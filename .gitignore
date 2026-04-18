@@ -1,0 +1,12 @@
+# Ignore dependencies
+node_modules/
+
+# Ignore logs
+*.log
+
+# Ignore cloned repos
+gemini-cli/
+
+# Ignore temporary artifacts
+.tmp
+.temp
