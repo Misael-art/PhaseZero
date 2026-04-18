@@ -1256,6 +1256,438 @@ function Resolve-CommandPath {
     return $null
 }
 
+# ─────────────────────────────────────────────────────────────
+# Dual Boot Management Module
+# ─────────────────────────────────────────────────────────────
+
+function Get-BootstrapFastStartupStatus {
+    $result = @{ Enabled = $false; Safe = $true; RegistryPath = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power'; Value = $null }
+    try {
+        $val = Get-ItemProperty -Path $result.RegistryPath -Name 'HiberbootEnabled' -ErrorAction SilentlyContinue
+        if ($null -ne $val -and $val.HiberbootEnabled -eq 1) {
+            $result.Enabled = $true
+            $result.Safe    = $false
+            $result.Value   = 1
+        } else {
+            $result.Value = if ($null -ne $val) { $val.HiberbootEnabled } else { $null }
+        }
+    } catch { }
+    return $result
+}
+
+function Get-BootstrapBitLockerStatus {
+    $result = @{ CEnabled = $false; StatusText = 'unknown' }
+    try {
+        $output = & manage-bde -status C: 2>$null
+        if ($output) {
+            $statusLine = $output | Where-Object { $_ -match 'Protection Status|Status de Prote' } | Select-Object -First 1
+            if ($statusLine -match '(On|Ativad)') {
+                $result.CEnabled   = $true
+                $result.StatusText = 'enabled'
+            } else {
+                $result.StatusText = 'disabled'
+            }
+        }
+    } catch {
+        $result.StatusText = 'error'
+    }
+    return $result
+}
+
+function Get-BootstrapLinuxPartitions {
+    $linuxPartitions = @()
+    try {
+        $partitions = Get-Partition -ErrorAction SilentlyContinue
+        foreach ($p in $partitions) {
+            $vol = $null
+            try { $vol = Get-Volume -Partition $p -ErrorAction SilentlyContinue } catch { }
+            $fsType = if ($vol) { [string]$vol.FileSystemType } else { '' }
+            $isLinux = ($fsType -eq '' -or $fsType -eq 'Unknown' -or $fsType -eq 'RAW') -and
+                       ($p.Type -notin @('System', 'Reserved', 'Recovery', 'IU', 'Basic')) -and
+                       ($p.Size -gt 1GB)
+            if ($isLinux) {
+                $linuxPartitions += @{
+                    DiskNumber      = $p.DiskNumber
+                    PartitionNumber = $p.PartitionNumber
+                    SizeGB          = [math]::Round($p.Size / 1GB, 1)
+                    Type            = [string]$p.Type
+                    FileSystem      = if ($fsType) { $fsType } else { 'Unknown' }
+                    GptType         = if ($p.GptType) { [string]$p.GptType } else { '' }
+                }
+            }
+        }
+    } catch { }
+    return @($linuxPartitions)
+}
+
+function Get-BootstrapEfiEntries {
+    if (-not (Test-IsAdmin)) { return $null }
+    $entries = @()
+    try {
+        $raw = & bcdedit /enum firmware 2>$null
+        if (-not $raw) { return @() }
+        $currentEntry = $null
+        foreach ($line in $raw) {
+            if ($line -match '^[-]+$') { continue }
+            if ($line -match '^\s*$') {
+                if ($currentEntry) { $entries += $currentEntry }
+                $currentEntry = $null
+                continue
+            }
+            if ($line -match '^(?:Firmware Boot Manager|Gerenciador de Inicializa)') {
+                $currentEntry = @{ Type = 'bootmgr'; Id = ''; Description = ''; Path = '' }
+                continue
+            }
+            if ($line -match '^(?:Firmware Application|Aplicativo de Firmware)') {
+                $currentEntry = @{ Type = 'entry'; Id = ''; Description = ''; Path = '' }
+                continue
+            }
+            if ($null -ne $currentEntry) {
+                if ($line -match '(?:identifier|identificador)\s+(.+)') { $currentEntry.Id = ($Matches[1]).Trim() }
+                if ($line -match '(?:description|descri)\s+(.+)')       { $currentEntry.Description = ($Matches[1]).Trim() }
+                if ($line -match '(?:path|caminho)\s+(.+)')             { $currentEntry.Path = ($Matches[1]).Trim() }
+            }
+        }
+        if ($currentEntry) { $entries += $currentEntry }
+    } catch { }
+    return @($entries)
+}
+
+function Get-BootstrapGrubPresence {
+    if (-not (Test-IsAdmin)) { return @{ Detected = $null; Path = ''; Confidence = 'unknown' } }
+    $result = @{ Detected = $false; Path = ''; Confidence = 'none' }
+    $efiEntries = Get-BootstrapEfiEntries
+    foreach ($entry in $efiEntries) {
+        if ($entry.Type -ne 'entry') { continue }
+        $p = [string]$entry.Path
+        $d = [string]$entry.Description
+        if ($p -match 'grubx64\.efi|shimx64\.efi' -or $d -match 'ubuntu|fedora|bazzite|steamos|linux|grub|refind|Pop!_OS|manjaro|arch|debian|opensuse|nixos') {
+            $result.Detected   = $true
+            $result.Path       = $p
+            $result.Confidence = 'high'
+            $result.EntryId    = $entry.Id
+            $result.EntryDesc  = $d
+            break
+        }
+    }
+    if (-not $result.Detected) {
+        $linuxParts = Get-BootstrapLinuxPartitions
+        if ($linuxParts.Count -gt 0) {
+            $result.Detected   = $true
+            $result.Confidence = 'medium'
+        }
+    }
+    return $result
+}
+
+function Test-BootstrapIsDualBoot {
+    $grub = Get-BootstrapGrubPresence
+    if ($grub.Detected -eq $true) { return $true }
+    $linuxParts = Get-BootstrapLinuxPartitions
+    return ($linuxParts.Count -gt 0)
+}
+
+function Get-BootstrapDualBootInfo {
+    $isAdmin       = Test-IsAdmin
+    $fastStartup   = Get-BootstrapFastStartupStatus
+    $bitlocker     = Get-BootstrapBitLockerStatus
+    $linuxParts    = Get-BootstrapLinuxPartitions
+    $grub          = Get-BootstrapGrubPresence
+    $efiEntries    = if ($isAdmin) { Get-BootstrapEfiEntries } else { $null }
+    $isDualBoot    = ($grub.Detected -eq $true) -or ($linuxParts.Count -gt 0)
+    $confidence    = if ($grub.Confidence -eq 'high') { 'high' } elseif ($linuxParts.Count -gt 0) { 'medium' } else { 'none' }
+    $detectedOS    = @('Windows')
+    if ($grub.EntryDesc) { $detectedOS += $grub.EntryDesc }
+    elseif ($linuxParts.Count -gt 0) { $detectedOS += 'Linux (unknown distro)' }
+
+    $warnings = New-Object System.Collections.Generic.List[string]
+    if ($fastStartup.Enabled) {
+        $warnings.Add('Fast Startup esta habilitado. Isso pode corromper particoes Linux ou impedir montagem de volumes NTFS compartilhados.')
+    }
+    if ($bitlocker.CEnabled) {
+        $warnings.Add('BitLocker esta ativo em C:. Alteracoes no EFI podem disparar recuperacao do BitLocker.')
+    }
+    if (-not $isAdmin) {
+        $warnings.Add('Executando sem privilegios de administrador. Algumas informacoes de EFI e disco podem estar incompletas.')
+    }
+
+    return @{
+        IsDualBoot      = $isDualBoot
+        Confidence      = $confidence
+        DetectedOS      = @($detectedOS)
+        GrubDetected    = [bool]$grub.Detected
+        GrubEfiPath     = [string]$grub.Path
+        GrubEntryId     = if ($grub.EntryId) { [string]$grub.EntryId } else { '' }
+        GrubEntryDesc   = if ($grub.EntryDesc) { [string]$grub.EntryDesc } else { '' }
+        LinuxPartitions = @($linuxParts)
+        EfiEntries      = $efiEntries
+        FastStartup     = $fastStartup
+        BitLocker       = $bitlocker
+        IsAdmin         = $isAdmin
+        Warnings        = @($warnings.ToArray())
+    }
+}
+
+# --- Guardrails ---
+
+function Test-BootstrapSafePartition {
+    param(
+        [Parameter(Mandatory = $true)][int]$DiskNumber,
+        [Parameter(Mandatory = $true)][int]$PartitionNumber
+    )
+    try {
+        $p = Get-Partition -DiskNumber $DiskNumber -PartitionNumber $PartitionNumber -ErrorAction Stop
+    } catch {
+        return $false
+    }
+    if ($p.Type -in @('System', 'Reserved', 'Recovery')) { return $false }
+    $vol = $null
+    try { $vol = Get-Volume -Partition $p -ErrorAction SilentlyContinue } catch { }
+    $fs = if ($vol) { [string]$vol.FileSystemType } else { '' }
+    if ($fs -eq '' -or $fs -eq 'Unknown' -or $fs -eq 'RAW') { return $false }
+    return $true
+}
+
+function Assert-BootstrapDiskSafety {
+    param(
+        [Parameter(Mandatory = $true)][int]$DiskNumber,
+        [Parameter(Mandatory = $true)][int]$PartitionNumber,
+        [string]$OperationName = 'disk operation'
+    )
+    if (-not (Test-BootstrapSafePartition -DiskNumber $DiskNumber -PartitionNumber $PartitionNumber)) {
+        throw "BLOCKED: $OperationName on Disk $DiskNumber Partition $PartitionNumber is not allowed. The partition is EFI System, Recovery, or has an unrecognized (possibly Linux) filesystem. This guard prevents accidental destruction of dual-boot partitions."
+    }
+}
+
+function Test-BootstrapSafeEfiOperation {
+    if (-not (Test-IsAdmin)) { return $false }
+    try {
+        $entries = Get-BootstrapEfiEntries
+        if ($null -eq $entries -or $entries.Count -eq 0) { return $false }
+        $hasBootMgr = ($entries | Where-Object { $_.Type -eq 'bootmgr' }).Count -gt 0
+        return $hasBootMgr
+    } catch { return $false }
+}
+
+# --- Prerequisites ---
+
+function Test-BootstrapDualBootPrerequisites {
+    $issues = @()
+    $fastStartup = Get-BootstrapFastStartupStatus
+    if ($fastStartup.Enabled) {
+        $issues += @{
+            Id          = 'fast-startup'
+            Severity    = 'critical'
+            Title       = 'Fast Startup habilitado'
+            Description = 'O Fast Startup faz o Windows hibernar em vez de desligar, o que pode corromper particoes compartilhadas e impedir o Linux de montar volumes NTFS.'
+            CanAutoFix  = $true
+        }
+    }
+    $bitlocker = Get-BootstrapBitLockerStatus
+    if ($bitlocker.CEnabled) {
+        $issues += @{
+            Id          = 'bitlocker'
+            Severity    = 'warning'
+            Title       = 'BitLocker ativo em C:'
+            Description = 'BitLocker pode disparar a tela de recuperacao se o bootloader EFI for alterado. Considere suspender o BitLocker antes de modificar entradas de boot.'
+            CanAutoFix  = $false
+        }
+    }
+    return @($issues)
+}
+
+function Repair-BootstrapFastStartup {
+    if (-not (Test-IsAdmin)) {
+        throw 'Repair-BootstrapFastStartup requer privilegios de administrador.'
+    }
+    $status = Get-BootstrapFastStartupStatus
+    if (-not $status.Enabled) {
+        Write-Log 'Fast Startup ja esta desabilitado.'
+        return @{ Changed = $false; PreviousValue = $status.Value }
+    }
+    $regPath = $status.RegistryPath
+    $previousValue = $status.Value
+    Set-ItemProperty -Path $regPath -Name 'HiberbootEnabled' -Value 0 -Type DWord -Force
+    Write-Log "Fast Startup desabilitado (HiberbootEnabled: $previousValue -> 0)."
+    return @{ Changed = $true; PreviousValue = $previousValue }
+}
+
+function Get-BootstrapDualBootRecommendations {
+    param([AllowNull()]$DualBootInfo)
+    if ($null -eq $DualBootInfo) { $DualBootInfo = Get-BootstrapDualBootInfo }
+    $recs = New-Object System.Collections.Generic.List[string]
+    if (-not $DualBootInfo.IsDualBoot) {
+        $recs.Add('Nenhum dual boot detectado. Nenhuma acao necessaria.')
+        return @($recs.ToArray())
+    }
+    if ($DualBootInfo.FastStartup.Enabled) {
+        $recs.Add('[CRITICO] Desabilitar Fast Startup: evita corrupcao de particiones Linux.')
+    }
+    if ($DualBootInfo.BitLocker.CEnabled) {
+        $recs.Add('[ATENCAO] BitLocker ativo: suspender antes de modificar bootloader.')
+    }
+    if ($DualBootInfo.GrubDetected) {
+        $recs.Add('[INFO] GRUB detectado: ' + $DualBootInfo.GrubEfiPath)
+    }
+    if ($DualBootInfo.LinuxPartitions.Count -gt 0) {
+        $recs.Add("[INFO] $($DualBootInfo.LinuxPartitions.Count) particao(oes) Linux detectada(s).")
+    }
+    $recs.Add('[DICA] Use o menu UEFI da BIOS (F12/F2/Del) como alternativa segura para trocar de SO.')
+    return @($recs.ToArray())
+}
+
+# --- Reboot Switch ---
+
+function Get-BootstrapAlternateBootEntries {
+    if (-not (Test-IsAdmin)) { return @() }
+    $entries = Get-BootstrapEfiEntries
+    $alternates = @()
+    foreach ($entry in $entries) {
+        if ($entry.Type -ne 'entry') { continue }
+        $d = [string]$entry.Description
+        $p = [string]$entry.Path
+        $isWindows = ($d -match 'Windows Boot Manager' -or $p -match 'bootmgfw\.efi')
+        if (-not $isWindows -and $entry.Id) {
+            $alternates += @{
+                Id          = $entry.Id
+                Description = $d
+                Path        = $p
+            }
+        }
+    }
+    return @($alternates)
+}
+
+function Set-BootstrapOneTimeBootTarget {
+    param(
+        [Parameter(Mandatory = $true)][string]$EntryGuid,
+        [switch]$CreateBackup
+    )
+    if (-not (Test-IsAdmin)) {
+        throw 'Set-BootstrapOneTimeBootTarget requer privilegios de administrador.'
+    }
+    if (-not (Test-BootstrapSafeEfiOperation)) {
+        throw 'Nao foi possivel validar as entradas EFI. Operacao cancelada por seguranca.'
+    }
+    if ($CreateBackup) {
+        $backupDir = Join-Path (Get-BootstrapDataRoot) 'bcd-backups'
+        if (-not (Test-Path $backupDir)) { New-Item -Path $backupDir -ItemType Directory -Force | Out-Null }
+        $backupPath = Join-Path $backupDir ("bcd_backup_{0}.bak" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+        $exitCode = 0
+        try {
+            $output = & bcdedit /export $backupPath 2>&1
+            if ($LASTEXITCODE -ne 0) { $exitCode = $LASTEXITCODE }
+        } catch { $exitCode = 1 }
+        if ($exitCode -ne 0) {
+            Write-Log "[WARN] Falha ao criar backup do BCD: $backupPath"
+        } else {
+            Write-Log "BCD backup criado: $backupPath"
+        }
+    }
+    $output = & bcdedit /set '{fwbootmgr}' bootsequence $EntryGuid 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falha ao definir bootsequence: $output"
+    }
+    Write-Log "Bootsequence definido para: $EntryGuid (proximo boot apenas)."
+    return @{ Success = $true; TargetGuid = $EntryGuid }
+}
+
+function Invoke-BootstrapRebootToLinux {
+    param(
+        [string]$PreferredEntryGuid,
+        [switch]$Force
+    )
+    if (-not (Test-IsAdmin)) {
+        throw 'Invoke-BootstrapRebootToLinux requer privilegios de administrador.'
+    }
+    $alternates = Get-BootstrapAlternateBootEntries
+    if ($alternates.Count -eq 0) {
+        throw 'Nenhuma entrada de boot alternativa (Linux/SteamOS) encontrada no firmware.'
+    }
+    $target = $null
+    if ($PreferredEntryGuid) {
+        $target = $alternates | Where-Object { $_.Id -eq $PreferredEntryGuid } | Select-Object -First 1
+    }
+    if (-not $target) {
+        $target = $alternates[0]
+    }
+    Write-Log "Preparando boot em: $($target.Description) ($($target.Id))"
+    Set-BootstrapOneTimeBootTarget -EntryGuid $target.Id -CreateBackup
+    if (-not $Force) {
+        Write-Log 'Bootsequence definido com sucesso. Reinicie manualmente quando estiver pronto.'
+        return @{ Success = $true; Target = $target; Rebooted = $false }
+    }
+    Write-Log 'Reiniciando em 3 segundos...'
+    & shutdown /r /t 3
+    return @{ Success = $true; Target = $target; Rebooted = $true }
+}
+
+function Get-BootstrapPhantomBootEntries {
+    if (-not (Test-IsAdmin)) { return @() }
+    
+    $phantoms = @()
+    $displayOrderStr = & bcdedit /enum '{bootmgr}' 2>$null | Select-String '^displayorder'
+    if (-not $displayOrderStr) { return @() }
+    
+    $guids = [regex]::Matches($displayOrderStr, '\{[a-f0-9\-]+\}') | ForEach-Object { $_.Value }
+    
+    foreach ($g in $guids) {
+        if ($g -eq '{current}') { continue } # ignora a entrada atual em execucao ativa
+        $entryLines = & bcdedit /enum $g 2>$null
+        $isPhantom = $false
+        $desc = ''
+        foreach ($line in $entryLines) {
+            if ($line -match '^description\s+(.*)') { $desc = $matches[1].Trim() }
+            if ($line -match '^device\s+unknown' -or $line -match '^osdevice\s+unknown') {
+                $isPhantom = $true
+            }
+        }
+        if ($isPhantom) {
+            $phantoms += @{ Id = $g; Description = $desc }
+        }
+    }
+    return $phantoms
+}
+
+function Repair-BootstrapPhantomEntries {
+    if (-not (Test-IsAdmin)) { throw 'Repair-BootstrapPhantomEntries requer privilegios de administrador.' }
+    
+    $phantoms = Get-BootstrapPhantomBootEntries
+    if ($phantoms.Count -eq 0) { 
+        return @{ Success = $true; Removed = 0; Message = 'Nenhuma entrada inativa encontrada.' } 
+    }
+    
+    # Criar backup do BCD
+    $backupDir = Join-Path (Get-BootstrapDataRoot) 'bcd-backups'
+    if (-not (Test-Path $backupDir)) { New-Item -Path $backupDir -ItemType Directory -Force | Out-Null }
+    $backupPath = Join-Path $backupDir ("bcd_backup_cleanup_{0}.bak" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    & bcdedit /export $backupPath 2>&1 | Out-Null
+    Write-Log "Backup BCD concluido em: $backupPath antes da limpeza."
+
+    $removedCount = 0
+    foreach ($p in $phantoms) {
+        Write-Log "Removendo phantom BCD entry: $($p.Description) ($($p.Id))"
+        & bcdedit /delete $($p.Id) /cleanup 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) { $removedCount++ }
+    }
+    
+    # Se sobrar so 1 no displayorder (e for o current), removemos o timeout para single-OS boot rapido
+    $displayOrderStr = & bcdedit /enum '{bootmgr}' 2>$null | Select-String '^displayorder'
+    if ($displayOrderStr) {
+        $remainingGuids = [regex]::Matches($displayOrderStr, '\{[a-f0-9\-]+\}') | ForEach-Object { $_.Value }
+        if ($remainingGuids.Count -eq 1 -and $remainingGuids[0] -eq '{current}') {
+            & bcdedit /timeout 0 2>&1 | Out-Null
+            Write-Log "Otimizacao: Timeout definido para 0 pois sobrou apenas a instalacao corrente."
+        }
+    }
+    
+    return @{ Success = $true; Removed = $removedCount; Backup = $backupPath }
+}
+
+# ─────────────────────────────────────────────────────────────
+# End of Dual Boot Module
+# ─────────────────────────────────────────────────────────────
+
 function New-BootstrapComponentDefinition {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -1969,6 +2401,8 @@ function Get-BootstrapComponentCatalog {
     $catalog['codex-installer'] = New-BootstrapComponentDefinition -Name 'codex-installer' -Description 'Codex installer desktop via winget.' -DependsOn @('system-core') -Kind 'codex-installer'
     $catalog['ollama'] = New-BootstrapComponentDefinition -Name 'ollama' -Description 'Ollama local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Ollama.Ollama'; DisplayName = 'Ollama' }
     $catalog['cherry-studio'] = New-BootstrapComponentDefinition -Name 'cherry-studio' -Description 'Cherry Studio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'kangfenmao.CherryStudio'; DisplayName = 'Cherry Studio' }
+    $catalog['lm-studio'] = New-BootstrapComponentDefinition -Name 'lm-studio' -Description 'LM Studio local LLM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'LMStudio.LMStudio'; DisplayName = 'LM Studio' }
+    $catalog['pinokio'] = New-BootstrapComponentDefinition -Name 'pinokio' -Description 'Pinokio AI Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Pinokio.Pinokio'; DisplayName = 'Pinokio' }
     $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ZedIndustries.Zed'; DisplayName = 'Zed' }
     $catalog['opencode'] = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode CLI via script oficial.' -DependsOn @('git-core') -Kind 'opencode'
     $catalog['gemini-cli'] = New-BootstrapComponentDefinition -Name 'gemini-cli' -Description 'Gemini CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@google/gemini-cli'; DisplayName = 'Gemini CLI (@google/gemini-cli)' }
@@ -2012,6 +2446,8 @@ function Get-BootstrapComponentCatalog {
     $catalog['tailscale'] = New-BootstrapComponentDefinition -Name 'tailscale' -Description 'VPN mesh para acesso remoto seguro.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Tailscale.Tailscale'; DisplayName = 'Tailscale'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Conecta o Deck remotamente sem expor servicos publicamente.' }
     $catalog['scrcpy'] = New-BootstrapComponentDefinition -Name 'scrcpy' -Description 'Espelha e controla Android no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Genymobile.scrcpy'; DisplayName = 'scrcpy'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda na ponte mobile quando o Deck esta dockado ou em bancada.' }
     $catalog['syncthing'] = New-BootstrapComponentDefinition -Name 'syncthing' -Description 'Sincroniza saves e configuracoes entre maquinas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Syncthing.Syncthing'; DisplayName = 'Syncthing'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mantem saves/configs coerentes entre Deck e desktop.' }
+    $catalog['chiaki'] = New-BootstrapComponentDefinition -Name 'chiaki' -Description 'Chiaki PS4/PS5 Remote Play.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'srwi.Chiaki'; DisplayName = 'Chiaki' }
+    $catalog['rustdesk'] = New-BootstrapComponentDefinition -Name 'rustdesk' -Description 'RustDesk remote desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'RustDesk.RustDesk'; DisplayName = 'RustDesk' }
     $catalog['quicklook'] = New-BootstrapComponentDefinition -Name 'quicklook' -Description 'Preview rapido de arquivos.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'QL-Win.QuickLook'; DisplayName = 'QuickLook'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Acelera inspeccao de arquivos em modo desktop e dock.' }
     $catalog['sharex'] = New-BootstrapComponentDefinition -Name 'sharex' -Description 'Captura e compartilhamento rapido.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ShareX.ShareX'; DisplayName = 'ShareX'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita screenshots e uploads com atalhos do Deck.' }
     $catalog['quickcpu'] = New-BootstrapComponentDefinition -Name 'quickcpu' -Description 'Controle fino de CPU e energia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'CoderBag.QuickCPUx64'; DisplayName = 'Quick CPU x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a equilibrar consumo e desempenho no modo bateria.' }
@@ -2042,6 +2478,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['fan-control'] = New-BootstrapComponentDefinition -Name 'fan-control' -Description 'Fan Control.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Rem0o.FanControl'; DisplayName = 'Fan Control' }
     $catalog['mem-reduct'] = New-BootstrapComponentDefinition -Name 'mem-reduct' -Description 'Mem Reduct.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'henrypp.memreduct'; DisplayName = 'Mem Reduct' }
     $catalog['jdownloader'] = New-BootstrapComponentDefinition -Name 'jdownloader' -Description 'JDownloader 2.' -DependsOn @('java-core') -Kind 'winget' -Data @{ Id = 'AppWork.JDownloader'; DisplayName = 'JDownloader 2'; AllowFailureWhenNotAdmin = $true }
+    $catalog['dualboot-manager'] = New-BootstrapComponentDefinition -Name 'dualboot-manager' -Description 'Dual boot detection, safety guardrails and reboot management.' -DependsOn @('system-core') -Optional $true -Kind 'builtin' -Data @{}
 
     return $catalog
 }
@@ -2052,7 +2489,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para máquina nova.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'google-app-desktop', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
@@ -2065,7 +2502,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['steamdeck-power'] = New-BootstrapProfileDefinition -Name 'steamdeck-power' -Description 'Gestao de energia e tuning para bateria/dock.' -Items @('powertoys', 'quickcpu', 'fan-control', 'mem-reduct')
     $catalog['steamdeck-dock'] = New-BootstrapProfileDefinition -Name 'steamdeck-dock' -Description 'Automacao handheld-dock com fallback generico.' -Items @('displayfusion', 'soundswitch', 'steamdeck-settings', 'steamdeck-automation')
     $catalog['steamdeck-storage'] = New-BootstrapProfileDefinition -Name 'steamdeck-storage' -Description 'Ferramentas de storage e auditoria.' -Items @('compactgui', 'treesize-free', 'pagefile-on-sd')
-    $catalog['steamdeck-connectivity'] = New-BootstrapProfileDefinition -Name 'steamdeck-connectivity' -Description 'Streaming e conectividade remota do Deck.' -Items @('sunshine', 'moonlight', 'tailscale', 'scrcpy', 'syncthing')
+    $catalog['steamdeck-connectivity'] = New-BootstrapProfileDefinition -Name 'steamdeck-connectivity' -Description 'Streaming e conectividade remota do Deck.' -Items @('sunshine', 'moonlight', 'tailscale', 'scrcpy', 'syncthing', 'chiaki', 'rustdesk', 'dualboot-manager')
     $catalog['steamdeck-qol'] = New-BootstrapProfileDefinition -Name 'steamdeck-qol' -Description 'Melhorias de UX para desktop e handheld.' -Items @('quicklook', 'sharex', 'explorerpatcher', 'mica-for-everyone')
     $catalog['steamdeck-capture'] = New-BootstrapProfileDefinition -Name 'steamdeck-capture' -Description 'Captura de gameplay e replay buffer.' -Items @('obs-studio', 'obs-source-record-plugin', 'instant-replay')
     $catalog['steamdeck-backup'] = New-BootstrapProfileDefinition -Name 'steamdeck-backup' -Description 'Backup de drivers e imagem golden.' -Items @('driver-store-explorer', 'macrium-reflect')
@@ -2200,6 +2637,10 @@ function Get-BootstrapAdminReasons {
 
     if ($ResolvedHostHealthMode -eq 'agressivo') {
         $reasons.Add('HostHealth agressivo ajusta servicos e requer elevacao.')
+    }
+
+    if (Test-BootstrapIsDualBoot) {
+        $reasons.Add('Gestao e leitura de entradas UEFI/Dual Boot requer elevacao.')
     }
 
     return @($reasons.ToArray())
