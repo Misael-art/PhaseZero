@@ -8,12 +8,17 @@ param(
     [string]$HostHealth,
     [string]$LogPath,
     [string]$ResultPath,
+    [string]$SecretsImportPath,
+    [string]$SecretsActivateProvider,
+    [string]$SecretsActivateCredential,
     [switch]$Interactive,
     [switch]$ListProfiles,
     [switch]$ListHostHealthModes,
     [switch]$ListComponents,
     [switch]$UiContractJson,
     [switch]$BootstrapUiLibraryMode,
+    [switch]$SecretsList,
+    [switch]$SecretsValidateAll,
     [switch]$DryRun,
     [switch]$NonInteractive
 )
@@ -59,6 +64,65 @@ function Refresh-SessionPath {
     $env:Path = @($machinePath, $userPath) -join ';'
 }
 
+function Test-BootstrapSensitiveEnvName {
+    param([string]$Name)
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return $false
+    }
+
+    return ($Name -match '(^|_)(API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASS|PAT)($|_)')
+}
+
+function Get-BootstrapEnvValueForLog {
+    param(
+        [string]$Name,
+        [string]$Value
+    )
+
+    if (Test-BootstrapSensitiveEnvName -Name $Name) {
+        return '[redacted]'
+    }
+
+    return $Value
+}
+
+function Notify-BootstrapEnvironmentChanged {
+    try {
+        if (-not ('BootstrapNativeMethods' -as [type])) {
+            Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class BootstrapNativeMethods {
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd,
+        uint Msg,
+        IntPtr wParam,
+        string lParam,
+        uint fuFlags,
+        uint uTimeout,
+        out IntPtr lpdwResult
+    );
+}
+"@
+        }
+
+        $result = [IntPtr]::Zero
+        $null = [BootstrapNativeMethods]::SendMessageTimeout(
+            [IntPtr]0xffff,
+            0x001A,
+            [IntPtr]::Zero,
+            'Environment',
+            0x0002,
+            5000,
+            [ref]$result
+        )
+    } catch {
+    }
+}
+
 function Invoke-NativeWithLog {
     param(
         [Parameter(Mandatory = $true)][string]$Exe,
@@ -78,13 +142,18 @@ function Invoke-NativeWithLog {
     $ErrorActionPreference = 'Continue'
 
     try {
-        & $Exe @Args 2>&1 | ForEach-Object {
-            $line = [string]$_
+        $output = & $Exe @Args 2>&1
+        $exitCode = $LASTEXITCODE
+        if ($null -eq $exitCode) {
+            $exitCode = 0
+        }
+        foreach ($item in @($output)) {
+            $line = [string]$item
             if ($line -match "`0") { $line = $line -replace "`0", '' }
             Add-Content -Path $script:LogPath -Value $line -Encoding utf8
             Write-Host $line
         }
-        return $LASTEXITCODE
+        return [int]$exitCode
     } finally {
         $ErrorActionPreference = $oldErrorActionPreference
         if ($hasNativePreferenceVar) {
@@ -178,11 +247,15 @@ function Set-UserEnvVar {
         [Parameter(Mandatory = $true)][string]$Value
     )
     $current = [Environment]::GetEnvironmentVariable($Name, 'User')
+    $logValue = Get-BootstrapEnvValueForLog -Name $Name -Value $Value
     if ($current -ne $Value) {
         [Environment]::SetEnvironmentVariable($Name, $Value, 'User')
-        Write-Log "Definido $Name (Usuário) = $Value"
+        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+        Notify-BootstrapEnvironmentChanged
+        Write-Log "Definido $Name (Usuário) = $logValue"
     } else {
-        Write-Log "Já definido $Name (Usuário) = $Value"
+        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+        Write-Log "Já definido $Name (Usuário) = $logValue"
     }
 }
 
@@ -242,30 +315,390 @@ function Ensure-ProxyEnvFromWinHttp {
     }
 }
 
+function Get-BootstrapAppInstallerPackage {
+    try {
+        return Get-AppxPackage -Name 'Microsoft.DesktopAppInstaller' -ErrorAction SilentlyContinue | Select-Object -First 1
+    } catch {
+        return $null
+    }
+}
+
+function Get-BootstrapPendingRebootReasons {
+    $reasons = New-Object System.Collections.Generic.List[string]
+
+    try {
+        if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
+            $reasons.Add('Component Based Servicing')
+        }
+    } catch {
+    }
+
+    try {
+        if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
+            $reasons.Add('Windows Update')
+        }
+    } catch {
+    }
+
+    try {
+        $sessionManager = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -ErrorAction SilentlyContinue
+        if ($sessionManager -and $sessionManager.PendingFileRenameOperations) {
+            $reasons.Add('PendingFileRenameOperations')
+        }
+    } catch {
+    }
+
+    try {
+        $updateExeVolatile = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Updates' -Name 'UpdateExeVolatile' -ErrorAction SilentlyContinue
+        if ($updateExeVolatile -and ($updateExeVolatile.UpdateExeVolatile -as [int]) -gt 0) {
+            $reasons.Add('UpdateExeVolatile')
+        }
+    } catch {
+    }
+
+    return @($reasons | Select-Object -Unique)
+}
+
+function Test-BootstrapTcpEndpoint {
+    param(
+        [Parameter(Mandatory = $true)][string]$HostName,
+        [int]$Port = 443,
+        [int]$TimeoutMilliseconds = 4000
+    )
+
+    $client = $null
+    try {
+        [void][Net.Dns]::GetHostAddresses($HostName)
+        $client = New-Object Net.Sockets.TcpClient
+        $async = $client.BeginConnect($HostName, $Port, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne($TimeoutMilliseconds, $false)) {
+            return $false
+        }
+        $client.EndConnect($async)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($client) {
+            $client.Dispose()
+        }
+    }
+}
+
+function Get-BootstrapPreflightRequirements {
+    param([string[]]$ResolvedComponents)
+
+    $catalog = Get-BootstrapComponentCatalog
+    $requiresNetwork = $false
+    $requiresWinget = $false
+    $needsGithub = $false
+    $needsMicrosoft = $false
+    $needsOpenCode = $false
+
+    foreach ($componentName in @($ResolvedComponents)) {
+        $componentDef = $catalog[$componentName]
+        if (-not $componentDef) { continue }
+
+        switch ($componentDef.Kind) {
+            'system-core' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'git-core' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'node-core' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'python-core' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'sevenzip' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'winget' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'wsl-core' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'wsl-ui' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'claude-code' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'vscode-extensions' {
+                $requiresNetwork = $true
+            }
+            'bootstrap-mcps' {
+                $requiresNetwork = $true
+            }
+            'codex-installer' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
+            'npm' {
+                $requiresNetwork = $true
+            }
+            'uvtool' {
+                $requiresNetwork = $true
+            }
+            'goose' {
+                $requiresNetwork = $true
+                $needsGithub = $true
+            }
+            'opencode' {
+                $requiresNetwork = $true
+                $needsOpenCode = $true
+            }
+            'openclaw' {
+                $requiresNetwork = $true
+            }
+            'repo-clone' {
+                $requiresNetwork = $true
+                $needsGithub = $true
+            }
+            'steamdeck-tools' {
+                $requiresNetwork = $true
+                $needsGithub = $true
+            }
+        }
+    }
+
+    $connectivityGroups = New-Object System.Collections.Generic.List[object]
+    if ($needsMicrosoft) {
+        $connectivityGroups.Add([pscustomobject]@{
+            Name = 'winget-store'
+            Hosts = @('cdn.winget.microsoft.com', 'storeedgefd.dsx.mp.microsoft.com')
+        })
+    }
+    if ($needsGithub) {
+        $connectivityGroups.Add([pscustomobject]@{
+            Name = 'github'
+            Hosts = @('github.com', 'api.github.com', 'objects.githubusercontent.com')
+        })
+    }
+    if ($needsOpenCode) {
+        $connectivityGroups.Add([pscustomobject]@{
+            Name = 'opencode'
+            Hosts = @('opencode.ai')
+        })
+    }
+
+    return [ordered]@{
+        RequiresNetwork = $requiresNetwork
+        RequiresWinget = $requiresWinget
+        ConnectivityGroups = $(if ($connectivityGroups.Count -gt 0) { $connectivityGroups.ToArray() } else { @() })
+    }
+}
+
+function Invoke-BootstrapExecutionPreflight {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string[]]$ResolvedComponents
+    )
+
+    if ($State.PreflightDone) { return }
+
+    Write-Log 'Executando preflight operacional...'
+    Write-Log "PowerShell: $($PSVersionTable.PSVersion) ($($PSVersionTable.PSEdition))"
+    Write-Log "LanguageMode: $($ExecutionContext.SessionState.LanguageMode)"
+    Ensure-ProxyEnvFromWinHttp
+
+    if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+        throw "Bootstrap requer FullLanguage. Modo atual: $($ExecutionContext.SessionState.LanguageMode)"
+    }
+
+    $requirements = Get-BootstrapPreflightRequirements -ResolvedComponents $ResolvedComponents
+    $pendingRebootReasons = @(Get-BootstrapPendingRebootReasons)
+    if ($pendingRebootReasons.Count -gt 0) {
+        Write-Log ("Reinicio pendente detectado: {0}. Recomendo reiniciar antes de prosseguir para evitar falhas de Store/winget/WSL." -f ($pendingRebootReasons -join ', ')) 'WARN'
+    } else {
+        Write-Log 'Nenhum reinicio pendente detectado.'
+    }
+
+    $wingetPath = $null
+    $appInstaller = $null
+    if ($requirements.RequiresWinget) {
+        $appInstaller = Get-BootstrapAppInstallerPackage
+        if ($appInstaller) {
+            Write-Log ("App Installer detectado: {0} ({1})" -f $appInstaller.Name, $appInstaller.Version)
+        } else {
+            Write-Log 'App Installer nao detectado via Get-AppxPackage.' 'WARN'
+        }
+
+        $wingetPath = Get-Winget
+        if (-not $wingetPath) {
+            if ($appInstaller) {
+                throw 'Preflight: App Installer presente, mas o winget ainda nao esta acessivel nesta sessao. Feche e reabra o terminal/Explorer, faca logoff ou reinicie a sessao e tente novamente.'
+            }
+            throw 'Preflight: winget/App Installer indisponivel. Em um Windows 11 recem-instalado, instale ou atualize o App Installer (Microsoft.DesktopAppInstaller) e execute novamente.'
+        }
+        Write-Log "Preflight: winget acessivel em $wingetPath"
+    }
+
+    $connectivitySummary = New-Object System.Collections.Generic.List[object]
+    if ($requirements.RequiresNetwork) {
+        foreach ($group in @($requirements.ConnectivityGroups)) {
+            $groupReachable = $false
+            $hostResults = New-Object System.Collections.Generic.List[object]
+
+            foreach ($hostName in @($group.Hosts)) {
+                $reachable = Test-BootstrapTcpEndpoint -HostName $hostName
+                $hostResults.Add([ordered]@{
+                    host = $hostName
+                    reachable = $reachable
+                })
+
+                if ($reachable) {
+                    $groupReachable = $true
+                    Write-Log ("Conectividade OK: {0}:443" -f $hostName)
+                } else {
+                    Write-Log ("Conectividade indisponivel: {0}:443" -f $hostName) 'WARN'
+                }
+            }
+
+            $connectivitySummary.Add([ordered]@{
+                group = $group.Name
+                reachable = $groupReachable
+                hosts = $(if ($hostResults.Count -gt 0) { $hostResults.ToArray() } else { @() })
+            })
+
+            if (-not $groupReachable) {
+                throw "Preflight: conectividade minima ausente para '$($group.Name)'. Hosts testados: $(@($group.Hosts) -join ', ')."
+            }
+        }
+    } else {
+        Write-Log 'Preflight: execucao atual nao requer downloads externos.'
+    }
+
+    if ($wingetPath) {
+        $State.Winget = $wingetPath
+    }
+
+    $State.PreflightSummary = [ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        requiresNetwork = $requirements.RequiresNetwork
+        requiresWinget = $requirements.RequiresWinget
+        pendingRebootReasons = @($pendingRebootReasons)
+        wingetPath = $wingetPath
+        appInstallerPresent = ($null -ne $appInstaller)
+        connectivity = $(if ($connectivitySummary.Count -gt 0) { $connectivitySummary.ToArray() } else { @() })
+    }
+    $State.PreflightDone = $true
+    Write-Log 'Preflight operacional concluido.'
+}
+
+function Invoke-NativeWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [Parameter(Mandatory = $true)][string[]]$Args,
+        [Parameter(Mandatory = $true)][string]$OperationName,
+        [int]$MaxAttempts = 2,
+        [int]$InitialDelaySeconds = 3
+    )
+
+    $attempt = 0
+    $delaySeconds = [Math]::Max(1, $InitialDelaySeconds)
+    $lastExitCode = -1
+
+    while ($attempt -lt $MaxAttempts) {
+        $attempt++
+        if ($attempt -gt 1) {
+            Write-Log ("Repetindo operacao: {0} (tentativa {1}/{2})" -f $OperationName, $attempt, $MaxAttempts) 'WARN'
+        }
+
+        $lastExitCode = Invoke-NativeWithLog -Exe $Exe -Args $Args
+        if ($lastExitCode -eq 0) {
+            return 0
+        }
+
+        if ($attempt -lt $MaxAttempts) {
+            Write-Log ("Falha em {0} (exit={1}). Nova tentativa em {2}s." -f $OperationName, $lastExitCode, $delaySeconds) 'WARN'
+            Start-Sleep -Seconds $delaySeconds
+            $delaySeconds = [Math]::Min(15, $delaySeconds * 2)
+        }
+    }
+
+    return $lastExitCode
+}
+
+function Invoke-WebRequestWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [string]$OperationName = 'download',
+        [int]$MaxAttempts = 3,
+        [int]$InitialDelaySeconds = 3
+    )
+
+    $attempt = 0
+    $delaySeconds = [Math]::Max(1, $InitialDelaySeconds)
+    while ($attempt -lt $MaxAttempts) {
+        $attempt++
+        try {
+            if ($attempt -gt 1) {
+                Write-Log ("Repetindo download: {0} (tentativa {1}/{2})" -f $OperationName, $attempt, $MaxAttempts) 'WARN'
+            }
+            Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile | Out-Null
+            return
+        } catch {
+            if ($attempt -ge $MaxAttempts) {
+                throw
+            }
+            Write-Log ("Falha em {0}: {1}. Nova tentativa em {2}s." -f $OperationName, $_.Exception.Message, $delaySeconds) 'WARN'
+            Start-Sleep -Seconds $delaySeconds
+            $delaySeconds = [Math]::Min(15, $delaySeconds * 2)
+        }
+    }
+}
+
 function Get-ClaudeHookConfigCandidatePaths {
     $candidates = @()
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    $localAppDataPath = Get-BootstrapLocalAppDataPath
 
-    if ($env:APPDATA) {
-        $candidates += (Join-Path $env:APPDATA 'Claude\claude_desktop_config.json')
+    if ($appDataPath) {
+        $candidates += (Join-Path $appDataPath 'Claude\claude_desktop_config.json')
     }
-    if ($env:LOCALAPPDATA) {
-        $candidates += (Join-Path $env:LOCALAPPDATA 'Claude\claude_desktop_config.json')
+    if ($localAppDataPath) {
+        $candidates += (Join-Path $localAppDataPath 'Claude\claude_desktop_config.json')
     }
 
-    if ($env:USERPROFILE) {
-        $candidates += (Join-Path $env:USERPROFILE '.claude\settings.json')
+    if ($userHome) {
+        $candidates += (Join-Path $userHome '.claude\settings.json')
     }
     if ($PSScriptRoot) {
         $candidates += (Join-Path $PSScriptRoot '.claude\settings.json')
     }
 
     $projectRoots = @()
-    if ($env:USERPROFILE) {
-        $projectRoots += (Join-Path $env:USERPROFILE 'Documents')
-        $projectRoots += (Join-Path $env:USERPROFILE 'Projects')
-        $projectRoots += (Join-Path $env:USERPROFILE 'Work')
-        $projectRoots += (Join-Path $env:USERPROFILE 'Workspace')
-        $projectRoots += (Join-Path $env:USERPROFILE 'Source')
+    if ($userHome) {
+        $projectRoots += (Join-Path $userHome 'Documents')
+        $projectRoots += (Join-Path $userHome 'Projects')
+        $projectRoots += (Join-Path $userHome 'Work')
+        $projectRoots += (Join-Path $userHome 'Workspace')
+        $projectRoots += (Join-Path $userHome 'Source')
     }
     try {
         $drives = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue
@@ -463,8 +896,9 @@ function Ensure-ClaudeHookConfigsHealthy {
 function Ensure-ClaudeCodeDefaults {
     param([string]$GitBashPath)
 
-    if (-not $env:USERPROFILE) { return }
-    $settingsDir = Join-Path $env:USERPROFILE '.claude'
+    $userHome = Get-BootstrapUserHomePath
+    if ([string]::IsNullOrWhiteSpace($userHome)) { return }
+    $settingsDir = Join-Path $userHome '.claude'
     $settingsPath = Join-Path $settingsDir 'settings.json'
     $null = New-Item -Path $settingsDir -ItemType Directory -Force
 
@@ -496,21 +930,72 @@ function Ensure-ClaudeCodeDefaults {
     }
 
     $changed = $false
+    function Get-TargetPropertyState {
+        param(
+            [Parameter(Mandatory = $true)]$Target,
+            [Parameter(Mandatory = $true)][string]$Name
+        )
+
+        if ($Target -is [System.Collections.IDictionary]) {
+            foreach ($key in @($Target.Keys)) {
+                if ([string]::Equals([string]$key, $Name, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return [pscustomobject]@{
+                        Exists = $true
+                        Key = $key
+                        Value = $Target[$key]
+                    }
+                }
+            }
+
+            return [pscustomobject]@{
+                Exists = $false
+                Key = $Name
+                Value = $null
+            }
+        }
+
+        $prop = $null
+        try { $prop = [System.Management.Automation.PSObject]::AsPSObject($Target).Properties[$Name] } catch { $prop = $null }
+        if ($null -ne $prop) {
+            $value = $null
+            try { $value = $prop.Value } catch { $value = $null }
+            return [pscustomobject]@{
+                Exists = $true
+                Key = $Name
+                Value = $value
+            }
+        }
+
+        return [pscustomobject]@{
+            Exists = $false
+            Key = $Name
+            Value = $null
+        }
+    }
+    function Set-TargetPropertyValue {
+        param(
+            [Parameter(Mandatory = $true)]$Target,
+            [Parameter(Mandatory = $true)][string]$Name,
+            [Parameter(Mandatory = $true)]$Value
+        )
+
+        $state = Get-TargetPropertyState -Target $Target -Name $Name
+        if ($Target -is [System.Collections.IDictionary]) {
+            $Target[$state.Key] = $Value
+            return
+        }
+
+        $Target | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+    }
     function Ensure-PropValue {
         param(
             [Parameter(Mandatory = $true)]$Target,
             [Parameter(Mandatory = $true)][string]$Name,
             [Parameter(Mandatory = $true)]$Value
         )
-        $prop = $null
-        try { $prop = [System.Management.Automation.PSObject]::AsPSObject($Target).Properties[$Name] } catch { $prop = $null }
-        $exists = ($null -ne $prop)
-        $current = $null
-        if ($exists) {
-            try { $current = $prop.Value } catch { $current = $null }
-        }
-        if ((-not $exists) -or ($current -ne $Value)) {
-            $Target | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+        $state = Get-TargetPropertyState -Target $Target -Name $Name
+        if ((-not $state.Exists) -or ($state.Value -ne $Value)) {
+            Set-TargetPropertyValue -Target $Target -Name $Name -Value $Value
             Set-Variable -Name changed -Value $true -Scope 1
         }
     }
@@ -519,11 +1004,11 @@ function Ensure-ClaudeCodeDefaults {
             [Parameter(Mandatory = $true)]$Target,
             [Parameter(Mandatory = $true)][string]$Name
         )
-        $v = $null
-        try { $v = $Target.$Name } catch { $v = $null }
-        if ((-not $v) -or (($v -isnot [pscustomobject]) -and ($v -isnot [hashtable]))) {
-            $v = [pscustomobject]@{}
-            $Target | Add-Member -NotePropertyName $Name -NotePropertyValue $v -Force
+        $state = Get-TargetPropertyState -Target $Target -Name $Name
+        $v = $state.Value
+        if ((-not $v) -or (($v -isnot [pscustomobject]) -and ($v -isnot [System.Collections.IDictionary]))) {
+            $v = [ordered]@{}
+            Set-TargetPropertyValue -Target $Target -Name $Name -Value $v
             Set-Variable -Name changed -Value $true -Scope 1
         }
         return $v
@@ -533,15 +1018,15 @@ function Ensure-ClaudeCodeDefaults {
             [Parameter(Mandatory = $true)]$Target,
             [Parameter(Mandatory = $true)][string]$Name
         )
-        $v = $null
-        try { $v = $Target.$Name } catch { $v = $null }
+        $state = Get-TargetPropertyState -Target $Target -Name $Name
+        $v = $state.Value
         if ($v -is [string]) {
             $v = @([string]$v)
-            $Target | Add-Member -NotePropertyName $Name -NotePropertyValue $v -Force
+            Set-TargetPropertyValue -Target $Target -Name $Name -Value $v
             Set-Variable -Name changed -Value $true -Scope 1
-        } elseif (-not ($v -is [System.Collections.IEnumerable])) {
+        } elseif (($null -eq $v) -or ($v -is [System.Collections.IDictionary]) -or (-not ($v -is [System.Collections.IEnumerable]))) {
             $v = @()
-            $Target | Add-Member -NotePropertyName $Name -NotePropertyValue $v -Force
+            Set-TargetPropertyValue -Target $Target -Name $Name -Value $v
             Set-Variable -Name changed -Value $true -Scope 1
         }
         return @($v)
@@ -594,13 +1079,13 @@ function Ensure-ClaudeCodeDefaults {
     $newAllow = Merge-StringArrayUniqueCI -Existing $allow -Add $allowWanted
     $allowNeedsUpdate = ($allow -is [string]) -or (@($newAllow).Count -ne @($allow).Count)
     if ($allowNeedsUpdate) {
-        $permObj | Add-Member -NotePropertyName 'allow' -NotePropertyValue @($newAllow) -Force
+        Set-TargetPropertyValue -Target $permObj -Name 'allow' -Value @($newAllow)
         $changed = $true
     }
 
     $newDeny = Merge-StringArrayUniqueCI -Existing $deny -Add $denyWanted
     if (@($newDeny).Count -ne @($deny).Count) {
-        $permObj | Add-Member -NotePropertyName 'deny' -NotePropertyValue $newDeny -Force
+        Set-TargetPropertyValue -Target $permObj -Name 'deny' -Value $newDeny
         $changed = $true
     }
 
@@ -703,7 +1188,15 @@ function Get-Winget {
 
 function Ensure-Winget {
     $winget = Get-Winget
-    if (-not $winget) { throw 'winget não encontrado. Instale o App Installer da Microsoft Store.' }
+    if (-not $winget) {
+        $appInstaller = Get-BootstrapAppInstallerPackage
+
+        if ($appInstaller) {
+            throw 'winget não está acessível no PATH, embora o App Installer esteja presente. Feche e reabra o terminal/Explorer, faça logoff ou reinicie a sessão e tente novamente.'
+        }
+
+        throw 'winget não encontrado. Em um Windows 11 recém-instalado, instale ou atualize o App Installer (Microsoft.DesktopAppInstaller) pela Microsoft Store e execute novamente.'
+    }
     $version = & $winget --version
     Write-Log "winget: $version"
     return $winget
@@ -736,13 +1229,13 @@ function Ensure-WingetPackage {
 
     $exitCode = -1
     if ($PreferUserScope) {
-        $exitCode = Invoke-NativeWithLog -Exe $WingetPath -Args (@($commonArgs) + @('--scope', 'user'))
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgs) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user"
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --scope user (winget). Tentando novamente sem --scope..." 'WARN'
         }
     }
     if ($exitCode -ne 0) {
-        $exitCode = Invoke-NativeWithLog -Exe $WingetPath -Args $commonArgs
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgs -OperationName "$DisplayName via winget"
     }
     if ($exitCode -ne 0) {
         if ($AllowFailureWhenNotAdmin -and (-not (Test-IsAdmin))) {
@@ -1067,7 +1560,7 @@ function Ensure-Uv {
     if (-not $pythonExe) { throw 'uv é necessário, mas o comando python não foi encontrado para instalar uv via pip.' }
 
     Write-Log 'Instalando uv via pip...'
-    $exitCode = Invoke-NativeWithLog -Exe $pythonExe -Args @('-m', 'pip', 'install', '-U', '--upgrade-strategy', 'only-if-needed', 'uv')
+    $exitCode = Invoke-NativeWithRetry -Exe $pythonExe -Args @('-m', 'pip', 'install', '-U', '--upgrade-strategy', 'only-if-needed', 'uv') -OperationName 'instalacao do uv via pip'
     if ($exitCode -ne 0) { throw "Falha ao instalar uv via pip (exit=$exitCode)." }
 
     Refresh-SessionPath
@@ -1079,29 +1572,39 @@ function Ensure-Uv {
     return $uvExe
 }
 
+function Get-BootstrapNonEmptyStringArray {
+    param([AllowNull()][string[]]$Values = @())
+
+    return @($Values | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+}
+
 function Ensure-UvToolPackage {
     param(
         [Parameter(Mandatory = $true)][string]$Package,
         [Parameter(Mandatory = $true)][string]$CommandName,
         [string]$DisplayName = $Package,
-        [string[]]$VersionArgs = @('--version')
+        [string[]]$VersionArgs = @('--version'),
+        [string[]]$InstallArgs = @()
     )
+
+    $sanitizedVersionArgs = Get-BootstrapNonEmptyStringArray -Values $VersionArgs
+    $sanitizedInstallArgs = Get-BootstrapNonEmptyStringArray -Values $InstallArgs
 
     $exe = Resolve-CommandPath -Name $CommandName
     if ($exe) {
-        $ver = Invoke-NativeFirstLine -Exe $exe -Args $VersionArgs
+        $ver = Invoke-NativeFirstLine -Exe $exe -Args $sanitizedVersionArgs
         Write-Log "$DisplayName já instalado: $ver ($exe)"
         return
     }
 
     $uvExe = Ensure-Uv
-    $localBin = Join-Path $env:USERPROFILE '.local\bin'
+    $localBin = Join-Path (Get-BootstrapUserHomePath) '.local\bin'
     $null = New-Item -Path $localBin -ItemType Directory -Force
     $env:UV_TOOL_BIN_DIR = $localBin
 
     Write-Log "Instalando $DisplayName ($Package) via uv tool..."
-    $exitCode = Invoke-NativeWithLog -Exe $uvExe -Args @('tool', 'install', '--reinstall', $Package)
-    if ($exitCode -ne 0) { throw "Falha ao instalar $DisplayName via uv tool (exit=$exitCode)." }
+    $installCommandArgs = @('tool', 'install', '--reinstall') + $sanitizedInstallArgs + @($Package)
+    $exitCode = Invoke-NativeWithRetry -Exe $uvExe -Args $installCommandArgs -OperationName "$DisplayName via uv tool"
 
     Ensure-PathUserContains -Dir $localBin
     Refresh-SessionPath
@@ -1109,7 +1612,11 @@ function Ensure-UvToolPackage {
     $exe = Resolve-CommandPath -Name $CommandName
     if (-not $exe) { throw "Instalação do $DisplayName concluída, mas o comando $CommandName não foi encontrado no PATH." }
 
-    $ver = Invoke-NativeFirstLine -Exe $exe -Args $VersionArgs
+    if ($exitCode -ne 0) {
+        Write-Log ("{0} retornou exit={1}, mas o comando {2} foi localizado no PATH; o bootstrap vai validar o binario e continuar." -f $DisplayName, $exitCode, $CommandName) 'WARN'
+    }
+
+    $ver = Invoke-NativeFirstLine -Exe $exe -Args $sanitizedVersionArgs
     Write-Log "$DisplayName instalado: $ver ($exe)"
 }
 
@@ -1127,7 +1634,7 @@ function Ensure-Goose {
         return
     }
 
-    $localBin = Join-Path $env:USERPROFILE '.local\bin'
+    $localBin = Join-Path (Get-BootstrapUserHomePath) '.local\bin'
     $null = New-Item -Path $localBin -ItemType Directory -Force
     Ensure-PathUserContains -Dir $localBin
     Refresh-SessionPath
@@ -1139,7 +1646,7 @@ function Ensure-Goose {
         $extractDir = Join-Path $env:TEMP ("goose_extract_{0}" -f ([Guid]::NewGuid().ToString('N')))
         try {
             Write-Log "Baixando goose (stable): $url"
-            Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zipPath | Out-Null
+            Invoke-WebRequestWithRetry -Uri $url -OutFile $zipPath -OperationName 'download do goose'
             Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
             $found = Get-ChildItem -Path $extractDir -Recurse -File -Filter 'goose.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
             if (-not $found) { throw "Não encontrei goose.exe dentro do zip: $url" }
@@ -1160,7 +1667,7 @@ function Ensure-Goose {
 
 function Ensure-OpenCode {
     param([Parameter(Mandatory = $true)][string]$BashPath)
-    $userProfileDir = $env:USERPROFILE
+    $userProfileDir = Get-BootstrapUserHomePath
     $binDir = Join-Path $userProfileDir '.opencode\bin'
     $exe = Join-Path $binDir 'opencode.exe'
 
@@ -1169,7 +1676,7 @@ function Ensure-OpenCode {
         Write-Log "opencode já instalado: $ver ($exe)"
     } else {
         Write-Log 'Instalando opencode via script oficial...'
-        $exitCode = Invoke-NativeWithLog -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://opencode.ai/install | bash')
+        $exitCode = Invoke-NativeWithRetry -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://opencode.ai/install | bash') -OperationName 'instalacao do opencode via script oficial'
         if ($exitCode -ne 0) { throw "Falha ao instalar opencode via script oficial (exit=$exitCode)." }
         if (-not (Test-Path $exe)) { throw "Instalação do opencode concluída, mas não encontrei: $exe" }
         $ver = & $exe --version
@@ -1244,7 +1751,7 @@ function Ensure-RepoClone {
         return
     }
     Write-Log "Clonando $RepoUrl em $TargetDir"
-    $exitCode = Invoke-NativeWithLog -Exe $GitExe -Args @('clone', $RepoUrl, $TargetDir)
+    $exitCode = Invoke-NativeWithRetry -Exe $GitExe -Args @('clone', $RepoUrl, $TargetDir) -OperationName "clone de $RepoUrl"
     if ($exitCode -ne 0) { throw "Falha ao clonar repositório (exit=$exitCode): $RepoUrl" }
     Write-Log "Clone concluído: $TargetDir"
 }
@@ -1254,6 +1761,23 @@ function Resolve-CommandPath {
     $cmd = Get-Command $Name -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     return $null
+}
+
+function Get-BootstrapUserHomePath {
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { return $env:USERPROFILE }
+    if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { return $env:HOME }
+    if (-not [string]::IsNullOrWhiteSpace($env:HOMEDRIVE) -and -not [string]::IsNullOrWhiteSpace($env:HOMEPATH)) {
+        return ($env:HOMEDRIVE + $env:HOMEPATH)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $env:LOCALAPPDATA }
+    if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) { return $env:TEMP }
+    if (-not [string]::IsNullOrWhiteSpace($env:TMP)) { return $env:TMP }
+    try {
+        $folder = [Environment]::GetFolderPath('UserProfile')
+        if (-not [string]::IsNullOrWhiteSpace($folder)) { return $folder }
+    } catch {
+    }
+    return (Get-Location).Path
 }
 
 # ─────────────────────────────────────────────────────────────
@@ -1762,7 +2286,7 @@ function ConvertTo-BootstrapHashtable {
         foreach ($item in $InputObject) {
             $items += @(ConvertTo-BootstrapHashtable -InputObject $item)
         }
-        return @($items)
+        return ,@($items)
     }
 
     if ($InputObject -is [pscustomobject]) {
@@ -1806,11 +2330,11 @@ function Merge-BootstrapData {
         return $result
     }
 
-    if (($normalizedDefaults -is [System.Array]) -and ($normalizedDefaults.Count -gt 0)) {
-        if (($normalizedCurrent -is [System.Array]) -and ($normalizedCurrent.Count -gt 0)) {
-            return @($normalizedCurrent)
+    if ($normalizedDefaults -is [System.Array]) {
+        if ($normalizedCurrent -is [System.Array]) {
+            return ,@($normalizedCurrent)
         }
-        return @($normalizedDefaults)
+        return ,@($normalizedDefaults)
     }
 
     if ($null -ne $normalizedCurrent) {
@@ -1852,7 +2376,7 @@ function ConvertTo-BootstrapObjectGraph {
         foreach ($item in $InputObject) {
             $items += @(ConvertTo-BootstrapObjectGraph -InputObject $item)
         }
-        return @($items)
+        return ,@($items)
     }
 
     return $InputObject
@@ -1861,12 +2385,12 @@ function ConvertTo-BootstrapObjectGraph {
 function Normalize-BootstrapObjectArray {
     param($Value)
 
-    if ($null -eq $Value) { return @() }
+    if ($null -eq $Value) { return ,@() }
 
     if (($Value -is [System.Collections.IDictionary]) -or ($Value -is [pscustomobject])) {
         $propertyCount = if ($Value -is [pscustomobject]) { @($Value.PSObject.Properties).Count } else { @($Value.Keys).Count }
-        if ($propertyCount -eq 0) { return @() }
-        return @((ConvertTo-BootstrapHashtable -InputObject $Value))
+        if ($propertyCount -eq 0) { return ,@() }
+        return ,@((ConvertTo-BootstrapHashtable -InputObject $Value))
     }
 
     if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string])) {
@@ -1874,10 +2398,10 @@ function Normalize-BootstrapObjectArray {
         foreach ($item in $Value) {
             $items += @(ConvertTo-BootstrapHashtable -InputObject $item)
         }
-        return @($items)
+        return ,@($items)
     }
 
-    return @($Value)
+    return ,@($Value)
 }
 
 function Get-BootstrapHostHealthModes {
@@ -2014,8 +2538,1167 @@ function Get-BootstrapHostHealthPolicy {
     }
 }
 
+function Test-BootstrapDirectoryWritable {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        $null = New-Item -Path $Path -ItemType Directory -Force
+        $probePath = Join-Path $Path ('.write-test-{0}.tmp' -f ([guid]::NewGuid().ToString('N')))
+        'bootstrap-write-test' | Set-Content -Path $probePath -Encoding utf8
+        Remove-Item -Path $probePath -Force -ErrorAction Stop
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Get-BootstrapDataRoot {
-    return (Join-Path $env:USERPROFILE '.bootstrap-tools')
+    $cachedDataRoot = $null
+    $cachedVariable = Get-Variable -Name BootstrapDataRoot -Scope Script -ErrorAction SilentlyContinue
+    if ($cachedVariable) {
+        $cachedDataRoot = [string]$cachedVariable.Value
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($cachedDataRoot) -and (Test-Path $cachedDataRoot)) {
+        $script:BootstrapDataRoot = $cachedDataRoot
+        return $script:BootstrapDataRoot
+    }
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:BOOTSTRAP_DATA_ROOT)) {
+        $candidates += $env:BOOTSTRAP_DATA_ROOT
+    }
+
+    $userHome = Get-BootstrapUserHomePath
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $candidates += (Join-Path $userHome '.bootstrap-tools')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $candidates += (Join-Path $env:LOCALAPPDATA 'bootstrap-tools')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) {
+        $candidates += (Join-Path $env:TEMP 'bootstrap-tools')
+    }
+    $candidates += (Join-Path (Get-Location).Path '.bootstrap-tools')
+
+    foreach ($candidate in @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+        if (Test-BootstrapDirectoryWritable -Path $candidate) {
+            $script:BootstrapDataRoot = $candidate
+            return $script:BootstrapDataRoot
+        }
+    }
+
+    $script:BootstrapDataRoot = (Join-Path (Get-Location).Path '.bootstrap-tools')
+    return $script:BootstrapDataRoot
+}
+
+function Get-BootstrapAppDataPath {
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) { return $env:APPDATA }
+    return (Join-Path (Get-BootstrapUserHomePath) 'AppData\Roaming')
+}
+
+function Get-BootstrapLocalAppDataPath {
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $env:LOCALAPPDATA }
+    return (Join-Path (Get-BootstrapUserHomePath) 'AppData\Local')
+}
+
+function Get-BootstrapSecretsPath {
+    return (Join-Path (Get-BootstrapDataRoot) 'bootstrap-secrets.json')
+}
+
+function Get-BootstrapPreferredFilePath {
+    param(
+        [string[]]$Candidates,
+        [string]$DefaultPath
+    )
+
+    $normalized = @($Candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    foreach ($candidate in $normalized) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    foreach ($candidate in $normalized) {
+        $parent = Split-Path -Path $candidate -Parent
+        if (-not [string]::IsNullOrWhiteSpace($parent) -and (Test-Path $parent)) {
+            return $candidate
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($DefaultPath)) {
+        return $DefaultPath
+    }
+    if ($normalized.Count -gt 0) {
+        return $normalized[0]
+    }
+    return $null
+}
+
+function Get-BootstrapSecretsKnownTargets {
+    return @('userEnv', 'claudeCode', 'claudeDesktop', 'cursor', 'windsurf', 'trae', 'openCode', 'vsCode', 'roo', 'cline', 'continue', 'zed', 'zCode', 'openClaw', 'comet')
+}
+
+function Get-BootstrapSecretsProviderCatalog {
+    return (ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
+        anthropic = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'anthropic'
+            defaults = [ordered]@{}
+            aliases = @('anthropic', 'claude')
+            tokenPatterns = @('sk-ant-[A-Za-z0-9_\-]+')
+        }
+        openai = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.openai.com/v1'
+                organizationId = ''
+            }
+            aliases = @('openai', 'chatgpt')
+            tokenPatterns = @('sk-proj-[A-Za-z0-9_\-]+', 'sk-[A-Za-z0-9_\-]{16,}')
+        }
+        google = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'google'
+            defaults = [ordered]@{}
+            aliases = @('google', 'gemini', 'google ai', 'google ai studio', 'googlestudio')
+            tokenPatterns = @('AIza[0-9A-Za-z\-_]{20,}')
+        }
+        xai = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.x.ai/v1'
+            }
+            aliases = @('xai', 'x.ai', 'grok')
+            tokenPatterns = @('xai-[A-Za-z0-9_\-]{12,}', 'sk-[A-Za-z0-9_\-]{16,}')
+        }
+        openrouter = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            defaults = [ordered]@{
+                baseUrl = 'https://openrouter.ai/api/v1'
+            }
+            aliases = @('openrouter')
+            tokenPatterns = @('sk-or-v1-[A-Za-z0-9]+')
+        }
+        github = [ordered]@{
+            secretKind = 'token'
+            validationKind = 'github'
+            defaults = [ordered]@{}
+            aliases = @('github')
+            tokenPatterns = @('github_pat_[A-Za-z0-9_]+', 'gh[pousr]_[A-Za-z0-9_]+')
+        }
+        moonshot = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.moonshot.ai/v1'
+            }
+            aliases = @('moonshot', 'kimi')
+            tokenPatterns = @('sk-[A-Za-z0-9_\-]{12,}', 'ak-[A-Za-z0-9_\-]{12,}')
+        }
+        deepseek = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.deepseek.com'
+            }
+            aliases = @('deepseek')
+            tokenPatterns = @('sk-[A-Za-z0-9_\-]{12,}')
+        }
+        bonsai = [ordered]@{
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            defaults = [ordered]@{}
+            aliases = @('bonsai', 'bonsai cloud')
+            tokenPatterns = @('sk_cr_[A-Za-z0-9_\-]{12,}', 'c[0-9a-f]{24,}', 'ak-[A-Za-z0-9_\-]{12,}')
+        }
+        context7 = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            defaults = [ordered]@{
+                baseUrl = 'https://mcp.context7.com/mcp'
+            }
+            aliases = @('context7')
+            tokenPatterns = @()
+        }
+        firecrawl = [ordered]@{
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            defaults = [ordered]@{}
+            aliases = @('firecrawl')
+            tokenPatterns = @('fc-[A-Za-z0-9_\-]{8,}')
+        }
+        apify = [ordered]@{
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            defaults = [ordered]@{
+                baseUrl = 'https://mcp.apify.com'
+            }
+            aliases = @('apify')
+            tokenPatterns = @()
+        }
+        supabase = [ordered]@{
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            defaults = [ordered]@{
+                baseUrl = 'https://mcp.supabase.com/mcp'
+                projectRef = ''
+                readOnly = 'true'
+            }
+            aliases = @('supabase')
+            tokenPatterns = @()
+        }
+        netdata = [ordered]@{
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            defaults = [ordered]@{
+                baseUrl = 'http://127.0.0.1:19999/mcp'
+            }
+            aliases = @('netdata')
+            tokenPatterns = @()
+        }
+    }))
+}
+
+function New-BootstrapSecretValidationState {
+    param(
+        [string]$State = 'unknown',
+        [string]$CheckedAt = '',
+        [string]$Message = ''
+    )
+
+    return [ordered]@{
+        state = if ([string]::IsNullOrWhiteSpace($State)) { 'unknown' } else { $State }
+        checkedAt = if ([string]::IsNullOrWhiteSpace($CheckedAt)) { '' } else { $CheckedAt }
+        message = if ([string]::IsNullOrWhiteSpace($Message)) { '' } else { $Message }
+    }
+}
+
+function ConvertTo-BootstrapSafeSlug {
+    param([string]$Text)
+
+    $value = if ([string]::IsNullOrWhiteSpace($Text)) { 'default' } else { $Text.ToLowerInvariant() }
+    $value = [regex]::Replace($value, '[^a-z0-9]+', '-')
+    $value = $value.Trim('-')
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        return 'default'
+    }
+    return $value
+}
+
+function New-BootstrapSecretCredentialId {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [string[]]$ExistingIds = @()
+    )
+
+    $slug = ConvertTo-BootstrapSafeSlug -Text $Label
+    $counter = 1
+    while ($true) {
+        $candidate = '{0}-{1}-{2:00}' -f $ProviderName.ToLowerInvariant(), $slug, $counter
+        if (@($ExistingIds) -notcontains $candidate) {
+            return $candidate
+        }
+        $counter += 1
+    }
+}
+
+function Get-BootstrapSecretsProviderDefinitionTemplate {
+    param([Parameter(Mandatory = $true)][string]$ProviderName)
+
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $providerMeta = @{}
+    if ($catalog.Contains($ProviderName)) {
+        $providerMeta = $catalog[$ProviderName]
+    }
+
+    $defaults = [ordered]@{}
+    if ($providerMeta.ContainsKey('defaults') -and ($providerMeta['defaults'] -is [hashtable])) {
+        foreach ($key in $providerMeta['defaults'].Keys) {
+            $defaults[$key] = [string]$providerMeta['defaults'][$key]
+        }
+    }
+
+    return [ordered]@{
+        defaults = $defaults
+        activeCredential = ''
+        rotationOrder = @()
+        credentials = [ordered]@{}
+    }
+}
+
+function Normalize-BootstrapSecretValidation {
+    param($Validation)
+
+    $normalized = ConvertTo-BootstrapHashtable -InputObject $Validation
+    if (-not ($normalized -is [hashtable])) {
+        return (New-BootstrapSecretValidationState)
+    }
+
+    return (New-BootstrapSecretValidationState -State ([string]$normalized['state']) -CheckedAt ([string]$normalized['checkedAt']) -Message ([string]$normalized['message']))
+}
+
+function Normalize-BootstrapSecretCredential {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [Parameter(Mandatory = $true)][string]$CredentialId,
+        $CredentialData,
+        [string]$DefaultSecretKind = 'secret'
+    )
+
+    $normalized = ConvertTo-BootstrapHashtable -InputObject $CredentialData
+    if (-not ($normalized -is [hashtable])) {
+        $normalized = @{}
+    }
+
+    $secret = ''
+    foreach ($key in @('secret', 'apiKey', 'token', 'key')) {
+        if ($normalized.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace([string]$normalized[$key])) {
+            $secret = [string]$normalized[$key]
+            break
+        }
+    }
+
+    $displayName = if (-not [string]::IsNullOrWhiteSpace([string]$normalized['displayName'])) {
+        [string]$normalized['displayName']
+    } else {
+        'Default'
+    }
+
+    $secretKind = if (-not [string]::IsNullOrWhiteSpace([string]$normalized['secretKind'])) {
+        [string]$normalized['secretKind']
+    } else {
+        $DefaultSecretKind
+    }
+
+    $result = [ordered]@{
+        displayName = $displayName
+        secret = $secret
+        secretKind = $secretKind
+        validation = Normalize-BootstrapSecretValidation -Validation $normalized['validation']
+    }
+
+    foreach ($key in $normalized.Keys) {
+        if ($key -in @('displayName', 'secret', 'apiKey', 'token', 'key', 'secretKind', 'validation')) { continue }
+        $value = $normalized[$key]
+        if ($value -is [string]) {
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $result[$key] = $value
+            }
+            continue
+        }
+        if ($null -ne $value) {
+            $result[$key] = $value
+        }
+    }
+
+    return $result
+}
+
+function Convert-BootstrapSecretsProviderDefinition {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        $ProviderData
+    )
+
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $template = Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName $ProviderName
+    $normalized = ConvertTo-BootstrapHashtable -InputObject $ProviderData
+    if (-not ($normalized -is [hashtable])) {
+        $normalized = @{}
+    }
+
+    $defaultSecretKind = if ($catalog.Contains($ProviderName)) { [string]$catalog[$ProviderName]['secretKind'] } else { 'secret' }
+    $defaults = ConvertTo-BootstrapHashtable -InputObject $template['defaults']
+    foreach ($key in $normalized.Keys) {
+        if ($key -in @('defaults', 'credentials', 'rotationOrder', 'activeCredential', 'apiKey', 'token', 'secret', 'key', 'validation')) { continue }
+        $value = $normalized[$key]
+        if ($value -is [hashtable]) { continue }
+        if ($value -is [System.Collections.IEnumerable] -and -not ($value -is [string])) { continue }
+        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $defaults[$key] = [string]$value
+        }
+    }
+    if ($normalized.ContainsKey('defaults') -and ($normalized['defaults'] -is [hashtable])) {
+        foreach ($key in $normalized['defaults'].Keys) {
+            $value = [string]$normalized['defaults'][$key]
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $defaults[$key] = $value
+            }
+        }
+    }
+
+    $credentials = [ordered]@{}
+    if ($normalized.ContainsKey('credentials') -and ($normalized['credentials'] -is [hashtable])) {
+        foreach ($credentialId in $normalized['credentials'].Keys) {
+            $credentials[[string]$credentialId] = Normalize-BootstrapSecretCredential -ProviderName $ProviderName -CredentialId ([string]$credentialId) -CredentialData $normalized['credentials'][$credentialId] -DefaultSecretKind $defaultSecretKind
+        }
+    }
+    if ($credentials.Count -eq 0) {
+        $legacySecret = ''
+        foreach ($key in @('apiKey', 'token', 'secret', 'key')) {
+            if ($normalized.ContainsKey($key) -and -not [string]::IsNullOrWhiteSpace([string]$normalized[$key])) {
+                $legacySecret = [string]$normalized[$key]
+                break
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($legacySecret)) {
+            $credentialId = New-BootstrapSecretCredentialId -ProviderName $ProviderName -Label 'default'
+            $credentials[$credentialId] = [ordered]@{
+                displayName = 'Default'
+                secret = $legacySecret
+                secretKind = $defaultSecretKind
+                validation = New-BootstrapSecretValidationState
+            }
+        }
+    }
+
+    $rotationOrder = New-Object System.Collections.Generic.List[string]
+    if ($normalized.ContainsKey('rotationOrder') -and ($normalized['rotationOrder'] -is [System.Collections.IEnumerable])) {
+        foreach ($entry in @($normalized['rotationOrder'])) {
+            $value = [string]$entry
+            if ([string]::IsNullOrWhiteSpace($value)) { continue }
+            if (-not $credentials.Contains($value)) { continue }
+            if (-not $rotationOrder.Contains($value)) {
+                $rotationOrder.Add($value)
+            }
+        }
+    }
+    foreach ($credentialId in $credentials.Keys) {
+        if (-not $rotationOrder.Contains($credentialId)) {
+            $rotationOrder.Add($credentialId)
+        }
+    }
+
+    $activeCredential = [string]$normalized['activeCredential']
+    if ([string]::IsNullOrWhiteSpace($activeCredential) -or -not $credentials.Contains($activeCredential)) {
+        $activeCredential = if ($rotationOrder.Count -gt 0) { $rotationOrder[0] } else { '' }
+    }
+
+    return [ordered]@{
+        defaults = $defaults
+        activeCredential = $activeCredential
+        rotationOrder = @($rotationOrder.ToArray())
+        credentials = $credentials
+    }
+}
+
+function Get-BootstrapSecretsTemplate {
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $providers = [ordered]@{}
+    foreach ($providerName in $catalog.Keys) {
+        $providers[$providerName] = Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName $providerName
+    }
+
+    return [ordered]@{
+        '$schema' = 'https://bootstrap.local/schemas/bootstrap-secrets.schema.json'
+        metadata = [ordered]@{
+            version = 2
+            description = 'Preencha as credenciais abaixo. O bootstrap aplica somente a credencial ativa e validada de cada provedor.'
+            notes = @(
+                'Use credentials para armazenar varias chaves por provedor.',
+                'activeCredential aponta para a chave atualmente aplicada.',
+                'rotationOrder define a fila manual de troca.',
+                'Os placeholders {{activeProviders.*}} e {{providers.*}} resolvem a credencial ativa validada.'
+            )
+        }
+        providers = $providers
+        targets = [ordered]@{
+            userEnv = [ordered]@{
+                ANTHROPIC_API_KEY = '{{activeProviders.anthropic.apiKey}}'
+                OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
+                OPENAI_BASE_URL = '{{activeProviders.openai.baseUrl}}'
+                OPENAI_ORGANIZATION = '{{activeProviders.openai.organizationId}}'
+                GEMINI_API_KEY = '{{activeProviders.google.apiKey}}'
+                GOOGLE_API_KEY = '{{activeProviders.google.apiKey}}'
+                XAI_API_KEY = '{{activeProviders.xai.apiKey}}'
+                XAI_BASE_URL = '{{activeProviders.xai.baseUrl}}'
+                OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
+                OPENROUTER_BASE_URL = '{{activeProviders.openrouter.baseUrl}}'
+                GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                GH_TOKEN = '{{activeProviders.github.token}}'
+                MOONSHOT_API_KEY = '{{activeProviders.moonshot.apiKey}}'
+                MOONSHOT_BASE_URL = '{{activeProviders.moonshot.baseUrl}}'
+                DEEPSEEK_API_KEY = '{{activeProviders.deepseek.apiKey}}'
+                DEEPSEEK_BASE_URL = '{{activeProviders.deepseek.baseUrl}}'
+                BONSAI_TOKEN = '{{activeProviders.bonsai.token}}'
+            }
+            claudeCode = [ordered]@{
+                env = [ordered]@{
+                    ANTHROPIC_API_KEY = '{{activeProviders.anthropic.apiKey}}'
+                    OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
+                    OPENAI_BASE_URL = '{{activeProviders.openai.baseUrl}}'
+                    OPENAI_ORGANIZATION = '{{activeProviders.openai.organizationId}}'
+                    GEMINI_API_KEY = '{{activeProviders.google.apiKey}}'
+                    GOOGLE_API_KEY = '{{activeProviders.google.apiKey}}'
+                    XAI_API_KEY = '{{activeProviders.xai.apiKey}}'
+                    XAI_BASE_URL = '{{activeProviders.xai.baseUrl}}'
+                    OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
+                    OPENROUTER_BASE_URL = '{{activeProviders.openrouter.baseUrl}}'
+                    GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                    GH_TOKEN = '{{activeProviders.github.token}}'
+                    MOONSHOT_API_KEY = '{{activeProviders.moonshot.apiKey}}'
+                    MOONSHOT_BASE_URL = '{{activeProviders.moonshot.baseUrl}}'
+                    DEEPSEEK_API_KEY = '{{activeProviders.deepseek.apiKey}}'
+                    DEEPSEEK_BASE_URL = '{{activeProviders.deepseek.baseUrl}}'
+                    BONSAI_TOKEN = '{{activeProviders.bonsai.token}}'
+                }
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            claudeDesktop = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            cursor = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            windsurf = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        disabled = $true
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                        alwaysAllow = @()
+                    }
+                }
+            }
+            trae = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            openCode = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        type = 'local'
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            vsCode = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            roo = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        disabled = $true
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                        alwaysAllow = @()
+                    }
+                }
+            }
+            cline = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        disabled = $true
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                        alwaysAllow = @()
+                    }
+                }
+            }
+            continue = [ordered]@{
+                env = [ordered]@{
+                    ANTHROPIC_API_KEY = '{{activeProviders.anthropic.apiKey}}'
+                    OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
+                    OPENAI_BASE_URL = '{{activeProviders.openai.baseUrl}}'
+                    OPENAI_ORGANIZATION = '{{activeProviders.openai.organizationId}}'
+                    GEMINI_API_KEY = '{{activeProviders.google.apiKey}}'
+                    GOOGLE_API_KEY = '{{activeProviders.google.apiKey}}'
+                    GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                    OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
+                    OPENROUTER_BASE_URL = '{{activeProviders.openrouter.baseUrl}}'
+                    DEEPSEEK_API_KEY = '{{activeProviders.deepseek.apiKey}}'
+                    DEEPSEEK_BASE_URL = '{{activeProviders.deepseek.baseUrl}}'
+                    MOONSHOT_API_KEY = '{{activeProviders.moonshot.apiKey}}'
+                    MOONSHOT_BASE_URL = '{{activeProviders.moonshot.baseUrl}}'
+                }
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            zed = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            zCode = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                    }
+                }
+            }
+            openClaw = [ordered]@{
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        disabled = $true
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                        alwaysAllow = @()
+                    }
+                }
+            }
+            comet = [ordered]@{
+            }
+        }
+    }
+}
+
+function Normalize-BootstrapSecretsData {
+    param($Secrets)
+
+    $template = Get-BootstrapSecretsTemplate
+    $normalized = ConvertTo-BootstrapHashtable -InputObject $Secrets
+    if (-not ($normalized -is [hashtable])) {
+        $normalized = @{}
+    }
+
+    $metadata = [ordered]@{
+        version = 2
+        description = [string]$template.metadata.description
+        notes = @($template.metadata.notes)
+    }
+    if ($normalized.ContainsKey('metadata') -and ($normalized['metadata'] -is [hashtable])) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$normalized['metadata']['description'])) {
+            $metadata.description = [string]$normalized['metadata']['description']
+        }
+        if ($normalized['metadata'].ContainsKey('notes') -and ($normalized['metadata']['notes'] -is [System.Collections.IEnumerable])) {
+            $notes = @()
+            foreach ($item in @($normalized['metadata']['notes'])) {
+                $value = [string]$item
+                if (-not [string]::IsNullOrWhiteSpace($value)) {
+                    $notes += @($value)
+                }
+            }
+            if ($notes.Count -gt 0) {
+                $metadata.notes = @($notes)
+            }
+        }
+    }
+
+    $providersCurrent = if ($normalized.ContainsKey('providers') -and ($normalized['providers'] -is [hashtable])) { $normalized['providers'] } else { @{} }
+    $providers = [ordered]@{}
+    foreach ($providerName in @($template.providers.Keys + $providersCurrent.Keys | Select-Object -Unique)) {
+        $providerCurrent = if ($providersCurrent.Contains($providerName)) { $providersCurrent[$providerName] } else { $null }
+        $providers[$providerName] = Convert-BootstrapSecretsProviderDefinition -ProviderName ([string]$providerName) -ProviderData $providerCurrent
+    }
+
+    $targetsCurrent = if ($normalized.ContainsKey('targets') -and ($normalized['targets'] -is [hashtable])) { $normalized['targets'] } else { @{} }
+    $targets = Merge-BootstrapData -Defaults $template.targets -Current $targetsCurrent
+
+    return [ordered]@{
+        '$schema' = [string]$template['$schema']
+        metadata = $metadata
+        providers = $providers
+        targets = ConvertTo-BootstrapHashtable -InputObject $targets
+    }
+}
+
+function Get-BootstrapSecretValueByPath {
+    param(
+        [Parameter(Mandatory = $true)]$Root,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    $current = $Root
+    foreach ($segment in @($Path -split '\.')) {
+        if ($current -is [System.Collections.IDictionary]) {
+            if (-not $current.Contains($segment)) { return $null }
+            $current = $current[$segment]
+            continue
+        }
+        if ($current -is [pscustomobject]) {
+            $property = $current.PSObject.Properties[$segment]
+            if ($null -eq $property) { return $null }
+            $current = $property.Value
+            continue
+        }
+        return $null
+    }
+    return $current
+}
+
+function Resolve-BootstrapSecretTemplates {
+    param(
+        [Parameter(Mandatory = $true)][AllowNull()]$Value,
+        [Parameter(Mandatory = $true)]$SecretsData
+    )
+
+    if ($null -eq $Value) { return $null }
+
+    if ($Value -is [string]) {
+        return [regex]::Replace($Value, '\{\{([^}]+)\}\}', {
+            param($match)
+            $path = $match.Groups[1].Value.Trim()
+            $resolved = Get-BootstrapSecretValueByPath -Root $SecretsData -Path $path
+            if ($null -eq $resolved) { return '' }
+            return [string]$resolved
+        })
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $result = [ordered]@{}
+        foreach ($key in $Value.Keys) {
+            $result[[string]$key] = Resolve-BootstrapSecretTemplates -Value $Value[$key] -SecretsData $SecretsData
+        }
+        return $result
+    }
+
+    if ($Value -is [pscustomobject]) {
+        $result = [ordered]@{}
+        foreach ($property in $Value.PSObject.Properties) {
+            $result[$property.Name] = Resolve-BootstrapSecretTemplates -Value $property.Value -SecretsData $SecretsData
+        }
+        return $result
+    }
+
+    if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string])) {
+        $items = @()
+        foreach ($item in $Value) {
+            $items += @(Resolve-BootstrapSecretTemplates -Value $item -SecretsData $SecretsData)
+        }
+        return ,@($items)
+    }
+
+    return $Value
+}
+
+function Get-BootstrapActiveProviders {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [switch]$RequirePassedValidation
+    )
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $result = [ordered]@{}
+
+    foreach ($providerName in @($normalized.providers.Keys)) {
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerName]
+        if (-not ($provider -is [hashtable])) { continue }
+
+        $activeCredential = [string]$provider['activeCredential']
+        if ([string]::IsNullOrWhiteSpace($activeCredential)) { continue }
+        if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]) -and $provider['credentials'].Contains($activeCredential))) { continue }
+
+        $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$activeCredential]
+        if (-not ($credential -is [hashtable])) { continue }
+        if ([string]::IsNullOrWhiteSpace([string]$credential['secret'])) { continue }
+
+        $validationState = if ($credential.ContainsKey('validation') -and ($credential['validation'] -is [hashtable])) { [string]$credential['validation']['state'] } else { 'unknown' }
+        if ($RequirePassedValidation -and ($validationState -ne 'passed')) {
+            continue
+        }
+
+        $providerMeta = if ($catalog.Contains($providerName)) { $catalog[$providerName] } else { @{} }
+        $secretKind = if (-not [string]::IsNullOrWhiteSpace([string]$credential['secretKind'])) { [string]$credential['secretKind'] } elseif ($providerMeta.ContainsKey('secretKind')) { [string]$providerMeta['secretKind'] } else { 'secret' }
+
+        $active = [ordered]@{
+            credentialId = $activeCredential
+            displayName = [string]$credential['displayName']
+        }
+        if ($provider.ContainsKey('defaults') -and ($provider['defaults'] -is [hashtable])) {
+            foreach ($key in $provider['defaults'].Keys) {
+                $value = [string]$provider['defaults'][$key]
+                if (-not [string]::IsNullOrWhiteSpace($value)) {
+                    $active[$key] = $value
+                }
+            }
+        }
+        foreach ($key in $credential.Keys) {
+            if ($key -in @('displayName', 'secret', 'secretKind', 'validation')) { continue }
+            $value = [string]$credential[$key]
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $active[$key] = $value
+            }
+        }
+
+        switch ($secretKind) {
+            'apiKey' { $active['apiKey'] = [string]$credential['secret'] }
+            'token' { $active['token'] = [string]$credential['secret'] }
+            default { $active['secret'] = [string]$credential['secret'] }
+        }
+
+        $result[$providerName] = $active
+    }
+
+    return $result
+}
+
+function Add-BootstrapImportedCredential {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$SecretsData,
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][string]$Secret
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Secret)) { return $SecretsData }
+
+    if (-not $SecretsData.ContainsKey('providers') -or -not ($SecretsData['providers'] -is [System.Collections.IDictionary])) {
+        $SecretsData['providers'] = @{}
+    }
+
+    if (-not $SecretsData['providers'].Contains($ProviderName) -or -not ($SecretsData['providers'][$ProviderName] -is [System.Collections.IDictionary])) {
+        $SecretsData['providers'][$ProviderName] = Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName $ProviderName
+    }
+
+    $provider = ConvertTo-BootstrapHashtable -InputObject $SecretsData['providers'][$ProviderName]
+    if (-not $provider.ContainsKey('credentials') -or -not ($provider['credentials'] -is [hashtable])) {
+        $provider['credentials'] = [ordered]@{}
+    }
+
+    foreach ($existingId in $provider['credentials'].Keys) {
+        $existingCredential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$existingId]
+        if (($existingCredential -is [hashtable]) -and ([string]$existingCredential['secret'] -eq $Secret)) {
+            return $SecretsData
+        }
+    }
+
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $defaultSecretKind = if ($catalog.Contains($ProviderName)) { [string]$catalog[$ProviderName]['secretKind'] } else { 'secret' }
+    $credentialId = New-BootstrapSecretCredentialId -ProviderName $ProviderName -Label $DisplayName -ExistingIds @($provider['credentials'].Keys)
+    $provider['credentials'][$credentialId] = [ordered]@{
+        displayName = if ([string]::IsNullOrWhiteSpace($DisplayName)) { 'Imported' } else { $DisplayName.Trim() }
+        secret = $Secret
+        secretKind = $defaultSecretKind
+        validation = New-BootstrapSecretValidationState
+    }
+
+    if (-not $provider.ContainsKey('rotationOrder') -or -not ($provider['rotationOrder'] -is [System.Collections.IEnumerable])) {
+        $provider['rotationOrder'] = @()
+    }
+    $provider['rotationOrder'] = @($provider['rotationOrder']) + @($credentialId)
+    $SecretsData['providers'][$ProviderName] = Convert-BootstrapSecretsProviderDefinition -ProviderName $ProviderName -ProviderData $provider
+    return $SecretsData
+}
+
+function Get-BootstrapSecretsProviderNameFromHeading {
+    param([string]$Heading)
+
+    if ([string]::IsNullOrWhiteSpace($Heading)) { return $null }
+    $normalizedHeading = $Heading.ToLowerInvariant()
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    foreach ($providerName in $catalog.Keys) {
+        foreach ($alias in @($catalog[$providerName]['aliases'])) {
+            if ($normalizedHeading -like "*$alias*") {
+                return $providerName
+            }
+        }
+    }
+    return $null
+}
+
+function Get-BootstrapSecretsTokenMatches {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [Parameter(Mandatory = $true)][string]$Text
+    )
+
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    if (-not $catalog.Contains($ProviderName)) { return @() }
+
+    $tokens = New-Object System.Collections.Generic.List[string]
+    foreach ($pattern in @($catalog[$ProviderName]['tokenPatterns'])) {
+        foreach ($match in [regex]::Matches($Text, $pattern)) {
+            $value = [string]$match.Value
+            if (-not [string]::IsNullOrWhiteSpace($value) -and -not $tokens.Contains($value)) {
+                $tokens.Add($value)
+            }
+        }
+    }
+
+    return @($tokens.ToArray())
+}
+
+function Import-BootstrapSecretsText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Text,
+        [Parameter(Mandatory = $true)]$SecretsData
+    )
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $currentProvider = $null
+    $lines = @($Text -split "`r?`n")
+
+    foreach ($line in $lines) {
+        $trimmed = $line.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+
+        if ($trimmed -match '^#{1,6}\s+(.+)$') {
+            $currentProvider = Get-BootstrapSecretsProviderNameFromHeading -Heading ([string]$matches[1])
+            continue
+        }
+        if (-not $currentProvider) { continue }
+        if ($trimmed -match '^https?://') { continue }
+        if ($trimmed -match '^[A-Za-z]:\\') { continue }
+
+        if (($currentProvider -eq 'openai') -and ($trimmed -match '(org-[A-Za-z0-9]+)')) {
+            $normalized.providers.openai.defaults.organizationId = [string]$matches[1]
+        }
+
+        $displayName = 'Imported'
+        $candidateText = $trimmed
+        if ($trimmed.StartsWith('|')) {
+            $cells = @($trimmed.Trim('|').Split('|') | ForEach-Object { $_.Trim() })
+            if ($cells.Count -gt 0) {
+                if ($cells[0] -match '^(servi[cç]o|service|chave|key|observa)') { continue }
+                $displayName = if ([string]::IsNullOrWhiteSpace($cells[0])) { 'Imported' } else { $cells[0] }
+                $candidateText = [string]::Join(' ', $cells)
+            }
+        } elseif ($trimmed -match '^([^:]+):\s+') {
+            $displayName = [string]$matches[1]
+        } elseif ($trimmed -match '^([^-]+)\s+-\s+') {
+            $displayName = [string]$matches[1]
+        }
+
+        foreach ($token in @(Get-BootstrapSecretsTokenMatches -ProviderName $currentProvider -Text $candidateText)) {
+            $normalized = Add-BootstrapImportedCredential -SecretsData $normalized -ProviderName $currentProvider -DisplayName $displayName -Secret $token
+        }
+    }
+
+    return (Normalize-BootstrapSecretsData -Secrets $normalized)
+}
+
+function Get-BootstrapSecretsListEntries {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $entries = @()
+
+    foreach ($providerName in ($normalized.providers.Keys | Sort-Object)) {
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerName]
+        if (-not ($provider -is [hashtable])) { continue }
+
+        $orderedIds = New-Object System.Collections.Generic.List[string]
+        foreach ($credentialId in @($provider['rotationOrder'])) {
+            $value = [string]$credentialId
+            if ([string]::IsNullOrWhiteSpace($value)) { continue }
+            if (-not $orderedIds.Contains($value)) { $orderedIds.Add($value) }
+        }
+        if ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable])) {
+            foreach ($credentialId in $provider['credentials'].Keys) {
+                if (-not $orderedIds.Contains([string]$credentialId)) {
+                    $orderedIds.Add([string]$credentialId)
+                }
+            }
+        }
+
+        $order = 0
+        foreach ($credentialId in $orderedIds) {
+            if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]) -and $provider['credentials'].Contains($credentialId))) { continue }
+            $order += 1
+            $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$credentialId]
+            $validation = if ($credential.ContainsKey('validation') -and ($credential['validation'] -is [hashtable])) { $credential['validation'] } else { @{} }
+            $entries += [pscustomobject]@{
+                provider = [string]$providerName
+                id = [string]$credentialId
+                displayName = [string]$credential['displayName']
+                active = ([string]$provider['activeCredential'] -eq [string]$credentialId)
+                order = $order
+                validationState = [string]$validation['state']
+                validationMessage = [string]$validation['message']
+            }
+        }
+    }
+
+    return @($entries)
+}
+
+function Get-BootstrapResolvedSecretsTargets {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [switch]$IncludeManagedMcps
+    )
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $activeProviders = Get-BootstrapActiveProviders -SecretsData $normalized -RequirePassedValidation
+    $context = [ordered]@{
+        metadata = $normalized['metadata']
+        targets = $normalized['targets']
+        activeProviders = $activeProviders
+        providers = $activeProviders
+    }
+
+    $resolvedTargets = ConvertTo-BootstrapHashtable -InputObject (Resolve-BootstrapSecretTemplates -Value $normalized['targets'] -SecretsData $context)
+    if ($resolvedTargets -is [hashtable]) {
+        $hasGithubToken = $activeProviders.Contains('github') -and -not [string]::IsNullOrWhiteSpace([string]$activeProviders['github']['token'])
+        foreach ($targetName in @('vsCode', 'continue')) {
+            if ($resolvedTargets.ContainsKey($targetName) -and ($resolvedTargets[$targetName] -is [hashtable])) {
+                $target = ConvertTo-BootstrapHashtable -InputObject $resolvedTargets[$targetName]
+                if ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable]) -and $target['mcpServers'].ContainsKey('github')) {
+                    $githubServer = ConvertTo-BootstrapHashtable -InputObject $target['mcpServers']['github']
+                    $githubServer['enabled'] = $hasGithubToken
+                    $target['mcpServers']['github'] = $githubServer
+                    $resolvedTargets[$targetName] = $target
+                }
+            }
+        }
+
+        if ($IncludeManagedMcps) {
+            $managedProviders = Get-BootstrapManagedMcpProviders -SecretsData $normalized
+            $resolvedTargets = Merge-BootstrapManagedMcpTargets -ResolvedTargets $resolvedTargets -ManagedProviders $managedProviders
+        }
+    }
+
+    return $resolvedTargets
+}
+
+function Get-BootstrapSecretsDiagnostics {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $knownTargets = Get-BootstrapSecretsKnownTargets
+    $warnings = @()
+    $unknownTargets = @()
+    $invalidTargets = @()
+
+    if (-not ($normalized['providers'] -is [System.Collections.IDictionary])) {
+        $warnings += @('providers deve ser um objeto JSON.')
+    }
+    if (-not ($normalized['targets'] -is [System.Collections.IDictionary])) {
+        $warnings += @('targets deve ser um objeto JSON.')
+    } else {
+        foreach ($targetName in $normalized['targets'].Keys) {
+            if ($knownTargets -notcontains [string]$targetName) {
+                $unknownTargets += @([string]$targetName)
+                continue
+            }
+            if (-not ($normalized['targets'][$targetName] -is [System.Collections.IDictionary])) {
+                $invalidTargets += @([string]$targetName)
+            }
+        }
+    }
+
+    if ($unknownTargets.Count -gt 0) {
+        $warnings += @("Targets desconhecidos no manifesto: $([string]::Join(', ', $unknownTargets))")
+    }
+    if ($invalidTargets.Count -gt 0) {
+        $warnings += @("Targets invalidos (esperado objeto JSON): $([string]::Join(', ', $invalidTargets))")
+    }
+    if ($normalized['targets'] -is [System.Collections.IDictionary] -and $normalized['targets'].Contains('comet') -and ($normalized['targets']['comet'] -is [System.Collections.IDictionary])) {
+        if (@($normalized['targets']['comet'].Keys).Count -gt 0) {
+            $warnings += @('Comet: sem suporte a MCP por arquivo; ignore este target ou deixe-o vazio.')
+        }
+    }
+
+    return [ordered]@{
+        warnings = @($warnings)
+        unknownTargets = @($unknownTargets)
+        invalidTargets = @($invalidTargets)
+    }
+}
+
+function Get-BootstrapSecretsData {
+    $path = Get-BootstrapSecretsPath
+    $current = $null
+    $created = $false
+
+    if (Test-Path $path) {
+        try {
+            $current = Get-Content -Path $path -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+            Write-Log "Falha ao ler bootstrap-secrets.json. O arquivo sera reformatado com os defaults atuais: $path" 'WARN'
+        }
+    }
+
+    if (-not $current) {
+        $current = @{}
+        $created = $true
+    }
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $current
+    Write-BootstrapJsonFile -Path $path -Value $normalized
+
+    return [ordered]@{
+        Path = $path
+        Data = $normalized
+        Created = $created
+    }
 }
 
 function Get-BootstrapSteamDeckSettingsPath {
@@ -2239,7 +3922,9 @@ function Ensure-BootstrapSteamDeckSettings {
     $merged = Normalize-BootstrapSteamDeckSettingsData -Settings $merged
     $merged.steamDeckVersion = $State.RequestedSteamDeckVersion
     $merged.resolvedSteamDeckVersion = $State.ResolvedSteamDeckVersion
-    (ConvertTo-BootstrapObjectGraph -InputObject $merged) | ConvertTo-Json -Depth 12 | Set-Content -Path $settingsPath -Encoding utf8
+    $json = [string]((ConvertTo-BootstrapObjectGraph -InputObject $merged) | ConvertTo-Json -Depth 12)
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($settingsPath, $json, $utf8)
     $State.SteamDeckSettingsPath = $settingsPath
     Write-Log "Config do Steam Deck garantida: $settingsPath"
 
@@ -2394,6 +4079,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['warp'] = New-BootstrapComponentDefinition -Name 'warp' -Description 'Warp terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Warp.Warp'; DisplayName = 'Warp'; AllowFailureWhenNotAdmin = $true }
     $catalog['trae'] = New-BootstrapComponentDefinition -Name 'trae' -Description 'Trae desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ByteDance.Trae'; DisplayName = 'Trae'; AllowFailureWhenNotAdmin = $true }
     $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'; AllowFailureWhenNotAdmin = $true }
+    $catalog['vscode'] = New-BootstrapComponentDefinition -Name 'vscode' -Description 'VS Code estável.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.VisualStudioCode'; DisplayName = 'Visual Studio Code'; AllowFailureWhenNotAdmin = $true }
     $catalog['vscode-insiders'] = New-BootstrapComponentDefinition -Name 'vscode-insiders' -Description 'VS Code Insiders.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.VisualStudioCode.Insiders'; DisplayName = 'Visual Studio Code - Insiders'; AllowFailureWhenNotAdmin = $true }
     $catalog['antigravity'] = New-BootstrapComponentDefinition -Name 'antigravity' -Description 'Google Antigravity.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Google.Antigravity'; DisplayName = 'Antigravity'; AllowFailureWhenNotAdmin = $true }
     $catalog['autoclaw'] = New-BootstrapComponentDefinition -Name 'autoclaw' -Description 'AutoClaw.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ZhipuAI.AutoClaw'; DisplayName = 'AutoClaw'; AllowFailureWhenNotAdmin = $true }
@@ -2412,7 +4098,10 @@ function Get-BootstrapComponentCatalog {
     $catalog['copilot-cli'] = New-BootstrapComponentDefinition -Name 'copilot-cli' -Description 'GitHub Copilot CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@github/copilot'; DisplayName = 'GitHub Copilot CLI (@github/copilot)' }
     $catalog['codex-cli'] = New-BootstrapComponentDefinition -Name 'codex-cli' -Description 'OpenAI Codex CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@openai/codex'; DisplayName = 'OpenAI Codex CLI (@openai/codex)' }
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
-    $catalog['claude-config'] = New-BootstrapComponentDefinition -Name 'claude-config' -Description 'Defaults e hooks do Claude Code.' -DependsOn @('git-core', 'claude-code') -Kind 'claude-config'
+    $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
+    $catalog['bootstrap-mcps'] = New-BootstrapComponentDefinition -Name 'bootstrap-mcps' -Description 'Instala dependencias locais dos MCPs gerenciados e registra o estado da automacao.' -DependsOn @('bootstrap-secrets', 'node-core', 'python-core') -Kind 'bootstrap-mcps'
+    $catalog['vscode-extensions'] = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'Instala e configura extensões do VS Code e VS Code Insiders.' -DependsOn @('bootstrap-secrets', 'vscode', 'vscode-insiders') -Kind 'vscode-extensions'
+    $catalog['claude-config'] = New-BootstrapComponentDefinition -Name 'claude-config' -Description 'Defaults e hooks do Claude Code.' -DependsOn @('git-core', 'claude-code', 'bootstrap-secrets') -Kind 'claude-config'
     $catalog['aider'] = New-BootstrapComponentDefinition -Name 'aider' -Description 'aider via uv tool.' -DependsOn @('python-core') -Kind 'uvtool' -Data @{ Package = 'aider-chat'; CommandName = 'aider'; DisplayName = 'aider (aider-chat)'; VersionArgs = @('--version') }
     $catalog['goose'] = New-BootstrapComponentDefinition -Name 'goose' -Description 'goose CLI.' -DependsOn @('git-core') -Kind 'goose'
     $catalog['repo-gemini-cli'] = New-BootstrapComponentDefinition -Name 'repo-gemini-cli' -Description 'Clone do repositório gemini-cli.' -DependsOn @('git-core') -Kind 'repo-clone' -Data @{ RepoUrl = 'https://github.com/heartyguy/gemini-cli'; TargetName = 'gemini-cli' }
@@ -2486,10 +4175,10 @@ function Get-BootstrapComponentCatalog {
 function Get-BootstrapProfileCatalog {
     $catalog = [ordered]@{}
 
-    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para máquina nova.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'google-app-desktop', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
@@ -2909,6 +4598,14 @@ function New-BootstrapState {
         GitInfo = $null
         NodeInfo = $null
         PythonReady = $false
+        SecretsPath = $null
+        SecretsSummary = $null
+        McpStatePath = $null
+        McpSummary = $null
+        VsCodeExtensionsPath = $null
+        VsCodeExtensionsSummary = $null
+        PreflightDone = $false
+        PreflightSummary = $null
         Completed = @{}
     }
 }
@@ -3063,7 +4760,7 @@ function Ensure-BootstrapSteamDeckToolsRuntime {
 
     try {
         Write-Log "Baixando Steam Deck Tools portable: $downloadUrl"
-        Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -OutFile $zipPath | Out-Null
+        Invoke-WebRequestWithRetry -Uri $downloadUrl -OutFile $zipPath -OperationName 'download do Steam Deck Tools'
         $null = New-Item -Path $extractDir -ItemType Directory -Force
         Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
         $null = New-Item -Path $installRoot -ItemType Directory -Force
@@ -3093,7 +4790,2584 @@ function Write-BootstrapJsonFile {
         $null = New-Item -Path $parent -ItemType Directory -Force
     }
 
-    (ConvertTo-BootstrapObjectGraph -InputObject $Value) | ConvertTo-Json -Depth 12 | Set-Content -Path $Path -Encoding utf8
+    $json = [string]((ConvertTo-BootstrapObjectGraph -InputObject $Value) | ConvertTo-Json -Depth 12)
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $json, $utf8)
+}
+
+function Remove-BootstrapJsonComments {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $builder = New-Object System.Text.StringBuilder
+    $inString = $false
+    $escape = $false
+    $inLineComment = $false
+    $inBlockComment = $false
+
+    for ($index = 0; $index -lt $Text.Length; $index++) {
+        $char = $Text[$index]
+        $next = if (($index + 1) -lt $Text.Length) { $Text[$index + 1] } else { [char]0 }
+
+        if ($inLineComment) {
+            if ($char -eq "`r" -or $char -eq "`n") {
+                $inLineComment = $false
+                [void]$builder.Append($char)
+            }
+            continue
+        }
+
+        if ($inBlockComment) {
+            if ($char -eq '*' -and $next -eq '/') {
+                $inBlockComment = $false
+                $index += 1
+            }
+            continue
+        }
+
+        if ($inString) {
+            [void]$builder.Append($char)
+            if ($escape) {
+                $escape = $false
+            } elseif ($char -eq '\') {
+                $escape = $true
+            } elseif ($char -eq '"') {
+                $inString = $false
+            }
+            continue
+        }
+
+        if ($char -eq '"') {
+            $inString = $true
+            [void]$builder.Append($char)
+            continue
+        }
+
+        if ($char -eq '/' -and $next -eq '/') {
+            $inLineComment = $true
+            $index += 1
+            continue
+        }
+
+        if ($char -eq '/' -and $next -eq '*') {
+            $inBlockComment = $true
+            $index += 1
+            continue
+        }
+
+        [void]$builder.Append($char)
+    }
+
+    return $builder.ToString()
+}
+
+function Remove-BootstrapJsonTrailingCommas {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $builder = New-Object System.Text.StringBuilder
+    $inString = $false
+    $escape = $false
+
+    for ($index = 0; $index -lt $Text.Length; $index++) {
+        $char = $Text[$index]
+
+        if ($inString) {
+            [void]$builder.Append($char)
+            if ($escape) {
+                $escape = $false
+            } elseif ($char -eq '\') {
+                $escape = $true
+            } elseif ($char -eq '"') {
+                $inString = $false
+            }
+            continue
+        }
+
+        if ($char -eq '"') {
+            $inString = $true
+            [void]$builder.Append($char)
+            continue
+        }
+
+        if ($char -eq ',') {
+            $lookAhead = $index + 1
+            while ($lookAhead -lt $Text.Length -and [char]::IsWhiteSpace($Text[$lookAhead])) {
+                $lookAhead += 1
+            }
+
+            if ($lookAhead -lt $Text.Length -and $Text[$lookAhead] -in @('}', ']')) {
+                continue
+            }
+        }
+
+        [void]$builder.Append($char)
+    }
+
+    return $builder.ToString()
+}
+
+function ConvertFrom-BootstrapJsonText {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $withoutComments = Remove-BootstrapJsonComments -Text $Text
+    $sanitized = Remove-BootstrapJsonTrailingCommas -Text $withoutComments
+    return ($sanitized | ConvertFrom-Json -ErrorAction Stop)
+}
+
+function Read-BootstrapJsonFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return $null
+    }
+
+    return (ConvertTo-BootstrapHashtable -InputObject (ConvertFrom-BootstrapJsonText -Text (Get-Content -Path $Path -Raw -Encoding utf8)))
+}
+
+function Ensure-BootstrapNamedMap {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Parent,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if (-not $Parent.ContainsKey($Name) -or -not ($Parent[$Name] -is [hashtable])) {
+        $Parent[$Name] = @{}
+    }
+    return $Parent[$Name]
+}
+
+function Remove-BootstrapEmptyNamedMap {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Parent,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($Parent.ContainsKey($Name) -and ($Parent[$Name] -is [hashtable]) -and ($Parent[$Name].Count -eq 0)) {
+        $Parent.Remove($Name) | Out-Null
+        return $true
+    }
+    return $false
+}
+
+function Set-BootstrapNonEmptyStringValues {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Target,
+        [Parameter(Mandatory = $true)][hashtable]$Values
+    )
+
+    foreach ($key in $Values.Keys) {
+        $value = [string]$Values[$key]
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        $Target[[string]$key] = $value
+    }
+}
+
+function Get-BootstrapClaudeDesktopConfigPath {
+    return (Join-Path (Get-BootstrapAppDataPath) 'Claude\claude_desktop_config.json')
+}
+
+function Get-BootstrapCursorMcpConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($userHome) { Join-Path $userHome '.cursor\mcp.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Cursor\mcp.json' })
+    ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.cursor\mcp.json' } else { $null }))
+}
+
+function Get-BootstrapWindsurfMcpConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($appDataPath) { Join-Path $appDataPath 'Codeium\Windsurf\mcp_config.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Windsurf\mcp.json' }),
+        $(if ($userHome) { Join-Path $userHome '.codeium\windsurf\mcp_config.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Windsurf\User\settings.json' })
+    ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'Codeium\Windsurf\mcp_config.json' } else { $null }))
+}
+
+function Get-BootstrapTraeMcpConfigPath {
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($appDataPath) { Join-Path $appDataPath 'Trae\User\mcp.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Trae\User\settings.json' })
+    ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'Trae\User\mcp.json' } else { $null }))
+}
+
+function Get-BootstrapOpenCodeConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($userHome) { Join-Path $userHome '.config\opencode\opencode.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'OpenCode\opencode.json' })
+    ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.config\opencode\opencode.json' } else { $null }))
+}
+
+function Test-BootstrapVsCodeStableInstalled {
+    $localAppDataPath = Get-BootstrapLocalAppDataPath
+    $programFilesX86 = ${env:ProgramFiles(x86)}
+    $candidates = @(
+        $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Microsoft VS Code\Code.exe' }),
+        $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Microsoft VS Code\bin\code.cmd' }),
+        $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Microsoft VS Code\Code.exe' }),
+        $(if ($programFilesX86) { Join-Path $programFilesX86 'Microsoft VS Code\Code.exe' })
+    )
+
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Test-BootstrapVsCodeInsidersInstalled {
+    $localAppDataPath = Get-BootstrapLocalAppDataPath
+    $programFilesX86 = ${env:ProgramFiles(x86)}
+    $candidates = @(
+        $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Microsoft VS Code Insiders\Code - Insiders.exe' }),
+        $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Microsoft VS Code Insiders\bin\code-insiders.cmd' }),
+        $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Microsoft VS Code Insiders\Code - Insiders.exe' }),
+        $(if ($programFilesX86) { Join-Path $programFilesX86 'Microsoft VS Code Insiders\Code - Insiders.exe' })
+    )
+
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Resolve-BootstrapVsCodeCliPath {
+    param([Parameter(Mandatory = $true)][ValidateSet('stable', 'insiders')][string]$Channel)
+
+    $localAppDataPath = Get-BootstrapLocalAppDataPath
+    $programFilesX86 = ${env:ProgramFiles(x86)}
+    $commandName = if ($Channel -eq 'insiders') { 'code-insiders' } else { 'code' }
+    $candidates = @()
+
+    if ($Channel -eq 'insiders') {
+        $candidates += @(
+            $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Microsoft VS Code Insiders\bin\code-insiders.cmd' }),
+            $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Microsoft VS Code Insiders\bin\code-insiders' }),
+            $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Microsoft VS Code Insiders\bin\code-insiders.cmd' }),
+            $(if ($programFilesX86) { Join-Path $programFilesX86 'Microsoft VS Code Insiders\bin\code-insiders.cmd' })
+        )
+    } else {
+        $candidates += @(
+            $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Microsoft VS Code\bin\code.cmd' }),
+            $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Microsoft VS Code\bin\code' }),
+            $(if ($env:ProgramFiles) { Join-Path $env:ProgramFiles 'Microsoft VS Code\bin\code.cmd' }),
+            $(if ($programFilesX86) { Join-Path $programFilesX86 'Microsoft VS Code\bin\code.cmd' })
+        )
+    }
+
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+
+    $resolved = Resolve-CommandPath -Name $commandName
+    if ($resolved) {
+        return $resolved
+    }
+
+    return $null
+}
+
+function Get-BootstrapVsCodeSettingsPath {
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\settings.json' }),
+        $(if ($userHome) { Join-Path $userHome '.vscode\settings.json' })
+    ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\settings.json' } else { $null }))
+}
+
+function Get-BootstrapVsCodeInsidersSettingsPath {
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\settings.json' })
+    ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\settings.json' } else { $null }))
+}
+
+function Get-BootstrapVsCodeMcpConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    $agentsPath = if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\mcp.json' } else { $null }
+    $insidersPath = if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\mcp.json' } else { $null }
+    $stablePath = if ($appDataPath) { Join-Path $appDataPath 'Code\User\mcp.json' } else { $null }
+    $workspacePath = if ($userHome) { Join-Path $userHome '.vscode\mcp.json' } else { $null }
+
+    foreach ($candidate in @($agentsPath, $insidersPath, $stablePath, $workspacePath)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $candidate
+        }
+    }
+
+    if (Test-BootstrapVsCodeInsidersInstalled) {
+        foreach ($candidate in @($agentsPath, $insidersPath)) {
+            if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+            $parent = Split-Path -Path $candidate -Parent
+            if (-not [string]::IsNullOrWhiteSpace($parent) -and (Test-Path $parent)) {
+                return $candidate
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($agentsPath)) {
+            return $agentsPath
+        }
+        return $insidersPath
+    }
+
+    foreach ($candidate in @($agentsPath, $insidersPath, $stablePath, $workspacePath)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $parent = Split-Path -Path $candidate -Parent
+        if (-not [string]::IsNullOrWhiteSpace($parent) -and (Test-Path $parent)) {
+            return $candidate
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($stablePath)) {
+        return $stablePath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($agentsPath)) {
+        return $agentsPath
+    }
+    return $workspacePath
+}
+
+function Get-BootstrapRooMcpConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($userHome) { Join-Path $userHome '.roo\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\rooveterinaryinc.roo-code\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\rooveterinaryinc.roo-code\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\rooveterinaryinc.roo-code\settings\mcp_settings.json' })
+    ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.roo\mcp_settings.json' } else { $null }))
+}
+
+function Get-BootstrapClineMcpConfigPath {
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Cursor\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Windsurf\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' })
+    ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' } else { $null }))
+}
+
+function Get-BootstrapZedConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($appDataPath) { Join-Path $appDataPath 'Zed\settings.json' }),
+        $(if ($userHome) { Join-Path $userHome '.config\zed\settings.json' })
+    ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'Zed\settings.json' } else { $null }))
+}
+
+function Get-BootstrapZCodeStorePath {
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($appDataPath) { Join-Path $appDataPath 'ai.z.zcode\store.json' })
+    ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'ai.z.zcode\store.json' } else { $null }))
+}
+
+function Get-BootstrapOpenClawConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    $appDataPath = Get-BootstrapAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($userHome) { Join-Path $userHome '.openclaw\openclaw.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'clawdbot\clawdbot.json5' })
+    ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.openclaw\openclaw.json' } else { $null }))
+}
+
+function Test-BootstrapSecretsProviderCredential {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [Parameter(Mandatory = $true)][hashtable]$ProviderDefinition,
+        [Parameter(Mandatory = $true)][string]$CredentialId,
+        [Parameter(Mandatory = $true)][hashtable]$Credential
+    )
+
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $checkedAt = (Get-Date).ToString('o')
+    $providerMeta = if ($catalog.Contains($ProviderName)) { $catalog[$ProviderName] } else { @{} }
+    $validationKind = if ($providerMeta.ContainsKey('validationKind')) { [string]$providerMeta['validationKind'] } else { 'unsupported' }
+    $secret = [string]$Credential['secret']
+    if ([string]::IsNullOrWhiteSpace($secret)) {
+        return (New-BootstrapSecretValidationState -State 'failed' -CheckedAt $checkedAt -Message 'secret vazio')
+    }
+
+    $baseUrl = ''
+    if ($Credential.ContainsKey('baseUrl') -and -not [string]::IsNullOrWhiteSpace([string]$Credential['baseUrl'])) {
+        $baseUrl = [string]$Credential['baseUrl']
+    } elseif ($ProviderDefinition.ContainsKey('defaults') -and ($ProviderDefinition['defaults'] -is [hashtable]) -and -not [string]::IsNullOrWhiteSpace([string]$ProviderDefinition['defaults']['baseUrl'])) {
+        $baseUrl = [string]$ProviderDefinition['defaults']['baseUrl']
+    } elseif ($providerMeta.ContainsKey('defaults') -and ($providerMeta['defaults'] -is [hashtable]) -and -not [string]::IsNullOrWhiteSpace([string]$providerMeta['defaults']['baseUrl'])) {
+        $baseUrl = [string]$providerMeta['defaults']['baseUrl']
+    }
+
+    $headers = @{}
+    $uri = ''
+    switch ($validationKind) {
+        'anthropic' {
+            $uri = 'https://api.anthropic.com/v1/models'
+            $headers = @{
+                'x-api-key' = $secret
+                'anthropic-version' = '2023-06-01'
+            }
+        }
+        'google' {
+            $uri = 'https://generativelanguage.googleapis.com/v1beta/models?key=' + [Uri]::EscapeDataString($secret)
+        }
+        'github' {
+            $uri = 'https://api.github.com/user'
+            $headers = @{
+                Authorization = "Bearer $secret"
+                Accept = 'application/vnd.github+json'
+                'X-GitHub-Api-Version' = '2022-11-28'
+                'User-Agent' = 'PhaseZero Bootstrap'
+            }
+        }
+        'openaiCompatible' {
+            if ([string]::IsNullOrWhiteSpace($baseUrl)) {
+                return (New-BootstrapSecretValidationState -State 'failed' -CheckedAt $checkedAt -Message 'baseUrl ausente')
+            }
+            $uri = ($baseUrl.TrimEnd('/') + '/models')
+            $headers = @{
+                Authorization = "Bearer $secret"
+            }
+        }
+        default {
+            return (New-BootstrapSecretValidationState -State 'unsupported/manual-review' -CheckedAt $checkedAt -Message 'sem validador dedicado')
+        }
+    }
+
+    try {
+        $null = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -ErrorAction Stop
+        return (New-BootstrapSecretValidationState -State 'passed' -CheckedAt $checkedAt -Message 'ok')
+    } catch {
+        return (New-BootstrapSecretValidationState -State 'failed' -CheckedAt $checkedAt -Message $_.Exception.Message)
+    }
+}
+
+function Invoke-BootstrapSecretsValidation {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [switch]$ValidateAll
+    )
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+
+    foreach ($providerName in @($normalized.providers.Keys)) {
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerName]
+        if (-not ($provider -is [hashtable])) { continue }
+        if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]))) { continue }
+
+        $credentialIds = @()
+        if ($ValidateAll) {
+            $credentialIds = @($provider['credentials'].Keys)
+        } else {
+            $activeCredential = [string]$provider['activeCredential']
+            if (-not [string]::IsNullOrWhiteSpace($activeCredential) -and $provider['credentials'].Contains($activeCredential)) {
+                $credentialIds = @($activeCredential)
+            }
+        }
+
+        foreach ($credentialId in $credentialIds) {
+            $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$credentialId]
+            if (-not ($credential -is [hashtable])) { continue }
+            $provider['credentials'][$credentialId]['validation'] = Test-BootstrapSecretsProviderCredential -ProviderName ([string]$providerName) -ProviderDefinition $provider -CredentialId ([string]$credentialId) -Credential $credential
+        }
+
+        $normalized.providers[$providerName] = Convert-BootstrapSecretsProviderDefinition -ProviderName ([string]$providerName) -ProviderData $provider
+    }
+
+    return $normalized
+}
+
+function Set-BootstrapSecretsActiveCredential {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [Parameter(Mandatory = $true)][string]$CredentialId
+    )
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    if (-not $normalized.providers.Contains($ProviderName)) {
+        throw "Provider desconhecido: $ProviderName"
+    }
+
+    $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$ProviderName]
+    if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]) -and $provider['credentials'].Contains($CredentialId))) {
+        throw "Credencial desconhecida para ${ProviderName}: $CredentialId"
+    }
+
+    $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$CredentialId]
+    $provider['credentials'][$CredentialId]['validation'] = Test-BootstrapSecretsProviderCredential -ProviderName $ProviderName -ProviderDefinition $provider -CredentialId $CredentialId -Credential $credential
+    if ([string]$provider['credentials'][$CredentialId]['validation']['state'] -eq 'passed') {
+        $provider['activeCredential'] = $CredentialId
+    }
+
+    $normalized.providers[$ProviderName] = Convert-BootstrapSecretsProviderDefinition -ProviderName $ProviderName -ProviderData $provider
+    return $normalized
+}
+
+function Move-BootstrapSecretsToNextCredential {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [Parameter(Mandatory = $true)][string]$ProviderName
+    )
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    if (-not $normalized.providers.Contains($ProviderName)) {
+        throw "Provider desconhecido: $ProviderName"
+    }
+
+    $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$ProviderName]
+    if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]))) {
+        return $normalized
+    }
+
+    $rotationOrder = @($provider['rotationOrder'])
+    $activeCredential = [string]$provider['activeCredential']
+    $candidateIds = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($activeCredential) -and $provider['credentials'].Contains($activeCredential)) {
+        $candidateIds.Add($activeCredential)
+    }
+    foreach ($credentialId in $rotationOrder) {
+        $value = [string]$credentialId
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        if (-not $candidateIds.Contains($value)) {
+            $candidateIds.Add($value)
+        }
+    }
+    foreach ($credentialId in $provider['credentials'].Keys) {
+        if (-not $candidateIds.Contains([string]$credentialId)) {
+            $candidateIds.Add([string]$credentialId)
+        }
+    }
+
+    foreach ($credentialId in $candidateIds) {
+        $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$credentialId]
+        if (-not ($credential -is [hashtable])) { continue }
+
+        $provider['credentials'][$credentialId]['validation'] = Test-BootstrapSecretsProviderCredential -ProviderName $ProviderName -ProviderDefinition $provider -CredentialId ([string]$credentialId) -Credential $credential
+        $state = [string]$provider['credentials'][$credentialId]['validation']['state']
+        if (($credentialId -eq $activeCredential) -and ($state -eq 'passed')) {
+            $normalized.providers[$ProviderName] = Convert-BootstrapSecretsProviderDefinition -ProviderName $ProviderName -ProviderData $provider
+            return $normalized
+        }
+        if (($credentialId -ne $activeCredential) -and ($state -eq 'passed')) {
+            $provider['activeCredential'] = [string]$credentialId
+            $normalized.providers[$ProviderName] = Convert-BootstrapSecretsProviderDefinition -ProviderName $ProviderName -ProviderData $provider
+            return $normalized
+        }
+    }
+
+    $normalized.providers[$ProviderName] = Convert-BootstrapSecretsProviderDefinition -ProviderName $ProviderName -ProviderData $provider
+    return $normalized
+}
+
+function Test-BootstrapSecretsTargetHasApplicableValues {
+    param($Target)
+
+    $normalized = ConvertTo-BootstrapHashtable -InputObject $Target
+    if (-not ($normalized -is [hashtable])) {
+        return $false
+    }
+
+    foreach ($key in $normalized.Keys) {
+        if ($key -eq 'env' -and ($normalized[$key] -is [hashtable])) {
+            foreach ($envKey in $normalized[$key].Keys) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$normalized[$key][$envKey])) {
+                    return $true
+                }
+            }
+            continue
+        }
+
+        if ($key -eq 'mcpServers' -and ($normalized[$key] -is [hashtable])) {
+            foreach ($serverName in $normalized[$key].Keys) {
+                $server = ConvertTo-BootstrapHashtable -InputObject $normalized[$key][$serverName]
+                if (-not ($server -is [hashtable])) { continue }
+                if ($server.ContainsKey('enabled') -and (-not [bool]$server['enabled'])) { continue }
+                if ($server.ContainsKey('disabled') -and [bool]$server['disabled']) { continue }
+                return $true
+            }
+            continue
+        }
+
+        if ($normalized[$key] -is [string]) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$normalized[$key])) {
+                return $true
+            }
+        }
+    }
+
+    return $false
+}
+
+function Ensure-BootstrapUserEnvSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('userEnv') -or -not ($ResolvedTargets['userEnv'] -is [hashtable])) {
+        return 0
+    }
+
+    $applied = 0
+    foreach ($name in $ResolvedTargets['userEnv'].Keys) {
+        $value = [string]$ResolvedTargets['userEnv'][$name]
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        Set-UserEnvVar -Name ([string]$name) -Value $value
+        $applied += 1
+    }
+    return $applied
+}
+
+function ConvertFrom-BootstrapRemoteBridgeServerDefinition {
+    param([Parameter(Mandatory = $true)][hashtable]$ServerDefinition)
+
+    if (-not $ServerDefinition.ContainsKey('command')) {
+        return $null
+    }
+
+    $command = [string]$ServerDefinition['command']
+    if (-not [string]::Equals($command, 'npx', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
+
+    $args = Get-BootstrapNonEmptyStringArray -Values @($ServerDefinition['args'])
+    if ($args.Count -lt 2) {
+        return $null
+    }
+    if ($args[0] -ne '-y' -or $args[1] -ne 'mcp-remote@latest') {
+        return $null
+    }
+
+    $url = ''
+    $headers = [ordered]@{}
+    $index = 2
+    while ($index -lt $args.Count) {
+        $token = [string]$args[$index]
+        switch ($token) {
+            '--http' {
+                $index += 1
+                if ($index -lt $args.Count) {
+                    $url = [string]$args[$index]
+                }
+            }
+            '--allow-http' {
+            }
+            '--header' {
+                $index += 1
+                if ($index -lt $args.Count) {
+                    $headerLine = [string]$args[$index]
+                    $parts = $headerLine -split ':\s*', 2
+                    if ($parts.Count -eq 2) {
+                        $headers[$parts[0]] = $parts[1]
+                    }
+                }
+            }
+            default {
+                if ([string]::IsNullOrWhiteSpace($url) -and ($token -match '^[a-z]+://')) {
+                    $url = $token
+                }
+            }
+        }
+        $index += 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($url)) {
+        return $null
+    }
+
+    $remote = [ordered]@{
+        url = $url
+    }
+    if ($headers.Count -gt 0) {
+        $remote['headers'] = $headers
+    }
+
+    return $remote
+}
+
+function ConvertTo-BootstrapMcpServerEntry {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$ServerDefinition,
+        [Parameter(Mandatory = $true)][ValidateSet('standard', 'opencode', 'vscode', 'zed', 'zcode')][string]$Format
+    )
+
+    if ($ServerDefinition.ContainsKey('enabled') -and (-not [bool]$ServerDefinition['enabled'])) {
+        return $null
+    }
+    if ($ServerDefinition.ContainsKey('disabled') -and [bool]$ServerDefinition['disabled']) {
+        return $null
+    }
+
+    $effectiveDefinition = $ServerDefinition
+    $remoteBridgeDefinition = ConvertFrom-BootstrapRemoteBridgeServerDefinition -ServerDefinition $ServerDefinition
+    if (($remoteBridgeDefinition -is [System.Collections.IDictionary]) -and $Format -in @('vscode', 'zed', 'zcode')) {
+        $effectiveDefinition = ConvertTo-BootstrapHashtable -InputObject $remoteBridgeDefinition
+    }
+
+    if ($Format -eq 'opencode') {
+        $serverOut = @{}
+        $type = ''
+        if ($effectiveDefinition.ContainsKey('type')) {
+            $type = [string]$effectiveDefinition['type']
+        }
+        if ([string]::IsNullOrWhiteSpace($type)) {
+            $type = if ($effectiveDefinition.ContainsKey('url')) { 'remote' } else { 'local' }
+        }
+        $serverOut['type'] = $type
+
+        if ($effectiveDefinition.ContainsKey('enabled')) {
+            $serverOut['enabled'] = [bool]$effectiveDefinition['enabled']
+        }
+
+        if ($type -eq 'local') {
+            $commandParts = @()
+            if ($effectiveDefinition.ContainsKey('command')) {
+                if (($effectiveDefinition['command'] -is [System.Collections.IEnumerable]) -and -not ($effectiveDefinition['command'] -is [string])) {
+                    $commandParts += @($effectiveDefinition['command'])
+                } else {
+                    $commandParts += @([string]$effectiveDefinition['command'])
+                }
+            }
+            if ($effectiveDefinition.ContainsKey('args')) {
+                $commandParts += @($effectiveDefinition['args'])
+            }
+            $commandParts = @($commandParts | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+            if ($commandParts.Count -gt 0) {
+                $serverOut['command'] = @($commandParts)
+            }
+            if ($effectiveDefinition.ContainsKey('env') -and ($effectiveDefinition['env'] -is [hashtable])) {
+                $environment = @{}
+                Set-BootstrapNonEmptyStringValues -Target $environment -Values $effectiveDefinition['env']
+                if ($environment.Count -gt 0) {
+                    $serverOut['environment'] = $environment
+                }
+            }
+        } else {
+            if ($effectiveDefinition.ContainsKey('url')) {
+                $url = [string]$effectiveDefinition['url']
+                if (-not [string]::IsNullOrWhiteSpace($url)) {
+                    $serverOut['url'] = $url
+                }
+            }
+            if ($effectiveDefinition.ContainsKey('headers') -and ($effectiveDefinition['headers'] -is [hashtable])) {
+                $headers = @{}
+                Set-BootstrapNonEmptyStringValues -Target $headers -Values $effectiveDefinition['headers']
+                if ($headers.Count -gt 0) {
+                    $serverOut['headers'] = $headers
+                }
+            }
+        }
+
+        if ($effectiveDefinition.ContainsKey('timeout')) {
+            $serverOut['timeout'] = $effectiveDefinition['timeout']
+        }
+        if ($serverOut.Count -le 1 -and $serverOut.ContainsKey('type')) {
+            return $null
+        }
+        return $serverOut
+    }
+
+    if ($Format -eq 'vscode' -or $Format -eq 'zcode') {
+        $serverOut = @{}
+        $type = ''
+        if ($effectiveDefinition.ContainsKey('type')) {
+            $type = [string]$effectiveDefinition['type']
+        }
+        if ([string]::IsNullOrWhiteSpace($type)) {
+            $type = if ($effectiveDefinition.ContainsKey('url')) { 'http' } else { 'stdio' }
+        }
+        $serverOut['type'] = $type
+
+        foreach ($propertyName in @('command', 'url')) {
+            if ($effectiveDefinition.ContainsKey($propertyName)) {
+                $value = [string]$effectiveDefinition[$propertyName]
+                if (-not [string]::IsNullOrWhiteSpace($value)) {
+                    $serverOut[$propertyName] = $value
+                }
+            }
+        }
+        if ($effectiveDefinition.ContainsKey('args')) {
+            $serverOut['args'] = @($effectiveDefinition['args'])
+        }
+        if ($effectiveDefinition.ContainsKey('headers') -and ($effectiveDefinition['headers'] -is [hashtable])) {
+            $headers = @{}
+            Set-BootstrapNonEmptyStringValues -Target $headers -Values $effectiveDefinition['headers']
+            if ($headers.Count -gt 0) {
+                $serverOut['headers'] = $headers
+            }
+        }
+        if ($effectiveDefinition.ContainsKey('env') -and ($effectiveDefinition['env'] -is [hashtable])) {
+            $envOut = @{}
+            Set-BootstrapNonEmptyStringValues -Target $envOut -Values $effectiveDefinition['env']
+            if ($envOut.Count -gt 0) {
+                $serverOut['env'] = $envOut
+            }
+        }
+        if ($serverOut.Count -le 1 -and $serverOut.ContainsKey('type')) {
+            return $null
+        }
+        return $serverOut
+    }
+
+    if ($Format -eq 'zed') {
+        $serverOut = @{}
+        if ($effectiveDefinition.ContainsKey('url')) {
+            $url = [string]$effectiveDefinition['url']
+            if (-not [string]::IsNullOrWhiteSpace($url)) {
+                $serverOut['url'] = $url
+            }
+        }
+        if ($effectiveDefinition.ContainsKey('headers') -and ($effectiveDefinition['headers'] -is [hashtable])) {
+            $headers = @{}
+            Set-BootstrapNonEmptyStringValues -Target $headers -Values $effectiveDefinition['headers']
+            if ($headers.Count -gt 0) {
+                $serverOut['headers'] = $headers
+            }
+        }
+        if ($serverOut.Count -eq 0) {
+            if ($effectiveDefinition.ContainsKey('command')) {
+                $commandPath = [string]$effectiveDefinition['command']
+                if (-not [string]::IsNullOrWhiteSpace($commandPath)) {
+                    $serverOut['command'] = $commandPath
+                }
+            }
+            if ($effectiveDefinition.ContainsKey('args')) {
+                $serverOut['args'] = @($effectiveDefinition['args'])
+            }
+            if ($effectiveDefinition.ContainsKey('env') -and ($effectiveDefinition['env'] -is [hashtable])) {
+                $envOut = @{}
+                Set-BootstrapNonEmptyStringValues -Target $envOut -Values $effectiveDefinition['env']
+                if ($envOut.Count -gt 0) {
+                    $serverOut['env'] = $envOut
+                }
+            }
+        }
+        if ($serverOut.Count -eq 0) {
+            return $null
+        }
+        return $serverOut
+    }
+
+    $result = @{}
+    foreach ($propertyName in @('command', 'url', 'transport', 'type', 'serverUrl')) {
+        if ($ServerDefinition.ContainsKey($propertyName)) {
+            $value = [string]$ServerDefinition[$propertyName]
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $result[$propertyName] = $value
+            }
+        }
+    }
+    if ($ServerDefinition.ContainsKey('args')) {
+        $result['args'] = @($ServerDefinition['args'])
+    }
+    if ($ServerDefinition.ContainsKey('headers') -and ($ServerDefinition['headers'] -is [hashtable])) {
+        $headers = @{}
+        Set-BootstrapNonEmptyStringValues -Target $headers -Values $ServerDefinition['headers']
+        if ($headers.Count -gt 0) {
+            $result['headers'] = $headers
+        }
+    }
+    if ($ServerDefinition.ContainsKey('env') -and ($ServerDefinition['env'] -is [hashtable])) {
+        $envOut = @{}
+        Set-BootstrapNonEmptyStringValues -Target $envOut -Values $ServerDefinition['env']
+        if ($envOut.Count -gt 0) {
+            $result['env'] = $envOut
+        }
+    }
+    if ($ServerDefinition.ContainsKey('alwaysAllow')) {
+        $result['alwaysAllow'] = @($ServerDefinition['alwaysAllow'])
+    }
+    if ($ServerDefinition.ContainsKey('disabled')) {
+        $result['disabled'] = [bool]$ServerDefinition['disabled']
+    }
+    if ($ServerDefinition.ContainsKey('enabled')) {
+        $result['enabled'] = [bool]$ServerDefinition['enabled']
+    }
+    if ($result.Count -eq 0) {
+        return $null
+    }
+    return $result
+}
+
+function Merge-BootstrapMcpServers {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$TargetMap,
+        [Parameter(Mandatory = $true)][hashtable]$SourceMap,
+        [Parameter(Mandatory = $true)][ValidateSet('standard', 'opencode', 'vscode', 'zed', 'zcode')][string]$Format
+    )
+
+    $applied = 0
+    foreach ($serverName in $SourceMap.Keys) {
+        $serverDef = ConvertTo-BootstrapHashtable -InputObject $SourceMap[$serverName]
+        if (-not ($serverDef -is [hashtable])) { continue }
+
+        $serverOut = ConvertTo-BootstrapMcpServerEntry -ServerDefinition $serverDef -Format $Format
+        if (-not ($serverOut -is [hashtable])) { continue }
+
+        $currentServer = @{}
+        if ($TargetMap.ContainsKey($serverName) -and ($TargetMap[$serverName] -is [hashtable])) {
+            $currentServer = ConvertTo-BootstrapHashtable -InputObject $TargetMap[$serverName]
+        }
+        foreach ($propertyName in $serverOut.Keys) {
+            $currentServer[$propertyName] = $serverOut[$propertyName]
+        }
+        $TargetMap[[string]$serverName] = $currentServer
+        $applied += 1
+    }
+    return $applied
+}
+
+function Ensure-BootstrapJsonTargetFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][hashtable]$Target,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [ValidateSet('standard', 'opencode', 'vscode', 'zed', 'zcode')][string]$McpFormat = 'standard',
+        [string]$McpPropertyName = 'mcpServers'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+
+    $settings = @{}
+    if (Test-Path $Path) {
+        try {
+            $settings = Read-BootstrapJsonFile -Path $Path
+            if (-not ($settings -is [hashtable])) { $settings = @{} }
+        } catch {
+            Write-Log "$Label invalido em $Path. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." 'WARN'
+            $settings = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
+
+    if ($Target.ContainsKey('env') -and ($Target['env'] -is [hashtable])) {
+        $envMap = Ensure-BootstrapNamedMap -Parent $settings -Name 'env'
+        Set-BootstrapNonEmptyStringValues -Target $envMap -Values $Target['env']
+    }
+
+    if ($Target.ContainsKey('mcpServers') -and ($Target['mcpServers'] -is [hashtable])) {
+        $mcpChanges = @{}
+        $appliedMcpServers = Merge-BootstrapMcpServers -TargetMap $mcpChanges -SourceMap $Target['mcpServers'] -Format $McpFormat
+        if ($appliedMcpServers -gt 0) {
+            $mcpMap = Ensure-BootstrapNamedMap -Parent $settings -Name $McpPropertyName
+            foreach ($serverName in $mcpChanges.Keys) {
+                $mcpMap[[string]$serverName] = $mcpChanges[$serverName]
+            }
+        }
+    }
+
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
+    if ($before -eq $after) {
+        return $false
+    }
+
+    Write-BootstrapJsonFile -Path $Path -Value $settings
+    Write-Log ("Segredos aplicados em {0}: {1}" -f $Label, $Path)
+    return $true
+}
+
+function Ensure-BootstrapZCodeStateMap {
+    param([hashtable]$Store)
+
+    $storageText = ''
+    if ($Store.ContainsKey('mcp-storage')) {
+        $storageText = [string]$Store['mcp-storage']
+    }
+
+    $storage = @{}
+    if (-not [string]::IsNullOrWhiteSpace($storageText)) {
+        try {
+            $storage = ConvertTo-BootstrapHashtable -InputObject ($storageText | ConvertFrom-Json -ErrorAction Stop)
+        } catch {
+            Write-Log 'ZCode mcp-storage invalido. O bootstrap vai recriar a estrutura MCP mesclada.' 'WARN'
+            $storage = @{}
+        }
+    }
+
+    $state = Ensure-BootstrapNamedMap -Parent $storage -Name 'state'
+    $config = Ensure-BootstrapNamedMap -Parent $state -Name 'config'
+    $mcp = Ensure-BootstrapNamedMap -Parent $config -Name 'mcp'
+    $null = Ensure-BootstrapNamedMap -Parent $mcp -Name 'mcpServers'
+
+    if (-not $state.ContainsKey('servers') -or -not ($state['servers'] -is [System.Collections.IEnumerable])) {
+        $state['servers'] = @()
+    } else {
+        $state['servers'] = @($state['servers'])
+    }
+
+    return $storage
+}
+
+function Ensure-BootstrapZCodeSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('zCode') -or -not ($ResolvedTargets['zCode'] -is [hashtable])) {
+        return $false
+    }
+
+    $target = ConvertTo-BootstrapHashtable -InputObject $ResolvedTargets['zCode']
+    $storePath = Get-BootstrapZCodeStorePath
+    if ([string]::IsNullOrWhiteSpace($storePath)) { return $false }
+
+    $store = @{}
+    if (Test-Path $storePath) {
+        try {
+            $store = Read-BootstrapJsonFile -Path $storePath
+            if (-not ($store -is [hashtable])) { $store = @{} }
+        } catch {
+            Write-Log "ZCode store invalido em $storePath. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." 'WARN'
+            $store = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $store) | ConvertTo-Json -Depth 30 -Compress)
+    $storage = Ensure-BootstrapZCodeStateMap -Store $store
+    $state = Ensure-BootstrapNamedMap -Parent $storage -Name 'state'
+    $config = Ensure-BootstrapNamedMap -Parent $state -Name 'config'
+    $mcp = Ensure-BootstrapNamedMap -Parent $config -Name 'mcp'
+    $mcpServers = Ensure-BootstrapNamedMap -Parent $mcp -Name 'mcpServers'
+
+    if ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable])) {
+        $mcpChanges = @{}
+        $appliedMcpServers = Merge-BootstrapMcpServers -TargetMap $mcpChanges -SourceMap $target['mcpServers'] -Format 'zcode'
+        if ($appliedMcpServers -gt 0) {
+            foreach ($serverName in $mcpChanges.Keys) {
+                $mcpServers[[string]$serverName] = $mcpChanges[$serverName]
+            }
+
+            $currentServers = @()
+            if ($state.ContainsKey('servers')) {
+                $currentServers = @($state['servers'])
+            }
+            $serversByName = @{}
+            foreach ($serverItem in $currentServers) {
+                $serverHash = ConvertTo-BootstrapHashtable -InputObject $serverItem
+                if ($serverHash.Count -eq 0) { continue }
+                $existingName = ''
+                if ($serverHash.ContainsKey('name')) {
+                    $existingName = [string]$serverHash['name']
+                }
+                if ([string]::IsNullOrWhiteSpace($existingName)) { continue }
+                $serversByName[$existingName] = $serverHash
+            }
+            foreach ($serverName in $mcpChanges.Keys) {
+                $sourceDefinition = ConvertTo-BootstrapHashtable -InputObject $target['mcpServers'][$serverName]
+                $serverRecord = @{}
+                if ($serversByName.ContainsKey($serverName)) {
+                    $serverRecord = $serversByName[$serverName]
+                }
+                $serverRecord['id'] = "mcp-$serverName"
+                $serverRecord['name'] = [string]$serverName
+                $serverRecord['config'] = $mcpChanges[$serverName]
+                if ($sourceDefinition.ContainsKey('enabled')) {
+                    $serverRecord['enabled'] = [bool]$sourceDefinition['enabled']
+                } elseif ($sourceDefinition.ContainsKey('disabled')) {
+                    $serverRecord['enabled'] = (-not [bool]$sourceDefinition['disabled'])
+                } elseif (-not $serverRecord.ContainsKey('enabled')) {
+                    $serverRecord['enabled'] = $true
+                }
+                if (-not $serverRecord.ContainsKey('source')) {
+                    $serverRecord['source'] = 'user'
+                }
+                if (-not $serverRecord.ContainsKey('status')) {
+                    $serverRecord['status'] = 'disconnected'
+                }
+                $serverRecord['changed'] = $true
+                $serversByName[$serverName] = $serverRecord
+            }
+            $state['servers'] = @($serversByName.Keys | Sort-Object | ForEach-Object { $serversByName[$_] })
+        }
+    }
+
+    $store['mcp-storage'] = [string]((ConvertTo-BootstrapObjectGraph -InputObject $storage) | ConvertTo-Json -Depth 30 -Compress)
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $store) | ConvertTo-Json -Depth 30 -Compress)
+    if ($before -eq $after) {
+        return $false
+    }
+
+    Write-BootstrapJsonFile -Path $storePath -Value $store
+    Write-Log ("Segredos aplicados em ZCode: {0}" -f $storePath)
+    return $true
+}
+
+function Ensure-BootstrapVsCodeSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('vsCode') -or -not ($ResolvedTargets['vsCode'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapVsCodeMcpConfigPath) -Target $ResolvedTargets['vsCode'] -Label 'VS Code MCP' -McpFormat 'vscode' -McpPropertyName 'servers')
+}
+
+function Ensure-BootstrapRooSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('roo') -or -not ($ResolvedTargets['roo'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapRooMcpConfigPath) -Target $ResolvedTargets['roo'] -Label 'Roo MCP')
+}
+
+function Ensure-BootstrapClineSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('cline') -or -not ($ResolvedTargets['cline'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapClineMcpConfigPath) -Target $ResolvedTargets['cline'] -Label 'Cline MCP')
+}
+
+function Ensure-BootstrapZedSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('zed') -or -not ($ResolvedTargets['zed'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapZedConfigPath) -Target $ResolvedTargets['zed'] -Label 'Zed settings' -McpFormat 'zed' -McpPropertyName 'context_servers')
+}
+
+function Ensure-BootstrapOpenClawSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('openClaw') -or -not ($ResolvedTargets['openClaw'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapOpenClawConfigPath) -Target $ResolvedTargets['openClaw'] -Label 'OpenClaw config')
+}
+
+function Ensure-BootstrapCometSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('comet') -or -not ($ResolvedTargets['comet'] -is [hashtable])) {
+        return $false
+    }
+
+    return $false
+}
+
+function Ensure-BootstrapClaudeCodeSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('claudeCode') -or -not ($ResolvedTargets['claudeCode'] -is [hashtable])) {
+        return $false
+    }
+
+    $userHome = Get-BootstrapUserHomePath
+    if ([string]::IsNullOrWhiteSpace($userHome)) { return $false }
+
+    $settingsPath = Join-Path (Join-Path $userHome '.claude') 'settings.json'
+    $settings = @{}
+    if (Test-Path $settingsPath) {
+        try {
+            $settings = Read-BootstrapJsonFile -Path $settingsPath
+            if (-not ($settings -is [hashtable])) { $settings = @{} }
+        } catch {
+            Write-Log "Claude Code settings invalidos em $settingsPath. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." 'WARN'
+            $settings = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
+    $target = $ResolvedTargets['claudeCode']
+
+    if ($target.ContainsKey('env') -and ($target['env'] -is [hashtable])) {
+        $envMap = Ensure-BootstrapNamedMap -Parent $settings -Name 'env'
+        Set-BootstrapNonEmptyStringValues -Target $envMap -Values $target['env']
+    }
+
+    if ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable])) {
+        $mcpChanges = @{}
+        $appliedMcpServers = Merge-BootstrapMcpServers -TargetMap $mcpChanges -SourceMap $target['mcpServers'] -Format 'standard'
+        if ($appliedMcpServers -gt 0) {
+            $mcpMap = Ensure-BootstrapNamedMap -Parent $settings -Name 'mcpServers'
+            foreach ($serverName in $mcpChanges.Keys) {
+                $mcpMap[[string]$serverName] = $mcpChanges[$serverName]
+            }
+        }
+    }
+
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
+    if ($before -eq $after) {
+        return $false
+    }
+
+    Write-BootstrapJsonFile -Path $settingsPath -Value $settings
+    Write-Log "Segredos aplicados em Claude Code: $settingsPath"
+    return $true
+}
+
+function Ensure-BootstrapClaudeDesktopSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('claudeDesktop') -or -not ($ResolvedTargets['claudeDesktop'] -is [hashtable])) {
+        return $false
+    }
+
+    $settingsPath = Get-BootstrapClaudeDesktopConfigPath
+    $settings = @{}
+    if (Test-Path $settingsPath) {
+        try {
+            $settings = Read-BootstrapJsonFile -Path $settingsPath
+            if (-not ($settings -is [hashtable])) { $settings = @{} }
+        } catch {
+            Write-Log "Claude Desktop config invalido em $settingsPath. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." 'WARN'
+            $settings = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
+    $target = $ResolvedTargets['claudeDesktop']
+
+    if ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable])) {
+        $mcpChanges = @{}
+        $appliedMcpServers = Merge-BootstrapMcpServers -TargetMap $mcpChanges -SourceMap $target['mcpServers'] -Format 'standard'
+        if ($appliedMcpServers -gt 0) {
+            $mcpMap = Ensure-BootstrapNamedMap -Parent $settings -Name 'mcpServers'
+            foreach ($serverName in $mcpChanges.Keys) {
+                $mcpMap[[string]$serverName] = $mcpChanges[$serverName]
+            }
+        }
+    }
+
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
+    if ($before -eq $after) {
+        return $false
+    }
+
+    Write-BootstrapJsonFile -Path $settingsPath -Value $settings
+    Write-Log "Segredos aplicados em Claude Desktop: $settingsPath"
+    return $true
+}
+
+function Ensure-BootstrapCursorSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('cursor') -or -not ($ResolvedTargets['cursor'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapCursorMcpConfigPath) -Target $ResolvedTargets['cursor'] -Label 'Cursor MCP' -McpFormat 'standard' -McpPropertyName 'mcpServers')
+}
+
+function Ensure-BootstrapWindsurfSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('windsurf') -or -not ($ResolvedTargets['windsurf'] -is [hashtable])) {
+        return $false
+    }
+
+    $path = Get-BootstrapWindsurfMcpConfigPath
+    $mcpPropertyName = if ([System.StringComparer]::OrdinalIgnoreCase.Equals([System.IO.Path]::GetFileName($path), 'settings.json')) { 'mcpServers' } else { 'mcpServers' }
+    return (Ensure-BootstrapJsonTargetFile -Path $path -Target $ResolvedTargets['windsurf'] -Label 'Windsurf MCP' -McpFormat 'standard' -McpPropertyName $mcpPropertyName)
+}
+
+function Ensure-BootstrapTraeSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('trae') -or -not ($ResolvedTargets['trae'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapTraeMcpConfigPath) -Target $ResolvedTargets['trae'] -Label 'Trae MCP' -McpFormat 'standard' -McpPropertyName 'mcpServers')
+}
+
+function Ensure-BootstrapOpenCodeSecrets {
+    param([hashtable]$ResolvedTargets)
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('openCode') -or -not ($ResolvedTargets['openCode'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapOpenCodeConfigPath) -Target $ResolvedTargets['openCode'] -Label 'OpenCode' -McpFormat 'opencode' -McpPropertyName 'mcp')
+}
+
+function Get-BootstrapVsCodeExtensionStatePath {
+    return (Join-Path (Get-BootstrapDataRoot) 'vscode-extension-state.json')
+}
+
+function Get-BootstrapContinueConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    if ([string]::IsNullOrWhiteSpace($userHome)) {
+        return $null
+    }
+
+    return (Join-Path (Join-Path $userHome '.continue') 'config.yaml')
+}
+
+function Get-BootstrapContinueEnvPath {
+    $userHome = Get-BootstrapUserHomePath
+    if ([string]::IsNullOrWhiteSpace($userHome)) {
+        return $null
+    }
+
+    return (Join-Path (Join-Path $userHome '.continue') '.env')
+}
+
+function Get-BootstrapMcpStatePath {
+    return (Join-Path (Get-BootstrapDataRoot) 'bootstrap-mcp-state.json')
+}
+
+function Get-BootstrapManagedMcpCapableTargets {
+    return @('claudeCode', 'claudeDesktop', 'cursor', 'windsurf', 'trae', 'openCode', 'vsCode', 'roo', 'cline', 'continue', 'zed', 'zCode', 'openClaw')
+}
+
+function Get-BootstrapManagedMcpCatalog {
+    return [ordered]@{
+        github = [ordered]@{
+            id = 'github'
+            displayName = 'GitHub MCP Server'
+            installKind = 'npm'
+            package = '@modelcontextprotocol/server-github'
+            authMode = 'token'
+        }
+        markitdown = [ordered]@{
+            id = 'markitdown'
+            displayName = 'Markitdown'
+            installKind = 'uvtool'
+            package = 'markitdown-mcp'
+            commandName = 'markitdown-mcp'
+            versionArgs = @('--help')
+            authMode = 'none'
+        }
+        netdata = [ordered]@{
+            id = 'netdata'
+            displayName = 'Netdata'
+            installKind = 'npm'
+            package = 'mcp-remote'
+            authMode = 'token-http'
+        }
+        context7 = [ordered]@{
+            id = 'context7'
+            displayName = 'Context7'
+            installKind = 'npm'
+            package = '@upstash/context7-mcp'
+            authMode = 'optional-key'
+        }
+        'chrome-devtools' = [ordered]@{
+            id = 'chrome-devtools'
+            displayName = 'Chrome DevTools MCP'
+            installKind = 'npm'
+            package = 'chrome-devtools-mcp'
+            authMode = 'none'
+        }
+        playwright = [ordered]@{
+            id = 'playwright'
+            displayName = 'Playwright'
+            installKind = 'npm'
+            package = '@playwright/mcp'
+            authMode = 'none'
+        }
+        serena = [ordered]@{
+            id = 'serena'
+            displayName = 'Serena'
+            installKind = 'uvtool'
+            package = 'serena-agent@latest'
+            commandName = 'serena'
+            versionArgs = @('--version')
+            installArgs = @('-p', '3.13', '--prerelease=allow')
+            authMode = 'none'
+        }
+        firecrawl = [ordered]@{
+            id = 'firecrawl'
+            displayName = 'Firecrawl'
+            installKind = 'npm'
+            package = 'firecrawl-mcp'
+            authMode = 'apiKey'
+        }
+        'desktop-commander' = [ordered]@{
+            id = 'desktop-commander'
+            displayName = 'Desktop Commander'
+            installKind = 'npm'
+            package = '@wonderwhy-er/desktop-commander'
+            authMode = 'none'
+        }
+        notion = [ordered]@{
+            id = 'notion'
+            displayName = 'Notion'
+            installKind = 'npm'
+            package = 'mcp-remote'
+            authMode = 'oauth'
+        }
+        supabase = [ordered]@{
+            id = 'supabase'
+            displayName = 'Supabase'
+            installKind = 'npm'
+            package = 'mcp-remote'
+            authMode = 'oauth'
+        }
+        figma = [ordered]@{
+            id = 'figma'
+            displayName = 'Figma MCP Server'
+            installKind = 'npm'
+            package = 'mcp-remote'
+            authMode = 'oauth'
+        }
+        apify = [ordered]@{
+            id = 'apify'
+            displayName = 'Apify'
+            installKind = 'npm'
+            package = '@apify/actors-mcp-server'
+            authMode = 'oauth-or-token'
+        }
+        vercel = [ordered]@{
+            id = 'vercel'
+            displayName = 'Vercel MCP'
+            installKind = 'npm'
+            package = 'mcp-remote'
+            authMode = 'oauth'
+        }
+        box = [ordered]@{
+            id = 'box'
+            displayName = 'Box MCP Server (Remote)'
+            installKind = 'npm'
+            package = 'mcp-remote'
+            authMode = 'oauth-admin'
+        }
+    }
+}
+
+function Get-BootstrapManagedMcpProviders {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $managedProviders = ConvertTo-BootstrapHashtable -InputObject (Get-BootstrapActiveProviders -SecretsData $normalized -RequirePassedValidation)
+    if (-not ($managedProviders -is [hashtable])) {
+        $managedProviders = [ordered]@{}
+    }
+
+    foreach ($providerName in @('context7', 'firecrawl', 'apify', 'netdata', 'supabase')) {
+        if ($managedProviders.Contains($providerName)) {
+            continue
+        }
+        if (-not ($normalized.Contains('providers') -and ($normalized['providers'] -is [System.Collections.IDictionary]) -and $normalized['providers'].Contains($providerName))) {
+            continue
+        }
+
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized['providers'][$providerName]
+        if (-not ($provider -is [hashtable])) {
+            continue
+        }
+
+        $providerMeta = if ($catalog.Contains($providerName)) { ConvertTo-BootstrapHashtable -InputObject $catalog[$providerName] } else { @{} }
+        $active = [ordered]@{}
+        $providerDefaults = $null
+        if ($provider.ContainsKey('defaults') -and ($provider['defaults'] -is [System.Collections.IDictionary])) {
+            $providerDefaults = ConvertTo-BootstrapHashtable -InputObject $provider['defaults']
+        }
+        if ($providerDefaults -is [hashtable]) {
+            foreach ($key in $providerDefaults.Keys) {
+                $value = [string]$providerDefaults[$key]
+                if (-not [string]::IsNullOrWhiteSpace($value)) {
+                    $active[$key] = $value
+                }
+            }
+        } else {
+            $providerMetaDefaults = $null
+            if ($providerMeta.ContainsKey('defaults') -and ($providerMeta['defaults'] -is [System.Collections.IDictionary])) {
+                $providerMetaDefaults = ConvertTo-BootstrapHashtable -InputObject $providerMeta['defaults']
+            }
+            if ($providerMetaDefaults -is [hashtable]) {
+                foreach ($key in $providerMetaDefaults.Keys) {
+                    $value = [string]$providerMetaDefaults[$key]
+                    if (-not [string]::IsNullOrWhiteSpace($value)) {
+                        $active[$key] = $value
+                    }
+                }
+            }
+        }
+
+        $activeCredential = [string]$provider['activeCredential']
+        $providerCredentials = $null
+        if ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [System.Collections.IDictionary])) {
+            $providerCredentials = ConvertTo-BootstrapHashtable -InputObject $provider['credentials']
+        }
+        if (-not [string]::IsNullOrWhiteSpace($activeCredential) -and ($providerCredentials -is [hashtable]) -and $providerCredentials.Contains($activeCredential)) {
+            $credential = ConvertTo-BootstrapHashtable -InputObject $providerCredentials[$activeCredential]
+            if ($credential -is [hashtable]) {
+                $active['credentialId'] = $activeCredential
+                $active['displayName'] = [string]$credential['displayName']
+                foreach ($key in $credential.Keys) {
+                    if ($key -in @('displayName', 'secret', 'secretKind', 'validation')) { continue }
+                    $value = [string]$credential[$key]
+                    if (-not [string]::IsNullOrWhiteSpace($value)) {
+                        $active[$key] = $value
+                    }
+                }
+
+                $secret = [string]$credential['secret']
+                if (-not [string]::IsNullOrWhiteSpace($secret)) {
+                    $secretKind = if (-not [string]::IsNullOrWhiteSpace([string]$credential['secretKind'])) {
+                        [string]$credential['secretKind']
+                    } elseif ($providerMeta.ContainsKey('secretKind')) {
+                        [string]$providerMeta['secretKind']
+                    } else {
+                        'secret'
+                    }
+                    switch ($secretKind) {
+                        'apiKey' { $active['apiKey'] = $secret }
+                        'token' { $active['token'] = $secret }
+                        default { $active['secret'] = $secret }
+                    }
+                    $active['validationBypassed'] = $true
+                }
+            }
+        }
+
+        if ($active.Count -gt 0) {
+            $managedProviders[$providerName] = $active
+        }
+    }
+
+    return $managedProviders
+}
+
+function New-BootstrapManagedMcpCommandServer {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [string[]]$Args = @(),
+        [hashtable]$Env = @{},
+        [bool]$Disabled = $false,
+        [bool]$Enabled = $true,
+        [string[]]$AlwaysAllow = @()
+    )
+
+    $server = [ordered]@{
+        command = $Command
+    }
+    if (@($Args).Count -gt 0) {
+        $server['args'] = @($Args)
+    }
+    if ($Env -and ($Env -is [hashtable]) -and $Env.Count -gt 0) {
+        $server['env'] = $Env
+    }
+    if (@($AlwaysAllow).Count -gt 0) {
+        $server['alwaysAllow'] = @($AlwaysAllow)
+    }
+    if ($Disabled) {
+        $server['disabled'] = $true
+    } else {
+        $server['enabled'] = $Enabled
+    }
+
+    return $server
+}
+
+function New-BootstrapManagedMcpRemoteBridgeServer {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [hashtable]$Headers = @{},
+        [switch]$AllowHttp
+    )
+
+    $args = New-Object System.Collections.Generic.List[string]
+    $args.Add('-y')
+    $args.Add('mcp-remote@latest')
+
+    if ($AllowHttp -or $Url.StartsWith('http://')) {
+        $args.Add('--http')
+        $args.Add($Url)
+        if ($Url.StartsWith('http://')) {
+            $args.Add('--allow-http')
+        }
+    } else {
+        $args.Add($Url)
+    }
+
+    foreach ($headerName in ($Headers.Keys | Sort-Object)) {
+        $args.Add('--header')
+        $args.Add(('{0}: {1}' -f $headerName, [string]$Headers[$headerName]))
+    }
+
+    return (New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @($args.ToArray()))
+}
+
+function Get-BootstrapManagedSupabaseMcpUrl {
+    param([hashtable]$ManagedProviders)
+
+    $baseUrl = 'https://mcp.supabase.com/mcp'
+    $projectRef = ''
+    $readOnly = 'true'
+
+    $provider = $null
+    if ($ManagedProviders.Contains('supabase') -and ($ManagedProviders['supabase'] -is [System.Collections.IDictionary])) {
+        $provider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['supabase']
+    }
+
+    if ($provider -is [hashtable]) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$provider['baseUrl'])) {
+            $baseUrl = [string]$provider['baseUrl']
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$provider['projectRef'])) {
+            $projectRef = [string]$provider['projectRef']
+        }
+        if (-not [string]::IsNullOrWhiteSpace([string]$provider['readOnly'])) {
+            $readOnly = [string]$provider['readOnly']
+        }
+    }
+
+    $queryParts = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::Equals($readOnly, 'false', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $queryParts.Add('read_only=true')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($projectRef)) {
+        $queryParts.Add(('project_ref={0}' -f [uri]::EscapeDataString($projectRef)))
+    }
+
+    if ($queryParts.Count -eq 0) {
+        return $baseUrl
+    }
+
+    $separator = if ($baseUrl.Contains('?')) { '&' } else { '?' }
+    return ($baseUrl + $separator + [string]::Join('&', @($queryParts.ToArray())))
+}
+
+function Get-BootstrapManagedMcpServers {
+    param([Parameter(Mandatory = $true)][hashtable]$ManagedProviders)
+
+    $servers = [ordered]@{}
+
+    $githubProvider = $null
+    if ($ManagedProviders.Contains('github') -and ($ManagedProviders['github'] -is [System.Collections.IDictionary])) {
+        $githubProvider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['github']
+    }
+    if ($githubProvider -is [hashtable] -and -not [string]::IsNullOrWhiteSpace([string]$githubProvider['token'])) {
+        $servers['github'] = New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @('-y', '@modelcontextprotocol/server-github') -Env ([ordered]@{
+            GITHUB_TOKEN = [string]$githubProvider['token']
+        })
+    }
+
+    $servers['markitdown'] = New-BootstrapManagedMcpCommandServer -Command 'markitdown-mcp'
+    $servers['chrome-devtools'] = New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @('-y', 'chrome-devtools-mcp@latest', '--isolated')
+    $servers['playwright'] = New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @('-y', '@playwright/mcp@latest', '--isolated')
+    $servers['serena'] = New-BootstrapManagedMcpCommandServer -Command 'serena' -Args @('start-mcp-server', '--project-from-cwd')
+    $servers['desktop-commander'] = New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @('-y', '@wonderwhy-er/desktop-commander@latest', '--no-onboarding')
+
+    $context7Provider = $null
+    if ($ManagedProviders.Contains('context7') -and ($ManagedProviders['context7'] -is [System.Collections.IDictionary])) {
+        $context7Provider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['context7']
+    }
+    if ($context7Provider -is [hashtable] -and -not [string]::IsNullOrWhiteSpace([string]$context7Provider['apiKey'])) {
+        $servers['context7'] = New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @('-y', '@upstash/context7-mcp') -Env ([ordered]@{
+            CONTEXT7_API_KEY = [string]$context7Provider['apiKey']
+        })
+    } else {
+        $servers['context7'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.context7.com/mcp'
+    }
+
+    $firecrawlProvider = $null
+    if ($ManagedProviders.Contains('firecrawl') -and ($ManagedProviders['firecrawl'] -is [System.Collections.IDictionary])) {
+        $firecrawlProvider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['firecrawl']
+    }
+    if ($firecrawlProvider -is [hashtable] -and -not [string]::IsNullOrWhiteSpace([string]$firecrawlProvider['apiKey'])) {
+        $servers['firecrawl'] = New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @('-y', 'firecrawl-mcp') -Env ([ordered]@{
+            FIRECRAWL_API_KEY = [string]$firecrawlProvider['apiKey']
+        })
+    }
+
+    $apifyProvider = $null
+    if ($ManagedProviders.Contains('apify') -and ($ManagedProviders['apify'] -is [System.Collections.IDictionary])) {
+        $apifyProvider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['apify']
+    }
+    if ($apifyProvider -is [hashtable] -and -not [string]::IsNullOrWhiteSpace([string]$apifyProvider['token'])) {
+        $servers['apify'] = New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @('-y', '@apify/actors-mcp-server') -Env ([ordered]@{
+            APIFY_TOKEN = [string]$apifyProvider['token']
+            TELEMETRY_ENABLED = 'false'
+        })
+    } else {
+        $servers['apify'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.apify.com'
+    }
+
+    $netdataProvider = $null
+    if ($ManagedProviders.Contains('netdata') -and ($ManagedProviders['netdata'] -is [System.Collections.IDictionary])) {
+        $netdataProvider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['netdata']
+    }
+    if ($netdataProvider -is [hashtable] -and -not [string]::IsNullOrWhiteSpace([string]$netdataProvider['token']) -and -not [string]::IsNullOrWhiteSpace([string]$netdataProvider['baseUrl'])) {
+        $servers['netdata'] = New-BootstrapManagedMcpRemoteBridgeServer -Url ([string]$netdataProvider['baseUrl']) -Headers ([ordered]@{
+            Authorization = ('Bearer {0}' -f [string]$netdataProvider['token'])
+        }) -AllowHttp
+    }
+
+    $servers['notion'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.notion.com/mcp'
+    $servers['supabase'] = New-BootstrapManagedMcpRemoteBridgeServer -Url (Get-BootstrapManagedSupabaseMcpUrl -ManagedProviders $ManagedProviders)
+    $servers['figma'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.figma.com/mcp'
+    $servers['vercel'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.vercel.com'
+    $servers['box'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.box.com'
+
+    return $servers
+}
+
+function Merge-BootstrapManagedMcpTargets {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$ResolvedTargets,
+        [Parameter(Mandatory = $true)][hashtable]$ManagedProviders
+    )
+
+    $managedServers = Get-BootstrapManagedMcpServers -ManagedProviders $ManagedProviders
+    foreach ($targetName in @(Get-BootstrapManagedMcpCapableTargets)) {
+        if (-not ($ResolvedTargets.Contains($targetName) -and ($ResolvedTargets[$targetName] -is [hashtable]))) {
+            continue
+        }
+
+        $target = ConvertTo-BootstrapHashtable -InputObject $ResolvedTargets[$targetName]
+        if (-not ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable]))) {
+            $target['mcpServers'] = [ordered]@{}
+        }
+
+        foreach ($serverName in $managedServers.Keys) {
+            if ($target['mcpServers'].Contains($serverName)) {
+                continue
+            }
+            $target['mcpServers'][$serverName] = ConvertTo-BootstrapHashtable -InputObject $managedServers[$serverName]
+        }
+
+        $ResolvedTargets[$targetName] = $target
+    }
+
+    return $ResolvedTargets
+}
+
+function Ensure-BootstrapManagedMcps {
+    param([hashtable]$State)
+
+    Ensure-BootstrapNodeCore -State $State
+    Ensure-BootstrapPythonCore -State $State
+
+    $secretsPath = if (-not [string]::IsNullOrWhiteSpace([string]$State.SecretsPath) -and (Test-Path $State.SecretsPath)) {
+        [string]$State.SecretsPath
+    } else {
+        Get-BootstrapSecretsPath
+    }
+    $secretsData = if (Test-Path $secretsPath) { Read-BootstrapJsonFile -Path $secretsPath } else { Get-BootstrapSecretsTemplate }
+    $resolvedTargets = Get-BootstrapResolvedSecretsTargets -SecretsData $secretsData -IncludeManagedMcps
+    $managedProviders = Get-BootstrapManagedMcpProviders -SecretsData $secretsData
+    $managedServers = Get-BootstrapManagedMcpServers -ManagedProviders $managedProviders
+    $catalog = Get-BootstrapManagedMcpCatalog
+    $statePath = Get-BootstrapMcpStatePath
+
+    $summary = [ordered]@{
+        path = $statePath
+        generatedAt = (Get-Date).ToString('o')
+        packages = @()
+        mcps = @()
+        authPending = @()
+        targets = [ordered]@{
+            claudeCodeUpdated = $false
+            claudeDesktopUpdated = $false
+            cursorUpdated = $false
+            windsurfUpdated = $false
+            traeUpdated = $false
+            openCodeUpdated = $false
+            vsCodeUpdated = $false
+            rooUpdated = $false
+            clineUpdated = $false
+            zedUpdated = $false
+            zCodeUpdated = $false
+            openClawUpdated = $false
+        }
+        continue = [ordered]@{}
+    }
+
+    $packageRecords = New-Object System.Collections.Generic.List[hashtable]
+    $seenPackages = @{}
+    foreach ($definition in $catalog.Values) {
+        $kind = [string]$definition['installKind']
+        $package = [string]$definition['package']
+        if ([string]::IsNullOrWhiteSpace($kind) -or [string]::IsNullOrWhiteSpace($package)) {
+            continue
+        }
+        $cacheKey = '{0}:{1}' -f $kind, $package
+        if ($seenPackages.Contains($cacheKey)) {
+            continue
+        }
+        $seenPackages[$cacheKey] = $true
+
+        switch ($kind) {
+            'npm' {
+                Ensure-NpmGlobalPackage -NpmCmd $State.NodeInfo.NpmCmd -Package $package -DisplayName $package
+                $packageRecords.Add([ordered]@{
+                    kind = 'npm'
+                    package = $package
+                    installed = $true
+                })
+            }
+            'uvtool' {
+                $versionArgs = if ($definition.Contains('versionArgs')) { @($definition['versionArgs']) } else { @('--version') }
+                $installArgs = if ($definition.Contains('installArgs')) { @($definition['installArgs']) } else { @() }
+                Ensure-UvToolPackage -Package $package -CommandName ([string]$definition['commandName']) -DisplayName ([string]$definition['displayName']) -VersionArgs $versionArgs -InstallArgs $installArgs
+                $packageRecords.Add([ordered]@{
+                    kind = 'uvtool'
+                    package = $package
+                    installed = $true
+                })
+            }
+        }
+    }
+    $summary.packages = @($packageRecords.ToArray())
+
+    foreach ($mcpId in $catalog.Keys) {
+        $definition = ConvertTo-BootstrapHashtable -InputObject $catalog[$mcpId]
+        $configured = $managedServers.Contains($mcpId)
+        $server = if ($configured) { ConvertTo-BootstrapHashtable -InputObject $managedServers[$mcpId] } else { @{} }
+        $mode = 'none'
+        if ($configured) {
+            if ([string]$server['command'] -eq 'npx' -and @($server['args']) -contains 'mcp-remote@latest') {
+                $mode = 'remote-bridge'
+            } else {
+                $mode = 'local'
+            }
+        }
+
+        $authMode = [string]$definition['authMode']
+        $authPending = $false
+        $reason = ''
+        switch ($authMode) {
+            'oauth' {
+                if ($configured) {
+                    $authPending = $true
+                    $reason = 'Autorizacao OAuth sera solicitada no primeiro uso.'
+                }
+            }
+            'oauth-admin' {
+                if ($configured) {
+                    $authPending = $true
+                    $reason = 'Pode exigir habilitacao do Box MCP e autorizacao/admin no tenant.'
+                }
+            }
+            'oauth-or-token' {
+                if ($configured -and $mode -eq 'remote-bridge') {
+                    $authPending = $true
+                    $reason = 'Sem token local ativo; o login OAuth sera solicitado no primeiro uso.'
+                }
+            }
+            'apiKey' {
+                if (-not $configured) {
+                    $authPending = $true
+                    $reason = 'Credencial ativa ausente para habilitar este MCP local.'
+                }
+            }
+            'token-http' {
+                if (-not $configured) {
+                    $authPending = $true
+                    $reason = 'Netdata exige URL MCP local e token ativo para ser habilitado.'
+                }
+            }
+        }
+
+        $record = [ordered]@{
+            id = [string]$mcpId
+            displayName = [string]$definition['displayName']
+            configured = $configured
+            mode = $mode
+            authPending = $authPending
+            reason = $reason
+        }
+        $summary.mcps += @($record)
+        if ($authPending) {
+            $summary.authPending += @([ordered]@{
+                id = [string]$mcpId
+                displayName = [string]$definition['displayName']
+                reason = $reason
+            })
+        }
+    }
+
+    if ($resolvedTargets.ContainsKey('claudeCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['claudeCode'])) {
+        $summary.targets.claudeCodeUpdated = Ensure-BootstrapClaudeCodeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('claudeDesktop') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['claudeDesktop'])) {
+        $summary.targets.claudeDesktopUpdated = Ensure-BootstrapClaudeDesktopSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('cursor') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['cursor'])) {
+        $summary.targets.cursorUpdated = Ensure-BootstrapCursorSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('windsurf') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['windsurf'])) {
+        $summary.targets.windsurfUpdated = Ensure-BootstrapWindsurfSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('trae') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['trae'])) {
+        $summary.targets.traeUpdated = Ensure-BootstrapTraeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('openCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openCode'])) {
+        $summary.targets.openCodeUpdated = Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('vsCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['vsCode'])) {
+        $summary.targets.vsCodeUpdated = Ensure-BootstrapVsCodeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('roo') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['roo'])) {
+        $summary.targets.rooUpdated = Ensure-BootstrapRooSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('cline') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['cline'])) {
+        $summary.targets.clineUpdated = Ensure-BootstrapClineSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('zed') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['zed'])) {
+        $summary.targets.zedUpdated = Ensure-BootstrapZedSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('zCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['zCode'])) {
+        $summary.targets.zCodeUpdated = Ensure-BootstrapZCodeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('openClaw') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openClaw'])) {
+        $summary.targets.openClawUpdated = Ensure-BootstrapOpenClawSecrets -ResolvedTargets $resolvedTargets
+    }
+
+    $summary.continue = Ensure-BootstrapContinueExtensionConfig -ResolvedTargets $resolvedTargets
+
+    Write-BootstrapJsonFile -Path $statePath -Value $summary
+    Write-Log ("Estado local dos MCPs gerenciados sincronizado: {0}" -f $statePath)
+
+    $State.McpStatePath = $statePath
+    $State.McpSummary = $summary
+    return $summary
+}
+
+function Get-BootstrapVsCodeExtensionCatalog {
+    return [ordered]@{
+        'augment.vscode-augment' = [ordered]@{
+            id = 'augment.vscode-augment'
+            displayName = 'Augment'
+            channels = @('stable', 'insiders')
+            configKind = 'manual-auth'
+            authPendingReason = 'Login via navegador exigido pela extensao.'
+        }
+        'kilocode.Kilo-Code' = [ordered]@{
+            id = 'kilocode.Kilo-Code'
+            displayName = 'Kilo Code'
+            channels = @('stable', 'insiders')
+            configKind = 'manual-auth'
+            authPendingReason = 'Conta/configuracao inicial exigida pela extensao.'
+        }
+        'Kombai.kombai' = [ordered]@{
+            id = 'Kombai.kombai'
+            displayName = 'Kombai'
+            channels = @('stable', 'insiders')
+            configKind = 'manual-auth'
+            authPendingReason = 'Login via navegador exigido pela extensao.'
+        }
+        'laurids.agent-skills-sh' = [ordered]@{
+            id = 'laurids.agent-skills-sh'
+            displayName = 'Agent Skills'
+            channels = @('stable', 'insiders')
+            configKind = 'none'
+            authPendingReason = ''
+        }
+        'digitarald.agent-memory' = [ordered]@{
+            id = 'digitarald.agent-memory'
+            displayName = 'Agent Memory'
+            channels = @('stable', 'insiders')
+            preferPreRelease = $true
+            configKind = 'vscode-settings'
+            authPendingReason = ''
+        }
+        'RooVeterinaryInc.roo-code-nightly' = [ordered]@{
+            id = 'RooVeterinaryInc.roo-code-nightly'
+            displayName = 'Roo Code Nightly'
+            channels = @('stable', 'insiders')
+            configKind = 'mcp-only'
+            authPendingReason = 'Selecao de provedor/modelo ainda depende da UI da extensao.'
+        }
+        'ms-toolsai.jupyter-renderers' = [ordered]@{
+            id = 'ms-toolsai.jupyter-renderers'
+            displayName = 'Jupyter Notebook Renderers'
+            channels = @('stable', 'insiders')
+            configKind = 'none'
+            authPendingReason = ''
+        }
+        'saoudrizwan.cline-nightly' = [ordered]@{
+            id = 'saoudrizwan.cline-nightly'
+            displayName = 'Cline (Nightly)'
+            channels = @('stable', 'insiders')
+            preferPreRelease = $true
+            configKind = 'mcp-only'
+            authPendingReason = 'Autenticacao BYOK/Cline Provider depende do cofre interno da extensao.'
+        }
+        'Continue.continue' = [ordered]@{
+            id = 'Continue.continue'
+            displayName = 'Continue'
+            channels = @('stable', 'insiders')
+            configKind = 'continue'
+            authPendingReason = ''
+        }
+    }
+}
+
+function Get-BootstrapVsCodeEditorTargets {
+    $targets = [ordered]@{}
+    $targets['stable'] = [ordered]@{
+        name = 'stable'
+        displayName = 'VS Code'
+        cliPath = Resolve-BootstrapVsCodeCliPath -Channel 'stable'
+        settingsPath = Get-BootstrapVsCodeSettingsPath
+    }
+    $targets['insiders'] = [ordered]@{
+        name = 'insiders'
+        displayName = 'VS Code Insiders'
+        cliPath = Resolve-BootstrapVsCodeCliPath -Channel 'insiders'
+        settingsPath = Get-BootstrapVsCodeInsidersSettingsPath
+    }
+
+    foreach ($channel in @($targets.Keys)) {
+        $targets[$channel]['available'] = -not [string]::IsNullOrWhiteSpace([string]$targets[$channel]['cliPath'])
+    }
+
+    return $targets
+}
+
+function Invoke-BootstrapCommandCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [Alias('Args')][string[]]$CommandArgs = @()
+    )
+
+    try {
+        $output = & $Exe @CommandArgs 2>&1
+        $exitCode = $LASTEXITCODE
+        if ($null -eq $exitCode) {
+            $exitCode = 0
+        }
+        return [ordered]@{
+            ExitCode = [int]$exitCode
+            Output = @($output)
+        }
+    } catch {
+        return [ordered]@{
+            ExitCode = 1
+            Output = @([string]$_.Exception.Message)
+        }
+    }
+}
+
+function Get-BootstrapInstalledVsCodeExtensions {
+    param([Parameter(Mandatory = $true)][string]$CliPath)
+
+    if ([string]::IsNullOrWhiteSpace($CliPath) -or -not (Test-Path $CliPath)) {
+        return @()
+    }
+
+    $result = Invoke-BootstrapCommandCapture -Exe $CliPath -Args @('--list-extensions')
+    if ($result.ExitCode -ne 0) {
+        Write-Log ("Falha ao listar extensoes de {0}: {1}" -f $CliPath, ((@($result.Output) -join ' ') -replace '\s+', ' ').Trim()) 'WARN'
+        return @()
+    }
+
+    $extensions = New-Object System.Collections.Generic.List[string]
+    foreach ($line in @($result.Output)) {
+        $trimmed = [string]$line
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+        $extensions.Add($trimmed.Trim())
+    }
+
+    return @($extensions.ToArray())
+}
+
+function Ensure-BootstrapVsCodeExtensionInstalled {
+    param(
+        [Parameter(Mandatory = $true)][string]$CliPath,
+        [Parameter(Mandatory = $true)]$ExtensionDefinition,
+        [Parameter(Mandatory = $true)][string[]]$InstalledExtensions,
+        [Parameter(Mandatory = $true)][string]$EditorLabel
+    )
+
+    $extensionId = [string]$ExtensionDefinition['id']
+    if ($InstalledExtensions -contains $extensionId) {
+        Write-Log ("Extensao ja instalada em {0}: {1}" -f $EditorLabel, $extensionId)
+        return [ordered]@{
+            installed = $true
+            changed = $false
+            error = ''
+        }
+    }
+
+    $preferPreRelease = [bool]$ExtensionDefinition['preferPreRelease']
+    $installArgs = @('--install-extension', $extensionId, '--force')
+    if ($preferPreRelease) {
+        $installArgs += @('--pre-release')
+    }
+
+    $result = Invoke-BootstrapCommandCapture -Exe $CliPath -Args $installArgs
+    if ($result.ExitCode -ne 0) {
+        $errorText = ((@($result.Output) -join ' ') -replace '\s+', ' ').Trim()
+        $needsPreReleaseRetry = (
+            -not $preferPreRelease -and
+            ($errorText -match 'has no release version' -or $errorText -match 'pre-?release')
+        )
+
+        if ($needsPreReleaseRetry) {
+            $preReleaseArgs = @('--install-extension', $extensionId, '--force', '--pre-release')
+            $preReleaseResult = Invoke-BootstrapCommandCapture -Exe $CliPath -Args $preReleaseArgs
+            if ($preReleaseResult.ExitCode -eq 0) {
+                Write-Log ("Extensao pre-release instalada em {0}: {1}" -f $EditorLabel, $extensionId)
+                return [ordered]@{
+                    installed = $true
+                    changed = $true
+                    error = ''
+                }
+            }
+
+            $errorText = ((@($preReleaseResult.Output) -join ' ') -replace '\s+', ' ').Trim()
+        }
+
+        return [ordered]@{
+            installed = $false
+            changed = $false
+            error = $errorText
+        }
+    }
+
+    if ($preferPreRelease) {
+        Write-Log ("Extensao pre-release instalada em {0}: {1}" -f $EditorLabel, $extensionId)
+    } else {
+        Write-Log ("Extensao instalada em {0}: {1}" -f $EditorLabel, $extensionId)
+    }
+    return [ordered]@{
+        installed = $true
+        changed = $true
+        error = ''
+    }
+}
+
+function Ensure-BootstrapJsonPropertyFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][hashtable]$Values,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+
+    $settings = @{}
+    if (Test-Path $Path) {
+        try {
+            $settings = Read-BootstrapJsonFile -Path $Path
+            if (-not ($settings -is [hashtable])) {
+                $settings = @{}
+            }
+        } catch {
+            $backupPath = Backup-BootstrapFile -Path $Path
+            if ($backupPath) {
+                Write-Log ("{0} invalido; backup criado: {1}" -f $Label, $backupPath) 'WARN'
+            }
+            $settings = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
+    foreach ($name in $Values.Keys) {
+        $settings[[string]$name] = $Values[$name]
+    }
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
+
+    if ($before -eq $after) {
+        return $false
+    }
+
+    if (Test-Path $Path) {
+        $backupPath = Backup-BootstrapFile -Path $Path
+        if ($backupPath) {
+            Write-Log ("Backup criado antes de atualizar {0}: {1}" -f $Label, $backupPath)
+        }
+    }
+
+    Write-BootstrapJsonFile -Path $Path -Value $settings
+    Write-Log ("Configuracao aplicada em {0}: {1}" -f $Label, $Path)
+    return $true
+}
+
+function ConvertTo-BootstrapEnvFileLine {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    $escaped = $Value.Replace('\', '\\').Replace('"', '\"')
+    return ('{0}="{1}"' -f $Name, $escaped)
+}
+
+function Write-BootstrapTextFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Content
+    )
+
+    $parent = Split-Path -Path $Path -Parent
+    if ($parent) {
+        $null = New-Item -Path $parent -ItemType Directory -Force
+    }
+
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8)
+}
+
+function Ensure-BootstrapTextFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Content,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    $current = if (Test-Path $Path) { [System.IO.File]::ReadAllText($Path) } else { '' }
+    if ($current -eq $Content) {
+        return $false
+    }
+
+    if (Test-Path $Path) {
+        $backupPath = Backup-BootstrapFile -Path $Path
+        if ($backupPath) {
+            Write-Log ("Backup criado antes de atualizar {0}: {1}" -f $Label, $backupPath)
+        }
+    }
+
+    Write-BootstrapTextFile -Path $Path -Content $Content
+    Write-Log ("Arquivo atualizado em {0}: {1}" -f $Label, $Path)
+    return $true
+}
+
+function Convert-BootstrapContinueScalarToYaml {
+    param($Value)
+
+    if ($Value -is [bool]) {
+        return ($(if ($Value) { 'true' } else { 'false' }))
+    }
+    if ($null -eq $Value) {
+        return '""'
+    }
+
+    $text = [string]$Value
+    if ($text -match '^[A-Za-z0-9._/${}{:-]+$') {
+        return $text
+    }
+
+    $escaped = $text.Replace('\', '\\').Replace('"', '\"')
+    return ('"{0}"' -f $escaped)
+}
+
+function Convert-BootstrapMcpServerToContinueYamlLines {
+    param(
+        [Parameter(Mandatory = $true)][string]$ServerName,
+        [Parameter(Mandatory = $true)][hashtable]$ServerDefinition
+    )
+
+    $server = ConvertTo-BootstrapHashtable -InputObject $ServerDefinition
+    if (-not ($server -is [hashtable])) {
+        return @()
+    }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add(('  - name: {0}' -f (Convert-BootstrapContinueScalarToYaml -Value $ServerName)))
+
+    foreach ($propertyName in @('command', 'cwd', 'url')) {
+        if ($server.ContainsKey($propertyName) -and -not [string]::IsNullOrWhiteSpace([string]$server[$propertyName])) {
+            $lines.Add(('    {0}: {1}' -f $propertyName, (Convert-BootstrapContinueScalarToYaml -Value $server[$propertyName])))
+        }
+    }
+
+    if ($server.ContainsKey('args') -and ($server['args'] -is [System.Collections.IEnumerable])) {
+        $args = @($server['args'])
+        if ($args.Count -gt 0) {
+            $lines.Add('    args:')
+            foreach ($arg in $args) {
+                $lines.Add(('      - {0}' -f (Convert-BootstrapContinueScalarToYaml -Value $arg)))
+            }
+        }
+    }
+
+    if ($server.ContainsKey('env') -and ($server['env'] -is [hashtable])) {
+        $envMap = @{}
+        Set-BootstrapNonEmptyStringValues -Target $envMap -Values $server['env']
+        if ($envMap.Count -gt 0) {
+            $lines.Add('    env:')
+            foreach ($name in ($envMap.Keys | Sort-Object)) {
+                $secretRef = '${{ secrets.' + [string]$name + ' }}'
+                $lines.Add(('      {0}: {1}' -f $name, (Convert-BootstrapContinueScalarToYaml -Value $secretRef)))
+            }
+        }
+    }
+
+    return @($lines.ToArray())
+}
+
+function Ensure-BootstrapContinueExtensionConfig {
+    param([hashtable]$ResolvedTargets)
+
+    $summary = [ordered]@{
+        envPath = Get-BootstrapContinueEnvPath
+        configPath = Get-BootstrapContinueConfigPath
+        envUpdated = $false
+        configUpdated = $false
+        configured = $false
+    }
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('continue') -or -not ($ResolvedTargets['continue'] -is [hashtable])) {
+        return $summary
+    }
+
+    $continueTarget = ConvertTo-BootstrapHashtable -InputObject $ResolvedTargets['continue']
+    $envValues = @{}
+    if ($continueTarget.ContainsKey('env') -and ($continueTarget['env'] -is [hashtable])) {
+        Set-BootstrapNonEmptyStringValues -Target $envValues -Values $continueTarget['env']
+    }
+
+    $envLines = New-Object System.Collections.Generic.List[string]
+    foreach ($name in ($envValues.Keys | Sort-Object)) {
+        $envLines.Add((ConvertTo-BootstrapEnvFileLine -Name $name -Value ([string]$envValues[$name])))
+    }
+
+    $yamlLines = New-Object System.Collections.Generic.List[string]
+    $yamlLines.Add('# Gerado automaticamente pelo bootstrap local.')
+    $yamlLines.Add('# Modelos nao sao fixados automaticamente para evitar IDs de modelo frageis.')
+    $yamlLines.Add('name: Bootstrap Local Config')
+    $yamlLines.Add('version: 1.0.0')
+    $yamlLines.Add('schema: v1')
+
+    $mcpLines = New-Object System.Collections.Generic.List[string]
+    if ($continueTarget.ContainsKey('mcpServers') -and ($continueTarget['mcpServers'] -is [hashtable])) {
+        foreach ($serverName in ($continueTarget['mcpServers'].Keys | Sort-Object)) {
+            $serverDefinition = ConvertTo-BootstrapHashtable -InputObject $continueTarget['mcpServers'][$serverName]
+            if (-not ($serverDefinition -is [hashtable])) { continue }
+            if ($serverDefinition.ContainsKey('enabled') -and (-not [bool]$serverDefinition['enabled'])) { continue }
+            foreach ($line in @(Convert-BootstrapMcpServerToContinueYamlLines -ServerName ([string]$serverName) -ServerDefinition $serverDefinition)) {
+                $mcpLines.Add($line)
+            }
+        }
+    }
+
+    if ($mcpLines.Count -gt 0) {
+        $yamlLines.Add('mcpServers:')
+        foreach ($line in $mcpLines) {
+            $yamlLines.Add($line)
+        }
+    }
+
+    $summary.configured = ($envValues.Count -gt 0) -or ($mcpLines.Count -gt 0)
+    if (-not $summary.configured) {
+        return $summary
+    }
+
+    $envContent = [string]::Join([Environment]::NewLine, @($envLines.ToArray()))
+    if ($envLines.Count -gt 0) {
+        if ($envContent.Length -gt 0) {
+            $envContent += [Environment]::NewLine
+        }
+        $summary.envUpdated = Ensure-BootstrapTextFile -Path $summary.envPath -Content $envContent -Label 'Continue .env'
+    } else {
+        $summary.envUpdated = $false
+    }
+
+    $configContent = [string]::Join([Environment]::NewLine, @($yamlLines.ToArray())) + [Environment]::NewLine
+    $summary.configUpdated = Ensure-BootstrapTextFile -Path $summary.configPath -Content $configContent -Label 'Continue config.yaml'
+
+    return $summary
+}
+
+function Ensure-BootstrapVsCodeExtensions {
+    param([hashtable]$State)
+
+    $bundlePath = if (-not [string]::IsNullOrWhiteSpace([string]$State.SecretsPath) -and (Test-Path $State.SecretsPath)) {
+        [string]$State.SecretsPath
+    } else {
+        Get-BootstrapSecretsPath
+    }
+
+    $secretsData = if (Test-Path $bundlePath) { Read-BootstrapJsonFile -Path $bundlePath } else { Get-BootstrapSecretsTemplate }
+    $resolvedTargets = Get-BootstrapResolvedSecretsTargets -SecretsData $secretsData -IncludeManagedMcps
+    $editorTargets = Get-BootstrapVsCodeEditorTargets
+    $extensionCatalog = Get-BootstrapVsCodeExtensionCatalog
+    $statePath = Get-BootstrapVsCodeExtensionStatePath
+
+    $summary = [ordered]@{
+        path = $statePath
+        generatedAt = (Get-Date).ToString('o')
+        editors = [ordered]@{}
+        continue = [ordered]@{}
+        authPending = @()
+        extensions = @()
+    }
+
+    $agentMemorySettings = @{
+        'agentMemory.storageBackend' = 'secret'
+        'agentMemory.autoSyncToFile' = ''
+    }
+
+    foreach ($channel in @($editorTargets.Keys)) {
+        $editor = $editorTargets[$channel]
+        $editorSummary = [ordered]@{
+            displayName = [string]$editor['displayName']
+            available = [bool]$editor['available']
+            cliPath = [string]$editor['cliPath']
+            settingsPath = [string]$editor['settingsPath']
+            settingsUpdated = $false
+            installed = @()
+            failed = @()
+        }
+
+        if (-not $editorSummary.available) {
+            Write-Log ("Editor ausente, extensoes serao ignoradas: {0}" -f $editorSummary.displayName) 'WARN'
+            $summary.editors[$channel] = $editorSummary
+            continue
+        }
+
+        $installedExtensions = @(Get-BootstrapInstalledVsCodeExtensions -CliPath $editorSummary.cliPath)
+        foreach ($extensionId in $extensionCatalog.Keys) {
+            $definition = $extensionCatalog[$extensionId]
+            if (-not (@($definition['channels']) -contains $channel)) { continue }
+
+            $installResult = Ensure-BootstrapVsCodeExtensionInstalled -CliPath $editorSummary.cliPath -ExtensionDefinition $definition -InstalledExtensions $installedExtensions -EditorLabel $editorSummary.displayName
+            $record = [ordered]@{
+                editor = $editorSummary.displayName
+                extensionId = [string]$definition['id']
+                displayName = [string]$definition['displayName']
+                installed = [bool]$installResult['installed']
+                changed = [bool]$installResult['changed']
+                configKind = [string]$definition['configKind']
+                error = [string]$installResult['error']
+            }
+
+            if ($record.installed) {
+                $editorSummary.installed += @([string]$record.extensionId)
+                if ($record.changed) {
+                    $installedExtensions += @([string]$record.extensionId)
+                }
+            } else {
+                $editorSummary.failed += @([string]$record.extensionId)
+            }
+
+            $summary.extensions += @($record)
+        }
+
+        $editorSummary.settingsUpdated = Ensure-BootstrapJsonPropertyFile -Path $editorSummary.settingsPath -Values $agentMemorySettings -Label ($editorSummary.displayName + ' settings.json')
+        $summary.editors[$channel] = $editorSummary
+    }
+
+    if ($resolvedTargets.ContainsKey('roo') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['roo'])) {
+        $null = Ensure-BootstrapRooSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('cline') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['cline'])) {
+        $null = Ensure-BootstrapClineSecrets -ResolvedTargets $resolvedTargets
+    }
+
+    $summary.continue = Ensure-BootstrapContinueExtensionConfig -ResolvedTargets $resolvedTargets
+    foreach ($definition in $extensionCatalog.Values) {
+        if ([string]::IsNullOrWhiteSpace([string]$definition['authPendingReason'])) { continue }
+        $summary.authPending += @([ordered]@{
+            extensionId = [string]$definition['id']
+            displayName = [string]$definition['displayName']
+            reason = [string]$definition['authPendingReason']
+        })
+    }
+
+    Write-BootstrapJsonFile -Path $statePath -Value $summary
+    Write-Log ("Estado local de extensoes VS Code sincronizado: {0}" -f $statePath)
+
+    $State.VsCodeExtensionsPath = $statePath
+    $State.VsCodeExtensionsSummary = $summary
+    return $summary
+}
+
+function Ensure-BootstrapSecrets {
+    param([hashtable]$State)
+
+    $bundle = Get-BootstrapSecretsData
+    $validatedData = Invoke-BootstrapSecretsValidation -SecretsData $bundle.Data
+    Write-BootstrapJsonFile -Path $bundle.Path -Value $validatedData
+    $resolvedTargets = Get-BootstrapResolvedSecretsTargets -SecretsData $validatedData
+    $diagnostics = Get-BootstrapSecretsDiagnostics -SecretsData $validatedData
+    $summary = [ordered]@{
+        path = [string]$bundle['Path']
+        createdTemplate = $bundle.Created
+        userEnvApplied = 0
+        claudeCodeUpdated = $false
+        claudeDesktopUpdated = $false
+        cursorUpdated = $false
+        windsurfUpdated = $false
+        traeUpdated = $false
+        openCodeUpdated = $false
+        vsCodeUpdated = $false
+        rooUpdated = $false
+        clineUpdated = $false
+        zedUpdated = $false
+        zCodeUpdated = $false
+        openClawUpdated = $false
+        cometUpdated = $false
+        diagnostics = $diagnostics
+    }
+
+    if ($resolvedTargets.ContainsKey('userEnv') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['userEnv'])) {
+        $summary.userEnvApplied = Ensure-BootstrapUserEnvSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('claudeCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['claudeCode'])) {
+        $summary.claudeCodeUpdated = Ensure-BootstrapClaudeCodeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('claudeDesktop') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['claudeDesktop'])) {
+        $summary.claudeDesktopUpdated = Ensure-BootstrapClaudeDesktopSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('cursor') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['cursor'])) {
+        $summary.cursorUpdated = Ensure-BootstrapCursorSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('windsurf') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['windsurf'])) {
+        $summary.windsurfUpdated = Ensure-BootstrapWindsurfSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('trae') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['trae'])) {
+        $summary.traeUpdated = Ensure-BootstrapTraeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('openCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openCode'])) {
+        $summary.openCodeUpdated = Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('vsCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['vsCode'])) {
+        $summary.vsCodeUpdated = Ensure-BootstrapVsCodeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('roo') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['roo'])) {
+        $summary.rooUpdated = Ensure-BootstrapRooSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('cline') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['cline'])) {
+        $summary.clineUpdated = Ensure-BootstrapClineSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('zed') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['zed'])) {
+        $summary.zedUpdated = Ensure-BootstrapZedSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('zCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['zCode'])) {
+        $summary.zCodeUpdated = Ensure-BootstrapZCodeSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('openClaw') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openClaw'])) {
+        $summary.openClawUpdated = Ensure-BootstrapOpenClawSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('comet') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['comet'])) {
+        $summary.cometUpdated = Ensure-BootstrapCometSecrets -ResolvedTargets $resolvedTargets
+    }
+
+    $State.SecretsPath = [string]$bundle['Path']
+    $State.SecretsSummary = $summary
+
+    foreach ($warning in @($diagnostics.warnings)) {
+        Write-Log "Manifesto de segredos: $warning" 'WARN'
+    }
+
+    if ($bundle.Created) {
+        Write-Log "Manifesto de segredos criado em $($bundle['Path']). Preencha as chaves e rode o bootstrap novamente para propagar tudo automaticamente." 'WARN'
+    } else {
+        Write-Log ("Manifesto de segredos sincronizado: env={0}, claudeCode={1}, claudeDesktop={2}, cursor={3}, windsurf={4}, trae={5}, openCode={6}, vsCode={7}, roo={8}, cline={9}, zed={10}, zCode={11}, openClaw={12}, comet={13}" -f $summary.userEnvApplied, $summary.claudeCodeUpdated, $summary.claudeDesktopUpdated, $summary.cursorUpdated, $summary.windsurfUpdated, $summary.traeUpdated, $summary.openCodeUpdated, $summary.vsCodeUpdated, $summary.rooUpdated, $summary.clineUpdated, $summary.zedUpdated, $summary.zCodeUpdated, $summary.openClawUpdated, $summary.cometUpdated)
+    }
 }
 
 function Write-BootstrapExecutionResultFile {
@@ -3456,6 +7730,9 @@ function Invoke-BootstrapComponent {
         'git-core' { Ensure-BootstrapGitCore -State $State }
         'node-core' { Ensure-BootstrapNodeCore -State $State }
         'python-core' { Ensure-BootstrapPythonCore -State $State }
+        'bootstrap-secrets' { Ensure-BootstrapSecrets -State $State }
+        'bootstrap-mcps' { Ensure-BootstrapManagedMcps -State $State | Out-Null }
+        'vscode-extensions' { Ensure-BootstrapVsCodeExtensions -State $State | Out-Null }
         'sevenzip' {
             Ensure-BootstrapSystemCore -State $State
             Ensure-WingetPackage -WingetPath $State.Winget -Id '7zip.7zip' -DisplayName '7-Zip' -AllowFailureWhenNotAdmin $true
@@ -3753,6 +8030,7 @@ function Invoke-BootstrapProfileMode {
     }
 
     $state = New-BootstrapState -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -RequestedSteamDeckVersion $SteamDeckVersion -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -HostHealthMode $resolvedHostHealthMode -UsesSteamDeckFlow:$usesSteamDeckFlow -IsDryRun:$DryRun
+    Invoke-BootstrapExecutionPreflight -State $state -ResolvedComponents $resolution.ResolvedComponents
 
     foreach ($componentName in $resolution.ResolvedComponents) {
         Invoke-BootstrapComponent -Name $componentName -State $state
@@ -3768,6 +8046,8 @@ function Invoke-BootstrapProfileMode {
             resultPath = $script:ResultPath
             workspaceRoot = $resolvedWorkspaceRoot
             cloneBaseDir = $resolvedCloneBaseDir
+            secretsPath = $state.SecretsPath
+            secretsSummary = $state.SecretsSummary
             usesSteamDeckFlow = $usesSteamDeckFlow
             resolvedSteamDeckVersion = $resolvedSteamDeckVersion
             resolvedHostHealthMode = $resolvedHostHealthMode
@@ -3776,10 +8056,14 @@ function Invoke-BootstrapProfileMode {
             hostHealthReportRoot = $state.HostHealthReportRoot
             steamDeckSettingsPath = $state.SteamDeckSettingsPath
             steamDeckAutomationRoot = $state.SteamDeckAutomationRoot
+            preflight = $state.PreflightSummary
         })
     }
 
     Write-Log 'Resumo:'
+    if (-not [string]::IsNullOrWhiteSpace($state.SecretsPath)) {
+        Write-Log "bootstrap secrets: $($state.SecretsPath)"
+    }
     Write-Log "CLAUDE_CODE_GIT_BASH_PATH: $([Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH','User'))"
     Write-BootstrapCommandSummary -Label 'git' -CommandName 'git' -Args @('--version')
     Write-BootstrapCommandSummary -Label 'node' -CommandName 'node' -Args @('-v')
@@ -3795,7 +8079,7 @@ function Invoke-BootstrapProfileMode {
     Write-BootstrapCommandSummary -Label 'goose' -CommandName 'goose' -Args @('--version')
     Write-BootstrapCommandSummary -Label 'wsl' -CommandName 'wsl.exe' -Args @('--version')
 
-    $opencodeExe = Join-Path (Join-Path $env:USERPROFILE '.opencode\bin') 'opencode.exe'
+    $opencodeExe = Join-Path (Join-Path (Get-BootstrapUserHomePath) '.opencode\bin') 'opencode.exe'
     if (Test-Path $opencodeExe) {
         Write-Log "opencode: $(& $opencodeExe --version) ($opencodeExe)"
     } else {
@@ -3830,6 +8114,130 @@ function Invoke-BootstrapProfileMode {
     Write-Log "Log salvo em: $script:LogPath"
 }
 
+function Set-BootstrapSecretsPreferredActiveCredentials {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [switch]$ForceFirstPassed,
+        [switch]$OnlyWhenMissing
+    )
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+
+    foreach ($providerName in @($normalized.providers.Keys)) {
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerName]
+        if (-not ($provider -is [hashtable])) { continue }
+        if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]))) { continue }
+
+        $shouldSelect = $ForceFirstPassed
+        if ($OnlyWhenMissing -and [string]::IsNullOrWhiteSpace([string]$provider['activeCredential'])) {
+            $shouldSelect = $true
+        }
+        if (-not $shouldSelect) { continue }
+
+        $candidateIds = @()
+        foreach ($credentialId in @($provider['rotationOrder'])) {
+            $value = [string]$credentialId
+            if ([string]::IsNullOrWhiteSpace($value)) { continue }
+            if ($provider['credentials'].Contains($value)) {
+                $candidateIds += @($value)
+            }
+        }
+        foreach ($credentialId in $provider['credentials'].Keys) {
+            if ($candidateIds -notcontains [string]$credentialId) {
+                $candidateIds += @([string]$credentialId)
+            }
+        }
+
+        $selected = ''
+        foreach ($credentialId in $candidateIds) {
+            $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$credentialId]
+            if (-not ($credential -is [hashtable])) { continue }
+            if (($credential.ContainsKey('validation')) -and ($credential['validation'] -is [hashtable]) -and ([string]$credential['validation']['state'] -eq 'passed')) {
+                $selected = [string]$credentialId
+                break
+            }
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($selected)) {
+            $provider['activeCredential'] = $selected
+        } elseif ($ForceFirstPassed) {
+            $provider['activeCredential'] = ''
+        }
+
+        $normalized.providers[$providerName] = Convert-BootstrapSecretsProviderDefinition -ProviderName ([string]$providerName) -ProviderData $provider
+    }
+
+    return $normalized
+}
+
+function Write-BootstrapSecretsList {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    foreach ($entry in @(Get-BootstrapSecretsListEntries -SecretsData $SecretsData)) {
+        $line = '{0} | {1} | active={2} | state={3} | {4}' -f $entry.provider, $entry.id, $entry.active.ToString().ToLowerInvariant(), $entry.validationState, $entry.displayName
+        Write-Output $line
+    }
+}
+
+function Invoke-BootstrapSecretsMode {
+    $bundle = Get-BootstrapSecretsData
+    $data = $bundle.Data
+    $mutated = $false
+
+    if (-not [string]::IsNullOrWhiteSpace($SecretsImportPath)) {
+        $text = Get-Content -Path $SecretsImportPath -Raw -Encoding utf8
+        $data = Import-BootstrapSecretsText -Text $text -SecretsData $data
+        $data = Invoke-BootstrapSecretsValidation -SecretsData $data -ValidateAll
+        $data = Set-BootstrapSecretsPreferredActiveCredentials -SecretsData $data -ForceFirstPassed
+        $mutated = $true
+    }
+
+    if ($SecretsValidateAll) {
+        $data = Invoke-BootstrapSecretsValidation -SecretsData $data -ValidateAll
+        $data = Set-BootstrapSecretsPreferredActiveCredentials -SecretsData $data -OnlyWhenMissing
+        $mutated = $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($SecretsActivateCredential)) {
+        if ($SecretsActivateCredential -notmatch '^([a-z0-9]+)-') {
+            throw "Nao foi possivel inferir o provider da credencial: $SecretsActivateCredential"
+        }
+        $providerName = [string]$matches[1]
+        $data = Set-BootstrapSecretsActiveCredential -SecretsData $data -ProviderName $providerName -CredentialId $SecretsActivateCredential
+        $mutated = $true
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($SecretsActivateProvider)) {
+        $data = Move-BootstrapSecretsToNextCredential -SecretsData $data -ProviderName $SecretsActivateProvider.ToLowerInvariant()
+        $mutated = $true
+    }
+
+    if ($mutated) {
+        Write-BootstrapJsonFile -Path $bundle.Path -Value $data
+        $state = New-BootstrapState -ResolvedWorkspaceRoot (Get-Location).Path -ResolvedCloneBaseDir (Get-Location).Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+        Ensure-BootstrapSecrets -State $state
+        $data = (Read-BootstrapJsonFile -Path $bundle.Path)
+    }
+
+    if ($SecretsList) {
+        Write-BootstrapSecretsList -SecretsData $data
+    }
+}
+
+$invocationName = ''
+try { $invocationName = [string]$MyInvocation.InvocationName } catch { $invocationName = '' }
+if ($invocationName -eq '.') {
+    return
+}
+
+$useBootstrapSecretsMode = (
+    $SecretsList -or
+    $SecretsValidateAll -or
+    [string]::IsNullOrWhiteSpace($SecretsImportPath) -eq $false -or
+    [string]::IsNullOrWhiteSpace($SecretsActivateProvider) -eq $false -or
+    [string]::IsNullOrWhiteSpace($SecretsActivateCredential) -eq $false
+)
+
 $useBootstrapProfileMode = (
     $UiContractJson -or
     $ListProfiles -or
@@ -3851,6 +8259,26 @@ if ($UiContractJson) {
 
 if ($BootstrapUiLibraryMode) {
     return
+}
+
+if ($useBootstrapSecretsMode) {
+    try {
+        Invoke-BootstrapSecretsMode
+        exit 0
+    } catch {
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                status = 'error'
+                generatedAt = (Get-Date).ToString('o')
+                logPath = $script:LogPath
+                resultPath = $script:ResultPath
+                error = $_.Exception.Message
+            })
+        }
+        Write-Log $_.Exception.Message 'ERROR'
+        Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+        exit 1
+    }
 }
 
 if ($useBootstrapProfileMode) {
@@ -3949,7 +8377,7 @@ try {
     $repoDir = Join-Path $CloneBaseDir 'gemini-cli'
     Ensure-RepoClone -GitExe $gitInfo.Git -RepoUrl 'https://github.com/heartyguy/gemini-cli' -TargetDir $repoDir
 
-    $opencodeExe = Join-Path (Join-Path $env:USERPROFILE '.opencode\bin') 'opencode.exe'
+    $opencodeExe = Join-Path (Join-Path (Get-BootstrapUserHomePath) '.opencode\bin') 'opencode.exe'
     $geminiCmd = Join-Path $nodeInfo.NpmBin 'gemini.cmd'
     $bonsaiCmd = Join-Path $nodeInfo.NpmBin 'bonsai.cmd'
     $grokCmd = Join-Path $nodeInfo.NpmBin 'grok.cmd'

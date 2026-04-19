@@ -51,6 +51,114 @@ O **PhaseZero** entende que cada máquina tem uma fase zero diferente. Escolha o
 Você pode facilmente plugar seus próprios aplicativos. Basta editar a seção principal de Componentes em `bootstrap-tools.ps1` usando a função:
 `New-BootstrapComponentDefinition` injetando IDs do Winget, npm, ou links diretos de download.
 
+## 🔐 Segredos Locais
+
+O bootstrap agora mantém credenciais locais em `.bootstrap-tools/bootstrap-secrets.json`, arquivo já ignorado pelo Git. Cada provedor pode ter várias chaves nomeadas, uma credencial ativa e uma fila manual de rotação.
+
+Fluxo sugerido:
+
+```powershell
+# garante/cria o manifesto local
+.\bootstrap-tools.ps1 -Component bootstrap-secrets -NonInteractive
+
+# importa um arquivo bruto de anotações, valida o que for suportado
+.\bootstrap-tools.ps1 -SecretsImportPath "C:\caminho\credenciais.md"
+
+# lista provider/id/status sem imprimir o segredo
+.\bootstrap-tools.ps1 -SecretsList
+
+# revalida todas as credenciais suportadas
+.\bootstrap-tools.ps1 -SecretsValidateAll
+
+# gira para a próxima credencial válida do provedor
+.\bootstrap-tools.ps1 -SecretsActivateProvider openrouter
+
+# ativa uma credencial específica, se passar na validação
+.\bootstrap-tools.ps1 -SecretsActivateCredential openrouter-gmail-01
+```
+
+Provedores com validação dedicada nesta etapa:
+
+- `openai`
+- `anthropic`
+- `google`
+- `openrouter`
+- `github`
+- `moonshot`
+- `deepseek`
+- `bonsai` entra como `unsupported/manual-review` até existir um validador confiável
+
+Quando a credencial ativa falha na validação, o bootstrap não reaplica aquele segredo nos env vars nem nos arquivos de configuração dos clientes.
+
+## 🧩 VS Code e Insiders
+
+O perfil `ai` agora também garante `Visual Studio Code`, `Visual Studio Code - Insiders` e instala automaticamente estas extensões nos dois editores:
+
+- `augment.vscode-augment`
+- `kilocode.Kilo-Code`
+- `Kombai.kombai`
+- `laurids.agent-skills-sh`
+- `digitarald.agent-memory`
+- `RooVeterinaryInc.roo-code-nightly`
+- `ms-toolsai.jupyter-renderers`
+- `saoudrizwan.cline-nightly`
+- `Continue.continue`
+
+Automação aplicada nesta etapa:
+
+- instala/extende as extensões via CLI oficial do VS Code (`code` / `code-insiders`);
+- reaplica MCPs suportados para `Roo` e `Cline`;
+- gera `.continue/.env` e `%USERPROFILE%\.continue\config.yaml` com segredos validados e MCPs suportados;
+- define defaults seguros do `Agent Memory` em `settings.json`.
+
+Restrições intencionais para segurança/resiliência:
+
+- `Augment`, `Kilo` e `Kombai` continuam com autenticação manual/assistida porque os fornecedores dependem de login próprio;
+- `Cline` e `Roo` recebem MCPs automaticamente, mas a seleção/autenticação do provedor continua na UI da extensão;
+- o estado local da automação fica em `.bootstrap-tools/vscode-extension-state.json`, também fora do Git.
+
+## 🔌 MCPs Gerenciados
+
+O componente `bootstrap-mcps` agora instala e reaplica uma camada gerenciada de MCPs para os clientes compatíveis (`Claude Code`, `Claude Desktop`, `Cursor`, `Windsurf`, `Trae`, `OpenCode`, `VS Code`, `Roo`, `Cline`, `Continue`, `Zed`, `ZCode` e `OpenClaw`).
+
+Catálogo automatizado nesta etapa:
+
+- `Markitdown`
+- `Netdata`
+- `Context7`
+- `Chrome DevTools MCP`
+- `Playwright`
+- `GitHub MCP Server`
+- `Serena`
+- `Firecrawl`
+- `Desktop Commander`
+- `Notion`
+- `Supabase`
+- `Figma MCP Server`
+- `Apify`
+- `Vercel MCP`
+- `Box MCP Server (Remote)`
+
+Estratégia de provisionamento:
+
+- MCPs locais usam `npx` ou `uv tool` quando isso é mais resiliente para o host;
+- MCPs remotos usam `mcp-remote@latest`, evitando espalhar secrets desnecessariamente por arquivos locais;
+- `Context7` e `Apify` aceitam modo remoto por padrão e alternam para modo local quando existe token ativo;
+- `Firecrawl` e `Netdata` só entram quando existe credencial ativa utilizável;
+- `Notion`, `Supabase`, `Figma`, `Vercel` e `Box` entram prontos para OAuth/autorizações no primeiro uso.
+
+Arquivos locais de estado:
+
+- `.bootstrap-tools/bootstrap-mcp-state.json`
+- `.bootstrap-tools/bootstrap-secrets.json`
+
+Observações de segurança:
+
+- a resolução enriquecida com MCPs é opt-in dentro do script; `bootstrap-secrets` continua conservador e não injeta MCPs gerenciados por padrão;
+- nenhum segredo é enviado ao Git;
+- segredos só são aplicados quando a credencial ativa está aprovada, com exceção dos provedores explicitamente marcados como bypass manual para MCPs opcionais (`context7`, `firecrawl`, `apify`, `netdata`, `supabase`);
+- provedores OAuth continuam dependentes da autorização do usuário no cliente final.
+
 ---
 
 <div align="center">
