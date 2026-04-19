@@ -8226,9 +8226,7 @@ function Invoke-BootstrapSecretsMode {
 
 $invocationName = ''
 try { $invocationName = [string]$MyInvocation.InvocationName } catch { $invocationName = '' }
-if ($invocationName -eq '.') {
-    return
-}
+$isDotSourced = ($invocationName -eq '.')
 
 $useBootstrapSecretsMode = (
     $SecretsList -or
@@ -8252,220 +8250,222 @@ $useBootstrapProfileMode = (
     (@($Exclude).Count -gt 0)
 )
 
-if ($UiContractJson) {
-    (Get-BootstrapUiContract | ConvertTo-Json -Depth 12)
-    return
-}
-
-if ($BootstrapUiLibraryMode) {
-    return
-}
-
-if ($useBootstrapSecretsMode) {
-    try {
-        Invoke-BootstrapSecretsMode
-        exit 0
-    } catch {
-        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-                status = 'error'
-                generatedAt = (Get-Date).ToString('o')
-                logPath = $script:LogPath
-                resultPath = $script:ResultPath
-                error = $_.Exception.Message
-            })
-        }
-        Write-Log $_.Exception.Message 'ERROR'
-        Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-        exit 1
+if (-not $isDotSourced) {
+    if ($UiContractJson) {
+        (Get-BootstrapUiContract | ConvertTo-Json -Depth 12)
+        return
     }
-}
 
-if ($useBootstrapProfileMode) {
-    try {
-        Invoke-BootstrapProfileMode
-        exit 0
-    } catch {
-        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-                status = 'error'
-                generatedAt = (Get-Date).ToString('o')
-                logPath = $script:LogPath
-                resultPath = $script:ResultPath
-                error = $_.Exception.Message
-            })
-        }
-        Write-Log $_.Exception.Message 'ERROR'
-        Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-        exit 1
+    if ($BootstrapUiLibraryMode) {
+        return
     }
-}
 
-try {
-    Write-Log "Início: $($script:StartTime.ToString('s'))"
-    Write-Log "Log: $script:LogPath"
-    Write-Log "Admin: $(Test-IsAdmin)"
-    Ensure-ProxyEnvFromWinHttp
+    if ($useBootstrapSecretsMode) {
+        try {
+            Invoke-BootstrapSecretsMode
+            exit 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                    status = 'error'
+                    generatedAt = (Get-Date).ToString('o')
+                    logPath = $script:LogPath
+                    resultPath = $script:ResultPath
+                    error = $_.Exception.Message
+                })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            exit 1
+        }
+    }
 
-    $winget = Ensure-Winget
-    Refresh-SessionPath
+    if ($useBootstrapProfileMode) {
+        try {
+            Invoke-BootstrapProfileMode
+            exit 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                    status = 'error'
+                    generatedAt = (Get-Date).ToString('o')
+                    logPath = $script:LogPath
+                    resultPath = $script:ResultPath
+                    error = $_.Exception.Message
+                })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            exit 1
+        }
+    }
 
-    $gitInfo = Ensure-GitAndBash -WingetPath $winget
-    Refresh-SessionPath
+    try {
+        Write-Log "Início: $($script:StartTime.ToString('s'))"
+        Write-Log "Log: $script:LogPath"
+        Write-Log "Admin: $(Test-IsAdmin)"
+        Ensure-ProxyEnvFromWinHttp
 
-    $nodeInfo = Ensure-NodeAndNpm -WingetPath $winget
-    Refresh-SessionPath
-
-    Ensure-WingetPackage -WingetPath $winget -Id 'EclipseAdoptium.Temurin.17.JDK' -DisplayName 'Java JDK (Temurin 17)'
-    Ensure-WingetPackage -WingetPath $winget -Id 'ImageMagick.ImageMagick' -DisplayName 'ImageMagick'
-    Ensure-WingetPackage -WingetPath $winget -Id '7zip.7zip' -DisplayName '7-Zip' -AllowFailureWhenNotAdmin $true
-    $sevenZipDir = $null
-    try { $sevenZipDir = Join-Path $env:ProgramFiles '7-Zip' } catch { $sevenZipDir = $null }
-    if ($sevenZipDir -and (Test-Path $sevenZipDir)) {
-        Ensure-PathUserContains -Dir $sevenZipDir
+        $winget = Ensure-Winget
         Refresh-SessionPath
-    }
-    Ensure-Python -WingetPath $winget
-    Refresh-SessionPath
 
-    Ensure-OpenCode -BashPath $gitInfo.Bash
-    Refresh-SessionPath
+        $gitInfo = Ensure-GitAndBash -WingetPath $winget
+        Refresh-SessionPath
 
-    Ensure-ClaudeCode -WingetPath $winget
-    Refresh-SessionPath
+        $nodeInfo = Ensure-NodeAndNpm -WingetPath $winget
+        Refresh-SessionPath
 
-    Ensure-WingetPackage -WingetPath $winget -Id 'GitHub.cli' -DisplayName 'GitHub CLI (gh)'
-    Refresh-SessionPath
-
-    Ensure-WingetPackage -WingetPath $winget -Id 'Google.Chrome' -DisplayName 'ChromeSetup (Google Chrome)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Notepad++.Notepad++' -DisplayName 'Notepad++' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Anthropic.Claude' -DisplayName 'Claude Setup (Claude Desktop)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Anysphere.Cursor' -DisplayName 'CursorUserSetup (Cursor)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Codeium.Windsurf' -DisplayName 'WindsurfUserSetup (Windsurf)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Warp.Warp' -DisplayName 'WarpSetup (Warp)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'ByteDance.Trae' -DisplayName 'Trae-Setup (Trae)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'SST.OpenCodeDesktop' -DisplayName 'opencode-desktop-windows (OpenCode Desktop)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Microsoft.VisualStudioCode.Insiders' -DisplayName 'Visual Studio Code - Insiders' -AllowFailureWhenNotAdmin $true
-    Ensure-WslUi -WingetPath $winget
-    Ensure-WingetPackage -WingetPath $winget -Id 'Google.Antigravity' -DisplayName 'Antigravity.exe' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'ZhipuAI.AutoClaw' -DisplayName 'autoclaw (AutoClaw)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Perplexity.Comet' -DisplayName 'Perplexity (Comet)' -AllowFailureWhenNotAdmin $true
-    Ensure-CodexInstaller -WingetPath $winget
-    Refresh-SessionPath
-
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@google/gemini-cli' -DisplayName 'Gemini CLI (@google/gemini-cli)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@bonsai-ai/cli' -DisplayName 'Bonsai CLI (@bonsai-ai/cli)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@vibe-kit/grok-cli' -DisplayName 'Grok CLI (@vibe-kit/grok-cli)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@qwen-code/qwen-code@latest' -DisplayName 'Qwen Code (@qwen-code/qwen-code)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@github/copilot' -DisplayName 'GitHub Copilot CLI (@github/copilot)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@openai/codex' -DisplayName 'OpenAI Codex CLI (@openai/codex)'
-    Ensure-OpenClaw -NpmCmd $nodeInfo.NpmCmd
-    Refresh-SessionPath
-
-    Ensure-ClaudeCodeDefaults -GitBashPath $gitInfo.Bash
-    Refresh-SessionPath
-
-    Ensure-ClaudeHookConfigsHealthy -GitBashPath $gitInfo.Bash
-    Refresh-SessionPath
-
-    Ensure-Aider
-    Refresh-SessionPath
-
-    Ensure-Goose -BashPath $gitInfo.Bash
-    Refresh-SessionPath
-
-    $repoDir = Join-Path $CloneBaseDir 'gemini-cli'
-    Ensure-RepoClone -GitExe $gitInfo.Git -RepoUrl 'https://github.com/heartyguy/gemini-cli' -TargetDir $repoDir
-
-    $opencodeExe = Join-Path (Join-Path (Get-BootstrapUserHomePath) '.opencode\bin') 'opencode.exe'
-    $geminiCmd = Join-Path $nodeInfo.NpmBin 'gemini.cmd'
-    $bonsaiCmd = Join-Path $nodeInfo.NpmBin 'bonsai.cmd'
-    $grokCmd = Join-Path $nodeInfo.NpmBin 'grok.cmd'
-    $qwenCmd = Join-Path $nodeInfo.NpmBin 'qwen.cmd'
-    $copilotCmd = Join-Path $nodeInfo.NpmBin 'copilot.cmd'
-    $codexCmd = Join-Path $nodeInfo.NpmBin 'codex.cmd'
-    $openclawCmd = Join-Path $nodeInfo.NpmBin 'openclaw.cmd'
-
-    Write-Log 'Resumo:'
-    Write-Log "CLAUDE_CODE_GIT_BASH_PATH: $([Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH','User'))"
-    Write-Log "git: $(& $gitInfo.Git --version)"
-    Write-Log "node: $(& $nodeInfo.Node -v)"
-    Write-Log "npm: $(& $nodeInfo.NpmCmd --version)"
-    $javaExe = Resolve-CommandPath -Name 'java'
-    if ($javaExe) { Write-Log "java: $(Invoke-NativeFirstLine -Exe $javaExe -Args @('-version'))" } else { Write-Log 'java: NÃO ENCONTRADO' 'WARN' }
-    $magickExe = Resolve-CommandPath -Name 'magick'
-    if ($magickExe) { Write-Log "magick: $(Invoke-NativeFirstLine -Exe $magickExe -Args @('-version'))" } else { Write-Log 'magick: NÃO ENCONTRADO' 'WARN' }
-    $sevenZipExe = Resolve-CommandPath -Name '7z'
-    if ($sevenZipExe) { Write-Log "7z: $(Invoke-NativeFirstLine -Exe $sevenZipExe -Args @()) ($sevenZipExe)" } else { Write-Log '7z: NÃO ENCONTRADO' 'WARN' }
-    $pythonExe = Resolve-CommandPath -Name 'python'
-    if ($pythonExe) { Write-Log "python: $(Invoke-NativeFirstLine -Exe $pythonExe -Args @('--version')) ($pythonExe)" } else { Write-Log 'python: NÃO ENCONTRADO' 'WARN' }
-    $pipExe = Resolve-CommandPath -Name 'pip'
-    if ($pipExe) { Write-Log "pip: $(Invoke-NativeFirstLine -Exe $pipExe -Args @('--version')) ($pipExe)" } else { Write-Log 'pip: NÃO ENCONTRADO' 'WARN' }
-    $claudeExe = Resolve-CommandPath -Name 'claude'
-    if ($claudeExe) { Write-Log "claude: $(Invoke-NativeFirstLine -Exe $claudeExe -Args @('--version')) ($claudeExe)" } else { Write-Log 'claude: NÃO ENCONTRADO' 'WARN' }
-    $ghExe = Resolve-CommandPath -Name 'gh'
-    if ($ghExe) { Write-Log "gh: $(Invoke-NativeFirstLine -Exe $ghExe -Args @('--version')) ($ghExe)" } else { Write-Log 'gh: NÃO ENCONTRADO' 'WARN' }
-    if (Test-Path $opencodeExe) { Write-Log "opencode: $(& $opencodeExe --version) ($opencodeExe)" } else { Write-Log "opencode: NÃO ENCONTRADO ($opencodeExe)" 'WARN' }
-    if (Test-Path $geminiCmd) { Write-Log "gemini: $(& $geminiCmd --version) ($geminiCmd)" } else { Write-Log "gemini: NÃO ENCONTRADO ($geminiCmd)" 'WARN' }
-    if (Test-Path $bonsaiCmd) { Write-Log "bonsai: instalado ($bonsaiCmd)" } else { Write-Log "bonsai: NÃO ENCONTRADO ($bonsaiCmd)" 'WARN' }
-    if (Test-Path $grokCmd) { Write-Log "grok: $(& $grokCmd --version) ($grokCmd)" } else { Write-Log "grok: NÃO ENCONTRADO ($grokCmd)" 'WARN' }
-    if (Test-Path $qwenCmd) { Write-Log "qwen: $(Invoke-NativeFirstLine -Exe $qwenCmd -Args @('--version')) ($qwenCmd)" } else { Write-Log "qwen: NÃO ENCONTRADO ($qwenCmd)" 'WARN' }
-    if (Test-Path $copilotCmd) { Write-Log "copilot: $(Invoke-NativeFirstLine -Exe $copilotCmd -Args @('--version')) ($copilotCmd)" } else { Write-Log "copilot: NÃO ENCONTRADO ($copilotCmd)" 'WARN' }
-    if (Test-Path $codexCmd) { Write-Log "codex: $(Invoke-NativeFirstLine -Exe $codexCmd -Args @('--version')) ($codexCmd)" } else { Write-Log "codex: NÃO ENCONTRADO ($codexCmd)" 'WARN' }
-    $codexPath = Resolve-CommandPath -Name 'codex'
-    if ($codexPath) {
-        $ext = ([IO.Path]::GetExtension($codexPath)).ToLowerInvariant()
-        if (($ext -eq '.exe') -and (-not (Test-Path $codexCmd))) {
-            Write-Log "codex (PATH) aponta para um .exe ($codexPath). Se o Codex Desktop estiver crashando, priorize o codex.cmd do npm para CLI e ajuste o config.toml do app." 'WARN'
-        } else {
-            Write-Log "codex (PATH): $codexPath"
+        Ensure-WingetPackage -WingetPath $winget -Id 'EclipseAdoptium.Temurin.17.JDK' -DisplayName 'Java JDK (Temurin 17)'
+        Ensure-WingetPackage -WingetPath $winget -Id 'ImageMagick.ImageMagick' -DisplayName 'ImageMagick'
+        Ensure-WingetPackage -WingetPath $winget -Id '7zip.7zip' -DisplayName '7-Zip' -AllowFailureWhenNotAdmin $true
+        $sevenZipDir = $null
+        try { $sevenZipDir = Join-Path $env:ProgramFiles '7-Zip' } catch { $sevenZipDir = $null }
+        if ($sevenZipDir -and (Test-Path $sevenZipDir)) {
+            Ensure-PathUserContains -Dir $sevenZipDir
+            Refresh-SessionPath
         }
-    }
-    if (Test-Path $openclawCmd) { Write-Log "openclaw: $(& $openclawCmd --version) ($openclawCmd)" } else { Write-Log "openclaw: NÃO ENCONTRADO ($openclawCmd)" 'WARN' }
-    $aiderExe = Resolve-CommandPath -Name 'aider'
-    if ($aiderExe) { Write-Log "aider: $(Invoke-NativeFirstLine -Exe $aiderExe -Args @('--version')) ($aiderExe)" } else { Write-Log 'aider: NÃO ENCONTRADO' 'WARN' }
-    $gooseExe = Resolve-CommandPath -Name 'goose'
-    if ($gooseExe) { Write-Log "goose: $(Invoke-NativeFirstLine -Exe $gooseExe -Args @('--version')) ($gooseExe)" } else { Write-Log 'goose: NÃO ENCONTRADO' 'WARN' }
-    $desktopWinget = @(
-        @{ Name = 'ChromeSetup'; Id = 'Google.Chrome' },
-        @{ Name = 'Notepad++'; Id = 'Notepad++.Notepad++' },
-        @{ Name = 'Claude Setup'; Id = 'Anthropic.Claude' },
-        @{ Name = 'CursorUserSetup'; Id = 'Anysphere.Cursor' },
-        @{ Name = 'WindsurfUserSetup'; Id = 'Codeium.Windsurf' },
-        @{ Name = 'WarpSetup'; Id = 'Warp.Warp' },
-        @{ Name = 'Trae-Setup'; Id = 'ByteDance.Trae' },
-        @{ Name = 'opencode-desktop-windows'; Id = 'SST.OpenCodeDesktop' },
-        @{ Name = 'Visual Studio Code - Insiders'; Id = 'Microsoft.VisualStudioCode.Insiders' },
-        @{ Name = 'WSL UI'; Id = 'OctasoftLtd.WSLUI' },
-        @{ Name = 'Antigravity.exe'; Id = 'Google.Antigravity' },
-        @{ Name = 'autoclaw'; Id = 'ZhipuAI.AutoClaw' },
-        @{ Name = 'Perplexity'; Id = 'Perplexity.Comet' },
-        @{ Name = 'Codex Installer'; Id = 'OpenAI.Codex' }
-    )
-    foreach ($app in $desktopWinget) {
-        $ok = Test-WingetPackageInstalled -WingetPath $winget -Id $app.Id
-        if ($ok) {
-            Write-Log ("desktop: {0} (winget: {1})" -f $app.Name, $app.Id)
-        } else {
-            Write-Log ("desktop: {0} NÃO ENCONTRADO (winget: {1})" -f $app.Name, $app.Id) 'WARN'
-        }
-    }
-    Write-Log "repo gemini-cli: $repoDir (exists=$(Test-Path $repoDir))"
+        Ensure-Python -WingetPath $winget
+        Refresh-SessionPath
 
-    $elapsed = New-TimeSpan -Start $script:StartTime -End (Get-Date)
-    Write-Log ("Concluído em {0:c}" -f $elapsed)
-    Write-Log "Log salvo em: $script:LogPath"
-} catch {
-    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-            status = 'error'
-            generatedAt = (Get-Date).ToString('o')
-            logPath = $script:LogPath
-            resultPath = $script:ResultPath
-            error = $_.Exception.Message
-        })
+        Ensure-OpenCode -BashPath $gitInfo.Bash
+        Refresh-SessionPath
+
+        Ensure-ClaudeCode -WingetPath $winget
+        Refresh-SessionPath
+
+        Ensure-WingetPackage -WingetPath $winget -Id 'GitHub.cli' -DisplayName 'GitHub CLI (gh)'
+        Refresh-SessionPath
+
+        Ensure-WingetPackage -WingetPath $winget -Id 'Google.Chrome' -DisplayName 'ChromeSetup (Google Chrome)' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'Notepad++.Notepad++' -DisplayName 'Notepad++' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'Anthropic.Claude' -DisplayName 'Claude Setup (Claude Desktop)' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'Anysphere.Cursor' -DisplayName 'CursorUserSetup (Cursor)' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'Codeium.Windsurf' -DisplayName 'WindsurfUserSetup (Windsurf)' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'Warp.Warp' -DisplayName 'WarpSetup (Warp)' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'ByteDance.Trae' -DisplayName 'Trae-Setup (Trae)' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'SST.OpenCodeDesktop' -DisplayName 'opencode-desktop-windows (OpenCode Desktop)' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'Microsoft.VisualStudioCode.Insiders' -DisplayName 'Visual Studio Code - Insiders' -AllowFailureWhenNotAdmin $true
+        Ensure-WslUi -WingetPath $winget
+        Ensure-WingetPackage -WingetPath $winget -Id 'Google.Antigravity' -DisplayName 'Antigravity.exe' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'ZhipuAI.AutoClaw' -DisplayName 'autoclaw (AutoClaw)' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'Perplexity.Comet' -DisplayName 'Perplexity (Comet)' -AllowFailureWhenNotAdmin $true
+        Ensure-CodexInstaller -WingetPath $winget
+        Refresh-SessionPath
+
+        Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@google/gemini-cli' -DisplayName 'Gemini CLI (@google/gemini-cli)'
+        Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@bonsai-ai/cli' -DisplayName 'Bonsai CLI (@bonsai-ai/cli)'
+        Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@vibe-kit/grok-cli' -DisplayName 'Grok CLI (@vibe-kit/grok-cli)'
+        Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@qwen-code/qwen-code@latest' -DisplayName 'Qwen Code (@qwen-code/qwen-code)'
+        Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@github/copilot' -DisplayName 'GitHub Copilot CLI (@github/copilot)'
+        Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@openai/codex' -DisplayName 'OpenAI Codex CLI (@openai/codex)'
+        Ensure-OpenClaw -NpmCmd $nodeInfo.NpmCmd
+        Refresh-SessionPath
+
+        Ensure-ClaudeCodeDefaults -GitBashPath $gitInfo.Bash
+        Refresh-SessionPath
+
+        Ensure-ClaudeHookConfigsHealthy -GitBashPath $gitInfo.Bash
+        Refresh-SessionPath
+
+        Ensure-Aider
+        Refresh-SessionPath
+
+        Ensure-Goose -BashPath $gitInfo.Bash
+        Refresh-SessionPath
+
+        $repoDir = Join-Path $CloneBaseDir 'gemini-cli'
+        Ensure-RepoClone -GitExe $gitInfo.Git -RepoUrl 'https://github.com/heartyguy/gemini-cli' -TargetDir $repoDir
+
+        $opencodeExe = Join-Path (Join-Path (Get-BootstrapUserHomePath) '.opencode\bin') 'opencode.exe'
+        $geminiCmd = Join-Path $nodeInfo.NpmBin 'gemini.cmd'
+        $bonsaiCmd = Join-Path $nodeInfo.NpmBin 'bonsai.cmd'
+        $grokCmd = Join-Path $nodeInfo.NpmBin 'grok.cmd'
+        $qwenCmd = Join-Path $nodeInfo.NpmBin 'qwen.cmd'
+        $copilotCmd = Join-Path $nodeInfo.NpmBin 'copilot.cmd'
+        $codexCmd = Join-Path $nodeInfo.NpmBin 'codex.cmd'
+        $openclawCmd = Join-Path $nodeInfo.NpmBin 'openclaw.cmd'
+
+        Write-Log 'Resumo:'
+        Write-Log "CLAUDE_CODE_GIT_BASH_PATH: $([Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH','User'))"
+        Write-Log "git: $(& $gitInfo.Git --version)"
+        Write-Log "node: $(& $nodeInfo.Node -v)"
+        Write-Log "npm: $(& $nodeInfo.NpmCmd --version)"
+        $javaExe = Resolve-CommandPath -Name 'java'
+        if ($javaExe) { Write-Log "java: $(Invoke-NativeFirstLine -Exe $javaExe -Args @('-version'))" } else { Write-Log 'java: NÃO ENCONTRADO' 'WARN' }
+        $magickExe = Resolve-CommandPath -Name 'magick'
+        if ($magickExe) { Write-Log "magick: $(Invoke-NativeFirstLine -Exe $magickExe -Args @('-version'))" } else { Write-Log 'magick: NÃO ENCONTRADO' 'WARN' }
+        $sevenZipExe = Resolve-CommandPath -Name '7z'
+        if ($sevenZipExe) { Write-Log "7z: $(Invoke-NativeFirstLine -Exe $sevenZipExe -Args @()) ($sevenZipExe)" } else { Write-Log '7z: NÃO ENCONTRADO' 'WARN' }
+        $pythonExe = Resolve-CommandPath -Name 'python'
+        if ($pythonExe) { Write-Log "python: $(Invoke-NativeFirstLine -Exe $pythonExe -Args @('--version')) ($pythonExe)" } else { Write-Log 'python: NÃO ENCONTRADO' 'WARN' }
+        $pipExe = Resolve-CommandPath -Name 'pip'
+        if ($pipExe) { Write-Log "pip: $(Invoke-NativeFirstLine -Exe $pipExe -Args @('--version')) ($pipExe)" } else { Write-Log 'pip: NÃO ENCONTRADO' 'WARN' }
+        $claudeExe = Resolve-CommandPath -Name 'claude'
+        if ($claudeExe) { Write-Log "claude: $(Invoke-NativeFirstLine -Exe $claudeExe -Args @('--version')) ($claudeExe)" } else { Write-Log 'claude: NÃO ENCONTRADO' 'WARN' }
+        $ghExe = Resolve-CommandPath -Name 'gh'
+        if ($ghExe) { Write-Log "gh: $(Invoke-NativeFirstLine -Exe $ghExe -Args @('--version')) ($ghExe)" } else { Write-Log 'gh: NÃO ENCONTRADO' 'WARN' }
+        if (Test-Path $opencodeExe) { Write-Log "opencode: $(& $opencodeExe --version) ($opencodeExe)" } else { Write-Log "opencode: NÃO ENCONTRADO ($opencodeExe)" 'WARN' }
+        if (Test-Path $geminiCmd) { Write-Log "gemini: $(& $geminiCmd --version) ($geminiCmd)" } else { Write-Log "gemini: NÃO ENCONTRADO ($geminiCmd)" 'WARN' }
+        if (Test-Path $bonsaiCmd) { Write-Log "bonsai: instalado ($bonsaiCmd)" } else { Write-Log "bonsai: NÃO ENCONTRADO ($bonsaiCmd)" 'WARN' }
+        if (Test-Path $grokCmd) { Write-Log "grok: $(& $grokCmd --version) ($grokCmd)" } else { Write-Log "grok: NÃO ENCONTRADO ($grokCmd)" 'WARN' }
+        if (Test-Path $qwenCmd) { Write-Log "qwen: $(Invoke-NativeFirstLine -Exe $qwenCmd -Args @('--version')) ($qwenCmd)" } else { Write-Log "qwen: NÃO ENCONTRADO ($qwenCmd)" 'WARN' }
+        if (Test-Path $copilotCmd) { Write-Log "copilot: $(Invoke-NativeFirstLine -Exe $copilotCmd -Args @('--version')) ($copilotCmd)" } else { Write-Log "copilot: NÃO ENCONTRADO ($copilotCmd)" 'WARN' }
+        if (Test-Path $codexCmd) { Write-Log "codex: $(Invoke-NativeFirstLine -Exe $codexCmd -Args @('--version')) ($codexCmd)" } else { Write-Log "codex: NÃO ENCONTRADO ($codexCmd)" 'WARN' }
+        $codexPath = Resolve-CommandPath -Name 'codex'
+        if ($codexPath) {
+            $ext = ([IO.Path]::GetExtension($codexPath)).ToLowerInvariant()
+            if (($ext -eq '.exe') -and (-not (Test-Path $codexCmd))) {
+                Write-Log "codex (PATH) aponta para um .exe ($codexPath). Se o Codex Desktop estiver crashando, priorize o codex.cmd do npm para CLI e ajuste o config.toml do app." 'WARN'
+            } else {
+                Write-Log "codex (PATH): $codexPath"
+            }
+        }
+        if (Test-Path $openclawCmd) { Write-Log "openclaw: $(& $openclawCmd --version) ($openclawCmd)" } else { Write-Log "openclaw: NÃO ENCONTRADO ($openclawCmd)" 'WARN' }
+        $aiderExe = Resolve-CommandPath -Name 'aider'
+        if ($aiderExe) { Write-Log "aider: $(Invoke-NativeFirstLine -Exe $aiderExe -Args @('--version')) ($aiderExe)" } else { Write-Log 'aider: NÃO ENCONTRADO' 'WARN' }
+        $gooseExe = Resolve-CommandPath -Name 'goose'
+        if ($gooseExe) { Write-Log "goose: $(Invoke-NativeFirstLine -Exe $gooseExe -Args @('--version')) ($gooseExe)" } else { Write-Log 'goose: NÃO ENCONTRADO' 'WARN' }
+        $desktopWinget = @(
+            @{ Name = 'ChromeSetup'; Id = 'Google.Chrome' },
+            @{ Name = 'Notepad++'; Id = 'Notepad++.Notepad++' },
+            @{ Name = 'Claude Setup'; Id = 'Anthropic.Claude' },
+            @{ Name = 'CursorUserSetup'; Id = 'Anysphere.Cursor' },
+            @{ Name = 'WindsurfUserSetup'; Id = 'Codeium.Windsurf' },
+            @{ Name = 'WarpSetup'; Id = 'Warp.Warp' },
+            @{ Name = 'Trae-Setup'; Id = 'ByteDance.Trae' },
+            @{ Name = 'opencode-desktop-windows'; Id = 'SST.OpenCodeDesktop' },
+            @{ Name = 'Visual Studio Code - Insiders'; Id = 'Microsoft.VisualStudioCode.Insiders' },
+            @{ Name = 'WSL UI'; Id = 'OctasoftLtd.WSLUI' },
+            @{ Name = 'Antigravity.exe'; Id = 'Google.Antigravity' },
+            @{ Name = 'autoclaw'; Id = 'ZhipuAI.AutoClaw' },
+            @{ Name = 'Perplexity'; Id = 'Perplexity.Comet' },
+            @{ Name = 'Codex Installer'; Id = 'OpenAI.Codex' }
+        )
+        foreach ($app in $desktopWinget) {
+            $ok = Test-WingetPackageInstalled -WingetPath $winget -Id $app.Id
+            if ($ok) {
+                Write-Log ("desktop: {0} (winget: {1})" -f $app.Name, $app.Id)
+            } else {
+                Write-Log ("desktop: {0} NÃO ENCONTRADO (winget: {1})" -f $app.Name, $app.Id) 'WARN'
+            }
+        }
+        Write-Log "repo gemini-cli: $repoDir (exists=$(Test-Path $repoDir))"
+
+        $elapsed = New-TimeSpan -Start $script:StartTime -End (Get-Date)
+        Write-Log ("Concluído em {0:c}" -f $elapsed)
+        Write-Log "Log salvo em: $script:LogPath"
+    } catch {
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                status = 'error'
+                generatedAt = (Get-Date).ToString('o')
+                logPath = $script:LogPath
+                resultPath = $script:ResultPath
+                error = $_.Exception.Message
+            })
+        }
+        Write-Log $_.Exception.Message 'ERROR'
+        Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+        exit 1
     }
-    Write-Log $_.Exception.Message 'ERROR'
-    Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-    exit 1
 }

@@ -1,5 +1,6 @@
 param(
-    [string]$UiStatePath = (Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'ui-state.json'),
+    [string]$UiStatePath,
+    [string]$UiLogPath,
     [switch]$SmokeTest
 )
 
@@ -7,8 +8,184 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 
+function Get-UiStorageRootCandidates {
+    $candidates = New-Object System.Collections.Generic.List[string]
+
+    if ($env:USERPROFILE) {
+        $candidates.Add((Join-Path $env:USERPROFILE '.bootstrap-tools'))
+    }
+    if ($env:LOCALAPPDATA) {
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'bootstrap-tools'))
+    }
+    if ($env:TEMP) {
+        $candidates.Add((Join-Path $env:TEMP 'bootstrap-tools'))
+    }
+
+    $cwdRoot = Join-Path (Get-Location).Path 'bootstrap-tools'
+    $candidates.Add($cwdRoot)
+
+    return @($candidates | Select-Object -Unique)
+}
+
+function Test-UiParentPathWritable {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $parent = Split-Path -Path $Path -Parent
+    if ([string]::IsNullOrWhiteSpace($parent)) { return $false }
+
+    try {
+        [void][System.IO.Directory]::CreateDirectory($parent)
+        $probePath = Join-Path $parent ('.bootstrap-ui-write-probe-{0}.tmp' -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes('probe')
+            $stream = [System.IO.File]::Open($probePath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            try {
+                $stream.Write($bytes, 0, $bytes.Length)
+                $stream.Flush()
+            } finally {
+                $stream.Dispose()
+            }
+            [System.IO.File]::Delete($probePath)
+            return $true
+        } catch {
+            try {
+                if ([System.IO.File]::Exists($probePath)) {
+                    [System.IO.File]::Delete($probePath)
+                }
+            } catch {
+            }
+            return $false
+        }
+    } catch {
+        return $false
+    }
+}
+
+function Resolve-UiStorageRoot {
+    foreach ($candidate in @(Get-UiStorageRootCandidates)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $probeFile = Join-Path $candidate 'ui-state.probe.json'
+        if (Test-UiParentPathWritable -Path $probeFile) {
+            return $candidate
+        }
+    }
+
+    throw 'Bootstrap UI não encontrou um diretório gravável para logs e estado local.'
+}
+
+function Resolve-UiWritablePath {
+    param(
+        [string]$RequestedPath,
+        [Parameter(Mandatory = $true)][string]$FallbackRelativePath
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) {
+        if (Test-UiParentPathWritable -Path $RequestedPath) {
+            return $RequestedPath
+        }
+    }
+
+    return (Join-Path $script:UiStorageRoot $FallbackRelativePath)
+}
+
+$script:UiStorageRoot = Resolve-UiStorageRoot
+$UiStatePath = Resolve-UiWritablePath -RequestedPath $UiStatePath -FallbackRelativePath 'ui-state.json'
+$script:UiLogPath = Resolve-UiWritablePath -RequestedPath $UiLogPath -FallbackRelativePath (Join-Path 'logs' ("bootstrap-ui_{0:yyyyMMdd_HHmmss}.log" -f (Get-Date)))
+
+if (-not [string]::IsNullOrWhiteSpace($UiLogPath) -and ($script:UiLogPath -ne $UiLogPath)) {
+    try {
+        Write-Host ("[bootstrap-ui] UiLogPath fallback ativado: {0}" -f $script:UiLogPath)
+    } catch {
+    }
+}
+$uiLogParent = Split-Path -Path $script:UiLogPath -Parent
+if ($uiLogParent) { $null = New-Item -Path $uiLogParent -ItemType Directory -Force }
+
+function Write-UiLog {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO'
+    )
+    try {
+        $line = "[{0:yyyy-MM-dd HH:mm:ss}] [{1}] {2}" -f (Get-Date), $Level, $Message
+        Add-Content -Path $script:UiLogPath -Value $line -Encoding utf8
+    } catch {
+    }
+}
+
+trap {
+    try { Write-UiLog -Level 'ERROR' -Message (($_ | Out-String).Trim()) } catch { }
+    throw
+}
+
+function Get-WindowsPowerShellExePath {
+    $systemRoot = if ($env:SystemRoot) { $env:SystemRoot } else { $env:WINDIR }
+    $system32 = Join-Path $systemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+        $sysnative = Join-Path $systemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+        if (Test-Path $sysnative) { return $sysnative }
+    }
+    return $system32
+}
+
+function ConvertTo-ArgumentString {
+    param([string[]]$Tokens)
+    return [string]::Join(' ', @($Tokens | ForEach-Object {
+        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+    }))
+}
+
+function Restart-InWindowsPowerShell {
+    $powershellExe = Get-WindowsPowerShellExePath
+    if (-not (Test-Path $powershellExe)) {
+        throw "Windows PowerShell 5.1 não encontrado em $powershellExe"
+    }
+
+    $argumentList = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
+    if (-not $SmokeTest) { $argumentList += '-STA' }
+    $argumentList += @('-File', $PSCommandPath, '-UiStatePath', $UiStatePath, '-UiLogPath', $script:UiLogPath)
+    if ($SmokeTest) { $argumentList += '-SmokeTest' }
+
+    Write-UiLog -Message ("Relaunching in Windows PowerShell. Exe={0}  Args={1}" -f $powershellExe, (ConvertTo-Json $argumentList -Compress))
+
+    if ($SmokeTest) {
+        & $powershellExe @argumentList
+        exit $LASTEXITCODE
+    }
+
+    Start-Process -FilePath $powershellExe -ArgumentList (ConvertTo-ArgumentString -Tokens $argumentList) | Out-Null
+    exit 0
+}
+
+function Test-UiEnvironment {
+    if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
+        throw 'Bootstrap UI requer Windows com interface desktop.'
+    }
+
+    if ($PSVersionTable.PSEdition -ne 'Desktop') {
+        Restart-InWindowsPowerShell
+    }
+
+    if ($PSVersionTable.PSVersion.Major -lt 5) {
+        throw "Bootstrap UI requer Windows PowerShell 5.1+. Versão atual: $($PSVersionTable.PSVersion)"
+    }
+
+    if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
+        throw "Bootstrap UI requer FullLanguage. Modo atual: $($ExecutionContext.SessionState.LanguageMode)"
+    }
+
+    if (-not $SmokeTest -and -not [Environment]::UserInteractive) {
+        throw 'Bootstrap UI requer uma sessão de usuário interativa.'
+    }
+}
+
+Write-UiLog -Message ("Start. PSEdition={0}  PSVersion={1}  OS64={2}  Proc64={3}  User={4}  LangMode={5}  Interactive={6}  UiStatePath={7}" -f $PSVersionTable.PSEdition, $PSVersionTable.PSVersion, [Environment]::Is64BitOperatingSystem, [Environment]::Is64BitProcess, $env:USERNAME, $ExecutionContext.SessionState.LanguageMode, [Environment]::UserInteractive, $UiStatePath)
+Test-UiEnvironment
+
 $backendScriptPath = Join-Path $PSScriptRoot 'bootstrap-tools.ps1'
 if (-not (Test-Path $backendScriptPath)) {
+    Write-UiLog -Level 'ERROR' -Message "bootstrap-tools.ps1 not found at $backendScriptPath"
     throw "bootstrap-tools.ps1 not found at $backendScriptPath"
 }
 
@@ -255,11 +432,10 @@ if ($SmokeTest) {
 # 
 
 if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
-    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $argumentList  = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', $PSCommandPath, '-UiStatePath', $UiStatePath)
-    Start-Process -FilePath $powershellExe -ArgumentList ([string]::Join(' ', @($argumentList | ForEach-Object {
-        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
-    }))) | Out-Null
+    $powershellExe = Get-WindowsPowerShellExePath
+    $argumentList  = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', $PSCommandPath, '-UiStatePath', $UiStatePath, '-UiLogPath', $script:UiLogPath)
+    Write-UiLog -Message ("Relaunching STA. Exe={0}  Args={1}" -f $powershellExe, (ConvertTo-Json $argumentList -Compress))
+    Start-Process -FilePath $powershellExe -ArgumentList (ConvertTo-ArgumentString -Tokens $argumentList) | Out-Null
     exit 0
 }
 
@@ -267,11 +443,17 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
 # WPF Assemblies
 # 
 
-Add-Type -AssemblyName PresentationFramework
-Add-Type -AssemblyName PresentationCore
-Add-Type -AssemblyName WindowsBase
-Add-Type -AssemblyName System.Windows.Forms   # still needed for FolderBrowserDialog
-Add-Type -AssemblyName System.Drawing
+try {
+    Add-Type -AssemblyName PresentationFramework
+    Add-Type -AssemblyName PresentationCore
+    Add-Type -AssemblyName WindowsBase
+    Add-Type -AssemblyName System.Windows.Forms   # still needed for FolderBrowserDialog
+    Add-Type -AssemblyName System.Drawing
+    Write-UiLog -Message 'WPF assemblies loaded.'
+} catch {
+    Write-UiLog -Level 'ERROR' -Message ("Failed to load WPF assemblies: {0}" -f (($_ | Out-String).Trim()))
+    throw
+}
 
 # 
 # XAML Definition
@@ -640,7 +822,7 @@ Add-Type -AssemblyName System.Drawing
 
                 <!-- Bottom nav actions -->
                 <StackPanel DockPanel.Dock="Bottom" Margin="12,16">
-                    <Button x:Name="BackButton"   Style="{StaticResource GhostBtn}" Content="<- Voltar"  Margin="0,4" Height="34"/>
+                    <Button x:Name="BackButton"   Style="{StaticResource GhostBtn}" Content="&lt;- Voltar"  Margin="0,4" Height="34"/>
                     <Button x:Name="NextButton"   Style="{StaticResource PrimaryBtn}" Content="Avanar ->" Margin="0,4" Height="34"/>
                     <Button x:Name="FinishButton" Style="{StaticResource GhostBtn}" Content="Fechar"     Margin="0,4" Height="34"/>
                 </StackPanel>
@@ -1135,12 +1317,14 @@ $ui = [ordered]@{
     NavSelection          = (Get-Control 'NavSelection')
     NavHostSetup          = (Get-Control 'NavHostSetup')
     NavSteamDeck          = (Get-Control 'NavSteamDeck')
+    NavDualBoot           = (Get-Control 'NavDualBoot')
     NavReview             = (Get-Control 'NavReview')
     NavRun                = (Get-Control 'NavRun')
     NavWelcomeText        = (Get-Control 'NavWelcomeText')
     NavSelectionText      = (Get-Control 'NavSelectionText')
     NavHostSetupText      = (Get-Control 'NavHostSetupText')
     NavSteamDeckText      = (Get-Control 'NavSteamDeckText')
+    NavDualBootText       = (Get-Control 'NavDualBootText')
     NavReviewText         = (Get-Control 'NavReviewText')
     NavRunText            = (Get-Control 'NavRunText')
 
@@ -1225,6 +1409,17 @@ $ui = [ordered]@{
     ReloadSettingsButton  = (Get-Control 'ReloadSettingsButton')
     SaveSettingsButton    = (Get-Control 'SaveSettingsButton')
 
+    # Dual Boot
+    DualBootTitleLabel    = (Get-Control 'DualBootTitleLabel')
+    DualBootStatusText    = (Get-Control 'DualBootStatusText')
+    DualBootPrereqsText   = (Get-Control 'DualBootPrereqsText')
+    FixFastStartupButton  = (Get-Control 'FixFastStartupButton')
+    DualBootTargetCombo   = (Get-Control 'DualBootTargetCombo')
+    RebootToLinuxButton   = (Get-Control 'RebootToLinuxButton')
+    BcdCleanupStatusText  = (Get-Control 'BcdCleanupStatusText')
+    BcdCleanupButton      = (Get-Control 'BcdCleanupButton')
+    RefreshDualBootButton = (Get-Control 'RefreshDualBootButton')
+
     # Review
     ReviewTitleLabel      = (Get-Control 'ReviewTitleLabel')
     ReviewSummaryLabel    = (Get-Control 'ReviewSummaryLabel')
@@ -1243,7 +1438,7 @@ $ui = [ordered]@{
     RunLogTextBox         = (Get-Control 'RunLogTextBox')
 
     # Pages (panels identified by WPF name)
-    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageSteamDeck', 'PageReview', 'PageRun')
+    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
 }
 
 # 
@@ -1302,17 +1497,6 @@ function Read-WpfGridRows {
 # 
 # Helpers (same logic, updated control references)
 # 
-
-function Quote-CommandArgument {
-    param([Parameter(Mandatory=$true)][string]$Value)
-    if ($Value -match '[\s"]') { return '"' + ($Value -replace '"', '\"') + '"' }
-    return $Value
-}
-
-function ConvertTo-ArgumentString {
-    param([string[]]$Tokens)
-    return ([string]::Join(' ', @($Tokens | ForEach-Object { Quote-CommandArgument -Value $_ })))
-}
 
 function Open-ExistingPath {
     param([string]$Path)
@@ -1417,6 +1601,7 @@ function Refresh-LocalizedText {
     $ui.NavSelectionText.Text  = $ui.Strings.Selection
     $ui.NavHostSetupText.Text  = $ui.Strings.HostSetup
     $ui.NavSteamDeckText.Text  = $ui.Strings.SteamDeckControl
+    $ui.NavDualBootText.Text   = $ui.Strings.DualBoot
     $ui.NavReviewText.Text     = $ui.Strings.Review
     $ui.NavRunText.Text        = $ui.Strings.Run
 }
@@ -1762,9 +1947,10 @@ function Build-BackendArguments {
 }
 
 function Start-BackendWorker {
-    $powershellExe   = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $powershellExe   = Get-WindowsPowerShellExePath
     $argumentString  = ConvertTo-ArgumentString -Tokens (Build-BackendArguments)
     $needsAdmin = ($ui.Preview -and @($ui.Preview.AdminReasons).Count -gt 0 -and -not (Test-IsAdmin))
+    Write-UiLog -Message ("Start-BackendWorker. NeedsAdmin={0}  Exe={1}  Args={2}" -f $needsAdmin, $powershellExe, $argumentString)
     if ($needsAdmin) { return (Start-Process -FilePath $powershellExe -ArgumentList $argumentString -Verb RunAs -WindowStyle Hidden -PassThru) }
     return (Start-Process -FilePath $powershellExe -ArgumentList $argumentString -WindowStyle Hidden -PassThru)
 }
@@ -2061,4 +2247,3 @@ $window.Add_Closing({
 # 
 
 $null = $window.ShowDialog()
-
