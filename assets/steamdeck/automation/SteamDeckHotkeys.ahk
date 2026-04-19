@@ -1,8 +1,35 @@
 #Requires AutoHotkey v2.0
 
-bootstrapRoot := EnvGet("USERPROFILE") "\.bootstrap-tools\steamdeck\automation"
-powershellExe := EnvGet("SystemRoot") "\System32\WindowsPowerShell\v1.0\powershell.exe"
-settingsPath := EnvGet("USERPROFILE") "\.bootstrap-tools\steamdeck-settings.json"
+ResolveBootstrapHome() {
+    userProfile := EnvGet("USERPROFILE")
+    if (userProfile != "")
+        return userProfile
+
+    home := EnvGet("HOME")
+    if (home != "")
+        return home
+
+    homeDrive := EnvGet("HOMEDRIVE")
+    homePath := EnvGet("HOMEPATH")
+    if (homeDrive != "" && homePath != "")
+        return homeDrive homePath
+
+    localAppData := EnvGet("LOCALAPPDATA")
+    if (localAppData != "")
+        return localAppData
+
+    tempPath := EnvGet("TEMP")
+    if (tempPath != "")
+        return tempPath
+
+    return A_WorkingDir
+}
+
+bootstrapHome := ResolveBootstrapHome()
+bootstrapRoot := bootstrapHome "\.bootstrap-tools\steamdeck\automation"
+systemRoot := EnvGet("SystemRoot")
+powershellExe := (systemRoot != "" ? systemRoot "\System32\WindowsPowerShell\v1.0\powershell.exe" : "powershell.exe")
+settingsPath := bootstrapHome "\.bootstrap-tools\steamdeck-settings.json"
 
 RunBootstrapScript(scriptName) {
     global bootstrapRoot

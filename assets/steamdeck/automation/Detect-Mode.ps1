@@ -1,10 +1,16 @@
 param(
-    [string]$SettingsPath = (Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'steamdeck-settings.json'),
+    [string]$SettingsPath,
     [string]$MockStatePath
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+. (Join-Path (Split-Path -Parent $PSCommandPath) 'SteamDeck.Common.ps1')
+
+if ([string]::IsNullOrWhiteSpace($SettingsPath)) {
+    $SettingsPath = Get-SteamDeckSettingsPath
+}
 
 function Normalize-DisplayValue {
     param([AllowNull()]$Value)
@@ -51,10 +57,7 @@ function ConvertTo-DisplayRecord {
 function Get-SettingsObject {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    if (-not (Test-Path $Path)) {
-        throw "Settings file not found: $Path"
-    }
-
+    Assert-SteamDeckFileExists -Path $Path -Description 'Settings file'
     return (Get-Content -Path $Path -Raw | ConvertFrom-Json)
 }
 

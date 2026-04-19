@@ -40,13 +40,9 @@ function Invoke-Bootstrap {
         throw "Bootstrap invocation timed out after 30000ms for args: $($CommandArgs -join ' ')"
     }
 
-    $stdout = $stdoutTask.Result
-    $stderr = $stderrTask.Result
-    $output = @($stdout, $stderr) -join [Environment]::NewLine
-
     return [pscustomobject]@{
         ExitCode = $process.ExitCode
-        Output = $output
+        Output = @($stdoutTask.Result, $stderrTask.Result) -join [Environment]::NewLine
     }
 }
 
@@ -62,140 +58,107 @@ function Assert-Contains {
     }
 }
 
-function Test-ListProfiles {
-    $result = Invoke-Bootstrap -CommandArgs @('-ListProfiles')
-    if ($result.ExitCode -ne 0) {
-        throw "Expected success for -ListProfiles, got exit code $($result.ExitCode)`n$($result.Output)"
+Describe 'Bootstrap profile mode' {
+    It 'lists supported profiles' {
+        $result = Invoke-Bootstrap -CommandArgs @('-ListProfiles')
+
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('legacy', 'recommended', 'steamdeck-recommended', 'steamdeck-full', 'steamdeck-dock')) {
+            Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected profile in output.'
+        }
     }
 
-    Assert-Contains -Text $result.Output -Pattern 'legacy' -Message 'Expected legacy profile in output.'
-    Assert-Contains -Text $result.Output -Pattern 'recommended' -Message 'Expected recommended profile in output.'
-    Assert-Contains -Text $result.Output -Pattern 'steamdeck-recommended' -Message 'Expected steamdeck-recommended profile in output.'
-    Assert-Contains -Text $result.Output -Pattern 'steamdeck-full' -Message 'Expected steamdeck-full profile in output.'
-    Assert-Contains -Text $result.Output -Pattern 'steamdeck-dock' -Message 'Expected steamdeck-dock profile in output.'
-}
+    It 'lists supported host health modes' {
+        $result = Invoke-Bootstrap -CommandArgs @('-ListHostHealthModes')
 
-function Test-ListHostHealthModes {
-    $result = Invoke-Bootstrap -CommandArgs @('-ListHostHealthModes')
-    if ($result.ExitCode -ne 0) {
-        throw "Expected success for -ListHostHealthModes, got exit code $($result.ExitCode)`n$($result.Output)"
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('off', 'conservador', 'equilibrado', 'agressivo')) {
+            Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected host health mode in output.'
+        }
     }
 
-    foreach ($expected in @('off', 'conservador', 'equilibrado', 'agressivo')) {
-        Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected host health mode in output.'
-    }
-}
+    It 'resolves ai profile dry-run dependencies' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'ai', '-Component', 'docker', '-DryRun')
 
-function Test-DryRunResolution {
-    $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'ai', '-Component', 'docker', '-DryRun')
-    if ($result.ExitCode -ne 0) {
-        throw "Expected success for ai+docker dry-run, got exit code $($result.ExitCode)`n$($result.Output)"
-    }
-
-    foreach ($expected in @('node-core', 'python-core', 'wsl-core', 'docker', 'codex-cli')) {
-        Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected resolved component in dry-run output.'
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('node-core', 'python-core', 'wsl-core', 'docker', 'codex-cli')) {
+            Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected resolved component in dry-run output.'
+        }
+        Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'host health mode: conservador' -Message 'Expected modern selections to default HostHealth to conservador.'
     }
 
-    Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'host health mode: conservador' -Message 'Expected modern selections to default HostHealth to conservador.'
-}
+    It 'rejects excluding a required dependency' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'ai', '-Exclude', 'node-core', '-DryRun')
 
-function Test-InvalidExcludeFails {
-    $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'ai', '-Exclude', 'node-core', '-DryRun')
-    if ($result.ExitCode -eq 0) {
-        throw "Expected failure when excluding mandatory dependency.`n$($result.Output)"
+        ($result.ExitCode -ne 0) | Should Be $true
+        (($result.Output -match 'depend') -or ($result.Output -match 'obrigat')) | Should Be $true
     }
 
-    if (($result.Output -notmatch 'depend') -and ($result.Output -notmatch 'obrigat')) {
-        throw "Expected dependency or required-component error message.`n$($result.Output)"
-    }
-}
+    It 'shows the steamdeck recommended dry-run audit' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-recommended', '-SteamDeckVersion', 'Auto', '-DryRun')
 
-function Test-SteamDeckRecommendedDryRun {
-    $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-recommended', '-SteamDeckVersion', 'Auto', '-DryRun')
-    if ($result.ExitCode -ne 0) {
-        throw "Expected success for steamdeck-recommended dry-run, got exit code $($result.ExitCode)`n$($result.Output)"
-    }
-
-    foreach ($expected in @(
-        'Resolved steam deck version: lcd',
-        'Host health mode: conservador',
-        'Audit:',
-        'Runtimes:',
-        'Payloads:',
-        'Config:',
-        'Verify:',
-        'steamdeck-settings',
-        'steamdeck-automation',
-        'displayfusion',
-        'soundswitch'
-    )) {
-        Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected steamdeck-recommended audit output.'
-    }
-}
-
-function Test-LegacyDefaultsHostHealthOff {
-    $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'legacy', '-DryRun')
-    if ($result.ExitCode -ne 0) {
-        throw "Expected success for legacy dry-run, got exit code $($result.ExitCode)`n$($result.Output)"
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @(
+            'Resolved steam deck version: lcd',
+            'Host health mode: conservador',
+            'Audit:',
+            'Runtimes:',
+            'Payloads:',
+            'Config:',
+            'Verify:',
+            'steamdeck-settings',
+            'steamdeck-automation',
+            'displayfusion',
+            'soundswitch'
+        )) {
+            Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected steamdeck-recommended audit output.'
+        }
     }
 
-    Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'host health mode: off' -Message 'Expected legacy to keep HostHealth off by default.'
-}
+    It 'keeps legacy profile default host health off' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'legacy', '-DryRun')
 
-function Test-HostHealthEquilibradoDryRun {
-    $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-recommended', '-SteamDeckVersion', 'Auto', '-HostHealth', 'equilibrado', '-DryRun')
-    if ($result.ExitCode -ne 0) {
-        throw "Expected success for HostHealth equilibrado dry-run, got exit code $($result.ExitCode)`n$($result.Output)"
+        $result.ExitCode | Should Be 0
+        Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'host health mode: off' -Message 'Expected legacy to keep HostHealth off by default.'
     }
 
-    foreach ($expected in @(
-        'Host health mode: equilibrado',
-        'Host health cleanup:',
-        'Host health startup:',
-        'Host health registry-fixes:',
-        'Host health game-mode:',
-        'Host health bloat:',
-        'Host health verify:',
-        'Microsoft.GetHelp',
-        'MSTeams',
-        'game-handheld',
-        'game-docked',
-        'desktop'
-    )) {
-        Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected HostHealth equilibrado dry-run output.'
-    }
-}
+    It 'renders equilibrado host health tasks' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-recommended', '-SteamDeckVersion', 'Auto', '-HostHealth', 'equilibrado', '-DryRun')
 
-function Test-HostHealthAgressivoDryRun {
-    $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-recommended', '-SteamDeckVersion', 'Auto', '-HostHealth', 'agressivo', '-DryRun')
-    if ($result.ExitCode -ne 0) {
-        throw "Expected success for HostHealth agressivo dry-run, got exit code $($result.ExitCode)`n$($result.Output)"
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @(
+            'Host health mode: equilibrado',
+            'Host health cleanup:',
+            'Host health startup:',
+            'Host health registry-fixes:',
+            'Host health game-mode:',
+            'Host health bloat:',
+            'Host health verify:',
+            'Microsoft.GetHelp',
+            'MSTeams',
+            'game-handheld',
+            'game-docked',
+            'desktop'
+        )) {
+            Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected HostHealth equilibrado dry-run output.'
+        }
     }
 
-    foreach ($expected in @('Host health mode: agressivo', 'Microsoft.BingSearch', 'Microsoft.MicrosoftPCManager')) {
-        Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected HostHealth agressivo dry-run output.'
+    It 'renders agressivo host health tasks' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-recommended', '-SteamDeckVersion', 'Auto', '-HostHealth', 'agressivo', '-DryRun')
+
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('Host health mode: agressivo', 'Microsoft.BingSearch', 'Microsoft.MicrosoftPCManager')) {
+            Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected HostHealth agressivo dry-run output.'
+        }
+    }
+
+    It 'surfaces manual blockers in steamdeck full dry-run' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-full', '-SteamDeckVersion', 'Auto', '-DryRun')
+
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('lossless-scaling', 'macrium-reflect', 'manual blockers:')) {
+            Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected steamdeck-full output to surface manual blockers.'
+        }
     }
 }
-
-function Test-SteamDeckFullDryRun {
-    $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-full', '-SteamDeckVersion', 'Auto', '-DryRun')
-    if ($result.ExitCode -ne 0) {
-        throw "Expected success for steamdeck-full dry-run, got exit code $($result.ExitCode)`n$($result.Output)"
-    }
-
-    foreach ($expected in @('lossless-scaling', 'macrium-reflect', 'manual blockers:')) {
-        Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected steamdeck-full output to surface manual blockers.'
-    }
-}
-
-Test-ListHostHealthModes
-Test-ListProfiles
-Test-DryRunResolution
-Test-InvalidExcludeFails
-Test-SteamDeckRecommendedDryRun
-Test-SteamDeckFullDryRun
-Test-LegacyDefaultsHostHealthOff
-Test-HostHealthEquilibradoDryRun
-Test-HostHealthAgressivoDryRun
-
-Write-Host 'bootstrap-tools.profiles.tests.ps1: PASS'

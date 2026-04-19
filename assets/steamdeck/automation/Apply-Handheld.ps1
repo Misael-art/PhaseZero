@@ -1,14 +1,24 @@
 param(
-    [string]$SettingsPath = (Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'steamdeck-settings.json'),
-    [string]$DetectionPath = (Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'steamdeck-current-detection.json')
+    [string]$SettingsPath,
+    [string]$DetectionPath
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+. (Join-Path (Split-Path -Parent $PSCommandPath) 'SteamDeck.Common.ps1')
+
+if ([string]::IsNullOrWhiteSpace($SettingsPath)) {
+    $SettingsPath = Get-SteamDeckSettingsPath
+}
+if ([string]::IsNullOrWhiteSpace($DetectionPath)) {
+    $DetectionPath = Get-SteamDeckDetectionPath
+}
+
 function Write-ApplyLog {
     param([string]$Message)
-    $logPath = Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'steamdeck-automation.log'
+    $logPath = Get-SteamDeckAutomationLogPath
+    Ensure-SteamDeckParentDirectory -Path $logPath
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] [HANDHELD] {1}" -f (Get-Date), $Message
     Add-Content -Path $logPath -Value $line -Encoding utf8
 }
@@ -46,11 +56,14 @@ function Stop-GameModeProcesses {
     }
 }
 
+Assert-SteamDeckFileExists -Path $SettingsPath -Description 'Settings file'
 $settings = Get-Content -Path $SettingsPath -Raw | ConvertFrom-Json
 $detection = if (Test-Path $DetectionPath) { Get-Content -Path $DetectionPath -Raw | ConvertFrom-Json } else { $null }
 $displaySwitch = Join-Path $env:SystemRoot 'System32\DisplaySwitch.exe'
 if (Test-Path $displaySwitch) {
     Start-Process -FilePath $displaySwitch -ArgumentList '/internal' -WindowStyle Hidden
+} else {
+    Write-ApplyLog "DisplaySwitch.exe not found: $displaySwitch"
 }
 
 Stop-GameModeProcesses -Settings $settings
@@ -66,7 +79,7 @@ $result = [ordered]@{
     matchedBy = if ($detection) { $detection.matchedBy } else { 'manual' }
 }
 
-$resultPath = Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'steamdeck-last-mode.json'
-$result | ConvertTo-Json -Depth 8 | Set-Content -Path $resultPath -Encoding utf8
+$resultPath = Get-SteamDeckLastModePath
+Write-SteamDeckJsonFile -Path $resultPath -Value $result -Depth 8
 Write-ApplyLog "Applied handheld mode at $($settings.handheld.resolution)"
 $result | ConvertTo-Json -Depth 8

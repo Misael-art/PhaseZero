@@ -10,3 +10,6 @@ gemini-cli/
 # Ignore temporary artifacts
 .tmp
 .temp
+
+# Ignore local bootstrap state and secrets
+.bootstrap-tools/

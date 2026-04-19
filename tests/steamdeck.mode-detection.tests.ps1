@@ -4,45 +4,20 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $detectScriptPath = Join-Path $repoRoot 'assets\steamdeck\automation\Detect-Mode.ps1'
 
-function Assert-Mode {
-    param(
-        [Parameter(Mandatory = $true)][string]$ExpectedMode,
-        [Parameter(Mandatory = $true)][object]$Actual
-    )
-
-    if ($Actual.mode -ne $ExpectedMode) {
-        throw "Expected mode $ExpectedMode but got $($Actual.mode)`n$($Actual | ConvertTo-Json -Depth 8)"
-    }
-}
-
-function Assert-SessionProfile {
-    param(
-        [Parameter(Mandatory = $true)][string]$ExpectedProfile,
-        [Parameter(Mandatory = $true)][object]$Actual
-    )
-
-    if ($Actual.sessionProfile -ne $ExpectedProfile) {
-        throw "Expected sessionProfile $ExpectedProfile but got $($Actual.sessionProfile)`n$($Actual | ConvertTo-Json -Depth 8)"
-    }
-}
-
 function Invoke-DetectMode {
     param(
         [Parameter(Mandatory = $true)][hashtable]$Settings,
         [Parameter(Mandatory = $true)][hashtable]$MockState
     )
 
-    if (-not (Test-Path $detectScriptPath)) {
-        throw "Detect-Mode.ps1 not found at $detectScriptPath"
-    }
-
     $settingsPath = Join-Path $env:TEMP ("steamdeck_settings_{0}.json" -f ([guid]::NewGuid().ToString('N')))
     $mockPath = Join-Path $env:TEMP ("steamdeck_state_{0}.json" -f ([guid]::NewGuid().ToString('N')))
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
     try {
         $Settings | ConvertTo-Json -Depth 12 | Set-Content -Path $settingsPath -Encoding utf8
         $MockState | ConvertTo-Json -Depth 12 | Set-Content -Path $mockPath -Encoding utf8
-        $json = & powershell -NoProfile -ExecutionPolicy Bypass -File $detectScriptPath -SettingsPath $settingsPath -MockStatePath $mockPath
+        $json = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $detectScriptPath -SettingsPath $settingsPath -MockStatePath $mockPath
         return ($json | ConvertFrom-Json)
     } finally {
         if (Test-Path $settingsPath) { Remove-Item $settingsPath -Force -ErrorAction SilentlyContinue }
@@ -73,150 +48,146 @@ $baseSettings = @{
     }
 }
 
-$handheld = Invoke-DetectMode -Settings $baseSettings -MockState @{
-    battery = @{ onAcPower = $false }
-    internalDisplay = @{
-        manufacturer = 'VLV'
-        product = 'ANX7530 U'
-        isActive = $true
-    }
-    externalDisplays = @()
-}
-Assert-Mode -ExpectedMode 'HANDHELD' -Actual $handheld
-Assert-SessionProfile -ExpectedProfile 'game-handheld' -Actual $handheld
-
-$lgSerialA = Invoke-DetectMode -Settings $baseSettings -MockState @{
-    battery = @{ onAcPower = $true }
-    internalDisplay = @{
-        manufacturer = 'VLV'
-        product = 'ANX7530 U'
-        isActive = $true
-    }
-    externalDisplays = @(
-        @{
-            manufacturer = 'GSM'
-            product = 'LG HDR WFHD'
-            serial = 'A'
-            instanceName = 'DISPLAY\GSM7714\A'
-            isPrimary = $true
-            isActive = $true
+Describe 'Steam Deck mode detection' {
+    It 'detects handheld mode' {
+        $result = Invoke-DetectMode -Settings $baseSettings -MockState @{
+            battery = @{ onAcPower = $false }
+            internalDisplay = @{
+                manufacturer = 'VLV'
+                product = 'ANX7530 U'
+                isActive = $true
+            }
+            externalDisplays = @()
         }
-    )
-}
-Assert-Mode -ExpectedMode 'DOCKED_MONITOR' -Actual $lgSerialA
-Assert-SessionProfile -ExpectedProfile 'desktop' -Actual $lgSerialA
 
-$lgSerialB = Invoke-DetectMode -Settings $baseSettings -MockState @{
-    battery = @{ onAcPower = $true }
-    internalDisplay = @{
-        manufacturer = 'VLV'
-        product = 'ANX7530 U'
-        isActive = $true
+        $result.mode | Should Be 'HANDHELD'
+        $result.sessionProfile | Should Be 'game-handheld'
     }
-    externalDisplays = @(
-        @{
-            manufacturer = 'GSM'
-            product = 'LG HDR WFHD'
-            serial = 'B'
-            instanceName = 'DISPLAY\GSM7714\B'
-            isPrimary = $false
-            isActive = $true
+
+    It 'detects docked monitor mode for multiple serials' {
+        foreach ($serial in @('A', 'B')) {
+            $result = Invoke-DetectMode -Settings $baseSettings -MockState @{
+                battery = @{ onAcPower = $true }
+                internalDisplay = @{
+                    manufacturer = 'VLV'
+                    product = 'ANX7530 U'
+                    isActive = $true
+                }
+                externalDisplays = @(
+                    @{
+                        manufacturer = 'GSM'
+                        product = 'LG HDR WFHD'
+                        serial = $serial
+                        instanceName = "DISPLAY\GSM7714\$serial"
+                        isPrimary = ($serial -eq 'A')
+                        isActive = $true
+                    }
+                )
+            }
+
+            $result.mode | Should Be 'DOCKED_MONITOR'
+            $result.sessionProfile | Should Be 'desktop'
         }
-    )
-}
-Assert-Mode -ExpectedMode 'DOCKED_MONITOR' -Actual $lgSerialB
-Assert-SessionProfile -ExpectedProfile 'desktop' -Actual $lgSerialB
-
-$unknownExternal = Invoke-DetectMode -Settings $baseSettings -MockState @{
-    battery = @{ onAcPower = $true }
-    internalDisplay = @{
-        manufacturer = 'VLV'
-        product = 'ANX7530 U'
-        isActive = $true
     }
-    externalDisplays = @(
-        @{
-            manufacturer = 'DEL'
-            product = 'Dell U2720Q'
-            serial = 'XYZ'
-            instanceName = 'DISPLAY\DEL0001\XYZ'
-            isPrimary = $true
-            isActive = $true
+
+    It 'falls back to generic external mode for unknown displays' {
+        $result = Invoke-DetectMode -Settings $baseSettings -MockState @{
+            battery = @{ onAcPower = $true }
+            internalDisplay = @{
+                manufacturer = 'VLV'
+                product = 'ANX7530 U'
+                isActive = $true
+            }
+            externalDisplays = @(
+                @{
+                    manufacturer = 'DEL'
+                    product = 'Dell U2720Q'
+                    serial = 'XYZ'
+                    instanceName = 'DISPLAY\DEL0001\XYZ'
+                    isPrimary = $true
+                    isActive = $true
+                }
+            )
         }
-    )
-}
-Assert-Mode -ExpectedMode 'DOCKED_TV' -Actual $unknownExternal
-Assert-SessionProfile -ExpectedProfile 'game-docked' -Actual $unknownExternal
 
-$mixedDisplays = Invoke-DetectMode -Settings $baseSettings -MockState @{
-    battery = @{ onAcPower = $true }
-    internalDisplay = @{
-        manufacturer = 'VLV'
-        product = 'ANX7530 U'
-        isActive = $true
+        $result.mode | Should Be 'DOCKED_TV'
+        $result.sessionProfile | Should Be 'game-docked'
     }
-    externalDisplays = @(
-        @{
-            manufacturer = 'DEL'
-            product = 'Dell U2720Q'
-            serial = 'XYZ'
-            instanceName = 'DISPLAY\DEL0001\XYZ'
-            isPrimary = $false
-            isActive = $true
-        },
-        @{
-            manufacturer = 'GSM'
-            product = 'LG HDR WFHD'
-            serial = 'PRIMARY'
-            instanceName = 'DISPLAY\GSM7714\PRIMARY'
-            isPrimary = $true
-            isActive = $true
+
+    It 'prefers the matched family when multiple displays are present' {
+        $result = Invoke-DetectMode -Settings $baseSettings -MockState @{
+            battery = @{ onAcPower = $true }
+            internalDisplay = @{
+                manufacturer = 'VLV'
+                product = 'ANX7530 U'
+                isActive = $true
+            }
+            externalDisplays = @(
+                @{
+                    manufacturer = 'DEL'
+                    product = 'Dell U2720Q'
+                    serial = 'XYZ'
+                    instanceName = 'DISPLAY\DEL0001\XYZ'
+                    isPrimary = $false
+                    isActive = $true
+                },
+                @{
+                    manufacturer = 'GSM'
+                    product = 'LG HDR WFHD'
+                    serial = 'PRIMARY'
+                    instanceName = 'DISPLAY\GSM7714\PRIMARY'
+                    isPrimary = $true
+                    isActive = $true
+                }
+            )
         }
-    )
-}
-Assert-Mode -ExpectedMode 'DOCKED_MONITOR' -Actual $mixedDisplays
-Assert-SessionProfile -ExpectedProfile 'desktop' -Actual $mixedDisplays
 
-$objectSchemaSettings = @{
-    steamDeckVersion = 'Auto'
-    internalDisplay = @{
-        manufacturer = 'VLV'
-        product = 'ANX7530 U'
+        $result.mode | Should Be 'DOCKED_MONITOR'
+        $result.sessionProfile | Should Be 'desktop'
     }
-    monitorProfiles = @{}
-    monitorFamilies = @{
-        manufacturer = 'GSM'
-        product = 'LG HDR WFHD'
-        mode = 'DOCKED_MONITOR'
-        layout = 'lg-hdr-wfhd'
-        resolutionPolicy = 'native-prefer-1440p-else-1080p'
-    }
-    genericExternal = @{
-        mode = 'DOCKED_TV'
-        resolutionPolicy = '1920x1080-safe'
-        layout = 'external-generic'
-    }
-}
 
-$objectSchemaFamily = Invoke-DetectMode -Settings $objectSchemaSettings -MockState @{
-    battery = @{ onAcPower = $true }
-    internalDisplay = @{
-        manufacturer = 'VLV'
-        product = 'ANX7530 U'
-        isActive = $true
-    }
-    externalDisplays = @(
-        @{
-            manufacturer = 'GSM'
-            product = 'LG HDR WFHD'
-            serial = 'OBJ'
-            instanceName = 'DISPLAY\GSM7714\OBJ'
-            isPrimary = $true
-            isActive = $true
+    It 'supports the legacy object schema for monitor families' {
+        $objectSchemaSettings = @{
+            steamDeckVersion = 'Auto'
+            internalDisplay = @{
+                manufacturer = 'VLV'
+                product = 'ANX7530 U'
+            }
+            monitorProfiles = @{}
+            monitorFamilies = @{
+                manufacturer = 'GSM'
+                product = 'LG HDR WFHD'
+                mode = 'DOCKED_MONITOR'
+                layout = 'lg-hdr-wfhd'
+                resolutionPolicy = 'native-prefer-1440p-else-1080p'
+            }
+            genericExternal = @{
+                mode = 'DOCKED_TV'
+                resolutionPolicy = '1920x1080-safe'
+                layout = 'external-generic'
+            }
         }
-    )
-}
-Assert-Mode -ExpectedMode 'DOCKED_MONITOR' -Actual $objectSchemaFamily
-Assert-SessionProfile -ExpectedProfile 'desktop' -Actual $objectSchemaFamily
 
-Write-Host 'steamdeck.mode-detection.tests.ps1: PASS'
+        $result = Invoke-DetectMode -Settings $objectSchemaSettings -MockState @{
+            battery = @{ onAcPower = $true }
+            internalDisplay = @{
+                manufacturer = 'VLV'
+                product = 'ANX7530 U'
+                isActive = $true
+            }
+            externalDisplays = @(
+                @{
+                    manufacturer = 'GSM'
+                    product = 'LG HDR WFHD'
+                    serial = 'OBJ'
+                    instanceName = 'DISPLAY\GSM7714\OBJ'
+                    isPrimary = $true
+                    isActive = $true
+                }
+            )
+        }
+
+        $result.mode | Should Be 'DOCKED_MONITOR'
+        $result.sessionProfile | Should Be 'desktop'
+    }
+}
