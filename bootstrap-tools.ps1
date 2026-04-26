@@ -263,16 +263,16 @@ function Ensure-ProxyEnvFromWinHttp {
     $text = ($raw | Out-String)
     if ($text -match 'Direct access') { return }
 
-    $proxyLine = ($raw | Where-Object { $_ -match 'Proxy Server\\(s\\)' } | Select-Object -First 1)
+    $proxyLine = ($raw | Where-Object { $_ -match 'Proxy Server\(s\)' } | Select-Object -First 1)
     if (-not $proxyLine) { return }
 
-    $proxy = ($proxyLine -replace '^.*Proxy Server\\(s\\)\\s*:\\s*', '').Trim()
+    $proxy = ($proxyLine -replace '^.*Proxy Server\(s\)\s*:\s*', '').Trim()
     if (-not $proxy) { return }
 
     $httpProxy = $null
     $httpsProxy = $null
-    if ($proxy -match 'http\\s*=\\s*([^;\\s]+)') { $httpProxy = $Matches[1] }
-    if ($proxy -match 'https\\s*=\\s*([^;\\s]+)') { $httpsProxy = $Matches[1] }
+    if ($proxy -match 'http\s*=\s*([^;\s]+)') { $httpProxy = $Matches[1] }
+    if ($proxy -match 'https\s*=\s*([^;\s]+)') { $httpsProxy = $Matches[1] }
     if (-not $httpProxy -and -not $httpsProxy) {
         $httpProxy = $proxy
         $httpsProxy = $proxy
@@ -289,7 +289,7 @@ function Ensure-ProxyEnvFromWinHttp {
 
     $bypassLine = ($raw | Where-Object { $_ -match 'Bypass List' } | Select-Object -First 1)
     if ($bypassLine -and -not $env:NO_PROXY) {
-        $bypass = ($bypassLine -replace '^.*Bypass List\\s*:\\s*', '').Trim()
+        $bypass = ($bypassLine -replace '^.*Bypass List\s*:\s*', '').Trim()
         if ($bypass -and ($bypass -notmatch 'None')) {
             $env:NO_PROXY = ($bypass -replace ';', ',')
             Write-Log "Detectado proxy bypass (WinHTTP) -> NO_PROXY=$($env:NO_PROXY)"
@@ -1264,7 +1264,7 @@ function Ensure-Goose {
         }
         Write-Log 'Instalando goose via script oficial (block/goose)...'
         $env:GOOSE_BIN_DIR = $localBin
-        $exitCode = Invoke-NativeWithLog -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash')
+        $exitCode = Invoke-NativeWithLog -Exe $BashPath -Args @('-lc', 'set -eo pipefail; curl --fail-with-body -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash')
         if ($exitCode -ne 0) {
             throw "Falha ao instalar goose via script oficial (exit=$exitCode). Verifique conectividade com github.com/block/goose."
         }
@@ -1293,7 +1293,7 @@ function Ensure-OpenCode {
         Write-Log "opencode já instalado: $ver ($exe)"
     } else {
         Write-Log 'Instalando opencode via script oficial...'
-        $exitCode = Invoke-NativeWithLog -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://opencode.ai/install | bash')
+        $exitCode = Invoke-NativeWithLog -Exe $BashPath -Args @('-lc', 'set -eo pipefail; curl --fail-with-body -fsSL https://opencode.ai/install | bash')
         if ($exitCode -ne 0) { throw "Falha ao instalar opencode via script oficial (exit=$exitCode)." }
         if (-not (Test-Path $exe)) { throw "Instalação do opencode concluída, mas não encontrei: $exe" }
         $ver = & $exe --version
@@ -1473,10 +1473,13 @@ function Get-BootstrapEfiEntries {
             $isHeader = $false
             $headerType = $null
             if (($line -match '^[A-Za-zÀ-ÿ].*') -and ($line -notmatch '^\s')) {
-                $isHeader = $true
-                if ($line -match '(?i)bootmgr|boot\s*manager|inicializa') { $headerType = 'bootmgr' }
-                elseif ($line -match '(?i)application|aplicativo|aplicaci|anwendung') { $headerType = 'entry' }
-                else { $headerType = 'entry' }
+                if ($line -match '(?i)bootmgr|boot\s*manager|inicializa') {
+                    $isHeader = $true; $headerType = 'bootmgr'
+                } elseif ($line -match '(?i)firmware\s*application|aplicativo\s*de\s*firmware|aplicaci.+firmware|firmware-?anwendung|application\s*de\s*microprogramme|application\s*de\s*firmware') {
+                    $isHeader = $true; $headerType = 'entry'
+                } elseif ($line -match '(?i)windows\s*boot\s*loader|carregador\s*de\s*inicializa|cargador\s*de\s*arranque|startladeprogramm') {
+                    $isHeader = $true; $headerType = 'entry'
+                }
             }
             if ($isHeader) {
                 $currentEntry = @{ Type = $headerType; Id = ''; Description = ''; Path = '' }
@@ -2317,8 +2320,11 @@ function Test-BootstrapComponentPersistedComplete {
     if (-not $env:BOOTSTRAP_RESUME) { return $false }
     if ($env:BOOTSTRAP_RESUME -ne '1') { return $false }
     $progress = Get-BootstrapPersistedProgress
-    if ($progress.ContainsKey('completed') -and $progress['completed'].ContainsKey($Name)) { return $true }
-    return $false
+    if (-not ($progress -is [hashtable])) { return $false }
+    if (-not $progress.ContainsKey('completed')) { return $false }
+    $completed = $progress['completed']
+    if (-not ($completed -is [hashtable])) { return $false }
+    return $completed.ContainsKey($Name)
 }
 
 function Reset-BootstrapPersistedProgress {
@@ -4236,6 +4242,17 @@ function Invoke-BootstrapProfileMode {
                 Write-Log ("{0}: NAO ENCONTRADO ({1})" -f $tool.Name, $tool.Path) 'WARN'
             }
         }
+
+        $codexCmd = Join-Path $state.NodeInfo.NpmBin 'codex.cmd'
+        $codexPath = Resolve-CommandPath -Name 'codex'
+        if ($codexPath) {
+            $ext = ([IO.Path]::GetExtension($codexPath)).ToLowerInvariant()
+            if (($ext -eq '.exe') -and (-not (Test-Path $codexCmd))) {
+                Write-Log "codex (PATH) aponta para um .exe ($codexPath). Se o Codex Desktop estiver crashando, priorize o codex.cmd do npm para CLI e ajuste o config.toml do app." 'WARN'
+            } else {
+                Write-Log "codex (PATH): $codexPath"
+            }
+        }
     }
 
     $repoDir = Join-Path $resolvedCloneBaseDir 'gemini-cli'
@@ -4255,22 +4272,25 @@ if ($BootstrapUiLibraryMode) {
     return
 }
 
+$script:BootstrapExitCode = 0
 try {
-    Invoke-BootstrapProfileMode
-    Close-BootstrapLogWriter
-    exit 0
-} catch {
-    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-            status = 'error'
-            generatedAt = (Get-Date).ToString('o')
-            logPath = $script:LogPath
-            resultPath = $script:ResultPath
-            error = $_.Exception.Message
-        })
+    try {
+        Invoke-BootstrapProfileMode
+    } catch {
+        $script:BootstrapExitCode = 1
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                status = 'error'
+                generatedAt = (Get-Date).ToString('o')
+                logPath = $script:LogPath
+                resultPath = $script:ResultPath
+                error = $_.Exception.Message
+            })
+        }
+        Write-Log $_.Exception.Message 'ERROR'
+        Write-Log "Log salvo em: $script:LogPath" 'ERROR'
     }
-    Write-Log $_.Exception.Message 'ERROR'
-    Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+} finally {
     Close-BootstrapLogWriter
-    exit 1
 }
+exit $script:BootstrapExitCode

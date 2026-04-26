@@ -112,6 +112,10 @@ if ($RunOnce) {
 
 # WMI event subscription for monitor and battery changes; falls back to periodic poll.
 $dispatcherJobs = @()
+foreach ($sid in @('BootstrapDeckMonitor', 'BootstrapDeckBattery')) {
+    Unregister-Event -SourceIdentifier $sid -ErrorAction SilentlyContinue
+    Get-EventSubscriber -SourceIdentifier $sid -ErrorAction SilentlyContinue | Unregister-Event -ErrorAction SilentlyContinue
+}
 try {
     $monitorQuery = "SELECT * FROM __InstanceOperationEvent WITHIN $DebounceSeconds WHERE TargetInstance ISA 'Win32_DesktopMonitor'"
     $batteryQuery = "SELECT * FROM __InstanceOperationEvent WITHIN $DebounceSeconds WHERE TargetInstance ISA 'Win32_Battery'"
@@ -124,22 +128,27 @@ try {
     Write-WatcherLog "WMI subscription failed, fallback to polling: $($_.Exception.Message)"
 }
 
-# Initial tick on start
-Tick-Once
-
-while ($true) {
-    $event = $null
-    try {
-        $event = Wait-Event -Timeout $FallbackPollSeconds
-    } catch { }
-    if ($event) {
+try {
+    Tick-Once
+    while ($true) {
+        $event = $null
         try {
-            Write-WatcherLog "Event: $($event.SourceIdentifier)"
-            Remove-Event -EventIdentifier $event.EventIdentifier
+            $event = Wait-Event -Timeout $FallbackPollSeconds
         } catch { }
-        Start-Sleep -Milliseconds 500
-        Tick-Once
-    } else {
-        Tick-Once
+        if ($event) {
+            try {
+                Write-WatcherLog "Event: $($event.SourceIdentifier)"
+                Remove-Event -EventIdentifier $event.EventIdentifier
+            } catch { }
+            Start-Sleep -Milliseconds 500
+            Tick-Once
+        } else {
+            Tick-Once
+        }
     }
+} finally {
+    foreach ($sid in $dispatcherJobs) {
+        try { Unregister-Event -SourceIdentifier $sid -ErrorAction SilentlyContinue } catch { }
+    }
+    Write-WatcherLog 'ModeWatcher exiting; subscriptions cleaned up'
 }

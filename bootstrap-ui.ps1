@@ -1960,11 +1960,24 @@ function Start-RunExecution {
     $ui.LogTimer.Start()
 }
 
+function Stop-ProcessTreeById {
+    param([Parameter(Mandatory = $true)][int]$Pid)
+    $taskkill = Join-Path $env:SystemRoot 'System32\taskkill.exe'
+    if (Test-Path $taskkill) {
+        try { & $taskkill '/T' '/F' '/PID' $Pid 2>$null | Out-Null; return } catch { }
+    }
+    try {
+        $children = @(Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId=$Pid" -ErrorAction SilentlyContinue)
+        foreach ($c in $children) { Stop-ProcessTreeById -Pid ([int]$c.ProcessId) }
+    } catch { }
+    try { Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue } catch { }
+}
+
 function Cancel-RunExecution {
     if (-not $ui.RunProcess) { return }
     if ($ui.RunProcess.HasExited) { return }
     try {
-        $ui.RunProcess.Kill($true)
+        Stop-ProcessTreeById -Pid ([int]$ui.RunProcess.Id)
     } catch {
         try { $ui.RunProcess.Kill() } catch { }
     }
@@ -2247,7 +2260,7 @@ $window.Add_Loaded({
 $window.Add_Closing({
     $ui.LogTimer.Stop()
     if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
-        try { $ui.RunProcess.Kill($true) } catch { }
+        try { Stop-ProcessTreeById -Pid ([int]$ui.RunProcess.Id) } catch { }
     }
     Save-UiStateImmediate -State $ui.State -Path $UiStatePath
     Flush-UiState
