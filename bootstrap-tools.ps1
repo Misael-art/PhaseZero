@@ -1,7 +1,7 @@
-param(
+﻿param(
     [string]$CloneBaseDir,
-    [string]$WorkspaceRoot = 'F:\Steam\Steamapps',
-    [string[]]$Profile = @(),
+    [string]$WorkspaceRoot,
+    [Alias('Profile')][string[]]$ProfileName = @(),
     [string[]]$Component = @(),
     [string[]]$Exclude = @(),
     [ValidateSet('Auto', 'LCD', 'OLED')][string]$SteamDeckVersion = 'Auto',
@@ -15,7 +15,8 @@ param(
     [switch]$UiContractJson,
     [switch]$BootstrapUiLibraryMode,
     [switch]$DryRun,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$AssumeYes
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,20 +44,72 @@ try {
 } catch {
 }
 
+$script:LogWriter = $null
+
+function Get-BootstrapLogWriter {
+    if ($script:LogWriter) { return $script:LogWriter }
+    $stream = [System.IO.StreamWriter]::new($script:LogPath, $true, [System.Text.UTF8Encoding]::new($false))
+    $stream.AutoFlush = $true
+    $script:LogWriter = $stream
+    return $stream
+}
+
+function Close-BootstrapLogWriter {
+    if ($script:LogWriter) {
+        try { $script:LogWriter.Flush(); $script:LogWriter.Dispose() } catch { }
+        $script:LogWriter = $null
+    }
+}
+
 function Write-Log {
     param(
         [Parameter(Mandatory = $true)][string]$Message,
         [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO'
     )
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] [{1}] {2}" -f (Get-Date), $Level, $Message
-    Add-Content -Path $script:LogPath -Value $line -Encoding utf8
+    try {
+        (Get-BootstrapLogWriter).WriteLine($line)
+    } catch {
+        Add-Content -Path $script:LogPath -Value $line -Encoding utf8
+    }
     Write-Host $line
+}
+
+function Test-IsWingetProgressLine {
+    param([string]$Line)
+    if ([string]::IsNullOrWhiteSpace($Line)) { return $false }
+    if ($Line -match '^[\s]*[█▒▓░\-/\\|]+[\s]*$') { return $true }
+    if ($Line -match '^\s*[\d\.]+\s*(KB|MB|GB|B)\s*/\s*[\d\.]+\s*(KB|MB|GB|B)') { return $true }
+    return $false
 }
 
 function Refresh-SessionPath {
     $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = @($machinePath, $userPath) -join ';'
+    $combined = @($machinePath, $userPath) -join ';'
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    $deduped = New-Object System.Collections.Generic.List[string]
+    foreach ($entry in ($combined -split ';')) {
+        $trimmed = $entry.Trim().TrimEnd('\')
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+        if ($seen.Add($trimmed)) { $deduped.Add($trimmed) }
+    }
+    $env:Path = ($deduped -join ';')
+}
+
+function Get-BootstrapDefaultWorkspaceRoot {
+    $candidates = @('F:\Steam\Steamapps', 'D:\Steam\Steamapps', 'E:\Steam\Steamapps')
+    foreach ($c in $candidates) {
+        $drive = Split-Path -Path $c -Qualifier
+        if ($drive -and (Test-Path $drive)) { return $c }
+    }
+    $drives = @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue |
+        Where-Object { $_.Used -ne $null -and $_.Free -ne $null -and $_.Name -ne 'C' } |
+        Sort-Object -Property Free -Descending)
+    if ($drives -and $drives.Count -gt 0) {
+        return (Join-Path ($drives[0].Root) 'Steam\Steamapps')
+    }
+    return (Join-Path $env:USERPROFILE 'Steam\Steamapps')
 }
 
 function Invoke-NativeWithLog {
@@ -78,10 +131,12 @@ function Invoke-NativeWithLog {
     $ErrorActionPreference = 'Continue'
 
     try {
+        $writer = Get-BootstrapLogWriter
         & $Exe @Args 2>&1 | ForEach-Object {
             $line = [string]$_
             if ($line -match "`0") { $line = $line -replace "`0", '' }
-            Add-Content -Path $script:LogPath -Value $line -Encoding utf8
+            if (Test-IsWingetProgressLine -Line $line) { return }
+            $writer.WriteLine($line)
             Write-Host $line
         }
         return $LASTEXITCODE
@@ -208,16 +263,16 @@ function Ensure-ProxyEnvFromWinHttp {
     $text = ($raw | Out-String)
     if ($text -match 'Direct access') { return }
 
-    $proxyLine = ($raw | Where-Object { $_ -match 'Proxy Server\\(s\\)' } | Select-Object -First 1)
+    $proxyLine = ($raw | Where-Object { $_ -match 'Proxy Server\(s\)' } | Select-Object -First 1)
     if (-not $proxyLine) { return }
 
-    $proxy = ($proxyLine -replace '^.*Proxy Server\\(s\\)\\s*:\\s*', '').Trim()
+    $proxy = ($proxyLine -replace '^.*Proxy Server\(s\)\s*:\s*', '').Trim()
     if (-not $proxy) { return }
 
     $httpProxy = $null
     $httpsProxy = $null
-    if ($proxy -match 'http\\s*=\\s*([^;\\s]+)') { $httpProxy = $Matches[1] }
-    if ($proxy -match 'https\\s*=\\s*([^;\\s]+)') { $httpsProxy = $Matches[1] }
+    if ($proxy -match 'http\s*=\s*([^;\s]+)') { $httpProxy = $Matches[1] }
+    if ($proxy -match 'https\s*=\s*([^;\s]+)') { $httpsProxy = $Matches[1] }
     if (-not $httpProxy -and -not $httpsProxy) {
         $httpProxy = $proxy
         $httpsProxy = $proxy
@@ -234,7 +289,7 @@ function Ensure-ProxyEnvFromWinHttp {
 
     $bypassLine = ($raw | Where-Object { $_ -match 'Bypass List' } | Select-Object -First 1)
     if ($bypassLine -and -not $env:NO_PROXY) {
-        $bypass = ($bypassLine -replace '^.*Bypass List\\s*:\\s*', '').Trim()
+        $bypass = ($bypassLine -replace '^.*Bypass List\s*:\s*', '').Trim()
         if ($bypass -and ($bypass -notmatch 'None')) {
             $env:NO_PROXY = ($bypass -replace ';', ',')
             Write-Log "Detectado proxy bypass (WinHTTP) -> NO_PROXY=$($env:NO_PROXY)"
@@ -259,50 +314,31 @@ function Get-ClaudeHookConfigCandidatePaths {
         $candidates += (Join-Path $PSScriptRoot '.claude\settings.json')
     }
 
-    $projectRoots = @()
-    if ($env:USERPROFILE) {
-        $projectRoots += (Join-Path $env:USERPROFILE 'Documents')
-        $projectRoots += (Join-Path $env:USERPROFILE 'Projects')
-        $projectRoots += (Join-Path $env:USERPROFILE 'Work')
-        $projectRoots += (Join-Path $env:USERPROFILE 'Workspace')
-        $projectRoots += (Join-Path $env:USERPROFILE 'Source')
-    }
-    try {
-        $drives = Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue
-        foreach ($d in $drives) {
-            if ($d -and $d.Root) {
-                $projectRoots += (Join-Path $d.Root 'Projects')
-                $projectRoots += (Join-Path $d.Root 'Work')
-                $projectRoots += (Join-Path $d.Root 'Workspace')
-                $projectRoots += (Join-Path $d.Root 'Source')
-            }
+    $deepScan = ($env:BOOTSTRAP_HOOKS_DEEP_SCAN -eq '1')
+
+    if ($deepScan) {
+        $projectRoots = @()
+        if ($env:USERPROFILE) {
+            $projectRoots += (Join-Path $env:USERPROFILE 'Documents')
+            $projectRoots += (Join-Path $env:USERPROFILE 'Projects')
+            $projectRoots += (Join-Path $env:USERPROFILE 'Work')
+            $projectRoots += (Join-Path $env:USERPROFILE 'Workspace')
+            $projectRoots += (Join-Path $env:USERPROFILE 'Source')
         }
-    } catch {
-    }
 
-    foreach ($root in ($projectRoots | Select-Object -Unique)) {
-        if (-not $root) { continue }
-        if (-not (Test-Path $root)) { continue }
+        foreach ($root in ($projectRoots | Select-Object -Unique)) {
+            if (-not $root) { continue }
+            if (-not (Test-Path $root)) { continue }
 
-        $level1 = @()
-        try {
-            $level1 = Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | Select-Object -First 200
-        } catch {
             $level1 = @()
-        }
-        foreach ($d1 in $level1) {
-            $p1 = Join-Path $d1.FullName '.claude\settings.json'
-            if (Test-Path $p1) { $candidates += $p1 }
-
-            $level2 = @()
             try {
-                $level2 = Get-ChildItem -Path $d1.FullName -Directory -ErrorAction SilentlyContinue | Select-Object -First 50
+                $level1 = Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue | Select-Object -First 200
             } catch {
-                $level2 = @()
+                $level1 = @()
             }
-            foreach ($d2 in $level2) {
-                $p2 = Join-Path $d2.FullName '.claude\settings.json'
-                if (Test-Path $p2) { $candidates += $p2 }
+            foreach ($d1 in $level1) {
+                $p1 = Join-Path $d1.FullName '.claude\settings.json'
+                if (Test-Path $p1) { $candidates += $p1 }
             }
         }
     }
@@ -340,10 +376,10 @@ function Convert-HookItemIfNeeded {
 
     if ($Item -is [string]) {
         $s = [string]$Item
-        if ($s -match '(?i)(^|\\s)/usr/bin/bash(\\s|$)' -or $s -match '(?i)(^|\\s)/bin/bash(\\s|$)' -or $s -match '(?i)\\bbash\\b') {
+        if ($s -match '(?i)(^|\s)/usr/bin/bash(\s|$)' -or $s -match '(?i)(^|\s)/bin/bash(\s|$)' -or $s -match '(?i)\bbash\b') {
             return $null
         }
-        if ($s -match '(?i)C:\\\\Program Files\\\\' -and ($s -notmatch '(?i)\"C:\\\\Program Files\\\\')) {
+        if ($s -match '(?i)C:\\Program Files\\' -and ($s -notmatch '(?i)"C:\\Program Files\\')) {
             return $null
         }
         return $Item
@@ -354,11 +390,11 @@ function Convert-HookItemIfNeeded {
     try { $cmd = $Item.command } catch { $cmd = $null }
     try { $args = $Item.args } catch { $args = $null }
 
-    if ($cmd -and ($cmd -match '(?i)^/usr/bin/bash(\\s|$)' -or $cmd -match '(?i)^/bin/bash(\\s|$)')) {
+    if ($cmd -and ($cmd -match '(?i)^/usr/bin/bash(\s|$)' -or $cmd -match '(?i)^/bin/bash(\s|$)')) {
         if (-not $GitBashPath -or -not (Test-Path $GitBashPath)) { return $null }
 
         $scriptText = $null
-        $m = [regex]::Match($cmd, '(?i)^(?:/usr/bin/bash|/bin/bash)\\s+-(?:l?c)\\s+(.+)$')
+        $m = [regex]::Match($cmd, '(?i)^(?:/usr/bin/bash|/bin/bash)\s+-(?:l?c)\s+(.+)$')
         if ($m.Success) {
             $scriptText = $m.Groups[1].Value.Trim()
         } elseif ($args -and ($args -is [System.Collections.IEnumerable])) {
@@ -386,7 +422,7 @@ function Convert-HookItemIfNeeded {
 
     $cmdStr = $null
     if ($cmd -is [string]) { $cmdStr = [string]$cmd }
-    if ($cmdStr -and ($cmdStr -match '(?i)\\bbash\\b') -and ($cmdStr -match '(?i)C:\\\\Program Files\\\\') -and ($cmdStr -notmatch '(?i)\"C:\\\\Program Files\\\\')) {
+    if ($cmdStr -and ($cmdStr -match '(?i)\bbash\b') -and ($cmdStr -match '(?i)C:\\Program Files\\') -and ($cmdStr -notmatch '(?i)"C:\\Program Files\\')) {
         return $null
     }
     return $Item
@@ -624,15 +660,21 @@ function Ensure-ClaudeCodeDefaults {
 function Get-WindowsOptionalFeatureState {
     param([Parameter(Mandatory = $true)][string]$FeatureName)
     try {
+        $f = Get-WindowsOptionalFeature -Online -FeatureName $FeatureName -ErrorAction Stop
+        if ($f) { return [string]$f.State }
+    } catch { }
+    try {
         $out = & dism.exe /online /Get-FeatureInfo /FeatureName:$FeatureName 2>&1
         if (-not $out) { return 'Unknown' }
         $text = ($out | Out-String)
-        if ($text -match '(?im)^\\s*State\\s*:\\s*Enabled\\s*$') { return 'Enabled' }
-        if ($text -match '(?im)^\\s*Estado\\s*:\\s*Habilitado\\s*$') { return 'Enabled' }
-        if ($text -match '(?im)^\\s*State\\s*:\\s*Enable Pending\\s*$') { return 'EnablePending' }
-        if ($text -match '(?im)^\\s*Estado\\s*:\\s*Habilita(ç|c)ão Pendente\\s*$') { return 'EnablePending' }
-        if ($text -match '(?im)^\\s*State\\s*:\\s*Disabled\\s*$') { return 'Disabled' }
-        if ($text -match '(?im)^\\s*Estado\\s*:\\s*Desabilitado\\s*$') { return 'Disabled' }
+        $stateMatch = [regex]::Match($text, '(?im)^\s*(?:State|Estado|Etat|Zustand)\s*:\s*(.+?)\s*$')
+        if (-not $stateMatch.Success) { return 'Unknown' }
+        $value = $stateMatch.Groups[1].Value.Trim()
+        if ($value -match '(?i)^(Enabled|Habilitad|Activ|Aktiv)') {
+            if ($value -match '(?i)Pending|Pendent|Anstehend') { return 'EnablePending' }
+            return 'Enabled'
+        }
+        if ($value -match '(?i)^(Disabled|Desabilitad|Desactiv|Deaktiv)') { return 'Disabled' }
         return 'Unknown'
     } catch {
         return 'Unknown'
@@ -752,7 +794,36 @@ function Ensure-WingetPackage {
         throw "Falha ao instalar $DisplayName via winget (exit=$exitCode)."
     }
     Refresh-SessionPath
+    Add-WingetInstalledIdToCache -Id $Id
     Write-Log "Instalação concluída: $DisplayName"
+}
+
+$script:WingetInstalledCache = $null
+
+function Get-WingetInstalledCache {
+    param([Parameter(Mandatory = $true)][string]$WingetPath)
+    if ($null -ne $script:WingetInstalledCache) { return $script:WingetInstalledCache }
+    $cache = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    try {
+        $out = & $WingetPath list --accept-source-agreements --disable-interactivity 2>$null
+        if ($out) {
+            foreach ($line in @($out)) {
+                $text = [string]$line
+                if ($text -match '\b([A-Za-z0-9][A-Za-z0-9._\-]*\.[A-Za-z0-9][A-Za-z0-9._\-]+)\b') {
+                    [void]$cache.Add($Matches[1])
+                }
+            }
+        }
+    } catch { }
+    $script:WingetInstalledCache = $cache
+    return $cache
+}
+
+function Add-WingetInstalledIdToCache {
+    param([string]$Id)
+    if ($null -ne $script:WingetInstalledCache -and $Id) {
+        [void]$script:WingetInstalledCache.Add($Id)
+    }
 }
 
 function Test-WingetPackageInstalled {
@@ -761,9 +832,13 @@ function Test-WingetPackageInstalled {
         [Parameter(Mandatory = $true)][string]$Id
     )
     try {
+        $cache = Get-WingetInstalledCache -WingetPath $WingetPath
+        if ($cache -and $cache.Contains($Id)) { return $true }
         $out = & $WingetPath list -e --id $Id 2>&1
         if (-not $out) { return $false }
-        return (($out | Out-String) -match [regex]::Escape($Id))
+        $found = (($out | Out-String) -match [regex]::Escape($Id))
+        if ($found) { Add-WingetInstalledIdToCache -Id $Id }
+        return $found
     } catch {
         return $false
     }
@@ -962,6 +1037,24 @@ function Invoke-NativeFirstLine {
     return ($out | Select-Object -First 1)
 }
 
+$script:NpmGlobalListCache = $null
+
+function Get-NpmGlobalListText {
+    param([Parameter(Mandatory = $true)][string]$NpmCmd)
+    if ($null -ne $script:NpmGlobalListCache) { return $script:NpmGlobalListCache }
+    try {
+        $out = & $NpmCmd list -g --depth=0 2>$null
+        $script:NpmGlobalListCache = ($out | Out-String)
+    } catch {
+        $script:NpmGlobalListCache = ''
+    }
+    return $script:NpmGlobalListCache
+}
+
+function Reset-NpmGlobalListCache {
+    $script:NpmGlobalListCache = $null
+}
+
 function Ensure-NpmGlobalPackage {
     param(
         [Parameter(Mandatory = $true)][string]$NpmCmd,
@@ -980,8 +1073,8 @@ function Ensure-NpmGlobalPackage {
     }
     $installed = $false
     try {
-        $out = & $NpmCmd list -g --depth=0 2>$null
-        if ($out -match [regex]::Escape($CheckName) + '@') { $installed = $true }
+        $listText = Get-NpmGlobalListText -NpmCmd $NpmCmd
+        if ($listText -match [regex]::Escape($CheckName) + '@') { $installed = $true }
     } catch {
         $installed = $false
     }
@@ -994,6 +1087,7 @@ function Ensure-NpmGlobalPackage {
     Write-Log "Instalando $DisplayName via npm -g..."
     $exitCode = Invoke-NpmWithLog -NpmCmd $NpmCmd -Args @('install', '-g', $Package)
     if ($exitCode -ne 0) { throw "Falha ao instalar $DisplayName via npm (exit=$exitCode)." }
+    Reset-NpmGlobalListCache
     Write-Log "Instalação concluída: $DisplayName"
 }
 
@@ -1117,6 +1211,36 @@ function Ensure-Aider {
     Ensure-UvToolPackage -Package 'aider-chat' -CommandName 'aider' -DisplayName 'aider (aider-chat)' -VersionArgs @('--version')
 }
 
+function Invoke-BootstrapDownloadVerified {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string]$ExpectedSha256
+    )
+
+    $tempPath = "$Destination.partial"
+    Write-Log "Baixando: $Url"
+    try {
+        Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $tempPath -ErrorAction Stop | Out-Null
+    } catch {
+        if (Test-Path $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+        throw "Falha ao baixar $Url. $($_.Exception.Message)"
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+        $hash = (Get-FileHash -LiteralPath $tempPath -Algorithm SHA256).Hash
+        if ($hash -ine $ExpectedSha256) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+            throw "Checksum SHA256 nao confere para $Url. Esperado=$ExpectedSha256 Obtido=$hash"
+        }
+        Write-Log "Checksum SHA256 ok: $Destination"
+    } else {
+        Write-Log "Checksum SHA256 nao informado para $Url (download seguiu sem verify)." 'WARN'
+    }
+
+    Move-Item -LiteralPath $tempPath -Destination $Destination -Force
+}
+
 function Ensure-Goose {
     param([Parameter(Mandatory = $true)][string]$BashPath)
 
@@ -1134,24 +1258,24 @@ function Ensure-Goose {
 
     $destExe = Join-Path $localBin 'goose.exe'
     if (-not (Test-Path $destExe)) {
-        $url = 'https://github.com/aaif-goose/goose/releases/download/stable/goose-x86_64-pc-windows-msvc.zip'
-        $zipPath = Join-Path $env:TEMP ("goose_{0}.zip" -f ([Guid]::NewGuid().ToString('N')))
-        $extractDir = Join-Path $env:TEMP ("goose_extract_{0}" -f ([Guid]::NewGuid().ToString('N')))
-        try {
-            Write-Log "Baixando goose (stable): $url"
-            Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $zipPath | Out-Null
-            Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-            $found = Get-ChildItem -Path $extractDir -Recurse -File -Filter 'goose.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-            if (-not $found) { throw "Não encontrei goose.exe dentro do zip: $url" }
-            Copy-Item -LiteralPath $found.FullName -Destination $destExe -Force
-        } finally {
-            if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue }
-            if (Test-Path $extractDir) { Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue }
+        # Goose oficial (Block) usa script bash de instalação; manter via script com env DEST.
+        if (-not (Test-Path $BashPath)) {
+            throw "bash.exe nao encontrado para instalar goose: $BashPath"
+        }
+        Write-Log 'Instalando goose via script oficial (block/goose)...'
+        $env:GOOSE_BIN_DIR = $localBin
+        $exitCode = Invoke-NativeWithLog -Exe $BashPath -Args @('-lc', 'set -eo pipefail; curl --fail-with-body -fsSL https://github.com/block/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash')
+        if ($exitCode -ne 0) {
+            throw "Falha ao instalar goose via script oficial (exit=$exitCode). Verifique conectividade com github.com/block/goose."
         }
     }
     Refresh-SessionPath
 
     $gooseExe = Resolve-CommandPath -Name 'goose'
+    if (-not $gooseExe) {
+        $candidate = Join-Path $localBin 'goose.exe'
+        if (Test-Path $candidate) { $gooseExe = $candidate }
+    }
     if (-not $gooseExe) { throw 'Instalação do goose concluída, mas o comando goose não foi encontrado no PATH.' }
 
     $ver = Invoke-NativeFirstLine -Exe $gooseExe -Args @('--version')
@@ -1169,7 +1293,7 @@ function Ensure-OpenCode {
         Write-Log "opencode já instalado: $ver ($exe)"
     } else {
         Write-Log 'Instalando opencode via script oficial...'
-        $exitCode = Invoke-NativeWithLog -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://opencode.ai/install | bash')
+        $exitCode = Invoke-NativeWithLog -Exe $BashPath -Args @('-lc', 'set -eo pipefail; curl --fail-with-body -fsSL https://opencode.ai/install | bash')
         if ($exitCode -ne 0) { throw "Falha ao instalar opencode via script oficial (exit=$exitCode)." }
         if (-not (Test-Path $exe)) { throw "Instalação do opencode concluída, mas não encontrei: $exe" }
         $ver = & $exe --version
@@ -1278,14 +1402,25 @@ function Get-BootstrapFastStartupStatus {
 function Get-BootstrapBitLockerStatus {
     $result = @{ CEnabled = $false; StatusText = 'unknown' }
     try {
+        $vol = Get-BitLockerVolume -MountPoint 'C:' -ErrorAction Stop
+        if ($vol) {
+            $result.CEnabled   = ([string]$vol.ProtectionStatus -eq 'On')
+            $result.StatusText = if ($result.CEnabled) { 'enabled' } else { 'disabled' }
+            return $result
+        }
+    } catch { }
+    try {
         $output = & manage-bde -status C: 2>$null
         if ($output) {
-            $statusLine = $output | Where-Object { $_ -match 'Protection Status|Status de Prote' } | Select-Object -First 1
-            if ($statusLine -match '(On|Ativad)') {
-                $result.CEnabled   = $true
-                $result.StatusText = 'enabled'
-            } else {
-                $result.StatusText = 'disabled'
+            $text = ($output | Out-String)
+            if ($text -match '(?i)(?:Protection\s*Status|Status\s*da?\s*Prote\w+|Estado\s*de\s*la\s*protecci\w+|Schutzstatus)\s*:\s*(\S+)') {
+                $value = $Matches[1].Trim()
+                if ($value -match '(?i)^(On|Ativad|Activad|Aktiv)') {
+                    $result.CEnabled   = $true
+                    $result.StatusText = 'enabled'
+                } else {
+                    $result.StatusText = 'disabled'
+                }
             }
         }
     } catch {
@@ -1327,6 +1462,7 @@ function Get-BootstrapEfiEntries {
         $raw = & bcdedit /enum firmware 2>$null
         if (-not $raw) { return @() }
         $currentEntry = $null
+        $guidRegex = '\{[0-9a-f\-]+\}|\{(?:fwbootmgr|bootmgr|current|default)\}'
         foreach ($line in $raw) {
             if ($line -match '^[-]+$') { continue }
             if ($line -match '^\s*$') {
@@ -1334,18 +1470,37 @@ function Get-BootstrapEfiEntries {
                 $currentEntry = $null
                 continue
             }
-            if ($line -match '^(?:Firmware Boot Manager|Gerenciador de Inicializa)') {
-                $currentEntry = @{ Type = 'bootmgr'; Id = ''; Description = ''; Path = '' }
-                continue
+            $isHeader = $false
+            $headerType = $null
+            if (($line -match '^[A-Za-zÀ-ÿ].*') -and ($line -notmatch '^\s')) {
+                if ($line -match '(?i)bootmgr|boot\s*manager|inicializa') {
+                    $isHeader = $true; $headerType = 'bootmgr'
+                } elseif ($line -match '(?i)firmware\s*application|aplicativo\s*de\s*firmware|aplicaci.+firmware|firmware-?anwendung|application\s*de\s*microprogramme|application\s*de\s*firmware') {
+                    $isHeader = $true; $headerType = 'entry'
+                } elseif ($line -match '(?i)windows\s*boot\s*loader|carregador\s*de\s*inicializa|cargador\s*de\s*arranque|startladeprogramm') {
+                    $isHeader = $true; $headerType = 'entry'
+                }
             }
-            if ($line -match '^(?:Firmware Application|Aplicativo de Firmware)') {
-                $currentEntry = @{ Type = 'entry'; Id = ''; Description = ''; Path = '' }
+            if ($isHeader) {
+                $currentEntry = @{ Type = $headerType; Id = ''; Description = ''; Path = '' }
                 continue
             }
             if ($null -ne $currentEntry) {
-                if ($line -match '(?:identifier|identificador)\s+(.+)') { $currentEntry.Id = ($Matches[1]).Trim() }
-                if ($line -match '(?:description|descri)\s+(.+)')       { $currentEntry.Description = ($Matches[1]).Trim() }
-                if ($line -match '(?:path|caminho)\s+(.+)')             { $currentEntry.Path = ($Matches[1]).Trim() }
+                if ($line -match '^\s*\S+\s+($guidRegex)\s*$') {
+                    $currentEntry.Id = $Matches[1]
+                    continue
+                }
+                if ($line -match $guidRegex -and -not $currentEntry.Id) {
+                    $currentEntry.Id = ($Matches[0])
+                }
+                if ($line -match '^\s*(?:description|descri\w*|descripci\w*|beschreibung)\s+(.+)$') {
+                    $currentEntry.Description = $Matches[1].Trim()
+                    continue
+                }
+                if ($line -match '^\s*(?:path|caminho|ruta|pfad|chemin)\s+(.+)$') {
+                    $currentEntry.Path = $Matches[1].Trim()
+                    continue
+                }
             }
         }
         if ($currentEntry) { $entries += $currentEntry }
@@ -1624,29 +1779,52 @@ function Invoke-BootstrapRebootToLinux {
 
 function Get-BootstrapPhantomBootEntries {
     if (-not (Test-IsAdmin)) { return @() }
-    
+
     $phantoms = @()
-    $displayOrderStr = & bcdedit /enum '{bootmgr}' 2>$null | Select-String '^displayorder'
-    if (-not $displayOrderStr) { return @() }
-    
-    $guids = [regex]::Matches($displayOrderStr, '\{[a-f0-9\-]+\}') | ForEach-Object { $_.Value }
-    
+    $bootmgrRaw = & bcdedit /enum '{bootmgr}' 2>$null
+    if (-not $bootmgrRaw) { return @() }
+    $bootmgrText = ($bootmgrRaw | Out-String)
+    $orderLine = $null
+    foreach ($line in @($bootmgrRaw)) {
+        if ($line -match '^\s*(displayorder|ordem|ordendisplayorder)\b') { $orderLine = $line; break }
+    }
+    if (-not $orderLine) {
+        $m = [regex]::Match($bootmgrText, '(?im)^\s*\S+\s+(\{[0-9a-f\-]+\}(?:\s+\{[0-9a-f\-]+\})*)\s*$')
+        if (-not $m.Success) { return @() }
+        $orderLine = $m.Value
+    }
+
+    $guids = [regex]::Matches($orderLine, '\{[a-f0-9\-]+\}') | ForEach-Object { $_.Value }
+
     foreach ($g in $guids) {
-        if ($g -eq '{current}') { continue } # ignora a entrada atual em execucao ativa
+        if ($g -ieq '{current}') { continue }
         $entryLines = & bcdedit /enum $g 2>$null
         $isPhantom = $false
         $desc = ''
-        foreach ($line in $entryLines) {
-            if ($line -match '^description\s+(.*)') { $desc = $matches[1].Trim() }
-            if ($line -match '^device\s+unknown' -or $line -match '^osdevice\s+unknown') {
-                $isPhantom = $true
-            }
-        }
+        $entryText = ($entryLines | Out-String)
+        $descMatch = [regex]::Match($entryText, '(?im)^\s*(?:description|descri\w*|descripci\w*|beschreibung)\s+(.+?)\s*$')
+        if ($descMatch.Success) { $desc = $descMatch.Groups[1].Value.Trim() }
+
+        $unknownMatch = [regex]::Match($entryText, '(?im)^\s*(?:device|osdevice|disposit\w+)\s+(?:unknown|desconhecid\w+|inconnu|unbekannt|desconocid\w+)\b')
+        if ($unknownMatch.Success) { $isPhantom = $true }
+
         if ($isPhantom) {
             $phantoms += @{ Id = $g; Description = $desc }
         }
     }
     return $phantoms
+}
+
+function Get-BootstrapPhantomBootEntriesPreview {
+    $phantoms = Get-BootstrapPhantomBootEntries
+    if (-not $phantoms -or $phantoms.Count -eq 0) {
+        return [pscustomobject]@{ Count = 0; Lines = @('Nenhuma entrada fantasma detectada.') }
+    }
+    $lines = foreach ($p in $phantoms) { ('  - {0} :: {1}' -f $p.Id, $p.Description) }
+    return [pscustomobject]@{
+        Count = $phantoms.Count
+        Lines = @(@("Entradas que serao removidas ($($phantoms.Count)):") + $lines)
+    }
 }
 
 function Repair-BootstrapPhantomEntries {
@@ -1884,6 +2062,90 @@ function Get-BootstrapHostHealthModes {
     return @('off', 'conservador', 'equilibrado', 'agressivo')
 }
 
+function Get-BootstrapHostHealthModeDescriptions {
+    return [ordered]@{
+        'off'          = 'HostHealth desligado: nenhuma alteração no host.'
+        'conservador'  = 'Limpa TEMPs do usuário e máquina, ajusta startup do usuário, fecha sugestões e Edge background.'
+        'equilibrado'  = 'Inclui conservador + remove apps Microsoft opcionais (Teams, GetHelp, Feedback, DevHome) e desabilita tarefas agendadas raras.'
+        'agressivo'    = 'Inclui equilibrado + remove BingSearch/PCManager e ajusta serviços (MapsBroker disabled).'
+    }
+}
+
+function Get-BootstrapComponentEstimatedSeconds {
+    param([Parameter(Mandatory = $true)]$ComponentDef)
+    $kind = [string]$ComponentDef.Kind
+    switch ($kind) {
+        'system-core'        { return 30 }
+        'git-core'           { return 90 }
+        'node-core'          { return 60 }
+        'python-core'        { return 80 }
+        'wsl-core'           { return 240 }
+        'wsl-ui'             { return 120 }
+        'docker'             { return 240 }
+        'winget'             { return 60 }
+        'sevenzip'           { return 30 }
+        'npm'                { return 45 }
+        'uvtool'             { return 30 }
+        'goose'              { return 45 }
+        'opencode'           { return 45 }
+        'openclaw'           { return 60 }
+        'claude-code'        { return 45 }
+        'claude-config'      { return 5 }
+        'codex-installer'    { return 60 }
+        'repo-clone'         { return 20 }
+        'workspace'          { return 5 }
+        'steamdeck-tools'    { return 60 }
+        'steamdeck-settings' { return 5 }
+        'steamdeck-automation' { return 10 }
+        'manual-required'   { return 5 }
+        'alias'              { return 0 }
+        'builtin'            { return 5 }
+        default              { return 30 }
+    }
+}
+
+function Get-BootstrapEstimatedTimeText {
+    param([string[]]$ComponentNames)
+    $catalog = Get-BootstrapComponentCatalog
+    $total = 0
+    foreach ($name in @($ComponentNames)) {
+        $def = $catalog[$name]
+        if ($def) { $total += [int](Get-BootstrapComponentEstimatedSeconds -ComponentDef $def) }
+    }
+    if ($total -le 0) { return '<1m' }
+    $ts = [TimeSpan]::FromSeconds($total)
+    if ($ts.TotalMinutes -lt 1) { return ("{0}s" -f [int]$ts.TotalSeconds) }
+    return ("{0}m{1:00}s" -f [int]$ts.TotalMinutes, $ts.Seconds)
+}
+
+function Test-BootstrapIsSteamDeck {
+    if ($env:BOOTSTRAP_SKIP_HARDWARE_DETECT -eq '1') { return $false }
+    try {
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -OperationTimeoutSec 4 -ErrorAction Stop
+        return ([string]$cs.Manufacturer -match 'Valve')
+    } catch {
+        return $false
+    }
+}
+
+function Get-BootstrapDiskFreeBytes {
+    param([string]$Drive = 'C')
+    try {
+        $letter = ($Drive.TrimEnd(':').TrimEnd('\'))
+        $info = [System.IO.DriveInfo]::new($letter)
+        if ($info -and $info.IsReady) { return [int64]$info.AvailableFreeSpace }
+    } catch { }
+    return $null
+}
+
+function Get-BootstrapFreeBytesFormatted {
+    param([int64]$Bytes)
+    if ($null -eq $Bytes -or $Bytes -le 0) { return 'desconhecido' }
+    if ($Bytes -ge 1GB) { return ('{0:n1} GB' -f ($Bytes / 1GB)) }
+    if ($Bytes -ge 1MB) { return ('{0:n1} MB' -f ($Bytes / 1MB)) }
+    return ('{0} KB' -f [math]::Round($Bytes / 1KB))
+}
+
 function Show-BootstrapHostHealthModes {
     foreach ($mode in (Get-BootstrapHostHealthModes)) {
         Write-Output $mode
@@ -2018,6 +2280,60 @@ function Get-BootstrapDataRoot {
     return (Join-Path $env:USERPROFILE '.bootstrap-tools')
 }
 
+function Get-BootstrapProgressPath {
+    return (Join-Path (Get-BootstrapDataRoot) 'progress.json')
+}
+
+function Get-BootstrapPersistedProgress {
+    $path = Get-BootstrapProgressPath
+    if (-not (Test-Path $path)) { return @{} }
+    try {
+        $obj = Get-Content -Path $path -Raw | ConvertFrom-Json -ErrorAction Stop
+        $hash = ConvertTo-BootstrapHashtable -InputObject $obj
+        if ($hash -is [hashtable]) { return $hash }
+        return @{}
+    } catch {
+        return @{}
+    }
+}
+
+function Save-BootstrapPersistedProgress {
+    param([Parameter(Mandatory = $true)]$Progress)
+    $path = Get-BootstrapProgressPath
+    $parent = Split-Path -Path $path -Parent
+    if ($parent) { $null = New-Item -Path $parent -ItemType Directory -Force }
+    Write-BootstrapJsonFile -Path $path -Value $Progress
+}
+
+function Add-BootstrapCompletedComponent {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $progress = Get-BootstrapPersistedProgress
+    if (-not $progress.ContainsKey('completed')) {
+        $progress['completed'] = @{}
+    }
+    $progress['completed'][$Name] = (Get-Date).ToString('o')
+    Save-BootstrapPersistedProgress -Progress $progress
+}
+
+function Test-BootstrapComponentPersistedComplete {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    if (-not $env:BOOTSTRAP_RESUME) { return $false }
+    if ($env:BOOTSTRAP_RESUME -ne '1') { return $false }
+    $progress = Get-BootstrapPersistedProgress
+    if (-not ($progress -is [hashtable])) { return $false }
+    if (-not $progress.ContainsKey('completed')) { return $false }
+    $completed = $progress['completed']
+    if (-not ($completed -is [hashtable])) { return $false }
+    return $completed.ContainsKey($Name)
+}
+
+function Reset-BootstrapPersistedProgress {
+    $path = Get-BootstrapProgressPath
+    if (Test-Path $path) {
+        Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-BootstrapSteamDeckSettingsPath {
     return (Join-Path (Get-BootstrapDataRoot) 'steamdeck-settings.json')
 }
@@ -2037,8 +2353,10 @@ function Get-BootstrapResolvedSteamDeckVersion {
         return $RequestedVersion.ToLowerInvariant()
     }
 
+    if ($env:BOOTSTRAP_SKIP_HARDWARE_DETECT -eq '1') { return 'lcd' }
+
     try {
-        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -OperationTimeoutSec 4 -ErrorAction Stop
         $manufacturer = [string]$computerSystem.Manufacturer
         $model = [string]$computerSystem.Model
         if ($manufacturer -match 'Valve') {
@@ -2049,7 +2367,7 @@ function Get-BootstrapResolvedSteamDeckVersion {
     }
 
     try {
-        $display = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop | Select-Object -First 1
+        $display = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -OperationTimeoutSec 4 -ErrorAction Stop | Select-Object -First 1
         if ($display) {
             $manufacturer = -join ($display.ManufacturerName | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ })
             $product = -join ($display.UserFriendlyName | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ })
@@ -2366,7 +2684,11 @@ function Get-BootstrapUsesSteamDeckFlow {
     return $false
 }
 
+$script:ComponentCatalogCache = $null
+$script:ProfileCatalogCache = $null
+
 function Get-BootstrapComponentCatalog {
+    if ($null -ne $script:ComponentCatalogCache) { return $script:ComponentCatalogCache }
     $catalog = [ordered]@{}
 
     $catalog['system-core'] = New-BootstrapComponentDefinition -Name 'system-core' -Description 'Base do sistema: log, proxy e winget.' -Optional $false -Kind 'system-core'
@@ -2480,10 +2802,12 @@ function Get-BootstrapComponentCatalog {
     $catalog['jdownloader'] = New-BootstrapComponentDefinition -Name 'jdownloader' -Description 'JDownloader 2.' -DependsOn @('java-core') -Kind 'winget' -Data @{ Id = 'AppWork.JDownloader'; DisplayName = 'JDownloader 2'; AllowFailureWhenNotAdmin = $true }
     $catalog['dualboot-manager'] = New-BootstrapComponentDefinition -Name 'dualboot-manager' -Description 'Dual boot detection, safety guardrails and reboot management.' -DependsOn @('system-core') -Optional $true -Kind 'builtin' -Data @{}
 
+    $script:ComponentCatalogCache = $catalog
     return $catalog
 }
 
 function Get-BootstrapProfileCatalog {
+    if ($null -ne $script:ProfileCatalogCache) { return $script:ProfileCatalogCache }
     $catalog = [ordered]@{}
 
     $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
@@ -2512,6 +2836,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['recommended'] = New-BootstrapProfileDefinition -Name 'recommended' -Description 'Perfis recomendados para sua máquina pessoal.' -Items @('base', 'containers', 'ai', 'creator', 'workspace', 'security', 'social', 'utilities')
     $catalog['full'] = New-BootstrapProfileDefinition -Name 'full' -Description 'Instala tudo.' -Items @('recommended', 'automation', 'game-dev', 'gaming')
 
+    $script:ProfileCatalogCache = $catalog
     return $catalog
 }
 
@@ -2588,8 +2913,11 @@ function Get-BootstrapUiContract {
         profileNames = @($profiles.Keys)
         componentNames = @($components.Keys)
         hostHealthModes = @(Get-BootstrapHostHealthModes)
+        hostHealthDescriptions = (Get-BootstrapHostHealthModeDescriptions)
+        isSteamDeckHardware = (Test-BootstrapIsSteamDeck)
+        diskFreeBytesC = (Get-BootstrapDiskFreeBytes -Drive 'C')
         defaults = [ordered]@{
-            workspaceRoot = 'F:\Steam\Steamapps'
+            workspaceRoot = Get-BootstrapDefaultWorkspaceRoot
             steamDeckVersion = 'Auto'
             uiLanguage = 'pt-BR'
             legacyHostHealth = 'off'
@@ -2839,7 +3167,7 @@ function Invoke-BootstrapInteractiveSelection {
 }
 
 function Get-BootstrapSelection {
-    $profiles = @(Normalize-BootstrapNames -Names $Profile)
+    $profiles = @(Normalize-BootstrapNames -Names $ProfileName)
     $components = @(Normalize-BootstrapNames -Names $Component)
     $excludes = @(Normalize-BootstrapNames -Names $Exclude)
     $selectedHostHealth = Normalize-BootstrapHostHealthMode -Mode $HostHealth
@@ -3057,13 +3385,25 @@ function Ensure-BootstrapSteamDeckToolsRuntime {
         }
     }
 
-    $downloadUrl = 'https://github.com/ayufan/steam-deck-tools/releases/download/0.7.3/SteamDeckTools-0.7.3-portable.zip'
+    $downloadUrl = $null
+    try {
+        $headers = @{ 'User-Agent' = 'phasezero-bootstrap'; 'Accept' = 'application/vnd.github+json' }
+        $release = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri 'https://api.github.com/repos/ayufan/steam-deck-tools/releases/latest' -ErrorAction Stop
+        $asset = @($release.assets) | Where-Object { $_.name -match 'portable\.zip$' } | Select-Object -First 1
+        if ($asset) { $downloadUrl = [string]$asset.browser_download_url }
+    } catch {
+        Write-Log "Falha ao consultar GitHub releases para Steam Deck Tools. $($_.Exception.Message)" 'WARN'
+    }
+    if (-not $downloadUrl) {
+        $downloadUrl = 'https://github.com/ayufan/steam-deck-tools/releases/download/0.7.3/SteamDeckTools-0.7.3-portable.zip'
+    }
+
     $zipPath = Join-Path $env:TEMP ("steamdecktools_{0}.zip" -f ([Guid]::NewGuid().ToString('N')))
     $extractDir = Join-Path $env:TEMP ("steamdecktools_extract_{0}" -f ([Guid]::NewGuid().ToString('N')))
 
     try {
         Write-Log "Baixando Steam Deck Tools portable: $downloadUrl"
-        Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -OutFile $zipPath | Out-Null
+        Invoke-BootstrapDownloadVerified -Url $downloadUrl -Destination $zipPath -ExpectedSha256 $null
         $null = New-Item -Path $extractDir -ItemType Directory -Force
         Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
         $null = New-Item -Path $installRoot -ItemType Directory -Force
@@ -3215,13 +3555,16 @@ function Invoke-BootstrapHostHealthCleanup {
         $windowsOld = 'C:\Windows.old'
         if (Test-Path $windowsOld) {
             $resolvedWindowsOld = (Get-Item -LiteralPath $windowsOld -ErrorAction SilentlyContinue).FullName
-            if ($resolvedWindowsOld -eq $windowsOld) {
+            $allowRemove = $AssumeYes -or ($env:BOOTSTRAP_REMOVE_WINDOWS_OLD -eq '1')
+            if ($resolvedWindowsOld -eq $windowsOld -and $allowRemove) {
                 try {
                     Remove-Item -LiteralPath $windowsOld -Recurse -Force -ErrorAction Stop
                     Write-Log 'HostHealth cleanup: Windows.old removido.'
                 } catch {
                     Write-Log 'HostHealth cleanup: nao foi possivel remover C:\Windows.old.' 'WARN'
                 }
+            } elseif ($resolvedWindowsOld -eq $windowsOld) {
+                Write-Log 'HostHealth cleanup: C:\Windows.old encontrado mas preservado. Use -AssumeYes ou BOOTSTRAP_REMOVE_WINDOWS_OLD=1 para autorizar remocao.' 'WARN'
             }
         }
     } else {
@@ -3443,6 +3786,11 @@ function Invoke-BootstrapComponent {
     )
 
     if ($State.Completed.ContainsKey($Name)) { return }
+    if (Test-BootstrapComponentPersistedComplete -Name $Name) {
+        Write-Log "Componente $Name marcado como concluido em execucao anterior. Pulando (BOOTSTRAP_RESUME=1)."
+        $State.Completed[$Name] = $true
+        return
+    }
 
     $catalog = Get-BootstrapComponentCatalog
     $componentDef = $catalog[$Name]
@@ -3539,6 +3887,9 @@ function Invoke-BootstrapComponent {
 
     Refresh-SessionPath
     $State.Completed[$Name] = $true
+    if ($env:BOOTSTRAP_RESUME -eq '1') {
+        try { Add-BootstrapCompletedComponent -Name $Name } catch { }
+    }
 }
 
 function Get-BootstrapExecutionPlanLines {
@@ -3580,8 +3931,11 @@ function Get-BootstrapExecutionPlanLines {
     $lines.Add(('Excluded components: {0}' -f ($(if (@($Selection.Excludes).Count -gt 0) { @($Selection.Excludes) -join ', ' } else { '-' }))))
     $lines.Add(('Expanded profiles: {0}' -f ($(if (@($Resolution.ExpandedProfiles).Count -gt 0) { @($Resolution.ExpandedProfiles) -join ', ' } else { '-' }))))
     $lines.Add(('Resolved components: {0}' -f ($(if (@($Resolution.ResolvedComponents).Count -gt 0) { @($Resolution.ResolvedComponents) -join ', ' } else { '-' }))))
+    $lines.Add(('Estimated time: {0}' -f (Get-BootstrapEstimatedTimeText -ComponentNames @($Resolution.ResolvedComponents))))
     $lines.Add(('WorkspaceRoot: {0}' -f $ResolvedWorkspaceRoot))
     $lines.Add(('CloneBaseDir: {0}' -f $ResolvedCloneBaseDir))
+    $diskFree = Get-BootstrapDiskFreeBytes -Drive 'C'
+    $lines.Add(('Disk free C:: {0}' -f (Get-BootstrapFreeBytesFormatted -Bytes $diskFree)))
     $lines.Add(('Host health mode: {0}' -f $ResolvedHostHealthMode))
 
     if ($usesSteamDeckFlow) {
@@ -3648,6 +4002,69 @@ function Show-BootstrapExecutionPlan {
     }
 }
 
+function Get-BootstrapPreflightChecks {
+    param(
+        [Parameter(Mandatory = $true)]$Resolution,
+        [Parameter(Mandatory = $true)][string]$ResolvedHostHealthMode,
+        [string[]]$AdminReasons = @()
+    )
+    $checks = New-Object System.Collections.Generic.List[object]
+    $isAdmin = Test-IsAdmin
+    $checks.Add(@{
+        Id = 'admin'
+        Severity = if (-not $isAdmin -and (@($AdminReasons).Count -gt 0)) { 'warning' } else { 'info' }
+        Title = if ($isAdmin) { 'Administrador disponivel' } else { 'Sem privilegios elevados' }
+        Detail = if ((@($AdminReasons).Count -gt 0) -and -not $isAdmin) {
+            'Etapas que pedem elevacao serao puladas ou tentarao re-execucao com UAC. Reabrir como Administrador para fluxo completo.'
+        } elseif ($isAdmin) {
+            'Sessao com privilegios completos.'
+        } else {
+            'Nenhum componente exigiu elevacao explicitamente.'
+        }
+    }) | Out-Null
+
+    $diskFree = Get-BootstrapDiskFreeBytes -Drive 'C'
+    $minBytes = 8GB
+    $sevDisk = if ($null -eq $diskFree) { 'warning' } elseif ($diskFree -lt $minBytes) { 'error' } else { 'ok' }
+    $checks.Add(@{
+        Id = 'disk-c-free'
+        Severity = $sevDisk
+        Title = ('Espaco livre em C:: {0}' -f (Get-BootstrapFreeBytesFormatted -Bytes $diskFree))
+        Detail = if ($sevDisk -eq 'error') { 'Recomendado >= 8 GB livres em C: antes de instalar SDKs/Docker.' } else { 'Espaco em C: ok.' }
+    }) | Out-Null
+
+    $eta = Get-BootstrapEstimatedTimeText -ComponentNames @($Resolution.ResolvedComponents)
+    $checks.Add(@{
+        Id = 'eta'
+        Severity = 'info'
+        Title = ('Tempo estimado: {0}' -f $eta)
+        Detail = 'Baseado em medias por tipo de componente (winget, npm, uv, downloads).'
+    }) | Out-Null
+
+    if ($ResolvedHostHealthMode -eq 'agressivo') {
+        $checks.Add(@{
+            Id = 'hosthealth-aggressive'
+            Severity = 'warning'
+            Title = 'HostHealth agressivo selecionado'
+            Detail = 'Removera apps Microsoft, ajustara servicos. Veja descricao do modo antes de prosseguir.'
+        }) | Out-Null
+    }
+
+    if (Test-BootstrapIsDualBoot) {
+        $fastStartup = Get-BootstrapFastStartupStatus
+        if ($fastStartup.Enabled) {
+            $checks.Add(@{
+                Id = 'fast-startup'
+                Severity = 'warning'
+                Title = 'Fast Startup habilitado em sistema dual-boot'
+                Detail = 'Pode corromper particoes Linux. Use a aba Dual Boot para desabilitar antes do run.'
+            }) | Out-Null
+        }
+    }
+
+    return @($checks.ToArray())
+}
+
 function Get-BootstrapPreviewData {
     param(
         [string[]]$SelectedProfiles = @(),
@@ -3655,12 +4072,12 @@ function Get-BootstrapPreviewData {
         [string[]]$ExcludedComponents = @(),
         [string]$RequestedSteamDeckVersion = 'Auto',
         [AllowNull()][string]$RequestedHostHealthMode = $null,
-        [string]$RequestedWorkspaceRoot = 'F:\Steam\Steamapps',
+        [string]$RequestedWorkspaceRoot = '',
         [string]$ExplicitCloneBaseDir = ''
     )
 
     $selection = New-BootstrapSelectionObject -SelectedProfiles $SelectedProfiles -SelectedComponents $SelectedComponents -ExcludedComponents $ExcludedComponents -SelectedHostHealth $RequestedHostHealthMode
-    $resolvedWorkspaceRoot = if ([string]::IsNullOrWhiteSpace($RequestedWorkspaceRoot)) { 'F:\Steam\Steamapps' } else { $RequestedWorkspaceRoot }
+    $resolvedWorkspaceRoot = if ([string]::IsNullOrWhiteSpace($RequestedWorkspaceRoot)) { Get-BootstrapDefaultWorkspaceRoot } else { $RequestedWorkspaceRoot }
     $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents $selection.Excludes
     $resolvedCloneBaseDir = Resolve-BootstrapCloneBaseDir -ExplicitCloneBaseDir $ExplicitCloneBaseDir -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedComponents $resolution.ResolvedComponents
     $usesSteamDeckFlow = Get-BootstrapUsesSteamDeckFlow -Selection $selection -Resolution $resolution
@@ -3668,6 +4085,7 @@ function Get-BootstrapPreviewData {
     $resolvedHostHealthMode = if ($selection.HostHealth) { $selection.HostHealth } else { Get-BootstrapDefaultHostHealthMode -Selection $selection -Resolution $resolution }
     $adminReasons = Get-BootstrapAdminReasons -Resolution $resolution -ResolvedHostHealthMode $resolvedHostHealthMode -UsesSteamDeckFlow:$usesSteamDeckFlow
     $planLines = Get-BootstrapExecutionPlanLines -Selection $selection -Resolution $resolution -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -ResolvedHostHealthMode $resolvedHostHealthMode
+    $preflight = Get-BootstrapPreflightChecks -Resolution $resolution -ResolvedHostHealthMode $resolvedHostHealthMode -AdminReasons $adminReasons
 
     return [ordered]@{
         Selection = $selection
@@ -3678,6 +4096,10 @@ function Get-BootstrapPreviewData {
         ResolvedWorkspaceRoot = $resolvedWorkspaceRoot
         ResolvedCloneBaseDir = $resolvedCloneBaseDir
         AdminReasons = @($adminReasons)
+        Preflight = @($preflight)
+        EstimatedTime = (Get-BootstrapEstimatedTimeText -ComponentNames @($resolution.ResolvedComponents))
+        DiskFreeBytes = (Get-BootstrapDiskFreeBytes -Drive 'C')
+        IsAdmin = (Test-IsAdmin)
         PlanLines = @($planLines)
         PlanText = ($planLines -join [Environment]::NewLine)
     }
@@ -3720,7 +4142,7 @@ function Invoke-BootstrapProfileMode {
     }
 
     $resolvedWorkspaceRoot = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
-        'F:\Steam\Steamapps'
+        Get-BootstrapDefaultWorkspaceRoot
     } else {
         $WorkspaceRoot
     }
@@ -3820,6 +4242,17 @@ function Invoke-BootstrapProfileMode {
                 Write-Log ("{0}: NAO ENCONTRADO ({1})" -f $tool.Name, $tool.Path) 'WARN'
             }
         }
+
+        $codexCmd = Join-Path $state.NodeInfo.NpmBin 'codex.cmd'
+        $codexPath = Resolve-CommandPath -Name 'codex'
+        if ($codexPath) {
+            $ext = ([IO.Path]::GetExtension($codexPath)).ToLowerInvariant()
+            if (($ext -eq '.exe') -and (-not (Test-Path $codexCmd))) {
+                Write-Log "codex (PATH) aponta para um .exe ($codexPath). Se o Codex Desktop estiver crashando, priorize o codex.cmd do npm para CLI e ajuste o config.toml do app." 'WARN'
+            } else {
+                Write-Log "codex (PATH): $codexPath"
+            }
+        }
     }
 
     $repoDir = Join-Path $resolvedCloneBaseDir 'gemini-cli'
@@ -3830,20 +4263,6 @@ function Invoke-BootstrapProfileMode {
     Write-Log "Log salvo em: $script:LogPath"
 }
 
-$useBootstrapProfileMode = (
-    $UiContractJson -or
-    $ListProfiles -or
-    $ListHostHealthModes -or
-    $ListComponents -or
-    $DryRun -or
-    $Interactive -or
-    $NonInteractive -or
-    [string]::IsNullOrWhiteSpace($HostHealth) -eq $false -or
-    (@($Profile).Count -gt 0) -or
-    (@($Component).Count -gt 0) -or
-    (@($Exclude).Count -gt 0)
-)
-
 if ($UiContractJson) {
     (Get-BootstrapUiContract | ConvertTo-Json -Depth 12)
     return
@@ -3853,11 +4272,12 @@ if ($BootstrapUiLibraryMode) {
     return
 }
 
-if ($useBootstrapProfileMode) {
+$script:BootstrapExitCode = 0
+try {
     try {
         Invoke-BootstrapProfileMode
-        exit 0
     } catch {
+        $script:BootstrapExitCode = 1
         if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
             Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
                 status = 'error'
@@ -3869,175 +4289,8 @@ if ($useBootstrapProfileMode) {
         }
         Write-Log $_.Exception.Message 'ERROR'
         Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-        exit 1
     }
+} finally {
+    Close-BootstrapLogWriter
 }
-
-try {
-    Write-Log "Início: $($script:StartTime.ToString('s'))"
-    Write-Log "Log: $script:LogPath"
-    Write-Log "Admin: $(Test-IsAdmin)"
-    Ensure-ProxyEnvFromWinHttp
-
-    $winget = Ensure-Winget
-    Refresh-SessionPath
-
-    $gitInfo = Ensure-GitAndBash -WingetPath $winget
-    Refresh-SessionPath
-
-    $nodeInfo = Ensure-NodeAndNpm -WingetPath $winget
-    Refresh-SessionPath
-
-    Ensure-WingetPackage -WingetPath $winget -Id 'EclipseAdoptium.Temurin.17.JDK' -DisplayName 'Java JDK (Temurin 17)'
-    Ensure-WingetPackage -WingetPath $winget -Id 'ImageMagick.ImageMagick' -DisplayName 'ImageMagick'
-    Ensure-WingetPackage -WingetPath $winget -Id '7zip.7zip' -DisplayName '7-Zip' -AllowFailureWhenNotAdmin $true
-    $sevenZipDir = $null
-    try { $sevenZipDir = Join-Path $env:ProgramFiles '7-Zip' } catch { $sevenZipDir = $null }
-    if ($sevenZipDir -and (Test-Path $sevenZipDir)) {
-        Ensure-PathUserContains -Dir $sevenZipDir
-        Refresh-SessionPath
-    }
-    Ensure-Python -WingetPath $winget
-    Refresh-SessionPath
-
-    Ensure-OpenCode -BashPath $gitInfo.Bash
-    Refresh-SessionPath
-
-    Ensure-ClaudeCode -WingetPath $winget
-    Refresh-SessionPath
-
-    Ensure-WingetPackage -WingetPath $winget -Id 'GitHub.cli' -DisplayName 'GitHub CLI (gh)'
-    Refresh-SessionPath
-
-    Ensure-WingetPackage -WingetPath $winget -Id 'Google.Chrome' -DisplayName 'ChromeSetup (Google Chrome)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Notepad++.Notepad++' -DisplayName 'Notepad++' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Anthropic.Claude' -DisplayName 'Claude Setup (Claude Desktop)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Anysphere.Cursor' -DisplayName 'CursorUserSetup (Cursor)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Codeium.Windsurf' -DisplayName 'WindsurfUserSetup (Windsurf)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Warp.Warp' -DisplayName 'WarpSetup (Warp)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'ByteDance.Trae' -DisplayName 'Trae-Setup (Trae)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'SST.OpenCodeDesktop' -DisplayName 'opencode-desktop-windows (OpenCode Desktop)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Microsoft.VisualStudioCode.Insiders' -DisplayName 'Visual Studio Code - Insiders' -AllowFailureWhenNotAdmin $true
-    Ensure-WslUi -WingetPath $winget
-    Ensure-WingetPackage -WingetPath $winget -Id 'Google.Antigravity' -DisplayName 'Antigravity.exe' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'ZhipuAI.AutoClaw' -DisplayName 'autoclaw (AutoClaw)' -AllowFailureWhenNotAdmin $true
-    Ensure-WingetPackage -WingetPath $winget -Id 'Perplexity.Comet' -DisplayName 'Perplexity (Comet)' -AllowFailureWhenNotAdmin $true
-    Ensure-CodexInstaller -WingetPath $winget
-    Refresh-SessionPath
-
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@google/gemini-cli' -DisplayName 'Gemini CLI (@google/gemini-cli)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@bonsai-ai/cli' -DisplayName 'Bonsai CLI (@bonsai-ai/cli)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@vibe-kit/grok-cli' -DisplayName 'Grok CLI (@vibe-kit/grok-cli)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@qwen-code/qwen-code@latest' -DisplayName 'Qwen Code (@qwen-code/qwen-code)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@github/copilot' -DisplayName 'GitHub Copilot CLI (@github/copilot)'
-    Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@openai/codex' -DisplayName 'OpenAI Codex CLI (@openai/codex)'
-    Ensure-OpenClaw -NpmCmd $nodeInfo.NpmCmd
-    Refresh-SessionPath
-
-    Ensure-ClaudeCodeDefaults -GitBashPath $gitInfo.Bash
-    Refresh-SessionPath
-
-    Ensure-ClaudeHookConfigsHealthy -GitBashPath $gitInfo.Bash
-    Refresh-SessionPath
-
-    Ensure-Aider
-    Refresh-SessionPath
-
-    Ensure-Goose -BashPath $gitInfo.Bash
-    Refresh-SessionPath
-
-    $repoDir = Join-Path $CloneBaseDir 'gemini-cli'
-    Ensure-RepoClone -GitExe $gitInfo.Git -RepoUrl 'https://github.com/heartyguy/gemini-cli' -TargetDir $repoDir
-
-    $opencodeExe = Join-Path (Join-Path $env:USERPROFILE '.opencode\bin') 'opencode.exe'
-    $geminiCmd = Join-Path $nodeInfo.NpmBin 'gemini.cmd'
-    $bonsaiCmd = Join-Path $nodeInfo.NpmBin 'bonsai.cmd'
-    $grokCmd = Join-Path $nodeInfo.NpmBin 'grok.cmd'
-    $qwenCmd = Join-Path $nodeInfo.NpmBin 'qwen.cmd'
-    $copilotCmd = Join-Path $nodeInfo.NpmBin 'copilot.cmd'
-    $codexCmd = Join-Path $nodeInfo.NpmBin 'codex.cmd'
-    $openclawCmd = Join-Path $nodeInfo.NpmBin 'openclaw.cmd'
-
-    Write-Log 'Resumo:'
-    Write-Log "CLAUDE_CODE_GIT_BASH_PATH: $([Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH','User'))"
-    Write-Log "git: $(& $gitInfo.Git --version)"
-    Write-Log "node: $(& $nodeInfo.Node -v)"
-    Write-Log "npm: $(& $nodeInfo.NpmCmd --version)"
-    $javaExe = Resolve-CommandPath -Name 'java'
-    if ($javaExe) { Write-Log "java: $(Invoke-NativeFirstLine -Exe $javaExe -Args @('-version'))" } else { Write-Log 'java: NÃO ENCONTRADO' 'WARN' }
-    $magickExe = Resolve-CommandPath -Name 'magick'
-    if ($magickExe) { Write-Log "magick: $(Invoke-NativeFirstLine -Exe $magickExe -Args @('-version'))" } else { Write-Log 'magick: NÃO ENCONTRADO' 'WARN' }
-    $sevenZipExe = Resolve-CommandPath -Name '7z'
-    if ($sevenZipExe) { Write-Log "7z: $(Invoke-NativeFirstLine -Exe $sevenZipExe -Args @()) ($sevenZipExe)" } else { Write-Log '7z: NÃO ENCONTRADO' 'WARN' }
-    $pythonExe = Resolve-CommandPath -Name 'python'
-    if ($pythonExe) { Write-Log "python: $(Invoke-NativeFirstLine -Exe $pythonExe -Args @('--version')) ($pythonExe)" } else { Write-Log 'python: NÃO ENCONTRADO' 'WARN' }
-    $pipExe = Resolve-CommandPath -Name 'pip'
-    if ($pipExe) { Write-Log "pip: $(Invoke-NativeFirstLine -Exe $pipExe -Args @('--version')) ($pipExe)" } else { Write-Log 'pip: NÃO ENCONTRADO' 'WARN' }
-    $claudeExe = Resolve-CommandPath -Name 'claude'
-    if ($claudeExe) { Write-Log "claude: $(Invoke-NativeFirstLine -Exe $claudeExe -Args @('--version')) ($claudeExe)" } else { Write-Log 'claude: NÃO ENCONTRADO' 'WARN' }
-    $ghExe = Resolve-CommandPath -Name 'gh'
-    if ($ghExe) { Write-Log "gh: $(Invoke-NativeFirstLine -Exe $ghExe -Args @('--version')) ($ghExe)" } else { Write-Log 'gh: NÃO ENCONTRADO' 'WARN' }
-    if (Test-Path $opencodeExe) { Write-Log "opencode: $(& $opencodeExe --version) ($opencodeExe)" } else { Write-Log "opencode: NÃO ENCONTRADO ($opencodeExe)" 'WARN' }
-    if (Test-Path $geminiCmd) { Write-Log "gemini: $(& $geminiCmd --version) ($geminiCmd)" } else { Write-Log "gemini: NÃO ENCONTRADO ($geminiCmd)" 'WARN' }
-    if (Test-Path $bonsaiCmd) { Write-Log "bonsai: instalado ($bonsaiCmd)" } else { Write-Log "bonsai: NÃO ENCONTRADO ($bonsaiCmd)" 'WARN' }
-    if (Test-Path $grokCmd) { Write-Log "grok: $(& $grokCmd --version) ($grokCmd)" } else { Write-Log "grok: NÃO ENCONTRADO ($grokCmd)" 'WARN' }
-    if (Test-Path $qwenCmd) { Write-Log "qwen: $(Invoke-NativeFirstLine -Exe $qwenCmd -Args @('--version')) ($qwenCmd)" } else { Write-Log "qwen: NÃO ENCONTRADO ($qwenCmd)" 'WARN' }
-    if (Test-Path $copilotCmd) { Write-Log "copilot: $(Invoke-NativeFirstLine -Exe $copilotCmd -Args @('--version')) ($copilotCmd)" } else { Write-Log "copilot: NÃO ENCONTRADO ($copilotCmd)" 'WARN' }
-    if (Test-Path $codexCmd) { Write-Log "codex: $(Invoke-NativeFirstLine -Exe $codexCmd -Args @('--version')) ($codexCmd)" } else { Write-Log "codex: NÃO ENCONTRADO ($codexCmd)" 'WARN' }
-    $codexPath = Resolve-CommandPath -Name 'codex'
-    if ($codexPath) {
-        $ext = ([IO.Path]::GetExtension($codexPath)).ToLowerInvariant()
-        if (($ext -eq '.exe') -and (-not (Test-Path $codexCmd))) {
-            Write-Log "codex (PATH) aponta para um .exe ($codexPath). Se o Codex Desktop estiver crashando, priorize o codex.cmd do npm para CLI e ajuste o config.toml do app." 'WARN'
-        } else {
-            Write-Log "codex (PATH): $codexPath"
-        }
-    }
-    if (Test-Path $openclawCmd) { Write-Log "openclaw: $(& $openclawCmd --version) ($openclawCmd)" } else { Write-Log "openclaw: NÃO ENCONTRADO ($openclawCmd)" 'WARN' }
-    $aiderExe = Resolve-CommandPath -Name 'aider'
-    if ($aiderExe) { Write-Log "aider: $(Invoke-NativeFirstLine -Exe $aiderExe -Args @('--version')) ($aiderExe)" } else { Write-Log 'aider: NÃO ENCONTRADO' 'WARN' }
-    $gooseExe = Resolve-CommandPath -Name 'goose'
-    if ($gooseExe) { Write-Log "goose: $(Invoke-NativeFirstLine -Exe $gooseExe -Args @('--version')) ($gooseExe)" } else { Write-Log 'goose: NÃO ENCONTRADO' 'WARN' }
-    $desktopWinget = @(
-        @{ Name = 'ChromeSetup'; Id = 'Google.Chrome' },
-        @{ Name = 'Notepad++'; Id = 'Notepad++.Notepad++' },
-        @{ Name = 'Claude Setup'; Id = 'Anthropic.Claude' },
-        @{ Name = 'CursorUserSetup'; Id = 'Anysphere.Cursor' },
-        @{ Name = 'WindsurfUserSetup'; Id = 'Codeium.Windsurf' },
-        @{ Name = 'WarpSetup'; Id = 'Warp.Warp' },
-        @{ Name = 'Trae-Setup'; Id = 'ByteDance.Trae' },
-        @{ Name = 'opencode-desktop-windows'; Id = 'SST.OpenCodeDesktop' },
-        @{ Name = 'Visual Studio Code - Insiders'; Id = 'Microsoft.VisualStudioCode.Insiders' },
-        @{ Name = 'WSL UI'; Id = 'OctasoftLtd.WSLUI' },
-        @{ Name = 'Antigravity.exe'; Id = 'Google.Antigravity' },
-        @{ Name = 'autoclaw'; Id = 'ZhipuAI.AutoClaw' },
-        @{ Name = 'Perplexity'; Id = 'Perplexity.Comet' },
-        @{ Name = 'Codex Installer'; Id = 'OpenAI.Codex' }
-    )
-    foreach ($app in $desktopWinget) {
-        $ok = Test-WingetPackageInstalled -WingetPath $winget -Id $app.Id
-        if ($ok) {
-            Write-Log ("desktop: {0} (winget: {1})" -f $app.Name, $app.Id)
-        } else {
-            Write-Log ("desktop: {0} NÃO ENCONTRADO (winget: {1})" -f $app.Name, $app.Id) 'WARN'
-        }
-    }
-    Write-Log "repo gemini-cli: $repoDir (exists=$(Test-Path $repoDir))"
-
-    $elapsed = New-TimeSpan -Start $script:StartTime -End (Get-Date)
-    Write-Log ("Concluído em {0:c}" -f $elapsed)
-    Write-Log "Log salvo em: $script:LogPath"
-} catch {
-    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-            status = 'error'
-            generatedAt = (Get-Date).ToString('o')
-            logPath = $script:LogPath
-            resultPath = $script:ResultPath
-            error = $_.Exception.Message
-        })
-    }
-    Write-Log $_.Exception.Message 'ERROR'
-    Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-    exit 1
-}
+exit $script:BootstrapExitCode

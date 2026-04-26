@@ -24,6 +24,9 @@ function Invoke-Bootstrap {
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.CreateNoWindow = $true
+    if (-not $startInfo.EnvironmentVariables.ContainsKey('BOOTSTRAP_SKIP_HARDWARE_DETECT')) {
+        $startInfo.EnvironmentVariables.Add('BOOTSTRAP_SKIP_HARDWARE_DETECT', '1')
+    }
 
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $startInfo
@@ -35,9 +38,9 @@ function Invoke-Bootstrap {
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
 
-    if (-not $process.WaitForExit(30000)) {
+    if (-not $process.WaitForExit(60000)) {
         try { $process.Kill() } catch { }
-        throw "Bootstrap invocation timed out after 30000ms for args: $($CommandArgs -join ' ')"
+        throw "Bootstrap invocation timed out after 60000ms for args: $($CommandArgs -join ' ')"
     }
 
     $stdout = $stdoutTask.Result

@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pwsh-tests:
+    name: PowerShell tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PowerShell version
+        shell: pwsh
+        run: $PSVersionTable
+
+      - name: Lint scripts
+        shell: pwsh
+        run: |
+          $errors = @()
+          foreach ($f in Get-ChildItem -Recurse -Include *.ps1) {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors -and $parseErrors.Count -gt 0) {
+              foreach ($err in $parseErrors) { $errors += "$($f.FullName):$($err.Extent.StartLineNumber): $($err.Message)" }
+            }
+          }
+          if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 }
+          Write-Host "Parse OK"
+
+      - name: Profiles tests
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/bootstrap-tools.profiles.tests.ps1
+
+      - name: UI smoke tests
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/bootstrap-ui.tests.ps1
+
+      - name: SteamDeck mode-detection tests
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/steamdeck.mode-detection.tests.ps1
+
+      - name: Dual-boot module tests
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/bootstrap-tools.dualboot.tests.ps1
+
+      - name: HostHealth policy tests
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/bootstrap-tools.hosthealth.tests.ps1
+
+      - name: Hook conversion tests
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/bootstrap-tools.hooks.tests.ps1
