@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$UiStatePath = (Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'ui-state.json'),
     [switch]$SmokeTest
 )
@@ -67,7 +67,8 @@ function Get-UiStrings {
                 RefreshReview      = 'Refresh Review'
                 ReviewSummary      = 'Preview equivalent to dry-run'
                 RunTitle           = 'Run'
-                StartRun           = '>  Start Execution'
+                StartRun           = '▶  Start Execution'
+                CancelRun          = '⏹  Cancel Execution'
                 OpenLog            = 'Open Log'
                 OpenResult         = 'Open Result'
                 OpenSettings       = 'Open Settings'
@@ -77,9 +78,10 @@ function Get-UiStrings {
                 RunStarted         = 'Execution started.'
                 RunCompleted       = 'Execution completed.'
                 RunFailed          = 'Execution failed.'
+                RunCanceled        = 'Execution canceled by user.'
                 UserCanceledElevation = 'Execution canceled or elevation denied.'
-                Back               = '<- Back'
-                Next               = 'Next ->'
+                Back               = '← Back'
+                Next               = 'Next →'
                 Finish             = 'Close'
                 Welcome            = 'Welcome'
                 Selection          = 'Selection'
@@ -94,15 +96,23 @@ function Get-UiStrings {
                 SessionHandheld    = 'HANDHELD'
                 SessionDockedTv    = 'DOCKED_TV'
                 SessionDockedMonitor = 'DOCKED_MONITOR'
+                DryRun             = 'Dry-run (preview only)'
+                EtaLabel           = 'Estimated time'
+                DiskFreeLabel      = 'Free disk'
+                AdminLabel         = 'Privileges'
+                AdminElevated      = 'Administrator'
+                AdminNotElevated   = 'Not elevated'
+                Progress           = 'Progress'
+                StepOf             = 'Step {0} of {1}'
             }
         }
         default {
             return @{
                 WindowTitle        = 'Central Bootstrap Tools'
                 WelcomeTitle       = 'Bootstrap Tools + Steam Deck'
-                WelcomeSubtitle    = 'Setup simples do host, controle do Steam Deck e manuteno ps-instalao.'
+                WelcomeSubtitle    = 'Setup simples do host, controle do Steam Deck e manutenção pós-instalação.'
                 Language           = 'Idioma'
-                QuickPresets       = 'Presets Rpidos'
+                QuickPresets       = 'Presets Rápidos'
                 CustomPresets      = 'Presets Personalizados'
                 PresetName         = 'Nome do preset'
                 SavePreset         = 'Salvar preset'
@@ -112,15 +122,15 @@ function Get-UiStrings {
                 Filter             = 'Filtro'
                 Profiles           = 'Perfis'
                 Components         = 'Componentes'
-                Excludes           = 'Excluses Opcionais'
-                SelectionDetails   = 'Detalhes da Seleo'
-                HostSetupTitle     = 'Configurao do Host'
+                Excludes           = 'Exclusões Opcionais'
+                SelectionDetails   = 'Detalhes da Seleção'
+                HostSetupTitle     = 'Configuração do Host'
                 HostHealth         = 'HostHealth'
-                SteamDeckVersion   = 'Verso do Steam Deck'
+                SteamDeckVersion   = 'Versão do Steam Deck'
                 WorkspaceRoot      = 'Workspace Root'
-                CloneBaseDir       = 'Diretrio Base de Clones'
+                CloneBaseDir       = 'Diretório Base de Clones'
                 Browse             = 'Selecionar'
-                AdminNeeds         = 'Reviso de Admin'
+                AdminNeeds         = 'Revisão de Admin'
                 SteamDeckCenterTitle = 'Central Steam Deck'
                 MonitorProfiles    = 'Monitor Profiles'
                 MonitorFamilies    = 'Monitor Families'
@@ -130,37 +140,47 @@ function Get-UiStrings {
                 SaveSettings       = 'Salvar Settings'
                 ReloadSettings     = 'Recarregar Settings'
                 UnknownMonitorHint = 'Monitores externos desconhecidos sempre caem em genericExternal.'
-                ReviewTitle        = 'Reviso'
-                RefreshReview      = 'Atualizar Reviso'
+                ReviewTitle        = 'Revisão'
+                RefreshReview      = 'Atualizar Revisão'
                 ReviewSummary      = 'Preview equivalente ao dry-run'
-                RunTitle           = 'Execuo'
-                StartRun           = '>  Iniciar Execuo'
+                RunTitle           = 'Execução'
+                StartRun           = '▶  Iniciar Execução'
+                CancelRun          = '⏹  Cancelar Execução'
                 OpenLog            = 'Abrir Log'
                 OpenResult         = 'Abrir Resultado'
                 OpenSettings       = 'Abrir Settings'
-                OpenReports        = 'Abrir Relatrios'
+                OpenReports        = 'Abrir Relatórios'
                 IdleStatus         = 'Pronto.'
                 SavingSettings     = 'Settings salvos.'
-                RunStarted         = 'Execuo iniciada.'
-                RunCompleted       = 'Execuo concluda.'
-                RunFailed          = 'Execuo falhou.'
-                UserCanceledElevation = 'Execuo cancelada ou elevao negada.'
-                Back               = '<- Voltar'
-                Next               = 'Avanar ->'
+                RunStarted         = 'Execução iniciada.'
+                RunCompleted       = 'Execução concluída.'
+                RunFailed          = 'Execução falhou.'
+                RunCanceled        = 'Execução cancelada pelo usuário.'
+                UserCanceledElevation = 'Execução cancelada ou elevação negada.'
+                Back               = '← Voltar'
+                Next               = 'Avançar →'
                 Finish             = 'Fechar'
-                Welcome            = 'Incio'
-                Selection          = 'Seleo'
+                Welcome            = 'Início'
+                Selection          = 'Seleção'
                 HostSetup          = 'Host Setup'
                 SteamDeckControl   = 'Steam Deck'
                 DualBoot           = 'Dual Boot'
-                Review             = 'Reviso'
-                Run                = 'Execuo'
+                Review             = 'Revisão'
+                Run                = 'Execução'
                 GenericMode        = 'Modo'
                 GenericLayout      = 'Layout'
-                GenericResolution  = 'Resoluo'
+                GenericResolution  = 'Resolução'
                 SessionHandheld    = 'HANDHELD'
                 SessionDockedTv    = 'DOCKED_TV'
                 SessionDockedMonitor = 'DOCKED_MONITOR'
+                DryRun             = 'Dry-run (somente preview)'
+                EtaLabel           = 'Tempo estimado'
+                DiskFreeLabel      = 'Espaço livre'
+                AdminLabel         = 'Privilégios'
+                AdminElevated      = 'Administrador'
+                AdminNotElevated   = 'Sem elevação'
+                Progress           = 'Progresso'
+                StepOf             = 'Etapa {0} de {1}'
             }
         }
     }
@@ -224,12 +244,48 @@ function Read-UiState {
     return (Normalize-UiState -State $current -Contract $Contract)
 }
 
-function Save-UiState {
+$script:UiSaveStateTimer = $null
+$script:UiSaveStateState  = $null
+$script:UiSaveStatePath   = $null
+
+function Save-UiStateImmediate {
     param(
         [Parameter(Mandatory = $true)]$State,
         [Parameter(Mandatory = $true)][string]$Path
     )
     Write-BootstrapJsonFile -Path $Path -Value (ConvertTo-BootstrapHashtable -InputObject $State)
+}
+
+function Save-UiState {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+    $script:UiSaveStateState = $State
+    $script:UiSaveStatePath  = $Path
+    if (-not $script:UiSaveStateTimer) {
+        $script:UiSaveStateTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $script:UiSaveStateTimer.Interval = [TimeSpan]::FromMilliseconds(400)
+        $script:UiSaveStateTimer.Add_Tick({
+            $script:UiSaveStateTimer.Stop()
+            if ($script:UiSaveStateState -and $script:UiSaveStatePath) {
+                try {
+                    Save-UiStateImmediate -State $script:UiSaveStateState -Path $script:UiSaveStatePath
+                } catch { }
+            }
+        })
+    }
+    $script:UiSaveStateTimer.Stop()
+    $script:UiSaveStateTimer.Start()
+}
+
+function Flush-UiState {
+    if ($script:UiSaveStateTimer -and $script:UiSaveStateTimer.IsEnabled) {
+        $script:UiSaveStateTimer.Stop()
+        if ($script:UiSaveStateState -and $script:UiSaveStatePath) {
+            Save-UiStateImmediate -State $script:UiSaveStateState -Path $script:UiSaveStatePath
+        }
+    }
 }
 
 # 
@@ -240,7 +296,7 @@ $contract = Get-BootstrapUiContract
 $state    = Read-UiState -Path $UiStatePath -Contract $contract
 
 if ($SmokeTest) {
-    Save-UiState -State $state -Path $UiStatePath
+    Save-UiStateImmediate -State $state -Path $UiStatePath
     [ordered]@{
         pages    = @(Get-UiPageIds)
         languages = @(Get-UiLanguages)
@@ -597,18 +653,18 @@ Add-Type -AssemblyName System.Drawing
                     <ToggleButton x:Name="NavWelcome"      Style="{StaticResource NavBtn}" IsChecked="True">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavWelcomeText" Text="Incio" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="NavWelcomeText" Text="Início" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavSelection"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavSelectionText" Text="Seleo" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="NavSelectionText" Text="Seleção" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavHostSetup"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="[gear]" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="⚙" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavHostSetupText" Text="Host Setup" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
@@ -627,13 +683,13 @@ Add-Type -AssemblyName System.Drawing
                     <ToggleButton x:Name="NavReview"       Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavReviewText" Text="Reviso" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="NavReviewText" Text="Revisão" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavRun"          Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text=">" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavRunText" Text="Execuo" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="NavRunText" Text="Execução" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                 </StackPanel>
@@ -641,7 +697,7 @@ Add-Type -AssemblyName System.Drawing
                 <!-- Bottom nav actions -->
                 <StackPanel DockPanel.Dock="Bottom" Margin="12,16">
                     <Button x:Name="BackButton"   Style="{StaticResource GhostBtn}" Content="<- Voltar"  Margin="0,4" Height="34"/>
-                    <Button x:Name="NextButton"   Style="{StaticResource PrimaryBtn}" Content="Avanar ->" Margin="0,4" Height="34"/>
+                    <Button x:Name="NextButton"   Style="{StaticResource PrimaryBtn}" Content="Avançar →" Margin="0,4" Height="34"/>
                     <Button x:Name="FinishButton" Style="{StaticResource GhostBtn}" Content="Fechar"     Margin="0,4" Height="34"/>
                 </StackPanel>
             </DockPanel>
@@ -654,7 +710,7 @@ Add-Type -AssemblyName System.Drawing
             <ScrollViewer x:Name="PageWelcome" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="WelcomeTitleLabel"    Style="{StaticResource PageTitle}"    Text="Bootstrap Tools + Steam Deck"/>
-                    <TextBlock x:Name="WelcomeSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Setup simples do host, controle do Steam Deck e manuteno ps-instalao."
+                    <TextBlock x:Name="WelcomeSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Setup simples do host, controle do Steam Deck e manutenção pós-instalação."
                                TextWrapping="Wrap"/>
 
                     <!-- Language selector -->
@@ -793,7 +849,7 @@ Add-Type -AssemblyName System.Drawing
             <!--  HOST SETUP PAGE  -->
             <ScrollViewer x:Name="PageHostSetup" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
-                    <TextBlock x:Name="HostTitleLabel" Style="{StaticResource PageTitle}" Text="Configurao do Host"/>
+                    <TextBlock x:Name="HostTitleLabel" Style="{StaticResource PageTitle}" Text="Configuração do Host"/>
                     <TextBlock Style="{StaticResource PageSubtitle}" Text="Configuraes de ambiente e sade do sistema." TextWrapping="Wrap"/>
 
                     <Border Style="{StaticResource Card}" Margin="0,0,0,16">
@@ -810,7 +866,7 @@ Add-Type -AssemblyName System.Drawing
 
                             <TextBlock x:Name="HostHealthLabel"       Grid.Row="0" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="HostHealth"/>
                             <ComboBox  x:Name="HostHealthCombo"       Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
-                            <TextBlock x:Name="SteamDeckVersionLabel" Grid.Row="2" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Verso Steam Deck"/>
+                            <TextBlock x:Name="SteamDeckVersionLabel" Grid.Row="2" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Versão Steam Deck"/>
                             <ComboBox  x:Name="SteamDeckVersionCombo" Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
                         </Grid>
                     </Border>
@@ -913,7 +969,7 @@ Add-Type -AssemblyName System.Drawing
                                     <ComboBox  x:Name="GenericModeCombo"       Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
                                     <TextBlock x:Name="GenericLayoutLabel"     Grid.Row="2" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Layout"/>
                                     <TextBox   x:Name="GenericLayoutTextBox"   Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkInput}" Height="32"/>
-                                    <TextBlock x:Name="GenericResolutionLabel" Grid.Row="4" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Resoluo"/>
+                                    <TextBlock x:Name="GenericResolutionLabel" Grid.Row="4" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Resolução"/>
                                     <TextBox   x:Name="GenericResolutionTextBox" Grid.Row="4" Grid.Column="1" Style="{StaticResource DarkInput}" Height="32"/>
                                 </Grid>
                             </StackPanel>
@@ -1026,7 +1082,7 @@ Add-Type -AssemblyName System.Drawing
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0">
-                    <TextBlock x:Name="ReviewTitleLabel" Style="{StaticResource PageTitle}" Text="Reviso"/>
+                    <TextBlock x:Name="ReviewTitleLabel" Style="{StaticResource PageTitle}" Text="Revisão"/>
                 </StackPanel>
 
                 <Border Grid.Row="1" Background="#1A1D2E" CornerRadius="8" Padding="14,10" Margin="0,0,0,14">
@@ -1054,18 +1110,21 @@ Add-Type -AssemblyName System.Drawing
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" x:Name="RunTitleLabel" Style="{StaticResource PageTitle}" Text="Execuo"/>
+                <TextBlock Grid.Row="0" x:Name="RunTitleLabel" Style="{StaticResource PageTitle}" Text="Execução"/>
 
                 <!-- Action bar -->
                 <Border Grid.Row="1" Background="#1A1D2E" CornerRadius="10" Padding="16,12" Margin="0,0,0,16">
                     <DockPanel>
+                        <Button x:Name="CancelRunButton" DockPanel.Dock="Right" Style="{StaticResource GhostBtn}"
+                                Content="⏹ Cancelar" Height="40" Margin="8,0,0,0" IsEnabled="False"/>
                         <Button x:Name="StartRunButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryBtn}"
-                                Content=">  Iniciar Execuo" FontSize="15" Height="40"/>
+                                Content="▶  Iniciar Execução" FontSize="15" Height="40"/>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <CheckBox x:Name="DryRunCheckBox" Content="Dry-run" Foreground="#94A3B8" Margin="0,0,12,0" VerticalAlignment="Center"/>
                             <Button x:Name="OpenLogButton"     Style="{StaticResource GhostBtn}" Content=" Log"        Margin="0,0,8,0" Height="34"/>
                             <Button x:Name="OpenResultButton"  Style="{StaticResource GhostBtn}" Content=" Resultado"  Margin="0,0,8,0" Height="34"/>
-                            <Button x:Name="OpenSettingsButton" Style="{StaticResource GhostBtn}" Content="[gear] Settings"   Margin="0,0,8,0" Height="34"/>
-                            <Button x:Name="OpenReportsButton" Style="{StaticResource GhostBtn}" Content=" Relatrios" Height="34"/>
+                            <Button x:Name="OpenSettingsButton" Style="{StaticResource GhostBtn}" Content="⚙ Settings"   Margin="0,0,8,0" Height="34"/>
+                            <Button x:Name="OpenReportsButton" Style="{StaticResource GhostBtn}" Content=" Relatórios" Height="34"/>
                         </StackPanel>
                     </DockPanel>
                 </Border>
@@ -1073,7 +1132,16 @@ Add-Type -AssemblyName System.Drawing
                 <!-- Log area -->
                 <Border Grid.Row="2" Style="{StaticResource Card}">
                     <DockPanel>
-                        <TextBlock x:Name="RunStatusLabel" DockPanel.Dock="Top" Foreground="#94A3B8" FontSize="12" Margin="0,0,0,8"/>
+                        <Grid DockPanel.Dock="Top" Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" x:Name="RunStatusLabel" Foreground="#94A3B8" FontSize="12"/>
+                            <TextBlock Grid.Column="1" x:Name="RunEtaLabel" Foreground="#7C3AED" FontSize="12" FontWeight="SemiBold"/>
+                        </Grid>
+                        <ProgressBar DockPanel.Dock="Top" x:Name="RunProgressBar" Height="6" Minimum="0" Maximum="100" Value="0"
+                                     Foreground="#7C3AED" Background="#252840" BorderThickness="0" Margin="0,0,0,8"/>
                         <TextBox x:Name="RunLogTextBox" Style="{StaticResource DarkReadonly}"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
                                  FontFamily="Consolas" FontSize="12"/>
@@ -1126,6 +1194,10 @@ $ui = [ordered]@{
     CurrentLogPath        = $null
     CurrentResultPath     = $null
     RunProcess            = $null
+    RunCanceled           = $false
+    RunStartTime          = $null
+    SaveStateTimer        = $null
+    SaveStateDirty        = $false
 
     # Window
     Window                = $window
@@ -1135,12 +1207,14 @@ $ui = [ordered]@{
     NavSelection          = (Get-Control 'NavSelection')
     NavHostSetup          = (Get-Control 'NavHostSetup')
     NavSteamDeck          = (Get-Control 'NavSteamDeck')
+    NavDualBoot           = (Get-Control 'NavDualBoot')
     NavReview             = (Get-Control 'NavReview')
     NavRun                = (Get-Control 'NavRun')
     NavWelcomeText        = (Get-Control 'NavWelcomeText')
     NavSelectionText      = (Get-Control 'NavSelectionText')
     NavHostSetupText      = (Get-Control 'NavHostSetupText')
     NavSteamDeckText      = (Get-Control 'NavSteamDeckText')
+    NavDualBootText       = (Get-Control 'NavDualBootText')
     NavReviewText         = (Get-Control 'NavReviewText')
     NavRunText            = (Get-Control 'NavRunText')
 
@@ -1225,6 +1299,17 @@ $ui = [ordered]@{
     ReloadSettingsButton  = (Get-Control 'ReloadSettingsButton')
     SaveSettingsButton    = (Get-Control 'SaveSettingsButton')
 
+    # Dual Boot
+    DualBootTitleLabel    = (Get-Control 'DualBootTitleLabel')
+    DualBootStatusText    = (Get-Control 'DualBootStatusText')
+    DualBootPrereqsText   = (Get-Control 'DualBootPrereqsText')
+    FixFastStartupButton  = (Get-Control 'FixFastStartupButton')
+    DualBootTargetCombo   = (Get-Control 'DualBootTargetCombo')
+    RebootToLinuxButton   = (Get-Control 'RebootToLinuxButton')
+    BcdCleanupStatusText  = (Get-Control 'BcdCleanupStatusText')
+    BcdCleanupButton      = (Get-Control 'BcdCleanupButton')
+    RefreshDualBootButton = (Get-Control 'RefreshDualBootButton')
+
     # Review
     ReviewTitleLabel      = (Get-Control 'ReviewTitleLabel')
     ReviewSummaryLabel    = (Get-Control 'ReviewSummaryLabel')
@@ -1235,7 +1320,11 @@ $ui = [ordered]@{
     # Run
     RunTitleLabel         = (Get-Control 'RunTitleLabel')
     RunStatusLabel        = (Get-Control 'RunStatusLabel')
+    RunEtaLabel           = (Get-Control 'RunEtaLabel')
+    RunProgressBar        = (Get-Control 'RunProgressBar')
     StartRunButton        = (Get-Control 'StartRunButton')
+    CancelRunButton       = (Get-Control 'CancelRunButton')
+    DryRunCheckBox        = (Get-Control 'DryRunCheckBox')
     OpenLogButton         = (Get-Control 'OpenLogButton')
     OpenResultButton      = (Get-Control 'OpenResultButton')
     OpenSettingsButton    = (Get-Control 'OpenSettingsButton')
@@ -1243,7 +1332,7 @@ $ui = [ordered]@{
     RunLogTextBox         = (Get-Control 'RunLogTextBox')
 
     # Pages (panels identified by WPF name)
-    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageSteamDeck', 'PageReview', 'PageRun')
+    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
 }
 
 # 
@@ -1406,7 +1495,7 @@ function Refresh-LocalizedText {
     $ui.StartRunButton.Content         = $ui.Strings.StartRun
     $ui.OpenLogButton.Content          = " $($ui.Strings.OpenLog)"
     $ui.OpenResultButton.Content       = " $($ui.Strings.OpenResult)"
-    $ui.OpenSettingsButton.Content     = "[gear] $($ui.Strings.OpenSettings)"
+    $ui.OpenSettingsButton.Content     = "⚙ $($ui.Strings.OpenSettings)"
     $ui.OpenReportsButton.Content      = " $($ui.Strings.OpenReports)"
     $ui.BackButton.Content             = $ui.Strings.Back
     $ui.NextButton.Content             = $ui.Strings.Next
@@ -1417,6 +1506,7 @@ function Refresh-LocalizedText {
     $ui.NavSelectionText.Text  = $ui.Strings.Selection
     $ui.NavHostSetupText.Text  = $ui.Strings.HostSetup
     $ui.NavSteamDeckText.Text  = $ui.Strings.SteamDeckControl
+    $ui.NavDualBootText.Text   = $ui.Strings.DualBoot
     $ui.NavReviewText.Text     = $ui.Strings.Review
     $ui.NavRunText.Text        = $ui.Strings.Run
 }
@@ -1620,13 +1710,13 @@ function Refresh-DualBootControls {
     $statusLines += "Is Dual Boot: $($info.IsDualBoot) (Confidence: $($info.Confidence))"
     $statusLines += "Sistemas Detectados: $(($info.DetectedOS) -join ', ')"
     $statusLines += "GRUB Detectado: $($info.GrubDetected) ($($info.GrubEfiPath))"
-    $statusLines += "Parties Linux: $($info.LinuxPartitions.Count)"
+    $statusLines += "Partições Linux: $($info.LinuxPartitions.Count)"
     $statusLines += ""
     $statusLines += ($recs -join [Environment]::NewLine)
     
     if (-not $info.IsAdmin) {
         $statusLines += ""
-        $statusLines += " AVISO: Executando sem privilgios de Administrador. Recursos avanados esto desabilitados."
+        $statusLines += "⚠ AVISO: Executando sem privilégios de Administrador. Recursos avançados estão desabilitados."
         $ui.RebootToLinuxButton.IsEnabled = $false
         $ui.FixFastStartupButton.IsEnabled = $false
         $ui.DualBootTargetCombo.IsEnabled = $false
@@ -1646,7 +1736,7 @@ function Refresh-DualBootControls {
     if ($prereqs.Count -gt 0) {
         $ui.DualBootPrereqsText.Text = ($prereqs | ForEach-Object { "[$($_.Severity.ToUpper())] $($_.Title): $($_.Description)" }) -join [Environment]::NewLine
     } else {
-        $ui.DualBootPrereqsText.Text = "Nenhum problema detectado. Todas as configuraes do Windows esto seguras para o Linux."
+        $ui.DualBootPrereqsText.Text = "Nenhum problema detectado. Todas as configurações do Windows estão seguras para o Linux."
     }
 
     $alts = Get-BootstrapAlternateBootEntries
@@ -1671,7 +1761,7 @@ function Refresh-DualBootControls {
             $ui.BcdCleanupButton.Visibility = 'Visible'
             $ui.BcdCleanupButton.IsEnabled = $true
         } else {
-            $ui.BcdCleanupStatusText.Text = "Menu de Boot limpo! Nenhuma instação órfã do Windows detectada."
+            $ui.BcdCleanupStatusText.Text = "Menu de Boot limpo! Nenhuma instalação órfã do Windows detectada."
         }
     } else {
         $ui.BcdCleanupStatusText.Text = "Requer privilégios de Administrador para auditar o Boot Configuration Data."
@@ -1681,9 +1771,22 @@ function Refresh-DualBootControls {
 function Refresh-ReviewPage {
     Capture-SteamDeckSettingsFromControls
     $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
-    $ui.ReviewTextBox.Text  = $ui.Preview.PlanText
+
+    $preflightLines = @()
+    if ($ui.Preview.Preflight) {
+        $preflightLines += '--- Pré-flight ---'
+        foreach ($chk in @($ui.Preview.Preflight)) {
+            $sev = [string]$chk.Severity
+            $marker = switch ($sev) { 'error' { '[X]' } 'warning' { '[!]' } 'ok' { '[v]' } default { '[i]' } }
+            $preflightLines += ('{0} {1}' -f $marker, $chk.Title)
+            if ($chk.Detail) { $preflightLines += ('     {0}' -f $chk.Detail) }
+        }
+        $preflightLines += ''
+    }
+    $ui.ReviewTextBox.Text  = (($preflightLines -join [Environment]::NewLine) + $ui.Preview.PlanText)
+
     $adminText = if (@($ui.Preview.AdminReasons).Count -gt 0) { @($ui.Preview.AdminReasons) -join '; ' } else { '-' }
-    $ui.ReviewMetaLabel.Text = "Admin: $adminText  |  Settings: $($ui.SettingsBundle.Path)  |  UI state: $UiStatePath"
+    $ui.ReviewMetaLabel.Text = "Admin: $adminText  |  ETA: $($ui.Preview.EstimatedTime)  |  Settings: $($ui.SettingsBundle.Path)"
 }
 
 # 
@@ -1748,8 +1851,8 @@ function Navigate-ToPage {
 # 
 
 function Build-BackendArguments {
-    $tokens = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $backendScriptPath)
-    foreach ($p in @($ui.State.selectedProfiles))   { $tokens += @('-Profile',   [string]$p) }
+    $tokens = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $backendScriptPath, '-NonInteractive')
+    foreach ($p in @($ui.State.selectedProfiles))   { $tokens += @('-ProfileName', [string]$p) }
     foreach ($c in @($ui.State.selectedComponents)) { $tokens += @('-Component', [string]$c) }
     foreach ($e in @($ui.State.excludedComponents)) { $tokens += @('-Exclude',   [string]$e) }
     $tokens += @('-SteamDeckVersion', [string]$ui.State.steamDeckVersion)
@@ -1758,6 +1861,7 @@ function Build-BackendArguments {
     $tokens += @('-CloneBaseDir',     [string]$ui.State.cloneBaseDir)
     $tokens += @('-LogPath',          [string]$ui.CurrentLogPath)
     $tokens += @('-ResultPath',       [string]$ui.CurrentResultPath)
+    if ($ui.DryRunCheckBox.IsChecked -eq $true) { $tokens += '-DryRun' }
     return $tokens
 }
 
@@ -1769,6 +1873,32 @@ function Start-BackendWorker {
     return (Start-Process -FilePath $powershellExe -ArgumentList $argumentString -WindowStyle Hidden -PassThru)
 }
 
+function Update-RunProgressFromLog {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return }
+    $total = 0
+    if ($ui.Preview -and $ui.Preview.Resolution) {
+        $total = @($ui.Preview.Resolution.ResolvedComponents).Count
+    }
+    if ($total -le 0) { return }
+    $matches = [regex]::Matches($Text, '(?m)^\[[^\]]+\]\s+\[INFO\]\s+Executando componente:\s+(\S+)')
+    if ($matches.Count -gt 0) {
+        $current = $matches[$matches.Count - 1].Groups[1].Value
+        $index = ([Array]::IndexOf(@($ui.Preview.Resolution.ResolvedComponents), $current))
+        if ($index -lt 0) { $index = $matches.Count - 1 }
+        $percent = [int](($index + 1) / $total * 100)
+        if ($percent -gt 100) { $percent = 100 }
+        $ui.RunProgressBar.Value = $percent
+        $ui.RunStatusLabel.Text = ('{0}: {1}/{2}  -  {3}' -f $ui.Strings.Progress, ($index + 1), $total, $current)
+        $elapsed = (Get-Date) - $ui.RunStartTime
+        if ($percent -gt 0) {
+            $estTotal = $elapsed.TotalSeconds * (100.0 / $percent)
+            $remain = [TimeSpan]::FromSeconds([math]::Max(0, $estTotal - $elapsed.TotalSeconds))
+            $ui.RunEtaLabel.Text = ('ETA ~ {0:mm\:ss}' -f $remain)
+        }
+    }
+}
+
 function Append-RunLog {
     if ([string]::IsNullOrWhiteSpace($ui.CurrentLogPath) -or -not (Test-Path $ui.CurrentLogPath)) { return }
     $content = [IO.File]::ReadAllText($ui.CurrentLogPath)
@@ -1777,23 +1907,33 @@ function Append-RunLog {
     $ui.RunLogTextBox.AppendText($newText)
     $ui.RunLogTextBox.ScrollToEnd()
     $ui.LogOffset = $content.Length
+    Update-RunProgressFromLog -Text $content
 }
 
 function Finalize-RunFromResult {
     Append-RunLog
-    if (-not (Test-Path $ui.CurrentResultPath)) { return }
-    $result = Get-Content -Path $ui.CurrentResultPath -Raw | ConvertFrom-Json
-    if ($result.status -eq 'success') {
-        $ui.RunStatusLabel.Text = $ui.Strings.RunCompleted
-        if ($result.hostHealthReportRoot) { $ui.State.lastReportPath = [string]$result.hostHealthReportRoot }
+    $finalText = ''
+    if (Test-Path $ui.CurrentResultPath) {
+        $result = Get-Content -Path $ui.CurrentResultPath -Raw | ConvertFrom-Json
+        if ($result.status -eq 'success') {
+            $ui.RunStatusLabel.Text = $ui.Strings.RunCompleted
+            $ui.RunProgressBar.Value = 100
+            if ($result.hostHealthReportRoot) { $ui.State.lastReportPath = [string]$result.hostHealthReportRoot }
+        } else {
+            $ui.RunStatusLabel.Text = "{0}  {1}" -f $ui.Strings.RunFailed, [string]$result.error
+        }
+    } elseif ($ui.RunCanceled) {
+        $ui.RunStatusLabel.Text = $ui.Strings.RunCanceled
     } else {
-        $ui.RunStatusLabel.Text = "{0}  {1}" -f $ui.Strings.RunFailed, [string]$result.error
+        $ui.RunStatusLabel.Text = $ui.Strings.RunFailed
     }
     $ui.State.lastLogPath    = $ui.CurrentLogPath
     $ui.State.lastResultPath = $ui.CurrentResultPath
     Save-UiState -State $ui.State -Path $UiStatePath
     $ui.RunProcess = $null
     $ui.LogTimer.Stop()
+    $ui.StartRunButton.IsEnabled = $true
+    $ui.CancelRunButton.IsEnabled = $false
 }
 
 function Start-RunExecution {
@@ -1804,14 +1944,34 @@ function Start-RunExecution {
     $ui.CurrentLogPath   = Join-Path $runRoot ("bootstrap-ui_{0}.log" -f $timestamp)
     $ui.CurrentResultPath = Join-Path $runRoot ("bootstrap-ui_{0}.result.json" -f $timestamp)
     $ui.LogOffset        = 0
+    $ui.RunCanceled      = $false
+    $ui.RunStartTime     = Get-Date
     $ui.RunLogTextBox.Clear()
+    $ui.RunProgressBar.Value = 0
     $ui.RunStatusLabel.Text = $ui.Strings.RunStarted
+    $ui.RunEtaLabel.Text = ''
     try { $ui.RunProcess = Start-BackendWorker } catch {
         $ui.RunStatusLabel.Text = $ui.Strings.UserCanceledElevation
         return
     }
-    Save-UiState -State $ui.State -Path $UiStatePath
+    $ui.StartRunButton.IsEnabled = $false
+    $ui.CancelRunButton.IsEnabled = $true
+    Save-UiStateImmediate -State $ui.State -Path $UiStatePath
     $ui.LogTimer.Start()
+}
+
+function Cancel-RunExecution {
+    if (-not $ui.RunProcess) { return }
+    if ($ui.RunProcess.HasExited) { return }
+    try {
+        $ui.RunProcess.Kill($true)
+    } catch {
+        try { $ui.RunProcess.Kill() } catch { }
+    }
+    $ui.RunCanceled = $true
+    $ui.RunStatusLabel.Text = $ui.Strings.RunCanceled
+    $ui.CancelRunButton.IsEnabled = $false
+    $ui.StartRunButton.IsEnabled = $true
 }
 
 # 
@@ -1985,8 +2145,20 @@ $ui.RebootToLinuxButton.Add_Click({
 
 $ui.BcdCleanupButton.Add_Click({
     try {
+        $preview = Get-BootstrapPhantomBootEntriesPreview
+        if (-not $preview -or $preview.Count -eq 0) {
+            [System.Windows.MessageBox]::Show('Nenhuma entrada fantasma detectada.', 'BCD Cleanup', 'OK', 'Information') | Out-Null
+            return
+        }
+        $msg = ($preview.Lines -join [Environment]::NewLine) + [Environment]::NewLine + [Environment]::NewLine + 'Confirmar remoção e backup do BCD?'
+        $result = [System.Windows.MessageBox]::Show($msg, 'BCD Cleanup - Confirmação', 'YesNo', 'Warning')
+        if ($result -ne 'Yes') {
+            $ui.StatusLabel.Text = 'BCD cleanup cancelado pelo usuário.'
+            return
+        }
+
         $ui.BcdCleanupButton.IsEnabled = $false
-        $ui.BcdCleanupStatusText.Text = "Realizando backup e limpando..."
+        $ui.BcdCleanupStatusText.Text = 'Realizando backup e limpando...'
         $res = Repair-BootstrapPhantomEntries
         if ($res.Success) {
             $ui.StatusLabel.Text = "Removidas $($res.Removed) entradas fantasmas. Backup em: $($res.Backup)"
@@ -2000,6 +2172,7 @@ $ui.BcdCleanupButton.Add_Click({
 
 # Run
 $ui.StartRunButton.Add_Click({ Start-RunExecution })
+$ui.CancelRunButton.Add_Click({ Cancel-RunExecution })
 
 $ui.OpenLogButton.Add_Click({
     $path = if (-not [string]::IsNullOrWhiteSpace($ui.CurrentLogPath)) { $ui.CurrentLogPath } else { [string]$ui.State.lastLogPath }
@@ -2036,15 +2209,35 @@ $ui.FinishButton.Add_Click({
 # 
 
 $window.Add_Loaded({
-    # Populate language combo
     [void]$ui.LanguageCombo.Items.Clear()
     foreach ($lang in (Get-UiLanguages)) { [void]$ui.LanguageCombo.Items.Add($lang) }
     $ui.LanguageCombo.SelectedItem = [string]$ui.State.language
 
-    # Populate combos
     foreach ($item in @('off','conservador','equilibrado','agressivo')) { [void]$ui.HostHealthCombo.Items.Add($item) }
     foreach ($item in @('Auto','LCD','OLED')) { [void]$ui.SteamDeckVersionCombo.Items.Add($item) }
     foreach ($item in @('DOCKED_TV','DOCKED_MONITOR')) { [void]$ui.GenericModeCombo.Items.Add($item) }
+
+    $hhDescriptions = $null
+    try { $hhDescriptions = $ui.Contract.hostHealthDescriptions } catch { $hhDescriptions = $null }
+    if ($hhDescriptions) {
+        $ttLines = @()
+        foreach ($mode in @('off','conservador','equilibrado','agressivo')) {
+            $desc = $null
+            try { $desc = $hhDescriptions.$mode } catch { $desc = $null }
+            if ($desc) { $ttLines += ("$mode -> $desc") }
+        }
+        if ($ttLines.Count -gt 0) {
+            $ui.HostHealthCombo.ToolTip = ($ttLines -join [Environment]::NewLine)
+        }
+    }
+
+    $isDeck = $false
+    try { $isDeck = [bool]$ui.Contract.isSteamDeckHardware } catch { $isDeck = $false }
+    if ($isDeck -and ($ui.State.selectedProfiles.Count -eq 1) -and ($ui.State.selectedProfiles[0] -eq 'recommended')) {
+        Apply-QuickPreset -PresetName 'steamdeck-recommended'
+        Save-UiStateImmediate -State $ui.State -Path $UiStatePath
+        $ui.StatusLabel.Text = 'Hardware Steam Deck detectado: preset steamdeck-recommended aplicado.'
+    }
 
     Refresh-LocalizedText
     Refresh-CustomPresets
@@ -2053,7 +2246,11 @@ $window.Add_Loaded({
 
 $window.Add_Closing({
     $ui.LogTimer.Stop()
-    Save-UiState -State $ui.State -Path $UiStatePath
+    if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
+        try { $ui.RunProcess.Kill($true) } catch { }
+    }
+    Save-UiStateImmediate -State $ui.State -Path $UiStatePath
+    Flush-UiState
 })
 
 # 

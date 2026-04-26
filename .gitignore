@@ -10,3 +10,16 @@ gemini-cli/
 # Ignore temporary artifacts
 .tmp
 .temp
+
+# Ignore bootstrap user data and backups
+.bootstrap-tools/
+*.bak
+*.bak_*
+bcd_backup_*.bak
+
+# Ignore IDE/local state
+.vscode/
+.idea/
+
+# Ignore generated UI runs
+ui-runs/
