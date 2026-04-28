@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+  pester:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Pester 3.4.0
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          Install-Module Pester -RequiredVersion 3.4.0 -Force -Scope CurrentUser
+
+      - name: Parse PowerShell
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $errors = @()
+          foreach ($f in Get-ChildItem -Recurse -File -Include *.ps1) {
+            $tokens = $null
+            $parseErrors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$tokens, [ref]$parseErrors) | Out-Null
+            if ($parseErrors -and $parseErrors.Count -gt 0) {
+              foreach ($err in $parseErrors) {
+                $errors += ("{0}:{1}: {2}" -f $f.FullName, $err.Extent.StartLineNumber, $err.Message)
+              }
+            }
+          }
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_ }
+            exit 1
+          }
+
+      - name: Run Pester
+        shell: powershell
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          Import-Module Pester -RequiredVersion 3.4.0
+          Invoke-Pester -Path .\tests -EnableExit
