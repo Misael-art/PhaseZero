@@ -95,6 +95,7 @@ do {
             'HANDHELD' { $handheldScript }
             'DOCKED_MONITOR' { $dockMonitorScript }
             'DOCKED_TV' { $dockTvScript }
+            'UNCLASSIFIED_EXTERNAL' { $dockMonitorScript }
             default { $null }
         }
 

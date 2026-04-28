@@ -90,6 +90,38 @@ Provedores com validação dedicada nesta etapa:
 
 Quando a credencial ativa falha na validação, o bootstrap não reaplica aquele segredo nos env vars nem nos arquivos de configuração dos clientes.
 
+## 🧠 API Center, OpenCode, Comet e Agent Skills
+
+O perfil `ai` e o fluxo `legacy` agora incluem o componente `agent-skills`. Ele instala o `caveman` por padrão usando os caminhos oficiais quando os runtimes existem, registra o resultado em `.bootstrap-tools/agent-skill-state.json` e não falha o bootstrap quando uma IDE/CLI ainda não está instalada.
+
+Automação Caveman:
+
+- `Claude Code`: tenta `claude plugin marketplace add JuliusBrussee/caveman` e depois `claude plugin install caveman@caveman`;
+- fallback Claude Code: usa o instalador standalone documentado apenas se o plugin falhar;
+- `Gemini CLI`: usa `gemini extensions install https://github.com/JuliusBrussee/caveman`;
+- `Cursor`, `Windsurf`, `Cline` e `GitHub Copilot`: usam `npx skills add JuliusBrussee/caveman -a <target> --copy` no Windows;
+- regras always-on são geradas a partir de `assets/agent-skills/caveman-always-on.md` com blocos marcados, sem sobrescrever instruções existentes.
+
+Arquivos de regra gerados quando o componente roda:
+
+- `.cursor/rules/caveman.mdc`
+- `.windsurf/rules/caveman.md`
+- `.clinerules/caveman.md`
+- `.github/copilot-instructions.md`
+- `AGENTS.md`
+
+O `OpenCode` agora recebe todos os provedores LLM com credencial ativa e `validation.state = passed`. O bootstrap mescla `~/.local/share/opencode/auth.json`, preserva credenciais não gerenciadas e só adiciona metadata em `opencode.json` quando precisa de `baseURL` customizado. A seleção de `model`, `small_model`, tema e providers não gerenciados é preservada.
+
+O `Comet` é tratado como `manual-only`: o bootstrap detecta a instalação e mostra quais provedores já estão prontos, mas não escreve arquivos internos não documentados.
+
+A UI (`bootstrap-ui.bat`) ganhou a página **API Center**, onde é possível ver:
+
+- total de credenciais por provedor, credencial ativa e estado de validação;
+- quais apps estão auto-aplicados e quais exigem setup manual;
+- lista de credenciais com segredo mascarado;
+- provedores ainda não configurados com links de criação, docs e campos necessários;
+- ações para adicionar/editar, validar, ativar, importar arquivo bruto e aplicar nos apps suportados.
+
 ## 🧩 VS Code e Insiders
 
 O perfil `ai` agora também garante `Visual Studio Code`, `Visual Studio Code - Insiders` e instala automaticamente estas extensões nos dois editores:

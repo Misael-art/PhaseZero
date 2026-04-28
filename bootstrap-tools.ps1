@@ -6,14 +6,20 @@ param(
     [string[]]$Exclude = @(),
     [ValidateSet('Auto', 'LCD', 'OLED')][string]$SteamDeckVersion = 'Auto',
     [string]$HostHealth,
+    [string]$AppTuning,
+    [string[]]$AppTuningCategory = @(),
+    [string[]]$AppTuningItem = @(),
+    [string[]]$ExcludeAppTuningItem = @(),
     [string]$LogPath,
     [string]$ResultPath,
     [string]$SecretsImportPath,
     [string]$SecretsActivateProvider,
     [string]$SecretsActivateCredential,
+    [switch]$ClaudeCodeProjectMcps,
     [switch]$Interactive,
     [switch]$ListProfiles,
     [switch]$ListHostHealthModes,
+    [switch]$ListAppTuningCatalog,
     [switch]$ListComponents,
     [switch]$UiContractJson,
     [switch]$BootstrapUiLibraryMode,
@@ -56,6 +62,33 @@ function Write-Log {
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] [{1}] {2}" -f (Get-Date), $Level, $Message
     Add-Content -Path $script:LogPath -Value $line -Encoding utf8
     Write-Host $line
+}
+
+function Reset-BootstrapFileCmdlets {
+    $names = @(
+        'Remove-Item',
+        'Set-Content',
+        'Add-Content',
+        'Get-Content',
+        'New-Item',
+        'Copy-Item',
+        'Move-Item',
+        'Out-File'
+    )
+
+    foreach ($name in $names) {
+        $fnPath = "function:$name"
+        if (Microsoft.PowerShell.Management\Test-Path $fnPath) {
+            Microsoft.PowerShell.Management\Remove-Item $fnPath -Force -ErrorAction SilentlyContinue
+        }
+        $aliasPath = "alias:$name"
+        if (Microsoft.PowerShell.Management\Test-Path $aliasPath) {
+            Microsoft.PowerShell.Management\Remove-Item $aliasPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Microsoft.PowerShell.Core\Import-Module Microsoft.PowerShell.Management -Force | Out-Null
+    Microsoft.PowerShell.Core\Import-Module Microsoft.PowerShell.Utility -Force | Out-Null
 }
 
 function Refresh-SessionPath {
@@ -159,6 +192,86 @@ function Invoke-NativeWithLog {
         if ($hasNativePreferenceVar) {
             $PSNativeCommandUseErrorActionPreference = $oldNativePreference
         }
+    }
+}
+
+function Test-WslCorruptionText {
+    param([AllowNull()][string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    return (
+        ($Text -match '(?i)REGDB_E_CLASSNOTREG') -or
+        ($Text -match '(?i)Wsl/CallMsi/Install') -or
+        ($Text -match '(?i)instala(c|ç)(a|ã)o do WSL parece estar corrompida') -or
+        ($Text -match '(?i)Pressione qualquer tecla para reparar o WSL')
+    )
+}
+
+function Invoke-NativeCaptureWithLog {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [string[]]$Args = @(),
+        [int]$TimeoutMs = 600000,
+        [AllowNull()][string]$InputText = $null
+    )
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = (($Args | ForEach-Object {
+                $v = [string]$_
+                if ($v -match '\s') { '"' + ($v -replace '"', '\"') + '"' } else { $v }
+            }) -join ' ')
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardInput = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $stdoutSb = New-Object System.Text.StringBuilder
+    $stderrSb = New-Object System.Text.StringBuilder
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    $proc.EnableRaisingEvents = $true
+    $proc.add_OutputDataReceived({
+            param($sender, $e)
+            if ($e.Data -ne $null) { [void]$stdoutSb.AppendLine([string]$e.Data) }
+        })
+    $proc.add_ErrorDataReceived({
+            param($sender, $e)
+            if ($e.Data -ne $null) { [void]$stderrSb.AppendLine([string]$e.Data) }
+        })
+
+    $null = $proc.Start()
+    $proc.BeginOutputReadLine()
+    $proc.BeginErrorReadLine()
+
+    if ($null -ne $InputText) {
+        try { $proc.StandardInput.Write($InputText) } catch { }
+        try { $proc.StandardInput.Close() } catch { }
+    }
+
+    $timedOut = -not $proc.WaitForExit($TimeoutMs)
+    if ($timedOut) {
+        try { $proc.Kill() } catch { }
+        try { $null = $proc.WaitForExit(5000) } catch { }
+    }
+
+    $exitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
+    $stdout = [string]$stdoutSb.ToString()
+    $stderr = [string]$stderrSb.ToString()
+
+    foreach ($line in ((($stdout + "`n" + $stderr) -replace "`r", '') -split "`n")) {
+        $text = [string]$line
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        Add-Content -Path $script:LogPath -Value $text -Encoding utf8
+        Write-Host $text
+    }
+
+    return [ordered]@{
+        exitCode = $exitCode
+        timedOut = $timedOut
+        stdout   = $stdout
+        stderr   = $stderr
     }
 }
 
@@ -755,6 +868,526 @@ function Backup-FileWithTimestamp {
     return $bak
 }
 
+function Get-BootstrapNotepadPlusPlusCuratedVersion {
+    return '2026.04.notepadpp.v1'
+}
+
+function Get-BootstrapNotepadPlusPlusAssetRoot {
+    return (Join-Path $PSScriptRoot 'assets\notepadpp')
+}
+
+function Get-BootstrapNotepadPlusPlusCuratedPluginDisplayNames {
+    param([string]$Architecture = 'x64')
+
+    $names = @(
+        'ComparePlus'
+        'AutoSave'
+        'CollectionInterface'
+        'Code Alignment'
+        'DSpellCheck'
+        'HEX-Editor'
+        'JSON Tools'
+        'JSON Viewer'
+        'JSTool'
+        'NppFTP'
+        'NppOpenAI'
+        'Snippets'
+        'XML Tools'
+    )
+
+    if ([string]$Architecture -eq 'x86') {
+        $names += @('MultiClipboard')
+    }
+
+    return @($names)
+}
+
+function Get-BootstrapNotepadPlusPlusDeferredCapabilities {
+    param([string]$Architecture = 'x64')
+
+    $items = @(
+        [ordered]@{
+            id = 'function-list'
+            displayName = 'Function List'
+            reason = 'Feature built-in do Notepad++. Curadoria foca UDLs/autoCompletion para ampliar cobertura.'
+        }
+        [ordered]@{
+            id = 'lsp-client'
+            displayName = 'LSP client'
+            reason = 'NppLspClient segue alpha/manual fora do Plugin Admin oficial. Nao entra no default seguro.'
+        }
+    )
+
+    if ([string]$Architecture -ne 'x86') {
+        $items += @(
+            [ordered]@{
+                id = 'multiclipboard'
+                displayName = 'MultiClipboard'
+                reason = 'Plugin oficial disponivel so na lista x86. Fluxo x64 marca como diferido para evitar quebra.'
+            }
+        )
+    }
+
+    return @($items)
+}
+
+function Get-BootstrapNotepadPlusPlusFallbackPluginCatalog {
+    param([string]$Architecture = 'x64')
+
+    if ([string]$Architecture -eq 'x86') {
+        return @(
+            [ordered]@{
+                displayName = 'MultiClipboard'
+                folderName = 'MultiClipboard'
+                version = '2.1.0.0'
+                repository = 'https://downloads.sourceforge.net/project/npp-plugins/MultiClipboard/MultiClipboard%202.1%20unicode/MultiClipboard_2.1_unicode_dll.zip'
+                id = 'fba2177939eae03056b0baeb724fd73faabb95298cca4beea91fe0bc19c3df56'
+                homepage = 'https://sourceforge.net/projects/npp-plugins/files/MultiClipboard/'
+                source = 'fallback'
+            }
+        )
+    }
+
+    return @(
+        [ordered]@{ displayName = 'ComparePlus'; folderName = 'ComparePlus'; version = '2.2.0'; repository = 'https://github.com/pnedev/comparePlus/releases/download/cp_2.2.0/ComparePlus_cp_2.2.0_x64.zip'; id = '0e12f673a98d1bf84f97c4961b482eb68d1e5841ec7fd079fc7011034458da79'; homepage = 'https://github.com/pnedev/comparePlus'; source = 'fallback' }
+        [ordered]@{ displayName = 'AutoSave'; folderName = 'AutoSave'; version = '2.0'; repository = 'https://github.com/francostellari/NppPlugins/raw/main/AutoSave/AutoSave_dll_2v00_x64.zip'; id = '1396d0f2a98be097c316be6639693b528b98f57afadf2f762d00eaf4e8d9ca60'; homepage = 'https://github.com/francostellari/NppPlugins'; source = 'fallback' }
+        [ordered]@{ displayName = 'CollectionInterface'; folderName = 'CollectionInterface'; version = '1.3.0'; repository = 'https://github.com/pryrt/NppPlugin-CollectionInterface/releases/download/v1.3.0/CollectionInterface_v1.3.0_x64.zip'; id = 'ca02cc609c41a9732f8729f4414a7c334502cc5593fec1fe3aaf942e86caaca3'; homepage = 'https://github.com/pryrt/NppPlugin-CollectionInterface'; source = 'fallback' }
+        [ordered]@{ displayName = 'Code Alignment'; folderName = 'CodeAlignmentNpp'; version = '14.1.107'; repository = 'https://github.com/cpmcgrath/codealignment/releases/download/v14.1/CodeAlignmentNpp_v14.1_x64.zip'; id = 'A11C60AD2DCAF0064A5C3CCA01AA2D2A6743897875E23887867783A2756B796B'; homepage = 'https://github.com/cpmcgrath/codealignment'; source = 'fallback' }
+        [ordered]@{ displayName = 'DSpellCheck'; folderName = 'DSpellCheck'; version = '1.5.0'; repository = 'https://github.com/Predelnik/DSpellCheck/releases/download/v1.5.0/DSpellCheck_x64.zip'; id = 'e906fdd4758732d56e54c9e7ce56be7d9356f818fb6f1710f47fbdca6cbb9a26'; homepage = 'https://github.com/Predelnik/DSpellCheck'; source = 'fallback' }
+        [ordered]@{ displayName = 'HEX-Editor'; folderName = 'HexEditor'; version = '0.9.14.0'; repository = 'https://github.com/chcg/NPP_HexEdit/releases/download/0.9.14/HexEditor_0.9.14_x64.zip'; id = '9411b2ec113c4918d0b7099f934e26120caad3a46e88756687393ccdd3791570'; homepage = 'https://github.com/chcg/NPP_HexEdit'; source = 'fallback' }
+        [ordered]@{ displayName = 'JSON Tools'; folderName = 'JsonTools'; version = '8.5'; repository = 'https://github.com/molsonkiko/JsonToolsNppPlugin/releases/download/v8.5/Release_x64.zip'; id = '2b430c399e3624ba02d4d9634cd4c307535cb10eafd5b478f630de866414e32a'; homepage = 'https://github.com/molsonkiko/JsonToolsNppPlugin'; source = 'fallback' }
+        [ordered]@{ displayName = 'JSON Viewer'; folderName = 'NPPJSONViewer'; version = '2.1.1.0'; repository = 'https://github.com/NPP-JSONViewer/JSON-Viewer/releases/download/v2.1.1.0/NppJSONViewer_x64_Release.zip'; id = 'd9e779084aee1a45a150eaa27dc10000be575364af4c9fc3f3f6937f2e5bf00c'; homepage = 'https://github.com/NPP-JSONViewer/JSON-Viewer'; source = 'fallback' }
+        [ordered]@{ displayName = 'JSTool'; folderName = 'JSMinNPP'; version = '25.11.16'; repository = 'https://sourceforge.net/projects/jsminnpp/files/Uni/JSToolNPP.25.11.16.uni.64.zip'; id = '96bf6b2d0a036eb0be0a5489a6ae57a19d4dbbee8e0e558b758bd0100e85cd86'; homepage = 'https://github.com/sunjw/jstoolnpp'; source = 'fallback' }
+        [ordered]@{ displayName = 'NppFTP'; folderName = 'NppFTP'; version = '0.29.15'; repository = 'https://github.com/ashkulz/NppFTP/releases/download/v0.29.15/NppFTP-x64.zip'; id = 'a8c4e654491c656e82aad75814468d6f6ba00c77f2374b66d00b35739624d3f5'; homepage = 'https://ashkulz.github.io/NppFTP/'; source = 'fallback' }
+        [ordered]@{ displayName = 'NppOpenAI'; folderName = 'NppOpenAI'; version = '0.5.0.0'; repository = 'https://github.com/Krazal/nppopenai/releases/download/v0.5.0/NppOpenAI_x64.zip'; id = '7b3142a5c150cfd0603cb10ecb3e4a69083540a481c2cdf142a2a3801cc6a60c'; homepage = 'https://github.com/Krazal/nppopenai'; source = 'fallback' }
+        [ordered]@{ displayName = 'Snippets'; folderName = 'NppSnippets'; version = '1.7.1'; repository = 'https://github.com/ffes/nppsnippets/releases/download/v1.7.1/NppSnippets-171-x64.zip'; id = 'cf62992cf0ef06b1df233af4240fb2152067098c0393a98c4bc8c3630757fc10'; homepage = 'https://www.fesevur.com/nppsnippets'; source = 'fallback' }
+        [ordered]@{ displayName = 'XML Tools'; folderName = 'XMLTools'; version = '3.1.1.13'; repository = 'https://github.com/morbac/xmltools/releases/download/3.1.1.13/XMLTools-3.1.1.13-x64.zip'; id = '7631ea990e731172e28e9fe85ac4861185c0292143603b9486bc969cc8e8e046'; homepage = 'https://github.com/morbac/xmltools'; source = 'fallback' }
+    )
+}
+
+function Get-BootstrapNotepadPlusPlusOfficialPluginCatalog {
+    param([string]$Architecture = 'x64')
+
+    $normalizedArchitecture = ([string]$Architecture).ToLowerInvariant()
+    $urlMap = @{
+        'x64' = 'https://raw.githubusercontent.com/notepad-plus-plus/nppPluginList/master/src/pl.x64.json'
+        'x86' = 'https://raw.githubusercontent.com/notepad-plus-plus/nppPluginList/master/src/pl.x86.json'
+        'arm64' = 'https://raw.githubusercontent.com/notepad-plus-plus/nppPluginList/master/src/pl.arm64.json'
+    }
+
+    if (-not $urlMap.ContainsKey($normalizedArchitecture)) {
+        throw "Arquitetura Notepad++ nao suportada para plugin catalog: $Architecture"
+    }
+
+    $cachePath = Join-Path $env:TEMP ("bootstrap-notepadpp-pluginlist-{0}.json" -f $normalizedArchitecture)
+    Invoke-WebRequestWithRetry -Uri $urlMap[$normalizedArchitecture] -OutFile $cachePath -OperationName "Notepad++ plugin list $normalizedArchitecture"
+    $json = Get-Content -Path $cachePath -Raw -Encoding utf8 | ConvertFrom-Json
+    $plugins = @()
+    foreach ($plugin in @($json.'npp-plugins')) {
+        $plugins += @([ordered]@{
+            displayName = [string]$plugin.'display-name'
+            folderName = [string]$plugin.'folder-name'
+            version = [string]$plugin.version
+            repository = [string]$plugin.repository
+            id = [string]$plugin.id
+            homepage = [string]$plugin.homepage
+            source = 'official'
+        })
+    }
+
+    return @($plugins)
+}
+
+function Get-BootstrapNotepadPlusPlusDesiredPlugins {
+    param(
+        [string]$Architecture = 'x64',
+        [switch]$UseFallbackOnly
+    )
+
+    $wanted = @(Get-BootstrapNotepadPlusPlusCuratedPluginDisplayNames -Architecture $Architecture)
+    $catalog = @()
+
+    if (-not $UseFallbackOnly) {
+        try {
+            $catalog = @(Get-BootstrapNotepadPlusPlusOfficialPluginCatalog -Architecture $Architecture)
+        } catch {
+            Write-Log ("Notepad++ plugin list oficial indisponivel: {0}. Usando fallback curado." -f $_.Exception.Message) 'WARN'
+        }
+    }
+
+    if (@($catalog).Count -eq 0) {
+        $catalog = @(Get-BootstrapNotepadPlusPlusFallbackPluginCatalog -Architecture $Architecture)
+    }
+
+    $index = @{}
+    foreach ($plugin in @($catalog)) {
+        $name = [string]$plugin.displayName
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $index[$name] = $plugin
+    }
+
+    $selected = @()
+    foreach ($wantedName in @($wanted)) {
+        if ($index.ContainsKey($wantedName)) {
+            $selected += @($index[$wantedName])
+        } else {
+            Write-Log ("Plugin Notepad++ nao encontrado no catalogo atual: {0}" -f $wantedName) 'WARN'
+        }
+    }
+
+    return @($selected)
+}
+
+function Get-BootstrapNotepadPlusPlusOfficialAssetDefinitions {
+    return @(
+        [ordered]@{
+            name = 'AutoHotkey V2 UDL'
+            relativeDestination = 'userDefineLangs\AutoHotKey_V2.udl.xml'
+            sourceUri = 'https://raw.githubusercontent.com/notepad-plus-plus/userDefinedLanguages/master/UDLs/AutoHotKey_V2.udl.xml'
+        }
+        [ordered]@{
+            name = 'AutoHotkey V2 AutoCompletion'
+            relativeDestination = 'autoCompletion\AutoHotkey V2.xml'
+            sourceUri = 'https://raw.githubusercontent.com/notepad-plus-plus/userDefinedLanguages/master/autoCompletion/AutoHotkey%20V2.xml'
+        }
+        [ordered]@{
+            name = 'TOML UDL'
+            relativeDestination = 'userDefineLangs\TOML_byTimendum.xml'
+            sourceUri = 'https://raw.githubusercontent.com/notepad-plus-plus/userDefinedLanguages/master/UDLs/TOML_byTimendum.xml'
+        }
+        [ordered]@{
+            name = 'TOML AutoCompletion'
+            relativeDestination = 'autoCompletion\TOML.xml'
+            sourceUri = 'https://raw.githubusercontent.com/notepad-plus-plus/userDefinedLanguages/master/autoCompletion/TOML.xml'
+        }
+    )
+}
+
+function Get-BootstrapNotepadPlusPlusCustomAssetDefinitions {
+    $assetRoot = Get-BootstrapNotepadPlusPlusAssetRoot
+    return @(
+        [ordered]@{ name = 'DotEnv UDL'; relativeDestination = 'userDefineLangs\bootstrap-dotenv.udl.xml'; sourcePath = (Join-Path $assetRoot 'udl\bootstrap-dotenv.udl.xml') }
+        [ordered]@{ name = 'DockerIgnore UDL'; relativeDestination = 'userDefineLangs\bootstrap-dockerignore.udl.xml'; sourcePath = (Join-Path $assetRoot 'udl\bootstrap-dockerignore.udl.xml') }
+        [ordered]@{ name = 'M68K UDL'; relativeDestination = 'userDefineLangs\bootstrap-m68k.udl.xml'; sourcePath = (Join-Path $assetRoot 'udl\bootstrap-m68k.udl.xml') }
+        [ordered]@{ name = 'MAME Config UDL'; relativeDestination = 'userDefineLangs\bootstrap-mame-config.udl.xml'; sourcePath = (Join-Path $assetRoot 'udl\bootstrap-mame-config.udl.xml') }
+        [ordered]@{ name = 'RetroFE Conf UDL'; relativeDestination = 'userDefineLangs\bootstrap-retrofe-conf.udl.xml'; sourcePath = (Join-Path $assetRoot 'udl\bootstrap-retrofe-conf.udl.xml') }
+        [ordered]@{ name = 'SGDK Resource UDL'; relativeDestination = 'userDefineLangs\bootstrap-sgdk-resource.udl.xml'; sourcePath = (Join-Path $assetRoot 'udl\bootstrap-sgdk-resource.udl.xml') }
+    )
+}
+
+function Get-BootstrapNotepadPlusPlusDesiredState {
+    param([string]$Architecture = 'x64')
+
+    $pluginFolders = @((Get-BootstrapNotepadPlusPlusDesiredPlugins -Architecture $Architecture -UseFallbackOnly) | ForEach-Object { [string]$_.folderName })
+    $requiredRelativePaths = @()
+    foreach ($asset in @(Get-BootstrapNotepadPlusPlusOfficialAssetDefinitions)) {
+        $requiredRelativePaths += @([string]$asset.relativeDestination)
+    }
+    foreach ($asset in @(Get-BootstrapNotepadPlusPlusCustomAssetDefinitions)) {
+        $requiredRelativePaths += @([string]$asset.relativeDestination)
+    }
+    $requiredRelativePaths += @('plugins\Config\NppOpenAI.ini')
+
+    return [ordered]@{
+        curatedVersion = Get-BootstrapNotepadPlusPlusCuratedVersion
+        architecture = [string]$Architecture
+        pluginFolders = @($pluginFolders | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+        requiredRelativePaths = @($requiredRelativePaths | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+        deferred = @(Get-BootstrapNotepadPlusPlusDeferredCapabilities -Architecture $Architecture)
+    }
+}
+
+function Get-BootstrapNotepadPlusPlusInstallInfo {
+    $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    $programW6432 = [Environment]::GetEnvironmentVariable('ProgramW6432')
+    $candidates = @(
+        (Join-Path $env:ProgramFiles 'Notepad++')
+        $(if ($programW6432 -and ($env:ProgramFiles -ne $programW6432)) { Join-Path $programW6432 'Notepad++' } else { $null })
+        $(if ($programFilesX86 -and ($env:ProgramFiles -ne $programFilesX86)) { Join-Path $programFilesX86 'Notepad++' } else { $null })
+        (Join-Path $env:LOCALAPPDATA 'Programs\Notepad++')
+    ) | Where-Object { $_ }
+
+    $installRoot = $null
+    foreach ($path in @($candidates | Select-Object -Unique)) {
+        if (Test-Path (Join-Path $path 'notepad++.exe')) {
+            $installRoot = $path
+            break
+        }
+    }
+
+    if (-not $installRoot) {
+        return [ordered]@{
+            Installed = $false
+            Architecture = 'x64'
+            InstallRoot = ''
+            PluginsRoot = ''
+            ConfigRoot = ''
+            PluginConfigRoot = ''
+        }
+    }
+
+    $architecture = 'x64'
+    if ($installRoot -like '*Program Files (x86)*') {
+        $architecture = 'x86'
+    }
+
+    $configRoot = if (Test-Path (Join-Path $installRoot 'doLocalConf.xml')) { $installRoot } else { Join-Path $env:APPDATA 'Notepad++' }
+    return [ordered]@{
+        Installed = $true
+        Architecture = $architecture
+        InstallRoot = $installRoot
+        PluginsRoot = (Join-Path $installRoot 'plugins')
+        ConfigRoot = $configRoot
+        PluginConfigRoot = (Join-Path $configRoot 'plugins\Config')
+    }
+}
+
+function Get-BootstrapNotepadPlusPlusMarkerPath {
+    param([Parameter(Mandatory = $true)]$InstallInfo)
+    return (Join-Path ([string]$InstallInfo.PluginConfigRoot) 'bootstrap-notepadpp.json')
+}
+
+function Test-BootstrapNotepadPlusPlusConfigured {
+    param(
+        [Parameter(Mandatory = $true)]$InstallInfo,
+        [AllowNull()]$DesiredState = $null
+    )
+
+    if (-not [bool]$InstallInfo.Installed) { return $false }
+    $desired = if ($DesiredState) { $DesiredState } else { Get-BootstrapNotepadPlusPlusDesiredState -Architecture ([string]$InstallInfo.Architecture) }
+    $markerPath = Get-BootstrapNotepadPlusPlusMarkerPath -InstallInfo $InstallInfo
+    $marker = Read-BootstrapJsonFile -Path $markerPath
+    if (-not $marker) { return $false }
+    if ([string]$marker.curatedVersion -ne [string]$desired.curatedVersion) { return $false }
+    if ([string]$marker.architecture -ne [string]$desired.architecture) { return $false }
+    if ([string]$marker.status -ne 'applied') { return $false }
+
+    foreach ($folder in @($desired.pluginFolders)) {
+        $pluginDir = Join-Path ([string]$InstallInfo.PluginsRoot) ([string]$folder)
+        if (-not (Test-Path $pluginDir)) { return $false }
+    }
+
+    foreach ($relativePath in @($desired.requiredRelativePaths)) {
+        $targetPath = Join-Path ([string]$InstallInfo.ConfigRoot) ([string]$relativePath)
+        if (-not (Test-Path $targetPath)) { return $false }
+    }
+
+    return $true
+}
+
+function Copy-BootstrapDirectoryItems {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceDir,
+        [Parameter(Mandatory = $true)][string]$DestinationDir
+    )
+
+    $null = New-Item -Path $DestinationDir -ItemType Directory -Force
+    foreach ($entry in @(Get-ChildItem -LiteralPath $SourceDir -Force -ErrorAction SilentlyContinue)) {
+        Copy-Item -LiteralPath $entry.FullName -Destination (Join-Path $DestinationDir $entry.Name) -Force -Recurse
+    }
+}
+
+function Get-BootstrapNotepadPlusPlusPluginSourceDirectory {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExtractRoot,
+        [Parameter(Mandatory = $true)]$Plugin
+    )
+
+    $preferred = Join-Path $ExtractRoot ([string]$Plugin.folderName)
+    if (Test-Path $preferred) { return $preferred }
+
+    $dll = Get-ChildItem -Path $ExtractRoot -Filter '*.dll' -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($dll) { return $dll.Directory.FullName }
+
+    $topLevel = @(Get-ChildItem -Path $ExtractRoot -Directory -ErrorAction SilentlyContinue)
+    if ($topLevel.Count -eq 1) { return $topLevel[0].FullName }
+
+    return $ExtractRoot
+}
+
+function Install-BootstrapNotepadPlusPlusPlugin {
+    param(
+        [Parameter(Mandatory = $true)]$InstallInfo,
+        [Parameter(Mandatory = $true)]$Plugin
+    )
+
+    $pluginRoot = [string]$InstallInfo.PluginsRoot
+    if (-not (Test-BootstrapDirectoryWritable -Path $pluginRoot)) {
+        return [ordered]@{ name = [string]$Plugin.displayName; status = 'failed'; error = "Sem permissao de escrita em $pluginRoot" }
+    }
+
+    $tempRoot = Join-Path $env:TEMP ('bootstrap-npp-plugin-' + [guid]::NewGuid().ToString('N'))
+    $zipPath = Join-Path $tempRoot 'plugin.zip'
+    $extractRoot = Join-Path $tempRoot 'extract'
+    $targetDir = Join-Path $pluginRoot ([string]$Plugin.folderName)
+
+    try {
+        $null = New-Item -Path $extractRoot -ItemType Directory -Force
+        Invoke-WebRequestWithRetry -Uri ([string]$Plugin.repository) -OutFile $zipPath -OperationName ("Notepad++ plugin {0}" -f [string]$Plugin.displayName)
+        if (-not [string]::IsNullOrWhiteSpace([string]$Plugin.id)) {
+            $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $expected = ([string]$Plugin.id).ToLowerInvariant()
+            if ($hash -ne $expected) {
+                throw "Checksum invalido para $([string]$Plugin.displayName): $hash"
+            }
+        }
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
+        $sourceDir = Get-BootstrapNotepadPlusPlusPluginSourceDirectory -ExtractRoot $extractRoot -Plugin $Plugin
+        Copy-BootstrapDirectoryItems -SourceDir $sourceDir -DestinationDir $targetDir
+        return [ordered]@{ name = [string]$Plugin.displayName; status = 'installed'; folder = [string]$Plugin.folderName; version = [string]$Plugin.version; source = [string]$Plugin.source }
+    } catch {
+        return [ordered]@{ name = [string]$Plugin.displayName; status = 'failed'; folder = [string]$Plugin.folderName; error = $_.Exception.Message }
+    } finally {
+        if (Test-Path $tempRoot) {
+            Remove-Item -Path $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Install-BootstrapNotepadPlusPlusRemoteAsset {
+    param(
+        [Parameter(Mandatory = $true)]$InstallInfo,
+        [Parameter(Mandatory = $true)]$Asset
+    )
+
+    $targetPath = Join-Path ([string]$InstallInfo.ConfigRoot) ([string]$Asset.relativeDestination)
+    $parent = Split-Path -Parent $targetPath
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            $null = New-Item -Path $parent -ItemType Directory -Force
+        }
+        Invoke-WebRequestWithRetry -Uri ([string]$Asset.sourceUri) -OutFile $targetPath -OperationName ("Notepad++ asset {0}" -f [string]$Asset.name)
+        return [ordered]@{ name = [string]$Asset.name; status = 'installed'; path = $targetPath }
+    } catch {
+        return [ordered]@{ name = [string]$Asset.name; status = 'failed'; path = $targetPath; error = $_.Exception.Message }
+    }
+}
+
+function Install-BootstrapNotepadPlusPlusLocalAsset {
+    param(
+        [Parameter(Mandatory = $true)]$InstallInfo,
+        [Parameter(Mandatory = $true)]$Asset
+    )
+
+    $targetPath = Join-Path ([string]$InstallInfo.ConfigRoot) ([string]$Asset.relativeDestination)
+    $parent = Split-Path -Parent $targetPath
+    try {
+        if (-not (Test-Path ([string]$Asset.sourcePath))) {
+            throw "Asset ausente: $([string]$Asset.sourcePath)"
+        }
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            $null = New-Item -Path $parent -ItemType Directory -Force
+        }
+        Copy-Item -Path ([string]$Asset.sourcePath) -Destination $targetPath -Force
+        return [ordered]@{ name = [string]$Asset.name; status = 'installed'; path = $targetPath }
+    } catch {
+        return [ordered]@{ name = [string]$Asset.name; status = 'failed'; path = $targetPath; error = $_.Exception.Message }
+    }
+}
+
+function Ensure-BootstrapNotepadPlusPlusOpenAiConfig {
+    param([Parameter(Mandatory = $true)]$InstallInfo)
+
+    $targetPath = Join-Path ([string]$InstallInfo.ConfigRoot) 'plugins\Config\NppOpenAI.ini'
+    $parent = Split-Path -Parent $targetPath
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($parent)) {
+            $null = New-Item -Path $parent -ItemType Directory -Force
+        }
+
+        if (-not (Test-Path $targetPath)) {
+            @(
+                '; Managed by bootstrap-tools.'
+                '; Fill secret_key manually or point plugin to your provider endpoint.'
+                '[API]'
+                'secret_key='
+                'api_url=https://api.openai.com/v1/'
+                'route_chat_completions=chat/completions'
+                'response_type=openai'
+                'model=gpt-4o-mini'
+                'temperature=0.2'
+                'show_reasoning=0'
+                'streaming=0'
+                ''
+                '[PLUGIN]'
+                'keep_question=0'
+            ) | Set-Content -Path $targetPath -Encoding utf8
+        }
+
+        return [ordered]@{ name = 'NppOpenAI config'; status = 'installed'; path = $targetPath }
+    } catch {
+        return [ordered]@{ name = 'NppOpenAI config'; status = 'failed'; path = $targetPath; error = $_.Exception.Message }
+    }
+}
+
+function Ensure-BootstrapNotepadPlusPlusDefaults {
+    $installInfo = Get-BootstrapNotepadPlusPlusInstallInfo
+    if (-not [bool]$installInfo.Installed) {
+        Write-Log 'Notepad++ defaults: app ausente. Pulando curadoria.' 'WARN'
+        return [ordered]@{ status = 'skipped'; reason = 'not-installed' }
+    }
+
+    Write-Log ("Notepad++ defaults: curadoria em {0}" -f [string]$installInfo.InstallRoot)
+    $null = New-Item -Path ([string]$installInfo.PluginsRoot) -ItemType Directory -Force
+    $null = New-Item -Path ([string]$installInfo.PluginConfigRoot) -ItemType Directory -Force
+
+    $desiredPlugins = @(Get-BootstrapNotepadPlusPlusDesiredPlugins -Architecture ([string]$installInfo.Architecture))
+    $officialAssets = @(Get-BootstrapNotepadPlusPlusOfficialAssetDefinitions)
+    $customAssets = @(Get-BootstrapNotepadPlusPlusCustomAssetDefinitions)
+    $desiredState = Get-BootstrapNotepadPlusPlusDesiredState -Architecture ([string]$installInfo.Architecture)
+
+    $pluginResults = @()
+    foreach ($plugin in @($desiredPlugins)) {
+        $result = Install-BootstrapNotepadPlusPlusPlugin -InstallInfo $installInfo -Plugin $plugin
+        $pluginResults += @($result)
+        Write-Log ("Notepad++ plugin {0}: {1}" -f [string]$plugin.displayName, [string]$result.status)
+    }
+
+    $assetResults = @()
+    foreach ($asset in @($officialAssets)) {
+        $result = Install-BootstrapNotepadPlusPlusRemoteAsset -InstallInfo $installInfo -Asset $asset
+        $assetResults += @($result)
+        Write-Log ("Notepad++ asset {0}: {1}" -f [string]$asset.name, [string]$result.status)
+    }
+    foreach ($asset in @($customAssets)) {
+        $result = Install-BootstrapNotepadPlusPlusLocalAsset -InstallInfo $installInfo -Asset $asset
+        $assetResults += @($result)
+        Write-Log ("Notepad++ asset {0}: {1}" -f [string]$asset.name, [string]$result.status)
+    }
+
+    $openAiConfig = Ensure-BootstrapNotepadPlusPlusOpenAiConfig -InstallInfo $installInfo
+    Write-Log ("Notepad++ asset {0}: {1}" -f [string]$openAiConfig.name, [string]$openAiConfig.status)
+
+    $failed = @($pluginResults + $assetResults + @($openAiConfig) | Where-Object { [string]$_.status -eq 'failed' })
+    $manifest = [ordered]@{
+        curatedVersion = [string]$desiredState.curatedVersion
+        architecture = [string]$installInfo.Architecture
+        status = $(if ($failed.Count -gt 0) { 'partial' } else { 'applied' })
+        appliedAt = (Get-Date).ToString('o')
+        installRoot = [string]$installInfo.InstallRoot
+        configRoot = [string]$installInfo.ConfigRoot
+        plugins = @($desiredPlugins | ForEach-Object {
+            [ordered]@{
+                displayName = [string]$_.displayName
+                folderName = [string]$_.folderName
+                version = [string]$_.version
+                homepage = [string]$_.homepage
+                source = [string]$_.source
+            }
+        })
+        requiredRelativePaths = @($desiredState.requiredRelativePaths)
+        deferred = @($desiredState.deferred)
+        results = [ordered]@{
+            plugins = @($pluginResults)
+            assets = @($assetResults + @($openAiConfig))
+        }
+    }
+
+    $markerPath = Get-BootstrapNotepadPlusPlusMarkerPath -InstallInfo $installInfo
+    Write-BootstrapJsonFile -Path $markerPath -Value $manifest
+    return $manifest
+}
+
 function Quote-WindowsPathTokensInString {
     param([Parameter(Mandatory = $true)][string]$Text)
     $pattern = '(?<!["''])([A-Za-z]:\\[^"'']*?\.(?:exe|cmd|bat|ps1))(?!["''])'
@@ -1055,10 +1688,17 @@ function Ensure-ClaudeCodeDefaults {
 
     $envObj = Ensure-ObjectProp -Target $obj -Name 'env'
     Ensure-PropValue -Target $envObj -Name 'CLAUDE_CODE_USE_POWERSHELL_TOOL' -Value '1'
-    Ensure-PropValue -Target $envObj -Name 'CLAUDE_CODE_EFFORT_LEVEL' -Value 'xhigh'
+    Ensure-PropValue -Target $envObj -Name 'CLAUDE_CODE_EFFORT_LEVEL' -Value 'low'
+    Ensure-PropValue -Target $envObj -Name 'CAVEMAN_DEFAULT_MODE' -Value 'ultra'
 
     $permObj = Ensure-ObjectProp -Target $obj -Name 'permissions'
     Ensure-PropValue -Target $permObj -Name 'defaultMode' -Value 'acceptEdits'
+
+    $pluginsObj = Ensure-ObjectProp -Target $obj -Name 'enabledPlugins'
+    foreach ($pluginId in @(Get-ClaudeCodeDesiredPlugins)) {
+        if ([string]::IsNullOrWhiteSpace($pluginId)) { continue }
+        Ensure-PropValue -Target $pluginsObj -Name $pluginId -Value $true
+    }
 
     $allow = Ensure-StringArrayProp -Target $permObj -Name 'allow'
     $deny = Ensure-StringArrayProp -Target $permObj -Name 'deny'
@@ -1103,6 +1743,239 @@ function Ensure-ClaudeCodeDefaults {
         }
     } else {
         Write-Log "Claude Code defaults já configurados: $settingsPath"
+    }
+}
+
+function Get-ClaudeCodeDesiredPlugins {
+    return @(
+        'caveman@caveman',
+        'typescript-lsp@claude-plugins-official',
+        'clangd-lsp@claude-plugins-official',
+        'claude-md-management@claude-plugins-official',
+        'code-review@claude-plugins-official'
+    )
+}
+
+function Get-ClaudeCodeInstalledPlugins {
+    param([Parameter(Mandatory = $true)][string]$ClaudeExe)
+
+    if ([string]::IsNullOrWhiteSpace($ClaudeExe) -or -not (Test-Path $ClaudeExe)) {
+        return @{}
+    }
+
+    $result = Invoke-BootstrapCommandCapture -Exe $ClaudeExe -Args @('plugin', 'list')
+    if ($result.ExitCode -ne 0) {
+        return @{}
+    }
+
+    $installed = @{}
+    foreach ($line in @($result.Output)) {
+        $text = [string]$line
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        $trimmed = $text.Trim()
+        if ($trimmed -match '^\s*[❯>\-*]\s*([A-Za-z0-9_.\-]+@[A-Za-z0-9_.\-]+)\s*$') {
+            $installed[[string]$matches[1]] = $true
+        }
+    }
+
+    return $installed
+}
+
+function Ensure-ClaudeCodePlugins {
+    param([hashtable]$State)
+
+    $claudeExe = Resolve-CommandPath -Name 'claude'
+    if (-not $claudeExe) {
+        Write-Log 'Claude Code plugins: runtime "claude" ausente; pulando.' 'WARN'
+        return [ordered]@{
+            ok = $false
+            installed = @()
+            skipped = @('runtime-ausente')
+            failed = @()
+        }
+    }
+
+    $installedMap = Get-ClaudeCodeInstalledPlugins -ClaudeExe ([string]$claudeExe)
+    $installed = @()
+    $skipped = @()
+    $failed = @()
+
+    foreach ($pluginId in @(Get-ClaudeCodeDesiredPlugins)) {
+        if ([string]::IsNullOrWhiteSpace($pluginId)) { continue }
+        if ($installedMap.ContainsKey($pluginId)) {
+            $skipped += @($pluginId)
+            continue
+        }
+
+        $exitCode = Invoke-NativeWithLog -Exe ([string]$claudeExe) -Args @('plugin', 'install', $pluginId)
+        if ($exitCode -eq 0) {
+            $installed += @($pluginId)
+        } else {
+            $failed += @($pluginId)
+            Write-Log ("Claude Code plugins: falha ao instalar {0} (exit={1})." -f $pluginId, $exitCode) 'WARN'
+        }
+    }
+
+    return [ordered]@{
+        ok = ($failed.Count -eq 0)
+        installed = @($installed)
+        skipped = @($skipped)
+        failed = @($failed)
+    }
+}
+
+function Get-ClaudeCodeDesiredProjectMcps {
+    param([Parameter(Mandatory = $true)][hashtable]$ManagedProviders)
+
+    $out = New-Object System.Collections.Generic.List[hashtable]
+    $out.Add([ordered]@{
+        name = 'sentry'
+        url = 'https://mcp.sentry.dev/mcp'
+        headers = @()
+    })
+
+    $bonsaiProvider = $null
+    if ($ManagedProviders.Contains('bonsai') -and ($ManagedProviders['bonsai'] -is [System.Collections.IDictionary])) {
+        $bonsaiProvider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['bonsai']
+    }
+    if ($bonsaiProvider -is [hashtable] -and -not [string]::IsNullOrWhiteSpace([string]$bonsaiProvider['token'])) {
+        $bonsaiBaseUrl = if (-not [string]::IsNullOrWhiteSpace([string]$bonsaiProvider['baseUrl'])) { [string]$bonsaiProvider['baseUrl'] } else { 'https://mcp.bonsai-rx.org/mcp' }
+        $out.Add([ordered]@{
+            name = 'bonsai'
+            url = $bonsaiBaseUrl
+            headers = @(
+                ('Authorization: Bearer {0}' -f [string]$bonsaiProvider['token'])
+            )
+        })
+    }
+
+    return @($out.ToArray())
+}
+
+function Get-ClaudeCodeProjectMcpNames {
+    param([Parameter(Mandatory = $true)][string]$ClaudeExe)
+
+    $result = Invoke-BootstrapCommandCapture -Exe $ClaudeExe -Args @('mcp', 'list')
+    if ($result.ExitCode -ne 0) {
+        return @{}
+    }
+
+    $names = @{}
+    foreach ($line in @($result.Output)) {
+        $text = [string]$line
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        $trimmed = $text.Trim()
+        if ($trimmed -match '^([A-Za-z0-9_.\-]+)\s*:') {
+            $names[[string]$matches[1]] = $true
+        }
+    }
+    return $names
+}
+
+function Ensure-ClaudeCodeProjectMcps {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][hashtable]$ManagedProviders
+    )
+
+    $claudeExe = Resolve-CommandPath -Name 'claude'
+    if (-not $claudeExe) {
+        Write-Log 'Claude Code MCPs: runtime "claude" ausente; pulando.' 'WARN'
+        return
+    }
+
+    $cwd = if (-not [string]::IsNullOrWhiteSpace([string]$State.CloneBaseDir) -and (Test-Path ([string]$State.CloneBaseDir))) { [string]$State.CloneBaseDir } else { (Get-Location).Path }
+
+    Push-Location $cwd
+    try {
+        $existing = Get-ClaudeCodeProjectMcpNames -ClaudeExe ([string]$claudeExe)
+        foreach ($spec in @(Get-ClaudeCodeDesiredProjectMcps -ManagedProviders $ManagedProviders)) {
+            $name = [string]$spec['name']
+            $url = [string]$spec['url']
+            if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($url)) { continue }
+            if ($existing.ContainsKey($name)) { continue }
+
+            $args = @('mcp', 'add', '-s', 'project', '--transport', 'http', $name, $url)
+            foreach ($header in @($spec['headers'])) {
+                if ([string]::IsNullOrWhiteSpace([string]$header)) { continue }
+                $args += @('-H', [string]$header)
+            }
+
+            $exitCode = Invoke-NativeWithLog -Exe ([string]$claudeExe) -Args $args
+            if ($exitCode -ne 0) {
+                Write-Log ("Claude Code MCPs: falha ao adicionar {0} (exit={1})." -f $name, $exitCode) 'WARN'
+            }
+        }
+    } finally {
+        Pop-Location
+    }
+}
+
+function Test-DockerReady {
+    $dockerExe = Resolve-CommandPath -Name 'docker'
+    if (-not $dockerExe) { return $false }
+
+    $result = Invoke-BootstrapCommandCapture -Exe ([string]$dockerExe) -Args @('version')
+    return ($result.ExitCode -eq 0)
+}
+
+function Ensure-OpenWebUI {
+    param([hashtable]$State)
+
+    if (-not (Test-DockerReady)) {
+        Write-Log 'Open WebUI: Docker indisponível (instale/abra Docker Desktop). Pulando.' 'WARN'
+        return
+    }
+
+    $dockerExe = [string](Resolve-CommandPath -Name 'docker')
+    $containerName = 'open-webui'
+    $image = 'ghcr.io/open-webui/open-webui:main'
+
+    $list = Invoke-BootstrapCommandCapture -Exe $dockerExe -Args @('ps', '-a', '--format', '{{.Names}}')
+    if ($list.ExitCode -ne 0) {
+        Write-Log 'Open WebUI: falha ao listar containers Docker.' 'WARN'
+        return
+    }
+
+    $exists = $false
+    foreach ($line in @($list.Output)) {
+        if ([string]::Equals(([string]$line).Trim(), $containerName, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $exists = $true
+            break
+        }
+    }
+
+    if ($exists) {
+        $inspect = Invoke-BootstrapCommandCapture -Exe $dockerExe -Args @('inspect', '-f', '{{.State.Running}}', $containerName)
+        $running = $false
+        if ($inspect.ExitCode -eq 0 -and @($inspect.Output).Count -gt 0) {
+            $running = [string]::Equals(([string]$inspect.Output[0]).Trim(), 'true', [System.StringComparison]::OrdinalIgnoreCase)
+        }
+        if ($running) {
+            Write-Log 'Open WebUI: container já em execução.'
+            return
+        }
+
+        $exitCode = Invoke-NativeWithLog -Exe $dockerExe -Args @('start', $containerName)
+        if ($exitCode -ne 0) {
+            Write-Log ("Open WebUI: falha ao iniciar container (exit={0})." -f $exitCode) 'WARN'
+        }
+        return
+    }
+
+    $exitCode = Invoke-NativeWithLog -Exe $dockerExe -Args @(
+        'run',
+        '-d',
+        '--name', $containerName,
+        '-p', '3000:8080',
+        '-v', 'open-webui:/app/backend/data',
+        '--restart', 'unless-stopped',
+        $image
+    )
+    if ($exitCode -ne 0) {
+        Write-Log ("Open WebUI: falha ao criar container (exit={0})." -f $exitCode) 'WARN'
+    } else {
+        Write-Log 'Open WebUI: container criado e iniciado (http://localhost:3000).'
     }
 }
 
@@ -1740,6 +2613,31 @@ function Ensure-OpenClaw {
     Write-Log "openclaw instalado: $ver ($openclawCmd)"
 }
 
+function Ensure-HermesProjectOpenCloudConfig {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    $root = if (-not [string]::IsNullOrWhiteSpace([string]$State.CloneBaseDir) -and (Test-Path ([string]$State.CloneBaseDir))) { [string]$State.CloneBaseDir } else { (Get-Location).Path }
+    $dir = Join-Path $root '.hermes'
+    $path = Join-Path $dir 'opencloud.json'
+    $null = New-Item -Path $dir -ItemType Directory -Force
+    Write-BootstrapJsonFile -Path $path -Value ([ordered]@{
+        schemaVersion = 1
+        generatedAt = (Get-Date).ToString('o')
+        tool = 'hermes'
+        opencloud = [ordered]@{
+            enabled = $true
+            mode = 'project'
+        }
+    })
+    Write-Log "Hermes: config OpenCloud no projeto atualizado: $path"
+}
+
+function Ensure-Hermes {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    Ensure-BootstrapNodeCore -State $State
+    Ensure-NpmGlobalPackage -NpmCmd $State.NodeInfo.NpmCmd -Package 'hermes@latest' -DisplayName 'Hermes'
+    Ensure-HermesProjectOpenCloudConfig -State $State
+}
+
 function Ensure-RepoClone {
     param(
         [Parameter(Mandatory = $true)][string]$GitExe,
@@ -1819,6 +2717,7 @@ function Get-BootstrapBitLockerStatus {
 }
 
 function Get-BootstrapLinuxPartitions {
+    if ($BootstrapUiLibraryMode) { return @() }
     $linuxPartitions = @()
     try {
         $partitions = Get-Partition -ErrorAction SilentlyContinue
@@ -1878,9 +2777,9 @@ function Get-BootstrapEfiEntries {
 }
 
 function Get-BootstrapGrubPresence {
-    if (-not (Test-IsAdmin)) { return @{ Detected = $null; Path = ''; Confidence = 'unknown' } }
-    $result = @{ Detected = $false; Path = ''; Confidence = 'none' }
-    $efiEntries = Get-BootstrapEfiEntries
+    if (-not (Test-IsAdmin)) { return @{ Detected = $null; Path = ''; Confidence = 'unknown'; EntryId = ''; EntryDesc = '' } }
+    $result = @{ Detected = $false; Path = ''; Confidence = 'none'; EntryId = ''; EntryDesc = '' }
+    $efiEntries = @(Get-BootstrapEfiEntries)
     foreach ($entry in $efiEntries) {
         if ($entry.Type -ne 'entry') { continue }
         $p = [string]$entry.Path
@@ -1895,7 +2794,7 @@ function Get-BootstrapGrubPresence {
         }
     }
     if (-not $result.Detected) {
-        $linuxParts = Get-BootstrapLinuxPartitions
+        $linuxParts = @(Get-BootstrapLinuxPartitions)
         if ($linuxParts.Count -gt 0) {
             $result.Detected   = $true
             $result.Confidence = 'medium'
@@ -1905,9 +2804,10 @@ function Get-BootstrapGrubPresence {
 }
 
 function Test-BootstrapIsDualBoot {
+    if ($BootstrapUiLibraryMode) { return $false }
     $grub = Get-BootstrapGrubPresence
     if ($grub.Detected -eq $true) { return $true }
-    $linuxParts = Get-BootstrapLinuxPartitions
+    $linuxParts = @(Get-BootstrapLinuxPartitions)
     return ($linuxParts.Count -gt 0)
 }
 
@@ -1915,8 +2815,13 @@ function Get-BootstrapDualBootInfo {
     $isAdmin       = Test-IsAdmin
     $fastStartup   = Get-BootstrapFastStartupStatus
     $bitlocker     = Get-BootstrapBitLockerStatus
-    $linuxParts    = Get-BootstrapLinuxPartitions
-    $grub          = Get-BootstrapGrubPresence
+    $linuxParts    = @(Get-BootstrapLinuxPartitions)
+    $grub          = ConvertTo-BootstrapHashtable -InputObject (Get-BootstrapGrubPresence)
+    if (-not $grub.ContainsKey('Detected')) { $grub['Detected'] = $false }
+    if (-not $grub.ContainsKey('Path')) { $grub['Path'] = '' }
+    if (-not $grub.ContainsKey('Confidence')) { $grub['Confidence'] = 'none' }
+    if (-not $grub.ContainsKey('EntryId')) { $grub['EntryId'] = '' }
+    if (-not $grub.ContainsKey('EntryDesc')) { $grub['EntryDesc'] = '' }
     $efiEntries    = if ($isAdmin) { Get-BootstrapEfiEntries } else { $null }
     $isDualBoot    = ($grub.Detected -eq $true) -or ($linuxParts.Count -gt 0)
     $confidence    = if ($grub.Confidence -eq 'high') { 'high' } elseif ($linuxParts.Count -gt 0) { 'medium' } else { 'none' }
@@ -2385,12 +3290,12 @@ function ConvertTo-BootstrapObjectGraph {
 function Normalize-BootstrapObjectArray {
     param($Value)
 
-    if ($null -eq $Value) { return ,@() }
+    if ($null -eq $Value) { return @() }
 
     if (($Value -is [System.Collections.IDictionary]) -or ($Value -is [pscustomobject])) {
         $propertyCount = if ($Value -is [pscustomobject]) { @($Value.PSObject.Properties).Count } else { @($Value.Keys).Count }
-        if ($propertyCount -eq 0) { return ,@() }
-        return ,@((ConvertTo-BootstrapHashtable -InputObject $Value))
+        if ($propertyCount -eq 0) { return @() }
+        return @((ConvertTo-BootstrapHashtable -InputObject $Value))
     }
 
     if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string])) {
@@ -2398,10 +3303,10 @@ function Normalize-BootstrapObjectArray {
         foreach ($item in $Value) {
             $items += @(ConvertTo-BootstrapHashtable -InputObject $item)
         }
-        return ,@($items)
+        return @($items)
     }
 
-    return ,@($Value)
+    return @($Value)
 }
 
 function Get-BootstrapHostHealthModes {
@@ -2444,6 +3349,428 @@ function Get-BootstrapDefaultHostHealthMode {
 
 function Get-BootstrapHostHealthRoot {
     return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'host-health') ('{0:yyyyMMdd_HHmmss}' -f $script:StartTime))
+}
+
+function Get-BootstrapAppTuningModes {
+    return @('off', 'recommended', 'custom')
+}
+
+function Normalize-BootstrapAppTuningMode {
+    param([AllowNull()][string]$Mode)
+
+    if ([string]::IsNullOrWhiteSpace($Mode)) { return '' }
+    $normalized = $Mode.Trim().ToLowerInvariant()
+    if ((Get-BootstrapAppTuningModes) -notcontains $normalized) {
+        throw "Modo AppTuning desconhecido: $Mode"
+    }
+    return $normalized
+}
+
+function Get-BootstrapAppTuningRoot {
+    return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'app-tuning') ('{0:yyyyMMdd_HHmmss}' -f $script:StartTime))
+}
+
+function Get-BootstrapAppTuningCatalog {
+    $categories = @(
+        [ordered]@{ id = 'gaming-console'; displayName = 'Gaming / Console'; description = 'Steam, Playnite, Heroic, RTSS e Special K seguros.' }
+        [ordered]@{ id = 'steamdeck-control'; displayName = 'Steam Deck Control'; description = 'Ferramentas de modo handheld, dock, audio e recovery.' }
+        [ordered]@{ id = 'dev-ai'; displayName = 'Dev / IA'; description = 'IDEs, CLIs de IA, MCPs e manifesto de chaves.' }
+        [ordered]@{ id = 'local-ai-containers'; displayName = 'IA Local / Containers'; description = 'Ollama, Docker e Open WebUI sob demanda.' }
+        [ordered]@{ id = 'browser-startup'; displayName = 'Navegadores / Startup'; description = 'Edge e Chrome sem processos de fundo desnecessarios.' }
+        [ordered]@{ id = 'connectivity'; displayName = 'Conectividade'; description = 'Streaming, VPN mesh, sync e remote desktop preservados.' }
+        [ordered]@{ id = 'capture-creator'; displayName = 'Captura / Creator'; description = 'OBS, ShareX, RTSS overlay e apps criativos sem autostart.' }
+        [ordered]@{ id = 'storage-backup'; displayName = 'Storage / Backup'; description = 'Auditoria de libraries, compactacao e backup golden.' }
+        [ordered]@{ id = 'windows-qol'; displayName = 'Windows QoL'; description = 'QuickLook, PowerToys e shell tweaks opt-in.' }
+    )
+
+    $items = @(
+        [ordered]@{ id = 'steam-big-picture-session'; category = 'gaming-console'; displayName = 'Steam Big Picture por modo'; description = 'Prepara Steam para abrir Big Picture somente em Game - Steam Deck.'; targetApps = @('steam'); probePaths = @('$env:ProgramFiles(x86)\Steam\steam.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'playnite-fullscreen'; category = 'gaming-console'; displayName = 'Playnite Fullscreen fallback'; description = 'Prepara Playnite como fallback console quando Steam nao abrir.'; targetApps = @('playnite'); probePaths = @('$env:APPDATA\Playnite\config.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked'); actions = @('config-file','session'); rollback = @('backup-file') }
+        [ordered]@{ id = 'heroic-library-paths'; category = 'gaming-console'; displayName = 'Heroic paths'; description = 'Audita paths Epic/GOG para integracao com Playnite.'; targetApps = @('heroic'); probePaths = @('$env:APPDATA\heroic'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'rtss-frame-presets'; category = 'gaming-console'; displayName = 'RTSS frame presets'; description = 'Prepara presets 40/45/60 FPS e overlay para modo jogo.'; targetApps = @('rtss'); probePaths = @('$env:ProgramFiles(x86)\RivaTuner Statistics Server\RTSS.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked'); actions = @('config-file','session'); rollback = @('backup-file') }
+        [ordered]@{ id = 'specialk-safe-defaults'; category = 'gaming-console'; displayName = 'Special K seguro'; description = 'Mantem Special K sem injecao global por padrao para reduzir risco anti-cheat.'; targetApps = @('special k','specialk'); probePaths = @('$env:LOCALAPPDATA\Programs\Special K\SKIF.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked'); actions = @('config-file','audit'); rollback = @('backup-file') }
+        [ordered]@{ id = 'specialk-global-injection'; category = 'gaming-console'; displayName = 'Special K injecao global'; description = 'Opcao profunda; fica opt-in por risco anti-cheat.'; targetApps = @('special k','specialk'); probePaths = @('$env:LOCALAPPDATA\Programs\Special K\SKIF.exe'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('game-handheld','game-docked'); actions = @('config-file'); rollback = @('backup-file') }
+
+        [ordered]@{ id = 'steamdeck-tools-allowlist'; category = 'steamdeck-control'; displayName = 'Steam Deck Tools allowlist'; description = 'Protege Steam Deck Tools contra limpeza/processos de jogo.'; targetApps = @('steam deck tools'); probePaths = @('$env:ProgramFiles\Steam Deck Tools\PowerControl.exe','$env:LOCALAPPDATA\Programs\Steam Deck Tools\PowerControl.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'autohotkey-recovery-hotkeys'; category = 'steamdeck-control'; displayName = 'AutoHotkey recovery'; description = 'Garante hotkeys de retorno para Desktop/Dev.'; targetApps = @('autohotkey'); probePaths = @('$env:LOCALAPPDATA\Programs\AutoHotkey\v2\AutoHotkey64.exe','$env:LOCALAPPDATA\Programs\AutoHotkey\AutoHotkey.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('session'); rollback = @('manual') }
+        [ordered]@{ id = 'powertoys-deck-layout'; category = 'steamdeck-control'; displayName = 'PowerToys Awake/FancyZones'; description = 'Ativa uso de Awake/FancyZones para dock/dev quando PowerToys existir.'; targetApps = @('powertoys'); probePaths = @('$env:LOCALAPPDATA\Microsoft\PowerToys'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','dev'); actions = @('config-file','session'); rollback = @('backup-file') }
+        [ordered]@{ id = 'soundswitch-audio-profile'; category = 'steamdeck-control'; displayName = 'SoundSwitch audio'; description = 'Prepara troca de audio Deck/HDMI/DP por modo.'; targetApps = @('soundswitch'); probePaths = @('$env:APPDATA\SoundSwitch'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('config-file','session'); rollback = @('backup-file') }
+        [ordered]@{ id = 'displayfusion-layouts'; category = 'steamdeck-control'; displayName = 'DisplayFusion layouts'; description = 'Perfis de monitor/dock; pode exigir elevacao para hooks globais.'; targetApps = @('displayfusion'); probePaths = @('$env:ProgramFiles\DisplayFusion\DisplayFusion.exe','$env:ProgramFiles(x86)\DisplayFusion\DisplayFusion.exe'); requiresAdmin = $true; defaultMode = 'recommended'; profiles = @('desktop','dev'); actions = @('config-file','task'); rollback = @('backup-file','registry-snapshot') }
+
+        [ordered]@{ id = 'vscode-family-settings'; category = 'dev-ai'; displayName = 'VS Code family settings'; description = 'Aplica settings/extensoes/MCPs para VS Code, Insiders, Cursor, Windsurf, Trae e Zed.'; targetApps = @('visual studio code','cursor','windsurf','trae','zed'); probePaths = @('$env:APPDATA\Code\User\settings.json','$env:APPDATA\Code - Insiders\User\settings.json','$env:APPDATA\Cursor\User','$env:APPDATA\Windsurf\User','$env:APPDATA\Zed\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
+        [ordered]@{ id = 'notepadpp-defaults'; category = 'dev-ai'; displayName = 'Notepad++ defaults'; description = 'Instala plugins oficiais curados, UDLs oficiais/custom, NppOpenAI.ini seguro e deixa LSP alpha fora do default.'; targetApps = @('notepad++'); probePaths = @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Programs\Notepad++\notepad++.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual') }
+        [ordered]@{ id = 'claude-code-defaults'; category = 'dev-ai'; displayName = 'Claude Code defaults'; description = 'Mantem settings, plugins e rules de Claude Code.'; targetApps = @('claude code'); probePaths = @('$env:USERPROFILE\.claude\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
+        [ordered]@{ id = 'opencode-auth-config'; category = 'dev-ai'; displayName = 'OpenCode auth/config'; description = 'Usa manifesto de chaves para auth/config do OpenCode.'; targetApps = @('opencode'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.local\share\opencode\auth.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
+        [ordered]@{ id = 'codex-cli-env'; category = 'dev-ai'; displayName = 'Codex CLI env'; description = 'Audita variaveis/chaves para Codex CLI e apps de agente.'; targetApps = @('codex cli','codex'); probePaths = @('$env:APPDATA\npm\codex.cmd','$env:LOCALAPPDATA\Microsoft\WindowsApps\codex.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'antigravity-settings'; category = 'dev-ai'; displayName = 'Antigravity settings'; description = 'Audita Antigravity para integracao futura com chaves e MCPs.'; targetApps = @('antigravity'); probePaths = @('$env:LOCALAPPDATA\Programs\Antigravity'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'cherry-studio-manual'; category = 'dev-ai'; displayName = 'Cherry Studio manual'; description = 'Marca setup manual de modelos/chaves no Cherry Studio.'; targetApps = @('cherry studio'); probePaths = @('$env:APPDATA\CherryStudio'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'comet-manual'; category = 'dev-ai'; displayName = 'Comet manual'; description = 'Registra Comet como manual-only para chaves e agentes.'; targetApps = @('comet'); probePaths = @('$env:LOCALAPPDATA\Comet'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
+
+        [ordered]@{ id = 'ollama-dev-session'; category = 'local-ai-containers'; displayName = 'Ollama sob demanda'; description = 'Evita tratar Ollama como requisito de Game - Steam Deck.'; targetApps = @('ollama'); probePaths = @('$env:USERPROFILE\.ollama'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'docker-dev-session'; category = 'local-ai-containers'; displayName = 'Docker sob demanda'; description = 'Docker fica preferencialmente em Desktop/Dev, nao no modo jogo.'; targetApps = @('docker desktop','docker'); probePaths = @('$env:APPDATA\Docker'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'openwebui-dev-session'; category = 'local-ai-containers'; displayName = 'Open WebUI sob demanda'; description = 'Open WebUI fica em Desktop/Dev e nao inicia junto ao console.'; targetApps = @('open webui','openwebui'); probePaths = @(); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
+
+        [ordered]@{ id = 'edge-background-off'; category = 'browser-startup'; displayName = 'Edge background off'; description = 'Desliga startup boost/background do Edge via HKCU.'; targetApps = @('microsoft edge','edge'); probePaths = @('$env:LOCALAPPDATA\Microsoft\Edge\User Data'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-handheld','game-docked'); actions = @('registry','startup'); rollback = @('registry-snapshot') }
+        [ordered]@{ id = 'chrome-background-off'; category = 'browser-startup'; displayName = 'Chrome background off'; description = 'Desliga apps em background do Chrome via policy HKCU.'; targetApps = @('google chrome','chrome'); probePaths = @('$env:LOCALAPPDATA\Google\Chrome\User Data'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-handheld','game-docked'); actions = @('registry','startup'); rollback = @('registry-snapshot') }
+
+        [ordered]@{ id = 'sunshine-allowlist'; category = 'connectivity'; displayName = 'Sunshine allowlist'; description = 'Mantem Sunshine ativo para streaming remoto.'; targetApps = @('sunshine'); probePaths = @('$env:ProgramFiles\Sunshine\sunshine.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-docked','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'tailscale-allowlist'; category = 'connectivity'; displayName = 'Tailscale allowlist'; description = 'Mantem VPN mesh preservada em modos jogo e dev.'; targetApps = @('tailscale'); probePaths = @('$env:ProgramFiles\Tailscale\tailscale.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'syncthing-allowlist'; category = 'connectivity'; displayName = 'Syncthing allowlist'; description = 'Preserva sync de saves/configs quando instalado.'; targetApps = @('syncthing'); probePaths = @('$env:LOCALAPPDATA\Syncthing'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'rustdesk-allowlist'; category = 'connectivity'; displayName = 'RustDesk allowlist'; description = 'Preserva remote desktop quando instalado.'; targetApps = @('rustdesk'); probePaths = @('$env:ProgramFiles\RustDesk\rustdesk.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('manual') }
+
+        [ordered]@{ id = 'obs-replay-buffer'; category = 'capture-creator'; displayName = 'OBS replay buffer'; description = 'Audita/guarda ponto para replay buffer e source record.'; targetApps = @('obs studio','obs'); probePaths = @('$env:APPDATA\obs-studio'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-docked','desktop'); actions = @('config-file','audit'); rollback = @('backup-file') }
+        [ordered]@{ id = 'sharex-hotkeys'; category = 'capture-creator'; displayName = 'ShareX hotkeys'; description = 'Prepara captura rapida sem interferir no jogo.'; targetApps = @('sharex'); probePaths = @('$env:APPDATA\ShareX'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-docked'); actions = @('config-file'); rollback = @('backup-file') }
+        [ordered]@{ id = 'blender-no-autostart'; category = 'capture-creator'; displayName = 'Blender sem autostart'; description = 'Garante Blender fora de startup/processos de jogo.'; targetApps = @('blender'); probePaths = @('$env:APPDATA\Blender Foundation'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('startup','audit'); rollback = @('manual') }
+
+        [ordered]@{ id = 'steam-library-audit'; category = 'storage-backup'; displayName = 'Steam libraries audit'; description = 'Audita libraries Steam, incluindo F:\Steam\Steamapps quando existir.'; targetApps = @('steam'); probePaths = @('F:\Steam\Steamapps','$env:ProgramFiles(x86)\Steam\steamapps'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-handheld','game-docked'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'storage-tools-audit'; category = 'storage-backup'; displayName = 'Storage tools audit'; description = 'Audita CompactGUI, TreeSize e WinDirStat sem compactar nada automaticamente.'; targetApps = @('compactgui','treesize','windirstat'); probePaths = @('$env:ProgramFiles\WinDirStat\windirstat.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'driver-backup-manual'; category = 'storage-backup'; displayName = 'Driver backup manual'; description = 'Marca backup de drivers/imagem golden como manual.'; targetApps = @('driver store explorer','macrium'); probePaths = @(); requiresAdmin = $true; defaultMode = 'opt-in'; profiles = @('desktop'); actions = @('audit'); rollback = @('manual') }
+
+        [ordered]@{ id = 'quicklook-defaults'; category = 'windows-qol'; displayName = 'QuickLook defaults'; description = 'Prepara preview rapido quando QuickLook existir.'; targetApps = @('quicklook'); probePaths = @('$env:LOCALAPPDATA\Programs\QuickLook'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'explorerpatcher-optin'; category = 'windows-qol'; displayName = 'ExplorerPatcher opt-in'; description = 'Shell tweak profundo; opt-in para reduzir risco.'; targetApps = @('explorerpatcher'); probePaths = @('$env:ProgramFiles\ExplorerPatcher'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('desktop'); actions = @('config-file','registry'); rollback = @('backup-file','registry-snapshot') }
+        [ordered]@{ id = 'mica-optin'; category = 'windows-qol'; displayName = 'Mica opt-in'; description = 'Visual tweak opcional para Mica For Everyone.'; targetApps = @('mica for everyone'); probePaths = @('$env:APPDATA\Mica For Everyone'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('desktop'); actions = @('config-file'); rollback = @('backup-file') }
+        [ordered]@{ id = 'powertoys-qol'; category = 'windows-qol'; displayName = 'PowerToys QoL'; description = 'Mantem PowerToys nos modulos uteis e evita ruído no jogo.'; targetApps = @('powertoys'); probePaths = @('$env:LOCALAPPDATA\Microsoft\PowerToys'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','dev'); actions = @('config-file','session'); rollback = @('backup-file') }
+    )
+
+    return [ordered]@{
+        categories = @($categories)
+        items = @($items)
+    }
+}
+
+function Show-BootstrapAppTuningCatalog {
+    $catalog = Get-BootstrapAppTuningCatalog
+    foreach ($category in @($catalog.categories)) {
+        Write-Output ("{0} - {1}" -f $category.id, $category.description)
+        foreach ($item in @($catalog.items | Where-Object { $_.category -eq $category.id })) {
+            Write-Output ("  {0} - {1} | default: {2} | admin: {3}" -f $item.id, $item.displayName, $item.defaultMode, $item.requiresAdmin)
+        }
+    }
+}
+
+function ConvertTo-BootstrapExpandedPath {
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+    $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    $expanded = $expanded -replace '\$env:ProgramFiles\(x86\)', $programFilesX86
+    $expanded = $expanded -replace '\$env:ProgramFiles', $env:ProgramFiles
+    $expanded = $expanded -replace '\$env:LOCALAPPDATA', $env:LOCALAPPDATA
+    $expanded = $expanded -replace '\$env:APPDATA', $env:APPDATA
+    $expanded = $expanded -replace '\$env:USERPROFILE', $env:USERPROFILE
+    return $expanded
+}
+
+function Get-BootstrapInstalledAppInventory {
+    $apps = @{}
+    $paths = @{}
+    $uninstallRoots = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+
+    foreach ($entry in @(Get-ItemProperty $uninstallRoots -ErrorAction SilentlyContinue)) {
+        $name = if ($entry.PSObject.Properties.Name -contains 'DisplayName') { [string]$entry.DisplayName } else { '' }
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $apps[$name.ToLowerInvariant()] = $true
+    }
+
+    try {
+        foreach ($entry in @(Get-StartApps -ErrorAction SilentlyContinue)) {
+            $name = if ($entry.PSObject.Properties.Name -contains 'Name') { [string]$entry.Name } else { '' }
+            if ([string]::IsNullOrWhiteSpace($name)) { continue }
+            $apps[$name.ToLowerInvariant()] = $true
+        }
+    } catch {
+    }
+
+    $catalog = Get-BootstrapAppTuningCatalog
+    foreach ($item in @($catalog.items)) {
+        foreach ($probePath in @($item.probePaths)) {
+            $expanded = ConvertTo-BootstrapExpandedPath -Path ([string]$probePath)
+            if ([string]::IsNullOrWhiteSpace($expanded)) { continue }
+            if (Test-Path $expanded) {
+                $paths[$expanded] = $true
+                foreach ($targetApp in @($item.targetApps)) {
+                    if (-not [string]::IsNullOrWhiteSpace([string]$targetApp)) {
+                        $apps[[string]$targetApp.ToLowerInvariant()] = $true
+                    }
+                }
+            }
+        }
+    }
+
+    return [ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        apps = $apps
+        paths = $paths
+    }
+}
+
+function Test-BootstrapAppTuningItemInstalled {
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [Parameter(Mandatory = $true)]$InstalledInventory
+    )
+
+    $inventory = ConvertTo-BootstrapHashtable -InputObject $InstalledInventory
+    $apps = if ($inventory.ContainsKey('apps') -and ($inventory['apps'] -is [hashtable])) { $inventory['apps'] } else { @{} }
+    $paths = if ($inventory.ContainsKey('paths') -and ($inventory['paths'] -is [hashtable])) { $inventory['paths'] } else { @{} }
+
+    foreach ($targetApp in @($Item.targetApps)) {
+        $needle = ([string]$targetApp).Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($needle)) { continue }
+        foreach ($appName in @($apps.Keys)) {
+            $text = ([string]$appName).ToLowerInvariant()
+            if ($text -eq $needle -or $text.Contains($needle)) {
+                return $true
+            }
+        }
+    }
+
+    foreach ($probePath in @($Item.probePaths)) {
+        $expanded = ConvertTo-BootstrapExpandedPath -Path ([string]$probePath)
+        if ([string]::IsNullOrWhiteSpace($expanded)) { continue }
+        if ($paths.ContainsKey($expanded)) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Get-BootstrapDefaultAppTuningMode {
+    param(
+        [Parameter(Mandatory = $true)]$Selection,
+        [Parameter(Mandatory = $true)]$Resolution
+    )
+
+    if (@($Selection.Profiles).Count -eq 1 -and [string]$Selection.Profiles[0] -eq 'legacy') {
+        return 'off'
+    }
+    return 'recommended'
+}
+
+function Resolve-BootstrapAppTuningSelection {
+    param(
+        [AllowNull()][string]$Mode,
+        [string[]]$Categories = @(),
+        [string[]]$Items = @(),
+        [string[]]$ExcludedItems = @(),
+        [Parameter(Mandatory = $true)]$Selection,
+        [Parameter(Mandatory = $true)]$Resolution,
+        [AllowNull()]$InstalledInventory = $null
+    )
+
+    $catalog = Get-BootstrapAppTuningCatalog
+    $normalizedMode = Normalize-BootstrapAppTuningMode -Mode $Mode
+    if ([string]::IsNullOrWhiteSpace($normalizedMode)) {
+        $normalizedMode = Get-BootstrapDefaultAppTuningMode -Selection $Selection -Resolution $Resolution
+    }
+
+    $categoryLookup = @{}
+    foreach ($category in @($catalog.categories)) { $categoryLookup[[string]$category.id] = $category }
+    $itemLookup = @{}
+    foreach ($item in @($catalog.items)) { $itemLookup[[string]$item.id] = $item }
+
+    $selectedCategories = @(Normalize-BootstrapNames -Names $Categories)
+    $selectedItems = @(Normalize-BootstrapNames -Names $Items)
+    $excluded = @(Normalize-BootstrapNames -Names $ExcludedItems)
+
+    foreach ($categoryId in @($selectedCategories)) {
+        if (-not $categoryLookup.ContainsKey($categoryId)) { throw "Categoria AppTuning desconhecida: $categoryId" }
+    }
+    foreach ($itemId in @($selectedItems + $excluded)) {
+        if (-not $itemLookup.ContainsKey($itemId)) { throw "Item AppTuning desconhecido: $itemId" }
+    }
+
+    $selectedMap = [ordered]@{}
+    if ($normalizedMode -eq 'recommended') {
+        foreach ($item in @($catalog.items)) {
+            if ([string]$item.defaultMode -eq 'recommended') {
+                $selectedMap[[string]$item.id] = $true
+            }
+        }
+    } elseif ($normalizedMode -eq 'custom') {
+        foreach ($categoryId in @($selectedCategories)) {
+            foreach ($item in @($catalog.items | Where-Object { $_.category -eq $categoryId -and $_.defaultMode -eq 'recommended' })) {
+                $selectedMap[[string]$item.id] = $true
+            }
+        }
+        foreach ($itemId in @($selectedItems)) {
+            $selectedMap[$itemId] = $true
+        }
+    }
+
+    foreach ($itemId in @($excluded)) {
+        if ($selectedMap.Contains($itemId)) { $selectedMap.Remove($itemId) }
+    }
+
+    $inventory = if ($InstalledInventory) { $InstalledInventory } else { Get-BootstrapInstalledAppInventory }
+    $resolvedItems = @()
+    foreach ($itemId in @($selectedMap.Keys)) {
+        $item = $itemLookup[$itemId]
+        $installed = Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inventory
+        $status = if ($installed) { 'pending' } else { 'skipped' }
+        $resolvedItems += @([ordered]@{
+            id = [string]$item.id
+            category = [string]$item.category
+            displayName = [string]$item.displayName
+            description = [string]$item.description
+            targetApps = @($item.targetApps)
+            probePaths = @($item.probePaths)
+            requiresAdmin = [bool]$item.requiresAdmin
+            defaultMode = [string]$item.defaultMode
+            profiles = @($item.profiles)
+            actions = @($item.actions)
+            rollback = @($item.rollback)
+            installed = $installed
+            status = $status
+        })
+    }
+
+    $categorySet = @{}
+    foreach ($item in @($resolvedItems)) { $categorySet[[string]$item.category] = $true }
+
+    return [ordered]@{
+        mode = $normalizedMode
+        categories = @($categorySet.Keys | Sort-Object)
+        requestedCategories = @($selectedCategories)
+        requestedItems = @($selectedItems)
+        excludedItems = @($excluded)
+        items = @($resolvedItems | Sort-Object category, id)
+        skippedItems = @($resolvedItems | Where-Object { $_.status -eq 'skipped' } | ForEach-Object { $_.id })
+        installedInventory = $inventory
+    }
+}
+
+function Get-BootstrapAppTuningInstallComponents {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    $map = @{
+        'steam-big-picture-session' = @('steam')
+        'playnite-fullscreen' = @('playnite')
+        'heroic-library-paths' = @('heroic')
+        'rtss-frame-presets' = @('rtss')
+        'specialk-safe-defaults' = @('special-k')
+        'specialk-global-injection' = @('special-k')
+        'steamdeck-tools-allowlist' = @('steamdeck-tools')
+        'autohotkey-recovery-hotkeys' = @('autohotkey-runtime')
+        'powertoys-deck-layout' = @('powertoys')
+        'soundswitch-audio-profile' = @('soundswitch')
+        'displayfusion-layouts' = @('displayfusion')
+        'vscode-family-settings' = @('vscode','vscode-insiders','cursor','windsurf','trae','zed')
+        'notepadpp-defaults' = @('notepadpp')
+        'claude-code-defaults' = @('claude-code')
+        'opencode-auth-config' = @('opencode')
+        'codex-cli-env' = @('codex-cli')
+        'antigravity-settings' = @('antigravity')
+        'cherry-studio-manual' = @('cherry-studio')
+        'ollama-dev-session' = @('ollama')
+        'docker-dev-session' = @('docker')
+        'edge-background-off' = @()
+        'chrome-background-off' = @('chrome')
+        'sunshine-allowlist' = @('sunshine')
+        'tailscale-allowlist' = @('tailscale')
+        'syncthing-allowlist' = @('syncthing')
+        'rustdesk-allowlist' = @('rustdesk')
+        'obs-replay-buffer' = @('obs-studio')
+        'sharex-hotkeys' = @('sharex')
+        'blender-no-autostart' = @('blender')
+        'steam-library-audit' = @('steam')
+        'storage-tools-audit' = @('compactgui','treesize-free')
+        'driver-backup-manual' = @('driver-store-explorer','macrium-reflect')
+        'quicklook-defaults' = @('quicklook')
+        'explorerpatcher-optin' = @('explorerpatcher')
+        'mica-optin' = @('mica-for-everyone')
+        'powertoys-qol' = @('powertoys')
+    }
+
+    $id = [string]$Item.id
+    if ($map.ContainsKey($id)) { return @($map[$id]) }
+    return @()
+}
+
+function Test-BootstrapAppTuningRegistryConfigured {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    try {
+        switch ([string]$Item.id) {
+            'edge-background-off' {
+                $policy = Get-ItemProperty -Path 'HKCU:\Software\Policies\Microsoft\Edge' -ErrorAction SilentlyContinue
+                return ($policy -and [string]$policy.StartupBoostEnabled -eq '0' -and [string]$policy.BackgroundModeEnabled -eq '0')
+            }
+            'chrome-background-off' {
+                $policy = Get-ItemProperty -Path 'HKCU:\Software\Policies\Google\Chrome' -ErrorAction SilentlyContinue
+                return ($policy -and [string]$policy.BackgroundModeEnabled -eq '0')
+            }
+            'notepadpp-defaults' {
+                $installInfo = Get-BootstrapNotepadPlusPlusInstallInfo
+                if (-not [bool]$installInfo.Installed) { return $false }
+                return (Test-BootstrapNotepadPlusPlusConfigured -InstallInfo $installInfo -DesiredState (Get-BootstrapNotepadPlusPlusDesiredState -Architecture ([string]$installInfo.Architecture)))
+            }
+        }
+    } catch {
+    }
+    return $false
+}
+
+function Get-BootstrapAppTuningStatusRows {
+    param(
+        [Parameter(Mandatory = $true)]$Plan,
+        [AllowNull()]$InstalledInventory = $null
+    )
+
+    $catalog = Get-BootstrapAppTuningCatalog
+    $inventory = if ($InstalledInventory) { $InstalledInventory } elseif ($Plan.installedInventory) { $Plan.installedInventory } else { Get-BootstrapInstalledAppInventory }
+    $selectedMap = @{}
+    foreach ($item in @($Plan.items)) { $selectedMap[[string]$item.id] = $item }
+
+    $rows = @()
+    foreach ($item in @($catalog.items)) {
+        $id = [string]$item.id
+        $installed = Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inventory
+        $selected = $selectedMap.ContainsKey($id)
+        $configured = Test-BootstrapAppTuningRegistryConfigured -Item $item
+        $configuredState = if ($configured) {
+            'configured'
+        } elseif ($selected -and $installed) {
+            'planned'
+        } elseif ($installed) {
+            'not-configured'
+        } else {
+            'not-installed'
+        }
+        $updatedState = if ($installed) { 'check' } else { 'not-installed' }
+        $installComponents = @(Get-BootstrapAppTuningInstallComponents -Item $item)
+
+        $rows += @([ordered]@{
+            id = $id
+            category = [string]$item.category
+            displayName = [string]$item.displayName
+            app = (@($item.targetApps) -join ', ')
+            description = [string]$item.description
+            profiles = @($item.profiles)
+            risk = [string]$item.defaultMode
+            requiresAdmin = [bool]$item.requiresAdmin
+            installed = $installed
+            configured = $configured
+            selected = $selected
+            installedState = if ($installed) { 'installed' } else { 'missing' }
+            configuredState = $configuredState
+            updatedState = $updatedState
+            installComponents = @($installComponents)
+            canInstall = ($installComponents.Count -gt 0)
+            canConfigure = $true
+            canUpdate = ($installComponents.Count -gt 0)
+            actions = @($item.actions)
+            rollback = @($item.rollback)
+        })
+    }
+
+    return @($rows | Sort-Object category, id)
 }
 
 function Get-BootstrapHostHealthPolicy {
@@ -2552,6 +3879,45 @@ function Test-BootstrapDirectoryWritable {
     }
 }
 
+function Get-BootstrapSecretsManifestCredentialCount {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) { return 0 }
+
+    try {
+        $raw = Get-Content -Path $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) { return 0 }
+        $data = ConvertTo-BootstrapHashtable -InputObject ($raw | ConvertFrom-Json -ErrorAction Stop)
+        if (-not ($data -is [hashtable]) -or -not ($data.ContainsKey('providers')) -or -not ($data['providers'] -is [hashtable])) {
+            return 0
+        }
+
+        $count = 0
+        foreach ($providerName in @($data['providers'].Keys)) {
+            $provider = $data['providers'][$providerName]
+            if (-not ($provider -is [hashtable])) { continue }
+            if ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable])) {
+                $count += @($provider['credentials'].Keys).Count
+                continue
+            }
+            if (($provider.ContainsKey('apiKey') -and -not [string]::IsNullOrWhiteSpace([string]$provider['apiKey'])) -or
+                ($provider.ContainsKey('token') -and -not [string]::IsNullOrWhiteSpace([string]$provider['token']))) {
+                $count++
+            }
+        }
+        return $count
+    } catch {
+        return 0
+    }
+}
+
+function Test-BootstrapSecretsManifestHasCredentials {
+    param([Parameter(Mandatory = $true)][string]$DataRoot)
+
+    $secretsPath = Join-Path $DataRoot 'bootstrap-secrets.json'
+    return ((Get-BootstrapSecretsManifestCredentialCount -Path $secretsPath) -gt 0)
+}
+
 function Get-BootstrapDataRoot {
     $cachedDataRoot = $null
     $cachedVariable = Get-Variable -Name BootstrapDataRoot -Scope Script -ErrorAction SilentlyContinue
@@ -2564,24 +3930,49 @@ function Get-BootstrapDataRoot {
         return $script:BootstrapDataRoot
     }
 
-    $candidates = @()
     if (-not [string]::IsNullOrWhiteSpace($env:BOOTSTRAP_DATA_ROOT)) {
-        $candidates += $env:BOOTSTRAP_DATA_ROOT
+        if (Test-BootstrapDirectoryWritable -Path $env:BOOTSTRAP_DATA_ROOT) {
+            $script:BootstrapDataRoot = $env:BOOTSTRAP_DATA_ROOT
+            return $script:BootstrapDataRoot
+        }
     }
 
+    $hostCandidates = @()
+    $hostCandidates += (Join-Path (Get-Location).Path '.bootstrap-tools')
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $hostCandidates += (Join-Path $PSScriptRoot '.bootstrap-tools')
+    }
+
+    $fallbackCandidates = @()
     $userHome = Get-BootstrapUserHomePath
     if (-not [string]::IsNullOrWhiteSpace($userHome)) {
-        $candidates += (Join-Path $userHome '.bootstrap-tools')
+        $fallbackCandidates += (Join-Path $userHome '.bootstrap-tools')
     }
     if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
-        $candidates += (Join-Path $env:LOCALAPPDATA 'bootstrap-tools')
+        $fallbackCandidates += (Join-Path $env:LOCALAPPDATA 'bootstrap-tools')
     }
     if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) {
-        $candidates += (Join-Path $env:TEMP 'bootstrap-tools')
+        $fallbackCandidates += (Join-Path $env:TEMP 'bootstrap-tools')
     }
-    $candidates += (Join-Path (Get-Location).Path '.bootstrap-tools')
+    $fallbackCandidates += $hostCandidates
 
-    foreach ($candidate in @($candidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)) {
+    $projectCandidates = @($hostCandidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    foreach ($candidate in $projectCandidates) {
+        if ((Test-BootstrapSecretsManifestHasCredentials -DataRoot $candidate) -and (Test-BootstrapDirectoryWritable -Path $candidate)) {
+            $script:BootstrapDataRoot = $candidate
+            return $script:BootstrapDataRoot
+        }
+    }
+
+    $candidates = @($fallbackCandidates | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    foreach ($candidate in $candidates) {
+        if ((Test-BootstrapSecretsManifestHasCredentials -DataRoot $candidate) -and (Test-BootstrapDirectoryWritable -Path $candidate)) {
+            $script:BootstrapDataRoot = $candidate
+            return $script:BootstrapDataRoot
+        }
+    }
+
+    foreach ($candidate in $candidates) {
         if (Test-BootstrapDirectoryWritable -Path $candidate) {
             $script:BootstrapDataRoot = $candidate
             return $script:BootstrapDataRoot
@@ -2642,15 +4033,39 @@ function Get-BootstrapSecretsKnownTargets {
 function Get-BootstrapSecretsProviderCatalog {
     return (ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
         anthropic = [ordered]@{
+            displayName = 'Anthropic'
+            category = 'llm'
             secretKind = 'apiKey'
             validationKind = 'anthropic'
+            signupUrl = 'https://console.anthropic.com/settings/keys'
+            docsUrl = 'https://docs.anthropic.com/en/api/getting-started'
+            pricingUrl = 'https://www.anthropic.com/pricing#api'
+            requiredFields = @('apiKey')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'anthropic'
+            appTargets = @('claudeCode', 'openCode', 'comet')
+            creationNotes = 'Crie uma API key no Console Anthropic e mantenha o billing ativo.'
             defaults = [ordered]@{}
             aliases = @('anthropic', 'claude')
             tokenPatterns = @('sk-ant-[A-Za-z0-9_\-]+')
         }
         openai = [ordered]@{
+            displayName = 'OpenAI'
+            category = 'llm'
             secretKind = 'apiKey'
             validationKind = 'openaiCompatible'
+            signupUrl = 'https://platform.openai.com/api-keys'
+            docsUrl = 'https://platform.openai.com/docs'
+            pricingUrl = 'https://openai.com/api/pricing/'
+            requiredFields = @('apiKey', 'baseUrl', 'organizationId')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'openai'
+            appTargets = @('claudeCode', 'openCode', 'geminiCli', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Crie uma project key e, se usar organizacao, informe Organization ID.'
             defaults = [ordered]@{
                 baseUrl = 'https://api.openai.com/v1'
                 organizationId = ''
@@ -2659,15 +4074,39 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @('sk-proj-[A-Za-z0-9_\-]+', 'sk-[A-Za-z0-9_\-]{16,}')
         }
         google = [ordered]@{
+            displayName = 'Google Gemini'
+            category = 'llm'
             secretKind = 'apiKey'
             validationKind = 'google'
+            signupUrl = 'https://aistudio.google.com/app/apikey'
+            docsUrl = 'https://ai.google.dev/gemini-api/docs'
+            pricingUrl = 'https://ai.google.dev/gemini-api/docs/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'google'
+            appTargets = @('claudeCode', 'openCode', 'geminiCli', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Crie a chave no Google AI Studio e habilite billing quando necessario.'
             defaults = [ordered]@{}
             aliases = @('google', 'gemini', 'google ai', 'google ai studio', 'googlestudio')
             tokenPatterns = @('AIza[0-9A-Za-z\-_]{20,}')
         }
         xai = [ordered]@{
+            displayName = 'xAI'
+            category = 'llm'
             secretKind = 'apiKey'
             validationKind = 'openaiCompatible'
+            signupUrl = 'https://console.x.ai/'
+            docsUrl = 'https://docs.x.ai/'
+            pricingUrl = 'https://x.ai/api'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'xai'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Use uma API key xAI com endpoint OpenAI-compatible.'
             defaults = [ordered]@{
                 baseUrl = 'https://api.x.ai/v1'
             }
@@ -2675,8 +4114,20 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @('xai-[A-Za-z0-9_\-]{12,}', 'sk-[A-Za-z0-9_\-]{16,}')
         }
         openrouter = [ordered]@{
+            displayName = 'OpenRouter'
+            category = 'llm-router'
             secretKind = 'apiKey'
             validationKind = 'openaiCompatible'
+            signupUrl = 'https://openrouter.ai/settings/keys'
+            docsUrl = 'https://openrouter.ai/docs'
+            pricingUrl = 'https://openrouter.ai/models'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'openrouter'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Crie uma chave em OpenRouter e confira saldo/modelos permitidos.'
             defaults = [ordered]@{
                 baseUrl = 'https://openrouter.ai/api/v1'
             }
@@ -2684,15 +4135,39 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @('sk-or-v1-[A-Za-z0-9]+')
         }
         github = [ordered]@{
+            displayName = 'GitHub'
+            category = 'source-control'
             secretKind = 'token'
             validationKind = 'github'
+            signupUrl = 'https://github.com/settings/tokens'
+            docsUrl = 'https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens'
+            pricingUrl = 'https://github.com/pricing'
+            requiredFields = @('token')
+            supportsValidation = $true
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'cursor', 'windsurf', 'cline', 'githubCopilot')
+            creationNotes = 'Use fine-grained PAT para MCP GitHub e automacoes locais.'
             defaults = [ordered]@{}
             aliases = @('github')
             tokenPatterns = @('github_pat_[A-Za-z0-9_]+', 'gh[pousr]_[A-Za-z0-9_]+')
         }
         moonshot = [ordered]@{
+            displayName = 'Moonshot Kimi'
+            category = 'llm'
             secretKind = 'apiKey'
             validationKind = 'openaiCompatible'
+            signupUrl = 'https://platform.moonshot.ai/console/api-keys'
+            docsUrl = 'https://platform.moonshot.ai/docs'
+            pricingUrl = 'https://platform.moonshot.ai/docs/pricing'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'moonshot'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Use a chave Kimi/Moonshot com endpoint OpenAI-compatible.'
             defaults = [ordered]@{
                 baseUrl = 'https://api.moonshot.ai/v1'
             }
@@ -2700,24 +4175,467 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @('sk-[A-Za-z0-9_\-]{12,}', 'ak-[A-Za-z0-9_\-]{12,}')
         }
         deepseek = [ordered]@{
+            displayName = 'DeepSeek'
+            category = 'llm'
             secretKind = 'apiKey'
             validationKind = 'openaiCompatible'
+            signupUrl = 'https://platform.deepseek.com/api_keys'
+            docsUrl = 'https://api-docs.deepseek.com/'
+            pricingUrl = 'https://api-docs.deepseek.com/quick_start/pricing'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'deepseek'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Crie a chave no console DeepSeek e valide quota antes de ativar.'
             defaults = [ordered]@{
                 baseUrl = 'https://api.deepseek.com'
             }
             aliases = @('deepseek')
             tokenPatterns = @('sk-[A-Za-z0-9_\-]{12,}')
         }
-        bonsai = [ordered]@{
+        mistral = [ordered]@{
+            displayName = 'Mistral AI'
+            category = 'llm'
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            signupUrl = 'https://console.mistral.ai/api-keys/'
+            docsUrl = 'https://docs.mistral.ai/getting-started/quickstart/'
+            pricingUrl = 'https://mistral.ai/pricing'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'mistral'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Crie uma chave no console Mistral e use o endpoint OpenAI-compatible.'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.mistral.ai/v1'
+            }
+            aliases = @('mistral', 'mistral ai')
+            tokenPatterns = @()
+        }
+        groq = [ordered]@{
+            displayName = 'Groq'
+            category = 'llm'
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            signupUrl = 'https://console.groq.com/keys'
+            docsUrl = 'https://console.groq.com/docs/quickstart'
+            pricingUrl = 'https://groq.com/pricing/'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'groq'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Crie uma key no GroqCloud e use o endpoint OpenAI-compatible.'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.groq.com/openai/v1'
+            }
+            aliases = @('groq')
+            tokenPatterns = @('gsk_[A-Za-z0-9_\-]{12,}')
+        }
+        cohere = [ordered]@{
+            displayName = 'Cohere'
+            category = 'llm'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://dashboard.cohere.com/api-keys'
+            docsUrl = 'https://docs.cohere.com/'
+            pricingUrl = 'https://cohere.com/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @()
+            creationNotes = 'Chave Cohere guardada para uso manual ou integracoes futuras.'
+            defaults = [ordered]@{}
+            aliases = @('cohere')
+            tokenPatterns = @()
+        }
+        perplexity = [ordered]@{
+            displayName = 'Perplexity'
+            category = 'llm-search'
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            signupUrl = 'https://www.perplexity.ai/settings/api'
+            docsUrl = 'https://docs.perplexity.ai/'
+            pricingUrl = 'https://docs.perplexity.ai/guides/pricing'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'perplexity'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Use para respostas com busca e modelos hosted pela Perplexity.'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.perplexity.ai'
+            }
+            aliases = @('perplexity', 'pplx')
+            tokenPatterns = @('pplx-[A-Za-z0-9_\-]{12,}')
+        }
+        huggingface = [ordered]@{
+            displayName = 'Hugging Face'
+            category = 'ai-platform'
             secretKind = 'token'
             validationKind = 'unsupported'
+            signupUrl = 'https://huggingface.co/settings/tokens'
+            docsUrl = 'https://huggingface.co/docs/hub/security-tokens'
+            pricingUrl = 'https://huggingface.co/pricing'
+            requiredFields = @('token')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @()
+            creationNotes = 'User access token para modelos, Spaces e downloads autenticados.'
+            defaults = [ordered]@{}
+            aliases = @('huggingface', 'hugging face', 'hf')
+            tokenPatterns = @('hf_[A-Za-z0-9_\-]{12,}')
+        }
+        together = [ordered]@{
+            displayName = 'Together AI'
+            category = 'llm'
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            signupUrl = 'https://api.together.ai/settings/api-keys'
+            docsUrl = 'https://docs.together.ai/docs/quickstart'
+            pricingUrl = 'https://www.together.ai/pricing'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'together'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Chave Together para modelos hosted e endpoint OpenAI-compatible.'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.together.xyz/v1'
+            }
+            aliases = @('together', 'together ai')
+            tokenPatterns = @()
+        }
+        elevenlabs = [ordered]@{
+            displayName = 'ElevenLabs'
+            category = 'voice-ai'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://elevenlabs.io/app/settings/api-keys'
+            docsUrl = 'https://elevenlabs.io/docs/api-reference/authentication'
+            pricingUrl = 'https://elevenlabs.io/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @()
+            creationNotes = 'API key para TTS, voz, audio e agentes ElevenLabs.'
+            defaults = [ordered]@{}
+            aliases = @('elevenlabs', 'eleven labs')
+            tokenPatterns = @()
+        }
+        tavily = [ordered]@{
+            displayName = 'Tavily'
+            category = 'search-rag'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://app.tavily.com/home'
+            docsUrl = 'https://docs.tavily.com/'
+            pricingUrl = 'https://tavily.com/#pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Busca web focada em agentes e RAG; uso manual/MCP conforme app.'
+            defaults = [ordered]@{}
+            aliases = @('tavily')
+            tokenPatterns = @('tvly-[A-Za-z0-9_\-]{12,}')
+        }
+        bravesearch = [ordered]@{
+            displayName = 'Brave Search API'
+            category = 'search-rag'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://api-dashboard.search.brave.com/app/keys'
+            docsUrl = 'https://api-dashboard.search.brave.com/app/documentation'
+            pricingUrl = 'https://brave.com/search/api/'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'API de busca web para agentes e MCPs de pesquisa.'
+            defaults = [ordered]@{}
+            aliases = @('brave', 'brave search', 'bravesearch')
+            tokenPatterns = @()
+        }
+        serpapi = [ordered]@{
+            displayName = 'SerpAPI'
+            category = 'search-rag'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://serpapi.com/manage-api-key'
+            docsUrl = 'https://serpapi.com/search-api'
+            pricingUrl = 'https://serpapi.com/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'SERP/search API para agentes, scraping controlado e RAG.'
+            defaults = [ordered]@{}
+            aliases = @('serpapi')
+            tokenPatterns = @()
+        }
+        exa = [ordered]@{
+            displayName = 'Exa'
+            category = 'search-rag'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://dashboard.exa.ai/api-keys'
+            docsUrl = 'https://docs.exa.ai/reference/getting-started'
+            pricingUrl = 'https://exa.ai/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Busca neural/web retrieval para agentes e pipelines RAG.'
+            defaults = [ordered]@{}
+            aliases = @('exa')
+            tokenPatterns = @()
+        }
+        jina = [ordered]@{
+            displayName = 'Jina AI'
+            category = 'search-rag'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://jina.ai/'
+            docsUrl = 'https://jina.ai/reader/'
+            pricingUrl = 'https://jina.ai/pricing/'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Reader, embeddings e rerank para RAG; key opcional conforme produto.'
+            defaults = [ordered]@{}
+            aliases = @('jina', 'jina ai')
+            tokenPatterns = @()
+        }
+        vercel = [ordered]@{
+            displayName = 'Vercel'
+            category = 'deployment'
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            signupUrl = 'https://vercel.com/account/tokens'
+            docsUrl = 'https://vercel.com/docs/accounts/create-a-token'
+            pricingUrl = 'https://vercel.com/pricing'
+            requiredFields = @('token')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Token para CLI, deploys, env vars e automacoes Vercel.'
+            defaults = [ordered]@{}
+            aliases = @('vercel')
+            tokenPatterns = @()
+        }
+        netlify = [ordered]@{
+            displayName = 'Netlify'
+            category = 'deployment'
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            signupUrl = 'https://app.netlify.com/user/applications#personal-access-tokens'
+            docsUrl = 'https://docs.netlify.com/api/get-started/#authentication'
+            pricingUrl = 'https://www.netlify.com/pricing/'
+            requiredFields = @('token')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Personal access token para CLI, deploys e API Netlify.'
+            defaults = [ordered]@{}
+            aliases = @('netlify')
+            tokenPatterns = @()
+        }
+        stripe = [ordered]@{
+            displayName = 'Stripe'
+            category = 'payments'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://dashboard.stripe.com/apikeys'
+            docsUrl = 'https://docs.stripe.com/keys'
+            pricingUrl = 'https://stripe.com/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @()
+            creationNotes = 'Secret key para pagamentos, billing e webhooks.'
+            defaults = [ordered]@{}
+            aliases = @('stripe')
+            tokenPatterns = @('sk_(test|live)_[A-Za-z0-9]+')
+        }
+        resend = [ordered]@{
+            displayName = 'Resend'
+            category = 'email'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://resend.com/api-keys'
+            docsUrl = 'https://resend.com/docs/dashboard/api-keys/introduction'
+            pricingUrl = 'https://resend.com/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @()
+            creationNotes = 'API key para envio de email transacional.'
+            defaults = [ordered]@{}
+            aliases = @('resend')
+            tokenPatterns = @('re_[A-Za-z0-9_\-]{12,}')
+        }
+        neon = [ordered]@{
+            displayName = 'Neon'
+            category = 'database'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://console.neon.tech/app/settings/api-keys'
+            docsUrl = 'https://neon.com/docs/manage/api-keys'
+            pricingUrl = 'https://neon.com/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'API key para gerenciar projetos Postgres Neon e automacoes.'
+            defaults = [ordered]@{}
+            aliases = @('neon')
+            tokenPatterns = @()
+        }
+        upstash = [ordered]@{
+            displayName = 'Upstash'
+            category = 'database'
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            signupUrl = 'https://console.upstash.com/account/api'
+            docsUrl = 'https://upstash.com/docs/redis/features/restapi'
+            pricingUrl = 'https://upstash.com/pricing'
+            requiredFields = @('token')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Tokens REST/QStash para Redis, queues e workflows.'
+            defaults = [ordered]@{}
+            aliases = @('upstash')
+            tokenPatterns = @()
+        }
+        clerk = [ordered]@{
+            displayName = 'Clerk'
+            category = 'auth'
+            secretKind = 'apiKey'
+            validationKind = 'unsupported'
+            signupUrl = 'https://dashboard.clerk.com/'
+            docsUrl = 'https://clerk.com/docs/deployments/clerk-environment-variables'
+            pricingUrl = 'https://clerk.com/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @()
+            creationNotes = 'Secret key e publishable key para autenticacao Clerk.'
+            defaults = [ordered]@{}
+            aliases = @('clerk')
+            tokenPatterns = @('sk_(test|live)_[A-Za-z0-9]+')
+        }
+        notion = [ordered]@{
+            displayName = 'Notion'
+            category = 'mcp'
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            signupUrl = 'https://www.notion.so/profile/integrations'
+            docsUrl = 'https://developers.notion.com/docs/create-a-notion-integration'
+            pricingUrl = 'https://www.notion.so/pricing'
+            requiredFields = @('token')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Internal integration token para MCP/automacoes Notion.'
+            defaults = [ordered]@{}
+            aliases = @('notion')
+            tokenPatterns = @('ntn_[A-Za-z0-9_\-]{12,}', 'secret_[A-Za-z0-9_\-]{12,}')
+        }
+        linear = [ordered]@{
+            displayName = 'Linear'
+            category = 'mcp'
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            signupUrl = 'https://linear.app/settings/api'
+            docsUrl = 'https://developers.linear.app/docs/graphql/working-with-the-graphql-api'
+            pricingUrl = 'https://linear.app/pricing'
+            requiredFields = @('token')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Personal API key/OAuth para issues, projetos e MCP Linear.'
+            defaults = [ordered]@{}
+            aliases = @('linear')
+            tokenPatterns = @('lin_api_[A-Za-z0-9_\-]{12,}')
+        }
+        bonsai = [ordered]@{
+            displayName = 'Bonsai'
+            category = 'agent-platform'
+            secretKind = 'token'
+            validationKind = 'unsupported'
+            signupUrl = 'https://bonsai-rx.org/'
+            docsUrl = 'https://bonsai-rx.org/docs/articles/installation.html'
+            pricingUrl = 'https://bonsai-rx.org/'
+            requiredFields = @('token')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode')
+            creationNotes = 'Token do Bonsai e fluxo Claude Code sao validados manualmente.'
             defaults = [ordered]@{}
             aliases = @('bonsai', 'bonsai cloud')
             tokenPatterns = @('sk_cr_[A-Za-z0-9_\-]{12,}', 'c[0-9a-f]{24,}', 'ak-[A-Za-z0-9_\-]{12,}')
         }
         context7 = [ordered]@{
+            displayName = 'Context7'
+            category = 'mcp'
             secretKind = 'apiKey'
             validationKind = 'unsupported'
+            signupUrl = 'https://context7.com/'
+            docsUrl = 'https://context7.com/'
+            pricingUrl = 'https://context7.com/'
+            requiredFields = @()
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'MCP remoto normalmente usa OAuth/remote bridge.'
             defaults = [ordered]@{
                 baseUrl = 'https://mcp.context7.com/mcp'
             }
@@ -2725,15 +4643,39 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @()
         }
         firecrawl = [ordered]@{
+            displayName = 'Firecrawl'
+            category = 'mcp'
             secretKind = 'apiKey'
             validationKind = 'unsupported'
+            signupUrl = 'https://www.firecrawl.dev/app/api-keys'
+            docsUrl = 'https://docs.firecrawl.dev/'
+            pricingUrl = 'https://www.firecrawl.dev/pricing'
+            requiredFields = @('apiKey')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'API key habilita MCP local Firecrawl quando disponivel.'
             defaults = [ordered]@{}
             aliases = @('firecrawl')
             tokenPatterns = @('fc-[A-Za-z0-9_\-]{8,}')
         }
         apify = [ordered]@{
+            displayName = 'Apify'
+            category = 'mcp'
             secretKind = 'token'
             validationKind = 'unsupported'
+            signupUrl = 'https://console.apify.com/account#/integrations'
+            docsUrl = 'https://docs.apify.com/platform/integrations/mcp'
+            pricingUrl = 'https://apify.com/pricing'
+            requiredFields = @('token')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Remote MCP pode pedir autorizacao no primeiro uso.'
             defaults = [ordered]@{
                 baseUrl = 'https://mcp.apify.com'
             }
@@ -2741,8 +4683,20 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @()
         }
         supabase = [ordered]@{
+            displayName = 'Supabase'
+            category = 'mcp'
             secretKind = 'token'
             validationKind = 'unsupported'
+            signupUrl = 'https://supabase.com/dashboard/account/tokens'
+            docsUrl = 'https://supabase.com/docs/guides/getting-started/mcp'
+            pricingUrl = 'https://supabase.com/pricing'
+            requiredFields = @('token', 'projectRef')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Remote MCP usa OAuth/token conforme workspace.'
             defaults = [ordered]@{
                 baseUrl = 'https://mcp.supabase.com/mcp'
                 projectRef = ''
@@ -2752,8 +4706,20 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @()
         }
         netdata = [ordered]@{
+            displayName = 'Netdata'
+            category = 'mcp'
             secretKind = 'token'
             validationKind = 'unsupported'
+            signupUrl = 'https://app.netdata.cloud/'
+            docsUrl = 'https://learn.netdata.cloud/docs/netdata-agent/configuration/mcp'
+            pricingUrl = 'https://www.netdata.cloud/pricing/'
+            requiredFields = @('token', 'baseUrl')
+            supportsValidation = $false
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline')
+            creationNotes = 'Exige endpoint MCP local e token Bearer.'
             defaults = [ordered]@{
                 baseUrl = 'http://127.0.0.1:19999/mcp'
             }
@@ -2761,6 +4727,355 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @()
         }
     }))
+}
+
+function Get-BootstrapAppCapabilityCatalog {
+    return (ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
+        claudeCode = [ordered]@{
+            displayName = 'Claude Code'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $true
+            authByEnv = $true
+            manualOnly = $false
+            notes = 'Recebe env/MCP via settings.json e Caveman via plugin.'
+        }
+        openCode = [ordered]@{
+            displayName = 'OpenCode'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $true
+            authByEnv = $false
+            manualOnly = $false
+            notes = 'Recebe auth.json, opencode.json e AGENTS.md.'
+        }
+        comet = [ordered]@{
+            displayName = 'Comet'
+            autoInstall = $true
+            alwaysOnRules = $false
+            authByFile = $false
+            authByEnv = $false
+            manualOnly = $true
+            notes = 'Sem contrato publico de arquivo local; bootstrap guia o setup manual.'
+        }
+        geminiCli = [ordered]@{
+            displayName = 'Gemini CLI'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $false
+            authByEnv = $true
+            manualOnly = $false
+            notes = 'Caveman instala como extension; chaves vem do ambiente.'
+        }
+        cursor = [ordered]@{
+            displayName = 'Cursor'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $false
+            authByEnv = $false
+            manualOnly = $false
+            notes = 'Caveman via npx skills e .cursor/rules.'
+        }
+        windsurf = [ordered]@{
+            displayName = 'Windsurf'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $false
+            authByEnv = $false
+            manualOnly = $false
+            notes = 'Caveman via npx skills e .windsurf/rules.'
+        }
+        cline = [ordered]@{
+            displayName = 'Cline'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $false
+            authByEnv = $false
+            manualOnly = $false
+            notes = 'Caveman via npx skills e .clinerules.'
+        }
+        githubCopilot = [ordered]@{
+            displayName = 'GitHub Copilot'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $false
+            authByEnv = $false
+            manualOnly = $false
+            notes = 'Caveman via npx skills e instrucoes Copilot/AGENTS.md.'
+        }
+    }))
+}
+
+function Get-BootstrapApiProviderDescription {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [string]$Category
+    )
+
+    switch ($ProviderName) {
+        'context7' { return 'MCP de documentacao atual por biblioteca; ajuda agentes a consultar docs recentes.' }
+        'firecrawl' { return 'Crawler/scraper e MCP para transformar sites em dados usaveis por agentes.' }
+        'apify' { return 'Plataforma de actors, scraping e MCP para automacoes web.' }
+        'supabase' { return 'Postgres/BaaS e MCP para projetos, schema, storage e dados.' }
+        'netdata' { return 'Observabilidade local/cloud via MCP; monitora host e servicos.' }
+        'bonsai' { return 'Plataforma/agente com token manual; mantido para fluxos especificos.' }
+    }
+
+    switch ($Category) {
+        'llm' { return 'Servico de IA para modelos de texto, codigo e agentes.' }
+        'llm-router' { return 'Roteador de modelos de IA; uma chave acessa varios provedores.' }
+        'llm-search' { return 'Servico de IA com busca/web answer para agentes e pesquisa.' }
+        'ai-platform' { return 'Plataforma de IA para modelos, datasets, inferencia ou assets.' }
+        'voice-ai' { return 'Servico de IA para voz, audio, TTS e agentes falados.' }
+        'search-rag' { return 'Busca/retrieval para agentes, pesquisa web e pipelines RAG.' }
+        'deployment' { return 'Hospedagem/deploy/API para publicar apps e automatizar ambientes.' }
+        'payments' { return 'Pagamentos, billing e webhooks de produto.' }
+        'email' { return 'Email transacional e notificacoes de app.' }
+        'database' { return 'Banco, cache, fila ou backend gerenciado para apps.' }
+        'auth' { return 'Autenticacao, usuarios e sessoes de produto.' }
+        'source-control' { return 'Codigo, repositorios, issues, CI e MCP de desenvolvimento.' }
+        'mcp' { return 'MCP ou integracao de ferramenta para agentes e IDEs.' }
+        'agent-platform' { return 'Plataforma de agentes/automacao com token manual.' }
+        default { return 'Servico externo com chave ou token para uso por apps, agentes ou automacoes.' }
+    }
+}
+
+function Get-BootstrapPublicApiCatalog {
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $public = [ordered]@{}
+    foreach ($providerName in @($catalog.Keys)) {
+        $meta = ConvertTo-BootstrapHashtable -InputObject $catalog[$providerName]
+        $public[$providerName] = [ordered]@{
+            displayName = [string]$meta['displayName']
+            category = [string]$meta['category']
+            description = Get-BootstrapApiProviderDescription -ProviderName ([string]$providerName) -Category ([string]$meta['category'])
+            signupUrl = [string]$meta['signupUrl']
+            docsUrl = [string]$meta['docsUrl']
+            pricingUrl = [string]$meta['pricingUrl']
+            requiredFields = @($meta['requiredFields'])
+            supportsValidation = [bool]$meta['supportsValidation']
+            supportsOpenCode = [bool]$meta['supportsOpenCode']
+            supportsComet = [bool]$meta['supportsComet']
+            appTargets = @($meta['appTargets'])
+            creationNotes = [string]$meta['creationNotes']
+        }
+    }
+    return $public
+}
+
+function Get-BootstrapApiCatalogRows {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $inventory = Get-BootstrapApiInventory -SecretsData $SecretsData
+    $providerLookup = @{}
+    foreach ($provider in @($inventory.providers)) {
+        $providerLookup[[string]$provider.id] = $provider
+    }
+
+    $rows = @()
+    foreach ($provider in @($inventory.providers | Sort-Object displayName)) {
+        $providerId = [string]$provider.id
+        $quantity = [int]$provider.totalCredentials
+        $configured = if ($quantity -gt 0 -and [string]$provider.activeValidationState -eq 'passed') { 1 } else { 0 }
+        $description = if (-not [string]::IsNullOrWhiteSpace([string]$provider.description)) {
+            [string]$provider.description
+        } else {
+            Get-BootstrapApiProviderDescription -ProviderName $providerId -Category ([string]$provider.category)
+        }
+        $rows += @([ordered]@{
+            id = $providerId
+            hasCredential = $(if ($quantity -gt 0) { '[x]' } else { '[ ]' })
+            quantity = $quantity
+            configured = $configured
+            provider = [string]$provider.displayName
+            description = $description
+            fields = (@($provider.requiredFields) -join ', ')
+            signup = [string]$provider.signupUrl
+            docs = [string]$provider.docsUrl
+            category = [string]$provider.category
+            validation = [string]$provider.activeValidationState
+        })
+    }
+    return @($rows)
+}
+
+function Get-BootstrapSecretPreview {
+    param([string]$Secret)
+
+    if ([string]::IsNullOrWhiteSpace($Secret)) { return '' }
+    $value = $Secret.Trim()
+    if ($value.StartsWith('sk-')) {
+        $suffix = if ($value.Length -gt 8) { $value.Substring($value.Length - 4) } else { '' }
+        return ('sk-***{0}' -f $suffix)
+    }
+    if ($value.Length -le 8) {
+        return '***'
+    }
+    return ('{0}***{1}' -f $value.Substring(0, [Math]::Min(4, $value.Length)), $value.Substring($value.Length - 4))
+}
+
+function Get-BootstrapCredentialEffectiveValue {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$ProviderDefinition,
+        [Parameter(Mandatory = $true)][hashtable]$Credential,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($Credential.ContainsKey($Name) -and -not [string]::IsNullOrWhiteSpace([string]$Credential[$Name])) {
+        return [string]$Credential[$Name]
+    }
+    if ($ProviderDefinition.ContainsKey('defaults') -and ($ProviderDefinition['defaults'] -is [hashtable]) -and -not [string]::IsNullOrWhiteSpace([string]$ProviderDefinition['defaults'][$Name])) {
+        return [string]$ProviderDefinition['defaults'][$Name]
+    }
+    return ''
+}
+
+function Get-BootstrapApiInventory {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $providerCatalog = Get-BootstrapSecretsProviderCatalog
+    $appCatalog = Get-BootstrapAppCapabilityCatalog
+    $providerRecords = @()
+    $availableToCreate = @()
+    $totalCredentials = 0
+    $validatedActive = 0
+
+    foreach ($providerName in @($providerCatalog.Keys)) {
+        $meta = ConvertTo-BootstrapHashtable -InputObject $providerCatalog[$providerName]
+        $provider = if ($normalized.providers.Contains($providerName)) { ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerName] } else { Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName $providerName }
+        $credentials = if ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable])) { $provider['credentials'] } else { @{} }
+        $activeCredentialId = [string]$provider['activeCredential']
+        $credentialRows = @()
+        $orderedIds = New-Object System.Collections.Generic.List[string]
+
+        foreach ($credentialId in @($provider['rotationOrder'])) {
+            $idText = [string]$credentialId
+            if (-not [string]::IsNullOrWhiteSpace($idText) -and $credentials.Contains($idText) -and -not $orderedIds.Contains($idText)) {
+                $orderedIds.Add($idText)
+            }
+        }
+        foreach ($credentialId in @($credentials.Keys)) {
+            $idText = [string]$credentialId
+            if (-not $orderedIds.Contains($idText)) {
+                $orderedIds.Add($idText)
+            }
+        }
+
+        $order = 0
+        $activeValidationState = 'missing'
+        $activeValidationMessage = ''
+        $activeDisplayName = ''
+        foreach ($credentialId in @($orderedIds.ToArray())) {
+            $order += 1
+            $credential = ConvertTo-BootstrapHashtable -InputObject $credentials[$credentialId]
+            if (-not ($credential -is [hashtable])) { continue }
+            $validation = if ($credential.ContainsKey('validation') -and ($credential['validation'] -is [hashtable])) { $credential['validation'] } else { @{} }
+            $state = if ([string]::IsNullOrWhiteSpace([string]$validation['state'])) { 'unknown' } else { [string]$validation['state'] }
+            $isActive = ([string]$credentialId -eq $activeCredentialId)
+            if ($isActive) {
+                $activeValidationState = $state
+                $activeValidationMessage = [string]$validation['message']
+                $activeDisplayName = [string]$credential['displayName']
+            }
+
+            $credentialRows += @([ordered]@{
+                id = [string]$credentialId
+                displayName = [string]$credential['displayName']
+                active = $isActive
+                order = $order
+                secretKind = [string]$credential['secretKind']
+                secretPreview = Get-BootstrapSecretPreview -Secret ([string]$credential['secret'])
+                baseUrl = [string]$credential['baseUrl']
+                organizationId = [string]$credential['organizationId']
+                projectRef = [string]$credential['projectRef']
+                readOnly = [string]$credential['readOnly']
+                validationState = $state
+                validationCheckedAt = [string]$validation['checkedAt']
+                validationMessage = [string]$validation['message']
+            })
+        }
+
+        $credentialCount = @($credentialRows).Count
+        $totalCredentials += $credentialCount
+        if ($activeValidationState -eq 'passed') {
+            $validatedActive += 1
+        }
+
+        $configuredApps = @()
+        $autoAppliedApps = @()
+        $manualOnlyApps = @()
+        $availableApps = @()
+        foreach ($appId in @($meta['appTargets'])) {
+            if (-not $appCatalog.Contains($appId)) { continue }
+            $app = $appCatalog[$appId]
+            $displayName = [string]$app['displayName']
+            $availableApps += @($displayName)
+            if ([bool]$app['manualOnly']) {
+                if ([bool]$meta['supportsComet']) {
+                    $manualOnlyApps += @($displayName)
+                }
+                continue
+            }
+            if ($activeValidationState -eq 'passed') {
+                $configuredApps += @($displayName)
+                if ($appId -eq 'openCode' -and -not [bool]$meta['supportsOpenCode']) { continue }
+                $autoAppliedApps += @($displayName)
+            }
+        }
+
+        $providerRecord = [ordered]@{
+            id = [string]$providerName
+            displayName = [string]$meta['displayName']
+            category = [string]$meta['category']
+            description = Get-BootstrapApiProviderDescription -ProviderName ([string]$providerName) -Category ([string]$meta['category'])
+            totalCredentials = $credentialCount
+            activeCredentialId = $activeCredentialId
+            activeDisplayName = $activeDisplayName
+            activeValidationState = $activeValidationState
+            activeValidationMessage = $activeValidationMessage
+            supportsValidation = [bool]$meta['supportsValidation']
+            supportsOpenCode = [bool]$meta['supportsOpenCode']
+            supportsComet = [bool]$meta['supportsComet']
+            configuredApps = @($configuredApps | Select-Object -Unique)
+            autoAppliedApps = @($autoAppliedApps | Select-Object -Unique)
+            manualOnlyApps = @($manualOnlyApps | Select-Object -Unique)
+            availableApps = @($availableApps | Select-Object -Unique)
+            signupUrl = [string]$meta['signupUrl']
+            docsUrl = [string]$meta['docsUrl']
+            pricingUrl = [string]$meta['pricingUrl']
+            requiredFields = @($meta['requiredFields'])
+            creationNotes = [string]$meta['creationNotes']
+            credentials = @($credentialRows)
+        }
+        $providerRecords += @($providerRecord)
+
+        if ($credentialCount -eq 0) {
+            $availableToCreate += @([ordered]@{
+                id = [string]$providerName
+                displayName = [string]$meta['displayName']
+                category = [string]$meta['category']
+                description = Get-BootstrapApiProviderDescription -ProviderName ([string]$providerName) -Category ([string]$meta['category'])
+                signupUrl = [string]$meta['signupUrl']
+                docsUrl = [string]$meta['docsUrl']
+                pricingUrl = [string]$meta['pricingUrl']
+                requiredFields = @($meta['requiredFields'])
+                creationNotes = [string]$meta['creationNotes']
+            })
+        }
+    }
+
+    return [ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        summary = [ordered]@{
+            providers = @($providerRecords).Count
+            configuredProviders = @($providerRecords | Where-Object { $_.totalCredentials -gt 0 }).Count
+            totalCredentials = $totalCredentials
+            validatedActiveProviders = $validatedActive
+        }
+        providers = @($providerRecords)
+        availableToCreate = @($availableToCreate)
+    }
 }
 
 function New-BootstrapSecretValidationState {
@@ -3705,6 +6020,10 @@ function Get-BootstrapSteamDeckSettingsPath {
     return (Join-Path (Get-BootstrapDataRoot) 'steamdeck-settings.json')
 }
 
+function Get-BootstrapSteamDeckDetectionPath {
+    return (Join-Path (Get-BootstrapDataRoot) 'steamdeck-current-detection.json')
+}
+
 function Get-BootstrapSteamDeckAutomationRoot {
     return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'steamdeck') 'automation')
 }
@@ -3721,7 +6040,7 @@ function Get-BootstrapResolvedSteamDeckVersion {
     }
 
     try {
-        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction Stop
+        $computerSystem = Get-CimInstance -ClassName Win32_ComputerSystem -OperationTimeoutSec 5 -ErrorAction Stop
         $manufacturer = [string]$computerSystem.Manufacturer
         $model = [string]$computerSystem.Model
         if ($manufacturer -match 'Valve') {
@@ -3732,7 +6051,7 @@ function Get-BootstrapResolvedSteamDeckVersion {
     }
 
     try {
-        $display = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -ErrorAction Stop | Select-Object -First 1
+        $display = Get-CimInstance -Namespace root\wmi -ClassName WmiMonitorID -OperationTimeoutSec 5 -ErrorAction Stop | Select-Object -First 1
         if ($display) {
             $manufacturer = -join ($display.ManufacturerName | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ })
             $product = -join ($display.UserFriendlyName | Where-Object { $_ -gt 0 } | ForEach-Object { [char]$_ })
@@ -3755,6 +6074,7 @@ function Get-BootstrapSteamDeckSettingsDefaults {
         internalDisplay = [ordered]@{
             manufacturer = 'VLV'
             product = 'ANX7530 U'
+            primary = $false
         }
         monitorProfiles = @()
         monitorFamilies = @(
@@ -3764,12 +6084,36 @@ function Get-BootstrapSteamDeckSettingsDefaults {
                 mode = 'DOCKED_MONITOR'
                 layout = 'lg-hdr-wfhd'
                 resolutionPolicy = 'native-prefer-1440p-else-1080p'
+                primary = $true
             }
         )
+        displayMode = 'extend'
         genericExternal = [ordered]@{
-            mode = 'DOCKED_TV'
-            resolutionPolicy = '1920x1080-safe'
-            layout = 'external-generic'
+            mode = 'UNCLASSIFIED_EXTERNAL'
+            resolutionPolicy = 'desktop-safe'
+            layout = 'external-unclassified'
+            primary = $true
+        }
+        displayClassification = [ordered]@{
+            unknownExternalMode = 'UNCLASSIFIED_EXTERNAL'
+            uiFallbackMode = 'DOCKED_MONITOR'
+        }
+        consoleSession = [ordered]@{
+            primaryShell = 'steam'
+            fallbackShell = 'playnite'
+            steamLaunch = 'steam://open/bigpicture'
+            softShell = $true
+        }
+        steamdeckTweaks = [ordered]@{
+            hibernation = 'enabled'
+            realtimeUtc = $true
+            requireLoginAfterSleep = $false
+            gameBar = 'enabled'
+            touchKeyboard = 'enabled'
+        }
+        steamdeckTools = [ordered]@{
+            required = @('RTSS', 'AMD Adrenalin', 'CRU', 'Steam Deck Tools')
+            autoStartOnHandheld = @('RTSS', 'Steam Deck Tools')
         }
         audioTargets = [ordered]@{
             handheld = @('Speaker', 'Steam Streaming Speakers')
@@ -3825,6 +6169,25 @@ function Normalize-BootstrapSteamDeckSettingsData {
     $normalized['monitorProfiles'] = @(Normalize-BootstrapObjectArray -Value ($normalized['monitorProfiles']))
     $normalized['monitorFamilies'] = @(Normalize-BootstrapObjectArray -Value ($normalized['monitorFamilies']))
 
+    $internalDisplay = if ($normalized.ContainsKey('internalDisplay')) { ConvertTo-BootstrapHashtable -InputObject $normalized['internalDisplay'] } else { @{} }
+    if (-not ($internalDisplay -is [hashtable])) { $internalDisplay = @{} }
+    if (-not $internalDisplay.ContainsKey('manufacturer') -or [string]::IsNullOrWhiteSpace([string]$internalDisplay['manufacturer'])) {
+        $internalDisplay['manufacturer'] = 'VLV'
+    }
+    if (-not $internalDisplay.ContainsKey('product') -or [string]::IsNullOrWhiteSpace([string]$internalDisplay['product'])) {
+        $internalDisplay['product'] = 'ANX7530 U'
+    }
+    if (-not $internalDisplay.ContainsKey('primary')) {
+        $internalDisplay['primary'] = $false
+    }
+    $normalized['internalDisplay'] = $internalDisplay
+
+    $displayMode = if ($normalized.ContainsKey('displayMode')) { ([string]$normalized['displayMode']).Trim().ToLowerInvariant() } else { '' }
+    if (@('extend', 'internal', 'external', 'clone') -notcontains $displayMode) {
+        $displayMode = 'extend'
+    }
+    $normalized['displayMode'] = $displayMode
+
     if (-not $normalized.ContainsKey('sessionProfiles')) {
         $normalized['sessionProfiles'] = @{
             HANDHELD = 'game-handheld'
@@ -3840,6 +6203,53 @@ function Normalize-BootstrapSteamDeckSettingsData {
             keepAlways = @('SecurityHealthSystray', 'RadeonSoftware', 'Steam', 'Sunshine', 'Tailscale', 'PowerControl', 'PerformanceOverlay', 'SteamController')
         }
     }
+
+    if (-not $normalized.ContainsKey('displayClassification')) {
+        $normalized['displayClassification'] = @{
+            unknownExternalMode = 'UNCLASSIFIED_EXTERNAL'
+            uiFallbackMode = 'DOCKED_MONITOR'
+        }
+    }
+
+    if (-not $normalized.ContainsKey('consoleSession')) {
+        $normalized['consoleSession'] = @{
+            primaryShell = 'steam'
+            fallbackShell = 'playnite'
+            steamLaunch = 'steam://open/bigpicture'
+            softShell = $true
+        }
+    }
+
+    $tweakDefaults = @{
+        hibernation = 'enabled'
+        realtimeUtc = $true
+        requireLoginAfterSleep = $false
+        gameBar = 'enabled'
+        touchKeyboard = 'enabled'
+    }
+    $tweaks = if ($normalized.ContainsKey('steamdeckTweaks')) { ConvertTo-BootstrapHashtable -InputObject $normalized['steamdeckTweaks'] } else { @{} }
+    if (-not ($tweaks -is [hashtable])) { $tweaks = @{} }
+    foreach ($key in @($tweakDefaults.Keys)) {
+        if (-not $tweaks.ContainsKey($key) -or $null -eq $tweaks[$key] -or [string]::IsNullOrWhiteSpace([string]$tweaks[$key])) {
+            $tweaks[$key] = $tweakDefaults[$key]
+        }
+    }
+    $normalized['steamdeckTweaks'] = $tweaks
+
+    $toolDefaults = @{
+        required = @('RTSS', 'AMD Adrenalin', 'CRU', 'Steam Deck Tools')
+        autoStartOnHandheld = @('RTSS', 'Steam Deck Tools')
+    }
+    $tools = if ($normalized.ContainsKey('steamdeckTools')) { ConvertTo-BootstrapHashtable -InputObject $normalized['steamdeckTools'] } else { @{} }
+    if (-not ($tools -is [hashtable])) { $tools = @{} }
+    foreach ($key in @($toolDefaults.Keys)) {
+        if (-not $tools.ContainsKey($key) -or $null -eq $tools[$key]) {
+            $tools[$key] = $toolDefaults[$key]
+        }
+    }
+    $tools['required'] = @($tools['required'])
+    $tools['autoStartOnHandheld'] = @($tools['autoStartOnHandheld'])
+    $normalized['steamdeckTools'] = $tools
 
     return $normalized
 }
@@ -3899,6 +6309,130 @@ function Save-BootstrapSteamDeckSettingsData {
     return [ordered]@{
         Path = $settingsPath
         BackupPath = $backupPath
+    }
+}
+
+function Get-BootstrapSteamDeckCurrentDetectionData {
+    $path = Get-BootstrapSteamDeckDetectionPath
+    if (-not (Test-Path $path)) {
+        return [ordered]@{
+            Path = $path
+            Data = $null
+        }
+    }
+
+    return [ordered]@{
+        Path = $path
+        Data = (Read-BootstrapJsonFile -Path $path)
+    }
+}
+
+function Get-BootstrapSteamDeckPendingExternalDisplay {
+    $bundle = Get-BootstrapSteamDeckCurrentDetectionData
+    $data = ConvertTo-BootstrapHashtable -InputObject $bundle.Data
+    if (-not ($data -is [hashtable])) {
+        return [ordered]@{
+            Path = $bundle.Path
+            Pending = $false
+            Detection = $null
+            Display = $null
+        }
+    }
+
+    $pending = ($data.ContainsKey('mode') -and ([string]$data['mode'] -eq 'UNCLASSIFIED_EXTERNAL'))
+    $display = if ($data.ContainsKey('selectedDisplay')) { $data['selectedDisplay'] } else { $null }
+    return [ordered]@{
+        Path = $bundle.Path
+        Pending = [bool]$pending
+        Detection = $data
+        Display = $display
+    }
+}
+
+function Add-BootstrapSteamDeckDisplayClassification {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('MonitorDev', 'TvGame')][string]$Choice,
+        [hashtable]$Display,
+        [switch]$CreateBackup
+    )
+
+    if (-not $Display) {
+        $pending = Get-BootstrapSteamDeckPendingExternalDisplay
+        $Display = ConvertTo-BootstrapHashtable -InputObject $pending.Display
+    }
+
+    if (-not $Display) {
+        throw 'Nenhum display externo pendente para classificar.'
+    }
+
+    $manufacturer = ([string]$Display['manufacturer']).Trim()
+    $product = ([string]$Display['product']).Trim()
+    $serial = ([string]$Display['serial']).Trim()
+    if ([string]::IsNullOrWhiteSpace($manufacturer) -or [string]::IsNullOrWhiteSpace($product)) {
+        throw 'Classificacao de display exige manufacturer e product.'
+    }
+
+    $mode = 'DOCKED_MONITOR'
+    $layout = 'external-monitor-dev'
+    $resolutionPolicy = 'native-prefer-1440p-else-1080p'
+    if ($Choice -eq 'TvGame') {
+        $mode = 'DOCKED_TV'
+        $layout = 'external-tv-game'
+        $resolutionPolicy = '1920x1080-safe'
+    }
+
+    $settingsBundle = Get-BootstrapSteamDeckSettingsData
+    $settings = ConvertTo-BootstrapHashtable -InputObject $settingsBundle.Data
+    $families = @(Normalize-BootstrapObjectArray -Value $settings['monitorFamilies'])
+    $nextFamilies = @()
+    $updated = $false
+
+    foreach ($family in $families) {
+        $familyMap = ConvertTo-BootstrapHashtable -InputObject $family
+        $sameManufacturer = ([string]$familyMap['manufacturer']).Trim() -ieq $manufacturer
+        $sameProduct = ([string]$familyMap['product']).Trim() -ieq $product
+        if ($sameManufacturer -and $sameProduct) {
+            $familyMap['mode'] = $mode
+            $familyMap['layout'] = $layout
+            $familyMap['resolutionPolicy'] = $resolutionPolicy
+            $familyMap['primary'] = $true
+            $familyMap['classifiedAt'] = (Get-Date).ToString('o')
+            $familyMap['classifiedBy'] = 'bootstrap-ui'
+            $updated = $true
+        }
+        $nextFamilies += @($familyMap)
+    }
+
+    if (-not $updated) {
+        $entry = @{
+            manufacturer = $manufacturer
+            product = $product
+            namePattern = $product
+            mode = $mode
+            layout = $layout
+            resolutionPolicy = $resolutionPolicy
+            primary = $true
+            classifiedAt = (Get-Date).ToString('o')
+            classifiedBy = 'bootstrap-ui'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($serial)) {
+            $entry['sampleSerial'] = $serial
+        }
+        $nextFamilies += @($entry)
+    }
+
+    $settings['monitorFamilies'] = @($nextFamilies)
+    $saveResult = Save-BootstrapSteamDeckSettingsData -Settings $settings -CreateBackup:$CreateBackup
+
+    return [ordered]@{
+        Path = $saveResult.Path
+        BackupPath = $saveResult.BackupPath
+        Target = 'monitorFamilies'
+        Mode = $mode
+        Layout = $layout
+        ResolutionPolicy = $resolutionPolicy
+        Manufacturer = $manufacturer
+        Product = $product
     }
 }
 
@@ -4098,10 +6632,15 @@ function Get-BootstrapComponentCatalog {
     $catalog['copilot-cli'] = New-BootstrapComponentDefinition -Name 'copilot-cli' -Description 'GitHub Copilot CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@github/copilot'; DisplayName = 'GitHub Copilot CLI (@github/copilot)' }
     $catalog['codex-cli'] = New-BootstrapComponentDefinition -Name 'codex-cli' -Description 'OpenAI Codex CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@openai/codex'; DisplayName = 'OpenAI Codex CLI (@openai/codex)' }
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
+    $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes via npm + OpenCloud config no projeto.' -DependsOn @('node-core') -Kind 'hermes'
     $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
     $catalog['bootstrap-mcps'] = New-BootstrapComponentDefinition -Name 'bootstrap-mcps' -Description 'Instala dependencias locais dos MCPs gerenciados e registra o estado da automacao.' -DependsOn @('bootstrap-secrets', 'node-core', 'python-core') -Kind 'bootstrap-mcps'
     $catalog['vscode-extensions'] = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'Instala e configura extensões do VS Code e VS Code Insiders.' -DependsOn @('bootstrap-secrets', 'vscode', 'vscode-insiders') -Kind 'vscode-extensions'
     $catalog['claude-config'] = New-BootstrapComponentDefinition -Name 'claude-config' -Description 'Defaults e hooks do Claude Code.' -DependsOn @('git-core', 'claude-code', 'bootstrap-secrets') -Kind 'claude-config'
+    $catalog['claude-plugins'] = New-BootstrapComponentDefinition -Name 'claude-plugins' -Description 'Instala plugins do Claude Code (LSP, markdown, code-review).' -DependsOn @('claude-code', 'claude-config') -Kind 'claude-plugins'
+    $catalog['agent-skills'] = New-BootstrapComponentDefinition -Name 'agent-skills' -Description 'Instala e ativa skills de agentes, incluindo Caveman por padrao.' -DependsOn @('claude-config', 'vscode-extensions') -Kind 'agent-skills'
+    $catalog['promptfoo'] = New-BootstrapComponentDefinition -Name 'promptfoo' -Description 'promptfoo via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'promptfoo'; DisplayName = 'promptfoo' }
+    $catalog['openwebui'] = New-BootstrapComponentDefinition -Name 'openwebui' -Description 'Open WebUI via Docker (porta 3000).' -DependsOn @('docker') -Kind 'openwebui'
     $catalog['aider'] = New-BootstrapComponentDefinition -Name 'aider' -Description 'aider via uv tool.' -DependsOn @('python-core') -Kind 'uvtool' -Data @{ Package = 'aider-chat'; CommandName = 'aider'; DisplayName = 'aider (aider-chat)'; VersionArgs = @('--version') }
     $catalog['goose'] = New-BootstrapComponentDefinition -Name 'goose' -Description 'goose CLI.' -DependsOn @('git-core') -Kind 'goose'
     $catalog['repo-gemini-cli'] = New-BootstrapComponentDefinition -Name 'repo-gemini-cli' -Description 'Clone do repositório gemini-cli.' -DependsOn @('git-core') -Kind 'repo-clone' -Data @{ RepoUrl = 'https://github.com/heartyguy/gemini-cli'; TargetName = 'gemini-cli' }
@@ -4120,10 +6659,19 @@ function Get-BootstrapComponentCatalog {
     $catalog['powershell-core-runtime'] = New-BootstrapComponentDefinition -Name 'powershell-core-runtime' -Description 'PowerShell Core pronto para componentes futuros.' -DependsOn @('powershell') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Provisiona pwsh antes de qualquer componente futuro que precise dele.' }
     $catalog['vigembus-runtime'] = New-BootstrapComponentDefinition -Name 'vigembus-runtime' -Description 'Barramento virtual usado por ferramentas de input do Steam Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ViGEm.ViGEmBus'; DisplayName = 'ViGEmBus'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Base para emulacao/ponte de controle no modo handheld.' }
     $catalog['steamdeck-tools-runtime'] = New-BootstrapComponentDefinition -Name 'steamdeck-tools-runtime' -Description 'Steam Deck Tools portatil com servicos de controle e overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'steamdeck-tools' -Data @{ Stage = 'runtime'; Provisioning = 'download'; ValueReason = 'Entrega overlay, controle, fan e power tuning especificos do Deck.' }
+    $catalog['amd-adrenalin'] = New-BootstrapComponentDefinition -Name 'amd-adrenalin' -Description 'AMD Software: Adrenalin Edition para drivers/overlay Radeon.' -Kind 'manual-required' -Data @{ DisplayName = 'AMD Adrenalin'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Garante painel Radeon presente para ajustes do driver AMD no modo handheld.'; ProbePaths = @('$env:ProgramFiles\AMD\CNext\CNext\RadeonSoftware.exe', '$env:ProgramFiles\AMD\CNext\CNext\AMDRSServ.exe'); Instructions = 'Instale o driver/painel AMD adequado ao Steam Deck antes de rodar novamente.' }
+    $catalog['cru'] = New-BootstrapComponentDefinition -Name 'cru' -Description 'Custom Resolution Utility para ajustes EDID/resolucao.' -Kind 'manual-required' -Data @{ DisplayName = 'CRU'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Permite corrigir modos de resolucao/refresh usados por handheld e dock.'; CheckCommand = 'CRU.exe'; ProbePaths = @('$env:ProgramFiles\Custom Resolution Utility\CRU.exe', '$env:LOCALAPPDATA\Programs\Custom Resolution Utility\CRU.exe'); Instructions = 'Instale/extraia o Custom Resolution Utility (CRU) e deixe CRU.exe no PATH ou em pasta conhecida.' }
+    $catalog['steamdeck-tools'] = New-BootstrapComponentDefinition -Name 'steamdeck-tools' -Description 'Bloco de tooling: RTSS, AMD Adrenalin, CRU e Steam Deck Tools.' -DependsOn @('rtss', 'amd-adrenalin', 'cru', 'steamdeck-tools-runtime') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'mixed'; ValueReason = 'Fecha o stack de overlay, driver, resolucao e controle fisico esperado no modo handheld.' }
     $catalog['displayfusion'] = New-BootstrapComponentDefinition -Name 'displayfusion' -Description 'Layout de monitores e perfis de dock.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'BinaryFortress.DisplayFusion'; DisplayName = 'DisplayFusion'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite layouts dedicados para monitor externo e dock.' }
     $catalog['soundswitch'] = New-BootstrapComponentDefinition -Name 'soundswitch' -Description 'Troca rapida de audio entre Deck e HDMI/DP.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'AntoineAflalo.SoundSwitch'; DisplayName = 'SoundSwitch'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Redireciona audio automaticamente entre handheld e dock.' }
-    $catalog['steamdeck-settings'] = New-BootstrapComponentDefinition -Name 'steamdeck-settings' -Description 'Cria e mantem steamdeck-settings.json com defaults e families.' -DependsOn @('system-core') -Kind 'steamdeck-settings' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Persiste os defaults do host, incluindo a familia GSM/LG HDR WFHD e o fallback generico.' }
-    $catalog['steamdeck-automation'] = New-BootstrapComponentDefinition -Name 'steamdeck-automation' -Description 'Provisiona watcher handheld/dock, scripts Apply-* e hotkeys.' -DependsOn @('steamdeck-settings', 'autohotkey-runtime', 'displayfusion', 'soundswitch', 'steamdeck-tools-runtime') -Kind 'steamdeck-automation' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Ativa a deteccao por familia de monitor e o fallback generico sem quebrar a experiencia dock.' }
+    $catalog['steamdeck-settings'] = New-BootstrapComponentDefinition -Name 'steamdeck-settings' -Description 'Cria e mantem steamdeck-settings.json com defaults e families.' -DependsOn @('system-core') -Kind 'steamdeck-settings' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Persiste defaults do host, familias conhecidas, classificacao de externo desconhecido e console shell.' }
+    $catalog['steamdeck-automation'] = New-BootstrapComponentDefinition -Name 'steamdeck-automation' -Description 'Provisiona watcher handheld/dock, scripts Apply-* e hotkeys.' -DependsOn @('steamdeck-settings', 'autohotkey-runtime', 'displayfusion', 'soundswitch', 'steamdeck-tools-runtime') -Kind 'steamdeck-automation' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Ativa deteccao por familia, Game - Steam Deck em handheld/TV e Desktop/Dev em monitor.' }
+    $catalog['steamdeck-tweaks'] = New-BootstrapComponentDefinition -Name 'steamdeck-tweaks' -Description 'Ajustes handheld: hibernacao, UTC, login pos-sleep, ms-gamebar e touch keyboard.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Aplica ajustes seguros quando o modo HANDHELD entra em Game - Steam Deck.' }
+    $catalog['console-session-manager'] = New-BootstrapComponentDefinition -Name 'console-session-manager' -Description 'Sessao Game - Steam Deck com Steam Big Picture primeiro e Playnite fallback.' -DependsOn @('steamdeck-automation', 'steam', 'playnite') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Entrega experiencia console-first sem trocar o shell do Windows.' }
+    $catalog['dev-session-manager'] = New-BootstrapComponentDefinition -Name 'dev-session-manager' -Description 'Sessao Desktop/Dev para monitor conhecido ou fallback seguro.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Evita abrir Steam Big Picture quando o Deck inicia em monitor de trabalho.' }
+    $catalog['display-classifier'] = New-BootstrapComponentDefinition -Name 'display-classifier' -Description 'Classifica externo desconhecido como Monitor/Dev ou TV/Game pela UI.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Impede falso positivo: desconhecido vira UNCLASSIFIED_EXTERNAL ate o usuario decidir.' }
+    $catalog['recovery-hotkeys'] = New-BootstrapComponentDefinition -Name 'recovery-hotkeys' -Description 'Hotkeys de recuperacao para voltar ao Desktop/Dev.' -DependsOn @('steamdeck-automation', 'autohotkey-runtime') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Mantem saida segura do modo console sem prender o usuario em fullscreen.' }
+    $catalog['console-readiness-audit'] = New-BootstrapComponentDefinition -Name 'console-readiness-audit' -Description 'Audita Steam, Playnite, Steam Deck Tools, RTSS, Adrenalin, CRU, SoundSwitch e watcher.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Mostra blockers antes de depender da experiencia console.' }
     $catalog['playnite'] = New-BootstrapComponentDefinition -Name 'playnite' -Description 'Frontend unificado para bibliotecas e modo console.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Playnite.Playnite'; DisplayName = 'Playnite'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega um frontend fullscreen amigavel a controle no Deck.' }
     $catalog['heroic'] = New-BootstrapComponentDefinition -Name 'heroic' -Description 'Cliente Epic/GOG leve para o Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'HeroicGamesLauncher.HeroicGamesLauncher'; DisplayName = 'Heroic Games Launcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre bibliotecas Epic/GOG sem depender do launcher oficial pesado.' }
     $catalog['rtss'] = New-BootstrapComponentDefinition -Name 'rtss' -Description 'RivaTuner Statistics Server para overlay e frame pacing.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Guru3D.RTSS'; DisplayName = 'RivaTuner Statistics Server'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega overlay e base para performance tuning no Deck.' }
@@ -4175,10 +6723,10 @@ function Get-BootstrapComponentCatalog {
 function Get-BootstrapProfileCatalog {
     $catalog = [ordered]@{}
 
-    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para máquina nova.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'google-app-desktop', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
@@ -4186,8 +6734,8 @@ function Get-BootstrapProfileCatalog {
     $catalog['creator'] = New-BootstrapProfileDefinition -Name 'creator' -Description 'Ferramentas de criação e mídia.' -Items @('autohotkey', 'blender', 'ffmpeg')
     $catalog['game-dev'] = New-BootstrapProfileDefinition -Name 'game-dev' -Description 'Toolchain de jogos e compilação.' -Items @('unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community')
     $catalog['gaming'] = New-BootstrapProfileDefinition -Name 'gaming' -Description 'Steam e ferramentas relacionadas.' -Items @('steam', 'steamcmd')
-    $catalog['steamdeck-essentials'] = New-BootstrapProfileDefinition -Name 'steamdeck-essentials' -Description 'Base handheld do Steam Deck em Windows.' -Items @('base', 'steam', 'playnite', 'heroic', 'rtss', 'special-k', 'vcpp-redist', 'directx-runtime', 'vigembus-runtime', 'steamdeck-tools-runtime', 'autohotkey-runtime')
-    $catalog['steamdeck-input'] = New-BootstrapProfileDefinition -Name 'steamdeck-input' -Description 'Perfis de input, hotkeys e automacao de controle.' -Items @('steamdeck-settings', 'steamdeck-automation')
+    $catalog['steamdeck-essentials'] = New-BootstrapProfileDefinition -Name 'steamdeck-essentials' -Description 'Base handheld do Steam Deck em Windows.' -Items @('base', 'steam', 'playnite', 'heroic', 'rtss', 'special-k', 'vcpp-redist', 'directx-runtime', 'vigembus-runtime', 'steamdeck-tools-runtime', 'steamdeck-tools', 'autohotkey-runtime')
+    $catalog['steamdeck-input'] = New-BootstrapProfileDefinition -Name 'steamdeck-input' -Description 'Perfis de input, hotkeys e automacao de controle.' -Items @('steamdeck-settings', 'steamdeck-automation', 'steamdeck-tweaks', 'console-session-manager', 'dev-session-manager', 'display-classifier', 'recovery-hotkeys', 'console-readiness-audit')
     $catalog['steamdeck-power'] = New-BootstrapProfileDefinition -Name 'steamdeck-power' -Description 'Gestao de energia e tuning para bateria/dock.' -Items @('powertoys', 'quickcpu', 'fan-control', 'mem-reduct')
     $catalog['steamdeck-dock'] = New-BootstrapProfileDefinition -Name 'steamdeck-dock' -Description 'Automacao handheld-dock com fallback generico.' -Items @('displayfusion', 'soundswitch', 'steamdeck-settings', 'steamdeck-automation')
     $catalog['steamdeck-storage'] = New-BootstrapProfileDefinition -Name 'steamdeck-storage' -Description 'Ferramentas de storage e auditoria.' -Items @('compactgui', 'treesize-free', 'pagefile-on-sd')
@@ -4227,13 +6775,18 @@ function New-BootstrapSelectionObject {
         [string[]]$SelectedProfiles = @(),
         [string[]]$SelectedComponents = @(),
         [string[]]$ExcludedComponents = @(),
-        [AllowNull()][string]$SelectedHostHealth = $null
+        [AllowNull()][string]$SelectedHostHealth = $null,
+        [AllowNull()][string]$SelectedAppTuning = $null,
+        [string[]]$SelectedAppTuningCategories = @(),
+        [string[]]$SelectedAppTuningItems = @(),
+        [string[]]$ExcludedAppTuningItems = @()
     )
 
     $profiles = @(Normalize-BootstrapNames -Names $SelectedProfiles)
     $components = @(Normalize-BootstrapNames -Names $SelectedComponents)
     $excludes = @(Normalize-BootstrapNames -Names $ExcludedComponents)
     $hostHealth = Normalize-BootstrapHostHealthMode -Mode $SelectedHostHealth
+    $appTuningMode = Normalize-BootstrapAppTuningMode -Mode $SelectedAppTuning
 
     if ($profiles.Count -eq 0 -and $components.Count -eq 0) {
         $profiles = @('legacy')
@@ -4244,12 +6797,29 @@ function New-BootstrapSelectionObject {
         Components = @($components)
         Excludes = @($excludes)
         HostHealth = $hostHealth
+        AppTuning = $appTuningMode
+        AppTuningCategories = @(Normalize-BootstrapNames -Names $SelectedAppTuningCategories)
+        AppTuningItems = @(Normalize-BootstrapNames -Names $SelectedAppTuningItems)
+        ExcludedAppTuningItems = @(Normalize-BootstrapNames -Names $ExcludedAppTuningItems)
     }
 }
 
 function Get-BootstrapUiContract {
     $profiles = Get-BootstrapProfileCatalog
     $components = Get-BootstrapComponentCatalog
+    $apiCatalog = Get-BootstrapPublicApiCatalog
+    $appCatalog = Get-BootstrapAppCapabilityCatalog
+    $secretsData = $null
+    $secretsPath = Get-BootstrapSecretsPath
+    if (Test-Path $secretsPath) {
+        try {
+            $secretsData = Read-BootstrapJsonFile -Path $secretsPath
+        } catch {
+            $secretsData = Get-BootstrapSecretsTemplate
+        }
+    } else {
+        $secretsData = Get-BootstrapSecretsTemplate
+    }
 
     $profileEntries = foreach ($profileName in $profiles.Keys) {
         $profileDef = $profiles[$profileName]
@@ -4277,15 +6847,22 @@ function Get-BootstrapUiContract {
         profileNames = @($profiles.Keys)
         componentNames = @($components.Keys)
         hostHealthModes = @(Get-BootstrapHostHealthModes)
+        appTuningModes = @(Get-BootstrapAppTuningModes)
         defaults = [ordered]@{
             workspaceRoot = 'F:\Steam\Steamapps'
             steamDeckVersion = 'Auto'
             uiLanguage = 'pt-BR'
             legacyHostHealth = 'off'
             modernHostHealth = 'conservador'
+            legacyAppTuning = 'off'
+            modernAppTuning = 'recommended'
         }
         profiles = @($profileEntries)
         components = @($componentEntries)
+        appTuningCatalog = Get-BootstrapAppTuningCatalog
+        apiCatalog = $apiCatalog
+        apiInventory = Get-BootstrapApiInventory -SecretsData $secretsData
+        appCatalog = $appCatalog
         steamDeckSettingsDefaults = Get-BootstrapSteamDeckSettingsDefaults -ResolvedSteamDeckVersion 'lcd'
     }
 }
@@ -4294,7 +6871,8 @@ function Get-BootstrapAdminReasons {
     param(
         [Parameter(Mandatory = $true)]$Resolution,
         [Parameter(Mandatory = $true)][string]$ResolvedHostHealthMode,
-        [bool]$UsesSteamDeckFlow = $false
+        [bool]$UsesSteamDeckFlow = $false,
+        [AllowNull()]$AppTuningPlan = $null
     )
 
     $reasons = New-Object System.Collections.Generic.List[string]
@@ -4326,6 +6904,12 @@ function Get-BootstrapAdminReasons {
 
     if ($ResolvedHostHealthMode -eq 'agressivo') {
         $reasons.Add('HostHealth agressivo ajusta servicos e requer elevacao.')
+    }
+
+    if ($AppTuningPlan) {
+        foreach ($item in @($AppTuningPlan.items | Where-Object { [bool]$_.requiresAdmin })) {
+            $reasons.Add(("AppTuning item {0} pode exigir elevacao para {1}." -f [string]$item.id, (@($item.actions) -join ', ')))
+        }
     }
 
     if (Test-BootstrapIsDualBoot) {
@@ -4524,6 +7108,10 @@ function Invoke-BootstrapInteractiveSelection {
         Components = @($selectedComponents)
         Excludes = @($selectedExcludes)
         HostHealth = $selectedHostHealth
+        AppTuning = ''
+        AppTuningCategories = @()
+        AppTuningItems = @()
+        ExcludedAppTuningItems = @()
     }
 }
 
@@ -4532,6 +7120,7 @@ function Get-BootstrapSelection {
     $components = @(Normalize-BootstrapNames -Names $Component)
     $excludes = @(Normalize-BootstrapNames -Names $Exclude)
     $selectedHostHealth = Normalize-BootstrapHostHealthMode -Mode $HostHealth
+    $selectedAppTuning = Normalize-BootstrapAppTuningMode -Mode $AppTuning
 
     if ($Interactive -and -not $NonInteractive -and $profiles.Count -eq 0 -and $components.Count -eq 0) {
         return Invoke-BootstrapInteractiveSelection
@@ -4546,6 +7135,10 @@ function Get-BootstrapSelection {
         Components = $components
         Excludes = $excludes
         HostHealth = $selectedHostHealth
+        AppTuning = $selectedAppTuning
+        AppTuningCategories = @(Normalize-BootstrapNames -Names $AppTuningCategory)
+        AppTuningItems = @(Normalize-BootstrapNames -Names $AppTuningItem)
+        ExcludedAppTuningItems = @(Normalize-BootstrapNames -Names $ExcludeAppTuningItem)
     }
 }
 
@@ -4578,6 +7171,7 @@ function New-BootstrapState {
         [string]$RequestedSteamDeckVersion = 'Auto',
         [string]$ResolvedSteamDeckVersion = 'lcd',
         [string]$HostHealthMode = 'off',
+        [string]$AppTuningMode = 'off',
         [bool]$UsesSteamDeckFlow = $false,
         [bool]$IsDryRun = $false
     )
@@ -4586,11 +7180,14 @@ function New-BootstrapState {
         DryRun = $IsDryRun
         WorkspaceRoot = $ResolvedWorkspaceRoot
         CloneBaseDir = $ResolvedCloneBaseDir
+        EnableClaudeCodeProjectMcps = $false
         RequestedSteamDeckVersion = $RequestedSteamDeckVersion
         ResolvedSteamDeckVersion = $ResolvedSteamDeckVersion
         HostHealthMode = $HostHealthMode
+        AppTuningMode = $AppTuningMode
         UsesSteamDeckFlow = $UsesSteamDeckFlow
         HostHealthReportRoot = $null
+        AppTuningReportRoot = $null
         SteamDeckSettingsPath = $null
         SteamDeckAutomationRoot = $null
         SteamDeckToolsRoot = $null
@@ -4662,6 +7259,71 @@ function Ensure-GitLfs {
     if ($exitCode -ne 0) { throw "Falha ao executar git lfs install (exit=$exitCode)." }
 }
 
+function Repair-BootstrapWslCorruption {
+    param(
+        [Parameter(Mandatory = $true)][string]$WslExe,
+        [hashtable]$State
+    )
+
+    if (-not (Test-IsAdmin)) {
+        Write-Log 'WSL: reparo requer privilégios de administrador. Pulando.' 'WARN'
+        return $false
+    }
+
+    Write-Log 'WSL: instalação parece corrompida. Tentando reparar...'
+
+    try { $null = Invoke-NativeCaptureWithLog -Exe $WslExe -Args @('--shutdown') -TimeoutMs 30000 -InputText "`n" } catch { }
+
+    Ensure-WindowsOptionalFeatureEnabled -FeatureName 'Microsoft-Windows-Subsystem-Linux' -DisplayName 'Windows Subsystem for Linux'
+    Ensure-WindowsOptionalFeatureEnabled -FeatureName 'VirtualMachinePlatform' -DisplayName 'Virtual Machine Platform'
+
+    $pkg = $null
+    try {
+        $pkg = Get-AppxPackage -Name 'MicrosoftCorporationII.WindowsSubsystemForLinux' -ErrorAction SilentlyContinue | Select-Object -First 1
+    } catch { $pkg = $null }
+
+    if ($pkg -and -not [string]::IsNullOrWhiteSpace([string]$pkg.InstallLocation)) {
+        $manifest = Join-Path ([string]$pkg.InstallLocation) 'AppxManifest.xml'
+        if (Test-Path $manifest) {
+            try {
+                Add-AppxPackage -DisableDevelopmentMode -Register $manifest -ErrorAction Stop | Out-Null
+                Write-Log "WSL: AppX re-registrado: $manifest"
+            } catch {
+                Write-Log ("WSL: falha ao re-registrar AppX: " + $_.Exception.Message) 'WARN'
+            }
+        }
+    } else {
+        if ($State -and $State.Winget) {
+            try {
+                Ensure-WingetPackage -WingetPath $State.Winget -Id 'Microsoft.WSL' -DisplayName 'WSL'
+            } catch {
+                Write-Log ("WSL: falha ao instalar Microsoft.WSL via winget: " + $_.Exception.Message) 'WARN'
+            }
+        } else {
+            Write-Log 'WSL: pacote AppX não encontrado e winget indisponível para reinstalar.' 'WARN'
+        }
+    }
+
+    $repairUpdate = Invoke-NativeCaptureWithLog -Exe $WslExe -Args @('--update') -TimeoutMs 900000 -InputText "`n"
+    $repairText = [string]($repairUpdate.stdout + "`n" + $repairUpdate.stderr)
+    if (Test-WslCorruptionText -Text $repairText) {
+        Write-Log 'WSL: ainda corrompido após reparo automático. Recomendo reiniciar e tentar novamente.' 'WARN'
+        return $false
+    }
+
+    if (($repairUpdate.exitCode -ne 0) -and ($repairUpdate.exitCode -ne 3010)) {
+        Write-Log "WSL: reparo executou, mas wsl --update retornou exit=$($repairUpdate.exitCode)." 'WARN'
+    }
+
+    $defaultVersionExitCode = Invoke-NativeWithLog -Exe $WslExe -Args @('--set-default-version', '2')
+    if (($defaultVersionExitCode -ne 0) -and ($defaultVersionExitCode -ne 3010)) {
+        Write-Log "WSL: falha ao executar wsl --set-default-version 2 (exit=$defaultVersionExitCode)." 'WARN'
+    }
+
+    Write-Log 'WSL: reparo finalizado.'
+    return $true
+}
+
 function Ensure-WslCore {
     param([hashtable]$State)
     Ensure-BootstrapSystemCore -State $State
@@ -4695,9 +7357,14 @@ function Ensure-WslCore {
         Write-Log 'Ubuntu já está listado no WSL.'
     }
 
-    $updateExitCode = Invoke-NativeWithLog -Exe $wslExe -Args @('--update')
-    if (($updateExitCode -ne 0) -and ($updateExitCode -ne 3010)) {
-        Write-Log "Falha ao executar wsl --update (exit=$updateExitCode)." 'WARN'
+    $updateResult = Invoke-NativeCaptureWithLog -Exe $wslExe -Args @('--update') -TimeoutMs 900000 -InputText "`n"
+    $updateText = [string]($updateResult.stdout + "`n" + $updateResult.stderr)
+    if (Test-WslCorruptionText -Text $updateText) {
+        $null = Repair-BootstrapWslCorruption -WslExe $wslExe -State $State
+    } elseif (($updateResult.exitCode -ne 0) -and ($updateResult.exitCode -ne 3010)) {
+        Write-Log "Falha ao executar wsl --update (exit=$($updateResult.exitCode))." 'WARN'
+    } elseif ($updateResult.timedOut) {
+        Write-Log 'wsl --update excedeu timeout e foi encerrado. Docker/WSL podem falhar; recomendo reiniciar e tentar de novo.' 'WARN'
     }
 
     $defaultVersionExitCode = Invoke-NativeWithLog -Exe $wslExe -Args @('--set-default-version', '2')
@@ -5000,6 +7667,63 @@ function Get-BootstrapOpenCodeConfigPath {
         $(if ($userHome) { Join-Path $userHome '.config\opencode\opencode.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'OpenCode\opencode.json' })
     ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.config\opencode\opencode.json' } else { $null }))
+}
+
+function Get-BootstrapOpenCodeAuthPath {
+    $userHome = Get-BootstrapUserHomePath
+    $localAppDataPath = Get-BootstrapLocalAppDataPath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($userHome) { Join-Path $userHome '.local\share\opencode\auth.json' }),
+        $(if ($localAppDataPath) { Join-Path $localAppDataPath 'opencode\auth.json' })
+    ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.local\share\opencode\auth.json' } else { $null }))
+}
+
+function Get-BootstrapOpenCodeProviderRecords {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $records = @()
+
+    foreach ($providerName in @($normalized.providers.Keys)) {
+        if (-not $catalog.Contains($providerName)) { continue }
+        $meta = ConvertTo-BootstrapHashtable -InputObject $catalog[$providerName]
+        if (-not [bool]$meta['supportsOpenCode']) { continue }
+
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerName]
+        if (-not ($provider -is [hashtable])) { continue }
+        $credentialId = [string]$provider['activeCredential']
+        if ([string]::IsNullOrWhiteSpace($credentialId)) { continue }
+        if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]) -and $provider['credentials'].Contains($credentialId))) { continue }
+
+        $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$credentialId]
+        if (-not ($credential -is [hashtable])) { continue }
+        $validation = if ($credential.ContainsKey('validation') -and ($credential['validation'] -is [hashtable])) { $credential['validation'] } else { @{} }
+        if ([string]$validation['state'] -ne 'passed') { continue }
+        if ([string]::IsNullOrWhiteSpace([string]$credential['secret'])) { continue }
+
+        $openCodeId = [string]$meta['openCodeId']
+        if ([string]::IsNullOrWhiteSpace($openCodeId)) { continue }
+
+        $baseUrl = Get-BootstrapCredentialEffectiveValue -ProviderDefinition $provider -Credential $credential -Name 'baseUrl'
+        $defaultBaseUrl = ''
+        if ($meta.ContainsKey('defaults') -and ($meta['defaults'] -is [hashtable])) {
+            $defaultBaseUrl = [string]$meta['defaults']['baseUrl']
+        }
+
+        $records += @([ordered]@{
+            providerName = [string]$providerName
+            providerId = $openCodeId
+            displayName = [string]$meta['displayName']
+            credentialId = $credentialId
+            secret = [string]$credential['secret']
+            baseUrl = $baseUrl
+            defaultBaseUrl = $defaultBaseUrl
+            needsConfig = (-not [string]::IsNullOrWhiteSpace($baseUrl) -and ($baseUrl.TrimEnd('/') -ne $defaultBaseUrl.TrimEnd('/')))
+        })
+    }
+
+    return @($records)
 }
 
 function Test-BootstrapVsCodeStableInstalled {
@@ -5958,13 +8682,64 @@ function Ensure-BootstrapOpenClawSecrets {
 }
 
 function Ensure-BootstrapCometSecrets {
-    param([hashtable]$ResolvedTargets)
+    param(
+        [hashtable]$ResolvedTargets,
+        [AllowNull()]$SecretsData = $null
+    )
 
     if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('comet') -or -not ($ResolvedTargets['comet'] -is [hashtable])) {
         return $false
     }
 
     return $false
+}
+
+function Test-BootstrapCometInstalled {
+    $localAppDataPath = Get-BootstrapLocalAppDataPath
+    $candidates = @(
+        $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Perplexity\Comet' }),
+        $(if ($localAppDataPath) { Join-Path $localAppDataPath 'Programs\Perplexity\Comet.exe' })
+    )
+
+    foreach ($candidate in @($candidates)) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path $candidate)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-BootstrapCometGuide {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $inventory = Get-BootstrapApiInventory -SecretsData $SecretsData
+    $readyProviders = @()
+    $missingProviders = @()
+
+    foreach ($provider in @($inventory.providers)) {
+        if (-not [bool]$provider.supportsComet) { continue }
+        $entry = [ordered]@{
+            id = [string]$provider.id
+            displayName = [string]$provider.displayName
+            validationState = [string]$provider.activeValidationState
+            signupUrl = [string]$provider.signupUrl
+            docsUrl = [string]$provider.docsUrl
+            requiredFields = @($provider.requiredFields)
+        }
+        if ([string]$provider.activeValidationState -eq 'passed') {
+            $readyProviders += @($entry)
+        } else {
+            $missingProviders += @($entry)
+        }
+    }
+
+    return [ordered]@{
+        mode = 'manualOnly'
+        installed = (Test-BootstrapCometInstalled)
+        message = 'Comet nao possui contrato publico de configuracao por arquivo neste bootstrap; use as chaves validadas listadas aqui no fluxo manual do app.'
+        readyProviders = @($readyProviders)
+        missingProviders = @($missingProviders)
+    }
 }
 
 function Ensure-BootstrapClaudeCodeSecrets {
@@ -6094,13 +8869,133 @@ function Ensure-BootstrapTraeSecrets {
 }
 
 function Ensure-BootstrapOpenCodeSecrets {
-    param([hashtable]$ResolvedTargets)
+    param(
+        [hashtable]$ResolvedTargets,
+        [AllowNull()]$SecretsData = $null
+    )
 
     if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('openCode') -or -not ($ResolvedTargets['openCode'] -is [hashtable])) {
         return $false
     }
 
-    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapOpenCodeConfigPath) -Target $ResolvedTargets['openCode'] -Label 'OpenCode' -McpFormat 'opencode' -McpPropertyName 'mcp')
+    $mcpUpdated = Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapOpenCodeConfigPath) -Target $ResolvedTargets['openCode'] -Label 'OpenCode' -McpFormat 'opencode' -McpPropertyName 'mcp'
+    $authUpdated = $false
+    $providerConfigUpdated = $false
+    if ($null -ne $SecretsData) {
+        $authSummary = Ensure-BootstrapOpenCodeProviderAuth -SecretsData $SecretsData
+        $providerConfigSummary = Ensure-BootstrapOpenCodeProviderConfig -SecretsData $SecretsData
+        $authUpdated = [bool]$authSummary.updated
+        $providerConfigUpdated = [bool]$providerConfigSummary.updated
+    }
+
+    return ($mcpUpdated -or $authUpdated -or $providerConfigUpdated)
+}
+
+function Ensure-BootstrapOpenCodeProviderAuth {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $path = Get-BootstrapOpenCodeAuthPath
+    $auth = @{}
+    if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path $path)) {
+        try {
+            $auth = Read-BootstrapJsonFile -Path $path
+            if (-not ($auth -is [hashtable])) { $auth = @{} }
+        } catch {
+            Write-Log "OpenCode auth.json invalido em $path. O bootstrap vai recriar o JSON mesclado." 'WARN'
+            $auth = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $auth) | ConvertTo-Json -Depth 20 -Compress)
+    $applied = @()
+    foreach ($record in @(Get-BootstrapOpenCodeProviderRecords -SecretsData $SecretsData)) {
+        $providerId = [string]$record.providerId
+        if ([string]::IsNullOrWhiteSpace($providerId)) { continue }
+        $auth[$providerId] = [ordered]@{
+            type = 'api'
+            key = [string]$record.secret
+        }
+        $applied += @([ordered]@{
+            provider = [string]$record.providerName
+            providerId = $providerId
+            credentialId = [string]$record.credentialId
+        })
+    }
+
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $auth) | ConvertTo-Json -Depth 20 -Compress)
+    $updated = ($before -ne $after)
+    if ($updated -and -not [string]::IsNullOrWhiteSpace($path)) {
+        Write-BootstrapJsonFile -Path $path -Value $auth
+        Write-Log "OpenCode auth sincronizado: $path"
+    }
+
+    return [ordered]@{
+        path = $path
+        updated = $updated
+        providers = @($applied)
+    }
+}
+
+function Ensure-BootstrapOpenCodeProviderConfig {
+    param([Parameter(Mandatory = $true)]$SecretsData)
+
+    $path = Get-BootstrapOpenCodeConfigPath
+    $settings = @{}
+    if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path $path)) {
+        try {
+            $settings = Read-BootstrapJsonFile -Path $path
+            if (-not ($settings -is [hashtable])) { $settings = @{} }
+        } catch {
+            Write-Log "OpenCode opencode.json invalido em $path. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." 'WARN'
+            $settings = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 30 -Compress)
+    if (-not $settings.ContainsKey('$schema')) {
+        $settings['$schema'] = 'https://opencode.ai/config.json'
+    }
+
+    $providerMap = Ensure-BootstrapNamedMap -Parent $settings -Name 'provider'
+    $applied = @()
+    foreach ($record in @(Get-BootstrapOpenCodeProviderRecords -SecretsData $SecretsData)) {
+        if (-not [bool]$record.needsConfig) { continue }
+        $providerId = [string]$record.providerId
+        if ([string]::IsNullOrWhiteSpace($providerId)) { continue }
+
+        $providerConfig = @{}
+        if ($providerMap.ContainsKey($providerId) -and ($providerMap[$providerId] -is [hashtable])) {
+            $providerConfig = ConvertTo-BootstrapHashtable -InputObject $providerMap[$providerId]
+        }
+        $options = Ensure-BootstrapNamedMap -Parent $providerConfig -Name 'options'
+        $options['baseURL'] = [string]$record.baseUrl
+        if (-not $providerConfig.ContainsKey('name') -or [string]::IsNullOrWhiteSpace([string]$providerConfig['name'])) {
+            $providerConfig['name'] = [string]$record.displayName
+        }
+        $providerMap[$providerId] = $providerConfig
+        $applied += @([ordered]@{
+            provider = [string]$record.providerName
+            providerId = $providerId
+            credentialId = [string]$record.credentialId
+        })
+    }
+
+    if ($providerMap.Count -eq 0) {
+        Remove-BootstrapEmptyNamedMap -Parent $settings -Name 'provider' | Out-Null
+    }
+
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 30 -Compress)
+    $updated = ($before -ne $after)
+    if ($updated -and -not [string]::IsNullOrWhiteSpace($path)) {
+        Write-BootstrapJsonFile -Path $path -Value $settings
+        Write-Log "OpenCode provider config sincronizado: $path"
+    }
+
+    return [ordered]@{
+        path = $path
+        updated = $updated
+        providers = @($applied)
+    }
 }
 
 function Get-BootstrapVsCodeExtensionStatePath {
@@ -6135,6 +9030,20 @@ function Get-BootstrapManagedMcpCapableTargets {
 
 function Get-BootstrapManagedMcpCatalog {
     return [ordered]@{
+        sentry = [ordered]@{
+            id = 'sentry'
+            displayName = 'Sentry MCP (Remote)'
+            installKind = 'npm'
+            package = 'mcp-remote'
+            authMode = 'oauth'
+        }
+        bonsai = [ordered]@{
+            id = 'bonsai'
+            displayName = 'Bonsai MCP (Remote)'
+            installKind = 'npm'
+            package = 'mcp-remote'
+            authMode = 'token-http'
+        }
         github = [ordered]@{
             id = 'github'
             displayName = 'GitHub MCP Server'
@@ -6258,7 +9167,7 @@ function Get-BootstrapManagedMcpProviders {
         $managedProviders = [ordered]@{}
     }
 
-    foreach ($providerName in @('context7', 'firecrawl', 'apify', 'netdata', 'supabase')) {
+    foreach ($providerName in @('context7', 'firecrawl', 'apify', 'netdata', 'supabase', 'bonsai')) {
         if ($managedProviders.Contains($providerName)) {
             continue
         }
@@ -6449,6 +9358,17 @@ function Get-BootstrapManagedMcpServers {
 
     $servers = [ordered]@{}
 
+    $bonsaiProvider = $null
+    if ($ManagedProviders.Contains('bonsai') -and ($ManagedProviders['bonsai'] -is [System.Collections.IDictionary])) {
+        $bonsaiProvider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['bonsai']
+    }
+    if ($bonsaiProvider -is [hashtable] -and -not [string]::IsNullOrWhiteSpace([string]$bonsaiProvider['token'])) {
+        $bonsaiBaseUrl = if (-not [string]::IsNullOrWhiteSpace([string]$bonsaiProvider['baseUrl'])) { [string]$bonsaiProvider['baseUrl'] } else { 'https://mcp.bonsai-rx.org/mcp' }
+        $servers['bonsai'] = New-BootstrapManagedMcpRemoteBridgeServer -Url $bonsaiBaseUrl -Headers ([ordered]@{
+            Authorization = ('Bearer {0}' -f [string]$bonsaiProvider['token'])
+        })
+    }
+
     $githubProvider = $null
     if ($ManagedProviders.Contains('github') -and ($ManagedProviders['github'] -is [System.Collections.IDictionary])) {
         $githubProvider = ConvertTo-BootstrapHashtable -InputObject $ManagedProviders['github']
@@ -6515,6 +9435,7 @@ function Get-BootstrapManagedMcpServers {
     $servers['figma'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.figma.com/mcp'
     $servers['vercel'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.vercel.com'
     $servers['box'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.box.com'
+    $servers['sentry'] = New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.sentry.dev/mcp'
 
     return $servers
 }
@@ -6671,7 +9592,7 @@ function Ensure-BootstrapManagedMcps {
             'token-http' {
                 if (-not $configured) {
                     $authPending = $true
-                    $reason = 'Netdata exige URL MCP local e token ativo para ser habilitado.'
+                    $reason = 'Exige URL MCP e token ativo para ser habilitado.'
                 }
             }
         }
@@ -6710,7 +9631,7 @@ function Ensure-BootstrapManagedMcps {
         $summary.targets.traeUpdated = Ensure-BootstrapTraeSecrets -ResolvedTargets $resolvedTargets
     }
     if ($resolvedTargets.ContainsKey('openCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openCode'])) {
-        $summary.targets.openCodeUpdated = Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $resolvedTargets
+        $summary.targets.openCodeUpdated = Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $resolvedTargets -SecretsData $secretsData
     }
     if ($resolvedTargets.ContainsKey('vsCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['vsCode'])) {
         $summary.targets.vsCodeUpdated = Ensure-BootstrapVsCodeSecrets -ResolvedTargets $resolvedTargets
@@ -6729,6 +9650,10 @@ function Ensure-BootstrapManagedMcps {
     }
     if ($resolvedTargets.ContainsKey('openClaw') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openClaw'])) {
         $summary.targets.openClawUpdated = Ensure-BootstrapOpenClawSecrets -ResolvedTargets $resolvedTargets
+    }
+
+    if ([bool]$State.EnableClaudeCodeProjectMcps) {
+        Ensure-ClaudeCodeProjectMcps -State $State -ManagedProviders $managedProviders
     }
 
     $summary.continue = Ensure-BootstrapContinueExtensionConfig -ResolvedTargets $resolvedTargets
@@ -7181,6 +10106,293 @@ function Ensure-BootstrapContinueExtensionConfig {
     return $summary
 }
 
+function Get-BootstrapAgentSkillStatePath {
+    return (Join-Path (Get-BootstrapDataRoot) 'agent-skill-state.json')
+}
+
+function Get-BootstrapCavemanTemplatePath {
+    return (Join-Path $PSScriptRoot 'assets\agent-skills\caveman-always-on.md')
+}
+
+function Get-BootstrapCavemanRuleBody {
+    $templatePath = Get-BootstrapCavemanTemplatePath
+    if (Test-Path $templatePath) {
+        return ((Get-Content -Path $templatePath -Raw -Encoding utf8).Trim())
+    }
+    return @'
+Terse like caveman.
+Technical substance exact. Only fluff die.
+ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift.
+Code/commits/PRs: normal.
+Off: "stop caveman" / "normal mode".
+'@.Trim()
+}
+
+function New-BootstrapNativeCommandSpec {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [string[]]$Args = @()
+    )
+
+    return [ordered]@{
+        exe = $Exe
+        args = @($Args)
+    }
+}
+
+function Get-BootstrapCavemanTargetCatalog {
+    return (ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
+        claudeCode = [ordered]@{
+            displayName = 'Claude Code'
+            runtime = 'claude'
+            commands = @(
+                (New-BootstrapNativeCommandSpec -Exe 'claude' -Args @('plugin', 'marketplace', 'add', 'JuliusBrussee/caveman')),
+                (New-BootstrapNativeCommandSpec -Exe 'claude' -Args @('plugin', 'install', 'caveman@caveman'))
+            )
+            fallbackCommands = @(
+                (New-BootstrapNativeCommandSpec -Exe 'powershell' -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex'))
+            )
+        }
+        geminiCli = [ordered]@{
+            displayName = 'Gemini CLI'
+            runtime = 'gemini'
+            commands = @(
+                (New-BootstrapNativeCommandSpec -Exe 'gemini' -Args @('extensions', 'install', 'https://github.com/JuliusBrussee/caveman'))
+            )
+            fallbackCommands = @()
+        }
+        cursor = [ordered]@{
+            displayName = 'Cursor'
+            runtime = 'npx'
+            commands = @(
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'cursor', '--copy'))
+            )
+            fallbackCommands = @()
+        }
+        windsurf = [ordered]@{
+            displayName = 'Windsurf'
+            runtime = 'npx'
+            commands = @(
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'windsurf', '--copy'))
+            )
+            fallbackCommands = @()
+        }
+        cline = [ordered]@{
+            displayName = 'Cline'
+            runtime = 'npx'
+            commands = @(
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'cline', '--copy'))
+            )
+            fallbackCommands = @()
+        }
+        githubCopilot = [ordered]@{
+            displayName = 'GitHub Copilot'
+            runtime = 'npx'
+            commands = @(
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'github-copilot', '--copy'))
+            )
+            fallbackCommands = @()
+        }
+    }))
+}
+
+function Format-BootstrapCommandSpec {
+    param([Parameter(Mandatory = $true)][hashtable]$Command)
+
+    return ('{0} {1}' -f [string]$Command['exe'], (@($Command['args']) -join ' ')).Trim()
+}
+
+function Merge-BootstrapMarkedTextBlock {
+    param(
+        [AllowNull()][string]$Content,
+        [Parameter(Mandatory = $true)][string]$Body,
+        [string]$Label = 'BOOTSTRAP CAVEMAN'
+    )
+
+    $startMarker = "<!-- BEGIN $Label -->"
+    $endMarker = "<!-- END $Label -->"
+    $block = ($startMarker + [Environment]::NewLine + $Body.Trim() + [Environment]::NewLine + $endMarker)
+    $current = if ($null -eq $Content) { '' } else { [string]$Content }
+    $pattern = '(?s)<!-- BEGIN ' + [regex]::Escape($Label) + ' -->.*?<!-- END ' + [regex]::Escape($Label) + ' -->'
+
+    if ($current -match $pattern) {
+        $updated = [regex]::Replace($current, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $block }, 1)
+    } elseif ([string]::IsNullOrWhiteSpace($current)) {
+        $updated = $block + [Environment]::NewLine
+    } else {
+        $updated = $current.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $block + [Environment]::NewLine
+    }
+
+    return [ordered]@{
+        content = $updated
+        changed = ($updated -ne $current)
+    }
+}
+
+function Ensure-BootstrapFrontMatterFlag {
+    param(
+        [string]$Content,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Value,
+        [string]$Description = 'Caveman always-on mode'
+    )
+
+    $current = if ($null -eq $Content) { '' } else { [string]$Content }
+    if ($current -match '(?s)^---\r?\n(.*?)\r?\n---') {
+        $frontMatter = $matches[1]
+        if ($frontMatter -match "(?m)^\s*$([regex]::Escape($Name))\s*:") {
+            return $current
+        }
+        return [regex]::Replace($current, '(?s)^---\r?\n', ("---" + [Environment]::NewLine + "${Name}: $Value" + [Environment]::NewLine), 1)
+    }
+
+    return ("---" + [Environment]::NewLine + "description: $Description" + [Environment]::NewLine + "${Name}: $Value" + [Environment]::NewLine + "---" + [Environment]::NewLine + [Environment]::NewLine + $current.TrimStart())
+}
+
+function Write-BootstrapMarkedRuleFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Body,
+        [string]$HeaderKind = 'none'
+    )
+
+    $current = if (Test-Path $Path) { [System.IO.File]::ReadAllText($Path) } else { '' }
+    switch ($HeaderKind) {
+        'cursor' { $current = Ensure-BootstrapFrontMatterFlag -Content $current -Name 'alwaysApply' -Value 'true' }
+        'windsurf' { $current = Ensure-BootstrapFrontMatterFlag -Content $current -Name 'trigger' -Value 'always_on' }
+    }
+    $merged = Merge-BootstrapMarkedTextBlock -Content $current -Body $Body
+    if ([bool]$merged.changed) {
+        Write-BootstrapTextFile -Path $Path -Content ([string]$merged.content)
+        return $true
+    }
+    return $false
+}
+
+function Ensure-BootstrapCavemanRuleFiles {
+    param([string]$WorkspaceRoot = (Get-Location).Path)
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { $WorkspaceRoot }
+    $body = Get-BootstrapCavemanRuleBody
+    $targets = @(
+        @{ id = 'cursor'; path = (Join-Path $root '.cursor\rules\caveman.mdc'); header = 'cursor' },
+        @{ id = 'windsurf'; path = (Join-Path $root '.windsurf\rules\caveman.md'); header = 'windsurf' },
+        @{ id = 'cline'; path = (Join-Path $root '.clinerules\caveman.md'); header = 'none' },
+        @{ id = 'githubCopilot'; path = (Join-Path $root '.github\copilot-instructions.md'); header = 'none' },
+        @{ id = 'agents'; path = (Join-Path $root 'AGENTS.md'); header = 'none' }
+    )
+    $records = @()
+    $updated = $false
+    foreach ($target in $targets) {
+        $changed = Write-BootstrapMarkedRuleFile -Path ([string]$target.path) -Body $body -HeaderKind ([string]$target.header)
+        $updated = ($updated -or $changed)
+        $records += @([ordered]@{
+            id = [string]$target.id
+            path = [string]$target.path
+            updated = $changed
+        })
+    }
+
+    return [ordered]@{
+        updated = $updated
+        files = @($records)
+    }
+}
+
+function Invoke-BootstrapCavemanCommandList {
+    param(
+        [Parameter(Mandatory = $true)][string]$RuntimePath,
+        [Parameter(Mandatory = $true)][object[]]$Commands
+    )
+
+    $lastCommand = ''
+    foreach ($commandRaw in @($Commands)) {
+        $command = ConvertTo-BootstrapHashtable -InputObject $commandRaw
+        if (-not ($command -is [hashtable])) { continue }
+        $lastCommand = Format-BootstrapCommandSpec -Command $command
+        $exitCode = Invoke-NativeWithLog -Exe $RuntimePath -Args @($command['args'])
+        if ($exitCode -ne 0) {
+            return [ordered]@{
+                ok = $false
+                lastCommand = $lastCommand
+                exitCode = $exitCode
+            }
+        }
+    }
+
+    return [ordered]@{
+        ok = $true
+        lastCommand = $lastCommand
+        exitCode = 0
+    }
+}
+
+function Ensure-BootstrapAgentSkills {
+    param([hashtable]$State)
+
+    $statePath = Get-BootstrapAgentSkillStatePath
+    $catalog = Get-BootstrapCavemanTargetCatalog
+    $summary = [ordered]@{
+        path = $statePath
+        generatedAt = (Get-Date).ToString('o')
+        skill = 'caveman'
+        templatePath = Get-BootstrapCavemanTemplatePath
+        rules = Ensure-BootstrapCavemanRuleFiles -WorkspaceRoot ([string]$State.CloneBaseDir)
+        targets = [ordered]@{}
+    }
+
+    foreach ($targetId in @($catalog.Keys)) {
+        $target = ConvertTo-BootstrapHashtable -InputObject $catalog[$targetId]
+        $runtimeName = [string]$target['runtime']
+        $runtimePath = Resolve-CommandPath -Name $runtimeName
+        $record = [ordered]@{
+            displayName = [string]$target['displayName']
+            runtime = $runtimeName
+            runtimePath = if ($runtimePath) { [string]$runtimePath } else { '' }
+            status = 'skipped'
+            lastCommand = ''
+            error = ''
+            fallbackUsed = $false
+            checkedAt = (Get-Date).ToString('o')
+        }
+
+        if (-not $runtimePath) {
+            $record.error = 'runtime ausente'
+            $summary.targets[$targetId] = $record
+            Write-Log ("Agent skills: runtime ausente para {0}; pulando." -f $record.displayName) 'WARN'
+            continue
+        }
+
+        $result = Invoke-BootstrapCavemanCommandList -RuntimePath $runtimePath -Commands @($target['commands'])
+        if (-not [bool]$result.ok -and $targetId -eq 'claudeCode' -and @($target['fallbackCommands']).Count -gt 0) {
+            $fallbackRuntime = Resolve-CommandPath -Name 'powershell'
+            if (-not $fallbackRuntime) {
+                $fallbackRuntime = Resolve-CommandPath -Name 'powershell.exe'
+            }
+            if ($fallbackRuntime) {
+                $record.fallbackUsed = $true
+                $result = Invoke-BootstrapCavemanCommandList -RuntimePath $fallbackRuntime -Commands @($target['fallbackCommands'])
+            }
+        }
+
+        $record.lastCommand = [string]$result.lastCommand
+        if ([bool]$result.ok) {
+            $record.status = if ([bool]$record.fallbackUsed) { 'installed-fallback' } else { 'installed' }
+        } else {
+            $record.status = 'failed'
+            $record.error = ('exit={0}' -f [string]$result.exitCode)
+        }
+        $summary.targets[$targetId] = $record
+    }
+
+    Write-BootstrapJsonFile -Path $statePath -Value $summary
+    Write-Log ("Estado local de agent skills sincronizado: {0}" -f $statePath)
+
+    $State.AgentSkillStatePath = $statePath
+    $State.AgentSkillSummary = $summary
+    return $summary
+}
+
 function Ensure-BootstrapVsCodeExtensions {
     param([hashtable]$State)
 
@@ -7310,6 +10522,7 @@ function Ensure-BootstrapSecrets {
         zCodeUpdated = $false
         openClawUpdated = $false
         cometUpdated = $false
+        cometGuide = Get-BootstrapCometGuide -SecretsData $validatedData
         diagnostics = $diagnostics
     }
 
@@ -7332,7 +10545,7 @@ function Ensure-BootstrapSecrets {
         $summary.traeUpdated = Ensure-BootstrapTraeSecrets -ResolvedTargets $resolvedTargets
     }
     if ($resolvedTargets.ContainsKey('openCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openCode'])) {
-        $summary.openCodeUpdated = Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $resolvedTargets
+        $summary.openCodeUpdated = Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $resolvedTargets -SecretsData $validatedData
     }
     if ($resolvedTargets.ContainsKey('vsCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['vsCode'])) {
         $summary.vsCodeUpdated = Ensure-BootstrapVsCodeSecrets -ResolvedTargets $resolvedTargets
@@ -7353,7 +10566,7 @@ function Ensure-BootstrapSecrets {
         $summary.openClawUpdated = Ensure-BootstrapOpenClawSecrets -ResolvedTargets $resolvedTargets
     }
     if ($resolvedTargets.ContainsKey('comet') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['comet'])) {
-        $summary.cometUpdated = Ensure-BootstrapCometSecrets -ResolvedTargets $resolvedTargets
+        $summary.cometUpdated = Ensure-BootstrapCometSecrets -ResolvedTargets $resolvedTargets -SecretsData $validatedData
     }
 
     $State.SecretsPath = [string]$bundle['Path']
@@ -7710,6 +10923,165 @@ function Invoke-BootstrapHostHealth {
     Invoke-BootstrapHostHealthVerify -State $State -Policy $policy
 }
 
+function Get-BootstrapAppTuningReportRoot {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    if (-not $State.AppTuningReportRoot) {
+        $State.AppTuningReportRoot = Get-BootstrapAppTuningRoot
+    }
+    $null = New-Item -Path $State.AppTuningReportRoot -ItemType Directory -Force
+    return $State.AppTuningReportRoot
+}
+
+function New-BootstrapAppTuningSnapshot {
+    param([Parameter(Mandatory = $true)]$Plan)
+
+    return [ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        mode = [string]$Plan.mode
+        categories = @($Plan.categories)
+        requestedCategories = @($Plan.requestedCategories)
+        requestedItems = @($Plan.requestedItems)
+        excludedItems = @($Plan.excludedItems)
+        items = @($Plan.items)
+        skippedItems = @($Plan.skippedItems)
+        installedInventory = $Plan.installedInventory
+    }
+}
+
+function Apply-BootstrapRegistryDword {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][int]$Value
+    )
+
+    $previous = $null
+    try {
+        if (Test-Path $Path) {
+            $current = Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
+            if ($current -and ($current.PSObject.Properties.Name -contains $Name)) {
+                $previous = $current.$Name
+            }
+        }
+        $null = New-Item -Path $Path -Force
+        New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
+        return [ordered]@{ path = $Path; name = $Name; previous = $previous; value = $Value; status = 'applied' }
+    } catch {
+        return [ordered]@{ path = $Path; name = $Name; previous = $previous; value = $Value; status = 'failed'; error = $_.Exception.Message }
+    }
+}
+
+function Apply-BrowserStartupTuning {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    $changes = @()
+    switch ([string]$Item.id) {
+        'edge-background-off' {
+            $changes += @(Apply-BootstrapRegistryDword -Path 'HKCU:\Software\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled' -Value 0)
+            $changes += @(Apply-BootstrapRegistryDword -Path 'HKCU:\Software\Policies\Microsoft\Edge' -Name 'BackgroundModeEnabled' -Value 0)
+        }
+        'chrome-background-off' {
+            $changes += @(Apply-BootstrapRegistryDword -Path 'HKCU:\Software\Policies\Google\Chrome' -Name 'BackgroundModeEnabled' -Value 0)
+        }
+    }
+
+    $failed = @($changes | Where-Object { [string]$_.status -eq 'failed' })
+    return [ordered]@{
+        id = [string]$Item.id
+        status = if ($failed.Count -gt 0) { 'failed' } else { 'applied' }
+        changes = @($changes)
+    }
+}
+
+function Apply-SteamConsoleTuning {
+    param([Parameter(Mandatory = $true)]$Item)
+    return [ordered]@{ id = [string]$Item.id; status = 'prepared'; note = 'Session policy prepared; Steam never forced as admin.' }
+}
+
+function Apply-PlayniteTuning {
+    param([Parameter(Mandatory = $true)]$Item)
+    return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Config file target detected; v1 leaves app-specific writes conservative.' }
+}
+
+function Apply-DevAiTuning {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    if ([string]$Item.id -eq 'notepadpp-defaults') {
+        $result = Ensure-BootstrapNotepadPlusPlusDefaults
+        return [ordered]@{
+            id = [string]$Item.id
+            status = [string]$result.status
+            note = 'Curadoria Notepad++ aplicada com plugins/UDLs oficiais e custom.'
+            manifest = $result
+        }
+    }
+
+    return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Dev/AI integration audited; secrets remain managed by bootstrap-secrets.' }
+}
+
+function Apply-LocalAiContainerTuning {
+    param([Parameter(Mandatory = $true)]$Item)
+    return [ordered]@{ id = [string]$Item.id; status = 'prepared'; note = 'Marked for Desktop/Dev session only; not Game - Steam Deck.' }
+}
+
+function Apply-CaptureTuning {
+    param([Parameter(Mandatory = $true)]$Item)
+    return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Capture settings kept audit-only unless explicit app config is safe.' }
+}
+
+function Invoke-BootstrapAppTuningItem {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    if (-not [bool]$Item.installed) {
+        return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'skipped'; reason = 'app absent' }
+    }
+
+    switch ([string]$Item.category) {
+        'browser-startup' { return (Apply-BrowserStartupTuning -Item $Item) }
+        'gaming-console' {
+            if ([string]$Item.id -eq 'playnite-fullscreen') { return (Apply-PlayniteTuning -Item $Item) }
+            return (Apply-SteamConsoleTuning -Item $Item)
+        }
+        'dev-ai' { return (Apply-DevAiTuning -Item $Item) }
+        'local-ai-containers' { return (Apply-LocalAiContainerTuning -Item $Item) }
+        'capture-creator' { return (Apply-CaptureTuning -Item $Item) }
+        default { return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'No mutable v1 action for this item.' } }
+    }
+}
+
+function Invoke-BootstrapAppTuning {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Plan
+    )
+
+    if ([string]$Plan.mode -eq 'off') {
+        Write-Log 'AppTuning: desligado para esta execucao.'
+        return
+    }
+
+    $reportRoot = Get-BootstrapAppTuningReportRoot -State $State
+    $snapshotPath = Join-Path $reportRoot 'snapshot.json'
+    $resultPath = Join-Path $reportRoot 'result.json'
+    Write-BootstrapJsonFile -Path $snapshotPath -Value (New-BootstrapAppTuningSnapshot -Plan $Plan)
+
+    $results = @()
+    foreach ($item in @($Plan.items)) {
+        Write-Log ("AppTuning: {0} ({1})" -f [string]$item.id, [string]$item.status)
+        $results += @(Invoke-BootstrapAppTuningItem -Item $item)
+    }
+
+    Write-BootstrapJsonFile -Path $resultPath -Value ([ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        mode = [string]$Plan.mode
+        reportRoot = $reportRoot
+        snapshotPath = $snapshotPath
+        results = @($results)
+    })
+    Write-Log "AppTuning report: $reportRoot"
+}
+
 function Invoke-BootstrapComponent {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -7733,6 +11105,7 @@ function Invoke-BootstrapComponent {
         'bootstrap-secrets' { Ensure-BootstrapSecrets -State $State }
         'bootstrap-mcps' { Ensure-BootstrapManagedMcps -State $State | Out-Null }
         'vscode-extensions' { Ensure-BootstrapVsCodeExtensions -State $State | Out-Null }
+        'agent-skills' { Ensure-BootstrapAgentSkills -State $State | Out-Null }
         'sevenzip' {
             Ensure-BootstrapSystemCore -State $State
             Ensure-WingetPackage -WingetPath $State.Winget -Id '7zip.7zip' -DisplayName '7-Zip' -AllowFailureWhenNotAdmin $true
@@ -7745,6 +11118,9 @@ function Invoke-BootstrapComponent {
             $allowFailureWhenNotAdmin = $false
             if ($componentDef.PSObject.Properties.Name -contains 'AllowFailureWhenNotAdmin') { $allowFailureWhenNotAdmin = [bool]$componentDef.AllowFailureWhenNotAdmin }
             Ensure-WingetPackage -WingetPath $State.Winget -Id $componentDef.Id -DisplayName $componentDef.DisplayName -PreferUserScope $preferUserScope -AllowFailureWhenNotAdmin $allowFailureWhenNotAdmin
+            if ($Name -eq 'notepadpp' -and [string]$State.AppTuningMode -eq 'off') {
+                $null = Ensure-BootstrapNotepadPlusPlusDefaults
+            }
         }
         'git-lfs' {
             Ensure-GitLfs -State $State
@@ -7784,10 +11160,19 @@ function Invoke-BootstrapComponent {
             Ensure-BootstrapNodeCore -State $State
             Ensure-OpenClaw -NpmCmd $State.NodeInfo.NpmCmd
         }
+        'hermes' {
+            Ensure-Hermes -State $State
+        }
         'claude-config' {
             Ensure-BootstrapGitCore -State $State
             Ensure-ClaudeCodeDefaults -GitBashPath $State.GitInfo.Bash
             Ensure-ClaudeHookConfigsHealthy -GitBashPath $State.GitInfo.Bash
+        }
+        'claude-plugins' {
+            Ensure-ClaudeCodePlugins -State $State | Out-Null
+        }
+        'openwebui' {
+            Ensure-OpenWebUI -State $State
         }
         'repo-clone' {
             Ensure-BootstrapGitCore -State $State
@@ -7825,7 +11210,8 @@ function Get-BootstrapExecutionPlanLines {
         [Parameter(Mandatory = $true)][string]$ResolvedWorkspaceRoot,
         [Parameter(Mandatory = $true)][string]$ResolvedCloneBaseDir,
         [string]$ResolvedSteamDeckVersion = '',
-        [Parameter(Mandatory = $true)][string]$ResolvedHostHealthMode
+        [Parameter(Mandatory = $true)][string]$ResolvedHostHealthMode,
+        [AllowNull()]$AppTuningPlan = $null
     )
 
     $catalog = Get-BootstrapComponentCatalog
@@ -7860,6 +11246,12 @@ function Get-BootstrapExecutionPlanLines {
     $lines.Add(('WorkspaceRoot: {0}' -f $ResolvedWorkspaceRoot))
     $lines.Add(('CloneBaseDir: {0}' -f $ResolvedCloneBaseDir))
     $lines.Add(('Host health mode: {0}' -f $ResolvedHostHealthMode))
+    if ($AppTuningPlan) {
+        $lines.Add(('AppTuning: {0}' -f [string]$AppTuningPlan.mode))
+        $lines.Add(('AppTuning categories: {0}' -f ($(if (@($AppTuningPlan.categories).Count -gt 0) { @($AppTuningPlan.categories) -join ', ' } else { '-' }))))
+        $lines.Add(('AppTuning items: {0}' -f ($(if (@($AppTuningPlan.items).Count -gt 0) { @($AppTuningPlan.items | ForEach-Object { $_.id }) -join ', ' } else { '-' }))))
+        $lines.Add(('AppTuning skipped: {0}' -f ($(if (@($AppTuningPlan.skippedItems).Count -gt 0) { @($AppTuningPlan.skippedItems) -join ', ' } else { '-' }))))
+    }
 
     if ($usesSteamDeckFlow) {
         $lines.Add(('Resolved steam deck version: {0}' -f $ResolvedSteamDeckVersion))
@@ -7882,6 +11274,12 @@ function Get-BootstrapExecutionPlanLines {
         $lines.Add(('Config: {0}' -f ($(if ($stageLookup['config'].Count -gt 0) { @($stageLookup['config'].ToArray()) -join ', ' } else { '-' }))))
         $lines.Add(('Verify: {0}' -f ($(if ($stageLookup['verify'].Count -gt 0) { @($stageLookup['verify'].ToArray()) -join ', ' } else { '-' }))))
         $lines.Add(('Manual blockers: {0}' -f ($(if ($manualBlockers.Count -gt 0) { @($manualBlockers.ToArray()) -join ', ' } else { '-' }))))
+        $lines.Add('Console mode: HANDHELD=Game - Steam Deck, DOCKED_TV=Game - Steam Deck, DOCKED_MONITOR=Desktop/Dev')
+        $lines.Add('Console shell: Steam Big Picture first, Playnite fallback, soft shell keeps explorer.exe intact')
+        $lines.Add('Handheld tweaks: hibernation=enabled, UTC clock, login-after-sleep=off, ms-gamebar=enabled, touch-keyboard=enabled')
+        $lines.Add('Steam Deck tooling: RTSS, AMD Adrenalin, CRU, Steam Deck Tools')
+        $lines.Add('Unknown external: UNCLASSIFIED_EXTERNAL -> UI classification -> fallback Desktop/Dev')
+        $lines.Add('Console readiness audit: Steam, Playnite, Steam Deck Tools, RTSS, AMD Adrenalin, CRU, SoundSwitch, ModeWatcher')
     }
 
     if ($ResolvedHostHealthMode -ne 'off') {
@@ -7904,10 +11302,11 @@ function Get-BootstrapExecutionPlanText {
         [Parameter(Mandatory = $true)][string]$ResolvedWorkspaceRoot,
         [Parameter(Mandatory = $true)][string]$ResolvedCloneBaseDir,
         [string]$ResolvedSteamDeckVersion = '',
-        [Parameter(Mandatory = $true)][string]$ResolvedHostHealthMode
+        [Parameter(Mandatory = $true)][string]$ResolvedHostHealthMode,
+        [AllowNull()]$AppTuningPlan = $null
     )
 
-    return ((Get-BootstrapExecutionPlanLines -Selection $Selection -Resolution $Resolution -ResolvedWorkspaceRoot $ResolvedWorkspaceRoot -ResolvedCloneBaseDir $ResolvedCloneBaseDir -ResolvedSteamDeckVersion $ResolvedSteamDeckVersion -ResolvedHostHealthMode $ResolvedHostHealthMode) -join [Environment]::NewLine)
+    return ((Get-BootstrapExecutionPlanLines -Selection $Selection -Resolution $Resolution -ResolvedWorkspaceRoot $ResolvedWorkspaceRoot -ResolvedCloneBaseDir $ResolvedCloneBaseDir -ResolvedSteamDeckVersion $ResolvedSteamDeckVersion -ResolvedHostHealthMode $ResolvedHostHealthMode -AppTuningPlan $AppTuningPlan) -join [Environment]::NewLine)
 }
 
 function Show-BootstrapExecutionPlan {
@@ -7917,10 +11316,11 @@ function Show-BootstrapExecutionPlan {
         [Parameter(Mandatory = $true)][string]$ResolvedWorkspaceRoot,
         [Parameter(Mandatory = $true)][string]$ResolvedCloneBaseDir,
         [string]$ResolvedSteamDeckVersion = '',
-        [Parameter(Mandatory = $true)][string]$ResolvedHostHealthMode
+        [Parameter(Mandatory = $true)][string]$ResolvedHostHealthMode,
+        [AllowNull()]$AppTuningPlan = $null
     )
 
-    foreach ($line in (Get-BootstrapExecutionPlanLines -Selection $Selection -Resolution $Resolution -ResolvedWorkspaceRoot $ResolvedWorkspaceRoot -ResolvedCloneBaseDir $ResolvedCloneBaseDir -ResolvedSteamDeckVersion $ResolvedSteamDeckVersion -ResolvedHostHealthMode $ResolvedHostHealthMode)) {
+    foreach ($line in (Get-BootstrapExecutionPlanLines -Selection $Selection -Resolution $Resolution -ResolvedWorkspaceRoot $ResolvedWorkspaceRoot -ResolvedCloneBaseDir $ResolvedCloneBaseDir -ResolvedSteamDeckVersion $ResolvedSteamDeckVersion -ResolvedHostHealthMode $ResolvedHostHealthMode -AppTuningPlan $AppTuningPlan)) {
         Write-Output $line
     }
 }
@@ -7932,19 +11332,24 @@ function Get-BootstrapPreviewData {
         [string[]]$ExcludedComponents = @(),
         [string]$RequestedSteamDeckVersion = 'Auto',
         [AllowNull()][string]$RequestedHostHealthMode = $null,
+        [AllowNull()][string]$RequestedAppTuningMode = $null,
+        [string[]]$RequestedAppTuningCategories = @(),
+        [string[]]$RequestedAppTuningItems = @(),
+        [string[]]$ExcludedAppTuningItems = @(),
         [string]$RequestedWorkspaceRoot = 'F:\Steam\Steamapps',
         [string]$ExplicitCloneBaseDir = ''
     )
 
-    $selection = New-BootstrapSelectionObject -SelectedProfiles $SelectedProfiles -SelectedComponents $SelectedComponents -ExcludedComponents $ExcludedComponents -SelectedHostHealth $RequestedHostHealthMode
+    $selection = New-BootstrapSelectionObject -SelectedProfiles $SelectedProfiles -SelectedComponents $SelectedComponents -ExcludedComponents $ExcludedComponents -SelectedHostHealth $RequestedHostHealthMode -SelectedAppTuning $RequestedAppTuningMode -SelectedAppTuningCategories $RequestedAppTuningCategories -SelectedAppTuningItems $RequestedAppTuningItems -ExcludedAppTuningItems $ExcludedAppTuningItems
     $resolvedWorkspaceRoot = if ([string]::IsNullOrWhiteSpace($RequestedWorkspaceRoot)) { 'F:\Steam\Steamapps' } else { $RequestedWorkspaceRoot }
     $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents $selection.Excludes
     $resolvedCloneBaseDir = Resolve-BootstrapCloneBaseDir -ExplicitCloneBaseDir $ExplicitCloneBaseDir -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedComponents $resolution.ResolvedComponents
     $usesSteamDeckFlow = Get-BootstrapUsesSteamDeckFlow -Selection $selection -Resolution $resolution
     $resolvedSteamDeckVersion = if ($usesSteamDeckFlow) { Get-BootstrapResolvedSteamDeckVersion -RequestedVersion $RequestedSteamDeckVersion } else { '' }
     $resolvedHostHealthMode = if ($selection.HostHealth) { $selection.HostHealth } else { Get-BootstrapDefaultHostHealthMode -Selection $selection -Resolution $resolution }
-    $adminReasons = Get-BootstrapAdminReasons -Resolution $resolution -ResolvedHostHealthMode $resolvedHostHealthMode -UsesSteamDeckFlow:$usesSteamDeckFlow
-    $planLines = Get-BootstrapExecutionPlanLines -Selection $selection -Resolution $resolution -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -ResolvedHostHealthMode $resolvedHostHealthMode
+    $appTuningPlan = Resolve-BootstrapAppTuningSelection -Mode $selection.AppTuning -Categories $selection.AppTuningCategories -Items $selection.AppTuningItems -ExcludedItems $selection.ExcludedAppTuningItems -Selection $selection -Resolution $resolution
+    $adminReasons = Get-BootstrapAdminReasons -Resolution $resolution -ResolvedHostHealthMode $resolvedHostHealthMode -UsesSteamDeckFlow:$usesSteamDeckFlow -AppTuningPlan $appTuningPlan
+    $planLines = Get-BootstrapExecutionPlanLines -Selection $selection -Resolution $resolution -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -ResolvedHostHealthMode $resolvedHostHealthMode -AppTuningPlan $appTuningPlan
 
     return [ordered]@{
         Selection = $selection
@@ -7952,6 +11357,8 @@ function Get-BootstrapPreviewData {
         UsesSteamDeckFlow = $usesSteamDeckFlow
         ResolvedSteamDeckVersion = $resolvedSteamDeckVersion
         ResolvedHostHealthMode = $resolvedHostHealthMode
+        ResolvedAppTuningMode = [string]$appTuningPlan.mode
+        AppTuningPlan = $appTuningPlan
         ResolvedWorkspaceRoot = $resolvedWorkspaceRoot
         ResolvedCloneBaseDir = $resolvedCloneBaseDir
         AdminReasons = @($adminReasons)
@@ -7991,6 +11398,11 @@ function Invoke-BootstrapProfileMode {
         return
     }
 
+    if ($ListAppTuningCatalog) {
+        Show-BootstrapAppTuningCatalog
+        return
+    }
+
     if ($ListComponents) {
         Show-BootstrapComponents
         return
@@ -8008,6 +11420,8 @@ function Invoke-BootstrapProfileMode {
     $usesSteamDeckFlow = Get-BootstrapUsesSteamDeckFlow -Selection $selection -Resolution $resolution
     $resolvedSteamDeckVersion = if ($usesSteamDeckFlow) { Get-BootstrapResolvedSteamDeckVersion -RequestedVersion $SteamDeckVersion } else { '' }
     $resolvedHostHealthMode = if ($selection.HostHealth) { $selection.HostHealth } else { Get-BootstrapDefaultHostHealthMode -Selection $selection -Resolution $resolution }
+    $appTuningPlan = Resolve-BootstrapAppTuningSelection -Mode $selection.AppTuning -Categories $selection.AppTuningCategories -Items $selection.AppTuningItems -ExcludedItems $selection.ExcludedAppTuningItems -Selection $selection -Resolution $resolution
+    $resolvedAppTuningMode = [string]$appTuningPlan.mode
 
     Write-Log ("Inicio: {0}" -f $script:StartTime.ToString('s'))
     Write-Log "Log: $script:LogPath"
@@ -8020,22 +11434,25 @@ function Invoke-BootstrapProfileMode {
     Write-Log "WorkspaceRoot: $resolvedWorkspaceRoot"
     Write-Log "CloneBaseDir: $resolvedCloneBaseDir"
     Write-Log "HostHealth: $resolvedHostHealthMode"
+    Write-Log "AppTuning: $resolvedAppTuningMode"
     if ($usesSteamDeckFlow) {
         Write-Log "Steam Deck version resolvida: $resolvedSteamDeckVersion"
     }
 
     if ($DryRun) {
-        Show-BootstrapExecutionPlan -Selection $selection -Resolution $resolution -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -ResolvedHostHealthMode $resolvedHostHealthMode
+        Show-BootstrapExecutionPlan -Selection $selection -Resolution $resolution -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -ResolvedHostHealthMode $resolvedHostHealthMode -AppTuningPlan $appTuningPlan
         return
     }
 
-    $state = New-BootstrapState -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -RequestedSteamDeckVersion $SteamDeckVersion -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -HostHealthMode $resolvedHostHealthMode -UsesSteamDeckFlow:$usesSteamDeckFlow -IsDryRun:$DryRun
+    $state = New-BootstrapState -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -RequestedSteamDeckVersion $SteamDeckVersion -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -HostHealthMode $resolvedHostHealthMode -AppTuningMode $resolvedAppTuningMode -UsesSteamDeckFlow:$usesSteamDeckFlow -IsDryRun:$DryRun
+    $state.EnableClaudeCodeProjectMcps = [bool]$ClaudeCodeProjectMcps
     Invoke-BootstrapExecutionPreflight -State $state -ResolvedComponents $resolution.ResolvedComponents
 
     foreach ($componentName in $resolution.ResolvedComponents) {
         Invoke-BootstrapComponent -Name $componentName -State $state
     }
 
+    Invoke-BootstrapAppTuning -State $state -Plan $appTuningPlan
     Invoke-BootstrapHostHealth -State $state -Mode $resolvedHostHealthMode
 
     if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
@@ -8051,8 +11468,11 @@ function Invoke-BootstrapProfileMode {
             usesSteamDeckFlow = $usesSteamDeckFlow
             resolvedSteamDeckVersion = $resolvedSteamDeckVersion
             resolvedHostHealthMode = $resolvedHostHealthMode
+            resolvedAppTuningMode = $resolvedAppTuningMode
             selection = $selection
             resolution = $resolution
+            appTuningPlan = $appTuningPlan
+            appTuningReportRoot = $state.AppTuningReportRoot
             hostHealthReportRoot = $state.HostHealthReportRoot
             steamDeckSettingsPath = $state.SteamDeckSettingsPath
             steamDeckAutomationRoot = $state.SteamDeckAutomationRoot
@@ -8179,6 +11599,169 @@ function Write-BootstrapSecretsList {
     }
 }
 
+function Set-BootstrapApiCredential {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [string]$CredentialId = '',
+        [string]$DisplayName = '',
+        [string]$Secret = '',
+        [hashtable]$Fields = @{},
+        [switch]$Validate,
+        [switch]$Activate
+    )
+
+    $providerKey = $ProviderName.ToLowerInvariant()
+    $bundle = Get-BootstrapSecretsData
+    $data = Normalize-BootstrapSecretsData -Secrets $bundle.Data
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    if (-not $catalog.Contains($providerKey)) {
+        throw "Provider desconhecido: $ProviderName"
+    }
+
+    $provider = ConvertTo-BootstrapHashtable -InputObject $data.providers[$providerKey]
+    if (-not ($provider -is [hashtable])) {
+        $provider = Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName $providerKey
+    }
+    if (-not $provider.ContainsKey('credentials') -or -not ($provider['credentials'] -is [hashtable])) {
+        $provider['credentials'] = [ordered]@{}
+    }
+
+    $isNew = [string]::IsNullOrWhiteSpace($CredentialId)
+    if ($isNew) {
+        if ([string]::IsNullOrWhiteSpace($Secret)) {
+            throw 'Informe o segredo para criar a credencial.'
+        }
+        $CredentialId = New-BootstrapSecretCredentialId -ProviderName $providerKey -Label $(if ([string]::IsNullOrWhiteSpace($DisplayName)) { 'manual' } else { $DisplayName }) -ExistingIds @($provider['credentials'].Keys)
+    } elseif (-not $provider['credentials'].Contains($CredentialId)) {
+        throw "Credencial desconhecida para ${providerKey}: $CredentialId"
+    }
+
+    $credential = if ($isNew) {
+        [ordered]@{
+            displayName = if ([string]::IsNullOrWhiteSpace($DisplayName)) { 'Manual' } else { $DisplayName.Trim() }
+            secret = $Secret.Trim()
+            secretKind = [string]$catalog[$providerKey]['secretKind']
+            validation = New-BootstrapSecretValidationState
+        }
+    } else {
+        Normalize-BootstrapSecretCredential -ProviderName $providerKey -CredentialId $CredentialId -CredentialData $provider['credentials'][$CredentialId] -DefaultSecretKind ([string]$catalog[$providerKey]['secretKind'])
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($DisplayName)) {
+        $credential['displayName'] = $DisplayName.Trim()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Secret)) {
+        if ([string]$credential['secret'] -ne $Secret.Trim()) {
+            $credential['secret'] = $Secret.Trim()
+            $credential['validation'] = New-BootstrapSecretValidationState
+        }
+    }
+
+    foreach ($fieldName in @('baseUrl', 'organizationId', 'projectRef', 'readOnly')) {
+        if ($Fields.ContainsKey($fieldName)) {
+            $fieldValue = [string]$Fields[$fieldName]
+            if ([string]::IsNullOrWhiteSpace($fieldValue)) {
+                if ($credential.Contains($fieldName)) { $credential.Remove($fieldName) | Out-Null }
+            } else {
+                $credential[$fieldName] = $fieldValue.Trim()
+            }
+        }
+    }
+
+    if ($Validate) {
+        $credential['validation'] = Test-BootstrapSecretsProviderCredential -ProviderName $providerKey -ProviderDefinition $provider -CredentialId $CredentialId -Credential $credential
+    }
+
+    $provider['credentials'][$CredentialId] = $credential
+    if (-not $provider.ContainsKey('rotationOrder') -or -not ($provider['rotationOrder'] -is [System.Collections.IEnumerable])) {
+        $provider['rotationOrder'] = @()
+    }
+    if (@($provider['rotationOrder']) -notcontains $CredentialId) {
+        $provider['rotationOrder'] = @($provider['rotationOrder']) + @($CredentialId)
+    }
+    if ($Activate -and [string]$credential['validation']['state'] -eq 'passed') {
+        $provider['activeCredential'] = $CredentialId
+    } elseif ([string]::IsNullOrWhiteSpace([string]$provider['activeCredential']) -and [string]$credential['validation']['state'] -eq 'passed') {
+        $provider['activeCredential'] = $CredentialId
+    }
+
+    $data.providers[$providerKey] = Convert-BootstrapSecretsProviderDefinition -ProviderName $providerKey -ProviderData $provider
+    Write-BootstrapJsonFile -Path $bundle.Path -Value $data
+    return [ordered]@{
+        path = $bundle.Path
+        credentialId = $CredentialId
+        inventory = Get-BootstrapApiInventory -SecretsData $data
+    }
+}
+
+function Invoke-BootstrapApiCredentialValidation {
+    param(
+        [string]$ProviderName = '',
+        [string]$CredentialId = '',
+        [switch]$All
+    )
+
+    $bundle = Get-BootstrapSecretsData
+    $data = $bundle.Data
+    if ($All) {
+        $data = Invoke-BootstrapSecretsValidation -SecretsData $data -ValidateAll
+    } elseif (-not [string]::IsNullOrWhiteSpace($ProviderName) -and -not [string]::IsNullOrWhiteSpace($CredentialId)) {
+        $providerKey = $ProviderName.ToLowerInvariant()
+        $normalized = Normalize-BootstrapSecretsData -Secrets $data
+        if (-not $normalized.providers.Contains($providerKey)) { throw "Provider desconhecido: $ProviderName" }
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerKey]
+        if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]) -and $provider['credentials'].Contains($CredentialId))) {
+            throw "Credencial desconhecida para ${providerKey}: $CredentialId"
+        }
+        $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$CredentialId]
+        $provider['credentials'][$CredentialId]['validation'] = Test-BootstrapSecretsProviderCredential -ProviderName $providerKey -ProviderDefinition $provider -CredentialId $CredentialId -Credential $credential
+        $normalized.providers[$providerKey] = Convert-BootstrapSecretsProviderDefinition -ProviderName $providerKey -ProviderData $provider
+        $data = $normalized
+    } else {
+        $data = Invoke-BootstrapSecretsValidation -SecretsData $data
+    }
+
+    Write-BootstrapJsonFile -Path $bundle.Path -Value $data
+    return [ordered]@{
+        path = $bundle.Path
+        inventory = Get-BootstrapApiInventory -SecretsData $data
+    }
+}
+
+function Set-BootstrapApiActiveCredential {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [Parameter(Mandatory = $true)][string]$CredentialId
+    )
+
+    $bundle = Get-BootstrapSecretsData
+    $data = Set-BootstrapSecretsActiveCredential -SecretsData $bundle.Data -ProviderName $ProviderName.ToLowerInvariant() -CredentialId $CredentialId
+    Write-BootstrapJsonFile -Path $bundle.Path -Value $data
+    return [ordered]@{
+        path = $bundle.Path
+        inventory = Get-BootstrapApiInventory -SecretsData $data
+    }
+}
+
+function Import-BootstrapApiCredentialFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $bundle = Get-BootstrapSecretsData
+    $text = Get-Content -Path $Path -Raw -Encoding utf8
+    $data = Import-BootstrapSecretsText -Text $text -SecretsData $bundle.Data
+    Write-BootstrapJsonFile -Path $bundle.Path -Value $data
+    return [ordered]@{
+        path = $bundle.Path
+        inventory = Get-BootstrapApiInventory -SecretsData $data
+    }
+}
+
+function Invoke-BootstrapApiApply {
+    $state = New-BootstrapState -ResolvedWorkspaceRoot (Get-Location).Path -ResolvedCloneBaseDir (Get-Location).Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+    Ensure-BootstrapSecrets -State $state
+    return $state.SecretsSummary
+}
+
 function Invoke-BootstrapSecretsMode {
     $bundle = Get-BootstrapSecretsData
     $data = $bundle.Data
@@ -8240,11 +11823,16 @@ $useBootstrapProfileMode = (
     $UiContractJson -or
     $ListProfiles -or
     $ListHostHealthModes -or
+    $ListAppTuningCatalog -or
     $ListComponents -or
     $DryRun -or
     $Interactive -or
     $NonInteractive -or
     [string]::IsNullOrWhiteSpace($HostHealth) -eq $false -or
+    [string]::IsNullOrWhiteSpace($AppTuning) -eq $false -or
+    (@($AppTuningCategory).Count -gt 0) -or
+    (@($AppTuningItem).Count -gt 0) -or
+    (@($ExcludeAppTuningItem).Count -gt 0) -or
     (@($Profile).Count -gt 0) -or
     (@($Component).Count -gt 0) -or
     (@($Exclude).Count -gt 0)

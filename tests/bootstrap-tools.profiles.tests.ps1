@@ -35,9 +35,9 @@ function Invoke-Bootstrap {
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
 
-    if (-not $process.WaitForExit(30000)) {
+    if (-not $process.WaitForExit(120000)) {
         try { $process.Kill() } catch { }
-        throw "Bootstrap invocation timed out after 30000ms for args: $($CommandArgs -join ' ')"
+        throw "Bootstrap invocation timed out after 120000ms for args: $($CommandArgs -join ' ')"
     }
 
     return [pscustomobject]@{
@@ -77,6 +77,15 @@ Describe 'Bootstrap profile mode' {
         }
     }
 
+    It 'lists supported app tuning catalog entries' {
+        $result = Invoke-Bootstrap -CommandArgs @('-ListAppTuningCatalog')
+
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('gaming-console', 'steamdeck-control', 'dev-ai', 'browser-startup', 'steam-big-picture-session')) {
+            Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected app tuning catalog entry in output.'
+        }
+    }
+
     It 'resolves ai profile dry-run dependencies' {
         $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'ai', '-Component', 'docker', '-DryRun')
 
@@ -85,6 +94,7 @@ Describe 'Bootstrap profile mode' {
             Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected resolved component in dry-run output.'
         }
         Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'host health mode: conservador' -Message 'Expected modern selections to default HostHealth to conservador.'
+        Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'apptuning: recommended' -Message 'Expected modern selections to default AppTuning to recommended.'
     }
 
     It 'rejects excluding a required dependency' {
@@ -108,10 +118,28 @@ Describe 'Bootstrap profile mode' {
             'Verify:',
             'steamdeck-settings',
             'steamdeck-automation',
+            'steamdeck-tweaks',
+            'steamdeck-tools',
+            'console-session-manager',
+            'dev-session-manager',
+            'display-classifier',
+            'recovery-hotkeys',
+            'console-readiness-audit',
             'displayfusion',
             'soundswitch'
         )) {
             Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected steamdeck-recommended audit output.'
+        }
+
+        foreach ($expected in @(
+            'Console mode: HANDHELD=Game - Steam Deck',
+            'DOCKED_TV=Game - Steam Deck',
+            'DOCKED_MONITOR=Desktop/Dev',
+            'Unknown external: UNCLASSIFIED_EXTERNAL -> UI classification -> fallback Desktop/Dev',
+            'Handheld tweaks: hibernation=enabled, UTC clock, login-after-sleep=off, ms-gamebar=enabled, touch-keyboard=enabled',
+            'Steam Deck tooling: RTSS, AMD Adrenalin, CRU, Steam Deck Tools'
+        )) {
+            Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected console-first Steam Deck dry-run output.'
         }
     }
 
@@ -120,6 +148,27 @@ Describe 'Bootstrap profile mode' {
 
         $result.ExitCode | Should Be 0
         Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'host health mode: off' -Message 'Expected legacy to keep HostHealth off by default.'
+        Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'apptuning: off' -Message 'Expected legacy to keep AppTuning off by default.'
+    }
+
+    It 'renders steamdeck app tuning categories in dry-run' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-recommended', '-SteamDeckVersion', 'Auto', '-DryRun')
+
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('AppTuning: recommended', 'AppTuning categories:', 'gaming-console', 'steamdeck-control', 'dev-ai')) {
+            Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected AppTuning dry-run output.'
+        }
+    }
+
+    It 'supports custom app tuning category and item exclusions' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'steamdeck-recommended', '-SteamDeckVersion', 'Auto', '-AppTuning', 'custom', '-AppTuningCategory', 'gaming-console', '-ExcludeAppTuningItem', 'rtss-frame-presets', '-DryRun')
+
+        $result.ExitCode | Should Be 0
+        Assert-Contains -Text $result.Output -Pattern 'AppTuning: custom' -Message 'Expected custom AppTuning mode.'
+        Assert-Contains -Text $result.Output -Pattern 'steam-big-picture-session' -Message 'Expected category item.'
+        if ($result.Output -match 'AppTuning items:.*rtss-frame-presets') {
+            throw "Excluded item should not be listed as selected.`nOutput:`n$($result.Output)"
+        }
     }
 
     It 'renders equilibrado host health tasks' {

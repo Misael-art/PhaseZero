@@ -50,3 +50,4 @@ RunBootstrapScript(scriptName) {
 ^!F3::RunBootstrapScript("Apply-DockedTv.ps1")
 ^!F4::RunBootstrapScript("ModeWatcher.ps1")
 ^!F5::Run("SoundSwitch")
+^!F6::RunBootstrapScript("Start-DevSession.ps1")

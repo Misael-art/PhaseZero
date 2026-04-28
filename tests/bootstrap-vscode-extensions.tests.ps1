@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath
+Reset-BootstrapFileCmdlets
 
 function New-TestDataRoot {
     return (Join-Path $env:TEMP ("bootstrap_vscode_ext_{0}" -f ([Guid]::NewGuid().ToString('N'))))

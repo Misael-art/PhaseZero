@@ -77,3 +77,144 @@ function Write-SteamDeckJsonFile {
     $encoding = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($Path, $json, $encoding)
 }
+
+function Read-SteamDeckJsonFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path $Path)) { return $null }
+    return (Get-Content -Path $Path -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop)
+}
+
+function ConvertTo-SteamDeckHashtable {
+    param($InputObject)
+
+    if ($null -eq $InputObject) { return $null }
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        $result = @{}
+        foreach ($key in $InputObject.Keys) {
+            $result[[string]$key] = ConvertTo-SteamDeckHashtable -InputObject $InputObject[$key]
+        }
+        return $result
+    }
+
+    if (($InputObject -is [System.Collections.IEnumerable]) -and -not ($InputObject -is [string]) -and -not ($InputObject -is [pscustomobject])) {
+        $items = @()
+        foreach ($item in $InputObject) {
+            $items += @(ConvertTo-SteamDeckHashtable -InputObject $item)
+        }
+        return ,@($items)
+    }
+
+    if ($InputObject -is [pscustomobject]) {
+        $result = @{}
+        foreach ($property in $InputObject.PSObject.Properties) {
+            $result[$property.Name] = ConvertTo-SteamDeckHashtable -InputObject $property.Value
+        }
+        return $result
+    }
+
+    return $InputObject
+}
+
+function ConvertTo-SteamDeckObjectGraph {
+    param($InputObject)
+
+    if ($null -eq $InputObject) { return $null }
+
+    if ($InputObject -is [System.Collections.IDictionary]) {
+        $result = [ordered]@{}
+        foreach ($key in $InputObject.Keys) {
+            $result[[string]$key] = ConvertTo-SteamDeckObjectGraph -InputObject $InputObject[$key]
+        }
+        return [pscustomobject]$result
+    }
+
+    if (($InputObject -is [System.Collections.IEnumerable]) -and -not ($InputObject -is [string]) -and -not ($InputObject -is [pscustomobject])) {
+        $items = @()
+        foreach ($item in $InputObject) {
+            $items += @(ConvertTo-SteamDeckObjectGraph -InputObject $item)
+        }
+        return ,@($items)
+    }
+
+    if ($InputObject -is [pscustomobject]) {
+        $result = [ordered]@{}
+        foreach ($property in $InputObject.PSObject.Properties) {
+            $result[$property.Name] = ConvertTo-SteamDeckObjectGraph -InputObject $property.Value
+        }
+        return [pscustomobject]$result
+    }
+
+    return $InputObject
+}
+
+function Get-SteamDeckSettingsArray {
+    param($Value)
+
+    if ($null -eq $Value) { return @() }
+    if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string]) -and -not ($Value -is [pscustomobject])) {
+        return @($Value)
+    }
+    return @($Value)
+}
+
+function Get-SteamDeckSettingMember {
+    param(
+        [AllowNull()]$Object,
+        [Parameter(Mandatory = $true)][string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object) { return $Default }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) { return $Object[$Name] }
+        return $Default
+    }
+    if ($Object.PSObject.Properties.Name -contains $Name) { return $Object.$Name }
+    return $Default
+}
+
+function ConvertTo-SteamDeckBool {
+    param($Value)
+
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return [bool]$Value }
+    $text = ([string]$Value).Trim()
+    return @('1', 'true', 'yes', 'y', 'sim', 'on') -contains $text.ToLowerInvariant()
+}
+
+function Resolve-SteamDeckDisplayMode {
+    param(
+        [AllowNull()]$Settings,
+        [string]$Default = 'extend'
+    )
+
+    $mode = ([string](Get-SteamDeckSettingMember -Object $Settings -Name 'displayMode' -Default $Default)).Trim().ToLowerInvariant()
+    if (@('extend', 'internal', 'external', 'clone') -notcontains $mode) {
+        $mode = $Default
+    }
+
+    $internalDisplay = Get-SteamDeckSettingMember -Object $Settings -Name 'internalDisplay' -Default $null
+    $internalPrimary = ConvertTo-SteamDeckBool (Get-SteamDeckSettingMember -Object $internalDisplay -Name 'primary' -Default $false)
+    if ($internalPrimary -and $mode -eq 'external') {
+        return 'extend'
+    }
+
+    return $mode
+}
+
+function Resolve-SteamDeckDisplaySwitchArgument {
+    param(
+        [AllowNull()]$Settings,
+        [string]$Default = 'extend'
+    )
+
+    $mode = Resolve-SteamDeckDisplayMode -Settings $Settings -Default $Default
+    switch ($mode) {
+        'internal' { return '/internal' }
+        'external' { return '/external' }
+        'clone' { return '/clone' }
+        default { return '/extend' }
+    }
+}

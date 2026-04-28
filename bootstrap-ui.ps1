@@ -200,7 +200,7 @@ function Get-UiLanguages {
 }
 
 function Get-UiPageIds {
-    return @('welcome', 'selection', 'host-setup', 'steamdeck-control', 'dual-boot', 'review', 'run')
+    return @('welcome', 'selection', 'host-setup', 'app-tuning', 'api-center', 'api-catalog', 'steamdeck-control', 'dual-boot', 'review', 'run')
 }
 
 function Get-UiStrings {
@@ -218,15 +218,48 @@ function Get-UiStrings {
                 SavePreset         = 'Save preset'
                 LoadPreset         = 'Load preset'
                 DeletePreset       = 'Delete preset'
-                SelectionTitle     = 'Profiles and Components'
+                SelectionTitle     = 'Guided Profile Selection'
                 Filter             = 'Filter'
-                Profiles           = 'Profiles'
-                Components         = 'Components'
-                Excludes           = 'Optional Excludes'
-                SelectionDetails   = 'Selection Details'
-                HostSetupTitle     = 'Host Setup'
-                HostHealth         = 'HostHealth'
-                SteamDeckVersion   = 'Steam Deck Version'
+                Profiles           = 'Ready-made profiles'
+                Components         = 'Tools to install'
+                Excludes           = 'Do not install'
+                SelectionDetails   = 'What this option does'
+                QuickOptions       = 'Quick options'
+                OptClaudePlugins   = 'Claude Code: plugins'
+                OptClaudeProjectMcps = 'Claude Code: project MCP sync'
+                OptOpenWebUI       = 'Local AI: Open WebUI (Docker)'
+                HostSetupTitle     = 'Prepare this PC'
+                AppTuningTitle      = 'Optimize Apps'
+                AppTuningSubtitle   = 'Pre-configure installed tools by category and profile, with safe defaults.'
+                AppTuningMode       = 'App tuning'
+                AppTuningCategories = 'Categories'
+                AppTuningItems      = 'Items'
+                AppTuningRecommended = 'Mark recommended'
+                AppTuningMarkCategory = 'Mark category'
+                AppTuningClearCategory = 'Clear category'
+                AppTuningAudit      = 'Audit now'
+                AppTuningInstall    = 'Install'
+                AppTuningConfigure  = 'Configure/Optimize'
+                AppTuningUpdate     = 'Update'
+                AppTuningStatus     = 'Safe and reversible app tuning.'
+                ApiCenterTitle      = 'API Keys Center'
+                ApiProviderSummary  = 'Providers overview'
+                ApiCredentials      = 'Saved keys (masked)'
+                ApiUsage            = 'Where keys are used'
+                ApiCreate           = 'Create new keys'
+                ApiRefresh          = 'Refresh inventory'
+                ApiSave             = 'Save credential'
+                ApiValidate         = 'Test selected key'
+                ApiValidateAll      = 'Test all keys'
+                ApiActivate         = 'Use this key now'
+                ApiImport           = 'Import raw file'
+                ApiApply            = 'Configure apps'
+                ApiCatalog          = 'Full catalog'
+                ApiCatalogTitle     = 'Full Key Catalog'
+                ApiCatalogSubtitle  = 'Researched provider list with possession, configured state, purpose, requirements and official links.'
+                ApiCatalogBack      = '<- API Center'
+                HostHealth         = 'Maintenance level'
+                SteamDeckVersion   = 'Steam Deck model'
                 WorkspaceRoot      = 'Workspace Root'
                 CloneBaseDir       = 'Clone Base Dir'
                 Browse             = 'Browse'
@@ -239,10 +272,14 @@ function Get-UiStrings {
                 WatcherStatus      = 'Watcher Status'
                 SaveSettings       = 'Save Settings'
                 ReloadSettings     = 'Reload Settings'
-                UnknownMonitorHint = 'Unknown external monitors always fall back to genericExternal.'
+                UnknownMonitorHint = 'Unknown external monitors stay unclassified until you choose Monitor/Dev or TV/Game. Safe fallback: Desktop/Dev.'
+                PendingExternal    = 'Pending unknown external display'
+                ClassifyMonitor    = 'Monitor/Dev'
+                ClassifyTv         = 'TV/Game'
                 ReviewTitle        = 'Review'
                 RefreshReview      = 'Refresh Review'
                 ReviewSummary      = 'Preview equivalent to dry-run'
+                ReviewSideEffects  = 'Side effects'
                 RunTitle           = 'Run'
                 StartRun           = '>  Start Execution'
                 OpenLog            = 'Open Log'
@@ -261,13 +298,16 @@ function Get-UiStrings {
                 Welcome            = 'Welcome'
                 Selection          = 'Selection'
                 HostSetup          = 'Host Setup'
-                SteamDeckControl   = 'Steam Deck'
-                DualBoot           = 'Dual Boot'
+                AppTuning          = 'Optimize Apps'
+                ApiCenter          = 'API Keys'
+                SteamDeckControl   = 'Steam Deck Center'
+                DualBoot           = 'Windows + Linux'
                 Review             = 'Review'
                 Run                = 'Run'
                 GenericMode        = 'Mode'
                 GenericLayout      = 'Layout'
                 GenericResolution  = 'Resolution'
+                DisplayMode        = 'Windows display mode'
                 SessionHandheld    = 'HANDHELD'
                 SessionDockedTv    = 'DOCKED_TV'
                 SessionDockedMonitor = 'DOCKED_MONITOR'
@@ -277,64 +317,104 @@ function Get-UiStrings {
             return @{
                 WindowTitle        = 'Central Bootstrap Tools'
                 WelcomeTitle       = 'Bootstrap Tools + Steam Deck'
-                WelcomeSubtitle    = 'Setup simples do host, controle do Steam Deck e manuteno ps-instalao.'
+                WelcomeSubtitle    = 'Setup simples do host, controle do Steam Deck e manutencao pos-instalacao.'
                 Language           = 'Idioma'
-                QuickPresets       = 'Presets Rpidos'
+                QuickPresets       = 'Presets Rapidos'
                 CustomPresets      = 'Presets Personalizados'
                 PresetName         = 'Nome do preset'
                 SavePreset         = 'Salvar preset'
                 LoadPreset         = 'Carregar preset'
                 DeletePreset       = 'Excluir preset'
-                SelectionTitle     = 'Perfis e Componentes'
+                SelectionTitle     = 'Escolha guiada de perfis'
                 Filter             = 'Filtro'
-                Profiles           = 'Perfis'
-                Components         = 'Componentes'
-                Excludes           = 'Excluses Opcionais'
-                SelectionDetails   = 'Detalhes da Seleo'
-                HostSetupTitle     = 'Configurao do Host'
-                HostHealth         = 'HostHealth'
-                SteamDeckVersion   = 'Verso do Steam Deck'
+                Profiles           = 'Perfis prontos'
+                Components         = 'Ferramentas para instalar'
+                Excludes           = 'Nao instalar'
+                SelectionDetails   = 'O que esta opcao faz'
+                QuickOptions       = 'Opcoes rapidas'
+                OptClaudePlugins   = 'Claude Code: plugins'
+                OptClaudeProjectMcps = 'Claude Code: sync MCP no projeto'
+                OptOpenWebUI       = 'IA local: Open WebUI (Docker)'
+                HostSetupTitle     = 'Preparacao deste PC'
+                AppTuningTitle      = 'Otimizar Apps'
+                AppTuningSubtitle   = 'Pre-configure ferramentas instaladas por categoria e perfil, com defaults seguros.'
+                AppTuningMode       = 'AppTuning'
+                AppTuningCategories = 'Categorias'
+                AppTuningItems      = 'Itens'
+                AppTuningRecommended = 'Marcar recomendados'
+                AppTuningMarkCategory = 'Marcar categoria'
+                AppTuningClearCategory = 'Limpar categoria'
+                AppTuningAudit      = 'Auditar agora'
+                AppTuningInstall    = 'Instalar'
+                AppTuningConfigure  = 'Configurar/Otimizar'
+                AppTuningUpdate     = 'Atualizar'
+                AppTuningStatus     = 'Otimização segura e reversível dos apps.'
+                ApiCenterTitle      = 'Central de Chaves e APIs'
+                ApiProviderSummary  = 'Resumo dos provedores'
+                ApiCredentials      = 'Chaves salvas (mascaradas)'
+                ApiUsage            = 'Onde cada API sera usada'
+                ApiCreate           = 'Criar novas chaves'
+                ApiRefresh          = 'Atualizar inventario'
+                ApiSave             = 'Salvar ou atualizar chave'
+                ApiValidate         = 'Testar chave selecionada'
+                ApiValidateAll      = 'Testar todas'
+                ApiActivate         = 'Usar esta chave agora'
+                ApiImport           = 'Importar arquivo bruto'
+                ApiApply            = 'Configurar apps'
+                ApiCatalog          = 'Catalogo completo'
+                ApiCatalogTitle     = 'Catalogo completo de chaves'
+                ApiCatalogSubtitle  = 'Lista pesquisada de provedores com posse, uso configurado, finalidade, requisitos e links oficiais.'
+                ApiCatalogBack      = '<- Central de APIs'
+                HostHealth         = 'Nivel de manutencao'
+                SteamDeckVersion   = 'Modelo do Steam Deck'
                 WorkspaceRoot      = 'Workspace Root'
-                CloneBaseDir       = 'Diretrio Base de Clones'
+                CloneBaseDir       = 'Diretorio Base de Clones'
                 Browse             = 'Selecionar'
-                AdminNeeds         = 'Reviso de Admin'
-                SteamDeckCenterTitle = 'Central Steam Deck'
-                MonitorProfiles    = 'Monitor Profiles'
-                MonitorFamilies    = 'Monitor Families'
-                GenericExternal    = 'Fallback genericExternal'
-                SessionProfiles    = 'Session Profiles'
+                AdminNeeds         = 'Revisao de Admin'
+                SteamDeckCenterTitle = 'Central do Steam Deck'
+                MonitorProfiles    = 'Monitores especificos'
+                MonitorFamilies    = 'Familias de monitores'
+                GenericExternal    = 'Regra padrao para monitor externo'
+                SessionProfiles    = 'Perfis de uso'
                 WatcherStatus      = 'Status do Watcher'
                 SaveSettings       = 'Salvar Settings'
                 ReloadSettings     = 'Recarregar Settings'
-                UnknownMonitorHint = 'Monitores externos desconhecidos sempre caem em genericExternal.'
-                ReviewTitle        = 'Reviso'
-                RefreshReview      = 'Atualizar Reviso'
+                UnknownMonitorHint = 'Monitores externos desconhecidos ficam pendentes ate voce escolher Monitor/Dev ou TV/Game. Fallback seguro: Desktop/Dev.'
+                PendingExternal    = 'Monitor externo desconhecido pendente'
+                ClassifyMonitor    = 'Monitor/Dev'
+                ClassifyTv         = 'TV/Game'
+                ReviewTitle        = 'Revisao'
+                RefreshReview      = 'Atualizar Revisao'
                 ReviewSummary      = 'Preview equivalente ao dry-run'
-                RunTitle           = 'Execuo'
-                StartRun           = '>  Iniciar Execuo'
+                ReviewSideEffects  = 'Efeitos colaterais'
+                RunTitle           = 'Execucao'
+                StartRun           = '>  Iniciar Execucao'
                 OpenLog            = 'Abrir Log'
                 OpenResult         = 'Abrir Resultado'
                 OpenSettings       = 'Abrir Settings'
-                OpenReports        = 'Abrir Relatrios'
+                OpenReports        = 'Abrir Relatorios'
                 IdleStatus         = 'Pronto.'
                 SavingSettings     = 'Settings salvos.'
-                RunStarted         = 'Execuo iniciada.'
-                RunCompleted       = 'Execuo concluda.'
-                RunFailed          = 'Execuo falhou.'
-                UserCanceledElevation = 'Execuo cancelada ou elevao negada.'
+                RunStarted         = 'Execucao iniciada.'
+                RunCompleted       = 'Execucao concluida.'
+                RunFailed          = 'Execucao falhou.'
+                UserCanceledElevation = 'Execucao cancelada ou elevacao negada.'
                 Back               = '<- Voltar'
-                Next               = 'Avanar ->'
+                Next               = 'Avancar ->'
                 Finish             = 'Fechar'
-                Welcome            = 'Incio'
-                Selection          = 'Seleo'
-                HostSetup          = 'Host Setup'
+                Welcome            = 'Inicio'
+                Selection          = 'Escolher'
+                HostSetup          = 'Configurar PC'
+                AppTuning          = 'Otimizar Apps'
+                ApiCenter          = 'Chaves (APIs)'
                 SteamDeckControl   = 'Steam Deck'
-                DualBoot           = 'Dual Boot'
-                Review             = 'Reviso'
-                Run                = 'Execuo'
+                DualBoot           = 'Windows e Linux'
+                Review             = 'Revisar'
+                Run                = 'Executar'
                 GenericMode        = 'Modo'
                 GenericLayout      = 'Layout'
-                GenericResolution  = 'Resoluo'
+                GenericResolution  = 'Resolucao'
+                DisplayMode        = 'Modo de exibicao'
                 SessionHandheld    = 'HANDHELD'
                 SessionDockedTv    = 'DOCKED_TV'
                 SessionDockedMonitor = 'DOCKED_MONITOR'
@@ -350,7 +430,12 @@ function Get-UiStateDefaults {
         selectedProfiles   = @('recommended')
         selectedComponents = @()
         excludedComponents = @()
+        enableClaudeCodeProjectMcps = $false
         hostHealth         = 'conservador'
+        appTuningMode      = 'recommended'
+        selectedAppTuningCategories = @()
+        selectedAppTuningItems = @()
+        excludedAppTuningItems = @()
         steamDeckVersion   = 'Auto'
         workspaceRoot      = [string]$Contract.defaults.workspaceRoot
         cloneBaseDir       = (Get-Location).Path
@@ -373,12 +458,21 @@ function Normalize-UiState {
     $normalized['selectedProfiles']   = @(Normalize-BootstrapNames -Names @($normalized['selectedProfiles']))
     $normalized['selectedComponents'] = @(Normalize-BootstrapNames -Names @($normalized['selectedComponents']))
     $normalized['excludedComponents'] = @(Normalize-BootstrapNames -Names @($normalized['excludedComponents']))
+    $normalized['selectedAppTuningCategories'] = @(Normalize-BootstrapNames -Names @($normalized['selectedAppTuningCategories']))
+    $normalized['selectedAppTuningItems'] = @(Normalize-BootstrapNames -Names @($normalized['selectedAppTuningItems']))
+    $normalized['excludedAppTuningItems'] = @(Normalize-BootstrapNames -Names @($normalized['excludedAppTuningItems']))
+    $normalized['enableClaudeCodeProjectMcps'] = [bool]$normalized['enableClaudeCodeProjectMcps']
     $language = [string]$normalized['language']
     if ((Get-UiLanguages) -notcontains $language) { $normalized['language'] = 'pt-BR' }
     if ([string]::IsNullOrWhiteSpace([string]$normalized['hostHealth'])) {
         $normalized['hostHealth'] = 'conservador'
     } else {
         $normalized['hostHealth'] = Normalize-BootstrapHostHealthMode -Mode ([string]$normalized['hostHealth'])
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$normalized['appTuningMode'])) {
+        $normalized['appTuningMode'] = 'recommended'
+    } else {
+        $normalized['appTuningMode'] = Normalize-BootstrapAppTuningMode -Mode ([string]$normalized['appTuningMode'])
     }
     if ([string]::IsNullOrWhiteSpace([string]$normalized['steamDeckVersion'])) {
         $normalized['steamDeckVersion'] = 'Auto'
@@ -455,6 +549,13 @@ try {
     throw
 }
 
+function Get-UiBrush {
+    param([Parameter(Mandatory = $true)][string]$Color)
+
+    $converter = New-Object System.Windows.Media.BrushConverter
+    return $converter.ConvertFromString($Color)
+}
+
 # 
 # XAML Definition
 # 
@@ -462,6 +563,7 @@ try {
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
         Title="Bootstrap Tools" Width="1180" Height="800"
         Background="#0F1117" WindowStartupLocation="CenterScreen"
         FontFamily="Segoe UI" FontSize="13" Foreground="#E2E8F0"
@@ -484,6 +586,19 @@ try {
         <SolidColorBrush x:Key="SidebarBg"     Color="#13162B"/>
         <SolidColorBrush x:Key="NavHoverBg"    Color="#1E2240"/>
         <SolidColorBrush x:Key="NavActiveBg"   Color="#2D1B69"/>
+
+        <x:Array x:Key="SteamDeckExternalModes" Type="{x:Type sys:String}">
+            <sys:String>HANDHELD</sys:String>
+            <sys:String>DOCKED_MONITOR</sys:String>
+            <sys:String>DOCKED_TV</sys:String>
+        </x:Array>
+
+        <x:Array x:Key="SteamDeckDisplayModes" Type="{x:Type sys:String}">
+            <sys:String>extend</sys:String>
+            <sys:String>internal</sys:String>
+            <sys:String>external</sys:String>
+            <sys:String>clone</sys:String>
+        </x:Array>
 
         <!-- Base TextBox style -->
         <Style x:Key="DarkInput" TargetType="TextBox">
@@ -524,6 +639,22 @@ try {
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding"         Value="8,5"/>
             <Setter Property="Height"          Value="34"/>
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="#1A1D2E"/>
+            <Setter Property="Foreground" Value="#E2E8F0"/>
+            <Setter Property="Padding" Value="8,6"/>
+            <Style.Triggers>
+                <Trigger Property="IsHighlighted" Value="True">
+                    <Setter Property="Background" Value="#2D1B69"/>
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#312E81"/>
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
 
         <!-- Primary button -->
@@ -717,6 +848,29 @@ try {
             <Setter Property="CanUserDeleteRows"     Value="True"/>
         </Style>
 
+        <Style TargetType="DataGridColumnHeader">
+            <Setter Property="Background" Value="#252840"/>
+            <Setter Property="Foreground" Value="#E2E8F0"/>
+            <Setter Property="BorderBrush" Value="#2D3148"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
+        <Style TargetType="DataGridCell">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#CBD5E1"/>
+            <Setter Property="BorderBrush" Value="#2D3148"/>
+            <Setter Property="BorderThickness" Value="0,0,1,1"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Style.Triggers>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#2D1B69"/>
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- CheckBox style -->
         <Style x:Key="DarkCheck" TargetType="CheckBox">
             <Setter Property="Foreground"   Value="#CBD5E1"/>
@@ -779,19 +933,31 @@ try {
                     <ToggleButton x:Name="NavWelcome"      Style="{StaticResource NavBtn}" IsChecked="True">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavWelcomeText" Text="Incio" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="NavWelcomeText" Text="Início" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavSelection"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavSelectionText" Text="Seleo" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="NavSelectionText" Text="Escolher" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavHostSetup"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="[gear]" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavHostSetupText" Text="Host Setup" VerticalAlignment="Center"/>
+                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="NavHostSetupText" Text="Configurar PC" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="NavAppTuning"    Style="{StaticResource NavBtn}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="NavAppTuningText" Text="Otimizar Apps" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="NavApiCenter"    Style="{StaticResource NavBtn}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="NavApiCenterText" Text="Chaves (APIs)" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavSteamDeck"    Style="{StaticResource NavBtn}">
@@ -809,13 +975,13 @@ try {
                     <ToggleButton x:Name="NavReview"       Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavReviewText" Text="Reviso" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="NavReviewText" Text="Revisar" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavRun"          Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text=">" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavRunText" Text="Execuo" VerticalAlignment="Center"/>
+                            <TextBlock x:Name="NavRunText" Text="Executar" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                 </StackPanel>
@@ -823,7 +989,7 @@ try {
                 <!-- Bottom nav actions -->
                 <StackPanel DockPanel.Dock="Bottom" Margin="12,16">
                     <Button x:Name="BackButton"   Style="{StaticResource GhostBtn}" Content="&lt;- Voltar"  Margin="0,4" Height="34"/>
-                    <Button x:Name="NextButton"   Style="{StaticResource PrimaryBtn}" Content="Avanar ->" Margin="0,4" Height="34"/>
+                    <Button x:Name="NextButton"   Style="{StaticResource PrimaryBtn}" Content="Avancar ->" Margin="0,4" Height="34"/>
                     <Button x:Name="FinishButton" Style="{StaticResource GhostBtn}" Content="Fechar"     Margin="0,4" Height="34"/>
                 </StackPanel>
             </DockPanel>
@@ -836,7 +1002,7 @@ try {
             <ScrollViewer x:Name="PageWelcome" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="WelcomeTitleLabel"    Style="{StaticResource PageTitle}"    Text="Bootstrap Tools + Steam Deck"/>
-                    <TextBlock x:Name="WelcomeSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Setup simples do host, controle do Steam Deck e manuteno ps-instalao."
+                    <TextBlock x:Name="WelcomeSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Setup simples do host, controle do Steam Deck e manutencao pos-instalacao."
                                TextWrapping="Wrap"/>
 
                     <!-- Language selector -->
@@ -942,18 +1108,30 @@ try {
                     <!-- Excludes + Details -->
                     <Grid Grid.Column="4">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="12"/>
                             <RowDefinition Height="*"/>
                             <RowDefinition Height="12"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
                         <Border Grid.Row="0" Style="{StaticResource Card}">
                             <DockPanel>
+                                <TextBlock x:Name="QuickOptionsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="OPCOES RAPIDAS"/>
+                                <StackPanel Margin="0,6,0,0">
+                                    <CheckBox x:Name="OptClaudePluginsCheckBox" Style="{StaticResource DarkCheck}" Content="Claude Code: plugins"/>
+                                    <CheckBox x:Name="OptClaudeProjectMcpsCheckBox" Style="{StaticResource DarkCheck}" Content="Claude Code: sync MCP no projeto"/>
+                                    <CheckBox x:Name="OptOpenWebUICheckBox" Style="{StaticResource DarkCheck}" Content="IA local: Open WebUI (Docker)"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <Border Grid.Row="2" Style="{StaticResource Card}">
+                            <DockPanel>
                                 <TextBlock x:Name="ExcludeLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="EXCLUSES OPCIONAIS"/>
                                 <ListBox x:Name="ExcludeList" Background="Transparent" BorderThickness="0"
                                          Foreground="#CBD5E1" Margin="0,4,0,0"/>
                             </DockPanel>
                         </Border>
-                        <Border Grid.Row="2" Style="{StaticResource Card}">
+                        <Border Grid.Row="4" Style="{StaticResource Card}">
                             <DockPanel>
                                 <TextBlock x:Name="DetailsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="DETALHES"/>
                                 <TextBox x:Name="DetailsTextBox" Style="{StaticResource DarkReadonly}"
@@ -1020,9 +1198,303 @@ try {
 
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
-                            <TextBlock x:Name="AdminNeedsTitleLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="REVISO DE ADMIN"/>
+                            <TextBlock x:Name="AdminNeedsTitleLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="REVISAO DE ADMIN"/>
                             <TextBox   x:Name="AdminNeedsTextBox" Style="{StaticResource DarkReadonly}"
                                        Height="160" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0"/>
+                        </DockPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!--  APP TUNING PAGE  -->
+            <ScrollViewer x:Name="PageAppTuning" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
+                <StackPanel>
+                    <TextBlock x:Name="AppTuningTitleLabel" Style="{StaticResource PageTitle}" Text="Otimizar Apps"/>
+                    <TextBlock x:Name="AppTuningSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Pre-configure ferramentas instaladas por categoria e perfil, com defaults seguros." TextWrapping="Wrap"/>
+
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="140"/>
+                            <ColumnDefinition Width="230"/>
+                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="100"/>
+                            <ColumnDefinition Width="180"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="10"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <TextBlock x:Name="AppTuningModeLabel" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="AppTuning"/>
+                        <ComboBox x:Name="AppTuningModeCombo" Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkCombo}" Margin="0,0,12,0"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Foreground="#94A3B8" VerticalAlignment="Center" Text="Filtro"/>
+                        <TextBox x:Name="AppTuningSearchBox" Grid.Row="0" Grid.Column="3" Style="{StaticResource DarkInput}" Height="34" Margin="0,0,12,0"/>
+                        <TextBlock Grid.Row="0" Grid.Column="4" Foreground="#94A3B8" VerticalAlignment="Center" Text="Status"/>
+                        <ComboBox x:Name="AppTuningStatusFilterCombo" Grid.Row="0" Grid.Column="5" Style="{StaticResource DarkCombo}"/>
+
+                        <TextBlock x:Name="AppTuningStatusLabel" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Foreground="#64748B" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        <StackPanel Grid.Row="2" Grid.Column="3" Grid.ColumnSpan="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="AppTuningRecommendedButton" Style="{StaticResource GhostBtn}" Content="Marcar recomendados" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningMarkCategoryButton" Style="{StaticResource GhostBtn}" Content="Marcar categoria" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningClearCategoryButton" Style="{StaticResource GhostBtn}" Content="Limpar categoria" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningAuditButton" Style="{StaticResource GhostBtn}" Content="Auditar agora" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningInstallButton" Style="{StaticResource GhostBtn}" Content="Instalar" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningConfigureButton" Style="{StaticResource PrimaryBtn}" Content="Configurar/Otimizar" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningUpdateButton" Style="{StaticResource GhostBtn}" Content="Atualizar" Height="32"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Grid Height="470">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="300"/>
+                        <ColumnDefinition Width="14"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+
+                    <Border Grid.Column="0" Style="{StaticResource Card}">
+                        <DockPanel>
+                            <TextBlock x:Name="AppTuningCategoriesLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="CATEGORIAS"/>
+                            <ListBox x:Name="AppTuningCategoryList" Background="Transparent" BorderThickness="0" Foreground="#CBD5E1" Margin="0,4,0,0"/>
+                        </DockPanel>
+                    </Border>
+
+                    <Border Grid.Column="2" Style="{StaticResource Card}">
+                        <DockPanel>
+                            <TextBlock x:Name="AppTuningItemsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="ITENS"/>
+                            <DataGrid x:Name="AppTuningItemsGrid" Style="{StaticResource DarkGrid}" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Extended">
+                                <DataGrid.Columns>
+                                    <DataGridCheckBoxColumn Header="Ativo" Binding="{Binding active, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="70"/>
+                                    <DataGridTextColumn Header="Id" Binding="{Binding id}" Width="0" Visibility="Collapsed"/>
+                                    <DataGridTextColumn Header="Componentes" Binding="{Binding installComponents}" Width="0" Visibility="Collapsed"/>
+                                    <DataGridTextColumn Header="Categoria" Binding="{Binding category}" Width="1.1*"/>
+                                    <DataGridTextColumn Header="App" Binding="{Binding app}" Width="1.2*"/>
+                                    <DataGridTextColumn Header="Otimizacao" Binding="{Binding optimization}" Width="1.8*"/>
+                                    <DataGridTextColumn Header="Perfil" Binding="{Binding profile}" Width="1.2*"/>
+                                    <DataGridTextColumn Header="Risco" Binding="{Binding risk}" Width="0.8*"/>
+                                    <DataGridTextColumn Header="Instalado" Binding="{Binding installed}" Width="0.8*"/>
+                                    <DataGridTextColumn Header="Configurado" Binding="{Binding configured}" Width="0.9*"/>
+                                    <DataGridTextColumn Header="Atualizado" Binding="{Binding updated}" Width="0.8*"/>
+                                    <DataGridTextColumn Header="Admin" Binding="{Binding admin}" Width="0.7*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
+                </Grid>
+
+                <Border Background="#1A1D2E" CornerRadius="8" Padding="12,8" Margin="0,10,0,0">
+                    <TextBlock x:Name="AppTuningHintLabel" Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap"/>
+                </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!--  API CENTER PAGE  -->
+            <ScrollViewer x:Name="PageApiCenter" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
+                <StackPanel>
+                    <TextBlock x:Name="ApiCenterTitleLabel" Style="{StaticResource PageTitle}" Text="Central de APIs"/>
+                    <TextBlock Style="{StaticResource PageSubtitle}" Text="Inventario seguro de chaves, validacao, rotacao e uso por app. Segredos ficam mascarados por padrao." TextWrapping="Wrap"/>
+
+                    <Border Background="#1A1D2E" CornerRadius="10" Padding="14,10" Margin="0,0,0,14">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button x:Name="ApiRefreshButton" Style="{StaticResource GhostBtn}" Content="Atualizar APIs" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="ApiValidateAllButton" Style="{StaticResource GhostBtn}" Content="Validar tudo" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="ApiImportButton" Style="{StaticResource GhostBtn}" Content="Importar arquivo bruto" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="ApiCatalogButton" Style="{StaticResource GhostBtn}" Content="Catalogo completo" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="ApiApplyButton" Style="{StaticResource PrimaryBtn}" Content="Aplicar nos apps" Height="32"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="ApiStatusLabel" Foreground="#94A3B8" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                                <TextBlock x:Name="ApiStatusLinksLabel" Foreground="#94A3B8" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed">
+                                    <Hyperlink x:Name="ApiSignupLink"><Run Text="Criar chave"/></Hyperlink>
+                                    <Run Text="  |  "/>
+                                    <Hyperlink x:Name="ApiDocsLink"><Run Text="Docs"/></Hyperlink>
+                                    <Run Text="  |  "/>
+                                    <Hyperlink x:Name="ApiPricingLink"><Run Text="Precos"/></Hyperlink>
+                                </TextBlock>
+                                <TextBlock x:Name="ApiSecretsLinksLabel" Foreground="#94A3B8" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed">
+                                    <Hyperlink x:Name="ApiSecretsFileLink"><Run Text="Abrir arquivo"/></Hyperlink>
+                                    <Run Text="  |  "/>
+                                    <Hyperlink x:Name="ApiSecretsFolderLink"><Run Text="Abrir pasta"/></Hyperlink>
+                                </TextBlock>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,14">
+                        <DockPanel>
+                            <TextBlock x:Name="ApiProviderSummaryLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="RESUMO POR PROVEDOR"/>
+                            <DataGrid x:Name="ApiProviderSummaryGrid" Style="{StaticResource DarkGrid}" Height="170" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Provedor" Binding="{Binding provider}" Width="1.1*"/>
+                                    <DataGridTextColumn Header="Chaves" Binding="{Binding total}" Width="0.6*"/>
+                                    <DataGridTextColumn Header="Em uso agora" Binding="{Binding active}" Width="1.1*"/>
+                                    <DataGridTextColumn Header="Teste" Binding="{Binding state}" Width="0.8*"/>
+                                    <DataGridTextColumn Header="Apps automaticos" Binding="{Binding autoApps}" Width="1.5*"/>
+                                    <DataGridTextColumn Header="Apps manuais" Binding="{Binding manualApps}" Width="1.2*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
+
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.1*"/>
+                            <ColumnDefinition Width="14"/>
+                            <ColumnDefinition Width="0.9*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock x:Name="ApiCredentialsLabel" Style="{StaticResource SectionLabel}" Text="CREDENCIAIS"/>
+                                <DataGrid x:Name="ApiCredentialGrid" Style="{StaticResource DarkGrid}" Height="220" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Provedor" Binding="{Binding provider}" Width="0.9*"/>
+                                        <DataGridTextColumn Header="Identificacao segura" Binding="{Binding id}" Width="1.6*"/>
+                                        <DataGridTextColumn Header="Nome amigavel" Binding="{Binding display}" Width="1.1*"/>
+                                        <DataGridTextColumn Header="Ativa" Binding="{Binding active}" Width="0.6*"/>
+                                        <DataGridTextColumn Header="Teste" Binding="{Binding state}" Width="0.8*"/>
+                                        <DataGridTextColumn Header="Mascara" Binding="{Binding preview}" Width="0.8*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </StackPanel>
+                        </Border>
+
+                        <Border Grid.Column="2" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="ADICIONAR / EDITAR"/>
+                                <TextBlock Foreground="#64748B" FontSize="11" TextWrapping="Wrap" Margin="0,0,0,8" Text="Selecione provedor e credencial. O campo segredo fica vazio ao editar; preencha apenas para criar ou trocar a chave."/>
+                                <TextBlock Foreground="#94A3B8" Text="Provedor"/>
+                                <ComboBox x:Name="ApiProviderCombo" Style="{StaticResource DarkCombo}" Margin="0,2,0,8"/>
+                                <TextBlock Foreground="#94A3B8" Text="Chave cadastrada"/>
+                                <ComboBox x:Name="ApiCredentialCombo" Style="{StaticResource DarkCombo}" Margin="0,2,0,8"/>
+                                <TextBlock Foreground="#94A3B8" Text="Nome para voce reconhecer"/>
+                                <TextBox x:Name="ApiDisplayNameTextBox" Style="{StaticResource DarkInput}" Height="32" Margin="0,2,0,8"/>
+                                <TextBlock Foreground="#94A3B8" Text="Segredo / API key"/>
+                                <PasswordBox x:Name="ApiSecretBox" Background="#252840" Foreground="#E2E8F0" BorderBrush="#2D3148" BorderThickness="1" Height="32" Margin="0,2,0,8"/>
+                                <TextBlock Foreground="#94A3B8" Text="Base URL"/>
+                                <TextBox x:Name="ApiBaseUrlTextBox" Style="{StaticResource DarkInput}" Height="32" Margin="0,2,0,8"/>
+                                <TextBlock Foreground="#94A3B8" Text="Organizacao"/>
+                                <TextBox x:Name="ApiOrganizationTextBox" Style="{StaticResource DarkInput}" Height="32" Margin="0,2,0,8"/>
+                                <TextBlock Foreground="#94A3B8" Text="Project Ref"/>
+                                <TextBox x:Name="ApiProjectRefTextBox" Style="{StaticResource DarkInput}" Height="32" Margin="0,2,0,12"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button x:Name="ApiSaveButton" Style="{StaticResource PrimaryBtn}" Content="Salvar credencial" Margin="0,0,8,0" Height="32"/>
+                                    <Button x:Name="ApiValidateButton" Style="{StaticResource GhostBtn}" Content="Validar" Margin="0,0,8,0" Height="32"/>
+                                    <Button x:Name="ApiActivateButton" Style="{StaticResource GhostBtn}" Content="Ativar" Height="32"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="14"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <Border Grid.Column="0" Style="{StaticResource Card}">
+                            <DockPanel>
+                                <TextBlock x:Name="ApiUsageLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="USO NOS APPS"/>
+                                <DataGrid x:Name="ApiUsageGrid" Style="{StaticResource DarkGrid}" Height="190" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Sistema" Binding="{Binding app}" Width="0.8*"/>
+                                        <DataGridTextColumn Header="Configurado sozinho" Binding="{Binding autoApplied}" Width="1.4*"/>
+                                        <DataGridTextColumn Header="Manual" Binding="{Binding manualOnly}" Width="1.1*"/>
+                                        <DataGridTextColumn Header="Disponivel" Binding="{Binding available}" Width="1.6*"/>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </DockPanel>
+                        </Border>
+
+                        <Border Grid.Column="2" Style="{StaticResource Card}">
+                            <DockPanel>
+                                <TextBlock x:Name="ApiCreateLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="CRIAR OU ASSINAR"/>
+                                <DataGrid x:Name="ApiCreateGrid" Style="{StaticResource DarkGrid}" Height="190" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Header="Provedor" Binding="{Binding provider}" Width="0.9*"/>
+                                        <DataGridTextColumn Header="Voce vai precisar" Binding="{Binding fields}" Width="1.2*"/>
+                                        <DataGridTemplateColumn Header="Criar chave" Width="1.2*">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock ToolTip="{Binding signup}">
+                                                        <Hyperlink NavigateUri="{Binding signup}">
+                                                            <Run Text="Abrir"/>
+                                                        </Hyperlink>
+                                                    </TextBlock>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Header="Ajuda" Width="1.2*">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock ToolTip="{Binding docs}">
+                                                        <Hyperlink NavigateUri="{Binding docs}">
+                                                            <Run Text="Abrir"/>
+                                                        </Hyperlink>
+                                                    </TextBlock>
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!--  API CATALOG PAGE  -->
+            <ScrollViewer x:Name="PageApiCatalog" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
+                <StackPanel>
+                    <TextBlock x:Name="ApiCatalogTitleLabel" Style="{StaticResource PageTitle}" Text="Catalogo completo de chaves"/>
+                    <TextBlock x:Name="ApiCatalogSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Lista pesquisada de provedores com posse, uso configurado, finalidade, requisitos e links oficiais." TextWrapping="Wrap"/>
+
+                    <Border Background="#1A1D2E" CornerRadius="10" Padding="14,10" Margin="0,0,0,14">
+                        <DockPanel>
+                            <Button x:Name="ApiCatalogBackButton" DockPanel.Dock="Right" Style="{StaticResource GhostBtn}" Content="&lt;- Central de APIs" Height="32"/>
+                            <TextBlock x:Name="ApiCatalogStatusLabel" Foreground="#94A3B8" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        </DockPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}">
+                        <DockPanel>
+                            <TextBlock x:Name="ApiFullCatalogLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="TODAS AS CHAVES POSSIVEIS"/>
+                            <DataGrid x:Name="ApiFullCatalogGrid" Style="{StaticResource DarkGrid}" Height="520" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Ja possui" Binding="{Binding hasCredential}" Width="0.7*"/>
+                                    <DataGridTextColumn Header="Quantidade" Binding="{Binding quantity}" Width="0.7*"/>
+                                    <DataGridTextColumn Header="Configuradas" Binding="{Binding configured}" Width="0.8*"/>
+                                    <DataGridTextColumn Header="Provedor" Binding="{Binding provider}" Width="1.1*"/>
+                                    <DataGridTextColumn Header="O que faz" Binding="{Binding description}" Width="2.2*"/>
+                                    <DataGridTextColumn Header="Voce vai precisar" Binding="{Binding fields}" Width="1.2*"/>
+                                    <DataGridTemplateColumn Header="Criar Chave" Width="1.0*">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock ToolTip="{Binding signup}">
+                                                    <Hyperlink NavigateUri="{Binding signup}">
+                                                        <Run Text="Abrir"/>
+                                                    </Hyperlink>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Header="Ajuda" Width="1.0*">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock ToolTip="{Binding docs}">
+                                                    <Hyperlink NavigateUri="{Binding docs}">
+                                                        <Run Text="Abrir"/>
+                                                    </Hyperlink>
+                                                </TextBlock>
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
                         </DockPanel>
                     </Border>
                 </StackPanel>
@@ -1032,40 +1504,49 @@ try {
             <ScrollViewer x:Name="PageSteamDeck" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="SteamDeckTitleLabel" Style="{StaticResource PageTitle}" Text="Central Steam Deck"/>
-                    <TextBlock Style="{StaticResource PageSubtitle}" Text="Configure perfis de monitor, sesses e o fallback genrico." TextWrapping="Wrap"/>
+                    <TextBlock Style="{StaticResource PageSubtitle}" Text="Configure perfis de monitor, sessoes e o fallback generico." TextWrapping="Wrap"/>
 
                     <!-- Monitor Profiles -->
                     <Border Style="{StaticResource Card}" Margin="0,0,0,14">
-                        <DockPanel>
-                            <TextBlock x:Name="MonitorProfilesLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="MONITOR PROFILES"/>
+                        <StackPanel>
+                            <TextBlock x:Name="MonitorProfilesLabel" Style="{StaticResource SectionLabel}" Text="MONITOR PROFILES"/>
                             <DataGrid  x:Name="MonitorProfilesGrid"  Style="{StaticResource DarkGrid}" Height="160" Margin="0,4,0,0">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="manufacturer"     Binding="{Binding manufacturer}"     Width="*"/>
-                                    <DataGridTextColumn Header="product"           Binding="{Binding product}"           Width="*"/>
-                                    <DataGridTextColumn Header="serial"            Binding="{Binding serial}"            Width="*"/>
-                                    <DataGridTextColumn Header="mode"              Binding="{Binding mode}"              Width="*"/>
-                                    <DataGridTextColumn Header="layout"            Binding="{Binding layout}"            Width="*"/>
-                                    <DataGridTextColumn Header="resolutionPolicy"  Binding="{Binding resolutionPolicy}"  Width="*"/>
+                                    <DataGridCheckBoxColumn Header="Principal"     Binding="{Binding primary, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                                    <DataGridTextColumn Header="Alvo"              Binding="{Binding target}"            Width="90" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Status"            Binding="{Binding status}"            Width="130" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Fabricante"        Binding="{Binding manufacturer}"      Width="*"/>
+                                    <DataGridTextColumn Header="Modelo"            Binding="{Binding product}"           Width="*"/>
+                                    <DataGridTextColumn Header="Serial"            Binding="{Binding serial}"            Width="*"/>
+                                    <DataGridComboBoxColumn Header="Perfil"        SelectedItemBinding="{Binding mode, UpdateSourceTrigger=PropertyChanged}" ItemsSource="{StaticResource SteamDeckExternalModes}" Width="*"/>
+                                    <DataGridTextColumn Header="Layout"            Binding="{Binding layout}"            Width="*"/>
+                                    <DataGridTextColumn Header="Resolucao"         Binding="{Binding resolutionPolicy}"  Width="*"/>
                                 </DataGrid.Columns>
                             </DataGrid>
-                        </DockPanel>
+                            <TextBlock Foreground="#64748B" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="Se esta lista estiver vazia, tudo bem: o Steam Deck ainda usa as familias conhecidas e a regra padrao para monitor externo."/>
+                        </StackPanel>
                     </Border>
 
                     <!-- Monitor Families -->
                     <Border Style="{StaticResource Card}" Margin="0,0,0,14">
-                        <DockPanel>
-                            <TextBlock x:Name="MonitorFamiliesLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="MONITOR FAMILIES"/>
+                        <StackPanel>
+                            <TextBlock x:Name="MonitorFamiliesLabel" Style="{StaticResource SectionLabel}" Text="MONITOR FAMILIES"/>
                             <DataGrid  x:Name="MonitorFamiliesGrid"  Style="{StaticResource DarkGrid}" Height="160" Margin="0,4,0,0">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="manufacturer"     Binding="{Binding manufacturer}"     Width="*"/>
-                                    <DataGridTextColumn Header="product"           Binding="{Binding product}"           Width="*"/>
-                                    <DataGridTextColumn Header="namePattern"       Binding="{Binding namePattern}"       Width="*"/>
-                                    <DataGridTextColumn Header="mode"              Binding="{Binding mode}"              Width="*"/>
-                                    <DataGridTextColumn Header="layout"            Binding="{Binding layout}"            Width="*"/>
-                                    <DataGridTextColumn Header="resolutionPolicy"  Binding="{Binding resolutionPolicy}"  Width="*"/>
+                                    <DataGridCheckBoxColumn Header="Principal"     Binding="{Binding primary, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="80"/>
+                                    <DataGridTextColumn Header="Status"            Binding="{Binding status}"            Width="120" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Fabricante"        Binding="{Binding manufacturer}"      Width="*"/>
+                                    <DataGridTextColumn Header="Modelo"            Binding="{Binding product}"           Width="*"/>
+                                    <DataGridTextColumn Header="Padrao do nome"    Binding="{Binding namePattern}"       Width="*"/>
+                                    <DataGridComboBoxColumn Header="Perfil"        SelectedItemBinding="{Binding mode, UpdateSourceTrigger=PropertyChanged}" ItemsSource="{StaticResource SteamDeckExternalModes}" Width="*"/>
+                                    <DataGridTextColumn Header="Layout"            Binding="{Binding layout}"            Width="*"/>
+                                    <DataGridTextColumn Header="Resolucao"         Binding="{Binding resolutionPolicy}"  Width="*"/>
                                 </DataGrid.Columns>
                             </DataGrid>
-                        </DockPanel>
+                            <TextBlock Foreground="#64748B" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"
+                                       Text="Familias permitem reconhecer monitores parecidos sem cadastrar serial por serial."/>
+                        </StackPanel>
                     </Border>
 
                     <Grid>
@@ -1078,7 +1559,7 @@ try {
                         <!-- Generic External -->
                         <Border Grid.Column="0" Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock x:Name="GenericGroupLabel" Style="{StaticResource SectionLabel}" Text="FALLBACK GENRICO"/>
+                                <TextBlock x:Name="GenericGroupLabel" Style="{StaticResource SectionLabel}" Text="FALLBACK GENERICO"/>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="130"/>
@@ -1090,13 +1571,17 @@ try {
                                         <RowDefinition Height="Auto"/>
                                         <RowDefinition Height="8"/>
                                         <RowDefinition Height="Auto"/>
+                                        <RowDefinition Height="8"/>
+                                        <RowDefinition Height="Auto"/>
                                     </Grid.RowDefinitions>
                                     <TextBlock x:Name="GenericModeLabel"       Grid.Row="0" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Modo"/>
                                     <ComboBox  x:Name="GenericModeCombo"       Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
                                     <TextBlock x:Name="GenericLayoutLabel"     Grid.Row="2" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Layout"/>
                                     <TextBox   x:Name="GenericLayoutTextBox"   Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkInput}" Height="32"/>
-                                    <TextBlock x:Name="GenericResolutionLabel" Grid.Row="4" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Resoluo"/>
+                                    <TextBlock x:Name="GenericResolutionLabel" Grid.Row="4" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Resolucao"/>
                                     <TextBox   x:Name="GenericResolutionTextBox" Grid.Row="4" Grid.Column="1" Style="{StaticResource DarkInput}" Height="32"/>
+                                    <TextBlock x:Name="DisplayModeLabel"       Grid.Row="6" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Display"/>
+                                    <ComboBox  x:Name="DisplayModeCombo"       Grid.Row="6" Grid.Column="1" Style="{StaticResource DarkCombo}" ItemsSource="{StaticResource SteamDeckDisplayModes}"/>
                                 </Grid>
                             </StackPanel>
                         </Border>
@@ -1128,6 +1613,20 @@ try {
                         </Border>
                     </Grid>
 
+                    <!-- Unknown external classifier -->
+                    <Border Style="{StaticResource Card}" Margin="0,14,0,0" BorderBrush="{StaticResource WarnBrush}">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button x:Name="ClassifyMonitorButton" Style="{StaticResource PrimaryBtn}" Content=" Monitor/Dev" Margin="0,0,8,0" Width="140" Height="34"/>
+                                <Button x:Name="ClassifyTvButton"      Style="{StaticResource GhostBtn}"   Content=" TV/Game" Width="120" Height="34"/>
+                            </StackPanel>
+                            <StackPanel>
+                                <TextBlock x:Name="PendingExternalLabel" Style="{StaticResource SectionLabel}" Text="MONITOR EXTERNO DESCONHECIDO"/>
+                                <TextBlock x:Name="PendingExternalStatusLabel" Foreground="#CBD5E1" FontSize="12" TextWrapping="Wrap" Margin="0,4,12,0"/>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
                     <!-- Watcher status + save buttons -->
                     <Border Background="#1A1D2E" CornerRadius="8" Padding="14,10" Margin="0,14,0,0">
                         <DockPanel>
@@ -1148,7 +1647,7 @@ try {
             <ScrollViewer x:Name="PageDualBoot" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="DualBootTitleLabel" Style="{StaticResource PageTitle}" Text="Dual Boot"/>
-                    <TextBlock Style="{StaticResource PageSubtitle}" Text="Validao de guardrails e gerenciamento do cenrio Windows + Linux." TextWrapping="Wrap"/>
+                    <TextBlock Style="{StaticResource PageSubtitle}" Text="Validacao de guardrails e gerenciamento do cenario Windows + Linux." TextWrapping="Wrap"/>
 
                     <!-- Status -->
                     <Border Style="{StaticResource Card}" Margin="0,0,0,16">
@@ -1208,19 +1707,30 @@ try {
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0">
-                    <TextBlock x:Name="ReviewTitleLabel" Style="{StaticResource PageTitle}" Text="Reviso"/>
+                    <TextBlock x:Name="ReviewTitleLabel" Style="{StaticResource PageTitle}" Text="Revisao"/>
                 </StackPanel>
 
                 <Border Grid.Row="1" Background="#1A1D2E" CornerRadius="8" Padding="14,10" Margin="0,0,0,14">
                     <DockPanel>
                         <Button x:Name="RefreshReviewButton" DockPanel.Dock="Right" Style="{StaticResource GhostBtn}" Content=" Atualizar" Height="32"/>
-                        <TextBlock x:Name="ReviewMetaLabel" Foreground="#64748B" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        <StackPanel>
+                            <TextBlock x:Name="ReviewMetaLabel" Foreground="#64748B" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="ReviewLinksLabel" Foreground="#64748B" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed">
+                                <Hyperlink x:Name="ReviewSettingsLink"><Run Text="Abrir Settings"/></Hyperlink>
+                                <Run Text="  |  "/>
+                                <Hyperlink x:Name="ReviewUiStateLink"><Run Text="Abrir UI state"/></Hyperlink>
+                            </TextBlock>
+                        </StackPanel>
                     </DockPanel>
                 </Border>
 
                 <Border Grid.Row="2" Style="{StaticResource Card}">
                     <DockPanel>
                         <TextBlock x:Name="ReviewSummaryLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="PREVIEW DO PLAN (DRY-RUN)"/>
+                        <TextBlock x:Name="ReviewSideEffectsLabel" Foreground="#64748B" FontSize="12" Margin="0,6,0,0" Text="Efeitos colaterais"/>
+                        <TextBox x:Name="ReviewSideEffectsTextBox" Style="{StaticResource DarkReadonly}"
+                                 AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                                 FontFamily="Consolas" FontSize="12" Height="86" Margin="0,6,0,10"/>
                         <TextBox x:Name="ReviewTextBox" Style="{StaticResource DarkReadonly}"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
                                  FontFamily="Consolas" FontSize="12" Margin="0,4,0,0"/>
@@ -1236,18 +1746,18 @@ try {
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" x:Name="RunTitleLabel" Style="{StaticResource PageTitle}" Text="Execuo"/>
+                <TextBlock Grid.Row="0" x:Name="RunTitleLabel" Style="{StaticResource PageTitle}" Text="Execucao"/>
 
                 <!-- Action bar -->
                 <Border Grid.Row="1" Background="#1A1D2E" CornerRadius="10" Padding="16,12" Margin="0,0,0,16">
                     <DockPanel>
                         <Button x:Name="StartRunButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryBtn}"
-                                Content=">  Iniciar Execuo" FontSize="15" Height="40"/>
+                                Content=">  Iniciar Execucao" FontSize="15" Height="40"/>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Button x:Name="OpenLogButton"     Style="{StaticResource GhostBtn}" Content=" Log"        Margin="0,0,8,0" Height="34"/>
                             <Button x:Name="OpenResultButton"  Style="{StaticResource GhostBtn}" Content=" Resultado"  Margin="0,0,8,0" Height="34"/>
                             <Button x:Name="OpenSettingsButton" Style="{StaticResource GhostBtn}" Content="[gear] Settings"   Margin="0,0,8,0" Height="34"/>
-                            <Button x:Name="OpenReportsButton" Style="{StaticResource GhostBtn}" Content=" Relatrios" Height="34"/>
+                            <Button x:Name="OpenReportsButton" Style="{StaticResource GhostBtn}" Content=" Relatorios" Height="34"/>
                         </StackPanel>
                     </DockPanel>
                 </Border>
@@ -1284,6 +1794,17 @@ try {
 $reader = [System.Xml.XmlNodeReader]::new($xaml)
 $window = [Windows.Markup.XamlReader]::Load($reader)
 
+$window.AddHandler([System.Windows.Documents.Hyperlink]::RequestNavigateEvent, [System.Windows.Navigation.RequestNavigateEventHandler]{
+    param($sender, $e)
+    try {
+        if ($e.Uri -and -not [string]::IsNullOrWhiteSpace([string]$e.Uri.OriginalString)) {
+            Start-Process ([string]$e.Uri.OriginalString)
+        }
+    } catch {
+    }
+    $e.Handled = $true
+})
+
 function Get-Control {
     param([Parameter(Mandatory=$true)][string]$Name)
     $ctrl = $window.FindName($Name)
@@ -1304,6 +1825,8 @@ $ui = [ordered]@{
     SettingsBundle        = Get-BootstrapSteamDeckSettingsData -RequestedSteamDeckVersion ([string]$state.steamDeckVersion) -ResolvedSteamDeckVersion 'lcd'
     SettingsBackupPath    = $null
     SuppressSelectionEvents = $false
+    SuppressApiEvents     = $false
+    SuppressAppTuningEvents = $false
     LogOffset             = 0
     CurrentLogPath        = $null
     CurrentResultPath     = $null
@@ -1316,6 +1839,8 @@ $ui = [ordered]@{
     NavWelcome            = (Get-Control 'NavWelcome')
     NavSelection          = (Get-Control 'NavSelection')
     NavHostSetup          = (Get-Control 'NavHostSetup')
+    NavAppTuning          = (Get-Control 'NavAppTuning')
+    NavApiCenter          = (Get-Control 'NavApiCenter')
     NavSteamDeck          = (Get-Control 'NavSteamDeck')
     NavDualBoot           = (Get-Control 'NavDualBoot')
     NavReview             = (Get-Control 'NavReview')
@@ -1323,6 +1848,8 @@ $ui = [ordered]@{
     NavWelcomeText        = (Get-Control 'NavWelcomeText')
     NavSelectionText      = (Get-Control 'NavSelectionText')
     NavHostSetupText      = (Get-Control 'NavHostSetupText')
+    NavAppTuningText      = (Get-Control 'NavAppTuningText')
+    NavApiCenterText      = (Get-Control 'NavApiCenterText')
     NavSteamDeckText      = (Get-Control 'NavSteamDeckText')
     NavDualBootText       = (Get-Control 'NavDualBootText')
     NavReviewText         = (Get-Control 'NavReviewText')
@@ -1362,6 +1889,10 @@ $ui = [ordered]@{
     ProfilesTree          = (Get-Control 'ProfilesTree')
     ComponentsLabel       = (Get-Control 'ComponentsLabel')
     ComponentsTree        = (Get-Control 'ComponentsTree')
+    QuickOptionsLabel     = (Get-Control 'QuickOptionsLabel')
+    OptClaudePluginsCheckBox = (Get-Control 'OptClaudePluginsCheckBox')
+    OptClaudeProjectMcpsCheckBox = (Get-Control 'OptClaudeProjectMcpsCheckBox')
+    OptOpenWebUICheckBox  = (Get-Control 'OptOpenWebUICheckBox')
     ExcludeLabel          = (Get-Control 'ExcludeLabel')
     ExcludeList           = (Get-Control 'ExcludeList')
     DetailsLabel          = (Get-Control 'DetailsLabel')
@@ -1384,6 +1915,67 @@ $ui = [ordered]@{
     AdminNeedsTitleLabel  = (Get-Control 'AdminNeedsTitleLabel')
     AdminNeedsTextBox     = (Get-Control 'AdminNeedsTextBox')
 
+    # App Tuning
+    AppTuningTitleLabel   = (Get-Control 'AppTuningTitleLabel')
+    AppTuningSubtitleLabel = (Get-Control 'AppTuningSubtitleLabel')
+    AppTuningModeLabel    = (Get-Control 'AppTuningModeLabel')
+    AppTuningModeCombo    = (Get-Control 'AppTuningModeCombo')
+    AppTuningSearchBox    = (Get-Control 'AppTuningSearchBox')
+    AppTuningStatusFilterCombo = (Get-Control 'AppTuningStatusFilterCombo')
+    AppTuningStatusLabel  = (Get-Control 'AppTuningStatusLabel')
+    AppTuningRecommendedButton = (Get-Control 'AppTuningRecommendedButton')
+    AppTuningMarkCategoryButton = (Get-Control 'AppTuningMarkCategoryButton')
+    AppTuningClearCategoryButton = (Get-Control 'AppTuningClearCategoryButton')
+    AppTuningAuditButton  = (Get-Control 'AppTuningAuditButton')
+    AppTuningInstallButton = (Get-Control 'AppTuningInstallButton')
+    AppTuningConfigureButton = (Get-Control 'AppTuningConfigureButton')
+    AppTuningUpdateButton = (Get-Control 'AppTuningUpdateButton')
+    AppTuningCategoriesLabel = (Get-Control 'AppTuningCategoriesLabel')
+    AppTuningCategoryList = (Get-Control 'AppTuningCategoryList')
+    AppTuningItemsLabel   = (Get-Control 'AppTuningItemsLabel')
+    AppTuningItemsGrid    = (Get-Control 'AppTuningItemsGrid')
+    AppTuningHintLabel    = (Get-Control 'AppTuningHintLabel')
+
+    # API Center
+    ApiCenterTitleLabel   = (Get-Control 'ApiCenterTitleLabel')
+    ApiProviderSummaryLabel = (Get-Control 'ApiProviderSummaryLabel')
+    ApiCredentialsLabel   = (Get-Control 'ApiCredentialsLabel')
+    ApiUsageLabel         = (Get-Control 'ApiUsageLabel')
+    ApiCreateLabel        = (Get-Control 'ApiCreateLabel')
+    ApiStatusLabel        = (Get-Control 'ApiStatusLabel')
+    ApiStatusLinksLabel   = (Get-Control 'ApiStatusLinksLabel')
+    ApiSignupLink         = (Get-Control 'ApiSignupLink')
+    ApiDocsLink           = (Get-Control 'ApiDocsLink')
+    ApiPricingLink        = (Get-Control 'ApiPricingLink')
+    ApiSecretsLinksLabel  = (Get-Control 'ApiSecretsLinksLabel')
+    ApiSecretsFileLink    = (Get-Control 'ApiSecretsFileLink')
+    ApiSecretsFolderLink  = (Get-Control 'ApiSecretsFolderLink')
+    ApiRefreshButton      = (Get-Control 'ApiRefreshButton')
+    ApiValidateAllButton  = (Get-Control 'ApiValidateAllButton')
+    ApiImportButton       = (Get-Control 'ApiImportButton')
+    ApiCatalogButton      = (Get-Control 'ApiCatalogButton')
+    ApiApplyButton        = (Get-Control 'ApiApplyButton')
+    ApiSaveButton         = (Get-Control 'ApiSaveButton')
+    ApiValidateButton     = (Get-Control 'ApiValidateButton')
+    ApiActivateButton     = (Get-Control 'ApiActivateButton')
+    ApiProviderSummaryGrid = (Get-Control 'ApiProviderSummaryGrid')
+    ApiCredentialGrid     = (Get-Control 'ApiCredentialGrid')
+    ApiUsageGrid          = (Get-Control 'ApiUsageGrid')
+    ApiCreateGrid         = (Get-Control 'ApiCreateGrid')
+    ApiProviderCombo      = (Get-Control 'ApiProviderCombo')
+    ApiCredentialCombo    = (Get-Control 'ApiCredentialCombo')
+    ApiDisplayNameTextBox = (Get-Control 'ApiDisplayNameTextBox')
+    ApiSecretBox          = (Get-Control 'ApiSecretBox')
+    ApiBaseUrlTextBox     = (Get-Control 'ApiBaseUrlTextBox')
+    ApiOrganizationTextBox = (Get-Control 'ApiOrganizationTextBox')
+    ApiProjectRefTextBox  = (Get-Control 'ApiProjectRefTextBox')
+    ApiCatalogTitleLabel  = (Get-Control 'ApiCatalogTitleLabel')
+    ApiCatalogSubtitleLabel = (Get-Control 'ApiCatalogSubtitleLabel')
+    ApiCatalogBackButton  = (Get-Control 'ApiCatalogBackButton')
+    ApiCatalogStatusLabel = (Get-Control 'ApiCatalogStatusLabel')
+    ApiFullCatalogLabel   = (Get-Control 'ApiFullCatalogLabel')
+    ApiFullCatalogGrid    = (Get-Control 'ApiFullCatalogGrid')
+
     # Steam Deck Control
     SteamDeckTitleLabel   = (Get-Control 'SteamDeckTitleLabel')
     MonitorProfilesLabel  = (Get-Control 'MonitorProfilesLabel')
@@ -1397,6 +1989,8 @@ $ui = [ordered]@{
     GenericLayoutTextBox  = (Get-Control 'GenericLayoutTextBox')
     GenericResolutionLabel = (Get-Control 'GenericResolutionLabel')
     GenericResolutionTextBox = (Get-Control 'GenericResolutionTextBox')
+    DisplayModeLabel     = (Get-Control 'DisplayModeLabel')
+    DisplayModeCombo     = (Get-Control 'DisplayModeCombo')
     SessionGroupLabel     = (Get-Control 'SessionGroupLabel')
     HandheldSessionLabel  = (Get-Control 'HandheldSessionLabel')
     HandheldSessionTextBox = (Get-Control 'HandheldSessionTextBox')
@@ -1404,6 +1998,10 @@ $ui = [ordered]@{
     DockTvSessionTextBox  = (Get-Control 'DockTvSessionTextBox')
     DockMonitorSessionLabel = (Get-Control 'DockMonitorSessionLabel')
     DockMonitorSessionTextBox = (Get-Control 'DockMonitorSessionTextBox')
+    PendingExternalLabel  = (Get-Control 'PendingExternalLabel')
+    PendingExternalStatusLabel = (Get-Control 'PendingExternalStatusLabel')
+    ClassifyMonitorButton = (Get-Control 'ClassifyMonitorButton')
+    ClassifyTvButton      = (Get-Control 'ClassifyTvButton')
     WatcherStatusLabel    = (Get-Control 'WatcherStatusLabel')
     UnknownMonitorHintLabel = (Get-Control 'UnknownMonitorHintLabel')
     ReloadSettingsButton  = (Get-Control 'ReloadSettingsButton')
@@ -1423,8 +2021,13 @@ $ui = [ordered]@{
     # Review
     ReviewTitleLabel      = (Get-Control 'ReviewTitleLabel')
     ReviewSummaryLabel    = (Get-Control 'ReviewSummaryLabel')
+    ReviewSideEffectsLabel = (Get-Control 'ReviewSideEffectsLabel')
+    ReviewSideEffectsTextBox = (Get-Control 'ReviewSideEffectsTextBox')
     RefreshReviewButton   = (Get-Control 'RefreshReviewButton')
     ReviewMetaLabel       = (Get-Control 'ReviewMetaLabel')
+    ReviewLinksLabel      = (Get-Control 'ReviewLinksLabel')
+    ReviewSettingsLink    = (Get-Control 'ReviewSettingsLink')
+    ReviewUiStateLink     = (Get-Control 'ReviewUiStateLink')
     ReviewTextBox         = (Get-Control 'ReviewTextBox')
 
     # Run
@@ -1438,7 +2041,7 @@ $ui = [ordered]@{
     RunLogTextBox         = (Get-Control 'RunLogTextBox')
 
     # Pages (panels identified by WPF name)
-    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
+    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageAppTuning', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
 }
 
 # 
@@ -1453,6 +2056,15 @@ $ui.LogTimer = $logTimer
 # Helper: WPF DataGrid population
 # 
 
+function ConvertTo-UiBoolean {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return [bool]$Value }
+    $text = ([string]$Value).Trim().ToLowerInvariant()
+    return @('1', 'true', 'yes', 'y', 'sim', 'on') -contains $text
+}
+
 function Load-WpfGridRows {
     param(
         [Parameter(Mandatory=$true)]$Grid,
@@ -1460,13 +2072,24 @@ function Load-WpfGridRows {
         [Parameter(Mandatory=$true)][string[]]$Columns
     )
     $table = New-Object System.Data.DataTable
-    foreach ($col in $Columns) { [void]$table.Columns.Add($col) }
+    foreach ($col in $Columns) {
+        if (@('primary', 'active') -contains $col) {
+            [void]$table.Columns.Add($col, [bool])
+        } else {
+            [void]$table.Columns.Add($col)
+        }
+    }
     foreach ($item in @($Items)) {
         $row = $table.NewRow()
         foreach ($col in $Columns) {
-            $row[$col] = if ($item -is [hashtable] -and $item.ContainsKey($col)) { [string]$item[$col] }
-                         elseif ($item.PSObject.Properties[$col]) { [string]$item.$col }
-                         else { '' }
+            $value = if ($item -is [System.Collections.IDictionary] -and $item.Contains($col)) { $item[$col] }
+                     elseif ($item.PSObject.Properties[$col]) { $item.$col }
+                     else { $null }
+            if (@('primary', 'active') -contains $col) {
+                $row[$col] = ConvertTo-UiBoolean -Value $value
+            } else {
+                $row[$col] = if ($null -eq $value) { '' } else { [string]$value }
+            }
         }
         $table.Rows.Add($row)
     }
@@ -1486,7 +2109,7 @@ function Read-WpfGridRows {
         $hasData = $false
         foreach ($col in $Columns) {
             $val = [string]$row[$col]
-            if (-not [string]::IsNullOrWhiteSpace($val)) { $hasData = $true }
+            if ((@('primary', 'active', 'status') -notcontains $col) -and -not [string]::IsNullOrWhiteSpace($val)) { $hasData = $true }
             $item[$col] = $val
         }
         if ($hasData) { $rows += @($item) }
@@ -1494,9 +2117,247 @@ function Read-WpfGridRows {
     return @($rows)
 }
 
-# 
+function Get-SteamDeckEditableModes {
+    return @('DOCKED_MONITOR', 'DOCKED_TV')
+}
+
+function Validate-SteamDeckGridModeRows {
+    param(
+        [Parameter(Mandatory=$true)]$Rows,
+        [Parameter(Mandatory=$true)][string]$GridName
+    )
+    $validModes = @(Get-SteamDeckEditableModes)
+    $index = 0
+    foreach ($row in @($Rows)) {
+        $index++
+        $rowData = ConvertTo-BootstrapHashtable -InputObject $row
+        $mode = ([string]$rowData['mode']).Trim().ToUpperInvariant()
+        if ([string]::IsNullOrWhiteSpace($mode)) {
+            throw "$GridName linha $index sem modo. Use DOCKED_MONITOR ou DOCKED_TV."
+        }
+        if ($validModes -notcontains $mode) {
+            throw "$GridName linha $index com modo invalido: $mode. Use DOCKED_MONITOR ou DOCKED_TV."
+        }
+        $row['mode'] = $mode
+    }
+}
+
+function Get-UiObjectValue {
+    param(
+        [AllowNull()]$Object,
+        [Parameter(Mandatory=$true)][string]$Name,
+        $Default = $null
+    )
+
+    if ($null -eq $Object) { return $Default }
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) { return $Object[$Name] }
+        return $Default
+    }
+    if ($Object.PSObject.Properties[$Name]) { return $Object.$Name }
+    return $Default
+}
+
+function Get-UiObjectArray {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return @() }
+    if ($Value -is [System.Collections.IDictionary]) {
+        if (@($Value.Keys).Count -eq 0) { return @() }
+        return @($Value)
+    }
+    if ($Value -is [pscustomobject]) {
+        if (@($Value.PSObject.Properties).Count -eq 0) { return @() }
+        return @($Value)
+    }
+    if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string])) {
+        return @($Value)
+    }
+    return @($Value)
+}
+
+function Normalize-UiDisplayValue {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return '' }
+    $text = ([string]$Value) -replace "`0", ''
+    $text = [regex]::Replace($text.Trim(), '\s+', ' ')
+    return $text.ToLowerInvariant()
+}
+
+function Test-UiDisplayMatch {
+    param(
+        [AllowNull()]$Display,
+        [AllowNull()]$Matcher,
+        [switch]$RequireSerial
+    )
+
+    if ($null -eq $Display -or $null -eq $Matcher) { return $false }
+    $displayManufacturer = Normalize-UiDisplayValue (Get-UiObjectValue -Object $Display -Name 'manufacturer')
+    $displayProduct = Normalize-UiDisplayValue (Get-UiObjectValue -Object $Display -Name 'product')
+    $matcherManufacturer = Normalize-UiDisplayValue (Get-UiObjectValue -Object $Matcher -Name 'manufacturer')
+    $matcherProduct = Normalize-UiDisplayValue (Get-UiObjectValue -Object $Matcher -Name 'product')
+    if ($displayManufacturer -ne $matcherManufacturer -or $displayProduct -ne $matcherProduct) { return $false }
+
+    if ($RequireSerial) {
+        $matcherSerial = Normalize-UiDisplayValue (Get-UiObjectValue -Object $Matcher -Name 'serial')
+        if (-not [string]::IsNullOrWhiteSpace($matcherSerial)) {
+            $displaySerial = Normalize-UiDisplayValue (Get-UiObjectValue -Object $Display -Name 'serial')
+            if ($displaySerial -ne $matcherSerial) { return $false }
+        }
+    }
+
+    return $true
+}
+
+function Get-UiSteamDeckLiveDetectionData {
+    param([Parameter(Mandatory=$true)]$Settings)
+
+    $automationRoot = Get-BootstrapSteamDeckAutomationRoot
+    $detectScript = Join-Path $automationRoot 'Detect-Mode.ps1'
+    if (-not (Test-Path $detectScript)) {
+        return (ConvertTo-BootstrapHashtable -InputObject (Get-BootstrapSteamDeckCurrentDetectionData).Data)
+    }
+
+    $tempPath = Join-Path $env:TEMP ("steamdeck-ui-detect-settings_{0}.json" -f ([guid]::NewGuid().ToString('N')))
+    try {
+        $jsonSettings = $Settings | ConvertTo-Json -Depth 12
+        [System.IO.File]::WriteAllText($tempPath, $jsonSettings, [System.Text.UTF8Encoding]::new($false))
+        $json = & $detectScript -SettingsPath $tempPath 2>$null
+        $text = (@($json) -join [Environment]::NewLine).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($text)) {
+            return (ConvertTo-BootstrapHashtable -InputObject ($text | ConvertFrom-Json -ErrorAction Stop))
+        }
+    } catch {
+        try { Write-UiLog -Level 'WARN' -Message "Steam Deck live detection failed: $($_.Exception.Message)" } catch { }
+    } finally {
+        if (Test-Path $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+    }
+
+    return (ConvertTo-BootstrapHashtable -InputObject (Get-BootstrapSteamDeckCurrentDetectionData).Data)
+}
+
+function Get-UiSteamDeckDisplayStatus {
+    param(
+        [AllowNull()]$Detection,
+        [Parameter(Mandatory=$true)]$Matcher,
+        [switch]$Internal,
+        [switch]$Family
+    )
+
+    if (-not ($Detection -is [hashtable])) { return 'status desconhecido' }
+
+    if ($Internal) {
+        $internal = Get-UiObjectValue -Object $Detection -Name 'internalDisplay'
+        if ($internal) {
+            $suffix = if (ConvertTo-UiBoolean (Get-UiObjectValue -Object $internal -Name 'isPrimary')) { ' / principal no Windows' } else { '' }
+            return "ativo$suffix"
+        }
+        $externalCount = [int](Get-UiObjectValue -Object $Detection -Name 'externalDisplayCount' -Default 0)
+        if ($externalCount -gt 0) { return 'desativado: so desktop externo' }
+        return 'nao detectado'
+    }
+
+    $selected = Get-UiObjectValue -Object $Detection -Name 'selectedDisplay'
+    if (Test-UiDisplayMatch -Display $selected -Matcher $Matcher -RequireSerial:(-not $Family)) {
+        $suffix = if (ConvertTo-UiBoolean (Get-UiObjectValue -Object $selected -Name 'isPrimary')) { ' / principal no Windows' } else { '' }
+        return "ativo$suffix"
+    }
+
+    foreach ($display in @(Get-UiObjectArray -Value (Get-UiObjectValue -Object $Detection -Name 'externalDisplays'))) {
+        if (Test-UiDisplayMatch -Display $display -Matcher $Matcher -RequireSerial:(-not $Family)) {
+            return 'ativo'
+        }
+    }
+
+    return 'cadastrado'
+}
+
+function Get-UiSteamDeckProfileRows {
+    param(
+        [Parameter(Mandatory=$true)][hashtable]$Settings,
+        [AllowNull()]$Detection
+    )
+
+    $internal = ConvertTo-BootstrapHashtable -InputObject (Get-UiObjectValue -Object $Settings -Name 'internalDisplay' -Default @{})
+    if (-not ($internal -is [hashtable])) { $internal = @{} }
+
+    $rows = @()
+    $rows += @([ordered]@{
+        primary = ConvertTo-UiBoolean -Value (Get-UiObjectValue -Object $internal -Name 'primary' -Default $false)
+        target = 'internal'
+        status = Get-UiSteamDeckDisplayStatus -Detection $Detection -Matcher $internal -Internal
+        manufacturer = [string](Get-UiObjectValue -Object $internal -Name 'manufacturer' -Default 'VLV')
+        product = [string](Get-UiObjectValue -Object $internal -Name 'product' -Default 'ANX7530 U')
+        serial = [string](Get-UiObjectValue -Object $internal -Name 'serial' -Default '')
+        mode = 'HANDHELD'
+        layout = [string](Get-UiObjectValue -Object $internal -Name 'layout' -Default 'internal-panel')
+        resolutionPolicy = [string](Get-UiObjectValue -Object $internal -Name 'resolutionPolicy' -Default '1280x800')
+    })
+
+    foreach ($profile in @(Get-UiObjectArray -Value (Get-UiObjectValue -Object $Settings -Name 'monitorProfiles'))) {
+        $profileMap = ConvertTo-BootstrapHashtable -InputObject $profile
+        $rows += @([ordered]@{
+            primary = ConvertTo-UiBoolean -Value (Get-UiObjectValue -Object $profileMap -Name 'primary' -Default $false)
+            target = 'profile'
+            status = Get-UiSteamDeckDisplayStatus -Detection $Detection -Matcher $profileMap
+            manufacturer = [string](Get-UiObjectValue -Object $profileMap -Name 'manufacturer')
+            product = [string](Get-UiObjectValue -Object $profileMap -Name 'product')
+            serial = [string](Get-UiObjectValue -Object $profileMap -Name 'serial')
+            mode = [string](Get-UiObjectValue -Object $profileMap -Name 'mode' -Default 'DOCKED_MONITOR')
+            layout = [string](Get-UiObjectValue -Object $profileMap -Name 'layout')
+            resolutionPolicy = [string](Get-UiObjectValue -Object $profileMap -Name 'resolutionPolicy')
+        })
+    }
+
+    return @($rows)
+}
+
+function Get-UiSteamDeckFamilyRows {
+    param(
+        [Parameter(Mandatory=$true)][hashtable]$Settings,
+        [AllowNull()]$Detection
+    )
+
+    $rows = @()
+    foreach ($family in @(Get-UiObjectArray -Value (Get-UiObjectValue -Object $Settings -Name 'monitorFamilies'))) {
+        $familyMap = ConvertTo-BootstrapHashtable -InputObject $family
+        $rows += @([ordered]@{
+            primary = ConvertTo-UiBoolean -Value (Get-UiObjectValue -Object $familyMap -Name 'primary' -Default $false)
+            status = Get-UiSteamDeckDisplayStatus -Detection $Detection -Matcher $familyMap -Family
+            manufacturer = [string](Get-UiObjectValue -Object $familyMap -Name 'manufacturer')
+            product = [string](Get-UiObjectValue -Object $familyMap -Name 'product')
+            namePattern = [string](Get-UiObjectValue -Object $familyMap -Name 'namePattern')
+            mode = [string](Get-UiObjectValue -Object $familyMap -Name 'mode' -Default 'DOCKED_MONITOR')
+            layout = [string](Get-UiObjectValue -Object $familyMap -Name 'layout')
+            resolutionPolicy = [string](Get-UiObjectValue -Object $familyMap -Name 'resolutionPolicy')
+        })
+    }
+
+    return @($rows)
+}
+
+function Remove-UiGridRuntimeColumns {
+    param(
+        [Parameter(Mandatory=$true)]$Rows,
+        [string[]]$RuntimeColumns = @('target', 'status')
+    )
+
+    $result = @()
+    foreach ($row in @($Rows)) {
+        $map = [ordered]@{}
+        foreach ($key in @($row.Keys)) {
+            if ($RuntimeColumns -contains [string]$key) { continue }
+            $map[$key] = $row[$key]
+        }
+        $result += @($map)
+    }
+    return @($result)
+}
+
+#
 # Helpers (same logic, updated control references)
-# 
+#
 
 function Open-ExistingPath {
     param([string]$Path)
@@ -1535,6 +2396,10 @@ function Apply-QuickPreset {
     $ui.State.selectedComponents = @()
     $ui.State.excludedComponents = @()
     $ui.State.hostHealth         = if ($PresetName -eq 'legacy') { 'off' } else { 'conservador' }
+    $ui.State.appTuningMode      = if ($PresetName -eq 'legacy') { 'off' } else { 'recommended' }
+    $ui.State.selectedAppTuningCategories = @()
+    $ui.State.selectedAppTuningItems = @()
+    $ui.State.excludedAppTuningItems = @()
     $ui.State.steamDeckVersion   = 'Auto'
 }
 
@@ -1559,9 +2424,43 @@ function Refresh-LocalizedText {
     $ui.SelectionTitleLabel.Text       = $ui.Strings.SelectionTitle
     $ui.ProfilesLabel.Text             = $ui.Strings.Profiles.ToUpper()
     $ui.ComponentsLabel.Text           = $ui.Strings.Components.ToUpper()
+    $ui.QuickOptionsLabel.Text         = $ui.Strings.QuickOptions.ToUpper()
+    $ui.OptClaudePluginsCheckBox.Content = $ui.Strings.OptClaudePlugins
+    $ui.OptClaudeProjectMcpsCheckBox.Content = $ui.Strings.OptClaudeProjectMcps
+    $ui.OptOpenWebUICheckBox.Content   = $ui.Strings.OptOpenWebUI
     $ui.ExcludeLabel.Text              = $ui.Strings.Excludes.ToUpper()
     $ui.DetailsLabel.Text              = $ui.Strings.SelectionDetails.ToUpper()
     $ui.HostTitleLabel.Text            = $ui.Strings.HostSetupTitle
+    $ui.AppTuningTitleLabel.Text       = $ui.Strings.AppTuningTitle
+    $ui.AppTuningSubtitleLabel.Text    = $ui.Strings.AppTuningSubtitle
+    $ui.AppTuningModeLabel.Text        = $ui.Strings.AppTuningMode
+    $ui.AppTuningCategoriesLabel.Text  = $ui.Strings.AppTuningCategories.ToUpper()
+    $ui.AppTuningItemsLabel.Text       = $ui.Strings.AppTuningItems.ToUpper()
+    $ui.AppTuningRecommendedButton.Content = $ui.Strings.AppTuningRecommended
+    $ui.AppTuningMarkCategoryButton.Content = $ui.Strings.AppTuningMarkCategory
+    $ui.AppTuningClearCategoryButton.Content = $ui.Strings.AppTuningClearCategory
+    $ui.AppTuningAuditButton.Content   = $ui.Strings.AppTuningAudit
+    $ui.AppTuningInstallButton.Content = $ui.Strings.AppTuningInstall
+    $ui.AppTuningConfigureButton.Content = $ui.Strings.AppTuningConfigure
+    $ui.AppTuningUpdateButton.Content  = $ui.Strings.AppTuningUpdate
+    $ui.AppTuningHintLabel.Text        = $ui.Strings.AppTuningStatus
+    $ui.ApiCenterTitleLabel.Text       = $ui.Strings.ApiCenterTitle
+    $ui.ApiProviderSummaryLabel.Text   = $ui.Strings.ApiProviderSummary.ToUpper()
+    $ui.ApiCredentialsLabel.Text       = $ui.Strings.ApiCredentials.ToUpper()
+    $ui.ApiUsageLabel.Text             = $ui.Strings.ApiUsage.ToUpper()
+    $ui.ApiCreateLabel.Text            = $ui.Strings.ApiCreate.ToUpper()
+    $ui.ApiRefreshButton.Content       = $ui.Strings.ApiRefresh
+    $ui.ApiValidateAllButton.Content   = $ui.Strings.ApiValidateAll
+    $ui.ApiImportButton.Content        = $ui.Strings.ApiImport
+    $ui.ApiCatalogButton.Content       = $ui.Strings.ApiCatalog
+    $ui.ApiApplyButton.Content         = $ui.Strings.ApiApply
+    $ui.ApiSaveButton.Content          = $ui.Strings.ApiSave
+    $ui.ApiValidateButton.Content      = $ui.Strings.ApiValidate
+    $ui.ApiActivateButton.Content      = $ui.Strings.ApiActivate
+    $ui.ApiCatalogTitleLabel.Text      = $ui.Strings.ApiCatalogTitle
+    $ui.ApiCatalogSubtitleLabel.Text   = $ui.Strings.ApiCatalogSubtitle
+    $ui.ApiCatalogBackButton.Content   = $ui.Strings.ApiCatalogBack
+    $ui.ApiFullCatalogLabel.Text       = $ui.Strings.ApiCatalogTitle.ToUpper()
     $ui.HostHealthLabel.Text           = $ui.Strings.HostHealth
     $ui.SteamDeckVersionLabel.Text     = $ui.Strings.SteamDeckVersion
     $ui.WorkspaceRootLabel.Text        = $ui.Strings.WorkspaceRoot
@@ -1576,15 +2475,20 @@ function Refresh-LocalizedText {
     $ui.GenericModeLabel.Text          = $ui.Strings.GenericMode
     $ui.GenericLayoutLabel.Text        = $ui.Strings.GenericLayout
     $ui.GenericResolutionLabel.Text    = $ui.Strings.GenericResolution
+    $ui.DisplayModeLabel.Text          = $ui.Strings.DisplayMode
     $ui.SessionGroupLabel.Text         = $ui.Strings.SessionProfiles.ToUpper()
     $ui.HandheldSessionLabel.Text      = $ui.Strings.SessionHandheld
     $ui.DockTvSessionLabel.Text        = $ui.Strings.SessionDockedTv
     $ui.DockMonitorSessionLabel.Text   = $ui.Strings.SessionDockedMonitor
+    $ui.PendingExternalLabel.Text      = $ui.Strings.PendingExternal.ToUpper()
+    $ui.ClassifyMonitorButton.Content  = " $($ui.Strings.ClassifyMonitor)"
+    $ui.ClassifyTvButton.Content       = " $($ui.Strings.ClassifyTv)"
     $ui.UnknownMonitorHintLabel.Text   = $ui.Strings.UnknownMonitorHint
     $ui.SaveSettingsButton.Content     = " $($ui.Strings.SaveSettings)"
     $ui.ReloadSettingsButton.Content   = " $($ui.Strings.ReloadSettings)"
     $ui.ReviewTitleLabel.Text          = $ui.Strings.ReviewTitle
     $ui.ReviewSummaryLabel.Text        = "$($ui.Strings.ReviewSummary)"
+    $ui.ReviewSideEffectsLabel.Text    = $ui.Strings.ReviewSideEffects
     $ui.RefreshReviewButton.Content    = " $($ui.Strings.RefreshReview)"
     $ui.RunTitleLabel.Text             = $ui.Strings.RunTitle
     $ui.StartRunButton.Content         = $ui.Strings.StartRun
@@ -1600,14 +2504,32 @@ function Refresh-LocalizedText {
     $ui.NavWelcomeText.Text    = $ui.Strings.Welcome
     $ui.NavSelectionText.Text  = $ui.Strings.Selection
     $ui.NavHostSetupText.Text  = $ui.Strings.HostSetup
+    $ui.NavAppTuningText.Text  = $ui.Strings.AppTuning
+    $ui.NavApiCenterText.Text  = $ui.Strings.ApiCenter
     $ui.NavSteamDeckText.Text  = $ui.Strings.SteamDeckControl
     $ui.NavDualBootText.Text   = $ui.Strings.DualBoot
     $ui.NavReviewText.Text     = $ui.Strings.Review
     $ui.NavRunText.Text        = $ui.Strings.Run
 }
 
+function Get-UiResolvedComponentNameSet {
+    $lookup = @{}
+    try {
+        $selection = New-BootstrapSelectionObject -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents @() -SelectedHostHealth $ui.State.hostHealth
+        $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents @()
+        foreach ($componentName in @($resolution.ResolvedComponents)) {
+            if ([string]::IsNullOrWhiteSpace([string]$componentName)) { continue }
+            if (@($ui.State.excludedComponents) -contains [string]$componentName) { continue }
+            $lookup[[string]$componentName] = $true
+        }
+    } catch {
+    }
+    return $lookup
+}
+
 function Refresh-SelectionTrees {
     $filter = ($ui.FilterTextBox.Text).Trim().ToLowerInvariant()
+    $resolvedComponentLookup = Get-UiResolvedComponentNameSet
     $ui.SuppressSelectionEvents = $true
     try {
         $ui.ProfilesTree.Items.Clear()
@@ -1617,12 +2539,12 @@ function Refresh-SelectionTrees {
             $item = New-Object System.Windows.Controls.TreeViewItem
             $item.Header   = $profile.name
             $item.Tag      = @{ kind = 'profile'; item = $profile }
-            $item.Foreground = [System.Windows.Media.Brushes]::LightSlateGray
+            $item.Foreground = Get-UiBrush '#CBD5E1'
             # CheckBox inside item header
             $cb = New-Object System.Windows.Controls.CheckBox
             $cb.Content    = $profile.name
             $cb.IsChecked  = (@($ui.State.selectedProfiles) -contains $profile.name)
-            $cb.Foreground = [System.Windows.Media.Brushes]::LightSlateGray
+            $cb.Foreground = Get-UiBrush '#CBD5E1'
             $cb.Tag        = @{ kind = 'profile'; item = $profile; name = $profile.name }
             $item.Header   = $cb
             $cb.Add_Checked({
@@ -1631,6 +2553,7 @@ function Refresh-SelectionTrees {
                 if (-not (@($ui.State.selectedProfiles) -contains $name)) {
                     $ui.State.selectedProfiles = @(@($ui.State.selectedProfiles) + $name)
                     Save-UiState -State $ui.State -Path $UiStatePath
+                    Refresh-SelectionTrees
                     Refresh-SelectionSummary
                 }
             })
@@ -1639,6 +2562,7 @@ function Refresh-SelectionTrees {
                 $name = [string]$this.Tag.name
                 $ui.State.selectedProfiles = @(@($ui.State.selectedProfiles) | Where-Object { $_ -ne $name })
                 Save-UiState -State $ui.State -Path $UiStatePath
+                Refresh-SelectionTrees
                 Refresh-SelectionSummary
             })
             $item.Add_Selected({
@@ -1656,25 +2580,44 @@ function Refresh-SelectionTrees {
             $item = New-Object System.Windows.Controls.TreeViewItem
             $item.Tag = @{ kind = 'component'; item = $component }
             $cb = New-Object System.Windows.Controls.CheckBox
-            $cb.Content   = $component.name
-            $cb.IsChecked = (@($ui.State.selectedComponents) -contains $component.name)
-            $cb.Foreground = [System.Windows.Media.Brushes]::LightSlateGray
-            $cb.Tag = @{ kind = 'component'; item = $component; name = $component.name }
+            $componentName = [string]$component.name
+            $isExplicitComponent = (@($ui.State.selectedComponents) -contains $componentName)
+            $isResolvedComponent = $resolvedComponentLookup.ContainsKey($componentName)
+            $isExcludedComponent = (@($ui.State.excludedComponents) -contains $componentName)
+            $cb.Content   = $componentName
+            $cb.IsChecked = (($isExplicitComponent -or $isResolvedComponent) -and -not $isExcludedComponent)
+            $cb.Foreground = Get-UiBrush '#CBD5E1'
+            $cb.Tag = @{ kind = 'component'; item = $component; name = $componentName; explicit = $isExplicitComponent; resolved = $isResolvedComponent; excluded = $isExcludedComponent }
+            if ($isResolvedComponent -and -not $isExplicitComponent) {
+                $cb.Opacity = 0.82
+                $cb.ToolTip = 'Incluido pelo perfil selecionado. Desmarcar item vindo de perfil adiciona em Nao instalar.'
+            }
             $item.Header = $cb
             $cb.Add_Checked({
                 if ($ui.SuppressSelectionEvents) { return }
                 $name = [string]$this.Tag.name
-                if (-not (@($ui.State.selectedComponents) -contains $name)) {
-                    $ui.State.selectedComponents = @(@($ui.State.selectedComponents) + $name)
-                    Save-UiState -State $ui.State -Path $UiStatePath
-                    Refresh-SelectionSummary
+                if (@($ui.State.excludedComponents) -contains $name) {
+                    $ui.State.excludedComponents = @(@($ui.State.excludedComponents) | Where-Object { $_ -ne $name })
                 }
+                if (-not [bool]$this.Tag.resolved -and -not (@($ui.State.selectedComponents) -contains $name)) {
+                    $ui.State.selectedComponents = @(@($ui.State.selectedComponents) + $name)
+                }
+                Save-UiState -State $ui.State -Path $UiStatePath
+                Refresh-SelectionTrees
+                Refresh-SelectionSummary
             })
             $cb.Add_Unchecked({
                 if ($ui.SuppressSelectionEvents) { return }
                 $name = [string]$this.Tag.name
-                $ui.State.selectedComponents = @(@($ui.State.selectedComponents) | Where-Object { $_ -ne $name })
+                if ([bool]$this.Tag.resolved -and -not (@($ui.State.excludedComponents) -contains $name)) {
+                    # Desmarcar item vindo de perfil adiciona em Nao instalar.
+                    $ui.State.excludedComponents = @(@($ui.State.excludedComponents) + $name)
+                }
+                if ([bool]$this.Tag.explicit) {
+                    $ui.State.selectedComponents = @(@($ui.State.selectedComponents) | Where-Object { $_ -ne $name })
+                }
                 Save-UiState -State $ui.State -Path $UiStatePath
+                Refresh-SelectionTrees
                 Refresh-SelectionSummary
             })
             $item.Add_Selected({
@@ -1684,6 +2627,10 @@ function Refresh-SelectionTrees {
             })
             [void]$ui.ComponentsTree.Items.Add($item)
         }
+
+        $ui.OptClaudePluginsCheckBox.IsChecked = $resolvedComponentLookup.ContainsKey('claude-plugins')
+        $ui.OptOpenWebUICheckBox.IsChecked     = $resolvedComponentLookup.ContainsKey('openwebui')
+        $ui.OptClaudeProjectMcpsCheckBox.IsChecked = [bool]$ui.State.enableClaudeCodeProjectMcps
     } finally {
         $ui.SuppressSelectionEvents = $false
     }
@@ -1699,17 +2646,21 @@ function Refresh-ExcludeList {
             $cb.Content   = $componentName
             $cb.IsChecked = (@($ui.State.excludedComponents) -contains $componentName)
             $cb.Style     = $null
-            $cb.Foreground = [System.Windows.Media.Brushes]::LightSlateGray
+            $cb.Foreground = Get-UiBrush '#CBD5E1'
             $tname = $componentName
             $cb.Add_Checked({
                 if (-not (@($ui.State.excludedComponents) -contains $tname)) {
                     $ui.State.excludedComponents = @(@($ui.State.excludedComponents) + $tname)
                     Save-UiState -State $ui.State -Path $UiStatePath
+                    Refresh-SelectionTrees
+                    Refresh-SelectionSummary
                 }
             })
             $cb.Add_Unchecked({
                 $ui.State.excludedComponents = @(@($ui.State.excludedComponents) | Where-Object { $_ -ne $tname })
                 Save-UiState -State $ui.State -Path $UiStatePath
+                Refresh-SelectionTrees
+                Refresh-SelectionSummary
             })
             $li = New-Object System.Windows.Controls.ListBoxItem
             $li.Content = $cb
@@ -1722,8 +2673,8 @@ function Refresh-ExcludeList {
 function Refresh-SelectionSummary {
     Refresh-ExcludeList
     try {
-        $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
-        $ui.SelectionSummaryLabel.Text = "Resolved: $(@($ui.Preview.Resolution.ResolvedComponents).Count) components | HostHealth: $($ui.Preview.ResolvedHostHealthMode)"
+        $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedAppTuningMode $ui.State.appTuningMode -RequestedAppTuningCategories $ui.State.selectedAppTuningCategories -RequestedAppTuningItems $ui.State.selectedAppTuningItems -ExcludedAppTuningItems $ui.State.excludedAppTuningItems -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
+        $ui.SelectionSummaryLabel.Text = "Resolved: $(@($ui.Preview.Resolution.ResolvedComponents).Count) components | HostHealth: $($ui.Preview.ResolvedHostHealthMode) | AppTuning: $($ui.Preview.ResolvedAppTuningMode)"
         $ui.SelectionErrorLabel.Text   = ''
     } catch {
         $ui.Preview = $null
@@ -1742,6 +2693,480 @@ function Refresh-HostSetupControls {
     } else { '-' }
 }
 
+function Get-UiAppTuningPreview {
+    $selection = New-BootstrapSelectionObject -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -SelectedHostHealth $ui.State.hostHealth -SelectedAppTuning $ui.State.appTuningMode -SelectedAppTuningCategories $ui.State.selectedAppTuningCategories -SelectedAppTuningItems $ui.State.selectedAppTuningItems -ExcludedAppTuningItems $ui.State.excludedAppTuningItems
+    $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents $selection.Excludes
+    return Resolve-BootstrapAppTuningSelection -Mode $selection.AppTuning -Categories $selection.AppTuningCategories -Items $selection.AppTuningItems -ExcludedItems $selection.ExcludedAppTuningItems -Selection $selection -Resolution $resolution
+}
+
+function Get-UiAppTuningCategoryCounts {
+    param([Parameter(Mandatory=$true)]$Plan)
+
+    $catalog = Get-BootstrapAppTuningCatalog
+    $selected = @{}
+    foreach ($item in @($Plan.items)) { $selected[[string]$item.id] = $true }
+    $counts = @{}
+    foreach ($category in @($catalog.categories)) {
+        $items = @($catalog.items | Where-Object { [string]$_.category -eq [string]$category.id })
+        $active = @($items | Where-Object { $selected.ContainsKey([string]$_.id) }).Count
+        $counts[[string]$category.id] = [ordered]@{ active = $active; total = $items.Count }
+    }
+    return $counts
+}
+
+function Format-UiAppTuningState {
+    param([AllowNull()][string]$State)
+
+    switch ([string]$State) {
+        'installed' { return '[x] instalado' }
+        'missing' { return '[ ] ausente' }
+        'configured' { return '[x] configurado' }
+        'planned' { return '[~] planejado' }
+        'not-configured' { return '[ ] nao' }
+        'check' { return '[?] verificar' }
+        'not-installed' { return '-' }
+        default { return [string]$State }
+    }
+}
+
+function Refresh-AppTuningControls {
+    try {
+        $ui.AppTuningModeCombo.SelectedItem = [string]$ui.State.appTuningMode
+        $plan = Get-UiAppTuningPreview
+        $catalog = Get-BootstrapAppTuningCatalog
+        $counts = Get-UiAppTuningCategoryCounts -Plan $plan
+        $activeMap = @{}
+        $itemStateMap = @{}
+        foreach ($item in @($plan.items)) {
+            $activeMap[[string]$item.id] = $true
+            $itemStateMap[[string]$item.id] = $item
+        }
+
+        $ui.SuppressAppTuningEvents = $true
+        try {
+            $ui.AppTuningCategoryList.Items.Clear()
+            foreach ($category in @($catalog.categories)) {
+                $categoryId = [string]$category.id
+                $count = $counts[$categoryId]
+                $cb = New-Object System.Windows.Controls.CheckBox
+                $cb.Content = "{0} ({1}/{2})" -f $categoryId, [int]$count.active, [int]$count.total
+                $cb.Tag = $categoryId
+                $cb.Foreground = Get-UiBrush '#CBD5E1'
+                $cb.IsChecked = (@($ui.State.selectedAppTuningCategories) -contains $categoryId)
+                $cb.ToolTip = [string]$category.description
+                $cb.Add_Checked({
+                    if ($ui.SuppressAppTuningEvents) { return }
+                    $id = [string]$this.Tag
+                    if (-not (@($ui.State.selectedAppTuningCategories) -contains $id)) {
+                        $ui.State.selectedAppTuningCategories = @(@($ui.State.selectedAppTuningCategories) + $id)
+                    }
+                    $ui.State.appTuningMode = 'custom'
+                    Save-UiState -State $ui.State -Path $UiStatePath
+                    Refresh-AppTuningControls
+                })
+                $cb.Add_Unchecked({
+                    if ($ui.SuppressAppTuningEvents) { return }
+                    $id = [string]$this.Tag
+                    $ui.State.selectedAppTuningCategories = @(@($ui.State.selectedAppTuningCategories) | Where-Object { $_ -ne $id })
+                    $ui.State.appTuningMode = 'custom'
+                    Save-UiState -State $ui.State -Path $UiStatePath
+                    Refresh-AppTuningControls
+                })
+                $li = New-Object System.Windows.Controls.ListBoxItem
+                $li.Content = $cb
+                $li.Tag = $categoryId
+                $li.Background = [System.Windows.Media.Brushes]::Transparent
+                [void]$ui.AppTuningCategoryList.Items.Add($li)
+            }
+        } finally {
+            $ui.SuppressAppTuningEvents = $false
+        }
+
+        $rows = @()
+        $filter = if ($ui.AppTuningSearchBox) { $ui.AppTuningSearchBox.Text.Trim().ToLowerInvariant() } else { '' }
+        $statusFilter = if ($ui.AppTuningStatusFilterCombo -and $ui.AppTuningStatusFilterCombo.SelectedItem) { [string]$ui.AppTuningStatusFilterCombo.SelectedItem } else { 'all' }
+        $statusRows = @(Get-BootstrapAppTuningStatusRows -Plan $plan)
+        foreach ($item in @($statusRows)) {
+            $itemId = [string]$item.id
+            $haystack = ("{0} {1} {2} {3}" -f $item.id, $item.category, $item.app, $item.displayName).ToLowerInvariant()
+            if (-not [string]::IsNullOrWhiteSpace($filter) -and -not $haystack.Contains($filter)) { continue }
+            if ($statusFilter -eq 'missing' -and [string]$item.installedState -ne 'missing') { continue }
+            if ($statusFilter -eq 'installed' -and [string]$item.installedState -ne 'installed') { continue }
+            if ($statusFilter -eq 'planned' -and [string]$item.configuredState -ne 'planned') { continue }
+            if ($statusFilter -eq 'not-configured' -and [string]$item.configuredState -ne 'not-configured') { continue }
+            if ($statusFilter -eq 'update-check' -and [string]$item.updatedState -ne 'check') { continue }
+            $rows += @([ordered]@{
+                active = $activeMap.ContainsKey($itemId)
+                id = $itemId
+                category = [string]$item.category
+                app = [string]$item.app
+                optimization = [string]$item.displayName
+                profile = (@($item.profiles) -join ', ')
+                risk = [string]$item.risk
+                installed = Format-UiAppTuningState -State ([string]$item.installedState)
+                configured = Format-UiAppTuningState -State ([string]$item.configuredState)
+                updated = Format-UiAppTuningState -State ([string]$item.updatedState)
+                admin = [string]$item.requiresAdmin
+                installComponents = (@($item.installComponents) -join ', ')
+            })
+        }
+        Load-WpfGridRows -Grid $ui.AppTuningItemsGrid -Items $rows -Columns @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin')
+        $installedCount = @($statusRows | Where-Object { [string]$_.installedState -eq 'installed' }).Count
+        $configuredCount = @($statusRows | Where-Object { [string]$_.configuredState -in @('configured','planned') }).Count
+        $ui.AppTuningStatusLabel.Text = "AppTuning: $($plan.mode) | apps: $installedCount/$(@($statusRows).Count) instalados | config: $configuredCount | selecionados: $(@($plan.items).Count)"
+    } catch {
+        $ui.AppTuningStatusLabel.Text = "AppTuning erro: $($_.Exception.Message)"
+    }
+}
+
+function Capture-AppTuningStateFromControls {
+    if ($ui.AppTuningModeCombo.SelectedItem) {
+        $ui.State.appTuningMode = [string]$ui.AppTuningModeCombo.SelectedItem
+    }
+    if ([string]$ui.State.appTuningMode -ne 'custom') {
+        Save-UiState -State $ui.State -Path $UiStatePath
+        return
+    }
+
+    $rows = @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin'))
+    if ($rows.Count -eq 0) {
+        Save-UiState -State $ui.State -Path $UiStatePath
+        return
+    }
+
+    $selectedItems = @()
+    $excludedItems = @()
+    foreach ($row in @($rows)) {
+        $id = [string]$row['id']
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+        if (ConvertTo-UiBoolean -Value $row['active']) {
+            $selectedItems += @($id)
+        } else {
+            $excludedItems += @($id)
+        }
+    }
+    $ui.State.selectedAppTuningItems = @(Normalize-BootstrapNames -Names $selectedItems)
+    $ui.State.excludedAppTuningItems = @(Normalize-BootstrapNames -Names $excludedItems)
+    Save-UiState -State $ui.State -Path $UiStatePath
+}
+
+function Get-SelectedAppTuningRows {
+    $rows = @()
+    foreach ($selected in @($ui.AppTuningItemsGrid.SelectedItems)) {
+        if ($selected -and $selected.Row) {
+            $row = [ordered]@{}
+            foreach ($column in @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin')) {
+                $row[$column] = [string]$selected.Row[$column]
+            }
+            if (-not [string]::IsNullOrWhiteSpace([string]$row['id'])) {
+                $rows += @($row)
+            }
+        }
+    }
+    if ($rows.Count -gt 0) { return @($rows) }
+    return @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin') | Where-Object { ConvertTo-UiBoolean -Value $_['active'] })
+}
+
+function Add-UiSelectedComponents {
+    param([string[]]$Components)
+
+    $componentCatalog = Get-BootstrapComponentCatalog
+    $added = @()
+    foreach ($componentName in @(Normalize-BootstrapNames -Names $Components)) {
+        if ([string]::IsNullOrWhiteSpace($componentName)) { continue }
+        if (-not $componentCatalog.ContainsKey($componentName)) { continue }
+        if (@($ui.State.excludedComponents) -contains $componentName) {
+            $ui.State.excludedComponents = @(@($ui.State.excludedComponents) | Where-Object { $_ -ne $componentName })
+        }
+        if (-not (@($ui.State.selectedComponents) -contains $componentName)) {
+            $ui.State.selectedComponents = @(@($ui.State.selectedComponents) + $componentName)
+            $added += @($componentName)
+        }
+    }
+    Save-UiState -State $ui.State -Path $UiStatePath
+    return @($added)
+}
+
+function Queue-AppTuningInstallOrUpdate {
+    param([Parameter(Mandatory=$true)][string]$ActionName)
+
+    $components = @()
+    foreach ($row in @(Get-SelectedAppTuningRows)) {
+        foreach ($component in (([string]$row['installComponents']) -split ',')) {
+            if ([string]::IsNullOrWhiteSpace($component)) { continue }
+            $components += @($component.Trim())
+        }
+    }
+    $added = @(Add-UiSelectedComponents -Components $components)
+    Refresh-SelectionSummary
+    Refresh-AppTuningControls
+    $ui.StatusLabel.Text = if ($added.Count -gt 0) {
+        "$ActionName planejado: $(@($added) -join ', ')"
+    } else {
+        "${ActionName}: nenhum componente novo para marcar."
+    }
+}
+
+function Queue-AppTuningConfigure {
+    $ids = @()
+    foreach ($row in @(Get-SelectedAppTuningRows)) {
+        $id = [string]$row['id']
+        if (-not [string]::IsNullOrWhiteSpace($id)) { $ids += @($id) }
+    }
+    if ($ids.Count -eq 0) { return }
+    $ui.State.appTuningMode = 'custom'
+    foreach ($id in @(Normalize-BootstrapNames -Names $ids)) {
+        if (-not (@($ui.State.selectedAppTuningItems) -contains $id)) {
+            $ui.State.selectedAppTuningItems = @(@($ui.State.selectedAppTuningItems) + $id)
+        }
+        if (@($ui.State.excludedAppTuningItems) -contains $id) {
+            $ui.State.excludedAppTuningItems = @(@($ui.State.excludedAppTuningItems) | Where-Object { $_ -ne $id })
+        }
+    }
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-AppTuningControls
+    $ui.StatusLabel.Text = "Config/Otimizacao planejada: $(@($ids) -join ', ')"
+}
+
+function Get-SelectedApiProviderId {
+    if ($ui.ApiProviderCombo.SelectedItem) { return [string]$ui.ApiProviderCombo.SelectedItem }
+    return ''
+}
+
+function Get-SelectedApiCredentialId {
+    if ($ui.ApiCredentialCombo.SelectedItem) {
+        $value = [string]$ui.ApiCredentialCombo.SelectedItem
+        if ($value -eq '<new>') { return '' }
+        return $value
+    }
+    return ''
+}
+
+function Get-ApiProviderInventory {
+    param([string]$ProviderId)
+    if ([string]::IsNullOrWhiteSpace($ProviderId) -or -not $ui.Contains('ApiInventory')) { return $null }
+    return ($ui.ApiInventory.providers | Where-Object { $_.id -eq $ProviderId } | Select-Object -First 1)
+}
+
+function Refresh-ApiCredentialEditor {
+    $providerId = Get-SelectedApiProviderId
+    $provider = Get-ApiProviderInventory -ProviderId $providerId
+    $credentialId = Get-SelectedApiCredentialId
+
+    $ui.ApiDisplayNameTextBox.Text = ''
+    $ui.ApiSecretBox.Password = ''
+    $ui.ApiBaseUrlTextBox.Text = ''
+    $ui.ApiOrganizationTextBox.Text = ''
+    $ui.ApiProjectRefTextBox.Text = ''
+    $ui.ApiStatusLinksLabel.Visibility = 'Collapsed'
+    $ui.ApiSignupLink.IsEnabled = $false
+    $ui.ApiDocsLink.IsEnabled = $false
+    $ui.ApiPricingLink.IsEnabled = $false
+    $ui.ApiSignupLink.NavigateUri = $null
+    $ui.ApiDocsLink.NavigateUri = $null
+    $ui.ApiPricingLink.NavigateUri = $null
+
+    if (-not $provider) { return }
+    $ui.ApiStatusLabel.Text = "Provider: $($provider.displayName)"
+    $hasLink = $false
+    $signupUrl = [string]$provider.signupUrl
+    if (-not [string]::IsNullOrWhiteSpace($signupUrl)) {
+        try { $ui.ApiSignupLink.NavigateUri = [Uri]$signupUrl; $ui.ApiSignupLink.IsEnabled = $true; $hasLink = $true } catch { }
+    }
+    $docsUrl = [string]$provider.docsUrl
+    if (-not [string]::IsNullOrWhiteSpace($docsUrl)) {
+        try { $ui.ApiDocsLink.NavigateUri = [Uri]$docsUrl; $ui.ApiDocsLink.IsEnabled = $true; $hasLink = $true } catch { }
+    }
+    $pricingUrl = [string]$provider.pricingUrl
+    if (-not [string]::IsNullOrWhiteSpace($pricingUrl)) {
+        try { $ui.ApiPricingLink.NavigateUri = [Uri]$pricingUrl; $ui.ApiPricingLink.IsEnabled = $true; $hasLink = $true } catch { }
+    }
+    if ($hasLink) { $ui.ApiStatusLinksLabel.Visibility = 'Visible' }
+
+    if ([string]::IsNullOrWhiteSpace($credentialId)) { return }
+    $credential = $provider.credentials | Where-Object { $_.id -eq $credentialId } | Select-Object -First 1
+    if ($credential) {
+        $credentialData = ConvertTo-BootstrapHashtable -InputObject $credential
+        $ui.ApiDisplayNameTextBox.Text = [string]$credentialData['displayName']
+        $ui.ApiBaseUrlTextBox.Text = [string]$credentialData['baseUrl']
+        $ui.ApiOrganizationTextBox.Text = [string]$credentialData['organizationId']
+        $ui.ApiProjectRefTextBox.Text = [string]$credentialData['projectRef']
+    }
+}
+
+function Refresh-ApiProviderCombos {
+    $selectedProvider = Get-SelectedApiProviderId
+    $selectedCredential = Get-SelectedApiCredentialId
+
+    $ui.SuppressApiEvents = $true
+    try {
+        $ui.ApiProviderCombo.Items.Clear()
+        foreach ($provider in @($ui.ApiInventory.providers | Sort-Object displayName)) {
+            [void]$ui.ApiProviderCombo.Items.Add([string]$provider.id)
+        }
+        if (-not [string]::IsNullOrWhiteSpace($selectedProvider) -and @($ui.ApiProviderCombo.Items) -contains $selectedProvider) {
+            $ui.ApiProviderCombo.SelectedItem = $selectedProvider
+        } elseif ($ui.ApiProviderCombo.Items.Count -gt 0) {
+            $ui.ApiProviderCombo.SelectedIndex = 0
+        }
+
+        $providerId = Get-SelectedApiProviderId
+        $provider = Get-ApiProviderInventory -ProviderId $providerId
+        $ui.ApiCredentialCombo.Items.Clear()
+        [void]$ui.ApiCredentialCombo.Items.Add('<new>')
+        if ($provider) {
+            foreach ($credential in @($provider.credentials)) {
+                [void]$ui.ApiCredentialCombo.Items.Add([string]$credential.id)
+            }
+            if (-not [string]::IsNullOrWhiteSpace($selectedCredential) -and @($ui.ApiCredentialCombo.Items) -contains $selectedCredential) {
+                $ui.ApiCredentialCombo.SelectedItem = $selectedCredential
+            } elseif (-not [string]::IsNullOrWhiteSpace([string]$provider.activeCredentialId) -and @($ui.ApiCredentialCombo.Items) -contains [string]$provider.activeCredentialId) {
+                $ui.ApiCredentialCombo.SelectedItem = [string]$provider.activeCredentialId
+            } else {
+                $ui.ApiCredentialCombo.SelectedIndex = 0
+            }
+        } else {
+            $ui.ApiCredentialCombo.SelectedIndex = 0
+        }
+    } finally {
+        $ui.SuppressApiEvents = $false
+    }
+    Refresh-ApiCredentialEditor
+}
+
+function Refresh-ApiCenterControls {
+    try {
+        $bundle = Get-BootstrapSecretsData
+        $ui['ApiInventory'] = Get-BootstrapApiInventory -SecretsData $bundle.Data
+
+        $providerRows = @()
+        $credentialRows = @()
+        foreach ($provider in @($ui.ApiInventory.providers)) {
+            $providerRows += @([ordered]@{
+                provider = [string]$provider.displayName
+                total = [string]$provider.totalCredentials
+                active = [string]$provider.activeCredentialId
+                state = [string]$provider.activeValidationState
+                autoApps = (@($provider.autoAppliedApps) -join ', ')
+                manualApps = (@($provider.manualOnlyApps) -join ', ')
+            })
+            foreach ($credential in @($provider.credentials)) {
+                $credentialRows += @([ordered]@{
+                    provider = [string]$provider.id
+                    id = [string]$credential.id
+                    display = [string]$credential.displayName
+                    active = [string]$credential.active
+                    state = [string]$credential.validationState
+                    preview = [string]$credential.secretPreview
+                })
+            }
+        }
+
+        $appCatalog = Get-BootstrapAppCapabilityCatalog
+        $usageRows = @()
+        foreach ($appId in @($appCatalog.Keys | Sort-Object)) {
+            $app = ConvertTo-BootstrapHashtable -InputObject $appCatalog[$appId]
+            $appName = [string]$app['displayName']
+            if ([string]::IsNullOrWhiteSpace($appName)) { continue }
+
+            $autoProviders = @()
+            $manualProviders = @()
+            $availableProviders = @()
+            foreach ($provider in @($ui.ApiInventory.providers)) {
+                $providerName = [string]$provider.displayName
+                if ([string]::IsNullOrWhiteSpace($providerName)) { $providerName = [string]$provider.id }
+                if (@($provider.autoAppliedApps) -contains $appName) {
+                    $autoProviders += @($providerName)
+                }
+                if ((@($provider.manualOnlyApps) -contains $appName) -and ([string]$provider.activeValidationState -eq 'passed')) {
+                    $manualProviders += @($providerName)
+                }
+                if (@($provider.availableApps) -contains $appName) {
+                    $availableProviders += @($providerName)
+                }
+            }
+
+            $usageRows += @([ordered]@{
+                app = $appName
+                autoApplied = (@($autoProviders | Sort-Object -Unique) -join ', ')
+                manualOnly = (@($manualProviders | Sort-Object -Unique) -join ', ')
+                available = (@($availableProviders | Sort-Object -Unique) -join ', ')
+            })
+        }
+
+        $createRows = @()
+        foreach ($provider in @($ui.ApiInventory.availableToCreate)) {
+            $createRows += @([ordered]@{
+                provider = [string]$provider.displayName
+                fields = (@($provider.requiredFields) -join ', ')
+                signup = [string]$provider.signupUrl
+                docs = [string]$provider.docsUrl
+            })
+        }
+
+        Load-WpfGridRows -Grid $ui.ApiProviderSummaryGrid -Items $providerRows -Columns @('provider','total','active','state','autoApps','manualApps')
+        Load-WpfGridRows -Grid $ui.ApiCredentialGrid -Items $credentialRows -Columns @('provider','id','display','active','state','preview')
+        Load-WpfGridRows -Grid $ui.ApiUsageGrid -Items $usageRows -Columns @('app','autoApplied','manualOnly','available')
+        Load-WpfGridRows -Grid $ui.ApiCreateGrid -Items $createRows -Columns @('provider','fields','signup','docs')
+        Refresh-ApiProviderCombos
+
+        $summary = $ui.ApiInventory.summary
+        $secretsPath = Get-BootstrapSecretsPath
+        if ([int]$summary.totalCredentials -eq 0) {
+            $ui.ApiStatusLabel.Text = "Nenhuma chave cadastrada ainda. Use Importar arquivo bruto ou Salvar chave. Arquivo: $secretsPath"
+        } else {
+            $ui.ApiStatusLabel.Text = "Provedores com chaves: $($summary.configuredProviders)/$($summary.providers) | Chaves cadastradas: $($summary.totalCredentials) | Em uso e validadas: $($summary.validatedActiveProviders) | Arquivo: $secretsPath"
+        }
+        $ui.ApiStatusLinksLabel.Visibility = 'Collapsed'
+        $ui.ApiSignupLink.IsEnabled = $false
+        $ui.ApiDocsLink.IsEnabled = $false
+        $ui.ApiPricingLink.IsEnabled = $false
+        $ui.ApiSignupLink.NavigateUri = $null
+        $ui.ApiDocsLink.NavigateUri = $null
+        $ui.ApiPricingLink.NavigateUri = $null
+        $ui.ApiSecretsLinksLabel.Visibility = 'Collapsed'
+        $ui.ApiSecretsFileLink.IsEnabled = $false
+        $ui.ApiSecretsFolderLink.IsEnabled = $false
+        $ui.ApiSecretsFileLink.NavigateUri = $null
+        $ui.ApiSecretsFolderLink.NavigateUri = $null
+        $anySecretsLink = $false
+        if (-not [string]::IsNullOrWhiteSpace($secretsPath) -and (Test-Path $secretsPath)) {
+            try {
+                $ui.ApiSecretsFileLink.NavigateUri = [Uri]("file:///" + ($secretsPath -replace '\\','/'))
+                $ui.ApiSecretsFileLink.IsEnabled = $true
+                $anySecretsLink = $true
+            } catch { }
+        }
+        $secretsDir = if (-not [string]::IsNullOrWhiteSpace($secretsPath)) { Split-Path -Path $secretsPath -Parent } else { '' }
+        if (-not [string]::IsNullOrWhiteSpace($secretsDir) -and (Test-Path $secretsDir)) {
+            try {
+                $ui.ApiSecretsFolderLink.NavigateUri = [Uri]("file:///" + ($secretsDir -replace '\\','/'))
+                $ui.ApiSecretsFolderLink.IsEnabled = $true
+                $anySecretsLink = $true
+            } catch { }
+        }
+        if ($anySecretsLink) { $ui.ApiSecretsLinksLabel.Visibility = 'Visible' }
+    } catch {
+        $ui.ApiStatusLabel.Text = "API Center erro: $($_.Exception.Message)"
+    }
+}
+
+function Refresh-ApiCatalogControls {
+    try {
+        $bundle = Get-BootstrapSecretsData
+        $rows = @(Get-BootstrapApiCatalogRows -SecretsData $bundle.Data)
+        Load-WpfGridRows -Grid $ui.ApiFullCatalogGrid -Items $rows -Columns @('hasCredential','quantity','configured','provider','description','fields','signup','docs')
+        $owned = @($rows | Where-Object { [string]$_['hasCredential'] -eq '[x]' }).Count
+        $configured = 0
+        foreach ($row in @($rows)) {
+            $configured += [int]$row['configured']
+        }
+        $ui.ApiCatalogStatusLabel.Text = "Catalogo: $(@($rows).Count) provedores | Ja possui: $owned | Configuradas: $configured"
+    } catch {
+        $ui.ApiCatalogStatusLabel.Text = "Catalogo erro: $($_.Exception.Message)"
+    }
+}
+
 function Refresh-SteamDeckStatus {
     $automationRoot = Get-BootstrapSteamDeckAutomationRoot
     $taskStatus = 'not found'
@@ -1754,28 +3179,79 @@ function Refresh-SteamDeckStatus {
     $ui.WatcherStatusLabel.Text = "Task: $taskStatus  |  ModeWatcher: $watcherExists  |  Hotkeys: $hotkeyExists  |  Settings: $($ui.SettingsBundle.Path)"
 }
 
+function Refresh-PendingExternalClassification {
+    try {
+        $pending = Get-BootstrapSteamDeckPendingExternalDisplay
+        if (-not $pending.Pending -or -not $pending.Display) {
+            $ui.PendingExternalStatusLabel.Text = 'Nenhum monitor externo desconhecido pendente. Monitores conhecidos seguem suas familias/perfis.'
+            $ui.ClassifyMonitorButton.IsEnabled = $false
+            $ui.ClassifyTvButton.IsEnabled = $false
+            return
+        }
+
+        $display = ConvertTo-BootstrapHashtable -InputObject $pending.Display
+        $ui.PendingExternalStatusLabel.Text = "Pendente: $($display.manufacturer) / $($display.product) / serial $($display.serial). Escolha Monitor/Dev para bancada ou TV/Game para console."
+        $ui.ClassifyMonitorButton.IsEnabled = $true
+        $ui.ClassifyTvButton.IsEnabled = $true
+    } catch {
+        $ui.PendingExternalStatusLabel.Text = "Falha ao ler deteccao atual: $($_.Exception.Message)"
+        $ui.ClassifyMonitorButton.IsEnabled = $false
+        $ui.ClassifyTvButton.IsEnabled = $false
+    }
+}
+
 function Refresh-SteamDeckControls {
     $ui.SettingsBundle = Get-BootstrapSteamDeckSettingsData -RequestedSteamDeckVersion ([string]$ui.State.steamDeckVersion) -ResolvedSteamDeckVersion 'lcd'
     $settings = ConvertTo-BootstrapHashtable -InputObject $ui.SettingsBundle.Data
-    Load-WpfGridRows -Grid $ui.MonitorProfilesGrid -Items @($settings.monitorProfiles) -Columns @('manufacturer','product','serial','mode','layout','resolutionPolicy')
-    Load-WpfGridRows -Grid $ui.MonitorFamiliesGrid -Items @($settings.monitorFamilies)  -Columns @('manufacturer','product','namePattern','mode','layout','resolutionPolicy')
+    $detection = Get-UiSteamDeckLiveDetectionData -Settings $settings
+    Load-WpfGridRows -Grid $ui.MonitorProfilesGrid -Items @(Get-UiSteamDeckProfileRows -Settings $settings -Detection $detection) -Columns @('primary','target','status','manufacturer','product','serial','mode','layout','resolutionPolicy')
+    Load-WpfGridRows -Grid $ui.MonitorFamiliesGrid -Items @(Get-UiSteamDeckFamilyRows -Settings $settings -Detection $detection)  -Columns @('primary','status','manufacturer','product','namePattern','mode','layout','resolutionPolicy')
     $ui.GenericModeCombo.SelectedItem      = [string]$settings.genericExternal.mode
     $ui.GenericLayoutTextBox.Text          = [string]$settings.genericExternal.layout
     $ui.GenericResolutionTextBox.Text      = [string]$settings.genericExternal.resolutionPolicy
+    $ui.DisplayModeCombo.SelectedItem      = if ($settings.ContainsKey('displayMode')) { [string]$settings.displayMode } else { 'extend' }
     $ui.HandheldSessionTextBox.Text        = [string]$settings.sessionProfiles.HANDHELD
     $ui.DockTvSessionTextBox.Text          = [string]$settings.sessionProfiles.DOCKED_TV
     $ui.DockMonitorSessionTextBox.Text     = [string]$settings.sessionProfiles.DOCKED_MONITOR
     Refresh-SteamDeckStatus
+    Refresh-PendingExternalClassification
 }
 
 function Capture-SteamDeckSettingsFromControls {
     $settings = ConvertTo-BootstrapHashtable -InputObject $ui.SettingsBundle.Data
-    $settings['monitorProfiles']  = @(Read-WpfGridRows -Grid $ui.MonitorProfilesGrid -Columns @('manufacturer','product','serial','mode','layout','resolutionPolicy'))
-    $settings['monitorFamilies']  = @(Read-WpfGridRows -Grid $ui.MonitorFamiliesGrid  -Columns @('manufacturer','product','namePattern','mode','layout','resolutionPolicy'))
+    $profileRows = @(Read-WpfGridRows -Grid $ui.MonitorProfilesGrid -Columns @('primary','target','status','manufacturer','product','serial','mode','layout','resolutionPolicy'))
+    $internalRows = @($profileRows | Where-Object { ([string]$_['target']).Trim().ToLowerInvariant() -eq 'internal' })
+    $externalProfileRows = @($profileRows | Where-Object { ([string]$_['target']).Trim().ToLowerInvariant() -ne 'internal' })
+    $monitorProfiles = @(Remove-UiGridRuntimeColumns -Rows $externalProfileRows)
+    $monitorFamilies = @(Remove-UiGridRuntimeColumns -Rows @(Read-WpfGridRows -Grid $ui.MonitorFamiliesGrid  -Columns @('primary','status','manufacturer','product','namePattern','mode','layout','resolutionPolicy')) -RuntimeColumns @('status'))
+    Validate-SteamDeckGridModeRows -Rows $monitorProfiles -GridName 'MonitorProfiles'
+    Validate-SteamDeckGridModeRows -Rows $monitorFamilies -GridName 'MonitorFamilies'
+
+    $internalRow = if ($internalRows.Count -gt 0) { $internalRows[0] } else { $null }
+    if ($internalRow) {
+        $settings['internalDisplay'] = @{
+            manufacturer = ([string]$internalRow['manufacturer']).Trim()
+            product = ([string]$internalRow['product']).Trim()
+            serial = ([string]$internalRow['serial']).Trim()
+            primary = ConvertTo-UiBoolean -Value $internalRow['primary']
+            layout = ([string]$internalRow['layout']).Trim()
+            resolutionPolicy = ([string]$internalRow['resolutionPolicy']).Trim()
+        }
+    }
+
+    $settings['monitorProfiles']  = @($monitorProfiles)
+    $settings['monitorFamilies']  = @($monitorFamilies)
+    $displayMode = if ($ui.DisplayModeCombo.SelectedItem) { [string]$ui.DisplayModeCombo.SelectedItem } else { 'extend' }
+    if ((ConvertTo-UiBoolean -Value (Get-UiObjectValue -Object $settings['internalDisplay'] -Name 'primary' -Default $false)) -and $displayMode -eq 'external') {
+        $displayMode = 'extend'
+        $ui.DisplayModeCombo.SelectedItem = 'extend'
+    }
+    $settings['displayMode'] = $displayMode
     $settings['genericExternal']  = @{
-        mode             = if ($ui.GenericModeCombo.SelectedItem) { [string]$ui.GenericModeCombo.SelectedItem } else { 'DOCKED_TV' }
+        mode             = if ($ui.GenericModeCombo.SelectedItem) { [string]$ui.GenericModeCombo.SelectedItem } else { 'UNCLASSIFIED_EXTERNAL' }
         layout           = $ui.GenericLayoutTextBox.Text.Trim()
         resolutionPolicy = $ui.GenericResolutionTextBox.Text.Trim()
+        primary          = ConvertTo-UiBoolean -Value (Get-UiObjectValue -Object $settings['genericExternal'] -Name 'primary' -Default $true)
     }
     $settings['sessionProfiles']  = @{
         HANDHELD       = $ui.HandheldSessionTextBox.Text.Trim()
@@ -1787,13 +3263,33 @@ function Capture-SteamDeckSettingsFromControls {
 }
 
 function Save-SteamDeckSettingsInteractive {
-    Capture-SteamDeckSettingsFromControls
-    $saveResult = Save-BootstrapSteamDeckSettingsData -Settings $ui.SettingsBundle.Data -CreateBackup
-    $ui.SettingsBackupPath         = $saveResult.BackupPath
-    $ui.State.lastSettingsPath     = $saveResult.Path
-    Save-UiState -State $ui.State -Path $UiStatePath
-    $ui.StatusLabel.Text           = $ui.Strings.SavingSettings
-    Refresh-SteamDeckStatus
+    try {
+        Capture-SteamDeckSettingsFromControls
+        $saveResult = Save-BootstrapSteamDeckSettingsData -Settings $ui.SettingsBundle.Data -CreateBackup
+        $ui.SettingsBackupPath         = $saveResult.BackupPath
+        $ui.State.lastSettingsPath     = $saveResult.Path
+        Save-UiState -State $ui.State -Path $UiStatePath
+        $ui.StatusLabel.Text           = $ui.Strings.SavingSettings
+        Refresh-SteamDeckStatus
+        return $true
+    } catch {
+        $ui.StatusLabel.Text = "Settings invalidos: $($_.Exception.Message)"
+        return $false
+    }
+}
+
+function Classify-PendingExternalDisplay {
+    param([ValidateSet('MonitorDev', 'TvGame')][string]$Choice)
+
+    try {
+        Capture-SteamDeckSettingsFromControls
+        $null = Save-BootstrapSteamDeckSettingsData -Settings $ui.SettingsBundle.Data -CreateBackup
+        $result = Add-BootstrapSteamDeckDisplayClassification -Choice $Choice -CreateBackup
+        $ui.StatusLabel.Text = "Display classificado: $($result.Manufacturer) / $($result.Product) => $($result.Mode)"
+        Refresh-SteamDeckControls
+    } catch {
+        $ui.StatusLabel.Text = "Falha ao classificar display: $($_.Exception.Message)"
+    }
 }
 
 function Refresh-DualBootControls {
@@ -1865,10 +3361,48 @@ function Refresh-DualBootControls {
 
 function Refresh-ReviewPage {
     Capture-SteamDeckSettingsFromControls
-    $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
+    Capture-AppTuningStateFromControls
+    $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedAppTuningMode $ui.State.appTuningMode -RequestedAppTuningCategories $ui.State.selectedAppTuningCategories -RequestedAppTuningItems $ui.State.selectedAppTuningItems -ExcludedAppTuningItems $ui.State.excludedAppTuningItems -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
     $ui.ReviewTextBox.Text  = $ui.Preview.PlanText
+    $resolved = @()
+    try {
+        $sel = New-BootstrapSelectionObject -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -SelectedHostHealth $ui.State.hostHealth
+        $res = Resolve-BootstrapComponents -SelectedProfiles $sel.Profiles -SelectedComponents $sel.Components -ExcludedComponents $sel.Excludes
+        $resolved = @($res.ResolvedComponents)
+    } catch { $resolved = @() }
+    $effects = @()
+    if ($resolved -contains 'bootstrap-secrets') { $effects += 'bootstrap-secrets: escreve manifests/settings (backup .bak) em pastas de usuario.' }
+    if ($resolved -contains 'bootstrap-mcps') { $effects += 'bootstrap-mcps: escreve mcp.json / configs em apps (VS Code, Cursor, Windsurf, Trae, OpenCode, etc).' }
+    if ($resolved -contains 'vscode-extensions') { $effects += 'vscode-extensions: instala extensoes + altera settings.json / configs de extensoes.' }
+    if ($resolved -contains 'claude-config') { $effects += 'claude-config: atualiza ~/.claude/settings.json (backup).' }
+    if ($resolved -contains 'claude-plugins') { $effects += 'claude-plugins: instala plugins via claude (rede).' }
+    if ($resolved -contains 'hermes') { $effects += 'hermes: instala via npm + cria/atualiza .hermes/opencloud.json no projeto.' }
+    if ([bool]$ui.State.enableClaudeCodeProjectMcps) { $effects += 'claude-code MCPs: adiciona MCPs no projeto via "claude mcp add".' }
+    $ui.ReviewSideEffectsTextBox.Text = if ($effects.Count -gt 0) { $effects -join [Environment]::NewLine } else { '-' }
     $adminText = if (@($ui.Preview.AdminReasons).Count -gt 0) { @($ui.Preview.AdminReasons) -join '; ' } else { '-' }
     $ui.ReviewMetaLabel.Text = "Admin: $adminText  |  Settings: $($ui.SettingsBundle.Path)  |  UI state: $UiStatePath"
+    $ui.ReviewLinksLabel.Visibility = 'Collapsed'
+    $ui.ReviewSettingsLink.IsEnabled = $false
+    $ui.ReviewUiStateLink.IsEnabled = $false
+    $ui.ReviewSettingsLink.NavigateUri = $null
+    $ui.ReviewUiStateLink.NavigateUri = $null
+    $anyLink = $false
+    $settingsPath = [string]$ui.SettingsBundle.Path
+    if (-not [string]::IsNullOrWhiteSpace($settingsPath) -and (Test-Path $settingsPath)) {
+        try {
+            $ui.ReviewSettingsLink.NavigateUri = [Uri]("file:///" + ($settingsPath -replace '\\','/'))
+            $ui.ReviewSettingsLink.IsEnabled = $true
+            $anyLink = $true
+        } catch { }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($UiStatePath) -and (Test-Path $UiStatePath)) {
+        try {
+            $ui.ReviewUiStateLink.NavigateUri = [Uri]("file:///" + ($UiStatePath -replace '\\','/'))
+            $ui.ReviewUiStateLink.IsEnabled = $true
+            $anyLink = $true
+        } catch { }
+    }
+    if ($anyLink) { $ui.ReviewLinksLabel.Visibility = 'Visible' }
 }
 
 # 
@@ -1879,11 +3413,14 @@ $navButtons = @(
     $ui.NavWelcome,
     $ui.NavSelection,
     $ui.NavHostSetup,
+    $ui.NavAppTuning,
+    $ui.NavApiCenter,
     $ui.NavSteamDeck,
     $ui.NavDualBoot,
     $ui.NavReview,
     $ui.NavRun
 )
+$navButtonTargets = @('welcome', 'selection', 'host-setup', 'app-tuning', 'api-center', 'steamdeck-control', 'dual-boot', 'review', 'run')
 
 function Navigate-ToPage {
     param([int]$Index)
@@ -1900,8 +3437,9 @@ function Navigate-ToPage {
     if ($activePage) { $activePage.Visibility = 'Visible' }
 
     # Toggle nav buttons
+    $activePageId = [string]$pageIds[$Index]
     for ($i = 0; $i -lt $navButtons.Count; $i++) {
-        $navButtons[$i].IsChecked = ($i -eq $Index)
+        $navButtons[$i].IsChecked = ([string]$navButtonTargets[$i] -eq $activePageId)
     }
 
     # Back/Next state
@@ -1912,6 +3450,9 @@ function Navigate-ToPage {
         'welcome'          { $ui.Strings.Welcome }
         'selection'        { $ui.Strings.Selection }
         'host-setup'       { $ui.Strings.HostSetup }
+        'app-tuning'       { $ui.Strings.AppTuning }
+        'api-center'       { $ui.Strings.ApiCenter }
+        'api-catalog'      { $ui.Strings.ApiCatalogTitle }
         'steamdeck-control' { $ui.Strings.SteamDeckControl }
         'dual-boot'        { $ui.Strings.DualBoot }
         'review'           { $ui.Strings.Review }
@@ -1922,6 +3463,9 @@ function Navigate-ToPage {
     switch ($pageIds[$Index]) {
         'selection'         { Refresh-SelectionTrees; Refresh-SelectionSummary }
         'host-setup'        { Refresh-SelectionSummary; Refresh-HostSetupControls }
+        'app-tuning'        { Refresh-AppTuningControls }
+        'api-center'        { Refresh-ApiCenterControls }
+        'api-catalog'       { Refresh-ApiCatalogControls }
         'steamdeck-control' { Refresh-SteamDeckControls }
         'dual-boot'         { Refresh-DualBootControls }
         'review'            { Refresh-ReviewPage; Refresh-HostSetupControls }
@@ -1937,8 +3481,13 @@ function Build-BackendArguments {
     foreach ($p in @($ui.State.selectedProfiles))   { $tokens += @('-Profile',   [string]$p) }
     foreach ($c in @($ui.State.selectedComponents)) { $tokens += @('-Component', [string]$c) }
     foreach ($e in @($ui.State.excludedComponents)) { $tokens += @('-Exclude',   [string]$e) }
+    if ([bool]$ui.State.enableClaudeCodeProjectMcps) { $tokens += @('-ClaudeCodeProjectMcps') }
     $tokens += @('-SteamDeckVersion', [string]$ui.State.steamDeckVersion)
     $tokens += @('-HostHealth',       [string]$ui.State.hostHealth)
+    $tokens += @('-AppTuning',        [string]$ui.State.appTuningMode)
+    foreach ($category in @($ui.State.selectedAppTuningCategories)) { $tokens += @('-AppTuningCategory', [string]$category) }
+    foreach ($item in @($ui.State.selectedAppTuningItems)) { $tokens += @('-AppTuningItem', [string]$item) }
+    foreach ($item in @($ui.State.excludedAppTuningItems)) { $tokens += @('-ExcludeAppTuningItem', [string]$item) }
     $tokens += @('-WorkspaceRoot',    [string]$ui.State.workspaceRoot)
     $tokens += @('-CloneBaseDir',     [string]$ui.State.cloneBaseDir)
     $tokens += @('-LogPath',          [string]$ui.CurrentLogPath)
@@ -1965,25 +3514,65 @@ function Append-RunLog {
     $ui.LogOffset = $content.Length
 }
 
-function Finalize-RunFromResult {
-    Append-RunLog
-    if (-not (Test-Path $ui.CurrentResultPath)) { return }
-    $result = Get-Content -Path $ui.CurrentResultPath -Raw | ConvertFrom-Json
-    if ($result.status -eq 'success') {
-        $ui.RunStatusLabel.Text = $ui.Strings.RunCompleted
-        if ($result.hostHealthReportRoot) { $ui.State.lastReportPath = [string]$result.hostHealthReportRoot }
+function Set-RunUiBusy {
+    param([bool]$Busy)
+    if ($Busy) {
+        $ui.StartRunButton.IsEnabled = $false
     } else {
-        $ui.RunStatusLabel.Text = "{0}  {1}" -f $ui.Strings.RunFailed, [string]$result.error
+        $ui.StartRunButton.IsEnabled = $true
     }
+}
+
+function Complete-RunExecution {
+    param([Parameter(Mandatory=$true)][string]$StatusText)
+    $ui.RunStatusLabel.Text = $StatusText
     $ui.State.lastLogPath    = $ui.CurrentLogPath
     $ui.State.lastResultPath = $ui.CurrentResultPath
     Save-UiState -State $ui.State -Path $UiStatePath
     $ui.RunProcess = $null
     $ui.LogTimer.Stop()
+    Set-RunUiBusy -Busy $false
+}
+
+function Complete-RunExecutionWithoutResult {
+    Append-RunLog
+    $exitCode = 'unknown'
+    if ($ui.RunProcess) {
+        try { $exitCode = [string]$ui.RunProcess.ExitCode } catch { $exitCode = 'unknown' }
+    }
+    $message = "{0}  Backend saiu sem result.json. ExitCode={1}" -f $ui.Strings.RunFailed, $exitCode
+    Write-UiLog -Level 'ERROR' -Message $message
+    Complete-RunExecution -StatusText $message
+}
+
+function Finalize-RunFromResult {
+    Append-RunLog
+    if (-not (Test-Path $ui.CurrentResultPath)) {
+        Complete-RunExecutionWithoutResult
+        return
+    }
+    try {
+        $result = Get-Content -Path $ui.CurrentResultPath -Raw | ConvertFrom-Json
+    } catch {
+        Complete-RunExecution -StatusText ("{0}  result.json invalido: {1}" -f $ui.Strings.RunFailed, $_.Exception.Message)
+        return
+    }
+    if ($result.status -eq 'success') {
+        $statusText = $ui.Strings.RunCompleted
+        if ($result.hostHealthReportRoot) { $ui.State.lastReportPath = [string]$result.hostHealthReportRoot }
+        if ($result.appTuningReportRoot) { $ui.State.lastReportPath = [string]$result.appTuningReportRoot }
+    } else {
+        $statusText = "{0}  {1}" -f $ui.Strings.RunFailed, [string]$result.error
+    }
+    Complete-RunExecution -StatusText $statusText
 }
 
 function Start-RunExecution {
-    Save-SteamDeckSettingsInteractive
+    if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
+        $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Aguarde a execucao atual finalizar."
+        return
+    }
+    if (-not (Save-SteamDeckSettingsInteractive)) { return }
     Refresh-ReviewPage
     $runRoot             = Join-Path (Get-BootstrapDataRoot) 'ui-runs'
     $timestamp           = Get-Date -Format 'yyyyMMdd_HHmmss'
@@ -1992,8 +3581,10 @@ function Start-RunExecution {
     $ui.LogOffset        = 0
     $ui.RunLogTextBox.Clear()
     $ui.RunStatusLabel.Text = $ui.Strings.RunStarted
+    Set-RunUiBusy -Busy $true
     try { $ui.RunProcess = Start-BackendWorker } catch {
         $ui.RunStatusLabel.Text = $ui.Strings.UserCanceledElevation
+        Set-RunUiBusy -Busy $false
         return
     }
     Save-UiState -State $ui.State -Path $UiStatePath
@@ -2007,8 +3598,12 @@ function Start-RunExecution {
 # Log timer
 $logTimer.Add_Tick({
     Append-RunLog
-    if ($ui.RunProcess -and $ui.RunProcess.HasExited -and (Test-Path $ui.CurrentResultPath)) {
-        Finalize-RunFromResult
+    if ($ui.RunProcess -and $ui.RunProcess.HasExited) {
+        if (Test-Path $ui.CurrentResultPath) {
+            Finalize-RunFromResult
+        } else {
+            Complete-RunExecutionWithoutResult
+        }
     }
 })
 
@@ -2019,6 +3614,129 @@ $ui.LanguageCombo.Add_SelectionChanged({
         Save-UiState -State $ui.State -Path $UiStatePath
         Refresh-LocalizedText
         Navigate-ToPage -Index $ui.CurrentPageIndex
+    }
+})
+
+# API Center
+$ui.ApiProviderCombo.Add_SelectionChanged({
+    if ($ui.SuppressApiEvents) { return }
+    if ($ui.ApiProviderCombo.SelectedItem) {
+        Refresh-ApiProviderCombos
+    }
+})
+
+$ui.ApiCredentialCombo.Add_SelectionChanged({
+    if ($ui.SuppressApiEvents) { return }
+    Refresh-ApiCredentialEditor
+})
+
+$ui.ApiCredentialGrid.Add_SelectionChanged({
+    if ($ui.SuppressApiEvents) { return }
+    if ($ui.ApiCredentialGrid.SelectedItem -and $ui.ApiCredentialGrid.SelectedItem.Row) {
+        $row = $ui.ApiCredentialGrid.SelectedItem.Row
+        $providerId = [string]$row['provider']
+        $credentialId = [string]$row['id']
+        if (-not [string]::IsNullOrWhiteSpace($providerId)) {
+            $ui.ApiProviderCombo.SelectedItem = $providerId
+        }
+        if (-not [string]::IsNullOrWhiteSpace($credentialId)) {
+            $ui.ApiCredentialCombo.SelectedItem = $credentialId
+        }
+        Refresh-ApiCredentialEditor
+    }
+})
+
+$ui.ApiRefreshButton.Add_Click({
+    Refresh-ApiCenterControls
+})
+
+$ui.ApiCatalogButton.Add_Click({
+    $pageIds = @(Get-UiPageIds)
+    $index = [Array]::IndexOf($pageIds, 'api-catalog')
+    if ($index -ge 0) { Navigate-ToPage -Index $index }
+})
+
+$ui.ApiCatalogBackButton.Add_Click({
+    $pageIds = @(Get-UiPageIds)
+    $index = [Array]::IndexOf($pageIds, 'api-center')
+    if ($index -ge 0) { Navigate-ToPage -Index $index }
+})
+
+$ui.ApiSaveButton.Add_Click({
+    try {
+        $providerId = Get-SelectedApiProviderId
+        if ([string]::IsNullOrWhiteSpace($providerId)) { return }
+        $fields = @{
+            baseUrl = $ui.ApiBaseUrlTextBox.Text.Trim()
+            organizationId = $ui.ApiOrganizationTextBox.Text.Trim()
+            projectRef = $ui.ApiProjectRefTextBox.Text.Trim()
+        }
+        $result = Set-BootstrapApiCredential -ProviderName $providerId -CredentialId (Get-SelectedApiCredentialId) -DisplayName $ui.ApiDisplayNameTextBox.Text.Trim() -Secret $ui.ApiSecretBox.Password -Fields $fields
+        $ui.ApiStatusLabel.Text = "Credencial salva: $($result.credentialId)"
+        Refresh-ApiCenterControls
+    } catch {
+        $ui.ApiStatusLabel.Text = "Falha ao salvar credencial: $($_.Exception.Message)"
+    }
+})
+
+$ui.ApiValidateButton.Add_Click({
+    try {
+        $providerId = Get-SelectedApiProviderId
+        $credentialId = Get-SelectedApiCredentialId
+        if ([string]::IsNullOrWhiteSpace($providerId) -or [string]::IsNullOrWhiteSpace($credentialId)) { return }
+        $null = Invoke-BootstrapApiCredentialValidation -ProviderName $providerId -CredentialId $credentialId
+        $ui.ApiStatusLabel.Text = "Credencial validada: $credentialId"
+        Refresh-ApiCenterControls
+    } catch {
+        $ui.ApiStatusLabel.Text = "Falha ao validar: $($_.Exception.Message)"
+    }
+})
+
+$ui.ApiValidateAllButton.Add_Click({
+    try {
+        $null = Invoke-BootstrapApiCredentialValidation -All
+        $ui.ApiStatusLabel.Text = 'Validacao concluida.'
+        Refresh-ApiCenterControls
+    } catch {
+        $ui.ApiStatusLabel.Text = "Falha ao validar tudo: $($_.Exception.Message)"
+    }
+})
+
+$ui.ApiActivateButton.Add_Click({
+    try {
+        $providerId = Get-SelectedApiProviderId
+        $credentialId = Get-SelectedApiCredentialId
+        if ([string]::IsNullOrWhiteSpace($providerId) -or [string]::IsNullOrWhiteSpace($credentialId)) { return }
+        $null = Set-BootstrapApiActiveCredential -ProviderName $providerId -CredentialId $credentialId
+        $ui.ApiStatusLabel.Text = "Credencial ativa: $credentialId"
+        Refresh-ApiCenterControls
+    } catch {
+        $ui.ApiStatusLabel.Text = "Falha ao ativar: $($_.Exception.Message)"
+    }
+})
+
+$ui.ApiImportButton.Add_Click({
+    try {
+        $dialog = New-Object System.Windows.Forms.OpenFileDialog
+        $dialog.Title = 'Importar arquivo bruto de credenciais'
+        $dialog.Filter = 'Markdown/Text (*.md;*.txt)|*.md;*.txt|All files (*.*)|*.*'
+        if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $null = Import-BootstrapApiCredentialFile -Path $dialog.FileName
+            $ui.ApiStatusLabel.Text = "Importado: $($dialog.FileName)"
+            Refresh-ApiCenterControls
+        }
+    } catch {
+        $ui.ApiStatusLabel.Text = "Falha ao importar: $($_.Exception.Message)"
+    }
+})
+
+$ui.ApiApplyButton.Add_Click({
+    try {
+        $null = Invoke-BootstrapApiApply
+        $ui.ApiStatusLabel.Text = 'APIs aplicadas nos apps suportados.'
+        Refresh-ApiCenterControls
+    } catch {
+        $ui.ApiStatusLabel.Text = "Falha ao aplicar APIs: $($_.Exception.Message)"
     }
 })
 
@@ -2044,7 +3762,12 @@ $ui.SavePresetButton.Add_Click({
         selectedProfiles   = @($ui.State.selectedProfiles)
         selectedComponents = @($ui.State.selectedComponents)
         excludedComponents = @($ui.State.excludedComponents)
+        enableClaudeCodeProjectMcps = [bool]$ui.State.enableClaudeCodeProjectMcps
         hostHealth         = [string]$ui.State.hostHealth
+        appTuningMode      = [string]$ui.State.appTuningMode
+        selectedAppTuningCategories = @($ui.State.selectedAppTuningCategories)
+        selectedAppTuningItems = @($ui.State.selectedAppTuningItems)
+        excludedAppTuningItems = @($ui.State.excludedAppTuningItems)
         steamDeckVersion   = [string]$ui.State.steamDeckVersion
         workspaceRoot      = [string]$ui.State.workspaceRoot
         cloneBaseDir       = [string]$ui.State.cloneBaseDir
@@ -2061,7 +3784,12 @@ $ui.LoadPresetButton.Add_Click({
     $ui.State.selectedProfiles   = @(Normalize-BootstrapNames -Names @($preset.selectedProfiles))
     $ui.State.selectedComponents = @(Normalize-BootstrapNames -Names @($preset.selectedComponents))
     $ui.State.excludedComponents = @(Normalize-BootstrapNames -Names @($preset.excludedComponents))
+    $ui.State.enableClaudeCodeProjectMcps = [bool]$preset.enableClaudeCodeProjectMcps
     $ui.State.hostHealth         = [string]$preset.hostHealth
+    $ui.State.appTuningMode      = if ($preset.appTuningMode) { [string]$preset.appTuningMode } else { 'recommended' }
+    $ui.State.selectedAppTuningCategories = @(Normalize-BootstrapNames -Names @($preset.selectedAppTuningCategories))
+    $ui.State.selectedAppTuningItems = @(Normalize-BootstrapNames -Names @($preset.selectedAppTuningItems))
+    $ui.State.excludedAppTuningItems = @(Normalize-BootstrapNames -Names @($preset.excludedAppTuningItems))
     $ui.State.steamDeckVersion   = [string]$preset.steamDeckVersion
     $ui.State.workspaceRoot      = [string]$preset.workspaceRoot
     $ui.State.cloneBaseDir       = [string]$preset.cloneBaseDir
@@ -2081,6 +3809,66 @@ $ui.DeletePresetButton.Add_Click({
 
 # Filter
 $ui.FilterTextBox.Add_TextChanged({ Refresh-SelectionTrees })
+
+function Set-UiComponentEnabled {
+    param(
+        [Parameter(Mandatory=$true)][string]$ComponentName,
+        [Parameter(Mandatory=$true)][bool]$Enabled
+    )
+    $name = @(Normalize-BootstrapNames -Names @($ComponentName))[0]
+    if ([string]::IsNullOrWhiteSpace($name)) { return }
+    $selection = New-BootstrapSelectionObject -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents @() -SelectedHostHealth $ui.State.hostHealth
+    $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents @()
+    $isResolved = (@($resolution.ResolvedComponents) -contains $name)
+    $isExplicit = (@($ui.State.selectedComponents) -contains $name)
+    if ($Enabled) {
+        if (@($ui.State.excludedComponents) -contains $name) {
+            $ui.State.excludedComponents = @(@($ui.State.excludedComponents) | Where-Object { $_ -ne $name })
+        }
+        if (-not $isResolved -and -not $isExplicit) {
+            $ui.State.selectedComponents = @(@($ui.State.selectedComponents) + $name)
+        }
+    } else {
+        if ($isResolved -and -not (@($ui.State.excludedComponents) -contains $name)) {
+            $ui.State.excludedComponents = @(@($ui.State.excludedComponents) + $name)
+        }
+        if ($isExplicit) {
+            $ui.State.selectedComponents = @(@($ui.State.selectedComponents) | Where-Object { $_ -ne $name })
+        }
+    }
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionTrees
+    Refresh-SelectionSummary
+}
+
+$ui.OptClaudePluginsCheckBox.Add_Checked({
+    if ($ui.SuppressSelectionEvents) { return }
+    Set-UiComponentEnabled -ComponentName 'claude-plugins' -Enabled $true
+})
+$ui.OptClaudePluginsCheckBox.Add_Unchecked({
+    if ($ui.SuppressSelectionEvents) { return }
+    Set-UiComponentEnabled -ComponentName 'claude-plugins' -Enabled $false
+})
+$ui.OptOpenWebUICheckBox.Add_Checked({
+    if ($ui.SuppressSelectionEvents) { return }
+    Set-UiComponentEnabled -ComponentName 'openwebui' -Enabled $true
+})
+$ui.OptOpenWebUICheckBox.Add_Unchecked({
+    if ($ui.SuppressSelectionEvents) { return }
+    Set-UiComponentEnabled -ComponentName 'openwebui' -Enabled $false
+})
+$ui.OptClaudeProjectMcpsCheckBox.Add_Checked({
+    if ($ui.SuppressSelectionEvents) { return }
+    $ui.State.enableClaudeCodeProjectMcps = $true
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionSummary
+})
+$ui.OptClaudeProjectMcpsCheckBox.Add_Unchecked({
+    if ($ui.SuppressSelectionEvents) { return }
+    $ui.State.enableClaudeCodeProjectMcps = $false
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionSummary
+})
 
 # Host Health
 $ui.HostHealthCombo.Add_SelectionChanged({
@@ -2133,9 +3921,77 @@ $ui.CloneBaseDirTextBox.Add_LostFocus({
     Save-UiState -State $ui.State -Path $UiStatePath
 })
 
+# App Tuning
+$ui.AppTuningModeCombo.Add_SelectionChanged({
+    if ($ui.AppTuningModeCombo.SelectedItem) {
+        $ui.State.appTuningMode = [string]$ui.AppTuningModeCombo.SelectedItem
+        Save-UiState -State $ui.State -Path $UiStatePath
+        Refresh-AppTuningControls
+        Refresh-SelectionSummary
+    }
+})
+
+$ui.AppTuningRecommendedButton.Add_Click({
+    $ui.State.appTuningMode = 'recommended'
+    $ui.State.selectedAppTuningCategories = @()
+    $ui.State.selectedAppTuningItems = @()
+    $ui.State.excludedAppTuningItems = @()
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-AppTuningControls
+})
+
+$ui.AppTuningMarkCategoryButton.Add_Click({
+    if ($ui.AppTuningCategoryList.SelectedItem -and $ui.AppTuningCategoryList.SelectedItem.Tag) {
+        $id = [string]$ui.AppTuningCategoryList.SelectedItem.Tag
+        if (-not (@($ui.State.selectedAppTuningCategories) -contains $id)) {
+            $ui.State.selectedAppTuningCategories = @(@($ui.State.selectedAppTuningCategories) + $id)
+        }
+        $ui.State.appTuningMode = 'custom'
+        Save-UiState -State $ui.State -Path $UiStatePath
+        Refresh-AppTuningControls
+    }
+})
+
+$ui.AppTuningClearCategoryButton.Add_Click({
+    if ($ui.AppTuningCategoryList.SelectedItem -and $ui.AppTuningCategoryList.SelectedItem.Tag) {
+        $id = [string]$ui.AppTuningCategoryList.SelectedItem.Tag
+        $ui.State.selectedAppTuningCategories = @(@($ui.State.selectedAppTuningCategories) | Where-Object { $_ -ne $id })
+        $ui.State.appTuningMode = 'custom'
+        Save-UiState -State $ui.State -Path $UiStatePath
+        Refresh-AppTuningControls
+    }
+})
+
+$ui.AppTuningAuditButton.Add_Click({
+    Capture-AppTuningStateFromControls
+    Refresh-AppTuningControls
+})
+
+$ui.AppTuningSearchBox.Add_TextChanged({
+    Refresh-AppTuningControls
+})
+
+$ui.AppTuningStatusFilterCombo.Add_SelectionChanged({
+    Refresh-AppTuningControls
+})
+
+$ui.AppTuningInstallButton.Add_Click({
+    Queue-AppTuningInstallOrUpdate -ActionName 'Instalacao'
+})
+
+$ui.AppTuningConfigureButton.Add_Click({
+    Queue-AppTuningConfigure
+})
+
+$ui.AppTuningUpdateButton.Add_Click({
+    Queue-AppTuningInstallOrUpdate -ActionName 'Atualizacao'
+})
+
 # Steam Deck control
 $ui.ReloadSettingsButton.Add_Click({ Refresh-SteamDeckControls; $ui.StatusLabel.Text = $ui.Strings.ReloadSettings })
-$ui.SaveSettingsButton.Add_Click({ Save-SteamDeckSettingsInteractive })
+$ui.SaveSettingsButton.Add_Click({ [void](Save-SteamDeckSettingsInteractive) })
+$ui.ClassifyMonitorButton.Add_Click({ Classify-PendingExternalDisplay -Choice 'MonitorDev' })
+$ui.ClassifyTvButton.Add_Click({ Classify-PendingExternalDisplay -Choice 'TvGame' })
 
 # Review
 $ui.RefreshReviewButton.Add_Click({ Refresh-ReviewPage })
@@ -2200,8 +4056,12 @@ $ui.OpenReportsButton.Add_Click({  Open-ExistingPath -Path ([string]$ui.State.la
 
 # Sidebar nav
 for ($i = 0; $i -lt $navButtons.Count; $i++) {
-    $idx = $i
-    $navButtons[$i].Add_Click({ Navigate-ToPage -Index $idx }.GetNewClosure())
+    $targetPageId = [string]$navButtonTargets[$i]
+    $navButtons[$i].Add_Click({
+        $pageIds = @(Get-UiPageIds)
+        $idx = [Array]::IndexOf($pageIds, $targetPageId)
+        if ($idx -ge 0) { Navigate-ToPage -Index $idx }
+    }.GetNewClosure())
 }
 
 # Back / Next / Finish
@@ -2229,8 +4089,11 @@ $window.Add_Loaded({
 
     # Populate combos
     foreach ($item in @('off','conservador','equilibrado','agressivo')) { [void]$ui.HostHealthCombo.Items.Add($item) }
+    foreach ($item in @(Get-BootstrapAppTuningModes)) { [void]$ui.AppTuningModeCombo.Items.Add($item) }
+    foreach ($item in @('all','installed','missing','planned','not-configured','update-check')) { [void]$ui.AppTuningStatusFilterCombo.Items.Add($item) }
+    $ui.AppTuningStatusFilterCombo.SelectedItem = 'all'
     foreach ($item in @('Auto','LCD','OLED')) { [void]$ui.SteamDeckVersionCombo.Items.Add($item) }
-    foreach ($item in @('DOCKED_TV','DOCKED_MONITOR')) { [void]$ui.GenericModeCombo.Items.Add($item) }
+    foreach ($item in @('UNCLASSIFIED_EXTERNAL','DOCKED_TV','DOCKED_MONITOR')) { [void]$ui.GenericModeCombo.Items.Add($item) }
 
     Refresh-LocalizedText
     Refresh-CustomPresets

@@ -15,13 +15,13 @@ function Invoke-DetectMode {
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 
     try {
-        $Settings | ConvertTo-Json -Depth 12 | Set-Content -Path $settingsPath -Encoding utf8
-        $MockState | ConvertTo-Json -Depth 12 | Set-Content -Path $mockPath -Encoding utf8
+        $Settings | ConvertTo-Json -Depth 12 | Microsoft.PowerShell.Management\Set-Content -Path $settingsPath -Encoding utf8
+        $MockState | ConvertTo-Json -Depth 12 | Microsoft.PowerShell.Management\Set-Content -Path $mockPath -Encoding utf8
         $json = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $detectScriptPath -SettingsPath $settingsPath -MockStatePath $mockPath
         return ($json | ConvertFrom-Json)
     } finally {
-        if (Test-Path $settingsPath) { Remove-Item $settingsPath -Force -ErrorAction SilentlyContinue }
-        if (Test-Path $mockPath) { Remove-Item $mockPath -Force -ErrorAction SilentlyContinue }
+        if (Microsoft.PowerShell.Management\Test-Path $settingsPath) { Microsoft.PowerShell.Management\Remove-Item $settingsPath -Force -ErrorAction SilentlyContinue }
+        if (Microsoft.PowerShell.Management\Test-Path $mockPath) { Microsoft.PowerShell.Management\Remove-Item $mockPath -Force -ErrorAction SilentlyContinue }
     }
 }
 
@@ -42,9 +42,18 @@ $baseSettings = @{
         }
     )
     genericExternal = @{
-        mode = 'DOCKED_TV'
+        mode = 'UNCLASSIFIED_EXTERNAL'
         resolutionPolicy = '1920x1080-safe'
         layout = 'external-generic'
+    }
+    displayClassification = @{
+        unknownExternalMode = 'UNCLASSIFIED_EXTERNAL'
+        uiFallbackMode = 'DOCKED_MONITOR'
+    }
+    consoleSession = @{
+        primaryShell = 'steam'
+        fallbackShell = 'playnite'
+        steamLaunch = 'steam://open/bigpicture'
     }
 }
 
@@ -90,7 +99,7 @@ Describe 'Steam Deck mode detection' {
         }
     }
 
-    It 'falls back to generic external mode for unknown displays' {
+    It 'keeps unknown external displays unclassified and safe for desktop fallback' {
         $result = Invoke-DetectMode -Settings $baseSettings -MockState @{
             battery = @{ onAcPower = $true }
             internalDisplay = @{
@@ -104,6 +113,44 @@ Describe 'Steam Deck mode detection' {
                     product = 'Dell U2720Q'
                     serial = 'XYZ'
                     instanceName = 'DISPLAY\DEL0001\XYZ'
+                    isPrimary = $true
+                    isActive = $true
+                }
+            )
+        }
+
+        $result.mode | Should Be 'UNCLASSIFIED_EXTERNAL'
+        $result.sessionProfile | Should Be 'desktop'
+        $result.matchedBy | Should Be 'unclassifiedExternal'
+        (($result.warnings -join "`n") -match 'classification') | Should Be $true
+    }
+
+    It 'detects known TV displays as console game mode' {
+        $settings = $baseSettings.Clone()
+        $settings.monitorProfiles = @(
+            @{
+                manufacturer = 'SAM'
+                product = 'Living Room TV'
+                serial = 'TV-01'
+                mode = 'DOCKED_TV'
+                layout = 'external-tv-game'
+                resolutionPolicy = '1920x1080-safe'
+            }
+        )
+
+        $result = Invoke-DetectMode -Settings $settings -MockState @{
+            battery = @{ onAcPower = $true }
+            internalDisplay = @{
+                manufacturer = 'VLV'
+                product = 'ANX7530 U'
+                isActive = $true
+            }
+            externalDisplays = @(
+                @{
+                    manufacturer = 'SAM'
+                    product = 'Living Room TV'
+                    serial = 'TV-01'
+                    instanceName = 'DISPLAY\SAMTV01\TV-01'
                     isPrimary = $true
                     isActive = $true
                 }

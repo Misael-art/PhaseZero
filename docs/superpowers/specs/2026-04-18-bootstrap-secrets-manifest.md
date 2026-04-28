@@ -103,6 +103,7 @@ Esse arquivo continua local-only e fica coberto pelo ignore do repositorio.
 - Itens sem validador confiavel entram como `unsupported/manual-review`.
 - `rotationOrder` preserva a fila manual definida pelo usuario/importador.
 - A camada de MCPs gerenciados e opt-in no resolvedor; `bootstrap-secrets` nao mistura esse catalogo por padrao.
+- O catalogo de provedores tambem alimenta o API Center, OpenCode e o guia manual do Comet; a UI recebe apenas metadados publicos e previews mascarados.
 
 ## Validacao
 
@@ -146,6 +147,49 @@ Comportamento:
 3. Validar.
 4. Aplicar somente as credenciais ativas e aprovadas.
 5. Quando uma key falhar, usar a fila manual para trocar com seguranca.
+
+## API Center e Apps
+
+`Get-BootstrapUiContract` expoe tres blocos derivados do manifesto local e do catalogo interno:
+
+- `apiCatalog`: metadados publicos dos provedores, como links de criacao, docs, campos obrigatorios e apps suportados.
+- `apiInventory`: resumo seguro por provedor, credenciais mascaradas, app usage e lista de provedores ainda nao configurados.
+- `appCatalog`: capacidades dos apps (`autoInstall`, `alwaysOnRules`, `authByFile`, `authByEnv`, `manualOnly`).
+
+Regras de seguranca:
+
+- O contrato da UI nunca inclui `secret`, token completo ou regex de deteccao de tokens.
+- Acoes inline escrevem somente em `.bootstrap-tools/bootstrap-secrets.json`.
+- Validar/ativar uma credencial nunca promove uma chave que falhou.
+- Aplicar para apps roda o mesmo fluxo de `bootstrap-secrets`, entao targets so recebem credenciais aprovadas.
+
+`OpenCode`:
+
+- `~/.local/share/opencode/auth.json` recebe uma entrada `type=api` por provedor LLM ativo e validado.
+- Credenciais nao gerenciadas pelo bootstrap sao preservadas.
+- `opencode.json` preserva `model`, `small_model`, tema e providers existentes.
+- Metadata de provider so e mesclada quando o manifesto exige `baseURL` customizado.
+
+`Comet`:
+
+- Permanece `manualOnly`.
+- O backend detecta instalacao e retorna provedores prontos, faltantes e links de criacao.
+- Nenhum arquivo interno nao documentado do Comet e alterado.
+
+## Agent Skills
+
+O componente `agent-skills` usa o mesmo ciclo local-only:
+
+- estado em `.bootstrap-tools/agent-skill-state.json`;
+- instalacao `caveman` por alvo com status `installed`, `installed-fallback`, `skipped` ou `failed`;
+- runtimes ausentes sao registrados como `skipped`, sem abortar o bootstrap;
+- regras always-on sao geradas por blocos marcados a partir de `assets/agent-skills/caveman-always-on.md`.
+
+Targets Caveman:
+
+- `Claude Code`: plugin marketplace + plugin install, com fallback standalone;
+- `Gemini CLI`: `gemini extensions install https://github.com/JuliusBrussee/caveman`;
+- `Cursor`, `Windsurf`, `Cline`, `GitHub Copilot`: `npx skills add JuliusBrussee/caveman -a <target> --copy`.
 
 ## MCPs Gerenciados
 

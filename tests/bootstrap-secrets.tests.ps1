@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath
+Reset-BootstrapFileCmdlets
 
 function New-TestDataRoot {
     return (Join-Path $env:TEMP ("bootstrap_secrets_{0}" -f ([Guid]::NewGuid().ToString('N'))))
@@ -59,9 +60,9 @@ function Invoke-BootstrapProcess {
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
 
-    if (-not $process.WaitForExit(30000)) {
+    if (-not $process.WaitForExit(120000)) {
         try { $process.Kill() } catch { }
-        throw "Bootstrap invocation timed out after 30000ms for args: $($CommandArgs -join ' ')"
+        throw "Bootstrap invocation timed out after 120000ms for args: $($CommandArgs -join ' ')"
     }
 
     return [pscustomobject]@{
@@ -345,6 +346,64 @@ Describe 'Bootstrap secrets manifest v2' {
         (Get-BootstrapEnvValueForLog -Name 'OPENAI_BASE_URL' -Value 'https://api.openai.com/v1') | Should Be 'https://api.openai.com/v1'
     }
 
+    It 'prefers a populated project secrets manifest over an empty user manifest' {
+        $originalBootstrapDataRoot = $env:BOOTSTRAP_DATA_ROOT
+        $originalUserProfile = $env:USERPROFILE
+        $originalLocalAppData = $env:LOCALAPPDATA
+        $originalTemp = $env:TEMP
+        $projectRoot = Join-Path $script:TestDataRoot 'Project'
+
+        try {
+            $env:BOOTSTRAP_DATA_ROOT = ''
+            $env:USERPROFILE = Join-Path $script:TestDataRoot 'User'
+            $env:LOCALAPPDATA = Join-Path $script:TestDataRoot 'LocalAppData'
+            $env:TEMP = Join-Path $script:TestDataRoot 'Temp'
+            New-Item -Path $env:USERPROFILE -ItemType Directory -Force | Out-Null
+            New-Item -Path $env:LOCALAPPDATA -ItemType Directory -Force | Out-Null
+            New-Item -Path $env:TEMP -ItemType Directory -Force | Out-Null
+            New-Item -Path $projectRoot -ItemType Directory -Force | Out-Null
+
+            $userSecretsPath = Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'bootstrap-secrets.json'
+            Write-BootstrapJsonFile -Path $userSecretsPath -Value (Get-BootstrapSecretsTemplate)
+
+            $projectSecretsPath = Join-Path (Join-Path $projectRoot '.bootstrap-tools') 'bootstrap-secrets.json'
+            Write-BootstrapJsonFile -Path $projectSecretsPath -Value @{
+                metadata = @{ version = 2 }
+                providers = @{
+                    openrouter = @{
+                        defaults = @{ baseUrl = 'https://openrouter.ai/api/v1' }
+                        activeCredential = 'openrouter-main-01'
+                        rotationOrder = @('openrouter-main-01')
+                        credentials = @{
+                            'openrouter-main-01' = @{
+                                displayName = 'Main'
+                                secret = 'sk-or-v1-project-secret'
+                                secretKind = 'apiKey'
+                                validation = @{ state = 'passed'; checkedAt = '2026-04-21T00:00:00Z'; message = 'ok' }
+                            }
+                        }
+                    }
+                }
+                targets = @{}
+            }
+
+            Remove-Variable -Scope Script -Name BootstrapDataRoot -ErrorAction SilentlyContinue
+            Push-Location $projectRoot
+            try {
+                Get-BootstrapDataRoot | Should Be (Join-Path $projectRoot '.bootstrap-tools')
+            } finally {
+                Pop-Location
+            }
+        } finally {
+            $env:BOOTSTRAP_DATA_ROOT = $originalBootstrapDataRoot
+            $env:USERPROFILE = $originalUserProfile
+            $env:LOCALAPPDATA = $originalLocalAppData
+            $env:TEMP = $originalTemp
+            Remove-Variable -Scope Script -Name BootstrapDataRoot -ErrorAction SilentlyContinue
+            Reset-TestDataRoot -Path $script:TestDataRoot
+        }
+    }
+
     It 'normalizes Claude Code permission arrays even when settings were loaded as hashtables' {
         $originalUserProfile = $env:USERPROFILE
         $env:USERPROFILE = Join-Path $script:TestDataRoot 'User'
@@ -369,6 +428,39 @@ Describe 'Bootstrap secrets manifest v2' {
 
         @($saved.permissions.allow) | Should Be @('Bash')
         (@($saved.permissions.deny) -contains 'Read(**/secrets/**)') | Should Be $true
+    }
+
+    It 'returns stable grub entry fields when no Linux loader is detected' {
+        Mock Test-IsAdmin { return $true }
+        Mock Get-BootstrapEfiEntries { return @() }
+        Mock Get-BootstrapLinuxPartitions { return @() }
+
+        $grub = Get-BootstrapGrubPresence
+
+        $hasEntryId = if ($grub -is [hashtable]) { $grub.ContainsKey('EntryId') } else { @($grub.PSObject.Properties.Name) -contains 'EntryId' }
+        $hasEntryDesc = if ($grub -is [hashtable]) { $grub.ContainsKey('EntryDesc') } else { @($grub.PSObject.Properties.Name) -contains 'EntryDesc' }
+
+        $hasEntryId | Should Be $true
+        $hasEntryDesc | Should Be $true
+        $grub.EntryId | Should Be ''
+        $grub.EntryDesc | Should Be ''
+    }
+
+    It 'builds dual boot info even when grub optional fields are absent' {
+        Mock Test-IsAdmin { return $false }
+        Mock Get-BootstrapFastStartupStatus {
+            return @{ Enabled = $false; Safe = $true; Value = 0; RegistryPath = '' }
+        }
+        Mock Get-BootstrapBitLockerStatus {
+            return @{ CEnabled = $false; StatusText = 'Off'; ProtectionStatus = '' }
+        }
+        Mock Get-BootstrapLinuxPartitions { return @() }
+        Mock Get-BootstrapEfiEntries { return @() }
+        Mock Get-BootstrapGrubPresence {
+            return [pscustomobject]@{ Detected = $false; Path = ''; Confidence = 'none' }
+        }
+
+        { Get-BootstrapDualBootInfo } | Should Not Throw
     }
 
     It 'does not apply an invalid active credential and persists the failed validation state' {

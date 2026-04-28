@@ -4,6 +4,7 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath
+Reset-BootstrapFileCmdlets
 
 function New-ManagedMcpTestRoot {
     return (Join-Path $env:TEMP ("bootstrap_managed_mcp_{0}" -f ([Guid]::NewGuid().ToString('N'))))
@@ -202,7 +203,7 @@ Describe 'Bootstrap managed MCPs' {
 
         (Test-Path $summary.path) | Should Be $true
         @($summary.packages).Count | Should Be 10
-        @($summary.mcps).Count | Should Be 15
+        @($summary.mcps).Count | Should Be 17
         $state.McpStatePath | Should Be $summary.path
     }
 

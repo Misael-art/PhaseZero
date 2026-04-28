@@ -68,9 +68,35 @@ if (Test-Path $displaySwitch) {
 
 Stop-GameModeProcesses -Settings $settings
 
+$tweaksResult = $null
+$tweaksScript = Join-Path (Split-Path -Parent $PSCommandPath) 'Apply-SteamDeckTweaks.ps1'
+if (Test-Path $tweaksScript) {
+    try {
+        $tweaksJson = & $tweaksScript -SettingsPath $SettingsPath -Mode 'HANDHELD'
+        $tweaksResult = $tweaksJson | ConvertFrom-Json
+    } catch {
+        Write-ApplyLog "Handheld tweaks failed: $($_.Exception.Message)"
+    }
+}
+
+$sessionResult = $null
+$sessionScript = Join-Path (Split-Path -Parent $PSCommandPath) 'Start-ConsoleSession.ps1'
+if (Test-Path $sessionScript) {
+    try {
+        $sessionJson = & $sessionScript -SettingsPath $SettingsPath -Mode 'HANDHELD'
+        $sessionResult = $sessionJson | ConvertFrom-Json
+    } catch {
+        Write-ApplyLog "Console session failed: $($_.Exception.Message)"
+    }
+}
+
 $result = [ordered]@{
     mode = 'HANDHELD'
+    effectiveMode = 'HANDHELD'
     sessionProfile = if ($detection -and $detection.sessionProfile) { $detection.sessionProfile } else { 'game-handheld' }
+    experience = 'Game - Steam Deck'
+    tweaks = $tweaksResult
+    consoleSession = $sessionResult
     resolution = $settings.handheld.resolution
     refreshHz = $settings.handheld.refreshHz
     taskbarMode = $settings.handheld.taskbarMode

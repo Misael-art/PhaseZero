@@ -13,3 +13,8 @@ gemini-cli/
 
 # Ignore local bootstrap state and secrets
 .bootstrap-tools/
+
+# Local IDE / agent worktrees
+.claude/
+Microsoft/
+.mcp.json
