@@ -21,6 +21,7 @@ param(
     [switch]$ListHostHealthModes,
     [switch]$ListAppTuningCatalog,
     [switch]$ListComponents,
+    [switch]$Doctor,
     [switch]$UiContractJson,
     [switch]$BootstrapUiLibraryMode,
     [switch]$SecretsList,
@@ -2657,7 +2658,18 @@ function Ensure-RepoClone {
 function Resolve-CommandPath {
     param([Parameter(Mandatory = $true)][string]$Name)
     $cmd = Get-Command $Name -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    if (-not $cmd) { return $null }
+
+    if ($cmd -is [System.Management.Automation.AliasInfo]) {
+        return (Resolve-CommandPath -Name ([string]$cmd.Definition))
+    }
+
+    if ($cmd.CommandType -in @('Application', 'ExternalScript')) {
+        $path = [string]$cmd.Source
+        if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path $path)) {
+            return $path
+        }
+    }
     return $null
 }
 
@@ -11383,6 +11395,100 @@ function Write-BootstrapCommandSummary {
     Write-Log ("{0}: {1} ({2})" -f $Label, (Invoke-NativeFirstLine -Exe $commandPath -Args $Args), $commandPath)
 }
 
+function Write-BootstrapDoctorToolSummary {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$CommandName,
+        [string[]]$Args = @('--version')
+    )
+
+    $commandPath = Resolve-CommandPath -Name $CommandName
+    if (-not $commandPath) {
+        Write-Log ("{0}: NAO ENCONTRADO" -f $Label) 'WARN'
+        return
+    }
+
+    if ($commandPath -match '\.ps1$') {
+        Write-Log ("{0}: script ({1})" -f $Label, $commandPath)
+        return
+    }
+
+    try {
+        $firstLine = [string](Invoke-NativeFirstLine -Exe $commandPath -Args $Args)
+        if ([string]::IsNullOrWhiteSpace($firstLine)) {
+            Write-Log ("{0}: (sem saida) ({1})" -f $Label, $commandPath) 'WARN'
+            return
+        }
+        Write-Log ("{0}: {1} ({2})" -f $Label, $firstLine.Trim(), $commandPath)
+    } catch {
+        Write-Log ("{0}: ERRO ({1}) ({2})" -f $Label, $_.Exception.Message, $commandPath) 'WARN'
+    }
+}
+
+function Invoke-BootstrapDoctorMode {
+    Write-Log ("Inicio: {0}" -f $script:StartTime.ToString('s'))
+    Write-Log "Log: $script:LogPath"
+    Write-Log "Modo: Doctor"
+    Write-Log "Admin: $(Test-IsAdmin)"
+    try {
+        Write-Log ("PowerShell: {0}" -f ([string]$PSVersionTable.PSVersion))
+    } catch {
+    }
+
+    $dataRoot = Get-BootstrapDataRoot
+    $dataRootExists = $false
+    try { $dataRootExists = (Test-Path $dataRoot) } catch { $dataRootExists = $false }
+    $dataRootWritable = $false
+    try { $dataRootWritable = (Test-BootstrapDirectoryWritable -Path $dataRoot) } catch { $dataRootWritable = $false }
+    Write-Log ("BOOTSTRAP_DATA_ROOT: {0}" -f $(if ([string]::IsNullOrWhiteSpace($env:BOOTSTRAP_DATA_ROOT)) { '-' } else { $env:BOOTSTRAP_DATA_ROOT }))
+    Write-Log ("DataRoot: {0} (exists={1} writable={2})" -f $dataRoot, $dataRootExists, $dataRootWritable)
+
+    $secretsPath = Get-BootstrapSecretsPath
+    if (Test-Path $secretsPath) {
+        try {
+            $text = Microsoft.PowerShell.Management\Get-Content -Path $secretsPath -Raw -Encoding utf8
+            $null = $text | ConvertFrom-Json -ErrorAction Stop
+            Write-Log "bootstrap-secrets.json: OK ($secretsPath)"
+        } catch {
+            Write-Log ("bootstrap-secrets.json: JSON invalido ({0})" -f $secretsPath) 'WARN'
+        }
+    } else {
+        Write-Log ("bootstrap-secrets.json: AUSENTE ({0})" -f $secretsPath) 'WARN'
+    }
+
+    foreach ($name in @('HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy')) {
+        try {
+            $value = [string]([Environment]::GetEnvironmentVariable($name, 'Process'))
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                Write-Log ("env:{0}={1}" -f $name, (Get-BootstrapEnvValueForLog -Name $name -Value $value))
+            }
+        } catch {
+        }
+    }
+
+    $gitBashPath = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', 'User')
+    if ([string]::IsNullOrWhiteSpace($gitBashPath)) {
+        Write-Log "CLAUDE_CODE_GIT_BASH_PATH: -" 'WARN'
+    } else {
+        Write-Log ("CLAUDE_CODE_GIT_BASH_PATH: {0} (exists={1})" -f $gitBashPath, (Test-Path $gitBashPath))
+    }
+
+    Write-Log 'Ferramentas:'
+    Write-BootstrapDoctorToolSummary -Label 'winget' -CommandName 'winget' -Args @('--version')
+    Write-BootstrapDoctorToolSummary -Label 'git' -CommandName 'git' -Args @('--version')
+    Write-BootstrapDoctorToolSummary -Label 'node' -CommandName 'node' -Args @('-v')
+    Write-BootstrapDoctorToolSummary -Label 'npm' -CommandName 'npm' -Args @('--version')
+    Write-BootstrapDoctorToolSummary -Label 'python' -CommandName 'python' -Args @('--version')
+    Write-BootstrapDoctorToolSummary -Label 'pip' -CommandName 'pip' -Args @('--version')
+    Write-BootstrapDoctorToolSummary -Label 'claude' -CommandName 'claude' -Args @('--version')
+    Write-BootstrapDoctorToolSummary -Label 'gh' -CommandName 'gh' -Args @('--version')
+    Write-BootstrapDoctorToolSummary -Label 'wsl' -CommandName 'wsl.exe' -Args @('--version')
+
+    $elapsed = New-TimeSpan -Start $script:StartTime -End (Get-Date)
+    Write-Log ("Concluido em {0:c}" -f $elapsed)
+    Write-Log "Log salvo em: $script:LogPath"
+}
+
 function Invoke-BootstrapProfileMode {
     if ($Interactive -and $NonInteractive) {
         throw 'Use apenas um modo de entrada: -Interactive ou -NonInteractive.'
@@ -11819,6 +11925,8 @@ $useBootstrapSecretsMode = (
     [string]::IsNullOrWhiteSpace($SecretsActivateCredential) -eq $false
 )
 
+$useBootstrapDoctorMode = $Doctor
+
 $useBootstrapProfileMode = (
     $UiContractJson -or
     $ListProfiles -or
@@ -11846,6 +11954,26 @@ if (-not $isDotSourced) {
 
     if ($BootstrapUiLibraryMode) {
         return
+    }
+
+    if ($useBootstrapDoctorMode) {
+        try {
+            Invoke-BootstrapDoctorMode
+            exit 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                    status = 'error'
+                    generatedAt = (Get-Date).ToString('o')
+                    logPath = $script:LogPath
+                    resultPath = $script:ResultPath
+                    error = $_.Exception.Message
+                })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            exit 1
+        }
     }
 
     if ($useBootstrapSecretsMode) {
