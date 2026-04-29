@@ -6726,6 +6726,8 @@ function Get-BootstrapComponentCatalog {
     $catalog['dotnet-6-sdk'] = New-BootstrapComponentDefinition -Name 'dotnet-6-sdk' -Description 'Microsoft .NET 6.0 SDK.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.DotNet.SDK.6'; DisplayName = 'Microsoft .NET 6.0 SDK' }
     $catalog['fan-control'] = New-BootstrapComponentDefinition -Name 'fan-control' -Description 'Fan Control.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Rem0o.FanControl'; DisplayName = 'Fan Control' }
     $catalog['mem-reduct'] = New-BootstrapComponentDefinition -Name 'mem-reduct' -Description 'Mem Reduct.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'henrypp.memreduct'; DisplayName = 'Mem Reduct' }
+    $catalog['raycast'] = New-BootstrapComponentDefinition -Name 'raycast' -Description 'Raycast launcher.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Raycast.Raycast'; DisplayName = 'Raycast'; AllowFailureWhenNotAdmin = $true }
+    $catalog['sparkle'] = New-BootstrapComponentDefinition -Name 'sparkle' -Description 'Sparkle: limpeza/debloat/otimizacao do Windows.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'xishang0128.Sparkle'; DisplayName = 'Sparkle'; AllowFailureWhenNotAdmin = $true }
     $catalog['jdownloader'] = New-BootstrapComponentDefinition -Name 'jdownloader' -Description 'JDownloader 2.' -DependsOn @('java-core') -Kind 'winget' -Data @{ Id = 'AppWork.JDownloader'; DisplayName = 'JDownloader 2'; AllowFailureWhenNotAdmin = $true }
     $catalog['dualboot-manager'] = New-BootstrapComponentDefinition -Name 'dualboot-manager' -Description 'Dual boot detection, safety guardrails and reboot management.' -DependsOn @('system-core') -Optional $true -Kind 'builtin' -Data @{}
 
@@ -6742,7 +6744,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
-    $catalog['utilities'] = New-BootstrapProfileDefinition -Name 'utilities' -Description 'Downloads e ferramentas de poweruser.' -Items @('jdownloader', 'fan-control', 'mem-reduct')
+    $catalog['utilities'] = New-BootstrapProfileDefinition -Name 'utilities' -Description 'Downloads e ferramentas de poweruser.' -Items @('jdownloader', 'fan-control', 'mem-reduct', 'raycast', 'sparkle')
     $catalog['creator'] = New-BootstrapProfileDefinition -Name 'creator' -Description 'Ferramentas de criação e mídia.' -Items @('autohotkey', 'blender', 'ffmpeg')
     $catalog['game-dev'] = New-BootstrapProfileDefinition -Name 'game-dev' -Description 'Toolchain de jogos e compilação.' -Items @('unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community')
     $catalog['gaming'] = New-BootstrapProfileDefinition -Name 'gaming' -Description 'Steam e ferramentas relacionadas.' -Items @('steam', 'steamcmd')
@@ -10177,7 +10179,8 @@ function Get-BootstrapCavemanTargetCatalog {
             displayName = 'Cursor'
             runtime = 'npx'
             commands = @(
-                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'cursor', '--copy'))
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'cursor', '--copy')),
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'alchaincyf/huashu-design', '-a', 'cursor', '--copy'))
             )
             fallbackCommands = @()
         }
@@ -10185,7 +10188,8 @@ function Get-BootstrapCavemanTargetCatalog {
             displayName = 'Windsurf'
             runtime = 'npx'
             commands = @(
-                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'windsurf', '--copy'))
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'windsurf', '--copy')),
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'alchaincyf/huashu-design', '-a', 'windsurf', '--copy'))
             )
             fallbackCommands = @()
         }
@@ -10193,7 +10197,8 @@ function Get-BootstrapCavemanTargetCatalog {
             displayName = 'Cline'
             runtime = 'npx'
             commands = @(
-                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'cline', '--copy'))
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'cline', '--copy')),
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'alchaincyf/huashu-design', '-a', 'cline', '--copy'))
             )
             fallbackCommands = @()
         }
@@ -10201,7 +10206,8 @@ function Get-BootstrapCavemanTargetCatalog {
             displayName = 'GitHub Copilot'
             runtime = 'npx'
             commands = @(
-                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'github-copilot', '--copy'))
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'JuliusBrussee/caveman', '-a', 'github-copilot', '--copy')),
+                (New-BootstrapNativeCommandSpec -Exe 'npx' -Args @('-y', 'skills', 'add', 'alchaincyf/huashu-design', '-a', 'github-copilot', '--copy'))
             )
             fallbackCommands = @()
         }
