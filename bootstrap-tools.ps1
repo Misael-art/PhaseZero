@@ -3414,7 +3414,8 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'claude-code-defaults'; category = 'dev-ai'; displayName = 'Claude Code defaults'; description = 'Mantem settings, plugins e rules de Claude Code.'; targetApps = @('claude code'); probePaths = @('$env:USERPROFILE\.claude\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'opencode-auth-config'; category = 'dev-ai'; displayName = 'OpenCode auth/config'; description = 'Usa manifesto de chaves para auth/config do OpenCode.'; targetApps = @('opencode'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.local\share\opencode\auth.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'codex-cli-env'; category = 'dev-ai'; displayName = 'Codex CLI env'; description = 'Audita variaveis/chaves para Codex CLI e apps de agente.'; targetApps = @('codex cli','codex'); probePaths = @('$env:APPDATA\npm\codex.cmd','$env:LOCALAPPDATA\Microsoft\WindowsApps\codex.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
-        [ordered]@{ id = 'antigravity-settings'; category = 'dev-ai'; displayName = 'Antigravity settings'; description = 'Audita Antigravity para integracao futura com chaves e MCPs.'; targetApps = @('antigravity'); probePaths = @('$env:LOCALAPPDATA\Programs\Antigravity'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'antigravity-settings'; category = 'dev-ai'; displayName = 'Antigravity settings'; description = 'Ativa env OpenAI-compatible (ex: Kimi/Moonshot) para uso via Antigravity e CLIs.'; targetApps = @('antigravity'); probePaths = @('$env:LOCALAPPDATA\Programs\Antigravity'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('manual') }
+        [ordered]@{ id = 'openclaude-cli-env'; category = 'dev-ai'; displayName = 'OpenClaude CLI env'; description = 'Prepara env OpenAI-compatible (OPENAI_* + CLAUDE_CODE_USE_OPENAI) para OpenClaude CLI.'; targetApps = @('openclaude'); probePaths = @('$env:APPDATA\npm\openclaude.cmd','$env:APPDATA\npm\openclaude.ps1'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('manual') }
         [ordered]@{ id = 'cherry-studio-manual'; category = 'dev-ai'; displayName = 'Cherry Studio manual'; description = 'Marca setup manual de modelos/chaves no Cherry Studio.'; targetApps = @('cherry studio'); probePaths = @('$env:APPDATA\CherryStudio'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
         [ordered]@{ id = 'comet-manual'; category = 'dev-ai'; displayName = 'Comet manual'; description = 'Registra Comet como manual-only para chaves e agentes.'; targetApps = @('comet'); probePaths = @('$env:LOCALAPPDATA\Comet'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
 
@@ -3679,6 +3680,7 @@ function Get-BootstrapAppTuningInstallComponents {
         'opencode-auth-config' = @('opencode')
         'codex-cli-env' = @('codex-cli')
         'antigravity-settings' = @('antigravity')
+        'openclaude-cli-env' = @('openclaude-cli')
         'cherry-studio-manual' = @('cherry-studio')
         'ollama-dev-session' = @('ollama')
         'docker-dev-session' = @('docker')
@@ -6643,6 +6645,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['qwen-code'] = New-BootstrapComponentDefinition -Name 'qwen-code' -Description 'Qwen Code via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@qwen-code/qwen-code@latest'; DisplayName = 'Qwen Code (@qwen-code/qwen-code)' }
     $catalog['copilot-cli'] = New-BootstrapComponentDefinition -Name 'copilot-cli' -Description 'GitHub Copilot CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@github/copilot'; DisplayName = 'GitHub Copilot CLI (@github/copilot)' }
     $catalog['codex-cli'] = New-BootstrapComponentDefinition -Name 'codex-cli' -Description 'OpenAI Codex CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@openai/codex'; DisplayName = 'OpenAI Codex CLI (@openai/codex)' }
+    $catalog['openclaude-cli'] = New-BootstrapComponentDefinition -Name 'openclaude-cli' -Description 'OpenClaude CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@gitlawb/openclaude'; DisplayName = 'OpenClaude CLI (@gitlawb/openclaude)' }
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes via npm + OpenCloud config no projeto.' -DependsOn @('node-core') -Kind 'hermes'
     $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
@@ -6737,10 +6740,10 @@ function Get-BootstrapComponentCatalog {
 function Get-BootstrapProfileCatalog {
     $catalog = [ordered]@{}
 
-    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para máquina nova.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'google-app-desktop', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
@@ -11022,20 +11025,159 @@ function Apply-PlayniteTuning {
     return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Config file target detected; v1 leaves app-specific writes conservative.' }
 }
 
-function Apply-DevAiTuning {
-    param([Parameter(Mandatory = $true)]$Item)
+function Resolve-BootstrapOpenAiCompatibleProviderCandidate {
+    param([string[]]$PreferredProviders = @('openrouter', 'openai', 'moonshot', 'deepseek', 'xai'))
 
-    if ([string]$Item.id -eq 'notepadpp-defaults') {
-        $result = Ensure-BootstrapNotepadPlusPlusDefaults
+    $secretsInfo = Get-BootstrapSecretsData
+    $secretsData = ConvertTo-BootstrapHashtable -InputObject $secretsInfo.Data
+    if (-not ($secretsData -is [hashtable])) { return $null }
+
+    $activeProviders = Get-BootstrapActiveProviders -SecretsData $secretsData -RequirePassedValidation
+    if (($activeProviders -isnot [hashtable]) -or ($activeProviders.Count -eq 0)) {
+        $activeProviders = Get-BootstrapActiveProviders -SecretsData $secretsData
+    }
+    if (-not ($activeProviders -is [hashtable]) -or ($activeProviders.Count -eq 0)) { return $null }
+
+    foreach ($providerName in @($PreferredProviders)) {
+        if ([string]::IsNullOrWhiteSpace($providerName)) { continue }
+        if (-not $activeProviders.Contains($providerName)) { continue }
+        $provider = ConvertTo-BootstrapHashtable -InputObject $activeProviders[$providerName]
+        if (-not ($provider -is [hashtable])) { continue }
+
+        $apiKey = ''
+        if ($provider.ContainsKey('apiKey')) { $apiKey = [string]$provider['apiKey'] }
+        if ([string]::IsNullOrWhiteSpace($apiKey) -and $provider.ContainsKey('token')) { $apiKey = [string]$provider['token'] }
+        if ([string]::IsNullOrWhiteSpace($apiKey) -and $provider.ContainsKey('secret')) { $apiKey = [string]$provider['secret'] }
+        if ([string]::IsNullOrWhiteSpace($apiKey)) { continue }
+
+        $baseUrl = ''
+        if ($provider.ContainsKey('baseUrl')) { $baseUrl = [string]$provider['baseUrl'] }
+        if ([string]::IsNullOrWhiteSpace($baseUrl) -and $provider.ContainsKey('baseURL')) { $baseUrl = [string]$provider['baseURL'] }
+        if ([string]::IsNullOrWhiteSpace($baseUrl) -and [string]::Equals([string]$providerName, 'openai', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $baseUrl = 'https://api.openai.com/v1'
+        }
+        if ([string]::IsNullOrWhiteSpace($baseUrl)) { continue }
+
         return [ordered]@{
-            id = [string]$Item.id
-            status = [string]$result.status
-            note = 'Curadoria Notepad++ aplicada com plugins/UDLs oficiais e custom.'
-            manifest = $result
+            provider = [string]$providerName
+            apiKey = $apiKey
+            baseUrl = $baseUrl
         }
     }
 
-    return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Dev/AI integration audited; secrets remain managed by bootstrap-secrets.' }
+    return $null
+}
+
+function Ensure-BootstrapOpenAiCompatibleUserEnv {
+    param([string[]]$PreferredProviders = @('openrouter', 'openai', 'moonshot', 'deepseek', 'xai'))
+
+    $candidate = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders $PreferredProviders
+    if (-not ($candidate -is [hashtable])) {
+        return [ordered]@{ status = 'skipped'; reason = 'no-openai-compatible-provider' }
+    }
+
+    $updated = @()
+    $skipped = @()
+    $providerName = [string]$candidate['provider']
+    $apiKey = [string]$candidate['apiKey']
+    $baseUrl = [string]$candidate['baseUrl']
+
+    $currentOpenAiKey = [Environment]::GetEnvironmentVariable('OPENAI_API_KEY', 'User')
+    if ([string]::IsNullOrWhiteSpace($currentOpenAiKey)) {
+        Set-UserEnvVar -Name 'OPENAI_API_KEY' -Value $apiKey
+        $updated += @('OPENAI_API_KEY')
+    } else {
+        $skipped += @('OPENAI_API_KEY')
+    }
+
+    $currentOpenAiBaseUrl = [Environment]::GetEnvironmentVariable('OPENAI_BASE_URL', 'User')
+    if ([string]::IsNullOrWhiteSpace($currentOpenAiBaseUrl)) {
+        Set-UserEnvVar -Name 'OPENAI_BASE_URL' -Value $baseUrl
+        $updated += @('OPENAI_BASE_URL')
+    } else {
+        $skipped += @('OPENAI_BASE_URL')
+    }
+
+    $finalOpenAiKey = [Environment]::GetEnvironmentVariable('OPENAI_API_KEY', 'User')
+    if (-not [string]::IsNullOrWhiteSpace($finalOpenAiKey)) {
+        Set-UserEnvVar -Name 'CLAUDE_CODE_USE_OPENAI' -Value '1'
+        $updated += @('CLAUDE_CODE_USE_OPENAI')
+    }
+
+    return [ordered]@{
+        status = if ($updated.Count -gt 0) { 'applied' } else { 'configured' }
+        provider = $providerName
+        updated = @($updated)
+        skipped = @($skipped)
+    }
+}
+
+function Apply-DevAiTuning {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    switch ([string]$Item.id) {
+        'notepadpp-defaults' {
+            $result = Ensure-BootstrapNotepadPlusPlusDefaults
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$result.status
+                note = 'Curadoria Notepad++ aplicada com plugins/UDLs oficiais e custom.'
+                manifest = $result
+            }
+        }
+        'claude-code-defaults' {
+            $gitBashPath = Get-GitBashExe
+            Ensure-ClaudeCodeDefaults -GitBashPath $gitBashPath
+            Ensure-ClaudeHookConfigsHealthy -GitBashPath $gitBashPath
+
+            $secretsInfo = Get-BootstrapSecretsData
+            $secretsData = ConvertTo-BootstrapHashtable -InputObject $secretsInfo.Data
+            $resolvedTargets = Get-BootstrapResolvedSecretsTargets -SecretsData $secretsData
+            $secretsUpdated = Ensure-BootstrapClaudeCodeSecrets -ResolvedTargets $resolvedTargets
+            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('openrouter', 'moonshot', 'deepseek', 'openai', 'xai')
+
+            return [ordered]@{
+                id = [string]$Item.id
+                status = 'applied'
+                note = 'Claude Code defaults + hooks + env OpenAI-compatible.'
+                secretsUpdated = [bool]$secretsUpdated
+                envShim = $envShim
+            }
+        }
+        'opencode-auth-config' {
+            $secretsInfo = Get-BootstrapSecretsData
+            $secretsData = ConvertTo-BootstrapHashtable -InputObject $secretsInfo.Data
+            $resolvedTargets = Get-BootstrapResolvedSecretsTargets -SecretsData $secretsData
+            $updated = Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $resolvedTargets -SecretsData $secretsData
+            return [ordered]@{
+                id = [string]$Item.id
+                status = if ([bool]$updated) { 'applied' } else { 'configured' }
+                note = 'OpenCode auth/config sincronizado via manifesto.'
+                updated = [bool]$updated
+            }
+        }
+        'antigravity-settings' {
+            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('moonshot', 'openrouter', 'deepseek', 'openai', 'xai')
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$envShim.status
+                note = 'Env OpenAI-compatible aplicado para Antigravity/CLIs.'
+                envShim = $envShim
+            }
+        }
+        'openclaude-cli-env' {
+            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('openrouter', 'moonshot', 'deepseek', 'openai', 'xai')
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$envShim.status
+                note = 'Env OpenAI-compatible aplicado para OpenClaude CLI.'
+                envShim = $envShim
+            }
+        }
+        default {
+            return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Dev/AI integration audited; secrets remain managed by bootstrap-secrets.' }
+        }
+    }
 }
 
 function Apply-LocalAiContainerTuning {
