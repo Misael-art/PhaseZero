@@ -4188,6 +4188,27 @@ function Get-BootstrapSecretsProviderCatalog {
             aliases = @('moonshot', 'kimi')
             tokenPatterns = @('sk-[A-Za-z0-9_\-]{12,}', 'ak-[A-Za-z0-9_\-]{12,}')
         }
+        mimo = [ordered]@{
+            displayName = 'MiMo'
+            category = 'llm'
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            signupUrl = ''
+            docsUrl = ''
+            pricingUrl = ''
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            openCodeId = 'mimo'
+            appTargets = @('claudeCode', 'openCode', 'geminiCli', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Use a API key MiMo + baseUrl OpenAI-compatible.'
+            defaults = [ordered]@{
+                baseUrl = ''
+            }
+            aliases = @('mimo', 'mi mo')
+            tokenPatterns = @('sk-saiz[0-9a-z]{10,}')
+        }
         deepseek = [ordered]@{
             displayName = 'DeepSeek'
             category = 'llm'
@@ -5935,6 +5956,38 @@ function Get-BootstrapResolvedSecretsTargets {
 
     $resolvedTargets = ConvertTo-BootstrapHashtable -InputObject (Resolve-BootstrapSecretTemplates -Value $normalized['targets'] -SecretsData $context)
     if ($resolvedTargets -is [hashtable]) {
+        if ($activeProviders.Contains('mimo') -and ($activeProviders['mimo'] -is [hashtable])) {
+            $mimo = ConvertTo-BootstrapHashtable -InputObject $activeProviders['mimo']
+            $mimoKey = if ($mimo.ContainsKey('apiKey')) { [string]$mimo['apiKey'] } else { '' }
+            $mimoBaseUrl = if ($mimo.ContainsKey('baseUrl')) { [string]$mimo['baseUrl'] } else { '' }
+            if (-not [string]::IsNullOrWhiteSpace($mimoKey) -and -not [string]::IsNullOrWhiteSpace($mimoBaseUrl)) {
+                foreach ($targetName in @('userEnv', 'claudeCode', 'continue')) {
+                    if (-not ($resolvedTargets.ContainsKey($targetName) -and ($resolvedTargets[$targetName] -is [hashtable]))) { continue }
+                    $target = ConvertTo-BootstrapHashtable -InputObject $resolvedTargets[$targetName]
+
+                    $envMap = $null
+                    if ([string]$targetName -eq 'userEnv') {
+                        $envMap = $target
+                    } elseif ($target.ContainsKey('env') -and ($target['env'] -is [hashtable])) {
+                        $envMap = ConvertTo-BootstrapHashtable -InputObject $target['env']
+                    }
+                    if (-not ($envMap -is [hashtable])) { continue }
+
+                    if (-not $envMap.ContainsKey('OPENAI_API_KEY') -or [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_API_KEY'])) {
+                        $envMap['OPENAI_API_KEY'] = $mimoKey
+                    }
+                    if (-not $envMap.ContainsKey('OPENAI_BASE_URL') -or [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_BASE_URL'])) {
+                        $envMap['OPENAI_BASE_URL'] = $mimoBaseUrl
+                    }
+
+                    if ([string]$targetName -ne 'userEnv') {
+                        $target['env'] = $envMap
+                    }
+                    $resolvedTargets[$targetName] = $target
+                }
+            }
+        }
+
         $hasGithubToken = $activeProviders.Contains('github') -and -not [string]::IsNullOrWhiteSpace([string]$activeProviders['github']['token'])
         foreach ($targetName in @('vsCode', 'continue')) {
             if ($resolvedTargets.ContainsKey($targetName) -and ($resolvedTargets[$targetName] -is [hashtable])) {
@@ -11026,7 +11079,7 @@ function Apply-PlayniteTuning {
 }
 
 function Resolve-BootstrapOpenAiCompatibleProviderCandidate {
-    param([string[]]$PreferredProviders = @('openrouter', 'openai', 'moonshot', 'deepseek', 'xai'))
+    param([string[]]$PreferredProviders = @('mimo', 'openrouter', 'openai', 'moonshot', 'deepseek', 'xai'))
 
     $secretsInfo = Get-BootstrapSecretsData
     $secretsData = ConvertTo-BootstrapHashtable -InputObject $secretsInfo.Data
@@ -11069,7 +11122,7 @@ function Resolve-BootstrapOpenAiCompatibleProviderCandidate {
 }
 
 function Ensure-BootstrapOpenAiCompatibleUserEnv {
-    param([string[]]$PreferredProviders = @('openrouter', 'openai', 'moonshot', 'deepseek', 'xai'))
+    param([string[]]$PreferredProviders = @('mimo', 'openrouter', 'openai', 'moonshot', 'deepseek', 'xai'))
 
     $candidate = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders $PreferredProviders
     if (-not ($candidate -is [hashtable])) {
@@ -11134,7 +11187,7 @@ function Apply-DevAiTuning {
             $secretsData = ConvertTo-BootstrapHashtable -InputObject $secretsInfo.Data
             $resolvedTargets = Get-BootstrapResolvedSecretsTargets -SecretsData $secretsData
             $secretsUpdated = Ensure-BootstrapClaudeCodeSecrets -ResolvedTargets $resolvedTargets
-            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('openrouter', 'moonshot', 'deepseek', 'openai', 'xai')
+            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('mimo', 'openrouter', 'moonshot', 'deepseek', 'openai', 'xai')
 
             return [ordered]@{
                 id = [string]$Item.id
@@ -11157,7 +11210,7 @@ function Apply-DevAiTuning {
             }
         }
         'antigravity-settings' {
-            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('moonshot', 'openrouter', 'deepseek', 'openai', 'xai')
+            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('mimo', 'moonshot', 'openrouter', 'deepseek', 'openai', 'xai')
             return [ordered]@{
                 id = [string]$Item.id
                 status = [string]$envShim.status
@@ -11166,7 +11219,7 @@ function Apply-DevAiTuning {
             }
         }
         'openclaude-cli-env' {
-            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('openrouter', 'moonshot', 'deepseek', 'openai', 'xai')
+            $envShim = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('mimo', 'openrouter', 'moonshot', 'deepseek', 'openai', 'xai')
             return [ordered]@{
                 id = [string]$Item.id
                 status = [string]$envShim.status
