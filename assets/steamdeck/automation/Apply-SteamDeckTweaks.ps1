@@ -206,6 +206,20 @@ if ($touchKeyboard -eq 'enabled') {
     $results.Add([ordered]@{ action = 'touch-keyboard-enabled'; ok = [bool]$ok; requiresAdmin = $false })
 }
 
+$steamInputAudit = Get-SteamDeckSteamInputConflictAudit -Settings $settings
+$actions.Add('steam-input-desktop-layout-audit')
+$results.Add([ordered]@{
+    action = 'steam-input-desktop-layout-audit'
+    ok = $true
+    status = [string]$steamInputAudit.status
+    ready = [bool]$steamInputAudit.ready
+    activeStack = [string]$steamInputAudit.activeStack
+    policy = [string]$steamInputAudit.policy
+    recommendedAction = [string]$steamInputAudit.recommendedAction
+    reason = [string]$steamInputAudit.reason
+    requiresAdmin = $false
+})
+
 $toolSpecs = @(
     [ordered]@{
         key = 'rtss'
@@ -242,6 +256,11 @@ $toolSpecs = @(
                 name = 'SteamController'
                 process = 'SteamController'
                 candidates = @('SteamController.exe', '$env:ProgramFiles\SteamDeckTools\SteamController.exe', '$env:LOCALAPPDATA\Programs\SteamDeckTools\SteamController.exe')
+            },
+            [ordered]@{
+                name = 'FanControl'
+                process = 'FanControl'
+                candidates = @('FanControl.exe', '$env:ProgramFiles\SteamDeckTools\FanControl.exe', '$env:LOCALAPPDATA\Programs\SteamDeckTools\FanControl.exe')
             },
             [ordered]@{
                 name = 'PerformanceOverlay'

@@ -218,3 +218,29 @@ function Resolve-SteamDeckDisplaySwitchArgument {
         default { return '/extend' }
     }
 }
+
+function Get-SteamDeckSteamInputConflictAudit {
+    param([AllowNull()]$Settings)
+
+    $steamInput = Get-SteamDeckSettingMember -Object $Settings -Name 'steamInput' -Default $null
+    $activeStack = ([string](Get-SteamDeckSettingMember -Object $steamInput -Name 'activeStack' -Default 'steamdeck-tools')).Trim()
+    if ([string]::IsNullOrWhiteSpace($activeStack)) { $activeStack = 'steamdeck-tools' }
+
+    $policy = ([string](Get-SteamDeckSettingMember -Object $steamInput -Name 'desktopLayoutConflictPolicy' -Default 'manual-disable')).Trim()
+    if ([string]::IsNullOrWhiteSpace($policy)) { $policy = 'manual-disable' }
+
+    $recommendedAction = [string](Get-SteamDeckSettingMember -Object $steamInput -Name 'recommendedAction' -Default 'Steam > Settings > Controller > Desktop Layout: disable/clear layout when Steam Deck Tools, Handheld Companion or GlosSI manages desktop input.')
+    if ([string]::IsNullOrWhiteSpace($recommendedAction)) {
+        $recommendedAction = 'Steam > Settings > Controller > Desktop Layout: disable/clear layout when Steam Deck Tools, Handheld Companion or GlosSI manages desktop input.'
+    }
+
+    return [ordered]@{
+        name = 'Steam Input Desktop Layout'
+        ready = $true
+        status = 'manual-review'
+        activeStack = $activeStack
+        policy = $policy
+        recommendedAction = $recommendedAction
+        reason = 'Desktop Layout ativo no Steam pode duplicar input quando outro stack controla mouse/controle no Windows.'
+    }
+}

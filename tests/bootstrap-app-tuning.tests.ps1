@@ -93,4 +93,144 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $steamRow.canConfigure | Should Be $true
         $steamRow.canUpdate | Should Be $true
     }
+
+    It 'resolves OpenAI-compatible provider with fallback diagnostics' {
+        $fixture = @{
+            metadata = @{ version = 2 }
+            providers = @{
+                mimo = @{
+                    defaults = @{ baseUrl = '' }
+                    activeCredential = 'mimo-main-01'
+                    rotationOrder = @('mimo-main-01')
+                    credentials = @{
+                        'mimo-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'test-mimo-key'
+                            secretKind = 'apiKey'
+                            validation = @{ state = 'passed'; checkedAt = '2026-04-29T00:00:00Z'; message = 'ok' }
+                        }
+                    }
+                }
+                openrouter = @{
+                    defaults = @{ baseUrl = 'https://openrouter.ai/api/v1' }
+                    activeCredential = 'openrouter-main-01'
+                    rotationOrder = @('openrouter-main-01')
+                    credentials = @{
+                        'openrouter-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'test-openrouter-key'
+                            secretKind = 'apiKey'
+                            validation = @{ state = 'passed'; checkedAt = '2026-04-29T00:00:00Z'; message = 'ok' }
+                        }
+                    }
+                }
+            }
+            targets = (Get-BootstrapSecretsTemplate).targets
+        }
+
+        $candidate = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders @('mimo', 'openrouter') -SecretsData $fixture
+
+        $candidate.status | Should Be 'selected'
+        $candidate.provider | Should Be 'openrouter'
+        $candidate.stage | Should Be 'validated-active'
+        @($candidate.attempts | Where-Object { $_.provider -eq 'mimo' })[0].reason | Should Be 'baseurl-missing'
+    }
+
+    It 'returns skipped diagnostics when no OpenAI-compatible provider is usable' {
+        $fixture = @{
+            metadata = @{ version = 2 }
+            providers = @{
+                mimo = @{
+                    defaults = @{ baseUrl = '' }
+                    activeCredential = 'mimo-main-01'
+                    rotationOrder = @('mimo-main-01')
+                    credentials = @{
+                        'mimo-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'test-mimo-key'
+                            secretKind = 'apiKey'
+                            validation = @{ state = 'failed'; checkedAt = '2026-04-29T00:00:00Z'; message = '401' }
+                        }
+                    }
+                }
+            }
+            targets = (Get-BootstrapSecretsTemplate).targets
+        }
+
+        $candidate = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders @('mimo') -SecretsData $fixture
+
+        $candidate.status | Should Be 'no-compatible-provider'
+        @($candidate.attempts).Count | Should Be 1
+        $candidate.attempts[0].reason | Should Be 'baseurl-missing'
+        $candidate.attempts[0].stage | Should Be 'active-fallback'
+    }
+
+    It 'handles ordered OpenAI-compatible resolver results without ContainsKey failures' {
+        Mock Resolve-BootstrapOpenAiCompatibleProviderCandidate {
+            return [ordered]@{
+                status = 'no-compatible-provider'
+                attempts = @([ordered]@{
+                    provider = 'mimo'
+                    stage = 'active-fallback'
+                    selected = $false
+                    reason = 'baseurl-missing'
+                    validationState = 'failed'
+                })
+            }
+        }
+
+        $result = Ensure-BootstrapOpenAiCompatibleUserEnv -PreferredProviders @('mimo')
+
+        [string]$result.status | Should Be 'skipped'
+        [string]$result.reason | Should Be 'no-openai-compatible-provider'
+        @($result.attempts).Count | Should Be 1
+    }
+
+    It 'classifies dev-ai API failures as non-blocking warnings' {
+        $item = [ordered]@{
+            id = 'antigravity-settings'
+            category = 'dev-ai'
+        }
+
+        $classification = Get-BootstrapAppTuningFailureClassification -Item $item -ErrorMessage 'OpenAI-compatible: nenhum provider utilizavel foi encontrado.' -ExceptionType 'System.Exception'
+
+        $classification.severity | Should Be 'warning'
+        $classification.classification | Should Be 'api-non-blocking'
+        $classification.blocking | Should Be $false
+    }
+
+    It 'classifies local execution failures as blocking' {
+        $item = [ordered]@{
+            id = 'notepadpp-defaults'
+            category = 'dev-ai'
+        }
+
+        $classification = Get-BootstrapAppTuningFailureClassification -Item $item -ErrorMessage 'Falha ao instalar plugin local.' -ExceptionType 'System.Exception'
+
+        $classification.severity | Should Be 'blocking'
+        $classification.classification | Should Be 'execution-failure'
+        $classification.blocking | Should Be $true
+    }
+
+    It 'applies notepad++ tuning without depending on OpenAI-compatible provider selection' {
+        Mock Ensure-BootstrapNotepadPlusPlusDefaults {
+            return [ordered]@{
+                status = 'partial'
+                results = [ordered]@{
+                    plugins = @()
+                    assets = @()
+                }
+            }
+        }
+        Mock Ensure-BootstrapOpenAiCompatibleUserEnv {
+            throw 'Nao deveria ser chamado neste teste.'
+        }
+
+        $result = Apply-DevAiTuning -Item ([ordered]@{ id = 'notepadpp-defaults'; category = 'dev-ai' })
+
+        $result.id | Should Be 'notepadpp-defaults'
+        $result.status | Should Be 'partial'
+        Assert-MockCalled Ensure-BootstrapNotepadPlusPlusDefaults -Times 1 -Exactly
+        Assert-MockCalled Ensure-BootstrapOpenAiCompatibleUserEnv -Times 0 -Exactly
+    }
 }

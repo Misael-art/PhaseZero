@@ -31,6 +31,14 @@ O **PhaseZero** entende que cada máquina tem uma fase zero diferente. Escolha o
 
 ## 🚀 Como Usar
 
+### Requisitos
+
+- Windows 10/11 com Windows PowerShell 5.1.
+- Sessão interativa de usuário para abrir a UI WPF.
+- Em Windows 11 limpo com internet, o script usa apenas Windows PowerShell 5.1 inicial. Se `winget`/App Installer não estiver acessível, tenta baixar e instalar o App Installer oficial (`https://aka.ms/getwinget`) antes de continuar.
+- Git, Node/npm e Python são verificados pelo `-Doctor` e instalados pelos perfis quando necessário.
+- Pester 3.4+ para rodar a suíte local de testes.
+
 1. **Clone o Repositório:**
    ```powershell
    git clone https://github.com/Misael-art/PhaseZero.git
@@ -46,10 +54,84 @@ O **PhaseZero** entende que cada máquina tem uma fase zero diferente. Escolha o
    .\bootstrap-tools.ps1 # irá expor prompts via console.
    ```
 
+3. **Execute um diagnóstico seguro antes de instalar:**
+   ```powershell
+   .\bootstrap-tools.ps1 -Doctor -DryRun -NonInteractive
+   .\bootstrap-tools.ps1 -Profile base -DryRun -NonInteractive
+   ```
+
+## ✅ Verificação Local
+
+Use estes comandos antes de publicar ou rodar perfis reais:
+
+```powershell
+# parse dos scripts principais
+$tokens = $null; $errors = $null
+[void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\bootstrap-tools.ps1), [ref]$tokens, [ref]$errors)
+$errors | Format-List
+
+# contrato usado pela UI
+.\bootstrap-tools.ps1 -UiContractJson -NonInteractive | ConvertFrom-Json | Out-Null
+
+# suíte automatizada
+Import-Module Pester -MinimumVersion 3.4.0
+Invoke-Pester -Script .\tests -PassThru
+```
+
+Checks manuais recomendados:
+
+- `.\bootstrap-ui.bat -SmokeTest` deve retornar JSON com páginas, idiomas e caminho de estado.
+- `.\bootstrap-tools.ps1 -Profile ai -DryRun -NonInteractive` deve resolver dependências sem instalar.
+- `.\bootstrap-tools.ps1 -ListApps` lista apps instaláveis sob demanda.
+- `.\bootstrap-tools.ps1 -App steam,vscode -DryRun -NonInteractive` resolve apps individuais para componentes instaláveis.
+- `.\bootstrap-tools.ps1 -Profile steamdeck-recommended -DryRun -NonInteractive` deve listar bloqueadores manuais e auditoria Steam Deck.
+- `.\bootstrap-tools.ps1 -Profile steamdeck-input-advanced -DryRun -NonInteractive` mostra a pilha opt-in com Handheld Companion e GlosSI.
+
+## 🚢 Prontidão de Produção
+
+- Rode sempre em `-DryRun` antes de execução real, principalmente em perfis que alteram PATH, variáveis de usuário, WSL, serviços, agendamentos ou automação Steam Deck.
+- Execute PowerShell como administrador somente quando o relatório listar necessidade explícita.
+- A página **Windows e Linux** audita o Windows Boot Manager/BCD, mostra default, timeout, ordem de menu e entradas órfãs. Alterações de default/timeout e limpeza de BCD exigem Administrador e criam backup antes de mudar.
+- Guarde logs em `%TEMP%\bootstrap-tools_*.log` ou em `-LogPath` controlado.
+- Não versionar `.bootstrap-tools/`, `.mcp.json`, dumps de logs, manifests com credenciais, clones locais ou worktrees de agentes.
+- Para MCPs locais, copie `.mcp.example.json` para `.mcp.json` e substitua placeholders apenas no arquivo ignorado.
+- Rotacione qualquer token que tenha sido colado em arquivo fora do gerenciador de segredos.
+
 ## ⚙️ Customização
 
-Você pode facilmente plugar seus próprios aplicativos. Basta editar a seção principal de Componentes em `bootstrap-tools.ps1` usando a função:
-`New-BootstrapComponentDefinition` injetando IDs do Winget, npm, ou links diretos de download.
+Você pode instalar apps individuais sem ativar um perfil inteiro:
+
+```powershell
+.\bootstrap-tools.ps1 -ListApps
+.\bootstrap-tools.ps1 -App steam,vscode,discord -DryRun -NonInteractive
+.\bootstrap-tools.ps1 -App steam,vscode,discord -NonInteractive
+```
+
+Para plugar apps próprios, edite `bootstrap-tools.ps1`:
+
+- `New-BootstrapComponentDefinition`: define o componente real (`winget`, `chocolatey`, `npm`, `uvtool`, `manual-required`, `builtin`).
+- `Get-BootstrapOnDemandAppDefinitions`: expõe o app na UI/CLI sob demanda.
+- `Get-BootstrapAppTuningCatalog`: agrupa otimizações e instalações individuais na página **Otimizar Apps**.
+
+## 🎮 Steam Deck no Windows
+
+O perfil `steamdeck-recommended` mantém o caminho seguro por padrão:
+
+- Steam Deck Tools portable por ayufan com `PowerControl.exe`, `SteamController.exe`, `FanControl.exe` e `PerformanceOverlay.exe`;
+- RTSS/MSI Afterburner para overlay low;
+- Playnite em fullscreen como fallback de console;
+- auditoria de conflito do Steam Input Desktop Layout para evitar duplo comando no Windows.
+
+Stacks avançados ficam opt-in por risco de conflito de controle:
+
+```powershell
+.\bootstrap-tools.ps1 -Profile steamdeck-input-advanced -DryRun -NonInteractive
+.\bootstrap-tools.ps1 -App handheld-companion,glossi -DryRun -NonInteractive
+```
+
+- `handheld-companion`: instala via winget (`BenjaminLSR.HandheldCompanion`) para Auto-TDP, gyro, emulação DS4 e QuickTools overlay.
+- `glossi`: instala via Chocolatey (`glossi`) para Steam Input global em UWP/launchers. Se Chocolatey não existir, a execução real precisa de Administrador para bootstrap do `choco.exe`.
+- Antes de usar Handheld Companion ou GlosSI junto com Steam, revise `Steam > Settings > Controller > Desktop Layout` e desative/limpe o layout de desktop quando outro stack estiver gerenciando input.
 
 ## 🔐 Segredos Locais
 

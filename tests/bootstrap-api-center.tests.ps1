@@ -35,13 +35,13 @@ function New-ApiCenterSecretsFixture {
                 credentials = @{
                     'openai-main-01' = @{
                         displayName = 'Main'
-                        secret = 'sk-proj-openai-secret'
+                            secret = 'test-openai-key'
                         secretKind = 'apiKey'
                         validation = @{ state = 'passed'; checkedAt = '2026-04-21T00:00:00Z'; message = 'ok' }
                     }
                     'openai-backup-01' = @{
                         displayName = 'Backup'
-                        secret = 'sk-proj-openai-backup-secret'
+                            secret = 'test-openai-backup-key'
                         secretKind = 'apiKey'
                         validation = @{ state = 'unknown'; checkedAt = ''; message = '' }
                     }
@@ -54,7 +54,7 @@ function New-ApiCenterSecretsFixture {
                 credentials = @{
                     'openrouter-main-01' = @{
                         displayName = 'Main'
-                        secret = 'sk-or-v1-openroutersecret'
+                            secret = 'test-openrouter-key'
                         secretKind = 'apiKey'
                         validation = @{ state = 'passed'; checkedAt = '2026-04-21T00:01:00Z'; message = 'ok' }
                     }
@@ -67,7 +67,7 @@ function New-ApiCenterSecretsFixture {
                 credentials = @{
                     'deepseek-main-01' = @{
                         displayName = 'Main'
-                        secret = 'sk-deepseek-secret'
+                            secret = 'test-deepseek-key'
                         secretKind = 'apiKey'
                         validation = @{ state = 'failed'; checkedAt = '2026-04-21T00:02:00Z'; message = '401' }
                     }
@@ -124,12 +124,45 @@ Describe 'Bootstrap API Center and app capability inventory' {
         $openai.totalCredentials | Should Be 2
         $openai.activeCredentialId | Should Be 'openai-main-01'
         $openai.activeValidationState | Should Be 'passed'
-        $openai.credentials[0].secretPreview | Should Match '^sk-\*\*\*'
-        ($openai | ConvertTo-Json -Depth 8) | Should Not Match 'sk-proj-openai-secret'
+        $openai.credentials[0].secretPreview | Should Match '\*\*\*'
+        ($openai | ConvertTo-Json -Depth 8) | Should Not Match 'test-openai-key'
         (@($openai.autoAppliedApps) -contains 'OpenCode') | Should Be $true
         (@($openai.manualOnlyApps) -contains 'Comet') | Should Be $true
         $deepseek.activeValidationState | Should Be 'failed'
+        (@('selected', 'no-compatible-provider') -contains [string]$inventory.summary.openAiCompatible.status) | Should Be $true
+        ($inventory.summary.openAiCompatible | ConvertTo-Json -Depth 6) | Should Match 'attempts'
+        (@('not-configured', 'warning') -contains [string]$inventory.summary.claudeDesktopAccess.status) | Should Be $true
+        ($inventory.summary.appCoverage.byokAndMcp -ge 1) | Should Be $true
+        $inventory.summary.appCoverage.apps | Should Not BeNullOrEmpty
+        (@($inventory.summary.appCoverage.apps | ForEach-Object { [string]$_.id }) -contains 'vsCode') | Should Be $true
         (@($inventory.availableToCreate | ForEach-Object { $_.id }) -contains 'anthropic') | Should Be $true
+    }
+
+    It 'classifies Claude Desktop organization access block from Anthropic validation message' {
+        $fixture = New-ApiCenterSecretsFixture
+        $fixture.providers['anthropic'] = @{
+            defaults = @{}
+            activeCredential = 'anthropic-main-01'
+            rotationOrder = @('anthropic-main-01')
+            credentials = @{
+                'anthropic-main-01' = @{
+                    displayName = 'Main'
+                    secret = 'test-anthropic-key'
+                    secretKind = 'apiKey'
+                    validation = @{
+                        state = 'failed'
+                        checkedAt = '2026-04-29T00:00:00Z'
+                        message = 'Your organization does not have access to Claude. Please login again or contact your administrator.'
+                    }
+                }
+            }
+        }
+
+        $inventory = Get-BootstrapApiInventory -SecretsData $fixture
+
+        $inventory.summary.claudeDesktopAccess.status | Should Be 'blocked'
+        $inventory.summary.claudeDesktopAccess.reason | Should Be 'organization-access-blocked'
+        $inventory.summary.claudeDesktopAccess.message | Should Match 'organiza'
     }
 
     It 'builds full researched key catalog rows with possession and configured counts' {
@@ -170,8 +203,8 @@ Describe 'Bootstrap API Center and app capability inventory' {
         $saved.opencode.key | Should Be 'existing-opencode-key'
         $saved.unrelated.key | Should Be 'keep-me'
         $saved.openai.type | Should Be 'api'
-        $saved.openai.key | Should Be 'sk-proj-openai-secret'
-        $saved.openrouter.key | Should Be 'sk-or-v1-openroutersecret'
+        $saved.openai.key | Should Be 'test-openai-key'
+        $saved.openrouter.key | Should Be 'test-openrouter-key'
         $saved.Contains('deepseek') | Should Be $false
     }
 
@@ -210,6 +243,6 @@ Describe 'Bootstrap API Center and app capability inventory' {
         (@($guide.readyProviders | ForEach-Object { $_.id }) -contains 'openai') | Should Be $true
         (@($guide.readyProviders | ForEach-Object { $_.id }) -contains 'openrouter') | Should Be $true
         (@($guide.missingProviders | ForEach-Object { $_.id }) -contains 'anthropic') | Should Be $true
-        ($guide | ConvertTo-Json -Depth 8) | Should Not Match 'sk-proj-openai-secret'
+        ($guide | ConvertTo-Json -Depth 8) | Should Not Match 'test-openai-key'
     }
 }

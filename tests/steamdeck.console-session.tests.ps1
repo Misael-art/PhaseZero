@@ -107,9 +107,14 @@ Describe 'Steam Deck console session automation' {
 
             $steamDeckTools = @($result.results) | Where-Object { $_.action -eq 'tooling-readiness-steam-deck-tools' } | Select-Object -First 1
             $steamDeckTools.name | Should Be 'Steam Deck Tools'
-            foreach ($expectedTool in @('PowerControl', 'SteamController', 'PerformanceOverlay')) {
+            foreach ($expectedTool in @('PowerControl', 'SteamController', 'FanControl', 'PerformanceOverlay')) {
                 (@($steamDeckTools.components | ForEach-Object { $_.name }) -contains $expectedTool) | Should Be $true
             }
+
+            (@($result.actions) -contains 'steam-input-desktop-layout-audit') | Should Be $true
+            $steamInputAudit = @($result.results) | Where-Object { $_.action -eq 'steam-input-desktop-layout-audit' } | Select-Object -First 1
+            $steamInputAudit.status | Should Be 'manual-review'
+            $steamInputAudit.recommendedAction | Should Match 'Desktop Layout'
         } finally {
             if (Test-Path $settingsPath) { Microsoft.PowerShell.Management\Remove-Item $settingsPath -Force -ErrorAction SilentlyContinue }
         }
@@ -142,9 +147,14 @@ Describe 'Steam Deck console session automation' {
             $result = $json | ConvertFrom-Json
 
             $steamDeckTools = @($result.checks) | Where-Object { $_.name -eq 'Steam Deck Tools' } | Select-Object -First 1
-            foreach ($expectedTool in @('PowerControl', 'SteamController', 'PerformanceOverlay')) {
+            foreach ($expectedTool in @('PowerControl', 'SteamController', 'FanControl', 'PerformanceOverlay')) {
                 (@($steamDeckTools.components | ForEach-Object { $_.name }) -contains $expectedTool) | Should Be $true
             }
+
+            $steamInputAudit = @($result.checks) | Where-Object { $_.name -eq 'Steam Input Desktop Layout' } | Select-Object -First 1
+            $steamInputAudit.ready | Should Be $true
+            $steamInputAudit.status | Should Be 'manual-review'
+            $steamInputAudit.recommendedAction | Should Match 'Desktop Layout'
         } finally {
             if (Test-Path $settingsPath) { Microsoft.PowerShell.Management\Remove-Item $settingsPath -Force -ErrorAction SilentlyContinue }
         }

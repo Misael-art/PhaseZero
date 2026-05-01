@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$CloneBaseDir,
     [string]$WorkspaceRoot = 'F:\Steam\Steamapps',
     [string[]]$Profile = @(),
@@ -7,6 +7,7 @@ param(
     [ValidateSet('Auto', 'LCD', 'OLED')][string]$SteamDeckVersion = 'Auto',
     [string]$HostHealth,
     [string]$AppTuning,
+    [string[]]$App = @(),
     [string[]]$AppTuningCategory = @(),
     [string[]]$AppTuningItem = @(),
     [string[]]$ExcludeAppTuningItem = @(),
@@ -20,6 +21,7 @@ param(
     [switch]$ListProfiles,
     [switch]$ListHostHealthModes,
     [switch]$ListAppTuningCatalog,
+    [switch]$ListApps,
     [switch]$ListComponents,
     [switch]$Doctor,
     [switch]$UiContractJson,
@@ -27,7 +29,9 @@ param(
     [switch]$SecretsList,
     [switch]$SecretsValidateAll,
     [switch]$DryRun,
-    [switch]$NonInteractive
+    [switch]$NonInteractive,
+    [switch]$SkipManualRequirements,
+    [switch]$IgnoreManualRequirements
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,10 +47,50 @@ $script:LogPath = if ([string]::IsNullOrWhiteSpace($LogPath)) {
     $LogPath
 }
 $script:ResultPath = $ResultPath
+$script:SkipManualRequirements = $SkipManualRequirements
+$script:IgnoreManualRequirements = $IgnoreManualRequirements
+$script:BootstrapSecretsProviderCatalogCache = $null
+$script:BootstrapAppCapabilityCatalogCache = $null
+$script:BootstrapManagedMcpCatalogCache = $null
 
 $script:LogParent = Split-Path -Path $script:LogPath -Parent
 if ($script:LogParent) {
     $null = New-Item -Path $script:LogParent -ItemType Directory -Force
+}
+
+trap {
+    $errorMessage = $_.Exception.Message
+    $errorDetails = ($_ | Out-String).Trim()
+
+    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        try {
+            $resultParent = Split-Path -Path $script:ResultPath -Parent
+            if ($resultParent) { $null = New-Item -Path $resultParent -ItemType Directory -Force -ErrorAction SilentlyContinue }
+
+            $fallbackResult = [ordered]@{
+                status = 'error'
+                generatedAt = (Get-Date).ToString('o')
+                logPath = $script:LogPath
+                resultPath = $script:ResultPath
+                exitCode = 1
+                error = $errorMessage
+                details = $errorDetails
+                note = 'Unhandled exception caught by global trap handler'
+            }
+            $json = $fallbackResult | ConvertTo-Json -Depth 12
+            [System.IO.File]::WriteAllText($script:ResultPath, $json, [System.Text.UTF8Encoding]::new($false))
+        } catch { }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($script:LogPath)) {
+        try {
+            $logParent = Split-Path -Path $script:LogPath -Parent
+            if ($logParent) { $null = New-Item -Path $logParent -ItemType Directory -Force -ErrorAction SilentlyContinue }
+            Add-Content -Path $script:LogPath -Value ("[{0:yyyy-MM-dd HH:mm:ss}] [ERROR] Unhandled exception: {1}" -f (Get-Date), $errorDetails) -Encoding utf8 -ErrorAction SilentlyContinue
+        } catch { }
+    }
+
+    exit 1
 }
 
 try {
@@ -383,6 +427,118 @@ function Test-IsAdmin {
     }
 }
 
+function Test-BootstrapElevatedOrSystem {
+    try {
+        $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+        if ($null -eq $identity) { return $false }
+        if ([string]$identity.User -eq 'S-1-5-18') { return $true }
+        $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+        return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch {
+        return $false
+    }
+}
+
+function Test-BootstrapAutomatedTestMode {
+    if ($BootstrapUiLibraryMode) { return $true }
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:PESTER_RUN_PATH)) { return $true }
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:BOOTSTRAP_TEST_MODE) -and [string]$env:BOOTSTRAP_TEST_MODE -eq '1') { return $true }
+    return $false
+}
+
+function Get-BootstrapSteamDeckMaintenanceAssetsRoot {
+    return (Join-Path $PSScriptRoot 'assets\steamdeck\maintenance')
+}
+
+function Get-BootstrapSteamDeckShellMenuSpec {
+    $maintenanceRoot = Get-BootstrapSteamDeckMaintenanceRoot
+    if (-not (Test-Path $maintenanceRoot)) {
+        $maintenanceRoot = Get-BootstrapSteamDeckMaintenanceAssetsRoot
+    }
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $powershellExe)) { $powershellExe = 'powershell.exe' }
+
+    $commands = @(
+        [ordered]@{ Id = 'power-save'; Verb = 'Plano Energia: Economia'; Script = (Join-Path $maintenanceRoot 'Set-PowerPlan.ps1'); Args = @('-Plan', 'SCHEME_MIN') }
+        [ordered]@{ Id = 'power-balanced'; Verb = 'Plano Energia: Balanceado'; Script = (Join-Path $maintenanceRoot 'Set-PowerPlan.ps1'); Args = @('-Plan', 'SCHEME_BALANCED') }
+        [ordered]@{ Id = 'power-performance'; Verb = 'Plano Energia: Alto desempenho'; Script = (Join-Path $maintenanceRoot 'Set-PowerPlan.ps1'); Args = @('-Plan', 'SCHEME_MAX') }
+        [ordered]@{ Id = 'windows-update-now'; Verb = 'Windows Update agora'; Script = (Join-Path $maintenanceRoot 'Invoke-WindowsUpdateNow.ps1'); Args = @() }
+        [ordered]@{ Id = 'compact-os'; Verb = 'Compactar Sistema (CompactOS)'; Script = (Join-Path $maintenanceRoot 'Enable-CompactOS.ps1'); Args = @() }
+        [ordered]@{ Id = 'restore-point'; Verb = 'Criar ponto de restauração'; Script = (Join-Path $maintenanceRoot 'New-SystemRestorePoint.ps1'); Args = @() }
+        [ordered]@{ Id = 'clear-caches'; Verb = 'Limpeza rápida de caches'; Script = (Join-Path $maintenanceRoot 'Clear-SteamDeckCaches.ps1'); Args = @() }
+        [ordered]@{ Id = 'clear-standby-memory'; Verb = 'Limpar memória standby'; Script = (Join-Path $maintenanceRoot 'Clear-StandbyMemory.ps1'); Args = @() }
+        [ordered]@{ Id = 'apply-sharedvram-launch-options'; Verb = 'Aplicar -sharedvram (allowlist)'; Script = (Join-Path $maintenanceRoot 'Apply-SharedVramLaunchOptions.ps1'); Args = @() }
+    )
+
+    $rendered = @()
+    foreach ($command in @($commands)) {
+        $argString = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f [string]$command.Script)) + @($command.Args)
+        $rendered += @([ordered]@{
+            Id = [string]$command.Id
+            Verb = [string]$command.Verb
+            Script = [string]$command.Script
+            Command = ('"{0}" {1}' -f $powershellExe, ($argString -join ' '))
+        })
+    }
+
+    return [ordered]@{
+        RootPath = 'HKLM:\SOFTWARE\Classes\DesktopBackground\Shell\ZBootstrapSteamDeck'
+        RootVerb = 'Z Bootstrap Steam Deck'
+        RootIcon = $powershellExe
+        Commands = @($rendered)
+    }
+}
+
+function Install-BootstrapSteamDeckShellMenu {
+    param([switch]$DryRun)
+
+    $spec = Get-BootstrapSteamDeckShellMenuSpec
+    if ($DryRun) {
+        return [ordered]@{
+            DryRun = $true
+            Changed = $false
+            RegistryPath = [string]$spec.RootPath
+            Commands = @($spec.Commands)
+        }
+    }
+
+    if (-not (Test-BootstrapElevatedOrSystem)) {
+        throw 'Install-BootstrapSteamDeckShellMenu requer contexto Administrador ou SYSTEM.'
+    }
+
+    $rootPath = [string]$spec.RootPath
+    $null = New-Item -Path $rootPath -Force
+    Set-ItemProperty -Path $rootPath -Name 'MUIVerb' -Value ([string]$spec.RootVerb) -Force
+    Set-ItemProperty -Path $rootPath -Name 'Icon' -Value ([string]$spec.RootIcon) -Force
+
+    $shellPath = Join-Path $rootPath 'shell'
+    $null = New-Item -Path $shellPath -Force
+    foreach ($command in @($spec.Commands)) {
+        $entryPath = Join-Path $shellPath ([string]$command.Id)
+        $commandPath = Join-Path $entryPath 'command'
+        $null = New-Item -Path $entryPath -Force
+        Set-ItemProperty -Path $entryPath -Name 'MUIVerb' -Value ([string]$command.Verb) -Force
+        $null = New-Item -Path $commandPath -Force
+        Set-Item -Path $commandPath -Value ([string]$command.Command) -Force
+    }
+
+    if (-not (Test-BootstrapAutomatedTestMode)) {
+        try {
+            Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+            Start-Process explorer.exe | Out-Null
+        } catch {
+            Write-Log "Falha ao reiniciar explorer após shell menu: $($_.Exception.Message)" 'WARN'
+        }
+    }
+
+    return [ordered]@{
+        DryRun = $false
+        Changed = $true
+        RegistryPath = $rootPath
+        Commands = @($spec.Commands)
+    }
+}
+
 function Ensure-ProxyEnvFromWinHttp {
     $raw = $null
     try {
@@ -508,6 +664,7 @@ function Get-BootstrapPreflightRequirements {
     $needsGithub = $false
     $needsMicrosoft = $false
     $needsOpenCode = $false
+    $needsChocolatey = $false
 
     foreach ($componentName in @($ResolvedComponents)) {
         $componentDef = $catalog[$componentName]
@@ -595,6 +752,10 @@ function Get-BootstrapPreflightRequirements {
                 $requiresNetwork = $true
                 $needsGithub = $true
             }
+            'chocolatey' {
+                $requiresNetwork = $true
+                $needsChocolatey = $true
+            }
         }
     }
 
@@ -615,6 +776,12 @@ function Get-BootstrapPreflightRequirements {
         $connectivityGroups.Add([pscustomobject]@{
             Name = 'opencode'
             Hosts = @('opencode.ai')
+        })
+    }
+    if ($needsChocolatey) {
+        $connectivityGroups.Add([pscustomobject]@{
+            Name = 'chocolatey'
+            Hosts = @('community.chocolatey.org', 'packages.chocolatey.org')
         })
     }
 
@@ -663,9 +830,15 @@ function Invoke-BootstrapExecutionPreflight {
         $wingetPath = Get-Winget
         if (-not $wingetPath) {
             if ($appInstaller) {
-                throw 'Preflight: App Installer presente, mas o winget ainda nao esta acessivel nesta sessao. Feche e reabra o terminal/Explorer, faca logoff ou reinicie a sessao e tente novamente.'
+                Refresh-SessionPath
+                $wingetPath = Get-Winget
+            } else {
+                $wingetPath = Install-BootstrapAppInstaller
+                $appInstaller = Get-BootstrapAppInstallerPackage
             }
-            throw 'Preflight: winget/App Installer indisponivel. Em um Windows 11 recem-instalado, instale ou atualize o App Installer (Microsoft.DesktopAppInstaller) e execute novamente.'
+        }
+        if (-not $wingetPath) {
+            throw 'Preflight: winget/App Installer indisponivel mesmo apos tentativa automatica. Instale Microsoft.DesktopAppInstaller e execute novamente.'
         }
         Write-Log "Preflight: winget acessivel em $wingetPath"
     }
@@ -2057,7 +2230,40 @@ function Get-Winget {
     if ($cmd) { return $cmd.Source }
     $candidate = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
     if (Test-Path $candidate) { return $candidate }
+    $windowsAppsRoot = Join-Path $env:ProgramFiles 'WindowsApps'
+    if (Test-Path $windowsAppsRoot) {
+        $packaged = Get-ChildItem -Path $windowsAppsRoot -Filter 'winget.exe' -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'Microsoft\.DesktopAppInstaller_' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+        if ($packaged) { return $packaged.FullName }
+    }
     return $null
+}
+
+function Install-BootstrapAppInstaller {
+    $downloadUrl = 'https://aka.ms/getwinget'
+    $targetDir = Join-Path (Get-BootstrapDataRoot) 'downloads'
+    if (-not (Test-Path $targetDir)) {
+        New-Item -Path $targetDir -ItemType Directory -Force | Out-Null
+    }
+
+    $bundlePath = Join-Path $targetDir 'Microsoft.DesktopAppInstaller.msixbundle'
+    Write-Log "winget ausente. Baixando App Installer oficial: $downloadUrl"
+    try {
+        Invoke-WebRequest -Uri $downloadUrl -OutFile $bundlePath -UseBasicParsing -ErrorAction Stop
+        Unblock-File -Path $bundlePath -ErrorAction SilentlyContinue
+        Add-AppxPackage -Path $bundlePath -ErrorAction Stop
+        Refresh-SessionPath
+    } catch {
+        throw "Falha ao instalar App Installer/winget automaticamente. Instale Microsoft.DesktopAppInstaller pela Microsoft Store ou baixe $downloadUrl. Erro: $($_.Exception.Message)"
+    }
+
+    $winget = Get-Winget
+    if (-not $winget) {
+        throw 'App Installer foi instalado, mas winget ainda nao apareceu nesta sessao. Feche e reabra o terminal/Explorer ou reinicie a sessao.'
+    }
+    return $winget
 }
 
 function Ensure-Winget {
@@ -2066,10 +2272,15 @@ function Ensure-Winget {
         $appInstaller = Get-BootstrapAppInstallerPackage
 
         if ($appInstaller) {
-            throw 'winget não está acessível no PATH, embora o App Installer esteja presente. Feche e reabra o terminal/Explorer, faça logoff ou reinicie a sessão e tente novamente.'
+            Write-Log 'App Installer presente, mas winget nao esta no PATH. Tentando localizar pacote e atualizar sessao.' 'WARN'
+            Refresh-SessionPath
+            $winget = Get-Winget
+            if (-not $winget) {
+                throw 'winget nao esta acessivel, embora o App Installer esteja presente. Feche e reabra o terminal/Explorer, faca logoff ou reinicie a sessao e tente novamente.'
+            }
+        } else {
+            $winget = Install-BootstrapAppInstaller
         }
-
-        throw 'winget não encontrado. Em um Windows 11 recém-instalado, instale ou atualize o App Installer (Microsoft.DesktopAppInstaller) pela Microsoft Store e execute novamente.'
     }
     $version = & $winget --version
     Write-Log "winget: $version"
@@ -2999,6 +3210,285 @@ function Get-BootstrapAlternateBootEntries {
     return @($alternates)
 }
 
+function ConvertFrom-BootstrapBcdEditOutput {
+    param([AllowNull()][string]$Text)
+
+    $entries = New-Object System.Collections.Generic.List[object]
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
+
+    $current = $null
+    $currentRaw = New-Object System.Collections.Generic.List[string]
+    $lastKey = ''
+    $lines = @(($Text -replace "`r", '') -split "`n")
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        $rawLine = [string]$line
+        if ([string]::IsNullOrWhiteSpace($rawLine)) {
+            continue
+        }
+        if ($rawLine -match '^-{3,}$') {
+            continue
+        }
+        $nextLine = if (($i + 1) -lt $lines.Count) { [string]$lines[$i + 1] } else { '' }
+        if ($rawLine -match '^\S.*$' -and $nextLine -match '^-{3,}$') {
+            if ($current -and $current.Contains('identifier')) {
+                $current['raw'] = @($currentRaw.ToArray())
+                $entries.Add([pscustomobject]$current)
+            }
+            $current = [ordered]@{ section = $rawLine.Trim(); properties = [ordered]@{} }
+            $currentRaw = New-Object System.Collections.Generic.List[string]
+            $currentRaw.Add($rawLine)
+            $lastKey = ''
+            $i++
+            continue
+        }
+        if (-not $current) {
+            $current = [ordered]@{ section = 'Unknown'; properties = [ordered]@{} }
+        }
+        $currentRaw.Add($rawLine)
+        if ($rawLine -match '^\s*([\p{L}A-Za-z0-9_\-]+)\s+(.+?)\s*$') {
+            $key = $matches[1].Trim().ToLowerInvariant()
+            $value = $matches[2].Trim()
+            if ($current['properties'].Contains($key)) {
+                $current['properties'][$key] = @($current['properties'][$key]) + @($value)
+            } else {
+                $current['properties'][$key] = $value
+            }
+            if ($key -in @('identifier','identificador')) {
+                $current['identifier'] = $value
+            }
+            $lastKey = $key
+        } elseif ($lastKey -and $rawLine -match '^\s+(\{[A-Za-z0-9\-]+\})\s*$') {
+            $value = $matches[1]
+            $current['properties'][$lastKey] = @($current['properties'][$lastKey]) + @($value)
+        }
+    }
+
+    if ($current -and $current.Contains('identifier')) {
+        $current['raw'] = @($currentRaw.ToArray())
+        $entries.Add([pscustomobject]$current)
+    }
+
+    return @($entries.ToArray())
+}
+
+function Get-BootstrapBcdProperty {
+    param(
+        [Parameter(Mandatory = $true)]$Entry,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    foreach ($name in @($Names)) {
+        $key = $name.ToLowerInvariant()
+        if ($Entry.properties -and $Entry.properties.Contains($key)) {
+            return $Entry.properties[$key]
+        }
+    }
+    return $null
+}
+
+function Get-BootstrapBcdDescription {
+    param([Parameter(Mandatory = $true)]$Entry)
+    $value = Get-BootstrapBcdProperty -Entry $Entry -Names @('description','descricao','descrição')
+    if ($null -eq $value) { return '' }
+    return [string](@($value)[0])
+}
+
+function Resolve-BootstrapBcdAliasTargetId {
+    param(
+        [Parameter(Mandatory = $true)]$Entries,
+        [AllowNull()][string]$AliasId = '{current}',
+        [AllowNull()][string]$DefaultId = '',
+        [AllowNull()][string[]]$DisplayOrder = @()
+    )
+
+    $alias = ([string]$AliasId).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($alias) -or $alias -notmatch '^\{.+\}$') {
+        return ''
+    }
+
+    $aliasEntry = @($Entries | Where-Object { [string]$_.identifier -eq $alias }) | Select-Object -First 1
+    $guidEntries = @($Entries | Where-Object {
+        $id = ([string]$_.identifier).Trim().ToLowerInvariant()
+        $id -match '^\{[0-9a-f\-]{36}\}$'
+    })
+
+    if ($aliasEntry) {
+        $aliasDescription = [string](Get-BootstrapBcdDescription -Entry $aliasEntry)
+        $aliasDevice = [string](@(Get-BootstrapBcdProperty -Entry $aliasEntry -Names @('device','dispositivo'))[0])
+        $aliasOsDevice = [string](@(Get-BootstrapBcdProperty -Entry $aliasEntry -Names @('osdevice','osdispositivo'))[0])
+
+        foreach ($candidate in @($guidEntries)) {
+            $candidateDescription = [string](Get-BootstrapBcdDescription -Entry $candidate)
+            $candidateDevice = [string](@(Get-BootstrapBcdProperty -Entry $candidate -Names @('device','dispositivo'))[0])
+            $candidateOsDevice = [string](@(Get-BootstrapBcdProperty -Entry $candidate -Names @('osdevice','osdispositivo'))[0])
+            $sameDescription = (-not [string]::IsNullOrWhiteSpace($aliasDescription)) -and ($candidateDescription -eq $aliasDescription)
+            $sameDevice = (-not [string]::IsNullOrWhiteSpace($aliasDevice)) -and ($candidateDevice -eq $aliasDevice)
+            $sameOsDevice = (-not [string]::IsNullOrWhiteSpace($aliasOsDevice)) -and ($candidateOsDevice -eq $aliasOsDevice)
+            if ($sameDescription -or $sameDevice -or $sameOsDevice) {
+                return [string]$candidate.identifier
+            }
+        }
+    }
+
+    $normalizedDefault = ([string]$DefaultId).Trim().ToLowerInvariant()
+    if ($normalizedDefault -match '^\{[0-9a-f\-]{36}\}$') {
+        return $normalizedDefault
+    }
+
+    foreach ($displayId in @($DisplayOrder)) {
+        $normalizedDisplayId = ([string]$displayId).Trim().ToLowerInvariant()
+        if ($normalizedDisplayId -match '^\{[0-9a-f\-]{36}\}$') {
+            return $normalizedDisplayId
+        }
+    }
+
+    return ''
+}
+
+function Test-BootstrapBcdEntryPhantom {
+    param([Parameter(Mandatory = $true)]$Entry)
+
+    $device = @(
+        @(Get-BootstrapBcdProperty -Entry $Entry -Names @('device','dispositivo')),
+        @(Get-BootstrapBcdProperty -Entry $Entry -Names @('osdevice','osdispositivo'))
+    )
+    foreach ($value in @($device)) {
+        if ([string]$value -match '(?i)^unknown$') { return $true }
+    }
+    return $false
+}
+
+function Get-BootstrapWindowsBootManagerState {
+    param([AllowNull()][string]$BcdText = $null)
+
+    $rawText = $BcdText
+    $commandError = ''
+    if ([string]::IsNullOrWhiteSpace($rawText)) {
+        try {
+            $rawText = (& bcdedit /enum all /v 2>&1 | Out-String)
+        } catch {
+            $commandError = $_.Exception.Message
+            $rawText = ''
+        }
+    }
+
+    $entries = @(ConvertFrom-BootstrapBcdEditOutput -Text $rawText)
+    $bootmgr = $entries | Where-Object { [string]$_.identifier -eq '{bootmgr}' } | Select-Object -First 1
+    $displayOrder = @()
+    $default = ''
+    $timeout = $null
+
+    if ($bootmgr) {
+        $displayOrder = @((Get-BootstrapBcdProperty -Entry $bootmgr -Names @('displayorder','ordemdeexibicao','ordemexibicao')) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^\{.+\}$' })
+        $default = [string](@(Get-BootstrapBcdProperty -Entry $bootmgr -Names @('default','padrao','padrão'))[0])
+        $timeoutValue = [string](@(Get-BootstrapBcdProperty -Entry $bootmgr -Names @('timeout','tempo'))[0])
+        if ($timeoutValue -match '^\d+$') { $timeout = [int]$timeoutValue }
+    }
+
+    $resolvedCurrentId = Resolve-BootstrapBcdAliasTargetId -Entries $entries -AliasId '{current}' -DefaultId $default -DisplayOrder $displayOrder
+    $resolvedDefaultId = ([string]$default).Trim().ToLowerInvariant()
+    if ($resolvedDefaultId -eq '{current}') {
+        $resolvedDefaultId = $resolvedCurrentId
+    }
+    if ($resolvedDefaultId -eq '{default}') {
+        $resolvedDefaultId = ''
+    }
+
+    $entryRows = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in @($entries)) {
+        $id = ([string]$entry.identifier).Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+        $description = Get-BootstrapBcdDescription -Entry $entry
+        if ([string]::IsNullOrWhiteSpace($description)) {
+            $description = "[sem descricao] $id"
+        }
+        $entryRows.Add([ordered]@{
+            id = $id
+            section = [string]$entry.section
+            description = $description
+            device = [string](@(Get-BootstrapBcdProperty -Entry $entry -Names @('device','dispositivo'))[0])
+            osdevice = [string](@(Get-BootstrapBcdProperty -Entry $entry -Names @('osdevice','osdispositivo'))[0])
+            inDisplayOrder = (@($displayOrder) -contains $id)
+            isDefault = ($id -eq [string]$default -or (-not [string]::IsNullOrWhiteSpace($resolvedDefaultId) -and $id -eq $resolvedDefaultId))
+            isCurrent = ($id -eq '{current}' -or (-not [string]::IsNullOrWhiteSpace($resolvedCurrentId) -and $id -eq $resolvedCurrentId))
+            isPhantom = (Test-BootstrapBcdEntryPhantom -Entry $entry)
+        })
+    }
+
+    return [ordered]@{
+        IsAdmin = Test-IsAdmin
+        CommandError = $commandError
+        Default = ([string]$default).Trim().ToLowerInvariant()
+        ResolvedDefault = $resolvedDefaultId
+        ResolvedCurrent = $resolvedCurrentId
+        Timeout = $timeout
+        DisplayOrder = @($displayOrder)
+        Entries = @($entryRows.ToArray())
+        PhantomEntries = @($entryRows.ToArray() | Where-Object { $_.isPhantom })
+        RawText = $rawText
+    }
+}
+
+function Backup-BootstrapWindowsBootManager {
+    if (-not (Test-IsAdmin)) { throw 'Backup-BootstrapWindowsBootManager requer privilegios de administrador.' }
+    $backupDir = Join-Path (Get-BootstrapDataRoot) 'bcd-backups'
+    if (-not (Test-Path $backupDir)) { New-Item -Path $backupDir -ItemType Directory -Force | Out-Null }
+    $backupPath = Join-Path $backupDir ("bcd_backup_{0}.bak" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    $output = & bcdedit /export $backupPath 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falha ao exportar BCD: $output"
+    }
+    Write-Log "BCD backup criado: $backupPath"
+    return $backupPath
+}
+
+function Set-BootstrapWindowsBootManager {
+    param(
+        [AllowNull()][string]$DefaultId = '',
+        [Nullable[int]]$Timeout = $null,
+        [switch]$DryRun
+    )
+
+    if (-not (Test-IsAdmin)) { throw 'Set-BootstrapWindowsBootManager requer privilegios de administrador.' }
+    $state = Get-BootstrapWindowsBootManagerState
+    $entryIds = @($state.Entries | ForEach-Object { [string]$_['id'] })
+    $actions = New-Object System.Collections.Generic.List[string]
+
+    if (-not [string]::IsNullOrWhiteSpace($DefaultId)) {
+        if (@($entryIds) -notcontains $DefaultId) { throw "Entrada BCD desconhecida: $DefaultId" }
+        $actions.Add("default=$DefaultId")
+    }
+    if ($null -ne $Timeout) {
+        if ($Timeout.Value -lt 0 -or $Timeout.Value -gt 600) { throw 'Timeout BCD deve ficar entre 0 e 600 segundos.' }
+        $actions.Add("timeout=$($Timeout.Value)")
+    }
+    if ($actions.Count -eq 0) {
+        return [ordered]@{ Success = $true; Changed = $false; DryRun = [bool]$DryRun; Actions = @() }
+    }
+
+    $backupPath = ''
+    if (-not $DryRun) {
+        $backupPath = Backup-BootstrapWindowsBootManager
+        if (-not [string]::IsNullOrWhiteSpace($DefaultId)) {
+            $output = & bcdedit /default $DefaultId 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Falha ao definir default BCD: $output" }
+        }
+        if ($null -ne $Timeout) {
+            $output = & bcdedit /timeout $Timeout.Value 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "Falha ao definir timeout BCD: $output" }
+        }
+    }
+
+    return [ordered]@{
+        Success = $true
+        Changed = (-not [bool]$DryRun)
+        DryRun = [bool]$DryRun
+        Backup = $backupPath
+        Actions = @($actions.ToArray())
+    }
+}
+
 function Set-BootstrapOneTimeBootTarget {
     param(
         [Parameter(Mandatory = $true)][string]$EntryGuid,
@@ -3065,29 +3555,10 @@ function Invoke-BootstrapRebootToLinux {
 
 function Get-BootstrapPhantomBootEntries {
     if (-not (Test-IsAdmin)) { return @() }
-    
-    $phantoms = @()
-    $displayOrderStr = & bcdedit /enum '{bootmgr}' 2>$null | Select-String '^displayorder'
-    if (-not $displayOrderStr) { return @() }
-    
-    $guids = [regex]::Matches($displayOrderStr, '\{[a-f0-9\-]+\}') | ForEach-Object { $_.Value }
-    
-    foreach ($g in $guids) {
-        if ($g -eq '{current}') { continue } # ignora a entrada atual em execucao ativa
-        $entryLines = & bcdedit /enum $g 2>$null
-        $isPhantom = $false
-        $desc = ''
-        foreach ($line in $entryLines) {
-            if ($line -match '^description\s+(.*)') { $desc = $matches[1].Trim() }
-            if ($line -match '^device\s+unknown' -or $line -match '^osdevice\s+unknown') {
-                $isPhantom = $true
-            }
-        }
-        if ($isPhantom) {
-            $phantoms += @{ Id = $g; Description = $desc }
-        }
-    }
-    return $phantoms
+    $state = Get-BootstrapWindowsBootManagerState
+    return @($state.PhantomEntries | Where-Object { [string]$_['id'] -ne '{current}' } | ForEach-Object {
+        @{ Id = [string]$_['id']; Description = [string]$_['description'] }
+    })
 }
 
 function Repair-BootstrapPhantomEntries {
@@ -3098,12 +3569,7 @@ function Repair-BootstrapPhantomEntries {
         return @{ Success = $true; Removed = 0; Message = 'Nenhuma entrada inativa encontrada.' } 
     }
     
-    # Criar backup do BCD
-    $backupDir = Join-Path (Get-BootstrapDataRoot) 'bcd-backups'
-    if (-not (Test-Path $backupDir)) { New-Item -Path $backupDir -ItemType Directory -Force | Out-Null }
-    $backupPath = Join-Path $backupDir ("bcd_backup_cleanup_{0}.bak" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
-    & bcdedit /export $backupPath 2>&1 | Out-Null
-    Write-Log "Backup BCD concluido em: $backupPath antes da limpeza."
+    $backupPath = Backup-BootstrapWindowsBootManager
 
     $removedCount = 0
     foreach ($p in $phantoms) {
@@ -3113,10 +3579,9 @@ function Repair-BootstrapPhantomEntries {
     }
     
     # Se sobrar so 1 no displayorder (e for o current), removemos o timeout para single-OS boot rapido
-    $displayOrderStr = & bcdedit /enum '{bootmgr}' 2>$null | Select-String '^displayorder'
-    if ($displayOrderStr) {
-        $remainingGuids = [regex]::Matches($displayOrderStr, '\{[a-f0-9\-]+\}') | ForEach-Object { $_.Value }
-        if ($remainingGuids.Count -eq 1 -and $remainingGuids[0] -eq '{current}') {
+    $state = Get-BootstrapWindowsBootManagerState
+    if (@($state.DisplayOrder).Count -eq 1) {
+        if ([string]$state.DisplayOrder[0] -eq '{current}') {
             & bcdedit /timeout 0 2>&1 | Out-Null
             Write-Log "Otimizacao: Timeout definido para 0 pois sobrou apenas a instalacao corrente."
         }
@@ -3168,13 +3633,36 @@ function New-BootstrapProfileDefinition {
     }
 }
 
+function ConvertTo-BootstrapNameText {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [string]) { return $Value }
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in @('id', 'name', 'value', 'tag', 'component', 'app')) {
+            if ($Value.Contains($key) -and -not [string]::IsNullOrWhiteSpace([string]$Value[$key])) {
+                return [string]$Value[$key]
+            }
+        }
+        return ''
+    }
+    foreach ($propertyName in @('id', 'Name', 'name', 'Value', 'value', 'Tag', 'tag', 'Content', 'content')) {
+        $property = $Value.PSObject.Properties[$propertyName]
+        if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+            return [string]$property.Value
+        }
+    }
+    return [string]$Value
+}
+
 function Normalize-BootstrapNames {
-    param([string[]]$Names)
+    param([object[]]$Names)
 
     $normalized = New-Object System.Collections.Generic.List[string]
     foreach ($name in @($Names)) {
-        if ([string]::IsNullOrWhiteSpace($name)) { continue }
-        foreach ($item in ($name -split ',')) {
+        $nameText = ConvertTo-BootstrapNameText -Value $name
+        if ([string]::IsNullOrWhiteSpace($nameText)) { continue }
+        foreach ($item in ($nameText -split ',')) {
             $trimmed = $item.Trim()
             if (-not [string]::IsNullOrWhiteSpace($trimmed)) {
                 $normalized.Add($trimmed.ToLowerInvariant())
@@ -3199,11 +3687,11 @@ function ConvertTo-BootstrapHashtable {
     }
 
     if (($InputObject -is [System.Collections.IEnumerable]) -and -not ($InputObject -is [string])) {
-        $items = @()
+        $items = New-Object System.Collections.Generic.List[object]
         foreach ($item in $InputObject) {
-            $items += @(ConvertTo-BootstrapHashtable -InputObject $item)
+            $items.Add((ConvertTo-BootstrapHashtable -InputObject $item))
         }
-        return ,@($items)
+        return ,@($items.ToArray())
     }
 
     if ($InputObject -is [pscustomobject]) {
@@ -3215,6 +3703,35 @@ function ConvertTo-BootstrapHashtable {
     }
 
     return $InputObject
+}
+
+function Test-BootstrapMapContainsKey {
+    param(
+        [AllowNull()]$Map,
+        [AllowNull()]$Key
+    )
+
+    if ($null -eq $Map) { return $false }
+    $keyText = [string]$Key
+    if ([string]::IsNullOrWhiteSpace($keyText)) { return $false }
+
+    if ($Map -is [hashtable]) {
+        return $Map.ContainsKey($keyText)
+    }
+    if ($Map -is [System.Collections.Specialized.OrderedDictionary]) {
+        return $Map.Contains($keyText)
+    }
+    if ($Map -is [System.Collections.IDictionary]) {
+        $hasContainsKey = $Map.PSObject.Methods.Name -contains 'ContainsKey'
+        if ($hasContainsKey) {
+            return [bool]$Map.ContainsKey($keyText)
+        }
+        return [bool]$Map.Contains($keyText)
+    }
+    if ($Map.PSObject.Properties.Name -contains 'Keys') {
+        return (@($Map.Keys) -contains $keyText)
+    }
+    return $false
 }
 
 function Merge-BootstrapData {
@@ -3355,6 +3872,9 @@ function Get-BootstrapDefaultHostHealthMode {
     if (($selectedComponents.Count -eq 0) -and ($selectedProfiles.Count -eq 1) -and ($selectedProfiles[0] -eq 'legacy') -and ($expandedProfiles.Count -eq 1) -and ($expandedProfiles[0] -eq 'legacy')) {
         return 'off'
     }
+    if (($selectedComponents.Count -gt 0) -and ($selectedProfiles.Count -eq 0)) {
+        return 'off'
+    }
 
     return 'conservador'
 }
@@ -3382,6 +3902,222 @@ function Get-BootstrapAppTuningRoot {
     return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'app-tuning') ('{0:yyyyMMdd_HHmmss}' -f $script:StartTime))
 }
 
+function Get-BootstrapOnDemandCategoryById {
+    param([Parameter(Mandatory = $true)][string]$Id)
+
+    switch ([string]$Id) {
+        'steam' { return 'midia' }
+        'playnite' { return 'midia' }
+        'heroic' { return 'midia' }
+        'rtss' { return 'midia' }
+        'epic-games' { return 'midia' }
+        'msi-afterburner' { return 'midia' }
+        'handheld-companion' { return 'sistema' }
+        'glossi' { return 'sistema' }
+        'mem-reduct' { return 'utilitarios' }
+        'special-k' { return 'midia' }
+        'vscode' { return 'dev' }
+        'vscode-insiders' { return 'dev' }
+        'cursor' { return 'dev' }
+        'windsurf' { return 'dev' }
+        'trae' { return 'dev' }
+        'zed' { return 'dev' }
+        'git' { return 'dev' }
+        'node' { return 'dev' }
+        'python' { return 'dev' }
+        'docker' { return 'dev' }
+        'notepadpp' { return 'utilitarios' }
+        'terminal' { return 'sistema' }
+        'powertoys' { return 'utilitarios' }
+        'github-cli' { return 'dev' }
+        'claude-desktop' { return 'ia' }
+        'claude-code' { return 'ia' }
+        'opencode' { return 'ia' }
+        'codex-cli' { return 'ia' }
+        'gemini-cli' { return 'ia' }
+        'ollama' { return 'ia' }
+        'lm-studio' { return 'ia' }
+        'cherry-studio' { return 'ia' }
+        'pinokio' { return 'ia' }
+        'chrome' { return 'utilitarios' }
+        'brave' { return 'utilitarios' }
+        'discord' { return 'comunicacao' }
+        'telegram' { return 'comunicacao' }
+        '1password' { return 'seguranca' }
+        'proton-drive' { return 'produtividade' }
+        'proton-pass' { return 'seguranca' }
+        'obs-studio' { return 'midia' }
+        'sharex' { return 'midia' }
+        'blender' { return 'design' }
+        'sunshine' { return 'midia' }
+        'moonlight' { return 'midia' }
+        'tailscale' { return 'seguranca' }
+        'syncthing' { return 'produtividade' }
+        'rustdesk' { return 'comunicacao' }
+        'web-photopea' { return 'design' }
+        'web-whatsapp' { return 'comunicacao' }
+        'web-xiaomi-ai-studio' { return 'ia' }
+        'web-manus' { return 'ia' }
+        'web-kimi' { return 'ia' }
+        'web-google-docs' { return 'office' }
+        'web-z-ai' { return 'ia' }
+        'web-gemini' { return 'ia' }
+        'web-google-ai-studio' { return 'ia' }
+        default { return 'utilitarios' }
+    }
+}
+
+function New-BootstrapOnDemandAppDefinition {
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][string[]]$Components,
+        [string[]]$TargetApps = @(),
+        [string[]]$ProbePaths = @(),
+        [string[]]$Profiles = @('desktop'),
+        [string]$Category = 'app-install'
+    )
+
+    if ($TargetApps.Count -eq 0) { $TargetApps = @($DisplayName) }
+    $resolvedCategory = [string]$Category
+    if ([string]::IsNullOrWhiteSpace($resolvedCategory) -or $resolvedCategory -eq 'app-install') {
+        $resolvedCategory = Get-BootstrapOnDemandCategoryById -Id $Id
+    }
+
+    return [ordered]@{
+        id = "app-$Id"
+        category = $resolvedCategory
+        displayName = "Instalar $DisplayName"
+        description = "Instalacao individual sob demanda: $DisplayName."
+        targetApps = @($TargetApps)
+        probePaths = @($ProbePaths)
+        requiresAdmin = $false
+        defaultMode = 'opt-in'
+        profiles = @($Profiles)
+        actions = @('install', 'audit')
+        rollback = @('winget-uninstall-manual')
+        installComponents = @($Components)
+    }
+}
+
+function Get-BootstrapOnDemandAppDefinitions {
+    return @(
+        New-BootstrapOnDemandAppDefinition -Id 'steam' -DisplayName 'Steam' -Components @('steam') -TargetApps @('steam') -ProbePaths @('$env:ProgramFiles(x86)\Steam\steam.exe') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'playnite' -DisplayName 'Playnite' -Components @('playnite') -TargetApps @('playnite') -ProbePaths @('$env:LOCALAPPDATA\Playnite\Playnite.DesktopApp.exe','$env:APPDATA\Playnite\config.json') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'heroic' -DisplayName 'Heroic Games Launcher' -Components @('heroic') -TargetApps @('heroic') -ProbePaths @('$env:LOCALAPPDATA\Programs\heroic\Heroic.exe') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'rtss' -DisplayName 'RTSS' -Components @('rtss') -TargetApps @('rtss','rivatuner') -ProbePaths @('$env:ProgramFiles(x86)\RivaTuner Statistics Server\RTSS.exe') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'special-k' -DisplayName 'Special K' -Components @('special-k') -TargetApps @('special k','specialk') -ProbePaths @('$env:LOCALAPPDATA\Programs\Special K\SKIF.exe') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'epic-games' -DisplayName 'Epic Games Launcher' -Components @('epic-games') -TargetApps @('epic games launcher') -ProbePaths @('$env:ProgramFiles(x86)\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'msi-afterburner' -DisplayName 'MSI Afterburner' -Components @('msi-afterburner') -TargetApps @('msi afterburner') -ProbePaths @('$env:ProgramFiles(x86)\MSI Afterburner\MSIAfterburner.exe','$env:ProgramFiles\MSI Afterburner\MSIAfterburner.exe') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'handheld-companion' -DisplayName 'Handheld Companion' -Components @('handheld-companion') -TargetApps @('handheld companion') -ProbePaths @('$env:ProgramFiles\Handheld Companion\HandheldCompanion.exe','$env:LOCALAPPDATA\Programs\Handheld Companion\HandheldCompanion.exe') -Profiles @('game-handheld','game-docked') -Category 'sistema'
+        New-BootstrapOnDemandAppDefinition -Id 'glossi' -DisplayName 'GlosSI' -Components @('glossi') -TargetApps @('glossi','global steam input') -ProbePaths @('$env:ProgramFiles\GlosSI\GlosSIConfig.exe','$env:ProgramData\chocolatey\lib\glossi\tools\GlosSIConfig.exe') -Profiles @('game-handheld','game-docked') -Category 'sistema'
+        New-BootstrapOnDemandAppDefinition -Id 'vscode' -DisplayName 'Visual Studio Code' -Components @('vscode') -TargetApps @('visual studio code','vscode') -ProbePaths @('$env:LOCALAPPDATA\Programs\Microsoft VS Code\Code.exe','$env:APPDATA\Code\User\settings.json') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'vscode-insiders' -DisplayName 'VS Code Insiders' -Components @('vscode-insiders') -TargetApps @('visual studio code insiders','vscode insiders') -ProbePaths @('$env:LOCALAPPDATA\Programs\Microsoft VS Code Insiders\Code - Insiders.exe','$env:APPDATA\Code - Insiders\User\settings.json') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'cursor' -DisplayName 'Cursor' -Components @('cursor') -TargetApps @('cursor') -ProbePaths @('$env:LOCALAPPDATA\Programs\cursor\Cursor.exe','$env:APPDATA\Cursor\User') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'windsurf' -DisplayName 'Windsurf' -Components @('windsurf') -TargetApps @('windsurf') -ProbePaths @('$env:LOCALAPPDATA\Programs\Windsurf\Windsurf.exe','$env:APPDATA\Windsurf\User') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'trae' -DisplayName 'Trae' -Components @('trae') -TargetApps @('trae') -ProbePaths @('$env:LOCALAPPDATA\Programs\Trae\Trae.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'zed' -DisplayName 'Zed' -Components @('zed') -TargetApps @('zed') -ProbePaths @('$env:LOCALAPPDATA\Programs\Zed\Zed.exe','$env:APPDATA\Zed\settings.json') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'git' -DisplayName 'Git' -Components @('git-core') -TargetApps @('git') -ProbePaths @('$env:ProgramFiles\Git\cmd\git.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'node' -DisplayName 'Node.js LTS' -Components @('node-core') -TargetApps @('node.js','node') -ProbePaths @('$env:ProgramFiles\nodejs\node.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'python' -DisplayName 'Python' -Components @('python-core') -TargetApps @('python') -ProbePaths @('$env:LOCALAPPDATA\Programs\Python') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'docker' -DisplayName 'Docker Desktop' -Components @('docker') -TargetApps @('docker desktop') -ProbePaths @('$env:ProgramFiles\Docker\Docker\Docker Desktop.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'notepadpp' -DisplayName 'Notepad++' -Components @('notepadpp') -TargetApps @('notepad++') -ProbePaths @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'terminal' -DisplayName 'Windows Terminal' -Components @('terminal') -TargetApps @('windows terminal') -ProbePaths @('$env:LOCALAPPDATA\Microsoft\WindowsApps\wt.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'powertoys' -DisplayName 'PowerToys' -Components @('powertoys') -TargetApps @('powertoys') -ProbePaths @('$env:LOCALAPPDATA\Microsoft\PowerToys') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'github-cli' -DisplayName 'GitHub CLI' -Components @('github-cli') -TargetApps @('github cli','gh') -ProbePaths @('$env:ProgramFiles\GitHub CLI\gh.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'claude-desktop' -DisplayName 'Claude Desktop' -Components @('claude-desktop') -TargetApps @('claude') -ProbePaths @('$env:LOCALAPPDATA\AnthropicClaude\Claude.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'claude-code' -DisplayName 'Claude Code' -Components @('claude-code') -TargetApps @('claude code') -ProbePaths @('$env:APPDATA\npm\claude.cmd') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'opencode' -DisplayName 'OpenCode CLI' -Components @('opencode') -TargetApps @('opencode') -ProbePaths @('$env:USERPROFILE\.opencode\bin\opencode.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'codex-cli' -DisplayName 'Codex CLI' -Components @('codex-cli') -TargetApps @('codex') -ProbePaths @('$env:APPDATA\npm\codex.cmd') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'gemini-cli' -DisplayName 'Gemini CLI' -Components @('gemini-cli') -TargetApps @('gemini') -ProbePaths @('$env:APPDATA\npm\gemini.cmd') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'ollama' -DisplayName 'Ollama' -Components @('ollama') -TargetApps @('ollama') -ProbePaths @('$env:LOCALAPPDATA\Programs\Ollama\ollama.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'lm-studio' -DisplayName 'LM Studio' -Components @('lm-studio') -TargetApps @('lm studio') -ProbePaths @('$env:LOCALAPPDATA\Programs\LM Studio\LM Studio.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'cherry-studio' -DisplayName 'Cherry Studio' -Components @('cherry-studio') -TargetApps @('cherry studio') -ProbePaths @('$env:APPDATA\CherryStudio') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'pinokio' -DisplayName 'Pinokio' -Components @('pinokio') -TargetApps @('pinokio') -ProbePaths @('$env:LOCALAPPDATA\Programs\Pinokio') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'chrome' -DisplayName 'Google Chrome' -Components @('chrome') -TargetApps @('google chrome','chrome') -ProbePaths @('$env:LOCALAPPDATA\Google\Chrome\User Data') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'brave' -DisplayName 'Brave Browser' -Components @('brave') -TargetApps @('brave') -ProbePaths @('$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'discord' -DisplayName 'Discord' -Components @('discord') -TargetApps @('discord') -ProbePaths @('$env:LOCALAPPDATA\Discord\Update.exe') -Profiles @('desktop','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'telegram' -DisplayName 'Telegram Desktop' -Components @('telegram') -TargetApps @('telegram') -ProbePaths @('$env:APPDATA\Telegram Desktop') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id '1password' -DisplayName '1Password' -Components @('1password') -TargetApps @('1password') -ProbePaths @('$env:LOCALAPPDATA\1Password\app\8\1Password.exe') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'proton-drive' -DisplayName 'Proton Drive' -Components @('proton-drive') -TargetApps @('proton drive') -ProbePaths @('$env:LOCALAPPDATA\Programs\Proton Drive\ProtonDrive.exe') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'proton-pass' -DisplayName 'Proton Pass' -Components @('proton-pass') -TargetApps @('proton pass') -ProbePaths @('$env:LOCALAPPDATA\Programs\Proton Pass') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'obs-studio' -DisplayName 'OBS Studio' -Components @('obs-studio') -TargetApps @('obs studio','obs') -ProbePaths @('$env:ProgramFiles\obs-studio\bin\64bit\obs64.exe','$env:APPDATA\obs-studio') -Profiles @('desktop','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'sharex' -DisplayName 'ShareX' -Components @('sharex') -TargetApps @('sharex') -ProbePaths @('$env:APPDATA\ShareX') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'blender' -DisplayName 'Blender' -Components @('blender') -TargetApps @('blender') -ProbePaths @('$env:APPDATA\Blender Foundation') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'sunshine' -DisplayName 'Sunshine' -Components @('sunshine') -TargetApps @('sunshine') -ProbePaths @('$env:ProgramFiles\Sunshine\sunshine.exe') -Profiles @('desktop','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'moonlight' -DisplayName 'Moonlight' -Components @('moonlight') -TargetApps @('moonlight') -ProbePaths @('$env:LOCALAPPDATA\Programs\Moonlight Game Streaming\Moonlight.exe') -Profiles @('desktop','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'tailscale' -DisplayName 'Tailscale' -Components @('tailscale') -TargetApps @('tailscale') -ProbePaths @('$env:ProgramFiles\Tailscale\tailscale.exe') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'syncthing' -DisplayName 'Syncthing' -Components @('syncthing') -TargetApps @('syncthing') -ProbePaths @('$env:LOCALAPPDATA\Syncthing') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'rustdesk' -DisplayName 'RustDesk' -Components @('rustdesk') -TargetApps @('rustdesk') -ProbePaths @('$env:ProgramFiles\RustDesk\rustdesk.exe') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'mem-reduct' -DisplayName 'Mem Reduct' -Components @('mem-reduct') -TargetApps @('mem reduct','memreduct') -ProbePaths @('$env:ProgramFiles\Mem Reduct\memreduct.exe','$env:ProgramFiles(x86)\Mem Reduct\memreduct.exe') -Profiles @('desktop','game-handheld','game-docked')
+        New-BootstrapOnDemandAppDefinition -Id 'web-photopea' -DisplayName 'Photopea (Web App)' -Components @('webapp-photopea') -TargetApps @('photopea web') -ProbePaths @('$env:USERPROFILE\Desktop\Design\Photopea.lnk') -Profiles @('desktop','dev') -Category 'design'
+        New-BootstrapOnDemandAppDefinition -Id 'web-whatsapp' -DisplayName 'WhatsApp Web (Web App)' -Components @('webapp-whatsapp-web') -TargetApps @('whatsapp web') -ProbePaths @('$env:USERPROFILE\Desktop\Comunicação\WhatsApp Web.lnk') -Profiles @('desktop') -Category 'comunicacao'
+        New-BootstrapOnDemandAppDefinition -Id 'web-xiaomi-ai-studio' -DisplayName 'Xiaomi AI Studio (Web App)' -Components @('webapp-xiaomi-ai-studio') -TargetApps @('xiaomi ai studio') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Xiaomi AI Studio.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'web-manus' -DisplayName 'Manus (Web App)' -Components @('webapp-manus') -TargetApps @('manus web') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Manus.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'web-kimi' -DisplayName 'Kimi (Web App)' -Components @('webapp-kimi') -TargetApps @('kimi web') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Kimi.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'web-google-docs' -DisplayName 'Google Docs (Web App)' -Components @('webapp-google-docs') -TargetApps @('google docs') -ProbePaths @('$env:USERPROFILE\Desktop\Office\Google Docs.lnk') -Profiles @('desktop','dev') -Category 'office'
+        New-BootstrapOnDemandAppDefinition -Id 'web-z-ai' -DisplayName 'Z.ai (Web App)' -Components @('webapp-z-ai') -TargetApps @('z ai web') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Z.ai.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'web-gemini' -DisplayName 'Gemini (Web App)' -Components @('webapp-gemini-web') -TargetApps @('gemini web') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Gemini.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'web-google-ai-studio' -DisplayName 'Google AI Studio (Web App)' -Components @('webapp-google-ai-studio') -TargetApps @('google ai studio') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Google AI Studio.lnk') -Profiles @('desktop','dev') -Category 'ia'
+    )
+}
+
+function Get-BootstrapAppCatalog {
+    $components = Get-BootstrapComponentCatalog
+    $apps = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @(Get-BootstrapOnDemandAppDefinitions)) {
+        foreach ($componentName in @($item.installComponents)) {
+            if (-not $components.Contains($componentName)) { continue }
+            $component = $components[$componentName]
+            $apps.Add([ordered]@{
+                app = ([string]$item.id -replace '^app-', '')
+                displayName = ([string]$item.displayName -replace '^Instalar ', '')
+                component = [string]$componentName
+                kind = [string]$component.Kind
+                wingetId = if ($component.PSObject.Properties['Id']) { [string]$component.Id } else { '' }
+                provisioning = if ($component.PSObject.Properties['Provisioning']) { [string]$component.Provisioning } else { [string]$component.Kind }
+                description = [string]$component.Description
+            }) | Out-Null
+        }
+    }
+    return @($apps.ToArray() | Sort-Object app, component)
+}
+
+function Resolve-BootstrapAppComponents {
+    param([object[]]$Names)
+
+    $requested = @(Normalize-BootstrapNames -Names $Names)
+    if ($requested.Count -eq 0) { return @() }
+
+    $catalog = Get-BootstrapAppCatalog
+    $lookup = @{}
+    foreach ($app in @($catalog)) {
+        foreach ($key in @($app.app, $app.displayName, $app.component)) {
+            $normalized = @(Normalize-BootstrapNames -Names @($key))
+            foreach ($name in @($normalized)) {
+                if (-not $lookup.ContainsKey($name)) { $lookup[$name] = New-Object System.Collections.Generic.List[string] }
+                $lookup[$name].Add([string]$app.component)
+            }
+        }
+    }
+
+    $resolved = New-Object System.Collections.Generic.List[string]
+    foreach ($name in @($requested)) {
+        if (-not $lookup.ContainsKey($name)) { throw "App desconhecido: $name. Use -ListApps para ver nomes suportados." }
+        foreach ($component in @($lookup[$name].ToArray())) {
+            if (-not $resolved.Contains($component)) { $resolved.Add($component) }
+        }
+    }
+    return @($resolved.ToArray())
+}
+
+function Show-BootstrapApps {
+    foreach ($app in @(Get-BootstrapAppCatalog)) {
+        $source = if ([string]::IsNullOrWhiteSpace([string]$app.wingetId)) { [string]$app.provisioning } else { "winget:$($app.wingetId)" }
+        Write-Output ("{0} - {1} | component: {2} | source: {3}" -f $app.app, $app.displayName, $app.component, $source)
+    }
+}
+
 function Get-BootstrapAppTuningCatalog {
     $categories = @(
         [ordered]@{ id = 'gaming-console'; displayName = 'Gaming / Console'; description = 'Steam, Playnite, Heroic, RTSS e Special K seguros.' }
@@ -3393,6 +4129,17 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'capture-creator'; displayName = 'Captura / Creator'; description = 'OBS, ShareX, RTSS overlay e apps criativos sem autostart.' }
         [ordered]@{ id = 'storage-backup'; displayName = 'Storage / Backup'; description = 'Auditoria de libraries, compactacao e backup golden.' }
         [ordered]@{ id = 'windows-qol'; displayName = 'Windows QoL'; description = 'QuickLook, PowerToys e shell tweaks opt-in.' }
+        [ordered]@{ id = 'ia'; displayName = 'IA'; description = 'Apps, agentes e atalhos web de IA.' }
+        [ordered]@{ id = 'comunicacao'; displayName = 'Comunicação'; description = 'Mensageria, chat e colaboração.' }
+        [ordered]@{ id = 'design'; displayName = 'Design'; description = 'Criação visual e ferramentas de design.' }
+        [ordered]@{ id = 'office'; displayName = 'Office'; description = 'Documentos e produtividade de escritório.' }
+        [ordered]@{ id = 'produtividade'; displayName = 'Produtividade'; description = 'Fluxo pessoal, sincronização e utilidade diária.' }
+        [ordered]@{ id = 'dev'; displayName = 'Dev'; description = 'Ferramentas e IDEs de desenvolvimento.' }
+        [ordered]@{ id = 'sistema'; displayName = 'Sistema'; description = 'Componentes de sistema e shell.' }
+        [ordered]@{ id = 'drivers'; displayName = 'Drivers'; description = 'Drivers e runtimes de hardware.' }
+        [ordered]@{ id = 'utilitarios'; displayName = 'Utilitários'; description = 'Utilitários gerais e manutenção.' }
+        [ordered]@{ id = 'seguranca'; displayName = 'Segurança'; description = 'Proteção de contas e rede.' }
+        [ordered]@{ id = 'midia'; displayName = 'Mídia'; description = 'Streaming, captura e multimídia.' }
     )
 
     $items = @(
@@ -3403,7 +4150,8 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'specialk-safe-defaults'; category = 'gaming-console'; displayName = 'Special K seguro'; description = 'Mantem Special K sem injecao global por padrao para reduzir risco anti-cheat.'; targetApps = @('special k','specialk'); probePaths = @('$env:LOCALAPPDATA\Programs\Special K\SKIF.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked'); actions = @('config-file','audit'); rollback = @('backup-file') }
         [ordered]@{ id = 'specialk-global-injection'; category = 'gaming-console'; displayName = 'Special K injecao global'; description = 'Opcao profunda; fica opt-in por risco anti-cheat.'; targetApps = @('special k','specialk'); probePaths = @('$env:LOCALAPPDATA\Programs\Special K\SKIF.exe'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('game-handheld','game-docked'); actions = @('config-file'); rollback = @('backup-file') }
 
-        [ordered]@{ id = 'steamdeck-tools-allowlist'; category = 'steamdeck-control'; displayName = 'Steam Deck Tools allowlist'; description = 'Protege Steam Deck Tools contra limpeza/processos de jogo.'; targetApps = @('steam deck tools'); probePaths = @('$env:ProgramFiles\Steam Deck Tools\PowerControl.exe','$env:LOCALAPPDATA\Programs\Steam Deck Tools\PowerControl.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'steamdeck-tools-allowlist'; category = 'steamdeck-control'; displayName = 'Steam Deck Tools allowlist'; description = 'Protege Steam Deck Tools contra limpeza/processos de jogo.'; targetApps = @('steam deck tools'); probePaths = @('$env:ProgramFiles\SteamDeckTools\PowerControl.exe','$env:LOCALAPPDATA\Programs\SteamDeckTools\PowerControl.exe','$env:ProgramFiles\SteamDeckTools\FanControl.exe','$env:LOCALAPPDATA\Programs\SteamDeckTools\FanControl.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'steam-input-desktop-layout-audit'; category = 'steamdeck-control'; displayName = 'Steam Input Desktop Layout'; description = 'Audita conflito de Desktop Layout com Steam Deck Tools, Handheld Companion ou GlosSI.'; targetApps = @('steam','steam deck tools','handheld companion','glossi'); probePaths = @('$env:ProgramFiles(x86)\Steam\steam.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('audit','manual-action'); rollback = @('manual') }
         [ordered]@{ id = 'autohotkey-recovery-hotkeys'; category = 'steamdeck-control'; displayName = 'AutoHotkey recovery'; description = 'Garante hotkeys de retorno para Desktop/Dev.'; targetApps = @('autohotkey'); probePaths = @('$env:LOCALAPPDATA\Programs\AutoHotkey\v2\AutoHotkey64.exe','$env:LOCALAPPDATA\Programs\AutoHotkey\AutoHotkey.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('session'); rollback = @('manual') }
         [ordered]@{ id = 'powertoys-deck-layout'; category = 'steamdeck-control'; displayName = 'PowerToys Awake/FancyZones'; description = 'Ativa uso de Awake/FancyZones para dock/dev quando PowerToys existir.'; targetApps = @('powertoys'); probePaths = @('$env:LOCALAPPDATA\Microsoft\PowerToys'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','dev'); actions = @('config-file','session'); rollback = @('backup-file') }
         [ordered]@{ id = 'soundswitch-audio-profile'; category = 'steamdeck-control'; displayName = 'SoundSwitch audio'; description = 'Prepara troca de audio Deck/HDMI/DP por modo.'; targetApps = @('soundswitch'); probePaths = @('$env:APPDATA\SoundSwitch'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('config-file','session'); rollback = @('backup-file') }
@@ -3444,6 +4192,8 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'mica-optin'; category = 'windows-qol'; displayName = 'Mica opt-in'; description = 'Visual tweak opcional para Mica For Everyone.'; targetApps = @('mica for everyone'); probePaths = @('$env:APPDATA\Mica For Everyone'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'powertoys-qol'; category = 'windows-qol'; displayName = 'PowerToys QoL'; description = 'Mantem PowerToys nos modulos uteis e evita ruído no jogo.'; targetApps = @('powertoys'); probePaths = @('$env:LOCALAPPDATA\Microsoft\PowerToys'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','dev'); actions = @('config-file','session'); rollback = @('backup-file') }
     )
+
+    $items += @(Get-BootstrapOnDemandAppDefinitions)
 
     return [ordered]@{
         categories = @($categories)
@@ -3529,8 +4279,8 @@ function Test-BootstrapAppTuningItemInstalled {
     )
 
     $inventory = ConvertTo-BootstrapHashtable -InputObject $InstalledInventory
-    $apps = if ($inventory.ContainsKey('apps') -and ($inventory['apps'] -is [hashtable])) { $inventory['apps'] } else { @{} }
-    $paths = if ($inventory.ContainsKey('paths') -and ($inventory['paths'] -is [hashtable])) { $inventory['paths'] } else { @{} }
+    $apps = if ((Test-BootstrapMapContainsKey -Map $inventory -Key 'apps') -and ($inventory['apps'] -is [hashtable])) { $inventory['apps'] } else { @{} }
+    $paths = if ((Test-BootstrapMapContainsKey -Map $inventory -Key 'paths') -and ($inventory['paths'] -is [hashtable])) { $inventory['paths'] } else { @{} }
 
     foreach ($targetApp in @($Item.targetApps)) {
         $needle = ([string]$targetApp).Trim().ToLowerInvariant()
@@ -3546,7 +4296,7 @@ function Test-BootstrapAppTuningItemInstalled {
     foreach ($probePath in @($Item.probePaths)) {
         $expanded = ConvertTo-BootstrapExpandedPath -Path ([string]$probePath)
         if ([string]::IsNullOrWhiteSpace($expanded)) { continue }
-        if ($paths.ContainsKey($expanded)) {
+        if (Test-BootstrapMapContainsKey -Map $paths -Key $expanded) {
             return $true
         }
     }
@@ -3561,6 +4311,9 @@ function Get-BootstrapDefaultAppTuningMode {
     )
 
     if (@($Selection.Profiles).Count -eq 1 -and [string]$Selection.Profiles[0] -eq 'legacy') {
+        return 'off'
+    }
+    if ((@($Selection.Components).Count -gt 0) -and (@($Selection.Profiles).Count -eq 0)) {
         return 'off'
     }
     return 'recommended'
@@ -3593,10 +4346,10 @@ function Resolve-BootstrapAppTuningSelection {
     $excluded = @(Normalize-BootstrapNames -Names $ExcludedItems)
 
     foreach ($categoryId in @($selectedCategories)) {
-        if (-not $categoryLookup.ContainsKey($categoryId)) { throw "Categoria AppTuning desconhecida: $categoryId" }
+        if (-not (Test-BootstrapMapContainsKey -Map $categoryLookup -Key $categoryId)) { throw "Categoria AppTuning desconhecida: $categoryId" }
     }
     foreach ($itemId in @($selectedItems + $excluded)) {
-        if (-not $itemLookup.ContainsKey($itemId)) { throw "Item AppTuning desconhecido: $itemId" }
+        if (-not (Test-BootstrapMapContainsKey -Map $itemLookup -Key $itemId)) { throw "Item AppTuning desconhecido: $itemId" }
     }
 
     $selectedMap = [ordered]@{}
@@ -3661,6 +4414,13 @@ function Resolve-BootstrapAppTuningSelection {
 
 function Get-BootstrapAppTuningInstallComponents {
     param([Parameter(Mandatory = $true)]$Item)
+
+    if (($Item -is [System.Collections.IDictionary]) -and $Item.Contains('installComponents')) {
+        return @($Item['installComponents'] | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    }
+    if ($Item.PSObject.Properties['installComponents']) {
+        return @($Item.installComponents | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    }
 
     $map = @{
         'steam-big-picture-session' = @('steam')
@@ -3746,7 +4506,7 @@ function Get-BootstrapAppTuningStatusRows {
     foreach ($item in @($catalog.items)) {
         $id = [string]$item.id
         $installed = Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inventory
-        $selected = $selectedMap.ContainsKey($id)
+        $selected = (Test-BootstrapMapContainsKey -Map $selectedMap -Key $id)
         $configured = Test-BootstrapAppTuningRegistryConfigured -Item $item
         $configuredState = if ($configured) {
             'configured'
@@ -3831,7 +4591,19 @@ function Get-BootstrapHostHealthPolicy {
     $serviceAdjustments = @()
     if ($normalizedMode -eq 'agressivo') {
         $serviceAdjustments = @(
-            [ordered]@{ Name = 'MapsBroker'; StartType = 'Disabled' }
+            [ordered]@{ Name = 'MapsBroker'; StartType = 'Disabled' },
+            [ordered]@{ Name = 'DiagTrack'; StartType = 'Disabled' }
+        )
+    }
+
+    $telemetryTasks = @()
+    if ($normalizedMode -eq 'agressivo') {
+        $telemetryTasks = @(
+            [ordered]@{ TaskPath = '\Microsoft\Windows\Application Experience\'; TaskName = 'Microsoft Compatibility Appraiser' },
+            [ordered]@{ TaskPath = '\Microsoft\Windows\Application Experience\'; TaskName = 'ProgramDataUpdater' },
+            [ordered]@{ TaskPath = '\Microsoft\Windows\Customer Experience Improvement Program\'; TaskName = 'Consolidator' },
+            [ordered]@{ TaskPath = '\Microsoft\Windows\Customer Experience Improvement Program\'; TaskName = 'UsbCeip' },
+            [ordered]@{ TaskPath = '\Microsoft\Windows\Autochk\'; TaskName = 'Proxy' }
         )
     }
 
@@ -3867,7 +4639,7 @@ function Get-BootstrapHostHealthPolicy {
             DOCKED_MONITOR = 'desktop'
         }
         KillInGame = @('ms-teams', 'olk', 'PhoneExperienceHost', 'msedge', 'Widgets', 'WidgetService')
-        KeepAlways = @('SecurityHealthSystray', 'RadeonSoftware', 'Steam', 'Sunshine', 'Tailscale', 'PowerControl', 'PerformanceOverlay', 'SteamController')
+        KeepAlways = @('SecurityHealthSystray', 'RadeonSoftware', 'Steam', 'Sunshine', 'Tailscale', 'PowerControl', 'PerformanceOverlay', 'SteamController', 'FanControl', 'HandheldCompanion', 'GlosSI')
         AppxRemove = @($appxRemove)
         Verify = @(
             'startup snapshot',
@@ -3876,6 +4648,11 @@ function Get-BootstrapHostHealthPolicy {
             'appx snapshot',
             'policy report'
         )
+        Telemetry = [ordered]@{
+            mode = if ($normalizedMode -eq 'agressivo') { 'opt-in-agressivo' } else { 'off' }
+            serviceAdjustments = @($serviceAdjustments | Where-Object { [string]$_.Name -eq 'DiagTrack' })
+            scheduledTasksDisable = @($telemetryTasks)
+        }
     }
 }
 
@@ -4045,7 +4822,11 @@ function Get-BootstrapSecretsKnownTargets {
 }
 
 function Get-BootstrapSecretsProviderCatalog {
-    return (ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
+    if ($script:BootstrapSecretsProviderCatalogCache -is [hashtable]) {
+        return $script:BootstrapSecretsProviderCatalogCache
+    }
+
+    $script:BootstrapSecretsProviderCatalogCache = (ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
         anthropic = [ordered]@{
             displayName = 'Anthropic'
             category = 'llm'
@@ -4762,10 +5543,15 @@ function Get-BootstrapSecretsProviderCatalog {
             tokenPatterns = @()
         }
     }))
+    return $script:BootstrapSecretsProviderCatalogCache
 }
 
 function Get-BootstrapAppCapabilityCatalog {
-    return (ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
+    if ($script:BootstrapAppCapabilityCatalogCache -is [hashtable]) {
+        return $script:BootstrapAppCapabilityCatalogCache
+    }
+
+    $script:BootstrapAppCapabilityCatalogCache = (ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
         claudeCode = [ordered]@{
             displayName = 'Claude Code'
             autoInstall = $true
@@ -4839,6 +5625,7 @@ function Get-BootstrapAppCapabilityCatalog {
             notes = 'Caveman via npx skills e instrucoes Copilot/AGENTS.md.'
         }
     }))
+    return $script:BootstrapAppCapabilityCatalogCache
 }
 
 function Get-BootstrapApiProviderDescription {
@@ -4963,6 +5750,130 @@ function Get-BootstrapCredentialEffectiveValue {
         return [string]$ProviderDefinition['defaults'][$Name]
     }
     return ''
+}
+
+function Get-BootstrapClaudeDesktopAccessDiagnostic {
+    param([Parameter(Mandatory = $true)]$Inventory)
+
+    $provider = @($Inventory.providers | Where-Object { [string]$_.id -eq 'anthropic' } | Select-Object -First 1)
+    if (@($provider).Count -eq 0) {
+        return [ordered]@{
+            status = 'not-configured'
+            reason = 'anthropic-provider-missing'
+            message = 'Provider Anthropic não encontrado no inventário.'
+            action = 'Cadastre e valide uma credencial Anthropic ativa no API Center.'
+        }
+    }
+
+    $anthropic = $provider[0]
+    $state = [string]$anthropic.activeValidationState
+    $validationMessage = [string]$anthropic.activeValidationMessage
+    if ($state -eq 'passed') {
+        return [ordered]@{
+            status = 'ok'
+            reason = 'validation-passed'
+            message = 'Credencial ativa Anthropic validada.'
+            action = ''
+        }
+    }
+
+    if (Test-BootstrapClaudeOrganizationAccessError -Message $validationMessage) {
+        return [ordered]@{
+            status = 'blocked'
+            reason = 'organization-access-blocked'
+            message = 'A organização autenticada não possui acesso ao Claude.'
+            action = 'No Claude Desktop, faça logout/login com a conta correta ou solicite habilitação ao administrador da organização.'
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($validationMessage)) {
+        $validationMessage = 'sem detalhe de validação'
+    }
+    return [ordered]@{
+        status = 'warning'
+        reason = 'validation-failed'
+        message = "Credencial Anthropic não validada: $validationMessage"
+        action = 'Valide novamente a credencial no API Center e confirme plano/permissões da conta Anthropic.'
+    }
+}
+
+function Get-BootstrapAppChannelCoverageSummary {
+    param(
+        [Parameter(Mandatory = $true)]$ResolvedTargets,
+        [Parameter(Mandatory = $true)][hashtable]$OpenAiCompatible
+    )
+
+    $coverageEntries = @()
+    $supportedTargets = @('vsCode', 'cursor', 'windsurf', 'trae', 'openCode', 'roo', 'cline', 'zed', 'zCode')
+    $labelMap = [ordered]@{
+        vsCode = 'VS Code / Insiders / Agents'
+        cursor = 'Cursor'
+        windsurf = 'Windsurf'
+        trae = 'Trae'
+        openCode = 'OpenCode'
+        roo = 'Roo Code (stable/nightly)'
+        cline = 'Cline (stable/nightly)'
+        zed = 'Zed'
+        zCode = 'Z Code'
+    }
+
+    foreach ($targetName in $supportedTargets) {
+        $target = @{}
+        if (($ResolvedTargets -is [hashtable]) -and $ResolvedTargets.ContainsKey($targetName) -and ($ResolvedTargets[$targetName] -is [hashtable])) {
+            $target = ConvertTo-BootstrapHashtable -InputObject $ResolvedTargets[$targetName]
+        }
+
+        $envMap = @{}
+        if ($target.ContainsKey('env') -and ($target['env'] -is [hashtable])) {
+            $envMap = ConvertTo-BootstrapHashtable -InputObject $target['env']
+        }
+        $mcpMap = @{}
+        if ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable])) {
+            $mcpMap = ConvertTo-BootstrapHashtable -InputObject $target['mcpServers']
+        }
+
+        $hasByok = $false
+        if ($targetName -eq 'openCode') {
+            $hasByok = ([string]$OpenAiCompatible['status'] -eq 'selected')
+        } else {
+            $hasByok = (
+                ($envMap.ContainsKey('OPENAI_API_KEY') -and -not [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_API_KEY'])) -or
+                ($envMap.ContainsKey('ANTHROPIC_API_KEY') -and -not [string]::IsNullOrWhiteSpace([string]$envMap['ANTHROPIC_API_KEY'])) -or
+                ($envMap.ContainsKey('GEMINI_API_KEY') -and -not [string]::IsNullOrWhiteSpace([string]$envMap['GEMINI_API_KEY']))
+            )
+        }
+        $hasMcp = (@($mcpMap.Keys).Count -gt 0)
+
+        $status = 'mcp-only'
+        $reason = 'BYOK não disponível por target resolvido; MCP mantido.'
+        if ($hasByok -and $hasMcp) {
+            $status = 'byok+mcp'
+            $reason = 'Aplicação completa: BYOK + MCP.'
+        } elseif ($hasByok -and -not $hasMcp) {
+            $status = 'byok-only'
+            $reason = 'BYOK aplicado; sem MCP configurado para este target.'
+        } elseif (-not $hasByok -and -not $hasMcp) {
+            $status = 'skipped'
+            $reason = 'Target sem valores aplicáveis no manifesto.'
+        }
+
+        $coverageEntries += @([ordered]@{
+            id = $targetName
+            displayName = [string]$labelMap[$targetName]
+            status = $status
+            reason = $reason
+            byokApplied = $hasByok
+            mcpApplied = $hasMcp
+        })
+    }
+
+    return [ordered]@{
+        byokAndMcp = @($coverageEntries | Where-Object { [string]$_.status -eq 'byok+mcp' }).Count
+        byokOnly = @($coverageEntries | Where-Object { [string]$_.status -eq 'byok-only' }).Count
+        mcpOnly = @($coverageEntries | Where-Object { [string]$_.status -eq 'mcp-only' }).Count
+        skipped = @($coverageEntries | Where-Object { [string]$_.status -eq 'skipped' }).Count
+        apps = @($coverageEntries)
+    }
 }
 
 function Get-BootstrapApiInventory {
@@ -5100,17 +6011,39 @@ function Get-BootstrapApiInventory {
         }
     }
 
-    return [ordered]@{
+    $openAiCompat = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders @('mimo', 'moonshot', 'openrouter', 'deepseek', 'openai', 'xai') -SecretsData $normalized
+    if (-not ($openAiCompat -is [hashtable])) {
+        $openAiCompat = [ordered]@{
+            status = 'no-compatible-provider'
+            provider = ''
+            baseUrl = ''
+            stage = 'none'
+            attempts = @()
+        }
+    }
+
+    $resolvedTargets = Get-BootstrapResolvedSecretsTargets -SecretsData $normalized
+    $inventory = [ordered]@{
         generatedAt = (Get-Date).ToString('o')
         summary = [ordered]@{
             providers = @($providerRecords).Count
             configuredProviders = @($providerRecords | Where-Object { $_.totalCredentials -gt 0 }).Count
             totalCredentials = $totalCredentials
             validatedActiveProviders = $validatedActive
+            openAiCompatible = [ordered]@{
+                status = [string]$openAiCompat.status
+                provider = [string]$openAiCompat.provider
+                baseUrl = [string]$openAiCompat.baseUrl
+                stage = [string]$openAiCompat.stage
+                attempts = @($openAiCompat.attempts)
+            }
+            appCoverage = Get-BootstrapAppChannelCoverageSummary -ResolvedTargets $resolvedTargets -OpenAiCompatible $openAiCompat
         }
         providers = @($providerRecords)
         availableToCreate = @($availableToCreate)
     }
+    $inventory.summary.claudeDesktopAccess = Get-BootstrapClaudeDesktopAccessDiagnostic -Inventory $inventory
+    return $inventory
 }
 
 function New-BootstrapSecretValidationState {
@@ -5343,6 +6276,24 @@ function Get-BootstrapSecretsTemplate {
     foreach ($providerName in $catalog.Keys) {
         $providers[$providerName] = Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName $providerName
     }
+    $sharedAiEnv = [ordered]@{
+        ANTHROPIC_API_KEY = '{{activeProviders.anthropic.apiKey}}'
+        OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
+        OPENAI_BASE_URL = '{{activeProviders.openai.baseUrl}}'
+        OPENAI_ORGANIZATION = '{{activeProviders.openai.organizationId}}'
+        GEMINI_API_KEY = '{{activeProviders.google.apiKey}}'
+        GOOGLE_API_KEY = '{{activeProviders.google.apiKey}}'
+        XAI_API_KEY = '{{activeProviders.xai.apiKey}}'
+        XAI_BASE_URL = '{{activeProviders.xai.baseUrl}}'
+        OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
+        OPENROUTER_BASE_URL = '{{activeProviders.openrouter.baseUrl}}'
+        GITHUB_TOKEN = '{{activeProviders.github.token}}'
+        GH_TOKEN = '{{activeProviders.github.token}}'
+        MOONSHOT_API_KEY = '{{activeProviders.moonshot.apiKey}}'
+        MOONSHOT_BASE_URL = '{{activeProviders.moonshot.baseUrl}}'
+        DEEPSEEK_API_KEY = '{{activeProviders.deepseek.apiKey}}'
+        DEEPSEEK_BASE_URL = '{{activeProviders.deepseek.baseUrl}}'
+    }
 
     return [ordered]@{
         '$schema' = 'https://bootstrap.local/schemas/bootstrap-secrets.schema.json'
@@ -5421,6 +6372,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             cursor = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         enabled = $false
@@ -5433,6 +6385,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             windsurf = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         disabled = $true
@@ -5446,6 +6399,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             trae = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         enabled = $false
@@ -5458,6 +6412,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             openCode = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         enabled = $false
@@ -5471,6 +6426,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             vsCode = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         enabled = $false
@@ -5483,6 +6439,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             roo = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         disabled = $true
@@ -5496,6 +6453,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             cline = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         disabled = $true
@@ -5536,6 +6494,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             zed = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         enabled = $false
@@ -5548,6 +6507,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             zCode = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         enabled = $false
@@ -5956,28 +6916,63 @@ function Get-BootstrapResolvedSecretsTargets {
 
     $resolvedTargets = ConvertTo-BootstrapHashtable -InputObject (Resolve-BootstrapSecretTemplates -Value $normalized['targets'] -SecretsData $context)
     if ($resolvedTargets -is [hashtable]) {
-        if ($activeProviders.Contains('mimo') -and ($activeProviders['mimo'] -is [hashtable])) {
-            $mimo = ConvertTo-BootstrapHashtable -InputObject $activeProviders['mimo']
-            $mimoKey = if ($mimo.ContainsKey('apiKey')) { [string]$mimo['apiKey'] } else { '' }
-            $mimoBaseUrl = if ($mimo.ContainsKey('baseUrl')) { [string]$mimo['baseUrl'] } else { '' }
-            if (-not [string]::IsNullOrWhiteSpace($mimoKey) -and -not [string]::IsNullOrWhiteSpace($mimoBaseUrl)) {
-                foreach ($targetName in @('userEnv', 'claudeCode', 'continue')) {
-                    if (-not ($resolvedTargets.ContainsKey($targetName) -and ($resolvedTargets[$targetName] -is [hashtable]))) { continue }
+        $openAiCompat = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders @('mimo', 'moonshot', 'openrouter', 'deepseek', 'openai', 'xai') -SecretsData $normalized
+        if (($openAiCompat -is [hashtable]) -and [string]$openAiCompat['status'] -eq 'selected') {
+            $compatKey = [string]$openAiCompat['apiKey']
+            $compatBaseUrl = [string]$openAiCompat['baseUrl']
+            $compatProvider = [string]$openAiCompat['provider']
+            $compatStage = [string]$openAiCompat['stage']
+            if (-not [string]::IsNullOrWhiteSpace($compatKey) -and -not [string]::IsNullOrWhiteSpace($compatBaseUrl)) {
+                foreach ($targetName in @('userEnv', 'claudeCode', 'continue', 'cursor', 'windsurf', 'trae', 'vsCode', 'roo', 'cline', 'zed', 'zCode')) {
+                    if (-not ($resolvedTargets.ContainsKey($targetName) -and ($resolvedTargets[$targetName] -is [System.Collections.IDictionary])) ) { continue }
                     $target = ConvertTo-BootstrapHashtable -InputObject $resolvedTargets[$targetName]
 
                     $envMap = $null
                     if ([string]$targetName -eq 'userEnv') {
                         $envMap = $target
-                    } elseif ($target.ContainsKey('env') -and ($target['env'] -is [hashtable])) {
+                    } elseif ($target.ContainsKey('env') -and ($target['env'] -is [System.Collections.IDictionary])) {
                         $envMap = ConvertTo-BootstrapHashtable -InputObject $target['env']
+                    } else {
+                        $envMap = @{}
                     }
                     if (-not ($envMap -is [hashtable])) { continue }
 
                     if (-not $envMap.ContainsKey('OPENAI_API_KEY') -or [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_API_KEY'])) {
-                        $envMap['OPENAI_API_KEY'] = $mimoKey
+                        $envMap['OPENAI_API_KEY'] = $compatKey
                     }
                     if (-not $envMap.ContainsKey('OPENAI_BASE_URL') -or [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_BASE_URL'])) {
-                        $envMap['OPENAI_BASE_URL'] = $mimoBaseUrl
+                        $envMap['OPENAI_BASE_URL'] = $compatBaseUrl
+                    }
+                    if (-not $envMap.ContainsKey('OPENAI_COMPAT_PROVIDER') -or [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_COMPAT_PROVIDER'])) {
+                        $envMap['OPENAI_COMPAT_PROVIDER'] = $compatProvider
+                    }
+                    if (-not $envMap.ContainsKey('OPENAI_COMPAT_STAGE') -or [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_COMPAT_STAGE'])) {
+                        $envMap['OPENAI_COMPAT_STAGE'] = $compatStage
+                    }
+                    if ([string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_API_KEY'])) {
+                        foreach ($compatSource in @(
+                            @{ provider = 'openrouter'; key = 'OPENROUTER_API_KEY'; base = 'OPENROUTER_BASE_URL' },
+                            @{ provider = 'moonshot'; key = 'MOONSHOT_API_KEY'; base = 'MOONSHOT_BASE_URL' },
+                            @{ provider = 'deepseek'; key = 'DEEPSEEK_API_KEY'; base = 'DEEPSEEK_BASE_URL' },
+                            @{ provider = 'xai'; key = 'XAI_API_KEY'; base = 'XAI_BASE_URL' }
+                        )) {
+                            $sourceKey = [string]$compatSource.key
+                            if (-not $envMap.ContainsKey($sourceKey)) { continue }
+                            $sourceValue = [string]$envMap[$sourceKey]
+                            if ([string]::IsNullOrWhiteSpace($sourceValue)) { continue }
+                            $envMap['OPENAI_API_KEY'] = $sourceValue
+                            $sourceBaseKey = [string]$compatSource.base
+                            if ($envMap.ContainsKey($sourceBaseKey) -and -not [string]::IsNullOrWhiteSpace([string]$envMap[$sourceBaseKey])) {
+                                $envMap['OPENAI_BASE_URL'] = [string]$envMap[$sourceBaseKey]
+                            }
+                            if (-not $envMap.ContainsKey('OPENAI_COMPAT_PROVIDER') -or [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_COMPAT_PROVIDER'])) {
+                                $envMap['OPENAI_COMPAT_PROVIDER'] = [string]$compatSource.provider
+                            }
+                            if (-not $envMap.ContainsKey('OPENAI_COMPAT_STAGE') -or [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_COMPAT_STAGE'])) {
+                                $envMap['OPENAI_COMPAT_STAGE'] = 'target-fallback'
+                            }
+                            break
+                        }
                     }
 
                     if ([string]$targetName -ne 'userEnv') {
@@ -6048,10 +7043,14 @@ function Get-BootstrapSecretsDiagnostics {
         }
     }
 
+    $inventory = Get-BootstrapApiInventory -SecretsData $normalized
     return [ordered]@{
         warnings = @($warnings)
         unknownTargets = @($unknownTargets)
         invalidTargets = @($invalidTargets)
+        openAiCompatible = $inventory.summary.openAiCompatible
+        claudeDesktopAccess = $inventory.summary.claudeDesktopAccess
+        appCoverage = $inventory.summary.appCoverage
     }
 }
 
@@ -6093,6 +7092,10 @@ function Get-BootstrapSteamDeckDetectionPath {
 
 function Get-BootstrapSteamDeckAutomationRoot {
     return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'steamdeck') 'automation')
+}
+
+function Get-BootstrapSteamDeckMaintenanceRoot {
+    return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'steamdeck') 'maintenance')
 }
 
 function Get-BootstrapSteamDeckAssetsRoot {
@@ -6182,6 +7185,12 @@ function Get-BootstrapSteamDeckSettingsDefaults {
             required = @('RTSS', 'AMD Adrenalin', 'CRU', 'Steam Deck Tools')
             autoStartOnHandheld = @('RTSS', 'Steam Deck Tools')
         }
+        steamInput = [ordered]@{
+            activeStack = 'steamdeck-tools'
+            desktopLayoutConflictPolicy = 'manual-disable'
+            recommendedAction = 'Steam > Settings > Controller > Desktop Layout: disable/clear layout when Steam Deck Tools, Handheld Companion or GlosSI manages desktop input.'
+            advancedStacks = @('handheld-companion', 'glossi')
+        }
         audioTargets = [ordered]@{
             handheld = @('Speaker', 'Steam Streaming Speakers')
             dockMonitor = @('HDMI', 'DisplayPort', 'LG HDR WFHD')
@@ -6216,7 +7225,12 @@ function Get-BootstrapSteamDeckSettingsDefaults {
         hostHealth = [ordered]@{
             mode = 'off'
             killInGame = @('ms-teams', 'olk', 'PhoneExperienceHost', 'msedge', 'Widgets', 'WidgetService')
-            keepAlways = @('SecurityHealthSystray', 'RadeonSoftware', 'Steam', 'Sunshine', 'Tailscale', 'PowerControl', 'PerformanceOverlay', 'SteamController')
+            keepAlways = @('SecurityHealthSystray', 'RadeonSoftware', 'Steam', 'Sunshine', 'Tailscale', 'PowerControl', 'PerformanceOverlay', 'SteamController', 'FanControl', 'HandheldCompanion', 'GlosSI')
+        }
+        sharedVramFix = [ordered]@{
+            enabled = $true
+            launchOption = '-sharedvram'
+            games = @()
         }
         manualOverrides = [ordered]@{
             forcedMode = $null
@@ -6255,20 +7269,49 @@ function Normalize-BootstrapSteamDeckSettingsData {
     }
     $normalized['displayMode'] = $displayMode
 
-    if (-not $normalized.ContainsKey('sessionProfiles')) {
-        $normalized['sessionProfiles'] = @{
-            HANDHELD = 'game-handheld'
-            DOCKED_TV = 'game-docked'
-            DOCKED_MONITOR = 'desktop'
+    $sessionProfileDefaults = @{
+        HANDHELD = 'game-handheld'
+        DOCKED_TV = 'game-docked'
+        DOCKED_MONITOR = 'desktop'
+    }
+    $sessionProfiles = if ($normalized.ContainsKey('sessionProfiles')) { ConvertTo-BootstrapHashtable -InputObject $normalized['sessionProfiles'] } else { @{} }
+    if (-not ($sessionProfiles -is [hashtable])) {
+        $sessionProfiles = @{}
+    }
+    foreach ($sessionProfileKey in @($sessionProfileDefaults.Keys)) {
+        if (-not $sessionProfiles.ContainsKey($sessionProfileKey) -or [string]::IsNullOrWhiteSpace([string]$sessionProfiles[$sessionProfileKey])) {
+            $sessionProfiles[$sessionProfileKey] = $sessionProfileDefaults[$sessionProfileKey]
         }
     }
+    $normalized['sessionProfiles'] = $sessionProfiles
 
     if (-not $normalized.ContainsKey('hostHealth')) {
         $normalized['hostHealth'] = @{
             mode = 'off'
             killInGame = @('ms-teams', 'olk', 'PhoneExperienceHost', 'msedge', 'Widgets', 'WidgetService')
-            keepAlways = @('SecurityHealthSystray', 'RadeonSoftware', 'Steam', 'Sunshine', 'Tailscale', 'PowerControl', 'PerformanceOverlay', 'SteamController')
+            keepAlways = @('SecurityHealthSystray', 'RadeonSoftware', 'Steam', 'Sunshine', 'Tailscale', 'PowerControl', 'PerformanceOverlay', 'SteamController', 'FanControl', 'HandheldCompanion', 'GlosSI')
         }
+    }
+
+    if (-not $normalized.ContainsKey('sharedVramFix')) {
+        $normalized['sharedVramFix'] = @{
+            enabled = $true
+            launchOption = '-sharedvram'
+            games = @()
+        }
+    } else {
+        $sharedVramFix = ConvertTo-BootstrapHashtable -InputObject $normalized['sharedVramFix']
+        if (-not ($sharedVramFix -is [hashtable])) { $sharedVramFix = @{} }
+        if (-not $sharedVramFix.ContainsKey('enabled')) { $sharedVramFix['enabled'] = $true }
+        if (-not $sharedVramFix.ContainsKey('launchOption') -or [string]::IsNullOrWhiteSpace([string]$sharedVramFix['launchOption'])) {
+            $sharedVramFix['launchOption'] = '-sharedvram'
+        }
+        if (-not $sharedVramFix.ContainsKey('games') -or -not ($sharedVramFix['games'] -is [System.Collections.IEnumerable])) {
+            $sharedVramFix['games'] = @()
+        } else {
+            $sharedVramFix['games'] = @(Normalize-BootstrapObjectArray -Value $sharedVramFix['games'])
+        }
+        $normalized['sharedVramFix'] = $sharedVramFix
     }
 
     if (-not $normalized.ContainsKey('displayClassification')) {
@@ -6317,6 +7360,22 @@ function Normalize-BootstrapSteamDeckSettingsData {
     $tools['required'] = @($tools['required'])
     $tools['autoStartOnHandheld'] = @($tools['autoStartOnHandheld'])
     $normalized['steamdeckTools'] = $tools
+
+    $steamInputDefaults = @{
+        activeStack = 'steamdeck-tools'
+        desktopLayoutConflictPolicy = 'manual-disable'
+        recommendedAction = 'Steam > Settings > Controller > Desktop Layout: disable/clear layout when Steam Deck Tools, Handheld Companion or GlosSI manages desktop input.'
+        advancedStacks = @('handheld-companion', 'glossi')
+    }
+    $steamInput = if ($normalized.ContainsKey('steamInput')) { ConvertTo-BootstrapHashtable -InputObject $normalized['steamInput'] } else { @{} }
+    if (-not ($steamInput -is [hashtable])) { $steamInput = @{} }
+    foreach ($key in @($steamInputDefaults.Keys)) {
+        if (-not $steamInput.ContainsKey($key) -or $null -eq $steamInput[$key] -or [string]::IsNullOrWhiteSpace([string]$steamInput[$key])) {
+            $steamInput[$key] = $steamInputDefaults[$key]
+        }
+    }
+    $steamInput['advancedStacks'] = @($steamInput['advancedStacks'])
+    $normalized['steamInput'] = $steamInput
 
     return $normalized
 }
@@ -6376,6 +7435,102 @@ function Save-BootstrapSteamDeckSettingsData {
     return [ordered]@{
         Path = $settingsPath
         BackupPath = $backupPath
+    }
+}
+
+function Apply-BootstrapSharedVramLaunchOptions {
+    param(
+        [string]$SteamRoot = "${env:ProgramFiles(x86)}\Steam",
+        [AllowNull()]$Settings = $null,
+        [switch]$DryRun
+    )
+
+    $settingsInput = $Settings
+    if ($null -eq $settingsInput) {
+        $settingsInput = (Get-BootstrapSteamDeckSettingsData).Data
+    }
+    $settingsMap = Normalize-BootstrapSteamDeckSettingsData -Settings $settingsInput
+    $fix = if ($settingsMap.ContainsKey('sharedVramFix')) { ConvertTo-BootstrapHashtable -InputObject $settingsMap['sharedVramFix'] } else { @{} }
+    $enabled = if ($fix.ContainsKey('enabled')) { [bool]$fix['enabled'] } else { $true }
+    $launchOption = if ($fix.ContainsKey('launchOption') -and -not [string]::IsNullOrWhiteSpace([string]$fix['launchOption'])) { [string]$fix['launchOption'] } else { '-sharedvram' }
+    $games = if ($fix.ContainsKey('games')) { @(Normalize-BootstrapObjectArray -Value $fix['games']) } else { @() }
+
+    if (-not $enabled) {
+        return [ordered]@{ DryRun = [bool]$DryRun; Status = 'skipped'; Reason = 'sharedVramFix desabilitado em settings.'; Changes = @() }
+    }
+    if ([string]::IsNullOrWhiteSpace($SteamRoot) -or -not (Test-Path $SteamRoot)) {
+        return [ordered]@{ DryRun = [bool]$DryRun; Status = 'skipped'; Reason = "SteamRoot inexistente: $SteamRoot"; Changes = @() }
+    }
+    if (@($games).Count -eq 0) {
+        return [ordered]@{ DryRun = [bool]$DryRun; Status = 'skipped'; Reason = 'Allowlist sharedVramFix.games vazia.'; Changes = @() }
+    }
+
+    $changes = @()
+    foreach ($gameRaw in @($games)) {
+        $game = ConvertTo-BootstrapHashtable -InputObject $gameRaw
+        $appId = [string]$game['appId']
+        if ([string]::IsNullOrWhiteSpace($appId)) {
+            $changes += @([ordered]@{ appId = ''; status = 'skipped'; reason = 'appId ausente na allowlist.' })
+            continue
+        }
+
+        $localConfigCandidates = @(Get-ChildItem -Path (Join-Path $SteamRoot 'userdata') -Filter 'localconfig.vdf' -Recurse -ErrorAction SilentlyContinue)
+        if (@($localConfigCandidates).Count -eq 0) {
+            $changes += @([ordered]@{ appId = $appId; status = 'skipped'; reason = 'localconfig.vdf não encontrado para nenhum usuário Steam.' })
+            continue
+        }
+
+        foreach ($candidate in @($localConfigCandidates)) {
+            $targetPath = [string]$candidate.FullName
+            $raw = ''
+            try {
+                $raw = Get-Content -Path $targetPath -Raw -Encoding utf8
+            } catch {
+                $changes += @([ordered]@{ appId = $appId; path = $targetPath; status = 'failed'; reason = "Falha leitura: $($_.Exception.Message)" })
+                continue
+            }
+
+            $sectionPattern = "(?ms)(""$([regex]::Escape($appId))""\s*\{.*?\})"
+            $hasGameSection = [regex]::IsMatch($raw, $sectionPattern)
+            if (-not $hasGameSection) {
+                $changes += @([ordered]@{ appId = $appId; path = $targetPath; status = 'skipped'; reason = 'App não encontrado no localconfig.vdf deste usuário.' })
+                continue
+            }
+
+            if ($DryRun) {
+                $changes += @([ordered]@{ appId = $appId; path = $targetPath; status = 'planned'; launchOption = $launchOption })
+                continue
+            }
+
+            $backup = Backup-BootstrapFile -Path $targetPath
+            $updated = $raw
+            $launchPattern = "(?ms)(""$([regex]::Escape($appId))""\s*\{.*?""LaunchOptions""\s*"")(.*?)("")"
+            if ([regex]::IsMatch($updated, $launchPattern)) {
+                $updated = [regex]::Replace($updated, $launchPattern, ('${1}{0}${3}' -f $launchOption), 1)
+            } else {
+                $insertPattern = "(?ms)(""$([regex]::Escape($appId))""\s*\{)"
+                $updated = [regex]::Replace($updated, $insertPattern, ('$1`r`n`t`t"LaunchOptions"`t`t"{0}"' -f $launchOption), 1)
+            }
+
+            try {
+                $encoding = New-Object System.Text.UTF8Encoding($false)
+                [System.IO.File]::WriteAllText($targetPath, $updated, $encoding)
+                $changes += @([ordered]@{ appId = $appId; path = $targetPath; status = 'applied'; backup = $backup; launchOption = $launchOption })
+            } catch {
+                $changes += @([ordered]@{ appId = $appId; path = $targetPath; status = 'failed'; backup = $backup; reason = "Falha escrita: $($_.Exception.Message)" })
+            }
+        }
+    }
+
+    $applied = @($changes | Where-Object { [string]$_.status -eq 'applied' }).Count
+    $planned = @($changes | Where-Object { [string]$_.status -eq 'planned' }).Count
+    $status = if ($DryRun -and $planned -gt 0) { 'planned' } elseif ($applied -gt 0) { 'applied' } else { 'skipped' }
+    return [ordered]@{
+        DryRun = [bool]$DryRun
+        Status = $status
+        Reason = if ($status -eq 'skipped') { 'Nenhuma alteração aplicável encontrada para allowlist.' } else { '' }
+        LaunchOption = $launchOption
+        Changes = @($changes)
     }
 }
 
@@ -6566,20 +7721,28 @@ function Ensure-BootstrapSteamDeckAutomation {
     param([hashtable]$State)
 
     $settingsPath = Ensure-BootstrapSteamDeckSettings -State $State
-    $sourceRoot = Get-BootstrapSteamDeckAssetsRoot
-    $targetRoot = Get-BootstrapSteamDeckAutomationRoot
+    $sourceAutomationRoot = Get-BootstrapSteamDeckAssetsRoot
+    $sourceMaintenanceRoot = Get-BootstrapSteamDeckMaintenanceAssetsRoot
+    $targetAutomationRoot = Get-BootstrapSteamDeckAutomationRoot
+    $targetMaintenanceRoot = Get-BootstrapSteamDeckMaintenanceRoot
 
-    if (-not (Test-Path $sourceRoot)) {
-        throw "Assets de automacao do Steam Deck nao encontrados em: $sourceRoot"
+    if (-not (Test-Path $sourceAutomationRoot)) {
+        throw "Assets de automacao do Steam Deck nao encontrados em: $sourceAutomationRoot"
+    }
+    if (-not (Test-Path $sourceMaintenanceRoot)) {
+        throw "Assets de manutencao do Steam Deck nao encontrados em: $sourceMaintenanceRoot"
     }
 
-    $null = New-Item -Path $targetRoot -ItemType Directory -Force
-    Copy-Item -Path (Join-Path $sourceRoot '*') -Destination $targetRoot -Force -Recurse
-    $State.SteamDeckAutomationRoot = $targetRoot
+    $null = New-Item -Path $targetAutomationRoot -ItemType Directory -Force
+    $null = New-Item -Path $targetMaintenanceRoot -ItemType Directory -Force
+    Copy-Item -Path (Join-Path $sourceAutomationRoot '*') -Destination $targetAutomationRoot -Force -Recurse
+    Copy-Item -Path (Join-Path $sourceMaintenanceRoot '*') -Destination $targetMaintenanceRoot -Force -Recurse
+    Copy-Item -Path (Join-Path $PSScriptRoot 'bootstrap-tools.ps1') -Destination (Join-Path $targetMaintenanceRoot 'bootstrap-tools.ps1') -Force
+    $State.SteamDeckAutomationRoot = $targetAutomationRoot
     $State.SteamDeckSettingsPath = $settingsPath
 
     Ensure-BootstrapSteamDeckWatcherTask -State $State
-    Write-Log "Automacao do Steam Deck garantida: $targetRoot"
+    Write-Log "Automacao/manutencao do Steam Deck garantidas: automation=$targetAutomationRoot maintenance=$targetMaintenanceRoot"
 }
 
 function Test-BootstrapManualRequirementInstalled {
@@ -6614,7 +7777,37 @@ function Ensure-BootstrapManualRequirement {
     }
 
     $instructions = if ($ComponentDef.PSObject.Properties.Name -contains 'Instructions') { [string]$ComponentDef.Instructions } else { 'Instale manualmente e rode o bootstrap novamente.' }
-    throw ("Dependencia manual obrigatoria ausente: {0}. {1}" -f $ComponentDef.DisplayName, $instructions)
+    $componentName = if ($ComponentDef.PSObject.Properties.Name -contains 'Name') { [string]$ComponentDef.Name } else { [string]$ComponentDef.Id }
+    $displayName = if ($ComponentDef.PSObject.Properties.Name -contains 'DisplayName') { [string]$ComponentDef.DisplayName } else { $componentName }
+    $manualRequirement = [ordered]@{
+        component = $componentName
+        displayName = $displayName
+        status = 'manual-required'
+        instructions = $instructions
+    }
+    if ($State) {
+        if (-not $State.ContainsKey('ManualRequirements') -or -not $State.ManualRequirements) {
+            $State.ManualRequirements = New-Object System.Collections.Generic.List[object]
+        }
+        $State.ManualRequirements.Add($manualRequirement) | Out-Null
+    }
+
+    if ($script:IgnoreManualRequirements) {
+        Write-Log ("Ignorando dependencia manual por flag global: {0}. {1}" -f $displayName, $instructions) 'WARN'
+        return
+    }
+
+    if (($ComponentDef.PSObject.Properties.Name -contains 'Optional') -and [bool]$ComponentDef.Optional) {
+        Write-Log ("Dependencia manual opcional ausente: {0}. {1}" -f $displayName, $instructions) 'WARN'
+        return
+    }
+
+    if ($script:SkipManualRequirements) {
+        Write-Log ("Pulando dependencia manual obrigatoria por flag global: {0}. {1}" -f $displayName, $instructions) 'WARN'
+        return
+    }
+
+    throw ("Dependencia manual obrigatoria ausente: {0}. {1}" -f $displayName, $instructions)
 }
 
 function Get-BootstrapComponentStage {
@@ -6660,37 +7853,46 @@ function Get-BootstrapComponentCatalog {
     $catalog['git-lfs'] = New-BootstrapComponentDefinition -Name 'git-lfs' -Description 'Git LFS e inicialização local.' -DependsOn @('git-core') -Kind 'git-lfs'
     $catalog['node-core'] = New-BootstrapComponentDefinition -Name 'node-core' -Description 'Node.js LTS e npm global bin.' -DependsOn @('system-core') -Optional $false -Kind 'node-core'
     $catalog['python-core'] = New-BootstrapComponentDefinition -Name 'python-core' -Description 'Python 3.13, PATH e uv.' -DependsOn @('system-core') -Optional $false -Kind 'python-core'
-    $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)' }
-    $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick' }
+    $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)' }
+    $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick' }
     $catalog['sevenzip'] = New-BootstrapComponentDefinition -Name 'sevenzip' -Description '7-Zip e ajuste de PATH.' -DependsOn @('system-core') -Kind 'sevenzip'
-    $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7' }
-    $catalog['terminal'] = New-BootstrapComponentDefinition -Name 'terminal' -Description 'Windows Terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.WindowsTerminal'; DisplayName = 'Windows Terminal' }
-    $catalog['powertoys'] = New-BootstrapComponentDefinition -Name 'powertoys' -Description 'Microsoft PowerToys.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.PowerToys'; DisplayName = 'Microsoft PowerToys' }
-    $catalog['github-cli'] = New-BootstrapComponentDefinition -Name 'github-cli' -Description 'GitHub CLI (gh).' -DependsOn @('git-core') -Kind 'winget' -Data @{ Id = 'GitHub.cli'; DisplayName = 'GitHub CLI (gh)' }
-    $catalog['chrome'] = New-BootstrapComponentDefinition -Name 'chrome' -Description 'Google Chrome.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Google.Chrome'; DisplayName = 'Google Chrome'; AllowFailureWhenNotAdmin = $true }
-    $catalog['google-app-desktop'] = New-BootstrapComponentDefinition -Name 'google-app-desktop' -Description 'Google App para Desktop.' -Kind 'manual-required' -Data @{ DisplayName = 'Google App Desktop'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Experiência oficial do Google no Windows.'; Instructions = 'Instale acessando https://search.google/google-app/desktop/?utm_source=Google&utm_medium=keyword_blog&utm_campaign=DGA_blog' }
-    $catalog['notepadpp'] = New-BootstrapComponentDefinition -Name 'notepadpp' -Description 'Notepad++.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Notepad++.Notepad++'; DisplayName = 'Notepad++'; AllowFailureWhenNotAdmin = $true }
+    $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7' }
+    $catalog['terminal'] = New-BootstrapComponentDefinition -Name 'terminal' -Description 'Windows Terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.WindowsTerminal'; DisplayName = 'Windows Terminal' }
+    $catalog['powertoys'] = New-BootstrapComponentDefinition -Name 'powertoys' -Description 'Microsoft PowerToys.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerToys'; DisplayName = 'Microsoft PowerToys' }
+    $catalog['github-cli'] = New-BootstrapComponentDefinition -Name 'github-cli' -Description 'GitHub CLI (gh).' -DependsOn @('git-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'GitHub.cli'; DisplayName = 'GitHub CLI (gh)' }
+    $catalog['chrome'] = New-BootstrapComponentDefinition -Name 'chrome' -Description 'Google Chrome.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Chrome'; DisplayName = 'Google Chrome'}
+    $catalog['google-app-desktop'] = New-BootstrapComponentDefinition -Name 'google-app-desktop' -Description 'Google App para Desktop.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Google App Desktop'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Experiência oficial do Google no Windows.'; Instructions = 'Instale acessando https://search.google/google-app/desktop/?utm_source=Google&utm_medium=keyword_blog&utm_campaign=DGA_blog' }
+    $catalog['notepadpp'] = New-BootstrapComponentDefinition -Name 'notepadpp' -Description 'Notepad++.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Notepad++.Notepad++'; DisplayName = 'Notepad++'}
     $catalog['wsl-core'] = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'Recursos WSL, Ubuntu e WSL 2.' -DependsOn @('system-core') -Kind 'wsl-core'
     $catalog['wsl-ui'] = New-BootstrapComponentDefinition -Name 'wsl-ui' -Description 'WSL UI e WebView2.' -DependsOn @('wsl-core') -Kind 'wsl-ui'
-    $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop' }
-    $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'; AllowFailureWhenNotAdmin = $true }
+    $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop' }
+    $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'}
     $catalog['claude-code'] = New-BootstrapComponentDefinition -Name 'claude-code' -Description 'Claude Code CLI.' -DependsOn @('system-core') -Kind 'claude-code'
-    $catalog['cursor'] = New-BootstrapComponentDefinition -Name 'cursor' -Description 'Cursor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Anysphere.Cursor'; DisplayName = 'Cursor'; AllowFailureWhenNotAdmin = $true }
-    $catalog['windsurf'] = New-BootstrapComponentDefinition -Name 'windsurf' -Description 'Windsurf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Codeium.Windsurf'; DisplayName = 'Windsurf'; AllowFailureWhenNotAdmin = $true }
-    $catalog['warp'] = New-BootstrapComponentDefinition -Name 'warp' -Description 'Warp terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Warp.Warp'; DisplayName = 'Warp'; AllowFailureWhenNotAdmin = $true }
-    $catalog['trae'] = New-BootstrapComponentDefinition -Name 'trae' -Description 'Trae desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ByteDance.Trae'; DisplayName = 'Trae'; AllowFailureWhenNotAdmin = $true }
-    $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'; AllowFailureWhenNotAdmin = $true }
-    $catalog['vscode'] = New-BootstrapComponentDefinition -Name 'vscode' -Description 'VS Code estável.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.VisualStudioCode'; DisplayName = 'Visual Studio Code'; AllowFailureWhenNotAdmin = $true }
-    $catalog['vscode-insiders'] = New-BootstrapComponentDefinition -Name 'vscode-insiders' -Description 'VS Code Insiders.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.VisualStudioCode.Insiders'; DisplayName = 'Visual Studio Code - Insiders'; AllowFailureWhenNotAdmin = $true }
-    $catalog['antigravity'] = New-BootstrapComponentDefinition -Name 'antigravity' -Description 'Google Antigravity.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Google.Antigravity'; DisplayName = 'Antigravity'; AllowFailureWhenNotAdmin = $true }
-    $catalog['autoclaw'] = New-BootstrapComponentDefinition -Name 'autoclaw' -Description 'AutoClaw.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ZhipuAI.AutoClaw'; DisplayName = 'AutoClaw'; AllowFailureWhenNotAdmin = $true }
-    $catalog['perplexity'] = New-BootstrapComponentDefinition -Name 'perplexity' -Description 'Perplexity Comet.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Perplexity.Comet'; DisplayName = 'Perplexity'; AllowFailureWhenNotAdmin = $true }
+    $catalog['cursor'] = New-BootstrapComponentDefinition -Name 'cursor' -Description 'Cursor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anysphere.Cursor'; DisplayName = 'Cursor'}
+    $catalog['windsurf'] = New-BootstrapComponentDefinition -Name 'windsurf' -Description 'Windsurf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Codeium.Windsurf'; DisplayName = 'Windsurf'}
+    $catalog['warp'] = New-BootstrapComponentDefinition -Name 'warp' -Description 'Warp terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Warp.Warp'; DisplayName = 'Warp'}
+    $catalog['trae'] = New-BootstrapComponentDefinition -Name 'trae' -Description 'Trae desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ByteDance.Trae'; DisplayName = 'Trae'}
+    $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'}
+    $catalog['vscode'] = New-BootstrapComponentDefinition -Name 'vscode' -Description 'VS Code estável.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode'; DisplayName = 'Visual Studio Code'}
+    $catalog['vscode-insiders'] = New-BootstrapComponentDefinition -Name 'vscode-insiders' -Description 'VS Code Insiders.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode.Insiders'; DisplayName = 'Visual Studio Code - Insiders'}
+    $catalog['antigravity'] = New-BootstrapComponentDefinition -Name 'antigravity' -Description 'Google Antigravity.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Antigravity'; DisplayName = 'Antigravity'}
+    $catalog['autoclaw'] = New-BootstrapComponentDefinition -Name 'autoclaw' -Description 'AutoClaw.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZhipuAI.AutoClaw'; DisplayName = 'AutoClaw'}
+    $catalog['perplexity'] = New-BootstrapComponentDefinition -Name 'perplexity' -Description 'Perplexity Comet.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Perplexity.Comet'; DisplayName = 'Perplexity'}
     $catalog['codex-installer'] = New-BootstrapComponentDefinition -Name 'codex-installer' -Description 'Codex installer desktop via winget.' -DependsOn @('system-core') -Kind 'codex-installer'
-    $catalog['ollama'] = New-BootstrapComponentDefinition -Name 'ollama' -Description 'Ollama local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Ollama.Ollama'; DisplayName = 'Ollama' }
-    $catalog['cherry-studio'] = New-BootstrapComponentDefinition -Name 'cherry-studio' -Description 'Cherry Studio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'kangfenmao.CherryStudio'; DisplayName = 'Cherry Studio' }
-    $catalog['lm-studio'] = New-BootstrapComponentDefinition -Name 'lm-studio' -Description 'LM Studio local LLM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'LMStudio.LMStudio'; DisplayName = 'LM Studio' }
-    $catalog['pinokio'] = New-BootstrapComponentDefinition -Name 'pinokio' -Description 'Pinokio AI Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Pinokio.Pinokio'; DisplayName = 'Pinokio' }
-    $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ZedIndustries.Zed'; DisplayName = 'Zed' }
+    $catalog['ollama'] = New-BootstrapComponentDefinition -Name 'ollama' -Description 'Ollama local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Ollama.Ollama'; DisplayName = 'Ollama' }
+    $catalog['cherry-studio'] = New-BootstrapComponentDefinition -Name 'cherry-studio' -Description 'Cherry Studio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'kangfenmao.CherryStudio'; DisplayName = 'Cherry Studio' }
+    $catalog['lm-studio'] = New-BootstrapComponentDefinition -Name 'lm-studio' -Description 'LM Studio local LLM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LMStudio.LMStudio'; DisplayName = 'LM Studio' }
+    $catalog['pinokio'] = New-BootstrapComponentDefinition -Name 'pinokio' -Description 'Pinokio AI Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Pinokio.Pinokio'; DisplayName = 'Pinokio' }
+    $catalog['webapp-photopea'] = New-BootstrapComponentDefinition -Name 'webapp-photopea' -Description 'Atalho web app Photopea na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Photopea'; Url = 'https://www.photopea.com/'; CategoryFolder = 'Design' }
+    $catalog['webapp-whatsapp-web'] = New-BootstrapComponentDefinition -Name 'webapp-whatsapp-web' -Description 'Atalho web app WhatsApp Web na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'WhatsApp Web'; Url = 'https://web.whatsapp.com/'; CategoryFolder = 'Comunicação' }
+    $catalog['webapp-xiaomi-ai-studio'] = New-BootstrapComponentDefinition -Name 'webapp-xiaomi-ai-studio' -Description 'Atalho web app Xiaomi AI Studio na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Xiaomi AI Studio'; Url = 'https://aistudio.xiaomimimo.com/#/'; CategoryFolder = 'IA' }
+    $catalog['webapp-manus'] = New-BootstrapComponentDefinition -Name 'webapp-manus' -Description 'Atalho web app Manus na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Manus'; Url = 'https://manus.im/app'; CategoryFolder = 'IA' }
+    $catalog['webapp-kimi'] = New-BootstrapComponentDefinition -Name 'webapp-kimi' -Description 'Atalho web app Kimi na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Kimi'; Url = 'https://www.kimi.com/'; CategoryFolder = 'IA' }
+    $catalog['webapp-google-docs'] = New-BootstrapComponentDefinition -Name 'webapp-google-docs' -Description 'Atalho web app Google Docs na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google Docs'; Url = 'https://docs.google.com/'; CategoryFolder = 'Office' }
+    $catalog['webapp-z-ai'] = New-BootstrapComponentDefinition -Name 'webapp-z-ai' -Description 'Atalho web app Z.ai na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Z.ai'; Url = 'https://chat.z.ai/'; CategoryFolder = 'IA' }
+    $catalog['webapp-gemini-web'] = New-BootstrapComponentDefinition -Name 'webapp-gemini-web' -Description 'Atalho web app Gemini na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Gemini'; Url = 'https://gemini.google.com/app'; CategoryFolder = 'IA' }
+    $catalog['webapp-google-ai-studio'] = New-BootstrapComponentDefinition -Name 'webapp-google-ai-studio' -Description 'Atalho web app Google AI Studio na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google AI Studio'; Url = 'https://aistudio.google.com/prompts/new_chat'; CategoryFolder = 'IA' }
+    $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZedIndustries.Zed'; DisplayName = 'Zed' }
     $catalog['opencode'] = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode CLI via script oficial.' -DependsOn @('git-core') -Kind 'opencode'
     $catalog['gemini-cli'] = New-BootstrapComponentDefinition -Name 'gemini-cli' -Description 'Gemini CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@google/gemini-cli'; DisplayName = 'Gemini CLI (@google/gemini-cli)' }
     $catalog['bonsai-cli'] = New-BootstrapComponentDefinition -Name 'bonsai-cli' -Description 'Bonsai CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@bonsai-ai/cli'; DisplayName = 'Bonsai CLI (@bonsai-ai/cli)' }
@@ -6713,25 +7915,28 @@ function Get-BootstrapComponentCatalog {
     $catalog['goose'] = New-BootstrapComponentDefinition -Name 'goose' -Description 'goose CLI.' -DependsOn @('git-core') -Kind 'goose'
     $catalog['repo-gemini-cli'] = New-BootstrapComponentDefinition -Name 'repo-gemini-cli' -Description 'Clone do repositório gemini-cli.' -DependsOn @('git-core') -Kind 'repo-clone' -Data @{ RepoUrl = 'https://github.com/heartyguy/gemini-cli'; TargetName = 'gemini-cli' }
     $catalog['n8n'] = New-BootstrapComponentDefinition -Name 'n8n' -Description 'n8n global via npm.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'n8n'; DisplayName = 'n8n' }
-    $catalog['autohotkey'] = New-BootstrapComponentDefinition -Name 'autohotkey' -Description 'AutoHotkey.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'AutoHotkey.AutoHotkey'; DisplayName = 'AutoHotkey' }
-    $catalog['blender'] = New-BootstrapComponentDefinition -Name 'blender' -Description 'Blender LTS.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'BlenderFoundation.Blender.LTS.4.5'; DisplayName = 'Blender LTS 4.5' }
-    $catalog['ffmpeg'] = New-BootstrapComponentDefinition -Name 'ffmpeg' -Description 'FFmpeg.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Gyan.FFmpeg'; DisplayName = 'FFmpeg' }
-    $catalog['unity-hub'] = New-BootstrapComponentDefinition -Name 'unity-hub' -Description 'Unity Hub.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Unity.UnityHub'; DisplayName = 'Unity Hub' }
-    $catalog['cmake'] = New-BootstrapComponentDefinition -Name 'cmake' -Description 'CMake.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Kitware.CMake'; DisplayName = 'CMake' }
-    $catalog['llvm'] = New-BootstrapComponentDefinition -Name 'llvm' -Description 'LLVM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'LLVM.LLVM'; DisplayName = 'LLVM' }
-    $catalog['rustup'] = New-BootstrapComponentDefinition -Name 'rustup' -Description 'Rustup.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Rustlang.Rustup'; DisplayName = 'Rustup' }
-    $catalog['visual-studio-community'] = New-BootstrapComponentDefinition -Name 'visual-studio-community' -Description 'Visual Studio Community 2022.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.VisualStudio.2022.Community'; DisplayName = 'Visual Studio Community 2022' }
-    $catalog['steam'] = New-BootstrapComponentDefinition -Name 'steam' -Description 'Steam.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Valve.Steam'; DisplayName = 'Steam' }
-    $catalog['steamcmd'] = New-BootstrapComponentDefinition -Name 'steamcmd' -Description 'SteamCMD.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Valve.SteamCMD'; DisplayName = 'SteamCMD' }
+    $catalog['autohotkey'] = New-BootstrapComponentDefinition -Name 'autohotkey' -Description 'AutoHotkey.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AutoHotkey.AutoHotkey'; DisplayName = 'AutoHotkey' }
+    $catalog['blender'] = New-BootstrapComponentDefinition -Name 'blender' -Description 'Blender LTS.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BlenderFoundation.Blender.LTS.4.5'; DisplayName = 'Blender LTS 4.5' }
+    $catalog['ffmpeg'] = New-BootstrapComponentDefinition -Name 'ffmpeg' -Description 'FFmpeg.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Gyan.FFmpeg'; DisplayName = 'FFmpeg' }
+    $catalog['unity-hub'] = New-BootstrapComponentDefinition -Name 'unity-hub' -Description 'Unity Hub.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Unity.UnityHub'; DisplayName = 'Unity Hub' }
+    $catalog['cmake'] = New-BootstrapComponentDefinition -Name 'cmake' -Description 'CMake.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Kitware.CMake'; DisplayName = 'CMake' }
+    $catalog['llvm'] = New-BootstrapComponentDefinition -Name 'llvm' -Description 'LLVM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LLVM.LLVM'; DisplayName = 'LLVM' }
+    $catalog['rustup'] = New-BootstrapComponentDefinition -Name 'rustup' -Description 'Rustup.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Rustlang.Rustup'; DisplayName = 'Rustup' }
+    $catalog['visual-studio-community'] = New-BootstrapComponentDefinition -Name 'visual-studio-community' -Description 'Visual Studio Community 2022.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudio.2022.Community'; DisplayName = 'Visual Studio Community 2022' }
+    $catalog['steam'] = New-BootstrapComponentDefinition -Name 'steam' -Description 'Steam.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.Steam'; DisplayName = 'Steam' }
+    $catalog['steamcmd'] = New-BootstrapComponentDefinition -Name 'steamcmd' -Description 'SteamCMD.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.SteamCMD'; DisplayName = 'SteamCMD' }
     $catalog['autohotkey-runtime'] = New-BootstrapComponentDefinition -Name 'autohotkey-runtime' -Description 'Runtime base para hotkeys e fallback manual do Steam Deck.' -DependsOn @('autohotkey') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite hotkeys fisicos e fallback local sem depender do Steam.' }
     $catalog['powershell-core-runtime'] = New-BootstrapComponentDefinition -Name 'powershell-core-runtime' -Description 'PowerShell Core pronto para componentes futuros.' -DependsOn @('powershell') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Provisiona pwsh antes de qualquer componente futuro que precise dele.' }
-    $catalog['vigembus-runtime'] = New-BootstrapComponentDefinition -Name 'vigembus-runtime' -Description 'Barramento virtual usado por ferramentas de input do Steam Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ViGEm.ViGEmBus'; DisplayName = 'ViGEmBus'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Base para emulacao/ponte de controle no modo handheld.' }
+    $catalog['vigembus-runtime'] = New-BootstrapComponentDefinition -Name 'vigembus-runtime' -Description 'Barramento virtual usado por ferramentas de input do Steam Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ViGEm.ViGEmBus'; DisplayName = 'ViGEmBus'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Base para emulacao/ponte de controle no modo handheld.' }
     $catalog['steamdeck-tools-runtime'] = New-BootstrapComponentDefinition -Name 'steamdeck-tools-runtime' -Description 'Steam Deck Tools portatil com servicos de controle e overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'steamdeck-tools' -Data @{ Stage = 'runtime'; Provisioning = 'download'; ValueReason = 'Entrega overlay, controle, fan e power tuning especificos do Deck.' }
-    $catalog['amd-adrenalin'] = New-BootstrapComponentDefinition -Name 'amd-adrenalin' -Description 'AMD Software: Adrenalin Edition para drivers/overlay Radeon.' -Kind 'manual-required' -Data @{ DisplayName = 'AMD Adrenalin'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Garante painel Radeon presente para ajustes do driver AMD no modo handheld.'; ProbePaths = @('$env:ProgramFiles\AMD\CNext\CNext\RadeonSoftware.exe', '$env:ProgramFiles\AMD\CNext\CNext\AMDRSServ.exe'); Instructions = 'Instale o driver/painel AMD adequado ao Steam Deck antes de rodar novamente.' }
-    $catalog['cru'] = New-BootstrapComponentDefinition -Name 'cru' -Description 'Custom Resolution Utility para ajustes EDID/resolucao.' -Kind 'manual-required' -Data @{ DisplayName = 'CRU'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Permite corrigir modos de resolucao/refresh usados por handheld e dock.'; CheckCommand = 'CRU.exe'; ProbePaths = @('$env:ProgramFiles\Custom Resolution Utility\CRU.exe', '$env:LOCALAPPDATA\Programs\Custom Resolution Utility\CRU.exe'); Instructions = 'Instale/extraia o Custom Resolution Utility (CRU) e deixe CRU.exe no PATH ou em pasta conhecida.' }
+    $catalog['handheld-companion'] = New-BootstrapComponentDefinition -Name 'handheld-companion' -Description 'Handheld Companion para Auto-TDP, gyro, DS4 e QuickTools overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BenjaminLSR.HandheldCompanion'; DisplayName = 'Handheld Companion'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Alternativa avancada ao Steam Deck Tools para Auto-TDP, gyro/DS4 e overlay tipo quick menu.' }
+    $catalog['glossi'] = New-BootstrapComponentDefinition -Name 'glossi' -Description 'GlosSI para Steam Input global em UWP/launchers de terceiros.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'chocolatey' -Data @{ Package = 'glossi'; DisplayName = 'GlosSI'; Stage = 'payload'; Provisioning = 'chocolatey'; RequiresAdmin = $true; ValueReason = 'Cobre Steam Input global quando jogo/launcher nao aceita injecao nativa do Steam.' }
+    $catalog['steamdeck-input-conflict-audit'] = New-BootstrapComponentDefinition -Name 'steamdeck-input-conflict-audit' -Description 'Audita conflito de Steam Desktop Layout com stacks externos de input.' -DependsOn @('steamdeck-settings') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Evita duplo input quando Steam Deck Tools, Handheld Companion ou GlosSI gerenciam controle no Windows.' }
+    $catalog['amd-adrenalin'] = New-BootstrapComponentDefinition -Name 'amd-adrenalin' -Description 'AMD Software: Adrenalin Edition para drivers/overlay Radeon.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'AMD Adrenalin'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Garante painel Radeon presente para ajustes do driver AMD no modo handheld.'; ProbePaths = @('$env:ProgramFiles\AMD\CNext\CNext\RadeonSoftware.exe', '$env:ProgramFiles\AMD\CNext\CNext\AMDRSServ.exe'); Instructions = 'Instale o driver/painel AMD adequado ao Steam Deck antes de rodar novamente.' }
+    $catalog['cru'] = New-BootstrapComponentDefinition -Name 'cru' -Description 'Custom Resolution Utility para ajustes EDID/resolucao.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'CRU'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Permite corrigir modos de resolucao/refresh usados por handheld e dock.'; CheckCommand = 'CRU.exe'; ProbePaths = @('$env:ProgramFiles\Custom Resolution Utility\CRU.exe', '$env:LOCALAPPDATA\Programs\Custom Resolution Utility\CRU.exe'); Instructions = 'Instale/extraia o Custom Resolution Utility (CRU) e deixe CRU.exe no PATH ou em pasta conhecida.' }
     $catalog['steamdeck-tools'] = New-BootstrapComponentDefinition -Name 'steamdeck-tools' -Description 'Bloco de tooling: RTSS, AMD Adrenalin, CRU e Steam Deck Tools.' -DependsOn @('rtss', 'amd-adrenalin', 'cru', 'steamdeck-tools-runtime') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'mixed'; ValueReason = 'Fecha o stack de overlay, driver, resolucao e controle fisico esperado no modo handheld.' }
-    $catalog['displayfusion'] = New-BootstrapComponentDefinition -Name 'displayfusion' -Description 'Layout de monitores e perfis de dock.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'BinaryFortress.DisplayFusion'; DisplayName = 'DisplayFusion'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite layouts dedicados para monitor externo e dock.' }
-    $catalog['soundswitch'] = New-BootstrapComponentDefinition -Name 'soundswitch' -Description 'Troca rapida de audio entre Deck e HDMI/DP.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'AntoineAflalo.SoundSwitch'; DisplayName = 'SoundSwitch'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Redireciona audio automaticamente entre handheld e dock.' }
+    $catalog['displayfusion'] = New-BootstrapComponentDefinition -Name 'displayfusion' -Description 'Layout de monitores e perfis de dock.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BinaryFortress.DisplayFusion'; DisplayName = 'DisplayFusion'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite layouts dedicados para monitor externo e dock.' }
+    $catalog['soundswitch'] = New-BootstrapComponentDefinition -Name 'soundswitch' -Description 'Troca rapida de audio entre Deck e HDMI/DP.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AntoineAflalo.SoundSwitch'; DisplayName = 'SoundSwitch'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Redireciona audio automaticamente entre handheld e dock.' }
     $catalog['steamdeck-settings'] = New-BootstrapComponentDefinition -Name 'steamdeck-settings' -Description 'Cria e mantem steamdeck-settings.json com defaults e families.' -DependsOn @('system-core') -Kind 'steamdeck-settings' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Persiste defaults do host, familias conhecidas, classificacao de externo desconhecido e console shell.' }
     $catalog['steamdeck-automation'] = New-BootstrapComponentDefinition -Name 'steamdeck-automation' -Description 'Provisiona watcher handheld/dock, scripts Apply-* e hotkeys.' -DependsOn @('steamdeck-settings', 'autohotkey-runtime', 'displayfusion', 'soundswitch', 'steamdeck-tools-runtime') -Kind 'steamdeck-automation' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Ativa deteccao por familia, Game - Steam Deck em handheld/TV e Desktop/Dev em monitor.' }
     $catalog['steamdeck-tweaks'] = New-BootstrapComponentDefinition -Name 'steamdeck-tweaks' -Description 'Ajustes handheld: hibernacao, UTC, login pos-sleep, ms-gamebar e touch keyboard.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Aplica ajustes seguros quando o modo HANDHELD entra em Game - Steam Deck.' }
@@ -6740,51 +7945,56 @@ function Get-BootstrapComponentCatalog {
     $catalog['display-classifier'] = New-BootstrapComponentDefinition -Name 'display-classifier' -Description 'Classifica externo desconhecido como Monitor/Dev ou TV/Game pela UI.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Impede falso positivo: desconhecido vira UNCLASSIFIED_EXTERNAL ate o usuario decidir.' }
     $catalog['recovery-hotkeys'] = New-BootstrapComponentDefinition -Name 'recovery-hotkeys' -Description 'Hotkeys de recuperacao para voltar ao Desktop/Dev.' -DependsOn @('steamdeck-automation', 'autohotkey-runtime') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Mantem saida segura do modo console sem prender o usuario em fullscreen.' }
     $catalog['console-readiness-audit'] = New-BootstrapComponentDefinition -Name 'console-readiness-audit' -Description 'Audita Steam, Playnite, Steam Deck Tools, RTSS, Adrenalin, CRU, SoundSwitch e watcher.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Mostra blockers antes de depender da experiencia console.' }
-    $catalog['playnite'] = New-BootstrapComponentDefinition -Name 'playnite' -Description 'Frontend unificado para bibliotecas e modo console.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Playnite.Playnite'; DisplayName = 'Playnite'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega um frontend fullscreen amigavel a controle no Deck.' }
-    $catalog['heroic'] = New-BootstrapComponentDefinition -Name 'heroic' -Description 'Cliente Epic/GOG leve para o Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'HeroicGamesLauncher.HeroicGamesLauncher'; DisplayName = 'Heroic Games Launcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre bibliotecas Epic/GOG sem depender do launcher oficial pesado.' }
-    $catalog['rtss'] = New-BootstrapComponentDefinition -Name 'rtss' -Description 'RivaTuner Statistics Server para overlay e frame pacing.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Guru3D.RTSS'; DisplayName = 'RivaTuner Statistics Server'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega overlay e base para performance tuning no Deck.' }
-    $catalog['special-k'] = New-BootstrapComponentDefinition -Name 'special-k' -Description 'Special K para HDR, pacing e latencia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'SpecialK.SpecialK'; DisplayName = 'Special K'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a estabilizar frame pacing e recursos visuais em jogos Windows no Deck.' }
-    $catalog['vcpp-redist'] = New-BootstrapComponentDefinition -Name 'vcpp-redist' -Description 'Visual C++ Redistributable 2015+ x64.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.VCRedist.2015+.x64'; DisplayName = 'Microsoft Visual C++ Redistributable 2015+ x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Evita falhas por runtime ausente em launchers, overlays e jogos.' }
-    $catalog['directx-runtime'] = New-BootstrapComponentDefinition -Name 'directx-runtime' -Description 'DirectX runtime legado para jogos e ferramentas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.DirectX'; DisplayName = 'Microsoft DirectX Runtime'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Fecha dependencias comuns de jogos Windows em instalacoes novas.' }
-    $catalog['sunshine'] = New-BootstrapComponentDefinition -Name 'sunshine' -Description 'Servidor de game streaming.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'LizardByte.Sunshine'; DisplayName = 'Sunshine'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Transforma o Deck dockado em host de streaming sem abrir portas manualmente.' }
-    $catalog['moonlight'] = New-BootstrapComponentDefinition -Name 'moonlight' -Description 'Cliente para streaming Sunshine/GameStream.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'MoonlightGameStreamingProject.Moonlight'; DisplayName = 'Moonlight'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita testes e acesso remoto ao ecossistema do Deck.' }
-    $catalog['tailscale'] = New-BootstrapComponentDefinition -Name 'tailscale' -Description 'VPN mesh para acesso remoto seguro.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Tailscale.Tailscale'; DisplayName = 'Tailscale'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Conecta o Deck remotamente sem expor servicos publicamente.' }
-    $catalog['scrcpy'] = New-BootstrapComponentDefinition -Name 'scrcpy' -Description 'Espelha e controla Android no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Genymobile.scrcpy'; DisplayName = 'scrcpy'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda na ponte mobile quando o Deck esta dockado ou em bancada.' }
-    $catalog['syncthing'] = New-BootstrapComponentDefinition -Name 'syncthing' -Description 'Sincroniza saves e configuracoes entre maquinas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Syncthing.Syncthing'; DisplayName = 'Syncthing'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mantem saves/configs coerentes entre Deck e desktop.' }
-    $catalog['chiaki'] = New-BootstrapComponentDefinition -Name 'chiaki' -Description 'Chiaki PS4/PS5 Remote Play.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'srwi.Chiaki'; DisplayName = 'Chiaki' }
-    $catalog['rustdesk'] = New-BootstrapComponentDefinition -Name 'rustdesk' -Description 'RustDesk remote desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'RustDesk.RustDesk'; DisplayName = 'RustDesk' }
-    $catalog['quicklook'] = New-BootstrapComponentDefinition -Name 'quicklook' -Description 'Preview rapido de arquivos.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'QL-Win.QuickLook'; DisplayName = 'QuickLook'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Acelera inspeccao de arquivos em modo desktop e dock.' }
-    $catalog['sharex'] = New-BootstrapComponentDefinition -Name 'sharex' -Description 'Captura e compartilhamento rapido.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'ShareX.ShareX'; DisplayName = 'ShareX'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita screenshots e uploads com atalhos do Deck.' }
-    $catalog['quickcpu'] = New-BootstrapComponentDefinition -Name 'quickcpu' -Description 'Controle fino de CPU e energia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'CoderBag.QuickCPUx64'; DisplayName = 'Quick CPU x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a equilibrar consumo e desempenho no modo bateria.' }
-    $catalog['explorerpatcher'] = New-BootstrapComponentDefinition -Name 'explorerpatcher' -Description 'Ajustes de shell do Windows para uso no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'valinet.ExplorerPatcher'; DisplayName = 'ExplorerPatcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Simplifica a UX do Windows em handheld e dock.' }
-    $catalog['mica-for-everyone'] = New-BootstrapComponentDefinition -Name 'mica-for-everyone' -Description 'Camada visual do Windows mais limpa e consistente.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'MicaForEveryone.MicaForEveryone'; DisplayName = 'Mica For Everyone'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Deixa a interface do Windows menos carregada para uso no Deck.' }
-    $catalog['compactgui'] = New-BootstrapComponentDefinition -Name 'compactgui' -Description 'Compacta instalacoes grandes para economizar espaco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'IridiumIO.CompactGUI'; DisplayName = 'CompactGUI'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Reduz pressao de storage no SSD interno do Deck.' }
-    $catalog['treesize-free'] = New-BootstrapComponentDefinition -Name 'treesize-free' -Description 'Analise rapida de uso de disco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'JAMSoftware.TreeSize.Free'; DisplayName = 'TreeSize Free'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra rapidamente o que esta consumindo espaco em SSD e SD.' }
-    $catalog['obs-studio'] = New-BootstrapComponentDefinition -Name 'obs-studio' -Description 'Captura e producao de video.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'OBSProject.OBSStudio'; DisplayName = 'OBS Studio'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre captura de gameplay e producao de conteudo no Deck.' }
-    $catalog['driver-store-explorer'] = New-BootstrapComponentDefinition -Name 'driver-store-explorer' -Description 'Backup e auditoria do driver store.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'lostindark.DriverStoreExplorer'; DisplayName = 'Driver Store Explorer'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a preservar drivers especificos do Deck para reinstalacao offline.' }
-    $catalog['lossless-scaling'] = New-BootstrapComponentDefinition -Name 'lossless-scaling' -Description 'Frame generation pago e otimizado para jogos no Deck.' -Kind 'manual-required' -Data @{ DisplayName = 'Lossless Scaling'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Entrega ganho real de fluidez, mas exige compra/licenca no Steam.'; Instructions = 'Instale pelo Steam antes de rodar novamente o perfil ou exclua o componente.' }
-    $catalog['macrium-reflect'] = New-BootstrapComponentDefinition -Name 'macrium-reflect' -Description 'Imagem golden do SSD para restore rapido.' -Kind 'manual-required' -Data @{ DisplayName = 'Macrium Reflect'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Cria uma imagem completa do Deck, mas exige instalacao/licenciamento manual.'; Instructions = 'Instale manualmente o Macrium Reflect antes de usar o perfil de backup.' }
-    $catalog['joyshockmapper'] = New-BootstrapComponentDefinition -Name 'joyshockmapper' -Description 'Mapeamento fino de gyro e controles.' -Kind 'manual-required' -Data @{ DisplayName = 'JoyShockMapper'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Da granularidade extra ao gyro, mas ainda depende de instalacao manual segura.'; Instructions = 'Instale o JoyShockMapper manualmente ou exclua este componente se optar por usar apenas Steam Input/Steam Deck Tools.' }
-    $catalog['vibrancegui'] = New-BootstrapComponentDefinition -Name 'vibrancegui' -Description 'Ajustes extras de vibrancia e saturacao.' -Kind 'manual-required' -Data @{ DisplayName = 'VibranceGUI'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Melhora saturacao no painel do Deck, mas a origem binaria precisa ser validada manualmente.'; Instructions = 'Valide e instale o VibranceGUI manualmente antes de rodar novamente.' }
-    $catalog['steamdeck-driver-pack'] = New-BootstrapComponentDefinition -Name 'steamdeck-driver-pack' -Description 'Drivers especificos do Steam Deck para Windows.' -Kind 'manual-required' -Data @{ DisplayName = 'Steam Deck driver pack'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Mantem paridade com o ecossistema do Deck, mas o pacote de drivers precisa ser escolhido conforme LCD/OLED e baixado com validacao manual.'; Instructions = 'Baixe e instale os drivers do Steam Deck adequados ao seu modelo antes de rodar novamente.' }
-    $catalog['obs-source-record-plugin'] = New-BootstrapComponentDefinition -Name 'obs-source-record-plugin' -Description 'Plugin Source Record para gravacao separada por fonte.' -Kind 'manual-required' -Data @{ DisplayName = 'OBS Source Record plugin'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Aprimora captura multipista, mas o plugin precisa ser instalado manualmente.'; Instructions = 'Instale o plugin Source Record no OBS antes de usar o perfil de captura.' }
+    $catalog['playnite'] = New-BootstrapComponentDefinition -Name 'playnite' -Description 'Frontend unificado para bibliotecas e modo console.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Playnite.Playnite'; DisplayName = 'Playnite'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega um frontend fullscreen amigavel a controle no Deck.' }
+    $catalog['epic-games'] = New-BootstrapComponentDefinition -Name 'epic-games' -Description 'Epic Games Launcher.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EpicGames.EpicGamesLauncher'; DisplayName = 'Epic Games Launcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Habilita biblioteca Epic no fluxo zero-touch do Deck.' }
+    $catalog['heroic'] = New-BootstrapComponentDefinition -Name 'heroic' -Description 'Cliente Epic/GOG leve para o Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'HeroicGamesLauncher.HeroicGamesLauncher'; DisplayName = 'Heroic Games Launcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre bibliotecas Epic/GOG sem depender do launcher oficial pesado.' }
+    $catalog['rtss'] = New-BootstrapComponentDefinition -Name 'rtss' -Description 'RivaTuner Statistics Server para overlay e frame pacing.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Guru3D.RTSS'; DisplayName = 'RivaTuner Statistics Server'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega overlay e base para performance tuning no Deck.' }
+    $catalog['msi-afterburner'] = New-BootstrapComponentDefinition -Name 'msi-afterburner' -Description 'MSI Afterburner para tuning de overlay/perf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Guru3D.Afterburner'; DisplayName = 'MSI Afterburner'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Complementa RTSS para telemetria e tuning no Deck.' }
+    $catalog['special-k'] = New-BootstrapComponentDefinition -Name 'special-k' -Description 'Special K para HDR, pacing e latencia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SpecialK.SpecialK'; DisplayName = 'Special K'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a estabilizar frame pacing e recursos visuais em jogos Windows no Deck.' }
+    $catalog['vcpp-redist'] = New-BootstrapComponentDefinition -Name 'vcpp-redist' -Description 'Visual C++ Redistributable 2015+ x64.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VCRedist.2015+.x64'; DisplayName = 'Microsoft Visual C++ Redistributable 2015+ x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Evita falhas por runtime ausente em launchers, overlays e jogos.' }
+    $catalog['directx-runtime'] = New-BootstrapComponentDefinition -Name 'directx-runtime' -Description 'DirectX runtime legado para jogos e ferramentas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.DirectX'; DisplayName = 'Microsoft DirectX Runtime'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Fecha dependencias comuns de jogos Windows em instalacoes novas.' }
+    $catalog['sunshine'] = New-BootstrapComponentDefinition -Name 'sunshine' -Description 'Servidor de game streaming.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LizardByte.Sunshine'; DisplayName = 'Sunshine'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Transforma o Deck dockado em host de streaming sem abrir portas manualmente.' }
+    $catalog['moonlight'] = New-BootstrapComponentDefinition -Name 'moonlight' -Description 'Cliente para streaming Sunshine/GameStream.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MoonlightGameStreamingProject.Moonlight'; DisplayName = 'Moonlight'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita testes e acesso remoto ao ecossistema do Deck.' }
+    $catalog['tailscale'] = New-BootstrapComponentDefinition -Name 'tailscale' -Description 'VPN mesh para acesso remoto seguro.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Tailscale.Tailscale'; DisplayName = 'Tailscale'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Conecta o Deck remotamente sem expor servicos publicamente.' }
+    $catalog['scrcpy'] = New-BootstrapComponentDefinition -Name 'scrcpy' -Description 'Espelha e controla Android no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Genymobile.scrcpy'; DisplayName = 'scrcpy'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda na ponte mobile quando o Deck esta dockado ou em bancada.' }
+    $catalog['syncthing'] = New-BootstrapComponentDefinition -Name 'syncthing' -Description 'Sincroniza saves e configuracoes entre maquinas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Syncthing.Syncthing'; DisplayName = 'Syncthing'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mantem saves/configs coerentes entre Deck e desktop.' }
+    $catalog['chiaki'] = New-BootstrapComponentDefinition -Name 'chiaki' -Description 'Chiaki PS4/PS5 Remote Play.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'srwi.Chiaki'; DisplayName = 'Chiaki' }
+    $catalog['rustdesk'] = New-BootstrapComponentDefinition -Name 'rustdesk' -Description 'RustDesk remote desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'RustDesk.RustDesk'; DisplayName = 'RustDesk' }
+    $catalog['quicklook'] = New-BootstrapComponentDefinition -Name 'quicklook' -Description 'Preview rapido de arquivos.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'QL-Win.QuickLook'; DisplayName = 'QuickLook'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Acelera inspeccao de arquivos em modo desktop e dock.' }
+    $catalog['sharex'] = New-BootstrapComponentDefinition -Name 'sharex' -Description 'Captura e compartilhamento rapido.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ShareX.ShareX'; DisplayName = 'ShareX'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita screenshots e uploads com atalhos do Deck.' }
+    $catalog['quickcpu'] = New-BootstrapComponentDefinition -Name 'quickcpu' -Description 'Controle fino de CPU e energia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'CoderBag.QuickCPUx64'; DisplayName = 'Quick CPU x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a equilibrar consumo e desempenho no modo bateria.' }
+    $catalog['explorerpatcher'] = New-BootstrapComponentDefinition -Name 'explorerpatcher' -Description 'Ajustes de shell do Windows para uso no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'valinet.ExplorerPatcher'; DisplayName = 'ExplorerPatcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Simplifica a UX do Windows em handheld e dock.' }
+    $catalog['mica-for-everyone'] = New-BootstrapComponentDefinition -Name 'mica-for-everyone' -Description 'Camada visual do Windows mais limpa e consistente.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MicaForEveryone.MicaForEveryone'; DisplayName = 'Mica For Everyone'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Deixa a interface do Windows menos carregada para uso no Deck.' }
+    $catalog['compactgui'] = New-BootstrapComponentDefinition -Name 'compactgui' -Description 'Compacta instalacoes grandes para economizar espaco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'IridiumIO.CompactGUI'; DisplayName = 'CompactGUI'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Reduz pressao de storage no SSD interno do Deck.' }
+    $catalog['treesize-free'] = New-BootstrapComponentDefinition -Name 'treesize-free' -Description 'Analise rapida de uso de disco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JAMSoftware.TreeSize.Free'; DisplayName = 'TreeSize Free'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra rapidamente o que esta consumindo espaco em SSD e SD.' }
+    $catalog['obs-studio'] = New-BootstrapComponentDefinition -Name 'obs-studio' -Description 'Captura e producao de video.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'OBSProject.OBSStudio'; DisplayName = 'OBS Studio'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre captura de gameplay e producao de conteudo no Deck.' }
+    $catalog['driver-store-explorer'] = New-BootstrapComponentDefinition -Name 'driver-store-explorer' -Description 'Backup e auditoria do driver store.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'lostindark.DriverStoreExplorer'; DisplayName = 'Driver Store Explorer'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a preservar drivers especificos do Deck para reinstalacao offline.' }
+    $catalog['lossless-scaling'] = New-BootstrapComponentDefinition -Name 'lossless-scaling' -Description 'Frame generation pago e otimizado para jogos no Deck.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Lossless Scaling'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Entrega ganho real de fluidez, mas exige compra/licenca no Steam.'; ProbePaths = @('${env:ProgramFiles(x86)}\Steam\steamapps\appmanifest_993090.acf'); Instructions = 'Instale pelo Steam com licença válida antes de rodar novamente o perfil ou exclua o componente.' }
+    $catalog['macrium-reflect'] = New-BootstrapComponentDefinition -Name 'macrium-reflect' -Description 'Imagem golden do SSD para restore rapido.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Macrium Reflect'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Cria uma imagem completa do Deck, mas exige instalacao/licenciamento manual.'; Instructions = 'Instale manualmente o Macrium Reflect antes de usar o perfil de backup.' }
+    $catalog['joyshockmapper'] = New-BootstrapComponentDefinition -Name 'joyshockmapper' -Description 'Mapeamento fino de gyro e controles.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'JoyShockMapper'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Da granularidade extra ao gyro, mas ainda depende de instalacao manual segura.'; Instructions = 'Instale o JoyShockMapper manualmente ou exclua este componente se optar por usar apenas Steam Input/Steam Deck Tools.' }
+    $catalog['vibrancegui'] = New-BootstrapComponentDefinition -Name 'vibrancegui' -Description 'Ajustes extras de vibrancia e saturacao.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'VibranceGUI'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Melhora saturacao no painel do Deck, mas a origem binaria precisa ser validada manualmente.'; Instructions = 'Valide e instale o VibranceGUI manualmente antes de rodar novamente.' }
+    $catalog['steamdeck-driver-pack'] = New-BootstrapComponentDefinition -Name 'steamdeck-driver-pack' -Description 'Drivers especificos do Steam Deck para Windows.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Steam Deck driver pack'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Mantem paridade com o ecossistema do Deck, mas o pacote de drivers precisa ser escolhido conforme LCD/OLED e baixado com validacao manual.'; Instructions = 'Baixe e instale os drivers do Steam Deck adequados ao seu modelo antes de rodar novamente.' }
+    $catalog['obs-source-record-plugin'] = New-BootstrapComponentDefinition -Name 'obs-source-record-plugin' -Description 'Plugin Source Record para gravacao separada por fonte.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'OBS Source Record plugin'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Aprimora captura multipista, mas o plugin precisa ser instalado manualmente.'; Instructions = 'Instale o plugin Source Record no OBS antes de usar o perfil de captura.' }
     $catalog['instant-replay'] = New-BootstrapComponentDefinition -Name 'instant-replay' -Description 'Preset para replay buffer/instant replay.' -DependsOn @('obs-studio') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Entrega um ponto de extensao para replay buffer sem introduzir outra dependencia agora.' }
-    $catalog['pagefile-on-sd'] = New-BootstrapComponentDefinition -Name 'pagefile-on-sd' -Description 'Move pagefile para o SD ou unidade de apoio.' -Kind 'manual-required' -Data @{ DisplayName = 'Pagefile on SD'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'E util para cenarios de storage apertado, mas e invasivo demais para habilitar automaticamente.'; Instructions = 'Ajuste manualmente o pagefile apos validar a unidade alvo e o impacto de desempenho.' }
+    $catalog['pagefile-on-sd'] = New-BootstrapComponentDefinition -Name 'pagefile-on-sd' -Description 'Move pagefile para o SD ou unidade de apoio.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Pagefile on SD'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'E util para cenarios de storage apertado, mas e invasivo demais para habilitar automaticamente.'; Instructions = 'Ajuste manualmente o pagefile apos validar a unidade alvo e o impacto de desempenho.' }
     $catalog['workspace-layout'] = New-BootstrapComponentDefinition -Name 'workspace-layout' -Description 'Cria layout de DevKits e DevProjetos em F:.' -Kind 'workspace'
 
-    $catalog['brave'] = New-BootstrapComponentDefinition -Name 'brave' -Description 'Brave Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Brave.Brave'; DisplayName = 'Brave Browser'; AllowFailureWhenNotAdmin = $true }
-    $catalog['discord'] = New-BootstrapComponentDefinition -Name 'discord' -Description 'Discord.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Discord.Discord'; DisplayName = 'Discord'; AllowFailureWhenNotAdmin = $true }
-    $catalog['telegram'] = New-BootstrapComponentDefinition -Name 'telegram' -Description 'Telegram Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Telegram.TelegramDesktop'; DisplayName = 'Telegram Desktop'; AllowFailureWhenNotAdmin = $true }
-    $catalog['1password'] = New-BootstrapComponentDefinition -Name '1password' -Description '1Password.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'AgileBits.1Password'; DisplayName = '1Password'; AllowFailureWhenNotAdmin = $true }
-    $catalog['proton-drive'] = New-BootstrapComponentDefinition -Name 'proton-drive' -Description 'Proton Drive.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Proton.ProtonDrive'; DisplayName = 'Proton Drive'; AllowFailureWhenNotAdmin = $true }
-    $catalog['proton-pass'] = New-BootstrapComponentDefinition -Name 'proton-pass' -Description 'Proton Pass.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Proton.ProtonPass'; DisplayName = 'Proton Pass'; AllowFailureWhenNotAdmin = $true }
-    $catalog['pycharm-community'] = New-BootstrapComponentDefinition -Name 'pycharm-community' -Description 'PyCharm Community.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'JetBrains.PyCharm.Community'; DisplayName = 'PyCharm Community' }
-    $catalog['dotnet-6-sdk'] = New-BootstrapComponentDefinition -Name 'dotnet-6-sdk' -Description 'Microsoft .NET 6.0 SDK.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Microsoft.DotNet.SDK.6'; DisplayName = 'Microsoft .NET 6.0 SDK' }
-    $catalog['fan-control'] = New-BootstrapComponentDefinition -Name 'fan-control' -Description 'Fan Control.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Rem0o.FanControl'; DisplayName = 'Fan Control' }
-    $catalog['mem-reduct'] = New-BootstrapComponentDefinition -Name 'mem-reduct' -Description 'Mem Reduct.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'henrypp.memreduct'; DisplayName = 'Mem Reduct' }
-    $catalog['raycast'] = New-BootstrapComponentDefinition -Name 'raycast' -Description 'Raycast launcher.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'Raycast.Raycast'; DisplayName = 'Raycast'; AllowFailureWhenNotAdmin = $true }
-    $catalog['sparkle'] = New-BootstrapComponentDefinition -Name 'sparkle' -Description 'Sparkle: limpeza/debloat/otimizacao do Windows.' -DependsOn @('system-core') -Kind 'winget' -Data @{ Id = 'xishang0128.Sparkle'; DisplayName = 'Sparkle'; AllowFailureWhenNotAdmin = $true }
-    $catalog['jdownloader'] = New-BootstrapComponentDefinition -Name 'jdownloader' -Description 'JDownloader 2.' -DependsOn @('java-core') -Kind 'winget' -Data @{ Id = 'AppWork.JDownloader'; DisplayName = 'JDownloader 2'; AllowFailureWhenNotAdmin = $true }
+    $catalog['brave'] = New-BootstrapComponentDefinition -Name 'brave' -Description 'Brave Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Brave.Brave'; DisplayName = 'Brave Browser'}
+    $catalog['discord'] = New-BootstrapComponentDefinition -Name 'discord' -Description 'Discord.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Discord.Discord'; DisplayName = 'Discord'}
+    $catalog['telegram'] = New-BootstrapComponentDefinition -Name 'telegram' -Description 'Telegram Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Telegram.TelegramDesktop'; DisplayName = 'Telegram Desktop'}
+    $catalog['1password'] = New-BootstrapComponentDefinition -Name '1password' -Description '1Password.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AgileBits.1Password'; DisplayName = '1Password'}
+    $catalog['proton-drive'] = New-BootstrapComponentDefinition -Name 'proton-drive' -Description 'Proton Drive.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Proton.ProtonDrive'; DisplayName = 'Proton Drive'}
+    $catalog['proton-pass'] = New-BootstrapComponentDefinition -Name 'proton-pass' -Description 'Proton Pass.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Proton.ProtonPass'; DisplayName = 'Proton Pass'}
+    $catalog['pycharm-community'] = New-BootstrapComponentDefinition -Name 'pycharm-community' -Description 'PyCharm Community.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JetBrains.PyCharm.Community'; DisplayName = 'PyCharm Community' }
+    $catalog['dotnet-6-sdk'] = New-BootstrapComponentDefinition -Name 'dotnet-6-sdk' -Description 'Microsoft .NET 6.0 SDK.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.DotNet.SDK.6'; DisplayName = 'Microsoft .NET 6.0 SDK' }
+    $catalog['fan-control'] = New-BootstrapComponentDefinition -Name 'fan-control' -Description 'Fan Control.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Rem0o.FanControl'; DisplayName = 'Fan Control' }
+    $catalog['mem-reduct'] = New-BootstrapComponentDefinition -Name 'mem-reduct' -Description 'Mem Reduct.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Henry++.MemReduct'; DisplayName = 'Mem Reduct' }
+    $catalog['steamdeck-shell-menu'] = New-BootstrapComponentDefinition -Name 'steamdeck-shell-menu' -Description 'Menu de manutenção no DesktopBackground com ações rápidas.' -DependsOn @('steamdeck-automation') -Kind 'steamdeck-shell-menu' -Data @{ Stage = 'config'; Provisioning = 'registry'; ValueReason = 'Entrega manutenção rápida no menu de contexto da área de trabalho.' }
+    $catalog['steamdeck-zero-touch'] = New-BootstrapComponentDefinition -Name 'steamdeck-zero-touch' -Description 'Provisionamento zero-touch dos apps essenciais faltantes do Deck.' -DependsOn @('steamdeck-automation') -Kind 'steamdeck-zero-touch' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Garante payload mínimo mesmo em host parcialmente provisionado.' }
+    $catalog['steamdeck-sharedvram-launch-options'] = New-BootstrapComponentDefinition -Name 'steamdeck-sharedvram-launch-options' -Description 'Aplica -sharedvram por allowlist no Steam.' -DependsOn @('steamdeck-automation') -Kind 'steamdeck-sharedvram-launch-options' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Evita editar todos os jogos; aplica somente em allowlist explícita.' }
+    $catalog['raycast'] = New-BootstrapComponentDefinition -Name 'raycast' -Description 'Raycast launcher.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Raycast.Raycast'; DisplayName = 'Raycast'}
+    $catalog['sparkle'] = New-BootstrapComponentDefinition -Name 'sparkle' -Description 'Sparkle: limpeza/debloat/otimizacao do Windows.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'xishang0128.Sparkle'; DisplayName = 'Sparkle'}
+    $catalog['jdownloader'] = New-BootstrapComponentDefinition -Name 'jdownloader' -Description 'JDownloader 2.' -DependsOn @('java-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AppWork.JDownloader'; DisplayName = 'JDownloader 2'}
     $catalog['dualboot-manager'] = New-BootstrapComponentDefinition -Name 'dualboot-manager' -Description 'Dual boot detection, safety guardrails and reboot management.' -DependsOn @('system-core') -Optional $true -Kind 'builtin' -Data @{}
 
     return $catalog
@@ -6805,7 +8015,8 @@ function Get-BootstrapProfileCatalog {
     $catalog['game-dev'] = New-BootstrapProfileDefinition -Name 'game-dev' -Description 'Toolchain de jogos e compilação.' -Items @('unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community')
     $catalog['gaming'] = New-BootstrapProfileDefinition -Name 'gaming' -Description 'Steam e ferramentas relacionadas.' -Items @('steam', 'steamcmd')
     $catalog['steamdeck-essentials'] = New-BootstrapProfileDefinition -Name 'steamdeck-essentials' -Description 'Base handheld do Steam Deck em Windows.' -Items @('base', 'steam', 'playnite', 'heroic', 'rtss', 'special-k', 'vcpp-redist', 'directx-runtime', 'vigembus-runtime', 'steamdeck-tools-runtime', 'steamdeck-tools', 'autohotkey-runtime')
-    $catalog['steamdeck-input'] = New-BootstrapProfileDefinition -Name 'steamdeck-input' -Description 'Perfis de input, hotkeys e automacao de controle.' -Items @('steamdeck-settings', 'steamdeck-automation', 'steamdeck-tweaks', 'console-session-manager', 'dev-session-manager', 'display-classifier', 'recovery-hotkeys', 'console-readiness-audit')
+    $catalog['steamdeck-input'] = New-BootstrapProfileDefinition -Name 'steamdeck-input' -Description 'Perfis de input, hotkeys e automacao de controle.' -Items @('steamdeck-settings', 'steamdeck-automation', 'steamdeck-tweaks', 'console-session-manager', 'dev-session-manager', 'display-classifier', 'recovery-hotkeys', 'steamdeck-input-conflict-audit', 'console-readiness-audit')
+    $catalog['steamdeck-input-advanced'] = New-BootstrapProfileDefinition -Name 'steamdeck-input-advanced' -Description 'Stacks alternativos opt-in: Handheld Companion e GlosSI.' -Items @('handheld-companion', 'glossi', 'steamdeck-input-conflict-audit')
     $catalog['steamdeck-power'] = New-BootstrapProfileDefinition -Name 'steamdeck-power' -Description 'Gestao de energia e tuning para bateria/dock.' -Items @('powertoys', 'quickcpu', 'fan-control', 'mem-reduct')
     $catalog['steamdeck-dock'] = New-BootstrapProfileDefinition -Name 'steamdeck-dock' -Description 'Automacao handheld-dock com fallback generico.' -Items @('displayfusion', 'soundswitch', 'steamdeck-settings', 'steamdeck-automation')
     $catalog['steamdeck-storage'] = New-BootstrapProfileDefinition -Name 'steamdeck-storage' -Description 'Ferramentas de storage e auditoria.' -Items @('compactgui', 'treesize-free', 'pagefile-on-sd')
@@ -6813,8 +8024,8 @@ function Get-BootstrapProfileCatalog {
     $catalog['steamdeck-qol'] = New-BootstrapProfileDefinition -Name 'steamdeck-qol' -Description 'Melhorias de UX para desktop e handheld.' -Items @('quicklook', 'sharex', 'explorerpatcher', 'mica-for-everyone')
     $catalog['steamdeck-capture'] = New-BootstrapProfileDefinition -Name 'steamdeck-capture' -Description 'Captura de gameplay e replay buffer.' -Items @('obs-studio', 'obs-source-record-plugin', 'instant-replay')
     $catalog['steamdeck-backup'] = New-BootstrapProfileDefinition -Name 'steamdeck-backup' -Description 'Backup de drivers e imagem golden.' -Items @('driver-store-explorer', 'macrium-reflect')
-    $catalog['steamdeck-recommended'] = New-BootstrapProfileDefinition -Name 'steamdeck-recommended' -Description 'Experiencia recomendada para este Steam Deck.' -Items @('steamdeck-essentials', 'steamdeck-input', 'steamdeck-power', 'steamdeck-dock', 'steamdeck-connectivity', 'steamdeck-qol')
-    $catalog['steamdeck-full'] = New-BootstrapProfileDefinition -Name 'steamdeck-full' -Description 'Camada completa Steam Deck, incluindo storage/capture/backup e bloqueadores manuais.' -Items @('steamdeck-recommended', 'steamdeck-storage', 'steamdeck-capture', 'steamdeck-backup', 'lossless-scaling', 'joyshockmapper', 'vibrancegui', 'steamdeck-driver-pack')
+    $catalog['steamdeck-recommended'] = New-BootstrapProfileDefinition -Name 'steamdeck-recommended' -Description 'Experiencia recomendada para este Steam Deck.' -Items @('steamdeck-essentials', 'steamdeck-input', 'steamdeck-power', 'steamdeck-dock', 'steamdeck-connectivity', 'steamdeck-qol', 'steamdeck-shell-menu', 'steamdeck-sharedvram-launch-options')
+    $catalog['steamdeck-full'] = New-BootstrapProfileDefinition -Name 'steamdeck-full' -Description 'Camada completa Steam Deck, incluindo storage/capture/backup e bloqueadores manuais.' -Items @('steamdeck-recommended', 'steamdeck-storage', 'steamdeck-capture', 'steamdeck-backup', 'steamdeck-zero-touch', 'epic-games', 'msi-afterburner', 'lossless-scaling', 'joyshockmapper', 'vibrancegui', 'steamdeck-driver-pack')
     $catalog['workspace'] = New-BootstrapProfileDefinition -Name 'workspace' -Description 'Layout em F:\Steam\Steamapps e Dev.' -Items @('workspace-layout', 'pycharm-community', 'dotnet-6-sdk')
     $catalog['recommended'] = New-BootstrapProfileDefinition -Name 'recommended' -Description 'Perfis recomendados para sua máquina pessoal.' -Items @('base', 'containers', 'ai', 'creator', 'workspace', 'security', 'social', 'utilities')
     $catalog['full'] = New-BootstrapProfileDefinition -Name 'full' -Description 'Instala tudo.' -Items @('recommended', 'automation', 'game-dev', 'gaming')
@@ -7188,6 +8399,12 @@ function Invoke-BootstrapInteractiveSelection {
 function Get-BootstrapSelection {
     $profiles = @(Normalize-BootstrapNames -Names $Profile)
     $components = @(Normalize-BootstrapNames -Names $Component)
+    $appComponents = @(Resolve-BootstrapAppComponents -Names $App)
+    foreach ($componentName in @($appComponents)) {
+        if (@($components) -notcontains $componentName) {
+            $components += @($componentName)
+        }
+    }
     $excludes = @(Normalize-BootstrapNames -Names $Exclude)
     $selectedHostHealth = Normalize-BootstrapHostHealthMode -Mode $HostHealth
     $selectedAppTuning = Normalize-BootstrapAppTuningMode -Mode $AppTuning
@@ -7274,6 +8491,7 @@ function New-BootstrapState {
         PreflightDone = $false
         PreflightSummary = $null
         Completed = @{}
+        ManualRequirements = New-Object System.Collections.Generic.List[object]
     }
 }
 
@@ -7480,15 +8698,18 @@ function Ensure-BootstrapSteamDeckToolsRuntime {
     $probePaths = @(
         (Join-Path $installRoot 'PowerControl.exe'),
         (Join-Path $installRoot 'SteamController.exe'),
+        (Join-Path $installRoot 'FanControl.exe'),
         (Join-Path $installRoot 'PerformanceOverlay.exe')
     )
 
-    foreach ($probePath in $probePaths) {
-        if (Test-Path $probePath) {
-            $State.SteamDeckToolsRoot = $installRoot
-            Write-Log "Steam Deck Tools ja encontrado em $installRoot"
-            return
-        }
+    $existingProbeCount = @($probePaths | Where-Object { Test-Path $_ }).Count
+    if ($existingProbeCount -eq @($probePaths).Count) {
+        $State.SteamDeckToolsRoot = $installRoot
+        Write-Log "Steam Deck Tools ja encontrado em $installRoot"
+        return
+    }
+    if ($existingProbeCount -gt 0) {
+        Write-Log "Steam Deck Tools parcial em $installRoot; reinstalando pacote portable para completar componentes." 'WARN'
     }
 
     $downloadUrl = 'https://github.com/ayufan/steam-deck-tools/releases/download/0.7.3/SteamDeckTools-0.7.3-portable.zip'
@@ -7507,13 +8728,78 @@ function Ensure-BootstrapSteamDeckToolsRuntime {
         if (Test-Path $extractDir) { Remove-Item -LiteralPath $extractDir -Recurse -Force -ErrorAction SilentlyContinue }
     }
 
-    $finalProbe = Join-Path $installRoot 'PowerControl.exe'
-    if (-not (Test-Path $finalProbe)) {
-        throw "Steam Deck Tools baixado, mas PowerControl.exe nao foi encontrado em $installRoot."
+    $requiredProbes = @('PowerControl.exe', 'SteamController.exe', 'FanControl.exe', 'PerformanceOverlay.exe')
+    $missingProbes = @($requiredProbes | Where-Object { -not (Test-Path (Join-Path $installRoot $_)) })
+    if (@($missingProbes).Count -gt 0) {
+        throw "Steam Deck Tools baixado, mas executaveis esperados nao foram encontrados em ${installRoot}: $(@($missingProbes) -join ', ')."
     }
 
     $State.SteamDeckToolsRoot = $installRoot
     Write-Log "Steam Deck Tools instalado em $installRoot"
+}
+
+function Resolve-BootstrapChocolateyPath {
+    $commandPath = Resolve-CommandPath -Name 'choco.exe'
+    if ($commandPath) { return $commandPath }
+
+    $knownPath = Join-Path $env:ProgramData 'chocolatey\bin\choco.exe'
+    if (Test-Path $knownPath) { return $knownPath }
+
+    return $null
+}
+
+function Ensure-BootstrapChocolateyCore {
+    param([hashtable]$State)
+
+    $existing = Resolve-BootstrapChocolateyPath
+    if ($existing) { return $existing }
+
+    if (-not (Test-IsAdmin)) {
+        throw 'Chocolatey ausente. Instale/rode o bootstrap como Administrador para provisionar componentes Chocolatey como GlosSI.'
+    }
+
+    Ensure-BootstrapSystemCore -State $State
+
+    $installerUrl = 'https://community.chocolatey.org/install.ps1'
+    $installerPath = Join-Path $env:TEMP ("chocolatey_install_{0}.ps1" -f ([guid]::NewGuid().ToString('N')))
+    try {
+        Write-Log "Baixando instalador oficial do Chocolatey: $installerUrl"
+        Invoke-WebRequestWithRetry -Uri $installerUrl -OutFile $installerPath -OperationName 'download do Chocolatey'
+
+        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (-not (Test-Path $powershellExe)) { $powershellExe = 'powershell.exe' }
+        $exitCode = Invoke-NativeWithLog -Exe $powershellExe -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installerPath)
+        if ($exitCode -ne 0) {
+            throw "Instalador do Chocolatey retornou exit code $exitCode."
+        }
+    } finally {
+        if (Test-Path $installerPath) { Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue }
+    }
+
+    Refresh-SessionPath
+    $resolved = Resolve-BootstrapChocolateyPath
+    if (-not $resolved) {
+        throw 'Chocolatey instalado, mas choco.exe nao foi encontrado no PATH nem em ProgramData.'
+    }
+    return $resolved
+}
+
+function Ensure-ChocolateyPackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$ChocoPath,
+        [Parameter(Mandatory = $true)][string]$Package,
+        [Parameter(Mandatory = $true)][string]$DisplayName
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Package)) {
+        throw "Pacote Chocolatey ausente para $DisplayName."
+    }
+
+    Write-Log "Garantindo pacote Chocolatey: $DisplayName ($Package)"
+    $exitCode = Invoke-NativeWithLog -Exe $ChocoPath -Args @('upgrade', $Package, '-y', '--no-progress', '--accept-license')
+    if (@(0, 3010, 1641) -notcontains $exitCode) {
+        throw "Falha ao instalar/atualizar $DisplayName via Chocolatey (exit=$exitCode)."
+    }
 }
 
 function Write-BootstrapJsonFile {
@@ -7939,10 +9225,16 @@ function Get-BootstrapRooMcpConfigPath {
     $appDataPath = Get-BootstrapAppDataPath
     return (Get-BootstrapPreferredFilePath -Candidates @(
         $(if ($userHome) { Join-Path $userHome '.roo\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\rooveterinaryinc.roo-code-nightly\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\rooveterinaryinc.roo-cline-nightly\settings\mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\rooveterinaryinc.roo-code\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\rooveterinaryinc.roo-code-nightly\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\rooveterinaryinc.roo-cline-nightly\settings\mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\rooveterinaryinc.roo-code\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\rooveterinaryinc.roo-code-nightly\settings\mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\rooveterinaryinc.roo-cline-nightly\settings\mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\rooveterinaryinc.roo-code\settings\mcp_settings.json' })
     ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.roo\mcp_settings.json' } else { $null }))
@@ -7951,10 +9243,15 @@ function Get-BootstrapRooMcpConfigPath {
 function Get-BootstrapClineMcpConfigPath {
     $appDataPath = Get-BootstrapAppDataPath
     return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\saoudrizwan.claude-dev-nightly\settings\cline_mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\saoudrizwan.claude-dev-nightly\settings\cline_mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Code - Insiders\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Cursor\User\globalStorage\saoudrizwan.claude-dev-nightly\settings\cline_mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Cursor\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Windsurf\User\globalStorage\saoudrizwan.claude-dev-nightly\settings\cline_mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Windsurf\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' }),
+        $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\saoudrizwan.claude-dev-nightly\settings\cline_mcp_settings.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'Agents - Insiders\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' })
     ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json' } else { $null }))
 }
@@ -8052,6 +9349,19 @@ function Test-BootstrapSecretsProviderCredential {
     } catch {
         return (New-BootstrapSecretValidationState -State 'failed' -CheckedAt $checkedAt -Message $_.Exception.Message)
     }
+}
+
+function Test-BootstrapClaudeOrganizationAccessError {
+    param([AllowNull()][string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) { return $false }
+    $normalized = $Message.ToLowerInvariant()
+    return (
+        $normalized.Contains('organization does not have access to claude') -or
+        ($normalized.Contains('does not have access to claude') -and $normalized.Contains('organization')) -or
+        ($normalized.Contains('contact your administrator') -and $normalized.Contains('claude')) -or
+        ($normalized.Contains('no access') -and $normalized.Contains('claude'))
+    )
 }
 
 function Invoke-BootstrapSecretsValidation {
@@ -9099,7 +10409,11 @@ function Get-BootstrapManagedMcpCapableTargets {
 }
 
 function Get-BootstrapManagedMcpCatalog {
-    return [ordered]@{
+    if ($script:BootstrapManagedMcpCatalogCache -is [hashtable]) {
+        return $script:BootstrapManagedMcpCatalogCache
+    }
+
+    $script:BootstrapManagedMcpCatalogCache = ConvertTo-BootstrapHashtable -InputObject ([ordered]@{
         sentry = [ordered]@{
             id = 'sentry'
             displayName = 'Sentry MCP (Remote)'
@@ -9224,7 +10538,8 @@ function Get-BootstrapManagedMcpCatalog {
             package = 'mcp-remote'
             authMode = 'oauth-admin'
         }
-    }
+    })
+    return $script:BootstrapManagedMcpCatalogCache
 }
 
 function Get-BootstrapManagedMcpProviders {
@@ -10649,6 +11964,18 @@ function Ensure-BootstrapSecrets {
     foreach ($warning in @($diagnostics.warnings)) {
         Write-Log "Manifesto de segredos: $warning" 'WARN'
     }
+    if ($diagnostics.Contains('openAiCompatible')) {
+        $compat = ConvertTo-BootstrapHashtable -InputObject $diagnostics.openAiCompatible
+        if (($compat -is [hashtable]) -and [string]$compat['status'] -ne 'selected') {
+            Write-Log ("OpenAI-compatible: nenhum provider utilizável selecionado (status={0})." -f [string]$compat['status']) 'WARN'
+        }
+    }
+    if ($diagnostics.Contains('claudeDesktopAccess')) {
+        $claudeAccess = ConvertTo-BootstrapHashtable -InputObject $diagnostics.claudeDesktopAccess
+        if (($claudeAccess -is [hashtable]) -and [string]$claudeAccess['status'] -eq 'blocked') {
+            Write-Log ("Claude Desktop: {0} Ação: {1}" -f [string]$claudeAccess['message'], [string]$claudeAccess['action']) 'WARN'
+        }
+    }
 
     if ($bundle.Created) {
         Write-Log "Manifesto de segredos criado em $($bundle['Path']). Preencha as chaves e rode o bootstrap novamente para propagar tudo automaticamente." 'WARN'
@@ -10957,6 +12284,52 @@ function Invoke-BootstrapHostHealthBloat {
     }
 }
 
+function Invoke-BootstrapHostHealthTelemetry {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Policy
+    )
+
+    $telemetry = ConvertTo-BootstrapHashtable -InputObject $Policy.Telemetry
+    if (-not ($telemetry -is [hashtable]) -or [string]$telemetry['mode'] -ne 'opt-in-agressivo') {
+        Write-Log 'HostHealth telemetry: modo não agressivo, nenhuma ação.'
+        return
+    }
+    if (-not (Test-IsAdmin)) {
+        Write-Log 'HostHealth telemetry: requer admin para ajustes reversíveis. Pulando.' 'WARN'
+        return
+    }
+
+    $reportRoot = Get-BootstrapHostHealthReportRoot -State $State
+    $changes = @()
+    foreach ($adjustment in @($telemetry['serviceAdjustments'])) {
+        try {
+            $service = Get-Service -Name ([string]$adjustment['Name']) -ErrorAction Stop
+            $changes += @([ordered]@{ type = 'service'; name = [string]$adjustment['Name']; previousStartType = [string]$service.StartType })
+            Set-Service -Name ([string]$adjustment['Name']) -StartupType ([string]$adjustment['StartType']) -ErrorAction Stop
+            Write-Log "HostHealth telemetry: serviço ajustado -> $([string]$adjustment['Name'])"
+        } catch {
+            Write-Log "HostHealth telemetry: falha serviço $([string]$adjustment['Name']) => $($_.Exception.Message)" 'WARN'
+        }
+    }
+    foreach ($taskDef in @($telemetry['scheduledTasksDisable'])) {
+        try {
+            $task = Get-ScheduledTask -TaskPath ([string]$taskDef['TaskPath']) -TaskName ([string]$taskDef['TaskName']) -ErrorAction Stop
+            $changes += @([ordered]@{ type = 'task'; taskPath = [string]$taskDef['TaskPath']; taskName = [string]$taskDef['TaskName']; previousState = [string]$task.State })
+            Disable-ScheduledTask -InputObject $task -ErrorAction Stop | Out-Null
+            Write-Log "HostHealth telemetry: tarefa desabilitada -> $([string]$taskDef['TaskPath'])$([string]$taskDef['TaskName'])"
+        } catch {
+            Write-Log "HostHealth telemetry: falha tarefa $([string]$taskDef['TaskPath'])$([string]$taskDef['TaskName']) => $($_.Exception.Message)" 'WARN'
+        }
+    }
+
+    Write-BootstrapJsonFile -Path (Join-Path $reportRoot 'telemetry-changes.json') -Value ([ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        reversible = $true
+        changes = @($changes)
+    })
+}
+
 function Invoke-BootstrapHostHealthVerify {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
@@ -10994,6 +12367,7 @@ function Invoke-BootstrapHostHealth {
     Invoke-BootstrapHostHealthRegistryFixes -State $State -Policy $policy
     Invoke-BootstrapHostHealthGameMode -State $State -Policy $policy
     Invoke-BootstrapHostHealthBloat -State $State -Policy $policy
+    Invoke-BootstrapHostHealthTelemetry -State $State -Policy $policy
     Invoke-BootstrapHostHealthVerify -State $State -Policy $policy
 }
 
@@ -11068,69 +12442,292 @@ function Apply-BrowserStartupTuning {
     }
 }
 
+function Ensure-BootstrapPlayniteFullscreenConfig {
+    $configPath = Join-Path $env:APPDATA 'Playnite\config.json'
+    if (-not (Test-Path $configPath)) {
+        return [ordered]@{ status = 'skipped'; note = "Playnite config ausente: $configPath" }
+    }
+
+    try {
+        $raw = Get-Content -Path $configPath -Raw -Encoding utf8
+        $config = ConvertTo-BootstrapHashtable -InputObject ($raw | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        throw "Falha ao ler config do Playnite em $configPath. Valide JSON/schema. Erro: $($_.Exception.Message)"
+    }
+
+    if (-not (($config.ContainsKey('StartInFullscreen') -or $config.ContainsKey('StartFullScreen') -or $config.ContainsKey('StartInFullScreen')))) {
+        throw "Schema Playnite inesperado em $configPath. Campos fullscreen não encontrados (StartInFullscreen/StartFullScreen/StartInFullScreen)."
+    }
+
+    $backup = Backup-BootstrapFile -Path $configPath
+    if ($config.ContainsKey('StartInFullscreen')) { $config['StartInFullscreen'] = $true }
+    if ($config.ContainsKey('StartFullScreen')) { $config['StartFullScreen'] = $true }
+    if ($config.ContainsKey('StartInFullScreen')) { $config['StartInFullScreen'] = $true }
+    Write-BootstrapJsonFile -Path $configPath -Value $config
+
+    return [ordered]@{
+        status = 'applied'
+        note = 'Playnite configurado para fullscreen com backup.'
+        path = $configPath
+        backup = $backup
+    }
+}
+
+function Ensure-BootstrapRtssLowOverlayProfile {
+    $profilePath = "${env:ProgramFiles(x86)}\RivaTuner Statistics Server\Profiles\Global"
+    if (-not (Test-Path $profilePath)) {
+        return [ordered]@{ status = 'skipped'; note = "RTSS profile ausente: $profilePath" }
+    }
+    $backup = Backup-BootstrapFile -Path $profilePath
+    $content = @(
+        '[Framerate]',
+        'Limit=60',
+        '[OSD]',
+        'ShowOSD=1',
+        'ShowFramerate=1',
+        'ShowFrametime=0',
+        'ShowMemory=0',
+        'Raster3D=0'
+    ) -join [Environment]::NewLine
+    try {
+        [System.IO.File]::WriteAllText($profilePath, $content, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        return [ordered]@{ status = 'failed'; note = "Falha escrita RTSS profile: $($_.Exception.Message)"; path = $profilePath; backup = $backup }
+    }
+    return [ordered]@{ status = 'applied'; note = 'RTSS low overlay aplicado.'; path = $profilePath; backup = $backup }
+}
+
+function Ensure-BootstrapAfterburnerLowOverlayProfile {
+    $candidates = @(
+        "${env:ProgramFiles(x86)}\MSI Afterburner\Profiles\MSIAfterburner.cfg",
+        "${env:ProgramFiles}\MSI Afterburner\Profiles\MSIAfterburner.cfg"
+    )
+    $targetPath = [string]($candidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($targetPath)) {
+        return [ordered]@{ status = 'skipped'; note = 'Afterburner profile ausente; ajuste não fatal.' }
+    }
+    $backup = Backup-BootstrapFile -Path $targetPath
+    $content = @(
+        '[Settings]',
+        'EnableOSD=1',
+        'OSDGraphs=0',
+        'OSDCoordinateSpace=0',
+        'ShowHardwareInfo=0'
+    ) -join [Environment]::NewLine
+    try {
+        [System.IO.File]::WriteAllText($targetPath, $content, (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        return [ordered]@{ status = 'failed'; note = "Falha escrita Afterburner profile: $($_.Exception.Message)"; path = $targetPath; backup = $backup }
+    }
+    return [ordered]@{ status = 'applied'; note = 'Afterburner low overlay aplicado.'; path = $targetPath; backup = $backup }
+}
+
 function Apply-SteamConsoleTuning {
     param([Parameter(Mandatory = $true)]$Item)
+
+    if ([string]$Item.id -eq 'rtss-frame-presets') {
+        $rtss = Ensure-BootstrapRtssLowOverlayProfile
+        $afterburner = Ensure-BootstrapAfterburnerLowOverlayProfile
+        $failed = @($rtss, $afterburner | Where-Object { [string]$_.status -eq 'failed' })
+        return [ordered]@{
+            id = [string]$Item.id
+            status = if ($failed.Count -gt 0) { 'failed' } elseif ((@($rtss, $afterburner | Where-Object { [string]$_.status -eq 'applied' }).Count -gt 0)) { 'applied' } else { 'skipped' }
+            note = 'Perfis low overlay avaliados para RTSS/Afterburner.'
+            rtss = $rtss
+            afterburner = $afterburner
+        }
+    }
+
     return [ordered]@{ id = [string]$Item.id; status = 'prepared'; note = 'Session policy prepared; Steam never forced as admin.' }
 }
 
 function Apply-PlayniteTuning {
     param([Parameter(Mandatory = $true)]$Item)
-    return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Config file target detected; v1 leaves app-specific writes conservative.' }
+    $result = Ensure-BootstrapPlayniteFullscreenConfig
+    return [ordered]@{
+        id = [string]$Item.id
+        status = [string]$result.status
+        note = [string]$result.note
+        details = $result
+    }
 }
 
 function Resolve-BootstrapOpenAiCompatibleProviderCandidate {
-    param([string[]]$PreferredProviders = @('mimo', 'openrouter', 'openai', 'moonshot', 'deepseek', 'xai'))
+    param(
+        [string[]]$PreferredProviders = @('mimo', 'openrouter', 'openai', 'moonshot', 'deepseek', 'xai'),
+        [AllowNull()]$SecretsData = $null
+    )
 
-    $secretsInfo = Get-BootstrapSecretsData
-    $secretsData = ConvertTo-BootstrapHashtable -InputObject $secretsInfo.Data
-    if (-not ($secretsData -is [hashtable])) { return $null }
-
-    $activeProviders = Get-BootstrapActiveProviders -SecretsData $secretsData -RequirePassedValidation
-    if (($activeProviders -isnot [hashtable]) -or ($activeProviders.Count -eq 0)) {
-        $activeProviders = Get-BootstrapActiveProviders -SecretsData $secretsData
-    }
-    if (-not ($activeProviders -is [hashtable]) -or ($activeProviders.Count -eq 0)) { return $null }
+    $secretsInput = if ($null -ne $SecretsData) { $SecretsData } else { (Get-BootstrapSecretsData).Data }
+    $normalized = Normalize-BootstrapSecretsData -Secrets $secretsInput
+    $catalog = Get-BootstrapSecretsProviderCatalog
+    $activeProvidersValidated = Get-BootstrapActiveProviders -SecretsData $normalized -RequirePassedValidation
+    $activeProviders = Get-BootstrapActiveProviders -SecretsData $normalized
+    $attempts = New-Object System.Collections.Generic.List[object]
 
     foreach ($providerName in @($PreferredProviders)) {
         if ([string]::IsNullOrWhiteSpace($providerName)) { continue }
-        if (-not $activeProviders.Contains($providerName)) { continue }
-        $provider = ConvertTo-BootstrapHashtable -InputObject $activeProviders[$providerName]
-        if (-not ($provider -is [hashtable])) { continue }
+        $normalizedProviderName = $providerName.Trim().ToLowerInvariant()
+        $stage = if ($activeProvidersValidated.Contains($normalizedProviderName)) { 'validated-active' } else { 'active-fallback' }
+
+        if (-not $normalized.providers.Contains($normalizedProviderName)) {
+            $attempts.Add([ordered]@{
+                provider = $normalizedProviderName
+                stage = $stage
+                selected = $false
+                reason = 'provider-not-configured'
+                validationState = 'missing'
+                credentialId = ''
+                hasSecret = $false
+                hasBaseUrl = $false
+            })
+            continue
+        }
+
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$normalizedProviderName]
+        $activeCredentialId = [string]$provider['activeCredential']
+        if ([string]::IsNullOrWhiteSpace($activeCredentialId)) {
+            $attempts.Add([ordered]@{
+                provider = $normalizedProviderName
+                stage = $stage
+                selected = $false
+                reason = 'active-credential-missing'
+                validationState = 'missing'
+                credentialId = ''
+                hasSecret = $false
+                hasBaseUrl = $false
+            })
+            continue
+        }
+        if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]) -and $provider['credentials'].Contains($activeCredentialId))) {
+            $attempts.Add([ordered]@{
+                provider = $normalizedProviderName
+                stage = $stage
+                selected = $false
+                reason = 'active-credential-not-found'
+                validationState = 'missing'
+                credentialId = $activeCredentialId
+                hasSecret = $false
+                hasBaseUrl = $false
+            })
+            continue
+        }
+
+        $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$activeCredentialId]
+        $validationState = if ($credential.ContainsKey('validation') -and ($credential['validation'] -is [hashtable])) { [string]$credential['validation']['state'] } else { 'unknown' }
+        if ($stage -eq 'active-fallback' -and $validationState -eq 'passed') {
+            $stage = 'active-validated'
+        }
+
+        $providerActive = if ($activeProviders.Contains($normalizedProviderName)) { ConvertTo-BootstrapHashtable -InputObject $activeProviders[$normalizedProviderName] } else { @{} }
+        $providerActiveValidated = if ($activeProvidersValidated.Contains($normalizedProviderName)) { ConvertTo-BootstrapHashtable -InputObject $activeProvidersValidated[$normalizedProviderName] } else { @{} }
+        $selectedProviderState = if ($stage -eq 'validated-active') { $providerActiveValidated } else { $providerActive }
 
         $apiKey = ''
-        if ($provider.ContainsKey('apiKey')) { $apiKey = [string]$provider['apiKey'] }
-        if ([string]::IsNullOrWhiteSpace($apiKey) -and $provider.ContainsKey('token')) { $apiKey = [string]$provider['token'] }
-        if ([string]::IsNullOrWhiteSpace($apiKey) -and $provider.ContainsKey('secret')) { $apiKey = [string]$provider['secret'] }
-        if ([string]::IsNullOrWhiteSpace($apiKey)) { continue }
+        if ($selectedProviderState.ContainsKey('apiKey')) { $apiKey = [string]$selectedProviderState['apiKey'] }
+        if ([string]::IsNullOrWhiteSpace($apiKey) -and $selectedProviderState.ContainsKey('token')) { $apiKey = [string]$selectedProviderState['token'] }
+        if ([string]::IsNullOrWhiteSpace($apiKey) -and $selectedProviderState.ContainsKey('secret')) { $apiKey = [string]$selectedProviderState['secret'] }
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            $apiKey = [string]$credential['secret']
+        }
 
         $baseUrl = ''
-        if ($provider.ContainsKey('baseUrl')) { $baseUrl = [string]$provider['baseUrl'] }
-        if ([string]::IsNullOrWhiteSpace($baseUrl) -and $provider.ContainsKey('baseURL')) { $baseUrl = [string]$provider['baseURL'] }
-        if ([string]::IsNullOrWhiteSpace($baseUrl) -and [string]::Equals([string]$providerName, 'openai', [System.StringComparison]::OrdinalIgnoreCase)) {
+        if ($selectedProviderState.ContainsKey('baseUrl')) { $baseUrl = [string]$selectedProviderState['baseUrl'] }
+        if ([string]::IsNullOrWhiteSpace($baseUrl) -and $selectedProviderState.ContainsKey('baseURL')) { $baseUrl = [string]$selectedProviderState['baseURL'] }
+        if ([string]::IsNullOrWhiteSpace($baseUrl) -and $credential.ContainsKey('baseUrl')) { $baseUrl = [string]$credential['baseUrl'] }
+        if ([string]::IsNullOrWhiteSpace($baseUrl) -and $provider.ContainsKey('defaults') -and ($provider['defaults'] -is [hashtable])) { $baseUrl = [string]$provider['defaults']['baseUrl'] }
+        if ([string]::IsNullOrWhiteSpace($baseUrl) -and $catalog.Contains($normalizedProviderName)) {
+            $providerMeta = ConvertTo-BootstrapHashtable -InputObject $catalog[$normalizedProviderName]
+            if ($providerMeta.ContainsKey('defaults') -and ($providerMeta['defaults'] -is [hashtable])) {
+                $baseUrl = [string]$providerMeta['defaults']['baseUrl']
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($baseUrl) -and [string]::Equals([string]$normalizedProviderName, 'openai', [System.StringComparison]::OrdinalIgnoreCase)) {
             $baseUrl = 'https://api.openai.com/v1'
         }
-        if ([string]::IsNullOrWhiteSpace($baseUrl)) { continue }
 
+        if ([string]::IsNullOrWhiteSpace($apiKey)) {
+            $attempts.Add([ordered]@{
+                provider = $normalizedProviderName
+                stage = $stage
+                selected = $false
+                reason = 'secret-missing'
+                validationState = $validationState
+                credentialId = $activeCredentialId
+                hasSecret = $false
+                hasBaseUrl = (-not [string]::IsNullOrWhiteSpace($baseUrl))
+            })
+            continue
+        }
+        if ([string]::IsNullOrWhiteSpace($baseUrl)) {
+            $attempts.Add([ordered]@{
+                provider = $normalizedProviderName
+                stage = $stage
+                selected = $false
+                reason = 'baseurl-missing'
+                validationState = $validationState
+                credentialId = $activeCredentialId
+                hasSecret = $true
+                hasBaseUrl = $false
+            })
+            continue
+        }
+
+        $attempts.Add([ordered]@{
+            provider = $normalizedProviderName
+            stage = $stage
+            selected = $true
+            reason = 'selected'
+            validationState = $validationState
+            credentialId = $activeCredentialId
+            hasSecret = $true
+            hasBaseUrl = $true
+        })
         return [ordered]@{
-            provider = [string]$providerName
+            status = 'selected'
+            provider = $normalizedProviderName
             apiKey = $apiKey
             baseUrl = $baseUrl
+            stage = $stage
+            attempts = @($attempts.ToArray())
         }
     }
 
-    return $null
+    return [ordered]@{
+        status = 'no-compatible-provider'
+        provider = ''
+        apiKey = ''
+        baseUrl = ''
+        stage = 'none'
+        attempts = @($attempts.ToArray())
+    }
 }
 
 function Ensure-BootstrapOpenAiCompatibleUserEnv {
     param([string[]]$PreferredProviders = @('mimo', 'openrouter', 'openai', 'moonshot', 'deepseek', 'xai'))
 
-    $candidate = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders $PreferredProviders
-    if (-not ($candidate -is [hashtable])) {
-        return [ordered]@{ status = 'skipped'; reason = 'no-openai-compatible-provider' }
+    $candidate = ConvertTo-BootstrapHashtable -InputObject (Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders $PreferredProviders)
+    if (-not ($candidate -is [hashtable]) -or [string]$candidate['status'] -ne 'selected') {
+        foreach ($attempt in @(if ($candidate -and (Test-BootstrapMapContainsKey -Map $candidate -Key 'attempts')) { $candidate['attempts'] } else { @() })) {
+            $attemptMap = ConvertTo-BootstrapHashtable -InputObject $attempt
+            Write-Log ("OpenAI-compatible tentativa: provider={0}, stage={1}, selected={2}, reason={3}, validation={4}" -f [string]$attemptMap['provider'], [string]$attemptMap['stage'], [string]$attemptMap['selected'], [string]$attemptMap['reason'], [string]$attemptMap['validationState']) 'WARN'
+        }
+        return [ordered]@{
+            status = 'skipped'
+            reason = 'no-openai-compatible-provider'
+            provider = ''
+            baseUrl = ''
+            stage = 'none'
+            updated = @()
+            skipped = @()
+            warnings = @('Nenhum provider OpenAI-compatible ativo e utilizável foi encontrado.')
+            attempts = if ($candidate -and (Test-BootstrapMapContainsKey -Map $candidate -Key 'attempts')) { @($candidate['attempts']) } else { @() }
+        }
     }
 
     $updated = @()
     $skipped = @()
+    $warnings = @()
     $providerName = [string]$candidate['provider']
     $apiKey = [string]$candidate['apiKey']
     $baseUrl = [string]$candidate['baseUrl']
@@ -11139,16 +12736,22 @@ function Ensure-BootstrapOpenAiCompatibleUserEnv {
     if ([string]::IsNullOrWhiteSpace($currentOpenAiKey)) {
         Set-UserEnvVar -Name 'OPENAI_API_KEY' -Value $apiKey
         $updated += @('OPENAI_API_KEY')
+    } elseif ($currentOpenAiKey -eq $apiKey) {
+        $skipped += @('OPENAI_API_KEY')
     } else {
         $skipped += @('OPENAI_API_KEY')
+        $warnings += @("OPENAI_API_KEY já definido no usuário com valor diferente; ajuste manual necessário para usar o provider '$providerName'.")
     }
 
     $currentOpenAiBaseUrl = [Environment]::GetEnvironmentVariable('OPENAI_BASE_URL', 'User')
     if ([string]::IsNullOrWhiteSpace($currentOpenAiBaseUrl)) {
         Set-UserEnvVar -Name 'OPENAI_BASE_URL' -Value $baseUrl
         $updated += @('OPENAI_BASE_URL')
+    } elseif ($currentOpenAiBaseUrl -eq $baseUrl) {
+        $skipped += @('OPENAI_BASE_URL')
     } else {
         $skipped += @('OPENAI_BASE_URL')
+        $warnings += @("OPENAI_BASE_URL já definido no usuário com valor diferente ($currentOpenAiBaseUrl); ajuste manual necessário para usar $baseUrl.")
     }
 
     $finalOpenAiKey = [Environment]::GetEnvironmentVariable('OPENAI_API_KEY', 'User')
@@ -11157,11 +12760,24 @@ function Ensure-BootstrapOpenAiCompatibleUserEnv {
         $updated += @('CLAUDE_CODE_USE_OPENAI')
     }
 
+    foreach ($warning in @($warnings)) {
+        Write-Log "OpenAI-compatible env: $warning" 'WARN'
+    }
+    foreach ($attempt in @($candidate['attempts'])) {
+        $attemptMap = ConvertTo-BootstrapHashtable -InputObject $attempt
+        Write-Log ("OpenAI-compatible tentativa: provider={0}, stage={1}, selected={2}, reason={3}, validation={4}" -f [string]$attemptMap['provider'], [string]$attemptMap['stage'], [string]$attemptMap['selected'], [string]$attemptMap['reason'], [string]$attemptMap['validationState'])
+    }
+
     return [ordered]@{
         status = if ($updated.Count -gt 0) { 'applied' } else { 'configured' }
+        reason = if ($warnings.Count -gt 0) { 'existing-user-env-conflict' } else { 'ok' }
         provider = $providerName
+        baseUrl = $baseUrl
+        stage = [string]$candidate['stage']
         updated = @($updated)
         skipped = @($skipped)
+        warnings = @($warnings)
+        attempts = @($candidate['attempts'])
     }
 }
 
@@ -11192,7 +12808,7 @@ function Apply-DevAiTuning {
             return [ordered]@{
                 id = [string]$Item.id
                 status = 'applied'
-                note = 'Claude Code defaults + hooks + env OpenAI-compatible.'
+                note = ("Claude Code defaults + hooks + env OpenAI-compatible (provider={0}, status={1})." -f [string]$envShim.provider, [string]$envShim.status)
                 secretsUpdated = [bool]$secretsUpdated
                 envShim = $envShim
             }
@@ -11214,7 +12830,7 @@ function Apply-DevAiTuning {
             return [ordered]@{
                 id = [string]$Item.id
                 status = [string]$envShim.status
-                note = 'Env OpenAI-compatible aplicado para Antigravity/CLIs.'
+                note = ("Env OpenAI-compatible para Antigravity/CLIs: provider={0}, status={1}, motivo={2}." -f [string]$envShim.provider, [string]$envShim.status, [string]$envShim.reason)
                 envShim = $envShim
             }
         }
@@ -11233,6 +12849,54 @@ function Apply-DevAiTuning {
     }
 }
 
+function Test-BootstrapApiRelatedErrorMessage {
+    param([AllowNull()][string]$Message)
+
+    if ([string]::IsNullOrWhiteSpace($Message)) { return $false }
+    $normalized = $Message.ToLowerInvariant()
+    return (
+        $normalized.Contains('openai-compatible') -or
+        $normalized.Contains('no-openai-compatible-provider') -or
+        $normalized.Contains('api key') -or
+        $normalized.Contains('api_key') -or
+        $normalized.Contains('token') -or
+        $normalized.Contains('organization does not have access to claude') -or
+        $normalized.Contains('anthropic')
+    )
+}
+
+function Get-BootstrapAppTuningFailureClassification {
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [AllowNull()][string]$ErrorMessage,
+        [AllowNull()][string]$ExceptionType
+    )
+
+    $itemId = [string]$Item.id
+    $itemCategory = [string]$Item.category
+    $message = if ([string]::IsNullOrWhiteSpace($ErrorMessage)) { 'sem detalhe de erro' } else { [string]$ErrorMessage }
+
+    if ((Test-BootstrapApiRelatedErrorMessage -Message $message) -and ($itemCategory -eq 'dev-ai')) {
+        return [ordered]@{
+            severity = 'warning'
+            classification = 'api-non-blocking'
+            reason = 'Dependencia de API detectada em item dev-ai; classificada como nao bloqueante.'
+            blocking = $false
+            message = $message
+            exceptionType = if ([string]::IsNullOrWhiteSpace($ExceptionType)) { 'RuntimeException' } else { [string]$ExceptionType }
+        }
+    }
+
+    return [ordered]@{
+        severity = 'blocking'
+        classification = 'execution-failure'
+        reason = ("Falha bloqueante no item {0} ({1})." -f $itemId, $itemCategory)
+        blocking = $true
+        message = $message
+        exceptionType = if ([string]::IsNullOrWhiteSpace($ExceptionType)) { 'RuntimeException' } else { [string]$ExceptionType }
+    }
+}
+
 function Apply-LocalAiContainerTuning {
     param([Parameter(Mandatory = $true)]$Item)
     return [ordered]@{ id = [string]$Item.id; status = 'prepared'; note = 'Marked for Desktop/Dev session only; not Game - Steam Deck.' }
@@ -11241,6 +12905,31 @@ function Apply-LocalAiContainerTuning {
 function Apply-CaptureTuning {
     param([Parameter(Mandatory = $true)]$Item)
     return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Capture settings kept audit-only unless explicit app config is safe.' }
+}
+
+function Apply-SteamDeckControlTuning {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    if ([string]$Item.id -eq 'steam-input-desktop-layout-audit') {
+        $settings = (Get-BootstrapSteamDeckSettingsData).Data
+        $steamInput = if ($settings.ContainsKey('steamInput')) { ConvertTo-BootstrapHashtable -InputObject $settings['steamInput'] } else { @{} }
+        if (-not ($steamInput -is [hashtable])) { $steamInput = @{} }
+        $recommendedAction = if ($steamInput.ContainsKey('recommendedAction') -and -not [string]::IsNullOrWhiteSpace([string]$steamInput['recommendedAction'])) {
+            [string]$steamInput['recommendedAction']
+        } else {
+            'Steam > Settings > Controller > Desktop Layout: disable/clear layout when Steam Deck Tools, Handheld Companion or GlosSI manages desktop input.'
+        }
+        return [ordered]@{
+            id = [string]$Item.id
+            category = [string]$Item.category
+            status = 'manual-review'
+            note = 'Revise Desktop Layout do Steam para evitar duplo input no Windows.'
+            recommendedAction = $recommendedAction
+            rollback = 'manual'
+        }
+    }
+
+    return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'Steam Deck control policy audited; no unsafe mutation applied.' }
 }
 
 function Invoke-BootstrapAppTuningItem {
@@ -11256,11 +12945,35 @@ function Invoke-BootstrapAppTuningItem {
             if ([string]$Item.id -eq 'playnite-fullscreen') { return (Apply-PlayniteTuning -Item $Item) }
             return (Apply-SteamConsoleTuning -Item $Item)
         }
+        'steamdeck-control' { return (Apply-SteamDeckControlTuning -Item $Item) }
         'dev-ai' { return (Apply-DevAiTuning -Item $Item) }
         'local-ai-containers' { return (Apply-LocalAiContainerTuning -Item $Item) }
         'capture-creator' { return (Apply-CaptureTuning -Item $Item) }
         default { return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'No mutable v1 action for this item.' } }
     }
+}
+
+function Normalize-BootstrapAppTuningItemResult {
+    param([AllowNull()]$Result)
+
+    $itemResult = ConvertTo-BootstrapHashtable -InputObject $Result
+    if (-not ($itemResult -is [hashtable])) {
+        return $Result
+    }
+
+    $status = [string]$itemResult['status']
+    if ($status -eq 'partial') {
+        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'severity')) { $itemResult['severity'] = 'warning' }
+        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'classification')) { $itemResult['classification'] = 'partial-application' }
+        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking')) { $itemResult['blocking'] = $false }
+    }
+    if ($status -eq 'failed') {
+        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'severity')) { $itemResult['severity'] = 'blocking' }
+        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'classification')) { $itemResult['classification'] = 'execution-failure' }
+        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking')) { $itemResult['blocking'] = $true }
+    }
+
+    return $itemResult
 }
 
 function Invoke-BootstrapAppTuning {
@@ -11280,9 +12993,42 @@ function Invoke-BootstrapAppTuning {
     Write-BootstrapJsonFile -Path $snapshotPath -Value (New-BootstrapAppTuningSnapshot -Plan $Plan)
 
     $results = @()
+    $blockingFailures = @()
     foreach ($item in @($Plan.items)) {
-        Write-Log ("AppTuning: {0} ({1})" -f [string]$item.id, [string]$item.status)
-        $results += @(Invoke-BootstrapAppTuningItem -Item $item)
+        $itemId = [string]$item.id
+        $itemCategory = [string]$item.category
+        $itemTargetApps = if ($item.targetApps -is [System.Collections.IEnumerable]) { @($item.targetApps) -join ',' } else { '' }
+        Write-Log ("AppTuning: itemId={0} category={1} stage=invoke-item status={2}" -f $itemId, $itemCategory, [string]$item.status)
+
+        $itemResult = $null
+        try {
+            $itemResult = Invoke-BootstrapAppTuningItem -Item $item
+        } catch {
+            $classification = Get-BootstrapAppTuningFailureClassification -Item $item -ErrorMessage $_.Exception.Message -ExceptionType $_.Exception.GetType().FullName
+            $itemResult = [ordered]@{
+                id = $itemId
+                category = $itemCategory
+                targetApps = if ([string]::IsNullOrWhiteSpace($itemTargetApps)) { @() } else { @($itemTargetApps -split ',') }
+                stage = 'invoke-item'
+                status = 'failed'
+                severity = [string]$classification['severity']
+                classification = [string]$classification['classification']
+                blocking = [bool]$classification['blocking']
+                reason = [string]$classification['reason']
+                error = [string]$classification['message']
+                exceptionType = [string]$classification['exceptionType']
+            }
+            Write-Log ("AppTuning: itemId={0} category={1} targetApps={2} stage=invoke-item status=failed severity={3} classification={4} exceptionType={5} message={6}" -f $itemId, $itemCategory, $itemTargetApps, [string]$itemResult['severity'], [string]$itemResult['classification'], [string]$itemResult['exceptionType'], [string]$itemResult['error']) 'WARN'
+        }
+
+        $itemResult = Normalize-BootstrapAppTuningItemResult -Result $itemResult
+        if ($itemResult -is [System.Collections.IDictionary]) {
+            if ((Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking') -and [bool]$itemResult['blocking']) {
+                $blockingFailures += @($itemResult)
+            }
+        }
+
+        $results += @($itemResult)
     }
 
     Write-BootstrapJsonFile -Path $resultPath -Value ([ordered]@{
@@ -11291,8 +13037,192 @@ function Invoke-BootstrapAppTuning {
         reportRoot = $reportRoot
         snapshotPath = $snapshotPath
         results = @($results)
+        blockingFailures = @($blockingFailures)
     })
+    if (@($blockingFailures).Count -gt 0) {
+        $firstBlocking = ConvertTo-BootstrapHashtable -InputObject $blockingFailures[0]
+        throw ("AppTuning bloqueado em {0}: {1}" -f [string]$firstBlocking['id'], [string]$firstBlocking['error'])
+    }
     Write-Log "AppTuning report: $reportRoot"
+}
+
+function Get-BootstrapDesktopPath {
+    $desktopPath = [Environment]::GetFolderPath('Desktop')
+    if (-not [string]::IsNullOrWhiteSpace($desktopPath)) {
+        return $desktopPath
+    }
+    $userHome = Get-BootstrapUserHomePath
+    if ([string]::IsNullOrWhiteSpace($userHome)) { return '' }
+    return (Join-Path $userHome 'Desktop')
+}
+
+function Get-BootstrapWebAppBrowserCandidate {
+    $candidates = @(
+        [ordered]@{
+            browser = 'edge'
+            exe = (Resolve-CommandPath -Name 'msedge')
+            argsPrefix = '--app='
+            fallbackPaths = @(
+                (Join-Path $env:ProgramFiles 'Microsoft\Edge\Application\msedge.exe'),
+                (Join-Path ${env:ProgramFiles(x86)} 'Microsoft\Edge\Application\msedge.exe')
+            )
+        },
+        [ordered]@{
+            browser = 'chrome'
+            exe = (Resolve-CommandPath -Name 'chrome')
+            argsPrefix = '--app='
+            fallbackPaths = @(
+                (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
+                (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),
+                (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe')
+            )
+        }
+    )
+
+    foreach ($candidate in @($candidates)) {
+        $exePath = [string]$candidate.exe
+        if ([string]::IsNullOrWhiteSpace($exePath)) {
+            foreach ($fallbackPath in @($candidate.fallbackPaths)) {
+                if (-not [string]::IsNullOrWhiteSpace($fallbackPath) -and (Test-Path $fallbackPath)) {
+                    $exePath = $fallbackPath
+                    break
+                }
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($exePath) -and (Test-Path $exePath)) {
+            return [ordered]@{
+                browser = [string]$candidate.browser
+                exe = $exePath
+                argsPrefix = [string]$candidate.argsPrefix
+            }
+        }
+    }
+
+    return [ordered]@{
+        browser = ''
+        exe = ''
+        argsPrefix = '--app='
+    }
+}
+
+function Ensure-BootstrapWebAppShortcut {
+    param(
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$CategoryFolder
+    )
+
+    if ([string]::IsNullOrWhiteSpace($DisplayName)) {
+        throw 'Web app shortcut sem DisplayName.'
+    }
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        throw "Web app shortcut '$DisplayName' sem URL."
+    }
+
+    $browser = Get-BootstrapWebAppBrowserCandidate
+    if ([string]::IsNullOrWhiteSpace([string]$browser.exe)) {
+        throw "Nenhum navegador suportado encontrado para web app '$DisplayName' (Edge/Chrome)."
+    }
+
+    $desktopPath = Get-BootstrapDesktopPath
+    if ([string]::IsNullOrWhiteSpace($desktopPath)) {
+        throw "Não foi possível resolver a Área de Trabalho para '$DisplayName'."
+    }
+
+    $safeFolder = if ([string]::IsNullOrWhiteSpace($CategoryFolder)) { 'Produtividade' } else { $CategoryFolder.Trim() }
+    $targetFolder = Join-Path $desktopPath $safeFolder
+    $null = New-Item -Path $targetFolder -ItemType Directory -Force
+    $shortcutPath = Join-Path $targetFolder ("{0}.lnk" -f $DisplayName)
+    $arguments = "{0}`"{1}`"" -f [string]$browser.argsPrefix, $Url
+    $workingDirectory = Split-Path -Path ([string]$browser.exe) -Parent
+
+    $before = ''
+    if (Test-Path $shortcutPath) {
+        try {
+            $before = (Get-Item -LiteralPath $shortcutPath).LastWriteTimeUtc.ToString('o')
+        } catch {
+            $before = ''
+        }
+    }
+
+    try {
+        $shell = New-Object -ComObject WScript.Shell
+        $shortcut = $shell.CreateShortcut($shortcutPath)
+        $shortcut.TargetPath = [string]$browser.exe
+        $shortcut.Arguments = $arguments
+        $shortcut.WorkingDirectory = $workingDirectory
+        $shortcut.IconLocation = ("{0},0" -f [string]$browser.exe)
+        $shortcut.Description = ("Bootstrap web app: {0}" -f $DisplayName)
+        $shortcut.Save()
+    } catch {
+        throw ("Falha ao criar atalho web app '{0}': {1}" -f $DisplayName, $_.Exception.Message)
+    }
+
+    $after = ''
+    try {
+        $after = (Get-Item -LiteralPath $shortcutPath).LastWriteTimeUtc.ToString('o')
+    } catch {
+        $after = ''
+    }
+
+    return [ordered]@{
+        displayName = $DisplayName
+        url = $Url
+        category = $safeFolder
+        path = $shortcutPath
+        browser = [string]$browser.browser
+        updated = ($before -ne $after)
+    }
+}
+
+function Ensure-BootstrapWebAppComponent {
+    param(
+        [Parameter(Mandatory = $true)]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $summary = Ensure-BootstrapWebAppShortcut -DisplayName ([string]$ComponentDef.DisplayName) -Url ([string]$ComponentDef.Url) -CategoryFolder ([string]$ComponentDef.CategoryFolder)
+    Write-Log ("Web app shortcut: {0} | browser={1} | updated={2} | path={3}" -f [string]$summary.displayName, [string]$summary.browser, [string]$summary.updated, [string]$summary.path)
+    return $summary
+}
+
+function Get-BootstrapSteamDeckZeroTouchComponents {
+    return @('steam', 'playnite', 'heroic', 'rtss', 'epic-games', 'msi-afterburner', 'mem-reduct')
+}
+
+function Invoke-BootstrapSteamDeckZeroTouchProvisioning {
+    param([Parameter(Mandatory = $true)]$State)
+
+    $catalog = Get-BootstrapComponentCatalog
+    $results = @()
+    foreach ($componentName in @(Get-BootstrapSteamDeckZeroTouchComponents)) {
+        if (-not $catalog.Contains($componentName)) {
+            $results += @([ordered]@{ component = $componentName; status = 'skipped'; reason = 'componente nao encontrado no catalogo' })
+            continue
+        }
+        $component = $catalog[$componentName]
+        if ([string]$component.Kind -ne 'winget') {
+            $results += @([ordered]@{ component = $componentName; status = 'skipped'; reason = "kind nao suportado para zero-touch: $([string]$component.Kind)" })
+            continue
+        }
+        if ([bool]$State.IsDryRun) {
+            $results += @([ordered]@{ component = $componentName; status = 'planned'; wingetId = [string]$component.Id })
+            continue
+        }
+
+        try {
+            Ensure-WingetPackage -WingetPath $State.Winget -Id ([string]$component.Id) -DisplayName ([string]$component.DisplayName) -AllowFailureWhenNotAdmin $true
+            $results += @([ordered]@{ component = $componentName; status = 'ensured'; wingetId = [string]$component.Id })
+        } catch {
+            $results += @([ordered]@{ component = $componentName; status = 'failed'; wingetId = [string]$component.Id; error = $_.Exception.Message })
+        }
+    }
+
+    Write-Log ("SteamDeck zero-touch: {0}" -f ((@($results | ForEach-Object { "{0}:{1}" -f [string]$_.component, [string]$_.status }) -join ', ')))
+    return [ordered]@{
+        status = 'completed'
+        results = @($results)
+    }
 }
 
 function Invoke-BootstrapComponent {
@@ -11334,6 +13264,10 @@ function Invoke-BootstrapComponent {
             if ($Name -eq 'notepadpp' -and [string]$State.AppTuningMode -eq 'off') {
                 $null = Ensure-BootstrapNotepadPlusPlusDefaults
             }
+        }
+        'chocolatey' {
+            $chocoPath = Ensure-BootstrapChocolateyCore -State $State
+            Ensure-ChocolateyPackage -ChocoPath $chocoPath -Package ([string]$componentDef.Package) -DisplayName ([string]$componentDef.DisplayName)
         }
         'git-lfs' {
             Ensure-GitLfs -State $State
@@ -11394,6 +13328,21 @@ function Invoke-BootstrapComponent {
         }
         'workspace' {
             Ensure-WorkspaceLayout -State $State
+        }
+        'steamdeck-shell-menu' {
+            Install-BootstrapSteamDeckShellMenu -DryRun:$State.IsDryRun | Out-Null
+        }
+        'steamdeck-zero-touch' {
+            Invoke-BootstrapSteamDeckZeroTouchProvisioning -State $State | Out-Null
+        }
+        'steamdeck-sharedvram-launch-options' {
+            $settingsBundle = Get-BootstrapSteamDeckSettingsData -RequestedSteamDeckVersion ([string]$State.RequestedSteamDeckVersion) -ResolvedSteamDeckVersion ([string]$State.ResolvedSteamDeckVersion)
+            $launchResult = Apply-BootstrapSharedVramLaunchOptions -Settings $settingsBundle.Data -DryRun:$State.IsDryRun
+            Write-Log ("SteamDeck sharedvram apply: status={0} reason={1}" -f [string]$launchResult.Status, [string]$launchResult.Reason)
+        }
+        'web-app-shortcut' {
+            Ensure-BootstrapSystemCore -State $State
+            Ensure-BootstrapWebAppComponent -State $State -ComponentDef $componentDef | Out-Null
         }
         'steamdeck-tools' {
             Ensure-BootstrapSteamDeckToolsRuntime -State $State
@@ -11490,9 +13439,11 @@ function Get-BootstrapExecutionPlanLines {
         $lines.Add('Console mode: HANDHELD=Game - Steam Deck, DOCKED_TV=Game - Steam Deck, DOCKED_MONITOR=Desktop/Dev')
         $lines.Add('Console shell: Steam Big Picture first, Playnite fallback, soft shell keeps explorer.exe intact')
         $lines.Add('Handheld tweaks: hibernation=enabled, UTC clock, login-after-sleep=off, ms-gamebar=enabled, touch-keyboard=enabled')
-        $lines.Add('Steam Deck tooling: RTSS, AMD Adrenalin, CRU, Steam Deck Tools')
+        $lines.Add('Steam Deck tooling: RTSS, AMD Adrenalin, CRU, Steam Deck Tools (Controller, PowerControl, FanControl, PerformanceOverlay)')
+        $lines.Add('Advanced input opt-in: Handheld Companion (Auto-TDP/gyro/DS4/QuickTools) and GlosSI (global Steam Input)')
+        $lines.Add('Steam Input guardrail: review/disable Desktop Layout when external input stack is active to avoid double input')
         $lines.Add('Unknown external: UNCLASSIFIED_EXTERNAL -> UI classification -> fallback Desktop/Dev')
-        $lines.Add('Console readiness audit: Steam, Playnite, Steam Deck Tools, RTSS, AMD Adrenalin, CRU, SoundSwitch, ModeWatcher')
+        $lines.Add('Console readiness audit: Steam, Playnite, Steam Deck Tools, Steam Input Desktop Layout, RTSS, AMD Adrenalin, CRU, SoundSwitch, ModeWatcher')
     }
 
     if ($ResolvedHostHealthMode -ne 'off') {
@@ -11710,6 +13661,11 @@ function Invoke-BootstrapProfileMode {
         return
     }
 
+    if ($ListApps) {
+        Show-BootstrapApps
+        return
+    }
+
     if ($ListComponents) {
         Show-BootstrapComponents
         return
@@ -11748,6 +13704,25 @@ function Invoke-BootstrapProfileMode {
 
     if ($DryRun) {
         Show-BootstrapExecutionPlan -Selection $selection -Resolution $resolution -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -ResolvedHostHealthMode $resolvedHostHealthMode -AppTuningPlan $appTuningPlan
+        
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                status = 'success'
+                generatedAt = (Get-Date).ToString('o')
+                logPath = $script:LogPath
+                resultPath = $script:ResultPath
+                dryRun = $true
+                workspaceRoot = $resolvedWorkspaceRoot
+                cloneBaseDir = $resolvedCloneBaseDir
+                usesSteamDeckFlow = $usesSteamDeckFlow
+                resolvedSteamDeckVersion = $resolvedSteamDeckVersion
+                resolvedHostHealthMode = $resolvedHostHealthMode
+                resolvedAppTuningMode = $resolvedAppTuningMode
+                selection = $selection
+                resolution = $resolution
+                appTuningPlan = $appTuningPlan
+            })
+        }
         return
     }
 
@@ -11784,6 +13759,7 @@ function Invoke-BootstrapProfileMode {
             steamDeckSettingsPath = $state.SteamDeckSettingsPath
             steamDeckAutomationRoot = $state.SteamDeckAutomationRoot
             preflight = $state.PreflightSummary
+            manualRequirements = @($state.ManualRequirements.ToArray())
         })
     }
 
@@ -12133,6 +14109,7 @@ $useBootstrapProfileMode = (
     $ListProfiles -or
     $ListHostHealthModes -or
     $ListAppTuningCatalog -or
+    $ListApps -or
     $ListComponents -or
     $DryRun -or
     $Interactive -or
@@ -12142,6 +14119,7 @@ $useBootstrapProfileMode = (
     (@($AppTuningCategory).Count -gt 0) -or
     (@($AppTuningItem).Count -gt 0) -or
     (@($ExcludeAppTuningItem).Count -gt 0) -or
+    (@($App).Count -gt 0) -or
     (@($Profile).Count -gt 0) -or
     (@($Component).Count -gt 0) -or
     (@($Exclude).Count -gt 0)

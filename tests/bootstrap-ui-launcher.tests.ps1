@@ -60,6 +60,7 @@ Describe 'Bootstrap UI launcher' {
         $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $script = @"
 `$ErrorActionPreference = 'Stop'
+if ([string]::IsNullOrWhiteSpace(`$env:WINDIR) -and -not [string]::IsNullOrWhiteSpace(`$env:SystemRoot)) { `$env:WINDIR = `$env:SystemRoot }
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
@@ -79,9 +80,15 @@ if (-not `$match.Success) { throw 'XAML block not found' }
     It 'keeps grid and dropdown text readable in the dark theme' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 
+        $raw | Should Match 'SystemColors\.WindowBrushKey'
+        $raw | Should Match 'SystemColors\.WindowTextBrushKey'
+        $raw | Should Match 'SystemColors\.HighlightTextBrushKey'
+        $raw | Should Match 'TargetType="ListBoxItem"'
         $raw | Should Match 'TargetType="ComboBoxItem"'
         $raw | Should Match 'TargetType="DataGridColumnHeader"'
         $raw | Should Match 'TargetType="DataGridCell"'
+        $raw | Should Match 'SelectionBrush'
+        $raw | Should Match 'CaretBrush'
         $raw | Should Not Match 'LightSlateGray'
     }
 
@@ -102,6 +109,8 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match '\$ui\.RunProcess -and -not \$ui\.RunProcess\.HasExited'
         $raw | Should Match '\$ui\.StartRunButton\.IsEnabled = \$false'
         $raw | Should Match '\$ui\.StartRunButton\.IsEnabled = \$true'
+        $raw | Should Match 'fallbackResult'
+        $raw | Should Match 'Backend saiu sem result\.json'
     }
 
     It 'constrains Steam Deck monitor mode editing to supported modes' {
@@ -172,6 +181,19 @@ if (-not `$match.Success) { throw 'XAML block not found' }
             $raw | Should Match $buttonName
         }
         $raw | Should Match 'Get-BootstrapAppTuningStatusRows'
+        $raw | Should Not Match 'Apps sob demanda'
+        $raw | Should Match 'Invoke-AppTuningSingleRowAction'
+        $raw | Should Match 'Add_MouseDoubleClick'
+    }
+
+    It 'exposes Windows Boot Manager controls beyond GRUB detection' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        foreach ($name in @('WindowsBootEntriesGrid','WindowsBootDefaultCombo','WindowsBootTimeoutTextBox','ApplyWindowsBootButton','BackupWindowsBootButton')) {
+            $raw | Should Match $name
+        }
+        $raw | Should Match 'Get-BootstrapWindowsBootManagerState'
+        $raw | Should Match 'Set-BootstrapWindowsBootManager'
     }
 
     It 'persists AppTuning state fields and passes them to preview/backend' {
@@ -190,6 +212,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $script = @"
 `$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+if ([string]::IsNullOrWhiteSpace(`$env:WINDIR) -and -not [string]::IsNullOrWhiteSpace(`$env:SystemRoot)) { `$env:WINDIR = `$env:SystemRoot }
 Add-Type -AssemblyName PresentationFramework
 `$raw = Get-Content -Path '$uiScriptPath' -Raw
 `$tokens = `$null

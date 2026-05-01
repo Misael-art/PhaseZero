@@ -81,8 +81,26 @@ Describe 'Bootstrap profile mode' {
         $result = Invoke-Bootstrap -CommandArgs @('-ListAppTuningCatalog')
 
         $result.ExitCode | Should Be 0
-        foreach ($expected in @('gaming-console', 'steamdeck-control', 'dev-ai', 'browser-startup', 'steam-big-picture-session')) {
+        foreach ($expected in @('gaming-console', 'steamdeck-control', 'dev-ai', 'browser-startup', 'ia', 'steam-big-picture-session', 'app-steam', 'app-web-photopea')) {
             Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected app tuning catalog entry in output.'
+        }
+    }
+
+    It 'lists installable apps for on-demand installation' {
+        $result = Invoke-Bootstrap -CommandArgs @('-ListApps')
+
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('steam', 'vscode', 'discord', 'component', 'winget')) {
+            Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected installable app in output.'
+        }
+    }
+
+    It 'resolves individual app requests into components' {
+        $result = Invoke-Bootstrap -CommandArgs @('-App', 'steam,vscode', '-DryRun')
+
+        $result.ExitCode | Should Be 0
+        foreach ($expected in @('system-core', 'steam', 'vscode')) {
+            Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected app component in dry-run output.'
         }
     }
 

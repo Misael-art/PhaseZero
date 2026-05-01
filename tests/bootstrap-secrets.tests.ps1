@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -91,7 +91,7 @@ Describe 'Bootstrap secrets manifest v2' {
             }
             providers = @{
                 openai = @{
-                    apiKey = 'sk-proj-test-openai'
+                    apiKey = 'test-openai-key'
                     baseUrl = 'https://api.openai.com/v1'
                 }
             }
@@ -107,7 +107,7 @@ Describe 'Bootstrap secrets manifest v2' {
         $bundle.Data.metadata.version | Should Be 2
         $bundle.Data.providers.openai.activeCredential | Should Be 'openai-default-01'
         $bundle.Data.providers.openai.rotationOrder | Should Be @('openai-default-01')
-        $bundle.Data.providers.openai.credentials['openai-default-01'].secret | Should Be 'sk-proj-test-openai'
+        $bundle.Data.providers.openai.credentials['openai-default-01'].secret | Should Be 'test-openai-key'
         $bundle.Data.targets.userEnv.OPENAI_API_KEY | Should Be '{{activeProviders.openai.apiKey}}'
     }
 
@@ -116,9 +116,9 @@ Describe 'Bootstrap secrets manifest v2' {
 ### OpenRouter
 | Serviço | Chave | Observação |
 |---------|-------|------------|
-| Gmail | `sk-or-v1-11111111111111111111111111111111` | principal |
-| USA | `sk-or-v1-22222222222222222222222222222222` | reserva |
-| Duplicada | `sk-or-v1-11111111111111111111111111111111` | repetida |
+| Gmail | `sk-or-v1-A` | principal |
+| USA | `sk-or-v1-B` | reserva |
+| Duplicada | `sk-or-v1-A` | repetida |
 '@
 
         $imported = Import-BootstrapSecretsText -Text $text -SecretsData (Get-BootstrapSecretsTemplate)
@@ -157,7 +157,7 @@ Describe 'Bootstrap secrets manifest v2' {
                     credentials = @{
                         'openrouter-main-01' = @{
                             displayName = 'Main'
-                            secret = 'sk-or-v1-super-secret-value'
+                            secret = 'test-openrouter-key'
                             secretKind = 'apiKey'
                             validation = @{
                                 state = 'passed'
@@ -181,7 +181,7 @@ Describe 'Bootstrap secrets manifest v2' {
         $result.Output | Should Match 'openrouter'
         $result.Output | Should Match 'openrouter-main-01'
         $result.Output | Should Match 'passed'
-        $result.Output | Should Not Match 'sk-or-v1-super-secret-value'
+        $result.Output | Should Not Match 'test-openrouter-key'
     }
 
     It 'resolves active provider placeholders into non-empty target values when validation passed' {
@@ -199,7 +199,7 @@ Describe 'Bootstrap secrets manifest v2' {
                     credentials = @{
                         'openrouter-main-01' = @{
                             displayName = 'Main'
-                            secret = 'sk-or-v1-placeholder-check'
+                            secret = 'test-key'
                             secretKind = 'apiKey'
                             validation = @{
                                 state = 'passed'
@@ -220,7 +220,7 @@ Describe 'Bootstrap secrets manifest v2' {
 
         $resolved = Get-BootstrapResolvedSecretsTargets -SecretsData $data
 
-        $resolved.userEnv.OPENROUTER_API_KEY | Should Be 'sk-or-v1-placeholder-check'
+        $resolved.userEnv.OPENROUTER_API_KEY | Should Be 'test-key'
         $resolved.userEnv.OPENROUTER_BASE_URL | Should Be 'https://openrouter.ai/api/v1'
     }
 
@@ -341,6 +341,60 @@ Describe 'Bootstrap secrets manifest v2' {
         }
     }
 
+    It 'includes nightly MCP paths for Roo and Cline in parallel with stable channels' {
+        $originalAppData = $env:APPDATA
+        $originalUserProfile = $env:USERPROFILE
+        $tempRoot = Join-Path $script:TestDataRoot 'nightly-paths'
+        $env:APPDATA = Join-Path $tempRoot 'Roaming'
+        $env:USERPROFILE = Join-Path $tempRoot 'User'
+
+        $rooNightlyPath = Join-Path $env:APPDATA 'Code - Insiders\User\globalStorage\rooveterinaryinc.roo-code-nightly\settings\mcp_settings.json'
+        $clineNightlyPath = Join-Path $env:APPDATA 'Agents - Insiders\User\globalStorage\saoudrizwan.claude-dev-nightly\settings\cline_mcp_settings.json'
+        New-Item -Path (Split-Path -Path $rooNightlyPath -Parent) -ItemType Directory -Force | Out-Null
+        New-Item -Path $rooNightlyPath -ItemType File -Force | Out-Null
+        New-Item -Path (Split-Path -Path $clineNightlyPath -Parent) -ItemType Directory -Force | Out-Null
+        New-Item -Path $clineNightlyPath -ItemType File -Force | Out-Null
+
+        try {
+            Get-BootstrapRooMcpConfigPath | Should Be $rooNightlyPath
+            Get-BootstrapClineMcpConfigPath | Should Be $clineNightlyPath
+        } finally {
+            $env:APPDATA = $originalAppData
+            $env:USERPROFILE = $originalUserProfile
+        }
+    }
+
+    It 'keeps BYOK env slots available for supported app targets' {
+        $fixture = @{
+            metadata = @{ version = 2 }
+            providers = @{
+                openrouter = @{
+                    defaults = @{ baseUrl = 'https://openrouter.ai/api/v1' }
+                    activeCredential = 'openrouter-main-01'
+                    rotationOrder = @('openrouter-main-01')
+                    credentials = @{
+                        'openrouter-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'test-openrouter-key'
+                            secretKind = 'apiKey'
+                            validation = @{ state = 'passed'; checkedAt = '2026-04-29T00:00:00Z'; message = 'ok' }
+                        }
+                    }
+                }
+            }
+            targets = (Get-BootstrapSecretsTemplate).targets
+        }
+
+        $resolved = Get-BootstrapResolvedSecretsTargets -SecretsData $fixture
+
+        $resolved.vsCode.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.vsCode.env.ContainsKey('OPENAI_BASE_URL') | Should Be $true
+        $resolved.roo.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.cline.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.zed.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.trae.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+    }
+
     It 'redacts sensitive env values in logs without hiding safe values' {
         (Get-BootstrapEnvValueForLog -Name 'OPENAI_API_KEY' -Value 'sk-secret') | Should Be '[redacted]'
         (Get-BootstrapEnvValueForLog -Name 'OPENAI_BASE_URL' -Value 'https://api.openai.com/v1') | Should Be 'https://api.openai.com/v1'
@@ -377,7 +431,7 @@ Describe 'Bootstrap secrets manifest v2' {
                         credentials = @{
                             'openrouter-main-01' = @{
                                 displayName = 'Main'
-                                secret = 'sk-or-v1-project-secret'
+                                secret = 'test-project-secret'
                                 secretKind = 'apiKey'
                                 validation = @{ state = 'passed'; checkedAt = '2026-04-21T00:00:00Z'; message = 'ok' }
                             }

@@ -27,6 +27,7 @@ function Get-SteamDeckToolsReadiness {
     $components = @(
         [ordered]@{ name = 'PowerControl'; candidates = @('PowerControl.exe', '$env:ProgramFiles\SteamDeckTools\PowerControl.exe', '$env:LOCALAPPDATA\Programs\SteamDeckTools\PowerControl.exe') },
         [ordered]@{ name = 'SteamController'; candidates = @('SteamController.exe', '$env:ProgramFiles\SteamDeckTools\SteamController.exe', '$env:LOCALAPPDATA\Programs\SteamDeckTools\SteamController.exe') },
+        [ordered]@{ name = 'FanControl'; candidates = @('FanControl.exe', '$env:ProgramFiles\SteamDeckTools\FanControl.exe', '$env:LOCALAPPDATA\Programs\SteamDeckTools\FanControl.exe') },
         [ordered]@{ name = 'PerformanceOverlay'; candidates = @('PerformanceOverlay.exe', '$env:ProgramFiles\SteamDeckTools\PerformanceOverlay.exe', '$env:LOCALAPPDATA\Programs\SteamDeckTools\PerformanceOverlay.exe') }
     )
 
@@ -45,10 +46,17 @@ function Get-SteamDeckToolsReadiness {
     }
 }
 
+$settings = $null
+if (Test-Path $SettingsPath) {
+    $settings = Read-SteamDeckJsonFile -Path $SettingsPath
+}
+$steamInputAudit = Get-SteamDeckSteamInputConflictAudit -Settings $settings
+
 $checks = @(
     [ordered]@{ name = 'Steam'; ready = Test-CommandOrPath -Candidates @('steam.exe', '${env:ProgramFiles(x86)}\Steam\steam.exe', '$env:ProgramFiles\Steam\steam.exe') },
     [ordered]@{ name = 'Playnite'; ready = Test-CommandOrPath -Candidates @('$env:LOCALAPPDATA\Playnite\Playnite.FullscreenApp.exe', '$env:ProgramFiles\Playnite\Playnite.FullscreenApp.exe') },
     (Get-SteamDeckToolsReadiness),
+    $steamInputAudit,
     [ordered]@{ name = 'RTSS'; ready = Test-CommandOrPath -Candidates @('RTSS.exe', '${env:ProgramFiles(x86)}\RivaTuner Statistics Server\RTSS.exe') },
     [ordered]@{ name = 'AMD Adrenalin'; ready = Test-CommandOrPath -Candidates @('$env:ProgramFiles\AMD\CNext\CNext\RadeonSoftware.exe', '$env:ProgramFiles\AMD\CNext\CNext\AMDRSServ.exe') },
     [ordered]@{ name = 'CRU'; ready = Test-CommandOrPath -Candidates @('CRU.exe', '$env:ProgramFiles\Custom Resolution Utility\CRU.exe', '$env:LOCALAPPDATA\Programs\Custom Resolution Utility\CRU.exe') },

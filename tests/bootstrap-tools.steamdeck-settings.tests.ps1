@@ -71,4 +71,18 @@ Describe 'Steam Deck settings schema' {
 
         [string]$normalized['displayMode'] | Should Be 'extend'
     }
+
+    It 'repairs blank session profile values saved by the UI' {
+        $normalized = Normalize-BootstrapSteamDeckSettingsData -Settings @{
+            sessionProfiles = @{
+                HANDHELD = ''
+                DOCKED_TV = ''
+                DOCKED_MONITOR = ''
+            }
+        }
+
+        [string]$normalized['sessionProfiles']['HANDHELD'] | Should Be 'game-handheld'
+        [string]$normalized['sessionProfiles']['DOCKED_TV'] | Should Be 'game-docked'
+        [string]$normalized['sessionProfiles']['DOCKED_MONITOR'] | Should Be 'desktop'
+    }
 }
