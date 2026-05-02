@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$CloneBaseDir,
     [string]$WorkspaceRoot = 'F:\Steam\Steamapps',
     [string[]]$Profile = @(),
@@ -31,7 +31,14 @@
     [switch]$DryRun,
     [switch]$NonInteractive,
     [switch]$SkipManualRequirements,
-    [switch]$IgnoreManualRequirements
+    [switch]$IgnoreManualRequirements,
+    [switch]$Resume,
+    [switch]$Rollback,
+    [switch]$Offline,
+    [string]$CacheDir = '',
+    [switch]$Audit,
+    [switch]$AutoRollback,
+    [switch]$Repair
 )
 
 $ErrorActionPreference = 'Stop'
@@ -105,9 +112,276 @@ function Write-Log {
         [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO'
     )
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] [{1}] {2}" -f (Get-Date), $Level, $Message
-    Add-Content -Path $script:LogPath -Value $line -Encoding utf8
+    if (-not [string]::IsNullOrWhiteSpace($script:LogPath)) {
+        try {
+            $logParent = Split-Path -Path $script:LogPath -Parent
+            if ($logParent -and -not (Test-Path $logParent)) { $null = New-Item -Path $logParent -ItemType Directory -Force }
+            Add-Content -Path $script:LogPath -Value $line -Encoding utf8 -ErrorAction SilentlyContinue
+        } catch { }
+    }
     Write-Host $line
 }
+
+function Get-BootstrapFreeSpace {
+    param([string]$Path)
+    try {
+        $drive = Get-PSDrive -Name ($Path.Substring(0, 1)) -ErrorAction SilentlyContinue
+        if ($drive) { return [Math]::Round($drive.Free / 1GB, 2) }
+    } catch { }
+    return 0
+}
+
+function Test-BootstrapDiskSpace {
+    param(
+        [object]$Selection,
+        [string[]]$ResolvedComponents,
+        [string]$ResolvedWorkspaceRoot
+    )
+    $minSystemGB = 2.0
+    $minWorkspaceGB = 1.0
+
+    if (@($Selection.Profiles) -contains 'full') {
+        $minSystemGB = 15.0
+        $minWorkspaceGB = 5.0
+    } elseif ($ResolvedComponents.Count -gt 50) {
+        $minSystemGB = 10.0
+    }
+
+    $systemFree = Get-BootstrapFreeSpace -Path $env:SystemDrive
+    if ($systemFree -lt $minSystemGB) {
+        Write-Log ("Espaco em disco insuficiente no sistema (C:). Disponivel: {0}GB, Necessario: {1}GB" -f $systemFree, $minSystemGB) 'WARN'
+        if (-not $script:DryRun) { throw "Espaco em disco insuficiente no sistema (C:). Limpe o disco e tente novamente." }
+    } else {
+        Write-Log ("Espaco em disco OK no sistema (C:): {0}GB disponivel." -f $systemFree)
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ResolvedWorkspaceRoot) -and (Test-Path $ResolvedWorkspaceRoot)) {
+        $workspaceFree = Get-BootstrapFreeSpace -Path $ResolvedWorkspaceRoot
+        if ($workspaceFree -lt $minWorkspaceGB) {
+            Write-Log ("Espaco em disco insuficiente no WorkspaceRoot ({0}). Disponivel: {1}GB, Necessario: {2}GB" -f $ResolvedWorkspaceRoot, $workspaceFree, $minWorkspaceGB) 'WARN'
+        }
+    }
+}
+
+function Assert-BootstrapDiskSpace {
+    param(
+        [double]$RequiredGB,
+        [string]$Path = $env:SystemDrive
+    )
+    if ($RequiredGB -le 0) { return }
+    $safetyBuffer = 1.0
+    $totalRequired = $RequiredGB + $safetyBuffer
+    $free = Get-BootstrapFreeSpace -Path $Path
+    if ($free -lt $totalRequired) {
+        throw ("Espaco em disco insuficiente para continuar operacao. Necessario: {0}GB (incluindo buffer), Disponivel: {1}GB em {2}" -f $totalRequired, $free, $Path)
+    }
+}
+
+function Get-BootstrapCheckpointPath {
+    $dataRoot = Get-BootstrapDataRoot
+    return Join-Path $dataRoot 'checkpoint.json'
+}
+
+function Save-BootstrapCheckpoint {
+    param(
+        [object]$Selection,
+        [string[]]$CompletedComponents,
+        [object[]]$AppTuningResults = @(),
+        [object[]]$HostHealthResults = @()
+    )
+    try {
+        $path = Get-BootstrapCheckpointPath
+        $parent = Split-Path $path -Parent
+        if (-not (Test-Path $parent)) { $null = New-Item -Path $parent -ItemType Directory -Force }
+
+        $checkpoint = [ordered]@{
+            ProfileSelection = $Selection.Profiles
+            ComponentSelection = $Selection.Components
+            CompletedComponents = @($CompletedComponents)
+            AppTuningResults = @($AppTuningResults)
+            HostHealthResults = @($HostHealthResults)
+            Timestamp = (Get-Date).ToString('o')
+        }
+        $checkpoint | ConvertTo-Json | Set-Content -Path $path -Encoding utf8 -Force
+    } catch {
+        Write-Log ("Falha ao salvar checkpoint: {0}" -f $_.Exception.Message) 'WARN'
+    }
+}
+
+function Load-BootstrapCheckpoint {
+    $path = Get-BootstrapCheckpointPath
+    if (Test-Path $path) {
+        try {
+            return Get-Content $path -Raw | ConvertFrom-Json
+        } catch { }
+    }
+    return $null
+}
+
+function Invoke-BootstrapRollback {
+    Write-Log 'Iniciando Rollback das alteracoes de sistema...' 'WARN'
+
+    # 1. Reverter Tweaks de Registro
+    Write-Log 'Revertendo tweaks de registro (ContentDeliveryManager, Edge, GameMode)...'
+    $registryTweaks = @(
+        @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; Name = 'SystemPaneSuggestionsEnabled'; Value = 1 }
+        @{ Path = 'HKCU:\Software\Microsoft\Edge\Main'; Name = 'AllowPrelaunch'; Value = 1 }
+        @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameGPT'; Name = 'GameModeEnabled'; Value = 0 }
+    )
+
+    foreach ($t in $registryTweaks) {
+        if (Test-Path $t.Path) {
+            Set-ItemProperty -Path $t.Path -Name $t.Name -Value $t.Value -ErrorAction SilentlyContinue
+        }
+    }
+
+    # 2. Remover Autostarts conhecidos (Mimo, OpenCode)
+    Write-Log 'Removendo entradas de inicializacao automatica criadas pelo script...'
+    $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    foreach ($name in @('MimoModeWatcher', 'OpenCodeDesktop')) {
+        Remove-ItemProperty -Path $runPath -Name $name -ErrorAction SilentlyContinue
+    }
+
+    Write-Log 'Rollback concluido. Algumas alteracoes (como instalacoes de apps) devem ser removidas manualmente via Painel de Controle/winget.'
+}
+
+function Register-BootstrapChange {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Path')][string]$Type,
+        [Parameter(Mandatory = $true)][string]$Target,
+        [AllowNull()]$OldValue,
+        [string]$Name # Para Registro
+    )
+    $change = [ordered]@{
+        Type = $Type
+        Target = $Target
+        OldValue = $OldValue
+        Name = $Name
+        Timestamp = (Get-Date).ToString('o')
+    }
+    $State.Changes.Add($change)
+}
+
+function Invoke-BootstrapAutoRollback {
+    param([Parameter(Mandatory = $true)]$State)
+
+    if (-not $State.Changes -or $State.Changes.Count -eq 0) {
+        Write-Log 'Nenhuma alteracao registrada para rollback automatico.'
+        return
+    }
+
+    $count = $State.Changes.Count
+    Write-Log "Iniciando Rollback Automatico de $count alteracoes..." 'WARN'
+
+    # Inverter ordem das mudancas
+    $changes = $State.Changes.ToArray()
+    if ($changes.Count -gt 1) {
+        $changes = $changes[($changes.Count - 1)..0]
+    }
+
+    foreach ($change in $changes) {
+        try {
+            switch ($change.Type) {
+                'Registry' {
+                    $target = $change.Target
+                    $name = $change.Name
+                    Write-Log "Rollback Registro: $target\$name"
+                    if ($null -eq $change.OldValue) {
+                        Remove-ItemProperty -Path $target -Name $name -ErrorAction SilentlyContinue
+                    } else {
+                        Set-ItemProperty -Path $target -Name $name -Value $change.OldValue -ErrorAction SilentlyContinue
+                    }
+                }
+                'File' {
+                    $target = $change.Target
+                    Write-Log "Rollback Arquivo: $target"
+                    if (Test-Path $target) {
+                        Remove-Item -Path $target -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                'Path' {
+                    # Path e mais complexo, mas por agora logamos
+                    $target = $change.Target
+                    Write-Log "Rollback PATH (manual recomendado): $target" 'WARN'
+                }
+            }
+        } catch {
+            $msg = $_.Exception.Message
+            Write-Log "Falha ao reverter alteracao: $msg" 'WARN'
+        }
+    }
+    Write-Log 'Rollback automatico concluido.'
+}
+
+function Invoke-BootstrapAuditMode {
+    param(
+        [hashtable]$Resolution,
+        [hashtable]$State,
+        [switch]$Repair
+    )
+    Write-Log 'Iniciando Auditoria de Integridade (Audit Mode)...'
+    $results = New-Object System.Collections.Generic.List[object]
+
+    foreach ($comp in $Resolution.ResolvedComponents) {
+        $def = $Resolution.Catalog[$comp]
+        if (-not $def) { continue }
+
+        $status = 'Unknown'
+        $detail = ''
+
+        # 1. Verificar Versão se houver comando
+        if ($def.VersionCheckCommand) {
+            try {
+                $actualVersion = Invoke-Expression $def.VersionCheckCommand -ErrorAction Stop
+                if ($def.ExpectedVersion -and $actualVersion -notmatch $def.ExpectedVersion) {
+                    $status = 'Unhealthy'
+                    $detail = "Versao atual: $actualVersion, Esperada: $($def.ExpectedVersion)"
+                } else {
+                    $status = 'Healthy'
+                    $detail = "Versao: $actualVersion"
+                }
+            } catch {
+                $status = 'Missing'
+                $detail = "Falha ao verificar versao: $($_.Exception.Message)"
+            }
+        }
+        # 2. Fallback para ProbePaths ou CommandName se ainda Unknown
+        if ($status -eq 'Unknown') {
+            if ($def.Data -and $def.Data.ContainsKey('ProbePaths')) {
+                $found = $false
+                foreach ($p in @($def.Data.ProbePaths)) {
+                    $expanded = [Environment]::ExpandEnvironmentVariables($p)
+                    if (Test-Path $expanded) { $found = $true; break }
+                }
+                $status = if ($found) { 'Healthy' } else { 'Missing' }
+            } elseif ($def.Data -and $def.Data.ContainsKey('CommandName')) {
+                if (Get-Command $def.Data.CommandName -ErrorAction SilentlyContinue) {
+                    $status = 'Healthy'
+                } else {
+                    $status = 'Missing'
+                }
+            }
+        }
+
+        Write-Log ("Audit: Componente {0} -> {1} ({2})" -f $comp, $status, $detail)
+
+        if ($Repair -and $status -ne 'Healthy' -and $State) {
+            Write-Log ("Repair: Tentando reinstalar {0}..." -f $comp) 'WARN'
+            try {
+                Invoke-BootstrapComponent -Name $comp -State $State
+                $status = 'Repaired'
+            } catch {
+                Write-Log ("Repair: Falha ao reparar {0}: {1}" -f $comp, $_.Exception.Message) 'ERROR'
+            }
+        }
+
+        $results.Add([pscustomobject]@{ Component = $comp; Status = $status; Detail = $detail })
+    }
+
+    return $results
+}
+
 
 function Reset-BootstrapFileCmdlets {
     $names = @(
@@ -805,6 +1079,19 @@ function Invoke-BootstrapExecutionPreflight {
     Write-Log "LanguageMode: $($ExecutionContext.SessionState.LanguageMode)"
     Ensure-ProxyEnvFromWinHttp
 
+    # Calcular espaco total estimado
+    $totalEstimatedGB = 0.0
+    $catalog = Get-BootstrapComponentCatalog
+    foreach ($comp in $ResolvedComponents) {
+        $def = $catalog[$comp]
+        if ($def -and $def.EstimatedSizeGB) { $totalEstimatedGB += $def.EstimatedSizeGB }
+    }
+    if ($totalEstimatedGB -gt 0) {
+        Write-Log ("Preflight: Espaco total estimado para instalacao: {0}GB" -f $totalEstimatedGB)
+    }
+
+    Test-BootstrapDiskSpace -Selection $State.Selection -ResolvedComponents $ResolvedComponents -ResolvedWorkspaceRoot $State.WorkspaceRoot
+
     if ($ExecutionContext.SessionState.LanguageMode -ne 'FullLanguage') {
         throw "Bootstrap requer FullLanguage. Modo atual: $($ExecutionContext.SessionState.LanguageMode)"
     }
@@ -844,7 +1131,7 @@ function Invoke-BootstrapExecutionPreflight {
     }
 
     $connectivitySummary = New-Object System.Collections.Generic.List[object]
-    if ($requirements.RequiresNetwork) {
+    if ($requirements.RequiresNetwork -and -not $Offline) {
         foreach ($group in @($requirements.ConnectivityGroups)) {
             $groupReachable = $false
             $hostResults = New-Object System.Collections.Generic.List[object]
@@ -929,6 +1216,12 @@ function Invoke-NativeWithRetry {
     return $lastExitCode
 }
 
+function Get-BootstrapCacheDir {
+    if (-not [string]::IsNullOrWhiteSpace($script:CacheDir)) { return $script:CacheDir }
+    $dataRoot = Get-BootstrapDataRoot
+    return Join-Path $dataRoot 'cache'
+}
+
 function Invoke-WebRequestWithRetry {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
@@ -937,6 +1230,25 @@ function Invoke-WebRequestWithRetry {
         [int]$MaxAttempts = 3,
         [int]$InitialDelaySeconds = 3
     )
+
+    # Lógica de Cache
+    $cacheDir = Get-BootstrapCacheDir
+    $fileName = Split-Path $OutFile -Leaf
+    $cachedPath = Join-Path $cacheDir $fileName
+
+    if (Test-Path $cachedPath) {
+        Write-Log ("Usando arquivo do cache: {0}" -f $fileName)
+        if ($OutFile -ne $cachedPath) {
+            $parent = Split-Path $OutFile -Parent
+            if ($parent -and -not (Test-Path $parent)) { $null = New-Item -Path $parent -ItemType Directory -Force }
+            Copy-Item -Path $cachedPath -Destination $OutFile -Force
+        }
+        return
+    }
+
+    if ($script:Offline) {
+        throw ("Modo OFFLINE ativo e arquivo nao encontrado no cache: {0}. Uri: {1}" -f $fileName, $Uri)
+    }
 
     $attempt = 0
     $delaySeconds = [Math]::Max(1, $InitialDelaySeconds)
@@ -947,6 +1259,11 @@ function Invoke-WebRequestWithRetry {
                 Write-Log ("Repetindo download: {0} (tentativa {1}/{2})" -f $OperationName, $attempt, $MaxAttempts) 'WARN'
             }
             Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile | Out-Null
+
+            # Salvar no cache após sucesso
+            if (-not (Test-Path $cacheDir)) { $null = New-Item -Path $cacheDir -ItemType Directory -Force }
+            Copy-Item -Path $OutFile -Destination $cachedPath -Force -ErrorAction SilentlyContinue
+
             return
         } catch {
             if ($attempt -ge $MaxAttempts) {
@@ -3563,12 +3880,12 @@ function Get-BootstrapPhantomBootEntries {
 
 function Repair-BootstrapPhantomEntries {
     if (-not (Test-IsAdmin)) { throw 'Repair-BootstrapPhantomEntries requer privilegios de administrador.' }
-    
+
     $phantoms = Get-BootstrapPhantomBootEntries
-    if ($phantoms.Count -eq 0) { 
-        return @{ Success = $true; Removed = 0; Message = 'Nenhuma entrada inativa encontrada.' } 
+    if ($phantoms.Count -eq 0) {
+        return @{ Success = $true; Removed = 0; Message = 'Nenhuma entrada inativa encontrada.' }
     }
-    
+
     $backupPath = Backup-BootstrapWindowsBootManager
 
     $removedCount = 0
@@ -3577,7 +3894,7 @@ function Repair-BootstrapPhantomEntries {
         & bcdedit /delete $($p.Id) /cleanup 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) { $removedCount++ }
     }
-    
+
     # Se sobrar so 1 no displayorder (e for o current), removemos o timeout para single-OS boot rapido
     $state = Get-BootstrapWindowsBootManagerState
     if (@($state.DisplayOrder).Count -eq 1) {
@@ -3586,7 +3903,7 @@ function Repair-BootstrapPhantomEntries {
             Write-Log "Otimizacao: Timeout definido para 0 pois sobrou apenas a instalacao corrente."
         }
     }
-    
+
     return @{ Success = $true; Removed = $removedCount; Backup = $backupPath }
 }
 
@@ -3601,7 +3918,11 @@ function New-BootstrapComponentDefinition {
         [string[]]$DependsOn = @(),
         [bool]$Optional = $true,
         [Parameter(Mandatory = $true)][string]$Kind,
-        [hashtable]$Data = @{}
+        [hashtable]$Data = @{},
+        [double]$EstimatedSizeGB = 0.0,
+        [bool]$RequiresNetwork = $false,
+        [string]$VersionCheckCommand = '',
+        [string]$ExpectedVersion = ''
     )
 
     $definition = [ordered]@{
@@ -3610,6 +3931,10 @@ function New-BootstrapComponentDefinition {
         DependsOn = @($DependsOn)
         Optional = $Optional
         Kind = $Kind
+        EstimatedSizeGB = $EstimatedSizeGB
+        RequiresNetwork = $RequiresNetwork
+        VersionCheckCommand = $VersionCheckCommand
+        ExpectedVersion = $ExpectedVersion
     }
 
     foreach ($key in $Data.Keys) {
@@ -7848,12 +8173,12 @@ function Get-BootstrapUsesSteamDeckFlow {
 function Get-BootstrapComponentCatalog {
     $catalog = [ordered]@{}
 
-    $catalog['system-core'] = New-BootstrapComponentDefinition -Name 'system-core' -Description 'Base do sistema: log, proxy e winget.' -Optional $false -Kind 'system-core'
-    $catalog['git-core'] = New-BootstrapComponentDefinition -Name 'git-core' -Description 'Git for Windows e Git Bash.' -DependsOn @('system-core') -Optional $false -Kind 'git-core'
-    $catalog['git-lfs'] = New-BootstrapComponentDefinition -Name 'git-lfs' -Description 'Git LFS e inicialização local.' -DependsOn @('git-core') -Kind 'git-lfs'
-    $catalog['node-core'] = New-BootstrapComponentDefinition -Name 'node-core' -Description 'Node.js LTS e npm global bin.' -DependsOn @('system-core') -Optional $false -Kind 'node-core'
-    $catalog['python-core'] = New-BootstrapComponentDefinition -Name 'python-core' -Description 'Python 3.13, PATH e uv.' -DependsOn @('system-core') -Optional $false -Kind 'python-core'
-    $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)' }
+    $catalog['system-core'] = New-BootstrapComponentDefinition -Name 'system-core' -Description 'Base do sistema: log, proxy e winget.' -Optional $false -Kind 'system-core' -EstimatedSizeGB 0.5 -RequiresNetwork $true
+    $catalog['git-core'] = New-BootstrapComponentDefinition -Name 'git-core' -Description 'Git for Windows e Git Bash.' -DependsOn @('system-core') -Optional $false -Kind 'git-core' -EstimatedSizeGB 0.8 -RequiresNetwork $true -VersionCheckCommand 'git --version'
+    $catalog['git-lfs'] = New-BootstrapComponentDefinition -Name 'git-lfs' -Description 'Git LFS e inicialização local.' -DependsOn @('git-core') -Kind 'git-lfs' -EstimatedSizeGB 0.1 -RequiresNetwork $true
+    $catalog['node-core'] = New-BootstrapComponentDefinition -Name 'node-core' -Description 'Node.js LTS e npm global bin.' -DependsOn @('system-core') -Optional $false -Kind 'node-core' -EstimatedSizeGB 1.0 -RequiresNetwork $true -VersionCheckCommand 'node -v'
+    $catalog['python-core'] = New-BootstrapComponentDefinition -Name 'python-core' -Description 'Python 3.13, PATH e uv.' -DependsOn @('system-core') -Optional $false -Kind 'python-core' -EstimatedSizeGB 1.5 -RequiresNetwork $true -VersionCheckCommand 'python --version'
+    $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)' } -EstimatedSizeGB 2.0 -RequiresNetwork $true -VersionCheckCommand 'java -version'
     $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick' }
     $catalog['sevenzip'] = New-BootstrapComponentDefinition -Name 'sevenzip' -Description '7-Zip e ajuste de PATH.' -DependsOn @('system-core') -Kind 'sevenzip'
     $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7' }
@@ -8453,6 +8778,7 @@ function Resolve-BootstrapCloneBaseDir {
 
 function New-BootstrapState {
     param(
+        [Parameter(Mandatory = $true)][object]$Selection,
         [Parameter(Mandatory = $true)][string]$ResolvedWorkspaceRoot,
         [Parameter(Mandatory = $true)][string]$ResolvedCloneBaseDir,
         [string]$RequestedSteamDeckVersion = 'Auto',
@@ -8464,6 +8790,7 @@ function New-BootstrapState {
     )
 
     return @{
+        Selection = $Selection
         DryRun = $IsDryRun
         WorkspaceRoot = $ResolvedWorkspaceRoot
         CloneBaseDir = $ResolvedCloneBaseDir
@@ -8492,6 +8819,9 @@ function New-BootstrapState {
         PreflightSummary = $null
         Completed = @{}
         ManualRequirements = New-Object System.Collections.Generic.List[object]
+        Changes = New-Object System.Collections.Generic.List[object]
+        AppTuningResults = New-Object System.Collections.Generic.List[object]
+        HostHealthResults = New-Object System.Collections.Generic.List[object]
     }
 }
 
@@ -12003,13 +12333,40 @@ function Ensure-BootstrapRegistryPath {
 
 function Set-BootstrapRegistryDword {
     param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][int]$Value
     )
 
-    Ensure-BootstrapRegistryPath -Path $Path
-    New-ItemProperty -Path $Path -Name $Name -PropertyType DWord -Value $Value -Force | Out-Null
+    try {
+        $previous = $null
+        if (Test-Path $Path) {
+            $current = Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
+            if ($current -and ($current.PSObject.Properties.Name -contains $Name)) {
+                $previous = $current.$Name
+            }
+        } else {
+            $null = New-Item -Path $Path -Force -ErrorAction SilentlyContinue
+        }
+
+        if ($State) {
+            Register-BootstrapChange -State $State -Type 'Registry' -Target $Path -Name $Name -OldValue $previous
+        }
+
+        if (Test-Path $Path) {
+            Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type DWord -Force -ErrorAction Stop | Out-Null
+        } else {
+            New-ItemProperty -Path $Path -Name $Name -PropertyType DWord -Value $Value -Force -ErrorAction Stop | Out-Null
+        }
+    } catch {
+        $msg = $_.Exception.Message
+        if ($msg -match 'acesso.*negado' -or $msg -match 'localizar.*caminho' -or $_.Exception.GetType().FullName -match 'UnauthorizedAccess') {
+            Write-Log ("HostHealth/Registry: acesso negado ou caminho ausente para {0}\{1}. Requer elevacao." -f $Path, $Name) 'WARN'
+        } else {
+            Write-Log ("HostHealth/Registry: falha ao definir {0}\{1} -> {2}" -f $Path, $Name, $msg) 'WARN'
+        }
+    }
 }
 
 function Get-BootstrapHostHealthReportRoot {
@@ -12043,12 +12400,55 @@ function Export-BootstrapHostHealthSnapshots {
     Write-BootstrapJsonFile -Path (Join-Path $reportRoot 'policy.json') -Value $Policy
 }
 
+function Test-BootstrapHostHealthProtectedTempItem {
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
+
+    try {
+        $fullPath = [System.IO.Path]::GetFullPath($Path)
+    } catch {
+        $fullPath = [string]$Path
+    }
+
+    foreach ($protectedPath in @(
+        $script:LogPath,
+        $script:ResultPath,
+        (Get-BootstrapDataRoot),
+        (Join-Path $env:TEMP 'bootstrap-tools'),
+        (Join-Path $env:LOCALAPPDATA 'bootstrap-tools'),
+        (Join-Path $env:USERPROFILE '.bootstrap-tools')
+    )) {
+        if ([string]::IsNullOrWhiteSpace($protectedPath)) { continue }
+        try {
+            $protectedFullPath = [System.IO.Path]::GetFullPath([string]$protectedPath).TrimEnd('\')
+        } catch {
+            $protectedFullPath = ([string]$protectedPath).TrimEnd('\')
+        }
+        if ($fullPath.TrimEnd('\').Equals($protectedFullPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+            $fullPath.StartsWith($protectedFullPath + '\', [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    $leaf = Split-Path -Path $fullPath -Leaf
+    if ($leaf -match '^(codex|codex[-_].*|node-repl.*|node_repl.*|kernel-assets|bootstrap-tools)(\.|-|_|$)') {
+        return $true
+    }
+
+    return $false
+}
+
 function Clear-BootstrapDirectoryContents {
     param([Parameter(Mandatory = $true)][string]$TargetPath)
 
     if (-not (Test-Path $TargetPath)) { return }
 
     foreach ($item in @(Get-ChildItem -LiteralPath $TargetPath -Force -ErrorAction SilentlyContinue)) {
+        if (Test-BootstrapHostHealthProtectedTempItem -Path $item.FullName) {
+            Write-Log "HostHealth cleanup: preservando $($item.FullName)"
+            continue
+        }
         try {
             if ($item.PSIsContainer) {
                 Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
@@ -12084,6 +12484,10 @@ function Invoke-BootstrapHostHealthCleanup {
 
     $bootstrapTempFiles = @(Get-ChildItem -LiteralPath $env:TEMP -Filter 'bootstrap-tools_*' -Force -ErrorAction SilentlyContinue)
     foreach ($file in $bootstrapTempFiles) {
+        if ((Test-BootstrapHostHealthProtectedTempItem -Path $file.FullName) -or ($file.Extension -in @('.log', '.json'))) {
+            Write-Log "HostHealth cleanup: preservando residuo observavel $($file.FullName)"
+            continue
+        }
         try {
             Remove-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
         } catch {
@@ -12213,18 +12617,18 @@ function Invoke-BootstrapHostHealthRegistryFixes {
         'SubscribedContent-353698Enabled',
         'SystemPaneSuggestionsEnabled'
     )) {
-        Set-BootstrapRegistryDword -Path $contentPath -Name $valueName -Value 0
+        Set-BootstrapRegistryDword -State $State -Path $contentPath -Name $valueName -Value 0
     }
 
     $edgePolicyPath = 'HKCU:\Software\Policies\Microsoft\Edge'
-    Set-BootstrapRegistryDword -Path $edgePolicyPath -Name 'StartupBoostEnabled' -Value 0
-    Set-BootstrapRegistryDword -Path $edgePolicyPath -Name 'BackgroundModeEnabled' -Value 0
+    Set-BootstrapRegistryDword -State $State -Path $edgePolicyPath -Name 'StartupBoostEnabled' -Value 0
+    Set-BootstrapRegistryDword -State $State -Path $edgePolicyPath -Name 'BackgroundModeEnabled' -Value 0
 
     $explorerAdvancedPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
-    Set-BootstrapRegistryDword -Path $explorerAdvancedPath -Name 'TaskbarDa' -Value 0
+    Set-BootstrapRegistryDword -State $State -Path $explorerAdvancedPath -Name 'TaskbarDa' -Value 0
 
     $gameBarPath = 'HKCU:\Software\Microsoft\GameBar'
-    Set-BootstrapRegistryDword -Path $gameBarPath -Name 'AutoGameModeEnabled' -Value 1
+    Set-BootstrapRegistryDword -State $State -Path $gameBarPath -Name 'AutoGameModeEnabled' -Value 1
 }
 
 function Sync-BootstrapSteamDeckHostHealthSettings {
@@ -12369,6 +12773,12 @@ function Invoke-BootstrapHostHealth {
     Invoke-BootstrapHostHealthBloat -State $State -Policy $policy
     Invoke-BootstrapHostHealthTelemetry -State $State -Policy $policy
     Invoke-BootstrapHostHealthVerify -State $State -Policy $policy
+
+    $State.HostHealthResults.Add([ordered]@{
+        mode = $normalizedMode
+        status = 'completed'
+        timestamp = (Get-Date).ToString('o')
+    })
 }
 
 function Get-BootstrapAppTuningReportRoot {
@@ -12399,6 +12809,7 @@ function New-BootstrapAppTuningSnapshot {
 
 function Apply-BootstrapRegistryDword {
     param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Name,
         [Parameter(Mandatory = $true)][int]$Value
@@ -12411,9 +12822,24 @@ function Apply-BootstrapRegistryDword {
             if ($current -and ($current.PSObject.Properties.Name -contains $Name)) {
                 $previous = $current.$Name
             }
+        } else {
+            $parent = Split-Path $Path -Parent
+            if (-not (Test-Path $parent)) {
+                # Tentar criar recursivamente se possivel, mas sem -Force no alvo
+                $null = New-Item -Path $parent -ItemType Directory -Force -ErrorAction SilentlyContinue
+            }
+            $null = New-Item -Path $Path -ErrorAction SilentlyContinue
         }
-        $null = New-Item -Path $Path -Force
-        New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
+
+        Register-BootstrapChange -State $State -Type 'Registry' -Target $Path -Name $Name -OldValue $previous
+
+        if (Test-Path $Path) {
+            Set-ItemProperty -Path $Path -Name $Name -Value $Value -Type DWord -Force | Out-Null
+        } else {
+            # Fallback se New-Item falhou silenciosamente
+            New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType DWord -Force | Out-Null
+        }
+
         return [ordered]@{ path = $Path; name = $Name; previous = $previous; value = $Value; status = 'applied' }
     } catch {
         return [ordered]@{ path = $Path; name = $Name; previous = $previous; value = $Value; status = 'failed'; error = $_.Exception.Message }
@@ -12421,24 +12847,38 @@ function Apply-BootstrapRegistryDword {
 }
 
 function Apply-BrowserStartupTuning {
-    param([Parameter(Mandatory = $true)]$Item)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Item
+    )
 
     $changes = @()
     switch ([string]$Item.id) {
         'edge-background-off' {
-            $changes += @(Apply-BootstrapRegistryDword -Path 'HKCU:\Software\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled' -Value 0)
-            $changes += @(Apply-BootstrapRegistryDword -Path 'HKCU:\Software\Policies\Microsoft\Edge' -Name 'BackgroundModeEnabled' -Value 0)
+            $changes += @(Apply-BootstrapRegistryDword -State $State -Path 'HKCU:\Software\Policies\Microsoft\Edge' -Name 'StartupBoostEnabled' -Value 0)
+            $changes += @(Apply-BootstrapRegistryDword -State $State -Path 'HKCU:\Software\Policies\Microsoft\Edge' -Name 'BackgroundModeEnabled' -Value 0)
         }
         'chrome-background-off' {
-            $changes += @(Apply-BootstrapRegistryDword -Path 'HKCU:\Software\Policies\Google\Chrome' -Name 'BackgroundModeEnabled' -Value 0)
+            $changes += @(Apply-BootstrapRegistryDword -State $State -Path 'HKCU:\Software\Policies\Google\Chrome' -Name 'BackgroundModeEnabled' -Value 0)
         }
     }
 
     $failed = @($changes | Where-Object { [string]$_.status -eq 'failed' })
+    $isRecoverableError = $false
+    $errorMsg = ''
+    if ($failed.Count -gt 0) {
+        $errorMsg = [string]$failed[0].error
+        if ($errorMsg -match 'acesso.*negado' -or $errorMsg -match 'localizar.*caminho' -or $errorMsg -match 'UnauthorizedAccess') {
+            $isRecoverableError = $true
+        }
+    }
+
     return [ordered]@{
         id = [string]$Item.id
         status = if ($failed.Count -gt 0) { 'failed' } else { 'applied' }
         changes = @($changes)
+        blocking = (-not $isRecoverableError)
+        error = $errorMsg
     }
 }
 
@@ -12887,6 +13327,18 @@ function Get-BootstrapAppTuningFailureClassification {
         }
     }
 
+    # Se for erro de permissao ou caminho inexistente em registro, nao bloquear
+    if ($message -match 'acesso.*negado' -or $message -match 'localizar.*caminho' -or $ExceptionType -match 'UnauthorizedAccess') {
+        return [ordered]@{
+            severity = 'warning'
+            classification = 'permission-denied'
+            reason = "Acesso negado ou caminho ausente ao aplicar ajuste {0}; classificado como nao bloqueante (pode requerer admin)." -f $itemId
+            blocking = $false
+            message = $message
+            exceptionType = $ExceptionType
+        }
+    }
+
     return [ordered]@{
         severity = 'blocking'
         classification = 'execution-failure'
@@ -12933,14 +13385,17 @@ function Apply-SteamDeckControlTuning {
 }
 
 function Invoke-BootstrapAppTuningItem {
-    param([Parameter(Mandatory = $true)]$Item)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Item
+    )
 
     if (-not [bool]$Item.installed) {
         return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'skipped'; reason = 'app absent' }
     }
 
     switch ([string]$Item.category) {
-        'browser-startup' { return (Apply-BrowserStartupTuning -Item $Item) }
+        'browser-startup' { return (Apply-BrowserStartupTuning -State $State -Item $Item) }
         'gaming-console' {
             if ([string]$Item.id -eq 'playnite-fullscreen') { return (Apply-PlayniteTuning -Item $Item) }
             return (Apply-SteamConsoleTuning -Item $Item)
@@ -13002,7 +13457,7 @@ function Invoke-BootstrapAppTuning {
 
         $itemResult = $null
         try {
-            $itemResult = Invoke-BootstrapAppTuningItem -Item $item
+            $itemResult = Invoke-BootstrapAppTuningItem -State $State -Item $item
         } catch {
             $classification = Get-BootstrapAppTuningFailureClassification -Item $item -ErrorMessage $_.Exception.Message -ExceptionType $_.Exception.GetType().FullName
             $itemResult = [ordered]@{
@@ -13026,8 +13481,8 @@ function Invoke-BootstrapAppTuning {
             if ((Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking') -and [bool]$itemResult['blocking']) {
                 $blockingFailures += @($itemResult)
             }
+            $State.AppTuningResults.Add($itemResult)
         }
-
         $results += @($itemResult)
     }
 
@@ -13236,6 +13691,16 @@ function Invoke-BootstrapComponent {
     $catalog = Get-BootstrapComponentCatalog
     $componentDef = $catalog[$Name]
     if (-not $componentDef) { throw "Componente desconhecido: $Name" }
+
+    # JIT Resilience Checks
+    if ($Offline -and $componentDef.RequiresNetwork) {
+        Write-Log "Offline mode: pulando componente que exige rede: $Name" 'WARN'
+        return
+    }
+
+    if ($componentDef.EstimatedSizeGB -gt 0) {
+        Assert-BootstrapDiskSpace -RequiredGB $componentDef.EstimatedSizeGB
+    }
 
     Write-Log "Executando componente: $Name"
 
@@ -13666,6 +14131,19 @@ function Invoke-BootstrapProfileMode {
         return
     }
 
+    if ($Rollback) {
+        Invoke-BootstrapRollback
+        return
+    }
+
+    if ($Audit) {
+        $selection = Get-BootstrapSelection
+        $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents $selection.Excludes
+        $state = New-BootstrapState -Selection $selection -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir (Get-Location).Path
+        Invoke-BootstrapAuditMode -Resolution $resolution -Repair:$Repair -State $state
+        return
+    }
+
     if ($ListComponents) {
         Show-BootstrapComponents
         return
@@ -13678,6 +14156,18 @@ function Invoke-BootstrapProfileMode {
     }
 
     $selection = Get-BootstrapSelection
+
+    $completedFromCheckpoint = @()
+    if ($Resume) {
+        $checkpoint = Load-BootstrapCheckpoint
+        if ($checkpoint) {
+            Write-Log "Retomando instalacao a partir do checkpoint de $($checkpoint.Timestamp)..."
+            $completedFromCheckpoint = @($checkpoint.CompletedComponents)
+        } else {
+            Write-Log "Nenhum checkpoint encontrado para retomar. Iniciando do zero." 'WARN'
+        }
+    }
+
     $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents $selection.Excludes
     $resolvedCloneBaseDir = Resolve-BootstrapCloneBaseDir -ExplicitCloneBaseDir $CloneBaseDir -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedComponents $resolution.ResolvedComponents
     $usesSteamDeckFlow = Get-BootstrapUsesSteamDeckFlow -Selection $selection -Resolution $resolution
@@ -13704,7 +14194,7 @@ function Invoke-BootstrapProfileMode {
 
     if ($DryRun) {
         Show-BootstrapExecutionPlan -Selection $selection -Resolution $resolution -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -ResolvedHostHealthMode $resolvedHostHealthMode -AppTuningPlan $appTuningPlan
-        
+
         if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
             Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
                 status = 'success'
@@ -13726,12 +14216,37 @@ function Invoke-BootstrapProfileMode {
         return
     }
 
-    $state = New-BootstrapState -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -RequestedSteamDeckVersion $SteamDeckVersion -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -HostHealthMode $resolvedHostHealthMode -AppTuningMode $resolvedAppTuningMode -UsesSteamDeckFlow:$usesSteamDeckFlow -IsDryRun:$DryRun
+    $state = New-BootstrapState -Selection $selection -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -RequestedSteamDeckVersion $SteamDeckVersion -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -HostHealthMode $resolvedHostHealthMode -AppTuningMode $resolvedAppTuningMode -UsesSteamDeckFlow:$usesSteamDeckFlow -IsDryRun:$DryRun
     $state.EnableClaudeCodeProjectMcps = [bool]$ClaudeCodeProjectMcps
+
+    # Preencher componentes ja concluidos se estiver em modo Resume
+    foreach ($comp in $completedFromCheckpoint) {
+        $state.Completed[$comp] = @{ Status = 'Resumed'; Timestamp = (Get-Date).ToString('o') }
+    }
+
     Invoke-BootstrapExecutionPreflight -State $state -ResolvedComponents $resolution.ResolvedComponents
 
-    foreach ($componentName in $resolution.ResolvedComponents) {
-        Invoke-BootstrapComponent -Name $componentName -State $state
+    $successfullyCompleted = New-Object System.Collections.Generic.List[string]
+    foreach ($comp in $completedFromCheckpoint) { $successfullyCompleted.Add($comp) }
+
+    try {
+        foreach ($componentName in $resolution.ResolvedComponents) {
+            if ($state.Completed.ContainsKey($componentName)) {
+                Write-Log "Componente ja concluido (skip): $componentName"
+                continue
+            }
+            Invoke-BootstrapComponent -Name $componentName -State $state
+            if ($state.Completed.ContainsKey($componentName)) {
+                $successfullyCompleted.Add($componentName)
+                Save-BootstrapCheckpoint -Selection $selection -CompletedComponents $successfullyCompleted.ToArray() -AppTuningResults $state.AppTuningResults -HostHealthResults $state.HostHealthResults
+            }
+        }
+    } catch {
+        Write-Log ("Falha critica na execucao: {0}" -f $_.Exception.Message) 'ERROR'
+        if ($AutoRollback) {
+            Invoke-BootstrapAutoRollback -State $state
+        }
+        throw
     }
 
     Invoke-BootstrapAppTuning -State $state -Plan $appTuningPlan
@@ -14040,7 +14555,7 @@ function Import-BootstrapApiCredentialFile {
 }
 
 function Invoke-BootstrapApiApply {
-    $state = New-BootstrapState -ResolvedWorkspaceRoot (Get-Location).Path -ResolvedCloneBaseDir (Get-Location).Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+    $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot (Get-Location).Path -ResolvedCloneBaseDir (Get-Location).Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
     Ensure-BootstrapSecrets -State $state
     return $state.SecretsSummary
 }
@@ -14080,7 +14595,7 @@ function Invoke-BootstrapSecretsMode {
 
     if ($mutated) {
         Write-BootstrapJsonFile -Path $bundle.Path -Value $data
-        $state = New-BootstrapState -ResolvedWorkspaceRoot (Get-Location).Path -ResolvedCloneBaseDir (Get-Location).Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot (Get-Location).Path -ResolvedCloneBaseDir (Get-Location).Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
         Ensure-BootstrapSecrets -State $state
         $data = (Read-BootstrapJsonFile -Path $bundle.Path)
     }

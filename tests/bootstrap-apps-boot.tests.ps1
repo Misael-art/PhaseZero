@@ -161,7 +161,7 @@ osdevice                unknown
 
     It 'serializes manual requirements into execution result JSON' {
         $tempResult = Join-Path $env:TEMP ("bootstrap_result_{0}.json" -f ([Guid]::NewGuid().ToString('N')))
-        $state = New-BootstrapState -ResolvedWorkspaceRoot 'C:\ws' -ResolvedCloneBaseDir 'C:\clones'
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot 'C:\ws' -ResolvedCloneBaseDir 'C:\clones'
         $state.ManualRequirements.Add([ordered]@{
             component = 'google-app-desktop'
             status = 'manual-required'
@@ -180,6 +180,39 @@ osdevice                unknown
         } finally {
             if (Test-Path $tempResult) {
                 Remove-Item -LiteralPath $tempResult -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    It 'detects protected temp artifacts before HostHealth cleanup' {
+        (Test-BootstrapHostHealthProtectedTempItem -Path (Join-Path $env:TEMP 'codex-index-cache')) | Should Be $true
+        (Test-BootstrapHostHealthProtectedTempItem -Path (Join-Path $env:TEMP 'node-repl-kernel-assets')) | Should Be $true
+        (Test-BootstrapHostHealthProtectedTempItem -Path (Join-Path $env:TEMP 'bootstrap-tools\ui.log')) | Should Be $true
+        (Test-BootstrapHostHealthProtectedTempItem -Path (Join-Path $env:TEMP 'ordinary-delete.tmp')) | Should Be $false
+    }
+
+    It 'preserves protected temp directories while clearing ordinary temp items' {
+        $tempRoot = Join-Path $env:TEMP ("bootstrap_cleanup_{0}" -f ([Guid]::NewGuid().ToString('N')))
+        $protectedDir = Join-Path $tempRoot 'codex-index-cache'
+        $ordinaryDir = Join-Path $tempRoot 'ordinary-cache'
+        $ordinaryFile = Join-Path $tempRoot 'ordinary-delete.tmp'
+
+        try {
+            $null = New-Item -Path $protectedDir -ItemType Directory -Force
+            $null = New-Item -Path $ordinaryDir -ItemType Directory -Force
+            Set-Content -Path (Join-Path $protectedDir 'state.json') -Value '{}' -Encoding utf8
+            Set-Content -Path (Join-Path $ordinaryDir 'state.json') -Value '{}' -Encoding utf8
+            Set-Content -Path $ordinaryFile -Value 'delete' -Encoding utf8
+            Mock Write-Log { }
+
+            Clear-BootstrapDirectoryContents -TargetPath $tempRoot
+
+            (Test-Path $protectedDir) | Should Be $true
+            (Test-Path $ordinaryDir) | Should Be $false
+            (Test-Path $ordinaryFile) | Should Be $false
+        } finally {
+            if (Test-Path $tempRoot) {
+                Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
     }

@@ -16,5 +16,8 @@ gemini-cli/
 
 # Local IDE / agent worktrees
 .claude/
+.serena/
 Microsoft/
 .mcp.json
+add-trap-handler.ps1
+fix-backend-crash.ps1

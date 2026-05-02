@@ -562,7 +562,7 @@ Describe 'Bootstrap secrets manifest v2' {
 
         Mock Set-UserEnvVar { }
 
-        $state = New-BootstrapState -ResolvedWorkspaceRoot $repoRoot -ResolvedCloneBaseDir $repoRoot -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $repoRoot -ResolvedCloneBaseDir $repoRoot -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
         Ensure-BootstrapSecrets -State $state
 
         Assert-MockCalled Set-UserEnvVar -Times 0 -Scope It -ParameterFilter { $Name -eq 'OPENAI_API_KEY' }

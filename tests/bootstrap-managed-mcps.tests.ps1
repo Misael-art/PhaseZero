@@ -195,7 +195,7 @@ Describe 'Bootstrap managed MCPs' {
         Mock Ensure-NpmGlobalPackage {}
         Mock Ensure-UvToolPackage {}
 
-        $state = New-BootstrapState -ResolvedWorkspaceRoot $PWD.Path -ResolvedCloneBaseDir $PWD.Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $PWD.Path -ResolvedCloneBaseDir $PWD.Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
         $state.NodeInfo = @{ NpmCmd = 'npm.cmd' }
         $state.PythonReady = $true
 

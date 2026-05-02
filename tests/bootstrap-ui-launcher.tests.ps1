@@ -286,4 +286,17 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $stdout | Should Match '"pages"'
         ([string]::IsNullOrWhiteSpace($stderr)) | Should Be $true
     }
+
+    It 'maps every direct UI event handler target before startup wiring' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $assigned = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($match in [regex]::Matches($raw, '(?m)^\s*(\w+)\s*=\s*\(Get-Control\s+''([^'']+)''\)')) {
+            [void]$assigned.Add($match.Groups[1].Value)
+        }
+
+        foreach ($match in [regex]::Matches($raw, '\$ui\.(\w+)\.Add_')) {
+            $target = $match.Groups[1].Value
+            ($assigned.Contains($target) -or $target -in @('LogTimer')) | Should Be $true
+        }
+    }
 }

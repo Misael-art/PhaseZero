@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$UiStatePath,
     [string]$UiLogPath,
     [switch]$SmokeTest
@@ -202,9 +202,9 @@ if (-not (Test-Path $backendScriptPath)) {
 
 . $backendScriptPath -BootstrapUiLibraryMode
 
-# 
+#
 # UI Helpers / Strings
-# 
+#
 
 function Get-UiLanguages {
     return @('pt-BR', 'en-US')
@@ -451,6 +451,9 @@ function Get-UiStateDefaults {
         excludedAppTuningItems = @()
         skipManualRequirements = $false
         ignoreManualRequirements = $false
+        offlineMode        = $false
+        enableResume       = $false
+        cacheDir           = ''
         steamDeckVersion   = 'Auto'
         workspaceRoot      = [string]$Contract.defaults.workspaceRoot
         cloneBaseDir       = (Get-Location).Path
@@ -518,9 +521,9 @@ function Save-UiState {
     Write-BootstrapJsonFile -Path $Path -Value (ConvertTo-BootstrapHashtable -InputObject $State)
 }
 
-# 
+#
 # Bootstrap / SmokeTest
-# 
+#
 
 $contract = Get-BootstrapUiContract
 $state    = Read-UiState -Path $UiStatePath -Contract $contract
@@ -536,9 +539,9 @@ if ($SmokeTest) {
     return
 }
 
-# 
+#
 # Ensure STA thread
-# 
+#
 
 if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
     $powershellExe = Get-WindowsPowerShellExePath
@@ -548,9 +551,9 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
     exit 0
 }
 
-# 
+#
 # WPF Assemblies
-# 
+#
 
 try {
     Add-Type -AssemblyName PresentationFramework
@@ -571,9 +574,9 @@ function Get-UiBrush {
     return $converter.ConvertFromString($Color)
 }
 
-# 
+#
 # XAML Definition
-# 
+#
 
 [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -1195,9 +1198,14 @@ function Get-UiBrush {
                             <ColumnDefinition Width="16"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="16"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
 
                         <!-- Quick Presets -->
-                        <Border Grid.Column="0" Style="{StaticResource Card}">
+                        <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock x:Name="QuickPresetsLabel" Style="{StaticResource SectionLabel}" Text="PRESETS RPIDOS"/>
                                 <Button x:Name="PresetRecommended"      Style="{StaticResource PresetBtn}" Tag="recommended"      Content="*  recommended"/>
@@ -1209,7 +1217,7 @@ function Get-UiBrush {
                         </Border>
 
                         <!-- Custom Presets -->
-                        <Border Grid.Column="2" Style="{StaticResource Card}">
+                        <Border Grid.Row="0" Grid.Column="2" Style="{StaticResource Card}">
                             <StackPanel>
                                 <TextBlock x:Name="CustomPresetsLabel" Style="{StaticResource SectionLabel}" Text="PRESETS PERSONALIZADOS"/>
                                 <TextBlock x:Name="PresetNameLabel" Foreground="#94A3B8" FontSize="12" Text="Nome do preset" Margin="0,0,0,4"/>
@@ -1227,6 +1235,19 @@ function Get-UiBrush {
                                     <Button x:Name="DeletePresetButton" Grid.Column="2" Style="{StaticResource GhostBtn}" Content=" Excluir"  Height="32"/>
                                 </Grid>
                             </StackPanel>
+                        </Border>
+
+                        <!-- Maintenance Card -->
+                        <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource Card}">
+                            <DockPanel>
+                                <TextBlock x:Name="MaintenanceLabel" Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="MANUTENCAO E RESILIENCIA"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <Button x:Name="AuditIntegrityButton" Style="{StaticResource GhostBtn}" Content="  Verificar Integridade (Audit)" Height="32" Margin="0,0,12,0"/>
+                                    <Button x:Name="RollbackChangesButton" Style="{StaticResource GhostBtn}" Content="  Reverter Tweaks (Rollback)" Foreground="{StaticResource WarnBrush}" Height="32" Margin="0,0,12,0"/>
+                                    <TextBlock Foreground="#94A3B8" FontSize="11" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="400"
+                                               Text="O Rollback reverte apenas ajustes de registro e sistema. Apps instalados devem ser removidos manualmente."/>
+                                </StackPanel>
+                            </DockPanel>
                         </Border>
                     </Grid>
                 </StackPanel>
@@ -1299,6 +1320,8 @@ function Get-UiBrush {
                                     <CheckBox x:Name="OptOpenWebUICheckBox" Style="{StaticResource DarkCheck}" Content="IA local: Open WebUI (Docker)"/>
                                     <CheckBox x:Name="OptSkipManualRequirementsCheckBox" Style="{StaticResource DarkCheck}" Content="Pular requisitos manuais (bloqueantes)"/>
                                     <CheckBox x:Name="OptIgnoreManualRequirementsCheckBox" Style="{StaticResource DarkCheck}" Content="Ignorar requisitos manuais (apenas log)"/>
+                                    <CheckBox x:Name="OptOfflineModeCheckBox" Style="{StaticResource DarkCheck}" Content="Modo Offline (usa cache local)"/>
+                                    <CheckBox x:Name="OptEnableResumeCheckBox" Style="{StaticResource DarkCheck}" Content="Retomar instalacao interrompida"/>
                                 </StackPanel>
                             </DockPanel>
                         </Border>
@@ -1909,7 +1932,7 @@ function Get-UiBrush {
                             </StackPanel>
                         </DockPanel>
                     </Border>
-                    
+
                     <Button x:Name="RefreshDualBootButton" Style="{StaticResource GhostBtn}" Content=" Recarregar Status" Width="180" HorizontalAlignment="Left" Height="34"/>
                 </StackPanel>
             </ScrollViewer>
@@ -2003,9 +2026,9 @@ function Get-UiBrush {
 </Window>
 '@
 
-# 
+#
 # Load WPF Window from XAML
-# 
+#
 
 $reader = [System.Xml.XmlNodeReader]::new($xaml)
 $window = [Windows.Markup.XamlReader]::Load($reader)
@@ -2028,9 +2051,9 @@ function Get-Control {
     return $ctrl
 }
 
-# 
+#
 # Control references
-# 
+#
 
 $ui = [ordered]@{
     Contract              = $contract
@@ -2109,6 +2132,10 @@ $ui = [ordered]@{
     OptClaudePluginsCheckBox = (Get-Control 'OptClaudePluginsCheckBox')
     OptClaudeProjectMcpsCheckBox = (Get-Control 'OptClaudeProjectMcpsCheckBox')
     OptOpenWebUICheckBox  = (Get-Control 'OptOpenWebUICheckBox')
+    OptSkipManualRequirementsCheckBox = (Get-Control 'OptSkipManualRequirementsCheckBox')
+    OptIgnoreManualRequirementsCheckBox = (Get-Control 'OptIgnoreManualRequirementsCheckBox')
+    OptOfflineModeCheckBox = (Get-Control 'OptOfflineModeCheckBox')
+    OptEnableResumeCheckBox = (Get-Control 'OptEnableResumeCheckBox')
     ExcludeLabel          = (Get-Control 'ExcludeLabel')
     ExcludeList           = (Get-Control 'ExcludeList')
     DetailsLabel          = (Get-Control 'DetailsLabel')
@@ -2130,6 +2157,8 @@ $ui = [ordered]@{
     CloneBrowseButton     = (Get-Control 'CloneBrowseButton')
     AdminNeedsTitleLabel  = (Get-Control 'AdminNeedsTitleLabel')
     AdminNeedsTextBox     = (Get-Control 'AdminNeedsTextBox')
+    AuditIntegrityButton  = (Get-Control 'AuditIntegrityButton')
+    RollbackChangesButton = (Get-Control 'RollbackChangesButton')
 
     # App Tuning
     AppTuningTitleLabel   = (Get-Control 'AppTuningTitleLabel')
@@ -2266,17 +2295,17 @@ $ui = [ordered]@{
     PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageAppTuning', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
 }
 
-# 
+#
 # DispatcherTimer (replaces WinForms Timer)
-# 
+#
 
 $logTimer = New-Object System.Windows.Threading.DispatcherTimer
 $logTimer.Interval = [TimeSpan]::FromMilliseconds(1200)
 $ui.LogTimer = $logTimer
 
-# 
+#
 # Helper: WPF DataGrid population
-# 
+#
 
 function ConvertTo-UiBoolean {
     param([AllowNull()]$Value)
@@ -2860,6 +2889,8 @@ function Refresh-SelectionTrees {
         $ui.OptClaudeProjectMcpsCheckBox.IsChecked = [bool]$ui.State.enableClaudeCodeProjectMcps
         $ui.OptSkipManualRequirementsCheckBox.IsChecked = [bool]$ui.State.skipManualRequirements
         $ui.OptIgnoreManualRequirementsCheckBox.IsChecked = [bool]$ui.State.ignoreManualRequirements
+        $ui.OptOfflineModeCheckBox.IsChecked = [bool]$ui.State.offlineMode
+        $ui.OptEnableResumeCheckBox.IsChecked = [bool]$ui.State.enableResume
     } finally {
         $ui.SuppressSelectionEvents = $false
     }
@@ -3804,7 +3835,7 @@ function Refresh-DualBootControls {
     $ui.DualBootStatusText.Text = 'Lendo UEFI firmware e gerenciador de disco...'
     $info = Get-BootstrapDualBootInfo
     $recs = Get-BootstrapDualBootRecommendations -DualBootInfo $info
-    
+
     $statusLines = @()
     $statusLines += "Is Dual Boot: $($info.IsDualBoot) (Confidence: $($info.Confidence))"
     $statusLines += "Sistemas Detectados: $(($info.DetectedOS) -join ', ')"
@@ -3812,7 +3843,7 @@ function Refresh-DualBootControls {
     $statusLines += "Parties Linux: $($info.LinuxPartitions.Count)"
     $statusLines += ""
     $statusLines += ($recs -join [Environment]::NewLine)
-    
+
     if (-not $info.IsAdmin) {
         $statusLines += ""
         $statusLines += "AVISO: executando sem privilegios de Administrador. Recursos avancados estao desabilitados."
@@ -3824,7 +3855,7 @@ function Refresh-DualBootControls {
         $ui.DualBootTargetCombo.IsEnabled = $true
     }
     $ui.DualBootStatusText.Text = ($statusLines -join [Environment]::NewLine)
-    
+
     $prereqs = Test-BootstrapDualBootPrerequisites
     $fsIssue = $prereqs | Where-Object { $_.Id -eq 'fast-startup' } | Select-Object -First 1
     if ($prereqs.Count -eq 0 -or (-not $fsIssue)) {
@@ -3951,9 +3982,9 @@ function Refresh-ReviewPage {
     if ($anyLink) { $ui.ReviewLinksLabel.Visibility = 'Visible' }
 }
 
-# 
+#
 # Navigation
-# 
+#
 
 $navButtons = @(
     $ui.NavWelcome,
@@ -4018,9 +4049,9 @@ function Navigate-ToPage {
     }
 }
 
-# 
+#
 # Process helpers
-# 
+#
 
 function Build-BackendArguments {
     $tokens = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $backendScriptPath)
@@ -4030,6 +4061,10 @@ function Build-BackendArguments {
     if ([bool]$ui.State.enableClaudeCodeProjectMcps) { $tokens += @('-ClaudeCodeProjectMcps') }
     if ([bool]$ui.State.skipManualRequirements) { $tokens += @('-SkipManualRequirements') }
     if ([bool]$ui.State.ignoreManualRequirements) { $tokens += @('-IgnoreManualRequirements') }
+    if ([bool]$ui.State.offlineMode) { $tokens += @('-Offline') }
+    if ([bool]$ui.State.enableResume) { $tokens += @('-Resume') }
+    if ($ui.MaintenanceMode -eq 'rollback') { $tokens += @('-Rollback') }
+    if ($ui.MaintenanceMode -eq 'audit') { $tokens += @('-Audit') }
     $tokens += @('-SteamDeckVersion', [string]$ui.State.steamDeckVersion)
     $tokens += @('-HostHealth',       [string]$ui.State.hostHealth)
     $tokens += @('-AppTuning',        [string]$ui.State.appTuningMode)
@@ -4157,9 +4192,9 @@ function Start-RunExecution {
     $ui.LogTimer.Start()
 }
 
-# 
+#
 # Event Handlers
-# 
+#
 
 # Log timer
 $logTimer.Add_Tick({
@@ -4374,6 +4409,21 @@ $ui.DeletePresetButton.Add_Click({
     Refresh-CustomPresets
 })
 
+$ui.AuditIntegrityButton.Add_Click({
+    $ui.MaintenanceMode = 'audit'
+    Navigate-To-Page -Index ($ui.PageNames.IndexOf('PageRun'))
+    $ui.StartRunButton.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent)))
+})
+
+$ui.RollbackChangesButton.Add_Click({
+    $confirm = [System.Windows.MessageBox]::Show("Deseja reverter os tweaks de sistema? Isso restaurara valores padrao de registro para Edge, GameMode e telemetria.", "Confirmar Rollback", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+    if ($confirm -eq 'Yes') {
+        $ui.MaintenanceMode = 'rollback'
+        Navigate-To-Page -Index ($ui.PageNames.IndexOf('PageRun'))
+        $ui.StartRunButton.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent)))
+    }
+})
+
 # Filter
 $ui.FilterTextBox.Add_TextChanged({ Refresh-SelectionTrees })
 
@@ -4446,6 +4496,32 @@ $ui.OptSkipManualRequirementsCheckBox.Add_Checked({
 $ui.OptSkipManualRequirementsCheckBox.Add_Unchecked({
     if ($ui.SuppressSelectionEvents) { return }
     $ui.State.skipManualRequirements = $false
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionSummary
+})
+
+$ui.OptOfflineModeCheckBox.Add_Checked({
+    if ($ui.SuppressSelectionEvents) { return }
+    $ui.State.offlineMode = $true
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionSummary
+})
+$ui.OptOfflineModeCheckBox.Add_Unchecked({
+    if ($ui.SuppressSelectionEvents) { return }
+    $ui.State.offlineMode = $false
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionSummary
+})
+
+$ui.OptEnableResumeCheckBox.Add_Checked({
+    if ($ui.SuppressSelectionEvents) { return }
+    $ui.State.enableResume = $true
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionSummary
+})
+$ui.OptEnableResumeCheckBox.Add_Unchecked({
+    if ($ui.SuppressSelectionEvents) { return }
+    $ui.State.enableResume = $false
     Save-UiState -State $ui.State -Path $UiStatePath
     Refresh-SelectionSummary
 })
@@ -4786,9 +4862,9 @@ $ui.FinishButton.Add_Click({
     $window.Close()
 })
 
-# 
+#
 # Window lifecycle
-# 
+#
 
 $window.Add_Loaded({
     # Populate language combo
@@ -4814,8 +4890,8 @@ $window.Add_Closing({
     Save-UiState -State $ui.State -Path $UiStatePath
 })
 
-# 
+#
 # Run the WPF application
-# 
+#
 
 $null = $window.ShowDialog()

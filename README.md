@@ -2,7 +2,7 @@
   <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" />
   <img src="https://img.shields.io/badge/PowerShell-5391FE?style=for-the-badge&logo=powershell&logoColor=white" />
   <img src="https://img.shields.io/badge/Steam_Deck-151014?style=for-the-badge&logo=steamdeck&logoColor=white" />
-  
+
   <h1>🚀 PhaseZero</h1>
   <p><strong>O Hub definitivo de Bootstrapping e Pós-Instalação para Windows e Steam Deck</strong></p>
 </div>
@@ -16,10 +16,22 @@ O **PhaseZero** é muito mais que um script de "pós-formatação". É um orques
 ## ✨ Principais Funcionalidades
 
 - 🎮 **Steam Deck Essentials & Automation**: Instalação customizada para Steam Deck (LCD/OLED) rodando Windows. Configurações de display automático (Handheld, TV, Monitor), overlay, automação de áudio, hotkeys baseadas em família de monitor, e suporte total a *Steam Deck Tools*.
-- 🤖 **Perfis de IA Embutidos**: Deploy rápido de stacks contemporâneos de IA, como Claude Desktop, Cursor, Trae, Gemini CLI, Ollama, e muito mais. 
+- 🤖 **Perfis de IA Embutidos**: Deploy rápido de stacks contemporâneos de IA, como Claude Desktop, Cursor, Trae, Gemini CLI, Ollama, e muito mais.
 - 🛠️ **DevForge Hub**: SDKs, Winget, WSL/Docker, Node LTS, Python 3.13+, Git LFS e utilitários chave instalados silenciosamente.
 - 🎨 **Interface Contratual Opcional**: Integrável a scripts visuais (`bootstrap-ui.bat`) para quem prefere dar "cliques" invés de lidar com flags de terminal diretamente.
 - 🧹 **Host Health (Saúde do Host)**: Monitoramento de recursos de GPU/CPU, finalização de apps de background pesados enquanto se joga e tratativas de limpeza do sistema.
+- 🛡️ **Arquitetura de Resiliência**: Proteção contra falhas com Checkpoint/Resume, Rollback automático de registro, validação JIT de espaço em disco e modo offline gracioso.
+
+## 🛡️ Arquitetura de Resiliência
+
+O PhaseZero foi projetado para ser robusto em execuções longas (15k+ linhas de lógica):
+
+*   **Checkpoint & Resume**: Salva o progresso detalhado (incluindo AppTuning e HostHealth). Se a execução for interrompida, use `-Resume` para continuar exatamente de onde parou.
+*   **Just-In-Time (JIT) Disk Protection**: Verifica o espaço em disco não apenas no início, mas antes de cada componente pesado, usando estimativas baseadas em metadados.
+*   **Session-Aware Rollback**: Registra todas as mutações de registro e arquivos durante a sessão. Use `-AutoRollback` para reverter alterações automaticamente em caso de falha crítica.
+*   **Intelligent Audit & Repair**: O modo `-Audit` verifica versões e integridade. Com a flag `-Repair`, o orquestrador reinstala ou corrige componentes degradados automaticamente.
+*   **Graceful Offline Mode**: O modo `-Offline` pula inteligentemente componentes que exigem rede, permitindo que a configuração do sistema e ferramentas locais prossigam sem erros.
+*   **HostHealth Safe Cleanup**: A limpeza de temporários preserva artefatos ativos do Codex, Node REPL, logs e estado local do PhaseZero para não matar ferramentas de diagnóstico durante uma execução longa.
 
 ## 📦 Perfis Embutidos (Profiles)
 
@@ -60,6 +72,23 @@ O **PhaseZero** entende que cada máquina tem uma fase zero diferente. Escolha o
    .\bootstrap-tools.ps1 -Profile base -DryRun -NonInteractive
    ```
 
+### Diagnóstico da UI
+
+Se `bootstrap-ui.bat` abrir e fechar ou mostrar erro, rode primeiro:
+
+```cmd
+bootstrap-ui.bat -SmokeTest
+```
+
+O smoke test deve retornar JSON e não deve escrever nada em `stderr`. Logs do launcher e da UI ficam, nesta ordem de preferência, em:
+
+- `%USERPROFILE%\.bootstrap-tools\logs\bootstrap-ui_*.launcher.log`
+- `%USERPROFILE%\.bootstrap-tools\logs\bootstrap-ui_*.ui.log`
+- `%LOCALAPPDATA%\bootstrap-tools\logs\`
+- `%TEMP%\bootstrap-tools\logs\`
+
+Erros de startup WPF normalmente aparecem no arquivo `.ui.log` com linha e `FullyQualifiedErrorId`.
+
 ## ✅ Verificação Local
 
 Use estes comandos antes de publicar ou rodar perfis reais:
@@ -69,9 +98,14 @@ Use estes comandos antes de publicar ou rodar perfis reais:
 $tokens = $null; $errors = $null
 [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\bootstrap-tools.ps1), [ref]$tokens, [ref]$errors)
 $errors | Format-List
+[void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path .\bootstrap-ui.ps1), [ref]$tokens, [ref]$errors)
+$errors | Format-List
 
 # contrato usado pela UI
 .\bootstrap-tools.ps1 -UiContractJson -NonInteractive | ConvertFrom-Json | Out-Null
+
+# launcher WPF sem abrir janela
+cmd /c bootstrap-ui.bat -SmokeTest
 
 # suíte automatizada
 Import-Module Pester -MinimumVersion 3.4.0
@@ -86,6 +120,8 @@ Checks manuais recomendados:
 - `.\bootstrap-tools.ps1 -App steam,vscode -DryRun -NonInteractive` resolve apps individuais para componentes instaláveis.
 - `.\bootstrap-tools.ps1 -Profile steamdeck-recommended -DryRun -NonInteractive` deve listar bloqueadores manuais e auditoria Steam Deck.
 - `.\bootstrap-tools.ps1 -Profile steamdeck-input-advanced -DryRun -NonInteractive` mostra a pilha opt-in com Handheld Companion e GlosSI.
+- `.\bootstrap-tools.ps1 -Audit -DryRun -NonInteractive` audita componentes resolvidos sem mutar o host.
+- `.\bootstrap-tools.ps1 -Rollback -NonInteractive` reverte tweaks conhecidos de registro/sistema; apps instalados continuam remoção manual.
 
 ## 🚢 Prontidão de Produção
 

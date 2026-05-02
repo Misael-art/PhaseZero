@@ -80,7 +80,7 @@ Describe 'Bootstrap agent skills' {
         Mock Resolve-CommandPath { return $null }
         Mock Invoke-NativeWithLog { throw 'should not invoke missing runtime' }
 
-        $state = New-BootstrapState -ResolvedWorkspaceRoot $script:TestDataRoot -ResolvedCloneBaseDir $script:TestDataRoot -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $script:TestDataRoot -ResolvedCloneBaseDir $script:TestDataRoot -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
         $summary = Ensure-BootstrapAgentSkills -State $state
 
         (Test-Path $summary.path) | Should Be $true
