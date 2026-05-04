@@ -230,6 +230,7 @@ function Get-UiStrings {
                 LoadPreset         = 'Load preset'
                 DeletePreset       = 'Delete preset'
                 SelectionTitle     = 'Guided Profile Selection'
+                ClearAllSelection  = 'Clear all selections'
                 Filter             = 'Filter'
                 Profiles           = 'Ready-made profiles'
                 Components         = 'Tools to install'
@@ -239,6 +240,11 @@ function Get-UiStrings {
                 OptClaudePlugins   = 'Claude Code: plugins'
                 OptClaudeProjectMcps = 'Claude Code: project MCP sync'
                 OptOpenWebUI       = 'Local AI: Open WebUI (Docker)'
+                OptSkipManualRequirements = 'Skip blocking manual requirements'
+                OptIgnoreManualRequirements = 'Ignore manual requirements (log only)'
+                OptRequireNoPendingReboot = 'Abort if Windows reports pending reboot (preflight)'
+                OptOfflineMode     = 'Offline mode (local cache)'
+                OptEnableResume    = 'Resume interrupted install'
                 HostSetupTitle     = 'Prepare this PC'
                 AppTuningTitle      = 'Optimize Apps'
                 AppTuningSubtitle   = 'Pre-configure installed tools by category and profile, with safe defaults.'
@@ -252,6 +258,7 @@ function Get-UiStrings {
                 AppTuningInstall    = 'Install'
                 AppTuningConfigure  = 'Configure/Optimize'
                 AppTuningUpdate     = 'Update'
+                AppTuningRunNow     = 'Run now'
                 AppTuningStatus     = 'Safe and reversible app tuning. Category app-install lists individual apps for on-demand installs.'
                 ApiCenterTitle      = 'API Keys Center'
                 ApiProviderSummary  = 'Providers overview'
@@ -337,6 +344,7 @@ function Get-UiStrings {
                 LoadPreset         = 'Carregar preset'
                 DeletePreset       = 'Excluir preset'
                 SelectionTitle     = 'Escolha guiada de perfis'
+                ClearAllSelection  = 'Limpar todas as selecoes'
                 Filter             = 'Filtro'
                 Profiles           = 'Perfis prontos'
                 Components         = 'Ferramentas para instalar'
@@ -348,6 +356,9 @@ function Get-UiStrings {
                 OptOpenWebUI       = 'IA local: Open WebUI (Docker)'
                 OptSkipManualRequirements = 'Pular requisitos manuais (bloqueantes)'
                 OptIgnoreManualRequirements = 'Ignorar requisitos manuais (apenas log)'
+                OptRequireNoPendingReboot = 'Abortar se houver reinicio pendente (preflight)'
+                OptOfflineMode     = 'Modo Offline (usa cache local)'
+                OptEnableResume    = 'Retomar instalacao interrompida'
                 HostSetupTitle     = 'Preparacao deste PC'
                 AppTuningTitle      = 'Otimizar Apps'
                 AppTuningSubtitle   = 'Pre-configure ferramentas instaladas por categoria e perfil, com defaults seguros.'
@@ -361,6 +372,7 @@ function Get-UiStrings {
                 AppTuningInstall    = 'Instalar'
                 AppTuningConfigure  = 'Configurar/Otimizar'
                 AppTuningUpdate     = 'Atualizar'
+                AppTuningRunNow     = 'Executar agora'
                 AppTuningStatus     = 'Otimização segura e reversível dos apps. Categoria app-install lista apps individuais sob demanda.'
                 ApiCenterTitle      = 'Central de Chaves e APIs'
                 ApiProviderSummary  = 'Resumo dos provedores'
@@ -451,6 +463,7 @@ function Get-UiStateDefaults {
         excludedAppTuningItems = @()
         skipManualRequirements = $false
         ignoreManualRequirements = $false
+        requireNoPendingReboot = $false
         offlineMode        = $false
         enableResume       = $false
         cacheDir           = ''
@@ -480,6 +493,8 @@ function Normalize-UiState {
     $normalized['selectedAppTuningItems'] = @(Normalize-BootstrapNames -Names @($normalized['selectedAppTuningItems']))
     $normalized['excludedAppTuningItems'] = @(Normalize-BootstrapNames -Names @($normalized['excludedAppTuningItems']))
     $normalized['enableClaudeCodeProjectMcps'] = [bool]$normalized['enableClaudeCodeProjectMcps']
+    if (-not $normalized.ContainsKey('requireNoPendingReboot')) { $normalized['requireNoPendingReboot'] = $false }
+    $normalized['requireNoPendingReboot'] = [bool]$normalized['requireNoPendingReboot']
     $language = [string]$normalized['language']
     if ((Get-UiLanguages) -notcontains $language) { $normalized['language'] = 'pt-BR' }
     if ([string]::IsNullOrWhiteSpace([string]$normalized['hostHealth'])) {
@@ -546,6 +561,7 @@ if ($SmokeTest) {
 if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
     $powershellExe = Get-WindowsPowerShellExePath
     $argumentList  = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', $PSCommandPath, '-UiStatePath', $UiStatePath, '-UiLogPath', $script:UiLogPath)
+    if ($SmokeTest) { $argumentList += '-SmokeTest' }
     Write-UiLog -Message ("Relaunching STA. Exe={0}  Args={1}" -f $powershellExe, (ConvertTo-Json $argumentList -Compress))
     Start-Process -FilePath $powershellExe -ArgumentList (ConvertTo-ArgumentString -Tokens $argumentList) | Out-Null
     exit 0
@@ -1269,9 +1285,11 @@ function Get-UiBrush {
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#94A3B8"/>
-                        <TextBox x:Name="FilterTextBox" Grid.Column="1" Style="{StaticResource DarkInput}" Height="34" ToolTip="Busque por perfil, componente ou descrição para filtrar rapidamente."/>
+                        <TextBox x:Name="FilterTextBox" Grid.Column="1" Style="{StaticResource DarkInput}" Height="34" ToolTip="Filtro por nome ou descrição. Várias palavras: todas devem aparecer (ex.: dotnet core). Hífens são ignorados (dotnetcore encontra dotnet-core)."/>
+                        <Button x:Name="ClearAllSelectionButton" Grid.Column="2" Style="{StaticResource GhostBtn}" Content=" Limpar tudo" Margin="10,0,0,0" Height="34"/>
                     </Grid>
                 </StackPanel>
 
@@ -1320,6 +1338,7 @@ function Get-UiBrush {
                                     <CheckBox x:Name="OptOpenWebUICheckBox" Style="{StaticResource DarkCheck}" Content="IA local: Open WebUI (Docker)"/>
                                     <CheckBox x:Name="OptSkipManualRequirementsCheckBox" Style="{StaticResource DarkCheck}" Content="Pular requisitos manuais (bloqueantes)"/>
                                     <CheckBox x:Name="OptIgnoreManualRequirementsCheckBox" Style="{StaticResource DarkCheck}" Content="Ignorar requisitos manuais (apenas log)"/>
+                                    <CheckBox x:Name="OptRequireNoPendingRebootCheckBox" Style="{StaticResource DarkCheck}" Content="Abortar se houver reinicio pendente (preflight)"/>
                                     <CheckBox x:Name="OptOfflineModeCheckBox" Style="{StaticResource DarkCheck}" Content="Modo Offline (usa cache local)"/>
                                     <CheckBox x:Name="OptEnableResumeCheckBox" Style="{StaticResource DarkCheck}" Content="Retomar instalacao interrompida"/>
                                 </StackPanel>
@@ -1441,9 +1460,11 @@ function Get-UiBrush {
                             <Button x:Name="AppTuningMarkCategoryButton" Style="{StaticResource GhostBtn}" Content="Marcar categoria" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningClearCategoryButton" Style="{StaticResource GhostBtn}" Content="Limpar categoria" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningAuditButton" Style="{StaticResource GhostBtn}" Content="Auditar agora" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningClearAllButton" Style="{StaticResource GhostBtn}" Content="Limpar tudo" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningInstallButton" Style="{StaticResource GhostBtn}" Content="Instalar" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningConfigureButton" Style="{StaticResource PrimaryBtn}" Content="Configurar/Otimizar" Margin="0,0,8,0" Height="32"/>
-                            <Button x:Name="AppTuningUpdateButton" Style="{StaticResource GhostBtn}" Content="Atualizar" Height="32"/>
+                            <Button x:Name="AppTuningUpdateButton" Style="{StaticResource GhostBtn}" Content="Atualizar" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningRunNowButton" Style="{StaticResource PrimaryBtn}" Content="Executar agora" Height="32"/>
                         </StackPanel>
                     </Grid>
                 </Border>
@@ -2037,7 +2058,19 @@ $window.AddHandler([System.Windows.Documents.Hyperlink]::RequestNavigateEvent, [
     param($sender, $e)
     try {
         if ($e.Uri -and -not [string]::IsNullOrWhiteSpace([string]$e.Uri.OriginalString)) {
-            Start-Process ([string]$e.Uri.OriginalString)
+            if ($e.Uri.IsFile) {
+                $localPath = [System.Uri]::UnescapeDataString($e.Uri.LocalPath)
+                if ($localPath -match '^/([A-Za-z]:)') { $localPath = $localPath.Substring(1) }
+                $ext = [System.IO.Path]::GetExtension($localPath).ToLowerInvariant()
+                if ($ext -in @('.ps1', '.psm1', '.psd1') -and (Test-Path -LiteralPath $localPath)) {
+                    $selectArg = if ($localPath -match '\s') { '/select,"{0}"' -f ($localPath -replace '"', '""') } else { '/select,{0}' -f $localPath }
+                    Start-Process -FilePath 'explorer.exe' -ArgumentList $selectArg | Out-Null
+                } else {
+                    Start-Process ([string]$e.Uri.OriginalString)
+                }
+            } else {
+                Start-Process ([string]$e.Uri.OriginalString)
+            }
         }
     } catch {
     }
@@ -2066,10 +2099,17 @@ $ui = [ordered]@{
     SuppressSelectionEvents = $false
     SuppressApiEvents     = $false
     SuppressAppTuningEvents = $false
+    # Byte offset no ficheiro CurrentLogPath (Append-RunLog le apenas bytes novos; evita OOM em logs grandes).
     LogOffset             = 0
     CurrentLogPath        = $null
     CurrentResultPath     = $null
+    CurrentStdoutPath     = $null
+    CurrentStderrPath     = $null
     RunProcess            = $null
+    ExecutionScopeOverride = $null
+    CurrentExecutionScopeLabel = ''
+    # 'none' = instalacao/perfil normal; 'audit' / 'rollback' apenas quando disparado pelos botoes de manutencao.
+    MaintenanceMode          = 'none'
 
     # Window
     Window                = $window
@@ -2124,6 +2164,7 @@ $ui = [ordered]@{
     # Selection
     SelectionTitleLabel   = (Get-Control 'SelectionTitleLabel')
     FilterTextBox         = (Get-Control 'FilterTextBox')
+    ClearAllSelectionButton = (Get-Control 'ClearAllSelectionButton')
     ProfilesLabel         = (Get-Control 'ProfilesLabel')
     ProfilesTree          = (Get-Control 'ProfilesTree')
     ComponentsLabel       = (Get-Control 'ComponentsLabel')
@@ -2134,6 +2175,7 @@ $ui = [ordered]@{
     OptOpenWebUICheckBox  = (Get-Control 'OptOpenWebUICheckBox')
     OptSkipManualRequirementsCheckBox = (Get-Control 'OptSkipManualRequirementsCheckBox')
     OptIgnoreManualRequirementsCheckBox = (Get-Control 'OptIgnoreManualRequirementsCheckBox')
+    OptRequireNoPendingRebootCheckBox = (Get-Control 'OptRequireNoPendingRebootCheckBox')
     OptOfflineModeCheckBox = (Get-Control 'OptOfflineModeCheckBox')
     OptEnableResumeCheckBox = (Get-Control 'OptEnableResumeCheckBox')
     ExcludeLabel          = (Get-Control 'ExcludeLabel')
@@ -2172,9 +2214,11 @@ $ui = [ordered]@{
     AppTuningMarkCategoryButton = (Get-Control 'AppTuningMarkCategoryButton')
     AppTuningClearCategoryButton = (Get-Control 'AppTuningClearCategoryButton')
     AppTuningAuditButton  = (Get-Control 'AppTuningAuditButton')
+    AppTuningClearAllButton = (Get-Control 'AppTuningClearAllButton')
     AppTuningInstallButton = (Get-Control 'AppTuningInstallButton')
     AppTuningConfigureButton = (Get-Control 'AppTuningConfigureButton')
     AppTuningUpdateButton = (Get-Control 'AppTuningUpdateButton')
+    AppTuningRunNowButton = (Get-Control 'AppTuningRunNowButton')
     AppTuningCategoriesLabel = (Get-Control 'AppTuningCategoriesLabel')
     AppTuningCategoryList = (Get-Control 'AppTuningCategoryList')
     AppTuningItemsLabel   = (Get-Control 'AppTuningItemsLabel')
@@ -2612,9 +2656,15 @@ function Remove-UiGridRuntimeColumns {
 
 function Open-ExistingPath {
     param([string]$Path)
-    if (-not [string]::IsNullOrWhiteSpace($Path) -and (Test-Path $Path)) {
-        Start-Process -FilePath $Path | Out-Null
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) { return }
+    $ext = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
+    if ($ext -in @('.ps1', '.psm1', '.psd1')) {
+        # Start-Process no .ps1 dispara "Abrir com" (associação Open); mostrar no Explorador em vez de executar.
+        $selectArg = if ($Path -match '\s') { '/select,"{0}"' -f ($Path -replace '"', '""') } else { '/select,{0}' -f $Path }
+        Start-Process -FilePath 'explorer.exe' -ArgumentList $selectArg | Out-Null
+        return
     }
+    Start-Process -FilePath $Path | Out-Null
 }
 
 function Get-SelectionDetailsText {
@@ -2630,6 +2680,8 @@ function Get-SelectionDetailsText {
             "Items: $(@($Item.items) -join ', ')"
         ) -join [Environment]::NewLine
     }
+    $name = [string]$Item.name
+    $impact = Get-UiComponentImpact -ComponentName $name -Component $Item
     return @(
         "Name: $($Item.name)"
         "Description: $($Item.description)"
@@ -2638,6 +2690,14 @@ function Get-SelectionDetailsText {
         "Stage: $($Item.stage)"
         "Optional: $($Item.optional)"
         "Value: $($Item.valueReason)"
+        "SelectedBy: $($impact.selectedBy)"
+        "CanExclude: $($impact.canExclude)"
+        "Dependents: $(@($impact.dependents) -join ', ')"
+        "RequiresAdmin: $($impact.requiresAdmin)"
+        "RequiresNetwork: $($impact.requiresNetwork)"
+        "ManualRequired: $($impact.manualRequired)"
+        "Reversible: $($impact.reversible)"
+        "RollbackNotes: $($impact.rollbackNotes)"
     ) -join [Environment]::NewLine
 }
 
@@ -2652,6 +2712,27 @@ function Apply-QuickPreset {
     $ui.State.selectedAppTuningItems = @()
     $ui.State.excludedAppTuningItems = @()
     $ui.State.steamDeckVersion   = 'Auto'
+}
+
+function Clear-UiAllSelections {
+    $ui.State.selectedProfiles = @()
+    $ui.State.selectedComponents = @()
+    $ui.State.excludedComponents = @()
+    $ui.State.appTuningMode = 'custom'
+    $ui.State.selectedAppTuningCategories = @()
+    $ui.State.selectedAppTuningItems = @()
+    $ui.State.excludedAppTuningItems = @()
+    $ui.State.enableClaudeCodeProjectMcps = $false
+    $ui.State.skipManualRequirements = $false
+    $ui.State.ignoreManualRequirements = $false
+    $ui.State.requireNoPendingReboot = $false
+    $ui.State.offlineMode = $false
+    $ui.State.enableResume = $false
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionTrees
+    Refresh-SelectionSummary
+    Refresh-AppTuningControls
+    Set-AppTuningActionFeedback -Message 'Selecao limpa. Nenhum perfil/componente/app tuning ativo.' -Level 'info'
 }
 
 function Refresh-CustomPresets {
@@ -2673,12 +2754,18 @@ function Refresh-LocalizedText {
     $ui.LoadPresetButton.Content       = "  $($ui.Strings.LoadPreset)"
     $ui.DeletePresetButton.Content     = "  $($ui.Strings.DeletePreset)"
     $ui.SelectionTitleLabel.Text       = $ui.Strings.SelectionTitle
+    $ui.ClearAllSelectionButton.Content = " $($ui.Strings.ClearAllSelection)"
     $ui.ProfilesLabel.Text             = $ui.Strings.Profiles.ToUpper()
     $ui.ComponentsLabel.Text           = $ui.Strings.Components.ToUpper()
     $ui.QuickOptionsLabel.Text         = $ui.Strings.QuickOptions.ToUpper()
     $ui.OptClaudePluginsCheckBox.Content = $ui.Strings.OptClaudePlugins
     $ui.OptClaudeProjectMcpsCheckBox.Content = $ui.Strings.OptClaudeProjectMcps
     $ui.OptOpenWebUICheckBox.Content   = $ui.Strings.OptOpenWebUI
+    $ui.OptSkipManualRequirementsCheckBox.Content = $ui.Strings.OptSkipManualRequirements
+    $ui.OptIgnoreManualRequirementsCheckBox.Content = $ui.Strings.OptIgnoreManualRequirements
+    $ui.OptRequireNoPendingRebootCheckBox.Content = $ui.Strings.OptRequireNoPendingReboot
+    $ui.OptOfflineModeCheckBox.Content = $ui.Strings.OptOfflineMode
+    $ui.OptEnableResumeCheckBox.Content = $ui.Strings.OptEnableResume
     $ui.ExcludeLabel.Text              = $ui.Strings.Excludes.ToUpper()
     $ui.DetailsLabel.Text              = $ui.Strings.SelectionDetails.ToUpper()
     $ui.HostTitleLabel.Text            = $ui.Strings.HostSetupTitle
@@ -2691,9 +2778,11 @@ function Refresh-LocalizedText {
     $ui.AppTuningMarkCategoryButton.Content = $ui.Strings.AppTuningMarkCategory
     $ui.AppTuningClearCategoryButton.Content = $ui.Strings.AppTuningClearCategory
     $ui.AppTuningAuditButton.Content   = $ui.Strings.AppTuningAudit
+    $ui.AppTuningClearAllButton.Content = $ui.Strings.ClearAllSelection
     $ui.AppTuningInstallButton.Content = $ui.Strings.AppTuningInstall
     $ui.AppTuningConfigureButton.Content = $ui.Strings.AppTuningConfigure
     $ui.AppTuningUpdateButton.Content  = $ui.Strings.AppTuningUpdate
+    $ui.AppTuningRunNowButton.Content  = $ui.Strings.AppTuningRunNow
     $ui.AppTuningHintLabel.Text        = $ui.Strings.AppTuningStatus
     $ui.ApiCenterTitleLabel.Text       = $ui.Strings.ApiCenterTitle
     $ui.ApiProviderSummaryLabel.Text   = $ui.Strings.ApiProviderSummary.ToUpper()
@@ -2779,6 +2868,117 @@ function Get-UiResolvedComponentNameSet {
     return $lookup
 }
 
+function Get-UiComponentCatalogLookup {
+    $lookup = @{}
+    foreach ($component in @($ui.Contract.components)) {
+        $name = [string]$component.name
+        if (-not [string]::IsNullOrWhiteSpace($name)) { $lookup[$name] = $component }
+    }
+    return $lookup
+}
+
+function Get-UiComponentDependents {
+    param([Parameter(Mandatory = $true)][string]$ComponentName)
+
+    $dependents = New-Object System.Collections.Generic.List[string]
+    foreach ($component in @($ui.Contract.components)) {
+        $name = [string]$component.name
+        if ([string]::IsNullOrWhiteSpace($name) -or $name -eq $ComponentName) { continue }
+        if (@($component.dependsOn) -contains $ComponentName) { $dependents.Add($name) }
+    }
+    return @($dependents.ToArray())
+}
+
+function Get-UiComponentImpact {
+    param(
+        [Parameter(Mandatory = $true)][string]$ComponentName,
+        [AllowNull()]$Component = $null
+    )
+
+    if (-not $Component) {
+        $lookup = Get-UiComponentCatalogLookup
+        if ($lookup.ContainsKey($ComponentName)) { $Component = $lookup[$ComponentName] }
+    }
+
+    $resolved = @{}
+    if ($ui.Preview -and $ui.Preview.Resolution) {
+        foreach ($name in @($ui.Preview.Resolution.ResolvedComponents)) { $resolved[[string]$name] = $true }
+    } else {
+        $resolved = Get-UiResolvedComponentNameSet
+    }
+
+    $explicit = (@($ui.State.selectedComponents) -contains $ComponentName)
+    $excluded = (@($ui.State.excludedComponents) -contains $ComponentName)
+    $isResolved = $resolved.ContainsKey($ComponentName)
+    $selectedBy = if ($excluded) { 'excluded' } elseif ($explicit) { 'explicit' } elseif ($isResolved) { 'profile/dependency' } else { 'not-selected' }
+    $dependents = @(Get-UiComponentDependents -ComponentName $ComponentName)
+    $reversibility = if ($Component -and $Component.reversibility) { $Component.reversibility } else { $null }
+    $reversible = if ($reversibility) { [string]$reversibility.reversible } else { 'unknown' }
+    $rollbackNotes = if ($reversibility) { [string]$reversibility.rollbackNotes } else { 'Sem contrato de reversibilidade.' }
+
+    return [ordered]@{
+        name = $ComponentName
+        selectedBy = $selectedBy
+        canExclude = [bool]($Component -and [bool]$Component.optional)
+        dependents = @($dependents)
+        requiresAdmin = [bool]($Component -and ($Component.kind -match 'wsl|steamdeck|service|driver'))
+        requiresNetwork = [bool]($Component -and ($Component.kind -match 'winget|npm|uvtool|repo|wsl|git|node|python|claude|opencode|openclaw|goose|codex'))
+        manualRequired = [bool]($Component -and [string]$Component.kind -eq 'manual-required')
+        stage = if ($Component) { [string]$Component.stage } else { '' }
+        reversible = $reversible
+        rollbackNotes = $rollbackNotes
+    }
+}
+
+function Get-UiSelectionImpact {
+    $impact = [ordered]@{
+        total = 0
+        explicit = @($ui.State.selectedComponents).Count
+        inherited = 0
+        excluded = @($ui.State.excludedComponents).Count
+        manual = 0
+        admin = 0
+        network = 0
+        partialOrManualRollback = 0
+    }
+    if (-not ($ui.Preview -and $ui.Preview.Resolution)) { return $impact }
+    $catalogLookup = Get-UiComponentCatalogLookup
+    $resolved = @($ui.Preview.Resolution.ResolvedComponents)
+    $impact.total = $resolved.Count
+    foreach ($componentName in $resolved) {
+        $name = [string]$componentName
+        if (@($ui.State.selectedComponents) -notcontains $name) { $impact.inherited++ }
+        if (-not $catalogLookup.ContainsKey($name)) { continue }
+        $component = $catalogLookup[$name]
+        $componentImpact = Get-UiComponentImpact -ComponentName $name -Component $component
+        if ($componentImpact.manualRequired) { $impact.manual++ }
+        if ($componentImpact.requiresAdmin) { $impact.admin++ }
+        if ($componentImpact.requiresNetwork) { $impact.network++ }
+        if (@('partial', 'manual', 'none') -contains [string]$componentImpact.reversible) { $impact.partialOrManualRollback++ }
+    }
+    return $impact
+}
+
+function Test-UiContractSelectionFilter {
+    param(
+        [string]$Name,
+        [string]$Description,
+        [string]$FilterNormalized
+    )
+    if ([string]::IsNullOrWhiteSpace($FilterNormalized)) { return $true }
+    $nameL = if ($Name) { $Name.ToLowerInvariant() } else { '' }
+    $descL = if ($Description) { $Description.ToLowerInvariant() } else { '' }
+    $compactName = $nameL.Replace('-', '').Replace('_', '')
+    $hay = ('{0} {1} {2}' -f $nameL, $descL, $compactName).Replace('-', ' ').Replace('_', ' ')
+    if ($hay.Contains($FilterNormalized)) { return $true }
+    $tokens = @($FilterNormalized -split '\s+', [System.StringSplitOptions]::RemoveEmptyEntries)
+    if ($tokens.Count -lt 2) { return $false }
+    foreach ($t in $tokens) {
+        if (-not $hay.Contains($t)) { return $false }
+    }
+    return $true
+}
+
 function Refresh-SelectionTrees {
     $filter = ($ui.FilterTextBox.Text).Trim().ToLowerInvariant()
     $resolvedComponentLookup = Get-UiResolvedComponentNameSet
@@ -2786,7 +2986,7 @@ function Refresh-SelectionTrees {
     try {
         $ui.ProfilesTree.Items.Clear()
         foreach ($profile in @($ui.Contract.profiles | Where-Object {
-            ($filter -eq '') -or ($_.name.ToLowerInvariant().Contains($filter)) -or ($_.description.ToLowerInvariant().Contains($filter))
+            Test-UiContractSelectionFilter -Name ([string]$_.name) -Description ([string]$_.description) -FilterNormalized $filter
         })) {
             $item = New-Object System.Windows.Controls.TreeViewItem
             $item.Header   = $profile.name
@@ -2829,7 +3029,7 @@ function Refresh-SelectionTrees {
 
         $ui.ComponentsTree.Items.Clear()
         foreach ($component in @($ui.Contract.components | Where-Object {
-            ($filter -eq '') -or ($_.name.ToLowerInvariant().Contains($filter)) -or ($_.description.ToLowerInvariant().Contains($filter))
+            Test-UiContractSelectionFilter -Name ([string]$_.name) -Description ([string]$_.description) -FilterNormalized $filter
         })) {
             $item = New-Object System.Windows.Controls.TreeViewItem
             $item.Tag = @{ kind = 'component'; item = $component }
@@ -2889,8 +3089,13 @@ function Refresh-SelectionTrees {
         $ui.OptClaudeProjectMcpsCheckBox.IsChecked = [bool]$ui.State.enableClaudeCodeProjectMcps
         $ui.OptSkipManualRequirementsCheckBox.IsChecked = [bool]$ui.State.skipManualRequirements
         $ui.OptIgnoreManualRequirementsCheckBox.IsChecked = [bool]$ui.State.ignoreManualRequirements
+        $ui.OptRequireNoPendingRebootCheckBox.IsChecked = [bool]$ui.State.requireNoPendingReboot
         $ui.OptOfflineModeCheckBox.IsChecked = [bool]$ui.State.offlineMode
         $ui.OptEnableResumeCheckBox.IsChecked = [bool]$ui.State.enableResume
+    } catch {
+        $message = "Falha ao atualizar selecao: $($_.Exception.Message)"
+        Write-UiLog -Level 'ERROR' -Message $message
+        try { $ui.SelectionErrorLabel.Text = $message } catch { }
     } finally {
         $ui.SuppressSelectionEvents = $false
     }
@@ -2934,7 +3139,8 @@ function Refresh-SelectionSummary {
     Refresh-ExcludeList
     try {
         $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedAppTuningMode $ui.State.appTuningMode -RequestedAppTuningCategories $ui.State.selectedAppTuningCategories -RequestedAppTuningItems $ui.State.selectedAppTuningItems -ExcludedAppTuningItems $ui.State.excludedAppTuningItems -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
-        $ui.SelectionSummaryLabel.Text = "Resolved: $(@($ui.Preview.Resolution.ResolvedComponents).Count) components | HostHealth: $($ui.Preview.ResolvedHostHealthMode) | AppTuning: $($ui.Preview.ResolvedAppTuningMode)"
+        $impact = Get-UiSelectionImpact
+        $ui.SelectionSummaryLabel.Text = "Selecionados: $($impact.total) | Explicitos: $($impact.explicit) | Herdados/deps: $($impact.inherited) | Excluidos: $($impact.excluded) | Manual: $($impact.manual) | Admin: $($impact.admin) | Rede: $($impact.network) | Rollback parcial/manual: $($impact.partialOrManualRollback) | HostHealth: $($ui.Preview.ResolvedHostHealthMode) | AppTuning: $($ui.Preview.ResolvedAppTuningMode)"
         $ui.SelectionErrorLabel.Text   = ''
     } catch {
         $ui.Preview = $null
@@ -3117,6 +3323,10 @@ function Refresh-AppTuningControls {
             $activeMap[[string]$item.id] = $true
             $itemStateMap[[string]$item.id] = $item
         }
+        $excludedFromState = @{}
+        foreach ($ex in @(Normalize-BootstrapNames -Names @($ui.State.excludedAppTuningItems))) {
+            if (-not [string]::IsNullOrWhiteSpace($ex)) { $excludedFromState[$ex] = $true }
+        }
 
         $ui.SuppressAppTuningEvents = $true
         try {
@@ -3180,7 +3390,7 @@ function Refresh-AppTuningControls {
             if ($statusFilter -eq 'update-check' -and [string]$item.updatedState -ne 'check') { continue }
             $filteredCount++
             $rows += @([ordered]@{
-                active = $activeMap.ContainsKey($itemId)
+                active = ($activeMap.ContainsKey($itemId) -and -not $excludedFromState.ContainsKey($itemId))
                 id = $itemId
                 category = [string]$item.category
                 app = [string]$item.app
@@ -3223,11 +3433,10 @@ function Capture-AppTuningStateFromControls {
     if ($ui.AppTuningModeCombo.SelectedItem) {
         $ui.State.appTuningMode = [string]$ui.AppTuningModeCombo.SelectedItem
     }
-    if ([string]$ui.State.appTuningMode -ne 'custom') {
-        Save-UiState -State $ui.State -Path $UiStatePath
-        return
-    }
 
+    # Sempre sincronizar a grelha (recommended/custom/off): o modo isolado e o backend usam
+    # selectedAppTuningItems / excludedAppTuningItems; antes o early-return em recommended deixava
+    # a selecao vazia apesar das caixas "Ativo" na UI.
     $rows = @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin'))
     if ($rows.Count -eq 0) {
         Save-UiState -State $ui.State -Path $UiStatePath
@@ -3306,6 +3515,228 @@ function Get-UiFriendlyActionError {
     return ("Não foi possível concluir {0}. Tente novamente. Se persistir, consulte o log da UI." -f $ActionLabel)
 }
 
+function Set-AppTuningActionFeedback {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [ValidateSet('info', 'warning', 'error')][string]$Level = 'info'
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Message)) { return }
+    $ui.StatusLabel.Text = $Message
+    try {
+        $current = [string]$ui.AppTuningStatusLabel.Text
+        if ([string]::IsNullOrWhiteSpace($current)) {
+            $ui.AppTuningStatusLabel.Text = "Ultima acao: $Message"
+        } else {
+            $base = $current -replace '\s*\|\s*Ultima acao:.*$', ''
+            $ui.AppTuningStatusLabel.Text = "$base | Ultima acao: $Message"
+        }
+    } catch {
+        $ui.AppTuningStatusLabel.Text = "Ultima acao: $Message"
+    }
+    if ($Level -eq 'warning') {
+        Write-UiLog -Level 'WARN' -Message $Message
+    } elseif ($Level -eq 'error') {
+        Write-UiLog -Level 'ERROR' -Message $Message
+    } else {
+        Write-UiLog -Message $Message
+    }
+}
+
+function Prompt-AppTuningNavigateToReview {
+    param([Parameter(Mandatory = $true)][string]$ActionMessage)
+
+    $prompt = @(
+        $ActionMessage
+        ''
+        'A acao foi apenas planejada. Nada foi executado ainda.'
+        'Deseja ir para Revisao agora para confirmar e executar?'
+    ) -join [Environment]::NewLine
+    $answer = [System.Windows.MessageBox]::Show(
+        $prompt,
+        'Bootstrap UI - Proximo passo',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Information
+    )
+    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    try {
+        Refresh-ReviewPage
+        $pageIds = @(Get-UiPageIds)
+        $reviewIndex = [Array]::IndexOf($pageIds, 'review')
+        if ($reviewIndex -ge 0) {
+            Navigate-ToPage -Index $reviewIndex
+        } else {
+            Navigate-ToPage -Index 8
+        }
+    } catch {
+        Write-UiLog -Level 'WARN' -Message ("Falha ao navegar para Revisao apos AppTuning: {0}" -f $_.Exception.Message)
+    }
+}
+
+function Clear-ExecutionScopeOverride {
+    $ui.ExecutionScopeOverride = $null
+    $ui.CurrentExecutionScopeLabel = ''
+}
+
+function New-ExecutionScopeSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Scope,
+        [string]$Source = 'unknown'
+    )
+
+    $rawScopeMode = [string]$Scope.scopeMode
+    if ([string]::IsNullOrWhiteSpace($rawScopeMode)) { $rawScopeMode = 'profile' }
+    $scopeMode = $rawScopeMode.Trim().ToLowerInvariant()
+    if ($scopeMode -ne 'isolated') { $scopeMode = 'profile' }
+
+    $snapshot = [ordered]@{
+        scopeMode = $scopeMode
+        scopeLabel = [string]$Scope.scopeLabel
+        selectedProfiles = @(Normalize-BootstrapNames -Names @($Scope.selectedProfiles))
+        selectedComponents = @(Normalize-BootstrapNames -Names @($Scope.selectedComponents))
+        excludedComponents = @(Normalize-BootstrapNames -Names @($Scope.excludedComponents))
+        hostHealth = Normalize-BootstrapHostHealthMode -Mode ([string]$Scope.hostHealth)
+        appTuningMode = Normalize-BootstrapAppTuningMode -Mode ([string]$Scope.appTuningMode)
+        selectedAppTuningCategories = @(Normalize-BootstrapNames -Names @($Scope.selectedAppTuningCategories))
+        selectedAppTuningItems = @(Normalize-BootstrapNames -Names @($Scope.selectedAppTuningItems))
+        excludedAppTuningItems = @(Normalize-BootstrapNames -Names @($Scope.excludedAppTuningItems))
+        source = [string]$Source
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$snapshot.scopeLabel)) {
+        $snapshot.scopeLabel = if ($scopeMode -eq 'isolated') { 'Isolado (somente AppTuning selecionado)' } else { 'Perfil atual' }
+    }
+
+    if ($scopeMode -eq 'isolated') {
+        # Whitelist forte: escopo isolado ignora historico global e campos fora do contrato.
+        $snapshot.selectedProfiles = @()
+        $snapshot.excludedComponents = @()
+        $snapshot.hostHealth = 'off'
+        $snapshot.appTuningMode = 'custom'
+        $snapshot.selectedAppTuningCategories = @()
+        $snapshot.excludedAppTuningItems = @()
+    }
+
+    return $snapshot
+}
+
+function Get-CurrentExecutionScopeSnapshot {
+    $baseScope = [ordered]@{
+        scopeMode = 'profile'
+        scopeLabel = 'Perfil atual'
+        selectedProfiles = @($ui.State.selectedProfiles)
+        selectedComponents = @($ui.State.selectedComponents)
+        excludedComponents = @($ui.State.excludedComponents)
+        hostHealth = [string]$ui.State.hostHealth
+        appTuningMode = [string]$ui.State.appTuningMode
+        selectedAppTuningCategories = @($ui.State.selectedAppTuningCategories)
+        selectedAppTuningItems = @($ui.State.selectedAppTuningItems)
+        excludedAppTuningItems = @($ui.State.excludedAppTuningItems)
+    }
+    if ($ui.ExecutionScopeOverride) {
+        return (New-ExecutionScopeSnapshot -Scope ([hashtable]$ui.ExecutionScopeOverride) -Source 'override')
+    }
+    return (New-ExecutionScopeSnapshot -Scope $baseScope -Source 'state')
+}
+
+function Assert-ExecutionScopeSnapshot {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Scope
+    )
+
+    if ([string]$Scope.scopeMode -eq 'isolated') {
+        if (@($Scope.excludedAppTuningItems).Count -gt 0) {
+            throw 'Escopo isolado invalido: ExcludeAppTuningItem deve estar vazio para evitar reaproveitar historico.'
+        }
+        if (@($Scope.selectedProfiles).Count -gt 0) {
+            throw 'Escopo isolado invalido: perfil nao pode ser enviado no modo isolado.'
+        }
+        if (@($Scope.selectedAppTuningCategories).Count -gt 0) {
+            throw 'Escopo isolado invalido: categorias AppTuning nao sao permitidas no modo isolado.'
+        }
+        $isolatedComponentCount = @($Scope.selectedComponents).Count
+        $isolatedItemCount = @($Scope.selectedAppTuningItems).Count
+        if ($isolatedComponentCount -eq 0 -and $isolatedItemCount -eq 0) {
+            throw 'Escopo isolado invalido: selecione ao menos um item AppTuning antes de executar.'
+        }
+    }
+}
+
+function Get-IsolatedAppTuningExecutionOverride {
+    $plannedComponentSet = @{}
+    $selectedItemSet = @{}
+    $statusRows = @()
+    foreach ($itemId in @(Normalize-BootstrapNames -Names @($ui.State.selectedAppTuningItems))) {
+        if ([string]::IsNullOrWhiteSpace([string]$itemId)) { continue }
+        $selectedItemSet[[string]$itemId] = $true
+    }
+
+    if ($selectedItemSet.Count -gt 0) {
+        try {
+            $plan = Get-UiAppTuningPreview
+            $statusRows = @(Get-BootstrapAppTuningStatusRows -Plan $plan)
+        } catch {
+            $statusRows = @()
+        }
+
+        foreach ($row in @($statusRows)) {
+            $itemId = [string]$row.id
+            if ([string]::IsNullOrWhiteSpace($itemId) -or -not $selectedItemSet.ContainsKey($itemId)) { continue }
+            foreach ($component in @([string[]]$row.installComponents)) {
+                $name = [string]$component
+                if ([string]::IsNullOrWhiteSpace($name)) { continue }
+                $plannedComponentSet[$name] = $true
+            }
+        }
+    }
+
+    return (New-ExecutionScopeSnapshot -Source 'isolated-builder' -Scope ([ordered]@{
+        scopeMode = 'isolated'
+        scopeLabel = 'Isolado (somente AppTuning selecionado)'
+        selectedProfiles = @()
+        selectedComponents = @($plannedComponentSet.Keys | Sort-Object)
+        excludedComponents = @()
+        hostHealth = 'off'
+        appTuningMode = 'custom'
+        selectedAppTuningCategories = @()
+        selectedAppTuningItems = @($selectedItemSet.Keys | Sort-Object)
+        excludedAppTuningItems = @()
+    }))
+}
+
+function Get-ProfileExecutionOverride {
+    return (New-ExecutionScopeSnapshot -Source 'profile-builder' -Scope ([ordered]@{
+        scopeMode = 'profile'
+        scopeLabel = 'Perfil atual'
+        selectedProfiles = @($ui.State.selectedProfiles)
+        selectedComponents = @($ui.State.selectedComponents)
+        excludedComponents = @($ui.State.excludedComponents)
+        hostHealth = [string]$ui.State.hostHealth
+        appTuningMode = [string]$ui.State.appTuningMode
+        selectedAppTuningCategories = @($ui.State.selectedAppTuningCategories)
+        selectedAppTuningItems = @($ui.State.selectedAppTuningItems)
+        excludedAppTuningItems = @($ui.State.excludedAppTuningItems)
+    }))
+}
+
+function Get-AppTuningInstallComponentsByAppName {
+    param([string]$AppName)
+
+    if ([string]::IsNullOrWhiteSpace($AppName)) { return @() }
+    $components = New-Object System.Collections.Generic.List[string]
+    try {
+        $statusRows = @(Get-BootstrapAppTuningStatusRows -Plan (Get-UiAppTuningPreview))
+        foreach ($statusRow in @($statusRows | Where-Object { ([string]$_.app).ToLowerInvariant() -eq ([string]$AppName).ToLowerInvariant() })) {
+            foreach ($component in @([string[]]$statusRow.installComponents)) {
+                if ([string]::IsNullOrWhiteSpace([string]$component)) { continue }
+                if (-not $components.Contains([string]$component)) { $components.Add([string]$component) }
+            }
+        }
+    } catch {
+    }
+    return @($components.ToArray())
+}
+
 function Queue-AppTuningInstallOrUpdate {
     param(
         [Parameter(Mandatory = $true)][string]$ActionName,
@@ -3320,26 +3751,60 @@ function Queue-AppTuningInstallOrUpdate {
             $components += @($component.Trim())
         }
     }
+    if ($components.Count -eq 0) {
+        $message = "$ActionName nao planejado: item sem componente instalavel. Use Configurar/Otimizar se o app ja estiver instalado."
+        Set-AppTuningActionFeedback -Message $message -Level 'warning'
+        return [ordered]@{ status = 'warning'; message = $message; added = @() }
+    }
+
     $added = @(Add-UiSelectedComponents -Components $components)
     Refresh-SelectionSummary
     Refresh-AppTuningControls
-    $ui.StatusLabel.Text = if ($added.Count -gt 0) {
-        "$ActionName planejado: $(@($added) -join ', ')"
+    $message = if ($added.Count -gt 0) {
+        "$ActionName planejado (nao executado): $(@($added) -join ', ')"
     } else {
-        "${ActionName}: nenhum componente novo para marcar."
+        "${ActionName}: nenhum componente novo para marcar (ja estava planejado, nao executado)."
     }
+    Set-AppTuningActionFeedback -Message $message -Level 'info'
+    return [ordered]@{ status = 'success'; message = $message; added = @($added) }
 }
 
 function Queue-AppTuningConfigure {
-    param([AllowNull()][object[]]$Rows = $null)
+    param(
+        [AllowNull()][object[]]$Rows = $null,
+        [switch]$AutoIncludeMissingInstall
+    )
 
     $ids = @()
+    $missingInstallRows = New-Object System.Collections.Generic.List[string]
+    $autoInstallComponents = New-Object System.Collections.Generic.List[string]
     $sourceRows = if ($Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
     foreach ($row in @($sourceRows)) {
         $id = [string]$row['id']
         if (-not [string]::IsNullOrWhiteSpace($id)) { $ids += @($id) }
+        $installedRaw = [string]$row['installedStateRaw']
+        $rowInstallComponents = @(([string]$row['installComponents'] -split ',') | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { ([string]$_).Trim() })
+        if ($installedRaw -eq 'missing' -and $rowInstallComponents.Count -eq 0) {
+            $display = [string]$row['optimization']
+            if ([string]::IsNullOrWhiteSpace($display)) { $display = [string]$row['app'] }
+            if (-not [string]::IsNullOrWhiteSpace($display)) { $missingInstallRows.Add($display) }
+            foreach ($component in @(Get-AppTuningInstallComponentsByAppName -AppName ([string]$row['app']))) {
+                if (-not $autoInstallComponents.Contains([string]$component)) { $autoInstallComponents.Add([string]$component) }
+            }
+        }
     }
-    if ($ids.Count -eq 0) { return }
+    if ($ids.Count -eq 0) {
+        $message = 'Config/Otimizacao nao planejada: selecione ao menos um item.'
+        Set-AppTuningActionFeedback -Message $message -Level 'warning'
+        return [ordered]@{ status = 'warning'; message = $message; ids = @() }
+    }
+
+    $autoAdded = @()
+    if ($AutoIncludeMissingInstall -and $autoInstallComponents.Count -gt 0) {
+        $autoAdded = @(Add-UiSelectedComponents -Components @($autoInstallComponents.ToArray()))
+        Refresh-SelectionSummary
+    }
+
     $ui.State.appTuningMode = 'custom'
     foreach ($id in @(Normalize-BootstrapNames -Names $ids)) {
         if (-not (@($ui.State.selectedAppTuningItems) -contains $id)) {
@@ -3351,7 +3816,19 @@ function Queue-AppTuningConfigure {
     }
     Save-UiState -State $ui.State -Path $UiStatePath
     Refresh-AppTuningControls
-    $ui.StatusLabel.Text = "Config/Otimizacao planejada: $(@($ids) -join ', ')"
+    $message = "Config/Otimizacao planejada (nao executada): $(@($ids) -join ', ')"
+    $status = 'success'
+    if ($missingInstallRows.Count -gt 0) {
+        $message += " | App ausente detectado: $(@($missingInstallRows.ToArray()) -join ', ')"
+        if ($autoAdded.Count -gt 0) {
+            $message += " | Instalacao adicionada automaticamente: $(@($autoAdded) -join ', ')"
+        } else {
+            $message += ' | Para aplicar de fato, planeje tambem a instalacao do app.'
+        }
+        $status = 'warning'
+    }
+    Set-AppTuningActionFeedback -Message $message -Level $(if ($status -eq 'warning') { 'warning' } else { 'info' })
+    return [ordered]@{ status = $status; message = $message; ids = @($ids); autoAdded = @($autoAdded) }
 }
 
 function Get-CurrentAppTuningRow {
@@ -3367,7 +3844,7 @@ function Get-CurrentAppTuningRow {
     if ($null -eq $rowData) { return $null }
 
     $row = [ordered]@{}
-    foreach ($column in @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin')) {
+    foreach ($column in @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin','installedStateRaw','configuredStateRaw','updatedStateRaw')) {
         if ($rowData -is [System.Collections.IDictionary]) {
             $row[$column] = if ($rowData.Contains($column)) { [string]$rowData[$column] } else { '' }
         } else {
@@ -3387,18 +3864,42 @@ function Invoke-AppTuningSingleRowAction {
     $rowId = [string]$Row['id']
     $rowName = [string]$Row['optimization']
     if ([string]::IsNullOrWhiteSpace($rowName)) { $rowName = [string]$Row['app'] }
-    $ui.StatusLabel.Text = "Processando $Action para '$rowName'..."
+    Set-AppTuningActionFeedback -Message "Processando $Action para '$rowName'..." -Level 'info'
     try {
+        $result = $null
         switch ($Action) {
-            'install' { Queue-AppTuningInstallOrUpdate -ActionName 'Instalacao' -Rows @($Row) }
-            'configure' { Queue-AppTuningConfigure -Rows @($Row) }
-            'update' { Queue-AppTuningInstallOrUpdate -ActionName 'Atualizacao' -Rows @($Row) }
+            'install' { $result = Queue-AppTuningInstallOrUpdate -ActionName 'Instalacao' -Rows @($Row) }
+            'configure' {
+                $autoIncludeInstall = $false
+                if ([string]$Row['installedStateRaw'] -eq 'missing') {
+                    $answer = [System.Windows.MessageBox]::Show(
+                        "O app base de '$rowName' ainda aparece como ausente. Deseja planejar instalacao automatica junto com a configuracao?",
+                        'Bootstrap UI - AppTuning',
+                        [System.Windows.MessageBoxButton]::YesNo,
+                        [System.Windows.MessageBoxImage]::Question
+                    )
+                    $autoIncludeInstall = ($answer -eq [System.Windows.MessageBoxResult]::Yes)
+                }
+                $result = Queue-AppTuningConfigure -Rows @($Row) -AutoIncludeMissingInstall:$autoIncludeInstall
+            }
+            'update' { $result = Queue-AppTuningInstallOrUpdate -ActionName 'Atualizacao' -Rows @($Row) }
+        }
+        if ($result -and [string]$result.status -eq 'warning') {
+            [void][System.Windows.MessageBox]::Show([string]$result.message, 'Bootstrap UI - Aviso', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
         }
         Refresh-AppTuningControls
-        $ui.StatusLabel.Text = "Ação unitária concluída para '$rowId' ($Action)."
+        if ($result -and -not [string]::IsNullOrWhiteSpace([string]$result.message)) {
+            Set-AppTuningActionFeedback -Message ([string]$result.message) -Level $(if ([string]$result.status -eq 'warning') { 'warning' } else { 'info' })
+            Prompt-AppTuningNavigateToReview -ActionMessage ([string]$result.message)
+        } else {
+            Set-AppTuningActionFeedback -Message "Acao unitaria concluida para '$rowId' ($Action)." -Level 'info'
+            Prompt-AppTuningNavigateToReview -ActionMessage "Acao '$Action' planejada para '$rowName'."
+        }
     } catch {
         Write-UiLog -Level 'ERROR' -Message ("AppTuning ação unitária falhou | action={0} | id={1} | message={2}`n{3}" -f $Action, $rowId, $_.Exception.Message, $_.ScriptStackTrace)
-        $ui.StatusLabel.Text = (Get-UiFriendlyActionError -ActionLabel "a ação '$Action' no item '$rowName'" -Exception $_.Exception)
+        $friendly = (Get-UiFriendlyActionError -ActionLabel "a ação '$Action' no item '$rowName'" -Exception $_.Exception)
+        Set-AppTuningActionFeedback -Message $friendly -Level 'error'
+        [void][System.Windows.MessageBox]::Show($friendly, 'Bootstrap UI - Erro', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
 }
 
@@ -4055,46 +4556,147 @@ function Navigate-ToPage {
 
 function Build-BackendArguments {
     $tokens = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $backendScriptPath)
-    foreach ($p in @($ui.State.selectedProfiles))   { $tokens += @('-Profile',   [string]$p) }
-    foreach ($c in @($ui.State.selectedComponents)) { $tokens += @('-Component', [string]$c) }
-    foreach ($e in @($ui.State.excludedComponents)) { $tokens += @('-Exclude',   [string]$e) }
+    $tokens += @('-NonInteractive')
+    function New-BackendArrayArgument {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [AllowNull()]$Values
+        )
+
+        $items = @($Values | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+        if ($items.Count -gt 0) {
+            return @($Name, ($items -join ','))
+        }
+        return @()
+    }
+
+    $scopeSnapshot = Get-CurrentExecutionScopeSnapshot
+    Assert-ExecutionScopeSnapshot -Scope $scopeSnapshot
+
+    $activeProfiles = @($scopeSnapshot.selectedProfiles)
+    $activeComponents = @($scopeSnapshot.selectedComponents)
+    $activeExcludes = @($scopeSnapshot.excludedComponents)
+    $activeHostHealth = [string]$scopeSnapshot.hostHealth
+    $activeAppTuningMode = [string]$scopeSnapshot.appTuningMode
+    $activeAppTuningCategories = @($scopeSnapshot.selectedAppTuningCategories)
+    $activeAppTuningItems = @($scopeSnapshot.selectedAppTuningItems)
+    $activeExcludedAppTuningItems = @($scopeSnapshot.excludedAppTuningItems)
+
+    $tokens += @(New-BackendArrayArgument -Name '-Profile' -Values $activeProfiles)
+    $tokens += @(New-BackendArrayArgument -Name '-Component' -Values $activeComponents)
+    $tokens += @(New-BackendArrayArgument -Name '-Exclude' -Values $activeExcludes)
     if ([bool]$ui.State.enableClaudeCodeProjectMcps) { $tokens += @('-ClaudeCodeProjectMcps') }
     if ([bool]$ui.State.skipManualRequirements) { $tokens += @('-SkipManualRequirements') }
     if ([bool]$ui.State.ignoreManualRequirements) { $tokens += @('-IgnoreManualRequirements') }
+    if ([bool]$ui.State.requireNoPendingReboot) { $tokens += @('-RequireNoPendingReboot') }
     if ([bool]$ui.State.offlineMode) { $tokens += @('-Offline') }
     if ([bool]$ui.State.enableResume) { $tokens += @('-Resume') }
-    if ($ui.MaintenanceMode -eq 'rollback') { $tokens += @('-Rollback') }
-    if ($ui.MaintenanceMode -eq 'audit') { $tokens += @('-Audit') }
+    $maint = [string]$ui.MaintenanceMode
+    if ([string]::IsNullOrWhiteSpace($maint)) { $maint = 'none' }
+    if ($maint -eq 'rollback') { $tokens += @('-Rollback') }
+    if ($maint -eq 'audit') { $tokens += @('-Audit') }
     $tokens += @('-SteamDeckVersion', [string]$ui.State.steamDeckVersion)
-    $tokens += @('-HostHealth',       [string]$ui.State.hostHealth)
-    $tokens += @('-AppTuning',        [string]$ui.State.appTuningMode)
-    foreach ($category in @($ui.State.selectedAppTuningCategories)) { $tokens += @('-AppTuningCategory', [string]$category) }
-    foreach ($item in @($ui.State.selectedAppTuningItems)) { $tokens += @('-AppTuningItem', [string]$item) }
-    foreach ($item in @($ui.State.excludedAppTuningItems)) { $tokens += @('-ExcludeAppTuningItem', [string]$item) }
+    $tokens += @('-HostHealth',       [string]$activeHostHealth)
+    $tokens += @('-AppTuning',        [string]$activeAppTuningMode)
+    $tokens += @(New-BackendArrayArgument -Name '-AppTuningCategory' -Values $activeAppTuningCategories)
+    $tokens += @(New-BackendArrayArgument -Name '-AppTuningItem' -Values $activeAppTuningItems)
+    $tokens += @(New-BackendArrayArgument -Name '-ExcludeAppTuningItem' -Values $activeExcludedAppTuningItems)
     $tokens += @('-WorkspaceRoot',    [string]$ui.State.workspaceRoot)
     $tokens += @('-CloneBaseDir',     [string]$ui.State.cloneBaseDir)
     $tokens += @('-LogPath',          [string]$ui.CurrentLogPath)
     $tokens += @('-ResultPath',       [string]$ui.CurrentResultPath)
+    Write-UiLog -Message ("Execution scope snapshot. Source={0} ScopeMode={1} Profiles={2} Components={3} Excludes={4} AppItems={5} ExcludedAppItems={6}  MaintenanceMode={7}" -f [string]$scopeSnapshot.source, [string]$scopeSnapshot.scopeMode, @($activeProfiles).Count, @($activeComponents).Count, @($activeExcludes).Count, @($activeAppTuningItems).Count, @($activeExcludedAppTuningItems).Count, $maint)
     return $tokens
 }
 
 function Start-BackendWorker {
     $powershellExe   = Get-WindowsPowerShellExePath
     $argumentString  = ConvertTo-ArgumentString -Tokens (Build-BackendArguments)
-    $needsAdmin = ($ui.Preview -and @($ui.Preview.AdminReasons).Count -gt 0 -and -not (Test-IsAdmin))
-    Write-UiLog -Message ("Start-BackendWorker. NeedsAdmin={0}  Exe={1}  Args={2}" -f $needsAdmin, $powershellExe, $argumentString)
-    if ($needsAdmin) { return (Start-Process -FilePath $powershellExe -ArgumentList $argumentString -Verb RunAs -WindowStyle Hidden -PassThru) }
-    return (Start-Process -FilePath $powershellExe -ArgumentList $argumentString -WindowStyle Hidden -PassThru)
+    $adminNeededForRun = ($ui.Preview -and @($ui.Preview.AdminReasons).Count -gt 0 -and -not (Test-IsAdmin))
+    $maintMode = [string]$ui.MaintenanceMode
+    if ([string]::IsNullOrWhiteSpace($maintMode)) { $maintMode = 'none' }
+    $maintenanceSkipsElevation = ($maintMode -eq 'audit' -or $maintMode -eq 'rollback')
+    $needsAdmin = ($adminNeededForRun -and -not $maintenanceSkipsElevation)
+    $backendRoot = [System.IO.Path]::GetDirectoryName($backendScriptPath)
+    if ([string]::IsNullOrWhiteSpace($backendRoot)) { $backendRoot = $PSScriptRoot }
+    $argumentLength = 0
+    try { $argumentLength = ([string]$argumentString).Length } catch { $argumentLength = 0 }
+    $safeArgumentLimit = 7600
+    if ($argumentLength -gt $safeArgumentLimit) {
+        throw ("ArgumentList acima do limite seguro ({0}>{1}). Revise selecao/AppTuning e limpe historico antes de executar." -f $argumentLength, $safeArgumentLimit)
+    }
+    Write-UiLog -Message ("Start-BackendWorker. NeedsAdmin={0}  ArgLength={1}  Exe={2}  Args={3}  WorkingDirectory={4}" -f $needsAdmin, $argumentLength, $powershellExe, $argumentString, $backendRoot)
+    $sp = @{
+        FilePath               = $powershellExe
+        ArgumentList           = $argumentString
+        WindowStyle            = 'Hidden'
+        PassThru               = $true
+        WorkingDirectory       = $backendRoot
+    }
+    if ($needsAdmin) {
+        $sp['Verb'] = 'RunAs'
+        Write-UiLog -Message 'Backend stream redirection disabled because elevation uses ShellExecute.'
+        return (Start-Process @sp)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ui.CurrentStdoutPath)) {
+        $sp['RedirectStandardOutput'] = [string]$ui.CurrentStdoutPath
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ui.CurrentStderrPath)) {
+        $sp['RedirectStandardError'] = [string]$ui.CurrentStderrPath
+    }
+    return (Start-Process @sp)
+}
+
+function Get-RunStreamTail {
+    param(
+        [string]$Path,
+        [int]$MaxLines = 40
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path $Path)) { return '' }
+    try {
+        $lines = @(Get-Content -Path $Path -ErrorAction Stop)
+        if ($lines.Count -eq 0) { return '' }
+        $start = [Math]::Max(0, $lines.Count - $MaxLines)
+        return (($lines[$start..($lines.Count - 1)] | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+    } catch {
+        return ("Falha ao ler stream {0}: {1}" -f $Path, $_.Exception.Message)
+    }
 }
 
 function Append-RunLog {
-    if ([string]::IsNullOrWhiteSpace($ui.CurrentLogPath) -or -not (Test-Path $ui.CurrentLogPath)) { return }
-    $content = [IO.File]::ReadAllText($ui.CurrentLogPath)
-    if ($content.Length -le $ui.LogOffset) { return }
-    $newText = $content.Substring($ui.LogOffset)
-    $ui.RunLogTextBox.AppendText($newText)
-    $ui.RunLogTextBox.ScrollToEnd()
-    $ui.LogOffset = $content.Length
+    try {
+        if ([string]::IsNullOrWhiteSpace($ui.CurrentLogPath) -or -not (Test-Path -LiteralPath $ui.CurrentLogPath)) { return }
+        $path = [string]$ui.CurrentLogPath
+        $fs = $null
+        $reader = $null
+        try {
+            $fs = [System.IO.File]::Open($path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            $len = $fs.Length
+            if ($len -le [long]$ui.LogOffset) { return }
+            if ([long]$ui.LogOffset -gt $len) {
+                $ui.LogOffset = 0
+                $fs.Position = 0
+            } else {
+                $fs.Position = [long]$ui.LogOffset
+            }
+            $reader = New-Object System.IO.StreamReader($fs, [System.Text.UTF8Encoding]::new($false), $true, 8192, $true)
+            $newText = $reader.ReadToEnd()
+            if (-not [string]::IsNullOrEmpty($newText)) {
+                $ui.RunLogTextBox.AppendText($newText)
+                $ui.RunLogTextBox.ScrollToEnd()
+            }
+            $ui.LogOffset = [long]$len
+        } finally {
+            if ($null -ne $reader) { try { $reader.Dispose() } catch { } }
+            if ($null -ne $fs) { try { $fs.Dispose() } catch { } }
+        }
+    } catch {
+        try {
+            Write-UiLog -Level 'WARN' -Message ("Append-RunLog: {0}" -f $_.Exception.Message)
+        } catch {
+        }
+    }
 }
 
 function Set-RunUiBusy {
@@ -4106,6 +4708,41 @@ function Set-RunUiBusy {
     }
 }
 
+function Test-UiBackendResultFileReady {
+    param(
+        [string]$Path,
+        [int]$MaxWaitMs = 3000
+    )
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $stepMs = 120
+    $waited = 0
+    while ($waited -le $MaxWaitMs) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+                try {
+                    if ($fs.Length -gt 0) { return $true }
+                } finally {
+                    $fs.Dispose()
+                }
+            }
+        } catch {
+        }
+        Start-Sleep -Milliseconds $stepMs
+        $waited += $stepMs
+    }
+    return $false
+}
+
+function Update-RunArtifactButtons {
+    $logPath = if (-not [string]::IsNullOrWhiteSpace($ui.CurrentLogPath)) { [string]$ui.CurrentLogPath } else { [string]$ui.State.lastLogPath }
+    $resultPath = if (-not [string]::IsNullOrWhiteSpace($ui.CurrentResultPath)) { [string]$ui.CurrentResultPath } else { [string]$ui.State.lastResultPath }
+    $reportPath = [string]$ui.State.lastReportPath
+    $ui.OpenLogButton.IsEnabled = (-not [string]::IsNullOrWhiteSpace($logPath) -and (Test-Path -LiteralPath $logPath))
+    $ui.OpenResultButton.IsEnabled = (-not [string]::IsNullOrWhiteSpace($resultPath) -and (Test-Path -LiteralPath $resultPath))
+    $ui.OpenReportsButton.IsEnabled = (-not [string]::IsNullOrWhiteSpace($reportPath) -and (Test-Path -LiteralPath $reportPath))
+}
+
 function Complete-RunExecution {
     param([Parameter(Mandatory=$true)][string]$StatusText)
     $ui.RunStatusLabel.Text = $StatusText
@@ -4114,7 +4751,10 @@ function Complete-RunExecution {
     Save-UiState -State $ui.State -Path $UiStatePath
     $ui.RunProcess = $null
     $ui.LogTimer.Stop()
+    $ui.MaintenanceMode = 'none'
+    Clear-ExecutionScopeOverride
     Set-RunUiBusy -Busy $false
+    Update-RunArtifactButtons
 }
 
 function Complete-RunExecutionWithoutResult {
@@ -4124,6 +4764,18 @@ function Complete-RunExecutionWithoutResult {
         try { $exitCode = [string]$ui.RunProcess.ExitCode } catch { $exitCode = 'unknown' }
     }
     $message = "{0}  Backend saiu sem result.json. ExitCode={1}. Verifique o log para detalhes." -f $ui.Strings.RunFailed, $exitCode
+    $stdoutTail = Get-RunStreamTail -Path ([string]$ui.CurrentStdoutPath)
+    $stderrTail = Get-RunStreamTail -Path ([string]$ui.CurrentStderrPath)
+    $streamDetail = if (-not [string]::IsNullOrWhiteSpace($stderrTail)) {
+        ($stderrTail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    } elseif (-not [string]::IsNullOrWhiteSpace($stdoutTail)) {
+        ($stdoutTail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    } else {
+        ''
+    }
+    if (-not [string]::IsNullOrWhiteSpace($streamDetail)) {
+        $message = "{0} stderr/stdout: {1}" -f $message, $streamDetail
+    }
     try {
         if (-not [string]::IsNullOrWhiteSpace($ui.CurrentResultPath)) {
             $resultParent = Split-Path -Path $ui.CurrentResultPath -Parent
@@ -4133,8 +4785,14 @@ function Complete-RunExecutionWithoutResult {
                 generatedAt = (Get-Date).ToString('o')
                 logPath = $ui.CurrentLogPath
                 resultPath = $ui.CurrentResultPath
+                stdoutPath = $ui.CurrentStdoutPath
+                stderrPath = $ui.CurrentStderrPath
+                stdoutTail = $stdoutTail
+                stderrTail = $stderrTail
                 exitCode = $exitCode
                 error = $message
+                howToFix = 'Abra stdout/stderr e o log da UI; corrija a falha indicada e execute novamente ou use -Audit para diagnostico.'
+                rollbackAvailable = $false
             }
             $fallbackJson = $fallbackResult | ConvertTo-Json -Depth 8
             [System.IO.File]::WriteAllText($ui.CurrentResultPath, $fallbackJson, [System.Text.UTF8Encoding]::new($false))
@@ -4148,12 +4806,13 @@ function Complete-RunExecutionWithoutResult {
 
 function Finalize-RunFromResult {
     Append-RunLog
-    if (-not (Test-Path $ui.CurrentResultPath)) {
+    $resultPath = [string]$ui.CurrentResultPath
+    if (-not (Test-UiBackendResultFileReady -Path $resultPath)) {
         Complete-RunExecutionWithoutResult
         return
     }
     try {
-        $result = Get-Content -Path $ui.CurrentResultPath -Raw | ConvertFrom-Json
+        $result = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 | ConvertFrom-Json
     } catch {
         Complete-RunExecution -StatusText ("{0}  result.json invalido: {1}" -f $ui.Strings.RunFailed, $_.Exception.Message)
         return
@@ -4162,32 +4821,95 @@ function Finalize-RunFromResult {
         $statusText = $ui.Strings.RunCompleted
         if ($result.hostHealthReportRoot) { $ui.State.lastReportPath = [string]$result.hostHealthReportRoot }
         if ($result.appTuningReportRoot) { $ui.State.lastReportPath = [string]$result.appTuningReportRoot }
+    } elseif ([string]$result.status -eq 'warning') {
+        if ([string]$result.mode -eq 'audit') {
+            $bad = 0
+            try { $bad = [int]$result.auditSummary.unhealthyOrMissing } catch { }
+            $statusText = "Auditoria concluida com avisos: $bad componente(s) unhealthy/missing. Ver log e resultado."
+        } else {
+            $statusText = 'Concluido com avisos. Verifique o log.'
+        }
     } else {
-        $statusText = "{0}  {1}" -f $ui.Strings.RunFailed, [string]$result.error
+        $err = if ($result.error) { [string]$result.error } else { 'sem detalhes (ver log).' }
+        $fix = if ($result.howToFix) { [string]$result.howToFix } else { 'Abra Resultado/Log para detalhes.' }
+        $rollbackText = if ($result.rollbackAvailable) { 'Rollback disponivel: Sim.' } else { 'Rollback disponivel: Nao.' }
+        if ($result.failedComponent) { $err = "Componente: $($result.failedComponent). $err" }
+        $statusText = "{0}  {1}" -f $ui.Strings.RunFailed, $err
+        $statusText = "{0} Como corrigir: {1} {2}" -f $statusText, $fix, $rollbackText
     }
     Complete-RunExecution -StatusText $statusText
 }
 
 function Start-RunExecution {
+    param(
+        [ValidateSet('none', 'audit', 'rollback')]
+        [string]$MaintenanceIntent = 'none'
+    )
     if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
         $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Aguarde a execucao atual finalizar."
         return
     }
-    if (-not (Save-SteamDeckSettingsInteractive)) { return }
-    Refresh-ReviewPage
-    $runRoot             = Join-Path (Get-BootstrapDataRoot) 'ui-runs'
-    $timestamp           = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $ui.CurrentLogPath   = Join-Path $runRoot ("bootstrap-ui_{0}.log" -f $timestamp)
-    $ui.CurrentResultPath = Join-Path $runRoot ("bootstrap-ui_{0}.result.json" -f $timestamp)
-    $ui.LogOffset        = 0
-    $ui.RunLogTextBox.Clear()
-    $ui.RunStatusLabel.Text = $ui.Strings.RunStarted
-    Set-RunUiBusy -Busy $true
-    try { $ui.RunProcess = Start-BackendWorker } catch {
-        $ui.RunStatusLabel.Text = $ui.Strings.UserCanceledElevation
-        Set-RunUiBusy -Busy $false
+    $ui.MaintenanceMode = [string]$MaintenanceIntent
+    if (-not (Save-SteamDeckSettingsInteractive)) {
+        $ui.MaintenanceMode = 'none'
         return
     }
+
+    try {
+        Write-UiLog -Message ("Start-RunExecution. MaintenanceIntent={0}" -f [string]$MaintenanceIntent)
+        Refresh-ReviewPage
+        $runRootBase = [string]$script:UiStorageRoot
+        if ([string]::IsNullOrWhiteSpace($runRootBase)) {
+            $runRootBase = if ($env:LOCALAPPDATA) {
+                Join-Path $env:LOCALAPPDATA 'bootstrap-tools'
+            } else {
+                Join-Path $env:USERPROFILE '.bootstrap-tools'
+            }
+        }
+        $runRoot = Join-Path $runRootBase 'ui-runs'
+        $null = New-Item -Path $runRoot -ItemType Directory -Force -ErrorAction SilentlyContinue
+        $timestamp           = Get-Date -Format 'yyyyMMdd_HHmmss'
+        $ui.CurrentLogPath   = Join-Path $runRoot ("bootstrap-ui_{0}.log" -f $timestamp)
+        $ui.CurrentResultPath = Join-Path $runRoot ("bootstrap-ui_{0}.result.json" -f $timestamp)
+        $ui.CurrentStdoutPath = Join-Path $runRoot ("bootstrap-ui_{0}.stdout.log" -f $timestamp)
+        $ui.CurrentStderrPath = Join-Path $runRoot ("bootstrap-ui_{0}.stderr.log" -f $timestamp)
+        $ui.LogOffset        = 0
+        $ui.RunLogTextBox.Clear()
+        if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentExecutionScopeLabel)) {
+            $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Escopo: $([string]$ui.CurrentExecutionScopeLabel)"
+            Write-UiLog -Message ("Escopo de execucao selecionado: {0}" -f [string]$ui.CurrentExecutionScopeLabel)
+        } else {
+            $ui.RunStatusLabel.Text = $ui.Strings.RunStarted
+        }
+        Update-RunArtifactButtons
+        Set-RunUiBusy -Busy $true
+        try {
+            $ui.RunProcess = Start-BackendWorker
+        } catch {
+            $startError = [string]$_.Exception.Message
+            if ([string]::IsNullOrWhiteSpace($startError)) { $startError = 'falha ao iniciar processo backend' }
+            Write-UiLog -Level 'ERROR' -Message ("Falha ao iniciar backend: {0}" -f $startError)
+            $ui.RunStatusLabel.Text = ("Falha ao iniciar backend: {0}" -f $startError)
+            $ui.MaintenanceMode = 'none'
+            Clear-ExecutionScopeOverride
+            Set-RunUiBusy -Busy $false
+            return
+        }
+    } catch {
+        try { Write-UiLog -Level 'ERROR' -Message ("Start-RunExecution: {0}" -f (($_ | Out-String).Trim())) } catch { }
+        $ui.MaintenanceMode = 'none'
+        Clear-ExecutionScopeOverride
+        try { Set-RunUiBusy -Busy $false } catch { }
+        $msg = [string]$_.Exception.Message
+        if ([string]::IsNullOrWhiteSpace($msg)) { $msg = 'Erro ao preparar a execucao.' }
+        $ui.RunStatusLabel.Text = ('Falha ao preparar execucao: {0}' -f $msg)
+        try {
+            [void][System.Windows.MessageBox]::Show($msg, 'Bootstrap UI', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
+        } catch {
+        }
+        return
+    }
+
     Save-UiState -State $ui.State -Path $UiStatePath
     $ui.LogTimer.Start()
 }
@@ -4198,13 +4920,27 @@ function Start-RunExecution {
 
 # Log timer
 $logTimer.Add_Tick({
-    Append-RunLog
-    if ($ui.RunProcess -and $ui.RunProcess.HasExited) {
-        if (Test-Path $ui.CurrentResultPath) {
-            Finalize-RunFromResult
-        } else {
-            Complete-RunExecutionWithoutResult
+    try {
+        Append-RunLog
+        if ($ui.RunProcess -and $ui.RunProcess.HasExited) {
+            if (Test-UiBackendResultFileReady -Path ([string]$ui.CurrentResultPath)) {
+                Finalize-RunFromResult
+            } else {
+                Complete-RunExecutionWithoutResult
+            }
         }
+    } catch {
+        try {
+            Write-UiLog -Level 'ERROR' -Message ("LogTimer tick: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        } catch {
+        }
+        try {
+            if ($null -ne $ui -and $null -ne $ui.RunStatusLabel) {
+                $ui.RunStatusLabel.Text = 'Erro ao atualizar log da execucao; veja ui.log (LogTimer).'
+            }
+        } catch {
+        }
+        try { $ui.LogTimer.Stop() } catch { }
     }
 })
 
@@ -4410,22 +5146,34 @@ $ui.DeletePresetButton.Add_Click({
 })
 
 $ui.AuditIntegrityButton.Add_Click({
-    $ui.MaintenanceMode = 'audit'
-    Navigate-To-Page -Index ($ui.PageNames.IndexOf('PageRun'))
-    $ui.StartRunButton.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent)))
+    $runIdx = @($ui.PageNames).IndexOf('PageRun')
+    if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
+    Navigate-ToPage -Index $runIdx
+    Start-RunExecution -MaintenanceIntent 'audit'
 })
 
 $ui.RollbackChangesButton.Add_Click({
     $confirm = [System.Windows.MessageBox]::Show("Deseja reverter os tweaks de sistema? Isso restaurara valores padrao de registro para Edge, GameMode e telemetria.", "Confirmar Rollback", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
     if ($confirm -eq 'Yes') {
-        $ui.MaintenanceMode = 'rollback'
-        Navigate-To-Page -Index ($ui.PageNames.IndexOf('PageRun'))
-        $ui.StartRunButton.RaiseEvent((New-Object System.Windows.RoutedEventArgs ([System.Windows.Controls.Button]::ClickEvent)))
+        $runIdx = @($ui.PageNames).IndexOf('PageRun')
+        if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
+        Navigate-ToPage -Index $runIdx
+        Start-RunExecution -MaintenanceIntent 'rollback'
     }
 })
 
 # Filter
 $ui.FilterTextBox.Add_TextChanged({ Refresh-SelectionTrees })
+$ui.ClearAllSelectionButton.Add_Click({
+    $answer = [System.Windows.MessageBox]::Show(
+        'Limpar toda a selecao atual? Isso remove perfis, componentes e itens AppTuning selecionados.',
+        'Bootstrap UI - Limpar selecao',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Question
+    )
+    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    Clear-UiAllSelections
+})
 
 function Set-UiComponentEnabled {
     param(
@@ -4539,6 +5287,19 @@ $ui.OptIgnoreManualRequirementsCheckBox.Add_Unchecked({
     Refresh-SelectionSummary
 })
 
+$ui.OptRequireNoPendingRebootCheckBox.Add_Checked({
+    if ($ui.SuppressSelectionEvents) { return }
+    $ui.State.requireNoPendingReboot = $true
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionSummary
+})
+$ui.OptRequireNoPendingRebootCheckBox.Add_Unchecked({
+    if ($ui.SuppressSelectionEvents) { return }
+    $ui.State.requireNoPendingReboot = $false
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-SelectionSummary
+})
+
 # Host Health
 $ui.HostHealthCombo.Add_SelectionChanged({
     if ($ui.HostHealthCombo.SelectedItem) {
@@ -4636,6 +5397,17 @@ $ui.AppTuningAuditButton.Add_Click({
     Refresh-AppTuningControls
 })
 
+$ui.AppTuningClearAllButton.Add_Click({
+    $answer = [System.Windows.MessageBox]::Show(
+        'Limpar toda a selecao atual? Isso remove perfis, componentes e itens AppTuning selecionados.',
+        'Bootstrap UI - Limpar selecao',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Question
+    )
+    if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
+    Clear-UiAllSelections
+})
+
 $ui.AppTuningSearchBox.Add_TextChanged({
     Refresh-AppTuningControls
 })
@@ -4714,7 +5486,10 @@ $ui.AppTuningItemsGrid.Add_MouseDoubleClick({
 
 $ui.AppTuningInstallButton.Add_Click({
     try {
-        Queue-AppTuningInstallOrUpdate -ActionName 'Instalacao'
+        $result = Queue-AppTuningInstallOrUpdate -ActionName 'Instalacao'
+        if ($result -and -not [string]::IsNullOrWhiteSpace([string]$result.message)) {
+            Prompt-AppTuningNavigateToReview -ActionMessage ([string]$result.message)
+        }
     } catch {
         Write-UiLog -Level 'ERROR' -Message ("Falha ao planejar instalação AppTuning: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
         $ui.StatusLabel.Text = (Get-UiFriendlyActionError -ActionLabel 'a instalação dos apps selecionados' -Exception $_.Exception)
@@ -4723,7 +5498,10 @@ $ui.AppTuningInstallButton.Add_Click({
 
 $ui.AppTuningConfigureButton.Add_Click({
     try {
-        Queue-AppTuningConfigure
+        $result = Queue-AppTuningConfigure
+        if ($result -and -not [string]::IsNullOrWhiteSpace([string]$result.message)) {
+            Prompt-AppTuningNavigateToReview -ActionMessage ([string]$result.message)
+        }
     } catch {
         Write-UiLog -Level 'ERROR' -Message ("Falha ao planejar configuração AppTuning: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
         $ui.StatusLabel.Text = (Get-UiFriendlyActionError -ActionLabel 'a configuração/otimização dos apps selecionados' -Exception $_.Exception)
@@ -4732,10 +5510,99 @@ $ui.AppTuningConfigureButton.Add_Click({
 
 $ui.AppTuningUpdateButton.Add_Click({
     try {
-        Queue-AppTuningInstallOrUpdate -ActionName 'Atualizacao'
+        $result = Queue-AppTuningInstallOrUpdate -ActionName 'Atualizacao'
+        if ($result -and -not [string]::IsNullOrWhiteSpace([string]$result.message)) {
+            Prompt-AppTuningNavigateToReview -ActionMessage ([string]$result.message)
+        }
     } catch {
         Write-UiLog -Level 'ERROR' -Message ("Falha ao planejar atualização AppTuning: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
         $ui.StatusLabel.Text = (Get-UiFriendlyActionError -ActionLabel 'a atualização dos apps selecionados' -Exception $_.Exception)
+    }
+})
+
+$ui.AppTuningRunNowButton.Add_Click({
+    try {
+        Capture-AppTuningStateFromControls
+        Refresh-SelectionSummary
+        Clear-ExecutionScopeOverride
+        $selectionCount = @($ui.State.selectedComponents).Count
+        $appTuningCount = @($ui.State.selectedAppTuningItems).Count
+        $scopeMessage = @(
+            'Escolha o escopo desta execucao:'
+            ''
+            'Sim = Isolado (somente AppTuning selecionado)'
+            'Nao = Perfil atual (inclui perfil + AppTuning)'
+            'Cancelar = abortar'
+            ''
+            ("Componentes selecionados: {0}" -f $selectionCount)
+            ("Itens AppTuning selecionados: {0}" -f $appTuningCount)
+        ) -join [Environment]::NewLine
+        $scopeAnswer = [System.Windows.MessageBox]::Show(
+            $scopeMessage,
+            'Bootstrap UI - Escopo da execucao',
+            [System.Windows.MessageBoxButton]::YesNoCancel,
+            [System.Windows.MessageBoxImage]::Question
+        )
+
+        if ($scopeAnswer -eq [System.Windows.MessageBoxResult]::Cancel) {
+            Set-AppTuningActionFeedback -Message 'Execucao imediata cancelada pelo usuario.' -Level 'warning'
+            return
+        }
+
+        if ($scopeAnswer -eq [System.Windows.MessageBoxResult]::Yes) {
+            $ui.ExecutionScopeOverride = Get-IsolatedAppTuningExecutionOverride
+        } else {
+            $ui.ExecutionScopeOverride = Get-ProfileExecutionOverride
+        }
+        $ui.CurrentExecutionScopeLabel = [string]$ui.ExecutionScopeOverride.scopeLabel
+        Write-UiLog -Message ("AppTuningRunNow scopeMode={0}" -f [string]$ui.ExecutionScopeOverride.scopeMode)
+        if ([string]$ui.ExecutionScopeOverride.scopeMode -eq 'isolated') {
+            $isolatedComponentCount = @($ui.ExecutionScopeOverride.selectedComponents).Count
+            $isolatedItemCount = @($ui.ExecutionScopeOverride.selectedAppTuningItems).Count
+            if ($isolatedComponentCount -eq 0 -and $isolatedItemCount -eq 0) {
+                Clear-ExecutionScopeOverride
+                Set-AppTuningActionFeedback -Message 'Execucao isolada cancelada: nenhum item AppTuning selecionado para executar.' -Level 'warning'
+                [void][System.Windows.MessageBox]::Show('Selecione pelo menos um item AppTuning antes de executar no modo Isolado.', 'Bootstrap UI - Escopo isolado', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+                return
+            }
+        }
+
+        $confirmMessage = @(
+            'Confirmar inicio imediato?'
+            ''
+            ("Escopo: {0}" -f [string]$ui.CurrentExecutionScopeLabel)
+            ("Componentes no run: {0}" -f @($ui.ExecutionScopeOverride.selectedComponents).Count)
+            ("Itens AppTuning no run: {0}" -f @($ui.ExecutionScopeOverride.selectedAppTuningItems).Count)
+            ''
+            'A execução vai iniciar imediatamente.'
+        ) -join [Environment]::NewLine
+        $confirmAnswer = [System.Windows.MessageBox]::Show(
+            $confirmMessage,
+            'Bootstrap UI - Confirmar execucao',
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question
+        )
+        if ($confirmAnswer -ne [System.Windows.MessageBoxResult]::Yes) {
+            Clear-ExecutionScopeOverride
+            Set-AppTuningActionFeedback -Message 'Execucao imediata cancelada pelo usuario.' -Level 'warning'
+            return
+        }
+
+        $pageIds = @(Get-UiPageIds)
+        $runIndex = [Array]::IndexOf($pageIds, 'run')
+        if ($runIndex -ge 0) {
+            Navigate-ToPage -Index $runIndex
+        } else {
+            Navigate-ToPage -Index 9
+        }
+        Set-AppTuningActionFeedback -Message ("Execucao imediata iniciando. Escopo: {0}" -f [string]$ui.CurrentExecutionScopeLabel) -Level 'info'
+        Start-RunExecution
+    } catch {
+        Clear-ExecutionScopeOverride
+        Write-UiLog -Level 'ERROR' -Message ("Falha ao iniciar execução imediata do AppTuning: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $friendly = Get-UiFriendlyActionError -ActionLabel 'a execução imediata do AppTuning' -Exception $_.Exception
+        Set-AppTuningActionFeedback -Message $friendly -Level 'error'
+        [void][System.Windows.MessageBox]::Show($friendly, 'Bootstrap UI - Erro', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
 })
 
@@ -4882,6 +5749,7 @@ $window.Add_Loaded({
 
     Refresh-LocalizedText
     Refresh-CustomPresets
+    Update-RunArtifactButtons
     Navigate-ToPage -Index 0
 })
 
@@ -4893,5 +5761,55 @@ $window.Add_Closing({
 #
 # Run the WPF application
 #
+
+try {
+    if ($null -eq [System.Windows.Application]::Current) {
+        $null = New-Object System.Windows.Application
+        [System.Windows.Application]::Current.ShutdownMode = [System.Windows.ShutdownMode]::OnMainWindowClose
+    }
+    $wpfApp = [System.Windows.Application]::Current
+    $wpfApp.MainWindow = $window
+    $null = $wpfApp.add_DispatcherUnhandledException({
+        param($sender, $e)
+        try {
+            Write-UiLog -Level 'ERROR' -Message ("DispatcherUnhandledException: {0}" -f $e.Exception.Message)
+            Write-UiLog -Level 'ERROR' -Message ($e.Exception | Format-List * -Force | Out-String)
+        } catch {
+        }
+        try {
+            if ($null -ne $ui -and $null -ne $ui.StatusLabel) {
+                $ui.StatusLabel.Text = 'Erro interno na UI; detalhes no log (DispatcherUnhandledException).'
+            }
+        } catch {
+        }
+        try {
+            [void][System.Windows.MessageBox]::Show(
+                ("Erro interno na interface:`n{0}`n`nA janela continua aberta; veja o log da UI." -f $e.Exception.Message),
+                'Bootstrap UI',
+                [System.Windows.MessageBoxButton]::OK,
+                [System.Windows.MessageBoxImage]::Error
+            )
+        } catch {
+        }
+        $e.Handled = $true
+    })
+} catch {
+    try {
+        Write-UiLog -Level 'WARN' -Message ("Falha ao registar protecao DispatcherUnhandledException: {0}" -f $_.Exception.Message)
+    } catch {
+    }
+}
+
+try {
+    $null = [AppDomain]::CurrentDomain.add_UnhandledException({
+        param($sender, $e)
+        $obj = $e.ExceptionObject
+        try {
+            Write-UiLog -Level 'ERROR' -Message ("AppDomain.UnhandledException: {0}" -f $obj)
+        } catch {
+        }
+    })
+} catch {
+}
 
 $null = $window.ShowDialog()

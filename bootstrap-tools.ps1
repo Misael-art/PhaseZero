@@ -3216,7 +3216,7 @@ function Ensure-WingetPackage {
     }
 
     Write-Log "Instalando $DisplayName via winget..."
-    $commonArgs = @(
+    $commonArgsBase = @(
         'install',
         '-e',
         '--id', $Id,
@@ -3224,6 +3224,7 @@ function Ensure-WingetPackage {
         '--accept-package-agreements',
         '--disable-interactivity'
     )
+    $commonArgsSilent = @($commonArgsBase + @('--silent'))
 
     # Tentativas extras com backoff (Invoke-NativeWithRetry) para falhas transitórias de rede/Store.
     $wingetInstallMaxAttempts = 5
@@ -3231,13 +3232,21 @@ function Ensure-WingetPackage {
 
     $exitCode = -1
     if ($PreferUserScope) {
-        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgs) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsSilent) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
         if ($exitCode -ne 0) {
-            Write-Log "Falha ao instalar $DisplayName com --scope user (winget). Tentando novamente sem --scope..." 'WARN'
+            Write-Log "Falha ao instalar $DisplayName com --scope user --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
+            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsBase) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+            if ($exitCode -ne 0) {
+                Write-Log "Falha ao instalar $DisplayName com --scope user (winget). Tentando novamente sem --scope..." 'WARN'
+            }
         }
     }
     if ($exitCode -ne 0) {
-        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgs -OperationName "$DisplayName via winget" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsSilent -OperationName "$DisplayName via winget --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+        if ($exitCode -ne 0) {
+            Write-Log "Falha ao instalar $DisplayName com --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
+            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsBase -OperationName "$DisplayName via winget" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+        }
     }
     if ($exitCode -ne 0) {
         if ($AllowFailureWhenNotAdmin -and (-not (Test-IsAdmin))) {
@@ -5478,6 +5487,27 @@ function Get-BootstrapInstalledAppInventory {
     }
 }
 
+function Test-BootstrapInventoryAppNameMatchesTarget {
+    <#
+    .SYNOPSIS
+        Correspondencia inventario (DisplayName/Start menu) vs targetApp, evitando falsos positivos de Substring
+        (ex.: "somethingnotepadplusplus" nao deve contar como Notepad++).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$HaystackLower,
+        [Parameter(Mandatory = $true)][string]$NeedleLower,
+        [Parameter(Mandatory = $true)][bool]$StrictBoundary
+    )
+
+    if ([string]::IsNullOrWhiteSpace($HaystackLower) -or [string]::IsNullOrWhiteSpace($NeedleLower)) { return $false }
+    if ($HaystackLower -eq $NeedleLower) { return $true }
+    if (-not $StrictBoundary) {
+        return ($HaystackLower.Contains($NeedleLower))
+    }
+    $escaped = [regex]::Escape($NeedleLower)
+    return [regex]::IsMatch($HaystackLower, ('(?i)(^|[^0-9a-z]){0}([^0-9a-z]|$)' -f $escaped))
+}
+
 function Test-BootstrapAppTuningItemInstalled {
     param(
         [Parameter(Mandatory = $true)]$Item,
@@ -5488,15 +5518,9 @@ function Test-BootstrapAppTuningItemInstalled {
     $apps = if ((Test-BootstrapMapContainsKey -Map $inventory -Key 'apps') -and ($inventory['apps'] -is [hashtable])) { $inventory['apps'] } else { @{} }
     $paths = if ((Test-BootstrapMapContainsKey -Map $inventory -Key 'paths') -and ($inventory['paths'] -is [hashtable])) { $inventory['paths'] } else { @{} }
 
-    foreach ($targetApp in @($Item.targetApps)) {
-        $needle = ([string]$targetApp).Trim().ToLowerInvariant()
-        if ([string]::IsNullOrWhiteSpace($needle)) { continue }
-        foreach ($appName in @($apps.Keys)) {
-            $text = ([string]$appName).ToLowerInvariant()
-            if ($text -eq $needle -or $text.Contains($needle)) {
-                return $true
-            }
-        }
+    $hasProbePaths = $false
+    foreach ($pp in @($Item.probePaths)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$pp)) { $hasProbePaths = $true; break }
     }
 
     foreach ($probePath in @($Item.probePaths)) {
@@ -5504,6 +5528,18 @@ function Test-BootstrapAppTuningItemInstalled {
         if ([string]::IsNullOrWhiteSpace($expanded)) { continue }
         if (Test-BootstrapMapContainsKey -Map $paths -Key $expanded) {
             return $true
+        }
+    }
+
+    foreach ($targetApp in @($Item.targetApps)) {
+        $needle = ([string]$targetApp).Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($needle)) { continue }
+        $strict = $hasProbePaths
+        foreach ($appName in @($apps.Keys)) {
+            $text = ([string]$appName).ToLowerInvariant()
+            if (Test-BootstrapInventoryAppNameMatchesTarget -HaystackLower $text -NeedleLower $needle -StrictBoundary $strict) {
+                return $true
+            }
         }
     }
 

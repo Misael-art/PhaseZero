@@ -94,6 +94,20 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $steamRow.canUpdate | Should Be $true
     }
 
+    It 'nao marca notepad++ instalado por substring acidental no DisplayName (itens com probePaths)' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $item = @($catalog.items | Where-Object { $_.id -eq 'notepadpp-defaults' })[0]
+        $inv = New-AppTuningInventoryFixture -InstalledApps @('somethingnotepadplusplus ide')
+        (Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inv) | Should Be $false
+    }
+
+    It 'marca notepad++ instalado quando DisplayName contem o token completo (itens com probePaths)' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $item = @($catalog.items | Where-Object { $_.id -eq 'notepadpp-defaults' })[0]
+        $inv = New-AppTuningInventoryFixture -InstalledApps @('notepad++ (64-bit x64)')
+        (Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inv) | Should Be $true
+    }
+
     It 'resolves OpenAI-compatible provider with fallback diagnostics' {
         $fixture = @{
             metadata = @{ version = 2 }
