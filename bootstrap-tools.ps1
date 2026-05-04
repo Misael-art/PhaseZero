@@ -1,6 +1,6 @@
 param(
     [string]$CloneBaseDir,
-    [string]$WorkspaceRoot = 'F:\Steam\Steamapps',
+    [string]$WorkspaceRoot = '',
     [string[]]$Profile = @(),
     [string[]]$Component = @(),
     [string[]]$Exclude = @(),
@@ -32,8 +32,11 @@ param(
     [switch]$NonInteractive,
     [switch]$SkipManualRequirements,
     [switch]$IgnoreManualRequirements,
+    [switch]$RequireNoPendingReboot,
     [switch]$Resume,
     [switch]$Rollback,
+    [string]$ChangesPath,
+    [switch]$AggressiveRollback,
     [switch]$Offline,
     [string]$CacheDir = '',
     [switch]$Audit,
@@ -56,6 +59,7 @@ $script:LogPath = if ([string]::IsNullOrWhiteSpace($LogPath)) {
 $script:ResultPath = $ResultPath
 $script:SkipManualRequirements = $SkipManualRequirements
 $script:IgnoreManualRequirements = $IgnoreManualRequirements
+$script:RequireNoPendingReboot = [bool]$RequireNoPendingReboot
 $script:BootstrapSecretsProviderCatalogCache = $null
 $script:BootstrapAppCapabilityCatalogCache = $null
 $script:BootstrapManagedMcpCatalogCache = $null
@@ -74,6 +78,15 @@ trap {
             $resultParent = Split-Path -Path $script:ResultPath -Parent
             if ($resultParent) { $null = New-Item -Path $resultParent -ItemType Directory -Force -ErrorAction SilentlyContinue }
 
+            $trapStk = ''
+            try {
+                if ($_ -and $_.ScriptStackTrace) {
+                    $trapStk = [string]$_.ScriptStackTrace
+                    if ($trapStk.Length -gt 8000) { $trapStk = $trapStk.Substring(0, 7997) + '...' }
+                }
+            } catch {
+                $trapStk = ''
+            }
             $fallbackResult = [ordered]@{
                 status = 'error'
                 generatedAt = (Get-Date).ToString('o')
@@ -82,6 +95,7 @@ trap {
                 exitCode = 1
                 error = $errorMessage
                 details = $errorDetails
+                scriptStackTrace = $trapStk
                 note = 'Unhandled exception caught by global trap handler'
             }
             $json = $fallbackResult | ConvertTo-Json -Depth 12
@@ -106,17 +120,99 @@ try {
 } catch {
 }
 
+function Normalize-BootstrapPathSegment {
+    <#
+    .SYNOPSIS
+        Reduz caminho ou segmento a uma unica string escalar para Join-Path/Split-Path.
+        Evita erro PS 5.1: ChildPath como Object[] quando um ramo anterior devolveu coleção.
+    #>
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return '' }
+    $arr = @($Value)
+    if ($arr.Count -eq 0) { return '' }
+    $first = $arr[0]
+    if ($null -eq $first) { return '' }
+    return ([string]$first).Trim()
+}
+
+function Get-BootstrapSpecialFolderEnv {
+    param([Parameter(Mandatory = $true)][string]$EnvironmentName)
+    $v = [Environment]::GetEnvironmentVariable($EnvironmentName, 'Machine')
+    if ([string]::IsNullOrWhiteSpace($v)) { $v = [Environment]::GetEnvironmentVariable($EnvironmentName, 'Process') }
+    if ([string]::IsNullOrWhiteSpace($v)) { $v = [Environment]::GetEnvironmentVariable($EnvironmentName, 'User') }
+    return (Normalize-BootstrapPathSegment -Value $v)
+}
+
+function Write-BootstrapExceptionStackTrace {
+    param([Parameter(Mandatory = $true)]$ErrorRecord)
+    try {
+        $stk = [string]$ErrorRecord.ScriptStackTrace
+        if ([string]::IsNullOrWhiteSpace($stk)) { return }
+        if ($stk.Length -gt 3500) { $stk = $stk.Substring(0, 3497) + '...' }
+        Write-Log ("StackTrace: {0}" -f $stk) 'ERROR'
+    } catch {
+    }
+}
+
+function Get-BootstrapErrorRecordStackTraceText {
+    param([AllowNull()]$ErrorRecord)
+    if ($null -eq $ErrorRecord) { return '' }
+    try {
+        $stk = [string]$ErrorRecord.ScriptStackTrace
+        if ([string]::IsNullOrWhiteSpace($stk)) { return '' }
+        if ($stk.Length -gt 8000) { $stk = $stk.Substring(0, 7997) + '...' }
+        return $stk
+    } catch {
+        return ''
+    }
+}
+
+function Write-BootstrapExecutionErrorResultFromRecord {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [AllowNull()]$ErrorRecord,
+        [hashtable]$Extra = @{}
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    $msg = if ($ErrorRecord -and $ErrorRecord.Exception) { [string]$ErrorRecord.Exception.Message } else { 'unknown error' }
+    $stk = Get-BootstrapErrorRecordStackTraceText -ErrorRecord $ErrorRecord
+    $payload = [ordered]@{
+        status = 'error'
+        generatedAt = (Get-Date).ToString('o')
+        logPath = $script:LogPath
+        resultPath = $Path
+        error = $msg
+        scriptStackTrace = $stk
+    }
+    foreach ($k in $Extra.Keys) {
+        $payload[$k] = $Extra[$k]
+    }
+    try {
+        Write-BootstrapExecutionResultFile -Path $Path -Value $payload
+    } catch {
+        try {
+            Write-Log ("Falha ao gravar result.json de erro: {0}" -f $_.Exception.Message) 'ERROR'
+        } catch {
+        }
+    }
+    if ($ErrorRecord) {
+        Write-BootstrapExceptionStackTrace -ErrorRecord $ErrorRecord
+    }
+}
+
 function Write-Log {
     param(
         [Parameter(Mandatory = $true)][string]$Message,
         [ValidateSet('INFO', 'WARN', 'ERROR')][string]$Level = 'INFO'
     )
     $line = "[{0:yyyy-MM-dd HH:mm:ss}] [{1}] {2}" -f (Get-Date), $Level, $Message
-    if (-not [string]::IsNullOrWhiteSpace($script:LogPath)) {
+    $logFile = Normalize-BootstrapPathSegment -Value $script:LogPath
+    if (-not [string]::IsNullOrWhiteSpace($logFile)) {
         try {
-            $logParent = Split-Path -Path $script:LogPath -Parent
+            $logParent = Split-Path -Path $logFile -Parent
             if ($logParent -and -not (Test-Path $logParent)) { $null = New-Item -Path $logParent -ItemType Directory -Force }
-            Add-Content -Path $script:LogPath -Value $line -Encoding utf8 -ErrorAction SilentlyContinue
+            Add-Content -Path $logFile -Value $line -Encoding utf8 -ErrorAction SilentlyContinue
         } catch { }
     }
     Write-Host $line
@@ -178,8 +274,8 @@ function Assert-BootstrapDiskSpace {
 }
 
 function Get-BootstrapCheckpointPath {
-    $dataRoot = Get-BootstrapDataRoot
-    return Join-Path $dataRoot 'checkpoint.json'
+    $dataRoot = Normalize-BootstrapPathSegment -Value (Get-BootstrapDataRoot)
+    return (Join-Path -Path $dataRoot -ChildPath 'checkpoint.json')
 }
 
 function Save-BootstrapCheckpoint {
@@ -219,6 +315,79 @@ function Load-BootstrapCheckpoint {
 }
 
 function Invoke-BootstrapRollback {
+    param(
+        [string]$ChangesPath = '',
+        [switch]$AggressiveRollback
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($ChangesPath) -and (Test-Path -LiteralPath $ChangesPath)) {
+        Write-Log ("Iniciando Rollback por manifesto: {0}" -f $ChangesPath) 'WARN'
+        $manifest = Read-BootstrapJsonFile -Path $ChangesPath
+        $changes = @($manifest.changes)
+        if ($changes.Count -gt 1) { $changes = $changes[($changes.Count - 1)..0] }
+        foreach ($change in $changes) {
+            $type = [string]$change.Type
+            $target = [string]$change.Target
+            $name = [string]$change.Name
+            try {
+                switch ($type) {
+                    'Registry' {
+                        if ([string]::IsNullOrWhiteSpace($target) -or [string]::IsNullOrWhiteSpace($name)) { continue }
+                        if ($null -eq $change.OldValue) {
+                            Remove-ItemProperty -Path $target -Name $name -ErrorAction SilentlyContinue
+                        } else {
+                            if (-not (Test-Path $target)) { $null = New-Item -Path $target -Force }
+                            Set-ItemProperty -Path $target -Name $name -Value $change.OldValue -Force -ErrorAction Stop
+                        }
+                        Write-Log ("Rollback manifest Registry: {0}\{1}" -f $target, $name)
+                    }
+                    'EnvVar' {
+                        [Environment]::SetEnvironmentVariable($target, $change.OldValue, 'User')
+                        Write-Log ("Rollback manifest EnvVar: {0}" -f $target)
+                    }
+                    'Path' {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$change.OldValue)) {
+                            [Environment]::SetEnvironmentVariable('Path', [string]$change.OldValue, 'User')
+                            Write-Log 'Rollback manifest PATH restaurado.'
+                        }
+                    }
+                    'File' {
+                        $backup = [string]$change.OldValue
+                        if (-not [string]::IsNullOrWhiteSpace($backup) -and (Test-Path -LiteralPath $backup)) {
+                            Copy-Item -LiteralPath $backup -Destination $target -Force
+                            Write-Log ("Rollback manifest File restaurado: {0}" -f $target)
+                        } elseif (Test-Path -LiteralPath $target) {
+                            Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+                            Write-Log ("Rollback manifest File removido: {0}" -f $target)
+                        }
+                    }
+                    'Directory' {
+                        if (Test-Path -LiteralPath $target) {
+                            $items = @(Get-ChildItem -LiteralPath $target -Force -ErrorAction SilentlyContinue)
+                            if ($items.Count -eq 0) {
+                                Remove-Item -LiteralPath $target -Force -ErrorAction SilentlyContinue
+                                Write-Log ("Rollback manifest Directory vazio removido: {0}" -f $target)
+                            } else {
+                                Write-Log ("Rollback manifest Directory nao vazio; remocao manual: {0}" -f $target) 'WARN'
+                            }
+                        }
+                    }
+                    default {
+                        if ($AggressiveRollback) {
+                            Write-Log ("Rollback agressivo ainda nao implementado para {0}: {1}" -f $type, $target) 'WARN'
+                        } else {
+                            Write-Log ("Rollback manual recomendado para {0}: {1}" -f $type, $target) 'WARN'
+                        }
+                    }
+                }
+            } catch {
+                Write-Log ("Falha no rollback manifest ({0} {1}): {2}" -f $type, $target, $_.Exception.Message) 'WARN'
+            }
+        }
+        Write-Log 'Rollback por manifesto concluido.'
+        return
+    }
+
     Write-Log 'Iniciando Rollback das alteracoes de sistema...' 'WARN'
 
     # 1. Reverter Tweaks de Registro
@@ -248,19 +417,99 @@ function Invoke-BootstrapRollback {
 function Register-BootstrapChange {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
-        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Path')][string]$Type,
+        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'Clone')][string]$Type,
         [Parameter(Mandatory = $true)][string]$Target,
         [AllowNull()]$OldValue,
-        [string]$Name # Para Registro
+        [string]$Name,
+        [AllowNull()]$NewValue = $null,
+        [string]$Operation = '',
+        [string]$RollbackAction = '',
+        [string]$Reversible = '',
+        [string]$Component = ''
     )
+    if ([string]::IsNullOrWhiteSpace($Component) -and $State.ContainsKey('CurrentComponent')) {
+        $Component = [string]$State.CurrentComponent
+    }
+    if ([string]::IsNullOrWhiteSpace($Operation)) { $Operation = $Type }
+    if ([string]::IsNullOrWhiteSpace($RollbackAction)) {
+        $RollbackAction = switch ($Type) {
+            'Registry' { 'restore-registry-value' }
+            'File' { 'restore-or-remove-file' }
+            'Directory' { 'remove-created-directory-if-safe' }
+            'Path' { 'restore-path-string' }
+            'EnvVar' { 'restore-env-var' }
+            default { 'manual-review' }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($Reversible)) {
+        $Reversible = if ($Type -in @('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Shortcut', 'Task', 'Service', 'Clone')) { 'partial' } else { 'manual' }
+    }
     $change = [ordered]@{
         Type = $Type
+        Component = $Component
+        Operation = $Operation
         Target = $Target
         OldValue = $OldValue
+        NewValue = $NewValue
         Name = $Name
+        RollbackAction = $RollbackAction
+        Reversible = $Reversible
         Timestamp = (Get-Date).ToString('o')
     }
     $State.Changes.Add($change)
+    Save-BootstrapChangeManifest -State $State
+}
+
+function Get-BootstrapChangeManifestPath {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    if (-not [string]::IsNullOrWhiteSpace([string]$State.ChangeManifestPath)) { return [string]$State.ChangeManifestPath }
+    $root = Normalize-BootstrapPathSegment -Value (Get-BootstrapDataRoot)
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        throw 'Get-BootstrapChangeManifestPath: DataRoot vazio apos normalizacao; defina BOOTSTRAP_DATA_ROOT ou verifique permissoes.'
+    }
+    $runId = Normalize-BootstrapPathSegment -Value $State.RunId
+    if ([string]::IsNullOrWhiteSpace($runId)) { $runId = $script:StartTime.ToString('yyyyMMdd_HHmmss') }
+    $runsDir = Join-Path -Path $root -ChildPath 'runs'
+    $path = Join-Path -Path $runsDir -ChildPath (Join-Path -Path $runId -ChildPath 'changes.json')
+    $State.ChangeManifestPath = $path
+    return $path
+}
+
+function Get-BootstrapChangesSummary {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    $changes = @($State.Changes.ToArray())
+    $byType = [ordered]@{}
+    foreach ($change in $changes) {
+        $type = [string]$change.Type
+        if ([string]::IsNullOrWhiteSpace($type)) { $type = 'Unknown' }
+        if (-not $byType.Contains($type)) { $byType[$type] = 0 }
+        $byType[$type]++
+    }
+    $reversible = @($changes | Where-Object { [string]$_['Reversible'] -in @('full', 'partial') }).Count
+    $manual = @($changes | Where-Object { [string]$_['Reversible'] -in @('manual', 'none', '') }).Count
+    return [ordered]@{
+        total = $changes.Count
+        reversible = $reversible
+        manual = $manual
+        byType = $byType
+    }
+}
+
+function Save-BootstrapChangeManifest {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    try {
+        $path = Get-BootstrapChangeManifestPath -State $State
+        Write-BootstrapJsonFile -Path $path -Value ([ordered]@{
+            generatedAt = (Get-Date).ToString('o')
+            runId = [string]$State.RunId
+            workspaceRoot = [string]$State.WorkspaceRoot
+            cloneBaseDir = [string]$State.CloneBaseDir
+            summary = Get-BootstrapChangesSummary -State $State
+            changes = @($State.Changes.ToArray())
+        })
+    } catch {
+        try { Write-Log ("Falha ao salvar manifesto de mudancas: {0}" -f $_.Exception.Message) 'WARN' } catch { }
+    }
 }
 
 function Invoke-BootstrapAutoRollback {
@@ -316,55 +565,334 @@ function Invoke-BootstrapAutoRollback {
 
 function Invoke-BootstrapAuditMode {
     param(
-        [hashtable]$Resolution,
-        [hashtable]$State,
+        [Parameter(Mandatory = $true)]$Resolution,
+        [object]$State = $null,
         [switch]$Repair
     )
     Write-Log 'Iniciando Auditoria de Integridade (Audit Mode)...'
     $results = New-Object System.Collections.Generic.List[object]
+    $catalog = Get-BootstrapComponentCatalog
+    $wingetExe = Get-Winget
+    $wingetPresenceCache = @{}
 
-    foreach ($comp in $Resolution.ResolvedComponents) {
-        $def = $Resolution.Catalog[$comp]
-        if (-not $def) { continue }
+    function New-AuditRow {
+        param(
+            [Parameter(Mandatory = $true)][string]$Component,
+            [Parameter(Mandatory = $true)][string]$Status,
+            [string]$Detail = '',
+            [string]$HowToFix = ''
+        )
+
+        return [pscustomobject]@{
+            Component = $Component
+            Status = $Status
+            Detail = $Detail
+            HowToFix = $HowToFix
+        }
+    }
+
+    function Get-AuditKnownFix {
+        param([string]$ComponentName)
+
+        switch ($ComponentName) {
+            'system-core' { return 'Instale ou repare App Installer/winget, confirme diretorio de dados gravavel e reabra a UI.' }
+            'git-core' { return 'Instale Git for Windows via winget: winget install -e --id Git.Git; reabra a UI para atualizar PATH.' }
+            'git-lfs' { return 'Instale Git LFS apos Git: winget install -e --id GitHub.GitLFS; depois rode git lfs install.' }
+            'node-core' { return 'Instale Node.js LTS via winget: winget install -e --id OpenJS.NodeJS.LTS; reabra a UI para atualizar PATH.' }
+            'python-core' { return 'Instale Python real via winget: winget install -e --id Python.Python.3.13; desative aliases python.exe/python3.exe da Microsoft Store se necessario.' }
+            'java-core' { return 'Instale Temurin JDK 17 via winget: winget install -e --id EclipseAdoptium.Temurin.17.JDK; reabra a UI para atualizar PATH.' }
+            'dotnet-core' { return 'Instale .NET SDK 8 via winget: winget install -e --id Microsoft.DotNet.SDK.8; confirme `dotnet --list-sdks` nao vazio e reabra a UI para atualizar PATH.' }
+            default { return 'Execute a instalacao do perfil correspondente ou instale o componente indicado; depois reabra a UI para atualizar PATH.' }
+        }
+    }
+
+    function Test-AuditPathIsWindowsStoreAlias {
+        param([string]$Path)
+        return (-not [string]::IsNullOrWhiteSpace($Path) -and $Path -match '\\Microsoft\\WindowsApps\\')
+    }
+
+    function Get-AuditFirstExistingPath {
+        param([string[]]$Candidates)
+        foreach ($candidate in @($Candidates)) {
+            if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+            $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+            $match = @(Get-Item -Path $expanded -ErrorAction SilentlyContinue | Select-Object -First 1)
+            if ($match.Count -gt 0) { return [string]$match[0].FullName }
+        }
+        return ''
+    }
+
+    function Test-AuditWingetInstalled {
+        param([string]$Id)
+        if ([string]::IsNullOrWhiteSpace($Id) -or -not $wingetExe) { return $false }
+        if (-not $wingetPresenceCache.ContainsKey($Id)) {
+            $installed = $false
+            try {
+                $cap = Invoke-WingetListIdProbe -WingetPath $wingetExe -Id $Id -TimeoutMs 8000
+                $combined = ([string]$cap.stdout + "`n" + [string]$cap.stderr).Trim()
+                if ([bool]$cap.timedOut) {
+                    Write-Log ("Audit: winget list timeout para {0}; tratando como nao confirmado." -f $Id) 'WARN'
+                    $installed = $false
+                } else {
+                    $installed = ($combined -match [regex]::Escape($Id))
+                }
+            } catch {
+                Write-Log ("Audit: falha ao consultar winget para {0}: {1}" -f $Id, $_.Exception.Message) 'WARN'
+                $installed = $false
+            }
+            $wingetPresenceCache[$Id] = $installed
+        }
+        return [bool]$wingetPresenceCache[$Id]
+    }
+
+    function Invoke-AuditVersionCommand {
+        param(
+            [Parameter(Mandatory = $true)][string]$ComponentName,
+            [Parameter(Mandatory = $true)][string]$CommandName,
+            [string[]]$Args = @('--version'),
+            [string[]]$InstalledPathCandidates = @(),
+            [string]$WingetId = ''
+        )
+
+        $fix = Get-AuditKnownFix -ComponentName $ComponentName
+        $cmdPath = Resolve-CommandPath -Name $CommandName
+        if ($cmdPath -and (Test-AuditPathIsWindowsStoreAlias -Path $cmdPath)) {
+            return (New-AuditRow -Component $ComponentName -Status 'AliasOnly' -Detail ("Alias da Microsoft Store encontrado em PATH: {0}" -f $cmdPath) -HowToFix $fix)
+        }
+
+        if ($ComponentName -eq 'node-core' -and $cmdPath -and $cmdPath -match '\\resources\\app\\resources\\helpers\\node\.exe$') {
+            return (New-AuditRow -Component $ComponentName -Status 'RuntimeOnly' -Detail ("Node embutido de aplicativo detectado, nao Node.js LTS do sistema: {0}" -f $cmdPath) -HowToFix $fix)
+        }
+
+        if ($cmdPath) {
+            try {
+                $output = (& $cmdPath @Args 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+                $output = $output.Trim()
+                if ([string]::IsNullOrWhiteSpace($output)) { $output = 'comando executado sem saida' }
+                return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("Versao: {0} ({1})" -f $output, $cmdPath) -HowToFix '')
+            } catch {
+                return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ("Comando encontrado, mas falhou: {0} ({1})" -f $_.Exception.Message, $cmdPath) -HowToFix $fix)
+            }
+        }
+
+        $installedPath = Get-AuditFirstExistingPath -Candidates $InstalledPathCandidates
+        if (-not [string]::IsNullOrWhiteSpace($installedPath)) {
+            return (New-AuditRow -Component $ComponentName -Status 'InstalledButNotInPath' -Detail ("Binario encontrado fora do PATH: {0}" -f $installedPath) -HowToFix $fix)
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($WingetId) -and (Test-AuditWingetInstalled -Id $WingetId)) {
+            return (New-AuditRow -Component $ComponentName -Status 'InstalledButNotInPath' -Detail ("winget lista {0} como instalado, mas {1} nao esta no PATH." -f $WingetId, $CommandName) -HowToFix $fix)
+        }
+
+        return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail ("Comando ausente: {0}" -f $CommandName) -HowToFix $fix)
+    }
+
+    function Invoke-AuditSystemCore {
+        param([string]$ComponentName)
+
+        $issues = New-Object System.Collections.Generic.List[string]
+        if ($wingetExe) {
+            $issues.Add("winget OK: $wingetExe")
+        } else {
+            $issues.Add('winget ausente.')
+        }
+
+        $dataRoot = Get-BootstrapDataRoot
+        if (Test-BootstrapDirectoryWritable -Path $dataRoot) {
+            $issues.Add("DataRoot gravavel: $dataRoot")
+        } else {
+            $issues.Add("DataRoot nao gravavel: $dataRoot")
+        }
+
+        try {
+            [void][Net.ServicePointManager]::SecurityProtocol
+            $issues.Add('TLS/ServicePointManager acessivel.')
+        } catch {
+            $issues.Add("TLS indisponível: $($_.Exception.Message)")
+        }
+
+        $healthy = ($wingetExe -and (Test-BootstrapDirectoryWritable -Path $dataRoot))
+        $status = if ($healthy) { 'Healthy' } else { 'Unhealthy' }
+        $fix = if ($healthy) { '' } else { Get-AuditKnownFix -ComponentName $ComponentName }
+        return (New-AuditRow -Component $ComponentName -Status $status -Detail ($issues -join ' ') -HowToFix $fix)
+    }
+
+    function Get-AuditSpecializedRow {
+        param([string]$ComponentName)
+
+        switch ($ComponentName) {
+            'system-core' {
+                return (Invoke-AuditSystemCore -ComponentName $ComponentName)
+            }
+            'git-core' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'git' -Args @('--version') -WingetId 'Git.Git' -InstalledPathCandidates @('%ProgramFiles%\Git\cmd\git.exe', '%ProgramFiles%\Git\bin\git.exe', '%LocalAppData%\Programs\Git\cmd\git.exe'))
+            }
+            'git-lfs' {
+                $gitRow = @($results.ToArray() | Where-Object { [string]$_.Component -eq 'git-core' } | Select-Object -First 1)
+                if ($gitRow -and ([string]$gitRow.Status -ne 'Healthy')) {
+                    return (New-AuditRow -Component $ComponentName -Status 'Blocked' -Detail ("Bloqueado por git-core: {0}" -f [string]$gitRow.Status) -HowToFix (Get-AuditKnownFix -ComponentName $ComponentName))
+                }
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'git-lfs' -Args @('--version') -WingetId 'GitHub.GitLFS' -InstalledPathCandidates @('%ProgramFiles%\Git LFS\git-lfs.exe', '%ProgramFiles%\Git\mingw64\bin\git-lfs.exe'))
+            }
+            'node-core' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'node' -Args @('-v') -WingetId 'OpenJS.NodeJS.LTS' -InstalledPathCandidates @('%ProgramFiles%\nodejs\node.exe'))
+            }
+            'python-core' {
+                $pythonRow = Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'python' -Args @('--version') -WingetId 'Python.Python.3.13' -InstalledPathCandidates @('%LocalAppData%\Programs\Python\Python313\python.exe', '%ProgramFiles%\Python313\python.exe')
+                if ([string]$pythonRow.Status -eq 'Missing') {
+                    $pyPath = Resolve-CommandPath -Name 'py'
+                    if ($pyPath -and -not (Test-AuditPathIsWindowsStoreAlias -Path $pyPath)) {
+                        return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'py' -Args @('-3', '--version') -InstalledPathCandidates @())
+                    }
+                }
+                return $pythonRow
+            }
+            'java-core' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'java' -Args @('-version') -WingetId 'EclipseAdoptium.Temurin.17.JDK' -InstalledPathCandidates @('%ProgramFiles%\Eclipse Adoptium\jdk-17*\bin\java.exe', '%ProgramFiles%\Java\jdk-17*\bin\java.exe'))
+            }
+            'dotnet-core' {
+                $fix = Get-AuditKnownFix -ComponentName $ComponentName
+                $cmdPath = Resolve-CommandPath -Name 'dotnet'
+                if ($cmdPath -and (Test-AuditPathIsWindowsStoreAlias -Path $cmdPath)) {
+                    return (New-AuditRow -Component $ComponentName -Status 'AliasOnly' -Detail ("Alias da Microsoft Store encontrado em PATH: {0}" -f $cmdPath) -HowToFix $fix)
+                }
+                if ($cmdPath) {
+                    try {
+                        $raw = (& $cmdPath @('--list-sdks') 2>&1 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+                        if (Test-BootstrapDotNetSdkListHasMajorBand -ListSdksOutput $raw -Major 8) {
+                            $detail = ($raw.Trim() -replace "`r?`n", '; ')
+                            if ($detail.Length -gt 240) { $detail = $detail.Substring(0, 237) + '...' }
+                            return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("SDKs: {0} ({1})" -f $detail, $cmdPath) -HowToFix '')
+                        }
+                        if (Test-BootstrapDotNetSdkListHasEntry -ListSdksOutput $raw) {
+                            return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ("dotnet com SDKs, mas nenhum na banda 8.x (dotnet-core requer .NET 8 SDK): {0}" -f $cmdPath) -HowToFix $fix)
+                        }
+                        return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ("dotnet encontrado mas sem SDK instalado (list-sdks vazio ou invalido): {0}" -f $cmdPath) -HowToFix $fix)
+                    } catch {
+                        return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ("dotnet encontrado mas falhou ao listar SDKs: {0} ({1})" -f $_.Exception.Message, $cmdPath) -HowToFix $fix)
+                    }
+                }
+                $installedPath = Get-AuditFirstExistingPath -Candidates @('%ProgramFiles%\dotnet\dotnet.exe')
+                if (-not [string]::IsNullOrWhiteSpace($installedPath)) {
+                    return (New-AuditRow -Component $ComponentName -Status 'InstalledButNotInPath' -Detail ("Binario encontrado fora do PATH: {0}" -f $installedPath) -HowToFix $fix)
+                }
+                if (Test-AuditWingetInstalled -Id 'Microsoft.DotNet.SDK.8') {
+                    return (New-AuditRow -Component $ComponentName -Status 'InstalledButNotInPath' -Detail 'winget lista Microsoft.DotNet.SDK.8 como instalado, mas dotnet nao esta no PATH.' -HowToFix $fix)
+                }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'Comando ausente: dotnet' -HowToFix $fix)
+            }
+            default {
+                return $null
+            }
+        }
+    }
+
+    foreach ($comp in @($Resolution.ResolvedComponents)) {
+        $def = $catalog[$comp]
+        if (-not $def) {
+            Write-Log ("Audit: Componente {0} -> Unknown (sem entrada no catalogo)" -f $comp) 'WARN'
+            $results.Add((New-AuditRow -Component $comp -Status 'Unknown' -Detail 'Sem definicao no catalogo de componentes.' -HowToFix 'Revise o catalogo de componentes do bootstrap.'))
+            continue
+        }
 
         $status = 'Unknown'
         $detail = ''
+        $howToFix = ''
 
-        # 1. Verificar Versão se houver comando
-        if ($def.VersionCheckCommand) {
+        $specializedRow = Get-AuditSpecializedRow -ComponentName $comp
+        if ($specializedRow) {
+            $status = [string]$specializedRow.Status
+            $detail = [string]$specializedRow.Detail
+            $howToFix = [string]$specializedRow.HowToFix
+        }
+
+        if ($status -eq 'Unknown' -and $def.VersionCheckCommand) {
             try {
-                $actualVersion = Invoke-Expression $def.VersionCheckCommand -ErrorAction Stop
-                if ($def.ExpectedVersion -and $actualVersion -notmatch $def.ExpectedVersion) {
+                $actualVersion = Invoke-Expression $def.VersionCheckCommand -ErrorAction Stop 2>&1
+                $verText = if ($null -eq $actualVersion) { '' } elseif ($actualVersion -is [System.Collections.ICollection] -and -not ($actualVersion -is [string])) {
+                    (($actualVersion | ForEach-Object { [string]$_ }) -join ' ').Trim()
+                } else {
+                    [string]$actualVersion
+                }
+                if ($def.ExpectedVersion -and $verText -notmatch $def.ExpectedVersion) {
                     $status = 'Unhealthy'
-                    $detail = "Versao atual: $actualVersion, Esperada: $($def.ExpectedVersion)"
+                    $detail = "Versao atual: $verText, Esperada: $($def.ExpectedVersion)"
+                    $howToFix = Get-AuditKnownFix -ComponentName $comp
                 } else {
                     $status = 'Healthy'
-                    $detail = "Versao: $actualVersion"
+                    $detail = "Versao: $verText"
                 }
             } catch {
                 $status = 'Missing'
                 $detail = "Falha ao verificar versao: $($_.Exception.Message)"
+                $howToFix = Get-AuditKnownFix -ComponentName $comp
             }
         }
-        # 2. Fallback para ProbePaths ou CommandName se ainda Unknown
+
         if ($status -eq 'Unknown') {
-            if ($def.Data -and $def.Data.ContainsKey('ProbePaths')) {
+            $probeScript = $def | Select-Object -ExpandProperty ProbePaths -ErrorAction SilentlyContinue
+            $probeList = @()
+            if ($probeScript) { $probeList = @($probeScript) }
+            if ($probeList.Count -gt 0) {
                 $found = $false
-                foreach ($p in @($def.Data.ProbePaths)) {
-                    $expanded = [Environment]::ExpandEnvironmentVariables($p)
-                    if (Test-Path $expanded) { $found = $true; break }
+                foreach ($p in $probeList) {
+                    $expanded = [Environment]::ExpandEnvironmentVariables([string]$p)
+                    if (Test-Path -LiteralPath $expanded) { $found = $true; break }
                 }
                 $status = if ($found) { 'Healthy' } else { 'Missing' }
-            } elseif ($def.Data -and $def.Data.ContainsKey('CommandName')) {
-                if (Get-Command $def.Data.CommandName -ErrorAction SilentlyContinue) {
+                $detail = if ($found) { 'ProbePaths encontrado.' } else { 'Nenhum ProbePaths encontrado.' }
+                if ($status -ne 'Healthy') { $howToFix = Get-AuditKnownFix -ComponentName $comp }
+            }
+        }
+
+        if ($status -eq 'Unknown') {
+            $cmdProbe = [string]($def | Select-Object -ExpandProperty CommandName -ErrorAction SilentlyContinue)
+            if (-not [string]::IsNullOrWhiteSpace($cmdProbe)) {
+                $cmdPath = Resolve-CommandPath -Name $cmdProbe
+                if ($cmdPath -and (Test-AuditPathIsWindowsStoreAlias -Path $cmdPath)) {
+                    $status = 'AliasOnly'
+                    $detail = "Alias da Microsoft Store encontrado: $cmdPath"
+                    $howToFix = Get-AuditKnownFix -ComponentName $comp
+                } elseif ($cmdPath) {
                     $status = 'Healthy'
+                    $detail = "Comando disponivel: $cmdProbe ($cmdPath)"
                 } else {
                     $status = 'Missing'
+                    $detail = "Comando ausente: $cmdProbe"
+                    $howToFix = Get-AuditKnownFix -ComponentName $comp
                 }
             }
         }
 
-        Write-Log ("Audit: Componente {0} -> {1} ({2})" -f $comp, $status, $detail)
+        if ($status -eq 'Unknown' -and [string]$def.Kind -eq 'winget' -and -not [string]::IsNullOrWhiteSpace([string]$def.Id) -and $wingetExe) {
+            try {
+                $wid = [string]$def.Id
+                if (-not $wingetPresenceCache.ContainsKey($wid)) {
+                    $wingetPresenceCache[$wid] = Test-WingetPackageInstalled -WingetPath $wingetExe -Id $wid
+                }
+                if ([bool]$wingetPresenceCache[$wid]) {
+                    $status = 'Healthy'
+                    $detail = "winget: pacote $wid presente."
+                } else {
+                    $status = 'Missing'
+                    $detail = "winget: pacote $wid nao listado como instalado."
+                    $howToFix = Get-AuditKnownFix -ComponentName $comp
+                }
+            } catch {
+                $detail = "winget: erro ao consultar $($def.Id): $($_.Exception.Message)"
+                $status = 'Unknown'
+                $howToFix = Get-AuditKnownFix -ComponentName $comp
+            }
+        }
+
+        if ($status -eq 'Unknown') {
+            $status = 'Skipped'
+            $detail = ('Sem heuristica de auditoria para Kind={0}.' -f [string]$def.Kind)
+            $howToFix = 'Nenhuma correcao automatica sugerida para este tipo de componente; valide manualmente ou adicione heuristica de auditoria ao catalogo.'
+        }
+
+        $logDetail = if ([string]::IsNullOrWhiteSpace($howToFix)) { $detail } else { "$detail | Como corrigir: $howToFix" }
+        Write-Log ("Audit: Componente {0} -> {1} ({2})" -f $comp, $status, $logDetail)
 
         if ($Repair -and $status -ne 'Healthy' -and $State) {
             Write-Log ("Repair: Tentando reinstalar {0}..." -f $comp) 'WARN'
@@ -376,7 +904,7 @@ function Invoke-BootstrapAuditMode {
             }
         }
 
-        $results.Add([pscustomobject]@{ Component = $comp; Status = $status; Detail = $detail })
+        $results.Add((New-AuditRow -Component $comp -Status $status -Detail $detail -HowToFix $howToFix))
     }
 
     return $results
@@ -526,6 +1054,11 @@ function Test-WslCorruptionText {
 }
 
 function Invoke-NativeCaptureWithLog {
+    <#
+    .NOTES
+        Evitar para saidas muito grandes (ex.: winget list em tabelas longas): use Invoke-WingetListIdProbe
+        ou redirecionamento para ficheiro; este caminho espelha cada linha para o log e usa pipes assincronos.
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Exe,
         [string[]]$Args = @(),
@@ -541,7 +1074,9 @@ function Invoke-NativeCaptureWithLog {
             }) -join ' ')
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
-    $psi.RedirectStandardInput = $true
+    # So redirecionar stdin quando houver dados a enviar: com RedirectStandardInput=true e pipe aberto,
+    # alguns EXEs (winget list, etc.) bloqueiam a espera de EOF e o audit/UI nunca chegam a result.json.
+    $psi.RedirectStandardInput = ($null -ne $InputText)
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
 
@@ -574,6 +1109,9 @@ function Invoke-NativeCaptureWithLog {
         try { $proc.Kill() } catch { }
         try { $null = $proc.WaitForExit(5000) } catch { }
     }
+
+    try { $proc.CancelOutputRead() } catch { }
+    try { $proc.CancelErrorRead() } catch { }
 
     $exitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
     $stdout = [string]$stdoutSb.ToString()
@@ -669,24 +1207,40 @@ function Ensure-PythonPathHealthy {
 
     $resolved = Resolve-CommandPath -Name 'python'
     if ($resolved -and ($resolved -match '\\Microsoft\\WindowsApps\\')) {
-        Write-Log "python ainda resolve para WindowsApps após priorização: $resolved" 'WARN'
+        Write-Log "python ainda resolve para WindowsApps apos priorização: $resolved" 'WARN'
     }
 }
 
 function Set-UserEnvVar {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string]$Value
+        [Parameter(Mandatory = $true)][object]$Value
     )
+    $valueString = if ($null -eq $Value) {
+        ''
+    } elseif ($Value -is [string]) {
+        $Value.Trim()
+    } elseif ($Value -is [System.Collections.IEnumerable]) {
+        $picked = $null
+        foreach ($piece in @($Value)) {
+            if ($null -eq $piece) { continue }
+            $s = [string]$piece
+            if (-not [string]::IsNullOrWhiteSpace($s)) { $picked = $s.Trim(); break }
+        }
+        if ($null -eq $picked) { '' } else { $picked }
+    } else {
+        ([string]$Value).Trim()
+    }
+
     $current = [Environment]::GetEnvironmentVariable($Name, 'User')
-    $logValue = Get-BootstrapEnvValueForLog -Name $Name -Value $Value
-    if ($current -ne $Value) {
-        [Environment]::SetEnvironmentVariable($Name, $Value, 'User')
-        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+    $logValue = Get-BootstrapEnvValueForLog -Name $Name -Value $valueString
+    if ($current -ne $valueString) {
+        [Environment]::SetEnvironmentVariable($Name, $valueString, 'User')
+        [Environment]::SetEnvironmentVariable($Name, $valueString, 'Process')
         Notify-BootstrapEnvironmentChanged
         Write-Log "Definido $Name (Usuário) = $logValue"
     } else {
-        [Environment]::SetEnvironmentVariable($Name, $Value, 'Process')
+        [Environment]::SetEnvironmentVariable($Name, $valueString, 'Process')
         Write-Log "Já definido $Name (Usuário) = $logValue"
     }
 }
@@ -801,7 +1355,7 @@ function Install-BootstrapSteamDeckShellMenu {
             Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
             Start-Process explorer.exe | Out-Null
         } catch {
-            Write-Log "Falha ao reiniciar explorer após shell menu: $($_.Exception.Message)" 'WARN'
+            Write-Log "Falha ao reiniciar explorer apos shell menu: $($_.Exception.Message)" 'WARN'
         }
     }
 
@@ -960,6 +1514,11 @@ function Get-BootstrapPreflightRequirements {
                 $requiresWinget = $true
                 $needsMicrosoft = $true
             }
+            'dotnet-core' {
+                $requiresNetwork = $true
+                $requiresWinget = $true
+                $needsMicrosoft = $true
+            }
             'python-core' {
                 $requiresNetwork = $true
                 $requiresWinget = $true
@@ -1100,8 +1659,41 @@ function Invoke-BootstrapExecutionPreflight {
     $pendingRebootReasons = @(Get-BootstrapPendingRebootReasons)
     if ($pendingRebootReasons.Count -gt 0) {
         Write-Log ("Reinicio pendente detectado: {0}. Recomendo reiniciar antes de prosseguir para evitar falhas de Store/winget/WSL." -f ($pendingRebootReasons -join ', ')) 'WARN'
+        if ($script:RequireNoPendingReboot) {
+            throw ("Preflight: reinicio pendente e flag -RequireNoPendingReboot ativa. Motivos: {0}. Reinicie o Windows e execute novamente, ou remova a flag." -f ($pendingRebootReasons -join ', '))
+        }
     } else {
         Write-Log 'Nenhum reinicio pendente detectado.'
+    }
+
+    $catalogForManual = Get-BootstrapComponentCatalog
+    $manualPlanRows = New-Object System.Collections.Generic.List[object]
+    foreach ($compName in @($ResolvedComponents)) {
+        $def = $catalogForManual[$compName]
+        if (-not $def) { continue }
+        if ([string]$def.Kind -ne 'manual-required') { continue }
+        $optional = $false
+        if ($def.PSObject.Properties.Name -contains 'Optional') { $optional = [bool]$def.Optional }
+        $displayName = if ($def.PSObject.Properties.Name -contains 'DisplayName') { [string]$def.DisplayName } else { $compName }
+        $instructions = if ($def.PSObject.Properties.Name -contains 'Instructions') { [string]$def.Instructions } else { '' }
+        $installed = $false
+        try { $installed = [bool](Test-BootstrapManualRequirementInstalled -ComponentDef $def) } catch { $installed = $false }
+        $wouldBlock = (-not $optional) -and (-not $script:SkipManualRequirements) -and (-not $script:IgnoreManualRequirements) -and (-not $installed)
+        $manualPlanRows.Add([ordered]@{
+            component = [string]$compName
+            displayName = $displayName
+            optional = $optional
+            installedProbe = $installed
+            wouldBlockWithoutSkipOrIgnore = $wouldBlock
+            instructionsPreview = if ($instructions.Length -gt 220) { $instructions.Substring(0, 217) + '...' } else { $instructions }
+        }) | Out-Null
+    }
+    if ($manualPlanRows.Count -gt 0) {
+        Write-Log ("Preflight: {0} componente(s) manual-required no plano resolvido (ver result.preflight.manualRequiredInPlan)." -f $manualPlanRows.Count)
+        foreach ($row in @($manualPlanRows.ToArray())) {
+            $blk = [string]$row['wouldBlockWithoutSkipOrIgnore']
+            Write-Log ("Preflight manual-required: {0} ({1}) optional={2} installedProbe={3} bloqueariaSemFlags={4}" -f [string]$row['component'], [string]$row['displayName'], [string]$row['optional'], [string]$row['installedProbe'], $blk)
+        }
     }
 
     $wingetPath = $null
@@ -1174,6 +1766,8 @@ function Invoke-BootstrapExecutionPreflight {
         requiresNetwork = $requirements.RequiresNetwork
         requiresWinget = $requirements.RequiresWinget
         pendingRebootReasons = @($pendingRebootReasons)
+        requireNoPendingReboot = [bool]$script:RequireNoPendingReboot
+        manualRequiredInPlan = $(if ($manualPlanRows.Count -gt 0) { @($manualPlanRows.ToArray()) } else { @() })
         wingetPath = $wingetPath
         appInstallerPresent = ($null -ne $appInstaller)
         connectivity = $(if ($connectivitySummary.Count -gt 0) { $connectivitySummary.ToArray() } else { @() })
@@ -1218,8 +1812,8 @@ function Invoke-NativeWithRetry {
 
 function Get-BootstrapCacheDir {
     if (-not [string]::IsNullOrWhiteSpace($script:CacheDir)) { return $script:CacheDir }
-    $dataRoot = Get-BootstrapDataRoot
-    return Join-Path $dataRoot 'cache'
+    $dataRoot = Normalize-BootstrapPathSegment -Value (Get-BootstrapDataRoot)
+    return (Join-Path -Path $dataRoot -ChildPath 'cache')
 }
 
 function Invoke-WebRequestWithRetry {
@@ -1260,7 +1854,7 @@ function Invoke-WebRequestWithRetry {
             }
             Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $OutFile | Out-Null
 
-            # Salvar no cache após sucesso
+            # Salvar no cache apos sucesso
             if (-not (Test-Path $cacheDir)) { $null = New-Item -Path $cacheDir -ItemType Directory -Force }
             Copy-Item -Path $OutFile -Destination $cachedPath -Force -ErrorAction SilentlyContinue
 
@@ -1971,7 +2565,7 @@ function Ensure-ClaudeHookConfigsHealthy {
         try {
             $obj = $raw | ConvertFrom-Json -ErrorAction Stop
         } catch {
-            Write-Log "Config de hooks não é JSON válido: $path" 'WARN'
+            Write-Log "Config de hooks nao é JSON válido: $path" 'WARN'
             continue
         }
 
@@ -2514,7 +3108,7 @@ function Ensure-WindowsOptionalFeatureEnabled {
         '/NoRestart'
     )
     if (($exitCode -ne 0) -and ($exitCode -ne 3010)) { throw "Falha ao habilitar recurso do Windows: $DisplayName (exit=$exitCode)." }
-    Write-Log "$DisplayName habilitado. Pode ser necessário reiniciar o Windows." 'WARN'
+    Write-Log "$DisplayName habilitado. Pode ser necessario reiniciar o Windows." 'WARN'
 }
 
 function Ensure-WslUi {
@@ -2612,7 +3206,9 @@ function Ensure-WingetPackage {
         [bool]$PreferUserScope = $true,
         [bool]$AllowFailureWhenNotAdmin = $false
     )
+    Write-Log ("winget: verificando instalacao de {0} (id={1})..." -f $DisplayName, $Id)
     $isInstalled = Test-WingetPackageInstalled -WingetPath $WingetPath -Id $Id
+    Write-Log ("winget list: verificacao concluida para id={0}; jaInstalado={1}" -f $Id, $isInstalled)
 
     if ($isInstalled) {
         Write-Log "$DisplayName já instalado (winget)."
@@ -2629,15 +3225,19 @@ function Ensure-WingetPackage {
         '--disable-interactivity'
     )
 
+    # Tentativas extras com backoff (Invoke-NativeWithRetry) para falhas transitórias de rede/Store.
+    $wingetInstallMaxAttempts = 5
+    $wingetInitialDelaySeconds = 2
+
     $exitCode = -1
     if ($PreferUserScope) {
-        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgs) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user"
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgs) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --scope user (winget). Tentando novamente sem --scope..." 'WARN'
         }
     }
     if ($exitCode -ne 0) {
-        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgs -OperationName "$DisplayName via winget"
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgs -OperationName "$DisplayName via winget" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
     }
     if ($exitCode -ne 0) {
         if ($AllowFailureWhenNotAdmin -and (-not (Test-IsAdmin))) {
@@ -2650,16 +3250,108 @@ function Ensure-WingetPackage {
     Write-Log "Instalação concluída: $DisplayName"
 }
 
+# Codigos de saida do winget em que "list" sem correspondencia significa pacote nao instalado (comportamento normal, nao falha operacional).
+# Ver: https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/returnCodes.md (0x8A150014)
+$script:WingetListExitCodesNotInstalled = @(
+    -1978335212
+)
+
+function Invoke-WingetListIdProbe {
+    <#
+    .SYNOPSIS
+        Executa winget list -e --id com redirecionamento para ficheiros temporarios (evita deadlock de pipes
+        e espelhamento linha-a-linha do Invoke-NativeCaptureWithLog em saidas muito grandes).
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$WingetPath,
+        [Parameter(Mandatory = $true)][string]$Id,
+        [int]$TimeoutMs = 120000
+    )
+
+    $guid = [Guid]::NewGuid().ToString('N')
+    $tempRoot = Normalize-BootstrapPathSegment -Value $env:TEMP
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) {
+        throw 'Invoke-WingetListIdProbe: TEMP indisponivel; nao e possivel criar ficheiros de captura winget.'
+    }
+    $stdoutPath = Join-Path -Path $tempRoot -ChildPath ("phasezero-winget-probe-{0}.out" -f $guid)
+    $stderrPath = Join-Path -Path $tempRoot -ChildPath ("phasezero-winget-probe-{0}.err" -f $guid)
+    $timedOut = $false
+    $exitCode = -1
+    $stdoutText = ''
+    $stderrText = ''
+    try {
+        $argList = @(
+            'list', '-e', '--id', $Id,
+            '--accept-source-agreements',
+            '--disable-interactivity'
+        )
+        $proc = Start-Process -FilePath $WingetPath -ArgumentList $argList -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden -PassThru
+        if (-not $proc.WaitForExit($TimeoutMs)) {
+            $timedOut = $true
+            try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+            try { $null = $proc.WaitForExit(5000) } catch { }
+            $exitCode = 124
+        } else {
+            $exitCode = [int]$proc.ExitCode
+        }
+        if (Test-Path -LiteralPath $stdoutPath) {
+            try { $stdoutText = [System.IO.File]::ReadAllText($stdoutPath) } catch { $stdoutText = '' }
+        }
+        if (Test-Path -LiteralPath $stderrPath) {
+            try { $stderrText = [System.IO.File]::ReadAllText($stderrPath) } catch { $stderrText = '' }
+        }
+    } catch {
+        throw
+    } finally {
+        try { if (Test-Path -LiteralPath $stdoutPath) { Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue } } catch { }
+        try { if (Test-Path -LiteralPath $stderrPath) { Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue } } catch { }
+    }
+
+    return [ordered]@{
+        exitCode = $exitCode
+        timedOut = $timedOut
+        stdout   = $stdoutText
+        stderr   = $stderrText
+    }
+}
+
 function Test-WingetPackageInstalled {
     param(
         [Parameter(Mandatory = $true)][string]$WingetPath,
         [Parameter(Mandatory = $true)][string]$Id
     )
     try {
-        $out = & $WingetPath list -e --id $Id 2>&1
-        if (-not $out) { return $false }
-        return (($out | Out-String) -match [regex]::Escape($Id))
+        $timeoutMs = 120000
+        $timeoutSec = [int]([Math]::Max(1, $timeoutMs / 1000))
+        Write-Log ("winget list: iniciando (timeout {0}s) id={1}" -f $timeoutSec, $Id)
+        $cap = Invoke-WingetListIdProbe -WingetPath $WingetPath -Id $Id -TimeoutMs $timeoutMs
+        $combined = ([string]$cap.stdout + "`n" + [string]$cap.stderr).Trim()
+        if ([bool]$cap.timedOut) {
+            Write-Log ("winget list: timeout ({0}s) ao verificar id={1}; assume-se nao instalado para permitir tentativa de install." -f $timeoutSec, $Id) 'WARN'
+            return $false
+        }
+        if ([int]$cap.exitCode -ne 0) {
+            $exit = [int]$cap.exitCode
+            if ($script:WingetListExitCodesNotInstalled -contains $exit) {
+                Write-Log ("winget list: id={0} nao consta como instalado (exit {1}, NO_APPLICATIONS_FOUND / 0x8A150014; esperado quando o pacote ainda nao esta instalado)." -f $Id, $exit)
+                return $false
+            }
+            $hint = ''
+            if (-not [string]::IsNullOrWhiteSpace($combined)) {
+                $lines = ($combined -replace "`r", '') -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+                if ($lines.Count -gt 0) {
+                    $firstLine = [string]$lines[0]
+                    if ($firstLine.Length -gt 200) { $firstLine = $firstLine.Substring(0, 200) + '...' }
+                    $hint = (' Saida: {0}' -f $firstLine)
+                }
+            }
+            Write-Log ("winget list: exitCode={0} id={1}; assume-se nao instalado.{2}" -f $exit, $Id, $hint) 'WARN'
+            return $false
+        }
+        if ([string]::IsNullOrWhiteSpace($combined)) { return $false }
+        return ($combined -match [regex]::Escape($Id))
     } catch {
+        Write-Log ("winget list: excecao ao verificar id={0}: {1}" -f $Id, $_.Exception.Message) 'WARN'
         return $false
     }
 }
@@ -2718,7 +3410,7 @@ function Ensure-Python {
         }
     }
 
-    if (-not $pythonExe -or ($pythonExe -match '\\Microsoft\\WindowsApps\\')) { throw 'Python instalado via winget, mas o comando python não foi encontrado no PATH.' }
+    if (-not $pythonExe -or ($pythonExe -match '\\Microsoft\\WindowsApps\\')) { throw 'Python instalado via winget, mas o comando python nao foi encontrado no PATH.' }
     $ver = ((& $pythonExe --version) 2>&1 | Select-Object -First 1)
     Write-Log "python instalado: $ver ($pythonExe)"
     Ensure-PythonPathHealthy -PythonExe $pythonExe
@@ -2726,27 +3418,71 @@ function Ensure-Python {
 
 function Get-GitExe {
     $cmd = Get-Command git -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
+    if ($null -ne $cmd) {
+        $cmdOne = @($cmd | Select-Object -First 1)[0]
+        if ($null -ne $cmdOne) {
+            $src = [string]$cmdOne.Source
+            if (-not [string]::IsNullOrWhiteSpace($src) -and (Test-Path -LiteralPath $src)) {
+                return $src
+            }
+        }
+    }
+    $pf64 = Get-BootstrapSpecialFolderEnv -EnvironmentName 'ProgramFiles'
+    $pf86 = Get-BootstrapSpecialFolderEnv -EnvironmentName 'ProgramFiles(x86)'
     $candidates = @(
-        Join-Path $env:ProgramFiles 'Git\cmd\git.exe',
-        Join-Path $env:ProgramFiles 'Git\bin\git.exe',
-        Join-Path ${env:ProgramFiles(x86)} 'Git\cmd\git.exe',
-        Join-Path ${env:ProgramFiles(x86)} 'Git\bin\git.exe'
-    ) | Where-Object { $_ -and (Test-Path $_) }
-    return $candidates | Select-Object -First 1
+        $(if ($pf64) { Join-Path -Path $pf64 -ChildPath 'Git\cmd\git.exe' } else { $null }),
+        $(if ($pf64) { Join-Path -Path $pf64 -ChildPath 'Git\bin\git.exe' } else { $null }),
+        $(if ($pf86) { Join-Path -Path $pf86 -ChildPath 'Git\cmd\git.exe' } else { $null }),
+        $(if ($pf86) { Join-Path -Path $pf86 -ChildPath 'Git\bin\git.exe' } else { $null })
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    $first = @($candidates | Select-Object -First 1)[0]
+    if ([string]::IsNullOrWhiteSpace([string]$first)) { return $null }
+    return [string]$first
 }
 
 function Get-GitBashExe {
-    $fromUser = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', 'User')
-    if ($fromUser -and (Test-Path $fromUser)) { return (Get-Item $fromUser).FullName }
-    if ($env:CLAUDE_CODE_GIT_BASH_PATH -and (Test-Path $env:CLAUDE_CODE_GIT_BASH_PATH)) { return (Get-Item $env:CLAUDE_CODE_GIT_BASH_PATH).FullName }
+    function Resolve-ClaudeGitBashPathCandidate {
+        param([AllowNull()][string]$CandidatePath)
+        if ([string]::IsNullOrWhiteSpace($CandidatePath)) { return $null }
+        $p = $CandidatePath.Trim()
+        try {
+            if (Test-Path -LiteralPath $p) {
+                $item = @(Get-Item -LiteralPath $p -ErrorAction SilentlyContinue | Select-Object -First 1)[0]
+                if ($null -eq $item) { return $null }
+                return [string]$item.FullName
+            }
+        } catch {
+            return $null
+        }
+        try {
+            if ([WildcardPattern]::ContainsWildcardCharacters($p)) {
+                $item = @(Get-Item -Path $p -ErrorAction SilentlyContinue | Select-Object -First 1)[0]
+                if ($null -eq $item) { return $null }
+                return [string]$item.FullName
+            }
+        } catch {
+            return $null
+        }
+        return $null
+    }
+
+    $fromUser = Normalize-BootstrapPathSegment -Value ([Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', 'User'))
+    $resolved = Resolve-ClaudeGitBashPathCandidate -CandidatePath $fromUser
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) { return $resolved }
+    $resolved = Resolve-ClaudeGitBashPathCandidate -CandidatePath (Normalize-BootstrapPathSegment -Value $env:CLAUDE_CODE_GIT_BASH_PATH)
+    if (-not [string]::IsNullOrWhiteSpace($resolved)) { return $resolved }
+
+    $pf64 = Get-BootstrapSpecialFolderEnv -EnvironmentName 'ProgramFiles'
+    $pf86 = Get-BootstrapSpecialFolderEnv -EnvironmentName 'ProgramFiles(x86)'
     $candidates = @(
-        Join-Path $env:ProgramFiles 'Git\bin\bash.exe',
-        Join-Path $env:ProgramFiles 'Git\usr\bin\bash.exe',
-        Join-Path ${env:ProgramFiles(x86)} 'Git\bin\bash.exe',
-        Join-Path ${env:ProgramFiles(x86)} 'Git\usr\bin\bash.exe'
-    ) | Where-Object { $_ -and (Test-Path $_) }
-    return $candidates | Select-Object -First 1
+        $(if ($pf64) { Join-Path -Path $pf64 -ChildPath 'Git\bin\bash.exe' } else { $null }),
+        $(if ($pf64) { Join-Path -Path $pf64 -ChildPath 'Git\usr\bin\bash.exe' } else { $null }),
+        $(if ($pf86) { Join-Path -Path $pf86 -ChildPath 'Git\bin\bash.exe' } else { $null }),
+        $(if ($pf86) { Join-Path -Path $pf86 -ChildPath 'Git\usr\bin\bash.exe' } else { $null })
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    $first = @($candidates | Select-Object -First 1)[0]
+    if ([string]::IsNullOrWhiteSpace([string]$first)) { return $null }
+    return [string]$first
 }
 
 function Ensure-GitAndBash {
@@ -2756,12 +3492,14 @@ function Ensure-GitAndBash {
         Ensure-WingetPackage -WingetPath $WingetPath -Id 'Git.Git' -DisplayName 'Git for Windows'
         $git = Get-GitExe
     }
-    if (-not $git) { throw 'Falha ao localizar git.exe após a instalação.' }
+    if (-not $git) { throw 'Falha ao localizar git.exe apos a instalação.' }
+    $git = [string](@($git)[0]).Trim()
     $gitVersion = & $git --version
     Write-Log "git: $gitVersion ($git)"
 
     $bash = Get-GitBashExe
-    if (-not $bash) { throw 'bash.exe (Git Bash) não encontrado após a instalação do Git.' }
+    if (-not $bash) { throw 'bash.exe (Git Bash) nao encontrado apos a instalação do Git.' }
+    $bash = [string](@($bash)[0]).Trim()
     Set-UserEnvVar -Name 'CLAUDE_CODE_GIT_BASH_PATH' -Value $bash
     Write-Log "bash: $bash"
     return @{ Git = $git; Bash = $bash }
@@ -2770,7 +3508,9 @@ function Ensure-GitAndBash {
 function Get-NodeExe {
     $cmd = Get-Command node -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    $candidate = Join-Path $env:ProgramFiles 'nodejs\node.exe'
+    $pf = Get-BootstrapSpecialFolderEnv -EnvironmentName 'ProgramFiles'
+    if (-not $pf) { return $null }
+    $candidate = Join-Path -Path $pf -ChildPath 'nodejs\node.exe'
     if (Test-Path $candidate) { return $candidate }
     return $null
 }
@@ -2778,9 +3518,108 @@ function Get-NodeExe {
 function Get-NpmCmd {
     $cmd = Get-Command npm.cmd -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    $candidate = Join-Path $env:ProgramFiles 'nodejs\npm.cmd'
+    $pf = Get-BootstrapSpecialFolderEnv -EnvironmentName 'ProgramFiles'
+    if (-not $pf) { return $null }
+    $candidate = Join-Path -Path $pf -ChildPath 'nodejs\npm.cmd'
     if (Test-Path $candidate) { return $candidate }
     return $null
+}
+
+function Test-BootstrapDotNetSdkListHasEntry {
+    <#
+    .SYNOPSIS
+        Indica se a saida de `dotnet --list-sdks` contem pelo menos uma linha de SDK (major.minor.patch).
+    #>
+    param([string]$ListSdksOutput)
+    if ([string]::IsNullOrWhiteSpace($ListSdksOutput)) { return $false }
+    foreach ($line in ($ListSdksOutput -split "`r?`n")) {
+        $t = $line.Trim()
+        if ($t -match '^\d+\.\d+\.\d+') { return $true }
+    }
+    return $false
+}
+
+function Test-BootstrapDotNetSdkListHasMajorBand {
+    <#
+    .SYNOPSIS
+        Indica se a saida de `dotnet --list-sdks` inclui SDK na banda major dada (ex.: 8 para .NET 8).
+    #>
+    param(
+        [string]$ListSdksOutput,
+        [int]$Major
+    )
+    if ([string]::IsNullOrWhiteSpace($ListSdksOutput)) { return $false }
+    $pat = '^\s*{0}\.\d+\.\d+' -f $Major
+    foreach ($line in ($ListSdksOutput -split "`r?`n")) {
+        if (($line.Trim()) -match $pat) { return $true }
+    }
+    return $false
+}
+
+function Get-DotNetExe {
+    $candidate = $null
+    try {
+        $pf = Get-BootstrapSpecialFolderEnv -EnvironmentName 'ProgramFiles'
+        if ($pf) { $candidate = Join-Path -Path $pf -ChildPath 'dotnet\dotnet.exe' }
+    } catch { $candidate = $null }
+    if ($candidate -and (Test-Path -LiteralPath $candidate)) { return $candidate }
+
+    $resolved = Resolve-CommandPath -Name 'dotnet'
+    if (-not $resolved) { return $null }
+    if ($resolved -match '\\Microsoft\\WindowsApps\\') { return $null }
+    return $resolved
+}
+
+function Get-DotNetListSdksOutput {
+    param([Parameter(Mandatory = $true)][string]$DotnetExe)
+    try {
+        $lines = & $DotnetExe @('--list-sdks') 2>&1 | ForEach-Object { [string]$_ }
+        return ($lines -join [Environment]::NewLine)
+    } catch {
+        return ''
+    }
+}
+
+function Ensure-DotNetSdkAndVerify {
+    param([Parameter(Mandatory = $true)][string]$WingetPath)
+
+    $dotnetWingetId = 'Microsoft.DotNet.SDK.8'
+    $targetMajor = 8
+    $dotnet = Get-DotNetExe
+    $sdkText = if ($dotnet) { Get-DotNetListSdksOutput -DotnetExe $dotnet } else { '' }
+    $hasBand8 = Test-BootstrapDotNetSdkListHasMajorBand -ListSdksOutput $sdkText -Major $targetMajor
+
+    if (-not $hasBand8) {
+        Ensure-WingetPackage -WingetPath $WingetPath -Id $dotnetWingetId -DisplayName 'Microsoft .NET SDK 8' -AllowFailureWhenNotAdmin $false
+        Refresh-SessionPath
+        $dotnet = Get-DotNetExe
+        $sdkText = if ($dotnet) { Get-DotNetListSdksOutput -DotnetExe $dotnet } else { '' }
+        $hasBand8 = Test-BootstrapDotNetSdkListHasMajorBand -ListSdksOutput $sdkText -Major $targetMajor
+    }
+
+    if (-not $dotnet) {
+        throw ('Falha ao localizar dotnet.exe apos instalar/verificar {0}. Confirme PATH (reabra a UI ou a sessao) e que o pacote winget instalou em Program Files.' -f $dotnetWingetId)
+    }
+
+    if (-not $hasBand8) {
+        throw ('dotnet.exe em {0}, mas `dotnet --list-sdks` nao lista SDK {1}.x (host sem SDK, PATH errado ou instalacao incompleta). Corrija com: winget install -e --id {2}; depois reabra a sessao.' -f $dotnet, $targetMajor, $dotnetWingetId)
+    }
+
+    $hostVer = ''
+    try {
+        $hostVer = ([string](& $dotnet @('--version') 2>&1 | Select-Object -First 1)).Trim()
+    } catch {
+        $hostVer = ''
+    }
+    Write-Log ("dotnet host: {0} ({1})" -f $(if ($hostVer) { $hostVer } else { '-' }), $dotnet)
+    $sdkPreview = ($sdkText.Trim() -replace "`r?`n", ' | ')
+    if ($sdkPreview.Length -gt 400) { $sdkPreview = $sdkPreview.Substring(0, 397) + '...' }
+    Write-Log ("dotnet --list-sdks: {0}" -f $sdkPreview)
+
+    return @{
+        DotnetExe = $dotnet
+        SdkListText = $sdkText
+    }
 }
 
 function Get-NodeMajor {
@@ -2808,12 +3647,12 @@ function Ensure-NodeAndNpm {
         Refresh-SessionPath
         $node = Get-NodeExe
     }
-    if (-not $node) { throw 'Falha ao localizar node.exe após a instalação.' }
+    if (-not $node) { throw 'Falha ao localizar node.exe apos a instalação.' }
     $nodeVersion = & $node -v
     Write-Log "node: $nodeVersion ($node)"
 
     $npmCmd = Get-NpmCmd
-    if (-not $npmCmd) { throw 'Falha ao localizar npm.cmd após a instalação.' }
+    if (-not $npmCmd) { throw 'Falha ao localizar npm.cmd apos a instalação.' }
     $npmVersion = & $npmCmd --version
     Write-Log "npm: $npmVersion ($npmCmd)"
 
@@ -2849,6 +3688,17 @@ function Invoke-NativeFirstLine {
         [Parameter(Mandatory = $true)][string]$Exe,
         [string[]]$Args = @()
     )
+
+    if ($Exe -match '\.(ps1|psm1|psd1)$') {
+        $psHost = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (-not (Test-Path -LiteralPath $psHost)) { $psHost = 'powershell.exe' }
+        try {
+            $out = & $psHost -NoProfile -ExecutionPolicy Bypass -File $Exe @Args 2>&1
+            return ($out | Select-Object -First 1)
+        } catch {
+            return ''
+        }
+    }
 
     $argsText = ''
     if ($Args -and $Args.Count -gt 0) { $argsText = ($Args -join ' ') }
@@ -2906,7 +3756,7 @@ function Ensure-ClaudeCode {
     Refresh-SessionPath
 
     $claudeExe = Resolve-CommandPath -Name 'claude'
-    if (-not $claudeExe) { throw 'Claude Code instalado (winget), mas o comando claude não foi encontrado no PATH.' }
+    if (-not $claudeExe) { throw 'Claude Code instalado (winget), mas o comando claude nao foi encontrado no PATH.' }
     $ver = ((& $claudeExe --version) 2>&1 | Select-Object -First 1)
     Write-Log "claude instalado: $ver ($claudeExe)"
 }
@@ -2959,7 +3809,7 @@ function Ensure-Uv {
     }
 
     $pythonExe = Resolve-CommandPath -Name 'python'
-    if (-not $pythonExe) { throw 'uv é necessário, mas o comando python não foi encontrado para instalar uv via pip.' }
+    if (-not $pythonExe) { throw 'uv é necessario, mas o comando python nao foi encontrado para instalar uv via pip.' }
 
     Write-Log 'Instalando uv via pip...'
     $exitCode = Invoke-NativeWithRetry -Exe $pythonExe -Args @('-m', 'pip', 'install', '-U', '--upgrade-strategy', 'only-if-needed', 'uv') -OperationName 'instalacao do uv via pip'
@@ -2967,7 +3817,7 @@ function Ensure-Uv {
 
     Refresh-SessionPath
     $uvExe = Resolve-CommandPath -Name 'uv'
-    if (-not $uvExe) { throw 'Instalação do uv concluída, mas o comando uv não foi encontrado no PATH.' }
+    if (-not $uvExe) { throw 'Instalação do uv concluída, mas o comando uv nao foi encontrado no PATH.' }
 
     $ver = Invoke-NativeFirstLine -Exe $uvExe -Args @('--version')
     Write-Log "uv instalado: $ver ($uvExe)"
@@ -3012,7 +3862,7 @@ function Ensure-UvToolPackage {
     Refresh-SessionPath
 
     $exe = Resolve-CommandPath -Name $CommandName
-    if (-not $exe) { throw "Instalação do $DisplayName concluída, mas o comando $CommandName não foi encontrado no PATH." }
+    if (-not $exe) { throw "Instalação do $DisplayName concluída, mas o comando $CommandName nao foi encontrado no PATH." }
 
     if ($exitCode -ne 0) {
         Write-Log ("{0} retornou exit={1}, mas o comando {2} foi localizado no PATH; o bootstrap vai validar o binario e continuar." -f $DisplayName, $exitCode, $CommandName) 'WARN'
@@ -3061,7 +3911,7 @@ function Ensure-Goose {
     Refresh-SessionPath
 
     $gooseExe = Resolve-CommandPath -Name 'goose'
-    if (-not $gooseExe) { throw 'Instalação do goose concluída, mas o comando goose não foi encontrado no PATH.' }
+    if (-not $gooseExe) { throw 'Instalação do goose concluída, mas o comando goose nao foi encontrado no PATH.' }
 
     $ver = Invoke-NativeFirstLine -Exe $gooseExe -Args @('--version')
     Write-Log "goose instalado: $ver ($gooseExe)"
@@ -3080,7 +3930,7 @@ function Ensure-OpenCode {
         Write-Log 'Instalando opencode via script oficial...'
         $exitCode = Invoke-NativeWithRetry -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://opencode.ai/install | bash') -OperationName 'instalacao do opencode via script oficial'
         if ($exitCode -ne 0) { throw "Falha ao instalar opencode via script oficial (exit=$exitCode)." }
-        if (-not (Test-Path $exe)) { throw "Instalação do opencode concluída, mas não encontrei: $exe" }
+        if (-not (Test-Path $exe)) { throw "Instalação do opencode concluída, mas nao encontrei: $exe" }
         $ver = & $exe --version
         Write-Log "opencode instalado: $ver ($exe)"
     }
@@ -3134,10 +3984,10 @@ function Ensure-OpenClaw {
         }
 
         $exitCode2 = Invoke-NpmWithLog -NpmCmd $NpmCmd -Args @('install', '-g', 'openclaw@latest', '--force')
-        if ($exitCode2 -ne 0) { throw "Falha ao instalar OpenClaw via npm (mesmo após retry) (exit=$exitCode2)." }
+        if ($exitCode2 -ne 0) { throw "Falha ao instalar OpenClaw via npm (mesmo apos retry) (exit=$exitCode2)." }
     }
 
-    if (-not (Test-Path $openclawCmd)) { throw "Instalação do OpenClaw concluída, mas não encontrei: $openclawCmd" }
+    if (-not (Test-Path $openclawCmd)) { throw "Instalação do OpenClaw concluída, mas nao encontrei: $openclawCmd" }
     $ver = Invoke-NativeFirstLine -Exe $openclawCmd -Args @('--version')
     Write-Log "openclaw instalado: $ver ($openclawCmd)"
 }
@@ -3213,6 +4063,37 @@ function Get-BootstrapUserHomePath {
     try {
         $folder = [Environment]::GetFolderPath('UserProfile')
         if (-not [string]::IsNullOrWhiteSpace($folder)) { return $folder }
+    } catch {
+    }
+    return (Get-Location).Path
+}
+
+function Get-BootstrapDefaultWorkspaceRoot {
+    if (-not [string]::IsNullOrWhiteSpace([string]$env:BOOTSTRAP_WORKSPACE_ROOT)) {
+        $explicit = [string]$env:BOOTSTRAP_WORKSPACE_ROOT.Trim()
+        if (-not [string]::IsNullOrWhiteSpace($explicit)) {
+            return $explicit
+        }
+    }
+
+    $steamPreferred = 'F:\Steam\Steamapps'
+    try {
+        $item = Get-Item -LiteralPath $steamPreferred -ErrorAction SilentlyContinue
+        if ($item -and $item.PSIsContainer) {
+            return $steamPreferred
+        }
+    } catch {
+    }
+
+    $home = Get-BootstrapUserHomePath
+    if (-not [string]::IsNullOrWhiteSpace($home)) {
+        return (Join-Path $home 'Workspace')
+    }
+
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($env:SystemDrive)) {
+            return (Join-Path $env:SystemDrive 'Workspace')
+        }
     } catch {
     }
     return (Get-Location).Path
@@ -5095,7 +5976,11 @@ function Get-BootstrapDataRoot {
         }
     }
 
-    $script:BootstrapDataRoot = (Join-Path (Get-Location).Path '.bootstrap-tools')
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $script:BootstrapDataRoot = (Join-Path $PSScriptRoot '.bootstrap-tools')
+    } else {
+        $script:BootstrapDataRoot = (Join-Path (Get-Location).Path '.bootstrap-tools')
+    }
     return $script:BootstrapDataRoot
 }
 
@@ -6085,7 +6970,7 @@ function Get-BootstrapClaudeDesktopAccessDiagnostic {
         return [ordered]@{
             status = 'not-configured'
             reason = 'anthropic-provider-missing'
-            message = 'Provider Anthropic não encontrado no inventário.'
+            message = 'Provider Anthropic nao encontrado no inventário.'
             action = 'Cadastre e valide uma credencial Anthropic ativa no API Center.'
         }
     }
@@ -6106,7 +6991,7 @@ function Get-BootstrapClaudeDesktopAccessDiagnostic {
         return [ordered]@{
             status = 'blocked'
             reason = 'organization-access-blocked'
-            message = 'A organização autenticada não possui acesso ao Claude.'
+            message = 'A organização autenticada nao possui acesso ao Claude.'
             action = 'No Claude Desktop, faça logout/login com a conta correta ou solicite habilitação ao administrador da organização.'
         }
     }
@@ -6117,7 +7002,7 @@ function Get-BootstrapClaudeDesktopAccessDiagnostic {
     return [ordered]@{
         status = 'warning'
         reason = 'validation-failed'
-        message = "Credencial Anthropic não validada: $validationMessage"
+        message = "Credencial Anthropic nao validada: $validationMessage"
         action = 'Valide novamente a credencial no API Center e confirme plano/permissões da conta Anthropic.'
     }
 }
@@ -6170,7 +7055,7 @@ function Get-BootstrapAppChannelCoverageSummary {
         $hasMcp = (@($mcpMap.Keys).Count -gt 0)
 
         $status = 'mcp-only'
-        $reason = 'BYOK não disponível por target resolvido; MCP mantido.'
+        $reason = 'BYOK nao disponível por target resolvido; MCP mantido.'
         if ($hasByok -and $hasMcp) {
             $status = 'byok+mcp'
             $reason = 'Aplicação completa: BYOK + MCP.'
@@ -7801,7 +8686,7 @@ function Apply-BootstrapSharedVramLaunchOptions {
 
         $localConfigCandidates = @(Get-ChildItem -Path (Join-Path $SteamRoot 'userdata') -Filter 'localconfig.vdf' -Recurse -ErrorAction SilentlyContinue)
         if (@($localConfigCandidates).Count -eq 0) {
-            $changes += @([ordered]@{ appId = $appId; status = 'skipped'; reason = 'localconfig.vdf não encontrado para nenhum usuário Steam.' })
+            $changes += @([ordered]@{ appId = $appId; status = 'skipped'; reason = 'localconfig.vdf nao encontrado para nenhum usuário Steam.' })
             continue
         }
 
@@ -7818,7 +8703,7 @@ function Apply-BootstrapSharedVramLaunchOptions {
             $sectionPattern = "(?ms)(""$([regex]::Escape($appId))""\s*\{.*?\})"
             $hasGameSection = [regex]::IsMatch($raw, $sectionPattern)
             if (-not $hasGameSection) {
-                $changes += @([ordered]@{ appId = $appId; path = $targetPath; status = 'skipped'; reason = 'App não encontrado no localconfig.vdf deste usuário.' })
+                $changes += @([ordered]@{ appId = $appId; path = $targetPath; status = 'skipped'; reason = 'App nao encontrado no localconfig.vdf deste usuário.' })
                 continue
             }
 
@@ -8146,6 +9031,7 @@ function Get-BootstrapComponentStage {
         'system-core' { return 'runtime' }
         'git-core' { return 'runtime' }
         'node-core' { return 'runtime' }
+        'dotnet-core' { return 'runtime' }
         'python-core' { return 'runtime' }
         'wsl-core' { return 'runtime' }
         'steamdeck-settings' { return 'config' }
@@ -8179,6 +9065,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['node-core'] = New-BootstrapComponentDefinition -Name 'node-core' -Description 'Node.js LTS e npm global bin.' -DependsOn @('system-core') -Optional $false -Kind 'node-core' -EstimatedSizeGB 1.0 -RequiresNetwork $true -VersionCheckCommand 'node -v'
     $catalog['python-core'] = New-BootstrapComponentDefinition -Name 'python-core' -Description 'Python 3.13, PATH e uv.' -DependsOn @('system-core') -Optional $false -Kind 'python-core' -EstimatedSizeGB 1.5 -RequiresNetwork $true -VersionCheckCommand 'python --version'
     $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)' } -EstimatedSizeGB 2.0 -RequiresNetwork $true -VersionCheckCommand 'java -version'
+    $catalog['dotnet-core'] = New-BootstrapComponentDefinition -Name 'dotnet-core' -Description 'Microsoft .NET SDK 8 (LTS), PATH e verificacao dotnet --list-sdks. Palavras-chave na busca da UI: dotnet, dotnet core, net8, sdk8, winget Microsoft.DotNet.SDK.8.' -DependsOn @('system-core') -Optional $false -Kind 'dotnet-core' -EstimatedSizeGB 1.2 -RequiresNetwork $true -VersionCheckCommand 'dotnet --list-sdks'
     $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick' }
     $catalog['sevenzip'] = New-BootstrapComponentDefinition -Name 'sevenzip' -Description '7-Zip e ajuste de PATH.' -DependsOn @('system-core') -Kind 'sevenzip'
     $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7' }
@@ -8328,14 +9215,14 @@ function Get-BootstrapComponentCatalog {
 function Get-BootstrapProfileCatalog {
     $catalog = [ordered]@{}
 
-    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
-    $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para máquina nova.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'google-app-desktop', 'brave', 'notepadpp')
+    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para máquina nova.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
     $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
-    $catalog['utilities'] = New-BootstrapProfileDefinition -Name 'utilities' -Description 'Downloads e ferramentas de poweruser.' -Items @('jdownloader', 'fan-control', 'mem-reduct', 'raycast', 'sparkle')
+    $catalog['utilities'] = New-BootstrapProfileDefinition -Name 'utilities' -Description 'Downloads e ferramentas de poweruser.' -Items @('jdownloader', 'fan-control', 'mem-reduct', 'raycast', 'sparkle', 'google-app-desktop')
     $catalog['creator'] = New-BootstrapProfileDefinition -Name 'creator' -Description 'Ferramentas de criação e mídia.' -Items @('autohotkey', 'blender', 'ffmpeg')
     $catalog['game-dev'] = New-BootstrapProfileDefinition -Name 'game-dev' -Description 'Toolchain de jogos e compilação.' -Items @('unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community')
     $catalog['gaming'] = New-BootstrapProfileDefinition -Name 'gaming' -Description 'Steam e ferramentas relacionadas.' -Items @('steam', 'steamcmd')
@@ -8351,7 +9238,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['steamdeck-backup'] = New-BootstrapProfileDefinition -Name 'steamdeck-backup' -Description 'Backup de drivers e imagem golden.' -Items @('driver-store-explorer', 'macrium-reflect')
     $catalog['steamdeck-recommended'] = New-BootstrapProfileDefinition -Name 'steamdeck-recommended' -Description 'Experiencia recomendada para este Steam Deck.' -Items @('steamdeck-essentials', 'steamdeck-input', 'steamdeck-power', 'steamdeck-dock', 'steamdeck-connectivity', 'steamdeck-qol', 'steamdeck-shell-menu', 'steamdeck-sharedvram-launch-options')
     $catalog['steamdeck-full'] = New-BootstrapProfileDefinition -Name 'steamdeck-full' -Description 'Camada completa Steam Deck, incluindo storage/capture/backup e bloqueadores manuais.' -Items @('steamdeck-recommended', 'steamdeck-storage', 'steamdeck-capture', 'steamdeck-backup', 'steamdeck-zero-touch', 'epic-games', 'msi-afterburner', 'lossless-scaling', 'joyshockmapper', 'vibrancegui', 'steamdeck-driver-pack')
-    $catalog['workspace'] = New-BootstrapProfileDefinition -Name 'workspace' -Description 'Layout em F:\Steam\Steamapps e Dev.' -Items @('workspace-layout', 'pycharm-community', 'dotnet-6-sdk')
+    $catalog['workspace'] = New-BootstrapProfileDefinition -Name 'workspace' -Description 'Layout em F:\Steam\Steamapps e Dev.' -Items @('workspace-layout', 'pycharm-community', 'dotnet-core')
     $catalog['recommended'] = New-BootstrapProfileDefinition -Name 'recommended' -Description 'Perfis recomendados para sua máquina pessoal.' -Items @('base', 'containers', 'ai', 'creator', 'workspace', 'security', 'social', 'utilities')
     $catalog['full'] = New-BootstrapProfileDefinition -Name 'full' -Description 'Instala tudo.' -Items @('recommended', 'automation', 'game-dev', 'gaming')
 
@@ -8446,6 +9333,7 @@ function Get-BootstrapUiContract {
             kind = [string]$componentDef.Kind
             stage = Get-BootstrapComponentStage -ComponentDef $componentDef
             valueReason = if ($componentDef.PSObject.Properties.Name -contains 'ValueReason') { [string]$componentDef.ValueReason } else { [string]$componentDef.Description }
+            reversibility = Get-BootstrapComponentReversibility -ComponentDef $componentDef
         }
     }
 
@@ -8455,7 +9343,7 @@ function Get-BootstrapUiContract {
         hostHealthModes = @(Get-BootstrapHostHealthModes)
         appTuningModes = @(Get-BootstrapAppTuningModes)
         defaults = [ordered]@{
-            workspaceRoot = 'F:\Steam\Steamapps'
+            workspaceRoot = Get-BootstrapDefaultWorkspaceRoot
             steamDeckVersion = 'Auto'
             uiLanguage = 'pt-BR'
             legacyHostHealth = 'off'
@@ -8547,6 +9435,51 @@ function Test-BootstrapComponentDependsOn {
     }
 
     return $false
+}
+
+function Get-BootstrapComponentReversibility {
+    param([Parameter(Mandatory = $true)]$ComponentDef)
+
+    $kind = [string]$ComponentDef.Kind
+    $changeTypes = @()
+    $reversible = 'manual'
+    $notes = 'Validacao manual recomendada antes de reverter.'
+
+    switch ($kind) {
+        'alias' { $reversible = 'none'; $notes = 'Alias nao altera o sistema.' }
+        'manual-required' { $reversible = 'none'; $changeTypes = @('manual'); $notes = 'Dependencia manual fora do controle do bootstrap.' }
+        'system-core' { $reversible = 'partial'; $changeTypes = @('package', 'path'); $notes = 'App Installer/winget e PATH podem exigir reparo manual.' }
+        'winget' { $reversible = 'manual'; $changeTypes = @('package'); $notes = 'Pacote pode ser removido via winget uninstall, mas rollback automatico nao remove apps por padrao.' }
+        'chocolatey' { $reversible = 'manual'; $changeTypes = @('package'); $notes = 'Pacote pode ser removido via choco uninstall quando instalado pelo bootstrap.' }
+        'npm' { $reversible = 'partial'; $changeTypes = @('package'); $notes = 'Pacote global pode ser removido via npm uninstall -g quando instalado pelo bootstrap.' }
+        'uvtool' { $reversible = 'partial'; $changeTypes = @('package'); $notes = 'Ferramenta uv pode exigir remocao manual ou uv tool uninstall.' }
+        'repo-clone' { $reversible = 'partial'; $changeTypes = @('clone', 'directory'); $notes = 'Diretorio clonado pode ser removido se foi criado pelo bootstrap.' }
+        'workspace' { $reversible = 'partial'; $changeTypes = @('directory'); $notes = 'Diretorios vazios criados pelo bootstrap podem ser removidos.' }
+        'web-app-shortcut' { $reversible = 'full'; $changeTypes = @('shortcut', 'file'); $notes = 'Atalhos criados pelo bootstrap podem ser removidos.' }
+        'steamdeck-shell-menu' { $reversible = 'partial'; $changeTypes = @('registry', 'file'); $notes = 'Shell menu possui remocao especifica; valide backups.' }
+        'bootstrap-secrets' { $reversible = 'partial'; $changeTypes = @('file', 'env'); $notes = 'Backups/manifests permitem restauracao parcial; segredos devem ser validados manualmente.' }
+        'bootstrap-mcps' { $reversible = 'partial'; $changeTypes = @('file'); $notes = 'Configs com backup podem ser restauradas; entradas externas exigem validacao.' }
+        'vscode-extensions' { $reversible = 'manual'; $changeTypes = @('package', 'file'); $notes = 'Extensoes podem ser removidas manualmente pelo editor/CLI.' }
+        default {
+            if ($kind -match 'settings|config|automation|agent-skills') {
+                $reversible = 'partial'
+                $changeTypes = @('file')
+                $notes = 'Arquivos/configs devem usar backups quando disponiveis.'
+            } elseif ($kind -match 'git|node|python|wsl|steamdeck|codex|claude|opencode|openclaw|goose|hermes|sevenzip') {
+                $reversible = 'partial'
+                $changeTypes = @('package', 'file', 'path')
+                $notes = 'Instalacao automatizada com reversao parcial; remocao de apps e runtimes e manual por padrao.'
+            } else {
+                $changeTypes = @('unknown')
+            }
+        }
+    }
+
+    return [ordered]@{
+        reversible = $reversible
+        changeTypes = @($changeTypes)
+        rollbackNotes = $notes
+    }
 }
 
 function Resolve-BootstrapComponents {
@@ -8642,7 +9575,7 @@ function Resolve-BootstrapComponents {
         if (-not $resolved.Contains($excludedName)) { continue }
 
         if (-not $components[$excludedName].Optional) {
-            throw "O componente $excludedName é obrigatório e não pode ser excluído."
+            throw "O componente $excludedName é obrigatório e nao pode ser excluído."
         }
 
         foreach ($resolvedName in @($resolved.ToArray())) {
@@ -8761,16 +9694,23 @@ function Resolve-BootstrapCloneBaseDir {
         [string[]]$ResolvedComponents
     )
 
+    $ExplicitCloneBaseDir = Normalize-BootstrapPathSegment -Value $ExplicitCloneBaseDir
+    $ResolvedWorkspaceRoot = Normalize-BootstrapPathSegment -Value $ResolvedWorkspaceRoot
+
     if (-not [string]::IsNullOrWhiteSpace($ExplicitCloneBaseDir)) {
         return $ExplicitCloneBaseDir
     }
 
-    $preferredProjectsDir = Join-Path $ResolvedWorkspaceRoot 'DevProjetos'
+    $preferredProjectsDir = Join-Path -Path $ResolvedWorkspaceRoot -ChildPath 'DevProjetos'
     $driveRoot = $null
     try { $driveRoot = Split-Path -Path $ResolvedWorkspaceRoot -Qualifier } catch { $driveRoot = $null }
 
     if (($ResolvedComponents -contains 'workspace-layout') -and $driveRoot -and (Test-Path $driveRoot)) {
         return $preferredProjectsDir
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        return $PSScriptRoot
     }
 
     return (Get-Location).Path
@@ -8789,11 +9729,15 @@ function New-BootstrapState {
         [bool]$IsDryRun = $false
     )
 
+    $wsRoot = Normalize-BootstrapPathSegment -Value $ResolvedWorkspaceRoot
+    $cloneRoot = Normalize-BootstrapPathSegment -Value $ResolvedCloneBaseDir
+
     return @{
         Selection = $Selection
         DryRun = $IsDryRun
-        WorkspaceRoot = $ResolvedWorkspaceRoot
-        CloneBaseDir = $ResolvedCloneBaseDir
+        RunId = $script:StartTime.ToString('yyyyMMdd_HHmmss')
+        WorkspaceRoot = $wsRoot
+        CloneBaseDir = $cloneRoot
         EnableClaudeCodeProjectMcps = $false
         RequestedSteamDeckVersion = $RequestedSteamDeckVersion
         ResolvedSteamDeckVersion = $ResolvedSteamDeckVersion
@@ -8808,6 +9752,7 @@ function New-BootstrapState {
         Winget = $null
         GitInfo = $null
         NodeInfo = $null
+        DotNetInfo = $null
         PythonReady = $false
         SecretsPath = $null
         SecretsSummary = $null
@@ -8817,6 +9762,10 @@ function New-BootstrapState {
         VsCodeExtensionsSummary = $null
         PreflightDone = $false
         PreflightSummary = $null
+        CurrentComponent = ''
+        ComponentStatus = @{}
+        LastError = $null
+        ChangeManifestPath = ''
         Completed = @{}
         ManualRequirements = New-Object System.Collections.Generic.List[object]
         Changes = New-Object System.Collections.Generic.List[object]
@@ -8846,6 +9795,14 @@ function Ensure-BootstrapNodeCore {
     if ($State.NodeInfo) { return }
     Ensure-BootstrapSystemCore -State $State
     $State.NodeInfo = Ensure-NodeAndNpm -WingetPath $State.Winget
+    Refresh-SessionPath
+}
+
+function Ensure-BootstrapDotNetCore {
+    param([hashtable]$State)
+    if ($State.DotNetInfo) { return }
+    Ensure-BootstrapSystemCore -State $State
+    $State.DotNetInfo = Ensure-DotNetSdkAndVerify -WingetPath $State.Winget
     Refresh-SessionPath
 }
 
@@ -8918,14 +9875,14 @@ function Repair-BootstrapWslCorruption {
                 Write-Log ("WSL: falha ao instalar Microsoft.WSL via winget: " + $_.Exception.Message) 'WARN'
             }
         } else {
-            Write-Log 'WSL: pacote AppX não encontrado e winget indisponível para reinstalar.' 'WARN'
+            Write-Log 'WSL: pacote AppX nao encontrado e winget indisponível para reinstalar.' 'WARN'
         }
     }
 
     $repairUpdate = Invoke-NativeCaptureWithLog -Exe $WslExe -Args @('--update') -TimeoutMs 900000 -InputText "`n"
     $repairText = [string]($repairUpdate.stdout + "`n" + $repairUpdate.stderr)
     if (Test-WslCorruptionText -Text $repairText) {
-        Write-Log 'WSL: ainda corrompido após reparo automático. Recomendo reiniciar e tentar novamente.' 'WARN'
+        Write-Log 'WSL: ainda corrompido apos reparo automático. Recomendo reiniciar e tentar novamente.' 'WARN'
         return $false
     }
 
@@ -8960,7 +9917,7 @@ function Ensure-WslCore {
         if (Test-Path $candidate) { $wslExe = $candidate }
     }
     if (-not $wslExe) {
-        Write-Log 'wsl.exe não encontrado após habilitar os recursos do Windows.' 'WARN'
+        Write-Log 'wsl.exe nao encontrado apos habilitar os recursos do Windows.' 'WARN'
         return
     }
 
@@ -8993,7 +9950,7 @@ function Ensure-WslCore {
 
 function Ensure-WorkspaceLayout {
     param([hashtable]$State)
-    $workspaceRoot = $State.WorkspaceRoot
+    $workspaceRoot = Normalize-BootstrapPathSegment -Value $State.WorkspaceRoot
     $driveRoot = $null
     try { $driveRoot = Split-Path -Path $workspaceRoot -Qualifier } catch { $driveRoot = $null }
     if ($driveRoot -and (-not (Test-Path $driveRoot))) {
@@ -9003,9 +9960,9 @@ function Ensure-WorkspaceLayout {
 
     $paths = @(
         $workspaceRoot,
-        (Join-Path $workspaceRoot 'DevKits'),
-        (Join-Path $workspaceRoot 'DevProjetos'),
-        (Join-Path (Join-Path $workspaceRoot 'DevProjetos') 'Docker')
+        (Join-Path -Path $workspaceRoot -ChildPath 'DevKits'),
+        (Join-Path -Path $workspaceRoot -ChildPath 'DevProjetos'),
+        (Join-Path -Path (Join-Path -Path $workspaceRoot -ChildPath 'DevProjetos') -ChildPath 'Docker')
     )
 
     foreach ($path in $paths) {
@@ -12696,7 +13653,7 @@ function Invoke-BootstrapHostHealthTelemetry {
 
     $telemetry = ConvertTo-BootstrapHashtable -InputObject $Policy.Telemetry
     if (-not ($telemetry -is [hashtable]) -or [string]$telemetry['mode'] -ne 'opt-in-agressivo') {
-        Write-Log 'HostHealth telemetry: modo não agressivo, nenhuma ação.'
+        Write-Log 'HostHealth telemetry: modo nao agressivo, nenhuma ação.'
         return
     }
     if (-not (Test-IsAdmin)) {
@@ -12896,7 +13853,7 @@ function Ensure-BootstrapPlayniteFullscreenConfig {
     }
 
     if (-not (($config.ContainsKey('StartInFullscreen') -or $config.ContainsKey('StartFullScreen') -or $config.ContainsKey('StartInFullScreen')))) {
-        throw "Schema Playnite inesperado em $configPath. Campos fullscreen não encontrados (StartInFullscreen/StartFullScreen/StartInFullScreen)."
+        throw "Schema Playnite inesperado em $configPath. Campos fullscreen nao encontrados (StartInFullscreen/StartFullScreen/StartInFullScreen)."
     }
 
     $backup = Backup-BootstrapFile -Path $configPath
@@ -12944,7 +13901,7 @@ function Ensure-BootstrapAfterburnerLowOverlayProfile {
     )
     $targetPath = [string]($candidates | Where-Object { Test-Path $_ } | Select-Object -First 1)
     if ([string]::IsNullOrWhiteSpace($targetPath)) {
-        return [ordered]@{ status = 'skipped'; note = 'Afterburner profile ausente; ajuste não fatal.' }
+        return [ordered]@{ status = 'skipped'; note = 'Afterburner profile ausente; ajuste nao fatal.' }
     }
     $backup = Backup-BootstrapFile -Path $targetPath
     $content = @(
@@ -13180,7 +14137,7 @@ function Ensure-BootstrapOpenAiCompatibleUserEnv {
         $skipped += @('OPENAI_API_KEY')
     } else {
         $skipped += @('OPENAI_API_KEY')
-        $warnings += @("OPENAI_API_KEY já definido no usuário com valor diferente; ajuste manual necessário para usar o provider '$providerName'.")
+        $warnings += @("OPENAI_API_KEY já definido no usuário com valor diferente; ajuste manual necessario para usar o provider '$providerName'.")
     }
 
     $currentOpenAiBaseUrl = [Environment]::GetEnvironmentVariable('OPENAI_BASE_URL', 'User')
@@ -13191,7 +14148,7 @@ function Ensure-BootstrapOpenAiCompatibleUserEnv {
         $skipped += @('OPENAI_BASE_URL')
     } else {
         $skipped += @('OPENAI_BASE_URL')
-        $warnings += @("OPENAI_BASE_URL já definido no usuário com valor diferente ($currentOpenAiBaseUrl); ajuste manual necessário para usar $baseUrl.")
+        $warnings += @("OPENAI_BASE_URL já definido no usuário com valor diferente ($currentOpenAiBaseUrl); ajuste manual necessario para usar $baseUrl.")
     }
 
     $finalOpenAiKey = [Environment]::GetEnvironmentVariable('OPENAI_API_KEY', 'User')
@@ -13449,15 +14406,27 @@ function Invoke-BootstrapAppTuning {
 
     $results = @()
     $blockingFailures = @()
+    # Inventario do plano e do inicio do run; apos winget instalar apps, precisamos reavaliar probePaths/targetApps
+    # para nao pular itens (ex.: notepadpp-defaults) com "app absent" indevidamente na mesma execucao.
+    $freshInventory = Get-BootstrapInstalledAppInventory
     foreach ($item in @($Plan.items)) {
-        $itemId = [string]$item.id
-        $itemCategory = [string]$item.category
-        $itemTargetApps = if ($item.targetApps -is [System.Collections.IEnumerable]) { @($item.targetApps) -join ',' } else { '' }
-        Write-Log ("AppTuning: itemId={0} category={1} stage=invoke-item status={2}" -f $itemId, $itemCategory, [string]$item.status)
+        $liveItem = ConvertTo-BootstrapHashtable -InputObject $item
+        if (-not ($liveItem -is [hashtable])) { $liveItem = @{ } }
+        try {
+            $liveItem['installed'] = (Test-BootstrapAppTuningItemInstalled -Item $liveItem -InstalledInventory $freshInventory)
+        } catch {
+            $liveItem['installed'] = $false
+        }
+
+        $itemId = [string]$liveItem['id']
+        $itemCategory = [string]$liveItem['category']
+        $itemTargetApps = if ($liveItem['targetApps'] -is [System.Collections.IEnumerable]) { @($liveItem['targetApps']) -join ',' } else { '' }
+        $plannedStatus = if ($item -is [System.Collections.IDictionary] -and (Test-BootstrapMapContainsKey -Map $item -Key 'status')) { [string]$item['status'] } else { '' }
+        Write-Log ("AppTuning: itemId={0} category={1} stage=pre-invoke planStatus={2} installedNow={3}" -f $itemId, $itemCategory, $plannedStatus, [bool]$liveItem['installed'])
 
         $itemResult = $null
         try {
-            $itemResult = Invoke-BootstrapAppTuningItem -State $State -Item $item
+            $itemResult = Invoke-BootstrapAppTuningItem -State $State -Item $liveItem
         } catch {
             $classification = Get-BootstrapAppTuningFailureClassification -Item $item -ErrorMessage $_.Exception.Message -ExceptionType $_.Exception.GetType().FullName
             $itemResult = [ordered]@{
@@ -13709,6 +14678,7 @@ function Invoke-BootstrapComponent {
         'system-core' { Ensure-BootstrapSystemCore -State $State }
         'git-core' { Ensure-BootstrapGitCore -State $State }
         'node-core' { Ensure-BootstrapNodeCore -State $State }
+        'dotnet-core' { Ensure-BootstrapDotNetCore -State $State }
         'python-core' { Ensure-BootstrapPythonCore -State $State }
         'bootstrap-secrets' { Ensure-BootstrapSecrets -State $State }
         'bootstrap-mcps' { Ensure-BootstrapManagedMcps -State $State | Out-Null }
@@ -13788,8 +14758,29 @@ function Invoke-BootstrapComponent {
         }
         'repo-clone' {
             Ensure-BootstrapGitCore -State $State
-            $targetDir = Join-Path $State.CloneBaseDir $componentDef.TargetName
-            Ensure-RepoClone -GitExe $State.GitInfo.Git -RepoUrl $componentDef.RepoUrl -TargetDir $targetDir
+            $cloneBase = [string](@($State.CloneBaseDir)[0]).Trim()
+            $targetNameRaw = $componentDef.TargetName
+            if ($null -eq $targetNameRaw) {
+                throw "repo-clone: TargetName ausente para o componente '$Name'. Corrija o catalogo."
+            }
+            if (($targetNameRaw -is [System.Collections.IEnumerable]) -and -not ($targetNameRaw -is [string])) {
+                $names = @($targetNameRaw | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                if ($names.Count -gt 1) {
+                    throw ("repo-clone: TargetName deve ser uma unica string; recebido {0} valores ({1}) para '{2}'." -f $names.Count, ($names -join ', '), $Name)
+                }
+                $targetName = if ($names.Count -gt 0) { $names[0].Trim() } else { '' }
+            } else {
+                $targetName = [string]$targetNameRaw
+                $targetName = $targetName.Trim()
+            }
+            if ([string]::IsNullOrWhiteSpace($targetName)) {
+                throw "repo-clone: TargetName vazio ou invalido para o componente '$Name'."
+            }
+            if ([string]::IsNullOrWhiteSpace($cloneBase)) {
+                throw "repo-clone: CloneBaseDir vazio ou invalido no estado do bootstrap."
+            }
+            $targetDir = Join-Path $cloneBase $targetName
+            Ensure-RepoClone -GitExe $State.GitInfo.Git -RepoUrl ([string]$componentDef.RepoUrl) -TargetDir $targetDir
         }
         'workspace' {
             Ensure-WorkspaceLayout -State $State
@@ -13822,7 +14813,7 @@ function Invoke-BootstrapComponent {
             Ensure-BootstrapManualRequirement -State $State -ComponentDef $componentDef
         }
         default {
-            throw "Tipo de componente não suportado: $($componentDef.Kind)"
+            throw "Tipo de componente nao suportado: $($componentDef.Kind)"
         }
     }
 
@@ -13965,12 +14956,12 @@ function Get-BootstrapPreviewData {
         [string[]]$RequestedAppTuningCategories = @(),
         [string[]]$RequestedAppTuningItems = @(),
         [string[]]$ExcludedAppTuningItems = @(),
-        [string]$RequestedWorkspaceRoot = 'F:\Steam\Steamapps',
+        [string]$RequestedWorkspaceRoot = '',
         [string]$ExplicitCloneBaseDir = ''
     )
 
     $selection = New-BootstrapSelectionObject -SelectedProfiles $SelectedProfiles -SelectedComponents $SelectedComponents -ExcludedComponents $ExcludedComponents -SelectedHostHealth $RequestedHostHealthMode -SelectedAppTuning $RequestedAppTuningMode -SelectedAppTuningCategories $RequestedAppTuningCategories -SelectedAppTuningItems $RequestedAppTuningItems -ExcludedAppTuningItems $ExcludedAppTuningItems
-    $resolvedWorkspaceRoot = if ([string]::IsNullOrWhiteSpace($RequestedWorkspaceRoot)) { 'F:\Steam\Steamapps' } else { $RequestedWorkspaceRoot }
+    $resolvedWorkspaceRoot = if ([string]::IsNullOrWhiteSpace($RequestedWorkspaceRoot)) { Get-BootstrapDefaultWorkspaceRoot } else { $RequestedWorkspaceRoot }
     $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents $selection.Excludes
     $resolvedCloneBaseDir = Resolve-BootstrapCloneBaseDir -ExplicitCloneBaseDir $ExplicitCloneBaseDir -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedComponents $resolution.ResolvedComponents
     $usesSteamDeckFlow = Get-BootstrapUsesSteamDeckFlow -Selection $selection -Resolution $resolution
@@ -13979,6 +14970,16 @@ function Get-BootstrapPreviewData {
     $appTuningPlan = Resolve-BootstrapAppTuningSelection -Mode $selection.AppTuning -Categories $selection.AppTuningCategories -Items $selection.AppTuningItems -ExcludedItems $selection.ExcludedAppTuningItems -Selection $selection -Resolution $resolution
     $adminReasons = Get-BootstrapAdminReasons -Resolution $resolution -ResolvedHostHealthMode $resolvedHostHealthMode -UsesSteamDeckFlow:$usesSteamDeckFlow -AppTuningPlan $appTuningPlan
     $planLines = Get-BootstrapExecutionPlanLines -Selection $selection -Resolution $resolution -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -ResolvedHostHealthMode $resolvedHostHealthMode -AppTuningPlan $appTuningPlan
+    $componentCatalog = Get-BootstrapComponentCatalog
+    $reversibilitySummary = [ordered]@{ full = 0; partial = 0; manual = 0; none = 0; unknown = 0 }
+    foreach ($componentName in @($resolution.ResolvedComponents)) {
+        $def = $componentCatalog[[string]$componentName]
+        if (-not $def) { $reversibilitySummary.unknown++; continue }
+        $rev = Get-BootstrapComponentReversibility -ComponentDef $def
+        $key = [string]$rev.reversible
+        if ([string]::IsNullOrWhiteSpace($key) -or -not $reversibilitySummary.Contains($key)) { $key = 'unknown' }
+        $reversibilitySummary[$key]++
+    }
 
     return [ordered]@{
         Selection = $selection
@@ -13991,6 +14992,7 @@ function Get-BootstrapPreviewData {
         ResolvedWorkspaceRoot = $resolvedWorkspaceRoot
         ResolvedCloneBaseDir = $resolvedCloneBaseDir
         AdminReasons = @($adminReasons)
+        ReversibilitySummary = $reversibilitySummary
         PlanLines = @($planLines)
         PlanText = ($planLines -join [Environment]::NewLine)
     }
@@ -14009,7 +15011,37 @@ function Write-BootstrapCommandSummary {
         return
     }
 
+    if ($commandPath -match '\\Microsoft\\WindowsApps\\') {
+        Write-Log ("{0}: NAO ENCONTRADO (atalho Microsoft Store em PATH, nao binario real): {1}" -f $Label, $commandPath) 'WARN'
+        return
+    }
+
     Write-Log ("{0}: {1} ({2})" -f $Label, (Invoke-NativeFirstLine -Exe $commandPath -Args $Args), $commandPath)
+}
+
+function Write-BootstrapDotNetSdksSummary {
+    $labelSdks = 'dotnet_sdks'
+    $commandPath = Resolve-CommandPath -Name 'dotnet'
+    if (-not $commandPath) {
+        Write-Log ("{0}: NAO ENCONTRADO" -f $labelSdks) 'WARN'
+        return
+    }
+    if ($commandPath -match '\\Microsoft\\WindowsApps\\') {
+        Write-Log ("{0}: NAO ENCONTRADO (atalho Microsoft Store em PATH, nao binario real): {1}" -f $labelSdks, $commandPath) 'WARN'
+        return
+    }
+    try {
+        $raw = (& $commandPath @('--list-sdks') 2>&1 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-Log ("{0}: (vazio; possivel host sem SDK) ({1})" -f $labelSdks, $commandPath) 'WARN'
+            return
+        }
+        $oneLine = ($raw.Trim() -replace "`r?`n", ' | ')
+        if ($oneLine.Length -gt 500) { $oneLine = $oneLine.Substring(0, 497) + '...' }
+        Write-Log ("{0}: {1} ({2})" -f $labelSdks, $oneLine, $commandPath)
+    } catch {
+        Write-Log ("{0}: ERRO ({1}) ({2})" -f $labelSdks, $_.Exception.Message, $commandPath) 'WARN'
+    }
 }
 
 function Write-BootstrapDoctorToolSummary {
@@ -14095,6 +15127,8 @@ function Invoke-BootstrapDoctorMode {
     Write-BootstrapDoctorToolSummary -Label 'git' -CommandName 'git' -Args @('--version')
     Write-BootstrapDoctorToolSummary -Label 'node' -CommandName 'node' -Args @('-v')
     Write-BootstrapDoctorToolSummary -Label 'npm' -CommandName 'npm' -Args @('--version')
+    Write-BootstrapDoctorToolSummary -Label 'dotnet' -CommandName 'dotnet' -Args @('--version')
+    Write-BootstrapDotNetSdksSummary
     Write-BootstrapDoctorToolSummary -Label 'python' -CommandName 'python' -Args @('--version')
     Write-BootstrapDoctorToolSummary -Label 'pip' -CommandName 'pip' -Args @('--version')
     Write-BootstrapDoctorToolSummary -Label 'claude' -CommandName 'claude' -Args @('--version')
@@ -14109,6 +15143,12 @@ function Invoke-BootstrapDoctorMode {
 function Invoke-BootstrapProfileMode {
     if ($Interactive -and $NonInteractive) {
         throw 'Use apenas um modo de entrada: -Interactive ou -NonInteractive.'
+    }
+
+    $resolvedWorkspaceRoot = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
+        Get-BootstrapDefaultWorkspaceRoot
+    } else {
+        $WorkspaceRoot
     }
 
     if ($ListProfiles) {
@@ -14132,27 +15172,110 @@ function Invoke-BootstrapProfileMode {
     }
 
     if ($Rollback) {
-        Invoke-BootstrapRollback
+        Invoke-BootstrapRollback -ChangesPath $ChangesPath -AggressiveRollback:$AggressiveRollback
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                status = 'success'
+                mode = 'rollback'
+                generatedAt = (Get-Date).ToString('o')
+                logPath = $script:LogPath
+                resultPath = $script:ResultPath
+                changesPath = $ChangesPath
+                message = 'Rollback de tweaks de registro e autostart concluido (ver log).'
+            })
+        }
         return
     }
 
     if ($Audit) {
         $selection = Get-BootstrapSelection
         $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents $selection.Excludes
-        $state = New-BootstrapState -Selection $selection -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir (Get-Location).Path
-        Invoke-BootstrapAuditMode -Resolution $resolution -Repair:$Repair -State $state
+        $resolvedCloneBaseDir = Resolve-BootstrapCloneBaseDir -ExplicitCloneBaseDir $CloneBaseDir -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedComponents $resolution.ResolvedComponents
+        $state = New-BootstrapState -Selection $selection -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir
+        $auditRows = @()
+        $auditRecord = $null
+        try {
+            $auditRecord = Invoke-BootstrapAuditMode -Resolution $resolution -Repair:$Repair -State $state
+            if ($null -ne $auditRecord) {
+                $auditRows = @($auditRecord)
+            }
+        } catch {
+            Write-Log ("Audit: execucao interrompida antes de concluir: {0}" -f $_.Exception.Message) 'ERROR'
+            Write-BootstrapExceptionStackTrace -ErrorRecord $_
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                try {
+                    Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{
+                        mode = 'audit'
+                        workspaceRoot = $resolvedWorkspaceRoot
+                        cloneBaseDir = $resolvedCloneBaseDir
+                        auditPartial = $true
+                        note = 'Invoke-BootstrapAuditMode falhou; result.json gravado com erro para a UI nao ficar sem ficheiro.'
+                    })
+                } catch {
+                    try {
+                        Write-Log ("Audit: falha secundaria ao gravar result.json de erro: {0}" -f $_.Exception.Message) 'ERROR'
+                    } catch {
+                    }
+                }
+            }
+            return
+        }
+
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            try {
+                $bad = @($auditRows | Where-Object { $_.Status -in @('Unhealthy', 'Missing', 'AliasOnly', 'InstalledButNotInPath', 'RuntimeOnly', 'Blocked', 'Unknown') })
+                $status = if ($bad.Count -gt 0) { 'warning' } else { 'success' }
+                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                    status = $status
+                    mode = 'audit'
+                    generatedAt = (Get-Date).ToString('o')
+                    logPath = $script:LogPath
+                    resultPath = $script:ResultPath
+                    workspaceRoot = $resolvedWorkspaceRoot
+                    cloneBaseDir = $resolvedCloneBaseDir
+                    auditSummary = [ordered]@{
+                        total = @($auditRows).Count
+                        unhealthyOrMissing = $bad.Count
+                    }
+                    auditResults = @($auditRows | ForEach-Object {
+                        [ordered]@{
+                            component = [string]$_.Component
+                            status = [string]$_.Status
+                            detail = [string]$_.Detail
+                            howToFix = [string]$_.HowToFix
+                        }
+                    })
+                })
+            } catch {
+                Write-Log ("Audit: falha ao serializar/gravar result.json (audit concluido em memoria): {0}" -f $_.Exception.Message) 'ERROR'
+                Write-BootstrapExceptionStackTrace -ErrorRecord $_
+                try {
+                    $badCount = @(@($auditRows | Where-Object { $_.Status -in @('Unhealthy', 'Missing', 'AliasOnly', 'InstalledButNotInPath', 'RuntimeOnly', 'Blocked', 'Unknown') })).Count
+                    $fallback = [ordered]@{
+                        status = 'warning'
+                        mode = 'audit'
+                        generatedAt = (Get-Date).ToString('o')
+                        logPath = $script:LogPath
+                        resultPath = $script:ResultPath
+                        workspaceRoot = $resolvedWorkspaceRoot
+                        cloneBaseDir = $resolvedCloneBaseDir
+                        error = [string]$_.Exception.Message
+                        howToFix = 'O audit terminou mas o JSON completo falhou; veja o log. Tente reduzir escopo ou atualizar o bootstrap.'
+                        auditSummary = [ordered]@{ total = @($auditRows).Count; unhealthyOrMissing = $badCount; serializationFallback = $true }
+                    }
+                    $utf8 = New-Object System.Text.UTF8Encoding($false)
+                    [System.IO.File]::WriteAllText($script:ResultPath, ([string](ConvertTo-Json -InputObject $fallback -Depth 8)), $utf8)
+                } catch {
+                    Write-Log ("Audit: impossivel gravar result.json minimo: {0}" -f $_.Exception.Message) 'ERROR'
+                }
+            }
+        }
         return
     }
 
     if ($ListComponents) {
         Show-BootstrapComponents
         return
-    }
-
-    $resolvedWorkspaceRoot = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) {
-        'F:\Steam\Steamapps'
-    } else {
-        $WorkspaceRoot
     }
 
     $selection = Get-BootstrapSelection
@@ -14175,6 +15298,7 @@ function Invoke-BootstrapProfileMode {
     $resolvedHostHealthMode = if ($selection.HostHealth) { $selection.HostHealth } else { Get-BootstrapDefaultHostHealthMode -Selection $selection -Resolution $resolution }
     $appTuningPlan = Resolve-BootstrapAppTuningSelection -Mode $selection.AppTuning -Categories $selection.AppTuningCategories -Items $selection.AppTuningItems -ExcludedItems $selection.ExcludedAppTuningItems -Selection $selection -Resolution $resolution
     $resolvedAppTuningMode = [string]$appTuningPlan.mode
+    $previewData = Get-BootstrapPreviewData -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents $selection.Excludes -RequestedSteamDeckVersion $SteamDeckVersion -RequestedHostHealthMode $resolvedHostHealthMode -RequestedAppTuningMode $selection.AppTuning -RequestedAppTuningCategories $selection.AppTuningCategories -RequestedAppTuningItems $selection.AppTuningItems -ExcludedAppTuningItems $selection.ExcludedAppTuningItems -RequestedWorkspaceRoot $resolvedWorkspaceRoot -ExplicitCloneBaseDir $resolvedCloneBaseDir
 
     Write-Log ("Inicio: {0}" -f $script:StartTime.ToString('s'))
     Write-Log "Log: $script:LogPath"
@@ -14188,6 +15312,41 @@ function Invoke-BootstrapProfileMode {
     Write-Log "CloneBaseDir: $resolvedCloneBaseDir"
     Write-Log "HostHealth: $resolvedHostHealthMode"
     Write-Log "AppTuning: $resolvedAppTuningMode"
+    # StrictMode: pipeline vazio vira $null — nunca usar .Count nesse resultado; materializar sempre com @( foreach ... ).
+    $reqCats = @(
+        foreach ($c in @($selection.AppTuningCategories)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$c)) { [string]$c }
+        }
+    )
+    $reqItems = @(
+        foreach ($it in @($selection.AppTuningItems)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$it)) { [string]$it }
+        }
+    )
+    $exItems = @(
+        foreach ($ex in @($selection.ExcludedAppTuningItems)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$ex)) { [string]$ex }
+        }
+    )
+    Write-Log ("AppTuning categorias (param): {0}" -f ($(if ($reqCats.Length -gt 0) { $reqCats -join ', ' } else { '-' })))
+    Write-Log ("AppTuning itens (param): {0}" -f ($(if ($reqItems.Length -gt 0) { $reqItems -join ', ' } else { '-' })))
+    Write-Log ("AppTuning exclusoes (param): {0}" -f ($(if ($exItems.Length -gt 0) { $exItems -join ', ' } else { '-' })))
+    $planItemIds = @(
+        foreach ($planItem in @($appTuningPlan.items)) {
+            $planItemId = [string]$planItem.id
+            if (-not [string]::IsNullOrWhiteSpace($planItemId)) { $planItemId }
+        }
+    )
+    Write-Log ("AppTuning plano: {0} item(ns); ids: {1}" -f $planItemIds.Length, ($(if ($planItemIds.Length -gt 0) { $planItemIds -join ', ' } else { '-' })))
+    $pendingPlan = @(
+        foreach ($planItem in @($appTuningPlan.items)) {
+            if ([string]$planItem.status -eq 'pending') { $planItem }
+        }
+    )
+    Write-Log ("AppTuning itens com status=pending no plano inicial: {0}" -f $pendingPlan.Length)
+    if ($reqItems -contains 'app-notepadpp' -and ($reqItems -notcontains 'notepadpp-defaults')) {
+        Write-Log 'AppTuning: aviso — selecionado app-notepadpp sem notepadpp-defaults; instalacao via componente ocorre, mas plugins/UDLs padrao exigem o item Notepad++ defaults.' 'WARN'
+    }
     if ($usesSteamDeckFlow) {
         Write-Log "Steam Deck version resolvida: $resolvedSteamDeckVersion"
     }
@@ -14210,6 +15369,7 @@ function Invoke-BootstrapProfileMode {
                 resolvedAppTuningMode = $resolvedAppTuningMode
                 selection = $selection
                 resolution = $resolution
+                reversibilitySummary = $previewData.ReversibilitySummary
                 appTuningPlan = $appTuningPlan
             })
         }
@@ -14218,6 +15378,8 @@ function Invoke-BootstrapProfileMode {
 
     $state = New-BootstrapState -Selection $selection -ResolvedWorkspaceRoot $resolvedWorkspaceRoot -ResolvedCloneBaseDir $resolvedCloneBaseDir -RequestedSteamDeckVersion $SteamDeckVersion -ResolvedSteamDeckVersion $resolvedSteamDeckVersion -HostHealthMode $resolvedHostHealthMode -AppTuningMode $resolvedAppTuningMode -UsesSteamDeckFlow:$usesSteamDeckFlow -IsDryRun:$DryRun
     $state.EnableClaudeCodeProjectMcps = [bool]$ClaudeCodeProjectMcps
+    $state.ChangeManifestPath = Get-BootstrapChangeManifestPath -State $state
+    Save-BootstrapChangeManifest -State $state
 
     # Preencher componentes ja concluidos se estiver em modo Resume
     foreach ($comp in $completedFromCheckpoint) {
@@ -14233,24 +15395,74 @@ function Invoke-BootstrapProfileMode {
         foreach ($componentName in $resolution.ResolvedComponents) {
             if ($state.Completed.ContainsKey($componentName)) {
                 Write-Log "Componente ja concluido (skip): $componentName"
+                $state.ComponentStatus[$componentName] = [ordered]@{ status = 'skipped'; timestamp = (Get-Date).ToString('o'); reason = 'already-completed' }
                 continue
             }
+            $state.CurrentComponent = [string]$componentName
+            $state.ComponentStatus[$componentName] = [ordered]@{ status = 'started'; timestamp = (Get-Date).ToString('o') }
             Invoke-BootstrapComponent -Name $componentName -State $state
             if ($state.Completed.ContainsKey($componentName)) {
+                $state.ComponentStatus[$componentName] = [ordered]@{ status = 'completed'; timestamp = (Get-Date).ToString('o') }
                 $successfullyCompleted.Add($componentName)
                 Save-BootstrapCheckpoint -Selection $selection -CompletedComponents $successfullyCompleted.ToArray() -AppTuningResults $state.AppTuningResults -HostHealthResults $state.HostHealthResults
             }
         }
     } catch {
+        $failedComponent = [string]$state.CurrentComponent
+        if (-not [string]::IsNullOrWhiteSpace($failedComponent)) {
+            $state.ComponentStatus[$failedComponent] = [ordered]@{ status = 'failed'; timestamp = (Get-Date).ToString('o'); error = $_.Exception.Message }
+        }
+        $state.LastError = $_.Exception.Message
+        Save-BootstrapChangeManifest -State $state
         Write-Log ("Falha critica na execucao: {0}" -f $_.Exception.Message) 'ERROR'
         if ($AutoRollback) {
             Invoke-BootstrapAutoRollback -State $state
         }
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{
+                phase = 'component-loop'
+                workspaceRoot = $resolvedWorkspaceRoot
+                cloneBaseDir = $resolvedCloneBaseDir
+                lastComponent = $failedComponent
+                failedComponent = $failedComponent
+                completedComponents = @($successfullyCompleted.ToArray())
+                componentStatus = $state.ComponentStatus
+                howToFix = 'Revise o log do componente, rode -Audit para diagnostico e use -Resume apos corrigir dependencias.'
+                changesPath = $state.ChangeManifestPath
+                changesSummary = Get-BootstrapChangesSummary -State $state
+                rollbackAvailable = ((@($state.Changes.ToArray()).Count -gt 0) -or (-not [string]::IsNullOrWhiteSpace([string]$state.ChangeManifestPath)))
+            })
+        }
         throw
     }
 
-    Invoke-BootstrapAppTuning -State $state -Plan $appTuningPlan
-    Invoke-BootstrapHostHealth -State $state -Mode $resolvedHostHealthMode
+    try {
+        $state.CurrentComponent = 'app-tuning'
+        Invoke-BootstrapAppTuning -State $state -Plan $appTuningPlan
+        $state.ComponentStatus['app-tuning'] = [ordered]@{ status = 'completed'; timestamp = (Get-Date).ToString('o') }
+        $state.CurrentComponent = 'host-health'
+        Invoke-BootstrapHostHealth -State $state -Mode $resolvedHostHealthMode
+        $state.ComponentStatus['host-health'] = [ordered]@{ status = 'completed'; timestamp = (Get-Date).ToString('o') }
+    } catch {
+        $failedComponent = [string]$state.CurrentComponent
+        $state.ComponentStatus[$failedComponent] = [ordered]@{ status = 'failed'; timestamp = (Get-Date).ToString('o'); error = $_.Exception.Message }
+        Save-BootstrapChangeManifest -State $state
+        Write-Log ("Falha critica (AppTuning/HostHealth): {0}" -f $_.Exception.Message) 'ERROR'
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{
+                phase = 'app-tuning-host-health'
+                lastComponent = $failedComponent
+                failedComponent = $failedComponent
+                completedComponents = @($successfullyCompleted.ToArray())
+                componentStatus = $state.ComponentStatus
+                howToFix = 'Revise AppTuning/HostHealth no log; desative o modo correspondente ou execute como Administrador quando indicado.'
+                changesPath = $state.ChangeManifestPath
+                changesSummary = Get-BootstrapChangesSummary -State $state
+                rollbackAvailable = (@($state.Changes.ToArray()).Count -gt 0)
+            })
+        }
+        throw
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
         Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
@@ -14275,6 +15487,11 @@ function Invoke-BootstrapProfileMode {
             steamDeckAutomationRoot = $state.SteamDeckAutomationRoot
             preflight = $state.PreflightSummary
             manualRequirements = @($state.ManualRequirements.ToArray())
+            componentStatus = $state.ComponentStatus
+            changesPath = $state.ChangeManifestPath
+            changesSummary = Get-BootstrapChangesSummary -State $state
+            reversibilitySummary = $previewData.ReversibilitySummary
+            rollbackAvailable = (@($state.Changes.ToArray()).Count -gt 0)
         })
     }
 
@@ -14287,6 +15504,8 @@ function Invoke-BootstrapProfileMode {
     Write-BootstrapCommandSummary -Label 'node' -CommandName 'node' -Args @('-v')
     Write-BootstrapCommandSummary -Label 'npm' -CommandName 'npm' -Args @('--version')
     Write-BootstrapCommandSummary -Label 'java' -CommandName 'java' -Args @('-version')
+    Write-BootstrapCommandSummary -Label 'dotnet' -CommandName 'dotnet' -Args @('--version')
+    Write-BootstrapDotNetSdksSummary
     Write-BootstrapCommandSummary -Label 'magick' -CommandName 'magick' -Args @('-version')
     Write-BootstrapCommandSummary -Label '7z' -CommandName '7z' -Args @()
     Write-BootstrapCommandSummary -Label 'python' -CommandName 'python' -Args @('--version')
@@ -14629,6 +15848,9 @@ $useBootstrapProfileMode = (
     $DryRun -or
     $Interactive -or
     $NonInteractive -or
+    $Rollback -or
+    $Audit -or
+    $Repair -or
     [string]::IsNullOrWhiteSpace($HostHealth) -eq $false -or
     [string]::IsNullOrWhiteSpace($AppTuning) -eq $false -or
     (@($AppTuningCategory).Count -gt 0) -or
@@ -14656,13 +15878,7 @@ if (-not $isDotSourced) {
             exit 0
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-                    status = 'error'
-                    generatedAt = (Get-Date).ToString('o')
-                    logPath = $script:LogPath
-                    resultPath = $script:ResultPath
-                    error = $_.Exception.Message
-                })
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'doctor' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'
@@ -14676,13 +15892,7 @@ if (-not $isDotSourced) {
             exit 0
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-                    status = 'error'
-                    generatedAt = (Get-Date).ToString('o')
-                    logPath = $script:LogPath
-                    resultPath = $script:ResultPath
-                    error = $_.Exception.Message
-                })
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'secrets' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'
@@ -14696,13 +15906,7 @@ if (-not $isDotSourced) {
             exit 0
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-                    status = 'error'
-                    generatedAt = (Get-Date).ToString('o')
-                    logPath = $script:LogPath
-                    resultPath = $script:ResultPath
-                    error = $_.Exception.Message
-                })
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'Invoke-BootstrapProfileMode-outer' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'
@@ -14866,13 +16070,7 @@ if (-not $isDotSourced) {
         Write-Log "Log salvo em: $script:LogPath"
     } catch {
         if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-                status = 'error'
-                generatedAt = (Get-Date).ToString('o')
-                logPath = $script:LogPath
-                resultPath = $script:ResultPath
-                error = $_.Exception.Message
-            })
+            Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'legacy-bootstrap-flow' })
         }
         Write-Log $_.Exception.Message 'ERROR'
         Write-Log "Log salvo em: $script:LogPath" 'ERROR'
