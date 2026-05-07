@@ -88,7 +88,7 @@ function Set-RegistryDwordBestEffort {
 function Invoke-PowerCfgBestEffort {
     param([string[]]$Arguments)
 
-    $powercfg = Join-Path $env:SystemRoot 'System32\powercfg.exe'
+    $powercfg = Join-SteamDeckSystemChild -RelativeChild 'System32\powercfg.exe'
     if (-not (Test-Path $powercfg)) { $powercfg = 'powercfg.exe' }
     try {
         & $powercfg @Arguments | Out-Null

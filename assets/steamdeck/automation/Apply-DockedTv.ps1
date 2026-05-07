@@ -59,7 +59,7 @@ function Stop-GameModeProcesses {
 Assert-SteamDeckFileExists -Path $SettingsPath -Description 'Settings file'
 $settings = Get-Content -Path $SettingsPath -Raw | ConvertFrom-Json
 $detection = if (Test-Path $DetectionPath) { Get-Content -Path $DetectionPath -Raw | ConvertFrom-Json } else { $null }
-$displaySwitch = Join-Path $env:SystemRoot 'System32\DisplaySwitch.exe'
+$displaySwitch = Join-SteamDeckSystemChild -RelativeChild 'System32\DisplaySwitch.exe'
 $displayMode = Resolve-SteamDeckDisplayMode -Settings $settings -Default 'extend'
 $displaySwitchArgument = Resolve-SteamDeckDisplaySwitchArgument -Settings $settings -Default 'extend'
 if (Test-Path $displaySwitch) {

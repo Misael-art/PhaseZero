@@ -1,6 +1,9 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$steamdeckRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path (Join-Path $steamdeckRoot 'automation') 'SteamDeck.Common.ps1')
+
 function Clear-DirectoryContentsSafe {
     param([Parameter(Mandatory = $true)][string]$TargetPath)
 
@@ -26,12 +29,14 @@ function Clear-DirectoryContentsSafe {
 }
 
 try {
+    $tempEnv = Normalize-SteamDeckPathSegment -Value $env:TEMP
+    $localTemp = Normalize-SteamDeckPathSegment -Value $env:LOCALAPPDATA
     $targets = @(
-        $env:TEMP,
-        (Join-Path $env:LOCALAPPDATA 'Temp'),
+        $tempEnv,
+        $(if (-not [string]::IsNullOrWhiteSpace($localTemp)) { Join-Path -Path $localTemp -ChildPath 'Temp' } else { $null }),
         'C:\Windows\Temp',
         'C:\Windows\Prefetch'
-    )
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
     $results = @()
     foreach ($target in @($targets)) {
         $results += @(Clear-DirectoryContentsSafe -TargetPath $target)

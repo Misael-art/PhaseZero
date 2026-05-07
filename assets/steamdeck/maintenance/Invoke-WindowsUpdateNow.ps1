@@ -1,6 +1,9 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+$steamdeckRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path (Join-Path $steamdeckRoot 'automation') 'SteamDeck.Common.ps1')
+
 function Invoke-WindowsUpdateCom {
     $session = New-Object -ComObject 'Microsoft.Update.Session'
     $searcher = $session.CreateUpdateSearcher()
@@ -38,7 +41,7 @@ function Invoke-WindowsUpdateCom {
 }
 
 function Invoke-WindowsUpdateUsoClientFallback {
-    $usoclient = Join-Path $env:SystemRoot 'System32\UsoClient.exe'
+    $usoclient = Join-SteamDeckSystemChild -RelativeChild 'System32\UsoClient.exe'
     if (-not (Test-Path $usoclient)) {
         throw 'UsoClient.exe não encontrado para fallback.'
     }

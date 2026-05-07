@@ -6,15 +6,19 @@ $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath -BootstrapUiLibraryMode
 
 function New-AppTuningInventoryFixture {
-    param([string[]]$InstalledApps = @())
+    param([string[]]$InstalledApps = @(), [string[]]$InstalledPaths = @())
 
     $apps = @{}
     foreach ($name in @($InstalledApps)) {
         $apps[$name.ToLowerInvariant()] = $true
     }
+    $paths = @{}
+    foreach ($p in @($InstalledPaths)) {
+        $paths[$p] = $true
+    }
     return [ordered]@{
         apps = $apps
-        paths = @{}
+        paths = $paths
         generatedAt = '2026-04-22T00:00:00Z'
     }
 }
@@ -80,9 +84,10 @@ Describe 'Bootstrap AppTuning catalog and selection' {
     It 'builds app status rows for install configure and update management' {
         $selection = New-BootstrapSelectionObject -SelectedProfiles @('steamdeck-recommended')
         $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles
-        $plan = Resolve-BootstrapAppTuningSelection -Mode 'custom' -Items @('steam-big-picture-session') -Selection $selection -Resolution $resolution -InstalledInventory (New-AppTuningInventoryFixture -InstalledApps @('steam'))
+        $steamPath = ConvertTo-BootstrapExpandedPath -Path '$env:ProgramFiles(x86)\Steam\steam.exe'
+        $plan = Resolve-BootstrapAppTuningSelection -Mode 'custom' -Items @('steam-big-picture-session') -Selection $selection -Resolution $resolution -InstalledInventory (New-AppTuningInventoryFixture -InstalledApps @('steam') -InstalledPaths @($steamPath))
 
-        $rows = Get-BootstrapAppTuningStatusRows -Plan $plan -InstalledInventory (New-AppTuningInventoryFixture -InstalledApps @('steam'))
+        $rows = Get-BootstrapAppTuningStatusRows -Plan $plan -InstalledInventory (New-AppTuningInventoryFixture -InstalledApps @('steam') -InstalledPaths @($steamPath))
         $steamRow = $rows | Where-Object { $_.id -eq 'steam-big-picture-session' } | Select-Object -First 1
 
         $steamRow.installedState | Should Be 'installed'
@@ -101,11 +106,19 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         (Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inv) | Should Be $false
     }
 
-    It 'marca notepad++ instalado quando DisplayName contem o token completo (itens com probePaths)' {
+    It 'marca notepad++ instalado quando probePaths estao no inventory (itens com probePaths)' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $item = @($catalog.items | Where-Object { $_.id -eq 'notepadpp-defaults' })[0]
+        $nppPath = ConvertTo-BootstrapExpandedPath -Path '$env:ProgramFiles\Notepad++\notepad++.exe'
+        $inv = New-AppTuningInventoryFixture -InstalledApps @('notepad++ (64-bit x64)') -InstalledPaths @($nppPath)
+        (Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inv) | Should Be $true
+    }
+
+    It 'nao marca notepad++ instalado quando so registry sem probePaths (ghost install)' {
         $catalog = Get-BootstrapAppTuningCatalog
         $item = @($catalog.items | Where-Object { $_.id -eq 'notepadpp-defaults' })[0]
         $inv = New-AppTuningInventoryFixture -InstalledApps @('notepad++ (64-bit x64)')
-        (Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inv) | Should Be $true
+        (Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inv) | Should Be $false
     }
 
     It 'resolves OpenAI-compatible provider with fallback diagnostics' {
@@ -246,5 +259,62 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $result.status | Should Be 'partial'
         Assert-MockCalled Ensure-BootstrapNotepadPlusPlusDefaults -Times 1 -Exactly
         Assert-MockCalled Ensure-BootstrapOpenAiCompatibleUserEnv -Times 0 -Exactly
+    }
+}
+
+Describe 'AppTuning installComponents e catalogo de componentes' {
+    function Test-HasInlineInstallComponents {
+        param($Item)
+        if ($Item -is [System.Collections.IDictionary] -and $Item.Contains('installComponents')) {
+            $ic = @($Item['installComponents'] | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            return ($ic.Count -gt 0)
+        }
+        $prop = $Item.PSObject.Properties['installComponents']
+        if ($null -eq $prop) { return $false }
+        $ic = @($prop.Value | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        return ($ic.Count -gt 0)
+    }
+
+    It 'todo componente retornado por Get-BootstrapAppTuningInstallComponents existe em Get-BootstrapComponentCatalog' {
+        $compCat = Get-BootstrapComponentCatalog
+        $appTuning = Get-BootstrapAppTuningCatalog
+        foreach ($item in @($appTuning.items)) {
+            $comps = @(Get-BootstrapAppTuningInstallComponents -Item $item)
+            foreach ($c in $comps) {
+                $nm = [string]$c
+                if ([string]::IsNullOrWhiteSpace($nm)) { continue }
+                (Test-BootstrapMapContainsKey -Map $compCat -Key $nm) | Should Be $true
+            }
+        }
+    }
+
+    It 'itens tuning sem installComponents inline tem mapa (ou lista vazia intencional so edge-background-off)' {
+        $appTuning = Get-BootstrapAppTuningCatalog
+        $missing = New-Object System.Collections.Generic.List[string]
+        foreach ($item in @($appTuning.items)) {
+            $id = [string]$item.id
+            if ($id -match '^app-') { continue }
+            if (Test-HasInlineInstallComponents -Item $item) { continue }
+            $comps = @(Get-BootstrapAppTuningInstallComponents -Item $item)
+            if ($comps.Count -eq 0 -and $id -ne 'edge-background-off') {
+                [void]$missing.Add($id)
+            }
+        }
+        $missing.Count | Should Be 0
+    }
+
+    It 'mapeia steam-input-desktop-layout-audit, comet-manual e openwebui-dev-session para instalacao isolada/lote' {
+        $app = Get-BootstrapAppTuningCatalog
+        $by = @{}
+        foreach ($x in @($app.items)) { $by[[string]$x.id] = $x }
+        $a = @(Get-BootstrapAppTuningInstallComponents -Item $by['steam-input-desktop-layout-audit'])
+        $a.Count | Should Be 1
+        $a[0] | Should Be 'steam'
+        $b = @(Get-BootstrapAppTuningInstallComponents -Item $by['comet-manual'])
+        $b.Count | Should Be 1
+        $b[0] | Should Be 'perplexity'
+        $c = @(Get-BootstrapAppTuningInstallComponents -Item $by['openwebui-dev-session'])
+        $c.Count | Should Be 1
+        $c[0] | Should Be 'openwebui'
     }
 }

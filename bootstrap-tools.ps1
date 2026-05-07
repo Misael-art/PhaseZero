@@ -33,6 +33,7 @@ param(
     [switch]$SkipManualRequirements,
     [switch]$IgnoreManualRequirements,
     [switch]$RequireNoPendingReboot,
+    [switch]$AllowPendingReboot,
     [switch]$Resume,
     [switch]$Rollback,
     [string]$ChangesPath,
@@ -60,6 +61,7 @@ $script:ResultPath = $ResultPath
 $script:SkipManualRequirements = $SkipManualRequirements
 $script:IgnoreManualRequirements = $IgnoreManualRequirements
 $script:RequireNoPendingReboot = [bool]$RequireNoPendingReboot
+$script:AllowPendingReboot = [bool]$AllowPendingReboot
 $script:BootstrapSecretsProviderCatalogCache = $null
 $script:BootstrapAppCapabilityCatalogCache = $null
 $script:BootstrapManagedMcpCatalogCache = $null
@@ -839,9 +841,21 @@ function Invoke-BootstrapAuditMode {
                     $expanded = [Environment]::ExpandEnvironmentVariables([string]$p)
                     if (Test-Path -LiteralPath $expanded) { $found = $true; break }
                 }
-                $status = if ($found) { 'Healthy' } else { 'Missing' }
-                $detail = if ($found) { 'ProbePaths encontrado.' } else { 'Nenhum ProbePaths encontrado.' }
-                if ($status -ne 'Healthy') { $howToFix = Get-AuditKnownFix -ComponentName $comp }
+                if ($found) {
+                    $status = 'Healthy'
+                    $detail = 'ProbePaths encontrado.'
+                } else {
+                    $wingetId = [string]($def | Select-Object -ExpandProperty Id -ErrorAction SilentlyContinue)
+                    if (-not [string]::IsNullOrWhiteSpace($wingetId) -and $wingetExe -and (Test-AuditWingetInstalled -Id $wingetId)) {
+                        $status = 'GhostInstalled'
+                        $detail = ('ProbePaths ausente em disco, mas winget lista {0} como instalado. Possivel ghost install.' -f $wingetId)
+                        $howToFix = 'Reinstale o pacote via winget ou remova o registro fantasma com winget uninstall.'
+                    } else {
+                        $status = 'Missing'
+                        $detail = 'Nenhum ProbePaths encontrado.'
+                        $howToFix = Get-AuditKnownFix -ComponentName $comp
+                    }
+                }
             }
         }
 
@@ -871,8 +885,27 @@ function Invoke-BootstrapAuditMode {
                     $wingetPresenceCache[$wid] = Test-WingetPackageInstalled -WingetPath $wingetExe -Id $wid
                 }
                 if ([bool]$wingetPresenceCache[$wid]) {
-                    $status = 'Healthy'
-                    $detail = "winget: pacote $wid presente."
+                    $probeScript = $def | Select-Object -ExpandProperty ProbePaths -ErrorAction SilentlyContinue
+                    $probeList = @()
+                    if ($probeScript) { $probeList = @($probeScript) }
+                    if ($probeList.Count -gt 0) {
+                        $diskFound = $false
+                        foreach ($p in $probeList) {
+                            $expanded = [Environment]::ExpandEnvironmentVariables([string]$p)
+                            if (Test-Path -LiteralPath $expanded) { $diskFound = $true; break }
+                        }
+                        if ($diskFound) {
+                            $status = 'Healthy'
+                            $detail = "winget: pacote $wid presente; binario verificado em disco."
+                        } else {
+                            $status = 'GhostInstalled'
+                            $detail = ('winget: pacote {0} presente, mas nenhum binario encontrado em ProbePaths. Ghost install.' -f $wid)
+                            $howToFix = 'Reinstale o pacote via winget ou remova o registro fantasma com winget uninstall.'
+                        }
+                    } else {
+                        $status = 'Healthy'
+                        $detail = "winget: pacote $wid presente."
+                    }
                 } else {
                     $status = 'Missing'
                     $detail = "winget: pacote $wid nao listado como instalado."
@@ -1004,42 +1037,70 @@ public static class BootstrapNativeMethods {
 }
 
 function Invoke-NativeWithLog {
+    <#
+    .SYNOPSIS
+        Executa binario nativo com captura de saida via async pipes e timeout configuravel.
+        Substitui o uso anterior de `& $Exe @Args 2>&1` que nao tinha protecao contra processos
+        travados (winget congelado pendurava tudo).
+    #>
     param(
         [Parameter(Mandatory = $true)][string]$Exe,
-        [string[]]$Args = @()
+        [string[]]$Args = @(),
+        [int]$TimeoutMs = 600000
     )
 
-    $hasNativePreferenceVar = $false
-    $oldNativePreference = $null
-    $nativePrefVar = Get-Variable -Name 'PSNativeCommandUseErrorActionPreference' -ErrorAction SilentlyContinue
-    if ($nativePrefVar) {
-        $hasNativePreferenceVar = $true
-        $oldNativePreference = $PSNativeCommandUseErrorActionPreference
-        $PSNativeCommandUseErrorActionPreference = $false
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = (($Args | ForEach-Object {
+                $v = [string]$_
+                if ($v -match '\s') { '"' + ($v -replace '"', '\"') + '"' } else { $v }
+            }) -join ' ')
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.RedirectStandardInput = $false
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    $proc.EnableRaisingEvents = $true
+
+    $logPath = $script:LogPath
+    $proc.add_OutputDataReceived({
+            param($sender, $e)
+            if ($null -ne $e.Data) {
+                $line = [string]$e.Data
+                if ($line -match "`0") { $line = $line -replace "`0", '' }
+                try { Add-Content -Path $logPath -Value $line -Encoding utf8 -ErrorAction SilentlyContinue } catch { }
+                Write-Host $line
+            }
+        })
+    $proc.add_ErrorDataReceived({
+            param($sender, $e)
+            if ($null -ne $e.Data) {
+                $line = [string]$e.Data
+                if ($line -match "`0") { $line = $line -replace "`0", '' }
+                try { Add-Content -Path $logPath -Value $line -Encoding utf8 -ErrorAction SilentlyContinue } catch { }
+                Write-Host $line
+            }
+        })
+
+    $null = $proc.Start()
+    $proc.BeginOutputReadLine()
+    $proc.BeginErrorReadLine()
+
+    $timedOut = -not $proc.WaitForExit($TimeoutMs)
+    if ($timedOut) {
+        Write-Log ("Comando nativo excedeu timeout ({0}ms): {1} {2}. Encerrando processo." -f $TimeoutMs, $Exe, $psi.Arguments) 'WARN'
+        try { $proc.Kill() } catch { }
+        try { $null = $proc.WaitForExit(5000) } catch { }
     }
 
-    $oldErrorActionPreference = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
+    try { $proc.CancelOutputRead() } catch { }
+    try { $proc.CancelErrorRead() } catch { }
 
-    try {
-        $output = & $Exe @Args 2>&1
-        $exitCode = $LASTEXITCODE
-        if ($null -eq $exitCode) {
-            $exitCode = 0
-        }
-        foreach ($item in @($output)) {
-            $line = [string]$item
-            if ($line -match "`0") { $line = $line -replace "`0", '' }
-            Add-Content -Path $script:LogPath -Value $line -Encoding utf8
-            Write-Host $line
-        }
-        return [int]$exitCode
-    } finally {
-        $ErrorActionPreference = $oldErrorActionPreference
-        if ($hasNativePreferenceVar) {
-            $PSNativeCommandUseErrorActionPreference = $oldNativePreference
-        }
-    }
+    if ($timedOut) { return 124 }
+    return [int]$proc.ExitCode
 }
 
 function Test-WslCorruptionText {
@@ -1658,10 +1719,11 @@ function Invoke-BootstrapExecutionPreflight {
     $requirements = Get-BootstrapPreflightRequirements -ResolvedComponents $ResolvedComponents
     $pendingRebootReasons = @(Get-BootstrapPendingRebootReasons)
     if ($pendingRebootReasons.Count -gt 0) {
-        Write-Log ("Reinicio pendente detectado: {0}. Recomendo reiniciar antes de prosseguir para evitar falhas de Store/winget/WSL." -f ($pendingRebootReasons -join ', ')) 'WARN'
+        Write-Log ("Reinicio pendente detectado: {0}. Instalacoes podem falhar (Store/winget/WSL). Recomendo reiniciar antes de prosseguir." -f ($pendingRebootReasons -join ', ')) 'WARN'
         if ($script:RequireNoPendingReboot) {
-            throw ("Preflight: reinicio pendente e flag -RequireNoPendingReboot ativa. Motivos: {0}. Reinicie o Windows e execute novamente, ou remova a flag." -f ($pendingRebootReasons -join ', '))
+            throw ("Preflight: reinicio pendente e flag -RequireNoPendingReboot ativa. Motivos: {0}. Reinicie o Windows e execute novamente." -f ($pendingRebootReasons -join ', '))
         }
+        Write-Log 'Continuando apesar do reinicio pendente (use -RequireNoPendingReboot para bloquear).' 'WARN'
     } else {
         Write-Log 'Nenhum reinicio pendente detectado.'
     }
@@ -1776,13 +1838,32 @@ function Invoke-BootstrapExecutionPreflight {
     Write-Log 'Preflight operacional concluido.'
 }
 
+# Exit codes do winget que NAO indicam falha real e nao devem disparar retry-loop.
+# Documentacao: https://learn.microsoft.com/en-us/windows/package-manager/winget/returnCodes
+# - -1978335189 (0x8A15002B) APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE: pacote ja instalado, nada a atualizar.
+# - -1978335212 (0x8A150014) APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND: pacote nao encontrado em list (esperado).
+# - -1978335215 (0x8A150011) APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED.
+# Em PowerShell 5.1 esses codigos sao truncados para o int32 nativo; quando o LASTEXITCODE retorna
+# como -1 cru, vem de Win32 (API saida sem traduzir o HRESULT). Tratamos ambos.
+$script:WingetSoftSuccessExitCodes = @(
+    -1978335189,
+    -1978335212,
+    -1978335215
+)
+
+function Test-WingetSoftSuccessExit {
+    param([int]$ExitCode)
+    return ($script:WingetSoftSuccessExitCodes -contains $ExitCode)
+}
+
 function Invoke-NativeWithRetry {
     param(
         [Parameter(Mandatory = $true)][string]$Exe,
         [Parameter(Mandatory = $true)][string[]]$Args,
         [Parameter(Mandatory = $true)][string]$OperationName,
         [int]$MaxAttempts = 2,
-        [int]$InitialDelaySeconds = 3
+        [int]$InitialDelaySeconds = 3,
+        [int[]]$SoftSuccessExitCodes = @()
     )
 
     $attempt = 0
@@ -1797,6 +1878,11 @@ function Invoke-NativeWithRetry {
 
         $lastExitCode = Invoke-NativeWithLog -Exe $Exe -Args $Args
         if ($lastExitCode -eq 0) {
+            return 0
+        }
+
+        if ($SoftSuccessExitCodes -and ($SoftSuccessExitCodes -contains $lastExitCode)) {
+            Write-Log ("{0}: exit={1} reconhecido como sucesso (no-op). Nao vai retentar." -f $OperationName, $lastExitCode)
             return 0
         }
 
@@ -2201,6 +2287,13 @@ function Get-BootstrapNotepadPlusPlusInstallInfo {
     }
 
     if (-not $installRoot) {
+        $wingetExe = Get-Winget
+        if ($wingetExe) {
+            $wingetInstalled = Test-WingetPackageInstalled -WingetPath $wingetExe -Id 'Notepad++.Notepad++'
+            if ($wingetInstalled) {
+                Write-Log 'Notepad++ ghost install — winget registry diz presente, mas nenhum binario encontrado em disco.' 'WARN'
+            }
+        }
         return [ordered]@{
             Installed = $false
             Architecture = 'x64'
@@ -3198,17 +3291,69 @@ function Ensure-Winget {
     return $winget
 }
 
+function Test-WingetProbePathsOnDisk {
+    param([string[]]$ProbePaths)
+    if (-not $ProbePaths -or $ProbePaths.Count -eq 0) { return $false }
+    foreach ($probe in $ProbePaths) {
+        if ([string]::IsNullOrWhiteSpace($probe)) { continue }
+        $expanded = ConvertTo-BootstrapExpandedPath -Path ([string]$probe)
+        if ([string]::IsNullOrWhiteSpace($expanded)) { continue }
+        # Suportar globs simples (ex: "...\jdk-17*\bin\java.exe").
+        if ($expanded -match '[\*\?]') {
+            $matches = @(Get-ChildItem -Path $expanded -ErrorAction SilentlyContinue)
+            if ($matches.Count -gt 0) { return $true }
+        } elseif (Test-Path -LiteralPath $expanded) {
+            return $true
+        }
+    }
+    return $false
+}
+
 function Ensure-WingetPackage {
     param(
         [Parameter(Mandatory = $true)][string]$WingetPath,
         [Parameter(Mandatory = $true)][string]$Id,
         [string]$DisplayName = $Id,
         [bool]$PreferUserScope = $true,
-        [bool]$AllowFailureWhenNotAdmin = $false
+        [bool]$AllowFailureWhenNotAdmin = $false,
+        [string[]]$ProbePaths = @()
     )
+
+    # Curto-circuito: se ProbePaths apontam para binario real em disco, considerar instalado
+    # sem invocar winget. Evita 100% dos retry-loops causados por reportes inconsistentes.
+    if ($ProbePaths -and (Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths)) {
+        Write-Log ("{0} ja instalado (ProbePaths em disco)." -f $DisplayName)
+        return
+    }
+
     Write-Log ("winget: verificando instalacao de {0} (id={1})..." -f $DisplayName, $Id)
     $isInstalled = Test-WingetPackageInstalled -WingetPath $WingetPath -Id $Id
     Write-Log ("winget list: verificacao concluida para id={0}; jaInstalado={1}" -f $Id, $isInstalled)
+
+    if ($isInstalled -and $ProbePaths.Count -gt 0) {
+        $diskVerified = Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths
+        if (-not $diskVerified) {
+            Write-Log ("winget: {0} reportado como instalado, mas nenhum binario encontrado em disco; removendo registro fantasma e tentando reinstalacao..." -f $DisplayName) 'WARN'
+            $ghostRemoved = $false
+
+            # Tentativa 1: winget uninstall com retry/backoff (UPDATE_NOT_APPLICABLE = sucesso)
+            $uninstallArgs = @('uninstall', '-e', '--id', $Id, '--purge', '--disable-interactivity')
+            $uninstallExit = Invoke-NativeWithRetry -Exe $WingetPath -Args $uninstallArgs -OperationName ("Removendo ghost {0} via winget uninstall" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+            if ($uninstallExit -eq 0) {
+                $ghostRemoved = $true
+            } else {
+                Write-Log ("winget: falha ao remover ghost {0} (exit={1}), tentando forcar com --force..." -f $DisplayName, $uninstallExit) 'WARN'
+                $forceArgs = @('uninstall', '-e', '--id', $Id, '--purge', '--force', '--disable-interactivity')
+                $forceExit = Invoke-NativeWithRetry -Exe $WingetPath -Args $forceArgs -OperationName ("Forcando remocao ghost {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+                if ($forceExit -eq 0) { $ghostRemoved = $true }
+            }
+
+            if ($ghostRemoved) {
+                Write-Log ("winget: ghost entry removida com sucesso para {0}." -f $DisplayName)
+            }
+            $isInstalled = $false
+        }
+    }
 
     if ($isInstalled) {
         Write-Log "$DisplayName já instalado (winget)."
@@ -3231,21 +3376,22 @@ function Ensure-WingetPackage {
     $wingetInitialDelaySeconds = 2
 
     $exitCode = -1
+    $softCodes = $script:WingetSoftSuccessExitCodes
     if ($PreferUserScope) {
-        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsSilent) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsSilent) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -SoftSuccessExitCodes $softCodes
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --scope user --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
-            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsBase) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsBase) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -SoftSuccessExitCodes $softCodes
             if ($exitCode -ne 0) {
                 Write-Log "Falha ao instalar $DisplayName com --scope user (winget). Tentando novamente sem --scope..." 'WARN'
             }
         }
     }
     if ($exitCode -ne 0) {
-        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsSilent -OperationName "$DisplayName via winget --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsSilent -OperationName "$DisplayName via winget --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -SoftSuccessExitCodes $softCodes
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
-            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsBase -OperationName "$DisplayName via winget" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds
+            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsBase -OperationName "$DisplayName via winget" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -SoftSuccessExitCodes $softCodes
         }
     }
     if ($exitCode -ne 0) {
@@ -3256,6 +3402,27 @@ function Ensure-WingetPackage {
         throw "Falha ao instalar $DisplayName via winget (exit=$exitCode)."
     }
     Refresh-SessionPath
+
+    if ($ProbePaths.Count -gt 0) {
+        $diskVerified = $false
+        $retryCount = 2
+        while ($retryCount -gt 0 -and -not $diskVerified) {
+            $diskVerified = Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths
+            if (-not $diskVerified) {
+                if ($retryCount -gt 1) {
+                    Write-Log ("winget: {0} pos-instalacao; aguardando binario em disco..." -f $DisplayName) 'WARN'
+                    Start-Sleep -Seconds 3
+                }
+                $retryCount--
+            }
+        }
+        if (-not $diskVerified) {
+            Write-Log ("winget: {0} instalado (exit 0), mas nenhum binario encontrado em ProbePaths. Possivel ghost install." -f $DisplayName) 'ERROR'
+        } else {
+            Write-Log ("winget: verificado binario em disco para {0}." -f $DisplayName)
+        }
+    }
+
     Write-Log "Instalação concluída: $DisplayName"
 }
 
@@ -3358,11 +3525,53 @@ function Test-WingetPackageInstalled {
             return $false
         }
         if ([string]::IsNullOrWhiteSpace($combined)) { return $false }
-        return ($combined -match [regex]::Escape($Id))
+        return (Test-WingetListOutputContainsId -Output $combined -Id $Id)
     } catch {
         Write-Log ("winget list: excecao ao verificar id={0}: {1}" -f $Id, $_.Exception.Message) 'WARN'
         return $false
     }
+}
+
+function Test-WingetListOutputContainsId {
+    <#
+    .SYNOPSIS
+        Decide se a saida tabular de `winget list -e --id <id>` contem uma linha de pacote
+        instalado para o Id pedido. Faz match em linha-a-linha, ignorando cabecalho/separador
+        e exigindo que o token coincida com o Id em uma das colunas. Evita falso-positivo
+        quando o Id aparece em mensagens como "Foi encontrado um pacote existente ja instalado".
+    #>
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyString()][string]$Output,
+        [Parameter(Mandatory = $true)][string]$Id
+    )
+    if ([string]::IsNullOrWhiteSpace($Output)) { return $false }
+    $idTrim = $Id.Trim()
+    if ([string]::IsNullOrWhiteSpace($idTrim)) { return $false }
+
+    $lines = ($Output -replace "`r", '') -split "`n"
+    $idEsc = [regex]::Escape($idTrim)
+    foreach ($raw in $lines) {
+        $line = [string]$raw
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $trimmed = $line.Trim()
+
+        # Pular linhas separadoras tabulares.
+        if ($trimmed -match '^[-=\s]+$') { continue }
+        # Pular cabecalho `Name  Id  Version  Available  Source` (ou variantes localizadas).
+        if ($trimmed -match '^\s*Name\s+Id\s+Vers' -or $trimmed -match '^\s*Nome\s+Id\s+Vers') { continue }
+
+        # Linhas de mensagem narrativa (winget escreve frases informativas em portugues/ingles).
+        # Match real exige que o Id apareca como TOKEN delimitado por whitespace (coluna) e nao
+        # como parte de uma frase pontuada por ":" ou ".".
+        if ($trimmed -match (('(^|\s)' + $idEsc + '($|\s)'))) {
+            # Confirma que a linha tambem possui pelo menos uma coluna apos o Id (Version).
+            # Linhas de log do tipo "winget: verificando id=Foo.Bar" tambem casariam, mas vem
+            # do nosso proprio Write-Log; sao filtradas porque o caller passa apenas $cap.stdout/stderr
+            # do processo winget, nunca do log local.
+            return $true
+        }
+    }
+    return $false
 }
 
 function Ensure-Python {
@@ -3371,6 +3580,9 @@ function Ensure-Python {
     )
 
     $pythonExe = Resolve-CommandPath -Name 'python'
+    if ($pythonExe -and ($pythonExe -match '\\Microsoft\\WindowsApps\\')) {
+        Write-Log 'python.exe e alias da Microsoft Store — instalando Python real via winget.' 'WARN'
+    }
     if ($pythonExe -and ($pythonExe -notmatch '\\Microsoft\\WindowsApps\\')) {
         $ver = ((& $pythonExe --version) 2>&1 | Select-Object -First 1)
         Write-Log "python já instalado: $ver ($pythonExe)"
@@ -3379,6 +3591,9 @@ function Ensure-Python {
     }
 
     $pyLauncher = Resolve-CommandPath -Name 'py'
+    if ($pyLauncher -and ($pyLauncher -match '\\Microsoft\\WindowsApps\\')) {
+        Write-Log 'py.exe e alias da Microsoft Store — ignorando.' 'WARN'
+    }
     if ($pyLauncher -and ($pyLauncher -notmatch '\\Microsoft\\WindowsApps\\')) {
         $ver = ((& $pyLauncher -3 --version) 2>&1 | Select-Object -First 1)
         Write-Log "Python já instalado (py launcher): $ver ($pyLauncher)"
@@ -3390,7 +3605,12 @@ function Ensure-Python {
         return
     }
 
-    Ensure-WingetPackage -WingetPath $WingetPath -Id 'Python.Python.3.13' -DisplayName 'Python 3.13'
+    $pythonProbePaths = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
+        "$env:ProgramFiles\Python313\python.exe",
+        "${env:ProgramFiles(x86)}\Python313\python.exe"
+    )
+    Ensure-WingetPackage -WingetPath $WingetPath -Id 'Python.Python.3.13' -DisplayName 'Python 3.13' -ProbePaths $pythonProbePaths
     Refresh-SessionPath
 
     $pythonExe = Resolve-CommandPath -Name 'python'
@@ -3498,7 +3718,7 @@ function Ensure-GitAndBash {
     param([Parameter(Mandatory = $true)][string]$WingetPath)
     $git = Get-GitExe
     if (-not $git) {
-        Ensure-WingetPackage -WingetPath $WingetPath -Id 'Git.Git' -DisplayName 'Git for Windows'
+        Ensure-WingetPackage -WingetPath $WingetPath -Id 'Git.Git' -DisplayName 'Git for Windows' -ProbePaths @("$env:ProgramFiles\Git\cmd\git.exe", "${env:ProgramFiles(x86)}\Git\cmd\git.exe")
         $git = Get-GitExe
     }
     if (-not $git) { throw 'Falha ao localizar git.exe apos a instalação.' }
@@ -3598,8 +3818,12 @@ function Ensure-DotNetSdkAndVerify {
     $sdkText = if ($dotnet) { Get-DotNetListSdksOutput -DotnetExe $dotnet } else { '' }
     $hasBand8 = Test-BootstrapDotNetSdkListHasMajorBand -ListSdksOutput $sdkText -Major $targetMajor
 
+    if ($dotnet -and -not $hasBand8 -and (Test-BootstrapDotNetSdkListHasEntry -ListSdksOutput $sdkText)) {
+        Write-Log ("dotnet-core: SDK mais recente detectado, mas .NET 8.x requerido pelo bootstrap. Instalando .NET 8 como complemento." -f $targetMajor) 'WARN'
+    }
+
     if (-not $hasBand8) {
-        Ensure-WingetPackage -WingetPath $WingetPath -Id $dotnetWingetId -DisplayName 'Microsoft .NET SDK 8' -AllowFailureWhenNotAdmin $false
+        Ensure-WingetPackage -WingetPath $WingetPath -Id $dotnetWingetId -DisplayName 'Microsoft .NET SDK 8' -AllowFailureWhenNotAdmin $false -ProbePaths @("$env:ProgramFiles\dotnet\dotnet.exe", "${env:ProgramFiles(x86)}\dotnet\dotnet.exe")
         Refresh-SessionPath
         $dotnet = Get-DotNetExe
         $sdkText = if ($dotnet) { Get-DotNetListSdksOutput -DotnetExe $dotnet } else { '' }
@@ -3652,7 +3876,7 @@ function Ensure-NodeAndNpm {
     }
 
     if ($needsInstall) {
-        Ensure-WingetPackage -WingetPath $WingetPath -Id 'OpenJS.NodeJS.LTS' -DisplayName 'Node.js (LTS)'
+        Ensure-WingetPackage -WingetPath $WingetPath -Id 'OpenJS.NodeJS.LTS' -DisplayName 'Node.js (LTS)' -ProbePaths @("$env:ProgramFiles\nodejs\node.exe", "${env:ProgramFiles(x86)}\nodejs\node.exe")
         Refresh-SessionPath
         $node = Get-NodeExe
     }
@@ -3761,7 +3985,7 @@ function Ensure-ClaudeCode {
         return
     }
 
-    Ensure-WingetPackage -WingetPath $WingetPath -Id 'Anthropic.ClaudeCode' -DisplayName 'Claude Code (Anthropic)'
+    Ensure-WingetPackage -WingetPath $WingetPath -Id 'Anthropic.ClaudeCode' -DisplayName 'Claude Code (Anthropic)' -ProbePaths @("$env:APPDATA\npm\claude.cmd", "$env:LOCALAPPDATA\Programs\ClaudeCode\claude.exe")
     Refresh-SessionPath
 
     $claudeExe = Resolve-CommandPath -Name 'claude'
@@ -5531,13 +5755,16 @@ function Test-BootstrapAppTuningItemInstalled {
         }
     }
 
+    if ($hasProbePaths) {
+        return $false
+    }
+
     foreach ($targetApp in @($Item.targetApps)) {
         $needle = ([string]$targetApp).Trim().ToLowerInvariant()
         if ([string]::IsNullOrWhiteSpace($needle)) { continue }
-        $strict = $hasProbePaths
         foreach ($appName in @($apps.Keys)) {
             $text = ([string]$appName).ToLowerInvariant()
-            if (Test-BootstrapInventoryAppNameMatchesTarget -HaystackLower $text -NeedleLower $needle -StrictBoundary $strict) {
+            if (Test-BootstrapInventoryAppNameMatchesTarget -HaystackLower $text -NeedleLower $needle -StrictBoundary $false) {
                 return $true
             }
         }
@@ -5672,6 +5899,7 @@ function Get-BootstrapAppTuningInstallComponents {
         'specialk-safe-defaults' = @('special-k')
         'specialk-global-injection' = @('special-k')
         'steamdeck-tools-allowlist' = @('steamdeck-tools')
+        'steam-input-desktop-layout-audit' = @('steam')
         'autohotkey-recovery-hotkeys' = @('autohotkey-runtime')
         'powertoys-deck-layout' = @('powertoys')
         'soundswitch-audio-profile' = @('soundswitch')
@@ -5684,8 +5912,10 @@ function Get-BootstrapAppTuningInstallComponents {
         'antigravity-settings' = @('antigravity')
         'openclaude-cli-env' = @('openclaude-cli')
         'cherry-studio-manual' = @('cherry-studio')
+        'comet-manual' = @('perplexity')
         'ollama-dev-session' = @('ollama')
         'docker-dev-session' = @('docker')
+        'openwebui-dev-session' = @('openwebui')
         'edge-background-off' = @()
         'chrome-background-off' = @('chrome')
         'sunshine-allowlist' = @('sunshine')
@@ -9100,37 +9330,37 @@ function Get-BootstrapComponentCatalog {
     $catalog['git-lfs'] = New-BootstrapComponentDefinition -Name 'git-lfs' -Description 'Git LFS e inicialização local.' -DependsOn @('git-core') -Kind 'git-lfs' -EstimatedSizeGB 0.1 -RequiresNetwork $true
     $catalog['node-core'] = New-BootstrapComponentDefinition -Name 'node-core' -Description 'Node.js LTS e npm global bin.' -DependsOn @('system-core') -Optional $false -Kind 'node-core' -EstimatedSizeGB 1.0 -RequiresNetwork $true -VersionCheckCommand 'node -v'
     $catalog['python-core'] = New-BootstrapComponentDefinition -Name 'python-core' -Description 'Python 3.13, PATH e uv.' -DependsOn @('system-core') -Optional $false -Kind 'python-core' -EstimatedSizeGB 1.5 -RequiresNetwork $true -VersionCheckCommand 'python --version'
-    $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)' } -EstimatedSizeGB 2.0 -RequiresNetwork $true -VersionCheckCommand 'java -version'
+    $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)'; ProbePaths = @("$env:ProgramFiles\Eclipse Adoptium\jdk-17*\bin\java.exe") } -EstimatedSizeGB 2.0 -RequiresNetwork $true -VersionCheckCommand 'java -version'
     $catalog['dotnet-core'] = New-BootstrapComponentDefinition -Name 'dotnet-core' -Description 'Microsoft .NET SDK 8 (LTS), PATH e verificacao dotnet --list-sdks. Palavras-chave na busca da UI: dotnet, dotnet core, net8, sdk8, winget Microsoft.DotNet.SDK.8.' -DependsOn @('system-core') -Optional $false -Kind 'dotnet-core' -EstimatedSizeGB 1.2 -RequiresNetwork $true -VersionCheckCommand 'dotnet --list-sdks'
-    $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick' }
-    $catalog['sevenzip'] = New-BootstrapComponentDefinition -Name 'sevenzip' -Description '7-Zip e ajuste de PATH.' -DependsOn @('system-core') -Kind 'sevenzip'
-    $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7' }
-    $catalog['terminal'] = New-BootstrapComponentDefinition -Name 'terminal' -Description 'Windows Terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.WindowsTerminal'; DisplayName = 'Windows Terminal' }
-    $catalog['powertoys'] = New-BootstrapComponentDefinition -Name 'powertoys' -Description 'Microsoft PowerToys.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerToys'; DisplayName = 'Microsoft PowerToys' }
-    $catalog['github-cli'] = New-BootstrapComponentDefinition -Name 'github-cli' -Description 'GitHub CLI (gh).' -DependsOn @('git-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'GitHub.cli'; DisplayName = 'GitHub CLI (gh)' }
-    $catalog['chrome'] = New-BootstrapComponentDefinition -Name 'chrome' -Description 'Google Chrome.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Chrome'; DisplayName = 'Google Chrome'}
+    $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick'; ProbePaths = @("$env:ProgramFiles\ImageMagick-*\magick.exe", "$env:ProgramFiles\ImageMagick\magick.exe") }
+    $catalog['sevenzip'] = New-BootstrapComponentDefinition -Name 'sevenzip' -Description '7-Zip e ajuste de PATH.' -DependsOn @('system-core') -Kind 'sevenzip' -Data @{ ProbePaths = @("$env:ProgramFiles\7-Zip\7z.exe", "${env:ProgramFiles(x86)}\7-Zip\7z.exe") }
+    $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7'; ProbePaths = @("$env:ProgramFiles\PowerShell\7\pwsh.exe", "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe") }
+    $catalog['terminal'] = New-BootstrapComponentDefinition -Name 'terminal' -Description 'Windows Terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.WindowsTerminal'; DisplayName = 'Windows Terminal'; ProbePaths = @("${env:LOCALAPPDATA}\Microsoft\WindowsApps\wt.exe", "$env:ProgramFiles\WindowsApps\WindowsTerminal.exe") }
+    $catalog['powertoys'] = New-BootstrapComponentDefinition -Name 'powertoys' -Description 'Microsoft PowerToys.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerToys'; DisplayName = 'Microsoft PowerToys'; ProbePaths = @("$env:ProgramFiles\PowerToys\PowerToys.exe") }
+    $catalog['github-cli'] = New-BootstrapComponentDefinition -Name 'github-cli' -Description 'GitHub CLI (gh).' -DependsOn @('git-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'GitHub.cli'; DisplayName = 'GitHub CLI (gh)'; ProbePaths = @("$env:ProgramFiles\GitHub CLI\gh.exe", "${env:LOCALAPPDATA}\Programs\GitHub CLI\gh.exe") }
+    $catalog['chrome'] = New-BootstrapComponentDefinition -Name 'chrome' -Description 'Google Chrome.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Chrome'; DisplayName = 'Google Chrome'; ProbePaths = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe", "${env:LOCALAPPDATA}\Google\Chrome\Application\chrome.exe") }
     $catalog['google-app-desktop'] = New-BootstrapComponentDefinition -Name 'google-app-desktop' -Description 'Google App para Desktop.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Google App Desktop'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Experiência oficial do Google no Windows.'; Instructions = 'Instale acessando https://search.google/google-app/desktop/?utm_source=Google&utm_medium=keyword_blog&utm_campaign=DGA_blog' }
-    $catalog['notepadpp'] = New-BootstrapComponentDefinition -Name 'notepadpp' -Description 'Notepad++.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Notepad++.Notepad++'; DisplayName = 'Notepad++'}
+    $catalog['notepadpp'] = New-BootstrapComponentDefinition -Name 'notepadpp' -Description 'Notepad++.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Notepad++.Notepad++'; DisplayName = 'Notepad++'; ProbePaths = @("$env:ProgramFiles\Notepad++\notepad++.exe", "${env:ProgramFiles(x86)}\Notepad++\notepad++.exe", "${env:LOCALAPPDATA}\Programs\Notepad++\notepad++.exe") }
     $catalog['wsl-core'] = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'Recursos WSL, Ubuntu e WSL 2.' -DependsOn @('system-core') -Kind 'wsl-core'
     $catalog['wsl-ui'] = New-BootstrapComponentDefinition -Name 'wsl-ui' -Description 'WSL UI e WebView2.' -DependsOn @('wsl-core') -Kind 'wsl-ui'
-    $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop' }
-    $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'}
+    $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Docker\Docker.exe", "$env:ProgramFiles\Docker\Docker.exe") }
+    $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Claude\Claude.exe", "$env:ProgramFiles\Claude\Claude.exe") }
     $catalog['claude-code'] = New-BootstrapComponentDefinition -Name 'claude-code' -Description 'Claude Code CLI.' -DependsOn @('system-core') -Kind 'claude-code'
-    $catalog['cursor'] = New-BootstrapComponentDefinition -Name 'cursor' -Description 'Cursor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anysphere.Cursor'; DisplayName = 'Cursor'}
-    $catalog['windsurf'] = New-BootstrapComponentDefinition -Name 'windsurf' -Description 'Windsurf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Codeium.Windsurf'; DisplayName = 'Windsurf'}
-    $catalog['warp'] = New-BootstrapComponentDefinition -Name 'warp' -Description 'Warp terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Warp.Warp'; DisplayName = 'Warp'}
-    $catalog['trae'] = New-BootstrapComponentDefinition -Name 'trae' -Description 'Trae desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ByteDance.Trae'; DisplayName = 'Trae'}
-    $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'}
-    $catalog['vscode'] = New-BootstrapComponentDefinition -Name 'vscode' -Description 'VS Code estável.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode'; DisplayName = 'Visual Studio Code'}
-    $catalog['vscode-insiders'] = New-BootstrapComponentDefinition -Name 'vscode-insiders' -Description 'VS Code Insiders.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode.Insiders'; DisplayName = 'Visual Studio Code - Insiders'}
-    $catalog['antigravity'] = New-BootstrapComponentDefinition -Name 'antigravity' -Description 'Google Antigravity.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Antigravity'; DisplayName = 'Antigravity'}
-    $catalog['autoclaw'] = New-BootstrapComponentDefinition -Name 'autoclaw' -Description 'AutoClaw.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZhipuAI.AutoClaw'; DisplayName = 'AutoClaw'}
-    $catalog['perplexity'] = New-BootstrapComponentDefinition -Name 'perplexity' -Description 'Perplexity Comet.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Perplexity.Comet'; DisplayName = 'Perplexity'}
+    $catalog['cursor'] = New-BootstrapComponentDefinition -Name 'cursor' -Description 'Cursor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anysphere.Cursor'; DisplayName = 'Cursor'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Cursor\Cursor.exe", "$env:ProgramFiles\Cursor\Cursor.exe") }
+    $catalog['windsurf'] = New-BootstrapComponentDefinition -Name 'windsurf' -Description 'Windsurf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Codeium.Windsurf'; DisplayName = 'Windsurf'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Windsurf\Windsurf.exe", "$env:ProgramFiles\Windsurf\Windsurf.exe") }
+    $catalog['warp'] = New-BootstrapComponentDefinition -Name 'warp' -Description 'Warp terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Warp.Warp'; DisplayName = 'Warp'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Warp\Warp.exe", "$env:ProgramFiles\Warp\Warp.exe") }
+    $catalog['trae'] = New-BootstrapComponentDefinition -Name 'trae' -Description 'Trae desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ByteDance.Trae'; DisplayName = 'Trae'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Trae\Trae.exe", "$env:ProgramFiles\Trae\Trae.exe") }
+    $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\OpenCode Desktop\OpenCode Desktop.exe", "$env:ProgramFiles\OpenCode Desktop\OpenCode Desktop.exe") }
+    $catalog['vscode'] = New-BootstrapComponentDefinition -Name 'vscode' -Description 'VS Code estável.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode'; DisplayName = 'Visual Studio Code'; ProbePaths = @("$env:ProgramFiles\Microsoft VS Code\Code.exe", "${env:LOCALAPPDATA}\Programs\Microsoft VS Code\Code.exe") }
+    $catalog['vscode-insiders'] = New-BootstrapComponentDefinition -Name 'vscode-insiders' -Description 'VS Code Insiders.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode.Insiders'; DisplayName = 'Visual Studio Code - Insiders'; ProbePaths = @("$env:ProgramFiles\Microsoft VS Code Insiders\Code - Insiders.exe", "${env:LOCALAPPDATA}\Programs\Microsoft VS Code Insiders\Code - Insiders.exe") }
+    $catalog['antigravity'] = New-BootstrapComponentDefinition -Name 'antigravity' -Description 'Google Antigravity.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Antigravity'; DisplayName = 'Antigravity'; ProbePaths = @("${env:LOCALAPPDATA}\Google\Antigravity\Antigravity.exe", "$env:ProgramFiles\Google\Antigravity\Antigravity.exe") }
+    $catalog['autoclaw'] = New-BootstrapComponentDefinition -Name 'autoclaw' -Description 'AutoClaw.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZhipuAI.AutoClaw'; DisplayName = 'AutoClaw'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\AutoClaw\AutoClaw.exe", "$env:ProgramFiles\AutoClaw\AutoClaw.exe") }
+    $catalog['perplexity'] = New-BootstrapComponentDefinition -Name 'perplexity' -Description 'Perplexity Comet.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Perplexity.Comet'; DisplayName = 'Perplexity'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Comet\Comet.exe", "$env:ProgramFiles\Comet\Comet.exe") }
     $catalog['codex-installer'] = New-BootstrapComponentDefinition -Name 'codex-installer' -Description 'Codex installer desktop via winget.' -DependsOn @('system-core') -Kind 'codex-installer'
-    $catalog['ollama'] = New-BootstrapComponentDefinition -Name 'ollama' -Description 'Ollama local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Ollama.Ollama'; DisplayName = 'Ollama' }
-    $catalog['cherry-studio'] = New-BootstrapComponentDefinition -Name 'cherry-studio' -Description 'Cherry Studio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'kangfenmao.CherryStudio'; DisplayName = 'Cherry Studio' }
-    $catalog['lm-studio'] = New-BootstrapComponentDefinition -Name 'lm-studio' -Description 'LM Studio local LLM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LMStudio.LMStudio'; DisplayName = 'LM Studio' }
-    $catalog['pinokio'] = New-BootstrapComponentDefinition -Name 'pinokio' -Description 'Pinokio AI Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Pinokio.Pinokio'; DisplayName = 'Pinokio' }
+    $catalog['ollama'] = New-BootstrapComponentDefinition -Name 'ollama' -Description 'Ollama local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Ollama.Ollama'; DisplayName = 'Ollama'; ProbePaths = @("${env:LOCALAPPDATA}\Ollama\ollama.exe", "$env:ProgramFiles\Ollama\ollama.exe") }
+    $catalog['cherry-studio'] = New-BootstrapComponentDefinition -Name 'cherry-studio' -Description 'Cherry Studio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'kangfenmao.CherryStudio'; DisplayName = 'Cherry Studio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Cherry Studio\Cherry Studio.exe", "$env:ProgramFiles\Cherry Studio\Cherry Studio.exe") }
+    $catalog['lm-studio'] = New-BootstrapComponentDefinition -Name 'lm-studio' -Description 'LM Studio local LLM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LMStudio.LMStudio'; DisplayName = 'LM Studio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\LM Studio\LM Studio.exe", "$env:ProgramFiles\LM Studio\LM Studio.exe") }
+    $catalog['pinokio'] = New-BootstrapComponentDefinition -Name 'pinokio' -Description 'Pinokio AI Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Pinokio.Pinokio'; DisplayName = 'Pinokio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Pinokio\Pinokio.exe", "$env:ProgramFiles\Pinokio\Pinokio.exe") }
     $catalog['webapp-photopea'] = New-BootstrapComponentDefinition -Name 'webapp-photopea' -Description 'Atalho web app Photopea na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Photopea'; Url = 'https://www.photopea.com/'; CategoryFolder = 'Design' }
     $catalog['webapp-whatsapp-web'] = New-BootstrapComponentDefinition -Name 'webapp-whatsapp-web' -Description 'Atalho web app WhatsApp Web na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'WhatsApp Web'; Url = 'https://web.whatsapp.com/'; CategoryFolder = 'Comunicação' }
     $catalog['webapp-xiaomi-ai-studio'] = New-BootstrapComponentDefinition -Name 'webapp-xiaomi-ai-studio' -Description 'Atalho web app Xiaomi AI Studio na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Xiaomi AI Studio'; Url = 'https://aistudio.xiaomimimo.com/#/'; CategoryFolder = 'IA' }
@@ -9140,7 +9370,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['webapp-z-ai'] = New-BootstrapComponentDefinition -Name 'webapp-z-ai' -Description 'Atalho web app Z.ai na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Z.ai'; Url = 'https://chat.z.ai/'; CategoryFolder = 'IA' }
     $catalog['webapp-gemini-web'] = New-BootstrapComponentDefinition -Name 'webapp-gemini-web' -Description 'Atalho web app Gemini na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Gemini'; Url = 'https://gemini.google.com/app'; CategoryFolder = 'IA' }
     $catalog['webapp-google-ai-studio'] = New-BootstrapComponentDefinition -Name 'webapp-google-ai-studio' -Description 'Atalho web app Google AI Studio na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google AI Studio'; Url = 'https://aistudio.google.com/prompts/new_chat'; CategoryFolder = 'IA' }
-    $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZedIndustries.Zed'; DisplayName = 'Zed' }
+    $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZedIndustries.Zed'; DisplayName = 'Zed'; ProbePaths = @("${env:LOCALAPPDATA}\Zed\Zed.exe", "$env:ProgramFiles\Zed\Zed.exe") }
     $catalog['opencode'] = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode CLI via script oficial.' -DependsOn @('git-core') -Kind 'opencode'
     $catalog['gemini-cli'] = New-BootstrapComponentDefinition -Name 'gemini-cli' -Description 'Gemini CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@google/gemini-cli'; DisplayName = 'Gemini CLI (@google/gemini-cli)' }
     $catalog['bonsai-cli'] = New-BootstrapComponentDefinition -Name 'bonsai-cli' -Description 'Bonsai CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@bonsai-ai/cli'; DisplayName = 'Bonsai CLI (@bonsai-ai/cli)' }
@@ -9163,28 +9393,28 @@ function Get-BootstrapComponentCatalog {
     $catalog['goose'] = New-BootstrapComponentDefinition -Name 'goose' -Description 'goose CLI.' -DependsOn @('git-core') -Kind 'goose'
     $catalog['repo-gemini-cli'] = New-BootstrapComponentDefinition -Name 'repo-gemini-cli' -Description 'Clone do repositório gemini-cli.' -DependsOn @('git-core') -Kind 'repo-clone' -Data @{ RepoUrl = 'https://github.com/heartyguy/gemini-cli'; TargetName = 'gemini-cli' }
     $catalog['n8n'] = New-BootstrapComponentDefinition -Name 'n8n' -Description 'n8n global via npm.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'n8n'; DisplayName = 'n8n' }
-    $catalog['autohotkey'] = New-BootstrapComponentDefinition -Name 'autohotkey' -Description 'AutoHotkey.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AutoHotkey.AutoHotkey'; DisplayName = 'AutoHotkey' }
-    $catalog['blender'] = New-BootstrapComponentDefinition -Name 'blender' -Description 'Blender LTS.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BlenderFoundation.Blender.LTS.4.5'; DisplayName = 'Blender LTS 4.5' }
-    $catalog['ffmpeg'] = New-BootstrapComponentDefinition -Name 'ffmpeg' -Description 'FFmpeg.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Gyan.FFmpeg'; DisplayName = 'FFmpeg' }
-    $catalog['unity-hub'] = New-BootstrapComponentDefinition -Name 'unity-hub' -Description 'Unity Hub.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Unity.UnityHub'; DisplayName = 'Unity Hub' }
-    $catalog['cmake'] = New-BootstrapComponentDefinition -Name 'cmake' -Description 'CMake.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Kitware.CMake'; DisplayName = 'CMake' }
-    $catalog['llvm'] = New-BootstrapComponentDefinition -Name 'llvm' -Description 'LLVM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LLVM.LLVM'; DisplayName = 'LLVM' }
-    $catalog['rustup'] = New-BootstrapComponentDefinition -Name 'rustup' -Description 'Rustup.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Rustlang.Rustup'; DisplayName = 'Rustup' }
-    $catalog['visual-studio-community'] = New-BootstrapComponentDefinition -Name 'visual-studio-community' -Description 'Visual Studio Community 2022.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudio.2022.Community'; DisplayName = 'Visual Studio Community 2022' }
-    $catalog['steam'] = New-BootstrapComponentDefinition -Name 'steam' -Description 'Steam.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.Steam'; DisplayName = 'Steam' }
-    $catalog['steamcmd'] = New-BootstrapComponentDefinition -Name 'steamcmd' -Description 'SteamCMD.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.SteamCMD'; DisplayName = 'SteamCMD' }
+    $catalog['autohotkey'] = New-BootstrapComponentDefinition -Name 'autohotkey' -Description 'AutoHotkey.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AutoHotkey.AutoHotkey'; DisplayName = 'AutoHotkey'; ProbePaths = @("$env:ProgramFiles\AutoHotkey\AutoHotkey64.exe", "${env:ProgramFiles(x86)}\AutoHotkey\AutoHotkey.exe") }
+    $catalog['blender'] = New-BootstrapComponentDefinition -Name 'blender' -Description 'Blender LTS.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BlenderFoundation.Blender.LTS.4.5'; DisplayName = 'Blender LTS 4.5'; ProbePaths = @("$env:ProgramFiles\Blender Foundation\Blender LTS\blender.exe", "$env:ProgramFiles\Blender Foundation\Blender 4.5\blender.exe") }
+    $catalog['ffmpeg'] = New-BootstrapComponentDefinition -Name 'ffmpeg' -Description 'FFmpeg.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Gyan.FFmpeg'; DisplayName = 'FFmpeg'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\ffmpeg\bin\ffmpeg.exe", "$env:ProgramFiles\ffmpeg\bin\ffmpeg.exe", "$env:ProgramData\chocolatey\bin\ffmpeg.exe") }
+    $catalog['unity-hub'] = New-BootstrapComponentDefinition -Name 'unity-hub' -Description 'Unity Hub.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Unity.UnityHub'; DisplayName = 'Unity Hub'; ProbePaths = @("$env:ProgramFiles\Unity Hub\Unity Hub.exe", "${env:LOCALAPPDATA}\Programs\Unity Hub\Unity Hub.exe") }
+    $catalog['cmake'] = New-BootstrapComponentDefinition -Name 'cmake' -Description 'CMake.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Kitware.CMake'; DisplayName = 'CMake'; ProbePaths = @("$env:ProgramFiles\CMake\bin\cmake.exe", "${env:ProgramFiles(x86)}\CMake\bin\cmake.exe") }
+    $catalog['llvm'] = New-BootstrapComponentDefinition -Name 'llvm' -Description 'LLVM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LLVM.LLVM'; DisplayName = 'LLVM'; ProbePaths = @("$env:ProgramFiles\LLVM\bin\clang.exe") }
+    $catalog['rustup'] = New-BootstrapComponentDefinition -Name 'rustup' -Description 'Rustup.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Rustlang.Rustup'; DisplayName = 'Rustup'; ProbePaths = @("${env:USERPROFILE}\.cargo\bin\rustup.exe", "$env:ProgramFiles\Rustup\bin\rustup.exe") }
+    $catalog['visual-studio-community'] = New-BootstrapComponentDefinition -Name 'visual-studio-community' -Description 'Visual Studio Community 2022.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudio.2022.Community'; DisplayName = 'Visual Studio Community 2022'; ProbePaths = @("$env:ProgramFiles\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe") }
+    $catalog['steam'] = New-BootstrapComponentDefinition -Name 'steam' -Description 'Steam.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.Steam'; DisplayName = 'Steam'; ProbePaths = @("${env:ProgramFiles(x86)}\Steam\steam.exe", "$env:ProgramFiles\Steam\steam.exe") }
+    $catalog['steamcmd'] = New-BootstrapComponentDefinition -Name 'steamcmd' -Description 'SteamCMD.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.SteamCMD'; DisplayName = 'SteamCMD'; ProbePaths = @("${env:ProgramFiles(x86)}\Steam\steamapps\common\SteamCMD\steamcmd.exe", "$env:ProgramFiles\Steam\steamapps\common\SteamCMD\steamcmd.exe") }
     $catalog['autohotkey-runtime'] = New-BootstrapComponentDefinition -Name 'autohotkey-runtime' -Description 'Runtime base para hotkeys e fallback manual do Steam Deck.' -DependsOn @('autohotkey') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite hotkeys fisicos e fallback local sem depender do Steam.' }
     $catalog['powershell-core-runtime'] = New-BootstrapComponentDefinition -Name 'powershell-core-runtime' -Description 'PowerShell Core pronto para componentes futuros.' -DependsOn @('powershell') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Provisiona pwsh antes de qualquer componente futuro que precise dele.' }
-    $catalog['vigembus-runtime'] = New-BootstrapComponentDefinition -Name 'vigembus-runtime' -Description 'Barramento virtual usado por ferramentas de input do Steam Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ViGEm.ViGEmBus'; DisplayName = 'ViGEmBus'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Base para emulacao/ponte de controle no modo handheld.' }
+    $catalog['vigembus-runtime'] = New-BootstrapComponentDefinition -Name 'vigembus-runtime' -Description 'Barramento virtual usado por ferramentas de input do Steam Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ViGEm.ViGEmBus'; DisplayName = 'ViGEmBus'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Base para emulacao/ponte de controle no modo handheld.'; ProbePaths = @("$env:ProgramFiles\Nefarius Software Solutions e.U\ViGEmBus\ViGEmBus.sys") }
     $catalog['steamdeck-tools-runtime'] = New-BootstrapComponentDefinition -Name 'steamdeck-tools-runtime' -Description 'Steam Deck Tools portatil com servicos de controle e overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'steamdeck-tools' -Data @{ Stage = 'runtime'; Provisioning = 'download'; ValueReason = 'Entrega overlay, controle, fan e power tuning especificos do Deck.' }
-    $catalog['handheld-companion'] = New-BootstrapComponentDefinition -Name 'handheld-companion' -Description 'Handheld Companion para Auto-TDP, gyro, DS4 e QuickTools overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BenjaminLSR.HandheldCompanion'; DisplayName = 'Handheld Companion'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Alternativa avancada ao Steam Deck Tools para Auto-TDP, gyro/DS4 e overlay tipo quick menu.' }
+    $catalog['handheld-companion'] = New-BootstrapComponentDefinition -Name 'handheld-companion' -Description 'Handheld Companion para Auto-TDP, gyro, DS4 e QuickTools overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BenjaminLSR.HandheldCompanion'; DisplayName = 'Handheld Companion'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Alternativa avancada ao Steam Deck Tools para Auto-TDP, gyro/DS4 e overlay tipo quick menu.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Handheld Companion\Handheld Companion.exe", "$env:ProgramFiles\Handheld Companion\Handheld Companion.exe") }
     $catalog['glossi'] = New-BootstrapComponentDefinition -Name 'glossi' -Description 'GlosSI para Steam Input global em UWP/launchers de terceiros.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'chocolatey' -Data @{ Package = 'glossi'; DisplayName = 'GlosSI'; Stage = 'payload'; Provisioning = 'chocolatey'; RequiresAdmin = $true; ValueReason = 'Cobre Steam Input global quando jogo/launcher nao aceita injecao nativa do Steam.' }
     $catalog['steamdeck-input-conflict-audit'] = New-BootstrapComponentDefinition -Name 'steamdeck-input-conflict-audit' -Description 'Audita conflito de Steam Desktop Layout com stacks externos de input.' -DependsOn @('steamdeck-settings') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Evita duplo input quando Steam Deck Tools, Handheld Companion ou GlosSI gerenciam controle no Windows.' }
     $catalog['amd-adrenalin'] = New-BootstrapComponentDefinition -Name 'amd-adrenalin' -Description 'AMD Software: Adrenalin Edition para drivers/overlay Radeon.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'AMD Adrenalin'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Garante painel Radeon presente para ajustes do driver AMD no modo handheld.'; ProbePaths = @('$env:ProgramFiles\AMD\CNext\CNext\RadeonSoftware.exe', '$env:ProgramFiles\AMD\CNext\CNext\AMDRSServ.exe'); Instructions = 'Instale o driver/painel AMD adequado ao Steam Deck antes de rodar novamente.' }
     $catalog['cru'] = New-BootstrapComponentDefinition -Name 'cru' -Description 'Custom Resolution Utility para ajustes EDID/resolucao.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'CRU'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Permite corrigir modos de resolucao/refresh usados por handheld e dock.'; CheckCommand = 'CRU.exe'; ProbePaths = @('$env:ProgramFiles\Custom Resolution Utility\CRU.exe', '$env:LOCALAPPDATA\Programs\Custom Resolution Utility\CRU.exe'); Instructions = 'Instale/extraia o Custom Resolution Utility (CRU) e deixe CRU.exe no PATH ou em pasta conhecida.' }
     $catalog['steamdeck-tools'] = New-BootstrapComponentDefinition -Name 'steamdeck-tools' -Description 'Bloco de tooling: RTSS, AMD Adrenalin, CRU e Steam Deck Tools.' -DependsOn @('rtss', 'amd-adrenalin', 'cru', 'steamdeck-tools-runtime') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'mixed'; ValueReason = 'Fecha o stack de overlay, driver, resolucao e controle fisico esperado no modo handheld.' }
-    $catalog['displayfusion'] = New-BootstrapComponentDefinition -Name 'displayfusion' -Description 'Layout de monitores e perfis de dock.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BinaryFortress.DisplayFusion'; DisplayName = 'DisplayFusion'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite layouts dedicados para monitor externo e dock.' }
-    $catalog['soundswitch'] = New-BootstrapComponentDefinition -Name 'soundswitch' -Description 'Troca rapida de audio entre Deck e HDMI/DP.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AntoineAflalo.SoundSwitch'; DisplayName = 'SoundSwitch'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Redireciona audio automaticamente entre handheld e dock.' }
+    $catalog['displayfusion'] = New-BootstrapComponentDefinition -Name 'displayfusion' -Description 'Layout de monitores e perfis de dock.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BinaryFortress.DisplayFusion'; DisplayName = 'DisplayFusion'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite layouts dedicados para monitor externo e dock.'; ProbePaths = @("$env:ProgramFiles\DisplayFusion\DisplayFusion.exe", "${env:ProgramFiles(x86)}\DisplayFusion\DisplayFusion.exe") }
+    $catalog['soundswitch'] = New-BootstrapComponentDefinition -Name 'soundswitch' -Description 'Troca rapida de audio entre Deck e HDMI/DP.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AntoineAflalo.SoundSwitch'; DisplayName = 'SoundSwitch'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Redireciona audio automaticamente entre handheld e dock.'; ProbePaths = @("${env:LOCALAPPDATA}\SoundSwitch\SoundSwitch.exe", "$env:ProgramFiles\SoundSwitch\SoundSwitch.exe") }
     $catalog['steamdeck-settings'] = New-BootstrapComponentDefinition -Name 'steamdeck-settings' -Description 'Cria e mantem steamdeck-settings.json com defaults e families.' -DependsOn @('system-core') -Kind 'steamdeck-settings' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Persiste defaults do host, familias conhecidas, classificacao de externo desconhecido e console shell.' }
     $catalog['steamdeck-automation'] = New-BootstrapComponentDefinition -Name 'steamdeck-automation' -Description 'Provisiona watcher handheld/dock, scripts Apply-* e hotkeys.' -DependsOn @('steamdeck-settings', 'autohotkey-runtime', 'displayfusion', 'soundswitch', 'steamdeck-tools-runtime') -Kind 'steamdeck-automation' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Ativa deteccao por familia, Game - Steam Deck em handheld/TV e Desktop/Dev em monitor.' }
     $catalog['steamdeck-tweaks'] = New-BootstrapComponentDefinition -Name 'steamdeck-tweaks' -Description 'Ajustes handheld: hibernacao, UTC, login pos-sleep, ms-gamebar e touch keyboard.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Aplica ajustes seguros quando o modo HANDHELD entra em Game - Steam Deck.' }
@@ -9193,30 +9423,30 @@ function Get-BootstrapComponentCatalog {
     $catalog['display-classifier'] = New-BootstrapComponentDefinition -Name 'display-classifier' -Description 'Classifica externo desconhecido como Monitor/Dev ou TV/Game pela UI.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Impede falso positivo: desconhecido vira UNCLASSIFIED_EXTERNAL ate o usuario decidir.' }
     $catalog['recovery-hotkeys'] = New-BootstrapComponentDefinition -Name 'recovery-hotkeys' -Description 'Hotkeys de recuperacao para voltar ao Desktop/Dev.' -DependsOn @('steamdeck-automation', 'autohotkey-runtime') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Mantem saida segura do modo console sem prender o usuario em fullscreen.' }
     $catalog['console-readiness-audit'] = New-BootstrapComponentDefinition -Name 'console-readiness-audit' -Description 'Audita Steam, Playnite, Steam Deck Tools, RTSS, Adrenalin, CRU, SoundSwitch e watcher.' -DependsOn @('steamdeck-automation') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Mostra blockers antes de depender da experiencia console.' }
-    $catalog['playnite'] = New-BootstrapComponentDefinition -Name 'playnite' -Description 'Frontend unificado para bibliotecas e modo console.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Playnite.Playnite'; DisplayName = 'Playnite'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega um frontend fullscreen amigavel a controle no Deck.' }
-    $catalog['epic-games'] = New-BootstrapComponentDefinition -Name 'epic-games' -Description 'Epic Games Launcher.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EpicGames.EpicGamesLauncher'; DisplayName = 'Epic Games Launcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Habilita biblioteca Epic no fluxo zero-touch do Deck.' }
-    $catalog['heroic'] = New-BootstrapComponentDefinition -Name 'heroic' -Description 'Cliente Epic/GOG leve para o Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'HeroicGamesLauncher.HeroicGamesLauncher'; DisplayName = 'Heroic Games Launcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre bibliotecas Epic/GOG sem depender do launcher oficial pesado.' }
-    $catalog['rtss'] = New-BootstrapComponentDefinition -Name 'rtss' -Description 'RivaTuner Statistics Server para overlay e frame pacing.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Guru3D.RTSS'; DisplayName = 'RivaTuner Statistics Server'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega overlay e base para performance tuning no Deck.' }
-    $catalog['msi-afterburner'] = New-BootstrapComponentDefinition -Name 'msi-afterburner' -Description 'MSI Afterburner para tuning de overlay/perf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Guru3D.Afterburner'; DisplayName = 'MSI Afterburner'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Complementa RTSS para telemetria e tuning no Deck.' }
-    $catalog['special-k'] = New-BootstrapComponentDefinition -Name 'special-k' -Description 'Special K para HDR, pacing e latencia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SpecialK.SpecialK'; DisplayName = 'Special K'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a estabilizar frame pacing e recursos visuais em jogos Windows no Deck.' }
-    $catalog['vcpp-redist'] = New-BootstrapComponentDefinition -Name 'vcpp-redist' -Description 'Visual C++ Redistributable 2015+ x64.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VCRedist.2015+.x64'; DisplayName = 'Microsoft Visual C++ Redistributable 2015+ x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Evita falhas por runtime ausente em launchers, overlays e jogos.' }
-    $catalog['directx-runtime'] = New-BootstrapComponentDefinition -Name 'directx-runtime' -Description 'DirectX runtime legado para jogos e ferramentas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.DirectX'; DisplayName = 'Microsoft DirectX Runtime'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Fecha dependencias comuns de jogos Windows em instalacoes novas.' }
-    $catalog['sunshine'] = New-BootstrapComponentDefinition -Name 'sunshine' -Description 'Servidor de game streaming.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LizardByte.Sunshine'; DisplayName = 'Sunshine'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Transforma o Deck dockado em host de streaming sem abrir portas manualmente.' }
-    $catalog['moonlight'] = New-BootstrapComponentDefinition -Name 'moonlight' -Description 'Cliente para streaming Sunshine/GameStream.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MoonlightGameStreamingProject.Moonlight'; DisplayName = 'Moonlight'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita testes e acesso remoto ao ecossistema do Deck.' }
-    $catalog['tailscale'] = New-BootstrapComponentDefinition -Name 'tailscale' -Description 'VPN mesh para acesso remoto seguro.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Tailscale.Tailscale'; DisplayName = 'Tailscale'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Conecta o Deck remotamente sem expor servicos publicamente.' }
-    $catalog['scrcpy'] = New-BootstrapComponentDefinition -Name 'scrcpy' -Description 'Espelha e controla Android no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Genymobile.scrcpy'; DisplayName = 'scrcpy'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda na ponte mobile quando o Deck esta dockado ou em bancada.' }
-    $catalog['syncthing'] = New-BootstrapComponentDefinition -Name 'syncthing' -Description 'Sincroniza saves e configuracoes entre maquinas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Syncthing.Syncthing'; DisplayName = 'Syncthing'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mantem saves/configs coerentes entre Deck e desktop.' }
-    $catalog['chiaki'] = New-BootstrapComponentDefinition -Name 'chiaki' -Description 'Chiaki PS4/PS5 Remote Play.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'srwi.Chiaki'; DisplayName = 'Chiaki' }
-    $catalog['rustdesk'] = New-BootstrapComponentDefinition -Name 'rustdesk' -Description 'RustDesk remote desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'RustDesk.RustDesk'; DisplayName = 'RustDesk' }
-    $catalog['quicklook'] = New-BootstrapComponentDefinition -Name 'quicklook' -Description 'Preview rapido de arquivos.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'QL-Win.QuickLook'; DisplayName = 'QuickLook'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Acelera inspeccao de arquivos em modo desktop e dock.' }
-    $catalog['sharex'] = New-BootstrapComponentDefinition -Name 'sharex' -Description 'Captura e compartilhamento rapido.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ShareX.ShareX'; DisplayName = 'ShareX'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita screenshots e uploads com atalhos do Deck.' }
-    $catalog['quickcpu'] = New-BootstrapComponentDefinition -Name 'quickcpu' -Description 'Controle fino de CPU e energia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'CoderBag.QuickCPUx64'; DisplayName = 'Quick CPU x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a equilibrar consumo e desempenho no modo bateria.' }
-    $catalog['explorerpatcher'] = New-BootstrapComponentDefinition -Name 'explorerpatcher' -Description 'Ajustes de shell do Windows para uso no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'valinet.ExplorerPatcher'; DisplayName = 'ExplorerPatcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Simplifica a UX do Windows em handheld e dock.' }
-    $catalog['mica-for-everyone'] = New-BootstrapComponentDefinition -Name 'mica-for-everyone' -Description 'Camada visual do Windows mais limpa e consistente.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MicaForEveryone.MicaForEveryone'; DisplayName = 'Mica For Everyone'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Deixa a interface do Windows menos carregada para uso no Deck.' }
-    $catalog['compactgui'] = New-BootstrapComponentDefinition -Name 'compactgui' -Description 'Compacta instalacoes grandes para economizar espaco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'IridiumIO.CompactGUI'; DisplayName = 'CompactGUI'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Reduz pressao de storage no SSD interno do Deck.' }
-    $catalog['treesize-free'] = New-BootstrapComponentDefinition -Name 'treesize-free' -Description 'Analise rapida de uso de disco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JAMSoftware.TreeSize.Free'; DisplayName = 'TreeSize Free'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra rapidamente o que esta consumindo espaco em SSD e SD.' }
-    $catalog['obs-studio'] = New-BootstrapComponentDefinition -Name 'obs-studio' -Description 'Captura e producao de video.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'OBSProject.OBSStudio'; DisplayName = 'OBS Studio'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre captura de gameplay e producao de conteudo no Deck.' }
-    $catalog['driver-store-explorer'] = New-BootstrapComponentDefinition -Name 'driver-store-explorer' -Description 'Backup e auditoria do driver store.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'lostindark.DriverStoreExplorer'; DisplayName = 'Driver Store Explorer'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a preservar drivers especificos do Deck para reinstalacao offline.' }
+    $catalog['playnite'] = New-BootstrapComponentDefinition -Name 'playnite' -Description 'Frontend unificado para bibliotecas e modo console.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Playnite.Playnite'; DisplayName = 'Playnite'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega um frontend fullscreen amigavel a controle no Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Playnite\Playnite.DesktopApp.exe", "$env:ProgramFiles\Playnite\Playnite.DesktopApp.exe") }
+    $catalog['epic-games'] = New-BootstrapComponentDefinition -Name 'epic-games' -Description 'Epic Games Launcher.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EpicGames.EpicGamesLauncher'; DisplayName = 'Epic Games Launcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Habilita biblioteca Epic no fluxo zero-touch do Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\EpicGamesLauncher\Portal\Binaries\Win64\EpicGamesLauncher.exe", "$env:ProgramFiles\Epic Games\Launcher\Portal\Binaries\Win64\EpicGamesLauncher.exe") }
+    $catalog['heroic'] = New-BootstrapComponentDefinition -Name 'heroic' -Description 'Cliente Epic/GOG leve para o Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'HeroicGamesLauncher.HeroicGamesLauncher'; DisplayName = 'Heroic Games Launcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre bibliotecas Epic/GOG sem depender do launcher oficial pesado.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Heroic\Heroic.exe", "$env:ProgramFiles\Heroic\Heroic.exe") }
+    $catalog['rtss'] = New-BootstrapComponentDefinition -Name 'rtss' -Description 'RivaTuner Statistics Server para overlay e frame pacing.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Guru3D.RTSS'; DisplayName = 'RivaTuner Statistics Server'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega overlay e base para performance tuning no Deck.'; ProbePaths = @("$env:ProgramFiles\RTSS\RTSS.exe", "${env:ProgramFiles(x86)}\RTSS\RTSS.exe") }
+    $catalog['msi-afterburner'] = New-BootstrapComponentDefinition -Name 'msi-afterburner' -Description 'MSI Afterburner para tuning de overlay/perf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Guru3D.Afterburner'; DisplayName = 'MSI Afterburner'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Complementa RTSS para telemetria e tuning no Deck.'; ProbePaths = @("$env:ProgramFiles\MSI Afterburner\MSIAfterburner.exe", "${env:ProgramFiles(x86)}\MSI Afterburner\MSIAfterburner.exe") }
+    $catalog['special-k'] = New-BootstrapComponentDefinition -Name 'special-k' -Description 'Special K para HDR, pacing e latencia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SpecialK.SpecialK'; DisplayName = 'Special K'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a estabilizar frame pacing e recursos visuais em jogos Windows no Deck.'; ProbePaths = @("$env:ProgramFiles\SpecialK\SpecialK32.exe", "$env:ProgramFiles\SpecialK\SpecialK64.exe", "${env:ProgramFiles(x86)}\SpecialK\SpecialK32.exe") }
+    $catalog['vcpp-redist'] = New-BootstrapComponentDefinition -Name 'vcpp-redist' -Description 'Visual C++ Redistributable 2015+ x64.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VCRedist.2015+.x64'; DisplayName = 'Microsoft Visual C++ Redistributable 2015+ x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Evita falhas por runtime ausente em launchers, overlays e jogos.'; ProbePaths = @("$env:ProgramFiles\Microsoft Visual C++ Redistributable\2015-2022\x64\vcruntime140.dll") }
+    $catalog['directx-runtime'] = New-BootstrapComponentDefinition -Name 'directx-runtime' -Description 'DirectX runtime legado para jogos e ferramentas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.DirectX'; DisplayName = 'Microsoft DirectX Runtime'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Fecha dependencias comuns de jogos Windows em instalacoes novas.'; ProbePaths = @("$env:SystemRoot\System32\d3d12.dll", "$env:SystemRoot\System32\d3d11.dll") }
+    $catalog['sunshine'] = New-BootstrapComponentDefinition -Name 'sunshine' -Description 'Servidor de game streaming.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LizardByte.Sunshine'; DisplayName = 'Sunshine'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Transforma o Deck dockado em host de streaming sem abrir portas manualmente.'; ProbePaths = @("${env:ProgramFiles(x86)}\Sunshine\gamesunshine.exe", "$env:ProgramFiles\Sunshine\gamesunshine.exe") }
+    $catalog['moonlight'] = New-BootstrapComponentDefinition -Name 'moonlight' -Description 'Cliente para streaming Sunshine/GameStream.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MoonlightGameStreamingProject.Moonlight'; DisplayName = 'Moonlight'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita testes e acesso remoto ao ecossistema do Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Moonlight Game Streaming Project\Moonlight\Moonlight.exe", "$env:ProgramFiles\Moonlight Game Streaming Project\Moonlight\Moonlight.exe") }
+    $catalog['tailscale'] = New-BootstrapComponentDefinition -Name 'tailscale' -Description 'VPN mesh para acesso remoto seguro.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Tailscale.Tailscale'; DisplayName = 'Tailscale'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Conecta o Deck remotamente sem expor servicos publicamente.'; ProbePaths = @("$env:ProgramFiles\Tailscale\tailscale.exe", "${env:LOCALAPPDATA}\Programs\Tailscale\tailscale.exe") }
+    $catalog['scrcpy'] = New-BootstrapComponentDefinition -Name 'scrcpy' -Description 'Espelha e controla Android no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Genymobile.scrcpy'; DisplayName = 'scrcpy'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda na ponte mobile quando o Deck esta dockado ou em bancada.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\scrcpy\scrcpy.exe", "$env:ProgramFiles\scrcpy\scrcpy.exe") }
+    $catalog['syncthing'] = New-BootstrapComponentDefinition -Name 'syncthing' -Description 'Sincroniza saves e configuracoes entre maquinas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Syncthing.Syncthing'; DisplayName = 'Syncthing'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mantem saves/configs coerentes entre Deck e desktop.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\SyncTrayzor\SyncTrayzor.exe", "$env:ProgramFiles\SyncTrayzor\SyncTrayzor.exe") }
+    $catalog['chiaki'] = New-BootstrapComponentDefinition -Name 'chiaki' -Description 'Chiaki PS4/PS5 Remote Play.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'srwi.Chiaki'; DisplayName = 'Chiaki'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\chiaki\Chiaki.exe", "$env:ProgramFiles\chiaki\Chiaki.exe") }
+    $catalog['rustdesk'] = New-BootstrapComponentDefinition -Name 'rustdesk' -Description 'RustDesk remote desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'RustDesk.RustDesk'; DisplayName = 'RustDesk'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\RustDesk\rustdesk.exe", "$env:ProgramFiles\RustDesk\rustdesk.exe") }
+    $catalog['quicklook'] = New-BootstrapComponentDefinition -Name 'quicklook' -Description 'Preview rapido de arquivos.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'QL-Win.QuickLook'; DisplayName = 'QuickLook'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Acelera inspeccao de arquivos em modo desktop e dock.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\QuickLook\QuickLook.exe", "$env:ProgramFiles\QuickLook\QuickLook.exe") }
+    $catalog['sharex'] = New-BootstrapComponentDefinition -Name 'sharex' -Description 'Captura e compartilhamento rapido.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ShareX.ShareX'; DisplayName = 'ShareX'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita screenshots e uploads com atalhos do Deck.'; ProbePaths = @("$env:ProgramFiles\ShareX\ShareX.exe", "${env:ProgramFiles(x86)}\ShareX\ShareX.exe") }
+    $catalog['quickcpu'] = New-BootstrapComponentDefinition -Name 'quickcpu' -Description 'Controle fino de CPU e energia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'CoderBag.QuickCPUx64'; DisplayName = 'Quick CPU x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a equilibrar consumo e desempenho no modo bateria.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\QuickCPU\QuickCPU.exe", "$env:ProgramFiles\QuickCPU\QuickCPU.exe") }
+    $catalog['explorerpatcher'] = New-BootstrapComponentDefinition -Name 'explorerpatcher' -Description 'Ajustes de shell do Windows para uso no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'valinet.ExplorerPatcher'; DisplayName = 'ExplorerPatcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Simplifica a UX do Windows em handheld e dock.'; ProbePaths = @("${env:LOCALAPPDATA}\ExplorerPatcher\ep_weather_host.dll", "$env:ProgramFiles\ExplorerPatcher\ep_weather_host.dll") }
+    $catalog['mica-for-everyone'] = New-BootstrapComponentDefinition -Name 'mica-for-everyone' -Description 'Camada visual do Windows mais limpa e consistente.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MicaForEveryone.MicaForEveryone'; DisplayName = 'Mica For Everyone'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Deixa a interface do Windows menos carregada para uso no Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Mica For Everyone\MicaForEveryone.exe", "$env:ProgramFiles\Mica For Everyone\MicaForEveryone.exe") }
+    $catalog['compactgui'] = New-BootstrapComponentDefinition -Name 'compactgui' -Description 'Compacta instalacoes grandes para economizar espaco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'IridiumIO.CompactGUI'; DisplayName = 'CompactGUI'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Reduz pressao de storage no SSD interno do Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\CompactGUI\CompactGUI.exe", "$env:ProgramFiles\CompactGUI\CompactGUI.exe") }
+    $catalog['treesize-free'] = New-BootstrapComponentDefinition -Name 'treesize-free' -Description 'Analise rapida de uso de disco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JAMSoftware.TreeSize.Free'; DisplayName = 'TreeSize Free'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra rapidamente o que esta consumindo espaco em SSD e SD.'; ProbePaths = @("$env:ProgramFiles\TreeSize Free\TreeSizeFree.exe", "${env:ProgramFiles(x86)}\TreeSize Free\TreeSizeFree.exe") }
+    $catalog['obs-studio'] = New-BootstrapComponentDefinition -Name 'obs-studio' -Description 'Captura e producao de video.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'OBSProject.OBSStudio'; DisplayName = 'OBS Studio'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre captura de gameplay e producao de conteudo no Deck.'; ProbePaths = @("$env:ProgramFiles\obs-studio\bin\64bit\obs64.exe", "${env:ProgramFiles(x86)}\obs-studio\bin\32bit\obs32.exe") }
+    $catalog['driver-store-explorer'] = New-BootstrapComponentDefinition -Name 'driver-store-explorer' -Description 'Backup e auditoria do driver store.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'lostindark.DriverStoreExplorer'; DisplayName = 'Driver Store Explorer'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a preservar drivers especificos do Deck para reinstalacao offline.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Driver Store Explorer\Rapr.exe", "$env:ProgramFiles\Driver Store Explorer\Rapr.exe") }
     $catalog['lossless-scaling'] = New-BootstrapComponentDefinition -Name 'lossless-scaling' -Description 'Frame generation pago e otimizado para jogos no Deck.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Lossless Scaling'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Entrega ganho real de fluidez, mas exige compra/licenca no Steam.'; ProbePaths = @('${env:ProgramFiles(x86)}\Steam\steamapps\appmanifest_993090.acf'); Instructions = 'Instale pelo Steam com licença válida antes de rodar novamente o perfil ou exclua o componente.' }
     $catalog['macrium-reflect'] = New-BootstrapComponentDefinition -Name 'macrium-reflect' -Description 'Imagem golden do SSD para restore rapido.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Macrium Reflect'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Cria uma imagem completa do Deck, mas exige instalacao/licenciamento manual.'; Instructions = 'Instale manualmente o Macrium Reflect antes de usar o perfil de backup.' }
     $catalog['joyshockmapper'] = New-BootstrapComponentDefinition -Name 'joyshockmapper' -Description 'Mapeamento fino de gyro e controles.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'JoyShockMapper'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Da granularidade extra ao gyro, mas ainda depende de instalacao manual segura.'; Instructions = 'Instale o JoyShockMapper manualmente ou exclua este componente se optar por usar apenas Steam Input/Steam Deck Tools.' }
@@ -9227,22 +9457,22 @@ function Get-BootstrapComponentCatalog {
     $catalog['pagefile-on-sd'] = New-BootstrapComponentDefinition -Name 'pagefile-on-sd' -Description 'Move pagefile para o SD ou unidade de apoio.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Pagefile on SD'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'E util para cenarios de storage apertado, mas e invasivo demais para habilitar automaticamente.'; Instructions = 'Ajuste manualmente o pagefile apos validar a unidade alvo e o impacto de desempenho.' }
     $catalog['workspace-layout'] = New-BootstrapComponentDefinition -Name 'workspace-layout' -Description 'Cria layout de DevKits e DevProjetos em F:.' -Kind 'workspace'
 
-    $catalog['brave'] = New-BootstrapComponentDefinition -Name 'brave' -Description 'Brave Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Brave.Brave'; DisplayName = 'Brave Browser'}
-    $catalog['discord'] = New-BootstrapComponentDefinition -Name 'discord' -Description 'Discord.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Discord.Discord'; DisplayName = 'Discord'}
-    $catalog['telegram'] = New-BootstrapComponentDefinition -Name 'telegram' -Description 'Telegram Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Telegram.TelegramDesktop'; DisplayName = 'Telegram Desktop'}
-    $catalog['1password'] = New-BootstrapComponentDefinition -Name '1password' -Description '1Password.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AgileBits.1Password'; DisplayName = '1Password'}
-    $catalog['proton-drive'] = New-BootstrapComponentDefinition -Name 'proton-drive' -Description 'Proton Drive.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Proton.ProtonDrive'; DisplayName = 'Proton Drive'}
-    $catalog['proton-pass'] = New-BootstrapComponentDefinition -Name 'proton-pass' -Description 'Proton Pass.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Proton.ProtonPass'; DisplayName = 'Proton Pass'}
-    $catalog['pycharm-community'] = New-BootstrapComponentDefinition -Name 'pycharm-community' -Description 'PyCharm Community.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JetBrains.PyCharm.Community'; DisplayName = 'PyCharm Community' }
-    $catalog['dotnet-6-sdk'] = New-BootstrapComponentDefinition -Name 'dotnet-6-sdk' -Description 'Microsoft .NET 6.0 SDK.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.DotNet.SDK.6'; DisplayName = 'Microsoft .NET 6.0 SDK' }
-    $catalog['fan-control'] = New-BootstrapComponentDefinition -Name 'fan-control' -Description 'Fan Control.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Rem0o.FanControl'; DisplayName = 'Fan Control' }
-    $catalog['mem-reduct'] = New-BootstrapComponentDefinition -Name 'mem-reduct' -Description 'Mem Reduct.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Henry++.MemReduct'; DisplayName = 'Mem Reduct' }
+    $catalog['brave'] = New-BootstrapComponentDefinition -Name 'brave' -Description 'Brave Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Brave.Brave'; DisplayName = 'Brave Browser'; ProbePaths = @("$env:ProgramFiles\BraveSoftware\Brave-Browser\Application\brave.exe", "${env:LOCALAPPDATA}\BraveSoftware\Brave-Browser\Application\brave.exe") }
+    $catalog['discord'] = New-BootstrapComponentDefinition -Name 'discord' -Description 'Discord.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Discord.Discord'; DisplayName = 'Discord'; ProbePaths = @("${env:LOCALAPPDATA}\Discord\Discord.exe", "$env:ProgramFiles\Discord\Discord.exe") }
+    $catalog['telegram'] = New-BootstrapComponentDefinition -Name 'telegram' -Description 'Telegram Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Telegram.TelegramDesktop'; DisplayName = 'Telegram Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Telegram Desktop\Telegram.exe", "$env:ProgramFiles\Telegram Desktop\Telegram.exe") }
+    $catalog['1password'] = New-BootstrapComponentDefinition -Name '1password' -Description '1Password.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AgileBits.1Password'; DisplayName = '1Password'; ProbePaths = @("${env:LOCALAPPDATA}\1Password\app\8\1Password.exe", "$env:ProgramFiles\1Password\1Password.exe") }
+    $catalog['proton-drive'] = New-BootstrapComponentDefinition -Name 'proton-drive' -Description 'Proton Drive.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Proton.ProtonDrive'; DisplayName = 'Proton Drive'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Proton Drive\Proton Drive.exe", "$env:ProgramFiles\Proton Drive\Proton Drive.exe") }
+    $catalog['proton-pass'] = New-BootstrapComponentDefinition -Name 'proton-pass' -Description 'Proton Pass.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Proton.ProtonPass'; DisplayName = 'Proton Pass'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Proton Pass\Proton Pass.exe", "$env:ProgramFiles\Proton Pass\Proton Pass.exe") }
+    $catalog['pycharm-community'] = New-BootstrapComponentDefinition -Name 'pycharm-community' -Description 'PyCharm Community.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JetBrains.PyCharm.Community'; DisplayName = 'PyCharm Community'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\PyCharm Community Edition\bin\pycharm64.exe", "$env:ProgramFiles\JetBrains\PyCharm Community Edition\bin\pycharm64.exe") }
+    $catalog['dotnet-6-sdk'] = New-BootstrapComponentDefinition -Name 'dotnet-6-sdk' -Description 'Microsoft .NET 6.0 SDK.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.DotNet.SDK.6'; DisplayName = 'Microsoft .NET 6.0 SDK'; ProbePaths = @("$env:ProgramFiles\dotnet\dotnet.exe") }
+    $catalog['fan-control'] = New-BootstrapComponentDefinition -Name 'fan-control' -Description 'Fan Control.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Rem0o.FanControl'; DisplayName = 'Fan Control'; ProbePaths = @("${env:LOCALAPPDATA}\FanControl\FanControl.exe", "$env:ProgramFiles\FanControl\FanControl.exe") }
+    $catalog['mem-reduct'] = New-BootstrapComponentDefinition -Name 'mem-reduct' -Description 'Mem Reduct.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Henry++.MemReduct'; DisplayName = 'Mem Reduct'; ProbePaths = @("${env:LOCALAPPDATA}\Mem Reduct\MemReduct.exe", "$env:ProgramFiles\Mem Reduct\MemReduct.exe") }
     $catalog['steamdeck-shell-menu'] = New-BootstrapComponentDefinition -Name 'steamdeck-shell-menu' -Description 'Menu de manutenção no DesktopBackground com ações rápidas.' -DependsOn @('steamdeck-automation') -Kind 'steamdeck-shell-menu' -Data @{ Stage = 'config'; Provisioning = 'registry'; ValueReason = 'Entrega manutenção rápida no menu de contexto da área de trabalho.' }
     $catalog['steamdeck-zero-touch'] = New-BootstrapComponentDefinition -Name 'steamdeck-zero-touch' -Description 'Provisionamento zero-touch dos apps essenciais faltantes do Deck.' -DependsOn @('steamdeck-automation') -Kind 'steamdeck-zero-touch' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Garante payload mínimo mesmo em host parcialmente provisionado.' }
     $catalog['steamdeck-sharedvram-launch-options'] = New-BootstrapComponentDefinition -Name 'steamdeck-sharedvram-launch-options' -Description 'Aplica -sharedvram por allowlist no Steam.' -DependsOn @('steamdeck-automation') -Kind 'steamdeck-sharedvram-launch-options' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Evita editar todos os jogos; aplica somente em allowlist explícita.' }
-    $catalog['raycast'] = New-BootstrapComponentDefinition -Name 'raycast' -Description 'Raycast launcher.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Raycast.Raycast'; DisplayName = 'Raycast'}
-    $catalog['sparkle'] = New-BootstrapComponentDefinition -Name 'sparkle' -Description 'Sparkle: limpeza/debloat/otimizacao do Windows.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'xishang0128.Sparkle'; DisplayName = 'Sparkle'}
-    $catalog['jdownloader'] = New-BootstrapComponentDefinition -Name 'jdownloader' -Description 'JDownloader 2.' -DependsOn @('java-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AppWork.JDownloader'; DisplayName = 'JDownloader 2'}
+    $catalog['raycast'] = New-BootstrapComponentDefinition -Name 'raycast' -Description 'Raycast launcher.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Raycast.Raycast'; DisplayName = 'Raycast'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Raycast\Raycast.exe", "$env:ProgramFiles\Raycast\Raycast.exe") }
+    $catalog['sparkle'] = New-BootstrapComponentDefinition -Name 'sparkle' -Description 'Sparkle: limpeza/debloat/otimizacao do Windows.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'xishang0128.Sparkle'; DisplayName = 'Sparkle'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Sparkle\Sparkle.exe", "$env:ProgramFiles\Sparkle\Sparkle.exe") }
+    $catalog['jdownloader'] = New-BootstrapComponentDefinition -Name 'jdownloader' -Description 'JDownloader 2.' -DependsOn @('java-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AppWork.JDownloader'; DisplayName = 'JDownloader 2'; ProbePaths = @("${env:LOCALAPPDATA}\JDownloader 2\JDownloader2.exe", "$env:ProgramFiles\JDownloader 2\JDownloader2.exe") }
     $catalog['dualboot-manager'] = New-BootstrapComponentDefinition -Name 'dualboot-manager' -Description 'Dual boot detection, safety guardrails and reboot management.' -DependsOn @('system-core') -Optional $true -Kind 'builtin' -Data @{}
 
     return $catalog
@@ -9865,7 +10095,7 @@ function Ensure-GitLfs {
     param([hashtable]$State)
     Ensure-BootstrapGitCore -State $State
     Ensure-BootstrapSystemCore -State $State
-    Ensure-WingetPackage -WingetPath $State.Winget -Id 'GitHub.GitLFS' -DisplayName 'Git LFS'
+    Ensure-WingetPackage -WingetPath $State.Winget -Id 'GitHub.GitLFS' -DisplayName 'Git LFS' -ProbePaths @("$env:ProgramFiles\Git LFS\git-lfs.exe", "$env:ProgramFiles\Git\mingw64\bin\git-lfs.exe", "${env:ProgramFiles(x86)}\Git LFS\git-lfs.exe")
     $exitCode = Invoke-NativeWithLog -Exe $State.GitInfo.Git -Args @('lfs', 'install')
     if ($exitCode -ne 0) { throw "Falha ao executar git lfs install (exit=$exitCode)." }
 }
@@ -9906,7 +10136,7 @@ function Repair-BootstrapWslCorruption {
     } else {
         if ($State -and $State.Winget) {
             try {
-                Ensure-WingetPackage -WingetPath $State.Winget -Id 'Microsoft.WSL' -DisplayName 'WSL'
+                Ensure-WingetPackage -WingetPath $State.Winget -Id 'Microsoft.WSL' -DisplayName 'WSL' -ProbePaths @("$env:WINDIR\System32\wsl.exe")
             } catch {
                 Write-Log ("WSL: falha ao instalar Microsoft.WSL via winget: " + $_.Exception.Message) 'WARN'
             }
@@ -14731,7 +14961,9 @@ function Invoke-BootstrapComponent {
             if ($componentDef.PSObject.Properties.Name -contains 'PreferUserScope') { $preferUserScope = [bool]$componentDef.PreferUserScope }
             $allowFailureWhenNotAdmin = $false
             if ($componentDef.PSObject.Properties.Name -contains 'AllowFailureWhenNotAdmin') { $allowFailureWhenNotAdmin = [bool]$componentDef.AllowFailureWhenNotAdmin }
-            Ensure-WingetPackage -WingetPath $State.Winget -Id $componentDef.Id -DisplayName $componentDef.DisplayName -PreferUserScope $preferUserScope -AllowFailureWhenNotAdmin $allowFailureWhenNotAdmin
+            $probePaths = @()
+            if ($componentDef.PSObject.Properties.Name -contains 'ProbePaths') { $probePaths = @($componentDef.ProbePaths) }
+            Ensure-WingetPackage -WingetPath $State.Winget -Id $componentDef.Id -DisplayName $componentDef.DisplayName -PreferUserScope $preferUserScope -AllowFailureWhenNotAdmin $allowFailureWhenNotAdmin -ProbePaths $probePaths
             if ($Name -eq 'notepadpp' -and [string]$State.AppTuningMode -eq 'off') {
                 $null = Ensure-BootstrapNotepadPlusPlusDefaults
             }
@@ -15965,9 +16197,9 @@ if (-not $isDotSourced) {
         $nodeInfo = Ensure-NodeAndNpm -WingetPath $winget
         Refresh-SessionPath
 
-        Ensure-WingetPackage -WingetPath $winget -Id 'EclipseAdoptium.Temurin.17.JDK' -DisplayName 'Java JDK (Temurin 17)'
-        Ensure-WingetPackage -WingetPath $winget -Id 'ImageMagick.ImageMagick' -DisplayName 'ImageMagick'
-        Ensure-WingetPackage -WingetPath $winget -Id '7zip.7zip' -DisplayName '7-Zip' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'EclipseAdoptium.Temurin.17.JDK' -DisplayName 'Java JDK (Temurin 17)' -ProbePaths @("$env:ProgramFiles\Eclipse Adoptium\jdk-17*\bin\java.exe", "${env:ProgramFiles(x86)}\Eclipse Adoptium\jdk-17*\bin\java.exe")
+        Ensure-WingetPackage -WingetPath $winget -Id 'ImageMagick.ImageMagick' -DisplayName 'ImageMagick' -ProbePaths @("$env:ProgramFiles\ImageMagick-*\magick.exe", "$env:ProgramFiles\ImageMagick\magick.exe")
+        Ensure-WingetPackage -WingetPath $winget -Id '7zip.7zip' -DisplayName '7-Zip' -AllowFailureWhenNotAdmin $true -ProbePaths @("$env:ProgramFiles\7-Zip\7z.exe", "${env:ProgramFiles(x86)}\7-Zip\7z.exe")
         $sevenZipDir = $null
         try { $sevenZipDir = Join-Path $env:ProgramFiles '7-Zip' } catch { $sevenZipDir = $null }
         if ($sevenZipDir -and (Test-Path $sevenZipDir)) {
@@ -15983,11 +16215,11 @@ if (-not $isDotSourced) {
         Ensure-ClaudeCode -WingetPath $winget
         Refresh-SessionPath
 
-        Ensure-WingetPackage -WingetPath $winget -Id 'GitHub.cli' -DisplayName 'GitHub CLI (gh)'
+        Ensure-WingetPackage -WingetPath $winget -Id 'GitHub.cli' -DisplayName 'GitHub CLI (gh)' -ProbePaths @("$env:ProgramFiles\GitHub CLI\gh.exe", "${env:LOCALAPPDATA}\Programs\GitHub CLI\gh.exe")
         Refresh-SessionPath
 
-        Ensure-WingetPackage -WingetPath $winget -Id 'Google.Chrome' -DisplayName 'ChromeSetup (Google Chrome)' -AllowFailureWhenNotAdmin $true
-        Ensure-WingetPackage -WingetPath $winget -Id 'Notepad++.Notepad++' -DisplayName 'Notepad++' -AllowFailureWhenNotAdmin $true
+        Ensure-WingetPackage -WingetPath $winget -Id 'Google.Chrome' -DisplayName 'ChromeSetup (Google Chrome)' -AllowFailureWhenNotAdmin $true -ProbePaths @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe", "${env:LOCALAPPDATA}\Google\Chrome\Application\chrome.exe")
+        Ensure-WingetPackage -WingetPath $winget -Id 'Notepad++.Notepad++' -DisplayName 'Notepad++' -AllowFailureWhenNotAdmin $true -ProbePaths @("$env:ProgramFiles\Notepad++\notepad++.exe", "${env:ProgramFiles(x86)}\Notepad++\notepad++.exe", "${env:LOCALAPPDATA}\Programs\Notepad++\notepad++.exe")
         Ensure-WingetPackage -WingetPath $winget -Id 'Anthropic.Claude' -DisplayName 'Claude Setup (Claude Desktop)' -AllowFailureWhenNotAdmin $true
         Ensure-WingetPackage -WingetPath $winget -Id 'Anysphere.Cursor' -DisplayName 'CursorUserSetup (Cursor)' -AllowFailureWhenNotAdmin $true
         Ensure-WingetPackage -WingetPath $winget -Id 'Codeium.Windsurf' -DisplayName 'WindsurfUserSetup (Windsurf)' -AllowFailureWhenNotAdmin $true

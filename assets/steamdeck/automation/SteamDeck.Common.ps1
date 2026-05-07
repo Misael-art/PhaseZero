@@ -1,12 +1,42 @@
-function Get-SteamDeckUserHomePath {
-    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { return $env:USERPROFILE }
-    if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { return $env:HOME }
-    if (-not [string]::IsNullOrWhiteSpace($env:HOMEDRIVE) -and -not [string]::IsNullOrWhiteSpace($env:HOMEPATH)) {
-        return ($env:HOMEDRIVE + $env:HOMEPATH)
+function Normalize-SteamDeckPathSegment {
+    <#
+    .SYNOPSIS
+        Garante segmento escalar para Join-Path (evita ChildPath como Object[] no PS 5.1).
+    #>
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return '' }
+    $arr = @($Value)
+    if ($arr.Count -eq 0) { return '' }
+    $first = $arr[0]
+    if ($null -eq $first) { return '' }
+    return ([string]$first).Trim()
+}
+
+function Join-SteamDeckSystemChild {
+    param([Parameter(Mandatory = $true)][string]$RelativeChild)
+    $root = Normalize-SteamDeckPathSegment -Value $env:SystemRoot
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        throw 'SteamDeck.Common: variavel de ambiente SystemRoot vazia ou invalida; nao e possivel montar caminho do sistema. Verifique o ambiente Windows e execute novamente.'
     }
-    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $env:LOCALAPPDATA }
-    if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) { return $env:TEMP }
-    if (-not [string]::IsNullOrWhiteSpace($env:TMP)) { return $env:TMP }
+    return (Join-Path -Path $root -ChildPath $RelativeChild)
+}
+
+function Get-SteamDeckUserHomePath {
+    $up = Normalize-SteamDeckPathSegment -Value $env:USERPROFILE
+    if (-not [string]::IsNullOrWhiteSpace($up)) { return $up }
+    $home = Normalize-SteamDeckPathSegment -Value $env:HOME
+    if (-not [string]::IsNullOrWhiteSpace($home)) { return $home }
+    $hd = Normalize-SteamDeckPathSegment -Value $env:HOMEDRIVE
+    $hp = Normalize-SteamDeckPathSegment -Value $env:HOMEPATH
+    if (-not [string]::IsNullOrWhiteSpace($hd) -and -not [string]::IsNullOrWhiteSpace($hp)) {
+        return ($hd + $hp)
+    }
+    $la = Normalize-SteamDeckPathSegment -Value $env:LOCALAPPDATA
+    if (-not [string]::IsNullOrWhiteSpace($la)) { return $la }
+    $tmp = Normalize-SteamDeckPathSegment -Value $env:TEMP
+    if (-not [string]::IsNullOrWhiteSpace($tmp)) { return $tmp }
+    $tmp2 = Normalize-SteamDeckPathSegment -Value $env:TMP
+    if (-not [string]::IsNullOrWhiteSpace($tmp2)) { return $tmp2 }
     return (Get-Location).Path
 }
 
@@ -39,10 +69,11 @@ function Get-SteamDeckModeWatcherLogPath {
 }
 
 function Get-SteamDeckWindowsPowerShellPath {
-    if (-not [string]::IsNullOrWhiteSpace($env:SystemRoot)) {
-        return (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
+    try {
+        return (Join-SteamDeckSystemChild -RelativeChild 'System32\WindowsPowerShell\v1.0\powershell.exe')
+    } catch {
+        return 'powershell.exe'
     }
-    return 'powershell.exe'
 }
 
 function Ensure-SteamDeckParentDirectory {

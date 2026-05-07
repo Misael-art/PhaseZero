@@ -429,6 +429,25 @@ Welcome to .NET 8.0!
         }
     }
 
+    Context 'Winget install modo silencioso preferencial' {
+        It 'Ensure-WingetPackage tenta --silent primeiro e faz fallback sem --silent' {
+            Mock Test-WingetPackageInstalled { return $false }
+            Mock Invoke-NativeWithRetry {
+                param([string]$Exe, [string[]]$Args, [string]$OperationName)
+                if ($OperationName -match '--silent') { return 1 }
+                return 0
+            }
+            Mock Refresh-SessionPath { }
+            Mock Write-Log { }
+
+            { Ensure-WingetPackage -WingetPath 'C:\Fake\winget.exe' -Id 'Notepad++.Notepad++' -DisplayName 'Notepad++' -PreferUserScope $true -AllowFailureWhenNotAdmin $false } | Should Not Throw
+
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Notepad++ via winget --scope user --silent' } -Times 1 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Notepad++ via winget --scope user' } -Times 1 -Exactly
+            Assert-MockCalled Refresh-SessionPath -Times 1 -Exactly
+        }
+    }
+
     Context 'Perfis e preflight manual/reboot' {
         It 'perfil base nao inclui google-app-desktop; utilities inclui' {
             $baseRes = Resolve-BootstrapComponents -SelectedProfiles @('base') -SelectedComponents @() -ExcludedComponents @()
@@ -440,8 +459,10 @@ Welcome to .NET 8.0!
 
         It 'Invoke-BootstrapExecutionPreflight falha com RequireNoPendingReboot quando ha reboot pendente' {
             $prev = $script:RequireNoPendingReboot
+            $prevAllow = $script:AllowPendingReboot
             try {
                 $script:RequireNoPendingReboot = $true
+                $script:AllowPendingReboot = $false
                 Mock Test-BootstrapDiskSpace { }
                 Mock Get-BootstrapPreflightRequirements {
                     return [ordered]@{
@@ -456,7 +477,109 @@ Welcome to .NET 8.0!
                 { Invoke-BootstrapExecutionPreflight -State $state -ResolvedComponents @('system-core') } | Should Throw 'RequireNoPendingReboot'
             } finally {
                 $script:RequireNoPendingReboot = $prev
+                $script:AllowPendingReboot = $prevAllow
             }
+        }
+    }
+    Context 'Winget ghost install handling' {
+        It 'Ensure-WingetPackage detecta ghost install via ProbePaths' {
+            Mock Test-WingetPackageInstalled { return $true }
+            Mock Test-WingetProbePathsOnDisk { return $false }
+            Mock Invoke-NativeWithRetry { return 0 }
+            Mock Refresh-SessionPath {}
+            Mock Write-Log {}
+
+            # Nao deve lancar excecao
+            { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Ghost' -DisplayName 'GhostPkg' -ProbePaths @('C:\fake\ghost.exe') } | Should Not Throw
+        }
+    }
+
+    Context 'Invoke-NativeWithRetry soft-success exit codes' {
+        It 'Exit code -1978335189 (UPDATE_NOT_APPLICABLE) curto-circuita retries' {
+            Mock Invoke-NativeWithLog { return -1978335189 }
+            Mock Write-Log {}
+            $r = Invoke-NativeWithRetry -Exe 'fake.exe' -Args @('install') -OperationName 'pkg-test' -MaxAttempts 5 -InitialDelaySeconds 1 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+            $r | Should Be 0
+            Assert-MockCalled Invoke-NativeWithLog -Times 1 -Exactly
+        }
+
+        It 'Sem SoftSuccessExitCodes, exit -1978335189 ainda dispara retries ate o limite' {
+            Mock Invoke-NativeWithLog { return -1978335189 }
+            Mock Write-Log {}
+            Mock Start-Sleep {}
+            $maxAttempts = 3
+            $r = Invoke-NativeWithRetry -Exe 'fake.exe' -Args @('install-no-soft') -OperationName 'pkg-test-no-soft' -MaxAttempts $maxAttempts -InitialDelaySeconds 1
+            $r | Should Be -1978335189
+            # Filtro pelo arg unico deste teste para nao contar chamadas do It vizinho.
+            Assert-MockCalled Invoke-NativeWithLog -ParameterFilter { $Args -contains 'install-no-soft' } -Times $maxAttempts -Exactly
+        }
+
+        It 'Test-WingetSoftSuccessExit reconhece todos os codigos catalogados' {
+            Test-WingetSoftSuccessExit -ExitCode -1978335189 | Should Be $true
+            Test-WingetSoftSuccessExit -ExitCode -1978335212 | Should Be $true
+            Test-WingetSoftSuccessExit -ExitCode -1978335215 | Should Be $true
+            Test-WingetSoftSuccessExit -ExitCode 0 | Should Be $false
+            Test-WingetSoftSuccessExit -ExitCode -1 | Should Be $false
+        }
+    }
+
+    Context 'Test-WingetListOutputContainsId parser' {
+        It 'casa Id em linha tabular real' {
+            $output = @'
+Name              Id                   Version  Source
+-----------------------------------------------------
+Python 3.13       Python.Python.3.13   3.13.13  winget
+'@
+            Test-WingetListOutputContainsId -Output $output -Id 'Python.Python.3.13' | Should Be $true
+        }
+
+        It 'NAO casa Id quando aparece apenas em frase de log narrativa' {
+            $output = 'Foi encontrado um pacote existente ja instalado. Tentando atualizar o pacote instalado...'
+            Test-WingetListOutputContainsId -Output $output -Id 'Python.Python.3.13' | Should Be $false
+        }
+
+        It 'NAO casa Id quando saida vazia' {
+            Test-WingetListOutputContainsId -Output '' -Id 'X.Y' | Should Be $false
+        }
+
+        It 'ignora linha de cabecalho mesmo se Id se repete depois' {
+            $output = "Name  Id  Version`nFoo  X.Y  1.0"
+            Test-WingetListOutputContainsId -Output $output -Id 'X.Y' | Should Be $true
+        }
+    }
+
+    Context 'Test-WingetProbePathsOnDisk' {
+        It 'retorna true quando algum probe path existe' {
+            Mock Test-Path { param($LiteralPath) return ($LiteralPath -eq 'C:\real\bin.exe') }
+            Test-WingetProbePathsOnDisk -ProbePaths @('C:\nope\bin.exe', 'C:\real\bin.exe') | Should Be $true
+        }
+
+        It 'retorna false quando nenhum probe existe' {
+            Mock Test-Path { return $false }
+            Mock Get-ChildItem { return @() }
+            Test-WingetProbePathsOnDisk -ProbePaths @('C:\a\bin.exe', 'C:\b\bin.exe') | Should Be $false
+        }
+
+        It 'retorna false para lista vazia' {
+            Test-WingetProbePathsOnDisk -ProbePaths @() | Should Be $false
+        }
+
+        It 'expande $env: em paths antes de testar' {
+            $expectedExpanded = [Environment]::ExpandEnvironmentVariables('%LOCALAPPDATA%\Programs\Foo\bin.exe')
+            Mock Test-Path { param($LiteralPath) return ($LiteralPath -eq $expectedExpanded) }
+            Test-WingetProbePathsOnDisk -ProbePaths @('$env:LOCALAPPDATA\Programs\Foo\bin.exe') | Should Be $true
+        }
+    }
+
+    Context 'Ensure-WingetPackage curto-circuito por ProbePaths' {
+        It 'Pula winget completamente quando binario ja existe em disco' {
+            Mock Test-WingetProbePathsOnDisk { return $true }
+            Mock Test-WingetPackageInstalled { throw 'nao deve ser chamado' }
+            Mock Invoke-NativeWithRetry { throw 'nao deve ser chamado' }
+            Mock Write-Log {}
+            { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Foo.Bar' -DisplayName 'Foo' -ProbePaths @('C:\real\foo.exe') } | Should Not Throw
+            Assert-MockCalled Test-WingetProbePathsOnDisk -Times 1 -Exactly
+            Assert-MockCalled Test-WingetPackageInstalled -Times 0 -Exactly
         }
     }
 }

@@ -41,9 +41,12 @@ function Get-SettingValue {
 
 function Find-PlayniteFullscreenPath {
     $candidates = @()
-    if ($env:LOCALAPPDATA) { $candidates += (Join-Path $env:LOCALAPPDATA 'Playnite\Playnite.FullscreenApp.exe') }
-    if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'Playnite\Playnite.FullscreenApp.exe') }
-    if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Playnite\Playnite.FullscreenApp.exe') }
+    $la = Normalize-SteamDeckPathSegment -Value $env:LOCALAPPDATA
+    $pf = Normalize-SteamDeckPathSegment -Value $env:ProgramFiles
+    $pf86 = Normalize-SteamDeckPathSegment -Value ${env:ProgramFiles(x86)}
+    if (-not [string]::IsNullOrWhiteSpace($la)) { $candidates += (Join-Path -Path $la -ChildPath 'Playnite\Playnite.FullscreenApp.exe') }
+    if (-not [string]::IsNullOrWhiteSpace($pf)) { $candidates += (Join-Path -Path $pf -ChildPath 'Playnite\Playnite.FullscreenApp.exe') }
+    if (-not [string]::IsNullOrWhiteSpace($pf86)) { $candidates += (Join-Path -Path $pf86 -ChildPath 'Playnite\Playnite.FullscreenApp.exe') }
 
     foreach ($candidate in $candidates) {
         if (Test-Path $candidate) { return $candidate }

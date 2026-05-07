@@ -105,12 +105,20 @@ if (-not `$match.Success) { throw 'XAML block not found' }
     It 'guards run execution against duplicate starts and missing result files' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 
+        $raw | Should Match 'DispatcherUnhandledException'
+        $raw | Should Match 'Append-RunLog'
+        $raw | Should Match 'LogTimer tick'
         $raw | Should Match 'Complete-RunExecutionWithoutResult'
         $raw | Should Match '\$ui\.RunProcess -and -not \$ui\.RunProcess\.HasExited'
         $raw | Should Match '\$ui\.StartRunButton\.IsEnabled = \$false'
         $raw | Should Match '\$ui\.StartRunButton\.IsEnabled = \$true'
         $raw | Should Match 'fallbackResult'
         $raw | Should Match 'Backend saiu sem result\.json'
+        $raw | Should Match 'function Start-RunExecution'
+        $raw | Should Match '\[string\]\$MaintenanceIntent = ''none'''
+        $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''audit'''
+        $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''rollback'''
+        $raw | Should Match 'MaintenanceMode\s+=\s+''none'''
     }
 
     It 'constrains Steam Deck monitor mode editing to supported modes' {
@@ -168,6 +176,8 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw = Get-Content -Path $uiScriptPath -Raw
 
         $raw | Should Match '<ScrollViewer x:Name="PageAppTuning"'
+        $raw | Should Match 'ClearAllSelectionButton'
+        $raw | Should Match 'Clear-UiAllSelections'
         $raw | Should Match 'AppTuningModeCombo'
         $raw | Should Match 'AppTuningSearchBox'
         $raw | Should Match 'AppTuningStatusFilterCombo'
@@ -177,7 +187,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         foreach ($header in @('Ativo','Categoria','App','Otimizacao','Perfil','Risco','Instalado','Configurado','Atualizado','Admin')) {
             $raw | Should Match ([regex]::Escape(('Header="{0}"' -f $header)))
         }
-        foreach ($buttonName in @('AppTuningRecommendedButton','AppTuningMarkCategoryButton','AppTuningClearCategoryButton','AppTuningAuditButton','AppTuningInstallButton','AppTuningConfigureButton','AppTuningUpdateButton')) {
+        foreach ($buttonName in @('AppTuningRecommendedButton','AppTuningMarkCategoryButton','AppTuningClearCategoryButton','AppTuningAuditButton','AppTuningClearAllButton','AppTuningInstallButton','AppTuningConfigureButton','AppTuningUpdateButton','AppTuningRunNowButton')) {
             $raw | Should Match $buttonName
         }
         $raw | Should Match 'Get-BootstrapAppTuningStatusRows'
@@ -248,6 +258,44 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'resolvedComponentLookup'
         $raw | Should Match '\$cb\.IsChecked = \(\(\$isExplicitComponent -or \$isResolvedComponent\) -and -not \$isExcludedComponent\)'
         $raw | Should Match 'Desmarcar item vindo de perfil adiciona em Nao instalar'
+    }
+
+    It 'shows actionable selection impact and rollback metadata' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Get-UiSelectionImpact'
+        $raw | Should Match 'Get-UiComponentImpact'
+        $raw | Should Match 'Selecionados:'
+        $raw | Should Match 'RollbackNotes'
+        $raw | Should Match 'SelectionErrorLabel\.Text = \$message'
+    }
+
+    It 'surfaces resilient run artifacts and rollback availability' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Update-RunArtifactButtons'
+        $raw | Should Match 'rollbackAvailable'
+        $raw | Should Match 'howToFix'
+        $raw | Should Match 'Rollback disponivel'
+    }
+
+    It 'supports per-run AppTuning scope override (isolated vs profile)' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'ExecutionScopeOverride'
+        $raw | Should Match 'New-ExecutionScopeSnapshot'
+        $raw | Should Match 'Get-CurrentExecutionScopeSnapshot'
+        $raw | Should Match 'Assert-ExecutionScopeSnapshot'
+        $raw | Should Match 'Get-IsolatedAppTuningExecutionOverride'
+        $raw | Should Match 'Get-ProfileExecutionOverride'
+        $raw | Should Match 'Whitelist forte: escopo isolado ignora historico global'
+        $raw | Should Match 'Escopo isolado invalido: ExcludeAppTuningItem deve estar vazio'
+        $raw | Should Match 'Execution scope snapshot\. Source='
+        $raw | Should Match 'ArgumentList acima do limite seguro'
+        $raw | Should Match 'YesNoCancel'
+        $raw | Should Match 'scopeMode=\{0\}'
+        $raw | Should Match 'Clear-ExecutionScopeOverride'
+        $raw | Should Match 'Escopo:'
     }
 
     It 'does not ship known mojibake in visible UI strings' {
