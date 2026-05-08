@@ -1,3 +1,7 @@
+param(
+    [switch]$DryRun
+)
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -5,7 +9,10 @@ $steamdeckRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path (Join-Path $steamdeckRoot 'automation') 'SteamDeck.Common.ps1')
 
 function Clear-DirectoryContentsSafe {
-    param([Parameter(Mandatory = $true)][string]$TargetPath)
+    param(
+        [Parameter(Mandatory = $true)][string]$TargetPath,
+        [switch]$DryRun
+    )
 
     if ([string]::IsNullOrWhiteSpace($TargetPath) -or -not (Test-Path $TargetPath)) {
         return [ordered]@{ path = $TargetPath; removed = 0; skipped = 0; note = 'path-missing' }
@@ -15,6 +22,10 @@ function Clear-DirectoryContentsSafe {
     $skipped = 0
     foreach ($item in @(Get-ChildItem -LiteralPath $TargetPath -Force -ErrorAction SilentlyContinue)) {
         try {
+            if ($DryRun) {
+                $removed++
+                continue
+            }
             if ($item.PSIsContainer) {
                 Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
             } else {
@@ -25,7 +36,8 @@ function Clear-DirectoryContentsSafe {
             $skipped++
         }
     }
-    return [ordered]@{ path = $TargetPath; removed = $removed; skipped = $skipped; note = 'ok' }
+    $note = if ($DryRun) { 'dry-run' } else { 'ok' }
+    return [ordered]@{ path = $TargetPath; removed = $removed; skipped = $skipped; note = $note }
 }
 
 try {
@@ -39,18 +51,22 @@ try {
     ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
     $results = @()
     foreach ($target in @($targets)) {
-        $results += @(Clear-DirectoryContentsSafe -TargetPath $target)
+        $results += @(Clear-DirectoryContentsSafe -TargetPath $target -DryRun:$DryRun)
     }
 
-    try {
-        Clear-RecycleBin -Force -ErrorAction Stop | Out-Null
-        $recycle = 'cleared'
-    } catch {
-        $recycle = 'partial'
+    if ($DryRun) {
+        $recycle = 'dry-run'
+    } else {
+        try {
+            Clear-RecycleBin -Force -ErrorAction Stop | Out-Null
+            $recycle = 'cleared'
+        } catch {
+            $recycle = 'partial'
+        }
     }
 
     [ordered]@{
-        status = 'applied'
+        status = if ($DryRun) { 'dry-run' } else { 'applied' }
         action = 'clear-steamdeck-caches'
         recycleBin = $recycle
         targets = @($results)
