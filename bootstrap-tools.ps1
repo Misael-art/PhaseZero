@@ -8585,6 +8585,30 @@ function Get-BootstrapSecretsDiagnostics {
     }
 }
 
+function Set-BootstrapFileOwnerOnlyAcl {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    try {
+        $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $acl = New-Object System.Security.AccessControl.FileSecurity
+        $acl.SetOwner($owner)
+        $acl.SetAccessRuleProtection($true, $false)
+        $rule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $owner, 'FullControl', 'Allow')
+        $acl.SetAccessRule($rule)
+        # SYSTEM keeps access so backup/AV/recovery still work; everyone else is denied.
+        try {
+            $systemSid = New-Object System.Security.Principal.SecurityIdentifier 'S-1-5-18'
+            $sysRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $systemSid, 'FullControl', 'Allow')
+            $acl.AddAccessRule($sysRule)
+        } catch { }
+        [System.IO.File]::SetAccessControl($Path, $acl)
+    } catch {
+        try { Write-Log ("Set-BootstrapFileOwnerOnlyAcl falhou em {0}: {1}" -f $Path, $_.Exception.Message) 'WARN' } catch { }
+    }
+}
+
 function Get-BootstrapSecretsData {
     $path = Get-BootstrapSecretsPath
     $current = $null
@@ -8605,6 +8629,7 @@ function Get-BootstrapSecretsData {
 
     $normalized = Normalize-BootstrapSecretsData -Secrets $current
     Write-BootstrapJsonFile -Path $path -Value $normalized
+    Set-BootstrapFileOwnerOnlyAcl -Path $path
 
     return [ordered]@{
         Path = $path
@@ -10995,10 +11020,21 @@ function Test-BootstrapSecretsProviderCredential {
     }
 
     try {
-        $null = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -ErrorAction Stop
+        # TimeoutSec prevents a hung credential probe from stalling the whole bootstrap.
+        $null = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -TimeoutSec 15 -ErrorAction Stop
         return (New-BootstrapSecretValidationState -State 'passed' -CheckedAt $checkedAt -Message 'ok')
     } catch {
-        return (New-BootstrapSecretValidationState -State 'failed' -CheckedAt $checkedAt -Message $_.Exception.Message)
+        # Sanitize the failure message so the secret can't leak through the
+        # Authorization header / x-api-key / google ?key= URL parameter into logs.
+        $msg = [string]$_.Exception.Message
+        if (-not [string]::IsNullOrWhiteSpace($secret)) {
+            try { $msg = $msg.Replace($secret, '<redacted>') } catch { }
+            try {
+                $escaped = [Uri]::EscapeDataString($secret)
+                if ($escaped -ne $secret) { $msg = $msg.Replace($escaped, '<redacted>') }
+            } catch { }
+        }
+        return (New-BootstrapSecretValidationState -State 'failed' -CheckedAt $checkedAt -Message $msg)
     }
 }
 
