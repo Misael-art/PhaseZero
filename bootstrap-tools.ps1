@@ -214,7 +214,24 @@ function Write-Log {
         try {
             $logParent = Split-Path -Path $logFile -Parent
             if ($logParent -and -not (Test-Path $logParent)) { $null = New-Item -Path $logParent -ItemType Directory -Force }
-            Add-Content -Path $logFile -Value $line -Encoding utf8 -ErrorAction SilentlyContinue
+            # Cross-process mutex protects against torn lines when child PS processes
+            # (e.g., dry-run probes, parallel jobs) write to the same log concurrently.
+            $mutexName = 'Global\PhaseZeroBootstrapLog_' + ([System.IO.Path]::GetFileName($logFile))
+            $mutex = $null
+            $haveLock = $false
+            try {
+                $mutex = New-Object System.Threading.Mutex($false, $mutexName)
+                $haveLock = $mutex.WaitOne(2000)
+                Add-Content -Path $logFile -Value $line -Encoding utf8 -ErrorAction SilentlyContinue
+            } catch [System.Threading.AbandonedMutexException] {
+                $haveLock = $true
+                Add-Content -Path $logFile -Value $line -Encoding utf8 -ErrorAction SilentlyContinue
+            } finally {
+                if ($mutex) {
+                    if ($haveLock) { try { $mutex.ReleaseMutex() } catch { } }
+                    try { $mutex.Dispose() } catch { }
+                }
+            }
         } catch { }
     }
     Write-Host $line
@@ -222,9 +239,39 @@ function Write-Log {
 
 function Get-BootstrapFreeSpace {
     param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return 0 }
     try {
-        $drive = Get-PSDrive -Name ($Path.Substring(0, 1)) -ErrorAction SilentlyContinue
-        if ($drive) { return [Math]::Round($drive.Free / 1GB, 2) }
+        # Resolve relative paths first so we don't substring "."
+        try {
+            $resolved = (Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue).Path
+            if ($resolved) { $Path = $resolved }
+        } catch { }
+
+        # UNC paths (\\server\share\...): use DirectoryInfo + DriveInfo bypass via WMI
+        if ($Path.StartsWith('\\')) {
+            try {
+                $diskInfo = New-Object System.IO.DriveInfo($Path)
+                if ($diskInfo -and $diskInfo.IsReady) {
+                    return [Math]::Round($diskInfo.AvailableFreeSpace / 1GB, 2)
+                }
+            } catch { }
+            return 0
+        }
+
+        # Local paths: take the leading drive letter (handles "C:", "C:\", "C:\foo")
+        if ($Path.Length -lt 2 -or $Path[1] -ne ':') { return 0 }
+        $driveLetter = $Path.Substring(0, 1)
+        $drive = Get-PSDrive -Name $driveLetter -ErrorAction SilentlyContinue
+        if ($drive -and ($drive.Free -or $drive.Free -eq 0)) {
+            return [Math]::Round(($drive.Free / 1GB), 2)
+        }
+        # Fallback to System.IO.DriveInfo when PSDrive lacks Free (mapped drives, etc.)
+        try {
+            $diskInfo = New-Object System.IO.DriveInfo($driveLetter + ':\')
+            if ($diskInfo -and $diskInfo.IsReady) {
+                return [Math]::Round($diskInfo.AvailableFreeSpace / 1GB, 2)
+            }
+        } catch { }
     } catch { }
     return 0
 }
@@ -300,7 +347,8 @@ function Save-BootstrapCheckpoint {
             HostHealthResults = @($HostHealthResults)
             Timestamp = (Get-Date).ToString('o')
         }
-        $checkpoint | ConvertTo-Json | Set-Content -Path $path -Encoding utf8 -Force
+        $json = $checkpoint | ConvertTo-Json -Depth 12
+        Write-BootstrapAtomicText -Path $path -Content $json
     } catch {
         Write-Log ("Falha ao salvar checkpoint: {0}" -f $_.Exception.Message) 'WARN'
     }
@@ -336,10 +384,17 @@ function Invoke-BootstrapRollback {
                     'Registry' {
                         if ([string]::IsNullOrWhiteSpace($target) -or [string]::IsNullOrWhiteSpace($name)) { continue }
                         if ($null -eq $change.OldValue) {
+                            # Idempotent: silently no-op if the property was already removed.
                             Remove-ItemProperty -Path $target -Name $name -ErrorAction SilentlyContinue
                         } else {
-                            if (-not (Test-Path $target)) { $null = New-Item -Path $target -Force }
-                            Set-ItemProperty -Path $target -Name $name -Value $change.OldValue -Force -ErrorAction Stop
+                            if (-not (Test-Path $target)) {
+                                try { $null = New-Item -Path $target -Force -ErrorAction Stop } catch {
+                                    Write-Log ("Rollback manifest Registry: nao foi possivel criar a chave {0}: {1}" -f $target, $_.Exception.Message) 'WARN'
+                                    continue
+                                }
+                            }
+                            # Use SilentlyContinue so a hive-level access denial doesn't break later changes.
+                            Set-ItemProperty -Path $target -Name $name -Value $change.OldValue -Force -ErrorAction SilentlyContinue
                         }
                         Write-Log ("Rollback manifest Registry: {0}\{1}" -f $target, $name)
                     }
@@ -10368,7 +10423,50 @@ function Write-BootstrapJsonFile {
 
     $json = [string]((ConvertTo-BootstrapObjectGraph -InputObject $Value) | ConvertTo-Json -Depth 12)
     $utf8 = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($Path, $json, $utf8)
+
+    Write-BootstrapAtomicText -Path $Path -Content $json -Encoding $utf8
+}
+
+function Write-BootstrapAtomicText {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Content,
+        [System.Text.Encoding]$Encoding
+    )
+    if (-not $Encoding) { $Encoding = New-Object System.Text.UTF8Encoding($false) }
+
+    # Stage to a sibling .tmp then move into place atomically. Same volume so a
+    # rename is metadata-only on NTFS. Falls back to direct write if the temp
+    # path can't be created (e.g., long-path issues, restricted parent).
+    $tmpPath = $Path + '.bttmp'
+    try {
+        [System.IO.File]::WriteAllText($tmpPath, $Content, $Encoding)
+    } catch {
+        # If we couldn't even stage, write directly and bail (best-effort).
+        [System.IO.File]::WriteAllText($Path, $Content, $Encoding)
+        return
+    }
+
+    try {
+        if (Test-Path -LiteralPath $Path) {
+            try {
+                [System.IO.File]::Replace($tmpPath, $Path, $null)
+            } catch {
+                # Replace fails on some volumes (network shares, ReFS without resilver,
+                # cross-device, paths with reserved chars). Fall back to delete+move.
+                Remove-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+                Move-Item -LiteralPath $tmpPath -Destination $Path -Force -ErrorAction Stop
+            }
+        } else {
+            Move-Item -LiteralPath $tmpPath -Destination $Path -Force -ErrorAction Stop
+        }
+    } catch {
+        if (Test-Path -LiteralPath $tmpPath) {
+            try { Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue } catch { }
+        }
+        # Last resort: write the content directly so callers don't lose data.
+        try { [System.IO.File]::WriteAllText($Path, $Content, $Encoding) } catch { throw }
+    }
 }
 
 function Remove-BootstrapJsonComments {
