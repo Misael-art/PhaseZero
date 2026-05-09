@@ -1435,16 +1435,19 @@ function Get-UiBrush {
                     <Border Style="{StaticResource Card}" Margin="0,0,0,14">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="140"/>
-                            <ColumnDefinition Width="230"/>
-                            <ColumnDefinition Width="90"/>
+                            <ColumnDefinition Width="130"/>
+                            <ColumnDefinition Width="170"/>
+                            <ColumnDefinition Width="70"/>
                             <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="100"/>
-                            <ColumnDefinition Width="180"/>
+                            <ColumnDefinition Width="80"/>
+                            <ColumnDefinition Width="145"/>
+                            <ColumnDefinition Width="70"/>
+                            <ColumnDefinition Width="150"/>
                         </Grid.ColumnDefinitions>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="10"/>
+                            <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         <TextBlock x:Name="AppTuningModeLabel" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="AppTuning"/>
@@ -1454,8 +1457,11 @@ function Get-UiBrush {
                         <TextBlock Grid.Row="0" Grid.Column="4" Foreground="#94A3B8" VerticalAlignment="Center" Text="Status" ToolTip="All: tudo | installed: instalado | missing: ausente | planned: planejado | not-configured: não configurado | update-check: requer verificação."/>
                         <ComboBox x:Name="AppTuningStatusFilterCombo" Grid.Row="0" Grid.Column="5" Style="{StaticResource DarkCombo}" ToolTip="Filtre os itens pelo estado atual para focar na ação necessária."/>
 
-                        <TextBlock x:Name="AppTuningStatusLabel" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Foreground="#94A3B8" VerticalAlignment="Center" TextWrapping="Wrap"/>
-                        <StackPanel Grid.Row="2" Grid.Column="3" Grid.ColumnSpan="3" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <TextBlock Grid.Row="0" Grid.Column="6" Foreground="#94A3B8" VerticalAlignment="Center" Text="Risco" ToolTip="Filtre por risco: conservative, advanced, aggressive."/>
+                        <ComboBox x:Name="AppTuningRiskFilterCombo" Grid.Row="0" Grid.Column="7" Style="{StaticResource DarkCombo}" ToolTip="Filtre itens por risco operacional."/>
+
+                        <TextBlock x:Name="AppTuningStatusLabel" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4" Foreground="#94A3B8" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        <StackPanel Grid.Row="2" Grid.Column="4" Grid.ColumnSpan="4" Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button x:Name="AppTuningRecommendedButton" Style="{StaticResource GhostBtn}" Content="Marcar recomendados" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningMarkCategoryButton" Style="{StaticResource GhostBtn}" Content="Marcar categoria" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningClearCategoryButton" Style="{StaticResource GhostBtn}" Content="Limpar categoria" Margin="0,0,8,0" Height="32"/>
@@ -1466,6 +1472,7 @@ function Get-UiBrush {
                             <Button x:Name="AppTuningUpdateButton" Style="{StaticResource GhostBtn}" Content="Atualizar" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningRunNowButton" Style="{StaticResource PrimaryBtn}" Content="Executar agora" Height="32"/>
                         </StackPanel>
+                        <TextBlock x:Name="AppTuningRiskWarningLabel" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="8" Margin="0,8,0,0" Foreground="#F59E0B" TextWrapping="Wrap" ToolTip="SecurityImpact gate for ai-agent-performance and other risky AppTuning items."/>
                     </Grid>
                 </Border>
 
@@ -1496,6 +1503,8 @@ function Get-UiBrush {
                                     <DataGridTextColumn Header="Otimizacao" Binding="{Binding optimization}" Width="1.8*"/>
                                     <DataGridTextColumn Header="Perfil" Binding="{Binding profile}" Width="1.2*"/>
                                     <DataGridTextColumn Header="Risco" Binding="{Binding risk}" Width="0.8*"/>
+                                    <DataGridTextColumn Header="SecurityImpact" Binding="{Binding securityImpact}" Width="0" Visibility="Collapsed"/>
+                                    <DataGridTextColumn Header="Rollback" Binding="{Binding rollbackScope}" Width="0.9*"/>
                                     <DataGridTextColumn Header="Instalado" Binding="{Binding installed}" Width="0.8*"/>
                                     <DataGridTextColumn Header="Configurado" Binding="{Binding configured}" Width="0.9*"/>
                                     <DataGridTextColumn Header="Atualizado" Binding="{Binding updated}" Width="0.8*"/>
@@ -2209,7 +2218,9 @@ $ui = [ordered]@{
     AppTuningModeCombo    = (Get-Control 'AppTuningModeCombo')
     AppTuningSearchBox    = (Get-Control 'AppTuningSearchBox')
     AppTuningStatusFilterCombo = (Get-Control 'AppTuningStatusFilterCombo')
+    AppTuningRiskFilterCombo = (Get-Control 'AppTuningRiskFilterCombo')
     AppTuningStatusLabel  = (Get-Control 'AppTuningStatusLabel')
+    AppTuningRiskWarningLabel = (Get-Control 'AppTuningRiskWarningLabel')
     AppTuningRecommendedButton = (Get-Control 'AppTuningRecommendedButton')
     AppTuningMarkCategoryButton = (Get-Control 'AppTuningMarkCategoryButton')
     AppTuningClearCategoryButton = (Get-Control 'AppTuningClearCategoryButton')
@@ -3299,6 +3310,9 @@ function Refresh-AppTuningControls {
         if (-not $ui.AppTuningStatusFilterCombo.SelectedItem) {
             $ui.AppTuningStatusFilterCombo.SelectedItem = 'all'
         }
+        if ($ui.AppTuningRiskFilterCombo -and -not $ui.AppTuningRiskFilterCombo.SelectedItem) {
+            $ui.AppTuningRiskFilterCombo.SelectedItem = 'all'
+        }
         $planWarnings = @()
         try {
             $plan = Get-UiAppTuningPreview
@@ -3377,12 +3391,14 @@ function Refresh-AppTuningControls {
         $rows = @()
         $filter = if ($ui.AppTuningSearchBox) { $ui.AppTuningSearchBox.Text.Trim().ToLowerInvariant() } else { '' }
         $statusFilter = if ($ui.AppTuningStatusFilterCombo -and $ui.AppTuningStatusFilterCombo.SelectedItem) { [string]$ui.AppTuningStatusFilterCombo.SelectedItem } else { 'all' }
+        $riskFilter = if ($ui.AppTuningRiskFilterCombo -and $ui.AppTuningRiskFilterCombo.SelectedItem) { [string]$ui.AppTuningRiskFilterCombo.SelectedItem } else { 'all' }
         $statusRows = @(Get-BootstrapAppTuningStatusRows -Plan $plan)
         $filteredCount = 0
         foreach ($item in @($statusRows)) {
             $itemId = [string]$item.id
             $haystack = ("{0} {1} {2} {3} {4} {5}" -f $item.id, $item.category, $item.app, $item.displayName, $item.description, (@($item.installComponents) -join ' ')).ToLowerInvariant()
             if (-not [string]::IsNullOrWhiteSpace($filter) -and -not $haystack.Contains($filter)) { continue }
+            if ($riskFilter -ne 'all' -and [string]$item.risk -ne $riskFilter) { continue }
             if ($statusFilter -eq 'missing' -and [string]$item.installedState -ne 'missing') { continue }
             if ($statusFilter -eq 'installed' -and [string]$item.installedState -ne 'installed') { continue }
             if ($statusFilter -eq 'planned' -and [string]$item.configuredState -ne 'planned') { continue }
@@ -3398,6 +3414,9 @@ function Refresh-AppTuningControls {
                 description = [string]$item.description
                 profile = (@($item.profiles) -join ', ')
                 risk = [string]$item.risk
+                securityImpact = [string]([bool]$item.securityImpact)
+                rollbackScope = [string]$item.rollbackScope
+                safetyNotes = (@($item.safetyNotes) -join '; ')
                 installed = Format-UiAppTuningState -State ([string]$item.installedState)
                 configured = Format-UiAppTuningState -State ([string]$item.configuredState)
                 updated = Format-UiAppTuningState -State ([string]$item.updatedState)
@@ -3408,10 +3427,21 @@ function Refresh-AppTuningControls {
                 installComponents = (@($item.installComponents) -join ', ')
             })
         }
-        Load-WpfGridRows -Grid $ui.AppTuningItemsGrid -Items $rows -Columns @('active','id','installComponents','category','app','optimization','description','profile','risk','installed','configured','updated','installedStateRaw','configuredStateRaw','updatedStateRaw','admin')
+        Load-WpfGridRows -Grid $ui.AppTuningItemsGrid -Items $rows -Columns @('active','id','installComponents','category','app','optimization','description','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','installedStateRaw','configuredStateRaw','updatedStateRaw','admin')
         $installedCount = @($statusRows | Where-Object { [string]$_.installedState -eq 'installed' }).Count
         $configuredCount = @($statusRows | Where-Object { [string]$_.configuredState -in @('configured','planned') }).Count
-        $ui.AppTuningStatusLabel.Text = "AppTuning: $($plan.mode) | apps: $installedCount/$(@($statusRows).Count) instalados | config: $configuredCount | selecionados: $(@($plan.items).Count) | exibidos: $filteredCount/$(@($statusRows).Count) | status: $statusFilter"
+        $securityImpactCount = @($plan.items | Where-Object { [bool]$_.securityImpact }).Count
+        $riskyCount = @($plan.items | Where-Object { [string]$_.riskTier -in @('advanced','aggressive') }).Count
+        $ui.AppTuningStatusLabel.Text = "AppTuning: $($plan.mode) | apps: $installedCount/$(@($statusRows).Count) instalados | config: $configuredCount | selecionados: $(@($plan.items).Count) | exibidos: $filteredCount/$(@($statusRows).Count) | status: $statusFilter | risco: $riskFilter"
+        if ($ui.AppTuningRiskWarningLabel) {
+            if ($securityImpactCount -gt 0) {
+                $ui.AppTuningRiskWarningLabel.Text = "SecurityImpact: $securityImpactCount item(ns) selecionado(s). Preview mostra rollback; execucao exige confirmacao."
+            } elseif ($riskyCount -gt 0) {
+                $ui.AppTuningRiskWarningLabel.Text = "Risco avancado: $riskyCount item(ns) selecionado(s), sem impacto de seguranca declarado."
+            } else {
+                $ui.AppTuningRiskWarningLabel.Text = ''
+            }
+        }
         if (-not [string]::IsNullOrWhiteSpace($filter)) {
             $ui.AppTuningStatusLabel.Text += " | busca: '$filter'"
         }
@@ -3437,7 +3467,7 @@ function Capture-AppTuningStateFromControls {
     # Sempre sincronizar a grelha (recommended/custom/off): o modo isolado e o backend usam
     # selectedAppTuningItems / excludedAppTuningItems; antes o early-return em recommended deixava
     # a selecao vazia apesar das caixas "Ativo" na UI.
-    $rows = @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin'))
+    $rows = @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','admin'))
     if ($rows.Count -eq 0) {
         Save-UiState -State $ui.State -Path $UiStatePath
         return
@@ -3470,7 +3500,7 @@ function Get-SelectedAppTuningRows {
         }
         if ($rowData) {
             $row = [ordered]@{}
-            foreach ($column in @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin')) {
+            foreach ($column in @('active','id','installComponents','category','app','optimization','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','admin')) {
                 if ($rowData -is [System.Collections.IDictionary]) {
                     $row[$column] = if ($rowData.Contains($column)) { [string]$rowData[$column] } else { '' }
                 } else {
@@ -3483,7 +3513,11 @@ function Get-SelectedAppTuningRows {
         }
     }
     if ($rows.Count -gt 0) { return @($rows) }
-    return @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin') | Where-Object { ConvertTo-UiBoolean -Value $_['active'] })
+    return @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','admin') | Where-Object { ConvertTo-UiBoolean -Value $_['active'] })
+}
+
+function Get-ActiveAppTuningRows {
+    return @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','admin','installedStateRaw','configuredStateRaw','updatedStateRaw') | Where-Object { ConvertTo-UiBoolean -Value $_['active'] })
 }
 
 function Add-UiSelectedComponents {
@@ -3737,6 +3771,32 @@ function Get-AppTuningInstallComponentsByAppName {
     return @($components.ToArray())
 }
 
+function Confirm-AppTuningSecurityImpact {
+    param([AllowNull()][object[]]$Rows = $null)
+
+    $sourceRows = if ($Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
+    $risky = @($sourceRows | Where-Object {
+        (ConvertTo-UiBoolean -Value $_['securityImpact']) -or ([string]$_['risk'] -eq 'aggressive')
+    })
+    if ($risky.Count -eq 0) { return $true }
+
+    $names = @($risky | ForEach-Object { [string]$_['id'] } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $message = @(
+        'Itens com SecurityImpact ou risco agressivo selecionados:'
+        ''
+        (@($names) -join [Environment]::NewLine)
+        ''
+        'Confirme somente se deseja aplicar ajustes sensiveis e com rollback registrado.'
+    ) -join [Environment]::NewLine
+    $answer = [System.Windows.MessageBox]::Show(
+        $message,
+        'Bootstrap UI - SecurityImpact',
+        [System.Windows.MessageBoxButton]::YesNo,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    return ($answer -eq [System.Windows.MessageBoxResult]::Yes)
+}
+
 function Queue-AppTuningInstallOrUpdate {
     param(
         [Parameter(Mandatory = $true)][string]$ActionName,
@@ -3779,6 +3839,11 @@ function Queue-AppTuningConfigure {
     $missingInstallRows = New-Object System.Collections.Generic.List[string]
     $autoInstallComponents = New-Object System.Collections.Generic.List[string]
     $sourceRows = if ($Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
+    if (-not (Confirm-AppTuningSecurityImpact -Rows $sourceRows)) {
+        $message = 'Config/Otimizacao cancelada: SecurityImpact nao confirmado.'
+        Set-AppTuningActionFeedback -Message $message -Level 'warning'
+        return [ordered]@{ status = 'warning'; message = $message; ids = @() }
+    }
     foreach ($row in @($sourceRows)) {
         $id = [string]$row['id']
         if (-not [string]::IsNullOrWhiteSpace($id)) { $ids += @($id) }
@@ -3844,7 +3909,7 @@ function Get-CurrentAppTuningRow {
     if ($null -eq $rowData) { return $null }
 
     $row = [ordered]@{}
-    foreach ($column in @('active','id','installComponents','category','app','optimization','profile','risk','installed','configured','updated','admin','installedStateRaw','configuredStateRaw','updatedStateRaw')) {
+    foreach ($column in @('active','id','installComponents','category','app','optimization','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','admin','installedStateRaw','configuredStateRaw','updatedStateRaw')) {
         if ($rowData -is [System.Collections.IDictionary]) {
             $row[$column] = if ($rowData.Contains($column)) { [string]$rowData[$column] } else { '' }
         } else {
@@ -5415,6 +5480,9 @@ $ui.AppTuningSearchBox.Add_TextChanged({
 $ui.AppTuningStatusFilterCombo.Add_SelectionChanged({
     Refresh-AppTuningControls
 })
+$ui.AppTuningRiskFilterCombo.Add_SelectionChanged({
+    Refresh-AppTuningControls
+})
 
 $ui.AppTuningItemsGrid.Add_LoadingRow({
     param($sender, $args)
@@ -5525,6 +5593,10 @@ $ui.AppTuningRunNowButton.Add_Click({
         Capture-AppTuningStateFromControls
         Refresh-SelectionSummary
         Clear-ExecutionScopeOverride
+        if (-not (Confirm-AppTuningSecurityImpact -Rows @(Get-ActiveAppTuningRows))) {
+            Set-AppTuningActionFeedback -Message 'Execucao imediata cancelada: SecurityImpact nao confirmado.' -Level 'warning'
+            return
+        }
         $selectionCount = @($ui.State.selectedComponents).Count
         $appTuningCount = @($ui.State.selectedAppTuningItems).Count
         $scopeMessage = @(
@@ -5744,6 +5816,8 @@ $window.Add_Loaded({
     foreach ($item in @(Get-BootstrapAppTuningModes)) { [void]$ui.AppTuningModeCombo.Items.Add($item) }
     foreach ($item in @('all','installed','missing','planned','not-configured','update-check')) { [void]$ui.AppTuningStatusFilterCombo.Items.Add($item) }
     $ui.AppTuningStatusFilterCombo.SelectedItem = 'all'
+    foreach ($item in @('all','conservative','advanced','aggressive','opt-in')) { [void]$ui.AppTuningRiskFilterCombo.Items.Add($item) }
+    $ui.AppTuningRiskFilterCombo.SelectedItem = 'all'
     foreach ($item in @('Auto','LCD','OLED')) { [void]$ui.SteamDeckVersionCombo.Items.Add($item) }
     foreach ($item in @('UNCLASSIFIED_EXTERNAL','DOCKED_TV','DOCKED_MONITOR')) { [void]$ui.GenericModeCombo.Items.Add($item) }
 

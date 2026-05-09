@@ -32,17 +32,20 @@ Describe 'Bootstrap managed MCPs' {
         $script:OriginalUserProfile = $env:USERPROFILE
         $script:OriginalAppData = $env:APPDATA
         $script:OriginalLocalAppData = $env:LOCALAPPDATA
+        $script:OriginalBootstrapDataRoot = $env:BOOTSTRAP_DATA_ROOT
     }
 
     AfterEach {
         $env:USERPROFILE = $script:OriginalUserProfile
         $env:APPDATA = $script:OriginalAppData
         $env:LOCALAPPDATA = $script:OriginalLocalAppData
+        $env:BOOTSTRAP_DATA_ROOT = $script:OriginalBootstrapDataRoot
         Remove-ManagedMcpTestRoot -Path $script:TestDataRoot
         Remove-Variable -Scope Script -Name TestDataRoot -ErrorAction SilentlyContinue
         Remove-Variable -Scope Script -Name OriginalUserProfile -ErrorAction SilentlyContinue
         Remove-Variable -Scope Script -Name OriginalAppData -ErrorAction SilentlyContinue
         Remove-Variable -Scope Script -Name OriginalLocalAppData -ErrorAction SilentlyContinue
+        Remove-Variable -Scope Script -Name OriginalBootstrapDataRoot -ErrorAction SilentlyContinue
     }
 
     It 'resolves the ai profile with bootstrap-mcps between bootstrap-secrets and vscode-extensions' {

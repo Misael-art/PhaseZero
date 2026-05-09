@@ -71,51 +71,6 @@ if ($script:LogParent) {
     $null = New-Item -Path $script:LogParent -ItemType Directory -Force
 }
 
-trap {
-    $errorMessage = $_.Exception.Message
-    $errorDetails = ($_ | Out-String).Trim()
-
-    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-        try {
-            $resultParent = Split-Path -Path $script:ResultPath -Parent
-            if ($resultParent) { $null = New-Item -Path $resultParent -ItemType Directory -Force -ErrorAction SilentlyContinue }
-
-            $trapStk = ''
-            try {
-                if ($_ -and $_.ScriptStackTrace) {
-                    $trapStk = [string]$_.ScriptStackTrace
-                    if ($trapStk.Length -gt 8000) { $trapStk = $trapStk.Substring(0, 7997) + '...' }
-                }
-            } catch {
-                $trapStk = ''
-            }
-            $fallbackResult = [ordered]@{
-                status = 'error'
-                generatedAt = (Get-Date).ToString('o')
-                logPath = $script:LogPath
-                resultPath = $script:ResultPath
-                exitCode = 1
-                error = $errorMessage
-                details = $errorDetails
-                scriptStackTrace = $trapStk
-                note = 'Unhandled exception caught by global trap handler'
-            }
-            $json = $fallbackResult | ConvertTo-Json -Depth 12
-            [System.IO.File]::WriteAllText($script:ResultPath, $json, [System.Text.UTF8Encoding]::new($false))
-        } catch { }
-    }
-
-    if (-not [string]::IsNullOrWhiteSpace($script:LogPath)) {
-        try {
-            $logParent = Split-Path -Path $script:LogPath -Parent
-            if ($logParent) { $null = New-Item -Path $logParent -ItemType Directory -Force -ErrorAction SilentlyContinue }
-            Add-Content -Path $script:LogPath -Value ("[{0:yyyy-MM-dd HH:mm:ss}] [ERROR] Unhandled exception: {1}" -f (Get-Date), $errorDetails) -Encoding utf8 -ErrorAction SilentlyContinue
-        } catch { }
-    }
-
-    exit 1
-}
-
 try {
     $sp = [Net.ServicePointManager]::SecurityProtocol
     [Net.ServicePointManager]::SecurityProtocol = $sp -bor [Net.SecurityProtocolType]::Tls12
@@ -429,6 +384,33 @@ function Invoke-BootstrapRollback {
                             }
                         }
                     }
+                    'Service' {
+                        if ([string]::IsNullOrWhiteSpace($target)) { continue }
+                        $oldState = ConvertTo-BootstrapHashtable -InputObject $change.OldValue
+                        $oldStartType = if ($oldState -is [hashtable] -and $oldState.ContainsKey('StartType')) { [string]$oldState['StartType'] } else { [string]$change.OldValue }
+                        $oldStatus = if ($oldState -is [hashtable] -and $oldState.ContainsKey('Status')) { [string]$oldState['Status'] } else { '' }
+                        if (-not [string]::IsNullOrWhiteSpace($oldStartType)) {
+                            Set-Service -Name $target -StartupType $oldStartType -ErrorAction SilentlyContinue
+                            Write-Log ("Rollback manifest Service: {0} StartupType={1}" -f $target, $oldStartType)
+                        }
+                        if ($oldStatus -eq 'Running') {
+                            Start-Service -Name $target -ErrorAction SilentlyContinue
+                            Write-Log ("Rollback manifest Service started: {0}" -f $target)
+                        } elseif ($oldStatus -eq 'Stopped') {
+                            Stop-Service -Name $target -ErrorAction SilentlyContinue
+                            Write-Log ("Rollback manifest Service stopped: {0}" -f $target)
+                        }
+                    }
+                    'DefenderExclusion' {
+                        if ([string]::IsNullOrWhiteSpace($target)) { continue }
+                        $kind = if ([string]::IsNullOrWhiteSpace($name)) { 'ExclusionPath' } else { $name }
+                        if ($kind -eq 'ExclusionProcess') {
+                            Remove-MpPreference -ExclusionProcess $target -ErrorAction SilentlyContinue
+                        } else {
+                            Remove-MpPreference -ExclusionPath $target -ErrorAction SilentlyContinue
+                        }
+                        Write-Log ("Rollback manifest DefenderExclusion: {0} {1}" -f $kind, $target)
+                    }
                     default {
                         if ($AggressiveRollback) {
                             Write-Log ("Rollback agressivo ainda nao implementado para {0}: {1}" -f $type, $target) 'WARN'
@@ -474,7 +456,7 @@ function Invoke-BootstrapRollback {
 function Register-BootstrapChange {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
-        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'Clone')][string]$Type,
+        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'DefenderExclusion', 'Clone')][string]$Type,
         [Parameter(Mandatory = $true)][string]$Target,
         [AllowNull()]$OldValue,
         [string]$Name,
@@ -495,6 +477,8 @@ function Register-BootstrapChange {
             'Directory' { 'remove-created-directory-if-safe' }
             'Path' { 'restore-path-string' }
             'EnvVar' { 'restore-env-var' }
+            'Service' { 'restore-service-state' }
+            'DefenderExclusion' { 'remove-defender-exclusion' }
             default { 'manual-review' }
         }
     }
@@ -659,6 +643,8 @@ function Invoke-BootstrapAuditMode {
             'python-core' { return 'Instale Python real via winget: winget install -e --id Python.Python.3.13; desative aliases python.exe/python3.exe da Microsoft Store se necessario.' }
             'java-core' { return 'Instale Temurin JDK 17 via winget: winget install -e --id EclipseAdoptium.Temurin.17.JDK; reabra a UI para atualizar PATH.' }
             'dotnet-core' { return 'Instale .NET SDK 8 via winget: winget install -e --id Microsoft.DotNet.SDK.8; confirme `dotnet --list-sdks` nao vazio e reabra a UI para atualizar PATH.' }
+            'codex-cli' { return 'Instale Codex CLI via npm -g: npm install -g @openai/codex; confirme codex --version.' }
+            'codex-installer' { return 'Rode AppTuning codex-desktop-repair; se continuar, atualize/reinstale OpenAI.Codex via winget ou Microsoft Store e reabra o app.' }
             default { return 'Execute a instalacao do perfil correspondente ou instale o componente indicado; depois reabra a UI para atualizar PATH.' }
         }
     }
@@ -837,6 +823,35 @@ function Invoke-BootstrapAuditMode {
                     return (New-AuditRow -Component $ComponentName -Status 'InstalledButNotInPath' -Detail 'winget lista Microsoft.DotNet.SDK.8 como instalado, mas dotnet nao esta no PATH.' -HowToFix $fix)
                 }
                 return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'Comando ausente: dotnet' -HowToFix $fix)
+            }
+            'codex-cli' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'codex' -Args @('--version') -InstalledPathCandidates @('%APPDATA%\npm\codex.cmd', '%LocalAppData%\Microsoft\WindowsApps\codex.exe'))
+            }
+            'codex-installer' {
+                $fix = Get-AuditKnownFix -ComponentName $ComponentName
+                $diag = Get-BootstrapCodexDesktopDiagnostics
+                $pkg = ConvertTo-BootstrapHashtable -InputObject $diag['package']
+                $latestLog = ConvertTo-BootstrapHashtable -InputObject $diag['latestLog']
+                $runtime = ConvertTo-BootstrapHashtable -InputObject $diag['runtime']
+                if (-not [bool]$pkg['installed']) {
+                    return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'OpenAI.Codex MSIX ausente.' -HowToFix $fix)
+                }
+
+                $detailParts = New-Object System.Collections.Generic.List[string]
+                $detailParts.Add(("MSIX {0}" -f [string]$pkg['version']))
+                if (-not [bool]$runtime['present']) {
+                    $detailParts.Add(("VC++ runtime ausente: {0}" -f (@($runtime['missing']) -join ', ')))
+                }
+                if (-not [string]::IsNullOrWhiteSpace([string]$latestLog['exitCode'])) {
+                    $detailParts.Add(("ultimo app-server exit={0} {1}" -f [string]$latestLog['exitCode'], [string]$latestLog['exitCodeHex']))
+                }
+                if ([bool]$latestLog['staleSpawnedPackage']) {
+                    $detailParts.Add(("ultimo log usou pacote antigo {0}" -f [string]$latestLog['spawnedVersion']))
+                }
+                if (@($diag['issues']).Count -gt 0) {
+                    return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ($detailParts.ToArray() -join '; ') -HowToFix $fix)
+                }
+                return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ($detailParts.ToArray() -join '; ') -HowToFix '')
             }
             default {
                 return $null
@@ -1039,7 +1054,7 @@ function Test-BootstrapSensitiveEnvName {
         return $false
     }
 
-    return ($Name -match '(^|_)(API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASS|PAT)($|_)')
+    return ($Name -match '(^|_)(API_KEY|KEY|TOKEN|SECRET|PASSWORD|PASS|PAT|ORG|ORGANIZATION|PROJECT)($|_)')
 }
 
 function Get-BootstrapEnvValueForLog {
@@ -1154,8 +1169,9 @@ function Invoke-NativeWithLog {
     try { $proc.CancelOutputRead() } catch { }
     try { $proc.CancelErrorRead() } catch { }
 
-    if ($timedOut) { return 124 }
-    return [int]$proc.ExitCode
+    $exitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
+    try { $proc.Dispose() } catch { }
+    return $exitCode
 }
 
 function Test-WslCorruptionText {
@@ -1230,6 +1246,7 @@ function Invoke-NativeCaptureWithLog {
     try { $proc.CancelErrorRead() } catch { }
 
     $exitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
+    try { $proc.Dispose() } catch { }
     $stdout = [string]$stdoutSb.ToString()
     $stderr = [string]$stderrSb.ToString()
 
@@ -4088,6 +4105,457 @@ function Ensure-CodexInstaller {
     }
 }
 
+function Get-BootstrapCodexHome {
+    $codexHome = [Environment]::GetEnvironmentVariable('CODEX_HOME', 'Process')
+    if ([string]::IsNullOrWhiteSpace($codexHome)) {
+        $codexHome = [Environment]::GetEnvironmentVariable('CODEX_HOME', 'User')
+    }
+    if ([string]::IsNullOrWhiteSpace($codexHome)) {
+        $codexHome = Join-Path $env:USERPROFILE '.codex'
+    }
+    return $codexHome
+}
+
+function Get-BootstrapCodexDesktopPackageDataRoot {
+    return (Join-Path $env:LOCALAPPDATA 'Packages\OpenAI.Codex_2p2nqsd0c76g0')
+}
+
+function Get-BootstrapCodexDesktopStatePaths {
+    $codexHome = Get-BootstrapCodexHome
+    return @(
+        (Join-Path $codexHome '.codex-global-state.json'),
+        (Join-Path $codexHome 'codex-global-state.json')
+    ) | Select-Object -Unique
+}
+
+function Test-BootstrapCodexTruthyValue {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return [bool]$Value }
+    $text = ([string]$Value).Trim().ToLowerInvariant()
+    return (@('1', 'true', 'yes', 'y', 'on') -contains $text)
+}
+
+function Get-BootstrapCodexDesktopPackageInfo {
+    $dataRoot = Get-BootstrapCodexDesktopPackageDataRoot
+    $info = [ordered]@{
+        installed = $false
+        version = ''
+        packageFullName = ''
+        installLocation = ''
+        dataRoot = $dataRoot
+        dataRootExists = (Test-Path -LiteralPath $dataRoot)
+    }
+
+    if (Get-Command -Name Get-AppxPackage -ErrorAction SilentlyContinue) {
+        try {
+            $pkg = @(Get-AppxPackage -Name 'OpenAI.Codex' -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1)
+            if ($pkg.Count -gt 0) {
+                $info['installed'] = $true
+                $info['version'] = [string]$pkg[0].Version
+                $info['packageFullName'] = [string]$pkg[0].PackageFullName
+                $info['installLocation'] = [string]$pkg[0].InstallLocation
+            }
+        } catch {
+            $info['queryError'] = $_.Exception.Message
+        }
+    }
+
+    return $info
+}
+
+function Get-BootstrapCodexCommandInfo {
+    $pathEntries = @()
+    try {
+        $pathEntries = @(where.exe codex 2>$null | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    } catch {
+        $pathEntries = @()
+    }
+    $cmdPath = [string]($pathEntries | Where-Object { $_ -match '\.cmd$' } | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($cmdPath)) {
+        $cmdPath = Resolve-CommandPath -Name 'codex'
+    }
+
+    $version = ''
+    if ($cmdPath) {
+        try {
+            $version = Invoke-NativeFirstLine -Exe $cmdPath -Args @('--version')
+        } catch {
+            $version = "erro: $($_.Exception.Message)"
+        }
+    }
+
+    return [ordered]@{
+        path = if ($cmdPath) { [string]$cmdPath } else { '' }
+        version = $version
+        pathEntries = @($pathEntries)
+    }
+}
+
+function Get-BootstrapCodexDesktopLatestLog {
+    $dataRoot = Get-BootstrapCodexDesktopPackageDataRoot
+    $logRoot = Join-Path $dataRoot 'LocalCache\Local\Codex\Logs'
+    $result = [ordered]@{
+        path = ''
+        exists = $false
+        exitCode = ''
+        exitCodeHex = ''
+        recentError = ''
+        spawnedPath = ''
+        spawnedVersion = ''
+        staleSpawnedPackage = $false
+        lastWriteTime = ''
+    }
+
+    if (-not (Test-Path -LiteralPath $logRoot)) { return $result }
+
+    $log = @(Get-ChildItem -LiteralPath $logRoot -Recurse -File -Filter 'codex-desktop-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+    if ($log.Count -eq 0) { return $result }
+
+    $result['path'] = [string]$log[0].FullName
+    $result['exists'] = $true
+    $result['lastWriteTime'] = ([datetime]$log[0].LastWriteTime).ToString('o')
+
+    try {
+        $text = (Get-Content -LiteralPath $log[0].FullName -Tail 240 -ErrorAction Stop | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        if ($text -match 'code=(\d+)') {
+            $result['exitCode'] = [string]$Matches[1]
+            try {
+                $result['exitCodeHex'] = ('0x{0:X8}' -f [uint32]([int64]$Matches[1]))
+            } catch {
+                $result['exitCodeHex'] = ''
+            }
+        } elseif ($text -match 'closeCode=(\d+)') {
+            $result['exitCode'] = [string]$Matches[1]
+            try {
+                $result['exitCodeHex'] = ('0x{0:X8}' -f [uint32]([int64]$Matches[1]))
+            } catch {
+                $result['exitCodeHex'] = ''
+            }
+        }
+        if ($text -match 'Most recent error:\s*([^"\r\n]+)') {
+            $result['recentError'] = ([string]$Matches[1]).Trim()
+        } elseif ($text -match 'message":"([^"]*write EPIPE[^"]*)"') {
+            $result['recentError'] = ([string]$Matches[1]).Trim()
+        }
+        if ($text -match 'executablePath="([^"]*codex\.exe)"') {
+            $result['spawnedPath'] = ([string]$Matches[1]) -replace '\\\\', '\'
+        }
+        if ($text -match 'OpenAI\.Codex_([0-9.]+)_x64__2p2nqsd0c76g0') {
+            $result['spawnedVersion'] = [string]$Matches[1]
+        }
+    } catch {
+        $result['readError'] = $_.Exception.Message
+    }
+
+    $pkg = Get-BootstrapCodexDesktopPackageInfo
+    if (-not [string]::IsNullOrWhiteSpace([string]$result['spawnedVersion']) -and -not [string]::IsNullOrWhiteSpace([string]$pkg['version'])) {
+        $result['staleSpawnedPackage'] = ([string]$result['spawnedVersion'] -ne [string]$pkg['version'])
+    }
+
+    return $result
+}
+
+function Get-BootstrapVcppRuntimeStatus {
+    $system32 = Join-Path $env:WINDIR 'System32'
+    $required = @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
+    $missing = @()
+    $present = @()
+    foreach ($dll in @($required)) {
+        $path = Join-Path $system32 $dll
+        if (Test-Path -LiteralPath $path) {
+            $present += @($dll)
+        } else {
+            $missing += @($dll)
+        }
+    }
+
+    return [ordered]@{
+        present = ($missing.Count -eq 0)
+        missing = @($missing)
+        found = @($present)
+        probeRoot = $system32
+        wingetId = 'Microsoft.VCRedist.2015+.x64'
+    }
+}
+
+function Ensure-BootstrapCodexDesktopVcppRuntime {
+    $before = Get-BootstrapVcppRuntimeStatus
+    if ([bool]$before['present']) {
+        return [ordered]@{ status = 'healthy'; reason = 'vcpp-runtime-present'; before = $before; after = $before }
+    }
+
+    $winget = Get-Winget
+    if (-not $winget) {
+        return [ordered]@{ status = 'failed'; reason = 'winget-ausente'; before = $before; after = $before }
+    }
+
+    try {
+        Ensure-WingetPackage -WingetPath $winget -Id 'Microsoft.VCRedist.2015+.x64' -DisplayName 'Microsoft Visual C++ Redistributable 2015+ x64' -AllowFailureWhenNotAdmin $true
+    } catch {
+        $afterFailure = Get-BootstrapVcppRuntimeStatus
+        return [ordered]@{ status = 'failed'; reason = $_.Exception.Message; before = $before; after = $afterFailure }
+    }
+
+    $after = Get-BootstrapVcppRuntimeStatus
+    return [ordered]@{
+        status = if ([bool]$after['present']) { 'installed' } else { 'attempted' }
+        reason = if ([bool]$after['present']) { 'vcpp-runtime-installed' } else { 'vcpp-runtime-still-missing' }
+        before = $before
+        after = $after
+    }
+}
+
+function Get-BootstrapCodexDesktopStateSummary {
+    $rows = @()
+    foreach ($path in @(Get-BootstrapCodexDesktopStatePaths)) {
+        $row = [ordered]@{
+            path = [string]$path
+            exists = (Test-Path -LiteralPath $path)
+            validJson = $false
+            wslEnabled = $false
+            terminalShell = ''
+            issue = ''
+        }
+        if ([bool]$row['exists']) {
+            try {
+                $data = ConvertTo-BootstrapHashtable -InputObject ((Get-Content -LiteralPath $path -Raw -ErrorAction Stop) | ConvertFrom-Json -ErrorAction Stop)
+                $row['validJson'] = $true
+                foreach ($key in @('runCodexInWindowsSubsystemForLinux', 'runcodexinwindowssubsystemforlinux')) {
+                    if ((Test-BootstrapMapContainsKey -Map $data -Key $key) -and (Test-BootstrapCodexTruthyValue -Value $data[$key])) {
+                        $row['wslEnabled'] = $true
+                    }
+                }
+                foreach ($key in @('integratedTerminalShell', 'terminalShell', 'shell')) {
+                    if ((Test-BootstrapMapContainsKey -Map $data -Key $key) -and -not [string]::IsNullOrWhiteSpace([string]$data[$key])) {
+                        $row['terminalShell'] = [string]$data[$key]
+                        break
+                    }
+                }
+            } catch {
+                $row['issue'] = "json-invalido: $($_.Exception.Message)"
+            }
+        }
+        $rows += @($row)
+    }
+    return @($rows)
+}
+
+function Test-BootstrapCodexConfigReadable {
+    $pathEntries = @()
+    try {
+        $pathEntries = @(where.exe codex 2>$null | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    } catch {
+        $pathEntries = @()
+    }
+    $codexCmd = [string]($pathEntries | Where-Object { $_ -match '\.cmd$' } | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($codexCmd)) {
+        $codexCmd = Resolve-CommandPath -Name 'codex'
+    }
+    if (-not $codexCmd) {
+        return [ordered]@{ status = 'unknown'; reason = 'codex-cmd-ausente'; output = '' }
+    }
+
+    try {
+        $output = (& $codexCmd @('debug', 'models') 2>&1 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        $exitCode = $LASTEXITCODE
+        $captured = $output
+        if ($captured.Length -gt 500) { $captured = $captured.Substring(0, 500) + '...' }
+        if ($exitCode -eq 0) {
+            return [ordered]@{ status = 'valid'; reason = 'debug-models-parsed-config'; output = $captured }
+        }
+        if ($output -match '(?i)(config|toml|parse|invalid)') {
+            return [ordered]@{ status = 'invalid'; reason = 'codex-config-parse-failed'; output = $captured }
+        }
+        return [ordered]@{ status = 'unknown'; reason = "exit-$exitCode"; output = $captured }
+    } catch {
+        return [ordered]@{ status = 'unknown'; reason = $_.Exception.Message; output = '' }
+    }
+}
+
+function Get-BootstrapCodexDesktopDiagnostics {
+    $package = Get-BootstrapCodexDesktopPackageInfo
+    $cli = Get-BootstrapCodexCommandInfo
+    $latestLog = Get-BootstrapCodexDesktopLatestLog
+    $runtime = Get-BootstrapVcppRuntimeStatus
+    $stateFiles = @(Get-BootstrapCodexDesktopStateSummary)
+    $configPath = Join-Path (Get-BootstrapCodexHome) 'config.toml'
+    $configStatus = Test-BootstrapCodexConfigReadable
+
+    $issues = New-Object System.Collections.Generic.List[string]
+    if (-not [bool]$package['installed']) {
+        $issues.Add('codex-desktop-msix-ausente')
+    }
+    if ([string]$latestLog['exitCode'] -eq '3221225781') {
+        $issues.Add('codex-app-server-crash-0xc0000135-epipe')
+        if (-not [bool]$runtime['present']) {
+            $issues.Add('vcpp-redist-missing-for-codex-desktop')
+        }
+    }
+    if ([bool]$latestLog['staleSpawnedPackage']) {
+        $issues.Add('codex-desktop-update-stale-process-or-log')
+    }
+    foreach ($state in @($stateFiles)) {
+        if ([string]$state.issue -ne '') { $issues.Add('codex-global-state-json-invalido') }
+        if ([bool]$state.wslEnabled -or ([string]$state.terminalShell).ToLowerInvariant() -eq 'wsl') {
+            $issues.Add('codex-desktop-wsl-runtime-enabled')
+        }
+    }
+    if ([string]$configStatus['status'] -eq 'invalid') {
+        $issues.Add('codex-config-toml-invalido')
+    }
+
+    return [ordered]@{
+        status = if ($issues.Count -gt 0) { 'needs-repair' } else { 'healthy' }
+        issues = @($issues.ToArray() | Select-Object -Unique)
+        package = $package
+        cli = $cli
+        runtime = $runtime
+        latestLog = $latestLog
+        stateFiles = @($stateFiles)
+        configPath = $configPath
+        configExists = (Test-Path -LiteralPath $configPath)
+        configStatus = $configStatus
+    }
+}
+
+function Repair-BootstrapCodexDesktopStateFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [switch]$DisableWslFallback
+    )
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        return [ordered]@{ path = $Path; status = 'skipped'; reason = 'state-file-missing'; backup = '' }
+    }
+
+    $backup = ''
+    $changes = New-Object System.Collections.Generic.List[string]
+    try {
+        $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop
+        $data = $null
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            $data = [ordered]@{}
+            $changes.Add('empty-state-normalized')
+        } else {
+            try {
+                $data = ConvertTo-BootstrapHashtable -InputObject ($raw | ConvertFrom-Json -ErrorAction Stop)
+            } catch {
+                $backup = Backup-BootstrapFile -Path $Path
+                Write-BootstrapJsonFile -Path $Path -Value ([ordered]@{})
+                return [ordered]@{ path = $Path; status = 'repaired'; reason = 'invalid-json-reset'; backup = $backup; changes = @('invalid-json-reset') }
+            }
+        }
+
+        if (-not ($data -is [hashtable])) { $data = [ordered]@{} }
+
+        foreach ($key in @('runCodexInWindowsSubsystemForLinux', 'runcodexinwindowssubsystemforlinux')) {
+            if ((Test-BootstrapMapContainsKey -Map $data -Key $key) -and (Test-BootstrapCodexTruthyValue -Value $data[$key])) {
+                $data[$key] = $false
+                $changes.Add("$key=false")
+            }
+        }
+
+        if ($DisableWslFallback) {
+            foreach ($key in @('integratedTerminalShell', 'terminalShell', 'shell')) {
+                if ((Test-BootstrapMapContainsKey -Map $data -Key $key) -and ([string]$data[$key]).Trim().ToLowerInvariant() -eq 'wsl') {
+                    $data[$key] = 'powershell'
+                    $changes.Add("$key=powershell")
+                }
+            }
+        }
+
+        if ($changes.Count -eq 0) {
+            return [ordered]@{ path = $Path; status = 'healthy'; reason = 'no-change'; backup = ''; changes = @() }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($backup)) {
+            $backup = Backup-BootstrapFile -Path $Path
+        }
+        Write-BootstrapJsonFile -Path $Path -Value $data
+        return [ordered]@{ path = $Path; status = 'repaired'; reason = 'state-normalized'; backup = $backup; changes = @($changes.ToArray()) }
+    } catch {
+        return [ordered]@{ path = $Path; status = 'failed'; reason = $_.Exception.Message; backup = $backup; changes = @($changes.ToArray()) }
+    }
+}
+
+function Repair-BootstrapCodexDesktopProcesses {
+    param([string]$CurrentPackageFullName = '')
+
+    $stopped = @()
+    try {
+        foreach ($proc in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(Codex|codex)$' })) {
+            $path = ''
+            try { $path = [string]$proc.Path } catch { $path = '' }
+            if ([string]::IsNullOrWhiteSpace($path) -or $path -notmatch '\\WindowsApps\\OpenAI\.Codex_') { continue }
+            if (-not [string]::IsNullOrWhiteSpace($CurrentPackageFullName) -and $path -match [regex]::Escape($CurrentPackageFullName)) { continue }
+            try {
+                Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+                $stopped += @([ordered]@{ id = [int]$proc.Id; path = $path; status = 'stopped' })
+            } catch {
+                $stopped += @([ordered]@{ id = [int]$proc.Id; path = $path; status = 'failed'; error = $_.Exception.Message })
+            }
+        }
+    } catch {
+        $stopped += @([ordered]@{ id = 0; path = ''; status = 'failed'; error = $_.Exception.Message })
+    }
+    return @($stopped)
+}
+
+function Repair-BootstrapCodexDesktop {
+    $before = Get-BootstrapCodexDesktopDiagnostics
+    $runtimeResult = [ordered]@{ status = 'skipped'; reason = 'vcpp-runtime-present-or-not-needed' }
+    if (@($before['issues']) -contains 'vcpp-redist-missing-for-codex-desktop') {
+        $runtimeResult = Ensure-BootstrapCodexDesktopVcppRuntime
+    }
+
+    $stateResults = @()
+    foreach ($path in @(Get-BootstrapCodexDesktopStatePaths)) {
+        $stateResults += @(Repair-BootstrapCodexDesktopStateFile -Path $path -DisableWslFallback)
+    }
+
+    $beforePackage = ConvertTo-BootstrapHashtable -InputObject $before['package']
+    $processResults = @(Repair-BootstrapCodexDesktopProcesses -CurrentPackageFullName ([string]$beforePackage['packageFullName']))
+    $after = Get-BootstrapCodexDesktopDiagnostics
+
+    $repairedCount = @($stateResults | Where-Object { [string]$_.status -eq 'repaired' }).Count
+    $stoppedCount = @($processResults | Where-Object { [string]$_.status -eq 'stopped' }).Count
+    $runtimeApplied = (@('installed', 'attempted') -contains [string]$runtimeResult['status'])
+    $hadStaleUpdate = (@($before['issues']) -contains 'codex-desktop-update-stale-process-or-log')
+    $hadCrash0135 = (@($before['issues']) -contains 'codex-app-server-crash-0xc0000135-epipe')
+
+    $status = if ($repairedCount -gt 0 -or $stoppedCount -gt 0 -or $runtimeApplied) {
+        'repaired'
+    } elseif ($hadStaleUpdate -and -not [string]::IsNullOrWhiteSpace([string]$beforePackage['version'])) {
+        'ready-to-reopen'
+    } elseif ($hadCrash0135) {
+        'action-required'
+    } elseif ([string]$after['status'] -eq 'healthy') {
+        'healthy'
+    } else {
+        'audited'
+    }
+
+    $note = switch ($status) {
+        'repaired' { if ($runtimeApplied) { 'Codex Desktop runtime/state/process repair applied.' } else { 'Codex Desktop state/process repair applied.' } }
+        'ready-to-reopen' { 'Ultimo crash usou pacote antigo; pacote atual ja instalado. Reabra Codex Desktop.' }
+        'action-required' { 'Codex Desktop ainda registra 0xC0000135/EPIPE; reinstale/atualize OpenAI.Codex se reabrir falhar.' }
+        'healthy' { 'Codex Desktop diagnostics healthy.' }
+        default { 'Codex Desktop audited.' }
+    }
+
+    return [ordered]@{
+        status = $status
+        note = $note
+        before = $before
+        after = $after
+        runtimeResult = $runtimeResult
+        stateResults = @($stateResults)
+        processResults = @($processResults)
+    }
+}
+
 function Ensure-Uv {
     $uvExe = Resolve-CommandPath -Name 'uv'
     if ($uvExe) {
@@ -4210,10 +4678,14 @@ function Ensure-OpenCode {
     $userProfileDir = Get-BootstrapUserHomePath
     $binDir = Join-Path $userProfileDir '.opencode\bin'
     $exe = Join-Path $binDir 'opencode.exe'
+    $resolvedOpenCode = Resolve-CommandPath -Name 'opencode'
 
     if (Test-Path $exe) {
         $ver = & $exe --version
         Write-Log "opencode já instalado: $ver ($exe)"
+    } elseif ($resolvedOpenCode) {
+        $ver = Invoke-NativeFirstLine -Exe $resolvedOpenCode -Args @('--version')
+        Write-Log "opencode ja instalado: $ver ($resolvedOpenCode)"
     } else {
         Write-Log 'Instalando opencode via script oficial...'
         $exitCode = Invoke-NativeWithRetry -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://opencode.ai/install | bash') -OperationName 'instalacao do opencode via script oficial'
@@ -4256,6 +4728,14 @@ function Ensure-OpenClaw {
     Write-Log 'Instalando OpenClaw (openclaw) via npm -g...'
     $exitCode = Invoke-NpmWithLog -NpmCmd $NpmCmd -Args @('install', '-g', 'openclaw@latest')
     if ($exitCode -ne 0) {
+        if (Test-Path $openclawCmd) {
+            $ver = Invoke-NativeFirstLine -Exe $openclawCmd -Args @('--version')
+            if (-not [string]::IsNullOrWhiteSpace([string]$ver)) {
+                Write-Log ("OpenClaw npm retornou exit={0}, mas o binario responde: {1} ({2}). Continuando." -f $exitCode, $ver, $openclawCmd) 'WARN'
+                return
+            }
+        }
+
         Write-Log 'Falha ao instalar OpenClaw. Tentando limpeza e retry...' 'WARN'
 
         foreach ($p in @($openclawModuleDir, $openclawCmd, (Join-Path $npmPrefix 'openclaw.ps1'), (Join-Path $npmPrefix 'openclaw'))) {
@@ -4272,7 +4752,16 @@ function Ensure-OpenClaw {
         }
 
         $exitCode2 = Invoke-NpmWithLog -NpmCmd $NpmCmd -Args @('install', '-g', 'openclaw@latest', '--force')
-        if ($exitCode2 -ne 0) { throw "Falha ao instalar OpenClaw via npm (mesmo apos retry) (exit=$exitCode2)." }
+        if ($exitCode2 -ne 0) {
+            if (Test-Path $openclawCmd) {
+                $ver = Invoke-NativeFirstLine -Exe $openclawCmd -Args @('--version')
+                if (-not [string]::IsNullOrWhiteSpace([string]$ver)) {
+                    Write-Log ("OpenClaw npm retry retornou exit={0}, mas o binario responde: {1} ({2}). Continuando." -f $exitCode2, $ver, $openclawCmd) 'WARN'
+                    return
+                }
+            }
+            throw "Falha ao instalar OpenClaw via npm (mesmo apos retry) (exit=$exitCode2)."
+        }
     }
 
     if (-not (Test-Path $openclawCmd)) { throw "Instalação do OpenClaw concluída, mas nao encontrei: $openclawCmd" }
@@ -4282,19 +4771,30 @@ function Ensure-OpenClaw {
 
 function Ensure-HermesProjectOpenCloudConfig {
     param([Parameter(Mandatory = $true)][hashtable]$State)
-    $root = if (-not [string]::IsNullOrWhiteSpace([string]$State.CloneBaseDir) -and (Test-Path ([string]$State.CloneBaseDir))) { [string]$State.CloneBaseDir } else { (Get-Location).Path }
-    $dir = Join-Path $root '.hermes'
-    $path = Join-Path $dir 'opencloud.json'
-    $null = New-Item -Path $dir -ItemType Directory -Force
-    Write-BootstrapJsonFile -Path $path -Value ([ordered]@{
-        schemaVersion = 1
-        generatedAt = (Get-Date).ToString('o')
-        tool = 'hermes'
-        opencloud = [ordered]@{
-            enabled = $true
-            mode = 'project'
+    $path = Get-BootstrapHermesConfigPath -State $State
+    if ([string]::IsNullOrWhiteSpace($path)) { throw 'Hermes: caminho de config nao resolvido.' }
+    $settings = @{}
+    if (Test-Path $path) {
+        try {
+            $settings = Read-BootstrapJsonFile -Path $path
+            if (-not ($settings -is [hashtable])) { $settings = @{} }
+        } catch {
+            $backupPath = Backup-BootstrapFile -Path $path
+            if ($backupPath) {
+                Write-Log ("Hermes: config invalido; backup criado: {0}" -f $backupPath) 'WARN'
+            }
+            $settings = @{}
         }
-    })
+    }
+    $settings['schemaVersion'] = 1
+    $settings['generatedAt'] = (Get-Date).ToString('o')
+    $settings['tool'] = 'hermes'
+    $opencloud = Ensure-BootstrapNamedMap -Parent $settings -Name 'opencloud'
+    $opencloud['enabled'] = $true
+    if (-not $opencloud.ContainsKey('mode') -or [string]::IsNullOrWhiteSpace([string]$opencloud['mode'])) {
+        $opencloud['mode'] = 'project'
+    }
+    Write-BootstrapJsonFile -Path $path -Value $settings
     Write-Log "Hermes: config OpenCloud no projeto atualizado: $path"
 }
 
@@ -5429,6 +5929,7 @@ function Get-BootstrapOnDemandCategoryById {
         'opencode' { return 'ia' }
         'codex-cli' { return 'ia' }
         'gemini-cli' { return 'ia' }
+        'kilo-cli' { return 'ia' }
         'ollama' { return 'ia' }
         'lm-studio' { return 'ia' }
         'cherry-studio' { return 'ia' }
@@ -5524,6 +6025,7 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'opencode' -DisplayName 'OpenCode CLI' -Components @('opencode') -TargetApps @('opencode') -ProbePaths @('$env:USERPROFILE\.opencode\bin\opencode.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'codex-cli' -DisplayName 'Codex CLI' -Components @('codex-cli') -TargetApps @('codex') -ProbePaths @('$env:APPDATA\npm\codex.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'gemini-cli' -DisplayName 'Gemini CLI' -Components @('gemini-cli') -TargetApps @('gemini') -ProbePaths @('$env:APPDATA\npm\gemini.cmd') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'kilo-cli' -DisplayName 'Kilo CLI' -Components @('kilo-cli') -TargetApps @('kilo','kilocode') -ProbePaths @('$env:APPDATA\npm\kilo.cmd','$env:APPDATA\npm\kilocode.cmd','$env:USERPROFILE\.local\share\kilo\auth.json') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'ollama' -DisplayName 'Ollama' -Components @('ollama') -TargetApps @('ollama') -ProbePaths @('$env:LOCALAPPDATA\Programs\Ollama\ollama.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'lm-studio' -DisplayName 'LM Studio' -Components @('lm-studio') -TargetApps @('lm studio') -ProbePaths @('$env:LOCALAPPDATA\Programs\LM Studio\LM Studio.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'cherry-studio' -DisplayName 'Cherry Studio' -Components @('cherry-studio') -TargetApps @('cherry studio') -ProbePaths @('$env:APPDATA\CherryStudio') -Profiles @('desktop','dev')
@@ -5618,6 +6120,7 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'steamdeck-control'; displayName = 'Steam Deck Control'; description = 'Ferramentas de modo handheld, dock, audio e recovery.' }
         [ordered]@{ id = 'dev-ai'; displayName = 'Dev / IA'; description = 'IDEs, CLIs de IA, MCPs e manifesto de chaves.' }
         [ordered]@{ id = 'local-ai-containers'; displayName = 'IA Local / Containers'; description = 'Ollama, Docker e Open WebUI sob demanda.' }
+        [ordered]@{ id = 'ai-agent-performance'; displayName = 'Performance Agentes IA'; description = 'Ajustes conservadores, auditaveis e reversiveis para baixa latencia de agentes.' }
         [ordered]@{ id = 'browser-startup'; displayName = 'Navegadores / Startup'; description = 'Edge e Chrome sem processos de fundo desnecessarios.' }
         [ordered]@{ id = 'connectivity'; displayName = 'Conectividade'; description = 'Streaming, VPN mesh, sync e remote desktop preservados.' }
         [ordered]@{ id = 'capture-creator'; displayName = 'Captura / Creator'; description = 'OBS, ShareX, RTSS overlay e apps criativos sem autostart.' }
@@ -5655,7 +6158,10 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'notepadpp-defaults'; category = 'dev-ai'; displayName = 'Notepad++ defaults'; description = 'Instala plugins oficiais curados, UDLs oficiais/custom, NppOpenAI.ini seguro e deixa LSP alpha fora do default.'; targetApps = @('notepad++'); probePaths = @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Programs\Notepad++\notepad++.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual') }
         [ordered]@{ id = 'claude-code-defaults'; category = 'dev-ai'; displayName = 'Claude Code defaults'; description = 'Mantem settings, plugins e rules de Claude Code.'; targetApps = @('claude code'); probePaths = @('$env:USERPROFILE\.claude\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'opencode-auth-config'; category = 'dev-ai'; displayName = 'OpenCode auth/config'; description = 'Usa manifesto de chaves para auth/config do OpenCode.'; targetApps = @('opencode'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.local\share\opencode\auth.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
+        [ordered]@{ id = 'ai-agent-byok-config'; category = 'dev-ai'; displayName = 'AI agent BYOK config'; description = 'Sincroniza manifesto de APIs para OpenCode, OpenClaw, Hermes, Kilo, Cline e Roo.'; targetApps = @('opencode','openclaw','hermes','kilo','kilocode','cline','roo code'); probePaths = @('$env:USERPROFILE\.local\share\opencode\auth.json','$env:USERPROFILE\.openclaw\openclaw.json','$env:USERPROFILE\.local\share\kilo\auth.json','$env:APPDATA\Code\User\globalStorage'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file') }
+        [ordered]@{ id = 'ai-agent-workflow-context-pack'; category = 'dev-ai'; displayName = 'AI workflow context pack'; description = 'Gera regras seguras sobre task splitting, hygiene de contexto, QA e modelos locais sem acao destrutiva.'; targetApps = @('opencode','openclaw','hermes','kilo','cline','roo code','continue'); probePaths = @('AGENTS.md','.clinerules','.continue'); requiresAdmin = $false; defaultMode = 'recommended'; riskTier = 'conservative'; securityImpact = $false; rollbackScope = 'backup-file'; safetyNotes = @('Config/rules apenas', 'Nao executa comandos de sistema', 'Nao roteia Gemini fora do Antigravity'); profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file'); installComponents = @('agent-skills') }
         [ordered]@{ id = 'codex-cli-env'; category = 'dev-ai'; displayName = 'Codex CLI env'; description = 'Audita variaveis/chaves para Codex CLI e apps de agente.'; targetApps = @('codex cli','codex'); probePaths = @('$env:APPDATA\npm\codex.cmd','$env:LOCALAPPDATA\Microsoft\WindowsApps\codex.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'codex-desktop-repair'; category = 'dev-ai'; displayName = 'Codex Desktop repair'; description = 'Audita e repara EPIPE/0xC0000135 do Codex Desktop: estado WSL, update stale, logs e config.'; targetApps = @('codex desktop','openai codex','codex'); probePaths = @('$env:LOCALAPPDATA\Packages\OpenAI.Codex_2p2nqsd0c76g0','$env:USERPROFILE\.codex\.codex-global-state.json','$env:USERPROFILE\.codex\config.toml'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit','repair','config-file'); rollback = @('backup-file','manual') }
         [ordered]@{ id = 'antigravity-settings'; category = 'dev-ai'; displayName = 'Antigravity settings'; description = 'Ativa env OpenAI-compatible (ex: Kimi/Moonshot) para uso via Antigravity e CLIs.'; targetApps = @('antigravity'); probePaths = @('$env:LOCALAPPDATA\Programs\Antigravity'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('manual') }
         [ordered]@{ id = 'openclaude-cli-env'; category = 'dev-ai'; displayName = 'OpenClaude CLI env'; description = 'Prepara env OpenAI-compatible (OPENAI_* + CLAUDE_CODE_USE_OPENAI) para OpenClaude CLI.'; targetApps = @('openclaude'); probePaths = @('$env:APPDATA\npm\openclaude.cmd','$env:APPDATA\npm\openclaude.ps1'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('manual') }
         [ordered]@{ id = 'cherry-studio-manual'; category = 'dev-ai'; displayName = 'Cherry Studio manual'; description = 'Marca setup manual de modelos/chaves no Cherry Studio.'; targetApps = @('cherry studio'); probePaths = @('$env:APPDATA\CherryStudio'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
@@ -5664,6 +6170,14 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'ollama-dev-session'; category = 'local-ai-containers'; displayName = 'Ollama sob demanda'; description = 'Evita tratar Ollama como requisito de Game - Steam Deck.'; targetApps = @('ollama'); probePaths = @('$env:USERPROFILE\.ollama'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
         [ordered]@{ id = 'docker-dev-session'; category = 'local-ai-containers'; displayName = 'Docker sob demanda'; description = 'Docker fica preferencialmente em Desktop/Dev, nao no modo jogo.'; targetApps = @('docker desktop','docker'); probePaths = @('$env:APPDATA\Docker'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
         [ordered]@{ id = 'openwebui-dev-session'; category = 'local-ai-containers'; displayName = 'Open WebUI sob demanda'; description = 'Open WebUI fica em Desktop/Dev e nao inicia junto ao console.'; targetApps = @('open webui','openwebui'); probePaths = @(); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
+
+        [ordered]@{ id = 'windows-ai-visual-performance'; category = 'ai-agent-performance'; displayName = 'Windows visual performance'; description = 'Desativa transparencias e usa perfil visual de melhor desempenho via HKCU.'; targetApps = @('windows'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'recommended'; riskTier = 'conservative'; securityImpact = $false; rollbackScope = 'registry-snapshot'; safetyNotes = @('HKCU apenas', 'Nao desativa seguranca', 'Rollback restaura valores anteriores'); profiles = @('dev','desktop'); actions = @('registry','audit'); rollback = @('registry-snapshot') }
+        [ordered]@{ id = 'windows-ai-delivery-optimization-http-only'; category = 'ai-agent-performance'; displayName = 'Delivery Optimization HTTP only'; description = 'Define Delivery Optimization sem peering usando DODownloadMode=0.'; targetApps = @('windows update'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $true; defaultMode = 'recommended'; riskTier = 'advanced'; securityImpact = $false; rollbackScope = 'registry-snapshot'; safetyNotes = @('HKLM requer admin', 'Sem SmartScreen/VBS', 'Rollback restaura valor anterior'); profiles = @('dev','desktop'); actions = @('registry','audit'); rollback = @('registry-snapshot') }
+        [ordered]@{ id = 'windows-ai-docker-high-priority'; category = 'ai-agent-performance'; displayName = 'Docker high priority session'; description = 'Eleva prioridade dos processos Docker ja em execucao, sem persistir no sistema.'; targetApps = @('docker desktop','docker'); probePaths = @('$env:ProgramFiles\Docker\Docker\Docker Desktop.exe','$env:APPDATA\Docker'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'recommended'; riskTier = 'conservative'; securityImpact = $false; rollbackScope = 'session-only'; safetyNotes = @('Sessao atual apenas', 'Nao altera servicos', 'Nao bloqueia se Docker ausente'); profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'windows-ai-security-posture-audit'; category = 'ai-agent-performance'; displayName = 'Security posture audit'; description = 'Audita VBS/Core Isolation, SmartScreen, indexacao, Defender, servicos e Docker sem aplicar mudancas.'; targetApps = @('windows security'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'recommended'; riskTier = 'conservative'; securityImpact = $false; rollbackScope = 'audit-only'; safetyNotes = @('Somente leitura', 'Nao desativa SmartScreen', 'Nao desativa VBS/Core Isolation'); profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'windows-ai-workspace-defender-exclusion'; category = 'ai-agent-performance'; displayName = 'Defender workspace exclusion'; description = 'Adiciona exclusao do Defender somente para workspace/clone root resolvido.'; targetApps = @('windows defender'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $true; defaultMode = 'opt-in'; riskTier = 'advanced'; securityImpact = $true; rollbackScope = 'defender-exclusion'; safetyNotes = @('Opt-in explicito', 'Escopo limitado a workspace/clone root', 'Rollback remove apenas exclusoes criadas pelo bootstrap'); profiles = @('dev','desktop'); actions = @('security','audit'); rollback = @('defender-exclusion') }
+        [ordered]@{ id = 'windows-ai-node-python-defender-process-exclusion'; category = 'ai-agent-performance'; displayName = 'Defender Node/Python process exclusion'; description = 'Adiciona exclusoes do Defender para caminhos reais de node/python encontrados.'; targetApps = @('node','python','windows defender'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $true; defaultMode = 'opt-in'; riskTier = 'aggressive'; securityImpact = $true; rollbackScope = 'defender-exclusion'; safetyNotes = @('Opt-in explicito', 'Usa caminho completo do executavel', 'Nao usa nomes soltos como python.exe/node.exe'); profiles = @('dev','desktop'); actions = @('security','audit'); rollback = @('defender-exclusion') }
+        [ordered]@{ id = 'windows-ai-services-deep-tuning'; category = 'ai-agent-performance'; displayName = 'Windows services deep tuning'; description = 'Para e desativa DiagTrack, dmwappushservice, WSearch e SysMain apenas por opt-in.'; targetApps = @('windows services'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $true; defaultMode = 'opt-in'; riskTier = 'aggressive'; securityImpact = $true; rollbackScope = 'service-state'; safetyNotes = @('Opt-in agressivo', 'Pode afetar busca/diagnostico/cache', 'Rollback restaura StartType e estado anterior'); profiles = @('dev','desktop'); actions = @('service','audit'); rollback = @('service-state') }
 
         [ordered]@{ id = 'edge-background-off'; category = 'browser-startup'; displayName = 'Edge background off'; description = 'Desliga startup boost/background do Edge via HKCU.'; targetApps = @('microsoft edge','edge'); probePaths = @('$env:LOCALAPPDATA\Microsoft\Edge\User Data'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-handheld','game-docked'); actions = @('registry','startup'); rollback = @('registry-snapshot') }
         [ordered]@{ id = 'chrome-background-off'; category = 'browser-startup'; displayName = 'Chrome background off'; description = 'Desliga apps em background do Chrome via policy HKCU.'; targetApps = @('google chrome','chrome'); probePaths = @('$env:LOCALAPPDATA\Google\Chrome\User Data'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-handheld','game-docked'); actions = @('registry','startup'); rollback = @('registry-snapshot') }
@@ -5793,6 +6307,11 @@ function Test-BootstrapAppTuningItemInstalled {
         [Parameter(Mandatory = $true)]$InstalledInventory
     )
 
+    $itemMap = ConvertTo-BootstrapHashtable -InputObject $Item
+    if (($itemMap -is [hashtable]) -and $itemMap.ContainsKey('alwaysAvailable') -and [bool]$itemMap['alwaysAvailable']) {
+        return $true
+    }
+
     $inventory = ConvertTo-BootstrapHashtable -InputObject $InstalledInventory
     $apps = if ((Test-BootstrapMapContainsKey -Map $inventory -Key 'apps') -and ($inventory['apps'] -is [hashtable])) { $inventory['apps'] } else { @{} }
     $paths = if ((Test-BootstrapMapContainsKey -Map $inventory -Key 'paths') -and ($inventory['paths'] -is [hashtable])) { $inventory['paths'] } else { @{} }
@@ -5826,6 +6345,50 @@ function Test-BootstrapAppTuningItemInstalled {
     }
 
     return $false
+}
+
+function Get-BootstrapAppTuningItemValue {
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()]$Default = $null
+    )
+
+    $itemMap = ConvertTo-BootstrapHashtable -InputObject $Item
+    if (($itemMap -is [hashtable]) -and $itemMap.ContainsKey($Name)) {
+        return $itemMap[$Name]
+    }
+    return $Default
+}
+
+function Get-BootstrapAppTuningRiskTier {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    $explicit = [string](Get-BootstrapAppTuningItemValue -Item $Item -Name 'riskTier' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($explicit)) { return $explicit }
+    $defaultMode = [string](Get-BootstrapAppTuningItemValue -Item $Item -Name 'defaultMode' -Default 'opt-in')
+    $requiresAdmin = [bool](Get-BootstrapAppTuningItemValue -Item $Item -Name 'requiresAdmin' -Default $false)
+    if ($defaultMode -eq 'recommended' -and -not $requiresAdmin) { return 'conservative' }
+    if ($defaultMode -eq 'recommended') { return 'advanced' }
+    return 'opt-in'
+}
+
+function Get-BootstrapAppTuningRollbackScope {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    $explicit = [string](Get-BootstrapAppTuningItemValue -Item $Item -Name 'rollbackScope' -Default '')
+    if (-not [string]::IsNullOrWhiteSpace($explicit)) { return $explicit }
+    $rollback = @(Get-BootstrapAppTuningItemValue -Item $Item -Name 'rollback' -Default @())
+    if ($rollback.Count -gt 0) { return (@($rollback) -join ',') }
+    return 'manual'
+}
+
+function Get-BootstrapAppTuningSafetyNotes {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    $notes = @(Get-BootstrapAppTuningItemValue -Item $Item -Name 'safetyNotes' -Default @())
+    if ($notes.Count -gt 0) { return @($notes | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }) }
+    return @('Ajuste segue contrato de AppTuning e nao deve sobrescrever configuracoes fora do item.')
 }
 
 function Get-BootstrapDefaultAppTuningMode {
@@ -5904,6 +6467,11 @@ function Resolve-BootstrapAppTuningSelection {
         $item = $itemLookup[$itemId]
         $installed = Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $inventory
         $status = if ($installed) { 'pending' } else { 'skipped' }
+        $riskTier = Get-BootstrapAppTuningRiskTier -Item $item
+        $securityImpact = [bool](Get-BootstrapAppTuningItemValue -Item $item -Name 'securityImpact' -Default $false)
+        $rollbackScope = Get-BootstrapAppTuningRollbackScope -Item $item
+        $safetyNotes = @(Get-BootstrapAppTuningSafetyNotes -Item $item)
+        $alwaysAvailable = [bool](Get-BootstrapAppTuningItemValue -Item $item -Name 'alwaysAvailable' -Default $false)
         $resolvedItems += @([ordered]@{
             id = [string]$item.id
             category = [string]$item.category
@@ -5916,6 +6484,11 @@ function Resolve-BootstrapAppTuningSelection {
             profiles = @($item.profiles)
             actions = @($item.actions)
             rollback = @($item.rollback)
+            alwaysAvailable = $alwaysAvailable
+            riskTier = $riskTier
+            securityImpact = $securityImpact
+            rollbackScope = $rollbackScope
+            safetyNotes = @($safetyNotes)
             installed = $installed
             status = $status
         })
@@ -5963,7 +6536,9 @@ function Get-BootstrapAppTuningInstallComponents {
         'notepadpp-defaults' = @('notepadpp')
         'claude-code-defaults' = @('claude-code')
         'opencode-auth-config' = @('opencode')
+        'ai-agent-byok-config' = @('bootstrap-secrets','vscode-extensions','opencode','openclaw','hermes','kilo-cli')
         'codex-cli-env' = @('codex-cli')
+        'codex-desktop-repair' = @('codex-installer','codex-cli','vcpp-redist')
         'antigravity-settings' = @('antigravity')
         'openclaude-cli-env' = @('openclaude-cli')
         'cherry-studio-manual' = @('cherry-studio')
@@ -6007,6 +6582,15 @@ function Test-BootstrapAppTuningRegistryConfigured {
                 $policy = Get-ItemProperty -Path 'HKCU:\Software\Policies\Google\Chrome' -ErrorAction SilentlyContinue
                 return ($policy -and [string]$policy.BackgroundModeEnabled -eq '0')
             }
+            'windows-ai-visual-performance' {
+                $visual = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -ErrorAction SilentlyContinue
+                $personalize = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction SilentlyContinue
+                return ($visual -and [string]$visual.VisualFXSetting -eq '2' -and $personalize -and [string]$personalize.EnableTransparency -eq '0')
+            }
+            'windows-ai-delivery-optimization-http-only' {
+                $policy = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' -ErrorAction SilentlyContinue
+                return ($policy -and [string]$policy.DODownloadMode -eq '0')
+            }
             'notepadpp-defaults' {
                 $installInfo = Get-BootstrapNotepadPlusPlusInstallInfo
                 if (-not [bool]$installInfo.Installed) { return $false }
@@ -6046,6 +6630,10 @@ function Get-BootstrapAppTuningStatusRows {
         }
         $updatedState = if ($installed) { 'check' } else { 'not-installed' }
         $installComponents = @(Get-BootstrapAppTuningInstallComponents -Item $item)
+        $riskTier = Get-BootstrapAppTuningRiskTier -Item $item
+        $securityImpact = [bool](Get-BootstrapAppTuningItemValue -Item $item -Name 'securityImpact' -Default $false)
+        $rollbackScope = Get-BootstrapAppTuningRollbackScope -Item $item
+        $safetyNotes = @(Get-BootstrapAppTuningSafetyNotes -Item $item)
 
         $rows += @([ordered]@{
             id = $id
@@ -6054,7 +6642,11 @@ function Get-BootstrapAppTuningStatusRows {
             app = (@($item.targetApps) -join ', ')
             description = [string]$item.description
             profiles = @($item.profiles)
-            risk = [string]$item.defaultMode
+            risk = $riskTier
+            riskTier = $riskTier
+            securityImpact = $securityImpact
+            rollbackScope = $rollbackScope
+            safetyNotes = @($safetyNotes)
             requiresAdmin = [bool]$item.requiresAdmin
             installed = $installed
             configured = $configured
@@ -6349,7 +6941,7 @@ function Get-BootstrapPreferredFilePath {
 }
 
 function Get-BootstrapSecretsKnownTargets {
-    return @('userEnv', 'claudeCode', 'claudeDesktop', 'cursor', 'windsurf', 'trae', 'openCode', 'vsCode', 'roo', 'cline', 'continue', 'zed', 'zCode', 'openClaw', 'comet')
+    return @('userEnv', 'claudeCode', 'claudeDesktop', 'cursor', 'windsurf', 'trae', 'openCode', 'vsCode', 'roo', 'cline', 'continue', 'zed', 'zCode', 'openClaw', 'hermes', 'kilo', 'antigravity', 'comet')
 }
 
 function Get-BootstrapSecretsProviderCatalog {
@@ -6409,11 +7001,11 @@ function Get-BootstrapSecretsProviderCatalog {
             pricingUrl = 'https://ai.google.dev/gemini-api/docs/pricing'
             requiredFields = @('apiKey')
             supportsValidation = $true
-            supportsOpenCode = $true
-            supportsComet = $true
-            openCodeId = 'google'
-            appTargets = @('claudeCode', 'openCode', 'geminiCli', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
-            creationNotes = 'Crie a chave no Google AI Studio e habilite billing quando necessario.'
+            supportsOpenCode = $false
+            supportsComet = $false
+            openCodeId = ''
+            appTargets = @('antigravity')
+            creationNotes = 'Chave Gemini fica restrita a Antigravity/Google; nao propague para outros agentes.'
             defaults = [ordered]@{}
             aliases = @('google', 'gemini', 'google ai', 'google ai studio', 'googlestudio')
             tokenPatterns = @('AIza[0-9A-Za-z\-_]{20,}')
@@ -7101,6 +7693,33 @@ function Get-BootstrapAppCapabilityCatalog {
             manualOnly = $false
             notes = 'Recebe auth.json, opencode.json e AGENTS.md.'
         }
+        openClaw = [ordered]@{
+            displayName = 'OpenClaw'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $true
+            authByEnv = $true
+            manualOnly = $false
+            notes = 'Recebe env/MCP por arquivo local preservado.'
+        }
+        hermes = [ordered]@{
+            displayName = 'Hermes'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $true
+            authByEnv = $true
+            manualOnly = $false
+            notes = 'Recebe .hermes/opencloud.json com env de provedores.'
+        }
+        kilo = [ordered]@{
+            displayName = 'Kilo CLI'
+            autoInstall = $true
+            alwaysOnRules = $true
+            authByFile = $true
+            authByEnv = $true
+            manualOnly = $false
+            notes = 'Compatibilidade OpenCode: auth.json + opencode.json.'
+        }
         comet = [ordered]@{
             displayName = 'Comet'
             autoInstall = $true
@@ -7335,13 +7954,16 @@ function Get-BootstrapAppChannelCoverageSummary {
     )
 
     $coverageEntries = @()
-    $supportedTargets = @('vsCode', 'cursor', 'windsurf', 'trae', 'openCode', 'roo', 'cline', 'zed', 'zCode')
+    $supportedTargets = @('vsCode', 'cursor', 'windsurf', 'trae', 'openCode', 'openClaw', 'hermes', 'kilo', 'roo', 'cline', 'zed', 'zCode')
     $labelMap = [ordered]@{
         vsCode = 'VS Code / Insiders / Agents'
         cursor = 'Cursor'
         windsurf = 'Windsurf'
         trae = 'Trae'
         openCode = 'OpenCode'
+        openClaw = 'OpenClaw'
+        hermes = 'Hermes'
+        kilo = 'Kilo CLI'
         roo = 'Roo Code (stable/nightly)'
         cline = 'Cline (stable/nightly)'
         zed = 'Zed'
@@ -7364,13 +7986,12 @@ function Get-BootstrapAppChannelCoverageSummary {
         }
 
         $hasByok = $false
-        if ($targetName -eq 'openCode') {
+        if ($targetName -in @('openCode', 'kilo')) {
             $hasByok = ([string]$OpenAiCompatible['status'] -eq 'selected')
         } else {
             $hasByok = (
                 ($envMap.ContainsKey('OPENAI_API_KEY') -and -not [string]::IsNullOrWhiteSpace([string]$envMap['OPENAI_API_KEY'])) -or
-                ($envMap.ContainsKey('ANTHROPIC_API_KEY') -and -not [string]::IsNullOrWhiteSpace([string]$envMap['ANTHROPIC_API_KEY'])) -or
-                ($envMap.ContainsKey('GEMINI_API_KEY') -and -not [string]::IsNullOrWhiteSpace([string]$envMap['GEMINI_API_KEY']))
+                ($envMap.ContainsKey('ANTHROPIC_API_KEY') -and -not [string]::IsNullOrWhiteSpace([string]$envMap['ANTHROPIC_API_KEY']))
             )
         }
         $hasMcp = (@($mcpMap.Keys).Count -gt 0)
@@ -7543,7 +8164,7 @@ function Get-BootstrapApiInventory {
     }
 
     $openAiCompat = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders @('mimo', 'moonshot', 'openrouter', 'deepseek', 'openai', 'xai') -SecretsData $normalized
-    if (-not ($openAiCompat -is [hashtable])) {
+    if (-not ($openAiCompat -is [System.Collections.IDictionary])) {
         $openAiCompat = [ordered]@{
             status = 'no-compatible-provider'
             provider = ''
@@ -7812,8 +8433,6 @@ function Get-BootstrapSecretsTemplate {
         OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
         OPENAI_BASE_URL = '{{activeProviders.openai.baseUrl}}'
         OPENAI_ORGANIZATION = '{{activeProviders.openai.organizationId}}'
-        GEMINI_API_KEY = '{{activeProviders.google.apiKey}}'
-        GOOGLE_API_KEY = '{{activeProviders.google.apiKey}}'
         XAI_API_KEY = '{{activeProviders.xai.apiKey}}'
         XAI_BASE_URL = '{{activeProviders.xai.baseUrl}}'
         OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
@@ -7845,8 +8464,6 @@ function Get-BootstrapSecretsTemplate {
                 OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
                 OPENAI_BASE_URL = '{{activeProviders.openai.baseUrl}}'
                 OPENAI_ORGANIZATION = '{{activeProviders.openai.organizationId}}'
-                GEMINI_API_KEY = '{{activeProviders.google.apiKey}}'
-                GOOGLE_API_KEY = '{{activeProviders.google.apiKey}}'
                 XAI_API_KEY = '{{activeProviders.xai.apiKey}}'
                 XAI_BASE_URL = '{{activeProviders.xai.baseUrl}}'
                 OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
@@ -7865,8 +8482,6 @@ function Get-BootstrapSecretsTemplate {
                     OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
                     OPENAI_BASE_URL = '{{activeProviders.openai.baseUrl}}'
                     OPENAI_ORGANIZATION = '{{activeProviders.openai.organizationId}}'
-                    GEMINI_API_KEY = '{{activeProviders.google.apiKey}}'
-                    GOOGLE_API_KEY = '{{activeProviders.google.apiKey}}'
                     XAI_API_KEY = '{{activeProviders.xai.apiKey}}'
                     XAI_BASE_URL = '{{activeProviders.xai.baseUrl}}'
                     OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
@@ -8003,8 +8618,6 @@ function Get-BootstrapSecretsTemplate {
                     OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
                     OPENAI_BASE_URL = '{{activeProviders.openai.baseUrl}}'
                     OPENAI_ORGANIZATION = '{{activeProviders.openai.organizationId}}'
-                    GEMINI_API_KEY = '{{activeProviders.google.apiKey}}'
-                    GOOGLE_API_KEY = '{{activeProviders.google.apiKey}}'
                     GITHUB_TOKEN = '{{activeProviders.github.token}}'
                     OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
                     OPENROUTER_BASE_URL = '{{activeProviders.openrouter.baseUrl}}'
@@ -8051,6 +8664,7 @@ function Get-BootstrapSecretsTemplate {
                 }
             }
             openClaw = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
                 mcpServers = [ordered]@{
                     github = [ordered]@{
                         disabled = $true
@@ -8060,6 +8674,34 @@ function Get-BootstrapSecretsTemplate {
                             GITHUB_TOKEN = '{{activeProviders.github.token}}'
                         }
                         alwaysAllow = @()
+                    }
+                }
+            }
+            hermes = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        disabled = $true
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
+                        alwaysAllow = @()
+                    }
+                }
+            }
+            kilo = [ordered]@{
+                env = ConvertTo-BootstrapHashtable -InputObject $sharedAiEnv
+                mcpServers = [ordered]@{
+                    github = [ordered]@{
+                        enabled = $false
+                        type = 'local'
+                        command = 'npx'
+                        args = @('-y', '@modelcontextprotocol/server-github')
+                        env = [ordered]@{
+                            GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                        }
                     }
                 }
             }
@@ -8110,6 +8752,7 @@ function Normalize-BootstrapSecretsData {
 
     $targetsCurrent = if ($normalized.ContainsKey('targets') -and ($normalized['targets'] -is [hashtable])) { $normalized['targets'] } else { @{} }
     $targets = Merge-BootstrapData -Defaults $template.targets -Current $targetsCurrent
+    $targets = Remove-BootstrapGeminiEnvFromNonAntigravityTargets -Targets (ConvertTo-BootstrapHashtable -InputObject $targets)
 
     return [ordered]@{
         '$schema' = [string]$template['$schema']
@@ -8186,6 +8829,32 @@ function Resolve-BootstrapSecretTemplates {
     }
 
     return $Value
+}
+
+function Remove-BootstrapGeminiEnvFromNonAntigravityTargets {
+    param([AllowNull()][hashtable]$Targets)
+
+    if (-not ($Targets -is [hashtable])) { return $Targets }
+    $blockedNames = @('GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GEMINI_API_KEY')
+    foreach ($targetName in @($Targets.Keys)) {
+        if ([string]$targetName -eq 'antigravity') { continue }
+        $target = ConvertTo-BootstrapHashtable -InputObject $Targets[$targetName]
+        if (-not ($target -is [hashtable])) { continue }
+
+        foreach ($name in $blockedNames) {
+            if ($target.ContainsKey($name)) { $target.Remove($name) | Out-Null }
+        }
+        if ($target.ContainsKey('env') -and ($target['env'] -is [hashtable])) {
+            $envMap = ConvertTo-BootstrapHashtable -InputObject $target['env']
+            foreach ($name in $blockedNames) {
+                if ($envMap.ContainsKey($name)) { $envMap.Remove($name) | Out-Null }
+            }
+            $target['env'] = $envMap
+        }
+
+        $Targets[$targetName] = $target
+    }
+    return $Targets
 }
 
 function Get-BootstrapActiveProviders {
@@ -8448,13 +9117,13 @@ function Get-BootstrapResolvedSecretsTargets {
     $resolvedTargets = ConvertTo-BootstrapHashtable -InputObject (Resolve-BootstrapSecretTemplates -Value $normalized['targets'] -SecretsData $context)
     if ($resolvedTargets -is [hashtable]) {
         $openAiCompat = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders @('mimo', 'moonshot', 'openrouter', 'deepseek', 'openai', 'xai') -SecretsData $normalized
-        if (($openAiCompat -is [hashtable]) -and [string]$openAiCompat['status'] -eq 'selected') {
+        if (($openAiCompat -is [System.Collections.IDictionary]) -and [string]$openAiCompat['status'] -eq 'selected') {
             $compatKey = [string]$openAiCompat['apiKey']
             $compatBaseUrl = [string]$openAiCompat['baseUrl']
             $compatProvider = [string]$openAiCompat['provider']
             $compatStage = [string]$openAiCompat['stage']
             if (-not [string]::IsNullOrWhiteSpace($compatKey) -and -not [string]::IsNullOrWhiteSpace($compatBaseUrl)) {
-                foreach ($targetName in @('userEnv', 'claudeCode', 'continue', 'cursor', 'windsurf', 'trae', 'vsCode', 'roo', 'cline', 'zed', 'zCode')) {
+                foreach ($targetName in @('userEnv', 'claudeCode', 'continue', 'cursor', 'windsurf', 'trae', 'vsCode', 'roo', 'cline', 'zed', 'zCode', 'openClaw', 'hermes', 'kilo')) {
                     if (-not ($resolvedTargets.ContainsKey($targetName) -and ($resolvedTargets[$targetName] -is [System.Collections.IDictionary])) ) { continue }
                     $target = ConvertTo-BootstrapHashtable -InputObject $resolvedTargets[$targetName]
 
@@ -9436,7 +10105,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['antigravity'] = New-BootstrapComponentDefinition -Name 'antigravity' -Description 'Google Antigravity.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Antigravity'; DisplayName = 'Antigravity'; ProbePaths = @("${env:LOCALAPPDATA}\Google\Antigravity\Antigravity.exe", "$env:ProgramFiles\Google\Antigravity\Antigravity.exe") }
     $catalog['autoclaw'] = New-BootstrapComponentDefinition -Name 'autoclaw' -Description 'AutoClaw.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZhipuAI.AutoClaw'; DisplayName = 'AutoClaw'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\AutoClaw\AutoClaw.exe", "$env:ProgramFiles\AutoClaw\AutoClaw.exe") }
     $catalog['perplexity'] = New-BootstrapComponentDefinition -Name 'perplexity' -Description 'Perplexity Comet.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Perplexity.Comet'; DisplayName = 'Perplexity'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Comet\Comet.exe", "$env:ProgramFiles\Comet\Comet.exe") }
-    $catalog['codex-installer'] = New-BootstrapComponentDefinition -Name 'codex-installer' -Description 'Codex installer desktop via winget.' -DependsOn @('system-core') -Kind 'codex-installer'
+    $catalog['codex-installer'] = New-BootstrapComponentDefinition -Name 'codex-installer' -Description 'Codex installer desktop via winget.' -DependsOn @('system-core', 'vcpp-redist') -Kind 'codex-installer'
     $catalog['ollama'] = New-BootstrapComponentDefinition -Name 'ollama' -Description 'Ollama local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Ollama.Ollama'; DisplayName = 'Ollama'; ProbePaths = @("${env:LOCALAPPDATA}\Ollama\ollama.exe", "$env:ProgramFiles\Ollama\ollama.exe") }
     $catalog['cherry-studio'] = New-BootstrapComponentDefinition -Name 'cherry-studio' -Description 'Cherry Studio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'kangfenmao.CherryStudio'; DisplayName = 'Cherry Studio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Cherry Studio\Cherry Studio.exe", "$env:ProgramFiles\Cherry Studio\Cherry Studio.exe") }
     $catalog['lm-studio'] = New-BootstrapComponentDefinition -Name 'lm-studio' -Description 'LM Studio local LLM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LMStudio.LMStudio'; DisplayName = 'LM Studio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\LM Studio\LM Studio.exe", "$env:ProgramFiles\LM Studio\LM Studio.exe") }
@@ -9453,6 +10122,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZedIndustries.Zed'; DisplayName = 'Zed'; ProbePaths = @("${env:LOCALAPPDATA}\Zed\Zed.exe", "$env:ProgramFiles\Zed\Zed.exe") }
     $catalog['opencode'] = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode CLI via script oficial.' -DependsOn @('git-core') -Kind 'opencode'
     $catalog['gemini-cli'] = New-BootstrapComponentDefinition -Name 'gemini-cli' -Description 'Gemini CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@google/gemini-cli'; DisplayName = 'Gemini CLI (@google/gemini-cli)' }
+    $catalog['kilo-cli'] = New-BootstrapComponentDefinition -Name 'kilo-cli' -Description 'Kilo CLI via npm -g.' -DependsOn @('node-core', 'bootstrap-secrets') -Kind 'npm' -Data @{ Package = '@kilocode/cli'; DisplayName = 'Kilo CLI (@kilocode/cli)' }
     $catalog['bonsai-cli'] = New-BootstrapComponentDefinition -Name 'bonsai-cli' -Description 'Bonsai CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@bonsai-ai/cli'; DisplayName = 'Bonsai CLI (@bonsai-ai/cli)' }
     $catalog['grok-cli'] = New-BootstrapComponentDefinition -Name 'grok-cli' -Description 'Grok CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@vibe-kit/grok-cli'; DisplayName = 'Grok CLI (@vibe-kit/grok-cli)' }
     $catalog['qwen-code'] = New-BootstrapComponentDefinition -Name 'qwen-code' -Description 'Qwen Code via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@qwen-code/qwen-code@latest'; DisplayName = 'Qwen Code (@qwen-code/qwen-code)' }
@@ -9463,7 +10133,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes via npm + OpenCloud config no projeto.' -DependsOn @('node-core') -Kind 'hermes'
     $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
     $catalog['bootstrap-mcps'] = New-BootstrapComponentDefinition -Name 'bootstrap-mcps' -Description 'Instala dependencias locais dos MCPs gerenciados e registra o estado da automacao.' -DependsOn @('bootstrap-secrets', 'node-core', 'python-core') -Kind 'bootstrap-mcps'
-    $catalog['vscode-extensions'] = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'Instala e configura extensões do VS Code e VS Code Insiders.' -DependsOn @('bootstrap-secrets', 'vscode', 'vscode-insiders') -Kind 'vscode-extensions'
+    $catalog['vscode-extensions'] = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'Instala e configura extensões do VS Code e VS Code Insiders quando presentes.' -DependsOn @('bootstrap-secrets', 'vscode') -Kind 'vscode-extensions'
     $catalog['claude-config'] = New-BootstrapComponentDefinition -Name 'claude-config' -Description 'Defaults e hooks do Claude Code.' -DependsOn @('git-core', 'claude-code', 'bootstrap-secrets') -Kind 'claude-config'
     $catalog['claude-plugins'] = New-BootstrapComponentDefinition -Name 'claude-plugins' -Description 'Instala plugins do Claude Code (LSP, markdown, code-review).' -DependsOn @('claude-code', 'claude-config') -Kind 'claude-plugins'
     $catalog['agent-skills'] = New-BootstrapComponentDefinition -Name 'agent-skills' -Description 'Instala e ativa skills de agentes, incluindo Caveman por padrao.' -DependsOn @('claude-config', 'vscode-extensions') -Kind 'agent-skills'
@@ -9561,10 +10231,10 @@ function Get-BootstrapComponentCatalog {
 function Get-BootstrapProfileCatalog {
     $catalog = [ordered]@{}
 
-    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para máquina nova.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
@@ -10710,6 +11380,22 @@ function Get-BootstrapOpenCodeAuthPath {
     ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.local\share\opencode\auth.json' } else { $null }))
 }
 
+function Get-BootstrapKiloConfigPath {
+    $userHome = Get-BootstrapUserHomePath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($userHome) { Join-Path $userHome '.config\kilo\opencode.json' }),
+        $(if ($userHome) { Join-Path $userHome '.config\kilo\kilo.json' }),
+        $(if ($userHome) { Join-Path $userHome '.config\kilo\config.json' })
+    ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.config\kilo\opencode.json' } else { $null }))
+}
+
+function Get-BootstrapKiloAuthPath {
+    $userHome = Get-BootstrapUserHomePath
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if ($userHome) { Join-Path $userHome '.local\share\kilo\auth.json' })
+    ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.local\share\kilo\auth.json' } else { $null }))
+}
+
 function Get-BootstrapOpenCodeProviderRecords {
     param([Parameter(Mandatory = $true)]$SecretsData)
 
@@ -10955,6 +11641,19 @@ function Get-BootstrapOpenClawConfigPath {
         $(if ($userHome) { Join-Path $userHome '.openclaw\openclaw.json' }),
         $(if ($appDataPath) { Join-Path $appDataPath 'clawdbot\clawdbot.json5' })
     ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.openclaw\openclaw.json' } else { $null }))
+}
+
+function Get-BootstrapHermesConfigPath {
+    param([AllowNull()][hashtable]$State = $null)
+
+    $root = ''
+    if (($State -is [hashtable]) -and -not [string]::IsNullOrWhiteSpace([string]$State.CloneBaseDir) -and (Test-Path ([string]$State.CloneBaseDir))) {
+        $root = [string]$State.CloneBaseDir
+    } elseif (-not [string]::IsNullOrWhiteSpace((Get-Location).Path)) {
+        $root = (Get-Location).Path
+    }
+    if ([string]::IsNullOrWhiteSpace($root)) { return $null }
+    return (Join-Path (Join-Path $root '.hermes') 'opencloud.json')
 }
 
 function Test-BootstrapSecretsProviderCredential {
@@ -11541,7 +12240,12 @@ function Ensure-BootstrapJsonTargetFile {
             $settings = Read-BootstrapJsonFile -Path $Path
             if (-not ($settings -is [hashtable])) { $settings = @{} }
         } catch {
-            Write-Log "$Label invalido em $Path. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." 'WARN'
+            $backupPath = Backup-BootstrapFile -Path $Path
+            if ($backupPath) {
+                Write-Log ("{0} invalido; backup criado: {1}" -f $Label, $backupPath) 'WARN'
+            } else {
+                Write-Log "$Label invalido em $Path. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." 'WARN'
+            }
             $settings = @{}
         }
     }
@@ -11567,6 +12271,13 @@ function Ensure-BootstrapJsonTargetFile {
     $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
     if ($before -eq $after) {
         return $false
+    }
+
+    if (Test-Path $Path) {
+        $backupPath = Backup-BootstrapFile -Path $Path
+        if ($backupPath) {
+            Write-Log ("Backup criado antes de atualizar {0}: {1}" -f $Label, $backupPath)
+        }
     }
 
     Write-BootstrapJsonFile -Path $Path -Value $settings
@@ -11746,6 +12457,67 @@ function Ensure-BootstrapOpenClawSecrets {
     }
 
     return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapOpenClawConfigPath) -Target $ResolvedTargets['openClaw'] -Label 'OpenClaw config')
+}
+
+function Ensure-BootstrapHermesSecrets {
+    param(
+        [hashtable]$ResolvedTargets,
+        [AllowNull()][hashtable]$State = $null
+    )
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('hermes') -or -not ($ResolvedTargets['hermes'] -is [hashtable])) {
+        return $false
+    }
+
+    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapHermesConfigPath -State $State) -Target $ResolvedTargets['hermes'] -Label 'Hermes OpenCloud')
+}
+
+function Ensure-BootstrapKiloSecrets {
+    param(
+        [hashtable]$ResolvedTargets,
+        [AllowNull()]$SecretsData = $null
+    )
+
+    if (-not ($ResolvedTargets -is [hashtable]) -or -not $ResolvedTargets.ContainsKey('kilo') -or -not ($ResolvedTargets['kilo'] -is [hashtable])) {
+        return $false
+    }
+
+    $configPath = Get-BootstrapKiloConfigPath
+    $kiloTarget = [ordered]@{}
+    $target = ConvertTo-BootstrapHashtable -InputObject $ResolvedTargets['kilo']
+    if ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable])) {
+        $kiloTarget['mcpServers'] = $target['mcpServers']
+    }
+    $mcpUpdated = Ensure-BootstrapJsonTargetFile -Path $configPath -Target $kiloTarget -Label 'Kilo CLI' -McpFormat 'opencode' -McpPropertyName 'mcp'
+    $authUpdated = $false
+    $providerConfigUpdated = $false
+    if ($null -ne $SecretsData) {
+        $authSummary = Ensure-BootstrapOpenCodeProviderAuth -SecretsData $SecretsData -AuthPath (Get-BootstrapKiloAuthPath) -Label 'Kilo CLI'
+        $providerConfigSummary = Ensure-BootstrapOpenCodeProviderConfig -SecretsData $SecretsData -ConfigPath $configPath -Label 'Kilo CLI'
+        $authUpdated = [bool]$authSummary.updated
+        $providerConfigUpdated = [bool]$providerConfigSummary.updated
+    }
+
+    $cleanupUpdated = $false
+    if (Test-Path $configPath) {
+        try {
+            $config = Read-BootstrapJsonFile -Path $configPath
+            if (($config -is [hashtable]) -and $config.ContainsKey('env')) {
+                $backupPath = Backup-BootstrapFile -Path $configPath
+                if ($backupPath) {
+                    Write-Log ("Backup criado antes de remover env invalido do Kilo CLI config: {0}" -f $backupPath)
+                }
+                $config.Remove('env')
+                Write-BootstrapJsonFile -Path $configPath -Value $config
+                Write-Log ("Kilo CLI config normalizado sem env top-level: {0}" -f $configPath)
+                $cleanupUpdated = $true
+            }
+        } catch {
+            Write-Log ("Kilo CLI config nao pode ser normalizado: {0}" -f $_.Exception.Message) 'WARN'
+        }
+    }
+
+    return ($mcpUpdated -or $authUpdated -or $providerConfigUpdated -or $cleanupUpdated)
 }
 
 function Ensure-BootstrapCometSecrets {
@@ -11959,16 +12731,25 @@ function Ensure-BootstrapOpenCodeSecrets {
 }
 
 function Ensure-BootstrapOpenCodeProviderAuth {
-    param([Parameter(Mandatory = $true)]$SecretsData)
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [string]$AuthPath = '',
+        [string]$Label = 'OpenCode'
+    )
 
-    $path = Get-BootstrapOpenCodeAuthPath
+    $path = if ([string]::IsNullOrWhiteSpace($AuthPath)) { Get-BootstrapOpenCodeAuthPath } else { $AuthPath }
     $auth = @{}
     if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path $path)) {
         try {
             $auth = Read-BootstrapJsonFile -Path $path
             if (-not ($auth -is [hashtable])) { $auth = @{} }
         } catch {
-            Write-Log "OpenCode auth.json invalido em $path. O bootstrap vai recriar o JSON mesclado." 'WARN'
+            $backupPath = Backup-BootstrapFile -Path $path
+            if ($backupPath) {
+                Write-Log ("{0} auth.json invalido; backup criado: {1}" -f $Label, $backupPath) 'WARN'
+            } else {
+                Write-Log ("{0} auth.json invalido em {1}. O bootstrap vai recriar o JSON mesclado." -f $Label, $path) 'WARN'
+            }
             $auth = @{}
         }
     }
@@ -11992,8 +12773,14 @@ function Ensure-BootstrapOpenCodeProviderAuth {
     $after = ((ConvertTo-BootstrapObjectGraph -InputObject $auth) | ConvertTo-Json -Depth 20 -Compress)
     $updated = ($before -ne $after)
     if ($updated -and -not [string]::IsNullOrWhiteSpace($path)) {
+        if (Test-Path $path) {
+            $backupPath = Backup-BootstrapFile -Path $path
+            if ($backupPath) {
+                Write-Log ("Backup criado antes de atualizar {0} auth: {1}" -f $Label, $backupPath)
+            }
+        }
         Write-BootstrapJsonFile -Path $path -Value $auth
-        Write-Log "OpenCode auth sincronizado: $path"
+        Write-Log ("{0} auth sincronizado: {1}" -f $Label, $path)
     }
 
     return [ordered]@{
@@ -12004,16 +12791,25 @@ function Ensure-BootstrapOpenCodeProviderAuth {
 }
 
 function Ensure-BootstrapOpenCodeProviderConfig {
-    param([Parameter(Mandatory = $true)]$SecretsData)
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [string]$ConfigPath = '',
+        [string]$Label = 'OpenCode'
+    )
 
-    $path = Get-BootstrapOpenCodeConfigPath
+    $path = if ([string]::IsNullOrWhiteSpace($ConfigPath)) { Get-BootstrapOpenCodeConfigPath } else { $ConfigPath }
     $settings = @{}
     if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path $path)) {
         try {
             $settings = Read-BootstrapJsonFile -Path $path
             if (-not ($settings -is [hashtable])) { $settings = @{} }
         } catch {
-            Write-Log "OpenCode opencode.json invalido em $path. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." 'WARN'
+            $backupPath = Backup-BootstrapFile -Path $path
+            if ($backupPath) {
+                Write-Log ("{0} config invalido; backup criado: {1}" -f $Label, $backupPath) 'WARN'
+            } else {
+                Write-Log ("{0} config invalido em {1}. O bootstrap vai preservar o arquivo existente e recriar o JSON mesclado." -f $Label, $path) 'WARN'
+            }
             $settings = @{}
         }
     }
@@ -12054,8 +12850,14 @@ function Ensure-BootstrapOpenCodeProviderConfig {
     $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 30 -Compress)
     $updated = ($before -ne $after)
     if ($updated -and -not [string]::IsNullOrWhiteSpace($path)) {
+        if (Test-Path $path) {
+            $backupPath = Backup-BootstrapFile -Path $path
+            if ($backupPath) {
+                Write-Log ("Backup criado antes de atualizar {0} config: {1}" -f $Label, $backupPath)
+            }
+        }
         Write-BootstrapJsonFile -Path $path -Value $settings
-        Write-Log "OpenCode provider config sincronizado: $path"
+        Write-Log ("{0} provider config sincronizado: {1}" -f $Label, $path)
     }
 
     return [ordered]@{
@@ -12092,7 +12894,7 @@ function Get-BootstrapMcpStatePath {
 }
 
 function Get-BootstrapManagedMcpCapableTargets {
-    return @('claudeCode', 'claudeDesktop', 'cursor', 'windsurf', 'trae', 'openCode', 'vsCode', 'roo', 'cline', 'continue', 'zed', 'zCode', 'openClaw')
+    return @('claudeCode', 'claudeDesktop', 'cursor', 'windsurf', 'trae', 'openCode', 'vsCode', 'roo', 'cline', 'continue', 'zed', 'zCode', 'openClaw', 'hermes', 'kilo')
 }
 
 function Get-BootstrapManagedMcpCatalog {
@@ -12579,6 +13381,8 @@ function Ensure-BootstrapManagedMcps {
             zedUpdated = $false
             zCodeUpdated = $false
             openClawUpdated = $false
+            hermesUpdated = $false
+            kiloUpdated = $false
         }
         continue = [ordered]@{}
     }
@@ -12722,6 +13526,12 @@ function Ensure-BootstrapManagedMcps {
     }
     if ($resolvedTargets.ContainsKey('openClaw') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openClaw'])) {
         $summary.targets.openClawUpdated = Ensure-BootstrapOpenClawSecrets -ResolvedTargets $resolvedTargets
+    }
+    if ($resolvedTargets.ContainsKey('hermes') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['hermes'])) {
+        $summary.targets.hermesUpdated = Ensure-BootstrapHermesSecrets -ResolvedTargets $resolvedTargets -State $State
+    }
+    if ($resolvedTargets.ContainsKey('kilo') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['kilo'])) {
+        $summary.targets.kiloUpdated = Ensure-BootstrapKiloSecrets -ResolvedTargets $resolvedTargets -SecretsData $secretsData
     }
 
     if ([bool]$State.EnableClaudeCodeProjectMcps) {
@@ -12881,7 +13691,7 @@ function Ensure-BootstrapVsCodeExtensionInstalled {
     param(
         [Parameter(Mandatory = $true)][string]$CliPath,
         [Parameter(Mandatory = $true)]$ExtensionDefinition,
-        [Parameter(Mandatory = $true)][string[]]$InstalledExtensions,
+        [AllowEmptyCollection()][string[]]$InstalledExtensions = @(),
         [Parameter(Mandatory = $true)][string]$EditorLabel
     )
 
@@ -13597,6 +14407,8 @@ function Ensure-BootstrapSecrets {
         zedUpdated = $false
         zCodeUpdated = $false
         openClawUpdated = $false
+        hermesUpdated = $false
+        kiloUpdated = $false
         cometUpdated = $false
         cometGuide = Get-BootstrapCometGuide -SecretsData $validatedData
         diagnostics = $diagnostics
@@ -13641,6 +14453,12 @@ function Ensure-BootstrapSecrets {
     if ($resolvedTargets.ContainsKey('openClaw') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openClaw'])) {
         $summary.openClawUpdated = Ensure-BootstrapOpenClawSecrets -ResolvedTargets $resolvedTargets
     }
+    if ($resolvedTargets.ContainsKey('hermes') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['hermes'])) {
+        $summary.hermesUpdated = Ensure-BootstrapHermesSecrets -ResolvedTargets $resolvedTargets -State $State
+    }
+    if ($resolvedTargets.ContainsKey('kilo') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['kilo'])) {
+        $summary.kiloUpdated = Ensure-BootstrapKiloSecrets -ResolvedTargets $resolvedTargets -SecretsData $validatedData
+    }
     if ($resolvedTargets.ContainsKey('comet') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['comet'])) {
         $summary.cometUpdated = Ensure-BootstrapCometSecrets -ResolvedTargets $resolvedTargets -SecretsData $validatedData
     }
@@ -13667,7 +14485,7 @@ function Ensure-BootstrapSecrets {
     if ($bundle.Created) {
         Write-Log "Manifesto de segredos criado em $($bundle['Path']). Preencha as chaves e rode o bootstrap novamente para propagar tudo automaticamente." 'WARN'
     } else {
-        Write-Log ("Manifesto de segredos sincronizado: env={0}, claudeCode={1}, claudeDesktop={2}, cursor={3}, windsurf={4}, trae={5}, openCode={6}, vsCode={7}, roo={8}, cline={9}, zed={10}, zCode={11}, openClaw={12}, comet={13}" -f $summary.userEnvApplied, $summary.claudeCodeUpdated, $summary.claudeDesktopUpdated, $summary.cursorUpdated, $summary.windsurfUpdated, $summary.traeUpdated, $summary.openCodeUpdated, $summary.vsCodeUpdated, $summary.rooUpdated, $summary.clineUpdated, $summary.zedUpdated, $summary.zCodeUpdated, $summary.openClawUpdated, $summary.cometUpdated)
+        Write-Log ("Manifesto de segredos sincronizado: env={0}, claudeCode={1}, claudeDesktop={2}, cursor={3}, windsurf={4}, trae={5}, openCode={6}, vsCode={7}, roo={8}, cline={9}, zed={10}, zCode={11}, openClaw={12}, hermes={13}, kilo={14}, comet={15}" -f $summary.userEnvApplied, $summary.claudeCodeUpdated, $summary.claudeDesktopUpdated, $summary.cursorUpdated, $summary.windsurfUpdated, $summary.traeUpdated, $summary.openCodeUpdated, $summary.vsCodeUpdated, $summary.rooUpdated, $summary.clineUpdated, $summary.zedUpdated, $summary.zCodeUpdated, $summary.openClawUpdated, $summary.hermesUpdated, $summary.kiloUpdated, $summary.cometUpdated)
     }
 }
 
@@ -13919,11 +14737,28 @@ function Disable-BootstrapScheduledTasks {
 }
 
 function Set-BootstrapServiceStartupTypes {
-    param($ServiceAdjustments)
+    param(
+        [AllowNull()][hashtable]$State = $null,
+        $ServiceAdjustments,
+        [switch]$StopService
+    )
+
+    if ($State) {
+        $results = Set-BootstrapServiceTuning -State $State -ServiceAdjustments $ServiceAdjustments -StopService:$StopService
+        foreach ($result in @($results)) {
+            if ([string]$result.status -eq 'applied') {
+                Write-Log "HostHealth startup: servico ajustado -> $([string]$result.name) => $([string]$result.startType)"
+            } else {
+                Write-Log "HostHealth startup: servico nao alterado -> $([string]$result.name) ($([string]$result.reason))" 'WARN'
+            }
+        }
+        return
+    }
 
     foreach ($adjustment in @($ServiceAdjustments)) {
         if (-not $adjustment) { continue }
         try {
+            if ($StopService) { Stop-Service -Name $adjustment.Name -ErrorAction SilentlyContinue }
             Set-Service -Name $adjustment.Name -StartupType $adjustment.StartType -ErrorAction Stop
             Write-Log "HostHealth startup: servico ajustado -> $($adjustment.Name) => $($adjustment.StartType)"
         } catch {
@@ -13953,7 +14788,7 @@ function Invoke-BootstrapHostHealthStartup {
 
     if ($Policy.Mode -eq 'agressivo') {
         if (Test-IsAdmin) {
-            Set-BootstrapServiceStartupTypes -ServiceAdjustments $Policy.ServiceAdjustments
+            Set-BootstrapServiceStartupTypes -State $State -ServiceAdjustments $Policy.ServiceAdjustments -StopService
         } else {
             Write-Log 'HostHealth startup: ajustes de servico requerem elevacao. Pulando.' 'WARN'
         }
@@ -14203,6 +15038,243 @@ function Apply-BootstrapRegistryDword {
     }
 }
 
+function Get-BootstrapServiceSnapshot {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    try {
+        $service = Get-Service -Name $Name -ErrorAction Stop
+        return [ordered]@{
+            Name = $Name
+            StartType = [string]$service.StartType
+            Status = [string]$service.Status
+            Exists = $true
+        }
+    } catch {
+        return [ordered]@{
+            Name = $Name
+            StartType = ''
+            Status = ''
+            Exists = $false
+            Error = $_.Exception.Message
+        }
+    }
+}
+
+function Set-BootstrapServiceTuning {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ServiceAdjustments,
+        [switch]$StopService
+    )
+
+    $results = @()
+    if (-not (Test-IsAdmin)) {
+        foreach ($adjustment in @($ServiceAdjustments)) {
+            $results += @([ordered]@{ name = [string]$adjustment.Name; status = 'skipped'; reason = 'admin-required'; blocking = $false })
+        }
+        return @($results)
+    }
+
+    foreach ($adjustment in @($ServiceAdjustments)) {
+        if (-not $adjustment) { continue }
+        $name = [string]$adjustment.Name
+        $startType = [string]$adjustment.StartType
+        if ([string]::IsNullOrWhiteSpace($name) -or [string]::IsNullOrWhiteSpace($startType)) { continue }
+        $snapshot = Get-BootstrapServiceSnapshot -Name $name
+        if (-not [bool]$snapshot.Exists) {
+            $results += @([ordered]@{ name = $name; status = 'skipped'; reason = 'service-not-found'; blocking = $false; snapshot = $snapshot })
+            continue
+        }
+
+        try {
+            Register-BootstrapChange -State $State -Type 'Service' -Target $name -Name 'StartupType' -OldValue $snapshot -NewValue $startType -Operation 'service-startup' -RollbackAction 'restore-service-state' -Reversible 'partial'
+            if ($StopService -and [string]$snapshot.Status -eq 'Running') {
+                Stop-Service -Name $name -ErrorAction SilentlyContinue
+            }
+            Set-Service -Name $name -StartupType $startType -ErrorAction Stop
+            $results += @([ordered]@{ name = $name; status = 'applied'; startType = $startType; stopped = [bool]$StopService; snapshot = $snapshot })
+        } catch {
+            $results += @([ordered]@{ name = $name; status = 'failed'; startType = $startType; error = $_.Exception.Message; blocking = $false; snapshot = $snapshot })
+        }
+    }
+
+    return @($results)
+}
+
+function Add-BootstrapDefenderExclusion {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][ValidateSet('ExclusionPath','ExclusionProcess')][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return [ordered]@{ kind = $Kind; value = ''; status = 'skipped'; reason = 'empty-value'; blocking = $false }
+    }
+    if (-not (Test-IsAdmin)) {
+        return [ordered]@{ kind = $Kind; value = $Value; status = 'skipped'; reason = 'admin-required'; blocking = $false }
+    }
+
+    $resolved = [string]$Value
+    try {
+        $resolved = [System.IO.Path]::GetFullPath([Environment]::ExpandEnvironmentVariables($Value))
+    } catch {
+        $resolved = [Environment]::ExpandEnvironmentVariables($Value)
+    }
+
+    try {
+        $pref = Get-MpPreference -ErrorAction SilentlyContinue
+        $existing = @()
+        if ($pref -and $pref.PSObject.Properties[$Kind]) { $existing = @($pref.$Kind) }
+        if (@($existing | ForEach-Object { [string]$_ }).Contains($resolved)) {
+            return [ordered]@{ kind = $Kind; value = $resolved; status = 'configured'; reason = 'already-present'; blocking = $false }
+        }
+
+        Register-BootstrapChange -State $State -Type 'DefenderExclusion' -Target $resolved -Name $Kind -OldValue $null -NewValue $resolved -Operation 'defender-exclusion-add' -RollbackAction 'remove-defender-exclusion' -Reversible 'partial'
+        if ($Kind -eq 'ExclusionProcess') {
+            Add-MpPreference -ExclusionProcess $resolved -ErrorAction Stop
+        } else {
+            Add-MpPreference -ExclusionPath $resolved -ErrorAction Stop
+        }
+        return [ordered]@{ kind = $Kind; value = $resolved; status = 'applied'; blocking = $false }
+    } catch {
+        return [ordered]@{ kind = $Kind; value = $resolved; status = 'failed'; error = $_.Exception.Message; blocking = $false }
+    }
+}
+
+function Set-BootstrapDockerHighPriority {
+    $processes = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(Docker Desktop|Docker|com\.docker|vpnkit|dockerd)$' })
+    if ($processes.Count -eq 0) {
+        return [ordered]@{ status = 'skipped'; reason = 'docker-process-not-running'; changed = @(); failed = @(); blocking = $false }
+    }
+
+    $changed = @()
+    $failed = @()
+    foreach ($proc in @($processes)) {
+        try {
+            $proc.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High
+            $changed += @([ordered]@{ id = $proc.Id; processName = $proc.ProcessName; priority = 'High' })
+        } catch {
+            $failed += @([ordered]@{ id = $proc.Id; processName = $proc.ProcessName; error = $_.Exception.Message })
+        }
+    }
+    return [ordered]@{
+        status = if ($changed.Count -gt 0) { 'applied' } elseif ($failed.Count -gt 0) { 'partial' } else { 'skipped' }
+        changed = @($changed)
+        failed = @($failed)
+        blocking = $false
+    }
+}
+
+function Get-BootstrapAiAgentPerformanceAudit {
+    $services = @()
+    foreach ($name in @('DiagTrack','dmwappushservice','WSearch','SysMain')) {
+        $services += @(Get-BootstrapServiceSnapshot -Name $name)
+    }
+
+    $defender = [ordered]@{ available = $false; exclusionPath = @(); exclusionProcess = @(); error = '' }
+    try {
+        $pref = Get-MpPreference -ErrorAction Stop
+        $defender.available = $true
+        $defender.exclusionPath = @($pref.ExclusionPath)
+        $defender.exclusionProcess = @($pref.ExclusionProcess)
+    } catch {
+        $defender.error = $_.Exception.Message
+    }
+
+    $smartScreen = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AppHost' -ErrorAction SilentlyContinue
+    $deviceGuard = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard' -ErrorAction SilentlyContinue
+    $visual = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -ErrorAction SilentlyContinue
+    $delivery = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' -ErrorAction SilentlyContinue
+
+    return [ordered]@{
+        generatedAt = (Get-Date).ToString('o')
+        services = @($services)
+        defender = $defender
+        smartScreen = [ordered]@{ enabledV2 = if ($smartScreen) { [string]$smartScreen.EnableWebContentEvaluation } else { '' } }
+        deviceGuard = [ordered]@{ enableVirtualizationBasedSecurity = if ($deviceGuard) { [string]$deviceGuard.EnableVirtualizationBasedSecurity } else { '' } }
+        visualEffects = [ordered]@{ visualFxSetting = if ($visual) { [string]$visual.VisualFXSetting } else { '' } }
+        deliveryOptimization = [ordered]@{ doDownloadMode = if ($delivery) { [string]$delivery.DODownloadMode } else { '' } }
+        dockerProcesses = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(Docker Desktop|Docker|com\.docker|vpnkit|dockerd)$' } | Select-Object Id, ProcessName, PriorityClass)
+    }
+}
+
+function Export-BootstrapAiAgentPerformanceAuditReport {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $reportRoot = Get-BootstrapAppTuningReportRoot -State $State
+    $path = Join-Path $reportRoot 'ai-agent-performance-audit.json'
+    Write-BootstrapJsonFile -Path $path -Value (Get-BootstrapAiAgentPerformanceAudit)
+    return $path
+}
+
+function Apply-AiAgentPerformanceTuning {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Item
+    )
+
+    switch ([string]$Item.id) {
+        'windows-ai-visual-performance' {
+            $changes = @(
+                (Apply-BootstrapRegistryDword -State $State -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -Name 'VisualFXSetting' -Value 2),
+                (Apply-BootstrapRegistryDword -State $State -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -Name 'EnableTransparency' -Value 0)
+            )
+            $failed = @($changes | Where-Object { [string]$_['status'] -eq 'failed' })
+            return [ordered]@{ id = [string]$Item.id; status = if ($failed.Count -gt 0) { 'partial' } else { 'applied' }; changes = @($changes); blocking = $false }
+        }
+        'windows-ai-delivery-optimization-http-only' {
+            if (-not (Test-IsAdmin)) {
+                return [ordered]@{ id = [string]$Item.id; status = 'skipped'; reason = 'admin-required'; blocking = $false }
+            }
+            $change = Apply-BootstrapRegistryDword -State $State -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization' -Name 'DODownloadMode' -Value 0
+            return [ordered]@{ id = [string]$Item.id; status = [string]$change.status; change = $change; blocking = $false }
+        }
+        'windows-ai-docker-high-priority' {
+            $result = Set-BootstrapDockerHighPriority
+            $result['id'] = [string]$Item.id
+            return $result
+        }
+        'windows-ai-security-posture-audit' {
+            $path = Export-BootstrapAiAgentPerformanceAuditReport -State $State
+            return [ordered]@{ id = [string]$Item.id; status = 'audited'; report = $path; blocking = $false }
+        }
+        'windows-ai-workspace-defender-exclusion' {
+            $targets = @([string]$State.WorkspaceRoot, [string]$State.CloneBaseDir) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+            $results = @()
+            foreach ($target in @($targets)) {
+                $results += @(Add-BootstrapDefenderExclusion -State $State -Kind 'ExclusionPath' -Value $target)
+            }
+            return [ordered]@{ id = [string]$Item.id; status = if (@($results | Where-Object { [string]$_['status'] -eq 'applied' }).Count -gt 0) { 'applied' } else { 'skipped' }; results = @($results); blocking = $false }
+        }
+        'windows-ai-node-python-defender-process-exclusion' {
+            $paths = @()
+            foreach ($cmd in @('node','python','python3')) {
+                $p = Resolve-CommandPath -Name $cmd
+                if (-not [string]::IsNullOrWhiteSpace($p) -and -not (@($paths) -contains $p)) { $paths += @($p) }
+            }
+            $results = @()
+            foreach ($path in @($paths)) {
+                $results += @(Add-BootstrapDefenderExclusion -State $State -Kind 'ExclusionProcess' -Value $path)
+            }
+            return [ordered]@{ id = [string]$Item.id; status = if (@($results | Where-Object { [string]$_['status'] -eq 'applied' }).Count -gt 0) { 'applied' } else { 'skipped' }; results = @($results); blocking = $false }
+        }
+        'windows-ai-services-deep-tuning' {
+            $services = @(
+                [ordered]@{ Name = 'DiagTrack'; StartType = 'Disabled' },
+                [ordered]@{ Name = 'dmwappushservice'; StartType = 'Disabled' },
+                [ordered]@{ Name = 'WSearch'; StartType = 'Disabled' },
+                [ordered]@{ Name = 'SysMain'; StartType = 'Disabled' }
+            )
+            $results = Set-BootstrapServiceTuning -State $State -ServiceAdjustments $services -StopService
+            return [ordered]@{ id = [string]$Item.id; status = if (@($results | Where-Object { [string]$_['status'] -eq 'applied' }).Count -gt 0) { 'applied' } else { 'skipped' }; results = @($results); blocking = $false }
+        }
+        default {
+            return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'AI agent performance item audit-only.'; blocking = $false }
+        }
+    }
+}
+
 function Apply-BrowserStartupTuning {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
@@ -14412,6 +15484,19 @@ function Resolve-BootstrapOpenAiCompatibleProviderCandidate {
 
         $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$activeCredentialId]
         $validationState = if ($credential.ContainsKey('validation') -and ($credential['validation'] -is [hashtable])) { [string]$credential['validation']['state'] } else { 'unknown' }
+        if ($validationState -match '^(failed|invalid|revoked|disabled)$') {
+            $attempts.Add([ordered]@{
+                provider = $normalizedProviderName
+                stage = $stage
+                selected = $false
+                reason = 'validation-failed'
+                validationState = $validationState
+                credentialId = $activeCredentialId
+                hasSecret = (-not [string]::IsNullOrWhiteSpace([string]$credential['secret']))
+                hasBaseUrl = $true
+            })
+            continue
+        }
         if ($stage -eq 'active-fallback' -and $validationState -eq 'passed') {
             $stage = 'active-validated'
         }
@@ -14578,8 +15663,43 @@ function Ensure-BootstrapOpenAiCompatibleUserEnv {
     }
 }
 
+function Ensure-BootstrapAiWorkflowContextPack {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { $WorkspaceRoot }
+    $targetDir = Join-Path $root '.codex\context-packs'
+    $targetPath = Join-Path $targetDir 'ai-agent-workflows.md'
+    $content = @(
+        '# AI Agent Workflow Context Pack',
+        '',
+        '- Classify work before execution: simple tasks stay single-agent; complex work gets planning, small subtasks, and verification.',
+        '- Keep context clean: summarize long failed attempts before starting a new lane.',
+        '- Keep Gemini keys scoped to Antigravity only; use OpenAI-compatible or local providers for other agents.',
+        '- Prefer local Qwen/Hermes/Ollama/LM Studio only when configured and explicitly selected.',
+        '- Run QA after worker output: parse configs, run targeted tests, then run broad tests before merge.',
+        '- Never disable SmartScreen, VBS/Core Isolation, whole-disk indexing, or QoS automatically.'
+    ) -join [Environment]::NewLine
+
+    $backup = ''
+    if (Test-Path -LiteralPath $targetPath) {
+        $current = Get-Content -LiteralPath $targetPath -Raw -ErrorAction SilentlyContinue
+        if ($current -eq $content) {
+            return [ordered]@{ status = 'configured'; path = $targetPath; backup = '' }
+        }
+        $backup = Backup-BootstrapFile -Path $targetPath
+    } else {
+        $null = New-Item -Path $targetDir -ItemType Directory -Force
+    }
+
+    Write-BootstrapAtomicText -Path $targetPath -Content $content
+    return [ordered]@{ status = 'applied'; path = $targetPath; backup = $backup }
+}
+
 function Apply-DevAiTuning {
-    param([Parameter(Mandatory = $true)]$Item)
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [AllowNull()][hashtable]$State = $null
+    )
 
     switch ([string]$Item.id) {
         'notepadpp-defaults' {
@@ -14620,6 +15740,35 @@ function Apply-DevAiTuning {
                 status = if ([bool]$updated) { 'applied' } else { 'configured' }
                 note = 'OpenCode auth/config sincronizado via manifesto.'
                 updated = [bool]$updated
+            }
+        }
+        'ai-agent-byok-config' {
+            $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot (Get-Location).Path -ResolvedCloneBaseDir (Get-Location).Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+            Ensure-BootstrapSecrets -State $state
+            return [ordered]@{
+                id = [string]$Item.id
+                status = 'applied'
+                note = 'Manifesto BYOK sincronizado para agentes CLI/IDE suportados.'
+                summary = $state.SecretsSummary
+            }
+        }
+        'ai-agent-workflow-context-pack' {
+            $workspace = if ($State) { [string]$State.CloneBaseDir } else { (Get-Location).Path }
+            $result = Ensure-BootstrapAiWorkflowContextPack -WorkspaceRoot $workspace
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$result.status
+                note = 'AI workflow/context pack aplicado sem automacao destrutiva.'
+                manifest = $result
+            }
+        }
+        'codex-desktop-repair' {
+            $repair = Repair-BootstrapCodexDesktop
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$repair['status']
+                note = [string]$repair['note']
+                manifest = $repair
             }
         }
         'antigravity-settings' {
@@ -14758,8 +15907,9 @@ function Invoke-BootstrapAppTuningItem {
             return (Apply-SteamConsoleTuning -Item $Item)
         }
         'steamdeck-control' { return (Apply-SteamDeckControlTuning -Item $Item) }
-        'dev-ai' { return (Apply-DevAiTuning -Item $Item) }
+        'dev-ai' { return (Apply-DevAiTuning -State $State -Item $Item) }
         'local-ai-containers' { return (Apply-LocalAiContainerTuning -Item $Item) }
+        'ai-agent-performance' { return (Apply-AiAgentPerformanceTuning -State $State -Item $Item) }
         'capture-creator' { return (Apply-CaptureTuning -Item $Item) }
         default { return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'No mutable v1 action for this item.' } }
     }
@@ -15921,6 +17071,10 @@ function Invoke-BootstrapProfileMode {
     $opencodeExe = Join-Path (Join-Path (Get-BootstrapUserHomePath) '.opencode\bin') 'opencode.exe'
     if (Test-Path $opencodeExe) {
         Write-Log "opencode: $(& $opencodeExe --version) ($opencodeExe)"
+    } elseif ($opencodeCmd = Resolve-CommandPath -Name 'opencode') {
+        $version = Invoke-NativeFirstLine -Exe $opencodeCmd -Args @('--version')
+        if ([string]::IsNullOrWhiteSpace($version)) { $version = 'instalado' }
+        Write-Log "opencode: $version ($opencodeCmd)"
     } else {
         Write-Log "opencode: NAO ENCONTRADO ($opencodeExe)" 'WARN'
     }
@@ -15933,7 +17087,9 @@ function Invoke-BootstrapProfileMode {
             @{ Name = 'qwen'; Path = (Join-Path $state.NodeInfo.NpmBin 'qwen.cmd') },
             @{ Name = 'copilot'; Path = (Join-Path $state.NodeInfo.NpmBin 'copilot.cmd') },
             @{ Name = 'codex'; Path = (Join-Path $state.NodeInfo.NpmBin 'codex.cmd') },
-            @{ Name = 'openclaw'; Path = (Join-Path $state.NodeInfo.NpmBin 'openclaw.cmd') }
+            @{ Name = 'openclaw'; Path = (Join-Path $state.NodeInfo.NpmBin 'openclaw.cmd') },
+            @{ Name = 'hermes'; Path = (Join-Path $state.NodeInfo.NpmBin 'hermes.cmd') },
+            @{ Name = 'kilo'; Path = (Join-Path $state.NodeInfo.NpmBin 'kilo.cmd') }
         )) {
             if (Test-Path $tool.Path) {
                 $version = Invoke-NativeFirstLine -Exe $tool.Path -Args @('--version')
@@ -16369,12 +17525,14 @@ if (-not $isDotSourced) {
         Refresh-SessionPath
 
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@google/gemini-cli' -DisplayName 'Gemini CLI (@google/gemini-cli)'
+        Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@kilocode/cli' -DisplayName 'Kilo CLI (@kilocode/cli)'
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@bonsai-ai/cli' -DisplayName 'Bonsai CLI (@bonsai-ai/cli)'
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@vibe-kit/grok-cli' -DisplayName 'Grok CLI (@vibe-kit/grok-cli)'
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@qwen-code/qwen-code@latest' -DisplayName 'Qwen Code (@qwen-code/qwen-code)'
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@github/copilot' -DisplayName 'GitHub Copilot CLI (@github/copilot)'
         Ensure-NpmGlobalPackage -NpmCmd $nodeInfo.NpmCmd -Package '@openai/codex' -DisplayName 'OpenAI Codex CLI (@openai/codex)'
         Ensure-OpenClaw -NpmCmd $nodeInfo.NpmCmd
+        Ensure-Hermes -State @{ NodeInfo = $nodeInfo; CloneBaseDir = $CloneBaseDir }
         Refresh-SessionPath
 
         Ensure-ClaudeCodeDefaults -GitBashPath $gitInfo.Bash
@@ -16394,12 +17552,14 @@ if (-not $isDotSourced) {
 
         $opencodeExe = Join-Path (Join-Path (Get-BootstrapUserHomePath) '.opencode\bin') 'opencode.exe'
         $geminiCmd = Join-Path $nodeInfo.NpmBin 'gemini.cmd'
+        $kiloCmd = Join-Path $nodeInfo.NpmBin 'kilo.cmd'
         $bonsaiCmd = Join-Path $nodeInfo.NpmBin 'bonsai.cmd'
         $grokCmd = Join-Path $nodeInfo.NpmBin 'grok.cmd'
         $qwenCmd = Join-Path $nodeInfo.NpmBin 'qwen.cmd'
         $copilotCmd = Join-Path $nodeInfo.NpmBin 'copilot.cmd'
         $codexCmd = Join-Path $nodeInfo.NpmBin 'codex.cmd'
         $openclawCmd = Join-Path $nodeInfo.NpmBin 'openclaw.cmd'
+        $hermesCmd = Join-Path $nodeInfo.NpmBin 'hermes.cmd'
 
         Write-Log 'Resumo:'
         Write-Log "CLAUDE_CODE_GIT_BASH_PATH: $([Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH','User'))"
@@ -16422,6 +17582,7 @@ if (-not $isDotSourced) {
         if ($ghExe) { Write-Log "gh: $(Invoke-NativeFirstLine -Exe $ghExe -Args @('--version')) ($ghExe)" } else { Write-Log 'gh: NÃO ENCONTRADO' 'WARN' }
         if (Test-Path $opencodeExe) { Write-Log "opencode: $(& $opencodeExe --version) ($opencodeExe)" } else { Write-Log "opencode: NÃO ENCONTRADO ($opencodeExe)" 'WARN' }
         if (Test-Path $geminiCmd) { Write-Log "gemini: $(& $geminiCmd --version) ($geminiCmd)" } else { Write-Log "gemini: NÃO ENCONTRADO ($geminiCmd)" 'WARN' }
+        if (Test-Path $kiloCmd) { Write-Log "kilo: $(& $kiloCmd --version) ($kiloCmd)" } else { Write-Log "kilo: NÃO ENCONTRADO ($kiloCmd)" 'WARN' }
         if (Test-Path $bonsaiCmd) { Write-Log "bonsai: instalado ($bonsaiCmd)" } else { Write-Log "bonsai: NÃO ENCONTRADO ($bonsaiCmd)" 'WARN' }
         if (Test-Path $grokCmd) { Write-Log "grok: $(& $grokCmd --version) ($grokCmd)" } else { Write-Log "grok: NÃO ENCONTRADO ($grokCmd)" 'WARN' }
         if (Test-Path $qwenCmd) { Write-Log "qwen: $(Invoke-NativeFirstLine -Exe $qwenCmd -Args @('--version')) ($qwenCmd)" } else { Write-Log "qwen: NÃO ENCONTRADO ($qwenCmd)" 'WARN' }
@@ -16437,6 +17598,7 @@ if (-not $isDotSourced) {
             }
         }
         if (Test-Path $openclawCmd) { Write-Log "openclaw: $(& $openclawCmd --version) ($openclawCmd)" } else { Write-Log "openclaw: NÃO ENCONTRADO ($openclawCmd)" 'WARN' }
+        if (Test-Path $hermesCmd) { Write-Log "hermes: $(& $hermesCmd --version) ($hermesCmd)" } else { Write-Log "hermes: NÃO ENCONTRADO ($hermesCmd)" 'WARN' }
         $aiderExe = Resolve-CommandPath -Name 'aider'
         if ($aiderExe) { Write-Log "aider: $(Invoke-NativeFirstLine -Exe $aiderExe -Args @('--version')) ($aiderExe)" } else { Write-Log 'aider: NÃO ENCONTRADO' 'WARN' }
         $gooseExe = Resolve-CommandPath -Name 'goose'

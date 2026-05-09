@@ -196,6 +196,20 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'Add_MouseDoubleClick'
     }
 
+    It 'surfaces AppTuning risk controls and security-impact confirmation' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'AppTuningRiskFilterCombo'
+        $raw | Should Match 'AppTuningRiskWarningLabel'
+        $raw | Should Match 'SecurityImpact'
+        $raw | Should Match 'rollbackScope'
+        $raw | Should Match 'Confirm-AppTuningSecurityImpact'
+        $raw | Should Match 'ai-agent-performance'
+        foreach ($risk in @('conservative','advanced','aggressive')) {
+            $raw | Should Match $risk
+        }
+    }
+
     It 'exposes Windows Boot Manager controls beyond GRUB detection' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 

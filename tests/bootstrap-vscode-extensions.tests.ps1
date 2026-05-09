@@ -63,6 +63,16 @@ Describe 'Bootstrap VS Code extensions' {
         $secretsIndex | Should BeLessThan $extensionsIndex
     }
 
+    It 'does not force VS Code Insiders when only vscode-extensions is selected' {
+        $resolution = Resolve-BootstrapComponents -SelectedProfiles @() -SelectedComponents @('vscode-extensions') -ExcludedComponents @()
+        $resolved = @($resolution.ResolvedComponents)
+
+        (@($resolved) -contains 'vscode') | Should Be $true
+        (@($resolved) -contains 'bootstrap-secrets') | Should Be $true
+        (@($resolved) -contains 'vscode-extensions') | Should Be $true
+        (@($resolved) -contains 'vscode-insiders') | Should Be $false
+    }
+
     It 'reads JSONC files with comments and trailing commas before updating VS Code settings' {
         $settingsPath = Join-Path $script:TestDataRoot 'settings.json'
         New-Item -Path (Split-Path -Path $settingsPath -Parent) -ItemType Directory -Force | Out-Null
@@ -221,6 +231,28 @@ Describe 'Bootstrap VS Code extensions' {
 
         $result.ExitCode | Should Be 0
         ((@($result.Output) -join ' ') -match 'bootstrap-cli-ok') | Should Be $true
+    }
+
+    It 'accepts an empty installed extension list before first install' {
+        $originalInvoker = ${function:Invoke-BootstrapCommandCapture}
+        Set-Item -Path function:Invoke-BootstrapCommandCapture -Value {
+            return [ordered]@{
+                ExitCode = 0
+                Output = @('Installed')
+            }
+        }
+
+        try {
+            $result = Ensure-BootstrapVsCodeExtensionInstalled -CliPath 'code.cmd' -ExtensionDefinition @{
+                id = 'publisher.first-extension'
+                displayName = 'First Extension'
+            } -InstalledExtensions @() -EditorLabel 'VS Code'
+        } finally {
+            Set-Item -Path function:Invoke-BootstrapCommandCapture -Value $originalInvoker
+        }
+
+        $result.installed | Should Be $true
+        $result.changed | Should Be $true
     }
 
     It 'falls back to pre-release installs when the marketplace reports no release version' {

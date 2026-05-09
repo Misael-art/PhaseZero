@@ -138,6 +138,17 @@ Describe 'Bootstrap API Center and app capability inventory' {
         (@($inventory.availableToCreate | ForEach-Object { $_.id }) -contains 'anthropic') | Should Be $true
     }
 
+    It 'reports OpenAI-compatible coverage from ordered resolver results' {
+        $inventory = Get-BootstrapApiInventory -SecretsData (New-ApiCenterSecretsFixture)
+        $openCode = @($inventory.summary.appCoverage.apps | Where-Object { $_.id -eq 'openCode' })[0]
+        $kilo = @($inventory.summary.appCoverage.apps | Where-Object { $_.id -eq 'kilo' })[0]
+
+        $inventory.summary.openAiCompatible.status | Should Be 'selected'
+        $inventory.summary.openAiCompatible.provider | Should Be 'openrouter'
+        $openCode.byokApplied | Should Be $true
+        $kilo.byokApplied | Should Be $true
+    }
+
     It 'classifies Claude Desktop organization access block from Anthropic validation message' {
         $fixture = New-ApiCenterSecretsFixture
         $fixture.providers['anthropic'] = @{
@@ -233,6 +244,23 @@ Describe 'Bootstrap API Center and app capability inventory' {
         $saved.provider.openai.options.baseURL | Should Be 'https://proxy.example.test/v1'
         $saved.provider.Contains('openrouter') | Should Be $false
         $saved.provider.Contains('deepseek') | Should Be $false
+    }
+
+    It 'applies validated providers to Kilo CLI using the OpenCode-compatible layout' {
+        $fixture = New-ApiCenterSecretsFixture
+        $fixture.providers.openai.defaults.baseUrl = 'https://proxy.example.test/v1'
+        $targets = Get-BootstrapResolvedSecretsTargets -SecretsData $fixture
+
+        $updated = Ensure-BootstrapKiloSecrets -ResolvedTargets $targets -SecretsData $fixture
+        $auth = Read-BootstrapJsonFile -Path (Get-BootstrapKiloAuthPath)
+        $config = Read-BootstrapJsonFile -Path (Get-BootstrapKiloConfigPath)
+
+        $updated | Should Be $true
+        $auth.openai.type | Should Be 'api'
+        $auth.openai.key | Should Be 'test-openai-key'
+        $config.provider.openai.options.baseURL | Should Be 'https://proxy.example.test/v1'
+        $config.provider.Contains('openrouter') | Should Be $false
+        $config.Contains('env') | Should Be $false
     }
 
     It 'reports Comet as manual-only with provider readiness and links' {

@@ -29,7 +29,7 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $categoryIds = @($catalog.categories | ForEach-Object { [string]$_.id })
         $steamItem = $catalog.items | Where-Object { $_.id -eq 'steam-big-picture-session' } | Select-Object -First 1
 
-        foreach ($expected in @('gaming-console','steamdeck-control','dev-ai','local-ai-containers','browser-startup','connectivity','capture-creator','storage-backup','windows-qol')) {
+        foreach ($expected in @('gaming-console','steamdeck-control','dev-ai','local-ai-containers','browser-startup','connectivity','capture-creator','storage-backup','windows-qol','ai-agent-performance')) {
             ($categoryIds -contains $expected) | Should Be $true
         }
 
@@ -37,6 +37,35 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $steamItem.defaultMode | Should Be 'recommended'
         (@($steamItem.actions) -contains 'session') | Should Be $true
         (@($steamItem.rollback) -contains 'manual') | Should Be $true
+    }
+
+    It 'exposes conservative AI agent performance items with safety metadata' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $byId = @{}
+        foreach ($item in @($catalog.items)) { $byId[[string]$item.id] = $item }
+
+        foreach ($id in @(
+            'windows-ai-visual-performance',
+            'windows-ai-delivery-optimization-http-only',
+            'windows-ai-docker-high-priority',
+            'windows-ai-security-posture-audit',
+            'windows-ai-workspace-defender-exclusion',
+            'windows-ai-node-python-defender-process-exclusion',
+            'windows-ai-services-deep-tuning'
+        )) {
+            $byId.ContainsKey($id) | Should Be $true
+            $byId[$id].category | Should Be 'ai-agent-performance'
+            [string]$byId[$id].riskTier | Should Not Be ''
+            [string]$byId[$id].rollbackScope | Should Not Be ''
+            @($byId[$id].safetyNotes).Count | Should BeGreaterThan 0
+        }
+
+        $byId['windows-ai-visual-performance'].defaultMode | Should Be 'recommended'
+        $byId['windows-ai-security-posture-audit'].defaultMode | Should Be 'recommended'
+        $byId['windows-ai-workspace-defender-exclusion'].defaultMode | Should Be 'opt-in'
+        $byId['windows-ai-node-python-defender-process-exclusion'].defaultMode | Should Be 'opt-in'
+        $byId['windows-ai-services-deep-tuning'].defaultMode | Should Be 'opt-in'
+        [bool]$byId['windows-ai-services-deep-tuning'].securityImpact | Should Be $true
     }
 
     It 'defaults legacy to off and modern profiles to recommended' {
@@ -59,6 +88,21 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         ($ids -contains 'playnite-fullscreen') | Should Be $true
         ($ids -contains 'rtss-frame-presets') | Should Be $false
         ($ids -contains 'specialk-global-injection') | Should Be $false
+    }
+
+    It 'keeps AI performance recommended selection conservative and allows explicit risky opt-in' {
+        $selection = New-BootstrapSelectionObject -SelectedProfiles @('recommended')
+        $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles
+        $plan = Resolve-BootstrapAppTuningSelection -Mode 'custom' -Categories @('ai-agent-performance') -Items @('windows-ai-services-deep-tuning') -Selection $selection -Resolution $resolution -InstalledInventory (New-AppTuningInventoryFixture)
+        $ids = @($plan.items | ForEach-Object { [string]$_.id })
+
+        ($ids -contains 'windows-ai-visual-performance') | Should Be $true
+        ($ids -contains 'windows-ai-security-posture-audit') | Should Be $true
+        ($ids -contains 'windows-ai-workspace-defender-exclusion') | Should Be $false
+        ($ids -contains 'windows-ai-node-python-defender-process-exclusion') | Should Be $false
+        ($ids -contains 'windows-ai-services-deep-tuning') | Should Be $true
+        (@($plan.items | Where-Object { $_.id -eq 'windows-ai-services-deep-tuning' })[0].securityImpact) | Should Be $true
+        (@($plan.items | Where-Object { $_.id -eq 'windows-ai-services-deep-tuning' })[0].riskTier) | Should Be 'aggressive'
     }
 
     It 'marks absent apps as skipped without failing selection' {
@@ -97,6 +141,20 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $steamRow.canInstall | Should Be $true
         $steamRow.canConfigure | Should Be $true
         $steamRow.canUpdate | Should Be $true
+    }
+
+    It 'surfaces AI performance risk metadata in status rows' {
+        $selection = New-BootstrapSelectionObject -SelectedProfiles @('recommended')
+        $resolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles
+        $plan = Resolve-BootstrapAppTuningSelection -Mode 'custom' -Categories @('ai-agent-performance') -Selection $selection -Resolution $resolution -InstalledInventory (New-AppTuningInventoryFixture)
+        $rows = Get-BootstrapAppTuningStatusRows -Plan $plan -InstalledInventory (New-AppTuningInventoryFixture)
+        $visual = $rows | Where-Object { $_.id -eq 'windows-ai-visual-performance' } | Select-Object -First 1
+
+        $visual.installedState | Should Be 'installed'
+        $visual.configuredState | Should Be 'planned'
+        $visual.risk | Should Be 'conservative'
+        $visual.rollbackScope | Should Be 'registry-snapshot'
+        @($visual.safetyNotes).Count | Should BeGreaterThan 0
     }
 
     It 'nao marca notepad++ instalado por substring acidental no DisplayName (itens com probePaths)' {
@@ -188,7 +246,7 @@ Describe 'Bootstrap AppTuning catalog and selection' {
 
         $candidate.status | Should Be 'no-compatible-provider'
         @($candidate.attempts).Count | Should Be 1
-        $candidate.attempts[0].reason | Should Be 'baseurl-missing'
+        $candidate.attempts[0].reason | Should Be 'validation-failed'
         $candidate.attempts[0].stage | Should Be 'active-fallback'
     }
 
@@ -260,6 +318,48 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         Assert-MockCalled Ensure-BootstrapNotepadPlusPlusDefaults -Times 1 -Exactly
         Assert-MockCalled Ensure-BootstrapOpenAiCompatibleUserEnv -Times 0 -Exactly
     }
+
+    It 'exposes Codex Desktop repair as dev-ai recommended tuning' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $item = @($catalog.items | Where-Object { $_.id -eq 'codex-desktop-repair' })[0]
+
+        $item.category | Should Be 'dev-ai'
+        $item.defaultMode | Should Be 'recommended'
+        (@($item.actions) -contains 'repair') | Should Be $true
+        (@($item.rollback) -contains 'backup-file') | Should Be $true
+    }
+
+    It 'exposes AI agent BYOK config for requested agent apps' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $item = @($catalog.items | Where-Object { $_.id -eq 'ai-agent-byok-config' })[0]
+
+        $item.category | Should Be 'dev-ai'
+        $item.defaultMode | Should Be 'recommended'
+        (@($item.targetApps) -contains 'openclaw') | Should Be $true
+        (@($item.targetApps) -contains 'hermes') | Should Be $true
+        (@($item.targetApps) -contains 'kilo') | Should Be $true
+        (@($item.actions) -contains 'config-file') | Should Be $true
+    }
+
+    It 'repairs Codex Desktop WSL state with backup' {
+        $root = Join-Path $env:TEMP ("phasezero_codex_state_{0}" -f ([Guid]::NewGuid().ToString('N')))
+        New-Item -Path $root -ItemType Directory -Force | Out-Null
+        $statePath = Join-Path $root '.codex-global-state.json'
+        @{
+            runCodexInWindowsSubsystemForLinux = $true
+            integratedTerminalShell = 'wsl'
+            keep = 'value'
+        } | ConvertTo-Json -Depth 4 | Set-Content -Path $statePath -Encoding UTF8
+
+        $result = Repair-BootstrapCodexDesktopStateFile -Path $statePath -DisableWslFallback
+        $state = Get-Content -Path $statePath -Raw | ConvertFrom-Json
+
+        $result.status | Should Be 'repaired'
+        (Test-Path -LiteralPath ([string]$result.backup)) | Should Be $true
+        [bool]$state.runCodexInWindowsSubsystemForLinux | Should Be $false
+        [string]$state.integratedTerminalShell | Should Be 'powershell'
+        [string]$state.keep | Should Be 'value'
+    }
 }
 
 Describe 'AppTuning installComponents e catalogo de componentes' {
@@ -288,7 +388,7 @@ Describe 'AppTuning installComponents e catalogo de componentes' {
         }
     }
 
-    It 'itens tuning sem installComponents inline tem mapa (ou lista vazia intencional so edge-background-off)' {
+    It 'itens tuning sem installComponents inline tem mapa (ou lista vazia intencional para sistema/app-free)' {
         $appTuning = Get-BootstrapAppTuningCatalog
         $missing = New-Object System.Collections.Generic.List[string]
         foreach ($item in @($appTuning.items)) {
@@ -296,25 +396,78 @@ Describe 'AppTuning installComponents e catalogo de componentes' {
             if ($id -match '^app-') { continue }
             if (Test-HasInlineInstallComponents -Item $item) { continue }
             $comps = @(Get-BootstrapAppTuningInstallComponents -Item $item)
-            if ($comps.Count -eq 0 -and $id -ne 'edge-background-off') {
+            $itemMap = ConvertTo-BootstrapHashtable -InputObject $item
+            $appFree = (($itemMap -is [hashtable]) -and $itemMap.ContainsKey('alwaysAvailable') -and [bool]$itemMap['alwaysAvailable'])
+            if ($comps.Count -eq 0 -and $id -ne 'edge-background-off' -and -not $appFree) {
                 [void]$missing.Add($id)
             }
         }
         $missing.Count | Should Be 0
     }
 
-    It 'mapeia steam-input-desktop-layout-audit, comet-manual e openwebui-dev-session para instalacao isolada/lote' {
+    It 'mapeia steam-input-desktop-layout-audit, codex-desktop-repair, ai-agent-byok-config, comet-manual e openwebui-dev-session para instalacao isolada/lote' {
         $app = Get-BootstrapAppTuningCatalog
         $by = @{}
         foreach ($x in @($app.items)) { $by[[string]$x.id] = $x }
         $a = @(Get-BootstrapAppTuningInstallComponents -Item $by['steam-input-desktop-layout-audit'])
         $a.Count | Should Be 1
         $a[0] | Should Be 'steam'
+        $d = @(Get-BootstrapAppTuningInstallComponents -Item $by['codex-desktop-repair'])
+        $d.Count | Should Be 3
+        (@($d) -contains 'codex-installer') | Should Be $true
+        (@($d) -contains 'codex-cli') | Should Be $true
+        (@($d) -contains 'vcpp-redist') | Should Be $true
+        $e = @(Get-BootstrapAppTuningInstallComponents -Item $by['ai-agent-byok-config'])
+        (@($e) -contains 'bootstrap-secrets') | Should Be $true
+        (@($e) -contains 'kilo-cli') | Should Be $true
+        (@($e) -contains 'openclaw') | Should Be $true
+        (@($e) -contains 'hermes') | Should Be $true
         $b = @(Get-BootstrapAppTuningInstallComponents -Item $by['comet-manual'])
         $b.Count | Should Be 1
         $b[0] | Should Be 'perplexity'
         $c = @(Get-BootstrapAppTuningInstallComponents -Item $by['openwebui-dev-session'])
         $c.Count | Should Be 1
         $c[0] | Should Be 'openwebui'
+    }
+}
+
+Describe 'AI agent performance helpers' {
+    It 'applies visual performance registry values through reversible registry helper' {
+        Mock Apply-BootstrapRegistryDword {
+            return [ordered]@{ path = $Path; name = $Name; value = $Value; status = 'applied' }
+        }
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot 'C:\Workspace' -ResolvedCloneBaseDir 'C:\Workspace'
+
+        $result = Apply-AiAgentPerformanceTuning -State $state -Item ([ordered]@{ id = 'windows-ai-visual-performance'; category = 'ai-agent-performance' })
+
+        $result.status | Should Be 'applied'
+        Assert-MockCalled Apply-BootstrapRegistryDword -ParameterFilter { $Path -eq 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects' -and $Name -eq 'VisualFXSetting' -and $Value -eq 2 } -Times 1
+        Assert-MockCalled Apply-BootstrapRegistryDword -ParameterFilter { $Path -eq 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -and $Name -eq 'EnableTransparency' -and $Value -eq 0 } -Times 1
+    }
+
+    It 'adds only workspace Defender exclusions and registers rollback' {
+        Mock Test-IsAdmin { return $true }
+        Mock Get-MpPreference { return [pscustomobject]@{ ExclusionPath = @('C:\Existing'); ExclusionProcess = @() } }
+        Mock Add-MpPreference
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot 'C:\Workspace' -ResolvedCloneBaseDir 'C:\Workspace'
+
+        $result = Add-BootstrapDefenderExclusion -State $state -Kind 'ExclusionPath' -Value 'C:\Workspace'
+
+        $result.status | Should Be 'applied'
+        Assert-MockCalled Add-MpPreference -ParameterFilter { $ExclusionPath -eq 'C:\Workspace' } -Times 1
+        $defenderChanges = @($state.Changes.ToArray() | Where-Object {
+            $change = ConvertTo-BootstrapHashtable -InputObject $_
+            ($change -is [hashtable]) -and [string]$change['Type'] -eq 'DefenderExclusion' -and [string]$change['Target'] -eq 'C:\Workspace'
+        })
+        $defenderChanges.Count | Should Be 1
+    }
+
+    It 'keeps Docker priority tuning non-blocking when Docker is absent' {
+        Mock Get-Process { return @() }
+
+        $result = Set-BootstrapDockerHighPriority
+
+        $result.status | Should Be 'skipped'
+        $result.blocking | Should Be $false
     }
 }

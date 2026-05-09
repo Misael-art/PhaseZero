@@ -393,10 +393,44 @@ Describe 'Bootstrap secrets manifest v2' {
         $resolved.cline.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
         $resolved.zed.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
         $resolved.trae.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.openClaw.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.hermes.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.kilo.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+    }
+
+    It 'does not propagate Gemini credentials outside the Google/Antigravity lane' {
+        $fixture = @{
+            metadata = @{ version = 2 }
+            providers = @{
+                google = @{
+                    activeCredential = 'google-main-01'
+                    rotationOrder = @('google-main-01')
+                    credentials = @{
+                        'google-main-01' = @{
+                            displayName = 'Gemini'
+                            secret = 'AIzaTestCredentialForPolicyOnly123456789'
+                            secretKind = 'apiKey'
+                            validation = @{ state = 'passed'; checkedAt = '2026-05-09T00:00:00Z'; message = 'ok' }
+                        }
+                    }
+                }
+            }
+            targets = (Get-BootstrapSecretsTemplate).targets
+        }
+
+        $resolved = Get-BootstrapResolvedSecretsTargets -SecretsData $fixture
+
+        $resolved.userEnv.ContainsKey('GEMINI_API_KEY') | Should Be $false
+        $resolved.openCode.env.ContainsKey('GEMINI_API_KEY') | Should Be $false
+        $resolved.roo.env.ContainsKey('GEMINI_API_KEY') | Should Be $false
+        $resolved.cline.env.ContainsKey('GEMINI_API_KEY') | Should Be $false
+        @(Get-BootstrapOpenCodeProviderRecords -SecretsData $fixture).Count | Should Be 0
     }
 
     It 'redacts sensitive env values in logs without hiding safe values' {
         (Get-BootstrapEnvValueForLog -Name 'OPENAI_API_KEY' -Value 'sk-secret') | Should Be '[redacted]'
+        (Get-BootstrapEnvValueForLog -Name 'OPENAI_ORGANIZATION' -Value 'org-secret') | Should Be '[redacted]'
+        (Get-BootstrapEnvValueForLog -Name 'OPENAI_PROJECT' -Value 'proj-secret') | Should Be '[redacted]'
         (Get-BootstrapEnvValueForLog -Name 'OPENAI_BASE_URL' -Value 'https://api.openai.com/v1') | Should Be 'https://api.openai.com/v1'
     }
 

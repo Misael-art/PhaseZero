@@ -147,6 +147,33 @@ Describe 'Resilience Architecture' {
                 Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
             }
         }
+
+        It 'rolls back service and Defender exclusion changes from a manifest' {
+            $tempDir = Join-Path $env:TEMP ('bootstrap-rollback-service-defender-test-' + (New-Guid).ToString())
+            $null = New-Item -Path $tempDir -ItemType Directory -Force
+            $manifestPath = Join-Path $tempDir 'changes.json'
+            try {
+                $manifest = [ordered]@{
+                    changes = @(
+                        [ordered]@{ Type = 'DefenderExclusion'; Target = 'C:\PhaseZero'; Name = 'ExclusionPath'; OldValue = $null; NewValue = 'C:\PhaseZero'; Reversible = 'partial' },
+                        [ordered]@{ Type = 'Service'; Target = 'DiagTrack'; Name = 'StartupType'; OldValue = [ordered]@{ StartType = 'Manual'; Status = 'Running' }; NewValue = 'Disabled'; Reversible = 'partial' }
+                    )
+                }
+                $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path $manifestPath -Encoding utf8
+                Mock Set-Service
+                Mock Start-Service
+                Mock Remove-MpPreference
+                Mock Write-Log
+
+                Invoke-BootstrapRollback -ChangesPath $manifestPath
+
+                Assert-MockCalled Remove-MpPreference -ParameterFilter { $ExclusionPath -eq 'C:\PhaseZero' } -Times 1
+                Assert-MockCalled Set-Service -ParameterFilter { $Name -eq 'DiagTrack' -and $StartupType -eq 'Manual' } -Times 1
+                Assert-MockCalled Start-Service -ParameterFilter { $Name -eq 'DiagTrack' } -Times 1
+            } finally {
+                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
     }
 
     Context 'Reversibility Contract' {
@@ -580,6 +607,31 @@ Python 3.13       Python.Python.3.13   3.13.13  winget
             { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Foo.Bar' -DisplayName 'Foo' -ProbePaths @('C:\real\foo.exe') } | Should Not Throw
             Assert-MockCalled Test-WingetProbePathsOnDisk -Times 1 -Exactly
             Assert-MockCalled Test-WingetPackageInstalled -Times 0 -Exactly
+        }
+    }
+
+    Context 'OpenClaw npm install resiliente' {
+        It 'aceita timeout quando npm cria o binario funcional antes do postinstall travar' {
+            $root = Join-Path $env:TEMP ("openclaw-timeout-{0}" -f ([Guid]::NewGuid().ToString('N')))
+            $prefix = Join-Path $root 'npm-prefix'
+            $npm = Join-Path $root 'npm.cmd'
+            $cmd = Join-Path $prefix 'openclaw.cmd'
+            try {
+                New-Item -Path $prefix -ItemType Directory -Force | Out-Null
+                Set-Content -LiteralPath $npm -Value "@echo off`r`nif ""%1""==""prefix"" if ""%2""==""-g"" echo $prefix`r`nexit /b 0`r`n" -Encoding ascii
+                Mock Invoke-NpmWithLog {
+                    New-Item -Path (Split-Path -Parent $cmd) -ItemType Directory -Force | Out-Null
+                    Set-Content -LiteralPath $cmd -Value '@echo off' -Encoding ascii
+                    return 124
+                }
+                Mock Invoke-NativeFirstLine { return 'OpenClaw 2026.5.7' }
+                Mock Write-Log {}
+
+                { Ensure-OpenClaw -NpmCmd $npm } | Should Not Throw
+                Assert-MockCalled Invoke-NpmWithLog -Times 1 -Exactly
+            } finally {
+                if (Test-Path $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+            }
         }
     }
 }
