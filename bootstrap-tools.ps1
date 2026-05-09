@@ -62,6 +62,7 @@ $script:SkipManualRequirements = $SkipManualRequirements
 $script:IgnoreManualRequirements = $IgnoreManualRequirements
 $script:RequireNoPendingReboot = [bool]$RequireNoPendingReboot
 $script:AllowPendingReboot = [bool]$AllowPendingReboot
+$script:SuppressConsoleLog = [bool]$BootstrapUiLibraryMode
 $script:BootstrapSecretsProviderCatalogCache = $null
 $script:BootstrapAppCapabilityCatalogCache = $null
 $script:BootstrapManagedMcpCatalogCache = $null
@@ -189,7 +190,9 @@ function Write-Log {
             }
         } catch { }
     }
-    Write-Host $line
+    if (-not [bool]$script:SuppressConsoleLog) {
+        Write-Host $line
+    }
 }
 
 function Get-BootstrapFreeSpace {
@@ -2648,6 +2651,43 @@ function Quote-WindowsPathTokensInString {
     }
 }
 
+function ConvertTo-GitBashPathToken {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $value = [string]$Path
+    if ($value -notmatch '^([A-Za-z]):\\(.+)$') { return $value }
+
+    $drive = $matches[1].ToLowerInvariant()
+    $tail = $matches[2] -replace '\\', '/'
+    return ("/{0}/{1}" -f $drive, $tail)
+}
+
+function Quote-GitBashArgument {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    $escaped = ([string]$Value).Replace('\', '\\').Replace('"', '\"').Replace('$', '\$').Replace('`', '\`')
+    return ('"{0}"' -f $escaped)
+}
+
+function Convert-WindowsPathTokensToGitBashCommand {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    $pathPattern = '([A-Za-z]:\\[^"'']*?\.(?:exe|cmd|bat|ps1|js))'
+    try {
+        $converted = [regex]::Replace($Text, '(["''])' + $pathPattern + '\1', {
+            param($m)
+            Quote-GitBashArgument -Value (ConvertTo-GitBashPathToken -Path $m.Groups[2].Value)
+        })
+        $converted = [regex]::Replace($converted, '(?<!["''])' + $pathPattern + '(?!["''])', {
+            param($m)
+            Quote-GitBashArgument -Value (ConvertTo-GitBashPathToken -Path $m.Groups[1].Value)
+        })
+        return $converted
+    } catch {
+        return $Text
+    }
+}
+
 function Convert-HookItemIfNeeded {
     param(
         [Parameter(Mandatory = $true)]$Item,
@@ -2656,6 +2696,9 @@ function Convert-HookItemIfNeeded {
 
     if ($Item -is [string]) {
         $s = [string]$Item
+        if ($s -match '[A-Za-z]:\\') {
+            return (Convert-WindowsPathTokensToGitBashCommand -Text $s)
+        }
         if ($s -match '(?i)(^|\\s)/usr/bin/bash(\\s|$)' -or $s -match '(?i)(^|\\s)/bin/bash(\\s|$)' -or $s -match '(?i)\\bbash\\b') {
             return $null
         }
@@ -2702,10 +2745,78 @@ function Convert-HookItemIfNeeded {
 
     $cmdStr = $null
     if ($cmd -is [string]) { $cmdStr = [string]$cmd }
+    if ($cmdStr -and ($cmdStr -match '[A-Za-z]:\\')) {
+        try { $Item.command = (Convert-WindowsPathTokensToGitBashCommand -Text $cmdStr) } catch { }
+    }
     if ($cmdStr -and ($cmdStr -match '(?i)\\bbash\\b') -and ($cmdStr -match '(?i)C:\\\\Program Files\\\\') -and ($cmdStr -notmatch '(?i)\"C:\\\\Program Files\\\\')) {
         return $null
     }
     return $Item
+}
+
+function Get-BootstrapBonsaiCliDistPath {
+    param([string]$BonsaiCommandPath)
+
+    $candidates = @()
+    if ($BonsaiCommandPath) { $candidates += $BonsaiCommandPath }
+
+    try {
+        $cmd = Get-Command bonsai -ErrorAction SilentlyContinue
+        if ($cmd) { $candidates += $cmd.Source }
+    } catch { }
+
+    if ($env:APPDATA) {
+        $candidates += (Join-Path $env:APPDATA 'npm\bonsai.ps1')
+        $candidates += (Join-Path $env:APPDATA 'npm\bonsai.cmd')
+    }
+
+    foreach ($cmdPath in @($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $cmdPath)) { continue }
+        $dir = Split-Path -Parent $cmdPath
+        if (-not $dir) { continue }
+        $candidate = Join-Path $dir 'node_modules\@bonsai-ai\cli\dist\cli.js'
+        if (Test-Path -LiteralPath $candidate) {
+            try { return (Resolve-Path -LiteralPath $candidate).Path } catch { return $candidate }
+        }
+    }
+
+    return $null
+}
+
+function Repair-BootstrapBonsaiCliSnapshotHooks {
+    param(
+        [string]$CliPath,
+        [string]$BonsaiCommandPath
+    )
+
+    if (-not $CliPath) {
+        $CliPath = Get-BootstrapBonsaiCliDistPath -BonsaiCommandPath $BonsaiCommandPath
+    }
+    if (-not $CliPath -or -not (Test-Path -LiteralPath $CliPath)) {
+        return [pscustomobject]@{ Status = 'missing'; Path = $CliPath; BackupPath = $null; Changed = $false }
+    }
+
+    $raw = Get-Content -LiteralPath $CliPath -Raw -Encoding utf8
+    $original = 'let D=`${process.argv[0]} ${process.argv[1]} internal snapshot`;return JSON.stringify'
+    $patchedMarker = 'JSON.stringify(C)}).join(" ");return JSON.stringify'
+    if ($raw.Contains($patchedMarker)) {
+        return [pscustomobject]@{ Status = 'already-patched'; Path = $CliPath; BackupPath = $null; Changed = $false }
+    }
+    if (-not $raw.Contains($original)) {
+        return [pscustomobject]@{ Status = 'unsupported'; Path = $CliPath; BackupPath = $null; Changed = $false }
+    }
+
+    $replacement = 'let D=[process.argv[0],process.argv[1],"internal","snapshot"].map(z=>{let C=String(z);if(process.platform==="win32"&&/^[A-Za-z]:\\/.test(C))C="/"+C[0].toLowerCase()+C.slice(2).replace(/\\/g,"/");return JSON.stringify(C)}).join(" ");return JSON.stringify'
+    $updated = $raw.Replace($original, $replacement)
+    if ($updated -eq $raw) {
+        return [pscustomobject]@{ Status = 'unchanged'; Path = $CliPath; BackupPath = $null; Changed = $false }
+    }
+
+    $backupPath = ('{0}.{1}.bak' -f $CliPath, (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    Copy-Item -LiteralPath $CliPath -Destination $backupPath -Force
+    Write-BootstrapAtomicText -Path $CliPath -Content $updated
+
+    return [pscustomobject]@{ Status = 'patched'; Path = $CliPath; BackupPath = $backupPath; Changed = $true }
 }
 
 function Ensure-ClaudeHookConfigsHealthy {
@@ -2739,15 +2850,20 @@ function Ensure-ClaudeHookConfigsHealthy {
         if (-not $hooks) { continue }
 
         $changed = $false
-        foreach ($k in @('SessionStart', 'UserPromptSubmit', 'Stop')) {
+        foreach ($k in @('SessionStart', 'UserPromptSubmit', 'Stop', 'StopFailure', 'PostToolUseFailure')) {
             $arr = $null
             try { $arr = $hooks.$k } catch { $arr = $null }
             if (-not $arr) { continue }
 
             $newArr = @()
             foreach ($item in @($arr)) {
+                $beforeItem = ''
+                try { $beforeItem = (($item | ConvertTo-Json -Depth 30 -Compress) -as [string]) } catch { $beforeItem = '' }
                 $fixed = Convert-HookItemIfNeeded -Item $item -GitBashPath $GitBashPath
                 if ($null -ne $fixed) {
+                    $afterItem = ''
+                    try { $afterItem = (($fixed | ConvertTo-Json -Depth 30 -Compress) -as [string]) } catch { $afterItem = '' }
+                    if ($beforeItem -ne $afterItem) { $changed = $true }
                     $newArr += $fixed
                 } else {
                     $changed = $true
@@ -4556,23 +4672,76 @@ function Repair-BootstrapCodexDesktop {
     }
 }
 
+function Resolve-BootstrapPythonExecutable {
+    $pythonExe = Resolve-CommandPath -Name 'python'
+    if ($pythonExe -and ($pythonExe -notmatch '\\Microsoft\\WindowsApps\\')) { return $pythonExe }
+
+    Refresh-SessionPath
+    $pythonExe = Resolve-CommandPath -Name 'python'
+    if ($pythonExe -and ($pythonExe -notmatch '\\Microsoft\\WindowsApps\\')) { return $pythonExe }
+
+    $pyLauncher = Resolve-CommandPath -Name 'py'
+    if ($pyLauncher -and ($pyLauncher -notmatch '\\Microsoft\\WindowsApps\\')) {
+        try {
+            $resolved = (& $pyLauncher -3 -c 'import sys; print(sys.executable)' 2>&1) | Select-Object -First 1
+            if ($resolved -and (Test-Path $resolved)) { return [string]$resolved }
+        } catch { }
+    }
+
+    $roots = @(
+        (Join-Path $env:LOCALAPPDATA 'Programs\Python'),
+        (Join-Path $env:ProgramFiles 'Python'),
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)}
+    ) | Where-Object { $_ -and (Test-Path $_) }
+
+    foreach ($root in $roots) {
+        $dirs = Get-ChildItem -Path $root -Directory -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -match '^Python3' } |
+            Sort-Object Name -Descending
+        foreach ($d in $dirs) {
+            $candidate = Join-Path $d.FullName 'python.exe'
+            if (Test-Path $candidate) { return [string]$candidate }
+        }
+    }
+
+    return $null
+}
+
 function Ensure-Uv {
     $uvExe = Resolve-CommandPath -Name 'uv'
+    if (-not $uvExe) {
+        Refresh-SessionPath
+        $uvExe = Resolve-CommandPath -Name 'uv'
+    }
     if ($uvExe) {
         $ver = Invoke-NativeFirstLine -Exe $uvExe -Args @('--version')
         Write-Log "uv já instalado: $ver ($uvExe)"
         return $uvExe
     }
 
-    $pythonExe = Resolve-CommandPath -Name 'python'
-    if (-not $pythonExe) { throw 'uv é necessario, mas o comando python nao foi encontrado para instalar uv via pip.' }
+    $pythonExe = Resolve-BootstrapPythonExecutable
+    if (-not $pythonExe) { throw 'uv é necessario, mas nenhum python.exe real foi encontrado (PATH, py launcher ou instalações conhecidas). Garanta python-core antes de chamar uvtool.' }
 
-    Write-Log 'Instalando uv via pip...'
+    Write-Log "Instalando uv via pip ($pythonExe)..."
     $exitCode = Invoke-NativeWithRetry -Exe $pythonExe -Args @('-m', 'pip', 'install', '-U', '--upgrade-strategy', 'only-if-needed', 'uv') -OperationName 'instalacao do uv via pip'
     if ($exitCode -ne 0) { throw "Falha ao instalar uv via pip (exit=$exitCode)." }
 
     Refresh-SessionPath
     $uvExe = Resolve-CommandPath -Name 'uv'
+    if (-not $uvExe) {
+        $pythonDir = Split-Path -Parent $pythonExe
+        $scriptsDir = Join-Path $pythonDir 'Scripts'
+        if (Test-Path $scriptsDir) {
+            Ensure-PathUserContains -Dir $scriptsDir
+            Refresh-SessionPath
+            $uvExe = Resolve-CommandPath -Name 'uv'
+            if (-not $uvExe) {
+                $candidate = Join-Path $scriptsDir 'uv.exe'
+                if (Test-Path $candidate) { $uvExe = $candidate }
+            }
+        }
+    }
     if (-not $uvExe) { throw 'Instalação do uv concluída, mas o comando uv nao foi encontrado no PATH.' }
 
     $ver = Invoke-NativeFirstLine -Exe $uvExe -Args @('--version')
@@ -12229,7 +12398,8 @@ function Ensure-BootstrapJsonTargetFile {
         [Parameter(Mandatory = $true)][hashtable]$Target,
         [Parameter(Mandatory = $true)][string]$Label,
         [ValidateSet('standard', 'opencode', 'vscode', 'zed', 'zcode')][string]$McpFormat = 'standard',
-        [string]$McpPropertyName = 'mcpServers'
+        [string]$McpPropertyName = 'mcpServers',
+        [switch]$RemoveRootEnv
     )
 
     if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
@@ -12252,7 +12422,9 @@ function Ensure-BootstrapJsonTargetFile {
 
     $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 20 -Compress)
 
-    if ($Target.ContainsKey('env') -and ($Target['env'] -is [hashtable])) {
+    if ($RemoveRootEnv) {
+        if ($settings.ContainsKey('env')) { $null = $settings.Remove('env') }
+    } elseif ($Target.ContainsKey('env') -and ($Target['env'] -is [hashtable])) {
         $envMap = Ensure-BootstrapNamedMap -Parent $settings -Name 'env'
         Set-BootstrapNonEmptyStringValues -Target $envMap -Values $Target['env']
     }
@@ -12717,7 +12889,6 @@ function Ensure-BootstrapOpenCodeSecrets {
         return $false
     }
 
-    $mcpUpdated = Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapOpenCodeConfigPath) -Target $ResolvedTargets['openCode'] -Label 'OpenCode' -McpFormat 'opencode' -McpPropertyName 'mcp'
     $authUpdated = $false
     $providerConfigUpdated = $false
     if ($null -ne $SecretsData) {
@@ -12726,6 +12897,7 @@ function Ensure-BootstrapOpenCodeSecrets {
         $authUpdated = [bool]$authSummary.updated
         $providerConfigUpdated = [bool]$providerConfigSummary.updated
     }
+    $mcpUpdated = Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapOpenCodeConfigPath) -Target $ResolvedTargets['openCode'] -Label 'OpenCode' -McpFormat 'opencode' -McpPropertyName 'mcp' -RemoveRootEnv
 
     return ($mcpUpdated -or $authUpdated -or $providerConfigUpdated)
 }
@@ -12790,6 +12962,60 @@ function Ensure-BootstrapOpenCodeProviderAuth {
     }
 }
 
+function Move-BootstrapOpenCodeRootEnvToProviderConfig {
+    param([Parameter(Mandatory = $true)][hashtable]$Settings)
+
+    if (-not ($Settings.ContainsKey('env') -and ($Settings['env'] -is [hashtable]))) {
+        return @()
+    }
+
+    $envMap = ConvertTo-BootstrapHashtable -InputObject $Settings['env']
+    if (-not ($envMap -is [hashtable]) -or $envMap.Count -eq 0) {
+        $null = $Settings.Remove('env')
+        return @()
+    }
+
+    $mappings = @(
+        @{ env = 'OPENAI_API_KEY'; provider = 'openai'; option = 'apiKey' },
+        @{ env = 'OPENAI_BASE_URL'; provider = 'openai'; option = 'baseURL' },
+        @{ env = 'OPENAI_ORGANIZATION'; provider = 'openai'; option = 'organization' },
+        @{ env = 'ANTHROPIC_API_KEY'; provider = 'anthropic'; option = 'apiKey' },
+        @{ env = 'OPENROUTER_API_KEY'; provider = 'openrouter'; option = 'apiKey' },
+        @{ env = 'OPENROUTER_BASE_URL'; provider = 'openrouter'; option = 'baseURL' },
+        @{ env = 'DEEPSEEK_API_KEY'; provider = 'deepseek'; option = 'apiKey' },
+        @{ env = 'DEEPSEEK_BASE_URL'; provider = 'deepseek'; option = 'baseURL' },
+        @{ env = 'MOONSHOT_API_KEY'; provider = 'moonshot'; option = 'apiKey' },
+        @{ env = 'MOONSHOT_BASE_URL'; provider = 'moonshot'; option = 'baseURL' },
+        @{ env = 'XAI_API_KEY'; provider = 'xai'; option = 'apiKey' },
+        @{ env = 'XAI_BASE_URL'; provider = 'xai'; option = 'baseURL' }
+    )
+
+    $providerMap = Ensure-BootstrapNamedMap -Parent $Settings -Name 'provider'
+    $moved = @()
+    foreach ($mapping in @($mappings)) {
+        $envName = [string]$mapping.env
+        if (-not $envMap.ContainsKey($envName)) { continue }
+        $value = [string]$envMap[$envName]
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+
+        $providerId = [string]$mapping.provider
+        $optionName = [string]$mapping.option
+        $providerConfig = @{}
+        if ($providerMap.ContainsKey($providerId) -and ($providerMap[$providerId] -is [hashtable])) {
+            $providerConfig = ConvertTo-BootstrapHashtable -InputObject $providerMap[$providerId]
+        }
+        $options = Ensure-BootstrapNamedMap -Parent $providerConfig -Name 'options'
+        if (-not $options.ContainsKey($optionName) -or [string]::IsNullOrWhiteSpace([string]$options[$optionName])) {
+            $options[$optionName] = $value
+            $moved += @($envName)
+        }
+        $providerMap[$providerId] = $providerConfig
+    }
+
+    $null = $Settings.Remove('env')
+    return @($moved)
+}
+
 function Ensure-BootstrapOpenCodeProviderConfig {
     param(
         [Parameter(Mandatory = $true)]$SecretsData,
@@ -12815,6 +13041,7 @@ function Ensure-BootstrapOpenCodeProviderConfig {
     }
 
     $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 30 -Compress)
+    $migratedRootEnv = @(Move-BootstrapOpenCodeRootEnvToProviderConfig -Settings $settings)
     if (-not $settings.ContainsKey('$schema')) {
         $settings['$schema'] = 'https://opencode.ai/config.json'
     }
@@ -12858,6 +13085,9 @@ function Ensure-BootstrapOpenCodeProviderConfig {
         }
         Write-BootstrapJsonFile -Path $path -Value $settings
         Write-Log ("{0} provider config sincronizado: {1}" -f $Label, $path)
+        if ($migratedRootEnv.Count -gt 0) {
+            Write-Log ("{0} env raiz invalido migrado/removido: {1}" -f $Label, (@($migratedRootEnv) -join ', '))
+        }
     }
 
     return [ordered]@{
@@ -16277,6 +16507,21 @@ function Invoke-BootstrapComponent {
         'npm' {
             Ensure-BootstrapNodeCore -State $State
             Ensure-NpmGlobalPackage -NpmCmd $State.NodeInfo.NpmCmd -Package $componentDef.Package -DisplayName $componentDef.DisplayName
+            if ($Name -eq 'bonsai-cli' -or ([string]$componentDef.Package) -eq '@bonsai-ai/cli') {
+                $bonsaiCommandPath = $null
+                if ($State.NodeInfo -and $State.NodeInfo.NpmBin) {
+                    $candidate = Join-Path ([string]$State.NodeInfo.NpmBin) 'bonsai.ps1'
+                    if (Test-Path -LiteralPath $candidate) { $bonsaiCommandPath = $candidate }
+                }
+                $repair = Repair-BootstrapBonsaiCliSnapshotHooks -BonsaiCommandPath $bonsaiCommandPath
+                if ($repair.Status -eq 'patched') {
+                    Write-Log ("Bonsai hooks corrigidos para Git Bash: {0}" -f $repair.Path)
+                } elseif ($repair.Status -eq 'already-patched') {
+                    Write-Log ("Bonsai hooks ja corrigidos: {0}" -f $repair.Path)
+                } else {
+                    Write-Log ("Bonsai hooks nao corrigidos automaticamente (status={0})." -f $repair.Status) 'WARN'
+                }
+            }
         }
         'uvtool' {
             Ensure-BootstrapPythonCore -State $State

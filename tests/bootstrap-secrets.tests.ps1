@@ -57,17 +57,17 @@ function Invoke-BootstrapProcess {
         throw "Failed to start bootstrap process for args: $($CommandArgs -join ' ')"
     }
 
-    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-    $stderrTask = $process.StandardError.ReadToEndAsync()
-
     if (-not $process.WaitForExit(120000)) {
         try { $process.Kill() } catch { }
         throw "Bootstrap invocation timed out after 120000ms for args: $($CommandArgs -join ' ')"
     }
 
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+
     return [pscustomobject]@{
         ExitCode = $process.ExitCode
-        Output = @($stdoutTask.Result, $stderrTask.Result) -join [Environment]::NewLine
+        Output = @($stdout, $stderr) -join [Environment]::NewLine
     }
 }
 

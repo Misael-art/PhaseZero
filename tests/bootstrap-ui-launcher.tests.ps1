@@ -304,12 +304,38 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'Get-ProfileExecutionOverride'
         $raw | Should Match 'Whitelist forte: escopo isolado ignora historico global'
         $raw | Should Match 'Escopo isolado invalido: ExcludeAppTuningItem deve estar vazio'
+        $raw | Should Match 'Refresh-ReviewPage'
+        $raw | Should Match 'scopeSnapshot = Get-CurrentExecutionScopeSnapshot'
+        $raw | Should Match 'Escopo: \$\(\[string\]\$scopeSnapshot\.scopeLabel\)'
         $raw | Should Match 'Execution scope snapshot\. Source='
         $raw | Should Match 'ArgumentList acima do limite seguro'
         $raw | Should Match 'YesNoCancel'
         $raw | Should Match 'scopeMode=\{0\}'
         $raw | Should Match 'Clear-ExecutionScopeOverride'
         $raw | Should Match 'Escopo:'
+    }
+
+    It 'clears profile, component, quick option, host health and AppTuning state together' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'function Clear-UiAllSelections'
+        $raw | Should Match '\$ui\.State\.selectedProfiles = @\(\)'
+        $raw | Should Match '\$ui\.State\.selectedComponents = @\(\)'
+        $raw | Should Match '\$ui\.State\.excludedComponents = @\(\)'
+        $raw | Should Match '\$ui\.State\.hostHealth = ''off'''
+        $raw | Should Match '\$ui\.State\.appTuningMode = ''off'''
+        $raw | Should Match '\$ui\.State\.enableClaudeCodeProjectMcps = \$false'
+        $raw | Should Match '\$ui\.State\.offlineMode = \$false'
+        $raw | Should Match 'Refresh-HostSetupControls'
+    }
+
+    It 'guards required components from UI exclusion' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Repair-UiExcludedComponents'
+        $raw | Should Match 'Test-UiComponentCanExclude'
+        $raw | Should Match 'Componente obrigatorio/dependencia base'
+        $raw | Should Match 'Remove-UiStringValue'
     }
 
     It 'does not ship known mojibake in visible UI strings' {

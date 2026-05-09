@@ -27,12 +27,12 @@ function Remove-ManagedMcpTestRoot {
 
 Describe 'Bootstrap managed MCPs' {
     BeforeEach {
-        $script:TestDataRoot = New-ManagedMcpTestRoot
-        Reset-ManagedMcpTestRoot -Path $script:TestDataRoot
         $script:OriginalUserProfile = $env:USERPROFILE
         $script:OriginalAppData = $env:APPDATA
         $script:OriginalLocalAppData = $env:LOCALAPPDATA
         $script:OriginalBootstrapDataRoot = $env:BOOTSTRAP_DATA_ROOT
+        $script:TestDataRoot = New-ManagedMcpTestRoot
+        Reset-ManagedMcpTestRoot -Path $script:TestDataRoot
     }
 
     AfterEach {

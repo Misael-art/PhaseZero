@@ -2725,25 +2725,72 @@ function Apply-QuickPreset {
     $ui.State.steamDeckVersion   = 'Auto'
 }
 
+function Remove-UiStringValue {
+    param(
+        [AllowNull()]$Values,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    $items = @($Values | ForEach-Object { [string]$_ })
+    return @($items -ne $Value)
+}
+
+function Test-UiComponentCanExclude {
+    param(
+        [Parameter(Mandatory = $true)][string]$ComponentName,
+        [AllowNull()]$Component = $null
+    )
+
+    if (-not $Component) {
+        $lookup = Get-UiComponentCatalogLookup
+        if ($lookup.ContainsKey($ComponentName)) { $Component = $lookup[$ComponentName] }
+    }
+    return [bool]($Component -and [bool]$Component.optional)
+}
+
+function Repair-UiExcludedComponents {
+    $catalogLookup = Get-UiComponentCatalogLookup
+    $kept = @()
+    $removed = @()
+    foreach ($componentName in @(Normalize-BootstrapNames -Names @($ui.State.excludedComponents))) {
+        if ([string]::IsNullOrWhiteSpace([string]$componentName)) { continue }
+        $component = if ($catalogLookup.ContainsKey([string]$componentName)) { $catalogLookup[[string]$componentName] } else { $null }
+        if (Test-UiComponentCanExclude -ComponentName ([string]$componentName) -Component $component) {
+            $kept += @([string]$componentName)
+        } else {
+            $removed += @([string]$componentName)
+        }
+    }
+    if ($removed.Count -gt 0) {
+        $ui.State.excludedComponents = @($kept)
+        Save-UiState -State $ui.State -Path $UiStatePath
+    }
+    return @($removed)
+}
+
 function Clear-UiAllSelections {
     $ui.State.selectedProfiles = @()
     $ui.State.selectedComponents = @()
     $ui.State.excludedComponents = @()
-    $ui.State.appTuningMode = 'custom'
+    $ui.State.hostHealth = 'off'
+    $ui.State.appTuningMode = 'off'
     $ui.State.selectedAppTuningCategories = @()
     $ui.State.selectedAppTuningItems = @()
     $ui.State.excludedAppTuningItems = @()
+    $ui.State.steamDeckVersion = 'Auto'
     $ui.State.enableClaudeCodeProjectMcps = $false
     $ui.State.skipManualRequirements = $false
     $ui.State.ignoreManualRequirements = $false
     $ui.State.requireNoPendingReboot = $false
     $ui.State.offlineMode = $false
     $ui.State.enableResume = $false
+    try { $ui.ExecutionScopeOverride = $null; $ui.CurrentExecutionScopeLabel = '' } catch { }
     Save-UiState -State $ui.State -Path $UiStatePath
     Refresh-SelectionTrees
     Refresh-SelectionSummary
+    Refresh-HostSetupControls
     Refresh-AppTuningControls
-    Set-AppTuningActionFeedback -Message 'Selecao limpa. Nenhum perfil/componente/app tuning ativo.' -Level 'info'
+    Set-AppTuningActionFeedback -Message 'Selecao limpa. Nenhum perfil/componente/host health/app tuning ativo.' -Level 'info'
 }
 
 function Refresh-CustomPresets {
@@ -2991,6 +3038,7 @@ function Test-UiContractSelectionFilter {
 }
 
 function Refresh-SelectionTrees {
+    $invalidExcludes = @(Repair-UiExcludedComponents)
     $filter = ($ui.FilterTextBox.Text).Trim().ToLowerInvariant()
     $resolvedComponentLookup = Get-UiResolvedComponentNameSet
     $ui.SuppressSelectionEvents = $true
@@ -3025,7 +3073,7 @@ function Refresh-SelectionTrees {
             $cb.Add_Unchecked({
                 if ($ui.SuppressSelectionEvents) { return }
                 $name = [string]$this.Tag.name
-                $ui.State.selectedProfiles = @(@($ui.State.selectedProfiles) | Where-Object { $_ -ne $name })
+                $ui.State.selectedProfiles = @(Remove-UiStringValue -Values $ui.State.selectedProfiles -Value $name)
                 Save-UiState -State $ui.State -Path $UiStatePath
                 Refresh-SelectionTrees
                 Refresh-SelectionSummary
@@ -3049,22 +3097,23 @@ function Refresh-SelectionTrees {
             $isExplicitComponent = (@($ui.State.selectedComponents) -contains $componentName)
             $isResolvedComponent = $resolvedComponentLookup.ContainsKey($componentName)
             $isExcludedComponent = (@($ui.State.excludedComponents) -contains $componentName)
+            $canExcludeComponent = Test-UiComponentCanExclude -ComponentName $componentName -Component $component
             $cb.Content   = $componentName
             $cb.IsChecked = (($isExplicitComponent -or $isResolvedComponent) -and -not $isExcludedComponent)
             $cb.Foreground = Get-UiBrush '#CBD5E1'
             $cb.Style = $window.FindResource('DarkCheck')
-            $cb.Tag = @{ kind = 'component'; item = $component; name = $componentName; explicit = $isExplicitComponent; resolved = $isResolvedComponent; excluded = $isExcludedComponent }
+            $cb.Tag = @{ kind = 'component'; item = $component; name = $componentName; explicit = $isExplicitComponent; resolved = $isResolvedComponent; excluded = $isExcludedComponent; canExclude = $canExcludeComponent }
             $cb.ToolTip = "Componente: $componentName`nDescrição: $([string]$component.description)`nTipo: $([string]$component.kind)`nEstágio: $([string]$component.stage)`nDepende de: $(@($component.dependsOn) -join ', ')"
             if ($isResolvedComponent -and -not $isExplicitComponent) {
                 $cb.Opacity = 0.82
-                $cb.ToolTip = 'Incluido pelo perfil selecionado. Desmarcar item vindo de perfil adiciona em Nao instalar.'
+                $cb.ToolTip = if ($canExcludeComponent) { 'Incluido pelo perfil selecionado. Desmarcar item vindo de perfil adiciona em Nao instalar.' } else { 'Componente obrigatorio/dependencia base. Remova o perfil ou componente que depende dele.' }
             }
             $item.Header = $cb
             $cb.Add_Checked({
                 if ($ui.SuppressSelectionEvents) { return }
                 $name = [string]$this.Tag.name
                 if (@($ui.State.excludedComponents) -contains $name) {
-                    $ui.State.excludedComponents = @(@($ui.State.excludedComponents) | Where-Object { $_ -ne $name })
+                    $ui.State.excludedComponents = @(Remove-UiStringValue -Values $ui.State.excludedComponents -Value $name)
                 }
                 if (-not [bool]$this.Tag.resolved -and -not (@($ui.State.selectedComponents) -contains $name)) {
                     $ui.State.selectedComponents = @(@($ui.State.selectedComponents) + $name)
@@ -3076,12 +3125,18 @@ function Refresh-SelectionTrees {
             $cb.Add_Unchecked({
                 if ($ui.SuppressSelectionEvents) { return }
                 $name = [string]$this.Tag.name
+                if ([bool]$this.Tag.resolved -and -not [bool]$this.Tag.canExclude) {
+                    Refresh-SelectionTrees
+                    Refresh-SelectionSummary
+                    $ui.SelectionErrorLabel.Text = "O componente $name e obrigatorio/dependencia base; remova o perfil ou componente que depende dele."
+                    return
+                }
                 if ([bool]$this.Tag.resolved -and -not (@($ui.State.excludedComponents) -contains $name)) {
                     # Desmarcar item vindo de perfil adiciona em Nao instalar.
                     $ui.State.excludedComponents = @(@($ui.State.excludedComponents) + $name)
                 }
                 if ([bool]$this.Tag.explicit) {
-                    $ui.State.selectedComponents = @(@($ui.State.selectedComponents) | Where-Object { $_ -ne $name })
+                    $ui.State.selectedComponents = @(Remove-UiStringValue -Values $ui.State.selectedComponents -Value $name)
                 }
                 Save-UiState -State $ui.State -Path $UiStatePath
                 Refresh-SelectionTrees
@@ -3110,21 +3165,38 @@ function Refresh-SelectionTrees {
     } finally {
         $ui.SuppressSelectionEvents = $false
     }
+    if ($invalidExcludes.Count -gt 0) {
+        $ui.SelectionErrorLabel.Text = "Exclusoes invalidas removidas: $(@($invalidExcludes) -join ', ')"
+    }
 }
 
 function Refresh-ExcludeList {
     $ui.ExcludeList.Items.Clear()
     try {
+        $null = Repair-UiExcludedComponents
         $selection     = New-BootstrapSelectionObject -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents @() -SelectedHostHealth $ui.State.hostHealth
         $baseResolution = Resolve-BootstrapComponents -SelectedProfiles $selection.Profiles -SelectedComponents $selection.Components -ExcludedComponents @()
+        $catalogLookup = Get-UiComponentCatalogLookup
         foreach ($componentName in @($baseResolution.ResolvedComponents)) {
             $cb = New-Object System.Windows.Controls.CheckBox
             $cb.Content   = $componentName
             $cb.IsChecked = (@($ui.State.excludedComponents) -contains $componentName)
             $cb.Style     = $window.FindResource('DarkCheck')
             $cb.Foreground = Get-UiBrush '#CBD5E1'
-            $tname = $componentName
+            $component = if ($catalogLookup.ContainsKey([string]$componentName)) { $catalogLookup[[string]$componentName] } else { $null }
+            $canExclude = Test-UiComponentCanExclude -ComponentName ([string]$componentName) -Component $component
+            $cb.Tag = @{ name = [string]$componentName; canExclude = $canExclude }
+            if (-not $canExclude) {
+                $cb.IsEnabled = $false
+                $cb.ToolTip = 'Componente obrigatorio/dependencia base. Remova o perfil ou componente que depende dele.'
+            }
             $cb.Add_Checked({
+                $tname = [string]$this.Tag.name
+                if (-not [bool]$this.Tag.canExclude) {
+                    $ui.SelectionErrorLabel.Text = "O componente $tname e obrigatorio/dependencia base e nao pode ser excluido."
+                    $this.IsChecked = $false
+                    return
+                }
                 if (-not (@($ui.State.excludedComponents) -contains $tname)) {
                     $ui.State.excludedComponents = @(@($ui.State.excludedComponents) + $tname)
                     Save-UiState -State $ui.State -Path $UiStatePath
@@ -3133,7 +3205,8 @@ function Refresh-ExcludeList {
                 }
             })
             $cb.Add_Unchecked({
-                $ui.State.excludedComponents = @(@($ui.State.excludedComponents) | Where-Object { $_ -ne $tname })
+                $tname = [string]$this.Tag.name
+                $ui.State.excludedComponents = @(Remove-UiStringValue -Values $ui.State.excludedComponents -Value $tname)
                 Save-UiState -State $ui.State -Path $UiStatePath
                 Refresh-SelectionTrees
                 Refresh-SelectionSummary
@@ -3147,12 +3220,13 @@ function Refresh-ExcludeList {
 }
 
 function Refresh-SelectionSummary {
+    $invalidExcludes = @(Repair-UiExcludedComponents)
     Refresh-ExcludeList
     try {
         $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedAppTuningMode $ui.State.appTuningMode -RequestedAppTuningCategories $ui.State.selectedAppTuningCategories -RequestedAppTuningItems $ui.State.selectedAppTuningItems -ExcludedAppTuningItems $ui.State.excludedAppTuningItems -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
         $impact = Get-UiSelectionImpact
         $ui.SelectionSummaryLabel.Text = "Selecionados: $($impact.total) | Explicitos: $($impact.explicit) | Herdados/deps: $($impact.inherited) | Excluidos: $($impact.excluded) | Manual: $($impact.manual) | Admin: $($impact.admin) | Rede: $($impact.network) | Rollback parcial/manual: $($impact.partialOrManualRollback) | HostHealth: $($ui.Preview.ResolvedHostHealthMode) | AppTuning: $($ui.Preview.ResolvedAppTuningMode)"
-        $ui.SelectionErrorLabel.Text   = ''
+        $ui.SelectionErrorLabel.Text   = if ($invalidExcludes.Count -gt 0) { "Exclusoes invalidas removidas: $(@($invalidExcludes) -join ', ')" } else { '' }
     } catch {
         $ui.Preview = $null
         $ui.SelectionSummaryLabel.Text = ''
@@ -3371,12 +3445,12 @@ function Refresh-AppTuningControls {
                     Refresh-AppTuningControls
                 })
                 $cb.Add_Unchecked({
-                    if ($ui.SuppressAppTuningEvents) { return }
-                    $id = [string]$this.Tag
-                    $ui.State.selectedAppTuningCategories = @(@($ui.State.selectedAppTuningCategories) | Where-Object { $_ -ne $id })
-                    $ui.State.appTuningMode = 'custom'
-                    Save-UiState -State $ui.State -Path $UiStatePath
-                    Refresh-AppTuningControls
+                if ($ui.SuppressAppTuningEvents) { return }
+                $id = [string]$this.Tag
+                $ui.State.selectedAppTuningCategories = @(Remove-UiStringValue -Values $ui.State.selectedAppTuningCategories -Value $id)
+                $ui.State.appTuningMode = 'custom'
+                Save-UiState -State $ui.State -Path $UiStatePath
+                Refresh-AppTuningControls
                 })
                 $li = New-Object System.Windows.Controls.ListBoxItem
                 $li.Content = $cb
@@ -3876,7 +3950,7 @@ function Queue-AppTuningConfigure {
             $ui.State.selectedAppTuningItems = @(@($ui.State.selectedAppTuningItems) + $id)
         }
         if (@($ui.State.excludedAppTuningItems) -contains $id) {
-            $ui.State.excludedAppTuningItems = @(@($ui.State.excludedAppTuningItems) | Where-Object { $_ -ne $id })
+            $ui.State.excludedAppTuningItems = @(Remove-UiStringValue -Values $ui.State.excludedAppTuningItems -Value $id)
         }
     }
     Save-UiState -State $ui.State -Path $UiStatePath
@@ -4505,11 +4579,12 @@ function Refresh-DualBootControls {
 function Refresh-ReviewPage {
     Capture-SteamDeckSettingsFromControls
     Capture-AppTuningStateFromControls
-    $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedAppTuningMode $ui.State.appTuningMode -RequestedAppTuningCategories $ui.State.selectedAppTuningCategories -RequestedAppTuningItems $ui.State.selectedAppTuningItems -ExcludedAppTuningItems $ui.State.excludedAppTuningItems -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
+    $scopeSnapshot = Get-CurrentExecutionScopeSnapshot
+    $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $scopeSnapshot.selectedProfiles -SelectedComponents $scopeSnapshot.selectedComponents -ExcludedComponents $scopeSnapshot.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $scopeSnapshot.hostHealth -RequestedAppTuningMode $scopeSnapshot.appTuningMode -RequestedAppTuningCategories $scopeSnapshot.selectedAppTuningCategories -RequestedAppTuningItems $scopeSnapshot.selectedAppTuningItems -ExcludedAppTuningItems $scopeSnapshot.excludedAppTuningItems -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
     $ui.ReviewTextBox.Text  = $ui.Preview.PlanText
     $resolved = @()
     try {
-        $sel = New-BootstrapSelectionObject -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -SelectedHostHealth $ui.State.hostHealth
+        $sel = New-BootstrapSelectionObject -SelectedProfiles $scopeSnapshot.selectedProfiles -SelectedComponents $scopeSnapshot.selectedComponents -ExcludedComponents $scopeSnapshot.excludedComponents -SelectedHostHealth $scopeSnapshot.hostHealth
         $res = Resolve-BootstrapComponents -SelectedProfiles $sel.Profiles -SelectedComponents $sel.Components -ExcludedComponents $sel.Excludes
         $resolved = @($res.ResolvedComponents)
     } catch { $resolved = @() }
@@ -4523,7 +4598,7 @@ function Refresh-ReviewPage {
     if ([bool]$ui.State.enableClaudeCodeProjectMcps) { $effects += 'claude-code MCPs: adiciona MCPs no projeto via "claude mcp add".' }
     $ui.ReviewSideEffectsTextBox.Text = if ($effects.Count -gt 0) { $effects -join [Environment]::NewLine } else { '-' }
     $adminText = if (@($ui.Preview.AdminReasons).Count -gt 0) { @($ui.Preview.AdminReasons) -join '; ' } else { '-' }
-    $ui.ReviewMetaLabel.Text = "Admin: $adminText  |  Settings: $($ui.SettingsBundle.Path)  |  UI state: $UiStatePath"
+    $ui.ReviewMetaLabel.Text = "Escopo: $([string]$scopeSnapshot.scopeLabel)  |  Admin: $adminText  |  Settings: $($ui.SettingsBundle.Path)  |  UI state: $UiStatePath"
     $ui.ReviewLinksLabel.Visibility = 'Collapsed'
     $ui.ReviewSettingsLink.IsEnabled = $false
     $ui.ReviewUiStateLink.IsEnabled = $false
@@ -4622,6 +4697,7 @@ function Navigate-ToPage {
 function Build-BackendArguments {
     $tokens = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $backendScriptPath)
     $tokens += @('-NonInteractive')
+    $null = Repair-UiExcludedComponents
     function New-BackendArrayArgument {
         param(
             [Parameter(Mandatory = $true)][string]$Name,
@@ -5253,17 +5329,21 @@ function Set-UiComponentEnabled {
     $isExplicit = (@($ui.State.selectedComponents) -contains $name)
     if ($Enabled) {
         if (@($ui.State.excludedComponents) -contains $name) {
-            $ui.State.excludedComponents = @(@($ui.State.excludedComponents) | Where-Object { $_ -ne $name })
+            $ui.State.excludedComponents = @(Remove-UiStringValue -Values $ui.State.excludedComponents -Value $name)
         }
         if (-not $isResolved -and -not $isExplicit) {
             $ui.State.selectedComponents = @(@($ui.State.selectedComponents) + $name)
         }
     } else {
+        if ($isResolved -and -not (Test-UiComponentCanExclude -ComponentName $name)) {
+            $ui.SelectionErrorLabel.Text = "O componente $name e obrigatorio/dependencia base; remova o perfil ou componente que depende dele."
+            return
+        }
         if ($isResolved -and -not (@($ui.State.excludedComponents) -contains $name)) {
             $ui.State.excludedComponents = @(@($ui.State.excludedComponents) + $name)
         }
         if ($isExplicit) {
-            $ui.State.selectedComponents = @(@($ui.State.selectedComponents) | Where-Object { $_ -ne $name })
+            $ui.State.selectedComponents = @(Remove-UiStringValue -Values $ui.State.selectedComponents -Value $name)
         }
     }
     Save-UiState -State $ui.State -Path $UiStatePath
@@ -5450,7 +5530,7 @@ $ui.AppTuningMarkCategoryButton.Add_Click({
 $ui.AppTuningClearCategoryButton.Add_Click({
     if ($ui.AppTuningCategoryList.SelectedItem -and $ui.AppTuningCategoryList.SelectedItem.Tag) {
         $id = [string]$ui.AppTuningCategoryList.SelectedItem.Tag
-        $ui.State.selectedAppTuningCategories = @(@($ui.State.selectedAppTuningCategories) | Where-Object { $_ -ne $id })
+        $ui.State.selectedAppTuningCategories = @(Remove-UiStringValue -Values $ui.State.selectedAppTuningCategories -Value $id)
         $ui.State.appTuningMode = 'custom'
         Save-UiState -State $ui.State -Path $UiStatePath
         Refresh-AppTuningControls

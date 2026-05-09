@@ -246,6 +246,35 @@ Describe 'Bootstrap API Center and app capability inventory' {
         $saved.provider.Contains('deepseek') | Should Be $false
     }
 
+    It 'migrates invalid OpenCode root env into provider options and removes the root key' {
+        $configPath = Get-BootstrapOpenCodeConfigPath
+        Write-BootstrapJsonFile -Path $configPath -Value @{
+            '$schema' = 'https://opencode.ai/config.json'
+            model = 'openai/gpt-5.2'
+            env = @{
+                OPENAI_API_KEY = 'legacy-openai-key'
+                OPENAI_BASE_URL = 'https://legacy-openai.example/v1'
+                OPENAI_ORGANIZATION = 'org-legacy'
+                DEEPSEEK_API_KEY = 'legacy-deepseek-key'
+                DEEPSEEK_BASE_URL = 'https://legacy-deepseek.example'
+            }
+        }
+
+        $fixture = New-ApiCenterSecretsFixture
+        $targets = Get-BootstrapResolvedSecretsTargets -SecretsData $fixture
+        $updated = Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $targets -SecretsData $fixture
+        $saved = Read-BootstrapJsonFile -Path $configPath
+
+        $updated | Should Be $true
+        $saved.Contains('env') | Should Be $false
+        $saved.model | Should Be 'openai/gpt-5.2'
+        $saved.provider.openai.options.apiKey | Should Be 'legacy-openai-key'
+        $saved.provider.openai.options.baseURL | Should Be 'https://legacy-openai.example/v1'
+        $saved.provider.openai.options.organization | Should Be 'org-legacy'
+        $saved.provider.deepseek.options.apiKey | Should Be 'legacy-deepseek-key'
+        $saved.provider.deepseek.options.baseURL | Should Be 'https://legacy-deepseek.example'
+    }
+
     It 'applies validated providers to Kilo CLI using the OpenCode-compatible layout' {
         $fixture = New-ApiCenterSecretsFixture
         $fixture.providers.openai.defaults.baseUrl = 'https://proxy.example.test/v1'

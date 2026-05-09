@@ -296,6 +296,66 @@ Describe 'Resilience Architecture' {
             }
         }
 
+        It 'Resolve-BootstrapPythonExecutable ignora stub WindowsApps e usa instalacao local' {
+            $oldLocalAppData = $env:LOCALAPPDATA
+            $root = Join-Path $env:TEMP ("bootstrap_python_resolve_{0}" -f ([Guid]::NewGuid().ToString('N')))
+            $pythonDir = Join-Path $root 'Programs\Python\Python313'
+            $pythonExe = Join-Path $pythonDir 'python.exe'
+            try {
+                $env:LOCALAPPDATA = $root
+                New-Item -Path $pythonDir -ItemType Directory -Force | Out-Null
+                New-Item -Path $pythonExe -ItemType File -Force | Out-Null
+                Mock Resolve-CommandPath {
+                    param([string]$Name)
+                    if ($Name -eq 'python') { return 'C:\Users\misae\AppData\Local\Microsoft\WindowsApps\python.exe' }
+                    return $null
+                }
+                Mock Refresh-SessionPath { }
+
+                Resolve-BootstrapPythonExecutable | Should Be $pythonExe
+            } finally {
+                $env:LOCALAPPDATA = $oldLocalAppData
+                Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        It 'Convert-HookItemIfNeeded converte hooks Bonsai Windows para paths Git Bash' {
+            $item = [pscustomobject]@{
+                type = 'command'
+                command = 'C:\Users\misae\AppData\Local\Microsoft\WinGet\Packages\OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe\node-v24.15.0-win-x64\node.exe C:\Users\misae\AppData\Local\Microsoft\WinGet\Packages\OpenJS.NodeJS.LTS_Microsoft.Winget.Source_8wekyb3d8bbwe\node-v24.15.0-win-x64\node_modules\@bonsai-ai\cli\dist\cli.js internal snapshot'
+            }
+
+            $fixed = Convert-HookItemIfNeeded -Item $item -GitBashPath 'C:\Program Files\Git\bin\bash.exe'
+
+            $fixed.command | Should Match '"/c/Users/misae/.+node\.exe"'
+            $fixed.command | Should Match '"/c/Users/misae/.+cli\.js"'
+            $fixed.command | Should Not Match 'C:\\Users'
+        }
+
+        It 'Repair-BootstrapBonsaiCliSnapshotHooks corrige gerador transiente de hooks do Bonsai' {
+            $root = Join-Path $env:TEMP ("bootstrap_bonsai_cli_{0}" -f ([Guid]::NewGuid().ToString('N')))
+            $dist = Join-Path $root 'node_modules\@bonsai-ai\cli\dist'
+            $cli = Join-Path $dist 'cli.js'
+            try {
+                New-Item -Path $dist -ItemType Directory -Force | Out-Null
+                'function zW1(){let D=`${process.argv[0]} ${process.argv[1]} internal snapshot`;return JSON.stringify({hooks:{SessionStart:[{hooks:[{command:D}]}]}})}' | Set-Content -Path $cli -Encoding utf8
+
+                $result = Repair-BootstrapBonsaiCliSnapshotHooks -CliPath $cli
+                $updated = Get-Content -Path $cli -Raw -Encoding utf8
+
+                $result.Status | Should Be 'patched'
+                [bool](Test-Path -LiteralPath $result.BackupPath) | Should Be $true
+                $updated | Should Match '\[process\.argv\[0\],process\.argv\[1\],"internal","snapshot"\]'
+                $updated | Should Match 'JSON\.stringify\(C\)\}\)\.join\(" "\)'
+                $updated | Should Not Match 'let D=`\$\{process\.argv\[0\]\}'
+
+                $second = Repair-BootstrapBonsaiCliSnapshotHooks -CliPath $cli
+                $second.Status | Should Be 'already-patched'
+            } finally {
+                Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It 'Invoke-BootstrapComponent repo-clone falha se TargetName for colecao com mais de um valor' {
             Mock Write-Log
             Mock Ensure-BootstrapGitCore { }
