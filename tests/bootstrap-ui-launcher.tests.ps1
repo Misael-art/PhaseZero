@@ -46,6 +46,36 @@ Describe 'Bootstrap UI launcher' {
         (@($result.languages) -contains 'pt-BR') | Should Be $true
         $result.statePath | Should Be $uiStatePath
         (Test-Path $uiStatePath) | Should Be $true
+
+        $state = Get-Content -LiteralPath $uiStatePath -Raw | ConvertFrom-Json
+        @($state.selectedProfiles) | Should Be @('safe-base')
+        [string]$state.hostHealth | Should Be 'off'
+        [string]$state.appTuningMode | Should Be 'off'
+    }
+
+    It 'normalizes persisted artifact paths to strings during state roundtrip' {
+        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $uiStatePath = Join-Path $script:TestDataRoot 'ui-state.json'
+        $uiLogPath = Join-Path $script:TestDataRoot 'bootstrap-ui.log'
+        New-Item -ItemType Directory -Force -Path $script:TestDataRoot | Out-Null
+        [ordered]@{
+            selectedProfiles = @('safe-base')
+            lastLogPath = [ordered]@{ Length = 12 }
+            lastResultPath = [ordered]@{ Length = 13 }
+            lastReportPath = [ordered]@{ Length = 14 }
+        } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $uiStatePath -Encoding utf8
+
+        $output = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $uiScriptPath -UiStatePath $uiStatePath -UiLogPath $uiLogPath -SmokeTest 2>&1
+        $LASTEXITCODE | Should Be 0
+        $null = ((@($output) -join [Environment]::NewLine).Trim()) | ConvertFrom-Json -ErrorAction Stop
+        $state = Get-Content -LiteralPath $uiStatePath -Raw | ConvertFrom-Json
+
+        [string]$state.lastLogPath | Should Be ''
+        [string]$state.lastResultPath | Should Be ''
+        [string]$state.lastReportPath | Should Be ''
+        ($state.lastLogPath -is [pscustomobject]) | Should Be $false
+        ($state.lastResultPath -is [pscustomobject]) | Should Be $false
+        ($state.lastReportPath -is [pscustomobject]) | Should Be $false
     }
 
     It 'keeps the embedded XAML parseable' {
@@ -114,6 +144,10 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match '\$ui\.StartRunButton\.IsEnabled = \$true'
         $raw | Should Match 'fallbackResult'
         $raw | Should Match 'Backend saiu sem result\.json'
+        $raw | Should Match 'artifactPaths'
+        $raw | Should Match 'diagnostics'
+        $raw | Should Match 'scope'
+        $raw | Should Match 'rollback'
         $raw | Should Match 'function Start-RunExecution'
         $raw | Should Match '\[string\]\$MaintenanceIntent = ''none'''
         $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''audit'''
@@ -271,7 +305,7 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'Get-UiResolvedComponentNameSet'
         $raw | Should Match 'resolvedComponentLookup'
         $raw | Should Match '\$cb\.IsChecked = \(\(\$isExplicitComponent -or \$isResolvedComponent\) -and -not \$isExcludedComponent\)'
-        $raw | Should Match 'Desmarcar item vindo de perfil adiciona em Nao instalar'
+        $raw | Should Match 'Desmarcar item vindo de perfil adiciona em N.o instalar'
     }
 
     It 'shows actionable selection impact and rollback metadata' {
@@ -291,6 +325,17 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'rollbackAvailable'
         $raw | Should Match 'howToFix'
         $raw | Should Match 'Rollback disponivel'
+    }
+
+    It 'captures elevated backend stdout and stderr inside the elevated process' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Build-ElevatedBackendCommand'
+        $raw | Should Match 'CurrentStdoutPath'
+        $raw | Should Match 'CurrentStderrPath'
+        $raw | Should Match '1>'
+        $raw | Should Match '2>'
+        $raw | Should Not Match 'Backend stream redirection disabled because elevation uses ShellExecute'
     }
 
     It 'supports per-run AppTuning scope override (isolated vs profile)' {
@@ -313,6 +358,66 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'scopeMode=\{0\}'
         $raw | Should Match 'Clear-ExecutionScopeOverride'
         $raw | Should Match 'Escopo:'
+    }
+
+    It 'requires explicit execution scope when profiles and isolated components coexist' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Confirm-UiExecutionScope'
+        $raw | Should Match 'Get-IsolatedComponentExecutionOverride'
+        $raw | Should Match 'Escopo amb'
+        $raw | Should Match 'Somente componentes selecionados'
+        $raw | Should Match 'Perfil atual \+ componentes'
+        $raw | Should Match 'Confirm-UiExecutionScope -MaintenanceIntent \$MaintenanceIntent'
+    }
+
+    It 'sanitizes component-only execution scope before backend args' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Normalize-UiComponentOnlyExecutionScope'
+        $raw | Should Match 'Instalacao isolada'
+        $raw | Should Match '\$snapshot\.hostHealth = ''off'''
+        $raw | Should Match '\$snapshot\.appTuningMode = ''off'''
+        $raw | Should Match '\$snapshot\.excludedAppTuningItems = @\(\)'
+    }
+
+    It 'requires accepted review before normal execution and shows blocked results as user action' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'ReviewAcceptedCheckBox'
+        $raw | Should Match 'Test-UiReviewAcceptedForRun'
+        $raw | Should Match 'Revis.o obrigat.ria'
+        $raw | Should Match '\$result\.status -eq ''blocked'''
+        $raw | Should Match 'Reinicio necessario'
+    }
+
+    It 'separates critical actions behind explicit confirmation modals' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'function Confirm-UiCriticalAction'
+        $raw | Should Match 'CriticalAction'
+        $raw | Should Match 'REINICIAR'
+        $raw | Should Match 'Confirmar rollback'
+        $raw | Should Match 'Confirmar BCD'
+    }
+
+    It 'defines visible focus states for keyboard navigation' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'FocusVisualBrush'
+        $raw | Should Match 'IsKeyboardFocusWithin'
+        $raw | Should Match 'TargetType="DataGridRow"'
+        $raw | Should Match 'TargetType="CheckBox"'
+        $raw | Should Match 'TargetType="TextBox"'
+    }
+
+    It 'debounces AppTuning search refresh and wraps dense toolbar actions' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'AppTuningRefreshTimer'
+        $raw | Should Match 'Request-AppTuningRefresh'
+        $raw | Should Match 'FromMilliseconds\(300\)'
+        $raw | Should Match '<WrapPanel'
     }
 
     It 'clears profile, component, quick option, host health and AppTuning state together' {
@@ -342,6 +447,7 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw = Get-Content -Path $uiScriptPath -Raw
 
         $raw | Should Not Match 'sesses|genrico|Resoluo|Validao|Execuo|Reviso|Relatrios|manuteno'
+        $raw | Should Not Match 'PRESETS RPIDOS|Configurao|Verso|EXCLUSES|Execucao|Revisao|Relatorios|Opcoes rapidas|Diretorio|Nao instalar|manutencao'
     }
 
     It 'runs the batch launcher smoke test without stderr noise' {

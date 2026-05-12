@@ -7,8 +7,46 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -Repository PSGallery
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          Import-Module PSScriptAnalyzer -Force
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Warning,Error -ExcludeRule 'PSUseShouldProcessForStateChangingFunctions','PSAvoidUsingInvokeExpression'
+          if ($results) {
+            $results | Format-Table -AutoSize
+            # Treat only Error severity as blocking for now
+            $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+            if ($errors) { exit 1 }
+          }
+
+      - name: Validate version.json
+        shell: pwsh
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          if (-not (Test-Path 'version.json')) { throw 'version.json not found' }
+          $v = Get-Content 'version.json' -Raw | ConvertFrom-Json
+          if (-not $v.version) { throw 'version.json missing version field' }
+          if (-not $v.schema) { throw 'version.json missing schema field' }
+          Write-Host "Version validated: $($v.version)"
+
   pester:
     runs-on: windows-latest
+    needs: lint
     steps:
       - uses: actions/checkout@v4
 

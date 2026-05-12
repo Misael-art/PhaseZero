@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$CloneBaseDir,
     [string]$WorkspaceRoot = '',
     [string[]]$Profile = @(),
@@ -57,7 +57,11 @@ $script:LogPath = if ([string]::IsNullOrWhiteSpace($LogPath)) {
 } else {
     $LogPath
 }
-$script:ResultPath = $ResultPath
+$script:ResultPath = if ([string]::IsNullOrWhiteSpace($ResultPath) -and -not [bool]$BootstrapUiLibraryMode) {
+    Join-Path $env:TEMP ("bootstrap-tools_{0:yyyyMMdd_HHmmss}.result.json" -f $script:StartTime)
+} else {
+    $ResultPath
+}
 $script:SkipManualRequirements = $SkipManualRequirements
 $script:IgnoreManualRequirements = $IgnoreManualRequirements
 $script:RequireNoPendingReboot = [bool]$RequireNoPendingReboot
@@ -135,13 +139,23 @@ function Write-BootstrapExecutionErrorResultFromRecord {
     if ([string]::IsNullOrWhiteSpace($Path)) { return }
     $msg = if ($ErrorRecord -and $ErrorRecord.Exception) { [string]$ErrorRecord.Exception.Message } else { 'unknown error' }
     $stk = Get-BootstrapErrorRecordStackTraceText -ErrorRecord $ErrorRecord
+    $blockedInfo = Get-BootstrapBlockedErrorInfo -ErrorRecord $ErrorRecord
+    $status = if ($blockedInfo.IsBlocked) { 'blocked' } else { 'error' }
     $payload = [ordered]@{
-        status = 'error'
+        status = $status
         generatedAt = (Get-Date).ToString('o')
         logPath = $script:LogPath
         resultPath = $Path
         error = $msg
         scriptStackTrace = $stk
+    }
+    if ($blockedInfo.IsBlocked) {
+        $payload.blockerKind = [string]$blockedInfo.Kind
+        $payload.action = [string]$blockedInfo.Action
+        $payload.blockerReasons = @($blockedInfo.Reasons)
+        if (-not $Extra.ContainsKey('howToFix')) {
+            $payload.howToFix = 'Reinicie o Windows e execute novamente.'
+        }
     }
     foreach ($k in $Extra.Keys) {
         $payload[$k] = $Extra[$k]
@@ -154,7 +168,7 @@ function Write-BootstrapExecutionErrorResultFromRecord {
         } catch {
         }
     }
-    if ($ErrorRecord) {
+    if ($ErrorRecord -and -not $blockedInfo.IsBlocked) {
         Write-BootstrapExceptionStackTrace -ErrorRecord $ErrorRecord
     }
 }
@@ -414,6 +428,35 @@ function Invoke-BootstrapRollback {
                         }
                         Write-Log ("Rollback manifest DefenderExclusion: {0} {1}" -f $kind, $target)
                     }
+                    'Package' {
+                        $action = ''
+                        if ($change.PSObject.Properties.Name -contains 'RollbackAction') { $action = [string]$change.RollbackAction }
+                        if ($action -ne 'winget-uninstall') {
+                            Write-Log ("Rollback manifest Package: acao '{0}' nao automatizada para {1}; remova manualmente." -f $action, $target) 'WARN'
+                            continue
+                        }
+                        if ([string]::IsNullOrWhiteSpace($target)) {
+                            Write-Log 'Rollback manifest Package: Target vazio; pulando.' 'WARN'
+                            continue
+                        }
+                        $winget = $null
+                        try { $winget = Get-Winget } catch { $winget = $null }
+                        if (-not $winget) {
+                            Write-Log ("Rollback manifest Package: winget indisponivel; nao foi possivel desinstalar {0}." -f $target) 'WARN'
+                            continue
+                        }
+                        $uninstallArgs = @('uninstall', '-e', '--id', $target, '--purge', '--disable-interactivity')
+                        try {
+                            $exit = Invoke-NativeWithLog -Exe $winget -Args $uninstallArgs
+                            if ($exit -eq 0 -or ($script:WingetSoftSuccessExitCodes -contains $exit)) {
+                                Write-Log ("Rollback manifest Package removido: {0}" -f $target)
+                            } else {
+                                Write-Log ("Rollback manifest Package: winget uninstall {0} retornou exit={1}." -f $target, $exit) 'WARN'
+                            }
+                        } catch {
+                            Write-Log ("Rollback manifest Package: excecao ao desinstalar {0}: {1}" -f $target, $_.Exception.Message) 'WARN'
+                        }
+                    }
                     default {
                         if ($AggressiveRollback) {
                             Write-Log ("Rollback agressivo ainda nao implementado para {0}: {1}" -f $type, $target) 'WARN'
@@ -607,6 +650,183 @@ function Invoke-BootstrapAutoRollback {
     Write-Log 'Rollback automatico concluido.'
 }
 
+function New-BootstrapAuditRow {
+    param(
+        [Parameter(Mandatory = $true)][string]$Component,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [string]$Detail = '',
+        [string]$HowToFix = '',
+        [AllowNull()]$ComponentDef = $null
+    )
+
+    $severityInfo = Convert-BootstrapAuditStatusToSeverity -Status $Status -ComponentDef $ComponentDef
+    return [pscustomobject]@{
+        Component = $Component
+        Status = $Status
+        Severity = [string]$severityInfo.Severity
+        Critical = [bool]$severityInfo.Critical
+        Detail = $Detail
+        HowToFix = $HowToFix
+    }
+}
+
+function Convert-BootstrapAuditStatusToSeverity {
+    param(
+        [Parameter(Mandatory = $true)][string]$Status,
+        [AllowNull()]$ComponentDef = $null
+    )
+
+    $statusValue = ([string]$Status).Trim()
+    $isOptional = $false
+    if ($ComponentDef) {
+        try {
+            if ($ComponentDef.PSObject.Properties.Name -contains 'Optional') {
+                $isOptional = [bool]$ComponentDef.Optional
+            }
+        } catch {
+            $isOptional = $false
+        }
+    }
+
+    $severity = switch ($statusValue) {
+        'Healthy' { 'Ready' }
+        'Repaired' { 'Ready' }
+        'Missing' { if ($isOptional) { 'OptionalMissing' } else { 'NeedsInstall' } }
+        'GhostInstall' { 'NeedsRepair' }
+        'Unhealthy' { 'NeedsRepair' }
+        'AliasOnly' { 'NeedsRepair' }
+        'InstalledButNotInPath' { 'NeedsRepair' }
+        'RuntimeOnly' { 'NeedsRepair' }
+        'RequiresRestart' { 'RequiresRestart' }
+        'Blocked' { 'ManualAction' }
+        'UnsupportedAudit' { 'UnsupportedAudit' }
+        'Skipped' { 'UnsupportedAudit' }
+        'Unknown' { 'UnsupportedAudit' }
+        default { 'UnsupportedAudit' }
+    }
+
+    $critical = ($severity -in @('NeedsInstall', 'NeedsRepair', 'RequiresRestart', 'ManualAction'))
+    return [pscustomobject]@{
+        Severity = $severity
+        Critical = [bool]$critical
+    }
+}
+
+function Add-BootstrapAuditSeverity {
+    param(
+        [Parameter(Mandatory = $true)]$Row,
+        [AllowNull()]$ComponentDef = $null
+    )
+
+    $rowTable = ConvertTo-BootstrapHashtable -InputObject $Row
+    $severityInfo = Convert-BootstrapAuditStatusToSeverity -Status ([string]$rowTable['Status']) -ComponentDef $ComponentDef
+    $rowTable['Severity'] = [string]$severityInfo.Severity
+    $rowTable['Critical'] = [bool]$severityInfo.Critical
+    return [pscustomobject]$rowTable
+}
+
+function New-BootstrapAuditSeveritySummary {
+    param([AllowNull()][object[]]$Rows = @())
+
+    $summary = [ordered]@{
+        total = @($Rows).Count
+        critical = 0
+        Ready = 0
+        NeedsInstall = 0
+        NeedsRepair = 0
+        RequiresRestart = 0
+        ManualAction = 0
+        OptionalMissing = 0
+        UnsupportedAudit = 0
+    }
+
+    foreach ($row in @($Rows)) {
+        $sev = ''
+        if ($row -is [System.Collections.IDictionary]) {
+            if ($row.Contains('Severity')) { $sev = [string]$row['Severity'] }
+            elseif ($row.Contains('severity')) { $sev = [string]$row['severity'] }
+        } elseif ($row.PSObject.Properties['Severity']) {
+            $sev = [string]$row.Severity
+        } elseif ($row.PSObject.Properties['severity']) {
+            $sev = [string]$row.severity
+        }
+        if ([string]::IsNullOrWhiteSpace($sev)) { $sev = 'UnsupportedAudit' }
+        if (-not $summary.Contains($sev)) { $sev = 'UnsupportedAudit' }
+        $summary[$sev] = [int]$summary[$sev] + 1
+        if ($sev -in @('NeedsInstall', 'NeedsRepair', 'RequiresRestart', 'ManualAction')) {
+            $summary['critical'] = [int]$summary['critical'] + 1
+        }
+    }
+
+    return [pscustomobject]$summary
+}
+
+function Get-AuditFirstExistingPathGlobal {
+    param([string[]]$Candidates)
+    foreach ($candidate in @($Candidates)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $expanded = [Environment]::ExpandEnvironmentVariables($candidate)
+        $match = @(Get-Item -Path $expanded -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($match.Count -gt 0) { return [string]$match[0].FullName }
+    }
+    return ''
+}
+
+function Test-AuditWingetInstalledGlobal {
+    param(
+        [string]$WingetPath,
+        [string]$Id
+    )
+
+    if ([string]::IsNullOrWhiteSpace($WingetPath) -or [string]::IsNullOrWhiteSpace($Id)) { return $false }
+    try {
+        $cap = Invoke-WingetListIdProbe -WingetPath $WingetPath -Id $Id -TimeoutMs 8000
+        $combined = ([string]$cap.stdout + "`n" + [string]$cap.stderr).Trim()
+        return ((-not [bool]$cap.timedOut) -and ($combined -match [regex]::Escape($Id)))
+    } catch {
+        return $false
+    }
+}
+
+function Get-BootstrapJavaJdkAuditRow {
+    param(
+        [string]$ComponentName = 'java-core',
+        [string]$WingetPath = ''
+    )
+
+    $fix = 'Instale Temurin JDK 17 via winget: winget install -e --id EclipseAdoptium.Temurin.17.JDK; reabra a UI para atualizar PATH.'
+    $javacPath = Resolve-CommandPath -Name 'javac'
+    if ($javacPath -and ($javacPath -match '\\Microsoft\\WindowsApps\\')) {
+        return (New-BootstrapAuditRow -Component $ComponentName -Status 'AliasOnly' -Detail ("Alias da Microsoft Store encontrado para javac em PATH: {0}" -f $javacPath) -HowToFix $fix)
+    }
+    if ($javacPath) {
+        try {
+            $output = (& $javacPath @('-version') 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+            $output = $output.Trim()
+            if ([string]::IsNullOrWhiteSpace($output)) { $output = 'javac executado sem saida' }
+            return (New-BootstrapAuditRow -Component $ComponentName -Status 'Healthy' -Detail ("JDK: {0} ({1})" -f $output, $javacPath) -HowToFix '')
+        } catch {
+            return (New-BootstrapAuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ("javac encontrado, mas falhou: {0} ({1})" -f $_.Exception.Message, $javacPath) -HowToFix $fix)
+        }
+    }
+
+    $installedJavac = Get-AuditFirstExistingPathGlobal -Candidates @('%ProgramFiles%\Eclipse Adoptium\jdk-17*\bin\javac.exe', '%ProgramFiles%\Java\jdk-17*\bin\javac.exe', '%ProgramFiles%\Eclipse Adoptium\jdk-*\bin\javac.exe', '%ProgramFiles%\Java\jdk-*\bin\javac.exe')
+    if (-not [string]::IsNullOrWhiteSpace($installedJavac)) {
+        return (New-BootstrapAuditRow -Component $ComponentName -Status 'InstalledButNotInPath' -Detail ("javac.exe encontrado fora do PATH: {0}" -f $installedJavac) -HowToFix $fix)
+    }
+
+    $javaPath = Resolve-CommandPath -Name 'java'
+    if ($javaPath) {
+        return (New-BootstrapAuditRow -Component $ComponentName -Status 'Missing' -Detail ("java.exe encontrado, mas javac.exe/JDK nao encontrado. Runtime JRE nao satisfaz java-core: {0}" -f $javaPath) -HowToFix $fix)
+    }
+
+    if (Test-AuditWingetInstalledGlobal -WingetPath $WingetPath -Id 'EclipseAdoptium.Temurin.17.JDK') {
+        return (New-BootstrapAuditRow -Component $ComponentName -Status 'InstalledButNotInPath' -Detail 'winget lista Temurin JDK 17 como instalado, mas javac.exe nao esta no PATH.' -HowToFix $fix)
+    }
+
+    return (New-BootstrapAuditRow -Component $ComponentName -Status 'Missing' -Detail 'javac.exe/JDK ausente.' -HowToFix $fix)
+}
+
 function Invoke-BootstrapAuditMode {
     param(
         [Parameter(Mandatory = $true)]$Resolution,
@@ -627,12 +847,7 @@ function Invoke-BootstrapAuditMode {
             [string]$HowToFix = ''
         )
 
-        return [pscustomobject]@{
-            Component = $Component
-            Status = $Status
-            Detail = $Detail
-            HowToFix = $HowToFix
-        }
+        return (New-BootstrapAuditRow -Component $Component -Status $Status -Detail $Detail -HowToFix $HowToFix)
     }
 
     function Get-AuditKnownFix {
@@ -763,6 +978,159 @@ function Invoke-BootstrapAuditMode {
         return (New-AuditRow -Component $ComponentName -Status $status -Detail ($issues -join ' ') -HowToFix $fix)
     }
 
+    function Invoke-AuditDeclaredCommands {
+        param(
+            [Parameter(Mandatory = $true)][string]$ComponentName,
+            [Parameter(Mandatory = $true)]$ComponentDef
+        )
+
+        $names = @()
+        if ($ComponentDef.PSObject.Properties.Name -contains 'CommandNames') {
+            $names = @($ComponentDef.CommandNames | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        } elseif ($ComponentDef.PSObject.Properties.Name -contains 'CommandName') {
+            $names = @($ComponentDef.CommandName | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        }
+        if ($names.Count -eq 0) { return $null }
+
+        foreach ($name in @($names)) {
+            $cmdPath = Resolve-CommandPath -Name ([string]$name)
+            if ($cmdPath -and (Test-AuditPathIsWindowsStoreAlias -Path $cmdPath)) {
+                return (New-AuditRow -Component $ComponentName -Status 'AliasOnly' -Detail ("Alias da Microsoft Store encontrado para {0}: {1}" -f [string]$name, $cmdPath) -HowToFix (Get-AuditKnownFix -ComponentName $ComponentName))
+            }
+            if ($cmdPath) {
+                return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("Comando disponivel: {0} ({1})" -f [string]$name, $cmdPath) -HowToFix '')
+            }
+        }
+
+        $package = if ($ComponentDef.PSObject.Properties.Name -contains 'Package') { [string]$ComponentDef.Package } else { '' }
+        $fix = if (-not [string]::IsNullOrWhiteSpace($package)) {
+            "Instale/repare via npm: npm install -g $package; reabra a UI para atualizar PATH."
+        } else {
+            Get-AuditKnownFix -ComponentName $ComponentName
+        }
+        return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail ("Comandos ausentes: {0}" -f ($names -join ', ')) -HowToFix $fix)
+    }
+
+    function Invoke-AuditRepoClone {
+        param(
+            [Parameter(Mandatory = $true)][string]$ComponentName,
+            [Parameter(Mandatory = $true)]$ComponentDef
+        )
+
+        $targetNames = @($ComponentDef.TargetName | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($targetNames.Count -ne 1) {
+            return (New-AuditRow -Component $ComponentName -Status 'UnsupportedAudit' -Detail 'repo-clone sem TargetName unico no catalogo.' -HowToFix 'Corrija TargetName no catalogo antes de auditar este repo.')
+        }
+        $cloneRoot = ''
+        if ($State -is [hashtable] -and $State.ContainsKey('CloneBaseDir')) { $cloneRoot = [string]$State.CloneBaseDir }
+        elseif ($State -and $State.PSObject.Properties['CloneBaseDir']) { $cloneRoot = [string]$State.CloneBaseDir }
+        if ([string]::IsNullOrWhiteSpace($cloneRoot)) { $cloneRoot = (Get-Location).Path }
+
+        $target = Join-Path $cloneRoot ([string]$targetNames[0])
+        if (Test-Path -LiteralPath (Join-Path $target '.git')) {
+            return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("Repositorio presente: {0}" -f $target) -HowToFix '')
+        }
+        if (Test-Path -LiteralPath $target) {
+            return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ("Diretorio existe mas nao parece clone git: {0}" -f $target) -HowToFix 'Remova/corrija o diretorio alvo ou execute o componente repo-clone novamente.')
+        }
+        return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail ("Repositorio ausente: {0}" -f $target) -HowToFix 'Execute o componente repo-clone correspondente apos git-core estar saudavel.')
+    }
+
+    function Invoke-AuditManualRequired {
+        param(
+            [Parameter(Mandatory = $true)][string]$ComponentName,
+            [Parameter(Mandatory = $true)]$ComponentDef
+        )
+
+        $display = if ($ComponentDef.PSObject.Properties.Name -contains 'DisplayName') { [string]$ComponentDef.DisplayName } else { $ComponentName }
+        $instructions = if ($ComponentDef.PSObject.Properties.Name -contains 'Instructions') { [string]$ComponentDef.Instructions } else { "Instale $display manualmente e rode a auditoria novamente." }
+        if (Test-BootstrapManualRequirementInstalled -ComponentDef $ComponentDef) {
+            return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("Requisito manual presente: {0}" -f $display) -HowToFix '')
+        }
+        $status = if ([bool]$ComponentDef.Optional) { 'Missing' } else { 'Blocked' }
+        return (New-AuditRow -Component $ComponentName -Status $status -Detail ("Requisito manual ausente: {0}" -f $display) -HowToFix $instructions)
+    }
+
+    function Invoke-AuditWslCore {
+        param([string]$ComponentName)
+
+        $fix = 'Habilite WSL com administrador: wsl --install; reinicie o Windows quando solicitado.'
+        $wslPath = Resolve-CommandPath -Name 'wsl.exe'
+        if (-not $wslPath) {
+            $candidate = Join-Path $env:SystemRoot 'System32\wsl.exe'
+            if (Test-Path -LiteralPath $candidate) { $wslPath = $candidate }
+        }
+        if (-not $wslPath) {
+            return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'wsl.exe ausente.' -HowToFix $fix)
+        }
+
+        $details = New-Object System.Collections.Generic.List[string]
+        $details.Add(("wsl.exe: {0}" -f $wslPath))
+
+        $appxPresent = $false
+        try { $appxPresent = [bool](Test-BootstrapAppxPackageInstalled -Names @('MicrosoftCorporationII.WindowsSubsystemForLinux')) } catch { $appxPresent = $false }
+        $details.Add(("AppX WSL: {0}" -f $appxPresent))
+
+        $servicePresent = $false
+        $serviceStatus = ''
+        try {
+            $svc = Get-Service -Name 'LxssManager' -ErrorAction Stop
+            $servicePresent = $true
+            $serviceStatus = [string]$svc.Status
+        } catch {
+            $servicePresent = $false
+            $serviceStatus = 'ausente'
+        }
+        $details.Add(("LxssManager: {0}" -f $serviceStatus))
+
+        $featureStates = New-Object System.Collections.Generic.List[string]
+        foreach ($featureName in @('Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform')) {
+            try {
+                $feature = Get-WindowsOptionalFeature -Online -FeatureName $featureName -ErrorAction Stop
+                $featureStates.Add(("{0}={1}" -f $featureName, [string]$feature.State))
+            } catch {
+                $featureStates.Add(("{0}=unknown" -f $featureName))
+            }
+        }
+        $details.Add(("Features: {0}" -f ($featureStates.ToArray() -join '; ')))
+
+        $detail = ($details.ToArray() -join ' | ')
+        if ($appxPresent -and $servicePresent) {
+            return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("WSL artefatos presentes. {0}" -f $detail) -HowToFix '')
+        }
+        if ($appxPresent -and -not $servicePresent) {
+            return (New-AuditRow -Component $ComponentName -Status 'RequiresRestart' -Detail ("Pacote WSL presente, mas servico LxssManager indisponivel. {0}" -f $detail) -HowToFix 'Reinicie o Windows ou faca logoff/logon; depois rode nova auditoria. Se persistir, execute wsl --update em terminal manual.')
+        }
+        return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ("wsl.exe encontrado, mas artefatos WSL incompletos. {0}" -f $detail) -HowToFix $fix)
+    }
+
+    function Invoke-AuditWslUi {
+        param([string]$ComponentName)
+
+        if (Test-AuditWingetInstalled -Id 'OctasoftLtd.WSLUI') {
+            return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail 'winget lista OctasoftLtd.WSLUI como instalado.' -HowToFix '')
+        }
+        return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'WSL UI nao encontrado via winget.' -HowToFix 'Instale via winget install -e --id OctasoftLtd.WSLUI quando WSL estiver saudavel.')
+    }
+
+    function Invoke-AuditVsCodeExtensions {
+        param([string]$ComponentName)
+
+        $codePath = Resolve-CommandPath -Name 'code'
+        $insidersPath = Resolve-CommandPath -Name 'code-insiders'
+        if (-not $codePath) {
+            $codePath = Get-AuditFirstExistingPath -Candidates @('%ProgramFiles%\Microsoft VS Code\Code.exe', '%LocalAppData%\Programs\Microsoft VS Code\Code.exe')
+        }
+        if (-not $insidersPath) {
+            $insidersPath = Get-AuditFirstExistingPath -Candidates @('%ProgramFiles%\Microsoft VS Code Insiders\Code - Insiders.exe', '%LocalAppData%\Programs\Microsoft VS Code Insiders\Code - Insiders.exe')
+        }
+        $found = @($codePath, $insidersPath | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($found.Count -gt 0) {
+            return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("VS Code alvo presente para extensoes: {0}" -f ($found -join '; ')) -HowToFix '')
+        }
+        return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'Nenhum VS Code/Insiders encontrado para aplicar extensoes.' -HowToFix 'Instale vscode ou vscode-insiders antes de aplicar vscode-extensions.')
+    }
+
     function Get-AuditSpecializedRow {
         param([string]$ComponentName)
 
@@ -783,6 +1151,18 @@ function Invoke-BootstrapAuditMode {
             'node-core' {
                 return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'node' -Args @('-v') -WingetId 'OpenJS.NodeJS.LTS' -InstalledPathCandidates @('%ProgramFiles%\nodejs\node.exe'))
             }
+            'claude-code' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'claude' -Args @('--version') -InstalledPathCandidates @('%APPDATA%\npm\claude.cmd', '%APPDATA%\npm\claude.ps1'))
+            }
+            'opencode' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'opencode' -Args @('--version') -InstalledPathCandidates @('%USERPROFILE%\.opencode\bin\opencode.exe'))
+            }
+            'openclaw' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'openclaw' -Args @('--version') -InstalledPathCandidates @('%APPDATA%\npm\openclaw.cmd', '%APPDATA%\npm\openclaw.ps1'))
+            }
+            'goose' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'goose' -Args @('--version') -InstalledPathCandidates @('%USERPROFILE%\.local\bin\goose.exe'))
+            }
             'python-core' {
                 $pythonRow = Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'python' -Args @('--version') -WingetId 'Python.Python.3.13' -InstalledPathCandidates @('%LocalAppData%\Programs\Python\Python313\python.exe', '%ProgramFiles%\Python313\python.exe')
                 if ([string]$pythonRow.Status -eq 'Missing') {
@@ -794,7 +1174,7 @@ function Invoke-BootstrapAuditMode {
                 return $pythonRow
             }
             'java-core' {
-                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'java' -Args @('-version') -WingetId 'EclipseAdoptium.Temurin.17.JDK' -InstalledPathCandidates @('%ProgramFiles%\Eclipse Adoptium\jdk-17*\bin\java.exe', '%ProgramFiles%\Java\jdk-17*\bin\java.exe'))
+                return (Get-BootstrapJavaJdkAuditRow -ComponentName $ComponentName -WingetPath $wingetExe)
             }
             'dotnet-core' {
                 $fix = Get-AuditKnownFix -ComponentName $ComponentName
@@ -856,6 +1236,98 @@ function Invoke-BootstrapAuditMode {
                 }
                 return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ($detailParts.ToArray() -join '; ') -HowToFix '')
             }
+            'notepadpp' {
+                $info = $null
+                try { $info = Get-BootstrapNotepadPlusPlusInstallInfo } catch { $info = $null }
+                if ($info -and [bool]$info.GhostState) {
+                    $hive = [string]$info.GhostHive
+                    if ([string]::IsNullOrWhiteSpace($hive)) { $hive = 'desconhecido' }
+                    return (New-AuditRow -Component $ComponentName -Status 'GhostInstall' -Detail ("Registro ({0}) declara Notepad++ instalado, mas binario ausente/corrompido em disco." -f $hive) -HowToFix 'Execute bootstrap-tools.ps1 -Audit -Repair para limpar a entrada fantasma (HKCU/HKLM/WOW6432Node) e reinstalar via winget.')
+                }
+                if ($info -and [bool]$info.Installed) {
+                    $exe = Join-Path ([string]$info.InstallRoot) 'notepad++.exe'
+                    $ver = [string]$info.RegistryDisplayVersion
+                    $detail = if ([string]::IsNullOrWhiteSpace($ver)) { "Notepad++ ({0}) em {1}" -f $info.Architecture, $exe } else { "Notepad++ {0} ({1}) em {2}" -f $ver, $info.Architecture, $exe }
+                    return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail $detail -HowToFix '')
+                }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'Notepad++ ausente em disco e nenhuma entrada de registro reconhecida.' -HowToFix 'Instale via winget: winget install -e --id Notepad++.Notepad++')
+            }
+            'powertoys' {
+                # PowerToys instala tanto como MSI (Program Files\PowerToys) quanto MSIX
+                # (WindowsApps\Microsoft.PowerToys_*). Validar disco + checar winget evita ghost.
+                $candidates = @(
+                    (Join-Path $env:ProgramFiles 'PowerToys\PowerToys.exe')
+                    $(if ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) { Join-Path ([Environment]::GetEnvironmentVariable('ProgramFiles(x86)')) 'PowerToys\PowerToys.exe' } else { $null })
+                    (Join-Path $env:LOCALAPPDATA 'PowerToys\PowerToys.exe')
+                ) | Where-Object { $_ }
+                $exePath = ''
+                foreach ($c in $candidates) {
+                    if (Test-Path -LiteralPath $c) { $exePath = $c; break }
+                }
+                if ([string]::IsNullOrWhiteSpace($exePath)) {
+                    $msixMatches = @(Get-ChildItem -Path (Join-Path $env:ProgramFiles 'WindowsApps\Microsoft.PowerToys_*\PowerToys.exe') -ErrorAction SilentlyContinue)
+                    if ($msixMatches.Count -gt 0) { $exePath = [string]$msixMatches[0].FullName }
+                }
+                if (-not [string]::IsNullOrWhiteSpace($exePath)) {
+                    $ver = ''
+                    try { $ver = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exePath).FileVersion } catch { $ver = '' }
+                    return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("PowerToys em {0} (v{1})" -f $exePath, $ver) -HowToFix '')
+                }
+                if (Test-AuditWingetInstalled -Id 'Microsoft.PowerToys') {
+                    return (New-AuditRow -Component $ComponentName -Status 'GhostInstall' -Detail 'winget lista Microsoft.PowerToys como instalado, mas PowerToys.exe ausente em ProgramFiles/LOCALAPPDATA/WindowsApps.' -HowToFix 'Execute bootstrap-tools.ps1 -Audit -Repair para limpar entrada fantasma e reinstalar.')
+                }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'PowerToys.exe nao encontrado.' -HowToFix 'Instale via winget install -e --id Microsoft.PowerToys')
+            }
+            'terminal' {
+                # Windows Terminal e MSIX: o alias wt.exe vive em WindowsApps mas o pacote real
+                # em WindowsApps\Microsoft.WindowsTerminal_*. Confiar so no alias deixa passar ghost.
+                $aliasPath = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\wt.exe'
+                $hasAlias = Test-Path -LiteralPath $aliasPath
+                $hasPackage = Test-BootstrapAppxPackageInstalled -Names @('Microsoft.WindowsTerminal')
+                $msixMatches = @(Get-ChildItem -Path (Join-Path $env:ProgramFiles 'WindowsApps\Microsoft.WindowsTerminal_*\wt.exe') -ErrorAction SilentlyContinue)
+                $msixPath = if ($msixMatches.Count -gt 0) { [string]$msixMatches[0].FullName } else { '' }
+                if ($hasAlias -and $hasPackage) {
+                    $detailPath = if ([string]::IsNullOrWhiteSpace($msixPath)) { 'Get-AppxPackage: Microsoft.WindowsTerminal' } else { $msixPath }
+                    return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("Windows Terminal MSIX em {0}; alias {1}" -f $detailPath, $aliasPath) -HowToFix '')
+                }
+                if ($hasAlias -and -not $hasPackage) {
+                    return (New-AuditRow -Component $ComponentName -Status 'GhostInstall' -Detail ("Alias wt.exe presente em {0}, mas pacote Appx Microsoft.WindowsTerminal ausente." -f $aliasPath) -HowToFix 'Execute bootstrap-tools.ps1 -Audit -Repair para reinstalar; ou Get-AppxPackage Microsoft.WindowsTerminal | Remove-AppxPackage seguido de winget install.')
+                }
+                if ($hasPackage) {
+                    $detailPath = if ([string]::IsNullOrWhiteSpace($msixPath)) { 'Get-AppxPackage: Microsoft.WindowsTerminal' } else { $msixPath }
+                    return (New-AuditRow -Component $ComponentName -Status 'InstalledButNotInPath' -Detail ("MSIX presente em {0} mas alias wt.exe ausente no PATH do usuario." -f $detailPath) -HowToFix 'Verifique Settings > Apps > Aliases de execucao para reabilitar wt.exe.')
+                }
+                if (Test-AuditWingetInstalled -Id 'Microsoft.WindowsTerminal') {
+                    return (New-AuditRow -Component $ComponentName -Status 'GhostInstall' -Detail 'winget lista Microsoft.WindowsTerminal como instalado, mas nem alias nem pacote MSIX foram encontrados.' -HowToFix 'Execute bootstrap-tools.ps1 -Audit -Repair.')
+                }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'Windows Terminal nao encontrado.' -HowToFix 'Instale via winget install -e --id Microsoft.WindowsTerminal')
+            }
+            'docker' {
+                $info = $null
+                try { $info = Get-BootstrapDockerInstallInfo } catch { $info = $null }
+                if ($info -and [bool]$info.GhostState) {
+                    $reason = [string]$info.GhostReason
+                    if ([string]::IsNullOrWhiteSpace($reason)) { $reason = 'binario ausente apos winget reportar presente' }
+                    return (New-AuditRow -Component $ComponentName -Status 'GhostInstall' -Detail ("Docker Desktop ghost: {0}" -f $reason) -HowToFix 'Execute bootstrap-tools.ps1 -Audit -Repair para limpar entrada fantasma e reinstalar Docker Desktop.')
+                }
+                if ($info -and [bool]$info.Installed) {
+                    $detail = ("Docker Desktop em {0} (v{1}); WSL2={2}; servico={3}" -f $info.InstallRoot, $info.FileVersion, $info.WslDistroPresent, $info.ServiceState)
+                    if ([bool]$info.HealthIssues) {
+                        return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail $detail -HowToFix 'Abra Docker Desktop manualmente, aguarde a engine subir, e revise Settings > Resources > WSL Integration.')
+                    }
+                    return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail $detail -HowToFix '')
+                }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail 'Docker Desktop ausente.' -HowToFix 'Instale via winget install -e --id Docker.DockerDesktop apos habilitar WSL.')
+            }
+            'wsl-core' {
+                return (Invoke-AuditWslCore -ComponentName $ComponentName)
+            }
+            'wsl-ui' {
+                return (Invoke-AuditWslUi -ComponentName $ComponentName)
+            }
+            'vscode-extensions' {
+                return (Invoke-AuditVsCodeExtensions -ComponentName $ComponentName)
+            }
             default {
                 return $null
             }
@@ -909,18 +1381,14 @@ function Invoke-BootstrapAuditMode {
             $probeList = @()
             if ($probeScript) { $probeList = @($probeScript) }
             if ($probeList.Count -gt 0) {
-                $found = $false
-                foreach ($p in $probeList) {
-                    $expanded = [Environment]::ExpandEnvironmentVariables([string]$p)
-                    if (Test-Path -LiteralPath $expanded) { $found = $true; break }
-                }
+                $found = Test-WingetProbePathsOnDisk -ProbePaths $probeList
                 if ($found) {
                     $status = 'Healthy'
                     $detail = 'ProbePaths encontrado.'
                 } else {
                     $wingetId = [string]($def | Select-Object -ExpandProperty Id -ErrorAction SilentlyContinue)
                     if (-not [string]::IsNullOrWhiteSpace($wingetId) -and $wingetExe -and (Test-AuditWingetInstalled -Id $wingetId)) {
-                        $status = 'GhostInstalled'
+                        $status = 'GhostInstall'
                         $detail = ('ProbePaths ausente em disco, mas winget lista {0} como instalado. Possivel ghost install.' -f $wingetId)
                         $howToFix = 'Reinstale o pacote via winget ou remova o registro fantasma com winget uninstall.'
                     } else {
@@ -951,6 +1419,29 @@ function Invoke-BootstrapAuditMode {
             }
         }
 
+        if ($status -eq 'Unknown' -and (($def.PSObject.Properties.Name -contains 'CommandNames') -or ([string]$def.Kind -eq 'npm'))) {
+            $commandRow = Invoke-AuditDeclaredCommands -ComponentName $comp -ComponentDef $def
+            if ($commandRow) {
+                $status = [string]$commandRow.Status
+                $detail = [string]$commandRow.Detail
+                $howToFix = [string]$commandRow.HowToFix
+            }
+        }
+
+        if ($status -eq 'Unknown' -and [string]$def.Kind -eq 'repo-clone') {
+            $repoRow = Invoke-AuditRepoClone -ComponentName $comp -ComponentDef $def
+            $status = [string]$repoRow.Status
+            $detail = [string]$repoRow.Detail
+            $howToFix = [string]$repoRow.HowToFix
+        }
+
+        if ($status -eq 'Unknown' -and [string]$def.Kind -eq 'manual-required') {
+            $manualRow = Invoke-AuditManualRequired -ComponentName $comp -ComponentDef $def
+            $status = [string]$manualRow.Status
+            $detail = [string]$manualRow.Detail
+            $howToFix = [string]$manualRow.HowToFix
+        }
+
         if ($status -eq 'Unknown' -and [string]$def.Kind -eq 'winget' -and -not [string]::IsNullOrWhiteSpace([string]$def.Id) -and $wingetExe) {
             try {
                 $wid = [string]$def.Id
@@ -962,16 +1453,12 @@ function Invoke-BootstrapAuditMode {
                     $probeList = @()
                     if ($probeScript) { $probeList = @($probeScript) }
                     if ($probeList.Count -gt 0) {
-                        $diskFound = $false
-                        foreach ($p in $probeList) {
-                            $expanded = [Environment]::ExpandEnvironmentVariables([string]$p)
-                            if (Test-Path -LiteralPath $expanded) { $diskFound = $true; break }
-                        }
+                        $diskFound = Test-WingetProbePathsOnDisk -ProbePaths $probeList
                         if ($diskFound) {
                             $status = 'Healthy'
                             $detail = "winget: pacote $wid presente; binario verificado em disco."
                         } else {
-                            $status = 'GhostInstalled'
+                            $status = 'GhostInstall'
                             $detail = ('winget: pacote {0} presente, mas nenhum binario encontrado em ProbePaths. Ghost install.' -f $wid)
                             $howToFix = 'Reinstale o pacote via winget ou remova o registro fantasma com winget uninstall.'
                         }
@@ -992,7 +1479,7 @@ function Invoke-BootstrapAuditMode {
         }
 
         if ($status -eq 'Unknown') {
-            $status = 'Skipped'
+            $status = 'UnsupportedAudit'
             $detail = ('Sem heuristica de auditoria para Kind={0}.' -f [string]$def.Kind)
             $howToFix = 'Nenhuma correcao automatica sugerida para este tipo de componente; valide manualmente ou adicione heuristica de auditoria ao catalogo.'
         }
@@ -1010,7 +1497,7 @@ function Invoke-BootstrapAuditMode {
             }
         }
 
-        $results.Add((New-AuditRow -Component $comp -Status $status -Detail $detail -HowToFix $howToFix))
+        $results.Add((New-BootstrapAuditRow -Component $comp -Status $status -Detail $detail -HowToFix $howToFix -ComponentDef $def))
     }
 
     return $results
@@ -1288,6 +1775,34 @@ function Ensure-PathUserContains {
     if (($env:Path -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') }) -inotcontains $Dir) {
         $env:Path = ($env:Path.TrimEnd(';') + ';' + $Dir).Trim(';')
     }
+}
+
+function Remove-PathUserEntry {
+    param([Parameter(Mandatory = $true)][string]$Dir)
+    if ([string]::IsNullOrWhiteSpace($Dir)) { return $false }
+    $normalizedDir = $Dir.Trim().TrimEnd('\')
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if ([string]::IsNullOrWhiteSpace($userPath)) { return $false }
+
+    $removed = $false
+    $kept = New-Object System.Collections.Generic.List[string]
+    foreach ($part in @($userPath -split ';')) {
+        $text = ([string]$part).Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        if ($text.TrimEnd('\') -ieq $normalizedDir) {
+            $removed = $true
+            continue
+        }
+        $kept.Add($text) | Out-Null
+    }
+
+    if ($removed) {
+        [Environment]::SetEnvironmentVariable('Path', (($kept.ToArray()) -join ';'), 'User')
+        $env:Path = (@(($env:Path -split ';') | Where-Object { ([string]$_).Trim().TrimEnd('\') -ine $normalizedDir }) -join ';')
+        Refresh-SessionPath
+        try { Write-Log "Removido do PATH (Usuário): $normalizedDir" } catch { }
+    }
+    return $removed
 }
 
 function Ensure-PathUserContainsFirst {
@@ -1593,6 +2108,108 @@ function Get-BootstrapPendingRebootReasons {
     return @($reasons | Select-Object -Unique)
 }
 
+function Get-BootstrapMsiHostilePendingRebootReasons {
+    param([AllowNull()][string[]]$Reasons = $null)
+
+    if ($null -eq $Reasons) {
+        try { $Reasons = @(Get-BootstrapPendingRebootReasons) } catch { $Reasons = @() }
+    }
+
+    $blockers = New-Object System.Collections.Generic.List[string]
+    foreach ($reason in @($Reasons)) {
+        $r = [string]$reason
+        if ($r -eq 'PendingFileRenameOperations' -or $r -eq 'UpdateExeVolatile') {
+            $blockers.Add($r)
+        }
+    }
+    return @($blockers | Select-Object -Unique)
+}
+
+function New-BootstrapBlockedException {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [Parameter(Mandatory = $true)][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$Action,
+        [string[]]$Reasons = @()
+    )
+
+    $ex = New-Object System.InvalidOperationException($Message)
+    $ex.Data['BootstrapStatus'] = 'blocked'
+    $ex.Data['BootstrapBlockerKind'] = $Kind
+    $ex.Data['BootstrapAction'] = $Action
+    $ex.Data['BootstrapReasons'] = @($Reasons)
+    return $ex
+}
+
+function Get-BootstrapBlockedErrorInfo {
+    param([AllowNull()]$ErrorRecord)
+
+    $info = [ordered]@{
+        IsBlocked = $false
+        Kind = ''
+        Action = ''
+        Reasons = @()
+    }
+
+    if (-not $ErrorRecord -or -not $ErrorRecord.Exception) { return $info }
+
+    try {
+        if ([string]$ErrorRecord.Exception.Data['BootstrapStatus'] -eq 'blocked') {
+            $info.IsBlocked = $true
+            $info.Kind = [string]$ErrorRecord.Exception.Data['BootstrapBlockerKind']
+            $info.Action = [string]$ErrorRecord.Exception.Data['BootstrapAction']
+            $info.Reasons = @($ErrorRecord.Exception.Data['BootstrapReasons'])
+        }
+    } catch {
+    }
+    return $info
+}
+
+function Get-BootstrapProcessesByName {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    return @(Get-Process -Name $Name -ErrorAction SilentlyContinue)
+}
+
+function Wait-BootstrapWingetMsiIdle {
+    param(
+        [int]$TimeoutSeconds = 60,
+        [int]$HeartbeatSeconds = 30
+    )
+
+    $timeout = [Math]::Max(1, $TimeoutSeconds)
+    $heartbeat = [Math]::Max(1, $HeartbeatSeconds)
+    $processNames = @('msiexec', 'WindowsPackageManagerServer', 'winget')
+    $lastHeartbeat = -1
+
+    for ($elapsed = 0; $elapsed -lt $timeout; $elapsed++) {
+        $active = @(
+            foreach ($name in $processNames) {
+                Get-BootstrapProcessesByName -Name $name
+            }
+        )
+        if (@($active).Count -eq 0) { return $true }
+
+        if ($lastHeartbeat -lt 0 -or (($elapsed - $lastHeartbeat) -ge $heartbeat)) {
+            $summary = @($active | Select-Object -First 6 | ForEach-Object { '{0}:{1}' -f $_.ProcessName, $_.Id }) -join ', '
+            Write-Log ("winget/msi: aguardando processos ficarem ociosos ({0}s/{1}s): {2}" -f $elapsed, $timeout, $summary) 'WARN'
+            $lastHeartbeat = $elapsed
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    $remaining = @(
+        foreach ($name in $processNames) {
+            Get-BootstrapProcessesByName -Name $name
+        }
+    )
+    if (@($remaining).Count -eq 0) { return $true }
+
+    $remainingSummary = @($remaining | Select-Object -First 6 | ForEach-Object { '{0}:{1}' -f $_.ProcessName, $_.Id }) -join ', '
+    Write-Log ("winget/msi: timeout aguardando ociosidade apos {0}s: {1}" -f $timeout, $remainingSummary) 'WARN'
+    return $false
+}
+
 function Test-BootstrapTcpEndpoint {
     param(
         [Parameter(Mandatory = $true)][string]$HostName,
@@ -1793,12 +2410,18 @@ function Invoke-BootstrapExecutionPreflight {
 
     $requirements = Get-BootstrapPreflightRequirements -ResolvedComponents $ResolvedComponents
     $pendingRebootReasons = @(Get-BootstrapPendingRebootReasons)
+    $pendingRebootMsiBlockers = @(Get-BootstrapMsiHostilePendingRebootReasons -Reasons $pendingRebootReasons)
+    $pendingRebootSeverity = if ($pendingRebootMsiBlockers.Count -gt 0) { 'blocker-for-msi-ghost' } else { 'warning' }
     if ($pendingRebootReasons.Count -gt 0) {
         Write-Log ("Reinicio pendente detectado: {0}. Instalacoes podem falhar (Store/winget/WSL). Recomendo reiniciar antes de prosseguir." -f ($pendingRebootReasons -join ', ')) 'WARN'
         if ($script:RequireNoPendingReboot) {
             throw ("Preflight: reinicio pendente e flag -RequireNoPendingReboot ativa. Motivos: {0}. Reinicie o Windows e execute novamente." -f ($pendingRebootReasons -join ', '))
         }
-        Write-Log 'Continuando apesar do reinicio pendente (use -RequireNoPendingReboot para bloquear).' 'WARN'
+        if ($pendingRebootMsiBlockers.Count -gt 0) {
+            Write-Log ("Preflight: reinicio pendente classificado como bloqueio para recuperacao de ghost MSI ({0}); componentes afetados retornarao status=blocked antes de instalar." -f ($pendingRebootMsiBlockers -join ', ')) 'WARN'
+        } else {
+            Write-Log 'Continuando apesar do reinicio pendente (use -RequireNoPendingReboot para bloquear).' 'WARN'
+        }
     } else {
         Write-Log 'Nenhum reinicio pendente detectado.'
     }
@@ -1903,6 +2526,8 @@ function Invoke-BootstrapExecutionPreflight {
         requiresNetwork = $requirements.RequiresNetwork
         requiresWinget = $requirements.RequiresWinget
         pendingRebootReasons = @($pendingRebootReasons)
+        pendingRebootSeverity = $pendingRebootSeverity
+        pendingRebootMsiBlockers = @($pendingRebootMsiBlockers)
         requireNoPendingReboot = [bool]$script:RequireNoPendingReboot
         manualRequiredInPlan = $(if ($manualPlanRows.Count -gt 0) { @($manualPlanRows.ToArray()) } else { @() })
         wingetPath = $wingetPath
@@ -2343,30 +2968,145 @@ function Get-BootstrapNotepadPlusPlusDesiredState {
     }
 }
 
+function Test-BootstrapNotepadPlusPlusBinary {
+    # Valida que `notepad++.exe` no caminho dado e um binario real e nao um stub de uninstall
+    # parcial (arquivo zerado, marcado-para-delete, ou MUI ResX restante). Sem isso, Test-Path
+    # cru aceita qualquer fantasma e bloqueia a curadoria de plugins/UDL.
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try {
+        $item = Get-Item -LiteralPath $Path -ErrorAction Stop
+    } catch {
+        return $false
+    }
+    if ([int64]$item.Length -lt 102400) { return $false }  # 100 KB: Notepad++ real tem ~4 MB; stubs ficam <10 KB
+    try {
+        $info = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($item.FullName)
+        if ([string]::IsNullOrWhiteSpace($info.FileVersion)) { return $false }
+    } catch {
+        return $false
+    }
+    return $true
+}
+
+function Get-BootstrapNotepadPlusPlusUninstallRegistry {
+    # Varre HKCU/HKLM/WOW6432Node\...\Uninstall procurando entradas Notepad++.
+    # Retorna 0..N hashtables com Hive marcado (HKCU/HKLM/HKLM-WOW64) para diagnostico
+    # de ghost por arquitetura. Padronizado com Get-BootstrapInstalledAppInventory.
+    $roots = @(
+        @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'; Hive = 'HKCU' }
+        @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'; Hive = 'HKLM' }
+        @{ Path = 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'; Hive = 'HKLM-WOW64' }
+    )
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($root in $roots) {
+        $entries = @()
+        try {
+            $entries = @(Get-ItemProperty -Path $root.Path -ErrorAction SilentlyContinue)
+        } catch {
+            $entries = @()
+        }
+        foreach ($entry in $entries) {
+            $displayName = ''
+            if ($entry.PSObject.Properties.Name -contains 'DisplayName') {
+                $displayName = [string]$entry.DisplayName
+            }
+            if ([string]::IsNullOrWhiteSpace($displayName)) { continue }
+            # $matches e variavel automatica do PowerShell (captura de regex). Nao reusar.
+            if ($displayName -notmatch '^Notepad\+\+(\s*\(.*\))?$') { continue }
+            $hive = [string]$root.Hive
+            $keyPath = ''
+            if ($entry.PSObject.Properties.Name -contains 'PSPath') { $keyPath = [string]$entry.PSPath }
+            $installLocation = ''
+            if ($entry.PSObject.Properties.Name -contains 'InstallLocation') { $installLocation = [string]$entry.InstallLocation }
+            $uninstallString = ''
+            if ($entry.PSObject.Properties.Name -contains 'UninstallString') { $uninstallString = [string]$entry.UninstallString }
+            $quietUninstallString = ''
+            if ($entry.PSObject.Properties.Name -contains 'QuietUninstallString') { $quietUninstallString = [string]$entry.QuietUninstallString }
+            $displayVersion = ''
+            if ($entry.PSObject.Properties.Name -contains 'DisplayVersion') { $displayVersion = [string]$entry.DisplayVersion }
+            $results.Add([ordered]@{
+                Hive = $hive
+                KeyPath = $keyPath
+                DisplayName = $displayName
+                DisplayVersion = $displayVersion
+                InstallLocation = $installLocation
+                UninstallString = $uninstallString
+                QuietUninstallString = $quietUninstallString
+            })
+        }
+    }
+    return @($results.ToArray())
+}
+
 function Get-BootstrapNotepadPlusPlusInstallInfo {
+    # Decisor autoritativo de presenca do Notepad++. Tres fases:
+    #   1) Disco: itera candidatos de install path e valida o .exe (tamanho + FileVersion).
+    #   2) Registry: consulta Uninstall em HKCU/HKLM/WOW6432Node; usa InstallLocation
+    #      como pista adicional para o probe de disco.
+    #   3) Divergencia: registry diz presente mas nada de binario valido em disco -> GhostState.
+    # Mantem compatibilidade com consumidores existentes (campos antigos preservados).
     $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
     $programW6432 = [Environment]::GetEnvironmentVariable('ProgramW6432')
+    $publicProfile = [Environment]::GetEnvironmentVariable('PUBLIC')
     $candidates = @(
         (Join-Path $env:ProgramFiles 'Notepad++')
         $(if ($programW6432 -and ($env:ProgramFiles -ne $programW6432)) { Join-Path $programW6432 'Notepad++' } else { $null })
         $(if ($programFilesX86 -and ($env:ProgramFiles -ne $programFilesX86)) { Join-Path $programFilesX86 'Notepad++' } else { $null })
         (Join-Path $env:LOCALAPPDATA 'Programs\Notepad++')
-    ) | Where-Object { $_ }
+        $(if ($publicProfile) { Join-Path $publicProfile 'Notepad++' } else { $null })
+    ) | Where-Object { $_ } | Select-Object -Unique
 
     $installRoot = $null
-    foreach ($path in @($candidates | Select-Object -Unique)) {
-        if (Test-Path (Join-Path $path 'notepad++.exe')) {
+    foreach ($path in @($candidates)) {
+        $exePath = Join-Path $path 'notepad++.exe'
+        if (Test-BootstrapNotepadPlusPlusBinary -Path $exePath) {
             $installRoot = $path
             break
         }
     }
 
+    $registryEntries = @()
+    try { $registryEntries = @(Get-BootstrapNotepadPlusPlusUninstallRegistry) } catch { $registryEntries = @() }
+
+    if (-not $installRoot -and $registryEntries.Count -gt 0) {
+        foreach ($entry in $registryEntries) {
+            $hintLocation = [string]$entry.InstallLocation
+            if ([string]::IsNullOrWhiteSpace($hintLocation)) { continue }
+            $hintExe = Join-Path $hintLocation 'notepad++.exe'
+            if (Test-BootstrapNotepadPlusPlusBinary -Path $hintExe) {
+                $installRoot = $hintLocation
+                break
+            }
+        }
+    }
+
     if (-not $installRoot) {
-        $wingetExe = Get-Winget
-        if ($wingetExe) {
-            $wingetInstalled = Test-WingetPackageInstalled -WingetPath $wingetExe -Id 'Notepad++.Notepad++'
-            if ($wingetInstalled) {
-                Write-Log 'Notepad++ ghost install — winget registry diz presente, mas nenhum binario encontrado em disco.' 'WARN'
+        $ghostState = $false
+        $ghostHive = ''
+        $ghostUninstallString = ''
+        $ghostQuietUninstallString = ''
+        $registryDisplayVersion = ''
+        if ($registryEntries.Count -gt 0) {
+            $ghostState = $true
+            $primary = $registryEntries[0]
+            $ghostHive = [string]$primary.Hive
+            $ghostUninstallString = [string]$primary.UninstallString
+            $ghostQuietUninstallString = [string]$primary.QuietUninstallString
+            $registryDisplayVersion = [string]$primary.DisplayVersion
+            Write-Log ("Notepad++ ghost install detectado: registro em {0} declara presente, mas nenhum binario valido em disco." -f $ghostHive) 'WARN'
+        } else {
+            $wingetExe = $null
+            try { $wingetExe = Get-Winget } catch { $wingetExe = $null }
+            if ($wingetExe) {
+                $wingetInstalled = $false
+                try { $wingetInstalled = Test-WingetPackageInstalled -WingetPath $wingetExe -Id 'Notepad++.Notepad++' } catch { $wingetInstalled = $false }
+                if ($wingetInstalled) {
+                    $ghostState = $true
+                    $ghostHive = 'winget'
+                    Write-Log 'Notepad++ ghost install — winget registry diz presente, mas nenhum binario encontrado em disco.' 'WARN'
+                }
             }
         }
         return [ordered]@{
@@ -2376,15 +3116,24 @@ function Get-BootstrapNotepadPlusPlusInstallInfo {
             PluginsRoot = ''
             ConfigRoot = ''
             PluginConfigRoot = ''
+            GhostState = $ghostState
+            GhostHive = $ghostHive
+            GhostUninstallString = $ghostUninstallString
+            GhostQuietUninstallString = $ghostQuietUninstallString
+            RegistryDisplayVersion = $registryDisplayVersion
         }
     }
 
     $architecture = 'x64'
     if ($installRoot -like '*Program Files (x86)*') {
         $architecture = 'x86'
+    } elseif ($registryEntries.Count -gt 0 -and [string]$registryEntries[0].Hive -eq 'HKLM-WOW64') {
+        $architecture = 'x86'
     }
 
     $configRoot = if (Test-Path (Join-Path $installRoot 'doLocalConf.xml')) { $installRoot } else { Join-Path $env:APPDATA 'Notepad++' }
+    $registryDisplayVersion = ''
+    if ($registryEntries.Count -gt 0) { $registryDisplayVersion = [string]$registryEntries[0].DisplayVersion }
     return [ordered]@{
         Installed = $true
         Architecture = $architecture
@@ -2392,6 +3141,126 @@ function Get-BootstrapNotepadPlusPlusInstallInfo {
         PluginsRoot = (Join-Path $installRoot 'plugins')
         ConfigRoot = $configRoot
         PluginConfigRoot = (Join-Path $configRoot 'plugins\Config')
+        GhostState = $false
+        GhostHive = ''
+        GhostUninstallString = ''
+        GhostQuietUninstallString = ''
+        RegistryDisplayVersion = $registryDisplayVersion
+    }
+}
+
+function Get-BootstrapDockerInstallInfo {
+    # Detector autoritativo para Docker Desktop. Cobre:
+    #   - Paths user-scope (LOCALAPPDATA\Docker\Docker.exe) e per-machine (ProgramFiles\Docker\Docker\Docker Desktop.exe).
+    #   - Validacao de binario (FileVersion).
+    #   - Estado do servico com.docker.service e presenca de distro WSL docker-desktop.
+    #   - Divergencia winget <-> disco => GhostState.
+    # Retorna hashtable estavel mesmo em falha (campos sempre presentes).
+    $candidates = @(
+        (Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe')
+        (Join-Path $env:ProgramFiles 'Docker\Docker.exe')
+        (Join-Path $env:LOCALAPPDATA 'Docker\Docker Desktop.exe')
+        (Join-Path $env:LOCALAPPDATA 'Docker\Docker.exe')
+    ) | Where-Object { $_ } | Select-Object -Unique
+
+    $installRoot = ''
+    $exePath = ''
+    foreach ($c in $candidates) {
+        if (-not (Test-Path -LiteralPath $c -PathType Leaf)) { continue }
+        try {
+            $item = Get-Item -LiteralPath $c -ErrorAction Stop
+        } catch {
+            continue
+        }
+        if ([int64]$item.Length -lt 102400) { continue }  # stub guard
+        $exePath = $item.FullName
+        $installRoot = Split-Path -Parent $exePath
+        break
+    }
+
+    $fileVersion = ''
+    if (-not [string]::IsNullOrWhiteSpace($exePath)) {
+        try { $fileVersion = [string][System.Diagnostics.FileVersionInfo]::GetVersionInfo($exePath).FileVersion } catch { $fileVersion = '' }
+    }
+
+    # Servico Docker (com.docker.service) - opcional, ausente em instalacoes que so usam WSL2.
+    $serviceState = 'absent'
+    try {
+        $svc = Get-Service -Name 'com.docker.service' -ErrorAction SilentlyContinue
+        if ($svc) { $serviceState = [string]$svc.Status }
+    } catch {
+        $serviceState = 'absent'
+    }
+
+    # Distro WSL docker-desktop - melhor sinal de integracao WSL2 saudavel.
+    # `wsl --list` pode travar quando WSL nao esta configurado; rodamos com timeout curto.
+    $wslDistroPresent = $false
+    try {
+        $wslExe = Join-Path $env:WINDIR 'System32\wsl.exe'
+        if ((Test-Path -LiteralPath $wslExe) -and -not [string]::IsNullOrWhiteSpace($exePath)) {
+            $stdoutPath = Join-Path $env:TEMP ('phasezero-wsl-list-' + [Guid]::NewGuid().ToString('N') + '.txt')
+            try {
+                $proc = Start-Process -FilePath $wslExe -ArgumentList @('--list','--quiet') -RedirectStandardOutput $stdoutPath -RedirectStandardError ([System.IO.Path]::GetTempFileName()) -WindowStyle Hidden -PassThru -ErrorAction SilentlyContinue
+                if ($proc) {
+                    if ($proc.WaitForExit(5000)) {
+                        if (Test-Path -LiteralPath $stdoutPath) {
+                            $listOut = [System.IO.File]::ReadAllText($stdoutPath)
+                            if ($listOut -and $listOut -match 'docker-desktop') { $wslDistroPresent = $true }
+                        }
+                    } else {
+                        try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+                    }
+                }
+            } finally {
+                if (Test-Path -LiteralPath $stdoutPath) { Remove-Item -LiteralPath $stdoutPath -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    } catch {
+        $wslDistroPresent = $false
+    }
+
+    if ([string]::IsNullOrWhiteSpace($exePath)) {
+        $ghostState = $false
+        $ghostReason = ''
+        $wingetExe = $null
+        try { $wingetExe = Get-Winget } catch { $wingetExe = $null }
+        if ($wingetExe) {
+            $wingetInstalled = $false
+            try { $wingetInstalled = Test-WingetPackageInstalled -WingetPath $wingetExe -Id 'Docker.DockerDesktop' } catch { $wingetInstalled = $false }
+            if ($wingetInstalled) {
+                $ghostState = $true
+                $ghostReason = 'winget reporta Docker.DockerDesktop instalado, mas nenhum binario valido encontrado em ProgramFiles\Docker ou LOCALAPPDATA\Docker'
+                Write-Log ('Docker Desktop ghost install detectado: ' + $ghostReason) 'WARN'
+            }
+        }
+        return [ordered]@{
+            Installed = $false
+            InstallRoot = ''
+            ExePath = ''
+            FileVersion = ''
+            ServiceState = $serviceState
+            WslDistroPresent = $wslDistroPresent
+            HealthIssues = $false
+            GhostState = $ghostState
+            GhostReason = $ghostReason
+        }
+    }
+
+    # Issues de saude: servico parado quando deveria rodar, ou WSL distro ausente (instalacao parcial).
+    $healthIssues = $false
+    if ($serviceState -eq 'Stopped') { $healthIssues = $true }
+    if (-not $wslDistroPresent -and $serviceState -eq 'absent') { $healthIssues = $true }
+
+    return [ordered]@{
+        Installed = $true
+        InstallRoot = $installRoot
+        ExePath = $exePath
+        FileVersion = $fileVersion
+        ServiceState = $serviceState
+        WslDistroPresent = $wslDistroPresent
+        HealthIssues = $healthIssues
+        GhostState = $false
+        GhostReason = ''
     }
 }
 
@@ -3497,6 +4366,166 @@ function Test-WingetProbePathsOnDisk {
     return $false
 }
 
+function Test-BootstrapAppxPackageInstalled {
+    param([string[]]$Names = @())
+
+    $packageNames = @(Get-BootstrapNonEmptyStringArray -Values $Names)
+    if ($packageNames.Count -eq 0) { return $false }
+    if (-not (Get-Command -Name Get-AppxPackage -ErrorAction SilentlyContinue)) { return $false }
+
+    foreach ($name in @($packageNames)) {
+        try {
+            $pkg = @(Get-AppxPackage -Name $name -ErrorAction SilentlyContinue | Select-Object -First 1)
+            if ($pkg.Count -gt 0) { return $true }
+        } catch {
+        }
+    }
+    return $false
+}
+
+function Test-BootstrapPackageArtifactsPresent {
+    param(
+        [string[]]$ProbePaths = @(),
+        [string[]]$AppxPackageNames = @()
+    )
+
+    if (@($AppxPackageNames).Count -gt 0 -and (Test-BootstrapAppxPackageInstalled -Names $AppxPackageNames)) {
+        return $true
+    }
+    if (@($ProbePaths).Count -gt 0 -and (Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths)) {
+        return $true
+    }
+    return $false
+}
+
+function Get-BootstrapHintField {
+    # Acesso defensivo a campos em hashtable, OrderedDictionary, ou PSCustomObject.
+    # Get-ItemProperty retorna PSCustomObject; testes podem passar [ordered]@{...}.
+    param(
+        [Parameter(Mandatory = $true)]$Hint,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    if ($null -eq $Hint) { return '' }
+    if ($Hint -is [System.Collections.IDictionary]) {
+        if ($Hint.Contains($Name)) { return [string]$Hint[$Name] }
+        return ''
+    }
+    try {
+        $props = $Hint.PSObject.Properties
+        if ($props -and ($props.Name -contains $Name)) {
+            return [string]$Hint.$Name
+        }
+    } catch { }
+    return ''
+}
+
+function Invoke-BootstrapGhostPackageRecovery {
+    <#
+    .SYNOPSIS
+        Limpa estado fantasma de um pacote (registry diz instalado, disco vazio/stub) por niveis:
+          1. winget uninstall --purge (com --force se necessario)
+          2. Fallback NSIS: executa UninstallString do registro com /S quando winget falha
+          3. Limpa chave Uninstall orfa em WOW6432Node se o resto sobreviveu
+        Retorna $true se acreditar ter limpado o ghost.
+    .PARAMETER UninstallStringHints
+        Lista opcional de objetos do registro (Hive/KeyPath/UninstallString/QuietUninstallString)
+        obtidos previamente. Quando vazia, o helper opera so via winget.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$WingetPath,
+        [Parameter(Mandatory = $true)][string]$Id,
+        [string]$DisplayName = $Id,
+        [object[]]$UninstallStringHints = @(),
+        [hashtable]$State = $null,
+        [string]$ComponentName = ''
+    )
+
+    $cleaned = $false
+
+    # 1. winget uninstall (com retry/backoff)
+    $uninstallArgs = @('uninstall', '-e', '--id', $Id, '--purge', '--disable-interactivity')
+    try {
+        $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $uninstallArgs -OperationName ("Ghost-recovery: winget uninstall {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+        if ($exit -eq 0) { $cleaned = $true }
+    } catch {
+        Write-Log ("Ghost-recovery: excecao em winget uninstall de {0}: {1}" -f $DisplayName, $_.Exception.Message) 'WARN'
+    }
+
+    if (-not $cleaned) {
+        $forceArgs = @('uninstall', '-e', '--id', $Id, '--purge', '--force', '--disable-interactivity')
+        try {
+            $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $forceArgs -OperationName ("Ghost-recovery: winget uninstall --force {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+            if ($exit -eq 0) { $cleaned = $true }
+        } catch {
+            Write-Log ("Ghost-recovery: excecao em winget --force de {0}: {1}" -f $DisplayName, $_.Exception.Message) 'WARN'
+        }
+    }
+
+    # 2. Fallback NSIS: dispara UninstallString do registro com /S
+    if (-not $cleaned -and $UninstallStringHints -and @($UninstallStringHints).Count -gt 0) {
+        foreach ($hint in @($UninstallStringHints)) {
+            # Hints podem vir como PSCustomObject (registry) ou OrderedDictionary/hashtable (testes).
+            # Get-BootstrapHintField faz get defensivo nos dois formatos.
+            $candidate = Get-BootstrapHintField -Hint $hint -Name 'QuietUninstallString'
+            if ([string]::IsNullOrWhiteSpace($candidate)) {
+                $candidate = Get-BootstrapHintField -Hint $hint -Name 'UninstallString'
+            }
+            if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+            # Extrai executavel e args do UninstallString (formato tipico: "C:\path\uninstall.exe" /Args ou "C:\path\uninstall.exe")
+            $exePath = ''
+            $extraArgs = @()
+            if ($candidate -match '^\s*"([^"]+)"\s*(.*)$') {
+                $exePath = $matches[1]
+                $tail = $matches[2].Trim()
+                if (-not [string]::IsNullOrWhiteSpace($tail)) { $extraArgs = @($tail -split '\s+') }
+            } elseif ($candidate -match '^\s*(\S+)\s*(.*)$') {
+                $exePath = $matches[1]
+                $tail = $matches[2].Trim()
+                if (-not [string]::IsNullOrWhiteSpace($tail)) { $extraArgs = @($tail -split '\s+') }
+            }
+            if ([string]::IsNullOrWhiteSpace($exePath) -or -not (Test-Path -LiteralPath $exePath)) {
+                Write-Log ("Ghost-recovery: UninstallString do registro ({0}) aponta para {1} inexistente; pulando." -f $hint.Hive, $exePath) 'WARN'
+                continue
+            }
+            if (@($extraArgs).Count -eq 0) { $extraArgs = @('/S') }  # NSIS silent
+            try {
+                Write-Log ("Ghost-recovery: invocando UninstallString NSIS para {0} ({1})..." -f $DisplayName, $hint.Hive)
+                $exit = Invoke-NativeWithLog -Exe $exePath -Args $extraArgs
+                if ($exit -eq 0) {
+                    $cleaned = $true
+                    break
+                } else {
+                    Write-Log ("Ghost-recovery: UninstallString NSIS retornou exit={0} para {1}." -f $exit, $DisplayName) 'WARN'
+                }
+            } catch {
+                Write-Log ("Ghost-recovery: excecao em UninstallString de {0}: {1}" -f $DisplayName, $_.Exception.Message) 'WARN'
+            }
+        }
+    }
+
+    # 3. Limpeza de chave Uninstall orfa que tenha sobrevivido (registrando para rollback).
+    if ($UninstallStringHints -and @($UninstallStringHints).Count -gt 0) {
+        foreach ($hint in @($UninstallStringHints)) {
+            $keyPath = Get-BootstrapHintField -Hint $hint -Name 'KeyPath'
+            if ([string]::IsNullOrWhiteSpace($keyPath)) { continue }
+            if (-not (Test-Path -LiteralPath $keyPath)) { continue }
+            $hive = Get-BootstrapHintField -Hint $hint -Name 'Hive'
+            try {
+                if ($State) {
+                    Register-BootstrapChange -State $State -Type 'Registry' -Target $keyPath -Name '__key__' -OldValue '__present__' -Operation 'remove-ghost-uninstall-key' -RollbackAction 'manual-review' -Reversible 'manual' -Component $ComponentName
+                }
+                Remove-Item -LiteralPath $keyPath -Recurse -Force -ErrorAction Stop
+                Write-Log ("Ghost-recovery: chave Uninstall orfa removida em {0}: {1}" -f $hive, $keyPath)
+                $cleaned = $true
+            } catch {
+                Write-Log ("Ghost-recovery: falha ao remover chave orfa {0}: {1}" -f $keyPath, $_.Exception.Message) 'WARN'
+            }
+        }
+    }
+
+    return $cleaned
+}
+
 function Ensure-WingetPackage {
     param(
         [Parameter(Mandatory = $true)][string]$WingetPath,
@@ -3504,13 +4533,18 @@ function Ensure-WingetPackage {
         [string]$DisplayName = $Id,
         [bool]$PreferUserScope = $true,
         [bool]$AllowFailureWhenNotAdmin = $false,
-        [string[]]$ProbePaths = @()
+        [string[]]$ProbePaths = @(),
+        [string[]]$AppxPackageNames = @(),
+        [hashtable]$State = $null,
+        [string]$ComponentName = '',
+        [object[]]$UninstallStringHints = @()
     )
 
     # Curto-circuito: se ProbePaths apontam para binario real em disco, considerar instalado
     # sem invocar winget. Evita 100% dos retry-loops causados por reportes inconsistentes.
-    if ($ProbePaths -and (Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths)) {
-        Write-Log ("{0} ja instalado (ProbePaths em disco)." -f $DisplayName)
+    $hasArtifactValidators = (($ProbePaths -and $ProbePaths.Count -gt 0) -or ($AppxPackageNames -and $AppxPackageNames.Count -gt 0))
+    if ($hasArtifactValidators -and (Test-BootstrapPackageArtifactsPresent -ProbePaths $ProbePaths -AppxPackageNames $AppxPackageNames)) {
+        Write-Log ("{0} ja instalado (artefato validado em disco/Appx)." -f $DisplayName)
         return
     }
 
@@ -3518,26 +4552,40 @@ function Ensure-WingetPackage {
     $isInstalled = Test-WingetPackageInstalled -WingetPath $WingetPath -Id $Id
     Write-Log ("winget list: verificacao concluida para id={0}; jaInstalado={1}" -f $Id, $isInstalled)
 
-    if ($isInstalled -and $ProbePaths.Count -gt 0) {
-        $diskVerified = Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths
+    if ($isInstalled -and $hasArtifactValidators) {
+        $diskVerified = Test-BootstrapPackageArtifactsPresent -ProbePaths $ProbePaths -AppxPackageNames $AppxPackageNames
         if (-not $diskVerified) {
-            Write-Log ("winget: {0} reportado como instalado, mas nenhum binario encontrado em disco; removendo registro fantasma e tentando reinstalacao..." -f $DisplayName) 'WARN'
-            $ghostRemoved = $false
-
-            # Tentativa 1: winget uninstall com retry/backoff (UPDATE_NOT_APPLICABLE = sucesso)
-            $uninstallArgs = @('uninstall', '-e', '--id', $Id, '--purge', '--disable-interactivity')
-            $uninstallExit = Invoke-NativeWithRetry -Exe $WingetPath -Args $uninstallArgs -OperationName ("Removendo ghost {0} via winget uninstall" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
-            if ($uninstallExit -eq 0) {
-                $ghostRemoved = $true
-            } else {
-                Write-Log ("winget: falha ao remover ghost {0} (exit={1}), tentando forcar com --force..." -f $DisplayName, $uninstallExit) 'WARN'
-                $forceArgs = @('uninstall', '-e', '--id', $Id, '--purge', '--force', '--disable-interactivity')
-                $forceExit = Invoke-NativeWithRetry -Exe $WingetPath -Args $forceArgs -OperationName ("Forcando remocao ghost {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
-                if ($forceExit -eq 0) { $ghostRemoved = $true }
+            # Gate MSI-hostil: ghost-recovery faz uninstall+install de MSI em sequencia.
+            # Se Windows tem PendingFileRenameOperations ou UpdateExeVolatile, msiexec trava
+            # esperando lock que so libera com reboot. Abortar este componente com mensagem
+            # acionavel em vez de pendurar 10min ate o timeout do Invoke-NativeWithLog.
+            $msiBlockers = @(Get-BootstrapMsiHostilePendingRebootReasons)
+            if ($msiBlockers.Count -gt 0) {
+                $blockerList = ($msiBlockers -join ', ')
+                $message = "Nao foi possivel reinstalar {0}: ghost entry presente e Windows requer reboot ({1}). Reinicie e execute novamente." -f $DisplayName, $blockerList
+                Write-Log ("winget: {0} ghost detectada, mas Windows tem estado MSI-hostil ({1}); bloqueando reinstalacao para evitar hang. Reinicie o Windows e tente novamente." -f $DisplayName, $blockerList) 'WARN'
+                throw (New-BootstrapBlockedException -Message $message -Kind 'pending-reboot-msi' -Action 'restart-required' -Reasons $msiBlockers)
             }
+
+            Write-Log ("winget: {0} reportado como instalado, mas nenhum binario encontrado em disco; removendo registro fantasma e tentando reinstalacao..." -f $DisplayName) 'WARN'
+            # Coleta hints de registry quando o caller nao passou explicitamente — permite que o
+            # caminho generico se beneficie da varredura HKCU/HKLM/WOW6432Node + fallback NSIS.
+            $hints = @($UninstallStringHints)
+            if ($hints.Count -eq 0 -and $Id -eq 'Notepad++.Notepad++') {
+                try { $hints = @(Get-BootstrapNotepadPlusPlusUninstallRegistry) } catch { $hints = @() }
+            }
+            $ghostRemoved = Invoke-BootstrapGhostPackageRecovery -WingetPath $WingetPath -Id $Id -DisplayName $DisplayName -UninstallStringHints $hints -State $State -ComponentName $ComponentName
 
             if ($ghostRemoved) {
                 Write-Log ("winget: ghost entry removida com sucesso para {0}." -f $DisplayName)
+                if (-not (Wait-BootstrapWingetMsiIdle -TimeoutSeconds 60 -HeartbeatSeconds 30)) {
+                    $message = "Nao foi possivel reinstalar {0}: winget/msiexec continuou ocupado apos remover ghost entry. Feche instaladores pendentes ou reinicie o Windows." -f $DisplayName
+                    throw (New-BootstrapBlockedException -Message $message -Kind 'winget-msi-busy' -Action 'restart-or-close-installers' -Reasons @('winget-msi-busy'))
+                }
+            } else {
+                $message = "Nao foi possivel reinstalar {0}: winget lista instalado, mas o binario nao existe e a limpeza de ghost nao concluiu. Remova/repare o pacote manualmente e execute novamente." -f $DisplayName
+                Write-Log ("winget: ghost de {0} nao foi limpo; bloqueando install para evitar estado parcial." -f $DisplayName) 'WARN'
+                throw (New-BootstrapBlockedException -Message $message -Kind 'winget-ghost-unresolved' -Action 'manual-ghost-cleanup' -Reasons @('winget-ghost-unresolved', $Id))
             }
             $isInstalled = $false
         }
@@ -3546,6 +4594,16 @@ function Ensure-WingetPackage {
     if ($isInstalled) {
         Write-Log "$DisplayName já instalado (winget)."
         return
+    }
+
+    if (-not [bool]$script:AllowPendingReboot) {
+        $msiBlockers = @(Get-BootstrapMsiHostilePendingRebootReasons)
+        if ($msiBlockers.Count -gt 0) {
+            $blockerList = ($msiBlockers -join ', ')
+            $message = "Nao foi possivel instalar {0}: Windows requer reboot antes de fluxos winget/MSI ({1}). Reinicie e execute novamente." -f $DisplayName, $blockerList
+            Write-Log ("winget: {0} bloqueado antes de mutacao por reboot pendente hostil a MSI ({1})." -f $DisplayName, $blockerList) 'WARN'
+            throw (New-BootstrapBlockedException -Message $message -Kind 'pending-reboot-msi' -Action 'restart-required' -Reasons $msiBlockers)
+        }
     }
 
     Write-Log "Instalando $DisplayName via winget..."
@@ -3591,11 +4649,11 @@ function Ensure-WingetPackage {
     }
     Refresh-SessionPath
 
-    if ($ProbePaths.Count -gt 0) {
+    if ($hasArtifactValidators) {
         $diskVerified = $false
         $retryCount = 2
         while ($retryCount -gt 0 -and -not $diskVerified) {
-            $diskVerified = Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths
+            $diskVerified = Test-BootstrapPackageArtifactsPresent -ProbePaths $ProbePaths -AppxPackageNames $AppxPackageNames
             if (-not $diskVerified) {
                 if ($retryCount -gt 1) {
                     Write-Log ("winget: {0} pos-instalacao; aguardando binario em disco..." -f $DisplayName) 'WARN'
@@ -3605,9 +4663,25 @@ function Ensure-WingetPackage {
             }
         }
         if (-not $diskVerified) {
-            Write-Log ("winget: {0} instalado (exit 0), mas nenhum binario encontrado em ProbePaths. Possivel ghost install." -f $DisplayName) 'ERROR'
+            Write-Log ("winget: {0} instalado (exit 0), mas nenhum artefato esperado foi encontrado. Possivel ghost install." -f $DisplayName) 'ERROR'
+            $message = "Instalacao de {0} retornou sucesso, mas nenhum artefato esperado apareceu (ProbePaths/Appx). Pacote nao sera marcado como concluido." -f $DisplayName
+            throw (New-BootstrapBlockedException -Message $message -Kind 'winget-post-install-unverified' -Action 'inspect-or-reinstall' -Reasons @('artifact-missing', $Id))
         } else {
             Write-Log ("winget: verificado binario em disco para {0}." -f $DisplayName)
+            if ($State) {
+                try {
+                    Register-BootstrapChange -State $State -Type 'Package' -Target $Id -Name $DisplayName -OldValue $null -NewValue @{ Source = 'winget'; Id = $Id } -Operation 'winget-install' -RollbackAction 'winget-uninstall' -Reversible 'partial' -Component $ComponentName
+                } catch {
+                    Write-Log ("winget: falha ao registrar mudanca de pacote {0} no manifest: {1}" -f $Id, $_.Exception.Message) 'WARN'
+                }
+            }
+        }
+    } elseif ($State) {
+        # Sem ProbePaths para validar — registramos mesmo assim (Reversible=partial), assumindo exit 0.
+        try {
+            Register-BootstrapChange -State $State -Type 'Package' -Target $Id -Name $DisplayName -OldValue $null -NewValue @{ Source = 'winget'; Id = $Id } -Operation 'winget-install' -RollbackAction 'winget-uninstall' -Reversible 'partial' -Component $ComponentName
+        } catch {
+            Write-Log ("winget: falha ao registrar mudanca de pacote {0} no manifest: {1}" -f $Id, $_.Exception.Message) 'WARN'
         }
     }
 
@@ -4133,7 +5207,10 @@ function Ensure-NpmGlobalPackage {
         [Parameter(Mandatory = $true)][string]$NpmCmd,
         [Parameter(Mandatory = $true)][string]$Package,
         [string]$DisplayName = $Package,
-        [string]$CheckName
+        [string]$CheckName,
+        [string[]]$CommandNames = @(),
+        [string[]]$VersionArgs = @('--version'),
+        [string]$NpmBin = ''
     )
     if (-not $CheckName) {
         if ($Package.StartsWith('@')) {
@@ -4144,6 +5221,13 @@ function Ensure-NpmGlobalPackage {
             $CheckName = $Package
         }
     }
+    $declaredCommands = @(Get-BootstrapNonEmptyStringArray -Values $CommandNames)
+    $versionProbeArgs = @(Get-BootstrapNonEmptyStringArray -Values $VersionArgs)
+    if ($versionProbeArgs.Count -eq 0) { $versionProbeArgs = @('--version') }
+    if (-not [string]::IsNullOrWhiteSpace($NpmBin)) {
+        Ensure-PathUserContains -Dir $NpmBin
+        Refresh-SessionPath
+    }
     $installed = $false
     try {
         $out = & $NpmCmd list -g --depth=0 2>$null
@@ -4153,19 +5237,56 @@ function Ensure-NpmGlobalPackage {
     }
 
     if ($installed) {
-        Write-Log "$DisplayName já instalado via npm -g."
-        return
+        if ($declaredCommands.Count -eq 0) {
+            Write-Log "$DisplayName já instalado via npm -g."
+            return
+        }
+        foreach ($cmdName in @($declaredCommands)) {
+            $cmdPath = Resolve-CommandPath -Name $cmdName
+            if ($cmdPath) {
+                try {
+                    $ver = Invoke-NativeFirstLine -Exe $cmdPath -Args $versionProbeArgs
+                    Write-Log "$DisplayName já instalado via npm -g: $ver ($cmdPath)"
+                } catch {
+                    Write-Log "$DisplayName já instalado via npm -g: comando $cmdName encontrado ($cmdPath)."
+                }
+                return
+            }
+        }
+        Write-Log ("{0} aparece em npm list -g, mas nenhum comando declarado foi encontrado ({1}); reinstalando." -f $DisplayName, ($declaredCommands -join ', ')) 'WARN'
     }
 
     Write-Log "Instalando $DisplayName via npm -g..."
     $exitCode = Invoke-NpmWithLog -NpmCmd $NpmCmd -Args @('install', '-g', $Package)
     if ($exitCode -ne 0) { throw "Falha ao instalar $DisplayName via npm (exit=$exitCode)." }
+    if (-not [string]::IsNullOrWhiteSpace($NpmBin)) {
+        Ensure-PathUserContains -Dir $NpmBin
+    }
+    Refresh-SessionPath
+    if ($declaredCommands.Count -gt 0) {
+        foreach ($cmdName in @($declaredCommands)) {
+            $cmdPath = Resolve-CommandPath -Name $cmdName
+            if ($cmdPath) {
+                try {
+                    $ver = Invoke-NativeFirstLine -Exe $cmdPath -Args $versionProbeArgs
+                    Write-Log "$DisplayName instalado: $ver ($cmdPath)"
+                } catch {
+                    Write-Log "$DisplayName instalado: comando $cmdName encontrado ($cmdPath)."
+                }
+                Write-Log "Instalação concluída: $DisplayName"
+                return
+            }
+        }
+        $message = "Instalacao npm de {0} retornou sucesso, mas nenhum comando declarado apareceu no PATH ({1}). Repare PATH/npm global bin ou reinstale." -f $DisplayName, ($declaredCommands -join ', ')
+        throw (New-BootstrapBlockedException -Message $message -Kind 'npm-command-unverified' -Action 'repair-node-path-or-reinstall' -Reasons @('npm-command-missing', $Package))
+    }
     Write-Log "Instalação concluída: $DisplayName"
 }
 
 function Ensure-ClaudeCode {
     param([Parameter(Mandatory = $true)][string]$WingetPath)
 
+    $null = $WingetPath
     $claudeExe = Resolve-CommandPath -Name 'claude'
     if ($claudeExe) {
         $ver = ((& $claudeExe --version) 2>&1 | Select-Object -First 1)
@@ -4173,11 +5294,12 @@ function Ensure-ClaudeCode {
         return
     }
 
-    Ensure-WingetPackage -WingetPath $WingetPath -Id 'Anthropic.ClaudeCode' -DisplayName 'Claude Code (Anthropic)' -ProbePaths @("$env:APPDATA\npm\claude.cmd", "$env:LOCALAPPDATA\Programs\ClaudeCode\claude.exe")
+    $npmCmd = Get-BootstrapNpmCommandForAiTools
+    Ensure-NpmGlobalPackage -NpmCmd $npmCmd -Package '@anthropic-ai/claude-code' -DisplayName 'Claude Code (Anthropic)' -CommandNames @('claude') -VersionArgs @('--version')
     Refresh-SessionPath
 
     $claudeExe = Resolve-CommandPath -Name 'claude'
-    if (-not $claudeExe) { throw 'Claude Code instalado (winget), mas o comando claude nao foi encontrado no PATH.' }
+    if (-not $claudeExe) { throw 'Claude Code instalado via npm, mas o comando claude nao foi encontrado no PATH.' }
     $ver = ((& $claudeExe --version) 2>&1 | Select-Object -First 1)
     Write-Log "claude instalado: $ver ($claudeExe)"
 }
@@ -4969,9 +6091,8 @@ function Ensure-HermesProjectOpenCloudConfig {
 
 function Ensure-Hermes {
     param([Parameter(Mandatory = $true)][hashtable]$State)
-    Ensure-BootstrapNodeCore -State $State
-    Ensure-NpmGlobalPackage -NpmCmd $State.NodeInfo.NpmCmd -Package 'hermes@latest' -DisplayName 'Hermes'
-    Ensure-HermesProjectOpenCloudConfig -State $State
+    $null = $State
+    throw (New-BootstrapBlockedException -Message 'Hermes Agent oficial validado em NousResearch/hermes-agent, mas instalacao automatica Windows nativa nao foi confirmada. Pacote npm "hermes" nao e usado para evitar falso positivo.' -Kind 'unsupported-external-tool' -Action 'manual-install-hermes-agent' -Reasons @('official-windows-installer-not-confirmed','npm-hermes-not-authoritative'))
 }
 
 function Ensure-RepoClone {
@@ -5042,9 +6163,9 @@ function Get-BootstrapDefaultWorkspaceRoot {
     } catch {
     }
 
-    $home = Get-BootstrapUserHomePath
-    if (-not [string]::IsNullOrWhiteSpace($home)) {
-        return (Join-Path $home 'Workspace')
+    $userHome = Get-BootstrapUserHomePath
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        return (Join-Path $userHome 'Workspace')
     }
 
     try {
@@ -6022,6 +7143,24 @@ function Normalize-BootstrapHostHealthMode {
     return $normalized
 }
 
+function Test-BootstrapSafeDefaultProfileSelection {
+    param(
+        [Parameter(Mandatory = $true)]$Selection,
+        [Parameter(Mandatory = $true)]$Resolution
+    )
+
+    $selectedProfiles = @($Selection.Profiles | ForEach-Object { [string]$_ })
+    $selectedComponents = @($Selection.Components)
+    $expandedProfiles = @($Resolution.ExpandedProfiles | ForEach-Object { [string]$_ })
+    if ($selectedComponents.Count -gt 0) { return $false }
+    if ($selectedProfiles.Count -eq 0) { return $false }
+    foreach ($profileName in @($selectedProfiles + $expandedProfiles)) {
+        if ([string]::IsNullOrWhiteSpace($profileName)) { continue }
+        if ($profileName -notin @('safe-base', 'recommended')) { return $false }
+    }
+    return $true
+}
+
 function Get-BootstrapDefaultHostHealthMode {
     param(
         [Parameter(Mandatory = $true)]$Selection,
@@ -6036,6 +7175,9 @@ function Get-BootstrapDefaultHostHealthMode {
         return 'off'
     }
     if (($selectedComponents.Count -gt 0) -and ($selectedProfiles.Count -eq 0)) {
+        return 'off'
+    }
+    if (Test-BootstrapSafeDefaultProfileSelection -Selection $Selection -Resolution $Resolution) {
         return 'off'
     }
 
@@ -6570,6 +7712,9 @@ function Get-BootstrapDefaultAppTuningMode {
         return 'off'
     }
     if ((@($Selection.Components).Count -gt 0) -and (@($Selection.Profiles).Count -eq 0)) {
+        return 'off'
+    }
+    if (Test-BootstrapSafeDefaultProfileSelection -Selection $Selection -Resolution $Resolution) {
         return 'off'
     }
     return 'recommended'
@@ -10253,15 +11398,15 @@ function Get-BootstrapComponentCatalog {
     $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick'; ProbePaths = @("$env:ProgramFiles\ImageMagick-*\magick.exe", "$env:ProgramFiles\ImageMagick\magick.exe") }
     $catalog['sevenzip'] = New-BootstrapComponentDefinition -Name 'sevenzip' -Description '7-Zip e ajuste de PATH.' -DependsOn @('system-core') -Kind 'sevenzip' -Data @{ ProbePaths = @("$env:ProgramFiles\7-Zip\7z.exe", "${env:ProgramFiles(x86)}\7-Zip\7z.exe") }
     $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7'; ProbePaths = @("$env:ProgramFiles\PowerShell\7\pwsh.exe", "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe") }
-    $catalog['terminal'] = New-BootstrapComponentDefinition -Name 'terminal' -Description 'Windows Terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.WindowsTerminal'; DisplayName = 'Windows Terminal'; ProbePaths = @("${env:LOCALAPPDATA}\Microsoft\WindowsApps\wt.exe", "$env:ProgramFiles\WindowsApps\WindowsTerminal.exe") }
-    $catalog['powertoys'] = New-BootstrapComponentDefinition -Name 'powertoys' -Description 'Microsoft PowerToys.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerToys'; DisplayName = 'Microsoft PowerToys'; ProbePaths = @("$env:ProgramFiles\PowerToys\PowerToys.exe") }
+    $catalog['terminal'] = New-BootstrapComponentDefinition -Name 'terminal' -Description 'Windows Terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.WindowsTerminal'; DisplayName = 'Windows Terminal'; AppxPackageNames = @('Microsoft.WindowsTerminal'); ProbePaths = @("$env:ProgramFiles\WindowsApps\Microsoft.WindowsTerminal_*\wt.exe") }
+    $catalog['powertoys'] = New-BootstrapComponentDefinition -Name 'powertoys' -Description 'Microsoft PowerToys.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerToys'; DisplayName = 'Microsoft PowerToys'; ProbePaths = @("$env:ProgramFiles\PowerToys\PowerToys.exe", "${env:ProgramFiles(x86)}\PowerToys\PowerToys.exe", "${env:LOCALAPPDATA}\PowerToys\PowerToys.exe", "$env:ProgramFiles\WindowsApps\Microsoft.PowerToys_*\PowerToys.exe") }
     $catalog['github-cli'] = New-BootstrapComponentDefinition -Name 'github-cli' -Description 'GitHub CLI (gh).' -DependsOn @('git-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'GitHub.cli'; DisplayName = 'GitHub CLI (gh)'; ProbePaths = @("$env:ProgramFiles\GitHub CLI\gh.exe", "${env:LOCALAPPDATA}\Programs\GitHub CLI\gh.exe") }
     $catalog['chrome'] = New-BootstrapComponentDefinition -Name 'chrome' -Description 'Google Chrome.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Chrome'; DisplayName = 'Google Chrome'; ProbePaths = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe", "${env:LOCALAPPDATA}\Google\Chrome\Application\chrome.exe") }
     $catalog['google-app-desktop'] = New-BootstrapComponentDefinition -Name 'google-app-desktop' -Description 'Google App para Desktop.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Google App Desktop'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Experiência oficial do Google no Windows.'; Instructions = 'Instale acessando https://search.google/google-app/desktop/?utm_source=Google&utm_medium=keyword_blog&utm_campaign=DGA_blog' }
     $catalog['notepadpp'] = New-BootstrapComponentDefinition -Name 'notepadpp' -Description 'Notepad++.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Notepad++.Notepad++'; DisplayName = 'Notepad++'; ProbePaths = @("$env:ProgramFiles\Notepad++\notepad++.exe", "${env:ProgramFiles(x86)}\Notepad++\notepad++.exe", "${env:LOCALAPPDATA}\Programs\Notepad++\notepad++.exe") }
     $catalog['wsl-core'] = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'Recursos WSL, Ubuntu e WSL 2.' -DependsOn @('system-core') -Kind 'wsl-core'
     $catalog['wsl-ui'] = New-BootstrapComponentDefinition -Name 'wsl-ui' -Description 'WSL UI e WebView2.' -DependsOn @('wsl-core') -Kind 'wsl-ui'
-    $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Docker\Docker.exe", "$env:ProgramFiles\Docker\Docker.exe") }
+    $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Docker\Docker.exe", "${env:LOCALAPPDATA}\Docker\Docker Desktop.exe", "$env:ProgramFiles\Docker\Docker.exe", "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe") }
     $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Claude\Claude.exe", "$env:ProgramFiles\Claude\Claude.exe") }
     $catalog['claude-code'] = New-BootstrapComponentDefinition -Name 'claude-code' -Description 'Claude Code CLI.' -DependsOn @('system-core') -Kind 'claude-code'
     $catalog['cursor'] = New-BootstrapComponentDefinition -Name 'cursor' -Description 'Cursor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anysphere.Cursor'; DisplayName = 'Cursor'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Cursor\Cursor.exe", "$env:ProgramFiles\Cursor\Cursor.exe") }
@@ -10290,14 +11435,14 @@ function Get-BootstrapComponentCatalog {
     $catalog['webapp-google-ai-studio'] = New-BootstrapComponentDefinition -Name 'webapp-google-ai-studio' -Description 'Atalho web app Google AI Studio na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google AI Studio'; Url = 'https://aistudio.google.com/prompts/new_chat'; CategoryFolder = 'IA' }
     $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZedIndustries.Zed'; DisplayName = 'Zed'; ProbePaths = @("${env:LOCALAPPDATA}\Zed\Zed.exe", "$env:ProgramFiles\Zed\Zed.exe") }
     $catalog['opencode'] = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode CLI via script oficial.' -DependsOn @('git-core') -Kind 'opencode'
-    $catalog['gemini-cli'] = New-BootstrapComponentDefinition -Name 'gemini-cli' -Description 'Gemini CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@google/gemini-cli'; DisplayName = 'Gemini CLI (@google/gemini-cli)' }
-    $catalog['kilo-cli'] = New-BootstrapComponentDefinition -Name 'kilo-cli' -Description 'Kilo CLI via npm -g.' -DependsOn @('node-core', 'bootstrap-secrets') -Kind 'npm' -Data @{ Package = '@kilocode/cli'; DisplayName = 'Kilo CLI (@kilocode/cli)' }
-    $catalog['bonsai-cli'] = New-BootstrapComponentDefinition -Name 'bonsai-cli' -Description 'Bonsai CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@bonsai-ai/cli'; DisplayName = 'Bonsai CLI (@bonsai-ai/cli)' }
-    $catalog['grok-cli'] = New-BootstrapComponentDefinition -Name 'grok-cli' -Description 'Grok CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@vibe-kit/grok-cli'; DisplayName = 'Grok CLI (@vibe-kit/grok-cli)' }
-    $catalog['qwen-code'] = New-BootstrapComponentDefinition -Name 'qwen-code' -Description 'Qwen Code via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@qwen-code/qwen-code@latest'; DisplayName = 'Qwen Code (@qwen-code/qwen-code)' }
-    $catalog['copilot-cli'] = New-BootstrapComponentDefinition -Name 'copilot-cli' -Description 'GitHub Copilot CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@github/copilot'; DisplayName = 'GitHub Copilot CLI (@github/copilot)' }
-    $catalog['codex-cli'] = New-BootstrapComponentDefinition -Name 'codex-cli' -Description 'OpenAI Codex CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@openai/codex'; DisplayName = 'OpenAI Codex CLI (@openai/codex)' }
-    $catalog['openclaude-cli'] = New-BootstrapComponentDefinition -Name 'openclaude-cli' -Description 'OpenClaude CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@gitlawb/openclaude'; DisplayName = 'OpenClaude CLI (@gitlawb/openclaude)' }
+    $catalog['gemini-cli'] = New-BootstrapComponentDefinition -Name 'gemini-cli' -Description 'Gemini CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@google/gemini-cli'; DisplayName = 'Gemini CLI (@google/gemini-cli)'; CommandNames = @('gemini') }
+    $catalog['kilo-cli'] = New-BootstrapComponentDefinition -Name 'kilo-cli' -Description 'Kilo CLI via npm -g.' -DependsOn @('node-core', 'bootstrap-secrets') -Kind 'npm' -Data @{ Package = '@kilocode/cli'; DisplayName = 'Kilo CLI (@kilocode/cli)'; CommandNames = @('kilo', 'kilocode') }
+    $catalog['bonsai-cli'] = New-BootstrapComponentDefinition -Name 'bonsai-cli' -Description 'Bonsai CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@bonsai-ai/cli'; DisplayName = 'Bonsai CLI (@bonsai-ai/cli)'; CommandNames = @('bonsai') }
+    $catalog['grok-cli'] = New-BootstrapComponentDefinition -Name 'grok-cli' -Description 'Grok CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@vibe-kit/grok-cli'; DisplayName = 'Grok CLI (@vibe-kit/grok-cli)'; CommandNames = @('grok') }
+    $catalog['qwen-code'] = New-BootstrapComponentDefinition -Name 'qwen-code' -Description 'Qwen Code via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@qwen-code/qwen-code@latest'; DisplayName = 'Qwen Code (@qwen-code/qwen-code)'; CommandNames = @('qwen') }
+    $catalog['copilot-cli'] = New-BootstrapComponentDefinition -Name 'copilot-cli' -Description 'GitHub Copilot CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@github/copilot'; DisplayName = 'GitHub Copilot CLI (@github/copilot)'; CommandNames = @('copilot') }
+    $catalog['codex-cli'] = New-BootstrapComponentDefinition -Name 'codex-cli' -Description 'OpenAI Codex CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@openai/codex'; DisplayName = 'OpenAI Codex CLI (@openai/codex)'; CommandNames = @('codex') }
+    $catalog['openclaude-cli'] = New-BootstrapComponentDefinition -Name 'openclaude-cli' -Description 'OpenClaude CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@gitlawb/openclaude'; DisplayName = 'OpenClaude CLI (@gitlawb/openclaude)'; CommandNames = @('openclaude') }
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes via npm + OpenCloud config no projeto.' -DependsOn @('node-core') -Kind 'hermes'
     $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
@@ -10306,12 +11451,12 @@ function Get-BootstrapComponentCatalog {
     $catalog['claude-config'] = New-BootstrapComponentDefinition -Name 'claude-config' -Description 'Defaults e hooks do Claude Code.' -DependsOn @('git-core', 'claude-code', 'bootstrap-secrets') -Kind 'claude-config'
     $catalog['claude-plugins'] = New-BootstrapComponentDefinition -Name 'claude-plugins' -Description 'Instala plugins do Claude Code (LSP, markdown, code-review).' -DependsOn @('claude-code', 'claude-config') -Kind 'claude-plugins'
     $catalog['agent-skills'] = New-BootstrapComponentDefinition -Name 'agent-skills' -Description 'Instala e ativa skills de agentes, incluindo Caveman por padrao.' -DependsOn @('claude-config', 'vscode-extensions') -Kind 'agent-skills'
-    $catalog['promptfoo'] = New-BootstrapComponentDefinition -Name 'promptfoo' -Description 'promptfoo via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'promptfoo'; DisplayName = 'promptfoo' }
+    $catalog['promptfoo'] = New-BootstrapComponentDefinition -Name 'promptfoo' -Description 'promptfoo via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'promptfoo'; DisplayName = 'promptfoo'; CommandNames = @('promptfoo', 'pf') }
     $catalog['openwebui'] = New-BootstrapComponentDefinition -Name 'openwebui' -Description 'Open WebUI via Docker (porta 3000).' -DependsOn @('docker') -Kind 'openwebui'
     $catalog['aider'] = New-BootstrapComponentDefinition -Name 'aider' -Description 'aider via uv tool.' -DependsOn @('python-core') -Kind 'uvtool' -Data @{ Package = 'aider-chat'; CommandName = 'aider'; DisplayName = 'aider (aider-chat)'; VersionArgs = @('--version') }
     $catalog['goose'] = New-BootstrapComponentDefinition -Name 'goose' -Description 'goose CLI.' -DependsOn @('git-core') -Kind 'goose'
     $catalog['repo-gemini-cli'] = New-BootstrapComponentDefinition -Name 'repo-gemini-cli' -Description 'Clone do repositório gemini-cli.' -DependsOn @('git-core') -Kind 'repo-clone' -Data @{ RepoUrl = 'https://github.com/heartyguy/gemini-cli'; TargetName = 'gemini-cli' }
-    $catalog['n8n'] = New-BootstrapComponentDefinition -Name 'n8n' -Description 'n8n global via npm.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'n8n'; DisplayName = 'n8n' }
+    $catalog['n8n'] = New-BootstrapComponentDefinition -Name 'n8n' -Description 'n8n global via npm.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'n8n'; DisplayName = 'n8n'; CommandNames = @('n8n') }
     $catalog['autohotkey'] = New-BootstrapComponentDefinition -Name 'autohotkey' -Description 'AutoHotkey.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AutoHotkey.AutoHotkey'; DisplayName = 'AutoHotkey'; ProbePaths = @("$env:ProgramFiles\AutoHotkey\AutoHotkey64.exe", "${env:ProgramFiles(x86)}\AutoHotkey\AutoHotkey.exe") }
     $catalog['blender'] = New-BootstrapComponentDefinition -Name 'blender' -Description 'Blender LTS.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BlenderFoundation.Blender.LTS.4.5'; DisplayName = 'Blender LTS 4.5'; ProbePaths = @("$env:ProgramFiles\Blender Foundation\Blender LTS\blender.exe", "$env:ProgramFiles\Blender Foundation\Blender 4.5\blender.exe") }
     $catalog['ffmpeg'] = New-BootstrapComponentDefinition -Name 'ffmpeg' -Description 'FFmpeg.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Gyan.FFmpeg'; DisplayName = 'FFmpeg'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\ffmpeg\bin\ffmpeg.exe", "$env:ProgramFiles\ffmpeg\bin\ffmpeg.exe", "$env:ProgramData\chocolatey\bin\ffmpeg.exe") }
@@ -10327,7 +11472,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['vigembus-runtime'] = New-BootstrapComponentDefinition -Name 'vigembus-runtime' -Description 'Barramento virtual usado por ferramentas de input do Steam Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ViGEm.ViGEmBus'; DisplayName = 'ViGEmBus'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Base para emulacao/ponte de controle no modo handheld.'; ProbePaths = @("$env:ProgramFiles\Nefarius Software Solutions e.U\ViGEmBus\ViGEmBus.sys") }
     $catalog['steamdeck-tools-runtime'] = New-BootstrapComponentDefinition -Name 'steamdeck-tools-runtime' -Description 'Steam Deck Tools portatil com servicos de controle e overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'steamdeck-tools' -Data @{ Stage = 'runtime'; Provisioning = 'download'; ValueReason = 'Entrega overlay, controle, fan e power tuning especificos do Deck.' }
     $catalog['handheld-companion'] = New-BootstrapComponentDefinition -Name 'handheld-companion' -Description 'Handheld Companion para Auto-TDP, gyro, DS4 e QuickTools overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BenjaminLSR.HandheldCompanion'; DisplayName = 'Handheld Companion'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Alternativa avancada ao Steam Deck Tools para Auto-TDP, gyro/DS4 e overlay tipo quick menu.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Handheld Companion\Handheld Companion.exe", "$env:ProgramFiles\Handheld Companion\Handheld Companion.exe") }
-    $catalog['glossi'] = New-BootstrapComponentDefinition -Name 'glossi' -Description 'GlosSI para Steam Input global em UWP/launchers de terceiros.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'chocolatey' -Data @{ Package = 'glossi'; DisplayName = 'GlosSI'; Stage = 'payload'; Provisioning = 'chocolatey'; RequiresAdmin = $true; ValueReason = 'Cobre Steam Input global quando jogo/launcher nao aceita injecao nativa do Steam.' }
+    $catalog['glossi'] = New-BootstrapComponentDefinition -Name 'glossi' -Description 'GlosSI para Steam Input global em UWP/launchers de terceiros.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'chocolatey' -Data @{ Package = 'glossi'; DisplayName = 'GlosSI'; Stage = 'payload'; Provisioning = 'chocolatey'; RequiresAdmin = $true; ValueReason = 'Cobre Steam Input global quando jogo/launcher nao aceita injecao nativa do Steam.'; ProbePaths = @("$env:ProgramFiles\GlosSI\GlosSIConfig.exe", "$env:ProgramData\chocolatey\lib\glossi\tools\GlosSIConfig.exe") }
     $catalog['steamdeck-input-conflict-audit'] = New-BootstrapComponentDefinition -Name 'steamdeck-input-conflict-audit' -Description 'Audita conflito de Steam Desktop Layout com stacks externos de input.' -DependsOn @('steamdeck-settings') -Kind 'alias' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Evita duplo input quando Steam Deck Tools, Handheld Companion ou GlosSI gerenciam controle no Windows.' }
     $catalog['amd-adrenalin'] = New-BootstrapComponentDefinition -Name 'amd-adrenalin' -Description 'AMD Software: Adrenalin Edition para drivers/overlay Radeon.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'AMD Adrenalin'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Garante painel Radeon presente para ajustes do driver AMD no modo handheld.'; ProbePaths = @('$env:ProgramFiles\AMD\CNext\CNext\RadeonSoftware.exe', '$env:ProgramFiles\AMD\CNext\CNext\AMDRSServ.exe'); Instructions = 'Instale o driver/painel AMD adequado ao Steam Deck antes de rodar novamente.' }
     $catalog['cru'] = New-BootstrapComponentDefinition -Name 'cru' -Description 'Custom Resolution Utility para ajustes EDID/resolucao.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'CRU'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Permite corrigir modos de resolucao/refresh usados por handheld e dock.'; CheckCommand = 'CRU.exe'; ProbePaths = @('$env:ProgramFiles\Custom Resolution Utility\CRU.exe', '$env:LOCALAPPDATA\Programs\Custom Resolution Utility\CRU.exe'); Instructions = 'Instale/extraia o Custom Resolution Utility (CRU) e deixe CRU.exe no PATH ou em pasta conhecida.' }
@@ -10401,9 +11546,11 @@ function Get-BootstrapProfileCatalog {
     $catalog = [ordered]@{}
 
     $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
-    $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para máquina nova.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
+    $catalog['safe-base'] = New-BootstrapProfileDefinition -Name 'safe-base' -Description 'Base segura e pequena para maquina limpa; sem desktops de IA, containers, jogos ou tuning.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp')
+    $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores e utilitarios.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
     $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
@@ -10424,8 +11571,9 @@ function Get-BootstrapProfileCatalog {
     $catalog['steamdeck-recommended'] = New-BootstrapProfileDefinition -Name 'steamdeck-recommended' -Description 'Experiencia recomendada para este Steam Deck.' -Items @('steamdeck-essentials', 'steamdeck-input', 'steamdeck-power', 'steamdeck-dock', 'steamdeck-connectivity', 'steamdeck-qol', 'steamdeck-shell-menu', 'steamdeck-sharedvram-launch-options')
     $catalog['steamdeck-full'] = New-BootstrapProfileDefinition -Name 'steamdeck-full' -Description 'Camada completa Steam Deck, incluindo storage/capture/backup e bloqueadores manuais.' -Items @('steamdeck-recommended', 'steamdeck-storage', 'steamdeck-capture', 'steamdeck-backup', 'steamdeck-zero-touch', 'epic-games', 'msi-afterburner', 'lossless-scaling', 'joyshockmapper', 'vibrancegui', 'steamdeck-driver-pack')
     $catalog['workspace'] = New-BootstrapProfileDefinition -Name 'workspace' -Description 'Layout em F:\Steam\Steamapps e Dev.' -Items @('workspace-layout', 'pycharm-community', 'dotnet-core')
-    $catalog['recommended'] = New-BootstrapProfileDefinition -Name 'recommended' -Description 'Perfis recomendados para sua máquina pessoal.' -Items @('base', 'containers', 'ai', 'creator', 'workspace', 'security', 'social', 'utilities')
-    $catalog['full'] = New-BootstrapProfileDefinition -Name 'full' -Description 'Instala tudo.' -Items @('recommended', 'automation', 'game-dev', 'gaming')
+    $catalog['full-workstation'] = New-BootstrapProfileDefinition -Name 'full-workstation' -Description 'Workstation ampla com base, containers, IA, criacao, workspace, seguranca, social e utilitarios; opt-in.' -Items @('base', 'containers', 'dev-ai', 'creator', 'workspace', 'security', 'social', 'utilities')
+    $catalog['recommended'] = New-BootstrapProfileDefinition -Name 'recommended' -Description 'Alias seguro para safe-base. Use full-workstation para instalacao ampla.' -Items @('safe-base')
+    $catalog['full'] = New-BootstrapProfileDefinition -Name 'full' -Description 'Instala tudo; perfil amplo opt-in.' -Items @('full-workstation', 'automation', 'game-dev', 'gaming')
 
     return $catalog
 }
@@ -10532,9 +11680,9 @@ function Get-BootstrapUiContract {
             steamDeckVersion = 'Auto'
             uiLanguage = 'pt-BR'
             legacyHostHealth = 'off'
-            modernHostHealth = 'conservador'
+            modernHostHealth = 'off'
             legacyAppTuning = 'off'
-            modernAppTuning = 'recommended'
+            modernAppTuning = 'off'
         }
         profiles = @($profileEntries)
         components = @($componentEntries)
@@ -11260,7 +12408,8 @@ function Ensure-ChocolateyPackage {
     param(
         [Parameter(Mandatory = $true)][string]$ChocoPath,
         [Parameter(Mandatory = $true)][string]$Package,
-        [Parameter(Mandatory = $true)][string]$DisplayName
+        [Parameter(Mandatory = $true)][string]$DisplayName,
+        [string[]]$ProbePaths = @()
     )
 
     if ([string]::IsNullOrWhiteSpace($Package)) {
@@ -11271,6 +12420,10 @@ function Ensure-ChocolateyPackage {
     $exitCode = Invoke-NativeWithLog -Exe $ChocoPath -Args @('upgrade', $Package, '-y', '--no-progress', '--accept-license')
     if (@(0, 3010, 1641) -notcontains $exitCode) {
         throw "Falha ao instalar/atualizar $DisplayName via Chocolatey (exit=$exitCode)."
+    }
+    if (@($ProbePaths).Count -gt 0 -and -not (Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths)) {
+        $message = "Instalacao Chocolatey de {0} retornou sucesso, mas nenhum ProbePaths apareceu em disco. Repare ou reinstale o pacote." -f $DisplayName
+        throw (New-BootstrapBlockedException -Message $message -Kind 'chocolatey-post-install-unverified' -Action 'inspect-or-reinstall' -Reasons @('probe-path-missing', $Package))
     }
 }
 
@@ -11459,6 +12612,793 @@ function Read-BootstrapJsonFile {
     }
 
     return (ConvertTo-BootstrapHashtable -InputObject (ConvertFrom-BootstrapJsonText -Text (Get-Content -Path $Path -Raw -Encoding utf8)))
+}
+
+function Get-BootstrapAiToolCatalog {
+    $catalog = [ordered]@{}
+    $catalog['rtk'] = [ordered]@{
+        ToolName             = 'rtk'
+        DisplayName          = 'RTK / Rust Token Killer'
+        CommandNames         = @('rtk')
+        VersionArgs          = @('--version')
+        DocsUrl              = 'https://www.rtk-ai.app/docs/'
+        GitHubRepo           = 'rtk-ai/rtk'
+        PackageName          = ''
+        InstallSupport       = 'github-release'
+        CargoFallbackAllowed = $false
+        Notes                = 'Instala somente binario oficial Windows quando release GitHub tiver asset compativel. rtk init e rtk gain suportados.'
+    }
+    $catalog['claude-code'] = [ordered]@{
+        ToolName       = 'claude-code'
+        DisplayName    = 'Claude Code'
+        CommandNames   = @('claude')
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://docs.claude.com/en/docs/claude-code/setup'
+        GitHubRepo     = ''
+        PackageName    = '@anthropic-ai/claude-code'
+        InstallSupport = 'npm-prefix'
+        Notes          = 'Instala via npm oficial. Autenticacao/login ficam fora do repositorio.'
+    }
+    $catalog['opencode'] = [ordered]@{
+        ToolName       = 'opencode'
+        DisplayName    = 'OpenCode'
+        CommandNames   = @('opencode')
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://opencode.ai/docs/'
+        GitHubRepo     = 'sst/opencode'
+        PackageName    = 'opencode-ai'
+        InstallSupport = 'npm-prefix'
+        Notes          = 'Instala via pacote npm oficial. Providers exigem configuracao propria do usuario.'
+    }
+    $catalog['hermes-agent'] = [ordered]@{
+        ToolName       = 'hermes-agent'
+        DisplayName    = 'Hermes Agent'
+        CommandNames   = @('hermes-agent','hermes')
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://github.com/NousResearch/hermes-agent'
+        GitHubRepo     = 'NousResearch/hermes-agent'
+        PackageName    = ''
+        InstallSupport = 'manual-windows-beta'
+        Notes          = 'Repo oficial validado. Windows PowerShell existe em beta; instalacao automatica nao habilitada sem contrato silent/uninstall. npm hermes nao e tratado como Hermes Agent oficial.'
+    }
+    $catalog['hermes-desktop'] = [ordered]@{
+        ToolName       = 'hermes-desktop'
+        DisplayName    = 'Hermes Desktop'
+        CommandNames   = @('Hermes Desktop','Hermes')
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://github.com/NousResearch/hermes-agent'
+        GitHubRepo     = 'NousResearch/hermes-agent'
+        PackageName    = ''
+        InstallSupport = 'manual'
+        ProbePaths     = @(
+            '$env:LOCALAPPDATA\Programs\Hermes Desktop\Hermes Desktop.exe',
+            '$env:ProgramFiles\Hermes Desktop\Hermes Desktop.exe'
+        )
+        Notes          = 'Sem instalador desktop Windows silencioso oficial confirmado.'
+    }
+    $catalog['openclaw'] = [ordered]@{
+        ToolName       = 'openclaw'
+        DisplayName    = 'OpenClaw'
+        CommandNames   = @('openclaw')
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://clawdocs.org/getting-started/installation/'
+        GitHubRepo     = 'openclaw/openclaw'
+        PackageName    = 'openclaw'
+        InstallSupport = 'npm-prefix'
+        Notes          = 'Instala via npm quando solicitado; onboarding e chaves ficam manuais.'
+    }
+    $catalog['aion-ui'] = [ordered]@{
+        ToolName       = 'aion-ui'
+        DisplayName    = 'Aion UI'
+        CommandNames   = @('AionUi','aionui','officecli')
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://aionui.com/download/'
+        GitHubRepo     = 'iOfficeAI/AionUi'
+        PackageName    = ''
+        InstallSupport = 'manual-winget'
+        ProbePaths     = @(
+            '$env:LOCALAPPDATA\Programs\AionUi\AionUi.exe',
+            '$env:ProgramFiles\AionUi\AionUi.exe'
+        )
+        Notes          = 'Download oficial e winget existem; automacao silenciosa nao assumida.'
+    }
+    $catalog['antigravity-workflows'] = [ordered]@{
+        ToolName       = 'antigravity-workflows'
+        DisplayName    = 'Google Antigravity workflows'
+        CommandNames   = @('antigravity')
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://antigravity.google/'
+        GitHubRepo     = ''
+        PackageName    = ''
+        InstallSupport = 'workflow-only'
+        Notes          = 'Gera templates locais. Sem CLI/formato oficial persistente confirmado.'
+    }
+    return $catalog
+}
+
+function Normalize-BootstrapAiToolName {
+    param([Parameter(Mandatory = $true)][string]$ToolName)
+    $name = $ToolName.Trim().ToLowerInvariant()
+    switch ($name) {
+        'claude' { return 'claude-code' }
+        'claudecode' { return 'claude-code' }
+        'rtk-ai' { return 'rtk' }
+        'rust-token-killer' { return 'rtk' }
+        'hermes' { return 'hermes-agent' }
+        'hermesagent' { return 'hermes-agent' }
+        'hermesdesktop' { return 'hermes-desktop' }
+        'aion' { return 'aion-ui' }
+        'aionui' { return 'aion-ui' }
+        'antigravity' { return 'antigravity-workflows' }
+        default { return $name }
+    }
+}
+
+function Get-BootstrapAiInstallRoot {
+    param([string]$InstallRoot)
+    if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
+        return [System.IO.Path]::GetFullPath($InstallRoot)
+    }
+    $base = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        Join-Path $env:LOCALAPPDATA 'PhaseZero'
+    } else {
+        Join-Path $env:TEMP 'PhaseZero'
+    }
+    return (Join-Path $base 'ai-tools')
+}
+
+function Get-BootstrapAiToolManifestPath {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+    return (Join-Path (Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot) 'phasezero-ai-tools.json')
+}
+
+function New-BootstrapAiToolManifest {
+    return @{
+        schemaVersion = 1
+        managedBy     = 'PhaseZero'
+        tools         = @{}
+        pathsAdded    = @{}
+    }
+}
+
+function Read-BootstrapAiToolManifest {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+    $path = Get-BootstrapAiToolManifestPath -InstallRoot $InstallRoot
+    if (-not (Test-Path -LiteralPath $path)) { return (New-BootstrapAiToolManifest) }
+    try {
+        $data = ConvertTo-BootstrapHashtable -InputObject (Read-BootstrapJsonFile -Path $path)
+        if (-not $data.ContainsKey('tools') -or -not ($data['tools'] -is [hashtable])) { $data['tools'] = @{} }
+        if (-not $data.ContainsKey('pathsAdded') -or -not ($data['pathsAdded'] -is [hashtable])) { $data['pathsAdded'] = @{} }
+        return $data
+    } catch {
+        try { Backup-BootstrapFile -Path $path | Out-Null } catch { }
+        return (New-BootstrapAiToolManifest)
+    }
+}
+
+function Write-BootstrapAiToolManifest {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [Parameter(Mandatory = $true)][hashtable]$Manifest
+    )
+    $path = Get-BootstrapAiToolManifestPath -InstallRoot $InstallRoot
+    $parent = Split-Path -Path $path -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        [void][System.IO.Directory]::CreateDirectory($parent)
+    }
+    Write-BootstrapJsonFile -Path $path -Value $Manifest
+    return $path
+}
+
+function Resolve-BootstrapAiProbePath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+    if ($expanded -match '\$env:([A-Za-z_][A-Za-z0-9_]*)') {
+        $expanded = [regex]::Replace($expanded, '\$env:([A-Za-z_][A-Za-z0-9_]*)', {
+            param($match)
+            $value = [Environment]::GetEnvironmentVariable($match.Groups[1].Value)
+            if ($null -eq $value) { '' } else { $value }
+        })
+    }
+    return $expanded
+}
+
+function Get-BootstrapNpmCommandForAiTools {
+    foreach ($name in @('npm.cmd','npm.exe','npm')) {
+        try {
+            $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Source)) {
+                return [string]$cmd.Source
+            }
+        } catch {
+        }
+    }
+    $fallback = Get-NpmCmd
+    if ($fallback) { return $fallback }
+    throw 'npm nao encontrado. Instale Node.js LTS e reexecute.'
+}
+
+function Get-BootstrapAiNpmPrefix {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+    return (Join-Path (Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot) 'npm-prefix')
+}
+
+function Get-BootstrapAiBinDir {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+    return (Join-Path (Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot) 'bin')
+}
+
+function Resolve-BootstrapAiToolCommandPath {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [string]$InstallRoot = ''
+    )
+
+    $names = @(Get-BootstrapNonEmptyStringArray -Values @($CatalogEntry['CommandNames']))
+    $roots = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
+        $resolvedRoot = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+        $roots.Add((Get-BootstrapAiNpmPrefix -InstallRoot $resolvedRoot)) | Out-Null
+        $roots.Add((Get-BootstrapAiBinDir -InstallRoot $resolvedRoot)) | Out-Null
+    }
+
+    if ($CatalogEntry.Contains('ProbePaths')) {
+        foreach ($probe in @($CatalogEntry['ProbePaths'])) {
+            $path = Resolve-BootstrapAiProbePath -Path ([string]$probe)
+            if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path)) { return $path }
+        }
+    }
+
+    foreach ($root in @($roots.ToArray())) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        foreach ($name in @($names)) {
+            foreach ($suffix in @('.cmd', '.exe', '.ps1', '')) {
+                $candidate = Join-Path $root ($name + $suffix)
+                if (Test-Path -LiteralPath $candidate) { return $candidate }
+            }
+        }
+    }
+
+    foreach ($name in @($names)) {
+        try {
+            $resolved = Resolve-CommandPath -Name $name
+            if ($resolved) { return $resolved }
+        } catch {
+        }
+        try {
+            $cmd = Get-Command $name -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Source)) { return [string]$cmd.Source }
+        } catch {
+        }
+    }
+    return ''
+}
+
+function Invoke-BootstrapAiNativeCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [string[]]$Args = @(),
+        [int]$TimeoutMs = 120000
+    )
+
+    $runExe = $Exe
+    $runArgs = @($Args)
+    if ($Exe -match '\.ps1$') {
+        $psHost = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if (-not (Test-Path -LiteralPath $psHost)) { $psHost = 'powershell.exe' }
+        $runExe = $psHost
+        $runArgs = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$Exe) + @($Args)
+    }
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $runExe
+    $psi.Arguments = (($runArgs | ForEach-Object {
+        $v = [string]$_
+        if ($v -match '[\s"]') { '"' + ($v -replace '"', '\"') + '"' } else { $v }
+    }) -join ' ')
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $proc = New-Object System.Diagnostics.Process
+    $proc.StartInfo = $psi
+    [void]$proc.Start()
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+    $timedOut = -not $proc.WaitForExit($TimeoutMs)
+    if ($timedOut) {
+        try { $proc.Kill() } catch { }
+        try { $null = $proc.WaitForExit(5000) } catch { }
+    }
+    $exitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
+    $stdout = [string]$stdoutTask.Result
+    $stderr = [string]$stderrTask.Result
+    try { $proc.Dispose() } catch { }
+    $first = (($stdout + "`n" + $stderr) -replace "`r", '' -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    return [ordered]@{
+        exitCode = $exitCode
+        timedOut = $timedOut
+        stdout   = $stdout
+        stderr   = $stderr
+        firstLine = if ($first) { [string]$first } else { '' }
+    }
+}
+
+function Get-BootstrapAiToolVersion {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$CommandPath
+    )
+    $args = @(Get-BootstrapNonEmptyStringArray -Values @($CatalogEntry['VersionArgs']))
+    if ($args.Count -eq 0) { $args = @('--version') }
+    try {
+        $result = Invoke-BootstrapAiNativeCommand -Exe $CommandPath -Args $args -TimeoutMs 30000
+        if (-not [string]::IsNullOrWhiteSpace([string]$result['firstLine'])) { return [string]$result['firstLine'] }
+    } catch {
+    }
+    return ''
+}
+
+function Test-BootstrapAiToolConfigured {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [string]$ProjectRoot = ''
+    )
+
+    switch ($ToolName) {
+        'claude-code' {
+            return (-not [string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY))
+        }
+        'opencode' {
+            $userHome = Get-BootstrapUserHomePath
+            $paths = @()
+            if ($userHome) { $paths += (Join-Path $userHome '.config\opencode\opencode.json') }
+            if ($env:APPDATA) { $paths += (Join-Path $env:APPDATA 'OpenCode\opencode.json') }
+            return [bool](@($paths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1))
+        }
+        'openclaw' {
+            $userHome = Get-BootstrapUserHomePath
+            if (-not $userHome) { return $false }
+            return (Test-Path -LiteralPath (Join-Path $userHome '.openclaw'))
+        }
+        'rtk' {
+            $root = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { $ProjectRoot }
+            return ((Test-Path -LiteralPath (Join-Path $root '.rtk')) -or (Test-Path -LiteralPath (Join-Path $root 'rtk.toml')))
+        }
+        'antigravity-workflows' {
+            return (Test-BootstrapAntigravityWorkflows -ProjectRoot $ProjectRoot)
+        }
+        default { return $false }
+    }
+}
+
+function Test-BootstrapAntigravityWorkflows {
+    param([string]$ProjectRoot = '')
+    $root = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { $ProjectRoot }
+    $workflowRoot = Join-Path $root '.antigravity\workflows'
+    foreach ($name in @('planning.md','backend.md','frontend.md','tests.md','review.md')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $workflowRoot $name))) { return $false }
+    }
+    return $true
+}
+
+function Get-BootstrapAiToolStatusRows {
+    param(
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = ''
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $catalog = Get-BootstrapAiToolCatalog
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($toolName in @($catalog.Keys)) {
+        $entry = $catalog[$toolName]
+        $status = 'absent'
+        $commandPath = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot $root
+        $version = ''
+        $configured = $false
+        if ($toolName -eq 'antigravity-workflows') {
+            $configured = Test-BootstrapAntigravityWorkflows -ProjectRoot $ProjectRoot
+            $status = if ($configured) { 'configured' } else { 'absent' }
+        } elseif (-not [string]::IsNullOrWhiteSpace($commandPath)) {
+            $version = Get-BootstrapAiToolVersion -CatalogEntry $entry -CommandPath $commandPath
+            $configured = Test-BootstrapAiToolConfigured -ToolName $toolName -ProjectRoot $ProjectRoot
+            $status = if ($configured) { 'configured' } else { 'installed' }
+            if ($toolName -eq 'hermes-agent') {
+                $status = 'manual'
+                $configured = $false
+            }
+        } elseif ([string]$entry['InstallSupport'] -match '^manual') {
+            $status = 'manual'
+        }
+        $rows.Add([ordered]@{
+            tool        = [string]$toolName
+            name        = [string]$entry['DisplayName']
+            status      = [string]$status
+            version     = [string]$version
+            configured  = [string]$configured
+            commandPath = [string]$commandPath
+            docs        = [string]$entry['DocsUrl']
+            support     = [string]$entry['InstallSupport']
+            message     = [string]$entry['Notes']
+        }) | Out-Null
+    }
+    return @($rows.ToArray())
+}
+
+function New-BootstrapAiToolResult {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][string]$Action,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = '',
+        [string]$Message = '',
+        [string]$Docs = '',
+        [string]$CommandPath = '',
+        [string]$Version = ''
+    )
+    return [ordered]@{
+        mode        = 'ai-tools'
+        tool        = $ToolName
+        action      = $Action
+        status      = $Status
+        installRoot = (Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot)
+        projectRoot = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { $ProjectRoot }
+        message     = $Message
+        docs        = $Docs
+        commandPath = $CommandPath
+        version     = $Version
+    }
+}
+
+function Install-BootstrapAiNpmTool {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $prefix = Get-BootstrapAiNpmPrefix -InstallRoot $root
+    $packageName = [string]$CatalogEntry['PackageName']
+    if ([string]::IsNullOrWhiteSpace($packageName)) {
+        return (New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'blocked' -InstallRoot $root -Message 'Pacote npm oficial nao definido.' -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'planned' -InstallRoot $root -Message ("npm install -g --prefix `"{0}`" {1}" -f $prefix, $packageName) -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    [void][System.IO.Directory]::CreateDirectory($prefix)
+    $npmCmd = Get-BootstrapNpmCommandForAiTools
+    $result = Invoke-BootstrapAiNativeCommand -Exe $npmCmd -Args @('install','-g','--prefix',$prefix,$packageName) -TimeoutMs 600000
+    if ([int]$result['exitCode'] -ne 0) {
+        $detail = ([string]$result['stderr']).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$result['stdout']).Trim() }
+        throw ("Falha ao instalar {0} via npm prefixado (exit={1}). {2}" -f $ToolName, [int]$result['exitCode'], $detail)
+    }
+
+    Ensure-PathUserContains -Dir $prefix
+    Refresh-SessionPath
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    $manifest['tools'][$ToolName] = @{
+        kind        = 'npm-prefix'
+        packageName = $packageName
+        prefix      = $prefix
+        installedAt = (Get-Date).ToString('o')
+    }
+    $manifest['pathsAdded'][$prefix] = $true
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+
+    $commandPath = Resolve-BootstrapAiToolCommandPath -CatalogEntry $CatalogEntry -InstallRoot $root
+    if ([string]::IsNullOrWhiteSpace($commandPath)) {
+        throw ("{0} instalado, mas comando esperado nao apareceu no PATH/prefixo." -f $ToolName)
+    }
+    $version = Get-BootstrapAiToolVersion -CatalogEntry $CatalogEntry -CommandPath $commandPath
+    return (New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'installed' -InstallRoot $root -Message 'Instalacao validada.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath $commandPath -Version $version)
+}
+
+function Uninstall-BootstrapAiNpmTool {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $prefix = Get-BootstrapAiNpmPrefix -InstallRoot $root
+    $packageName = [string]$CatalogEntry['PackageName']
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName $ToolName -Action 'uninstall' -Status 'planned' -InstallRoot $root -Message ("npm uninstall -g --prefix `"{0}`" {1}" -f $prefix, $packageName) -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    if ((-not $manifest['tools'].ContainsKey($ToolName)) -and -not (Test-Path -LiteralPath $prefix)) {
+        Remove-PathUserEntry -Dir $prefix | Out-Null
+        return (New-BootstrapAiToolResult -ToolName $ToolName -Action 'uninstall' -Status 'absent' -InstallRoot $root -Message 'Nada gerenciado pelo projeto encontrado.' -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($packageName) -and (Test-Path -LiteralPath $prefix)) {
+        $npmCmd = Get-BootstrapNpmCommandForAiTools
+        $result = Invoke-BootstrapAiNativeCommand -Exe $npmCmd -Args @('uninstall','-g','--prefix',$prefix,$packageName) -TimeoutMs 600000
+        if ([int]$result['exitCode'] -ne 0) {
+            $detail = ([string]$result['stderr']).Trim()
+            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$result['stdout']).Trim() }
+            throw ("Falha ao desinstalar {0} via npm prefixado (exit={1}). {2}" -f $ToolName, [int]$result['exitCode'], $detail)
+        }
+    }
+
+    if ($manifest['tools'].ContainsKey($ToolName)) { $manifest['tools'].Remove($ToolName) | Out-Null }
+    $otherUsesPrefix = $false
+    foreach ($entryName in @($manifest['tools'].Keys)) {
+        $entry = $manifest['tools'][$entryName]
+        if ($entry -is [hashtable] -and $entry.ContainsKey('prefix') -and ([string]$entry['prefix']).TrimEnd('\') -ieq $prefix.TrimEnd('\')) {
+            $otherUsesPrefix = $true
+        }
+    }
+    if (-not $otherUsesPrefix) {
+        Remove-PathUserEntry -Dir $prefix | Out-Null
+        if ($manifest['pathsAdded'].ContainsKey($prefix)) { $manifest['pathsAdded'].Remove($prefix) | Out-Null }
+    }
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+
+    return (New-BootstrapAiToolResult -ToolName $ToolName -Action 'uninstall' -Status 'removed' -InstallRoot $root -Message 'Artefatos gerenciados removidos.' -Docs ([string]$CatalogEntry['DocsUrl']))
+}
+
+function Install-BootstrapRtkTool {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $binDir = Get-BootstrapAiBinDir -InstallRoot $root
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'rtk' -Action 'install' -Status 'planned' -InstallRoot $root -Message 'Baixar release oficial GitHub, validar checksum se publicado, instalar rtk.exe em bin gerenciado.' -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $api = 'https://api.github.com/repos/rtk-ai/rtk/releases/latest'
+    $release = Invoke-RestMethod -Uri $api -Headers @{ 'User-Agent' = 'PhaseZero-Bootstrap' } -ErrorAction Stop
+    $assets = @($release.assets)
+    $asset = @($assets | Where-Object {
+        ([string]$_.name) -match '(?i)(windows|win|pc-windows|x86_64-pc-windows|x64)' -and
+        ([string]$_.name) -match '(?i)\.(zip|exe)$'
+    } | Select-Object -First 1)
+    if (-not $asset) {
+        return (New-BootstrapAiToolResult -ToolName 'rtk' -Action 'install' -Status 'blocked' -InstallRoot $root -Message 'Release oficial nao publicou asset Windows compativel detectavel.' -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    [void][System.IO.Directory]::CreateDirectory($binDir)
+    $downloadRoot = Join-Path $root 'downloads'
+    [void][System.IO.Directory]::CreateDirectory($downloadRoot)
+    $assetPath = Join-Path $downloadRoot ([string]$asset.name)
+    Invoke-WebRequest -Uri ([string]$asset.browser_download_url) -OutFile $assetPath -UseBasicParsing -Headers @{ 'User-Agent' = 'PhaseZero-Bootstrap' } -ErrorAction Stop
+
+    $checksumAsset = @($assets | Where-Object { ([string]$_.name) -ieq (([string]$asset.name) + '.sha256') -or ([string]$_.name) -ieq 'SHA256SUMS' -or ([string]$_.name) -ieq 'checksums.txt' } | Select-Object -First 1)
+    if ($checksumAsset) {
+        $checksumPath = Join-Path $downloadRoot ([string]$checksumAsset.name)
+        Invoke-WebRequest -Uri ([string]$checksumAsset.browser_download_url) -OutFile $checksumPath -UseBasicParsing -Headers @{ 'User-Agent' = 'PhaseZero-Bootstrap' } -ErrorAction Stop
+        $expectedText = Get-Content -LiteralPath $checksumPath -Raw
+        $expected = ''
+        foreach ($line in @($expectedText -replace "`r", '' -split "`n")) {
+            if ([string]$line -match [regex]::Escape([string]$asset.name)) {
+                $expected = ([regex]::Match([string]$line, '(?i)\b[a-f0-9]{64}\b')).Value
+                if (-not [string]::IsNullOrWhiteSpace($expected)) { break }
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($expected)) {
+            $expected = ([regex]::Match($expectedText, '(?i)\b[a-f0-9]{64}\b')).Value
+        }
+        if (-not [string]::IsNullOrWhiteSpace($expected)) {
+            $actual = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected.ToLowerInvariant()) {
+                throw "Checksum RTK invalido. Esperado=$expected Atual=$actual"
+            }
+        }
+    }
+
+    $rtkExe = Join-Path $binDir 'rtk.exe'
+    if ([string]$asset.name -match '(?i)\.zip$') {
+        $extractRoot = Join-Path $downloadRoot ([System.IO.Path]::GetFileNameWithoutExtension([string]$asset.name))
+        if (Test-Path -LiteralPath $extractRoot) { Remove-Item -LiteralPath $extractRoot -Recurse -Force }
+        Expand-Archive -LiteralPath $assetPath -DestinationPath $extractRoot -Force
+        $found = Get-ChildItem -LiteralPath $extractRoot -Recurse -Filter 'rtk.exe' | Select-Object -First 1
+        if (-not $found) { throw 'Asset RTK baixado, mas rtk.exe nao foi encontrado dentro do zip.' }
+        Copy-Item -LiteralPath $found.FullName -Destination $rtkExe -Force
+    } else {
+        Copy-Item -LiteralPath $assetPath -Destination $rtkExe -Force
+    }
+
+    Ensure-PathUserContains -Dir $binDir
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    $manifest['tools']['rtk'] = @{
+        kind        = 'github-release'
+        source      = [string]$asset.browser_download_url
+        version     = [string]$release.tag_name
+        binDir      = $binDir
+        installedAt = (Get-Date).ToString('o')
+    }
+    $manifest['pathsAdded'][$binDir] = $true
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+    $version = Get-BootstrapAiToolVersion -CatalogEntry $CatalogEntry -CommandPath $rtkExe
+    return (New-BootstrapAiToolResult -ToolName 'rtk' -Action 'install' -Status 'installed' -InstallRoot $root -Message 'RTK instalado por release oficial GitHub.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath $rtkExe -Version $version)
+}
+
+function Uninstall-BootstrapRtkTool {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $binDir = Get-BootstrapAiBinDir -InstallRoot $root
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'rtk' -Action 'uninstall' -Status 'planned' -InstallRoot $root -Message 'Remover rtk.exe gerenciado e PATH adicionado pelo projeto.' -Docs 'https://www.rtk-ai.app/docs/')
+    }
+    $rtkExe = Join-Path $binDir 'rtk.exe'
+    if (Test-Path -LiteralPath $rtkExe) { Remove-Item -LiteralPath $rtkExe -Force }
+    Remove-PathUserEntry -Dir $binDir | Out-Null
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    if ($manifest['tools'].ContainsKey('rtk')) { $manifest['tools'].Remove('rtk') | Out-Null }
+    if ($manifest['pathsAdded'].ContainsKey($binDir)) { $manifest['pathsAdded'].Remove($binDir) | Out-Null }
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+    return (New-BootstrapAiToolResult -ToolName 'rtk' -Action 'uninstall' -Status 'removed' -InstallRoot $root -Message 'RTK gerenciado removido.' -Docs 'https://www.rtk-ai.app/docs/')
+}
+
+function Set-BootstrapAntigravityWorkflows {
+    param(
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+    $root = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($ProjectRoot) }
+    $workflowRoot = Join-Path $root '.antigravity\workflows'
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'antigravity-workflows' -Action 'configure' -Status 'planned' -ProjectRoot $root -Message "Criar templates em $workflowRoot" -Docs 'https://antigravity.google/')
+    }
+
+    [void][System.IO.Directory]::CreateDirectory($workflowRoot)
+    $templates = [ordered]@{
+        'planning.md' = @(
+            '# Planning'
+            ''
+            '- Read repository state before proposing work.'
+            '- List assumptions, blockers, validation commands, and rollback scope.'
+            '- Do not write secrets. Use placeholders and secure stores.'
+        ) -join [Environment]::NewLine
+        'backend.md' = @(
+            '# Backend'
+            ''
+            '- Keep changes scoped to existing service boundaries.'
+            '- Add tests for every behavior change.'
+            '- Validate install, upgrade, and uninstall flows when touched.'
+        ) -join [Environment]::NewLine
+        'frontend.md' = @(
+            '# Frontend'
+            ''
+            '- Preserve keyboard focus, readable labels, and clear status states.'
+            '- Validate XAML parse/load before claiming UI readiness.'
+            '- Avoid false success messages.'
+        ) -join [Environment]::NewLine
+        'tests.md' = @(
+            '# Tests'
+            ''
+            '- Start with failing coverage for each fix.'
+            '- Exercise path-with-spaces, dependency-missing, offline, idempotent install, and idempotent uninstall cases.'
+            '- Record exact commands and exit codes.'
+        ) -join [Environment]::NewLine
+        'review.md' = @(
+            '# Review'
+            ''
+            '- Prioritize bugs, destructive side effects, secret handling, and unsupported external claims.'
+            '- Confirm official sources for tool installs and model/provider availability.'
+            '- Verify repo diff contains only intentional changes.'
+        ) -join [Environment]::NewLine
+    }
+
+    foreach ($name in @($templates.Keys)) {
+        $path = Join-Path $workflowRoot $name
+        if (Test-Path -LiteralPath $path) { Backup-BootstrapFile -Path $path | Out-Null }
+        [System.IO.File]::WriteAllText($path, [string]$templates[$name], [System.Text.UTF8Encoding]::new($false))
+    }
+
+    return (New-BootstrapAiToolResult -ToolName 'antigravity-workflows' -Action 'configure' -Status 'configured' -ProjectRoot $root -Message "Workflows gerados em $workflowRoot" -Docs 'https://antigravity.google/')
+}
+
+function Invoke-BootstrapAiToolAction {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [ValidateSet('install','validate','configure','uninstall','gain','docs')][string]$Action = 'validate',
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = '',
+        [switch]$DryRun,
+        [switch]$Yes,
+        [switch]$NoAdmin
+    )
+
+    $null = $Yes
+    $null = $NoAdmin
+    $name = Normalize-BootstrapAiToolName -ToolName $ToolName
+    $catalog = Get-BootstrapAiToolCatalog
+    if (-not $catalog.Contains($name)) { throw "AI tool desconhecida: $ToolName" }
+    $entry = $catalog[$name]
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $project = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($ProjectRoot) }
+
+    if ($Action -eq 'validate') {
+        $row = @(Get-BootstrapAiToolStatusRows -InstallRoot $root -ProjectRoot $project | Where-Object { [string]$_['tool'] -eq $name } | Select-Object -First 1)
+        if ($row.Count -eq 0) {
+            return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'error' -InstallRoot $root -ProjectRoot $project -Message 'Status nao encontrado.' -Docs ([string]$entry['DocsUrl']))
+        }
+        return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status ([string]$row[0]['status']) -InstallRoot $root -ProjectRoot $project -Message ([string]$row[0]['message']) -Docs ([string]$row[0]['docs']) -CommandPath ([string]$row[0]['commandPath']) -Version ([string]$row[0]['version']))
+    }
+
+    if ($Action -eq 'docs') {
+        return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'manual' -InstallRoot $root -ProjectRoot $project -Message ([string]$entry['DocsUrl']) -Docs ([string]$entry['DocsUrl']))
+    }
+
+    if ($Action -eq 'gain') {
+        if ($name -ne 'rtk') {
+            return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'blocked' -InstallRoot $root -ProjectRoot $project -Message 'gain existe apenas para RTK.' -Docs ([string]$entry['DocsUrl']))
+        }
+        $commandPath = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot $root
+        if ([string]::IsNullOrWhiteSpace($commandPath)) {
+            return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'absent' -InstallRoot $root -ProjectRoot $project -Message 'rtk nao encontrado.' -Docs ([string]$entry['DocsUrl']))
+        }
+        if ($DryRun) {
+            return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'planned' -InstallRoot $root -ProjectRoot $project -Message 'rtk gain' -Docs ([string]$entry['DocsUrl']) -CommandPath $commandPath)
+        }
+        $result = Invoke-BootstrapAiNativeCommand -Exe $commandPath -Args @('gain') -TimeoutMs 120000
+        $status = if ([int]$result['exitCode'] -eq 0) { 'validated' } else { 'error' }
+        return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message ([string]$result['firstLine']) -Docs ([string]$entry['DocsUrl']) -CommandPath $commandPath)
+    }
+
+    if ($Action -eq 'configure') {
+        if ($name -eq 'antigravity-workflows') {
+            return (Set-BootstrapAntigravityWorkflows -ProjectRoot $project -DryRun:$DryRun)
+        }
+        if ($name -eq 'rtk') {
+            $commandPath = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot $root
+            if ([string]::IsNullOrWhiteSpace($commandPath)) {
+                return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'absent' -InstallRoot $root -ProjectRoot $project -Message 'rtk nao encontrado para rtk init.' -Docs ([string]$entry['DocsUrl']))
+            }
+            if ($DryRun) {
+                return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'planned' -InstallRoot $root -ProjectRoot $project -Message 'rtk init' -Docs ([string]$entry['DocsUrl']) -CommandPath $commandPath)
+            }
+            $result = Invoke-BootstrapAiNativeCommand -Exe $commandPath -Args @('init') -TimeoutMs 120000
+            if ([int]$result['exitCode'] -ne 0) {
+                throw ("rtk init falhou (exit={0}). {1}" -f [int]$result['exitCode'], ([string]$result['stderr']).Trim())
+            }
+            return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'configured' -InstallRoot $root -ProjectRoot $project -Message 'rtk init validado.' -Docs ([string]$entry['DocsUrl']) -CommandPath $commandPath)
+        }
+        return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'manual' -InstallRoot $root -ProjectRoot $project -Message 'Configuracao requer login/chave do usuario; nada foi gravado no repositorio.' -Docs ([string]$entry['DocsUrl']))
+    }
+
+    if ($Action -eq 'install') {
+        switch ([string]$entry['InstallSupport']) {
+            'npm-prefix' { return (Install-BootstrapAiNpmTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
+            'github-release' {
+                if ($name -eq 'rtk') { return (Install-BootstrapRtkTool -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
+            }
+            'workflow-only' { return (Set-BootstrapAntigravityWorkflows -ProjectRoot $project -DryRun:$DryRun) }
+        }
+        $status = if ($DryRun) { 'planned' } else { 'manual' }
+        return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message ([string]$entry['Notes']) -Docs ([string]$entry['DocsUrl']))
+    }
+
+    if ($Action -eq 'uninstall') {
+        switch ([string]$entry['InstallSupport']) {
+            'npm-prefix' { return (Uninstall-BootstrapAiNpmTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
+            'github-release' {
+                if ($name -eq 'rtk') { return (Uninstall-BootstrapRtkTool -InstallRoot $root -DryRun:$DryRun) }
+            }
+            'workflow-only' {
+                $status = if ($DryRun) { 'planned' } else { 'manual' }
+                return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Remocao de workflows requer decisao manual; arquivos podem conter edicoes do usuario.' -Docs ([string]$entry['DocsUrl']))
+            }
+        }
+        $status = if ($DryRun) { 'planned' } else { 'manual' }
+        return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Nenhum artefato gerenciado pelo projeto para remover.' -Docs ([string]$entry['DocsUrl']))
+    }
 }
 
 function Ensure-BootstrapNamedMap {
@@ -14719,13 +16659,122 @@ function Ensure-BootstrapSecrets {
     }
 }
 
+function Add-BootstrapResultFieldIfMissing {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$Payload,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()]$Value
+    )
+
+    if (-not $Payload.Contains($Name) -or $null -eq $Payload[$Name]) {
+        $Payload[$Name] = $Value
+    }
+}
+
+function ConvertTo-BootstrapResultPayloadDictionary {
+    param([Parameter(Mandatory = $true)]$Value)
+
+    $payload = [ordered]@{}
+    if ($Value -is [System.Collections.IDictionary]) {
+        foreach ($key in $Value.Keys) {
+            $payload[[string]$key] = $Value[$key]
+        }
+        return $payload
+    }
+
+    foreach ($prop in @($Value.PSObject.Properties)) {
+        $payload[[string]$prop.Name] = $prop.Value
+    }
+    return $payload
+}
+
+function Get-BootstrapResultExitCodeForStatus {
+    param([string]$Status)
+
+    switch (([string]$Status).ToLowerInvariant()) {
+        'success' { return 0 }
+        'warning' { return 0 }
+        'blocked' { return 2 }
+        default { return 1 }
+    }
+}
+
+function Complete-BootstrapExecutionResultEnvelope {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]$Value
+    )
+
+    $payload = ConvertTo-BootstrapResultPayloadDictionary -Value $Value
+    Add-BootstrapResultFieldIfMissing -Payload $payload -Name 'mode' -Value 'profile'
+    Add-BootstrapResultFieldIfMissing -Payload $payload -Name 'generatedAt' -Value ((Get-Date).ToString('o'))
+    Add-BootstrapResultFieldIfMissing -Payload $payload -Name 'logPath' -Value $script:LogPath
+    Add-BootstrapResultFieldIfMissing -Payload $payload -Name 'resultPath' -Value $Path
+    Add-BootstrapResultFieldIfMissing -Payload $payload -Name 'exitCode' -Value (Get-BootstrapResultExitCodeForStatus -Status ([string]$payload['status']))
+    $payload['logPath'] = Normalize-BootstrapPathSegment -Value $payload['logPath']
+    $payload['resultPath'] = Normalize-BootstrapPathSegment -Value $payload['resultPath']
+
+    if (-not $payload.Contains('artifactPaths') -or $null -eq $payload['artifactPaths']) {
+        $artifactPaths = [ordered]@{
+            logPath = [string]$payload['logPath']
+            resultPath = [string]$payload['resultPath']
+        }
+        foreach ($name in @('stdoutPath','stderrPath','changesPath','appTuningReportRoot','hostHealthReportRoot')) {
+            if ($payload.Contains($name) -and -not [string]::IsNullOrWhiteSpace([string]$payload[$name])) {
+                $artifactPaths[$name] = [string]$payload[$name]
+            }
+        }
+        $payload['artifactPaths'] = $artifactPaths
+    }
+
+    if (-not $payload.Contains('diagnostics') -or $null -eq $payload['diagnostics']) {
+        $status = ([string]$payload['status']).ToLowerInvariant()
+        $message = ''
+        if ($payload.Contains('error')) { $message = [string]$payload['error'] }
+        if ([string]::IsNullOrWhiteSpace($message) -and $payload.Contains('message')) { $message = [string]$payload['message'] }
+        if ($status -in @('error','blocked','warning') -or -not [string]::IsNullOrWhiteSpace($message)) {
+            if ([string]::IsNullOrWhiteSpace($message)) { $message = [string]$payload['status'] }
+            $payload['diagnostics'] = @([ordered]@{
+                severity = $(if ($status -eq 'blocked') { 'blocked' } elseif ($status -eq 'warning') { 'warning' } else { 'error' })
+                message = $message
+                howToFix = $(if ($payload.Contains('howToFix')) { [string]$payload['howToFix'] } else { '' })
+            })
+        } else {
+            $payload['diagnostics'] = @()
+        }
+    }
+
+    if (-not $payload.Contains('scope') -or $null -eq $payload['scope']) {
+        $payload['scope'] = [ordered]@{
+            selection = $(if ($payload.Contains('selection')) { $payload['selection'] } else { $null })
+            resolution = $(if ($payload.Contains('resolution')) { $payload['resolution'] } else { $null })
+            hostHealth = $(if ($payload.Contains('resolvedHostHealthMode')) { [string]$payload['resolvedHostHealthMode'] } else { '' })
+            appTuning = $(if ($payload.Contains('resolvedAppTuningMode')) { [string]$payload['resolvedAppTuningMode'] } else { '' })
+            steamDeckVersion = $(if ($payload.Contains('resolvedSteamDeckVersion')) { [string]$payload['resolvedSteamDeckVersion'] } else { '' })
+        }
+    }
+
+    if (-not $payload.Contains('rollback') -or $null -eq $payload['rollback']) {
+        $changesPath = if ($payload.Contains('changesPath')) { [string]$payload['changesPath'] } else { '' }
+        $available = $false
+        if ($payload.Contains('rollbackAvailable')) { $available = [bool]$payload['rollbackAvailable'] }
+        $payload['rollback'] = [ordered]@{
+            available = $available
+            changesPath = $changesPath
+            summary = $(if ($payload.Contains('changesSummary')) { $payload['changesSummary'] } else { $null })
+        }
+    }
+
+    return $payload
+}
+
 function Write-BootstrapExecutionResultFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)]$Value
     )
 
-    Write-BootstrapJsonFile -Path $Path -Value $Value
+    Write-BootstrapJsonFile -Path $Path -Value (Complete-BootstrapExecutionResultEnvelope -Path $Path -Value $Value)
 }
 
 function Ensure-BootstrapRegistryPath {
@@ -16477,14 +18526,18 @@ function Invoke-BootstrapComponent {
             if ($componentDef.PSObject.Properties.Name -contains 'AllowFailureWhenNotAdmin') { $allowFailureWhenNotAdmin = [bool]$componentDef.AllowFailureWhenNotAdmin }
             $probePaths = @()
             if ($componentDef.PSObject.Properties.Name -contains 'ProbePaths') { $probePaths = @($componentDef.ProbePaths) }
-            Ensure-WingetPackage -WingetPath $State.Winget -Id $componentDef.Id -DisplayName $componentDef.DisplayName -PreferUserScope $preferUserScope -AllowFailureWhenNotAdmin $allowFailureWhenNotAdmin -ProbePaths $probePaths
+            $appxPackageNames = @()
+            if ($componentDef.PSObject.Properties.Name -contains 'AppxPackageNames') { $appxPackageNames = @($componentDef.AppxPackageNames) }
+            Ensure-WingetPackage -WingetPath $State.Winget -Id $componentDef.Id -DisplayName $componentDef.DisplayName -PreferUserScope $preferUserScope -AllowFailureWhenNotAdmin $allowFailureWhenNotAdmin -ProbePaths $probePaths -AppxPackageNames $appxPackageNames -State $State -ComponentName $Name
             if ($Name -eq 'notepadpp' -and [string]$State.AppTuningMode -eq 'off') {
                 $null = Ensure-BootstrapNotepadPlusPlusDefaults
             }
         }
         'chocolatey' {
             $chocoPath = Ensure-BootstrapChocolateyCore -State $State
-            Ensure-ChocolateyPackage -ChocoPath $chocoPath -Package ([string]$componentDef.Package) -DisplayName ([string]$componentDef.DisplayName)
+            $probePaths = @()
+            if ($componentDef.PSObject.Properties.Name -contains 'ProbePaths') { $probePaths = @($componentDef.ProbePaths) }
+            Ensure-ChocolateyPackage -ChocoPath $chocoPath -Package ([string]$componentDef.Package) -DisplayName ([string]$componentDef.DisplayName) -ProbePaths $probePaths
         }
         'git-lfs' {
             Ensure-GitLfs -State $State
@@ -16506,7 +18559,14 @@ function Invoke-BootstrapComponent {
         }
         'npm' {
             Ensure-BootstrapNodeCore -State $State
-            Ensure-NpmGlobalPackage -NpmCmd $State.NodeInfo.NpmCmd -Package $componentDef.Package -DisplayName $componentDef.DisplayName
+            $commandNames = @()
+            if ($componentDef.PSObject.Properties.Name -contains 'CommandNames') { $commandNames = @($componentDef.CommandNames) }
+            elseif ($componentDef.PSObject.Properties.Name -contains 'CommandName') { $commandNames = @($componentDef.CommandName) }
+            $versionArgs = @('--version')
+            if ($componentDef.PSObject.Properties.Name -contains 'VersionArgs') { $versionArgs = @($componentDef.VersionArgs) }
+            $npmBin = ''
+            if ($State.NodeInfo -and $State.NodeInfo.NpmBin) { $npmBin = [string]$State.NodeInfo.NpmBin }
+            Ensure-NpmGlobalPackage -NpmCmd $State.NodeInfo.NpmCmd -Package $componentDef.Package -DisplayName $componentDef.DisplayName -CommandNames $commandNames -VersionArgs $versionArgs -NpmBin $npmBin
             if ($Name -eq 'bonsai-cli' -or ([string]$componentDef.Package) -eq '@bonsai-ai/cli') {
                 $bonsaiCommandPath = $null
                 if ($State.NodeInfo -and $State.NodeInfo.NpmBin) {
@@ -16874,6 +18934,7 @@ function Write-BootstrapDoctorToolSummary {
 function Invoke-BootstrapDoctorMode {
     Write-Log ("Inicio: {0}" -f $script:StartTime.ToString('s'))
     Write-Log "Log: $script:LogPath"
+    Write-Log "Result: $script:ResultPath"
     Write-Log "Modo: Doctor"
     Write-Log "Admin: $(Test-IsAdmin)"
     try {
@@ -16933,6 +18994,16 @@ function Invoke-BootstrapDoctorMode {
     Write-BootstrapDoctorToolSummary -Label 'wsl' -CommandName 'wsl.exe' -Args @('--version')
 
     $elapsed = New-TimeSpan -Start $script:StartTime -End (Get-Date)
+    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+            status = 'success'
+            mode = 'doctor'
+            generatedAt = (Get-Date).ToString('o')
+            logPath = $script:LogPath
+            resultPath = $script:ResultPath
+            dataRoot = $dataRoot
+        })
+    }
     Write-Log ("Concluido em {0:c}" -f $elapsed)
     Write-Log "Log salvo em: $script:LogPath"
 }
@@ -17020,8 +19091,8 @@ function Invoke-BootstrapProfileMode {
 
         if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
             try {
-                $bad = @($auditRows | Where-Object { $_.Status -in @('Unhealthy', 'Missing', 'AliasOnly', 'InstalledButNotInPath', 'RuntimeOnly', 'Blocked', 'Unknown') })
-                $status = if ($bad.Count -gt 0) { 'warning' } else { 'success' }
+                $summary = New-BootstrapAuditSeveritySummary -Rows $auditRows
+                $status = if ([int]$summary.critical -gt 0) { 'warning' } else { 'success' }
                 Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
                     status = $status
                     mode = 'audit'
@@ -17030,14 +19101,13 @@ function Invoke-BootstrapProfileMode {
                     resultPath = $script:ResultPath
                     workspaceRoot = $resolvedWorkspaceRoot
                     cloneBaseDir = $resolvedCloneBaseDir
-                    auditSummary = [ordered]@{
-                        total = @($auditRows).Count
-                        unhealthyOrMissing = $bad.Count
-                    }
+                    auditSummary = $summary
                     auditResults = @($auditRows | ForEach-Object {
                         [ordered]@{
                             component = [string]$_.Component
                             status = [string]$_.Status
+                            severity = [string]$_.Severity
+                            critical = [bool]$_.Critical
                             detail = [string]$_.Detail
                             howToFix = [string]$_.HowToFix
                         }
@@ -17047,7 +19117,7 @@ function Invoke-BootstrapProfileMode {
                 Write-Log ("Audit: falha ao serializar/gravar result.json (audit concluido em memoria): {0}" -f $_.Exception.Message) 'ERROR'
                 Write-BootstrapExceptionStackTrace -ErrorRecord $_
                 try {
-                    $badCount = @(@($auditRows | Where-Object { $_.Status -in @('Unhealthy', 'Missing', 'AliasOnly', 'InstalledButNotInPath', 'RuntimeOnly', 'Blocked', 'Unknown') })).Count
+                    $summary = New-BootstrapAuditSeveritySummary -Rows $auditRows
                     $fallback = [ordered]@{
                         status = 'warning'
                         mode = 'audit'
@@ -17058,7 +19128,8 @@ function Invoke-BootstrapProfileMode {
                         cloneBaseDir = $resolvedCloneBaseDir
                         error = [string]$_.Exception.Message
                         howToFix = 'O audit terminou mas o JSON completo falhou; veja o log. Tente reduzir escopo ou atualizar o bootstrap.'
-                        auditSummary = [ordered]@{ total = @($auditRows).Count; unhealthyOrMissing = $badCount; serializationFallback = $true }
+                        auditSummary = $summary
+                        serializationFallback = $true
                     }
                     $utf8 = New-Object System.Text.UTF8Encoding($false)
                     [System.IO.File]::WriteAllText($script:ResultPath, ([string](ConvertTo-Json -InputObject $fallback -Depth 8)), $utf8)
@@ -17099,6 +19170,7 @@ function Invoke-BootstrapProfileMode {
 
     Write-Log ("Inicio: {0}" -f $script:StartTime.ToString('s'))
     Write-Log "Log: $script:LogPath"
+    Write-Log "Result: $script:ResultPath"
     Write-Log "Admin: $(Test-IsAdmin)"
     Write-Log ("Profiles selecionados: {0}" -f ($(if (@($selection.Profiles).Count -gt 0) { @($selection.Profiles) -join ', ' } else { '-' })))
     Write-Log ("Componentes selecionados: {0}" -f ($(if (@($selection.Components).Count -gt 0) { @($selection.Components) -join ', ' } else { '-' })))
@@ -17206,13 +19278,22 @@ function Invoke-BootstrapProfileMode {
         }
     } catch {
         $failedComponent = [string]$state.CurrentComponent
+        $blockedInfo = Get-BootstrapBlockedErrorInfo -ErrorRecord $_
         if (-not [string]::IsNullOrWhiteSpace($failedComponent)) {
-            $state.ComponentStatus[$failedComponent] = [ordered]@{ status = 'failed'; timestamp = (Get-Date).ToString('o'); error = $_.Exception.Message }
+            if ($blockedInfo.IsBlocked) {
+                $state.ComponentStatus[$failedComponent] = [ordered]@{ status = 'blocked'; timestamp = (Get-Date).ToString('o'); error = $_.Exception.Message; blockerKind = [string]$blockedInfo.Kind; action = [string]$blockedInfo.Action; blockerReasons = @($blockedInfo.Reasons) }
+            } else {
+                $state.ComponentStatus[$failedComponent] = [ordered]@{ status = 'failed'; timestamp = (Get-Date).ToString('o'); error = $_.Exception.Message }
+            }
         }
         $state.LastError = $_.Exception.Message
         Save-BootstrapChangeManifest -State $state
-        Write-Log ("Falha critica na execucao: {0}" -f $_.Exception.Message) 'ERROR'
-        if ($AutoRollback) {
+        if ($blockedInfo.IsBlocked) {
+            Write-Log ("Execucao bloqueada: {0}" -f $_.Exception.Message) 'WARN'
+        } else {
+            Write-Log ("Falha critica na execucao: {0}" -f $_.Exception.Message) 'ERROR'
+        }
+        if ($AutoRollback -and -not $blockedInfo.IsBlocked) {
             Invoke-BootstrapAutoRollback -State $state
         }
         if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
@@ -17224,7 +19305,7 @@ function Invoke-BootstrapProfileMode {
                 failedComponent = $failedComponent
                 completedComponents = @($successfullyCompleted.ToArray())
                 componentStatus = $state.ComponentStatus
-                howToFix = 'Revise o log do componente, rode -Audit para diagnostico e use -Resume apos corrigir dependencias.'
+                howToFix = $(if ($blockedInfo.IsBlocked -and [string]$blockedInfo.Action -eq 'restart-required') { 'Reinicie o Windows e execute novamente.' } else { 'Revise o log do componente, rode -Audit para diagnostico e use -Resume apos corrigir dependencias.' })
                 changesPath = $state.ChangeManifestPath
                 changesSummary = Get-BootstrapChangesSummary -State $state
                 rollbackAvailable = ((@($state.Changes.ToArray()).Count -gt 0) -or (-not [string]::IsNullOrWhiteSpace([string]$state.ChangeManifestPath)))
@@ -17631,6 +19712,12 @@ $invocationName = ''
 try { $invocationName = [string]$MyInvocation.InvocationName } catch { $invocationName = '' }
 $isDotSourced = ($invocationName -eq '.')
 
+function Stop-BootstrapProcess {
+    param([int]$Code)
+    $global:LASTEXITCODE = $Code
+    [Environment]::Exit($Code)
+}
+
 $useBootstrapSecretsMode = (
     $SecretsList -or
     $SecretsValidateAll -or
@@ -17678,48 +19765,57 @@ if (-not $isDotSourced) {
     if ($useBootstrapDoctorMode) {
         try {
             Invoke-BootstrapDoctorMode
-            exit 0
+            Stop-BootstrapProcess 0
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
                 Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'doctor' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-            exit 1
+            Stop-BootstrapProcess 1
         }
     }
 
     if ($useBootstrapSecretsMode) {
         try {
             Invoke-BootstrapSecretsMode
-            exit 0
+            Stop-BootstrapProcess 0
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
                 Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'secrets' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-            exit 1
+            Stop-BootstrapProcess 1
         }
     }
 
     if ($useBootstrapProfileMode) {
         try {
             Invoke-BootstrapProfileMode
-            exit 0
+            Stop-BootstrapProcess 0
         } catch {
+            $blockedInfo = Get-BootstrapBlockedErrorInfo -ErrorRecord $_
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'Invoke-BootstrapProfileMode-outer' })
+                if (-not ($blockedInfo.IsBlocked -and (Test-Path -LiteralPath $script:ResultPath))) {
+                    Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'Invoke-BootstrapProfileMode-outer' })
+                }
             }
-            Write-Log $_.Exception.Message 'ERROR'
-            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-            exit 1
+            if ($blockedInfo.IsBlocked) {
+                Write-Log $_.Exception.Message 'WARN'
+                Write-Log "Log salvo em: $script:LogPath" 'WARN'
+            } else {
+                Write-Log $_.Exception.Message 'ERROR'
+                Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            }
+            Stop-BootstrapProcess 1
         }
     }
 
     try {
         Write-Log "Início: $($script:StartTime.ToString('s'))"
         Write-Log "Log: $script:LogPath"
+        Write-Log "Result: $script:ResultPath"
         Write-Log "Admin: $(Test-IsAdmin)"
         Ensure-ProxyEnvFromWinHttp
 
@@ -17883,6 +19979,6 @@ if (-not $isDotSourced) {
         }
         Write-Log $_.Exception.Message 'ERROR'
         Write-Log "Log salvo em: $script:LogPath" 'ERROR'
-        exit 1
+        Stop-BootstrapProcess 1
     }
 }

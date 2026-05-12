@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$UiStatePath,
     [string]$UiLogPath,
     [switch]$SmokeTest
@@ -211,7 +211,7 @@ function Get-UiLanguages {
 }
 
 function Get-UiPageIds {
-    return @('welcome', 'selection', 'host-setup', 'app-tuning', 'api-center', 'api-catalog', 'steamdeck-control', 'dual-boot', 'review', 'run')
+    return @('welcome', 'selection', 'host-setup', 'app-tuning', 'ai-tools', 'api-center', 'api-catalog', 'steamdeck-control', 'dual-boot', 'review', 'run')
 }
 
 function Get-UiStrings {
@@ -260,6 +260,13 @@ function Get-UiStrings {
                 AppTuningUpdate     = 'Update'
                 AppTuningRunNow     = 'Run now'
                 AppTuningStatus     = 'Safe and reversible app tuning. Category app-install lists individual apps for on-demand installs.'
+                AiToolsTitle        = 'AI Coding Tools'
+                AiToolsStatus       = 'Install, validate, configure, uninstall, or open official docs for optional AI coding tools.'
+                AiToolsInstall      = 'Install'
+                AiToolsValidate     = 'Validate'
+                AiToolsConfigure    = 'Configure'
+                AiToolsUninstall    = 'Uninstall'
+                AiToolsDocs         = 'Open docs'
                 ApiCenterTitle      = 'API Keys Center'
                 ApiProviderSummary  = 'Providers overview'
                 ApiCredentials      = 'Saved keys (masked)'
@@ -335,9 +342,9 @@ function Get-UiStrings {
             return @{
                 WindowTitle        = 'Central Bootstrap Tools'
                 WelcomeTitle       = 'Bootstrap Tools + Steam Deck'
-                WelcomeSubtitle    = 'Setup simples do host, controle do Steam Deck e manutencao pos-instalacao.'
+                WelcomeSubtitle    = 'Setup simples do host, controle do Steam Deck e manutenção pós-instalação.'
                 Language           = 'Idioma'
-                QuickPresets       = 'Presets Rapidos'
+                QuickPresets       = 'Presets rápidos'
                 CustomPresets      = 'Presets Personalizados'
                 PresetName         = 'Nome do preset'
                 SavePreset         = 'Salvar preset'
@@ -348,9 +355,9 @@ function Get-UiStrings {
                 Filter             = 'Filtro'
                 Profiles           = 'Perfis prontos'
                 Components         = 'Ferramentas para instalar'
-                Excludes           = 'Nao instalar'
+                Excludes           = 'Não instalar'
                 SelectionDetails   = 'O que esta opcao faz'
-                QuickOptions       = 'Opcoes rapidas'
+                QuickOptions       = 'Opções rápidas'
                 OptClaudePlugins   = 'Claude Code: plugins'
                 OptClaudeProjectMcps = 'Claude Code: sync MCP no projeto'
                 OptOpenWebUI       = 'IA local: Open WebUI (Docker)'
@@ -374,6 +381,13 @@ function Get-UiStrings {
                 AppTuningUpdate     = 'Atualizar'
                 AppTuningRunNow     = 'Executar agora'
                 AppTuningStatus     = 'Otimização segura e reversível dos apps. Categoria app-install lista apps individuais sob demanda.'
+                AiToolsTitle        = 'AI Coding Tools'
+                AiToolsStatus       = 'Instale, valide, configure, desinstale ou abra docs oficiais de ferramentas opcionais de IA.'
+                AiToolsInstall      = 'Instalar'
+                AiToolsValidate     = 'Validar'
+                AiToolsConfigure    = 'Configurar'
+                AiToolsUninstall    = 'Desinstalar'
+                AiToolsDocs         = 'Abrir docs'
                 ApiCenterTitle      = 'Central de Chaves e APIs'
                 ApiProviderSummary  = 'Resumo dos provedores'
                 ApiCredentials      = 'Chaves salvas (mascaradas)'
@@ -390,12 +404,12 @@ function Get-UiStrings {
                 ApiCatalogTitle     = 'Catalogo completo de chaves'
                 ApiCatalogSubtitle  = 'Lista pesquisada de provedores com posse, uso configurado, finalidade, requisitos e links oficiais.'
                 ApiCatalogBack      = '<- Central de APIs'
-                HostHealth         = 'Nivel de manutencao'
+                HostHealth         = 'Nível de manutenção'
                 SteamDeckVersion   = 'Modelo do Steam Deck'
                 WorkspaceRoot      = 'Workspace Root'
-                CloneBaseDir       = 'Diretorio Base de Clones'
+                CloneBaseDir       = 'Diretório Base de Clones'
                 Browse             = 'Selecionar'
-                AdminNeeds         = 'Revisao de Admin'
+                AdminNeeds         = 'Revisão de Admin'
                 SteamDeckCenterTitle = 'Central do Steam Deck'
                 MonitorProfiles    = 'Monitores especificos'
                 MonitorFamilies    = 'Familias de monitores'
@@ -408,29 +422,29 @@ function Get-UiStrings {
                 PendingExternal    = 'Monitor externo desconhecido pendente'
                 ClassifyMonitor    = 'Monitor/Dev'
                 ClassifyTv         = 'TV/Game'
-                ReviewTitle        = 'Revisao'
-                RefreshReview      = 'Atualizar Revisao'
+                ReviewTitle        = 'Revisão'
+                RefreshReview      = 'Atualizar Revisão'
                 ReviewSummary      = 'Preview equivalente ao dry-run'
                 ReviewSideEffects  = 'Efeitos colaterais'
-                RunTitle           = 'Execucao'
-                StartRun           = '>  Iniciar Execucao'
+                RunTitle           = 'Execução'
+                StartRun           = '▶  Iniciar Execução'
                 OpenLog            = 'Abrir Log'
                 OpenResult         = 'Abrir Resultado'
                 OpenSettings       = 'Abrir Settings'
-                OpenReports        = 'Abrir Relatorios'
+                OpenReports        = 'Abrir Relatórios'
                 IdleStatus         = 'Pronto.'
                 SavingSettings     = 'Settings salvos.'
-                RunStarted         = 'Execucao iniciada.'
-                RunCompleted       = 'Execucao concluida.'
-                RunFailed          = 'Execucao falhou.'
-                UserCanceledElevation = 'Execucao cancelada ou elevacao negada.'
+                RunStarted         = 'Execução iniciada.'
+                RunCompleted       = 'Execução concluída.'
+                RunFailed          = 'Execução falhou.'
+                UserCanceledElevation = 'Execução cancelada ou elevação negada.'
                 Back               = '<- Voltar'
                 Next               = 'Avancar ->'
                 Finish             = 'Fechar'
                 Welcome            = 'Inicio'
                 Selection          = 'Escolher'
                 HostSetup          = 'Configurar PC'
-                AppTuning          = 'Otimizar Apps'
+                AppTuning          = 'Otimização de apps (AppTuning)'
                 ApiCenter          = 'Chaves (APIs)'
                 SteamDeckControl   = 'Steam Deck'
                 DualBoot           = 'Windows e Linux'
@@ -438,7 +452,7 @@ function Get-UiStrings {
                 Run                = 'Executar'
                 GenericMode        = 'Modo'
                 GenericLayout      = 'Layout'
-                GenericResolution  = 'Resolucao'
+                GenericResolution  = 'Resolução'
                 DisplayMode        = 'Modo de exibicao'
                 SessionHandheld    = 'HANDHELD'
                 SessionDockedTv    = 'DOCKED_TV'
@@ -452,12 +466,12 @@ function Get-UiStateDefaults {
     param($Contract)
     return [ordered]@{
         language           = 'pt-BR'
-        selectedProfiles   = @('recommended')
+        selectedProfiles   = @('safe-base')
         selectedComponents = @()
         excludedComponents = @()
         enableClaudeCodeProjectMcps = $false
-        hostHealth         = 'conservador'
-        appTuningMode      = 'recommended'
+        hostHealth         = 'off'
+        appTuningMode      = 'off'
         selectedAppTuningCategories = @()
         selectedAppTuningItems = @()
         excludedAppTuningItems = @()
@@ -476,6 +490,20 @@ function Get-UiStateDefaults {
         lastReportPath     = $null
         lastSettingsPath   = Get-BootstrapSteamDeckSettingsPath
     }
+}
+
+function Normalize-UiScalarPath {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return '' }
+    if ($Value -is [string]) { return ([string]$Value).Trim() }
+    if ($Value -is [System.ValueType]) { return ([string]$Value).Trim() }
+    if (($Value -is [System.Collections.IEnumerable]) -and -not ($Value -is [string])) {
+        $items = @($Value)
+        if ($items.Count -eq 1 -and $items[0] -is [string]) { return ([string]$items[0]).Trim() }
+        return ''
+    }
+    return ''
 }
 
 function Normalize-UiState {
@@ -498,12 +526,12 @@ function Normalize-UiState {
     $language = [string]$normalized['language']
     if ((Get-UiLanguages) -notcontains $language) { $normalized['language'] = 'pt-BR' }
     if ([string]::IsNullOrWhiteSpace([string]$normalized['hostHealth'])) {
-        $normalized['hostHealth'] = 'conservador'
+        $normalized['hostHealth'] = 'off'
     } else {
         $normalized['hostHealth'] = Normalize-BootstrapHostHealthMode -Mode ([string]$normalized['hostHealth'])
     }
     if ([string]::IsNullOrWhiteSpace([string]$normalized['appTuningMode'])) {
-        $normalized['appTuningMode'] = 'recommended'
+        $normalized['appTuningMode'] = 'off'
     } else {
         $normalized['appTuningMode'] = Normalize-BootstrapAppTuningMode -Mode ([string]$normalized['appTuningMode'])
     }
@@ -512,6 +540,11 @@ function Normalize-UiState {
     }
     if (-not $normalized.ContainsKey('customPresets') -or -not ($normalized['customPresets'] -is [hashtable])) {
         $normalized['customPresets'] = @{}
+    }
+    foreach ($pathField in @('lastLogPath', 'lastResultPath', 'lastReportPath', 'lastSettingsPath', 'workspaceRoot', 'cloneBaseDir', 'cacheDir')) {
+        if ($normalized.ContainsKey($pathField)) {
+            $normalized[$pathField] = Normalize-UiScalarPath -Value $normalized[$pathField]
+        }
     }
     return $normalized
 }
@@ -617,6 +650,7 @@ function Get-UiBrush {
         <SolidColorBrush x:Key="SuccessBrush"  Color="#10B981"/>
         <SolidColorBrush x:Key="ErrorBrush"    Color="#EF4444"/>
         <SolidColorBrush x:Key="WarnBrush"     Color="#F59E0B"/>
+        <SolidColorBrush x:Key="FocusVisualBrush" Color="#FBBF24"/>
         <SolidColorBrush x:Key="SidebarBg"     Color="#13162B"/>
         <SolidColorBrush x:Key="NavHoverBg"    Color="#1E2240"/>
         <SolidColorBrush x:Key="NavActiveBg"   Color="#2D1B69"/>
@@ -654,7 +688,8 @@ function Get-UiBrush {
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="TextBox">
-                        <Border Background="{TemplateBinding Background}"
+                        <Border x:Name="InputBorder"
+                                Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
                                 CornerRadius="6">
@@ -662,6 +697,16 @@ function Get-UiBrush {
                                           Margin="{TemplateBinding Padding}"
                                           VerticalAlignment="Center"/>
                         </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="InputBorder" Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
+                                <Setter TargetName="InputBorder" Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                            <Trigger Property="IsFocused" Value="True">
+                                <Setter TargetName="InputBorder" Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
+                                <Setter TargetName="InputBorder" Property="BorderThickness" Value="2"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
@@ -814,6 +859,10 @@ function Get-UiBrush {
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#6D28D9"/>
                             </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
+                                <Setter TargetName="border" Property="BorderThickness" Value="2"/>
+                            </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="border" Property="Background" Value="#374151"/>
                                 <Setter Property="Foreground" Value="#94A3B8"/>
@@ -852,6 +901,10 @@ function Get-UiBrush {
                             <Trigger Property="IsPressed" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#252840"/>
                             </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
+                                <Setter TargetName="border" Property="BorderThickness" Value="2"/>
+                            </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Foreground" Value="#94A3B8"/>
                             </Trigger>
@@ -889,6 +942,10 @@ function Get-UiBrush {
                                 <Setter TargetName="border" Property="BorderBrush" Value="#7C3AED"/>
                                 <Setter Property="Foreground" Value="#E2E8F0"/>
                             </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
+                                <Setter TargetName="border" Property="BorderThickness" Value="2"/>
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -922,6 +979,10 @@ function Get-UiBrush {
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="border" Property="Background" Value="#1E2240"/>
                                 <Setter Property="Foreground" Value="#E2E8F0"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
+                                <Setter TargetName="border" Property="BorderThickness" Value="2"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -1003,6 +1064,21 @@ function Get-UiBrush {
             </Style.Triggers>
         </Style>
 
+        <Style TargetType="DataGridRow">
+            <Setter Property="Foreground" Value="#CBD5E1"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
+                    <Setter Property="BorderThickness" Value="1"/>
+                </Trigger>
+                <Trigger Property="IsSelected" Value="True">
+                    <Setter Property="Background" Value="#2D1B69"/>
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
         <!-- CheckBox style -->
         <Style x:Key="DarkCheck" TargetType="CheckBox">
             <Setter Property="Foreground"   Value="#CBD5E1"/>
@@ -1043,6 +1119,9 @@ function Get-UiBrush {
                                 <Setter TargetName="CheckBorder" Property="Background" Value="#7C3AED"/>
                                 <Setter TargetName="CheckBorder" Property="BorderBrush" Value="#C4B5FD"/>
                                 <Setter TargetName="CheckMark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="CheckBorder" Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter Property="Foreground" Value="#64748B"/>
@@ -1125,57 +1204,67 @@ function Get-UiBrush {
 
                 <!-- Nav items -->
                 <StackPanel x:Name="NavPanel" DockPanel.Dock="Top" Margin="0,0,0,0">
+                    <TextBlock Text="Instalação" Foreground="#64748B" FontSize="10" FontWeight="SemiBold" Margin="22,0,0,6"/>
                     <ToggleButton x:Name="NavWelcome"      Style="{StaticResource NavBtn}" IsChecked="True">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="⌂" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavWelcomeText" Text="Início" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavSelection"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="▣" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavSelectionText" Text="Escolher" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavHostSetup"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="⚙" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavHostSetupText" Text="Configurar PC" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavAppTuning"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="◈" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavAppTuningText" Text="Otimizar Apps" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
+                    <ToggleButton x:Name="NavAiTools"    Style="{StaticResource NavBtn}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="AI" FontSize="12" FontWeight="SemiBold" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="NavAiToolsText" Text="AI Coding Tools" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <TextBlock Text="Credenciais" Foreground="#64748B" FontSize="10" FontWeight="SemiBold" Margin="22,12,0,6"/>
                     <ToggleButton x:Name="NavApiCenter"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="●" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavApiCenterText" Text="Chaves (APIs)" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
+                    <TextBlock Text="Steam Deck" Foreground="#64748B" FontSize="10" FontWeight="SemiBold" Margin="22,12,0,6"/>
                     <ToggleButton x:Name="NavSteamDeck"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="▤" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavSteamDeckText" Text="Steam Deck" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
+                    <TextBlock Text="Sistema avançado" Foreground="#64748B" FontSize="10" FontWeight="SemiBold" Margin="22,12,0,6"/>
                     <ToggleButton x:Name="NavDualBoot"       Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="⏻" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavDualBootText" Text="Dual Boot" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavReview"       Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="✓" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavReviewText" Text="Revisar" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavRun"          Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text=">" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock Text="▶" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavRunText" Text="Executar" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
@@ -1197,7 +1286,7 @@ function Get-UiBrush {
             <ScrollViewer x:Name="PageWelcome" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="WelcomeTitleLabel"    Style="{StaticResource PageTitle}"    Text="Bootstrap Tools + Steam Deck"/>
-                    <TextBlock x:Name="WelcomeSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Setup simples do host, controle do Steam Deck e manutencao pos-instalacao."
+                    <TextBlock x:Name="WelcomeSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Setup simples do host, controle do Steam Deck e manutenção pós-instalação."
                                TextWrapping="Wrap"/>
 
                     <!-- Language selector -->
@@ -1223,7 +1312,7 @@ function Get-UiBrush {
                         <!-- Quick Presets -->
                         <Border Grid.Row="0" Grid.Column="0" Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock x:Name="QuickPresetsLabel" Style="{StaticResource SectionLabel}" Text="PRESETS RPIDOS"/>
+                                <TextBlock x:Name="QuickPresetsLabel" Style="{StaticResource SectionLabel}" Text="PRESETS RÁPIDOS"/>
                                 <Button x:Name="PresetRecommended"      Style="{StaticResource PresetBtn}" Tag="recommended"      Content="*  recommended"/>
                                 <Button x:Name="PresetLegacy"           Style="{StaticResource PresetBtn}" Tag="legacy"           Content="  legacy"/>
                                 <Button x:Name="PresetFull"             Style="{StaticResource PresetBtn}" Tag="full"             Content="  full"/>
@@ -1256,7 +1345,7 @@ function Get-UiBrush {
                         <!-- Maintenance Card -->
                         <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Style="{StaticResource Card}">
                             <DockPanel>
-                                <TextBlock x:Name="MaintenanceLabel" Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="MANUTENCAO E RESILIENCIA"/>
+                                <TextBlock x:Name="MaintenanceLabel" Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="MANUTENÇÃO E RESILIÊNCIA"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                     <Button x:Name="AuditIntegrityButton" Style="{StaticResource GhostBtn}" Content="  Verificar Integridade (Audit)" Height="32" Margin="0,0,12,0"/>
                                     <Button x:Name="RollbackChangesButton" Style="{StaticResource GhostBtn}" Content="  Reverter Tweaks (Rollback)" Foreground="{StaticResource WarnBrush}" Height="32" Margin="0,0,12,0"/>
@@ -1331,7 +1420,7 @@ function Get-UiBrush {
                         </Grid.RowDefinitions>
                         <Border Grid.Row="0" Style="{StaticResource Card}">
                             <DockPanel>
-                                <TextBlock x:Name="QuickOptionsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="OPCOES RAPIDAS"/>
+                                <TextBlock x:Name="QuickOptionsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="OPÇÕES RÁPIDAS"/>
                                 <StackPanel Margin="0,6,0,0">
                                     <CheckBox x:Name="OptClaudePluginsCheckBox" Style="{StaticResource DarkCheck}" Content="Claude Code: plugins"/>
                                     <CheckBox x:Name="OptClaudeProjectMcpsCheckBox" Style="{StaticResource DarkCheck}" Content="Claude Code: sync MCP no projeto"/>
@@ -1346,7 +1435,7 @@ function Get-UiBrush {
                         </Border>
                         <Border Grid.Row="2" Style="{StaticResource Card}">
                             <DockPanel>
-                                <TextBlock x:Name="ExcludeLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="EXCLUSES OPCIONAIS"/>
+                            <TextBlock x:Name="ExcludeLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="EXCLUSÕES OPCIONAIS"/>
                                 <ListBox x:Name="ExcludeList" Background="Transparent" BorderThickness="0"
                                          Foreground="#CBD5E1" Margin="0,4,0,0"/>
                             </DockPanel>
@@ -1373,8 +1462,8 @@ function Get-UiBrush {
             <!--  HOST SETUP PAGE  -->
             <ScrollViewer x:Name="PageHostSetup" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
-                    <TextBlock x:Name="HostTitleLabel" Style="{StaticResource PageTitle}" Text="Configurao do Host"/>
-                    <TextBlock Style="{StaticResource PageSubtitle}" Text="Configuraes de ambiente e sade do sistema." TextWrapping="Wrap"/>
+                    <TextBlock x:Name="HostTitleLabel" Style="{StaticResource PageTitle}" Text="Configuração do Host"/>
+                    <TextBlock Style="{StaticResource PageSubtitle}" Text="Configurações de ambiente e saúde do sistema." TextWrapping="Wrap"/>
 
                     <Border Style="{StaticResource Card}" Margin="0,0,0,16">
                         <Grid>
@@ -1390,7 +1479,7 @@ function Get-UiBrush {
 
                             <TextBlock x:Name="HostHealthLabel"       Grid.Row="0" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="HostHealth"/>
                             <ComboBox  x:Name="HostHealthCombo"       Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
-                            <TextBlock x:Name="SteamDeckVersionLabel" Grid.Row="2" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Verso Steam Deck"/>
+                            <TextBlock x:Name="SteamDeckVersionLabel" Grid.Row="2" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Versão Steam Deck"/>
                             <ComboBox  x:Name="SteamDeckVersionCombo" Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
                         </Grid>
                     </Border>
@@ -1418,7 +1507,7 @@ function Get-UiBrush {
 
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
-                            <TextBlock x:Name="AdminNeedsTitleLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="REVISAO DE ADMIN"/>
+                            <TextBlock x:Name="AdminNeedsTitleLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="REVISÃO DE ADMIN"/>
                             <TextBox   x:Name="AdminNeedsTextBox" Style="{StaticResource DarkReadonly}"
                                        Height="160" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0"/>
                         </DockPanel>
@@ -1460,8 +1549,8 @@ function Get-UiBrush {
                         <TextBlock Grid.Row="0" Grid.Column="6" Foreground="#94A3B8" VerticalAlignment="Center" Text="Risco" ToolTip="Filtre por risco: conservative, advanced, aggressive."/>
                         <ComboBox x:Name="AppTuningRiskFilterCombo" Grid.Row="0" Grid.Column="7" Style="{StaticResource DarkCombo}" ToolTip="Filtre itens por risco operacional."/>
 
-                        <TextBlock x:Name="AppTuningStatusLabel" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="4" Foreground="#94A3B8" VerticalAlignment="Center" TextWrapping="Wrap"/>
-                        <StackPanel Grid.Row="2" Grid.Column="4" Grid.ColumnSpan="4" Orientation="Horizontal" HorizontalAlignment="Right">
+                        <TextBlock x:Name="AppTuningStatusLabel" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="3" Foreground="#94A3B8" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                        <WrapPanel Grid.Row="2" Grid.Column="3" Grid.ColumnSpan="5" HorizontalAlignment="Right">
                             <Button x:Name="AppTuningRecommendedButton" Style="{StaticResource GhostBtn}" Content="Marcar recomendados" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningMarkCategoryButton" Style="{StaticResource GhostBtn}" Content="Marcar categoria" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningClearCategoryButton" Style="{StaticResource GhostBtn}" Content="Limpar categoria" Margin="0,0,8,0" Height="32"/>
@@ -1471,7 +1560,7 @@ function Get-UiBrush {
                             <Button x:Name="AppTuningConfigureButton" Style="{StaticResource PrimaryBtn}" Content="Configurar/Otimizar" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningUpdateButton" Style="{StaticResource GhostBtn}" Content="Atualizar" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningRunNowButton" Style="{StaticResource PrimaryBtn}" Content="Executar agora" Height="32"/>
-                        </StackPanel>
+                        </WrapPanel>
                         <TextBlock x:Name="AppTuningRiskWarningLabel" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="8" Margin="0,8,0,0" Foreground="#F59E0B" TextWrapping="Wrap" ToolTip="SecurityImpact gate for ai-agent-performance and other risky AppTuning items."/>
                     </Grid>
                 </Border>
@@ -1518,6 +1607,45 @@ function Get-UiBrush {
                 <Border Background="#1A1D2E" CornerRadius="8" Padding="12,8" Margin="0,10,0,0">
                     <TextBlock x:Name="AppTuningHintLabel" Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap"/>
                 </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!--  AI CODING TOOLS PAGE  -->
+            <ScrollViewer x:Name="PageAiTools" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
+                <StackPanel>
+                    <TextBlock x:Name="AiToolsTitleLabel" Style="{StaticResource PageTitle}" Text="AI Coding Tools"/>
+                    <TextBlock x:Name="AiToolsSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Instale, valide, configure, desinstale ou abra docs oficiais de ferramentas opcionais de IA." TextWrapping="Wrap"/>
+
+                    <Border Background="#1A1D2E" CornerRadius="8" Padding="14,10" Margin="0,0,0,14">
+                        <DockPanel>
+                            <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
+                                <Button x:Name="AiToolsInstallButton" Style="{StaticResource GhostBtn}" Content="Instalar" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsValidateButton" Style="{StaticResource GhostBtn}" Content="Validar" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsConfigureButton" Style="{StaticResource PrimaryBtn}" Content="Configurar" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsUninstallButton" Style="{StaticResource GhostBtn}" Foreground="{StaticResource WarnBrush}" Content="Desinstalar" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsDocsButton" Style="{StaticResource GhostBtn}" Content="Abrir docs" Height="32"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="AiToolsStatusLabel" Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                        </DockPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource Card}">
+                        <DockPanel>
+                            <TextBlock Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="FERRAMENTAS OPCIONAIS"/>
+                            <DataGrid x:Name="AiToolsGrid" Style="{StaticResource DarkGrid}" Height="500" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Single" IsReadOnly="True">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Tool" Binding="{Binding tool}" Width="1.0*"/>
+                                    <DataGridTextColumn Header="Nome" Binding="{Binding name}" Width="1.4*"/>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding status}" Width="0.9*"/>
+                                    <DataGridTextColumn Header="Versão" Binding="{Binding version}" Width="1.1*"/>
+                                    <DataGridTextColumn Header="Suporte" Binding="{Binding support}" Width="1.0*"/>
+                                    <DataGridTextColumn Header="Comando" Binding="{Binding commandPath}" Width="1.7*"/>
+                                    <DataGridTextColumn Header="Mensagem" Binding="{Binding message}" Width="2.2*"/>
+                                    <DataGridTextColumn Header="Docs" Binding="{Binding docs}" Width="1.5*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
 
@@ -1751,7 +1879,7 @@ function Get-UiBrush {
                                     <DataGridTextColumn Header="Serial"            Binding="{Binding serial}"            Width="*"/>
                                     <DataGridComboBoxColumn Header="Perfil"        SelectedItemBinding="{Binding mode, UpdateSourceTrigger=PropertyChanged}" ItemsSource="{StaticResource SteamDeckExternalModes}" Width="*"/>
                                     <DataGridTextColumn Header="Layout"            Binding="{Binding layout}"            Width="*"/>
-                                    <DataGridTextColumn Header="Resolucao"         Binding="{Binding resolutionPolicy}"  Width="*"/>
+                                    <DataGridTextColumn Header="Resolução"         Binding="{Binding resolutionPolicy}"  Width="*"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                                 <TextBlock Foreground="#94A3B8" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"
@@ -1772,7 +1900,7 @@ function Get-UiBrush {
                                     <DataGridTextColumn Header="Padrao do nome"    Binding="{Binding namePattern}"       Width="*"/>
                                     <DataGridComboBoxColumn Header="Perfil"        SelectedItemBinding="{Binding mode, UpdateSourceTrigger=PropertyChanged}" ItemsSource="{StaticResource SteamDeckExternalModes}" Width="*"/>
                                     <DataGridTextColumn Header="Layout"            Binding="{Binding layout}"            Width="*"/>
-                                    <DataGridTextColumn Header="Resolucao"         Binding="{Binding resolutionPolicy}"  Width="*"/>
+                                    <DataGridTextColumn Header="Resolução"         Binding="{Binding resolutionPolicy}"  Width="*"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                                 <TextBlock Foreground="#94A3B8" FontSize="11" Margin="0,8,0,0" TextWrapping="Wrap"
@@ -1809,7 +1937,7 @@ function Get-UiBrush {
                                     <ComboBox  x:Name="GenericModeCombo"       Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
                                     <TextBlock x:Name="GenericLayoutLabel"     Grid.Row="2" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Layout"/>
                                     <TextBox   x:Name="GenericLayoutTextBox"   Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkInput}" Height="32"/>
-                                    <TextBlock x:Name="GenericResolutionLabel" Grid.Row="4" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Resolucao"/>
+                                    <TextBlock x:Name="GenericResolutionLabel" Grid.Row="4" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Resolução"/>
                                     <TextBox   x:Name="GenericResolutionTextBox" Grid.Row="4" Grid.Column="1" Style="{StaticResource DarkInput}" Height="32"/>
                                     <TextBlock x:Name="DisplayModeLabel"       Grid.Row="6" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Display"/>
                                     <ComboBox  x:Name="DisplayModeCombo"       Grid.Row="6" Grid.Column="1" Style="{StaticResource DarkCombo}" ItemsSource="{StaticResource SteamDeckDisplayModes}"/>
@@ -1976,12 +2104,15 @@ function Get-UiBrush {
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0">
-                    <TextBlock x:Name="ReviewTitleLabel" Style="{StaticResource PageTitle}" Text="Revisao"/>
+                    <TextBlock x:Name="ReviewTitleLabel" Style="{StaticResource PageTitle}" Text="Revisão"/>
                 </StackPanel>
 
                 <Border Grid.Row="1" Background="#1A1D2E" CornerRadius="8" Padding="14,10" Margin="0,0,0,14">
                     <DockPanel>
-                        <Button x:Name="RefreshReviewButton" DockPanel.Dock="Right" Style="{StaticResource GhostBtn}" Content=" Atualizar" Height="32"/>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+                            <CheckBox x:Name="ReviewAcceptedCheckBox" Style="{StaticResource DarkCheck}" Content="Aceito esta revisão" Margin="0,0,12,0"/>
+                            <Button x:Name="RefreshReviewButton" Style="{StaticResource GhostBtn}" Content=" Atualizar" Height="32"/>
+                        </StackPanel>
                         <StackPanel>
                             <TextBlock x:Name="ReviewMetaLabel" Foreground="#94A3B8" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"/>
                             <TextBlock x:Name="ReviewLinksLabel" Foreground="#94A3B8" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed">
@@ -2015,18 +2146,18 @@ function Get-UiBrush {
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <TextBlock Grid.Row="0" x:Name="RunTitleLabel" Style="{StaticResource PageTitle}" Text="Execucao"/>
+                <TextBlock Grid.Row="0" x:Name="RunTitleLabel" Style="{StaticResource PageTitle}" Text="Execução"/>
 
                 <!-- Action bar -->
                 <Border Grid.Row="1" Background="#1A1D2E" CornerRadius="10" Padding="16,12" Margin="0,0,0,16">
                     <DockPanel>
                         <Button x:Name="StartRunButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryBtn}"
-                                Content=">  Iniciar Execucao" FontSize="15" Height="40"/>
+                                Content="▶  Iniciar Execução" FontSize="15" Height="40"/>
                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                             <Button x:Name="OpenLogButton"     Style="{StaticResource GhostBtn}" Content=" Log"        Margin="0,0,8,0" Height="34"/>
                             <Button x:Name="OpenResultButton"  Style="{StaticResource GhostBtn}" Content=" Resultado"  Margin="0,0,8,0" Height="34"/>
-                            <Button x:Name="OpenSettingsButton" Style="{StaticResource GhostBtn}" Content="[gear] Settings"   Margin="0,0,8,0" Height="34"/>
-                            <Button x:Name="OpenReportsButton" Style="{StaticResource GhostBtn}" Content=" Relatorios" Height="34"/>
+                            <Button x:Name="OpenSettingsButton" Style="{StaticResource GhostBtn}" Content="⚙ Settings"   Margin="0,0,8,0" Height="34"/>
+                            <Button x:Name="OpenReportsButton" Style="{StaticResource GhostBtn}" Content=" Relatórios" Height="34"/>
                         </StackPanel>
                     </DockPanel>
                 </Border>
@@ -2117,7 +2248,7 @@ $ui = [ordered]@{
     RunProcess            = $null
     ExecutionScopeOverride = $null
     CurrentExecutionScopeLabel = ''
-    # 'none' = instalacao/perfil normal; 'audit' / 'rollback' apenas quando disparado pelos botoes de manutencao.
+    # 'none' = instalação/perfil normal; 'audit' / 'rollback' apenas quando disparado pelos botões de manutenção.
     MaintenanceMode          = 'none'
 
     # Window
@@ -2128,6 +2259,7 @@ $ui = [ordered]@{
     NavSelection          = (Get-Control 'NavSelection')
     NavHostSetup          = (Get-Control 'NavHostSetup')
     NavAppTuning          = (Get-Control 'NavAppTuning')
+    NavAiTools            = (Get-Control 'NavAiTools')
     NavApiCenter          = (Get-Control 'NavApiCenter')
     NavSteamDeck          = (Get-Control 'NavSteamDeck')
     NavDualBoot           = (Get-Control 'NavDualBoot')
@@ -2137,6 +2269,7 @@ $ui = [ordered]@{
     NavSelectionText      = (Get-Control 'NavSelectionText')
     NavHostSetupText      = (Get-Control 'NavHostSetupText')
     NavAppTuningText      = (Get-Control 'NavAppTuningText')
+    NavAiToolsText        = (Get-Control 'NavAiToolsText')
     NavApiCenterText      = (Get-Control 'NavApiCenterText')
     NavSteamDeckText      = (Get-Control 'NavSteamDeckText')
     NavDualBootText       = (Get-Control 'NavDualBootText')
@@ -2236,6 +2369,17 @@ $ui = [ordered]@{
     AppTuningItemsGrid    = (Get-Control 'AppTuningItemsGrid')
     AppTuningHintLabel    = (Get-Control 'AppTuningHintLabel')
 
+    # AI Coding Tools
+    AiToolsTitleLabel     = (Get-Control 'AiToolsTitleLabel')
+    AiToolsSubtitleLabel  = (Get-Control 'AiToolsSubtitleLabel')
+    AiToolsStatusLabel    = (Get-Control 'AiToolsStatusLabel')
+    AiToolsGrid           = (Get-Control 'AiToolsGrid')
+    AiToolsInstallButton  = (Get-Control 'AiToolsInstallButton')
+    AiToolsValidateButton = (Get-Control 'AiToolsValidateButton')
+    AiToolsConfigureButton = (Get-Control 'AiToolsConfigureButton')
+    AiToolsUninstallButton = (Get-Control 'AiToolsUninstallButton')
+    AiToolsDocsButton     = (Get-Control 'AiToolsDocsButton')
+
     # API Center
     ApiCenterTitleLabel   = (Get-Control 'ApiCenterTitleLabel')
     ApiProviderSummaryLabel = (Get-Control 'ApiProviderSummaryLabel')
@@ -2329,6 +2473,7 @@ $ui = [ordered]@{
     ReviewSummaryLabel    = (Get-Control 'ReviewSummaryLabel')
     ReviewSideEffectsLabel = (Get-Control 'ReviewSideEffectsLabel')
     ReviewSideEffectsTextBox = (Get-Control 'ReviewSideEffectsTextBox')
+    ReviewAcceptedCheckBox = (Get-Control 'ReviewAcceptedCheckBox')
     RefreshReviewButton   = (Get-Control 'RefreshReviewButton')
     ReviewMetaLabel       = (Get-Control 'ReviewMetaLabel')
     ReviewLinksLabel      = (Get-Control 'ReviewLinksLabel')
@@ -2347,7 +2492,7 @@ $ui = [ordered]@{
     RunLogTextBox         = (Get-Control 'RunLogTextBox')
 
     # Pages (panels identified by WPF name)
-    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageAppTuning', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
+    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageAppTuning', 'PageAiTools', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
 }
 
 #
@@ -2357,6 +2502,10 @@ $ui = [ordered]@{
 $logTimer = New-Object System.Windows.Threading.DispatcherTimer
 $logTimer.Interval = [TimeSpan]::FromMilliseconds(1200)
 $ui.LogTimer = $logTimer
+
+$appTuningRefreshTimer = New-Object System.Windows.Threading.DispatcherTimer
+$appTuningRefreshTimer.Interval = [TimeSpan]::FromMilliseconds(300)
+$ui.AppTuningRefreshTimer = $appTuningRefreshTimer
 
 #
 # Helper: WPF DataGrid population
@@ -2842,6 +2991,14 @@ function Refresh-LocalizedText {
     $ui.AppTuningUpdateButton.Content  = $ui.Strings.AppTuningUpdate
     $ui.AppTuningRunNowButton.Content  = $ui.Strings.AppTuningRunNow
     $ui.AppTuningHintLabel.Text        = $ui.Strings.AppTuningStatus
+    $ui.AiToolsTitleLabel.Text         = $ui.Strings.AiToolsTitle
+    $ui.AiToolsSubtitleLabel.Text      = $ui.Strings.AiToolsStatus
+    $ui.AiToolsStatusLabel.Text        = $ui.Strings.AiToolsStatus
+    $ui.AiToolsInstallButton.Content   = $ui.Strings.AiToolsInstall
+    $ui.AiToolsValidateButton.Content  = $ui.Strings.AiToolsValidate
+    $ui.AiToolsConfigureButton.Content = $ui.Strings.AiToolsConfigure
+    $ui.AiToolsUninstallButton.Content = $ui.Strings.AiToolsUninstall
+    $ui.AiToolsDocsButton.Content      = $ui.Strings.AiToolsDocs
     $ui.ApiCenterTitleLabel.Text       = $ui.Strings.ApiCenterTitle
     $ui.ApiProviderSummaryLabel.Text   = $ui.Strings.ApiProviderSummary.ToUpper()
     $ui.ApiCredentialsLabel.Text       = $ui.Strings.ApiCredentials.ToUpper()
@@ -2903,6 +3060,7 @@ function Refresh-LocalizedText {
     $ui.NavSelectionText.Text  = $ui.Strings.Selection
     $ui.NavHostSetupText.Text  = $ui.Strings.HostSetup
     $ui.NavAppTuningText.Text  = $ui.Strings.AppTuning
+    $ui.NavAiToolsText.Text    = $ui.Strings.AiToolsTitle
     $ui.NavApiCenterText.Text  = $ui.Strings.ApiCenter
     $ui.NavSteamDeckText.Text  = $ui.Strings.SteamDeckControl
     $ui.NavDualBootText.Text   = $ui.Strings.DualBoot
@@ -3106,7 +3264,7 @@ function Refresh-SelectionTrees {
             $cb.ToolTip = "Componente: $componentName`nDescrição: $([string]$component.description)`nTipo: $([string]$component.kind)`nEstágio: $([string]$component.stage)`nDepende de: $(@($component.dependsOn) -join ', ')"
             if ($isResolvedComponent -and -not $isExplicitComponent) {
                 $cb.Opacity = 0.82
-                $cb.ToolTip = if ($canExcludeComponent) { 'Incluido pelo perfil selecionado. Desmarcar item vindo de perfil adiciona em Nao instalar.' } else { 'Componente obrigatorio/dependencia base. Remova o perfil ou componente que depende dele.' }
+                $cb.ToolTip = if ($canExcludeComponent) { 'Incluído pelo perfil selecionado. Desmarcar item vindo de perfil adiciona em Não instalar.' } else { 'Componente obrigatório/dependência base. Remova o perfil ou componente que depende dele.' }
             }
             $item.Header = $cb
             $cb.Add_Checked({
@@ -3132,7 +3290,7 @@ function Refresh-SelectionTrees {
                     return
                 }
                 if ([bool]$this.Tag.resolved -and -not (@($ui.State.excludedComponents) -contains $name)) {
-                    # Desmarcar item vindo de perfil adiciona em Nao instalar.
+                    # Desmarcar item vindo de perfil adiciona em Não instalar.
                     $ui.State.excludedComponents = @(@($ui.State.excludedComponents) + $name)
                 }
                 if ([bool]$this.Tag.explicit) {
@@ -3509,7 +3667,7 @@ function Refresh-AppTuningControls {
         $ui.AppTuningStatusLabel.Text = "AppTuning: $($plan.mode) | apps: $installedCount/$(@($statusRows).Count) instalados | config: $configuredCount | selecionados: $(@($plan.items).Count) | exibidos: $filteredCount/$(@($statusRows).Count) | status: $statusFilter | risco: $riskFilter"
         if ($ui.AppTuningRiskWarningLabel) {
             if ($securityImpactCount -gt 0) {
-                $ui.AppTuningRiskWarningLabel.Text = "SecurityImpact: $securityImpactCount item(ns) selecionado(s). Preview mostra rollback; execucao exige confirmacao."
+                $ui.AppTuningRiskWarningLabel.Text = "SecurityImpact: $securityImpactCount item(ns) selecionado(s). Preview mostra rollback; execução exige confirmação."
             } elseif ($riskyCount -gt 0) {
                 $ui.AppTuningRiskWarningLabel.Text = "Risco avancado: $riskyCount item(ns) selecionado(s), sem impacto de seguranca declarado."
             } else {
@@ -3530,6 +3688,15 @@ function Refresh-AppTuningControls {
         }
     } catch {
         $ui.AppTuningStatusLabel.Text = "AppTuning erro: $($_.Exception.Message)"
+    }
+}
+
+function Request-AppTuningRefresh {
+    if ($ui.AppTuningRefreshTimer) {
+        $ui.AppTuningRefreshTimer.Stop()
+        $ui.AppTuningRefreshTimer.Start()
+    } else {
+        Refresh-AppTuningControls
     }
 }
 
@@ -3658,7 +3825,7 @@ function Prompt-AppTuningNavigateToReview {
         $ActionMessage
         ''
         'A acao foi apenas planejada. Nada foi executado ainda.'
-        'Deseja ir para Revisao agora para confirmar e executar?'
+        'Deseja ir para Revisão agora para confirmar e executar?'
     ) -join [Environment]::NewLine
     $answer = [System.Windows.MessageBox]::Show(
         $prompt,
@@ -3677,13 +3844,29 @@ function Prompt-AppTuningNavigateToReview {
             Navigate-ToPage -Index 8
         }
     } catch {
-        Write-UiLog -Level 'WARN' -Message ("Falha ao navegar para Revisao apos AppTuning: {0}" -f $_.Exception.Message)
+        Write-UiLog -Level 'WARN' -Message ("Falha ao navegar para Revisão após AppTuning: {0}" -f $_.Exception.Message)
     }
 }
 
 function Clear-ExecutionScopeOverride {
     $ui.ExecutionScopeOverride = $null
     $ui.CurrentExecutionScopeLabel = ''
+}
+
+function Normalize-UiComponentOnlyExecutionScope {
+    param([Parameter(Mandatory = $true)]$Snapshot)
+
+    $hasProfiles = (@($Snapshot.selectedProfiles).Count -gt 0)
+    $hasComponents = (@($Snapshot.selectedComponents).Count -gt 0)
+    if ($hasComponents -and -not $hasProfiles) {
+        $Snapshot.scopeLabel = 'Instalacao isolada (somente componentes selecionados)'
+        $Snapshot.hostHealth = 'off'
+        if (@($Snapshot.selectedAppTuningCategories).Count -eq 0 -and @($Snapshot.selectedAppTuningItems).Count -eq 0) {
+            $Snapshot.appTuningMode = 'off'
+            $Snapshot.excludedAppTuningItems = @()
+        }
+    }
+    return $Snapshot
 }
 
 function New-ExecutionScopeSnapshot {
@@ -3725,6 +3908,7 @@ function New-ExecutionScopeSnapshot {
         $snapshot.excludedAppTuningItems = @()
     }
 
+    $snapshot = Normalize-UiComponentOnlyExecutionScope -Snapshot $snapshot
     return $snapshot
 }
 
@@ -3810,6 +3994,68 @@ function Get-IsolatedAppTuningExecutionOverride {
         selectedAppTuningItems = @($selectedItemSet.Keys | Sort-Object)
         excludedAppTuningItems = @()
     }))
+}
+
+function Get-IsolatedComponentExecutionOverride {
+    return (New-ExecutionScopeSnapshot -Source 'isolated-component-builder' -Scope ([ordered]@{
+        scopeMode = 'isolated'
+        scopeLabel = 'Somente componentes selecionados'
+        selectedProfiles = @()
+        selectedComponents = @($ui.State.selectedComponents)
+        excludedComponents = @()
+        hostHealth = 'off'
+        appTuningMode = 'off'
+        selectedAppTuningCategories = @()
+        selectedAppTuningItems = @()
+        excludedAppTuningItems = @()
+    }))
+}
+
+function Confirm-UiExecutionScope {
+    param(
+        [ValidateSet('none', 'audit', 'rollback')]
+        [string]$MaintenanceIntent = 'none'
+    )
+
+    if ([string]$MaintenanceIntent -ne 'none') { return $true }
+    if ($ui.ExecutionScopeOverride) { return $true }
+
+    $profileCount = @($ui.State.selectedProfiles).Count
+    $componentCount = @($ui.State.selectedComponents).Count
+    if ($profileCount -eq 0 -or $componentCount -eq 0) { return $true }
+
+    $profiles = @($ui.State.selectedProfiles) -join ', '
+    $components = @($ui.State.selectedComponents) -join ', '
+    $message = @(
+        'Escopo ambíguo: ha perfil e componente isolado selecionados.'
+        ''
+        "Perfis: $profiles"
+        "Componentes: $components"
+        ''
+        'Sim = Somente componentes selecionados (sem perfil, HostHealth off, AppTuning off).'
+        'Nao = Perfil atual + componentes.'
+        'Cancelar = voltar para revisar.'
+    ) -join [Environment]::NewLine
+
+    $answer = [System.Windows.MessageBox]::Show(
+        $message,
+        'Bootstrap UI - Escopo de execução',
+        [System.Windows.MessageBoxButton]::YesNoCancel,
+        [System.Windows.MessageBoxImage]::Warning
+    )
+    if ($answer -eq [System.Windows.MessageBoxResult]::Cancel) {
+        $ui.StatusLabel.Text = 'Execução cancelada: escopo ambíguo não confirmado.'
+        return $false
+    }
+    if ($answer -eq [System.Windows.MessageBoxResult]::Yes) {
+        $ui.ExecutionScopeOverride = Get-IsolatedComponentExecutionOverride
+        $ui.CurrentExecutionScopeLabel = 'Somente componentes selecionados'
+        return $true
+    }
+
+    $ui.ExecutionScopeOverride = Get-ProfileExecutionOverride
+    $ui.CurrentExecutionScopeLabel = 'Perfil atual + componentes'
+    return $true
 }
 
 function Get-ProfileExecutionOverride {
@@ -4211,6 +4457,76 @@ function Refresh-ApiProviderCombos {
         $ui.SuppressApiEvents = $false
     }
     Refresh-ApiCredentialEditor
+}
+
+function Refresh-AiToolsControls {
+    try {
+        $installRoot = Get-BootstrapAiInstallRoot
+        $rows = @(Get-BootstrapAiToolStatusRows -InstallRoot $installRoot -ProjectRoot $PSScriptRoot)
+        Load-WpfGridRows -Grid $ui.AiToolsGrid -Items $rows -Columns @('tool','name','status','version','support','commandPath','message','docs')
+        $installedCount = @($rows | Where-Object { [string]$_['status'] -in @('installed','configured') }).Count
+        $manualCount = @($rows | Where-Object { [string]$_['status'] -eq 'manual' }).Count
+        $ui.AiToolsStatusLabel.Text = "AI Coding Tools: $installedCount instaladas/configuradas | $manualCount requerem acao manual | root: $installRoot"
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("Falha ao atualizar AI Coding Tools: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.AiToolsStatusLabel.Text = "AI Coding Tools erro: $($_.Exception.Message)"
+    }
+}
+
+function Get-SelectedAiToolName {
+    if ($null -eq $ui.AiToolsGrid.SelectedItem) { return '' }
+    $item = $ui.AiToolsGrid.SelectedItem
+    try {
+        if ($item -and $item.PSObject.Properties['Row']) { return [string]$item.Row['tool'] }
+    } catch {
+    }
+    try {
+        if ($item -is [System.Collections.IDictionary] -and $item.Contains('tool')) { return [string]$item['tool'] }
+    } catch {
+    }
+    return ''
+}
+
+function Invoke-UiAiToolAction {
+    param([Parameter(Mandatory = $true)][string]$Action)
+
+    $toolName = Get-SelectedAiToolName
+    if ([string]::IsNullOrWhiteSpace($toolName)) {
+        $ui.AiToolsStatusLabel.Text = 'Selecione uma ferramenta.'
+        return
+    }
+    if ($Action -eq 'uninstall') {
+        if (-not (Confirm-UiCriticalAction -Title 'Confirmar desinstalacao' -Message "Desinstalar artefatos gerenciados pelo projeto para: $toolName")) { return }
+    }
+    try {
+        $result = Invoke-BootstrapAiToolAction -ToolName $toolName -Action $Action -ProjectRoot $PSScriptRoot -Yes -NoAdmin
+        $status = [string]$result['status']
+        $message = [string]$result['message']
+        if ([string]::IsNullOrWhiteSpace($message)) { $message = [string]$result['docs'] }
+        $ui.AiToolsStatusLabel.Text = "$toolName / ${Action}: $status. $message"
+        Refresh-AiToolsControls
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("AI tool action failed: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.AiToolsStatusLabel.Text = "Erro em $toolName / ${Action}: $($_.Exception.Message)"
+    }
+}
+
+function Open-SelectedAiToolDocs {
+    $toolName = Get-SelectedAiToolName
+    if ([string]::IsNullOrWhiteSpace($toolName)) {
+        $ui.AiToolsStatusLabel.Text = 'Selecione uma ferramenta.'
+        return
+    }
+    try {
+        $catalog = Get-BootstrapAiToolCatalog
+        $normalized = Normalize-BootstrapAiToolName -ToolName $toolName
+        if (-not $catalog.Contains($normalized)) { throw "Ferramenta desconhecida: $toolName" }
+        $docs = [string]$catalog[$normalized]['DocsUrl']
+        Start-Process $docs | Out-Null
+        $ui.AiToolsStatusLabel.Text = "Docs abertas: $docs"
+    } catch {
+        $ui.AiToolsStatusLabel.Text = "Erro ao abrir docs: $($_.Exception.Message)"
+    }
 }
 
 function Refresh-ApiCenterControls {
@@ -4632,13 +4948,14 @@ $navButtons = @(
     $ui.NavSelection,
     $ui.NavHostSetup,
     $ui.NavAppTuning,
+    $ui.NavAiTools,
     $ui.NavApiCenter,
     $ui.NavSteamDeck,
     $ui.NavDualBoot,
     $ui.NavReview,
     $ui.NavRun
 )
-$navButtonTargets = @('welcome', 'selection', 'host-setup', 'app-tuning', 'api-center', 'steamdeck-control', 'dual-boot', 'review', 'run')
+$navButtonTargets = @('welcome', 'selection', 'host-setup', 'app-tuning', 'ai-tools', 'api-center', 'steamdeck-control', 'dual-boot', 'review', 'run')
 
 function Navigate-ToPage {
     param([int]$Index)
@@ -4669,6 +4986,7 @@ function Navigate-ToPage {
         'selection'        { $ui.Strings.Selection }
         'host-setup'       { $ui.Strings.HostSetup }
         'app-tuning'       { $ui.Strings.AppTuning }
+        'ai-tools'         { $ui.Strings.AiToolsTitle }
         'api-center'       { $ui.Strings.ApiCenter }
         'api-catalog'      { $ui.Strings.ApiCatalogTitle }
         'steamdeck-control' { $ui.Strings.SteamDeckControl }
@@ -4682,6 +5000,7 @@ function Navigate-ToPage {
         'selection'         { Refresh-SelectionTrees; Refresh-SelectionSummary }
         'host-setup'        { Refresh-SelectionSummary; Refresh-HostSetupControls }
         'app-tuning'        { Refresh-AppTuningControls }
+        'ai-tools'          { Refresh-AiToolsControls }
         'api-center'        { Refresh-ApiCenterControls }
         'api-catalog'       { Refresh-ApiCatalogControls }
         'steamdeck-control' { Refresh-SteamDeckControls }
@@ -4750,9 +5069,41 @@ function Build-BackendArguments {
     return $tokens
 }
 
+function ConvertTo-PowerShellLiteral {
+    param([AllowNull()][string]$Value)
+    if ($null -eq $Value) { return "''" }
+    return "'" + ([string]$Value -replace "'", "''") + "'"
+}
+
+function Build-ElevatedBackendCommand {
+    param([Parameter(Mandatory = $true)][string[]]$BackendTokens)
+
+    $fileIndex = [Array]::IndexOf($BackendTokens, '-File')
+    if ($fileIndex -lt 0 -or ($fileIndex + 1) -ge $BackendTokens.Count) {
+        throw 'Argumentos backend invalidos para elevacao: -File ausente.'
+    }
+    $scriptPath = [string]$BackendTokens[$fileIndex + 1]
+    $scriptArgs = @()
+    if (($fileIndex + 2) -lt $BackendTokens.Count) {
+        $scriptArgs = @($BackendTokens[($fileIndex + 2)..($BackendTokens.Count - 1)])
+    }
+    $commandParts = @('&', (ConvertTo-PowerShellLiteral -Value $scriptPath))
+    foreach ($arg in @($scriptArgs)) {
+        $commandParts += (ConvertTo-PowerShellLiteral -Value ([string]$arg))
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentStdoutPath)) {
+        $commandParts += @('1>', (ConvertTo-PowerShellLiteral -Value ([string]$ui.CurrentStdoutPath)))
+    }
+    if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentStderrPath)) {
+        $commandParts += @('2>', (ConvertTo-PowerShellLiteral -Value ([string]$ui.CurrentStderrPath)))
+    }
+    return @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ($commandParts -join ' '))
+}
+
 function Start-BackendWorker {
     $powershellExe   = Get-WindowsPowerShellExePath
-    $argumentString  = ConvertTo-ArgumentString -Tokens (Build-BackendArguments)
+    $backendTokens   = Build-BackendArguments
+    $argumentString  = ConvertTo-ArgumentString -Tokens $backendTokens
     $adminNeededForRun = ($ui.Preview -and @($ui.Preview.AdminReasons).Count -gt 0 -and -not (Test-IsAdmin))
     $maintMode = [string]$ui.MaintenanceMode
     if ([string]::IsNullOrWhiteSpace($maintMode)) { $maintMode = 'none' }
@@ -4776,7 +5127,9 @@ function Start-BackendWorker {
     }
     if ($needsAdmin) {
         $sp['Verb'] = 'RunAs'
-        Write-UiLog -Message 'Backend stream redirection disabled because elevation uses ShellExecute.'
+        $elevatedTokens = Build-ElevatedBackendCommand -BackendTokens $backendTokens
+        $sp['ArgumentList'] = ConvertTo-ArgumentString -Tokens $elevatedTokens
+        Write-UiLog -Message ("Backend elevated stream capture enabled inside child process. Stdout={0} Stderr={1}" -f [string]$ui.CurrentStdoutPath, [string]$ui.CurrentStderrPath)
         return (Start-Process @sp)
     }
     if (-not [string]::IsNullOrWhiteSpace($ui.CurrentStdoutPath)) {
@@ -4887,8 +5240,8 @@ function Update-RunArtifactButtons {
 function Complete-RunExecution {
     param([Parameter(Mandatory=$true)][string]$StatusText)
     $ui.RunStatusLabel.Text = $StatusText
-    $ui.State.lastLogPath    = $ui.CurrentLogPath
-    $ui.State.lastResultPath = $ui.CurrentResultPath
+    $ui.State.lastLogPath    = Normalize-UiScalarPath -Value $ui.CurrentLogPath
+    $ui.State.lastResultPath = Normalize-UiScalarPath -Value $ui.CurrentResultPath
     Save-UiState -State $ui.State -Path $UiStatePath
     $ui.RunProcess = $null
     $ui.LogTimer.Stop()
@@ -4923,6 +5276,7 @@ function Complete-RunExecutionWithoutResult {
             if ($resultParent) { $null = New-Item -Path $resultParent -ItemType Directory -Force }
             $fallbackResult = [ordered]@{
                 status = 'error'
+                mode = 'ui'
                 generatedAt = (Get-Date).ToString('o')
                 logPath = $ui.CurrentLogPath
                 resultPath = $ui.CurrentResultPath
@@ -4934,6 +5288,23 @@ function Complete-RunExecutionWithoutResult {
                 error = $message
                 howToFix = 'Abra stdout/stderr e o log da UI; corrija a falha indicada e execute novamente ou use -Audit para diagnostico.'
                 rollbackAvailable = $false
+                artifactPaths = [ordered]@{
+                    logPath = $ui.CurrentLogPath
+                    resultPath = $ui.CurrentResultPath
+                    stdoutPath = $ui.CurrentStdoutPath
+                    stderrPath = $ui.CurrentStderrPath
+                }
+                diagnostics = @([ordered]@{
+                    severity = 'error'
+                    message = $message
+                    howToFix = 'Abra stdout/stderr e o log da UI; corrija a falha indicada e execute novamente ou use -Audit para diagnostico.'
+                })
+                scope = Get-CurrentExecutionScopeSnapshot
+                rollback = [ordered]@{
+                    available = $false
+                    changesPath = ''
+                    summary = $null
+                }
             }
             $fallbackJson = $fallbackResult | ConvertTo-Json -Depth 8
             [System.IO.File]::WriteAllText($ui.CurrentResultPath, $fallbackJson, [System.Text.UTF8Encoding]::new($false))
@@ -4965,11 +5336,16 @@ function Finalize-RunFromResult {
     } elseif ([string]$result.status -eq 'warning') {
         if ([string]$result.mode -eq 'audit') {
             $bad = 0
-            try { $bad = [int]$result.auditSummary.unhealthyOrMissing } catch { }
-            $statusText = "Auditoria concluida com avisos: $bad componente(s) unhealthy/missing. Ver log e resultado."
+            try { $bad = [int]$result.auditSummary.critical } catch { }
+            $statusText = "Auditoria concluida com avisos: $bad componente(s) requerem instalacao/reparo/acao manual. Ver log e resultado."
         } else {
             $statusText = 'Concluido com avisos. Verifique o log.'
         }
+    } elseif ($result.status -eq 'blocked') {
+        $err = if ($result.error) { [string]$result.error } else { 'ação do usuário necessária.' }
+        $fix = if ($result.howToFix) { [string]$result.howToFix } else { 'Reinicie o Windows e execute novamente.' }
+        $kind = if ($result.blockerKind) { [string]$result.blockerKind } else { 'blocked' }
+        $statusText = "Reinicio necessario. Bloqueio: $kind. $err Como corrigir: $fix"
     } else {
         $err = if ($result.error) { [string]$result.error } else { 'sem detalhes (ver log).' }
         $fix = if ($result.howToFix) { [string]$result.howToFix } else { 'Abra Resultado/Log para detalhes.' }
@@ -4981,18 +5357,110 @@ function Finalize-RunFromResult {
     Complete-RunExecution -StatusText $statusText
 }
 
+function Test-UiReviewAcceptedForRun {
+    param([string]$MaintenanceIntent = 'none')
+
+    if ([string]$MaintenanceIntent -ne 'none') { return $true }
+    return [bool]$ui.ReviewAcceptedCheckBox.IsChecked
+}
+
+function Confirm-UiCriticalAction {
+    param(
+        [Parameter(Mandatory = $true)][string]$Title,
+        [Parameter(Mandatory = $true)][string]$Message,
+        [string]$RequiredToken = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($RequiredToken)) {
+        $choice = [System.Windows.MessageBox]::Show($Message, $Title, [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+        return ($choice -eq [System.Windows.MessageBoxResult]::Yes)
+    }
+
+    $dialog = New-Object System.Windows.Window
+    $dialog.Title = $Title
+    $dialog.Width = 520
+    $dialog.Height = 250
+    $dialog.WindowStartupLocation = 'CenterOwner'
+    $dialog.Owner = $ui.Window
+    $dialog.Background = Get-UiBrush '#0F1117'
+    $dialog.Foreground = Get-UiBrush '#E2E8F0'
+    $dialog.ResizeMode = 'NoResize'
+
+    $root = New-Object System.Windows.Controls.StackPanel
+    $root.Margin = New-Object System.Windows.Thickness(18)
+
+    $label = New-Object System.Windows.Controls.TextBlock
+    $label.Text = $Message
+    $label.TextWrapping = 'Wrap'
+    $label.Margin = New-Object System.Windows.Thickness(0,0,0,12)
+    $root.Children.Add($label) | Out-Null
+
+    $hint = New-Object System.Windows.Controls.TextBlock
+    $hint.Text = "Digite $RequiredToken para confirmar."
+    $hint.Foreground = Get-UiBrush '#F59E0B'
+    $hint.Margin = New-Object System.Windows.Thickness(0,0,0,6)
+    $root.Children.Add($hint) | Out-Null
+
+    $input = New-Object System.Windows.Controls.TextBox
+    $input.Height = 32
+    $input.Margin = New-Object System.Windows.Thickness(0,0,0,14)
+    $root.Children.Add($input) | Out-Null
+
+    $buttons = New-Object System.Windows.Controls.StackPanel
+    $buttons.Orientation = 'Horizontal'
+    $buttons.HorizontalAlignment = 'Right'
+    $cancel = New-Object System.Windows.Controls.Button
+    $cancel.Content = 'Cancelar'
+    $cancel.Width = 100
+    $cancel.Height = 32
+    $cancel.Margin = New-Object System.Windows.Thickness(0,0,8,0)
+    $ok = New-Object System.Windows.Controls.Button
+    $ok.Content = 'Confirmar'
+    $ok.Width = 110
+    $ok.Height = 32
+    $buttons.Children.Add($cancel) | Out-Null
+    $buttons.Children.Add($ok) | Out-Null
+    $root.Children.Add($buttons) | Out-Null
+
+    $script:CriticalActionConfirmed = $false
+    $cancel.Add_Click({ $dialog.DialogResult = $false; $dialog.Close() })
+    $ok.Add_Click({
+        if ($input.Text.Trim() -eq $RequiredToken) {
+            $script:CriticalActionConfirmed = $true
+            $dialog.DialogResult = $true
+            $dialog.Close()
+        } else {
+            [void][System.Windows.MessageBox]::Show("Confirmação inválida. Digite $RequiredToken.", 'Bootstrap UI - Ação crítica', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+        }
+    })
+    [void]$dialog.ShowDialog()
+    return [bool]$script:CriticalActionConfirmed
+}
+
 function Start-RunExecution {
     param(
         [ValidateSet('none', 'audit', 'rollback')]
         [string]$MaintenanceIntent = 'none'
     )
     if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
-        $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Aguarde a execucao atual finalizar."
+        $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Aguarde a execução atual finalizar."
+        return
+    }
+    if (-not (Test-UiReviewAcceptedForRun -MaintenanceIntent $MaintenanceIntent)) {
+        $reviewIdx = @($ui.PageNames).IndexOf('PageReview')
+        if ($reviewIdx -ge 0) { Navigate-ToPage -Index $reviewIdx }
+        $ui.StatusLabel.Text = 'Revisão obrigatória: aceite a revisão antes de executar.'
+        [void][System.Windows.MessageBox]::Show('Revisão obrigatória: confira escopo, efeitos colaterais e artefatos, marque "Aceito esta revisão" e execute novamente.', 'Bootstrap UI - Revisão obrigatória', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
         return
     }
     $ui.MaintenanceMode = [string]$MaintenanceIntent
     if (-not (Save-SteamDeckSettingsInteractive)) {
         $ui.MaintenanceMode = 'none'
+        return
+    }
+    if (-not (Confirm-UiExecutionScope -MaintenanceIntent $MaintenanceIntent)) {
+        $ui.MaintenanceMode = 'none'
+        Clear-ExecutionScopeOverride
         return
     }
 
@@ -5018,7 +5486,7 @@ function Start-RunExecution {
         $ui.RunLogTextBox.Clear()
         if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentExecutionScopeLabel)) {
             $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Escopo: $([string]$ui.CurrentExecutionScopeLabel)"
-            Write-UiLog -Message ("Escopo de execucao selecionado: {0}" -f [string]$ui.CurrentExecutionScopeLabel)
+            Write-UiLog -Message ("Escopo de execução selecionado: {0}" -f [string]$ui.CurrentExecutionScopeLabel)
         } else {
             $ui.RunStatusLabel.Text = $ui.Strings.RunStarted
         }
@@ -5042,8 +5510,8 @@ function Start-RunExecution {
         Clear-ExecutionScopeOverride
         try { Set-RunUiBusy -Busy $false } catch { }
         $msg = [string]$_.Exception.Message
-        if ([string]::IsNullOrWhiteSpace($msg)) { $msg = 'Erro ao preparar a execucao.' }
-        $ui.RunStatusLabel.Text = ('Falha ao preparar execucao: {0}' -f $msg)
+        if ([string]::IsNullOrWhiteSpace($msg)) { $msg = 'Erro ao preparar a execução.' }
+        $ui.RunStatusLabel.Text = ('Falha ao preparar execução: {0}' -f $msg)
         try {
             [void][System.Windows.MessageBox]::Show($msg, 'Bootstrap UI', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
         } catch {
@@ -5077,11 +5545,20 @@ $logTimer.Add_Tick({
         }
         try {
             if ($null -ne $ui -and $null -ne $ui.RunStatusLabel) {
-                $ui.RunStatusLabel.Text = 'Erro ao atualizar log da execucao; veja ui.log (LogTimer).'
+                $ui.RunStatusLabel.Text = 'Erro ao atualizar log da execução; veja ui.log (LogTimer).'
             }
         } catch {
         }
         try { $ui.LogTimer.Stop() } catch { }
+    }
+})
+
+$appTuningRefreshTimer.Add_Tick({
+    try {
+        $ui.AppTuningRefreshTimer.Stop()
+        Refresh-AppTuningControls
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("AppTuningRefreshTimer: {0}" -f $_.Exception.Message)
     }
 })
 
@@ -5294,8 +5771,7 @@ $ui.AuditIntegrityButton.Add_Click({
 })
 
 $ui.RollbackChangesButton.Add_Click({
-    $confirm = [System.Windows.MessageBox]::Show("Deseja reverter os tweaks de sistema? Isso restaurara valores padrao de registro para Edge, GameMode e telemetria.", "Confirmar Rollback", [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
-    if ($confirm -eq 'Yes') {
+    if (Confirm-UiCriticalAction -Title 'Confirmar rollback' -Message "Rollback vai reverter ajustes de registro/sistema criados pelo bootstrap. Apps instalados nao serao removidos automaticamente. Log atual: $([string]$ui.CurrentLogPath)") {
         $runIdx = @($ui.PageNames).IndexOf('PageRun')
         if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
         Navigate-ToPage -Index $runIdx
@@ -5554,14 +6030,14 @@ $ui.AppTuningClearAllButton.Add_Click({
 })
 
 $ui.AppTuningSearchBox.Add_TextChanged({
-    Refresh-AppTuningControls
+    Request-AppTuningRefresh
 })
 
 $ui.AppTuningStatusFilterCombo.Add_SelectionChanged({
-    Refresh-AppTuningControls
+    Request-AppTuningRefresh
 })
 $ui.AppTuningRiskFilterCombo.Add_SelectionChanged({
-    Refresh-AppTuningControls
+    Request-AppTuningRefresh
 })
 
 $ui.AppTuningItemsGrid.Add_LoadingRow({
@@ -5674,13 +6150,13 @@ $ui.AppTuningRunNowButton.Add_Click({
         Refresh-SelectionSummary
         Clear-ExecutionScopeOverride
         if (-not (Confirm-AppTuningSecurityImpact -Rows @(Get-ActiveAppTuningRows))) {
-            Set-AppTuningActionFeedback -Message 'Execucao imediata cancelada: SecurityImpact nao confirmado.' -Level 'warning'
+            Set-AppTuningActionFeedback -Message 'Execução imediata cancelada: SecurityImpact não confirmado.' -Level 'warning'
             return
         }
         $selectionCount = @($ui.State.selectedComponents).Count
         $appTuningCount = @($ui.State.selectedAppTuningItems).Count
         $scopeMessage = @(
-            'Escolha o escopo desta execucao:'
+            'Escolha o escopo desta execução:'
             ''
             'Sim = Isolado (somente AppTuning selecionado)'
             'Nao = Perfil atual (inclui perfil + AppTuning)'
@@ -5691,13 +6167,13 @@ $ui.AppTuningRunNowButton.Add_Click({
         ) -join [Environment]::NewLine
         $scopeAnswer = [System.Windows.MessageBox]::Show(
             $scopeMessage,
-            'Bootstrap UI - Escopo da execucao',
+            'Bootstrap UI - Escopo da execução',
             [System.Windows.MessageBoxButton]::YesNoCancel,
             [System.Windows.MessageBoxImage]::Question
         )
 
         if ($scopeAnswer -eq [System.Windows.MessageBoxResult]::Cancel) {
-            Set-AppTuningActionFeedback -Message 'Execucao imediata cancelada pelo usuario.' -Level 'warning'
+            Set-AppTuningActionFeedback -Message 'Execução imediata cancelada pelo usuário.' -Level 'warning'
             return
         }
 
@@ -5713,7 +6189,7 @@ $ui.AppTuningRunNowButton.Add_Click({
             $isolatedItemCount = @($ui.ExecutionScopeOverride.selectedAppTuningItems).Count
             if ($isolatedComponentCount -eq 0 -and $isolatedItemCount -eq 0) {
                 Clear-ExecutionScopeOverride
-                Set-AppTuningActionFeedback -Message 'Execucao isolada cancelada: nenhum item AppTuning selecionado para executar.' -Level 'warning'
+                Set-AppTuningActionFeedback -Message 'Execução isolada cancelada: nenhum item AppTuning selecionado para executar.' -Level 'warning'
                 [void][System.Windows.MessageBox]::Show('Selecione pelo menos um item AppTuning antes de executar no modo Isolado.', 'Bootstrap UI - Escopo isolado', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
                 return
             }
@@ -5730,13 +6206,13 @@ $ui.AppTuningRunNowButton.Add_Click({
         ) -join [Environment]::NewLine
         $confirmAnswer = [System.Windows.MessageBox]::Show(
             $confirmMessage,
-            'Bootstrap UI - Confirmar execucao',
+            'Bootstrap UI - Confirmar execução',
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Question
         )
         if ($confirmAnswer -ne [System.Windows.MessageBoxResult]::Yes) {
             Clear-ExecutionScopeOverride
-            Set-AppTuningActionFeedback -Message 'Execucao imediata cancelada pelo usuario.' -Level 'warning'
+            Set-AppTuningActionFeedback -Message 'Execução imediata cancelada pelo usuário.' -Level 'warning'
             return
         }
 
@@ -5747,7 +6223,7 @@ $ui.AppTuningRunNowButton.Add_Click({
         } else {
             Navigate-ToPage -Index 9
         }
-        Set-AppTuningActionFeedback -Message ("Execucao imediata iniciando. Escopo: {0}" -f [string]$ui.CurrentExecutionScopeLabel) -Level 'info'
+        Set-AppTuningActionFeedback -Message ("Execução imediata iniciando. Escopo: {0}" -f [string]$ui.CurrentExecutionScopeLabel) -Level 'info'
         Start-RunExecution
     } catch {
         Clear-ExecutionScopeOverride
@@ -5757,6 +6233,13 @@ $ui.AppTuningRunNowButton.Add_Click({
         [void][System.Windows.MessageBox]::Show($friendly, 'Bootstrap UI - Erro', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
 })
+
+# AI Coding Tools
+$ui.AiToolsInstallButton.Add_Click({ Invoke-UiAiToolAction -Action 'install' })
+$ui.AiToolsValidateButton.Add_Click({ Invoke-UiAiToolAction -Action 'validate' })
+$ui.AiToolsConfigureButton.Add_Click({ Invoke-UiAiToolAction -Action 'configure' })
+$ui.AiToolsUninstallButton.Add_Click({ Invoke-UiAiToolAction -Action 'uninstall' })
+$ui.AiToolsDocsButton.Add_Click({ Open-SelectedAiToolDocs })
 
 # Steam Deck control
 $ui.ReloadSettingsButton.Add_Click({ Refresh-SteamDeckControls; $ui.StatusLabel.Text = $ui.Strings.ReloadSettings })
@@ -5785,6 +6268,8 @@ $ui.FixFastStartupButton.Add_Click({
 $ui.RebootToLinuxButton.Add_Click({
     if ($ui.DualBootTargetCombo.SelectedItem) {
         $guid = [string]$ui.DualBootTargetCombo.SelectedItem.Tag
+        $targetText = [string]$ui.DualBootTargetCombo.SelectedItem.Content
+        if (-not (Confirm-UiCriticalAction -Title 'Confirmar reboot' -Message "Destino: $targetText`nEfeito: define boot one-time e reinicia o Windows agora.`nCancelamento: feche esta janela." -RequiredToken 'REINICIAR')) { return }
         try {
             $res = Invoke-BootstrapRebootToLinux -PreferredEntryGuid $guid -Force
             if ($res.Rebooted) {
@@ -5821,6 +6306,7 @@ $ui.ApplyWindowsBootButton.Add_Click({
             }
             $timeout = $parsedTimeout
         }
+        if (-not (Confirm-UiCriticalAction -Title 'Confirmar BCD' -Message "Aplicar BCD vai alterar o Windows Boot Manager. Um backup sera criado antes da alteracao. Default: $defaultId Timeout: $timeout")) { return }
         $res = Set-BootstrapWindowsBootManager -DefaultId $defaultId -Timeout $timeout
         $ui.StatusLabel.Text = "BCD atualizado: $(@($res.Actions) -join ', ') | Backup: $($res.Backup)"
         Refresh-DualBootControls
@@ -5831,6 +6317,7 @@ $ui.ApplyWindowsBootButton.Add_Click({
 
 $ui.BcdCleanupButton.Add_Click({
     try {
+        if (-not (Confirm-UiCriticalAction -Title 'Confirmar BCD cleanup' -Message 'A limpeza de BCD cria backup e remove entradas fantasmas detectadas. Revise o backup no status apos concluir.')) { return }
         $ui.BcdCleanupButton.IsEnabled = $false
         $ui.BcdCleanupStatusText.Text = "Realizando backup e limpando..."
         $res = Repair-BootstrapPhantomEntries

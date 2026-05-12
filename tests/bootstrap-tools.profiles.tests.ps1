@@ -63,7 +63,7 @@ Describe 'Bootstrap profile mode' {
         $result = Invoke-Bootstrap -CommandArgs @('-ListProfiles')
 
         $result.ExitCode | Should Be 0
-        foreach ($expected in @('legacy', 'recommended', 'steamdeck-recommended', 'steamdeck-full', 'steamdeck-dock')) {
+        foreach ($expected in @('legacy', 'safe-base', 'dev-ai', 'full-workstation', 'recommended', 'steamdeck-recommended', 'steamdeck-full', 'steamdeck-dock')) {
             Assert-Contains -Text $result.Output -Pattern $expected -Message 'Expected profile in output.'
         }
     }
@@ -95,12 +95,145 @@ Describe 'Bootstrap profile mode' {
         }
     }
 
+    It 'ships a Pester wrapper with explicit FailedCount exit semantics' {
+        $runner = Join-Path $repoRoot 'tests\run-pester.ps1'
+
+        Test-Path $runner | Should Be $true
+        $raw = Get-Content -Path $runner -Raw
+        $raw | Should Match 'Invoke-Pester'
+        $raw | Should Match '-PassThru'
+        $raw | Should Match 'FailedCount'
+        $raw | Should Match '\[Environment\]::Exit\(\$exitCode\)'
+    }
+
+    It 'documents the safe product contract without mojibake' {
+        $readme = Get-Content -Path (Join-Path $repoRoot 'README.md') -Raw
+
+        $readme | Should Not Match '\u00F0|\u00C3|\u00C2|\uFFFD|\u00E2\u0080|\u00E2\u009C|\u00E2\u009A'
+        $readme | Should Match 'safe-base'
+        $readme | Should Match 'full-workstation'
+        $readme | Should Match 'result\.json'
+        $readme | Should Match 'UnsupportedAudit'
+        $readme | Should Match 'Limites'
+    }
+
     It 'resolves individual app requests into components' {
         $result = Invoke-Bootstrap -CommandArgs @('-App', 'steam,vscode', '-DryRun')
 
         $result.ExitCode | Should Be 0
         foreach ($expected in @('system-core', 'steam', 'vscode')) {
             Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected app component in dry-run output.'
+        }
+    }
+
+    It 'keeps component-only dry-run free from HostHealth and AppTuning defaults' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Component', 'notepadpp', '-DryRun')
+
+        $result.ExitCode | Should Be 0
+        Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'host health mode: off' -Message 'Expected component-only dry-run to keep HostHealth off.'
+        Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern 'apptuning: off' -Message 'Expected component-only dry-run to keep AppTuning off.'
+    }
+
+    It 'writes a default result json even when ResultPath is omitted' {
+        $result = Invoke-Bootstrap -CommandArgs @('-Component', 'notepadpp', '-DryRun', '-NonInteractive')
+
+        $result.ExitCode | Should Be 0
+        $match = [regex]::Match($result.Output, 'Result:\s*(.+?\.result\.json)')
+        $match.Success | Should Be $true
+        $resultPath = $match.Groups[1].Value.Trim()
+        Test-Path -LiteralPath $resultPath | Should Be $true
+        $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        [string]$json.status | Should Be 'success'
+        [string]$json.resultPath | Should Be $resultPath
+        [string]$json.mode | Should Be 'profile'
+        [int]$json.exitCode | Should Be 0
+        [string]$json.artifactPaths.resultPath | Should Be $resultPath
+        [string]$json.artifactPaths.logPath | Should Not Be ''
+        @($json.diagnostics).Count | Should Be 0
+        [string]$json.scope.selection.Components[0] | Should Be 'notepadpp'
+        [string]$json.scope.resolution.ResolvedComponents[0] | Should Be 'system-core'
+        $json.rollback.available | Should Be $false
+    }
+
+    It 'install-cli legacy dry-run passes result and log paths through to backend' {
+        $cli = Join-Path $repoRoot 'install-cli.ps1'
+        $resultPath = Join-Path $env:TEMP ("phasezero-install-cli-{0}.result.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = Join-Path $env:TEMP ("phasezero-install-cli-{0}.log" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $output = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $cli -Profile safe-base -DryRun -NonInteractive --result-path $resultPath --log-path $logPath 2>&1
+            $LASTEXITCODE | Should Be 0
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            Test-Path -LiteralPath $logPath | Should Be $true
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            [string]$json.status | Should Be 'success'
+            [string]$json.resolvedHostHealthMode | Should Be 'off'
+            [string]$json.resolvedAppTuningMode | Should Be 'off'
+            [string]$json.artifactPaths.resultPath | Should Be ([System.IO.Path]::GetFullPath($resultPath))
+            [string]$json.artifactPaths.logPath | Should Be ([System.IO.Path]::GetFullPath($logPath))
+            [int]$json.exitCode | Should Be 0
+        } finally {
+            Remove-Item -LiteralPath $resultPath, $logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'install-cli legacy missing profile writes actionable result schema' {
+        $cli = Join-Path $repoRoot 'install-cli.ps1'
+        $resultPath = Join-Path $env:TEMP ("phasezero-install-cli-missing-profile-{0}.result.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = Join-Path $env:TEMP ("phasezero-install-cli-missing-profile-{0}.log" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $output = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $cli -NonInteractive --result-path $resultPath --log-path $logPath 2>&1
+            $LASTEXITCODE | Should Be 2
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            [string]$json.status | Should Be 'error'
+            [int]$json.exitCode | Should Be 2
+            [string]$json.artifactPaths.resultPath | Should Be ([System.IO.Path]::GetFullPath($resultPath))
+            [string]$json.artifactPaths.logPath | Should Be ([System.IO.Path]::GetFullPath($logPath))
+            @($json.diagnostics).Count | Should BeGreaterThan 0
+            [string]$json.diagnostics[0].message | Should Match 'Profile'
+            $json.rollback.available | Should Be $false
+        } finally {
+            Remove-Item -LiteralPath $resultPath, $logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'keeps safe-base and recommended small without AI desktop or container stacks' {
+        foreach ($profileName in @('safe-base', 'recommended')) {
+            $resultPath = Join-Path $env:TEMP ("phasezero-{0}-{1}.json" -f $profileName, ([Guid]::NewGuid().ToString('N')))
+            try {
+                $result = Invoke-Bootstrap -CommandArgs @('-Profile', $profileName, '-DryRun', '-NonInteractive', '-ResultPath', $resultPath)
+
+                $result.ExitCode | Should Be 0
+                Test-Path $resultPath | Should Be $true
+                $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+                @($json.resolution.ResolvedComponents).Count | Should BeLessThan 25
+                foreach ($forbidden in @('docker', 'wsl-core', 'claude-desktop', 'cursor', 'steam', 'visual-studio-community')) {
+                    (@($json.resolution.ResolvedComponents) -contains $forbidden) | Should Be $false
+                }
+                [string]$json.resolvedHostHealthMode | Should Be 'off'
+                [string]$json.resolvedAppTuningMode | Should Be 'off'
+            } finally {
+                Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+
+    It 'keeps full-workstation as explicit broad opt-in profile' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-full-workstation-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $result = Invoke-Bootstrap -CommandArgs @('-Profile', 'full-workstation', '-DryRun', '-NonInteractive', '-ResultPath', $resultPath)
+
+            $result.ExitCode | Should Be 0
+            Test-Path $resultPath | Should Be $true
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            @($json.resolution.ResolvedComponents).Count | Should BeGreaterThan 40
+            foreach ($expected in @('docker', 'claude-desktop', 'cursor', 'notepadpp')) {
+                (@($json.resolution.ResolvedComponents) -contains $expected) | Should Be $true
+            }
+        } finally {
+            Remove-Item -LiteralPath $resultPath -Force -ErrorAction SilentlyContinue
         }
     }
 

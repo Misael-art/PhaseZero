@@ -214,6 +214,223 @@ Describe 'Resilience Architecture' {
             $results[0].Status | Should Be 'Repaired'
             Assert-MockCalled Invoke-BootstrapComponent
         }
+
+        It 'maps legacy audit statuses into actionable severities' {
+            $optionalDef = [pscustomobject]@{ Optional = $true }
+            $requiredDef = [pscustomobject]@{ Optional = $false }
+
+            (Convert-BootstrapAuditStatusToSeverity -Status 'Healthy' -ComponentDef $requiredDef).Severity | Should Be 'Ready'
+            (Convert-BootstrapAuditStatusToSeverity -Status 'Missing' -ComponentDef $requiredDef).Severity | Should Be 'NeedsInstall'
+            (Convert-BootstrapAuditStatusToSeverity -Status 'Missing' -ComponentDef $optionalDef).Severity | Should Be 'OptionalMissing'
+            (Convert-BootstrapAuditStatusToSeverity -Status 'GhostInstall' -ComponentDef $requiredDef).Severity | Should Be 'NeedsRepair'
+            (Convert-BootstrapAuditStatusToSeverity -Status 'RequiresRestart' -ComponentDef $requiredDef).Severity | Should Be 'RequiresRestart'
+            (Convert-BootstrapAuditStatusToSeverity -Status 'Skipped' -ComponentDef $requiredDef).Severity | Should Be 'UnsupportedAudit'
+            (Convert-BootstrapAuditStatusToSeverity -Status 'Unknown' -ComponentDef $requiredDef).Critical | Should Be $false
+        }
+
+        It 'summarizes audit by severity and excludes UnsupportedAudit from critical count' {
+            $rows = @(
+                [pscustomobject]@{ Severity = 'Ready' },
+                [pscustomobject]@{ Severity = 'NeedsInstall' },
+                [pscustomobject]@{ Severity = 'UnsupportedAudit' }
+            )
+
+            $summary = New-BootstrapAuditSeveritySummary -Rows $rows
+
+            [int]$summary.total | Should Be 3
+            [int]$summary.Ready | Should Be 1
+            [int]$summary.NeedsInstall | Should Be 1
+            [int]$summary.UnsupportedAudit | Should Be 1
+            [int]$summary.critical | Should Be 1
+        }
+
+        It 'Java JDK audit rejects java runtime without javac' {
+            Mock Resolve-CommandPath {
+                param([string]$Name)
+                if ($Name -eq 'java') { return (Join-Path $env:SystemRoot 'System32\cmd.exe') }
+                return $null
+            }
+            Mock Get-AuditFirstExistingPathGlobal { return '' }
+            Mock Test-AuditWingetInstalledGlobal { return $false }
+
+            $row = Get-BootstrapJavaJdkAuditRow -ComponentName 'java-core'
+
+            [string]$row.Status | Should Not Be 'Healthy'
+            [string]$row.Severity | Should Be 'NeedsInstall'
+            [string]$row.Detail | Should Match 'javac'
+        }
+
+        It 'audits npm components with declared commands instead of UnsupportedAudit' {
+            $catalog = @{
+                'npm-tool' = New-BootstrapComponentDefinition -Name 'npm-tool' -Description 'npm tool' -Kind 'npm' -Data @{ Package = 'pkg'; DisplayName = 'Pkg'; CommandNames = @('pkgcmd') }
+            }
+            $resolution = @{ ResolvedComponents = @('npm-tool') }
+            Mock Get-BootstrapComponentCatalog { $catalog }
+            Mock Get-Winget { return $null }
+            Mock Resolve-CommandPath {
+                param([string]$Name)
+                if ($Name -eq 'pkgcmd') { return 'C:\Tools\pkgcmd.cmd' }
+                return $null
+            }
+
+            $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
+
+            [string]$rows[0].Status | Should Be 'Healthy'
+            [string]$rows[0].Severity | Should Be 'Ready'
+            [string]$rows[0].Detail | Should Match 'pkgcmd'
+        }
+
+        It 'audits repo-clone target folders instead of UnsupportedAudit' {
+            $root = Join-Path $env:TEMP ('phasezero-audit-repo-' + [guid]::NewGuid().ToString('N'))
+            try {
+                $target = Join-Path $root 'gemini-cli'
+                New-Item -ItemType Directory -Path (Join-Path $target '.git') -Force | Out-Null
+                $catalog = @{
+                    'repo-test' = New-BootstrapComponentDefinition -Name 'repo-test' -Description 'repo test' -Kind 'repo-clone' -Data @{ RepoUrl = 'https://example.invalid/repo.git'; TargetName = 'gemini-cli' }
+                }
+                $resolution = @{ ResolvedComponents = @('repo-test') }
+                $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $root -ResolvedCloneBaseDir $root
+                Mock Get-BootstrapComponentCatalog { $catalog }
+                Mock Get-Winget { return $null }
+
+                $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution -State $state)
+
+                [string]$rows[0].Status | Should Be 'Healthy'
+                [string]$rows[0].Severity | Should Be 'Ready'
+                [string]$rows[0].Detail | Should Match 'gemini-cli'
+            } finally {
+                if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+        }
+
+        It 'audits manual-required optional components as OptionalMissing with action text' {
+            $catalog = @{
+                'manual-test' = New-BootstrapComponentDefinition -Name 'manual-test' -Description 'manual test' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Manual Test'; Instructions = 'Install Manual Test manually.' }
+            }
+            $resolution = @{ ResolvedComponents = @('manual-test') }
+            Mock Get-BootstrapComponentCatalog { $catalog }
+            Mock Get-Winget { return $null }
+
+            $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
+
+            [string]$rows[0].Status | Should Be 'Missing'
+            [string]$rows[0].Severity | Should Be 'OptionalMissing'
+            [string]$rows[0].HowToFix | Should Match 'Manual Test'
+        }
+
+        It 'audits command-backed custom AI tools instead of UnsupportedAudit' {
+            $catalog = @{
+                'opencode' = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode' -Kind 'opencode'
+                'openclaw' = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw' -Kind 'openclaw'
+                'goose' = New-BootstrapComponentDefinition -Name 'goose' -Description 'Goose' -Kind 'goose'
+            }
+            $resolution = @{ ResolvedComponents = @('opencode','openclaw','goose') }
+            Mock Get-BootstrapComponentCatalog { $catalog }
+            Mock Get-Winget { return $null }
+            Mock Resolve-CommandPath {
+                param([string]$Name)
+                switch ($Name) {
+                    'opencode' { return 'C:\Tools\opencode.exe' }
+                    'openclaw' { return 'C:\Tools\openclaw.cmd' }
+                    default { return $null }
+                }
+            }
+
+            $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
+
+            ([string[]]@($rows | ForEach-Object { [string]$_.Severity }) -contains 'UnsupportedAudit') | Should Be $false
+            $gooseRow = $rows | Where-Object Component -eq 'goose' | Select-Object -First 1
+            [string]$gooseRow.Status | Should Be 'Missing'
+        }
+
+        It 'audits WSL and VS Code extension components without UnsupportedAudit' {
+            $catalog = @{
+                'wsl-core' = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'WSL' -Optional $false -Kind 'wsl-core'
+                'vscode-extensions' = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'VS Code extensions' -Optional $true -Kind 'vscode-extensions'
+            }
+            $resolution = @{ ResolvedComponents = @('wsl-core','vscode-extensions') }
+            Mock Get-BootstrapComponentCatalog { $catalog }
+            Mock Get-Winget { return $null }
+            Mock Resolve-CommandPath {
+                param([string]$Name)
+                switch ($Name) {
+                    'wsl.exe' { return 'C:\Windows\System32\wsl.exe' }
+                    'code' { return 'C:\Users\Test\AppData\Local\Programs\Microsoft VS Code\bin\code.cmd' }
+                    default { return $null }
+                }
+            }
+            Mock Test-BootstrapAppxPackageInstalled { return $true }
+            Mock Get-Service { return [pscustomobject]@{ Name = 'LxssManager'; Status = 'Running' } }
+            Mock Invoke-NativeCaptureWithLog { throw 'wsl.exe must not be invoked during audit' }
+
+            $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
+
+            $statuses = @($rows | ForEach-Object { [string]$_.Status })
+            $severities = @($rows | ForEach-Object { [string]$_.Severity })
+            ($statuses -contains 'UnsupportedAudit') | Should Be $false
+            ($severities -contains 'UnsupportedAudit') | Should Be $false
+            Assert-MockCalled Invoke-NativeCaptureWithLog -Times 0
+        }
+
+        It 'marks WSL as restart-required when only the AppX package is present' {
+            $catalog = @{
+                'wsl-core' = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'WSL' -Optional $false -Kind 'wsl-core'
+            }
+            $resolution = @{ ResolvedComponents = @('wsl-core') }
+            Mock Get-BootstrapComponentCatalog { $catalog }
+            Mock Get-Winget { return $null }
+            Mock Resolve-CommandPath {
+                param([string]$Name)
+                if ($Name -eq 'wsl.exe') { return 'C:\Windows\System32\wsl.exe' }
+                return $null
+            }
+            Mock Test-BootstrapAppxPackageInstalled { return $true }
+            Mock Get-Service { throw 'service missing' }
+            Mock Invoke-NativeCaptureWithLog { throw 'wsl.exe must not be invoked during audit' }
+
+            $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
+
+            [string]$rows[0].Status | Should Be 'RequiresRestart'
+            [string]$rows[0].Severity | Should Be 'RequiresRestart'
+            [string]$rows[0].HowToFix | Should Match 'Reinicie'
+            Assert-MockCalled Invoke-NativeCaptureWithLog -Times 0
+        }
+    }
+
+    Context 'Result JSON contract matrix' {
+        It 'writes schema for success warning blocked and error statuses' {
+            $root = Join-Path $env:TEMP ('phasezero-result-matrix-' + [guid]::NewGuid().ToString('N'))
+            try {
+                New-Item -ItemType Directory -Path $root -Force | Out-Null
+                foreach ($case in @(
+                    @{ Name = 'success'; Status = 'success'; Exit = 0; DiagnosticCount = 0 },
+                    @{ Name = 'warning'; Status = 'warning'; Exit = 0; DiagnosticCount = 1 },
+                    @{ Name = 'blocked'; Status = 'blocked'; Exit = 2; DiagnosticCount = 1 },
+                    @{ Name = 'error'; Status = 'error'; Exit = 1; DiagnosticCount = 1 }
+                )) {
+                    $path = Join-Path $root ("{0}.result.json" -f $case.Name)
+                    Write-BootstrapExecutionResultFile -Path $path -Value ([ordered]@{
+                        status = [string]$case.Status
+                        mode = 'matrix-test'
+                        error = $(if ([int]$case.DiagnosticCount -gt 0) { "matrix $($case.Status)" } else { '' })
+                        howToFix = 'matrix fix'
+                    })
+
+                    Test-Path -LiteralPath $path | Should Be $true
+                    $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+                    [string]$json.status | Should Be ([string]$case.Status)
+                    [int]$json.exitCode | Should Be ([int]$case.Exit)
+                    [string]$json.resultPath | Should Be $path
+                    [string]$json.logPath | Should Match '\.log$'
+                    [string]$json.artifactPaths.resultPath | Should Be $path
+                    $json.PSObject.Properties.Name -contains 'scope' | Should Be $true
+                    $json.PSObject.Properties.Name -contains 'rollback' | Should Be $true
+                    @($json.diagnostics).Count | Should Be ([int]$case.DiagnosticCount)
+                }
+            } finally {
+                if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+        }
     }
 
     Context 'AppTuning log lines (StrictMode safe)' {
@@ -517,8 +734,30 @@ Welcome to .NET 8.0!
     }
 
     Context 'Winget install modo silencioso preferencial' {
+        It 'Ensure-WingetPackage bloqueia instalacao winget antes de mutar quando reboot pendente hostil a MSI existe' {
+            Mock Test-WingetPackageInstalled { return $false }
+            Mock Test-BootstrapPackageArtifactsPresent { return $false }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @('PendingFileRenameOperations') }
+            Mock Invoke-NativeWithRetry { throw 'winget install nao deve executar com reboot pendente hostil' }
+            Mock Write-Log {}
+
+            $caught = $null
+            try {
+                Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Pending' -DisplayName 'PendingPkg' -ProbePaths @('C:\missing\pending.exe')
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'pending-reboot-msi'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'restart-required'
+            Assert-MockCalled Invoke-NativeWithRetry -Times 0 -Exactly -Scope It
+        }
+
         It 'Ensure-WingetPackage tenta --silent primeiro e faz fallback sem --silent' {
             Mock Test-WingetPackageInstalled { return $false }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
             Mock Invoke-NativeWithRetry {
                 param([string]$Exe, [string[]]$Args, [string]$OperationName)
                 if ($OperationName -match '--silent') { return 1 }
@@ -570,14 +809,138 @@ Welcome to .NET 8.0!
     }
     Context 'Winget ghost install handling' {
         It 'Ensure-WingetPackage detecta ghost install via ProbePaths' {
+            $script:WingetGhostProbeCheckCount = 0
+            Mock Test-WingetPackageInstalled { return $true }
+            Mock Test-WingetProbePathsOnDisk {
+                $script:WingetGhostProbeCheckCount++
+                return ($script:WingetGhostProbeCheckCount -ge 3)
+            }
+            Mock Invoke-NativeWithRetry { return 0 }
+            Mock Refresh-SessionPath {}
+            Mock Write-Log {}
+            Mock Get-BootstrapPendingRebootReasons { return @() }
+            Mock Get-BootstrapProcessesByName { return @() }
+
+            # Nao deve lancar excecao
+            { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Ghost' -DisplayName 'GhostPkg' -ProbePaths @('C:\fake\ghost.exe') } | Should Not Throw
+            Assert-MockCalled Get-BootstrapProcessesByName -Times 3 -Exactly -Scope It
+        }
+
+        It 'Ensure-WingetPackage classifica ghost-recovery como Blocked quando PendingFileRenameOperations bloqueia MSI' {
             Mock Test-WingetPackageInstalled { return $true }
             Mock Test-WingetProbePathsOnDisk { return $false }
             Mock Invoke-NativeWithRetry { return 0 }
             Mock Refresh-SessionPath {}
             Mock Write-Log {}
+            Mock Get-BootstrapPendingRebootReasons { return @('PendingFileRenameOperations') }
 
-            # Nao deve lancar excecao
+            $caught = $null
+            try {
+                Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Ghost' -DisplayName 'GhostPkg' -ProbePaths @('C:\fake\ghost.exe')
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'pending-reboot-msi'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'restart-required'
+            Assert-MockCalled Invoke-NativeWithRetry -Times 0 -Exactly -Scope It
+        }
+
+        It 'Ensure-WingetPackage prossegue ghost-recovery quando reboot pendente nao bloqueia MSI' {
+            $script:WingetGhostProbeCheckCount = 0
+            Mock Test-WingetPackageInstalled { return $true }
+            Mock Test-WingetProbePathsOnDisk {
+                $script:WingetGhostProbeCheckCount++
+                return ($script:WingetGhostProbeCheckCount -ge 3)
+            }
+            Mock Invoke-NativeWithRetry { return 0 }
+            Mock Refresh-SessionPath {}
+            Mock Write-Log {}
+            Mock Get-BootstrapPendingRebootReasons { return @('Component Based Servicing') }
+            Mock Get-BootstrapProcessesByName { return @() }
+
             { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Ghost' -DisplayName 'GhostPkg' -ProbePaths @('C:\fake\ghost.exe') } | Should Not Throw
+            Assert-MockCalled Get-BootstrapProcessesByName -Times 3 -Exactly -Scope It
+        }
+
+        It 'Ensure-WingetPackage bloqueia quando ghost-recovery nao limpa estado' {
+            Mock Test-WingetPackageInstalled { return $true }
+            Mock Test-WingetProbePathsOnDisk { return $false }
+            Mock Get-BootstrapPendingRebootReasons { return @() }
+            Mock Invoke-BootstrapGhostPackageRecovery { return $false }
+            Mock Invoke-NativeWithRetry { throw 'install nao deve ser chamado com ghost pendente' }
+            Mock Refresh-SessionPath {}
+            Mock Write-Log {}
+
+            $caught = $null
+            try {
+                Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Ghost' -DisplayName 'GhostPkg' -ProbePaths @('C:\fake\ghost.exe')
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'winget-ghost-unresolved'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'manual-ghost-cleanup'
+            Assert-MockCalled Invoke-NativeWithRetry -Times 0 -Exactly -Scope It
+        }
+
+        It 'Ensure-WingetPackage bloqueia sucesso winget sem binario em ProbePaths' {
+            Mock Test-WingetPackageInstalled { return $false }
+            Mock Test-WingetProbePathsOnDisk { return $false }
+            Mock Invoke-NativeWithRetry { return 0 }
+            Mock Refresh-SessionPath {}
+            Mock Start-Sleep {}
+            Mock Write-Log {}
+
+            $caught = $null
+            try {
+                Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.NoBinary' -DisplayName 'NoBinaryPkg' -ProbePaths @('C:\fake\missing.exe')
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'winget-post-install-unverified'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'inspect-or-reinstall'
+            Assert-MockCalled Invoke-NativeWithRetry -Times 1 -Scope It
+        }
+
+        It 'Ensure-WingetPackage bloqueia sucesso winget sem pacote Appx esperado' {
+            Mock Test-WingetPackageInstalled { return $false }
+            Mock Test-BootstrapAppxPackageInstalled { return $false }
+            Mock Invoke-NativeWithRetry { return 0 }
+            Mock Refresh-SessionPath {}
+            Mock Start-Sleep {}
+            Mock Write-Log {}
+
+            $caught = $null
+            try {
+                Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Microsoft.WindowsTerminal' -DisplayName 'Windows Terminal' -AppxPackageNames @('Microsoft.WindowsTerminal')
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'winget-post-install-unverified'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'inspect-or-reinstall'
+        }
+
+        It 'Wait-BootstrapWingetMsiIdle retorna false quando MSI/Winget continuam ocupados' {
+            Mock Get-BootstrapProcessesByName {
+                return @([pscustomobject]@{ ProcessName = 'msiexec'; Id = 1234 })
+            }
+            Mock Start-Sleep {}
+            Mock Write-Log {}
+
+            $idle = Wait-BootstrapWingetMsiIdle -TimeoutSeconds 1 -HeartbeatSeconds 1
+
+            $idle | Should Be $false
         }
     }
 
@@ -667,6 +1030,65 @@ Python 3.13       Python.Python.3.13   3.13.13  winget
             { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Foo.Bar' -DisplayName 'Foo' -ProbePaths @('C:\real\foo.exe') } | Should Not Throw
             Assert-MockCalled Test-WingetProbePathsOnDisk -Times 1 -Exactly
             Assert-MockCalled Test-WingetPackageInstalled -Times 0 -Exactly
+        }
+    }
+
+    Context 'Instaladores nao-winget com validacao de artefato' {
+        It 'catalogo npm declara command validation para CLIs conhecidas' {
+            $catalog = Get-BootstrapComponentCatalog
+            $expected = @{
+                'gemini-cli' = 'gemini'
+                'kilo-cli' = 'kilo'
+                'bonsai-cli' = 'bonsai'
+                'grok-cli' = 'grok'
+                'qwen-code' = 'qwen'
+                'copilot-cli' = 'copilot'
+                'codex-cli' = 'codex'
+                'promptfoo' = 'promptfoo'
+                'n8n' = 'n8n'
+            }
+            foreach ($name in @($expected.Keys)) {
+                (Test-BootstrapMapContainsKey -Map $catalog -Key $name) | Should Be $true
+                $commands = @()
+                if ($catalog[$name].PSObject.Properties.Name -contains 'CommandNames') { $commands = @($catalog[$name].CommandNames) }
+                (@($commands) -contains [string]$expected[$name]) | Should Be $true
+            }
+        }
+
+        It 'Ensure-NpmGlobalPackage bloqueia quando comando declarado nao aparece apos npm install' {
+            Mock Invoke-NpmWithLog { return 0 }
+            Mock Resolve-CommandPath { return $null }
+            Mock Write-Log {}
+            $caught = $null
+
+            try {
+                Ensure-NpmGlobalPackage -NpmCmd 'npm.cmd' -Package '@openai/codex' -DisplayName 'Codex CLI' -CommandNames @('codex')
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'npm-command-unverified'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'repair-node-path-or-reinstall'
+        }
+
+        It 'Ensure-ChocolateyPackage bloqueia quando ProbePaths nao aparece apos sucesso' {
+            Mock Invoke-NativeWithLog { return 0 }
+            Mock Test-WingetProbePathsOnDisk { return $false }
+            Mock Write-Log {}
+            $caught = $null
+
+            try {
+                Ensure-ChocolateyPackage -ChocoPath 'choco.exe' -Package 'glossi' -DisplayName 'GlosSI' -ProbePaths @('C:\missing\GlosSIConfig.exe')
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'chocolatey-post-install-unverified'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'inspect-or-reinstall'
         }
     }
 

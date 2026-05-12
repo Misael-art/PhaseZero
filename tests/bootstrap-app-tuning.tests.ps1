@@ -68,14 +68,18 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         [bool]$byId['windows-ai-services-deep-tuning'].securityImpact | Should Be $true
     }
 
-    It 'defaults legacy to off and modern profiles to recommended' {
+    It 'defaults profile aliases to off and applies recommended tuning only when explicitly requested' {
         $legacySelection = New-BootstrapSelectionObject -SelectedProfiles @('legacy')
         $legacyResolution = Resolve-BootstrapComponents -SelectedProfiles $legacySelection.Profiles
         $modernSelection = New-BootstrapSelectionObject -SelectedProfiles @('recommended')
         $modernResolution = Resolve-BootstrapComponents -SelectedProfiles $modernSelection.Profiles
 
         (Get-BootstrapDefaultAppTuningMode -Selection $legacySelection -Resolution $legacyResolution) | Should Be 'off'
-        (Get-BootstrapDefaultAppTuningMode -Selection $modernSelection -Resolution $modernResolution) | Should Be 'recommended'
+        (Get-BootstrapDefaultAppTuningMode -Selection $modernSelection -Resolution $modernResolution) | Should Be 'off'
+
+        $explicitPlan = Resolve-BootstrapAppTuningSelection -Mode 'recommended' -Selection $modernSelection -Resolution $modernResolution -InstalledInventory (New-AppTuningInventoryFixture -InstalledApps @('steam'))
+        $explicitPlan.mode | Should Be 'recommended'
+        @($explicitPlan.items).Count | Should BeGreaterThan 0
     }
 
     It 'selects safe category items and preserves explicit exclusions' {
