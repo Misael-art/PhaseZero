@@ -407,11 +407,8 @@ Critério para passar de fase: 100% das tasks da fase anterior em `completed`, C
   2. Isolar trecho da rotação via `git diff` + patch (preserva separação).
   3. Esperar dev humano commit do WIP dele primeiro; agente comita por cima.
 - agente: Claude Opus 4.7
-- estado atual: **trabalho de TASK-001..003 NÃO COMMITADO**. Está só no working tree. Arquivos 100% novos do agente (seguros para commit isolado):
-  - `AGENT_EXECUTION_PLAN.md`
-  - `docs/adr/0001-secrets-rotation-state-machine.md`
-  - `tests/bootstrap-secrets-rotation.tests.ps1`
-  - Alterações em `bootstrap-tools.ps1` estão **entremeadas** com diff alheio — exigem patch seletivo.
+- estado atual: commit `28bd922` adicionou plano + ADR + teste novo. **ATENÇÃO:** o teste `tests/bootstrap-secrets-rotation.tests.ps1` referencia funções que ainda estão **apenas no working tree** de `bootstrap-tools.ps1`. CI rodando contra `28bd922` isoladamente **falhará** porque o worker não foi commitado. As mudanças do worker em `bootstrap-tools.ps1` (linhas ~502, ~14302+, ~10052) precisam ser separadas das modificações alheias e commitadas antes de qualquer push.
+- recomendação: próximo passo (humano ou agente) deve usar `git diff bootstrap-tools.ps1` para extrair os blocos do worker (limites claros: a função `Move-BootstrapSecretsToNextCredential` é seguida imediatamente pelo bloco `# region Secrets rotation worker (ADR 0001)`; mudanças em `Register-BootstrapChange` linhas 505 e 532; preservação de `rotationQueue` na função `Convert-BootstrapSecretsProviderDefinition` perto da linha 10052), aplicar como patch num branch limpo (TASK-006a já planeja isso), e abrir PR.
 
 ---
 
