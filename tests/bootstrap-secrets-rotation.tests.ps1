@@ -114,7 +114,7 @@ Describe 'Secrets rotation worker' {
             $manifestPath = Join-Path $script:RotationDataRoot 'bootstrap-secrets.json'
             New-RotationSecretsManifest -Path $manifestPath
             $bundle = Get-BootstrapSecretsData
-            { Add-BootstrapSecretRotationItem -SecretsData $bundle.Data -ProviderName 'openai' -TargetCredentialId 'does-not-exist' } | Should Throw
+            { Add-BootstrapSecretRotationItem -SecretsData $bundle.Data -ProviderName 'openai' -TargetCredentialId 'does-not-exist' } | Should Throw 'Credencial desconhecida'
         }
     }
 

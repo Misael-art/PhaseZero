@@ -66,7 +66,7 @@ Describe 'Resilience Architecture' {
             $null = New-Item -Path $cacheDir -ItemType Directory -Force
 
             $script:CacheDir = $cacheDir
-            $script:Offline = $true
+            $Global:BootstrapOfflineOverride = $true
 
             $testFile = Join-Path $cacheDir 'out.txt'
             'hello' | Set-Content -Path $testFile
@@ -79,12 +79,12 @@ Describe 'Resilience Architecture' {
             Get-Content $outFile | Should Be 'hello'
 
             # Should throw if NOT in cache
-            { Invoke-WebRequestWithRetry -Uri 'http://dummy2' -OutFile (Join-Path $tempDir 'missing.txt') } | Should Throw
+            { Invoke-WebRequestWithRetry -Uri 'http://dummy2' -OutFile (Join-Path $tempDir 'missing.txt') } | Should Throw 'Modo OFFLINE'
 
             # Cleanup
             Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
             $script:CacheDir = ''
-            $script:Offline = $false
+            Remove-Variable -Name 'BootstrapOfflineOverride' -Scope Global -ErrorAction SilentlyContinue
         }
     }
 
@@ -431,6 +431,35 @@ Describe 'Resilience Architecture' {
                 if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
             }
         }
+
+        It 'serializa strings escalares em arrays e caminhos sem objetos Length' {
+            $root = Join-Path $env:TEMP ('phasezero-result-scalars-' + [guid]::NewGuid().ToString('N'))
+            try {
+                New-Item -ItemType Directory -Path $root -Force | Out-Null
+                $resultPath = Join-Path $root 'scalar.result.json'
+                $changesPath = Join-Path $root 'changes.json'
+
+                Write-BootstrapExecutionResultFile -Path $resultPath -Value ([ordered]@{
+                    status = 'success'
+                    changesPath = $changesPath
+                    preflight = [ordered]@{
+                        pendingRebootReasons = @('PendingFileRenameOperations')
+                        pendingRebootMsiBlockers = @()
+                    }
+                })
+
+                $rawJson = Get-Content -LiteralPath $resultPath -Raw
+                $json = $rawJson | ConvertFrom-Json
+                [string]$json.changesPath | Should Be $changesPath
+                ($json.preflight.pendingRebootReasons[0] -is [string]) | Should Be $true
+                [string]$json.preflight.pendingRebootReasons[0] | Should Be 'PendingFileRenameOperations'
+                ($rawJson -match '"Length"\s*:') | Should Be $false
+                [string]$json.artifactPaths.changesPath | Should Be $changesPath
+                [string]$json.rollback.changesPath | Should Be $changesPath
+            } finally {
+                if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+        }
     }
 
     Context 'AppTuning log lines (StrictMode safe)' {
@@ -673,6 +702,22 @@ Welcome to .NET 8.0!
             $out = "6.0.428 [C:\Program Files\dotnet\sdk]"
             Test-BootstrapDotNetSdkListHasMajorBand -ListSdksOutput $out -Major 8 | Should Be $false
         }
+
+        It 'usa probe especifico de SDK 8 ao instalar dotnet-core' {
+            $script:dotnetProbePaths = @()
+            Mock Get-DotNetExe { return 'C:\Program Files\dotnet\dotnet.exe' }
+            Mock Get-DotNetListSdksOutput { return "10.0.203 [C:\Program Files\dotnet\sdk]" }
+            Mock Ensure-WingetPackage {
+                param($WingetPath, $Id, $DisplayName, $AllowFailureWhenNotAdmin, $ProbePaths)
+                $script:dotnetProbePaths = @($ProbePaths)
+            }
+            Mock Refresh-SessionPath {}
+
+            { Ensure-DotNetSdkAndVerify -WingetPath 'winget.exe' } | Should Throw 'SDK 8.x'
+
+            ($script:dotnetProbePaths -join '|') | Should Match '\\dotnet\\sdk\\8\.\*\\dotnet\.dll'
+            ($script:dotnetProbePaths -join '|') | Should Not Match '\\dotnet\\dotnet\.exe'
+        }
     }
 
     Context 'Winget list probe (Invoke-WingetListIdProbe)' {
@@ -772,6 +817,54 @@ Welcome to .NET 8.0!
             Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Notepad++ via winget --scope user' } -Times 1 -Exactly
             Assert-MockCalled Refresh-SessionPath -Times 1 -Exactly
         }
+
+        It 'Ensure-WingetPackage evita fallback machine sem admin quando user-scope falha' {
+            Mock Test-WingetPackageInstalled { return $false }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
+            Mock Test-IsAdmin { return $false }
+            Mock Invoke-NativeWithRetry { return -1978335216 }
+            Mock Refresh-SessionPath { throw 'Refresh-SessionPath nao deve executar quando pacote foi pulado' }
+            Mock Write-Log { }
+            $state = @{
+                ComponentStatus = @{}
+                SkippedComponents = New-Object System.Collections.Generic.List[object]
+                Warnings = New-Object System.Collections.Generic.List[string]
+            }
+
+            { Ensure-WingetPackage -WingetPath 'C:\Fake\winget.exe' -Id 'Google.Chrome' -DisplayName 'Google Chrome' -PreferUserScope $true -AllowFailureWhenNotAdmin $true -State $state -ComponentName 'chrome' } | Should Not Throw
+
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --scope user --silent' } -Times 1 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --scope user' } -Times 0 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --scope user --silent' -and $TimeoutMs -eq 120000 } -Times 1 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --silent' } -Times 0 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget' } -Times 0 -Exactly
+            Assert-MockCalled Write-Log -ParameterFilter { $Level -eq 'WARN' -and $Message -match 'Nao tentando fallback machine' } -Times 1 -Exactly
+            @($state.SkippedComponents.ToArray()).Count | Should Be 1
+            [string]$state.SkippedComponents[0].component | Should Be 'chrome'
+            [string]$state.ComponentStatus['chrome'].status | Should Be 'skipped'
+            @($state.Warnings.ToArray()).Count | Should Be 1
+        }
+
+        It 'Ensure-WingetPackage pula apos timeout user-scope sem retentar non-silent em non-admin' {
+            Mock Test-WingetPackageInstalled { return $false }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
+            Mock Test-IsAdmin { return $false }
+            Mock Invoke-NativeWithRetry { return 124 }
+            Mock Refresh-SessionPath { throw 'Refresh-SessionPath nao deve executar quando pacote foi pulado' }
+            Mock Write-Log { }
+            $state = @{
+                ComponentStatus = @{}
+                SkippedComponents = New-Object System.Collections.Generic.List[object]
+                Warnings = New-Object System.Collections.Generic.List[string]
+            }
+
+            { Ensure-WingetPackage -WingetPath 'C:\Fake\winget.exe' -Id 'Google.Antigravity' -DisplayName 'Antigravity' -PreferUserScope $true -AllowFailureWhenNotAdmin $true -State $state -ComponentName 'antigravity' } | Should Not Throw
+
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Antigravity via winget --scope user --silent' -and $NonRetryableExitCodes -contains 124 -and $NonRetryableExitCodes -contains -1978335226 } -Times 1 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Antigravity via winget --scope user' } -Times 0 -Exactly
+            [string]$state.ComponentStatus['antigravity'].status | Should Be 'skipped'
+            [int]$state.SkippedComponents[0].exitCode | Should Be 124
+        }
     }
 
     Context 'Perfis e preflight manual/reboot' {
@@ -806,6 +899,67 @@ Welcome to .NET 8.0!
                 $script:AllowPendingReboot = $prevAllow
             }
         }
+
+        It 'classifica PendingFileRenameOperations de spool e GamingServices como aviso nao hostil a MSI' {
+            Mock Get-BootstrapPendingFileRenameOperationRecords {
+                return @(
+                    [pscustomobject]@{
+                        source = '\??\C:\Windows\System32\gamingservicesproxy_e.dll.0'
+                        destination = ''
+                        category = 'gaming-services'
+                        msiHostile = $false
+                    },
+                    [pscustomobject]@{
+                        source = '\??\C:\Windows\System32\spool\drivers\x64\3\New\UNIDRV.DLL'
+                        destination = '\??\C:\Windows\System32\spool\drivers\x64\3\UNIDRV.DLL'
+                        category = 'print-driver'
+                        msiHostile = $false
+                    }
+                )
+            }
+
+            $blockers = @(Get-BootstrapMsiHostilePendingRebootReasons -Reasons @('PendingFileRenameOperations'))
+
+            @($blockers).Count | Should Be 0
+        }
+
+        It 'classifica PendingFileRenameOperations de installer/cache como bloqueio MSI-hostil' {
+            Mock Get-BootstrapPendingFileRenameOperationRecords {
+                return @(
+                    [pscustomobject]@{
+                        source = '\??\C:\Windows\Installer\1234.tmp'
+                        destination = '\??\C:\Windows\Installer\1234.msi'
+                        category = 'installer'
+                        msiHostile = $true
+                    }
+                )
+            }
+
+            $blockers = @(Get-BootstrapMsiHostilePendingRebootReasons -Reasons @('PendingFileRenameOperations'))
+
+            @($blockers).Count | Should Be 1
+            [string]$blockers[0] | Should Be 'PendingFileRenameOperations'
+        }
+
+        It 'inclui detalhes categorizados do pending reboot no diagnostico de preflight' {
+            Mock Get-BootstrapPendingFileRenameOperationRecords {
+                return @(
+                    [pscustomobject]@{
+                        source = '\??\C:\Windows\System32\spool\drivers\x64\3\New\UNIDRV.DLL'
+                        destination = '\??\C:\Windows\System32\spool\drivers\x64\3\UNIDRV.DLL'
+                        category = 'print-driver'
+                        msiHostile = $false
+                    }
+                )
+            }
+
+            $details = @(Get-BootstrapPendingRebootDetails -Reasons @('PendingFileRenameOperations'))
+
+            @($details).Count | Should Be 1
+            [string]$details[0].reason | Should Be 'PendingFileRenameOperations'
+            [string]$details[0].category | Should Be 'print-driver'
+            [bool]$details[0].msiHostile | Should Be $false
+        }
     }
     Context 'Winget ghost install handling' {
         It 'Ensure-WingetPackage detecta ghost install via ProbePaths' {
@@ -832,7 +986,7 @@ Welcome to .NET 8.0!
             Mock Invoke-NativeWithRetry { return 0 }
             Mock Refresh-SessionPath {}
             Mock Write-Log {}
-            Mock Get-BootstrapPendingRebootReasons { return @('PendingFileRenameOperations') }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @('PendingFileRenameOperations') }
 
             $caught = $null
             try {
@@ -848,6 +1002,26 @@ Welcome to .NET 8.0!
             Assert-MockCalled Invoke-NativeWithRetry -Times 0 -Exactly -Scope It
         }
 
+        It 'Ensure-WingetPackage prossegue ghost-recovery quando pending rename e benigno' {
+            $script:WingetGhostProbeCheckCount = 0
+            Mock Test-WingetPackageInstalled { return $true }
+            Mock Test-WingetProbePathsOnDisk {
+                $script:WingetGhostProbeCheckCount++
+                return ($script:WingetGhostProbeCheckCount -ge 3)
+            }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
+            Mock Invoke-BootstrapGhostPackageRecovery { return $true }
+            Mock Get-BootstrapProcessesByName { return @() }
+            Mock Invoke-NativeWithRetry { return 0 }
+            Mock Refresh-SessionPath {}
+            Mock Write-Log {}
+
+            { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Ghost' -DisplayName 'GhostPkg' -ProbePaths @('C:\fake\ghost.exe') } | Should Not Throw
+
+            Assert-MockCalled Invoke-BootstrapGhostPackageRecovery -Times 1 -Exactly -Scope It
+            Assert-MockCalled Invoke-NativeWithRetry -Times 1 -Scope It
+        }
+
         It 'Ensure-WingetPackage prossegue ghost-recovery quando reboot pendente nao bloqueia MSI' {
             $script:WingetGhostProbeCheckCount = 0
             Mock Test-WingetPackageInstalled { return $true }
@@ -859,10 +1033,52 @@ Welcome to .NET 8.0!
             Mock Refresh-SessionPath {}
             Mock Write-Log {}
             Mock Get-BootstrapPendingRebootReasons { return @('Component Based Servicing') }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
             Mock Get-BootstrapProcessesByName { return @() }
 
             { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Ghost' -DisplayName 'GhostPkg' -ProbePaths @('C:\fake\ghost.exe') } | Should Not Throw
             Assert-MockCalled Get-BootstrapProcessesByName -Times 3 -Exactly -Scope It
+        }
+
+        It 'Invoke-BootstrapGhostPackageRecovery tenta --all-versions quando winget reporta multiplas versoes' {
+            $root = Join-Path $env:TEMP ("phasezero-allversions-{0}" -f ([Guid]::NewGuid().ToString('N')))
+            try {
+                New-Item -Path $root -ItemType Directory -Force | Out-Null
+                $childPath = Join-Path $root 'run.ps1'
+                $stdoutPath = Join-Path $root 'out.txt'
+                $stderrPath = Join-Path $root 'err.txt'
+                @"
+. '$scriptPath' -BootstrapUiLibraryMode
+function Write-Log { param([string]`$Message, [string]`$Level) }
+`$script:allVersionsUninstallCalled = `$false
+function Invoke-NativeWithRetry {
+    param(`$Exe, [string[]]`$Args, `$OperationName)
+    `$callArgs = @(`$PSBoundParameters['Args'])
+    if (`$callArgs -contains '--all-versions') {
+        `$script:allVersionsUninstallCalled = `$true
+        return 0
+    }
+    return -1978335210
+}
+`$cleaned = Invoke-BootstrapGhostPackageRecovery -WingetPath 'fake.exe' -Id 'SST.OpenCodeDesktop' -DisplayName 'OpenCode Desktop'
+'CLEANED=' + `$cleaned
+'ALLVERSIONS=' + `$script:allVersionsUninstallCalled
+if (-not `$cleaned) { exit 20 }
+if (-not `$script:allVersionsUninstallCalled) { exit 21 }
+exit 0
+"@ | Set-Content -LiteralPath $childPath -Encoding utf8
+                $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+                $proc = Start-Process -FilePath $powershellExe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$childPath) -Wait -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+                $stdout = Get-Content -Raw -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
+                $stderr = Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+
+                $proc.ExitCode | Should Be 0
+                $stdout | Should Match 'CLEANED=True'
+                $stdout | Should Match 'ALLVERSIONS=True'
+                [string]::IsNullOrWhiteSpace($stderr) | Should Be $true
+            } finally {
+                if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+            }
         }
 
         It 'Ensure-WingetPackage bloqueia quando ghost-recovery nao limpa estado' {
@@ -942,6 +1158,26 @@ Welcome to .NET 8.0!
 
             $idle | Should Be $false
         }
+
+        It 'Wait-BootstrapWingetMsiIdle ignora servicos stale de msiexec e WindowsPackageManagerServer' {
+            $old = (Get-Date).AddHours(-2)
+            Mock Get-BootstrapProcessesByName {
+                param([string]$Name)
+                if ($Name -eq 'msiexec') {
+                    return @([pscustomobject]@{ ProcessName = 'msiexec'; Id = 2200; StartTime = $old; Path = ''; CommandLine = '' })
+                }
+                if ($Name -eq 'WindowsPackageManagerServer') {
+                    return @([pscustomobject]@{ ProcessName = 'WindowsPackageManagerServer'; Id = 18356; StartTime = $old; Path = 'C:\Program Files\WindowsApps\WindowsPackageManagerServer.exe'; CommandLine = '"WindowsPackageManagerServer.exe" -Embedding' })
+                }
+                return @()
+            }
+            Mock Start-Sleep {}
+            Mock Write-Log {}
+
+            $idle = Wait-BootstrapWingetMsiIdle -TimeoutSeconds 1 -HeartbeatSeconds 1
+
+            $idle | Should Be $true
+        }
     }
 
     Context 'Invoke-NativeWithRetry soft-success exit codes' {
@@ -962,6 +1198,59 @@ Welcome to .NET 8.0!
             $r | Should Be -1978335189
             # Filtro pelo arg unico deste teste para nao contar chamadas do It vizinho.
             Assert-MockCalled Invoke-NativeWithLog -ParameterFilter { $Args -contains 'install-no-soft' } -Times $maxAttempts -Exactly
+        }
+
+        It 'NonRetryableExitCodes corta retries de falha deterministica' {
+            Mock Invoke-NativeWithLog { return -1978335216 }
+            Mock Write-Log {}
+            Mock Start-Sleep {}
+
+            $r = Invoke-NativeWithRetry -Exe 'fake.exe' -Args @('install-no-applicable') -OperationName 'pkg-test-no-applicable' -MaxAttempts 5 -InitialDelaySeconds 1 -NonRetryableExitCodes @(-1978335216)
+
+            $r | Should Be -1978335216
+            Assert-MockCalled Invoke-NativeWithLog -ParameterFilter { $Args -contains 'install-no-applicable' } -Times 1 -Exactly
+            Assert-MockCalled Write-Log -ParameterFilter { $Level -eq 'WARN' -and $Message -match 'falha nao retentavel' } -Times 1 -Exactly
+        }
+
+        It 'retries native nonzero commands without terminating the PowerShell host' {
+            $root = Join-Path $env:TEMP ("phasezero-native-retry-{0}" -f ([Guid]::NewGuid().ToString('N')))
+            try {
+                New-Item -Path $root -ItemType Directory -Force | Out-Null
+                $cmdPath = Join-Path $root 'fail.cmd'
+                $attemptsPath = Join-Path $root 'attempts.txt'
+                $childPath = Join-Path $root 'run.ps1'
+                $stdoutPath = Join-Path $root 'child.out'
+                $stderrPath = Join-Path $root 'child.err'
+                $logPath = Join-Path $root 'native.log'
+                @"
+@echo off
+echo attempt>>"$attemptsPath"
+echo native failure
+exit /b 7
+"@ | Set-Content -LiteralPath $cmdPath -Encoding ascii
+                @"
+. '$scriptPath' -BootstrapUiLibraryMode
+`$script:LogPath = '$logPath'
+function Start-Sleep { param([int]`$Seconds, [int]`$Milliseconds) }
+`$exit = Invoke-NativeWithRetry -Exe `$env:ComSpec -Args @('/d','/s','/c','$cmdPath') -OperationName 'native-retry-real' -MaxAttempts 2 -InitialDelaySeconds 1
+'RETRY_EXIT=' + `$exit
+if (`$exit -ne 7) { exit 20 }
+if (@(Get-Content -LiteralPath '$attemptsPath').Count -ne 2) { exit 21 }
+if ((Get-Content -Raw -LiteralPath '$logPath') -notmatch 'native failure') { exit 22 }
+exit 0
+"@ | Set-Content -LiteralPath $childPath -Encoding utf8
+
+                $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+                $proc = Start-Process -FilePath $powershellExe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$childPath) -Wait -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
+
+                $stdout = Get-Content -Raw -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
+                $stderr = Get-Content -Raw -LiteralPath $stderrPath -ErrorAction SilentlyContinue
+                $proc.ExitCode | Should Be 0
+                $stdout | Should Match 'RETRY_EXIT=7'
+                [string]::IsNullOrWhiteSpace($stderr) | Should Be $true
+            } finally {
+                if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+            }
         }
 
         It 'Test-WingetSoftSuccessExit reconhece todos os codigos catalogados' {

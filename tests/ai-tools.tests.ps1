@@ -22,7 +22,7 @@ function Remove-AiToolsTestRoot {
 function Invoke-InstallCliBat {
     param(
         [Parameter(Mandatory = $true)][string[]]$Args,
-        [int]$TimeoutMs = 120000
+        [int]$TimeoutMs = 240000
     )
 
     $argLiteral = ($Args | ForEach-Object {

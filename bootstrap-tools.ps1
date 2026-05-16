@@ -28,6 +28,11 @@
     [switch]$BootstrapUiLibraryMode,
     [switch]$SecretsList,
     [switch]$SecretsValidateAll,
+    [switch]$RotateSecrets,
+    [string]$RotateSecretsProvider = '',
+    [int]$RotateSecretsMaxItems = 10,
+    [int]$RotateSecretsTimeoutSeconds = 120,
+    [ValidateSet('none', 'daily', 'weekly')][string]$RotateSecretsSchedule = '',
     [switch]$DryRun,
     [switch]$NonInteractive,
     [switch]$SkipManualRequirements,
@@ -502,7 +507,7 @@ function Invoke-BootstrapRollback {
 function Register-BootstrapChange {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
-        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'DefenderExclusion', 'Clone')][string]$Type,
+        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'DefenderExclusion', 'Clone', 'SecretsRotation')][string]$Type,
         [Parameter(Mandatory = $true)][string]$Target,
         [AllowNull()]$OldValue,
         [string]$Name,
@@ -525,11 +530,12 @@ function Register-BootstrapChange {
             'EnvVar' { 'restore-env-var' }
             'Service' { 'restore-service-state' }
             'DefenderExclusion' { 'remove-defender-exclusion' }
+            'SecretsRotation' { 'restore-active-credential' }
             default { 'manual-review' }
         }
     }
     if ([string]::IsNullOrWhiteSpace($Reversible)) {
-        $Reversible = if ($Type -in @('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Shortcut', 'Task', 'Service', 'Clone')) { 'partial' } else { 'manual' }
+        $Reversible = if ($Type -in @('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Shortcut', 'Task', 'Service', 'Clone', 'SecretsRotation')) { 'partial' } else { 'manual' }
     }
     $change = [ordered]@{
         Type = $Type
@@ -1599,9 +1605,9 @@ public static class BootstrapNativeMethods {
 function Invoke-NativeWithLog {
     <#
     .SYNOPSIS
-        Executa binario nativo com captura de saida via async pipes e timeout configuravel.
-        Substitui o uso anterior de `& $Exe @Args 2>&1` que nao tinha protecao contra processos
-        travados (winget congelado pendurava tudo).
+        Executa binario nativo com captura de saida via tarefas async e timeout configuravel.
+        Evita `& $Exe @Args 2>&1` e pipes async, que podem deixar exit code nativo vazar
+        para o processo PowerShell antes do bootstrap escrever result.json.
     #>
     param(
         [Parameter(Mandatory = $true)][string]$Exe,
@@ -1609,58 +1615,58 @@ function Invoke-NativeWithLog {
         [int]$TimeoutMs = 600000
     )
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $Exe
-    $psi.Arguments = (($Args | ForEach-Object {
+    $argumentString = (($Args | ForEach-Object {
                 $v = [string]$_
-                if ($v -match '\s') { '"' + ($v -replace '"', '\"') + '"' } else { $v }
+                if ($v -match '[\s"]') { '"' + ($v -replace '"', '\"') + '"' } else { $v }
             }) -join ' ')
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.RedirectStandardInput = $false
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
+    $timedOut = $false
+    $exitCode = -1
+    $proc = $null
 
-    $proc = New-Object System.Diagnostics.Process
-    $proc.StartInfo = $psi
-    $proc.EnableRaisingEvents = $true
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $Exe
+        $psi.Arguments = $argumentString
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.RedirectStandardInput = $false
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
 
-    $logPath = $script:LogPath
-    $proc.add_OutputDataReceived({
-            param($sender, $e)
-            if ($null -ne $e.Data) {
-                $line = [string]$e.Data
-                if ($line -match "`0") { $line = $line -replace "`0", '' }
-                try { Add-Content -Path $logPath -Value $line -Encoding utf8 -ErrorAction SilentlyContinue } catch { }
+        $proc = New-Object System.Diagnostics.Process
+        $proc.StartInfo = $psi
+        [void]$proc.Start()
+        $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+        $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+        if (-not $proc.WaitForExit($TimeoutMs)) {
+            $timedOut = $true
+            Write-Log ("Comando nativo excedeu timeout ({0}ms): {1} {2}. Encerrando processo." -f $TimeoutMs, $Exe, $argumentString) 'WARN'
+            try { $proc.Kill() } catch { }
+            try { $null = $proc.WaitForExit(5000) } catch { }
+            $exitCode = 124
+        } else {
+            try { $proc.WaitForExit() } catch { }
+            $exitCode = [int]$proc.ExitCode
+        }
+
+        foreach ($textTask in @($stdoutTask, $stderrTask)) {
+            $text = ''
+            try { $text = [string]$textTask.Result } catch { $text = '' }
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            $lines = ($text -replace "`0", '' -replace "`r", "`n") -split "`n"
+            foreach ($lineValue in @($lines)) {
+                $line = [string]$lineValue
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                try { Add-Content -Path $script:LogPath -Value $line -Encoding utf8 -ErrorAction SilentlyContinue } catch { }
                 Write-Host $line
             }
-        })
-    $proc.add_ErrorDataReceived({
-            param($sender, $e)
-            if ($null -ne $e.Data) {
-                $line = [string]$e.Data
-                if ($line -match "`0") { $line = $line -replace "`0", '' }
-                try { Add-Content -Path $logPath -Value $line -Encoding utf8 -ErrorAction SilentlyContinue } catch { }
-                Write-Host $line
-            }
-        })
-
-    $null = $proc.Start()
-    $proc.BeginOutputReadLine()
-    $proc.BeginErrorReadLine()
-
-    $timedOut = -not $proc.WaitForExit($TimeoutMs)
-    if ($timedOut) {
-        Write-Log ("Comando nativo excedeu timeout ({0}ms): {1} {2}. Encerrando processo." -f $TimeoutMs, $Exe, $psi.Arguments) 'WARN'
-        try { $proc.Kill() } catch { }
-        try { $null = $proc.WaitForExit(5000) } catch { }
+        }
+    } finally {
+        try { if ($proc) { $proc.Dispose() } } catch { }
+        try { $global:LASTEXITCODE = 0 } catch { }
     }
 
-    try { $proc.CancelOutputRead() } catch { }
-    try { $proc.CancelErrorRead() } catch { }
-
-    $exitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
-    try { $proc.Dispose() } catch { }
     return $exitCode
 }
 
@@ -2108,6 +2114,130 @@ function Get-BootstrapPendingRebootReasons {
     return @($reasons | Select-Object -Unique)
 }
 
+function Normalize-BootstrapPendingFileRenamePath {
+    param([AllowNull()][string]$Path)
+
+    $text = ([string]$Path).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+    $text = $text -replace '^\*\d+', ''
+    $text = $text -replace '^\\\?\?\\', ''
+    return $text
+}
+
+function Get-BootstrapPendingFileRenameOperationCategory {
+    param(
+        [AllowNull()][string]$Source,
+        [AllowNull()][string]$Destination
+    )
+
+    $joined = ((@($Source, $Destination) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) -join ' ').ToLowerInvariant()
+    if ($joined -match '\\system32\\spool\\drivers\\') { return 'print-driver' }
+    if ($joined -match 'gamingservices|gameinput') { return 'gaming-services' }
+    if ($joined -match '\\windows\\installer\\|\\programdata\\package cache\\|\\installer\\|\.msi(\s|$)|\.msp(\s|$)|msiexec|desktopappinstaller|appinstaller|winget') { return 'installer' }
+    if ($joined -match '\\windows\\softwaredistribution\\|\\winsxs\\|\\servicing\\') { return 'windows-update' }
+    if ($joined -match '\\windows\\system32\\drivers\\|\\driverstore\\') { return 'driver' }
+    if ($joined -match '\\windows\\system32\\') { return 'system-file' }
+    return 'unknown'
+}
+
+function Test-BootstrapPendingFileRenameOperationMsiHostile {
+    param(
+        [AllowNull()][string]$Source,
+        [AllowNull()][string]$Destination
+    )
+
+    $category = Get-BootstrapPendingFileRenameOperationCategory -Source $Source -Destination $Destination
+    return (@('installer', 'windows-update') -contains $category)
+}
+
+function Get-BootstrapPendingFileRenameOperationRecords {
+    param([AllowNull()][string[]]$Operations = $null)
+
+    if ($null -eq $Operations) {
+        try {
+            $sessionManager = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -ErrorAction SilentlyContinue
+            if ($sessionManager -and $sessionManager.PendingFileRenameOperations) {
+                $Operations = @($sessionManager.PendingFileRenameOperations)
+            } else {
+                $Operations = @()
+            }
+        } catch {
+            $Operations = @()
+        }
+    }
+
+    $records = New-Object System.Collections.Generic.List[object]
+    $items = @($Operations)
+    for ($i = 0; $i -lt $items.Count; $i += 2) {
+        $source = Normalize-BootstrapPendingFileRenamePath -Path ([string]$items[$i])
+        $destination = ''
+        if (($i + 1) -lt $items.Count) {
+            $destination = Normalize-BootstrapPendingFileRenamePath -Path ([string]$items[$i + 1])
+        }
+        if ([string]::IsNullOrWhiteSpace($source) -and [string]::IsNullOrWhiteSpace($destination)) { continue }
+
+        $category = Get-BootstrapPendingFileRenameOperationCategory -Source $source -Destination $destination
+        $records.Add([pscustomobject]@{
+                source = $source
+                destination = $destination
+                action = $(if ([string]::IsNullOrWhiteSpace($destination)) { 'delete' } else { 'rename' })
+                category = $category
+                msiHostile = [bool](Test-BootstrapPendingFileRenameOperationMsiHostile -Source $source -Destination $destination)
+            })
+    }
+
+    return @($records.ToArray())
+}
+
+function Get-BootstrapPendingRebootDetails {
+    param([AllowNull()][string[]]$Reasons = $null)
+
+    if ($null -eq $Reasons) {
+        try { $Reasons = @(Get-BootstrapPendingRebootReasons) } catch { $Reasons = @() }
+    }
+
+    $details = New-Object System.Collections.Generic.List[object]
+    foreach ($reason in @($Reasons)) {
+        $r = [string]$reason
+        if ($r -eq 'PendingFileRenameOperations') {
+            $records = @(Get-BootstrapPendingFileRenameOperationRecords)
+            if ($records.Count -eq 0) {
+                $details.Add([pscustomobject]@{
+                        reason = $r
+                        category = 'unreadable'
+                        msiHostile = $true
+                        count = 0
+                        source = ''
+                        destination = ''
+                    })
+                continue
+            }
+            foreach ($record in $records) {
+                $details.Add([pscustomobject]@{
+                        reason = $r
+                        category = [string]$record.category
+                        msiHostile = [bool]$record.msiHostile
+                        count = 1
+                        source = [string]$record.source
+                        destination = [string]$record.destination
+                    })
+            }
+            continue
+        }
+
+        $details.Add([pscustomobject]@{
+                reason = $r
+                category = $(if ($r -eq 'UpdateExeVolatile') { 'installer' } elseif ($r -match 'Windows Update|Component Based Servicing') { 'windows-update' } else { 'system' })
+                msiHostile = [bool]($r -eq 'UpdateExeVolatile')
+                count = 1
+                source = ''
+                destination = ''
+            })
+    }
+
+    return @($details.ToArray())
+}
+
 function Get-BootstrapMsiHostilePendingRebootReasons {
     param([AllowNull()][string[]]$Reasons = $null)
 
@@ -2118,8 +2248,15 @@ function Get-BootstrapMsiHostilePendingRebootReasons {
     $blockers = New-Object System.Collections.Generic.List[string]
     foreach ($reason in @($Reasons)) {
         $r = [string]$reason
-        if ($r -eq 'PendingFileRenameOperations' -or $r -eq 'UpdateExeVolatile') {
+        if ($r -eq 'UpdateExeVolatile') {
             $blockers.Add($r)
+            continue
+        }
+        if ($r -eq 'PendingFileRenameOperations') {
+            $records = @(Get-BootstrapPendingFileRenameOperationRecords)
+            if ($records.Count -eq 0 -or @($records | Where-Object { [bool]$_.msiHostile }).Count -gt 0) {
+                $blockers.Add($r)
+            }
         }
     }
     return @($blockers | Select-Object -Unique)
@@ -2139,6 +2276,66 @@ function New-BootstrapBlockedException {
     $ex.Data['BootstrapAction'] = $Action
     $ex.Data['BootstrapReasons'] = @($Reasons)
     return $ex
+}
+
+function Register-BootstrapComponentSkip {
+    param(
+        [AllowNull()][hashtable]$State = $null,
+        [string]$ComponentName = '',
+        [string]$Reason = 'skipped',
+        [string]$Message = '',
+        [string]$Action = '',
+        [string]$PackageId = '',
+        [string]$DisplayName = '',
+        [AllowNull()][object]$ExitCode = $null
+    )
+
+    if (-not $State) { return }
+    if (-not $State.ContainsKey('SkippedComponents')) {
+        $State.SkippedComponents = New-Object System.Collections.Generic.List[object]
+    }
+    if (-not $State.ContainsKey('Warnings')) {
+        $State.Warnings = New-Object System.Collections.Generic.List[string]
+    }
+
+    $record = [ordered]@{
+        component = $ComponentName
+        reason = $Reason
+        message = $Message
+        action = $Action
+        packageId = $PackageId
+        displayName = $DisplayName
+        exitCode = $ExitCode
+        timestamp = (Get-Date).ToString('o')
+    }
+    $State.SkippedComponents.Add($record)
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        $State.Warnings.Add($Message)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ComponentName)) {
+        $State.ComponentStatus[$ComponentName] = [ordered]@{
+            status = 'skipped'
+            timestamp = $record.timestamp
+            reason = $Reason
+            warning = $Message
+            action = $Action
+            packageId = $PackageId
+            exitCode = $ExitCode
+        }
+    }
+}
+
+function Test-BootstrapComponentSkipped {
+    param(
+        [AllowNull()][hashtable]$State = $null,
+        [Parameter(Mandatory = $true)][string]$ComponentName
+    )
+
+    if (-not $State -or -not $State.ContainsKey('SkippedComponents')) { return $false }
+    foreach ($item in @($State.SkippedComponents.ToArray())) {
+        if ([string]$item.component -eq $ComponentName) { return $true }
+    }
+    return $false
 }
 
 function Get-BootstrapBlockedErrorInfo {
@@ -2168,7 +2365,59 @@ function Get-BootstrapBlockedErrorInfo {
 function Get-BootstrapProcessesByName {
     param([Parameter(Mandatory = $true)][string]$Name)
 
-    return @(Get-Process -Name $Name -ErrorAction SilentlyContinue)
+    $exeName = if ($Name -match '(?i)\.exe$') { $Name } else { "$Name.exe" }
+    try {
+        return @(
+            Get-CimInstance Win32_Process -Filter ("Name='{0}'" -f ($exeName -replace "'", "''")) -ErrorAction Stop |
+                ForEach-Object {
+                    [pscustomobject]@{
+                        ProcessName = ([string]$_.Name -replace '(?i)\.exe$', '')
+                        Id = [int]$_.ProcessId
+                        StartTime = $_.CreationDate
+                        Path = [string]$_.ExecutablePath
+                        CommandLine = [string]$_.CommandLine
+                    }
+                }
+        )
+    } catch {
+        return @(Get-Process -Name $Name -ErrorAction SilentlyContinue)
+    }
+}
+
+function Test-BootstrapInstallerProcessIsBusy {
+    param(
+        [Parameter(Mandatory = $true)]$Process,
+        [Parameter(Mandatory = $true)][datetime]$WaitStarted
+    )
+
+    $name = ([string]$Process.ProcessName).Trim()
+    $start = $null
+    try {
+        if ($Process.PSObject.Properties.Name -contains 'StartTime' -and $null -ne $Process.StartTime) {
+            $start = [datetime]$Process.StartTime
+        }
+    } catch {
+        $start = $null
+    }
+    $path = ''
+    if ($Process.PSObject.Properties.Name -contains 'Path') { $path = [string]$Process.Path }
+    $commandLine = ''
+    if ($Process.PSObject.Properties.Name -contains 'CommandLine') { $commandLine = [string]$Process.CommandLine }
+
+    if ($name -ieq 'WindowsPackageManagerServer') {
+        if ($start -and $start -lt $WaitStarted.AddMinutes(-2)) { return $false }
+        return $true
+    }
+
+    if ($name -ieq 'msiexec') {
+        if ([string]::IsNullOrWhiteSpace($path) -and [string]::IsNullOrWhiteSpace($commandLine) -and $start -and $start -lt $WaitStarted.AddMinutes(-2)) {
+            return $false
+        }
+        if ($start -and $start -lt $WaitStarted.AddMinutes(-30)) { return $false }
+        return $true
+    }
+
+    return $true
 }
 
 function Wait-BootstrapWingetMsiIdle {
@@ -2183,9 +2432,10 @@ function Wait-BootstrapWingetMsiIdle {
     $lastHeartbeat = -1
 
     for ($elapsed = 0; $elapsed -lt $timeout; $elapsed++) {
+        $referenceTime = Get-Date
         $active = @(
             foreach ($name in $processNames) {
-                Get-BootstrapProcessesByName -Name $name
+                Get-BootstrapProcessesByName -Name $name | Where-Object { Test-BootstrapInstallerProcessIsBusy -Process $_ -WaitStarted $referenceTime }
             }
         )
         if (@($active).Count -eq 0) { return $true }
@@ -2198,9 +2448,10 @@ function Wait-BootstrapWingetMsiIdle {
         Start-Sleep -Seconds 1
     }
 
+    $referenceTime = Get-Date
     $remaining = @(
         foreach ($name in $processNames) {
-            Get-BootstrapProcessesByName -Name $name
+            Get-BootstrapProcessesByName -Name $name | Where-Object { Test-BootstrapInstallerProcessIsBusy -Process $_ -WaitStarted $referenceTime }
         }
     )
     if (@($remaining).Count -eq 0) { return $true }
@@ -2410,10 +2661,17 @@ function Invoke-BootstrapExecutionPreflight {
 
     $requirements = Get-BootstrapPreflightRequirements -ResolvedComponents $ResolvedComponents
     $pendingRebootReasons = @(Get-BootstrapPendingRebootReasons)
+    $pendingRebootDetails = @(Get-BootstrapPendingRebootDetails -Reasons $pendingRebootReasons)
     $pendingRebootMsiBlockers = @(Get-BootstrapMsiHostilePendingRebootReasons -Reasons $pendingRebootReasons)
     $pendingRebootSeverity = if ($pendingRebootMsiBlockers.Count -gt 0) { 'blocker-for-msi-ghost' } else { 'warning' }
     if ($pendingRebootReasons.Count -gt 0) {
         Write-Log ("Reinicio pendente detectado: {0}. Instalacoes podem falhar (Store/winget/WSL). Recomendo reiniciar antes de prosseguir." -f ($pendingRebootReasons -join ', ')) 'WARN'
+        $renameDetails = @($pendingRebootDetails | Where-Object { [string]$_.reason -eq 'PendingFileRenameOperations' })
+        if ($renameDetails.Count -gt 0) {
+            $categorySummary = @($renameDetails | Group-Object category | ForEach-Object { "{0}={1}" -f $_.Name, $_.Count })
+            $hostileCount = @($renameDetails | Where-Object { [bool]$_.msiHostile }).Count
+            Write-Log ("PendingFileRenameOperations: {0} operacao(oes), categorias: {1}, msiHostile={2}" -f $renameDetails.Count, ($categorySummary -join ', '), $hostileCount) 'WARN'
+        }
         if ($script:RequireNoPendingReboot) {
             throw ("Preflight: reinicio pendente e flag -RequireNoPendingReboot ativa. Motivos: {0}. Reinicie o Windows e execute novamente." -f ($pendingRebootReasons -join ', '))
         }
@@ -2526,6 +2784,7 @@ function Invoke-BootstrapExecutionPreflight {
         requiresNetwork = $requirements.RequiresNetwork
         requiresWinget = $requirements.RequiresWinget
         pendingRebootReasons = @($pendingRebootReasons)
+        pendingRebootDetails = @($pendingRebootDetails)
         pendingRebootSeverity = $pendingRebootSeverity
         pendingRebootMsiBlockers = @($pendingRebootMsiBlockers)
         requireNoPendingReboot = [bool]$script:RequireNoPendingReboot
@@ -2551,6 +2810,10 @@ $script:WingetSoftSuccessExitCodes = @(
     -1978335215
 )
 
+$script:WingetNonRetryableInstallExitCodes = @(
+    -1978335216
+)
+
 function Test-WingetSoftSuccessExit {
     param([int]$ExitCode)
     return ($script:WingetSoftSuccessExitCodes -contains $ExitCode)
@@ -2563,7 +2826,9 @@ function Invoke-NativeWithRetry {
         [Parameter(Mandatory = $true)][string]$OperationName,
         [int]$MaxAttempts = 2,
         [int]$InitialDelaySeconds = 3,
-        [int[]]$SoftSuccessExitCodes = @()
+        [int]$TimeoutMs = 600000,
+        [int[]]$SoftSuccessExitCodes = @(),
+        [int[]]$NonRetryableExitCodes = @()
     )
 
     $attempt = 0
@@ -2576,7 +2841,7 @@ function Invoke-NativeWithRetry {
             Write-Log ("Repetindo operacao: {0} (tentativa {1}/{2})" -f $OperationName, $attempt, $MaxAttempts) 'WARN'
         }
 
-        $lastExitCode = Invoke-NativeWithLog -Exe $Exe -Args $Args
+        $lastExitCode = Invoke-NativeWithLog -Exe $Exe -Args $Args -TimeoutMs $TimeoutMs
         if ($lastExitCode -eq 0) {
             return 0
         }
@@ -2584,6 +2849,11 @@ function Invoke-NativeWithRetry {
         if ($SoftSuccessExitCodes -and ($SoftSuccessExitCodes -contains $lastExitCode)) {
             Write-Log ("{0}: exit={1} reconhecido como sucesso (no-op). Nao vai retentar." -f $OperationName, $lastExitCode)
             return 0
+        }
+
+        if ($NonRetryableExitCodes -and ($NonRetryableExitCodes -contains $lastExitCode)) {
+            Write-Log ("{0}: exit={1} reconhecido como falha nao retentavel. Nao vai retentar." -f $OperationName, $lastExitCode) 'WARN'
+            return $lastExitCode
         }
 
         if ($attempt -lt $MaxAttempts) {
@@ -2626,7 +2896,11 @@ function Invoke-WebRequestWithRetry {
         return
     }
 
-    if ($script:Offline) {
+    $offlineActive = [bool]$script:Offline
+    if (-not $offlineActive -and (Get-Variable -Name 'BootstrapOfflineOverride' -Scope Global -ErrorAction SilentlyContinue)) {
+        $offlineActive = [bool]$Global:BootstrapOfflineOverride
+    }
+    if ($offlineActive) {
         throw ("Modo OFFLINE ativo e arquivo nao encontrado no cache: {0}. Uri: {1}" -f $fileName, $Uri)
     }
 
@@ -2988,6 +3262,27 @@ function Test-BootstrapNotepadPlusPlusBinary {
         return $false
     }
     return $true
+}
+
+function Get-BootstrapNotepadPlusPlusProbePaths {
+    $programFiles = [Environment]::GetEnvironmentVariable('ProgramFiles')
+    $programFilesX86 = [Environment]::GetEnvironmentVariable('ProgramFiles(x86)')
+    $programW6432 = [Environment]::GetEnvironmentVariable('ProgramW6432')
+    $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA')
+    $publicProfile = [Environment]::GetEnvironmentVariable('PUBLIC')
+
+    $paths = @(
+        $(if ($programFiles) { Join-Path $programFiles 'Notepad++\notepad++.exe' } else { $null })
+        $(if ($programW6432 -and ($programFiles -ne $programW6432)) { Join-Path $programW6432 'Notepad++\notepad++.exe' } else { $null })
+        $(if ($programFilesX86 -and ($programFiles -ne $programFilesX86)) { Join-Path $programFilesX86 'Notepad++\notepad++.exe' } else { $null })
+        $(if ($localAppData) { Join-Path $localAppData 'Programs\Notepad++\notepad++.exe' } else { $null })
+        $(if ($localAppData) { Join-Path $localAppData 'Microsoft\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe' } else { $null })
+        $(if ($programFiles) { Join-Path $programFiles 'WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe' } else { $null })
+        $(if ($programW6432 -and ($programFiles -ne $programW6432)) { Join-Path $programW6432 'WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe' } else { $null })
+        $(if ($publicProfile) { Join-Path $publicProfile 'Notepad++\notepad++.exe' } else { $null })
+    )
+
+    return @($paths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
 }
 
 function Get-BootstrapNotepadPlusPlusUninstallRegistry {
@@ -4461,6 +4756,16 @@ function Invoke-BootstrapGhostPackageRecovery {
         }
     }
 
+    if (-not $cleaned) {
+        $allVersionsArgs = @('uninstall', '-e', '--id', $Id, '--all-versions', '--purge', '--force', '--disable-interactivity')
+        try {
+            $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $allVersionsArgs -OperationName ("Ghost-recovery: winget uninstall --all-versions {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+            if ($exit -eq 0) { $cleaned = $true }
+        } catch {
+            Write-Log ("Ghost-recovery: excecao em winget --all-versions de {0}: {1}" -f $DisplayName, $_.Exception.Message) 'WARN'
+        }
+    }
+
     # 2. Fallback NSIS: dispara UninstallString do registro com /S
     if (-not $cleaned -and $UninstallStringHints -and @($UninstallStringHints).Count -gt 0) {
         foreach ($hint in @($UninstallStringHints)) {
@@ -4623,21 +4928,39 @@ function Ensure-WingetPackage {
 
     $exitCode = -1
     $softCodes = $script:WingetSoftSuccessExitCodes
+    $isNonAdminSkippable = ($AllowFailureWhenNotAdmin -and (-not (Test-IsAdmin)))
+    $nonRetryableCodes = @($script:WingetNonRetryableInstallExitCodes)
+    if ($isNonAdminSkippable) {
+        $nonRetryableCodes += @(124, -1978335226)
+    }
+    $wingetInstallTimeoutMs = if ($isNonAdminSkippable) { 120000 } else { 600000 }
     if ($PreferUserScope) {
-        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsSilent) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -SoftSuccessExitCodes $softCodes
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsSilent) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
+        if ($exitCode -ne 0 -and $isNonAdminSkippable -and (($exitCode -eq 124) -or ($nonRetryableCodes -contains $exitCode))) {
+            $skipMessage = "$DisplayName falhou em --scope user sem privilegios de administrador (exit=$exitCode). Nao tentando fallback machine para evitar UAC/winget preso. Execute elevado ou instale o pacote manualmente."
+            Write-Log $skipMessage 'WARN'
+            Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason 'non-admin-user-scope-failed' -Message $skipMessage -Action 'rerun-elevated-or-install-manually' -PackageId $Id -DisplayName $DisplayName -ExitCode $exitCode
+            return
+        }
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --scope user --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
-            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsBase) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -SoftSuccessExitCodes $softCodes
-            if ($exitCode -ne 0) {
-                Write-Log "Falha ao instalar $DisplayName com --scope user (winget). Tentando novamente sem --scope..." 'WARN'
-            }
+            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsBase) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
+        }
+        if ($exitCode -ne 0 -and $isNonAdminSkippable) {
+            $skipMessage = "$DisplayName falhou em --scope user sem privilegios de administrador (exit=$exitCode). Nao tentando fallback machine para evitar UAC/winget preso. Execute elevado ou instale o pacote manualmente."
+            Write-Log $skipMessage 'WARN'
+            Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason 'non-admin-user-scope-failed' -Message $skipMessage -Action 'rerun-elevated-or-install-manually' -PackageId $Id -DisplayName $DisplayName -ExitCode $exitCode
+            return
+        }
+        if ($exitCode -ne 0) {
+            Write-Log "Falha ao instalar $DisplayName com --scope user (winget). Tentando novamente sem --scope..." 'WARN'
         }
     }
     if ($exitCode -ne 0) {
-        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsSilent -OperationName "$DisplayName via winget --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -SoftSuccessExitCodes $softCodes
+        $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsSilent -OperationName "$DisplayName via winget --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
-            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsBase -OperationName "$DisplayName via winget" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -SoftSuccessExitCodes $softCodes
+            $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsBase -OperationName "$DisplayName via winget" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
         }
     }
     if ($exitCode -ne 0) {
@@ -5085,7 +5408,11 @@ function Ensure-DotNetSdkAndVerify {
     }
 
     if (-not $hasBand8) {
-        Ensure-WingetPackage -WingetPath $WingetPath -Id $dotnetWingetId -DisplayName 'Microsoft .NET SDK 8' -AllowFailureWhenNotAdmin $false -ProbePaths @("$env:ProgramFiles\dotnet\dotnet.exe", "${env:ProgramFiles(x86)}\dotnet\dotnet.exe")
+        $dotnetSdk8ProbePaths = @(
+            "$env:ProgramFiles\dotnet\sdk\8.*\dotnet.dll",
+            "${env:ProgramFiles(x86)}\dotnet\sdk\8.*\dotnet.dll"
+        )
+        Ensure-WingetPackage -WingetPath $WingetPath -Id $dotnetWingetId -DisplayName 'Microsoft .NET SDK 8' -AllowFailureWhenNotAdmin $false -ProbePaths $dotnetSdk8ProbePaths
         Refresh-SessionPath
         $dotnet = Get-DotNetExe
         $sdkText = if ($dotnet) { Get-DotNetListSdksOutput -DotnetExe $dotnet } else { '' }
@@ -7072,6 +7399,9 @@ function ConvertTo-BootstrapObjectGraph {
     param($InputObject)
 
     if ($null -eq $InputObject) { return $null }
+    if ($InputObject -is [string]) { return [string]$InputObject }
+    if ($InputObject -is [char]) { return [string]$InputObject }
+    if ($InputObject -is [System.ValueType]) { return $InputObject }
 
     if ($InputObject -is [System.Collections.IDictionary]) {
         $result = [ordered]@{}
@@ -7327,7 +7657,7 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'node' -DisplayName 'Node.js LTS' -Components @('node-core') -TargetApps @('node.js','node') -ProbePaths @('$env:ProgramFiles\nodejs\node.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'python' -DisplayName 'Python' -Components @('python-core') -TargetApps @('python') -ProbePaths @('$env:LOCALAPPDATA\Programs\Python') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'docker' -DisplayName 'Docker Desktop' -Components @('docker') -TargetApps @('docker desktop') -ProbePaths @('$env:ProgramFiles\Docker\Docker\Docker Desktop.exe') -Profiles @('desktop','dev')
-        New-BootstrapOnDemandAppDefinition -Id 'notepadpp' -DisplayName 'Notepad++' -Components @('notepadpp') -TargetApps @('notepad++') -ProbePaths @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'notepadpp' -DisplayName 'Notepad++' -Components @('notepadpp') -TargetApps @('notepad++') -ProbePaths @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Programs\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe','$env:ProgramFiles\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'terminal' -DisplayName 'Windows Terminal' -Components @('terminal') -TargetApps @('windows terminal') -ProbePaths @('$env:LOCALAPPDATA\Microsoft\WindowsApps\wt.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'powertoys' -DisplayName 'PowerToys' -Components @('powertoys') -TargetApps @('powertoys') -ProbePaths @('$env:LOCALAPPDATA\Microsoft\PowerToys') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'github-cli' -DisplayName 'GitHub CLI' -Components @('github-cli') -TargetApps @('github cli','gh') -ProbePaths @('$env:ProgramFiles\GitHub CLI\gh.exe') -Profiles @('desktop','dev')
@@ -7466,7 +7796,7 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'displayfusion-layouts'; category = 'steamdeck-control'; displayName = 'DisplayFusion layouts'; description = 'Perfis de monitor/dock; pode exigir elevacao para hooks globais.'; targetApps = @('displayfusion'); probePaths = @('$env:ProgramFiles\DisplayFusion\DisplayFusion.exe','$env:ProgramFiles(x86)\DisplayFusion\DisplayFusion.exe'); requiresAdmin = $true; defaultMode = 'recommended'; profiles = @('desktop','dev'); actions = @('config-file','task'); rollback = @('backup-file','registry-snapshot') }
 
         [ordered]@{ id = 'vscode-family-settings'; category = 'dev-ai'; displayName = 'VS Code family settings'; description = 'Aplica settings/extensoes/MCPs para VS Code, Insiders, Cursor, Windsurf, Trae e Zed.'; targetApps = @('visual studio code','cursor','windsurf','trae','zed'); probePaths = @('$env:APPDATA\Code\User\settings.json','$env:APPDATA\Code - Insiders\User\settings.json','$env:APPDATA\Cursor\User','$env:APPDATA\Windsurf\User','$env:APPDATA\Zed\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
-        [ordered]@{ id = 'notepadpp-defaults'; category = 'dev-ai'; displayName = 'Notepad++ defaults'; description = 'Instala plugins oficiais curados, UDLs oficiais/custom, NppOpenAI.ini seguro e deixa LSP alpha fora do default.'; targetApps = @('notepad++'); probePaths = @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Programs\Notepad++\notepad++.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual') }
+        [ordered]@{ id = 'notepadpp-defaults'; category = 'dev-ai'; displayName = 'Notepad++ defaults'; description = 'Instala plugins oficiais curados, UDLs oficiais/custom, NppOpenAI.ini seguro e deixa LSP alpha fora do default.'; targetApps = @('notepad++'); probePaths = @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Programs\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe','$env:ProgramFiles\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual') }
         [ordered]@{ id = 'claude-code-defaults'; category = 'dev-ai'; displayName = 'Claude Code defaults'; description = 'Mantem settings, plugins e rules de Claude Code.'; targetApps = @('claude code'); probePaths = @('$env:USERPROFILE\.claude\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'opencode-auth-config'; category = 'dev-ai'; displayName = 'OpenCode auth/config'; description = 'Usa manifesto de chaves para auth/config do OpenCode.'; targetApps = @('opencode'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.local\share\opencode\auth.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'ai-agent-byok-config'; category = 'dev-ai'; displayName = 'AI agent BYOK config'; description = 'Sincroniza manifesto de APIs para OpenCode, OpenClaw, Hermes, Kilo, Cline e Roo.'; targetApps = @('opencode','openclaw','hermes','kilo','kilocode','cline','roo code'); probePaths = @('$env:USERPROFILE\.local\share\opencode\auth.json','$env:USERPROFILE\.openclaw\openclaw.json','$env:USERPROFILE\.local\share\kilo\auth.json','$env:APPDATA\Code\User\globalStorage'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file') }
@@ -9728,11 +10058,20 @@ function Convert-BootstrapSecretsProviderDefinition {
         $activeCredential = if ($rotationOrder.Count -gt 0) { $rotationOrder[0] } else { '' }
     }
 
+    $rotationQueue = @()
+    if ($normalized.ContainsKey('rotationQueue') -and ($normalized['rotationQueue'] -is [System.Collections.IEnumerable])) {
+        foreach ($entry in @($normalized['rotationQueue'])) {
+            $hashEntry = ConvertTo-BootstrapHashtable -InputObject $entry
+            if ($hashEntry -is [hashtable]) { $rotationQueue += ,$hashEntry }
+        }
+    }
+
     return [ordered]@{
         defaults = $defaults
         activeCredential = $activeCredential
         rotationOrder = @($rotationOrder.ToArray())
         credentials = $credentials
+        rotationQueue = $rotationQueue
     }
 }
 
@@ -11397,23 +11736,23 @@ function Get-BootstrapComponentCatalog {
     $catalog['dotnet-core'] = New-BootstrapComponentDefinition -Name 'dotnet-core' -Description 'Microsoft .NET SDK 8 (LTS), PATH e verificacao dotnet --list-sdks. Palavras-chave na busca da UI: dotnet, dotnet core, net8, sdk8, winget Microsoft.DotNet.SDK.8.' -DependsOn @('system-core') -Optional $false -Kind 'dotnet-core' -EstimatedSizeGB 1.2 -RequiresNetwork $true -VersionCheckCommand 'dotnet --list-sdks'
     $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick'; ProbePaths = @("$env:ProgramFiles\ImageMagick-*\magick.exe", "$env:ProgramFiles\ImageMagick\magick.exe") }
     $catalog['sevenzip'] = New-BootstrapComponentDefinition -Name 'sevenzip' -Description '7-Zip e ajuste de PATH.' -DependsOn @('system-core') -Kind 'sevenzip' -Data @{ ProbePaths = @("$env:ProgramFiles\7-Zip\7z.exe", "${env:ProgramFiles(x86)}\7-Zip\7z.exe") }
-    $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7'; ProbePaths = @("$env:ProgramFiles\PowerShell\7\pwsh.exe", "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe") }
+    $catalog['powershell'] = New-BootstrapComponentDefinition -Name 'powershell' -Description 'PowerShell 7.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerShell'; DisplayName = 'PowerShell 7'; AppxPackageNames = @('Microsoft.PowerShell'); ProbePaths = @("$env:ProgramFiles\PowerShell\7\pwsh.exe", "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe") }
     $catalog['terminal'] = New-BootstrapComponentDefinition -Name 'terminal' -Description 'Windows Terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.WindowsTerminal'; DisplayName = 'Windows Terminal'; AppxPackageNames = @('Microsoft.WindowsTerminal'); ProbePaths = @("$env:ProgramFiles\WindowsApps\Microsoft.WindowsTerminal_*\wt.exe") }
     $catalog['powertoys'] = New-BootstrapComponentDefinition -Name 'powertoys' -Description 'Microsoft PowerToys.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.PowerToys'; DisplayName = 'Microsoft PowerToys'; ProbePaths = @("$env:ProgramFiles\PowerToys\PowerToys.exe", "${env:ProgramFiles(x86)}\PowerToys\PowerToys.exe", "${env:LOCALAPPDATA}\PowerToys\PowerToys.exe", "$env:ProgramFiles\WindowsApps\Microsoft.PowerToys_*\PowerToys.exe") }
     $catalog['github-cli'] = New-BootstrapComponentDefinition -Name 'github-cli' -Description 'GitHub CLI (gh).' -DependsOn @('git-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'GitHub.cli'; DisplayName = 'GitHub CLI (gh)'; ProbePaths = @("$env:ProgramFiles\GitHub CLI\gh.exe", "${env:LOCALAPPDATA}\Programs\GitHub CLI\gh.exe") }
     $catalog['chrome'] = New-BootstrapComponentDefinition -Name 'chrome' -Description 'Google Chrome.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Chrome'; DisplayName = 'Google Chrome'; ProbePaths = @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe", "${env:LOCALAPPDATA}\Google\Chrome\Application\chrome.exe") }
     $catalog['google-app-desktop'] = New-BootstrapComponentDefinition -Name 'google-app-desktop' -Description 'Google App para Desktop.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Google App Desktop'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Experiência oficial do Google no Windows.'; Instructions = 'Instale acessando https://search.google/google-app/desktop/?utm_source=Google&utm_medium=keyword_blog&utm_campaign=DGA_blog' }
-    $catalog['notepadpp'] = New-BootstrapComponentDefinition -Name 'notepadpp' -Description 'Notepad++.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Notepad++.Notepad++'; DisplayName = 'Notepad++'; ProbePaths = @("$env:ProgramFiles\Notepad++\notepad++.exe", "${env:ProgramFiles(x86)}\Notepad++\notepad++.exe", "${env:LOCALAPPDATA}\Programs\Notepad++\notepad++.exe") }
+    $catalog['notepadpp'] = New-BootstrapComponentDefinition -Name 'notepadpp' -Description 'Notepad++.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Notepad++.Notepad++'; DisplayName = 'Notepad++'; ProbePaths = @(Get-BootstrapNotepadPlusPlusProbePaths) }
     $catalog['wsl-core'] = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'Recursos WSL, Ubuntu e WSL 2.' -DependsOn @('system-core') -Kind 'wsl-core'
     $catalog['wsl-ui'] = New-BootstrapComponentDefinition -Name 'wsl-ui' -Description 'WSL UI e WebView2.' -DependsOn @('wsl-core') -Kind 'wsl-ui'
     $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Docker\Docker.exe", "${env:LOCALAPPDATA}\Docker\Docker Desktop.exe", "$env:ProgramFiles\Docker\Docker.exe", "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe") }
-    $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Claude\Claude.exe", "$env:ProgramFiles\Claude\Claude.exe") }
+    $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\AnthropicClaude\claude.exe", "${env:LOCALAPPDATA}\AnthropicClaude\app-*\claude.exe", "${env:LOCALAPPDATA}\Programs\Claude\Claude.exe", "$env:ProgramFiles\Claude\Claude.exe") }
     $catalog['claude-code'] = New-BootstrapComponentDefinition -Name 'claude-code' -Description 'Claude Code CLI.' -DependsOn @('system-core') -Kind 'claude-code'
     $catalog['cursor'] = New-BootstrapComponentDefinition -Name 'cursor' -Description 'Cursor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anysphere.Cursor'; DisplayName = 'Cursor'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Cursor\Cursor.exe", "$env:ProgramFiles\Cursor\Cursor.exe") }
     $catalog['windsurf'] = New-BootstrapComponentDefinition -Name 'windsurf' -Description 'Windsurf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Codeium.Windsurf'; DisplayName = 'Windsurf'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Windsurf\Windsurf.exe", "$env:ProgramFiles\Windsurf\Windsurf.exe") }
     $catalog['warp'] = New-BootstrapComponentDefinition -Name 'warp' -Description 'Warp terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Warp.Warp'; DisplayName = 'Warp'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Warp\Warp.exe", "$env:ProgramFiles\Warp\Warp.exe") }
     $catalog['trae'] = New-BootstrapComponentDefinition -Name 'trae' -Description 'Trae desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ByteDance.Trae'; DisplayName = 'Trae'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Trae\Trae.exe", "$env:ProgramFiles\Trae\Trae.exe") }
-    $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\OpenCode Desktop\OpenCode Desktop.exe", "$env:ProgramFiles\OpenCode Desktop\OpenCode Desktop.exe") }
+    $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\OpenCode Desktop\OpenCode Desktop.exe", "$env:ProgramFiles\OpenCode Desktop\OpenCode Desktop.exe", "$env:ProgramFiles\OpenCode\OpenCode.exe") }
     $catalog['vscode'] = New-BootstrapComponentDefinition -Name 'vscode' -Description 'VS Code estável.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode'; DisplayName = 'Visual Studio Code'; ProbePaths = @("$env:ProgramFiles\Microsoft VS Code\Code.exe", "${env:LOCALAPPDATA}\Programs\Microsoft VS Code\Code.exe") }
     $catalog['vscode-insiders'] = New-BootstrapComponentDefinition -Name 'vscode-insiders' -Description 'VS Code Insiders.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode.Insiders'; DisplayName = 'Visual Studio Code - Insiders'; ProbePaths = @("$env:ProgramFiles\Microsoft VS Code Insiders\Code - Insiders.exe", "${env:LOCALAPPDATA}\Programs\Microsoft VS Code Insiders\Code - Insiders.exe") }
     $catalog['antigravity'] = New-BootstrapComponentDefinition -Name 'antigravity' -Description 'Google Antigravity.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Antigravity'; DisplayName = 'Antigravity'; ProbePaths = @("${env:LOCALAPPDATA}\Google\Antigravity\Antigravity.exe", "$env:ProgramFiles\Google\Antigravity\Antigravity.exe") }
@@ -11670,7 +12009,19 @@ function Get-BootstrapUiContract {
         }
     }
 
+    $rotationEventsPath = ''
+    try {
+        $dataRoot = Get-BootstrapDataRoot
+        if (-not [string]::IsNullOrWhiteSpace($dataRoot)) {
+            $rotationEventsPath = Join-Path $dataRoot 'rotation-events.jsonl'
+        }
+    } catch {
+        $rotationEventsPath = ''
+    }
+    $rotationScheduleState = Get-BootstrapRotationScheduledTaskState
+
     return [ordered]@{
+        schemaVersion = '1.0.0'
         profileNames = @($profiles.Keys)
         componentNames = @($components.Keys)
         hostHealthModes = @(Get-BootstrapHostHealthModes)
@@ -11691,6 +12042,14 @@ function Get-BootstrapUiContract {
         apiInventory = Get-BootstrapApiInventory -SecretsData $secretsData
         appCatalog = $appCatalog
         steamDeckSettingsDefaults = Get-BootstrapSteamDeckSettingsDefaults -ResolvedSteamDeckVersion 'lcd'
+        secretsRotation = [ordered]@{
+            schedule = if ($rotationScheduleState.exists) { 'unknown' } else { 'none' }
+            scheduleOptions = @('none', 'daily', 'weekly')
+            scheduledTaskName = [string]$rotationScheduleState.taskName
+            scheduledTaskExists = [bool]$rotationScheduleState.exists
+            eventsPath = $rotationEventsPath
+            staleHoursDefault = 24
+        }
     }
 }
 
@@ -12097,6 +12456,8 @@ function New-BootstrapState {
         PreflightSummary = $null
         CurrentComponent = ''
         ComponentStatus = @{}
+        SkippedComponents = New-Object System.Collections.Generic.List[object]
+        Warnings = New-Object System.Collections.Generic.List[string]
         LastError = $null
         ChangeManifestPath = ''
         Completed = @{}
@@ -13770,8 +14131,11 @@ function Test-BootstrapSecretsProviderCredential {
         [Parameter(Mandatory = $true)][string]$ProviderName,
         [Parameter(Mandatory = $true)][hashtable]$ProviderDefinition,
         [Parameter(Mandatory = $true)][string]$CredentialId,
-        [Parameter(Mandatory = $true)][hashtable]$Credential
+        [Parameter(Mandatory = $true)][hashtable]$Credential,
+        [int]$TimeoutSeconds = 15
     )
+    if ($TimeoutSeconds -lt 1) { $TimeoutSeconds = 1 }
+    if ($TimeoutSeconds -gt 120) { $TimeoutSeconds = 120 }
 
     $catalog = Get-BootstrapSecretsProviderCatalog
     $checkedAt = (Get-Date).ToString('o')
@@ -13828,8 +14192,7 @@ function Test-BootstrapSecretsProviderCredential {
     }
 
     try {
-        # TimeoutSec prevents a hung credential probe from stalling the whole bootstrap.
-        $null = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -TimeoutSec 15 -ErrorAction Stop
+        $null = Invoke-RestMethod -Method Get -Uri $uri -Headers $headers -TimeoutSec $TimeoutSeconds -ErrorAction Stop
         return (New-BootstrapSecretValidationState -State 'passed' -CheckedAt $checkedAt -Message 'ok')
     } catch {
         # Sanitize the failure message so the secret can't leak through the
@@ -13976,6 +14339,519 @@ function Move-BootstrapSecretsToNextCredential {
     $normalized.providers[$ProviderName] = Convert-BootstrapSecretsProviderDefinition -ProviderName $ProviderName -ProviderData $provider
     return $normalized
 }
+
+# region Secrets rotation worker (ADR 0001)
+#
+# Estados: queued -> validating -> activating -> broadcasting -> settled | failed
+# Funcoes puras (operam sobre o objeto $SecretsData em memoria, sem I/O).
+# Persistencia + Register-BootstrapChange acontecem em Invoke-BootstrapSecretRotation.
+
+function Get-BootstrapSecretsValidationFailureCategory {
+    param([AllowNull()][string]$Message)
+    if ([string]::IsNullOrWhiteSpace($Message)) { return 'unknown' }
+    $normalized = $Message.ToLowerInvariant()
+    if ($normalized -match '\b401\b' -or $normalized.Contains('unauthorized')) { return 'auth' }
+    if ($normalized -match '\b403\b' -or $normalized.Contains('forbidden')) { return 'auth' }
+    if ($normalized -match '\b429\b' -or $normalized.Contains('rate limit') -or $normalized.Contains('quota')) { return 'rate-limit' }
+    if ($normalized -match '\b5\d\d\b' -or $normalized.Contains('server error') -or $normalized.Contains('bad gateway')) { return 'server' }
+    if ($normalized.Contains('timeout') -or $normalized.Contains('timed out') -or $normalized.Contains('operation has timed out')) { return 'timeout' }
+    if ($normalized.Contains('the underlying connection') -or $normalized.Contains('no such host') -or $normalized.Contains('unable to connect') -or $normalized.Contains('actively refused')) { return 'network' }
+    return 'unknown'
+}
+
+function Test-BootstrapSecretsRetryableFailure {
+    param([Parameter(Mandatory = $true)][string]$Category)
+    return @('server', 'timeout', 'network', 'rate-limit') -contains $Category
+}
+
+function New-BootstrapSecretRotationId {
+    param([Parameter(Mandatory = $true)][string]$ProviderName)
+    $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
+    $suffix = [Guid]::NewGuid().ToString('N').Substring(0, 4)
+    return ('rot-{0}-{1}-{2}' -f $ProviderName, $stamp, $suffix)
+}
+
+function New-BootstrapSecretRotationItem {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [string]$TargetCredentialId = '',
+        [string]$Trigger = 'manual',
+        [int]$MaxAttempts = 3,
+        [int]$TimeoutSecondsPerValidator = 15,
+        [int]$TimeoutSecondsTotal = 120,
+        [string]$PreviousActiveCredentialId = ''
+    )
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+    return [ordered]@{
+        id = New-BootstrapSecretRotationId -ProviderName $ProviderName
+        provider = $ProviderName
+        targetCredentialId = [string]$TargetCredentialId
+        trigger = [string]$Trigger
+        state = 'queued'
+        attempts = 0
+        maxAttempts = $MaxAttempts
+        timeoutSecondsPerValidator = $TimeoutSecondsPerValidator
+        timeoutSecondsTotal = $TimeoutSecondsTotal
+        createdAt = $now
+        lastTransitionAt = $now
+        previousActiveCredentialId = [string]$PreviousActiveCredentialId
+        lastError = ''
+        events = @(@{ at = $now; from = ''; to = 'queued'; message = '' })
+    }
+}
+
+function Get-BootstrapSecretRotationQueue {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [Parameter(Mandatory = $true)][string]$ProviderName
+    )
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $providerKey = $ProviderName.ToLowerInvariant()
+    if (-not $normalized.providers.Contains($providerKey)) {
+        return @()
+    }
+    $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerKey]
+    if (-not ($provider -is [hashtable])) { return @() }
+    if (-not $provider.ContainsKey('rotationQueue') -or -not ($provider['rotationQueue'] -is [System.Collections.IEnumerable])) {
+        return @()
+    }
+    $items = New-Object System.Collections.ArrayList
+    foreach ($entry in @($provider['rotationQueue'])) {
+        $hashEntry = ConvertTo-BootstrapHashtable -InputObject $entry
+        if ($hashEntry -is [hashtable]) { $null = $items.Add($hashEntry) }
+    }
+    return ,@($items.ToArray())
+}
+
+function Add-BootstrapSecretRotationItem {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [string]$TargetCredentialId = '',
+        [string]$Trigger = 'manual',
+        [int]$MaxAttempts = 3,
+        [int]$TimeoutSecondsPerValidator = 15,
+        [int]$TimeoutSecondsTotal = 120
+    )
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $providerKey = $ProviderName.ToLowerInvariant()
+    if (-not $normalized.providers.Contains($providerKey)) {
+        throw "Provider desconhecido: $ProviderName"
+    }
+    $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerKey]
+    if (-not $provider.ContainsKey('rotationQueue') -or -not ($provider['rotationQueue'] -is [System.Collections.IEnumerable])) {
+        $provider['rotationQueue'] = @()
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TargetCredentialId)) {
+        $hasCred = $false
+        if ($provider.ContainsKey('credentials') -and $provider['credentials'] -is [System.Collections.IDictionary]) {
+            $hasCred = $provider['credentials'].Contains($TargetCredentialId)
+        }
+        if (-not $hasCred) {
+            throw "Credencial desconhecida para ${providerKey}: $TargetCredentialId"
+        }
+    }
+    $previousActive = [string]$provider['activeCredential']
+    $item = New-BootstrapSecretRotationItem -ProviderName $providerKey -TargetCredentialId $TargetCredentialId -Trigger $Trigger -MaxAttempts $MaxAttempts -TimeoutSecondsPerValidator $TimeoutSecondsPerValidator -TimeoutSecondsTotal $TimeoutSecondsTotal -PreviousActiveCredentialId $previousActive
+    $provider['rotationQueue'] = @($provider['rotationQueue']) + @($item)
+    $normalized.providers[$providerKey] = Convert-BootstrapSecretsProviderDefinition -ProviderName $providerKey -ProviderData $provider
+    return @{
+        Data = $normalized
+        Item = $item
+    }
+}
+
+function Update-BootstrapSecretRotationItemState {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Item,
+        [Parameter(Mandatory = $true)][string]$To,
+        [string]$Message = ''
+    )
+    $from = [string]$Item['state']
+    $now = (Get-Date).ToUniversalTime().ToString('o')
+    $Item['state'] = $To
+    $Item['lastTransitionAt'] = $now
+    if (-not [string]::IsNullOrWhiteSpace($Message)) {
+        $Item['lastError'] = $Message
+    }
+    $events = @($Item['events'])
+    $events += @(@{ at = $now; from = $from; to = $To; message = $Message; attempt = [int]$Item['attempts'] })
+    $Item['events'] = $events
+    return $Item
+}
+
+function Get-BootstrapSecretRotationNextCandidate {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Provider,
+        [Parameter(Mandatory = $true)][hashtable]$Item
+    )
+    $target = [string]$Item['targetCredentialId']
+    if (-not [string]::IsNullOrWhiteSpace($target)) {
+        if ($Provider['credentials'].Contains($target)) { return $target }
+        return $null
+    }
+    $activeCredential = [string]$Provider['activeCredential']
+    $candidates = New-Object System.Collections.Generic.List[string]
+    foreach ($credentialId in @($Provider['rotationOrder'])) {
+        $value = [string]$credentialId
+        if ([string]::IsNullOrWhiteSpace($value)) { continue }
+        if ($value -eq $activeCredential) { continue }
+        if (-not $Provider['credentials'].Contains($value)) { continue }
+        if (-not $candidates.Contains($value)) { $candidates.Add($value) }
+    }
+    foreach ($credentialId in $Provider['credentials'].Keys) {
+        $value = [string]$credentialId
+        if ($value -eq $activeCredential) { continue }
+        if (-not $candidates.Contains($value)) { $candidates.Add($value) }
+    }
+    if ($candidates.Count -gt 0) { return $candidates[0] }
+    return $null
+}
+
+function Invoke-BootstrapSecretRotationItemTransitions {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [Parameter(Mandatory = $true)][hashtable]$Item,
+        [DateTime]$Deadline = ([DateTime]::UtcNow.AddSeconds(120)),
+        [scriptblock]$ValidatorOverride = $null,
+        [scriptblock]$BroadcastOverride = $null,
+        [scriptblock]$EventSink = $null,
+        [switch]$DryRun
+    )
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $providerKey = [string]$Item['provider']
+    if (-not $normalized.providers.Contains($providerKey)) {
+        $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'failed' -Message "provider desconhecido: $providerKey"
+        return @{ Data = $normalized; Item = $Item; Completed = $true }
+    }
+    $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerKey]
+    $emit = {
+        param($name, $payload)
+        if ($EventSink) {
+            try { & $EventSink $name $payload } catch { }
+        }
+    }
+    & $emit 'transition-start' @{ rotationId = $Item['id']; from = ''; to = [string]$Item['state']; provider = $providerKey }
+
+    # queued -> validating
+    if ([string]$Item['state'] -eq 'queued') {
+        $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'validating'
+        & $emit 'state-change' @{ rotationId = $Item['id']; state = 'validating' }
+    }
+
+    # validating loop
+    while ([string]$Item['state'] -eq 'validating') {
+        if ([DateTime]::UtcNow -gt $Deadline) {
+            $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'failed' -Message 'timeout total da rotacao'
+            & $emit 'timeout' @{ rotationId = $Item['id'] }
+            break
+        }
+        $candidate = Get-BootstrapSecretRotationNextCandidate -Provider $provider -Item $Item
+        if ([string]::IsNullOrWhiteSpace($candidate)) {
+            $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'failed' -Message 'sem credenciais candidatas'
+            break
+        }
+        $Item['attempts'] = [int]$Item['attempts'] + 1
+        $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$candidate]
+        $validation = $null
+        if ($ValidatorOverride) {
+            $validation = & $ValidatorOverride $providerKey $candidate $credential
+        } else {
+            $validation = Test-BootstrapSecretsProviderCredential -ProviderName $providerKey -ProviderDefinition $provider -CredentialId $candidate -Credential $credential -TimeoutSeconds ([int]$Item['timeoutSecondsPerValidator'])
+        }
+        $provider['credentials'][$candidate]['validation'] = $validation
+        $state = [string]$validation['state']
+        & $emit 'validation-result' @{ rotationId = $Item['id']; credentialId = $candidate; state = $state }
+        if ($state -eq 'passed') {
+            $Item['targetCredentialId'] = $candidate
+            $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'activating'
+            break
+        }
+        $category = Get-BootstrapSecretsValidationFailureCategory -Message ([string]$validation['message'])
+        $retryable = Test-BootstrapSecretsRetryableFailure -Category $category
+        if ((-not $retryable) -or ([int]$Item['attempts'] -ge [int]$Item['maxAttempts'])) {
+            # Quando o usuario pediu uma credencial especifica, falha definitiva.
+            if (-not [string]::IsNullOrWhiteSpace([string]$Item['targetCredentialId']) -and ([string]$Item['targetCredentialId'] -eq $candidate)) {
+                $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'failed' -Message ("validacao falhou: $category")
+                break
+            }
+            # Tenta proxima candidata zerando attempts? Nao — mantemos attempts globais por item para limitar custo.
+            if ([int]$Item['attempts'] -ge [int]$Item['maxAttempts']) {
+                $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'failed' -Message ("tentativas esgotadas (categoria=$category)")
+                break
+            }
+            # Se erro nao retryavel mas ha outras candidatas, continua looping (proxima iteracao escolhe outra).
+            continue
+        }
+        # Backoff antes da proxima tentativa.
+        $delay = [Math]::Min(60, [Math]::Pow(2, [int]$Item['attempts']))
+        $jitter = (Get-Random -Minimum 0 -Maximum 1500) / 1000.0
+        $sleepMs = [int](([double]$delay + [double]$jitter) * 1000)
+        if (-not $DryRun -and $sleepMs -gt 0) {
+            $remainingMs = [int](($Deadline - [DateTime]::UtcNow).TotalMilliseconds)
+            if ($remainingMs -le 0) {
+                $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'failed' -Message 'timeout total da rotacao'
+                break
+            }
+            Start-Sleep -Milliseconds ([Math]::Min($sleepMs, $remainingMs))
+        }
+    }
+
+    # activating
+    if ([string]$Item['state'] -eq 'activating') {
+        $candidate = [string]$Item['targetCredentialId']
+        if (-not $provider['credentials'].Contains($candidate)) {
+            $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'failed' -Message 'credencial alvo desapareceu'
+        } else {
+            $provider['activeCredential'] = $candidate
+            $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'broadcasting'
+            & $emit 'state-change' @{ rotationId = $Item['id']; state = 'broadcasting' }
+        }
+    }
+
+    # broadcasting
+    if ([string]$Item['state'] -eq 'broadcasting') {
+        $normalized.providers[$providerKey] = Convert-BootstrapSecretsProviderDefinition -ProviderName $providerKey -ProviderData $provider
+        $broadcastOk = $false
+        $broadcastMessage = ''
+        try {
+            if ($BroadcastOverride) {
+                $broadcastOk = [bool](& $BroadcastOverride $normalized $providerKey $Item)
+            } else {
+                # Em DryRun nao chamamos Ensure-BootstrapSecrets; assumimos sucesso para deixar testes deterministicos.
+                if ($DryRun) {
+                    $broadcastOk = $true
+                } else {
+                    # Sem state real do bootstrap aqui — o caller (Invoke-BootstrapSecretRotation) cuida do broadcast real.
+                    $broadcastOk = $true
+                }
+            }
+        } catch {
+            $broadcastOk = $false
+            $broadcastMessage = [string]$_.Exception.Message
+        }
+        if ($broadcastOk) {
+            $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'settled'
+        } else {
+            # Reverte activeCredential para previous se broadcast total falhou.
+            if (-not [string]::IsNullOrWhiteSpace([string]$Item['previousActiveCredentialId']) -and $provider['credentials'].Contains([string]$Item['previousActiveCredentialId'])) {
+                $provider['activeCredential'] = [string]$Item['previousActiveCredentialId']
+                $normalized.providers[$providerKey] = Convert-BootstrapSecretsProviderDefinition -ProviderName $providerKey -ProviderData $provider
+            }
+            $Item = Update-BootstrapSecretRotationItemState -Item $Item -To 'failed' -Message ("broadcast falhou: $broadcastMessage")
+        }
+    }
+
+    # Persistir fila atualizada no provider.
+    $queue = @()
+    if ($provider.ContainsKey('rotationQueue') -and ($provider['rotationQueue'] -is [System.Collections.IEnumerable])) {
+        foreach ($entry in @($provider['rotationQueue'])) {
+            $hashEntry = ConvertTo-BootstrapHashtable -InputObject $entry
+            if (-not ($hashEntry -is [hashtable])) { continue }
+            if ([string]$hashEntry['id'] -eq [string]$Item['id']) {
+                $queue += ,$Item
+            } else {
+                $queue += ,$hashEntry
+            }
+        }
+    }
+    if (@($queue | Where-Object { [string]$_['id'] -eq [string]$Item['id'] }).Count -eq 0) {
+        $queue += ,$Item
+    }
+    $provider['rotationQueue'] = $queue
+    $normalized.providers[$providerKey] = Convert-BootstrapSecretsProviderDefinition -ProviderName $providerKey -ProviderData $provider
+    return @{
+        Data = $normalized
+        Item = $Item
+        Completed = ([string]$Item['state'] -in @('settled', 'failed'))
+    }
+}
+
+function Lock-BootstrapSecretsFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [int]$TimeoutSeconds = 5
+    )
+    $lockPath = "$Path.lock"
+    $directory = Split-Path -Path $lockPath -Parent
+    if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        try {
+            $stream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+            return $stream
+        } catch {
+            Start-Sleep -Milliseconds 200
+        }
+    }
+    throw "RotationConcurrencyError: nao foi possivel adquirir lock em ${TimeoutSeconds}s ($lockPath)"
+}
+
+function Unlock-BootstrapSecretsFile {
+    param([System.IO.FileStream]$Stream, [string]$Path)
+    if ($Stream) {
+        try { $Stream.Dispose() } catch { }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Path)) {
+        $lockPath = "$Path.lock"
+        try { if (Test-Path -LiteralPath $lockPath) { Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue } } catch { }
+    }
+}
+
+function Write-BootstrapRotationEvent {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][hashtable]$Payload,
+        [string]$EventsPath = ''
+    )
+    if ([string]::IsNullOrWhiteSpace($EventsPath)) {
+        $root = Get-BootstrapDataRoot
+        if ([string]::IsNullOrWhiteSpace($root)) { return }
+        $EventsPath = Join-Path $root 'rotation-events.jsonl'
+    }
+    $directory = Split-Path -Path $EventsPath -Parent
+    if (-not [string]::IsNullOrWhiteSpace($directory) -and -not (Test-Path -LiteralPath $directory)) {
+        New-Item -ItemType Directory -Path $directory -Force | Out-Null
+    }
+    $entry = [ordered]@{
+        at = (Get-Date).ToUniversalTime().ToString('o')
+        event = $Name
+    }
+    foreach ($key in $Payload.Keys) { $entry[[string]$key] = $Payload[$key] }
+    $line = ($entry | ConvertTo-Json -Depth 6 -Compress)
+    try {
+        Add-Content -LiteralPath $EventsPath -Value $line -Encoding UTF8
+    } catch { }
+    # Rotacao simples: se passou de 1000 linhas, mantem ultimas 750.
+    try {
+        $existing = @()
+        if (Test-Path -LiteralPath $EventsPath) { $existing = @(Get-Content -LiteralPath $EventsPath -Encoding UTF8) }
+        if ($existing.Count -gt 1000) {
+            $keep = $existing[($existing.Count - 750)..($existing.Count - 1)]
+            $tmpPath = "$EventsPath.tmp"
+            Set-Content -LiteralPath $tmpPath -Value $keep -Encoding UTF8
+            Move-Item -LiteralPath $tmpPath -Destination $EventsPath -Force
+        }
+    } catch { }
+}
+
+function Invoke-BootstrapSecretRotation {
+    param(
+        [string]$ProviderName = '',
+        [int]$MaxItems = 10,
+        [int]$TimeoutSeconds = 120,
+        [hashtable]$State = $null,
+        [switch]$DryRun
+    )
+    $bundle = Get-BootstrapSecretsData
+    $manifestPath = $bundle.Path
+    $data = $bundle.Data
+    $lock = $null
+    $processed = New-Object System.Collections.ArrayList
+    $eventsPath = ''
+    try {
+        $root = Get-BootstrapDataRoot
+        if (-not [string]::IsNullOrWhiteSpace($root)) { $eventsPath = Join-Path $root 'rotation-events.jsonl' }
+    } catch { $eventsPath = '' }
+    $sink = {
+        param($name, $payload)
+        if (-not [string]::IsNullOrWhiteSpace($eventsPath)) {
+            try { Write-BootstrapRotationEvent -Name $name -Payload $payload -EventsPath $eventsPath } catch { }
+        }
+    }
+    try {
+        $lock = Lock-BootstrapSecretsFile -Path $manifestPath -TimeoutSeconds 5
+        $normalized = Normalize-BootstrapSecretsData -Secrets $data
+        $providerFilter = ''
+        if (-not [string]::IsNullOrWhiteSpace($ProviderName)) { $providerFilter = $ProviderName.ToLowerInvariant() }
+        $globalDeadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+        $itemBudget = $MaxItems
+        foreach ($key in @($normalized.providers.Keys)) {
+            if ($itemBudget -le 0) { break }
+            if ([DateTime]::UtcNow -gt $globalDeadline) { break }
+            if (-not [string]::IsNullOrWhiteSpace($providerFilter) -and ($key -ne $providerFilter)) { continue }
+            $providerData = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$key]
+            if (-not $providerData.ContainsKey('rotationQueue')) { continue }
+            $queue = @($providerData['rotationQueue'])
+            foreach ($entry in $queue) {
+                if ($itemBudget -le 0) { break }
+                if ([DateTime]::UtcNow -gt $globalDeadline) { break }
+                $item = ConvertTo-BootstrapHashtable -InputObject $entry
+                if (-not ($item -is [hashtable])) { continue }
+                $itemState = [string]$item['state']
+                if ($itemState -in @('settled', 'failed')) { continue }
+                $itemDeadline = [DateTime]::UtcNow.AddSeconds([int]$item['timeoutSecondsTotal'])
+                if ($itemDeadline -gt $globalDeadline) { $itemDeadline = $globalDeadline }
+                $result = Invoke-BootstrapSecretRotationItemTransitions -SecretsData $normalized -Item $item -Deadline $itemDeadline -EventSink $sink -DryRun:$DryRun
+                $normalized = $result.Data
+                $item = $result.Item
+                $itemBudget = $itemBudget - 1
+                $finalState = [string]$item['state']
+                if ($finalState -eq 'broadcasting') {
+                    # transition stopped on broadcasting (provavelmente por DryRun + sem override). Marca settled em DryRun.
+                    if ($DryRun) { $item = Update-BootstrapSecretRotationItemState -Item $item -To 'settled' -Message 'dry-run' }
+                }
+                if (-not $DryRun -and $finalState -eq 'broadcasting') {
+                    try {
+                        Write-BootstrapJsonFile -Path $manifestPath -Value $normalized
+                        if ($State -ne $null) {
+                            $stateForBroadcast = $State
+                        } else {
+                            $stateForBroadcast = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot (Get-Location).Path -ResolvedCloneBaseDir (Get-Location).Path -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+                        }
+                        Ensure-BootstrapSecrets -State $stateForBroadcast
+                        $normalized = Read-BootstrapJsonFile -Path $manifestPath
+                        $providerData2 = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$key]
+                        $queue2 = @()
+                        foreach ($q in @($providerData2['rotationQueue'])) {
+                            $qHash = ConvertTo-BootstrapHashtable -InputObject $q
+                            if (-not ($qHash -is [hashtable])) { continue }
+                            if ([string]$qHash['id'] -eq [string]$item['id']) {
+                                $item = Update-BootstrapSecretRotationItemState -Item $item -To 'settled'
+                                $queue2 += ,$item
+                            } else {
+                                $queue2 += ,$qHash
+                            }
+                        }
+                        $providerData2['rotationQueue'] = $queue2
+                        $normalized.providers[$key] = Convert-BootstrapSecretsProviderDefinition -ProviderName $key -ProviderData $providerData2
+                    } catch {
+                        $broadcastError = [string]$_.Exception.Message
+                        if (-not [string]::IsNullOrWhiteSpace([string]$item['previousActiveCredentialId'])) {
+                            $providerData['activeCredential'] = [string]$item['previousActiveCredentialId']
+                            $normalized.providers[$key] = Convert-BootstrapSecretsProviderDefinition -ProviderName $key -ProviderData $providerData
+                        }
+                        $item = Update-BootstrapSecretRotationItemState -Item $item -To 'failed' -Message ("broadcast falhou: $broadcastError")
+                    }
+                }
+                if ($State -ne $null -and [string]$item['state'] -eq 'settled') {
+                    try {
+                        Register-BootstrapChange -State $State -Type 'SecretsRotation' -Target ("$key/$([string]$item['targetCredentialId'])") -OldValue ([string]$item['previousActiveCredentialId']) -NewValue ([string]$item['targetCredentialId']) -Name ([string]$item['id']) -Component 'bootstrap-secrets-rotation'
+                    } catch { }
+                }
+                $null = $processed.Add($item)
+                if (-not $DryRun) {
+                    Write-BootstrapJsonFile -Path $manifestPath -Value $normalized
+                }
+            }
+        }
+        if ($DryRun) {
+            # Em dry-run nao persiste no disco.
+        } else {
+            Write-BootstrapJsonFile -Path $manifestPath -Value $normalized
+        }
+        return @{
+            Path = $manifestPath
+            Processed = @($processed)
+            Data = $normalized
+        }
+    } finally {
+        Unlock-BootstrapSecretsFile -Stream $lock -Path $manifestPath
+    }
+}
+# endregion
 
 function Test-BootstrapSecretsTargetHasApplicableValues {
     param($Target)
@@ -18674,6 +19550,10 @@ function Invoke-BootstrapComponent {
         }
     }
 
+    if (Test-BootstrapComponentSkipped -State $State -ComponentName $Name) {
+        return
+    }
+
     Refresh-SessionPath
     $State.Completed[$Name] = $true
 }
@@ -19274,6 +20154,8 @@ function Invoke-BootstrapProfileMode {
                 $state.ComponentStatus[$componentName] = [ordered]@{ status = 'completed'; timestamp = (Get-Date).ToString('o') }
                 $successfullyCompleted.Add($componentName)
                 Save-BootstrapCheckpoint -Selection $selection -CompletedComponents $successfullyCompleted.ToArray() -AppTuningResults $state.AppTuningResults -HostHealthResults $state.HostHealthResults
+            } elseif (Test-BootstrapComponentSkipped -State $state -ComponentName $componentName) {
+                Write-Log ("Componente pulado com aviso: {0}" -f $componentName) 'WARN'
             }
         }
     } catch {
@@ -19304,6 +20186,8 @@ function Invoke-BootstrapProfileMode {
                 lastComponent = $failedComponent
                 failedComponent = $failedComponent
                 completedComponents = @($successfullyCompleted.ToArray())
+                warnings = @($state.Warnings.ToArray())
+                skippedComponents = @($state.SkippedComponents.ToArray())
                 componentStatus = $state.ComponentStatus
                 howToFix = $(if ($blockedInfo.IsBlocked -and [string]$blockedInfo.Action -eq 'restart-required') { 'Reinicie o Windows e execute novamente.' } else { 'Revise o log do componente, rode -Audit para diagnostico e use -Resume apos corrigir dependencias.' })
                 changesPath = $state.ChangeManifestPath
@@ -19332,6 +20216,8 @@ function Invoke-BootstrapProfileMode {
                 lastComponent = $failedComponent
                 failedComponent = $failedComponent
                 completedComponents = @($successfullyCompleted.ToArray())
+                warnings = @($state.Warnings.ToArray())
+                skippedComponents = @($state.SkippedComponents.ToArray())
                 componentStatus = $state.ComponentStatus
                 howToFix = 'Revise AppTuning/HostHealth no log; desative o modo correspondente ou execute como Administrador quando indicado.'
                 changesPath = $state.ChangeManifestPath
@@ -19343,8 +20229,11 @@ function Invoke-BootstrapProfileMode {
     }
 
     if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        $skippedComponents = @($state.SkippedComponents.ToArray())
+        $resultWarnings = @($state.Warnings.ToArray())
+        $resultStatus = if ($skippedComponents.Count -gt 0 -or $resultWarnings.Count -gt 0) { 'warning' } else { 'success' }
         Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-            status = 'success'
+            status = $resultStatus
             generatedAt = (Get-Date).ToString('o')
             logPath = $script:LogPath
             resultPath = $script:ResultPath
@@ -19365,6 +20254,9 @@ function Invoke-BootstrapProfileMode {
             steamDeckAutomationRoot = $state.SteamDeckAutomationRoot
             preflight = $state.PreflightSummary
             manualRequirements = @($state.ManualRequirements.ToArray())
+            warnings = $resultWarnings
+            skippedComponents = $skippedComponents
+            completedComponents = @($successfullyCompleted.ToArray())
             componentStatus = $state.ComponentStatus
             changesPath = $state.ChangeManifestPath
             changesSummary = Get-BootstrapChangesSummary -State $state
@@ -19663,6 +20555,174 @@ function Invoke-BootstrapApiApply {
     return $state.SecretsSummary
 }
 
+function Get-BootstrapRotationStaleProviders {
+    param(
+        [Parameter(Mandatory = $true)]$SecretsData,
+        [int]$StaleHours = 24
+    )
+    $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+    $stale = New-Object System.Collections.ArrayList
+    $cutoff = (Get-Date).ToUniversalTime().AddHours(-1 * [Math]::Abs($StaleHours))
+    foreach ($providerName in @($normalized.providers.Keys)) {
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$providerName]
+        if (-not ($provider -is [hashtable])) { continue }
+        if (-not ($provider.ContainsKey('credentials') -and ($provider['credentials'] -is [hashtable]))) { continue }
+        $activeId = [string]$provider['activeCredential']
+        if ([string]::IsNullOrWhiteSpace($activeId)) { continue }
+        if (-not $provider['credentials'].Contains($activeId)) { continue }
+        $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$activeId]
+        if (-not ($credential -is [hashtable])) { continue }
+        $validation = ConvertTo-BootstrapHashtable -InputObject $credential['validation']
+        if (-not ($validation -is [hashtable])) { $null = $stale.Add([string]$providerName); continue }
+        $state = [string]$validation['state']
+        if ($state -in @('failed', 'unknown')) { $null = $stale.Add([string]$providerName); continue }
+        if ($state -eq 'passed') {
+            $checkedAtRaw = [string]$validation['checkedAt']
+            if ([string]::IsNullOrWhiteSpace($checkedAtRaw)) { $null = $stale.Add([string]$providerName); continue }
+            $checkedAt = [DateTime]::MinValue
+            $parsed = [DateTime]::TryParse($checkedAtRaw, [ref]$checkedAt)
+            if (-not $parsed) { $null = $stale.Add([string]$providerName); continue }
+            if ($checkedAt.ToUniversalTime() -lt $cutoff) { $null = $stale.Add([string]$providerName) }
+        }
+    }
+    return ,@($stale.ToArray())
+}
+
+function Get-BootstrapRotationScheduledTaskName {
+    return 'PhaseZero\BootstrapSecretsRotation'
+}
+
+function Get-BootstrapRotationScheduledTaskState {
+    $taskName = Get-BootstrapRotationScheduledTaskName
+    $exists = $false
+    try {
+        $existing = Get-ScheduledTask -TaskName (Split-Path $taskName -Leaf) -TaskPath ('\' + (Split-Path $taskName -Parent) + '\') -ErrorAction SilentlyContinue
+        if ($existing) { $exists = $true }
+    } catch {
+        $exists = $false
+    }
+    return [ordered]@{ exists = $exists; taskName = $taskName }
+}
+
+function Register-BootstrapRotationScheduledTask {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('none', 'daily', 'weekly')][string]$Schedule,
+        [hashtable]$State = $null,
+        [switch]$DryRun
+    )
+    $taskName = Get-BootstrapRotationScheduledTaskName
+    $leaf = Split-Path $taskName -Leaf
+    $folder = '\' + (Split-Path $taskName -Parent) + '\'
+    if ($Schedule -eq 'none') {
+        if ($DryRun) {
+            return [ordered]@{ status = 'would-remove'; taskName = $taskName; schedule = 'none' }
+        }
+        try {
+            $existing = Get-ScheduledTask -TaskName $leaf -TaskPath $folder -ErrorAction SilentlyContinue
+            if ($existing) {
+                Unregister-ScheduledTask -TaskName $leaf -TaskPath $folder -Confirm:$false -ErrorAction Stop
+                if ($State -ne $null) {
+                    try { Register-BootstrapChange -State $State -Type 'Task' -Target $taskName -OldValue 'present' -NewValue 'absent' -Operation 'unregister' -Component 'bootstrap-secrets-rotation' } catch { }
+                }
+                return [ordered]@{ status = 'removed'; taskName = $taskName; schedule = 'none' }
+            }
+            return [ordered]@{ status = 'absent'; taskName = $taskName; schedule = 'none' }
+        } catch {
+            return [ordered]@{ status = 'error'; taskName = $taskName; schedule = 'none'; message = [string]$_.Exception.Message }
+        }
+    }
+
+    $time = '03:17'
+    $argsLine = "-NoProfile -ExecutionPolicy Bypass -File `"$($PSCommandPath)`" -RotateSecrets -NonInteractive"
+    if ($DryRun) {
+        return [ordered]@{ status = 'would-register'; taskName = $taskName; schedule = $Schedule; time = $time; args = $argsLine }
+    }
+    try {
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $argsLine
+        $trigger = if ($Schedule -eq 'daily') {
+            New-ScheduledTaskTrigger -Daily -At $time
+        } else {
+            New-ScheduledTaskTrigger -Weekly -DaysOfWeek Sunday -At $time
+        }
+        $principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType S4U -RunLevel Limited
+        $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
+        $existing = Get-ScheduledTask -TaskName $leaf -TaskPath $folder -ErrorAction SilentlyContinue
+        $previous = if ($existing) { 'present' } else { 'absent' }
+        Register-ScheduledTask -TaskName $leaf -TaskPath $folder -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+        if ($State -ne $null) {
+            try { Register-BootstrapChange -State $State -Type 'Task' -Target $taskName -OldValue $previous -NewValue ('schedule=' + $Schedule) -Operation 'register' -Component 'bootstrap-secrets-rotation' } catch { }
+        }
+        return [ordered]@{ status = 'registered'; taskName = $taskName; schedule = $Schedule; time = $time }
+    } catch {
+        return [ordered]@{ status = 'error'; taskName = $taskName; schedule = $Schedule; message = [string]$_.Exception.Message }
+    }
+}
+
+function Invoke-BootstrapRotateSecretsMode {
+    param(
+        [string]$Provider = '',
+        [int]$MaxItems = 10,
+        [int]$TimeoutSeconds = 120,
+        [string]$Schedule = '',
+        [switch]$DryRun
+    )
+
+    $bundle = Get-BootstrapSecretsData
+    $data = $bundle.Data
+    $providerFilter = if (-not [string]::IsNullOrWhiteSpace($Provider)) { $Provider.ToLowerInvariant() } else { '' }
+
+    $staleProviders = Get-BootstrapRotationStaleProviders -SecretsData $data -StaleHours 24
+    if (-not [string]::IsNullOrWhiteSpace($providerFilter)) {
+        $staleProviders = @($staleProviders | Where-Object { [string]$_ -eq $providerFilter })
+    }
+    $enqueued = New-Object System.Collections.ArrayList
+    foreach ($providerName in $staleProviders) {
+        $existingQueue = Get-BootstrapSecretRotationQueue -SecretsData $data -ProviderName $providerName
+        $activeOpen = @($existingQueue | Where-Object { [string]$_['state'] -notin @('settled', 'failed') }).Count
+        if ($activeOpen -gt 0) { continue }
+        $result = Add-BootstrapSecretRotationItem -SecretsData $data -ProviderName $providerName -Trigger 'scheduled'
+        $data = $result.Data
+        $null = $enqueued.Add([ordered]@{ provider = $providerName; rotationId = [string]$result.Item['id'] })
+    }
+    $originalSnapshot = $null
+    if ($enqueued.Count -gt 0) {
+        if ($DryRun) {
+            try { $originalSnapshot = Get-Content -LiteralPath $bundle.Path -Raw -Encoding UTF8 } catch { $originalSnapshot = $null }
+        }
+        Write-BootstrapJsonFile -Path $bundle.Path -Value $data
+    }
+
+    $processed = @()
+    try {
+        if (-not $DryRun) {
+            $rotation = Invoke-BootstrapSecretRotation -ProviderName $providerFilter -MaxItems $MaxItems -TimeoutSeconds $TimeoutSeconds
+            $processed = @($rotation.Processed)
+        } else {
+            $rotation = Invoke-BootstrapSecretRotation -ProviderName $providerFilter -MaxItems $MaxItems -TimeoutSeconds $TimeoutSeconds -DryRun
+            $processed = @($rotation.Processed)
+        }
+    } finally {
+        if ($DryRun -and $null -ne $originalSnapshot) {
+            try { Set-Content -LiteralPath $bundle.Path -Value $originalSnapshot -Encoding UTF8 -NoNewline } catch { }
+        }
+    }
+
+    $scheduleResult = $null
+    if (-not [string]::IsNullOrWhiteSpace($Schedule)) {
+        $scheduleResult = Register-BootstrapRotationScheduledTask -Schedule $Schedule -DryRun:$DryRun
+    }
+
+    $output = [ordered]@{
+        manifestPath = $bundle.Path
+        enqueued = @($enqueued)
+        processedCount = $processed.Count
+        processed = @($processed | ForEach-Object { [ordered]@{ id = [string]$_['id']; provider = [string]$_['provider']; state = [string]$_['state']; targetCredentialId = [string]$_['targetCredentialId']; attempts = [int]$_['attempts']; lastError = [string]$_['lastError'] } })
+        schedule = $scheduleResult
+        dryRun = [bool]$DryRun
+    }
+    return $output
+}
+
 function Invoke-BootstrapSecretsMode {
     $bundle = Get-BootstrapSecretsData
     $data = $bundle.Data
@@ -19726,30 +20786,37 @@ $useBootstrapSecretsMode = (
     [string]::IsNullOrWhiteSpace($SecretsActivateCredential) -eq $false
 )
 
+$useBootstrapRotateSecretsMode = (
+    $RotateSecrets -or
+    -not [string]::IsNullOrWhiteSpace($RotateSecretsSchedule)
+)
+
 $useBootstrapDoctorMode = $Doctor
 
 $useBootstrapProfileMode = (
-    $UiContractJson -or
-    $ListProfiles -or
-    $ListHostHealthModes -or
-    $ListAppTuningCatalog -or
-    $ListApps -or
-    $ListComponents -or
-    $DryRun -or
-    $Interactive -or
-    $NonInteractive -or
-    $Rollback -or
-    $Audit -or
-    $Repair -or
-    [string]::IsNullOrWhiteSpace($HostHealth) -eq $false -or
-    [string]::IsNullOrWhiteSpace($AppTuning) -eq $false -or
-    (@($AppTuningCategory).Count -gt 0) -or
-    (@($AppTuningItem).Count -gt 0) -or
-    (@($ExcludeAppTuningItem).Count -gt 0) -or
-    (@($App).Count -gt 0) -or
-    (@($Profile).Count -gt 0) -or
-    (@($Component).Count -gt 0) -or
-    (@($Exclude).Count -gt 0)
+    -not $useBootstrapRotateSecretsMode -and (
+        $UiContractJson -or
+        $ListProfiles -or
+        $ListHostHealthModes -or
+        $ListAppTuningCatalog -or
+        $ListApps -or
+        $ListComponents -or
+        $DryRun -or
+        $Interactive -or
+        $NonInteractive -or
+        $Rollback -or
+        $Audit -or
+        $Repair -or
+        [string]::IsNullOrWhiteSpace($HostHealth) -eq $false -or
+        [string]::IsNullOrWhiteSpace($AppTuning) -eq $false -or
+        (@($AppTuningCategory).Count -gt 0) -or
+        (@($AppTuningItem).Count -gt 0) -or
+        (@($ExcludeAppTuningItem).Count -gt 0) -or
+        (@($App).Count -gt 0) -or
+        (@($Profile).Count -gt 0) -or
+        (@($Component).Count -gt 0) -or
+        (@($Exclude).Count -gt 0)
+    )
 )
 
 if (-not $isDotSourced) {
@@ -19790,6 +20857,21 @@ if (-not $isDotSourced) {
         }
     }
 
+    if ($useBootstrapRotateSecretsMode) {
+        try {
+            $rotateOutput = Invoke-BootstrapRotateSecretsMode -Provider $RotateSecretsProvider -MaxItems $RotateSecretsMaxItems -TimeoutSeconds $RotateSecretsTimeoutSeconds -Schedule $RotateSecretsSchedule -DryRun:$DryRun
+            Write-Output (($rotateOutput | ConvertTo-Json -Depth 6 -Compress))
+            Stop-BootstrapProcess 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'rotate-secrets' })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            Stop-BootstrapProcess 1
+        }
+    }
+
     if ($useBootstrapProfileMode) {
         try {
             Invoke-BootstrapProfileMode
@@ -19797,7 +20879,7 @@ if (-not $isDotSourced) {
         } catch {
             $blockedInfo = Get-BootstrapBlockedErrorInfo -ErrorRecord $_
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
-                if (-not ($blockedInfo.IsBlocked -and (Test-Path -LiteralPath $script:ResultPath))) {
+                if (-not (Test-Path -LiteralPath $script:ResultPath)) {
                     Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'Invoke-BootstrapProfileMode-outer' })
                 }
             }
@@ -19850,7 +20932,7 @@ if (-not $isDotSourced) {
         Refresh-SessionPath
 
         Ensure-WingetPackage -WingetPath $winget -Id 'Google.Chrome' -DisplayName 'ChromeSetup (Google Chrome)' -AllowFailureWhenNotAdmin $true -ProbePaths @("$env:ProgramFiles\Google\Chrome\Application\chrome.exe", "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe", "${env:LOCALAPPDATA}\Google\Chrome\Application\chrome.exe")
-        Ensure-WingetPackage -WingetPath $winget -Id 'Notepad++.Notepad++' -DisplayName 'Notepad++' -AllowFailureWhenNotAdmin $true -ProbePaths @("$env:ProgramFiles\Notepad++\notepad++.exe", "${env:ProgramFiles(x86)}\Notepad++\notepad++.exe", "${env:LOCALAPPDATA}\Programs\Notepad++\notepad++.exe")
+        Ensure-WingetPackage -WingetPath $winget -Id 'Notepad++.Notepad++' -DisplayName 'Notepad++' -AllowFailureWhenNotAdmin $true -ProbePaths @(Get-BootstrapNotepadPlusPlusProbePaths)
         Ensure-WingetPackage -WingetPath $winget -Id 'Anthropic.Claude' -DisplayName 'Claude Setup (Claude Desktop)' -AllowFailureWhenNotAdmin $true
         Ensure-WingetPackage -WingetPath $winget -Id 'Anysphere.Cursor' -DisplayName 'CursorUserSetup (Cursor)' -AllowFailureWhenNotAdmin $true
         Ensure-WingetPackage -WingetPath $winget -Id 'Codeium.Windsurf' -DisplayName 'WindsurfUserSetup (Windsurf)' -AllowFailureWhenNotAdmin $true

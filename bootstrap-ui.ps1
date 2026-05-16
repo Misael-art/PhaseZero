@@ -140,11 +140,43 @@ function Get-WindowsPowerShellExePath {
     return $system32
 }
 
+function ConvertTo-CommandLineArgument {
+    param([AllowNull()][string]$Token)
+
+    if ($null -eq $Token) { return '""' }
+    $text = [string]$Token
+    if ($text.Length -eq 0) { return '""' }
+    if ($text -notmatch '[\s"`&\(\)\^]') { return $text }
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    for ($i = 0; $i -lt $text.Length; $i++) {
+        $ch = $text[$i]
+        if ($ch -eq [char]'\') {
+            $backslashes++
+            continue
+        }
+        if ($ch -eq [char]'"') {
+            if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+            [void]$builder.Append('\"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$builder.Append($ch)
+    }
+    if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
 function ConvertTo-ArgumentString {
     param([string[]]$Tokens)
-    return [string]::Join(' ', @($Tokens | ForEach-Object {
-        if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
-    }))
+    return [string]::Join(' ', @($Tokens | ForEach-Object { ConvertTo-CommandLineArgument -Token ([string]$_) }))
 }
 
 function Restart-InWindowsPowerShell {
@@ -573,7 +605,55 @@ function Save-UiState {
 # Bootstrap / SmokeTest
 #
 
+$Script:UiContractMinSupported = '1.0.0'
+$Script:UiContractMaxSupported  = '1.99.99'
+
+function Test-UiContractVersionCompat {
+    param(
+        [Parameter(Mandatory = $true)][string]$Version,
+        [Parameter(Mandatory = $true)][string]$Min,
+        [Parameter(Mandatory = $true)][string]$Max
+    )
+    function ConvertTo-Tuple([string]$v) {
+        $parts = $v -split '\.'
+        if ($parts.Count -lt 3) { return $null }
+        try { return [int[]]@([int]$parts[0], [int]$parts[1], [int]$parts[2]) } catch { return $null }
+    }
+    $vT = ConvertTo-Tuple $Version
+    $mn = ConvertTo-Tuple $Min
+    $mx = ConvertTo-Tuple $Max
+    if (-not $vT -or -not $mn -or -not $mx) {
+        return @{ status = 'invalid'; severity = 'error'; message = "Versao invalida do contrato: '$Version'" }
+    }
+    if ($vT[0] -gt $mx[0]) {
+        return @{ status = 'cli-too-new'; severity = 'error'; message = "UI desatualizada: contrato $Version > suportado $Max. Atualize a UI." }
+    }
+    if ($vT[0] -lt $mn[0]) {
+        return @{ status = 'cli-too-old'; severity = 'error'; message = "CLI desatualizada: contrato $Version < suportado $Min. Atualize o bootstrap." }
+    }
+    if (($vT[0] -eq $mx[0]) -and ($vT[1] -gt $mx[1] -or ($vT[1] -eq $mx[1] -and $vT[2] -gt $mx[2]))) {
+        return @{ status = 'minor-newer'; severity = 'warning'; message = "Contrato $Version e mais novo que o esperado por esta UI ($Max). Continuando." }
+    }
+    return @{ status = 'ok'; severity = 'info'; message = "Contrato compativel: $Version" }
+}
+
 $contract = Get-BootstrapUiContract
+
+$contractVersion = ''
+try { $contractVersion = [string]$contract.schemaVersion } catch { $contractVersion = '' }
+if ([string]::IsNullOrWhiteSpace($contractVersion)) {
+    Write-UiLog -Level 'WARN' -Message "Contrato sem schemaVersion (CLI antiga)."
+} else {
+    $compat = Test-UiContractVersionCompat -Version $contractVersion -Min $Script:UiContractMinSupported -Max $Script:UiContractMaxSupported
+    $compatLevel = 'INFO'
+    if ($compat.severity -eq 'error') { $compatLevel = 'ERROR' }
+    elseif ($compat.severity -eq 'warning') { $compatLevel = 'WARN' }
+    Write-UiLog -Level $compatLevel -Message $compat.message
+    if ($compat.severity -eq 'error' -and -not $SmokeTest) {
+        throw $compat.message
+    }
+}
+
 $state    = Read-UiState -Path $UiStatePath -Contract $contract
 
 if ($SmokeTest) {
@@ -2245,6 +2325,7 @@ $ui = [ordered]@{
     CurrentResultPath     = $null
     CurrentStdoutPath     = $null
     CurrentStderrPath     = $null
+    CurrentBackendWasElevated = $false
     RunProcess            = $null
     ExecutionScopeOverride = $null
     CurrentExecutionScopeLabel = ''
@@ -5075,6 +5156,163 @@ function ConvertTo-PowerShellLiteral {
     return "'" + ([string]$Value -replace "'", "''") + "'"
 }
 
+function Get-UiBackendParameterBindingSpec {
+    $valueParameters = @(
+        '-CloneBaseDir',
+        '-WorkspaceRoot',
+        '-Profile',
+        '-Component',
+        '-Exclude',
+        '-SteamDeckVersion',
+        '-HostHealth',
+        '-AppTuning',
+        '-App',
+        '-AppTuningCategory',
+        '-AppTuningItem',
+        '-ExcludeAppTuningItem',
+        '-LogPath',
+        '-ResultPath',
+        '-SecretsImportPath',
+        '-SecretsActivateProvider',
+        '-SecretsActivateCredential',
+        '-ChangesPath',
+        '-CacheDir'
+    )
+    $switchParameters = @(
+        '-ClaudeCodeProjectMcps',
+        '-Interactive',
+        '-ListProfiles',
+        '-ListHostHealthModes',
+        '-ListAppTuningCatalog',
+        '-ListApps',
+        '-ListComponents',
+        '-Doctor',
+        '-UiContractJson',
+        '-BootstrapUiLibraryMode',
+        '-SecretsList',
+        '-SecretsValidateAll',
+        '-DryRun',
+        '-NonInteractive',
+        '-SkipManualRequirements',
+        '-IgnoreManualRequirements',
+        '-RequireNoPendingReboot',
+        '-AllowPendingReboot',
+        '-Resume',
+        '-Rollback',
+        '-AggressiveRollback',
+        '-Offline',
+        '-Audit',
+        '-AutoRollback',
+        '-Repair'
+    )
+
+    $values = @{}
+    foreach ($name in $valueParameters) { $values[$name.ToLowerInvariant()] = $true }
+    $switches = @{}
+    foreach ($name in $switchParameters) { $switches[$name.ToLowerInvariant()] = $true }
+
+    return [pscustomobject]@{
+        ValueParameters = $values
+        SwitchParameters = $switches
+    }
+}
+
+function ConvertTo-ElevatedBackendInvocationParts {
+    param([Parameter(Mandatory = $true)][string[]]$ScriptArgs)
+
+    $spec = Get-UiBackendParameterBindingSpec
+    $parts = New-Object System.Collections.Generic.List[string]
+    for ($i = 0; $i -lt $ScriptArgs.Count; $i++) {
+        $token = [string]$ScriptArgs[$i]
+        $key = $token.ToLowerInvariant()
+        if ($spec.SwitchParameters.ContainsKey($key)) {
+            $parts.Add($token)
+            continue
+        }
+        if ($spec.ValueParameters.ContainsKey($key)) {
+            if (($i + 1) -ge $ScriptArgs.Count) {
+                throw ("Argumento backend elevado sem valor: {0}" -f $token)
+            }
+            $parts.Add($token)
+            $i++
+            $parts.Add((ConvertTo-PowerShellLiteral -Value ([string]$ScriptArgs[$i])))
+            continue
+        }
+        throw ("Argumento backend elevado desconhecido: {0}" -f $token)
+    }
+
+    return @($parts.ToArray())
+}
+
+function Get-UiBackendTokenValue {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Tokens,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    for ($i = 0; $i -lt $Tokens.Count; $i++) {
+        if ([string]::Equals([string]$Tokens[$i], $Name, [System.StringComparison]::OrdinalIgnoreCase)) {
+            if (($i + 1) -lt $Tokens.Count) { return [string]$Tokens[$i + 1] }
+            return ''
+        }
+    }
+    return ''
+}
+
+function New-UiElevatedBackendWrapperCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$ScriptPath,
+        [Parameter(Mandatory = $true)][string[]]$InvocationParts,
+        [string]$StdoutPath,
+        [string]$StderrPath,
+        [string]$ResultPath,
+        [string]$LogPath
+    )
+
+    $invokeCommand = (@('&', (ConvertTo-PowerShellLiteral -Value $ScriptPath)) + @($InvocationParts)) -join ' '
+    $scriptLiteral = ConvertTo-PowerShellLiteral -Value $ScriptPath
+    $stdoutLiteral = ConvertTo-PowerShellLiteral -Value $StdoutPath
+    $stderrLiteral = ConvertTo-PowerShellLiteral -Value $StderrPath
+    $resultLiteral = ConvertTo-PowerShellLiteral -Value $ResultPath
+    $logLiteral = ConvertTo-PowerShellLiteral -Value $LogPath
+    $howToFixLiteral = ConvertTo-PowerShellLiteral -Value 'Corrija o erro do wrapper elevado ou rode novamente com escopo isolado/audit para diagnosticar sem UAC.'
+
+    $statements = @(
+        '$ErrorActionPreference = ''Stop''',
+        '$ProgressPreference = ''SilentlyContinue''',
+        ('$scriptPath = {0}' -f $scriptLiteral),
+        ('$stdoutPath = {0}' -f $stdoutLiteral),
+        ('$stderrPath = {0}' -f $stderrLiteral),
+        ('$resultPath = {0}' -f $resultLiteral),
+        ('$logPath = {0}' -f $logLiteral),
+        ('$howToFix = {0}' -f $howToFixLiteral),
+        'function Write-UiElevatedWrapperLine { param([string]$Path,[string]$Level,[string]$Message,[switch]$Utf8) if ([string]::IsNullOrWhiteSpace($Path)) { return } try { $parent = Split-Path -Path $Path -Parent; if ($parent) { [void][System.IO.Directory]::CreateDirectory($parent) }; $line = ''[{0:yyyy-MM-dd HH:mm:ss}] [{1}] {2}'' -f (Get-Date), $Level, $Message; if ($Utf8) { Add-Content -LiteralPath $Path -Value $line -Encoding utf8 } else { $line | Out-File -FilePath $Path -Append } } catch { } }',
+        'Write-UiElevatedWrapperLine -Path $stdoutPath -Level ''INFO'' -Message (''Bootstrap UI elevated wrapper started. Script={0} WorkingDirectory={1} ResultPath={2}'' -f $scriptPath, (Get-Location).Path, $resultPath)',
+        'Write-UiElevatedWrapperLine -Path $logPath -Level ''INFO'' -Message (''Bootstrap UI elevated wrapper started. Script={0} WorkingDirectory={1} ResultPath={2}'' -f $scriptPath, (Get-Location).Path, $resultPath) -Utf8',
+        'try {',
+        ('  {0} 1>> $stdoutPath 2>> $stderrPath' -f $invokeCommand),
+        '  exit $LASTEXITCODE',
+        '} catch {',
+        '  $message = ''Elevated backend wrapper failed: {0}'' -f $_.Exception.Message',
+        '  Write-UiElevatedWrapperLine -Path $stderrPath -Level ''ERROR'' -Message $message',
+        '  Write-UiElevatedWrapperLine -Path $logPath -Level ''ERROR'' -Message $message -Utf8',
+        '  try {',
+        '    if (-not [string]::IsNullOrWhiteSpace($resultPath)) {',
+        '      $parent = Split-Path -Path $resultPath -Parent',
+        '      if ($parent) { [void][System.IO.Directory]::CreateDirectory($parent) }',
+        '      $fallback = [ordered]@{ status = ''error''; mode = ''ui-elevated''; generatedAt = (Get-Date).ToString(''o''); exitCode = 1; error = $message; howToFix = $howToFix; logPath = $logPath; resultPath = $resultPath; stdoutPath = $stdoutPath; stderrPath = $stderrPath; diagnostics = @([ordered]@{ severity = ''error''; message = $message; howToFix = $howToFix }) }',
+        '      [System.IO.File]::WriteAllText($resultPath, ($fallback | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))',
+        '    }',
+        '  } catch {',
+        '    Write-UiElevatedWrapperLine -Path $stderrPath -Level ''ERROR'' -Message (''Failed to write elevated fallback result: {0}'' -f $_.Exception.Message)',
+        '  }',
+        '  exit 1',
+        '}'
+    )
+
+    return ($statements -join '; ')
+}
+
 function Build-ElevatedBackendCommand {
     param([Parameter(Mandatory = $true)][string[]]$BackendTokens)
 
@@ -5087,17 +5325,44 @@ function Build-ElevatedBackendCommand {
     if (($fileIndex + 2) -lt $BackendTokens.Count) {
         $scriptArgs = @($BackendTokens[($fileIndex + 2)..($BackendTokens.Count - 1)])
     }
-    $commandParts = @('&', (ConvertTo-PowerShellLiteral -Value $scriptPath))
-    foreach ($arg in @($scriptArgs)) {
-        $commandParts += (ConvertTo-PowerShellLiteral -Value ([string]$arg))
+    $invocationParts = ConvertTo-ElevatedBackendInvocationParts -ScriptArgs $scriptArgs
+    $resultPath = Get-UiBackendTokenValue -Tokens $scriptArgs -Name '-ResultPath'
+    $logPath = Get-UiBackendTokenValue -Tokens $scriptArgs -Name '-LogPath'
+    $command = New-UiElevatedBackendWrapperCommand -ScriptPath $scriptPath -InvocationParts $invocationParts -StdoutPath ([string]$ui.CurrentStdoutPath) -StderrPath ([string]$ui.CurrentStderrPath) -ResultPath $resultPath -LogPath $logPath
+    return @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $command)
+}
+
+function New-UiRunArtifactSet {
+    param([string]$Timestamp = (Get-Date -Format 'yyyyMMdd_HHmmss'))
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace([string]$script:UiStorageRoot)) {
+        $candidates.Add((Join-Path ([string]$script:UiStorageRoot) 'ui-runs'))
     }
-    if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentStdoutPath)) {
-        $commandParts += @('1>', (ConvertTo-PowerShellLiteral -Value ([string]$ui.CurrentStdoutPath)))
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $candidates.Add((Join-Path $env:LOCALAPPDATA 'bootstrap-tools\ui-runs'))
     }
-    if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentStderrPath)) {
-        $commandParts += @('2>', (ConvertTo-PowerShellLiteral -Value ([string]$ui.CurrentStderrPath)))
+    if (-not [string]::IsNullOrWhiteSpace($env:TEMP)) {
+        $candidates.Add((Join-Path $env:TEMP 'bootstrap-tools\ui-runs'))
     }
-    return @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ($commandParts -join ' '))
+    $candidates.Add((Join-Path $PSScriptRoot 'bootstrap-tools\ui-runs'))
+
+    foreach ($candidate in @($candidates | Select-Object -Unique)) {
+        if ([string]::IsNullOrWhiteSpace([string]$candidate)) { continue }
+        $probeFile = Join-Path ([string]$candidate) ('.bootstrap-ui-run-probe-{0}.tmp' -f ([Guid]::NewGuid().ToString('N')))
+        if (Test-UiParentPathWritable -Path $probeFile) {
+            $root = [string]$candidate
+            return [ordered]@{
+                Root = $root
+                LogPath = Join-Path $root ("bootstrap-ui_{0}.log" -f $Timestamp)
+                ResultPath = Join-Path $root ("bootstrap-ui_{0}.result.json" -f $Timestamp)
+                StdoutPath = Join-Path $root ("bootstrap-ui_{0}.stdout.log" -f $Timestamp)
+                StderrPath = Join-Path $root ("bootstrap-ui_{0}.stderr.log" -f $Timestamp)
+            }
+        }
+    }
+
+    throw 'Bootstrap UI não encontrou diretório gravável para artefatos de execução.'
 }
 
 function Start-BackendWorker {
@@ -5117,6 +5382,7 @@ function Start-BackendWorker {
     if ($argumentLength -gt $safeArgumentLimit) {
         throw ("ArgumentList acima do limite seguro ({0}>{1}). Revise selecao/AppTuning e limpe historico antes de executar." -f $argumentLength, $safeArgumentLimit)
     }
+    $ui.CurrentBackendWasElevated = [bool]$needsAdmin
     Write-UiLog -Message ("Start-BackendWorker. NeedsAdmin={0}  ArgLength={1}  Exe={2}  Args={3}  WorkingDirectory={4}" -f $needsAdmin, $argumentLength, $powershellExe, $argumentString, $backendRoot)
     $sp = @{
         FilePath               = $powershellExe
@@ -5155,6 +5421,80 @@ function Get-RunStreamTail {
         return (($lines[$start..($lines.Count - 1)] | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
     } catch {
         return ("Falha ao ler stream {0}: {1}" -f $Path, $_.Exception.Message)
+    }
+}
+
+function Write-UiFallbackResult {
+    param(
+        [Parameter(Mandatory = $true)][string]$Message,
+        [string]$HowToFix = 'Abra stdout/stderr e o log da UI; corrija a falha indicada e execute novamente ou use -Audit para diagnostico.',
+        [string]$ExitCode = 'unknown',
+        [string]$EmptyStreamHint = ''
+    )
+
+    $stdoutTail = Get-RunStreamTail -Path ([string]$ui.CurrentStdoutPath)
+    $stderrTail = Get-RunStreamTail -Path ([string]$ui.CurrentStderrPath)
+    $finalMessage = [string]$Message
+    $streamDetail = if (-not [string]::IsNullOrWhiteSpace($stderrTail)) {
+        ($stderrTail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    } elseif (-not [string]::IsNullOrWhiteSpace($stdoutTail)) {
+        ($stdoutTail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    } else {
+        ''
+    }
+    if (-not [string]::IsNullOrWhiteSpace($streamDetail)) {
+        $finalMessage = "{0} stderr/stdout: {1}" -f $finalMessage, $streamDetail
+    } elseif (-not [string]::IsNullOrWhiteSpace($EmptyStreamHint)) {
+        $finalMessage = "{0} {1}" -f $finalMessage, $EmptyStreamHint
+    }
+
+    try {
+        if (-not [string]::IsNullOrWhiteSpace($ui.CurrentResultPath)) {
+            $resultParent = Split-Path -Path $ui.CurrentResultPath -Parent
+            if ($resultParent) { $null = New-Item -Path $resultParent -ItemType Directory -Force }
+            $fallbackResult = [ordered]@{
+                status = 'error'
+                mode = 'ui'
+                generatedAt = (Get-Date).ToString('o')
+                logPath = $ui.CurrentLogPath
+                resultPath = $ui.CurrentResultPath
+                stdoutPath = $ui.CurrentStdoutPath
+                stderrPath = $ui.CurrentStderrPath
+                stdoutTail = $stdoutTail
+                stderrTail = $stderrTail
+                exitCode = $ExitCode
+                error = $finalMessage
+                howToFix = $HowToFix
+                rollbackAvailable = $false
+                artifactPaths = [ordered]@{
+                    logPath = $ui.CurrentLogPath
+                    resultPath = $ui.CurrentResultPath
+                    stdoutPath = $ui.CurrentStdoutPath
+                    stderrPath = $ui.CurrentStderrPath
+                }
+                diagnostics = @([ordered]@{
+                    severity = 'error'
+                    message = $finalMessage
+                    howToFix = $HowToFix
+                })
+                scope = Get-CurrentExecutionScopeSnapshot
+                rollback = [ordered]@{
+                    available = $false
+                    changesPath = ''
+                    summary = $null
+                }
+            }
+            $fallbackJson = $fallbackResult | ConvertTo-Json -Depth 8
+            [System.IO.File]::WriteAllText($ui.CurrentResultPath, $fallbackJson, [System.Text.UTF8Encoding]::new($false))
+        }
+    } catch {
+        Write-UiLog -Level 'WARN' -Message ("Falha ao escrever fallback result.json: {0}" -f $_.Exception.Message)
+    }
+
+    return [pscustomobject]@{
+        Message = $finalMessage
+        StdoutTail = $stdoutTail
+        StderrTail = $stderrTail
     }
 }
 
@@ -5228,6 +5568,38 @@ function Test-UiBackendResultFileReady {
     return $false
 }
 
+function Read-UiBackendResultWithRetry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [int]$MaxWaitMs = 3000,
+        [int]$StepMs = 120
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { throw 'result.json path vazio.' }
+    $waited = 0
+    $step = [Math]::Max(20, $StepMs)
+    $lastError = $null
+    while ($waited -le $MaxWaitMs) {
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                $raw = Get-Content -LiteralPath $Path -Raw -Encoding utf8 -ErrorAction Stop
+                if (-not [string]::IsNullOrWhiteSpace($raw)) {
+                    return ($raw | ConvertFrom-Json -ErrorAction Stop)
+                }
+            }
+        } catch {
+            $lastError = $_
+        }
+        Start-Sleep -Milliseconds $step
+        $waited += $step
+    }
+
+    if ($lastError) {
+        throw ("result.json invalido ou incompleto apos {0}ms: {1}" -f $MaxWaitMs, $lastError.Exception.Message)
+    }
+    throw ("result.json ausente ou vazio apos {0}ms: {1}" -f $MaxWaitMs, $Path)
+}
+
 function Update-RunArtifactButtons {
     $logPath = if (-not [string]::IsNullOrWhiteSpace($ui.CurrentLogPath)) { [string]$ui.CurrentLogPath } else { [string]$ui.State.lastLogPath }
     $resultPath = if (-not [string]::IsNullOrWhiteSpace($ui.CurrentResultPath)) { [string]$ui.CurrentResultPath } else { [string]$ui.State.lastResultPath }
@@ -5258,102 +5630,110 @@ function Complete-RunExecutionWithoutResult {
         try { $exitCode = [string]$ui.RunProcess.ExitCode } catch { $exitCode = 'unknown' }
     }
     $message = "{0}  Backend saiu sem result.json. ExitCode={1}. Verifique o log para detalhes." -f $ui.Strings.RunFailed, $exitCode
-    $stdoutTail = Get-RunStreamTail -Path ([string]$ui.CurrentStdoutPath)
-    $stderrTail = Get-RunStreamTail -Path ([string]$ui.CurrentStderrPath)
-    $streamDetail = if (-not [string]::IsNullOrWhiteSpace($stderrTail)) {
-        ($stderrTail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
-    } elseif (-not [string]::IsNullOrWhiteSpace($stdoutTail)) {
-        ($stdoutTail -split "\r?\n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
-    } else {
-        ''
-    }
-    if (-not [string]::IsNullOrWhiteSpace($streamDetail)) {
-        $message = "{0} stderr/stdout: {1}" -f $message, $streamDetail
-    }
+    $emptyStreamHint = ''
     try {
-        if (-not [string]::IsNullOrWhiteSpace($ui.CurrentResultPath)) {
-            $resultParent = Split-Path -Path $ui.CurrentResultPath -Parent
-            if ($resultParent) { $null = New-Item -Path $resultParent -ItemType Directory -Force }
-            $fallbackResult = [ordered]@{
-                status = 'error'
-                mode = 'ui'
-                generatedAt = (Get-Date).ToString('o')
-                logPath = $ui.CurrentLogPath
-                resultPath = $ui.CurrentResultPath
-                stdoutPath = $ui.CurrentStdoutPath
-                stderrPath = $ui.CurrentStderrPath
-                stdoutTail = $stdoutTail
-                stderrTail = $stderrTail
-                exitCode = $exitCode
-                error = $message
-                howToFix = 'Abra stdout/stderr e o log da UI; corrija a falha indicada e execute novamente ou use -Audit para diagnostico.'
-                rollbackAvailable = $false
-                artifactPaths = [ordered]@{
-                    logPath = $ui.CurrentLogPath
-                    resultPath = $ui.CurrentResultPath
-                    stdoutPath = $ui.CurrentStdoutPath
-                    stderrPath = $ui.CurrentStderrPath
-                }
-                diagnostics = @([ordered]@{
-                    severity = 'error'
-                    message = $message
-                    howToFix = 'Abra stdout/stderr e o log da UI; corrija a falha indicada e execute novamente ou use -Audit para diagnostico.'
-                })
-                scope = Get-CurrentExecutionScopeSnapshot
-                rollback = [ordered]@{
-                    available = $false
-                    changesPath = ''
-                    summary = $null
-                }
-            }
-            $fallbackJson = $fallbackResult | ConvertTo-Json -Depth 8
-            [System.IO.File]::WriteAllText($ui.CurrentResultPath, $fallbackJson, [System.Text.UTF8Encoding]::new($false))
+        if ([bool]$ui.CurrentBackendWasElevated) {
+            $emptyStreamHint = 'Processo elevado encerrou antes do backend inicializar; verificar wrapper/elevation/argument binding.'
         }
     } catch {
-        Write-UiLog -Level 'WARN' -Message ("Falha ao escrever fallback result.json: {0}" -f $_.Exception.Message)
+        $emptyStreamHint = ''
     }
-    Write-UiLog -Level 'ERROR' -Message $message
-    Complete-RunExecution -StatusText $message
+    $fallback = Write-UiFallbackResult -Message $message -ExitCode $exitCode -EmptyStreamHint $emptyStreamHint
+    Write-UiLog -Level 'ERROR' -Message ([string]$fallback.Message)
+    Complete-RunExecution -StatusText ([string]$fallback.Message)
+}
+
+function Get-UiRunStatusTextFromResult {
+    param(
+        [Parameter(Mandatory = $true)]$Result,
+        [Parameter(Mandatory = $true)]$Strings
+    )
+
+    $values = @{}
+    foreach ($property in @($Result.PSObject.Properties)) {
+        $values[[string]$property.Name] = $property.Value
+    }
+    $stringValues = @{}
+    foreach ($property in @($Strings.PSObject.Properties)) {
+        $stringValues[[string]$property.Name] = $property.Value
+    }
+
+    function Get-ResultTextValue {
+        param(
+            [Parameter(Mandatory = $true)][string]$Name,
+            [string]$Default = ''
+        )
+        if ($values.ContainsKey($Name) -and $null -ne $values[$Name]) {
+            return [string]$values[$Name]
+        }
+        return $Default
+    }
+
+    function Get-ResultBoolValue {
+        param([Parameter(Mandatory = $true)][string]$Name)
+        if ($values.ContainsKey($Name) -and $null -ne $values[$Name]) {
+            return [bool]$values[$Name]
+        }
+        return $false
+    }
+
+    $status = Get-ResultTextValue -Name 'status'
+    $runCompleted = if ($stringValues.ContainsKey('RunCompleted')) { [string]$stringValues['RunCompleted'] } else { 'Execução concluída.' }
+    $runFailed = if ($stringValues.ContainsKey('RunFailed')) { [string]$stringValues['RunFailed'] } else { 'Execução falhou.' }
+
+    if ($status -eq 'success') {
+        return $runCompleted
+    } elseif ($status -eq 'warning') {
+        if ((Get-ResultTextValue -Name 'mode') -eq 'audit') {
+            $bad = 0
+            if ($values.ContainsKey('auditSummary') -and $null -ne $values['auditSummary']) {
+                try { $bad = [int]$values['auditSummary'].critical } catch { }
+            }
+            return "Auditoria concluida com avisos: $bad componente(s) requerem instalacao/reparo/acao manual. Ver log e resultado."
+        } else {
+            return 'Concluido com avisos. Verifique o log.'
+        }
+    } elseif ($status -eq 'blocked') {
+        $err = Get-ResultTextValue -Name 'error' -Default 'ação do usuário necessária.'
+        $fix = Get-ResultTextValue -Name 'howToFix' -Default 'Revise a ação indicada e execute novamente.'
+        $kind = Get-ResultTextValue -Name 'blockerKind' -Default 'blocked'
+        $action = Get-ResultTextValue -Name 'action'
+        $prefix = if ($kind -eq 'pending-reboot-msi' -or $action -eq 'restart-required') { 'Reinício necessário' } else { 'Ação necessária' }
+        return "{0}. Bloqueio: {1}. {2} Como corrigir: {3}" -f $prefix, $kind, $err, $fix
+    } else {
+        $err = Get-ResultTextValue -Name 'error' -Default 'sem detalhes (ver log).'
+        $fix = Get-ResultTextValue -Name 'howToFix' -Default 'Abra Resultado/Log para detalhes.'
+        $rollbackText = if (Get-ResultBoolValue -Name 'rollbackAvailable') { 'Rollback disponivel: Sim.' } else { 'Rollback disponivel: Nao.' }
+        $failedComponent = Get-ResultTextValue -Name 'failedComponent'
+        if (-not [string]::IsNullOrWhiteSpace($failedComponent)) { $err = "Componente: $failedComponent. $err" }
+        $statusText = "{0}  {1}" -f $runFailed, $err
+        return ("{0} Como corrigir: {1} {2}" -f $statusText, $fix, $rollbackText)
+    }
 }
 
 function Finalize-RunFromResult {
     Append-RunLog
     $resultPath = [string]$ui.CurrentResultPath
-    if (-not (Test-UiBackendResultFileReady -Path $resultPath)) {
-        Complete-RunExecutionWithoutResult
-        return
-    }
     try {
-        $result = Get-Content -LiteralPath $resultPath -Raw -Encoding utf8 | ConvertFrom-Json
+        $result = Read-UiBackendResultWithRetry -Path $resultPath
     } catch {
+        if (-not (Test-UiBackendResultFileReady -Path $resultPath -MaxWaitMs 0)) {
+            Complete-RunExecutionWithoutResult
+            return
+        }
         Complete-RunExecution -StatusText ("{0}  result.json invalido: {1}" -f $ui.Strings.RunFailed, $_.Exception.Message)
         return
     }
-    if ($result.status -eq 'success') {
-        $statusText = $ui.Strings.RunCompleted
-        if ($result.hostHealthReportRoot) { $ui.State.lastReportPath = [string]$result.hostHealthReportRoot }
-        if ($result.appTuningReportRoot) { $ui.State.lastReportPath = [string]$result.appTuningReportRoot }
-    } elseif ([string]$result.status -eq 'warning') {
-        if ([string]$result.mode -eq 'audit') {
-            $bad = 0
-            try { $bad = [int]$result.auditSummary.critical } catch { }
-            $statusText = "Auditoria concluida com avisos: $bad componente(s) requerem instalacao/reparo/acao manual. Ver log e resultado."
-        } else {
-            $statusText = 'Concluido com avisos. Verifique o log.'
+    if ([string]$result.status -eq 'success') {
+        $resultProperties = @($result.PSObject.Properties.Name)
+        if (($resultProperties -contains 'hostHealthReportRoot') -and -not [string]::IsNullOrWhiteSpace([string]$result.hostHealthReportRoot)) {
+            $ui.State.lastReportPath = [string]$result.hostHealthReportRoot
         }
-    } elseif ($result.status -eq 'blocked') {
-        $err = if ($result.error) { [string]$result.error } else { 'ação do usuário necessária.' }
-        $fix = if ($result.howToFix) { [string]$result.howToFix } else { 'Reinicie o Windows e execute novamente.' }
-        $kind = if ($result.blockerKind) { [string]$result.blockerKind } else { 'blocked' }
-        $statusText = "Reinicio necessario. Bloqueio: $kind. $err Como corrigir: $fix"
-    } else {
-        $err = if ($result.error) { [string]$result.error } else { 'sem detalhes (ver log).' }
-        $fix = if ($result.howToFix) { [string]$result.howToFix } else { 'Abra Resultado/Log para detalhes.' }
-        $rollbackText = if ($result.rollbackAvailable) { 'Rollback disponivel: Sim.' } else { 'Rollback disponivel: Nao.' }
-        if ($result.failedComponent) { $err = "Componente: $($result.failedComponent). $err" }
-        $statusText = "{0}  {1}" -f $ui.Strings.RunFailed, $err
-        $statusText = "{0} Como corrigir: {1} {2}" -f $statusText, $fix, $rollbackText
+        if (($resultProperties -contains 'appTuningReportRoot') -and -not [string]::IsNullOrWhiteSpace([string]$result.appTuningReportRoot)) {
+            $ui.State.lastReportPath = [string]$result.appTuningReportRoot
+        }
     }
+    $statusText = Get-UiRunStatusTextFromResult -Result $result -Strings $ui.Strings
     Complete-RunExecution -StatusText $statusText
 }
 
@@ -5467,21 +5847,13 @@ function Start-RunExecution {
     try {
         Write-UiLog -Message ("Start-RunExecution. MaintenanceIntent={0}" -f [string]$MaintenanceIntent)
         Refresh-ReviewPage
-        $runRootBase = [string]$script:UiStorageRoot
-        if ([string]::IsNullOrWhiteSpace($runRootBase)) {
-            $runRootBase = if ($env:LOCALAPPDATA) {
-                Join-Path $env:LOCALAPPDATA 'bootstrap-tools'
-            } else {
-                Join-Path $env:USERPROFILE '.bootstrap-tools'
-            }
-        }
-        $runRoot = Join-Path $runRootBase 'ui-runs'
-        $null = New-Item -Path $runRoot -ItemType Directory -Force -ErrorAction SilentlyContinue
         $timestamp           = Get-Date -Format 'yyyyMMdd_HHmmss'
-        $ui.CurrentLogPath   = Join-Path $runRoot ("bootstrap-ui_{0}.log" -f $timestamp)
-        $ui.CurrentResultPath = Join-Path $runRoot ("bootstrap-ui_{0}.result.json" -f $timestamp)
-        $ui.CurrentStdoutPath = Join-Path $runRoot ("bootstrap-ui_{0}.stdout.log" -f $timestamp)
-        $ui.CurrentStderrPath = Join-Path $runRoot ("bootstrap-ui_{0}.stderr.log" -f $timestamp)
+        $artifacts = New-UiRunArtifactSet -Timestamp $timestamp
+        $ui.CurrentLogPath   = [string]$artifacts.LogPath
+        $ui.CurrentResultPath = [string]$artifacts.ResultPath
+        $ui.CurrentStdoutPath = [string]$artifacts.StdoutPath
+        $ui.CurrentStderrPath = [string]$artifacts.StderrPath
+        $ui.CurrentBackendWasElevated = $false
         $ui.LogOffset        = 0
         $ui.RunLogTextBox.Clear()
         if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentExecutionScopeLabel)) {
@@ -5497,11 +5869,13 @@ function Start-RunExecution {
         } catch {
             $startError = [string]$_.Exception.Message
             if ([string]::IsNullOrWhiteSpace($startError)) { $startError = 'falha ao iniciar processo backend' }
-            Write-UiLog -Level 'ERROR' -Message ("Falha ao iniciar backend: {0}" -f $startError)
-            $ui.RunStatusLabel.Text = ("Falha ao iniciar backend: {0}" -f $startError)
+            $fallback = Write-UiFallbackResult -Message ("Falha ao iniciar backend: {0}" -f $startError) -HowToFix 'Abra o log da UI, valide PowerShell/paths/permissao e execute novamente.' -ExitCode 'not-started'
+            Write-UiLog -Level 'ERROR' -Message ([string]$fallback.Message)
+            $ui.RunStatusLabel.Text = [string]$fallback.Message
             $ui.MaintenanceMode = 'none'
             Clear-ExecutionScopeOverride
             Set-RunUiBusy -Busy $false
+            Update-RunArtifactButtons
             return
         }
     } catch {

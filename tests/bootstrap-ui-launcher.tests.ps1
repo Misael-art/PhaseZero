@@ -4,6 +4,22 @@ Set-StrictMode -Version Latest
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $uiScriptPath = Join-Path $repoRoot 'bootstrap-ui.ps1'
 
+function Import-UiFunctionsForTest {
+    param([Parameter(Mandatory = $true)][string[]]$Names)
+
+    $raw = Get-Content -Path $uiScriptPath -Raw
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($raw, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw ($errors | Out-String) }
+
+    foreach ($name in $Names) {
+        $functionAst = $ast.Find({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+        if (-not $functionAst) { throw ("Function not found: {0}" -f $name) }
+        Invoke-Expression ("function global:{0} {1}" -f $name, $functionAst.Body.Extent.Text)
+    }
+}
+
 function New-TestDataRoot {
     return (Join-Path $env:TEMP ("bootstrap_ui_{0}" -f ([Guid]::NewGuid().ToString('N'))))
 }
@@ -153,6 +169,67 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''audit'''
         $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''rollback'''
         $raw | Should Match 'MaintenanceMode\s+=\s+''none'''
+        $raw | Should Match 'Write-UiFallbackResult'
+        $raw | Should Match 'Falha ao iniciar backend'
+        $raw | Should Match 'Processo elevado encerrou antes do backend inicializar'
+        $raw | Should Match 'Read-UiBackendResultWithRetry'
+        $raw | Should Match 'Get-UiRunStatusTextFromResult'
+    }
+
+    It 'formats blocked result status by blocker action instead of always saying reboot' {
+        Import-UiFunctionsForTest -Names @('Get-UiRunStatusTextFromResult')
+        $strings = [pscustomobject]@{
+            RunCompleted = 'Execução concluída.'
+            RunFailed = 'Execução falhou.'
+        }
+
+        $reboot = Get-UiRunStatusTextFromResult -Result ([pscustomobject]@{
+                status = 'blocked'
+                blockerKind = 'pending-reboot-msi'
+                action = 'restart-required'
+                error = 'reboot required'
+                howToFix = 'restart'
+            }) -Strings $strings
+        $ghost = Get-UiRunStatusTextFromResult -Result ([pscustomobject]@{
+                status = 'blocked'
+                blockerKind = 'winget-ghost-unresolved'
+                action = 'manual-ghost-cleanup'
+                error = 'ghost'
+                howToFix = 'cleanup'
+            }) -Strings $strings
+
+        $reboot | Should Match 'Rein.cio necess.rio'
+        $ghost | Should Match 'A..o necess.ria'
+        $ghost | Should Not Match 'Rein.cio necess.rio'
+    }
+
+    It 'quotes backend arguments containing shell-sensitive characters' {
+        Import-UiFunctionsForTest -Names @('ConvertTo-CommandLineArgument','ConvertTo-ArgumentString')
+
+        $line = ConvertTo-ArgumentString -Tokens @('plain','C:\Path With Space\tool.ps1','A&B','Group(Value)','caret^value','he said "hi"')
+
+        $line | Should Be 'plain "C:\Path With Space\tool.ps1" "A&B" "Group(Value)" "caret^value" "he said \"hi\""'
+    }
+
+    It 'waits until result json is parseable instead of accepting a partial file' {
+        Import-UiFunctionsForTest -Names @('Read-UiBackendResultWithRetry')
+        $path = Join-Path $script:TestDataRoot 'partial.result.json'
+        $null = New-Item -Path $script:TestDataRoot -ItemType Directory -Force
+        Set-Content -LiteralPath $path -Value '{"status":' -Encoding utf8
+        $job = Start-Job -ScriptBlock {
+            param([string]$ResultPath)
+            Start-Sleep -Milliseconds 120
+            Set-Content -LiteralPath $ResultPath -Value '{"status":"success","exitCode":0}' -Encoding utf8
+        } -ArgumentList $path
+        try {
+            $result = Read-UiBackendResultWithRetry -Path $path -MaxWaitMs 1500 -StepMs 50
+        } finally {
+            Receive-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        }
+
+        [string]$result.status | Should Be 'success'
+        [int]$result.exitCode | Should Be 0
     }
 
     It 'constrains Steam Deck monitor mode editing to supported modes' {
@@ -338,6 +415,111 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Not Match 'Backend stream redirection disabled because elevation uses ShellExecute'
     }
 
+    It 'keeps backend parameter names unquoted in the elevated command' {
+        Import-UiFunctionsForTest -Names @('ConvertTo-PowerShellLiteral','Get-UiBackendParameterBindingSpec','ConvertTo-ElevatedBackendInvocationParts','Get-UiBackendTokenValue','New-UiElevatedBackendWrapperCommand','Build-ElevatedBackendCommand')
+        $scriptPath = Join-Path $script:TestDataRoot 'Dir & (A)\probe.ps1'
+        $resultPath = Join-Path $script:TestDataRoot 'Result Dir\result.json'
+        $stdoutPath = Join-Path $script:TestDataRoot 'Streams\stdout.log'
+        $stderrPath = Join-Path $script:TestDataRoot 'Streams\stderr.log'
+        $global:ui = [pscustomobject]@{
+            CurrentStdoutPath = $stdoutPath
+            CurrentStderrPath = $stderrPath
+        }
+
+        try {
+            $tokens = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$scriptPath,'-NonInteractive','-Profile','full','-ResultPath',$resultPath)
+            $elevated = Build-ElevatedBackendCommand -BackendTokens $tokens
+            $command = [string]$elevated[-1]
+
+            $command | Should Match ([regex]::Escape("-Profile 'full'"))
+            $command | Should Match ([regex]::Escape("-ResultPath '$resultPath'"))
+            $command | Should Not Match ([regex]::Escape("'-Profile' 'full'"))
+            $command | Should Match '1>'
+            $command | Should Match '2>'
+        } finally {
+            Remove-Variable -Name ui -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'binds elevated backend arguments correctly when command is executed without UAC' {
+        Import-UiFunctionsForTest -Names @('ConvertTo-PowerShellLiteral','Get-UiBackendParameterBindingSpec','ConvertTo-ElevatedBackendInvocationParts','Get-UiBackendTokenValue','New-UiElevatedBackendWrapperCommand','Build-ElevatedBackendCommand')
+        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $probeRoot = Join-Path $script:TestDataRoot 'Probe & (Elevated)'
+        $null = New-Item -Path $probeRoot -ItemType Directory -Force
+        $probePath = Join-Path $probeRoot 'probe.ps1'
+        $resultPath = Join-Path $probeRoot 'result.json'
+        $stdoutPath = Join-Path $probeRoot 'stdout.log'
+        $stderrPath = Join-Path $probeRoot 'stderr.log'
+        Set-Content -LiteralPath $probePath -Encoding utf8 -Value @'
+param(
+    [switch]$NonInteractive,
+    [string]$Profile,
+    [string]$ResultPath
+)
+[ordered]@{
+    status = 'success'
+    mode = 'probe'
+    exitCode = 0
+} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $ResultPath -Encoding utf8
+[ordered]@{
+    NonInteractive = [bool]$NonInteractive
+    Profile = [string]$Profile
+    ResultPath = [string]$ResultPath
+} | ConvertTo-Json -Compress
+'@
+        $global:ui = [pscustomobject]@{
+            CurrentStdoutPath = $stdoutPath
+            CurrentStderrPath = $stderrPath
+        }
+
+        try {
+            $tokens = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$probePath,'-NonInteractive','-Profile','full','-ResultPath',$resultPath)
+            $elevated = Build-ElevatedBackendCommand -BackendTokens $tokens
+            & $powershellExe @elevated | Out-Null
+            $LASTEXITCODE | Should Be 0
+
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            $stdoutLines = @(Get-Content -LiteralPath $stdoutPath -ErrorAction Stop | Where-Object { [string]$_ -match '^\s*\{' })
+            $bound = ($stdoutLines[-1] | ConvertFrom-Json -ErrorAction Stop)
+            [bool]$bound.NonInteractive | Should Be $true
+            [string]$bound.Profile | Should Be 'full'
+            [string]$bound.ResultPath | Should Be $resultPath
+            ([string]::IsNullOrWhiteSpace((Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue))) | Should Be $true
+        } finally {
+            Remove-Variable -Name ui -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'writes an elevated fallback result when backend cannot start' {
+        Import-UiFunctionsForTest -Names @('ConvertTo-PowerShellLiteral','Get-UiBackendParameterBindingSpec','ConvertTo-ElevatedBackendInvocationParts','Get-UiBackendTokenValue','New-UiElevatedBackendWrapperCommand','Build-ElevatedBackendCommand')
+        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $probeRoot = Join-Path $script:TestDataRoot 'Missing Probe'
+        $null = New-Item -Path $probeRoot -ItemType Directory -Force
+        $missingScript = Join-Path $probeRoot 'missing.ps1'
+        $resultPath = Join-Path $probeRoot 'result.json'
+        $stdoutPath = Join-Path $probeRoot 'stdout.log'
+        $stderrPath = Join-Path $probeRoot 'stderr.log'
+        $global:ui = [pscustomobject]@{
+            CurrentStdoutPath = $stdoutPath
+            CurrentStderrPath = $stderrPath
+        }
+
+        try {
+            $tokens = @('-NoProfile','-ExecutionPolicy','Bypass','-File',$missingScript,'-NonInteractive','-Profile','full','-ResultPath',$resultPath)
+            $elevated = Build-ElevatedBackendCommand -BackendTokens $tokens
+            & $powershellExe @elevated | Out-Null
+            ($LASTEXITCODE -ne 0) | Should Be $true
+
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$result.status | Should Be 'error'
+            [string]$result.mode | Should Be 'ui-elevated'
+            [string]$result.error | Should Match 'Elevated backend wrapper failed'
+        } finally {
+            Remove-Variable -Name ui -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'supports per-run AppTuning scope override (isolated vs profile)' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 
@@ -387,8 +569,9 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'ReviewAcceptedCheckBox'
         $raw | Should Match 'Test-UiReviewAcceptedForRun'
         $raw | Should Match 'Revis.o obrigat.ria'
-        $raw | Should Match '\$result\.status -eq ''blocked'''
-        $raw | Should Match 'Reinicio necessario'
+        $raw | Should Match '\$status -eq ''blocked'''
+        $raw | Should Match 'Get-UiRunStatusTextFromResult'
+        $raw | Should Match 'A..o necess.ria'
     }
 
     It 'separates critical actions behind explicit confirmation modals' {
@@ -447,7 +630,7 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw = Get-Content -Path $uiScriptPath -Raw
 
         $raw | Should Not Match 'sesses|genrico|Resoluo|Validao|Execuo|Reviso|Relatrios|manuteno'
-        $raw | Should Not Match 'PRESETS RPIDOS|Configurao|Verso|EXCLUSES|Execucao|Revisao|Relatorios|Opcoes rapidas|Diretorio|Nao instalar|manutencao'
+        $raw | Should Not Match 'PRESETS RPIDOS|Configurao|Verso|EXCLUSES|Execucao|Revisao|Relatorios|Opcoes rapidas|Nao instalar|manutencao'
     }
 
     It 'runs the batch launcher smoke test without stderr noise' {
@@ -477,7 +660,9 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
             $stderr = (Get-Content -Path $stderrPath -Raw)
         }
 
-        $stdout | Should Match '"pages"'
+        $result = $stdout | ConvertFrom-Json -ErrorAction Stop
+        (@($result.pages) -contains 'welcome') | Should Be $true
+        $stdout | Should Not Match '\[INFO\]'
         ([string]::IsNullOrWhiteSpace($stderr)) | Should Be $true
     }
 

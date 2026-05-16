@@ -59,11 +59,11 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 
 | Campo | Valor |
 |---|---|
-| Última atualização | 2026-05-14 (TASK-003 concluída — 325/325 Pester verde) |
+| Última atualização | 2026-05-15 (TASK-003..005 + 008..010 verificadas e fixes aplicados — 343/343 Pester verde) |
 | Agente responsável | Claude Opus 4.7 |
 | Branch ativa | `codex-bootstrap-secrets-rotation` |
 | Task em andamento | nenhuma |
-| Próxima task sugerida | **TASK-004** (CLI `-RotateSecrets` + agendamento) |
+| Próxima task sugerida | **TASK-006** (cobertura adicional rotação) ou **TASK-011** (lint Register-BootstrapChange) |
 | Pester versão alvo | 3.4.0 (lock CI) |
 | PowerShell alvo | 5.1 (PS7 só na Fase 3) |
 
@@ -73,6 +73,7 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 - 2026-05-13 — TASK-001 concluída. Branch tem core de secrets (~30 funções) + rotação manual via `Move-BootstrapSecretsToNextCredential`. Gaps: fila programática, timeout exposto, retry/backoff, scheduler, eventos estruturados, `Register-BootstrapChange` em ativação/rotação, lock cross-process. Re-estimativa: 27h → 31h. Nova TASK-006a (isolar commits) adicionada. Pester baseline 18/18 verde.
 - 2026-05-14 — TASK-002 concluída. ADR `docs/adr/0001-secrets-rotation-state-machine.md` definido: 6 estados (queued→validating→activating→broadcasting→settled|failed), retry exponencial com jitter, timeout 15s/validador e 120s/item, lock por arquivo `.lock`, eventos JSONL, broadcast com `minBroadcastSuccess=1`, rollback via `Register-BootstrapChange`. Compatibilidade preservada com `Move-BootstrapSecretsToNextCredential` (vira thin wrapper).
 - 2026-05-14 — TASK-003 concluída. 11 novas funções em `bootstrap-tools.ps1` (linhas ~14302+): `Get-/Add-/Update-/Invoke-BootstrapSecretRotation*`, `Lock-/Unlock-BootstrapSecretsFile`, `Write-BootstrapRotationEvent`, `Get-BootstrapSecretsValidationFailureCategory`, `Test-BootstrapSecretsRetryableFailure`. `Test-BootstrapSecretsProviderCredential` ganhou `-TimeoutSeconds` (1–120, default 15). `Register-BootstrapChange` ganhou tipo `'SecretsRotation'`. `Convert-BootstrapSecretsProviderDefinition` agora preserva `rotationQueue`. Novo arquivo `tests/bootstrap-secrets-rotation.tests.ps1` com 13 `It`. **Resultado final: Pester 325/325 verde** (suite inteira). Parse OK em ambos `.ps1`. Mudanças aditivas — nenhum teste pré-existente quebrou.
+- 2026-05-15 — Verificação após interrupção do agente anterior. Suite cresceu para 343 testes (TASK-004/008/009/010 já presentes no working tree não commitado): `-RotateSecrets` CLI mode + `Invoke-BootstrapRotateSecretsMode` + `Get-BootstrapRotationStaleProviders` + `Register-BootstrapRotationScheduledTask`; `tests/bootstrap-secrets-rotation-cli.tests.ps1` cobre stale detection, scheduler dry-run, end-to-end rotate mode, UI Contract `secretsRotation` block e cap de 1000 linhas em `rotation-events.jsonl`. UI Contract ganhou `schemaVersion=1.0.0` + `secretsRotation.{schedule,eventsPath}`; `bootstrap-ui.ps1` ganhou `Test-UiContractVersionCompat` + constantes `$Script:UiContractMin/MaxSupported`; novos testes `bootstrap-ui-contract-snapshot.tests.ps1` (4 It) e `bootstrap-ui-contract-version.tests.ps1` (5 It) + fixture `tests/fixtures/ui-contract-v1-keys.json`. Fixes aplicados nesta sessão: (1) `Add-BootstrapSecretRotationItem` validava `credentials` com `-is [hashtable]` mas `Normalize-...` retorna `OrderedDictionary` — afrouxado para `[System.Collections.IDictionary]`; (2) `Invoke-WebRequestWithRetry` lia `$script:Offline` do escopo do orquestrador, inacessível pelo test de `tests/resilience.tests.ps1` — adicionado fallback para `$Global:BootstrapOfflineOverride`; (3) testes usavam `Should Throw` sem mensagem que Pester 3.4 não captura quando `$ErrorActionPreference='Stop'` — trocado por `Should Throw '<msg>'`; (4) timeout do `Invoke-InstallCliBat` em `tests/ai-tools.tests.ps1` elevado de 120s→240s (execução real leva ~155s). **Resultado final: Pester 343/343 verde**, parse OK em ambos `.ps1`, `cmd /c .\bootstrap-ui.bat -SmokeTest` emite JSON sem stderr, `.\bootstrap-tools.ps1 -RotateSecrets -DryRun -NonInteractive` produz JSON estruturado.
 
 ---
 
@@ -407,8 +408,7 @@ Critério para passar de fase: 100% das tasks da fase anterior em `completed`, C
   2. Isolar trecho da rotação via `git diff` + patch (preserva separação).
   3. Esperar dev humano commit do WIP dele primeiro; agente comita por cima.
 - agente: Claude Opus 4.7
-- estado atual: commit `28bd922` adicionou plano + ADR + teste novo. **ATENÇÃO:** o teste `tests/bootstrap-secrets-rotation.tests.ps1` referencia funções que ainda estão **apenas no working tree** de `bootstrap-tools.ps1`. CI rodando contra `28bd922` isoladamente **falhará** porque o worker não foi commitado. As mudanças do worker em `bootstrap-tools.ps1` (linhas ~502, ~14302+, ~10052) precisam ser separadas das modificações alheias e commitadas antes de qualquer push.
-- recomendação: próximo passo (humano ou agente) deve usar `git diff bootstrap-tools.ps1` para extrair os blocos do worker (limites claros: a função `Move-BootstrapSecretsToNextCredential` é seguida imediatamente pelo bloco `# region Secrets rotation worker (ADR 0001)`; mudanças em `Register-BootstrapChange` linhas 505 e 532; preservação de `rotationQueue` na função `Convert-BootstrapSecretsProviderDefinition` perto da linha 10052), aplicar como patch num branch limpo (TASK-006a já planeja isso), e abrir PR.
+- estado atual: **resolvido em 2026-05-15** via 2 commits separados conforme decisão do dev humano: (1) `feat(TASK-003..010)` agrupa worker rotação + scheduler + UI Contract schemaVersion + testes novos + fixes desta sessão; (2) `wip(misc)` agrupa o WIP alheio (AGENTS.md, README.md, SteamDeck.Common.ps1, 5 tests modificados, RTK.md, Setup-AITools.ps1, run-pester-runner.tests.ps1). Suite 343/343 verde antes de cada commit. CI pode rodar contra ambos limpamente.
 
 ---
 
@@ -423,6 +423,9 @@ Critério para passar de fase: 100% das tasks da fase anterior em `completed`, C
 - **2026-05-14 / DEC-005** — Lock baseado em arquivo (`.lock` ao lado do manifest, `FileShare::None`) com timeout 5s. Mutex nomeado descartado por complexidade.
 - **2026-05-14 / DEC-006** — Erros de validação `401/403` são terminais (sem retry). `5xx/timeout/429` são retryáveis com backoff exponencial + jitter, até `maxAttempts=3`.
 - **2026-05-14 / DEC-007** — `Move-BootstrapSecretsToNextCredential` vira thin wrapper sobre o worker novo. Compatibilidade pública preservada para não quebrar testes e `Invoke-BootstrapSecretsMode`.
+- **2026-05-15 / DEC-008** — `Add-BootstrapSecretRotationItem` valida `credentials` com `[System.Collections.IDictionary]` (não `[hashtable]`) porque `Normalize-BootstrapSecretsData` produz `OrderedDictionary`. Aplicar a mesma regra em qualquer checagem futura de containers normalizados.
+- **2026-05-15 / DEC-009** — Pester 3.4 com `$ErrorActionPreference='Stop'` exige `Should Throw '<msg-parcial>'`. `Should Throw` sem mensagem é silenciosamente falso-negativo. Padronizar em todos os novos testes.
+- **2026-05-15 / DEC-010** — Fluxo de Offline cache em `Invoke-WebRequestWithRetry` aceita override via `$Global:BootstrapOfflineOverride` para testabilidade — `$script:Offline` continua sendo o canal de produção (param block).
 
 ---
 
@@ -430,7 +433,14 @@ Critério para passar de fase: 100% das tasks da fase anterior em `completed`, C
 
 > Tasks completadas vão para cá com link para commit/PR.
 
-(vazio)
+- **TASK-001 (auditoria branch)** — 2026-05-13. Findings em §"TASK-001 Findings".
+- **TASK-002 (ADR state machine)** — 2026-05-14. `docs/adr/0001-secrets-rotation-state-machine.md`. Commit `28bd922`.
+- **TASK-003 (worker fila rotação)** — 2026-05-14 (implementação) + 2026-05-15 (commit isolado). 11 funções em `bootstrap-tools.ps1`, classificação 401/timeout/server/rate-limit, lock cross-process, eventos JSONL.
+- **TASK-004 (CLI `-RotateSecrets` + scheduler)** — 2026-05-15. `Invoke-BootstrapRotateSecretsMode`, `Register-BootstrapRotationScheduledTask`, `Get-BootstrapRotationStaleProviders`, UI Contract `secretsRotation.schedule`. Verificação: `.\bootstrap-tools.ps1 -RotateSecrets -DryRun -NonInteractive` retorna JSON estruturado.
+- **TASK-005 (notificação eventos)** — 2026-05-15. `Write-BootstrapRotationEvent` + cap de 1000 linhas em `rotation-events.jsonl`, exposto via `secretsRotation.eventsPath` no contrato.
+- **TASK-008 (UI Contract schemaVersion)** — 2026-05-15. Top-level `schemaVersion = "1.0.0"`.
+- **TASK-009 (negociação UI ↔ Orchestrator)** — 2026-05-15. `Test-UiContractVersionCompat` + 5 `It` cobrindo accept/warn/error-major-new/error-major-old/malformed.
+- **TASK-010 (snapshot test do contrato)** — 2026-05-15. `tests/fixtures/ui-contract-v1-keys.json` + 4 `It`.
 
 ---
 

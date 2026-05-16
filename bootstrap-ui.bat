@@ -4,6 +4,10 @@ setlocal EnableExtensions DisableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 set "UI_SCRIPT=%SCRIPT_DIR%bootstrap-ui.ps1"
 set "BACKEND_SCRIPT=%SCRIPT_DIR%bootstrap-tools.ps1"
+set "BOOTSTRAP_SMOKE_TEST=0"
+for %%A in (%*) do (
+  if /I "%%~A"=="-SmokeTest" set "BOOTSTRAP_SMOKE_TEST=1"
+)
 
 set "PS_EXE="
 if exist "%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe" set "PS_EXE=%SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe"
@@ -12,14 +16,17 @@ if not defined PS_EXE set "PS_EXE=powershell.exe"
 
 set "LOG_DIR="
 call :resolve_log_dir
-if not defined LOG_DIR set "LOG_DIR=%TEMP%\bootstrap-tools\logs"
 
 set "TS="
-for /f "delims=" %%I in ('%PS_EXE% -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul') do set "TS=%%I"
+for /f "delims=" %%I in ('"%PS_EXE%" -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul') do set "TS=%%I"
 if not defined TS set "TS=unknown"
 
-set "LAUNCHER_LOG=%LOG_DIR%\bootstrap-ui_%TS%.launcher.log"
-set "UI_LOG=%LOG_DIR%\bootstrap-ui_%TS%.ui.log"
+set "LAUNCHER_LOG="
+set "UI_LOG="
+if defined LOG_DIR (
+  set "LAUNCHER_LOG=%LOG_DIR%\bootstrap-ui_%TS%.launcher.log"
+  set "UI_LOG=%LOG_DIR%\bootstrap-ui_%TS%.ui.log"
+)
 
 call :log INFO "Bootstrap UI launcher started."
 call :log INFO "SCRIPT_DIR=%SCRIPT_DIR%"
@@ -29,12 +36,20 @@ call :log INFO "UI_LOG=%UI_LOG%"
 
 if not exist "%UI_SCRIPT%" (
   call :log ERROR "Arquivo nao encontrado: %UI_SCRIPT%"
-  echo ERRO: %UI_SCRIPT% nao encontrado.
+  if "%BOOTSTRAP_SMOKE_TEST%"=="1" (
+    >&2 echo(ERRO: %UI_SCRIPT% nao encontrado.
+  ) else (
+    echo(ERRO: %UI_SCRIPT% nao encontrado.
+  )
   exit /b 2
 )
 if not exist "%BACKEND_SCRIPT%" (
   call :log ERROR "Arquivo nao encontrado: %BACKEND_SCRIPT%"
-  echo ERRO: %BACKEND_SCRIPT% nao encontrado.
+  if "%BOOTSTRAP_SMOKE_TEST%"=="1" (
+    >&2 echo(ERRO: %BACKEND_SCRIPT% nao encontrado.
+  ) else (
+    echo(ERRO: %BACKEND_SCRIPT% nao encontrado.
+  )
   exit /b 2
 )
 
@@ -53,12 +68,20 @@ call :log INFO "Admin=%IS_ADMIN%  ProcArch=%PROCESSOR_ARCHITECTURE%  Wow64=%PROC
 pushd "%SCRIPT_DIR%" >nul 2>&1
 if errorlevel 1 (
   call :log ERROR "Falha ao entrar no diretorio do script: %SCRIPT_DIR%"
-  echo ERRO: falha ao acessar %SCRIPT_DIR%
+  if "%BOOTSTRAP_SMOKE_TEST%"=="1" (
+    >&2 echo(ERRO: falha ao acessar %SCRIPT_DIR%
+  ) else (
+    echo(ERRO: falha ao acessar %SCRIPT_DIR%
+  )
   exit /b 3
 )
 
 call :log INFO "Launching UI: %UI_SCRIPT%"
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%UI_SCRIPT%" -UiLogPath "%UI_LOG%" %*
+if defined UI_LOG (
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%UI_SCRIPT%" -UiLogPath "%UI_LOG%" %*
+) else (
+  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%UI_SCRIPT%" %*
+)
 set "EXITCODE=%ERRORLEVEL%"
 
 call :log INFO "Bootstrap UI exited with code %EXITCODE%."
@@ -66,18 +89,25 @@ popd >nul 2>&1
 exit /b %EXITCODE%
 
 :log
+setlocal EnableDelayedExpansion
 set "LOG_LEVEL=%~1"
 set "LOG_MSG=%~2"
 set "LOG_LINE=[%DATE% %TIME%] [%LOG_LEVEL%] %LOG_MSG%"
-if defined LAUNCHER_LOG call :append_log "%LAUNCHER_LOG%" "%LOG_LINE%"
-echo %LOG_LINE%
+if defined LAUNCHER_LOG call :append_log "!LAUNCHER_LOG!" "!LOG_LINE!"
+if not "%BOOTSTRAP_SMOKE_TEST%"=="1" echo(!LOG_LINE!
+endlocal
 exit /b 0
 
 :append_log
+setlocal EnableDelayedExpansion
 set "APPEND_PATH=%~1"
 set "APPEND_LINE=%~2"
-if not defined APPEND_PATH exit /b 0
-(>>"%APPEND_PATH%" echo %APPEND_LINE%) 2>nul
+if not defined APPEND_PATH (
+  endlocal
+  exit /b 0
+)
+(>>"!APPEND_PATH!" echo(!APPEND_LINE!) 2>nul
+endlocal
 exit /b 0
 
 :resolve_log_dir
