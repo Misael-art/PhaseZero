@@ -24,8 +24,8 @@ function Join-SteamDeckSystemChild {
 function Get-SteamDeckUserHomePath {
     $up = Normalize-SteamDeckPathSegment -Value $env:USERPROFILE
     if (-not [string]::IsNullOrWhiteSpace($up)) { return $up }
-    $home = Normalize-SteamDeckPathSegment -Value $env:HOME
-    if (-not [string]::IsNullOrWhiteSpace($home)) { return $home }
+    $homePath = Normalize-SteamDeckPathSegment -Value $env:HOME
+    if (-not [string]::IsNullOrWhiteSpace($homePath)) { return $homePath }
     $hd = Normalize-SteamDeckPathSegment -Value $env:HOMEDRIVE
     $hp = Normalize-SteamDeckPathSegment -Value $env:HOMEPATH
     if (-not [string]::IsNullOrWhiteSpace($hd) -and -not [string]::IsNullOrWhiteSpace($hp)) {

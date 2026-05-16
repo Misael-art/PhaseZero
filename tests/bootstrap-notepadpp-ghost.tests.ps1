@@ -81,6 +81,35 @@ Describe 'Bootstrap Notepad++ ghost-install detection' {
         }
     }
 
+    Context 'Notepad++ ProbePaths' {
+
+        It 'inclui pacote WinGet user-scope nos probes do componente' {
+            $catalog = Get-BootstrapComponentCatalog
+            $probes = @($catalog['notepadpp'].ProbePaths)
+
+            @($probes | Where-Object { [string]$_ -like '*\Microsoft\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe' }).Count | Should BeGreaterThan 0
+        }
+
+        It 'aceita binario Notepad++ instalado em Microsoft WinGet Packages' {
+            $oldLocalAppData = $env:LOCALAPPDATA
+            $root = Join-Path $env:TEMP ('npp-winget-probe-' + [guid]::NewGuid().ToString('N'))
+            try {
+                $env:LOCALAPPDATA = $root
+                $packageDir = Join-Path $root 'Microsoft\WinGet\Packages\Notepad++.Notepad++_Microsoft.Winget.Source_8wekyb3d8bbwe'
+                $null = New-Item -Path $packageDir -ItemType Directory -Force
+                [System.IO.File]::WriteAllBytes((Join-Path $packageDir 'notepad++.exe'), (New-Object byte[] 8))
+
+                $catalog = Get-BootstrapComponentCatalog
+                $probes = @($catalog['notepadpp'].ProbePaths)
+
+                (Test-WingetProbePathsOnDisk -ProbePaths $probes) | Should Be $true
+            } finally {
+                $env:LOCALAPPDATA = $oldLocalAppData
+                if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+        }
+    }
+
     Context 'Ensure-WingetPackage registra rollback no manifest' {
 
         It 'chama Register-BootstrapChange com Type=Package e RollbackAction=winget-uninstall apos install bem-sucedida' {

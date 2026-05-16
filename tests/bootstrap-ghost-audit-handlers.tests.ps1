@@ -59,6 +59,30 @@ Describe 'Bootstrap ghost-audit extras (powertoys/terminal/docker)' {
             (@($paths | Where-Object { $_ -match 'Microsoft\\WindowsApps\\wt\.exe' })).Count | Should Be 0
             (@($terminal.AppxPackageNames) -contains 'Microsoft.WindowsTerminal') | Should Be $true
         }
+
+        It 'powershell valida instalacao MSIX via AppxPackageNames' {
+            $catalog = Get-BootstrapComponentCatalog
+            $powershell = $catalog['powershell']
+            $powershell | Should Not Be $null
+            (@($powershell.AppxPackageNames) -contains 'Microsoft.PowerShell') | Should Be $true
+        }
+
+        It 'claude-desktop cobre instalacao atual em LOCALAPPDATA AnthropicClaude' {
+            $catalog = Get-BootstrapComponentCatalog
+            $claude = $catalog['claude-desktop']
+            $claude | Should Not Be $null
+            $paths = @($claude.ProbePaths)
+            (@($paths | Where-Object { $_ -match 'AnthropicClaude\\claude\.exe' })).Count | Should BeGreaterThan 0
+            (@($paths | Where-Object { $_ -match 'AnthropicClaude\\app-\*\\claude\.exe' })).Count | Should BeGreaterThan 0
+        }
+
+        It 'opencode-desktop cobre instalacao atual em Program Files OpenCode' {
+            $catalog = Get-BootstrapComponentCatalog
+            $opencodeDesktop = $catalog['opencode-desktop']
+            $opencodeDesktop | Should Not Be $null
+            $paths = @($opencodeDesktop.ProbePaths)
+            (@($paths | Where-Object { $_ -match 'OpenCode\\OpenCode\.exe' })).Count | Should BeGreaterThan 0
+        }
     }
 
     Context 'Contrato generico de auditoria' {

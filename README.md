@@ -19,7 +19,7 @@ PhaseZero e um instalador e auditor Windows para pos-instalacao segura. O alvo m
 - Windows PowerShell 5.1.
 - Sessao interativa para a UI WPF.
 - Internet para bootstrap de App Installer/winget e pacotes online.
-- Pester 3.4+ para rodar a suite local.
+- Pester 3.4.0 para rodar a suite local. `tests\run-pester.ps1` detecta a versao exata e tenta instalar em `CurrentUser` quando ausente; use `-NoInstall` para bloquear rede/mutacao e receber erro instrutivo.
 
 Sem winget em maquina limpa, o bootstrap tenta caminho seguro de App Installer oficial (`https://aka.ms/getwinget`) quando aplicavel. Se PATH/sessao ainda nao enxergar winget depois do bootstrap, a UI/CLI devem orientar logoff, nova sessao ou reboot em vez de falhar de modo opaco.
 
@@ -166,11 +166,16 @@ Contrato e dry-runs minimos:
 cmd /c bootstrap-ui.bat -SmokeTest
 ```
 
-Suite:
+Suite. Em maquina limpa, o runner prepara Pester 3.4.0 em `CurrentUser` com timeout e retry controlado:
 
 ```powershell
-Import-Module Pester -RequiredVersion 3.4.0
 .\tests\run-pester.ps1
+```
+
+Suite sem instalar dependencia ausente:
+
+```powershell
+.\tests\run-pester.ps1 -NoInstall
 ```
 
 ## Seguranca

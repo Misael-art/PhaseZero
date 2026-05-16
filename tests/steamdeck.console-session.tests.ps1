@@ -61,6 +61,22 @@ Describe 'Steam Deck console session automation' {
         } | Should Be '/extend'
     }
 
+    It 'falls back to HOME when USERPROFILE is empty without assigning automatic variables' {
+        . (Join-Path $automationRoot 'SteamDeck.Common.ps1')
+
+        $oldUserProfile = $env:USERPROFILE
+        $oldHome = $env:HOME
+        try {
+            $env:USERPROFILE = ''
+            $env:HOME = 'C:\Users\DeckHome'
+
+            Get-SteamDeckUserHomePath | Should Be 'C:\Users\DeckHome'
+        } finally {
+            $env:USERPROFILE = $oldUserProfile
+            $env:HOME = $oldHome
+        }
+    }
+
     It 'dry-runs console session as Steam Big Picture first with Playnite fallback' {
         $settingsPath = New-TestSettingsPath
         $scriptPath = Join-Path $automationRoot 'Start-ConsoleSession.ps1'
