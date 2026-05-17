@@ -82,7 +82,9 @@ Describe 'AI coding tool support' {
         [string]$catalog['rtk'].GitHubRepo | Should Be 'rtk-ai/rtk'
         [bool]$catalog['rtk'].CargoFallbackAllowed | Should Be $false
         [string]$catalog['hermes-agent'].GitHubRepo | Should Be 'NousResearch/hermes-agent'
-        [string]$catalog['hermes-agent'].InstallSupport | Should Be 'manual-windows-beta'
+        [string]$catalog['hermes-agent'].InstallSupport | Should Be 'wsl-installer'
+        [string]$catalog['hermes-agent'].Notes | Should Match 'WSL2'
+        (@($catalog['hermes-agent'].ProbePaths) -contains '$env:USERPROFILE\.hermes\hermes-agent') | Should Be $true
         [string]$catalog['antigravity-workflows'].InstallSupport | Should Be 'workflow-only'
     }
 
@@ -111,6 +113,17 @@ Describe 'AI coding tool support' {
         [string]$uninstall1.status | Should Be 'planned'
         [string]$uninstall2.status | Should Be 'planned'
         [string]$install.installRoot | Should Be $rootWithSpaces
+    }
+
+    It 'plans Hermes Agent install through the official WSL installer' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $result = Invoke-BootstrapAiToolAction -ToolName 'hermes-agent' -Action 'install' -InstallRoot $script:AiToolsTestRoot -ProjectRoot $repoRoot -DryRun -Yes
+
+        [string]$result.status | Should Be 'planned'
+        [string]$result.message | Should Match 'install\.sh'
+        [string]$result.message | Should Match '--skip-setup'
+        [string]$result.message | Should Match 'WSL2'
     }
 
     It 'generates Antigravity workflow templates without external dependencies' {

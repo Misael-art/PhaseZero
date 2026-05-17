@@ -296,17 +296,22 @@ function Invoke-CliAiToolsMode {
             $status = [string]$result['status']
             if ($action -in @('install','configure','uninstall') -and $status -in @('blocked','error')) { $exitCode = 3 }
         } catch {
-            $exitCode = 2
+            $status = if ($_.Exception.Data.Contains('BootstrapStatus')) { [string]$_.Exception.Data['BootstrapStatus'] } else { 'error' }
+            $kind = if ($_.Exception.Data.Contains('BootstrapBlockerKind')) { [string]$_.Exception.Data['BootstrapBlockerKind'] } else { '' }
+            $actionHint = if ($_.Exception.Data.Contains('BootstrapAction')) { [string]$_.Exception.Data['BootstrapAction'] } else { '' }
+            $exitCode = if ($status -eq 'blocked') { 3 } else { 2 }
             $message = $_.Exception.Message
             Write-CliLog -Level 'ERROR' -Message $message
             $results.Add([ordered]@{
                 mode        = 'ai-tools'
                 tool        = [string]$tool
                 action      = $action
-                status      = 'error'
+                status      = $status
                 installRoot = $installRoot
                 projectRoot = $PSScriptRoot
                 message     = $message
+                blockerKind = $kind
+                howToFix    = $actionHint
             }) | Out-Null
         }
     }
@@ -323,7 +328,7 @@ function Invoke-CliAiToolsMode {
     }
     if ($results.Count -eq 1) {
         $single = $results[0]
-        foreach ($key in @('tool','status','message','docs','commandPath','version')) {
+        foreach ($key in @('tool','status','message','docs','commandPath','version','blockerKind','howToFix')) {
             if ($single -is [System.Collections.IDictionary] -and $single.Contains($key)) { $payload[$key] = $single[$key] }
         }
     }

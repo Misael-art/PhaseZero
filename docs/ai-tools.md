@@ -21,7 +21,7 @@ Escopo: integrações opcionais. Nenhuma chave real entra no repositório.
 | `openclaw` | `npm install -g --prefix <root> openclaw` | `openclaw --version` | `openclaw onboard` manual | Remove pacote/prefixo/PATH gerenciado |
 | `rtk` | Release GitHub Windows, checksum se publicado | `rtk --version` | `rtk init`, `rtk gain` | Remove `rtk.exe`/PATH gerenciado |
 | `antigravity-workflows` | Sem binário | Arquivos locais | Gera `.antigravity/workflows/*.md` | Manual, para preservar edições |
-| `hermes-agent` | Manual/Windows beta oficial | Detecta, sem assumir npm `hermes` | Manual | Não remove artefato não gerenciado |
+| `hermes-agent` | WSL2 + `install.sh --skip-setup` oficial | `wsl bash -lc "hermes --version"` | `hermes model/setup` manual dentro do WSL | Manual, preserva `~/.hermes` |
 | `hermes-desktop` | Manual | Detecta caminhos comuns | Manual | Não remove artefato não gerenciado |
 | `aion-ui` | Manual/winget oficial | Detecta caminhos comuns | Manual | Não remove artefato não gerenciado |
 
@@ -33,6 +33,7 @@ Exemplos:
 .\install-cli.bat --tool claude-code --validate --dry-run --yes --no-admin
 .\install-cli.bat --tool opencode --install-root "$env:TEMP\PhaseZero AI Tools" --yes --no-admin
 .\install-cli.bat --tool opencode --uninstall --install-root "$env:TEMP\PhaseZero AI Tools" --yes --no-admin
+.\install-cli.bat --tool hermes-agent --yes
 .\install-cli.bat --all-ai-tools --validate --dry-run --yes
 ```
 
@@ -50,5 +51,6 @@ Resultados estruturados:
 - PATH é alterado só no escopo User e registrado em manifesto.
 - Uninstall remove apenas artefatos registrados pelo projeto.
 - Chaves/API/login ficam em métodos oficiais das ferramentas ou SecretStore/Credential Manager; placeholders em docs.
+- Hermes Agent não usa o pacote npm `hermes` como sinal oficial. Em Windows, o caminho automatizado suportado é WSL2; se `wsl.exe` retornar `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`, o fluxo bloqueia cedo com `blockerKind=wsl-msi-registration-broken`.
 - Integrações sem método Windows oficial ou silent installer confirmado ficam `manual`.
 - OpenRouter Owl Alpha foi tratado como modelo opcional com ID `openrouter/owl-alpha`; disponibilidade/limites/preço dependem do provedor e devem ser validados antes de configurar Hermes.

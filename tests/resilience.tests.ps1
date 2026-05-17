@@ -361,7 +361,7 @@ Describe 'Resilience Architecture' {
             }
             Mock Test-BootstrapAppxPackageInstalled { return $true }
             Mock Get-Service { return [pscustomobject]@{ Name = 'LxssManager'; Status = 'Running' } }
-            Mock Invoke-NativeCaptureWithLog { throw 'wsl.exe must not be invoked during audit' }
+            Mock Get-BootstrapWslStatusProbe { return @{ exitCode = 0; stdout = 'WSL version: 2.6.1'; stderr = ''; timedOut = $false } }
 
             $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
 
@@ -369,7 +369,54 @@ Describe 'Resilience Architecture' {
             $severities = @($rows | ForEach-Object { [string]$_.Severity })
             ($statuses -contains 'UnsupportedAudit') | Should Be $false
             ($severities -contains 'UnsupportedAudit') | Should Be $false
-            Assert-MockCalled Invoke-NativeCaptureWithLog -Times 0
+            Assert-MockCalled Get-BootstrapWslStatusProbe -Times 1
+        }
+
+        It 'audits WSL MSI registration corruption as unhealthy instead of healthy' {
+            $catalog = @{
+                'wsl-core' = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'WSL' -Optional $false -Kind 'wsl-core'
+            }
+            $resolution = @{ ResolvedComponents = @('wsl-core') }
+            Mock Get-BootstrapComponentCatalog { $catalog }
+            Mock Get-Winget { return $null }
+            Mock Resolve-CommandPath {
+                param([string]$Name)
+                if ($Name -eq 'wsl.exe') { return 'C:\Windows\System32\wsl.exe' }
+                return $null
+            }
+            Mock Test-BootstrapAppxPackageInstalled { return $true }
+            Mock Get-Service { return [pscustomobject]@{ Name = 'LxssManager'; Status = 'Running' } }
+            Mock Get-BootstrapWslStatusProbe { return @{ exitCode = 1; stdout = ''; stderr = 'Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG'; timedOut = $false } }
+
+            $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
+
+            [string]$rows[0].Status | Should Be 'Unhealthy'
+            [string]$rows[0].Severity | Should Be 'NeedsRepair'
+            [string]$rows[0].HowToFix | Should Match 'administrador|wsl --update|Microsoft.WSL'
+        }
+
+        It 'blocks WSL core repair without admin when MSI registration is corrupt' {
+            Mock Ensure-BootstrapSystemCore {}
+            Mock Test-IsAdmin { return $false }
+            Mock Resolve-CommandPath {
+                param([string]$Name)
+                if ($Name -eq 'wsl.exe') { return 'C:\Windows\System32\wsl.exe' }
+                return $null
+            }
+            Mock Get-BootstrapWslStatusProbe { return @{ exitCode = 1; stdout = ''; stderr = 'Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG'; timedOut = $false } }
+            Mock Write-Log {}
+            $caught = $null
+
+            try {
+                Ensure-WslCore -State @{}
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'wsl-msi-registration-broken'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'rerun-elevated-or-repair-wsl'
         }
 
         It 'marks WSL as restart-required when only the AppX package is present' {
@@ -386,14 +433,14 @@ Describe 'Resilience Architecture' {
             }
             Mock Test-BootstrapAppxPackageInstalled { return $true }
             Mock Get-Service { throw 'service missing' }
-            Mock Invoke-NativeCaptureWithLog { throw 'wsl.exe must not be invoked during audit' }
+            Mock Get-BootstrapWslStatusProbe { return @{ exitCode = 0; stdout = ''; stderr = ''; timedOut = $false } }
 
             $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
 
             [string]$rows[0].Status | Should Be 'RequiresRestart'
             [string]$rows[0].Severity | Should Be 'RequiresRestart'
             [string]$rows[0].HowToFix | Should Match 'Reinicie'
-            Assert-MockCalled Invoke-NativeCaptureWithLog -Times 0
+            Assert-MockCalled Get-BootstrapWslStatusProbe -Times 1
         }
     }
 

@@ -1101,6 +1101,15 @@ function Invoke-BootstrapAuditMode {
         $details.Add(("Features: {0}" -f ($featureStates.ToArray() -join '; ')))
 
         $detail = ($details.ToArray() -join ' | ')
+        $statusProbe = $null
+        try { $statusProbe = Get-BootstrapWslStatusProbe -WslExe $wslPath } catch { $statusProbe = $null }
+        if ($statusProbe) {
+            $statusText = [string]($statusProbe.stdout + "`n" + $statusProbe.stderr)
+            if (Test-WslCorruptionText -Text $statusText) {
+                $cleanStatusText = ($statusText -replace "`0", '' -replace "`r", ' ' -replace "`n", ' ').Trim()
+                return (New-AuditRow -Component $ComponentName -Status 'Unhealthy' -Detail ("WSL MSI/AppX corrompido: {0}. {1}" -f $cleanStatusText, $detail) -HowToFix 'Abra PowerShell como administrador e rode o componente wsl-core; ele tentara re-registrar/reinstalar Microsoft.WSL. Depois reinicie e execute wsl --update.')
+            }
+        }
         if ($appxPresent -and $servicePresent) {
             return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("WSL artefatos presentes. {0}" -f $detail) -HowToFix '')
         }
@@ -1673,12 +1682,68 @@ function Invoke-NativeWithLog {
 function Test-WslCorruptionText {
     param([AllowNull()][string]$Text)
     if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    $normalized = [string]$Text -replace "`0", ''
     return (
-        ($Text -match '(?i)REGDB_E_CLASSNOTREG') -or
-        ($Text -match '(?i)Wsl/CallMsi/Install') -or
-        ($Text -match '(?i)instala(c|ç)(a|ã)o do WSL parece estar corrompida') -or
-        ($Text -match '(?i)Pressione qualquer tecla para reparar o WSL')
+        ($normalized -match '(?i)REGDB_E_CLASSNOTREG') -or
+        ($normalized -match '(?i)Wsl/CallMsi/Install') -or
+        ($normalized -match '(?i)instala(c|ç)(a|ã)o do WSL parece estar corrompida') -or
+        ($normalized -match '(?i)Pressione qualquer tecla para reparar o WSL')
     )
+}
+
+function Get-BootstrapWslStatusProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$WslExe,
+        [int]$TimeoutMs = 120000
+    )
+
+    $stdoutPath = Join-Path $env:TEMP ('phasezero-wsl-status-out-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    $stderrPath = Join-Path $env:TEMP ('phasezero-wsl-status-err-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    $proc = $null
+    try {
+        $proc = Start-Process -FilePath $WslExe -ArgumentList @('--status') -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden -PassThru -ErrorAction Stop
+        $timedOut = -not $proc.WaitForExit($TimeoutMs)
+        if ($timedOut) {
+            try { $proc.Kill() } catch { }
+            try { $null = $proc.WaitForExit(5000) } catch { }
+        }
+        $stdout = ''
+        $stderr = ''
+        try { if (Test-Path -LiteralPath $stdoutPath) { $stdout = [System.IO.File]::ReadAllText($stdoutPath) } } catch { $stdout = '' }
+        try { if (Test-Path -LiteralPath $stderrPath) { $stderr = [System.IO.File]::ReadAllText($stderrPath) } } catch { $stderr = '' }
+        return [ordered]@{
+            exitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
+            timedOut = $timedOut
+            stdout = $stdout
+            stderr = $stderr
+            firstLine = (($stdout + "`n" + $stderr) -replace "`0", '' -replace "`r", "`n" -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+        }
+    } catch {
+        return [ordered]@{
+            exitCode = 1
+            timedOut = $false
+            stdout = ''
+            stderr = $_.Exception.Message
+            firstLine = $_.Exception.Message
+        }
+    } finally {
+        try { if ($proc) { $proc.Dispose() } } catch { }
+        try { Remove-Item -LiteralPath $stdoutPath,$stderrPath -Force -ErrorAction SilentlyContinue } catch { }
+    }
+}
+
+function Assert-BootstrapWslNotCorrupt {
+    param(
+        [Parameter(Mandatory = $true)][string]$WslExe,
+        [int]$TimeoutMs = 120000
+    )
+
+    $probe = Get-BootstrapWslStatusProbe -WslExe $WslExe -TimeoutMs $TimeoutMs
+    $text = [string]($probe.stdout + "`n" + $probe.stderr)
+    if (Test-WslCorruptionText -Text $text) {
+        throw (New-BootstrapBlockedException -Message 'WSL host corrompido: Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG. Reparo exige administrador para re-registrar/reinstalar Microsoft.WSL.' -Kind 'wsl-msi-registration-broken' -Action 'rerun-elevated-or-repair-wsl' -Reasons @('REGDB_E_CLASSNOTREG','Microsoft.WSL'))
+    }
+    return $probe
 }
 
 function Invoke-NativeCaptureWithLog {
@@ -6438,8 +6503,11 @@ function Ensure-HermesProjectOpenCloudConfig {
 
 function Ensure-Hermes {
     param([Parameter(Mandatory = $true)][hashtable]$State)
-    $null = $State
-    throw (New-BootstrapBlockedException -Message 'Hermes Agent oficial validado em NousResearch/hermes-agent, mas instalacao automatica Windows nativa nao foi confirmada. Pacote npm "hermes" nao e usado para evitar falso positivo.' -Kind 'unsupported-external-tool' -Action 'manual-install-hermes-agent' -Reasons @('official-windows-installer-not-confirmed','npm-hermes-not-authoritative'))
+    Ensure-WslCore -State $State
+    $catalog = Get-BootstrapAiToolCatalog
+    $result = Install-BootstrapHermesAgentWsl -CatalogEntry $catalog['hermes-agent'] -InstallRoot (Get-BootstrapAiInstallRoot -InstallRoot '') -ProjectRoot (Get-Location).Path
+    Write-Log ("Hermes Agent: {0} ({1})" -f [string]$result.status, [string]$result.version)
+    Ensure-HermesProjectOpenCloudConfig -State $State
 }
 
 function Ensure-RepoClone {
@@ -11803,7 +11871,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['codex-cli'] = New-BootstrapComponentDefinition -Name 'codex-cli' -Description 'OpenAI Codex CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@openai/codex'; DisplayName = 'OpenAI Codex CLI (@openai/codex)'; CommandNames = @('codex') }
     $catalog['openclaude-cli'] = New-BootstrapComponentDefinition -Name 'openclaude-cli' -Description 'OpenClaude CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@gitlawb/openclaude'; DisplayName = 'OpenClaude CLI (@gitlawb/openclaude)'; CommandNames = @('openclaude') }
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
-    $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes via npm + OpenCloud config no projeto.' -DependsOn @('node-core') -Kind 'hermes'
+    $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes Agent via WSL2 + OpenCloud config no projeto.' -DependsOn @('wsl-core') -Kind 'hermes'
     $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
     $catalog['bootstrap-mcps'] = New-BootstrapComponentDefinition -Name 'bootstrap-mcps' -Description 'Instala dependencias locais dos MCPs gerenciados e registra o estado da automacao.' -DependsOn @('bootstrap-secrets', 'node-core', 'python-core') -Kind 'bootstrap-mcps'
     $catalog['vscode-extensions'] = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'Instala e configura extensões do VS Code e VS Code Insiders quando presentes.' -DependsOn @('bootstrap-secrets', 'vscode') -Kind 'vscode-extensions'
@@ -11908,7 +11976,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['safe-base'] = New-BootstrapProfileDefinition -Name 'safe-base' -Description 'Base segura e pequena para maquina limpa; sem desktops de IA, containers, jogos ou tuning.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores e utilitarios.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
@@ -12584,7 +12652,14 @@ function Repair-BootstrapWslCorruption {
     } else {
         if ($State -and $State.Winget) {
             try {
-                Ensure-WingetPackage -WingetPath $State.Winget -Id 'Microsoft.WSL' -DisplayName 'WSL' -ProbePaths @("$env:WINDIR\System32\wsl.exe")
+                $installExit = Invoke-NativeWithRetry -Exe $State.Winget -Args @('install','--id','Microsoft.WSL','-e','--source','winget','--accept-package-agreements','--accept-source-agreements','--disable-interactivity') -OperationName 'reinstalacao WSL via winget' -TimeoutMs 900000 -NonRetryableExitCodes @()
+                if (($installExit -ne 0) -and ($installExit -ne 3010)) {
+                    Write-Log ("WSL: winget install Microsoft.WSL retornou exit={0}; tentando upgrade." -f $installExit) 'WARN'
+                    $upgradeExit = Invoke-NativeWithRetry -Exe $State.Winget -Args @('upgrade','--id','Microsoft.WSL','-e','--source','winget','--accept-package-agreements','--accept-source-agreements','--disable-interactivity') -OperationName 'upgrade WSL via winget' -TimeoutMs 900000 -NonRetryableExitCodes @()
+                    if (($upgradeExit -ne 0) -and ($upgradeExit -ne 3010)) {
+                        Write-Log ("WSL: winget upgrade Microsoft.WSL retornou exit={0}." -f $upgradeExit) 'WARN'
+                    }
+                }
             } catch {
                 Write-Log ("WSL: falha ao instalar Microsoft.WSL via winget: " + $_.Exception.Message) 'WARN'
             }
@@ -12616,6 +12691,21 @@ function Repair-BootstrapWslCorruption {
 function Ensure-WslCore {
     param([hashtable]$State)
     Ensure-BootstrapSystemCore -State $State
+
+    $wslExe = Resolve-CommandPath -Name 'wsl.exe'
+    if (-not $wslExe) {
+        $candidate = Join-Path $env:SystemRoot 'System32\wsl.exe'
+        if (Test-Path $candidate) { $wslExe = $candidate }
+    }
+    if ($wslExe) {
+        try {
+            $null = Assert-BootstrapWslNotCorrupt -WslExe $wslExe
+        } catch {
+            if (-not (Test-IsAdmin)) { throw }
+            $repaired = Repair-BootstrapWslCorruption -WslExe $wslExe -State $State
+            if (-not $repaired) { throw }
+        }
+    }
 
     if (-not (Test-IsAdmin)) {
         Write-Log 'WSL core requer privilégios de administrador para habilitar recursos do Windows. Pulando.' 'WARN'
@@ -13034,13 +13124,14 @@ function Get-BootstrapAiToolCatalog {
     $catalog['hermes-agent'] = [ordered]@{
         ToolName       = 'hermes-agent'
         DisplayName    = 'Hermes Agent'
-        CommandNames   = @('hermes-agent','hermes')
+        CommandNames   = @()
         VersionArgs    = @('--version')
         DocsUrl        = 'https://github.com/NousResearch/hermes-agent'
         GitHubRepo     = 'NousResearch/hermes-agent'
         PackageName    = ''
-        InstallSupport = 'manual-windows-beta'
-        Notes          = 'Repo oficial validado. Windows PowerShell existe em beta; instalacao automatica nao habilitada sem contrato silent/uninstall. npm hermes nao e tratado como Hermes Agent oficial.'
+        InstallSupport = 'wsl-installer'
+        ProbePaths     = @('$env:USERPROFILE\.hermes\hermes-agent')
+        Notes          = 'Repo oficial validado. Windows nativo nao e caminho estavel; instalacao suportada pelo projeto usa WSL2 e install.sh oficial com --skip-setup. npm hermes nao e tratado como Hermes Agent oficial.'
     }
     $catalog['hermes-desktop'] = [ordered]@{
         ToolName       = 'hermes-desktop'
@@ -13328,6 +13419,17 @@ function Test-BootstrapAiToolConfigured {
     )
 
     switch ($ToolName) {
+        'hermes-agent' {
+            try {
+                $wslExe = Get-BootstrapWslExePath
+                if ([string]::IsNullOrWhiteSpace($wslExe)) { return $false }
+                $null = Assert-BootstrapWslNotCorrupt -WslExe $wslExe -TimeoutMs 5000
+                $result = Invoke-BootstrapAiNativeCommand -Exe $wslExe -Args @('bash','-lc','test -d "$HOME/.hermes/hermes-agent" && command -v hermes >/dev/null 2>&1') -TimeoutMs 15000
+                return ([int]$result['exitCode'] -eq 0)
+            } catch {
+                return $false
+            }
+        }
         'claude-code' {
             return (-not [string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY))
         }
@@ -13381,14 +13483,23 @@ function Get-BootstrapAiToolStatusRows {
         if ($toolName -eq 'antigravity-workflows') {
             $configured = Test-BootstrapAntigravityWorkflows -ProjectRoot $ProjectRoot
             $status = if ($configured) { 'configured' } else { 'absent' }
+        } elseif ($toolName -eq 'hermes-agent') {
+            $configured = Test-BootstrapAiToolConfigured -ToolName $toolName -ProjectRoot $ProjectRoot
+            $status = if ($configured) { 'configured' } else { 'absent' }
+            if ($configured) {
+                try {
+                    $wslExe = Get-BootstrapWslExePath
+                    $hermesVersion = Invoke-BootstrapAiNativeCommand -Exe $wslExe -Args @('bash','-lc','hermes --version') -TimeoutMs 15000
+                    $version = [string]$hermesVersion['firstLine']
+                    $commandPath = 'wsl.exe bash -lc hermes'
+                } catch {
+                    $version = ''
+                }
+            }
         } elseif (-not [string]::IsNullOrWhiteSpace($commandPath)) {
             $version = Get-BootstrapAiToolVersion -CatalogEntry $entry -CommandPath $commandPath
             $configured = Test-BootstrapAiToolConfigured -ToolName $toolName -ProjectRoot $ProjectRoot
             $status = if ($configured) { 'configured' } else { 'installed' }
-            if ($toolName -eq 'hermes-agent') {
-                $status = 'manual'
-                $configured = $false
-            }
         } elseif ([string]$entry['InstallSupport'] -match '^manual') {
             $status = 'manual'
         }
@@ -13477,6 +13588,62 @@ function Install-BootstrapAiNpmTool {
     }
     $version = Get-BootstrapAiToolVersion -CatalogEntry $CatalogEntry -CommandPath $commandPath
     return (New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'installed' -InstallRoot $root -Message 'Instalacao validada.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath $commandPath -Version $version)
+}
+
+function Get-BootstrapWslExePath {
+    $wslExe = Resolve-CommandPath -Name 'wsl.exe'
+    if (-not $wslExe) {
+        $candidate = Join-Path $env:SystemRoot 'System32\wsl.exe'
+        if (Test-Path -LiteralPath $candidate) { $wslExe = $candidate }
+    }
+    return $wslExe
+}
+
+function Invoke-BootstrapWslBashCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [int]$TimeoutMs = 120000
+    )
+
+    $wslExe = Get-BootstrapWslExePath
+    if ([string]::IsNullOrWhiteSpace($wslExe)) {
+        throw (New-BootstrapBlockedException -Message 'wsl.exe nao encontrado. Hermes Agent requer WSL2 no Windows.' -Kind 'wsl-missing' -Action 'install-wsl' -Reasons @('wsl.exe-missing'))
+    }
+    $null = Assert-BootstrapWslNotCorrupt -WslExe $wslExe
+    return (Invoke-BootstrapAiNativeCommand -Exe $wslExe -Args @('bash','-lc',$Command) -TimeoutMs $TimeoutMs)
+}
+
+function Install-BootstrapHermesAgentWsl {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $installer = 'https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh'
+    $command = "curl -fsSL $installer | bash -s -- --skip-setup"
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'hermes-agent' -Action 'install' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ("WSL2: {0}" -f $command) -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    $install = Invoke-BootstrapWslBashCommand -Command $command -TimeoutMs 1200000
+    if ([int]$install['exitCode'] -ne 0) {
+        $detail = ([string]$install['stderr']).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$install['stdout']).Trim() }
+        throw ("Falha ao instalar Hermes Agent no WSL2 (exit={0}). {1}" -f [int]$install['exitCode'], $detail)
+    }
+
+    $validate = Invoke-BootstrapWslBashCommand -Command 'command -v hermes >/dev/null 2>&1 && hermes --version' -TimeoutMs 120000
+    if ([int]$validate['exitCode'] -ne 0) {
+        $detail = ([string]$validate['stderr']).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$validate['stdout']).Trim() }
+        throw ("Hermes Agent instalado, mas comando hermes nao validou no WSL2 (exit={0}). {1}" -f [int]$validate['exitCode'], $detail)
+    }
+
+    $version = [string]$validate['firstLine']
+    return (New-BootstrapAiToolResult -ToolName 'hermes-agent' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'Hermes Agent instalado e validado no WSL2.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath 'wsl.exe bash -lc hermes' -Version $version)
 }
 
 function Uninstall-BootstrapAiNpmTool {
@@ -13757,6 +13924,9 @@ function Invoke-BootstrapAiToolAction {
     if ($Action -eq 'install') {
         switch ([string]$entry['InstallSupport']) {
             'npm-prefix' { return (Install-BootstrapAiNpmTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
+            'wsl-installer' {
+                if ($name -eq 'hermes-agent') { return (Install-BootstrapHermesAgentWsl -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            }
             'github-release' {
                 if ($name -eq 'rtk') { return (Install-BootstrapRtkTool -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
             }
@@ -13769,6 +13939,10 @@ function Invoke-BootstrapAiToolAction {
     if ($Action -eq 'uninstall') {
         switch ([string]$entry['InstallSupport']) {
             'npm-prefix' { return (Uninstall-BootstrapAiNpmTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
+            'wsl-installer' {
+                $status = if ($DryRun) { 'planned' } else { 'manual' }
+                return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Remocao do Hermes Agent em WSL2 requer decisao manual para preservar ~/.hermes e dados do usuario.' -Docs ([string]$entry['DocsUrl']))
+            }
             'github-release' {
                 if ($name -eq 'rtk') { return (Uninstall-BootstrapRtkTool -InstallRoot $root -DryRun:$DryRun) }
             }
