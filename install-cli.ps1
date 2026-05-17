@@ -181,11 +181,18 @@ function Complete-CliResultEnvelope {
         $message = ''
         if ($result.Contains('error')) { $message = [string]$result['error'] }
         if ([string]::IsNullOrWhiteSpace($message) -and $result.Contains('message')) { $message = [string]$result['message'] }
-        if ([string]::IsNullOrWhiteSpace($message)) {
+        $statusText = if ($result.Contains('status')) { [string]$result['status'] } else { 'success' }
+        $diagnosticSeverity = switch ($statusText) {
+            'blocked' { 'blocked'; break }
+            'error' { 'error'; break }
+            'warning' { 'warning'; break }
+            default { '' }
+        }
+        if ([string]::IsNullOrWhiteSpace($message) -or [string]::IsNullOrWhiteSpace($diagnosticSeverity)) {
             $result['diagnostics'] = @()
         } else {
             $result['diagnostics'] = @([ordered]@{
-                severity = $(if ([string]$result['status'] -eq 'blocked') { 'blocked' } else { 'error' })
+                severity = $diagnosticSeverity
                 message = $message
                 howToFix = $(if ($result.Contains('howToFix')) { [string]$result['howToFix'] } else { '' })
             })

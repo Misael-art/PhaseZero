@@ -153,6 +153,7 @@ Describe 'AI coding tool support' {
         [string]$json.mode | Should Be 'ai-tools'
         [string]$json.action | Should Be 'validate'
         [string]$json.installRoot | Should Be $rootWithSpaces
+        @($json.diagnostics).Count | Should Be 0
     }
 
     It 'rejects unknown AI tools with a non-zero exit and diagnostic' {

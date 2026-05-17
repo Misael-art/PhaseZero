@@ -60,7 +60,7 @@ Describe 'Resilience Architecture' {
 
     Context 'Offline Mode & Cache' {
         It 'Invoke-WebRequestWithRetry uses cache if available' {
-            $tempDir = Join-Path $env:TEMP ('bootstrap-test-' + (New-Guid).ToString())
+            $tempDir = Join-Path $env:TEMP ('bootstrap-test-' + ([Guid]::NewGuid().ToString()))
             $null = New-Item -Path $tempDir -ItemType Directory -Force
             $cacheDir = Join-Path $tempDir 'cache'
             $null = New-Item -Path $cacheDir -ItemType Directory -Force
@@ -107,7 +107,7 @@ Describe 'Resilience Architecture' {
         }
 
         It 'writes a change manifest with auditable rollback metadata' {
-            $tempDir = Join-Path $env:TEMP ('bootstrap-manifest-test-' + (New-Guid).ToString())
+            $tempDir = Join-Path $env:TEMP ('bootstrap-manifest-test-' + ([Guid]::NewGuid().ToString()))
             $null = New-Item -Path $tempDir -ItemType Directory -Force
             try {
                 $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot 'C:\' -ResolvedCloneBaseDir 'C:\'
@@ -127,7 +127,7 @@ Describe 'Resilience Architecture' {
         }
 
         It 'rolls back registry values from a manifest before legacy fallback' {
-            $tempDir = Join-Path $env:TEMP ('bootstrap-rollback-test-' + (New-Guid).ToString())
+            $tempDir = Join-Path $env:TEMP ('bootstrap-rollback-test-' + ([Guid]::NewGuid().ToString()))
             $null = New-Item -Path $tempDir -ItemType Directory -Force
             $manifestPath = Join-Path $tempDir 'changes.json'
             try {
@@ -149,7 +149,7 @@ Describe 'Resilience Architecture' {
         }
 
         It 'rolls back service and Defender exclusion changes from a manifest' {
-            $tempDir = Join-Path $env:TEMP ('bootstrap-rollback-service-defender-test-' + (New-Guid).ToString())
+            $tempDir = Join-Path $env:TEMP ('bootstrap-rollback-service-defender-test-' + ([Guid]::NewGuid().ToString()))
             $null = New-Item -Path $tempDir -ItemType Directory -Force
             $manifestPath = Join-Path $tempDir 'changes.json'
             try {

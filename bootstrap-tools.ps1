@@ -3033,7 +3033,6 @@ function Get-BootstrapNotepadPlusPlusCuratedPluginDisplayNames {
         'HEX-Editor'
         'JSON Tools'
         'JSON Viewer'
-        'JSTool'
         'NppFTP'
         'NppOpenAI'
         'Snippets'
@@ -3069,6 +3068,11 @@ function Get-BootstrapNotepadPlusPlusDeferredCapabilities {
                 id = 'multiclipboard'
                 displayName = 'MultiClipboard'
                 reason = 'Plugin oficial disponivel so na lista x86. Fluxo x64 marca como diferido para evitar quebra.'
+            }
+            [ordered]@{
+                id = 'jstool'
+                displayName = 'JSTool'
+                reason = 'Fonte SourceForge retorna HTML em fluxo automatizado Windows; diferido para evitar falso zip/cache quebrado.'
             }
         )
     }
@@ -3622,6 +3626,21 @@ function Get-BootstrapNotepadPlusPlusPluginSourceDirectory {
     return $ExtractRoot
 }
 
+function Get-BootstrapFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    $stream = [System.IO.File]::OpenRead($resolvedPath)
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha256.ComputeHash($stream)
+        return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally {
+        $sha256.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Install-BootstrapNotepadPlusPlusPlugin {
     param(
         [Parameter(Mandatory = $true)]$InstallInfo,
@@ -3634,7 +3653,8 @@ function Install-BootstrapNotepadPlusPlusPlugin {
     }
 
     $tempRoot = Join-Path $env:TEMP ('bootstrap-npp-plugin-' + [guid]::NewGuid().ToString('N'))
-    $zipPath = Join-Path $tempRoot 'plugin.zip'
+    $pluginArchiveName = 'notepadpp-plugin-{0}.zip' -f (([string]$Plugin.folderName) -replace '[^A-Za-z0-9._-]', '_')
+    $zipPath = Join-Path $tempRoot $pluginArchiveName
     $extractRoot = Join-Path $tempRoot 'extract'
     $targetDir = Join-Path $pluginRoot ([string]$Plugin.folderName)
 
@@ -3642,7 +3662,7 @@ function Install-BootstrapNotepadPlusPlusPlugin {
         $null = New-Item -Path $extractRoot -ItemType Directory -Force
         Invoke-WebRequestWithRetry -Uri ([string]$Plugin.repository) -OutFile $zipPath -OperationName ("Notepad++ plugin {0}" -f [string]$Plugin.displayName)
         if (-not [string]::IsNullOrWhiteSpace([string]$Plugin.id)) {
-            $hash = (Get-FileHash -Path $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $hash = Get-BootstrapFileSha256 -Path $zipPath
             $expected = ([string]$Plugin.id).ToLowerInvariant()
             if ($hash -ne $expected) {
                 throw "Checksum invalido para $([string]$Plugin.displayName): $hash"
@@ -13552,7 +13572,7 @@ function Install-BootstrapRtkTool {
             $expected = ([regex]::Match($expectedText, '(?i)\b[a-f0-9]{64}\b')).Value
         }
         if (-not [string]::IsNullOrWhiteSpace($expected)) {
-            $actual = (Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            $actual = Get-BootstrapFileSha256 -Path $assetPath
             if ($actual -ne $expected.ToLowerInvariant()) {
                 throw "Checksum RTK invalido. Esperado=$expected Atual=$actual"
             }
@@ -19406,7 +19426,13 @@ function Invoke-BootstrapComponent {
             if ($componentDef.PSObject.Properties.Name -contains 'AppxPackageNames') { $appxPackageNames = @($componentDef.AppxPackageNames) }
             Ensure-WingetPackage -WingetPath $State.Winget -Id $componentDef.Id -DisplayName $componentDef.DisplayName -PreferUserScope $preferUserScope -AllowFailureWhenNotAdmin $allowFailureWhenNotAdmin -ProbePaths $probePaths -AppxPackageNames $appxPackageNames -State $State -ComponentName $Name
             if ($Name -eq 'notepadpp' -and [string]$State.AppTuningMode -eq 'off') {
-                $null = Ensure-BootstrapNotepadPlusPlusDefaults
+                $notepadDefaults = Ensure-BootstrapNotepadPlusPlusDefaults
+                if ([string]$notepadDefaults.status -eq 'partial') {
+                    if (-not $State.ContainsKey('Warnings')) {
+                        $State.Warnings = New-Object System.Collections.Generic.List[string]
+                    }
+                    $State.Warnings.Add('notepadpp-defaults-partial: Notepad++ defaults parcial; alguns plugins/assets falharam. Veja bootstrap-notepadpp.json e reexecute o componente notepadpp.')
+                }
             }
         }
         'chocolatey' {

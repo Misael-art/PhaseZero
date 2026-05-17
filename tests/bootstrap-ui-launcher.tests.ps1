@@ -222,7 +222,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
             Set-Content -LiteralPath $ResultPath -Value '{"status":"success","exitCode":0}' -Encoding utf8
         } -ArgumentList $path
         try {
-            $result = Read-UiBackendResultWithRetry -Path $path -MaxWaitMs 1500 -StepMs 50
+            $result = Read-UiBackendResultWithRetry -Path $path -MaxWaitMs 6000 -StepMs 100
         } finally {
             Receive-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
             Remove-Job -Job $job -Force -ErrorAction SilentlyContinue

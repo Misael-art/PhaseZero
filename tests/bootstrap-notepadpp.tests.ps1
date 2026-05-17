@@ -6,14 +6,37 @@ $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath -BootstrapUiLibraryMode
 
 Describe 'Bootstrap Notepad++ defaults' {
+    It 'uses internal SHA256 helper for plugin checksum validation' {
+        $raw = Get-Content -LiteralPath $scriptPath -Raw
+
+        $raw | Should Match 'function Get-BootstrapFileSha256'
+        $raw | Should Match 'Get-BootstrapFileSha256 -Path \$zipPath'
+    }
+
+    It 'uses plugin-specific cache file names for plugin archives' {
+        $raw = Get-Content -LiteralPath $scriptPath -Raw
+
+        $raw | Should Match 'notepadpp-plugin-\{0\}\.zip'
+        $raw | Should Match '\$Plugin\.folderName'
+    }
+
+    It 'surfaces partial defaults as component warning instead of silent success' {
+        $raw = Get-Content -LiteralPath $scriptPath -Raw
+
+        $raw | Should Match 'notepadpp-defaults-partial'
+        $raw | Should Match 'Notepad\+\+ defaults parcial'
+        $raw | Should Match 'State\.Warnings\.Add'
+    }
+
     It 'returns curated x64 plugin set without unsupported defaults' {
         $plugins = @(Get-BootstrapNotepadPlusPlusDesiredPlugins -Architecture 'x64' -UseFallbackOnly)
         $names = @($plugins | ForEach-Object { [string]$_.displayName })
 
-        foreach ($expected in @('ComparePlus','AutoSave','CollectionInterface','Code Alignment','DSpellCheck','HEX-Editor','JSON Tools','JSON Viewer','JSTool','NppFTP','NppOpenAI','Snippets','XML Tools')) {
+        foreach ($expected in @('ComparePlus','AutoSave','CollectionInterface','Code Alignment','DSpellCheck','HEX-Editor','JSON Tools','JSON Viewer','NppFTP','NppOpenAI','Snippets','XML Tools')) {
             ($names -contains $expected) | Should Be $true
         }
 
+        ($names -contains 'JSTool') | Should Be $false
         ($names -contains 'MultiClipboard') | Should Be $false
     }
 
@@ -24,18 +47,22 @@ Describe 'Bootstrap Notepad++ defaults' {
         ($ids -contains 'function-list') | Should Be $true
         ($ids -contains 'multiclipboard') | Should Be $true
         ($ids -contains 'lsp-client') | Should Be $true
+        ($ids -contains 'jstool') | Should Be $true
 
         (($deferred | Where-Object { $_.id -eq 'function-list' } | Select-Object -First 1).reason) | Should Match 'built-in'
         (($deferred | Where-Object { $_.id -eq 'multiclipboard' } | Select-Object -First 1).reason) | Should Match 'x64'
         (($deferred | Where-Object { $_.id -eq 'lsp-client' } | Select-Object -First 1).reason) | Should Match 'alpha|manual'
+        (($deferred | Where-Object { $_.id -eq 'jstool' } | Select-Object -First 1).reason) | Should Match 'SourceForge|automatizado'
     }
 
     It 'defines curated syntax assets and plugin folders' {
         $desired = Get-BootstrapNotepadPlusPlusDesiredState -Architecture 'x64'
 
-        foreach ($expectedPluginFolder in @('ComparePlus','AutoSave','CollectionInterface','CodeAlignmentNpp','DSpellCheck','HexEditor','JsonTools','NPPJSONViewer','JSMinNPP','NppFTP','NppOpenAI','NppSnippets','XMLTools')) {
+        foreach ($expectedPluginFolder in @('ComparePlus','AutoSave','CollectionInterface','CodeAlignmentNpp','DSpellCheck','HexEditor','JsonTools','NPPJSONViewer','NppFTP','NppOpenAI','NppSnippets','XMLTools')) {
             (@($desired.pluginFolders) -contains $expectedPluginFolder) | Should Be $true
         }
+
+        (@($desired.pluginFolders) -contains 'JSMinNPP') | Should Be $false
 
         foreach ($expectedPath in @(
             'userDefineLangs\AutoHotKey_V2.udl.xml',
