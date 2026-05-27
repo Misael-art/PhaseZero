@@ -6615,6 +6615,16 @@ function Install-BootstrapAiUsagebarComponent {
     }
 }
 
+function Install-BootstrapAionUiComponent {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    $catalog = Get-BootstrapAiToolCatalog
+    $result = Install-BootstrapAionUiComponentPackage -CatalogEntry $catalog['aionui'] -State $State -NoAdmin:(-not (Test-IsAdmin))
+    Write-Log ("AionUI: {0} ({1}) {2}" -f [string]$result.status, [string]$result.version, [string]$result.message)
+    if ([string]$result.status -eq 'blocked') {
+        throw ([string]$result.message)
+    }
+}
+
 function Ensure-RepoClone {
     param(
         [Parameter(Mandatory = $true)][string]$GitExe,
@@ -7762,6 +7772,7 @@ function Get-BootstrapOnDemandCategoryById {
         'claude-code' { return 'ia' }
         'opencode' { return 'ia' }
         'ai-usagebar' { return 'ia' }
+        'aionui' { return 'ia' }
         'codex-cli' { return 'ia' }
         'gemini-cli' { return 'ia' }
         'kilo-cli' { return 'ia' }
@@ -7859,6 +7870,7 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'claude-code' -DisplayName 'Claude Code' -Components @('claude-code') -TargetApps @('claude code') -ProbePaths @('$env:APPDATA\npm\claude.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'opencode' -DisplayName 'OpenCode CLI' -Components @('opencode') -TargetApps @('opencode') -ProbePaths @('$env:USERPROFILE\.opencode\bin\opencode.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'ai-usagebar' -DisplayName 'AI Usagebar' -Components @('ai-usagebar') -TargetApps @('ai usagebar','usagebar','waybar ai usage') -ProbePaths @('$env:LOCALAPPDATA\PhaseZero\ai-tools\bin\ai-usagebar.exe','$env:APPDATA\ai-usagebar\config\config.toml','$env:USERPROFILE\.config\ai-usagebar\config.toml') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'aionui' -DisplayName 'AionUI' -Components @('aionui') -TargetApps @('aionui','aion ui','office ai') -ProbePaths @('$env:LOCALAPPDATA\Programs\AionUi\AionUi.exe','$env:LOCALAPPDATA\Programs\AionUI\AionUI.exe','$env:ProgramFiles\AionUi\AionUi.exe','$env:ProgramFiles\AionUI\AionUI.exe','$env:LOCALAPPDATA\Microsoft\WinGet\Packages\iOfficeAI.AionUi_*\AionUi.exe') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'codex-cli' -DisplayName 'Codex CLI' -Components @('codex-cli') -TargetApps @('codex') -ProbePaths @('$env:APPDATA\npm\codex.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'gemini-cli' -DisplayName 'Gemini CLI' -Components @('gemini-cli') -TargetApps @('gemini') -ProbePaths @('$env:APPDATA\npm\gemini.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'kilo-cli' -DisplayName 'Kilo CLI' -Components @('kilo-cli') -TargetApps @('kilo','kilocode') -ProbePaths @('$env:APPDATA\npm\kilo.cmd','$env:APPDATA\npm\kilocode.cmd','$env:USERPROFILE\.local\share\kilo\auth.json') -Profiles @('desktop','dev')
@@ -11980,6 +11992,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes Agent via WSL2 + OpenCloud config no projeto.' -DependsOn @('wsl-core') -Kind 'hermes'
     $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar Waybar/TUI por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
+    $catalog['aionui'] = New-BootstrapComponentDefinition -Name 'aionui' -Description 'AionUI desktop app via winget oficial iOfficeAI.AionUi ou instalador oficial.' -Kind 'aionui' -EstimatedSizeGB 0.4 -RequiresNetwork $true
     $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
     $catalog['bootstrap-mcps'] = New-BootstrapComponentDefinition -Name 'bootstrap-mcps' -Description 'Instala dependencias locais dos MCPs gerenciados e registra o estado da automacao.' -DependsOn @('bootstrap-secrets', 'node-core', 'python-core') -Kind 'bootstrap-mcps'
     $catalog['vscode-extensions'] = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'Instala e configura extensões do VS Code e VS Code Insiders quando presentes.' -DependsOn @('bootstrap-secrets', 'vscode') -Kind 'vscode-extensions'
@@ -12092,7 +12105,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['public-beta'] = New-BootstrapProfileDefinition -Name 'public-beta' -Description 'Primeira instalacao confiavel para beta publico; maior que safe-base, sem WSL/Docker/IA pesada/gaming.' -Items @('safe-base', 'powershell', 'powertoys', 'brave', 'bootstrap-secrets', 'vscode', 'vscode-extensions', 'bootstrap-mcps')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores e utilitarios.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'ai-usagebar', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'ai-usagebar', 'aionui', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
@@ -12234,6 +12247,7 @@ function Get-BootstrapUiContract {
             publicBetaProfile = ($profiles.Contains('public-beta'))
             steamDeckDoctor = $true
             githubCliAgentAuth = $true
+            aionuiIntegration = $true
         }
         profileNames = @($profiles.Keys)
         componentNames = @($components.Keys)
@@ -13370,20 +13384,29 @@ function Get-BootstrapAiToolCatalog {
         InstallSupport = 'npm-prefix'
         Notes          = 'Instala via npm quando solicitado; onboarding e chaves ficam manuais.'
     }
-    $catalog['aion-ui'] = [ordered]@{
-        ToolName       = 'aion-ui'
-        DisplayName    = 'Aion UI'
-        CommandNames   = @('AionUi','aionui','officecli')
-        VersionArgs    = @('--version')
+    $catalog['aionui'] = [ordered]@{
+        ToolName       = 'aionui'
+        DisplayName    = 'AionUI'
+        CommandNames   = @('AionUi','AionUI','aionui','officecli')
+        VersionArgs    = @()
         DocsUrl        = 'https://aionui.com/download/'
+        DownloadUrl    = 'https://aionui.com/download/'
+        WikiUrl        = 'https://github.com/iOfficeAI/AionUi/wiki/LLM-Configuration'
         GitHubRepo     = 'iOfficeAI/AionUi'
         PackageName    = ''
-        InstallSupport = 'manual-winget'
+        WingetId       = 'iOfficeAI.AionUi'
+        InstallSupport = 'winget-official-exe'
+        Architectures  = @('x64','arm64')
+        Aliases        = @('aion-ui','aion','aionui')
         ProbePaths     = @(
             '$env:LOCALAPPDATA\Programs\AionUi\AionUi.exe',
-            '$env:ProgramFiles\AionUi\AionUi.exe'
+            '$env:LOCALAPPDATA\Programs\AionUI\AionUI.exe',
+            '$env:ProgramFiles\AionUi\AionUi.exe',
+            '$env:ProgramFiles\AionUI\AionUI.exe',
+            '$env:LOCALAPPDATA\Microsoft\WinGet\Packages\iOfficeAI.AionUi_*\AionUi.exe',
+            '$env:LOCALAPPDATA\Microsoft\WinGet\Packages\iOfficeAI.AionUi_*\AionUI.exe'
         )
-        Notes          = 'Download oficial e winget existem; automacao silenciosa nao assumida.'
+        Notes          = 'Instala via winget exact id iOfficeAI.AionUi; fallback oficial .exe fica bloqueado em modo automatizado quando silent args nao forem documentados.'
     }
     $catalog['antigravity-workflows'] = [ordered]@{
         ToolName       = 'antigravity-workflows'
@@ -13426,8 +13449,9 @@ function Normalize-BootstrapAiToolName {
         'hermes' { return 'hermes-agent' }
         'hermesagent' { return 'hermes-agent' }
         'hermesdesktop' { return 'hermes-desktop' }
-        'aion' { return 'aion-ui' }
-        'aionui' { return 'aion-ui' }
+        'aion' { return 'aionui' }
+        'aion-ui' { return 'aionui' }
+        'aionui' { return 'aionui' }
         'antigravity' { return 'antigravity-workflows' }
         'aiusagebar' { return 'ai-usagebar' }
         'usagebar' { return 'ai-usagebar' }
@@ -13667,6 +13691,242 @@ function Test-BootstrapHostIsWindows {
     return ([string]$env:OS -eq 'Windows_NT')
 }
 
+function Get-BootstrapAionUiArchitecture {
+    $arch = [string]$env:PROCESSOR_ARCHITECTURE
+    if ($arch -match '(?i)arm64') { return 'arm64' }
+    return 'x64'
+}
+
+function Get-BootstrapAionUiProviderMap {
+    return @(
+        [ordered]@{ provider = 'openai'; env = @('OPENAI_API_KEY'); baseUrl = 'https://api.openai.com/v1'; validationProvider = 'openai'; rotationSupported = $true }
+        [ordered]@{ provider = 'anthropic'; env = @('ANTHROPIC_API_KEY'); baseUrl = 'https://api.anthropic.com'; validationProvider = 'anthropic'; rotationSupported = $true }
+        [ordered]@{ provider = 'gemini'; env = @('GEMINI_API_KEY','GOOGLE_API_KEY'); baseUrl = 'https://generativelanguage.googleapis.com'; validationProvider = 'google'; rotationSupported = $true }
+        [ordered]@{ provider = 'openrouter'; env = @('OPENROUTER_API_KEY'); baseUrl = 'https://openrouter.ai/api/v1'; validationProvider = 'openrouter'; rotationSupported = $true }
+        [ordered]@{ provider = 'deepseek'; env = @('DEEPSEEK_API_KEY'); baseUrl = 'https://api.deepseek.com'; validationProvider = 'deepseek'; rotationSupported = $true }
+        [ordered]@{ provider = 'xai'; env = @('XAI_API_KEY'); baseUrl = 'https://api.x.ai/v1'; validationProvider = 'xai'; rotationSupported = $true }
+        [ordered]@{ provider = 'dashscope'; env = @('DASHSCOPE_API_KEY'); baseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1'; validationProvider = ''; rotationSupported = $true }
+        [ordered]@{ provider = 'qwen'; env = @('QWEN_API_KEY'); baseUrl = 'https://dashscope.aliyuncs.com/compatible-mode/v1'; validationProvider = ''; rotationSupported = $true }
+        [ordered]@{ provider = 'zai'; env = @('ZAI_API_KEY'); baseUrl = $(if ([string]::IsNullOrWhiteSpace($env:ZAI_BASE_URL)) { 'https://open.bigmodel.cn/api/paas/v4' } else { [string]$env:ZAI_BASE_URL }); validationProvider = ''; rotationSupported = $true }
+    )
+}
+
+function Split-BootstrapAionUiEnvKeyValue {
+    param([AllowNull()][string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return @() }
+    $items = New-Object System.Collections.Generic.List[string]
+    foreach ($part in (([string]$Value) -split "[,`r`n]+")) {
+        $trimmed = ([string]$part).Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+        if (-not (@($items.ToArray()) -contains $trimmed)) { $items.Add($trimmed) | Out-Null }
+    }
+    return @($items.ToArray())
+}
+
+function Get-BootstrapAionUiEnvProviderCandidates {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns','')]
+    param()
+
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @(Get-BootstrapAionUiProviderMap)) {
+        $keyCount = 0
+        foreach ($name in @($item['env'])) {
+            $value = [Environment]::GetEnvironmentVariable([string]$name, 'Process')
+            if ([string]::IsNullOrWhiteSpace($value)) { $value = [Environment]::GetEnvironmentVariable([string]$name, 'User') }
+            $keyCount += @((Split-BootstrapAionUiEnvKeyValue -Value $value)).Count
+        }
+        $rows.Add([ordered]@{
+            provider = [string]$item['provider']
+            envPresent = ($keyCount -gt 0)
+            keyCount = [int]$keyCount
+            rotationSupported = [bool]$item['rotationSupported']
+            status = $(if ($keyCount -gt 0) { 'present' } else { 'missing' })
+            source = $(if ($keyCount -gt 0) { 'env' } else { 'missing' })
+            baseUrl = [string]$item['baseUrl']
+        }) | Out-Null
+    }
+    return @($rows.ToArray())
+}
+
+function Get-BootstrapAionUiInstallInfo {
+    $catalog = Get-BootstrapAiToolCatalog
+    $entry = $catalog['aionui']
+    $exePath = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot ''
+    $version = ''
+    if (-not [string]::IsNullOrWhiteSpace($exePath) -and (Test-Path -LiteralPath $exePath)) {
+        try {
+            $info = Get-Item -LiteralPath $exePath -ErrorAction Stop
+            $version = [string]$info.VersionInfo.ProductVersion
+            if ([string]::IsNullOrWhiteSpace($version)) { $version = [string]$info.VersionInfo.FileVersion }
+        } catch {
+            $version = ''
+        }
+    }
+    return [ordered]@{
+        installed = -not [string]::IsNullOrWhiteSpace($exePath)
+        exePath = [string]$exePath
+        version = [string]$version
+        architecture = Get-BootstrapAionUiArchitecture
+        wingetId = [string]$entry['WingetId']
+        downloadUrl = [string]$entry['DownloadUrl']
+        repo = [string]$entry['GitHubRepo']
+        wikiUrl = [string]$entry['WikiUrl']
+    }
+}
+
+function Test-BootstrapAionUiInstalled {
+    $info = Get-BootstrapAionUiInstallInfo
+    return [bool]$info['installed']
+}
+
+function Get-BootstrapAionUiConfigCandidateList {
+    $roots = New-Object System.Collections.Generic.List[string]
+    foreach ($root in @($env:APPDATA, $env:LOCALAPPDATA)) {
+        if ([string]::IsNullOrWhiteSpace($root) -or -not (Test-Path -LiteralPath $root)) { continue }
+        foreach ($name in @('AionUi','AionUI','aionui','iOfficeAI\AionUi','iOfficeAI\AionUI')) {
+            $candidate = Join-Path $root $name
+            if (Test-Path -LiteralPath $candidate) { $roots.Add($candidate) | Out-Null }
+        }
+    }
+    $files = New-Object System.Collections.Generic.List[object]
+    foreach ($root in @($roots.ToArray())) {
+        try {
+            foreach ($file in @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object {
+                $full = [string]$_.FullName
+                if ($full -match '(?i)\\(node_modules|conversations|builtin-skills|sentry)\\') { return $false }
+                return ($_.Name -match '(?i)(config|settings|llm|provider|aionui).*\.(json|sqlite|sqlite3|db|toml)$' -or $_.Name -match '(?i)^aionui.*\.(db|sqlite|sqlite3)$')
+            } | Select-Object -First 20)) {
+                $files.Add([ordered]@{ path = [string]$file.FullName; name = [string]$file.Name; length = [long]$file.Length }) | Out-Null
+            }
+        } catch {
+            Write-Verbose ("AionUI config discovery skipped: {0}" -f (Get-BootstrapCleanNativeText -Text $_.Exception.Message -MaxLength 200))
+        }
+    }
+    return @($files.ToArray())
+}
+
+function Set-BootstrapAionUiProviderConfig {
+    param(
+        [switch]$DryRun,
+        [switch]$StartOnce
+    )
+
+    $info = Get-BootstrapAionUiInstallInfo
+    if ($StartOnce -and [bool]$info['installed'] -and -not $DryRun) {
+        try {
+            $proc = Start-Process -FilePath ([string]$info['exePath']) -PassThru -WindowStyle Hidden -ErrorAction Stop
+            Start-Sleep -Seconds 5
+            if ($proc -and -not $proc.HasExited) {
+                try { $proc.CloseMainWindow() | Out-Null } catch { Write-Verbose $_.Exception.Message }
+                Start-Sleep -Seconds 2
+                if (-not $proc.HasExited) { try { $proc.Kill() } catch { Write-Verbose $_.Exception.Message } }
+            }
+        } catch {
+            Write-Verbose ("AionUI start-once skipped: {0}" -f (Get-BootstrapCleanNativeText -Text $_.Exception.Message -MaxLength 200))
+        }
+    }
+
+    $providers = @(Get-BootstrapAionUiEnvProviderCandidates | Where-Object { [bool]$_['envPresent'] })
+    $configs = @(Get-BootstrapAionUiConfigCandidateList)
+    $status = if ($DryRun) { 'planned' } else { 'manual' }
+    $reason = 'AionUI CLI/config schema for provider writes is not documented as stable; PhaseZero discovered local candidates but did not write secrets into an unknown store.'
+    if ($configs.Count -eq 0) {
+        $reason = 'AionUI config store not found yet; start AionUI once and configure providers in app settings, or rerun after the app creates its data directory.'
+    }
+    return [ordered]@{
+        status = $status
+        configured = @()
+        detectedProviders = @($providers | ForEach-Object { [string]$_['provider'] })
+        configCandidates = @($configs)
+        manualRequired = $true
+        reversible = $true
+        reason = $reason
+        recommendedAction = 'Open AionUI > LLM Configuration and paste local env keys manually; PhaseZero report lists provider names only.'
+    }
+}
+
+function ConvertTo-BootstrapAionUiSafeReport {
+    param([Parameter(Mandatory = $true)]$Report)
+    return (ConvertTo-BootstrapSupportSafeObject -Value $Report -Name 'aionui')
+}
+
+function Get-BootstrapAionUiDoctorReport {
+    param([switch]$ValidateProviders)
+
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $info = Get-BootstrapAionUiInstallInfo
+    $providers = @(Get-BootstrapAionUiEnvProviderCandidates)
+    $configured = New-Object System.Collections.Generic.List[string]
+    $rejected = New-Object System.Collections.Generic.List[string]
+    $statuses = [ordered]@{}
+
+    foreach ($row in @($providers)) {
+        $provider = [string]$row['provider']
+        $status = if ([bool]$row['envPresent']) { 'present' } else { 'missing' }
+        $lastErrorCode = ''
+        if ($ValidateProviders -and [bool]$row['envPresent']) {
+            try {
+                $map = @(Get-BootstrapAionUiProviderMap | Where-Object { [string]$_['provider'] -eq $provider } | Select-Object -First 1)
+                $validationProvider = if ($map.Count -gt 0) { [string]$map[0]['validationProvider'] } else { '' }
+                if (-not [string]::IsNullOrWhiteSpace($validationProvider)) {
+                    $secret = ''
+                    foreach ($envName in @($map[0]['env'])) {
+                        $value = [Environment]::GetEnvironmentVariable([string]$envName, 'Process')
+                        if ([string]::IsNullOrWhiteSpace($value)) { $value = [Environment]::GetEnvironmentVariable([string]$envName, 'User') }
+                        $keys = @(Split-BootstrapAionUiEnvKeyValue -Value $value)
+                        if ($keys.Count -gt 0) { $secret = [string]$keys[0]; break }
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($secret) -and $secret -notmatch '^phasezero-test-') {
+                        $definition = Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName $validationProvider
+                        if ($provider -eq 'gemini') { $definition = Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName 'google' }
+                        $credential = @{ secret = $secret; secretKind = 'apiKey'; baseUrl = [string]$row['baseUrl'] }
+                        $validation = Test-BootstrapSecretsProviderCredential -ProviderName $validationProvider -ProviderDefinition $definition -CredentialId ('env-' + $provider) -Credential $credential -TimeoutSeconds 10
+                        $message = [string]$validation['message']
+                        if ($message -match '(?i)\b(401|403|expired|invalid|unauthorized|forbidden)\b') {
+                            $lastErrorCode = if ($matches[1] -match '^(401|403)$') { [string]$matches[1] } else { 'auth-failed' }
+                        }
+                        $status = Convert-BootstrapDoctorValidationStatus -ValidationState ([string]$validation['state']) -LastErrorCode $lastErrorCode -HasSecret:$true
+                    }
+                }
+            } catch {
+                $status = 'unknown'
+                $lastErrorCode = 'probe-error'
+            }
+        }
+        if ($status -in @('rejected','expired')) { $rejected.Add($provider) | Out-Null }
+        $statuses[$provider] = [ordered]@{
+            status = $status
+            envPresent = [bool]$row['envPresent']
+            keyCount = [int]$row['keyCount']
+            rotationSupported = [bool]$row['rotationSupported']
+            lastErrorCode = $lastErrorCode
+        }
+    }
+
+    $configCandidates = @(Get-BootstrapAionUiConfigCandidateList)
+    $configPath = if ($configCandidates.Count -gt 0) { [string]$configCandidates[0]['path'] } else { '' }
+    $configStatus = if ($configCandidates.Count -gt 0) { 'discovered-manual' } else { 'missing' }
+    $detected = @($providers | Where-Object { [bool]$_['envPresent'] } | ForEach-Object { [string]$_['provider'] })
+    $overall = if (-not [bool]$info['installed']) { 'missing' } elseif ($rejected.Count -gt 0) { 'warning' } elseif ($configured.Count -gt 0) { 'healthy' } else { 'warning' }
+    $started.Stop()
+    return [ordered]@{
+        schemaVersion = 1
+        status = $overall
+        installed = [bool]$info['installed']
+        version = [string]$info['version']
+        exePath = [string]$info['exePath']
+        configPath = $configPath
+        configStatus = $configStatus
+        providersDetected = @($detected)
+        providersConfigured = @($configured.ToArray())
+        providersRejected = @($rejected.ToArray())
+        providers = $statuses
+        architecture = [string]$info['architecture']
+        wingetId = [string]$info['wingetId']
+        durationMs = [long]$started.ElapsedMilliseconds
+    }
+}
+
 function Get-BootstrapAiUsagebarConfigText {
     return @'
 [ui]
@@ -13793,6 +14053,10 @@ function Test-BootstrapAiToolConfigured {
         'ai-usagebar' {
             return ((Test-BootstrapAiUsagebarNativeConfigured) -or (Test-BootstrapAiUsagebarWslConfigured))
         }
+        'aionui' {
+            $doctor = Get-BootstrapAionUiDoctorReport
+            return ([bool]$doctor['installed'] -and @($doctor['providersConfigured']).Count -gt 0)
+        }
         default { return $false }
     }
 }
@@ -13848,6 +14112,16 @@ function Get-BootstrapAiToolStatusRows {
                 $commandPath = 'wsl.exe bash -lc ai-usagebar'
                 $status = 'configured'
             }
+        } elseif ($toolName -eq 'aionui') {
+            $doctor = Get-BootstrapAionUiDoctorReport
+            $commandPath = [string]$doctor['exePath']
+            $version = [string]$doctor['version']
+            $configured = (@($doctor['providersConfigured']).Count -gt 0)
+            if ([bool]$doctor['installed']) {
+                $status = if ($configured) { 'configured' } else { 'installed' }
+            } else {
+                $status = 'absent'
+            }
         } elseif (-not [string]::IsNullOrWhiteSpace($commandPath)) {
             $version = Get-BootstrapAiToolVersion -CatalogEntry $entry -CommandPath $commandPath
             $configured = Test-BootstrapAiToolConfigured -ToolName $toolName -ProjectRoot $ProjectRoot
@@ -13894,6 +14168,73 @@ function New-BootstrapAiToolResult {
         commandPath = $CommandPath
         version     = $Version
     }
+}
+
+function Add-BootstrapAionUiPlanField {
+    param(
+        [Parameter(Mandatory = $true)]$Result,
+        [string]$Source = 'winget'
+    )
+    $Result['source'] = $Source
+    $Result['wingetId'] = 'iOfficeAI.AionUi'
+    $Result['architecture'] = Get-BootstrapAionUiArchitecture
+    $Result['downloadUrl'] = 'https://aionui.com/download/'
+    $Result['repo'] = 'iOfficeAI/AionUi'
+    $Result['wikiUrl'] = 'https://github.com/iOfficeAI/AionUi/wiki/LLM-Configuration'
+    $Result['providerEnv'] = @(Get-BootstrapAionUiEnvProviderCandidates)
+    return $Result
+}
+
+function Install-BootstrapAionUiComponentPackage {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [AllowNull()][hashtable]$State = $null,
+        [switch]$DryRun,
+        [switch]$NoAdmin
+    )
+
+    if ($DryRun) {
+        $message = 'winget install -e --id iOfficeAI.AionUi --scope user; fallback oficial .exe somente com silent args documentados.'
+        $result = New-BootstrapAiToolResult -ToolName 'aionui' -Action 'install' -Status 'planned' -Message $message -Docs ([string]$CatalogEntry['DocsUrl'])
+        return (Add-BootstrapAionUiPlanField -Result $result -Source 'winget')
+    }
+
+    $info = Get-BootstrapAionUiInstallInfo
+    if ([bool]$info['installed']) {
+        $result = New-BootstrapAiToolResult -ToolName 'aionui' -Action 'install' -Status 'installed' -Message 'AionUI ja instalado.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath ([string]$info['exePath']) -Version ([string]$info['version'])
+        return (Add-BootstrapAionUiPlanField -Result $result -Source 'existing')
+    }
+
+    if (-not (Test-BootstrapHostIsWindows)) {
+        $result = New-BootstrapAiToolResult -ToolName 'aionui' -Action 'install' -Status 'blocked' -Message 'AionUI Windows installer requer Windows.' -Docs ([string]$CatalogEntry['DocsUrl'])
+        return (Add-BootstrapAionUiPlanField -Result $result -Source 'winget')
+    }
+
+    $winget = Get-Winget
+    if (-not $winget) {
+        $result = New-BootstrapAiToolResult -ToolName 'aionui' -Action 'install' -Status 'blocked' -Message 'winget ausente; baixe o instalador oficial em https://aionui.com/download/ ou instale winget.' -Docs ([string]$CatalogEntry['DocsUrl'])
+        return (Add-BootstrapAionUiPlanField -Result $result -Source 'official-exe')
+    }
+
+    $probePaths = @($CatalogEntry['ProbePaths'])
+    $allowFailure = [bool]$NoAdmin
+    Ensure-WingetPackage -WingetPath $winget -Id ([string]$CatalogEntry['WingetId']) -DisplayName 'AionUI' -PreferUserScope $true -AllowFailureWhenNotAdmin $allowFailure -ProbePaths $probePaths -State $State -ComponentName 'aionui'
+    $info = Get-BootstrapAionUiInstallInfo
+    if (-not [bool]$info['installed']) {
+        $status = if ($allowFailure -and -not (Test-IsAdmin)) { 'blocked' } else { 'manual' }
+        $message = 'winget concluiu ou foi pulado, mas AionUI exe nao foi encontrado; instale via download oficial ou execute elevado.'
+        $result = New-BootstrapAiToolResult -ToolName 'aionui' -Action 'install' -Status $status -Message $message -Docs ([string]$CatalogEntry['DocsUrl'])
+        return (Add-BootstrapAionUiPlanField -Result $result -Source 'winget')
+    }
+
+    $config = Set-BootstrapAionUiProviderConfig -StartOnce
+    $message = 'AionUI instalado via winget oficial. Provider config requer schema estavel; nenhuma chave foi impressa ou gravada pelo PhaseZero.'
+    if (@($config['detectedProviders']).Count -gt 0) {
+        $message = $message + (" Providers detectados no ambiente: {0}." -f ((@($config['detectedProviders']) | Sort-Object) -join ', '))
+    }
+    $result = New-BootstrapAiToolResult -ToolName 'aionui' -Action 'install' -Status 'installed' -Message $message -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath ([string]$info['exePath']) -Version ([string]$info['version'])
+    $result['configuration'] = $config
+    return (Add-BootstrapAionUiPlanField -Result $result -Source 'winget')
 }
 
 function Install-BootstrapAiNpmTool {
@@ -14525,6 +14866,14 @@ function Invoke-BootstrapAiToolAction {
         if ($name -eq 'ai-usagebar') {
             return (Set-BootstrapAiUsagebarConfig -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun)
         }
+        if ($name -eq 'aionui') {
+            $config = Set-BootstrapAionUiProviderConfig -DryRun:$DryRun -StartOnce:((-not $DryRun) -and (-not $NoAdmin))
+            $status = [string]$config['status']
+            $result = New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message ([string]$config['reason']) -Docs ([string]$entry['WikiUrl'])
+            $result['configuration'] = $config
+            $result['providerEnv'] = @(Get-BootstrapAionUiEnvProviderCandidates)
+            return $result
+        }
         return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'manual' -InstallRoot $root -ProjectRoot $project -Message 'Configuracao requer login/chave do usuario; nada foi gravado no repositorio.' -Docs ([string]$entry['DocsUrl']))
     }
 
@@ -14540,6 +14889,9 @@ function Invoke-BootstrapAiToolAction {
             'workflow-only' { return (Set-BootstrapAntigravityWorkflows -ProjectRoot $project -DryRun:$DryRun) }
             'linux-release' {
                 if ($name -eq 'ai-usagebar') { return (Install-BootstrapAiUsagebar -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            }
+            'winget-official-exe' {
+                if ($name -eq 'aionui') { return (Install-BootstrapAionUiComponentPackage -CatalogEntry $entry -DryRun:$DryRun -NoAdmin:$NoAdmin) }
             }
         }
         $status = if ($DryRun) { 'planned' } else { 'manual' }
@@ -20402,6 +20754,9 @@ function Invoke-BootstrapComponent {
         'ai-usagebar' {
             Install-BootstrapAiUsagebarComponent -State $State
         }
+        'aionui' {
+            Install-BootstrapAionUiComponent -State $State
+        }
         'claude-config' {
             Ensure-BootstrapGitCore -State $State
             Ensure-ClaudeCodeDefaults -GitBashPath $State.GitInfo.Bash
@@ -21768,6 +22123,7 @@ function New-BootstrapDoctorReport {
     $checks.Add((Get-BootstrapSecretsManifestHealth))
     $secretsDoctor = New-BootstrapSecretsDoctorReport
     $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport
+    $aionUiDoctor = Get-BootstrapAionUiDoctorReport -ValidateProviders
     $wslRepairDoctor = New-BootstrapWslRepairDoctorReport
 
     $rebootReasons = @()
@@ -21838,6 +22194,11 @@ function New-BootstrapDoctorReport {
     } catch {
         Write-Verbose $_.Exception.Message
     }
+    try {
+        if ([string]$aionUiDoctor['status'] -in @('warning','critical','blocked')) { $hasWarning = $true }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
 
     return [ordered]@{
         schemaVersion = 1
@@ -21847,6 +22208,7 @@ function New-BootstrapDoctorReport {
         checks = @($checks.ToArray())
         secrets = $secretsDoctor
         aiUsagebar = $aiUsagebarDoctor
+        aionui = $aionUiDoctor
         wslRepair = $wslRepairDoctor
         githubCliAuth = $githubCliAuth
         deck = $deckReport
@@ -22027,7 +22389,7 @@ function ConvertTo-BootstrapSupportSafeText {
     }
     $safe = $safe -replace '(?i)(sk-[A-Za-z0-9_\-]{8,})', '[redacted]'
     $safe = $safe -replace '(?i)(ghp_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})', '[redacted]'
-    $safe = $safe -replace '\b(GH_TOKEN|GITHUB_TOKEN)\b', '[redacted-env-name]'
+    $safe = $safe -replace '\b(GH_TOKEN|GITHUB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|OPENROUTER_API_KEY|DEEPSEEK_API_KEY|XAI_API_KEY|DASHSCOPE_API_KEY|QWEN_API_KEY|ZAI_API_KEY|ZAI_BASE_URL)\b', '[redacted-env-name]'
     $safe = $safe -replace '(?i)(bearer\s+)[A-Za-z0-9._\-]+', '$1[redacted]'
     $ipv4Pattern = '\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b'
     $safe = [regex]::Replace($safe, $ipv4Pattern, {
@@ -22153,6 +22515,17 @@ function New-BootstrapSupportBundle {
             $aiUsagebarDoctor = $null
         }
         if ($null -eq $aiUsagebarDoctor) { $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport }
+        $aionUiDoctor = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('aionui')) {
+                $aionUiDoctor = $DoctorReport['aionui']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['aionui']) {
+                $aionUiDoctor = $DoctorReport.aionui
+            }
+        } catch {
+            $aionUiDoctor = $null
+        }
+        if ($null -eq $aionUiDoctor) { $aionUiDoctor = Get-BootstrapAionUiDoctorReport }
         $wslRepairDoctor = $null
         try {
             if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('wslRepair')) {
@@ -22170,6 +22543,7 @@ function New-BootstrapSupportBundle {
         Write-BootstrapJsonFile -Path (Join-Path $staging 'result.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $ResultPayload -Name 'result')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'secrets-doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $secretsDoctor -Name 'secretsDoctor')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-usagebar.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiUsagebarDoctor -Name 'aiUsagebar')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'aionui.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aionUiDoctor -Name 'aionui')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'wsl-repair.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $wslRepairDoctor -Name 'wslRepair')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'deck-doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $deckReport -Name 'deckDoctor')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'deck-power.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $deckReport -Name 'power' -Default ([ordered]@{})) -Name 'deckPower')
@@ -22192,7 +22566,7 @@ function New-BootstrapSupportBundle {
         if (Test-Path -LiteralPath $DestinationPath) { Remove-Item -LiteralPath $DestinationPath -Force }
         Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $DestinationPath -Force
         $fileInfo = Get-Item -LiteralPath $DestinationPath
-        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
+        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','aionui.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
         $started.Stop()
         return [ordered]@{
             path = [string]$fileInfo.FullName

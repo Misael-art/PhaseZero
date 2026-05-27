@@ -41,7 +41,7 @@ function Invoke-SupportBootstrap {
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit(120000)) {
-        try { $process.Kill() } catch { }
+        try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
         throw "Bootstrap invocation timed out for args: $($CommandArgs -join ' ')"
     }
 
@@ -72,6 +72,7 @@ Describe 'PhaseZero support robustness track' {
         [bool]$contract.capabilities.publicBetaProfile | Should Be $true
         [bool]$contract.capabilities.steamDeckDoctor | Should Be $true
         [bool]$contract.capabilities.githubCliAgentAuth | Should Be $true
+        [bool]$contract.capabilities.aionuiIntegration | Should Be $true
         (@($contract.profileNames) -contains 'public-beta') | Should Be $true
     }
 
@@ -235,6 +236,31 @@ api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
             $json | Should Match 'inlineApiKeyPresent'
         } finally {
             if ($null -eq $oldUserProfile) { Remove-Item Env:\USERPROFILE -ErrorAction SilentlyContinue } else { $env:USERPROFILE = $oldUserProfile }
+        }
+    }
+
+    It 'reports AionUI doctor fields without exposing provider env values' {
+        $oldOpenAi = $env:OPENAI_API_KEY
+        $oldGemini = $env:GEMINI_API_KEY
+        if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { $env:OPENAI_API_KEY = 'phasezero-test-openai-doctor' }
+        if ([string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) { $env:GEMINI_API_KEY = 'phasezero-test-gemini-doctor' }
+        try {
+            $report = Get-BootstrapAionUiDoctorReport
+            $json = $report | ConvertTo-Json -Depth 10
+
+            $report.Contains('installed') | Should Be $true
+            $report.Contains('version') | Should Be $true
+            $report.Contains('exePath') | Should Be $true
+            $report.Contains('configPath') | Should Be $true
+            $report.Contains('configStatus') | Should Be $true
+            $report.Contains('providersConfigured') | Should Be $true
+            $report.Contains('providersRejected') | Should Be $true
+            [int64]$report['durationMs'] | Should BeGreaterThan -1
+            $json | Should Not Match 'phasezero-test-openai-doctor|phasezero-test-gemini-doctor'
+            $json | Should Not Match 'OPENAI_API_KEY|GEMINI_API_KEY|sk-|protectedData'
+        } finally {
+            if ($null -eq $oldOpenAi) { Remove-Item Env:\OPENAI_API_KEY -ErrorAction SilentlyContinue } else { $env:OPENAI_API_KEY = $oldOpenAi }
+            if ($null -eq $oldGemini) { Remove-Item Env:\GEMINI_API_KEY -ErrorAction SilentlyContinue } else { $env:GEMINI_API_KEY = $oldGemini }
         }
     }
 
@@ -404,6 +430,9 @@ api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
         }
         function Invoke-BootstrapDeckCommandProbe {
             param([string]$Label, [string]$FileName, [string[]]$Arguments, [int]$TimeoutMs)
+            $null = $FileName
+            $null = $Arguments
+            $null = $TimeoutMs
             return [ordered]@{ label = $Label; exitCode = 0; timedOut = $false; output = 'Power Scheme GUID: deck-balanced (Balanced)' }
         }
         function Test-BootstrapDeckAnyPath {
@@ -429,10 +458,14 @@ api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
         }
         function Invoke-BootstrapDeckCommandProbe {
             param([string]$Label, [string]$FileName, [string[]]$Arguments, [int]$TimeoutMs)
+            $null = $FileName
+            $null = $Arguments
+            $null = $TimeoutMs
             return [ordered]@{ label = $Label; exitCode = $null; timedOut = $false; output = '' }
         }
         function Test-BootstrapDeckAnyPath {
             param([string[]]$Paths)
+            $null = $Paths
             return $false
         }
 
@@ -499,6 +532,7 @@ api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
             ($bundleNames -contains 'deck-doctor.json') | Should Be $true
             ($bundleNames -contains 'secrets-doctor.json') | Should Be $true
             ($bundleNames -contains 'ai-usagebar.json') | Should Be $true
+            ($bundleNames -contains 'aionui.json') | Should Be $true
             ($bundleNames -contains 'wsl-repair.json') | Should Be $true
             ($bundleNames -contains 'deck-power.json') | Should Be $true
             ($bundleNames -contains 'deck-display.json') | Should Be $true
@@ -511,8 +545,10 @@ api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
             $allText | Should Not Match 'ghp_'
             $allText | Should Not Match 'sk-'
             $allText | Should Not Match 'sk-or-'
+            $allText | Should Not Match 'sk-ant-'
             $allText | Should Not Match 'github_pat_'
             $allText | Should Not Match 'protectedData'
+            $allText | Should Not Match 'OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|OPENROUTER_API_KEY|DEEPSEEK_API_KEY|XAI_API_KEY|DASHSCOPE_API_KEY|QWEN_API_KEY|ZAI_API_KEY'
             $allText | Should Not Match ([regex]::Escape($env:USERPROFILE))
             $allText | Should Not Match '203\.0\.113\.10'
             @(Get-ChildItem -Path $extractRoot -Recurse -File | Where-Object { $_.Name -match 'bootstrap-secrets|\.env' }).Count | Should Be 0

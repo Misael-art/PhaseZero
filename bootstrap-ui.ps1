@@ -1678,6 +1678,12 @@ function Get-UiBrush {
                         </Border>
                         <Border Style="{StaticResource Card}" Margin="0,0,8,0">
                             <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="AionUI"/>
+                                <TextBlock x:Name="HealthAionUiStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="AionUI: Ausente"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                            <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="Steam Deck"/>
                                 <TextBlock x:Name="HealthDeckStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Steam Deck: não verificado."/>
                             </StackPanel>
@@ -2576,6 +2582,7 @@ $ui = [ordered]@{
     HealthDeckStatusText  = (Get-Control 'HealthDeckStatusText')
     HealthGithubStatusText = (Get-Control 'HealthGithubStatusText')
     HealthAiUsagebarStatusText = (Get-Control 'HealthAiUsagebarStatusText')
+    HealthAionUiStatusText = (Get-Control 'HealthAionUiStatusText')
     HealthRollbackStatusText = (Get-Control 'HealthRollbackStatusText')
     HealthDoctorButton    = (Get-Control 'HealthDoctorButton')
     HealthSupportBundleButton = (Get-Control 'HealthSupportBundleButton')
@@ -3274,6 +3281,7 @@ function Refresh-LocalizedText {
     $ui.HealthDeckStatusText.Text      = $ui.Strings.HealthDeckStatus
     $ui.HealthGithubStatusText.Text    = $ui.Strings.HealthGithubStatus
     $ui.HealthAiUsagebarStatusText.Text = 'ai-usagebar: Ausente'
+    $ui.HealthAionUiStatusText.Text    = 'AionUI: Ausente'
     $ui.HealthRollbackStatusText.Text  = 'Rollback: OK'
     $ui.HealthDoctorButton.Content     = $ui.Strings.HealthDoctor
     $ui.HealthSupportBundleButton.Content = $ui.Strings.HealthSupportBundle
@@ -6020,6 +6028,20 @@ function Get-UiHealthCardStatusText {
                 }
                 return 'ai-usagebar: Ausente'
             }
+            'aionui' {
+                if ($doctor.PSObject.Properties.Name -contains 'aionui' -and $null -ne $doctor.aionui) {
+                    $aion = $doctor.aionui
+                    if (-not [bool]$aion.installed) { return 'AionUI: Ausente' }
+                    $configured = @()
+                    $rejected = @()
+                    if ($aion.PSObject.Properties.Name -contains 'providersConfigured') { $configured = @($aion.providersConfigured) }
+                    if ($aion.PSObject.Properties.Name -contains 'providersRejected') { $rejected = @($aion.providersRejected) }
+                    if ($rejected.Count -gt 0) { return ("AionUI: Atenção - {0}" -f (($rejected | Select-Object -First 3) -join ', ')) }
+                    if ($configured.Count -gt 0) { return ("AionUI: OK - {0}" -f (($configured | Select-Object -First 3) -join ', ')) }
+                    return 'AionUI: Atenção - sem providers'
+                }
+                return 'AionUI: Ausente'
+            }
             'rollback' {
                 $check = Get-UiDoctorCheckById -Result $Result -Id 'rollback-gate'
                 if ($null -eq $check) { return 'Rollback: Ausente' }
@@ -6101,6 +6123,7 @@ function Finalize-RunFromResult {
             $ui.HealthDeckStatusText.Text = Get-UiDeckStatusTextFromResult -Result $result
             $ui.HealthGithubStatusText.Text = Get-UiGithubCliStatusTextFromResult -Result $result
             $ui.HealthAiUsagebarStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'ai-usagebar'
+            $ui.HealthAionUiStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'aionui'
             $ui.HealthRollbackStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'rollback'
             $ui.HealthDoctorTextBox.Text = ($result | ConvertTo-Json -Depth 8)
         }
@@ -6566,6 +6589,7 @@ function Copy-HealthDiagnostic {
                 [string]$ui.HealthSecretsStatusText.Text,
                 [string]$ui.HealthGithubStatusText.Text,
                 [string]$ui.HealthAiUsagebarStatusText.Text,
+                [string]$ui.HealthAionUiStatusText.Text,
                 [string]$ui.HealthDeckStatusText.Text,
                 [string]$ui.HealthRollbackStatusText.Text
             ) -join [Environment]::NewLine

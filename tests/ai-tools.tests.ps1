@@ -71,7 +71,7 @@ Describe 'AI coding tool support' {
 
         $catalog = Get-BootstrapAiToolCatalog
 
-        foreach ($toolName in @('rtk','claude-code','opencode','hermes-agent','hermes-desktop','openclaw','aion-ui','antigravity-workflows','ai-usagebar')) {
+        foreach ($toolName in @('rtk','claude-code','opencode','hermes-agent','hermes-desktop','openclaw','aionui','antigravity-workflows','ai-usagebar')) {
             $catalog.Contains($toolName) | Should Be $true
             [string]$catalog[$toolName].DocsUrl | Should Match '^https://'
             [string]$catalog[$toolName].InstallSupport | Should Not Be ''
@@ -91,6 +91,17 @@ Describe 'AI coding tool support' {
         [string]$catalog['ai-usagebar'].ReleaseTag | Should Be 'v0.4.0'
         [string]$catalog['ai-usagebar'].ReleaseAssets['x86_64'].Name | Should Be 'ai-usagebar-linux-x86_64.tar.gz'
         [string]$catalog['ai-usagebar'].ReleaseAssets['x86_64'].Sha256 | Should Match '^[a-f0-9]{64}$'
+
+        [string]$catalog['aionui'].ToolName | Should Be 'aionui'
+        [string]$catalog['aionui'].DisplayName | Should Be 'AionUI'
+        [string]$catalog['aionui'].WingetId | Should Be 'iOfficeAI.AionUi'
+        [string]$catalog['aionui'].DownloadUrl | Should Be 'https://aionui.com/download/'
+        [string]$catalog['aionui'].GitHubRepo | Should Be 'iOfficeAI/AionUi'
+        [string]$catalog['aionui'].WikiUrl | Should Match 'LLM-Configuration'
+        [string]$catalog['aionui'].InstallSupport | Should Be 'winget-official-exe'
+        (@($catalog['aionui'].Architectures) -contains 'x64') | Should Be $true
+        (@($catalog['aionui'].Architectures) -contains 'arm64') | Should Be $true
+        (@($catalog['aionui'].Aliases) -contains 'aion-ui') | Should Be $true
     }
 
     It 'reports AI tool status without claiming missing tools are configured' {
@@ -168,6 +179,21 @@ Describe 'AI coding tool support' {
         (@($profiles['public-beta'].Items) -contains 'ai-usagebar') | Should Be $false
     }
 
+    It 'declares AionUI as an on-demand AI component outside safe-base' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $components = Get-BootstrapComponentCatalog
+        $profiles = Get-BootstrapProfileCatalog
+        $apps = @(Get-BootstrapOnDemandAppDefinitions)
+
+        $components.Contains('aionui') | Should Be $true
+        [string]$components['aionui'].Kind | Should Be 'aionui'
+        (@($profiles['ai'].Items) -contains 'aionui') | Should Be $true
+        (@($profiles['safe-base'].Items) -contains 'aionui') | Should Be $false
+        (@($profiles['public-beta'].Items) -contains 'aionui') | Should Be $false
+        (@($apps | Where-Object { [string]$_['id'] -eq 'app-aionui' }).Count) | Should Be 1
+    }
+
     It 'generates Antigravity workflow templates without external dependencies' {
         . $toolsScriptPath -BootstrapUiLibraryMode
 
@@ -209,6 +235,76 @@ Describe 'AI coding tool support' {
         [string]$json.action | Should Be 'validate'
         [string]$json.installRoot | Should Be $rootWithSpaces
         @($json.diagnostics).Count | Should Be 0
+    }
+
+    It 'accepts AionUI validate through install-cli with redacted JSON' {
+        $resultPath = Join-Path $script:AiToolsTestRoot 'aionui-result.json'
+        $logPath = Join-Path $script:AiToolsTestRoot 'aionui.log'
+
+        $result = Invoke-InstallCliBat -Args @('--tool','aionui','--validate','--yes','--no-admin','--install-root',$script:AiToolsTestRoot,'--result-path',$resultPath,'--log-path',$logPath)
+
+        $result.ExitCode | Should Be 0
+        ([string]::IsNullOrWhiteSpace($result.Stderr)) | Should Be $true
+        $jsonText = Get-Content -LiteralPath $resultPath -Raw
+        $json = $jsonText | ConvertFrom-Json
+        [string]$json.tool | Should Be 'aionui'
+        [string]$json.action | Should Be 'validate'
+        $jsonText | Should Not Match 'sk-|sk-or-|sk-ant-|ghp_|github_pat_|protectedData'
+        $jsonText | Should Not Match 'OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|OPENROUTER_API_KEY'
+    }
+
+    It 'plans AionUI dry-run without downloading and reports arch plus env providers without values' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $oldOpenAi = $env:OPENAI_API_KEY
+        $oldOpenRouter = $env:OPENROUTER_API_KEY
+        if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) { $env:OPENAI_API_KEY = 'phasezero-test-openai-present' }
+        if ([string]::IsNullOrWhiteSpace($env:OPENROUTER_API_KEY)) { $env:OPENROUTER_API_KEY = "phasezero-test-router-one`nphasezero-test-router-two" }
+        try {
+            $result = Invoke-BootstrapAiToolAction -ToolName 'aion-ui' -Action 'install' -InstallRoot $script:AiToolsTestRoot -ProjectRoot $repoRoot -DryRun -Yes -NoAdmin
+            $json = $result | ConvertTo-Json -Depth 10
+
+            [string]$result.tool | Should Be 'aionui'
+            [string]$result.status | Should Be 'planned'
+            [string]$result.source | Should Be 'winget'
+            [string]$result.wingetId | Should Be 'iOfficeAI.AionUi'
+            [string]$result.architecture | Should Match '^(x64|arm64)$'
+            (@($result.providerEnv | Where-Object { [string]$_['provider'] -eq 'openai' -and [bool]$_['envPresent'] }).Count) | Should Be 1
+            (@($result.providerEnv | Where-Object { [string]$_['provider'] -eq 'openrouter' -and [int]$_['keyCount'] -ge 1 }).Count) | Should Be 1
+            $json | Should Not Match 'phasezero-test-openai-present|phasezero-test-router-one|phasezero-test-router-two'
+            $json | Should Not Match 'OPENAI_API_KEY|OPENROUTER_API_KEY'
+        } finally {
+            if ($null -eq $oldOpenAi) { Remove-Item Env:\OPENAI_API_KEY -ErrorAction SilentlyContinue } else { $env:OPENAI_API_KEY = $oldOpenAi }
+            if ($null -eq $oldOpenRouter) { Remove-Item Env:\OPENROUTER_API_KEY -ErrorAction SilentlyContinue } else { $env:OPENROUTER_API_KEY = $oldOpenRouter }
+        }
+    }
+
+    It 'maps AionUI provider env candidates and preserves multi-key rotation metadata' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $names = @('OPENAI_API_KEY','ANTHROPIC_API_KEY','GEMINI_API_KEY','GOOGLE_API_KEY','OPENROUTER_API_KEY','DEEPSEEK_API_KEY','XAI_API_KEY','DASHSCOPE_API_KEY','QWEN_API_KEY','ZAI_API_KEY')
+        $old = @{}
+        foreach ($name in $names) {
+            $old[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+            if ([string]::IsNullOrWhiteSpace([string]$old[$name])) {
+                [Environment]::SetEnvironmentVariable($name, ('phasezero-test-' + $name.ToLowerInvariant()), 'Process')
+            }
+        }
+        [Environment]::SetEnvironmentVariable('OPENROUTER_API_KEY', "phasezero-test-router-one,phasezero-test-router-two`nphasezero-test-router-three", 'Process')
+        try {
+            $candidates = @(Get-BootstrapAionUiEnvProviderCandidates)
+            foreach ($provider in @('openai','anthropic','gemini','openrouter','deepseek','xai','dashscope','qwen','zai')) {
+                (@($candidates | Where-Object { [string]$_['provider'] -eq $provider -and [bool]$_['envPresent'] }).Count) | Should Be 1
+            }
+            $openrouter = @($candidates | Where-Object { [string]$_['provider'] -eq 'openrouter' } | Select-Object -First 1)
+            [int]$openrouter[0]['keyCount'] | Should Be 3
+            [bool]$openrouter[0]['rotationSupported'] | Should Be $true
+            ($candidates | ConvertTo-Json -Depth 8) | Should Not Match 'phasezero-test-|OPENROUTER_API_KEY|OPENAI_API_KEY'
+        } finally {
+            foreach ($name in $names) {
+                [Environment]::SetEnvironmentVariable($name, $old[$name], 'Process')
+            }
+        }
     }
 
     It 'rejects unknown AI tools with a non-zero exit and diagnostic' {

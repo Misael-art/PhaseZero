@@ -82,6 +82,20 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 
 ---
 
+## AionUI Execution Checklist
+
+- status: validated
+- scope: official AionUI install, env provider audit, Doctor, SupportBundle, UI health card, host validation
+- TDD added: catalog, install-cli JSON redaction, dry-run plan, env mapping multi-key, Doctor fields, bundle artifact, UI card mapping
+- files changed: bootstrap-tools.ps1, bootstrap-ui.ps1, tests/ai-tools.tests.ps1, tests/bootstrap-support-robustness.tests.ps1, tests/bootstrap-ui-launcher.tests.ps1, AGENT_EXECUTION_PLAN.md
+- host install: AionUI installed at C:\Users\misae\AppData\Local\Programs\AionUi\AionUi.exe, version 2.1.5.0, smoke process started and stayed alive.
+- provider env detected: openai, anthropic, openrouter, deepseek. Missing: gemini/google, xai, dashscope, qwen, zai. Values never printed.
+- provider config: not written. Local DB has providers table with api_key_encrypted and empty provider rows; no documented encryption/write schema, so PhaseZero blocks automatic mutation and gives manual fallback.
+- support bundle: C:\Users\misae\AppData\Local\Temp\phasezero-support_20260527_173441_23044_790ea16f.zip; scan clean; includes aionui.json.
+- validation commands: parse all 121 ps1 OK; PSScriptAnalyzer Error 0 and warning budget 705; Pester 397/397 OK; bootstrap-ui.bat -SmokeTest OK; install-cli.ps1 --tool aionui --validate --yes --no-admin OK; Doctor/SupportBundle/RepairPlan/Audit/safe-base dry-run exit 0.
+- blockers: automatic provider write blocked by AionUI encrypted key storage without stable documented schema; WSL host still reports service/AppX warning in Audit but does not hang.
+- next task: decide whether to add a documented AionUI provider-writer after upstream documents encryption/config API.
+
 ## 2. Roadmap em Fases
 
 | Fase | Janela | Objetivo | Tasks |

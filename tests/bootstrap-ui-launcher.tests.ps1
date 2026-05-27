@@ -223,13 +223,14 @@ if (-not `$match.Success) { throw 'XAML block not found' }
             'HealthSecretsStatusText',
             'HealthGithubStatusText',
             'HealthAiUsagebarStatusText',
+            'HealthAionUiStatusText',
             'HealthDeckStatusText',
             'HealthRollbackStatusText',
             'HealthCopyDiagnosticButton'
         )) {
             $raw | Should Match $controlName
         }
-        foreach ($label in @('WSL','winget','Reboot','Secrets','GitHub CLI','ai-usagebar','Steam Deck','Rollback')) {
+        foreach ($label in @('WSL','winget','Reboot','Secrets','GitHub CLI','ai-usagebar','AionUI','Steam Deck','Rollback')) {
             $raw | Should Match ([regex]::Escape($label))
         }
         foreach ($statusText in @('OK','Aten..o','Cr.tico','Ausente','Bloqueado')) {
@@ -253,6 +254,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
                 )
                 secrets = [pscustomobject]@{ providers = @([pscustomobject]@{ provider = 'openai'; status = 'present' }) }
                 aiUsagebar = [pscustomobject]@{ installed = $true; configured = $true; primaryVendor = 'openrouter' }
+                aionui = [pscustomobject]@{ installed = $true; providersConfigured = @('openai','gemini'); providersRejected = @('openrouter'); configStatus = 'manual' }
                 wslRepair = [pscustomobject]@{ status = 'blocked'; corruptionKind = 'REGDB_E_CLASSNOTREG'; recommendedAction = 'repair elevated' }
             }
         }
@@ -262,6 +264,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         (Get-UiHealthCardStatusText -Result $result -Card 'reboot') | Should Match 'Aten..o.*reboot pending'
         (Get-UiHealthCardStatusText -Result $result -Card 'secrets') | Should Match 'OK'
         (Get-UiHealthCardStatusText -Result $result -Card 'ai-usagebar') | Should Match 'OK.*openrouter'
+        (Get-UiHealthCardStatusText -Result $result -Card 'aionui') | Should Match 'Aten..o.*openrouter'
         (Get-UiHealthCardStatusText -Result $result -Card 'rollback') | Should Match 'OK.*rollback ok'
     }
 
