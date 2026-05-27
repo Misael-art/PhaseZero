@@ -24,6 +24,12 @@
     [switch]$ListApps,
     [switch]$ListComponents,
     [switch]$Doctor,
+    [switch]$SupportBundle,
+    [switch]$RepairPlan,
+    [switch]$ReleasePack,
+    [string]$ReleaseVersion = '',
+    [string]$ReleaseOutputDir = '',
+    [string]$ExecuteRepairPlan = '',
     [switch]$UiContractJson,
     [switch]$BootstrapUiLibraryMode,
     [switch]$SecretsList,
@@ -47,7 +53,9 @@
     [string]$CacheDir = '',
     [switch]$Audit,
     [switch]$AutoRollback,
-    [switch]$Repair
+    [switch]$Repair,
+    [ValidateRange(1, 3600)][int]$AuditTimeoutSeconds = 180,
+    [ValidateRange(1, 600)][int]$AuditComponentTimeoutSeconds = 30
 )
 
 $ErrorActionPreference = 'Stop'
@@ -57,13 +65,14 @@ Set-StrictMode -Version Latest
 $OutputEncoding = [Console]::OutputEncoding
 
 $script:StartTime = Get-Date
+$script:RunId = ('{0:yyyyMMdd_HHmmss}_{1}_{2}' -f $script:StartTime, $PID, ([Guid]::NewGuid().ToString('N').Substring(0, 8)))
 $script:LogPath = if ([string]::IsNullOrWhiteSpace($LogPath)) {
-    Join-Path $env:TEMP ("bootstrap-tools_{0:yyyyMMdd_HHmmss}.log" -f $script:StartTime)
+    Join-Path $env:TEMP ("bootstrap-tools_{0}.log" -f $script:RunId)
 } else {
     $LogPath
 }
 $script:ResultPath = if ([string]::IsNullOrWhiteSpace($ResultPath) -and -not [bool]$BootstrapUiLibraryMode) {
-    Join-Path $env:TEMP ("bootstrap-tools_{0:yyyyMMdd_HHmmss}.result.json" -f $script:StartTime)
+    Join-Path $env:TEMP ("bootstrap-tools_{0}.result.json" -f $script:RunId)
 } else {
     $ResultPath
 }
@@ -561,7 +570,7 @@ function Get-BootstrapChangeManifestPath {
         throw 'Get-BootstrapChangeManifestPath: DataRoot vazio apos normalizacao; defina BOOTSTRAP_DATA_ROOT ou verifique permissoes.'
     }
     $runId = Normalize-BootstrapPathSegment -Value $State.RunId
-    if ([string]::IsNullOrWhiteSpace($runId)) { $runId = $script:StartTime.ToString('yyyyMMdd_HHmmss') }
+    if ([string]::IsNullOrWhiteSpace($runId)) { $runId = $script:RunId }
     $runsDir = Join-Path -Path $root -ChildPath 'runs'
     $path = Join-Path -Path $runsDir -ChildPath (Join-Path -Path $runId -ChildPath 'changes.json')
     $State.ChangeManifestPath = $path
@@ -662,7 +671,10 @@ function New-BootstrapAuditRow {
         [Parameter(Mandatory = $true)][string]$Status,
         [string]$Detail = '',
         [string]$HowToFix = '',
-        [AllowNull()]$ComponentDef = $null
+        [AllowNull()]$ComponentDef = $null,
+        [long]$DurationMs = 0,
+        [bool]$TimedOut = $false,
+        [string]$ProbeSource = ''
     )
 
     $severityInfo = Convert-BootstrapAuditStatusToSeverity -Status $Status -ComponentDef $ComponentDef
@@ -673,6 +685,9 @@ function New-BootstrapAuditRow {
         Critical = [bool]$severityInfo.Critical
         Detail = $Detail
         HowToFix = $HowToFix
+        DurationMs = [long]([Math]::Max(0, $DurationMs))
+        TimedOut = [bool]$TimedOut
+        ProbeSource = [string]$ProbeSource
     }
 }
 
@@ -737,6 +752,8 @@ function New-BootstrapAuditSeveritySummary {
     $summary = [ordered]@{
         total = @($Rows).Count
         critical = 0
+        durationMs = 0
+        timedOut = 0
         Ready = 0
         NeedsInstall = 0
         NeedsRepair = 0
@@ -761,6 +778,23 @@ function New-BootstrapAuditSeveritySummary {
         $summary[$sev] = [int]$summary[$sev] + 1
         if ($sev -in @('NeedsInstall', 'NeedsRepair', 'RequiresRestart', 'ManualAction')) {
             $summary['critical'] = [int]$summary['critical'] + 1
+        }
+        $durationMs = 0
+        if ($row -is [System.Collections.IDictionary]) {
+            if ($row.Contains('DurationMs')) { $durationMs = [long]$row['DurationMs'] }
+            elseif ($row.Contains('durationMs')) { $durationMs = [long]$row['durationMs'] }
+            if (($row.Contains('TimedOut') -and [bool]$row['TimedOut']) -or ($row.Contains('timedOut') -and [bool]$row['timedOut'])) {
+                $summary['timedOut'] = [int]$summary['timedOut'] + 1
+            }
+        } else {
+            if ($row.PSObject.Properties['DurationMs']) { $durationMs = [long]$row.DurationMs }
+            elseif ($row.PSObject.Properties['durationMs']) { $durationMs = [long]$row.durationMs }
+            if (($row.PSObject.Properties['TimedOut'] -and [bool]$row.TimedOut) -or ($row.PSObject.Properties['timedOut'] -and [bool]$row.timedOut)) {
+                $summary['timedOut'] = [int]$summary['timedOut'] + 1
+            }
+        }
+        if ($durationMs -gt 0) {
+            $summary['durationMs'] = [long]$summary['durationMs'] + [long]$durationMs
         }
     }
 
@@ -837,13 +871,18 @@ function Invoke-BootstrapAuditMode {
     param(
         [Parameter(Mandatory = $true)]$Resolution,
         [object]$State = $null,
-        [switch]$Repair
+        [switch]$Repair,
+        [int]$TimeoutSeconds = 180,
+        [int]$ComponentTimeoutSeconds = 30
     )
     Write-Log 'Iniciando Auditoria de Integridade (Audit Mode)...'
     $results = New-Object System.Collections.Generic.List[object]
     $catalog = Get-BootstrapComponentCatalog
     $wingetExe = Get-Winget
     $wingetPresenceCache = @{}
+    $auditStartedAt = Get-Date
+    $auditDeadline = $auditStartedAt.AddSeconds([Math]::Max(1, $TimeoutSeconds))
+    $auditComponentTimeoutSeconds = [Math]::Max(1, $ComponentTimeoutSeconds)
 
     function New-AuditRow {
         param(
@@ -889,27 +928,47 @@ function Invoke-BootstrapAuditMode {
         return ''
     }
 
-    function Test-AuditWingetInstalled {
+    function Invoke-AuditWingetPresence {
         param([string]$Id)
-        if ([string]::IsNullOrWhiteSpace($Id) -or -not $wingetExe) { return $false }
+        if ([string]::IsNullOrWhiteSpace($Id) -or -not $wingetExe) {
+            return [ordered]@{ Installed = $false; TimedOut = $false; ProbeSource = ''; Detail = 'winget indisponivel.' }
+        }
         if (-not $wingetPresenceCache.ContainsKey($Id)) {
             $installed = $false
+            $timedOut = $false
+            $detail = ''
             try {
-                $cap = Invoke-WingetListIdProbe -WingetPath $wingetExe -Id $Id -TimeoutMs 8000
+                $probeTimeoutMs = [Math]::Min(8000, [Math]::Max(1000, ($auditComponentTimeoutSeconds * 1000)))
+                $cap = Invoke-WingetListIdProbe -WingetPath $wingetExe -Id $Id -TimeoutMs $probeTimeoutMs
                 $combined = ([string]$cap.stdout + "`n" + [string]$cap.stderr).Trim()
                 if ([bool]$cap.timedOut) {
                     Write-Log ("Audit: winget list timeout para {0}; tratando como nao confirmado." -f $Id) 'WARN'
                     $installed = $false
+                    $timedOut = $true
+                    $detail = ("winget list timeout para {0} em {1}ms." -f $Id, $probeTimeoutMs)
                 } else {
                     $installed = ($combined -match [regex]::Escape($Id))
+                    $detail = if ($installed) { "winget lista $Id como instalado." } else { "winget nao lista $Id como instalado." }
                 }
             } catch {
                 Write-Log ("Audit: falha ao consultar winget para {0}: {1}" -f $Id, $_.Exception.Message) 'WARN'
                 $installed = $false
+                $detail = "winget falhou para ${Id}: $($_.Exception.Message)"
             }
-            $wingetPresenceCache[$Id] = $installed
+            $wingetPresenceCache[$Id] = [ordered]@{
+                Installed = [bool]$installed
+                TimedOut = [bool]$timedOut
+                ProbeSource = 'winget-list-id'
+                Detail = [string]$detail
+            }
         }
-        return [bool]$wingetPresenceCache[$Id]
+        return $wingetPresenceCache[$Id]
+    }
+
+    function Test-AuditWingetInstalled {
+        param([string]$Id)
+        $presence = Invoke-AuditWingetPresence -Id $Id
+        return [bool]$presence.Installed
     }
 
     function Invoke-AuditVersionCommand {
@@ -1102,7 +1161,10 @@ function Invoke-BootstrapAuditMode {
 
         $detail = ($details.ToArray() -join ' | ')
         $statusProbe = $null
-        try { $statusProbe = Get-BootstrapWslStatusProbe -WslExe $wslPath } catch { $statusProbe = $null }
+        try {
+            $wslTimeoutMs = [Math]::Min(15000, [Math]::Max(1000, ($auditComponentTimeoutSeconds * 1000)))
+            $statusProbe = Get-BootstrapWslStatusProbe -WslExe $wslPath -TimeoutMs $wslTimeoutMs
+        } catch { $statusProbe = $null }
         if ($statusProbe) {
             $statusText = [string]($statusProbe.stdout + "`n" + $statusProbe.stderr)
             if (Test-WslCorruptionText -Text $statusText) {
@@ -1171,6 +1233,9 @@ function Invoke-BootstrapAuditMode {
             }
             'opencode' {
                 return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'opencode' -Args @('--version') -InstalledPathCandidates @('%USERPROFILE%\.opencode\bin\opencode.exe'))
+            }
+            'ai-usagebar' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'ai-usagebar' -Args @('--help') -InstalledPathCandidates @('%LOCALAPPDATA%\PhaseZero\ai-tools\bin\ai-usagebar.exe'))
             }
             'openclaw' {
                 return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'openclaw' -Args @('--version') -InstalledPathCandidates @('%APPDATA%\npm\openclaw.cmd', '%APPDATA%\npm\openclaw.ps1'))
@@ -1350,22 +1415,34 @@ function Invoke-BootstrapAuditMode {
     }
 
     foreach ($comp in @($Resolution.ResolvedComponents)) {
+        $remainingMs = [int]([Math]::Max(0, ($auditDeadline - (Get-Date)).TotalMilliseconds))
+        if ($remainingMs -le 0) {
+            Write-Log ("Audit: timeout global atingido antes de {0}; encerrando restante." -f $comp) 'WARN'
+            $results.Add((New-BootstrapAuditRow -Component $comp -Status 'Unknown' -Detail ("Audit timeout global apos {0}s antes de auditar componente." -f $TimeoutSeconds) -HowToFix 'Rode novamente com -AuditTimeoutSeconds maior ou audite menos componentes.' -DurationMs 0 -TimedOut $true -ProbeSource 'audit-timeout'))
+            continue
+        }
+        $componentStopwatch = [Diagnostics.Stopwatch]::StartNew()
         $def = $catalog[$comp]
         if (-not $def) {
             Write-Log ("Audit: Componente {0} -> Unknown (sem entrada no catalogo)" -f $comp) 'WARN'
-            $results.Add((New-AuditRow -Component $comp -Status 'Unknown' -Detail 'Sem definicao no catalogo de componentes.' -HowToFix 'Revise o catalogo de componentes do bootstrap.'))
+            $componentStopwatch.Stop()
+            $results.Add((New-BootstrapAuditRow -Component $comp -Status 'Unknown' -Detail 'Sem definicao no catalogo de componentes.' -HowToFix 'Revise o catalogo de componentes do bootstrap.' -DurationMs $componentStopwatch.ElapsedMilliseconds -ProbeSource 'catalog'))
             continue
         }
 
         $status = 'Unknown'
         $detail = ''
         $howToFix = ''
+        $probeSource = ''
+        $probeTimedOut = $false
 
         $specializedRow = Get-AuditSpecializedRow -ComponentName $comp
         if ($specializedRow) {
             $status = [string]$specializedRow.Status
             $detail = [string]$specializedRow.Detail
             $howToFix = [string]$specializedRow.HowToFix
+            if ($specializedRow.PSObject.Properties['ProbeSource']) { $probeSource = [string]$specializedRow.ProbeSource }
+            if ($specializedRow.PSObject.Properties['TimedOut']) { $probeTimedOut = [bool]$specializedRow.TimedOut }
         }
 
         if ($status -eq 'Unknown' -and $def.VersionCheckCommand) {
@@ -1402,10 +1479,19 @@ function Invoke-BootstrapAuditMode {
                     $detail = 'ProbePaths encontrado.'
                 } else {
                     $wingetId = [string]($def | Select-Object -ExpandProperty Id -ErrorAction SilentlyContinue)
-                    if (-not [string]::IsNullOrWhiteSpace($wingetId) -and $wingetExe -and (Test-AuditWingetInstalled -Id $wingetId)) {
+                    if (-not [string]::IsNullOrWhiteSpace($wingetId) -and $wingetExe) {
+                        $presence = Invoke-AuditWingetPresence -Id $wingetId
+                        $probeSource = [string]$presence.ProbeSource
+                        $probeTimedOut = [bool]$presence.TimedOut
+                    }
+                    if (-not [string]::IsNullOrWhiteSpace($wingetId) -and $wingetExe -and -not $probeTimedOut -and [bool]$presence.Installed) {
                         $status = 'GhostInstall'
                         $detail = ('ProbePaths ausente em disco, mas winget lista {0} como instalado. Possivel ghost install.' -f $wingetId)
                         $howToFix = 'Reinstale o pacote via winget ou remova o registro fantasma com winget uninstall.'
+                    } elseif ($probeTimedOut) {
+                        $status = 'Unknown'
+                        $detail = [string]$presence.Detail
+                        $howToFix = 'Rode novamente ou use -AuditComponentTimeoutSeconds maior se o winget estiver lento.'
                     } else {
                         $status = 'Missing'
                         $detail = 'Nenhum ProbePaths encontrado.'
@@ -1460,10 +1546,14 @@ function Invoke-BootstrapAuditMode {
         if ($status -eq 'Unknown' -and [string]$def.Kind -eq 'winget' -and -not [string]::IsNullOrWhiteSpace([string]$def.Id) -and $wingetExe) {
             try {
                 $wid = [string]$def.Id
-                if (-not $wingetPresenceCache.ContainsKey($wid)) {
-                    $wingetPresenceCache[$wid] = Test-WingetPackageInstalled -WingetPath $wingetExe -Id $wid
-                }
-                if ([bool]$wingetPresenceCache[$wid]) {
+                $presence = Invoke-AuditWingetPresence -Id $wid
+                $probeSource = [string]$presence.ProbeSource
+                $probeTimedOut = [bool]$presence.TimedOut
+                if ($probeTimedOut) {
+                    $status = 'Unknown'
+                    $detail = [string]$presence.Detail
+                    $howToFix = 'Rode novamente ou use -AuditComponentTimeoutSeconds maior se o winget estiver lento.'
+                } elseif ([bool]$presence.Installed) {
                     $probeScript = $def | Select-Object -ExpandProperty ProbePaths -ErrorAction SilentlyContinue
                     $probeList = @()
                     if ($probeScript) { $probeList = @($probeScript) }
@@ -1493,7 +1583,7 @@ function Invoke-BootstrapAuditMode {
             }
         }
 
-        if ($status -eq 'Unknown') {
+        if ($status -eq 'Unknown' -and -not $probeTimedOut) {
             $status = 'UnsupportedAudit'
             $detail = ('Sem heuristica de auditoria para Kind={0}.' -f [string]$def.Kind)
             $howToFix = 'Nenhuma correcao automatica sugerida para este tipo de componente; valide manualmente ou adicione heuristica de auditoria ao catalogo.'
@@ -1512,7 +1602,13 @@ function Invoke-BootstrapAuditMode {
             }
         }
 
-        $results.Add((New-BootstrapAuditRow -Component $comp -Status $status -Detail $detail -HowToFix $howToFix -ComponentDef $def))
+        $componentStopwatch.Stop()
+        $durationMs = [long]$componentStopwatch.ElapsedMilliseconds
+        if ($durationMs -gt ($auditComponentTimeoutSeconds * 1000)) {
+            $probeTimedOut = $true
+            if ([string]::IsNullOrWhiteSpace($probeSource)) { $probeSource = 'component-timeout' }
+        }
+        $results.Add((New-BootstrapAuditRow -Component $comp -Status $status -Detail $detail -HowToFix $howToFix -ComponentDef $def -DurationMs $durationMs -TimedOut:$probeTimedOut -ProbeSource $probeSource))
     }
 
     return $results
@@ -1628,7 +1724,6 @@ function Invoke-NativeWithLog {
                 $v = [string]$_
                 if ($v -match '[\s"]') { '"' + ($v -replace '"', '\"') + '"' } else { $v }
             }) -join ' ')
-    $timedOut = $false
     $exitCode = -1
     $proc = $null
 
@@ -1649,7 +1744,6 @@ function Invoke-NativeWithLog {
         $stderrTask = $proc.StandardError.ReadToEndAsync()
 
         if (-not $proc.WaitForExit($TimeoutMs)) {
-            $timedOut = $true
             Write-Log ("Comando nativo excedeu timeout ({0}ms): {1} {2}. Encerrando processo." -f $TimeoutMs, $Exe, $argumentString) 'WARN'
             try { $proc.Kill() } catch { }
             try { $null = $proc.WaitForExit(5000) } catch { }
@@ -5860,7 +5954,7 @@ function Get-BootstrapCodexDesktopLatestLog {
 
     if (-not (Test-Path -LiteralPath $logRoot)) { return $result }
 
-    $log = @(Get-ChildItem -LiteralPath $logRoot -Recurse -File -Filter 'codex-desktop-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+    $log = @(Get-ChildItem -LiteralPath $logRoot -File -Filter 'codex-desktop-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
     if ($log.Count -eq 0) { return $result }
 
     $result['path'] = [string]$log[0].FullName
@@ -6508,6 +6602,17 @@ function Ensure-Hermes {
     $result = Install-BootstrapHermesAgentWsl -CatalogEntry $catalog['hermes-agent'] -InstallRoot (Get-BootstrapAiInstallRoot -InstallRoot '') -ProjectRoot (Get-Location).Path
     Write-Log ("Hermes Agent: {0} ({1})" -f [string]$result.status, [string]$result.version)
     Ensure-HermesProjectOpenCloudConfig -State $State
+}
+
+function Install-BootstrapAiUsagebarComponent {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    $null = $State
+    $catalog = Get-BootstrapAiToolCatalog
+    $result = Install-BootstrapAiUsagebar -CatalogEntry $catalog['ai-usagebar'] -InstallRoot (Get-BootstrapAiInstallRoot -InstallRoot '') -ProjectRoot (Get-Location).Path
+    Write-Log ("ai-usagebar: {0} ({1}) {2}" -f [string]$result.status, [string]$result.version, [string]$result.message)
+    if ([string]$result.status -eq 'blocked') {
+        throw ([string]$result.message)
+    }
 }
 
 function Ensure-RepoClone {
@@ -7603,7 +7708,7 @@ function Get-BootstrapDefaultHostHealthMode {
 }
 
 function Get-BootstrapHostHealthRoot {
-    return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'host-health') ('{0:yyyyMMdd_HHmmss}' -f $script:StartTime))
+    return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'host-health') $script:RunId)
 }
 
 function Get-BootstrapAppTuningModes {
@@ -7622,7 +7727,7 @@ function Normalize-BootstrapAppTuningMode {
 }
 
 function Get-BootstrapAppTuningRoot {
-    return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'app-tuning') ('{0:yyyyMMdd_HHmmss}' -f $script:StartTime))
+    return (Join-Path (Join-Path (Get-BootstrapDataRoot) 'app-tuning') $script:RunId)
 }
 
 function Get-BootstrapOnDemandCategoryById {
@@ -7656,6 +7761,7 @@ function Get-BootstrapOnDemandCategoryById {
         'claude-desktop' { return 'ia' }
         'claude-code' { return 'ia' }
         'opencode' { return 'ia' }
+        'ai-usagebar' { return 'ia' }
         'codex-cli' { return 'ia' }
         'gemini-cli' { return 'ia' }
         'kilo-cli' { return 'ia' }
@@ -7752,6 +7858,7 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'claude-desktop' -DisplayName 'Claude Desktop' -Components @('claude-desktop') -TargetApps @('claude') -ProbePaths @('$env:LOCALAPPDATA\AnthropicClaude\Claude.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'claude-code' -DisplayName 'Claude Code' -Components @('claude-code') -TargetApps @('claude code') -ProbePaths @('$env:APPDATA\npm\claude.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'opencode' -DisplayName 'OpenCode CLI' -Components @('opencode') -TargetApps @('opencode') -ProbePaths @('$env:USERPROFILE\.opencode\bin\opencode.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'ai-usagebar' -DisplayName 'AI Usagebar' -Components @('ai-usagebar') -TargetApps @('ai usagebar','usagebar','waybar ai usage') -ProbePaths @('$env:LOCALAPPDATA\PhaseZero\ai-tools\bin\ai-usagebar.exe','$env:APPDATA\ai-usagebar\config\config.toml','$env:USERPROFILE\.config\ai-usagebar\config.toml') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'codex-cli' -DisplayName 'Codex CLI' -Components @('codex-cli') -TargetApps @('codex') -ProbePaths @('$env:APPDATA\npm\codex.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'gemini-cli' -DisplayName 'Gemini CLI' -Components @('gemini-cli') -TargetApps @('gemini') -ProbePaths @('$env:APPDATA\npm\gemini.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'kilo-cli' -DisplayName 'Kilo CLI' -Components @('kilo-cli') -TargetApps @('kilo','kilocode') -ProbePaths @('$env:APPDATA\npm\kilo.cmd','$env:APPDATA\npm\kilocode.cmd','$env:USERPROFILE\.local\share\kilo\auth.json') -Profiles @('desktop','dev')
@@ -7890,6 +7997,7 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'ai-agent-byok-config'; category = 'dev-ai'; displayName = 'AI agent BYOK config'; description = 'Sincroniza manifesto de APIs para OpenCode, OpenClaw, Hermes, Kilo, Cline e Roo.'; targetApps = @('opencode','openclaw','hermes','kilo','kilocode','cline','roo code'); probePaths = @('$env:USERPROFILE\.local\share\opencode\auth.json','$env:USERPROFILE\.openclaw\openclaw.json','$env:USERPROFILE\.local\share\kilo\auth.json','$env:APPDATA\Code\User\globalStorage'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file') }
         [ordered]@{ id = 'ai-agent-workflow-context-pack'; category = 'dev-ai'; displayName = 'AI workflow context pack'; description = 'Gera regras seguras sobre task splitting, hygiene de contexto, QA e modelos locais sem acao destrutiva.'; targetApps = @('opencode','openclaw','hermes','kilo','cline','roo code','continue'); probePaths = @('AGENTS.md','.clinerules','.continue'); requiresAdmin = $false; defaultMode = 'recommended'; riskTier = 'conservative'; securityImpact = $false; rollbackScope = 'backup-file'; safetyNotes = @('Config/rules apenas', 'Nao executa comandos de sistema', 'Nao roteia Gemini fora do Antigravity'); profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file'); installComponents = @('agent-skills') }
         [ordered]@{ id = 'codex-cli-env'; category = 'dev-ai'; displayName = 'Codex CLI env'; description = 'Audita variaveis/chaves para Codex CLI e apps de agente.'; targetApps = @('codex cli','codex'); probePaths = @('$env:APPDATA\npm\codex.cmd','$env:LOCALAPPDATA\Microsoft\WindowsApps\codex.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit'); rollback = @('manual') }
+        [ordered]@{ id = 'github-cli-agent-auth'; category = 'dev-ai'; displayName = 'GitHub CLI agent auth'; description = 'Propaga token GitHub validado para configs de agentes como env de contexto, sem gravar GH_TOKEN global do Windows.'; targetApps = @('github cli','gh','codex','claude code','opencode','continue','vscode'); probePaths = @('$env:ProgramFiles\GitHub CLI\gh.exe','$env:LOCALAPPDATA\Programs\GitHub CLI\gh.exe','$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GitHub.cli_*\gh.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual'); installComponents = @('github-cli','bootstrap-secrets') }
         [ordered]@{ id = 'codex-desktop-repair'; category = 'dev-ai'; displayName = 'Codex Desktop repair'; description = 'Audita e repara EPIPE/0xC0000135 do Codex Desktop: estado WSL, update stale, logs e config.'; targetApps = @('codex desktop','openai codex','codex'); probePaths = @('$env:LOCALAPPDATA\Packages\OpenAI.Codex_2p2nqsd0c76g0','$env:USERPROFILE\.codex\.codex-global-state.json','$env:USERPROFILE\.codex\config.toml'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('audit','repair','config-file'); rollback = @('backup-file','manual') }
         [ordered]@{ id = 'antigravity-settings'; category = 'dev-ai'; displayName = 'Antigravity settings'; description = 'Ativa env OpenAI-compatible (ex: Kimi/Moonshot) para uso via Antigravity e CLIs.'; targetApps = @('antigravity'); probePaths = @('$env:LOCALAPPDATA\Programs\Antigravity'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('manual') }
         [ordered]@{ id = 'openclaude-cli-env'; category = 'dev-ai'; displayName = 'OpenClaude CLI env'; description = 'Prepara env OpenAI-compatible (OPENAI_* + CLAUDE_CODE_USE_OPENAI) para OpenClaude CLI.'; targetApps = @('openclaude'); probePaths = @('$env:APPDATA\npm\openclaude.cmd','$env:APPDATA\npm\openclaude.ps1'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('manual') }
@@ -8270,6 +8378,7 @@ function Get-BootstrapAppTuningInstallComponents {
         'opencode-auth-config' = @('opencode')
         'ai-agent-byok-config' = @('bootstrap-secrets','vscode-extensions','opencode','openclaw','hermes','kilo-cli')
         'codex-cli-env' = @('codex-cli')
+        'github-cli-agent-auth' = @('github-cli','bootstrap-secrets')
         'codex-desktop-repair' = @('codex-installer','codex-cli','vcpp-redist')
         'antigravity-settings' = @('antigravity')
         'openclaude-cli-env' = @('openclaude-cli')
@@ -8527,9 +8636,7 @@ function Get-BootstrapSecretsManifestCredentialCount {
     if (-not (Test-Path $Path)) { return 0 }
 
     try {
-        $raw = Get-Content -Path $Path -Raw -ErrorAction Stop
-        if ([string]::IsNullOrWhiteSpace($raw)) { return 0 }
-        $data = ConvertTo-BootstrapHashtable -InputObject ($raw | ConvertFrom-Json -ErrorAction Stop)
+        $data = Read-BootstrapJsonFile -Path $Path
         if (-not ($data -is [hashtable]) -or -not ($data.ContainsKey('providers')) -or -not ($data['providers'] -is [hashtable])) {
             return 0
         }
@@ -11026,9 +11133,9 @@ function Get-BootstrapSecretsData {
 
     if (Test-Path $path) {
         try {
-            $current = Get-Content -Path $path -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop
+            $current = Read-BootstrapJsonFile -Path $path
         } catch {
-            Write-Log "Falha ao ler bootstrap-secrets.json. O arquivo sera reformatado com os defaults atuais: $path" 'WARN'
+            Write-Log "Falha ao ler bootstrap-secrets.json. O arquivo sera reformatado com os defaults atuais: $path ($($_.Exception.Message))" 'WARN'
         }
     }
 
@@ -11872,6 +11979,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['openclaude-cli'] = New-BootstrapComponentDefinition -Name 'openclaude-cli' -Description 'OpenClaude CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@gitlawb/openclaude'; DisplayName = 'OpenClaude CLI (@gitlawb/openclaude)'; CommandNames = @('openclaude') }
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes Agent via WSL2 + OpenCloud config no projeto.' -DependsOn @('wsl-core') -Kind 'hermes'
+    $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar Waybar/TUI por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
     $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
     $catalog['bootstrap-mcps'] = New-BootstrapComponentDefinition -Name 'bootstrap-mcps' -Description 'Instala dependencias locais dos MCPs gerenciados e registra o estado da automacao.' -DependsOn @('bootstrap-secrets', 'node-core', 'python-core') -Kind 'bootstrap-mcps'
     $catalog['vscode-extensions'] = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'Instala e configura extensões do VS Code e VS Code Insiders quando presentes.' -DependsOn @('bootstrap-secrets', 'vscode') -Kind 'vscode-extensions'
@@ -11936,6 +12044,13 @@ function Get-BootstrapComponentCatalog {
     $catalog['mica-for-everyone'] = New-BootstrapComponentDefinition -Name 'mica-for-everyone' -Description 'Camada visual do Windows mais limpa e consistente.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MicaForEveryone.MicaForEveryone'; DisplayName = 'Mica For Everyone'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Deixa a interface do Windows menos carregada para uso no Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Mica For Everyone\MicaForEveryone.exe", "$env:ProgramFiles\Mica For Everyone\MicaForEveryone.exe") }
     $catalog['compactgui'] = New-BootstrapComponentDefinition -Name 'compactgui' -Description 'Compacta instalacoes grandes para economizar espaco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'IridiumIO.CompactGUI'; DisplayName = 'CompactGUI'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Reduz pressao de storage no SSD interno do Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\CompactGUI\CompactGUI.exe", "$env:ProgramFiles\CompactGUI\CompactGUI.exe") }
     $catalog['treesize-free'] = New-BootstrapComponentDefinition -Name 'treesize-free' -Description 'Analise rapida de uso de disco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JAMSoftware.TreeSize.Free'; DisplayName = 'TreeSize Free'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra rapidamente o que esta consumindo espaco em SSD e SD.'; ProbePaths = @("$env:ProgramFiles\TreeSize Free\TreeSizeFree.exe", "${env:ProgramFiles(x86)}\TreeSize Free\TreeSizeFree.exe") }
+    $catalog['sysinternals-suite'] = New-BootstrapComponentDefinition -Name 'sysinternals-suite' -Description 'Sysinternals Suite para diagnostico local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.Sysinternals.Suite'; DisplayName = 'Sysinternals Suite'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega Process Explorer, Process Monitor, Autoruns, TCPView e ferramentas essenciais de suporte.'; ProbePaths = @("$env:ProgramFiles\SysinternalsSuite\Procmon.exe", "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Microsoft.Sysinternals.Suite_*\Procmon.exe") }
+    $catalog['crystaldiskinfo'] = New-BootstrapComponentDefinition -Name 'crystaldiskinfo' -Description 'CrystalDiskInfo para saude SMART/NVMe.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'CrystalDewWorld.CrystalDiskInfo'; DisplayName = 'CrystalDiskInfo'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a diagnosticar disco/SSD antes de culpar instaladores ou WSL.'; ProbePaths = @("$env:ProgramFiles\CrystalDiskInfo\DiskInfo64.exe", "$env:ProgramFiles\CrystalDiskInfo\DiskInfo.exe", "${env:LOCALAPPDATA}\Programs\CrystalDiskInfo\DiskInfo64.exe") }
+    $catalog['hwinfo64'] = New-BootstrapComponentDefinition -Name 'hwinfo64' -Description 'HWiNFO para inventario e sensores.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'REALiX.HWiNFO'; DisplayName = 'HWiNFO'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Coleta inventario de hardware e sensores para suporte local sem SaaS.'; ProbePaths = @("$env:ProgramFiles\HWiNFO64\HWiNFO64.exe", "${env:LOCALAPPDATA}\Programs\HWiNFO64\HWiNFO64.exe") }
+    $catalog['wiztree'] = New-BootstrapComponentDefinition -Name 'wiztree' -Description 'WizTree para analise rapida de storage.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AntibodySoftware.WizTree'; DisplayName = 'WizTree'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra consumo de disco rapidamente durante suporte.'; ProbePaths = @("$env:ProgramFiles\WizTree\WizTree64.exe", "$env:ProgramFiles\WizTree\WizTree.exe", "${env:LOCALAPPDATA}\Programs\WizTree\WizTree64.exe") }
+    $catalog['windirstat'] = New-BootstrapComponentDefinition -Name 'windirstat' -Description 'WinDirStat para mapa visual de storage.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'WinDirStat.WinDirStat'; DisplayName = 'WinDirStat'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Alternativa conhecida para explicar consumo de disco em suporte.'; ProbePaths = @("$env:ProgramFiles\WinDirStat\windirstat.exe", "${env:ProgramFiles(x86)}\WinDirStat\windirstat.exe") }
+    $catalog['latencymon'] = New-BootstrapComponentDefinition -Name 'latencymon' -Description 'LatencyMon para diagnostico de DPC/latencia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Resplendence.LatencyMon'; DisplayName = 'LatencyMon'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a investigar stutter, audio dropouts e latencia em Deck/desktop.'; ProbePaths = @("$env:ProgramFiles\LatencyMon\LatMon.exe", "${env:ProgramFiles(x86)}\LatencyMon\LatMon.exe") }
+    $catalog['windows-repair-toolbox'] = New-BootstrapComponentDefinition -Name 'windows-repair-toolbox' -Description 'Windows Repair Toolbox para recuperacao assistida.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Windows Repair Toolbox'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Ferramenta poderosa de recuperacao; fica manual para evitar baixar/executar utilitarios de terceiros sem revisao.'; Instructions = 'Instale e use manualmente somente durante atendimento de suporte confiavel.' }
     $catalog['obs-studio'] = New-BootstrapComponentDefinition -Name 'obs-studio' -Description 'Captura e producao de video.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'OBSProject.OBSStudio'; DisplayName = 'OBS Studio'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre captura de gameplay e producao de conteudo no Deck.'; ProbePaths = @("$env:ProgramFiles\obs-studio\bin\64bit\obs64.exe", "${env:ProgramFiles(x86)}\obs-studio\bin\32bit\obs32.exe") }
     $catalog['driver-store-explorer'] = New-BootstrapComponentDefinition -Name 'driver-store-explorer' -Description 'Backup e auditoria do driver store.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'lostindark.DriverStoreExplorer'; DisplayName = 'Driver Store Explorer'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a preservar drivers especificos do Deck para reinstalacao offline.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Driver Store Explorer\Rapr.exe", "$env:ProgramFiles\Driver Store Explorer\Rapr.exe") }
     $catalog['lossless-scaling'] = New-BootstrapComponentDefinition -Name 'lossless-scaling' -Description 'Frame generation pago e otimizado para jogos no Deck.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Lossless Scaling'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Entrega ganho real de fluidez, mas exige compra/licenca no Steam.'; ProbePaths = @('${env:ProgramFiles(x86)}\Steam\steamapps\appmanifest_993090.acf'); Instructions = 'Instale pelo Steam com licença válida antes de rodar novamente o perfil ou exclua o componente.' }
@@ -11974,14 +12089,16 @@ function Get-BootstrapProfileCatalog {
 
     $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['safe-base'] = New-BootstrapProfileDefinition -Name 'safe-base' -Description 'Base segura e pequena para maquina limpa; sem desktops de IA, containers, jogos ou tuning.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp')
+    $catalog['public-beta'] = New-BootstrapProfileDefinition -Name 'public-beta' -Description 'Primeira instalacao confiavel para beta publico; maior que safe-base, sem WSL/Docker/IA pesada/gaming.' -Items @('safe-base', 'powershell', 'powertoys', 'brave', 'bootstrap-secrets', 'vscode', 'vscode-extensions', 'bootstrap-mcps')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores e utilitarios.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'ai-usagebar', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
     $catalog['utilities'] = New-BootstrapProfileDefinition -Name 'utilities' -Description 'Downloads e ferramentas de poweruser.' -Items @('jdownloader', 'fan-control', 'mem-reduct', 'raycast', 'sparkle', 'google-app-desktop')
+    $catalog['support-tools'] = New-BootstrapProfileDefinition -Name 'support-tools' -Description 'Ferramentas opcionais de diagnostico e atendimento local.' -Items @('sysinternals-suite', 'crystaldiskinfo', 'hwinfo64', 'wiztree', 'windirstat', 'latencymon', 'driver-store-explorer', 'windows-repair-toolbox')
     $catalog['creator'] = New-BootstrapProfileDefinition -Name 'creator' -Description 'Ferramentas de criação e mídia.' -Items @('autohotkey', 'blender', 'ffmpeg')
     $catalog['game-dev'] = New-BootstrapProfileDefinition -Name 'game-dev' -Description 'Toolchain de jogos e compilação.' -Items @('unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community')
     $catalog['gaming'] = New-BootstrapProfileDefinition -Name 'gaming' -Description 'Steam e ferramentas relacionadas.' -Items @('steam', 'steamcmd')
@@ -12109,7 +12226,15 @@ function Get-BootstrapUiContract {
     $rotationScheduleState = Get-BootstrapRotationScheduledTaskState
 
     return [ordered]@{
-        schemaVersion = '1.0.0'
+        schemaVersion = '1.4.0'
+        capabilities = [ordered]@{
+            doctor = $true
+            supportBundle = $true
+            repairPlan = $true
+            publicBetaProfile = ($profiles.Contains('public-beta'))
+            steamDeckDoctor = $true
+            githubCliAgentAuth = $true
+        }
         profileNames = @($profiles.Keys)
         componentNames = @($components.Keys)
         hostHealthModes = @(Get-BootstrapHostHealthModes)
@@ -12515,7 +12640,7 @@ function New-BootstrapState {
     return @{
         Selection = $Selection
         DryRun = $IsDryRun
-        RunId = $script:StartTime.ToString('yyyyMMdd_HHmmss')
+        RunId = $script:RunId
         WorkspaceRoot = $wsRoot
         CloneBaseDir = $cloneRoot
         EnableClaudeCodeProjectMcps = $false
@@ -12898,10 +13023,83 @@ function Ensure-ChocolateyPackage {
     }
 }
 
+function Test-BootstrapSecretsManifestPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    try {
+        return ((Split-Path -Path $Path -Leaf) -ieq 'bootstrap-secrets.json')
+    } catch {
+        return $false
+    }
+}
+
+function Test-BootstrapSecretsProtectedEnvelope {
+    param([AllowNull()]$Value)
+
+    $map = ConvertTo-BootstrapHashtable -InputObject $Value
+    if (-not ($map -is [hashtable])) { return $false }
+    if (-not $map.ContainsKey('protectedData')) { return $false }
+    $metadata = if ($map.ContainsKey('metadata')) { ConvertTo-BootstrapHashtable -InputObject $map['metadata'] } else { @{} }
+    if (-not ($metadata -is [hashtable])) { return $false }
+    return ([string]$metadata['protection'] -eq 'dpapi-current-user')
+}
+
+function Protect-BootstrapDpapiText {
+    param([Parameter(Mandatory = $true)][string]$Text)
+
+    try {
+        Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        $protected = [System.Security.Cryptography.ProtectedData]::Protect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+        return [Convert]::ToBase64String($protected)
+    } catch {
+        throw "DPAPI indisponivel para proteger bootstrap-secrets.json: $($_.Exception.Message)"
+    }
+}
+
+function Unprotect-BootstrapDpapiText {
+    param([Parameter(Mandatory = $true)][string]$ProtectedData)
+
+    try {
+        Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+        $bytes = [Convert]::FromBase64String($ProtectedData)
+        $plain = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes, $null, [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+        return [System.Text.Encoding]::UTF8.GetString($plain)
+    } catch {
+        throw "DPAPI indisponivel ou envelope de segredos corrompido: $($_.Exception.Message)"
+    }
+}
+
+function Protect-BootstrapSecretsManifestData {
+    param([Parameter(Mandatory = $true)]$Data)
+
+    if (Test-BootstrapSecretsProtectedEnvelope -Value $Data) { return $Data }
+    $plainJson = [string]((ConvertTo-BootstrapObjectGraph -InputObject $Data) | ConvertTo-Json -Depth 30)
+    return [ordered]@{
+        '$schema' = 'https://bootstrap.local/schemas/bootstrap-secrets-protected.schema.json'
+        metadata = [ordered]@{
+            version = 3
+            protection = 'dpapi-current-user'
+            protectedAt = (Get-Date).ToString('o')
+        }
+        protectedData = (Protect-BootstrapDpapiText -Text $plainJson)
+    }
+}
+
+function Unprotect-BootstrapSecretsManifestData {
+    param([Parameter(Mandatory = $true)]$Envelope)
+
+    $map = ConvertTo-BootstrapHashtable -InputObject $Envelope
+    if (-not (Test-BootstrapSecretsProtectedEnvelope -Value $map)) { return $map }
+    $plainJson = Unprotect-BootstrapDpapiText -ProtectedData ([string]$map['protectedData'])
+    return (ConvertTo-BootstrapHashtable -InputObject (ConvertFrom-BootstrapJsonText -Text $plainJson))
+}
+
 function Write-BootstrapJsonFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
-        [Parameter(Mandatory = $true)]$Value
+        [AllowNull()][Parameter(Mandatory = $true)]$Value
     )
 
     $parent = Split-Path -Path $Path -Parent
@@ -12909,7 +13107,16 @@ function Write-BootstrapJsonFile {
         $null = New-Item -Path $parent -ItemType Directory -Force
     }
 
-    $json = [string]((ConvertTo-BootstrapObjectGraph -InputObject $Value) | ConvertTo-Json -Depth 12)
+    $valueToWrite = $Value
+    if (Test-BootstrapSecretsManifestPath -Path $Path) {
+        $valueToWrite = Protect-BootstrapSecretsManifestData -Data $Value
+    }
+
+    if ($null -eq $valueToWrite) {
+        $json = 'null'
+    } else {
+        $json = [string]((ConvertTo-BootstrapObjectGraph -InputObject $valueToWrite) | ConvertTo-Json -Depth 12)
+    }
     $utf8 = New-Object System.Text.UTF8Encoding($false)
 
     Write-BootstrapAtomicText -Path $Path -Content $json -Encoding $utf8
@@ -13082,7 +13289,11 @@ function Read-BootstrapJsonFile {
         return $null
     }
 
-    return (ConvertTo-BootstrapHashtable -InputObject (ConvertFrom-BootstrapJsonText -Text (Get-Content -Path $Path -Raw -Encoding utf8)))
+    $parsed = ConvertTo-BootstrapHashtable -InputObject (ConvertFrom-BootstrapJsonText -Text (Get-Content -Path $Path -Raw -Encoding utf8))
+    if (Test-BootstrapSecretsManifestPath -Path $Path -and (Test-BootstrapSecretsProtectedEnvelope -Value $parsed)) {
+        return (Unprotect-BootstrapSecretsManifestData -Envelope $parsed)
+    }
+    return $parsed
 }
 
 function Get-BootstrapAiToolCatalog {
@@ -13185,6 +13396,22 @@ function Get-BootstrapAiToolCatalog {
         InstallSupport = 'workflow-only'
         Notes          = 'Gera templates locais. Sem CLI/formato oficial persistente confirmado.'
     }
+    $catalog['ai-usagebar'] = [ordered]@{
+        ToolName       = 'ai-usagebar'
+        DisplayName    = 'AI Usagebar'
+        CommandNames   = @('ai-usagebar', 'ai-usagebar-tui')
+        VersionArgs    = @('--help')
+        DocsUrl        = 'https://github.com/akitaonrails/ai-usagebar'
+        GitHubRepo     = 'akitaonrails/ai-usagebar'
+        PackageName    = ''
+        InstallSupport = 'linux-release'
+        ReleaseTag     = 'v0.4.0'
+        ReleaseAssets  = [ordered]@{
+            x86_64  = [ordered]@{ Name = 'ai-usagebar-linux-x86_64.tar.gz'; Sha256 = '55b9d77a7c81de2a445e36eae240bcf7286bb7d4ec380f38830f7d4a809a70b1' }
+            aarch64 = [ordered]@{ Name = 'ai-usagebar-linux-aarch64.tar.gz'; Sha256 = 'd849897e3c10f9b2fcff570f8b3e7ecc67332e33183ef5c95cd9a017eaf890bd' }
+        }
+        Notes          = 'Waybar/TUI Rust para uso de Claude, Codex/OpenAI, Z.AI e OpenRouter. Linux/WSL usa release oficial verificada; Windows com WSL indisponivel usa fallback cargo na tag oficial.'
+    }
     return $catalog
 }
 
@@ -13202,6 +13429,8 @@ function Normalize-BootstrapAiToolName {
         'aion' { return 'aion-ui' }
         'aionui' { return 'aion-ui' }
         'antigravity' { return 'antigravity-workflows' }
+        'aiusagebar' { return 'ai-usagebar' }
+        'usagebar' { return 'ai-usagebar' }
         default { return $name }
     }
 }
@@ -13350,6 +13579,7 @@ function Invoke-BootstrapAiNativeCommand {
     param(
         [Parameter(Mandatory = $true)][string]$Exe,
         [string[]]$Args = @(),
+        [string]$WorkingDirectory = '',
         [int]$TimeoutMs = 120000
     )
 
@@ -13368,6 +13598,9 @@ function Invoke-BootstrapAiNativeCommand {
         $v = [string]$_
         if ($v -match '[\s"]') { '"' + ($v -replace '"', '\"') + '"' } else { $v }
     }) -join ' ')
+    if (-not [string]::IsNullOrWhiteSpace($WorkingDirectory)) {
+        $psi.WorkingDirectory = $WorkingDirectory
+    }
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $psi.UseShellExecute = $false
@@ -13387,7 +13620,7 @@ function Invoke-BootstrapAiNativeCommand {
     $stdout = [string]$stdoutTask.Result
     $stderr = [string]$stderrTask.Result
     try { $proc.Dispose() } catch { }
-    $first = (($stdout + "`n" + $stderr) -replace "`r", '' -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
+    $first = (($stdout + "`n" + $stderr) -replace "`0", '' -replace "`r", '' -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -First 1)
     return [ordered]@{
         exitCode = $exitCode
         timedOut = $timedOut
@@ -13395,6 +13628,24 @@ function Invoke-BootstrapAiNativeCommand {
         stderr   = $stderr
         firstLine = if ($first) { [string]$first } else { '' }
     }
+}
+
+function Get-BootstrapCleanNativeText {
+    param(
+        [AllowNull()][string]$Text,
+        [int]$MaxLength = 1200
+    )
+    if ([string]::IsNullOrWhiteSpace($Text)) { return '' }
+    $clean = ([string]$Text) -replace "`0", ''
+    $clean = $clean -replace "`r", ' ' -replace "`n", ' '
+    $clean = ($clean -replace '\s+', ' ').Trim()
+    $clean = $clean -replace '(?i)n.o registrada', 'nao registrada'
+    $clean = $clean -replace '(?i)c.digo de erro', 'Codigo de erro'
+    $clean = $clean -replace [char]0xFFFD, '?'
+    if ($MaxLength -gt 0 -and $clean.Length -gt $MaxLength) {
+        return ($clean.Substring(0, $MaxLength - 3) + '...')
+    }
+    return $clean
 }
 
 function Get-BootstrapAiToolVersion {
@@ -13408,6 +13659,93 @@ function Get-BootstrapAiToolVersion {
         $result = Invoke-BootstrapAiNativeCommand -Exe $CommandPath -Args $args -TimeoutMs 30000
         if (-not [string]::IsNullOrWhiteSpace([string]$result['firstLine'])) { return [string]$result['firstLine'] }
     } catch {
+    }
+    return ''
+}
+
+function Test-BootstrapHostIsWindows {
+    return ([string]$env:OS -eq 'Windows_NT')
+}
+
+function Get-BootstrapAiUsagebarConfigText {
+    return @'
+[ui]
+primary = "anthropic"
+
+[anthropic]
+enabled = true
+
+[openai]
+enabled = true
+admin_key_env = "OPENAI_ADMIN_KEY"
+
+[zai]
+enabled = true
+api_key_env = "ZAI_API_KEY"
+
+[openrouter]
+enabled = true
+api_key_env = "OPENROUTER_API_KEY"
+'@
+}
+
+function Get-BootstrapAiUsagebarNativeConfigPathSet {
+    $paths = New-Object System.Collections.Generic.List[string]
+    $userHome = Get-BootstrapUserHomePath
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $paths.Add((Join-Path $userHome '.config\ai-usagebar\config.toml')) | Out-Null
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA)) {
+        $paths.Add((Join-Path $env:APPDATA 'ai-usagebar\config\config.toml')) | Out-Null
+    }
+    return @($paths.ToArray())
+}
+
+function Write-BootstrapAiUsagebarConfigFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $parent = Split-Path -Path $Path -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        [void][System.IO.Directory]::CreateDirectory($parent)
+    }
+    [System.IO.File]::WriteAllText($Path, (Get-BootstrapAiUsagebarConfigText), [System.Text.UTF8Encoding]::new($false))
+    return $Path
+}
+
+function Test-BootstrapAiUsagebarNativeConfigured {
+    foreach ($path in @(Get-BootstrapAiUsagebarNativeConfigPathSet)) {
+        if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path)) { return $true }
+    }
+    return $false
+}
+
+function Get-BootstrapAiUsagebarConfigBase64 {
+    return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes((Get-BootstrapAiUsagebarConfigText)))
+}
+
+function Test-BootstrapAiUsagebarWslConfigured {
+    try {
+        $wslExe = Get-BootstrapWslExePath
+        if ([string]::IsNullOrWhiteSpace($wslExe)) { return $false }
+        $null = Assert-BootstrapWslNotCorrupt -WslExe $wslExe -TimeoutMs 5000
+        $result = Invoke-BootstrapAiNativeCommand -Exe $wslExe -Args @('bash','-lc','test -x "$HOME/.local/bin/ai-usagebar" && test -f "$HOME/.config/ai-usagebar/config.toml"') -TimeoutMs 10000
+        return ([int]$result['exitCode'] -eq 0)
+    } catch {
+        Write-Verbose ("ai-usagebar WSL config probe skipped: {0}" -f (Get-BootstrapCleanNativeText -Text $_.Exception.Message -MaxLength 300))
+        return $false
+    }
+}
+
+function Get-BootstrapAiUsagebarWslVersion {
+    try {
+        $wslExe = Get-BootstrapWslExePath
+        if ([string]::IsNullOrWhiteSpace($wslExe)) { return '' }
+        $null = Assert-BootstrapWslNotCorrupt -WslExe $wslExe -TimeoutMs 5000
+        $result = Invoke-BootstrapAiNativeCommand -Exe $wslExe -Args @('bash','-lc','"$HOME/.local/bin/ai-usagebar" --help | head -n 1') -TimeoutMs 10000
+        if ([int]$result['exitCode'] -eq 0 -and -not [string]::IsNullOrWhiteSpace([string]$result['firstLine'])) {
+            return [string]$result['firstLine']
+        }
+    } catch {
+        Write-Verbose ("ai-usagebar WSL version probe skipped: {0}" -f (Get-BootstrapCleanNativeText -Text $_.Exception.Message -MaxLength 300))
     }
     return ''
 }
@@ -13452,6 +13790,9 @@ function Test-BootstrapAiToolConfigured {
         'antigravity-workflows' {
             return (Test-BootstrapAntigravityWorkflows -ProjectRoot $ProjectRoot)
         }
+        'ai-usagebar' {
+            return ((Test-BootstrapAiUsagebarNativeConfigured) -or (Test-BootstrapAiUsagebarWslConfigured))
+        }
         default { return $false }
     }
 }
@@ -13495,6 +13836,17 @@ function Get-BootstrapAiToolStatusRows {
                 } catch {
                     $version = ''
                 }
+            }
+        } elseif ($toolName -eq 'ai-usagebar') {
+            $configured = Test-BootstrapAiToolConfigured -ToolName $toolName -ProjectRoot $ProjectRoot
+            if (-not [string]::IsNullOrWhiteSpace($commandPath)) {
+                $version = [string]$entry['ReleaseTag']
+                $status = if ($configured) { 'configured' } else { 'installed' }
+            } elseif ($configured) {
+                $version = Get-BootstrapAiUsagebarWslVersion
+                if ([string]::IsNullOrWhiteSpace($version)) { $version = [string]$entry['ReleaseTag'] }
+                $commandPath = 'wsl.exe bash -lc ai-usagebar'
+                $status = 'configured'
             }
         } elseif (-not [string]::IsNullOrWhiteSpace($commandPath)) {
             $version = Get-BootstrapAiToolVersion -CatalogEntry $entry -CommandPath $commandPath
@@ -13607,9 +13959,9 @@ function Invoke-BootstrapWslBashCommand {
 
     $wslExe = Get-BootstrapWslExePath
     if ([string]::IsNullOrWhiteSpace($wslExe)) {
-        throw (New-BootstrapBlockedException -Message 'wsl.exe nao encontrado. Hermes Agent requer WSL2 no Windows.' -Kind 'wsl-missing' -Action 'install-wsl' -Reasons @('wsl.exe-missing'))
+        throw (New-BootstrapBlockedException -Message 'wsl.exe nao encontrado. Esta ferramenta requer WSL2 no Windows ou fallback nativo disponivel.' -Kind 'wsl-missing' -Action 'install-wsl' -Reasons @('wsl.exe-missing'))
     }
-    $null = Assert-BootstrapWslNotCorrupt -WslExe $wslExe
+    $null = Assert-BootstrapWslNotCorrupt -WslExe $wslExe -TimeoutMs 15000
     return (Invoke-BootstrapAiNativeCommand -Exe $wslExe -Args @('bash','-lc',$Command) -TimeoutMs $TimeoutMs)
 }
 
@@ -13644,6 +13996,258 @@ function Install-BootstrapHermesAgentWsl {
 
     $version = [string]$validate['firstLine']
     return (New-BootstrapAiToolResult -ToolName 'hermes-agent' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'Hermes Agent instalado e validado no WSL2.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath 'wsl.exe bash -lc hermes' -Version $version)
+}
+
+function Get-BootstrapAiUsagebarReleaseAsset {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$Architecture
+    )
+    $arch = $Architecture.Trim().ToLowerInvariant()
+    if ($arch -in @('amd64','x64','x86_64')) { $arch = 'x86_64' }
+    if ($arch -in @('arm64','aarch64')) { $arch = 'aarch64' }
+    $assets = $CatalogEntry['ReleaseAssets']
+    if ($assets -is [System.Collections.IDictionary] -and $assets.Contains($arch)) {
+        return $assets[$arch]
+    }
+    throw "Arquitetura ai-usagebar nao suportada: $Architecture"
+}
+
+function Get-BootstrapAiUsagebarWslInstallCommand {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry)
+    $tag = [string]$CatalogEntry['ReleaseTag']
+    $assets = $CatalogEntry['ReleaseAssets']
+    $x64 = $assets['x86_64']
+    $arm64 = $assets['aarch64']
+    $configB64 = Get-BootstrapAiUsagebarConfigBase64
+    return @"
+set -euo pipefail
+arch="`$(uname -m)"
+case "`$arch" in
+  x86_64|amd64) asset="$($x64['Name'])"; sha="$($x64['Sha256'])" ;;
+  aarch64|arm64) asset="$($arm64['Name'])"; sha="$($arm64['Sha256'])" ;;
+  *) echo "unsupported architecture: `$arch" >&2; exit 86 ;;
+esac
+tmp="`$(mktemp -d)"
+trap 'rm -rf "`$tmp"' EXIT
+mkdir -p "`$HOME/.local/bin" "`$HOME/.config/ai-usagebar"
+url="https://github.com/akitaonrails/ai-usagebar/releases/download/$tag/`$asset"
+curl -fsSL -o "`$tmp/`$asset" "`$url"
+printf '%s  %s\n' "`$sha" "`$tmp/`$asset" | sha256sum -c -
+tar xzf "`$tmp/`$asset" -C "`$HOME/.local/bin" ai-usagebar ai-usagebar-tui
+chmod +x "`$HOME/.local/bin/ai-usagebar" "`$HOME/.local/bin/ai-usagebar-tui"
+if [ ! -f "`$HOME/.config/ai-usagebar/config.toml" ]; then
+  printf '%s' '$configB64' | base64 -d > "`$HOME/.config/ai-usagebar/config.toml"
+  chmod 600 "`$HOME/.config/ai-usagebar/config.toml"
+fi
+"`$HOME/.local/bin/ai-usagebar" --help >/dev/null
+test -x "`$HOME/.local/bin/ai-usagebar-tui"
+"`$HOME/.local/bin/ai-usagebar" --help | head -n 1
+"@
+}
+
+function Set-BootstrapAiUsagebarConfig {
+    param(
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $paths = @(Get-BootstrapAiUsagebarNativeConfigPathSet)
+    $message = ("Criar config sem secrets: {0}" -f ($paths -join ', '))
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'configure' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $message -Docs 'https://github.com/akitaonrails/ai-usagebar')
+    }
+    foreach ($path in @($paths)) {
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+        Write-BootstrapAiUsagebarConfigFile -Path $path | Out-Null
+    }
+    try {
+        $wslExe = Get-BootstrapWslExePath
+        if (-not [string]::IsNullOrWhiteSpace($wslExe)) {
+            $null = Assert-BootstrapWslNotCorrupt -WslExe $wslExe -TimeoutMs 5000
+            $configB64 = Get-BootstrapAiUsagebarConfigBase64
+            $command = "mkdir -p `"`$HOME/.config/ai-usagebar`" && printf '%s' '$configB64' | base64 -d > `"`$HOME/.config/ai-usagebar/config.toml`" && chmod 600 `"`$HOME/.config/ai-usagebar/config.toml`""
+            $null = Invoke-BootstrapAiNativeCommand -Exe $wslExe -Args @('bash','-lc',$command) -TimeoutMs 10000
+        }
+    } catch {
+        Write-Verbose ("ai-usagebar WSL config write skipped: {0}" -f (Get-BootstrapCleanNativeText -Text $_.Exception.Message -MaxLength 300))
+    }
+    return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'configure' -Status 'configured' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'Config ai-usagebar criada sem tokens inline; usa env vars e OAuth dos CLIs oficiais.' -Docs 'https://github.com/akitaonrails/ai-usagebar')
+}
+
+function Install-BootstrapAiUsagebarViaWsl {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = ''
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $command = Get-BootstrapAiUsagebarWslInstallCommand -CatalogEntry $CatalogEntry
+    $install = Invoke-BootstrapWslBashCommand -Command $command -TimeoutMs 600000
+    if ([int]$install['exitCode'] -ne 0) {
+        $detail = Get-BootstrapCleanNativeText -Text ([string]$install['stderr'])
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = Get-BootstrapCleanNativeText -Text ([string]$install['stdout']) }
+        throw ("Falha ao instalar ai-usagebar no WSL/Linux (exit={0}). {1}" -f [int]$install['exitCode'], $detail)
+    }
+    $version = [string]$install['firstLine']
+    if ([string]::IsNullOrWhiteSpace($version)) { $version = [string]$CatalogEntry['ReleaseTag'] }
+    return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-usagebar instalado no WSL/Linux por release oficial verificada.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath 'wsl.exe bash -lc ai-usagebar' -Version $version)
+}
+
+function Install-BootstrapAiUsagebarViaCargo {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [string]$BlockedReason = ''
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $gitExe = Resolve-CommandPath -Name 'git.exe'
+    if (-not $gitExe) { $gitExe = Resolve-CommandPath -Name 'git' }
+    $cargoExe = Resolve-CommandPath -Name 'cargo.exe'
+    if (-not $cargoExe) { $cargoExe = Resolve-CommandPath -Name 'cargo' }
+    if ([string]::IsNullOrWhiteSpace($gitExe) -or [string]::IsNullOrWhiteSpace($cargoExe)) {
+        $missing = @()
+        if ([string]::IsNullOrWhiteSpace($gitExe)) { $missing += 'git' }
+        if ([string]::IsNullOrWhiteSpace($cargoExe)) { $missing += 'cargo/rustup' }
+        $msg = ("ai-usagebar requer WSL saudavel ou fallback Cargo; ausente: {0}." -f ($missing -join ', '))
+        $cleanBlockedReason = Get-BootstrapCleanNativeText -Text $BlockedReason
+        if (-not [string]::IsNullOrWhiteSpace($cleanBlockedReason)) { $msg = "$msg WSL: $cleanBlockedReason" }
+        return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'install' -Status 'blocked' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $msg -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    $tag = [string]$CatalogEntry['ReleaseTag']
+    $sourceRoot = Join-Path $root 'sources'
+    $sourceDir = Join-Path $sourceRoot ("ai-usagebar-{0}" -f ($tag.TrimStart('v')))
+    $binDir = Get-BootstrapAiBinDir -InstallRoot $root
+    [void][System.IO.Directory]::CreateDirectory($sourceRoot)
+    [void][System.IO.Directory]::CreateDirectory($binDir)
+
+    if (-not (Test-Path -LiteralPath (Join-Path $sourceDir '.git'))) {
+        $clone = Invoke-BootstrapAiNativeCommand -Exe $gitExe -Args @('clone','--depth','1','--branch',$tag,'https://github.com/akitaonrails/ai-usagebar.git',$sourceDir) -TimeoutMs 300000
+        if ([int]$clone['exitCode'] -ne 0) {
+            $detail = ([string]$clone['stderr']).Trim()
+            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$clone['stdout']).Trim() }
+            throw ("Falha ao clonar ai-usagebar {0} (exit={1}). {2}" -f $tag, [int]$clone['exitCode'], $detail)
+        }
+    } else {
+        $fetch = Invoke-BootstrapAiNativeCommand -Exe $gitExe -Args @('-C',$sourceDir,'fetch','--tags','--force','--depth','1','origin',$tag) -TimeoutMs 300000
+        if ([int]$fetch['exitCode'] -ne 0) {
+            $detail = ([string]$fetch['stderr']).Trim()
+            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$fetch['stdout']).Trim() }
+            throw ("Falha ao atualizar fonte ai-usagebar {0} (exit={1}). {2}" -f $tag, [int]$fetch['exitCode'], $detail)
+        }
+        $checkout = Invoke-BootstrapAiNativeCommand -Exe $gitExe -Args @('-C',$sourceDir,'checkout','--force',$tag) -TimeoutMs 120000
+        if ([int]$checkout['exitCode'] -ne 0) {
+            $detail = ([string]$checkout['stderr']).Trim()
+            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$checkout['stdout']).Trim() }
+            throw ("Falha ao aplicar tag ai-usagebar {0} (exit={1}). {2}" -f $tag, [int]$checkout['exitCode'], $detail)
+        }
+    }
+
+    $build = Invoke-BootstrapAiNativeCommand -Exe $cargoExe -Args @('build','--release') -WorkingDirectory $sourceDir -TimeoutMs 1200000
+    if ([int]$build['exitCode'] -ne 0) {
+        $detail = ([string]$build['stderr']).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$build['stdout']).Trim() }
+        throw ("Falha ao compilar ai-usagebar via Cargo (exit={0}). {1}" -f [int]$build['exitCode'], $detail)
+    }
+
+    foreach ($binary in @('ai-usagebar.exe','ai-usagebar-tui.exe')) {
+        $sourceBinary = Join-Path (Join-Path $sourceDir 'target\release') $binary
+        if (-not (Test-Path -LiteralPath $sourceBinary)) { throw "Build ai-usagebar concluiu, mas binario nao existe: $sourceBinary" }
+        Copy-Item -LiteralPath $sourceBinary -Destination (Join-Path $binDir $binary) -Force
+    }
+    foreach ($path in @(Get-BootstrapAiUsagebarNativeConfigPathSet)) {
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+        if (-not (Test-Path -LiteralPath $path)) { Write-BootstrapAiUsagebarConfigFile -Path $path | Out-Null }
+    }
+    Ensure-PathUserContains -Dir $binDir
+    Refresh-SessionPath
+
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    $manifest['tools']['ai-usagebar'] = @{
+        kind        = 'cargo-tag'
+        repo        = 'akitaonrails/ai-usagebar'
+        version     = $tag
+        sourceDir   = $sourceDir
+        binDir      = $binDir
+        installedAt = (Get-Date).ToString('o')
+    }
+    $manifest['pathsAdded'][$binDir] = $true
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+
+    $exe = Join-Path $binDir 'ai-usagebar.exe'
+    $validate = Invoke-BootstrapAiNativeCommand -Exe $exe -Args @('--help') -TimeoutMs 30000
+    if ([int]$validate['exitCode'] -ne 0) {
+        throw ("ai-usagebar instalado, mas --help falhou (exit={0}). {1}" -f [int]$validate['exitCode'], ([string]$validate['stderr']).Trim())
+    }
+    $message = 'ai-usagebar instalado por fallback Cargo na tag oficial.'
+    $cleanBlockedReason = Get-BootstrapCleanNativeText -Text $BlockedReason
+    if (-not [string]::IsNullOrWhiteSpace($cleanBlockedReason)) { $message = "$message WSL ignorado: $cleanBlockedReason" }
+    return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $message -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath $exe -Version $tag)
+}
+
+function Install-BootstrapAiUsagebar {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $tag = [string]$CatalogEntry['ReleaseTag']
+    $asset = Get-BootstrapAiUsagebarReleaseAsset -CatalogEntry $CatalogEntry -Architecture 'x86_64'
+    if ($DryRun) {
+        $message = ("GitHub akitaonrails/ai-usagebar {0}: baixar asset Linux verificado sha256 ({1}) via WSL quando saudavel; no Windows sem WSL, compilar fallback Cargo da tag oficial em bin gerenciado." -f $tag, [string]$asset['Name'])
+        return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'install' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $message -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    if (Test-BootstrapHostIsWindows) {
+        try {
+            return (Install-BootstrapAiUsagebarViaWsl -CatalogEntry $CatalogEntry -InstallRoot $root -ProjectRoot $ProjectRoot)
+        } catch {
+            $reason = Get-BootstrapCleanNativeText -Text $_.Exception.Message
+            return (Install-BootstrapAiUsagebarViaCargo -CatalogEntry $CatalogEntry -InstallRoot $root -ProjectRoot $ProjectRoot -BlockedReason $reason)
+        }
+    }
+
+    try {
+        $command = Get-BootstrapAiUsagebarWslInstallCommand -CatalogEntry $CatalogEntry
+        $install = Invoke-BootstrapAiNativeCommand -Exe 'bash' -Args @('-lc',$command) -TimeoutMs 600000
+        if ([int]$install['exitCode'] -ne 0) {
+            $detail = ([string]$install['stderr']).Trim()
+            if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$install['stdout']).Trim() }
+            throw ("Falha ao instalar ai-usagebar local Linux (exit={0}). {1}" -f [int]$install['exitCode'], $detail)
+        }
+        $version = [string]$install['firstLine']
+        if ([string]::IsNullOrWhiteSpace($version)) { $version = $tag }
+        return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-usagebar instalado por release oficial Linux verificada.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath 'ai-usagebar' -Version $version)
+    } catch {
+        return (Install-BootstrapAiUsagebarViaCargo -CatalogEntry $CatalogEntry -InstallRoot $root -ProjectRoot $ProjectRoot -BlockedReason $_.Exception.Message)
+    }
+}
+
+function Uninstall-BootstrapAiUsagebar {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $binDir = Get-BootstrapAiBinDir -InstallRoot $root
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'uninstall' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'Remover binarios Windows gerenciados; instalacao WSL/Linux fica manual para preservar config e tokens do usuario.' -Docs 'https://github.com/akitaonrails/ai-usagebar')
+    }
+    foreach ($binary in @('ai-usagebar.exe','ai-usagebar-tui.exe')) {
+        $path = Join-Path $binDir $binary
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    }
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    if ($manifest['tools'].ContainsKey('ai-usagebar')) { $manifest['tools'].Remove('ai-usagebar') | Out-Null }
+    if ($manifest['pathsAdded'].ContainsKey($binDir)) { $manifest['pathsAdded'].Remove($binDir) | Out-Null }
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+    return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'uninstall' -Status 'removed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-usagebar Windows gerenciado removido; configs preservadas.' -Docs 'https://github.com/akitaonrails/ai-usagebar')
 }
 
 function Uninstall-BootstrapAiNpmTool {
@@ -13918,6 +14522,9 @@ function Invoke-BootstrapAiToolAction {
             }
             return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'configured' -InstallRoot $root -ProjectRoot $project -Message 'rtk init validado.' -Docs ([string]$entry['DocsUrl']) -CommandPath $commandPath)
         }
+        if ($name -eq 'ai-usagebar') {
+            return (Set-BootstrapAiUsagebarConfig -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun)
+        }
         return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'manual' -InstallRoot $root -ProjectRoot $project -Message 'Configuracao requer login/chave do usuario; nada foi gravado no repositorio.' -Docs ([string]$entry['DocsUrl']))
     }
 
@@ -13931,6 +14538,9 @@ function Invoke-BootstrapAiToolAction {
                 if ($name -eq 'rtk') { return (Install-BootstrapRtkTool -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
             }
             'workflow-only' { return (Set-BootstrapAntigravityWorkflows -ProjectRoot $project -DryRun:$DryRun) }
+            'linux-release' {
+                if ($name -eq 'ai-usagebar') { return (Install-BootstrapAiUsagebar -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            }
         }
         $status = if ($DryRun) { 'planned' } else { 'manual' }
         return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message ([string]$entry['Notes']) -Docs ([string]$entry['DocsUrl']))
@@ -13949,6 +14559,9 @@ function Invoke-BootstrapAiToolAction {
             'workflow-only' {
                 $status = if ($DryRun) { 'planned' } else { 'manual' }
                 return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Remocao de workflows requer decisao manual; arquivos podem conter edicoes do usuario.' -Docs ([string]$entry['DocsUrl']))
+            }
+            'linux-release' {
+                if ($name -eq 'ai-usagebar') { return (Uninstall-BootstrapAiUsagebar -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
             }
         }
         $status = if ($DryRun) { 'planned' } else { 'manual' }
@@ -19044,6 +19657,105 @@ function Ensure-BootstrapAiWorkflowContextPack {
     return [ordered]@{ status = 'applied'; path = $targetPath; backup = $backup }
 }
 
+function Set-BootstrapGithubCliAgentAuth {
+    $bundle = Get-BootstrapSecretsData
+    $secretsData = ConvertTo-BootstrapHashtable -InputObject $bundle.Data
+    $tokenState = Get-BootstrapGithubActiveTokenState -SecretsData $secretsData
+    $summary = [ordered]@{
+        status = 'skipped'
+        reason = ''
+        path = [string]$bundle.Path
+        userEnvApplied = 0
+        tokenAvailable = [bool]$tokenState['tokenAvailable']
+        tokenSource = [string]$tokenState['tokenSource']
+        credentialId = [string]$tokenState['credentialId']
+        validationState = [string]$tokenState['validationState']
+        targets = [ordered]@{
+            claudeCodeUpdated = $false
+            claudeDesktopUpdated = $false
+            cursorUpdated = $false
+            windsurfUpdated = $false
+            traeUpdated = $false
+            openCodeUpdated = $false
+            vsCodeUpdated = $false
+            rooUpdated = $false
+            clineUpdated = $false
+            zedUpdated = $false
+            zCodeUpdated = $false
+            openClawUpdated = $false
+            hermesUpdated = $false
+            kiloUpdated = $false
+            continueUpdated = $false
+        }
+        warnings = @()
+    }
+
+    if (-not [bool]$tokenState['tokenAvailable']) {
+        $summary['reason'] = 'github-token-missing'
+        $summary['warnings'] = @('Nenhum token GitHub ativo encontrado em bootstrap-secrets.')
+        return $summary
+    }
+    if ([string]$tokenState['tokenSource'] -ne 'bootstrap-secrets:validated-active') {
+        $summary['reason'] = 'github-token-not-validated'
+        $summary['warnings'] = @('Token GitHub existe, mas ainda nao tem validacao passed; agentes nao foram atualizados.')
+        return $summary
+    }
+
+    $resolvedTargets = Get-BootstrapResolvedSecretsTargets -SecretsData $secretsData -IncludeManagedMcps
+    if ($resolvedTargets.ContainsKey('claudeCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['claudeCode'])) {
+        $summary.targets.claudeCodeUpdated = [bool](Ensure-BootstrapClaudeCodeSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('claudeDesktop') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['claudeDesktop'])) {
+        $summary.targets.claudeDesktopUpdated = [bool](Ensure-BootstrapClaudeDesktopSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('cursor') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['cursor'])) {
+        $summary.targets.cursorUpdated = [bool](Ensure-BootstrapCursorSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('windsurf') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['windsurf'])) {
+        $summary.targets.windsurfUpdated = [bool](Ensure-BootstrapWindsurfSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('trae') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['trae'])) {
+        $summary.targets.traeUpdated = [bool](Ensure-BootstrapTraeSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('openCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openCode'])) {
+        $summary.targets.openCodeUpdated = [bool](Ensure-BootstrapOpenCodeSecrets -ResolvedTargets $resolvedTargets -SecretsData $secretsData)
+    }
+    if ($resolvedTargets.ContainsKey('vsCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['vsCode'])) {
+        $summary.targets.vsCodeUpdated = [bool](Ensure-BootstrapVsCodeSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('roo') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['roo'])) {
+        $summary.targets.rooUpdated = [bool](Ensure-BootstrapRooSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('cline') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['cline'])) {
+        $summary.targets.clineUpdated = [bool](Ensure-BootstrapClineSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('zed') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['zed'])) {
+        $summary.targets.zedUpdated = [bool](Ensure-BootstrapZedSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('zCode') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['zCode'])) {
+        $summary.targets.zCodeUpdated = [bool](Ensure-BootstrapZCodeSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('openClaw') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['openClaw'])) {
+        $summary.targets.openClawUpdated = [bool](Ensure-BootstrapOpenClawSecrets -ResolvedTargets $resolvedTargets)
+    }
+    if ($resolvedTargets.ContainsKey('hermes') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['hermes'])) {
+        $summary.targets.hermesUpdated = [bool](Ensure-BootstrapHermesSecrets -ResolvedTargets $resolvedTargets -State $null)
+    }
+    if ($resolvedTargets.ContainsKey('kilo') -and (Test-BootstrapSecretsTargetHasApplicableValues -Target $resolvedTargets['kilo'])) {
+        $summary.targets.kiloUpdated = [bool](Ensure-BootstrapKiloSecrets -ResolvedTargets $resolvedTargets -SecretsData $secretsData)
+    }
+    $continueResult = Ensure-BootstrapContinueExtensionConfig -ResolvedTargets $resolvedTargets
+    $summary.targets.continueUpdated = ($null -ne $continueResult)
+
+    $updatedCount = 0
+    foreach ($key in @($summary.targets.Keys)) {
+        if ([bool]$summary.targets[$key]) { $updatedCount += 1 }
+    }
+    $summary['status'] = if ($updatedCount -gt 0) { 'applied' } else { 'configured' }
+    $summary['reason'] = 'agent-context-only'
+    return $summary
+}
+
 function Apply-DevAiTuning {
     param(
         [Parameter(Mandatory = $true)]$Item,
@@ -19109,6 +19821,15 @@ function Apply-DevAiTuning {
                 status = [string]$result.status
                 note = 'AI workflow/context pack aplicado sem automacao destrutiva.'
                 manifest = $result
+            }
+        }
+        'github-cli-agent-auth' {
+            $summary = Set-BootstrapGithubCliAgentAuth
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$summary.status
+                note = 'GitHub token sincronizado para configs de agentes sem persistir GH_TOKEN global.'
+                summary = $summary
             }
         }
         'codex-desktop-repair' {
@@ -19678,6 +20399,9 @@ function Invoke-BootstrapComponent {
         'hermes' {
             Ensure-Hermes -State $State
         }
+        'ai-usagebar' {
+            Install-BootstrapAiUsagebarComponent -State $State
+        }
         'claude-config' {
             Ensure-BootstrapGitCore -State $State
             Ensure-ClaudeCodeDefaults -GitBashPath $State.GitInfo.Bash
@@ -19985,7 +20709,7 @@ function Write-BootstrapDoctorToolSummary {
     param(
         [Parameter(Mandatory = $true)][string]$Label,
         [Parameter(Mandatory = $true)][string]$CommandName,
-        [string[]]$Args = @('--version')
+        [string[]]$ToolArgs = @('--version')
     )
 
     $commandPath = Resolve-CommandPath -Name $CommandName
@@ -20000,7 +20724,7 @@ function Write-BootstrapDoctorToolSummary {
     }
 
     try {
-        $firstLine = [string](Invoke-NativeFirstLine -Exe $commandPath -Args $Args)
+        $firstLine = [string](Invoke-NativeFirstLine -Exe $commandPath -Args $ToolArgs)
         if ([string]::IsNullOrWhiteSpace($firstLine)) {
             Write-Log ("{0}: (sem saida) ({1})" -f $Label, $commandPath) 'WARN'
             return
@@ -20011,81 +20735,1777 @@ function Write-BootstrapDoctorToolSummary {
     }
 }
 
-function Invoke-BootstrapDoctorMode {
-    Write-Log ("Inicio: {0}" -f $script:StartTime.ToString('s'))
-    Write-Log "Log: $script:LogPath"
-    Write-Log "Result: $script:ResultPath"
-    Write-Log "Modo: Doctor"
-    Write-Log "Admin: $(Test-IsAdmin)"
-    try {
-        Write-Log ("PowerShell: {0}" -f ([string]$PSVersionTable.PSVersion))
-    } catch {
-    }
+function Invoke-BootstrapDoctorCommandProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$CommandName,
+        [string[]]$CommandArgs = @('--version'),
+        [int]$TimeoutMs = 3000
+    )
 
-    $dataRoot = Get-BootstrapDataRoot
-    $dataRootExists = $false
-    try { $dataRootExists = (Test-Path $dataRoot) } catch { $dataRootExists = $false }
-    $dataRootWritable = $false
-    try { $dataRootWritable = (Test-BootstrapDirectoryWritable -Path $dataRoot) } catch { $dataRootWritable = $false }
-    Write-Log ("BOOTSTRAP_DATA_ROOT: {0}" -f $(if ([string]::IsNullOrWhiteSpace($env:BOOTSTRAP_DATA_ROOT)) { '-' } else { $env:BOOTSTRAP_DATA_ROOT }))
-    Write-Log ("DataRoot: {0} (exists={1} writable={2})" -f $dataRoot, $dataRootExists, $dataRootWritable)
-
-    $secretsPath = Get-BootstrapSecretsPath
-    if (Test-Path $secretsPath) {
-        try {
-            $text = Microsoft.PowerShell.Management\Get-Content -Path $secretsPath -Raw -Encoding utf8
-            $null = $text | ConvertFrom-Json -ErrorAction Stop
-            Write-Log "bootstrap-secrets.json: OK ($secretsPath)"
-        } catch {
-            Write-Log ("bootstrap-secrets.json: JSON invalido ({0})" -f $secretsPath) 'WARN'
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $commandPath = Resolve-CommandPath -Name $CommandName
+    if (-not $commandPath) {
+        $started.Stop()
+        return [ordered]@{
+            id = $Label
+            status = 'missing'
+            severity = 'warning'
+            path = ''
+            version = ''
+            durationMs = [long]$started.ElapsedMilliseconds
+            timedOut = $false
+            summary = "$Label nao encontrado."
         }
-    } else {
-        Write-Log ("bootstrap-secrets.json: AUSENTE ({0})" -f $secretsPath) 'WARN'
     }
 
-    foreach ($name in @('HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy')) {
+    $stdout = ''
+    $stderr = ''
+    $timedOut = $false
+    $exitCode = $null
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $commandPath
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $psi
+        if ($CommandArgs -and $CommandArgs.Count -gt 0) {
+            $psi.Arguments = (($CommandArgs | ForEach-Object {
+                        $argText = [string]$_
+                        if ($argText -match '[\s"]') { '"' + ($argText -replace '"', '\"') + '"' } else { $argText }
+                    }) -join ' ')
+        }
+        if (-not $process.Start()) { throw "Falha ao iniciar $CommandName" }
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit([Math]::Max(500, $TimeoutMs))) {
+            $timedOut = $true
+            try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
+        } else {
+            $exitCode = $process.ExitCode
+            $stdout = [string]$stdoutTask.Result
+            $stderr = [string]$stderrTask.Result
+        }
+    } catch {
+        $stderr = [string]$_.Exception.Message
+    }
+    $started.Stop()
+
+    $firstLine = ''
+    foreach ($line in @($stdout -split "`r?`n") + @($stderr -split "`r?`n")) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+            $firstLine = ([string]$line).Trim()
+            break
+        }
+    }
+    if ($firstLine.Length -gt 240) { $firstLine = $firstLine.Substring(0, 237) + '...' }
+
+    $status = 'healthy'
+    $severity = 'info'
+    $summary = if ([string]::IsNullOrWhiteSpace($firstLine)) { "$Label encontrado." } else { "${Label}: $firstLine" }
+    if ($timedOut) {
+        $status = 'timeout'
+        $severity = 'warning'
+        $summary = "$Label excedeu timeout de ${TimeoutMs}ms."
+    } elseif ($null -ne $exitCode -and [int]$exitCode -ne 0) {
+        $status = 'warning'
+        $severity = 'warning'
+    }
+
+    return [ordered]@{
+        id = $Label
+        status = $status
+        severity = $severity
+        path = [string]$commandPath
+        version = $firstLine
+        exitCode = $exitCode
+        durationMs = [long]$started.ElapsedMilliseconds
+        timedOut = [bool]$timedOut
+        summary = $summary
+    }
+}
+
+function Get-BootstrapGithubActiveTokenState {
+    param([AllowNull()]$SecretsData = $null)
+
+    $result = [ordered]@{
+        tokenAvailable = $false
+        tokenSource = 'none'
+        credentialId = ''
+        displayName = ''
+        validationState = 'missing'
+    }
+
+    try {
+        $secretsInput = $SecretsData
+        if ($null -eq $secretsInput) {
+            $bundle = Get-BootstrapSecretsData
+            $secretsInput = $bundle.Data
+        }
+        $normalized = Normalize-BootstrapSecretsData -Secrets $secretsInput
+
+        $githubProvider = @{}
+        $activeCredentialId = ''
+        $credential = @{}
+        if (Test-BootstrapMapContainsKey -Map $normalized.providers -Key 'github') {
+            $githubProvider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers['github']
+            $activeCredentialId = [string]$githubProvider['activeCredential']
+            if (-not [string]::IsNullOrWhiteSpace($activeCredentialId) -and
+                (Test-BootstrapMapContainsKey -Map $githubProvider -Key 'credentials') -and
+                (Test-BootstrapMapContainsKey -Map $githubProvider['credentials'] -Key $activeCredentialId)) {
+                $credential = ConvertTo-BootstrapHashtable -InputObject $githubProvider['credentials'][$activeCredentialId]
+                $result['credentialId'] = $activeCredentialId
+                $result['displayName'] = [string]$credential['displayName']
+                if ((Test-BootstrapMapContainsKey -Map $credential -Key 'validation') -and ($credential['validation'] -is [System.Collections.IDictionary])) {
+                    $validation = ConvertTo-BootstrapHashtable -InputObject $credential['validation']
+                    $result['validationState'] = [string]$validation['state']
+                } else {
+                    $result['validationState'] = 'unknown'
+                }
+            }
+        }
+
+        $validated = Get-BootstrapActiveProviders -SecretsData $normalized -RequirePassedValidation
+        if ((Test-BootstrapMapContainsKey -Map $validated -Key 'github') -and
+            -not [string]::IsNullOrWhiteSpace([string]$validated['github']['token'])) {
+            $result['tokenAvailable'] = $true
+            $result['tokenSource'] = 'bootstrap-secrets:validated-active'
+            $result['validationState'] = 'passed'
+            if ([string]::IsNullOrWhiteSpace([string]$result['credentialId'])) {
+                $result['credentialId'] = [string]$validated['github']['credentialId']
+                $result['displayName'] = [string]$validated['github']['displayName']
+            }
+            return $result
+        }
+
+        $active = Get-BootstrapActiveProviders -SecretsData $normalized
+        if ((Test-BootstrapMapContainsKey -Map $active -Key 'github') -and
+            -not [string]::IsNullOrWhiteSpace([string]$active['github']['token'])) {
+            $result['tokenAvailable'] = $true
+            $result['tokenSource'] = 'bootstrap-secrets:active-fallback'
+            if ([string]::IsNullOrWhiteSpace([string]$result['credentialId'])) {
+                $result['credentialId'] = [string]$active['github']['credentialId']
+                $result['displayName'] = [string]$active['github']['displayName']
+            }
+        }
+    } catch {
+        $result['tokenAvailable'] = $false
+        $result['tokenSource'] = 'error'
+        $result['validationState'] = 'error'
+    }
+
+    return $result
+}
+
+function Get-BootstrapGithubCliAuthHealth {
+    param(
+        [AllowNull()]$SecretsData = $null,
+        [int]$TimeoutMs = 3000
+    )
+
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $tokenState = Get-BootstrapGithubActiveTokenState -SecretsData $SecretsData
+    $ghPath = Resolve-CommandPath -Name 'gh'
+    if (-not $ghPath) {
+        $started.Stop()
+        return [ordered]@{
+            id = 'github-cli-auth'
+            status = 'missing'
+            severity = 'warning'
+            ghInstalled = $false
+            ghAuthStatus = 'missing'
+            path = ''
+            exitCode = $null
+            durationMs = [long]$started.ElapsedMilliseconds
+            timedOut = $false
+            tokenAvailable = [bool]$tokenState['tokenAvailable']
+            tokenSource = [string]$tokenState['tokenSource']
+            credentialId = [string]$tokenState['credentialId']
+            validationState = [string]$tokenState['validationState']
+            summary = 'GitHub CLI (gh) nao encontrado.'
+            recommendedAction = 'Instale o componente github-cli; depois aplique github-cli-agent-auth ou use gh auth login manualmente.'
+        }
+    }
+
+    $probe = Invoke-BootstrapDoctorCommandProbe -Label 'github-cli-auth' -CommandName 'gh' -CommandArgs @('auth','status') -TimeoutMs $TimeoutMs
+    $probeMap = ConvertTo-BootstrapHashtable -InputObject $probe
+    $timedOut = $false
+    if (Test-BootstrapMapContainsKey -Map $probeMap -Key 'timedOut') { $timedOut = [bool]$probeMap['timedOut'] }
+    $exitCode = $null
+    if (Test-BootstrapMapContainsKey -Map $probeMap -Key 'exitCode') { $exitCode = $probeMap['exitCode'] }
+    $probeStatus = if (Test-BootstrapMapContainsKey -Map $probeMap -Key 'status') { [string]$probeMap['status'] } else { 'warning' }
+    $started.Stop()
+
+    $tokenAvailable = [bool]$tokenState['tokenAvailable']
+    $status = 'warning'
+    $severity = 'warning'
+    $ghAuthStatus = 'unauthenticated'
+    $recommendedAction = 'Adicione token GitHub em bootstrap-secrets ou rode gh auth login manualmente.'
+    if ($timedOut) {
+        $status = 'critical'
+        $severity = 'warning'
+        $ghAuthStatus = 'timeout'
+        $recommendedAction = 'Revise instalacao do gh; probe de autenticacao excedeu timeout.'
+    } elseif ($probeStatus -eq 'healthy' -or ($null -ne $exitCode -and [int]$exitCode -eq 0)) {
+        $status = 'healthy'
+        $severity = 'info'
+        $ghAuthStatus = 'authenticated'
+        $recommendedAction = 'Nenhuma acao necessaria.'
+    } elseif ($tokenAvailable) {
+        $recommendedAction = 'Aplique github-cli-agent-auth para injetar GH_TOKEN nos agentes; gh auth login segue opcional e manual.'
+    }
+
+    $summary = switch ($ghAuthStatus) {
+        'authenticated' { 'GitHub CLI autenticado.' }
+        'timeout' { 'GitHub CLI auth status excedeu timeout.' }
+        default {
+            if ($tokenAvailable) {
+                'GitHub CLI sem auth interativo; token GitHub ativo disponivel para agentes.'
+            } else {
+                'GitHub CLI sem autenticacao e sem token GitHub ativo.'
+            }
+        }
+    }
+
+    return [ordered]@{
+        id = 'github-cli-auth'
+        status = $status
+        severity = $severity
+        ghInstalled = $true
+        ghAuthStatus = $ghAuthStatus
+        path = [string]$ghPath
+        exitCode = $exitCode
+        durationMs = [long]$started.ElapsedMilliseconds
+        timedOut = $timedOut
+        tokenAvailable = $tokenAvailable
+        tokenSource = [string]$tokenState['tokenSource']
+        credentialId = [string]$tokenState['credentialId']
+        validationState = [string]$tokenState['validationState']
+        summary = $summary
+        recommendedAction = $recommendedAction
+        probeSummary = if (Test-BootstrapMapContainsKey -Map $probeMap -Key 'summary') { [string]$probeMap['summary'] } else { '' }
+    }
+}
+
+function Get-BootstrapSecretsManifestHealth {
+    $path = Get-BootstrapSecretsPath
+    if (-not (Test-Path -LiteralPath $path)) {
+        return [ordered]@{
+            id = 'secrets'
+            status = 'missing'
+            severity = 'warning'
+            path = $path
+            state = 'missing'
+            summary = 'bootstrap-secrets.json ausente.'
+        }
+    }
+
+    try {
+        $raw = Microsoft.PowerShell.Management\Get-Content -LiteralPath $path -Raw -Encoding utf8
+        $parsed = ConvertTo-BootstrapHashtable -InputObject (ConvertFrom-BootstrapJsonText -Text $raw)
+        $protected = Test-BootstrapSecretsProtectedEnvelope -Value $parsed
+        $metadata = if ($parsed.ContainsKey('metadata')) { ConvertTo-BootstrapHashtable -InputObject $parsed['metadata'] } else { @{} }
+        $version = if ($metadata.ContainsKey('version')) { [string]$metadata['version'] } else { '' }
+        if ($protected) {
+            return [ordered]@{
+                id = 'secrets'
+                status = 'healthy'
+                severity = 'info'
+                path = $path
+                state = 'protected'
+                version = $version
+                summary = 'bootstrap-secrets.json protegido com DPAPI.'
+            }
+        }
+        $state = if ($version -eq '2') { 'needsMigration' } else { 'plaintext' }
+        return [ordered]@{
+            id = 'secrets'
+            status = 'warning'
+            severity = 'warning'
+            path = $path
+            state = $state
+            version = $version
+            summary = "bootstrap-secrets.json nao esta protegido ($state)."
+        }
+    } catch {
+        return [ordered]@{
+            id = 'secrets'
+            status = 'corrupt'
+            severity = 'error'
+            path = $path
+            state = 'corrupt'
+            summary = "bootstrap-secrets.json invalido/corrompido: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Get-BootstrapVersionHealth {
+    $versionPath = Join-Path $PSScriptRoot 'version.json'
+    $version = ''
+    if (Test-Path -LiteralPath $versionPath) {
         try {
-            $value = [string]([Environment]::GetEnvironmentVariable($name, 'Process'))
-            if (-not [string]::IsNullOrWhiteSpace($value)) {
-                Write-Log ("env:{0}={1}" -f $name, (Get-BootstrapEnvValueForLog -Name $name -Value $value))
+            $versionJson = Microsoft.PowerShell.Management\Get-Content -LiteralPath $versionPath -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop
+            if ($versionJson.PSObject.Properties['version']) { $version = [string]$versionJson.version }
+        } catch {
+            $version = ''
+        }
+    }
+
+    $commit = ''
+    try {
+        $git = Resolve-CommandPath -Name 'git'
+        if ($git -and -not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+            $commit = [string]((& $git -C $PSScriptRoot rev-parse --short HEAD 2>$null | Select-Object -First 1))
+        }
+    } catch {
+        $commit = ''
+    }
+
+    return [ordered]@{
+        id = 'version'
+        status = 'healthy'
+        severity = 'info'
+        version = $version
+        commit = $commit
+        summary = ("version={0} commit={1}" -f $(if ([string]::IsNullOrWhiteSpace($version)) { 'unknown' } else { $version }), $(if ([string]::IsNullOrWhiteSpace($commit)) { 'unknown' } else { $commit }))
+    }
+}
+
+function Get-BootstrapUiContractHealth {
+    try {
+        $contract = Get-BootstrapUiContract
+        $capabilities = if ($contract.Contains('capabilities')) { $contract['capabilities'] } else { @{} }
+        return [ordered]@{
+            id = 'ui-contract'
+            status = 'healthy'
+            severity = 'info'
+            schemaVersion = [string]$contract['schemaVersion']
+            capabilities = $capabilities
+            summary = ("UI contract {0}" -f [string]$contract['schemaVersion'])
+        }
+    } catch {
+        return [ordered]@{
+            id = 'ui-contract'
+            status = 'error'
+            severity = 'error'
+            schemaVersion = ''
+            summary = "Falha ao gerar UI contract: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Get-BootstrapWslDoctorHealth {
+    $wsl = Resolve-CommandPath -Name 'wsl.exe'
+    if (-not $wsl) {
+        return [ordered]@{
+            id = 'wsl'
+            status = 'missing'
+            severity = 'warning'
+            path = ''
+            summary = 'wsl.exe nao encontrado.'
+        }
+    }
+    try {
+        $probe = Get-BootstrapWslStatusProbe -WslExe $wsl -TimeoutMs 5000
+        $text = ([string]$probe.stdout + "`n" + [string]$probe.stderr).Trim()
+        $status = if ([bool]$probe.timedOut) { 'timeout' } elseif (Test-WslCorruptionText -Text $text) { 'corrupt' } else { 'healthy' }
+        return [ordered]@{
+            id = 'wsl'
+            status = $status
+            severity = $(if ($status -eq 'healthy') { 'info' } else { 'warning' })
+            path = $wsl
+            timedOut = [bool]$probe.timedOut
+            exitCode = $probe.exitCode
+            summary = $(if ([string]::IsNullOrWhiteSpace($text)) { "WSL probe $status." } else { (($text -split "`r?`n") | Select-Object -First 1) })
+        }
+    } catch {
+        return [ordered]@{
+            id = 'wsl'
+            status = 'error'
+            severity = 'warning'
+            path = $wsl
+            summary = "Falha no probe WSL: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Get-BootstrapWslRepairCorruptionKind {
+    param(
+        [AllowNull()][string]$Text,
+        [bool]$AppxPresent = $false,
+        [bool]$ServicePresent = $false
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Text) -and ([string]$Text -match '(?i)REGDB_E_CLASSNOTREG')) { return 'REGDB_E_CLASSNOTREG' }
+    if (-not $AppxPresent) { return 'missingAppx' }
+    if (-not $ServicePresent) { return 'missingService' }
+    return 'unknown'
+}
+
+function New-BootstrapWslRepairDoctorReport {
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $wslPath = Resolve-CommandPath -Name 'wsl.exe'
+    if (-not $wslPath) {
+        try {
+            $candidate = Join-Path $env:SystemRoot 'System32\wsl.exe'
+            if (Test-Path -LiteralPath $candidate) { $wslPath = $candidate }
+        } catch {
+            $wslPath = ''
+        }
+    }
+
+    $appxPresent = $false
+    try {
+        $appxPresent = [bool](Test-BootstrapAppxPackageInstalled -Names @('MicrosoftCorporationII.WindowsSubsystemForLinux', 'Microsoft.WSL'))
+    } catch {
+        $appxPresent = $false
+    }
+
+    $servicePresent = $false
+    $serviceStatus = ''
+    try {
+        $service = Get-Service -Name 'LxssManager' -ErrorAction Stop
+        $servicePresent = $true
+        $serviceStatus = [string]$service.Status
+    } catch {
+        $servicePresent = $false
+    }
+
+    $timedOut = $false
+    $exitCode = $null
+    $probeText = ''
+    if (-not [string]::IsNullOrWhiteSpace($wslPath)) {
+        try {
+            $probe = Get-BootstrapWslStatusProbe -WslExe $wslPath -TimeoutMs 5000
+            $timedOut = [bool]$probe.timedOut
+            $exitCode = $probe.exitCode
+            $probeText = ([string]$probe.stdout + "`n" + [string]$probe.stderr)
+        } catch {
+            $probeText = [string]$_.Exception.Message
+        }
+    }
+
+    $corruptionDetected = $false
+    if (-not [string]::IsNullOrWhiteSpace($probeText) -and (Test-WslCorruptionText -Text $probeText)) { $corruptionDetected = $true }
+    if (-not $appxPresent -or -not $servicePresent) { $corruptionDetected = $true }
+    $kind = Get-BootstrapWslRepairCorruptionKind -Text $probeText -AppxPresent:$appxPresent -ServicePresent:$servicePresent
+    $requiresAdmin = $corruptionDetected -and ($kind -in @('REGDB_E_CLASSNOTREG','missingAppx','missingService','unknown'))
+    $isAdmin = [bool](Test-IsAdmin)
+
+    $status = 'healthy'
+    $action = 'Nenhuma acao necessaria.'
+    if ([string]::IsNullOrWhiteSpace($wslPath)) {
+        $status = 'warning'
+        $kind = 'missingAppx'
+        $requiresAdmin = $true
+        $action = 'Abra PowerShell como administrador e execute .\bootstrap-tools.ps1 -Component wsl-core -DryRun; depois confirme RepairPlan.'
+    } elseif ($timedOut) {
+        $status = 'blocked'
+        $action = 'Probe WSL excedeu timeout curto; rode Doctor novamente ou confirme RepairPlan pela UI se persistir.'
+    } elseif ($corruptionDetected) {
+        if ($isAdmin) { $status = 'critical' } else { $status = 'blocked' }
+        $action = 'Abra PowerShell como administrador e execute RepairPlan confirmado para repair-wsl-registration.'
+    } elseif ($servicePresent -and $serviceStatus -notin @('Running','Stopped')) {
+        $status = 'warning'
+        $action = 'Revise LxssManager e reinicie o Windows se WSL falhar.'
+    }
+
+    $started.Stop()
+    return [ordered]@{
+        schemaVersion = 1
+        status = $status
+        corruptionDetected = [bool]$corruptionDetected
+        corruptionKind = $kind
+        requiresAdmin = [bool]$requiresAdmin
+        recommendedAction = $action
+        durationMs = [long]$started.ElapsedMilliseconds
+        wslPresent = -not [string]::IsNullOrWhiteSpace($wslPath)
+        appxPresent = [bool]$appxPresent
+        servicePresent = [bool]$servicePresent
+        serviceStatus = $serviceStatus
+        timedOut = [bool]$timedOut
+        exitCode = $exitCode
+    }
+}
+
+function Get-BootstrapDoctorProviderEnvNames {
+    param([Parameter(Mandatory = $true)][string]$ProviderName)
+    switch ($ProviderName) {
+        'openai' { return @('OPENAI_API_KEY', 'OPENAI_ADMIN_KEY') }
+        'anthropic' { return @('ANTHROPIC_API_KEY') }
+        'github' { return @('GH_TOKEN', 'GITHUB_TOKEN') }
+        'openrouter' { return @('OPENROUTER_API_KEY') }
+        'zai' { return @('ZAI_API_KEY') }
+        default { return @() }
+    }
+}
+
+function Test-BootstrapDoctorAnyEnvPresent {
+    param([string[]]$Names = @())
+    foreach ($name in @($Names)) {
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $value = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return $true }
+        $value = [Environment]::GetEnvironmentVariable($name, 'User')
+        if (-not [string]::IsNullOrWhiteSpace($value)) { return $true }
+    }
+    return $false
+}
+
+function Get-BootstrapDoctorProviderVaultState {
+    param(
+        [Parameter(Mandatory = $true)][string]$ProviderName,
+        [Parameter(Mandatory = $true)]$SecretsData
+    )
+
+    $result = [ordered]@{
+        present = $false
+        validationState = 'missing'
+        lastErrorCode = ''
+    }
+    try {
+        $normalized = Normalize-BootstrapSecretsData -Secrets $SecretsData
+        if (-not (Test-BootstrapMapContainsKey -Map $normalized.providers -Key $ProviderName)) { return $result }
+        $provider = ConvertTo-BootstrapHashtable -InputObject $normalized.providers[$ProviderName]
+        $activeCredentialId = [string]$provider['activeCredential']
+        if ([string]::IsNullOrWhiteSpace($activeCredentialId)) { return $result }
+        if (-not (Test-BootstrapMapContainsKey -Map $provider -Key 'credentials')) { return $result }
+        if (-not (Test-BootstrapMapContainsKey -Map $provider['credentials'] -Key $activeCredentialId)) { return $result }
+        $credential = ConvertTo-BootstrapHashtable -InputObject $provider['credentials'][$activeCredentialId]
+        if (-not [string]::IsNullOrWhiteSpace([string]$credential['secret'])) {
+            $result['present'] = $true
+        }
+        if ((Test-BootstrapMapContainsKey -Map $credential -Key 'validation') -and ($credential['validation'] -is [System.Collections.IDictionary])) {
+            $validation = ConvertTo-BootstrapHashtable -InputObject $credential['validation']
+            $result['validationState'] = [string]$validation['state']
+            $message = [string]$validation['message']
+            if ($message -match '(?i)\b(401|403|expired|invalid|unauthorized)\b') {
+                $result['lastErrorCode'] = [string]$matches[1]
+            }
+        } elseif ([bool]$result['present']) {
+            $result['validationState'] = 'unknown'
+        }
+    } catch {
+        $result['validationState'] = 'unknown'
+    }
+    return $result
+}
+
+function Convert-BootstrapDoctorValidationStatus {
+    param(
+        [AllowNull()][string]$ValidationState,
+        [AllowNull()][string]$LastErrorCode,
+        [bool]$HasSecret = $false
+    )
+
+    $state = [string]$ValidationState
+    $code = [string]$LastErrorCode
+    if ($state -eq 'passed') { return 'present' }
+    if ($code -match '(?i)expired') { return 'expired' }
+    if ($state -eq 'failed' -or $code -match '^(401|403)$|(?i)invalid|unauthorized') { return 'rejected' }
+    if ($HasSecret) { return 'present' }
+    return 'missing'
+}
+
+function New-BootstrapSecretsDoctorReport {
+    param([AllowNull()]$SecretsData = $null)
+
+    if ($null -eq $SecretsData) {
+        try {
+            $bundle = Get-BootstrapSecretsData
+            $SecretsData = $bundle.Data
+        } catch {
+            $SecretsData = Get-BootstrapSecretsTemplate
+        }
+    }
+
+    $providers = New-Object System.Collections.Generic.List[object]
+    foreach ($providerName in @('openai','anthropic','github','openrouter','zai')) {
+        $envPresent = Test-BootstrapDoctorAnyEnvPresent -Names (Get-BootstrapDoctorProviderEnvNames -ProviderName $providerName)
+        $vault = Get-BootstrapDoctorProviderVaultState -ProviderName $providerName -SecretsData $SecretsData
+        $oauthPresent = $false
+        if ($providerName -eq 'github') {
+            try {
+                $gh = Get-BootstrapGithubCliAuthHealth -SecretsData $SecretsData -TimeoutMs 3000
+                $oauthPresent = ([string]$gh['ghAuthStatus'] -eq 'authenticated')
+            } catch {
+                $oauthPresent = $false
+            }
+        }
+        $hasSecret = ($envPresent -or [bool]$vault['present'] -or $oauthPresent)
+        $status = Convert-BootstrapDoctorValidationStatus -ValidationState ([string]$vault['validationState']) -LastErrorCode ([string]$vault['lastErrorCode']) -HasSecret:$hasSecret
+        $source = 'missing'
+        if ($envPresent) { $source = 'env' } elseif ([bool]$vault['present']) { $source = 'vault' } elseif ($oauthPresent) { $source = 'oauth' }
+        $action = if ($status -eq 'missing') { "Configure credencial local para $providerName." } elseif ($status -in @('rejected','expired')) { "Rotacione credencial local de $providerName." } else { 'Nenhuma acao necessaria.' }
+        $providers.Add([ordered]@{
+            provider = $providerName
+            status = $status
+            source = $source
+            envPresent = [bool]$envPresent
+            vaultPresent = [bool]$vault['present']
+            oauthPresent = [bool]$oauthPresent
+            lastErrorCode = [string]$vault['lastErrorCode']
+            recommendedAction = $action
+        })
+    }
+
+    return [ordered]@{
+        schemaVersion = 1
+        generatedAt = (Get-Date).ToString('o')
+        providers = @($providers.ToArray())
+    }
+}
+
+function Read-BootstrapAiUsagebarConfigReport {
+    $result = [ordered]@{
+        configured = $false
+        primaryVendor = ''
+        enabledVendors = @()
+        vendors = [ordered]@{}
+        configPaths = @()
+    }
+
+    $enabled = New-Object System.Collections.Generic.List[string]
+    foreach ($path in @(Get-BootstrapAiUsagebarNativeConfigPathSet)) {
+        if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) { continue }
+        $result['configured'] = $true
+        $result['configPaths'] += @([ordered]@{ path = $path; present = $true })
+        $currentSection = ''
+        try {
+            $lines = @(Microsoft.PowerShell.Management\Get-Content -LiteralPath $path -Encoding utf8 -ErrorAction Stop)
+            foreach ($line in @($lines)) {
+                $text = ([string]$line).Trim()
+                if ($text -match '^\[([A-Za-z0-9_\-]+)\]$') {
+                    $currentSection = $matches[1].ToLowerInvariant()
+                    if (-not $result['vendors'].Contains($currentSection)) {
+                        $result['vendors'][$currentSection] = [ordered]@{ enabled = $false; inlineApiKeyPresent = $false; apiKeyEnv = '' }
+                    }
+                    continue
+                }
+                if ($text -match '^(primary)\s*=\s*"?([^"#]+)"?') {
+                    $result['primaryVendor'] = ([string]$matches[2]).Trim().Trim('"').ToLowerInvariant()
+                    continue
+                }
+                if ([string]::IsNullOrWhiteSpace($currentSection)) { continue }
+                if (-not $result['vendors'].Contains($currentSection)) {
+                    $result['vendors'][$currentSection] = [ordered]@{ enabled = $false; inlineApiKeyPresent = $false; apiKeyEnv = '' }
+                }
+                if ($text -match '^enabled\s*=\s*true\b') {
+                    $result['vendors'][$currentSection]['enabled'] = $true
+                    if (-not (@($enabled.ToArray()) -contains $currentSection)) { $enabled.Add($currentSection) }
+                } elseif ($text -match '^(api_key|admin_key)\s*=') {
+                    $result['vendors'][$currentSection]['inlineApiKeyPresent'] = $true
+                } elseif ($text -match '^(api_key_env|admin_key_env)\s*=\s*"?([^"#]+)"?') {
+                    $result['vendors'][$currentSection]['apiKeyEnv'] = ([string]$matches[2]).Trim().Trim('"')
+                }
             }
         } catch {
+            $result['configPaths'] += @([ordered]@{ path = $path; present = $true; error = $_.Exception.Message })
+        }
+    }
+    $result['enabledVendors'] = @($enabled.ToArray())
+    return $result
+}
+
+function Get-BootstrapAiUsagebarVendorStatus {
+    param(
+        [Parameter(Mandatory = $true)][string]$Vendor,
+        [Parameter(Mandatory = $true)]$Config,
+        [switch]$ValidateOpenRouter
+    )
+
+    $vendorInfo = if ($Config['vendors'].Contains($Vendor)) { $Config['vendors'][$Vendor] } else { [ordered]@{ enabled = $false; inlineApiKeyPresent = $false; apiKeyEnv = '' } }
+    $envNames = Get-BootstrapDoctorProviderEnvNames -ProviderName $Vendor
+    if (-not [string]::IsNullOrWhiteSpace([string]$vendorInfo['apiKeyEnv'])) { $envNames = @([string]$vendorInfo['apiKeyEnv']) }
+    $envPresent = Test-BootstrapDoctorAnyEnvPresent -Names $envNames
+    $inlinePresent = [bool]$vendorInfo['inlineApiKeyPresent']
+    $status = if ($envPresent -or $inlinePresent) { 'present' } else { 'missing' }
+    $lastErrorCode = ''
+
+    if ($Vendor -eq 'openrouter' -and $ValidateOpenRouter -and $envPresent) {
+        $secret = [Environment]::GetEnvironmentVariable('OPENROUTER_API_KEY', 'Process')
+        if ([string]::IsNullOrWhiteSpace($secret)) { $secret = [Environment]::GetEnvironmentVariable('OPENROUTER_API_KEY', 'User') }
+        try {
+            $providerDefinition = Get-BootstrapSecretsProviderDefinitionTemplate -ProviderName 'openrouter'
+            $validation = Test-BootstrapSecretsProviderCredential -ProviderName 'openrouter' -ProviderDefinition $providerDefinition -CredentialId 'env-openrouter' -Credential @{ secret = $secret; secretKind = 'apiKey' } -TimeoutSeconds 10
+            $message = [string]$validation['message']
+            if ($message -match '(?i)\b(401|403|expired|invalid|unauthorized)\b') { $lastErrorCode = [string]$matches[1] }
+            $status = Convert-BootstrapDoctorValidationStatus -ValidationState ([string]$validation['state']) -LastErrorCode $lastErrorCode -HasSecret:$true
+        } catch {
+            $status = 'unknown'
+            $lastErrorCode = 'probe-error'
         }
     }
 
-    $gitBashPath = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', 'User')
-    if ([string]::IsNullOrWhiteSpace($gitBashPath)) {
-        Write-Log "CLAUDE_CODE_GIT_BASH_PATH: -" 'WARN'
-    } else {
-        Write-Log ("CLAUDE_CODE_GIT_BASH_PATH: {0} (exists={1})" -f $gitBashPath, (Test-Path $gitBashPath))
+    return [ordered]@{
+        status = $status
+        envPresent = [bool]$envPresent
+        inlineApiKeyPresent = [bool]$inlinePresent
+        enabled = [bool]$vendorInfo['enabled']
+        lastErrorCode = $lastErrorCode
+    }
+}
+
+function New-BootstrapAiUsagebarDoctorReport {
+    param([switch]$ValidateOpenRouter)
+
+    $commandPath = Resolve-CommandPath -Name 'ai-usagebar'
+    if (-not $commandPath) {
+        foreach ($candidate in @((Join-Path $env:LOCALAPPDATA 'PhaseZero\ai-tools\bin\ai-usagebar.exe'))) {
+            if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+                $commandPath = $candidate
+                break
+            }
+        }
+    }
+    $version = ''
+    if (-not [string]::IsNullOrWhiteSpace($commandPath)) {
+        try {
+            $probe = Invoke-BootstrapDoctorCommandProbe -Label 'ai-usagebar' -CommandName 'ai-usagebar' -CommandArgs @('--version') -TimeoutMs 3000
+            $version = [string]$probe['version']
+        } catch {
+            $version = ''
+        }
     }
 
-    Write-Log 'Ferramentas:'
-    Write-BootstrapDoctorToolSummary -Label 'winget' -CommandName 'winget' -Args @('--version')
-    Write-BootstrapDoctorToolSummary -Label 'git' -CommandName 'git' -Args @('--version')
-    Write-BootstrapDoctorToolSummary -Label 'node' -CommandName 'node' -Args @('-v')
-    Write-BootstrapDoctorToolSummary -Label 'npm' -CommandName 'npm' -Args @('--version')
-    Write-BootstrapDoctorToolSummary -Label 'dotnet' -CommandName 'dotnet' -Args @('--version')
-    Write-BootstrapDotNetSdksSummary
-    Write-BootstrapDoctorToolSummary -Label 'python' -CommandName 'python' -Args @('--version')
-    Write-BootstrapDoctorToolSummary -Label 'pip' -CommandName 'pip' -Args @('--version')
-    Write-BootstrapDoctorToolSummary -Label 'claude' -CommandName 'claude' -Args @('--version')
-    Write-BootstrapDoctorToolSummary -Label 'gh' -CommandName 'gh' -Args @('--version')
-    Write-BootstrapDoctorToolSummary -Label 'wsl' -CommandName 'wsl.exe' -Args @('--version')
+    $config = Read-BootstrapAiUsagebarConfigReport
+    $vendors = [ordered]@{}
+    foreach ($vendor in @('openai','anthropic','openrouter','zai')) {
+        $vendors[$vendor] = Get-BootstrapAiUsagebarVendorStatus -Vendor $vendor -Config $config -ValidateOpenRouter:$ValidateOpenRouter
+    }
 
-    $elapsed = New-TimeSpan -Start $script:StartTime -End (Get-Date)
+    return [ordered]@{
+        schemaVersion = 1
+        installed = -not [string]::IsNullOrWhiteSpace($commandPath)
+        configured = [bool]$config['configured']
+        primaryVendor = [string]$config['primaryVendor']
+        enabledVendors = @($config['enabledVendors'])
+        commandPath = [string]$commandPath
+        version = $version
+        configPaths = @($config['configPaths'])
+        vendors = $vendors
+    }
+}
+
+function Get-BootstrapDeckCimInstance {
+    param([Parameter(Mandatory = $true)][string]$ClassName)
+
+    try {
+        if (Get-Command -Name Get-CimInstance -ErrorAction SilentlyContinue) {
+            return @(Get-CimInstance -ClassName $ClassName -ErrorAction Stop)
+        }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    return @()
+}
+
+function Invoke-BootstrapDeckCommandProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Label,
+        [Parameter(Mandatory = $true)][string]$FileName,
+        [string[]]$Arguments = @(),
+        [int]$TimeoutMs = 3000
+    )
+
+    $probe = Invoke-BootstrapDoctorCommandProbe -Label $Label -CommandName $FileName -CommandArgs $Arguments -TimeoutMs $TimeoutMs
+    return [ordered]@{
+        label = $Label
+        status = [string]$probe['status']
+        path = [string]$probe['path']
+        exitCode = $probe['exitCode']
+        timedOut = [bool]$probe['timedOut']
+        output = [string]$probe['output']
+    }
+}
+
+function Test-BootstrapDeckAnyPath {
+    param([string[]]$Paths = @())
+    return [bool](Test-WingetProbePathsOnDisk -ProbePaths $Paths)
+}
+
+function Get-BootstrapDeckComponentProbePath {
+    param([Parameter(Mandatory = $true)][string]$ComponentName)
+
+    try {
+        $catalog = Get-BootstrapComponentCatalog
+        if (-not $catalog.Contains($ComponentName)) { return @() }
+        $component = $catalog[$ComponentName]
+        if ($component.PSObject.Properties.Name -contains 'ProbePaths') {
+            return @($component.ProbePaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    return @()
+}
+
+function Get-BootstrapDeckObjectText {
+    param([AllowNull()]$Value)
+    if ($null -eq $Value) { return '' }
+    $parts = New-Object System.Collections.Generic.List[string]
+    foreach ($item in @($Value)) {
+        if ($null -eq $item) { continue }
+        foreach ($propName in @('Manufacturer','Model','Product','Name','Caption','Description','SMBIOSBIOSVersion','PNPDeviceID','DriverVersion')) {
+            try {
+                if ($item.PSObject.Properties[$propName] -and -not [string]::IsNullOrWhiteSpace([string]$item.$propName)) {
+                    $parts.Add([string]$item.$propName)
+                }
+            } catch {
+                Write-Verbose $_.Exception.Message
+            }
+        }
+    }
+    return (@($parts.ToArray()) -join ' ')
+}
+
+function New-BootstrapDeckCheck {
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [ValidateSet('info','warning','error')][string]$Severity = 'info',
+        [Parameter(Mandatory = $true)][string]$Summary,
+        [System.Collections.IDictionary]$Data = @{}
+    )
+
+    $check = [ordered]@{
+        id = $Id
+        status = $Status
+        severity = $Severity
+        summary = $Summary
+    }
+    foreach ($key in @($Data.Keys)) {
+        $check[$key] = $Data[$key]
+    }
+    return $check
+}
+
+function Get-BootstrapDeckLibrarySummary {
+    $candidates = @(
+        'F:\Steam\Steamapps',
+        "$env:ProgramFiles\Steam\steamapps",
+        "${env:ProgramFiles(x86)}\Steam\steamapps"
+    )
+    $present = New-Object System.Collections.Generic.List[object]
+    foreach ($candidate in @($candidates)) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        $expanded = ConvertTo-BootstrapExpandedPath -Path ([string]$candidate)
+        if ([string]::IsNullOrWhiteSpace($expanded) -or -not (Test-Path -LiteralPath $expanded)) { continue }
+        $driveName = ''
+        $freeGb = $null
+        try {
+            $root = [System.IO.Path]::GetPathRoot($expanded)
+            if (-not [string]::IsNullOrWhiteSpace($root)) {
+                $driveName = $root.TrimEnd('\').TrimEnd(':')
+                $drive = Get-PSDrive -Name $driveName -ErrorAction SilentlyContinue
+                if ($drive) { $freeGb = [math]::Round(([double]$drive.Free / 1GB), 2) }
+            }
+        } catch {
+            Write-Verbose $_.Exception.Message
+        }
+        $present.Add([ordered]@{
+            path = $expanded
+            drive = $driveName
+            freeGb = $freeGb
+        })
+    }
+    return [ordered]@{
+        candidates = @($candidates)
+        present = @($present.ToArray())
+        count = @($present.ToArray()).Count
+    }
+}
+
+function New-BootstrapSteamDeckDoctorReport {
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $checks = New-Object System.Collections.Generic.List[object]
+
+    $computer = @(Get-BootstrapDeckCimInstance -ClassName 'Win32_ComputerSystem')
+    $baseBoard = @(Get-BootstrapDeckCimInstance -ClassName 'Win32_BaseBoard')
+    $bios = @(Get-BootstrapDeckCimInstance -ClassName 'Win32_BIOS')
+    $video = @(Get-BootstrapDeckCimInstance -ClassName 'Win32_VideoController')
+    $battery = @(Get-BootstrapDeckCimInstance -ClassName 'Win32_Battery')
+    $monitors = @(Get-BootstrapDeckCimInstance -ClassName 'Win32_DesktopMonitor')
+
+    $hardwareText = ((Get-BootstrapDeckObjectText -Value $computer), (Get-BootstrapDeckObjectText -Value $baseBoard), (Get-BootstrapDeckObjectText -Value $bios), (Get-BootstrapDeckObjectText -Value $video)) -join ' '
+    $isDeck = ($hardwareText -match '(?i)\bValve\b|Steam\s*Deck|Jupiter|Galileo|Van\s*Gogh|AMD\s*Custom\s*GPU')
+    $hardwareStatus = if ($isDeck) { 'healthy' } else { 'notDetected' }
+    $checks.Add((New-BootstrapDeckCheck -Id 'deck-hardware' -Status $hardwareStatus -Severity 'info' -Summary $(if ($isDeck) { 'Steam Deck hardware detected.' } else { 'Steam Deck hardware not detected.' }) -Data @{
+        manufacturer = $(if ($computer.Count -gt 0) { [string]$computer[0].Manufacturer } else { '' })
+        model = $(if ($computer.Count -gt 0) { [string]$computer[0].Model } else { '' })
+        baseBoard = $(if ($baseBoard.Count -gt 0) { [string]$baseBoard[0].Product } else { '' })
+    }))
+
+    if (-not $isDeck) {
+        $started.Stop()
+        return [ordered]@{
+            schemaVersion = 1
+            status = 'notDetected'
+            isLikelySteamDeck = $false
+            durationMs = [long]$started.ElapsedMilliseconds
+            summary = 'Steam Deck hardware not detected.'
+            checks = @($checks.ToArray())
+            power = [ordered]@{ batteryPresent = ($battery.Count -gt 0); activeScheme = ''; battery = @($battery) }
+            display = [ordered]@{ monitorCount = $monitors.Count; monitors = @($monitors) }
+            libraries = Get-BootstrapDeckLibrarySummary
+        }
+    }
+
+    $amdVideo = @($video | Where-Object { ((Get-BootstrapDeckObjectText -Value $_) -match '(?i)AMD|Radeon|Van\s*Gogh|Custom\s*GPU') })
+    $checks.Add((New-BootstrapDeckCheck -Id 'deck-amd-driver' -Status $(if ($amdVideo.Count -gt 0) { 'healthy' } else { 'warning' }) -Severity $(if ($amdVideo.Count -gt 0) { 'info' } else { 'warning' }) -Summary $(if ($amdVideo.Count -gt 0) { "AMD GPU driver: $([string]$amdVideo[0].DriverVersion)" } else { 'AMD GPU driver not detected via WMI.' }) -Data @{
+        adapters = @($video | ForEach-Object { [ordered]@{ name = [string]$_.Name; driverVersion = [string]$_.DriverVersion } })
+    }))
+
+    $powerProbe = Invoke-BootstrapDeckCommandProbe -Label 'powercfg-active-scheme' -FileName 'powercfg.exe' -Arguments @('/GETACTIVESCHEME') -TimeoutMs 3000
+    $batterySummary = if ($battery.Count -gt 0) {
+        "Battery detected; charge=$([string]$battery[0].EstimatedChargeRemaining)%"
+    } else {
+        'Battery not reported by Windows WMI.'
+    }
+    $checks.Add((New-BootstrapDeckCheck -Id 'deck-power' -Status $(if ($battery.Count -gt 0) { 'healthy' } else { 'warning' }) -Severity $(if ($battery.Count -gt 0) { 'info' } else { 'warning' }) -Summary $batterySummary -Data @{
+        batteryPresent = ($battery.Count -gt 0)
+        estimatedChargeRemaining = $(if ($battery.Count -gt 0) { $battery[0].EstimatedChargeRemaining } else { $null })
+        activeScheme = [string]$powerProbe['output']
+        powercfgTimedOut = [bool]$powerProbe['timedOut']
+    }))
+
+    $checks.Add((New-BootstrapDeckCheck -Id 'deck-display' -Status 'healthy' -Severity 'info' -Summary ("Displays reported by Windows: {0}" -f $monitors.Count) -Data @{
+        monitorCount = $monitors.Count
+        monitors = @($monitors | ForEach-Object { [ordered]@{ name = [string]$_.Name; pnpDeviceId = [string]$_.PNPDeviceID } })
+    }))
+
+    $steamPresent = Test-BootstrapDeckAnyPath -Paths @('${env:ProgramFiles(x86)}\Steam\steam.exe', '$env:ProgramFiles\Steam\steam.exe', '$env:LOCALAPPDATA\Steam\steam.exe')
+    $handheldPresent = Test-BootstrapDeckAnyPath -Paths @('$env:ProgramFiles\Handheld Companion\HandheldCompanion.exe', '$env:LOCALAPPDATA\Programs\Handheld Companion\HandheldCompanion.exe')
+    $glossiPresent = Test-BootstrapDeckAnyPath -Paths @('$env:ProgramFiles\GlosSI\GlosSIConfig.exe', '$env:ProgramData\chocolatey\lib\glossi\tools\GlosSIConfig.exe')
+    $deckToolsPresent = Test-BootstrapDeckAnyPath -Paths @('$env:ProgramFiles\Steam Deck Tools', '$env:ProgramFiles\SteamDeckTools', '$env:LOCALAPPDATA\Programs\Steam Deck Tools')
+    $inputLayers = @()
+    if ($steamPresent) { $inputLayers += 'Steam Input' }
+    if ($handheldPresent) { $inputLayers += 'Handheld Companion' }
+    if ($glossiPresent) { $inputLayers += 'GlosSI' }
+    if ($deckToolsPresent) { $inputLayers += 'Steam Deck Tools' }
+    $inputConflict = ($steamPresent -and ($handheldPresent -or $glossiPresent)) -or ($inputLayers.Count -gt 2)
+    $checks.Add((New-BootstrapDeckCheck -Id 'deck-input-conflicts' -Status $(if ($inputConflict) { 'warning' } else { 'healthy' }) -Severity $(if ($inputConflict) { 'warning' } else { 'info' }) -Summary $(if ($inputConflict) { "Potential input overlap: $($inputLayers -join ', ')." } else { "Input layers: $($inputLayers -join ', ')." }) -Data @{
+        steamInput = [bool]$steamPresent
+        handheldCompanion = [bool]$handheldPresent
+        glossi = [bool]$glossiPresent
+        steamDeckTools = [bool]$deckToolsPresent
+        layers = @($inputLayers)
+    }))
+
+    $streaming = [ordered]@{}
+    foreach ($component in @('sunshine','moonlight','tailscale','rustdesk')) {
+        $streaming[$component] = [bool](Test-BootstrapDeckAnyPath -Paths (Get-BootstrapDeckComponentProbePath -ComponentName $component))
+    }
+    $checks.Add((New-BootstrapDeckCheck -Id 'deck-streaming-connectivity' -Status 'healthy' -Severity 'info' -Summary ("Streaming/connectivity installed: {0}" -f ((@($streaming.Keys) | Where-Object { [bool]$streaming[$_] }) -join ', ')) -Data $streaming))
+
+    $libraries = Get-BootstrapDeckLibrarySummary
+    $checks.Add((New-BootstrapDeckCheck -Id 'deck-steam-libraries' -Status $(if ([int]$libraries['count'] -gt 0) { 'healthy' } else { 'warning' }) -Severity $(if ([int]$libraries['count'] -gt 0) { 'info' } else { 'warning' }) -Summary ("Steam libraries found: {0}" -f [int]$libraries['count']) -Data @{
+        libraryCount = [int]$libraries['count']
+        libraries = @($libraries['present'])
+    }))
+
+    $hasError = (@($checks | Where-Object { [string]$_['severity'] -eq 'error' }).Count -gt 0)
+    $hasWarning = (@($checks | Where-Object { [string]$_['severity'] -eq 'warning' }).Count -gt 0)
+    $started.Stop()
+
+    return [ordered]@{
+        schemaVersion = 1
+        status = $(if ($hasError) { 'critical' } elseif ($hasWarning) { 'warning' } else { 'healthy' })
+        isLikelySteamDeck = $true
+        durationMs = [long]$started.ElapsedMilliseconds
+        summary = $(if ($hasWarning) { 'Steam Deck diagnostics completed with warnings.' } else { 'Steam Deck diagnostics healthy.' })
+        checks = @($checks.ToArray())
+        power = [ordered]@{
+            batteryPresent = ($battery.Count -gt 0)
+            battery = @($battery | ForEach-Object { [ordered]@{ estimatedChargeRemaining = $_.EstimatedChargeRemaining; batteryStatus = $_.BatteryStatus } })
+            activeScheme = [string]$powerProbe['output']
+        }
+        display = [ordered]@{
+            monitorCount = $monitors.Count
+            monitors = @($monitors | ForEach-Object { [ordered]@{ name = [string]$_.Name; pnpDeviceId = [string]$_.PNPDeviceID } })
+        }
+        libraries = $libraries
+    }
+}
+
+function New-BootstrapDoctorReport {
+    param(
+        [int]$AuditTimeoutSeconds = 180,
+        [int]$AuditComponentTimeoutSeconds = 30
+    )
+
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $checks = New-Object System.Collections.Generic.List[object]
+
+    $checks.Add((Get-BootstrapVersionHealth))
+    $checks.Add([ordered]@{
+        id = 'powershell'
+        status = 'healthy'
+        severity = 'info'
+        version = [string]$PSVersionTable.PSVersion
+        edition = [string]$PSVersionTable.PSEdition
+        summary = "PowerShell $($PSVersionTable.PSVersion)"
+    })
+    $checks.Add([ordered]@{
+        id = 'admin'
+        status = $(if (Test-IsAdmin) { 'admin' } else { 'standard-user' })
+        severity = 'info'
+        isAdmin = [bool](Test-IsAdmin)
+        summary = ("Admin={0}" -f [bool](Test-IsAdmin))
+    })
+
+    $dataRoot = Get-BootstrapDataRoot
+    $checks.Add([ordered]@{
+        id = 'data-root'
+        status = $(if (Test-BootstrapDirectoryWritable -Path $dataRoot) { 'healthy' } else { 'warning' })
+        severity = $(if (Test-BootstrapDirectoryWritable -Path $dataRoot) { 'info' } else { 'warning' })
+        path = $dataRoot
+        summary = "DataRoot: $dataRoot"
+    })
+    $checks.Add((Get-BootstrapSecretsManifestHealth))
+    $secretsDoctor = New-BootstrapSecretsDoctorReport
+    $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport
+    $wslRepairDoctor = New-BootstrapWslRepairDoctorReport
+
+    $rebootReasons = @()
+    try { $rebootReasons = @(Get-BootstrapPendingRebootReasons) } catch { $rebootReasons = @() }
+    $checks.Add([ordered]@{
+        id = 'pending-reboot'
+        status = $(if ($rebootReasons.Count -gt 0) { 'warning' } else { 'healthy' })
+        severity = $(if ($rebootReasons.Count -gt 0) { 'warning' } else { 'info' })
+        pending = ($rebootReasons.Count -gt 0)
+        reasons = @($rebootReasons)
+        summary = $(if ($rebootReasons.Count -gt 0) { "Reinicio pendente: $($rebootReasons -join ', ')" } else { 'Sem reinicio pendente detectado.' })
+    })
+
+    foreach ($tool in @(
+            @{ Label = 'winget'; CommandName = 'winget'; Args = @('--version') },
+            @{ Label = 'git'; CommandName = 'git'; Args = @('--version') },
+            @{ Label = 'node'; CommandName = 'node'; Args = @('-v') },
+            @{ Label = 'npm'; CommandName = 'npm'; Args = @('--version') },
+            @{ Label = 'dotnet'; CommandName = 'dotnet'; Args = @('--version') },
+            @{ Label = 'python'; CommandName = 'python'; Args = @('--version') },
+            @{ Label = 'gh'; CommandName = 'gh'; Args = @('--version') }
+        )) {
+        $checks.Add((Invoke-BootstrapDoctorCommandProbe -Label ([string]$tool['Label']) -CommandName ([string]$tool['CommandName']) -CommandArgs @($tool['Args']) -TimeoutMs 3000))
+    }
+    $githubCliAuth = Get-BootstrapGithubCliAuthHealth
+    $checks.Add($githubCliAuth)
+    $checks.Add((Get-BootstrapWslDoctorHealth))
+    $checks.Add((Get-BootstrapUiContractHealth))
+    $checks.Add([ordered]@{
+        id = 'rollback-gate'
+        status = $(if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'tests\bootstrap-quality-gates.tests.ps1')) { 'healthy' } else { 'warning' })
+        severity = $(if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'tests\bootstrap-quality-gates.tests.ps1')) { 'info' } else { 'warning' })
+        summary = 'Rollback/mutation gate coberto por tests/bootstrap-quality-gates.tests.ps1.'
+    })
+
+    $auditRows = @()
+    $auditSummary = [pscustomobject](New-BootstrapAuditSeveritySummary -Rows @())
+    try {
+        $resolution = Resolve-BootstrapComponents -SelectedProfiles @('safe-base') -SelectedComponents @() -ExcludedComponents @()
+        $auditRows = @(Invoke-BootstrapAuditMode -Resolution $resolution -TimeoutSeconds $AuditTimeoutSeconds -ComponentTimeoutSeconds $AuditComponentTimeoutSeconds)
+        $auditSummary = New-BootstrapAuditSeveritySummary -Rows $auditRows
+    } catch {
+        $checks.Add([ordered]@{
+            id = 'audit'
+            status = 'error'
+            severity = 'warning'
+            summary = "Audit resumido falhou: $($_.Exception.Message)"
+        })
+    }
+
+    $hasError = (@($checks | Where-Object { [string]($_['severity']) -eq 'error' }).Count -gt 0)
+    $hasWarning = (@($checks | Where-Object { [string]($_['severity']) -eq 'warning' }).Count -gt 0)
+    try {
+        if ([int]$auditSummary.critical -gt 0 -or [int]$auditSummary.timedOut -gt 0) { $hasWarning = $true }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    $started.Stop()
+
+    $deckReport = New-BootstrapSteamDeckDoctorReport
+    try {
+        if ([string]$deckReport['status'] -in @('warning','critical')) { $hasWarning = $true }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    try {
+        if ([string]$wslRepairDoctor['status'] -in @('warning','critical','blocked')) { $hasWarning = $true }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+
+    return [ordered]@{
+        schemaVersion = 1
+        status = $(if ($hasError) { 'error' } elseif ($hasWarning) { 'warning' } else { 'success' })
+        generatedAt = (Get-Date).ToString('o')
+        durationMs = [long]$started.ElapsedMilliseconds
+        checks = @($checks.ToArray())
+        secrets = $secretsDoctor
+        aiUsagebar = $aiUsagebarDoctor
+        wslRepair = $wslRepairDoctor
+        githubCliAuth = $githubCliAuth
+        deck = $deckReport
+        auditSummary = $auditSummary
+        auditResults = @($auditRows)
+    }
+}
+
+function Add-BootstrapRepairPlanItem {
+    param(
+        [Parameter(Mandatory = $true)]$Items,
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][string]$Component,
+        [ValidateSet('low','medium','high')][string]$Risk = 'medium',
+        [bool]$RequiresAdmin = $false,
+        [bool]$RollbackAvailable = $false,
+        [string]$DryRunCommand = '',
+        [string]$ExecuteCommand = '',
+        [string]$Reason = '',
+        [bool]$ConfirmationRequired = $true
+    )
+
+    $Items.Add([ordered]@{
+        id = $Id
+        component = $Component
+        risk = $Risk
+        requiresAdmin = [bool]$RequiresAdmin
+        rollbackAvailable = [bool]$RollbackAvailable
+        dryRunCommand = $DryRunCommand
+        executeCommand = $ExecuteCommand
+        reason = $Reason
+        confirmationRequired = [bool]$ConfirmationRequired
+    })
+}
+
+function New-BootstrapRepairPlan {
+    param([AllowNull()]$DoctorReport = $null)
+
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $items = New-Object System.Collections.Generic.List[object]
+    $repoCommand = '.\bootstrap-tools.ps1'
+
+    if ($DoctorReport) {
+        $wslRepair = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('wslRepair')) {
+                $wslRepair = $DoctorReport['wslRepair']
+            } elseif ($DoctorReport.PSObject.Properties['wslRepair']) {
+                $wslRepair = $DoctorReport.wslRepair
+            }
+        } catch {
+            $wslRepair = $null
+        }
+        if ($wslRepair) {
+            $wslStatus = [string]$wslRepair['status']
+            $wslCorrupt = [bool]$wslRepair['corruptionDetected']
+            if ($wslCorrupt -or $wslStatus -in @('blocked','critical')) {
+                $kind = [string]$wslRepair['corruptionKind']
+                Add-BootstrapRepairPlanItem -Items $items -Id 'repair-wsl-registration' -Component 'wsl-core' -Risk 'high' -RequiresAdmin:$true -RollbackAvailable:$false -DryRunCommand "$repoCommand -Component wsl-core -DryRun -NonInteractive" -ExecuteCommand "$repoCommand -Component wsl-core -NonInteractive" -Reason ("WSL repair required: {0}. {1}" -f $kind, [string]$wslRepair['recommendedAction']) -ConfirmationRequired:$true
+            }
+        }
+
+        foreach ($check in @($DoctorReport['checks'])) {
+            $id = [string]$check['id']
+            $status = [string]$check['status']
+            if ($id -eq 'pending-reboot' -and [bool]$check['pending']) {
+                Add-BootstrapRepairPlanItem -Items $items -Id 'restart-windows' -Component 'pending-reboot' -Risk 'low' -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand '' -ExecuteCommand 'shutdown /r /t 0' -Reason ([string]$check['summary'])
+            } elseif ($id -eq 'secrets' -and [string]$check['state'] -in @('needsMigration','plaintext','corrupt')) {
+                Add-BootstrapRepairPlanItem -Items $items -Id 'repair-secrets-manifest' -Component 'bootstrap-secrets' -Risk 'medium' -RequiresAdmin:$false -RollbackAvailable:$true -DryRunCommand "$repoCommand -Component bootstrap-secrets -DryRun -NonInteractive" -ExecuteCommand "$repoCommand -Component bootstrap-secrets -NonInteractive" -Reason ([string]$check['summary'])
+            } elseif ($id -eq 'wsl' -and $status -in @('timeout','corrupt','error') -and (@($items.ToArray() | Where-Object { [string]$_['id'] -eq 'repair-wsl-registration' }).Count -eq 0)) {
+                Add-BootstrapRepairPlanItem -Items $items -Id 'repair-wsl-registration' -Component 'wsl-core' -Risk 'high' -RequiresAdmin:$true -RollbackAvailable:$false -DryRunCommand "$repoCommand -Component wsl-core -DryRun -NonInteractive" -ExecuteCommand "$repoCommand -Component wsl-core -NonInteractive" -Reason ([string]$check['summary']) -ConfirmationRequired:$true
+            }
+        }
+
+        foreach ($row in @($DoctorReport['auditResults'])) {
+            $component = [string]$row.Component
+            if ([string]::IsNullOrWhiteSpace($component)) { continue }
+            $severity = [string]$row.Severity
+            if ($severity -notin @('NeedsInstall','NeedsRepair','RequiresRestart','ManualAction')) { continue }
+            $risk = if ($severity -eq 'RequiresRestart') { 'high' } elseif ($severity -eq 'ManualAction') { 'medium' } else { 'low' }
+            Add-BootstrapRepairPlanItem -Items $items -Id ("repair-{0}" -f $component) -Component $component -Risk $risk -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand "$repoCommand -Component $component -DryRun -NonInteractive" -ExecuteCommand "$repoCommand -Component $component -NonInteractive" -Reason ([string]$row.HowToFix)
+        }
+    }
+
+    $started.Stop()
+    return [ordered]@{
+        schemaVersion = 1
+        generatedAt = (Get-Date).ToString('o')
+        durationMs = [long]$started.ElapsedMilliseconds
+        defaultExecution = 'manual-confirmation'
+        items = @($items.ToArray())
+    }
+}
+
+function Get-BootstrapPSScriptAnalyzerSummary {
+    $module = Get-Module -ListAvailable -Name PSScriptAnalyzer | Sort-Object Version -Descending | Select-Object -First 1
+    if (-not $module) {
+        return [ordered]@{ available = $false; errors = $null; warnings = $null; note = 'PSScriptAnalyzer not installed.' }
+    }
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $targets = @('bootstrap-tools.ps1','bootstrap-ui.ps1','install-cli.ps1') | ForEach-Object { Join-Path $PSScriptRoot $_ } | Where-Object { Test-Path -LiteralPath $_ }
+        $job = Start-Job -ScriptBlock {
+            param([string[]]$AnalyzerTargets)
+            Import-Module PSScriptAnalyzer -Force
+            $results = @()
+            foreach ($target in @($AnalyzerTargets)) {
+                $results += @(Invoke-ScriptAnalyzer -Path $target -Severity Warning,Error -ExcludeRule 'PSUseShouldProcessForStateChangingFunctions','PSAvoidUsingInvokeExpression')
+            }
+            [ordered]@{
+                errors = @($results | Where-Object { $_.Severity -eq 'Error' }).Count
+                warnings = @($results | Where-Object { $_.Severity -eq 'Warning' }).Count
+            }
+        } -ArgumentList (,$targets)
+        try {
+            if (-not (Wait-Job -Job $job -Timeout 20)) {
+                try { Stop-Job -Job $job -ErrorAction SilentlyContinue } catch { }
+                $started.Stop()
+                return [ordered]@{
+                    available = $true
+                    version = [string]$module.Version
+                    files = @($targets).Count
+                    errors = $null
+                    warnings = $null
+                    timedOut = $true
+                    durationMs = [long]$started.ElapsedMilliseconds
+                    note = 'PSScriptAnalyzer summary timed out; run tests/bootstrap-quality-gates.tests.ps1 for authoritative budget.'
+                }
+            }
+            $summary = Receive-Job -Job $job -ErrorAction Stop
+        } finally {
+            Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+        }
+        $started.Stop()
+        return [ordered]@{
+            available = $true
+            version = [string]$module.Version
+            files = @($targets).Count
+            errors = [int]$summary['errors']
+            warnings = [int]$summary['warnings']
+            timedOut = $false
+            durationMs = [long]$started.ElapsedMilliseconds
+        }
+    } catch {
+        $started.Stop()
+        return [ordered]@{ available = $true; errors = $null; warnings = $null; timedOut = $false; durationMs = [long]$started.ElapsedMilliseconds; note = $_.Exception.Message }
+    }
+}
+
+function Test-BootstrapPrivateIpv4Address {
+    param([Parameter(Mandatory = $true)][string]$Address)
+
+    $parts = @($Address -split '\.')
+    if ($parts.Count -ne 4) { return $true }
+    $octets = @()
+    foreach ($part in @($parts)) {
+        $value = 0
+        if (-not [int]::TryParse($part, [ref]$value)) { return $true }
+        $octets += $value
+    }
+    if ($octets[0] -eq 10) { return $true }
+    if ($octets[0] -eq 127) { return $true }
+    if ($octets[0] -eq 169 -and $octets[1] -eq 254) { return $true }
+    if ($octets[0] -eq 172 -and $octets[1] -ge 16 -and $octets[1] -le 31) { return $true }
+    if ($octets[0] -eq 192 -and $octets[1] -eq 168) { return $true }
+    if ($octets[0] -eq 0) { return $true }
+    return $false
+}
+
+function ConvertTo-BootstrapSupportSafeText {
+    param([AllowNull()][string]$Text)
+
+    if ($null -eq $Text) { return $null }
+    $safe = [string]$Text
+    foreach ($root in @($env:USERPROFILE, $env:LOCALAPPDATA, $env:APPDATA, $env:TEMP)) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        $safe = $safe -replace [regex]::Escape($root), '[redacted-user-path]'
+    }
+    $safe = $safe -replace '(?i)(sk-[A-Za-z0-9_\-]{8,})', '[redacted]'
+    $safe = $safe -replace '(?i)(ghp_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})', '[redacted]'
+    $safe = $safe -replace '\b(GH_TOKEN|GITHUB_TOKEN)\b', '[redacted-env-name]'
+    $safe = $safe -replace '(?i)(bearer\s+)[A-Za-z0-9._\-]+', '$1[redacted]'
+    $ipv4Pattern = '\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b'
+    $safe = [regex]::Replace($safe, $ipv4Pattern, {
+        param($match)
+        if (Test-BootstrapPrivateIpv4Address -Address ([string]$match.Value)) { return [string]$match.Value }
+        return '[redacted-public-ip]'
+    })
+    return $safe
+}
+
+function ConvertTo-BootstrapSupportSafeObject {
+    param(
+        [AllowNull()]$Value,
+        [string]$Name = ''
+    )
+
+    $lowerName = $Name.ToLowerInvariant()
+    if ($lowerName -match 'protecteddata|(^|[^a-z])secret($|[^a-z])|token($|[^a-z])|apikey|api_key|password|credential|steamlogin|steamid|refresh') {
+        return '[redacted]'
+    }
+    if ($null -eq $Value) { return $null }
+    if ($Value -is [string]) {
+        return (ConvertTo-BootstrapSupportSafeText -Text ([string]$Value))
+    }
+    if ($Value -is [ValueType]) { return $Value }
+    if ($Value -is [System.Collections.IDictionary]) {
+        $safe = [ordered]@{}
+        foreach ($key in @($Value.Keys)) {
+            $safe[[string]$key] = ConvertTo-BootstrapSupportSafeObject -Value $Value[$key] -Name ([string]$key)
+        }
+        return $safe
+    }
+    if ($Value -is [System.Collections.IEnumerable] -and -not ($Value -is [string])) {
+        $list = New-Object System.Collections.Generic.List[object]
+        foreach ($item in @($Value)) { $list.Add((ConvertTo-BootstrapSupportSafeObject -Value $item -Name $Name)) }
+        return @($list.ToArray())
+    }
+    if ($Value -is [psobject]) {
+        $safeObject = [ordered]@{}
+        foreach ($prop in @($Value.PSObject.Properties)) {
+            $safeObject[[string]$prop.Name] = ConvertTo-BootstrapSupportSafeObject -Value $prop.Value -Name ([string]$prop.Name)
+        }
+        return $safeObject
+    }
+    return $Value
+}
+
+function Get-BootstrapNamedValue {
+    param(
+        [AllowNull()]$Object,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()]$Default = $null
+    )
+
+    if ($null -eq $Object) { return $Default }
+    try {
+        if (Test-BootstrapMapContainsKey -Map $Object -Key $Name) { return $Object[$Name] }
+        if ($Object.PSObject.Properties[$Name]) { return $Object.PSObject.Properties[$Name].Value }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    return $Default
+}
+
+function New-BootstrapSupportBundle {
+    param(
+        [Parameter(Mandatory = $true)]$DoctorReport,
+        [Parameter(Mandatory = $true)]$RepairPlan,
+        [Parameter(Mandatory = $true)]$ResultPayload,
+        [string]$DestinationPath = ''
+    )
+
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $timestamp = $script:RunId
+    if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
+        $DestinationPath = Join-Path $env:TEMP ("phasezero-support_{0}.zip" -f $timestamp)
+    }
+    $staging = Join-Path $env:TEMP ("phasezero-support_{0}_{1}" -f $timestamp, ([Guid]::NewGuid().ToString('N')))
+    $null = New-Item -Path $staging -ItemType Directory -Force
+    $null = New-Item -Path (Join-Path $staging 'logs') -ItemType Directory -Force
+    try {
+        $deckReport = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('deck')) {
+                $deckReport = $DoctorReport['deck']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['deck']) {
+                $deckReport = $DoctorReport.deck
+            }
+        } catch {
+            $deckReport = $null
+        }
+        if ($null -eq $deckReport) { $deckReport = New-BootstrapSteamDeckDoctorReport }
+        $githubAuth = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('githubCliAuth')) {
+                $githubAuth = $DoctorReport['githubCliAuth']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['githubCliAuth']) {
+                $githubAuth = $DoctorReport.githubCliAuth
+            }
+        } catch {
+            $githubAuth = $null
+        }
+        if ($null -eq $githubAuth) { $githubAuth = Get-BootstrapGithubCliAuthHealth }
+        $secretsDoctor = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('secrets')) {
+                $secretsDoctor = $DoctorReport['secrets']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['secrets']) {
+                $secretsDoctor = $DoctorReport.secrets
+            }
+        } catch {
+            $secretsDoctor = $null
+        }
+        if ($null -eq $secretsDoctor) { $secretsDoctor = New-BootstrapSecretsDoctorReport }
+        $aiUsagebarDoctor = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('aiUsagebar')) {
+                $aiUsagebarDoctor = $DoctorReport['aiUsagebar']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['aiUsagebar']) {
+                $aiUsagebarDoctor = $DoctorReport.aiUsagebar
+            }
+        } catch {
+            $aiUsagebarDoctor = $null
+        }
+        if ($null -eq $aiUsagebarDoctor) { $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport }
+        $wslRepairDoctor = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('wslRepair')) {
+                $wslRepairDoctor = $DoctorReport['wslRepair']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['wslRepair']) {
+                $wslRepairDoctor = $DoctorReport.wslRepair
+            }
+        } catch {
+            $wslRepairDoctor = $null
+        }
+        if ($null -eq $wslRepairDoctor) { $wslRepairDoctor = New-BootstrapWslRepairDoctorReport }
+
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $DoctorReport -Name 'doctor')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'repair-plan.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $RepairPlan -Name 'repairPlan')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'result.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $ResultPayload -Name 'result')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'secrets-doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $secretsDoctor -Name 'secretsDoctor')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-usagebar.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiUsagebarDoctor -Name 'aiUsagebar')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'wsl-repair.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $wslRepairDoctor -Name 'wslRepair')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'deck-doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $deckReport -Name 'deckDoctor')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'deck-power.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $deckReport -Name 'power' -Default ([ordered]@{})) -Name 'deckPower')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'deck-display.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $deckReport -Name 'display' -Default ([ordered]@{})) -Name 'deckDisplay')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'deck-libraries.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $deckReport -Name 'libraries' -Default @()) -Name 'deckLibraries')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'github-auth.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $githubAuth -Name 'githubAuth')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'psscriptanalyzer-summary.json') -Value (Get-BootstrapPSScriptAnalyzerSummary)
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'environment.json') -Value ([ordered]@{
+            generatedAt = (Get-Date).ToString('o')
+            osVersion = [Environment]::OSVersion.VersionString
+            is64BitOperatingSystem = [Environment]::Is64BitOperatingSystem
+            is64BitProcess = [Environment]::Is64BitProcess
+            powershell = [string]$PSVersionTable.PSVersion
+        })
+        if (-not [string]::IsNullOrWhiteSpace($script:LogPath) -and (Test-Path -LiteralPath $script:LogPath)) {
+            $logText = Microsoft.PowerShell.Management\Get-Content -LiteralPath $script:LogPath -Raw -Encoding utf8 -ErrorAction SilentlyContinue
+            $safeLogText = [string](ConvertTo-BootstrapSupportSafeObject -Value $logText -Name 'log')
+            $safeLogText | Set-Content -LiteralPath (Join-Path $staging 'logs\current.log') -Encoding utf8
+        }
+        if (Test-Path -LiteralPath $DestinationPath) { Remove-Item -LiteralPath $DestinationPath -Force }
+        Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $DestinationPath -Force
+        $fileInfo = Get-Item -LiteralPath $DestinationPath
+        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
+        $started.Stop()
+        return [ordered]@{
+            path = [string]$fileInfo.FullName
+            sizeBytes = [long]$fileInfo.Length
+            durationMs = [long]$started.ElapsedMilliseconds
+            included = @($includedFiles)
+            redaction = 'secret-keys-and-protected-envelope-redacted'
+        }
+    } finally {
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-BootstrapReleaseCommit {
+    try {
+        $git = Resolve-CommandPath -Name 'git'
+        if ($git) {
+            $commit = [string]((& $git -C $PSScriptRoot rev-parse HEAD 2>$null | Select-Object -First 1))
+            if (-not [string]::IsNullOrWhiteSpace($commit)) { return $commit.Trim() }
+        }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    return 'unknown'
+}
+
+function Get-BootstrapReleaseVersion {
+    param([string]$RequestedVersion = '')
+
+    if (-not [string]::IsNullOrWhiteSpace($RequestedVersion)) { return $RequestedVersion.Trim() }
+    $versionPath = Join-Path $PSScriptRoot 'version.json'
+    if (Test-Path -LiteralPath $versionPath) {
+        try {
+            $versionJson = Microsoft.PowerShell.Management\Get-Content -LiteralPath $versionPath -Raw -Encoding utf8 | ConvertFrom-Json -ErrorAction Stop
+            if ($versionJson.PSObject.Properties['version'] -and -not [string]::IsNullOrWhiteSpace([string]$versionJson.version)) {
+                return ([string]$versionJson.version).Trim()
+            }
+        } catch {
+            Write-Verbose $_.Exception.Message
+        }
+    }
+    return '0.0.0'
+}
+
+function New-BootstrapUpgradeScriptText {
+    return @'
+param(
+    [string]$InstallRoot = '',
+    [switch]$WhatIf
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$packageRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
+    $InstallRoot = Split-Path -Parent $packageRoot
+}
+if (-not (Test-Path -LiteralPath $InstallRoot)) {
+    $null = New-Item -Path $InstallRoot -ItemType Directory -Force
+}
+
+$files = @('bootstrap-ui.ps1','bootstrap-ui.bat','install-cli.ps1','install-cli.bat','version.json','CHANGELOG.md')
+foreach ($file in $files) {
+    $source = Join-Path $packageRoot $file
+    if (-not (Test-Path -LiteralPath $source)) { continue }
+    $target = Join-Path $InstallRoot $file
+    if ($WhatIf) {
+        Write-Output ("Would copy {0} -> {1}" -f $source, $target)
+        continue
+    }
+    Copy-Item -LiteralPath $source -Destination $target -Force
+}
+
+Write-Output ("PhaseZero upgrade package applied to {0}" -f $InstallRoot)
+'@
+}
+
+function Assert-BootstrapReleaseTextSafe {
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $forbidden = @('ghp_', 'sk-', 'sk-or-', 'protectedData')
+    foreach ($file in @(Get-ChildItem -LiteralPath $Root -Recurse -File)) {
+        $text = ''
+        try { $text = Microsoft.PowerShell.Management\Get-Content -LiteralPath $file.FullName -Raw -Encoding utf8 -ErrorAction Stop } catch { $text = '' }
+        foreach ($pattern in $forbidden) {
+            if ($text -like ("*{0}*" -f $pattern)) {
+                throw ("ReleasePack unsafe literal in {0}: {1}" -f $file.Name, $pattern)
+            }
+        }
+    }
+}
+
+function New-BootstrapReleasePack {
+    param(
+        [string]$Version = '',
+        [string]$DestinationRoot = ''
+    )
+
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $resolvedVersion = Get-BootstrapReleaseVersion -RequestedVersion $Version
+    if ($resolvedVersion -notmatch '^\d+\.\d+\.\d+([A-Za-z0-9\.\-_]+)?$') {
+        throw "Release version invalida: $resolvedVersion"
+    }
+    if ([string]::IsNullOrWhiteSpace($DestinationRoot)) {
+        $DestinationRoot = Join-Path $PSScriptRoot 'dist'
+    }
+    $null = New-Item -Path $DestinationRoot -ItemType Directory -Force
+    $destinationInfo = Get-Item -LiteralPath $DestinationRoot
+    $releaseName = "PhaseZero-v$resolvedVersion"
+    $staging = Join-Path $destinationInfo.FullName $releaseName
+    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    $null = New-Item -Path $staging -ItemType Directory -Force
+
+    $commit = Get-BootstrapReleaseCommit
+    $contract = Get-BootstrapUiContract
+    $contractVersion = [string]$contract['schemaVersion']
+    $builtAt = (Get-Date).ToUniversalTime().ToString('o')
+
+    foreach ($fileName in @('bootstrap-ui.ps1','bootstrap-ui.bat','install-cli.ps1','install-cli.bat')) {
+        $source = Join-Path $PSScriptRoot $fileName
+        if (Test-Path -LiteralPath $source) {
+            Copy-Item -LiteralPath $source -Destination (Join-Path $staging $fileName) -Force
+        }
+    }
+
+    $versionPayload = [ordered]@{
+        schema = 'https://phasezero.local/schemas/version.json'
+        version = $resolvedVersion
+        channel = 'local'
+        commit = $commit
+        date = $builtAt
+        contractVersion = $contractVersion
+        minimumPowerShellVersion = '5.1'
+        minimumPesterVersion = '3.4.0'
+    }
+    $versionPath = Join-Path $staging 'version.json'
+    Write-BootstrapJsonFile -Path $versionPath -Value $versionPayload
+
+    $changelogPath = Join-Path $staging 'CHANGELOG.md'
+    @(
+        "# PhaseZero $resolvedVersion"
+        ''
+        ("- Commit: {0}" -f $commit)
+        ("- Date: {0}" -f $builtAt)
+        ("- UI contract: {0}" -f $contractVersion)
+        '- Local support, diagnostic, repair planning, BAT/CLI and UI package.'
+    ) | Set-Content -LiteralPath $changelogPath -Encoding utf8
+
+    $upgradePath = Join-Path $staging 'upgrade.ps1'
+    Set-Content -LiteralPath $upgradePath -Value (New-BootstrapUpgradeScriptText) -Encoding utf8
+
+    Assert-BootstrapReleaseTextSafe -Root $staging
+
+    $zipPath = Join-Path $destinationInfo.FullName ("{0}.zip" -f $releaseName)
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath -Force
+
+    $checksumsPath = Join-Path $destinationInfo.FullName 'SHA256SUMS.txt'
+    $checksumRows = New-Object System.Collections.Generic.List[string]
+    foreach ($artifact in @($zipPath, $changelogPath, $versionPath, $upgradePath)) {
+        $hash = Get-BootstrapFileSha256 -Path $artifact
+        $checksumRows.Add(("{0}  {1}" -f $hash, (Split-Path -Leaf $artifact)))
+    }
+    $checksumRows.ToArray() | Set-Content -LiteralPath $checksumsPath -Encoding ascii
+
+    $started.Stop()
+    return [ordered]@{
+        schemaVersion = 1
+        version = $resolvedVersion
+        commit = $commit
+        date = $builtAt
+        contractVersion = $contractVersion
+        durationMs = [long]$started.ElapsedMilliseconds
+        zipPath = $zipPath
+        checksumsPath = $checksumsPath
+        changelogPath = $changelogPath
+        versionJsonPath = $versionPath
+        upgradePath = $upgradePath
+    }
+}
+
+function Invoke-BootstrapReleasePackMode {
+    Write-Log "Modo: ReleasePack"
+    $pack = New-BootstrapReleasePack -Version $ReleaseVersion -DestinationRoot $ReleaseOutputDir
     if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
         Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
             status = 'success'
+            exitCode = 0
+            mode = 'release-pack'
+            generatedAt = (Get-Date).ToString('o')
+            logPath = $script:LogPath
+            resultPath = $script:ResultPath
+            releasePack = $pack
+        })
+    }
+    Write-Log ("ReleasePack: {0}" -f [string]$pack['zipPath'])
+}
+
+function Invoke-BootstrapDoctorMode {
+    Write-Log "Modo: Doctor"
+    $doctor = New-BootstrapDoctorReport -AuditTimeoutSeconds $AuditTimeoutSeconds -AuditComponentTimeoutSeconds $AuditComponentTimeoutSeconds
+    $repairPlan = New-BootstrapRepairPlan -DoctorReport $doctor
+    $status = [string]$doctor['status']
+    if ($status -eq 'error') { $status = 'warning' }
+    Write-Log ("Doctor: status={0} checks={1} auditCritical={2} repairItems={3}" -f $status, @($doctor['checks']).Count, [int]$doctor['auditSummary'].critical, @($repairPlan['items']).Count)
+    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+            status = $status
+            exitCode = 0
             mode = 'doctor'
             generatedAt = (Get-Date).ToString('o')
             logPath = $script:LogPath
             resultPath = $script:ResultPath
-            dataRoot = $dataRoot
+            doctor = $doctor
+            repairPlan = $repairPlan
         })
     }
-    Write-Log ("Concluido em {0:c}" -f $elapsed)
     Write-Log "Log salvo em: $script:LogPath"
+}
+
+function Invoke-BootstrapSupportBundleMode {
+    Write-Log "Modo: SupportBundle"
+    $doctor = New-BootstrapDoctorReport -AuditTimeoutSeconds $AuditTimeoutSeconds -AuditComponentTimeoutSeconds $AuditComponentTimeoutSeconds
+    $repairPlan = New-BootstrapRepairPlan -DoctorReport $doctor
+    $status = [string]$doctor['status']
+    if ($status -eq 'error') { $status = 'warning' }
+    $payload = [ordered]@{
+        status = $status
+        exitCode = 0
+        mode = 'support-bundle'
+        generatedAt = (Get-Date).ToString('o')
+        logPath = $script:LogPath
+        resultPath = $script:ResultPath
+        doctor = $doctor
+        repairPlan = $repairPlan
+    }
+    $bundle = New-BootstrapSupportBundle -DoctorReport $doctor -RepairPlan $repairPlan -ResultPayload $payload
+    $payload['supportBundle'] = $bundle
+    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value $payload
+    }
+    Write-Log ("Support bundle: {0}" -f [string]$bundle['path'])
+}
+
+function Invoke-BootstrapRepairPlanMode {
+    param([string]$ExecutePath = '')
+
+    if (-not [string]::IsNullOrWhiteSpace($ExecutePath)) {
+        $plan = Read-BootstrapJsonFile -Path $ExecutePath
+        $itemCount = 0
+        try { $itemCount = @($plan['items']).Count } catch { $itemCount = 0 }
+        if ($NonInteractive -or -not $Interactive) {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                    status = 'blocked'
+                    exitCode = 2
+                    mode = 'repair-plan'
+                    blockerKind = 'repair-plan-confirmation-required'
+                    action = 'rerun-interactive'
+                    error = 'Execucao de RepairPlan exige confirmacao manual interativa.'
+                    howToFix = 'Abra a UI/painel Saude ou rode novamente em modo interativo e confirme cada lote.'
+                    repairPlan = $plan
+                })
+            }
+            Write-Log 'RepairPlan bloqueado: confirmacao manual obrigatoria.' 'WARN'
+            return [pscustomobject]@{ ExitCode = 2; Status = 'blocked'; ItemCount = $itemCount }
+        }
+        $requiresAdminItems = @($plan['items'] | Where-Object { [bool]$_['requiresAdmin'] })
+        if ($requiresAdminItems.Count -gt 0 -and -not (Test-IsAdmin)) {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                    status = 'blocked'
+                    exitCode = 2
+                    mode = 'repair-plan'
+                    blockerKind = 'repair-plan-admin-required'
+                    action = 'rerun-elevated'
+                    error = 'RepairPlan contem item que exige administrador.'
+                    howToFix = 'Abra PowerShell como administrador/elevado e confirme o RepairPlan pela UI.'
+                    repairPlan = $plan
+                })
+            }
+            Write-Log 'RepairPlan bloqueado: item exige administrador.' 'WARN'
+            return [pscustomobject]@{ ExitCode = 2; Status = 'blocked'; ItemCount = $itemCount }
+        }
+        Write-Log ("RepairPlan carregado: {0} item(ns). Execucao automatica ainda exige fluxo UI confirmado." -f $itemCount)
+        if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+            Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+                status = 'blocked'
+                exitCode = 2
+                mode = 'repair-plan'
+                blockerKind = 'repair-plan-ui-required'
+                error = 'Execucao detalhada da fila de reparo deve ser confirmada pela UI.'
+                repairPlan = $plan
+            })
+        }
+        return [pscustomobject]@{ ExitCode = 2; Status = 'blocked'; ItemCount = $itemCount }
+    }
+
+    $doctor = New-BootstrapDoctorReport -AuditTimeoutSeconds $AuditTimeoutSeconds -AuditComponentTimeoutSeconds $AuditComponentTimeoutSeconds
+    $repairPlan = New-BootstrapRepairPlan -DoctorReport $doctor
+    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+            status = 'success'
+            exitCode = 0
+            mode = 'repair-plan'
+            generatedAt = (Get-Date).ToString('o')
+            doctor = $doctor
+            repairPlan = $repairPlan
+        })
+    }
+    Write-Log ("RepairPlan gerado: {0} item(ns)." -f @($repairPlan['items']).Count)
+    return [pscustomobject]@{ ExitCode = 0; Status = 'success'; ItemCount = @($repairPlan['items']).Count }
 }
 
 function Invoke-BootstrapProfileMode {
@@ -20143,7 +22563,7 @@ function Invoke-BootstrapProfileMode {
         $auditRows = @()
         $auditRecord = $null
         try {
-            $auditRecord = Invoke-BootstrapAuditMode -Resolution $resolution -Repair:$Repair -State $state
+            $auditRecord = Invoke-BootstrapAuditMode -Resolution $resolution -Repair:$Repair -State $state -TimeoutSeconds $AuditTimeoutSeconds -ComponentTimeoutSeconds $AuditComponentTimeoutSeconds
             if ($null -ne $auditRecord) {
                 $auditRows = @($auditRecord)
             }
@@ -20190,6 +22610,9 @@ function Invoke-BootstrapProfileMode {
                             critical = [bool]$_.Critical
                             detail = [string]$_.Detail
                             howToFix = [string]$_.HowToFix
+                            durationMs = [long]$_.DurationMs
+                            timedOut = [bool]$_.TimedOut
+                            probeSource = [string]$_.ProbeSource
                         }
                     })
                 })
@@ -20992,9 +23415,15 @@ $useBootstrapRotateSecretsMode = (
 )
 
 $useBootstrapDoctorMode = $Doctor
+$useBootstrapSupportBundleMode = $SupportBundle
+$useBootstrapRepairPlanMode = ($RepairPlan -or -not [string]::IsNullOrWhiteSpace($ExecuteRepairPlan))
+$useBootstrapReleasePackMode = $ReleasePack
 
 $useBootstrapProfileMode = (
-    -not $useBootstrapRotateSecretsMode -and (
+    -not $useBootstrapRotateSecretsMode -and
+    -not $useBootstrapSupportBundleMode -and
+    -not $useBootstrapRepairPlanMode -and
+    -not $useBootstrapReleasePackMode -and (
         $UiContractJson -or
         $ListProfiles -or
         $ListHostHealthModes -or
@@ -21036,6 +23465,48 @@ if (-not $isDotSourced) {
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
                 Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'doctor' })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            Stop-BootstrapProcess 1
+        }
+    }
+
+    if ($useBootstrapSupportBundleMode) {
+        try {
+            Invoke-BootstrapSupportBundleMode
+            Stop-BootstrapProcess 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'support-bundle' })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            Stop-BootstrapProcess 1
+        }
+    }
+
+    if ($useBootstrapRepairPlanMode) {
+        try {
+            $repairModeResult = Invoke-BootstrapRepairPlanMode -ExecutePath $ExecuteRepairPlan
+            Stop-BootstrapProcess ([int]$repairModeResult.ExitCode)
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'repair-plan' })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            Stop-BootstrapProcess 1
+        }
+    }
+
+    if ($useBootstrapReleasePackMode) {
+        try {
+            Invoke-BootstrapReleasePackMode
+            Stop-BootstrapProcess 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'release-pack' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'

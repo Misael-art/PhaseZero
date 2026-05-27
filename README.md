@@ -49,6 +49,12 @@ Perfil seguro:
 .\bootstrap-tools.ps1 -Profile safe-base -DryRun -NonInteractive
 ```
 
+Perfil beta publico:
+
+```powershell
+.\bootstrap-tools.ps1 -Profile public-beta -DryRun -NonInteractive
+```
+
 Perfil amplo, somente escolha explicita:
 
 ```powershell
@@ -61,10 +67,21 @@ Auditoria:
 .\bootstrap-tools.ps1 -Audit -DryRun -NonInteractive
 ```
 
+Diagnostico local:
+
+```powershell
+.\bootstrap-tools.ps1 -Doctor -DryRun -NonInteractive
+.\bootstrap-tools.ps1 -SupportBundle -DryRun -NonInteractive
+.\bootstrap-tools.ps1 -RepairPlan -DryRun -NonInteractive
+```
+
+`-Doctor` inclui `doctor.deck` com diagnostico read-only do Steam Deck quando aplicavel: hardware, AMD driver, bateria/power plan, display, input, streaming/conectividade e libraries Steam. `-SupportBundle` adiciona `deck-doctor.json`, `deck-power.json`, `deck-display.json` e `deck-libraries.json`; HTML bruto de `powercfg` nao entra no zip por padrao.
+
 ## Perfis
 
 - `safe-base`: base pequena para maquina limpa. Inclui runtime/dev essencial e Notepad++. Nao inclui desktops de IA, containers, jogos, HostHealth ou AppTuning.
 - `recommended`: alias seguro/compat para `safe-base`.
+- `public-beta`: primeira instalacao confiavel; inclui base segura, PowerShell, PowerToys, Brave, VS Code, secrets e MCPs. Nao inclui WSL/Docker/IA desktop/gaming.
 - `dev-ai`: pilha de IA/dev por escolha explicita.
 - `full-workstation`: perfil amplo com stacks desktop, IA, containers, creator, social e utilitarios. Nunca deve ser default silencioso.
 - `legacy`: compatibilidade com fluxo historico.
@@ -96,6 +113,8 @@ Toda execucao deve deixar um `result.json` parseavel quando `ResultPath` existe 
 - `scope`;
 - `rollback`;
 - `auditSummary` e `auditResults[]` quando `mode = audit`.
+- `doctor`, `supportBundle` e `repairPlan` quando os modos de suporte local forem usados.
+- `doctor.deck` quando `mode = doctor` ou bundle de suporte gerar diagnostico Steam Deck.
 
 UI e `install-cli.ps1` nao aceitam sucesso somente por exit code. Se processo elevado, crash fake ou backend morto nao escrever `result.json`, a camada chamadora cria fallback com stdout/stderr/log/result e acao recomendada.
 

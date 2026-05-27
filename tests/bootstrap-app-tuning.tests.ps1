@@ -345,6 +345,36 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         (@($item.actions) -contains 'config-file') | Should Be $true
     }
 
+    It 'exposes GitHub CLI agent auth as dev-ai recommended tuning' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $item = @($catalog.items | Where-Object { $_.id -eq 'github-cli-agent-auth' })[0]
+
+        $item.category | Should Be 'dev-ai'
+        $item.defaultMode | Should Be 'recommended'
+        (@($item.targetApps) -contains 'github cli') | Should Be $true
+        (@($item.actions) -contains 'config-file') | Should Be $true
+        (@(Get-BootstrapAppTuningInstallComponents -Item $item) -contains 'github-cli') | Should Be $true
+        (@(Get-BootstrapAppTuningInstallComponents -Item $item) -contains 'bootstrap-secrets') | Should Be $true
+    }
+
+    It 'applies GitHub CLI agent auth without touching userEnv directly' {
+        Mock Set-BootstrapGithubCliAgentAuth {
+            return [ordered]@{
+                status = 'applied'
+                userEnvApplied = 0
+                tokenAvailable = $true
+                targets = @{ claudeCodeUpdated = $true }
+            }
+        }
+
+        $result = Apply-DevAiTuning -Item ([ordered]@{ id = 'github-cli-agent-auth'; category = 'dev-ai' })
+
+        $result.id | Should Be 'github-cli-agent-auth'
+        $result.status | Should Be 'applied'
+        $result.summary.userEnvApplied | Should Be 0
+        Assert-MockCalled Set-BootstrapGithubCliAgentAuth -Times 1 -Exactly
+    }
+
     It 'repairs Codex Desktop WSL state with backup' {
         $root = Join-Path $env:TEMP ("phasezero_codex_state_{0}" -f ([Guid]::NewGuid().ToString('N')))
         New-Item -Path $root -ItemType Directory -Force | Out-Null

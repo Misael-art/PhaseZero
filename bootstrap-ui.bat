@@ -7,6 +7,7 @@ set "BACKEND_SCRIPT=%SCRIPT_DIR%bootstrap-tools.ps1"
 set "BOOTSTRAP_SMOKE_TEST=0"
 for %%A in (%*) do (
   if /I "%%~A"=="-SmokeTest" set "BOOTSTRAP_SMOKE_TEST=1"
+  if /I "%%~A"=="-SmokeTestWindow" set "BOOTSTRAP_SMOKE_TEST=1"
 )
 
 set "PS_EXE="
@@ -18,8 +19,7 @@ set "LOG_DIR="
 call :resolve_log_dir
 
 set "TS="
-for /f "delims=" %%I in ('"%PS_EXE%" -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul') do set "TS=%%I"
-if not defined TS set "TS=unknown"
+call :resolve_timestamp
 
 set "LAUNCHER_LOG="
 set "UI_LOG="
@@ -77,14 +77,24 @@ if errorlevel 1 (
 )
 
 call :log INFO "Launching UI: %UI_SCRIPT%"
-if defined UI_LOG (
-  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%UI_SCRIPT%" -UiLogPath "%UI_LOG%" %*
+if "%BOOTSTRAP_SMOKE_TEST%"=="1" (
+  if defined UI_LOG (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%UI_SCRIPT%" -UiLogPath "%UI_LOG%" %*
+  ) else (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%UI_SCRIPT%" %*
+  )
 ) else (
-  "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%UI_SCRIPT%" %*
+  echo(PhaseZero UI iniciando...
+  if defined UI_LOG (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%UI_SCRIPT%" -UiLogPath "%UI_LOG%" %*
+  ) else (
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -STA -WindowStyle Hidden -File "%UI_SCRIPT%" %*
+  )
 )
 set "EXITCODE=%ERRORLEVEL%"
 
 call :log INFO "Bootstrap UI exited with code %EXITCODE%."
+if not "%BOOTSTRAP_SMOKE_TEST%"=="1" if not "%EXITCODE%"=="0" call :print_failure
 popd >nul 2>&1
 exit /b %EXITCODE%
 
@@ -94,8 +104,16 @@ set "LOG_LEVEL=%~1"
 set "LOG_MSG=%~2"
 set "LOG_LINE=[%DATE% %TIME%] [%LOG_LEVEL%] %LOG_MSG%"
 if defined LAUNCHER_LOG call :append_log "!LAUNCHER_LOG!" "!LOG_LINE!"
-if not "%BOOTSTRAP_SMOKE_TEST%"=="1" echo(!LOG_LINE!
+if not "%BOOTSTRAP_SMOKE_TEST%"=="1" if /I "%BOOTSTRAP_UI_VERBOSE%"=="1" echo(!LOG_LINE!
 endlocal
+exit /b 0
+
+:print_failure
+echo(
+echo(PhaseZero UI falhou. Codigo: %EXITCODE%
+if defined UI_LOG echo(Log UI: %UI_LOG%
+if defined LAUNCHER_LOG echo(Log launcher: %LAUNCHER_LOG%
+echo(Detalhe completo: set BOOTSTRAP_UI_VERBOSE=1 e rode novamente.
 exit /b 0
 
 :append_log
@@ -129,4 +147,17 @@ if exist "%LOG_PROBE%" (
   del /f /q "%LOG_PROBE%" >nul 2>&1
   set "LOG_DIR=%CANDIDATE_LOG_DIR%"
 )
+exit /b 0
+
+:resolve_timestamp
+for /f "delims=" %%I in ('"%PS_EXE%" -NoProfile -Command "Get-Date -Format yyyyMMdd_HHmmss" 2^>nul') do if not defined TS set "TS=%%I"
+if defined TS exit /b 0
+set "TS=%DATE%_%TIME%"
+set "TS=%TS:/=-%"
+set "TS=%TS:\=-%"
+set "TS=%TS::=-%"
+set "TS=%TS:.=-%"
+set "TS=%TS:,=-%"
+set "TS=%TS: =_%"
+if not defined TS set "TS=%RANDOM%%RANDOM%"
 exit /b 0

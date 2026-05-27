@@ -59,11 +59,11 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 
 | Campo | Valor |
 |---|---|
-| Última atualização | 2026-05-16 (BAT real safe-base/AI validado; Pester 346/346 verde nesta máquina) |
+| Última atualização | 2026-05-27 (Support robustness + WSL Repair + BAT/UI/ReleasePack; Pester 392/392 verde nesta maquina) |
 | Agente responsável | Codex |
 | Branch ativa | `codex-bootstrap-secrets-rotation` |
 | Task em andamento | nenhuma |
-| Próxima task sugerida | **TASK-006** (cobertura adicional rotação) ou **TASK-011** (lint Register-BootstrapChange) |
+| Próxima task sugerida | revisar diffs grandes e separar commits por escopo antes de PR/merge |
 | Pester versão alvo | 3.4.0 (lock CI) |
 | PowerShell alvo | 5.1 (PS7 só na Fase 3) |
 
@@ -76,6 +76,9 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 - 2026-05-15 — Verificação após interrupção do agente anterior. Suite cresceu para 343 testes (TASK-004/008/009/010 já presentes no working tree não commitado): `-RotateSecrets` CLI mode + `Invoke-BootstrapRotateSecretsMode` + `Get-BootstrapRotationStaleProviders` + `Register-BootstrapRotationScheduledTask`; `tests/bootstrap-secrets-rotation-cli.tests.ps1` cobre stale detection, scheduler dry-run, end-to-end rotate mode, UI Contract `secretsRotation` block e cap de 1000 linhas em `rotation-events.jsonl`. UI Contract ganhou `schemaVersion=1.0.0` + `secretsRotation.{schedule,eventsPath}`; `bootstrap-ui.ps1` ganhou `Test-UiContractVersionCompat` + constantes `$Script:UiContractMin/MaxSupported`; novos testes `bootstrap-ui-contract-snapshot.tests.ps1` (4 It) e `bootstrap-ui-contract-version.tests.ps1` (5 It) + fixture `tests/fixtures/ui-contract-v1-keys.json`. Fixes aplicados nesta sessão: (1) `Add-BootstrapSecretRotationItem` validava `credentials` com `-is [hashtable]` mas `Normalize-...` retorna `OrderedDictionary` — afrouxado para `[System.Collections.IDictionary]`; (2) `Invoke-WebRequestWithRetry` lia `$script:Offline` do escopo do orquestrador, inacessível pelo test de `tests/resilience.tests.ps1` — adicionado fallback para `$Global:BootstrapOfflineOverride`; (3) testes usavam `Should Throw` sem mensagem que Pester 3.4 não captura quando `$ErrorActionPreference='Stop'` — trocado por `Should Throw '<msg>'`; (4) timeout do `Invoke-InstallCliBat` em `tests/ai-tools.tests.ps1` elevado de 120s→240s (execução real leva ~155s). **Resultado final: Pester 343/343 verde**, parse OK em ambos `.ps1`, `cmd /c .\bootstrap-ui.bat -SmokeTest` emite JSON sem stderr, `.\bootstrap-tools.ps1 -RotateSecrets -DryRun -NonInteractive` produz JSON estruturado.
 - 2026-05-16 — Validação independente após rewrite reportado: suite completa inicialmente não pôde ser confirmada e dois arquivos falharam isolados. Correções aplicadas: `New-Guid` trocado por `[Guid]::NewGuid()` em `tests/resilience.tests.ps1` para PS 5.1; timeout do teste de `Read-UiBackendResultWithRetry` aumentado para cobrir latência real de `Start-Job` no host. Verificação final nesta máquina: arquivos alterados por arquivo verdes, parse OK, ScriptAnalyzer Error OK, `bootstrap-ui.bat -SmokeTest` OK, `bootstrap-tools.ps1 -RotateSecrets -DryRun -NonInteractive` exit 0 com falha auth esperada nas credenciais locais `github`/`xai`, Pester completo **343/343 verde**.
 - 2026-05-16 — Validação real via `.bat`: `bootstrap-ui.bat -SmokeTest` emitiu JSON parseável sem stderr; `install-cli.bat --tool rtk --validate --yes` retornou `configured` com `rtk 0.40.0` e diagnóstico vazio; `install-cli.bat -Profile safe-base -NonInteractive` retornou `success`, 12 plugins Notepad++ aplicados, zero warnings/diagnostics. Correções adicionais: diagnóstico AI tools não classifica `installed/configured` como erro; Notepad++ usa SHA256 .NET interno, cache por plugin e JSTool foi diferido porque SourceForge devolve HTML no fluxo automatizado. Pester completo **346/346 verde**.
+- 2026-05-17 — Diagnóstico de produto implementado: `-Audit` ganhou `-AuditTimeoutSeconds`/`-AuditComponentTimeoutSeconds`, fallback winget curto, `durationMs`/`timedOut`/`probeSource` no resultado, DPAPI para `bootstrap-secrets.json`, Pester quality gates para PSScriptAnalyzer budget e mutações sem `Register-BootstrapChange`. Verificação: parse OK, PSScriptAnalyzer 0 errors, `-Audit -DryRun` 48 componentes em ~39s, `bootstrap-ui.bat -SmokeTest` OK, `safe-base -DryRun` success, Pester completo **356/356 verde**.
+- 2026-05-18 — Support Robustness Track implementado: modos `-Doctor`, `-SupportBundle`, `-RepairPlan`, `-ExecuteRepairPlan`; UI Saúde; perfil `public-beta`; apps opcionais de suporte; RunId único em log/result/support bundle para evitar colisão entre processos paralelos. Verificação: parse OK, PSScriptAnalyzer 0 errors/694 warnings, Pester completo **361/361 verde**, `bootstrap-ui.bat -SmokeTest` OK, `safe-base -DryRun` OK, `-Audit -DryRun` OK, `-Doctor -DryRun` OK.
+- 2026-05-19 — Steam Deck Support Read-Only Track implementado: `doctor.deck`, artefatos `deck-*.json` no SupportBundle, UI Saúde mostra status Steam Deck, UiContract `1.3.0` com `steamDeckDoctor`; execução read-only, sem reparos automáticos. Verificação: parse OK, PSScriptAnalyzer 0 errors/705 warnings, Pester completo **363/363 verde**, UI smoke OK, `-Doctor -DryRun` OK, `-SupportBundle -DryRun` OK.
 
 ---
 
@@ -574,3 +577,31 @@ Executando `Invoke-Pester -Path .\tests\bootstrap-secrets.tests.ps1 -EnableExit`
 ---
 
 **Fim do plano. Atualize seção 1 antes de fechar a sessão.**
+---
+
+## Atualizacao de Execucao - 2026-05-26
+
+- **Agente:** Codex.
+- **Status:** Roadmap suporte local robusto em Fase 1 parcial.
+- **Implementado:** `doctor.secrets`, `doctor.aiUsagebar`, `secrets-doctor.json`, `ai-usagebar.json`, redacao de `api_key` inline e tokens (`ghp_`, `sk-`, `sk-or-`, `protectedData`, `.env` bruto).
+- **Arquivos tocados:** `bootstrap-tools.ps1`, `tests/bootstrap-support-robustness.tests.ps1`, `AGENT_EXECUTION_PLAN.md`.
+- **Verificacao verde:** parse all `.ps1`; PSScriptAnalyzer Severity Error; targeted Pester `tests/bootstrap-support-robustness.tests.ps1` 14/14; `install-cli.ps1 --tool ai-usagebar --validate --yes --no-admin`; `bootstrap-tools.ps1 -Doctor -DryRun -NonInteractive`; `bootstrap-tools.ps1 -SupportBundle -DryRun -NonInteractive`.
+- **Bloqueio:** `tests\run-pester.ps1 -NoInstall` excedeu timeout de 10min sem resumo; nao marcar roadmap completo ate rerodar com timeout maior ou isolar hang.
+- **Proxima task concreta:** Fase 2 WSL Repair Seguro com TDD.
+
+---
+
+## Atualizacao de Execucao - 2026-05-27
+
+- **Agente:** Codex.
+- **Status real:** Fases 1 a 6 entregues e revalidadas nesta worktree. Full Pester final verde.
+- **Fase 1 fechada:** suite completa rerodada com timeout de 30min; `doctor.secrets`, `doctor.aiUsagebar` e SupportBundle redigido mantidos verdes.
+- **Fase 2 entregue:** `doctor.wslRepair` com `REGDB_E_CLASSNOTREG`, `missingAppx`, `missingService`, `unknown`; WSL probe com timeout curto; RepairPlan `repair-wsl-registration`; bloqueio non-admin/noninteractive; bundle inclui `wsl-repair.json`.
+- **Fase 3 entregue:** cobertura BAT/CLI para `bootstrap-ui.bat` e `install-cli.bat`; smoke sem stderr, pass-through e linhas legiveis.
+- **Fase 4 entregue:** painel Saude como entrada operacional, cards WSL/winget/reboot/secrets/GitHub CLI/ai-usagebar/Steam Deck/rollback, acoes Doctor/Export bundle/RepairPlan/Copiar diagnostico e feedback por resultado.
+- **Fase 5 entregue:** `durationMs` em doctor/checks/repairPlan/supportBundle; Audit corrigido para nao travar em scan recursivo de logs Codex; Audit default fechou em ~31s.
+- **Fase 6 entregue:** `ReleasePack` com zip, `SHA256SUMS.txt`, `CHANGELOG.md`, `version.json`, `upgrade.ps1`; zip validado sem `.env`, `bootstrap-secrets`, `protectedData`, `ghp_`, `github_pat_`, `sk-`, `sk-or-`.
+- **Comandos rodados finais:** parse all `.ps1` 121 arquivos ok; PSScriptAnalyzer Severity Error=0; `tests\run-pester.ps1 -NoInstall` Passed=392 Failed=0; `bootstrap-ui.bat -SmokeTest` exit 0; `safe-base -DryRun` exit 0; `-Audit -DryRun` exit 0; `-Doctor -DryRun` exit 0; `-SupportBundle -DryRun` exit 0.
+- **Artefatos finais:** result JSON gravado para Doctor, SupportBundle, RepairPlan, Audit, safe-base e ReleasePack em `C:\Users\misae\AppData\Local\Temp\phasezero_final_9ffde2e4572a4e36b2f5b8f99d8c4d6a`.
+- **Bloqueios reais:** nenhum bloqueio funcional restante. Host tem WSL com `LxssManager` ausente/restart requerido, mas Doctor/Audit nao travam e reportam acao recomendada.
+- **Proxima task unica:** revisar diffs grandes e separar commits por escopo antes de PR/merge.

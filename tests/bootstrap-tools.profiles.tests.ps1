@@ -68,6 +68,23 @@ Describe 'Bootstrap profile mode' {
         }
     }
 
+    It 'renders install-cli profile selection as readable line-bounded sections' {
+        $cli = Join-Path $repoRoot 'install-cli.ps1'
+        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+
+        $output = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $cli -ListProfiles 2>&1
+        $LASTEXITCODE | Should Be 0
+        $text = (@($output) -join [Environment]::NewLine)
+        $lines = @($text -split '\r?\n' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+        $text | Should Match 'Perfis recomendados'
+        $text | Should Match 'Steam Deck'
+        $text | Should Match 'Nome\s+Descricao'
+        $text | Should Match '(?m)^\s*safe-base\s{2,}'
+        $text | Should Not Match 'legacy - .*safe-base - .*public-beta -'
+        @($lines | Where-Object { $_.Length -gt 118 }).Count | Should Be 0
+    }
+
     It 'lists supported host health modes' {
         $result = Invoke-Bootstrap -CommandArgs @('-ListHostHealthModes')
 

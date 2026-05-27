@@ -1,7 +1,8 @@
 ﻿param(
     [string]$UiStatePath,
     [string]$UiLogPath,
-    [switch]$SmokeTest
+    [switch]$SmokeTest,
+    [switch]$SmokeTestWindow
 )
 
 $ErrorActionPreference = 'Stop'
@@ -189,6 +190,7 @@ function Restart-InWindowsPowerShell {
     if (-not $SmokeTest) { $argumentList += '-STA' }
     $argumentList += @('-File', $PSCommandPath, '-UiStatePath', $UiStatePath, '-UiLogPath', $script:UiLogPath)
     if ($SmokeTest) { $argumentList += '-SmokeTest' }
+    if ($SmokeTestWindow) { $argumentList += '-SmokeTestWindow' }
 
     Write-UiLog -Message ("Relaunching in Windows PowerShell. Exe={0}  Args={1}" -f $powershellExe, (ConvertTo-Json $argumentList -Compress))
 
@@ -243,7 +245,7 @@ function Get-UiLanguages {
 }
 
 function Get-UiPageIds {
-    return @('welcome', 'selection', 'host-setup', 'app-tuning', 'ai-tools', 'api-center', 'api-catalog', 'steamdeck-control', 'dual-boot', 'review', 'run')
+    return @('welcome', 'selection', 'host-setup', 'health', 'app-tuning', 'ai-tools', 'api-center', 'api-catalog', 'steamdeck-control', 'dual-boot', 'review', 'run')
 }
 
 function Get-UiStrings {
@@ -292,6 +294,15 @@ function Get-UiStrings {
                 AppTuningUpdate     = 'Update'
                 AppTuningRunNow     = 'Run now'
                 AppTuningStatus     = 'Safe and reversible app tuning. Category app-install lists individual apps for on-demand installs.'
+                HealthTitle         = 'Health'
+                HealthSummary       = 'Local support diagnostics, export bundle and manual repair queue.'
+                HealthStatus        = 'Run Doctor to refresh local health.'
+                HealthDoctor        = 'Run Doctor'
+                HealthSupportBundle = 'Export support bundle'
+                HealthRepairPlan    = 'View repair queue'
+                HealthCopyDiagnostic = 'Copy diagnostic'
+                HealthDeckStatus    = 'Steam Deck: not checked.'
+                HealthGithubStatus  = 'GitHub CLI: not checked.'
                 AiToolsTitle        = 'AI Coding Tools'
                 AiToolsStatus       = 'Install, validate, configure, uninstall, or open official docs for optional AI coding tools.'
                 AiToolsInstall      = 'Install'
@@ -355,6 +366,7 @@ function Get-UiStrings {
                 Welcome            = 'Welcome'
                 Selection          = 'Selection'
                 HostSetup          = 'Host Setup'
+                Health             = 'Health'
                 AppTuning          = 'Optimize Apps'
                 ApiCenter          = 'API Keys'
                 SteamDeckControl   = 'Steam Deck Center'
@@ -413,6 +425,15 @@ function Get-UiStrings {
                 AppTuningUpdate     = 'Atualizar'
                 AppTuningRunNow     = 'Executar agora'
                 AppTuningStatus     = 'Otimização segura e reversível dos apps. Categoria app-install lista apps individuais sob demanda.'
+                HealthTitle         = 'Saúde'
+                HealthSummary       = 'Diagnóstico local, pacote de suporte e fila manual de reparo.'
+                HealthStatus        = 'Rode Doctor para atualizar a saúde local.'
+                HealthDoctor        = 'Rodar Doctor'
+                HealthSupportBundle = 'Exportar bundle'
+                HealthRepairPlan    = 'Ver fila de reparo'
+                HealthCopyDiagnostic = 'Copiar diagnóstico'
+                HealthDeckStatus    = 'Steam Deck: não verificado.'
+                HealthGithubStatus  = 'GitHub CLI: não verificado.'
                 AiToolsTitle        = 'AI Coding Tools'
                 AiToolsStatus       = 'Instale, valide, configure, desinstale ou abra docs oficiais de ferramentas opcionais de IA.'
                 AiToolsInstall      = 'Instalar'
@@ -476,6 +497,7 @@ function Get-UiStrings {
                 Welcome            = 'Inicio'
                 Selection          = 'Escolher'
                 HostSetup          = 'Configurar PC'
+                Health             = 'Saúde'
                 AppTuning          = 'Otimização de apps (AppTuning)'
                 ApiCenter          = 'Chaves (APIs)'
                 SteamDeckControl   = 'Steam Deck'
@@ -675,6 +697,7 @@ if ([Threading.Thread]::CurrentThread.ApartmentState -ne 'STA') {
     $powershellExe = Get-WindowsPowerShellExePath
     $argumentList  = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', $PSCommandPath, '-UiStatePath', $UiStatePath, '-UiLogPath', $script:UiLogPath)
     if ($SmokeTest) { $argumentList += '-SmokeTest' }
+    if ($SmokeTestWindow) { $argumentList += '-SmokeTestWindow' }
     Write-UiLog -Message ("Relaunching STA. Exe={0}  Args={1}" -f $powershellExe, (ConvertTo-Json $argumentList -Compress))
     Start-Process -FilePath $powershellExe -ArgumentList (ConvertTo-ArgumentString -Tokens $argumentList) | Out-Null
     exit 0
@@ -1303,6 +1326,12 @@ function Get-UiBrush {
                             <TextBlock x:Name="NavHostSetupText" Text="Configurar PC" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
+                    <ToggleButton x:Name="NavHealth"    Style="{StaticResource NavBtn}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="+" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="NavHealthText" Text="Saúde" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
                     <ToggleButton x:Name="NavAppTuning"    Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="◈" FontSize="15" Margin="0,0,10,0"/>
@@ -1427,6 +1456,8 @@ function Get-UiBrush {
                             <DockPanel>
                                 <TextBlock x:Name="MaintenanceLabel" Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="MANUTENÇÃO E RESILIÊNCIA"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                    <Button x:Name="DoctorQuickButton" Style="{StaticResource GhostBtn}" Content="  Doctor" Height="32" Margin="0,0,12,0"/>
+                                    <Button x:Name="SupportBundleQuickButton" Style="{StaticResource GhostBtn}" Content="  Bundle" Height="32" Margin="0,0,12,0"/>
                                     <Button x:Name="AuditIntegrityButton" Style="{StaticResource GhostBtn}" Content="  Verificar Integridade (Audit)" Height="32" Margin="0,0,12,0"/>
                                     <Button x:Name="RollbackChangesButton" Style="{StaticResource GhostBtn}" Content="  Reverter Tweaks (Rollback)" Foreground="{StaticResource WarnBrush}" Height="32" Margin="0,0,12,0"/>
                                     <TextBlock Foreground="#94A3B8" FontSize="11" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="400"
@@ -1590,6 +1621,111 @@ function Get-UiBrush {
                             <TextBlock x:Name="AdminNeedsTitleLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="REVISÃO DE ADMIN"/>
                             <TextBox   x:Name="AdminNeedsTextBox" Style="{StaticResource DarkReadonly}"
                                        Height="160" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Margin="0,4,0,0"/>
+                        </DockPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!--  HEALTH PAGE  -->
+            <ScrollViewer x:Name="PageHealth" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
+                <StackPanel>
+                    <TextBlock x:Name="HealthTitleLabel" Style="{StaticResource PageTitle}" Text="Saúde"/>
+                    <TextBlock x:Name="HealthSummaryLabel" Style="{StaticResource PageSubtitle}" Text="Diagnóstico local, pacote de suporte e fila manual de reparo." TextWrapping="Wrap"/>
+
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock Style="{StaticResource SectionLabel}" Text="STATUS"/>
+                            <TextBlock x:Name="HealthStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Rode Doctor para atualizar a saúde local."/>
+                        </StackPanel>
+                    </Border>
+
+                    <UniformGrid Columns="4" Margin="0,0,0,16">
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,8">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="WSL"/>
+                                <TextBlock x:Name="HealthWslStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="WSL: Ausente"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,8">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="winget"/>
+                                <TextBlock x:Name="HealthWingetStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="winget: Ausente"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,8">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="Reboot"/>
+                                <TextBlock x:Name="HealthRebootStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Reboot: OK"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,8">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="Secrets"/>
+                                <TextBlock x:Name="HealthSecretsStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Secrets: Atenção"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="GitHub CLI"/>
+                                <TextBlock x:Name="HealthGithubStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="GitHub CLI: não verificado."/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="ai-usagebar"/>
+                                <TextBlock x:Name="HealthAiUsagebarStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="ai-usagebar: Ausente"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="Steam Deck"/>
+                                <TextBlock x:Name="HealthDeckStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Steam Deck: não verificado."/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,0,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="Rollback"/>
+                                <TextBlock x:Name="HealthRollbackStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Rollback: Crítico/Bloqueado se confirmação faltar."/>
+                            </StackPanel>
+                        </Border>
+                    </UniformGrid>
+
+                    <Grid Margin="0,0,0,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="DOCTOR"/>
+                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Audit resumido, WSL, winget, reboot, secrets, contrato UI e logs."/>
+                                <Button x:Name="HealthDoctorButton" Style="{StaticResource PrimaryBtn}" Content="Rodar Doctor" Height="34"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="2" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="SUPPORT BUNDLE"/>
+                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Export local sem secrets para diagnostico e suporte."/>
+                                <Button x:Name="HealthSupportBundleButton" Style="{StaticResource GhostBtn}" Content="Exportar bundle" Height="34"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Grid.Column="4" Style="{StaticResource Card}">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="REPAIR QUEUE"/>
+                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Fila de ações com risco, admin e rollback; execução manual."/>
+                                <Button x:Name="HealthRepairPlanButton" Style="{StaticResource GhostBtn}" Content="Ver fila de reparo" Height="34"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                    <Button x:Name="HealthCopyDiagnosticButton" Style="{StaticResource GhostBtn}" Content="Copiar diagnóstico" Height="32" Margin="0,0,0,16"/>
+
+                    <Border Style="{StaticResource Card}">
+                        <DockPanel>
+                            <TextBlock Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="ULTIMO RESULTADO"/>
+                            <TextBox x:Name="HealthDoctorTextBox" Style="{StaticResource DarkReadonly}" Height="220" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
                         </DockPanel>
                     </Border>
                 </StackPanel>
@@ -2339,6 +2475,7 @@ $ui = [ordered]@{
     NavWelcome            = (Get-Control 'NavWelcome')
     NavSelection          = (Get-Control 'NavSelection')
     NavHostSetup          = (Get-Control 'NavHostSetup')
+    NavHealth             = (Get-Control 'NavHealth')
     NavAppTuning          = (Get-Control 'NavAppTuning')
     NavAiTools            = (Get-Control 'NavAiTools')
     NavApiCenter          = (Get-Control 'NavApiCenter')
@@ -2349,6 +2486,7 @@ $ui = [ordered]@{
     NavWelcomeText        = (Get-Control 'NavWelcomeText')
     NavSelectionText      = (Get-Control 'NavSelectionText')
     NavHostSetupText      = (Get-Control 'NavHostSetupText')
+    NavHealthText         = (Get-Control 'NavHealthText')
     NavAppTuningText      = (Get-Control 'NavAppTuningText')
     NavAiToolsText        = (Get-Control 'NavAiToolsText')
     NavApiCenterText      = (Get-Control 'NavApiCenterText')
@@ -2422,8 +2560,28 @@ $ui = [ordered]@{
     CloneBrowseButton     = (Get-Control 'CloneBrowseButton')
     AdminNeedsTitleLabel  = (Get-Control 'AdminNeedsTitleLabel')
     AdminNeedsTextBox     = (Get-Control 'AdminNeedsTextBox')
+    DoctorQuickButton     = (Get-Control 'DoctorQuickButton')
+    SupportBundleQuickButton = (Get-Control 'SupportBundleQuickButton')
     AuditIntegrityButton  = (Get-Control 'AuditIntegrityButton')
     RollbackChangesButton = (Get-Control 'RollbackChangesButton')
+
+    # Health
+    HealthTitleLabel      = (Get-Control 'HealthTitleLabel')
+    HealthSummaryLabel    = (Get-Control 'HealthSummaryLabel')
+    HealthStatusText      = (Get-Control 'HealthStatusText')
+    HealthWslStatusText   = (Get-Control 'HealthWslStatusText')
+    HealthWingetStatusText = (Get-Control 'HealthWingetStatusText')
+    HealthRebootStatusText = (Get-Control 'HealthRebootStatusText')
+    HealthSecretsStatusText = (Get-Control 'HealthSecretsStatusText')
+    HealthDeckStatusText  = (Get-Control 'HealthDeckStatusText')
+    HealthGithubStatusText = (Get-Control 'HealthGithubStatusText')
+    HealthAiUsagebarStatusText = (Get-Control 'HealthAiUsagebarStatusText')
+    HealthRollbackStatusText = (Get-Control 'HealthRollbackStatusText')
+    HealthDoctorButton    = (Get-Control 'HealthDoctorButton')
+    HealthSupportBundleButton = (Get-Control 'HealthSupportBundleButton')
+    HealthRepairPlanButton = (Get-Control 'HealthRepairPlanButton')
+    HealthCopyDiagnosticButton = (Get-Control 'HealthCopyDiagnosticButton')
+    HealthDoctorTextBox   = (Get-Control 'HealthDoctorTextBox')
 
     # App Tuning
     AppTuningTitleLabel   = (Get-Control 'AppTuningTitleLabel')
@@ -2573,7 +2731,7 @@ $ui = [ordered]@{
     RunLogTextBox         = (Get-Control 'RunLogTextBox')
 
     # Pages (panels identified by WPF name)
-    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageAppTuning', 'PageAiTools', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
+    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageHealth', 'PageAppTuning', 'PageAiTools', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
 }
 
 #
@@ -3104,6 +3262,23 @@ function Refresh-LocalizedText {
     $ui.WorkspaceBrowseButton.Content  = " $($ui.Strings.Browse)"
     $ui.CloneBrowseButton.Content      = " $($ui.Strings.Browse)"
     $ui.AdminNeedsTitleLabel.Text      = $ui.Strings.AdminNeeds.ToUpper()
+    $ui.DoctorQuickButton.Content      = " $($ui.Strings.HealthDoctor)"
+    $ui.SupportBundleQuickButton.Content = " $($ui.Strings.HealthSupportBundle)"
+    $ui.HealthTitleLabel.Text          = $ui.Strings.HealthTitle
+    $ui.HealthSummaryLabel.Text        = $ui.Strings.HealthSummary
+    $ui.HealthStatusText.Text          = $ui.Strings.HealthStatus
+    $ui.HealthWslStatusText.Text       = 'WSL: Ausente'
+    $ui.HealthWingetStatusText.Text    = 'winget: Ausente'
+    $ui.HealthRebootStatusText.Text    = 'Reboot: OK'
+    $ui.HealthSecretsStatusText.Text   = 'Secrets: Atenção'
+    $ui.HealthDeckStatusText.Text      = $ui.Strings.HealthDeckStatus
+    $ui.HealthGithubStatusText.Text    = $ui.Strings.HealthGithubStatus
+    $ui.HealthAiUsagebarStatusText.Text = 'ai-usagebar: Ausente'
+    $ui.HealthRollbackStatusText.Text  = 'Rollback: OK'
+    $ui.HealthDoctorButton.Content     = $ui.Strings.HealthDoctor
+    $ui.HealthSupportBundleButton.Content = $ui.Strings.HealthSupportBundle
+    $ui.HealthRepairPlanButton.Content = $ui.Strings.HealthRepairPlan
+    $ui.HealthCopyDiagnosticButton.Content = $ui.Strings.HealthCopyDiagnostic
     $ui.SteamDeckTitleLabel.Text       = $ui.Strings.SteamDeckCenterTitle
     $ui.MonitorProfilesLabel.Text      = $ui.Strings.MonitorProfiles.ToUpper()
     $ui.MonitorFamiliesLabel.Text      = $ui.Strings.MonitorFamilies.ToUpper()
@@ -3140,6 +3315,7 @@ function Refresh-LocalizedText {
     $ui.NavWelcomeText.Text    = $ui.Strings.Welcome
     $ui.NavSelectionText.Text  = $ui.Strings.Selection
     $ui.NavHostSetupText.Text  = $ui.Strings.HostSetup
+    $ui.NavHealthText.Text     = $ui.Strings.Health
     $ui.NavAppTuningText.Text  = $ui.Strings.AppTuning
     $ui.NavAiToolsText.Text    = $ui.Strings.AiToolsTitle
     $ui.NavApiCenterText.Text  = $ui.Strings.ApiCenter
@@ -4094,7 +4270,7 @@ function Get-IsolatedComponentExecutionOverride {
 
 function Confirm-UiExecutionScope {
     param(
-        [ValidateSet('none', 'audit', 'rollback')]
+        [ValidateSet('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan')]
         [string]$MaintenanceIntent = 'none'
     )
 
@@ -5028,6 +5204,7 @@ $navButtons = @(
     $ui.NavWelcome,
     $ui.NavSelection,
     $ui.NavHostSetup,
+    $ui.NavHealth,
     $ui.NavAppTuning,
     $ui.NavAiTools,
     $ui.NavApiCenter,
@@ -5036,7 +5213,7 @@ $navButtons = @(
     $ui.NavReview,
     $ui.NavRun
 )
-$navButtonTargets = @('welcome', 'selection', 'host-setup', 'app-tuning', 'ai-tools', 'api-center', 'steamdeck-control', 'dual-boot', 'review', 'run')
+$navButtonTargets = @('welcome', 'selection', 'host-setup', 'health', 'app-tuning', 'ai-tools', 'api-center', 'steamdeck-control', 'dual-boot', 'review', 'run')
 
 function Navigate-ToPage {
     param([int]$Index)
@@ -5066,6 +5243,7 @@ function Navigate-ToPage {
         'welcome'          { $ui.Strings.Welcome }
         'selection'        { $ui.Strings.Selection }
         'host-setup'       { $ui.Strings.HostSetup }
+        'health'           { $ui.Strings.Health }
         'app-tuning'       { $ui.Strings.AppTuning }
         'ai-tools'         { $ui.Strings.AiToolsTitle }
         'api-center'       { $ui.Strings.ApiCenter }
@@ -5136,6 +5314,9 @@ function Build-BackendArguments {
     if ([string]::IsNullOrWhiteSpace($maint)) { $maint = 'none' }
     if ($maint -eq 'rollback') { $tokens += @('-Rollback') }
     if ($maint -eq 'audit') { $tokens += @('-Audit') }
+    if ($maint -eq 'doctor') { $tokens += @('-Doctor') }
+    if ($maint -eq 'support-bundle') { $tokens += @('-SupportBundle') }
+    if ($maint -eq 'repair-plan') { $tokens += @('-RepairPlan') }
     $tokens += @('-SteamDeckVersion', [string]$ui.State.steamDeckVersion)
     $tokens += @('-HostHealth',       [string]$activeHostHealth)
     $tokens += @('-AppTuning',        [string]$activeAppTuningMode)
@@ -5176,7 +5357,8 @@ function Get-UiBackendParameterBindingSpec {
         '-SecretsActivateProvider',
         '-SecretsActivateCredential',
         '-ChangesPath',
-        '-CacheDir'
+        '-CacheDir',
+        '-ExecuteRepairPlan'
     )
     $switchParameters = @(
         '-ClaudeCodeProjectMcps',
@@ -5187,6 +5369,8 @@ function Get-UiBackendParameterBindingSpec {
         '-ListApps',
         '-ListComponents',
         '-Doctor',
+        '-SupportBundle',
+        '-RepairPlan',
         '-UiContractJson',
         '-BootstrapUiLibraryMode',
         '-SecretsList',
@@ -5372,7 +5556,7 @@ function Start-BackendWorker {
     $adminNeededForRun = ($ui.Preview -and @($ui.Preview.AdminReasons).Count -gt 0 -and -not (Test-IsAdmin))
     $maintMode = [string]$ui.MaintenanceMode
     if ([string]::IsNullOrWhiteSpace($maintMode)) { $maintMode = 'none' }
-    $maintenanceSkipsElevation = ($maintMode -eq 'audit' -or $maintMode -eq 'rollback')
+    $maintenanceSkipsElevation = ($maintMode -in @('audit','rollback','doctor','support-bundle','repair-plan'))
     $needsAdmin = ($adminNeededForRun -and -not $maintenanceSkipsElevation)
     $backendRoot = [System.IO.Path]::GetDirectoryName($backendScriptPath)
     if ([string]::IsNullOrWhiteSpace($backendRoot)) { $backendRoot = $PSScriptRoot }
@@ -5678,13 +5862,19 @@ function Get-UiRunStatusTextFromResult {
     }
 
     $status = Get-ResultTextValue -Name 'status'
+    $mode = Get-ResultTextValue -Name 'mode'
     $runCompleted = if ($stringValues.ContainsKey('RunCompleted')) { [string]$stringValues['RunCompleted'] } else { 'Execução concluída.' }
     $runFailed = if ($stringValues.ContainsKey('RunFailed')) { [string]$stringValues['RunFailed'] } else { 'Execução falhou.' }
 
     if ($status -eq 'success') {
+        if ($mode -eq 'doctor') { return 'Doctor concluido. Abra Resultado para ver checks, audit resumido e fila de reparo.' }
+        if ($mode -eq 'support-bundle') { return 'Support bundle exportado. Abra Resultado para ver o caminho do zip.' }
+        if ($mode -eq 'repair-plan') { return 'Fila de reparo gerada. Abra Resultado para revisar as acoes.' }
         return $runCompleted
     } elseif ($status -eq 'warning') {
-        if ((Get-ResultTextValue -Name 'mode') -eq 'audit') {
+        if ($mode -eq 'doctor') { return 'Doctor concluido com avisos. Abra Resultado para ver checks e fila de reparo.' }
+        if ($mode -eq 'support-bundle') { return 'Support bundle exportado com avisos. Abra Resultado para ver detalhes.' }
+        if ($mode -eq 'audit') {
             $bad = 0
             if ($values.ContainsKey('auditSummary') -and $null -ne $values['auditSummary']) {
                 try { $bad = [int]$values['auditSummary'].critical } catch { }
@@ -5711,6 +5901,172 @@ function Get-UiRunStatusTextFromResult {
     }
 }
 
+function Get-UiDeckStatusTextFromResult {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    try {
+        if (-not ($Result.PSObject.Properties.Name -contains 'doctor')) { return $ui.Strings.HealthDeckStatus }
+        if ($null -eq $Result.doctor) { return $ui.Strings.HealthDeckStatus }
+        if (-not ($Result.doctor.PSObject.Properties.Name -contains 'deck')) { return $ui.Strings.HealthDeckStatus }
+        if ($null -eq $Result.doctor.deck) { return $ui.Strings.HealthDeckStatus }
+        $deck = $Result.doctor.deck
+        $status = [string]$deck.status
+        $label = switch ($status) {
+            'healthy' { 'OK' }
+            'warning' { 'Atenção' }
+            'critical' { 'Crítico' }
+            'notDetected' { 'Não detectado' }
+            default { $status }
+        }
+        $summary = ''
+        if ($deck.PSObject.Properties.Name -contains 'summary') { $summary = [string]$deck.summary }
+        if ([string]::IsNullOrWhiteSpace($summary)) { return "Steam Deck: $label" }
+        return "Steam Deck: $label - $summary"
+    } catch {
+        return $ui.Strings.HealthDeckStatus
+    }
+}
+
+function Get-UiHealthStatusLabel {
+    param([AllowNull()][string]$Status)
+
+    switch ([string]$Status) {
+        'healthy' { return 'OK' }
+        'success' { return 'OK' }
+        'present' { return 'OK' }
+        'configured' { return 'OK' }
+        'admin' { return 'OK' }
+        'notDetected' { return 'Ausente' }
+        'missing' { return 'Ausente' }
+        'warning' { return 'Atenção' }
+        'critical' { return 'Crítico' }
+        'error' { return 'Crítico' }
+        'corrupt' { return 'Crítico' }
+        'blocked' { return 'Bloqueado' }
+        default {
+            if ([string]::IsNullOrWhiteSpace([string]$Status)) { return 'Ausente' }
+            return [string]$Status
+        }
+    }
+}
+
+function Get-UiDoctorCheckById {
+    param(
+        [Parameter(Mandatory = $true)]$Result,
+        [Parameter(Mandatory = $true)][string]$Id
+    )
+
+    try {
+        if (-not ($Result.PSObject.Properties.Name -contains 'doctor')) { return $null }
+        if ($null -eq $Result.doctor) { return $null }
+        if (-not ($Result.doctor.PSObject.Properties.Name -contains 'checks')) { return $null }
+        return @($Result.doctor.checks | Where-Object { [string]$_.id -eq $Id } | Select-Object -First 1)
+    } catch {
+        return $null
+    }
+}
+
+function Get-UiHealthCardStatusText {
+    param(
+        [Parameter(Mandatory = $true)]$Result,
+        [Parameter(Mandatory = $true)][string]$Card
+    )
+
+    try {
+        $cardName = ([string]$Card).ToLowerInvariant()
+        if (-not ($Result.PSObject.Properties.Name -contains 'doctor') -or $null -eq $Result.doctor) {
+            return ("{0}: Ausente" -f $Card)
+        }
+        $doctor = $Result.doctor
+        switch ($cardName) {
+            'wsl' {
+                $wsl = $null
+                if ($doctor.PSObject.Properties.Name -contains 'wslRepair') { $wsl = $doctor.wslRepair }
+                if ($null -eq $wsl) { $wsl = Get-UiDoctorCheckById -Result $Result -Id 'wsl' }
+                if ($null -eq $wsl) { return 'WSL: Ausente' }
+                $label = Get-UiHealthStatusLabel -Status ([string]$wsl.status)
+                $detail = if ($wsl.PSObject.Properties.Name -contains 'corruptionKind') { [string]$wsl.corruptionKind } elseif ($wsl.PSObject.Properties.Name -contains 'summary') { [string]$wsl.summary } else { '' }
+                if ([string]::IsNullOrWhiteSpace($detail)) { return "WSL: $label" }
+                return "WSL: $label - $detail"
+            }
+            'winget' {
+                $check = Get-UiDoctorCheckById -Result $Result -Id 'winget'
+                if ($null -eq $check) { return 'winget: Ausente' }
+                return ("winget: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
+            }
+            'reboot' {
+                $check = Get-UiDoctorCheckById -Result $Result -Id 'pending-reboot'
+                if ($null -eq $check) { return 'Reboot: OK' }
+                return ("Reboot: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
+            }
+            'secrets' {
+                if ($doctor.PSObject.Properties.Name -contains 'secrets' -and $null -ne $doctor.secrets) {
+                    $bad = @($doctor.secrets.providers | Where-Object { [string]$_.status -in @('missing','rejected','expired','unknown') })
+                    if ($bad.Count -eq 0) { return 'Secrets: OK' }
+                    return ("Secrets: Atenção - {0} provider(s) precisam de ação" -f $bad.Count)
+                }
+                $check = Get-UiDoctorCheckById -Result $Result -Id 'secrets'
+                if ($null -eq $check) { return 'Secrets: Ausente' }
+                return ("Secrets: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
+            }
+            'ai-usagebar' {
+                if ($doctor.PSObject.Properties.Name -contains 'aiUsagebar' -and $null -ne $doctor.aiUsagebar) {
+                    $ai = $doctor.aiUsagebar
+                    $ok = ([bool]$ai.installed -and [bool]$ai.configured)
+                    $label = if ($ok) { 'OK' } else { 'Ausente' }
+                    $vendor = if ($ai.PSObject.Properties.Name -contains 'primaryVendor') { [string]$ai.primaryVendor } else { '' }
+                    if ([string]::IsNullOrWhiteSpace($vendor)) { return "ai-usagebar: $label" }
+                    return "ai-usagebar: $label - $vendor"
+                }
+                return 'ai-usagebar: Ausente'
+            }
+            'rollback' {
+                $check = Get-UiDoctorCheckById -Result $Result -Id 'rollback-gate'
+                if ($null -eq $check) { return 'Rollback: Ausente' }
+                return ("Rollback: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
+            }
+            default { return ("{0}: Ausente" -f $Card) }
+        }
+    } catch {
+        return ("{0}: Ausente" -f $Card)
+    }
+}
+
+function Get-UiGithubCliStatusTextFromResult {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    try {
+        if (-not ($Result.PSObject.Properties.Name -contains 'doctor')) { return $ui.Strings.HealthGithubStatus }
+        if ($null -eq $Result.doctor) { return $ui.Strings.HealthGithubStatus }
+        $github = $null
+        if ($Result.doctor.PSObject.Properties.Name -contains 'githubCliAuth') {
+            $github = $Result.doctor.githubCliAuth
+        }
+        if ($null -eq $github -and ($Result.doctor.PSObject.Properties.Name -contains 'checks')) {
+            $github = @($Result.doctor.checks | Where-Object { [string]$_.id -eq 'github-cli-auth' } | Select-Object -First 1)
+        }
+        if ($null -eq $github) { return $ui.Strings.HealthGithubStatus }
+
+        $status = [string]$github.status
+        $authStatus = if ($github.PSObject.Properties.Name -contains 'ghAuthStatus') { [string]$github.ghAuthStatus } else { '' }
+        $tokenAvailable = $false
+        if ($github.PSObject.Properties.Name -contains 'tokenAvailable') { $tokenAvailable = [bool]$github.tokenAvailable }
+        $label = switch ($status) {
+            'healthy' { 'OK' }
+            'missing' { 'gh ausente' }
+            'critical' { 'Crítico' }
+            'warning' { if ($tokenAvailable) { 'Token disponível' } else { 'Sem autenticação' } }
+            default { if ([string]::IsNullOrWhiteSpace($authStatus)) { $status } else { $authStatus } }
+        }
+        $summary = ''
+        if ($github.PSObject.Properties.Name -contains 'summary') { $summary = [string]$github.summary }
+        if ([string]::IsNullOrWhiteSpace($summary)) { return "GitHub CLI: $label" }
+        return "GitHub CLI: $label - $summary"
+    } catch {
+        return $ui.Strings.HealthGithubStatus
+    }
+}
+
 function Finalize-RunFromResult {
     Append-RunLog
     $resultPath = [string]$ui.CurrentResultPath
@@ -5734,6 +6090,22 @@ function Finalize-RunFromResult {
         }
     }
     $statusText = Get-UiRunStatusTextFromResult -Result $result -Strings $ui.Strings
+    try {
+        $modeText = [string]$result.mode
+        if ($modeText -in @('doctor','support-bundle','repair-plan')) {
+            $ui.HealthStatusText.Text = $statusText
+            $ui.HealthWslStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'wsl'
+            $ui.HealthWingetStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'winget'
+            $ui.HealthRebootStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'reboot'
+            $ui.HealthSecretsStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'secrets'
+            $ui.HealthDeckStatusText.Text = Get-UiDeckStatusTextFromResult -Result $result
+            $ui.HealthGithubStatusText.Text = Get-UiGithubCliStatusTextFromResult -Result $result
+            $ui.HealthAiUsagebarStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'ai-usagebar'
+            $ui.HealthRollbackStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'rollback'
+            $ui.HealthDoctorTextBox.Text = ($result | ConvertTo-Json -Depth 8)
+        }
+    } catch {
+    }
     Complete-RunExecution -StatusText $statusText
 }
 
@@ -5819,7 +6191,7 @@ function Confirm-UiCriticalAction {
 
 function Start-RunExecution {
     param(
-        [ValidateSet('none', 'audit', 'rollback')]
+        [ValidateSet('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan')]
         [string]$MaintenanceIntent = 'none'
     )
     if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
@@ -6073,15 +6445,18 @@ $ui.ApiApplyButton.Add_Click({
 # Quick preset buttons
 foreach ($presetEntry in $ui.PresetButtons.GetEnumerator()) {
     $btnRef     = $presetEntry.Value
-    $presetName = $presetEntry.Key
+    $btnRef.Tag = [string]$presetEntry.Key
     $btnRef.Add_Click({
+        param($sourceControl)
+        $presetName = [string]$sourceControl.Tag
+        if ([string]::IsNullOrWhiteSpace($presetName)) { return }
         Apply-QuickPreset -PresetName $presetName
         Save-UiState -State $ui.State -Path $UiStatePath
         Refresh-SelectionTrees
         Refresh-SelectionSummary
         Refresh-HostSetupControls
         $ui.StatusLabel.Text = "Preset: $presetName"
-    }.GetNewClosure())
+    })
 }
 
 # Custom preset actions
@@ -6143,6 +6518,66 @@ $ui.AuditIntegrityButton.Add_Click({
     Navigate-ToPage -Index $runIdx
     Start-RunExecution -MaintenanceIntent 'audit'
 })
+
+$ui.DoctorQuickButton.Add_Click({
+    $runIdx = @($ui.PageNames).IndexOf('PageRun')
+    if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
+    Navigate-ToPage -Index $runIdx
+    Start-RunExecution -MaintenanceIntent 'doctor'
+})
+
+$ui.SupportBundleQuickButton.Add_Click({
+    $runIdx = @($ui.PageNames).IndexOf('PageRun')
+    if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
+    Navigate-ToPage -Index $runIdx
+    Start-RunExecution -MaintenanceIntent 'support-bundle'
+})
+
+$ui.HealthDoctorButton.Add_Click({
+    $runIdx = @($ui.PageNames).IndexOf('PageRun')
+    if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
+    Navigate-ToPage -Index $runIdx
+    Start-RunExecution -MaintenanceIntent 'doctor'
+})
+
+$ui.HealthSupportBundleButton.Add_Click({
+    $runIdx = @($ui.PageNames).IndexOf('PageRun')
+    if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
+    Navigate-ToPage -Index $runIdx
+    Start-RunExecution -MaintenanceIntent 'support-bundle'
+})
+
+$ui.HealthRepairPlanButton.Add_Click({
+    $runIdx = @($ui.PageNames).IndexOf('PageRun')
+    if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
+    Navigate-ToPage -Index $runIdx
+    Start-RunExecution -MaintenanceIntent 'repair-plan'
+})
+
+function Copy-HealthDiagnostic {
+    try {
+        $text = [string]$ui.HealthDoctorTextBox.Text
+        if ([string]::IsNullOrWhiteSpace($text)) {
+            $text = @(
+                [string]$ui.HealthStatusText.Text,
+                [string]$ui.HealthWslStatusText.Text,
+                [string]$ui.HealthWingetStatusText.Text,
+                [string]$ui.HealthRebootStatusText.Text,
+                [string]$ui.HealthSecretsStatusText.Text,
+                [string]$ui.HealthGithubStatusText.Text,
+                [string]$ui.HealthAiUsagebarStatusText.Text,
+                [string]$ui.HealthDeckStatusText.Text,
+                [string]$ui.HealthRollbackStatusText.Text
+            ) -join [Environment]::NewLine
+        }
+        [System.Windows.Clipboard]::SetText($text)
+        $ui.StatusLabel.Text = 'Diagnóstico copiado.'
+    } catch {
+        $ui.StatusLabel.Text = "Erro ao copiar diagnóstico: $($_.Exception.Message)"
+    }
+}
+
+$ui.HealthCopyDiagnosticButton.Add_Click({ Copy-HealthDiagnostic })
 
 $ui.RollbackChangesButton.Add_Click({
     if (Confirm-UiCriticalAction -Title 'Confirmar rollback' -Message "Rollback vai reverter ajustes de registro/sistema criados pelo bootstrap. Apps instalados nao serao removidos automaticamente. Log atual: $([string]$ui.CurrentLogPath)") {
@@ -6721,12 +7156,14 @@ $ui.OpenReportsButton.Add_Click({  Open-ExistingPath -Path ([string]$ui.State.la
 
 # Sidebar nav
 for ($i = 0; $i -lt $navButtons.Count; $i++) {
-    $targetPageId = [string]$navButtonTargets[$i]
+    $navButtons[$i].Tag = [string]$navButtonTargets[$i]
     $navButtons[$i].Add_Click({
+        param($sourceControl)
+        $targetPageId = [string]$sourceControl.Tag
         $pageIds = @(Get-UiPageIds)
         $idx = [Array]::IndexOf($pageIds, $targetPageId)
         if ($idx -ge 0) { Navigate-ToPage -Index $idx }
-    }.GetNewClosure())
+    })
 }
 
 # Back / Next / Finish
@@ -6772,6 +7209,19 @@ $window.Add_Closing({
     $ui.LogTimer.Stop()
     Save-UiState -State $ui.State -Path $UiStatePath
 })
+
+if ($SmokeTestWindow) {
+    Save-UiState -State $ui.State -Path $UiStatePath
+    [ordered]@{
+        pages              = @(Get-UiPageIds)
+        languages          = @(Get-UiLanguages)
+        statePath          = $UiStatePath
+        backend            = $backendScriptPath
+        windowLoaded       = ($null -ne $window)
+        handlersRegistered = $true
+    } | ConvertTo-Json -Depth 8
+    return
+}
 
 #
 # Run the WPF application

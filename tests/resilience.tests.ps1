@@ -244,6 +244,61 @@ Describe 'Resilience Architecture' {
             [int]$summary.critical | Should Be 1
         }
 
+        It 'summarizes audit duration and timeout counts' {
+            $rows = @(
+                [pscustomobject]@{ Severity = 'Ready'; DurationMs = 12; TimedOut = $false },
+                [pscustomobject]@{ Severity = 'UnsupportedAudit'; DurationMs = 38; TimedOut = $true }
+            )
+
+            $summary = New-BootstrapAuditSeveritySummary -Rows $rows
+
+            [int]$summary.durationMs | Should Be 50
+            [int]$summary.timedOut | Should Be 1
+        }
+
+        It 'adds audit timing metadata to rows' {
+            $row = New-BootstrapAuditRow -Component 'slow-winget' -Status 'Unknown' -Detail 'winget timeout' -DurationMs 42 -TimedOut $true -ProbeSource 'winget-list-id'
+
+            [int]$row.DurationMs | Should Be 42
+            [bool]$row.TimedOut | Should Be $true
+            [string]$row.ProbeSource | Should Be 'winget-list-id'
+        }
+
+        It 'uses the short audit winget probe for generic winget fallback' {
+            $catalog = @{
+                'slow-winget' = [pscustomobject]@{
+                    Name = 'slow-winget'
+                    Description = 'Slow winget component'
+                    Kind = 'winget'
+                    DependsOn = @()
+                    Optional = $false
+                    Id = 'Example.Slow'
+                    ProbePaths = @()
+                    VersionCheckCommand = ''
+                }
+            }
+            $resolution = @{
+                ResolvedComponents = @('slow-winget')
+                Catalog = $catalog
+            }
+
+            Mock Get-BootstrapComponentCatalog { $catalog }
+            Mock Get-Winget { return 'winget.exe' }
+            Mock Test-WingetPackageInstalled { throw '120s fallback should not be used by audit' }
+            Mock Invoke-WingetListIdProbe {
+                return @{ stdout = ''; stderr = 'timeout'; exitCode = 124; timedOut = $true }
+            }
+
+            $results = Invoke-BootstrapAuditMode -Resolution $resolution -ComponentTimeoutSeconds 1
+
+            [string]$results[0].Component | Should Be 'slow-winget'
+            [string]$results[0].Status | Should Be 'Unknown'
+            [bool]$results[0].TimedOut | Should Be $true
+            [string]$results[0].ProbeSource | Should Be 'winget-list-id'
+            Assert-MockCalled Test-WingetPackageInstalled -Times 0 -Scope It
+            Assert-MockCalled Invoke-WingetListIdProbe -Scope It -ParameterFilter { $Id -eq 'Example.Slow' -and $TimeoutMs -le 8000 }
+        }
+
         It 'Java JDK audit rejects java runtime without javac' {
             Mock Resolve-CommandPath {
                 param([string]$Name)

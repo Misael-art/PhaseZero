@@ -1,11 +1,12 @@
 {
-  "schemaVersion": "1.0.0",
+  "schemaVersion": "1.4.0",
   "topLevelKeys": [
     "apiCatalog",
     "apiInventory",
     "appCatalog",
     "appTuningCatalog",
     "appTuningModes",
+    "capabilities",
     "componentNames",
     "components",
     "defaults",

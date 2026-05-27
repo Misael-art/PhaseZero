@@ -164,7 +164,7 @@ Describe 'Rotate secrets CLI helpers' {
     Context 'UI Contract exposes secretsRotation' {
         It 'includes schemaVersion and secretsRotation block' {
             $contract = Get-BootstrapUiContract
-            $contract.schemaVersion | Should Be '1.0.0'
+            $contract.schemaVersion | Should Be '1.4.0'
             $contract.secretsRotation | Should Not BeNullOrEmpty
             $contract.secretsRotation.scheduleOptions -contains 'daily' | Should Be $true
             $contract.secretsRotation.staleHoursDefault | Should Be 24

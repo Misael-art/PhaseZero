@@ -50,12 +50,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Pester 3.4.0
+      - name: Install Pester 3.4.0 and PSScriptAnalyzer
         shell: powershell
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           Install-Module Pester -RequiredVersion 3.4.0 -Force -Scope CurrentUser
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
 
       - name: Parse PowerShell
         shell: pwsh

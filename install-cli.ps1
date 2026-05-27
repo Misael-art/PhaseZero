@@ -129,6 +129,124 @@ function Read-HostOrDefault {
     return $reply
 }
 
+function Write-CliLine {
+    param([AllowNull()][string]$Text = '')
+    Write-Output ([string]$Text)
+}
+
+function Get-CliOutputWidth {
+    try {
+        $width = [int][Console]::WindowWidth
+    } catch {
+        $width = 100
+    }
+
+    if ($width -lt 80) { return 80 }
+    if ($width -gt 118) { return 118 }
+    return $width
+}
+
+function Split-CliTextLine {
+    param(
+        [AllowNull()][string]$Text,
+        [ValidateRange(20, 200)][int]$Width
+    )
+
+    $normalized = ([string]$Text -replace '\s+', ' ').Trim()
+    if ([string]::IsNullOrWhiteSpace($normalized)) { return @('') }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $current = ''
+    foreach ($word in @($normalized -split ' ')) {
+        $remaining = [string]$word
+        while ($remaining.Length -gt $Width) {
+            if (-not [string]::IsNullOrWhiteSpace($current)) {
+                $lines.Add($current) | Out-Null
+                $current = ''
+            }
+            $lines.Add($remaining.Substring(0, $Width)) | Out-Null
+            $remaining = $remaining.Substring($Width)
+        }
+
+        if ([string]::IsNullOrWhiteSpace($current)) {
+            $current = $remaining
+        } elseif (($current.Length + 1 + $remaining.Length) -le $Width) {
+            $current = "$current $remaining"
+        } else {
+            $lines.Add($current) | Out-Null
+            $current = $remaining
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($current)) {
+        $lines.Add($current) | Out-Null
+    }
+    return @($lines.ToArray())
+}
+
+function Write-CliProfileRow {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()][string]$Description,
+        [ValidateRange(80, 118)][int]$Width
+    )
+
+    $nameWidth = 28
+    $prefixWidth = 2 + $nameWidth + 2
+    $descriptionWidth = [Math]::Max(30, ($Width - $prefixWidth))
+    $wrapped = @(Split-CliTextLine -Text $Description -Width $descriptionWidth)
+    Write-CliLine -Text ('  {0,-28}  {1}' -f $Name, $wrapped[0])
+    for ($i = 1; $i -lt $wrapped.Count; $i++) {
+        Write-CliLine -Text ('  {0,-28}  {1}' -f '', $wrapped[$i])
+    }
+}
+
+function Get-CliProfileGroupMap {
+    $groups = [ordered]@{}
+    $groups['Perfis recomendados'] = @('recommended', 'safe-base', 'public-beta', 'base', 'full-workstation', 'full')
+    $groups['Steam Deck'] = @(
+        'steamdeck-recommended', 'steamdeck-full', 'steamdeck-essentials', 'steamdeck-input',
+        'steamdeck-input-advanced', 'steamdeck-power', 'steamdeck-dock', 'steamdeck-storage',
+        'steamdeck-connectivity', 'steamdeck-qol', 'steamdeck-capture', 'steamdeck-backup'
+    )
+    $groups['Categorias opcionais'] = @(
+        'containers', 'ai', 'dev-ai', 'support-tools', 'security', 'utilities', 'creator',
+        'game-dev', 'gaming', 'automation', 'social', 'workspace', 'legacy'
+    )
+    return $groups
+}
+
+function Write-CliProfileCatalog {
+    param([Parameter(Mandatory = $true)][hashtable]$Profiles)
+
+    $width = Get-CliOutputWidth
+    $written = @{}
+    Write-CliLine -Text ('Nome'.PadRight(30) + 'Descricao')
+    Write-CliLine -Text ('-' * $width)
+
+    $groups = Get-CliProfileGroupMap
+    foreach ($groupName in $groups.Keys) {
+        Write-CliLine
+        Write-CliLine -Text $groupName
+        foreach ($profileName in @($groups[$groupName])) {
+            if (-not $Profiles.Contains($profileName)) { continue }
+            $profileDef = $Profiles[$profileName]
+            Write-CliProfileRow -Name ([string]$profileDef.Name) -Description ([string]$profileDef.Description) -Width $width
+            $written[$profileName] = $true
+        }
+    }
+
+    $remaining = @($Profiles.Keys | Where-Object { -not $written.ContainsKey([string]$_) } | Sort-Object)
+    if ($remaining.Count -gt 0) {
+        Write-CliLine
+        Write-CliLine -Text 'Outros'
+        foreach ($profileName in $remaining) {
+            $profileDef = $Profiles[$profileName]
+            Write-CliProfileRow -Name ([string]$profileDef.Name) -Description ([string]$profileDef.Description) -Width $width
+        }
+    }
+}
+
 function Resolve-CliLogPath {
     param([string]$RequestedPath)
     if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) { return [System.IO.Path]::GetFullPath($RequestedPath) }
@@ -370,13 +488,14 @@ Write-Header 'PhaseZero Bootstrap - instalador CLI'
 Write-Host '[1/3] Carregando perfis disponiveis...' -ForegroundColor Green
 Write-Host ''
 
-$profilesOutput = & powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "& { . '$ToolsPs1' -BootstrapUiLibraryMode; Show-BootstrapProfiles }" 2>&1
-$exitCode = $LASTEXITCODE
-Write-Host $profilesOutput
-if ($exitCode -ne 0) {
-    Write-Host "[ERRO] Falha ao listar perfis (codigo $exitCode)." -ForegroundColor Red
+try {
+    . $ToolsPs1 -BootstrapUiLibraryMode
+    $profiles = Get-BootstrapProfileCatalog
+    Write-CliProfileCatalog -Profiles $profiles
+} catch {
+    Write-Host "[ERRO] Falha ao listar perfis: $($_.Exception.Message)" -ForegroundColor Red
     if (-not [bool]$script:Options.NonInteractive) { Pause }
-    exit $exitCode
+    exit 1
 }
 
 if ([bool]$script:Options.ListProfiles) { exit 0 }
@@ -390,7 +509,7 @@ if ([string]::IsNullOrWhiteSpace($profileChoice)) {
         exit 2
     }
     Write-Host ''
-    $profileChoice = Read-HostOrDefault -Prompt 'Digite o nome do perfil que deseja instalar (ex: base, full, ai)'
+    $profileChoice = Read-HostOrDefault -Prompt 'Digite o perfil (ex: recommended, safe-base, public-beta, steamdeck-recommended)'
     if ([string]::IsNullOrWhiteSpace($profileChoice)) {
         Write-Host '[AVISO] Nenhum perfil selecionado. Saindo.' -ForegroundColor Yellow
         if (-not [bool]$script:Options.NonInteractive) { Pause }

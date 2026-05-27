@@ -56,6 +56,7 @@ Describe 'Bootstrap UI launcher' {
 
         $result = $text | ConvertFrom-Json -ErrorAction Stop
         (@($result.pages) -contains 'welcome') | Should Be $true
+        (@($result.pages) -contains 'health') | Should Be $true
         (@($result.pages) -contains 'app-tuning') | Should Be $true
         (@($result.pages) -contains 'api-center') | Should Be $true
         (@($result.pages) -contains 'api-catalog') | Should Be $true
@@ -67,6 +68,24 @@ Describe 'Bootstrap UI launcher' {
         @($state.selectedProfiles) | Should Be @('safe-base')
         [string]$state.hostHealth | Should Be 'off'
         [string]$state.appTuningMode | Should Be 'off'
+    }
+
+    It 'loads full WPF window wiring after backend import' {
+        $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        $uiStatePath = Join-Path $script:TestDataRoot 'ui-state.json'
+        $uiLogPath = Join-Path $script:TestDataRoot 'bootstrap-ui.log'
+
+        $output = & $powershellExe -NoProfile -ExecutionPolicy Bypass -STA -File $uiScriptPath -UiStatePath $uiStatePath -UiLogPath $uiLogPath -SmokeTestWindow 2>&1
+        $exitCode = $LASTEXITCODE
+        $text = ((@($output) -join [Environment]::NewLine)).Trim()
+
+        $exitCode | Should Be 0
+        ([string]::IsNullOrWhiteSpace($text)) | Should Be $false
+
+        $result = $text | ConvertFrom-Json -ErrorAction Stop
+        [bool]$result.windowLoaded | Should Be $true
+        [bool]$result.handlersRegistered | Should Be $true
+        (@($result.pages) -contains 'health') | Should Be $true
     }
 
     It 'normalizes persisted artifact paths to strings during state roundtrip' {
@@ -100,6 +119,12 @@ Describe 'Bootstrap UI launcher' {
 
         $match.Success | Should Be $true
         { [xml]$null = $match.Groups[1].Value } | Should Not Throw
+    }
+
+    It 'does not use closure snapshots for UI event wiring' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Not Match '\.GetNewClosure\(\)'
     }
 
     It 'loads the embedded XAML with the WPF runtime' {
@@ -151,6 +176,18 @@ if (-not `$match.Success) { throw 'XAML block not found' }
     It 'guards run execution against duplicate starts and missing result files' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 
+        $raw | Should Match 'PageHealth'
+        $raw | Should Match 'HealthDoctorButton'
+        $raw | Should Match 'HealthSupportBundleButton'
+        $raw | Should Match 'HealthRepairPlanButton'
+        $raw | Should Match 'HealthDeckStatusText'
+        $raw | Should Match 'HealthGithubStatusText'
+        $raw | Should Match 'doctor\.deck'
+        $raw | Should Match 'doctor\.githubCliAuth'
+        $raw | Should Match 'Get-UiGithubCliStatusTextFromResult'
+        $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''doctor'''
+        $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''support-bundle'''
+        $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''repair-plan'''
         $raw | Should Match 'DispatcherUnhandledException'
         $raw | Should Match 'Append-RunLog'
         $raw | Should Match 'LogTimer tick'
@@ -174,6 +211,58 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'Processo elevado encerrou antes do backend inicializar'
         $raw | Should Match 'Read-UiBackendResultWithRetry'
         $raw | Should Match 'Get-UiRunStatusTextFromResult'
+    }
+
+    It 'renders Health as an operational dashboard with all required cards and actions' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        foreach ($controlName in @(
+            'HealthWslStatusText',
+            'HealthWingetStatusText',
+            'HealthRebootStatusText',
+            'HealthSecretsStatusText',
+            'HealthGithubStatusText',
+            'HealthAiUsagebarStatusText',
+            'HealthDeckStatusText',
+            'HealthRollbackStatusText',
+            'HealthCopyDiagnosticButton'
+        )) {
+            $raw | Should Match $controlName
+        }
+        foreach ($label in @('WSL','winget','Reboot','Secrets','GitHub CLI','ai-usagebar','Steam Deck','Rollback')) {
+            $raw | Should Match ([regex]::Escape($label))
+        }
+        foreach ($statusText in @('OK','Aten..o','Cr.tico','Ausente','Bloqueado')) {
+            $raw | Should Match $statusText
+        }
+        $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''doctor'''
+        $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''support-bundle'''
+        $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''repair-plan'''
+        $raw | Should Match 'Copy-HealthDiagnostic'
+    }
+
+    It 'maps Doctor result fields into Health card status text' {
+        Import-UiFunctionsForTest -Names @('Get-UiHealthStatusLabel','Get-UiDoctorCheckById','Get-UiHealthCardStatusText')
+
+        $result = [pscustomobject]@{
+            doctor = [pscustomobject]@{
+                checks = @(
+                    [pscustomobject]@{ id = 'winget'; status = 'healthy'; summary = 'winget ok' },
+                    [pscustomobject]@{ id = 'pending-reboot'; status = 'warning'; pending = $true; summary = 'reboot pending' },
+                    [pscustomobject]@{ id = 'rollback-gate'; status = 'healthy'; summary = 'rollback ok' }
+                )
+                secrets = [pscustomobject]@{ providers = @([pscustomobject]@{ provider = 'openai'; status = 'present' }) }
+                aiUsagebar = [pscustomobject]@{ installed = $true; configured = $true; primaryVendor = 'openrouter' }
+                wslRepair = [pscustomobject]@{ status = 'blocked'; corruptionKind = 'REGDB_E_CLASSNOTREG'; recommendedAction = 'repair elevated' }
+            }
+        }
+
+        (Get-UiHealthCardStatusText -Result $result -Card 'wsl') | Should Match 'Bloqueado.*REGDB_E_CLASSNOTREG'
+        (Get-UiHealthCardStatusText -Result $result -Card 'winget') | Should Match 'OK.*winget ok'
+        (Get-UiHealthCardStatusText -Result $result -Card 'reboot') | Should Match 'Aten..o.*reboot pending'
+        (Get-UiHealthCardStatusText -Result $result -Card 'secrets') | Should Match 'OK'
+        (Get-UiHealthCardStatusText -Result $result -Card 'ai-usagebar') | Should Match 'OK.*openrouter'
+        (Get-UiHealthCardStatusText -Result $result -Card 'rollback') | Should Match 'OK.*rollback ok'
     }
 
     It 'formats blocked result status by blocker action instead of always saying reboot' {
@@ -664,6 +753,17 @@ param(
         (@($result.pages) -contains 'welcome') | Should Be $true
         $stdout | Should Not Match '\[INFO\]'
         ([string]::IsNullOrWhiteSpace($stderr)) | Should Be $true
+    }
+
+    It 'keeps launcher console output concise by default' {
+        $raw = Get-Content -Path (Join-Path $repoRoot 'bootstrap-ui.bat') -Raw
+
+        $raw | Should Match 'BOOTSTRAP_UI_VERBOSE'
+        $raw | Should Match ':resolve_timestamp'
+        $raw | Should Match '-STA'
+        $raw | Should Match '-WindowStyle Hidden'
+        $raw | Should Not Match 'TS=unknown'
+        $raw | Should Not Match 'if not "%BOOTSTRAP_SMOKE_TEST%"=="1" echo\(!LOG_LINE!'
     }
 
     It 'maps every direct UI event handler target before startup wiring' {

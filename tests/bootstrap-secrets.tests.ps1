@@ -111,6 +111,71 @@ Describe 'Bootstrap secrets manifest v2' {
         $bundle.Data.targets.userEnv.OPENAI_API_KEY | Should Be '{{activeProviders.openai.apiKey}}'
     }
 
+    It 'protects bootstrap-secrets.json at rest and reads the decrypted manifest through helpers' {
+        $path = Join-Path $script:TestDataRoot 'bootstrap-secrets.json'
+        Write-BootstrapJsonFile -Path $path -Value @{
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                openai = @{
+                    activeCredential = 'openai-main-01'
+                    rotationOrder = @('openai-main-01')
+                    credentials = @{
+                        'openai-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'phasezero-value-at-rest'
+                            secretKind = 'apiKey'
+                        }
+                    }
+                }
+            }
+            targets = @{}
+        }
+
+        $raw = Get-Content -Path $path -Raw -Encoding utf8
+        $stored = $raw | ConvertFrom-Json
+        [int]$stored.metadata.version | Should Be 3
+        [string]$stored.metadata.protection | Should Be 'dpapi-current-user'
+        [string]$raw | Should Not Match 'phasezero-value-at-rest'
+
+        $read = Read-BootstrapJsonFile -Path $path
+        $read.providers.openai.credentials['openai-main-01'].secret | Should Be 'phasezero-value-at-rest'
+    }
+
+    It 'migrates a plaintext v2 secrets manifest to a protected v3 envelope' {
+        $path = Join-Path $script:TestDataRoot 'bootstrap-secrets.json'
+        $plaintext = @{
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                github = @{
+                    activeCredential = 'github-main-01'
+                    rotationOrder = @('github-main-01')
+                    credentials = @{
+                        'github-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'phasezero-value-plain'
+                            secretKind = 'apiKey'
+                        }
+                    }
+                }
+            }
+            targets = @{}
+        } | ConvertTo-Json -Depth 12
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $null = New-Item -Path (Split-Path -Path $path -Parent) -ItemType Directory -Force
+        [System.IO.File]::WriteAllText($path, [string]$plaintext, $utf8)
+
+        $bundle = Get-BootstrapSecretsData
+
+        $bundle.Data.providers.github.credentials['github-main-01'].secret | Should Be 'phasezero-value-plain'
+        $raw = Get-Content -Path $path -Raw -Encoding utf8
+        [string]$raw | Should Not Match 'phasezero-value-plain'
+        [int](($raw | ConvertFrom-Json).metadata.version) | Should Be 3
+    }
+
     It 'imports multiple keys with stable ids, de-duplicates repeated secrets, and seeds rotation order' {
         $text = @'
 ### OpenRouter

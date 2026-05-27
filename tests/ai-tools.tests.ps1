@@ -45,7 +45,7 @@ function Invoke-InstallCliBat {
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     if (-not $process.WaitForExit($TimeoutMs)) {
-        try { $process.Kill() } catch { }
+        try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
         throw "install-cli.bat timed out for args: $($Args -join ' ')"
     }
 
@@ -71,7 +71,7 @@ Describe 'AI coding tool support' {
 
         $catalog = Get-BootstrapAiToolCatalog
 
-        foreach ($toolName in @('rtk','claude-code','opencode','hermes-agent','hermes-desktop','openclaw','aion-ui','antigravity-workflows')) {
+        foreach ($toolName in @('rtk','claude-code','opencode','hermes-agent','hermes-desktop','openclaw','aion-ui','antigravity-workflows','ai-usagebar')) {
             $catalog.Contains($toolName) | Should Be $true
             [string]$catalog[$toolName].DocsUrl | Should Match '^https://'
             [string]$catalog[$toolName].InstallSupport | Should Not Be ''
@@ -86,6 +86,11 @@ Describe 'AI coding tool support' {
         [string]$catalog['hermes-agent'].Notes | Should Match 'WSL2'
         (@($catalog['hermes-agent'].ProbePaths) -contains '$env:USERPROFILE\.hermes\hermes-agent') | Should Be $true
         [string]$catalog['antigravity-workflows'].InstallSupport | Should Be 'workflow-only'
+        [string]$catalog['ai-usagebar'].GitHubRepo | Should Be 'akitaonrails/ai-usagebar'
+        [string]$catalog['ai-usagebar'].InstallSupport | Should Be 'linux-release'
+        [string]$catalog['ai-usagebar'].ReleaseTag | Should Be 'v0.4.0'
+        [string]$catalog['ai-usagebar'].ReleaseAssets['x86_64'].Name | Should Be 'ai-usagebar-linux-x86_64.tar.gz'
+        [string]$catalog['ai-usagebar'].ReleaseAssets['x86_64'].Sha256 | Should Match '^[a-f0-9]{64}$'
     }
 
     It 'reports AI tool status without claiming missing tools are configured' {
@@ -124,6 +129,43 @@ Describe 'AI coding tool support' {
         [string]$result.message | Should Match 'install\.sh'
         [string]$result.message | Should Match '--skip-setup'
         [string]$result.message | Should Match 'WSL2'
+    }
+
+    It 'plans AI Usagebar install through a verified official release path' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $result = Invoke-BootstrapAiToolAction -ToolName 'usagebar' -Action 'install' -InstallRoot $script:AiToolsTestRoot -ProjectRoot $repoRoot -DryRun -Yes
+
+        [string]$result.tool | Should Be 'ai-usagebar'
+        [string]$result.status | Should Be 'planned'
+        [string]$result.message | Should Match 'akitaonrails/ai-usagebar'
+        [string]$result.message | Should Match 'v0\.4\.0'
+        [string]$result.message | Should Match 'sha256'
+    }
+
+    It 'keeps AI Usagebar TUI out of noninteractive validation probes' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $catalog = Get-BootstrapAiToolCatalog
+        $command = Get-BootstrapAiUsagebarWslInstallCommand -CatalogEntry $catalog['ai-usagebar']
+
+        [string]$command | Should Match 'ai-usagebar" --help'
+        [string]$command | Should Match 'test -x ".+ai-usagebar-tui'
+        [string]$command | Should Not Match 'ai-usagebar-tui" --help'
+    }
+
+    It 'declares AI Usagebar as an installable component outside safe public profiles' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $components = Get-BootstrapComponentCatalog
+        $profiles = Get-BootstrapProfileCatalog
+
+        $components.Contains('ai-usagebar') | Should Be $true
+        [string]$components['ai-usagebar'].Kind | Should Be 'ai-usagebar'
+        (@($components['ai-usagebar'].DependsOn) -contains 'git-core') | Should Be $true
+        (@($profiles['ai'].Items) -contains 'ai-usagebar') | Should Be $true
+        (@($profiles['safe-base'].Items) -contains 'ai-usagebar') | Should Be $false
+        (@($profiles['public-beta'].Items) -contains 'ai-usagebar') | Should Be $false
     }
 
     It 'generates Antigravity workflow templates without external dependencies' {
