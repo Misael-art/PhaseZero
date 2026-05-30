@@ -353,8 +353,11 @@ function Load-BootstrapCheckpoint {
 function Invoke-BootstrapRollback {
     param(
         [string]$ChangesPath = '',
-        [switch]$AggressiveRollback
+        [switch]$AggressiveRollback,
+        [switch]$DryRun
     )
+
+    $plannedActions = New-Object System.Collections.Generic.List[object]
 
     if (-not [string]::IsNullOrWhiteSpace($ChangesPath) -and (Test-Path -LiteralPath $ChangesPath)) {
         Write-Log ("Iniciando Rollback por manifesto: {0}" -f $ChangesPath) 'WARN'
@@ -366,6 +369,17 @@ function Invoke-BootstrapRollback {
             $target = [string]$change.Target
             $name = [string]$change.Name
             try {
+                if ($DryRun) {
+                    $plannedActions.Add([ordered]@{
+                        type = $type
+                        target = $target
+                        name = $name
+                        rollbackAction = if ($change.PSObject.Properties.Name -contains 'RollbackAction') { [string]$change.RollbackAction } else { '' }
+                        component = if ($change.PSObject.Properties.Name -contains 'Component') { [string]$change.Component } else { '' }
+                    })
+                    Write-Log ("DRY-RUN Rollback manifest {0}: {1}" -f $type, $target)
+                    continue
+                }
                 switch ($type) {
                     'Registry' {
                         if ([string]::IsNullOrWhiteSpace($target) -or [string]::IsNullOrWhiteSpace($name)) { continue }
@@ -483,11 +497,45 @@ function Invoke-BootstrapRollback {
                 Write-Log ("Falha no rollback manifest ({0} {1}): {2}" -f $type, $target, $_.Exception.Message) 'WARN'
             }
         }
-        Write-Log 'Rollback por manifesto concluido.'
-        return
+        if ($DryRun) {
+            Write-Log 'DRY-RUN Rollback por manifesto planejado.'
+            return [ordered]@{
+                status = 'planned'
+                dryRun = $true
+                changesPath = $ChangesPath
+                plannedActions = @($plannedActions.ToArray())
+            }
+        } else {
+            Write-Log 'Rollback por manifesto concluido.'
+            return [ordered]@{
+                status = 'success'
+                dryRun = $false
+                changesPath = $ChangesPath
+                plannedActions = @()
+            }
+        }
     }
 
     Write-Log 'Iniciando Rollback das alteracoes de sistema...' 'WARN'
+
+    if ($DryRun) {
+        foreach ($item in @(
+            [ordered]@{ type = 'Registry'; target = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'; name = 'SystemPaneSuggestionsEnabled' },
+            [ordered]@{ type = 'Registry'; target = 'HKCU:\Software\Microsoft\Edge\Main'; name = 'AllowPrelaunch' },
+            [ordered]@{ type = 'Registry'; target = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\GameGPT'; name = 'GameModeEnabled' },
+            [ordered]@{ type = 'Registry'; target = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'; name = 'MimoModeWatcher' },
+            [ordered]@{ type = 'Registry'; target = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'; name = 'OpenCodeDesktop' }
+        )) {
+            $plannedActions.Add($item)
+        }
+        Write-Log 'DRY-RUN Rollback legado planejado.'
+        return [ordered]@{
+            status = 'planned'
+            dryRun = $true
+            changesPath = $ChangesPath
+            plannedActions = @($plannedActions.ToArray())
+        }
+    }
 
     # 1. Reverter Tweaks de Registro
     Write-Log 'Revertendo tweaks de registro (ContentDeliveryManager, Edge, GameMode)...'
@@ -511,6 +559,12 @@ function Invoke-BootstrapRollback {
     }
 
     Write-Log 'Rollback concluido. Algumas alteracoes (como instalacoes de apps) devem ser removidas manualmente via Painel de Controle/winget.'
+    return [ordered]@{
+        status = 'success'
+        dryRun = $false
+        changesPath = $ChangesPath
+        plannedActions = @()
+    }
 }
 
 function Register-BootstrapChange {
@@ -2973,6 +3027,17 @@ $script:WingetNonRetryableInstallExitCodes = @(
     -1978335216
 )
 
+# Pacotes de RUNTIME do sistema que NUNCA devem entrar em ghost-recovery (uninstall+reinstall),
+# mesmo se as ProbePaths falharem. Erro de ProbePath em um destes desinstala um runtime crítico do
+# Windows e o run fica preso esperando msiexec liberar lock. Em vez disso, logamos WARN e tratamos
+# como já instalado para o resto do componente decidir o que fazer (Audit/Repair existem para isso).
+$script:WingetGhostRecoveryBlocklist = @(
+    'Microsoft.VCRedist.2015+.x64',
+    'Microsoft.VCRedist.2015+.x86',
+    'Microsoft.DirectX',
+    'ViGEm.ViGEmBus'
+)
+
 function Test-WingetSoftSuccessExit {
     param([int]$ExitCode)
     return ($script:WingetSoftSuccessExitCodes -contains $ExitCode)
@@ -5039,6 +5104,16 @@ function Ensure-WingetPackage {
     if ($isInstalled -and $hasArtifactValidators) {
         $diskVerified = Test-BootstrapPackageArtifactsPresent -ProbePaths $ProbePaths -AppxPackageNames $AppxPackageNames
         if (-not $diskVerified) {
+            # Gate de blocklist: runtimes do sistema NUNCA devem ser desinstalados automaticamente
+            # por um ProbePath errado. Se cair aqui para um Id da blocklist, registrar WARN claro
+            # (incluindo qual ProbePath falhou) e tratar como instalado. Audit/Repair existem para
+            # cenarios em que o runtime realmente esta quebrado.
+            if ($script:WingetGhostRecoveryBlocklist -contains $Id) {
+                $probeDesc = if ($ProbePaths -and $ProbePaths.Count -gt 0) { ($ProbePaths -join '; ') } else { '<vazio>' }
+                Write-Log ("winget: {0} (id={1}) listado como instalado mas ProbePaths nao validaram em disco. Id esta no blocklist de runtimes criticos; NAO disparando ghost-recovery. ProbePaths verificados: {2}" -f $DisplayName, $Id, $probeDesc) 'WARN'
+                Write-Log ("winget: tratando {0} como instalado. Use -Audit para diagnostico ou -Audit -Repair para reinstalacao supervisionada." -f $DisplayName) 'WARN'
+                return
+            }
             # Gate MSI-hostil: ghost-recovery faz uninstall+install de MSI em sequencia.
             # Se Windows tem PendingFileRenameOperations ou UpdateExeVolatile, msiexec trava
             # esperando lock que so libera com reboot. Abortar este componente com mensagem
@@ -5112,13 +5187,34 @@ function Ensure-WingetPackage {
     if ($isNonAdminSkippable) {
         $nonRetryableCodes += @(124, -1978335226)
     }
-    $wingetInstallTimeoutMs = if ($isNonAdminSkippable) { 120000 } else { 600000 }
+    # Timeout user-scope: 300s permite downloads legitimos (~300MB) sem matar processos travados em UAC,
+    # que tipicamente nao emitem nenhum output e seriam detectaveis muito antes. Em machine scope o
+    # timeout amplo (600s) cobre instalacoes MSI maiores.
+    $wingetInstallTimeoutMs = if ($isNonAdminSkippable) { 300000 } else { 600000 }
+    # Helper para produzir mensagem de skip apropriada ao codigo de saida (UAC/timeout vs. pacote
+    # incompativel). exit=-1978335216 (NO_APPLICABLE_INSTALLER) = pacote nao tem instalador para este
+    # escopo/arquitetura, nao tem nada a ver com privilegios.
+    $resolveSkip = {
+        param([int]$Code)
+        if ($Code -eq -1978335216) {
+            return [pscustomobject]@{
+                Message = "$DisplayName nao tem instalador aplicavel para este sistema/escopo (winget exit=$Code, 0x8A150010). Pacote provavelmente exige machine-scope ou nao publica binario para esta arquitetura. Instale manualmente se necessario."
+                Reason = 'no-applicable-installer'
+                Action = 'install-manually-or-check-package-availability'
+            }
+        }
+        return [pscustomobject]@{
+            Message = "$DisplayName falhou em --scope user sem privilegios de administrador (exit=$Code). Nao tentando fallback machine para evitar UAC/winget preso. Execute elevado ou instale o pacote manualmente."
+            Reason = 'non-admin-user-scope-failed'
+            Action = 'rerun-elevated-or-install-manually'
+        }
+    }
     if ($PreferUserScope) {
         $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsSilent) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
         if ($exitCode -ne 0 -and $isNonAdminSkippable -and (($exitCode -eq 124) -or ($nonRetryableCodes -contains $exitCode))) {
-            $skipMessage = "$DisplayName falhou em --scope user sem privilegios de administrador (exit=$exitCode). Nao tentando fallback machine para evitar UAC/winget preso. Execute elevado ou instale o pacote manualmente."
-            Write-Log $skipMessage 'WARN'
-            Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason 'non-admin-user-scope-failed' -Message $skipMessage -Action 'rerun-elevated-or-install-manually' -PackageId $Id -DisplayName $DisplayName -ExitCode $exitCode
+            $skip = & $resolveSkip $exitCode
+            Write-Log $skip.Message 'WARN'
+            Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason $skip.Reason -Message $skip.Message -Action $skip.Action -PackageId $Id -DisplayName $DisplayName -ExitCode $exitCode
             return
         }
         if ($exitCode -ne 0) {
@@ -5126,9 +5222,9 @@ function Ensure-WingetPackage {
             $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsBase) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
         }
         if ($exitCode -ne 0 -and $isNonAdminSkippable) {
-            $skipMessage = "$DisplayName falhou em --scope user sem privilegios de administrador (exit=$exitCode). Nao tentando fallback machine para evitar UAC/winget preso. Execute elevado ou instale o pacote manualmente."
-            Write-Log $skipMessage 'WARN'
-            Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason 'non-admin-user-scope-failed' -Message $skipMessage -Action 'rerun-elevated-or-install-manually' -PackageId $Id -DisplayName $DisplayName -ExitCode $exitCode
+            $skip = & $resolveSkip $exitCode
+            Write-Log $skip.Message 'WARN'
+            Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason $skip.Reason -Message $skip.Message -Action $skip.Action -PackageId $Id -DisplayName $DisplayName -ExitCode $exitCode
             return
         }
         if ($exitCode -ne 0) {
@@ -12017,7 +12113,10 @@ function Get-BootstrapComponentCatalog {
     $catalog['steamcmd'] = New-BootstrapComponentDefinition -Name 'steamcmd' -Description 'SteamCMD.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.SteamCMD'; DisplayName = 'SteamCMD'; ProbePaths = @("${env:ProgramFiles(x86)}\Steam\steamapps\common\SteamCMD\steamcmd.exe", "$env:ProgramFiles\Steam\steamapps\common\SteamCMD\steamcmd.exe") }
     $catalog['autohotkey-runtime'] = New-BootstrapComponentDefinition -Name 'autohotkey-runtime' -Description 'Runtime base para hotkeys e fallback manual do Steam Deck.' -DependsOn @('autohotkey') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite hotkeys fisicos e fallback local sem depender do Steam.' }
     $catalog['powershell-core-runtime'] = New-BootstrapComponentDefinition -Name 'powershell-core-runtime' -Description 'PowerShell Core pronto para componentes futuros.' -DependsOn @('powershell') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Provisiona pwsh antes de qualquer componente futuro que precise dele.' }
-    $catalog['vigembus-runtime'] = New-BootstrapComponentDefinition -Name 'vigembus-runtime' -Description 'Barramento virtual usado por ferramentas de input do Steam Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ViGEm.ViGEmBus'; DisplayName = 'ViGEmBus'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Base para emulacao/ponte de controle no modo handheld.'; ProbePaths = @("$env:ProgramFiles\Nefarius Software Solutions e.U\ViGEmBus\ViGEmBus.sys") }
+    # vigembus-runtime: o driver .sys vai para System32\drivers (driver store). A pasta Program Files
+    # so contem readme/uninstaller, NAO o .sys binario. ProbePath antigo (Nefarius Software Solutions e.U)
+    # nunca encontraria o driver e dispararia ghost-recovery destrutiva do barramento de input.
+    $catalog['vigembus-runtime'] = New-BootstrapComponentDefinition -Name 'vigembus-runtime' -Description 'Barramento virtual usado por ferramentas de input do Steam Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ViGEm.ViGEmBus'; DisplayName = 'ViGEmBus'; Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Base para emulacao/ponte de controle no modo handheld.'; ProbePaths = @("$env:SystemRoot\System32\drivers\ViGEmBus.sys") }
     $catalog['steamdeck-tools-runtime'] = New-BootstrapComponentDefinition -Name 'steamdeck-tools-runtime' -Description 'Steam Deck Tools portatil com servicos de controle e overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'steamdeck-tools' -Data @{ Stage = 'runtime'; Provisioning = 'download'; ValueReason = 'Entrega overlay, controle, fan e power tuning especificos do Deck.' }
     $catalog['handheld-companion'] = New-BootstrapComponentDefinition -Name 'handheld-companion' -Description 'Handheld Companion para Auto-TDP, gyro, DS4 e QuickTools overlay.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BenjaminLSR.HandheldCompanion'; DisplayName = 'Handheld Companion'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Alternativa avancada ao Steam Deck Tools para Auto-TDP, gyro/DS4 e overlay tipo quick menu.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Handheld Companion\Handheld Companion.exe", "$env:ProgramFiles\Handheld Companion\Handheld Companion.exe") }
     $catalog['glossi'] = New-BootstrapComponentDefinition -Name 'glossi' -Description 'GlosSI para Steam Input global em UWP/launchers de terceiros.' -DependsOn @('system-core', 'vigembus-runtime') -Kind 'chocolatey' -Data @{ Package = 'glossi'; DisplayName = 'GlosSI'; Stage = 'payload'; Provisioning = 'chocolatey'; RequiresAdmin = $true; ValueReason = 'Cobre Steam Input global quando jogo/launcher nao aceita injecao nativa do Steam.'; ProbePaths = @("$env:ProgramFiles\GlosSI\GlosSIConfig.exe", "$env:ProgramData\chocolatey\lib\glossi\tools\GlosSIConfig.exe") }
@@ -12041,7 +12140,10 @@ function Get-BootstrapComponentCatalog {
     $catalog['rtss'] = New-BootstrapComponentDefinition -Name 'rtss' -Description 'RivaTuner Statistics Server para overlay e frame pacing.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Guru3D.RTSS'; DisplayName = 'RivaTuner Statistics Server'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega overlay e base para performance tuning no Deck.'; ProbePaths = @("$env:ProgramFiles\RTSS\RTSS.exe", "${env:ProgramFiles(x86)}\RTSS\RTSS.exe") }
     $catalog['msi-afterburner'] = New-BootstrapComponentDefinition -Name 'msi-afterburner' -Description 'MSI Afterburner para tuning de overlay/perf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Guru3D.Afterburner'; DisplayName = 'MSI Afterburner'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Complementa RTSS para telemetria e tuning no Deck.'; ProbePaths = @("$env:ProgramFiles\MSI Afterburner\MSIAfterburner.exe", "${env:ProgramFiles(x86)}\MSI Afterburner\MSIAfterburner.exe") }
     $catalog['special-k'] = New-BootstrapComponentDefinition -Name 'special-k' -Description 'Special K para HDR, pacing e latencia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SpecialK.SpecialK'; DisplayName = 'Special K'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a estabilizar frame pacing e recursos visuais em jogos Windows no Deck.'; ProbePaths = @("$env:ProgramFiles\SpecialK\SpecialK32.exe", "$env:ProgramFiles\SpecialK\SpecialK64.exe", "${env:ProgramFiles(x86)}\SpecialK\SpecialK32.exe") }
-    $catalog['vcpp-redist'] = New-BootstrapComponentDefinition -Name 'vcpp-redist' -Description 'Visual C++ Redistributable 2015+ x64.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VCRedist.2015+.x64'; DisplayName = 'Microsoft Visual C++ Redistributable 2015+ x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Evita falhas por runtime ausente em launchers, overlays e jogos.'; ProbePaths = @("$env:ProgramFiles\Microsoft Visual C++ Redistributable\2015-2022\x64\vcruntime140.dll") }
+    # vcpp-redist: o runtime VC++ instala as DLLs em System32 (Side-by-Side merge), NAO em Program Files.
+    # ProbePaths apontando para Program Files causava ghost-recovery destrutiva (uninstall) de um runtime
+    # critico do sistema. Mesmas DLLs sao validadas em Get-BootstrapVcppRuntimeStatus.
+    $catalog['vcpp-redist'] = New-BootstrapComponentDefinition -Name 'vcpp-redist' -Description 'Visual C++ Redistributable 2015+ x64.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VCRedist.2015+.x64'; DisplayName = 'Microsoft Visual C++ Redistributable 2015+ x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Evita falhas por runtime ausente em launchers, overlays e jogos.'; ProbePaths = @("$env:SystemRoot\System32\vcruntime140.dll", "$env:SystemRoot\System32\vcruntime140_1.dll", "$env:SystemRoot\System32\msvcp140.dll") }
     $catalog['directx-runtime'] = New-BootstrapComponentDefinition -Name 'directx-runtime' -Description 'DirectX runtime legado para jogos e ferramentas.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.DirectX'; DisplayName = 'Microsoft DirectX Runtime'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Fecha dependencias comuns de jogos Windows em instalacoes novas.'; ProbePaths = @("$env:SystemRoot\System32\d3d12.dll", "$env:SystemRoot\System32\d3d11.dll") }
     $catalog['sunshine'] = New-BootstrapComponentDefinition -Name 'sunshine' -Description 'Servidor de game streaming.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LizardByte.Sunshine'; DisplayName = 'Sunshine'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Transforma o Deck dockado em host de streaming sem abrir portas manualmente.'; ProbePaths = @("${env:ProgramFiles(x86)}\Sunshine\gamesunshine.exe", "$env:ProgramFiles\Sunshine\gamesunshine.exe") }
     $catalog['moonlight'] = New-BootstrapComponentDefinition -Name 'moonlight' -Description 'Cliente para streaming Sunshine/GameStream.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MoonlightGameStreamingProject.Moonlight'; DisplayName = 'Moonlight'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita testes e acesso remoto ao ecossistema do Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Moonlight Game Streaming Project\Moonlight\Moonlight.exe", "$env:ProgramFiles\Moonlight Game Streaming Project\Moonlight\Moonlight.exe") }
@@ -12053,7 +12155,9 @@ function Get-BootstrapComponentCatalog {
     $catalog['quicklook'] = New-BootstrapComponentDefinition -Name 'quicklook' -Description 'Preview rapido de arquivos.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'QL-Win.QuickLook'; DisplayName = 'QuickLook'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Acelera inspeccao de arquivos em modo desktop e dock.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\QuickLook\QuickLook.exe", "$env:ProgramFiles\QuickLook\QuickLook.exe") }
     $catalog['sharex'] = New-BootstrapComponentDefinition -Name 'sharex' -Description 'Captura e compartilhamento rapido.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ShareX.ShareX'; DisplayName = 'ShareX'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Facilita screenshots e uploads com atalhos do Deck.'; ProbePaths = @("$env:ProgramFiles\ShareX\ShareX.exe", "${env:ProgramFiles(x86)}\ShareX\ShareX.exe") }
     $catalog['quickcpu'] = New-BootstrapComponentDefinition -Name 'quickcpu' -Description 'Controle fino de CPU e energia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'CoderBag.QuickCPUx64'; DisplayName = 'Quick CPU x64'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a equilibrar consumo e desempenho no modo bateria.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\QuickCPU\QuickCPU.exe", "$env:ProgramFiles\QuickCPU\QuickCPU.exe") }
-    $catalog['explorerpatcher'] = New-BootstrapComponentDefinition -Name 'explorerpatcher' -Description 'Ajustes de shell do Windows para uso no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'valinet.ExplorerPatcher'; DisplayName = 'ExplorerPatcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Simplifica a UX do Windows em handheld e dock.'; ProbePaths = @("${env:LOCALAPPDATA}\ExplorerPatcher\ep_weather_host.dll", "$env:ProgramFiles\ExplorerPatcher\ep_weather_host.dll") }
+    # explorerpatcher: winget instala apenas ep_setup.exe; ep_weather_host.dll so existe se o usuario
+    # ativar o plugin de clima manualmente. Usar caminho do cache winget que sempre existe pos-install.
+    $catalog['explorerpatcher'] = New-BootstrapComponentDefinition -Name 'explorerpatcher' -Description 'Ajustes de shell do Windows para uso no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'valinet.ExplorerPatcher'; DisplayName = 'ExplorerPatcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Simplifica a UX do Windows em handheld e dock.'; ProbePaths = @("$env:LOCALAPPDATA\Microsoft\WinGet\Packages\valinet.ExplorerPatcher_*\ep_setup.exe", "$env:ProgramFiles\ExplorerPatcher\ep_setup.exe") }
     $catalog['mica-for-everyone'] = New-BootstrapComponentDefinition -Name 'mica-for-everyone' -Description 'Camada visual do Windows mais limpa e consistente.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MicaForEveryone.MicaForEveryone'; DisplayName = 'Mica For Everyone'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Deixa a interface do Windows menos carregada para uso no Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Mica For Everyone\MicaForEveryone.exe", "$env:ProgramFiles\Mica For Everyone\MicaForEveryone.exe") }
     $catalog['compactgui'] = New-BootstrapComponentDefinition -Name 'compactgui' -Description 'Compacta instalacoes grandes para economizar espaco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'IridiumIO.CompactGUI'; DisplayName = 'CompactGUI'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Reduz pressao de storage no SSD interno do Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\CompactGUI\CompactGUI.exe", "$env:ProgramFiles\CompactGUI\CompactGUI.exe") }
     $catalog['treesize-free'] = New-BootstrapComponentDefinition -Name 'treesize-free' -Description 'Analise rapida de uso de disco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JAMSoftware.TreeSize.Free'; DisplayName = 'TreeSize Free'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra rapidamente o que esta consumindo espaco em SSD e SD.'; ProbePaths = @("$env:ProgramFiles\TreeSize Free\TreeSizeFree.exe", "${env:ProgramFiles(x86)}\TreeSize Free\TreeSizeFree.exe") }
@@ -22914,16 +23018,18 @@ function Invoke-BootstrapProfileMode {
     }
 
     if ($Rollback) {
-        Invoke-BootstrapRollback -ChangesPath $ChangesPath -AggressiveRollback:$AggressiveRollback
+        $rollbackResult = Invoke-BootstrapRollback -ChangesPath $ChangesPath -AggressiveRollback:$AggressiveRollback -DryRun:$DryRun
         if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
             Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
-                status = 'success'
+                status = if ($DryRun) { 'planned' } else { 'success' }
                 mode = 'rollback'
+                dryRun = [bool]$DryRun
                 generatedAt = (Get-Date).ToString('o')
                 logPath = $script:LogPath
                 resultPath = $script:ResultPath
                 changesPath = $ChangesPath
-                message = 'Rollback de tweaks de registro e autostart concluido (ver log).'
+                plannedActions = @($rollbackResult.plannedActions)
+                message = if ($DryRun) { 'Rollback dry-run planejado; nenhuma mutacao executada.' } else { 'Rollback de tweaks de registro e autostart concluido (ver log).' }
             })
         }
         return

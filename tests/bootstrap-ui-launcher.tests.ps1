@@ -213,6 +213,14 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'Get-UiRunStatusTextFromResult'
     }
 
+    It 'finalizes a ready result when LogTimer process polling throws' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'LogTimer tick'
+        $raw | Should Match '(?s)catch \{\s*try \{\s*Write-UiLog.*?Test-UiBackendResultFileReady -Path \(\[string\]\$ui\.CurrentResultPath\).*?Finalize-RunFromResult.*?return'
+        $raw | Should Match '(?s)catch \{\s*try \{\s*Write-UiLog.*?Complete-RunExecutionWithoutResult.*?return'
+    }
+
     It 'renders Health as an operational dashboard with all required cards and actions' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 

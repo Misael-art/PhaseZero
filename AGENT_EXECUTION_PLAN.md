@@ -619,3 +619,17 @@ Executando `Invoke-Pester -Path .\tests\bootstrap-secrets.tests.ps1 -EnableExit`
 - **Artefatos finais:** result JSON gravado para Doctor, SupportBundle, RepairPlan, Audit, safe-base e ReleasePack em `C:\Users\misae\AppData\Local\Temp\phasezero_final_9ffde2e4572a4e36b2f5b8f99d8c4d6a`.
 - **Bloqueios reais:** nenhum bloqueio funcional restante. Host tem WSL com `LxssManager` ausente/restart requerido, mas Doctor/Audit nao travam e reportam acao recomendada.
 - **Proxima task unica:** revisar diffs grandes e separar commits por escopo antes de PR/merge.
+
+---
+
+## Atualizacao de Execucao - 2026-05-30
+
+- **Agente:** Codex.
+- **Status real:** parecer Trae reconciliado com execucao segura; validacao completa verde.
+- **Implementado/confirmado:** blocklist de ghost-recovery para runtimes criticos (`Microsoft.VCRedist.2015+.x64`, `Microsoft.VCRedist.2015+.x86`, `Microsoft.DirectX`, `ViGEm.ViGEmBus`); ProbePaths corrigidos para VC++ em `System32`, ViGEm em `System32\drivers`, ExplorerPatcher em `ep_setup.exe`; winget user-scope non-admin com timeout 300000ms e skip `no-applicable-installer` para `0x8A150010`; Rollback dry-run com `plannedActions` sem mutacao; UI LogTimer prioriza `result.json` pronto se polling do processo falhar; helper de testes mata subprocess tree em timeout.
+- **TDD/targeted verdes:** `tests\resilience.tests.ps1` 89/89; `tests\bootstrap-ui-launcher.tests.ps1` 46/46; `tests\bootstrap-probe-paths.tests.ps1` 13/13; `tests\bootstrap-tools.profiles.tests.ps1` 23/23.
+- **Validacao final:** parse all `.ps1` 122 arquivos OK; PSScriptAnalyzer tracked Severity Error=0 e warnings=704/705; `tests\run-pester.ps1 -NoInstall` Passed=413 Failed=0 Total=413 em 1093.9s; `bootstrap-ui.bat -SmokeTest` exit 0; `install-cli.ps1 --tool aionui --validate --yes --no-admin` exit 0; `install-cli.bat --tool ai-usagebar --validate --dry-run --yes` exit 0; `bootstrap-tools.ps1 -Doctor -DryRun -NonInteractive` exit 0; `-SupportBundle -DryRun -NonInteractive` exit 0; `-RepairPlan -DryRun -NonInteractive` exit 0; `-Audit -DryRun -NonInteractive` exit 0; `-Profile safe-base -DryRun -NonInteractive` exit 0.
+- **AionUI neste host:** instalado em `C:\Users\misae\AppData\Local\Programs\AionUi\AionUi.exe`, versao `2.1.5.0`; smoke Start-Process OK, processo vivo e encerrado pelo teste. Doctor detectou env de `openai`, `anthropic`, `openrouter`, `deepseek`, sem expor valores; `configStatus=discovered-manual`, entao provider config automatica fica em fallback manual seguro por schema local nao documentado.
+- **SupportBundle:** `C:\Users\misae\AppData\Local\Temp\phasezero-support_20260530_052854_15228_c8c0a7f7.zip`; entradas incluem `aionui.json`, `ai-usagebar.json`, `secrets-doctor.json`, `wsl-repair.json`, `repair-plan.json`; scan PS5 sem hits para `ghp_`, `github_pat_`, `sk-`, `sk-or-`, `sk-ant-`, `protectedData`, nomes de env sensiveis, `.env` bruto ou `bootstrap-secrets.json`.
+- **Bloqueios reais:** host reporta WSL `RequiresRestart`/`LxssManager` ausente e alguns apps opcionais ausentes/ghost no Audit; nao bloqueiam Doctor/Audit/SupportBundle e geram JSON.
+- **Proxima task unica:** revisar diff final, commitar sem `.trae/`, e push da branch `codex-bootstrap-secrets-rotation`.

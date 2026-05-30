@@ -36,9 +36,13 @@ function Invoke-Bootstrap {
     $stderrTask = $process.StandardError.ReadToEndAsync()
 
     if (-not $process.WaitForExit(120000)) {
-        try { $process.Kill() } catch { }
+        try { & taskkill.exe /PID $process.Id /T /F | Out-Null } catch { $null = $_ }
+        try { if (-not $process.HasExited) { $process.Kill() } } catch { $null = $_ }
         throw "Bootstrap invocation timed out after 120000ms for args: $($CommandArgs -join ' ')"
     }
+
+    [void]$stdoutTask.Wait(5000)
+    [void]$stderrTask.Wait(5000)
 
     return [pscustomobject]@{
         ExitCode = $process.ExitCode

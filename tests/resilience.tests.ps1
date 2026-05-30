@@ -148,6 +148,33 @@ Describe 'Resilience Architecture' {
             }
         }
 
+        It 'plans rollback from a manifest in dry-run without mutating system state' {
+            $tempDir = Join-Path $env:TEMP ('bootstrap-rollback-dryrun-test-' + ([Guid]::NewGuid().ToString()))
+            $null = New-Item -Path $tempDir -ItemType Directory -Force
+            $manifestPath = Join-Path $tempDir 'changes.json'
+            try {
+                $manifest = [ordered]@{
+                    changes = @(
+                        [ordered]@{ Type = 'EnvVar'; Target = 'PHASEZERO_ROLLBACK_DRYRUN'; Name = ''; OldValue = 'old'; NewValue = 'new'; Reversible = 'partial' },
+                        [ordered]@{ Type = 'Package'; Target = 'Example.Tool'; Name = ''; OldValue = $null; NewValue = 'installed'; RollbackAction = 'winget-uninstall'; Reversible = 'manual' }
+                    )
+                }
+                $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path $manifestPath -Encoding utf8
+                Mock Get-Winget { 'winget.exe' }
+                Mock Invoke-NativeWithLog { 0 }
+                Mock Write-Log
+
+                $result = Invoke-BootstrapRollback -ChangesPath $manifestPath -DryRun
+
+                $result.dryRun | Should Be $true
+                $result.status | Should Be 'planned'
+                @($result.plannedActions).Count | Should Be 2
+                Assert-MockCalled Invoke-NativeWithLog -Times 0
+            } finally {
+                Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It 'rolls back service and Defender exclusion changes from a manifest' {
             $tempDir = Join-Path $env:TEMP ('bootstrap-rollback-service-defender-test-' + ([Guid]::NewGuid().ToString()))
             $null = New-Item -Path $tempDir -ItemType Directory -Force
@@ -937,10 +964,10 @@ Welcome to .NET 8.0!
 
             Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --scope user --silent' } -Times 1 -Exactly
             Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --scope user' } -Times 0 -Exactly
-            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --scope user --silent' -and $TimeoutMs -eq 120000 } -Times 1 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --scope user --silent' -and $TimeoutMs -eq 300000 } -Times 1 -Exactly
             Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget --silent' } -Times 0 -Exactly
             Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Google Chrome via winget' } -Times 0 -Exactly
-            Assert-MockCalled Write-Log -ParameterFilter { $Level -eq 'WARN' -and $Message -match 'Nao tentando fallback machine' } -Times 1 -Exactly
+            Assert-MockCalled Write-Log -ParameterFilter { $Level -eq 'WARN' -and $Message -match 'nao tem instalador aplicavel' } -Times 1 -Exactly
             @($state.SkippedComponents.ToArray()).Count | Should Be 1
             [string]$state.SkippedComponents[0].component | Should Be 'chrome'
             [string]$state.ComponentStatus['chrome'].status | Should Be 'skipped'
@@ -1124,6 +1151,20 @@ Welcome to .NET 8.0!
             Assert-MockCalled Invoke-NativeWithRetry -Times 1 -Scope It
         }
 
+        It 'Ensure-WingetPackage nao faz ghost-recovery para runtimes protegidos' {
+            Mock Test-WingetPackageInstalled { return $true }
+            Mock Test-WingetProbePathsOnDisk { return $false }
+            Mock Invoke-BootstrapGhostPackageRecovery { throw 'ghost-recovery nao deve rodar para runtime protegido' }
+            Mock Invoke-NativeWithRetry { return 0 }
+            Mock Refresh-SessionPath {}
+            Mock Write-Log {}
+
+            { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Microsoft.VCRedist.2015+.x64' -DisplayName 'VC++' -ProbePaths @('C:\Windows\System32\vcruntime140.dll') } | Should Not Throw
+
+            Assert-MockCalled Invoke-BootstrapGhostPackageRecovery -Times 0 -Exactly -Scope It
+            Assert-MockCalled Invoke-NativeWithRetry -Times 0 -Exactly -Scope It
+        }
+
         It 'Ensure-WingetPackage prossegue ghost-recovery quando reboot pendente nao bloqueia MSI' {
             $script:WingetGhostProbeCheckCount = 0
             Mock Test-WingetPackageInstalled { return $true }
@@ -1137,6 +1178,7 @@ Welcome to .NET 8.0!
             Mock Get-BootstrapPendingRebootReasons { return @('Component Based Servicing') }
             Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
             Mock Get-BootstrapProcessesByName { return @() }
+            Mock Invoke-BootstrapGhostPackageRecovery { return $true }
 
             { Ensure-WingetPackage -WingetPath 'fake.exe' -Id 'Test.Ghost' -DisplayName 'GhostPkg' -ProbePaths @('C:\fake\ghost.exe') } | Should Not Throw
             Assert-MockCalled Get-BootstrapProcessesByName -Times 3 -Exactly -Scope It

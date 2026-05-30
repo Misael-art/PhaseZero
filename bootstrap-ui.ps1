@@ -6313,6 +6313,22 @@ $logTimer.Add_Tick({
         } catch {
         }
         try {
+            if (Test-UiBackendResultFileReady -Path ([string]$ui.CurrentResultPath)) {
+                Finalize-RunFromResult
+                return
+            }
+        } catch {
+            $null = $_
+        }
+        try {
+            if ($ui.RunProcess -and $ui.RunProcess.HasExited) {
+                Complete-RunExecutionWithoutResult
+                return
+            }
+        } catch {
+            $null = $_
+        }
+        try {
             if ($null -ne $ui -and $null -ne $ui.RunStatusLabel) {
                 $ui.RunStatusLabel.Text = 'Erro ao atualizar log da execução; veja ui.log (LogTimer).'
             }
