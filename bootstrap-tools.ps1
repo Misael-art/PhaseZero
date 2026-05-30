@@ -570,7 +570,7 @@ function Invoke-BootstrapRollback {
 function Register-BootstrapChange {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
-        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'DefenderExclusion', 'Clone', 'SecretsRotation')][string]$Type,
+        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'DefenderExclusion', 'Clone', 'SecretsRotation', 'WindowsFeature', 'WindowsCapability', 'FirewallRule')][string]$Type,
         [Parameter(Mandatory = $true)][string]$Target,
         [AllowNull()]$OldValue,
         [string]$Name,
@@ -594,6 +594,7 @@ function Register-BootstrapChange {
             'Service' { 'restore-service-state' }
             'DefenderExclusion' { 'remove-defender-exclusion' }
             'SecretsRotation' { 'restore-active-credential' }
+            'FirewallRule' { 'remove-firewall-rule' }
             default { 'manual-review' }
         }
     }
@@ -1458,6 +1459,50 @@ function Invoke-BootstrapAuditMode {
             }
             'wsl-ui' {
                 return (Invoke-AuditWslUi -ComponentName $ComponentName)
+            }
+            'hyper-v' {
+                $states = @($catalog[$ComponentName].FeatureNames | ForEach-Object { "{0}={1}" -f [string]$_, (Get-WindowsOptionalFeatureState -FeatureName ([string]$_)) })
+                $allEnabled = $true
+                foreach ($feature in @($catalog[$ComponentName].FeatureNames)) {
+                    if ((Get-WindowsOptionalFeatureState -FeatureName ([string]$feature)) -ne 'Enabled') { $allEnabled = $false }
+                }
+                if ($allEnabled) { return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ($states -join '; ') -HowToFix '') }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail ($states -join '; ') -HowToFix 'Execute elevado: bootstrap-tools.ps1 -Component hyper-v -NonInteractive')
+            }
+            'hyper-v-tools' {
+                $states = @($catalog[$ComponentName].FeatureNames | ForEach-Object { "{0}={1}" -f [string]$_, (Get-WindowsOptionalFeatureState -FeatureName ([string]$_)) })
+                $allEnabled = $true
+                foreach ($feature in @($catalog[$ComponentName].FeatureNames)) {
+                    if ((Get-WindowsOptionalFeatureState -FeatureName ([string]$feature)) -ne 'Enabled') { $allEnabled = $false }
+                }
+                if ($allEnabled) { return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ($states -join '; ') -HowToFix '') }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail ($states -join '; ') -HowToFix 'Execute elevado: bootstrap-tools.ps1 -Component hyper-v-tools -NonInteractive')
+            }
+            'windows-hypervisor-platform' {
+                $states = @($catalog[$ComponentName].FeatureNames | ForEach-Object { "{0}={1}" -f [string]$_, (Get-WindowsOptionalFeatureState -FeatureName ([string]$_)) })
+                $allEnabled = $true
+                foreach ($feature in @($catalog[$ComponentName].FeatureNames)) {
+                    if ((Get-WindowsOptionalFeatureState -FeatureName ([string]$feature)) -ne 'Enabled') { $allEnabled = $false }
+                }
+                if ($allEnabled) { return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ($states -join '; ') -HowToFix '') }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail ($states -join '; ') -HowToFix 'Execute elevado: bootstrap-tools.ps1 -Component windows-hypervisor-platform -NonInteractive')
+            }
+            'openssh-client' {
+                $stateText = Get-BootstrapWindowsCapabilityState -CapabilityName 'OpenSSH.Client~~~~0.0.1.0'
+                $sshPath = Resolve-CommandPath -Name 'ssh'
+                if ($stateText -eq 'Installed' -or $sshPath) { return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("capability={0}; ssh={1}" -f $stateText, $sshPath) -HowToFix '') }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail ("capability={0}; ssh ausente" -f $stateText) -HowToFix 'Execute elevado: bootstrap-tools.ps1 -Component openssh-client -NonInteractive')
+            }
+            'openssh-server' {
+                $stateText = Get-BootstrapWindowsCapabilityState -CapabilityName 'OpenSSH.Server~~~~0.0.1.0'
+                $svc = Get-Service -Name 'sshd' -ErrorAction SilentlyContinue
+                $rule = Get-NetFirewallRule -DisplayName 'PhaseZero OpenSSH Server Domain Private' -ErrorAction SilentlyContinue
+                $ruleProfile = ''
+                if ($rule) { $ruleProfile = (($rule | Select-Object -First 1).Profile).ToString() }
+                if ($stateText -eq 'Installed' -and $svc -and $rule -and ($ruleProfile -notmatch 'Public')) {
+                    return (New-AuditRow -Component $ComponentName -Status 'Healthy' -Detail ("capability={0}; service={1}; firewall={2}" -f $stateText, [string]$svc.Status, $ruleProfile) -HowToFix '')
+                }
+                return (New-AuditRow -Component $ComponentName -Status 'Missing' -Detail ("capability={0}; service={1}; firewall={2}" -f $stateText, $(if ($svc) { [string]$svc.Status } else { 'absent' }), $(if ($rule) { $ruleProfile } else { 'absent' })) -HowToFix 'Execute elevado: bootstrap-tools.ps1 -Component openssh-server -NonInteractive')
             }
             'vscode-extensions' {
                 return (Invoke-AuditVsCodeExtensions -ComponentName $ComponentName)
@@ -4800,6 +4845,182 @@ function Ensure-WindowsOptionalFeatureEnabled {
     Write-Log "$DisplayName habilitado. Pode ser necessario reiniciar o Windows." 'WARN'
 }
 
+function Get-BootstrapWindowsCapabilityState {
+    param([Parameter(Mandatory = $true)][string]$CapabilityName)
+    try {
+        $cap = Get-WindowsCapability -Online -Name $CapabilityName -ErrorAction Stop | Select-Object -First 1
+        if ($cap -and $cap.State) { return [string]$cap.State }
+    } catch {
+        try {
+            $out = & dism.exe /online /Get-CapabilityInfo /CapabilityName:$CapabilityName 2>&1
+            $text = ($out | Out-String)
+            if ($text -match '(?im)^\s*State\s*:\s*Installed\s*$') { return 'Installed' }
+            if ($text -match '(?im)^\s*Estado\s*:\s*Instalado\s*$') { return 'Installed' }
+            if ($text -match '(?im)^\s*State\s*:\s*Not Present\s*$') { return 'NotPresent' }
+            if ($text -match '(?im)^\s*Estado\s*:\s*N.o Presente\s*$') { return 'NotPresent' }
+        } catch {
+            return 'Unknown'
+        }
+    }
+    return 'Unknown'
+}
+
+function Ensure-BootstrapWindowsFeatureComponent {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseApprovedVerbs', '')]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$ComponentName,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $features = @($ComponentDef.FeatureNames | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $dryRun = [bool]$State.DryRun
+    if ($dryRun) {
+        Write-Log ("DryRun: planejado habilitar recurso(s) Windows para {0}: {1}" -f $ComponentName, ($features -join ', '))
+        return [ordered]@{ status = 'planned'; dryRun = $true; component = $ComponentName; featureNames = @($features) }
+    }
+
+    if (-not (Test-IsAdmin)) {
+        $message = ("{0} requer PowerShell elevado para habilitar recurso(s) Windows: {1}" -f $ComponentName, ($features -join ', '))
+        Write-Log $message 'WARN'
+        Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason 'admin-required' -Message $message -Action 'rerun-elevated'
+        return [ordered]@{ status = 'blocked'; dryRun = $false; component = $ComponentName; featureNames = @($features); requiresAdmin = $true }
+    }
+
+    $changed = New-Object System.Collections.Generic.List[string]
+    foreach ($feature in $features) {
+        $oldState = Get-WindowsOptionalFeatureState -FeatureName $feature
+        if ($oldState -eq 'Enabled') { continue }
+        Ensure-WindowsOptionalFeatureEnabled -FeatureName $feature -DisplayName $feature
+        Register-BootstrapChange -State $State -Type WindowsFeature -Target $feature -OldValue $oldState -NewValue 'Enabled' -Operation 'enable-windows-feature' -Component $ComponentName
+        $changed.Add($feature)
+    }
+    $status = if ($changed.Count -gt 0) { 'changed' } else { 'healthy' }
+    return [ordered]@{ status = $status; dryRun = $false; component = $ComponentName; featureNames = @($features); changed = @($changed.ToArray()) }
+}
+
+function Ensure-BootstrapOpenSshServerPostInstall {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseApprovedVerbs', '')]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef,
+        [Parameter(Mandatory = $true)][string]$ComponentName
+    )
+
+    $serviceName = [string]$ComponentDef.ServiceName
+    if (-not [string]::IsNullOrWhiteSpace($serviceName)) {
+        $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($svc) {
+            $oldStartType = ''
+            Set-Service -Name $serviceName -StartupType Automatic -ErrorAction Stop
+            if ($svc.Status -ne 'Running') { Start-Service -Name $serviceName -ErrorAction Stop }
+            Register-BootstrapChange -State $State -Type Service -Target $serviceName -OldValue $oldStartType -NewValue 'Automatic/Running' -Operation 'enable-service' -Component $ComponentName
+        }
+    }
+
+    $profiles = @($ComponentDef.FirewallProfiles | Where-Object { $_ -in @('Domain','Private') })
+    if (($profiles -contains 'Public') -or $profiles.Count -eq 0) { $profiles = @('Domain','Private') }
+    $ruleName = [string]$ComponentDef.FirewallRuleName
+    if ([string]::IsNullOrWhiteSpace($ruleName)) { $ruleName = 'PhaseZero OpenSSH Server Domain Private' }
+    $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+    if (-not $existing) {
+        New-NetFirewallRule -DisplayName $ruleName -Direction Inbound -Action Allow -Protocol TCP -LocalPort 22 -Profile ($profiles -join ',') | Out-Null
+        Register-BootstrapChange -State $State -Type FirewallRule -Target $ruleName -OldValue $null -NewValue ($profiles -join ',') -Operation 'create-firewall-rule' -Component $ComponentName
+    }
+}
+
+function Ensure-BootstrapWindowsCapabilityComponent {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseApprovedVerbs', '')]
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$ComponentName,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $capabilities = @($ComponentDef.CapabilityNames | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    $firewallProfiles = @()
+    if ($ComponentDef.PSObject.Properties.Name -contains 'FirewallProfiles') {
+        $firewallProfiles = @($ComponentDef.FirewallProfiles | Where-Object { $_ -in @('Domain','Private') })
+    }
+    $dryRun = [bool]$State.DryRun
+    if ($dryRun) {
+        Write-Log ("DryRun: planejado habilitar capability(s) Windows para {0}: {1}" -f $ComponentName, ($capabilities -join ', '))
+        return [ordered]@{ status = 'planned'; dryRun = $true; component = $ComponentName; capabilityNames = @($capabilities); firewallProfiles = @($firewallProfiles) }
+    }
+
+    if (-not (Test-IsAdmin)) {
+        $message = ("{0} requer PowerShell elevado para habilitar capability(s) Windows: {1}" -f $ComponentName, ($capabilities -join ', '))
+        Write-Log $message 'WARN'
+        Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason 'admin-required' -Message $message -Action 'rerun-elevated'
+        return [ordered]@{ status = 'blocked'; dryRun = $false; component = $ComponentName; capabilityNames = @($capabilities); requiresAdmin = $true; firewallProfiles = @($firewallProfiles) }
+    }
+
+    $changed = New-Object System.Collections.Generic.List[string]
+    foreach ($capability in $capabilities) {
+        $oldState = Get-BootstrapWindowsCapabilityState -CapabilityName $capability
+        if ($oldState -eq 'Installed') { continue }
+        Write-Log ("Habilitando capability Windows: {0}" -f $capability)
+        Add-WindowsCapability -Online -Name $capability -ErrorAction Stop | Out-Null
+        Register-BootstrapChange -State $State -Type WindowsCapability -Target $capability -OldValue $oldState -NewValue 'Installed' -Operation 'add-windows-capability' -Component $ComponentName
+        $changed.Add($capability)
+    }
+
+    if ($ComponentName -eq 'openssh-server') {
+        Ensure-BootstrapOpenSshServerPostInstall -State $State -ComponentDef $ComponentDef -ComponentName $ComponentName
+    }
+
+    $status = if ($changed.Count -gt 0) { 'changed' } else { 'healthy' }
+    return [ordered]@{ status = $status; dryRun = $false; component = $ComponentName; capabilityNames = @($capabilities); changed = @($changed.ToArray()); firewallProfiles = @($firewallProfiles) }
+}
+
+function Test-BootstrapWinhanceInstalled {
+    param([Parameter(Mandatory = $true)]$ComponentDef)
+
+    $probePaths = @()
+    if ($ComponentDef.PSObject.Properties.Name -contains 'ProbePaths') { $probePaths = @($ComponentDef.ProbePaths) }
+    if ($probePaths.Count -gt 0 -and (Test-WingetProbePathsOnDisk -ProbePaths $probePaths)) { return $true }
+    return $false
+}
+
+function Install-BootstrapWinhanceComponent {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $sourceUrl = [string]$ComponentDef.SourceUrl
+    $installCommand = [string]$ComponentDef.InstallCommand
+    if ([string]::IsNullOrWhiteSpace($sourceUrl)) { $sourceUrl = 'https://get.winhance.net/' }
+    if ([string]::IsNullOrWhiteSpace($installCommand)) { $installCommand = 'irm "https://get.winhance.net" | iex' }
+
+    if ([bool]$State.DryRun) {
+        Write-Log ("DryRun: planejado instalar Winhance via fonte oficial: {0}; nenhuma otimizacao/tweak sera aplicada." -f $sourceUrl)
+        return [ordered]@{ status = 'planned'; dryRun = $true; sourceUrl = $sourceUrl; installCommand = $installCommand; tweaksApplied = $false }
+    }
+
+    if (Test-BootstrapWinhanceInstalled -ComponentDef $ComponentDef) {
+        Write-Log 'Winhance ja instalado (artefato validado em disco).'
+        return [ordered]@{ status = 'healthy'; dryRun = [bool]$State.DryRun; sourceUrl = $sourceUrl; tweaksApplied = $false }
+    }
+
+    if (-not (Test-IsAdmin)) {
+        $message = 'Winhance installer oficial requer PowerShell elevado. Bloqueado sem aplicar tweaks.'
+        Write-Log $message 'WARN'
+        Register-BootstrapComponentSkip -State $State -ComponentName 'winhance' -Reason 'admin-required' -Message $message -Action 'rerun-elevated-or-install-manually'
+        return [ordered]@{ status = 'blocked'; dryRun = $false; sourceUrl = $sourceUrl; requiresAdmin = $true; tweaksApplied = $false }
+    }
+
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $script = 'irm "https://get.winhance.net" | iex'
+    Write-Log 'Instalando Winhance via instalador oficial. Nenhuma configuracao/tweak sera aplicado pelo PhaseZero.'
+    $exitCode = Invoke-NativeWithLog -Exe $powershellExe -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $script) -TimeoutMs 300000
+    if ($exitCode -ne 0) {
+        throw ("Winhance installer oficial falhou (exit={0})." -f $exitCode)
+    }
+    Register-BootstrapChange -State $State -Type Package -Target 'Winhance' -OldValue $null -NewValue $sourceUrl -Operation 'install-official-installer' -Component 'winhance'
+    return [ordered]@{ status = 'installed'; dryRun = $false; sourceUrl = $sourceUrl; tweaksApplied = $false }
+}
+
 function Ensure-WslUi {
     param([Parameter(Mandatory = $true)][string]$WingetPath)
 
@@ -5780,28 +6001,98 @@ function Invoke-NpmWithLog {
     return (Invoke-NativeWithLog -Exe $NpmCmd -Args $Args)
 }
 
+function ConvertTo-BootstrapSafeNativeSummaryLine {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) { return '' }
+    $text = [string]$Value
+    $text = $text -replace [string][char]0, ''
+    $text = $text -replace ([string][char]0xFFFD), ''
+    $text = $text -replace 'ï¿½', ''
+    $text = $text -replace '[\u0001-\u0008\u000B\u000C\u000E-\u001F]', ''
+    $text = $text.Trim()
+    if ($text.Length -gt 500) { $text = $text.Substring(0, 497) + '...' }
+    return $text
+}
+
+function Invoke-BootstrapScriptBlockWithTimeout {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$ScriptBlock,
+        [ValidateRange(1, 600)][int]$TimeoutSeconds = 5
+    )
+
+    $job = $null
+    $started = Get-Date
+    try {
+        $job = Start-Job -ScriptBlock $ScriptBlock
+        if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
+            try { Stop-Job -Job $job -ErrorAction SilentlyContinue } catch { }
+            return [ordered]@{
+                name = $Name
+                status = 'timeout'
+                timedOut = $true
+                durationMs = [long]((Get-Date) - $started).TotalMilliseconds
+                value = $null
+                error = ("{0} exceeded timeout of {1}s" -f $Name, $TimeoutSeconds)
+            }
+        }
+        $value = Receive-Job -Job $job -ErrorAction Stop
+        return [ordered]@{
+            name = $Name
+            status = 'ok'
+            timedOut = $false
+            durationMs = [long]((Get-Date) - $started).TotalMilliseconds
+            value = $value
+            error = ''
+        }
+    } catch {
+        return [ordered]@{
+            name = $Name
+            status = 'failed'
+            timedOut = $false
+            durationMs = [long]((Get-Date) - $started).TotalMilliseconds
+            value = $null
+            error = $_.Exception.Message
+        }
+    } finally {
+        if ($job) { Remove-Job -Job $job -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Invoke-NativeFirstLine {
     param(
         [Parameter(Mandatory = $true)][string]$Exe,
-        [string[]]$Args = @()
+        [Alias('Args')][string[]]$Arguments = @(),
+        [int]$TimeoutMs = 3000
     )
 
     if ($Exe -match '\.(ps1|psm1|psd1)$') {
+        $scriptFile = $Exe
         $psHost = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         if (-not (Test-Path -LiteralPath $psHost)) { $psHost = 'powershell.exe' }
-        try {
-            $out = & $psHost -NoProfile -ExecutionPolicy Bypass -File $Exe @Args 2>&1
-            return ($out | Select-Object -First 1)
-        } catch {
-            return ''
-        }
+        $Exe = $psHost
+        $Arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptFile) + @($Arguments)
     }
 
-    $argsText = ''
-    if ($Args -and $Args.Count -gt 0) { $argsText = ($Args -join ' ') }
-    $cmdLine = ('"{0}" {1} 2>&1' -f ($Exe -replace '"', '""'), $argsText).Trim()
-    $out = & $env:ComSpec /c $cmdLine
-    return ($out | Select-Object -First 1)
+    $stdoutPath = Join-Path $env:TEMP ('phasezero-native-firstline-out-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    $stderrPath = Join-Path $env:TEMP ('phasezero-native-firstline-err-' + [Guid]::NewGuid().ToString('N') + '.txt')
+    $proc = $null
+    try {
+        $proc = Start-Process -FilePath $Exe -ArgumentList $Arguments -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -WindowStyle Hidden -PassThru -ErrorAction Stop
+        if (-not $proc.WaitForExit([Math]::Max(500, $TimeoutMs))) {
+            try { $proc.Kill() } catch { }
+            return (ConvertTo-BootstrapSafeNativeSummaryLine -Value ("timeout after {0}ms" -f $TimeoutMs))
+        }
+        $lines = @()
+        if (Test-Path -LiteralPath $stdoutPath) { $lines += @(Get-Content -LiteralPath $stdoutPath -ErrorAction SilentlyContinue) }
+        if ($lines.Count -eq 0 -and (Test-Path -LiteralPath $stderrPath)) { $lines += @(Get-Content -LiteralPath $stderrPath -ErrorAction SilentlyContinue) }
+        return (ConvertTo-BootstrapSafeNativeSummaryLine -Value ($lines | Select-Object -First 1))
+    } catch {
+        return ''
+    } finally {
+        Remove-Item -LiteralPath $stdoutPath,$stderrPath -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Ensure-NpmGlobalPackage {
@@ -12048,6 +12339,13 @@ function Get-BootstrapComponentCatalog {
     $catalog['notepadpp'] = New-BootstrapComponentDefinition -Name 'notepadpp' -Description 'Notepad++.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Notepad++.Notepad++'; DisplayName = 'Notepad++'; ProbePaths = @(Get-BootstrapNotepadPlusPlusProbePaths) }
     $catalog['wsl-core'] = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'Recursos WSL, Ubuntu e WSL 2.' -DependsOn @('system-core') -Kind 'wsl-core'
     $catalog['wsl-ui'] = New-BootstrapComponentDefinition -Name 'wsl-ui' -Description 'WSL UI e WebView2.' -DependsOn @('wsl-core') -Kind 'wsl-ui'
+    $catalog['hyper-v'] = New-BootstrapComponentDefinition -Name 'hyper-v' -Description 'Hyper-V Platform completo. Opt-in; requer admin e reboot.' -DependsOn @('system-core') -Kind 'windows-feature' -Data @{ DisplayName = 'Hyper-V'; FeatureNames = @('Microsoft-Hyper-V-All'); RequiresAdmin = $true; RequiresReboot = $true; Stage = 'runtime'; Provisioning = 'windows-feature' }
+    $catalog['hyper-v-tools'] = New-BootstrapComponentDefinition -Name 'hyper-v-tools' -Description 'Ferramentas de gerenciamento Hyper-V. Opt-in; requer admin e reboot.' -DependsOn @('system-core') -Kind 'windows-feature' -Data @{ DisplayName = 'Hyper-V Management Tools'; FeatureNames = @('Microsoft-Hyper-V-Management-Clients', 'Microsoft-Hyper-V-Management-PowerShell'); RequiresAdmin = $true; RequiresReboot = $true; Stage = 'runtime'; Provisioning = 'windows-feature' }
+    $catalog['windows-hypervisor-platform'] = New-BootstrapComponentDefinition -Name 'windows-hypervisor-platform' -Description 'Windows Hypervisor Platform. Opt-in; requer admin e reboot.' -DependsOn @('system-core') -Kind 'windows-feature' -Data @{ DisplayName = 'Windows Hypervisor Platform'; FeatureNames = @('HypervisorPlatform'); RequiresAdmin = $true; RequiresReboot = $true; Stage = 'runtime'; Provisioning = 'windows-feature' }
+    $catalog['openssh-client'] = New-BootstrapComponentDefinition -Name 'openssh-client' -Description 'OpenSSH Client via Windows capability.' -DependsOn @('system-core') -Kind 'windows-capability' -Data @{ DisplayName = 'OpenSSH Client'; CapabilityNames = @('OpenSSH.Client~~~~0.0.1.0'); CommandNames = @('ssh'); RequiresAdmin = $true; Stage = 'runtime'; Provisioning = 'windows-capability' }
+    $catalog['openssh-server'] = New-BootstrapComponentDefinition -Name 'openssh-server' -Description 'OpenSSH Server via Windows capability; firewall Domain/Private somente.' -DependsOn @('openssh-client') -Kind 'windows-capability' -Data @{ DisplayName = 'OpenSSH Server'; CapabilityNames = @('OpenSSH.Server~~~~0.0.1.0'); ServiceName = 'sshd'; FirewallRuleName = 'PhaseZero OpenSSH Server Domain Private'; FirewallProfiles = @('Domain', 'Private'); RequiresAdmin = $true; Stage = 'runtime'; Provisioning = 'windows-capability' }
+    $catalog['3d-viewer'] = New-BootstrapComponentDefinition -Name '3d-viewer' -Description 'Microsoft 3D Viewer via Microsoft Store/winget.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = '9NBLGGH42THS'; DisplayName = 'Microsoft 3D Viewer'; AppxPackageNames = @('Microsoft.Microsoft3DViewer'); ProbePaths = @("$env:ProgramFiles\WindowsApps\Microsoft.Microsoft3DViewer_*\3DViewer.exe") } -RequiresNetwork $true
+    $catalog['winhance'] = New-BootstrapComponentDefinition -Name 'winhance' -Description 'Winhance install/audit somente; nenhuma otimizacao agressiva aplicada.' -DependsOn @('system-core') -Kind 'winhance' -Data @{ AllowFailureWhenNotAdmin = $true; DisplayName = 'Winhance'; SourceUrl = 'https://get.winhance.net/'; InstallCommand = 'irm "https://get.winhance.net" | iex'; RepoUrl = 'https://github.com/memstechtips/Winhance'; ProbePaths = @("$env:ProgramFiles\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Programs\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Winhance\Winhance.exe", "C:\ProgramData\Winhance\Winhance.exe") } -RequiresNetwork $true
     $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Docker\Docker.exe", "${env:LOCALAPPDATA}\Docker\Docker Desktop.exe", "$env:ProgramFiles\Docker\Docker.exe", "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe") }
     $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\AnthropicClaude\claude.exe", "${env:LOCALAPPDATA}\AnthropicClaude\app-*\claude.exe", "${env:LOCALAPPDATA}\Programs\Claude\Claude.exe", "$env:ProgramFiles\Claude\Claude.exe") }
     $catalog['claude-code'] = New-BootstrapComponentDefinition -Name 'claude-code' -Description 'Claude Code CLI.' -DependsOn @('system-core') -Kind 'claude-code'
@@ -19585,19 +19883,41 @@ function Set-BootstrapDockerHighPriority {
 }
 
 function Get-BootstrapAiAgentPerformanceAudit {
+    function Get-OptionalPropertyString {
+        param(
+            [AllowNull()]$Object,
+            [Parameter(Mandatory = $true)][string]$Name
+        )
+        if ($null -eq $Object) { return '' }
+        $propertyNames = @($Object.PSObject.Properties | ForEach-Object { [string]$_.Name })
+        if ($propertyNames -notcontains $Name) { return '' }
+        return [string]$Object.$Name
+    }
+
     $services = @()
     foreach ($name in @('DiagTrack','dmwappushservice','WSearch','SysMain')) {
         $services += @(Get-BootstrapServiceSnapshot -Name $name)
     }
 
-    $defender = [ordered]@{ available = $false; exclusionPath = @(); exclusionProcess = @(); error = '' }
-    try {
+    $defender = [ordered]@{ available = $false; exclusionPath = @(); exclusionProcess = @(); error = ''; timedOut = $false }
+    $defenderProbe = Invoke-BootstrapScriptBlockWithTimeout -Name 'Get-MpPreference' -TimeoutSeconds 5 -ScriptBlock {
         $pref = Get-MpPreference -ErrorAction Stop
-        $defender.available = $true
-        $defender.exclusionPath = @($pref.ExclusionPath)
-        $defender.exclusionProcess = @($pref.ExclusionProcess)
-    } catch {
-        $defender.error = $_.Exception.Message
+        return [ordered]@{
+            available = $true
+            exclusionPath = @($pref.ExclusionPath)
+            exclusionProcess = @($pref.ExclusionProcess)
+        }
+    }
+    if ([bool]$defenderProbe.timedOut) {
+        $defender.error = 'Get-MpPreference timeout'
+        $defender.timedOut = $true
+    } elseif ([string]$defenderProbe.status -eq 'ok') {
+        $value = ConvertTo-BootstrapHashtable -InputObject $defenderProbe.value
+        $defender.available = [bool]$value['available']
+        $defender.exclusionPath = @($value['exclusionPath'])
+        $defender.exclusionProcess = @($value['exclusionProcess'])
+    } else {
+        $defender.error = [string]$defenderProbe.error
     }
 
     $smartScreen = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\AppHost' -ErrorAction SilentlyContinue
@@ -19609,10 +19929,10 @@ function Get-BootstrapAiAgentPerformanceAudit {
         generatedAt = (Get-Date).ToString('o')
         services = @($services)
         defender = $defender
-        smartScreen = [ordered]@{ enabledV2 = if ($smartScreen) { [string]$smartScreen.EnableWebContentEvaluation } else { '' } }
-        deviceGuard = [ordered]@{ enableVirtualizationBasedSecurity = if ($deviceGuard) { [string]$deviceGuard.EnableVirtualizationBasedSecurity } else { '' } }
-        visualEffects = [ordered]@{ visualFxSetting = if ($visual) { [string]$visual.VisualFXSetting } else { '' } }
-        deliveryOptimization = [ordered]@{ doDownloadMode = if ($delivery) { [string]$delivery.DODownloadMode } else { '' } }
+        smartScreen = [ordered]@{ enabledV2 = Get-OptionalPropertyString -Object $smartScreen -Name 'EnableWebContentEvaluation' }
+        deviceGuard = [ordered]@{ enableVirtualizationBasedSecurity = Get-OptionalPropertyString -Object $deviceGuard -Name 'EnableVirtualizationBasedSecurity' }
+        visualEffects = [ordered]@{ visualFxSetting = Get-OptionalPropertyString -Object $visual -Name 'VisualFXSetting' }
+        deliveryOptimization = [ordered]@{ doDownloadMode = Get-OptionalPropertyString -Object $delivery -Name 'DODownloadMode' }
         dockerProcesses = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^(Docker Desktop|Docker|com\.docker|vpnkit|dockerd)$' } | Select-Object Id, ProcessName, PriorityClass)
     }
 }
@@ -20802,6 +21122,12 @@ function Invoke-BootstrapComponent {
             Ensure-BootstrapSystemCore -State $State
             Ensure-WslUi -WingetPath $State.Winget
         }
+        'windows-feature' {
+            Ensure-BootstrapWindowsFeatureComponent -State $State -ComponentName $Name -ComponentDef $componentDef | Out-Null
+        }
+        'windows-capability' {
+            Ensure-BootstrapWindowsCapabilityComponent -State $State -ComponentName $Name -ComponentDef $componentDef | Out-Null
+        }
         'claude-code' {
             Ensure-BootstrapSystemCore -State $State
             Ensure-ClaudeCode -WingetPath $State.Winget
@@ -20860,6 +21186,10 @@ function Invoke-BootstrapComponent {
         }
         'aionui' {
             Install-BootstrapAionUiComponent -State $State
+        }
+        'winhance' {
+            Ensure-BootstrapSystemCore -State $State
+            Install-BootstrapWinhanceComponent -State $State -ComponentDef $componentDef | Out-Null
         }
         'claude-config' {
             Ensure-BootstrapGitCore -State $State

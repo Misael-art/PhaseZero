@@ -82,19 +82,20 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 
 ---
 
-## AionUI Execution Checklist
+## Current Execution Checklist
 
 - status: validated
-- scope: official AionUI install, env provider audit, Doctor, SupportBundle, UI health card, host validation
-- TDD added: catalog, install-cli JSON redaction, dry-run plan, env mapping multi-key, Doctor fields, bundle artifact, UI card mapping
-- files changed: bootstrap-tools.ps1, bootstrap-ui.ps1, tests/ai-tools.tests.ps1, tests/bootstrap-support-robustness.tests.ps1, tests/bootstrap-ui-launcher.tests.ps1, AGENT_EXECUTION_PLAN.md
-- host install: AionUI installed at C:\Users\misae\AppData\Local\Programs\AionUi\AionUi.exe, version 2.1.5.0, smoke process started and stayed alive.
-- provider env detected: openai, anthropic, openrouter, deepseek. Missing: gemini/google, xai, dashscope, qwen, zai. Values never printed.
-- provider config: not written. Local DB has providers table with api_key_encrypted and empty provider rows; no documented encryption/write schema, so PhaseZero blocks automatic mutation and gives manual fallback.
-- support bundle: C:\Users\misae\AppData\Local\Temp\phasezero-support_20260527_173441_23044_790ea16f.zip; scan clean; includes aionui.json.
-- validation commands: parse all 121 ps1 OK; PSScriptAnalyzer Error 0 and warning budget 705; Pester 397/397 OK; bootstrap-ui.bat -SmokeTest OK; install-cli.ps1 --tool aionui --validate --yes --no-admin OK; Doctor/SupportBundle/RepairPlan/Audit/safe-base dry-run exit 0.
-- blockers: automatic provider write blocked by AionUI encrypted key storage without stable documented schema; WSL host still reports service/AppX warning in Audit but does not hang.
-- next task: decide whether to add a documented AionUI provider-writer after upstream documents encryption/config API.
+- scope: AionUI/ai-usagebar host install validation, Windows resource catalog, WSL/native probe hardening, full QA, bundle secret scan
+- branch: codex-bootstrap-secrets-rotation
+- files changed: bootstrap-tools.ps1, tests/bootstrap-windows-resources.tests.ps1, tests/bootstrap-app-tuning.tests.ps1, tests/bootstrap-quality-gates.tests.ps1, AGENT_EXECUTION_PLAN.md
+- TDD added: Windows feature/capability catalog, OpenSSH post-install guard, Winhance official-source handling, native probe timeout/sanitization, AppTuning host-tolerant assertion, mutation allow-list update
+- host install: AionUI installed at C:\Users\misae\AppData\Local\Programs\AionUi\AionUi.exe, version 2.1.5.0; smoke process started and stayed alive. ai-usagebar configured at C:\Users\misae\AppData\Local\PhaseZero\ai-tools\bin\ai-usagebar.exe, version 0.4.0. 3D Viewer installed through Microsoft Store winget id 9NBLGGH42THS. Winhance already installed; no tweaks applied.
+- provider env detected: openai, anthropic, openrouter, deepseek. Missing: gemini/google, xai, dashscope/qwen, zai. Values never printed.
+- provider config: AionUI automatic provider write remains blocked by encrypted local storage without stable documented write schema; PhaseZero audits and gives manual fallback instead of inventing schema.
+- support bundle: C:\Users\misae\AppData\Local\Temp\phasezero-support_20260530_083238_7580_a8828ec1.zip; entries include aionui.json, ai-usagebar.json, secrets-doctor.json, wsl-repair.json. Hard secret scan OK: no raw .env, no bootstrap-secrets.json file, no protectedData, no ghp_/github_pat_/sk-/sk-or-/sk-ant- token patterns.
+- validation commands: parse all ps1 OK; PSScriptAnalyzer Error 0; Pester full 422/422 OK in 1366.54s; bootstrap-ui.bat -SmokeTest OK; install-cli.bat --tool ai-usagebar --validate --dry-run --yes OK; install-cli.ps1 --tool aionui --validate --yes --no-admin OK; install-cli.ps1 --tool ai-usagebar --validate --yes --no-admin OK; Doctor/SupportBundle/RepairPlan/Audit/safe-base dry-run exit 0.
+- blockers: non-admin host blocks Hyper-V, Hyper-V tools, Windows Hypervisor Platform, OpenSSH Client, OpenSSH Server installation; pending reboot warning present; WSL service/AppX state still unhealthy but probes no longer hang; AionUI provider write blocked until upstream exposes stable config/encryption API.
+- next task: run elevated Windows resource installation if desired, then rerun Doctor/RepairPlan to clear admin-blocked items.
 
 ## 2. Roadmap em Fases
 

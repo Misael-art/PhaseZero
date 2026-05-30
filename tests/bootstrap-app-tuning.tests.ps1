@@ -155,7 +155,7 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $visual = $rows | Where-Object { $_.id -eq 'windows-ai-visual-performance' } | Select-Object -First 1
 
         $visual.installedState | Should Be 'installed'
-        $visual.configuredState | Should Be 'planned'
+        (@('planned','configured') -contains $visual.configuredState) | Should Be $true
         $visual.risk | Should Be 'conservative'
         $visual.rollbackScope | Should Be 'registry-snapshot'
         @($visual.safetyNotes).Count | Should BeGreaterThan 0

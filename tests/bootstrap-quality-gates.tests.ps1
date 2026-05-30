@@ -70,6 +70,7 @@ Describe 'Bootstrap quality gates' {
             'Disable-BootstrapRunEntries',
             'Set-BootstrapServiceStartupTypes',
             'Invoke-BootstrapHostHealthTelemetry',
+            'Invoke-NativeFirstLine',
             'New-BootstrapSupportBundle',
             'New-BootstrapReleasePack'
         )
