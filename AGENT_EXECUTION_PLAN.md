@@ -85,17 +85,17 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 ## Current Execution Checklist
 
 - status: validated
-- scope: AionUI/ai-usagebar host install validation, Windows resource catalog, WSL/native probe hardening, full QA, bundle secret scan
+- scope: AI Config Doctor/Sync, Hermes Windows beta fallback metadata, OpenClaw/CodeClaw handling, IDE/MCP health bundle artifacts, redaction and full QA
 - branch: codex-bootstrap-secrets-rotation
-- files changed: bootstrap-tools.ps1, tests/bootstrap-windows-resources.tests.ps1, tests/bootstrap-app-tuning.tests.ps1, tests/bootstrap-quality-gates.tests.ps1, AGENT_EXECUTION_PLAN.md
-- TDD added: Windows feature/capability catalog, OpenSSH post-install guard, Winhance official-source handling, native probe timeout/sanitization, AppTuning host-tolerant assertion, mutation allow-list update
-- host install: AionUI installed at C:\Users\misae\AppData\Local\Programs\AionUi\AionUi.exe, version 2.1.5.0; smoke process started and stayed alive. ai-usagebar configured at C:\Users\misae\AppData\Local\PhaseZero\ai-tools\bin\ai-usagebar.exe, version 0.4.0. 3D Viewer installed through Microsoft Store winget id 9NBLGGH42THS. Winhance already installed; no tweaks applied.
-- provider env detected: openai, anthropic, openrouter, deepseek. Missing: gemini/google, xai, dashscope/qwen, zai. Values never printed.
-- provider config: AionUI automatic provider write remains blocked by encrypted local storage without stable documented write schema; PhaseZero audits and gives manual fallback instead of inventing schema.
-- support bundle: C:\Users\misae\AppData\Local\Temp\phasezero-support_20260530_083238_7580_a8828ec1.zip; entries include aionui.json, ai-usagebar.json, secrets-doctor.json, wsl-repair.json. Hard secret scan OK: no raw .env, no bootstrap-secrets.json file, no protectedData, no ghp_/github_pat_/sk-/sk-or-/sk-ant- token patterns.
-- validation commands: parse all ps1 OK; PSScriptAnalyzer Error 0; Pester full 422/422 OK in 1366.54s; bootstrap-ui.bat -SmokeTest OK; install-cli.bat --tool ai-usagebar --validate --dry-run --yes OK; install-cli.ps1 --tool aionui --validate --yes --no-admin OK; install-cli.ps1 --tool ai-usagebar --validate --yes --no-admin OK; Doctor/SupportBundle/RepairPlan/Audit/safe-base dry-run exit 0.
-- blockers: non-admin host blocks Hyper-V, Hyper-V tools, Windows Hypervisor Platform, OpenSSH Client, OpenSSH Server installation; pending reboot warning present; WSL service/AppX state still unhealthy but probes no longer hang; AionUI provider write blocked until upstream exposes stable config/encryption API.
-- next task: run elevated Windows resource installation if desired, then rerun Doctor/RepairPlan to clear admin-blocked items.
+- files changed: bootstrap-tools.ps1, tests/bootstrap-ai-config.tests.ps1, AGENT_EXECUTION_PLAN.md
+- TDD added: aiConfigSync UI capability, codeclaw alias, Hermes Windows beta metadata, OpenClaw Node 22 requirement, redacted AI Config Doctor, dry-run AI Config Sync, CLI result.json modes, SupportBundle ai-config/ide-targets/mcp-health artifacts
+- implementation: added -AiConfigDoctor and -AiConfigSync modes; result.json gains aiConfig block; Doctor embeds aiConfig; SupportBundle emits ai-config.json, ide-targets.json and mcp-health.json; Hermes remains WSL-first with documented Windows native beta fallback metadata; OpenClaw blocks automation beyond safe dry-run/manual fallback and treats CodeClaw as alias.
+- provider env detected in final dry-run: openai, anthropic, openrouter, deepseek. Values never printed. AionUI automatic provider write remains blocked by encrypted local storage without stable documented write schema.
+- support bundle: C:\Users\misae\AppData\Local\Temp\phasezero-support_20260531_115155_18716_4fa225c4.zip; entries include ai-config.json, ide-targets.json, mcp-health.json, aionui.json, ai-usagebar.json, secrets-doctor.json, wsl-repair.json. Hard secret scan OK: no raw .env, no protectedData, no Authorization Bearer, no ghp_/github_pat_/sk-/sk-or-/sk-ant- token patterns.
+- validation commands: parse all ps1 OK (117 files); PSScriptAnalyzer Error 0; PSScriptAnalyzer warning budget stays <= 705; targeted AI Config Pester 8/8 OK; support/UI/AI targeted Pester OK; bootstrap-ui.bat -SmokeTest OK; bootstrap-tools.ps1 -AiConfigDoctor -DryRun -NonInteractive OK; bootstrap-tools.ps1 -AiConfigSync -DryRun -NonInteractive OK; Doctor/SupportBundle dry-run exit 0; full Pester 430/430 OK in 2363.36s.
+- slow-test note: first full run hit the 30min external timeout without summary; diagnostic rerun with log completed green in 39m23s. Slowest areas were PSScriptAnalyzer quality gate, SupportBundle/Doctor checks, managed MCP matrix and rotation log cap. No deadlock found; result.json-writing modes stayed bounded.
+- blockers: non-admin host still blocks elevated Windows resources from prior checklist; pending reboot warning present; WSL service/AppX state still unhealthy but probes do not hang; AionUI provider write blocked until upstream exposes stable config/encryption API.
+- next task: split/optimize slow Pester groups so full local validation returns below 30 minutes consistently.
 
 ## 2. Roadmap em Fases
 

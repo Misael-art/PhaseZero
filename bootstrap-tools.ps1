@@ -25,6 +25,8 @@
     [switch]$ListComponents,
     [switch]$Doctor,
     [switch]$SupportBundle,
+    [switch]$AiConfigDoctor,
+    [switch]$AiConfigSync,
     [switch]$RepairPlan,
     [switch]$ReleasePack,
     [string]$ReleaseVersion = '',
@@ -12650,6 +12652,7 @@ function Get-BootstrapUiContract {
             steamDeckDoctor = $true
             githubCliAgentAuth = $true
             aionuiIntegration = $true
+            aiConfigSync = $true
         }
         profileNames = @($profiles.Keys)
         componentNames = @($components.Keys)
@@ -13757,8 +13760,11 @@ function Get-BootstrapAiToolCatalog {
         GitHubRepo     = 'NousResearch/hermes-agent'
         PackageName    = ''
         InstallSupport = 'wsl-installer'
+        WindowsInstallSupport = 'native-powershell-beta'
+        WindowsInstallCommand = 'iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)'
+        WindowsDataRoot = '$env:LOCALAPPDATA\hermes'
         ProbePaths     = @('$env:USERPROFILE\.hermes\hermes-agent')
-        Notes          = 'Repo oficial validado. Windows nativo nao e caminho estavel; instalacao suportada pelo projeto usa WSL2 e install.sh oficial com --skip-setup. npm hermes nao e tratado como Hermes Agent oficial.'
+        Notes          = 'Repo oficial validado. WSL2 segue preferido quando saudavel; Windows nativo beta usa install.ps1 oficial e data dir em LOCALAPPDATA.'
     }
     $catalog['hermes-desktop'] = [ordered]@{
         ToolName       = 'hermes-desktop'
@@ -13784,7 +13790,9 @@ function Get-BootstrapAiToolCatalog {
         GitHubRepo     = 'openclaw/openclaw'
         PackageName    = 'openclaw'
         InstallSupport = 'npm-prefix'
-        Notes          = 'Instala via npm quando solicitado; onboarding e chaves ficam manuais.'
+        MinimumNodeMajor = 22
+        Aliases        = @('codeclaw')
+        Notes          = 'Instala via npm quando solicitado; Node >= 22 requerido. Onboarding, daemon/gateway e chaves ficam manuais.'
     }
     $catalog['aionui'] = [ordered]@{
         ToolName       = 'aionui'
@@ -13854,6 +13862,7 @@ function Normalize-BootstrapAiToolName {
         'aion' { return 'aionui' }
         'aion-ui' { return 'aionui' }
         'aionui' { return 'aionui' }
+        'codeclaw' { return 'openclaw' }
         'antigravity' { return 'antigravity-workflows' }
         'aiusagebar' { return 'ai-usagebar' }
         'usagebar' { return 'ai-usagebar' }
@@ -22021,6 +22030,7 @@ function New-BootstrapWslRepairDoctorReport {
 }
 
 function Get-BootstrapDoctorProviderEnvNames {
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSUseSingularNouns','')]
     param([Parameter(Mandatory = $true)][string]$ProviderName)
     switch ($ProviderName) {
         'openai' { return @('OPENAI_API_KEY', 'OPENAI_ADMIN_KEY') }
@@ -22277,6 +22287,265 @@ function New-BootstrapAiUsagebarDoctorReport {
         configPaths = @($config['configPaths'])
         vendors = $vendors
     }
+}
+
+function Get-BootstrapAiConfigProviderEnvMap {
+    return @(
+        [ordered]@{ provider = 'openai'; env = @('OPENAI_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','vsCode','cursor','windsurf','trae','roo','cline','zed','zCode','kilo') }
+        [ordered]@{ provider = 'anthropic'; env = @('ANTHROPIC_API_KEY'); targetApps = @('openClaw','hermes','continue','vsCode','cursor','windsurf','trae','roo','cline','zed','zCode') }
+        [ordered]@{ provider = 'gemini'; env = @('GEMINI_API_KEY','GOOGLE_API_KEY'); targetApps = @('continue','vsCode','cursor','windsurf','trae','roo','cline') }
+        [ordered]@{ provider = 'openrouter'; env = @('OPENROUTER_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','kilo') }
+        [ordered]@{ provider = 'deepseek'; env = @('DEEPSEEK_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','kilo') }
+        [ordered]@{ provider = 'xai'; env = @('XAI_API_KEY'); targetApps = @('openClaw','continue','vsCode') }
+        [ordered]@{ provider = 'dashscope'; env = @('DASHSCOPE_API_KEY','QWEN_API_KEY'); targetApps = @('openClaw','continue') }
+        [ordered]@{ provider = 'zai'; env = @('ZAI_API_KEY'); targetApps = @('openClaw','hermes','continue') }
+        [ordered]@{ provider = 'github'; env = @('GH_TOKEN','GITHUB_TOKEN'); targetApps = @('claudeCode','claudeDesktop','vsCode','cursor','windsurf','trae','continue','zed','zCode','openCode') }
+    )
+}
+
+function Get-BootstrapAiConfigKnownTargetList {
+    return @(
+        'claudeCode','claudeDesktop','vsCode','cursor','windsurf','trae','roo','cline',
+        'zed','zCode','openCode','kilo','continue','openClaw','hermes','aionui','aiUsagebar'
+    )
+}
+
+function Get-BootstrapAiConfigProviderReport {
+    $providers = New-Object System.Collections.Generic.List[object]
+    foreach ($provider in @(Get-BootstrapAiConfigProviderEnvMap)) {
+        $names = @($provider['env'])
+        $presentNames = New-Object System.Collections.Generic.List[string]
+        foreach ($name in @($names)) {
+            if (Test-BootstrapDoctorAnyEnvPresent -Names @([string]$name)) {
+                $presentNames.Add([string]$name) | Out-Null
+            }
+        }
+        $status = if ($presentNames.Count -gt 0) { 'present' } else { 'missing' }
+        $providers.Add([ordered]@{
+            provider = [string]$provider['provider']
+            status = $status
+            source = $(if ($presentNames.Count -gt 0) { 'env' } else { 'missing' })
+            envPresent = ($presentNames.Count -gt 0)
+            envNames = @($presentNames.ToArray())
+            targetApps = @($provider['targetApps'])
+            value = '[redacted]'
+        }) | Out-Null
+    }
+    return @($providers.ToArray())
+}
+
+function Get-BootstrapAiConfigTargetReport {
+    param([object[]]$Providers = @())
+
+    $targets = New-Object System.Collections.Generic.List[object]
+    foreach ($target in @(Get-BootstrapAiConfigKnownTargetList)) {
+        $providerNames = @($Providers | Where-Object { [bool]$_['envPresent'] -and (@($_['targetApps']) -contains $target) } | ForEach-Object { [string]$_['provider'] })
+        $status = if ($target -in @('aionui')) {
+            'manualRequired'
+        } elseif ($providerNames.Count -gt 0) {
+            'ready'
+        } else {
+            'missing'
+        }
+        $manual = ($target -in @('aionui','openClaw','hermes'))
+        $reason = if ($target -eq 'aionui') {
+            'AionUI provider store is encrypted/undocumented; use manual app settings.'
+        } elseif ($target -eq 'openClaw') {
+            'OpenClaw onboarding/config daemon remain manual unless stable CLI config set exists.'
+        } elseif ($target -eq 'hermes') {
+            'Hermes config writes must use hermes config set when command exists.'
+        } elseif ($providerNames.Count -gt 0) {
+            'Provider env available for app-scoped sync.'
+        } else {
+            'No compatible provider env detected.'
+        }
+        $targets.Add([ordered]@{
+            id = $target
+            status = $status
+            providers = @($providerNames)
+            manualRequired = [bool]$manual
+            drift = 'unknown'
+            reason = $reason
+        }) | Out-Null
+    }
+    return @($targets.ToArray())
+}
+
+function Get-BootstrapAiConfigMcpHealth {
+    $servers = New-Object System.Collections.Generic.List[object]
+    $managed = Get-BootstrapManagedMcpCatalog
+    foreach ($name in @($managed.Keys)) {
+        $def = ConvertTo-BootstrapHashtable -InputObject $managed[$name]
+        $command = if ($def.ContainsKey('command')) { [string]$def['command'] } else { '' }
+        $url = if ($def.ContainsKey('url')) { [string]$def['url'] } elseif ($def.ContainsKey('baseUrl')) { [string]$def['baseUrl'] } else { '' }
+        $status = 'unknown'
+        if (-not [string]::IsNullOrWhiteSpace($command)) {
+            $status = if (Resolve-CommandPath -Name $command) { 'ready' } else { 'missing' }
+        } elseif (-not [string]::IsNullOrWhiteSpace($url)) {
+            $status = 'remote'
+        }
+        $servers.Add([ordered]@{
+            id = [string]$name
+            status = $status
+            profile = if ($def.ContainsKey('profile')) { [string]$def['profile'] } else { 'core' }
+            command = $command
+            url = $url
+            auth = if ($def.ContainsKey('env') -or $def.ContainsKey('headers')) { 'redacted' } else { 'none' }
+        }) | Out-Null
+    }
+    return [ordered]@{
+        schemaVersion = 1
+        status = 'success'
+        servers = @($servers.ToArray())
+    }
+}
+
+function Get-BootstrapHermesAiConfigReport {
+    $catalog = Get-BootstrapAiToolCatalog
+    $entry = $catalog['hermes-agent']
+    $cmd = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot ''
+    $layout = if (-not [string]::IsNullOrWhiteSpace($cmd) -and $cmd -match '(?i)\\AppData\\Local\\hermes\\') { 'windows-native' } elseif (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.hermes')) { 'wsl-or-posix' } else { 'unknown' }
+    return [ordered]@{
+        installed = -not [string]::IsNullOrWhiteSpace($cmd)
+        commandPath = [string]$cmd
+        layout = $layout
+        windowsInstallSupport = [string]$entry['WindowsInstallSupport']
+        windowsInstallCommand = [string]$entry['WindowsInstallCommand']
+        configMethod = 'hermes config set'
+        manualRequired = $true
+        smoke = [ordered]@{
+            version = $(if ($cmd) { Invoke-BootstrapDoctorCommandProbe -Label 'hermes-version' -CommandName $cmd -CommandArgs @('--version') -TimeoutMs 3000 } else { [ordered]@{ status = 'missing' } })
+            doctor = $(if ($cmd) { Invoke-BootstrapDoctorCommandProbe -Label 'hermes-doctor' -CommandName $cmd -CommandArgs @('doctor') -TimeoutMs 5000 } else { [ordered]@{ status = 'missing' } })
+            configCheck = $(if ($cmd) { Invoke-BootstrapDoctorCommandProbe -Label 'hermes-config-check' -CommandName $cmd -CommandArgs @('config','check') -TimeoutMs 5000 } else { [ordered]@{ status = 'missing' } })
+        }
+    }
+}
+
+function Get-BootstrapOpenClawAiConfigReport {
+    $catalog = Get-BootstrapAiToolCatalog
+    $entry = $catalog['openclaw']
+    $cmd = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot ''
+    $nodePath = Resolve-CommandPath -Name 'node'
+    $nodeMajor = 0
+    if ($nodePath) {
+        try {
+            $line = Invoke-NativeFirstLine -Exe $nodePath -Args @('-v') -TimeoutMs 3000
+            if ([string]$line -match 'v?(\d+)') { $nodeMajor = [int]$matches[1] }
+        } catch {
+            $nodeMajor = 0
+        }
+    }
+    return [ordered]@{
+        installed = -not [string]::IsNullOrWhiteSpace($cmd)
+        commandPath = [string]$cmd
+        minimumNodeMajor = [int]$entry['MinimumNodeMajor']
+        nodeMajor = $nodeMajor
+        nodeStatus = $(if ($nodeMajor -ge [int]$entry['MinimumNodeMajor']) { 'ready' } elseif ($nodeMajor -gt 0) { 'blocked' } else { 'missing' })
+        aliases = @($entry['Aliases'])
+        onboarding = 'manual'
+        daemon = 'manual-opt-in'
+        smoke = [ordered]@{
+            version = $(if ($cmd) { Invoke-BootstrapDoctorCommandProbe -Label 'openclaw-version' -CommandName $cmd -CommandArgs @('--version') -TimeoutMs 3000 } else { [ordered]@{ status = 'missing' } })
+            status = $(if ($cmd) { Invoke-BootstrapDoctorCommandProbe -Label 'openclaw-status' -CommandName $cmd -CommandArgs @('status') -TimeoutMs 5000 } else { [ordered]@{ status = 'missing' } })
+        }
+    }
+}
+
+function New-BootstrapAiConfigDoctorReport {
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $providers = @(Get-BootstrapAiConfigProviderReport)
+    $targets = @(Get-BootstrapAiConfigTargetReport -Providers $providers)
+    $mcpHealth = Get-BootstrapAiConfigMcpHealth
+    $hermes = Get-BootstrapHermesAiConfigReport
+    $openclaw = Get-BootstrapOpenClawAiConfigReport
+    $manual = (@($targets | Where-Object { [bool]$_['manualRequired'] }).Count -gt 0)
+    $drift = @($targets | Where-Object { [string]$_['drift'] -eq 'drift' })
+    $started.Stop()
+    return [ordered]@{
+        schemaVersion = 1
+        status = $(if ($manual) { 'warning' } else { 'success' })
+        generatedAt = (Get-Date).ToString('o')
+        durationMs = [long]$started.ElapsedMilliseconds
+        providers = @($providers)
+        targets = @($targets)
+        mcps = $mcpHealth
+        drift = @($drift)
+        applied = @()
+        skipped = @()
+        manualRequired = [bool]$manual
+        hermes = $hermes
+        openclaw = $openclaw
+        aionui = Get-BootstrapAionUiDoctorReport
+        aiUsagebar = New-BootstrapAiUsagebarDoctorReport
+    }
+}
+
+function Invoke-BootstrapAiConfigSync {
+    param([switch]$DryRun)
+
+    $doctor = New-BootstrapAiConfigDoctorReport
+    $planned = New-Object System.Collections.Generic.List[object]
+    foreach ($target in @($doctor['targets'])) {
+        $providers = @($target['providers'])
+        if ($providers.Count -eq 0) { continue }
+        $planned.Add([ordered]@{
+            target = [string]$target['id']
+            action = $(if ([bool]$target['manualRequired']) { 'manual-fallback' } else { 'sync-app-scoped-config' })
+            providers = @($providers)
+            writesSecrets = $false
+            backupRequired = (-not [bool]$DryRun)
+            status = $(if ($DryRun) { 'planned' } else { 'skipped' })
+            reason = [string]$target['reason']
+        }) | Out-Null
+    }
+
+    return [ordered]@{
+        schemaVersion = 1
+        status = $(if ($DryRun) { 'planned' } else { 'manualRequired' })
+        dryRun = [bool]$DryRun
+        generatedAt = (Get-Date).ToString('o')
+        providers = @($doctor['providers'])
+        targets = @($doctor['targets'])
+        planned = @($planned.ToArray())
+        applied = @()
+        skipped = @($planned.ToArray() | Where-Object { [string]$_['action'] -eq 'manual-fallback' })
+        manualRequired = $true
+        recommendedAction = 'Run with app-specific documented CLI/config support only; AionUI/OpenClaw onboarding/Hermes gateway remain manual unless confirmed.'
+    }
+}
+
+function Invoke-BootstrapAiConfigDoctorMode {
+    Write-Log 'Modo: AiConfigDoctor'
+    $report = New-BootstrapAiConfigDoctorReport
+    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+            status = [string]$report['status']
+            exitCode = 0
+            mode = 'ai-config-doctor'
+            generatedAt = (Get-Date).ToString('o')
+            logPath = $script:LogPath
+            resultPath = $script:ResultPath
+            aiConfig = ConvertTo-BootstrapSupportSafeObject -Value $report -Name 'aiConfig'
+        })
+    }
+    Write-Log ("AiConfigDoctor: status={0} targets={1}" -f [string]$report['status'], @($report['targets']).Count)
+}
+
+function Invoke-BootstrapAiConfigSyncMode {
+    Write-Log 'Modo: AiConfigSync'
+    $report = Invoke-BootstrapAiConfigSync -DryRun:$DryRun
+    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
+            status = [string]$report['status']
+            exitCode = 0
+            mode = 'ai-config-sync'
+            generatedAt = (Get-Date).ToString('o')
+            logPath = $script:LogPath
+            resultPath = $script:ResultPath
+            aiConfig = ConvertTo-BootstrapSupportSafeObject -Value $report -Name 'aiConfigSync'
+        })
+    }
+    Write-Log ("AiConfigSync: status={0} planned={1} dryRun={2}" -f [string]$report['status'], @($report['planned']).Count, [bool]$report['dryRun'])
 }
 
 function Get-BootstrapDeckCimInstance {
@@ -22558,6 +22827,7 @@ function New-BootstrapDoctorReport {
     $secretsDoctor = New-BootstrapSecretsDoctorReport
     $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport
     $aionUiDoctor = Get-BootstrapAionUiDoctorReport -ValidateProviders
+    $aiConfigDoctor = New-BootstrapAiConfigDoctorReport
     $wslRepairDoctor = New-BootstrapWslRepairDoctorReport
 
     $rebootReasons = @()
@@ -22643,6 +22913,7 @@ function New-BootstrapDoctorReport {
         secrets = $secretsDoctor
         aiUsagebar = $aiUsagebarDoctor
         aionui = $aionUiDoctor
+        aiConfig = $aiConfigDoctor
         wslRepair = $wslRepairDoctor
         githubCliAuth = $githubCliAuth
         deck = $deckReport
@@ -22960,6 +23231,17 @@ function New-BootstrapSupportBundle {
             $aionUiDoctor = $null
         }
         if ($null -eq $aionUiDoctor) { $aionUiDoctor = Get-BootstrapAionUiDoctorReport }
+        $aiConfigDoctor = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('aiConfig')) {
+                $aiConfigDoctor = $DoctorReport['aiConfig']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['aiConfig']) {
+                $aiConfigDoctor = $DoctorReport.aiConfig
+            }
+        } catch {
+            $aiConfigDoctor = $null
+        }
+        if ($null -eq $aiConfigDoctor) { $aiConfigDoctor = New-BootstrapAiConfigDoctorReport }
         $wslRepairDoctor = $null
         try {
             if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('wslRepair')) {
@@ -22978,6 +23260,9 @@ function New-BootstrapSupportBundle {
         Write-BootstrapJsonFile -Path (Join-Path $staging 'secrets-doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $secretsDoctor -Name 'secretsDoctor')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-usagebar.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiUsagebarDoctor -Name 'aiUsagebar')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'aionui.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aionUiDoctor -Name 'aionui')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-config.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiConfigDoctor -Name 'aiConfig')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'ide-targets.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $aiConfigDoctor -Name 'targets' -Default @()) -Name 'ideTargets')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'mcp-health.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $aiConfigDoctor -Name 'mcps' -Default ([ordered]@{})) -Name 'mcpHealth')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'wsl-repair.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $wslRepairDoctor -Name 'wslRepair')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'deck-doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $deckReport -Name 'deckDoctor')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'deck-power.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $deckReport -Name 'power' -Default ([ordered]@{})) -Name 'deckPower')
@@ -23000,7 +23285,7 @@ function New-BootstrapSupportBundle {
         if (Test-Path -LiteralPath $DestinationPath) { Remove-Item -LiteralPath $DestinationPath -Force }
         Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $DestinationPath -Force
         $fileInfo = Get-Item -LiteralPath $DestinationPath
-        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','aionui.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
+        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','aionui.json','ai-config.json','ide-targets.json','mcp-health.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
         $started.Stop()
         return [ordered]@{
             path = [string]$fileInfo.FullName
@@ -24226,12 +24511,16 @@ $useBootstrapRotateSecretsMode = (
 
 $useBootstrapDoctorMode = $Doctor
 $useBootstrapSupportBundleMode = $SupportBundle
+$useBootstrapAiConfigDoctorMode = $AiConfigDoctor
+$useBootstrapAiConfigSyncMode = $AiConfigSync
 $useBootstrapRepairPlanMode = ($RepairPlan -or -not [string]::IsNullOrWhiteSpace($ExecuteRepairPlan))
 $useBootstrapReleasePackMode = $ReleasePack
 
 $useBootstrapProfileMode = (
     -not $useBootstrapRotateSecretsMode -and
     -not $useBootstrapSupportBundleMode -and
+    -not $useBootstrapAiConfigDoctorMode -and
+    -not $useBootstrapAiConfigSyncMode -and
     -not $useBootstrapRepairPlanMode -and
     -not $useBootstrapReleasePackMode -and (
         $UiContractJson -or
@@ -24289,6 +24578,34 @@ if (-not $isDotSourced) {
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
                 Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'support-bundle' })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            Stop-BootstrapProcess 1
+        }
+    }
+
+    if ($useBootstrapAiConfigDoctorMode) {
+        try {
+            Invoke-BootstrapAiConfigDoctorMode
+            Stop-BootstrapProcess 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'ai-config-doctor' })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            Stop-BootstrapProcess 1
+        }
+    }
+
+    if ($useBootstrapAiConfigSyncMode) {
+        try {
+            Invoke-BootstrapAiConfigSyncMode
+            Stop-BootstrapProcess 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'ai-config-sync' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'
