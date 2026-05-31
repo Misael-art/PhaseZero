@@ -245,7 +245,11 @@ function Get-UiLanguages {
 }
 
 function Get-UiPageIds {
-    return @('welcome', 'selection', 'host-setup', 'health', 'app-tuning', 'ai-tools', 'api-center', 'api-catalog', 'steamdeck-control', 'dual-boot', 'review', 'run')
+    return @('health', 'welcome', 'selection', 'host-setup', 'app-tuning', 'ai-tools', 'api-center', 'api-catalog', 'steamdeck-control', 'dual-boot', 'review', 'run')
+}
+
+function Get-UiStartPageId {
+    return 'health'
 }
 
 function Get-UiStrings {
@@ -682,6 +686,8 @@ if ($SmokeTest) {
     Save-UiState -State $state -Path $UiStatePath
     [ordered]@{
         pages    = @(Get-UiPageIds)
+        startPage = Get-UiStartPageId
+        primaryAction = 'doctor'
         languages = @(Get-UiLanguages)
         statePath = $UiStatePath
         backend  = $backendScriptPath
@@ -1308,7 +1314,13 @@ function Get-UiBrush {
                 <!-- Nav items -->
                 <StackPanel x:Name="NavPanel" DockPanel.Dock="Top" Margin="0,0,0,0">
                     <TextBlock Text="Instalação" Foreground="#64748B" FontSize="10" FontWeight="SemiBold" Margin="22,0,0,6"/>
-                    <ToggleButton x:Name="NavWelcome"      Style="{StaticResource NavBtn}" IsChecked="True">
+                    <ToggleButton x:Name="NavHealth"    Style="{StaticResource NavBtn}" IsChecked="True">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="+" FontSize="15" Margin="0,0,10,0"/>
+                            <TextBlock x:Name="NavHealthText" Text="Saúde" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="NavWelcome"      Style="{StaticResource NavBtn}">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="⌂" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavWelcomeText" Text="Início" VerticalAlignment="Center"/>
@@ -1324,12 +1336,6 @@ function Get-UiBrush {
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="⚙" FontSize="15" Margin="0,0,10,0"/>
                             <TextBlock x:Name="NavHostSetupText" Text="Configurar PC" VerticalAlignment="Center"/>
-                        </StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="NavHealth"    Style="{StaticResource NavBtn}">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="+" FontSize="15" Margin="0,0,10,0"/>
-                            <TextBlock x:Name="NavHealthText" Text="Saúde" VerticalAlignment="Center"/>
                         </StackPanel>
                     </ToggleButton>
                     <ToggleButton x:Name="NavAppTuning"    Style="{StaticResource NavBtn}">
@@ -1392,7 +1398,7 @@ function Get-UiBrush {
         <Grid Grid.Column="1" Grid.Row="0">
 
             <!--  WELCOME PAGE  -->
-            <ScrollViewer x:Name="PageWelcome" VerticalScrollBarVisibility="Auto" Padding="32,28">
+            <ScrollViewer x:Name="PageWelcome" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="WelcomeTitleLabel"    Style="{StaticResource PageTitle}"    Text="Bootstrap Tools + Steam Deck"/>
                     <TextBlock x:Name="WelcomeSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Setup simples do host, controle do Steam Deck e manutenção pós-instalação."
@@ -1627,7 +1633,7 @@ function Get-UiBrush {
             </ScrollViewer>
 
             <!--  HEALTH PAGE  -->
-            <ScrollViewer x:Name="PageHealth" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
+            <ScrollViewer x:Name="PageHealth" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="HealthTitleLabel" Style="{StaticResource PageTitle}" Text="Saúde"/>
                     <TextBlock x:Name="HealthSummaryLabel" Style="{StaticResource PageSubtitle}" Text="Diagnóstico local, pacote de suporte e fila manual de reparo." TextWrapping="Wrap"/>
@@ -2738,7 +2744,7 @@ $ui = [ordered]@{
     RunLogTextBox         = (Get-Control 'RunLogTextBox')
 
     # Pages (panels identified by WPF name)
-    PageNames             = @('PageWelcome', 'PageSelection', 'PageHostSetup', 'PageHealth', 'PageAppTuning', 'PageAiTools', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
+    PageNames             = @('PageHealth', 'PageWelcome', 'PageSelection', 'PageHostSetup', 'PageAppTuning', 'PageAiTools', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
 }
 
 #
@@ -5209,10 +5215,10 @@ function Refresh-ReviewPage {
 #
 
 $navButtons = @(
+    $ui.NavHealth,
     $ui.NavWelcome,
     $ui.NavSelection,
     $ui.NavHostSetup,
-    $ui.NavHealth,
     $ui.NavAppTuning,
     $ui.NavAiTools,
     $ui.NavApiCenter,
@@ -5221,7 +5227,7 @@ $navButtons = @(
     $ui.NavReview,
     $ui.NavRun
 )
-$navButtonTargets = @('welcome', 'selection', 'host-setup', 'health', 'app-tuning', 'ai-tools', 'api-center', 'steamdeck-control', 'dual-boot', 'review', 'run')
+$navButtonTargets = @('health', 'welcome', 'selection', 'host-setup', 'app-tuning', 'ai-tools', 'api-center', 'steamdeck-control', 'dual-boot', 'review', 'run')
 
 function Navigate-ToPage {
     param([int]$Index)
@@ -7242,7 +7248,9 @@ $window.Add_Loaded({
     Refresh-LocalizedText
     Refresh-CustomPresets
     Update-RunArtifactButtons
-    Navigate-ToPage -Index 0
+    $startPageIndex = [Array]::IndexOf(@(Get-UiPageIds), (Get-UiStartPageId))
+    if ($startPageIndex -lt 0) { $startPageIndex = 0 }
+    Navigate-ToPage -Index $startPageIndex
 })
 
 $window.Add_Closing({
@@ -7254,6 +7262,8 @@ if ($SmokeTestWindow) {
     Save-UiState -State $ui.State -Path $UiStatePath
     [ordered]@{
         pages              = @(Get-UiPageIds)
+        startPage          = Get-UiStartPageId
+        primaryAction      = 'doctor'
         languages          = @(Get-UiLanguages)
         statePath          = $UiStatePath
         backend            = $backendScriptPath

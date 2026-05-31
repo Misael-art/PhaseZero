@@ -85,15 +85,13 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 ## Current Execution Checklist
 
 - status: validated
-- scope: AI Config Doctor/Sync, Hermes Windows beta fallback metadata, OpenClaw/CodeClaw handling, IDE/MCP health bundle artifacts, redaction and full QA
+- scope: BAT launcher robustness, Health-first UI/CX, real smoke coverage and full QA
 - branch: codex-bootstrap-secrets-rotation
-- files changed: bootstrap-tools.ps1, tests/bootstrap-ai-config.tests.ps1, AGENT_EXECUTION_PLAN.md
-- TDD added: aiConfigSync UI capability, codeclaw alias, Hermes Windows beta metadata, OpenClaw Node 22 requirement, redacted AI Config Doctor, dry-run AI Config Sync, CLI result.json modes, SupportBundle ai-config/ide-targets/mcp-health artifacts
-- implementation: added -AiConfigDoctor and -AiConfigSync modes; result.json gains aiConfig block; Doctor embeds aiConfig; SupportBundle emits ai-config.json, ide-targets.json and mcp-health.json; Hermes remains WSL-first with documented Windows native beta fallback metadata; OpenClaw blocks automation beyond safe dry-run/manual fallback and treats CodeClaw as alias.
-- provider env detected in final dry-run: openai, anthropic, openrouter, deepseek. Values never printed. AionUI automatic provider write remains blocked by encrypted local storage without stable documented write schema.
-- support bundle: C:\Users\misae\AppData\Local\Temp\phasezero-support_20260531_115155_18716_4fa225c4.zip; entries include ai-config.json, ide-targets.json, mcp-health.json, aionui.json, ai-usagebar.json, secrets-doctor.json, wsl-repair.json. Hard secret scan OK: no raw .env, no protectedData, no Authorization Bearer, no ghp_/github_pat_/sk-/sk-or-/sk-ant- token patterns.
-- validation commands: parse all ps1 OK (117 files); PSScriptAnalyzer Error 0; PSScriptAnalyzer warning budget stays <= 705; targeted AI Config Pester 8/8 OK; support/UI/AI targeted Pester OK; bootstrap-ui.bat -SmokeTest OK; bootstrap-tools.ps1 -AiConfigDoctor -DryRun -NonInteractive OK; bootstrap-tools.ps1 -AiConfigSync -DryRun -NonInteractive OK; Doctor/SupportBundle dry-run exit 0; full Pester 430/430 OK in 2363.36s.
-- slow-test note: first full run hit the 30min external timeout without summary; diagnostic rerun with log completed green in 39m23s. Slowest areas were PSScriptAnalyzer quality gate, SupportBundle/Doctor checks, managed MCP matrix and rotation log cap. No deadlock found; result.json-writing modes stayed bounded.
+- files changed: bootstrap-ui.ps1, install-cli.bat, tests/bootstrap-bat-cli.tests.ps1, tests/bootstrap-ui-launcher.tests.ps1, AGENT_EXECUTION_PLAN.md
+- TDD added: BAT launcher literal-argument/noise guard, PowerShell fallback guard, Health-first smoke contract, startPage/primaryAction smoke fields.
+- implementation: install-cli.bat now uses DisableDelayedExpansion, Sysnative/System32/powershell fallback and quiet friendly errors; UI navigation and WPF initial state now start on Health as the operational entry; smoke contract lists health first and exposes startPage=health plus primaryAction=doctor.
+- validation commands: parse all ps1 OK (117 files); PSScriptAnalyzer Error 0; bootstrap-ui.bat -SmokeTest OK with health first; install-cli.bat --tool ai-usagebar --validate --dry-run --yes OK; targeted BAT Pester 6/6 OK; targeted UI launcher Pester 47/47 OK; full Pester 432/432 OK in 2385.97s.
+- slow-test note: first full run hit 45min external timeout and left one orphan Pester powershell process; it was stopped by PID after confirming no child process. Rerun with captured log completed green in 39m46s. Slowest areas remain PSScriptAnalyzer quality gate, SupportBundle/Doctor checks, managed MCP matrix, rotation log cap and some winget/npm timeout tests.
 - blockers: non-admin host still blocks elevated Windows resources from prior checklist; pending reboot warning present; WSL service/AppX state still unhealthy but probes do not hang; AionUI provider write blocked until upstream exposes stable config/encryption API.
 - next task: split/optimize slow Pester groups so full local validation returns below 30 minutes consistently.
 

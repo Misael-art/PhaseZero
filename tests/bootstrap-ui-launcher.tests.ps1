@@ -766,6 +766,29 @@ param(
         ([string]::IsNullOrWhiteSpace($stderr)) | Should Be $true
     }
 
+    It 'starts the operational Health page first in smoke contract' {
+        $stdoutPath = Join-Path $script:TestDataRoot 'health-first.stdout.txt'
+        $stderrPath = Join-Path $script:TestDataRoot 'health-first.stderr.txt'
+        $command = ('.\bootstrap-ui.bat -SmokeTest 1> "{0}" 2> "{1}"' -f $stdoutPath, $stderrPath)
+
+        $null = New-Item -Path $script:TestDataRoot -ItemType Directory -Force
+
+        Push-Location $repoRoot
+        try {
+            & cmd /c $command | Out-Null
+            $exitCode = $LASTEXITCODE
+        } finally {
+            Pop-Location
+        }
+
+        $exitCode | Should Be 0
+        $result = (Get-Content -Path $stdoutPath -Raw) | ConvertFrom-Json -ErrorAction Stop
+        [string]@($result.pages)[0] | Should Be 'health'
+        [string]$result.startPage | Should Be 'health'
+        [string]$result.primaryAction | Should Be 'doctor'
+        [string]::IsNullOrWhiteSpace((Get-Content -Path $stderrPath -Raw)) | Should Be $true
+    }
+
     It 'keeps launcher console output concise by default' {
         $raw = Get-Content -Path (Join-Path $repoRoot 'bootstrap-ui.bat') -Raw
 

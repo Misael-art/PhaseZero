@@ -95,4 +95,15 @@ Describe 'PhaseZero BAT launchers' {
         $uiBat | Should Match '"%UI_SCRIPT%".*%\*'
         $uiBat | Should Match 'pushd "%SCRIPT_DIR%"'
     }
+
+    It 'keeps BAT launchers robust for literal arguments and missing fixed PowerShell paths' {
+        $installBat = Get-Content -LiteralPath (Join-Path $repoRoot 'install-cli.bat') -Raw
+        $uiBat = Get-Content -LiteralPath (Join-Path $repoRoot 'bootstrap-ui.bat') -Raw
+
+        $installBat | Should Match 'setlocal EnableExtensions DisableDelayedExpansion'
+        $uiBat | Should Match 'setlocal EnableExtensions DisableDelayedExpansion'
+        $installBat | Should Match 'if not defined PS_EXE set "PS_EXE=powershell\.exe"'
+        $installBat | Should Match 'BOOTSTRAP_CLI_VERBOSE'
+        $installBat | Should Not Match 'echo \[install-cli\].*1>&2'
+    }
 }
