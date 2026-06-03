@@ -13803,6 +13803,9 @@ function Get-BootstrapAiProxyCatalog {
         PreferredDefault = $true
         StartCommand = 'npm start'
         LoginCommand = 'npm run login'
+        RequiresWebLoginValidation = $true
+        WebValidationKind = 'browser-session'
+        WebValidationCommand = 'npm run login'
         Playwright = $true
         EnvDefaults = [ordered]@{ PORT = '3010'; API_KEY = '{{generatedLocalApiKey}}'; BROWSER = 'chromium' }
         EnvFrom = [ordered]@{}
@@ -13825,6 +13828,9 @@ function Get-BootstrapAiProxyCatalog {
         PreferredDefault = $false
         StartCommand = 'npm start'
         LoginCommand = 'npm run login'
+        RequiresWebLoginValidation = $true
+        WebValidationKind = 'browser-session'
+        WebValidationCommand = 'npm run login'
         Playwright = $true
         EnvDefaults = [ordered]@{ PORT = '3011'; API_KEY = '{{generatedLocalApiKey}}'; BROWSER = 'chromium' }
         EnvFrom = [ordered]@{ QWEN_EMAIL = @('QWEN_EMAIL'); QWEN_PASSWORD = @('QWEN_PASSWORD') }
@@ -13847,6 +13853,9 @@ function Get-BootstrapAiProxyCatalog {
         PreferredDefault = $false
         StartCommand = 'npm start'
         LoginCommand = 'npm run login'
+        RequiresWebLoginValidation = $true
+        WebValidationKind = 'browser-session'
+        WebValidationCommand = 'npm run login'
         Playwright = $true
         EnvDefaults = [ordered]@{ PORT = '3012'; API_KEY = '{{generatedLocalApiKey}}'; PLAYWRIGHT_HEADLESS = 'true'; PLAYWRIGHT_TIMEOUT = '30000'; LOG_LEVEL = 'info' }
         EnvFrom = [ordered]@{}
@@ -13869,6 +13878,9 @@ function Get-BootstrapAiProxyCatalog {
         PreferredDefault = $false
         StartCommand = 'go run main.go'
         LoginCommand = ''
+        RequiresWebLoginValidation = $true
+        WebValidationKind = 'env-session'
+        WebValidationCommand = 'configure Mimo/Xiaomi session environment'
         Playwright = $false
         EnvDefaults = [ordered]@{ PORT = '3013'; API_KEY = '{{generatedLocalApiKey}}' }
         EnvFrom = [ordered]@{
@@ -13898,6 +13910,9 @@ function Get-BootstrapAiProxyCatalog {
         PreferredDefault = $false
         StartCommand = 'npm start'
         LoginCommand = ''
+        RequiresWebLoginValidation = $false
+        WebValidationKind = ''
+        WebValidationCommand = ''
         Playwright = $false
         EnvDefaults = [ordered]@{ PORT = '8081'; API_KEY = '{{generatedLocalApiKey}}'; UPSTREAM_URL = 'http://localhost:8080'; UPSTREAM_API_KEY = 'test'; AUTO_START_PROXY = 'true'; DEBUG = 'false' }
         EnvFrom = [ordered]@{ UPSTREAM_API_KEY = @('ANTIGRAVITY_UPSTREAM_API_KEY'); UPSTREAM_URL = @('ANTIGRAVITY_UPSTREAM_URL') }
@@ -13920,6 +13935,9 @@ function Get-BootstrapAiProxyCatalog {
         PreferredDefault = $false
         StartCommand = 'npm run tauri dev'
         LoginCommand = ''
+        RequiresWebLoginValidation = $false
+        WebValidationKind = ''
+        WebValidationCommand = ''
         Playwright = $false
         NpmLegacyPeerDeps = $true
         EnvDefaults = [ordered]@{}
@@ -15055,6 +15073,8 @@ function New-BootstrapAiProxyManifest {
             apiKeySource = '.env:API_KEY'
             loginCommand = [string]$entry['LoginCommand']
             startCommand = [string]$entry['StartCommand']
+            requiresWebLoginValidation = [bool]$entry['RequiresWebLoginValidation']
+            webValidationKind = [string]$entry['WebValidationKind']
         }) | Out-Null
     }
     return [ordered]@{
@@ -15464,6 +15484,7 @@ function Set-BootstrapAiProxyEnvironment {
     $manifestPath = Get-BootstrapAiProxyManifestPath -InstallRoot $root
     if ($DryRun) {
         $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'configure' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ('Criar .env local redigido e manifest seguro para {0}.' -f [string]$CatalogEntry['DisplayName']) -Docs ([string]$CatalogEntry['DocsUrl'])
+        $result['webValidation'] = Invoke-BootstrapAiProxyWebValidation -ToolName $ToolName -CatalogEntry $CatalogEntry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath $envPath -DryRun
         return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath $envPath -ManifestPath $manifestPath)
     }
 
@@ -15471,6 +15492,7 @@ function Set-BootstrapAiProxyEnvironment {
     $writtenManifestPath = Write-BootstrapAiProxyManifest -InstallRoot $root
     $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'configure' -Status 'configured' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ('Config local criada para {0}; valores secretos permanecem somente no .env do proxy.' -f [string]$CatalogEntry['DisplayName']) -Docs ([string]$CatalogEntry['DocsUrl'])
     $result['env'] = [ordered]@{ keyCount = [int]$envInfo['keyCount']; secretKeyCount = [int]$envInfo['secretKeyCount']; hasApiKey = [bool]$envInfo['hasApiKey'] }
+    $result['webValidation'] = Invoke-BootstrapAiProxyWebValidation -ToolName $ToolName -CatalogEntry $CatalogEntry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath ([string]$envInfo['path'])
     return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath ([string]$envInfo['path']) -ManifestPath $writtenManifestPath)
 }
 
@@ -15534,6 +15556,7 @@ function Install-BootstrapAiProxyManagedTool {
         if ($runtime -eq 'go') { $steps += 'go mod download'; $steps += 'go build' }
         if ($runtime -eq 'tauri') { $steps += 'npm run build' }
         $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message (($steps -join '; ') + ('; repo={0}' -f [string]$CatalogEntry['RepoUrl'])) -Docs ([string]$CatalogEntry['DocsUrl'])
+        $result['webValidation'] = Invoke-BootstrapAiProxyWebValidation -ToolName $ToolName -CatalogEntry $CatalogEntry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath $envPath -DryRun
         return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath $envPath -ManifestPath $manifestPath)
     }
 
@@ -15567,6 +15590,7 @@ function Install-BootstrapAiProxyManagedTool {
         Invoke-BootstrapAiProxyInstallCommand -Exe $go -Arguments @('build','-o',(Join-Path $binDir 'mimo-ai-proxy.exe'),'.') -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'go build' | Out-Null
     }
 
+    $webValidation = Invoke-BootstrapAiProxyWebValidation -ToolName $ToolName -CatalogEntry $CatalogEntry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath ([string]$configResult['envPath'])
     $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
     $manifest['tools'][$ToolName] = @{
         kind = [string]$CatalogEntry['InstallSupport']
@@ -15579,6 +15603,7 @@ function Install-BootstrapAiProxyManagedTool {
     }
     Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
     $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ('{0} instalado/configurado em source gerenciado.' -f [string]$CatalogEntry['DisplayName']) -Docs ([string]$CatalogEntry['DocsUrl'])
+    $result['webValidation'] = $webValidation
     return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath ([string]$configResult['envPath']) -ManifestPath ([string]$configResult['manifestPath']))
 }
 
@@ -15708,6 +15733,276 @@ function Invoke-BootstrapAiProxyHttpProbe {
     }
 }
 
+function Test-BootstrapAiProxyRuntimeReady {
+    param(
+        [Parameter(Mandatory = $true)][string]$Runtime,
+        [Parameter(Mandatory = $true)][string]$SourceRoot
+    )
+    if ([string]$Runtime -eq 'node' -or [string]$Runtime -eq 'tauri') {
+        return (Test-Path -LiteralPath (Join-Path $SourceRoot 'node_modules'))
+    }
+    if ([string]$Runtime -eq 'go') {
+        return ((Test-Path -LiteralPath (Join-Path $SourceRoot 'bin\mimo-ai-proxy.exe')) -or (Test-Path -LiteralPath (Join-Path $SourceRoot 'go.mod')))
+    }
+    return $false
+}
+
+function Test-BootstrapAiProxyEnvGroupPresent {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap,
+        [Parameter(Mandatory = $true)][string[]]$Keys
+    )
+    foreach ($key in @($Keys)) {
+        if (Test-BootstrapMapContainsKey -Map $EnvMap -Key $key -and -not [string]::IsNullOrWhiteSpace([string]$EnvMap[$key])) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Get-BootstrapAiProxyWebValidationMissingGroups {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$EnvMap
+    )
+    $missing = New-Object System.Collections.Generic.List[string]
+    if ([string]$ToolName -eq 'mimo-ai-proxy') {
+        if (-not (Test-BootstrapAiProxyEnvGroupPresent -EnvMap $EnvMap -Keys @('SERVICE_TOKEN','SERVICE_TOKENS'))) { $missing.Add('mimo-service-session') | Out-Null }
+        if (-not (Test-BootstrapAiProxyEnvGroupPresent -EnvMap $EnvMap -Keys @('USER_ID','USER_IDS'))) { $missing.Add('mimo-user-session') | Out-Null }
+        if (-not (Test-BootstrapAiProxyEnvGroupPresent -EnvMap $EnvMap -Keys @('XIAOMI_CHATBOT_PH','XIAOMI_CHATBOT_PHS'))) { $missing.Add('mimo-chatbot-session') | Out-Null }
+    }
+    return @($missing.ToArray())
+}
+
+function Get-BootstrapAiProxyChatValidationUrl {
+    param([AllowEmptyString()][string]$BaseUrl)
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) { return '' }
+    return (([string]$BaseUrl).TrimEnd('/') + '/chat/completions')
+}
+
+function Invoke-BootstrapAiProxyChatValidation {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Model,
+        [AllowNull()][string]$ApiKey = '',
+        [int]$TimeoutMs = 10000
+    )
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $status = 'unknown'
+    $statusCode = 0
+    $errorCode = ''
+    if ([string]::IsNullOrWhiteSpace($Url) -or [string]::IsNullOrWhiteSpace($Model)) {
+        $started.Stop()
+        return [ordered]@{ status = 'not-applicable'; statusCode = 0; errorCode = ''; durationMs = [long]$started.ElapsedMilliseconds }
+    }
+
+    $body = @{
+        model = [string]$Model
+        stream = $false
+        max_tokens = 1
+        messages = @(@{ role = 'user'; content = 'PhaseZero validation. Reply OK.' })
+    } | ConvertTo-Json -Depth 6 -Compress
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+
+    try {
+        $request = [System.Net.WebRequest]::Create($Url)
+        $request.Method = 'POST'
+        $request.Timeout = $TimeoutMs
+        $request.ReadWriteTimeout = $TimeoutMs
+        $request.ContentType = 'application/json'
+        $request.ContentLength = $bytes.Length
+        try { $request.Proxy = $null } catch { }
+        if (-not [string]::IsNullOrWhiteSpace($ApiKey)) {
+            $request.Headers['Authorization'] = 'Bearer ' + [string]$ApiKey
+        }
+        $stream = $request.GetRequestStream()
+        try {
+            $stream.Write($bytes, 0, $bytes.Length)
+        } finally {
+            $stream.Close()
+            $stream.Dispose()
+        }
+        $response = $request.GetResponse()
+        try {
+            $statusCode = [int]$response.StatusCode
+            $status = if ($statusCode -ge 200 -and $statusCode -lt 300) { 'validated' } elseif ($statusCode -eq 401 -or $statusCode -eq 403) { 'auth-failed' } else { 'failed' }
+        } finally {
+            if ($response) { $response.Close(); $response.Dispose() }
+        }
+    } catch [System.Net.WebException] {
+        $errorCode = [string]$_.Exception.Status
+        $response = $_.Exception.Response
+        if ($response) {
+            try {
+                $statusCode = [int]$response.StatusCode
+                $text = ''
+                try {
+                    $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+                    try { $text = $reader.ReadToEnd() } finally { $reader.Close(); $reader.Dispose() }
+                } catch {
+                    $text = ''
+                }
+                $safeText = Get-BootstrapCleanNativeText -Text $text -MaxLength 1200
+                if ($statusCode -eq 401 -or $statusCode -eq 403) {
+                    $status = 'auth-failed'
+                } elseif ($safeText -match '(?i)\blogin\b|sign in|sess[aã]o|session|cookie|unauth') {
+                    $status = 'login-required'
+                    $errorCode = 'login-required'
+                } else {
+                    $status = 'failed'
+                }
+            } finally {
+                $response.Close()
+                $response.Dispose()
+            }
+        } elseif ($_.Exception.Status -eq [System.Net.WebExceptionStatus]::Timeout) {
+            $status = 'timeout'
+        } else {
+            $status = 'unreachable'
+        }
+    } catch {
+        $errorCode = 'exception'
+        $status = 'failed'
+    } finally {
+        $started.Stop()
+    }
+
+    return [ordered]@{
+        status = $status
+        statusCode = [int]$statusCode
+        errorCode = $errorCode
+        durationMs = [long]$started.ElapsedMilliseconds
+    }
+}
+
+function Invoke-BootstrapAiProxyWebValidation {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [string]$InstallRoot = '',
+        [string]$SourceRoot = '',
+        [string]$EnvPath = '',
+        [AllowNull()][System.Collections.IDictionary]$RuntimeProbe = $null,
+        [switch]$UseCachedOnly,
+        [switch]$DryRun,
+        [int]$TimeoutMs = 10000
+    )
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $name = Normalize-BootstrapAiToolName -ToolName $ToolName
+    $required = ($CatalogEntry.Contains('RequiresWebLoginValidation') -and [bool]$CatalogEntry['RequiresWebLoginValidation'])
+    $kind = if ($CatalogEntry.Contains('WebValidationKind')) { [string]$CatalogEntry['WebValidationKind'] } else { '' }
+    $command = if ($CatalogEntry.Contains('WebValidationCommand')) { [string]$CatalogEntry['WebValidationCommand'] } else { [string]$CatalogEntry['LoginCommand'] }
+    $baseUrl = [string]$CatalogEntry['BaseUrl']
+    $chatUrl = Get-BootstrapAiProxyChatValidationUrl -BaseUrl $baseUrl
+    $modelsUrl = Get-BootstrapAiProxyModelsUrl -BaseUrl $baseUrl
+    $result = [ordered]@{
+        required = [bool]$required
+        kind = $kind
+        status = 'not-applicable'
+        command = $command
+        endpoint = $chatUrl
+        modelsEndpoint = $modelsUrl
+        modelsStatus = ''
+        modelsStatusCode = 0
+        chatStatusCode = 0
+        missing = @()
+        durationMs = 0
+        recommendedAction = ''
+    }
+    if (-not $required) {
+        $started.Stop()
+        $result['durationMs'] = [long]$started.ElapsedMilliseconds
+        return $result
+    }
+    if ($DryRun) {
+        $started.Stop()
+        $result['status'] = 'planned'
+        $result['recommendedAction'] = 'Depois do install/start, validar sessao web local sem expor credenciais.'
+        $result['durationMs'] = [long]$started.ElapsedMilliseconds
+        return $result
+    }
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    if ([string]::IsNullOrWhiteSpace($SourceRoot)) { $SourceRoot = Get-BootstrapAiProxySourceRoot -ToolName $name -InstallRoot $root }
+    if ([string]::IsNullOrWhiteSpace($EnvPath)) { $EnvPath = Join-Path $SourceRoot '.env' }
+    $envMap = @{}
+    if (Test-Path -LiteralPath $EnvPath) {
+        try { $envMap = Read-BootstrapDotEnvFile -Path $EnvPath } catch { $envMap = @{} }
+    }
+    if ([string]$kind -eq 'env-session') {
+        $missing = @(Get-BootstrapAiProxyWebValidationMissingGroups -ToolName $name -EnvMap $envMap)
+        if ($missing.Count -gt 0) {
+            $started.Stop()
+            $result['status'] = 'missing-credentials'
+            $result['missing'] = @($missing)
+            $result['recommendedAction'] = 'Configure a sessao web local do provider no ambiente do usuario e rode configure/start novamente.'
+            $result['durationMs'] = [long]$started.ElapsedMilliseconds
+            return $result
+        }
+    }
+
+    $installed = Test-Path -LiteralPath (Join-Path $SourceRoot '.git')
+    $runtimeReady = Test-BootstrapAiProxyRuntimeReady -Runtime ([string]$CatalogEntry['Runtime']) -SourceRoot $SourceRoot
+    if (-not $installed -or -not $runtimeReady) {
+        $started.Stop()
+        $result['status'] = 'not-ready'
+        $result['recommendedAction'] = 'Conclua install/deps, inicie o proxy e execute a validacao web novamente.'
+        if (-not [string]::IsNullOrWhiteSpace($command)) { $result['recommendedAction'] = $result['recommendedAction'] + (' Se a sessao falhar, rode manualmente: {0}.' -f $command) }
+        $result['durationMs'] = [long]$started.ElapsedMilliseconds
+        return $result
+    }
+
+    $probe = $RuntimeProbe
+    if ($null -eq $probe) {
+        $probe = Get-BootstrapAiProxyRuntimeProbe -ToolName $name -CatalogEntry $CatalogEntry -SourceRoot $SourceRoot -EnvPath $EnvPath -TimeoutMs 3000
+    }
+    $result['modelsStatus'] = [string]$probe['modelsStatus']
+    $result['modelsStatusCode'] = [int]$probe['modelsStatusCode']
+    if (-not [bool]$probe['runtimeAvailable']) {
+        $started.Stop()
+        $result['status'] = if ([bool]$probe['listening']) { 'failed' } else { 'start-required' }
+        if ([string]$probe['modelsStatus'] -eq 'rejected') { $result['status'] = 'auth-failed' }
+        $result['recommendedAction'] = 'Inicie o proxy e valide /v1/chat/completions local. Nenhum segredo sera exibido.'
+        if (-not [string]::IsNullOrWhiteSpace($command)) { $result['recommendedAction'] = $result['recommendedAction'] + (' Se necessario, rode login manual: {0}.' -f $command) }
+        $result['durationMs'] = [long]$started.ElapsedMilliseconds
+        return $result
+    }
+
+    if ($UseCachedOnly) {
+        $statePath = Get-BootstrapAiProxyRuntimeStatePath -ToolName $name -InstallRoot $root
+        $cachedStatus = ''
+        if (Test-Path -LiteralPath $statePath) {
+            try {
+                $state = Read-BootstrapJsonFile -Path $statePath
+                if (Test-BootstrapMapContainsKey -Map $state -Key 'webValidationStatus') { $cachedStatus = [string]$state['webValidationStatus'] }
+            } catch {
+                $cachedStatus = ''
+            }
+        }
+        $started.Stop()
+        $result['status'] = if ([string]::IsNullOrWhiteSpace($cachedStatus)) { 'validation-required' } else { $cachedStatus }
+        $result['recommendedAction'] = if ([string]$result['status'] -eq 'validated') { '' } else { 'Rode install-cli.ps1 --tool ' + $name + ' --start --yes --no-admin para executar validacao web ativa.' }
+        $result['durationMs'] = [long]$started.ElapsedMilliseconds
+        return $result
+    }
+
+    $apiKey = ''
+    if (Test-BootstrapMapContainsKey -Map $envMap -Key 'API_KEY') { $apiKey = [string]$envMap['API_KEY'] }
+    $chat = Invoke-BootstrapAiProxyChatValidation -Url $chatUrl -Model ([string]$CatalogEntry['DefaultModel']) -ApiKey $apiKey -TimeoutMs $TimeoutMs
+    $started.Stop()
+    $result['status'] = [string]$chat['status']
+    $result['chatStatusCode'] = [int]$chat['statusCode']
+    $result['durationMs'] = [long]$started.ElapsedMilliseconds
+    $result['recommendedAction'] = switch ([string]$chat['status']) {
+        'validated' { '' ; break }
+        'auth-failed' { 'A API local rejeitou autenticacao redigida; recrie .env e reinicie o proxy.'; break }
+        'login-required' { if ([string]::IsNullOrWhiteSpace($command)) { 'Sessao web requerida; configure login manual do provider.' } else { ('Sessao web requerida; rode login manual: {0}.' -f $command) }; break }
+        'timeout' { 'Validacao web excedeu timeout curto; verifique proxy/login e tente novamente.'; break }
+        default { 'Validacao web falhou; verifique sessao web/upstream e logs locais do proxy.' }
+    }
+    return $result
+}
+
 function Get-BootstrapAiProxyRuntimeProbe {
     param(
         [Parameter(Mandatory = $true)][string]$ToolName,
@@ -15787,17 +16082,21 @@ function Get-BootstrapAiProxyToolDoctorReport {
     $filesConfigured = Test-Path -LiteralPath $envPath
     $runtimeReady = $false
     $runtime = [string]$entry['Runtime']
-    if ($runtime -eq 'node' -or $runtime -eq 'tauri') {
-        $runtimeReady = Test-Path -LiteralPath (Join-Path $sourceRoot 'node_modules')
-    } elseif ($runtime -eq 'go') {
-        $runtimeReady = (Test-Path -LiteralPath (Join-Path $sourceRoot 'bin\mimo-ai-proxy.exe')) -or (Test-Path -LiteralPath (Join-Path $sourceRoot 'go.mod'))
-    }
+    $runtimeReady = Test-BootstrapAiProxyRuntimeReady -Runtime $runtime -SourceRoot $sourceRoot
     $probe = Get-BootstrapAiProxyRuntimeProbe -ToolName $name -CatalogEntry $entry -SourceRoot $sourceRoot -EnvPath $envPath -TimeoutMs 3000
     $httpProxy = ([int]$entry['Port'] -gt 0 -and $runtime -ne 'tauri')
-    $configured = if ($httpProxy) { ($installed -and $filesConfigured -and $runtimeReady -and [bool]$probe['runtimeAvailable']) } else { ($installed -and $runtimeReady) }
+    $webValidation = Invoke-BootstrapAiProxyWebValidation -ToolName $name -CatalogEntry $entry -InstallRoot $InstallRoot -SourceRoot $sourceRoot -EnvPath $envPath -RuntimeProbe $probe -UseCachedOnly
+    $webValidationOk = (-not [bool]$webValidation['required'] -or [string]$webValidation['status'] -eq 'validated')
+    $configured = if ($httpProxy) { ($installed -and $filesConfigured -and $runtimeReady -and [bool]$probe['runtimeAvailable'] -and $webValidationOk) } else { ($installed -and $runtimeReady) }
     $status = 'missing'
     if ($configured) {
         $status = 'configured'
+    } elseif ($installed -and $filesConfigured -and $runtimeReady -and $httpProxy -and [string]$webValidation['status'] -eq 'missing-credentials') {
+        $status = 'auth-failed'
+    } elseif ($installed -and $filesConfigured -and $runtimeReady -and $httpProxy -and [string]$webValidation['status'] -eq 'login-required') {
+        $status = 'auth-failed'
+    } elseif ($installed -and $filesConfigured -and $runtimeReady -and $httpProxy -and [bool]$probe['runtimeAvailable'] -and -not $webValidationOk) {
+        $status = 'unhealthy'
     } elseif ($installed -and $filesConfigured -and $runtimeReady -and $httpProxy -and [string]$probe['modelsStatus'] -eq 'rejected') {
         $status = 'auth-failed'
     } elseif ($installed -and $filesConfigured -and $runtimeReady -and $httpProxy -and [bool]$probe['listening']) {
@@ -15810,7 +16109,7 @@ function Get-BootstrapAiProxyToolDoctorReport {
     $recommendedAction = switch ($status) {
         'configured' { '' ; break }
         'auth-failed' { ("Verifique o .env local de {0} e reinicie o proxy; valores permanecem redigidos." -f $name); break }
-        'unhealthy' { ("{0} esta ouvindo, mas /v1/models falhou; verifique upstream/login local e logs do proxy." -f $name); break }
+        'unhealthy' { ("{0} esta ouvindo, mas validacao web falhou; verifique upstream/login local e logs do proxy." -f $name); break }
         'start-required' { ("Execute install-cli.ps1 --tool {0} --start --yes --no-admin ou o componente ai-proxy-suite." -f $name); break }
         'warning' { ("Execute componente {0} para concluir clone/deps/.env." -f $name); break }
         default { ("Execute componente {0} para instalar e configurar." -f $name) }
@@ -15834,6 +16133,7 @@ function Get-BootstrapAiProxyToolDoctorReport {
         healthUrl = [string]$probe['healthUrl']
         modelsUrl = [string]$probe['modelsUrl']
         runtimeProbeDurationMs = [long]$probe['durationMs']
+        webValidation = $webValidation
         recommendedAction = $recommendedAction
         sourceRoot = $sourceRoot
         envPath = $(if ($filesConfigured) { $envPath } else { '' })
@@ -15990,18 +16290,53 @@ function Start-BootstrapAiProxyTool {
             port = [int]$plan['port']
             modelsUrl = [string]$plan['modelsUrl']
         }
+        $result['webValidation'] = Invoke-BootstrapAiProxyWebValidation -ToolName $name -CatalogEntry $entry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath $envPath -DryRun
         return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
     }
 
     $doctor = Get-BootstrapAiProxyToolDoctorReport -ToolName $name -InstallRoot $root
     if ([bool]$doctor['runtimeAvailable']) {
-        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'running' -InstallRoot $root -Message ("{0} ja responde em {1}." -f $name, [string]$doctor['modelsUrl']) -Docs ([string]$entry['DocsUrl'])
+        $doctorProbe = [ordered]@{
+            listening = [bool]$doctor['listening']
+            pid = @($doctor['pid'])
+            processName = @($doctor['processName'])
+            healthStatus = [string]$doctor['healthStatus']
+            healthStatusCode = [int]$doctor['healthStatusCode']
+            modelsStatus = [string]$doctor['modelsStatus']
+            modelsStatusCode = [int]$doctor['modelsStatusCode']
+            healthUrl = [string]$doctor['healthUrl']
+            modelsUrl = [string]$doctor['modelsUrl']
+            runtimeAvailable = [bool]$doctor['runtimeAvailable']
+            durationMs = [long]$doctor['runtimeProbeDurationMs']
+        }
+        $webValidation = Invoke-BootstrapAiProxyWebValidation -ToolName $name -CatalogEntry $entry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath $envPath -RuntimeProbe $doctorProbe
+        $status = if (-not [bool]$webValidation['required'] -or [string]$webValidation['status'] -eq 'validated') { 'running' } elseif ([string]$webValidation['status'] -eq 'login-required' -or [string]$webValidation['status'] -eq 'missing-credentials') { 'login-required' } elseif ([string]$webValidation['status'] -eq 'auth-failed') { 'auth-failed' } else { 'error' }
+        $message = if ($status -eq 'running') { ("{0} ja responde em {1}." -f $name, [string]$doctor['modelsUrl']) } else { ("{0} responde /v1/models, mas validacao web esta {1}." -f $name, [string]$webValidation['status']) }
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status $status -InstallRoot $root -Message $message -Docs ([string]$entry['DocsUrl'])
         $result['runtimeProbe'] = [ordered]@{
             listening = [bool]$doctor['listening']
             pid = @($doctor['pid'])
             healthStatus = [string]$doctor['healthStatus']
             modelsStatus = [string]$doctor['modelsStatus']
             modelsUrl = [string]$doctor['modelsUrl']
+        }
+        $result['webValidation'] = $webValidation
+        $statePath = Get-BootstrapAiProxyRuntimeStatePath -ToolName $name -InstallRoot $root
+        try {
+            Write-BootstrapJsonFile -Path $statePath -Value ([ordered]@{
+                tool = $name
+                status = $status
+                pid = if (@($doctor['pid']).Count -gt 0) { [int]@($doctor['pid'])[0] } else { 0 }
+                checkedAt = (Get-Date).ToString('o')
+                port = [int]$entry['Port']
+                baseUrl = [string]$entry['BaseUrl']
+                modelsUrl = [string]$doctor['modelsUrl']
+                healthStatus = [string]$doctor['healthStatus']
+                modelsStatus = [string]$doctor['modelsStatus']
+                webValidationStatus = [string]$webValidation['status']
+            })
+            $result['statePath'] = $statePath
+        } catch {
         }
         return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
     }
@@ -16028,6 +16363,7 @@ function Start-BootstrapAiProxyTool {
             modelsStatusCode = [int]$doctor['modelsStatusCode']
             modelsUrl = [string]$doctor['modelsUrl']
         }
+        $result['webValidation'] = $doctor['webValidation']
         return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
     }
 
@@ -16082,11 +16418,15 @@ function Start-BootstrapAiProxyTool {
     }
 
     $wait = Wait-BootstrapAiProxyRuntime -ToolName $name -CatalogEntry $entry -SourceRoot $sourceRoot -EnvPath $envPath -TimeoutMs $TimeoutMs
-    $status = if ([bool]$wait['runtimeAvailable']) { 'started' } elseif ([string]$wait['modelsStatus'] -eq 'rejected') { 'auth-failed' } else { 'error' }
+    $webValidation = Invoke-BootstrapAiProxyWebValidation -ToolName $name -CatalogEntry $entry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath $envPath -RuntimeProbe $wait
+    $webValidationOk = (-not [bool]$webValidation['required'] -or [string]$webValidation['status'] -eq 'validated')
+    $status = if ([bool]$wait['runtimeAvailable'] -and $webValidationOk) { 'started' } elseif ([string]$webValidation['status'] -eq 'login-required' -or [string]$webValidation['status'] -eq 'missing-credentials') { 'login-required' } elseif ([string]$wait['modelsStatus'] -eq 'rejected' -or [string]$webValidation['status'] -eq 'auth-failed') { 'auth-failed' } else { 'error' }
     $message = if ($status -eq 'started') {
         ("{0} responde em {1}." -f $name, [string]$wait['modelsUrl'])
     } elseif ($status -eq 'auth-failed') {
         ("{0} iniciou, mas /v1/models rejeitou autenticacao local redigida." -f $name)
+    } elseif ($status -eq 'login-required') {
+        ("{0} iniciou, mas validacao web requer login/sessao local." -f $name)
     } else {
         ("{0} iniciou PID {1}, mas /v1/models nao respondeu dentro de {2}ms." -f $name, [int]$proc.Id, $TimeoutMs)
     }
@@ -16101,6 +16441,7 @@ function Start-BootstrapAiProxyTool {
         modelsUrl = [string]$wait['modelsUrl']
         healthStatus = [string]$wait['healthStatus']
         modelsStatus = [string]$wait['modelsStatus']
+        webValidationStatus = [string]$webValidation['status']
         logPath = $stdoutPath
         errorLogPath = $stderrPath
     }
@@ -16121,6 +16462,7 @@ function Start-BootstrapAiProxyTool {
         modelsUrl = [string]$wait['modelsUrl']
         waitDurationMs = [long]$wait['waitDurationMs']
     }
+    $result['webValidation'] = $webValidation
     return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
 }
 
@@ -16145,12 +16487,13 @@ function Start-BootstrapAiProxySuite {
             modelsUrl = if (Test-BootstrapMapContainsKey -Map $start -Key 'runtimeProbe') { [string]$start['runtimeProbe']['modelsUrl'] } elseif (Test-BootstrapMapContainsKey -Map $start -Key 'startPlan') { [string]$start['startPlan']['modelsUrl'] } else { Get-BootstrapAiProxyModelsUrl -BaseUrl ([string]$start['baseUrl']) }
             pid = if (Test-BootstrapMapContainsKey -Map $start -Key 'pid') { [int]$start['pid'] } else { 0 }
             logPath = if (Test-BootstrapMapContainsKey -Map $start -Key 'logPath') { [string]$start['logPath'] } else { '' }
+            webValidationStatus = if (Test-BootstrapMapContainsKey -Map $start -Key 'webValidation') { [string]$start['webValidation']['status'] } else { '' }
             message = [string]$start['message']
         }) | Out-Null
     }
     $items = @($results.ToArray())
     $ok = @($items | Where-Object { [string]$_['status'] -in @('started','running','planned') })
-    $bad = @($items | Where-Object { [string]$_['status'] -in @('blocked','error','auth-failed','unhealthy') })
+    $bad = @($items | Where-Object { [string]$_['status'] -in @('blocked','error','auth-failed','unhealthy','login-required') })
     $status = if ($DryRun) { 'planned' } elseif ($bad.Count -eq 0 -and $ok.Count -gt 0) { 'started' } elseif ($bad.Count -gt 0) { 'error' } else { 'missing' }
     $message = if ($DryRun) {
         ("Start AI proxy suite planejado: {0} provider(s) HTTP." -f $items.Count)

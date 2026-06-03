@@ -503,7 +503,7 @@ function Invoke-CliAiToolsMode {
             $result = Invoke-BootstrapAiToolAction -ToolName ([string]$tool) -Action $action -InstallRoot $installRoot -ProjectRoot $PSScriptRoot -DryRun:([bool]$Options.DryRun) -Yes:([bool]$Options.Yes) -NoAdmin:([bool]$Options.NoAdmin)
             $results.Add($result) | Out-Null
             $status = [string]$result['status']
-            if ($action -in @('install','configure','start','uninstall') -and $status -in @('blocked','error','auth-failed','unhealthy')) { $exitCode = 3 }
+            if ($action -in @('install','configure','start','uninstall') -and $status -in @('blocked','error','auth-failed','unhealthy','login-required')) { $exitCode = 3 }
         } catch {
             $status = if ($_.Exception.Data.Contains('BootstrapStatus')) { [string]$_.Exception.Data['BootstrapStatus'] } else { 'error' }
             $kind = if ($_.Exception.Data.Contains('BootstrapBlockerKind')) { [string]$_.Exception.Data['BootstrapBlockerKind'] } else { '' }

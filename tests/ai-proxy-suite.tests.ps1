@@ -49,6 +49,11 @@ Describe 'AI proxy suite support' {
 
         $ports = @('kimiproxy','qwenproxy','deepsproxy','mimo-ai-proxy','antigravity-openai-adapter' | ForEach-Object { [int]$catalog[$_].Port })
         @($ports | Select-Object -Unique).Count | Should Be $ports.Count
+
+        foreach ($toolName in @('kimiproxy','qwenproxy','deepsproxy','mimo-ai-proxy')) {
+            [bool]$catalog[$toolName].RequiresWebLoginValidation | Should Be $true
+            [string]$catalog[$toolName].WebValidationKind | Should Match '^(browser-session|env-session)$'
+        }
     }
 
     It 'plans KimiProxy install with unique port, Playwright and Kimi as preferred model' {
@@ -86,6 +91,50 @@ Describe 'AI proxy suite support' {
         } finally {
             if ($null -eq $oldQwenEmail) { Remove-Item Env:\QWEN_EMAIL -ErrorAction SilentlyContinue } else { $env:QWEN_EMAIL = $oldQwenEmail }
             if ($null -eq $oldQwenPassword) { Remove-Item Env:\QWEN_PASSWORD -ErrorAction SilentlyContinue } else { $env:QWEN_PASSWORD = $oldQwenPassword }
+        }
+    }
+
+    It 'adds a redacted web validation result to configure for browser-login proxies' {
+        $result = Invoke-BootstrapAiToolAction -ToolName 'qwenproxy' -Action 'configure' -InstallRoot $script:AiProxySuiteRoot -ProjectRoot $repoRoot -Yes
+        $json = $result | ConvertTo-Json -Depth 14
+
+        [string]$result.status | Should Be 'configured'
+        [bool]$result.webValidation.required | Should Be $true
+        [string]$result.webValidation.kind | Should Be 'browser-session'
+        [string]$result.webValidation.status | Should Be 'not-ready'
+        [string]$result.webValidation.command | Should Be 'npm run login'
+        $json | Should Not Match 'QWEN_PASSWORD|QWEN_EMAIL|phasezero-qwen|API_KEY'
+    }
+
+    It 'reports Mimo web session requirements without exposing secret env names or values' {
+        $oldServiceToken = $env:SERVICE_TOKEN
+        $oldServiceTokens = $env:SERVICE_TOKENS
+        $oldUserId = $env:USER_ID
+        $oldUserIds = $env:USER_IDS
+        $oldPh = $env:XIAOMI_CHATBOT_PH
+        $oldPhs = $env:XIAOMI_CHATBOT_PHS
+        Remove-Item Env:\SERVICE_TOKEN -ErrorAction SilentlyContinue
+        Remove-Item Env:\SERVICE_TOKENS -ErrorAction SilentlyContinue
+        Remove-Item Env:\USER_ID -ErrorAction SilentlyContinue
+        Remove-Item Env:\USER_IDS -ErrorAction SilentlyContinue
+        Remove-Item Env:\XIAOMI_CHATBOT_PH -ErrorAction SilentlyContinue
+        Remove-Item Env:\XIAOMI_CHATBOT_PHS -ErrorAction SilentlyContinue
+        try {
+            $result = Invoke-BootstrapAiToolAction -ToolName 'mimo-ai-proxy' -Action 'configure' -InstallRoot $script:AiProxySuiteRoot -ProjectRoot $repoRoot -Yes
+            $json = $result | ConvertTo-Json -Depth 14
+
+            [bool]$result.webValidation.required | Should Be $true
+            [string]$result.webValidation.kind | Should Be 'env-session'
+            [string]$result.webValidation.status | Should Be 'missing-credentials'
+            @($result.webValidation.missing).Count | Should Be 3
+            $json | Should Not Match 'SERVICE_TOKEN|SERVICE_TOKENS|USER_ID|USER_IDS|XIAOMI_CHATBOT_PH|XIAOMI_CHATBOT_PHS|API_KEY'
+        } finally {
+            if ($null -eq $oldServiceToken) { Remove-Item Env:\SERVICE_TOKEN -ErrorAction SilentlyContinue } else { $env:SERVICE_TOKEN = $oldServiceToken }
+            if ($null -eq $oldServiceTokens) { Remove-Item Env:\SERVICE_TOKENS -ErrorAction SilentlyContinue } else { $env:SERVICE_TOKENS = $oldServiceTokens }
+            if ($null -eq $oldUserId) { Remove-Item Env:\USER_ID -ErrorAction SilentlyContinue } else { $env:USER_ID = $oldUserId }
+            if ($null -eq $oldUserIds) { Remove-Item Env:\USER_IDS -ErrorAction SilentlyContinue } else { $env:USER_IDS = $oldUserIds }
+            if ($null -eq $oldPh) { Remove-Item Env:\XIAOMI_CHATBOT_PH -ErrorAction SilentlyContinue } else { $env:XIAOMI_CHATBOT_PH = $oldPh }
+            if ($null -eq $oldPhs) { Remove-Item Env:\XIAOMI_CHATBOT_PHS -ErrorAction SilentlyContinue } else { $env:XIAOMI_CHATBOT_PHS = $oldPhs }
         }
     }
 
@@ -241,6 +290,39 @@ Describe 'AI proxy suite support' {
         [bool]$report.configured | Should Be $false
     }
 
+    It 'uses cached web validation in Doctor instead of running chat validation probes' {
+        $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName 'kimiproxy' -InstallRoot $script:AiProxySuiteRoot
+        New-Item -Path (Join-Path $sourceRoot '.git'),(Join-Path $sourceRoot 'node_modules') -ItemType Directory -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $sourceRoot '.env') -Value @('PORT=3010','API_KEY=redacted-test') -Encoding UTF8
+        Write-BootstrapJsonFile -Path (Get-BootstrapAiProxyRuntimeStatePath -ToolName 'kimiproxy' -InstallRoot $script:AiProxySuiteRoot) -Value ([ordered]@{
+            tool = 'kimiproxy'
+            status = 'started'
+            webValidationStatus = 'validated'
+        })
+        Mock Get-BootstrapAiProxyRuntimeProbe {
+            return [ordered]@{
+                listening = $true
+                pid = @(1234)
+                processName = @('node')
+                healthStatus = 'ok'
+                healthStatusCode = 200
+                modelsStatus = 'ok'
+                modelsStatusCode = 200
+                healthUrl = 'http://127.0.0.1:3010/health'
+                modelsUrl = 'http://127.0.0.1:3010/v1/models'
+                runtimeAvailable = $true
+                durationMs = 30
+            }
+        }
+        Mock Invoke-BootstrapAiProxyChatValidation { throw 'Doctor must not run chat validation' }
+
+        $report = Get-BootstrapAiProxyToolDoctorReport -ToolName 'kimiproxy' -InstallRoot $script:AiProxySuiteRoot
+
+        [string]$report.status | Should Be 'configured'
+        [string]$report.webValidation.status | Should Be 'validated'
+        Assert-MockCalled Invoke-BootstrapAiProxyChatValidation -Times 0 -Exactly -Scope It
+    }
+
     It 'marks suite degraded when one HTTP proxy is unhealthy even if a desktop tool is configured' {
         $catalog = $script:RealAiProxyCatalogForTests
         $script:AiProxyCatalogOverride = [ordered]@{
@@ -315,6 +397,9 @@ Describe 'AI proxy suite support' {
                 waitDurationMs = 25
             }
         }
+        Mock Invoke-BootstrapAiProxyWebValidation {
+            return [ordered]@{ required = $true; kind = 'env-session'; status = 'validated'; command = 'configure Mimo/Xiaomi session environment'; missing = @(); durationMs = 5; recommendedAction = '' }
+        }
 
         $result = Start-BootstrapAiProxyTool -ToolName 'mimo-ai-proxy' -InstallRoot $script:AiProxySuiteRoot -TimeoutMs 1000
 
@@ -364,6 +449,9 @@ Describe 'AI proxy suite support' {
                 runtimeAvailable = $true
                 waitDurationMs = 25
             }
+        }
+        Mock Invoke-BootstrapAiProxyWebValidation {
+            return [ordered]@{ required = $true; kind = 'env-session'; status = 'validated'; command = 'configure Mimo/Xiaomi session environment'; missing = @(); durationMs = 5; recommendedAction = '' }
         }
 
         $result = Start-BootstrapAiProxyTool -ToolName 'mimo-ai-proxy' -InstallRoot $script:AiProxySuiteRoot -TimeoutMs 1000
