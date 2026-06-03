@@ -72,7 +72,8 @@ Describe 'Bootstrap quality gates' {
             'Invoke-BootstrapHostHealthTelemetry',
             'Invoke-NativeFirstLine',
             'New-BootstrapSupportBundle',
-            'New-BootstrapReleasePack'
+            'New-BootstrapReleasePack',
+            'Write-BootstrapAiProxyEnvFile'
         )
 
         $functions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))

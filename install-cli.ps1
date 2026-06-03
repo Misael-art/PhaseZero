@@ -1,10 +1,10 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     PhaseZero Bootstrap - instalador CLI.
 .DESCRIPTION
     Fluxo legado de perfis continua. Fluxo AI tools aceita flags GNU-style:
-    --tool, --all-ai-tools, --validate, --configure, --uninstall, --dry-run,
+    --tool, --all-ai-tools, --validate, --configure, --start, --uninstall, --dry-run,
     --yes, --no-admin, --install-root, --result-path e --log-path.
 #>
 
@@ -12,6 +12,24 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [Console]::OutputEncoding
 try { [Console]::Title = 'PhaseZero Bootstrap - CLI Installer' } catch { }
+
+function Write-CliOut {
+    param(
+        [Parameter(Mandatory = $true, Position = 0)][AllowEmptyString()][string]$Text,
+        [Parameter(Position = 1)][System.ConsoleColor]$ForegroundColor
+    )
+    if ($ForegroundColor -ne $null) {
+        try {
+            $prev = [Console]::ForegroundColor
+            [Console]::ForegroundColor = $ForegroundColor
+            [Console]::WriteLine($Text)
+            [Console]::ForegroundColor = $prev
+            return
+        } catch {
+        }
+    }
+    [Console]::WriteLine($Text)
+}
 
 $ToolsPs1 = Join-Path $PSScriptRoot 'bootstrap-tools.ps1'
 
@@ -25,6 +43,7 @@ function New-CliOptions {
         AllAiTools     = $false
         Validate       = $false
         Configure      = $false
+        Start          = $false
         Uninstall      = $false
         DryRun         = $false
         Yes            = $false
@@ -71,6 +90,7 @@ function Read-CliArgs {
             'allaitools' { $opts.AllAiTools = $true }
             'validate' { $opts.Validate = $true }
             'configure' { $opts.Configure = $true }
+            'start' { $opts.Start = $true }
             'uninstall' { $opts.Uninstall = $true }
             'dryrun' { $opts.DryRun = $true }
             'yes' { $opts.Yes = $true }
@@ -103,22 +123,23 @@ function Read-CliArgs {
 
 function Write-Header {
     param([string]$Text)
-    Write-Host ''
-    Write-Host ('=' * 60) -ForegroundColor Cyan
-    Write-Host "  $Text" -ForegroundColor Cyan
-    Write-Host ('=' * 60) -ForegroundColor Cyan
-    Write-Host ''
+    Write-CliOut ''
+    Write-CliOut ('=' * 60) Cyan
+    Write-CliOut "  $Text"
+    Write-CliOut ('=' * 60) Cyan
+    Write-CliOut ''
 }
 
 function Write-CliUsage {
-    Write-Host 'Uso legado:'
-    Write-Host '  install-cli.bat -ListProfiles'
-    Write-Host '  install-cli.bat -Profile base -NonInteractive'
-    Write-Host ''
-    Write-Host 'AI tools:'
-    Write-Host '  install-cli.bat --tool claude-code --validate --dry-run --yes'
+    Write-CliOut ''
+    Write-CliOut ''
+    Write-CliOut ''
+    Write-CliOut ''
+    Write-CliOut ''
+    Write-CliOut ''
     Write-Host '  install-cli.bat --tool opencode --install-root "%TEMP%\PhaseZero AI" --yes'
     Write-Host '  install-cli.bat --tool opencode --uninstall --install-root "%TEMP%\PhaseZero AI" --yes'
+    Write-Host '  install-cli.bat --tool ai-proxy-suite --start --yes --no-admin'
 }
 
 function Read-HostOrDefault {
@@ -254,6 +275,75 @@ function Resolve-CliLogPath {
     return (Join-Path $root ("phasezero-install-cli-ai-tools-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date)))
 }
 
+function Get-CliGuidedProfileEntry {
+    return @(
+        [ordered]@{ key = '1'; name = 'safe-base';             label = 'Base segura para maquina limpa.' },
+        [ordered]@{ key = '2'; name = 'public-beta';           label = 'Beta publico confiavel.' },
+        [ordered]@{ key = '3'; name = 'steamdeck-recommended'; label = 'Steam Deck recomendado.' },
+        [ordered]@{ key = '4'; name = 'full-workstation';      label = 'Workstation ampla, opt-in.' },
+        [ordered]@{ key = '5'; name = '';                      label = 'Outro: digite nome ou alias.' }
+    )
+}
+
+function Show-CliMainMenu {
+    Write-CliOut ''
+    Write-CliOut 'PhaseZero Bootstrap - menu rapido' Cyan
+    Write-CliOut ''
+    Write-CliOut '  1) Doctor (diagnostico, dry-run sem alteracoes)' Cyan
+    Write-CliOut '  2) Exportar SupportBundle (dry-run, sem alteracoes)' Cyan
+    Write-CliOut '  3) Dry-run perfil safe-base' Cyan
+    Write-CliOut '  4) Dry-run perfil public-beta' Cyan
+    Write-CliOut '  5) Listar perfis disponiveis' Cyan
+    Write-CliOut '  6) Instalacao guiada (perfil recomendado)' Cyan
+    Write-CliOut '  0) Sair' Cyan
+    Write-CliOut ''
+    $reply = Read-Host 'Selecione [1-6, 0=sair]'
+    if ($null -eq $reply) { return '' }
+    return ([string]$reply).Trim()
+}
+
+function Show-CliGuidedProfilePicker {
+    Write-CliOut ''
+    Write-CliOut 'Instalacao guiada: escolha um perfil base.' Cyan
+    Write-CliOut ''
+    foreach ($entry in (Get-CliGuidedProfileEntries)) {
+        $displayName = if ([string]::IsNullOrWhiteSpace([string]$entry.name)) { '(digitar)' } else { [string]$entry.name }
+        Write-CliOut ('  {0}  {1,-26} {2}' -f [string]$entry.key, $displayName, [string]$entry.label)
+    }
+    Write-CliOut ''
+    $pick = ([string](Read-Host 'Numero do perfil [1-5]')).Trim()
+    $entries = Get-CliGuidedProfileEntries
+    $match = $entries | Where-Object { [string]$_.key -eq $pick } | Select-Object -First 1
+    if ($null -eq $match) { return '' }
+    if (-not [string]::IsNullOrWhiteSpace([string]$match.name)) { return [string]$match.name }
+    return ([string](Read-Host 'Nome do perfil (ex: base, ai, full)')).Trim()
+}
+
+function Invoke-CliMenuBackendIntent {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('Doctor','SupportBundle','RepairPlan')][string]$Intent
+    )
+    Write-CliOut ''
+    Write-CliOut ("[atalho] Executando -{0} (dry-run, sem alteracoes)..." -f $Intent) Green
+    Write-CliOut ''
+    $argsList = Add-CliBackendArtifactArg -ArgumentList @(
+        '-NoProfile','-ExecutionPolicy','Bypass',
+        '-File', $ToolsPs1,
+        ("-{0}" -f $Intent),
+        '-DryRun','-NonInteractive'
+    )
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $argsList -NoNewWindow -PassThru -Wait
+    $exit = [int]$process.ExitCode
+    if ($exit -ne 0) {
+        Write-CliOut ''
+        Write-CliOut ("[ERRO] Atalho {0} falhou (codigo {1})." -f $Intent, $exit) Red
+        Write-CliOut ("Log:    {0}" -f [string]$script:Options.LogPath) Yellow
+        Write-CliOut ("Result: {0}" -f [string]$script:Options.ResultPath) Yellow
+        Write-CliOut ("Retome com: .\bootstrap-tools.ps1 -{0} -DryRun -NonInteractive" -f $Intent) Yellow
+    }
+    return $exit
+}
+
 function Write-CliLog {
     param(
         [Parameter(Mandatory = $true)][string]$Message,
@@ -349,7 +439,7 @@ function Write-CliJsonResult {
     Write-Host $json
 }
 
-function Add-CliBackendArtifactArgs {
+function Add-CliBackendArtifactArg {
     param([string[]]$ArgumentList)
 
     $argsOut = @($ArgumentList)
@@ -400,6 +490,7 @@ function Invoke-CliAiToolsMode {
 
     $action = 'install'
     if ([bool]$Options.Uninstall) { $action = 'uninstall' }
+    elseif ([bool]$Options.Start) { $action = 'start' }
     elseif ([bool]$Options.Configure) { $action = 'configure' }
     elseif ([bool]$Options.Validate) { $action = 'validate' }
 
@@ -412,7 +503,7 @@ function Invoke-CliAiToolsMode {
             $result = Invoke-BootstrapAiToolAction -ToolName ([string]$tool) -Action $action -InstallRoot $installRoot -ProjectRoot $PSScriptRoot -DryRun:([bool]$Options.DryRun) -Yes:([bool]$Options.Yes) -NoAdmin:([bool]$Options.NoAdmin)
             $results.Add($result) | Out-Null
             $status = [string]$result['status']
-            if ($action -in @('install','configure','uninstall') -and $status -in @('blocked','error')) { $exitCode = 3 }
+            if ($action -in @('install','configure','start','uninstall') -and $status -in @('blocked','error','auth-failed','unhealthy')) { $exitCode = 3 }
         } catch {
             $status = if ($_.Exception.Data.Contains('BootstrapStatus')) { [string]$_.Exception.Data['BootstrapStatus'] } else { 'error' }
             $kind = if ($_.Exception.Data.Contains('BootstrapBlockerKind')) { [string]$_.Exception.Data['BootstrapBlockerKind'] } else { '' }
@@ -472,9 +563,9 @@ if ([bool]$script:Options.Help) {
 }
 
 if (-not (Test-Path -LiteralPath $ToolsPs1)) {
-    Write-Host '[ERRO] Nao encontrado:' -ForegroundColor Red
-    Write-Host "  $ToolsPs1" -ForegroundColor Yellow
-    Write-Host 'Execute a partir da pasta do repositorio.' -ForegroundColor Red
+    Write-CliOut '[ERRO] Nao encontrado:' Red
+    Write-CliOut "  $ToolsPs1"
+    Write-CliOut 'Execute a partir da pasta do repositorio.' Red
     if (-not [bool]$script:Options.NonInteractive) { Pause }
     exit 1
 }
@@ -485,46 +576,90 @@ if ([bool]$script:Options.AllAiTools -or @($script:Options.Tool).Count -gt 0) {
 
 Write-Header 'PhaseZero Bootstrap - instalador CLI'
 
-Write-Host '[1/3] Carregando perfis disponiveis...' -ForegroundColor Green
-Write-Host ''
-
 try {
     . $ToolsPs1 -BootstrapUiLibraryMode
     $profiles = Get-BootstrapProfileCatalog
-    Write-CliProfileCatalog -Profiles $profiles
 } catch {
-    Write-Host "[ERRO] Falha ao listar perfis: $($_.Exception.Message)" -ForegroundColor Red
+    Write-CliOut "[ERRO] Falha ao carregar catalogo: $($_.Exception.Message)"
     if (-not [bool]$script:Options.NonInteractive) { Pause }
     exit 1
 }
 
-if ([bool]$script:Options.ListProfiles) { exit 0 }
+if ([bool]$script:Options.ListProfiles) {
+    Write-CliOut '[1/3] Carregando perfis disponiveis...' Green
+    Write-CliOut ''
+    Write-CliProfileCatalog -Profiles $profiles
+    exit 0
+}
 
 $profileChoice = [string]$script:Options.Profile
 if ([string]::IsNullOrWhiteSpace($profileChoice)) {
     if ([bool]$script:Options.NonInteractive) {
-        Write-Host '[ERRO] -Profile e obrigatorio em modo nao-interativo.' -ForegroundColor Red
-        Write-Host 'Uso: .\install-cli.ps1 -Profile <nome> -NonInteractive' -ForegroundColor Yellow
+        Write-CliOut '[ERRO] -Profile e obrigatorio em modo nao-interativo.' Red
+        Write-CliOut 'Uso: .\install-cli.ps1 -Profile <nome> -NonInteractive' Yellow
+        Write-CliOut 'Listar perfis: .\install-cli.ps1 -ListProfiles' Yellow
         Write-CliLegacyFailureResult -Message '-Profile e obrigatorio em modo nao-interativo.' -ExitCode 2
         exit 2
     }
-    Write-Host ''
-    $profileChoice = Read-HostOrDefault -Prompt 'Digite o perfil (ex: recommended, safe-base, public-beta, steamdeck-recommended)'
+
+    $menuChoice = Show-CliMainMenu
+    switch ($menuChoice) {
+        '1' {
+            $exit = Invoke-CliMenuBackendIntent -Intent 'Doctor'
+            if (-not [bool]$script:Options.NonInteractive) { Pause }
+            exit $exit
+        }
+        '2' {
+            $exit = Invoke-CliMenuBackendIntent -Intent 'SupportBundle'
+            if (-not [bool]$script:Options.NonInteractive) { Pause }
+            exit $exit
+        }
+        '3' {
+            $profileChoice = 'safe-base'
+            $script:Options.DryRun = $true
+        }
+        '4' {
+            $profileChoice = 'public-beta'
+            $script:Options.DryRun = $true
+        }
+        '5' {
+            Write-CliOut ''
+            Write-CliOut '[1/3] Carregando perfis disponiveis...' Green
+            Write-CliOut ''
+            Write-CliProfileCatalog -Profiles $profiles
+            if (-not [bool]$script:Options.NonInteractive) { Pause }
+            exit 0
+        }
+        '6' {
+            $profileChoice = Show-CliGuidedProfilePicker
+        }
+        '0' { exit 0 }
+        '' { exit 0 }
+        default {
+            Write-CliOut '[AVISO] Opcao invalida. Saindo.' Yellow
+            if (-not [bool]$script:Options.NonInteractive) { Pause }
+            exit 0
+        }
+    }
+
     if ([string]::IsNullOrWhiteSpace($profileChoice)) {
-        Write-Host '[AVISO] Nenhum perfil selecionado. Saindo.' -ForegroundColor Yellow
+        Write-CliOut '[AVISO] Nenhum perfil selecionado. Saindo.' Yellow
         if (-not [bool]$script:Options.NonInteractive) { Pause }
         exit 0
     }
 }
 
+Write-CliOut ''
+Write-CliOut ("[1/3] Perfil selecionado: {0}" -f $profileChoice) Green
+
 if ([bool]$script:Options.DryRun) { $script:Options.SkipDryRun = $false }
 
 if (-not [bool]$script:Options.SkipDryRun) {
-    Write-Host ''
-    Write-Host "[2/3] Validando selecao: $profileChoice" -ForegroundColor Green
-    Write-Host ''
+    Write-CliOut ''
+    Write-CliOut "[2/3] Validando selecao: $profileChoice"
+    Write-CliOut ''
 
-    $dryArgs = Add-CliBackendArtifactArgs -ArgumentList @(
+    $dryArgs = Add-CliBackendArtifactArg -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass',
         '-File', $ToolsPs1,
         '-Profile', $profileChoice,
@@ -534,7 +669,12 @@ if (-not [bool]$script:Options.SkipDryRun) {
     $dryExit = $process.ExitCode
 
     if ($dryExit -ne 0) {
-        Write-Host "[ERRO] Dry-run falhou (codigo $dryExit). Verifique o log em %TEMP%." -ForegroundColor Red
+        Write-CliOut ''
+        Write-CliOut "[ERRO] Dry-run falhou (codigo $dryExit)."
+        Write-CliOut ("Log:        {0}" -f [string]$script:Options.LogPath) Yellow
+        Write-CliOut ("Result:     {0}" -f [string]$script:Options.ResultPath) Yellow
+        Write-CliOut ("Retomar:    .\install-cli.bat -Profile {0} -DryRun" -f $profileChoice) Yellow
+        Write-CliOut ("Diagnostico:.\bootstrap-ui.bat --doctor") Yellow
         if (-not [string]::IsNullOrWhiteSpace([string]$script:Options.ResultPath) -and -not (Test-Path -LiteralPath ([string]$script:Options.ResultPath))) {
             Write-CliLegacyFailureResult -Message "Dry-run falhou (codigo $dryExit) sem result.json do backend." -ExitCode $dryExit
         }
@@ -543,26 +683,29 @@ if (-not [bool]$script:Options.SkipDryRun) {
     }
     if ([bool]$script:Options.DryRun) {
         Write-Header 'DRY-RUN: validacao concluida'
+        Write-CliOut ("Result:    {0}" -f [string]$script:Options.ResultPath) Green
+        Write-CliOut ("Log:       {0}" -f [string]$script:Options.LogPath) Green
+        Write-CliOut ("Aplicar:   .\install-cli.bat -Profile {0}" -f $profileChoice) Cyan
         exit 0
     }
 }
 
 if (-not [bool]$script:Options.NonInteractive) {
-    Write-Host ''
+    Write-CliOut ''
     $confirm = Read-Host 'Deseja prosseguir com a instalacao real? (S/N)'
     if ($confirm -notmatch '^[Ss]$') {
-        Write-Host '[AVISO] Instalacao cancelada pelo usuario.' -ForegroundColor Yellow
+        Write-CliOut '[AVISO] Instalacao cancelada pelo usuario.' Yellow
         Pause
         exit 0
     }
 }
 
-Write-Host ''
-Write-Host "[3/3] Iniciando instalacao do perfil: $profileChoice" -ForegroundColor Green
-Write-Host 'Isso pode levar varios minutos dependendo das dependencias...' -ForegroundColor Yellow
-Write-Host ''
+Write-CliOut ''
+Write-CliOut "[3/3] Iniciando instalacao do perfil: $profileChoice"
+Write-CliOut 'Isso pode levar varios minutos dependendo das dependencias...' Yellow
+Write-CliOut ''
 
-$installArgs = Add-CliBackendArtifactArgs -ArgumentList @(
+$installArgs = Add-CliBackendArtifactArg -ArgumentList @(
     '-NoProfile', '-ExecutionPolicy', 'Bypass',
     '-File', $ToolsPs1,
     '-Profile', $profileChoice,
@@ -571,12 +714,18 @@ $installArgs = Add-CliBackendArtifactArgs -ArgumentList @(
 $installProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait
 $installExit = $installProcess.ExitCode
 
-Write-Host ''
+Write-CliOut ''
 if ($installExit -eq 0) {
     Write-Header 'SUCESSO: Instalacao concluida!'
+    Write-CliOut ("Result:    {0}" -f [string]$script:Options.ResultPath) Green
+    Write-CliOut ("Log:       {0}" -f [string]$script:Options.LogPath) Green
 } else {
-    Write-Host "[ERRO] A instalacao falhou ou foi interrompida (ExitCode: $installExit)." -ForegroundColor Red
-    Write-Host 'Verifique o log gerado em seu diretorio TEMP.' -ForegroundColor Yellow
+    Write-CliOut ("[ERRO] A instalacao falhou ou foi interrompida (ExitCode: {0})." -f $installExit) Red
+    Write-CliOut ("Log:          {0}" -f [string]$script:Options.LogPath) Yellow
+    Write-CliOut ("Result:       {0}" -f [string]$script:Options.ResultPath) Yellow
+    Write-CliOut ("Retomar:      .\install-cli.bat -Profile {0}" -f $profileChoice) Yellow
+    Write-CliOut ("Diagnostico:  .\bootstrap-ui.bat --doctor") Yellow
+    Write-CliOut ("Bundle:       .\bootstrap-ui.bat --support-bundle") Yellow
     if (-not [string]::IsNullOrWhiteSpace([string]$script:Options.ResultPath) -and -not (Test-Path -LiteralPath ([string]$script:Options.ResultPath))) {
         Write-CliLegacyFailureResult -Message "Instalacao falhou ou foi interrompida sem result.json do backend." -ExitCode $installExit
     }

@@ -5,9 +5,16 @@ set "SCRIPT_DIR=%~dp0"
 set "UI_SCRIPT=%SCRIPT_DIR%bootstrap-ui.ps1"
 set "BACKEND_SCRIPT=%SCRIPT_DIR%bootstrap-tools.ps1"
 set "BOOTSTRAP_SMOKE_TEST=0"
+set "BOOTSTRAP_UI_SHORTCUT="
+set "BOOTSTRAP_UI_FORWARD_ARGS="
 for %%A in (%*) do (
   if /I "%%~A"=="-SmokeTest" set "BOOTSTRAP_SMOKE_TEST=1"
   if /I "%%~A"=="-SmokeTestWindow" set "BOOTSTRAP_SMOKE_TEST=1"
+  if /I "%%~A"=="--smoke" set "BOOTSTRAP_SMOKE_TEST=1"
+  if /I "%%~A"=="--verbose" set "BOOTSTRAP_UI_VERBOSE=1"
+  if /I "%%~A"=="--doctor" set "BOOTSTRAP_UI_SHORTCUT=doctor"
+  if /I "%%~A"=="--support-bundle" set "BOOTSTRAP_UI_SHORTCUT=support-bundle"
+  if /I "%%~A"=="--repair-plan" set "BOOTSTRAP_UI_SHORTCUT=repair-plan"
 )
 
 set "PS_EXE="
@@ -33,6 +40,7 @@ call :log INFO "SCRIPT_DIR=%SCRIPT_DIR%"
 call :log INFO "PS_EXE=%PS_EXE%"
 call :log INFO "LOG_DIR=%LOG_DIR%"
 call :log INFO "UI_LOG=%UI_LOG%"
+call :log INFO "SHORTCUT=%BOOTSTRAP_UI_SHORTCUT%"
 
 if not exist "%UI_SCRIPT%" (
   call :log ERROR "Arquivo nao encontrado: %UI_SCRIPT%"
@@ -40,6 +48,7 @@ if not exist "%UI_SCRIPT%" (
     >&2 echo(ERRO: %UI_SCRIPT% nao encontrado.
   ) else (
     echo(ERRO: %UI_SCRIPT% nao encontrado.
+    call :print_preflight
   )
   exit /b 2
 )
@@ -49,6 +58,7 @@ if not exist "%BACKEND_SCRIPT%" (
     >&2 echo(ERRO: %BACKEND_SCRIPT% nao encontrado.
   ) else (
     echo(ERRO: %BACKEND_SCRIPT% nao encontrado.
+    call :print_preflight
   )
   exit /b 2
 )
@@ -72,9 +82,12 @@ if errorlevel 1 (
     >&2 echo(ERRO: falha ao acessar %SCRIPT_DIR%
   ) else (
     echo(ERRO: falha ao acessar %SCRIPT_DIR%
+    call :print_preflight
   )
   exit /b 3
 )
+
+if defined BOOTSTRAP_UI_SHORTCUT goto :run_shortcut
 
 call :log INFO "Launching UI: %UI_SCRIPT%"
 if "%BOOTSTRAP_SMOKE_TEST%"=="1" (
@@ -98,6 +111,26 @@ if not "%BOOTSTRAP_SMOKE_TEST%"=="1" if not "%EXITCODE%"=="0" call :print_failur
 popd >nul 2>&1
 exit /b %EXITCODE%
 
+:run_shortcut
+call :log INFO ("Atalho ativo: %BOOTSTRAP_UI_SHORTCUT%")
+set "SHORTCUT_FLAG="
+if /I "%BOOTSTRAP_UI_SHORTCUT%"=="doctor" set "SHORTCUT_FLAG=-Doctor"
+if /I "%BOOTSTRAP_UI_SHORTCUT%"=="support-bundle" set "SHORTCUT_FLAG=-SupportBundle"
+if /I "%BOOTSTRAP_UI_SHORTCUT%"=="repair-plan" set "SHORTCUT_FLAG=-RepairPlan"
+if not defined SHORTCUT_FLAG (
+  echo(ERRO: atalho desconhecido: %BOOTSTRAP_UI_SHORTCUT%
+  call :print_preflight
+  popd >nul 2>&1
+  exit /b 4
+)
+echo(PhaseZero atalho %BOOTSTRAP_UI_SHORTCUT% (dry-run, sem alteracoes)...
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%BACKEND_SCRIPT%" %SHORTCUT_FLAG% -DryRun -NonInteractive
+set "EXITCODE=%ERRORLEVEL%"
+call :log INFO "Atalho %BOOTSTRAP_UI_SHORTCUT% terminou com codigo %EXITCODE%."
+if not "%EXITCODE%"=="0" call :print_failure
+popd >nul 2>&1
+exit /b %EXITCODE%
+
 :log
 setlocal EnableDelayedExpansion
 set "LOG_LEVEL=%~1"
@@ -108,12 +141,30 @@ if not "%BOOTSTRAP_SMOKE_TEST%"=="1" if /I "%BOOTSTRAP_UI_VERBOSE%"=="1" echo(!L
 endlocal
 exit /b 0
 
+:print_preflight
+echo(
+echo(Preflight (diagnostico):
+echo(  PowerShell: %PS_EXE%
+echo(  UI script:  %UI_SCRIPT%
+echo(  Backend:    %BACKEND_SCRIPT%
+echo(  Diretorio:  %SCRIPT_DIR%
+echo(  Admin:      %IS_ADMIN%
+echo(  Log dir:    %LOG_DIR%
+exit /b 0
+
 :print_failure
 echo(
 echo(PhaseZero UI falhou. Codigo: %EXITCODE%
-if defined UI_LOG echo(Log UI: %UI_LOG%
-if defined LAUNCHER_LOG echo(Log launcher: %LAUNCHER_LOG%
-echo(Detalhe completo: set BOOTSTRAP_UI_VERBOSE=1 e rode novamente.
+if defined UI_LOG echo(Log UI:        %UI_LOG%
+if defined LAUNCHER_LOG echo(Log launcher:  %LAUNCHER_LOG%
+echo(
+echo(Diagnostico rapido:
+echo(  Smoke contrato:   bootstrap-ui.bat -SmokeTest
+echo(  Smoke window:     bootstrap-ui.bat -SmokeTestWindow
+echo(  Doctor dry-run:   bootstrap-ui.bat --doctor
+echo(  Support bundle:   bootstrap-ui.bat --support-bundle
+echo(  Repair plan:      bootstrap-ui.bat --repair-plan
+echo(  Verbose launcher: set BOOTSTRAP_UI_VERBOSE=1 ^&^& bootstrap-ui.bat
 exit /b 0
 
 :append_log

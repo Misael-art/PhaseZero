@@ -65,7 +65,7 @@ Describe 'PhaseZero support robustness track' {
     It 'exposes support capabilities and public-beta in the UI contract' {
         $contract = Get-BootstrapUiContract
 
-        [string]$contract.schemaVersion | Should Be '1.4.0'
+        [string]$contract.schemaVersion | Should Be '1.6.0'
         [bool]$contract.capabilities.doctor | Should Be $true
         [bool]$contract.capabilities.supportBundle | Should Be $true
         [bool]$contract.capabilities.repairPlan | Should Be $true
@@ -73,6 +73,9 @@ Describe 'PhaseZero support robustness track' {
         [bool]$contract.capabilities.steamDeckDoctor | Should Be $true
         [bool]$contract.capabilities.githubCliAgentAuth | Should Be $true
         [bool]$contract.capabilities.aionuiIntegration | Should Be $true
+        [bool]$contract.capabilities.launcherDiagnostics | Should Be $true
+        [bool]$contract.capabilities.guidedCliMenu | Should Be $true
+        [bool]$contract.capabilities.runTimeline | Should Be $true
         (@($contract.profileNames) -contains 'public-beta') | Should Be $true
     }
 

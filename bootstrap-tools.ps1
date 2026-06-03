@@ -1637,6 +1637,56 @@ function Invoke-BootstrapAuditMode {
             $howToFix = [string]$repoRow.HowToFix
         }
 
+        if ($status -eq 'Unknown' -and [string]$def.Kind -eq 'ai-proxy-repo') {
+            $toolName = if ($def.PSObject.Properties.Name -contains 'ToolName') { [string]$def.ToolName } else { [string]$comp }
+            $proxyRow = Get-BootstrapAiProxyToolDoctorReport -ToolName $toolName
+            if ($proxyRow -and [string]$proxyRow['status'] -eq 'configured') {
+                $status = 'Healthy'
+                $detail = ("Proxy local operacional: {0} ({1}); /v1/models={2}" -f [string]$proxyRow['id'], [string]$proxyRow['baseUrl'], [string]$proxyRow['modelsStatus'])
+            } elseif ($proxyRow -and [string]$proxyRow['status'] -eq 'start-required') {
+                $status = 'Unhealthy'
+                $detail = ("Proxy local instalado, mas API nao esta ouvindo/respondendo: {0} ({1})" -f [string]$proxyRow['id'], [string]$proxyRow['baseUrl'])
+                $howToFix = ("Execute install-cli.ps1 --tool {0} --start --yes --no-admin e valide /v1/models." -f [string]$proxyRow['id'])
+            } elseif ($proxyRow -and [string]$proxyRow['status'] -eq 'auth-failed') {
+                $status = 'Unhealthy'
+                $detail = ("Proxy local iniciou, mas /v1/models rejeitou autenticacao redigida: {0}" -f [string]$proxyRow['id'])
+                $howToFix = [string]$proxyRow['recommendedAction']
+            } elseif ($proxyRow -and [string]$proxyRow['status'] -eq 'unhealthy') {
+                $status = 'Unhealthy'
+                $detail = ("Proxy local ouvindo, mas /v1/models falhou: {0} ({1})" -f [string]$proxyRow['id'], [string]$proxyRow['modelsStatus'])
+                $howToFix = [string]$proxyRow['recommendedAction']
+            } elseif ($proxyRow -and [string]$proxyRow['status'] -eq 'warning') {
+                $status = 'Unhealthy'
+                $detail = ("Proxy local parcial: {0}" -f [string]$proxyRow['sourceRoot'])
+                $howToFix = "Execute componente $comp novamente para concluir clone/deps/.env."
+            } else {
+                $status = 'Missing'
+                $detail = ("Proxy local ausente: {0}" -f $toolName)
+                $howToFix = "Execute componente $comp para clonar, configurar .env e instalar deps."
+            }
+        }
+
+        if ($status -eq 'Unknown' -and [string]$def.Kind -eq 'ai-proxy-suite') {
+            $suiteRow = New-BootstrapAiProxySuiteDoctorReport
+            $configuredCount = [int]$suiteRow['configuredProviders']
+            if ([string]$suiteRow['status'] -eq 'ready') {
+                $status = 'Healthy'
+                $detail = ("Suite de proxies local operacional: {0} provider(s); default Kimi {1}" -f $configuredCount, [string]$suiteRow['defaultBaseUrl'])
+            } elseif ([string]$suiteRow['status'] -eq 'degraded') {
+                $status = 'Unhealthy'
+                $detail = ("Suite de proxies degradada: {0} provider(s) com /v1/models falhando." -f [int]$suiteRow['unhealthyProviders'])
+                $howToFix = 'Verifique upstream/login dos providers degradados e rode install-cli.ps1 --tool ai-proxy-suite --start --yes --no-admin.'
+            } elseif ([string]$suiteRow['status'] -eq 'start-required') {
+                $status = 'Unhealthy'
+                $detail = ("Suite de proxies instalada, mas {0} provider(s) exigem start/health." -f [int]$suiteRow['startRequiredProviders'])
+                $howToFix = 'Execute install-cli.ps1 --tool ai-proxy-suite --start --yes --no-admin.'
+            } else {
+                $status = 'Missing'
+                $detail = 'Suite de proxies local ainda nao configurada.'
+                $howToFix = 'Execute componente ai-proxy-suite ou perfil ai.'
+            }
+        }
+
         if ($status -eq 'Unknown' -and [string]$def.Kind -eq 'manual-required') {
             $manualRow = Invoke-AuditManualRequired -ComponentName $comp -ComponentDef $def
             $status = [string]$manualRow.Status
@@ -2842,6 +2892,14 @@ function Get-BootstrapPreflightRequirements {
                 $requiresNetwork = $true
             }
             'repo-clone' {
+                $requiresNetwork = $true
+                $needsGithub = $true
+            }
+            'ai-proxy-repo' {
+                $requiresNetwork = $true
+                $needsGithub = $true
+            }
+            'ai-proxy-suite' {
                 $requiresNetwork = $true
                 $needsGithub = $true
             }
@@ -12328,6 +12386,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['git-lfs'] = New-BootstrapComponentDefinition -Name 'git-lfs' -Description 'Git LFS e inicialização local.' -DependsOn @('git-core') -Kind 'git-lfs' -EstimatedSizeGB 0.1 -RequiresNetwork $true
     $catalog['node-core'] = New-BootstrapComponentDefinition -Name 'node-core' -Description 'Node.js LTS e npm global bin.' -DependsOn @('system-core') -Optional $false -Kind 'node-core' -EstimatedSizeGB 1.0 -RequiresNetwork $true -VersionCheckCommand 'node -v'
     $catalog['python-core'] = New-BootstrapComponentDefinition -Name 'python-core' -Description 'Python 3.13, PATH e uv.' -DependsOn @('system-core') -Optional $false -Kind 'python-core' -EstimatedSizeGB 1.5 -RequiresNetwork $true -VersionCheckCommand 'python --version'
+    $catalog['go-core'] = New-BootstrapComponentDefinition -Name 'go-core' -Description 'Go toolchain para proxies locais em Go.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'GoLang.Go'; DisplayName = 'Go'; ProbePaths = @("$env:ProgramFiles\Go\bin\go.exe", "${env:LOCALAPPDATA}\Programs\Go\bin\go.exe") } -EstimatedSizeGB 0.8 -RequiresNetwork $true -VersionCheckCommand 'go version'
     $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)'; ProbePaths = @("$env:ProgramFiles\Eclipse Adoptium\jdk-17*\bin\java.exe") } -EstimatedSizeGB 2.0 -RequiresNetwork $true -VersionCheckCommand 'java -version'
     $catalog['dotnet-core'] = New-BootstrapComponentDefinition -Name 'dotnet-core' -Description 'Microsoft .NET SDK 8 (LTS), PATH e verificacao dotnet --list-sdks. Palavras-chave na busca da UI: dotnet, dotnet core, net8, sdk8, winget Microsoft.DotNet.SDK.8.' -DependsOn @('system-core') -Optional $false -Kind 'dotnet-core' -EstimatedSizeGB 1.2 -RequiresNetwork $true -VersionCheckCommand 'dotnet --list-sdks'
     $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick'; ProbePaths = @("$env:ProgramFiles\ImageMagick-*\magick.exe", "$env:ProgramFiles\ImageMagick\magick.exe") }
@@ -12389,6 +12448,13 @@ function Get-BootstrapComponentCatalog {
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes Agent via WSL2 + OpenCloud config no projeto.' -DependsOn @('wsl-core') -Kind 'hermes'
     $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar Waybar/TUI por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
     $catalog['aionui'] = New-BootstrapComponentDefinition -Name 'aionui' -Description 'AionUI desktop app via winget oficial iOfficeAI.AionUi ou instalador oficial.' -Kind 'aionui' -EstimatedSizeGB 0.4 -RequiresNetwork $true
+    $catalog['kimiproxy'] = New-BootstrapComponentDefinition -Name 'kimiproxy' -Description 'KimiProxy local OpenAI-compatible; padrao preferido da suite local.' -DependsOn @('git-core', 'node-core') -Kind 'ai-proxy-repo' -Data @{ ToolName = 'kimiproxy' } -EstimatedSizeGB 1.0 -RequiresNetwork $true
+    $catalog['qwenproxy'] = New-BootstrapComponentDefinition -Name 'qwenproxy' -Description 'QwenProxy local OpenAI-compatible.' -DependsOn @('git-core', 'node-core') -Kind 'ai-proxy-repo' -Data @{ ToolName = 'qwenproxy' } -EstimatedSizeGB 1.0 -RequiresNetwork $true
+    $catalog['deepsproxy'] = New-BootstrapComponentDefinition -Name 'deepsproxy' -Description 'DeepsProxy local OpenAI-compatible.' -DependsOn @('git-core', 'node-core') -Kind 'ai-proxy-repo' -Data @{ ToolName = 'deepsproxy' } -EstimatedSizeGB 1.0 -RequiresNetwork $true
+    $catalog['mimo-ai-proxy'] = New-BootstrapComponentDefinition -Name 'mimo-ai-proxy' -Description 'Mimo AI Proxy local OpenAI-compatible.' -DependsOn @('git-core', 'go-core') -Kind 'ai-proxy-repo' -Data @{ ToolName = 'mimo-ai-proxy' } -EstimatedSizeGB 0.8 -RequiresNetwork $true
+    $catalog['antigravity-openai-adapter'] = New-BootstrapComponentDefinition -Name 'antigravity-openai-adapter' -Description 'Antigravity OpenAI Adapter local.' -DependsOn @('git-core', 'node-core') -Kind 'ai-proxy-repo' -Data @{ ToolName = 'antigravity-openai-adapter' } -EstimatedSizeGB 0.5 -RequiresNetwork $true
+    $catalog['dockernativemanager'] = New-BootstrapComponentDefinition -Name 'dockernativemanager' -Description 'Docker Native Manager via fonte Tauri gerenciada.' -DependsOn @('git-core', 'node-core', 'rustup') -Kind 'ai-proxy-repo' -Data @{ ToolName = 'dockernativemanager' } -EstimatedSizeGB 1.5 -RequiresNetwork $true
+    $catalog['ai-proxy-suite'] = New-BootstrapComponentDefinition -Name 'ai-proxy-suite' -Description 'Manifest e defaults IDE da suite local: Kimi principal, Qwen/DeepSeek/Mimo/Antigravity selecionaveis.' -DependsOn @('kimiproxy','qwenproxy','deepsproxy','mimo-ai-proxy','antigravity-openai-adapter','dockernativemanager','bootstrap-secrets') -Kind 'ai-proxy-suite' -EstimatedSizeGB 0.1 -RequiresNetwork $false
     $catalog['bootstrap-secrets'] = New-BootstrapComponentDefinition -Name 'bootstrap-secrets' -Description 'Cria e aplica manifesto local de chaves, tokens e MCPs.' -Kind 'bootstrap-secrets'
     $catalog['bootstrap-mcps'] = New-BootstrapComponentDefinition -Name 'bootstrap-mcps' -Description 'Instala dependencias locais dos MCPs gerenciados e registra o estado da automacao.' -DependsOn @('bootstrap-secrets', 'node-core', 'python-core') -Kind 'bootstrap-mcps'
     $catalog['vscode-extensions'] = New-BootstrapComponentDefinition -Name 'vscode-extensions' -Description 'Instala e configura extensões do VS Code e VS Code Insiders quando presentes.' -DependsOn @('bootstrap-secrets', 'vscode') -Kind 'vscode-extensions'
@@ -12504,12 +12570,12 @@ function Get-BootstrapComponentCatalog {
 function Get-BootstrapProfileCatalog {
     $catalog = [ordered]@{}
 
-    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['safe-base'] = New-BootstrapProfileDefinition -Name 'safe-base' -Description 'Base segura e pequena para maquina limpa; sem desktops de IA, containers, jogos ou tuning.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp')
     $catalog['public-beta'] = New-BootstrapProfileDefinition -Name 'public-beta' -Description 'Primeira instalacao confiavel para beta publico; maior que safe-base, sem WSL/Docker/IA pesada/gaming.' -Items @('safe-base', 'powershell', 'powertoys', 'brave', 'bootstrap-secrets', 'vscode', 'vscode-extensions', 'bootstrap-mcps')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores e utilitarios.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops e CLIs de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'ai-usagebar', 'aionui', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'aionui', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
@@ -12643,7 +12709,7 @@ function Get-BootstrapUiContract {
     $rotationScheduleState = Get-BootstrapRotationScheduledTaskState
 
     return [ordered]@{
-        schemaVersion = '1.4.0'
+        schemaVersion = '1.6.0'
         capabilities = [ordered]@{
             doctor = $true
             supportBundle = $true
@@ -12653,6 +12719,10 @@ function Get-BootstrapUiContract {
             githubCliAgentAuth = $true
             aionuiIntegration = $true
             aiConfigSync = $true
+            aiProxySuite = $true
+            launcherDiagnostics = $true
+            guidedCliMenu = $true
+            runTimeline = $true
         }
         profileNames = @($profiles.Keys)
         componentNames = @($components.Keys)
@@ -13715,6 +13785,151 @@ function Read-BootstrapJsonFile {
     return $parsed
 }
 
+function Get-BootstrapAiProxyCatalog {
+    $catalog = [ordered]@{}
+    $catalog['kimiproxy'] = [ordered]@{
+        ToolName = 'kimiproxy'
+        DisplayName = 'KimiProxy'
+        DocsUrl = 'https://github.com/pedrofariasx/kimiproxy'
+        RepoUrl = 'https://github.com/pedrofariasx/kimiproxy.git'
+        GitHubRepo = 'pedrofariasx/kimiproxy'
+        InstallSupport = 'git-node-playwright-proxy'
+        Runtime = 'node'
+        Port = 3010
+        HealthPath = '/health'
+        BaseUrl = 'http://127.0.0.1:3010/v1'
+        DefaultModel = 'k2d6-thinking'
+        Models = @('k2d6-thinking','k2d6')
+        PreferredDefault = $true
+        StartCommand = 'npm start'
+        LoginCommand = 'npm run login'
+        Playwright = $true
+        EnvDefaults = [ordered]@{ PORT = '3010'; API_KEY = '{{generatedLocalApiKey}}'; BROWSER = 'chromium' }
+        EnvFrom = [ordered]@{}
+        SecretKeys = @('API_KEY')
+        Notes = 'Kimi proxy local OpenAI-compatible. Kimi e padrao preferido para IDEs via PhaseZero proxy suite.'
+    }
+    $catalog['qwenproxy'] = [ordered]@{
+        ToolName = 'qwenproxy'
+        DisplayName = 'QwenProxy'
+        DocsUrl = 'https://github.com/pedrofariasx/qwenproxy'
+        RepoUrl = 'https://github.com/pedrofariasx/qwenproxy.git'
+        GitHubRepo = 'pedrofariasx/qwenproxy'
+        InstallSupport = 'git-node-playwright-proxy'
+        Runtime = 'node'
+        Port = 3011
+        HealthPath = '/health'
+        BaseUrl = 'http://127.0.0.1:3011/v1'
+        DefaultModel = 'qwen3.6-plus'
+        Models = @('qwen3.6-plus','qwen3.6-plus-no-thinking')
+        PreferredDefault = $false
+        StartCommand = 'npm start'
+        LoginCommand = 'npm run login'
+        Playwright = $true
+        EnvDefaults = [ordered]@{ PORT = '3011'; API_KEY = '{{generatedLocalApiKey}}'; BROWSER = 'chromium' }
+        EnvFrom = [ordered]@{ QWEN_EMAIL = @('QWEN_EMAIL'); QWEN_PASSWORD = @('QWEN_PASSWORD') }
+        SecretKeys = @('API_KEY','QWEN_PASSWORD')
+        Notes = 'Qwen proxy local OpenAI-compatible com login manual ou credenciais QWEN_* quando presentes.'
+    }
+    $catalog['deepsproxy'] = [ordered]@{
+        ToolName = 'deepsproxy'
+        DisplayName = 'DeepsProxy'
+        DocsUrl = 'https://github.com/pedrofariasx/deepsproxy'
+        RepoUrl = 'https://github.com/pedrofariasx/deepsproxy.git'
+        GitHubRepo = 'pedrofariasx/deepsproxy'
+        InstallSupport = 'git-node-playwright-proxy'
+        Runtime = 'node'
+        Port = 3012
+        HealthPath = '/health'
+        BaseUrl = 'http://127.0.0.1:3012/v1'
+        DefaultModel = 'deepseek-v4-pro'
+        Models = @('deepseek-v4-pro','deepseek-v4-flash','deepseek-v4-flash-thinking')
+        PreferredDefault = $false
+        StartCommand = 'npm start'
+        LoginCommand = 'npm run login'
+        Playwright = $true
+        EnvDefaults = [ordered]@{ PORT = '3012'; API_KEY = '{{generatedLocalApiKey}}'; PLAYWRIGHT_HEADLESS = 'true'; PLAYWRIGHT_TIMEOUT = '30000'; LOG_LEVEL = 'info' }
+        EnvFrom = [ordered]@{}
+        SecretKeys = @('API_KEY')
+        Notes = 'DeepSeek web proxy local OpenAI-compatible.'
+    }
+    $catalog['mimo-ai-proxy'] = [ordered]@{
+        ToolName = 'mimo-ai-proxy'
+        DisplayName = 'Mimo AI Proxy'
+        DocsUrl = 'https://github.com/pedrofariasx/mimo-ai-proxy'
+        RepoUrl = 'https://github.com/pedrofariasx/mimo-ai-proxy.git'
+        GitHubRepo = 'pedrofariasx/mimo-ai-proxy'
+        InstallSupport = 'git-go-proxy'
+        Runtime = 'go'
+        Port = 3013
+        HealthPath = '/health'
+        BaseUrl = 'http://127.0.0.1:3013/v1'
+        DefaultModel = 'mimo-v2.5-pro'
+        Models = @('mimo-v2.5-pro','mimo-v2.5')
+        PreferredDefault = $false
+        StartCommand = 'go run main.go'
+        LoginCommand = ''
+        Playwright = $false
+        EnvDefaults = [ordered]@{ PORT = '3013'; API_KEY = '{{generatedLocalApiKey}}' }
+        EnvFrom = [ordered]@{
+            SERVICE_TOKEN = @('SERVICE_TOKEN','MIMO_SERVICE_TOKEN','XIAOMI_SERVICE_TOKEN')
+            USER_ID = @('USER_ID','MIMO_USER_ID','XIAOMI_USER_ID')
+            XIAOMI_CHATBOT_PH = @('XIAOMI_CHATBOT_PH','MIMO_XIAOMI_CHATBOT_PH')
+            SERVICE_TOKENS = @('SERVICE_TOKENS','MIMO_SERVICE_TOKENS','XIAOMI_SERVICE_TOKENS')
+            USER_IDS = @('USER_IDS','MIMO_USER_IDS','XIAOMI_USER_IDS')
+            XIAOMI_CHATBOT_PHS = @('XIAOMI_CHATBOT_PHS','MIMO_XIAOMI_CHATBOT_PHS')
+        }
+        SecretKeys = @('API_KEY','SERVICE_TOKEN','SERVICE_TOKENS','USER_ID','USER_IDS','XIAOMI_CHATBOT_PH','XIAOMI_CHATBOT_PHS')
+        Notes = 'Mimo/Xiaomi proxy local OpenAI-compatible em Go. Usa tokens Mimo/Xiaomi do ambiente quando presentes.'
+    }
+    $catalog['antigravity-openai-adapter'] = [ordered]@{
+        ToolName = 'antigravity-openai-adapter'
+        DisplayName = 'Antigravity OpenAI Adapter'
+        DocsUrl = 'https://github.com/pedrofariasx/antigravity-openai-adapter'
+        RepoUrl = 'https://github.com/pedrofariasx/antigravity-openai-adapter.git'
+        GitHubRepo = 'pedrofariasx/antigravity-openai-adapter'
+        InstallSupport = 'git-node-proxy'
+        Runtime = 'node'
+        Port = 8081
+        HealthPath = '/health'
+        BaseUrl = 'http://127.0.0.1:8081/v1'
+        DefaultModel = 'claude-sonnet-4-5'
+        Models = @('claude-sonnet-4-5','gemini-2.5-pro')
+        PreferredDefault = $false
+        StartCommand = 'npm start'
+        LoginCommand = ''
+        Playwright = $false
+        EnvDefaults = [ordered]@{ PORT = '8081'; API_KEY = '{{generatedLocalApiKey}}'; UPSTREAM_URL = 'http://localhost:8080'; UPSTREAM_API_KEY = 'test'; AUTO_START_PROXY = 'true'; DEBUG = 'false' }
+        EnvFrom = [ordered]@{ UPSTREAM_API_KEY = @('ANTIGRAVITY_UPSTREAM_API_KEY'); UPSTREAM_URL = @('ANTIGRAVITY_UPSTREAM_URL') }
+        SecretKeys = @('API_KEY','UPSTREAM_API_KEY')
+        Notes = 'Adapter OpenAI-compatible para antigravity-claude-proxy; auto-start fica habilitado por padrao.'
+    }
+    $catalog['dockernativemanager'] = [ordered]@{
+        ToolName = 'dockernativemanager'
+        DisplayName = 'Docker Native Manager'
+        DocsUrl = 'https://github.com/pedrofariasx/dockernativemanager'
+        RepoUrl = 'https://github.com/pedrofariasx/dockernativemanager.git'
+        GitHubRepo = 'pedrofariasx/dockernativemanager'
+        InstallSupport = 'git-tauri-app'
+        Runtime = 'tauri'
+        Port = 0
+        HealthPath = ''
+        BaseUrl = ''
+        DefaultModel = ''
+        Models = @()
+        PreferredDefault = $false
+        StartCommand = 'npm run tauri dev'
+        LoginCommand = ''
+        Playwright = $false
+        NpmLegacyPeerDeps = $true
+        EnvDefaults = [ordered]@{}
+        EnvFrom = [ordered]@{}
+        SecretKeys = @()
+        Notes = 'Gerenciador desktop Tauri para Docker. PhaseZero clona, instala dependencias Node e valida build web; build Tauri nativo depende de toolchain local.'
+    }
+    return $catalog
+}
+
 function Get-BootstrapAiToolCatalog {
     $catalog = [ordered]@{}
     $catalog['rtk'] = [ordered]@{
@@ -13845,6 +14060,21 @@ function Get-BootstrapAiToolCatalog {
         }
         Notes          = 'Waybar/TUI Rust para uso de Claude, Codex/OpenAI, Z.AI e OpenRouter. Linux/WSL usa release oficial verificada; Windows com WSL indisponivel usa fallback cargo na tag oficial.'
     }
+    $catalog['ai-proxy-suite'] = [ordered]@{
+        ToolName       = 'ai-proxy-suite'
+        DisplayName    = 'PhaseZero AI Proxy Suite'
+        CommandNames   = @()
+        VersionArgs    = @()
+        DocsUrl        = 'https://github.com/pedrofariasx/kimiproxy'
+        GitHubRepo     = 'pedrofariasx/kimiproxy'
+        PackageName    = ''
+        InstallSupport = 'ai-proxy-suite'
+        Notes          = 'Instala e configura KimiProxy como default OpenAI-compatible; Qwen/DeepSeek/Mimo/Antigravity ficam selecionaveis.'
+    }
+    $proxyCatalog = Get-BootstrapAiProxyCatalog
+    foreach ($proxyName in $proxyCatalog.Keys) {
+        $catalog[$proxyName] = $proxyCatalog[$proxyName]
+    }
     return $catalog
 }
 
@@ -13864,6 +14094,24 @@ function Normalize-BootstrapAiToolName {
         'aionui' { return 'aionui' }
         'codeclaw' { return 'openclaw' }
         'antigravity' { return 'antigravity-workflows' }
+        'kimi' { return 'kimiproxy' }
+        'kimi-proxy' { return 'kimiproxy' }
+        'qwen-proxy' { return 'qwenproxy' }
+        'deep-proxy' { return 'deepsproxy' }
+        'deepseek-proxy' { return 'deepsproxy' }
+        'deeps-proxy' { return 'deepsproxy' }
+        'mimo-proxy' { return 'mimo-ai-proxy' }
+        'mimoai' { return 'mimo-ai-proxy' }
+        'mimoaiproxy' { return 'mimo-ai-proxy' }
+        'ago-adapter' { return 'antigravity-openai-adapter' }
+        'antigravity-adapter' { return 'antigravity-openai-adapter' }
+        'antigravity-openai' { return 'antigravity-openai-adapter' }
+        'docker-native-manager' { return 'dockernativemanager' }
+        'docker-native' { return 'dockernativemanager' }
+        'dockernm' { return 'dockernativemanager' }
+        'proxy-suite' { return 'ai-proxy-suite' }
+        'ai-proxies' { return 'ai-proxy-suite' }
+        'local-proxies' { return 'ai-proxy-suite' }
         'aiusagebar' { return 'ai-usagebar' }
         'usagebar' { return 'ai-usagebar' }
         default { return $name }
@@ -14533,6 +14781,34 @@ function Get-BootstrapAiToolStatusRows {
             } else {
                 $status = 'absent'
             }
+        } elseif ($toolName -eq 'ai-proxy-suite') {
+            $suite = New-BootstrapAiProxySuiteDoctorReport -InstallRoot $InstallRoot
+            $configuredCount = [int]$suite['configuredProviders']
+            $configured = ([string]$suite['status'] -eq 'ready')
+            $status = switch ([string]$suite['status']) {
+                'ready' { 'configured'; break }
+                'start-required' { 'start-required'; break }
+                'degraded' { 'unhealthy'; break }
+                'warning' { 'installed'; break }
+                default { 'absent' }
+            }
+            $version = [string]$suite['defaultModel']
+            $commandPath = [string]$suite['manifestPath']
+        } elseif (Test-BootstrapAiProxyToolName -ToolName $toolName) {
+            $proxy = Get-BootstrapAiProxyToolDoctorReport -ToolName $toolName -InstallRoot $InstallRoot
+            if ($proxy) {
+                $commandPath = [string]$proxy['sourceRoot']
+                $configured = [bool]$proxy['configured']
+                $status = switch ([string]$proxy['status']) {
+                    'configured' { 'configured'; break }
+                    'start-required' { 'start-required'; break }
+                    'auth-failed' { 'auth-failed'; break }
+                    'unhealthy' { 'unhealthy'; break }
+                    'warning' { 'installed'; break }
+                    default { 'absent' }
+                }
+                $version = [string]$proxy['repo']
+            }
         } elseif (-not [string]::IsNullOrWhiteSpace($commandPath)) {
             $version = Get-BootstrapAiToolVersion -CatalogEntry $entry -CommandPath $commandPath
             $configured = Test-BootstrapAiToolConfigured -ToolName $toolName -ProjectRoot $ProjectRoot
@@ -14579,6 +14855,1314 @@ function New-BootstrapAiToolResult {
         commandPath = $CommandPath
         version     = $Version
     }
+}
+
+function Test-BootstrapAiProxyToolName {
+    param([Parameter(Mandatory = $true)][string]$ToolName)
+    $catalog = Get-BootstrapAiProxyCatalog
+    return $catalog.Contains((Normalize-BootstrapAiToolName -ToolName $ToolName))
+}
+
+function Get-BootstrapAiProxySourceRoot {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [string]$InstallRoot = ''
+    )
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    return (Join-Path (Join-Path $root 'sources') $ToolName)
+}
+
+function Get-BootstrapAiProxyManifestPath {
+    param([string]$InstallRoot = '')
+    return (Join-Path (Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot) 'phasezero-ai-proxy-suite.json')
+}
+
+function Get-BootstrapAiProxyRuntimeRoot {
+    param([string]$InstallRoot = '')
+    return (Join-Path (Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot) 'runtime')
+}
+
+function Get-BootstrapAiProxyRuntimeStatePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [string]$InstallRoot = ''
+    )
+    return (Join-Path (Get-BootstrapAiProxyRuntimeRoot -InstallRoot $InstallRoot) ("{0}.json" -f $ToolName))
+}
+
+function Get-BootstrapAiProxyLogRoot {
+    param([string]$InstallRoot = '')
+    return (Join-Path (Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot) 'logs')
+}
+
+function New-BootstrapLocalApiKey {
+    $bytes = New-Object byte[] 24
+    try {
+        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+        $rng.GetBytes($bytes)
+        $rng.Dispose()
+    } catch {
+        $bytes = ([Guid]::NewGuid().ToByteArray() + [Guid]::NewGuid().ToByteArray())
+    }
+    $token = [Convert]::ToBase64String($bytes)
+    $token = $token.TrimEnd('=').Replace('+','').Replace('/','')
+    return ('sk-phasezero-local-' + $token)
+}
+
+function Read-BootstrapDotEnvFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $map = [ordered]@{}
+    if (-not (Test-Path -LiteralPath $Path)) { return $map }
+    foreach ($line in @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)) {
+        $text = [string]$line
+        if ($text -notmatch '^\s*([^#=\s][^=]*)=(.*)$') { continue }
+        $key = $matches[1].Trim()
+        $value = [string]$matches[2]
+        $value = $value.Trim()
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            if ($value.Length -ge 2) { $value = $value.Substring(1, $value.Length - 2) }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($key)) { $map[$key] = $value }
+    }
+    return $map
+}
+
+function ConvertTo-BootstrapDotEnvValue {
+    param([AllowNull()][string]$Value)
+    $text = [string]$Value
+    if ($text -match '[\r\n]') { $text = ($text -replace "[\r\n]+", ',') }
+    if ($text -match '\s|#|"' ) {
+        return ('"' + ($text -replace '\\', '\\' -replace '"', '\"') + '"')
+    }
+    return $text
+}
+
+function Get-BootstrapProcessOrUserEnvValue {
+    param([Parameter(Mandatory = $true)][string[]]$Names)
+    foreach ($scope in @('Process','User')) {
+        foreach ($name in @($Names)) {
+            if ([string]::IsNullOrWhiteSpace([string]$name)) { continue }
+            $value = [Environment]::GetEnvironmentVariable([string]$name, $scope)
+            if (-not [string]::IsNullOrWhiteSpace($value)) { return [string]$value }
+        }
+    }
+    return ''
+}
+
+function Get-BootstrapAiProxyEnvMap {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$EnvPath
+    )
+
+    $existing = Read-BootstrapDotEnvFile -Path $EnvPath
+    $envMap = [ordered]@{}
+    $defaults = ConvertTo-BootstrapHashtable -InputObject $CatalogEntry['EnvDefaults']
+    foreach ($key in @($defaults.Keys)) {
+        $value = [string]$defaults[$key]
+        if ($value -eq '{{generatedLocalApiKey}}') {
+            if ($existing.Contains($key) -and -not [string]::IsNullOrWhiteSpace([string]$existing[$key])) {
+                $value = [string]$existing[$key]
+            } else {
+                $value = New-BootstrapLocalApiKey
+            }
+        }
+        $envMap[[string]$key] = $value
+    }
+
+    $from = ConvertTo-BootstrapHashtable -InputObject $CatalogEntry['EnvFrom']
+    foreach ($targetKey in @($from.Keys)) {
+        $names = @($from[$targetKey] | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        $value = Get-BootstrapProcessOrUserEnvValue -Names $names
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            $envMap[[string]$targetKey] = $value
+        } elseif ($existing.Contains($targetKey) -and -not [string]::IsNullOrWhiteSpace([string]$existing[$targetKey])) {
+            $envMap[[string]$targetKey] = [string]$existing[$targetKey]
+        }
+    }
+
+    return $envMap
+}
+
+function Write-BootstrapAiProxyEnvFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [string]$InstallRoot = ''
+    )
+
+    $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName $ToolName -InstallRoot $InstallRoot
+    [void][System.IO.Directory]::CreateDirectory($sourceRoot)
+    $envPath = Join-Path $sourceRoot '.env'
+    $envMap = Get-BootstrapAiProxyEnvMap -CatalogEntry $CatalogEntry -EnvPath $envPath
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# Managed by PhaseZero. Do not commit this file.') | Out-Null
+    foreach ($key in @($envMap.Keys)) {
+        $lines.Add(('{0}={1}' -f [string]$key, (ConvertTo-BootstrapDotEnvValue -Value ([string]$envMap[$key])))) | Out-Null
+    }
+    if (Test-Path -LiteralPath $envPath) {
+        try { Remove-Item -LiteralPath $envPath -Force -ErrorAction Stop } catch { Write-Verbose $_.Exception.Message }
+    }
+    $envStream = [System.IO.File]::Open($envPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    try {
+        $envBytes = [System.Text.Encoding]::UTF8.GetBytes((($lines.ToArray()) -join [Environment]::NewLine) + [Environment]::NewLine)
+        $envStream.Write($envBytes, 0, $envBytes.Length)
+    } finally {
+        $envStream.Close()
+        $envStream.Dispose()
+    }
+    try {
+        $acl = Get-Acl -LiteralPath $envPath
+        $currentIdentity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+        $allowRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $currentIdentity.User, 'Read,Write,Modify,FullControl',
+            'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule($allowRule)
+        $administrators = New-Object System.Security.Principal.SecurityIdentifier('S-1-5-32-544')
+        $adminRule = New-Object System.Security.AccessControl.FileSystemAccessRule(
+            $administrators, 'FullControl',
+            'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        $acl.AddAccessRule($adminRule)
+        Set-Acl -LiteralPath $envPath -AclObject $acl
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    return [ordered]@{
+        path = $envPath
+        keyCount = [int]$envMap.Count
+        secretKeyCount = @($CatalogEntry['SecretKeys']).Count
+        hasApiKey = $envMap.Contains('API_KEY')
+    }
+}
+
+function New-BootstrapAiProxyManifest {
+    param([string]$InstallRoot = '')
+    $null = $InstallRoot
+    $catalog = Get-BootstrapAiProxyCatalog
+    $providers = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($catalog.Keys)) {
+        $entry = $catalog[$name]
+        if ([int]$entry['Port'] -le 0) { continue }
+        $providers.Add([ordered]@{
+            id = [string]$name
+            name = [string]$entry['DisplayName']
+            preferred = [bool]$entry['PreferredDefault']
+            baseUrl = [string]$entry['BaseUrl']
+            defaultModel = [string]$entry['DefaultModel']
+            models = @($entry['Models'])
+            apiKeySource = '.env:API_KEY'
+            loginCommand = [string]$entry['LoginCommand']
+            startCommand = [string]$entry['StartCommand']
+        }) | Out-Null
+    }
+    return [ordered]@{
+        schemaVersion = 1
+        generatedAt = (Get-Date).ToString('o')
+        defaultProvider = 'kimiproxy'
+        defaultBaseUrl = [string]$catalog['kimiproxy']['BaseUrl']
+        defaultModel = [string]$catalog['kimiproxy']['DefaultModel']
+        providers = @($providers.ToArray())
+        targets = @('vsCode','cursor','windsurf','trae','roo','cline','zed','zCode','openCode','openClaw','hermes','kilo','continue')
+        note = 'API keys live only in each proxy .env; this manifest is safe to include in support bundles.'
+    }
+}
+
+function Write-BootstrapAiProxyManifest {
+    param([string]$InstallRoot = '')
+    $path = Get-BootstrapAiProxyManifestPath -InstallRoot $InstallRoot
+    $parent = Split-Path -Path $path -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parent)) { [void][System.IO.Directory]::CreateDirectory($parent) }
+    Write-BootstrapJsonFile -Path $path -Value (New-BootstrapAiProxyManifest -InstallRoot $InstallRoot)
+    return $path
+}
+
+function Get-BootstrapAiProxyEnvVariableName {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][string]$Suffix
+    )
+
+    $prefix = ([regex]::Replace($ToolName.ToUpperInvariant(), '[^A-Z0-9]+', '_')).Trim('_')
+    return ('{0}_{1}' -f $prefix, $Suffix.ToUpperInvariant())
+}
+
+function Get-BootstrapAiProxyProviderId {
+    param([Parameter(Mandatory = $true)][string]$ToolName)
+
+    switch ($ToolName) {
+        'kimiproxy' { return 'phasezero-kimi' }
+        'qwenproxy' { return 'phasezero-qwen' }
+        'deepsproxy' { return 'phasezero-deepseek' }
+        'mimo-ai-proxy' { return 'phasezero-mimo' }
+        'antigravity-openai-adapter' { return 'phasezero-antigravity' }
+        default { return ('phasezero-' + (([regex]::Replace($ToolName.ToLowerInvariant(), '[^a-z0-9]+', '-')).Trim('-'))) }
+    }
+}
+
+function ConvertTo-BootstrapAiProxySafeProviderRecord {
+    param([Parameter(Mandatory = $true)][System.Collections.IDictionary]$Record)
+
+    return [ordered]@{
+        id = [string]$Record['id']
+        providerId = [string]$Record['providerId']
+        name = [string]$Record['name']
+        configured = [bool]$Record['configured']
+        preferred = [bool]$Record['preferred']
+        baseUrl = [string]$Record['baseUrl']
+        defaultModel = [string]$Record['defaultModel']
+        models = @($Record['models'])
+        port = [int]$Record['port']
+        apiKeyEnvName = [string]$Record['apiKeyEnvName']
+        baseUrlEnvName = [string]$Record['baseUrlEnvName']
+        modelEnvName = [string]$Record['modelEnvName']
+        envPath = [string]$Record['envPath']
+        sourceRoot = [string]$Record['sourceRoot']
+    }
+}
+
+function Get-BootstrapAiProxyProviderRecord {
+    param(
+        [string]$InstallRoot = '',
+        [switch]$EnsureEnv
+    )
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $catalog = Get-BootstrapAiProxyCatalog
+    $records = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($catalog.Keys)) {
+        $entry = $catalog[$name]
+        if ([int]$entry['Port'] -le 0) { continue }
+        $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName ([string]$name) -InstallRoot $root
+        $envPath = Join-Path $sourceRoot '.env'
+        if ($EnsureEnv) {
+            Write-BootstrapAiProxyEnvFile -ToolName ([string]$name) -CatalogEntry $entry -InstallRoot $root | Out-Null
+        }
+
+        $envMap = @{}
+        if (Test-Path -LiteralPath $envPath) {
+            $envMap = Read-BootstrapDotEnvFile -Path $envPath
+        }
+        $apiKey = if (Test-BootstrapMapContainsKey -Map $envMap -Key 'API_KEY') { [string]$envMap['API_KEY'] } else { '' }
+        $records.Add([ordered]@{
+            id = [string]$name
+            providerId = Get-BootstrapAiProxyProviderId -ToolName ([string]$name)
+            name = [string]$entry['DisplayName']
+            configured = (-not [string]::IsNullOrWhiteSpace($apiKey))
+            preferred = [bool]$entry['PreferredDefault']
+            baseUrl = [string]$entry['BaseUrl']
+            defaultModel = [string]$entry['DefaultModel']
+            models = @($entry['Models'])
+            port = [int]$entry['Port']
+            apiKey = $apiKey
+            apiKeyEnvName = Get-BootstrapAiProxyEnvVariableName -ToolName ([string]$name) -Suffix 'API_KEY'
+            baseUrlEnvName = Get-BootstrapAiProxyEnvVariableName -ToolName ([string]$name) -Suffix 'BASE_URL'
+            modelEnvName = Get-BootstrapAiProxyEnvVariableName -ToolName ([string]$name) -Suffix 'MODEL'
+            envPath = $envPath
+            sourceRoot = $sourceRoot
+        }) | Out-Null
+    }
+    return @($records.ToArray())
+}
+
+function Get-BootstrapAiProxyDefaultRecord {
+    param([Parameter(Mandatory = $true)][object[]]$Records)
+
+    $default = @($Records | Where-Object { [string]$_['id'] -eq 'kimiproxy' } | Select-Object -First 1)
+    if (@($default).Count -gt 0) { return $default[0] }
+    $preferred = @($Records | Where-Object { [bool]$_['preferred'] } | Select-Object -First 1)
+    if (@($preferred).Count -gt 0) { return $preferred[0] }
+    return @($Records | Select-Object -First 1)[0]
+}
+
+function New-BootstrapAiProxyIdeEnvironment {
+    param([Parameter(Mandatory = $true)][object[]]$Records)
+
+    $default = Get-BootstrapAiProxyDefaultRecord -Records $Records
+    $envMap = [ordered]@{
+        OPENAI_API_KEY = [string]$default['apiKey']
+        OPENAI_BASE_URL = [string]$default['baseUrl']
+        OPENAI_MODEL = [string]$default['defaultModel']
+        OPENAI_COMPAT_PROVIDER = [string]$default['id']
+        OPENAI_COMPAT_STAGE = 'phasezero-ai-proxy-suite'
+        PHASEZERO_AI_PROXY_DEFAULT = [string]$default['id']
+    }
+
+    foreach ($record in @($Records)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$record['apiKey'])) {
+            $envMap[[string]$record['apiKeyEnvName']] = [string]$record['apiKey']
+        }
+        $envMap[[string]$record['baseUrlEnvName']] = [string]$record['baseUrl']
+        $envMap[[string]$record['modelEnvName']] = [string]$record['defaultModel']
+    }
+    return $envMap
+}
+
+function New-BootstrapAiProxyContinueModel {
+    param([Parameter(Mandatory = $true)][object[]]$Records)
+
+    $models = New-Object System.Collections.Generic.List[object]
+    foreach ($record in @($Records)) {
+        if ([string]::IsNullOrWhiteSpace([string]$record['apiKey'])) { continue }
+        $models.Add([ordered]@{
+            name = ('PhaseZero {0}' -f [string]$record['name'])
+            provider = 'openai'
+            model = [string]$record['defaultModel']
+            apiBase = [string]$record['baseUrl']
+            apiKey = ('${{ secrets.' + [string]$record['apiKeyEnvName'] + ' }}')
+            roles = @('chat','edit','apply')
+        }) | Out-Null
+    }
+    return @($models.ToArray())
+}
+
+function New-BootstrapAiProxyResolvedTarget {
+    param([Parameter(Mandatory = $true)][object[]]$Records)
+
+    $envMap = New-BootstrapAiProxyIdeEnvironment -Records $Records
+    $targets = [ordered]@{}
+    foreach ($targetName in @('claudeCode','cursor','windsurf','trae','vsCode','roo','cline','zed','zCode','openClaw','hermes')) {
+        $targets[$targetName] = [ordered]@{
+            env = ConvertTo-BootstrapHashtable -InputObject $envMap
+            mcpServers = [ordered]@{}
+        }
+    }
+    $targets['continue'] = [ordered]@{
+        env = ConvertTo-BootstrapHashtable -InputObject $envMap
+        models = @(New-BootstrapAiProxyContinueModel -Records $Records)
+        mcpServers = [ordered]@{}
+    }
+    return (ConvertTo-BootstrapHashtable -InputObject $targets)
+}
+
+function Set-BootstrapOpenCodeAiProxyProviderConfig {
+    param(
+        [string]$InstallRoot = '',
+        [string]$ConfigPath = '',
+        [string]$Label = 'OpenCode'
+    )
+
+    $records = @(Get-BootstrapAiProxyProviderRecord -InstallRoot $InstallRoot -EnsureEnv)
+    $configured = @($records | Where-Object { [bool]$_['configured'] })
+    $path = if ([string]::IsNullOrWhiteSpace($ConfigPath)) { Get-BootstrapOpenCodeConfigPath } else { $ConfigPath }
+    $summary = [ordered]@{
+        path = $path
+        updated = $false
+        defaultProvider = 'kimiproxy'
+        defaultModel = 'k2d6-thinking'
+        providers = @($configured | ForEach-Object { ConvertTo-BootstrapAiProxySafeProviderRecord -Record $_ })
+    }
+    if ([string]::IsNullOrWhiteSpace($path) -or $configured.Count -eq 0) {
+        return $summary
+    }
+
+    $settings = @{}
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $settings = Read-BootstrapJsonFile -Path $path
+            if (-not ($settings -is [hashtable])) { $settings = @{} }
+        } catch {
+            $backupPath = Backup-BootstrapFile -Path $path
+            if ($backupPath) {
+                Write-Log ("{0} config invalido; backup criado: {1}" -f $Label, $backupPath) 'WARN'
+            }
+            $settings = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 40 -Compress)
+    if (-not $settings.ContainsKey('$schema')) {
+        $settings['$schema'] = 'https://opencode.ai/config.json'
+    }
+    $providerMap = Ensure-BootstrapNamedMap -Parent $settings -Name 'provider'
+
+    foreach ($record in @($configured)) {
+        $providerId = [string]$record['providerId']
+        $providerConfig = @{}
+        if ($providerMap.ContainsKey($providerId) -and ($providerMap[$providerId] -is [hashtable])) {
+            $providerConfig = ConvertTo-BootstrapHashtable -InputObject $providerMap[$providerId]
+        }
+        $providerConfig['name'] = [string]$record['name']
+        $options = Ensure-BootstrapNamedMap -Parent $providerConfig -Name 'options'
+        $options['baseURL'] = [string]$record['baseUrl']
+        $options['apiKey'] = [string]$record['apiKey']
+        $modelsMap = Ensure-BootstrapNamedMap -Parent $providerConfig -Name 'models'
+        foreach ($modelId in @($record['models'])) {
+            $id = [string]$modelId
+            if ([string]::IsNullOrWhiteSpace($id)) { continue }
+            if (-not $modelsMap.ContainsKey($id) -or -not ($modelsMap[$id] -is [hashtable])) {
+                $modelsMap[$id] = [ordered]@{}
+            }
+        }
+        $providerMap[$providerId] = $providerConfig
+    }
+
+    $default = Get-BootstrapAiProxyDefaultRecord -Records $configured
+    $defaultModel = ('{0}/{1}' -f [string]$default['providerId'], [string]$default['defaultModel'])
+    $settings['model'] = $defaultModel
+    $smallModel = @($default['models'] | Where-Object { [string]$_ -ne [string]$default['defaultModel'] } | Select-Object -First 1)
+    if (@($smallModel).Count -gt 0) {
+        $settings['small_model'] = ('{0}/{1}' -f [string]$default['providerId'], [string]$smallModel[0])
+    }
+
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 40 -Compress)
+    if ($before -ne $after) {
+        if (Test-Path -LiteralPath $path) {
+            Backup-BootstrapFile -Path $path | Out-Null
+        }
+        Write-BootstrapJsonFile -Path $path -Value $settings
+        Write-Log ("{0} configurado com PhaseZero AI Proxy Suite: {1}" -f $Label, $path)
+        $summary.updated = $true
+    }
+    return $summary
+}
+
+function Set-BootstrapAiProxyIdeDefault {
+    param(
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $project = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($ProjectRoot) }
+    $plannedTargets = @('claudeCode','cursor','windsurf','trae','vsCode','roo','cline','zed','zCode','openCode','openClaw','hermes','kilo','continue')
+    if ($DryRun) {
+        return [ordered]@{
+            status = 'planned'
+            installRoot = $root
+            projectRoot = $project
+            manifestPath = Get-BootstrapAiProxyManifestPath -InstallRoot $root
+            defaultProvider = 'kimiproxy'
+            defaultBaseUrl = [string](Get-BootstrapAiProxyCatalog)['kimiproxy']['BaseUrl']
+            defaultModel = [string](Get-BootstrapAiProxyCatalog)['kimiproxy']['DefaultModel']
+            providers = @((Get-BootstrapAiProxyProviderRecord -InstallRoot $root) | ForEach-Object { ConvertTo-BootstrapAiProxySafeProviderRecord -Record $_ })
+            targets = @($plannedTargets)
+            targetUpdates = [ordered]@{}
+        }
+    }
+
+    $records = @(Get-BootstrapAiProxyProviderRecord -InstallRoot $root -EnsureEnv)
+    $manifestPath = Write-BootstrapAiProxyManifest -InstallRoot $root
+    $resolvedTargets = New-BootstrapAiProxyResolvedTarget -Records $records
+    $targetUpdates = [ordered]@{
+        claudeCodeUpdated = Ensure-BootstrapClaudeCodeSecrets -ResolvedTargets $resolvedTargets
+        cursorUpdated = Ensure-BootstrapCursorSecrets -ResolvedTargets $resolvedTargets
+        windsurfUpdated = Ensure-BootstrapWindsurfSecrets -ResolvedTargets $resolvedTargets
+        traeUpdated = Ensure-BootstrapTraeSecrets -ResolvedTargets $resolvedTargets
+        vsCodeUpdated = Ensure-BootstrapVsCodeSecrets -ResolvedTargets $resolvedTargets
+        rooUpdated = Ensure-BootstrapRooSecrets -ResolvedTargets $resolvedTargets
+        clineUpdated = Ensure-BootstrapClineSecrets -ResolvedTargets $resolvedTargets
+        zedUpdated = Ensure-BootstrapZedSecrets -ResolvedTargets $resolvedTargets
+        zCodeUpdated = Ensure-BootstrapZCodeSecrets -ResolvedTargets $resolvedTargets
+        openClawUpdated = Ensure-BootstrapOpenClawSecrets -ResolvedTargets $resolvedTargets
+        hermesUpdated = Ensure-BootstrapHermesSecrets -ResolvedTargets $resolvedTargets -State @{ CloneBaseDir = $project }
+        continueUpdated = $false
+        openCodeUpdated = $false
+        kiloUpdated = $false
+    }
+    $continueSummary = Ensure-BootstrapContinueExtensionConfig -ResolvedTargets $resolvedTargets
+    $targetUpdates.continueUpdated = ([bool]$continueSummary.envUpdated -or [bool]$continueSummary.configUpdated)
+    $openCodeSummary = Set-BootstrapOpenCodeAiProxyProviderConfig -InstallRoot $root
+    $targetUpdates.openCodeUpdated = [bool]$openCodeSummary.updated
+    $kiloSummary = Set-BootstrapOpenCodeAiProxyProviderConfig -InstallRoot $root -ConfigPath (Get-BootstrapKiloConfigPath) -Label 'Kilo CLI'
+    $targetUpdates.kiloUpdated = [bool]$kiloSummary.updated
+    $default = Get-BootstrapAiProxyDefaultRecord -Records $records
+
+    return [ordered]@{
+        status = 'configured'
+        installRoot = $root
+        projectRoot = $project
+        manifestPath = $manifestPath
+        defaultProvider = [string]$default['id']
+        defaultBaseUrl = [string]$default['baseUrl']
+        defaultModel = [string]$default['defaultModel']
+        providers = @($records | ForEach-Object { ConvertTo-BootstrapAiProxySafeProviderRecord -Record $_ })
+        targets = @($plannedTargets)
+        targetUpdates = $targetUpdates
+        continue = $continueSummary
+        openCode = $openCodeSummary
+        kilo = $kiloSummary
+    }
+}
+
+function Install-BootstrapAiProxySuiteManagedTool {
+    param(
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $project = if ([string]::IsNullOrWhiteSpace($ProjectRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($ProjectRoot) }
+    $catalog = Get-BootstrapAiProxyCatalog
+    $installResults = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($catalog.Keys)) {
+        $entry = $catalog[$name]
+        $install = Install-BootstrapAiProxyManagedTool -ToolName ([string]$name) -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun
+        $installResults.Add([ordered]@{
+            tool = [string]$install['tool']
+            status = [string]$install['status']
+            runtime = [string]$install['runtime']
+            repoUrl = [string]$install['repoUrl']
+            baseUrl = [string]$install['baseUrl']
+            defaultModel = [string]$install['defaultModel']
+        }) | Out-Null
+    }
+
+    $defaults = Set-BootstrapAiProxyIdeDefault -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun
+    $start = Start-BootstrapAiProxySuite -InstallRoot $root -DryRun:$DryRun -TimeoutMs 30000
+    $status = if ($DryRun) { 'planned' } elseif ([string]$start['status'] -eq 'started') { 'configured' } else { [string]$start['status'] }
+    $result = New-BootstrapAiToolResult -ToolName 'ai-proxy-suite' -Action 'install' -Status $status -InstallRoot $root -ProjectRoot $project -Message 'AI proxy suite gerenciada: Kimi default; demais providers selecionaveis.' -Docs 'https://github.com/pedrofariasx/kimiproxy'
+    $result['defaultProvider'] = [string]$defaults['defaultProvider']
+    $result['defaultBaseUrl'] = [string]$defaults['defaultBaseUrl']
+    $result['defaultModel'] = [string]$defaults['defaultModel']
+    $result['providers'] = @($defaults['providers'])
+    $result['targets'] = $defaults['targetUpdates']
+    $result['installResults'] = @($installResults.ToArray())
+    $result['startResults'] = @($start['startResults'])
+    if (Test-BootstrapMapContainsKey -Map $start -Key 'doctor') { $result['runtimeStatus'] = $start['doctor'] }
+    $result['manifestPath'] = [string]$defaults['manifestPath']
+    return $result
+}
+
+function Add-BootstrapAiProxyResultField {
+    param(
+        [Parameter(Mandatory = $true)]$Result,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [string]$InstallRoot = '',
+        [string]$EnvPath = '',
+        [string]$ManifestPath = ''
+    )
+    $Result['repoUrl'] = [string]$CatalogEntry['RepoUrl']
+    $Result['runtime'] = [string]$CatalogEntry['Runtime']
+    $Result['port'] = [int]$CatalogEntry['Port']
+    $Result['baseUrl'] = [string]$CatalogEntry['BaseUrl']
+    $Result['defaultModel'] = [string]$CatalogEntry['DefaultModel']
+    $Result['models'] = @($CatalogEntry['Models'])
+    $Result['preferredDefault'] = [bool]$CatalogEntry['PreferredDefault']
+    $Result['playwright'] = [bool]$CatalogEntry['Playwright']
+    $Result['sourceRoot'] = Get-BootstrapAiProxySourceRoot -ToolName ([string]$CatalogEntry['ToolName']) -InstallRoot $InstallRoot
+    if (-not [string]::IsNullOrWhiteSpace($EnvPath)) { $Result['envPath'] = $EnvPath }
+    if (-not [string]::IsNullOrWhiteSpace($ManifestPath)) { $Result['manifestPath'] = $ManifestPath }
+    return $Result
+}
+
+function Set-BootstrapAiProxyEnvironment {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName $ToolName -InstallRoot $root
+    $envPath = Join-Path $sourceRoot '.env'
+    $manifestPath = Get-BootstrapAiProxyManifestPath -InstallRoot $root
+    if ($DryRun) {
+        $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'configure' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ('Criar .env local redigido e manifest seguro para {0}.' -f [string]$CatalogEntry['DisplayName']) -Docs ([string]$CatalogEntry['DocsUrl'])
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath $envPath -ManifestPath $manifestPath)
+    }
+
+    $envInfo = Write-BootstrapAiProxyEnvFile -ToolName $ToolName -CatalogEntry $CatalogEntry -InstallRoot $root
+    $writtenManifestPath = Write-BootstrapAiProxyManifest -InstallRoot $root
+    $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'configure' -Status 'configured' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ('Config local criada para {0}; valores secretos permanecem somente no .env do proxy.' -f [string]$CatalogEntry['DisplayName']) -Docs ([string]$CatalogEntry['DocsUrl'])
+    $result['env'] = [ordered]@{ keyCount = [int]$envInfo['keyCount']; secretKeyCount = [int]$envInfo['secretKeyCount']; hasApiKey = [bool]$envInfo['hasApiKey'] }
+    return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath ([string]$envInfo['path']) -ManifestPath $writtenManifestPath)
+}
+
+function Invoke-BootstrapAiProxyInstallCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Exe,
+        [string[]]$Arguments = @(),
+        [Parameter(Mandatory = $true)][string]$WorkingDirectory,
+        [int]$TimeoutMs = 600000,
+        [string]$Label = 'command'
+    )
+
+    $result = Invoke-BootstrapAiNativeCommand -Exe $Exe -Args $Arguments -WorkingDirectory $WorkingDirectory -TimeoutMs $TimeoutMs
+    if ([int]$result['exitCode'] -ne 0) {
+        $detail = Get-BootstrapCleanNativeText -Text (([string]$result['stderr']) + ' ' + ([string]$result['stdout'])) -MaxLength 800
+        throw ("{0} falhou (exit={1}). {2}" -f $Label, [int]$result['exitCode'], $detail)
+    }
+    return $result
+}
+
+function Sync-BootstrapAiProxyRepository {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$SourceRoot
+    )
+
+    $git = Resolve-CommandPath -Name 'git'
+    if (-not $git) { throw 'git nao encontrado para clonar proxy local.' }
+    if (Test-Path -LiteralPath (Join-Path $SourceRoot '.git')) {
+        Invoke-BootstrapAiProxyInstallCommand -Exe $git -Arguments @('fetch','--depth','1','origin') -WorkingDirectory $SourceRoot -TimeoutMs 300000 -Label 'git fetch' | Out-Null
+        Invoke-BootstrapAiProxyInstallCommand -Exe $git -Arguments @('pull','--ff-only') -WorkingDirectory $SourceRoot -TimeoutMs 300000 -Label 'git pull' | Out-Null
+        return
+    }
+    if (Test-Path -LiteralPath $SourceRoot) {
+        $items = @(Get-ChildItem -LiteralPath $SourceRoot -Force -ErrorAction SilentlyContinue)
+        if ($items.Count -gt 0) { throw "Diretorio existe mas nao e clone git gerenciado: $SourceRoot" }
+    } else {
+        [void][System.IO.Directory]::CreateDirectory((Split-Path -Path $SourceRoot -Parent))
+    }
+    Invoke-BootstrapAiProxyInstallCommand -Exe $git -Arguments @('clone','--depth','1',[string]$CatalogEntry['RepoUrl'],$SourceRoot) -WorkingDirectory (Split-Path -Path $SourceRoot -Parent) -TimeoutMs 600000 -Label 'git clone' | Out-Null
+}
+
+function Install-BootstrapAiProxyManagedTool {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName $ToolName -InstallRoot $root
+    $envPath = Join-Path $sourceRoot '.env'
+    $manifestPath = Get-BootstrapAiProxyManifestPath -InstallRoot $root
+    $runtime = [string]$CatalogEntry['Runtime']
+    if ($DryRun) {
+        $steps = @('git clone/update')
+        if ($runtime -eq 'node' -or $runtime -eq 'tauri') { $steps += 'npm install' }
+        if ([bool]$CatalogEntry['Playwright']) { $steps += 'npx playwright install chromium' }
+        if ($runtime -eq 'go') { $steps += 'go mod download'; $steps += 'go build' }
+        if ($runtime -eq 'tauri') { $steps += 'npm run build' }
+        $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message (($steps -join '; ') + ('; repo={0}' -f [string]$CatalogEntry['RepoUrl'])) -Docs ([string]$CatalogEntry['DocsUrl'])
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath $envPath -ManifestPath $manifestPath)
+    }
+
+    Sync-BootstrapAiProxyRepository -CatalogEntry $CatalogEntry -SourceRoot $sourceRoot
+    $configResult = Set-BootstrapAiProxyEnvironment -ToolName $ToolName -CatalogEntry $CatalogEntry -InstallRoot $root -ProjectRoot $ProjectRoot
+
+    if ($runtime -eq 'node' -or $runtime -eq 'tauri') {
+        $npm = Get-BootstrapNpmCommandForAiTools
+        $npmArgs = @('install')
+        if ($CatalogEntry.Contains('NpmLegacyPeerDeps') -and [bool]$CatalogEntry['NpmLegacyPeerDeps']) {
+            $npmArgs += '--legacy-peer-deps'
+        }
+        Invoke-BootstrapAiProxyInstallCommand -Exe $npm -Arguments $npmArgs -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'npm install' | Out-Null
+        if ([bool]$CatalogEntry['Playwright']) {
+            $npx = $npm -replace 'npm(\.cmd|\.exe)?$', 'npx$1'
+            if (-not (Test-Path -LiteralPath $npx)) { $npx = 'npx.cmd' }
+            Invoke-BootstrapAiProxyInstallCommand -Exe $npx -Arguments @('playwright','install','chromium') -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'playwright install chromium' | Out-Null
+        }
+        if ($runtime -eq 'tauri') {
+            Invoke-BootstrapAiProxyInstallCommand -Exe $npm -Arguments @('run','build') -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'npm run build' | Out-Null
+        }
+    } elseif ($runtime -eq 'go') {
+        $go = Resolve-CommandPath -Name 'go'
+        if (-not $go) {
+            $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'blocked' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'Go nao encontrado. Instale componente go-core ou use Docker Compose do repositorio.' -Docs ([string]$CatalogEntry['DocsUrl'])
+            return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath ([string]$configResult['envPath']) -ManifestPath ([string]$configResult['manifestPath']))
+        }
+        Invoke-BootstrapAiProxyInstallCommand -Exe $go -Arguments @('mod','download') -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'go mod download' | Out-Null
+        $binDir = Join-Path $sourceRoot 'bin'
+        [void][System.IO.Directory]::CreateDirectory($binDir)
+        Invoke-BootstrapAiProxyInstallCommand -Exe $go -Arguments @('build','-o',(Join-Path $binDir 'mimo-ai-proxy.exe'),'.') -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'go build' | Out-Null
+    }
+
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    $manifest['tools'][$ToolName] = @{
+        kind = [string]$CatalogEntry['InstallSupport']
+        repo = [string]$CatalogEntry['GitHubRepo']
+        sourceRoot = $sourceRoot
+        port = [int]$CatalogEntry['Port']
+        baseUrl = [string]$CatalogEntry['BaseUrl']
+        defaultModel = [string]$CatalogEntry['DefaultModel']
+        installedAt = (Get-Date).ToString('o')
+    }
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+    $result = New-BootstrapAiToolResult -ToolName $ToolName -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ('{0} instalado/configurado em source gerenciado.' -f [string]$CatalogEntry['DisplayName']) -Docs ([string]$CatalogEntry['DocsUrl'])
+    return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $CatalogEntry -InstallRoot $root -EnvPath ([string]$configResult['envPath']) -ManifestPath ([string]$configResult['manifestPath']))
+}
+
+function Get-BootstrapAiProxyModelsUrl {
+    param([AllowEmptyString()][string]$BaseUrl)
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) { return '' }
+    return (([string]$BaseUrl).TrimEnd('/') + '/models')
+}
+
+function Get-BootstrapAiProxyHealthUrl {
+    param(
+        [AllowEmptyString()][string]$BaseUrl,
+        [string]$HealthPath = '/health'
+    )
+    if ([string]::IsNullOrWhiteSpace($BaseUrl) -or [string]::IsNullOrWhiteSpace($HealthPath)) { return '' }
+    $root = ([string]$BaseUrl).TrimEnd('/') -replace '/v1$',''
+    return ($root + '/' + ([string]$HealthPath).TrimStart('/'))
+}
+
+function Get-BootstrapAiProxyListeningProcessIds {
+    param([int]$Port)
+    $ids = New-Object System.Collections.Generic.List[int]
+    if ($Port -le 0) { return @() }
+
+    try {
+        if (Get-Command -Name Get-NetTCPConnection -ErrorAction SilentlyContinue) {
+            $rows = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+            foreach ($row in $rows) {
+                $processId = [int]$row.OwningProcess
+                if ($processId -gt 0 -and -not @($ids.ToArray()).Contains($processId)) { $ids.Add($processId) | Out-Null }
+            }
+        }
+    } catch {
+    }
+
+    if ($ids.Count -eq 0) {
+        try {
+            $netstat = Join-Path $env:SystemRoot 'System32\netstat.exe'
+            if (-not (Test-Path -LiteralPath $netstat)) { $netstat = 'netstat.exe' }
+            $lines = @(& $netstat -ano -p tcp 2>$null)
+            foreach ($line in $lines) {
+                if ([string]$line -match ("(?i)^\s*TCP\s+\S+:{0}\s+\S+\s+LISTENING\s+(\d+)\s*$" -f [regex]::Escape([string]$Port))) {
+                    $processId = [int]$matches[1]
+                    if ($processId -gt 0 -and -not @($ids.ToArray()).Contains($processId)) { $ids.Add($processId) | Out-Null }
+                }
+            }
+        } catch {
+        }
+    }
+
+    return @($ids.ToArray())
+}
+
+function Get-BootstrapAiProxyProcessNames {
+    param([int[]]$ProcessIds = @())
+    $names = New-Object System.Collections.Generic.List[string]
+    foreach ($processId in @($ProcessIds)) {
+        try {
+            $proc = Get-Process -Id ([int]$processId) -ErrorAction Stop
+            $name = [string]$proc.ProcessName
+            if (-not [string]::IsNullOrWhiteSpace($name) -and -not @($names.ToArray()).Contains($name)) { $names.Add($name) | Out-Null }
+        } catch {
+        }
+    }
+    return @($names.ToArray())
+}
+
+function Invoke-BootstrapAiProxyHttpProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [AllowNull()][string]$ApiKey = '',
+        [int]$TimeoutMs = 3000
+    )
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $status = 'unknown'
+    $statusCode = 0
+    $errorCode = ''
+    if ([string]::IsNullOrWhiteSpace($Url)) {
+        $started.Stop()
+        return [ordered]@{ status = 'not-applicable'; statusCode = 0; errorCode = ''; durationMs = [long]$started.ElapsedMilliseconds }
+    }
+
+    try {
+        $request = [System.Net.WebRequest]::Create($Url)
+        $request.Method = 'GET'
+        $request.Timeout = $TimeoutMs
+        $request.ReadWriteTimeout = $TimeoutMs
+        try { $request.Proxy = $null } catch { }
+        if (-not [string]::IsNullOrWhiteSpace($ApiKey)) {
+            $request.Headers['Authorization'] = 'Bearer ' + [string]$ApiKey
+        }
+        $response = $request.GetResponse()
+        try {
+            $statusCode = [int]$response.StatusCode
+            $status = if ($statusCode -ge 200 -and $statusCode -lt 300) { 'ok' } elseif ($statusCode -eq 401 -or $statusCode -eq 403) { 'rejected' } else { 'error' }
+        } finally {
+            if ($response) { $response.Close(); $response.Dispose() }
+        }
+    } catch [System.Net.WebException] {
+        $errorCode = [string]$_.Exception.Status
+        $response = $_.Exception.Response
+        if ($response) {
+            try {
+                $statusCode = [int]$response.StatusCode
+                $status = if ($statusCode -eq 401 -or $statusCode -eq 403) { 'rejected' } else { 'error' }
+            } finally {
+                $response.Close()
+                $response.Dispose()
+            }
+        } elseif ($_.Exception.Status -eq [System.Net.WebExceptionStatus]::Timeout) {
+            $status = 'timeout'
+        } else {
+            $status = 'unreachable'
+        }
+    } catch {
+        $errorCode = 'exception'
+        $status = 'error'
+    } finally {
+        $started.Stop()
+    }
+
+    return [ordered]@{
+        status = $status
+        statusCode = [int]$statusCode
+        errorCode = $errorCode
+        durationMs = [long]$started.ElapsedMilliseconds
+    }
+}
+
+function Get-BootstrapAiProxyRuntimeProbe {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][string]$EnvPath,
+        [int]$TimeoutMs = 3000
+    )
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $port = [int]$CatalogEntry['Port']
+    $runtime = [string]$CatalogEntry['Runtime']
+    $healthUrl = Get-BootstrapAiProxyHealthUrl -BaseUrl ([string]$CatalogEntry['BaseUrl']) -HealthPath ([string]$CatalogEntry['HealthPath'])
+    $modelsUrl = Get-BootstrapAiProxyModelsUrl -BaseUrl ([string]$CatalogEntry['BaseUrl'])
+    $apiKey = ''
+    if (Test-Path -LiteralPath $EnvPath) {
+        try {
+            $envMap = Read-BootstrapDotEnvFile -Path $EnvPath
+            if (Test-BootstrapMapContainsKey -Map $envMap -Key 'API_KEY') { $apiKey = [string]$envMap['API_KEY'] }
+        } catch {
+            $apiKey = ''
+        }
+    }
+
+    if ($port -le 0 -or $runtime -eq 'tauri') {
+        $started.Stop()
+        return [ordered]@{
+            listening = $false
+            pid = @()
+            processName = @()
+            healthStatus = 'not-applicable'
+            healthStatusCode = 0
+            modelsStatus = 'not-applicable'
+            modelsStatusCode = 0
+            healthUrl = ''
+            modelsUrl = ''
+            runtimeAvailable = $false
+            durationMs = [long]$started.ElapsedMilliseconds
+        }
+    }
+
+    $pids = @(Get-BootstrapAiProxyListeningProcessIds -Port $port)
+    $listening = ($pids.Count -gt 0)
+    $health = [ordered]@{ status = 'unreachable'; statusCode = 0; errorCode = ''; durationMs = 0 }
+    $models = [ordered]@{ status = 'unreachable'; statusCode = 0; errorCode = ''; durationMs = 0 }
+    if ($listening) {
+        $health = Invoke-BootstrapAiProxyHttpProbe -Url $healthUrl -ApiKey $apiKey -TimeoutMs $TimeoutMs
+        $models = Invoke-BootstrapAiProxyHttpProbe -Url $modelsUrl -ApiKey $apiKey -TimeoutMs $TimeoutMs
+    }
+    $started.Stop()
+    return [ordered]@{
+        listening = [bool]$listening
+        pid = @($pids)
+        processName = @(Get-BootstrapAiProxyProcessNames -ProcessIds $pids)
+        healthStatus = [string]$health['status']
+        healthStatusCode = [int]$health['statusCode']
+        modelsStatus = [string]$models['status']
+        modelsStatusCode = [int]$models['statusCode']
+        healthUrl = $healthUrl
+        modelsUrl = $modelsUrl
+        runtimeAvailable = ([string]$models['status'] -eq 'ok')
+        durationMs = [long]$started.ElapsedMilliseconds
+    }
+}
+
+function Get-BootstrapAiProxyToolDoctorReport {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [string]$InstallRoot = ''
+    )
+    $name = Normalize-BootstrapAiToolName -ToolName $ToolName
+    $catalog = Get-BootstrapAiProxyCatalog
+    if (-not $catalog.Contains($name)) { return $null }
+    $entry = $catalog[$name]
+    $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName $name -InstallRoot $InstallRoot
+    $envPath = Join-Path $sourceRoot '.env'
+    $installed = Test-Path -LiteralPath (Join-Path $sourceRoot '.git')
+    $filesConfigured = Test-Path -LiteralPath $envPath
+    $runtimeReady = $false
+    $runtime = [string]$entry['Runtime']
+    if ($runtime -eq 'node' -or $runtime -eq 'tauri') {
+        $runtimeReady = Test-Path -LiteralPath (Join-Path $sourceRoot 'node_modules')
+    } elseif ($runtime -eq 'go') {
+        $runtimeReady = (Test-Path -LiteralPath (Join-Path $sourceRoot 'bin\mimo-ai-proxy.exe')) -or (Test-Path -LiteralPath (Join-Path $sourceRoot 'go.mod'))
+    }
+    $probe = Get-BootstrapAiProxyRuntimeProbe -ToolName $name -CatalogEntry $entry -SourceRoot $sourceRoot -EnvPath $envPath -TimeoutMs 3000
+    $httpProxy = ([int]$entry['Port'] -gt 0 -and $runtime -ne 'tauri')
+    $configured = if ($httpProxy) { ($installed -and $filesConfigured -and $runtimeReady -and [bool]$probe['runtimeAvailable']) } else { ($installed -and $runtimeReady) }
+    $status = 'missing'
+    if ($configured) {
+        $status = 'configured'
+    } elseif ($installed -and $filesConfigured -and $runtimeReady -and $httpProxy -and [string]$probe['modelsStatus'] -eq 'rejected') {
+        $status = 'auth-failed'
+    } elseif ($installed -and $filesConfigured -and $runtimeReady -and $httpProxy -and [bool]$probe['listening']) {
+        $status = 'unhealthy'
+    } elseif ($installed -and $filesConfigured -and $runtimeReady -and $httpProxy) {
+        $status = 'start-required'
+    } elseif ($installed -or $filesConfigured) {
+        $status = 'warning'
+    }
+    $recommendedAction = switch ($status) {
+        'configured' { '' ; break }
+        'auth-failed' { ("Verifique o .env local de {0} e reinicie o proxy; valores permanecem redigidos." -f $name); break }
+        'unhealthy' { ("{0} esta ouvindo, mas /v1/models falhou; verifique upstream/login local e logs do proxy." -f $name); break }
+        'start-required' { ("Execute install-cli.ps1 --tool {0} --start --yes --no-admin ou o componente ai-proxy-suite." -f $name); break }
+        'warning' { ("Execute componente {0} para concluir clone/deps/.env." -f $name); break }
+        default { ("Execute componente {0} para instalar e configurar." -f $name) }
+    }
+    return [ordered]@{
+        id = $name
+        name = [string]$entry['DisplayName']
+        status = $status
+        installed = [bool]$installed
+        configured = [bool]$configured
+        filesConfigured = [bool]$filesConfigured
+        runtimeReady = [bool]$runtimeReady
+        runtimeAvailable = [bool]$probe['runtimeAvailable']
+        listening = [bool]$probe['listening']
+        pid = @($probe['pid'])
+        processName = @($probe['processName'])
+        healthStatus = [string]$probe['healthStatus']
+        healthStatusCode = [int]$probe['healthStatusCode']
+        modelsStatus = [string]$probe['modelsStatus']
+        modelsStatusCode = [int]$probe['modelsStatusCode']
+        healthUrl = [string]$probe['healthUrl']
+        modelsUrl = [string]$probe['modelsUrl']
+        runtimeProbeDurationMs = [long]$probe['durationMs']
+        recommendedAction = $recommendedAction
+        sourceRoot = $sourceRoot
+        envPath = $(if ($filesConfigured) { $envPath } else { '' })
+        repo = [string]$entry['GitHubRepo']
+        port = [int]$entry['Port']
+        baseUrl = [string]$entry['BaseUrl']
+        defaultModel = [string]$entry['DefaultModel']
+        preferredDefault = [bool]$entry['PreferredDefault']
+        startCommand = [string]$entry['StartCommand']
+        loginCommand = [string]$entry['LoginCommand']
+    }
+}
+
+function New-BootstrapAiProxySuiteDoctorReport {
+    param([string]$InstallRoot = '')
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $catalog = Get-BootstrapAiProxyCatalog
+    $items = @($catalog.Keys | ForEach-Object { Get-BootstrapAiProxyToolDoctorReport -ToolName ([string]$_) -InstallRoot $InstallRoot })
+    $started.Stop()
+    $httpProviders = @($items | Where-Object { [int]$_['port'] -gt 0 })
+    $configured = @($httpProviders | Where-Object { [string]$_['status'] -eq 'configured' })
+    $desktopConfigured = @($items | Where-Object { [int]$_['port'] -le 0 -and [string]$_['status'] -eq 'configured' })
+    $runtimeReady = @($items | Where-Object { [bool]$_['runtimeReady'] })
+    $startRequired = @($items | Where-Object { [string]$_['status'] -eq 'start-required' })
+    $authFailed = @($items | Where-Object { [string]$_['status'] -eq 'auth-failed' })
+    $unhealthy = @($items | Where-Object { [string]$_['status'] -eq 'unhealthy' })
+    $partial = @($items | Where-Object { [string]$_['status'] -eq 'warning' })
+    $status = 'missing'
+    if ($httpProviders.Count -gt 0 -and $configured.Count -eq $httpProviders.Count) {
+        $status = 'ready'
+    } elseif ($unhealthy.Count -gt 0) {
+        $status = 'degraded'
+    } elseif ($startRequired.Count -gt 0 -or $authFailed.Count -gt 0) {
+        $status = 'start-required'
+    } elseif ($runtimeReady.Count -gt 0 -or $partial.Count -gt 0) {
+        $status = 'warning'
+    }
+    return [ordered]@{
+        schemaVersion = 1
+        status = $status
+        durationMs = [long]$started.ElapsedMilliseconds
+        defaultProvider = 'kimiproxy'
+        defaultBaseUrl = [string]$catalog['kimiproxy']['BaseUrl']
+        defaultModel = [string]$catalog['kimiproxy']['DefaultModel']
+        configuredProviders = [int]$configured.Count
+        runtimeReadyProviders = [int]$runtimeReady.Count
+        startRequiredProviders = [int]$startRequired.Count
+        authFailedProviders = [int]$authFailed.Count
+        unhealthyProviders = [int]$unhealthy.Count
+        desktopConfiguredProviders = [int]$desktopConfigured.Count
+        operationalProviders = @($configured | ForEach-Object { [string]$_['id'] })
+        desktopConfiguredProviderIds = @($desktopConfigured | ForEach-Object { [string]$_['id'] })
+        startRequiredProviderIds = @($startRequired | ForEach-Object { [string]$_['id'] })
+        unhealthyProviderIds = @($unhealthy | ForEach-Object { [string]$_['id'] })
+        providers = @($items)
+        manifestPath = Get-BootstrapAiProxyManifestPath -InstallRoot $InstallRoot
+    }
+}
+
+function Get-BootstrapAiProxyStartPlan {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [string]$InstallRoot = ''
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName $ToolName -InstallRoot $root
+    $runtime = [string]$CatalogEntry['Runtime']
+    $exe = ''
+    $args = @()
+    if ($runtime -eq 'node') {
+        $exe = Get-BootstrapNpmCommandForAiTools
+        $args = @('run','start')
+    } elseif ($runtime -eq 'go') {
+        $bin = Join-Path (Join-Path $sourceRoot 'bin') 'mimo-ai-proxy.exe'
+        if (Test-Path -LiteralPath $bin) {
+            $exe = $bin
+            $args = @()
+        } else {
+            $go = Resolve-CommandPath -Name 'go'
+            if ($go) {
+                $exe = $go
+                $args = @('run','main.go')
+            }
+        }
+    } elseif ($runtime -eq 'tauri') {
+        $exe = ''
+        $args = @()
+    }
+
+    $commandText = if ([string]::IsNullOrWhiteSpace($exe)) { '' } else { ((@($exe) + @($args)) -join ' ') }
+    return [ordered]@{
+        tool = $ToolName
+        runtime = $runtime
+        exe = $exe
+        args = @($args)
+        workingDirectory = $sourceRoot
+        command = $commandText
+        port = [int]$CatalogEntry['Port']
+        baseUrl = [string]$CatalogEntry['BaseUrl']
+        modelsUrl = Get-BootstrapAiProxyModelsUrl -BaseUrl ([string]$CatalogEntry['BaseUrl'])
+    }
+}
+
+function Wait-BootstrapAiProxyRuntime {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][string]$EnvPath,
+        [int]$TimeoutMs = 30000
+    )
+    $started = [Diagnostics.Stopwatch]::StartNew()
+    $probe = Get-BootstrapAiProxyRuntimeProbe -ToolName $ToolName -CatalogEntry $CatalogEntry -SourceRoot $SourceRoot -EnvPath $EnvPath -TimeoutMs 3000
+    while (-not [bool]$probe['runtimeAvailable'] -and [long]$started.ElapsedMilliseconds -lt $TimeoutMs) {
+        if ([string]$probe['modelsStatus'] -eq 'rejected') { break }
+        Start-Sleep -Milliseconds 750
+        $probe = Get-BootstrapAiProxyRuntimeProbe -ToolName $ToolName -CatalogEntry $CatalogEntry -SourceRoot $SourceRoot -EnvPath $EnvPath -TimeoutMs 3000
+    }
+    $started.Stop()
+    $probe['waitDurationMs'] = [long]$started.ElapsedMilliseconds
+    return $probe
+}
+
+function Start-BootstrapAiProxyTool {
+    param(
+        [Parameter(Mandatory = $true)][string]$ToolName,
+        [string]$InstallRoot = '',
+        [switch]$DryRun,
+        [int]$TimeoutMs = 30000
+    )
+    $name = Normalize-BootstrapAiToolName -ToolName $ToolName
+    $catalog = Get-BootstrapAiProxyCatalog
+    if (-not $catalog.Contains($name)) {
+        return (New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'blocked' -InstallRoot $InstallRoot -Message 'Proxy local desconhecido.' -Docs '')
+    }
+    $entry = $catalog[$name]
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName $name -InstallRoot $root
+    $envPath = Join-Path $sourceRoot '.env'
+    $runtime = [string]$entry['Runtime']
+    $plan = Get-BootstrapAiProxyStartPlan -ToolName $name -CatalogEntry $entry -InstallRoot $root
+
+    if ([int]$entry['Port'] -le 0 -or $runtime -eq 'tauri') {
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'skipped' -InstallRoot $root -Message 'Runtime desktop sem API HTTP local para iniciar via PhaseZero.' -Docs ([string]$entry['DocsUrl'])
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+    }
+
+    if ($DryRun) {
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'planned' -InstallRoot $root -Message ("Start {0}: {1}; validar {2}" -f $name, [string]$plan['command'], [string]$plan['modelsUrl']) -Docs ([string]$entry['DocsUrl'])
+        $result['startPlan'] = [ordered]@{
+            command = [string]$plan['command']
+            workingDirectory = [string]$plan['workingDirectory']
+            port = [int]$plan['port']
+            modelsUrl = [string]$plan['modelsUrl']
+        }
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+    }
+
+    $doctor = Get-BootstrapAiProxyToolDoctorReport -ToolName $name -InstallRoot $root
+    if ([bool]$doctor['runtimeAvailable']) {
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'running' -InstallRoot $root -Message ("{0} ja responde em {1}." -f $name, [string]$doctor['modelsUrl']) -Docs ([string]$entry['DocsUrl'])
+        $result['runtimeProbe'] = [ordered]@{
+            listening = [bool]$doctor['listening']
+            pid = @($doctor['pid'])
+            healthStatus = [string]$doctor['healthStatus']
+            modelsStatus = [string]$doctor['modelsStatus']
+            modelsUrl = [string]$doctor['modelsUrl']
+        }
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+    }
+
+    if (-not [bool]$doctor['installed'] -or -not [bool]$doctor['filesConfigured'] -or -not [bool]$doctor['runtimeReady']) {
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'blocked' -InstallRoot $root -Message ("{0} nao esta pronto para start: instale clone/deps/.env antes." -f $name) -Docs ([string]$entry['DocsUrl'])
+        $result['readiness'] = [ordered]@{
+            installed = [bool]$doctor['installed']
+            filesConfigured = [bool]$doctor['filesConfigured']
+            runtimeReady = [bool]$doctor['runtimeReady']
+        }
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+    }
+
+    if ([bool]$doctor['listening']) {
+        $status = if ([string]$doctor['modelsStatus'] -eq 'rejected') { 'auth-failed' } else { 'error' }
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status $status -InstallRoot $root -Message ("{0} ja esta ouvindo, mas /v1/models esta {1} ({2}); nao iniciei processo duplicado." -f $name, [string]$doctor['modelsStatus'], [int]$doctor['modelsStatusCode']) -Docs ([string]$entry['DocsUrl'])
+        $result['runtimeProbe'] = [ordered]@{
+            listening = [bool]$doctor['listening']
+            pid = @($doctor['pid'])
+            healthStatus = [string]$doctor['healthStatus']
+            healthStatusCode = [int]$doctor['healthStatusCode']
+            modelsStatus = [string]$doctor['modelsStatus']
+            modelsStatusCode = [int]$doctor['modelsStatusCode']
+            modelsUrl = [string]$doctor['modelsUrl']
+        }
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$plan['exe'])) {
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'blocked' -InstallRoot $root -Message ("Runtime de start indisponivel para {0}." -f $name) -Docs ([string]$entry['DocsUrl'])
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+    }
+
+    $logRoot = Get-BootstrapAiProxyLogRoot -InstallRoot $root
+    [void][System.IO.Directory]::CreateDirectory($logRoot)
+    $stdoutPath = Join-Path $logRoot ("{0}-{1}.out.log" -f $name, $script:RunId)
+    $stderrPath = Join-Path $logRoot ("{0}-{1}.err.log" -f $name, $script:RunId)
+    $proc = $null
+    $startError = $null
+    try {
+        $startParams = @{
+            FilePath = [string]$plan['exe']
+            WorkingDirectory = [string]$plan['workingDirectory']
+            RedirectStandardOutput = $stdoutPath
+            RedirectStandardError = $stderrPath
+            WindowStyle = 'Hidden'
+            PassThru = $true
+            ErrorAction = 'Stop'
+        }
+        $startArgs = @($plan['args'] | Where-Object { $null -ne $_ -and -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($startArgs.Count -gt 0) { $startParams['ArgumentList'] = $startArgs }
+        $proc = Start-Process @startParams
+    } catch {
+        $startError = $_
+        if ($runtime -eq 'go' -and [string]$plan['exe'] -match 'mimo-ai-proxy\.exe$') {
+            $go = Resolve-CommandPath -Name 'go'
+            if ($go) {
+                try {
+                    $fallbackParams = @{}
+                    foreach ($key in @($startParams.Keys)) { $fallbackParams[$key] = $startParams[$key] }
+                    $fallbackParams['FilePath'] = $go
+                    $fallbackParams['ArgumentList'] = @('run','main.go')
+                    $proc = Start-Process @fallbackParams
+                    $plan['command'] = ('{0} run main.go' -f $go)
+                } catch {
+                    $startError = $_
+                }
+            }
+        }
+    }
+    if (-not $proc) {
+        $startMessage = if ($startError) { (Get-BootstrapCleanNativeText -Text $startError.Exception.Message -MaxLength 240) } else { 'erro desconhecido' }
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'error' -InstallRoot $root -Message ("Falha ao iniciar {0}: {1}" -f $name, $startMessage) -Docs ([string]$entry['DocsUrl'])
+        $result['logPath'] = $stdoutPath
+        $result['errorLogPath'] = $stderrPath
+        return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+    }
+
+    $wait = Wait-BootstrapAiProxyRuntime -ToolName $name -CatalogEntry $entry -SourceRoot $sourceRoot -EnvPath $envPath -TimeoutMs $TimeoutMs
+    $status = if ([bool]$wait['runtimeAvailable']) { 'started' } elseif ([string]$wait['modelsStatus'] -eq 'rejected') { 'auth-failed' } else { 'error' }
+    $message = if ($status -eq 'started') {
+        ("{0} responde em {1}." -f $name, [string]$wait['modelsUrl'])
+    } elseif ($status -eq 'auth-failed') {
+        ("{0} iniciou, mas /v1/models rejeitou autenticacao local redigida." -f $name)
+    } else {
+        ("{0} iniciou PID {1}, mas /v1/models nao respondeu dentro de {2}ms." -f $name, [int]$proc.Id, $TimeoutMs)
+    }
+    $statePath = Get-BootstrapAiProxyRuntimeStatePath -ToolName $name -InstallRoot $root
+    $state = [ordered]@{
+        tool = $name
+        status = $status
+        pid = [int]$proc.Id
+        startedAt = (Get-Date).ToString('o')
+        port = [int]$entry['Port']
+        baseUrl = [string]$entry['BaseUrl']
+        modelsUrl = [string]$wait['modelsUrl']
+        healthStatus = [string]$wait['healthStatus']
+        modelsStatus = [string]$wait['modelsStatus']
+        logPath = $stdoutPath
+        errorLogPath = $stderrPath
+    }
+    try { Write-BootstrapJsonFile -Path $statePath -Value $state } catch { }
+
+    $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status $status -InstallRoot $root -Message $message -Docs ([string]$entry['DocsUrl'])
+    $result['pid'] = [int]$proc.Id
+    $result['logPath'] = $stdoutPath
+    $result['errorLogPath'] = $stderrPath
+    $result['statePath'] = $statePath
+    $result['runtimeProbe'] = [ordered]@{
+        listening = [bool]$wait['listening']
+        pid = @($wait['pid'])
+        healthStatus = [string]$wait['healthStatus']
+        healthStatusCode = [int]$wait['healthStatusCode']
+        modelsStatus = [string]$wait['modelsStatus']
+        modelsStatusCode = [int]$wait['modelsStatusCode']
+        modelsUrl = [string]$wait['modelsUrl']
+        waitDurationMs = [long]$wait['waitDurationMs']
+    }
+    return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+}
+
+function Start-BootstrapAiProxySuite {
+    param(
+        [string]$InstallRoot = '',
+        [switch]$DryRun,
+        [int]$TimeoutMs = 30000
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $catalog = Get-BootstrapAiProxyCatalog
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($catalog.Keys)) {
+        $entry = $catalog[$name]
+        if ([int]$entry['Port'] -le 0) { continue }
+        $start = Start-BootstrapAiProxyTool -ToolName ([string]$name) -InstallRoot $root -DryRun:$DryRun -TimeoutMs $TimeoutMs
+        $results.Add([ordered]@{
+            tool = [string]$start['tool']
+            status = [string]$start['status']
+            port = [int]$start['port']
+            baseUrl = [string]$start['baseUrl']
+            modelsUrl = if (Test-BootstrapMapContainsKey -Map $start -Key 'runtimeProbe') { [string]$start['runtimeProbe']['modelsUrl'] } elseif (Test-BootstrapMapContainsKey -Map $start -Key 'startPlan') { [string]$start['startPlan']['modelsUrl'] } else { Get-BootstrapAiProxyModelsUrl -BaseUrl ([string]$start['baseUrl']) }
+            pid = if (Test-BootstrapMapContainsKey -Map $start -Key 'pid') { [int]$start['pid'] } else { 0 }
+            logPath = if (Test-BootstrapMapContainsKey -Map $start -Key 'logPath') { [string]$start['logPath'] } else { '' }
+            message = [string]$start['message']
+        }) | Out-Null
+    }
+    $items = @($results.ToArray())
+    $ok = @($items | Where-Object { [string]$_['status'] -in @('started','running','planned') })
+    $bad = @($items | Where-Object { [string]$_['status'] -in @('blocked','error','auth-failed','unhealthy') })
+    $status = if ($DryRun) { 'planned' } elseif ($bad.Count -eq 0 -and $ok.Count -gt 0) { 'started' } elseif ($bad.Count -gt 0) { 'error' } else { 'missing' }
+    $message = if ($DryRun) {
+        ("Start AI proxy suite planejado: {0} provider(s) HTTP." -f $items.Count)
+    } else {
+        ("Start AI proxy suite: {0}/{1} provider(s) OK." -f $ok.Count, $items.Count)
+    }
+    $result = New-BootstrapAiToolResult -ToolName 'ai-proxy-suite' -Action 'start' -Status $status -InstallRoot $root -Message $message -Docs 'https://github.com/pedrofariasx/kimiproxy'
+    $result['startResults'] = @($items)
+    if (-not $DryRun) {
+        $result['doctor'] = New-BootstrapAiProxySuiteDoctorReport -InstallRoot $root
+    }
+    return $result
 }
 
 function Add-BootstrapAionUiPlanField {
@@ -15211,7 +16795,7 @@ function Set-BootstrapAntigravityWorkflows {
 function Invoke-BootstrapAiToolAction {
     param(
         [Parameter(Mandatory = $true)][string]$ToolName,
-        [ValidateSet('install','validate','configure','uninstall','gain','docs')][string]$Action = 'validate',
+        [ValidateSet('install','validate','configure','start','uninstall','gain','docs')][string]$Action = 'validate',
         [string]$InstallRoot = '',
         [string]$ProjectRoot = '',
         [switch]$DryRun,
@@ -15240,6 +16824,16 @@ function Invoke-BootstrapAiToolAction {
         return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'manual' -InstallRoot $root -ProjectRoot $project -Message ([string]$entry['DocsUrl']) -Docs ([string]$entry['DocsUrl']))
     }
 
+    if ($Action -eq 'start') {
+        if ($name -eq 'ai-proxy-suite') {
+            return (Start-BootstrapAiProxySuite -InstallRoot $root -DryRun:$DryRun -TimeoutMs 30000)
+        }
+        if (Test-BootstrapAiProxyToolName -ToolName $name) {
+            return (Start-BootstrapAiProxyTool -ToolName $name -InstallRoot $root -DryRun:$DryRun -TimeoutMs 30000)
+        }
+        return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'manual' -InstallRoot $root -ProjectRoot $project -Message 'Start gerenciado existe apenas para proxies locais PhaseZero.' -Docs ([string]$entry['DocsUrl']))
+    }
+
     if ($Action -eq 'gain') {
         if ($name -ne 'rtk') {
             return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status 'blocked' -InstallRoot $root -ProjectRoot $project -Message 'gain existe apenas para RTK.' -Docs ([string]$entry['DocsUrl']))
@@ -15257,6 +16851,21 @@ function Invoke-BootstrapAiToolAction {
     }
 
     if ($Action -eq 'configure') {
+        if ($name -eq 'ai-proxy-suite') {
+            $defaults = Set-BootstrapAiProxyIdeDefault -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun
+            $status = [string]$defaults['status']
+            $result = New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'AI proxy suite configurada para IDEs: Kimi default, demais providers selecionaveis.' -Docs ([string]$entry['DocsUrl'])
+            $result['defaultProvider'] = [string]$defaults['defaultProvider']
+            $result['defaultBaseUrl'] = [string]$defaults['defaultBaseUrl']
+            $result['defaultModel'] = [string]$defaults['defaultModel']
+            $result['providers'] = @($defaults['providers'])
+            $result['targets'] = $defaults['targetUpdates']
+            $result['manifestPath'] = [string]$defaults['manifestPath']
+            return $result
+        }
+        if (Test-BootstrapAiProxyToolName -ToolName $name) {
+            return (Set-BootstrapAiProxyEnvironment -ToolName $name -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun)
+        }
         if ($name -eq 'antigravity-workflows') {
             return (Set-BootstrapAntigravityWorkflows -ProjectRoot $project -DryRun:$DryRun)
         }
@@ -15304,6 +16913,11 @@ function Invoke-BootstrapAiToolAction {
             'winget-official-exe' {
                 if ($name -eq 'aionui') { return (Install-BootstrapAionUiComponentPackage -CatalogEntry $entry -DryRun:$DryRun -NoAdmin:$NoAdmin) }
             }
+            'git-node-playwright-proxy' { return (Install-BootstrapAiProxyManagedTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            'git-node-proxy' { return (Install-BootstrapAiProxyManagedTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            'git-go-proxy' { return (Install-BootstrapAiProxyManagedTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            'git-tauri-app' { return (Install-BootstrapAiProxyManagedTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            'ai-proxy-suite' { return (Install-BootstrapAiProxySuiteManagedTool -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
         }
         $status = if ($DryRun) { 'planned' } else { 'manual' }
         return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message ([string]$entry['Notes']) -Docs ([string]$entry['DocsUrl']))
@@ -15325,6 +16939,22 @@ function Invoke-BootstrapAiToolAction {
             }
             'linux-release' {
                 if ($name -eq 'ai-usagebar') { return (Uninstall-BootstrapAiUsagebar -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            }
+            'git-node-playwright-proxy' {
+                $status = if ($DryRun) { 'planned' } else { 'manual' }
+                return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Remocao de proxy local preserva repo, profiles, .env e sessoes do navegador; remova manualmente se tiver backup.' -Docs ([string]$entry['DocsUrl']))
+            }
+            'git-node-proxy' {
+                $status = if ($DryRun) { 'planned' } else { 'manual' }
+                return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Remocao de proxy local preserva repo e .env; remova manualmente se tiver backup.' -Docs ([string]$entry['DocsUrl']))
+            }
+            'git-go-proxy' {
+                $status = if ($DryRun) { 'planned' } else { 'manual' }
+                return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Remocao de proxy local preserva repo e .env; remova manualmente se tiver backup.' -Docs ([string]$entry['DocsUrl']))
+            }
+            'git-tauri-app' {
+                $status = if ($DryRun) { 'planned' } else { 'manual' }
+                return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Remocao de app Tauri gerenciado preserva fonte local; remova manualmente se tiver backup.' -Docs ([string]$entry['DocsUrl']))
             }
         }
         $status = if ($DryRun) { 'planned' } else { 'manual' }
@@ -18531,6 +20161,36 @@ function Convert-BootstrapMcpServerToContinueYamlLines {
     return @($lines.ToArray())
 }
 
+function Convert-BootstrapContinueModelToYamlLine {
+    param([Parameter(Mandatory = $true)][hashtable]$Model)
+
+    $modelData = ConvertTo-BootstrapHashtable -InputObject $Model
+    if (-not ($modelData -is [hashtable])) { return @() }
+    if ([string]::IsNullOrWhiteSpace([string]$modelData['name']) -or [string]::IsNullOrWhiteSpace([string]$modelData['model'])) {
+        return @()
+    }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add(('  - name: {0}' -f (Convert-BootstrapContinueScalarToYaml -Value $modelData['name'])))
+    foreach ($propertyName in @('provider','model','apiBase','apiKey')) {
+        if ($modelData.ContainsKey($propertyName) -and -not [string]::IsNullOrWhiteSpace([string]$modelData[$propertyName])) {
+            $lines.Add(('    {0}: {1}' -f $propertyName, (Convert-BootstrapContinueScalarToYaml -Value $modelData[$propertyName])))
+        }
+    }
+
+    if ($modelData.ContainsKey('roles') -and ($modelData['roles'] -is [System.Collections.IEnumerable]) -and -not ($modelData['roles'] -is [string])) {
+        $roles = @($modelData['roles'] | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        if ($roles.Count -gt 0) {
+            $lines.Add('    roles:')
+            foreach ($role in @($roles)) {
+                $lines.Add(('      - {0}' -f (Convert-BootstrapContinueScalarToYaml -Value $role)))
+            }
+        }
+    }
+
+    return @($lines.ToArray())
+}
+
 function Ensure-BootstrapContinueExtensionConfig {
     param([hashtable]$ResolvedTargets)
 
@@ -18564,6 +20224,22 @@ function Ensure-BootstrapContinueExtensionConfig {
     $yamlLines.Add('version: 1.0.0')
     $yamlLines.Add('schema: v1')
 
+    $modelLines = New-Object System.Collections.Generic.List[string]
+    if ($continueTarget.ContainsKey('models') -and ($continueTarget['models'] -is [System.Collections.IEnumerable]) -and -not ($continueTarget['models'] -is [string])) {
+        foreach ($model in @($continueTarget['models'])) {
+            foreach ($line in @(Convert-BootstrapContinueModelToYamlLine -Model (ConvertTo-BootstrapHashtable -InputObject $model))) {
+                $modelLines.Add($line)
+            }
+        }
+    }
+
+    if ($modelLines.Count -gt 0) {
+        $yamlLines.Add('models:')
+        foreach ($line in @($modelLines.ToArray())) {
+            $yamlLines.Add($line)
+        }
+    }
+
     $mcpLines = New-Object System.Collections.Generic.List[string]
     if ($continueTarget.ContainsKey('mcpServers') -and ($continueTarget['mcpServers'] -is [hashtable])) {
         foreach ($serverName in ($continueTarget['mcpServers'].Keys | Sort-Object)) {
@@ -18583,7 +20259,7 @@ function Ensure-BootstrapContinueExtensionConfig {
         }
     }
 
-    $summary.configured = ($envValues.Count -gt 0) -or ($mcpLines.Count -gt 0)
+    $summary.configured = ($envValues.Count -gt 0) -or ($mcpLines.Count -gt 0) -or ($modelLines.Count -gt 0)
     if (-not $summary.configured) {
         return $summary
     }
@@ -21196,6 +22872,21 @@ function Invoke-BootstrapComponent {
         'aionui' {
             Install-BootstrapAionUiComponent -State $State
         }
+        'ai-proxy-repo' {
+            $toolName = if ($componentDef.PSObject.Properties.Name -contains 'ToolName') { [string]$componentDef.ToolName } else { [string]$Name }
+            $catalog = Get-BootstrapAiToolCatalog
+            $normalizedToolName = Normalize-BootstrapAiToolName -ToolName $toolName
+            if (-not $catalog.Contains($normalizedToolName)) { throw "AI proxy desconhecido no componente '$Name': $toolName" }
+            $result = Install-BootstrapAiProxyManagedTool -ToolName $normalizedToolName -CatalogEntry $catalog[$normalizedToolName] -InstallRoot (Get-BootstrapAiInstallRoot -InstallRoot '') -ProjectRoot $PSScriptRoot -DryRun:([bool]$State.DryRun)
+            Write-Log ("AI proxy {0}: {1} ({2})" -f [string]$result['tool'], [string]$result['status'], [string]$result['baseUrl'])
+        }
+        'ai-proxy-suite' {
+            $summary = Install-BootstrapAiProxySuiteManagedTool -InstallRoot (Get-BootstrapAiInstallRoot -InstallRoot '') -ProjectRoot $PSScriptRoot -DryRun:([bool]$State.DryRun)
+            Write-Log ("AI proxy suite: {0}; manifest={1}; default={2} {3}" -f [string]$summary['status'], [string]$summary['manifestPath'], [string]$summary['defaultProvider'], [string]$summary['defaultModel'])
+            if (-not [bool]$State.DryRun -and [string]$summary['status'] -in @('error','blocked','auth-failed')) {
+                throw ("AI proxy suite nao ficou operacional: {0}" -f [string]$summary['status'])
+            }
+        }
         'winhance' {
             Ensure-BootstrapSystemCore -State $State
             Install-BootstrapWinhanceComponent -State $State -ComponentDef $componentDef | Out-Null
@@ -22458,6 +24149,7 @@ function New-BootstrapAiConfigDoctorReport {
     $mcpHealth = Get-BootstrapAiConfigMcpHealth
     $hermes = Get-BootstrapHermesAiConfigReport
     $openclaw = Get-BootstrapOpenClawAiConfigReport
+    $aiProxies = New-BootstrapAiProxySuiteDoctorReport
     $manual = (@($targets | Where-Object { [bool]$_['manualRequired'] }).Count -gt 0)
     $drift = @($targets | Where-Object { [string]$_['drift'] -eq 'drift' })
     $started.Stop()
@@ -22475,6 +24167,7 @@ function New-BootstrapAiConfigDoctorReport {
         manualRequired = [bool]$manual
         hermes = $hermes
         openclaw = $openclaw
+        aiProxies = $aiProxies
         aionui = Get-BootstrapAionUiDoctorReport
         aiUsagebar = New-BootstrapAiUsagebarDoctorReport
     }
@@ -22828,6 +24521,7 @@ function New-BootstrapDoctorReport {
     $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport
     $aionUiDoctor = Get-BootstrapAionUiDoctorReport -ValidateProviders
     $aiConfigDoctor = New-BootstrapAiConfigDoctorReport
+    $aiProxyDoctor = New-BootstrapAiProxySuiteDoctorReport
     $wslRepairDoctor = New-BootstrapWslRepairDoctorReport
 
     $rebootReasons = @()
@@ -22914,6 +24608,7 @@ function New-BootstrapDoctorReport {
         aiUsagebar = $aiUsagebarDoctor
         aionui = $aionUiDoctor
         aiConfig = $aiConfigDoctor
+        aiProxies = $aiProxyDoctor
         wslRepair = $wslRepairDoctor
         githubCliAuth = $githubCliAuth
         deck = $deckReport
@@ -23094,7 +24789,7 @@ function ConvertTo-BootstrapSupportSafeText {
     }
     $safe = $safe -replace '(?i)(sk-[A-Za-z0-9_\-]{8,})', '[redacted]'
     $safe = $safe -replace '(?i)(ghp_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]{8,})', '[redacted]'
-    $safe = $safe -replace '\b(GH_TOKEN|GITHUB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|OPENROUTER_API_KEY|DEEPSEEK_API_KEY|XAI_API_KEY|DASHSCOPE_API_KEY|QWEN_API_KEY|ZAI_API_KEY|ZAI_BASE_URL)\b', '[redacted-env-name]'
+    $safe = $safe -replace '\b(GH_TOKEN|GITHUB_TOKEN|OPENAI_API_KEY|OPENAI_BASE_URL|OPENAI_MODEL|ANTHROPIC_API_KEY|GEMINI_API_KEY|GOOGLE_API_KEY|OPENROUTER_API_KEY|DEEPSEEK_API_KEY|XAI_API_KEY|DASHSCOPE_API_KEY|QWEN_API_KEY|ZAI_API_KEY|ZAI_BASE_URL|MOONSHOT_API_KEY|MOONSHOT_BASE_URL|KIMIPROXY_API_KEY|KIMIPROXY_BASE_URL|KIMIPROXY_MODEL|QWENPROXY_API_KEY|QWENPROXY_BASE_URL|QWENPROXY_MODEL|DEEPSPROXY_API_KEY|DEEPSPROXY_BASE_URL|DEEPSPROXY_MODEL|MIMO_AI_PROXY_API_KEY|MIMO_AI_PROXY_BASE_URL|MIMO_AI_PROXY_MODEL|ANTIGRAVITY_OPENAI_ADAPTER_API_KEY|ANTIGRAVITY_OPENAI_ADAPTER_BASE_URL|ANTIGRAVITY_OPENAI_ADAPTER_MODEL|QWEN_EMAIL|QWEN_PASSWORD|SERVICE_TOKEN|SERVICE_TOKENS|USER_ID|USER_IDS|XIAOMI_CHATBOT_PH|XIAOMI_CHATBOT_PHS|MIMO_SERVICE_TOKEN|MIMO_SERVICE_TOKENS|MIMO_USER_ID|MIMO_USER_IDS|ANTIGRAVITY_UPSTREAM_API_KEY|ANTIGRAVITY_UPSTREAM_URL)\b', '[redacted-env-name]'
     $safe = $safe -replace '(?i)(bearer\s+)[A-Za-z0-9._\-]+', '$1[redacted]'
     $ipv4Pattern = '\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b'
     $safe = [regex]::Replace($safe, $ipv4Pattern, {
@@ -23231,6 +24926,17 @@ function New-BootstrapSupportBundle {
             $aionUiDoctor = $null
         }
         if ($null -eq $aionUiDoctor) { $aionUiDoctor = Get-BootstrapAionUiDoctorReport }
+        $aiProxyDoctor = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('aiProxies')) {
+                $aiProxyDoctor = $DoctorReport['aiProxies']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['aiProxies']) {
+                $aiProxyDoctor = $DoctorReport.aiProxies
+            }
+        } catch {
+            $aiProxyDoctor = $null
+        }
+        if ($null -eq $aiProxyDoctor) { $aiProxyDoctor = New-BootstrapAiProxySuiteDoctorReport }
         $aiConfigDoctor = $null
         try {
             if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('aiConfig')) {
@@ -23260,6 +24966,7 @@ function New-BootstrapSupportBundle {
         Write-BootstrapJsonFile -Path (Join-Path $staging 'secrets-doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $secretsDoctor -Name 'secretsDoctor')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-usagebar.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiUsagebarDoctor -Name 'aiUsagebar')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'aionui.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aionUiDoctor -Name 'aionui')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-proxy-suite.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiProxyDoctor -Name 'aiProxies')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-config.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiConfigDoctor -Name 'aiConfig')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'ide-targets.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $aiConfigDoctor -Name 'targets' -Default @()) -Name 'ideTargets')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'mcp-health.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value (Get-BootstrapNamedValue -Object $aiConfigDoctor -Name 'mcps' -Default ([ordered]@{})) -Name 'mcpHealth')
@@ -23285,7 +24992,7 @@ function New-BootstrapSupportBundle {
         if (Test-Path -LiteralPath $DestinationPath) { Remove-Item -LiteralPath $DestinationPath -Force }
         Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $DestinationPath -Force
         $fileInfo = Get-Item -LiteralPath $DestinationPath
-        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','aionui.json','ai-config.json','ide-targets.json','mcp-health.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
+        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','aionui.json','ai-proxy-suite.json','ai-config.json','ide-targets.json','mcp-health.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
         $started.Stop()
         return [ordered]@{
             path = [string]$fileInfo.FullName

@@ -2371,13 +2371,14 @@ function Get-UiBrush {
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
                 <TextBlock Grid.Row="0" x:Name="RunTitleLabel" Style="{StaticResource PageTitle}" Text="Execução"/>
 
                 <!-- Action bar -->
-                <Border Grid.Row="1" Background="#1A1D2E" CornerRadius="10" Padding="16,12" Margin="0,0,0,16">
+                <Border Grid.Row="1" Background="#1A1D2E" CornerRadius="10" Padding="16,12" Margin="0,0,0,12">
                     <DockPanel>
                         <Button x:Name="StartRunButton" DockPanel.Dock="Right" Style="{StaticResource PrimaryBtn}"
                                 Content="▶  Iniciar Execução" FontSize="15" Height="40"/>
@@ -2390,8 +2391,38 @@ function Get-UiBrush {
                     </DockPanel>
                 </Border>
 
+                <!-- Run timeline -->
+                <Border Grid.Row="2" Background="#1A1D2E" CornerRadius="10" Padding="16,12" Margin="0,0,0,12">
+                    <StackPanel x:Name="RunTimelineBar" Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel Orientation="Vertical" Margin="0,0,28,0">
+                            <Border x:Name="RunTimelineStep1Dot" Width="14" Height="14" CornerRadius="7" Background="#3A405A" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="RunTimelineStep1Label" Text="Preparando" Foreground="#94A3B8" FontSize="11"/>
+                        </StackPanel>
+                        <TextBlock Text="—" Foreground="#3A405A" VerticalAlignment="Top" Margin="0,2,28,0" FontSize="14"/>
+                        <StackPanel Orientation="Vertical" Margin="0,0,28,0">
+                            <Border x:Name="RunTimelineStep2Dot" Width="14" Height="14" CornerRadius="7" Background="#3A405A" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="RunTimelineStep2Label" Text="Dry-run" Foreground="#94A3B8" FontSize="11"/>
+                        </StackPanel>
+                        <TextBlock Text="—" Foreground="#3A405A" VerticalAlignment="Top" Margin="0,2,28,0" FontSize="14"/>
+                        <StackPanel Orientation="Vertical" Margin="0,0,28,0">
+                            <Border x:Name="RunTimelineStep3Dot" Width="14" Height="14" CornerRadius="7" Background="#3A405A" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="RunTimelineStep3Label" Text="Executando" Foreground="#94A3B8" FontSize="11"/>
+                        </StackPanel>
+                        <TextBlock Text="—" Foreground="#3A405A" VerticalAlignment="Top" Margin="0,2,28,0" FontSize="14"/>
+                        <StackPanel Orientation="Vertical" Margin="0,0,28,0">
+                            <Border x:Name="RunTimelineStep4Dot" Width="14" Height="14" CornerRadius="7" Background="#3A405A" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="RunTimelineStep4Label" Text="result.json" Foreground="#94A3B8" FontSize="11"/>
+                        </StackPanel>
+                        <TextBlock Text="—" Foreground="#3A405A" VerticalAlignment="Top" Margin="0,2,28,0" FontSize="14"/>
+                        <StackPanel Orientation="Vertical" Margin="0,0,0,0">
+                            <Border x:Name="RunTimelineStep5Dot" Width="14" Height="14" CornerRadius="7" Background="#3A405A" Margin="0,0,0,4"/>
+                            <TextBlock x:Name="RunTimelineStep5Label" Text="Bundle/Logs" Foreground="#94A3B8" FontSize="11"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
                 <!-- Log area -->
-                <Border Grid.Row="2" Style="{StaticResource Card}">
+                <Border Grid.Row="3" Style="{StaticResource Card}">
                     <DockPanel>
                         <TextBlock x:Name="RunStatusLabel" DockPanel.Dock="Top" Foreground="#94A3B8" FontSize="12" Margin="0,0,0,8"/>
                         <TextBox x:Name="RunLogTextBox" Style="{StaticResource DarkReadonly}"
@@ -2742,6 +2773,16 @@ $ui = [ordered]@{
     OpenSettingsButton    = (Get-Control 'OpenSettingsButton')
     OpenReportsButton     = (Get-Control 'OpenReportsButton')
     RunLogTextBox         = (Get-Control 'RunLogTextBox')
+    RunTimelineStep1Dot   = (Get-Control 'RunTimelineStep1Dot')
+    RunTimelineStep1Label = (Get-Control 'RunTimelineStep1Label')
+    RunTimelineStep2Dot   = (Get-Control 'RunTimelineStep2Dot')
+    RunTimelineStep2Label = (Get-Control 'RunTimelineStep2Label')
+    RunTimelineStep3Dot   = (Get-Control 'RunTimelineStep3Dot')
+    RunTimelineStep3Label = (Get-Control 'RunTimelineStep3Label')
+    RunTimelineStep4Dot   = (Get-Control 'RunTimelineStep4Dot')
+    RunTimelineStep4Label = (Get-Control 'RunTimelineStep4Label')
+    RunTimelineStep5Dot   = (Get-Control 'RunTimelineStep5Dot')
+    RunTimelineStep5Label = (Get-Control 'RunTimelineStep5Label')
 
     # Pages (panels identified by WPF name)
     PageNames             = @('PageHealth', 'PageWelcome', 'PageSelection', 'PageHostSetup', 'PageAppTuning', 'PageAiTools', 'PageApiCenter', 'PageApiCatalog', 'PageSteamDeck', 'PageDualBoot', 'PageReview', 'PageRun')
@@ -5807,6 +5848,45 @@ function Update-RunArtifactButtons {
     $ui.OpenReportsButton.IsEnabled = (-not [string]::IsNullOrWhiteSpace($reportPath) -and (Test-Path -LiteralPath $reportPath))
 }
 
+function Set-RunTimelineStage {
+    param(
+        [Parameter(Mandatory=$true)][ValidateSet(1,2,3,4,5)][int]$Step,
+        [Parameter(Mandatory=$true)][ValidateSet('pending','running','done','error')][string]$State
+    )
+    $color = switch ($State) {
+        'pending' { '#3A405A' }
+        'running' { '#F59E0B' }
+        'done'    { '#10B981' }
+        'error'   { '#EF4444' }
+        default   { '#3A405A' }
+    }
+    $labelColor = switch ($State) {
+        'done'    { '#10B981' }
+        'running' { '#F59E0B' }
+        'error'   { '#EF4444' }
+        default   { '#94A3B8' }
+    }
+    try {
+        $dotProp   = "RunTimelineStep${Step}Dot"
+        $labelProp = "RunTimelineStep${Step}Label"
+        $dot   = $ui.$dotProp
+        $label = $ui.$labelProp
+        if ($dot)   { $dot.Background   = New-SolidColorBrush $color }
+        if ($label) { $label.Foreground = New-SolidColorBrush $labelColor }
+    } catch {
+    }
+}
+
+function Reset-RunTimeline {
+    foreach ($s in 1..5) { Set-RunTimelineStage -Step $s -State 'pending' }
+}
+
+function New-SolidColorBrush {
+    param([Parameter(Mandatory=$true)][string]$Hex)
+    $b = New-Object System.Windows.Media.SolidColorBrush ([System.Windows.Media.ColorConverter]::ConvertFromString($Hex))
+    return $b
+}
+
 function Complete-RunExecution {
     param([Parameter(Mandatory=$true)][string]$StatusText)
     $ui.RunStatusLabel.Text = $StatusText
@@ -5819,6 +5899,7 @@ function Complete-RunExecution {
     Clear-ExecutionScopeOverride
     Set-RunUiBusy -Busy $false
     Update-RunArtifactButtons
+    Set-RunTimelineStage -Step 5 -State 'done'
 }
 
 function Complete-RunExecutionWithoutResult {
@@ -6257,6 +6338,8 @@ function Start-RunExecution {
         $ui.CurrentBackendWasElevated = $false
         $ui.LogOffset        = 0
         $ui.RunLogTextBox.Clear()
+        Reset-RunTimeline
+        Set-RunTimelineStage -Step 1 -State 'running'
         if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentExecutionScopeLabel)) {
             $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Escopo: $([string]$ui.CurrentExecutionScopeLabel)"
             Write-UiLog -Message ("Escopo de execução selecionado: {0}" -f [string]$ui.CurrentExecutionScopeLabel)
@@ -6277,6 +6360,7 @@ function Start-RunExecution {
             Clear-ExecutionScopeOverride
             Set-RunUiBusy -Busy $false
             Update-RunArtifactButtons
+            Set-RunTimelineStage -Step 1 -State 'error'
             return
         }
     } catch {
@@ -6295,6 +6379,10 @@ function Start-RunExecution {
     }
 
     Save-UiState -State $ui.State -Path $UiStatePath
+    Set-RunTimelineStage -Step 1 -State 'done'
+    Set-RunTimelineStage -Step 2 -State 'running'
+    Set-RunTimelineStage -Step 3 -State 'running'
+    Set-RunTimelineStage -Step 4 -State 'pending'
     $ui.LogTimer.Start()
 }
 
@@ -6307,10 +6395,20 @@ $logTimer.Add_Tick({
     try {
         Append-RunLog
         if ($ui.RunProcess -and $ui.RunProcess.HasExited) {
+            Set-RunTimelineStage -Step 2 -State 'done'
+            Set-RunTimelineStage -Step 3 -State 'done'
             if (Test-UiBackendResultFileReady -Path ([string]$ui.CurrentResultPath)) {
+                Set-RunTimelineStage -Step 4 -State 'running'
                 Finalize-RunFromResult
             } else {
+                Set-RunTimelineStage -Step 4 -State 'error'
                 Complete-RunExecutionWithoutResult
+            }
+        } else {
+            if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
+                if (Test-UiBackendResultFileReady -Path ([string]$ui.CurrentResultPath)) {
+                    Set-RunTimelineStage -Step 4 -State 'done'
+                }
             }
         }
     } catch {
@@ -7269,6 +7367,10 @@ if ($SmokeTestWindow) {
         backend            = $backendScriptPath
         windowLoaded       = ($null -ne $window)
         handlersRegistered = $true
+        runTimeline        = [ordered]@{
+            present       = ($null -ne (Get-Control 'RunTimelineStep1Dot'))
+            stages        = @('Preparando','Dry-run','Executando','result.json','Bundle/Logs')
+        }
     } | ConvertTo-Json -Depth 8
     return
 }

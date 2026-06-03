@@ -237,6 +237,39 @@ Describe 'AI coding tool support' {
         @($json.diagnostics).Count | Should Be 0
     }
 
+    It 'passes ai-proxy-suite start dry-run through install-cli without starting processes' {
+        $resultPath = Join-Path $script:AiToolsTestRoot 'ai-proxy-start-result.json'
+        $logPath = Join-Path $script:AiToolsTestRoot 'ai-proxy-start.log'
+        $rootWithSpaces = Join-Path $script:AiToolsTestRoot 'proxy root with spaces'
+
+        $result = Invoke-InstallCliBat -Args @('--tool','ai-proxy-suite','--start','--dry-run','--yes','--no-admin','--install-root',$rootWithSpaces,'--result-path',$resultPath,'--log-path',$logPath)
+
+        $result.ExitCode | Should Be 0
+        ([string]::IsNullOrWhiteSpace($result.Stderr)) | Should Be $true
+        $jsonText = Get-Content -LiteralPath $resultPath -Raw
+        $json = $jsonText | ConvertFrom-Json
+        [string]$json.mode | Should Be 'ai-tools'
+        [string]$json.action | Should Be 'start'
+        [string]$json.tool | Should Be 'ai-proxy-suite'
+        [string]$json.status | Should Be 'planned'
+        @($json.results[0].startResults).Count | Should BeGreaterThan 0
+        $jsonText | Should Not Match 'API_KEY|QWEN_PASSWORD|SERVICE_TOKEN|USER_ID|XIAOMI_CHATBOT_PH|sk-'
+    }
+
+    It 'returns non-zero when ai proxy start is blocked' {
+        $resultPath = Join-Path $script:AiToolsTestRoot 'ai-proxy-start-blocked-result.json'
+        $logPath = Join-Path $script:AiToolsTestRoot 'ai-proxy-start-blocked.log'
+        $emptyRoot = Join-Path $script:AiToolsTestRoot 'empty proxy root'
+
+        $result = Invoke-InstallCliBat -Args @('--tool','mimo-ai-proxy','--start','--yes','--no-admin','--install-root',$emptyRoot,'--result-path',$resultPath,'--log-path',$logPath)
+
+        $result.ExitCode | Should Be 3
+        $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        [string]$json.action | Should Be 'start'
+        [string]$json.tool | Should Be 'mimo-ai-proxy'
+        [string]$json.status | Should Be 'blocked'
+    }
+
     It 'accepts AionUI validate through install-cli with redacted JSON' {
         $resultPath = Join-Path $script:AiToolsTestRoot 'aionui-result.json'
         $logPath = Join-Path $script:AiToolsTestRoot 'aionui.log'
