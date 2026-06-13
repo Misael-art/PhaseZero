@@ -13,35 +13,43 @@ function Invoke-PhaseZeroBatForTest {
     $out = Join-Path $env:TEMP ("phasezero-bat-{0}.out" -f ([Guid]::NewGuid().ToString('N')))
     $err = Join-Path $env:TEMP ("phasezero-bat-{0}.err" -f ([Guid]::NewGuid().ToString('N')))
     $process = $null
+    $result = $null
     try {
         $startInfo = New-Object System.Diagnostics.ProcessStartInfo
         $startInfo.FileName = (Join-Path $repoRoot $FileName)
         $startInfo.Arguments = $Arguments
         $startInfo.UseShellExecute = $false
-        $startInfo.RedirectStandardOutput = $false
-        $startInfo.RedirectStandardError = $false
+        $startInfo.RedirectStandardOutput = $true
+        $startInfo.RedirectStandardError = $true
         $startInfo.CreateNoWindow = $true
 
-        $process = Start-Process -FilePath $startInfo.FileName -ArgumentList $Arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput $out -RedirectStandardError $err
+        $process = New-Object System.Diagnostics.Process
+        $process.StartInfo = $startInfo
+        $null = $process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutMs)) {
             try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
             throw ("{0} timed out for args: {1}" -f $FileName, $Arguments)
         }
+        $stdout = $stdoutTask.Result
+        $stderr = $stderrTask.Result
 
-        return [pscustomobject]@{
+        $result = [pscustomobject]@{
             ExitCode = [int]$process.ExitCode
-            Stdout = if (Test-Path -LiteralPath $out) { Get-Content -LiteralPath $out -Raw } else { '' }
-            Stderr = if (Test-Path -LiteralPath $err) { Get-Content -LiteralPath $err -Raw } else { '' }
+            Stdout = $stdout
+            Stderr = $stderr
         }
     } finally {
         if ($process) { try { $process.Dispose() } catch { Write-Verbose $_.Exception.Message } }
         Remove-Item -LiteralPath $out,$err -Force -ErrorAction SilentlyContinue
     }
+    return $result
 }
 
 Describe 'PhaseZero BAT launchers' {
     It 'runs bootstrap-ui.bat SmokeTest without stderr or console noise' {
-        $result = Invoke-PhaseZeroBatForTest -FileName 'bootstrap-ui.bat' -Arguments '-SmokeTest'
+        $result = @(Invoke-PhaseZeroBatForTest -FileName 'bootstrap-ui.bat' -Arguments '-SmokeTest' | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
 
         $result.ExitCode | Should Be 0
         [string]::IsNullOrWhiteSpace([string]$result.Stderr) | Should Be $true
@@ -52,7 +60,7 @@ Describe 'PhaseZero BAT launchers' {
     }
 
     It 'runs bootstrap-ui.bat SmokeTestWindow without opening a persistent process' {
-        $result = Invoke-PhaseZeroBatForTest -FileName 'bootstrap-ui.bat' -Arguments '-SmokeTestWindow'
+        $result = @(Invoke-PhaseZeroBatForTest -FileName 'bootstrap-ui.bat' -Arguments '-SmokeTestWindow' | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
 
         $result.ExitCode | Should Be 0
         [string]::IsNullOrWhiteSpace([string]$result.Stderr) | Should Be $true
@@ -62,7 +70,7 @@ Describe 'PhaseZero BAT launchers' {
     }
 
     It 'passes install-cli.bat AI Usagebar dry-run validation arguments through as JSON' {
-        $result = Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '--tool ai-usagebar --validate --dry-run --yes'
+        $result = @(Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '--tool ai-usagebar --validate --dry-run --yes' | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
 
         $result.ExitCode | Should Be 0
         [string]::IsNullOrWhiteSpace([string]$result.Stderr) | Should Be $true
@@ -75,7 +83,7 @@ Describe 'PhaseZero BAT launchers' {
     }
 
     It 'keeps install-cli.bat ListProfiles readable and free of mojibake' {
-        $result = Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '-ListProfiles'
+        $result = @(Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '-ListProfiles' | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
 
         $result.ExitCode | Should Be 0
         [string]::IsNullOrWhiteSpace([string]$result.Stderr) | Should Be $true

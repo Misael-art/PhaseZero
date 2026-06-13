@@ -216,8 +216,10 @@ Describe 'PhaseZero support robustness track' {
 
     It 'redacts inline ai-usagebar api_key values from diagnostics' {
         $testHome = Join-Path $script:SupportTestRoot 'home'
+        $testAppData = Join-Path $script:SupportTestRoot 'appdata'
         $configDir = Join-Path $testHome '.config\ai-usagebar'
         $null = New-Item -Path $configDir -ItemType Directory -Force
+        $null = New-Item -Path $testAppData -ItemType Directory -Force
         Set-Content -LiteralPath (Join-Path $configDir 'config.toml') -Encoding utf8 -Value @'
 [ui]
 primary = "openrouter"
@@ -227,7 +229,9 @@ enabled = true
 api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
 '@
         $oldUserProfile = $env:USERPROFILE
+        $oldAppData = $env:APPDATA
         $env:USERPROFILE = $testHome
+        $env:APPDATA = $testAppData
         try {
             $report = New-BootstrapAiUsagebarDoctorReport
             $json = $report | ConvertTo-Json -Depth 10
@@ -239,6 +243,7 @@ api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
             $json | Should Match 'inlineApiKeyPresent'
         } finally {
             if ($null -eq $oldUserProfile) { Remove-Item Env:\USERPROFILE -ErrorAction SilentlyContinue } else { $env:USERPROFILE = $oldUserProfile }
+            if ($null -eq $oldAppData) { Remove-Item Env:\APPDATA -ErrorAction SilentlyContinue } else { $env:APPDATA = $oldAppData }
         }
     }
 

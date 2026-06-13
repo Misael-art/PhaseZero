@@ -69,7 +69,11 @@ Describe 'Resilience Architecture' {
             $Global:BootstrapOfflineOverride = $true
 
             $testFile = Join-Path $cacheDir 'out.txt'
-            'hello' | Set-Content -Path $testFile
+            [System.IO.File]::WriteAllText($testFile, 'hello', [System.Text.UTF8Encoding]::new($false))
+            Mock Copy-Item {
+                param([string]$Path, [string]$Destination, [switch]$Force)
+                [System.IO.File]::Copy($Path, $Destination, $true) | Out-Null
+            }
 
             $outFile = Join-Path $tempDir 'out.txt'
 
@@ -136,7 +140,7 @@ Describe 'Resilience Architecture' {
                         [ordered]@{ Type = 'Registry'; Target = 'HKCU:\PhaseZeroTest'; Name = 'Value'; OldValue = 'old'; Reversible = 'partial' }
                     )
                 }
-                $manifest | ConvertTo-Json -Depth 6 | Set-Content -Path $manifestPath -Encoding utf8
+                [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
                 Mock Set-ItemProperty
                 Mock Write-Log
 
@@ -159,7 +163,7 @@ Describe 'Resilience Architecture' {
                         [ordered]@{ Type = 'Package'; Target = 'Example.Tool'; Name = ''; OldValue = $null; NewValue = 'installed'; RollbackAction = 'winget-uninstall'; Reversible = 'manual' }
                     )
                 }
-                $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path $manifestPath -Encoding utf8
+                [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
                 Mock Get-Winget { 'winget.exe' }
                 Mock Invoke-NativeWithLog { 0 }
                 Mock Write-Log
@@ -186,7 +190,7 @@ Describe 'Resilience Architecture' {
                         [ordered]@{ Type = 'Service'; Target = 'DiagTrack'; Name = 'StartupType'; OldValue = [ordered]@{ StartType = 'Manual'; Status = 'Running' }; NewValue = 'Disabled'; Reversible = 'partial' }
                     )
                 }
-                $manifest | ConvertTo-Json -Depth 8 | Set-Content -Path $manifestPath -Encoding utf8
+                [System.IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 8), [System.Text.UTF8Encoding]::new($false))
                 Mock Set-Service
                 Mock Start-Service
                 Mock Remove-MpPreference
@@ -658,8 +662,8 @@ Describe 'Resilience Architecture' {
             $null = New-Item -ItemType Directory -Path $td -Force
             $oldUser = [Environment]::GetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', 'User')
             try {
-                'stub' | Out-File -FilePath (Join-Path $td 'bash1.exe') -Encoding ascii
-                'stub' | Out-File -FilePath (Join-Path $td 'bash2.exe') -Encoding ascii
+                [System.IO.File]::WriteAllText((Join-Path $td 'bash1.exe'), 'stub', [System.Text.ASCIIEncoding]::new())
+                [System.IO.File]::WriteAllText((Join-Path $td 'bash2.exe'), 'stub', [System.Text.ASCIIEncoding]::new())
                 $pat = Join-Path $td 'bash?.exe'
                 [Environment]::SetEnvironmentVariable('CLAUDE_CODE_GIT_BASH_PATH', $pat, 'User')
                 $r = Get-GitBashExe
@@ -685,6 +689,7 @@ Describe 'Resilience Architecture' {
                     if ($Name -eq 'python') { return 'C:\Users\misae\AppData\Local\Microsoft\WindowsApps\python.exe' }
                     return $null
                 }
+                Mock Get-BootstrapCommandPathCandidates { return @() }
                 Mock Refresh-SessionPath { }
 
                 Resolve-BootstrapPythonExecutable | Should Be $pythonExe
@@ -692,6 +697,20 @@ Describe 'Resilience Architecture' {
                 $env:LOCALAPPDATA = $oldLocalAppData
                 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
             }
+        }
+
+        It 'Resolve-BootstrapPythonExecutable ignora venv Hermes e usa Python real' {
+            Mock Get-BootstrapCommandPathCandidates {
+                return @(
+                    'C:\Users\misae\.hermes\hermes-agent\venv\Scripts\python.exe',
+                    'C:\Users\misae\AppData\Local\Programs\Python\Python313\python.exe',
+                    'C:\Users\misae\AppData\Local\Microsoft\WindowsApps\python.exe'
+                )
+            }
+            Mock Refresh-SessionPath { }
+            Mock Resolve-CommandPath { return $null }
+
+            Resolve-BootstrapPythonExecutable | Should Be 'C:\Users\misae\AppData\Local\Programs\Python\Python313\python.exe'
         }
 
         It 'Convert-HookItemIfNeeded converte hooks Bonsai Windows para paths Git Bash' {
@@ -713,9 +732,13 @@ Describe 'Resilience Architecture' {
             $cli = Join-Path $dist 'cli.js'
             try {
                 New-Item -Path $dist -ItemType Directory -Force | Out-Null
-                'function zW1(){let D=`${process.argv[0]} ${process.argv[1]} internal snapshot`;return JSON.stringify({hooks:{SessionStart:[{hooks:[{command:D}]}]}})}' | Set-Content -Path $cli -Encoding utf8
+                [System.IO.File]::WriteAllText($cli, 'function zW1(){let D=`${process.argv[0]} ${process.argv[1]} internal snapshot`;return JSON.stringify({hooks:{SessionStart:[{hooks:[{command:D}]}]}})}', [System.Text.UTF8Encoding]::new($false))
+                Mock Copy-Item {
+                    param([string]$LiteralPath, [string]$Destination, [switch]$Force)
+                    [System.IO.File]::Copy($LiteralPath, $Destination, $true) | Out-Null
+                }
 
-                $result = Repair-BootstrapBonsaiCliSnapshotHooks -CliPath $cli
+                $result = @(Repair-BootstrapBonsaiCliSnapshotHooks -CliPath $cli | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'Status') })[0]
                 $updated = Get-Content -Path $cli -Raw -Encoding utf8
 
                 $result.Status | Should Be 'patched'
@@ -724,7 +747,7 @@ Describe 'Resilience Architecture' {
                 $updated | Should Match 'JSON\.stringify\(C\)\}\)\.join\(" "\)'
                 $updated | Should Not Match 'let D=`\$\{process\.argv\[0\]\}'
 
-                $second = Repair-BootstrapBonsaiCliSnapshotHooks -CliPath $cli
+                $second = @(Repair-BootstrapBonsaiCliSnapshotHooks -CliPath $cli | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'Status') })[0]
                 $second.Status | Should Be 'already-patched'
             } finally {
                 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
@@ -764,7 +787,7 @@ Describe 'Resilience Architecture' {
     Context 'Invoke-NativeFirstLine ps1' {
         It 'executa .ps1 via powershell -File em vez de cmd (evita dialogo Abrir com)' {
             $tmp = Join-Path $env:TEMP ("pz-nfl-{0}.ps1" -f [guid]::NewGuid().ToString('N'))
-            'Write-Output "hello-from-nfl-test"' | Set-Content -Path $tmp -Encoding utf8
+            [System.IO.File]::WriteAllText($tmp, 'Write-Output "hello-from-nfl-test"', [System.Text.UTF8Encoding]::new($false))
             try {
                 $line = Invoke-NativeFirstLine -Exe $tmp -Args @()
                 [string]$line | Should Match 'hello-from-nfl-test'
@@ -869,9 +892,10 @@ Welcome to .NET 8.0!
                 return $fake
             }
             $cap = Invoke-WingetListIdProbe -WingetPath 'C:\Fake\winget.exe' -Id 'Microsoft.WindowsTerminal' -TimeoutMs 5000
-            $cap.timedOut | Should Be $false
-            $cap.exitCode | Should Be 0
-            $cap.stdout | Should Match 'Microsoft\.WindowsTerminal'
+            $probe = @($cap | Where-Object { $_ -is [System.Collections.IDictionary] })[0]
+            [bool]$probe['timedOut'] | Should Be $false
+            [int]$probe['exitCode'] | Should Be 0
+            [string]$probe['stdout'] | Should Match 'Microsoft\.WindowsTerminal'
             Assert-MockCalled Start-Process -Times 1 -Exactly
         }
 
@@ -1191,26 +1215,28 @@ Welcome to .NET 8.0!
                 $childPath = Join-Path $root 'run.ps1'
                 $stdoutPath = Join-Path $root 'out.txt'
                 $stderrPath = Join-Path $root 'err.txt'
-                @"
-. '$scriptPath' -BootstrapUiLibraryMode
-function Write-Log { param([string]`$Message, [string]`$Level) }
-`$script:allVersionsUninstallCalled = `$false
-function Invoke-NativeWithRetry {
-    param(`$Exe, [string[]]`$Args, `$OperationName)
-    `$callArgs = @(`$PSBoundParameters['Args'])
-    if (`$callArgs -contains '--all-versions') {
-        `$script:allVersionsUninstallCalled = `$true
-        return 0
-    }
-    return -1978335210
-}
-`$cleaned = Invoke-BootstrapGhostPackageRecovery -WingetPath 'fake.exe' -Id 'SST.OpenCodeDesktop' -DisplayName 'OpenCode Desktop'
-'CLEANED=' + `$cleaned
-'ALLVERSIONS=' + `$script:allVersionsUninstallCalled
-if (-not `$cleaned) { exit 20 }
-if (-not `$script:allVersionsUninstallCalled) { exit 21 }
-exit 0
-"@ | Set-Content -LiteralPath $childPath -Encoding utf8
+                $escapedScriptPath = $scriptPath.Replace("'", "''")
+                $childScript = @(
+                    ". '$escapedScriptPath' -BootstrapUiLibraryMode"
+                    "function Write-Log { param([string]`$Message, [string]`$Level) }"
+                    "`$script:allVersionsUninstallCalled = `$false"
+                    "function Invoke-NativeWithRetry {"
+                    "    param(`$Exe, [string[]]`$Args, `$OperationName)"
+                    "    `$callArgs = @(`$PSBoundParameters['Args'])"
+                    "    if (`$callArgs -contains '--all-versions') {"
+                    "        `$script:allVersionsUninstallCalled = `$true"
+                    "        return 0"
+                    "    }"
+                    "    return -1978335210"
+                    "}"
+                    "`$cleaned = Invoke-BootstrapGhostPackageRecovery -WingetPath 'fake.exe' -Id 'SST.OpenCodeDesktop' -DisplayName 'OpenCode Desktop'"
+                    "'CLEANED=' + `$cleaned"
+                    "'ALLVERSIONS=' + `$script:allVersionsUninstallCalled"
+                    "if (-not `$cleaned) { exit 20 }"
+                    "if (-not `$script:allVersionsUninstallCalled) { exit 21 }"
+                    "exit 0"
+                ) -join "`r`n"
+                [System.IO.File]::WriteAllText($childPath, $childScript, [System.Text.UTF8Encoding]::new($false))
                 $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
                 $proc = Start-Process -FilePath $powershellExe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$childPath) -Wait -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
                 $stdout = Get-Content -Raw -LiteralPath $stdoutPath -ErrorAction SilentlyContinue
@@ -1366,23 +1392,29 @@ exit 0
                 $stdoutPath = Join-Path $root 'child.out'
                 $stderrPath = Join-Path $root 'child.err'
                 $logPath = Join-Path $root 'native.log'
-                @"
-@echo off
-echo attempt>>"$attemptsPath"
-echo native failure
-exit /b 7
-"@ | Set-Content -LiteralPath $cmdPath -Encoding ascii
-                @"
-. '$scriptPath' -BootstrapUiLibraryMode
-`$script:LogPath = '$logPath'
-function Start-Sleep { param([int]`$Seconds, [int]`$Milliseconds) }
-`$exit = Invoke-NativeWithRetry -Exe `$env:ComSpec -Args @('/d','/s','/c','$cmdPath') -OperationName 'native-retry-real' -MaxAttempts 2 -InitialDelaySeconds 1
-'RETRY_EXIT=' + `$exit
-if (`$exit -ne 7) { exit 20 }
-if (@(Get-Content -LiteralPath '$attemptsPath').Count -ne 2) { exit 21 }
-if ((Get-Content -Raw -LiteralPath '$logPath') -notmatch 'native failure') { exit 22 }
+                $cmdScript = @(
+                    '@echo off'
+                    "echo attempt>>`"$attemptsPath`""
+                    'echo native failure'
+                    'exit /b 7'
+                ) -join "`r`n"
+                [System.IO.File]::WriteAllText($cmdPath, $cmdScript, [System.Text.ASCIIEncoding]::new())
+                $escapedScriptPath = $scriptPath.Replace("'", "''")
+                $escapedLogPath = $logPath.Replace("'", "''")
+                $escapedAttemptsPath = $attemptsPath.Replace("'", "''")
+                $escapedCmdPath = $cmdPath.Replace("'", "''")
+                $childScript = @"
+. '{0}' -BootstrapUiLibraryMode
+`$script:LogPath = '{1}'
+function Start-Sleep {{ param([int]`$Seconds, [int]`$Milliseconds) }}
+`$nativeExit = Invoke-NativeWithRetry -Exe `$env:ComSpec -Args @('/d','/s','/c','{2}') -OperationName 'native-retry-real' -MaxAttempts 2 -InitialDelaySeconds 1
+Write-Output ('RETRY_EXIT=' + `$nativeExit)
+if (`$nativeExit -ne 7) {{ exit 20 }}
+if (@(Get-Content -LiteralPath '{3}').Count -ne 2) {{ exit 21 }}
+if ((Get-Content -Raw -LiteralPath '{1}') -notmatch 'native failure') {{ exit 22 }}
 exit 0
-"@ | Set-Content -LiteralPath $childPath -Encoding utf8
+"@ -f $escapedScriptPath, $escapedLogPath, $escapedCmdPath, $escapedAttemptsPath
+                [System.IO.File]::WriteAllText($childPath, $childScript, [System.Text.UTF8Encoding]::new($false))
 
                 $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
                 $proc = Start-Process -FilePath $powershellExe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',$childPath) -Wait -PassThru -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath
@@ -1533,10 +1565,10 @@ Python 3.13       Python.Python.3.13   3.13.13  winget
             $cmd = Join-Path $prefix 'openclaw.cmd'
             try {
                 New-Item -Path $prefix -ItemType Directory -Force | Out-Null
-                Set-Content -LiteralPath $npm -Value "@echo off`r`nif ""%1""==""prefix"" if ""%2""==""-g"" echo $prefix`r`nexit /b 0`r`n" -Encoding ascii
+                [System.IO.File]::WriteAllText($npm, "@echo off`r`nif ""%1""==""prefix"" if ""%2""==""-g"" echo $prefix`r`nexit /b 0`r`n", [System.Text.ASCIIEncoding]::new())
                 Mock Invoke-NpmWithLog {
                     New-Item -Path (Split-Path -Parent $cmd) -ItemType Directory -Force | Out-Null
-                    Set-Content -LiteralPath $cmd -Value '@echo off' -Encoding ascii
+                    [System.IO.File]::WriteAllText($cmd, '@echo off', [System.Text.ASCIIEncoding]::new())
                     return 124
                 }
                 Mock Invoke-NativeFirstLine { return 'OpenClaw 2026.5.7' }

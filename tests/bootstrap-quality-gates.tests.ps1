@@ -64,6 +64,7 @@ Describe 'Bootstrap quality gates' {
             'Install-BootstrapRtkTool',
             'Uninstall-BootstrapRtkTool',
             'Uninstall-BootstrapAiUsagebar',
+            'Install-BootstrapAiUsagebarViaCargo',
             'Unlock-BootstrapSecretsFile',
             'Clear-BootstrapDirectoryContents',
             'Invoke-BootstrapHostHealthCleanup',

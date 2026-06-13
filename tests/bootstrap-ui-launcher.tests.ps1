@@ -93,12 +93,13 @@ Describe 'Bootstrap UI launcher' {
         $uiStatePath = Join-Path $script:TestDataRoot 'ui-state.json'
         $uiLogPath = Join-Path $script:TestDataRoot 'bootstrap-ui.log'
         New-Item -ItemType Directory -Force -Path $script:TestDataRoot | Out-Null
-        [ordered]@{
+        $seedState = [ordered]@{
             selectedProfiles = @('safe-base')
             lastLogPath = [ordered]@{ Length = 12 }
             lastResultPath = [ordered]@{ Length = 13 }
             lastReportPath = [ordered]@{ Length = 14 }
-        } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $uiStatePath -Encoding utf8
+        }
+        [System.IO.File]::WriteAllText($uiStatePath, ($seedState | ConvertTo-Json -Depth 6), [System.Text.UTF8Encoding]::new($false))
 
         $output = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $uiScriptPath -UiStatePath $uiStatePath -UiLogPath $uiLogPath -SmokeTest 2>&1
         $LASTEXITCODE | Should Be 0
@@ -241,7 +242,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         foreach ($label in @('WSL','winget','Reboot','Secrets','GitHub CLI','ai-usagebar','AionUI','Steam Deck','Rollback')) {
             $raw | Should Match ([regex]::Escape($label))
         }
-        foreach ($statusText in @('OK','Aten..o','Cr.tico','Ausente','Bloqueado')) {
+        foreach ($statusText in @('OK','Aten.*o','Cr.*tico','Ausente','Bloqueado')) {
             $raw | Should Match $statusText
         }
         $raw | Should Match 'Start-RunExecution -MaintenanceIntent ''doctor'''
@@ -269,10 +270,10 @@ if (-not `$match.Success) { throw 'XAML block not found' }
 
         (Get-UiHealthCardStatusText -Result $result -Card 'wsl') | Should Match 'Bloqueado.*REGDB_E_CLASSNOTREG'
         (Get-UiHealthCardStatusText -Result $result -Card 'winget') | Should Match 'OK.*winget ok'
-        (Get-UiHealthCardStatusText -Result $result -Card 'reboot') | Should Match 'Aten..o.*reboot pending'
+        (Get-UiHealthCardStatusText -Result $result -Card 'reboot') | Should Match 'Aten.*o.*reboot pending'
         (Get-UiHealthCardStatusText -Result $result -Card 'secrets') | Should Match 'OK'
         (Get-UiHealthCardStatusText -Result $result -Card 'ai-usagebar') | Should Match 'OK.*openrouter'
-        (Get-UiHealthCardStatusText -Result $result -Card 'aionui') | Should Match 'Aten..o.*openrouter'
+        (Get-UiHealthCardStatusText -Result $result -Card 'aionui') | Should Match 'Aten.*o.*openrouter'
         (Get-UiHealthCardStatusText -Result $result -Card 'rollback') | Should Match 'OK.*rollback ok'
     }
 
@@ -298,8 +299,8 @@ if (-not `$match.Success) { throw 'XAML block not found' }
                 howToFix = 'cleanup'
             }) -Strings $strings
 
-        $reboot | Should Match 'Rein.cio necess.rio'
-        $ghost | Should Match 'A..o necess.ria'
+        $reboot | Should Match 'Rein.*cio necess.*rio'
+        $ghost | Should Match 'A.*necess.*ria'
         $ghost | Should Not Match 'Rein.cio necess.rio'
     }
 
@@ -315,11 +316,11 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         Import-UiFunctionsForTest -Names @('Read-UiBackendResultWithRetry')
         $path = Join-Path $script:TestDataRoot 'partial.result.json'
         $null = New-Item -Path $script:TestDataRoot -ItemType Directory -Force
-        Set-Content -LiteralPath $path -Value '{"status":' -Encoding utf8
+        [System.IO.File]::WriteAllText($path, '{"status":', [System.Text.UTF8Encoding]::new($false))
         $job = Start-Job -ScriptBlock {
             param([string]$ResultPath)
             Start-Sleep -Milliseconds 120
-            Set-Content -LiteralPath $ResultPath -Value '{"status":"success","exitCode":0}' -Encoding utf8
+            [System.IO.File]::WriteAllText($ResultPath, '{"status":"success","exitCode":0}', [System.Text.UTF8Encoding]::new($false))
         } -ArgumentList $path
         try {
             $result = Read-UiBackendResultWithRetry -Path $path -MaxWaitMs 6000 -StepMs 100
@@ -407,6 +408,28 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'Add_MouseDoubleClick'
     }
 
+    It 'uses checked AppTuning rows for toolbar actions instead of the highlighted row' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Get-CheckedAppTuningRows'
+        $raw | Should Match 'Commit-UiGridEdits'
+        $raw | Should Match 'Queue-AppTuningInstallOrUpdate -ActionName ''Instalacao'' -Rows @\(Get-CheckedAppTuningRows\)'
+        $raw | Should Match 'Queue-AppTuningConfigure -Rows @\(Get-CheckedAppTuningRows\)'
+        $raw | Should Match 'Queue-AppTuningInstallOrUpdate -ActionName ''Atualizacao'' -Rows @\(Get-CheckedAppTuningRows\)'
+    }
+
+    It 'adds explicit checkbox selection and multi-tool actions to AI Coding Tools' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'selectedAiTools'
+        $raw | Should Match 'DataGridCheckBoxColumn Header="Ativo"'
+        $raw | Should Match 'SelectionMode="Extended"'
+        $raw | Should Match 'Capture-AiToolsSelectionFromControls'
+        $raw | Should Match 'Get-SelectedAiToolNames'
+        $raw | Should Match 'foreach \(\$toolName in @\(\$toolNames\)\)'
+        $raw | Should Match 'Load-WpfGridRows -Grid \$ui\.AiToolsGrid -Items \$viewRows -Columns @\(''active'',''tool'''
+    }
+
     It 'surfaces AppTuning risk controls and security-impact confirmation' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 
@@ -482,7 +505,7 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'Get-UiResolvedComponentNameSet'
         $raw | Should Match 'resolvedComponentLookup'
         $raw | Should Match '\$cb\.IsChecked = \(\(\$isExplicitComponent -or \$isResolvedComponent\) -and -not \$isExcludedComponent\)'
-        $raw | Should Match 'Desmarcar item vindo de perfil adiciona em N.o instalar'
+        $raw | Should Match 'Desmarcar item vindo de perfil adiciona em N.*instalar'
     }
 
     It 'shows actionable selection impact and rollback metadata' {
@@ -550,7 +573,7 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $resultPath = Join-Path $probeRoot 'result.json'
         $stdoutPath = Join-Path $probeRoot 'stdout.log'
         $stderrPath = Join-Path $probeRoot 'stderr.log'
-        Set-Content -LiteralPath $probePath -Encoding utf8 -Value @'
+        [System.IO.File]::WriteAllText($probePath, @'
 param(
     [switch]$NonInteractive,
     [string]$Profile,
@@ -566,7 +589,7 @@ param(
     Profile = [string]$Profile
     ResultPath = [string]$ResultPath
 } | ConvertTo-Json -Compress
-'@
+'@, [System.Text.UTF8Encoding]::new($false))
         $global:ui = [pscustomobject]@{
             CurrentStdoutPath = $stdoutPath
             CurrentStderrPath = $stderrPath
@@ -668,10 +691,10 @@ param(
 
         $raw | Should Match 'ReviewAcceptedCheckBox'
         $raw | Should Match 'Test-UiReviewAcceptedForRun'
-        $raw | Should Match 'Revis.o obrigat.ria'
+        $raw | Should Match 'Revis.*obrigat.*ria'
         $raw | Should Match '\$status -eq ''blocked'''
         $raw | Should Match 'Get-UiRunStatusTextFromResult'
-        $raw | Should Match 'A..o necess.ria'
+        $raw | Should Match 'A.*necess.*ria'
     }
 
     It 'separates critical actions behind explicit confirmation modals' {

@@ -17,7 +17,11 @@ gemini-cli/
 .bootstrap-tools/*.bak
 .bootstrap-tools/ui-runs/
 
+# Local run logs (diagnostico de instalacao real)
+.runlogs/
+
 # Local IDE / agent worktrees
+.trae/
 .codex/
 .rtk/
 .vscode/

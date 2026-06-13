@@ -32,7 +32,11 @@ function Invoke-PhaseZeroBatForTest {
         $process.StartInfo = $startInfo
         $null = $process.Start()
         if ($StdinText) {
-            $process.StandardInput.Write($StdinText)
+            # Escrever bytes crus sem BOM: StandardInput.Write usa Console.InputEncoding e pode
+            # emitir preambulo UTF-8, fazendo o menu receber "<BOM>5" e rejeitar a opcao.
+            $stdinBytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes([string]$StdinText)
+            $process.StandardInput.BaseStream.Write($stdinBytes, 0, $stdinBytes.Length)
+            $process.StandardInput.BaseStream.Flush()
             $process.StandardInput.Close()
         }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()

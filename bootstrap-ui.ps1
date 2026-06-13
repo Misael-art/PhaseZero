@@ -1,4 +1,4 @@
-﻿param(
+param(
     [string]$UiStatePath,
     [string]$UiLogPath,
     [switch]$SmokeTest,
@@ -19,6 +19,37 @@ function Repair-UiWindowsEnvironment {
 }
 
 Repair-UiWindowsEnvironment
+
+function Get-UiPendingRebootReasons {
+    $reasons = New-Object System.Collections.Generic.List[string]
+    try {
+        if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
+            $reasons.Add('Component Based Servicing')
+        }
+    } catch {
+    }
+    try {
+        if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
+            $reasons.Add('Windows Update')
+        }
+    } catch {
+    }
+    try {
+        $sessionManager = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -ErrorAction SilentlyContinue
+        if ($sessionManager -and $sessionManager.PendingFileRenameOperations) {
+            $reasons.Add('PendingFileRenameOperations')
+        }
+    } catch {
+    }
+    try {
+        $updateExeVolatile = Get-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Updates' -Name 'UpdateExeVolatile' -ErrorAction SilentlyContinue
+        if ($updateExeVolatile -and ($updateExeVolatile.UpdateExeVolatile -as [int]) -gt 0) {
+            $reasons.Add('UpdateExeVolatile')
+        }
+    } catch {
+    }
+    return @($reasons | Select-Object -Unique)
+}
 
 function Get-UiStorageRootCandidates {
     $candidates = New-Object System.Collections.Generic.List[string]
@@ -363,6 +394,11 @@ function Get-UiStrings {
                 RunStarted         = 'Execution started.'
                 RunCompleted       = 'Execution completed.'
                 RunFailed          = 'Execution failed.'
+                RunPhaseInstalling = 'Phase: installing packages.'
+                RunPhaseValidating = 'Phase: validating artifacts.'
+                RunPhaseRunning    = 'Phase: running.'
+                PendingRebootBanner = 'Pending reboot detected: {0}. Reboot recommended.'
+                PendingRebootBannerBlocking = 'Pending reboot detected: {0}. winget/MSI may block until reboot.'
                 UserCanceledElevation = 'Execution canceled or elevation denied.'
                 Back               = '<- Back'
                 Next               = 'Next ->'
@@ -494,6 +530,11 @@ function Get-UiStrings {
                 RunStarted         = 'Execução iniciada.'
                 RunCompleted       = 'Execução concluída.'
                 RunFailed          = 'Execução falhou.'
+                RunPhaseInstalling = 'Fase: instalando pacotes.'
+                RunPhaseValidating = 'Fase: validando artefatos.'
+                RunPhaseRunning    = 'Fase: executando.'
+                PendingRebootBanner = 'Reinício pendente detectado: {0}. Recomendo reiniciar.'
+                PendingRebootBannerBlocking = 'Reinício pendente detectado: {0}. Pode travar winget/MSI até reiniciar.'
                 UserCanceledElevation = 'Execução cancelada ou elevação negada.'
                 Back               = '<- Voltar'
                 Next               = 'Avancar ->'
@@ -2424,6 +2465,9 @@ function Get-UiBrush {
                 <!-- Log area -->
                 <Border Grid.Row="3" Style="{StaticResource Card}">
                     <DockPanel>
+                        <Border x:Name="PendingRebootBanner" DockPanel.Dock="Top" Background="#2B1D0A" CornerRadius="8" Padding="10,8" Margin="0,0,0,8" Visibility="Collapsed">
+                            <TextBlock x:Name="PendingRebootBannerLabel" Foreground="#FBBF24" FontSize="12" TextWrapping="Wrap"/>
+                        </Border>
                         <TextBlock x:Name="RunStatusLabel" DockPanel.Dock="Top" Foreground="#94A3B8" FontSize="12" Margin="0,0,0,8"/>
                         <TextBox x:Name="RunLogTextBox" Style="{StaticResource DarkReadonly}"
                                  AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
@@ -2508,6 +2552,9 @@ $ui = [ordered]@{
     RunProcess            = $null
     ExecutionScopeOverride = $null
     CurrentExecutionScopeLabel = ''
+    CurrentRunPhase       = ''
+    RunFinalized          = $false
+    PendingRebootReasons  = @()
     # 'none' = instalação/perfil normal; 'audit' / 'rollback' apenas quando disparado pelos botões de manutenção.
     MaintenanceMode          = 'none'
 
@@ -2767,6 +2814,8 @@ $ui = [ordered]@{
     # Run
     RunTitleLabel         = (Get-Control 'RunTitleLabel')
     RunStatusLabel        = (Get-Control 'RunStatusLabel')
+    PendingRebootBanner   = (Get-Control 'PendingRebootBanner')
+    PendingRebootBannerLabel = (Get-Control 'PendingRebootBannerLabel')
     StartRunButton        = (Get-Control 'StartRunButton')
     OpenLogButton         = (Get-Control 'OpenLogButton')
     OpenResultButton      = (Get-Control 'OpenResultButton')
@@ -5737,6 +5786,73 @@ function Write-UiFallbackResult {
     }
 }
 
+function Update-UiPendingRebootBanner {
+    param([string[]]$Reasons = @())
+
+    try {
+        $items = @($Reasons | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $ui.PendingRebootReasons = @($items)
+        if ($items.Count -eq 0) {
+            if ($ui.PendingRebootBanner) { $ui.PendingRebootBanner.Visibility = 'Collapsed' }
+            return
+        }
+        $summary = if ($items.Count -gt 2) { (($items | Select-Object -First 2) -join ', ') + ', ...' } else { ($items -join ', ') }
+        $text = if ([bool]$ui.State.requireNoPendingReboot) {
+            [string]::Format([string]$ui.Strings.PendingRebootBannerBlocking, $summary)
+        } else {
+            [string]::Format([string]$ui.Strings.PendingRebootBanner, $summary)
+        }
+        if ($ui.PendingRebootBannerLabel) { $ui.PendingRebootBannerLabel.Text = $text }
+        if ($ui.PendingRebootBanner) { $ui.PendingRebootBanner.Visibility = 'Visible' }
+    } catch {
+    }
+}
+
+function Update-UiRunStatusPhase {
+    param([string]$Phase = '')
+
+    if ([bool]$ui.RunFinalized) { return }
+    $p = ([string]$Phase).Trim().ToLowerInvariant()
+    if ([string]::IsNullOrWhiteSpace($p)) { return }
+    if ([string]$ui.CurrentRunPhase -eq $p) { return }
+    $ui.CurrentRunPhase = $p
+
+    $phaseText = ''
+    if ($p -eq 'installing') { $phaseText = [string]$ui.Strings.RunPhaseInstalling }
+    elseif ($p -eq 'validating') { $phaseText = [string]$ui.Strings.RunPhaseValidating }
+    elseif ($p -eq 'running') { $phaseText = [string]$ui.Strings.RunPhaseRunning }
+
+    $base = [string]$ui.Strings.RunStarted
+    if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentExecutionScopeLabel)) {
+        $base = "$base Escopo: $([string]$ui.CurrentExecutionScopeLabel)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($phaseText)) {
+        $base = "$base $phaseText"
+    }
+    $ui.RunStatusLabel.Text = $base
+}
+
+function Update-UiRunPhaseFromLogChunk {
+    param([string]$Text = '')
+
+    if ([bool]$ui.RunFinalized) { return }
+    if ([string]::IsNullOrWhiteSpace($Text)) { return }
+
+    $chunk = $Text.ToLowerInvariant()
+    if ($chunk -match 'pos-instalacao|artefato esperado|verificado binario') {
+        Update-UiRunStatusPhase -Phase 'validating'
+        return
+    }
+    if ($chunk -match 'instalando .* via winget|winget: verificando instalacao|winget install') {
+        Update-UiRunStatusPhase -Phase 'installing'
+        return
+    }
+    if ($chunk -match 'executando preflight|executando componente|executando perfil|invokebootstrapp') {
+        Update-UiRunStatusPhase -Phase 'running'
+        return
+    }
+}
+
 function Append-RunLog {
     try {
         if ([string]::IsNullOrWhiteSpace($ui.CurrentLogPath) -or -not (Test-Path -LiteralPath $ui.CurrentLogPath)) { return }
@@ -5758,6 +5874,7 @@ function Append-RunLog {
             if (-not [string]::IsNullOrEmpty($newText)) {
                 $ui.RunLogTextBox.AppendText($newText)
                 $ui.RunLogTextBox.ScrollToEnd()
+                Update-UiRunPhaseFromLogChunk -Text $newText
             }
             $ui.LogOffset = [long]$len
         } finally {
@@ -5893,6 +6010,8 @@ function Complete-RunExecution {
     $ui.State.lastLogPath    = Normalize-UiScalarPath -Value $ui.CurrentLogPath
     $ui.State.lastResultPath = Normalize-UiScalarPath -Value $ui.CurrentResultPath
     Save-UiState -State $ui.State -Path $UiStatePath
+    $ui.RunFinalized = $true
+    $ui.CurrentRunPhase = ''
     $ui.RunProcess = $null
     $ui.LogTimer.Stop()
     $ui.MaintenanceMode = 'none'
@@ -6198,6 +6317,12 @@ function Finalize-RunFromResult {
             $ui.State.lastReportPath = [string]$result.appTuningReportRoot
         }
     }
+    try {
+        $pending = @()
+        $pending = @(Get-UiPendingRebootReasons)
+        Update-UiPendingRebootBanner -Reasons $pending
+    } catch {
+    }
     $statusText = Get-UiRunStatusTextFromResult -Result $result -Strings $ui.Strings
     try {
         $modeText = [string]$result.mode
@@ -6337,15 +6462,23 @@ function Start-RunExecution {
         $ui.CurrentStderrPath = [string]$artifacts.StderrPath
         $ui.CurrentBackendWasElevated = $false
         $ui.LogOffset        = 0
+        $ui.RunFinalized     = $false
+        $ui.CurrentRunPhase  = ''
         $ui.RunLogTextBox.Clear()
         Reset-RunTimeline
         Set-RunTimelineStage -Step 1 -State 'running'
+        try {
+            $pending = @(Get-UiPendingRebootReasons)
+            Update-UiPendingRebootBanner -Reasons $pending
+        } catch {
+        }
         if (-not [string]::IsNullOrWhiteSpace([string]$ui.CurrentExecutionScopeLabel)) {
             $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Escopo: $([string]$ui.CurrentExecutionScopeLabel)"
             Write-UiLog -Message ("Escopo de execução selecionado: {0}" -f [string]$ui.CurrentExecutionScopeLabel)
         } else {
             $ui.RunStatusLabel.Text = $ui.Strings.RunStarted
         }
+        Update-UiRunStatusPhase -Phase 'running'
         Update-RunArtifactButtons
         Set-RunUiBusy -Busy $true
         try {
@@ -6438,6 +6571,14 @@ $logTimer.Add_Tick({
             }
         } catch {
         }
+        # Failsafe: nunca deixar a UI presa em estado busy quando o tick aborta sem
+        # conseguir finalizar pelo result.json nem pelo processo. Restaura os mesmos
+        # invariantes de Complete-RunExecution antes de parar o timer.
+        try { $ui.RunProcess = $null } catch { }
+        try { $ui.MaintenanceMode = 'none' } catch { }
+        try { Clear-ExecutionScopeOverride } catch { }
+        try { Set-RunUiBusy -Busy $false } catch { }
+        try { Update-RunArtifactButtons } catch { }
         try { $ui.LogTimer.Stop() } catch { }
     }
 })

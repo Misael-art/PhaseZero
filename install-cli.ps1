@@ -142,10 +142,24 @@ function Write-CliUsage {
     Write-Host '  install-cli.bat --tool ai-proxy-suite --start --yes --no-admin'
 }
 
+function ConvertTo-CliCleanReply {
+    param([AllowNull()][object]$Value)
+    if ($null -eq $Value) { return '' }
+    $text = [string]$Value
+    # BOM/zero-width (U+FEFF, U+200B-U+200D) chegam via stdin redirecionado (ex.: type respostas.txt |
+    # install-cli.bat com arquivo salvo como UTF-8 com BOM) e NAO sao removidos por Trim() no
+    # .NET Framework; sem isso a opcao "5" vira "<BOM>5" e cai em "Opcao invalida".
+    # Chars construidos por code point para nao depender do encoding com que este arquivo e lido.
+    foreach ($cp in @(0xFEFF, 0x200B, 0x200C, 0x200D)) {
+        $text = $text.Replace([string][char]$cp, '')
+    }
+    return $text.Trim()
+}
+
 function Read-HostOrDefault {
     param([string]$Prompt, [string]$Default = '')
     if ([bool]$script:Options.NonInteractive) { return $Default }
-    $reply = Read-Host $Prompt
+    $reply = ConvertTo-CliCleanReply (Read-Host $Prompt)
     if ([string]::IsNullOrWhiteSpace($reply)) { return $Default }
     return $reply
 }
@@ -298,8 +312,7 @@ function Show-CliMainMenu {
     Write-CliOut '  0) Sair' Cyan
     Write-CliOut ''
     $reply = Read-Host 'Selecione [1-6, 0=sair]'
-    if ($null -eq $reply) { return '' }
-    return ([string]$reply).Trim()
+    return (ConvertTo-CliCleanReply $reply)
 }
 
 function Show-CliGuidedProfilePicker {
@@ -311,12 +324,12 @@ function Show-CliGuidedProfilePicker {
         Write-CliOut ('  {0}  {1,-26} {2}' -f [string]$entry.key, $displayName, [string]$entry.label)
     }
     Write-CliOut ''
-    $pick = ([string](Read-Host 'Numero do perfil [1-5]')).Trim()
+    $pick = ConvertTo-CliCleanReply (Read-Host 'Numero do perfil [1-5]')
     $entries = Get-CliGuidedProfileEntries
     $match = $entries | Where-Object { [string]$_.key -eq $pick } | Select-Object -First 1
     if ($null -eq $match) { return '' }
     if (-not [string]::IsNullOrWhiteSpace([string]$match.name)) { return [string]$match.name }
-    return ([string](Read-Host 'Nome do perfil (ex: base, ai, full)')).Trim()
+    return (ConvertTo-CliCleanReply (Read-Host 'Nome do perfil (ex: base, ai, full)'))
 }
 
 function Invoke-CliMenuBackendIntent {
@@ -692,7 +705,7 @@ if (-not [bool]$script:Options.SkipDryRun) {
 
 if (-not [bool]$script:Options.NonInteractive) {
     Write-CliOut ''
-    $confirm = Read-Host 'Deseja prosseguir com a instalacao real? (S/N)'
+    $confirm = ConvertTo-CliCleanReply (Read-Host 'Deseja prosseguir com a instalacao real? (S/N)')
     if ($confirm -notmatch '^[Ss]$') {
         Write-CliOut '[AVISO] Instalacao cancelada pelo usuario.' Yellow
         Pause

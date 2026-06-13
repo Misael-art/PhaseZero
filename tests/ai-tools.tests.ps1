@@ -165,6 +165,34 @@ Describe 'AI coding tool support' {
         [string]$command | Should Not Match 'ai-usagebar-tui" --help'
     }
 
+    It 'does not mark AI Usagebar configured when the Windows binary is blocked by policy' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        Mock Resolve-BootstrapAiToolCommandPath {
+            param([System.Collections.IDictionary]$CatalogEntry, [string]$InstallRoot)
+            if ([string]$CatalogEntry['ToolName'] -eq 'ai-usagebar') {
+                return 'C:\Users\misae\AppData\Local\PhaseZero\ai-tools\bin\ai-usagebar.exe'
+            }
+            return ''
+        }
+        Mock Invoke-BootstrapAiUsagebarCommandProbe {
+            return [ordered]@{
+                ok = $false
+                status = 'blocked'
+                path = 'C:\Users\misae\AppData\Local\PhaseZero\ai-tools\bin\ai-usagebar.exe'
+                version = ''
+                message = 'Application Control blocked this file.'
+            }
+        }
+        Mock Test-BootstrapAiUsagebarNativeConfigured { return $true }
+        Mock Test-BootstrapAiUsagebarWslConfigured { return $false }
+
+        $row = @(Get-BootstrapAiToolStatusRows -InstallRoot $script:AiToolsTestRoot -ProjectRoot $repoRoot | Where-Object { [string]$_['tool'] -eq 'ai-usagebar' } | Select-Object -First 1)
+
+        [string]$row[0]['status'] | Should Be 'blocked'
+        [string]$row[0]['configured'] | Should Be 'False'
+    }
+
     It 'declares AI Usagebar as an installable component outside safe public profiles' {
         . $toolsScriptPath -BootstrapUiLibraryMode
 
