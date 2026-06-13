@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$CloneBaseDir,
     [string]$WorkspaceRoot = '',
     [string[]]$Profile = @(),
@@ -16582,35 +16582,49 @@ function Get-BootstrapAiProxyStartPlan {
     $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName $ToolName -InstallRoot $root
     $runtime = [string]$CatalogEntry['Runtime']
     $exe = ''
-    $args = @()
+    $argumentList = @()
+    $runtimeAvailable = $true
+    $runtimeWarning = ''
     if ($runtime -eq 'node') {
-        $exe = Get-BootstrapNpmCommandForAiTools
-        $args = @('run','start')
+        try {
+            $exe = Get-BootstrapNpmCommandForAiTools
+        } catch {
+            $exe = 'npm'
+            $runtimeAvailable = $false
+            $runtimeWarning = $_.Exception.Message
+        }
+        $argumentList = @('run','start')
     } elseif ($runtime -eq 'go') {
         $bin = Join-Path (Join-Path $sourceRoot 'bin') 'mimo-ai-proxy.exe'
         if (Test-Path -LiteralPath $bin) {
             $exe = $bin
-            $args = @()
+            $argumentList = @()
         } else {
             $go = Resolve-CommandPath -Name 'go'
             if ($go) {
                 $exe = $go
-                $args = @('run','main.go')
+                $argumentList = @('run','main.go')
             }
+        }
+        if ([string]::IsNullOrWhiteSpace($exe)) {
+            $runtimeAvailable = $false
+            $runtimeWarning = 'go runtime nao encontrado.'
         }
     } elseif ($runtime -eq 'tauri') {
         $exe = ''
-        $args = @()
+        $argumentList = @()
     }
 
-    $commandText = if ([string]::IsNullOrWhiteSpace($exe)) { '' } else { ((@($exe) + @($args)) -join ' ') }
+    $commandText = if ([string]::IsNullOrWhiteSpace($exe)) { '' } else { ((@($exe) + @($argumentList)) -join ' ') }
     return [ordered]@{
         tool = $ToolName
         runtime = $runtime
         exe = $exe
-        args = @($args)
+        args = @($argumentList)
         workingDirectory = $sourceRoot
         command = $commandText
+        runtimeAvailable = [bool]$runtimeAvailable
+        runtimeWarning = $runtimeWarning
         port = [int]$CatalogEntry['Port']
         baseUrl = [string]$CatalogEntry['BaseUrl']
         modelsUrl = Get-BootstrapAiProxyModelsUrl -BaseUrl ([string]$CatalogEntry['BaseUrl'])
@@ -16666,6 +16680,8 @@ function Start-BootstrapAiProxyTool {
         $result['startPlan'] = [ordered]@{
             command = [string]$plan['command']
             workingDirectory = [string]$plan['workingDirectory']
+            runtimeAvailable = [bool]$plan['runtimeAvailable']
+            runtimeWarning = [string]$plan['runtimeWarning']
             port = [int]$plan['port']
             modelsUrl = [string]$plan['modelsUrl']
         }
@@ -16746,8 +16762,10 @@ function Start-BootstrapAiProxyTool {
         return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
     }
 
-    if ([string]::IsNullOrWhiteSpace([string]$plan['exe'])) {
-        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'blocked' -InstallRoot $root -Message ("Runtime de start indisponivel para {0}." -f $name) -Docs ([string]$entry['DocsUrl'])
+    if (-not [bool]$plan['runtimeAvailable'] -or [string]::IsNullOrWhiteSpace([string]$plan['exe'])) {
+        $detail = [string]$plan['runtimeWarning']
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = 'runtime de start indisponivel' }
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'blocked' -InstallRoot $root -Message ("Runtime de start indisponivel para {0}: {1}." -f $name, $detail) -Docs ([string]$entry['DocsUrl'])
         return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
     }
 
@@ -23179,8 +23197,24 @@ function Get-BootstrapAppTuningFailureClassification {
         }
     }
 
-    # Se for erro de permissao ou caminho inexistente em registro, nao bloquear
-    if ($message -match 'acesso.*negado' -or $message -match 'localizar.*caminho' -or $ExceptionType -match 'UnauthorizedAccess') {
+    # Se for erro de permissao ou caminho inexistente em registro, nao bloquear.
+    # Cobrir mensagens PT e EN e os tipos de excecao reais: ajustes que escrevem em
+    # chaves protegidas/HKLM num run sem admin lancam System.Security.SecurityException
+    # ("Requested registry access is not allowed.") ou UnauthorizedAccessException.
+    # Sem isso, um unico ajuste admin-only (ex.: edge-background-off) abortava TODA a fase
+    # de AppTuning + HostHealth em vez de pular como os componentes admin-only fazem.
+    $permissionDenied = (
+        $message -match 'acesso.*negado' -or
+        $message -match 'localizar.*caminho' -or
+        $message -match '(?i)access is not allowed' -or
+        $message -match '(?i)access is denied' -or
+        $message -match '(?i)requested registry access' -or
+        $message -match '(?i)unauthorized' -or
+        $message -match '(?i)cannot find.*path' -or
+        $ExceptionType -match 'UnauthorizedAccess' -or
+        $ExceptionType -match 'SecurityException'
+    )
+    if ($permissionDenied) {
         return [ordered]@{
             severity = 'warning'
             classification = 'permission-denied'

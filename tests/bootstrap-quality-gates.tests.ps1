@@ -74,7 +74,8 @@ Describe 'Bootstrap quality gates' {
             'Invoke-NativeFirstLine',
             'New-BootstrapSupportBundle',
             'New-BootstrapReleasePack',
-            'Write-BootstrapAiProxyEnvFile'
+            'Write-BootstrapAiProxyEnvFile',
+            'Clear-BootstrapPlaywrightStaleLock'
         )
 
         $functions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))

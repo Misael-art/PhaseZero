@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$UiStatePath,
     [string]$UiLogPath,
     [switch]$SmokeTest,
@@ -449,8 +449,8 @@ function Get-UiStrings {
                 OptIgnoreManualRequirements = 'Ignorar requisitos manuais (apenas log)'
                 OptRequireNoPendingReboot = 'Abortar se houver reinicio pendente (preflight)'
                 OptOfflineMode     = 'Modo Offline (usa cache local)'
-                OptEnableResume    = 'Retomar instalacao interrompida'
-                HostSetupTitle     = 'Preparacao deste PC'
+                OptEnableResume    = 'Retomar instalação interrompida'
+                HostSetupTitle     = 'Preparação deste PC'
                 AppTuningTitle      = 'Otimizar Apps'
                 AppTuningSubtitle   = 'Pre-configure ferramentas instaladas por categoria e perfil, com defaults seguros.'
                 AppTuningMode       = 'AppTuning'
@@ -475,11 +475,11 @@ function Get-UiStrings {
                 HealthDeckStatus    = 'Steam Deck: não verificado.'
                 HealthGithubStatus  = 'GitHub CLI: não verificado.'
                 AiToolsTitle        = 'AI Coding Tools'
-                AiToolsStatus       = 'Instale, valide, configure, desinstale ou abra docs oficiais de ferramentas opcionais de IA.'
-                AiToolsInstall      = 'Instalar'
-                AiToolsValidate     = 'Validar'
-                AiToolsConfigure    = 'Configurar'
-                AiToolsUninstall    = 'Desinstalar'
+                AiToolsStatus       = 'Marque uma ou mais ferramentas e instale, valide, configure, desinstale ou abra docs oficiais.'
+                AiToolsInstall      = 'Instalar marcadas'
+                AiToolsValidate     = 'Validar marcadas'
+                AiToolsConfigure    = 'Configurar marcadas'
+                AiToolsUninstall    = 'Desinstalar marcadas'
                 AiToolsDocs         = 'Abrir docs'
                 ApiCenterTitle      = 'Central de Chaves e APIs'
                 ApiProviderSummary  = 'Resumo dos provedores'
@@ -493,8 +493,8 @@ function Get-UiStrings {
                 ApiActivate         = 'Usar esta chave agora'
                 ApiImport           = 'Importar arquivo bruto'
                 ApiApply            = 'Configurar apps'
-                ApiCatalog          = 'Catalogo completo'
-                ApiCatalogTitle     = 'Catalogo completo de chaves'
+                ApiCatalog          = 'Catálogo completo'
+                ApiCatalogTitle     = 'Catálogo completo de chaves'
                 ApiCatalogSubtitle  = 'Lista pesquisada de provedores com posse, uso configurado, finalidade, requisitos e links oficiais.'
                 ApiCatalogBack      = '<- Central de APIs'
                 HostHealth         = 'Nível de manutenção'
@@ -536,10 +536,10 @@ function Get-UiStrings {
                 PendingRebootBanner = 'Reinício pendente detectado: {0}. Recomendo reiniciar.'
                 PendingRebootBannerBlocking = 'Reinício pendente detectado: {0}. Pode travar winget/MSI até reiniciar.'
                 UserCanceledElevation = 'Execução cancelada ou elevação negada.'
-                Back               = '<- Voltar'
-                Next               = 'Avancar ->'
+                Back               = 'Voltar'
+                Next               = 'Avançar'
                 Finish             = 'Fechar'
-                Welcome            = 'Inicio'
+                Welcome            = 'Início'
                 Selection          = 'Escolher'
                 HostSetup          = 'Configurar PC'
                 Health             = 'Saúde'
@@ -552,7 +552,7 @@ function Get-UiStrings {
                 GenericMode        = 'Modo'
                 GenericLayout      = 'Layout'
                 GenericResolution  = 'Resolução'
-                DisplayMode        = 'Modo de exibicao'
+                DisplayMode        = 'Modo de exibição'
                 SessionHandheld    = 'HANDHELD'
                 SessionDockedTv    = 'DOCKED_TV'
                 SessionDockedMonitor = 'DOCKED_MONITOR'
@@ -574,6 +574,7 @@ function Get-UiStateDefaults {
         selectedAppTuningCategories = @()
         selectedAppTuningItems = @()
         excludedAppTuningItems = @()
+        selectedAiTools    = @()
         skipManualRequirements = $false
         ignoreManualRequirements = $false
         requireNoPendingReboot = $false
@@ -619,6 +620,7 @@ function Normalize-UiState {
     $normalized['selectedAppTuningCategories'] = @(Normalize-BootstrapNames -Names @($normalized['selectedAppTuningCategories']))
     $normalized['selectedAppTuningItems'] = @(Normalize-BootstrapNames -Names @($normalized['selectedAppTuningItems']))
     $normalized['excludedAppTuningItems'] = @(Normalize-BootstrapNames -Names @($normalized['excludedAppTuningItems']))
+    $normalized['selectedAiTools'] = @(Normalize-BootstrapNames -Names @($normalized['selectedAiTools']))
     $normalized['enableClaudeCodeProjectMcps'] = [bool]$normalized['enableClaudeCodeProjectMcps']
     if (-not $normalized.ContainsKey('requireNoPendingReboot')) { $normalized['requireNoPendingReboot'] = $false }
     $normalized['requireNoPendingReboot'] = [bool]$normalized['requireNoPendingReboot']
@@ -1189,6 +1191,12 @@ function Get-UiBrush {
             <Setter Property="RowHeaderWidth"        Value="0"/>
             <Setter Property="CanUserAddRows"        Value="True"/>
             <Setter Property="CanUserDeleteRows"     Value="True"/>
+            <Setter Property="EnableRowVirtualization" Value="True"/>
+            <Setter Property="EnableColumnVirtualization" Value="True"/>
+            <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
+            <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
+            <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+            <Setter Property="ScrollViewer.IsDeferredScrollingEnabled" Value="True"/>
         </Style>
 
         <Style TargetType="DataGridColumnHeader">
@@ -1428,8 +1436,8 @@ function Get-UiBrush {
 
                 <!-- Bottom nav actions -->
                 <StackPanel DockPanel.Dock="Bottom" Margin="12,16">
-                    <Button x:Name="BackButton"   Style="{StaticResource GhostBtn}" Content="&lt;- Voltar"  Margin="0,4" Height="34"/>
-                    <Button x:Name="NextButton"   Style="{StaticResource PrimaryBtn}" Content="Avancar ->" Margin="0,4" Height="34"/>
+                    <Button x:Name="BackButton"   Style="{StaticResource GhostBtn}" Content="Voltar"  Margin="0,4" Height="34"/>
+                    <Button x:Name="NextButton"   Style="{StaticResource PrimaryBtn}" Content="Avançar" Margin="0,4" Height="34"/>
                     <Button x:Name="FinishButton" Style="{StaticResource GhostBtn}" Content="Fechar"     Margin="0,4" Height="34"/>
                 </StackPanel>
             </DockPanel>
@@ -1858,7 +1866,7 @@ function Get-UiBrush {
                                     <DataGridTextColumn Header="Componentes" Binding="{Binding installComponents}" Width="0" Visibility="Collapsed"/>
                                     <DataGridTextColumn Header="Categoria" Binding="{Binding category}" Width="1.1*"/>
                                     <DataGridTextColumn Header="App" Binding="{Binding app}" Width="1.2*"/>
-                                    <DataGridTextColumn Header="Otimizacao" Binding="{Binding optimization}" Width="1.8*"/>
+                                    <DataGridTextColumn Header="Otimização" Binding="{Binding optimization}" Width="1.8*"/>
                                     <DataGridTextColumn Header="Perfil" Binding="{Binding profile}" Width="1.2*"/>
                                     <DataGridTextColumn Header="Risco" Binding="{Binding risk}" Width="0.8*"/>
                                     <DataGridTextColumn Header="SecurityImpact" Binding="{Binding securityImpact}" Width="0" Visibility="Collapsed"/>
@@ -1883,15 +1891,15 @@ function Get-UiBrush {
             <ScrollViewer x:Name="PageAiTools" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="AiToolsTitleLabel" Style="{StaticResource PageTitle}" Text="AI Coding Tools"/>
-                    <TextBlock x:Name="AiToolsSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Instale, valide, configure, desinstale ou abra docs oficiais de ferramentas opcionais de IA." TextWrapping="Wrap"/>
+                    <TextBlock x:Name="AiToolsSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Marque uma ou mais ferramentas e instale, valide, configure, desinstale ou abra docs oficiais." TextWrapping="Wrap"/>
 
                     <Border Background="#1A1D2E" CornerRadius="8" Padding="14,10" Margin="0,0,0,14">
                         <DockPanel>
                             <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
-                                <Button x:Name="AiToolsInstallButton" Style="{StaticResource GhostBtn}" Content="Instalar" Margin="0,0,8,0" Height="32"/>
-                                <Button x:Name="AiToolsValidateButton" Style="{StaticResource GhostBtn}" Content="Validar" Margin="0,0,8,0" Height="32"/>
-                                <Button x:Name="AiToolsConfigureButton" Style="{StaticResource PrimaryBtn}" Content="Configurar" Margin="0,0,8,0" Height="32"/>
-                                <Button x:Name="AiToolsUninstallButton" Style="{StaticResource GhostBtn}" Foreground="{StaticResource WarnBrush}" Content="Desinstalar" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsInstallButton" Style="{StaticResource GhostBtn}" Content="Instalar marcadas" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsValidateButton" Style="{StaticResource GhostBtn}" Content="Validar marcadas" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsConfigureButton" Style="{StaticResource PrimaryBtn}" Content="Configurar marcadas" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsUninstallButton" Style="{StaticResource GhostBtn}" Foreground="{StaticResource WarnBrush}" Content="Desinstalar marcadas" Margin="0,0,8,0" Height="32"/>
                                 <Button x:Name="AiToolsDocsButton" Style="{StaticResource GhostBtn}" Content="Abrir docs" Height="32"/>
                             </WrapPanel>
                             <TextBlock x:Name="AiToolsStatusLabel" Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"/>
@@ -1901,16 +1909,17 @@ function Get-UiBrush {
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
                             <TextBlock Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="FERRAMENTAS OPCIONAIS"/>
-                            <DataGrid x:Name="AiToolsGrid" Style="{StaticResource DarkGrid}" Height="500" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Single" IsReadOnly="True">
+                            <DataGrid x:Name="AiToolsGrid" Style="{StaticResource DarkGrid}" Height="500" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Extended" IsReadOnly="False">
                                 <DataGrid.Columns>
-                                    <DataGridTextColumn Header="Tool" Binding="{Binding tool}" Width="1.0*"/>
-                                    <DataGridTextColumn Header="Nome" Binding="{Binding name}" Width="1.4*"/>
-                                    <DataGridTextColumn Header="Status" Binding="{Binding status}" Width="0.9*"/>
-                                    <DataGridTextColumn Header="Versão" Binding="{Binding version}" Width="1.1*"/>
-                                    <DataGridTextColumn Header="Suporte" Binding="{Binding support}" Width="1.0*"/>
-                                    <DataGridTextColumn Header="Comando" Binding="{Binding commandPath}" Width="1.7*"/>
-                                    <DataGridTextColumn Header="Mensagem" Binding="{Binding message}" Width="2.2*"/>
-                                    <DataGridTextColumn Header="Docs" Binding="{Binding docs}" Width="1.5*"/>
+                                    <DataGridCheckBoxColumn Header="Ativo" Binding="{Binding active, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="70" ElementStyle="{StaticResource DarkGridCheckBoxElement}" EditingElementStyle="{StaticResource DarkGridCheckBoxEditing}"/>
+                                    <DataGridTextColumn Header="Tool" Binding="{Binding tool}" Width="1.0*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Nome" Binding="{Binding name}" Width="1.4*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Status" Binding="{Binding status}" Width="0.9*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Versão" Binding="{Binding version}" Width="1.1*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Suporte" Binding="{Binding support}" Width="1.0*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Comando" Binding="{Binding commandPath}" Width="1.7*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Mensagem" Binding="{Binding message}" Width="2.2*" IsReadOnly="True"/>
+                                    <DataGridTextColumn Header="Docs" Binding="{Binding docs}" Width="1.5*" IsReadOnly="True"/>
                                 </DataGrid.Columns>
                             </DataGrid>
                         </DockPanel>
@@ -1930,7 +1939,7 @@ function Get-UiBrush {
                                 <Button x:Name="ApiRefreshButton" Style="{StaticResource GhostBtn}" Content="Atualizar APIs" Margin="0,0,8,0" Height="32"/>
                                 <Button x:Name="ApiValidateAllButton" Style="{StaticResource GhostBtn}" Content="Validar tudo" Margin="0,0,8,0" Height="32"/>
                                 <Button x:Name="ApiImportButton" Style="{StaticResource GhostBtn}" Content="Importar arquivo bruto" Margin="0,0,8,0" Height="32"/>
-                                <Button x:Name="ApiCatalogButton" Style="{StaticResource GhostBtn}" Content="Catalogo completo" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="ApiCatalogButton" Style="{StaticResource GhostBtn}" Content="Catálogo completo" Margin="0,0,8,0" Height="32"/>
                                 <Button x:Name="ApiApplyButton" Style="{StaticResource PrimaryBtn}" Content="Aplicar nos apps" Height="32"/>
                             </StackPanel>
                             <StackPanel>
@@ -1940,7 +1949,7 @@ function Get-UiBrush {
                                     <Run Text="  |  "/>
                                     <Hyperlink x:Name="ApiDocsLink"><Run Text="Docs"/></Hyperlink>
                                     <Run Text="  |  "/>
-                                    <Hyperlink x:Name="ApiPricingLink"><Run Text="Precos"/></Hyperlink>
+                                    <Hyperlink x:Name="ApiPricingLink"><Run Text="Preços"/></Hyperlink>
                                 </TextBlock>
                                 <TextBlock x:Name="ApiSecretsLinksLabel" Foreground="#94A3B8" FontSize="12" Margin="0,4,0,0" TextWrapping="Wrap" Visibility="Collapsed">
                                     <Hyperlink x:Name="ApiSecretsFileLink"><Run Text="Abrir arquivo"/></Hyperlink>
@@ -2078,7 +2087,7 @@ function Get-UiBrush {
             <!--  API CATALOG PAGE  -->
             <ScrollViewer x:Name="PageApiCatalog" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
-                    <TextBlock x:Name="ApiCatalogTitleLabel" Style="{StaticResource PageTitle}" Text="Catalogo completo de chaves"/>
+                    <TextBlock x:Name="ApiCatalogTitleLabel" Style="{StaticResource PageTitle}" Text="Catálogo completo de chaves"/>
                     <TextBlock x:Name="ApiCatalogSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Lista pesquisada de provedores com posse, uso configurado, finalidade, requisitos e links oficiais." TextWrapping="Wrap"/>
 
                     <Border Background="#1A1D2E" CornerRadius="10" Padding="14,10" Margin="0,0,0,14">
@@ -2893,6 +2902,13 @@ function Load-WpfGridRows {
     $Grid.ItemsSource = $table.DefaultView
 }
 
+function Complete-UiGridEdit {
+    param([Parameter(Mandatory=$true)]$Grid)
+
+    try { [void]$Grid.CommitEdit([System.Windows.Controls.DataGridEditingUnit]::Cell, $true) } catch { [void]$_.Exception }
+    try { [void]$Grid.CommitEdit([System.Windows.Controls.DataGridEditingUnit]::Row, $true) } catch { [void]$_.Exception }
+}
+
 function Read-WpfGridRows {
     param(
         [Parameter(Mandatory=$true)]$Grid,
@@ -2900,6 +2916,7 @@ function Read-WpfGridRows {
     )
     $rows = @()
     if ($null -eq $Grid.ItemsSource) { return $rows }
+    Complete-UiGridEdit -Grid $Grid
     foreach ($rowView in $Grid.ItemsSource) {
         $row = $rowView.Row
         $item = [ordered]@{}
@@ -3052,7 +3069,7 @@ function Get-UiSteamDeckDisplayStatus {
         }
         $externalCount = [int](Get-UiObjectValue -Object $Detection -Name 'externalDisplayCount' -Default 0)
         if ($externalCount -gt 0) { return 'desativado: so desktop externo' }
-        return 'nao detectado'
+        return 'não detectado'
     }
 
     $selected = Get-UiObjectValue -Object $Detection -Name 'selectedDisplay'
@@ -3213,6 +3230,7 @@ function Apply-QuickPreset {
     $ui.State.selectedAppTuningCategories = @()
     $ui.State.selectedAppTuningItems = @()
     $ui.State.excludedAppTuningItems = @()
+    $ui.State.selectedAiTools = @()
     $ui.State.steamDeckVersion   = 'Auto'
 }
 
@@ -3268,6 +3286,7 @@ function Clear-UiAllSelections {
     $ui.State.selectedAppTuningCategories = @()
     $ui.State.selectedAppTuningItems = @()
     $ui.State.excludedAppTuningItems = @()
+    $ui.State.selectedAiTools = @()
     $ui.State.steamDeckVersion = 'Auto'
     $ui.State.enableClaudeCodeProjectMcps = $false
     $ui.State.skipManualRequirements = $false
@@ -3712,7 +3731,7 @@ function Refresh-ExcludeList {
             $cb.Add_Checked({
                 $tname = [string]$this.Tag.name
                 if (-not [bool]$this.Tag.canExclude) {
-                    $ui.SelectionErrorLabel.Text = "O componente $tname e obrigatorio/dependencia base e nao pode ser excluido."
+                    $ui.SelectionErrorLabel.Text = "O componente $tname é obrigatório/dependência base e não pode ser excluído."
                     $this.IsChecked = $false
                     return
                 }
@@ -3885,7 +3904,7 @@ function Format-UiAppTuningState {
         'missing' { return '[ ] ausente' }
         'configured' { return '[x] configurado' }
         'planned' { return '[~] planejado' }
-        'not-configured' { return '[ ] nao' }
+        'not-configured' { return '[ ] não' }
         'check' { return '[?] verificar' }
         'not-installed' { return '-' }
         default { return [string]$State }
@@ -4066,7 +4085,7 @@ function Capture-AppTuningStateFromControls {
         $ui.State.appTuningMode = [string]$ui.AppTuningModeCombo.SelectedItem
     }
 
-    # Sempre sincronizar a grelha (recommended/custom/off): o modo isolado e o backend usam
+    # Sempre sincronizar a grade (recommended/custom/off): o modo isolado e o backend usam
     # selectedAppTuningItems / excludedAppTuningItems; antes o early-return em recommended deixava
     # a selecao vazia apesar das caixas "Ativo" na UI.
     $rows = @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','admin'))
@@ -4115,7 +4134,11 @@ function Get-SelectedAppTuningRows {
         }
     }
     if ($rows.Count -gt 0) { return @($rows) }
-    return @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','admin') | Where-Object { ConvertTo-UiBoolean -Value $_['active'] })
+    return @(Get-CheckedAppTuningRowList)
+}
+
+function Get-CheckedAppTuningRowList {
+    return @(Read-WpfGridRows -Grid $ui.AppTuningItemsGrid -Columns @('active','id','installComponents','category','app','optimization','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','admin','installedStateRaw','configuredStateRaw','updatedStateRaw') | Where-Object { ConvertTo-UiBoolean -Value $_['active'] })
 }
 
 function Get-ActiveAppTuningRows {
@@ -4220,7 +4243,7 @@ function Normalize-UiComponentOnlyExecutionScope {
     $hasProfiles = (@($Snapshot.selectedProfiles).Count -gt 0)
     $hasComponents = (@($Snapshot.selectedComponents).Count -gt 0)
     if ($hasComponents -and -not $hasProfiles) {
-        $Snapshot.scopeLabel = 'Instalacao isolada (somente componentes selecionados)'
+        $Snapshot.scopeLabel = 'Instalação isolada (somente componentes selecionados)'
         $Snapshot.hostHealth = 'off'
         if (@($Snapshot.selectedAppTuningCategories).Count -eq 0 -and @($Snapshot.selectedAppTuningItems).Count -eq 0) {
             $Snapshot.appTuningMode = 'off'
@@ -4302,10 +4325,10 @@ function Assert-ExecutionScopeSnapshot {
             throw 'Escopo isolado invalido: ExcludeAppTuningItem deve estar vazio para evitar reaproveitar historico.'
         }
         if (@($Scope.selectedProfiles).Count -gt 0) {
-            throw 'Escopo isolado invalido: perfil nao pode ser enviado no modo isolado.'
+            throw 'Escopo isolado inválido: perfil não pode ser enviado no modo isolado.'
         }
         if (@($Scope.selectedAppTuningCategories).Count -gt 0) {
-            throw 'Escopo isolado invalido: categorias AppTuning nao sao permitidas no modo isolado.'
+            throw 'Escopo isolado inválido: categorias AppTuning não são permitidas no modo isolado.'
         }
         $isolatedComponentCount = @($Scope.selectedComponents).Count
         $isolatedItemCount = @($Scope.selectedAppTuningItems).Count
@@ -4394,7 +4417,7 @@ function Confirm-UiExecutionScope {
         "Componentes: $components"
         ''
         'Sim = Somente componentes selecionados (sem perfil, HostHealth off, AppTuning off).'
-        'Nao = Perfil atual + componentes.'
+        'Não = Perfil atual + componentes.'
         'Cancelar = voltar para revisar.'
     ) -join [Environment]::NewLine
 
@@ -4455,7 +4478,7 @@ function Get-AppTuningInstallComponentsByAppName {
 function Confirm-AppTuningSecurityImpact {
     param([AllowNull()][object[]]$Rows = $null)
 
-    $sourceRows = if ($Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
+    $sourceRows = if ($null -ne $Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
     $risky = @($sourceRows | Where-Object {
         (ConvertTo-UiBoolean -Value $_['securityImpact']) -or ([string]$_['risk'] -eq 'aggressive')
     })
@@ -4485,7 +4508,7 @@ function Queue-AppTuningInstallOrUpdate {
     )
 
     $components = @()
-    $sourceRows = if ($Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
+    $sourceRows = if ($null -ne $Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
     foreach ($row in @($sourceRows)) {
         foreach ($component in (([string]$row['installComponents']) -split ',')) {
             if ([string]::IsNullOrWhiteSpace($component)) { continue }
@@ -4493,7 +4516,7 @@ function Queue-AppTuningInstallOrUpdate {
         }
     }
     if ($components.Count -eq 0) {
-        $message = "$ActionName nao planejado: item sem componente instalavel. Use Configurar/Otimizar se o app ja estiver instalado."
+        $message = "$ActionName não planejado: item sem componente instalável. Use Configurar/Otimizar se o app já estiver instalado."
         Set-AppTuningActionFeedback -Message $message -Level 'warning'
         return [ordered]@{ status = 'warning'; message = $message; added = @() }
     }
@@ -4502,9 +4525,9 @@ function Queue-AppTuningInstallOrUpdate {
     Refresh-SelectionSummary
     Refresh-AppTuningControls
     $message = if ($added.Count -gt 0) {
-        "$ActionName planejado (nao executado): $(@($added) -join ', ')"
+        "$ActionName planejado (não executado): $(@($added) -join ', ')"
     } else {
-        "${ActionName}: nenhum componente novo para marcar (ja estava planejado, nao executado)."
+        "${ActionName}: nenhum componente novo para marcar (já estava planejado, não executado)."
     }
     Set-AppTuningActionFeedback -Message $message -Level 'info'
     return [ordered]@{ status = 'success'; message = $message; added = @($added) }
@@ -4521,7 +4544,7 @@ function Queue-AppTuningConfigure {
     $autoInstallComponents = New-Object System.Collections.Generic.List[string]
     $sourceRows = if ($Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
     if (-not (Confirm-AppTuningSecurityImpact -Rows $sourceRows)) {
-        $message = 'Config/Otimizacao cancelada: SecurityImpact nao confirmado.'
+        $message = 'Config/Otimização cancelada: SecurityImpact não confirmado.'
         Set-AppTuningActionFeedback -Message $message -Level 'warning'
         return [ordered]@{ status = 'warning'; message = $message; ids = @() }
     }
@@ -4540,7 +4563,7 @@ function Queue-AppTuningConfigure {
         }
     }
     if ($ids.Count -eq 0) {
-        $message = 'Config/Otimizacao nao planejada: selecione ao menos um item.'
+        $message = 'Config/Otimização não planejada: selecione ao menos um item.'
         Set-AppTuningActionFeedback -Message $message -Level 'warning'
         return [ordered]@{ status = 'warning'; message = $message; ids = @() }
     }
@@ -4562,12 +4585,12 @@ function Queue-AppTuningConfigure {
     }
     Save-UiState -State $ui.State -Path $UiStatePath
     Refresh-AppTuningControls
-    $message = "Config/Otimizacao planejada (nao executada): $(@($ids) -join ', ')"
+    $message = "Config/Otimização planejada (não executada): $(@($ids) -join ', ')"
     $status = 'success'
     if ($missingInstallRows.Count -gt 0) {
         $message += " | App ausente detectado: $(@($missingInstallRows.ToArray()) -join ', ')"
         if ($autoAdded.Count -gt 0) {
-            $message += " | Instalacao adicionada automaticamente: $(@($autoAdded) -join ', ')"
+            $message += " | Instalação adicionada automaticamente: $(@($autoAdded) -join ', ')"
         } else {
             $message += ' | Para aplicar de fato, planeje tambem a instalacao do app.'
         }
@@ -4614,7 +4637,7 @@ function Invoke-AppTuningSingleRowAction {
     try {
         $result = $null
         switch ($Action) {
-            'install' { $result = Queue-AppTuningInstallOrUpdate -ActionName 'Instalacao' -Rows @($Row) }
+            'install' { $result = Queue-AppTuningInstallOrUpdate -ActionName 'Instalação' -Rows @($Row) }
             'configure' {
                 $autoIncludeInstall = $false
                 if ([string]$Row['installedStateRaw'] -eq 'missing') {
@@ -4628,7 +4651,7 @@ function Invoke-AppTuningSingleRowAction {
                 }
                 $result = Queue-AppTuningConfigure -Rows @($Row) -AutoIncludeMissingInstall:$autoIncludeInstall
             }
-            'update' { $result = Queue-AppTuningInstallOrUpdate -ActionName 'Atualizacao' -Rows @($Row) }
+            'update' { $result = Queue-AppTuningInstallOrUpdate -ActionName 'Atualização' -Rows @($Row) }
         }
         if ($result -and [string]$result.status -eq 'warning') {
             [void][System.Windows.MessageBox]::Show([string]$result.message, 'Bootstrap UI - Aviso', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
@@ -4638,8 +4661,8 @@ function Invoke-AppTuningSingleRowAction {
             Set-AppTuningActionFeedback -Message ([string]$result.message) -Level $(if ([string]$result.status -eq 'warning') { 'warning' } else { 'info' })
             Prompt-AppTuningNavigateToReview -ActionMessage ([string]$result.message)
         } else {
-            Set-AppTuningActionFeedback -Message "Acao unitaria concluida para '$rowId' ($Action)." -Level 'info'
-            Prompt-AppTuningNavigateToReview -ActionMessage "Acao '$Action' planejada para '$rowName'."
+            Set-AppTuningActionFeedback -Message "Ação unitária concluída para '$rowId' ($Action)." -Level 'info'
+            Prompt-AppTuningNavigateToReview -ActionMessage "Ação '$Action' planejada para '$rowName'."
         }
     } catch {
         Write-UiLog -Level 'ERROR' -Message ("AppTuning ação unitária falhou | action={0} | id={1} | message={2}`n{3}" -f $Action, $rowId, $_.Exception.Message, $_.ScriptStackTrace)
@@ -4824,67 +4847,124 @@ function Refresh-AiToolsControls {
     try {
         $installRoot = Get-BootstrapAiInstallRoot
         $rows = @(Get-BootstrapAiToolStatusRows -InstallRoot $installRoot -ProjectRoot $PSScriptRoot)
-        Load-WpfGridRows -Grid $ui.AiToolsGrid -Items $rows -Columns @('tool','name','status','version','support','commandPath','message','docs')
+        $selectedLookup = @{}
+        foreach ($toolName in @(Normalize-BootstrapNames -Names @($ui.State.selectedAiTools))) {
+            if (-not [string]::IsNullOrWhiteSpace($toolName)) { $selectedLookup[$toolName] = $true }
+        }
+        $viewRows = @()
+        foreach ($row in @($rows)) {
+            $toolName = Normalize-BootstrapAiToolName -ToolName ([string]$row['tool'])
+            $viewRows += @([ordered]@{
+                active = $selectedLookup.ContainsKey($toolName)
+                tool = [string]$row['tool']
+                name = [string]$row['name']
+                status = [string]$row['status']
+                version = [string]$row['version']
+                support = [string]$row['support']
+                commandPath = [string]$row['commandPath']
+                message = [string]$row['message']
+                docs = [string]$row['docs']
+            })
+        }
+        Load-WpfGridRows -Grid $ui.AiToolsGrid -Items $viewRows -Columns @('active','tool','name','status','version','support','commandPath','message','docs')
         $installedCount = @($rows | Where-Object { [string]$_['status'] -in @('installed','configured') }).Count
         $manualCount = @($rows | Where-Object { [string]$_['status'] -eq 'manual' }).Count
-        $ui.AiToolsStatusLabel.Text = "AI Coding Tools: $installedCount instaladas/configuradas | $manualCount requerem acao manual | root: $installRoot"
+        $markedCount = @($selectedLookup.Keys).Count
+        $ui.AiToolsStatusLabel.Text = "AI Coding Tools: $installedCount instaladas/configuradas | $manualCount requerem ação manual | marcadas: $markedCount | root: $installRoot"
     } catch {
         Write-UiLog -Level 'ERROR' -Message ("Falha ao atualizar AI Coding Tools: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
         $ui.AiToolsStatusLabel.Text = "AI Coding Tools erro: $($_.Exception.Message)"
     }
 }
 
-function Get-SelectedAiToolName {
-    if ($null -eq $ui.AiToolsGrid.SelectedItem) { return '' }
-    $item = $ui.AiToolsGrid.SelectedItem
+function Get-AiToolNameFromGridItem {
+    param([AllowNull()]$Item)
+
+    if ($null -eq $Item) { return '' }
     try {
-        if ($item -and $item.PSObject.Properties['Row']) { return [string]$item.Row['tool'] }
-    } catch {
-    }
+        if ($Item -and $Item.PSObject.Properties['Row']) { return [string]$Item.Row['tool'] }
+    } catch { [void]$_.Exception }
     try {
-        if ($item -is [System.Collections.IDictionary] -and $item.Contains('tool')) { return [string]$item['tool'] }
-    } catch {
-    }
+        if ($Item -is [System.Collections.IDictionary] -and $Item.Contains('tool')) { return [string]$Item['tool'] }
+    } catch { [void]$_.Exception }
     return ''
+}
+
+function Read-AiToolSelectionFromControl {
+    $selected = @()
+    $rows = @(Read-WpfGridRows -Grid $ui.AiToolsGrid -Columns @('active','tool','name','status','version','support','commandPath','message','docs'))
+    foreach ($row in @($rows)) {
+        if (-not (ConvertTo-UiBoolean -Value $row['active'])) { continue }
+        $toolName = Normalize-BootstrapAiToolName -ToolName ([string]$row['tool'])
+        if (-not [string]::IsNullOrWhiteSpace($toolName)) { $selected += @($toolName) }
+    }
+    $ui.State.selectedAiTools = @(Normalize-BootstrapNames -Names $selected)
+    Save-UiState -State $ui.State -Path $UiStatePath
+    return @($ui.State.selectedAiTools)
+}
+
+function Get-SelectedAiToolNameList {
+    $toolNames = @(Read-AiToolSelectionFromControl)
+    if ($toolNames.Count -gt 0) { return @($toolNames) }
+
+    $fallback = @()
+    foreach ($item in @($ui.AiToolsGrid.SelectedItems)) {
+        $toolName = Normalize-BootstrapAiToolName -ToolName (Get-AiToolNameFromGridItem -Item $item)
+        if (-not [string]::IsNullOrWhiteSpace($toolName) -and (@($fallback) -notcontains $toolName)) {
+            $fallback += @($toolName)
+        }
+    }
+    return @($fallback)
 }
 
 function Invoke-UiAiToolAction {
     param([Parameter(Mandatory = $true)][string]$Action)
 
-    $toolName = Get-SelectedAiToolName
-    if ([string]::IsNullOrWhiteSpace($toolName)) {
-        $ui.AiToolsStatusLabel.Text = 'Selecione uma ferramenta.'
+    $toolNames = @(Get-SelectedAiToolNameList)
+    if ($toolNames.Count -eq 0) {
+        $ui.AiToolsStatusLabel.Text = 'Marque uma ou mais ferramentas.'
         return
     }
     if ($Action -eq 'uninstall') {
-        if (-not (Confirm-UiCriticalAction -Title 'Confirmar desinstalacao' -Message "Desinstalar artefatos gerenciados pelo projeto para: $toolName")) { return }
+        if (-not (Confirm-UiCriticalAction -Title 'Confirmar desinstalação' -Message "Desinstalar artefatos gerenciados pelo projeto para: $(@($toolNames) -join ', ')")) { return }
     }
-    try {
-        $result = Invoke-BootstrapAiToolAction -ToolName $toolName -Action $Action -ProjectRoot $PSScriptRoot -Yes -NoAdmin
-        $status = [string]$result['status']
-        $message = [string]$result['message']
-        if ([string]::IsNullOrWhiteSpace($message)) { $message = [string]$result['docs'] }
-        $ui.AiToolsStatusLabel.Text = "$toolName / ${Action}: $status. $message"
-        Refresh-AiToolsControls
-    } catch {
-        Write-UiLog -Level 'ERROR' -Message ("AI tool action failed: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
-        $ui.AiToolsStatusLabel.Text = "Erro em $toolName / ${Action}: $($_.Exception.Message)"
+
+    $summaries = @()
+    foreach ($toolName in @($toolNames)) {
+        try {
+            $result = Invoke-BootstrapAiToolAction -ToolName $toolName -Action $Action -ProjectRoot $PSScriptRoot -Yes -NoAdmin
+            $status = [string]$result['status']
+            $message = [string]$result['message']
+            if ([string]::IsNullOrWhiteSpace($message)) { $message = [string]$result['docs'] }
+            $summaries += @("{0}: {1}" -f $toolName, $status)
+            Write-UiLog -Message ("AI tool action | tool={0} | action={1} | status={2} | message={3}" -f $toolName, $Action, $status, $message)
+        } catch {
+            Write-UiLog -Level 'ERROR' -Message ("AI tool action failed | tool={0} | action={1} | message={2}`n{3}" -f $toolName, $Action, $_.Exception.Message, $_.ScriptStackTrace)
+            $summaries += @("{0}: erro ({1})" -f $toolName, $_.Exception.Message)
+        }
     }
+    $ui.AiToolsStatusLabel.Text = "AI Tools / ${Action}: $($summaries -join ' | ')"
+    Refresh-AiToolsControls
 }
 
-function Open-SelectedAiToolDocs {
-    $toolName = Get-SelectedAiToolName
-    if ([string]::IsNullOrWhiteSpace($toolName)) {
-        $ui.AiToolsStatusLabel.Text = 'Selecione uma ferramenta.'
+function Open-SelectedAiToolDocumentation {
+    $toolNames = @(Get-SelectedAiToolNameList)
+    if ($toolNames.Count -eq 0) {
+        $ui.AiToolsStatusLabel.Text = 'Marque uma ou mais ferramentas.'
         return
     }
     try {
         $catalog = Get-BootstrapAiToolCatalog
-        $normalized = Normalize-BootstrapAiToolName -ToolName $toolName
-        if (-not $catalog.Contains($normalized)) { throw "Ferramenta desconhecida: $toolName" }
-        $docs = [string]$catalog[$normalized]['DocsUrl']
-        Start-Process $docs | Out-Null
-        $ui.AiToolsStatusLabel.Text = "Docs abertas: $docs"
+        $opened = @()
+        foreach ($toolName in @($toolNames)) {
+            $normalized = Normalize-BootstrapAiToolName -ToolName $toolName
+            if (-not $catalog.Contains($normalized)) { throw "Ferramenta desconhecida: $toolName" }
+            $docs = [string]$catalog[$normalized]['DocsUrl']
+            if ([string]::IsNullOrWhiteSpace($docs)) { continue }
+            Start-Process $docs | Out-Null
+            $opened += @($normalized)
+        }
+        $ui.AiToolsStatusLabel.Text = "Docs abertas: $(@($opened) -join ', ')"
     } catch {
         $ui.AiToolsStatusLabel.Text = "Erro ao abrir docs: $($_.Exception.Message)"
     }
@@ -5017,9 +5097,9 @@ function Refresh-ApiCatalogControls {
         foreach ($row in @($rows)) {
             $configured += [int]$row['configured']
         }
-        $ui.ApiCatalogStatusLabel.Text = "Catalogo: $(@($rows).Count) provedores | Ja possui: $owned | Configuradas: $configured"
+        $ui.ApiCatalogStatusLabel.Text = "Catálogo: $(@($rows).Count) provedores | Já possui: $owned | Configuradas: $configured"
     } catch {
-        $ui.ApiCatalogStatusLabel.Text = "Catalogo erro: $($_.Exception.Message)"
+        $ui.ApiCatalogStatusLabel.Text = "Catálogo erro: $($_.Exception.Message)"
     }
 }
 
@@ -6093,7 +6173,7 @@ function Get-UiRunStatusTextFromResult {
             if ($values.ContainsKey('auditSummary') -and $null -ne $values['auditSummary']) {
                 try { $bad = [int]$values['auditSummary'].critical } catch { }
             }
-            return "Auditoria concluida com avisos: $bad componente(s) requerem instalacao/reparo/acao manual. Ver log e resultado."
+            return "Auditoria concluída com avisos: $bad componente(s) requerem instalação/reparo/ação manual. Ver log e resultado."
         } else {
             return 'Concluido com avisos. Verifique o log.'
         }
@@ -6107,7 +6187,7 @@ function Get-UiRunStatusTextFromResult {
     } else {
         $err = Get-ResultTextValue -Name 'error' -Default 'sem detalhes (ver log).'
         $fix = Get-ResultTextValue -Name 'howToFix' -Default 'Abra Resultado/Log para detalhes.'
-        $rollbackText = if (Get-ResultBoolValue -Name 'rollbackAvailable') { 'Rollback disponivel: Sim.' } else { 'Rollback disponivel: Nao.' }
+        $rollbackText = if (Get-ResultBoolValue -Name 'rollbackAvailable') { 'Rollback disponível: Sim.' } else { 'Rollback disponível: Não.' }
         $failedComponent = Get-ResultTextValue -Name 'failedComponent'
         if (-not [string]::IsNullOrWhiteSpace($failedComponent)) { $err = "Componente: $failedComponent. $err" }
         $statusText = "{0}  {1}" -f $runFailed, $err
@@ -6865,7 +6945,7 @@ function Copy-HealthDiagnostic {
 $ui.HealthCopyDiagnosticButton.Add_Click({ Copy-HealthDiagnostic })
 
 $ui.RollbackChangesButton.Add_Click({
-    if (Confirm-UiCriticalAction -Title 'Confirmar rollback' -Message "Rollback vai reverter ajustes de registro/sistema criados pelo bootstrap. Apps instalados nao serao removidos automaticamente. Log atual: $([string]$ui.CurrentLogPath)") {
+    if (Confirm-UiCriticalAction -Title 'Confirmar rollback' -Message "Rollback vai reverter ajustes de registro/sistema criados pelo bootstrap. Apps instalados não serão removidos automaticamente. Log atual: $([string]$ui.CurrentLogPath)") {
         $runIdx = @($ui.PageNames).IndexOf('PageRun')
         if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
         Navigate-ToPage -Index $runIdx
@@ -7204,7 +7284,7 @@ $ui.AppTuningItemsGrid.Add_MouseDoubleClick({
 
 $ui.AppTuningInstallButton.Add_Click({
     try {
-        $result = Queue-AppTuningInstallOrUpdate -ActionName 'Instalacao'
+        $result = Queue-AppTuningInstallOrUpdate -ActionName 'Instalação' -Rows @(Get-CheckedAppTuningRowList)
         if ($result -and -not [string]::IsNullOrWhiteSpace([string]$result.message)) {
             Prompt-AppTuningNavigateToReview -ActionMessage ([string]$result.message)
         }
@@ -7216,7 +7296,7 @@ $ui.AppTuningInstallButton.Add_Click({
 
 $ui.AppTuningConfigureButton.Add_Click({
     try {
-        $result = Queue-AppTuningConfigure
+        $result = Queue-AppTuningConfigure -Rows @(Get-CheckedAppTuningRowList)
         if ($result -and -not [string]::IsNullOrWhiteSpace([string]$result.message)) {
             Prompt-AppTuningNavigateToReview -ActionMessage ([string]$result.message)
         }
@@ -7228,7 +7308,7 @@ $ui.AppTuningConfigureButton.Add_Click({
 
 $ui.AppTuningUpdateButton.Add_Click({
     try {
-        $result = Queue-AppTuningInstallOrUpdate -ActionName 'Atualizacao'
+        $result = Queue-AppTuningInstallOrUpdate -ActionName 'Atualização' -Rows @(Get-CheckedAppTuningRowList)
         if ($result -and -not [string]::IsNullOrWhiteSpace([string]$result.message)) {
             Prompt-AppTuningNavigateToReview -ActionMessage ([string]$result.message)
         }
@@ -7253,7 +7333,7 @@ $ui.AppTuningRunNowButton.Add_Click({
             'Escolha o escopo desta execução:'
             ''
             'Sim = Isolado (somente AppTuning selecionado)'
-            'Nao = Perfil atual (inclui perfil + AppTuning)'
+            'Não = Perfil atual (inclui perfil + AppTuning)'
             'Cancelar = abortar'
             ''
             ("Componentes selecionados: {0}" -f $selectionCount)
@@ -7333,7 +7413,7 @@ $ui.AiToolsInstallButton.Add_Click({ Invoke-UiAiToolAction -Action 'install' })
 $ui.AiToolsValidateButton.Add_Click({ Invoke-UiAiToolAction -Action 'validate' })
 $ui.AiToolsConfigureButton.Add_Click({ Invoke-UiAiToolAction -Action 'configure' })
 $ui.AiToolsUninstallButton.Add_Click({ Invoke-UiAiToolAction -Action 'uninstall' })
-$ui.AiToolsDocsButton.Add_Click({ Open-SelectedAiToolDocs })
+$ui.AiToolsDocsButton.Add_Click({ Open-SelectedAiToolDocumentation })
 
 # Steam Deck control
 $ui.ReloadSettingsButton.Add_Click({ Refresh-SteamDeckControls; $ui.StatusLabel.Text = $ui.Strings.ReloadSettings })

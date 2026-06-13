@@ -405,28 +405,37 @@ Describe 'Resilience Architecture' {
         }
 
         It 'audits command-backed custom AI tools instead of UnsupportedAudit' {
+            $oldUserProfile = $env:USERPROFILE
+            $tempUserProfile = Join-Path $env:TEMP ("bootstrap_audit_ai_tools_{0}" -f ([Guid]::NewGuid().ToString('N')))
             $catalog = @{
                 'opencode' = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode' -Kind 'opencode'
                 'openclaw' = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw' -Kind 'openclaw'
                 'goose' = New-BootstrapComponentDefinition -Name 'goose' -Description 'Goose' -Kind 'goose'
             }
-            $resolution = @{ ResolvedComponents = @('opencode','openclaw','goose') }
-            Mock Get-BootstrapComponentCatalog { $catalog }
-            Mock Get-Winget { return $null }
-            Mock Resolve-CommandPath {
-                param([string]$Name)
-                switch ($Name) {
-                    'opencode' { return 'C:\Tools\opencode.exe' }
-                    'openclaw' { return 'C:\Tools\openclaw.cmd' }
-                    default { return $null }
+            try {
+                New-Item -Path $tempUserProfile -ItemType Directory -Force | Out-Null
+                $env:USERPROFILE = $tempUserProfile
+                $resolution = @{ ResolvedComponents = @('opencode','openclaw','goose') }
+                Mock Get-BootstrapComponentCatalog { $catalog }
+                Mock Get-Winget { return $null }
+                Mock Resolve-CommandPath {
+                    param([string]$Name)
+                    switch ($Name) {
+                        'opencode' { return 'C:\Tools\opencode.exe' }
+                        'openclaw' { return 'C:\Tools\openclaw.cmd' }
+                        default { return $null }
+                    }
                 }
+
+                $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
+
+                ([string[]]@($rows | ForEach-Object { [string]$_.Severity }) -contains 'UnsupportedAudit') | Should Be $false
+                $gooseRow = $rows | Where-Object Component -eq 'goose' | Select-Object -First 1
+                [string]$gooseRow.Status | Should Be 'Missing'
+            } finally {
+                $env:USERPROFILE = $oldUserProfile
+                if (Test-Path -LiteralPath $tempUserProfile) { Remove-Item -LiteralPath $tempUserProfile -Recurse -Force -ErrorAction SilentlyContinue }
             }
-
-            $rows = @(Invoke-BootstrapAuditMode -Resolution $resolution)
-
-            ([string[]]@($rows | ForEach-Object { [string]$_.Severity }) -contains 'UnsupportedAudit') | Should Be $false
-            $gooseRow = $rows | Where-Object Component -eq 'goose' | Select-Object -First 1
-            [string]$gooseRow.Status | Should Be 'Missing'
         }
 
         It 'audits WSL and VS Code extension components without UnsupportedAudit' {

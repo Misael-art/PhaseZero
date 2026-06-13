@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -396,7 +396,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'AppTuningCategoryList'
         $raw | Should Match 'AppTuningItemsGrid'
         $raw | Should Match 'Refresh-AppTuningControls'
-        foreach ($header in @('Ativo','Categoria','App','Otimizacao','Perfil','Risco','Instalado','Configurado','Atualizado','Admin')) {
+        foreach ($header in @('Ativo','Categoria','App','Otimização','Perfil','Risco','Instalado','Configurado','Atualizado','Admin')) {
             $raw | Should Match ([regex]::Escape(('Header="{0}"' -f $header)))
         }
         foreach ($buttonName in @('AppTuningRecommendedButton','AppTuningMarkCategoryButton','AppTuningClearCategoryButton','AppTuningAuditButton','AppTuningClearAllButton','AppTuningInstallButton','AppTuningConfigureButton','AppTuningUpdateButton','AppTuningRunNowButton')) {
@@ -411,11 +411,11 @@ if (-not `$match.Success) { throw 'XAML block not found' }
     It 'uses checked AppTuning rows for toolbar actions instead of the highlighted row' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 
-        $raw | Should Match 'Get-CheckedAppTuningRows'
-        $raw | Should Match 'Commit-UiGridEdits'
-        $raw | Should Match 'Queue-AppTuningInstallOrUpdate -ActionName ''Instalacao'' -Rows @\(Get-CheckedAppTuningRows\)'
-        $raw | Should Match 'Queue-AppTuningConfigure -Rows @\(Get-CheckedAppTuningRows\)'
-        $raw | Should Match 'Queue-AppTuningInstallOrUpdate -ActionName ''Atualizacao'' -Rows @\(Get-CheckedAppTuningRows\)'
+        $raw | Should Match 'Get-CheckedAppTuningRowList'
+        $raw | Should Match 'Complete-UiGridEdit'
+        $raw | Should Match 'Queue-AppTuningInstallOrUpdate -ActionName ''Instalação'' -Rows @\(Get-CheckedAppTuningRowList\)'
+        $raw | Should Match 'Queue-AppTuningConfigure -Rows @\(Get-CheckedAppTuningRowList\)'
+        $raw | Should Match 'Queue-AppTuningInstallOrUpdate -ActionName ''Atualização'' -Rows @\(Get-CheckedAppTuningRowList\)'
     }
 
     It 'adds explicit checkbox selection and multi-tool actions to AI Coding Tools' {
@@ -424,8 +424,8 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'selectedAiTools'
         $raw | Should Match 'DataGridCheckBoxColumn Header="Ativo"'
         $raw | Should Match 'SelectionMode="Extended"'
-        $raw | Should Match 'Capture-AiToolsSelectionFromControls'
-        $raw | Should Match 'Get-SelectedAiToolNames'
+        $raw | Should Match 'Read-AiToolSelectionFromControl'
+        $raw | Should Match 'Get-SelectedAiToolNameList'
         $raw | Should Match 'foreach \(\$toolName in @\(\$toolNames\)\)'
         $raw | Should Match 'Load-WpfGridRows -Grid \$ui\.AiToolsGrid -Items \$viewRows -Columns @\(''active'',''tool'''
     }
@@ -524,7 +524,7 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'Update-RunArtifactButtons'
         $raw | Should Match 'rollbackAvailable'
         $raw | Should Match 'howToFix'
-        $raw | Should Match 'Rollback disponivel'
+        $raw | Should Match 'Rollback disponível'
     }
 
     It 'captures elevated backend stdout and stderr inside the elevated process' {
@@ -680,7 +680,7 @@ param(
         $raw = Get-Content -Path $uiScriptPath -Raw
 
         $raw | Should Match 'Normalize-UiComponentOnlyExecutionScope'
-        $raw | Should Match 'Instalacao isolada'
+        $raw | Should Match 'Instalação isolada'
         $raw | Should Match '\$snapshot\.hostHealth = ''off'''
         $raw | Should Match '\$snapshot\.appTuningMode = ''off'''
         $raw | Should Match '\$snapshot\.excludedAppTuningItems = @\(\)'
@@ -754,6 +754,21 @@ param(
 
         $raw | Should Not Match 'sesses|genrico|Resoluo|Validao|Execuo|Reviso|Relatrios|manuteno'
         $raw | Should Not Match 'PRESETS RPIDOS|Configurao|Verso|EXCLUSES|Execucao|Revisao|Relatorios|Opcoes rapidas|Nao instalar|manutencao'
+    }
+
+    It 'keeps UTF-8 BOM on PowerShell files that contain user-facing accents' {
+        foreach ($path in @($uiScriptPath, (Join-Path $repoRoot 'bootstrap-tools.ps1'))) {
+            $bytes = [System.IO.File]::ReadAllBytes($path)
+            $bytes.Length | Should BeGreaterThan 3
+            $bytes[0] | Should Be 0xEF
+            $bytes[1] | Should Be 0xBB
+            $bytes[2] | Should Be 0xBF
+        }
+
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $raw | Should Match 'Avançar'
+        $raw | Should Match 'Catálogo'
+        $raw | Should Not Match 'AvanÃ§ar|CatÃ¡logo|ConfiguraÃ§Ã£o|ExecuÃ§Ã£o'
     }
 
     It 'runs the batch launcher smoke test without stderr noise' {
