@@ -232,6 +232,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
             'HealthSecretsStatusText',
             'HealthGithubStatusText',
             'HealthAiUsagebarStatusText',
+            'HealthAiMemoryStatusText',
             'HealthAionUiStatusText',
             'HealthDeckStatusText',
             'HealthRollbackStatusText',
@@ -239,7 +240,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         )) {
             $raw | Should Match $controlName
         }
-        foreach ($label in @('WSL','winget','Reboot','Secrets','GitHub CLI','ai-usagebar','AionUI','Steam Deck','Rollback')) {
+        foreach ($label in @('WSL','winget','Reboot','Secrets','GitHub CLI','ai-usagebar','ai-memory','AionUI','Steam Deck','Rollback')) {
             $raw | Should Match ([regex]::Escape($label))
         }
         foreach ($statusText in @('OK','Aten.*o','Cr.*tico','Ausente','Bloqueado')) {
@@ -441,6 +442,30 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'ai-agent-performance'
         foreach ($risk in @('conservative','advanced','aggressive')) {
             $raw | Should Match $risk
+        }
+    }
+
+    It 'surfaces component safety badges from the UI contract' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        foreach ($expected in @('Seguro','Experimental','Manual','Requer GPU','Requer login')) {
+            $raw | Should Match $expected
+        }
+        foreach ($field in @('riskLevel','manualReason','requiresGpu','requiresInteractiveLogin','officialSource')) {
+            $raw | Should Match $field
+        }
+    }
+
+    It 'surfaces compact AppTuning badges and artifact actions in the UI' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Header="Badges"'
+        $raw | Should Match 'Binding="\{Binding badges\}"'
+        foreach ($buttonName in @('AppTuningOpenFolderButton','AppTuningViewLogButton')) {
+            $raw | Should Match $buttonName
+        }
+        foreach ($badge in @('Docker','BYOK','Seguro','Manual')) {
+            $raw | Should Match $badge
         }
     }
 

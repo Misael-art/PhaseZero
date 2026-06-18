@@ -4,8 +4,9 @@
     PhaseZero Bootstrap - instalador CLI.
 .DESCRIPTION
     Fluxo legado de perfis continua. Fluxo AI tools aceita flags GNU-style:
-    --tool, --all-ai-tools, --validate, --configure, --start, --uninstall, --dry-run,
-    --yes, --no-admin, --install-root, --result-path e --log-path.
+    --tool, --all-ai-tools, --install, --validate, --configure, --start, --uninstall, --dry-run,
+    --app, --component, --config, --list-apps, --list-configs, --list-tools, --yes, --no-admin,
+    --install-root, --result-path e --log-path.
 #>
 
 $ErrorActionPreference = 'Stop'
@@ -39,8 +40,19 @@ function New-CliOptions {
         NonInteractive = $false
         SkipDryRun     = $false
         ListProfiles   = $false
+        ListApps       = $false
+        ListConfigs    = $false
+        ListTools      = $false
+        ListItems      = $false
         Tool           = @()
         AllAiTools     = $false
+        Item           = @()
+        App            = @()
+        Component      = @()
+        Config         = @()
+        ConfigCategory = @()
+        ExcludeConfig  = @()
+        Install        = $false
         Validate       = $false
         Configure      = $false
         Start          = $false
@@ -83,11 +95,62 @@ function Read-CliArgs {
             'noninteractive' { $opts.NonInteractive = $true }
             'skipdryrun' { $opts.SkipDryRun = $true }
             'listprofiles' { $opts.ListProfiles = $true }
+            'listapps' { $opts.ListApps = $true }
+            'listapp' { $opts.ListApps = $true }
+            'listconfigs' { $opts.ListConfigs = $true }
+            'listconfig' { $opts.ListConfigs = $true }
+            'listtools' { $opts.ListTools = $true }
+            'listtool' { $opts.ListTools = $true }
+            'listaitools' { $opts.ListTools = $true }
+            'listaitool' { $opts.ListTools = $true }
+            'listitems' { $opts.ListItems = $true }
+            'listitem' { $opts.ListItems = $true }
             'tool' {
                 if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Tool += @($value) }
             }
             'allaitools' { $opts.AllAiTools = $true }
+            'item' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Item += @($value) }
+            }
+            'app' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.App += @($value) }
+            }
+            'component' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Component += @($value) }
+            }
+            'config' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
+            }
+            'configuration' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
+            }
+            'apptuningitem' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
+            }
+            'configcategory' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ConfigCategory += @($value) }
+            }
+            'apptuningcategory' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ConfigCategory += @($value) }
+            }
+            'excludeconfig' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ExcludeConfig += @($value) }
+            }
+            'excludeapptuningitem' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ExcludeConfig += @($value) }
+            }
+            'install' { $opts.Install = $true }
             'validate' { $opts.Validate = $true }
             'configure' { $opts.Configure = $true }
             'start' { $opts.Start = $true }
@@ -121,6 +184,16 @@ function Read-CliArgs {
     return $opts
 }
 
+function Pause {
+    # Override do Pause nativo: em modo automacao (--yes/--non-interactive) ou com stdin
+    # redirecionado/sem console, nunca bloquear esperando tecla (evita travar CLI/testes/CI).
+    if ($script:Options -and (([bool]$script:Options.NonInteractive) -or ([bool]$script:Options.Yes))) { return }
+    try { if ([Console]::IsInputRedirected) { return } } catch { return }
+    try { $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown') } catch {
+        try { Read-Host | Out-Null } catch { }
+    }
+}
+
 function Write-Header {
     param([string]$Text)
     Write-CliOut ''
@@ -132,14 +205,31 @@ function Write-Header {
 
 function Write-CliUsage {
     Write-CliOut ''
+    Write-CliOut 'PhaseZero Bootstrap - CLI'
     Write-CliOut ''
+    Write-CliOut 'Perfis:'
+    Write-CliOut '  install-cli.bat -ListProfiles'
+    Write-CliOut '  install-cli.bat -Profile safe-base -DryRun'
     Write-CliOut ''
+    Write-CliOut 'Apps individuais:'
+    Write-CliOut '  install-cli.bat --list-items'
+    Write-CliOut '  install-cli.bat --list-apps'
+    Write-CliOut '  install-cli.bat --item traefik --dry-run --yes'
+    Write-CliOut '  install-cli.bat --app app-zen-browser --dry-run --yes'
+    Write-CliOut '  install-cli.bat --app app-zen-browser --yes'
     Write-CliOut ''
+    Write-CliOut 'Configuracoes individuais:'
+    Write-CliOut '  install-cli.bat --list-configs'
+    Write-CliOut '  install-cli.bat --config zen-browser-privacy-prefs --dry-run --yes'
+    Write-CliOut '  install-cli.bat --config zen-browser-privacy-prefs --yes'
     Write-CliOut ''
-    Write-CliOut ''
-    Write-Host '  install-cli.bat --tool opencode --install-root "%TEMP%\PhaseZero AI" --yes'
-    Write-Host '  install-cli.bat --tool opencode --uninstall --install-root "%TEMP%\PhaseZero AI" --yes'
-    Write-Host '  install-cli.bat --tool ai-proxy-suite --start --yes --no-admin'
+    Write-CliOut 'AI tools:'
+    Write-CliOut '  install-cli.bat --list-tools'
+    Write-CliOut '  install-cli.bat --tool opencode --install-root "%TEMP%\PhaseZero AI" --yes'
+    Write-CliOut '  install-cli.bat --tool opencode --uninstall --install-root "%TEMP%\PhaseZero AI" --yes'
+    Write-CliOut '  install-cli.bat --tool kimiproxy --install --yes --no-admin'
+    Write-CliOut '  install-cli.bat --tool kimiproxy --start --yes --no-admin'
+    Write-CliOut '  install-cli.bat --tool ai-proxy-suite --start --yes --no-admin'
 }
 
 function ConvertTo-CliCleanReply {
@@ -282,6 +372,513 @@ function Write-CliProfileCatalog {
     }
 }
 
+function ConvertTo-CliSearchKey {
+    param([AllowNull()][object]$Value)
+
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return '' }
+
+    try {
+        $normalized = @(Normalize-BootstrapNames -Names @($text))
+        if ($normalized.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$normalized[0])) {
+            return ([string]$normalized[0]).ToLowerInvariant()
+        }
+    } catch {
+    }
+
+    return (($text -replace '[^\p{L}\p{Nd}]+', '-').Trim('-')).ToLowerInvariant()
+}
+
+function Get-CliCatalogValue {
+    param(
+        [AllowNull()]$Entry,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [AllowNull()]$Default = ''
+    )
+
+    if ($Entry -is [System.Collections.IDictionary] -and $Entry.Contains($Name)) {
+        return $Entry[$Name]
+    }
+
+    $property = $Entry.PSObject.Properties[$Name]
+    if ($property) { return $property.Value }
+    return $Default
+}
+
+function ConvertTo-CliScalarText {
+    param([AllowNull()]$Value)
+
+    $items = @($Value)
+    if ($items.Count -eq 0) { return '' }
+    return [string]$items[0]
+}
+
+function Add-CliUniqueValue {
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][System.Collections.Generic.List[string]]$List,
+        [AllowNull()][object]$Value
+    )
+
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+    if (-not $List.Contains($text)) { $List.Add($text) | Out-Null }
+}
+
+function New-CliCatalogEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Kind,
+        [Parameter(Mandatory = $true)][int]$Number,
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][string]$Title,
+        [string]$Category = '',
+        [string]$Component = '',
+        [string]$Source = '',
+        [string]$Actions = '',
+        [string]$Risk = '',
+        [string[]]$Aliases = @(),
+        [string[]]$Terms = @()
+    )
+
+    $termList = New-Object System.Collections.Generic.List[string]
+    Add-CliUniqueValue -List $termList -Value $Id
+    Add-CliUniqueValue -List $termList -Value $Title
+    Add-CliUniqueValue -List $termList -Value $Component
+    Add-CliUniqueValue -List $termList -Value $Category
+    Add-CliUniqueValue -List $termList -Value $Source
+    foreach ($term in @($Terms)) { Add-CliUniqueValue -List $termList -Value $term }
+
+    $searchKeys = New-Object System.Collections.Generic.List[string]
+    foreach ($term in @($termList.ToArray())) {
+        $key = ConvertTo-CliSearchKey -Value $term
+        if (-not [string]::IsNullOrWhiteSpace($key) -and -not $searchKeys.Contains($key)) {
+            $searchKeys.Add($key) | Out-Null
+        }
+    }
+
+    $aliasKeys = New-Object System.Collections.Generic.List[string]
+    foreach ($alias in @($Aliases)) {
+        $key = ConvertTo-CliSearchKey -Value $alias
+        if (-not [string]::IsNullOrWhiteSpace($key)) {
+            if (-not $aliasKeys.Contains($key)) { $aliasKeys.Add($key) | Out-Null }
+            if (-not $searchKeys.Contains($key)) { $searchKeys.Add($key) | Out-Null }
+        }
+    }
+
+    return [pscustomobject]@{
+        number = $Number
+        kind = $Kind
+        id = $Id
+        title = $Title
+        category = $Category
+        component = $Component
+        source = $Source
+        actions = $Actions
+        risk = $Risk
+        aliasSearchKeys = @($aliasKeys.ToArray())
+        terms = @($termList.ToArray())
+        searchKeys = @($searchKeys.ToArray())
+    }
+}
+
+function Get-CliCatalogEntries {
+    param([Parameter(Mandatory = $true)][ValidateSet('app','config','config-category','tool')][string]$Kind)
+
+    $entries = New-Object System.Collections.Generic.List[object]
+    $number = 1
+
+    if ($Kind -eq 'app') {
+        $componentCatalog = Get-BootstrapComponentCatalog
+        foreach ($app in @(Get-BootstrapAppCatalog | Sort-Object app, displayName, component)) {
+            $source = if ([string]::IsNullOrWhiteSpace([string]$app.wingetId)) { [string]$app.provisioning } else { "winget:$($app.wingetId)" }
+            $terms = @([string]$app.app, [string]$app.displayName, [string]$app.component, [string]$app.wingetId)
+            $componentDef = if ($componentCatalog.Contains([string]$app.component)) { $componentCatalog[[string]$app.component] } else { $null }
+            $componentKind = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $componentDef -Name 'Kind')
+            $risk = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $componentDef -Name 'riskLevel')
+            if ([string]::IsNullOrWhiteSpace($risk)) { $risk = if ($componentKind -eq 'manual-required') { 'manual' } else { 'safe' } }
+            $actions = if ($componentKind -eq 'manual-required') { 'manual,audit' } else { 'install,audit' }
+            $entries.Add((New-CliCatalogEntry -Kind 'app' -Number $number -Id ([string]$app.id) -Title ([string]$app.displayName) -Component ([string]$app.component) -Source $source -Actions $actions -Risk $risk -Terms $terms)) | Out-Null
+            $number++
+        }
+        return @($entries.ToArray())
+    }
+
+    if ($Kind -eq 'tool') {
+        $toolCatalog = Get-BootstrapAiToolCatalog
+        foreach ($toolName in @($toolCatalog.Keys | Sort-Object)) {
+            $tool = $toolCatalog[$toolName]
+            $idValue = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'ToolName' -Default $toolName)
+            $id = if ([string]::IsNullOrWhiteSpace($idValue)) { [string]$toolName } else { $idValue }
+            $displayName = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'DisplayName' -Default $id)
+            $title = if ([string]::IsNullOrWhiteSpace($displayName)) { $id } else { $displayName }
+            $support = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'InstallSupport')
+            $githubRepo = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'GitHubRepo')
+            $docsUrl = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'DocsUrl')
+            $packageName = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'PackageName')
+            $source = if (-not [string]::IsNullOrWhiteSpace($githubRepo)) { "github:$githubRepo" } elseif (-not [string]::IsNullOrWhiteSpace($support)) { $support } else { $docsUrl }
+            $category = if ($support -match 'proxy|ai-proxy-suite') { 'ai-proxy' } else { 'ai-tool' }
+            $aliases = @((Get-CliCatalogValue -Entry $tool -Name 'Aliases' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            $commandNames = @((Get-CliCatalogValue -Entry $tool -Name 'CommandNames' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+            $aliasText = (@($aliases) -join ' ')
+            $actions = if ($support -match 'manual|workflow') { 'validate,manual' } else { 'install,validate,configure' }
+            if ($support -match 'proxy|ai-proxy-suite') { $actions += ',start' }
+            $risk = if ($support -match 'manual|workflow') { 'manual' } elseif ($support -match 'proxy|ai-proxy-suite') { 'experimental' } else { 'conservative' }
+            $terms = @(
+                @($aliases),
+                @($commandNames),
+                $docsUrl,
+                (ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'RepoUrl')),
+                $githubRepo,
+                $packageName,
+                (ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'WingetId')),
+                (ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $tool -Name 'Notes'))
+            )
+            $componentText = if (-not [string]::IsNullOrWhiteSpace($aliasText)) { $aliasText } else { $packageName }
+            $entries.Add((New-CliCatalogEntry -Kind 'tool' -Number $number -Id $id -Title $title -Category $category -Component $componentText -Source $source -Actions $actions -Risk $risk -Aliases @($aliases) -Terms $terms)) | Out-Null
+            $number++
+        }
+        return @($entries.ToArray())
+    }
+
+    $catalog = Get-BootstrapAppTuningCatalog
+    $categoryLookup = @{}
+    foreach ($category in @($catalog.categories)) {
+        $categoryLookup[[string]$category.id] = [string]$category.displayName
+    }
+
+    if ($Kind -eq 'config-category') {
+        foreach ($category in @($catalog.categories | Sort-Object id)) {
+            $id = [string]$category.id
+            $title = if ([string]::IsNullOrWhiteSpace([string]$category.displayName)) { $id } else { [string]$category.displayName }
+            $entries.Add((New-CliCatalogEntry -Kind 'category' -Number $number -Id $id -Title $title -Category $id -Terms @([string]$category.description))) | Out-Null
+            $number++
+        }
+        return @($entries.ToArray())
+    }
+
+    $configItems = @(
+        $catalog.items |
+            Where-Object { [string](Get-CliCatalogValue -Entry $_ -Name 'id') -notmatch '^app-' } |
+            Sort-Object `
+                @{ Expression = { [string](Get-CliCatalogValue -Entry $_ -Name 'category') } }, `
+                @{ Expression = { [string](Get-CliCatalogValue -Entry $_ -Name 'displayName') } }, `
+                @{ Expression = { [string](Get-CliCatalogValue -Entry $_ -Name 'id') } }
+    )
+    foreach ($item in $configItems) {
+        $id = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $item -Name 'id')
+        $category = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $item -Name 'category')
+        $displayName = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $item -Name 'displayName')
+        $title = if ([string]::IsNullOrWhiteSpace($displayName)) { $id } else { $displayName }
+        $categoryTitle = if ($categoryLookup.ContainsKey($category) -and -not [string]::IsNullOrWhiteSpace([string]$categoryLookup[$category])) { [string]$categoryLookup[$category] } else { $category }
+        $targetApps = @((Get-CliCatalogValue -Entry $item -Name 'targetApps' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $actions = @((Get-CliCatalogValue -Entry $item -Name 'actions' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $profiles = @((Get-CliCatalogValue -Entry $item -Name 'profiles' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $installComponents = @((Get-CliCatalogValue -Entry $item -Name 'installComponents' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $aliases = @((Get-CliCatalogValue -Entry $item -Name 'aliases' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $badges = @((Get-CliCatalogValue -Entry $item -Name 'badges' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $risk = Get-BootstrapAppTuningRiskTier -Item $item
+        $description = ConvertTo-CliScalarText (Get-CliCatalogValue -Entry $item -Name 'description')
+        $terms = @(
+            $description,
+            @($targetApps) -join ' ',
+            @($actions) -join ' ',
+            @($profiles) -join ' ',
+            @($installComponents) -join ' ',
+            @($aliases) -join ' ',
+            @($badges) -join ' ',
+            $categoryTitle
+        )
+        $entries.Add((New-CliCatalogEntry -Kind 'config' -Number $number -Id $id -Title $title -Category $category -Component ((@($installComponents) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) -join ',') -Source $categoryTitle -Actions ((@($actions) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) -join ',') -Risk $risk -Aliases @($aliases) -Terms $terms)) | Out-Null
+        $number++
+    }
+    return @($entries.ToArray())
+}
+
+function Get-CliTermPreview {
+    param([string[]]$Terms)
+    $kept = @()
+    foreach ($term in @($Terms)) {
+        if ([string]::IsNullOrWhiteSpace([string]$term)) { continue }
+        if (@($kept) -contains [string]$term) { continue }
+        $kept += @([string]$term)
+        if ($kept.Count -ge 4) { break }
+    }
+    return ($kept -join ', ')
+}
+
+function Write-CliCatalogEntries {
+    param([Parameter(Mandatory = $true)][ValidateSet('app','config','tool')][string]$Kind)
+
+    $entries = @(Get-CliCatalogEntries -Kind $Kind)
+    $label = switch ($Kind) {
+        'app' { 'app' }
+        'config' { 'config' }
+        default { 'tool' }
+    }
+    $currentCategory = ''
+    foreach ($entry in $entries) {
+        if ($Kind -eq 'config' -and [string]$entry.category -ne $currentCategory) {
+            $currentCategory = [string]$entry.category
+            Write-CliOut ''
+            Write-CliOut ("[{0}] {1}" -f $currentCategory, [string]$entry.source) Cyan
+        }
+        $termPreview = Get-CliTermPreview -Terms @($entry.terms)
+        if ($Kind -eq 'app') {
+            Write-CliOut ('{0,3}. [app] {1} | {2} | component: {3} | termos: {4} | source: {5}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.component, $termPreview, [string]$entry.source)
+        } elseif ($Kind -eq 'config') {
+            Write-CliOut ('{0,3}. [config] {1} | {2} | categoria: {3} | termos: {4} | acoes: {5} | risco: {6}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.actions, [string]$entry.risk)
+        } else {
+            Write-CliOut ('{0,3}. [tool] {1} | {2} | categoria: {3} | termos: {4} | source: {5}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.source)
+        }
+    }
+    Write-CliOut ''
+    if ($Kind -eq 'tool') {
+        Write-CliOut 'Dica: use numero, ID ou termo. Instalar: .\install-cli.bat --tool <termo> --install --yes. Iniciar: .\install-cli.bat --tool <termo> --start --yes --no-admin' Yellow
+    } else {
+        Write-CliOut ("Dica: use numero, ID ou qualquer termo listado. Ex: .\install-cli.bat --{0} <termo> --dry-run --yes" -f $(if ($Kind -eq 'app') { 'app' } else { 'config' })) Yellow
+    }
+}
+
+function Get-CliUnifiedCatalogEntries {
+    $unified = New-Object System.Collections.Generic.List[object]
+    $number = 1
+    foreach ($kind in @('app','config','tool')) {
+        foreach ($entry in @(Get-CliCatalogEntries -Kind $kind)) {
+            $unified.Add([pscustomobject]@{
+                number = $number
+                kind = $kind
+                entry = $entry
+            }) | Out-Null
+            $number++
+        }
+    }
+    return @($unified.ToArray())
+}
+
+function Write-CliUnifiedCatalogEntries {
+    $currentGroup = ''
+    foreach ($item in @(Get-CliUnifiedCatalogEntries)) {
+        $entry = $item.entry
+        $group = switch ([string]$item.kind) {
+            'app' { 'apps' }
+            'config' { [string]$entry.category }
+            default { [string]$entry.category }
+        }
+        if ($group -ne $currentGroup) {
+            $currentGroup = $group
+            Write-CliOut ''
+            Write-CliOut ("[{0}]" -f $currentGroup) Cyan
+        }
+        Write-CliOut ('{0,3}. [{1}] {2} | {3} | acoes: {4} | risco: {5}' -f
+            [int]$item.number,
+            [string]$item.kind,
+            [string]$entry.id,
+            [string]$entry.title,
+            [string]$entry.actions,
+            [string]$entry.risk)
+    }
+    Write-CliOut ''
+    Write-CliOut 'Dica: use numero global, ID, alias ou nome. Ex: .\install-cli.bat --item <termo> --dry-run --yes' Yellow
+}
+
+function Find-CliCatalogMatches {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('app','config','config-category','tool')][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$Token
+    )
+
+    $entries = @(Get-CliCatalogEntries -Kind $Kind)
+    $clean = (ConvertTo-CliCleanReply $Token)
+    if ([string]::IsNullOrWhiteSpace($clean)) { return @() }
+
+    $number = 0
+    if ([int]::TryParse($clean, [ref]$number)) {
+        return @($entries | Where-Object { [int]$_.number -eq $number })
+    }
+
+    $key = ConvertTo-CliSearchKey -Value $clean
+    if ([string]::IsNullOrWhiteSpace($key)) { return @() }
+
+    $exact = @($entries | Where-Object { @($_.searchKeys) -contains $key })
+    if ($exact.Count -gt 0) { return @($exact) }
+
+    return @($entries | Where-Object {
+        $matched = $false
+        foreach ($searchKey in @($_.searchKeys)) {
+            if ([string]$searchKey -like "*$key*") { $matched = $true; break }
+        }
+        $matched
+    })
+}
+
+function Resolve-CliCatalogToken {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('app','config','config-category','tool')][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$Token
+    )
+
+    $matches = @(Find-CliCatalogMatches -Kind $Kind -Token $Token)
+    if ($matches.Count -eq 1) { return $matches[0] }
+    $clean = ConvertTo-CliCleanReply $Token
+    $key = ConvertTo-CliSearchKey -Value $clean
+    if (-not [string]::IsNullOrWhiteSpace($key)) {
+        $aliasMatches = @($matches | Where-Object { @($_.aliasSearchKeys) -contains $key })
+        if ($aliasMatches.Count -eq 1) { return $aliasMatches[0] }
+    }
+    if ($Kind -eq 'tool' -and $matches.Count -gt 1) {
+        $withoutSuite = @($matches | Where-Object { [string]$_.id -ne 'ai-proxy-suite' })
+        if ($withoutSuite.Count -eq 1) { return $withoutSuite[0] }
+    }
+
+    $label = switch ($Kind) {
+        'app' { 'app' }
+        'config' { 'configuracao' }
+        'tool' { 'AI tool' }
+        default { 'categoria' }
+    }
+
+    if ($matches.Count -eq 0) {
+        throw "Nenhum $label encontrado para '$Token'. Use --list-apps, --list-configs ou --list-tools para ver numeros, IDs e termos."
+    }
+
+    $sample = (@($matches | Select-Object -First 8 | ForEach-Object { "{0}. {1} ({2})" -f [int]$_.number, [string]$_.id, [string]$_.title }) -join '; ')
+    throw "Termo ambiguo para $label '$Token'. Refine a busca ou use o numero/ID. Opcoes: $sample"
+}
+
+function Resolve-CliOptionTerms {
+    param([Parameter(Mandatory = $true)]$Options)
+
+    $resolvedApps = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @($Options.App)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        $entry = Resolve-CliCatalogToken -Kind 'app' -Token ([string]$value)
+        if (-not $resolvedApps.Contains([string]$entry.id)) { $resolvedApps.Add([string]$entry.id) | Out-Null }
+    }
+    $Options.App = @($resolvedApps.ToArray())
+
+    $resolvedConfigs = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @($Options.Config)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        $entry = Resolve-CliCatalogToken -Kind 'config' -Token ([string]$value)
+        if (-not $resolvedConfigs.Contains([string]$entry.id)) { $resolvedConfigs.Add([string]$entry.id) | Out-Null }
+    }
+    $Options.Config = @($resolvedConfigs.ToArray())
+
+    $resolvedCategories = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @($Options.ConfigCategory)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        $entry = Resolve-CliCatalogToken -Kind 'config-category' -Token ([string]$value)
+        if (-not $resolvedCategories.Contains([string]$entry.id)) { $resolvedCategories.Add([string]$entry.id) | Out-Null }
+    }
+    $Options.ConfigCategory = @($resolvedCategories.ToArray())
+}
+
+function Resolve-CliToolTerms {
+    param(
+        [Parameter(Mandatory = $true)]$Options,
+        [Parameter(Mandatory = $true)][hashtable]$Catalog
+    )
+
+    $resolvedTools = New-Object System.Collections.Generic.List[string]
+    foreach ($value in @($Options.Tool)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        $entry = Resolve-CliCatalogToken -Kind 'tool' -Token ([string]$value)
+        if (-not $Catalog.Contains([string]$entry.id)) {
+            throw "AI tool desconhecida: $value"
+        }
+        if (-not $resolvedTools.Contains([string]$entry.id)) { $resolvedTools.Add([string]$entry.id) | Out-Null }
+    }
+    $Options.Tool = @($resolvedTools.ToArray())
+}
+
+function Resolve-CliUnifiedItemTerms {
+    param([Parameter(Mandatory = $true)]$Options)
+
+    if (@($Options.Item).Count -eq 0) { return }
+
+    foreach ($value in @($Options.Item)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        $clean = ConvertTo-CliCleanReply ([string]$value)
+        $searchKey = ConvertTo-CliSearchKey -Value $clean
+        $matches = New-Object System.Collections.Generic.List[object]
+        $globalNumber = 0
+        if ([int]::TryParse($clean, [ref]$globalNumber)) {
+            foreach ($item in @(Get-CliUnifiedCatalogEntries | Where-Object { [int]$_.number -eq $globalNumber })) {
+                $matches.Add([pscustomobject]@{ kind = [string]$item.kind; entry = $item.entry }) | Out-Null
+            }
+        } else {
+            foreach ($kind in @('app','config','tool')) {
+                foreach ($entry in @(Find-CliCatalogMatches -Kind $kind -Token $clean)) {
+                    $matches.Add([pscustomobject]@{ kind = $kind; entry = $entry }) | Out-Null
+                }
+            }
+        }
+
+        if ($matches.Count -eq 0) {
+            throw "Nenhum item encontrado para '$value'. Use --list-apps, --list-configs ou --list-tools."
+        }
+
+        $aliasExact = @($matches.ToArray() | Where-Object { @($_.entry.aliasSearchKeys) -contains $searchKey })
+        if ($aliasExact.Count -eq 1) {
+            $candidates = @($aliasExact)
+        } elseif ($aliasExact.Count -gt 1) {
+            $candidates = @($aliasExact)
+        } else {
+        $exact = @($matches.ToArray() | Where-Object {
+            ([string]$_.entry.id -eq $clean) -or (@($_.entry.searchKeys) -contains $searchKey)
+        })
+        $candidates = @(if ($exact.Count -gt 0) { $exact } else { $matches.ToArray() })
+        }
+        if ($candidates.Count -ne 1) {
+            $sample = (@($candidates | Select-Object -First 8 | ForEach-Object { "{0}:{1}. {2}" -f [string]$_.kind, [int]$_.entry.number, [string]$_.entry.id }) -join '; ')
+            throw "Termo ambiguo para item '$value'. Use numero/ID com --app, --config ou --tool. Opcoes: $sample"
+        }
+
+        $selected = $candidates[0]
+        switch ([string]$selected.kind) {
+            'app' {
+                if (@($Options.App) -notcontains [string]$selected.entry.id) { $Options.App += @([string]$selected.entry.id) }
+            }
+            'config' {
+                if (@($Options.Config) -notcontains [string]$selected.entry.id) { $Options.Config += @([string]$selected.entry.id) }
+            }
+            'tool' {
+                if (@($Options.Tool) -notcontains [string]$selected.entry.id) { $Options.Tool += @([string]$selected.entry.id) }
+            }
+        }
+    }
+
+    $Options.Item = @()
+}
+
+function Read-CliCatalogSelection {
+    param([Parameter(Mandatory = $true)][ValidateSet('app','config','tool')][string]$Kind)
+
+    $title = switch ($Kind) {
+        'app' { 'Apps individuais disponiveis' }
+        'config' { 'Configuracoes individuais disponiveis' }
+        default { 'AI tools e proxies disponiveis' }
+    }
+    while ($true) {
+        Write-CliOut ''
+        Write-CliOut $title Green
+        Write-CliOut ''
+        Write-CliCatalogEntries -Kind $Kind
+        Write-CliOut 'Digite numero, ID ou termo (0 cancela)' Cyan
+        $reply = ConvertTo-CliCleanReply (Read-Host)
+        if ([string]::IsNullOrWhiteSpace($reply) -or $reply -eq '0') { return $null }
+        $matches = @(Find-CliCatalogMatches -Kind $Kind -Token $reply)
+        if ($matches.Count -eq 1) { return $matches[0] }
+        if ($matches.Count -eq 0) {
+            Write-CliOut ("[AVISO] Nenhum item encontrado para: {0}" -f $reply) Yellow
+            continue
+        }
+        Write-CliOut '[AVISO] Termo ambiguo. Use numero ou ID de uma das opcoes:' Yellow
+        foreach ($match in @($matches | Select-Object -First 12)) {
+            Write-CliOut ('  {0}. {1} | {2}' -f [int]$match.number, [string]$match.id, [string]$match.title) Yellow
+        }
+    }
+}
+
 function Resolve-CliLogPath {
     param([string]$RequestedPath)
     if (-not [string]::IsNullOrWhiteSpace($RequestedPath)) { return [System.IO.Path]::GetFullPath($RequestedPath) }
@@ -299,6 +896,10 @@ function Get-CliGuidedProfileEntry {
     )
 }
 
+function Get-CliGuidedProfileEntries {
+    return @(Get-CliGuidedProfileEntry)
+}
+
 function Show-CliMainMenu {
     Write-CliOut ''
     Write-CliOut 'PhaseZero Bootstrap - menu rapido' Cyan
@@ -309,9 +910,12 @@ function Show-CliMainMenu {
     Write-CliOut '  4) Dry-run perfil public-beta' Cyan
     Write-CliOut '  5) Listar perfis disponiveis' Cyan
     Write-CliOut '  6) Instalacao guiada (perfil recomendado)' Cyan
+    Write-CliOut '  7) App individual (buscar, validar, instalar)' Cyan
+    Write-CliOut '  8) Configuracao individual (buscar, validar, aplicar)' Cyan
+    Write-CliOut '  9) AI tool/proxy (buscar, instalar, iniciar)' Cyan
     Write-CliOut '  0) Sair' Cyan
     Write-CliOut ''
-    $reply = Read-Host 'Selecione [1-6, 0=sair]'
+    $reply = Read-Host 'Selecione [1-9, 0=sair]'
     return (ConvertTo-CliCleanReply $reply)
 }
 
@@ -465,22 +1069,271 @@ function Add-CliBackendArtifactArg {
     return $argsOut
 }
 
+function Join-CliOptionValues {
+    param([object[]]$Values)
+    return (@($Values) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ }) -join ','
+}
+
+function Test-CliHasBootstrapSelection {
+    param([Parameter(Mandatory = $true)]$Options)
+    return (
+        @($Options.App).Count -gt 0 -or
+        @($Options.Component).Count -gt 0 -or
+        @($Options.Config).Count -gt 0 -or
+        @($Options.ConfigCategory).Count -gt 0 -or
+        @($Options.ExcludeConfig).Count -gt 0
+    )
+}
+
+function New-CliIsolatedBackendArgs {
+    param(
+        [Parameter(Mandatory = $true)]$Options,
+        [bool]$DryRun
+    )
+
+    $backendArgs = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', $ToolsPs1,
+        '-NonInteractive', '-SkipManualRequirements',
+        '-HostHealth', 'off'
+    )
+
+    if ($DryRun) { $backendArgs += @('-DryRun') }
+
+    $apps = Join-CliOptionValues -Values $Options.App
+    if (-not [string]::IsNullOrWhiteSpace($apps)) { $backendArgs += @('-App', $apps) }
+
+    $components = Join-CliOptionValues -Values $Options.Component
+    if (-not [string]::IsNullOrWhiteSpace($components)) { $backendArgs += @('-Component', $components) }
+
+    $configs = Join-CliOptionValues -Values $Options.Config
+    $configCategories = Join-CliOptionValues -Values $Options.ConfigCategory
+    $excludedConfigs = Join-CliOptionValues -Values $Options.ExcludeConfig
+    if (-not [string]::IsNullOrWhiteSpace($configs) -or -not [string]::IsNullOrWhiteSpace($configCategories)) {
+        $backendArgs += @('-AppTuning', 'custom')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($configs)) { $backendArgs += @('-AppTuningItem', $configs) }
+    if (-not [string]::IsNullOrWhiteSpace($configCategories)) { $backendArgs += @('-AppTuningCategory', $configCategories) }
+    if (-not [string]::IsNullOrWhiteSpace($excludedConfigs)) { $backendArgs += @('-ExcludeAppTuningItem', $excludedConfigs) }
+
+    return (Add-CliBackendArtifactArg -ArgumentList $backendArgs)
+}
+
+function Format-CliApplyCommand {
+    param([Parameter(Mandatory = $true)]$Options)
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    $parts.Add('.\install-cli.bat') | Out-Null
+    foreach ($value in @($Options.App)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $parts.Add('--app') | Out-Null
+            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
+        }
+    }
+    foreach ($value in @($Options.Component)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $parts.Add('--component') | Out-Null
+            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
+        }
+    }
+    foreach ($value in @($Options.Config)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $parts.Add('--config') | Out-Null
+            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
+        }
+    }
+    foreach ($value in @($Options.ConfigCategory)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
+            $parts.Add('--config-category') | Out-Null
+            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
+        }
+    }
+    $parts.Add('--yes') | Out-Null
+    return ($parts.ToArray() -join ' ')
+}
+
+function Format-CliCommandToken {
+    param([Parameter(Mandatory = $true)][string]$Value)
+    if ($Value -match '[\s"]') { return ('"{0}"' -f ($Value -replace '"', '\"')) }
+    return $Value
+}
+
+function Update-CliResultFileMode {
+    param(
+        [Parameter(Mandatory = $true)][string]$Mode,
+        [int]$ExitCode
+    )
+
+    $path = [string]$script:Options.ResultPath
+    if ([string]::IsNullOrWhiteSpace($path) -or -not (Test-Path -LiteralPath $path)) { return }
+    try {
+        $json = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json -ErrorAction Stop
+        $result = [ordered]@{}
+        foreach ($prop in @($json.PSObject.Properties)) { $result[[string]$prop.Name] = $prop.Value }
+        $result['mode'] = $Mode
+        $result['cliMode'] = $Mode
+        $result['exitCode'] = $ExitCode
+        if ($Mode -eq 'isolated') {
+            $singleItem = ''
+            $singleCategory = ''
+            if (@($script:Options.Config).Count -eq 1) {
+                $singleItem = [string]$script:Options.Config[0]
+                try {
+                    $catalog = Get-BootstrapAppTuningCatalog
+                    foreach ($it in @($catalog.items)) {
+                        if ([string]$it.id -eq $singleItem) {
+                            $singleCategory = [string]$it.category
+                            break
+                        }
+                    }
+                } catch {
+                    $singleCategory = 'config'
+                }
+            } elseif (@($script:Options.App).Count -eq 1) {
+                $singleItem = [string]$script:Options.App[0]
+                $singleCategory = 'app'
+            } elseif (@($script:Options.Component).Count -eq 1) {
+                $singleItem = [string]$script:Options.Component[0]
+                $singleCategory = 'component'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($singleItem)) {
+                $result['item'] = $singleItem
+                $result['category'] = $singleCategory
+                $result['action'] = if ([bool]$script:Options.DryRun) { 'dry-run' } else { 'apply' }
+                if (-not $result.Contains('changed')) { $result['changed'] = $false }
+                if (-not $result.Contains('blockedReason')) {
+                    $statusText = if ($result.Contains('status')) { [string]$result['status'] } else { '' }
+                    $result['blockedReason'] = if ($ExitCode -ne 0 -or $statusText -in @('blocked','error','failed')) { if ($result.Contains('error')) { [string]$result['error'] } else { 'execution-failed' } } else { '' }
+                }
+                if (-not $result.Contains('paths')) {
+                    $result['paths'] = @(
+                        [System.IO.Path]::GetFullPath([string]$script:Options.ResultPath),
+                        [System.IO.Path]::GetFullPath([string]$script:Options.LogPath)
+                    )
+                }
+                if (-not $result.Contains('nextSteps')) {
+                    $nextSteps = if ([bool]$script:Options.DryRun) {
+                        @('Revise o result.json e remova --dry-run para aplicar.')
+                    } else {
+                        @('Revise logs e rode o doctor relacionado se houver bloqueio.')
+                    }
+                    $result['nextSteps'] = [object[]]@($nextSteps)
+                }
+                if (-not $result.Contains('doctor') -or $null -eq $result['doctor']) {
+                    $result['doctor'] = [ordered]@{
+                        status = 'not-run'
+                        reason = if ([bool]$script:Options.DryRun) { 'dry-run' } else { 'item-without-doctor-result' }
+                        checks = [object[]]@()
+                    }
+                }
+                $result['paths'] = [object[]]@($result['paths'])
+                $result['nextSteps'] = [object[]]@($result['nextSteps'])
+            }
+        }
+        if (-not $result.Contains('artifactPaths')) {
+            $result['artifactPaths'] = [ordered]@{
+                logPath = [System.IO.Path]::GetFullPath([string]$script:Options.LogPath)
+                resultPath = [System.IO.Path]::GetFullPath([string]$script:Options.ResultPath)
+            }
+        }
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        [System.IO.File]::WriteAllText([System.IO.Path]::GetFullPath($path), ($result | ConvertTo-Json -Depth 14), $utf8)
+    } catch {
+        Write-CliOut ("[AVISO] Nao foi possivel ajustar result.json do CLI: {0}" -f $_.Exception.Message) Yellow
+    }
+}
+
+function Invoke-CliBootstrapSelectionMode {
+    param([Parameter(Mandatory = $true)]$Options)
+
+    $targetSummary = @()
+    if (@($Options.App).Count -gt 0) { $targetSummary += ("apps={0}" -f (Join-CliOptionValues -Values $Options.App)) }
+    if (@($Options.Component).Count -gt 0) { $targetSummary += ("componentes={0}" -f (Join-CliOptionValues -Values $Options.Component)) }
+    if (@($Options.Config).Count -gt 0) { $targetSummary += ("configs={0}" -f (Join-CliOptionValues -Values $Options.Config)) }
+    if (@($Options.ConfigCategory).Count -gt 0) { $targetSummary += ("categorias={0}" -f (Join-CliOptionValues -Values $Options.ConfigCategory)) }
+
+    Write-Header 'PhaseZero Bootstrap - instalacao individual'
+    Write-CliOut ("Selecao: {0}" -f ($targetSummary -join ' | ')) Green
+
+    if (-not [bool]$Options.SkipDryRun) {
+        Write-CliOut ''
+        Write-CliOut '[1/2] Dry-run individual...' Green
+        $dryArgs = New-CliIsolatedBackendArgs -Options $Options -DryRun:$true
+        $dryProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $dryArgs -NoNewWindow -PassThru -Wait
+        $dryExit = [int]$dryProcess.ExitCode
+        Update-CliResultFileMode -Mode 'isolated' -ExitCode $dryExit
+        if ($dryExit -ne 0) {
+            Write-CliOut ("[ERRO] Dry-run individual falhou (codigo {0})." -f $dryExit) Red
+            Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow
+            Write-CliOut ("Log:    {0}" -f [string]$Options.LogPath) Yellow
+            if (-not (Test-Path -LiteralPath ([string]$Options.ResultPath))) {
+                Write-CliLegacyFailureResult -Message "Dry-run individual falhou (codigo $dryExit) sem result.json do backend." -ExitCode $dryExit
+            }
+            if (-not [bool]$Options.NonInteractive) { Pause }
+            exit $dryExit
+        }
+        if ([bool]$Options.DryRun) {
+            Write-Header 'DRY-RUN: selecao individual validada'
+            Write-CliOut ("Result:  {0}" -f [string]$Options.ResultPath) Green
+            Write-CliOut ("Log:     {0}" -f [string]$Options.LogPath) Green
+            Write-CliOut ("Aplicar: {0}" -f (Format-CliApplyCommand -Options $Options)) Cyan
+            exit 0
+        }
+    }
+
+    if (-not [bool]$Options.Yes -and -not [bool]$Options.NonInteractive) {
+        Write-CliOut ''
+        $confirm = ConvertTo-CliCleanReply (Read-Host 'Aplicar instalacao/configuracao individual agora? (S/N)')
+        if ($confirm -notmatch '^[Ss]$') {
+            Write-CliOut '[AVISO] Operacao cancelada pelo usuario.' Yellow
+            Pause
+            exit 0
+        }
+    }
+
+    Write-CliOut ''
+    Write-CliOut '[2/2] Aplicando selecao individual...' Green
+    $installArgs = New-CliIsolatedBackendArgs -Options $Options -DryRun:$false
+    $installProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait
+    $installExit = [int]$installProcess.ExitCode
+    Update-CliResultFileMode -Mode 'isolated' -ExitCode $installExit
+
+    Write-CliOut ''
+    if ($installExit -eq 0) {
+        Write-Header 'SUCESSO: selecao individual concluida'
+        Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Green
+        Write-CliOut ("Log:    {0}" -f [string]$Options.LogPath) Green
+    } else {
+        Write-CliOut ("[ERRO] Selecao individual falhou (codigo {0})." -f $installExit) Red
+        Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow
+        Write-CliOut ("Log:    {0}" -f [string]$Options.LogPath) Yellow
+        Write-CliOut 'Diagnostico: .\bootstrap-ui.bat --doctor' Yellow
+        if (-not (Test-Path -LiteralPath ([string]$Options.ResultPath))) {
+            Write-CliLegacyFailureResult -Message "Selecao individual falhou (codigo $installExit) sem result.json do backend." -ExitCode $installExit
+        }
+    }
+    if (-not [bool]$Options.NonInteractive) { Pause }
+    exit $installExit
+}
+
 function Write-CliLegacyFailureResult {
     param(
         [Parameter(Mandatory = $true)][string]$Message,
-        [int]$ExitCode = 2
+        [int]$ExitCode = 2,
+        [string]$Mode = 'legacy',
+        [string]$HowToFix = 'Revise o argumento informado, rode install-cli.bat -ListProfiles e execute novamente com -Profile <nome>.'
     )
 
     if ([string]::IsNullOrWhiteSpace([string]$script:Options.ResultPath)) { return }
     $payload = [ordered]@{
         status = 'error'
-        mode = 'legacy'
+        mode = $Mode
         generatedAt = (Get-Date).ToString('o')
         logPath = [string]$script:Options.LogPath
         resultPath = [System.IO.Path]::GetFullPath([string]$script:Options.ResultPath)
         exitCode = $ExitCode
         error = $Message
-        howToFix = 'Revise o argumento informado, rode install-cli.bat -ListProfiles e execute novamente com -Profile <nome>.'
+        howToFix = $HowToFix
     }
     Write-CliJsonResult -Payload $payload -ResultPath ([string]$script:Options.ResultPath)
 }
@@ -497,6 +1350,7 @@ function Invoke-CliAiToolsMode {
     if ([bool]$Options.AllAiTools) {
         $tools = @($catalog.Keys)
     } else {
+        Resolve-CliToolTerms -Options $Options -Catalog $catalog
         $tools = @($Options.Tool)
     }
     if ($tools.Count -eq 0) { throw 'Informe --tool <name> ou --all-ai-tools.' }
@@ -583,6 +1437,22 @@ if (-not (Test-Path -LiteralPath $ToolsPs1)) {
     exit 1
 }
 
+if ([bool]$script:Options.ListTools) {
+    . $ToolsPs1 -BootstrapUiLibraryMode
+    Write-CliOut '[1/1] AI tools e proxies disponiveis...' Green
+    Write-CliOut ''
+    Write-CliCatalogEntries -Kind 'tool'
+    exit 0
+}
+
+if ([bool]$script:Options.ListItems) {
+    . $ToolsPs1 -BootstrapUiLibraryMode
+    Write-CliOut '[1/1] Catalogo unificado...' Green
+    Write-CliOut ''
+    Write-CliUnifiedCatalogEntries
+    exit 0
+}
+
 if ([bool]$script:Options.AllAiTools -or @($script:Options.Tool).Count -gt 0) {
     Invoke-CliAiToolsMode -Options $script:Options
 }
@@ -598,11 +1468,65 @@ try {
     exit 1
 }
 
+try {
+    Resolve-CliUnifiedItemTerms -Options $script:Options
+} catch {
+    Write-CliOut ("[ERRO] {0}" -f $_.Exception.Message) Red
+    Write-CliOut 'Listar tudo:        .\install-cli.bat --list-items' Yellow
+    Write-CliOut 'Listar apps:        .\install-cli.bat --list-apps' Yellow
+    Write-CliOut 'Listar configs:     .\install-cli.bat --list-configs' Yellow
+    Write-CliOut 'Listar AI tools:    .\install-cli.bat --list-tools' Yellow
+    Write-CliLegacyFailureResult -Message $_.Exception.Message -ExitCode 2 -Mode 'isolated-selection' -HowToFix 'Rode install-cli.bat --list-items e use numero global, ID, alias ou nome exato com --item.'
+    Write-CliOut ("Result: {0}" -f [string]$script:Options.ResultPath) Yellow
+    Write-CliOut ("Log:    {0}" -f [string]$script:Options.LogPath) Yellow
+    Write-CliOut 'Proximo passo: rode .\install-cli.bat --list-items' Yellow
+    if (-not [bool]$script:Options.NonInteractive) { Pause }
+    exit 2
+}
+
+if (@($script:Options.Tool).Count -gt 0 -and -not (Test-CliHasBootstrapSelection -Options $script:Options)) {
+    Invoke-CliAiToolsMode -Options $script:Options
+}
+
 if ([bool]$script:Options.ListProfiles) {
     Write-CliOut '[1/3] Carregando perfis disponiveis...' Green
     Write-CliOut ''
     Write-CliProfileCatalog -Profiles $profiles
     exit 0
+}
+
+if ([bool]$script:Options.ListApps) {
+    Write-CliOut '[1/1] Apps individuais disponiveis...' Green
+    Write-CliOut ''
+    Write-CliCatalogEntries -Kind 'app'
+    exit 0
+}
+
+if ([bool]$script:Options.ListConfigs) {
+    Write-CliOut '[1/1] Configuracoes disponiveis...' Green
+    Write-CliOut ''
+    Write-CliCatalogEntries -Kind 'config'
+    exit 0
+}
+
+try {
+    Resolve-CliOptionTerms -Options $script:Options
+} catch {
+    Write-CliOut ("[ERRO] {0}" -f $_.Exception.Message) Red
+    Write-CliOut 'Listar tudo:        .\install-cli.bat --list-items' Yellow
+    Write-CliOut 'Listar apps:        .\install-cli.bat --list-apps' Yellow
+    Write-CliOut 'Listar configs:     .\install-cli.bat --list-configs' Yellow
+    Write-CliOut 'Listar AI tools:    .\install-cli.bat --list-tools' Yellow
+    Write-CliLegacyFailureResult -Message $_.Exception.Message -ExitCode 2 -Mode 'isolated-selection' -HowToFix 'Rode install-cli.bat --list-items ou o catalogo especifico e use numero, ID, alias ou nome exato.'
+    Write-CliOut ("Result: {0}" -f [string]$script:Options.ResultPath) Yellow
+    Write-CliOut ("Log:    {0}" -f [string]$script:Options.LogPath) Yellow
+    Write-CliOut 'Proximo passo: corrija a selecao usando o catalogo exibido.' Yellow
+    if (-not [bool]$script:Options.NonInteractive) { Pause }
+    exit 2
+}
+
+if (Test-CliHasBootstrapSelection -Options $script:Options) {
+    Invoke-CliBootstrapSelectionMode -Options $script:Options
 }
 
 $profileChoice = [string]$script:Options.Profile
@@ -645,6 +1569,37 @@ if ([string]::IsNullOrWhiteSpace($profileChoice)) {
         }
         '6' {
             $profileChoice = Show-CliGuidedProfilePicker
+        }
+        '7' {
+            $entry = Read-CliCatalogSelection -Kind 'app'
+            if ($null -eq $entry) {
+                Write-CliOut '[AVISO] Nenhum app selecionado. Saindo.' Yellow
+                if (-not [bool]$script:Options.NonInteractive) { Pause }
+                exit 0
+            }
+            $script:Options.App = @([string]$entry.id)
+            Invoke-CliBootstrapSelectionMode -Options $script:Options
+        }
+        '8' {
+            $entry = Read-CliCatalogSelection -Kind 'config'
+            if ($null -eq $entry) {
+                Write-CliOut '[AVISO] Nenhuma configuracao selecionada. Saindo.' Yellow
+                if (-not [bool]$script:Options.NonInteractive) { Pause }
+                exit 0
+            }
+            $script:Options.Config = @([string]$entry.id)
+            Invoke-CliBootstrapSelectionMode -Options $script:Options
+        }
+        '9' {
+            $entry = Read-CliCatalogSelection -Kind 'tool'
+            if ($null -eq $entry) {
+                Write-CliOut '[AVISO] Nenhuma AI tool selecionada. Saindo.' Yellow
+                if (-not [bool]$script:Options.NonInteractive) { Pause }
+                exit 0
+            }
+            $script:Options.Tool = @([string]$entry.id)
+            $script:Options.Start = $true
+            Invoke-CliAiToolsMode -Options $script:Options
         }
         '0' { exit 0 }
         '' { exit 0 }

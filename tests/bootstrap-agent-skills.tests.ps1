@@ -114,4 +114,33 @@ Keep this custom line.
         (Test-Path (Join-Path $workspaceRoot '.github\copilot-instructions.md')) | Should Be $true
         (Test-Path (Join-Path $workspaceRoot 'AGENTS.md')) | Should Be $true
     }
+
+    It 'merges PhaseZero Tools rule files idempotently without clobbering caveman blocks' {
+        $workspaceRoot = Join-Path $script:TestDataRoot 'workspace-phasezero'
+        $cursorPath = Join-Path $workspaceRoot '.cursor\rules\phasezero-tools.mdc'
+        $cavemanPath = Join-Path $workspaceRoot '.cursor\rules\caveman.mdc'
+        New-Item -Path (Split-Path -Path $cursorPath -Parent) -ItemType Directory -Force | Out-Null
+        Set-Content -Path $cavemanPath -Encoding utf8 -Value @'
+---
+alwaysApply: true
+---
+<!-- BEGIN BOOTSTRAP CAVEMAN -->
+Terse like caveman.
+<!-- END BOOTSTRAP CAVEMAN -->
+Keep this custom line.
+'@
+        $first = Ensure-BootstrapPhaseZeroToolRuleFiles -WorkspaceRoot $workspaceRoot
+        $second = Ensure-BootstrapPhaseZeroToolRuleFiles -WorkspaceRoot $workspaceRoot
+        $content = Get-Content -Path $cursorPath -Raw
+        $first.updated | Should Be $true
+        $second.updated | Should Be $false
+        $content | Should Match 'BEGIN PHASEZERO TOOLS'
+        $content | Should Match 'rtk'
+        $content | Should Match 'ai-memory'
+        $content | Should Match 'caveman'
+        (Test-Path (Join-Path $workspaceRoot '.windsurf\rules\phasezero-tools.md')) | Should Be $true
+        (Test-Path (Join-Path $workspaceRoot '.clinerules\phasezero-tools.md')) | Should Be $true
+        (Test-Path (Join-Path $workspaceRoot '.github\copilot-instructions.md')) | Should Be $true
+        (Test-Path (Join-Path $workspaceRoot 'AGENTS.md')) | Should Be $true
+    }
 }

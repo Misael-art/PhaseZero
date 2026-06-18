@@ -323,11 +323,13 @@ function Get-UiStrings {
                 AppTuningRecommended = 'Mark recommended'
                 AppTuningMarkCategory = 'Mark category'
                 AppTuningClearCategory = 'Clear category'
-                AppTuningAudit      = 'Audit now'
+                AppTuningAudit      = 'Refresh status'
                 AppTuningInstall    = 'Install'
                 AppTuningConfigure  = 'Configure/Optimize'
                 AppTuningUpdate     = 'Update'
                 AppTuningRunNow     = 'Run now'
+                AppTuningOpenFolder = 'Open folder'
+                AppTuningViewLog    = 'View log'
                 AppTuningStatus     = 'Safe and reversible app tuning. Category app-install lists individual apps for on-demand installs.'
                 HealthTitle         = 'Health'
                 HealthSummary       = 'Local support diagnostics, export bundle and manual repair queue.'
@@ -459,11 +461,13 @@ function Get-UiStrings {
                 AppTuningRecommended = 'Marcar recomendados'
                 AppTuningMarkCategory = 'Marcar categoria'
                 AppTuningClearCategory = 'Limpar categoria'
-                AppTuningAudit      = 'Auditar agora'
+                AppTuningAudit      = 'Atualizar status'
                 AppTuningInstall    = 'Instalar'
                 AppTuningConfigure  = 'Configurar/Otimizar'
                 AppTuningUpdate     = 'Atualizar'
                 AppTuningRunNow     = 'Executar agora'
+                AppTuningOpenFolder = 'Abrir pasta'
+                AppTuningViewLog    = 'Ver log'
                 AppTuningStatus     = 'Otimização segura e reversível dos apps. Categoria app-install lista apps individuais sob demanda.'
                 HealthTitle         = 'Saúde'
                 HealthSummary       = 'Diagnóstico local, pacote de suporte e fila manual de reparo.'
@@ -1733,6 +1737,12 @@ function Get-UiBrush {
                         </Border>
                         <Border Style="{StaticResource Card}" Margin="0,0,8,0">
                             <StackPanel>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="ai-memory"/>
+                                <TextBlock x:Name="HealthAiMemoryStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="ai-memory: Ausente"/>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                            <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="AionUI"/>
                                 <TextBlock x:Name="HealthAionUiStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="AionUI: Ausente"/>
                             </StackPanel>
@@ -1831,12 +1841,14 @@ function Get-UiBrush {
                             <Button x:Name="AppTuningRecommendedButton" Style="{StaticResource GhostBtn}" Content="Marcar recomendados" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningMarkCategoryButton" Style="{StaticResource GhostBtn}" Content="Marcar categoria" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningClearCategoryButton" Style="{StaticResource GhostBtn}" Content="Limpar categoria" Margin="0,0,8,0" Height="32"/>
-                            <Button x:Name="AppTuningAuditButton" Style="{StaticResource GhostBtn}" Content="Auditar agora" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningAuditButton" Style="{StaticResource GhostBtn}" Content="Atualizar status" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningClearAllButton" Style="{StaticResource GhostBtn}" Content="Limpar tudo" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningInstallButton" Style="{StaticResource GhostBtn}" Content="Instalar" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningConfigureButton" Style="{StaticResource PrimaryBtn}" Content="Configurar/Otimizar" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningUpdateButton" Style="{StaticResource GhostBtn}" Content="Atualizar" Margin="0,0,8,0" Height="32"/>
-                            <Button x:Name="AppTuningRunNowButton" Style="{StaticResource PrimaryBtn}" Content="Executar agora" Height="32"/>
+                            <Button x:Name="AppTuningRunNowButton" Style="{StaticResource PrimaryBtn}" Content="Executar agora" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningOpenFolderButton" Style="{StaticResource GhostBtn}" Content="Abrir pasta" Margin="0,0,8,0" Height="32"/>
+                            <Button x:Name="AppTuningViewLogButton" Style="{StaticResource GhostBtn}" Content="Ver log" Height="32"/>
                         </WrapPanel>
                         <TextBlock x:Name="AppTuningRiskWarningLabel" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="8" Margin="0,8,0,0" Foreground="#F59E0B" TextWrapping="Wrap" ToolTip="SecurityImpact gate for ai-agent-performance and other risky AppTuning items."/>
                     </Grid>
@@ -1859,7 +1871,7 @@ function Get-UiBrush {
                     <Border Grid.Column="2" Style="{StaticResource Card}">
                         <DockPanel>
                             <TextBlock x:Name="AppTuningItemsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="ITENS"/>
-                            <DataGrid x:Name="AppTuningItemsGrid" Style="{StaticResource DarkGrid}" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Extended">
+                            <DataGrid x:Name="AppTuningItemsGrid" Style="{StaticResource DarkGrid}" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Extended" ToolTip="Badges: Seguro, Manual, Docker, BYOK">
                                 <DataGrid.Columns>
                                     <DataGridCheckBoxColumn Header="Ativo" Binding="{Binding active, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="70" ElementStyle="{StaticResource DarkGridCheckBoxElement}" EditingElementStyle="{StaticResource DarkGridCheckBoxEditing}"/>
                                     <DataGridTextColumn Header="Id" Binding="{Binding id}" Width="0" Visibility="Collapsed"/>
@@ -1869,6 +1881,7 @@ function Get-UiBrush {
                                     <DataGridTextColumn Header="Otimização" Binding="{Binding optimization}" Width="1.8*"/>
                                     <DataGridTextColumn Header="Perfil" Binding="{Binding profile}" Width="1.2*"/>
                                     <DataGridTextColumn Header="Risco" Binding="{Binding risk}" Width="0.8*"/>
+                                    <DataGridTextColumn Header="Badges" Binding="{Binding badges}" Width="1.0*"/>
                                     <DataGridTextColumn Header="SecurityImpact" Binding="{Binding securityImpact}" Width="0" Visibility="Collapsed"/>
                                     <DataGridTextColumn Header="Rollback" Binding="{Binding rollbackScope}" Width="0.9*"/>
                                     <DataGridTextColumn Header="Instalado" Binding="{Binding installed}" Width="0.8*"/>
@@ -2675,6 +2688,7 @@ $ui = [ordered]@{
     HealthDeckStatusText  = (Get-Control 'HealthDeckStatusText')
     HealthGithubStatusText = (Get-Control 'HealthGithubStatusText')
     HealthAiUsagebarStatusText = (Get-Control 'HealthAiUsagebarStatusText')
+    HealthAiMemoryStatusText = (Get-Control 'HealthAiMemoryStatusText')
     HealthAionUiStatusText = (Get-Control 'HealthAionUiStatusText')
     HealthRollbackStatusText = (Get-Control 'HealthRollbackStatusText')
     HealthDoctorButton    = (Get-Control 'HealthDoctorButton')
@@ -2702,6 +2716,8 @@ $ui = [ordered]@{
     AppTuningConfigureButton = (Get-Control 'AppTuningConfigureButton')
     AppTuningUpdateButton = (Get-Control 'AppTuningUpdateButton')
     AppTuningRunNowButton = (Get-Control 'AppTuningRunNowButton')
+    AppTuningOpenFolderButton = (Get-Control 'AppTuningOpenFolderButton')
+    AppTuningViewLogButton = (Get-Control 'AppTuningViewLogButton')
     AppTuningCategoriesLabel = (Get-Control 'AppTuningCategoriesLabel')
     AppTuningCategoryList = (Get-Control 'AppTuningCategoryList')
     AppTuningItemsLabel   = (Get-Control 'AppTuningItemsLabel')
@@ -3351,6 +3367,8 @@ function Refresh-LocalizedText {
     $ui.AppTuningConfigureButton.Content = $ui.Strings.AppTuningConfigure
     $ui.AppTuningUpdateButton.Content  = $ui.Strings.AppTuningUpdate
     $ui.AppTuningRunNowButton.Content  = $ui.Strings.AppTuningRunNow
+    $ui.AppTuningOpenFolderButton.Content = $ui.Strings.AppTuningOpenFolder
+    $ui.AppTuningViewLogButton.Content = $ui.Strings.AppTuningViewLog
     $ui.AppTuningHintLabel.Text        = $ui.Strings.AppTuningStatus
     $ui.AiToolsTitleLabel.Text         = $ui.Strings.AiToolsTitle
     $ui.AiToolsSubtitleLabel.Text      = $ui.Strings.AiToolsStatus
@@ -3396,6 +3414,7 @@ function Refresh-LocalizedText {
     $ui.HealthDeckStatusText.Text      = $ui.Strings.HealthDeckStatus
     $ui.HealthGithubStatusText.Text    = $ui.Strings.HealthGithubStatus
     $ui.HealthAiUsagebarStatusText.Text = 'ai-usagebar: Ausente'
+    $ui.HealthAiMemoryStatusText.Text  = 'ai-memory: Ausente'
     $ui.HealthAionUiStatusText.Text    = 'AionUI: Ausente'
     $ui.HealthRollbackStatusText.Text  = 'Rollback: OK'
     $ui.HealthDoctorButton.Content     = $ui.Strings.HealthDoctor
@@ -3575,6 +3594,41 @@ function Test-UiContractSelectionFilter {
     return $true
 }
 
+function Get-UiComponentSafetyBadges {
+    param([AllowNull()]$Component)
+
+    if (-not $Component) { return @() }
+    $badges = New-Object System.Collections.Generic.List[string]
+    try {
+        foreach ($badge in @($Component.badges)) {
+            $text = [string]$badge
+            if (-not [string]::IsNullOrWhiteSpace($text) -and -not $badges.Contains($text)) {
+                $badges.Add($text) | Out-Null
+            }
+        }
+    } catch { }
+
+    if ($badges.Count -eq 0) {
+        $riskLevel = [string]$Component.riskLevel
+        switch ($riskLevel) {
+            'safe' { $badges.Add('Seguro') | Out-Null }
+            'experimental' { $badges.Add('Experimental') | Out-Null }
+            'manual' { $badges.Add('Manual') | Out-Null }
+        }
+        if ([bool]$Component.requiresGpu) { $badges.Add('Requer GPU') | Out-Null }
+        if ([bool]$Component.requiresInteractiveLogin) { $badges.Add('Requer login') | Out-Null }
+    }
+    return @($badges.ToArray())
+}
+
+function Format-UiComponentSafetySuffix {
+    param([AllowNull()]$Component)
+
+    $badges = @(Get-UiComponentSafetyBadges -Component $Component)
+    if ($badges.Count -eq 0) { return '' }
+    return ('[{0}]' -f ($badges -join ', '))
+}
+
 function Refresh-SelectionTrees {
     $invalidExcludes = @(Repair-UiExcludedComponents)
     $filter = ($ui.FilterTextBox.Text).Trim().ToLowerInvariant()
@@ -3636,15 +3690,17 @@ function Refresh-SelectionTrees {
             $isResolvedComponent = $resolvedComponentLookup.ContainsKey($componentName)
             $isExcludedComponent = (@($ui.State.excludedComponents) -contains $componentName)
             $canExcludeComponent = Test-UiComponentCanExclude -ComponentName $componentName -Component $component
-            $cb.Content   = $componentName
+            $badgeSuffix = Format-UiComponentSafetySuffix -Component $component
+            $cb.Content   = if ([string]::IsNullOrWhiteSpace($badgeSuffix)) { $componentName } else { "$componentName $badgeSuffix" }
             $cb.IsChecked = (($isExplicitComponent -or $isResolvedComponent) -and -not $isExcludedComponent)
             $cb.Foreground = Get-UiBrush '#CBD5E1'
             $cb.Style = $window.FindResource('DarkCheck')
             $cb.Tag = @{ kind = 'component'; item = $component; name = $componentName; explicit = $isExplicitComponent; resolved = $isResolvedComponent; excluded = $isExcludedComponent; canExclude = $canExcludeComponent }
-            $cb.ToolTip = "Componente: $componentName`nDescrição: $([string]$component.description)`nTipo: $([string]$component.kind)`nEstágio: $([string]$component.stage)`nDepende de: $(@($component.dependsOn) -join ', ')"
+            $safetyTooltip = "Componente: $componentName`nDescrição: $([string]$component.description)`nTipo: $([string]$component.kind)`nEstágio: $([string]$component.stage)`nRisco: $([string]$component.riskLevel)`nBadges: $(@(Get-UiComponentSafetyBadges -Component $component) -join ', ')`nFonte oficial: $([string]$component.officialSource)`nManual: $([string]$component.manualReason)`nGPU: $([string]$component.requiresGpu)`nLogin: $([string]$component.requiresInteractiveLogin)`nDepende de: $(@($component.dependsOn) -join ', ')"
+            $cb.ToolTip = $safetyTooltip
             if ($isResolvedComponent -and -not $isExplicitComponent) {
                 $cb.Opacity = 0.82
-                $cb.ToolTip = if ($canExcludeComponent) { 'Incluído pelo perfil selecionado. Desmarcar item vindo de perfil adiciona em Não instalar.' } else { 'Componente obrigatório/dependência base. Remova o perfil ou componente que depende dele.' }
+                $cb.ToolTip = if ($canExcludeComponent) { "$safetyTooltip`nIncluído pelo perfil selecionado. Desmarcar item vindo de perfil adiciona em Não instalar." } else { "$safetyTooltip`nComponente obrigatório/dependência base. Remova o perfil ou componente que depende dele." }
             }
             $item.Header = $cb
             $cb.Add_Checked({
@@ -4026,6 +4082,7 @@ function Refresh-AppTuningControls {
                 description = [string]$item.description
                 profile = (@($item.profiles) -join ', ')
                 risk = [string]$item.risk
+                badges = [string]$item.badges
                 securityImpact = [string]([bool]$item.securityImpact)
                 rollbackScope = [string]$item.rollbackScope
                 safetyNotes = (@($item.safetyNotes) -join '; ')
@@ -4039,7 +4096,7 @@ function Refresh-AppTuningControls {
                 installComponents = (@($item.installComponents) -join ', ')
             })
         }
-        Load-WpfGridRows -Grid $ui.AppTuningItemsGrid -Items $rows -Columns @('active','id','installComponents','category','app','optimization','description','profile','risk','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','installedStateRaw','configuredStateRaw','updatedStateRaw','admin')
+        Load-WpfGridRows -Grid $ui.AppTuningItemsGrid -Items $rows -Columns @('active','id','installComponents','category','app','optimization','description','profile','risk','badges','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','installedStateRaw','configuredStateRaw','updatedStateRaw','admin')
         $installedCount = @($statusRows | Where-Object { [string]$_.installedState -eq 'installed' }).Count
         $configuredCount = @($statusRows | Where-Object { [string]$_.configuredState -in @('configured','planned') }).Count
         $securityImpactCount = @($plan.items | Where-Object { [bool]$_.securityImpact }).Count
@@ -6314,6 +6371,16 @@ function Get-UiHealthCardStatusText {
                 }
                 return 'ai-usagebar: Ausente'
             }
+            'ai-memory' {
+                if ($doctor.PSObject.Properties.Name -contains 'aiMemory' -and $null -ne $doctor.aiMemory) {
+                    $mem = $doctor.aiMemory
+                    if (-not [bool]$mem.installed) { return 'ai-memory: Ausente' }
+                    $server = if ([bool]$mem.serverReachable) { 'servidor ativo' } else { 'servidor parado' }
+                    $label = if ([bool]$mem.configured) { 'OK' } else { 'Instalado' }
+                    return "ai-memory: $label - $server"
+                }
+                return 'ai-memory: Ausente'
+            }
             'aionui' {
                 if ($doctor.PSObject.Properties.Name -contains 'aionui' -and $null -ne $doctor.aionui) {
                     $aion = $doctor.aionui
@@ -6415,6 +6482,7 @@ function Finalize-RunFromResult {
             $ui.HealthDeckStatusText.Text = Get-UiDeckStatusTextFromResult -Result $result
             $ui.HealthGithubStatusText.Text = Get-UiGithubCliStatusTextFromResult -Result $result
             $ui.HealthAiUsagebarStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'ai-usagebar'
+            $ui.HealthAiMemoryStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'ai-memory'
             $ui.HealthAionUiStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'aionui'
             $ui.HealthRollbackStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'rollback'
             $ui.HealthDoctorTextBox.Text = ($result | ConvertTo-Json -Depth 8)
@@ -6930,6 +6998,7 @@ function Copy-HealthDiagnostic {
                 [string]$ui.HealthSecretsStatusText.Text,
                 [string]$ui.HealthGithubStatusText.Text,
                 [string]$ui.HealthAiUsagebarStatusText.Text,
+                [string]$ui.HealthAiMemoryStatusText.Text,
                 [string]$ui.HealthAionUiStatusText.Text,
                 [string]$ui.HealthDeckStatusText.Text,
                 [string]$ui.HealthRollbackStatusText.Text
@@ -7190,6 +7259,7 @@ $ui.AppTuningClearCategoryButton.Add_Click({
 $ui.AppTuningAuditButton.Add_Click({
     Capture-AppTuningStateFromControls
     Refresh-AppTuningControls
+    Set-AppTuningActionFeedback -Message 'Status local atualizado. Nenhuma configuração foi alterada.' -Level 'info'
 })
 
 $ui.AppTuningClearAllButton.Add_Click({
@@ -7406,6 +7476,18 @@ $ui.AppTuningRunNowButton.Add_Click({
         Set-AppTuningActionFeedback -Message $friendly -Level 'error'
         [void][System.Windows.MessageBox]::Show($friendly, 'Bootstrap UI - Erro', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Error)
     }
+})
+
+$ui.AppTuningOpenFolderButton.Add_Click({
+    $root = if (-not [string]::IsNullOrWhiteSpace([string]$ui.State.cloneBaseDir)) { [string]$ui.State.cloneBaseDir } elseif (-not [string]::IsNullOrWhiteSpace([string]$ui.State.workspaceRoot)) { [string]$ui.State.workspaceRoot } else { (Get-Location).Path }
+    $path = Join-Path $root '.phasezero'
+    if (-not (Test-Path -LiteralPath $path)) { $path = $root }
+    Open-ExistingPath -Path $path
+})
+
+$ui.AppTuningViewLogButton.Add_Click({
+    $path = if (-not [string]::IsNullOrWhiteSpace($ui.CurrentLogPath)) { $ui.CurrentLogPath } else { [string]$ui.State.lastLogPath }
+    Open-ExistingPath -Path $path
 })
 
 # AI Coding Tools

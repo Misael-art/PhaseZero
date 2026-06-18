@@ -540,6 +540,7 @@ api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
             ($bundleNames -contains 'deck-doctor.json') | Should Be $true
             ($bundleNames -contains 'secrets-doctor.json') | Should Be $true
             ($bundleNames -contains 'ai-usagebar.json') | Should Be $true
+            ($bundleNames -contains 'ai-memory.json') | Should Be $true
             ($bundleNames -contains 'aionui.json') | Should Be $true
             ($bundleNames -contains 'wsl-repair.json') | Should Be $true
             ($bundleNames -contains 'deck-power.json') | Should Be $true

@@ -116,6 +116,88 @@ Describe 'Bootstrap profile mode' {
         }
     }
 
+    It 'declares transcript integration components with safety metadata and no safe-profile leakage' {
+        . $scriptPath -BootstrapUiLibraryMode
+
+        $components = Get-BootstrapComponentCatalog
+        $profiles = Get-BootstrapProfileCatalog
+        $safeProfiles = @('safe-base','recommended','public-beta')
+        $safeComponents = @('zen-browser','jan-ai','obsidian','kde-connect','godot','krita','audacity','supermaven-vscode')
+        $experimentalComponents = @('printing-press','odysseus','indextts2','anythingllm','llamacpp-server','headroom-ai')
+
+        foreach ($name in @($safeComponents + $experimentalComponents)) {
+            $components.Contains($name) | Should Be $true
+            [string]$components[$name].riskLevel | Should Match '^(safe|experimental|manual)$'
+            [string]$components[$name].officialSource | Should Match '^https://'
+            ($components[$name].PSObject.Properties.Name -contains 'requiresGpu') | Should Be $true
+            ($components[$name].PSObject.Properties.Name -contains 'requiresInteractiveLogin') | Should Be $true
+            foreach ($profileName in $safeProfiles) {
+                (@($profiles[$profileName].Items) -contains $name) | Should Be $false
+            }
+        }
+
+        foreach ($name in $safeComponents) {
+            [string]$components[$name].riskLevel | Should Be 'safe'
+            [string]$components[$name].Kind | Should Match '^(winget|vscode-extension)$'
+        }
+        foreach ($name in $experimentalComponents) {
+            [string]$components[$name].riskLevel | Should Match '^(experimental|manual)$'
+            [string]$components[$name].manualReason | Should Not Be ''
+            [bool]$components[$name].Optional | Should Be $true
+        }
+        [bool]$components['indextts2'].requiresGpu | Should Be $true
+        [string]$components['llamacpp-server'].manualReason | Should Match 'MTP|modelo'
+        [string]$components['headroom-ai'].Kind | Should Be 'uvtool'
+        [string]$components['headroom-ai'].Package | Should Be 'headroom-ai[proxy]'
+        [string]$components['headroom-ai'].CommandName | Should Be 'headroom'
+        (@($components['headroom-ai'].DependsOn) -contains 'rustup') | Should Be $true
+        (@($profiles['ai'].Items) -contains 'headroom-ai') | Should Be $true
+    }
+
+    It 'declares transcript on-demand app ids and resolves them to components' {
+        . $scriptPath -BootstrapUiLibraryMode
+
+        $apps = @(Get-BootstrapOnDemandAppDefinitions)
+        foreach ($appId in @('app-zen-browser','app-jan-ai','app-obsidian','app-kde-connect','app-godot','app-krita','app-audacity','app-anythingllm','app-odysseus','app-indextts2','app-headroom-ai','app-v0-dev','app-bolt-new','app-lovable-dev')) {
+            (@($apps | Where-Object { [string]$_.id -eq $appId }).Count) | Should Be 1
+        }
+
+        @(Resolve-BootstrapAppComponents -Names @('zen-browser')) | Should Be @('zen-browser')
+        @(Resolve-BootstrapAppComponents -Names @('headroom-ai')) | Should Be @('headroom-ai')
+        @(Resolve-BootstrapAppComponents -Names @('v0-dev')) | Should Be @('webapp-v0-dev')
+        @(Resolve-BootstrapAppComponents -Names @('lovable-dev')) | Should Be @('webapp-lovable-dev')
+    }
+
+    It 'exports transcript component metadata through the UI contract' {
+        . $scriptPath -BootstrapUiLibraryMode
+
+        $contract = Get-BootstrapUiContract
+        $componentRows = $contract.components
+        $byName = @{}
+        for ($i = 0; $i -lt $componentRows.Count; $i++) { $byName[[string]$componentRows[$i].name] = $componentRows[$i] }
+
+        foreach ($name in @('zen-browser','printing-press','indextts2','headroom-ai')) {
+            $byName.ContainsKey($name) | Should Be $true
+            [string]$byName[$name].riskLevel | Should Match '^(safe|experimental|manual)$'
+            [string]$byName[$name].officialSource | Should Match '^https://'
+            $byName[$name].Contains('manualReason') | Should Be $true
+            $byName[$name].Contains('requiresGpu') | Should Be $true
+            $byName[$name].Contains('requiresInteractiveLogin') | Should Be $true
+        }
+    }
+
+    It 'keeps game-dev focused on essential creation tools' {
+        . $scriptPath -BootstrapUiLibraryMode
+
+        $profiles = Get-BootstrapProfileCatalog
+        foreach ($expected in @('godot','krita','audacity')) {
+            (@($profiles['game-dev'].Items) -contains $expected) | Should Be $true
+        }
+        foreach ($forbidden in @('printing-press','odysseus','indextts2','anythingllm','llamacpp-server','zen-browser','jan-ai','obsidian','kde-connect','supermaven-vscode')) {
+            (@($profiles['game-dev'].Items) -contains $forbidden) | Should Be $false
+        }
+    }
+
     It 'ships a Pester wrapper with explicit FailedCount exit semantics' {
         $runner = Join-Path $repoRoot 'tests\run-pester.ps1'
 
@@ -381,5 +463,95 @@ Describe 'Bootstrap profile mode' {
         foreach ($expected in @('lossless-scaling', 'macrium-reflect', 'manual blockers:')) {
             Assert-Contains -Text $result.Output.ToLowerInvariant() -Pattern $expected.ToLowerInvariant() -Message 'Expected steamdeck-full output to surface manual blockers.'
         }
+    }
+
+    It 'declares PhaseZero profile with baseline components and webapps' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $prof = Get-BootstrapProfileCatalog
+        $pz = $prof['PhaseZero']
+        $pz | Should Not Be $null
+        [string]$pz.Name | Should Be 'PhaseZero'
+        foreach ($expected in @('git-core','git-lfs','node-core','python-core','java-core','dotnet-core','sevenzip','terminal','github-cli','notepadpp','powershell','chrome','wsl-core','wsl-ui','docker','unity-hub','cmake','llvm','rustup','visual-studio-community','steam','steamcmd')) {
+            (@($pz.Items) -contains $expected) | Should Be $true
+        }
+        (@($pz.Items) -contains 'webapps') | Should Be $true
+    }
+
+    It 'declares webapps profile with all web-app-shortcut components' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $prof = Get-BootstrapProfileCatalog
+        $wp = $prof['webapps']
+        $wp | Should Not Be $null
+        [string]$wp.Name | Should Be 'webapps'
+        foreach ($expected in @('webapp-photopea','webapp-gmail','webapp-youtube','webapp-spotify','webapp-trello','webapp-notion','webapp-google-drive','webapp-slack','webapp-zoom')) {
+            (@($wp.Items) -contains $expected) | Should Be $true
+        }
+    }
+
+    It 'declares virtualization profile with hyper-v components' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $prof = Get-BootstrapProfileCatalog
+        $vp = $prof['virtualization']
+        $vp | Should Not Be $null
+        [string]$vp.Name | Should Be 'virtualization'
+        foreach ($expected in @('hyper-v','hyper-v-tools','windows-hypervisor-platform')) {
+            (@($vp.Items) -contains $expected) | Should Be $true
+        }
+    }
+
+    It 'includes webapps in base profile' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $prof = Get-BootstrapProfileCatalog
+        (@($prof['base'].Items) -contains 'webapps') | Should Be $true
+    }
+
+    It 'includes webapps and virtualization in full profile' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $prof = Get-BootstrapProfileCatalog
+        (@($prof['full'].Items) -contains 'webapps') | Should Be $true
+        (@($prof['full'].Items) -contains 'virtualization') | Should Be $true
+    }
+
+    It 'realocates obsidian/zen-browser/kde-connect into utilities profile' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $prof = Get-BootstrapProfileCatalog
+        foreach ($item in @('obsidian','zen-browser','kde-connect')) {
+            (@($prof['utilities'].Items) -contains $item) | Should Be $true
+        }
+    }
+
+    It 'realocates supermaven-vscode into ai profile' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $prof = Get-BootstrapProfileCatalog
+        (@($prof['ai'].Items) -contains 'supermaven-vscode') | Should Be $true
+    }
+
+    It 'every new webapp component has a corresponding on-demand definition with https url' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $comps = Get-BootstrapComponentCatalog
+        $webappItems = @($comps.Keys | Where-Object { $_ -like 'webapp-*' })
+        $webappItems.Count | Should BeGreaterThan 35
+        foreach ($name in $webappItems) {
+            $def = $comps[$name]
+            [string]$def.Kind | Should Be 'web-app-shortcut'
+            [string]$def.Url | Should Match '^https://'
+        }
+    }
+
+    It 'phasezero-baseline probe resolves known components' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $baseline = Get-BootstrapPhaseZeroBaselineComponents
+        $baseline.Count | Should BeGreaterThan 20
+        (@($baseline) -contains 'git-core') | Should Be $true
+        (@($baseline) -contains 'webapp-photopea') | Should Be $true
+        (@($baseline) -contains 'webapp-youtube') | Should Be $true
+    }
+
+    It 'phasezero-tools rule body reads from asset file' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $body = Get-BootstrapPhaseZeroToolRuleBody
+        [string]$body | Should Match 'rtk'
+        [string]$body | Should Match 'ai-memory'
+        [string]$body | Should Match 'caveman'
     }
 }

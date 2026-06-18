@@ -29,7 +29,7 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $categoryIds = @($catalog.categories | ForEach-Object { [string]$_.id })
         $steamItem = $catalog.items | Where-Object { $_.id -eq 'steam-big-picture-session' } | Select-Object -First 1
 
-        foreach ($expected in @('gaming-console','steamdeck-control','dev-ai','local-ai-containers','browser-startup','connectivity','capture-creator','storage-backup','windows-qol','ai-agent-performance')) {
+        foreach ($expected in @('gaming-console','steamdeck-control','dev-ai','local-ai-containers','browser-startup','connectivity','capture-creator','storage-backup','windows-qol','ai-agent-performance','agent-config','knowledge-vault','workflow-automation')) {
             ($categoryIds -contains $expected) | Should Be $true
         }
 
@@ -37,6 +37,65 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $steamItem.defaultMode | Should Be 'recommended'
         (@($steamItem.actions) -contains 'session') | Should Be $true
         (@($steamItem.rollback) -contains 'manual') | Should Be $true
+    }
+
+    It 'exposes transcript integration AppTuning templates as opt-in reversible/manual items' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $byId = @{}
+        foreach ($item in @($catalog.items)) { $byId[[string]$item.id] = $item }
+
+        foreach ($id in @('llamacpp-mtp-template','agent-config-claude-rtk-template','headroom-agent-context-compression','knowledge-vault-obsidian-template','n8n-youtube-workflow-template','zen-browser-privacy-prefs')) {
+            $byId.ContainsKey($id) | Should Be $true
+            [string]$byId[$id].defaultMode | Should Be 'opt-in'
+            [string]$byId[$id].riskTier | Should Match '^(conservative|advanced|experimental|manual)$'
+            [string]$byId[$id].rollbackScope | Should Not Be ''
+            @($byId[$id].safetyNotes).Count | Should BeGreaterThan 0
+        }
+
+        [string]$byId['llamacpp-mtp-template'].category | Should Be 'dev-ai'
+        (@($byId['llamacpp-mtp-template'].actions) -contains 'diagnostic') | Should Be $true
+        (@($byId['llamacpp-mtp-template'].targetApps) -contains 'llama.cpp') | Should Be $true
+        [string]$byId['agent-config-claude-rtk-template'].category | Should Be 'agent-config'
+        [string]$byId['headroom-agent-context-compression'].category | Should Be 'agent-config'
+        (@($byId['headroom-agent-context-compression'].actions) -contains 'config-template') | Should Be $true
+        (@($byId['headroom-agent-context-compression'].actions) -contains 'wrapper-template') | Should Be $true
+        (@($byId['headroom-agent-context-compression'].targetApps) -contains 'claude code') | Should Be $true
+        (@($byId['headroom-agent-context-compression'].targetApps) -contains 'codex') | Should Be $true
+        (@($byId['headroom-agent-context-compression'].targetApps) -contains 'aider') | Should Be $true
+        (@($byId['headroom-agent-context-compression'].targetApps) -contains 'n8n') | Should Be $true
+        (@($byId['headroom-agent-context-compression'].targetApps) -contains 'opencode') | Should Be $true
+        (@($byId['headroom-agent-context-compression'].installComponents) -contains 'headroom-ai') | Should Be $true
+        [string]$byId['knowledge-vault-obsidian-template'].category | Should Be 'knowledge-vault'
+        [string]$byId['n8n-youtube-workflow-template'].category | Should Be 'workflow-automation'
+        [bool]$byId['n8n-youtube-workflow-template'].requiresInteractiveLogin | Should Be $true
+    }
+
+    It 'generates Headroom integration helper for correlated agent apps' {
+        $workspace = Join-Path $TestDrive 'headroom-workspace'
+        $null = New-Item -Path $workspace -ItemType Directory -Force
+        $item = [ordered]@{
+            id = 'headroom-agent-context-compression'
+            category = 'agent-config'
+            installed = $true
+        }
+
+        $result = Invoke-BootstrapAppTuningItem -State @{ CloneBaseDir = $workspace } -Item $item
+
+        [string]$result.status | Should Match '^(applied|configured)$'
+        $docPath = Join-Path $workspace '.codex\context-packs\headroom-agent-integration.md'
+        $scriptPath = Join-Path $workspace '.codex\scripts\headroom-agent.ps1'
+        Test-Path -LiteralPath $docPath | Should Be $true
+        Test-Path -LiteralPath $scriptPath | Should Be $true
+
+        $doc = Get-Content -LiteralPath $docPath -Raw
+        $script = Get-Content -LiteralPath $scriptPath -Raw
+        foreach ($expected in @('headroom wrap claude --memory','headroom wrap codex --memory','headroom wrap aider','headroom wrap cursor','headroom wrap openclaw','n8n','OpenCode')) {
+            $doc | Should Match ([regex]::Escape($expected))
+        }
+        $doc | Should Match 'OpenCode.+manual'
+        foreach ($expectedAction in @('wrap-claude','wrap-codex','wrap-aider','wrap-cursor','wrap-copilot','wrap-gemini','wrap-openclaw','mcp-install','proxy','stats')) {
+            $script | Should Match ([regex]::Escape($expectedAction))
+        }
     }
 
     It 'exposes conservative AI agent performance items with safety metadata' {

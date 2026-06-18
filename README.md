@@ -86,6 +86,15 @@ Diagnostico local:
 - `full-workstation`: perfil amplo com stacks desktop, IA, containers, creator, social e utilitarios. Nunca deve ser default silencioso.
 - `legacy`: compatibilidade com fluxo historico.
 
+## Transcricoes tecnicas
+
+- Matriz fechada: `docs/video-transcript-integration.md` cobre 58 titulos com Destino final definido.
+- Apps novos ficam sob demanda: Zen Browser, Jan, Obsidian, KDE Connect, Godot, Krita, Audacity, Headroom AI, web apps v0/Bolt/Lovable.
+- Itens experimentais ficam opt-in/manual: Printing Press, Odysseus, IndexTTS2, AnythingLLM, llama.cpp MTP e Headroom AI.
+- Providers BYOK OpenAI-compatible novos: `minimax`, `nex`, `zhipu-glm`.
+- AppTuning adiciona `agent-config`, `knowledge-vault`, `workflow-automation` e templates manuais.
+- UI exibe badges por componente: Seguro, Experimental, Manual, Requer GPU, Requer login.
+
 ## Escopo UI/CLI
 
 Quando usuario seleciona componente isolado, backend recebe somente o componente necessario:

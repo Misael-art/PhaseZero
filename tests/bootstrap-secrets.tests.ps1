@@ -463,6 +463,23 @@ Describe 'Bootstrap secrets manifest v2' {
         $resolved.kilo.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
     }
 
+    It 'declares transcript OpenAI-compatible providers as opt-in manual BYOK providers' {
+        $providers = Get-BootstrapSecretsProviderCatalog
+
+        foreach ($provider in @('minimax','nex','zhipu-glm')) {
+            $providers.ContainsKey($provider) | Should Be $true
+            [string]$providers[$provider].validationKind | Should Be 'openaiCompatible'
+            [string]$providers[$provider].secretKind | Should Be 'apiKey'
+            (@($providers[$provider].requiredFields) -contains 'apiKey') | Should Be $true
+            (@($providers[$provider].requiredFields) -contains 'baseUrl') | Should Be $true
+            [bool]$providers[$provider].supportsValidation | Should Be $true
+            [bool]$providers[$provider].manualOptIn | Should Be $true
+            [string]$providers[$provider].signupUrl | Should Match '^https://'
+            [string]$providers[$provider].defaults.baseUrl | Should Match '^https://'
+            (@($providers[$provider].appTargets) -contains 'openCode') | Should Be $true
+        }
+    }
+
     It 'does not propagate Gemini credentials outside the Google/Antigravity lane' {
         $fixture = @{
             metadata = @{ version = 2 }

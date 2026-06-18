@@ -70,6 +70,30 @@ Describe 'AI proxy suite support' {
         [string]$result.message | Should Match 'playwright install chromium'
     }
 
+    It 'repairs a managed proxy repository when fast-forward update diverges' {
+        $catalog = Get-BootstrapAiProxyCatalog
+        $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName 'qwenproxy' -InstallRoot $script:AiProxySuiteRoot
+        New-Item -Path (Join-Path $sourceRoot '.git') -ItemType Directory -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $sourceRoot '.env') -Value 'API_KEY=redacted-test' -Encoding UTF8
+        $script:ManagedRepoRepairCalled = $false
+
+        Mock Resolve-CommandPath { return 'C:\Tools\git.exe' } -ParameterFilter { $Name -eq 'git' }
+        Mock Invoke-BootstrapAiProxyInstallCommand {
+            if ($Label -eq 'git pull') { throw "git pull falhou (exit=128). Diverging branches can't be fast-forwarded" }
+            return [ordered]@{ exitCode = 0 }
+        }
+        Mock Repair-BootstrapAiProxyManagedRepository {
+            $script:ManagedRepoRepairCalled = $true
+            return [ordered]@{ repaired = $true; backupPath = 'C:\PhaseZero\repo-backup'; envRestored = $true }
+        }
+
+        Sync-BootstrapAiProxyRepository -CatalogEntry $catalog['qwenproxy'] -SourceRoot $sourceRoot
+
+        [bool]$script:ManagedRepoRepairCalled | Should Be $true
+        Assert-MockCalled Invoke-BootstrapAiProxyInstallCommand -ParameterFilter { $Label -eq 'git pull' } -Times 1 -Scope It
+        Assert-MockCalled Repair-BootstrapAiProxyManagedRepository -Times 1 -Exactly -Scope It
+    }
+
     It 'writes proxy env and manifest without exposing env secret values in result' {
         $oldQwenEmail = $env:QWEN_EMAIL
         $oldQwenPassword = $env:QWEN_PASSWORD
@@ -149,6 +173,19 @@ Describe 'AI proxy suite support' {
         $env:LOCALAPPDATA = Join-Path $script:AiProxySuiteRoot 'User\AppData\Local'
         $env:BOOTSTRAP_DATA_ROOT = Join-Path $script:AiProxySuiteRoot 'Data'
         New-Item -Path $projectRoot,$env:USERPROFILE,$env:APPDATA,$env:LOCALAPPDATA,$env:BOOTSTRAP_DATA_ROOT -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $env:APPDATA 'clawdbot') -ItemType Directory -Force | Out-Null
+        Write-BootstrapJsonFile -Path (Join-Path $env:USERPROFILE '.openclaw\openclaw.json') -Value ([ordered]@{
+            mcpServers = [ordered]@{
+                existing = [ordered]@{
+                    command = 'npx'
+                    args = @('-y','existing-mcp')
+                    enabled = $true
+                }
+            }
+            env = [ordered]@{
+                LEGACY_VAR = 'kept'
+            }
+        })
         try {
             $kimi = Invoke-BootstrapAiToolAction -ToolName 'kimiproxy' -Action 'configure' -InstallRoot $script:AiProxySuiteRoot -ProjectRoot $projectRoot -Yes
             $envMap = Read-BootstrapDotEnvFile -Path ([string]$kimi.envPath)
@@ -175,10 +212,44 @@ Describe 'AI proxy suite support' {
             [string]$openCode.model | Should Be 'phasezero-kimi/k2d6-thinking'
             [string]$openCode.provider['phasezero-kimi'].options.baseURL | Should Be 'http://127.0.0.1:3010/v1'
             [string]$openCode.provider['phasezero-kimi'].options.apiKey | Should Be $localKey
+            $openCodeAuth = Read-BootstrapJsonFile -Path (Join-Path $env:USERPROFILE '.local\share\opencode\auth.json')
+            [string]$openCodeAuth['phasezero-kimi'].type | Should Be 'api'
+            [string]$openCodeAuth['phasezero-kimi'].key | Should Be $localKey
+
+            $kiloConfig = Read-BootstrapJsonFile -Path (Join-Path $env:USERPROFILE '.config\kilo\opencode.json')
+            [string]$kiloConfig.model | Should Be 'phasezero-kimi/k2d6-thinking'
+            [string]$kiloConfig.provider['phasezero-kimi'].options.baseURL | Should Be 'http://127.0.0.1:3010/v1'
+            $kiloAuth = Read-BootstrapJsonFile -Path (Join-Path $env:USERPROFILE '.local\share\kilo\auth.json')
+            [string]$kiloAuth['phasezero-kimi'].type | Should Be 'api'
+            [string]$kiloAuth['phasezero-kimi'].key | Should Be $localKey
 
             $hermes = Read-BootstrapJsonFile -Path (Join-Path $projectRoot '.hermes\opencloud.json')
             [string]$hermes.env.OPENAI_BASE_URL | Should Be 'http://127.0.0.1:3010/v1'
             [string]$hermes.env.OPENAI_MODEL | Should Be 'k2d6-thinking'
+            $hermesEnv = Get-Content -LiteralPath (Join-Path $env:USERPROFILE '.hermes\.env') -Raw -Encoding UTF8
+            $hermesConfig = Get-Content -LiteralPath (Join-Path $env:USERPROFILE '.hermes\config.yaml') -Raw -Encoding UTF8
+            $hermesEnv | Should Match 'KIMIPROXY_API_KEY='
+            $hermesEnv | Should Match 'OPENAI_BASE_URL="?http://127\.0\.0\.1:3010/v1"?'
+            $hermesConfig | Should Match 'custom_providers:'
+            $hermesConfig | Should Match 'name: phasezero-kimi'
+            $hermesConfig | Should Match 'provider: custom:phasezero-kimi'
+            $hermesConfig | Should Match 'default: k2d6-thinking'
+
+            $openClaw = Read-BootstrapJsonFile -Path (Join-Path $env:USERPROFILE '.openclaw\openclaw.json')
+            $openClaw.ContainsKey('mcpServers') | Should Be $false
+            [string]$openClaw.mcp.servers.existing.command | Should Be 'npx'
+            [string]$openClaw.env.vars.OPENAI_BASE_URL | Should Be 'http://127.0.0.1:3010/v1'
+            [string]$openClaw.env.vars.OPENAI_MODEL | Should Be 'k2d6-thinking'
+            [string]$openClaw.env.vars.LEGACY_VAR | Should Be 'kept'
+            [string]$openClaw.models.providers['phasezero-kimi'].baseUrl | Should Be 'http://127.0.0.1:3010/v1'
+            [string]$openClaw.models.providers['phasezero-kimi'].apiKey | Should Be '${KIMIPROXY_API_KEY}'
+            [string]$openClaw.agents.defaults.model | Should Be 'phasezero-kimi/k2d6-thinking'
+            [string]$openClaw.agents.defaults.models['phasezero-kimi/k2d6-thinking'].alias | Should Be 'PhaseZero KimiProxy'
+
+            $clawbot = Read-BootstrapJsonFile -Path (Join-Path $env:APPDATA 'clawdbot\clawdbot.json5')
+            [string]$clawbot.env.vars.OPENAI_BASE_URL | Should Be 'http://127.0.0.1:3010/v1'
+            [string]$clawbot.env.vars.OPENAI_MODEL | Should Be 'k2d6-thinking'
+            [string]$clawbot.models.providers['phasezero-kimi'].baseUrl | Should Be 'http://127.0.0.1:3010/v1'
 
             $json | Should Not Match ([regex]::Escape($localKey))
         } finally {
@@ -361,6 +432,95 @@ Describe 'AI proxy suite support' {
         [string]$result.message | Should Match 'Start'
     }
 
+    It 'keeps suite start usable when the default provider is running and optional providers are degraded' {
+        $classification = Get-BootstrapAiProxySuiteStartClassification -Items @(
+            [ordered]@{ tool = 'kimiproxy'; status = 'running' },
+            [ordered]@{ tool = 'qwenproxy'; status = 'error' },
+            [ordered]@{ tool = 'deepsproxy'; status = 'started' },
+            [ordered]@{ tool = 'mimo-ai-proxy'; status = 'error' },
+            [ordered]@{ tool = 'antigravity-openai-adapter'; status = 'error' }
+        )
+
+        [string]$classification.status | Should Be 'degraded'
+        [int]$classification.okCount | Should Be 2
+        [int]$classification.degradedCount | Should Be 3
+        [string]$classification.defaultProviderStatus | Should Be 'running'
+    }
+
+    It 'retries Playwright install when the cache lock is transiently compromised' {
+        $catalog = Get-BootstrapAiProxyCatalog
+        $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName 'kimiproxy' -InstallRoot $script:AiProxySuiteRoot
+        New-Item -Path $sourceRoot -ItemType Directory -Force | Out-Null
+        $script:PlaywrightInstallAttempts = 0
+
+        Mock Get-BootstrapNpmCommandForAiTools { return 'C:\Tools\npm.cmd' }
+        Mock Get-BootstrapNpxCommandForAiTools { return 'C:\Tools\npx.cmd' }
+        Mock Clear-BootstrapPlaywrightStaleLock { }
+        Mock Start-Sleep { }
+        Mock Invoke-BootstrapAiProxyInstallCommand {
+            $script:PlaywrightInstallAttempts++
+            if ($script:PlaywrightInstallAttempts -eq 1) {
+                throw "playwright install chromium falhou (exit=1). Error: ENOENT: no such file or directory, stat 'C:\Users\misae\AppData\Local\ms-playwright\__dirlock'"
+            }
+            return [ordered]@{ exitCode = 0 }
+        }
+
+        $result = Ensure-BootstrapAiProxyPlaywrightRuntime -CatalogEntry $catalog['kimiproxy'] -SourceRoot $sourceRoot
+
+        [string]$result.status | Should Be 'ready'
+        [int]$script:PlaywrightInstallAttempts | Should Be 2
+        Assert-MockCalled Invoke-BootstrapAiProxyInstallCommand -Times 2 -Exactly -Scope It
+    }
+
+    It 'repairs Playwright browsers before starting browser-session node proxies' {
+        $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName 'kimiproxy' -InstallRoot $script:AiProxySuiteRoot
+        New-Item -Path (Join-Path $sourceRoot '.git'),(Join-Path $sourceRoot 'node_modules') -ItemType Directory -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $sourceRoot '.env') -Value @('PORT=3010','API_KEY=redacted-test') -Encoding UTF8
+
+        Mock Get-BootstrapAiProxyToolDoctorReport {
+            return [ordered]@{
+                installed = $true
+                filesConfigured = $true
+                runtimeReady = $true
+                runtimeAvailable = $false
+                listening = $false
+                pid = @()
+                healthStatus = 'unreachable'
+                healthStatusCode = 0
+                modelsStatus = 'unreachable'
+                modelsStatusCode = 0
+                modelsUrl = 'http://127.0.0.1:3010/v1/models'
+            }
+        }
+        Mock Ensure-BootstrapAiProxyPlaywrightRuntime {
+            return [ordered]@{ status = 'ready'; changed = $true }
+        }
+        Mock Start-Process { return [pscustomobject]@{ Id = 6363 } }
+        Mock Wait-BootstrapAiProxyRuntime {
+            return [ordered]@{
+                listening = $true
+                pid = @(6363)
+                healthStatus = 'ok'
+                healthStatusCode = 200
+                modelsStatus = 'ok'
+                modelsStatusCode = 200
+                modelsUrl = 'http://127.0.0.1:3010/v1/models'
+                runtimeAvailable = $true
+                waitDurationMs = 25
+            }
+        }
+        Mock Invoke-BootstrapAiProxyWebValidation {
+            return [ordered]@{ required = $true; kind = 'browser-session'; status = 'validated'; command = 'npm run login'; missing = @(); durationMs = 5; recommendedAction = '' }
+        }
+
+        $result = Start-BootstrapAiProxyTool -ToolName 'kimiproxy' -InstallRoot $script:AiProxySuiteRoot -TimeoutMs 1000
+
+        [string]$result.status | Should Be 'started'
+        [int]$result.pid | Should Be 6363
+        Assert-MockCalled Ensure-BootstrapAiProxyPlaywrightRuntime -Times 1 -Exactly -Scope It
+        Assert-MockCalled Start-Process -Times 1 -Exactly -Scope It
+    }
+
     It 'starts a Go proxy executable without requiring an ArgumentList' {
         $sourceRoot = Get-BootstrapAiProxySourceRoot -ToolName 'mimo-ai-proxy' -InstallRoot $script:AiProxySuiteRoot
         $binDir = Join-Path $sourceRoot 'bin'
@@ -484,6 +644,70 @@ Describe 'AI proxy suite support' {
 
         [string]$result.status | Should Be 'error'
         [string]$result.message | Should Match 'ouvindo'
+        Assert-MockCalled Start-Process -Times 0 -Exactly -Scope It
+    }
+
+    It 'keeps an already running proxy successful when chat validation times out' {
+        Mock Get-BootstrapAiProxyToolDoctorReport {
+            return [ordered]@{
+                installed = $true
+                filesConfigured = $true
+                runtimeReady = $true
+                runtimeAvailable = $true
+                listening = $true
+                pid = @(16276)
+                processName = @('node')
+                healthStatus = 'ok'
+                healthStatusCode = 200
+                modelsStatus = 'ok'
+                modelsStatusCode = 200
+                healthUrl = 'http://127.0.0.1:3011/health'
+                modelsUrl = 'http://127.0.0.1:3011/v1/models'
+                runtimeProbeDurationMs = 20
+            }
+        }
+        Mock Invoke-BootstrapAiProxyWebValidation {
+            return [ordered]@{ required = $true; kind = 'browser-session'; status = 'timeout'; command = 'npm run login'; missing = @(); durationMs = 10000; recommendedAction = 'login manual' }
+        }
+        Mock Start-Process { throw 'should not start duplicate listener' }
+
+        $result = Start-BootstrapAiProxyTool -ToolName 'qwenproxy' -InstallRoot $script:AiProxySuiteRoot -TimeoutMs 1000
+
+        [string]$result.status | Should Be 'running'
+        [string]$result.message | Should Match 'validacao web esta timeout'
+        Assert-MockCalled Start-Process -Times 0 -Exactly -Scope It
+    }
+
+    It 'treats a listening browser-session proxy with healthy /health and slow /v1/models as running' {
+        Mock Get-BootstrapAiProxyToolDoctorReport {
+            return [ordered]@{
+                installed = $true
+                filesConfigured = $true
+                runtimeReady = $true
+                runtimeAvailable = $false
+                listening = $true
+                pid = @(16276)
+                processName = @('node')
+                healthStatus = 'ok'
+                healthStatusCode = 200
+                modelsStatus = 'timeout'
+                modelsStatusCode = 0
+                modelsUrl = 'http://127.0.0.1:3011/v1/models'
+                webValidation = [ordered]@{
+                    required = $true
+                    kind = 'browser-session'
+                    status = 'failed'
+                    command = 'npm run login'
+                    missing = @()
+                }
+            }
+        }
+        Mock Start-Process { throw 'should not start duplicate listener' }
+
+        $result = Start-BootstrapAiProxyTool -ToolName 'qwenproxy' -InstallRoot $script:AiProxySuiteRoot -TimeoutMs 1000
+
+        [string]$result.status | Should Be 'running'
+        [string]$result.message | Should Match '/health esta ok'
         Assert-MockCalled Start-Process -Times 0 -Exactly -Scope It
     }
 }

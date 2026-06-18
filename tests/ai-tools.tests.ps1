@@ -71,7 +71,7 @@ Describe 'AI coding tool support' {
 
         $catalog = Get-BootstrapAiToolCatalog
 
-        foreach ($toolName in @('rtk','claude-code','opencode','hermes-agent','hermes-desktop','openclaw','aionui','antigravity-workflows','ai-usagebar')) {
+        foreach ($toolName in @('rtk','claude-code','opencode','hermes-agent','hermes-desktop','openclaw','aionui','antigravity-workflows','ai-usagebar','ai-memory')) {
             $catalog.Contains($toolName) | Should Be $true
             [string]$catalog[$toolName].DocsUrl | Should Match '^https://'
             [string]$catalog[$toolName].InstallSupport | Should Not Be ''
@@ -88,7 +88,7 @@ Describe 'AI coding tool support' {
         [string]$catalog['antigravity-workflows'].InstallSupport | Should Be 'workflow-only'
         [string]$catalog['ai-usagebar'].GitHubRepo | Should Be 'akitaonrails/ai-usagebar'
         [string]$catalog['ai-usagebar'].InstallSupport | Should Be 'linux-release'
-        [string]$catalog['ai-usagebar'].ReleaseTag | Should Be 'v0.4.0'
+        [string]$catalog['ai-usagebar'].ReleaseTag | Should Be 'v0.7.1'
         [string]$catalog['ai-usagebar'].ReleaseAssets['x86_64'].Name | Should Be 'ai-usagebar-linux-x86_64.tar.gz'
         [string]$catalog['ai-usagebar'].ReleaseAssets['x86_64'].Sha256 | Should Match '^[a-f0-9]{64}$'
 
@@ -102,6 +102,42 @@ Describe 'AI coding tool support' {
         (@($catalog['aionui'].Architectures) -contains 'x64') | Should Be $true
         (@($catalog['aionui'].Architectures) -contains 'arm64') | Should Be $true
         (@($catalog['aionui'].Aliases) -contains 'aion-ui') | Should Be $true
+    }
+
+    It 'declares transcript opt-in AI tools with official sources and dry-run support' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $catalog = Get-BootstrapAiToolCatalog
+
+        foreach ($toolName in @('printing-press','indextts2','odysseus','ollama','lm-studio','openwebui','n8n')) {
+            $catalog.Contains($toolName) | Should Be $true
+            [string]$catalog[$toolName].DocsUrl | Should Match '^https://'
+            [string]$catalog[$toolName].InstallSupport | Should Not Be ''
+            [string]$catalog[$toolName].RiskLevel | Should Match '^(safe|experimental|manual)$'
+            [bool]$catalog[$toolName].DefaultProfileAllowed | Should Be $false
+        }
+
+        [string]$catalog['printing-press'].GitHubRepo | Should Be 'mvanhorn/cli-printing-press'
+        [string]$catalog['printing-press'].InstallSupport | Should Be 'manual-workflow'
+        [string]$catalog['indextts2'].GitHubRepo | Should Be 'index-tts/index-tts'
+        [bool]$catalog['indextts2'].RequiresGpu | Should Be $true
+        [string]$catalog['odysseus'].GitHubRepo | Should Be 'pewdiepie-archdaemon/odysseus'
+        [string]$catalog['ollama'].InstallSupport | Should Be 'winget'
+        [string]$catalog['openwebui'].InstallSupport | Should Be 'docker-manual'
+        [string]$catalog['n8n'].InstallSupport | Should Be 'workflow-template'
+    }
+
+    It 'plans transcript experimental AI tool dry-runs without mutating the host' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        foreach ($toolName in @('printing-press','indextts2','odysseus')) {
+            $result = Invoke-BootstrapAiToolAction -ToolName $toolName -Action 'install' -InstallRoot $script:AiToolsTestRoot -ProjectRoot $repoRoot -DryRun -Yes
+
+            [string]$result.tool | Should Be $toolName
+            [string]$result.status | Should Be 'planned'
+            [string]$result.action | Should Be 'install'
+            [string]$result.message | Should Match 'opt-in|manual|GPU|admin|oficial'
+        }
     }
 
     It 'reports AI tool status without claiming missing tools are configured' {
@@ -150,7 +186,7 @@ Describe 'AI coding tool support' {
         [string]$result.tool | Should Be 'ai-usagebar'
         [string]$result.status | Should Be 'planned'
         [string]$result.message | Should Match 'akitaonrails/ai-usagebar'
-        [string]$result.message | Should Match 'v0\.4\.0'
+        [string]$result.message | Should Match 'v0\.7\.1'
         [string]$result.message | Should Match 'sha256'
     }
 
@@ -265,6 +301,22 @@ Describe 'AI coding tool support' {
         @($json.diagnostics).Count | Should Be 0
     }
 
+    It 'accepts explicit install flag for transcript manual AI tools through install-cli' {
+        $resultPath = Join-Path $script:AiToolsTestRoot 'printing-press-install-result.json'
+        $logPath = Join-Path $script:AiToolsTestRoot 'printing-press-install.log'
+
+        $result = Invoke-InstallCliBat -Args @('--tool','printing-press','--install','--dry-run','--yes','--no-admin','--install-root',$script:AiToolsTestRoot,'--result-path',$resultPath,'--log-path',$logPath)
+
+        $result.ExitCode | Should Be 0
+        ([string]::IsNullOrWhiteSpace($result.Stderr)) | Should Be $true
+        $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        [string]$json.mode | Should Be 'ai-tools'
+        [string]$json.action | Should Be 'install'
+        [string]$json.tool | Should Be 'printing-press'
+        [string]$json.status | Should Be 'planned'
+        [bool]$json.dryRun | Should Be $true
+    }
+
     It 'passes ai-proxy-suite start dry-run through install-cli without starting processes' {
         $resultPath = Join-Path $script:AiToolsTestRoot 'ai-proxy-start-result.json'
         $logPath = Join-Path $script:AiToolsTestRoot 'ai-proxy-start.log'
@@ -282,6 +334,41 @@ Describe 'AI coding tool support' {
         [string]$json.status | Should Be 'planned'
         @($json.results[0].startResults).Count | Should BeGreaterThan 0
         $jsonText | Should Not Match 'API_KEY|QWEN_PASSWORD|SERVICE_TOKEN|USER_ID|XIAOMI_CHATBOT_PH|sk-'
+    }
+
+    It 'lists individual AI proxy tools and accepts Antigravity proxy alias for start dry-run' {
+        $list = Invoke-InstallCliBat -Args @('--list-tools','--yes','--no-admin')
+
+        $list.ExitCode | Should Be 0
+        ([string]::IsNullOrWhiteSpace($list.Stderr)) | Should Be $true
+        foreach ($expected in @('kimiproxy','qwenproxy','deepsproxy','mimo-ai-proxy','antigravity-openai-adapter','antigravity-proxy')) {
+            $list.Stdout | Should Match ([regex]::Escape($expected))
+        }
+        $list.Stdout | Should Match 'install'
+        $list.Stdout | Should Match 'start'
+        $list.Stdout | Should Match '(?m)^\s*\d+\.\s+\[tool\]\s+'
+
+        $resultPath = Join-Path $script:AiToolsTestRoot 'antigravity-proxy-start-result.json'
+        $logPath = Join-Path $script:AiToolsTestRoot 'antigravity-proxy-start.log'
+        $rootWithSpaces = Join-Path $script:AiToolsTestRoot 'proxy root with spaces'
+
+        $result = Invoke-InstallCliBat -Args @('--tool','antigravity-proxy','--start','--dry-run','--yes','--no-admin','--install-root',$rootWithSpaces,'--result-path',$resultPath,'--log-path',$logPath)
+
+        $result.ExitCode | Should Be 0
+        ([string]::IsNullOrWhiteSpace($result.Stderr)) | Should Be $true
+        $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        [string]$json.mode | Should Be 'ai-tools'
+        [string]$json.action | Should Be 'start'
+        [string]$json.tool | Should Be 'antigravity-openai-adapter'
+        [string]$json.status | Should Be 'planned'
+
+        $mimo = Invoke-InstallCliBat -Args @('--tool','mimo','--install','--dry-run','--yes','--no-admin','--install-root',$rootWithSpaces)
+
+        $mimo.ExitCode | Should Be 0
+        ([string]::IsNullOrWhiteSpace($mimo.Stderr)) | Should Be $true
+        $mimoJson = $mimo.Stdout | ConvertFrom-Json
+        [string]$mimoJson.tool | Should Be 'mimo-ai-proxy'
+        [string]$mimoJson.status | Should Be 'planned'
     }
 
     It 'returns non-zero when ai proxy start is blocked' {
@@ -383,5 +470,118 @@ Describe 'AI coding tool support' {
             $raw | Should Match $name
         }
         $raw | Should Not Match 'Configurao|Verso|RPIDOS|Configuraes|sade|Resolucao'
+    }
+
+    It 'declares ai-memory catalog entry with native-release and verified fields' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $catalog = Get-BootstrapAiToolCatalog
+        $catalog.Contains('ai-memory') | Should Be $true
+        [string]$catalog['ai-memory'].GitHubRepo | Should Be 'akitaonrails/ai-memory'
+        [string]$catalog['ai-memory'].InstallSupport | Should Be 'native-release'
+        [string]$catalog['ai-memory'].ReleaseTag | Should Be 'v1.1.0'
+        [string]$catalog['ai-memory'].ServerUrl | Should Be 'http://127.0.0.1:49374'
+        [string]$catalog['ai-memory'].ReleaseAssets['windows'].Name | Should Be 'ai-memory-windows-x86_64.zip'
+        [string]$catalog['ai-memory'].ReleaseAssets['windows'].Sha256 | Should Match '^[a-f0-9]{64}$'
+    }
+
+    It 'normalizes ai-memory aliases correctly' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        Normalize-BootstrapAiToolName -ToolName 'aimemory' | Should Be 'ai-memory'
+        Normalize-BootstrapAiToolName -ToolName 'ai-mem' | Should Be 'ai-memory'
+        Normalize-BootstrapAiToolName -ToolName 'memory' | Should Be 'ai-memory'
+    }
+
+    It 'reports ai-memory as missing when not installed' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        Mock Get-BootstrapAiMemoryExePath { return '' }
+        Test-BootstrapAiToolConfigured -ToolName 'ai-memory' | Should Be $false
+    }
+
+    It 'plans ai-memory install through a verified native release path' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $catalog = Get-BootstrapAiToolCatalog
+        $entry = $catalog['ai-memory']
+        [string]$entry.InstallSupport | Should Be 'native-release'
+        $entry.ReleaseAssets.Contains('windows') | Should Be $true
+    }
+
+    It 'keeps ai-memory doctor source free of secret logging' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $source = Get-Content -LiteralPath $toolsScriptPath -Raw
+        $functionStart = $source.IndexOf('function New-BootstrapAiMemoryDoctorReport')
+        $functionEnd = $source.IndexOf('function ', $functionStart + 10)
+        if ($functionEnd -le $functionStart) { $functionEnd = $source.Length }
+        $body = $source.Substring($functionStart, $functionEnd - $functionStart)
+
+        $body | Should Not Match 'api_key|API_KEY|ApiKey'
+        $body | Should Not Match 'ghp_|gho_|ghu_'
+    }
+
+    It 'adds ai-memory to the on-demand app catalog' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $onDemand = Get-BootstrapOnDemandAppDefinitions
+        $memory = @($onDemand | Where-Object { $_.id -eq 'app-ai-memory' })
+        $memory.Count | Should Be 1
+        [string]$memory[0].category | Should Be 'ia'
+    }
+
+    It 'declares ai-memory in the tool catalog with correct metadata' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $catalog = Get-BootstrapAiToolCatalog
+        $comp = $catalog['ai-memory']
+        $comp | Should Not Be $null
+        [string]$comp.ToolName | Should Be 'ai-memory'
+        [string]$comp.InstallSupport | Should Be 'native-release'
+        [string]$comp.ServerUrl | Should Be 'http://127.0.0.1:49374'
+    }
+
+    It 'includes ai-memory in the ai profile' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $profiles = Get-BootstrapProfileCatalog
+        $aiProfile = $profiles['ai']
+        $aiProfile | Should Not Be $null
+        (@($aiProfile.Items) -contains 'ai-memory') | Should Be $true
+    }
+
+    It 'keeps WSL bash translation failures out of successful AI Usagebar Cargo fallback messages' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $catalog = Get-BootstrapAiToolCatalog
+        $sourceDir = Join-Path $script:AiToolsTestRoot 'sources\ai-usagebar-0.7.1'
+        $releaseDir = Join-Path $sourceDir 'target\release'
+        $binDir = Join-Path $script:AiToolsTestRoot 'win-bin'
+        $configDir = Join-Path $script:AiToolsTestRoot 'config'
+        $null = New-Item -Path (Join-Path $sourceDir '.git') -ItemType Directory -Force
+        $null = New-Item -Path $releaseDir -ItemType Directory -Force
+        Set-Content -LiteralPath (Join-Path $releaseDir 'ai-usagebar.exe') -Value 'fake exe'
+        Set-Content -LiteralPath (Join-Path $releaseDir 'ai-usagebar-tui.exe') -Value 'fake exe'
+
+        Mock Test-BootstrapHostIsWindows { return $true }
+        Mock Install-BootstrapAiUsagebarViaWsl { throw "Falha ao instalar ai-usagebar no WSL/Linux (exit=127). wsl: Failed to translate 'F:\Projects\PhaseZero' /bin/sh: bash: not found" }
+        Mock Get-BootstrapAiUsagebarWindowsBinDir { return $binDir }
+        Mock Get-BootstrapAiUsagebarNativeConfigPathSet { return @(Join-Path $configDir 'config.toml') }
+        Mock Ensure-PathUserContains { }
+        Mock Refresh-SessionPath { }
+        Mock Resolve-CommandPath { return 'C:\Tools\git.exe' } -ParameterFilter { $Name -eq 'git.exe' -or $Name -eq 'git' }
+        Mock Resolve-CommandPath { return 'C:\Tools\cargo.exe' } -ParameterFilter { $Name -eq 'cargo.exe' -or $Name -eq 'cargo' }
+        Mock Invoke-BootstrapAiNativeCommand { return [ordered]@{ exitCode = 0; timedOut = $false; stdout = ''; stderr = ''; firstLine = 'ok' } }
+        Mock Invoke-BootstrapAiUsagebarCommandProbe { return [ordered]@{ ok = $true; status = 'installed'; path = $CommandPath; version = 'v0.4.0'; message = 'ok' } }
+
+        $result = Install-BootstrapAiUsagebar -CatalogEntry $catalog['ai-usagebar'] -InstallRoot $script:AiToolsTestRoot -ProjectRoot $repoRoot
+
+        [string]$result.status | Should Be 'installed'
+        [string]$result.message | Should Match 'fallback Cargo'
+        [string]$result.message | Should Match 'WSL indisponivel'
+        [string]$result.message | Should Not Match 'Falha ao instalar'
+        [string]$result.message | Should Not Match 'Failed to translate'
+        [string]$result.message | Should Not Match 'bash: not found'
     }
 }

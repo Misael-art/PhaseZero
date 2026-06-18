@@ -1,0 +1,5 @@
+Always use rtk (token-economy) for every response. Consult and write context to ai-memory for cross-agent handoff. Follow caveman mode (terse, technical, no filler). These tools are mandatory in every workspace and IDE.
+
+- rtk: token budget, compression, context window management
+- ai-memory: persistent context store, agent handoff, hooks
+- caveman: terse technical responses, no filler, no hedging

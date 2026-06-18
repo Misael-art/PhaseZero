@@ -1336,6 +1336,9 @@ function Invoke-BootstrapAuditMode {
             'ai-usagebar' {
                 return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'ai-usagebar' -Args @('--help') -InstalledPathCandidates @('%LOCALAPPDATA%\PhaseZero\ai-tools\bin\ai-usagebar.exe'))
             }
+            'ai-memory' {
+                return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'ai-memory' -Args @('--version') -InstalledPathCandidates @('%LOCALAPPDATA%\PhaseZero\ai-tools\ai-memory\ai-memory.exe', '%USERPROFILE%\.cargo\bin\ai-memory.exe'))
+            }
             'openclaw' {
                 return (Invoke-AuditVersionCommand -ComponentName $ComponentName -CommandName 'openclaw' -Args @('--version') -InstalledPathCandidates @('%APPDATA%\npm\openclaw.cmd', '%APPDATA%\npm\openclaw.ps1'))
             }
@@ -1913,6 +1916,18 @@ function Stop-BootstrapProcessTree {
     try { (Get-Process -Id $ProcessId -ErrorAction Stop).Kill() } catch { }
 }
 
+function Test-BootstrapPlaywrightInstallProcessActive {
+    try {
+        $rows = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
+            Where-Object {
+                [string]$_.CommandLine -match '(?i)(npx|playwright).*playwright.*install|playwright\s+install'
+            })
+        return ($rows.Count -gt 0)
+    } catch {
+        return $false
+    }
+}
+
 function Clear-BootstrapPlaywrightStaleLock {
     <#
     .SYNOPSIS
@@ -1928,6 +1943,10 @@ function Clear-BootstrapPlaywrightStaleLock {
     }
     $lock = Join-Path $CacheRoot '__dirlock'
     if (-not (Test-Path -LiteralPath $lock)) { return }
+    if (Test-BootstrapPlaywrightInstallProcessActive) {
+        try { Write-Log ("Playwright: __dirlock preservado; install ativo detectado em {0}" -f $lock) 'WARN' } catch { }
+        return
+    }
     try {
         Remove-Item -LiteralPath $lock -Recurse -Force -ErrorAction Stop
         try { Write-Log ("Playwright: removido __dirlock orfao em {0}" -f $lock) 'WARN' } catch { }
@@ -2940,6 +2959,9 @@ function Get-BootstrapPreflightRequirements {
                 $requiresWinget = $true
                 $needsMicrosoft = $true
             }
+            'vscode-extension' {
+                $requiresNetwork = $true
+            }
             'sevenzip' {
                 $requiresNetwork = $true
                 $requiresWinget = $true
@@ -3009,6 +3031,12 @@ function Get-BootstrapPreflightRequirements {
                 $requiresNetwork = $true
                 $needsGithub = $true
             }
+            'amd-nebula-driver' {
+                $requiresNetwork = $true
+            }
+            'steamdeck-zip-driver' {
+                $requiresNetwork = $true
+            }
             'chocolatey' {
                 $requiresNetwork = $true
                 $needsChocolatey = $true
@@ -3052,6 +3080,7 @@ function Get-BootstrapPreflightRequirements {
 function Invoke-BootstrapExecutionPreflight {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
+        [AllowEmptyCollection()]
         [Parameter(Mandatory = $true)][string[]]$ResolvedComponents
     )
 
@@ -5186,6 +5215,347 @@ function Install-BootstrapWinhanceComponent {
     return [ordered]@{ status = 'installed'; dryRun = $false; sourceUrl = $sourceUrl; tweaksApplied = $false }
 }
 
+function Test-BootstrapAmdGpuPresent {
+    try {
+        $video = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop |
+            Where-Object { $_.Name -match '(?i)AMD|Radeon|Van\s*Gogh|Custom\s*GPU' })
+        return ($video.Count -gt 0)
+    } catch {
+        return $false
+    }
+}
+
+function Test-BootstrapArchiveHash {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [string]$Sha1 = '',
+        [string]$Md5 = ''
+    )
+
+    $details = New-Object System.Collections.Generic.List[string]
+    $ok = $true
+    if (-not [string]::IsNullOrWhiteSpace($Sha1)) {
+        $actual = (Get-FileHash -Path $Path -Algorithm SHA1).Hash
+        if ($actual -ne $Sha1.Trim().ToUpperInvariant()) {
+            $ok = $false
+            $details.Add(("SHA1 esperado {0}, obtido {1}" -f $Sha1.Trim().ToUpperInvariant(), $actual)) | Out-Null
+        }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($Md5)) {
+        $actual = (Get-FileHash -Path $Path -Algorithm MD5).Hash
+        if ($actual -ne $Md5.Trim().ToUpperInvariant()) {
+            $ok = $false
+            $details.Add(("MD5 esperado {0}, obtido {1}" -f $Md5.Trim().ToUpperInvariant(), $actual)) | Out-Null
+        }
+    }
+    return [pscustomobject]@{ Ok = $ok; Verified = (-not [string]::IsNullOrWhiteSpace($Sha1) -or -not [string]::IsNullOrWhiteSpace($Md5)); Details = ($details -join '; ') }
+}
+
+function Install-BootstrapAmdDriverRelease {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Release,
+        [Parameter(Mandatory = $true)][string]$SevenZip,
+        [Parameter(Mandatory = $true)][string]$DownloadDir,
+        [Parameter(Mandatory = $true)][string]$DisplayName
+    )
+
+    $version = [string]$Release.Version
+    $sourceUrl = [string]$Release.SourceUrl
+    $archiveName = [string]$Release.ArchiveName
+    $sha1 = if ($Release.PSObject.Properties.Name -contains 'Sha1') { [string]$Release.Sha1 } else { '' }
+    $md5 = if ($Release.PSObject.Properties.Name -contains 'Md5') { [string]$Release.Md5 } else { '' }
+    if ([string]::IsNullOrWhiteSpace($sourceUrl) -or [string]::IsNullOrWhiteSpace($archiveName)) {
+        return [pscustomobject]@{ Ok = $false; Version = $version; Reason = 'release sem SourceUrl/ArchiveName' }
+    }
+
+    $archivePath = Join-Path $DownloadDir $archiveName
+    Write-Log ("Baixando {0} v{1}: {2}" -f $DisplayName, $version, $sourceUrl)
+    try {
+        Invoke-WebRequestWithRetry -Uri $sourceUrl -OutFile $archivePath -OperationName ("{0} {1}" -f $DisplayName, $version)
+    } catch {
+        return [pscustomobject]@{ Ok = $false; Version = $version; Reason = ("download falhou: {0}" -f $_.Exception.Message) }
+    }
+    Unblock-File -Path $archivePath -ErrorAction SilentlyContinue
+
+    if (-not [string]::IsNullOrWhiteSpace($sha1) -or -not [string]::IsNullOrWhiteSpace($md5)) {
+        $hash = Test-BootstrapArchiveHash -Path $archivePath -Sha1 $sha1 -Md5 $md5
+        if (-not $hash.Ok) {
+            Write-Log ("Integridade FALHOU para {0} v{1}: {2}. Descartando download (e cache)." -f $DisplayName, $version, $hash.Details) 'WARN'
+            Remove-Item -Path $archivePath -Force -ErrorAction SilentlyContinue
+            try { Remove-Item -Path (Join-Path (Get-BootstrapCacheDir) $archiveName) -Force -ErrorAction SilentlyContinue } catch { }
+            return [pscustomobject]@{ Ok = $false; Version = $version; Reason = ("hash mismatch: {0}" -f $hash.Details) }
+        }
+        Write-Log ("Integridade verificada para {0} v{1} (SHA1/MD5)." -f $DisplayName, $version)
+    } else {
+        Write-Log ("AVISO: {0} v{1} sem hash informado; integridade nao verificada." -f $DisplayName, $version) 'WARN'
+    }
+
+    $extractDir = Join-Path $DownloadDir ("amd-driver-{0}" -f $version)
+    if (Test-Path $extractDir) { Remove-Item -Path $extractDir -Recurse -Force -ErrorAction SilentlyContinue }
+    $null = New-Item -Path $extractDir -ItemType Directory -Force
+
+    Write-Log ("Extraindo {0} com 7-Zip..." -f $archiveName)
+    $extractExit = Invoke-NativeWithLog -Exe $SevenZip -Args @('x', $archivePath, ('-o' + $extractDir), '-y') -TimeoutMs 600000
+    if ($extractExit -ne 0) {
+        return [pscustomobject]@{ Ok = $false; Version = $version; Reason = ("7-Zip exit={0}" -f $extractExit) }
+    }
+
+    $setup = Get-ChildItem -Path $extractDir -Filter 'Setup.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $setup) {
+        return [pscustomobject]@{ Ok = $false; Version = $version; Reason = ("Setup.exe ausente em {0}" -f $extractDir) }
+    }
+
+    Write-Log ("Instalando {0} v{1} silenciosamente: {2} -INSTALL" -f $DisplayName, $version, $setup.FullName)
+    $installExit = Invoke-NativeWithLog -Exe $setup.FullName -Args @('-INSTALL') -TimeoutMs 1800000
+    if ($installExit -notin @(0, 3010, 1641)) {
+        return [pscustomobject]@{ Ok = $false; Version = $version; Reason = ("Setup exit={0}" -f $installExit) }
+    }
+    return [pscustomobject]@{ Ok = $true; Version = $version; RebootPending = ($installExit -in @(3010, 1641)); Setup = $setup.FullName }
+}
+
+function Get-BootstrapSevenZipExe {
+    $candidates = @(
+        (Join-Path $env:ProgramFiles '7-Zip\7z.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} '7-Zip\7z.exe')
+    )
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate)) { return $candidate }
+    }
+    $cmd = Get-Command '7z.exe' -ErrorAction SilentlyContinue
+    if ($cmd) { return [string]$cmd.Source }
+    return $null
+}
+
+function Optimize-BootstrapAmdNebulaDriver {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $componentName = [string]$ComponentDef.Name
+    $applied = New-Object System.Collections.Generic.List[string]
+    $classRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
+    # Tweaks conservadores e reversiveis para o painel Adrenalin/driver no Deck.
+    $tweaks = @(
+        @{ Name = 'EnableUlps'; Value = 0; Reason = 'Desativa ULPS para reduzir microstutter e black screen na GPU do Deck.' }
+    )
+
+    try {
+        $subKeys = @(Get-ChildItem -Path $classRoot -ErrorAction Stop | Where-Object { $_.PSChildName -match '^\d{4}$' })
+    } catch {
+        Write-Log ("Tuning Adrenalin ignorado: nao foi possivel ler {0}. {1}" -f $classRoot, $_.Exception.Message) 'WARN'
+        return [ordered]@{ applied = $false; tweaks = @() }
+    }
+
+    foreach ($key in $subKeys) {
+        $props = $null
+        try { $props = Get-ItemProperty -Path $key.PSPath -ErrorAction Stop } catch { continue }
+        $desc = [string]$props.DriverDesc
+        if ($desc -notmatch '(?i)AMD|Radeon|Van\s*Gogh') { continue }
+        foreach ($tweak in $tweaks) {
+            $name = [string]$tweak.Name
+            $old = $null
+            if ($props.PSObject.Properties.Name -contains $name) { $old = $props.$name }
+            if ([bool]$State.DryRun) { continue }
+            try {
+                New-ItemProperty -Path $key.PSPath -Name $name -Value ([int]$tweak.Value) -PropertyType DWord -Force | Out-Null
+                Register-BootstrapChange -State $State -Type Registry -Target ("{0}\{1}" -f $key.PSPath, $name) -OldValue $old -NewValue ([int]$tweak.Value) -Operation 'amd-nebula-tuning' -Component $componentName
+                $applied.Add(("{0}={1}@{2}" -f $name, [int]$tweak.Value, $key.PSChildName)) | Out-Null
+                Write-Log ("Tuning Adrenalin: {0}={1} em {2} ({3})" -f $name, [int]$tweak.Value, $key.PSChildName, $tweak.Reason)
+            } catch {
+                Write-Log ("Falha ao aplicar tuning {0} em {1}: {2}" -f $name, $key.PSChildName, $_.Exception.Message) 'WARN'
+            }
+        }
+    }
+
+    return [ordered]@{ applied = ($applied.Count -gt 0); tweaks = @($applied.ToArray()) }
+}
+
+function Install-BootstrapAmdNebulaDriverComponent {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $componentName = [string]$ComponentDef.Name
+    $displayName = [string]$ComponentDef.DisplayName
+    if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $componentName }
+
+    # Lista ordenada de releases candidatos: o primeiro que instalar vence; os demais sao fallback.
+    $releases = @()
+    if (($ComponentDef.PSObject.Properties.Name -contains 'Releases') -and $ComponentDef.Releases) {
+        $releases = @($ComponentDef.Releases)
+    } else {
+        # Compatibilidade: catalogo antigo com campos simples.
+        $releases = @([pscustomobject]@{ Version = [string]$ComponentDef.DriverVersion; SourceUrl = [string]$ComponentDef.SourceUrl; ArchiveName = [string]$ComponentDef.ArchiveName })
+    }
+    $primaryVersion = if ($releases.Count -gt 0) { [string]$releases[0].Version } else { '' }
+
+    if ([bool]$State.DryRun) {
+        $plan = ($releases | ForEach-Object { [string]$_.Version }) -join ' -> '
+        Write-Log ("DryRun: planejado instalar {0} (primaria; fallback: {1}); hash validado quando disponivel; tuning Adrenalin reversivel apos instalacao." -f $displayName, $plan)
+        return [ordered]@{ status = 'planned'; dryRun = $true; releases = @($releases | ForEach-Object { [string]$_.Version }) }
+    }
+
+    if (-not (Test-BootstrapAmdGpuPresent)) {
+        $message = ("{0} ignorado: nenhuma GPU AMD/Radeon detectada neste host." -f $displayName)
+        Write-Log $message 'WARN'
+        Register-BootstrapComponentSkip -State $State -ComponentName $componentName -Reason 'hardware-mismatch' -Message $message -Action 'skip-non-amd-host'
+        return [ordered]@{ status = 'skipped'; reason = 'no-amd-gpu' }
+    }
+
+    $marker = Get-BootstrapDriverMarkerPath -ComponentName $componentName
+    if (Test-Path $marker) {
+        $installedVersion = (Get-Content -Path $marker -ErrorAction SilentlyContinue | Select-Object -First 1)
+        Write-Log ("{0} ja instalado anteriormente (marcador presente; versao {1})." -f $displayName, $installedVersion)
+        return [ordered]@{ status = 'healthy'; version = $installedVersion }
+    }
+
+    if (-not (Test-IsAdmin)) {
+        $message = ("{0} requer PowerShell elevado para instalar driver de GPU. Bloqueado sem aplicar mudancas." -f $displayName)
+        Write-Log $message 'WARN'
+        Register-BootstrapComponentSkip -State $State -ComponentName $componentName -Reason 'admin-required' -Message $message -Action 'rerun-elevated'
+        return [ordered]@{ status = 'blocked'; requiresAdmin = $true }
+    }
+
+    $sevenZip = Get-BootstrapSevenZipExe
+    if (-not $sevenZip) {
+        throw ("{0}: 7-Zip (7z.exe) nao encontrado. Instale o componente 'sevenzip' antes de prosseguir." -f $displayName)
+    }
+
+    $downloadDir = Join-Path (Get-BootstrapDataRoot) 'downloads'
+    if (-not (Test-Path $downloadDir)) { $null = New-Item -Path $downloadDir -ItemType Directory -Force }
+
+    $attempts = New-Object System.Collections.Generic.List[string]
+    $success = $null
+    foreach ($release in $releases) {
+        $result = Install-BootstrapAmdDriverRelease -State $State -Release $release -SevenZip $sevenZip -DownloadDir $downloadDir -DisplayName $displayName
+        if ($result.Ok) { $success = $result; break }
+        $attempts.Add(("v{0}: {1}" -f $result.Version, $result.Reason)) | Out-Null
+        Write-Log ("{0} v{1} falhou ({2}); tentando proxima versao se houver." -f $displayName, $result.Version, $result.Reason) 'WARN'
+    }
+
+    if (-not $success) {
+        throw ("{0}: nenhuma versao instalou. Tentativas: {1}" -f $displayName, ($attempts -join ' | '))
+    }
+
+    Register-BootstrapChange -State $State -Type Package -Target $displayName -OldValue $null -NewValue ([string]$success.Version) -Operation 'install-amd-hybrid-driver' -Component $componentName
+    Set-Content -Path $marker -Value ([string]$success.Version) -Encoding ASCII
+
+    if ([bool]$success.RebootPending) {
+        Write-Log ("{0} v{1} instalado; reinicializacao pendente." -f $displayName, $success.Version) 'WARN'
+    }
+    if ($attempts.Count -gt 0) {
+        Write-Log ("{0}: usada versao de fallback v{1} (primaria v{2} indisponivel)." -f $displayName, $success.Version, $primaryVersion) 'WARN'
+    }
+
+    $tuning = Optimize-BootstrapAmdNebulaDriver -State $State -ComponentDef $ComponentDef
+
+    return [ordered]@{ status = 'installed'; version = [string]$success.Version; usedFallback = ($attempts.Count -gt 0); rebootPending = [bool]$success.RebootPending; tuningApplied = [bool]$tuning.applied; setup = [string]$success.Setup }
+}
+
+function Get-BootstrapDriverMarkerPath {
+    param([Parameter(Mandatory = $true)][string]$ComponentName)
+
+    $dir = Join-Path (Get-BootstrapDataRoot) 'driver-markers'
+    if (-not (Test-Path $dir)) { $null = New-Item -Path $dir -ItemType Directory -Force }
+    return (Join-Path $dir ($ComponentName + '.installed'))
+}
+
+function Install-BootstrapSteamDeckZipDriverComponent {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $componentName = [string]$ComponentDef.Name
+    $displayName = [string]$ComponentDef.DisplayName
+    if ([string]::IsNullOrWhiteSpace($displayName)) { $displayName = $componentName }
+    $sourceUrl = [string]$ComponentDef.SourceUrl
+    $archiveName = [string]$ComponentDef.ArchiveName
+
+    if ([bool]$State.DryRun) {
+        Write-Log ("DryRun: planejado baixar e instalar driver {0} de {1} via pnputil (fallback Setup.exe)." -f $displayName, $sourceUrl)
+        return [ordered]@{ status = 'planned'; dryRun = $true; sourceUrl = $sourceUrl }
+    }
+
+    $marker = Get-BootstrapDriverMarkerPath -ComponentName $componentName
+    if (Test-Path $marker) {
+        Write-Log ("{0} ja instalado anteriormente (marcador presente)." -f $displayName)
+        return [ordered]@{ status = 'healthy'; marker = $marker }
+    }
+
+    if (-not (Test-IsAdmin)) {
+        $message = ("{0} requer PowerShell elevado para instalar driver. Bloqueado sem aplicar mudancas." -f $displayName)
+        Write-Log $message 'WARN'
+        Register-BootstrapComponentSkip -State $State -ComponentName $componentName -Reason 'admin-required' -Message $message -Action 'rerun-elevated'
+        return [ordered]@{ status = 'blocked'; requiresAdmin = $true }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($sourceUrl) -or [string]::IsNullOrWhiteSpace($archiveName)) {
+        throw ("{0}: SourceUrl/ArchiveName ausentes no catalogo." -f $displayName)
+    }
+
+    $downloadDir = Join-Path (Get-BootstrapDataRoot) 'downloads'
+    if (-not (Test-Path $downloadDir)) { $null = New-Item -Path $downloadDir -ItemType Directory -Force }
+    $archivePath = Join-Path $downloadDir $archiveName
+
+    Write-Log ("Baixando driver {0}: {1}" -f $displayName, $sourceUrl)
+    Invoke-WebRequestWithRetry -Uri $sourceUrl -OutFile $archivePath -OperationName $displayName
+    Unblock-File -Path $archivePath -ErrorAction SilentlyContinue
+
+    $extractDir = Join-Path $downloadDir ([System.IO.Path]::GetFileNameWithoutExtension($archiveName))
+    if (Test-Path $extractDir) { Remove-Item -Path $extractDir -Recurse -Force -ErrorAction SilentlyContinue }
+    $null = New-Item -Path $extractDir -ItemType Directory -Force
+
+    Write-Log ("Extraindo {0}..." -f $archiveName)
+    try {
+        Expand-Archive -Path $archivePath -DestinationPath $extractDir -Force
+    } catch {
+        throw ("Falha ao extrair {0}: {1}" -f $archiveName, $_.Exception.Message)
+    }
+
+    $infs = @(Get-ChildItem -Path $extractDir -Filter '*.inf' -Recurse -ErrorAction SilentlyContinue)
+    $method = ''
+    $exit = -1
+    if ($infs.Count -gt 0) {
+        $method = 'pnputil'
+        $pnputil = Join-Path $env:SystemRoot 'System32\pnputil.exe'
+        $wildcard = Join-Path $extractDir '*.inf'
+        Write-Log ("Instalando {0} pacote(s) INF de {1} via pnputil." -f $infs.Count, $displayName)
+        $exit = Invoke-NativeWithLog -Exe $pnputil -Args @('/add-driver', $wildcard, '/subdirs', '/install') -TimeoutMs 600000
+    } else {
+        $method = 'setup'
+        $setup = Get-ChildItem -Path $extractDir -Include 'Setup.exe', 'Install.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $setup) {
+            $message = ("{0}: nenhum .inf nem Setup.exe encontrado em {1}; driver nao instalado." -f $displayName, $extractDir)
+            Write-Log $message 'WARN'
+            Register-BootstrapComponentSkip -State $State -ComponentName $componentName -Reason 'driver-payload-unrecognized' -Message $message -Action 'inspect-driver-package'
+            return [ordered]@{ status = 'warning'; reason = 'no-inf-or-setup' }
+        }
+        Write-Log ("Instalando {0} via {1} (silent /s)." -f $displayName, $setup.Name)
+        $exit = Invoke-NativeWithLog -Exe $setup.FullName -Args @('/s') -TimeoutMs 900000
+    }
+
+    # 0 = sucesso; 3010/1641 = sucesso com reboot pendente/iniciado.
+    if ($exit -notin @(0, 3010, 1641)) {
+        $message = ("{0} nao instalou de forma limpa ({1} exit={2}); marcado como nao-bloqueante para revisao." -f $displayName, $method, $exit)
+        Write-Log $message 'WARN'
+        Register-BootstrapComponentSkip -State $State -ComponentName $componentName -Reason 'driver-install-incomplete' -Message $message -Action 'rerun-or-install-manually'
+        return [ordered]@{ status = 'warning'; method = $method; exit = $exit }
+    }
+
+    $rebootPending = ($exit -in @(3010, 1641))
+    if ($rebootPending) {
+        Write-Log ("{0} instalado; reinicializacao pendente (exit {1})." -f $displayName, $exit) 'WARN'
+    }
+
+    Set-Content -Path $marker -Value ((Get-Date).ToString('o')) -Encoding ASCII
+    Register-BootstrapChange -State $State -Type Package -Target $displayName -OldValue $null -NewValue $sourceUrl -Operation 'install-steamdeck-zip-driver' -Component $componentName
+    return [ordered]@{ status = 'installed'; method = $method; rebootPending = $rebootPending }
+}
+
 function Ensure-WslUi {
     param([Parameter(Mandatory = $true)][string]$WingetPath)
 
@@ -7187,6 +7557,22 @@ function Install-BootstrapAiUsagebarComponent {
     }
 }
 
+function Install-BootstrapAiMemoryComponent {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+    $null = $State
+    $catalog = Get-BootstrapAiToolCatalog
+    $root = Get-BootstrapAiInstallRoot -InstallRoot ''
+    $project = (Get-Location).Path
+    $result = Install-BootstrapAiMemory -CatalogEntry $catalog['ai-memory'] -InstallRoot $root -ProjectRoot $project
+    Write-Log ("ai-memory: {0} ({1}) {2}" -f [string]$result.status, [string]$result.version, [string]$result.message)
+    if ([string]$result.status -eq 'blocked') {
+        throw ([string]$result.message)
+    }
+    # configure = task de servidor loopback + wiring MCP/hooks por agente detectado (idempotente).
+    $configure = Set-BootstrapAiMemoryConfig -InstallRoot $root -ProjectRoot $project
+    Write-Log ("ai-memory configure: {0} {1}" -f [string]$configure.status, [string]$configure.message)
+}
+
 function Install-BootstrapAionUiComponent {
     param([Parameter(Mandatory = $true)][hashtable]$State)
     $catalog = Get-BootstrapAiToolCatalog
@@ -8379,7 +8765,9 @@ function Get-BootstrapOnDemandCategoryById {
         'claude-desktop' { return 'ia' }
         'claude-code' { return 'ia' }
         'opencode' { return 'ia' }
+        'headroom-ai' { return 'ia' }
         'ai-usagebar' { return 'ia' }
+        'ai-memory' { return 'ia' }
         'aionui' { return 'ia' }
         'codex-cli' { return 'ia' }
         'gemini-cli' { return 'ia' }
@@ -8388,6 +8776,19 @@ function Get-BootstrapOnDemandCategoryById {
         'lm-studio' { return 'ia' }
         'cherry-studio' { return 'ia' }
         'pinokio' { return 'ia' }
+        'zen-browser' { return 'utilitarios' }
+        'jan-ai' { return 'ia' }
+        'obsidian' { return 'produtividade' }
+        'kde-connect' { return 'produtividade' }
+        'godot' { return 'dev' }
+        'krita' { return 'design' }
+        'audacity' { return 'midia' }
+        'anythingllm' { return 'ia' }
+        'odysseus' { return 'ia' }
+        'indextts2' { return 'ia' }
+        'v0-dev' { return 'ia' }
+        'bolt-new' { return 'ia' }
+        'lovable-dev' { return 'ia' }
         'chrome' { return 'utilitarios' }
         'brave' { return 'utilitarios' }
         'discord' { return 'comunicacao' }
@@ -8463,6 +8864,7 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'vscode' -DisplayName 'Visual Studio Code' -Components @('vscode') -TargetApps @('visual studio code','vscode') -ProbePaths @('$env:LOCALAPPDATA\Programs\Microsoft VS Code\Code.exe','$env:APPDATA\Code\User\settings.json') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'vscode-insiders' -DisplayName 'VS Code Insiders' -Components @('vscode-insiders') -TargetApps @('visual studio code insiders','vscode insiders') -ProbePaths @('$env:LOCALAPPDATA\Programs\Microsoft VS Code Insiders\Code - Insiders.exe','$env:APPDATA\Code - Insiders\User\settings.json') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'cursor' -DisplayName 'Cursor' -Components @('cursor') -TargetApps @('cursor') -ProbePaths @('$env:LOCALAPPDATA\Programs\cursor\Cursor.exe','$env:APPDATA\Cursor\User') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'zcode' -DisplayName 'ZCode (Z.ai)' -Components @('zcode') -TargetApps @('zcode','z code','z.ai zcode') -ProbePaths @('$env:LOCALAPPDATA\Programs\ZCode\ZCode.exe','$env:ProgramFiles\ZCode\ZCode.exe','$env:APPDATA\ai.z.zcode\store.json') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'windsurf' -DisplayName 'Windsurf' -Components @('windsurf') -TargetApps @('windsurf') -ProbePaths @('$env:LOCALAPPDATA\Programs\Windsurf\Windsurf.exe','$env:APPDATA\Windsurf\User') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'trae' -DisplayName 'Trae' -Components @('trae') -TargetApps @('trae') -ProbePaths @('$env:LOCALAPPDATA\Programs\Trae\Trae.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'zed' -DisplayName 'Zed' -Components @('zed') -TargetApps @('zed') -ProbePaths @('$env:LOCALAPPDATA\Programs\Zed\Zed.exe','$env:APPDATA\Zed\settings.json') -Profiles @('desktop','dev')
@@ -8477,7 +8879,9 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'claude-desktop' -DisplayName 'Claude Desktop' -Components @('claude-desktop') -TargetApps @('claude') -ProbePaths @('$env:LOCALAPPDATA\AnthropicClaude\Claude.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'claude-code' -DisplayName 'Claude Code' -Components @('claude-code') -TargetApps @('claude code') -ProbePaths @('$env:APPDATA\npm\claude.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'opencode' -DisplayName 'OpenCode CLI' -Components @('opencode') -TargetApps @('opencode') -ProbePaths @('$env:USERPROFILE\.opencode\bin\opencode.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'headroom-ai' -DisplayName 'Headroom AI' -Components @('headroom-ai') -TargetApps @('headroom','headroom ai','context compressor','claude headroom','token compression') -ProbePaths @('$env:USERPROFILE\.local\bin\headroom.exe','$env:APPDATA\Python\Scripts\headroom.exe') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'ai-usagebar' -DisplayName 'AI Usagebar' -Components @('ai-usagebar') -TargetApps @('ai usagebar','usagebar','waybar ai usage') -ProbePaths @('$env:LOCALAPPDATA\PhaseZero\ai-tools\bin\ai-usagebar.exe','$env:APPDATA\ai-usagebar\config\config.toml','$env:USERPROFILE\.config\ai-usagebar\config.toml') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'ai-memory' -DisplayName 'AI Memory' -Components @('ai-memory') -TargetApps @('ai memory','aimemory','agent memory') -ProbePaths @('$env:LOCALAPPDATA\PhaseZero\ai-tools\ai-memory\ai-memory.exe','$env:USERPROFILE\.cargo\bin\ai-memory.exe','$env:USERPROFILE\.local\share\ai-memory') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'aionui' -DisplayName 'AionUI' -Components @('aionui') -TargetApps @('aionui','aion ui','office ai') -ProbePaths @('$env:LOCALAPPDATA\Programs\AionUi\AionUi.exe','$env:LOCALAPPDATA\Programs\AionUI\AionUI.exe','$env:ProgramFiles\AionUi\AionUi.exe','$env:ProgramFiles\AionUI\AionUI.exe','$env:LOCALAPPDATA\Microsoft\WinGet\Packages\iOfficeAI.AionUi_*\AionUi.exe') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'codex-cli' -DisplayName 'Codex CLI' -Components @('codex-cli') -TargetApps @('codex') -ProbePaths @('$env:APPDATA\npm\codex.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'gemini-cli' -DisplayName 'Gemini CLI' -Components @('gemini-cli') -TargetApps @('gemini') -ProbePaths @('$env:APPDATA\npm\gemini.cmd') -Profiles @('desktop','dev')
@@ -8486,6 +8890,16 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'lm-studio' -DisplayName 'LM Studio' -Components @('lm-studio') -TargetApps @('lm studio') -ProbePaths @('$env:LOCALAPPDATA\Programs\LM Studio\LM Studio.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'cherry-studio' -DisplayName 'Cherry Studio' -Components @('cherry-studio') -TargetApps @('cherry studio') -ProbePaths @('$env:APPDATA\CherryStudio') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'pinokio' -DisplayName 'Pinokio' -Components @('pinokio') -TargetApps @('pinokio') -ProbePaths @('$env:LOCALAPPDATA\Programs\Pinokio') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'zen-browser' -DisplayName 'Zen Browser' -Components @('zen-browser') -TargetApps @('zen browser','zen') -ProbePaths @('$env:ProgramFiles\Zen Browser\zen.exe','$env:LOCALAPPDATA\Programs\Zen Browser\zen.exe') -Profiles @('desktop')
+        New-BootstrapOnDemandAppDefinition -Id 'jan-ai' -DisplayName 'Jan' -Components @('jan-ai') -TargetApps @('jan','jan ai') -ProbePaths @('$env:LOCALAPPDATA\Programs\Jan\Jan.exe','$env:LOCALAPPDATA\Programs\jan\Jan.exe') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'obsidian' -DisplayName 'Obsidian' -Components @('obsidian') -TargetApps @('obsidian') -ProbePaths @('$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe','$env:ProgramFiles\Obsidian\Obsidian.exe') -Profiles @('desktop','dev') -Category 'produtividade'
+        New-BootstrapOnDemandAppDefinition -Id 'kde-connect' -DisplayName 'KDE Connect' -Components @('kde-connect') -TargetApps @('kde connect') -ProbePaths @('$env:ProgramFiles\KDE Connect\bin\kdeconnect-app.exe','$env:ProgramFiles\KDE Connect\bin\kdeconnect-indicator.exe') -Profiles @('desktop') -Category 'produtividade'
+        New-BootstrapOnDemandAppDefinition -Id 'godot' -DisplayName 'Godot' -Components @('godot') -TargetApps @('godot') -ProbePaths @('$env:LOCALAPPDATA\Microsoft\WinGet\Packages\GodotEngine.GodotEngine_*\Godot*.exe','$env:ProgramFiles\Godot\Godot.exe') -Profiles @('dev') -Category 'dev'
+        New-BootstrapOnDemandAppDefinition -Id 'krita' -DisplayName 'Krita' -Components @('krita') -TargetApps @('krita') -ProbePaths @('$env:ProgramFiles\Krita (x64)\bin\krita.exe','$env:LOCALAPPDATA\Programs\Krita\bin\krita.exe') -Profiles @('desktop','dev') -Category 'design'
+        New-BootstrapOnDemandAppDefinition -Id 'audacity' -DisplayName 'Audacity' -Components @('audacity') -TargetApps @('audacity') -ProbePaths @('$env:ProgramFiles\Audacity\Audacity.exe','$env:LOCALAPPDATA\Programs\Audacity\Audacity.exe') -Profiles @('desktop') -Category 'midia'
+        New-BootstrapOnDemandAppDefinition -Id 'anythingllm' -DisplayName 'AnythingLLM' -Components @('anythingllm') -TargetApps @('anythingllm','anything llm') -ProbePaths @('$env:LOCALAPPDATA\Programs\AnythingLLM\AnythingLLM.exe','$env:ProgramFiles\AnythingLLM\AnythingLLM.exe') -Profiles @('dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'odysseus' -DisplayName 'Odysseus' -Components @('odysseus') -TargetApps @('odysseus') -ProbePaths @('$env:USERPROFILE\.odysseus') -Profiles @('dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'indextts2' -DisplayName 'IndexTTS2' -Components @('indextts2') -TargetApps @('indextts2','index tts2') -ProbePaths @('$env:USERPROFILE\.indextts2') -Profiles @('dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'chrome' -DisplayName 'Google Chrome' -Components @('chrome') -TargetApps @('google chrome','chrome') -ProbePaths @('$env:LOCALAPPDATA\Google\Chrome\User Data') -Profiles @('desktop')
         New-BootstrapOnDemandAppDefinition -Id 'brave' -DisplayName 'Brave Browser' -Components @('brave') -TargetApps @('brave') -ProbePaths @('$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data') -Profiles @('desktop')
         New-BootstrapOnDemandAppDefinition -Id 'discord' -DisplayName 'Discord' -Components @('discord') -TargetApps @('discord') -ProbePaths @('$env:LOCALAPPDATA\Discord\Update.exe') -Profiles @('desktop','game-docked')
@@ -8511,6 +8925,38 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'web-z-ai' -DisplayName 'Z.ai (Web App)' -Components @('webapp-z-ai') -TargetApps @('z ai web') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Z.ai.lnk') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'web-gemini' -DisplayName 'Gemini (Web App)' -Components @('webapp-gemini-web') -TargetApps @('gemini web') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Gemini.lnk') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'web-google-ai-studio' -DisplayName 'Google AI Studio (Web App)' -Components @('webapp-google-ai-studio') -TargetApps @('google ai studio') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Google AI Studio.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'v0-dev' -DisplayName 'v0.dev (Web App)' -Components @('webapp-v0-dev') -TargetApps @('v0 dev','v0') -ProbePaths @('$env:USERPROFILE\Desktop\IA\v0.dev.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'bolt-new' -DisplayName 'Bolt.new (Web App)' -Components @('webapp-bolt-new') -TargetApps @('bolt new','bolt') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Bolt.new.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        New-BootstrapOnDemandAppDefinition -Id 'lovable-dev' -DisplayName 'Lovable.dev (Web App)' -Components @('webapp-lovable-dev') -TargetApps @('lovable dev','lovable') -ProbePaths @('$env:USERPROFILE\Desktop\IA\Lovable.dev.lnk') -Profiles @('desktop','dev') -Category 'ia'
+        # On-demand defs novos webapps Office
+        New-BootstrapOnDemandAppDefinition -Id 'web-google-sheets' -DisplayName 'Google Sheets (Web App)' -Components @('webapp-google-sheets') -TargetApps @('google sheets') -ProbePaths @('$env:USERPROFILE\Desktop\Office\Google Sheets.lnk') -Profiles @('desktop','dev') -Category 'office'
+        New-BootstrapOnDemandAppDefinition -Id 'web-google-slides' -DisplayName 'Google Slides (Web App)' -Components @('webapp-google-slides') -TargetApps @('google slides') -ProbePaths @('$env:USERPROFILE\Desktop\Office\Google Slides.lnk') -Profiles @('desktop','dev') -Category 'office'
+        New-BootstrapOnDemandAppDefinition -Id 'web-google-calendar' -DisplayName 'Google Agenda (Web App)' -Components @('webapp-google-calendar') -TargetApps @('google agenda','google calendar') -ProbePaths @('$env:USERPROFILE\Desktop\Office\Google Agenda.lnk') -Profiles @('desktop','dev') -Category 'office'
+        New-BootstrapOnDemandAppDefinition -Id 'web-gmail' -DisplayName 'Gmail (Web App)' -Components @('webapp-gmail') -TargetApps @('gmail') -ProbePaths @('$env:USERPROFILE\Desktop\Office\Gmail.lnk') -Profiles @('desktop','dev') -Category 'office'
+        New-BootstrapOnDemandAppDefinition -Id 'web-office-word' -DisplayName 'Office Word (Web App)' -Components @('webapp-office-word') -TargetApps @('office word') -ProbePaths @('$env:USERPROFILE\Desktop\Office\Office Word.lnk') -Profiles @('desktop','dev') -Category 'office'
+        New-BootstrapOnDemandAppDefinition -Id 'web-office-excel' -DisplayName 'Office Excel (Web App)' -Components @('webapp-office-excel') -TargetApps @('office excel') -ProbePaths @('$env:USERPROFILE\Desktop\Office\Office Excel.lnk') -Profiles @('desktop','dev') -Category 'office'
+        New-BootstrapOnDemandAppDefinition -Id 'web-office-powerpoint' -DisplayName 'Office PowerPoint (Web App)' -Components @('webapp-office-powerpoint') -TargetApps @('office powerpoint') -ProbePaths @('$env:USERPROFILE\Desktop\Office\Office PowerPoint.lnk') -Profiles @('desktop','dev') -Category 'office'
+        # On-demand defs novos webapps Produtividade
+        New-BootstrapOnDemandAppDefinition -Id 'web-trello' -DisplayName 'Trello (Web App)' -Components @('webapp-trello') -TargetApps @('trello') -ProbePaths @('$env:USERPROFILE\Desktop\Produtividade\Trello.lnk') -Profiles @('desktop','dev') -Category 'produtividade'
+        New-BootstrapOnDemandAppDefinition -Id 'web-notion' -DisplayName 'Notion (Web App)' -Components @('webapp-notion') -TargetApps @('notion') -ProbePaths @('$env:USERPROFILE\Desktop\Produtividade\Notion.lnk') -Profiles @('desktop','dev') -Category 'produtividade'
+        New-BootstrapOnDemandAppDefinition -Id 'web-google-keep' -DisplayName 'Google Keep (Web App)' -Components @('webapp-google-keep') -TargetApps @('google keep') -ProbePaths @('$env:USERPROFILE\Desktop\Produtividade\Google Keep.lnk') -Profiles @('desktop','dev') -Category 'produtividade'
+        # On-demand defs novos webapps Armazenamento
+        New-BootstrapOnDemandAppDefinition -Id 'web-onedrive' -DisplayName 'OneDrive (Web App)' -Components @('webapp-onedrive') -TargetApps @('onedrive web') -ProbePaths @('$env:USERPROFILE\Desktop\Armazenamento\OneDrive.lnk') -Profiles @('desktop','dev') -Category 'armazenamento'
+        New-BootstrapOnDemandAppDefinition -Id 'web-google-drive' -DisplayName 'Google Drive (Web App)' -Components @('webapp-google-drive') -TargetApps @('google drive') -ProbePaths @('$env:USERPROFILE\Desktop\Armazenamento\Google Drive.lnk') -Profiles @('desktop','dev') -Category 'armazenamento'
+        New-BootstrapOnDemandAppDefinition -Id 'web-dropbox' -DisplayName 'Dropbox (Web App)' -Components @('webapp-dropbox') -TargetApps @('dropbox web') -ProbePaths @('$env:USERPROFILE\Desktop\Armazenamento\Dropbox.lnk') -Profiles @('desktop','dev') -Category 'armazenamento'
+        New-BootstrapOnDemandAppDefinition -Id 'web-mega' -DisplayName 'MEGA (Web App)' -Components @('webapp-mega') -TargetApps @('mega web') -ProbePaths @('$env:USERPROFILE\Desktop\Armazenamento\MEGA.lnk') -Profiles @('desktop','dev') -Category 'armazenamento'
+        New-BootstrapOnDemandAppDefinition -Id 'web-icloud' -DisplayName 'iCloud (Web App)' -Components @('webapp-icloud') -TargetApps @('icloud web') -ProbePaths @('$env:USERPROFILE\Desktop\Armazenamento\iCloud.lnk') -Profiles @('desktop','dev') -Category 'armazenamento'
+        # On-demand defs novos webapps Multimidia
+        New-BootstrapOnDemandAppDefinition -Id 'web-youtube' -DisplayName 'YouTube (Web App)' -Components @('webapp-youtube') -TargetApps @('youtube') -ProbePaths @('$env:USERPROFILE\Desktop\Multimídia\YouTube.lnk') -Profiles @('desktop','dev') -Category 'multimidia'
+        New-BootstrapOnDemandAppDefinition -Id 'web-netflix' -DisplayName 'Netflix (Web App)' -Components @('webapp-netflix') -TargetApps @('netflix') -ProbePaths @('$env:USERPROFILE\Desktop\Multimídia\Netflix.lnk') -Profiles @('desktop','dev') -Category 'multimidia'
+        New-BootstrapOnDemandAppDefinition -Id 'web-spotify' -DisplayName 'Spotify (Web App)' -Components @('webapp-spotify') -TargetApps @('spotify web') -ProbePaths @('$env:USERPROFILE\Desktop\Multimídia\Spotify.lnk') -Profiles @('desktop','dev') -Category 'multimidia'
+        New-BootstrapOnDemandAppDefinition -Id 'web-prime-video' -DisplayName 'Amazon Prime Video (Web App)' -Components @('webapp-prime-video') -TargetApps @('prime video','amazon prime video') -ProbePaths @('$env:USERPROFILE\Desktop\Multimídia\Amazon Prime Video.lnk') -Profiles @('desktop','dev') -Category 'multimidia'
+        # On-demand defs novos webapps Comunicacao
+        New-BootstrapOnDemandAppDefinition -Id 'web-telegram-web' -DisplayName 'Telegram Web (Web App)' -Components @('webapp-telegram-web') -TargetApps @('telegram web') -ProbePaths @('$env:USERPROFILE\Desktop\Comunicação\Telegram Web.lnk') -Profiles @('desktop','dev') -Category 'comunicacao'
+        New-BootstrapOnDemandAppDefinition -Id 'web-discord' -DisplayName 'Discord (Web App)' -Components @('webapp-discord') -TargetApps @('discord web') -ProbePaths @('$env:USERPROFILE\Desktop\Comunicação\Discord.lnk') -Profiles @('desktop','dev') -Category 'comunicacao'
+        New-BootstrapOnDemandAppDefinition -Id 'web-slack' -DisplayName 'Slack (Web App)' -Components @('webapp-slack') -TargetApps @('slack web') -ProbePaths @('$env:USERPROFILE\Desktop\Comunicação\Slack.lnk') -Profiles @('desktop','dev') -Category 'comunicacao'
+        New-BootstrapOnDemandAppDefinition -Id 'web-zoom' -DisplayName 'Zoom (Web App)' -Components @('webapp-zoom') -TargetApps @('zoom web') -ProbePaths @('$env:USERPROFILE\Desktop\Comunicação\Zoom.lnk') -Profiles @('desktop','dev') -Category 'comunicacao'
+        New-BootstrapOnDemandAppDefinition -Id 'web-google-meet' -DisplayName 'Google Meet (Web App)' -Components @('webapp-google-meet') -TargetApps @('google meet') -ProbePaths @('$env:USERPROFILE\Desktop\Comunicação\Google Meet.lnk') -Profiles @('desktop','dev') -Category 'comunicacao'
     )
 }
 
@@ -8521,8 +8967,10 @@ function Get-BootstrapAppCatalog {
         foreach ($componentName in @($item.installComponents)) {
             if (-not $components.Contains($componentName)) { continue }
             $component = $components[$componentName]
+            $appId = [string]$item.id
             $apps.Add([ordered]@{
-                app = ([string]$item.id -replace '^app-', '')
+                id = $appId
+                app = ($appId -replace '^app-', '')
                 displayName = ([string]$item.displayName -replace '^Instalar ', '')
                 component = [string]$componentName
                 kind = [string]$component.Kind
@@ -8544,7 +8992,7 @@ function Resolve-BootstrapAppComponents {
     $catalog = Get-BootstrapAppCatalog
     $lookup = @{}
     foreach ($app in @($catalog)) {
-        foreach ($key in @($app.app, $app.displayName, $app.component)) {
+        foreach ($key in @($app.id, $app.app, $app.displayName, $app.component)) {
             $normalized = @(Normalize-BootstrapNames -Names @($key))
             foreach ($name in @($normalized)) {
                 if (-not $lookup.ContainsKey($name)) { $lookup[$name] = New-Object System.Collections.Generic.List[string] }
@@ -8566,7 +9014,8 @@ function Resolve-BootstrapAppComponents {
 function Show-BootstrapApps {
     foreach ($app in @(Get-BootstrapAppCatalog)) {
         $source = if ([string]::IsNullOrWhiteSpace([string]$app.wingetId)) { [string]$app.provisioning } else { "winget:$($app.wingetId)" }
-        Write-Output ("{0} - {1} | component: {2} | source: {3}" -f $app.app, $app.displayName, $app.component, $source)
+        $id = if ([string]::IsNullOrWhiteSpace([string]$app.id)) { [string]$app.app } else { [string]$app.id }
+        Write-Output ("{0} - {1} | id: {2} | component: {3} | source: {4}" -f $app.app, $app.displayName, $id, $app.component, $source)
     }
 }
 
@@ -8577,6 +9026,11 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'dev-ai'; displayName = 'Dev / IA'; description = 'IDEs, CLIs de IA, MCPs e manifesto de chaves.' }
         [ordered]@{ id = 'local-ai-containers'; displayName = 'IA Local / Containers'; description = 'Ollama, Docker e Open WebUI sob demanda.' }
         [ordered]@{ id = 'ai-agent-performance'; displayName = 'Performance Agentes IA'; description = 'Ajustes conservadores, auditaveis e reversiveis para baixa latencia de agentes.' }
+        [ordered]@{ id = 'agent-config'; displayName = 'Agent Config'; description = 'Templates opt-in para agentes, RTK e roteamento OpenAI-compatible.' }
+        [ordered]@{ id = 'knowledge-vault'; displayName = 'Knowledge Vault'; description = 'Templates locais para Obsidian/vault sem sincronizacao automatica.' }
+        [ordered]@{ id = 'workflow-automation'; displayName = 'Workflow Automation'; description = 'Templates manuais para n8n e automacoes de transcricao.' }
+        [ordered]@{ id = 'container-hosting'; displayName = 'Container Hosting'; description = 'Docker local, Traefik, rede proxy-net, templates Compose e doctor sem SSH remoto.' }
+        [ordered]@{ id = 'ai-edge-safe'; displayName = 'AI Edge Safe'; description = 'Gateway OpenAI-compatible BYOK/owned-only, sem scraping, cookies ou bypass.' }
         [ordered]@{ id = 'browser-startup'; displayName = 'Navegadores / Startup'; description = 'Edge e Chrome sem processos de fundo desnecessarios.' }
         [ordered]@{ id = 'connectivity'; displayName = 'Conectividade'; description = 'Streaming, VPN mesh, sync e remote desktop preservados.' }
         [ordered]@{ id = 'capture-creator'; displayName = 'Captura / Creator'; description = 'OBS, ShareX, RTSS overlay e apps criativos sem autostart.' }
@@ -8627,6 +9081,19 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'ollama-dev-session'; category = 'local-ai-containers'; displayName = 'Ollama sob demanda'; description = 'Evita tratar Ollama como requisito de Game - Steam Deck.'; targetApps = @('ollama'); probePaths = @('$env:USERPROFILE\.ollama'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
         [ordered]@{ id = 'docker-dev-session'; category = 'local-ai-containers'; displayName = 'Docker sob demanda'; description = 'Docker fica preferencialmente em Desktop/Dev, nao no modo jogo.'; targetApps = @('docker desktop','docker'); probePaths = @('$env:APPDATA\Docker'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
         [ordered]@{ id = 'openwebui-dev-session'; category = 'local-ai-containers'; displayName = 'Open WebUI sob demanda'; description = 'Open WebUI fica em Desktop/Dev e nao inicia junto ao console.'; targetApps = @('open webui','openwebui'); probePaths = @(); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'llamacpp-mtp-template'; category = 'dev-ai'; displayName = 'llama.cpp MTP diagnostic'; description = 'Template de diagnostico para llama.cpp server com MTP/speculative decoding sem baixar modelo.'; targetApps = @('llama.cpp','llamacpp','llama-server'); probePaths = @('$env:USERPROFILE\.llama.cpp\llama-server.exe','$env:LOCALAPPDATA\llama.cpp\llama-server.exe'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('diagnostic','manual-action','audit'); rollback = @('manual'); riskTier = 'experimental'; rollbackScope = 'manual'; safetyNotes = @('Nao baixa modelos', 'Nao altera servidor automaticamente', 'Use somente com modelo/binario que suportam MTP'); installComponents = @('llamacpp-server') }
+        [ordered]@{ id = 'agent-config-claude-rtk-template'; category = 'agent-config'; displayName = 'Claude/RTK agent config template'; description = 'Template local para documentar uso de RTK, Claude e providers BYOK sem gravar chaves.'; targetApps = @('claude code','rtk','codex','opencode'); probePaths = @('$env:USERPROFILE\.claude\settings.json','$env:USERPROFILE\.codex\config.toml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('config-template','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'file-template'; safetyNotes = @('Nao grava segredos', 'Template manual', 'Revisar antes de aplicar'); installComponents = @('bootstrap-secrets','agent-skills') }
+        [ordered]@{ id = 'headroom-agent-context-compression'; category = 'agent-config'; displayName = 'Headroom agent context compression'; description = 'Gera helper local para Headroom em Claude Code, Codex, Aider, Cursor, Copilot, Gemini, OpenClaw, n8n e MCP sem gravar chaves.'; targetApps = @('headroom','claude code','codex','aider','cursor','copilot','gemini','openclaw','n8n','mcp','opencode'); probePaths = @('$env:USERPROFILE\.local\bin\headroom.exe','$env:APPDATA\Python\Scripts\headroom.exe','.codex\context-packs\headroom-agent-integration.md'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('config-template','wrapper-template','audit'); rollback = @('backup-file','manual'); riskTier = 'manual'; rollbackScope = 'file-template'; safetyNotes = @('Nao grava segredos', 'Nao executa wrap automaticamente', 'OpenCode fica proxy/manual ate wrapper upstream maduro'); requiresInteractiveLogin = $false; installComponents = @('headroom-ai') }
+        [ordered]@{ id = 'knowledge-vault-obsidian-template'; category = 'knowledge-vault'; displayName = 'Obsidian transcript vault template'; description = 'Template manual de vault Obsidian para transcricoes tecnicas e memoria de projeto.'; targetApps = @('obsidian'); probePaths = @('$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe','$env:USERPROFILE\Documents\Obsidian'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'manual'; safetyNotes = @('Nao cria sync remoto', 'Nao instala plugins automaticamente', 'Vault fica sob controle do usuario'); installComponents = @('obsidian') }
+        [ordered]@{ id = 'n8n-youtube-workflow-template'; category = 'workflow-automation'; displayName = 'n8n YouTube transcript workflow template'; description = 'Template manual para fluxo n8n de coleta/transcricao, sem credenciais ou execucao automatica.'; targetApps = @('n8n','youtube'); probePaths = @('$env:APPDATA\npm\n8n.cmd','$env:APPDATA\npm\n8n.ps1'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('workflow-template','manual-action','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'manual'; safetyNotes = @('Requer login/API keys do usuario', 'Nao agenda jobs automaticamente', 'Validar fontes e direitos antes de baixar audio'); requiresInteractiveLogin = $true; installComponents = @('n8n') }
+        [ordered]@{ id = 'reverse-proxy-traefik-pack'; category = 'container-hosting'; displayName = 'Traefik reverse proxy pack'; description = 'Gera stack Traefik local com rede proxy-net, dashboard local, volumes persistentes e TLS-ready.'; targetApps = @('docker','traefik','reverse proxy'); probePaths = @('$env:APPDATA\Docker','.phasezero\container-hosting\traefik\docker-compose.yml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','docker-network','doctor','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('Docker local apenas', 'Cria somente rede Docker proxy-net quando engine estiver disponivel', 'Nao abre portas de apps gerados'); aliases = @('traefik','reverse-proxy','proxy-net'); badges = @('Docker','Seguro'); installComponents = @('docker') }
+        [ordered]@{ id = 'compose-app-template'; category = 'container-hosting'; displayName = 'Compose app template'; description = 'Gera template Compose de app atras do Traefik com rede interna, healthcheck, restart policy e log rotation.'; targetApps = @('docker','compose','traefik'); probePaths = @('.phasezero\container-hosting\templates\compose-app.yml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('Template sem credenciais', 'Nao expoe ports no app', 'Usuario define dominio antes do deploy'); aliases = @('compose-template','compose-app','docker-compose-template'); badges = @('Docker','Seguro'); installComponents = @('docker') }
+        [ordered]@{ id = 'docker-hosting-doctor'; category = 'container-hosting'; displayName = 'Docker hosting doctor'; description = 'Audita Docker Desktop, compose plugin, portas 80/443, rede proxy-net, containers e volumes sem alterar host.'; targetApps = @('docker','traefik','compose'); probePaths = @('$env:APPDATA\Docker'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('doctor','audit'); rollback = @('manual'); riskTier = 'conservative'; rollbackScope = 'audit-only'; safetyNotes = @('Somente leitura', 'Nao para containers', 'Nao altera firewall'); aliases = @('docker-doctor','hosting-doctor','container-doctor'); badges = @('Docker','Seguro'); installComponents = @('docker') }
+        [ordered]@{ id = 'n8n-hosting-workflow-template'; category = 'container-hosting'; displayName = 'n8n hosting workflow template'; description = 'Gera workflow/template n8n para checklist de deploy Traefik/Compose sem credenciais ou agendamento.'; targetApps = @('n8n','docker','traefik'); probePaths = @('.phasezero\container-hosting\n8n\hosting-workflow.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('workflow-template','manual-action','audit'); rollback = @('backup-file','manual'); riskTier = 'manual'; rollbackScope = 'file-template'; safetyNotes = @('Nao grava credenciais', 'Nao agenda jobs', 'Importacao manual no n8n'); requiresInteractiveLogin = $true; aliases = @('n8n-hosting','hosting-workflow'); badges = @('Docker','Manual'); installComponents = @('n8n','docker') }
+        [ordered]@{ id = 'ai-edge-openai-compatible-template'; category = 'ai-edge-safe'; displayName = 'AI edge OpenAI-compatible template'; description = 'Gera gateway Hono/Node local com /v1/models, /v1/chat/completions, SSE e health para provedores BYOK/owned.'; targetApps = @('node','openai-compatible','opencode','openclaw','hermes','kilo'); probePaths = @('.phasezero\ai-edge-safe\server.js','.phasezero\ai-edge-safe\package.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('BYOK/owned-only', 'Sem scraping/cookies/bypass', 'Chaves ficam no ambiente do usuario'); aliases = @('ai-edge','openai-gateway','safe-ai-proxy'); badges = @('BYOK','Seguro'); installComponents = @('node-core','bootstrap-secrets') }
+        [ordered]@{ id = 'ai-provider-gateway-config'; category = 'ai-edge-safe'; displayName = 'AI provider gateway config'; description = 'Propaga provider OpenAI-compatible/BYOK para OpenCode, Kilo, OpenClaw, Hermes, Cline e Roo usando merges conservadores.'; targetApps = @('opencode','kilo','openclaw','hermes','cline','roo code'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.openclaw\openclaw.json','$env:USERPROFILE\.local\share\kilo\auth.json','.hermes\opencloud.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'backup-file'; safetyNotes = @('Backup antes de escrever', 'Parse JSON real e preserva campos desconhecidos', 'Aborta se JSON invalido'); aliases = @('byok-gateway','ai-provider-gateway','gateway-config'); badges = @('BYOK','Seguro'); installComponents = @('bootstrap-secrets','opencode','openclaw','hermes','kilo-cli') }
+        [ordered]@{ id = 'ai-gateway-doctor'; category = 'ai-edge-safe'; displayName = 'AI gateway doctor'; description = 'Valida base URL, chave presente, /v1/models e streaming simples sem registrar valor de segredo.'; targetApps = @('openai-compatible','gateway','opencode','hermes'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('doctor','audit'); rollback = @('manual'); riskTier = 'conservative'; rollbackScope = 'audit-only'; safetyNotes = @('Nao imprime chave', 'Nao usa cookies/sessoes', 'Somente endpoints autorizados pelo usuario'); aliases = @('ai-gateway-doctor','safe-ai-doctor','openai-gateway-doctor'); badges = @('BYOK','Seguro'); installComponents = @('bootstrap-secrets') }
+        [ordered]@{ id = 'zen-browser-privacy-prefs'; category = 'browser-startup'; displayName = 'Zen Browser privacy prefs'; description = 'Checklist opt-in para prefs de privacidade do Zen sem sobrescrever perfil do usuario.'; targetApps = @('zen browser','zen'); probePaths = @('$env:APPDATA\zen','$env:LOCALAPPDATA\Zen Browser'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('desktop','dev'); actions = @('manual-action','audit'); rollback = @('manual'); riskTier = 'conservative'; rollbackScope = 'manual'; safetyNotes = @('Checklist manual', 'Nao altera prefs.js automaticamente', 'Preserva perfil existente'); installComponents = @('zen-browser') }
 
         [ordered]@{ id = 'windows-ai-visual-performance'; category = 'ai-agent-performance'; displayName = 'Windows visual performance'; description = 'Desativa transparencias e usa perfil visual de melhor desempenho via HKCU.'; targetApps = @('windows'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'recommended'; riskTier = 'conservative'; securityImpact = $false; rollbackScope = 'registry-snapshot'; safetyNotes = @('HKCU apenas', 'Nao desativa seguranca', 'Rollback restaura valores anteriores'); profiles = @('dev','desktop'); actions = @('registry','audit'); rollback = @('registry-snapshot') }
         [ordered]@{ id = 'windows-ai-delivery-optimization-http-only'; category = 'ai-agent-performance'; displayName = 'Delivery Optimization HTTP only'; description = 'Define Delivery Optimization sem peering usando DODownloadMode=0.'; targetApps = @('windows update'); probePaths = @(); alwaysAvailable = $true; requiresAdmin = $true; defaultMode = 'recommended'; riskTier = 'advanced'; securityImpact = $false; rollbackScope = 'registry-snapshot'; safetyNotes = @('HKLM requer admin', 'Sem SmartScreen/VBS', 'Rollback restaura valor anterior'); profiles = @('dev','desktop'); actions = @('registry','audit'); rollback = @('registry-snapshot') }
@@ -8848,6 +9315,30 @@ function Get-BootstrapAppTuningSafetyNotes {
     return @('Ajuste segue contrato de AppTuning e nao deve sobrescrever configuracoes fora do item.')
 }
 
+function Get-BootstrapAppTuningBadges {
+    param([Parameter(Mandatory = $true)]$Item)
+
+    $badges = New-Object System.Collections.Generic.List[string]
+    foreach ($badge in @(Get-BootstrapAppTuningItemValue -Item $Item -Name 'badges' -Default @())) {
+        $text = ([string]$badge).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($text) -and -not $badges.Contains($text)) { $badges.Add($text) | Out-Null }
+    }
+
+    $riskTier = Get-BootstrapAppTuningRiskTier -Item $Item
+    switch ($riskTier) {
+        'conservative' { if (-not $badges.Contains('Seguro')) { $badges.Add('Seguro') | Out-Null } }
+        'manual' { if (-not $badges.Contains('Manual')) { $badges.Add('Manual') | Out-Null } }
+        'experimental' { if (-not $badges.Contains('Experimental')) { $badges.Add('Experimental') | Out-Null } }
+    }
+    if ([bool](Get-BootstrapAppTuningItemValue -Item $Item -Name 'requiresAdmin' -Default $false)) {
+        if (-not $badges.Contains('Admin')) { $badges.Add('Admin') | Out-Null }
+    }
+    if ([bool](Get-BootstrapAppTuningItemValue -Item $Item -Name 'requiresInteractiveLogin' -Default $false)) {
+        if (-not $badges.Contains('Login')) { $badges.Add('Login') | Out-Null }
+    }
+    return @($badges.ToArray())
+}
+
 function Get-BootstrapDefaultAppTuningMode {
     param(
         [Parameter(Mandatory = $true)]$Selection,
@@ -8931,6 +9422,7 @@ function Resolve-BootstrapAppTuningSelection {
         $securityImpact = [bool](Get-BootstrapAppTuningItemValue -Item $item -Name 'securityImpact' -Default $false)
         $rollbackScope = Get-BootstrapAppTuningRollbackScope -Item $item
         $safetyNotes = @(Get-BootstrapAppTuningSafetyNotes -Item $item)
+        $badges = @(Get-BootstrapAppTuningBadges -Item $item)
         $alwaysAvailable = [bool](Get-BootstrapAppTuningItemValue -Item $item -Name 'alwaysAvailable' -Default $false)
         $resolvedItems += @([ordered]@{
             id = [string]$item.id
@@ -8949,6 +9441,8 @@ function Resolve-BootstrapAppTuningSelection {
             securityImpact = $securityImpact
             rollbackScope = $rollbackScope
             safetyNotes = @($safetyNotes)
+            badges = @($badges)
+            aliases = @(Get-BootstrapAppTuningItemValue -Item $item -Name 'aliases' -Default @())
             installed = $installed
             status = $status
         })
@@ -9007,6 +9501,12 @@ function Get-BootstrapAppTuningInstallComponents {
         'ollama-dev-session' = @('ollama')
         'docker-dev-session' = @('docker')
         'openwebui-dev-session' = @('openwebui')
+        'llamacpp-mtp-template' = @('llamacpp-server')
+        'agent-config-claude-rtk-template' = @('bootstrap-secrets','agent-skills')
+        'headroom-agent-context-compression' = @('headroom-ai')
+        'knowledge-vault-obsidian-template' = @('obsidian')
+        'n8n-youtube-workflow-template' = @('n8n')
+        'zen-browser-privacy-prefs' = @('zen-browser')
         'edge-background-off' = @()
         'chrome-background-off' = @('chrome')
         'sunshine-allowlist' = @('sunshine')
@@ -9095,6 +9595,7 @@ function Get-BootstrapAppTuningStatusRows {
         $securityImpact = [bool](Get-BootstrapAppTuningItemValue -Item $item -Name 'securityImpact' -Default $false)
         $rollbackScope = Get-BootstrapAppTuningRollbackScope -Item $item
         $safetyNotes = @(Get-BootstrapAppTuningSafetyNotes -Item $item)
+        $badges = @(Get-BootstrapAppTuningBadges -Item $item)
 
         $rows += @([ordered]@{
             id = $id
@@ -9108,6 +9609,7 @@ function Get-BootstrapAppTuningStatusRows {
             securityImpact = $securityImpact
             rollbackScope = $rollbackScope
             safetyNotes = @($safetyNotes)
+            badges = (@($badges) -join ', ')
             requiresAdmin = [bool]$item.requiresAdmin
             installed = $installed
             configured = $configured
@@ -9713,6 +10215,72 @@ function Get-BootstrapSecretsProviderCatalog {
                 baseUrl = 'https://api.together.xyz/v1'
             }
             aliases = @('together', 'together ai')
+            tokenPatterns = @()
+        }
+        minimax = [ordered]@{
+            displayName = 'MiniMax'
+            category = 'llm'
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            signupUrl = 'https://platform.minimax.io/'
+            docsUrl = 'https://platform.minimax.io/docs/api-reference/text-openai-api'
+            pricingUrl = 'https://platform.minimax.io/'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            manualOptIn = $true
+            openCodeId = 'minimax'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Provider BYOK manual. Use endpoint OpenAI-compatible MiniMax somente apos validar quota/regiao.'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.minimax.io/v1'
+            }
+            aliases = @('minimax', 'mini max')
+            tokenPatterns = @()
+        }
+        nex = [ordered]@{
+            displayName = 'NexRouter'
+            category = 'llm-router'
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            signupUrl = 'https://nexrouter.io/'
+            docsUrl = 'https://nexrouter.io/'
+            pricingUrl = 'https://nexrouter.io/'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            manualOptIn = $true
+            openCodeId = 'nex'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Provider BYOK manual. Confirme modelos e billing no painel NexRouter antes de propagar para agentes.'
+            defaults = [ordered]@{
+                baseUrl = 'https://api.nexrouter.io/v1'
+            }
+            aliases = @('nex', 'nexrouter', 'nex router')
+            tokenPatterns = @()
+        }
+        'zhipu-glm' = [ordered]@{
+            displayName = 'Zhipu GLM / Z.ai'
+            category = 'llm'
+            secretKind = 'apiKey'
+            validationKind = 'openaiCompatible'
+            signupUrl = 'https://open.bigmodel.cn/'
+            docsUrl = 'https://z.ai/model-api'
+            pricingUrl = 'https://z.ai/model-api'
+            requiredFields = @('apiKey', 'baseUrl')
+            supportsValidation = $true
+            supportsOpenCode = $true
+            supportsComet = $true
+            manualOptIn = $true
+            openCodeId = 'zhipu-glm'
+            appTargets = @('claudeCode', 'openCode', 'cursor', 'windsurf', 'cline', 'githubCopilot', 'comet')
+            creationNotes = 'Provider BYOK manual. Use GLM/Z.ai somente com endpoint e key confirmados no console atual.'
+            defaults = [ordered]@{
+                baseUrl = 'https://open.bigmodel.cn/api/paas/v4'
+            }
+            aliases = @('zhipu', 'zhipu ai', 'glm', 'z-ai', 'z.ai', 'bigmodel')
             tokenPatterns = @()
         }
         elevenlabs = [ordered]@{
@@ -12610,6 +13178,19 @@ function Get-BootstrapComponentCatalog {
     $catalog['cherry-studio'] = New-BootstrapComponentDefinition -Name 'cherry-studio' -Description 'Cherry Studio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'kangfenmao.CherryStudio'; DisplayName = 'Cherry Studio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Cherry Studio\Cherry Studio.exe", "$env:ProgramFiles\Cherry Studio\Cherry Studio.exe") }
     $catalog['lm-studio'] = New-BootstrapComponentDefinition -Name 'lm-studio' -Description 'LM Studio local LLM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LMStudio.LMStudio'; DisplayName = 'LM Studio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\LM Studio\LM Studio.exe", "$env:ProgramFiles\LM Studio\LM Studio.exe") }
     $catalog['pinokio'] = New-BootstrapComponentDefinition -Name 'pinokio' -Description 'Pinokio AI Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Pinokio.Pinokio'; DisplayName = 'Pinokio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Pinokio\Pinokio.exe", "$env:ProgramFiles\Pinokio\Pinokio.exe") }
+    $catalog['zen-browser'] = New-BootstrapComponentDefinition -Name 'zen-browser' -Description 'Zen Browser via winget oficial.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Zen-Team.Zen-Browser'; DisplayName = 'Zen Browser'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Navegador moderno sob demanda; privacidade reversivel fica em AppTuning opt-in.'; ProbePaths = @("$env:ProgramFiles\Zen Browser\zen.exe", "${env:LOCALAPPDATA}\Programs\Zen Browser\zen.exe"); riskLevel = 'safe'; officialSource = 'https://zen-browser.app/'; manualReason = ''; requiresGpu = $false; requiresInteractiveLogin = $false }
+    $catalog['jan-ai'] = New-BootstrapComponentDefinition -Name 'jan-ai' -Description 'Jan local AI desktop via winget oficial.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Jan.Jan'; DisplayName = 'Jan'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cliente local de IA sob demanda; modelos ficam escolha do usuario.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Jan\Jan.exe", "${env:LOCALAPPDATA}\Programs\jan\Jan.exe", "$env:ProgramFiles\Jan\Jan.exe"); riskLevel = 'safe'; officialSource = 'https://jan.ai/'; manualReason = ''; requiresGpu = $false; requiresInteractiveLogin = $false }
+    $catalog['obsidian'] = New-BootstrapComponentDefinition -Name 'obsidian' -Description 'Obsidian para knowledge vault.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Obsidian.Obsidian'; DisplayName = 'Obsidian'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Vault local para memoria/projetos; sincronizacao e plugins ficam manuais.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Obsidian\Obsidian.exe", "$env:ProgramFiles\Obsidian\Obsidian.exe"); riskLevel = 'safe'; officialSource = 'https://obsidian.md/'; manualReason = ''; requiresGpu = $false; requiresInteractiveLogin = $false }
+    $catalog['kde-connect'] = New-BootstrapComponentDefinition -Name 'kde-connect' -Description 'KDE Connect para integracao telefone/desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'KDE.KDEConnect'; DisplayName = 'KDE Connect'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Conectividade reversivel; pareamento exige interacao do usuario.'; ProbePaths = @("$env:ProgramFiles\KDE Connect\bin\kdeconnect-app.exe", "$env:ProgramFiles\KDE Connect\bin\kdeconnect-indicator.exe", "${env:LOCALAPPDATA}\Programs\KDE Connect\bin\kdeconnect-app.exe"); riskLevel = 'safe'; officialSource = 'https://kdeconnect.kde.org/'; manualReason = 'Pareamento de dispositivo exige confirmacao interativa.'; requiresGpu = $false; requiresInteractiveLogin = $true }
+    $catalog['godot'] = New-BootstrapComponentDefinition -Name 'godot' -Description 'Godot Engine para game-dev.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'GodotEngine.GodotEngine'; DisplayName = 'Godot Engine'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ferramenta essencial de game-dev, segura e sob demanda.'; ProbePaths = @("${env:LOCALAPPDATA}\Microsoft\WinGet\Packages\GodotEngine.GodotEngine_*\Godot*.exe", "$env:ProgramFiles\Godot\Godot.exe"); riskLevel = 'safe'; officialSource = 'https://godotengine.org/'; manualReason = ''; requiresGpu = $false; requiresInteractiveLogin = $false }
+    $catalog['krita'] = New-BootstrapComponentDefinition -Name 'krita' -Description 'Krita para arte 2D.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'KDE.Krita'; DisplayName = 'Krita'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ferramenta criativa oficial para sprites/texturas.'; ProbePaths = @("$env:ProgramFiles\Krita (x64)\bin\krita.exe", "${env:LOCALAPPDATA}\Programs\Krita\bin\krita.exe"); riskLevel = 'safe'; officialSource = 'https://krita.org/'; manualReason = ''; requiresGpu = $false; requiresInteractiveLogin = $false }
+    $catalog['audacity'] = New-BootstrapComponentDefinition -Name 'audacity' -Description 'Audacity para audio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Audacity.Audacity'; DisplayName = 'Audacity'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Edicao de audio local para creator/game-dev.'; ProbePaths = @("$env:ProgramFiles\Audacity\Audacity.exe", "${env:LOCALAPPDATA}\Programs\Audacity\Audacity.exe"); riskLevel = 'safe'; officialSource = 'https://www.audacityteam.org/'; manualReason = ''; requiresGpu = $false; requiresInteractiveLogin = $false }
+    $catalog['supermaven-vscode'] = New-BootstrapComponentDefinition -Name 'supermaven-vscode' -Description 'Supermaven extension para VS Code.' -DependsOn @('vscode') -Kind 'vscode-extension' -Data @{ ExtensionId = 'supermaven.supermaven'; DisplayName = 'Supermaven'; Stage = 'payload'; Provisioning = 'vscode-extension'; ValueReason = 'Extensao oficial sob demanda; login/conta ficam fora do bootstrap.'; ProbePaths = @("$env:USERPROFILE\.vscode\extensions\supermaven.supermaven-*", "$env:USERPROFILE\.vscode-insiders\extensions\supermaven.supermaven-*"); riskLevel = 'safe'; officialSource = 'https://marketplace.visualstudio.com/items?itemName=supermaven.supermaven'; manualReason = 'Login opcional no servico Supermaven acontece dentro do VS Code.'; requiresGpu = $false; requiresInteractiveLogin = $true }
+    $catalog['printing-press'] = New-BootstrapComponentDefinition -Name 'printing-press' -Description 'Printing Press experimental, fluxo oficial manual.' -Optional $true -DependsOn @('git-core', 'go-core', 'node-core') -Kind 'manual-required' -Data @{ DisplayName = 'Printing Press'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'MCP/skills gerados ficam opt-in; nenhuma automacao silenciosa.'; ProbePaths = @("$env:USERPROFILE\.printing-press"); Instructions = 'Instale pelo fluxo oficial de https://github.com/mvanhorn/cli-printing-press e valide CLI/skills antes de ativar MCP gerado.'; riskLevel = 'experimental'; officialSource = 'https://github.com/mvanhorn/cli-printing-press'; manualReason = 'Fluxo oficial combina Go, Node e skills; requer revisao antes de gerar MCP.'; requiresGpu = $false; requiresInteractiveLogin = $false }
+    $catalog['odysseus'] = New-BootstrapComponentDefinition -Name 'odysseus' -Description 'Odysseus admin console experimental.' -Optional $true -DependsOn @('git-core', 'node-core') -Kind 'manual-required' -Data @{ DisplayName = 'Odysseus'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Admin console sensivel; instalacao automatica fica bloqueada por seguranca.'; ProbePaths = @("$env:USERPROFILE\.odysseus"); Instructions = 'Revise o repo oficial https://github.com/pewdiepie-archdaemon/odysseus e instale manualmente em ambiente isolado.'; riskLevel = 'experimental'; officialSource = 'https://github.com/pewdiepie-archdaemon/odysseus'; manualReason = 'Admin console exige revisao de permissao, rede e credenciais.'; requiresGpu = $false; requiresInteractiveLogin = $true }
+    $catalog['indextts2'] = New-BootstrapComponentDefinition -Name 'indextts2' -Description 'IndexTTS2 experimental para TTS local.' -Optional $true -DependsOn @('git-core', 'python-core') -Kind 'manual-required' -Data @{ DisplayName = 'IndexTTS2'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'TTS pesado; clone/venv/pesos exigem auditoria local e GPU opcional.'; ProbePaths = @("$env:USERPROFILE\.indextts2"); Instructions = 'Clone https://github.com/index-tts/index-tts em venv isolado; valide GPU/Python sem baixar pesos grandes por padrao.'; riskLevel = 'experimental'; officialSource = 'https://github.com/index-tts/index-tts'; manualReason = 'Requer GPU/Python audit e pesos grandes opcionais; nao baixar modelos automaticamente.'; requiresGpu = $true; requiresInteractiveLogin = $false }
+    $catalog['anythingllm'] = New-BootstrapComponentDefinition -Name 'anythingllm' -Description 'AnythingLLM desktop manual/experimental.' -Optional $true -DependsOn @('system-core') -Kind 'manual-required' -Data @{ DisplayName = 'AnythingLLM'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Instalador Windows silencioso oficial nao confirmado neste fluxo; manter manual.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\AnythingLLM\AnythingLLM.exe", "$env:ProgramFiles\AnythingLLM\AnythingLLM.exe"); Instructions = 'Instale pelo download oficial https://anythingllm.com/download e configure providers manualmente.'; riskLevel = 'manual'; officialSource = 'https://anythingllm.com/download'; manualReason = 'Sem caminho silent oficial validado; providers e dados locais exigem escolha do usuario.'; requiresGpu = $false; requiresInteractiveLogin = $true }
+    $catalog['llamacpp-server'] = New-BootstrapComponentDefinition -Name 'llamacpp-server' -Description 'llama.cpp server experimental com diagnostico MTP.' -Optional $true -DependsOn @('git-core', 'cmake') -Kind 'manual-required' -Data @{ DisplayName = 'llama.cpp server'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Servidor local/MTP so deve ativar flags quando binario e modelo suportam cabecas MTP.'; ProbePaths = @("$env:USERPROFILE\.llama.cpp\llama-server.exe", "$env:LOCALAPPDATA\llama.cpp\llama-server.exe"); Instructions = 'Instale llama.cpp oficial e rode diagnostico VRAM/contexto antes de usar spec-draft-n-max=4 ou flags MTP.'; riskLevel = 'experimental'; officialSource = 'https://github.com/ggml-org/llama.cpp/blob/master/docs/speculative.md'; manualReason = 'MTP depende de binario, modelo e VRAM; precisa validacao manual por host.'; requiresGpu = $false; requiresInteractiveLogin = $false }
     $catalog['webapp-photopea'] = New-BootstrapComponentDefinition -Name 'webapp-photopea' -Description 'Atalho web app Photopea na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Photopea'; Url = 'https://www.photopea.com/'; CategoryFolder = 'Design' }
     $catalog['webapp-whatsapp-web'] = New-BootstrapComponentDefinition -Name 'webapp-whatsapp-web' -Description 'Atalho web app WhatsApp Web na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'WhatsApp Web'; Url = 'https://web.whatsapp.com/'; CategoryFolder = 'Comunicação' }
     $catalog['webapp-xiaomi-ai-studio'] = New-BootstrapComponentDefinition -Name 'webapp-xiaomi-ai-studio' -Description 'Atalho web app Xiaomi AI Studio na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Xiaomi AI Studio'; Url = 'https://aistudio.xiaomimimo.com/#/'; CategoryFolder = 'IA' }
@@ -12619,7 +13200,40 @@ function Get-BootstrapComponentCatalog {
     $catalog['webapp-z-ai'] = New-BootstrapComponentDefinition -Name 'webapp-z-ai' -Description 'Atalho web app Z.ai na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Z.ai'; Url = 'https://chat.z.ai/'; CategoryFolder = 'IA' }
     $catalog['webapp-gemini-web'] = New-BootstrapComponentDefinition -Name 'webapp-gemini-web' -Description 'Atalho web app Gemini na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Gemini'; Url = 'https://gemini.google.com/app'; CategoryFolder = 'IA' }
     $catalog['webapp-google-ai-studio'] = New-BootstrapComponentDefinition -Name 'webapp-google-ai-studio' -Description 'Atalho web app Google AI Studio na Área de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google AI Studio'; Url = 'https://aistudio.google.com/prompts/new_chat'; CategoryFolder = 'IA' }
+    $catalog['webapp-v0-dev'] = New-BootstrapComponentDefinition -Name 'webapp-v0-dev' -Description 'Atalho web app v0.dev na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'v0.dev'; Url = 'https://v0.dev/'; CategoryFolder = 'IA'; riskLevel = 'safe'; officialSource = 'https://v0.dev/'; manualReason = 'Login/conta ficam no navegador.'; requiresGpu = $false; requiresInteractiveLogin = $true }
+    $catalog['webapp-bolt-new'] = New-BootstrapComponentDefinition -Name 'webapp-bolt-new' -Description 'Atalho web app Bolt.new na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Bolt.new'; Url = 'https://bolt.new/'; CategoryFolder = 'IA'; riskLevel = 'safe'; officialSource = 'https://bolt.new/'; manualReason = 'Login/conta ficam no navegador.'; requiresGpu = $false; requiresInteractiveLogin = $true }
+    $catalog['webapp-lovable-dev'] = New-BootstrapComponentDefinition -Name 'webapp-lovable-dev' -Description 'Atalho web app Lovable.dev na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Lovable.dev'; Url = 'https://lovable.dev/'; CategoryFolder = 'IA'; riskLevel = 'safe'; officialSource = 'https://lovable.dev/'; manualReason = 'Login/conta ficam no navegador.'; requiresGpu = $false; requiresInteractiveLogin = $true }
+    # Novos web-apps Office
+    $catalog['webapp-google-sheets'] = New-BootstrapComponentDefinition -Name 'webapp-google-sheets' -Description 'Atalho web app Google Sheets na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google Sheets'; Url = 'https://sheets.google.com/'; CategoryFolder = 'Office' }
+    $catalog['webapp-google-slides'] = New-BootstrapComponentDefinition -Name 'webapp-google-slides' -Description 'Atalho web app Google Slides na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google Slides'; Url = 'https://slides.google.com/'; CategoryFolder = 'Office' }
+    $catalog['webapp-google-calendar'] = New-BootstrapComponentDefinition -Name 'webapp-google-calendar' -Description 'Atalho web app Google Agenda na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google Agenda'; Url = 'https://calendar.google.com/'; CategoryFolder = 'Office' }
+    $catalog['webapp-gmail'] = New-BootstrapComponentDefinition -Name 'webapp-gmail' -Description 'Atalho web app Gmail na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Gmail'; Url = 'https://mail.google.com/'; CategoryFolder = 'Office' }
+    $catalog['webapp-office-word'] = New-BootstrapComponentDefinition -Name 'webapp-office-word' -Description 'Atalho web app Office Word na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Office Word'; Url = 'https://www.office.com/launch/word'; CategoryFolder = 'Office' }
+    $catalog['webapp-office-excel'] = New-BootstrapComponentDefinition -Name 'webapp-office-excel' -Description 'Atalho web app Office Excel na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Office Excel'; Url = 'https://www.office.com/launch/excel'; CategoryFolder = 'Office' }
+    $catalog['webapp-office-powerpoint'] = New-BootstrapComponentDefinition -Name 'webapp-office-powerpoint' -Description 'Atalho web app Office PowerPoint na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Office PowerPoint'; Url = 'https://www.office.com/launch/powerpoint'; CategoryFolder = 'Office' }
+    # Novos web-apps Produtividade
+    $catalog['webapp-trello'] = New-BootstrapComponentDefinition -Name 'webapp-trello' -Description 'Atalho web app Trello na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Trello'; Url = 'https://trello.com/'; CategoryFolder = 'Produtividade' }
+    $catalog['webapp-notion'] = New-BootstrapComponentDefinition -Name 'webapp-notion' -Description 'Atalho web app Notion na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Notion'; Url = 'https://www.notion.so/'; CategoryFolder = 'Produtividade' }
+    $catalog['webapp-google-keep'] = New-BootstrapComponentDefinition -Name 'webapp-google-keep' -Description 'Atalho web app Google Keep na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google Keep'; Url = 'https://keep.google.com/'; CategoryFolder = 'Produtividade' }
+    # Novos web-apps Armazenamento
+    $catalog['webapp-onedrive'] = New-BootstrapComponentDefinition -Name 'webapp-onedrive' -Description 'Atalho web app OneDrive na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'OneDrive'; Url = 'https://onedrive.live.com/'; CategoryFolder = 'Armazenamento' }
+    $catalog['webapp-google-drive'] = New-BootstrapComponentDefinition -Name 'webapp-google-drive' -Description 'Atalho web app Google Drive na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google Drive'; Url = 'https://drive.google.com/'; CategoryFolder = 'Armazenamento' }
+    $catalog['webapp-dropbox'] = New-BootstrapComponentDefinition -Name 'webapp-dropbox' -Description 'Atalho web app Dropbox na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Dropbox'; Url = 'https://www.dropbox.com/'; CategoryFolder = 'Armazenamento' }
+    $catalog['webapp-mega'] = New-BootstrapComponentDefinition -Name 'webapp-mega' -Description 'Atalho web app MEGA na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'MEGA'; Url = 'https://mega.nz/'; CategoryFolder = 'Armazenamento' }
+    $catalog['webapp-icloud'] = New-BootstrapComponentDefinition -Name 'webapp-icloud' -Description 'Atalho web app iCloud na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'iCloud'; Url = 'https://www.icloud.com/'; CategoryFolder = 'Armazenamento' }
+    # Novos web-apps Multimidia
+    $catalog['webapp-youtube'] = New-BootstrapComponentDefinition -Name 'webapp-youtube' -Description 'Atalho web app YouTube na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'YouTube'; Url = 'https://www.youtube.com/'; CategoryFolder = 'Multimídia' }
+    $catalog['webapp-netflix'] = New-BootstrapComponentDefinition -Name 'webapp-netflix' -Description 'Atalho web app Netflix na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Netflix'; Url = 'https://www.netflix.com/'; CategoryFolder = 'Multimídia' }
+    $catalog['webapp-spotify'] = New-BootstrapComponentDefinition -Name 'webapp-spotify' -Description 'Atalho web app Spotify na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Spotify'; Url = 'https://open.spotify.com/'; CategoryFolder = 'Multimídia' }
+    $catalog['webapp-prime-video'] = New-BootstrapComponentDefinition -Name 'webapp-prime-video' -Description 'Atalho web app Amazon Prime Video na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Amazon Prime Video'; Url = 'https://www.primevideo.com/'; CategoryFolder = 'Multimídia' }
+    # Novos web-apps Comunicacao
+    $catalog['webapp-telegram-web'] = New-BootstrapComponentDefinition -Name 'webapp-telegram-web' -Description 'Atalho web app Telegram Web na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Telegram Web'; Url = 'https://web.telegram.org/'; CategoryFolder = 'Comunicação' }
+    $catalog['webapp-discord'] = New-BootstrapComponentDefinition -Name 'webapp-discord' -Description 'Atalho web app Discord na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Discord'; Url = 'https://discord.com/app'; CategoryFolder = 'Comunicação' }
+    $catalog['webapp-slack'] = New-BootstrapComponentDefinition -Name 'webapp-slack' -Description 'Atalho web app Slack na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Slack'; Url = 'https://slack.com/'; CategoryFolder = 'Comunicação' }
+    $catalog['webapp-zoom'] = New-BootstrapComponentDefinition -Name 'webapp-zoom' -Description 'Atalho web app Zoom na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Zoom'; Url = 'https://zoom.us/'; CategoryFolder = 'Comunicação' }
+    $catalog['webapp-google-meet'] = New-BootstrapComponentDefinition -Name 'webapp-google-meet' -Description 'Atalho web app Google Meet na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google Meet'; Url = 'https://meet.google.com/'; CategoryFolder = 'Comunicação' }
     $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZedIndustries.Zed'; DisplayName = 'Zed'; ProbePaths = @("${env:LOCALAPPDATA}\Zed\Zed.exe", "$env:ProgramFiles\Zed\Zed.exe") }
+    $catalog['zcode'] = New-BootstrapComponentDefinition -Name 'zcode' -Description 'ZCode (IDE de IA da Z.ai). Instalacao manual; o bootstrap valida presenca e aplica segredos/MCP gerenciados quando o app esta instalado.' -Optional $true -DependsOn @('system-core') -Kind 'manual-required' -Data @{ DisplayName = 'ZCode (Z.ai)'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Recebe segredos validados e o catalogo MCP gerenciado; o instalador oficial exige download/login manual em zcode.z.ai.'; Instructions = 'Instale o ZCode em https://zcode.z.ai/en e rode novamente para aplicar segredos/MCP gerenciados.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\ZCode\ZCode.exe", "${env:LOCALAPPDATA}\Programs\zcode\ZCode.exe", "$env:ProgramFiles\ZCode\ZCode.exe", "$env:APPDATA\ai.z.zcode\store.json") }
     $catalog['opencode'] = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode CLI via script oficial.' -DependsOn @('git-core') -Kind 'opencode'
     $catalog['gemini-cli'] = New-BootstrapComponentDefinition -Name 'gemini-cli' -Description 'Gemini CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@google/gemini-cli'; DisplayName = 'Gemini CLI (@google/gemini-cli)'; CommandNames = @('gemini') }
     $catalog['kilo-cli'] = New-BootstrapComponentDefinition -Name 'kilo-cli' -Description 'Kilo CLI via npm -g.' -DependsOn @('node-core', 'bootstrap-secrets') -Kind 'npm' -Data @{ Package = '@kilocode/cli'; DisplayName = 'Kilo CLI (@kilocode/cli)'; CommandNames = @('kilo', 'kilocode') }
@@ -12631,7 +13245,8 @@ function Get-BootstrapComponentCatalog {
     $catalog['openclaude-cli'] = New-BootstrapComponentDefinition -Name 'openclaude-cli' -Description 'OpenClaude CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@gitlawb/openclaude'; DisplayName = 'OpenClaude CLI (@gitlawb/openclaude)'; CommandNames = @('openclaude') }
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes Agent via WSL2 + OpenCloud config no projeto.' -DependsOn @('wsl-core') -Kind 'hermes'
-    $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar Waybar/TUI por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
+    $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar: monitor de uso/plano (TUI/CLI no Windows, Waybar no Linux) por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
+    $catalog['ai-memory'] = New-BootstrapComponentDefinition -Name 'ai-memory' -Description 'AI Memory: memoria de longo prazo e handoff de contexto entre agentes via servidor loopback + MCP + hooks. Binario nativo Windows verificado ou fallback Cargo.' -DependsOn @('git-core', 'rustup') -Kind 'ai-memory' -EstimatedSizeGB 0.3 -RequiresNetwork $true
     $catalog['aionui'] = New-BootstrapComponentDefinition -Name 'aionui' -Description 'AionUI desktop app via winget oficial iOfficeAI.AionUi ou instalador oficial.' -Kind 'aionui' -EstimatedSizeGB 0.4 -RequiresNetwork $true
     $catalog['kimiproxy'] = New-BootstrapComponentDefinition -Name 'kimiproxy' -Description 'KimiProxy local OpenAI-compatible; padrao preferido da suite local.' -DependsOn @('git-core', 'node-core') -Kind 'ai-proxy-repo' -Data @{ ToolName = 'kimiproxy' } -EstimatedSizeGB 1.0 -RequiresNetwork $true
     $catalog['qwenproxy'] = New-BootstrapComponentDefinition -Name 'qwenproxy' -Description 'QwenProxy local OpenAI-compatible.' -DependsOn @('git-core', 'node-core') -Kind 'ai-proxy-repo' -Data @{ ToolName = 'qwenproxy' } -EstimatedSizeGB 1.0 -RequiresNetwork $true
@@ -12652,6 +13267,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['goose'] = New-BootstrapComponentDefinition -Name 'goose' -Description 'goose CLI.' -DependsOn @('git-core') -Kind 'goose'
     $catalog['repo-gemini-cli'] = New-BootstrapComponentDefinition -Name 'repo-gemini-cli' -Description 'Clone do repositório gemini-cli.' -DependsOn @('git-core') -Kind 'repo-clone' -Data @{ RepoUrl = 'https://github.com/heartyguy/gemini-cli'; TargetName = 'gemini-cli' }
     $catalog['n8n'] = New-BootstrapComponentDefinition -Name 'n8n' -Description 'n8n global via npm.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'n8n'; DisplayName = 'n8n'; CommandNames = @('n8n') }
+    $catalog['headroom-ai'] = New-BootstrapComponentDefinition -Name 'headroom-ai' -Description 'Headroom AI context compressor via uv tool.' -DependsOn @('python-core', 'rustup') -Kind 'uvtool' -Data @{ Package = 'headroom-ai[proxy]'; CommandName = 'headroom'; DisplayName = 'Headroom AI (headroom-ai[proxy])'; VersionArgs = @('version'); Stage = 'payload'; Provisioning = 'uvtool'; ValueReason = 'Wrapper/proxy local para compressao de contexto em agentes CLI e OpenAI-compatible.'; ProbePaths = @("$env:USERPROFILE\.local\bin\headroom.exe", "$env:APPDATA\Python\Scripts\headroom.exe"); riskLevel = 'experimental'; officialSource = 'https://pypi.org/project/headroom-ai/'; manualReason = 'Windows pode precisar compilar dependencias Rust quando wheel pronta nao existir; wrappers ficam opt-in.'; requiresGpu = $false; requiresInteractiveLogin = $false } -EstimatedSizeGB 0.5 -RequiresNetwork $true
     $catalog['autohotkey'] = New-BootstrapComponentDefinition -Name 'autohotkey' -Description 'AutoHotkey.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AutoHotkey.AutoHotkey'; DisplayName = 'AutoHotkey'; ProbePaths = @("$env:ProgramFiles\AutoHotkey\AutoHotkey64.exe", "${env:ProgramFiles(x86)}\AutoHotkey\AutoHotkey.exe") }
     $catalog['blender'] = New-BootstrapComponentDefinition -Name 'blender' -Description 'Blender LTS.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'BlenderFoundation.Blender.LTS.4.5'; DisplayName = 'Blender LTS 4.5'; ProbePaths = @("$env:ProgramFiles\Blender Foundation\Blender LTS\blender.exe", "$env:ProgramFiles\Blender Foundation\Blender 4.5\blender.exe") }
     $catalog['ffmpeg'] = New-BootstrapComponentDefinition -Name 'ffmpeg' -Description 'FFmpeg.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Gyan.FFmpeg'; DisplayName = 'FFmpeg'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\ffmpeg\bin\ffmpeg.exe", "$env:ProgramFiles\ffmpeg\bin\ffmpeg.exe", "$env:ProgramData\chocolatey\bin\ffmpeg.exe") }
@@ -12726,6 +13342,13 @@ function Get-BootstrapComponentCatalog {
     $catalog['joyshockmapper'] = New-BootstrapComponentDefinition -Name 'joyshockmapper' -Description 'Mapeamento fino de gyro e controles.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'JoyShockMapper'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Da granularidade extra ao gyro, mas ainda depende de instalacao manual segura.'; Instructions = 'Instale o JoyShockMapper manualmente ou exclua este componente se optar por usar apenas Steam Input/Steam Deck Tools.' }
     $catalog['vibrancegui'] = New-BootstrapComponentDefinition -Name 'vibrancegui' -Description 'Ajustes extras de vibrancia e saturacao.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'VibranceGUI'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Melhora saturacao no painel do Deck, mas a origem binaria precisa ser validada manualmente.'; Instructions = 'Valide e instale o VibranceGUI manualmente antes de rodar novamente.' }
     $catalog['steamdeck-driver-pack'] = New-BootstrapComponentDefinition -Name 'steamdeck-driver-pack' -Description 'Drivers especificos do Steam Deck para Windows.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Steam Deck driver pack'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Mantem paridade com o ecossistema do Deck, mas o pacote de drivers precisa ser escolhido conforme LCD/OLED e baixado com validacao manual.'; Instructions = 'Baixe e instale os drivers do Steam Deck adequados ao seu modelo antes de rodar novamente.' }
+    $catalog['steamdeck-amd-nebula-driver'] = New-BootstrapComponentDefinition -Name 'steamdeck-amd-nebula-driver' -Description 'GFX Driver AMD R-ID Software Hybrid Edition (Radeon-ID): primaria 25.3.1-R2.5 Sophronia (Polaris/Vega/Navi) com hash SHA1/MD5, fallback 23.11.1 Nebula (GCN). Download .7z, extracao via 7-Zip, instalacao silenciosa e tuning Adrenalin reversivel.' -Optional $true -DependsOn @('system-core', 'sevenzip') -Kind 'amd-nebula-driver' -EstimatedSizeGB 1.4 -RequiresNetwork $true -Data @{ DisplayName = 'AMD R-ID Hybrid Edition (25.3.1 Sophronia)'; Stage = 'payload'; Provisioning = 'custom-installer'; RequiresAdmin = $true; RequiresReboot = $true; DriverVersion = '25.3.1'; SourceUrl = 'https://sourceforge.net/projects/radeon-id-distribution/files/Release%20Polaris-Vega-Navi/WHQL-R-ID-Software-Hybrid-25.3.1-R2.5-Win10-Win11-PolarisVegaNavi-Sophronia.7z/download'; ArchiveName = 'WHQL-R-ID-Software-Hybrid-25.3.1-R2.5-Win10-Win11-PolarisVegaNavi-Sophronia.7z'; Releases = @(
+        [pscustomobject]@{ Version = '25.3.1-R2.5-Sophronia'; SourceUrl = 'https://sourceforge.net/projects/radeon-id-distribution/files/Release%20Polaris-Vega-Navi/WHQL-R-ID-Software-Hybrid-25.3.1-R2.5-Win10-Win11-PolarisVegaNavi-Sophronia.7z/download'; ArchiveName = 'WHQL-R-ID-Software-Hybrid-25.3.1-R2.5-Win10-Win11-PolarisVegaNavi-Sophronia.7z'; Sha1 = '04234cb220051035f995ea55b79088021d563513'; Md5 = 'eb1aa06fec1fa0fc148b09f870972597' },
+        [pscustomobject]@{ Version = '23.11.1-GCNFlex-Nebula'; SourceUrl = 'https://sourceforge.net/projects/radeon-id-distribution/files/Release%20Legacy%20GCN%20%28Pre-Polaris%29/WHQL-AMD-Software-Hybrid-Edition-23.11.1-GCNFlex-Nebula-Native-DCH.7z/download'; ArchiveName = 'WHQL-AMD-Software-Hybrid-Edition-23.11.1-GCNFlex-Nebula-Native-DCH.7z'; Sha1 = ''; Md5 = '' }
+    ); ValueReason = 'Driver moddado R-ID entrega stack DCH/Adrenalin atual (25.3.1 Sophronia) para Polaris/Vega/Navi, com fallback automatico para 23.11.1 Nebula; gateado por presenca de GPU AMD e admin, com validacao de hash SHA1/MD5.' }
+    $catalog['steamdeck-storage-driver'] = New-BootstrapComponentDefinition -Name 'steamdeck-storage-driver' -Description 'Driver oficial Valve do leitor de cartao microSD (BayHub) do Steam Deck para Windows. Download .zip + instalacao via pnputil.' -Optional $true -DependsOn @('system-core') -Kind 'steamdeck-zip-driver' -EstimatedSizeGB 0.1 -RequiresNetwork $true -Data @{ DisplayName = 'Steam Deck SD card reader (BayHub)'; Stage = 'payload'; Provisioning = 'custom-installer'; RequiresAdmin = $true; SourceUrl = 'https://steamdeck-packages.steamos.cloud/misc/windows/drivers/BayHub_SD_STOR_installV3.4.01.89_W10W11_logoed_20220228.zip'; ArchiveName = 'BayHub_SD_STOR_installV3.4.01.89_W10W11_logoed_20220228.zip'; ValueReason = 'Habilita o leitor de cartao microSD do Deck no Windows (driver oficial Valve).' }
+    $catalog['steamdeck-wifi-driver'] = New-BootstrapComponentDefinition -Name 'steamdeck-wifi-driver' -Description 'Driver oficial Valve de Wi-Fi (Qualcomm FC66E) do Steam Deck para Windows. Download .zip + instalacao via pnputil.' -Optional $true -DependsOn @('system-core') -Kind 'steamdeck-zip-driver' -EstimatedSizeGB 0.1 -RequiresNetwork $true -Data @{ DisplayName = 'Steam Deck Wi-Fi (FC66E)'; Stage = 'payload'; Provisioning = 'custom-installer'; RequiresAdmin = $true; SourceUrl = 'https://steamdeck-packages.steamos.cloud/misc/windows/drivers/FC66E-WIN_WiFi_driver.zip'; ArchiveName = 'FC66E-WIN_WiFi_driver.zip'; ValueReason = 'Habilita o adaptador Wi-Fi do Deck no Windows (driver oficial Valve).' }
+    $catalog['steamdeck-bluetooth-driver'] = New-BootstrapComponentDefinition -Name 'steamdeck-bluetooth-driver' -Description 'Driver oficial Valve de Bluetooth (Qualcomm FC66E-B) do Steam Deck para Windows. Download .zip + instalacao via pnputil.' -Optional $true -DependsOn @('system-core') -Kind 'steamdeck-zip-driver' -EstimatedSizeGB 0.1 -RequiresNetwork $true -Data @{ DisplayName = 'Steam Deck Bluetooth (FC66E-B)'; Stage = 'payload'; Provisioning = 'custom-installer'; RequiresAdmin = $true; SourceUrl = 'https://steamdeck-packages.steamos.cloud/misc/windows/drivers/FC66E-B_WIN_Bluetooth_driver.zip'; ArchiveName = 'FC66E-B_WIN_Bluetooth_driver.zip'; ValueReason = 'Habilita o Bluetooth do Deck no Windows (driver oficial Valve).' }
     $catalog['obs-source-record-plugin'] = New-BootstrapComponentDefinition -Name 'obs-source-record-plugin' -Description 'Plugin Source Record para gravacao separada por fonte.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'OBS Source Record plugin'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Aprimora captura multipista, mas o plugin precisa ser instalado manualmente.'; Instructions = 'Instale o plugin Source Record no OBS antes de usar o perfil de captura.' }
     $catalog['instant-replay'] = New-BootstrapComponentDefinition -Name 'instant-replay' -Description 'Preset para replay buffer/instant replay.' -DependsOn @('obs-studio') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Entrega um ponto de extensao para replay buffer sem introduzir outra dependencia agora.' }
     $catalog['pagefile-on-sd'] = New-BootstrapComponentDefinition -Name 'pagefile-on-sd' -Description 'Move pagefile para o SD ou unidade de apoio.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Pagefile on SD'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'E util para cenarios de storage apertado, mas e invasivo demais para habilitar automaticamente.'; Instructions = 'Ajuste manualmente o pagefile apos validar a unidade alvo e o impacto de desempenho.' }
@@ -12758,17 +13381,17 @@ function Get-BootstrapProfileCatalog {
     $catalog['legacy'] = New-BootstrapProfileDefinition -Name 'legacy' -Description 'Replica o fluxo atual do script.' -Items @('git-core', 'node-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'python-core', 'opencode', 'claude-code', 'github-cli', 'chrome', 'google-app-desktop', 'notepadpp', 'claude-desktop', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'wsl-ui', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
     $catalog['safe-base'] = New-BootstrapProfileDefinition -Name 'safe-base' -Description 'Base segura e pequena para maquina limpa; sem desktops de IA, containers, jogos ou tuning.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp')
     $catalog['public-beta'] = New-BootstrapProfileDefinition -Name 'public-beta' -Description 'Primeira instalacao confiavel para beta publico; maior que safe-base, sem WSL/Docker/IA pesada/gaming.' -Items @('safe-base', 'powershell', 'powertoys', 'brave', 'bootstrap-secrets', 'vscode', 'vscode-extensions', 'bootstrap-mcps')
-    $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores e utilitarios.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp')
+    $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores, utilitarios e atalhos web.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp', 'webapps')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'aionui', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'ai-memory', 'aionui', 'headroom-ai', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli', 'supermaven-vscode')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
     $catalog['social'] = New-BootstrapProfileDefinition -Name 'social' -Description 'Mensageiros e comunicação.' -Items @('discord', 'telegram')
-    $catalog['utilities'] = New-BootstrapProfileDefinition -Name 'utilities' -Description 'Downloads e ferramentas de poweruser.' -Items @('jdownloader', 'fan-control', 'mem-reduct', 'raycast', 'sparkle', 'google-app-desktop')
+    $catalog['utilities'] = New-BootstrapProfileDefinition -Name 'utilities' -Description 'Downloads e ferramentas de poweruser.' -Items @('jdownloader', 'fan-control', 'mem-reduct', 'raycast', 'sparkle', 'google-app-desktop', 'obsidian', 'zen-browser', 'kde-connect')
     $catalog['support-tools'] = New-BootstrapProfileDefinition -Name 'support-tools' -Description 'Ferramentas opcionais de diagnostico e atendimento local.' -Items @('sysinternals-suite', 'crystaldiskinfo', 'hwinfo64', 'wiztree', 'windirstat', 'latencymon', 'driver-store-explorer', 'windows-repair-toolbox')
     $catalog['creator'] = New-BootstrapProfileDefinition -Name 'creator' -Description 'Ferramentas de criação e mídia.' -Items @('autohotkey', 'blender', 'ffmpeg')
-    $catalog['game-dev'] = New-BootstrapProfileDefinition -Name 'game-dev' -Description 'Toolchain de jogos e compilação.' -Items @('unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community')
+    $catalog['game-dev'] = New-BootstrapProfileDefinition -Name 'game-dev' -Description 'Toolchain de jogos e compilação.' -Items @('unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community', 'godot', 'krita', 'audacity')
     $catalog['gaming'] = New-BootstrapProfileDefinition -Name 'gaming' -Description 'Steam e ferramentas relacionadas.' -Items @('steam', 'steamcmd')
     $catalog['steamdeck-essentials'] = New-BootstrapProfileDefinition -Name 'steamdeck-essentials' -Description 'Base handheld do Steam Deck em Windows.' -Items @('base', 'steam', 'playnite', 'heroic', 'rtss', 'special-k', 'vcpp-redist', 'directx-runtime', 'vigembus-runtime', 'steamdeck-tools-runtime', 'steamdeck-tools', 'autohotkey-runtime')
     $catalog['steamdeck-input'] = New-BootstrapProfileDefinition -Name 'steamdeck-input' -Description 'Perfis de input, hotkeys e automacao de controle.' -Items @('steamdeck-settings', 'steamdeck-automation', 'steamdeck-tweaks', 'console-session-manager', 'dev-session-manager', 'display-classifier', 'recovery-hotkeys', 'steamdeck-input-conflict-audit', 'console-readiness-audit')
@@ -12781,11 +13404,14 @@ function Get-BootstrapProfileCatalog {
     $catalog['steamdeck-capture'] = New-BootstrapProfileDefinition -Name 'steamdeck-capture' -Description 'Captura de gameplay e replay buffer.' -Items @('obs-studio', 'obs-source-record-plugin', 'instant-replay')
     $catalog['steamdeck-backup'] = New-BootstrapProfileDefinition -Name 'steamdeck-backup' -Description 'Backup de drivers e imagem golden.' -Items @('driver-store-explorer', 'macrium-reflect')
     $catalog['steamdeck-recommended'] = New-BootstrapProfileDefinition -Name 'steamdeck-recommended' -Description 'Experiencia recomendada para este Steam Deck.' -Items @('steamdeck-essentials', 'steamdeck-input', 'steamdeck-power', 'steamdeck-dock', 'steamdeck-connectivity', 'steamdeck-qol', 'steamdeck-shell-menu', 'steamdeck-sharedvram-launch-options')
-    $catalog['steamdeck-full'] = New-BootstrapProfileDefinition -Name 'steamdeck-full' -Description 'Camada completa Steam Deck, incluindo storage/capture/backup e bloqueadores manuais.' -Items @('steamdeck-recommended', 'steamdeck-storage', 'steamdeck-capture', 'steamdeck-backup', 'steamdeck-zero-touch', 'epic-games', 'msi-afterburner', 'lossless-scaling', 'joyshockmapper', 'vibrancegui', 'steamdeck-driver-pack')
+    $catalog['steamdeck-full'] = New-BootstrapProfileDefinition -Name 'steamdeck-full' -Description 'Camada completa Steam Deck, incluindo storage/capture/backup e bloqueadores manuais.' -Items @('steamdeck-recommended', 'steamdeck-storage', 'steamdeck-capture', 'steamdeck-backup', 'steamdeck-zero-touch', 'epic-games', 'msi-afterburner', 'lossless-scaling', 'joyshockmapper', 'vibrancegui', 'steamdeck-driver-pack', 'steamdeck-amd-nebula-driver', 'steamdeck-storage-driver', 'steamdeck-wifi-driver', 'steamdeck-bluetooth-driver')
     $catalog['workspace'] = New-BootstrapProfileDefinition -Name 'workspace' -Description 'Layout em F:\Steam\Steamapps e Dev.' -Items @('workspace-layout', 'pycharm-community', 'dotnet-core')
+    $catalog['webapps'] = New-BootstrapProfileDefinition -Name 'webapps' -Description 'Atalhos web (PWA) de Office, nuvem, multimidia, comunicacao e IA na area de trabalho.' -Items @('webapp-photopea', 'webapp-whatsapp-web', 'webapp-xiaomi-ai-studio', 'webapp-manus', 'webapp-kimi', 'webapp-google-docs', 'webapp-z-ai', 'webapp-gemini-web', 'webapp-google-ai-studio', 'webapp-v0-dev', 'webapp-bolt-new', 'webapp-lovable-dev', 'webapp-google-sheets', 'webapp-google-slides', 'webapp-google-calendar', 'webapp-gmail', 'webapp-office-word', 'webapp-office-excel', 'webapp-office-powerpoint', 'webapp-trello', 'webapp-notion', 'webapp-google-keep', 'webapp-onedrive', 'webapp-google-drive', 'webapp-dropbox', 'webapp-mega', 'webapp-icloud', 'webapp-youtube', 'webapp-netflix', 'webapp-spotify', 'webapp-prime-video', 'webapp-telegram-web', 'webapp-discord', 'webapp-slack', 'webapp-zoom', 'webapp-google-meet')
+    $catalog['virtualization'] = New-BootstrapProfileDefinition -Name 'virtualization' -Description 'Plataformas de virtualizacao opt-in (admin + reboot): Hyper-V e Windows Hypervisor Platform.' -Items @('hyper-v', 'hyper-v-tools', 'windows-hypervisor-platform')
+    $catalog['PhaseZero'] = New-BootstrapProfileDefinition -Name 'PhaseZero' -Description 'Baseline obrigatorio do projeto: runtimes, ferramentas, plataformas e atalhos web que todo host deve ter instalados e configurados.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp', 'powershell', 'chrome', 'wsl-core', 'wsl-ui', 'docker', 'unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community', 'steam', 'steamcmd', 'webapps')
     $catalog['full-workstation'] = New-BootstrapProfileDefinition -Name 'full-workstation' -Description 'Workstation ampla com base, containers, IA, criacao, workspace, seguranca, social e utilitarios; opt-in.' -Items @('base', 'containers', 'dev-ai', 'creator', 'workspace', 'security', 'social', 'utilities')
     $catalog['recommended'] = New-BootstrapProfileDefinition -Name 'recommended' -Description 'Alias seguro para safe-base. Use full-workstation para instalacao ampla.' -Items @('safe-base')
-    $catalog['full'] = New-BootstrapProfileDefinition -Name 'full' -Description 'Instala tudo; perfil amplo opt-in.' -Items @('full-workstation', 'automation', 'game-dev', 'gaming')
+    $catalog['full'] = New-BootstrapProfileDefinition -Name 'full' -Description 'Instala tudo; perfil amplo opt-in.' -Items @('full-workstation', 'automation', 'game-dev', 'gaming', 'webapps', 'virtualization')
 
     return $catalog
 }
@@ -12826,7 +13452,14 @@ function New-BootstrapSelectionObject {
     $hostHealth = Normalize-BootstrapHostHealthMode -Mode $SelectedHostHealth
     $appTuningMode = Normalize-BootstrapAppTuningMode -Mode $SelectedAppTuning
 
-    if ($profiles.Count -eq 0 -and $components.Count -eq 0) {
+    $hasExplicitAppTuningSelection = (
+        -not [string]::IsNullOrWhiteSpace($appTuningMode) -or
+        @($SelectedAppTuningCategories).Count -gt 0 -or
+        @($SelectedAppTuningItems).Count -gt 0 -or
+        @($ExcludedAppTuningItems).Count -gt 0
+    )
+
+    if ($profiles.Count -eq 0 -and $components.Count -eq 0 -and -not $hasExplicitAppTuningSelection) {
         $profiles = @('legacy')
     }
 
@@ -12870,6 +13503,24 @@ function Get-BootstrapUiContract {
 
     $componentEntries = foreach ($componentName in $components.Keys) {
         $componentDef = $components[$componentName]
+        $riskLevel = ''
+        if ($componentDef.PSObject.Properties.Name -contains 'riskLevel') { $riskLevel = [string]$componentDef.riskLevel }
+        if ([string]::IsNullOrWhiteSpace($riskLevel)) {
+            $riskLevel = if ([string]$componentDef.Kind -eq 'manual-required') { 'manual' } else { 'safe' }
+        }
+        $manualReason = if ($componentDef.PSObject.Properties.Name -contains 'manualReason') { [string]$componentDef.manualReason } else { '' }
+        $officialSource = if ($componentDef.PSObject.Properties.Name -contains 'officialSource') { [string]$componentDef.officialSource } else { '' }
+        $requiresGpu = if ($componentDef.PSObject.Properties.Name -contains 'requiresGpu') { [bool]$componentDef.requiresGpu } else { $false }
+        $requiresInteractiveLogin = if ($componentDef.PSObject.Properties.Name -contains 'requiresInteractiveLogin') { [bool]$componentDef.requiresInteractiveLogin } else { $false }
+        $badges = New-Object System.Collections.Generic.List[string]
+        switch ($riskLevel) {
+            'safe' { $badges.Add('Seguro') | Out-Null }
+            'experimental' { $badges.Add('Experimental') | Out-Null }
+            'manual' { $badges.Add('Manual') | Out-Null }
+            default { if (-not [string]::IsNullOrWhiteSpace($riskLevel)) { $badges.Add($riskLevel) | Out-Null } }
+        }
+        if ($requiresGpu) { $badges.Add('Requer GPU') | Out-Null }
+        if ($requiresInteractiveLogin) { $badges.Add('Requer login') | Out-Null }
         [ordered]@{
             name = $componentDef.Name
             description = $componentDef.Description
@@ -12878,6 +13529,12 @@ function Get-BootstrapUiContract {
             kind = [string]$componentDef.Kind
             stage = Get-BootstrapComponentStage -ComponentDef $componentDef
             valueReason = if ($componentDef.PSObject.Properties.Name -contains 'ValueReason') { [string]$componentDef.ValueReason } else { [string]$componentDef.Description }
+            riskLevel = $riskLevel
+            manualReason = $manualReason
+            requiresGpu = $requiresGpu
+            requiresInteractiveLogin = $requiresInteractiveLogin
+            officialSource = $officialSource
+            badges = @($badges.ToArray())
             reversibility = Get-BootstrapComponentReversibility -ComponentDef $componentDef
         }
     }
@@ -12905,6 +13562,7 @@ function Get-BootstrapUiContract {
             aionuiIntegration = $true
             aiConfigSync = $true
             aiProxySuite = $true
+            aiMemory = $true
             launcherDiagnostics = $true
             guidedCliMenu = $true
             runTimeline = $true
@@ -12961,6 +13619,14 @@ function Get-BootstrapAdminReasons {
 
     if ($resolvedComponents -contains 'steamdeck-driver-pack') {
         $reasons.Add('Drivers especificos do Steam Deck exigem instalacao elevada.')
+    }
+
+    if ($resolvedComponents -contains 'steamdeck-amd-nebula-driver') {
+        $reasons.Add('Instalar o driver AMD Nebula Hybrid Edition exige elevacao (setup de driver de GPU + tuning de registro).')
+    }
+
+    if (@('steamdeck-storage-driver', 'steamdeck-wifi-driver', 'steamdeck-bluetooth-driver') | Where-Object { $resolvedComponents -contains $_ }) {
+        $reasons.Add('Instalar drivers oficiais do Steam Deck (SD/Wi-Fi/Bluetooth) via pnputil exige elevacao.')
     }
 
     if ($UsesSteamDeckFlow -and ($resolvedComponents -contains 'steamdeck-tools-runtime')) {
@@ -13039,6 +13705,7 @@ function Get-BootstrapComponentReversibility {
         'bootstrap-secrets' { $reversible = 'partial'; $changeTypes = @('file', 'env'); $notes = 'Backups/manifests permitem restauracao parcial; segredos devem ser validados manualmente.' }
         'bootstrap-mcps' { $reversible = 'partial'; $changeTypes = @('file'); $notes = 'Configs com backup podem ser restauradas; entradas externas exigem validacao.' }
         'vscode-extensions' { $reversible = 'manual'; $changeTypes = @('package', 'file'); $notes = 'Extensoes podem ser removidas manualmente pelo editor/CLI.' }
+        'vscode-extension' { $reversible = 'manual'; $changeTypes = @('package', 'file'); $notes = 'Extensao pode ser removida manualmente pelo editor/CLI.' }
         default {
             if ($kind -match 'settings|config|automation|agent-skills') {
                 $reversible = 'partial'
@@ -13250,7 +13917,14 @@ function Get-BootstrapSelection {
         return Invoke-BootstrapInteractiveSelection
     }
 
-    if ($profiles.Count -eq 0 -and $components.Count -eq 0) {
+    $hasExplicitAppTuningSelection = (
+        -not [string]::IsNullOrWhiteSpace($selectedAppTuning) -or
+        @($AppTuningCategory).Count -gt 0 -or
+        @($AppTuningItem).Count -gt 0 -or
+        @($ExcludeAppTuningItem).Count -gt 0
+    )
+
+    if ($profiles.Count -eq 0 -and $components.Count -eq 0 -and -not $hasExplicitAppTuningSelection) {
         $profiles = @('legacy')
     }
 
@@ -14075,6 +14749,7 @@ function Get-BootstrapAiProxyCatalog {
         BaseUrl = 'http://127.0.0.1:3010/v1'
         DefaultModel = 'k2d6-thinking'
         Models = @('k2d6-thinking','k2d6')
+        Aliases = @('kimi','kimi-proxy')
         PreferredDefault = $true
         StartCommand = 'npm start'
         LoginCommand = 'npm run login'
@@ -14100,6 +14775,7 @@ function Get-BootstrapAiProxyCatalog {
         BaseUrl = 'http://127.0.0.1:3011/v1'
         DefaultModel = 'qwen3.6-plus'
         Models = @('qwen3.6-plus','qwen3.6-plus-no-thinking')
+        Aliases = @('qwen','qwen-proxy')
         PreferredDefault = $false
         StartCommand = 'npm start'
         LoginCommand = 'npm run login'
@@ -14125,6 +14801,7 @@ function Get-BootstrapAiProxyCatalog {
         BaseUrl = 'http://127.0.0.1:3012/v1'
         DefaultModel = 'deepseek-v4-pro'
         Models = @('deepseek-v4-pro','deepseek-v4-flash','deepseek-v4-flash-thinking')
+        Aliases = @('deep-proxy','deeps-proxy','deepseek-proxy')
         PreferredDefault = $false
         StartCommand = 'npm start'
         LoginCommand = 'npm run login'
@@ -14150,6 +14827,7 @@ function Get-BootstrapAiProxyCatalog {
         BaseUrl = 'http://127.0.0.1:3013/v1'
         DefaultModel = 'mimo-v2.5-pro'
         Models = @('mimo-v2.5-pro','mimo-v2.5')
+        Aliases = @('mimo','mimo-proxy','mimoai','mimoaiproxy')
         PreferredDefault = $false
         StartCommand = 'go run main.go'
         LoginCommand = ''
@@ -14182,6 +14860,7 @@ function Get-BootstrapAiProxyCatalog {
         BaseUrl = 'http://127.0.0.1:8081/v1'
         DefaultModel = 'claude-sonnet-4-5'
         Models = @('claude-sonnet-4-5','gemini-2.5-pro')
+        Aliases = @('antigravity-proxy','antigravityproxy','antigravity-adapter','antigravity-openai','antigravity-claude-proxy','ago-adapter')
         PreferredDefault = $false
         StartCommand = 'npm start'
         LoginCommand = ''
@@ -14326,6 +15005,113 @@ function Get-BootstrapAiToolCatalog {
         )
         Notes          = 'Instala via winget exact id iOfficeAI.AionUi; fallback oficial .exe fica bloqueado em modo automatizado quando silent args nao forem documentados.'
     }
+    $catalog['printing-press'] = [ordered]@{
+        ToolName              = 'printing-press'
+        DisplayName           = 'Printing Press'
+        CommandNames          = @('printing-press')
+        VersionArgs           = @('--version')
+        DocsUrl               = 'https://github.com/mvanhorn/cli-printing-press'
+        GitHubRepo            = 'mvanhorn/cli-printing-press'
+        PackageName           = ''
+        InstallSupport        = 'manual-workflow'
+        RiskLevel             = 'experimental'
+        RequiresGpu           = $false
+        DefaultProfileAllowed = $false
+        ProbePaths            = @('$env:USERPROFILE\.printing-press')
+        Notes                 = 'opt-in manual oficial: revise repo, Go/Node/skills e MCP gerado antes de ativar no host.'
+    }
+    $catalog['indextts2'] = [ordered]@{
+        ToolName              = 'indextts2'
+        DisplayName           = 'IndexTTS2'
+        CommandNames          = @('indextts2','index-tts')
+        VersionArgs           = @('--help')
+        DocsUrl               = 'https://github.com/index-tts/index-tts'
+        GitHubRepo            = 'index-tts/index-tts'
+        PackageName           = ''
+        InstallSupport        = 'manual-workflow'
+        RiskLevel             = 'experimental'
+        RequiresGpu           = $true
+        DefaultProfileAllowed = $false
+        ProbePaths            = @('$env:USERPROFILE\.indextts2')
+        Notes                 = 'opt-in manual oficial: requer GPU/Python/venv e pesos grandes; dry-run planeja sem baixar modelos.'
+    }
+    $catalog['odysseus'] = [ordered]@{
+        ToolName              = 'odysseus'
+        DisplayName           = 'Odysseus'
+        CommandNames          = @('odysseus')
+        VersionArgs           = @('--version')
+        DocsUrl               = 'https://github.com/pewdiepie-archdaemon/odysseus'
+        GitHubRepo            = 'pewdiepie-archdaemon/odysseus'
+        PackageName           = ''
+        InstallSupport        = 'manual-workflow'
+        RiskLevel             = 'experimental'
+        RequiresGpu           = $false
+        DefaultProfileAllowed = $false
+        ProbePaths            = @('$env:USERPROFILE\.odysseus')
+        Notes                 = 'opt-in manual oficial: admin console sensivel; revisar rede, permissoes e credenciais antes de usar.'
+    }
+    $catalog['ollama'] = [ordered]@{
+        ToolName              = 'ollama'
+        DisplayName           = 'Ollama'
+        CommandNames          = @('ollama')
+        VersionArgs           = @('--version')
+        DocsUrl               = 'https://ollama.com/download'
+        GitHubRepo            = 'ollama/ollama'
+        PackageName           = ''
+        WingetId              = 'Ollama.Ollama'
+        InstallSupport        = 'winget'
+        RiskLevel             = 'safe'
+        RequiresGpu           = $false
+        DefaultProfileAllowed = $false
+        ProbePaths            = @('$env:LOCALAPPDATA\Ollama\ollama.exe','$env:ProgramFiles\Ollama\ollama.exe')
+        Notes                 = 'Instalavel via winget sob demanda; modelos e pulls ficam sob escolha do usuario.'
+    }
+    $catalog['lm-studio'] = [ordered]@{
+        ToolName              = 'lm-studio'
+        DisplayName           = 'LM Studio'
+        CommandNames          = @('lms')
+        VersionArgs           = @('--version')
+        DocsUrl               = 'https://lmstudio.ai/'
+        GitHubRepo            = ''
+        PackageName           = ''
+        WingetId              = 'LMStudio.LMStudio'
+        InstallSupport        = 'winget'
+        RiskLevel             = 'safe'
+        RequiresGpu           = $false
+        DefaultProfileAllowed = $false
+        ProbePaths            = @('$env:LOCALAPPDATA\Programs\LM Studio\LM Studio.exe','$env:ProgramFiles\LM Studio\LM Studio.exe')
+        Notes                 = 'Instalavel via winget sob demanda; modelos locais nao sao baixados automaticamente.'
+    }
+    $catalog['openwebui'] = [ordered]@{
+        ToolName              = 'openwebui'
+        DisplayName           = 'Open WebUI'
+        CommandNames          = @()
+        VersionArgs           = @()
+        DocsUrl               = 'https://docs.openwebui.com/'
+        GitHubRepo            = 'open-webui/open-webui'
+        PackageName           = ''
+        InstallSupport        = 'docker-manual'
+        RiskLevel             = 'manual'
+        RequiresGpu           = $false
+        DefaultProfileAllowed = $false
+        ProbePaths            = @()
+        Notes                 = 'manual opt-in via Docker; requer escolha local de porta, volumes, login e providers.'
+    }
+    $catalog['n8n'] = [ordered]@{
+        ToolName              = 'n8n'
+        DisplayName           = 'n8n'
+        CommandNames          = @('n8n')
+        VersionArgs           = @('--version')
+        DocsUrl               = 'https://docs.n8n.io/'
+        GitHubRepo            = 'n8n-io/n8n'
+        PackageName           = 'n8n'
+        InstallSupport        = 'workflow-template'
+        RiskLevel             = 'manual'
+        RequiresGpu           = $false
+        DefaultProfileAllowed = $false
+        ProbePaths            = @('$env:APPDATA\npm\n8n.cmd','$env:APPDATA\npm\n8n.ps1')
+        Notes                 = 'workflow-template opt-in: templates de transcricao exigem credenciais, revisao e execucao manual.'
+    }
     $catalog['antigravity-workflows'] = [ordered]@{
         ToolName       = 'antigravity-workflows'
         DisplayName    = 'Google Antigravity workflows'
@@ -14346,13 +15132,32 @@ function Get-BootstrapAiToolCatalog {
         GitHubRepo     = 'akitaonrails/ai-usagebar'
         PackageName    = ''
         InstallSupport = 'linux-release'
-        ReleaseTag     = 'v0.4.0'
+        ReleaseTag     = 'v0.7.1'
         ProbePaths     = @('%USERPROFILE%\.local\bin\ai-usagebar.cmd', '%USERPROFILE%\.local\bin\ai-usagebar.exe', '%LOCALAPPDATA%\PhaseZero\ai-tools\bin\ai-usagebar.exe')
         ReleaseAssets  = [ordered]@{
-            x86_64  = [ordered]@{ Name = 'ai-usagebar-linux-x86_64.tar.gz'; Sha256 = '55b9d77a7c81de2a445e36eae240bcf7286bb7d4ec380f38830f7d4a809a70b1' }
-            aarch64 = [ordered]@{ Name = 'ai-usagebar-linux-aarch64.tar.gz'; Sha256 = 'd849897e3c10f9b2fcff570f8b3e7ecc67332e33183ef5c95cd9a017eaf890bd' }
+            x86_64  = [ordered]@{ Name = 'ai-usagebar-linux-x86_64.tar.gz'; Sha256 = '4dfc2bea172fd89f390ea9f9d0f009982d5e1ab7e04e7eee67de353572c13d65' }
+            aarch64 = [ordered]@{ Name = 'ai-usagebar-linux-aarch64.tar.gz'; Sha256 = '3b4c0910506cadcb08479fa9b0c0021435223be9039b27772834d2b7a328bb26' }
         }
-        Notes          = 'Waybar/TUI Rust para uso de Claude, Codex/OpenAI, Z.AI e OpenRouter. Linux/WSL usa release oficial verificada; Windows com WSL indisponivel usa fallback cargo na tag oficial.'
+        Notes          = 'Monitor Rust de uso/plano para Claude, Codex/OpenAI, Z.AI, OpenRouter e DeepSeek. No Windows a experiencia nativa e o TUI (ai-usagebar-tui) e o modo CLI --json/--pretty; o widget Waybar e exclusivo de Linux. Linux/WSL usa release oficial verificada; Windows sem WSL usa fallback cargo na tag oficial.'
+    }
+    $catalog['ai-memory'] = [ordered]@{
+        ToolName       = 'ai-memory'
+        DisplayName    = 'AI Memory'
+        CommandNames   = @('ai-memory')
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://github.com/akitaonrails/ai-memory'
+        GitHubRepo     = 'akitaonrails/ai-memory'
+        PackageName    = ''
+        InstallSupport = 'native-release'
+        ReleaseTag     = 'v1.1.0'
+        ServerUrl      = 'http://127.0.0.1:49374'
+        ProbePaths     = @('%LOCALAPPDATA%\PhaseZero\ai-tools\ai-memory\ai-memory.exe', '%LOCALAPPDATA%\PhaseZero\ai-tools\bin\ai-memory.exe', '%USERPROFILE%\.cargo\bin\ai-memory.exe', '%LOCALAPPDATA%\ai-memory\ai-memory.exe')
+        ReleaseAssets  = [ordered]@{
+            windows = [ordered]@{ Name = 'ai-memory-windows-x86_64.zip'; Sha256 = '7465f9958c0549d8733446bb4fb5538d18a2d7414c0a6069ce0561ba1f81ac95' }
+            x86_64  = [ordered]@{ Name = 'ai-memory-linux-x86_64.tar.gz'; Sha256 = '76c8195b273dbdecd028d1bee9b3474a297bbf74511487b2ca766e10d63b233e' }
+            aarch64 = [ordered]@{ Name = 'ai-memory-linux-aarch64.tar.gz'; Sha256 = 'f4f7b9d6e80582de111c3c5fcb4e568e2ae158c620dd469b0236bf79a2b77a0d' }
+        }
+        Notes          = 'Memoria de longo prazo Rust para handoff de contexto entre agentes (Claude Code, Codex, OpenCode). Servidor HTTP loopback 127.0.0.1:49374 + MCP + hooks de ciclo de vida. Windows usa zip nativo verificado por sha256; fallback cargo install na tag oficial. Beta: servidor opt-in.'
     }
     $catalog['ai-proxy-suite'] = [ordered]@{
         ToolName       = 'ai-proxy-suite'
@@ -14397,6 +15202,10 @@ function Normalize-BootstrapAiToolName {
         'mimo-proxy' { return 'mimo-ai-proxy' }
         'mimoai' { return 'mimo-ai-proxy' }
         'mimoaiproxy' { return 'mimo-ai-proxy' }
+        'antigravity-proxy' { return 'antigravity-openai-adapter' }
+        'antigravityproxy' { return 'antigravity-openai-adapter' }
+        'antigravity-claude-proxy' { return 'antigravity-openai-adapter' }
+        'antigravityclaudeproxy' { return 'antigravity-openai-adapter' }
         'ago-adapter' { return 'antigravity-openai-adapter' }
         'antigravity-adapter' { return 'antigravity-openai-adapter' }
         'antigravity-openai' { return 'antigravity-openai-adapter' }
@@ -14408,6 +15217,17 @@ function Normalize-BootstrapAiToolName {
         'local-proxies' { return 'ai-proxy-suite' }
         'aiusagebar' { return 'ai-usagebar' }
         'usagebar' { return 'ai-usagebar' }
+        'aimemory' { return 'ai-memory' }
+        'ai-mem' { return 'ai-memory' }
+        'memory' { return 'ai-memory' }
+        'printingpress' { return 'printing-press' }
+        'index-tts' { return 'indextts2' }
+        'index-tts2' { return 'indextts2' }
+        'index tts2' { return 'indextts2' }
+        'open-webui' { return 'openwebui' }
+        'open webui' { return 'openwebui' }
+        'lmstudio' { return 'lm-studio' }
+        'lm studio' { return 'lm-studio' }
         default { return $name }
     }
 }
@@ -14494,6 +15314,38 @@ function Get-BootstrapNpmCommandForAiTools {
     $fallback = Get-NpmCmd
     if ($fallback) { return $fallback }
     throw 'npm nao encontrado. Instale Node.js LTS e reexecute.'
+}
+
+function Get-BootstrapNpxCommandForAiTools {
+    param([AllowEmptyString()][string]$NpmCommand = '')
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($NpmCommand)) {
+        if ($NpmCommand -match '(?i)npm(\.cmd|\.exe|\.ps1)?$') {
+            $candidates.Add(($NpmCommand -replace '(?i)npm(\.cmd|\.exe|\.ps1)?$', 'npx$1')) | Out-Null
+        }
+        $npmDir = Split-Path -Path $NpmCommand -Parent
+        if (-not [string]::IsNullOrWhiteSpace($npmDir)) {
+            foreach ($name in @('npx.cmd','npx.exe','npx.ps1','npx')) {
+                $candidates.Add((Join-Path $npmDir $name)) | Out-Null
+            }
+        }
+    }
+    foreach ($candidate in @($candidates.ToArray())) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) {
+            return $candidate
+        }
+    }
+    foreach ($name in @('npx.cmd','npx.exe','npx')) {
+        try {
+            $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($cmd -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Source)) {
+                return [string]$cmd.Source
+            }
+        } catch {
+        }
+    }
+    return 'npx.cmd'
 }
 
 function Get-BootstrapAiNpmPrefix {
@@ -14924,6 +15776,10 @@ api_key_env = "ZAI_API_KEY"
 [openrouter]
 enabled = true
 api_key_env = "OPENROUTER_API_KEY"
+
+[deepseek]
+enabled = true
+api_key_env = "DEEPSEEK_API_KEY"
 '@
 }
 
@@ -15095,6 +15951,10 @@ function Test-BootstrapAiToolConfigured {
                 return ((Test-BootstrapAiUsagebarNativeConfigured) -or (Test-BootstrapAiUsagebarWslConfigured))
             }
             return (Test-BootstrapAiUsagebarWslConfigured)
+        }
+        'ai-memory' {
+            $doctor = New-BootstrapAiMemoryDoctorReport
+            return ([bool]$doctor['installed'] -and ([bool]$doctor['serverReachable'] -or [bool]$doctor['mcpConfigured']))
         }
         'aionui' {
             $doctor = Get-BootstrapAionUiDoctorReport
@@ -15634,6 +16494,7 @@ function Set-BootstrapOpenCodeAiProxyProviderConfig {
     param(
         [string]$InstallRoot = '',
         [string]$ConfigPath = '',
+        [string]$AuthPath = '',
         [string]$Label = 'OpenCode'
     )
 
@@ -15646,6 +16507,9 @@ function Set-BootstrapOpenCodeAiProxyProviderConfig {
         defaultProvider = 'kimiproxy'
         defaultModel = 'k2d6-thinking'
         providers = @($configured | ForEach-Object { ConvertTo-BootstrapAiProxySafeProviderRecord -Record $_ })
+        configUpdated = $false
+        authPath = if ([string]::IsNullOrWhiteSpace($AuthPath)) { '' } else { $AuthPath }
+        authUpdated = $false
     }
     if ([string]::IsNullOrWhiteSpace($path) -or $configured.Count -eq 0) {
         return $summary
@@ -15701,14 +16565,324 @@ function Set-BootstrapOpenCodeAiProxyProviderConfig {
     }
 
     $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 40 -Compress)
-    if ($before -ne $after) {
+    $configUpdated = ($before -ne $after)
+    if ($configUpdated) {
         if (Test-Path -LiteralPath $path) {
             Backup-BootstrapFile -Path $path | Out-Null
         }
         Write-BootstrapJsonFile -Path $path -Value $settings
         Write-Log ("{0} configurado com PhaseZero AI Proxy Suite: {1}" -f $Label, $path)
+    }
+    $authSummary = Set-BootstrapAiProxyProviderAuth -InstallRoot $InstallRoot -AuthPath $AuthPath -Label $Label
+    $summary.configUpdated = $configUpdated
+    $summary.authPath = [string]$authSummary.path
+    $summary.authUpdated = [bool]$authSummary.updated
+    $summary.updated = ($configUpdated -or [bool]$authSummary.updated)
+    return $summary
+}
+
+function Set-BootstrapAiProxyProviderAuth {
+    param(
+        [string]$InstallRoot = '',
+        [string]$AuthPath = '',
+        [string]$Label = 'OpenCode'
+    )
+
+    $records = @(Get-BootstrapAiProxyProviderRecord -InstallRoot $InstallRoot -EnsureEnv)
+    $configured = @($records | Where-Object { [bool]$_['configured'] })
+    $path = $AuthPath
+    if ([string]::IsNullOrWhiteSpace($path)) {
+        $path = Get-BootstrapOpenCodeAuthPath
+    }
+    $summary = [ordered]@{
+        path = $path
+        updated = $false
+        providers = @($configured | ForEach-Object {
+            [ordered]@{
+                id = [string]$_['id']
+                providerId = [string]$_['providerId']
+                name = [string]$_['name']
+            }
+        })
+    }
+    if ([string]::IsNullOrWhiteSpace($path) -or $configured.Count -eq 0) {
+        return $summary
+    }
+
+    $auth = @{}
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $auth = Read-BootstrapJsonFile -Path $path
+            if (-not ($auth -is [hashtable])) { $auth = @{} }
+        } catch {
+            $backupPath = Backup-BootstrapFile -Path $path
+            if ($backupPath) {
+                Write-Log ("{0} auth invalido; backup criado: {1}" -f $Label, $backupPath) 'WARN'
+            }
+            $auth = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $auth) | ConvertTo-Json -Depth 30 -Compress)
+    foreach ($record in @($configured)) {
+        $providerId = [string]$record['providerId']
+        $apiKey = [string]$record['apiKey']
+        if ([string]::IsNullOrWhiteSpace($providerId) -or [string]::IsNullOrWhiteSpace($apiKey)) { continue }
+        $auth[$providerId] = [ordered]@{
+            type = 'api'
+            key = $apiKey
+        }
+    }
+
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $auth) | ConvertTo-Json -Depth 30 -Compress)
+    if ($before -ne $after) {
+        if (Test-Path -LiteralPath $path) {
+            Backup-BootstrapFile -Path $path | Out-Null
+        }
+        Write-BootstrapJsonFile -Path $path -Value $auth
+        Write-Log ("{0} auth sincronizado com PhaseZero AI Proxy Suite: {1}" -f $Label, $path)
         $summary.updated = $true
     }
+
+    return $summary
+}
+
+function Get-BootstrapAiProxyRecordsFromResolvedEnv {
+    param([hashtable]$Env)
+
+    $records = New-Object System.Collections.Generic.List[object]
+    if (-not ($Env -is [hashtable])) { return @() }
+    $catalog = Get-BootstrapAiProxyCatalog
+    foreach ($name in @($catalog.Keys)) {
+        $apiKeyEnvName = Get-BootstrapAiProxyEnvVariableName -ToolName ([string]$name) -Suffix 'API_KEY'
+        $baseUrlEnvName = Get-BootstrapAiProxyEnvVariableName -ToolName ([string]$name) -Suffix 'BASE_URL'
+        $modelEnvName = Get-BootstrapAiProxyEnvVariableName -ToolName ([string]$name) -Suffix 'MODEL'
+        if (-not ($Env.ContainsKey($baseUrlEnvName) -and $Env.ContainsKey($modelEnvName))) { continue }
+        $entry = ConvertTo-BootstrapHashtable -InputObject $catalog[$name]
+        $records.Add([ordered]@{
+            id = [string]$name
+            providerId = Get-BootstrapAiProxyProviderId -ToolName ([string]$name)
+            name = [string]$entry['DisplayName']
+            baseUrl = [string]$Env[$baseUrlEnvName]
+            defaultModel = [string]$Env[$modelEnvName]
+            models = @($entry['Models'])
+            apiKeyEnvName = $apiKeyEnvName
+            apiKey = $(if ($Env.ContainsKey($apiKeyEnvName)) { [string]$Env[$apiKeyEnvName] } else { '' })
+            preferred = [bool]$entry['PreferredDefault']
+        }) | Out-Null
+    }
+    return @($records.ToArray())
+}
+
+function Ensure-BootstrapOpenClawCompatibleConfigFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][hashtable]$Target,
+        [Parameter(Mandatory = $true)][string]$Label
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $settings = @{}
+    if (Test-Path -LiteralPath $Path) {
+        try {
+            $settings = Read-BootstrapJsonFile -Path $Path
+            if (-not ($settings -is [hashtable])) { $settings = @{} }
+        } catch {
+            $backupPath = Backup-BootstrapFile -Path $Path
+            if ($backupPath) {
+                Write-Log ("{0} invalido; backup criado: {1}" -f $Label, $backupPath) 'WARN'
+            }
+            $settings = @{}
+        }
+    }
+
+    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 60 -Compress)
+
+    $mcpRoot = Ensure-BootstrapNamedMap -Parent $settings -Name 'mcp'
+    $mcpServers = Ensure-BootstrapNamedMap -Parent $mcpRoot -Name 'servers'
+    if ($settings.ContainsKey('mcpServers') -and ($settings['mcpServers'] -is [hashtable])) {
+        $legacyMcp = ConvertTo-BootstrapHashtable -InputObject $settings['mcpServers']
+        foreach ($serverName in @($legacyMcp.Keys)) {
+            $mcpServers[[string]$serverName] = $legacyMcp[$serverName]
+        }
+        $null = $settings.Remove('mcpServers')
+    }
+    if ($Target.ContainsKey('mcpServers') -and ($Target['mcpServers'] -is [hashtable])) {
+        $mcpChanges = @{}
+        $appliedMcpServers = Merge-BootstrapMcpServers -TargetMap $mcpChanges -SourceMap $Target['mcpServers'] -Format 'standard'
+        if ($appliedMcpServers -gt 0) {
+            foreach ($serverName in @($mcpChanges.Keys)) {
+                $mcpServers[[string]$serverName] = $mcpChanges[$serverName]
+            }
+        }
+    }
+    if ($mcpServers.Count -eq 0) {
+        Remove-BootstrapEmptyNamedMap -Parent $mcpRoot -Name 'servers' | Out-Null
+        Remove-BootstrapEmptyNamedMap -Parent $settings -Name 'mcp' | Out-Null
+    }
+
+    $envRoot = Ensure-BootstrapNamedMap -Parent $settings -Name 'env'
+    $envVars = Ensure-BootstrapNamedMap -Parent $envRoot -Name 'vars'
+    foreach ($name in @($envRoot.Keys)) {
+        if ($name -in @('vars','shellEnv')) { continue }
+        $value = $envRoot[$name]
+        if ($value -is [string] -and -not [string]::IsNullOrWhiteSpace($value)) {
+            $envVars[[string]$name] = [string]$value
+        }
+        $null = $envRoot.Remove($name)
+    }
+    if ($Target.ContainsKey('env') -and ($Target['env'] -is [hashtable])) {
+        Set-BootstrapNonEmptyStringValues -Target $envVars -Values $Target['env']
+    }
+    if ($envVars.Count -eq 0) {
+        Remove-BootstrapEmptyNamedMap -Parent $envRoot -Name 'vars' | Out-Null
+        Remove-BootstrapEmptyNamedMap -Parent $settings -Name 'env' | Out-Null
+    }
+
+    $records = @(Get-BootstrapAiProxyRecordsFromResolvedEnv -Env $envVars)
+    if ($records.Count -gt 0) {
+        $modelsRoot = Ensure-BootstrapNamedMap -Parent $settings -Name 'models'
+        $modelsRoot['mode'] = 'merge'
+        $providersMap = Ensure-BootstrapNamedMap -Parent $modelsRoot -Name 'providers'
+        foreach ($record in @($records)) {
+            $providerId = [string]$record['providerId']
+            if ([string]::IsNullOrWhiteSpace($providerId)) { continue }
+            $modelList = New-Object System.Collections.Generic.List[object]
+            foreach ($modelId in @($record['models'])) {
+                $modelText = [string]$modelId
+                if ([string]::IsNullOrWhiteSpace($modelText)) { continue }
+                $modelList.Add([ordered]@{
+                    id = $modelText
+                    name = $modelText
+                    api = 'openai-completions'
+                    baseUrl = [string]$record['baseUrl']
+                    input = @('text')
+                }) | Out-Null
+            }
+            $providersMap[$providerId] = [ordered]@{
+                baseUrl = [string]$record['baseUrl']
+                api = 'openai-completions'
+                apiKey = ('${' + [string]$record['apiKeyEnvName'] + '}')
+                models = @($modelList.ToArray())
+            }
+        }
+
+        $default = Get-BootstrapAiProxyDefaultRecord -Records $records
+        if ($null -ne $default) {
+            $agentsRoot = Ensure-BootstrapNamedMap -Parent $settings -Name 'agents'
+            $defaults = Ensure-BootstrapNamedMap -Parent $agentsRoot -Name 'defaults'
+            $defaultModel = ('{0}/{1}' -f [string]$default['providerId'], [string]$default['defaultModel'])
+            $defaults['model'] = $defaultModel
+            $defaultModels = Ensure-BootstrapNamedMap -Parent $defaults -Name 'models'
+            foreach ($record in @($records)) {
+                foreach ($modelId in @($record['models'])) {
+                    $fullModel = ('{0}/{1}' -f [string]$record['providerId'], [string]$modelId)
+                    $defaultModels[$fullModel] = [ordered]@{
+                        alias = ('PhaseZero {0}' -f [string]$record['name'])
+                    }
+                }
+            }
+        }
+    }
+
+    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $settings) | ConvertTo-Json -Depth 60 -Compress)
+    if ($before -eq $after) {
+        return $false
+    }
+    if (Test-Path -LiteralPath $Path) {
+        Backup-BootstrapFile -Path $Path | Out-Null
+    }
+    Write-BootstrapJsonFile -Path $Path -Value $settings
+    Write-Log ("{0} configurado com PhaseZero AI Proxy Suite: {1}" -f $Label, $Path)
+    return $true
+}
+
+function Convert-BootstrapHermesYamlValue {
+    param([AllowNull()][string]$Value)
+
+    return (Convert-BootstrapContinueScalarToYaml -Value $Value)
+}
+
+function New-BootstrapHermesPhaseZeroYamlContent {
+    param([Parameter(Mandatory = $true)][hashtable]$Env)
+
+    $records = @(Get-BootstrapAiProxyRecordsFromResolvedEnv -Env $Env)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# BEGIN PHASEZERO AI PROXY SUITE') | Out-Null
+    $lines.Add('# Managed by PhaseZero. Secrets stay in ~/.hermes/.env.') | Out-Null
+    if ($records.Count -gt 0) {
+        $default = Get-BootstrapAiProxyDefaultRecord -Records $records
+        if ($null -ne $default) {
+            $lines.Add('model:') | Out-Null
+            $lines.Add(('  provider: {0}' -f (Convert-BootstrapHermesYamlValue -Value ('custom:' + [string]$default['providerId'])))) | Out-Null
+            $lines.Add(('  default: {0}' -f (Convert-BootstrapHermesYamlValue -Value ([string]$default['defaultModel'])))) | Out-Null
+        }
+        $lines.Add('custom_providers:') | Out-Null
+        foreach ($record in @($records)) {
+            $lines.Add(('  - name: {0}' -f (Convert-BootstrapHermesYamlValue -Value ([string]$record['providerId'])))) | Out-Null
+            $lines.Add(('    base_url: {0}' -f (Convert-BootstrapHermesYamlValue -Value ([string]$record['baseUrl'])))) | Out-Null
+            $lines.Add(('    key_env: {0}' -f (Convert-BootstrapHermesYamlValue -Value ([string]$record['apiKeyEnvName'])))) | Out-Null
+            $lines.Add('    api_mode: chat_completions') | Out-Null
+            $lines.Add(('    model: {0}' -f (Convert-BootstrapHermesYamlValue -Value ([string]$record['defaultModel'])))) | Out-Null
+        }
+    }
+    $lines.Add('# END PHASEZERO AI PROXY SUITE') | Out-Null
+    return ([string]::Join([Environment]::NewLine, @($lines.ToArray())) + [Environment]::NewLine)
+}
+
+function Merge-BootstrapHermesPhaseZeroBlock {
+    param(
+        [string]$Current,
+        [string]$Block
+    )
+
+    $begin = '# BEGIN PHASEZERO AI PROXY SUITE'
+    $end = '# END PHASEZERO AI PROXY SUITE'
+    if ([string]::IsNullOrWhiteSpace($Current)) { return $Block }
+    $pattern = '(?s)# BEGIN PHASEZERO AI PROXY SUITE.*?# END PHASEZERO AI PROXY SUITE\s*'
+    if ($Current -match [regex]::Escape($begin)) {
+        return ([regex]::Replace($Current, $pattern, $Block))
+    }
+    return $null
+}
+
+function Ensure-BootstrapHermesHomeProxyConfig {
+    param([Parameter(Mandatory = $true)][hashtable]$Target)
+
+    $summary = [ordered]@{
+        envPath = Get-BootstrapHermesEnvPath
+        configPath = Get-BootstrapHermesYamlConfigPath
+        sidecarPath = Get-BootstrapHermesPhaseZeroConfigPath
+        envUpdated = $false
+        configUpdated = $false
+        sidecarUpdated = $false
+    }
+    if (-not ($Target -is [hashtable]) -or -not ($Target.ContainsKey('env') -and ($Target['env'] -is [hashtable]))) {
+        return $summary
+    }
+
+    $envValues = @{}
+    Set-BootstrapNonEmptyStringValues -Target $envValues -Values $Target['env']
+    if ($envValues.Count -eq 0) { return $summary }
+
+    $envLines = New-Object System.Collections.Generic.List[string]
+    $envLines.Add('# Managed by PhaseZero. Do not commit this file.') | Out-Null
+    foreach ($name in ($envValues.Keys | Sort-Object)) {
+        $envLines.Add((ConvertTo-BootstrapEnvFileLine -Name ([string]$name) -Value ([string]$envValues[$name]))) | Out-Null
+    }
+    $envContent = [string]::Join([Environment]::NewLine, @($envLines.ToArray())) + [Environment]::NewLine
+    $summary.envUpdated = Ensure-BootstrapTextFile -Path $summary.envPath -Content $envContent -Label 'Hermes .env'
+
+    $block = New-BootstrapHermesPhaseZeroYamlContent -Env $envValues
+    $configPath = [string]$summary.configPath
+    $current = if (-not [string]::IsNullOrWhiteSpace($configPath) -and (Test-Path -LiteralPath $configPath)) { [System.IO.File]::ReadAllText($configPath) } else { '' }
+    $merged = Merge-BootstrapHermesPhaseZeroBlock -Current $current -Block $block
+    if ($null -ne $merged) {
+        $summary.configUpdated = Ensure-BootstrapTextFile -Path $configPath -Content $merged -Label 'Hermes config.yaml'
+    } else {
+        $summary.sidecarUpdated = Ensure-BootstrapTextFile -Path $summary.sidecarPath -Content $block -Label 'Hermes PhaseZero sidecar'
+    }
+
     return $summary
 }
 
@@ -15760,7 +16934,7 @@ function Set-BootstrapAiProxyIdeDefault {
     $targetUpdates.continueUpdated = ([bool]$continueSummary.envUpdated -or [bool]$continueSummary.configUpdated)
     $openCodeSummary = Set-BootstrapOpenCodeAiProxyProviderConfig -InstallRoot $root
     $targetUpdates.openCodeUpdated = [bool]$openCodeSummary.updated
-    $kiloSummary = Set-BootstrapOpenCodeAiProxyProviderConfig -InstallRoot $root -ConfigPath (Get-BootstrapKiloConfigPath) -Label 'Kilo CLI'
+    $kiloSummary = Set-BootstrapOpenCodeAiProxyProviderConfig -InstallRoot $root -ConfigPath (Get-BootstrapKiloConfigPath) -AuthPath (Get-BootstrapKiloAuthPath) -Label 'Kilo CLI'
     $targetUpdates.kiloUpdated = [bool]$kiloSummary.updated
     $default = Get-BootstrapAiProxyDefaultRecord -Records $records
 
@@ -15887,6 +17061,267 @@ function Invoke-BootstrapAiProxyInstallCommand {
     return $result
 }
 
+function Test-BootstrapAiProxyManagedSourcePath {
+    param([Parameter(Mandatory = $true)][string]$SourceRoot)
+
+    $fullSource = [System.IO.Path]::GetFullPath($SourceRoot)
+    $parent = [System.IO.Path]::GetFullPath((Split-Path -Path $fullSource -Parent))
+    if ([string]::IsNullOrWhiteSpace($parent) -or (Split-Path -Path $parent -Leaf) -ne 'sources') {
+        throw "Caminho de proxy gerenciado recusado: $SourceRoot"
+    }
+    $prefix = $parent.TrimEnd('\','/') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $fullSource.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Caminho de proxy gerenciado fora de sources: $SourceRoot"
+    }
+    return $true
+}
+
+function Restore-BootstrapAiProxyManagedLocalState {
+    param(
+        [Parameter(Mandatory = $true)][string]$BackupPath,
+        [Parameter(Mandatory = $true)][string]$SourceRoot
+    )
+
+    $restored = New-Object System.Collections.Generic.List[string]
+    foreach ($name in @('.env','.env.local','user-data','user_data','browser-data','browser_data','playwright-data','profile','profiles','session','sessions','.session','.sessions','storageState.json','cookies.json')) {
+        $from = Join-Path $BackupPath $name
+        if (-not (Test-Path -LiteralPath $from)) { continue }
+        $to = Join-Path $SourceRoot $name
+        try {
+            Copy-Item -LiteralPath $from -Destination $to -Recurse -Force -ErrorAction Stop
+            $restored.Add($name) | Out-Null
+        } catch {
+            Write-Log ("Repo gerenciado: nao foi possivel restaurar estado local {0}: {1}" -f $name, $_.Exception.Message) 'WARN'
+        }
+    }
+    return @($restored.ToArray())
+}
+
+function Repair-BootstrapAiProxyManagedRepository {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [Parameter(Mandatory = $true)][string]$GitExe
+    )
+
+    [void](Test-BootstrapAiProxyManagedSourcePath -SourceRoot $SourceRoot)
+    $parent = Split-Path -Path $SourceRoot -Parent
+    $leaf = Split-Path -Path $SourceRoot -Leaf
+    $backupRoot = Join-Path $parent '.phasezero-repo-backups'
+    [void][System.IO.Directory]::CreateDirectory($backupRoot)
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $backupPath = Join-Path $backupRoot ("{0}-{1}" -f $leaf, $stamp)
+    if (Test-Path -LiteralPath $backupPath) {
+        $backupPath = Join-Path $backupRoot ("{0}-{1}-{2}" -f $leaf, $stamp, ([Guid]::NewGuid().ToString('N').Substring(0, 8)))
+    }
+
+    Move-Item -LiteralPath $SourceRoot -Destination $backupPath -Force -ErrorAction Stop
+    try {
+        Invoke-BootstrapAiProxyInstallCommand -Exe $GitExe -Arguments @('clone','--depth','1',[string]$CatalogEntry['RepoUrl'],$SourceRoot) -WorkingDirectory $parent -TimeoutMs 600000 -Label 'git clone repair' | Out-Null
+    } catch {
+        if ((-not (Test-Path -LiteralPath $SourceRoot)) -and (Test-Path -LiteralPath $backupPath)) {
+            try { Move-Item -LiteralPath $backupPath -Destination $SourceRoot -Force -ErrorAction SilentlyContinue } catch { }
+        }
+        throw
+    }
+
+    $restored = @(Restore-BootstrapAiProxyManagedLocalState -BackupPath $backupPath -SourceRoot $SourceRoot)
+    Write-Log ("Repo gerenciado reparado por reclone limpo: {0}; backup: {1}" -f $SourceRoot, $backupPath) 'WARN'
+    return [ordered]@{
+        repaired = $true
+        backupPath = $backupPath
+        restoredLocalState = @($restored)
+        envRestored = (@($restored) -contains '.env')
+    }
+}
+
+function Ensure-BootstrapAiProxyPlaywrightRuntime {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [switch]$DryRun
+    )
+
+    if (-not ([bool]$CatalogEntry['Playwright'])) {
+        return [ordered]@{ status = 'skipped'; changed = $false }
+    }
+    $playwrightArgs = @('playwright','install','chromium','chromium-headless-shell')
+    if ($DryRun) {
+        return [ordered]@{ status = 'planned'; changed = $false; command = 'npx playwright install chromium chromium-headless-shell' }
+    }
+    if (-not (Test-Path -LiteralPath $SourceRoot)) {
+        throw "sourceRoot ausente para Playwright: $SourceRoot"
+    }
+
+    $npm = Get-BootstrapNpmCommandForAiTools
+    $npx = Get-BootstrapNpxCommandForAiTools -NpmCommand $npm
+    Clear-BootstrapPlaywrightStaleLock
+    try {
+        $direct = Ensure-BootstrapAiProxyPlaywrightRuntimeDirect -Npx $npx -SourceRoot $SourceRoot -BrowserArgs @('chromium','chromium-headless-shell')
+        if ([string]$direct['status'] -eq 'ready') {
+            return $direct
+        }
+    } catch {
+        Write-Log ("Playwright direto indisponivel; usando fallback npx install. {0}" -f (Get-BootstrapCleanNativeText -Text $_.Exception.Message -MaxLength 300)) 'WARN'
+    }
+
+    $lastMessage = ''
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        Clear-BootstrapPlaywrightStaleLock
+        try {
+            Invoke-BootstrapAiProxyInstallCommand -Exe $npx -Arguments $playwrightArgs -WorkingDirectory $SourceRoot -TimeoutMs 300000 -Label 'playwright install chromium chromium-headless-shell' | Out-Null
+            return [ordered]@{
+                status = 'ready'
+                changed = $true
+                attempts = $attempt
+                command = ('{0} playwright install chromium chromium-headless-shell' -f $npx)
+            }
+        } catch {
+            $lastMessage = [string]$_.Exception.Message
+            if ($attempt -lt 3 -and $lastMessage -match '(?i)__dirlock|lockfile|ENOENT|EEXIST|EPERM|EBUSY') {
+                Write-Log ("Playwright install chromium/headless-shell falhou por lock/cache transitorio (tentativa {0}/3). Retry." -f $attempt) 'WARN'
+                Start-Sleep -Milliseconds (750 * $attempt)
+                continue
+            }
+            throw
+        }
+    }
+    throw $lastMessage
+}
+
+function Get-BootstrapPlaywrightInstallPlan {
+    param(
+        [Parameter(Mandatory = $true)][string]$Npx,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [string[]]$BrowserArgs = @('chromium','chromium-headless-shell')
+    )
+
+    $args = @('playwright','install') + @($BrowserArgs) + @('--dry-run')
+    $result = Invoke-BootstrapAiNativeCommand -Exe $Npx -Args $args -WorkingDirectory $SourceRoot -TimeoutMs 60000
+    if ([int]$result['exitCode'] -ne 0) {
+        $detail = Get-BootstrapCleanNativeText -Text (([string]$result['stderr']) + ' ' + ([string]$result['stdout'])) -MaxLength 800
+        throw ("playwright install --dry-run falhou (exit={0}). {1}" -f [int]$result['exitCode'], $detail)
+    }
+
+    $records = New-Object System.Collections.Generic.List[object]
+    $currentName = ''
+    $currentLocation = ''
+    $seen = @{}
+    foreach ($rawLine in (([string]$result['stdout']) -replace "`r", "`n" -split "`n")) {
+        $line = ([string]$rawLine).Trim()
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        if ($line -match '^(?<name>.+?)\s+\(playwright\s+.+?\)$') {
+            $currentName = $matches['name'].Trim()
+            $currentLocation = ''
+            continue
+        }
+        if ($line -match '^Install location:\s+(?<path>.+)$') {
+            $currentLocation = $matches['path'].Trim()
+            continue
+        }
+        if ($line -match '^Download url:\s+(?<url>https?://.+)$' -and -not [string]::IsNullOrWhiteSpace($currentLocation)) {
+            $url = $matches['url'].Trim()
+            $key = ([System.IO.Path]::GetFullPath($currentLocation)).ToLowerInvariant()
+            if (-not $seen.ContainsKey($key)) {
+                $seen[$key] = $true
+                $records.Add([ordered]@{
+                    name = $currentName
+                    installLocation = $currentLocation
+                    downloadUrl = $url
+                }) | Out-Null
+            }
+        }
+    }
+    return @($records.ToArray())
+}
+
+function Invoke-BootstrapCurlDownload {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$OutFile,
+        [string]$Label = 'download'
+    )
+
+    $parent = Split-Path -Path $OutFile -Parent
+    if ($parent) { [void][System.IO.Directory]::CreateDirectory($parent) }
+    $curl = Resolve-CommandPath -Name 'curl.exe'
+    if (-not $curl) {
+        $candidate = Join-Path $env:SystemRoot 'System32\curl.exe'
+        if (Test-Path -LiteralPath $candidate) { $curl = $candidate }
+    }
+    if ($curl) {
+        $args = @('-L','--fail','--retry','3','--connect-timeout','30','--max-time','900','-o',$OutFile,$Url)
+        $result = Invoke-BootstrapAiNativeCommand -Exe $curl -Args $args -TimeoutMs 930000
+        if ([int]$result['exitCode'] -eq 0 -and (Test-Path -LiteralPath $OutFile)) { return }
+        $detail = Get-BootstrapCleanNativeText -Text (([string]$result['stderr']) + ' ' + ([string]$result['stdout'])) -MaxLength 800
+        throw ("{0} falhou via curl (exit={1}). {2}" -f $Label, [int]$result['exitCode'], $detail)
+    }
+
+    Invoke-WebRequestWithRetry -Uri $Url -OutFile $OutFile -OperationName $Label
+}
+
+function Expand-BootstrapZipArchiveSafe {
+    param(
+        [Parameter(Mandatory = $true)][string]$ZipPath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $parent = Split-Path -Path $DestinationPath -Parent
+    if ($parent) { [void][System.IO.Directory]::CreateDirectory($parent) }
+    $tmp = $DestinationPath + '.tmp-' + ([Guid]::NewGuid().ToString('N').Substring(0, 8))
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    [void][System.IO.Directory]::CreateDirectory($tmp)
+    try {
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($ZipPath, $tmp)
+        if (Test-Path -LiteralPath $DestinationPath) {
+            Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        } else {
+            Move-Item -LiteralPath $tmp -Destination $DestinationPath -Force -ErrorAction Stop
+        }
+    } catch {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+        throw
+    }
+}
+
+function Ensure-BootstrapAiProxyPlaywrightRuntimeDirect {
+    param(
+        [Parameter(Mandatory = $true)][string]$Npx,
+        [Parameter(Mandatory = $true)][string]$SourceRoot,
+        [string[]]$BrowserArgs = @('chromium','chromium-headless-shell')
+    )
+
+    $plan = @(Get-BootstrapPlaywrightInstallPlan -Npx $Npx -SourceRoot $SourceRoot -BrowserArgs $BrowserArgs)
+    if ($plan.Count -eq 0) {
+        return [ordered]@{ status = 'unavailable'; changed = $false; reason = 'empty-plan' }
+    }
+
+    $missing = @($plan | Where-Object { -not (Test-Path -LiteralPath ([string]$_['installLocation'])) })
+    if ($missing.Count -eq 0) {
+        return [ordered]@{ status = 'ready'; changed = $false; direct = $true; installed = @(); planned = $plan.Count }
+    }
+
+    $downloadRoot = Join-Path (Get-BootstrapDataRoot) 'downloads\playwright'
+    [void][System.IO.Directory]::CreateDirectory($downloadRoot)
+    $installed = New-Object System.Collections.Generic.List[string]
+    foreach ($item in @($missing)) {
+        $url = [string]$item['downloadUrl']
+        $location = [string]$item['installLocation']
+        if ([string]::IsNullOrWhiteSpace($url) -or [string]::IsNullOrWhiteSpace($location)) { continue }
+        $zipName = [System.IO.Path]::GetFileName(([Uri]$url).AbsolutePath)
+        if ([string]::IsNullOrWhiteSpace($zipName)) { $zipName = ([Guid]::NewGuid().ToString('N') + '.zip') }
+        $zipPath = Join-Path $downloadRoot $zipName
+        Write-Log ("Playwright direto: baixando {0} de {1}" -f [string]$item['name'], $url)
+        Invoke-BootstrapCurlDownload -Url $url -OutFile $zipPath -Label ("Playwright {0}" -f [string]$item['name'])
+        Write-Log ("Playwright direto: extraindo {0} para {1}" -f $zipName, $location)
+        Expand-BootstrapZipArchiveSafe -ZipPath $zipPath -DestinationPath $location
+        $installed.Add($location) | Out-Null
+    }
+
+    return [ordered]@{ status = 'ready'; changed = ($installed.Count -gt 0); direct = $true; installed = @($installed.ToArray()); planned = $plan.Count }
+}
+
 function Sync-BootstrapAiProxyRepository {
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
@@ -15896,8 +17331,18 @@ function Sync-BootstrapAiProxyRepository {
     $git = Resolve-CommandPath -Name 'git'
     if (-not $git) { throw 'git nao encontrado para clonar proxy local.' }
     if (Test-Path -LiteralPath (Join-Path $SourceRoot '.git')) {
-        Invoke-BootstrapAiProxyInstallCommand -Exe $git -Arguments @('fetch','--depth','1','origin') -WorkingDirectory $SourceRoot -TimeoutMs 300000 -Label 'git fetch' | Out-Null
-        Invoke-BootstrapAiProxyInstallCommand -Exe $git -Arguments @('pull','--ff-only') -WorkingDirectory $SourceRoot -TimeoutMs 300000 -Label 'git pull' | Out-Null
+        try {
+            Invoke-BootstrapAiProxyInstallCommand -Exe $git -Arguments @('fetch','--depth','1','origin') -WorkingDirectory $SourceRoot -TimeoutMs 300000 -Label 'git fetch' | Out-Null
+            Invoke-BootstrapAiProxyInstallCommand -Exe $git -Arguments @('pull','--ff-only') -WorkingDirectory $SourceRoot -TimeoutMs 300000 -Label 'git pull' | Out-Null
+        } catch {
+            $detail = [string]$_.Exception.Message
+            if ($detail -match '(?i)diverg|fast-forward|would be overwritten|local changes|not possible|untracked|cannot lock ref') {
+                Write-Log ("Repo gerenciado divergente/sujo; reparando por reclone com backup. {0}" -f (Get-BootstrapCleanNativeText -Text $detail -MaxLength 300)) 'WARN'
+                Repair-BootstrapAiProxyManagedRepository -CatalogEntry $CatalogEntry -SourceRoot $SourceRoot -GitExe $git | Out-Null
+            } else {
+                throw
+            }
+        }
         return
     }
     if (Test-Path -LiteralPath $SourceRoot) {
@@ -15945,14 +17390,7 @@ function Install-BootstrapAiProxyManagedTool {
         }
         Invoke-BootstrapAiProxyInstallCommand -Exe $npm -Arguments $npmArgs -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'npm install' | Out-Null
         if ([bool]$CatalogEntry['Playwright']) {
-            $npx = $npm -replace 'npm(\.cmd|\.exe)?$', 'npx$1'
-            if (-not (Test-Path -LiteralPath $npx)) { $npx = 'npx.cmd' }
-            # Remove lock orfao antes de instalar. Se um install anterior foi morto no meio do
-            # download (ex.: nosso proprio timeout em conexao lenta), o __dirlock fica e o
-            # playwright recusa todo install futuro com "active lockfile found" (exit=1) - uma
-            # falha em cascata. Como instalamos um proxy por vez, e seguro limpar o lock orfao.
-            Clear-BootstrapPlaywrightStaleLock
-            Invoke-BootstrapAiProxyInstallCommand -Exe $npx -Arguments @('playwright','install','chromium') -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'playwright install chromium' | Out-Null
+            Ensure-BootstrapAiProxyPlaywrightRuntime -CatalogEntry $CatalogEntry -SourceRoot $sourceRoot | Out-Null
         }
         if ($runtime -eq 'tauri') {
             Invoke-BootstrapAiProxyInstallCommand -Exe $npm -Arguments @('run','build') -WorkingDirectory $sourceRoot -TimeoutMs 900000 -Label 'npm run build' | Out-Null
@@ -16656,7 +18094,7 @@ function Start-BootstrapAiProxyTool {
         [Parameter(Mandatory = $true)][string]$ToolName,
         [string]$InstallRoot = '',
         [switch]$DryRun,
-        [int]$TimeoutMs = 30000
+        [int]$TimeoutMs = 60000
     )
     $name = Normalize-BootstrapAiToolName -ToolName $ToolName
     $catalog = Get-BootstrapAiProxyCatalog
@@ -16705,8 +18143,14 @@ function Start-BootstrapAiProxyTool {
             durationMs = [long]$doctor['runtimeProbeDurationMs']
         }
         $webValidation = Invoke-BootstrapAiProxyWebValidation -ToolName $name -CatalogEntry $entry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath $envPath -RuntimeProbe $doctorProbe
-        $status = if (-not [bool]$webValidation['required'] -or [string]$webValidation['status'] -eq 'validated') { 'running' } elseif ([string]$webValidation['status'] -eq 'login-required' -or [string]$webValidation['status'] -eq 'missing-credentials') { 'login-required' } elseif ([string]$webValidation['status'] -eq 'auth-failed') { 'auth-failed' } else { 'error' }
-        $message = if ($status -eq 'running') { ("{0} ja responde em {1}." -f $name, [string]$doctor['modelsUrl']) } else { ("{0} responde /v1/models, mas validacao web esta {1}." -f $name, [string]$webValidation['status']) }
+        $status = if ([string]$webValidation['status'] -eq 'auth-failed') { 'auth-failed' } else { 'running' }
+        $message = if ($status -eq 'running' -and (-not [bool]$webValidation['required'] -or [string]$webValidation['status'] -eq 'validated')) {
+            ("{0} ja responde em {1}." -f $name, [string]$doctor['modelsUrl'])
+        } elseif ($status -eq 'running') {
+            ("{0} responde /v1/models; validacao web esta {1}." -f $name, [string]$webValidation['status'])
+        } else {
+            ("{0} responde /v1/models, mas validacao web esta {1}." -f $name, [string]$webValidation['status'])
+        }
         $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status $status -InstallRoot $root -Message $message -Docs ([string]$entry['DocsUrl'])
         $result['runtimeProbe'] = [ordered]@{
             listening = [bool]$doctor['listening']
@@ -16747,8 +18191,15 @@ function Start-BootstrapAiProxyTool {
     }
 
     if ([bool]$doctor['listening']) {
-        $status = if ([string]$doctor['modelsStatus'] -eq 'rejected') { 'auth-failed' } else { 'error' }
-        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status $status -InstallRoot $root -Message ("{0} ja esta ouvindo, mas /v1/models esta {1} ({2}); nao iniciei processo duplicado." -f $name, [string]$doctor['modelsStatus'], [int]$doctor['modelsStatusCode']) -Docs ([string]$entry['DocsUrl'])
+        $doctorWebValidation = if (Test-BootstrapMapContainsKey -Map $doctor -Key 'webValidation') { $doctor['webValidation'] } else { $null }
+        $browserSessionPending = (($doctorWebValidation -is [System.Collections.IDictionary]) -and [bool]$doctorWebValidation['required'] -and [string]$doctorWebValidation['kind'] -eq 'browser-session' -and [string]$doctor['healthStatus'] -eq 'ok')
+        $status = if ($browserSessionPending) { 'running' } elseif ([string]$doctor['modelsStatus'] -eq 'rejected') { 'auth-failed' } else { 'error' }
+        $message = if ($browserSessionPending) {
+            ("{0} ja esta ouvindo e /health esta ok; /v1/models esta {1}. Validacao web/login pode ser necessaria." -f $name, [string]$doctor['modelsStatus'])
+        } else {
+            ("{0} ja esta ouvindo, mas /v1/models esta {1} ({2}); nao iniciei processo duplicado." -f $name, [string]$doctor['modelsStatus'], [int]$doctor['modelsStatusCode'])
+        }
+        $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status $status -InstallRoot $root -Message $message -Docs ([string]$entry['DocsUrl'])
         $result['runtimeProbe'] = [ordered]@{
             listening = [bool]$doctor['listening']
             pid = @($doctor['pid'])
@@ -16767,6 +18218,18 @@ function Start-BootstrapAiProxyTool {
         if ([string]::IsNullOrWhiteSpace($detail)) { $detail = 'runtime de start indisponivel' }
         $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'blocked' -InstallRoot $root -Message ("Runtime de start indisponivel para {0}: {1}." -f $name, $detail) -Docs ([string]$entry['DocsUrl'])
         return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+    }
+
+    $playwrightRuntime = [ordered]@{ status = 'skipped'; changed = $false }
+    if ([bool]$entry['Playwright']) {
+        try {
+            $playwrightRuntime = Ensure-BootstrapAiProxyPlaywrightRuntime -CatalogEntry $entry -SourceRoot $sourceRoot
+        } catch {
+            $detail = Get-BootstrapCleanNativeText -Text $_.Exception.Message -MaxLength 500
+            $result = New-BootstrapAiToolResult -ToolName $name -Action 'start' -Status 'blocked' -InstallRoot $root -Message ("Playwright runtime indisponivel para {0}: {1}. Rode install/start novamente apos liberar rede/cache." -f $name, $detail) -Docs ([string]$entry['DocsUrl'])
+            $result['playwrightRuntime'] = [ordered]@{ status = 'error'; message = $detail }
+            return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
+        }
     }
 
     $logRoot = Get-BootstrapAiProxyLogRoot -InstallRoot $root
@@ -16817,9 +18280,11 @@ function Start-BootstrapAiProxyTool {
     $wait = Wait-BootstrapAiProxyRuntime -ToolName $name -CatalogEntry $entry -SourceRoot $sourceRoot -EnvPath $envPath -TimeoutMs $TimeoutMs
     $webValidation = Invoke-BootstrapAiProxyWebValidation -ToolName $name -CatalogEntry $entry -InstallRoot $root -SourceRoot $sourceRoot -EnvPath $envPath -RuntimeProbe $wait
     $webValidationOk = (-not [bool]$webValidation['required'] -or [string]$webValidation['status'] -eq 'validated')
-    $status = if ([bool]$wait['runtimeAvailable'] -and $webValidationOk) { 'started' } elseif ([string]$webValidation['status'] -eq 'login-required' -or [string]$webValidation['status'] -eq 'missing-credentials') { 'login-required' } elseif ([string]$wait['modelsStatus'] -eq 'rejected' -or [string]$webValidation['status'] -eq 'auth-failed') { 'auth-failed' } else { 'error' }
-    $message = if ($status -eq 'started') {
+    $status = if ([bool]$wait['runtimeAvailable']) { 'started' } elseif ([string]$webValidation['status'] -eq 'login-required' -or [string]$webValidation['status'] -eq 'missing-credentials') { 'login-required' } elseif ([string]$wait['modelsStatus'] -eq 'rejected' -or [string]$webValidation['status'] -eq 'auth-failed') { 'auth-failed' } else { 'error' }
+    $message = if ($status -eq 'started' -and $webValidationOk) {
         ("{0} responde em {1}." -f $name, [string]$wait['modelsUrl'])
+    } elseif ($status -eq 'started') {
+        ("{0} responde em {1}; validacao web esta {2}." -f $name, [string]$wait['modelsUrl'], [string]$webValidation['status'])
     } elseif ($status -eq 'auth-failed') {
         ("{0} iniciou, mas /v1/models rejeitou autenticacao local redigida." -f $name)
     } elseif ($status -eq 'login-required') {
@@ -16849,6 +18314,7 @@ function Start-BootstrapAiProxyTool {
     $result['logPath'] = $stdoutPath
     $result['errorLogPath'] = $stderrPath
     $result['statePath'] = $statePath
+    $result['playwrightRuntime'] = $playwrightRuntime
     $result['runtimeProbe'] = [ordered]@{
         listening = [bool]$wait['listening']
         pid = @($wait['pid'])
@@ -16863,11 +18329,47 @@ function Start-BootstrapAiProxyTool {
     return (Add-BootstrapAiProxyResultField -Result $result -CatalogEntry $entry -InstallRoot $root -EnvPath $envPath -ManifestPath (Get-BootstrapAiProxyManifestPath -InstallRoot $root))
 }
 
+function Get-BootstrapAiProxySuiteStartClassification {
+    param(
+        [AllowNull()][object[]]$Items = @(),
+        [switch]$DryRun
+    )
+
+    $itemsList = @($Items)
+    $ok = @($itemsList | Where-Object { [string]$_['status'] -in @('started','running','planned') })
+    $bad = @($itemsList | Where-Object { [string]$_['status'] -notin @('started','running','planned') })
+    $default = @($itemsList | Where-Object { [string]$_['tool'] -eq 'kimiproxy' } | Select-Object -First 1)
+    $defaultStatus = if ($default.Count -gt 0) { [string]$default[0]['status'] } else { 'missing' }
+    $defaultOk = ($defaultStatus -in @('started','running','planned'))
+    $status = if ($DryRun) {
+        'planned'
+    } elseif ($itemsList.Count -eq 0) {
+        'missing'
+    } elseif ($defaultOk -and $bad.Count -eq 0) {
+        'started'
+    } elseif ($defaultOk) {
+        'degraded'
+    } elseif ($ok.Count -gt 0) {
+        'degraded'
+    } else {
+        'error'
+    }
+
+    return [ordered]@{
+        status = $status
+        okCount = [int]$ok.Count
+        degradedCount = [int]$bad.Count
+        totalCount = [int]$itemsList.Count
+        defaultProvider = 'kimiproxy'
+        defaultProviderStatus = $defaultStatus
+    }
+}
+
 function Start-BootstrapAiProxySuite {
     param(
         [string]$InstallRoot = '',
         [switch]$DryRun,
-        [int]$TimeoutMs = 30000
+        [int]$TimeoutMs = 60000
     )
     $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
     $catalog = Get-BootstrapAiProxyCatalog
@@ -16889,16 +18391,20 @@ function Start-BootstrapAiProxySuite {
         }) | Out-Null
     }
     $items = @($results.ToArray())
-    $ok = @($items | Where-Object { [string]$_['status'] -in @('started','running','planned') })
-    $bad = @($items | Where-Object { [string]$_['status'] -in @('blocked','error','auth-failed','unhealthy','login-required') })
-    $status = if ($DryRun) { 'planned' } elseif ($bad.Count -eq 0 -and $ok.Count -gt 0) { 'started' } elseif ($bad.Count -gt 0) { 'error' } else { 'missing' }
+    $classification = Get-BootstrapAiProxySuiteStartClassification -Items $items -DryRun:$DryRun
+    $status = [string]$classification['status']
     $message = if ($DryRun) {
         ("Start AI proxy suite planejado: {0} provider(s) HTTP." -f $items.Count)
     } else {
-        ("Start AI proxy suite: {0}/{1} provider(s) OK." -f $ok.Count, $items.Count)
+        ("Start AI proxy suite: {0}/{1} provider(s) OK; default {2}={3}." -f [int]$classification['okCount'], [int]$classification['totalCount'], [string]$classification['defaultProvider'], [string]$classification['defaultProviderStatus'])
     }
     $result = New-BootstrapAiToolResult -ToolName 'ai-proxy-suite' -Action 'start' -Status $status -InstallRoot $root -Message $message -Docs 'https://github.com/pedrofariasx/kimiproxy'
     $result['startResults'] = @($items)
+    $result['okCount'] = [int]$classification['okCount']
+    $result['degradedCount'] = [int]$classification['degradedCount']
+    $result['totalCount'] = [int]$classification['totalCount']
+    $result['defaultProvider'] = [string]$classification['defaultProvider']
+    $result['defaultProviderStatus'] = [string]$classification['defaultProviderStatus']
     if (-not $DryRun) {
         $result['doctor'] = New-BootstrapAiProxySuiteDoctorReport -InstallRoot $root
     }
@@ -17178,6 +18684,15 @@ function Install-BootstrapAiUsagebarViaWsl {
     return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-usagebar instalado no WSL/Linux por release oficial verificada.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath 'wsl.exe bash -lc ai-usagebar' -Version $version)
 }
 
+function Get-BootstrapAiUsagebarWslFallbackNote {
+    param([AllowNull()][string]$Reason)
+
+    $cleanReason = Get-BootstrapCleanNativeText -Text $Reason -MaxLength 500
+    if ([string]::IsNullOrWhiteSpace($cleanReason)) { return '' }
+
+    return 'WSL indisponivel; fallback Cargo Windows usado.'
+}
+
 function Install-BootstrapAiUsagebarViaCargo {
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
@@ -17195,8 +18710,8 @@ function Install-BootstrapAiUsagebarViaCargo {
         if ([string]::IsNullOrWhiteSpace($gitExe)) { $missing += 'git' }
         if ([string]::IsNullOrWhiteSpace($cargoExe)) { $missing += 'cargo/rustup' }
         $msg = ("ai-usagebar requer WSL saudavel ou fallback Cargo; ausente: {0}." -f ($missing -join ', '))
-        $cleanBlockedReason = Get-BootstrapCleanNativeText -Text $BlockedReason
-        if (-not [string]::IsNullOrWhiteSpace($cleanBlockedReason)) { $msg = "$msg WSL: $cleanBlockedReason" }
+        $fallbackNote = Get-BootstrapAiUsagebarWslFallbackNote -Reason $BlockedReason
+        if (-not [string]::IsNullOrWhiteSpace($fallbackNote)) { $msg = "$msg $fallbackNote" }
         return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'install' -Status 'blocked' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $msg -Docs ([string]$CatalogEntry['DocsUrl']))
     }
 
@@ -17281,8 +18796,8 @@ function Install-BootstrapAiUsagebarViaCargo {
         throw ("ai-usagebar instalado, mas --help falhou ({0}). {1}" -f [string]$validate['status'], [string]$validate['message'])
     }
     $message = 'ai-usagebar instalado por fallback Cargo na tag oficial.'
-    $cleanBlockedReason = Get-BootstrapCleanNativeText -Text $BlockedReason
-    if (-not [string]::IsNullOrWhiteSpace($cleanBlockedReason)) { $message = "$message WSL ignorado: $cleanBlockedReason" }
+    $fallbackNote = Get-BootstrapAiUsagebarWslFallbackNote -Reason $BlockedReason
+    if (-not [string]::IsNullOrWhiteSpace($fallbackNote)) { $message = "$message $fallbackNote" }
     return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $message -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath $exe -Version $tag)
 }
 
@@ -17350,6 +18865,316 @@ function Uninstall-BootstrapAiUsagebar {
     }
     Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
     return (New-BootstrapAiToolResult -ToolName 'ai-usagebar' -Action 'uninstall' -Status 'removed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-usagebar Windows gerenciado removido; configs preservadas.' -Docs 'https://github.com/akitaonrails/ai-usagebar')
+}
+
+function Get-BootstrapAiMemoryInstallDir {
+    param([Parameter(Mandatory = $true)][string]$InstallRoot)
+    return (Join-Path (Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot) 'ai-memory')
+}
+
+function Get-BootstrapAiMemoryExePath {
+    param([string]$InstallRoot = '')
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $candidates.Add((Join-Path (Get-BootstrapAiMemoryInstallDir -InstallRoot $root) 'ai-memory.exe')) | Out-Null
+    $candidates.Add((Join-Path (Get-BootstrapAiBinDir -InstallRoot $root) 'ai-memory.exe')) | Out-Null
+    $cargoHome = Join-Path $env:USERPROFILE '.cargo\bin\ai-memory.exe'
+    $candidates.Add($cargoHome) | Out-Null
+    foreach ($candidate in @($candidates.ToArray())) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) { return $candidate }
+    }
+    return ''
+}
+
+function Get-BootstrapAiMemoryServerUrl {
+    if (-not [string]::IsNullOrWhiteSpace($env:AI_MEMORY_SERVER_URL)) { return [string]$env:AI_MEMORY_SERVER_URL }
+    return 'http://127.0.0.1:49374'
+}
+
+function Get-BootstrapAiMemoryReleaseAsset {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$Key
+    )
+    $assets = $CatalogEntry['ReleaseAssets']
+    if ($assets -is [System.Collections.IDictionary] -and $assets.Contains($Key)) { return $assets[$Key] }
+    throw ("Asset ai-memory '{0}' nao definido no catalogo." -f $Key)
+}
+
+function Get-BootstrapAiMemoryDetectedAgents {
+    # Mapeia agentes instalados para os identificadores --client/--agent do ai-memory.
+    $agents = New-Object System.Collections.Generic.List[string]
+    $catalog = Get-BootstrapAiToolCatalog
+    $probe = @(
+        @{ Tool = 'claude-code'; Id = 'claude-code' }
+        @{ Tool = 'codex-cli'; Id = 'codex' }
+        @{ Tool = 'opencode'; Id = 'opencode' }
+        @{ Tool = 'gemini-cli'; Id = 'gemini-cli' }
+    )
+    foreach ($item in $probe) {
+        $toolName = [string]$item.Tool
+        if (-not $catalog.Contains($toolName)) { continue }
+        try {
+            $path = Resolve-BootstrapAiToolCommandPath -CatalogEntry $catalog[$toolName] -InstallRoot (Get-BootstrapAiInstallRoot -InstallRoot '')
+        } catch {
+            $path = ''
+        }
+        if (-not [string]::IsNullOrWhiteSpace($path)) { $agents.Add([string]$item.Id) | Out-Null }
+    }
+    return @($agents.ToArray())
+}
+
+function Invoke-BootstrapAiMemoryWiring {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExePath,
+        [string[]]$Agents = @(),
+        [switch]$DryRun
+    )
+    # Executa install-mcp/install-hooks idempotentes por agente detectado. Sem --apply seria dry-run nativo.
+    $serverUrl = Get-BootstrapAiMemoryServerUrl
+    $applied = New-Object System.Collections.Generic.List[object]
+    $aiRoot = Get-BootstrapAiInstallRoot
+    $memoryInstallDir = Get-BootstrapAiMemoryInstallDir -InstallRoot $aiRoot
+    foreach ($agent in @($Agents)) {
+        if ([string]::IsNullOrWhiteSpace($agent)) { continue }
+        foreach ($verb in @('install-mcp', 'install-hooks')) {
+            $flag = if ($verb -eq 'install-mcp') { '--client' } else { '--agent' }
+            $hooksDirArg = @()
+            if ($verb -eq 'install-hooks' -and -not [string]::IsNullOrWhiteSpace($memoryInstallDir)) {
+                $hooksDirArg = @('--hooks-dir', (Join-Path $memoryInstallDir 'hooks'))
+            }
+            if ($DryRun) {
+                $applied.Add([ordered]@{ agent = $agent; command = ("{0} {1} {2} --apply --server-url {3} {4}" -f $verb, $flag, $agent, $serverUrl, ($hooksDirArg -join ' ')); status = 'planned' }) | Out-Null
+                continue
+            }
+            try {
+                $runArgs = @($verb, $flag, $agent, '--apply', '--server-url', $serverUrl) + $hooksDirArg
+                $result = Invoke-BootstrapAiNativeCommand -Exe $ExePath -Args $runArgs -TimeoutMs 60000
+                $status = if ([int]$result['exitCode'] -eq 0) { 'applied' } else { 'failed' }
+                $applied.Add([ordered]@{ agent = $agent; command = ("{0} {1} {2}" -f $verb, $flag, $agent); status = $status; detail = (Get-BootstrapCleanNativeText -Text (([string]$result['stderr']) + ' ' + ([string]$result['stdout'])) -MaxLength 300) }) | Out-Null
+            } catch {
+                $applied.Add([ordered]@{ agent = $agent; command = ("{0} {1} {2}" -f $verb, $flag, $agent); status = 'failed'; detail = (Get-BootstrapCleanNativeText -Text $_.Exception.Message -MaxLength 300) }) | Out-Null
+            }
+        }
+    }
+    return @($applied.ToArray())
+}
+
+function Ensure-BootstrapAiMemoryServerTask {
+    param(
+        [Parameter(Mandatory = $true)][string]$ExePath,
+        [switch]$DryRun
+    )
+    # Registra task de logon que sobe o servidor loopback ai-memory serve.
+    $taskName = 'BootstrapTools-AiMemoryServer'
+    $serverUrl = Get-BootstrapAiMemoryServerUrl
+    $bind = '127.0.0.1:49374'
+    if ($serverUrl -match '://([^/]+)') { $bind = $matches[1] }
+    $taskCommand = ('"{0}" serve --transport http --bind {1}' -f $ExePath, $bind)
+    if ($DryRun) {
+        return [ordered]@{ status = 'planned'; task = $taskName; command = $taskCommand }
+    }
+    $schtasksExe = Resolve-CommandPath -Name 'schtasks.exe'
+    if (-not $schtasksExe) { $schtasksExe = Join-Path $env:SystemRoot 'System32\schtasks.exe' }
+    if (-not (Test-Path $schtasksExe)) {
+        return [ordered]@{ status = 'skipped'; task = $taskName; command = $taskCommand; reason = 'schtasks.exe nao encontrado.' }
+    }
+    $exitCode = Invoke-NativeWithLog -Exe $schtasksExe -Args @('/Create', '/SC', 'ONLOGON', '/TN', $taskName, '/TR', $taskCommand, '/F', '/RU', $env:USERNAME)
+    if ($exitCode -ne 0) {
+        return [ordered]@{ status = 'failed'; task = $taskName; command = $taskCommand; reason = ("exit={0}" -f $exitCode) }
+    }
+    return [ordered]@{ status = 'registered'; task = $taskName; command = $taskCommand }
+}
+
+function Install-BootstrapAiMemory {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $tag = [string]$CatalogEntry['ReleaseTag']
+    $installDir = Get-BootstrapAiMemoryInstallDir -InstallRoot $root
+    if ($DryRun) {
+        $asset = Get-BootstrapAiMemoryReleaseAsset -CatalogEntry $CatalogEntry -Key 'windows'
+        $message = ("GitHub akitaonrails/ai-memory {0}: baixar {1} verificado sha256, extrair ai-memory.exe em bin gerenciado, registrar PATH/task de logon e rodar install-mcp/install-hooks por agente; fallback cargo install quando indisponivel." -f $tag, [string]$asset['Name'])
+        return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'install' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $message -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    if (Test-BootstrapHostIsWindows) {
+        try {
+            return (Install-BootstrapAiMemoryViaRelease -CatalogEntry $CatalogEntry -InstallRoot $root -ProjectRoot $ProjectRoot)
+        } catch {
+            $reason = Get-BootstrapCleanNativeText -Text $_.Exception.Message
+            return (Install-BootstrapAiMemoryViaCargo -CatalogEntry $CatalogEntry -InstallRoot $root -ProjectRoot $ProjectRoot -BlockedReason $reason)
+        }
+    }
+
+    return (Install-BootstrapAiMemoryViaCargo -CatalogEntry $CatalogEntry -InstallRoot $root -ProjectRoot $ProjectRoot)
+}
+
+function Install-BootstrapAiMemoryViaRelease {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = ''
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $tag = [string]$CatalogEntry['ReleaseTag']
+    $asset = Get-BootstrapAiMemoryReleaseAsset -CatalogEntry $CatalogEntry -Key 'windows'
+    $assetName = [string]$asset['Name']
+    $expected = ([string]$asset['Sha256']).ToLowerInvariant()
+    $installDir = Get-BootstrapAiMemoryInstallDir -InstallRoot $root
+    $downloadRoot = Join-Path $root 'downloads'
+    [void][System.IO.Directory]::CreateDirectory($installDir)
+    [void][System.IO.Directory]::CreateDirectory($downloadRoot)
+    $assetPath = Join-Path $downloadRoot $assetName
+    $url = ("https://github.com/{0}/releases/download/{1}/{2}" -f [string]$CatalogEntry['GitHubRepo'], $tag, $assetName)
+
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    Invoke-WebRequest -Uri $url -OutFile $assetPath -UseBasicParsing -Headers @{ 'User-Agent' = 'PhaseZero-Bootstrap' } -ErrorAction Stop
+
+    if (-not [string]::IsNullOrWhiteSpace($expected)) {
+        $actual = (Get-BootstrapFileSha256 -Path $assetPath).ToLowerInvariant()
+        if ($actual -ne $expected) {
+            throw ("Checksum ai-memory invalido. Esperado={0} Atual={1}" -f $expected, $actual)
+        }
+    }
+
+    if (Test-Path -LiteralPath (Join-Path $installDir 'ai-memory.exe')) {
+        Remove-Item -LiteralPath (Join-Path $installDir 'ai-memory.exe') -Force -ErrorAction SilentlyContinue
+    }
+    Expand-Archive -LiteralPath $assetPath -DestinationPath $installDir -Force
+    $exePath = Join-Path $installDir 'ai-memory.exe'
+    if (-not (Test-Path -LiteralPath $exePath)) {
+        $found = Get-ChildItem -LiteralPath $installDir -Recurse -Filter 'ai-memory.exe' | Select-Object -First 1
+        if (-not $found) { throw 'Zip ai-memory extraido, mas ai-memory.exe nao foi encontrado.' }
+        $exePath = $found.FullName
+    }
+
+    Ensure-PathUserContains -Dir $installDir
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    $manifest['tools']['ai-memory'] = @{
+        kind        = 'windows-release'
+        source      = $url
+        version     = $tag
+        binDir      = $installDir
+        installedAt = (Get-Date).ToString('o')
+    }
+    $manifest['pathsAdded'][$installDir] = $true
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+
+    $version = Get-BootstrapAiToolVersion -CatalogEntry $CatalogEntry -CommandPath $exePath
+    if ([string]::IsNullOrWhiteSpace($version)) { $version = $tag }
+    return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-memory instalado por release nativa Windows verificada por sha256.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath $exePath -Version $version)
+}
+
+function Install-BootstrapAiMemoryViaCargo {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [string]$BlockedReason = ''
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $cargoExe = Resolve-CommandPath -Name 'cargo.exe'
+    if (-not $cargoExe) { $cargoExe = Resolve-CommandPath -Name 'cargo' }
+    if ([string]::IsNullOrWhiteSpace($cargoExe)) {
+        $msg = 'ai-memory requer release nativa verificada ou fallback Cargo; cargo/rustup ausente.'
+        $clean = Get-BootstrapCleanNativeText -Text $BlockedReason -MaxLength 400
+        if (-not [string]::IsNullOrWhiteSpace($clean)) { $msg = "$msg Detalhe: $clean" }
+        return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'install' -Status 'blocked' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $msg -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    $tag = [string]$CatalogEntry['ReleaseTag']
+    $repo = [string]$CatalogEntry['GitHubRepo']
+    $build = Invoke-BootstrapAiNativeCommand -Exe $cargoExe -Args @('install', '--git', ("https://github.com/{0}.git" -f $repo), '--tag', $tag, 'ai-memory-cli') -TimeoutMs 1200000
+    if ([int]$build['exitCode'] -ne 0) {
+        $detail = ([string]$build['stderr']).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$build['stdout']).Trim() }
+        throw ("Falha ao compilar ai-memory via Cargo (exit={0}). {1}" -f [int]$build['exitCode'], $detail)
+    }
+
+    $exePath = Get-BootstrapAiMemoryExePath -InstallRoot $root
+    if ([string]::IsNullOrWhiteSpace($exePath)) { $exePath = Join-Path $env:USERPROFILE '.cargo\bin\ai-memory.exe' }
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    $manifest['tools']['ai-memory'] = @{
+        kind        = 'cargo-install'
+        source      = ("https://github.com/{0}.git" -f $repo)
+        version     = $tag
+        binDir      = (Split-Path -Path $exePath -Parent)
+        installedAt = (Get-Date).ToString('o')
+    }
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+    $version = Get-BootstrapAiToolVersion -CatalogEntry $CatalogEntry -CommandPath $exePath
+    if ([string]::IsNullOrWhiteSpace($version)) { $version = $tag }
+    return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-memory instalado por fallback cargo install na tag oficial.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath $exePath -Version $version)
+}
+
+function Set-BootstrapAiMemoryConfig {
+    param(
+        [string]$InstallRoot = '',
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+    # configure = registra servidor (task de logon) + wiring MCP/hooks por agente detectado.
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $exePath = Get-BootstrapAiMemoryExePath -InstallRoot $root
+    $agents = Get-BootstrapAiMemoryDetectedAgents
+    if ([string]::IsNullOrWhiteSpace($exePath)) {
+        if ($DryRun) {
+            $msg = ("Planejado: registrar task servidor loopback e rodar install-mcp/install-hooks para: {0}" -f (($agents -join ', ')))
+            return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'configure' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $msg -Docs 'https://github.com/akitaonrails/ai-memory')
+        }
+        return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'configure' -Status 'absent' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-memory.exe nao encontrado; instale antes de configurar.' -Docs 'https://github.com/akitaonrails/ai-memory')
+    }
+
+    $task = Ensure-BootstrapAiMemoryServerTask -ExePath $exePath -DryRun:$DryRun
+    $wiring = Invoke-BootstrapAiMemoryWiring -ExePath $exePath -Agents $agents -DryRun:$DryRun
+    $status = if ($DryRun) { 'planned' } else { 'configured' }
+    $message = if (@($agents).Count -gt 0) {
+        ("Servidor loopback {0}; MCP/hooks aplicados para: {1}." -f [string]$task['status'], (($agents -join ', ')))
+    } else {
+        ("Servidor loopback {0}; nenhum agente (Claude Code/Codex/OpenCode/Gemini) detectado para wiring automatico." -f [string]$task['status'])
+    }
+    $result = New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'configure' -Status $status -InstallRoot $root -ProjectRoot $ProjectRoot -Message $message -Docs 'https://github.com/akitaonrails/ai-memory' -CommandPath $exePath
+    $result['serverTask'] = $task
+    $result['agents'] = @($agents)
+    $result['wiring'] = @($wiring)
+    return $result
+}
+
+function Uninstall-BootstrapAiMemory {
+    param(
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $installDir = Get-BootstrapAiMemoryInstallDir -InstallRoot $root
+    $taskName = 'BootstrapTools-AiMemoryServer'
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'uninstall' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'Remover ai-memory.exe gerenciado e task de logon; preserva dados de memoria (wiki/raw/db) e configs dos agentes.' -Docs 'https://github.com/akitaonrails/ai-memory')
+    }
+
+    $schtasksExe = Resolve-CommandPath -Name 'schtasks.exe'
+    if (-not $schtasksExe) { $schtasksExe = Join-Path $env:SystemRoot 'System32\schtasks.exe' }
+    if (Test-Path $schtasksExe) {
+        Invoke-NativeWithLog -Exe $schtasksExe -Args @('/Delete', '/TN', $taskName, '/F') | Out-Null
+    }
+
+    $exe = Join-Path $installDir 'ai-memory.exe'
+    if (Test-Path -LiteralPath $exe) { Remove-Item -LiteralPath $exe -Force -ErrorAction SilentlyContinue }
+
+    $manifest = Read-BootstrapAiToolManifest -InstallRoot $root
+    if ($manifest['tools'].ContainsKey('ai-memory')) { $manifest['tools'].Remove('ai-memory') | Out-Null }
+    if ($manifest['pathsAdded'].ContainsKey($installDir)) {
+        Remove-PathUserEntry -Dir $installDir | Out-Null
+        $manifest['pathsAdded'].Remove($installDir) | Out-Null
+    }
+    Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
+    return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'uninstall' -Status 'removed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-memory gerenciado e task removidos; dados de memoria do usuario preservados.' -Docs 'https://github.com/akitaonrails/ai-memory')
 }
 
 function Uninstall-BootstrapAiNpmTool {
@@ -17652,6 +19477,9 @@ function Invoke-BootstrapAiToolAction {
         if ($name -eq 'ai-usagebar') {
             return (Set-BootstrapAiUsagebarConfig -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun)
         }
+        if ($name -eq 'ai-memory') {
+            return (Set-BootstrapAiMemoryConfig -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun)
+        }
         if ($name -eq 'aionui') {
             $config = Set-BootstrapAionUiProviderConfig -DryRun:$DryRun -StartOnce:((-not $DryRun) -and (-not $NoAdmin))
             $status = [string]$config['status']
@@ -17675,6 +19503,9 @@ function Invoke-BootstrapAiToolAction {
             'workflow-only' { return (Set-BootstrapAntigravityWorkflows -ProjectRoot $project -DryRun:$DryRun) }
             'linux-release' {
                 if ($name -eq 'ai-usagebar') { return (Install-BootstrapAiUsagebar -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            }
+            'native-release' {
+                if ($name -eq 'ai-memory') { return (Install-BootstrapAiMemory -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
             }
             'winget-official-exe' {
                 if ($name -eq 'aionui') { return (Install-BootstrapAionUiComponentPackage -CatalogEntry $entry -DryRun:$DryRun -NoAdmin:$NoAdmin) }
@@ -17705,6 +19536,9 @@ function Invoke-BootstrapAiToolAction {
             }
             'linux-release' {
                 if ($name -eq 'ai-usagebar') { return (Uninstall-BootstrapAiUsagebar -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+            }
+            'native-release' {
+                if ($name -eq 'ai-memory') { return (Uninstall-BootstrapAiMemory -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
             }
             'git-node-playwright-proxy' {
                 $status = if ($DryRun) { 'planned' } else { 'manual' }
@@ -18087,12 +19921,51 @@ function Get-BootstrapZCodeStorePath {
 }
 
 function Get-BootstrapOpenClawConfigPath {
+    $paths = @(Get-BootstrapOpenClawConfigPaths)
+    if ($paths.Count -gt 0) { return [string]$paths[0] }
+    return $null
+}
+
+function Get-BootstrapOpenClawConfigPaths {
     $userHome = Get-BootstrapUserHomePath
     $appDataPath = Get-BootstrapAppDataPath
-    return (Get-BootstrapPreferredFilePath -Candidates @(
-        $(if ($userHome) { Join-Path $userHome '.openclaw\openclaw.json' }),
-        $(if ($appDataPath) { Join-Path $appDataPath 'clawdbot\clawdbot.json5' })
-    ) -DefaultPath $(if ($userHome) { Join-Path $userHome '.openclaw\openclaw.json' } else { $null }))
+    $paths = New-Object System.Collections.Generic.List[string]
+    if ($userHome) { $paths.Add((Join-Path $userHome '.openclaw\openclaw.json')) | Out-Null }
+    if ($appDataPath) { $paths.Add((Join-Path $appDataPath 'clawdbot\clawdbot.json5')) | Out-Null }
+    if ($appDataPath -and (Test-Path -LiteralPath (Join-Path $appDataPath 'clawdecode'))) {
+        $paths.Add((Join-Path $appDataPath 'clawdecode\clawdecode.json5')) | Out-Null
+    }
+    $unique = New-Object System.Collections.Generic.List[string]
+    foreach ($path in @($paths.ToArray())) {
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+        $full = [System.IO.Path]::GetFullPath($path)
+        if (-not @($unique.ToArray()).Contains($full)) { $unique.Add($full) | Out-Null }
+    }
+    return @($unique.ToArray())
+}
+
+function Get-BootstrapHermesHomePath {
+    $userHome = Get-BootstrapUserHomePath
+    if ([string]::IsNullOrWhiteSpace($userHome)) { return $null }
+    return (Join-Path $userHome '.hermes')
+}
+
+function Get-BootstrapHermesEnvPath {
+    $hermesHome = Get-BootstrapHermesHomePath
+    if ([string]::IsNullOrWhiteSpace($hermesHome)) { return $null }
+    return (Join-Path $hermesHome '.env')
+}
+
+function Get-BootstrapHermesYamlConfigPath {
+    $hermesHome = Get-BootstrapHermesHomePath
+    if ([string]::IsNullOrWhiteSpace($hermesHome)) { return $null }
+    return (Join-Path $hermesHome 'config.yaml')
+}
+
+function Get-BootstrapHermesPhaseZeroConfigPath {
+    $hermesHome = Get-BootstrapHermesHomePath
+    if ([string]::IsNullOrWhiteSpace($hermesHome)) { return $null }
+    return (Join-Path $hermesHome 'phasezero-ai-proxy.config.yaml')
 }
 
 function Get-BootstrapHermesConfigPath {
@@ -19338,6 +21211,39 @@ function Ensure-BootstrapZCodeStateMap {
     return $storage
 }
 
+function Sort-BootstrapGraphKeys {
+    param([AllowNull()]$Node)
+
+    if ($null -eq $Node) { return $null }
+    if ($Node -is [System.Collections.IDictionary]) {
+        $ordered = [ordered]@{}
+        foreach ($key in (@($Node.Keys) | Sort-Object)) {
+            $ordered[[string]$key] = Sort-BootstrapGraphKeys -Node $Node[$key]
+        }
+        return $ordered
+    }
+    if ($Node -is [System.Management.Automation.PSCustomObject]) {
+        $ordered = [ordered]@{}
+        foreach ($prop in (@($Node.PSObject.Properties) | Sort-Object Name)) {
+            $ordered[[string]$prop.Name] = Sort-BootstrapGraphKeys -Node $prop.Value
+        }
+        return $ordered
+    }
+    if (($Node -is [System.Collections.IEnumerable]) -and -not ($Node -is [string])) {
+        return @($Node | ForEach-Object { Sort-BootstrapGraphKeys -Node $_ })
+    }
+    return $Node
+}
+
+function ConvertTo-BootstrapStableJson {
+    # Serializacao canonica (chaves ordenadas em todos os niveis) para comparar estruturas
+    # sem falso-positivo de mudanca por ordem de chaves/whitespace.
+    param([AllowNull()]$InputObject)
+
+    $graph = ConvertTo-BootstrapObjectGraph -InputObject $InputObject
+    return ([string]((Sort-BootstrapGraphKeys -Node $graph) | ConvertTo-Json -Depth 30 -Compress))
+}
+
 function Ensure-BootstrapZCodeSecrets {
     param([hashtable]$ResolvedTargets)
 
@@ -19346,6 +21252,10 @@ function Ensure-BootstrapZCodeSecrets {
     }
 
     $target = ConvertTo-BootstrapHashtable -InputObject $ResolvedTargets['zCode']
+    # Autoprotecao: este alvo so aplica mcpServers; sem servidores aplicaveis nao ha o que gravar (evita store esqueleto orfao).
+    if (-not ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable]) -and (@($target['mcpServers'].Keys).Count -gt 0))) {
+        return $false
+    }
     $storePath = Get-BootstrapZCodeStorePath
     if ([string]::IsNullOrWhiteSpace($storePath)) { return $false }
 
@@ -19360,12 +21270,13 @@ function Ensure-BootstrapZCodeSecrets {
         }
     }
 
-    $before = ((ConvertTo-BootstrapObjectGraph -InputObject $store) | ConvertTo-Json -Depth 30 -Compress)
     $storage = Ensure-BootstrapZCodeStateMap -Store $store
     $state = Ensure-BootstrapNamedMap -Parent $storage -Name 'state'
     $config = Ensure-BootstrapNamedMap -Parent $state -Name 'config'
     $mcp = Ensure-BootstrapNamedMap -Parent $config -Name 'mcp'
     $mcpServers = Ensure-BootstrapNamedMap -Parent $mcp -Name 'mcpServers'
+    # Snapshot canonico (chaves ordenadas) pos-skeleton: so muda se houver mudanca funcional, matando o churn.
+    $beforeStable = ConvertTo-BootstrapStableJson -InputObject $storage
 
     if ($target.ContainsKey('mcpServers') -and ($target['mcpServers'] -is [hashtable])) {
         $mcpChanges = @{}
@@ -19419,12 +21330,20 @@ function Ensure-BootstrapZCodeSecrets {
         }
     }
 
-    $store['mcp-storage'] = [string]((ConvertTo-BootstrapObjectGraph -InputObject $storage) | ConvertTo-Json -Depth 30 -Compress)
-    $after = ((ConvertTo-BootstrapObjectGraph -InputObject $store) | ConvertTo-Json -Depth 30 -Compress)
-    if ($before -eq $after) {
+    $afterStable = ConvertTo-BootstrapStableJson -InputObject $storage
+    if ($beforeStable -eq $afterStable) {
         return $false
     }
+    $store['mcp-storage'] = [string]((ConvertTo-BootstrapObjectGraph -InputObject $storage) | ConvertTo-Json -Depth 30 -Compress)
 
+    # Backup recuperavel antes de sobrescrever (preserva inclusive o caso de JSON corrompido).
+    if (Test-Path $storePath) {
+        try {
+            Copy-Item -LiteralPath $storePath -Destination ($storePath + '.bak') -Force -ErrorAction Stop
+        } catch {
+            Write-Log ("Nao foi possivel gravar backup do store ZCode: {0}" -f $_.Exception.Message) 'WARN'
+        }
+    }
     Write-BootstrapJsonFile -Path $storePath -Value $store
     Write-Log ("Segredos aplicados em ZCode: {0}" -f $storePath)
     return $true
@@ -19477,7 +21396,13 @@ function Ensure-BootstrapOpenClawSecrets {
         return $false
     }
 
-    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapOpenClawConfigPath) -Target $ResolvedTargets['openClaw'] -Label 'OpenClaw config')
+    $updated = $false
+    foreach ($path in @(Get-BootstrapOpenClawConfigPaths)) {
+        $label = if ($path -match '(?i)clawdbot') { 'Clawbot config' } else { 'OpenClaw config' }
+        if ($path -match '(?i)clawdecode') { $label = 'ClawDecode config' }
+        $updated = ((Ensure-BootstrapOpenClawCompatibleConfigFile -Path $path -Target $ResolvedTargets['openClaw'] -Label $label) -or $updated)
+    }
+    return $updated
 }
 
 function Ensure-BootstrapHermesSecrets {
@@ -19490,7 +21415,9 @@ function Ensure-BootstrapHermesSecrets {
         return $false
     }
 
-    return (Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapHermesConfigPath -State $State) -Target $ResolvedTargets['hermes'] -Label 'Hermes OpenCloud')
+    $projectUpdated = Ensure-BootstrapJsonTargetFile -Path (Get-BootstrapHermesConfigPath -State $State) -Target $ResolvedTargets['hermes'] -Label 'Hermes OpenCloud'
+    $homeSummary = Ensure-BootstrapHermesHomeProxyConfig -Target $ResolvedTargets['hermes']
+    return ($projectUpdated -or [bool]$homeSummary.envUpdated -or [bool]$homeSummary.configUpdated -or [bool]$homeSummary.sidecarUpdated)
 }
 
 function Ensure-BootstrapKiloSecrets {
@@ -20832,6 +22759,54 @@ function Ensure-BootstrapVsCodeExtensionInstalled {
     }
 }
 
+function Ensure-BootstrapSingleVsCodeExtension {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $extensionId = if ($ComponentDef.PSObject.Properties.Name -contains 'ExtensionId') { [string]$ComponentDef.ExtensionId } else { '' }
+    if ([string]::IsNullOrWhiteSpace($extensionId)) {
+        throw 'vscode-extension: ExtensionId ausente no catalogo.'
+    }
+    $displayName = if ($ComponentDef.PSObject.Properties.Name -contains 'DisplayName') { [string]$ComponentDef.DisplayName } else { $extensionId }
+    if ([bool]$State.IsDryRun) {
+        Write-Log ("Dry-run: instalaria extensao VS Code {0} ({1})." -f $displayName, $extensionId)
+        return [ordered]@{ status = 'planned'; extensionId = $extensionId; editors = @(); changed = $false }
+    }
+
+    $editorTargets = Get-BootstrapVsCodeEditorTargets
+    $records = New-Object System.Collections.Generic.List[object]
+    foreach ($channel in @($editorTargets.Keys)) {
+        $editor = $editorTargets[$channel]
+        if (-not [bool]$editor['available']) { continue }
+        $cliPath = [string]$editor['cliPath']
+        $installedExtensions = @(Get-BootstrapInstalledVsCodeExtensions -CliPath $cliPath)
+        $result = Ensure-BootstrapVsCodeExtensionInstalled -CliPath $cliPath -ExtensionDefinition @{
+            id = $extensionId
+            displayName = $displayName
+            preferPreRelease = $false
+        } -InstalledExtensions $installedExtensions -EditorLabel ([string]$editor['displayName'])
+        $records.Add([ordered]@{
+            editor = [string]$editor['displayName']
+            extensionId = $extensionId
+            installed = [bool]$result['installed']
+            changed = [bool]$result['changed']
+            error = [string]$result['error']
+        }) | Out-Null
+    }
+
+    if ($records.Count -eq 0) {
+        throw ("Nenhum VS Code/Insiders disponivel para instalar extensao {0}." -f $extensionId)
+    }
+    return [ordered]@{
+        status = 'applied'
+        extensionId = $extensionId
+        editors = @($records.ToArray())
+        changed = (@($records.ToArray() | Where-Object { [bool]$_['changed'] }).Count -gt 0)
+    }
+}
+
 function Ensure-BootstrapJsonPropertyFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -21264,7 +23239,8 @@ function Write-BootstrapMarkedRuleFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
         [Parameter(Mandatory = $true)][string]$Body,
-        [string]$HeaderKind = 'none'
+        [string]$HeaderKind = 'none',
+        [string]$Label = 'BOOTSTRAP CAVEMAN'
     )
 
     $current = if (Test-Path $Path) { [System.IO.File]::ReadAllText($Path) } else { '' }
@@ -21272,7 +23248,7 @@ function Write-BootstrapMarkedRuleFile {
         'cursor' { $current = Ensure-BootstrapFrontMatterFlag -Content $current -Name 'alwaysApply' -Value 'true' }
         'windsurf' { $current = Ensure-BootstrapFrontMatterFlag -Content $current -Name 'trigger' -Value 'always_on' }
     }
-    $merged = Merge-BootstrapMarkedTextBlock -Content $current -Body $Body
+    $merged = Merge-BootstrapMarkedTextBlock -Content $current -Body $Body -Label $Label
     if ([bool]$merged.changed) {
         Write-BootstrapTextFile -Path $Path -Content ([string]$merged.content)
         return $true
@@ -21307,6 +23283,195 @@ function Ensure-BootstrapCavemanRuleFiles {
     return [ordered]@{
         updated = $updated
         files = @($records)
+    }
+}
+
+function Get-BootstrapPhaseZeroBaselineComponents {
+    $catalog = Get-BootstrapComponentCatalog
+    $profileCatalog = Get-BootstrapProfileCatalog
+    $phaseZero = $profileCatalog['PhaseZero']
+    $webappsProfile = $profileCatalog['webapps']
+    $visited = @{}
+    $result = New-Object System.Collections.Generic.List[string]
+    function Resolve-PZItems {
+        param([string[]]$Items)
+        foreach ($item in @($Items)) {
+            if ($visited.ContainsKey($item)) { continue }
+            $visited[$item] = $true
+            if ($profileCatalog.Contains($item)) {
+                Resolve-PZItems -Items @($profileCatalog[$item].Items)
+            } else {
+                $result.Add($item)
+            }
+        }
+    }
+    if ($phaseZero) { Resolve-PZItems -Items @($phaseZero.Items) }
+    return @($result.ToArray())
+}
+
+function Invoke-BootstrapPhaseZeroBaselineProbe {
+    $baseline = Get-BootstrapPhaseZeroBaselineComponents
+    $catalog = Get-BootstrapComponentCatalog
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($comp in $baseline) {
+        $def = $catalog[$comp]
+        if (-not $def) {
+            $rows.Add((New-BootstrapAuditRow -Component $comp -Status 'Missing' -Detail 'Componente nao encontrado no catalogo.' -HowToFix ''))
+            continue
+        }
+        $status = 'Missing'
+        $detail = ''
+        $howToFix = ''
+        $probePaths = @()
+        if ($def.PSObject.Properties.Name -contains 'Data') {
+            $data = if ($def.Data -is [hashtable]) { $def.Data } else { @{} }
+            if ($data.Contains('ProbePaths')) { $probePaths = @($data['ProbePaths']) }
+        }
+        if ($probePaths.Count -gt 0) {
+            $found = $false
+            foreach ($p in $probePaths) {
+                $expanded = [Environment]::ExpandEnvironmentVariables([string]$p)
+                $items = @(Get-Item -Path $expanded -ErrorAction SilentlyContinue | Select-Object -First 1)
+                if ($items.Count -gt 0) { $found = $true; $detail = "Encontrado: $($items[0].FullName)"; break }
+            }
+            if ($found) { $status = 'Healthy' } else { $detail = "ProbePaths nao encontrado: $($probePaths -join '; ')" }
+        }
+        if ($def.PSObject.Properties.Name -contains 'VersionCheckCommand' -and -not [string]::IsNullOrWhiteSpace([string]$def.VersionCheckCommand)) {
+            try {
+                $split = @([string]$def.VersionCheckCommand -split '\s+')
+                $cmd = $split[0]
+                $cmdArgs = @($split[1..($split.Count-1)])
+                $cmdPath = Resolve-CommandPath -Name $cmd
+                if ($cmdPath) {
+                    $output = (& $cmdPath @cmdArgs 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+                    $status = 'Healthy'
+                    $detail = "Versao: $output ($cmdPath)"
+                } else {
+                    $detail = if ($detail) { "$detail; Comando $cmd ausente no PATH" } else { "Comando $cmd ausente no PATH" }
+                    if ($status -ne 'Healthy') { $status = 'Missing' }
+                }
+            } catch {
+                $detail = if ($detail) { "$detail; $($_.Exception.Message)" } else { $_.Exception.Message }
+                if ($status -eq 'Healthy') { $status = 'Degraded' }
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = 'Nenhum probe definido.' }
+        $rows.Add((New-BootstrapAuditRow -Component $comp -Status $status -Detail $detail -HowToFix $howToFix))
+    }
+    return [ordered]@{
+        phasezeroBaseline = [ordered]@{
+            results = @($rows.ToArray())
+            generatedAt = (Get-Date).ToString('o')
+        }
+    }
+}
+
+function Get-BootstrapPhaseZeroToolRuleBody {
+    $templatePath = Join-Path $PSScriptRoot 'assets\agent-skills\phasezero-tools-always-on.md'
+    if (Test-Path $templatePath) {
+        return ((Get-Content -Path $templatePath -Raw -Encoding utf8).Trim())
+    }
+    return @'
+Always use rtk (token-economy) for every response.
+Consult and write context to ai-memory for cross-agent handoff.
+Follow caveman mode (terse, technical, no filler).
+'@.Trim()
+}
+
+function Ensure-BootstrapPhaseZeroToolRuleFiles {
+    param([string]$WorkspaceRoot = (Get-Location).Path)
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { $WorkspaceRoot }
+    $body = Get-BootstrapPhaseZeroToolRuleBody
+    $targets = @(
+        @{ id = 'cursor'; path = (Join-Path $root '.cursor\rules\phasezero-tools.mdc'); header = 'cursor' },
+        @{ id = 'windsurf'; path = (Join-Path $root '.windsurf\rules\phasezero-tools.md'); header = 'windsurf' },
+        @{ id = 'cline'; path = (Join-Path $root '.clinerules\phasezero-tools.md'); header = 'none' },
+        @{ id = 'githubCopilot'; path = (Join-Path $root '.github\copilot-instructions.md'); header = 'none' },
+        @{ id = 'agents'; path = (Join-Path $root 'AGENTS.md'); header = 'none' }
+    )
+    $records = @()
+    $updated = $false
+    foreach ($target in $targets) {
+        $changed = Write-BootstrapMarkedRuleFile -Path ([string]$target.path) -Body $body -HeaderKind ([string]$target.header) -Label 'PHASEZERO TOOLS'
+        $updated = ($updated -or $changed)
+        $records += @([ordered]@{
+            id = [string]$target.id
+            path = [string]$target.path
+            updated = $changed
+        })
+    }
+    return [ordered]@{
+        updated = $updated
+        files = @($records)
+    }
+}
+
+function Invoke-BootstrapPhaseZeroPostConfig {
+    param(
+        [hashtable]$State,
+        [switch]$DryRun
+    )
+    $results = New-Object System.Collections.Generic.List[object]
+    # 1. rtk — garantir instalado e aplicar agent-config-claude-rtk-template
+    $rtkEntry = $null
+    $aiCatalog = Get-BootstrapAiToolCatalog
+    if ($aiCatalog -and $aiCatalog.Contains('rtk')) { $rtkEntry = $aiCatalog['rtk'] }
+    if ($rtkEntry) {
+        try {
+            $rtkResult = Install-BootstrapAiProxyManagedTool -ToolName 'rtk' -CatalogEntry $rtkEntry -DryRun:$DryRun
+            $results.Add([ordered]@{ tool = 'rtk'; action = 'install'; status = if ($DryRun) { 'planned' } else { 'installed' }; detail = ($rtkResult.Message -replace '\s+',' ') })
+        } catch {
+            $results.Add([ordered]@{ tool = 'rtk'; action = 'install'; status = 'failed'; detail = $_.Exception.Message })
+        }
+    }
+    # 2. ai-memory — detect agents and wire
+    $agentsToWire = @()
+    foreach ($agent in @('claude-code', 'codex-cli', 'opencode')) {
+        $path = Resolve-CommandPath -Name ($agent -replace '-cli$','')
+        if ($path) { $agentsToWire += $agent }
+    }
+    $memoryExe = Get-BootstrapAiMemoryExePath
+    if (-not $memoryExe) { $memoryExe = Resolve-CommandPath -Name 'ai-memory' }
+    if ($memoryExe -and $agentsToWire.Count -gt 0) {
+        $wiringResult = Invoke-BootstrapAiMemoryWiring -ExePath $memoryExe -Agents $agentsToWire -DryRun:$DryRun
+        $results.Add([ordered]@{ tool = 'ai-memory'; action = 'wiring'; agents = @($agentsToWire); status = 'applied'; detail = @($wiringResult) })
+        $taskResult = Ensure-BootstrapAiMemoryServerTask -ExePath $memoryExe -DryRun:$DryRun
+        $results.Add([ordered]@{ tool = 'ai-memory'; action = 'server-task'; status = $taskResult.status; detail = $taskResult })
+    } else {
+        $results.Add([ordered]@{ tool = 'ai-memory'; action = 'wiring'; status = 'skipped'; detail = if (-not $memoryExe) { 'ai-memory nao encontrado' } else { 'nenhum agente detectado' } })
+    }
+    # Resolve workspace de forma segura: nunca cair no diretorio atual silenciosamente.
+    $workspaceRoot = $PSScriptRoot
+    if ($State -and ($State -is [hashtable]) -and $State.ContainsKey('CloneBaseDir') -and -not [string]::IsNullOrWhiteSpace([string]$State.CloneBaseDir)) {
+        $workspaceRoot = [string]$State.CloneBaseDir
+    }
+    # 3. caveman — reaplicar Ensure-BootstrapAgentSkills
+    if ($DryRun) {
+        $results.Add([ordered]@{ tool = 'caveman'; action = 'agent-skills'; status = 'planned'; detail = 'DryRun: nenhuma regra caveman gravada.' })
+    } else {
+        try {
+            $cavemanResult = Ensure-BootstrapAgentSkills -State $State
+            $results.Add([ordered]@{ tool = 'caveman'; action = 'agent-skills'; status = 'applied'; detail = $cavemanResult })
+        } catch {
+            $results.Add([ordered]@{ tool = 'caveman'; action = 'agent-skills'; status = 'failed'; detail = $_.Exception.Message })
+        }
+    }
+    # 4. phasezero-tools rule files
+    if ($DryRun) {
+        $results.Add([ordered]@{ tool = 'phasezero-tools-rule'; action = 'rule-files'; status = 'planned'; detail = ("DryRun: regras seriam gravadas em {0}." -f $workspaceRoot) })
+    } else {
+        try {
+            $rulesResult = Ensure-BootstrapPhaseZeroToolRuleFiles -WorkspaceRoot $workspaceRoot
+            $results.Add([ordered]@{ tool = 'phasezero-tools-rule'; action = 'rule-files'; status = 'applied'; detail = $rulesResult })
+        } catch {
+            $results.Add([ordered]@{ tool = 'phasezero-tools-rule'; action = 'rule-files'; status = 'failed'; detail = $_.Exception.Message })
+        }
+    }
+    return [ordered]@{
+        phaseZeroPostConfig = [ordered]@{
+            results = @($results.ToArray())
+            completedAt = (Get-Date).ToString('o')
+        }
     }
 }
 
@@ -22951,6 +25116,703 @@ function Ensure-BootstrapAiWorkflowContextPack {
     return [ordered]@{ status = 'applied'; path = $targetPath; backup = $backup }
 }
 
+function Ensure-BootstrapHeadroomAgentIntegration {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $docDir = Join-Path $root '.codex\context-packs'
+    $scriptDir = Join-Path $root '.codex\scripts'
+    $docPath = Join-Path $docDir 'headroom-agent-integration.md'
+    $scriptPath = Join-Path $scriptDir 'headroom-agent.ps1'
+
+    $docContent = @(
+        '# Headroom Agent Integration',
+        '',
+        'Purpose: keep Headroom setup explicit, local, and reversible. This file documents supported wrappers and proxy/MCP paths without storing API keys.',
+        '',
+        'Install:',
+        '- PhaseZero app: app-headroom-ai',
+        '- Package source: PyPI headroom-ai[proxy]',
+        '',
+        'Supported wrappers:',
+        '- Claude Code: `headroom wrap claude --memory`',
+        '- Codex CLI: `headroom wrap codex --memory`',
+        '- Aider: `headroom wrap aider`',
+        '- Cursor: `headroom wrap cursor`',
+        '- GitHub Copilot CLI: `headroom wrap copilot`',
+        '- Gemini CLI: `headroom wrap gemini`',
+        '- OpenClaw: `headroom wrap openclaw`',
+        '- OpenCode: manual proxy only; no stable Headroom wrapper is confirmed upstream yet.',
+        '',
+        'Proxy and automation:',
+        '- n8n: run `headroom proxy --port 8787` and point OpenAI-compatible nodes to the local proxy after adding your own credentials in n8n.',
+        '- MCP: run `headroom mcp install` only after reviewing target agent config.',
+        '- Stats: run `headroom stats` to inspect local savings.',
+        '',
+        'Helper:',
+        '- Use `.codex/scripts/headroom-agent.ps1 -Action status` to see available agent CLIs.',
+        '- Use `.codex/scripts/headroom-agent.ps1 -Action wrap-claude` or another wrap action when you intentionally want Headroom to touch that agent.',
+        '',
+        'Safety:',
+        '- No secrets are written here.',
+        '- No wrappers run automatically during PhaseZero tuning.',
+        '- Review generated agent config diffs after each wrap command.'
+    ) -join [Environment]::NewLine
+
+    $scriptContent = @'
+param(
+    [ValidateSet('status','proxy','wrap-claude','wrap-codex','wrap-aider','wrap-cursor','wrap-copilot','wrap-gemini','wrap-openclaw','mcp-install','stats')]
+    [string]$Action = 'status',
+
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ExtraArgs = @()
+)
+
+$ErrorActionPreference = 'Stop'
+
+function Resolve-PhaseZeroCommand {
+    param([Parameter(Mandatory = $true)][string]$Name)
+
+    $cmd = Get-Command -Name $Name -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $cmd) { return '' }
+    if (-not [string]::IsNullOrWhiteSpace([string]$cmd.Source)) { return [string]$cmd.Source }
+    return [string]$cmd.Name
+}
+
+function Invoke-Headroom {
+    param([Parameter(Mandatory = $true)][string[]]$Args)
+
+    $headroom = Resolve-PhaseZeroCommand -Name 'headroom'
+    if ([string]::IsNullOrWhiteSpace($headroom)) {
+        throw 'headroom not found. Install app-headroom-ai first.'
+    }
+
+    $allArgs = @($Args) + @($ExtraArgs)
+    & $headroom @allArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+switch ($Action) {
+    'status' {
+        Invoke-Headroom -Args @('version')
+        foreach ($name in @('claude','codex','aider','cursor','copilot','gemini','openclaw','opencode','n8n')) {
+            $path = Resolve-PhaseZeroCommand -Name $name
+            if ([string]::IsNullOrWhiteSpace($path)) {
+                Write-Output ("{0}: missing" -f $name)
+            } else {
+                Write-Output ("{0}: {1}" -f $name, $path)
+            }
+        }
+    }
+    'proxy' { Invoke-Headroom -Args @('proxy','--port','8787') }
+    'wrap-claude' { Invoke-Headroom -Args @('wrap','claude','--memory') }
+    'wrap-codex' { Invoke-Headroom -Args @('wrap','codex','--memory') }
+    'wrap-aider' { Invoke-Headroom -Args @('wrap','aider') }
+    'wrap-cursor' { Invoke-Headroom -Args @('wrap','cursor') }
+    'wrap-copilot' { Invoke-Headroom -Args @('wrap','copilot') }
+    'wrap-gemini' { Invoke-Headroom -Args @('wrap','gemini') }
+    'wrap-openclaw' { Invoke-Headroom -Args @('wrap','openclaw') }
+    'mcp-install' { Invoke-Headroom -Args @('mcp','install') }
+    'stats' { Invoke-Headroom -Args @('stats') }
+}
+'@
+
+    $null = New-Item -Path $docDir -ItemType Directory -Force
+    $null = New-Item -Path $scriptDir -ItemType Directory -Force
+
+    $changed = $false
+    $backups = New-Object System.Collections.Generic.List[string]
+    foreach ($entry in @(
+        [ordered]@{ path = $docPath; content = $docContent },
+        [ordered]@{ path = $scriptPath; content = $scriptContent }
+    )) {
+        $path = [string]$entry.path
+        $content = [string]$entry.content
+        if (Test-Path -LiteralPath $path) {
+            $current = Get-Content -LiteralPath $path -Raw -ErrorAction SilentlyContinue
+            if ($current -eq $content) { continue }
+            $backup = Backup-BootstrapFile -Path $path
+            if (-not [string]::IsNullOrWhiteSpace($backup)) { $backups.Add($backup) }
+        }
+        Write-BootstrapAtomicText -Path $path -Content $content
+        $changed = $true
+    }
+
+    return [ordered]@{
+        status = if ($changed) { 'applied' } else { 'configured' }
+        root = $root
+        paths = @($docPath, $scriptPath)
+        backups = @($backups.ToArray())
+    }
+}
+
+function Write-BootstrapManagedTemplateFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Content
+    )
+
+    $parent = Split-Path -Path $Path -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        $null = New-Item -Path $parent -ItemType Directory -Force
+    }
+
+    $backup = ''
+    if (Test-Path -LiteralPath $Path) {
+        $current = Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue
+        if ($current -eq $Content) {
+            return [ordered]@{ path = $Path; status = 'configured'; backup = '' }
+        }
+        $backup = Backup-BootstrapFile -Path $Path
+    }
+
+    Write-BootstrapAtomicText -Path $Path -Content $Content
+    return [ordered]@{ path = $Path; status = 'applied'; backup = $backup }
+}
+
+function Get-BootstrapTraefikComposeText {
+    return @'
+services:
+  traefik:
+    image: traefik:v3.3
+    container_name: phasezero-traefik
+    restart: unless-stopped
+    command:
+      - --api.dashboard=true
+      - --api.insecure=false
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --log.level=INFO
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-data:/data
+    networks:
+      - proxy-net
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.traefik-dashboard.rule=Host(`traefik.localhost`)
+      - traefik.http.routers.traefik-dashboard.entrypoints=web
+      - traefik.http.routers.traefik-dashboard.service=api@internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  proxy-net:
+    external: true
+
+volumes:
+  traefik-data:
+'@
+}
+
+function Get-BootstrapComposeAppTemplateText {
+    return @'
+services:
+  app:
+    image: ghcr.io/example/app:latest
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - app-internal
+      - proxy-net
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy-net
+      - traefik.http.routers.example.rule=Host(`app.example.local`)
+      - traefik.http.routers.example.entrypoints=web
+      - traefik.http.services.example.loadbalancer.server.port=3000
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: change-me
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - app-internal
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  app-internal:
+    internal: true
+  proxy-net:
+    external: true
+
+volumes:
+  db-data:
+'@
+}
+
+function Get-BootstrapDockerHostingDoctorScriptText {
+    return @'
+param()
+$ErrorActionPreference = 'Stop'
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+. (Join-Path $repo 'bootstrap-tools.ps1') -BootstrapUiLibraryMode
+Get-BootstrapDockerHostingDoctorReport | ConvertTo-Json -Depth 10
+'@
+}
+
+function Get-BootstrapN8nHostingWorkflowTemplateText {
+    $workflow = [ordered]@{
+        name = 'PhaseZero Traefik hosting checklist'
+        active = $false
+        nodes = @(
+            [ordered]@{
+                parameters = [ordered]@{}
+                id = 'manual-trigger'
+                name = 'Manual trigger'
+                type = 'n8n-nodes-base.manualTrigger'
+                typeVersion = 1
+                position = @(0, 0)
+            },
+            [ordered]@{
+                parameters = [ordered]@{
+                    values = [ordered]@{
+                        string = @(
+                            [ordered]@{ name = 'checklist'; value = 'Verify Docker Desktop, proxy-net, Traefik compose, app compose labels, and manual DNS/TLS before deploy.' }
+                        )
+                    }
+                }
+                id = 'hosting-checklist'
+                name = 'Hosting checklist'
+                type = 'n8n-nodes-base.set'
+                typeVersion = 3
+                position = @(280, 0)
+            }
+        )
+        connections = [ordered]@{
+            'Manual trigger' = [ordered]@{
+                main = @(@([ordered]@{ node = 'Hosting checklist'; type = 'main'; index = 0 }))
+            }
+        }
+        settings = [ordered]@{}
+        tags = @('phasezero','container-hosting','manual')
+    }
+    return [string]($workflow | ConvertTo-Json -Depth 12)
+}
+
+function Invoke-BootstrapDockerSafeTextCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$DockerPath,
+        [Parameter(Mandatory = $true)][string[]]$Args
+    )
+
+    try {
+        $output = & $DockerPath @Args 2>&1
+        return [ordered]@{ exitCode = [int]$LASTEXITCODE; output = (@($output) -join "`n") }
+    } catch {
+        return [ordered]@{ exitCode = 99; output = $_.Exception.Message }
+    }
+}
+
+function Ensure-BootstrapDockerProxyNetwork {
+    param([string]$NetworkName = 'proxy-net')
+
+    $docker = Resolve-CommandPath -Name 'docker'
+    if ([string]::IsNullOrWhiteSpace($docker)) { $docker = Resolve-CommandPath -Name 'docker.exe' }
+    if ([string]::IsNullOrWhiteSpace($docker)) {
+        return [ordered]@{ status = 'skipped'; changed = $false; reason = 'docker-command-missing'; network = $NetworkName }
+    }
+
+    $inspect = Invoke-BootstrapDockerSafeTextCommand -DockerPath $docker -Args @('network','inspect',$NetworkName)
+    if ([int]$inspect.exitCode -eq 0) {
+        return [ordered]@{ status = 'configured'; changed = $false; reason = 'network-exists'; network = $NetworkName }
+    }
+
+    $create = Invoke-BootstrapDockerSafeTextCommand -DockerPath $docker -Args @('network','create',$NetworkName)
+    if ([int]$create.exitCode -eq 0) {
+        return [ordered]@{ status = 'applied'; changed = $true; reason = 'network-created'; network = $NetworkName }
+    }
+
+    return [ordered]@{ status = 'skipped'; changed = $false; reason = 'docker-engine-unavailable'; network = $NetworkName; detail = [string]$create.output }
+}
+
+function Get-BootstrapTcpPortCheck {
+    param([Parameter(Mandatory = $true)][int]$Port)
+
+    try {
+        $listeners = @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue)
+        return [ordered]@{
+            id = "port-$Port"
+            status = if ($listeners.Count -gt 0) { 'warning' } else { 'healthy' }
+            port = $Port
+            summary = if ($listeners.Count -gt 0) { "Porta $Port ja tem listener; Traefik pode conflitar." } else { "Porta $Port livre." }
+        }
+    } catch {
+        return [ordered]@{ id = "port-$Port"; status = 'unknown'; port = $Port; summary = 'Nao foi possivel auditar porta sem alterar o host.' }
+    }
+}
+
+function Get-BootstrapDockerHostingDoctorReport {
+    $checks = New-Object System.Collections.Generic.List[object]
+    $docker = Resolve-CommandPath -Name 'docker'
+    if ([string]::IsNullOrWhiteSpace($docker)) { $docker = Resolve-CommandPath -Name 'docker.exe' }
+
+    if ([string]::IsNullOrWhiteSpace($docker)) {
+        $checks.Add([ordered]@{ id = 'docker-command'; status = 'blocked'; summary = 'Docker CLI nao encontrado. Instale/abra Docker Desktop.' }) | Out-Null
+        $checks.Add([ordered]@{ id = 'compose-plugin'; status = 'skipped'; summary = 'Compose nao auditado sem Docker CLI.' }) | Out-Null
+        $checks.Add([ordered]@{ id = 'proxy-net'; status = 'skipped'; summary = 'Rede proxy-net nao auditada sem Docker CLI.' }) | Out-Null
+        return [ordered]@{
+            status = 'blocked'
+            changed = $false
+            checks = @($checks.ToArray())
+            nextSteps = @('Instale Docker Desktop via item docker.', 'Abra Docker Desktop e rode novamente docker-hosting-doctor.')
+        }
+    }
+
+    $version = Invoke-BootstrapDockerSafeTextCommand -DockerPath $docker -Args @('version','--format','{{.Server.Version}}')
+    $checks.Add([ordered]@{
+        id = 'docker-command'
+        status = if ([int]$version.exitCode -eq 0) { 'healthy' } else { 'blocked' }
+        summary = if ([int]$version.exitCode -eq 0) { 'Docker CLI e engine respondem.' } else { 'Docker CLI encontrado, mas engine nao respondeu.' }
+    }) | Out-Null
+
+    $compose = Invoke-BootstrapDockerSafeTextCommand -DockerPath $docker -Args @('compose','version')
+    $checks.Add([ordered]@{
+        id = 'compose-plugin'
+        status = if ([int]$compose.exitCode -eq 0) { 'healthy' } else { 'warning' }
+        summary = if ([int]$compose.exitCode -eq 0) { 'Docker Compose plugin disponivel.' } else { 'Docker Compose plugin nao respondeu.' }
+    }) | Out-Null
+
+    $network = Invoke-BootstrapDockerSafeTextCommand -DockerPath $docker -Args @('network','inspect','proxy-net')
+    $checks.Add([ordered]@{
+        id = 'proxy-net'
+        status = if ([int]$network.exitCode -eq 0) { 'healthy' } else { 'warning' }
+        summary = if ([int]$network.exitCode -eq 0) { 'Rede proxy-net existe.' } else { 'Rede proxy-net ausente; Traefik pack pode cria-la.' }
+    }) | Out-Null
+
+    $checks.Add((Get-BootstrapTcpPortCheck -Port 80)) | Out-Null
+    $checks.Add((Get-BootstrapTcpPortCheck -Port 443)) | Out-Null
+
+    $blocked = @($checks.ToArray() | Where-Object { [string]$_['status'] -eq 'blocked' }).Count
+    $warnings = @($checks.ToArray() | Where-Object { [string]$_['status'] -eq 'warning' }).Count
+    return [ordered]@{
+        status = if ($blocked -gt 0) { 'blocked' } elseif ($warnings -gt 0) { 'warning' } else { 'healthy' }
+        changed = $false
+        checks = @($checks.ToArray())
+        nextSteps = @('Use .phasezero/container-hosting/traefik/docker-compose.yml para subir o proxy.', 'Revise dominios e DNS antes de expor servicos.')
+    }
+}
+
+function Ensure-BootstrapContainerHostingPack {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $base = Join-Path $root '.phasezero\container-hosting'
+    $files = @(
+        [ordered]@{ path = (Join-Path $base 'traefik\docker-compose.yml'); content = (Get-BootstrapTraefikComposeText) },
+        [ordered]@{ path = (Join-Path $base 'templates\compose-app.yml'); content = (Get-BootstrapComposeAppTemplateText) },
+        [ordered]@{ path = (Join-Path $base 'docker-hosting-doctor.ps1'); content = (Get-BootstrapDockerHostingDoctorScriptText) },
+        [ordered]@{ path = (Join-Path $base 'n8n\hosting-workflow.json'); content = (Get-BootstrapN8nHostingWorkflowTemplateText) }
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $changed = $false
+    foreach ($file in @($files)) {
+        $row = Write-BootstrapManagedTemplateFile -Path ([string]$file.path) -Content ([string]$file.content)
+        if ([string]$row['status'] -eq 'applied') { $changed = $true }
+        $results.Add($row) | Out-Null
+    }
+
+    $network = Ensure-BootstrapDockerProxyNetwork -NetworkName 'proxy-net'
+    if ([bool]$network['changed']) { $changed = $true }
+    $doctor = Get-BootstrapDockerHostingDoctorReport
+
+    return [ordered]@{
+        status = if ($changed) { 'applied' } else { 'configured' }
+        changed = $changed
+        root = $base
+        paths = @($results.ToArray() | ForEach-Object { [string]$_['path'] })
+        fileResults = @($results.ToArray())
+        network = $network
+        doctor = $doctor
+        nextSteps = @('Revise dominios nos labels Traefik.', 'Suba primeiro a rede/proxy, depois apps com o template.')
+    }
+}
+
+function Get-BootstrapAiEdgePackageJsonText {
+    $pkg = [ordered]@{
+        name = 'phasezero-ai-edge-safe'
+        version = '0.1.0'
+        private = $true
+        type = 'module'
+        scripts = [ordered]@{
+            start = 'node server.js'
+            doctor = 'node server.js --doctor'
+        }
+        dependencies = [ordered]@{
+            hono = '^4.7.0'
+            '@hono/node-server' = '^1.13.0'
+        }
+    }
+    return [string]($pkg | ConvertTo-Json -Depth 8)
+}
+
+function Get-BootstrapAiEdgeServerText {
+    return @'
+import { Hono } from 'hono'
+import { serve } from '@hono/node-server'
+
+const app = new Hono()
+const upstreamBase = (process.env.AI_PROVIDER_BASE_URL || '').replace(/\/+$/, '')
+const upstreamKey = process.env.AI_PROVIDER_API_KEY || ''
+const defaultModel = process.env.AI_PROVIDER_MODEL || 'default'
+
+function jsonError(message, status = 400) {
+  return new Response(JSON.stringify({ error: { message } }), {
+    status,
+    headers: { 'content-type': 'application/json' }
+  })
+}
+
+function authHeaders(extra = {}) {
+  if (!upstreamKey) return extra
+  return { ...extra, authorization: `Bearer ${upstreamKey}` }
+}
+
+app.get('/health', (c) => c.json({
+  status: upstreamBase && upstreamKey ? 'ready' : 'blocked',
+  upstreamConfigured: Boolean(upstreamBase),
+  secretPresent: Boolean(upstreamKey)
+}))
+
+app.get('/v1/models', async () => {
+  if (!upstreamBase || !upstreamKey) return jsonError('Provider base URL or key missing.', 503)
+  const response = await fetch(`${upstreamBase}/models`, { headers: authHeaders() })
+  return new Response(response.body, {
+    status: response.status,
+    headers: { 'content-type': response.headers.get('content-type') || 'application/json' }
+  })
+})
+
+app.post('/v1/chat/completions', async (c) => {
+  if (!upstreamBase || !upstreamKey) return jsonError('Provider base URL or key missing.', 503)
+  const body = await c.req.json()
+  if (!body.model) body.model = defaultModel
+  const stream = Boolean(body.stream)
+  const response = await fetch(`${upstreamBase}/chat/completions`, {
+    method: 'POST',
+    headers: authHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify(body)
+  })
+  return new Response(response.body, {
+    status: response.status,
+    headers: {
+      'content-type': stream ? 'text/event-stream' : (response.headers.get('content-type') || 'application/json'),
+      'cache-control': stream ? 'no-cache' : 'no-store'
+    }
+  })
+})
+
+serve({ fetch: app.fetch, port: Number(process.env.PORT || 8787) })
+'@
+}
+
+function Get-BootstrapAiEdgeSecurityText {
+    return @'
+# PhaseZero AI Edge Safe Policy
+
+This template is BYOK/owned-only.
+
+Allowed:
+- Official provider APIs.
+- User-owned local gateways.
+- OpenAI-compatible endpoints with explicit keys.
+
+Blocked:
+- No token scraping.
+- No browser session extraction.
+- No WAF or CAPTCHA bypass.
+- No traffic abuse or proxy rotation.
+- No raw secrets in logs.
+'@
+}
+
+function Get-BootstrapAiEdgeEnvExampleText {
+    return @'
+AI_PROVIDER_BASE_URL=https://api.example.com/v1
+AI_PROVIDER_API_KEY=replace-with-your-own-key
+AI_PROVIDER_MODEL=provider-model-id
+PORT=8787
+'@
+}
+
+function Get-BootstrapAiEdgeReadmeText {
+    return @'
+# PhaseZero AI Edge Safe
+
+Local OpenAI-compatible gateway for providers you own or access with your own key.
+
+Run:
+
+```powershell
+npm install
+copy .env.example .env
+npm start
+```
+
+Point compatible tools to `http://127.0.0.1:8787/v1`.
+'@
+}
+
+function Ensure-BootstrapAiEdgeSafeTemplate {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $base = Join-Path $root '.phasezero\ai-edge-safe'
+    $files = @(
+        [ordered]@{ path = (Join-Path $base 'package.json'); content = (Get-BootstrapAiEdgePackageJsonText) },
+        [ordered]@{ path = (Join-Path $base 'server.js'); content = (Get-BootstrapAiEdgeServerText) },
+        [ordered]@{ path = (Join-Path $base '.env.example'); content = (Get-BootstrapAiEdgeEnvExampleText) },
+        [ordered]@{ path = (Join-Path $base 'SECURITY.md'); content = (Get-BootstrapAiEdgeSecurityText) },
+        [ordered]@{ path = (Join-Path $base 'README.md'); content = (Get-BootstrapAiEdgeReadmeText) }
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $changed = $false
+    foreach ($file in @($files)) {
+        $row = Write-BootstrapManagedTemplateFile -Path ([string]$file.path) -Content ([string]$file.content)
+        if ([string]$row['status'] -eq 'applied') { $changed = $true }
+        $results.Add($row) | Out-Null
+    }
+
+    return [ordered]@{
+        status = if ($changed) { 'applied' } else { 'configured' }
+        changed = $changed
+        root = $base
+        paths = @($results.ToArray() | ForEach-Object { [string]$_['path'] })
+        fileResults = @($results.ToArray())
+        prohibitions = @('token-scraping','session-extraction','waf-bypass','captcha-bypass','proxy-rotation-abuse')
+        nextSteps = @('Configure .env com endpoint e chave proprios.', 'Rode npm install e npm start dentro da pasta gerada.')
+    }
+}
+
+function Get-BootstrapAiGatewayDoctorReport {
+    param(
+        [AllowNull()][string]$BaseUrl = '',
+        [AllowNull()][string]$ApiKey = '',
+        [ValidateRange(1,60)][int]$TimeoutSec = 8
+    )
+
+    $checks = New-Object System.Collections.Generic.List[object]
+    $base = ([string]$BaseUrl).Trim().TrimEnd('/')
+    $secretPresent = -not [string]::IsNullOrWhiteSpace([string]$ApiKey)
+
+    $checks.Add([ordered]@{
+        id = 'base-url'
+        status = if ([string]::IsNullOrWhiteSpace($base)) { 'blocked' } else { 'healthy' }
+        summary = if ([string]::IsNullOrWhiteSpace($base)) { 'Base URL ausente.' } else { 'Base URL informada.' }
+    }) | Out-Null
+    $checks.Add([ordered]@{
+        id = 'secret'
+        status = if ($secretPresent) { 'healthy' } else { 'blocked' }
+        secretPresent = $secretPresent
+        summary = if ($secretPresent) { 'Segredo presente e redigido.' } else { 'Segredo ausente.' }
+    }) | Out-Null
+
+    if ([string]::IsNullOrWhiteSpace($base) -or -not $secretPresent) {
+        return [ordered]@{
+            status = 'blocked'
+            changed = $false
+            checks = @($checks.ToArray())
+            secretPresent = $secretPresent
+            nextSteps = @('Informe base URL e chave de provider autorizado.', 'Depois valide /v1/models e streaming simples.')
+        }
+    }
+
+    try {
+        $headers = @{ Authorization = "Bearer $ApiKey" }
+        $response = Invoke-WebRequest -Uri ($base + '/models') -Headers $headers -UseBasicParsing -TimeoutSec $TimeoutSec -ErrorAction Stop
+        $checks.Add([ordered]@{ id = 'models'; status = 'healthy'; statusCode = [int]$response.StatusCode; summary = '/models respondeu.' }) | Out-Null
+    } catch {
+        $checks.Add([ordered]@{ id = 'models'; status = 'warning'; summary = 'Falha ao validar /models; revise endpoint, quota e modelo.' }) | Out-Null
+    }
+
+    $warnings = @($checks.ToArray() | Where-Object { [string]$_['status'] -eq 'warning' }).Count
+    return [ordered]@{
+        status = if ($warnings -gt 0) { 'warning' } else { 'healthy' }
+        changed = $false
+        checks = @($checks.ToArray())
+        secretPresent = $secretPresent
+        nextSteps = @('Propague este endpoint apenas para apps compativeis.', 'Mantenha chaves fora de logs e arquivos versionados.')
+    }
+}
+
+function Apply-ContainerHostingTuning {
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [AllowNull()][hashtable]$State = $null
+    )
+
+    $workspace = if ($State -and $State.ContainsKey('CloneBaseDir') -and -not [string]::IsNullOrWhiteSpace([string]$State['CloneBaseDir'])) { [string]$State['CloneBaseDir'] } else { (Get-Location).Path }
+    switch ([string]$Item.id) {
+        'docker-hosting-doctor' {
+            $doctor = Get-BootstrapDockerHostingDoctorReport
+            return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = [string]$doctor.status; changed = $false; doctor = $doctor; note = 'Docker hosting doctor executado sem mutacao.' }
+        }
+        default {
+            $pack = Ensure-BootstrapContainerHostingPack -WorkspaceRoot $workspace
+            return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = [string]$pack.status; changed = [bool]$pack.changed; paths = @($pack.paths); doctor = $pack.doctor; nextSteps = @($pack.nextSteps); manifest = $pack }
+        }
+    }
+}
+
+function Apply-AiEdgeSafeTuning {
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [AllowNull()][hashtable]$State = $null
+    )
+
+    $workspace = if ($State -and $State.ContainsKey('CloneBaseDir') -and -not [string]::IsNullOrWhiteSpace([string]$State['CloneBaseDir'])) { [string]$State['CloneBaseDir'] } else { (Get-Location).Path }
+    switch ([string]$Item.id) {
+        'ai-gateway-doctor' {
+            $doctor = Get-BootstrapAiGatewayDoctorReport
+            return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = [string]$doctor.status; changed = $false; doctor = $doctor; note = 'AI gateway doctor executado com segredos redigidos.' }
+        }
+        'ai-provider-gateway-config' {
+            $template = Ensure-BootstrapAiEdgeSafeTemplate -WorkspaceRoot $workspace
+            $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $workspace -ResolvedCloneBaseDir $workspace -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+            Ensure-BootstrapSecrets -State $state
+            return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'applied'; changed = [bool]$template.changed; paths = @($template.paths); summary = $state.SecretsSummary; nextSteps = @('Revise backups dos JSONs alterados.', 'Valide apps compativeis antes de trocar default global.') }
+        }
+        default {
+            $template = Ensure-BootstrapAiEdgeSafeTemplate -WorkspaceRoot $workspace
+            return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = [string]$template.status; changed = [bool]$template.changed; paths = @($template.paths); nextSteps = @($template.nextSteps); manifest = $template }
+        }
+    }
+}
+
 function Set-BootstrapGithubCliAgentAuth {
     $bundle = Get-BootstrapSecretsData
     $secretsData = ConvertTo-BootstrapHashtable -InputObject $bundle.Data
@@ -23159,6 +26021,29 @@ function Apply-DevAiTuning {
     }
 }
 
+function Apply-AgentConfigTuning {
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [AllowNull()][hashtable]$State = $null
+    )
+
+    switch ([string]$Item.id) {
+        'headroom-agent-context-compression' {
+            $workspace = if ($State -and $State.ContainsKey('CloneBaseDir') -and -not [string]::IsNullOrWhiteSpace([string]$State['CloneBaseDir'])) { [string]$State['CloneBaseDir'] } else { (Get-Location).Path }
+            $result = Ensure-BootstrapHeadroomAgentIntegration -WorkspaceRoot $workspace
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$result.status
+                note = 'Headroom integration helper generated for agent wrappers, proxy, MCP and n8n.'
+                manifest = $result
+            }
+        }
+        default {
+            return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'Agent config template audited; no secrets changed.' }
+        }
+    }
+}
+
 function Test-BootstrapApiRelatedErrorMessage {
     param([AllowNull()][string]$Message)
 
@@ -23288,7 +26173,10 @@ function Invoke-BootstrapAppTuningItem {
         }
         'steamdeck-control' { return (Apply-SteamDeckControlTuning -Item $Item) }
         'dev-ai' { return (Apply-DevAiTuning -State $State -Item $Item) }
+        'agent-config' { return (Apply-AgentConfigTuning -State $State -Item $Item) }
         'local-ai-containers' { return (Apply-LocalAiContainerTuning -Item $Item) }
+        'container-hosting' { return (Apply-ContainerHostingTuning -State $State -Item $Item) }
+        'ai-edge-safe' { return (Apply-AiEdgeSafeTuning -State $State -Item $Item) }
         'ai-agent-performance' { return (Apply-AiAgentPerformanceTuning -State $State -Item $Item) }
         'capture-creator' { return (Apply-CaptureTuning -Item $Item) }
         default { return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'No mutable v1 action for this item.' } }
@@ -23613,6 +26501,7 @@ function Invoke-BootstrapComponent {
         'bootstrap-secrets' { Ensure-BootstrapSecrets -State $State }
         'bootstrap-mcps' { Ensure-BootstrapManagedMcps -State $State | Out-Null }
         'vscode-extensions' { Ensure-BootstrapVsCodeExtensions -State $State | Out-Null }
+        'vscode-extension' { Ensure-BootstrapSingleVsCodeExtension -State $State -ComponentDef $componentDef | Out-Null }
         'agent-skills' { Ensure-BootstrapAgentSkills -State $State | Out-Null }
         'sevenzip' {
             Ensure-BootstrapSystemCore -State $State
@@ -23718,6 +26607,9 @@ function Invoke-BootstrapComponent {
         'ai-usagebar' {
             Install-BootstrapAiUsagebarComponent -State $State
         }
+        'ai-memory' {
+            Install-BootstrapAiMemoryComponent -State $State
+        }
         'aionui' {
             Install-BootstrapAionUiComponent -State $State
         }
@@ -23759,6 +26651,14 @@ function Invoke-BootstrapComponent {
         'winhance' {
             Ensure-BootstrapSystemCore -State $State
             Install-BootstrapWinhanceComponent -State $State -ComponentDef $componentDef | Out-Null
+        }
+        'amd-nebula-driver' {
+            Ensure-BootstrapSystemCore -State $State
+            Install-BootstrapAmdNebulaDriverComponent -State $State -ComponentDef $componentDef | Out-Null
+        }
+        'steamdeck-zip-driver' {
+            Ensure-BootstrapSystemCore -State $State
+            Install-BootstrapSteamDeckZipDriverComponent -State $State -ComponentDef $componentDef | Out-Null
         }
         'claude-config' {
             Ensure-BootstrapGitCore -State $State
@@ -24616,6 +27516,7 @@ function Get-BootstrapDoctorProviderEnvNames {
         'github' { return @('GH_TOKEN', 'GITHUB_TOKEN') }
         'openrouter' { return @('OPENROUTER_API_KEY') }
         'zai' { return @('ZAI_API_KEY') }
+        'deepseek' { return @('DEEPSEEK_API_KEY') }
         default { return @() }
     }
 }
@@ -24851,7 +27752,7 @@ function New-BootstrapAiUsagebarDoctorReport {
         $wslConfigured = $false
     }
     $vendors = [ordered]@{}
-    foreach ($vendor in @('openai','anthropic','openrouter','zai')) {
+    foreach ($vendor in @('openai','anthropic','openrouter','zai','deepseek')) {
         $vendors[$vendor] = Get-BootstrapAiUsagebarVendorStatus -Vendor $vendor -Config $config -ValidateOpenRouter:$ValidateOpenRouter
     }
 
@@ -24872,16 +27773,88 @@ function New-BootstrapAiUsagebarDoctorReport {
     }
 }
 
+function Test-BootstrapAiMemoryServerReachable {
+    param([string]$ServerUrl = '')
+    $url = if ([string]::IsNullOrWhiteSpace($ServerUrl)) { Get-BootstrapAiMemoryServerUrl } else { $ServerUrl }
+    foreach ($suffix in @('/health', '/')) {
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $response = Invoke-WebRequest -Uri ($url.TrimEnd('/') + $suffix) -UseBasicParsing -TimeoutSec 3 -ErrorAction Stop
+            if ($null -ne $response) { return $true }
+        } catch {
+            $status = $null
+            try { $status = $_.Exception.Response.StatusCode.value__ } catch { $status = $null }
+            # Qualquer resposta HTTP (mesmo 404/401) prova que o servidor esta de pe.
+            if ($null -ne $status) { return $true }
+        }
+    }
+    return $false
+}
+
+function New-BootstrapAiMemoryDoctorReport {
+    $catalog = Get-BootstrapAiToolCatalog
+    $entry = if ($catalog.Contains('ai-memory')) { $catalog['ai-memory'] } else { $null }
+    $exePath = Get-BootstrapAiMemoryExePath -InstallRoot ''
+    $installed = (-not [string]::IsNullOrWhiteSpace($exePath))
+    $version = ''
+    $commandStatus = 'missing'
+    if ($installed -and $null -ne $entry) {
+        $probe = Invoke-BootstrapDoctorCommandProbe -Label 'ai-memory-version' -CommandName $exePath -CommandArgs @('--version') -TimeoutMs 5000
+        $commandStatus = [string]$probe['status']
+        if ($probe.Contains('firstLine')) { $version = [string]$probe['firstLine'] }
+        if ([string]::IsNullOrWhiteSpace($version)) { $version = [string]$entry['ReleaseTag'] }
+    }
+
+    $serverUrl = Get-BootstrapAiMemoryServerUrl
+    $serverReachable = $false
+    try { $serverReachable = [bool](Test-BootstrapAiMemoryServerReachable -ServerUrl $serverUrl) } catch { $serverReachable = $false }
+
+    $agents = @()
+    try { $agents = Get-BootstrapAiMemoryDetectedAgents } catch { $agents = @() }
+
+    # Sinal de wiring: marcadores ai-memory nos arquivos de config dos agentes nativos.
+    $mcpConfigured = $false
+    $userHome = Get-BootstrapUserHomePath
+    $markerCandidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $markerCandidates.Add((Join-Path $userHome '.claude.json')) | Out-Null
+        $markerCandidates.Add((Join-Path $userHome '.claude\settings.json')) | Out-Null
+        $markerCandidates.Add((Join-Path $userHome '.codex\config.toml')) | Out-Null
+    }
+    foreach ($candidate in @($markerCandidates.ToArray())) {
+        if ([string]::IsNullOrWhiteSpace($candidate) -or -not (Test-Path -LiteralPath $candidate)) { continue }
+        try {
+            $text = Microsoft.PowerShell.Management\Get-Content -LiteralPath $candidate -Raw -ErrorAction Stop
+            if ($text -match '(?i)ai-memory') { $mcpConfigured = $true; break }
+        } catch {
+        }
+    }
+
+    return [ordered]@{
+        schemaVersion = 1
+        installed = $installed
+        configured = ($installed -and ($serverReachable -or $mcpConfigured))
+        serverReachable = $serverReachable
+        mcpConfigured = $mcpConfigured
+        commandStatus = $commandStatus
+        commandPath = [string]$exePath
+        serverUrl = [string]$serverUrl
+        version = [string]$version
+        detectedAgents = @($agents)
+        notes = 'Beta: servidor loopback opt-in; handoff entre Claude Code/Codex/OpenCode.'
+    }
+}
+
 function Get-BootstrapAiConfigProviderEnvMap {
     return @(
         [ordered]@{ provider = 'openai'; env = @('OPENAI_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','vsCode','cursor','windsurf','trae','roo','cline','zed','zCode','kilo') }
         [ordered]@{ provider = 'anthropic'; env = @('ANTHROPIC_API_KEY'); targetApps = @('openClaw','hermes','continue','vsCode','cursor','windsurf','trae','roo','cline','zed','zCode') }
         [ordered]@{ provider = 'gemini'; env = @('GEMINI_API_KEY','GOOGLE_API_KEY'); targetApps = @('continue','vsCode','cursor','windsurf','trae','roo','cline') }
-        [ordered]@{ provider = 'openrouter'; env = @('OPENROUTER_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','kilo') }
-        [ordered]@{ provider = 'deepseek'; env = @('DEEPSEEK_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','kilo') }
+        [ordered]@{ provider = 'openrouter'; env = @('OPENROUTER_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','kilo','aiUsagebar') }
+        [ordered]@{ provider = 'deepseek'; env = @('DEEPSEEK_API_KEY'); targetApps = @('openCode','openClaw','hermes','continue','kilo','aiUsagebar') }
         [ordered]@{ provider = 'xai'; env = @('XAI_API_KEY'); targetApps = @('openClaw','continue','vsCode') }
         [ordered]@{ provider = 'dashscope'; env = @('DASHSCOPE_API_KEY','QWEN_API_KEY'); targetApps = @('openClaw','continue') }
-        [ordered]@{ provider = 'zai'; env = @('ZAI_API_KEY'); targetApps = @('openClaw','hermes','continue') }
+        [ordered]@{ provider = 'zai'; env = @('ZAI_API_KEY'); targetApps = @('openClaw','hermes','continue','aiUsagebar') }
         [ordered]@{ provider = 'github'; env = @('GH_TOKEN','GITHUB_TOKEN'); targetApps = @('claudeCode','claudeDesktop','vsCode','cursor','windsurf','trae','continue','zed','zCode','openCode') }
     )
 }
@@ -25062,6 +28035,7 @@ function New-BootstrapAiConfigDoctorReport {
         aiProxies = $aiProxies
         aionui = Get-BootstrapAionUiDoctorReport
         aiUsagebar = New-BootstrapAiUsagebarDoctorReport
+        aiMemory = New-BootstrapAiMemoryDoctorReport
     }
 }
 
@@ -25411,6 +28385,7 @@ function New-BootstrapDoctorReport {
     $checks.Add((Get-BootstrapSecretsManifestHealth))
     $secretsDoctor = New-BootstrapSecretsDoctorReport
     $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport
+    $aiMemoryDoctor = New-BootstrapAiMemoryDoctorReport
     $aionUiDoctor = Get-BootstrapAionUiDoctorReport -ValidateProviders
     $aiConfigDoctor = New-BootstrapAiConfigDoctorReport
     $aiProxyDoctor = New-BootstrapAiProxySuiteDoctorReport
@@ -25464,6 +28439,25 @@ function New-BootstrapDoctorReport {
         })
     }
 
+    $phaseZeroBaseline = $null
+    try {
+        $phaseZeroBaseline = Invoke-BootstrapPhaseZeroBaselineProbe
+        $checks.Add([ordered]@{
+            id = 'phasezero-baseline'
+            status = 'healthy'
+            severity = 'info'
+            summary = 'PhaseZero baseline audit concluido.'
+            phasezeroBaseline = $phaseZeroBaseline
+        })
+    } catch {
+        $checks.Add([ordered]@{
+            id = 'phasezero-baseline'
+            status = 'error'
+            severity = 'warning'
+            summary = "PhaseZero baseline audit falhou: $($_.Exception.Message)"
+        })
+    }
+
     $hasError = (@($checks | Where-Object { [string]($_['severity']) -eq 'error' }).Count -gt 0)
     $hasWarning = (@($checks | Where-Object { [string]($_['severity']) -eq 'warning' }).Count -gt 0)
     try {
@@ -25498,6 +28492,7 @@ function New-BootstrapDoctorReport {
         checks = @($checks.ToArray())
         secrets = $secretsDoctor
         aiUsagebar = $aiUsagebarDoctor
+        aiMemory = $aiMemoryDoctor
         aionui = $aionUiDoctor
         aiConfig = $aiConfigDoctor
         aiProxies = $aiProxyDoctor
@@ -25807,6 +28802,17 @@ function New-BootstrapSupportBundle {
             $aiUsagebarDoctor = $null
         }
         if ($null -eq $aiUsagebarDoctor) { $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport }
+        $aiMemoryDoctor = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('aiMemory')) {
+                $aiMemoryDoctor = $DoctorReport['aiMemory']
+            } elseif ($DoctorReport -and $DoctorReport.PSObject.Properties['aiMemory']) {
+                $aiMemoryDoctor = $DoctorReport.aiMemory
+            }
+        } catch {
+            $aiMemoryDoctor = $null
+        }
+        if ($null -eq $aiMemoryDoctor) { $aiMemoryDoctor = New-BootstrapAiMemoryDoctorReport }
         $aionUiDoctor = $null
         try {
             if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('aionui')) {
@@ -25857,6 +28863,7 @@ function New-BootstrapSupportBundle {
         Write-BootstrapJsonFile -Path (Join-Path $staging 'result.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $ResultPayload -Name 'result')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'secrets-doctor.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $secretsDoctor -Name 'secretsDoctor')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-usagebar.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiUsagebarDoctor -Name 'aiUsagebar')
+        Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-memory.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiMemoryDoctor -Name 'aiMemory')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'aionui.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aionUiDoctor -Name 'aionui')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-proxy-suite.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiProxyDoctor -Name 'aiProxies')
         Write-BootstrapJsonFile -Path (Join-Path $staging 'ai-config.json') -Value (ConvertTo-BootstrapSupportSafeObject -Value $aiConfigDoctor -Name 'aiConfig')
@@ -25884,7 +28891,7 @@ function New-BootstrapSupportBundle {
         if (Test-Path -LiteralPath $DestinationPath) { Remove-Item -LiteralPath $DestinationPath -Force }
         Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $DestinationPath -Force
         $fileInfo = Get-Item -LiteralPath $DestinationPath
-        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','aionui.json','ai-proxy-suite.json','ai-config.json','ide-targets.json','mcp-health.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
+        $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','ai-memory.json','aionui.json','ai-proxy-suite.json','ai-config.json','ide-targets.json','mcp-health.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
         $started.Stop()
         return [ordered]@{
             path = [string]$fileInfo.FullName
@@ -26261,6 +29268,7 @@ function Invoke-BootstrapProfileMode {
             if ($null -ne $auditRecord) {
                 $auditRows = @($auditRecord)
             }
+            try { $auditPhaseZero = Invoke-BootstrapPhaseZeroBaselineProbe } catch { }
         } catch {
             Write-Log ("Audit: execucao interrompida antes de concluir: {0}" -f $_.Exception.Message) 'ERROR'
             Write-BootstrapExceptionStackTrace -ErrorRecord $_
@@ -26296,6 +29304,7 @@ function Invoke-BootstrapProfileMode {
                     workspaceRoot = $resolvedWorkspaceRoot
                     cloneBaseDir = $resolvedCloneBaseDir
                     auditSummary = $summary
+                    auditPhaseZero = $auditPhaseZero
                     auditResults = @($auditRows | ForEach-Object {
                         [ordered]@{
                             component = [string]$_.Component
@@ -26577,11 +29586,14 @@ function Invoke-BootstrapProfileMode {
         $state.CurrentComponent = 'host-health'
         Invoke-BootstrapHostHealth -State $state -Mode $resolvedHostHealthMode
         $state.ComponentStatus['host-health'] = [ordered]@{ status = 'completed'; timestamp = (Get-Date).ToString('o') }
+        $state.CurrentComponent = 'phasezero-post-config'
+        $phaseZeroPostConfigResult = Invoke-BootstrapPhaseZeroPostConfig -State $state -DryRun:$DryRun
+        $state.ComponentStatus['phasezero-post-config'] = [ordered]@{ status = 'completed'; timestamp = (Get-Date).ToString('o') }
     } catch {
         $failedComponent = [string]$state.CurrentComponent
         $state.ComponentStatus[$failedComponent] = [ordered]@{ status = 'failed'; timestamp = (Get-Date).ToString('o'); error = $_.Exception.Message }
         Save-BootstrapChangeManifest -State $state
-        Write-Log ("Falha critica (AppTuning/HostHealth): {0}" -f $_.Exception.Message) 'ERROR'
+        Write-Log ("Falha critica (AppTuning/HostHealth/PostConfig): {0}" -f $_.Exception.Message) 'ERROR'
         if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
             Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{
                 phase = 'app-tuning-host-health'
