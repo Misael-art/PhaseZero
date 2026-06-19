@@ -7849,10 +7849,10 @@ function Get-BootstrapLinuxPartitions {
             $vol = $null
             try { $vol = Get-Volume -Partition $p -ErrorAction SilentlyContinue } catch { }
             $fsType = if ($vol) { [string]$vol.FileSystemType } else { '' }
-            $isLinux = ($fsType -eq '' -or $fsType -eq 'Unknown' -or $fsType -eq 'RAW') -and
+            $isLinuxPartition = ($fsType -eq '' -or $fsType -eq 'Unknown' -or $fsType -eq 'RAW') -and
                        ($p.Type -notin @('System', 'Reserved', 'Recovery', 'IU', 'Basic')) -and
                        ($p.Size -gt 1GB)
-            if ($isLinux) {
+            if ($isLinuxPartition) {
                 $linuxPartitions += @{
                     DiskNumber      = $p.DiskNumber
                     PartitionNumber = $p.PartitionNumber
@@ -8099,8 +8099,8 @@ function Get-BootstrapAlternateBootEntries {
         if ($entry.Type -ne 'entry') { continue }
         $d = [string]$entry.Description
         $p = [string]$entry.Path
-        $isWindows = ($d -match 'Windows Boot Manager' -or $p -match 'bootmgfw\.efi')
-        if (-not $isWindows -and $entry.Id) {
+        $isWindowsEntry = ($d -match 'Windows Boot Manager' -or $p -match 'bootmgfw\.efi')
+        if (-not $isWindowsEntry -and $entry.Id) {
             $alternates += @{
                 Id          = $entry.Id
                 Description = $d
