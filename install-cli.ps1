@@ -57,6 +57,12 @@ function New-CliOptions {
         Configure      = $false
         Start          = $false
         Uninstall      = $false
+        FactoryReset   = $false
+        ExportConfig   = ''
+        ImportConfig   = ''
+        Batch          = ''
+        IncludeSecrets = $false
+        InstallWebapps = $false
         DryRun         = $false
         Yes            = $false
         NoAdmin        = $false
@@ -155,6 +161,22 @@ function Read-CliArgs {
             'configure' { $opts.Configure = $true }
             'start' { $opts.Start = $true }
             'uninstall' { $opts.Uninstall = $true }
+            'factoryreset' { $opts.FactoryReset = $true }
+            'resetdefault' { $opts.FactoryReset = $true }
+            'exportconfig' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                $opts.ExportConfig = $value
+            }
+            'importconfig' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                $opts.ImportConfig = $value
+            }
+            'batch' {
+                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                $opts.Batch = $value
+            }
+            'includesecrets' { $opts.IncludeSecrets = $true }
+            'installwebapps' { $opts.InstallWebapps = $true }
             'dryrun' { $opts.DryRun = $true }
             'yes' { $opts.Yes = $true }
             'y' { $opts.Yes = $true }
@@ -230,6 +252,17 @@ function Write-CliUsage {
     Write-CliOut '  install-cli.bat --tool kimiproxy --install --yes --no-admin'
     Write-CliOut '  install-cli.bat --tool kimiproxy --start --yes --no-admin'
     Write-CliOut '  install-cli.bat --tool ai-proxy-suite --start --yes --no-admin'
+    Write-CliOut ''
+    Write-CliOut 'Ciclo de vida de configuracao:'
+    Write-CliOut '  install-cli.bat --item cursor --export-config "%USERPROFILE%\pz-configs" --yes'
+    Write-CliOut '  install-cli.bat --item cursor --import-config "%USERPROFILE%\pz-configs" --yes'
+    Write-CliOut '  install-cli.bat --item cursor --import-config https://github.com/voce/seus-configs.git --yes'
+    Write-CliOut '  install-cli.bat --item cursor --factory-reset --yes'
+    Write-CliOut '  install-cli.bat --batch export --export-config "%USERPROFILE%\pz-configs" --yes   (todos os amarelos)'
+    Write-CliOut '  install-cli.bat --export-config ... --include-secrets   (opcional; exporta segredos)'
+    Write-CliOut ''
+    Write-CliOut 'Web apps (todos de uma vez):'
+    Write-CliOut '  install-cli.bat --install-webapps --yes'
 }
 
 function ConvertTo-CliCleanReply {
@@ -1470,6 +1503,58 @@ if ([bool]$script:Options.Help) {
     exit 0
 }
 
+function Invoke-CliLifecycleActions {
+    # Executa export/import/factory-reset (individual por --item/--app/--config ou em lote --batch).
+    # Backend ja carregado em library mode. Retorna $false se nao houver acao de ciclo de vida.
+    param([Parameter(Mandatory = $true)]$Options)
+
+    $hasBatch = -not [string]::IsNullOrWhiteSpace([string]$Options.Batch)
+    $hasExport = -not [string]::IsNullOrWhiteSpace([string]$Options.ExportConfig)
+    $hasImport = -not [string]::IsNullOrWhiteSpace([string]$Options.ImportConfig)
+    if (-not ($hasBatch -or $hasExport -or $hasImport -or [bool]$Options.FactoryReset)) { return $false }
+
+    $dry = [bool]$Options.DryRun
+    $ids = @(@($Options.App) + @($Options.Component) + @($Options.Config) + @($Options.Item) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique)
+
+    # Acao efetiva
+    $action = if ($hasBatch) { [string]$Options.Batch } elseif ([bool]$Options.FactoryReset) { 'factory-reset' } elseif ($hasExport) { 'export' } else { 'import' }
+    if ($action -notin @('export', 'import', 'factory-reset')) {
+        Write-CliOut ("[ERRO] Acao de ciclo de vida invalida: {0} (use export|import|factory-reset)." -f $action) Red
+        exit 2
+    }
+    $path = if ($action -eq 'export') { [string]$Options.ExportConfig } elseif ($action -eq 'import') { [string]$Options.ImportConfig } else { '' }
+
+    Write-CliOut ("[ciclo de vida] acao={0} alvo={1} dry-run={2}" -f $action, $(if ($hasBatch) { 'lote(amarelos)' } else { ($ids -join ',') }), $dry) Cyan
+
+    $result = $null
+    try {
+        if ($hasBatch) {
+            $result = Invoke-BootstrapBatchAction -Action $action -Path $path -Ids @($ids) -IncludeSecrets:([bool]$Options.IncludeSecrets) -DryRun:$dry
+        } else {
+            if (@($ids).Count -eq 0) {
+                Write-CliOut '[ERRO] Informe o item com --item/--app/--config (ou use --batch para todos os amarelos).' Red
+                exit 2
+            }
+            $items = New-Object System.Collections.Generic.List[object]
+            foreach ($id in $ids) {
+                $r = Invoke-BootstrapItemAction -Id $id -Action $action -Path $path -IncludeSecrets:([bool]$Options.IncludeSecrets) -DryRun:$dry
+                $items.Add([ordered]@{ id = $id; status = [string]$r.status; detail = $r }) | Out-Null
+                Write-CliOut ("  {0}: {1}" -f $id, [string]$r.status) $(if ([string]$r.status -in @('exported','imported','reverted','planned')) { [System.ConsoleColor]::Green } else { [System.ConsoleColor]::Yellow })
+            }
+            $result = [ordered]@{ action = $action; count = @($ids).Count; results = @($items.ToArray()) }
+        }
+    } catch {
+        Write-CliOut ("[ERRO] Ciclo de vida falhou: {0}" -f $_.Exception.Message) Red
+        exit 1
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace([string]$Options.ResultPath)) {
+        try { Write-BootstrapJsonFile -Path ([string]$Options.ResultPath) -Value $result; Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow } catch { }
+    }
+    Write-CliOut '[ciclo de vida] concluido.' Green
+    return $true
+}
+
 if (-not (Test-Path -LiteralPath $ToolsPs1)) {
     Write-CliOut '[ERRO] Nao encontrado:' Red
     Write-CliOut "  $ToolsPs1"
@@ -1507,6 +1592,15 @@ try {
     Write-CliOut "[ERRO] Falha ao carregar catalogo: $($_.Exception.Message)"
     if (-not [bool]$script:Options.NonInteractive) { Pause }
     exit 1
+}
+
+# Acoes de ciclo de vida de configuracao (export/import/factory-reset, individual ou em lote).
+if (Invoke-CliLifecycleActions -Options $script:Options) { exit 0 }
+
+# Atalho amigavel: instalar todos os Web Apps de uma unica vez (reusa o perfil webapps).
+if ([bool]$script:Options.InstallWebapps -and [string]::IsNullOrWhiteSpace([string]$script:Options.Profile)) {
+    $script:Options.Profile = 'webapps'
+    Write-CliOut '[web apps] instalando todos via perfil "webapps".' Green
 }
 
 try {
