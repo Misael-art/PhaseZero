@@ -265,8 +265,14 @@ Describe 'Bootstrap managed MCPs' {
         }) -Format 'zed'
         $remote = ConvertTo-BootstrapMcpServerEntry -ServerDefinition (New-BootstrapManagedMcpRemoteBridgeServer -Url 'https://mcp.context7.com/mcp') -Format 'zed'
 
-        $local.command | Should Be 'npx'
-        $local.args | Should Be @('-y', 'chrome-devtools-mcp@latest', '--isolated')
+        # Em Windows, comandos 'npx' sao encapsulados em `cmd /c npx ...` para serem lancaveis.
+        if (Test-BootstrapHostIsWindows) {
+            $local.command | Should Be 'cmd'
+            $local.args | Should Be @('/c', 'npx', '-y', 'chrome-devtools-mcp@latest', '--isolated')
+        } else {
+            $local.command | Should Be 'npx'
+            $local.args | Should Be @('-y', 'chrome-devtools-mcp@latest', '--isolated')
+        }
         $local.Contains('url') | Should Be $false
         $remote.url | Should Be 'https://mcp.context7.com/mcp'
         $remote.Contains('command') | Should Be $false

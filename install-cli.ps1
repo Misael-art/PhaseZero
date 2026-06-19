@@ -605,6 +605,41 @@ function Get-CliTermPreview {
     return ($kept -join ', ')
 }
 
+function Resolve-CliEntryStatus {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('app','config','tool')][string]$Kind,
+        [Parameter(Mandatory = $true)]$Entry,
+        [hashtable]$Cache
+    )
+
+    $probePaths = @()
+    $commandNames = @()
+    if ($Kind -eq 'app') {
+        $componentCatalog = Get-BootstrapComponentCatalog
+        $component = [string]$Entry.component
+        if (-not [string]::IsNullOrWhiteSpace($component) -and $componentCatalog.Contains($component)) {
+            $def = $componentCatalog[$component]
+            if ($def.PSObject.Properties.Name -contains 'ProbePaths') { $probePaths = @($def.ProbePaths) }
+        }
+    } elseif ($Kind -eq 'tool') {
+        $toolCatalog = Get-BootstrapAiToolCatalog
+        if ($toolCatalog.Contains([string]$Entry.id)) {
+            $commandNames = @((Get-CliCatalogValue -Entry $toolCatalog[[string]$Entry.id] -Name 'CommandNames' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        }
+    }
+
+    $status = Get-BootstrapItemStatus -Kind $Kind -Id ([string]$Entry.id) -ProbePaths $probePaths -CommandNames $commandNames -Cache $Cache
+    return [pscustomobject]@{ status = $status; color = [System.ConsoleColor](Get-BootstrapItemStatusColor -Status $status) }
+}
+
+function Write-CliStatusLegend {
+    Write-CliOut 'Legenda de status:' Cyan
+    foreach ($info in (Get-BootstrapItemStatusInfo)) {
+        Write-CliOut ('  * {0}' -f [string]$info.label) ([System.ConsoleColor][string]$info.color)
+    }
+    Write-CliOut ''
+}
+
 function Write-CliCatalogEntries {
     param([Parameter(Mandatory = $true)][ValidateSet('app','config','tool')][string]$Kind)
 
@@ -614,6 +649,8 @@ function Write-CliCatalogEntries {
         'config' { 'config' }
         default { 'tool' }
     }
+    $statusCache = Read-BootstrapItemStatusCache
+    Write-CliStatusLegend
     $currentCategory = ''
     foreach ($entry in $entries) {
         if ($Kind -eq 'config' -and [string]$entry.category -ne $currentCategory) {
@@ -622,12 +659,13 @@ function Write-CliCatalogEntries {
             Write-CliOut ("[{0}] {1}" -f $currentCategory, [string]$entry.source) Cyan
         }
         $termPreview = Get-CliTermPreview -Terms @($entry.terms)
+        $statusInfo = Resolve-CliEntryStatus -Kind $Kind -Entry $entry -Cache $statusCache
         if ($Kind -eq 'app') {
-            Write-CliOut ('{0,3}. [app] {1} | {2} | component: {3} | termos: {4} | source: {5}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.component, $termPreview, [string]$entry.source)
+            Write-CliOut ('{0,3}. [app] {1} | {2} | component: {3} | termos: {4} | source: {5}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.component, $termPreview, [string]$entry.source) $statusInfo.color
         } elseif ($Kind -eq 'config') {
-            Write-CliOut ('{0,3}. [config] {1} | {2} | categoria: {3} | termos: {4} | acoes: {5} | risco: {6}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.actions, [string]$entry.risk)
+            Write-CliOut ('{0,3}. [config] {1} | {2} | categoria: {3} | termos: {4} | acoes: {5} | risco: {6}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.actions, [string]$entry.risk) $statusInfo.color
         } else {
-            Write-CliOut ('{0,3}. [tool] {1} | {2} | categoria: {3} | termos: {4} | source: {5}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.source)
+            Write-CliOut ('{0,3}. [tool] {1} | {2} | categoria: {3} | termos: {4} | source: {5}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.source) $statusInfo.color
         }
     }
     Write-CliOut ''
@@ -655,6 +693,8 @@ function Get-CliUnifiedCatalogEntries {
 }
 
 function Write-CliUnifiedCatalogEntries {
+    $statusCache = Read-BootstrapItemStatusCache
+    Write-CliStatusLegend
     $currentGroup = ''
     foreach ($item in @(Get-CliUnifiedCatalogEntries)) {
         $entry = $item.entry
@@ -668,13 +708,14 @@ function Write-CliUnifiedCatalogEntries {
             Write-CliOut ''
             Write-CliOut ("[{0}]" -f $currentGroup) Cyan
         }
+        $statusInfo = Resolve-CliEntryStatus -Kind ([string]$item.kind) -Entry $entry -Cache $statusCache
         Write-CliOut ('{0,3}. [{1}] {2} | {3} | acoes: {4} | risco: {5}' -f
             [int]$item.number,
             [string]$item.kind,
             [string]$entry.id,
             [string]$entry.title,
             [string]$entry.actions,
-            [string]$entry.risk)
+            [string]$entry.risk) $statusInfo.color
     }
     Write-CliOut ''
     Write-CliOut 'Dica: use numero global, ID, alias ou nome. Ex: .\install-cli.bat --item <termo> --dry-run --yes' Yellow

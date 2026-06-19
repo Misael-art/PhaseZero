@@ -779,6 +779,36 @@ function Get-UiBrush {
     return $converter.ConvertFromString($Color)
 }
 
+function Get-UiStatusHex {
+    # Mapeia os 5 estados de status para hex legivel no tema escuro.
+    param([string]$Status)
+    switch ([string]$Status) {
+        'error'                  { return '#EF4444' } # vermelho
+        'not-installed'          { return '#FFFFFF' } # branco
+        'installed-unconfigured' { return '#FACC15' } # amarelo
+        'configured'             { return '#3B82F6' } # azul
+        'optimized-tested'       { return '#22C55E' } # verde
+        default                  { return '#CBD5E1' } # neutro
+    }
+}
+
+function Get-UiStatusBrush {
+    param([string]$Status)
+    return (Get-UiBrush (Get-UiStatusHex -Status $Status))
+}
+
+function Get-UiStatusLabel {
+    param([string]$Status)
+    switch ([string]$Status) {
+        'error'                  { return 'erro' }
+        'not-installed'          { return 'nao instalado' }
+        'installed-unconfigured' { return 'instalado, nao configurado' }
+        'configured'             { return 'instalado e configurado' }
+        'optimized-tested'       { return 'instalado, configurado, otimizado e testado' }
+        default                  { return 'desconhecido' }
+    }
+}
+
 #
 # XAML Definition
 #
@@ -3693,10 +3723,11 @@ function Refresh-SelectionTrees {
             $badgeSuffix = Format-UiComponentSafetySuffix -Component $component
             $cb.Content   = if ([string]::IsNullOrWhiteSpace($badgeSuffix)) { $componentName } else { "$componentName $badgeSuffix" }
             $cb.IsChecked = (($isExplicitComponent -or $isResolvedComponent) -and -not $isExcludedComponent)
-            $cb.Foreground = Get-UiBrush '#CBD5E1'
+            $componentStatus = if ($component.PSObject.Properties.Name -contains 'status') { [string]$component.status } else { '' }
+            $cb.Foreground = Get-UiStatusBrush -Status $componentStatus
             $cb.Style = $window.FindResource('DarkCheck')
             $cb.Tag = @{ kind = 'component'; item = $component; name = $componentName; explicit = $isExplicitComponent; resolved = $isResolvedComponent; excluded = $isExcludedComponent; canExclude = $canExcludeComponent }
-            $safetyTooltip = "Componente: $componentName`nDescrição: $([string]$component.description)`nTipo: $([string]$component.kind)`nEstágio: $([string]$component.stage)`nRisco: $([string]$component.riskLevel)`nBadges: $(@(Get-UiComponentSafetyBadges -Component $component) -join ', ')`nFonte oficial: $([string]$component.officialSource)`nManual: $([string]$component.manualReason)`nGPU: $([string]$component.requiresGpu)`nLogin: $([string]$component.requiresInteractiveLogin)`nDepende de: $(@($component.dependsOn) -join ', ')"
+            $safetyTooltip = "Componente: $componentName`nStatus: $(Get-UiStatusLabel -Status $componentStatus)`nDescrição: $([string]$component.description)`nTipo: $([string]$component.kind)`nEstágio: $([string]$component.stage)`nRisco: $([string]$component.riskLevel)`nBadges: $(@(Get-UiComponentSafetyBadges -Component $component) -join ', ')`nFonte oficial: $([string]$component.officialSource)`nManual: $([string]$component.manualReason)`nGPU: $([string]$component.requiresGpu)`nLogin: $([string]$component.requiresInteractiveLogin)`nDepende de: $(@($component.dependsOn) -join ', ')"
             $cb.ToolTip = $safetyTooltip
             if ($isResolvedComponent -and -not $isExplicitComponent) {
                 $cb.Opacity = 0.82

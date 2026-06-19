@@ -5661,6 +5661,107 @@ function Test-WingetProbePathsOnDisk {
     return $false
 }
 
+function Get-BootstrapItemStatusInfo {
+    # Modelo unico de 5 estados usado por CLI e UI. Ordem = legenda.
+    return @(
+        [ordered]@{ status = 'error';                  color = 'Red';    label = 'erro' }
+        [ordered]@{ status = 'not-installed';          color = 'White';  label = 'nao instalado' }
+        [ordered]@{ status = 'installed-unconfigured'; color = 'Yellow'; label = 'instalado, nao configurado' }
+        [ordered]@{ status = 'configured';             color = 'Blue';   label = 'instalado e configurado' }
+        [ordered]@{ status = 'optimized-tested';       color = 'Green';  label = 'instalado, configurado, otimizado e testado' }
+    )
+}
+
+function Get-BootstrapItemStatusColor {
+    param([Parameter(Mandatory = $true)][string]$Status)
+    foreach ($info in (Get-BootstrapItemStatusInfo)) {
+        if ([string]$info.status -eq $Status) { return [string]$info.color }
+    }
+    return 'Gray'
+}
+
+function Get-BootstrapItemStatusRank {
+    # Ordena por "quao avancado" o estado e (erro fica fora desta escala).
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Status)
+    switch ($Status) {
+        'not-installed'          { return 0 }
+        'installed-unconfigured' { return 1 }
+        'configured'             { return 2 }
+        'optimized-tested'       { return 3 }
+        default                  { return -1 }
+    }
+}
+
+function Get-BootstrapItemStatusCachePath {
+    return (Join-Path (Get-BootstrapDataRoot) 'item-status.json')
+}
+
+function Read-BootstrapItemStatusCache {
+    $path = Get-BootstrapItemStatusCachePath
+    if (-not (Test-Path -LiteralPath $path)) { return @{} }
+    try {
+        $data = ConvertTo-BootstrapHashtable -InputObject (Read-BootstrapJsonFile -Path $path)
+        if (-not ($data -is [hashtable])) { return @{} }
+        return $data
+    } catch {
+        return @{}
+    }
+}
+
+function Set-BootstrapItemStatus {
+    # Persiste o estado conhecido de um item (chamado pelos fluxos de install/configure/validate/optimize).
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('app', 'config', 'tool')][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][ValidateSet('error', 'not-installed', 'installed-unconfigured', 'configured', 'optimized-tested')][string]$Status
+    )
+    if ([string]::IsNullOrWhiteSpace($Id)) { return }
+    $cache = Read-BootstrapItemStatusCache
+    $key = "{0}:{1}" -f $Kind, $Id
+    $cache[$key] = [ordered]@{ status = $Status; updatedAt = (Get-Date).ToString('o') }
+    try { Write-BootstrapJsonFile -Path (Get-BootstrapItemStatusCachePath) -Value $cache } catch { }
+}
+
+function Get-BootstrapItemStatus {
+    # Resolve um dos 5 estados combinando probe barato (ao vivo) + estado persistido (cache).
+    # Nunca roda doctors/comandos externos pesados.
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('app', 'config', 'tool')][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$Id,
+        [string[]]$ProbePaths = @(),
+        [string[]]$CommandNames = @(),
+        [switch]$ErrorFlag,
+        [hashtable]$Cache
+    )
+
+    if (-not $Cache) { $Cache = Read-BootstrapItemStatusCache }
+    $key = "{0}:{1}" -f $Kind, $Id
+    $cachedStatus = ''
+    if ($Cache.ContainsKey($key)) {
+        $entry = ConvertTo-BootstrapHashtable -InputObject $Cache[$key]
+        if ($entry.ContainsKey('status')) { $cachedStatus = [string]$entry['status'] }
+    }
+
+    # Erro tem prioridade (vale mesmo se o binario sumiu).
+    if ($ErrorFlag -or $cachedStatus -eq 'error') { return 'error' }
+
+    # Probe de instalacao ao vivo.
+    $installed = $false
+    if (@($ProbePaths).Count -gt 0 -and (Test-WingetProbePathsOnDisk -ProbePaths @($ProbePaths))) { $installed = $true }
+    if (-not $installed) {
+        foreach ($cmd in @($CommandNames)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$cmd) -and (Get-Command -Name ([string]$cmd) -ErrorAction SilentlyContinue)) { $installed = $true; break }
+        }
+    }
+
+    if (-not $installed) { return 'not-installed' }
+
+    # Instalado: nunca regredir abaixo de "installed-unconfigured"; usar o cache para subir.
+    $cachedRank = Get-BootstrapItemStatusRank -Status $cachedStatus
+    if ($cachedRank -ge (Get-BootstrapItemStatusRank -Status 'configured')) { return $cachedStatus }
+    return 'installed-unconfigured'
+}
+
 function Test-BootstrapAppxPackageInstalled {
     param([string[]]$Names = @())
 
@@ -13243,6 +13344,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['copilot-cli'] = New-BootstrapComponentDefinition -Name 'copilot-cli' -Description 'GitHub Copilot CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@github/copilot'; DisplayName = 'GitHub Copilot CLI (@github/copilot)'; CommandNames = @('copilot') }
     $catalog['codex-cli'] = New-BootstrapComponentDefinition -Name 'codex-cli' -Description 'OpenAI Codex CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@openai/codex'; DisplayName = 'OpenAI Codex CLI (@openai/codex)'; CommandNames = @('codex') }
     $catalog['openclaude-cli'] = New-BootstrapComponentDefinition -Name 'openclaude-cli' -Description 'OpenClaude CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@gitlawb/openclaude'; DisplayName = 'OpenClaude CLI (@gitlawb/openclaude)'; CommandNames = @('openclaude') }
+    $catalog['mimo-code'] = New-BootstrapComponentDefinition -Name 'mimo-code' -Description 'MiMo Code CLI (fork agentico do OpenCode, Xiaomi MiMo) via npm -g. Configura provider OpenAI-compatible validado quando disponivel; senao usa MiMo Auto (gratis).' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@mimo-ai/cli'; DisplayName = 'MiMo Code (@mimo-ai/cli)'; CommandNames = @('mimo') } -RequiresNetwork $true
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes Agent via WSL2 + OpenCloud config no projeto.' -DependsOn @('wsl-core') -Kind 'hermes'
     $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar: monitor de uso/plano (TUI/CLI no Windows, Waybar no Linux) por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
@@ -13383,7 +13485,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['public-beta'] = New-BootstrapProfileDefinition -Name 'public-beta' -Description 'Primeira instalacao confiavel para beta publico; maior que safe-base, sem WSL/Docker/IA pesada/gaming.' -Items @('safe-base', 'powershell', 'powertoys', 'brave', 'bootstrap-secrets', 'vscode', 'vscode-extensions', 'bootstrap-mcps')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores, utilitarios e atalhos web.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp', 'webapps')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'ai-memory', 'aionui', 'headroom-ai', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli', 'supermaven-vscode')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'mimo-code', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'ai-memory', 'aionui', 'headroom-ai', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli', 'supermaven-vscode')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
@@ -13501,6 +13603,7 @@ function Get-BootstrapUiContract {
         }
     }
 
+    $statusCache = Read-BootstrapItemStatusCache
     $componentEntries = foreach ($componentName in $components.Keys) {
         $componentDef = $components[$componentName]
         $riskLevel = ''
@@ -13521,6 +13624,9 @@ function Get-BootstrapUiContract {
         }
         if ($requiresGpu) { $badges.Add('Requer GPU') | Out-Null }
         if ($requiresInteractiveLogin) { $badges.Add('Requer login') | Out-Null }
+        $componentProbePaths = @()
+        if ($componentDef.PSObject.Properties.Name -contains 'ProbePaths') { $componentProbePaths = @($componentDef.ProbePaths) }
+        $componentStatus = Get-BootstrapItemStatus -Kind 'app' -Id ([string]$componentDef.Name) -ProbePaths $componentProbePaths -Cache $statusCache
         [ordered]@{
             name = $componentDef.Name
             description = $componentDef.Description
@@ -13535,6 +13641,8 @@ function Get-BootstrapUiContract {
             requiresInteractiveLogin = $requiresInteractiveLogin
             officialSource = $officialSource
             badges = @($badges.ToArray())
+            status = $componentStatus
+            statusColor = (Get-BootstrapItemStatusColor -Status $componentStatus)
             reversibility = Get-BootstrapComponentReversibility -ComponentDef $componentDef
         }
     }
@@ -13566,6 +13674,7 @@ function Get-BootstrapUiContract {
             launcherDiagnostics = $true
             guidedCliMenu = $true
             runTimeline = $true
+            itemStatusSignals = $true
         }
         profileNames = @($profiles.Keys)
         componentNames = @($components.Keys)
@@ -13582,6 +13691,7 @@ function Get-BootstrapUiContract {
         }
         profiles = @($profileEntries)
         components = @($componentEntries)
+        itemStatusLegend = @(Get-BootstrapItemStatusInfo)
         appTuningCatalog = Get-BootstrapAppTuningCatalog
         apiCatalog = $apiCatalog
         apiInventory = Get-BootstrapApiInventory -SecretsData $secretsData
@@ -18963,17 +19073,64 @@ function Invoke-BootstrapAiMemoryWiring {
 function Ensure-BootstrapAiMemoryServerTask {
     param(
         [Parameter(Mandatory = $true)][string]$ExePath,
-        [switch]$DryRun
+        [switch]$DryRun,
+        [switch]$Visible
     )
     # Registra task de logon que sobe o servidor loopback ai-memory serve.
+    # Por padrao roda em segundo plano (sem janela de console) via launcher VBS;
+    # use -Visible para manter o console visivel (debug).
     $taskName = 'BootstrapTools-AiMemoryServer'
     $serverUrl = Get-BootstrapAiMemoryServerUrl
     $bind = '127.0.0.1:49374'
     if ($serverUrl -match '://([^/]+)') { $bind = $matches[1] }
-    $taskCommand = ('"{0}" serve --transport http --bind {1}' -f $ExePath, $bind)
-    if ($DryRun) {
-        return [ordered]@{ status = 'planned'; task = $taskName; command = $taskCommand }
+
+    $hidden = -not $Visible
+    $vbsPath = ''
+    if ($hidden) {
+        $launcherDir = Split-Path -Parent $ExePath
+        $vbsPath = Join-Path $launcherDir 'ai-memory-serve-hidden.vbs'
+        # WScript.Shell.Run com window style 0 = oculto; False = nao espera.
+        $vbsBody = 'CreateObject("WScript.Shell").Run """' + $ExePath + '"" serve --transport http --bind ' + $bind + '", 0, False'
+        $wscriptExe = Join-Path $env:SystemRoot 'System32\wscript.exe'
+        $taskCommand = ('"{0}" "{1}"' -f $wscriptExe, $vbsPath)
+    } else {
+        $taskCommand = ('"{0}" serve --transport http --bind {1}' -f $ExePath, $bind)
     }
+
+    if ($DryRun) {
+        return [ordered]@{ status = 'planned'; task = $taskName; command = $taskCommand; hidden = $hidden }
+    }
+
+    if ($hidden) {
+        try {
+            Write-BootstrapAtomicText -Path $vbsPath -Content $vbsBody -Encoding (New-Object System.Text.UTF8Encoding($false))
+        } catch {
+            return [ordered]@{ status = 'failed'; task = $taskName; command = $taskCommand; reason = ("vbs-write: {0}" -f $_.Exception.Message) }
+        }
+    }
+
+    # Primario: Register-ScheduledTask (por-usuario, NAO exige elevacao, suporta janela oculta).
+    if (Get-Command -Name Register-ScheduledTask -ErrorAction SilentlyContinue) {
+        try {
+            $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
+            if ($hidden) {
+                $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') -Argument ('"{0}"' -f $vbsPath)
+            } else {
+                $action = New-ScheduledTaskAction -Execute $ExePath -Argument ('serve --transport http --bind {0}' -f $bind)
+            }
+            $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+            $principal = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) -LogonType Interactive -RunLevel Limited
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
+            $settings.Hidden = $hidden
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Inicia o servidor loopback ai-memory no logon (segundo plano quando oculto).' -ErrorAction Stop | Out-Null
+            return [ordered]@{ status = 'registered'; task = $taskName; command = $taskCommand; hidden = $hidden; method = 'register-scheduledtask' }
+        } catch {
+            Write-Log ("ai-memory: Register-ScheduledTask falhou ({0}); tentando schtasks." -f $_.Exception.Message) 'WARN'
+        }
+    }
+
+    # Fallback: schtasks (pode exigir elevacao em alguns hosts).
     $schtasksExe = Resolve-CommandPath -Name 'schtasks.exe'
     if (-not $schtasksExe) { $schtasksExe = Join-Path $env:SystemRoot 'System32\schtasks.exe' }
     if (-not (Test-Path $schtasksExe)) {
@@ -18981,9 +19138,9 @@ function Ensure-BootstrapAiMemoryServerTask {
     }
     $exitCode = Invoke-NativeWithLog -Exe $schtasksExe -Args @('/Create', '/SC', 'ONLOGON', '/TN', $taskName, '/TR', $taskCommand, '/F', '/RU', $env:USERNAME)
     if ($exitCode -ne 0) {
-        return [ordered]@{ status = 'failed'; task = $taskName; command = $taskCommand; reason = ("exit={0}" -f $exitCode) }
+        return [ordered]@{ status = 'failed'; task = $taskName; command = $taskCommand; reason = ("schtasks-exit={0}" -f $exitCode); hidden = $hidden }
     }
-    return [ordered]@{ status = 'registered'; task = $taskName; command = $taskCommand }
+    return [ordered]@{ status = 'registered'; task = $taskName; command = $taskCommand; hidden = $hidden; method = 'schtasks' }
 }
 
 function Install-BootstrapAiMemory {
@@ -19920,6 +20077,89 @@ function Get-BootstrapZCodeStorePath {
     ) -DefaultPath $(if ($appDataPath) { Join-Path $appDataPath 'ai.z.zcode\store.json' } else { $null }))
 }
 
+function Get-BootstrapMimoCodeConfigPath {
+    # MiMo Code (fork do OpenCode) le config global em ~/.config/mimocode/mimocode.json.
+    $userHome = [string]$env:USERPROFILE
+    return (Get-BootstrapPreferredFilePath -Candidates @(
+        $(if (-not [string]::IsNullOrWhiteSpace($userHome)) { Join-Path $userHome '.config\mimocode\mimocode.json' })
+    ) -DefaultPath $(if (-not [string]::IsNullOrWhiteSpace($userHome)) { Join-Path $userHome '.config\mimocode\mimocode.json' } else { $null }))
+}
+
+function Ensure-BootstrapMimoCodeConfig {
+    # Aplica provider OpenAI-compatible validado no config do MiMo Code, de forma resiliente:
+    # backup antes de sobrescrever, merge conservador (preserva campos desconhecidos), nunca loga o segredo.
+    # Sem provider validado: mantem MiMo Auto (gratis) e nao grava nada.
+    param(
+        [hashtable]$State,
+        [AllowNull()]$Candidate = $null,
+        [string]$ConfigPath = ''
+    )
+
+    $dryRun = ($State -is [hashtable]) -and $State.ContainsKey('DryRun') -and [bool]$State.DryRun
+
+    $candidate = $Candidate
+    if ($null -eq $candidate) {
+        try {
+            $candidate = Resolve-BootstrapOpenAiCompatibleProviderCandidate -PreferredProviders @('mimo', 'moonshot', 'openrouter', 'deepseek', 'openai', 'xai')
+        } catch {
+            Write-Log ("MiMo Code: nao foi possivel resolver provider OpenAI-compatible: {0}" -f $_.Exception.Message) 'WARN'
+            return [ordered]@{ status = 'skipped'; reason = 'resolver-error' }
+        }
+    }
+    if (-not $candidate -or [string]$candidate.status -ne 'selected') {
+        Write-Log 'MiMo Code: nenhum provider OpenAI-compatible validado; mantendo MiMo Auto (gratis) sem gravar config.'
+        return [ordered]@{ status = 'skipped'; reason = 'no-validated-provider' }
+    }
+
+    $providerName = [string]$candidate.provider
+    $baseUrl = [string]$candidate.baseUrl
+    $apiKey = [string]$candidate.apiKey
+    if ([string]::IsNullOrWhiteSpace($baseUrl) -or [string]::IsNullOrWhiteSpace($apiKey)) {
+        return [ordered]@{ status = 'skipped'; reason = 'incomplete-candidate'; provider = $providerName }
+    }
+
+    $configPath = if (-not [string]::IsNullOrWhiteSpace($ConfigPath)) { $ConfigPath } else { Get-BootstrapMimoCodeConfigPath }
+    if ([string]::IsNullOrWhiteSpace($configPath)) { return [ordered]@{ status = 'skipped'; reason = 'no-config-path' } }
+
+    if ($dryRun) {
+        Write-Log ("DryRun: MiMo Code apontaria para provider '{0}' (OpenAI-compatible) em {1}; chave nao exibida." -f $providerName, $configPath)
+        return [ordered]@{ status = 'planned'; provider = $providerName; path = $configPath }
+    }
+
+    $config = @{}
+    if (Test-Path $configPath) {
+        try {
+            $config = Read-BootstrapJsonFile -Path $configPath
+            if (-not ($config -is [hashtable])) { $config = @{} }
+        } catch {
+            Write-Log "MiMo Code config invalido em $configPath; sera preservado via .bak antes de recriar." 'WARN'
+            $config = @{}
+        }
+    }
+
+    $before = ConvertTo-BootstrapStableJson -InputObject $config
+    $provider = Ensure-BootstrapNamedMap -Parent $config -Name 'provider'
+    $internal = Ensure-BootstrapNamedMap -Parent $provider -Name 'internal'
+    $options = Ensure-BootstrapNamedMap -Parent $internal -Name 'options'
+    $options['baseURL'] = $baseUrl
+    $options['apiKey'] = $apiKey
+    $after = ConvertTo-BootstrapStableJson -InputObject $config
+    if ($before -eq $after) {
+        return [ordered]@{ status = 'unchanged'; provider = $providerName; path = $configPath }
+    }
+
+    if (Test-Path $configPath) {
+        try { Copy-Item -LiteralPath $configPath -Destination ($configPath + '.bak') -Force -ErrorAction Stop }
+        catch { Write-Log ("Nao foi possivel gravar backup do config MiMo Code: {0}" -f $_.Exception.Message) 'WARN' }
+    }
+    Write-BootstrapJsonFile -Path $configPath -Value $config
+    if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
+        try { Register-BootstrapChange -State $State -Type File -Target $configPath -OldValue $null -NewValue 'mimocode-provider' -Operation 'configure-mimocode' -Component 'mimo-code' } catch { }
+    }
+    Write-Log ("MiMo Code configurado com provider OpenAI-compatible '{0}' (chave mascarada) em {1}" -f $providerName, $configPath)
+    return [ordered]@{ status = 'configured'; provider = $providerName; path = $configPath }
+}
+
 function Get-BootstrapOpenClawConfigPath {
     $paths = @(Get-BootstrapOpenClawConfigPaths)
     if ($paths.Count -gt 0) { return [string]$paths[0] }
@@ -20831,6 +21071,26 @@ function ConvertFrom-BootstrapRemoteBridgeServerDefinition {
     return $remote
 }
 
+function Get-BootstrapWindowsNpxLaunch {
+    # Em Windows, um comando MCP "npx" puro nao e resolvido por CreateProcess (npx e npx.cmd),
+    # causando "Could not attach to MCP server". Encapsula em `cmd /c npx ...` (forma padrao e
+    # robusta no Windows). Mantemos a forma canonica 'npx' internamente; este wrap so e aplicado
+    # na serializacao final de cada cliente. Retorna $null quando nao se aplica.
+    param([string]$Command, [string[]]$Args = @())
+
+    if (-not (Test-BootstrapHostIsWindows)) { return $null }
+    if ([string]::IsNullOrWhiteSpace($Command)) { return $null }
+    if ([string]::Equals($Command, 'cmd', [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
+    $base = [System.IO.Path]::GetFileNameWithoutExtension($Command)
+    if (-not [string]::Equals($base, 'npx', [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
+
+    $newArgs = New-Object System.Collections.Generic.List[string]
+    $newArgs.Add('/c') | Out-Null
+    $newArgs.Add('npx') | Out-Null
+    foreach ($a in @($Args)) { $newArgs.Add([string]$a) | Out-Null }
+    return [ordered]@{ command = 'cmd'; args = @($newArgs.ToArray()) }
+}
+
 function ConvertTo-BootstrapMcpServerEntry {
     param(
         [Parameter(Mandatory = $true)][hashtable]$ServerDefinition,
@@ -20848,6 +21108,16 @@ function ConvertTo-BootstrapMcpServerEntry {
     $remoteBridgeDefinition = ConvertFrom-BootstrapRemoteBridgeServerDefinition -ServerDefinition $ServerDefinition
     if (($remoteBridgeDefinition -is [System.Collections.IDictionary]) -and $Format -in @('vscode', 'zed', 'zcode')) {
         $effectiveDefinition = ConvertTo-BootstrapHashtable -InputObject $remoteBridgeDefinition
+    }
+
+    # Robustez Windows: encapsular comandos stdio 'npx' em `cmd /c npx ...` na saida final.
+    if (($effectiveDefinition -is [System.Collections.IDictionary]) -and $effectiveDefinition.ContainsKey('command') -and -not $effectiveDefinition.ContainsKey('url')) {
+        $npxWrap = Get-BootstrapWindowsNpxLaunch -Command ([string]$effectiveDefinition['command']) -Args @($effectiveDefinition['args'])
+        if ($npxWrap) {
+            $effectiveDefinition = ConvertTo-BootstrapHashtable -InputObject $effectiveDefinition
+            $effectiveDefinition['command'] = [string]$npxWrap['command']
+            $effectiveDefinition['args'] = @($npxWrap['args'])
+        }
     }
 
     if ($Format -eq 'opencode') {
@@ -20994,40 +21264,41 @@ function ConvertTo-BootstrapMcpServerEntry {
         return $serverOut
     }
 
+    # Formato 'standard': usa $effectiveDefinition (ja com o wrap Windows npx aplicado quando cabivel).
     $result = @{}
     foreach ($propertyName in @('command', 'url', 'transport', 'type', 'serverUrl')) {
-        if ($ServerDefinition.ContainsKey($propertyName)) {
-            $value = [string]$ServerDefinition[$propertyName]
+        if ($effectiveDefinition.ContainsKey($propertyName)) {
+            $value = [string]$effectiveDefinition[$propertyName]
             if (-not [string]::IsNullOrWhiteSpace($value)) {
                 $result[$propertyName] = $value
             }
         }
     }
-    if ($ServerDefinition.ContainsKey('args')) {
-        $result['args'] = @($ServerDefinition['args'])
+    if ($effectiveDefinition.ContainsKey('args')) {
+        $result['args'] = @($effectiveDefinition['args'])
     }
-    if ($ServerDefinition.ContainsKey('headers') -and ($ServerDefinition['headers'] -is [hashtable])) {
+    if ($effectiveDefinition.ContainsKey('headers') -and ($effectiveDefinition['headers'] -is [hashtable])) {
         $headers = @{}
-        Set-BootstrapNonEmptyStringValues -Target $headers -Values $ServerDefinition['headers']
+        Set-BootstrapNonEmptyStringValues -Target $headers -Values $effectiveDefinition['headers']
         if ($headers.Count -gt 0) {
             $result['headers'] = $headers
         }
     }
-    if ($ServerDefinition.ContainsKey('env') -and ($ServerDefinition['env'] -is [hashtable])) {
+    if ($effectiveDefinition.ContainsKey('env') -and ($effectiveDefinition['env'] -is [hashtable])) {
         $envOut = @{}
-        Set-BootstrapNonEmptyStringValues -Target $envOut -Values $ServerDefinition['env']
+        Set-BootstrapNonEmptyStringValues -Target $envOut -Values $effectiveDefinition['env']
         if ($envOut.Count -gt 0) {
             $result['env'] = $envOut
         }
     }
-    if ($ServerDefinition.ContainsKey('alwaysAllow')) {
-        $result['alwaysAllow'] = @($ServerDefinition['alwaysAllow'])
+    if ($effectiveDefinition.ContainsKey('alwaysAllow')) {
+        $result['alwaysAllow'] = @($effectiveDefinition['alwaysAllow'])
     }
-    if ($ServerDefinition.ContainsKey('disabled')) {
-        $result['disabled'] = [bool]$ServerDefinition['disabled']
+    if ($effectiveDefinition.ContainsKey('disabled')) {
+        $result['disabled'] = [bool]$effectiveDefinition['disabled']
     }
-    if ($ServerDefinition.ContainsKey('enabled')) {
-        $result['enabled'] = [bool]$ServerDefinition['enabled']
+    if ($effectiveDefinition.ContainsKey('enabled')) {
+        $result['enabled'] = [bool]$effectiveDefinition['enabled']
     }
     if ($result.Count -eq 0) {
         return $null
@@ -26569,6 +26840,10 @@ function Invoke-BootstrapComponent {
             $npmBin = ''
             if ($State.NodeInfo -and $State.NodeInfo.NpmBin) { $npmBin = [string]$State.NodeInfo.NpmBin }
             Ensure-NpmGlobalPackage -NpmCmd $State.NodeInfo.NpmCmd -Package $componentDef.Package -DisplayName $componentDef.DisplayName -CommandNames $commandNames -VersionArgs $versionArgs -NpmBin $npmBin
+            if ($Name -eq 'mimo-code' -or ([string]$componentDef.Package) -eq '@mimo-ai/cli') {
+                try { Ensure-BootstrapMimoCodeConfig -State $State | Out-Null }
+                catch { Write-Log ("MiMo Code: configuracao de provider nao aplicada (nao-bloqueante): {0}" -f $_.Exception.Message) 'WARN' }
+            }
             if ($Name -eq 'bonsai-cli' -or ([string]$componentDef.Package) -eq '@bonsai-ai/cli') {
                 $bonsaiCommandPath = $null
                 if ($State.NodeInfo -and $State.NodeInfo.NpmBin) {
