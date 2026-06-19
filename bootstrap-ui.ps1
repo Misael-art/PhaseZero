@@ -1643,6 +1643,19 @@ function Get-UiStatusLabel {
                         <Border Grid.Row="4" Style="{StaticResource Card}">
                             <DockPanel>
                                 <TextBlock x:Name="DetailsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="DETALHES"/>
+                                <StackPanel x:Name="ConfigActionsPanel" DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                                    <TextBlock x:Name="ConfigActionsLabel" Style="{StaticResource SectionLabel}" Text="AÇÕES DE CONFIGURAÇÃO (item selecionado)"/>
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button x:Name="CfgConfigureButton" Style="{StaticResource GhostBtn}" Content="Configurar/Otimizar" Margin="0,0,6,6" Height="30"/>
+                                        <Button x:Name="CfgResetButton" Style="{StaticResource GhostBtn}" Content="Reverter (fábrica)" Margin="0,0,6,6" Height="30"/>
+                                        <Button x:Name="CfgExportButton" Style="{StaticResource GhostBtn}" Content="Exportar" Margin="0,0,6,6" Height="30"/>
+                                        <Button x:Name="CfgImportButton" Style="{StaticResource GhostBtn}" Content="Importar" Margin="0,0,6,6" Height="30"/>
+                                    </WrapPanel>
+                                    <WrapPanel Margin="0,2,0,0">
+                                        <Button x:Name="CfgBatchResetButton" Style="{StaticResource GhostBtn}" Content="Lote: reverter amarelos" Margin="0,0,6,6" Height="30"/>
+                                        <Button x:Name="InstallWebappsButton" Style="{StaticResource GhostBtn}" Content="Instalar todos os Web Apps" Margin="0,0,6,6" Height="30"/>
+                                    </WrapPanel>
+                                </StackPanel>
                                 <TextBox x:Name="DetailsTextBox" Style="{StaticResource DarkReadonly}"
                                          TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AcceptsReturn="True"/>
                             </DockPanel>
@@ -2685,6 +2698,12 @@ $ui = [ordered]@{
     ExcludeList           = (Get-Control 'ExcludeList')
     DetailsLabel          = (Get-Control 'DetailsLabel')
     DetailsTextBox        = (Get-Control 'DetailsTextBox')
+    CfgConfigureButton    = (Get-Control 'CfgConfigureButton')
+    CfgResetButton        = (Get-Control 'CfgResetButton')
+    CfgExportButton       = (Get-Control 'CfgExportButton')
+    CfgImportButton       = (Get-Control 'CfgImportButton')
+    CfgBatchResetButton   = (Get-Control 'CfgBatchResetButton')
+    InstallWebappsButton  = (Get-Control 'InstallWebappsButton')
     SelectionSummaryLabel = (Get-Control 'SelectionSummaryLabel')
     SelectionErrorLabel   = (Get-Control 'SelectionErrorLabel')
 
@@ -6808,6 +6827,77 @@ $ui.ApiCredentialGrid.Add_SelectionChanged({
         }
         Refresh-ApiCredentialEditor
     }
+})
+
+function Get-UiSelectedComponentName {
+    try {
+        $sel = $ui.ComponentsTree.SelectedItem
+        if ($sel -and $sel.Tag -and $sel.Tag.item -and $sel.Tag.item.PSObject.Properties.Name -contains 'name') {
+            return [string]$sel.Tag.item.name
+        }
+    } catch { }
+    return ''
+}
+
+function Select-UiFolderDialog {
+    param([string]$Description = 'Selecione a pasta')
+    try {
+        $shell = New-Object -ComObject Shell.Application
+        $folder = $shell.BrowseForFolder(0, $Description, 0, 0)
+        if ($folder -and $folder.Self -and $folder.Self.Path) { return [string]$folder.Self.Path }
+    } catch { }
+    return ''
+}
+
+function Start-UiConfigCli {
+    # Re-spawn install-cli.ps1 com flags de ciclo de vida, oculto e nao-interativo.
+    param([Parameter(Mandatory = $true)][string[]]$CliArgs)
+    try {
+        $cli = Join-Path $PSScriptRoot 'install-cli.ps1'
+        $psExe = Get-WindowsPowerShellExePath
+        $tokens = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $cli) + @($CliArgs) + @('--yes', '--no-admin')
+        Start-Process -FilePath $psExe -ArgumentList (ConvertTo-ArgumentString -Tokens $tokens) -WorkingDirectory $PSScriptRoot | Out-Null
+        return $true
+    } catch {
+        [System.Windows.MessageBox]::Show(("Falha ao iniciar acao: {0}" -f $_.Exception.Message), 'PhaseZero') | Out-Null
+        return $false
+    }
+}
+
+function Invoke-UiItemConfigAction {
+    param([Parameter(Mandatory = $true)][string]$Action)
+    $name = Get-UiSelectedComponentName
+    if ([string]::IsNullOrWhiteSpace($name)) {
+        [System.Windows.MessageBox]::Show('Selecione um componente na arvore primeiro.', 'PhaseZero', 'OK', 'Information') | Out-Null
+        return
+    }
+    switch ($Action) {
+        'configure' { if (Start-UiConfigCli -CliArgs @('--item', $name)) { [System.Windows.MessageBox]::Show(("Configurando '{0}' em segundo plano." -f $name), 'PhaseZero') | Out-Null } }
+        'factory-reset' {
+            $confirm = [System.Windows.MessageBox]::Show(("Reverter '{0}' para o padrao de fabrica? Um backup do estado atual sera criado." -f $name), 'Confirmar', 'YesNo', 'Warning')
+            if ($confirm -eq 'Yes') { if (Start-UiConfigCli -CliArgs @('--item', $name, '--factory-reset')) { [System.Windows.MessageBox]::Show(("Revertendo '{0}' em segundo plano." -f $name), 'PhaseZero') | Out-Null } }
+        }
+        'export' {
+            $dir = Select-UiFolderDialog -Description 'Pasta de destino do export'
+            if (-not [string]::IsNullOrWhiteSpace($dir)) { if (Start-UiConfigCli -CliArgs @('--item', $name, '--export-config', $dir)) { [System.Windows.MessageBox]::Show(("Exportando '{0}' para {1}." -f $name, $dir), 'PhaseZero') | Out-Null } }
+        }
+        'import' {
+            $dir = Select-UiFolderDialog -Description 'Pasta/bundle de origem do import'
+            if (-not [string]::IsNullOrWhiteSpace($dir)) { if (Start-UiConfigCli -CliArgs @('--item', $name, '--import-config', $dir)) { [System.Windows.MessageBox]::Show(("Importando '{0}' de {1}." -f $name, $dir), 'PhaseZero') | Out-Null } }
+        }
+    }
+}
+
+$ui.CfgConfigureButton.Add_Click({ Invoke-UiItemConfigAction -Action 'configure' })
+$ui.CfgResetButton.Add_Click({ Invoke-UiItemConfigAction -Action 'factory-reset' })
+$ui.CfgExportButton.Add_Click({ Invoke-UiItemConfigAction -Action 'export' })
+$ui.CfgImportButton.Add_Click({ Invoke-UiItemConfigAction -Action 'import' })
+$ui.CfgBatchResetButton.Add_Click({
+    $confirm = [System.Windows.MessageBox]::Show('Reverter para fabrica TODOS os itens amarelos (instalados, nao configurados)? Backups serao criados.', 'Confirmar lote', 'YesNo', 'Warning')
+    if ($confirm -eq 'Yes') { if (Start-UiConfigCli -CliArgs @('--batch', 'factory-reset')) { [System.Windows.MessageBox]::Show('Revertendo itens amarelos em segundo plano.', 'PhaseZero') | Out-Null } }
+})
+$ui.InstallWebappsButton.Add_Click({
+    if (Start-UiConfigCli -CliArgs @('--install-webapps')) { [System.Windows.MessageBox]::Show('Instalando todos os Web Apps em segundo plano.', 'PhaseZero') | Out-Null }
 })
 
 $ui.ApiRefreshButton.Add_Click({
