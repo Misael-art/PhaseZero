@@ -26906,6 +26906,64 @@ function Get-BootstrapWebAppBrowserCandidate {
     }
 }
 
+function Test-BootstrapIcoFile {
+    # Valida que o arquivo e um .ico real (magic bytes 00 00 01 00) e nao um HTML/404.
+    param([Parameter(Mandatory = $true)][string]$Path)
+    try {
+        if (-not (Test-Path -LiteralPath $Path)) { return $false }
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        if ($bytes.Length -lt 6) { return $false }
+        return ($bytes[0] -eq 0 -and $bytes[1] -eq 0 -and $bytes[2] -eq 1 -and $bytes[3] -eq 0)
+    } catch { return $false }
+}
+
+function Resolve-BootstrapWebAppIconLocation {
+    # Cascata resiliente de icone de identidade para web apps; nunca lanca. Retorna '' se nada servir.
+    # 1) asset curado assets/webapp-icons/<slug>.ico  2) cache local  3) download host/favicon.ico (validado)
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$DisplayName
+    )
+
+    $slug = ([string]$DisplayName).ToLowerInvariant() -replace '[^a-z0-9]+', '-'
+    $slug = $slug.Trim('-')
+
+    # 1) Asset curado versionado no repo (offline, confiavel).
+    try {
+        $curated = Join-Path $PSScriptRoot ("assets\webapp-icons\{0}.ico" -f $slug)
+        if (Test-BootstrapIcoFile -Path $curated) { return ("{0},0" -f $curated) }
+    } catch { }
+
+    # Host da URL (evita colidir com a variavel automatica $Host).
+    $urlHost = ''
+    try { $urlHost = ([System.Uri]$Url).Host } catch { $urlHost = '' }
+    if ([string]::IsNullOrWhiteSpace($urlHost)) { return '' }
+
+    # 2) Cache local.
+    $cacheDir = ''
+    try {
+        $cacheDir = Join-Path (Get-BootstrapDataRoot) 'webapp-icons'
+        if (-not (Test-Path -LiteralPath $cacheDir)) { $null = New-Item -ItemType Directory -Path $cacheDir -Force }
+    } catch { $cacheDir = '' }
+    if ([string]::IsNullOrWhiteSpace($cacheDir)) { return '' }
+    $cached = Join-Path $cacheDir ("{0}.ico" -f $urlHost)
+    if (Test-BootstrapIcoFile -Path $cached) { return ("{0},0" -f $cached) }
+
+    # 3) Download favicon.ico (best-effort, validado por magic bytes; nunca bloqueia).
+    foreach ($candidateUrl in @(("https://{0}/favicon.ico" -f $urlHost))) {
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $candidateUrl -OutFile $cached -UseBasicParsing -TimeoutSec 8 -ErrorAction Stop | Out-Null
+            if (Test-BootstrapIcoFile -Path $cached) { return ("{0},0" -f $cached) }
+            Remove-Item -LiteralPath $cached -Force -ErrorAction SilentlyContinue
+        } catch {
+            try { if (Test-Path -LiteralPath $cached) { Remove-Item -LiteralPath $cached -Force -ErrorAction SilentlyContinue } } catch { }
+        }
+    }
+
+    return ''
+}
+
 function Ensure-BootstrapWebAppShortcut {
     param(
         [Parameter(Mandatory = $true)][string]$DisplayName,
@@ -26952,7 +27010,9 @@ function Ensure-BootstrapWebAppShortcut {
         $shortcut.TargetPath = [string]$browser.exe
         $shortcut.Arguments = $arguments
         $shortcut.WorkingDirectory = $workingDirectory
-        $shortcut.IconLocation = ("{0},0" -f [string]$browser.exe)
+        $iconLocation = Resolve-BootstrapWebAppIconLocation -Url $Url -DisplayName $DisplayName
+        if ([string]::IsNullOrWhiteSpace($iconLocation)) { $iconLocation = ("{0},0" -f [string]$browser.exe) }
+        $shortcut.IconLocation = $iconLocation
         $shortcut.Description = ("Bootstrap web app: {0}" -f $DisplayName)
         $shortcut.Save()
     } catch {
