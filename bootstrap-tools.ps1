@@ -20160,6 +20160,294 @@ function Ensure-BootstrapMimoCodeConfig {
     return [ordered]@{ status = 'configured'; provider = $providerName; path = $configPath }
 }
 
+# =========================================================================
+# Ciclo de vida de configuracao por item (configurar/otimizar, reverter de
+# fabrica, exportar, importar) - individual e em lote. Dirigido por descritor.
+# =========================================================================
+
+function Get-BootstrapItemConfigDescriptor {
+    # Mapeia um item para seus arquivos de configuracao gerenciados (config-bearing).
+    # Itens sem config gerenciada retornam managed=$false (export/reset/import = no-op honesto).
+    param([Parameter(Mandatory = $true)][string]$Id)
+
+    $id = ([string]$Id).Trim().ToLowerInvariant()
+    $paths = @()
+    switch ($id) {
+        'mimo-code'  { $paths = @(Get-BootstrapMimoCodeConfigPath) }
+        'zcode'      { $paths = @(Get-BootstrapZCodeStorePath) }
+        'cursor'     { $paths = @(Get-BootstrapCursorMcpConfigPath) }
+        'windsurf'   { $paths = @(Get-BootstrapWindsurfMcpConfigPath) }
+        'trae'       { $paths = @(Get-BootstrapTraeMcpConfigPath) }
+        'opencode'   { $paths = @((Get-BootstrapOpenCodeConfigPath), (Get-BootstrapOpenCodeAuthPath)) }
+        'kilo-cli'   { $paths = @((Get-BootstrapKiloConfigPath), (Get-BootstrapKiloAuthPath)) }
+        'vscode'     { $paths = @(Get-BootstrapVsCodeMcpConfigPath) }
+        'roo'        { $paths = @(Get-BootstrapRooMcpConfigPath) }
+        'cline'      { $paths = @(Get-BootstrapClineMcpConfigPath) }
+        'zed'        { $paths = @(Get-BootstrapZedConfigPath) }
+        default      { $paths = @() }
+    }
+    $paths = @($paths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+    return [ordered]@{ id = $id; paths = @($paths); managed = ($paths.Count -gt 0) }
+}
+
+function Protect-BootstrapExportedConfig {
+    # Redige chaves sensiveis (apiKey/token/secret/password/authorization) recursivamente.
+    param([AllowNull()]$Node)
+
+    if ($Node -is [System.Collections.IDictionary]) {
+        $out = [ordered]@{}
+        foreach ($key in @($Node.Keys)) {
+            if ([string]$key -match '(?i)(api[_-]?key|token|secret|password|authorization|bearer|client[_-]?secret)') {
+                $out[[string]$key] = '***REDACTED***'
+            } else {
+                $out[[string]$key] = Protect-BootstrapExportedConfig -Node $Node[$key]
+            }
+        }
+        return $out
+    }
+    if (($Node -is [System.Collections.IEnumerable]) -and -not ($Node -is [string])) {
+        return @($Node | ForEach-Object { Protect-BootstrapExportedConfig -Node $_ })
+    }
+    return $Node
+}
+
+function Export-BootstrapItemConfig {
+    # Exporta os arquivos de config gerenciados de um item para um bundle portatil.
+    # Segredos sao redigidos por padrao; -IncludeSecrets e opt-in explicito.
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string[]]$ConfigPaths = @(),
+        [switch]$IncludeSecrets,
+        [switch]$DryRun
+    )
+
+    $desc = if (@($ConfigPaths).Count -gt 0) { [ordered]@{ id = ([string]$Id).Trim().ToLowerInvariant(); paths = @($ConfigPaths); managed = $true } } else { Get-BootstrapItemConfigDescriptor -Id $Id }
+    if (-not $desc.managed) { return [ordered]@{ status = 'skipped'; reason = 'no-managed-config'; id = $Id } }
+    $existing = @($desc.paths | Where-Object { Test-Path -LiteralPath ([string]$_) })
+    if ($existing.Count -eq 0) { return [ordered]@{ status = 'skipped'; reason = 'no-config-on-disk'; id = $Id } }
+    if ($DryRun) { return [ordered]@{ status = 'planned'; id = $Id; files = $existing.Count; destination = $Destination; redacted = (-not $IncludeSecrets) } }
+
+    $bundleDir = Join-Path $Destination $desc.id
+    $null = New-Item -ItemType Directory -Path $bundleDir -Force
+    $entries = New-Object System.Collections.Generic.List[object]
+    foreach ($p in $existing) {
+        $leaf = Split-Path -Path ([string]$p) -Leaf
+        $target = Join-Path $bundleDir $leaf
+        $isJson = $false
+        try {
+            $data = Read-BootstrapJsonFile -Path ([string]$p)
+            if ($data -is [hashtable]) {
+                $isJson = $true
+                $emit = if ($IncludeSecrets) { $data } else { Protect-BootstrapExportedConfig -Node $data }
+                Write-BootstrapJsonFile -Path $target -Value $emit
+            }
+        } catch { $isJson = $false }
+        if (-not $isJson) { Copy-Item -LiteralPath ([string]$p) -Destination $target -Force }
+        $hash = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+        $entries.Add([ordered]@{ source = [string]$p; file = $leaf; sha256 = $hash; json = $isJson; redacted = ($isJson -and -not $IncludeSecrets) }) | Out-Null
+    }
+    $manifest = [ordered]@{ schemaVersion = 1; id = $desc.id; exportedAt = (Get-Date).ToString('o'); includeSecrets = [bool]$IncludeSecrets; files = @($entries.ToArray()) }
+    Write-BootstrapJsonFile -Path (Join-Path $bundleDir 'phasezero-export.json') -Value $manifest
+    return [ordered]@{ status = 'exported'; id = $desc.id; bundle = $bundleDir; files = $entries.Count; redacted = (-not $IncludeSecrets) }
+}
+
+function Merge-BootstrapConfigGraph {
+    # Merge conservador: preserva campos desconhecidos do alvo; nunca sobrescreve com placeholder redigido.
+    param([AllowNull()]$Target, [AllowNull()]$Source)
+
+    if (($Source -is [System.Collections.IDictionary]) -and ($Target -is [System.Collections.IDictionary])) {
+        foreach ($key in @($Source.Keys)) {
+            $sv = $Source[$key]
+            if (($sv -is [string]) -and ([string]$sv -eq '***REDACTED***')) { continue }
+            if ($Target.Contains([string]$key)) {
+                $Target[[string]$key] = Merge-BootstrapConfigGraph -Target $Target[[string]$key] -Source $sv
+            } else {
+                $Target[[string]$key] = $sv
+            }
+        }
+        return $Target
+    }
+    if (($Source -is [string]) -and ([string]$Source -eq '***REDACTED***')) { return $Target }
+    return $Source
+}
+
+function Import-BootstrapItemConfig {
+    # Importa config de um diretorio local OU repo git (clonado em temp). Backup antes,
+    # merge conservador, aborta em JSON invalido preservando backup. Placeholders redigidos nao sobrescrevem.
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][string]$Source,
+        [string[]]$ConfigPaths = @(),
+        [hashtable]$State,
+        [switch]$DryRun
+    )
+
+    $desc = if (@($ConfigPaths).Count -gt 0) { [ordered]@{ id = ([string]$Id).Trim().ToLowerInvariant(); paths = @($ConfigPaths); managed = $true } } else { Get-BootstrapItemConfigDescriptor -Id $Id }
+    if (-not $desc.managed) { return [ordered]@{ status = 'skipped'; reason = 'no-managed-config'; id = $Id } }
+
+    $sourceDir = $Source
+    $tempClone = ''
+    if ($Source -match '^(https?://|git@)') {
+        if ($DryRun) { return [ordered]@{ status = 'planned'; id = $Id; source = $Source; clone = $true } }
+        $gitExe = Resolve-CommandPath -Name 'git'
+        if (-not $gitExe) { return [ordered]@{ status = 'failed'; id = $Id; reason = 'git-nao-encontrado' } }
+        $tempClone = Join-Path ([System.IO.Path]::GetTempPath()) ('pz-import-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $exit = Invoke-NativeWithLog -Exe $gitExe -Args @('clone', '--depth', '1', $Source, $tempClone) -TimeoutMs 300000
+        if ($exit -ne 0) { return [ordered]@{ status = 'failed'; id = $Id; reason = ("git-clone-exit={0}" -f $exit) } }
+        $sourceDir = $tempClone
+    }
+
+    try {
+        $bundleDir = Join-Path $sourceDir $desc.id
+        if (-not (Test-Path -LiteralPath $bundleDir)) { $bundleDir = $sourceDir }
+        if (-not (Test-Path -LiteralPath $bundleDir)) { return [ordered]@{ status = 'failed'; id = $Id; reason = 'bundle-nao-encontrado' } }
+
+        if ($DryRun) { return [ordered]@{ status = 'planned'; id = $Id; source = $bundleDir } }
+
+        $applied = New-Object System.Collections.Generic.List[string]
+        foreach ($targetPath in $desc.paths) {
+            $leaf = Split-Path -Path ([string]$targetPath) -Leaf
+            $srcFile = Join-Path $bundleDir $leaf
+            if (-not (Test-Path -LiteralPath $srcFile)) { continue }
+
+            # Tenta JSON (merge conservador); senao copia bruta.
+            $srcData = $null; $isJson = $false
+            try { $srcData = Read-BootstrapJsonFile -Path $srcFile; if ($srcData -is [hashtable]) { $isJson = $true } } catch {
+                return [ordered]@{ status = 'failed'; id = $Id; reason = ("json-invalido-no-bundle: {0}" -f $leaf) }
+            }
+
+            if (Test-Path -LiteralPath ([string]$targetPath)) {
+                try { Copy-Item -LiteralPath ([string]$targetPath) -Destination (([string]$targetPath) + '.bak') -Force -ErrorAction Stop } catch { }
+            }
+
+            if ($isJson) {
+                $targetData = @{}
+                if (Test-Path -LiteralPath ([string]$targetPath)) {
+                    try { $targetData = Read-BootstrapJsonFile -Path ([string]$targetPath); if (-not ($targetData -is [hashtable])) { $targetData = @{} } } catch { $targetData = @{} }
+                }
+                $merged = Merge-BootstrapConfigGraph -Target $targetData -Source $srcData
+                Write-BootstrapJsonFile -Path ([string]$targetPath) -Value $merged
+            } else {
+                Copy-Item -LiteralPath $srcFile -Destination ([string]$targetPath) -Force
+            }
+            if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
+                try { Register-BootstrapChange -State $State -Type File -Target ([string]$targetPath) -Operation 'import-item-config' -Component $desc.id } catch { }
+            }
+            $applied.Add($leaf) | Out-Null
+        }
+        $importStatus = if ($applied.Count -gt 0) { 'imported' } else { 'skipped' }
+        return [ordered]@{ status = $importStatus; id = $desc.id; files = @($applied.ToArray()) }
+    } finally {
+        if (-not [string]::IsNullOrWhiteSpace($tempClone) -and (Test-Path -LiteralPath $tempClone)) {
+            try { Remove-Item -LiteralPath $tempClone -Recurse -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    }
+}
+
+function Invoke-BootstrapItemFactoryReset {
+    # Reverte para fabrica: backup do estado atual primeiro, depois restaura do .bak mais recente.
+    # Sem baseline (.bak), reporta sem apagar as cegas.
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [string[]]$ConfigPaths = @(),
+        [hashtable]$State,
+        [switch]$DryRun
+    )
+
+    $desc = if (@($ConfigPaths).Count -gt 0) { [ordered]@{ id = ([string]$Id).Trim().ToLowerInvariant(); paths = @($ConfigPaths); managed = $true } } else { Get-BootstrapItemConfigDescriptor -Id $Id }
+    if (-not $desc.managed) { return [ordered]@{ status = 'skipped'; reason = 'no-managed-config'; id = $Id } }
+
+    $restored = New-Object System.Collections.Generic.List[string]
+    $noBaseline = New-Object System.Collections.Generic.List[string]
+    foreach ($p in $desc.paths) {
+        $path = [string]$p
+        $baseline = $path + '.bak'
+        if (-not (Test-Path -LiteralPath $baseline)) {
+            # procura backup timestamped mais recente
+            $dir = Split-Path -Path $path -Parent
+            $leaf = Split-Path -Path $path -Leaf
+            $cand = @()
+            if (-not [string]::IsNullOrWhiteSpace($dir) -and (Test-Path -LiteralPath $dir)) {
+                $cand = @(Get-ChildItem -LiteralPath $dir -Filter ($leaf + '*.bak*') -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+            }
+            if ($cand.Count -gt 0) { $baseline = $cand[0].FullName } else { $baseline = '' }
+        }
+        if ([string]::IsNullOrWhiteSpace($baseline) -or -not (Test-Path -LiteralPath $baseline)) {
+            $noBaseline.Add($leaf) | Out-Null
+            continue
+        }
+        if ($DryRun) { $restored.Add($leaf) | Out-Null; continue }
+        if (Test-Path -LiteralPath $path) {
+            try { Copy-Item -LiteralPath $path -Destination ($path + '.pre-reset.bak') -Force -ErrorAction Stop } catch { }
+        }
+        Copy-Item -LiteralPath $baseline -Destination $path -Force
+        if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
+            try { Register-BootstrapChange -State $State -Type File -Target $path -Operation 'factory-reset' -Component $desc.id } catch { }
+        }
+        $restored.Add((Split-Path -Path $path -Leaf)) | Out-Null
+    }
+    if (-not $DryRun -and $restored.Count -gt 0) { Set-BootstrapItemStatus -Kind 'app' -Id $desc.id -Status 'installed-unconfigured' }
+    $status = if ($DryRun) { 'planned' } elseif ($restored.Count -gt 0) { 'reverted' } else { 'no-baseline' }
+    return [ordered]@{ status = $status; id = $desc.id; restored = @($restored.ToArray()); noBaseline = @($noBaseline.ToArray()) }
+}
+
+function Invoke-BootstrapItemAction {
+    # Dispatcher unico das acoes de ciclo de vida por item.
+    param(
+        [Parameter(Mandatory = $true)][string]$Id,
+        [Parameter(Mandatory = $true)][ValidateSet('factory-reset', 'export', 'import')][string]$Action,
+        [string]$Path = '',
+        [hashtable]$State,
+        [switch]$IncludeSecrets,
+        [switch]$DryRun
+    )
+    switch ($Action) {
+        'export'        { return (Export-BootstrapItemConfig -Id $Id -Destination $Path -IncludeSecrets:$IncludeSecrets -DryRun:$DryRun) }
+        'import'        { return (Import-BootstrapItemConfig -Id $Id -Source $Path -State $State -DryRun:$DryRun) }
+        'factory-reset' { return (Invoke-BootstrapItemFactoryReset -Id $Id -State $State -DryRun:$DryRun) }
+    }
+}
+
+function Invoke-BootstrapBatchAction {
+    # Aplica uma acao a todos os itens config-bearing em estado 'installed-unconfigured' (amarelo).
+    # Nao-bloqueante: falha de um nao aborta o lote.
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('factory-reset', 'export', 'import')][string]$Action,
+        [string]$Path = '',
+        [string[]]$Ids = @(),
+        [hashtable]$State,
+        [switch]$IncludeSecrets,
+        [switch]$DryRun
+    )
+
+    $candidates = @($Ids)
+    if ($candidates.Count -eq 0) {
+        $cache = Read-BootstrapItemStatusCache
+        $components = Get-BootstrapComponentCatalog
+        foreach ($name in @($components.Keys)) {
+            if (-not (Get-BootstrapItemConfigDescriptor -Id $name).managed) { continue }
+            $def = $components[$name]
+            $probe = @()
+            if ($def.PSObject.Properties.Name -contains 'ProbePaths') { $probe = @($def.ProbePaths) }
+            $st = Get-BootstrapItemStatus -Kind 'app' -Id $name -ProbePaths $probe -Cache $cache
+            if ($st -eq 'installed-unconfigured') { $candidates += $name }
+        }
+    }
+    $candidates = @($candidates | Select-Object -Unique)
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($id in $candidates) {
+        try {
+            $r = Invoke-BootstrapItemAction -Id $id -Action $Action -Path $Path -State $State -IncludeSecrets:$IncludeSecrets -DryRun:$DryRun
+            $results.Add([ordered]@{ id = $id; status = [string]$r.status; detail = $r }) | Out-Null
+        } catch {
+            $results.Add([ordered]@{ id = $id; status = 'failed'; detail = $_.Exception.Message }) | Out-Null
+        }
+    }
+    return [ordered]@{ action = $Action; count = $candidates.Count; results = @($results.ToArray()) }
+}
+
 function Get-BootstrapOpenClawConfigPath {
     $paths = @(Get-BootstrapOpenClawConfigPaths)
     if ($paths.Count -gt 0) { return [string]$paths[0] }
