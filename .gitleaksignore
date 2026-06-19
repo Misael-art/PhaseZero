@@ -1,0 +1,5 @@
+# Falsos-positivos do gitleaks (regra generic-api-key) em FIXTURES DE TESTE.
+# Sao credenciais fabricadas usadas pelos testes Pester (nomes/valores ficticios
+# tipo 'activeCredential = ...'), nao segredos reais. Fingerprints: commit:arquivo:regra:linha
+7abc0355c3fc398e3bdae4c02c244733b965ab19:tests/bootstrap-api-center.tests.ps1:generic-api-key:145
+b7299b936a96d10c57cd454f7d174eaf27fdc3fe:tests/bootstrap-managed-mcps.tests.ps1:generic-api-key:95
