@@ -133,6 +133,10 @@ Describe 'PhaseZero launcher diagnostics and CLI short menu' {
     It 'lists profiles from the guided picker when menu option 5 is selected' {
         $result = Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '' -TimeoutMs 60000 -StdinText "5`n0`n"
 
+        Write-Host ("DIAG5_EXIT={0}" -f $result.ExitCode)
+        Write-Host ("DIAG5_STDERR={0}" -f ([string]$result.Stderr))
+        Write-Host ("DIAG5_STDOUT_BEGIN`n{0}`nDIAG5_STDOUT_END" -f ([string]$result.Stdout))
+
         $result.ExitCode | Should Be 0
         $result.Stdout   | Should Match 'Perfis recomendados'
         $result.Stdout   | Should Match 'safe-base'
