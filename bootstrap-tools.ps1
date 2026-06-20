@@ -29512,7 +29512,10 @@ function New-BootstrapSupportBundle {
             $safeLogText | Set-Content -LiteralPath (Join-Path $staging 'logs\current.log') -Encoding utf8
         }
         if (Test-Path -LiteralPath $DestinationPath) { Remove-Item -LiteralPath $DestinationPath -Force }
-        Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $DestinationPath -Force
+        # CreateFromDirectory e deterministico (zipa todo o staging); evita o bug de wildcard do
+        # Compress-Archive no PS 5.1, que omitia arquivos de forma intermitente (ex.: ai-proxy-suite.json).
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $DestinationPath)
         $fileInfo = Get-Item -LiteralPath $DestinationPath
         $includedFiles = @('doctor.json','repair-plan.json','result.json','secrets-doctor.json','ai-usagebar.json','ai-memory.json','aionui.json','ai-proxy-suite.json','ai-config.json','ide-targets.json','mcp-health.json','wsl-repair.json','deck-doctor.json','deck-power.json','deck-display.json','deck-libraries.json','github-auth.json','psscriptanalyzer-summary.json','environment.json','logs/current.log')
         $started.Stop()
@@ -29671,7 +29674,9 @@ function New-BootstrapReleasePack {
 
     $zipPath = Join-Path $destinationInfo.FullName ("{0}.zip" -f $releaseName)
     if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-    Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $zipPath -Force
+    # Determinismo: CreateFromDirectory evita o bug de wildcard do Compress-Archive (PS 5.1).
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+    [System.IO.Compression.ZipFile]::CreateFromDirectory($staging, $zipPath)
 
     $checksumsPath = Join-Path $destinationInfo.FullName 'SHA256SUMS.txt'
     $checksumRows = New-Object System.Collections.Generic.List[string]
