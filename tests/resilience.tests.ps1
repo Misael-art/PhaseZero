@@ -701,12 +701,11 @@ Describe 'Resilience Architecture' {
                 Mock Get-BootstrapCommandPathCandidates { return @() }
                 Mock Refresh-SessionPath { }
 
-                # Expande 8.3 (RUNNER~1 nos runners) para a forma longa que a funcao retorna.
+                # Expande 8.3 (RUNNER~1 nos runners) para a forma longa via (Get-Location).Path
+                # (mesma resolucao da funcao), normalizando o diretorio pai e rejuntando o nome.
                 $expectedExe = $pythonExe
-                try {
-                    $fso = New-Object -ComObject Scripting.FileSystemObject
-                    if (Test-Path -LiteralPath $pythonExe -PathType Leaf) { $expectedExe = [string]$fso.GetFile($pythonExe).Path }
-                } catch { }
+                Push-Location -LiteralPath $pythonDir
+                try { $expectedExe = Join-Path (Get-Location).Path 'python.exe' } finally { Pop-Location }
                 Resolve-BootstrapPythonExecutable | Should Be $expectedExe
             } finally {
                 $env:LOCALAPPDATA = $oldLocalAppData

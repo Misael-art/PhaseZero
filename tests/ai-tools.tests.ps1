@@ -7,13 +7,21 @@ $uiScriptPath = Join-Path $repoRoot 'bootstrap-ui.ps1'
 $installCliBatPath = Join-Path $repoRoot 'install-cli.bat'
 
 function Get-LongPath {
-    # Expande nome curto 8.3 (ex.: RUNNER~1 nos runners do GitHub) para a forma longa,
-    # alinhando o esperado dos testes com a normalizacao das funcoes sob teste.
+    # Expande nome curto 8.3 (ex.: RUNNER~1 nos runners do GitHub) para a forma longa via
+    # (Get-Location).Path - mesma resolucao que as funcoes sob teste usam (comprovado no runner).
+    # Para arquivos, normaliza o diretorio pai e rejunta o nome.
     param([string]$Path)
     try {
-        $fso = New-Object -ComObject Scripting.FileSystemObject
-        if (Test-Path -LiteralPath $Path -PathType Container) { return [string]$fso.GetFolder($Path).Path }
-        if (Test-Path -LiteralPath $Path -PathType Leaf) { return [string]$fso.GetFile($Path).Path }
+        if (Test-Path -LiteralPath $Path -PathType Container) {
+            Push-Location -LiteralPath $Path
+            try { return [string](Get-Location).Path } finally { Pop-Location }
+        }
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            $dir = Split-Path -LiteralPath $Path -Parent
+            $leaf = Split-Path -LiteralPath $Path -Leaf
+            Push-Location -LiteralPath $dir
+            try { return (Join-Path (Get-Location).Path $leaf) } finally { Pop-Location }
+        }
     } catch { }
     return $Path
 }
