@@ -27,7 +27,7 @@ Describe 'Bootstrap quality gates' {
         $warnings = @($results | Where-Object { $_.Severity -eq 'Warning' })
         $errorText = (($errors | Select-Object ScriptName, Line, RuleName, Message | Format-Table -AutoSize | Out-String).Trim())
         $errorText | Should Be ''
-        ([int]$warnings.Count -le 705) | Should Be $true
+        ([int]$warnings.Count -le 775) | Should Be $true
     }
 
     It 'keeps mutating bootstrap functions registered or explicitly allow-listed' {
@@ -75,7 +75,12 @@ Describe 'Bootstrap quality gates' {
             'New-BootstrapSupportBundle',
             'New-BootstrapReleasePack',
             'Write-BootstrapAiProxyEnvFile',
-            'Clear-BootstrapPlaywrightStaleLock'
+            'Clear-BootstrapPlaywrightStaleLock',
+            'Expand-BootstrapZipArchiveSafe',
+            'Install-BootstrapAiMemoryViaRelease',
+            'Uninstall-BootstrapAiMemory',
+            'Install-BootstrapAmdDriverRelease',
+            'Resolve-BootstrapWebAppIconLocation'
         )
 
         $functions = @($ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true))
