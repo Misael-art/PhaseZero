@@ -701,7 +701,13 @@ Describe 'Resilience Architecture' {
                 Mock Get-BootstrapCommandPathCandidates { return @() }
                 Mock Refresh-SessionPath { }
 
-                Resolve-BootstrapPythonExecutable | Should Be $pythonExe
+                # Expande 8.3 (RUNNER~1 nos runners) para a forma longa que a funcao retorna.
+                $expectedExe = $pythonExe
+                try {
+                    $fso = New-Object -ComObject Scripting.FileSystemObject
+                    if (Test-Path -LiteralPath $pythonExe -PathType Leaf) { $expectedExe = [string]$fso.GetFile($pythonExe).Path }
+                } catch { }
+                Resolve-BootstrapPythonExecutable | Should Be $expectedExe
             } finally {
                 $env:LOCALAPPDATA = $oldLocalAppData
                 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

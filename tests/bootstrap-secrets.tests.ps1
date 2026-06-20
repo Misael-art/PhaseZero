@@ -560,7 +560,9 @@ Describe 'Bootstrap secrets manifest v2' {
             Remove-Variable -Scope Script -Name BootstrapDataRoot -ErrorAction SilentlyContinue
             Push-Location $projectRoot
             try {
-                Get-BootstrapDataRoot | Should Be (Join-Path $projectRoot '.bootstrap-tools')
+                # (Get-Location).Path resolve a forma longa do diretorio (igual a Get-BootstrapDataRoot),
+                # evitando divergencia 8.3 (RUNNER~1) vs longa nos runners do GitHub.
+                Get-BootstrapDataRoot | Should Be (Join-Path (Get-Location).Path '.bootstrap-tools')
             } finally {
                 Pop-Location
             }

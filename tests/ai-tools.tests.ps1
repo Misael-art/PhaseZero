@@ -6,10 +6,22 @@ $toolsScriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 $uiScriptPath = Join-Path $repoRoot 'bootstrap-ui.ps1'
 $installCliBatPath = Join-Path $repoRoot 'install-cli.bat'
 
+function Get-LongPath {
+    # Expande nome curto 8.3 (ex.: RUNNER~1 nos runners do GitHub) para a forma longa,
+    # alinhando o esperado dos testes com a normalizacao das funcoes sob teste.
+    param([string]$Path)
+    try {
+        $fso = New-Object -ComObject Scripting.FileSystemObject
+        if (Test-Path -LiteralPath $Path -PathType Container) { return [string]$fso.GetFolder($Path).Path }
+        if (Test-Path -LiteralPath $Path -PathType Leaf) { return [string]$fso.GetFile($Path).Path }
+    } catch { }
+    return $Path
+}
+
 function New-AiToolsTestRoot {
     $root = Join-Path $env:TEMP ("PhaseZero AI Tools {0}" -f ([Guid]::NewGuid().ToString('N')))
     $null = New-Item -Path $root -ItemType Directory -Force
-    return $root
+    return (Get-LongPath $root)
 }
 
 function Remove-AiToolsTestRoot {
