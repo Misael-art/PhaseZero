@@ -10,3 +10,28 @@ gemini-cli/
 # Ignore temporary artifacts
 .tmp
 .temp
+
+# Ignore local bootstrap state and secrets
+.bootstrap-tools/
+# Never commit backup dumps
+.bootstrap-tools/*.bak
+.bootstrap-tools/ui-runs/
+
+# Local run logs (diagnostico de instalacao real)
+.runlogs/
+
+# Local IDE / agent worktrees
+.trae/
+.codex/
+.rtk/
+.vscode/
+.claude/
+.hermes/
+.serena/
+Microsoft/
+.mcp.json
+run_pester_*.ps1
+tests/_parse-check.ps1
+cookbook/
+add-trap-handler.ps1
+fix-backend-crash.ps1

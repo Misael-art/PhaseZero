@@ -1,0 +1,759 @@
+﻿$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
+. $scriptPath
+Reset-BootstrapFileCmdlets
+
+function New-TestDataRoot {
+    return (Join-Path $env:TEMP ("bootstrap_secrets_{0}" -f ([Guid]::NewGuid().ToString('N'))))
+}
+
+function Reset-TestDataRoot {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $env:BOOTSTRAP_DATA_ROOT = $Path
+    Remove-Variable -Scope Script -Name BootstrapDataRoot -ErrorAction SilentlyContinue
+}
+
+function Remove-TestDataRoot {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (Test-Path $Path) {
+        Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Invoke-BootstrapProcess {
+    param(
+        [Parameter(Mandatory = $true)][string]$DataRoot,
+        [Parameter(Mandatory = $true)][string[]]$CommandArgs
+    )
+
+    $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $allArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) + $CommandArgs
+    $quotedArgs = foreach ($arg in $allArgs) {
+        if ($arg -match '[\s"]') {
+            '"' + ($arg -replace '"', '\"') + '"'
+        } else {
+            $arg
+        }
+    }
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = $powershellExe
+    $startInfo.Arguments = [string]::Join(' ', $quotedArgs)
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+    $startInfo.EnvironmentVariables['BOOTSTRAP_DATA_ROOT'] = $DataRoot
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+
+    if (-not $process.Start()) {
+        throw "Failed to start bootstrap process for args: $($CommandArgs -join ' ')"
+    }
+
+    if (-not $process.WaitForExit(120000)) {
+        try { $process.Kill() } catch { }
+        throw "Bootstrap invocation timed out after 120000ms for args: $($CommandArgs -join ' ')"
+    }
+
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+
+    return [pscustomobject]@{
+        ExitCode = $process.ExitCode
+        Output = @($stdout, $stderr) -join [Environment]::NewLine
+    }
+}
+
+Describe 'Bootstrap secrets manifest v2' {
+    BeforeEach {
+        $script:TestDataRoot = New-TestDataRoot
+        Reset-TestDataRoot -Path $script:TestDataRoot
+    }
+
+    AfterEach {
+        Remove-TestDataRoot -Path $script:TestDataRoot
+        Remove-Variable -Scope Script -Name TestDataRoot -ErrorAction SilentlyContinue
+    }
+
+    It 'migrates a v1 manifest to v2 without losing targets' {
+        $path = Join-Path $script:TestDataRoot 'bootstrap-secrets.json'
+        Write-BootstrapJsonFile -Path $path -Value @{
+            '$schema' = 'https://bootstrap.local/schemas/bootstrap-secrets.schema.json'
+            metadata = @{
+                version = 1
+            }
+            providers = @{
+                openai = @{
+                    apiKey = 'test-openai-key'
+                    baseUrl = 'https://api.openai.com/v1'
+                }
+            }
+            targets = @{
+                userEnv = @{
+                    OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
+                }
+            }
+        }
+
+        $bundle = Get-BootstrapSecretsData
+
+        $bundle.Data.metadata.version | Should Be 2
+        $bundle.Data.providers.openai.activeCredential | Should Be 'openai-default-01'
+        $bundle.Data.providers.openai.rotationOrder | Should Be @('openai-default-01')
+        $bundle.Data.providers.openai.credentials['openai-default-01'].secret | Should Be 'test-openai-key'
+        $bundle.Data.targets.userEnv.OPENAI_API_KEY | Should Be '{{activeProviders.openai.apiKey}}'
+    }
+
+    It 'protects bootstrap-secrets.json at rest and reads the decrypted manifest through helpers' {
+        $path = Join-Path $script:TestDataRoot 'bootstrap-secrets.json'
+        Write-BootstrapJsonFile -Path $path -Value @{
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                openai = @{
+                    activeCredential = 'openai-main-01'
+                    rotationOrder = @('openai-main-01')
+                    credentials = @{
+                        'openai-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'phasezero-value-at-rest'
+                            secretKind = 'apiKey'
+                        }
+                    }
+                }
+            }
+            targets = @{}
+        }
+
+        $raw = Get-Content -Path $path -Raw -Encoding utf8
+        $stored = $raw | ConvertFrom-Json
+        [int]$stored.metadata.version | Should Be 3
+        [string]$stored.metadata.protection | Should Be 'dpapi-current-user'
+        [string]$raw | Should Not Match 'phasezero-value-at-rest'
+
+        $read = Read-BootstrapJsonFile -Path $path
+        $read.providers.openai.credentials['openai-main-01'].secret | Should Be 'phasezero-value-at-rest'
+    }
+
+    It 'migrates a plaintext v2 secrets manifest to a protected v3 envelope' {
+        $path = Join-Path $script:TestDataRoot 'bootstrap-secrets.json'
+        $plaintext = @{
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                github = @{
+                    activeCredential = 'github-main-01'
+                    rotationOrder = @('github-main-01')
+                    credentials = @{
+                        'github-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'phasezero-value-plain'
+                            secretKind = 'apiKey'
+                        }
+                    }
+                }
+            }
+            targets = @{}
+        } | ConvertTo-Json -Depth 12
+        $utf8 = New-Object System.Text.UTF8Encoding($false)
+        $null = New-Item -Path (Split-Path -Path $path -Parent) -ItemType Directory -Force
+        [System.IO.File]::WriteAllText($path, [string]$plaintext, $utf8)
+
+        $bundle = Get-BootstrapSecretsData
+
+        $bundle.Data.providers.github.credentials['github-main-01'].secret | Should Be 'phasezero-value-plain'
+        $raw = Get-Content -Path $path -Raw -Encoding utf8
+        [string]$raw | Should Not Match 'phasezero-value-plain'
+        [int](($raw | ConvertFrom-Json).metadata.version) | Should Be 3
+    }
+
+    It 'imports multiple keys with stable ids, de-duplicates repeated secrets, and seeds rotation order' {
+        $text = @'
+### OpenRouter
+| Serviço | Chave | Observação |
+|---------|-------|------------|
+| Gmail | `sk-or-v1-A` | principal |
+| USA | `sk-or-v1-B` | reserva |
+| Duplicada | `sk-or-v1-A` | repetida |
+'@
+
+        $imported = Import-BootstrapSecretsText -Text $text -SecretsData (Get-BootstrapSecretsTemplate)
+        $provider = $imported.providers.openrouter
+
+        @($provider.credentials.Keys).Count | Should Be 2
+        $provider.rotationOrder | Should Be @('openrouter-gmail-01', 'openrouter-usa-01')
+        $provider.credentials['openrouter-gmail-01'].displayName | Should Be 'Gmail'
+        $provider.credentials['openrouter-usa-01'].displayName | Should Be 'USA'
+    }
+
+    It 'resolves the ai profile with vscode-insiders before bootstrap-secrets' {
+        $resolution = Resolve-BootstrapComponents -SelectedProfiles @('ai') -SelectedComponents @() -ExcludedComponents @()
+        $vscodeIndex = [array]::IndexOf(@($resolution.ResolvedComponents), 'vscode-insiders')
+        $secretsIndex = [array]::IndexOf(@($resolution.ResolvedComponents), 'bootstrap-secrets')
+
+        $vscodeIndex | Should BeGreaterThan -1
+        $secretsIndex | Should BeGreaterThan -1
+        $vscodeIndex | Should BeLessThan $secretsIndex
+    }
+
+    It 'lists credentials safely without printing the raw secret' {
+        $path = Join-Path $script:TestDataRoot 'bootstrap-secrets.json'
+        Write-BootstrapJsonFile -Path $path -Value @{
+            '$schema' = 'https://bootstrap.local/schemas/bootstrap-secrets.schema.json'
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                openrouter = @{
+                    defaults = @{
+                        baseUrl = 'https://openrouter.ai/api/v1'
+                    }
+                    activeCredential = 'openrouter-main-01'
+                    rotationOrder = @('openrouter-main-01')
+                    credentials = @{
+                        'openrouter-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'test-openrouter-key'
+                            secretKind = 'apiKey'
+                            validation = @{
+                                state = 'passed'
+                                checkedAt = '2026-04-18T00:00:00Z'
+                                message = 'ok'
+                            }
+                        }
+                    }
+                }
+            }
+            targets = @{
+                userEnv = @{
+                    OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
+                }
+            }
+        }
+
+        $result = Invoke-BootstrapProcess -DataRoot $script:TestDataRoot -CommandArgs @('-SecretsList')
+
+        $result.ExitCode | Should Be 0
+        $result.Output | Should Match 'openrouter'
+        $result.Output | Should Match 'openrouter-main-01'
+        $result.Output | Should Match 'passed'
+        $result.Output | Should Not Match 'test-openrouter-key'
+    }
+
+    It 'resolves active provider placeholders into non-empty target values when validation passed' {
+        $data = @{
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                openrouter = @{
+                    defaults = @{
+                        baseUrl = 'https://openrouter.ai/api/v1'
+                    }
+                    activeCredential = 'openrouter-main-01'
+                    rotationOrder = @('openrouter-main-01')
+                    credentials = @{
+                        'openrouter-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'test-key'
+                            secretKind = 'apiKey'
+                            validation = @{
+                                state = 'passed'
+                                checkedAt = '2026-04-18T00:00:00Z'
+                                message = 'ok'
+                            }
+                        }
+                    }
+                }
+            }
+            targets = @{
+                userEnv = @{
+                    OPENROUTER_API_KEY = '{{activeProviders.openrouter.apiKey}}'
+                    OPENROUTER_BASE_URL = '{{activeProviders.openrouter.baseUrl}}'
+                }
+            }
+        }
+
+        $resolved = Get-BootstrapResolvedSecretsTargets -SecretsData $data
+
+        $resolved.userEnv.OPENROUTER_API_KEY | Should Be 'test-key'
+        $resolved.userEnv.OPENROUTER_BASE_URL | Should Be 'https://openrouter.ai/api/v1'
+    }
+
+    It 'keeps managed MCP servers opt-in when resolving ordinary secret targets' {
+        $resolved = Get-BootstrapResolvedSecretsTargets -SecretsData (Get-BootstrapSecretsTemplate)
+
+        $resolved.continue.mcpServers.Contains('markitdown') | Should Be $false
+        $resolved.vsCode.mcpServers.Contains('notion') | Should Be $false
+    }
+
+    It 'enables the VS Code GitHub MCP only when there is an active validated github credential' {
+        $withGithub = @{
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                github = @{
+                    defaults = @{}
+                    activeCredential = 'github-main-01'
+                    rotationOrder = @('github-main-01')
+                    credentials = @{
+                        'github-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'ghp-valid-token'
+                            secretKind = 'token'
+                            validation = @{
+                                state = 'passed'
+                                checkedAt = '2026-04-19T00:00:00Z'
+                                message = 'ok'
+                            }
+                        }
+                    }
+                }
+            }
+            targets = @{
+                vsCode = @{
+                    mcpServers = @{
+                        github = @{
+                            enabled = $false
+                            command = 'npx'
+                            args = @('-y', '@modelcontextprotocol/server-github')
+                            env = @{
+                                GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        $withoutGithub = @{
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                github = @{
+                    defaults = @{}
+                    activeCredential = 'github-main-01'
+                    rotationOrder = @('github-main-01')
+                    credentials = @{
+                        'github-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'ghp-invalid-token'
+                            secretKind = 'token'
+                            validation = @{
+                                state = 'failed'
+                                checkedAt = '2026-04-19T00:00:00Z'
+                                message = '401'
+                            }
+                        }
+                    }
+                }
+            }
+            targets = @{
+                vsCode = @{
+                    mcpServers = @{
+                        github = @{
+                            enabled = $false
+                            command = 'npx'
+                            args = @('-y', '@modelcontextprotocol/server-github')
+                            env = @{
+                                GITHUB_TOKEN = '{{activeProviders.github.token}}'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        (Get-BootstrapResolvedSecretsTargets -SecretsData $withGithub).vsCode.mcpServers.github.enabled | Should Be $true
+        (Get-BootstrapResolvedSecretsTargets -SecretsData $withoutGithub).vsCode.mcpServers.github.enabled | Should Be $false
+    }
+
+    It 'prefers the Agents Insiders MCP path when insiders is installed even if stable Code folders already exist' {
+        $originalAppData = $env:APPDATA
+        $originalLocalAppData = $env:LOCALAPPDATA
+        $originalUserProfile = $env:USERPROFILE
+
+        $tempRoot = Join-Path $script:TestDataRoot 'vscode-paths'
+        $env:APPDATA = Join-Path $tempRoot 'Roaming'
+        $env:LOCALAPPDATA = Join-Path $tempRoot 'Local'
+        $env:USERPROFILE = Join-Path $tempRoot 'User'
+
+        $stableParent = Join-Path $env:APPDATA 'Code\User'
+        $insidersExeParent = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code Insiders'
+        $expectedPath = Join-Path $env:APPDATA 'Agents - Insiders\User\mcp.json'
+
+        New-Item -Path $stableParent -ItemType Directory -Force | Out-Null
+        New-Item -Path $insidersExeParent -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $insidersExeParent 'Code - Insiders.exe') -ItemType File -Force | Out-Null
+
+        try {
+            Get-BootstrapVsCodeMcpConfigPath | Should Be $expectedPath
+        } finally {
+            $env:APPDATA = $originalAppData
+            $env:LOCALAPPDATA = $originalLocalAppData
+            $env:USERPROFILE = $originalUserProfile
+        }
+    }
+
+    It 'includes nightly MCP paths for Roo and Cline in parallel with stable channels' {
+        $originalAppData = $env:APPDATA
+        $originalUserProfile = $env:USERPROFILE
+        $tempRoot = Join-Path $script:TestDataRoot 'nightly-paths'
+        $env:APPDATA = Join-Path $tempRoot 'Roaming'
+        $env:USERPROFILE = Join-Path $tempRoot 'User'
+
+        $rooNightlyPath = Join-Path $env:APPDATA 'Code - Insiders\User\globalStorage\rooveterinaryinc.roo-code-nightly\settings\mcp_settings.json'
+        $clineNightlyPath = Join-Path $env:APPDATA 'Agents - Insiders\User\globalStorage\saoudrizwan.claude-dev-nightly\settings\cline_mcp_settings.json'
+        New-Item -Path (Split-Path -Path $rooNightlyPath -Parent) -ItemType Directory -Force | Out-Null
+        New-Item -Path $rooNightlyPath -ItemType File -Force | Out-Null
+        New-Item -Path (Split-Path -Path $clineNightlyPath -Parent) -ItemType Directory -Force | Out-Null
+        New-Item -Path $clineNightlyPath -ItemType File -Force | Out-Null
+
+        try {
+            Get-BootstrapRooMcpConfigPath | Should Be $rooNightlyPath
+            Get-BootstrapClineMcpConfigPath | Should Be $clineNightlyPath
+        } finally {
+            $env:APPDATA = $originalAppData
+            $env:USERPROFILE = $originalUserProfile
+        }
+    }
+
+    It 'keeps BYOK env slots available for supported app targets' {
+        $fixture = @{
+            metadata = @{ version = 2 }
+            providers = @{
+                openrouter = @{
+                    defaults = @{ baseUrl = 'https://openrouter.ai/api/v1' }
+                    activeCredential = 'openrouter-main-01'
+                    rotationOrder = @('openrouter-main-01')
+                    credentials = @{
+                        'openrouter-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'test-openrouter-key'
+                            secretKind = 'apiKey'
+                            validation = @{ state = 'passed'; checkedAt = '2026-04-29T00:00:00Z'; message = 'ok' }
+                        }
+                    }
+                }
+            }
+            targets = (Get-BootstrapSecretsTemplate).targets
+        }
+
+        $resolved = Get-BootstrapResolvedSecretsTargets -SecretsData $fixture
+
+        $resolved.vsCode.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.vsCode.env.ContainsKey('OPENAI_BASE_URL') | Should Be $true
+        $resolved.roo.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.cline.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.zed.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.trae.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.openClaw.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.hermes.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+        $resolved.kilo.env.ContainsKey('OPENAI_API_KEY') | Should Be $true
+    }
+
+    It 'declares transcript OpenAI-compatible providers as opt-in manual BYOK providers' {
+        $providers = Get-BootstrapSecretsProviderCatalog
+
+        foreach ($provider in @('minimax','nex','zhipu-glm')) {
+            $providers.ContainsKey($provider) | Should Be $true
+            [string]$providers[$provider].validationKind | Should Be 'openaiCompatible'
+            [string]$providers[$provider].secretKind | Should Be 'apiKey'
+            (@($providers[$provider].requiredFields) -contains 'apiKey') | Should Be $true
+            (@($providers[$provider].requiredFields) -contains 'baseUrl') | Should Be $true
+            [bool]$providers[$provider].supportsValidation | Should Be $true
+            [bool]$providers[$provider].manualOptIn | Should Be $true
+            [string]$providers[$provider].signupUrl | Should Match '^https://'
+            [string]$providers[$provider].defaults.baseUrl | Should Match '^https://'
+            (@($providers[$provider].appTargets) -contains 'openCode') | Should Be $true
+        }
+    }
+
+    It 'does not propagate Gemini credentials outside the Google/Antigravity lane' {
+        $fixture = @{
+            metadata = @{ version = 2 }
+            providers = @{
+                google = @{
+                    activeCredential = 'google-main-01'
+                    rotationOrder = @('google-main-01')
+                    credentials = @{
+                        'google-main-01' = @{
+                            displayName = 'Gemini'
+                            secret = 'AIzaTestCredentialForPolicyOnly123456789'
+                            secretKind = 'apiKey'
+                            validation = @{ state = 'passed'; checkedAt = '2026-05-09T00:00:00Z'; message = 'ok' }
+                        }
+                    }
+                }
+            }
+            targets = (Get-BootstrapSecretsTemplate).targets
+        }
+
+        $resolved = Get-BootstrapResolvedSecretsTargets -SecretsData $fixture
+
+        $resolved.userEnv.ContainsKey('GEMINI_API_KEY') | Should Be $false
+        $resolved.openCode.env.ContainsKey('GEMINI_API_KEY') | Should Be $false
+        $resolved.roo.env.ContainsKey('GEMINI_API_KEY') | Should Be $false
+        $resolved.cline.env.ContainsKey('GEMINI_API_KEY') | Should Be $false
+        @(Get-BootstrapOpenCodeProviderRecords -SecretsData $fixture).Count | Should Be 0
+    }
+
+    It 'redacts sensitive env values in logs without hiding safe values' {
+        (Get-BootstrapEnvValueForLog -Name 'OPENAI_API_KEY' -Value 'sk-secret') | Should Be '[redacted]'
+        (Get-BootstrapEnvValueForLog -Name 'OPENAI_ORGANIZATION' -Value 'org-secret') | Should Be '[redacted]'
+        (Get-BootstrapEnvValueForLog -Name 'OPENAI_PROJECT' -Value 'proj-secret') | Should Be '[redacted]'
+        (Get-BootstrapEnvValueForLog -Name 'OPENAI_BASE_URL' -Value 'https://api.openai.com/v1') | Should Be 'https://api.openai.com/v1'
+    }
+
+    It 'prefers a populated project secrets manifest over an empty user manifest' {
+        $originalBootstrapDataRoot = $env:BOOTSTRAP_DATA_ROOT
+        $originalUserProfile = $env:USERPROFILE
+        $originalLocalAppData = $env:LOCALAPPDATA
+        $originalTemp = $env:TEMP
+        $projectRoot = Join-Path $script:TestDataRoot 'Project'
+
+        try {
+            $env:BOOTSTRAP_DATA_ROOT = ''
+            $env:USERPROFILE = Join-Path $script:TestDataRoot 'User'
+            $env:LOCALAPPDATA = Join-Path $script:TestDataRoot 'LocalAppData'
+            $env:TEMP = Join-Path $script:TestDataRoot 'Temp'
+            New-Item -Path $env:USERPROFILE -ItemType Directory -Force | Out-Null
+            New-Item -Path $env:LOCALAPPDATA -ItemType Directory -Force | Out-Null
+            New-Item -Path $env:TEMP -ItemType Directory -Force | Out-Null
+            New-Item -Path $projectRoot -ItemType Directory -Force | Out-Null
+
+            $userSecretsPath = Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'bootstrap-secrets.json'
+            Write-BootstrapJsonFile -Path $userSecretsPath -Value (Get-BootstrapSecretsTemplate)
+
+            $projectSecretsPath = Join-Path (Join-Path $projectRoot '.bootstrap-tools') 'bootstrap-secrets.json'
+            Write-BootstrapJsonFile -Path $projectSecretsPath -Value @{
+                metadata = @{ version = 2 }
+                providers = @{
+                    openrouter = @{
+                        defaults = @{ baseUrl = 'https://openrouter.ai/api/v1' }
+                        activeCredential = 'openrouter-main-01'
+                        rotationOrder = @('openrouter-main-01')
+                        credentials = @{
+                            'openrouter-main-01' = @{
+                                displayName = 'Main'
+                                secret = 'test-project-secret'
+                                secretKind = 'apiKey'
+                                validation = @{ state = 'passed'; checkedAt = '2026-04-21T00:00:00Z'; message = 'ok' }
+                            }
+                        }
+                    }
+                }
+                targets = @{}
+            }
+
+            Remove-Variable -Scope Script -Name BootstrapDataRoot -ErrorAction SilentlyContinue
+            Push-Location $projectRoot
+            try {
+                # (Get-Location).Path resolve a forma longa do diretorio (igual a Get-BootstrapDataRoot),
+                # evitando divergencia 8.3 (RUNNER~1) vs longa nos runners do GitHub.
+                Get-BootstrapDataRoot | Should Be (Join-Path (Get-Location).Path '.bootstrap-tools')
+            } finally {
+                Pop-Location
+            }
+        } finally {
+            $env:BOOTSTRAP_DATA_ROOT = $originalBootstrapDataRoot
+            $env:USERPROFILE = $originalUserProfile
+            $env:LOCALAPPDATA = $originalLocalAppData
+            $env:TEMP = $originalTemp
+            Remove-Variable -Scope Script -Name BootstrapDataRoot -ErrorAction SilentlyContinue
+            Reset-TestDataRoot -Path $script:TestDataRoot
+        }
+    }
+
+    It 'normalizes Claude Code permission arrays even when settings were loaded as hashtables' {
+        $originalUserProfile = $env:USERPROFILE
+        $env:USERPROFILE = Join-Path $script:TestDataRoot 'User'
+        $settingsDir = Join-Path $env:USERPROFILE '.claude'
+        $settingsPath = Join-Path $settingsDir 'settings.json'
+        New-Item -Path $settingsDir -ItemType Directory -Force | Out-Null
+        Set-Content -Path $settingsPath -Encoding utf8 -Value @'
+{
+  "permissions": {
+    "allow": "Bash",
+    "deny": "Read(.env)"
+  }
+}
+'@
+
+        try {
+            Ensure-ClaudeCodeDefaults
+            $saved = Read-BootstrapJsonFile -Path $settingsPath
+        } finally {
+            $env:USERPROFILE = $originalUserProfile
+        }
+
+        @($saved.permissions.allow) | Should Be @('Bash')
+        (@($saved.permissions.deny) -contains 'Read(**/secrets/**)') | Should Be $true
+    }
+
+    It 'returns stable grub entry fields when no Linux loader is detected' {
+        Mock Test-IsAdmin { return $true }
+        Mock Get-BootstrapEfiEntries { return @() }
+        Mock Get-BootstrapLinuxPartitions { return @() }
+
+        $grub = Get-BootstrapGrubPresence
+
+        $hasEntryId = if ($grub -is [hashtable]) { $grub.ContainsKey('EntryId') } else { @($grub.PSObject.Properties.Name) -contains 'EntryId' }
+        $hasEntryDesc = if ($grub -is [hashtable]) { $grub.ContainsKey('EntryDesc') } else { @($grub.PSObject.Properties.Name) -contains 'EntryDesc' }
+
+        $hasEntryId | Should Be $true
+        $hasEntryDesc | Should Be $true
+        $grub.EntryId | Should Be ''
+        $grub.EntryDesc | Should Be ''
+    }
+
+    It 'builds dual boot info even when grub optional fields are absent' {
+        Mock Test-IsAdmin { return $false }
+        Mock Get-BootstrapFastStartupStatus {
+            return @{ Enabled = $false; Safe = $true; Value = 0; RegistryPath = '' }
+        }
+        Mock Get-BootstrapBitLockerStatus {
+            return @{ CEnabled = $false; StatusText = 'Off'; ProtectionStatus = '' }
+        }
+        Mock Get-BootstrapLinuxPartitions { return @() }
+        Mock Get-BootstrapEfiEntries { return @() }
+        Mock Get-BootstrapGrubPresence {
+            return [pscustomobject]@{ Detected = $false; Path = ''; Confidence = 'none' }
+        }
+
+        { Get-BootstrapDualBootInfo } | Should Not Throw
+    }
+
+    It 'does not apply an invalid active credential and persists the failed validation state' {
+        $path = Join-Path $script:TestDataRoot 'bootstrap-secrets.json'
+        Write-BootstrapJsonFile -Path $path -Value @{
+            '$schema' = 'https://bootstrap.local/schemas/bootstrap-secrets.schema.json'
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                openai = @{
+                    defaults = @{
+                        baseUrl = 'https://api.openai.com/v1'
+                    }
+                    activeCredential = 'openai-main-01'
+                    rotationOrder = @('openai-main-01')
+                    credentials = @{
+                        'openai-main-01' = @{
+                            displayName = 'Main'
+                            secret = 'sk-proj-invalid'
+                            secretKind = 'apiKey'
+                            validation = @{
+                                state = 'unknown'
+                                checkedAt = ''
+                                message = ''
+                            }
+                        }
+                    }
+                }
+            }
+            targets = @{
+                userEnv = @{
+                    OPENAI_API_KEY = '{{activeProviders.openai.apiKey}}'
+                }
+            }
+        }
+
+        Mock Test-BootstrapSecretsProviderCredential {
+            return @{
+                state = 'failed'
+                checkedAt = '2026-04-18T01:00:00Z'
+                message = '401 unauthorized'
+            }
+        }
+
+        Mock Set-UserEnvVar { }
+
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $repoRoot -ResolvedCloneBaseDir $repoRoot -RequestedSteamDeckVersion 'Auto' -ResolvedSteamDeckVersion '' -HostHealthMode 'off' -UsesSteamDeckFlow:$false -IsDryRun:$false
+        Ensure-BootstrapSecrets -State $state
+
+        Assert-MockCalled Set-UserEnvVar -Times 0 -Scope It -ParameterFilter { $Name -eq 'OPENAI_API_KEY' }
+        $saved = Read-BootstrapJsonFile -Path $path
+        $saved.providers.openai.credentials['openai-main-01'].validation.state | Should Be 'failed'
+    }
+
+    It 'rotates a provider to the next valid credential only' {
+        $data = @{
+            metadata = @{
+                version = 2
+            }
+            providers = @{
+                openai = @{
+                    defaults = @{
+                        baseUrl = 'https://api.openai.com/v1'
+                    }
+                    activeCredential = 'openai-primary-01'
+                    rotationOrder = @('openai-primary-01', 'openai-backup-01')
+                    credentials = @{
+                        'openai-primary-01' = @{
+                            displayName = 'Primary'
+                            secret = 'sk-proj-invalid'
+                            secretKind = 'apiKey'
+                            validation = @{
+                                state = 'unknown'
+                                checkedAt = ''
+                                message = ''
+                            }
+                        }
+                        'openai-backup-01' = @{
+                            displayName = 'Backup'
+                            secret = 'sk-proj-valid'
+                            secretKind = 'apiKey'
+                            validation = @{
+                                state = 'unknown'
+                                checkedAt = ''
+                                message = ''
+                            }
+                        }
+                    }
+                }
+            }
+            targets = @{}
+        }
+
+        Mock Test-BootstrapSecretsProviderCredential {
+            param(
+                [string]$ProviderName,
+                [hashtable]$ProviderDefinition,
+                [string]$CredentialId,
+                [hashtable]$Credential
+            )
+
+            if ($CredentialId -eq 'openai-primary-01') {
+                return @{
+                    state = 'failed'
+                    checkedAt = '2026-04-18T02:00:00Z'
+                    message = 'quota exceeded'
+                }
+            }
+
+            return @{
+                state = 'passed'
+                checkedAt = '2026-04-18T02:01:00Z'
+                message = 'ok'
+            }
+        }
+
+        $rotated = Move-BootstrapSecretsToNextCredential -SecretsData $data -ProviderName 'openai'
+
+        $rotated.providers.openai.activeCredential | Should Be 'openai-backup-01'
+        $rotated.providers.openai.credentials['openai-primary-01'].validation.state | Should Be 'failed'
+        $rotated.providers.openai.credentials['openai-backup-01'].validation.state | Should Be 'passed'
+    }
+}

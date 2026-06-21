@@ -1,0 +1,101 @@
+$ErrorActionPreference = 'Stop'
+
+$script:RepoRoot = Split-Path -Parent $PSScriptRoot
+
+function Invoke-PhaseZeroCliCoherenceTest {
+    param(
+        [Parameter(Mandatory = $true)][string]$Arguments,
+        [int]$TimeoutMs = 180000
+    )
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'cmd.exe'
+    $startInfo.Arguments = '/d /c ""{0}" {1}"' -f (Join-Path $script:RepoRoot 'install-cli.bat'), $Arguments
+    $startInfo.WorkingDirectory = $script:RepoRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    $null = $process.Start()
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if (-not $process.WaitForExit($TimeoutMs)) {
+        try { $process.Kill() } catch { }
+        throw "CLI excedeu timeout de $TimeoutMs ms."
+    }
+    $stdout = $stdoutTask.GetAwaiter().GetResult()
+    $stderr = $stderrTask.GetAwaiter().GetResult()
+    return [pscustomobject]@{
+        ExitCode = [int]$process.ExitCode
+        Stdout = [string]$stdout
+        Stderr = [string]$stderr
+    }
+}
+
+Describe 'CLI and UI coherence' {
+    It 'lists a unified numbered catalog and resolves its first number through --item' {
+        $list = Invoke-PhaseZeroCliCoherenceTest -Arguments '--list-items'
+
+        $list.ExitCode | Should Be 0
+        $list.Stdout | Should Match '(?m)^\s*1\.\s+\[(app|config|tool)\]\s+'
+        $list.Stdout | Should Not Match '(?m)acoes:\s*\|\s*risco:\s*$'
+        $first = [regex]::Match($list.Stdout, '(?m)^\s*1\.\s+\[(?<kind>app|config|tool)\]\s+(?<id>[^\s|]+)')
+        $first.Success | Should Be $true
+
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-item-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--item 1 --dry-run --yes --no-admin --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+            $run.ExitCode | Should Be 0
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.item | Should Be ([string]$first.Groups['id'].Value)
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'keeps isolated result collection fields as arrays and doctor as a structured object' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-result-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--item traefik --dry-run --yes --no-admin --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+            $run.ExitCode | Should Be 0
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+
+            $json.paths -is [System.Array] | Should Be $true
+            $json.nextSteps -is [System.Array] | Should Be $true
+            $null -eq $json.doctor | Should Be $false
+            [string]$json.doctor.status | Should Be 'not-run'
+            $json.doctor.checks -is [System.Array] | Should Be $true
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'labels the AppTuning local refresh action honestly' {
+        $raw = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'bootstrap-ui.ps1') -Raw
+
+        $raw | Should Match "AppTuningAudit\s*=\s*'Refresh status'"
+        $raw | Should Match "AppTuningAudit\s*=\s*'Atualizar status'"
+        $raw | Should Match 'Status local atualizado'
+    }
+
+    It 'returns individual selection guidance when --item does not resolve' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-error-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--item item-inexistente --dry-run --yes --no-admin --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+            $run.ExitCode | Should Be 2
+            $run.Stdout | Should Match 'Result:'
+            $run.Stdout | Should Match 'Log:'
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.mode | Should Be 'isolated-selection'
+            [string]$json.howToFix | Should Match '--list-items'
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

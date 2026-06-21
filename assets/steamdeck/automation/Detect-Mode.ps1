@@ -1,10 +1,16 @@
 param(
-    [string]$SettingsPath = (Join-Path (Join-Path $env:USERPROFILE '.bootstrap-tools') 'steamdeck-settings.json'),
+    [string]$SettingsPath,
     [string]$MockStatePath
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+. (Join-Path (Split-Path -Parent $PSCommandPath) 'SteamDeck.Common.ps1')
+
+if ([string]::IsNullOrWhiteSpace($SettingsPath)) {
+    $SettingsPath = Get-SteamDeckSettingsPath
+}
 
 function Normalize-DisplayValue {
     param([AllowNull()]$Value)
@@ -15,6 +21,15 @@ function Normalize-DisplayValue {
     $text = $text.Trim()
     $text = [regex]::Replace($text, '\s+', ' ')
     return $text.ToLowerInvariant()
+}
+
+function ConvertTo-DisplayBool {
+    param([AllowNull()]$Value)
+
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [bool]) { return [bool]$Value }
+    $text = ([string]$Value).Trim().ToLowerInvariant()
+    return @('1', 'true', 'yes', 'y', 'sim', 'on') -contains $text
 }
 
 function ConvertTo-DisplayRecord {
@@ -51,10 +66,7 @@ function ConvertTo-DisplayRecord {
 function Get-SettingsObject {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    if (-not (Test-Path $Path)) {
-        throw "Settings file not found: $Path"
-    }
-
+    Assert-SteamDeckFileExists -Path $Path -Description 'Settings file'
     return (Get-Content -Path $Path -Raw | ConvertFrom-Json)
 }
 
@@ -90,6 +102,25 @@ function Get-SessionProfiles {
     }
 
     foreach ($property in $Settings.sessionProfiles.PSObject.Properties) {
+        $defaults[$property.Name] = [string]$property.Value
+    }
+
+    return [pscustomobject]$defaults
+}
+
+function Get-DisplayClassification {
+    param($Settings)
+
+    $defaults = [ordered]@{
+        unknownExternalMode = 'UNCLASSIFIED_EXTERNAL'
+        uiFallbackMode = 'DOCKED_MONITOR'
+    }
+
+    if ($Settings.PSObject.Properties.Name -notcontains 'displayClassification') {
+        return [pscustomobject]$defaults
+    }
+
+    foreach ($property in $Settings.displayClassification.PSObject.Properties) {
         $defaults[$property.Name] = [string]$property.Value
     }
 
@@ -167,6 +198,25 @@ function Resolve-PreferredDisplay {
     return $Displays[0]
 }
 
+function Resolve-PreferredDisplayMatch {
+    param(
+        [Parameter(Mandatory = $true)][object[]]$Matches,
+        [System.Collections.Generic.List[string]]$Warnings
+    )
+
+    if ($Matches.Count -eq 0) { return $null }
+
+    $primaryConfigMatches = @($Matches | Where-Object {
+        $_.config -and ($_.config.PSObject.Properties.Name -contains 'primary') -and (ConvertTo-DisplayBool $_.config.primary)
+    })
+
+    $candidateMatches = if ($primaryConfigMatches.Count -gt 0) { $primaryConfigMatches } else { $Matches }
+    $selectedDisplay = Resolve-PreferredDisplay -Displays @($candidateMatches.display) -Warnings $Warnings
+    if (-not $selectedDisplay) { return $candidateMatches[0] }
+
+    return ($candidateMatches | Where-Object { $_.display.instanceNormalized -eq $selectedDisplay.instanceNormalized } | Select-Object -First 1)
+}
+
 function Test-DisplayMatch {
     param(
         [Parameter(Mandatory = $true)]$Display,
@@ -199,6 +249,7 @@ $settings = Get-SettingsObject -Path $SettingsPath
 $monitorProfiles = @(Get-SettingsArray -Value $settings.monitorProfiles)
 $monitorFamilies = @(Get-SettingsArray -Value $settings.monitorFamilies)
 $sessionProfiles = Get-SessionProfiles -Settings $settings
+$displayClassification = Get-DisplayClassification -Settings $settings
 $state = if ($MockStatePath) {
     Get-Content -Path $MockStatePath -Raw | ConvertFrom-Json
 } else {
@@ -237,9 +288,9 @@ if ($externalDisplays.Count -eq 0) {
     }
 
     if ($profileMatches.Count -gt 0) {
-        $selected = Resolve-PreferredDisplay -Displays @($profileMatches.display) -Warnings $warnings
-        $selectedDisplay = $selected
-        $matchedConfig = ($profileMatches | Where-Object { $_.display.instanceNormalized -eq $selected.instanceNormalized } | Select-Object -First 1).config
+        $selectedMatch = Resolve-PreferredDisplayMatch -Matches @($profileMatches) -Warnings $warnings
+        $selectedDisplay = $selectedMatch.display
+        $matchedConfig = $selectedMatch.config
         $mode = if ($matchedConfig.PSObject.Properties.Name -contains 'mode') { [string]$matchedConfig.mode } else { 'DOCKED_MONITOR' }
         $matchedBy = 'profile'
     } else {
@@ -256,17 +307,31 @@ if ($externalDisplays.Count -eq 0) {
         }
 
         if ($familyMatches.Count -gt 0) {
-            $selected = Resolve-PreferredDisplay -Displays @($familyMatches.display) -Warnings $warnings
-            $selectedDisplay = $selected
-            $matchedConfig = ($familyMatches | Where-Object { $_.display.instanceNormalized -eq $selected.instanceNormalized } | Select-Object -First 1).config
+            $selectedMatch = Resolve-PreferredDisplayMatch -Matches @($familyMatches) -Warnings $warnings
+            $selectedDisplay = $selectedMatch.display
+            $matchedConfig = $selectedMatch.config
             $mode = if ($matchedConfig.PSObject.Properties.Name -contains 'mode') { [string]$matchedConfig.mode } else { 'DOCKED_MONITOR' }
             $matchedBy = 'family'
         } else {
             $selectedDisplay = Resolve-PreferredDisplay -Displays $externalDisplays -Warnings $warnings
             $matchedConfig = $settings.genericExternal
-            $mode = if ($matchedConfig.PSObject.Properties.Name -contains 'mode') { [string]$matchedConfig.mode } else { 'DOCKED_TV' }
-            $matchedBy = 'genericExternal'
-            $warnings.Add('External display not recognized. Generic fallback applied.')
+            $unknownMode = if ($displayClassification.PSObject.Properties.Name -contains 'unknownExternalMode') { [string]$displayClassification.unknownExternalMode } else { 'UNCLASSIFIED_EXTERNAL' }
+            if ($unknownMode -eq 'UNCLASSIFIED_EXTERNAL') {
+                $fallbackMode = if ($displayClassification.PSObject.Properties.Name -contains 'uiFallbackMode') { [string]$displayClassification.uiFallbackMode } else { 'DOCKED_MONITOR' }
+                $mode = 'UNCLASSIFIED_EXTERNAL'
+                $matchedBy = 'unclassifiedExternal'
+                $matchedConfig = [ordered]@{
+                    mode = $fallbackMode
+                    resolutionPolicy = if ($settings.genericExternal.PSObject.Properties.Name -contains 'resolutionPolicy') { [string]$settings.genericExternal.resolutionPolicy } else { 'desktop-safe' }
+                    layout = if ($settings.genericExternal.PSObject.Properties.Name -contains 'layout') { [string]$settings.genericExternal.layout } else { 'external-unclassified' }
+                    classificationRequired = $true
+                }
+                $warnings.Add('External display not recognized. UI classification required; fallback Desktop/Dev is used until classified.')
+            } else {
+                $mode = if ($matchedConfig.PSObject.Properties.Name -contains 'mode') { [string]$matchedConfig.mode } else { 'DOCKED_TV' }
+                $matchedBy = 'genericExternal'
+                $warnings.Add('External display not recognized. Generic fallback applied.')
+            }
         }
     }
 }
@@ -275,15 +340,24 @@ $sessionProfile = switch ($mode) {
     'HANDHELD' { [string]$sessionProfiles.HANDHELD }
     'DOCKED_TV' { [string]$sessionProfiles.DOCKED_TV }
     'DOCKED_MONITOR' { [string]$sessionProfiles.DOCKED_MONITOR }
+    'UNCLASSIFIED_EXTERNAL' { [string]$sessionProfiles.DOCKED_MONITOR }
     default { 'desktop' }
+}
+
+$effectiveMode = if ($mode -eq 'UNCLASSIFIED_EXTERNAL') {
+    if ($matchedConfig -and ($matchedConfig.PSObject.Properties.Name -contains 'mode')) { [string]$matchedConfig.mode } else { 'DOCKED_MONITOR' }
+} else {
+    $mode
 }
 
 [ordered]@{
     mode = $mode
+    effectiveMode = $effectiveMode
     sessionProfile = $sessionProfile
     matchedBy = $matchedBy
     matchedConfig = $matchedConfig
     internalDisplay = $internalDisplay
+    externalDisplays = @($externalDisplays)
     selectedDisplay = $selectedDisplay
     externalDisplayCount = $externalDisplays.Count
     onAcPower = [bool]$state.battery.onAcPower

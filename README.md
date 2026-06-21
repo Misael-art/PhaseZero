@@ -1,58 +1,214 @@
-<div align="center">
-  <img src="https://img.shields.io/badge/Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" />
-  <img src="https://img.shields.io/badge/PowerShell-5391FE?style=for-the-badge&logo=powershell&logoColor=white" />
-  <img src="https://img.shields.io/badge/Steam_Deck-151014?style=for-the-badge&logo=steamdeck&logoColor=white" />
-  
-  <h1>🚀 PhaseZero</h1>
-  <p><strong>O Hub definitivo de Bootstrapping e Pós-Instalação para Windows e Steam Deck</strong></p>
-</div>
+# PhaseZero
 
----
+PhaseZero e um instalador e auditor Windows para pos-instalacao segura. O alvo minimo e maquina Windows limpa com Windows PowerShell 5.1. O projeto deve explicar escopo, escrever `result.json`, preservar logs e falhar com diagnostico acionavel.
 
-## 💡 O que é o PhaseZero?
+## Principios de Produto
 
-O **PhaseZero** é muito mais que um script de "pós-formatação". É um orquestrador sob demanda capaz de forjar o ambiente ideal para a sua máquina através de perfis predefinidos. Com uma interface CLI e suporte à Interface de Usuário (UI) amigável, ele automatiza a instalação de ferramentas, configurações de ambiente e ajustes profundos do sistema para Gamers, Desenvolvedores, Criadores de Conteúdo, e Entusiastas de Inteligência Artificial.
+- Dry-run antes de mutacao real.
+- Perfil default pequeno e seguro: `safe-base`.
+- Perfil amplo somente por opt-in: `full-workstation`.
+- Componentes isolados nao herdam perfil, HostHealth ou AppTuning por acidente.
+- UI e CLI compartilham contrato de execucao, logs e resultado.
+- Falha sem `result.json` e tratada como erro do produto.
+- Reboot pendente bloqueia fluxos winget/MSI arriscados antes de mutar.
+- Rollback e aplicado onde ha manifest seguro; apps instalados por terceiros podem exigir remocao manual.
 
-## ✨ Principais Funcionalidades
+## Requisitos
 
-- 🎮 **Steam Deck Essentials & Automation**: Instalação customizada para Steam Deck (LCD/OLED) rodando Windows. Configurações de display automático (Handheld, TV, Monitor), overlay, automação de áudio, hotkeys baseadas em família de monitor, e suporte total a *Steam Deck Tools*.
-- 🤖 **Perfis de IA Embutidos**: Deploy rápido de stacks contemporâneos de IA, como Claude Desktop, Cursor, Trae, Gemini CLI, Ollama, e muito mais. 
-- 🛠️ **DevForge Hub**: SDKs, Winget, WSL/Docker, Node LTS, Python 3.13+, Git LFS e utilitários chave instalados silenciosamente.
-- 🎨 **Interface Contratual Opcional**: Integrável a scripts visuais (`bootstrap-ui.bat`) para quem prefere dar "cliques" invés de lidar com flags de terminal diretamente.
-- 🧹 **Host Health (Saúde do Host)**: Monitoramento de recursos de GPU/CPU, finalização de apps de background pesados enquanto se joga e tratativas de limpeza do sistema.
+- Windows 10/11.
+- Windows PowerShell 5.1.
+- Sessao interativa para a UI WPF.
+- Internet para bootstrap de App Installer/winget e pacotes online.
+- Pester 3.4.0 para rodar a suite local. `tests\run-pester.ps1` detecta a versao exata e tenta instalar em `CurrentUser` quando ausente; use `-NoInstall` para bloquear rede/mutacao e receber erro instrutivo.
 
-## 📦 Perfis Embutidos (Profiles)
+Sem winget em maquina limpa, o bootstrap tenta caminho seguro de App Installer oficial (`https://aka.ms/getwinget`) quando aplicavel. Se PATH/sessao ainda nao enxergar winget depois do bootstrap, a UI/CLI devem orientar logoff, nova sessao ou reboot em vez de falhar de modo opaco.
 
-O **PhaseZero** entende que cada máquina tem uma fase zero diferente. Escolha o perfil alvo durante o Bootstrap:
-*   **Base**: Kit de sobrevivência essencial, universal para qualquer PC limpo (Navegadores, Git, terminais robustos).
-*   **Containers & Game Dev**: Builds completas via WSL2, Docker e CMake/Unity.
-*   **AI Ecosystem**: Transforma a sua máquina em um cluster criativo cognitivo local.
-*   **Steam Deck Full**: Transforma o seu portátil com a camada máxima de facilidades, convertendo perfis automaticamente ao dockar.
+## Uso Seguro
 
-## 🚀 Como Usar
+UI:
 
-1. **Clone o Repositório:**
-   ```powershell
-   git clone https://github.com/Misael-art/PhaseZero.git
-   cd PhaseZero
-   ```
+```cmd
+bootstrap-ui.bat
+```
 
-2. **Inicie o Bootstrap** (Através do Bat UI)
-   ```cmd
-   .\bootstrap-ui.bat
-   ```
-   **Ou pela linha de comando** caso queira ser direto ao ponto:
-   ```powershell
-   .\bootstrap-tools.ps1 # irá expor prompts via console.
-   ```
+Smoke test da UI, sem abrir janela:
 
-## ⚙️ Customização
+```cmd
+cmd /c bootstrap-ui.bat -SmokeTest
+```
 
-Você pode facilmente plugar seus próprios aplicativos. Basta editar a seção principal de Componentes em `bootstrap-tools.ps1` usando a função:
-`New-BootstrapComponentDefinition` injetando IDs do Winget, npm, ou links diretos de download.
+CLI dry-run de componente isolado:
 
----
+```powershell
+.\bootstrap-tools.ps1 -Component notepadpp -DryRun -NonInteractive -HostHealth off -AppTuning off
+```
 
-<div align="center">
-  <i>Construído com foco em automação e flexibilidade máxima para Windows Power Users.</i>
-</div>
+Perfil seguro:
+
+```powershell
+.\bootstrap-tools.ps1 -Profile safe-base -DryRun -NonInteractive
+```
+
+Perfil beta publico:
+
+```powershell
+.\bootstrap-tools.ps1 -Profile public-beta -DryRun -NonInteractive
+```
+
+Perfil amplo, somente escolha explicita:
+
+```powershell
+.\bootstrap-tools.ps1 -Profile full-workstation -DryRun -NonInteractive
+```
+
+Auditoria:
+
+```powershell
+.\bootstrap-tools.ps1 -Audit -DryRun -NonInteractive
+```
+
+Diagnostico local:
+
+```powershell
+.\bootstrap-tools.ps1 -Doctor -DryRun -NonInteractive
+.\bootstrap-tools.ps1 -SupportBundle -DryRun -NonInteractive
+.\bootstrap-tools.ps1 -RepairPlan -DryRun -NonInteractive
+```
+
+`-Doctor` inclui `doctor.deck` com diagnostico read-only do Steam Deck quando aplicavel: hardware, AMD driver, bateria/power plan, display, input, streaming/conectividade e libraries Steam. `-SupportBundle` adiciona `deck-doctor.json`, `deck-power.json`, `deck-display.json` e `deck-libraries.json`; HTML bruto de `powercfg` nao entra no zip por padrao.
+
+## Perfis
+
+- `safe-base`: base pequena para maquina limpa. Inclui runtime/dev essencial e Notepad++. Nao inclui desktops de IA, containers, jogos, HostHealth ou AppTuning.
+- `recommended`: alias seguro/compat para `safe-base`.
+- `public-beta`: primeira instalacao confiavel; inclui base segura, PowerShell, PowerToys, Brave, VS Code, secrets e MCPs. Nao inclui WSL/Docker/IA desktop/gaming.
+- `dev-ai`: pilha de IA/dev por escolha explicita.
+- `full-workstation`: perfil amplo com stacks desktop, IA, containers, creator, social e utilitarios. Nunca deve ser default silencioso.
+- `legacy`: compatibilidade com fluxo historico.
+
+## Transcricoes tecnicas
+
+- Matriz fechada: `docs/video-transcript-integration.md` cobre 58 titulos com Destino final definido.
+- Apps novos ficam sob demanda: Zen Browser, Jan, Obsidian, KDE Connect, Godot, Krita, Audacity, Headroom AI, web apps v0/Bolt/Lovable.
+- Itens experimentais ficam opt-in/manual: Printing Press, Odysseus, IndexTTS2, AnythingLLM, llama.cpp MTP e Headroom AI.
+- Providers BYOK OpenAI-compatible novos: `minimax`, `nex`, `zhipu-glm`.
+- AppTuning adiciona `agent-config`, `knowledge-vault`, `workflow-automation` e templates manuais.
+- UI exibe badges por componente: Seguro, Experimental, Manual, Requer GPU, Requer login.
+
+## Escopo UI/CLI
+
+Quando usuario seleciona componente isolado, backend recebe somente o componente necessario:
+
+```powershell
+-Component notepadpp -HostHealth off -AppTuning off
+```
+
+O backend nao deve receber `-Profile recommended` nesse caso. Se perfis e componentes coexistem na UI, o botao principal exige confirmacao de escopo antes de executar:
+
+- somente componentes selecionados;
+- perfil atual + componentes;
+- cancelar.
+
+## Result JSON
+
+Toda execucao deve deixar um `result.json` parseavel quando `ResultPath` existe ou quando o script escolhe caminho padrao. O envelope comum inclui:
+
+- `status`: `success`, `warning`, `blocked` ou `error`;
+- `exitCode`;
+- `mode`;
+- `artifactPaths.logPath`;
+- `artifactPaths.resultPath`;
+- `diagnostics[]`;
+- `scope`;
+- `rollback`;
+- `auditSummary` e `auditResults[]` quando `mode = audit`.
+- `doctor`, `supportBundle` e `repairPlan` quando os modos de suporte local forem usados.
+- `doctor.deck` quando `mode = doctor` ou bundle de suporte gerar diagnostico Steam Deck.
+
+UI e `install-cli.ps1` nao aceitam sucesso somente por exit code. Se processo elevado, crash fake ou backend morto nao escrever `result.json`, a camada chamadora cria fallback com stdout/stderr/log/result e acao recomendada.
+
+## Auditoria
+
+Severidades publicas:
+
+- `Ready`
+- `NeedsInstall`
+- `NeedsRepair`
+- `RequiresRestart`
+- `ManualAction`
+- `OptionalMissing`
+- `UnsupportedAudit`
+
+`UnsupportedAudit` nao entra em contagem critica. `Skipped` legado vira `UnsupportedAudit`. `GhostInstall` vira `NeedsRepair` quando ha reparo seguro; caso contrario, deve virar acao manual clara. Java valida JDK real por `javac.exe`/path de JDK, nao somente `java -version`. .NET SDK valida banda 8.x por `dotnet --list-sdks`.
+
+## Logs e Artefatos
+
+Locais comuns:
+
+- `%USERPROFILE%\.bootstrap-tools\logs\`
+- `%LOCALAPPDATA%\bootstrap-tools\logs\`
+- `%TEMP%\bootstrap-tools\`
+
+Campos importantes em falha:
+
+- componente afetado;
+- causa;
+- `howToFix`;
+- stdout/stderr quando houver processo filho;
+- `rollback.available`;
+- caminho de change manifest quando existir.
+
+## Rollback e Limites
+
+Rollback cobre mudancas registradas pelo projeto: registro, arquivos gerenciados, alguns servicos e exclusoes Defender controladas. Nao promete desfazer com seguranca todo pacote winget/npm/chocolatey/uv instalado fora do manifest. Quando rollback automatico nao e seguro, `result.json` deve marcar acao manual.
+
+Limites atuais:
+
+- alguns componentes ainda retornam `UnsupportedAudit` ate existir heuristica segura;
+- alguns provedores/API exigem login, OAuth ou revisao manual;
+- pacotes externos podem mudar IDs, instaladores e comportamento;
+- WSL, MSI e winget podem exigir reboot antes de nova tentativa;
+- UI WPF exige sessao desktop interativa.
+
+## Verificacao Local
+
+Parse PowerShell:
+
+```powershell
+$files = 'bootstrap-tools.ps1','bootstrap-ui.ps1','install-cli.ps1'
+foreach ($f in $files) {
+  $tokens = $null
+  $errors = $null
+  [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$tokens, [ref]$errors) > $null
+  if ($errors) { $errors | Format-List; exit 1 }
+}
+```
+
+Contrato e dry-runs minimos:
+
+```powershell
+.\bootstrap-tools.ps1 -UiContractJson -NonInteractive | ConvertFrom-Json | Out-Null
+.\bootstrap-tools.ps1 -Component notepadpp -DryRun -NonInteractive -HostHealth off -AppTuning off
+.\bootstrap-tools.ps1 -Profile safe-base -DryRun -NonInteractive
+.\bootstrap-tools.ps1 -Audit -DryRun -NonInteractive
+cmd /c bootstrap-ui.bat -SmokeTest
+```
+
+Suite. Em maquina limpa, o runner prepara Pester 3.4.0 em `CurrentUser` com timeout e retry controlado:
+
+```powershell
+.\tests\run-pester.ps1
+```
+
+Suite sem instalar dependencia ausente:
+
+```powershell
+.\tests\run-pester.ps1 -NoInstall
+```
+
+## Seguranca
+
+- Nao versionar `.bootstrap-tools/`, `.mcp.json`, logs, dumps ou manifests com credenciais.
+- Credenciais locais ficam fora do Git.
+- Tokens vazados fora do gerenciador de segredos devem ser rotacionados.
+- Componentes `manual-required` explicam motivo e instrucao, sem marcar sucesso automatico.

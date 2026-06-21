@@ -1,0 +1,37 @@
+{
+  "schemaVersion": "1.6.0",
+  "topLevelKeys": [
+    "apiCatalog",
+    "apiInventory",
+    "appCatalog",
+    "appTuningCatalog",
+    "appTuningModes",
+    "capabilities",
+    "componentNames",
+    "components",
+    "defaults",
+    "hostHealthModes",
+    "profileNames",
+    "profiles",
+    "schemaVersion",
+    "secretsRotation",
+    "steamDeckSettingsDefaults"
+  ],
+  "defaultsKeys": [
+    "legacyAppTuning",
+    "legacyHostHealth",
+    "modernAppTuning",
+    "modernHostHealth",
+    "steamDeckVersion",
+    "uiLanguage",
+    "workspaceRoot"
+  ],
+  "secretsRotationKeys": [
+    "eventsPath",
+    "schedule",
+    "scheduleOptions",
+    "scheduledTaskExists",
+    "scheduledTaskName",
+    "staleHoursDefault"
+  ]
+}
