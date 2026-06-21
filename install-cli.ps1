@@ -960,54 +960,153 @@ function Resolve-CliLogPath {
     return (Join-Path $root ("phasezero-install-cli-ai-tools-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date)))
 }
 
-function Get-CliGuidedProfileEntry {
-    return @(
-        [ordered]@{ key = '1'; name = 'safe-base';             label = 'Base segura para maquina limpa.' },
-        [ordered]@{ key = '2'; name = 'public-beta';           label = 'Beta publico confiavel.' },
-        [ordered]@{ key = '3'; name = 'steamdeck-recommended'; label = 'Steam Deck recomendado.' },
-        [ordered]@{ key = '4'; name = 'full-workstation';      label = 'Workstation ampla, opt-in.' },
-        [ordered]@{ key = '5'; name = '';                      label = 'Outro: digite nome ou alias.' }
-    )
+function Get-CliProfileMenuEntries {
+    # Lista numerada de TODOS os perfis do catalogo, agrupada (mesma ordem do catalogo visual),
+    # para que o que aparece na lista seja exatamente o que o usuario pode escolher e instalar.
+    param([Parameter(Mandatory = $true)][hashtable]$Profiles)
+
+    $entries = New-Object System.Collections.Generic.List[object]
+    $written = @{}
+    $number = 0
+    $groups = Get-CliProfileGroupMap
+    foreach ($groupName in $groups.Keys) {
+        foreach ($profileName in @($groups[$groupName])) {
+            if (-not $Profiles.Contains($profileName) -or $written.ContainsKey([string]$profileName)) { continue }
+            $number++
+            $def = $Profiles[$profileName]
+            $entries.Add([pscustomobject]@{ number = $number; group = [string]$groupName; key = [string]$profileName; name = [string]$def.Name; description = [string]$def.Description }) | Out-Null
+            $written[[string]$profileName] = $true
+        }
+    }
+    foreach ($profileName in @($Profiles.Keys | Where-Object { -not $written.ContainsKey([string]$_) } | Sort-Object)) {
+        $number++
+        $def = $Profiles[$profileName]
+        $entries.Add([pscustomobject]@{ number = $number; group = 'Outros'; key = [string]$profileName; name = [string]$def.Name; description = [string]$def.Description }) | Out-Null
+        $written[[string]$profileName] = $true
+    }
+    return @($entries.ToArray())
 }
 
-function Get-CliGuidedProfileEntries {
-    return @(Get-CliGuidedProfileEntry)
+function Read-CliProfileSelection {
+    # Mostra a lista numerada e aceita numero, nome ou alias; retorna o nome do perfil ('' = voltar).
+    param([Parameter(Mandatory = $true)][hashtable]$Profiles)
+
+    $entries = Get-CliProfileMenuEntries -Profiles $Profiles
+    $width = Get-CliOutputWidth
+    # IMPORTANTE: render via Write-CliOut ([Console]::WriteLine -> host). Nao usar Write-CliProfileRow
+    # aqui: ele escreve no pipeline e poluiria o valor de retorno desta funcao (capturado pelo caller).
+    $nameWidth = 30
+    $descriptionWidth = [Math]::Max(30, ($width - ($nameWidth + 4)))
+    while ($true) {
+        Write-CliOut ''
+        Write-CliOut 'Instalacao guiada por perfil' Green
+        $currentGroup = ''
+        foreach ($entry in $entries) {
+            if ([string]$entry.group -ne $currentGroup) {
+                $currentGroup = [string]$entry.group
+                Write-CliOut ''
+                Write-CliOut $currentGroup Cyan
+            }
+            $label = '{0,3}. {1}' -f [int]$entry.number, [string]$entry.name
+            $wrapped = @(Split-CliTextLine -Text ([string]$entry.description) -Width $descriptionWidth)
+            Write-CliOut ('  {0}  {1}' -f $label.PadRight($nameWidth), $wrapped[0])
+            for ($i = 1; $i -lt $wrapped.Count; $i++) {
+                Write-CliOut ('  {0}  {1}' -f ''.PadRight($nameWidth), $wrapped[$i])
+            }
+        }
+        Write-CliOut ''
+        $reply = ConvertTo-CliCleanReply (Read-Host 'Numero ou nome do perfil (0=voltar)')
+        if ([string]::IsNullOrWhiteSpace($reply) -or $reply -eq '0') { return '' }
+        $number = 0
+        if ([int]::TryParse($reply, [ref]$number)) {
+            $match = $entries | Where-Object { [int]$_.number -eq $number } | Select-Object -First 1
+            if ($null -ne $match) { return [string]$match.key }
+        } else {
+            $match = $entries | Where-Object { [string]$_.key -eq $reply -or [string]$_.name -eq $reply } | Select-Object -First 1
+            if ($null -ne $match) { return [string]$match.key }
+            if ($Profiles.Contains($reply)) { return $reply }
+        }
+        Write-CliOut ("[AVISO] Perfil nao encontrado: {0}" -f $reply) Yellow
+    }
+}
+
+function Invoke-CliMenuProfileFlow {
+    # Fluxo coeso de perfil: escolher -> pre-visualizar (dry-run) -> confirmar -> instalar.
+    # Retorna o exit code do backend (0 tambem quando o usuario volta/cancela). Nao encerra o processo.
+    param(
+        [Parameter(Mandatory = $true)]$Options,
+        [Parameter(Mandatory = $true)][hashtable]$Profiles
+    )
+
+    $profileChoice = Read-CliProfileSelection -Profiles $Profiles
+    if ([string]::IsNullOrWhiteSpace($profileChoice)) { return 0 }
+
+    Write-CliOut ''
+    Write-CliOut ("[1/3] Perfil selecionado: {0}" -f $profileChoice) Green
+    Write-CliOut ''
+    Write-CliOut ("[2/3] Pre-visualizando (dry-run): {0}" -f $profileChoice) Green
+    $dryArgs = Add-CliBackendArtifactArg -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', $ToolsPs1,
+        '-Profile', $profileChoice,
+        '-DryRun', '-NonInteractive', '-SkipManualRequirements'
+    )
+    $dryExit = [int](Start-Process -FilePath 'powershell.exe' -ArgumentList $dryArgs -NoNewWindow -PassThru -Wait).ExitCode
+    if ($dryExit -ne 0) {
+        Write-CliOut ("[ERRO] Dry-run falhou (codigo {0})." -f $dryExit) Red
+        Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow
+        Write-CliOut ("Log:    {0}" -f [string]$Options.LogPath) Yellow
+        return $dryExit
+    }
+
+    Write-CliOut ''
+    $confirm = ConvertTo-CliCleanReply (Read-Host ("Instalar o perfil '{0}' agora? (S/N)" -f $profileChoice))
+    if ($confirm -notmatch '^[Ss]$') {
+        Write-CliOut '[AVISO] Instalacao cancelada pelo usuario.' Yellow
+        return 0
+    }
+
+    Write-CliOut ''
+    Write-CliOut ("[3/3] Instalando perfil: {0}" -f $profileChoice) Green
+    Write-CliOut 'Isso pode levar varios minutos dependendo das dependencias...' Yellow
+    $installArgs = Add-CliBackendArtifactArg -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', $ToolsPs1,
+        '-Profile', $profileChoice,
+        '-NonInteractive', '-SkipManualRequirements'
+    )
+    $installExit = [int](Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait).ExitCode
+    Write-CliOut ''
+    if ($installExit -eq 0) {
+        Write-Header 'SUCESSO: perfil instalado'
+        Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Green
+        Write-CliOut ("Log:    {0}" -f [string]$Options.LogPath) Green
+    } else {
+        Write-CliOut ("[ERRO] Instalacao do perfil falhou (codigo {0})." -f $installExit) Red
+        Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow
+        Write-CliOut ("Log:    {0}" -f [string]$Options.LogPath) Yellow
+    }
+    return $installExit
 }
 
 function Show-CliMainMenu {
     Write-CliOut ''
     Write-CliOut 'PhaseZero Bootstrap - menu rapido' Cyan
     Write-CliOut ''
+    Write-CliOut 'Diagnostico (seguro, sem alteracoes)' Green
     Write-CliOut '  1) Doctor (diagnostico, dry-run sem alteracoes)' Cyan
     Write-CliOut '  2) Exportar SupportBundle (dry-run, sem alteracoes)' Cyan
-    Write-CliOut '  3) Dry-run perfil safe-base' Cyan
-    Write-CliOut '  4) Dry-run perfil public-beta' Cyan
-    Write-CliOut '  5) Listar perfis disponiveis' Cyan
-    Write-CliOut '  6) Instalacao guiada (perfil recomendado)' Cyan
-    Write-CliOut '  7) App individual (buscar, validar, instalar)' Cyan
-    Write-CliOut '  8) Configuracao individual (buscar, validar, aplicar)' Cyan
-    Write-CliOut '  9) AI tool/proxy (buscar, instalar, iniciar)' Cyan
+    Write-CliOut ''
+    Write-CliOut 'Instalar (sempre pre-visualiza com dry-run e pede confirmacao)' Green
+    Write-CliOut '  3) Instalacao guiada por perfil (listar, escolher e instalar)' Cyan
+    Write-CliOut '  4) App individual (buscar, validar, instalar)' Cyan
+    Write-CliOut '  5) Configuracao individual (buscar, validar, aplicar)' Cyan
+    Write-CliOut '  6) AI tool/proxy (buscar, instalar, iniciar)' Cyan
+    Write-CliOut ''
     Write-CliOut '  0) Sair' Cyan
     Write-CliOut ''
-    $reply = Read-Host 'Selecione [1-9, 0=sair]'
+    $reply = Read-Host 'Selecione [1-6, 0=sair]'
     return (ConvertTo-CliCleanReply $reply)
-}
-
-function Show-CliGuidedProfilePicker {
-    Write-CliOut ''
-    Write-CliOut 'Instalacao guiada: escolha um perfil base.' Cyan
-    Write-CliOut ''
-    foreach ($entry in (Get-CliGuidedProfileEntries)) {
-        $displayName = if ([string]::IsNullOrWhiteSpace([string]$entry.name)) { '(digitar)' } else { [string]$entry.name }
-        Write-CliOut ('  {0}  {1,-26} {2}' -f [string]$entry.key, $displayName, [string]$entry.label)
-    }
-    Write-CliOut ''
-    $pick = ConvertTo-CliCleanReply (Read-Host 'Numero do perfil [1-5]')
-    $entries = Get-CliGuidedProfileEntries
-    $match = $entries | Where-Object { [string]$_.key -eq $pick } | Select-Object -First 1
-    if ($null -eq $match) { return '' }
-    if (-not [string]::IsNullOrWhiteSpace([string]$match.name)) { return [string]$match.name }
-    return (ConvertTo-CliCleanReply (Read-Host 'Nome do perfil (ex: base, ai, full)'))
 }
 
 function Invoke-CliMenuBackendIntent {
@@ -1318,7 +1417,10 @@ function Update-CliResultFileMode {
 }
 
 function Invoke-CliBootstrapSelectionMode {
-    param([Parameter(Mandatory = $true)]$Options)
+    param(
+        [Parameter(Mandatory = $true)]$Options,
+        [switch]$ReturnExit
+    )
 
     $targetSummary = @()
     if (@($Options.App).Count -gt 0) { $targetSummary += ("apps={0}" -f (Join-CliOptionValues -Values $Options.App)) }
@@ -1343,15 +1445,15 @@ function Invoke-CliBootstrapSelectionMode {
             if (-not (Test-Path -LiteralPath ([string]$Options.ResultPath))) {
                 Write-CliLegacyFailureResult -Message "Dry-run individual falhou (codigo $dryExit) sem result.json do backend." -ExitCode $dryExit
             }
-            if (-not [bool]$Options.NonInteractive) { Pause }
-            exit $dryExit
+            if (-not $ReturnExit -and -not [bool]$Options.NonInteractive) { Pause }
+            if ($ReturnExit) { return $dryExit } else { exit $dryExit }
         }
         if ([bool]$Options.DryRun) {
             Write-Header 'DRY-RUN: selecao individual validada'
             Write-CliOut ("Result:  {0}" -f [string]$Options.ResultPath) Green
             Write-CliOut ("Log:     {0}" -f [string]$Options.LogPath) Green
             Write-CliOut ("Aplicar: {0}" -f (Format-CliApplyCommand -Options $Options)) Cyan
-            exit 0
+            if ($ReturnExit) { return 0 } else { exit 0 }
         }
     }
 
@@ -1360,8 +1462,8 @@ function Invoke-CliBootstrapSelectionMode {
         $confirm = ConvertTo-CliCleanReply (Read-Host 'Aplicar instalacao/configuracao individual agora? (S/N)')
         if ($confirm -notmatch '^[Ss]$') {
             Write-CliOut '[AVISO] Operacao cancelada pelo usuario.' Yellow
-            Pause
-            exit 0
+            if (-not $ReturnExit) { Pause }
+            if ($ReturnExit) { return 0 } else { exit 0 }
         }
     }
 
@@ -1386,8 +1488,8 @@ function Invoke-CliBootstrapSelectionMode {
             Write-CliLegacyFailureResult -Message "Selecao individual falhou (codigo $installExit) sem result.json do backend." -ExitCode $installExit
         }
     }
-    if (-not [bool]$Options.NonInteractive) { Pause }
-    exit $installExit
+    if (-not $ReturnExit -and -not [bool]$Options.NonInteractive) { Pause }
+    if ($ReturnExit) { return $installExit } else { exit $installExit }
 }
 
 function Write-CliLegacyFailureResult {
@@ -1413,7 +1515,10 @@ function Write-CliLegacyFailureResult {
 }
 
 function Invoke-CliAiToolsMode {
-    param([Parameter(Mandatory = $true)]$Options)
+    param(
+        [Parameter(Mandatory = $true)]$Options,
+        [switch]$ReturnExit
+    )
 
     . $ToolsPs1 -BootstrapUiLibraryMode
     $script:CliLogPath = Resolve-CliLogPath -RequestedPath ([string]$Options.LogPath)
@@ -1484,7 +1589,7 @@ function Invoke-CliAiToolsMode {
     }
     Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
     Write-CliLog -Message ("AI tools mode finished. ExitCode={0}" -f $exitCode)
-    exit $exitCode
+    if ($ReturnExit) { return $exitCode } else { exit $exitCode }
 }
 
 $script:Options = Read-CliArgs -Tokens @($args)
@@ -1674,81 +1779,66 @@ if ([string]::IsNullOrWhiteSpace($profileChoice)) {
         exit 2
     }
 
-    $menuChoice = Show-CliMainMenu
-    switch ($menuChoice) {
-        '1' {
-            $exit = Invoke-CliMenuBackendIntent -Intent 'Doctor'
-            if (-not [bool]$script:Options.NonInteractive) { Pause }
-            exit $exit
-        }
-        '2' {
-            $exit = Invoke-CliMenuBackendIntent -Intent 'SupportBundle'
-            if (-not [bool]$script:Options.NonInteractive) { Pause }
-            exit $exit
-        }
-        '3' {
-            $profileChoice = 'safe-base'
-            $script:Options.DryRun = $true
-        }
-        '4' {
-            $profileChoice = 'public-beta'
-            $script:Options.DryRun = $true
-        }
-        '5' {
-            Write-CliOut ''
-            Write-CliOut '[1/3] Carregando perfis disponiveis...' Green
-            Write-CliOut ''
-            Write-CliProfileCatalog -Profiles $profiles
-            if (-not [bool]$script:Options.NonInteractive) { Pause }
-            exit 0
-        }
-        '6' {
-            $profileChoice = Show-CliGuidedProfilePicker
-        }
-        '7' {
-            $entry = Read-CliCatalogSelection -Kind 'app'
-            if ($null -eq $entry) {
-                Write-CliOut '[AVISO] Nenhum app selecionado. Saindo.' Yellow
-                if (-not [bool]$script:Options.NonInteractive) { Pause }
-                exit 0
+    # Laco de menu: cada acao executa e retorna ao menu; somente "Sair" encerra o processo.
+    # (Em PowerShell, 'continue/break' dentro de switch nao controlam o while; por isso cada
+    # case termina naturalmente e o while reitera, e apenas os cases de saida chamam exit.)
+    while ($true) {
+        $menuChoice = Show-CliMainMenu
+        switch ($menuChoice) {
+            '1' {
+                [void](Invoke-CliMenuBackendIntent -Intent 'Doctor')
+                Pause
             }
-            $script:Options.App = @([string]$entry.id)
-            Invoke-CliBootstrapSelectionMode -Options $script:Options
-        }
-        '8' {
-            $entry = Read-CliCatalogSelection -Kind 'config'
-            if ($null -eq $entry) {
-                Write-CliOut '[AVISO] Nenhuma configuracao selecionada. Saindo.' Yellow
-                if (-not [bool]$script:Options.NonInteractive) { Pause }
-                exit 0
+            '2' {
+                [void](Invoke-CliMenuBackendIntent -Intent 'SupportBundle')
+                Pause
             }
-            $script:Options.Config = @([string]$entry.id)
-            Invoke-CliBootstrapSelectionMode -Options $script:Options
-        }
-        '9' {
-            $entry = Read-CliCatalogSelection -Kind 'tool'
-            if ($null -eq $entry) {
-                Write-CliOut '[AVISO] Nenhuma AI tool selecionada. Saindo.' Yellow
-                if (-not [bool]$script:Options.NonInteractive) { Pause }
-                exit 0
+            '3' {
+                [void](Invoke-CliMenuProfileFlow -Options $script:Options -Profiles $profiles)
+                Pause
             }
-            $script:Options.Tool = @([string]$entry.id)
-            $script:Options.Start = $true
-            Invoke-CliAiToolsMode -Options $script:Options
+            '4' {
+                $entry = Read-CliCatalogSelection -Kind 'app'
+                if ($null -eq $entry) {
+                    Write-CliOut '[AVISO] Nenhum app selecionado.' Yellow
+                } else {
+                    $script:Options.App = @([string]$entry.id)
+                    [void](Invoke-CliBootstrapSelectionMode -Options $script:Options -ReturnExit)
+                    $script:Options.App = @()
+                }
+                Pause
+            }
+            '5' {
+                $entry = Read-CliCatalogSelection -Kind 'config'
+                if ($null -eq $entry) {
+                    Write-CliOut '[AVISO] Nenhuma configuracao selecionada.' Yellow
+                } else {
+                    $script:Options.Config = @([string]$entry.id)
+                    [void](Invoke-CliBootstrapSelectionMode -Options $script:Options -ReturnExit)
+                    $script:Options.Config = @()
+                }
+                Pause
+            }
+            '6' {
+                $entry = Read-CliCatalogSelection -Kind 'tool'
+                if ($null -eq $entry) {
+                    Write-CliOut '[AVISO] Nenhuma AI tool selecionada.' Yellow
+                } else {
+                    $script:Options.Tool = @([string]$entry.id)
+                    $script:Options.Start = $true
+                    [void](Invoke-CliAiToolsMode -Options $script:Options -ReturnExit)
+                    $script:Options.Tool = @()
+                    $script:Options.Start = $false
+                }
+                Pause
+            }
+            '0' { exit 0 }
+            '' { exit 0 }
+            default {
+                Write-CliOut '[AVISO] Opcao invalida.' Yellow
+                Pause
+            }
         }
-        '0' { exit 0 }
-        '' { exit 0 }
-        default {
-            Write-CliOut '[AVISO] Opcao invalida. Saindo.' Yellow
-            if (-not [bool]$script:Options.NonInteractive) { Pause }
-            exit 0
-        }
-    }
-
-    if ([string]::IsNullOrWhiteSpace($profileChoice)) {
-        Write-CliOut '[AVISO] Nenhum perfil selecionado. Saindo.' Yellow
-        if (-not [bool]$script:Options.NonInteractive) { Pause }
-        exit 0
     }
 }
 

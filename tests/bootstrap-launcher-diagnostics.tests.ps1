@@ -126,16 +126,18 @@ Describe 'PhaseZero launcher diagnostics and CLI short menu' {
         $result.Stdout   | Should Match 'menu rapido'
         $result.Stdout   | Should Match 'Doctor \(diagnostico, dry-run sem alteracoes\)'
         $result.Stdout   | Should Match 'Exportar SupportBundle'
-        $result.Stdout   | Should Match 'Dry-run perfil safe-base'
-        $result.Stdout   | Should Match 'Instalacao guiada'
+        $result.Stdout   | Should Match 'Instalacao guiada por perfil'
+        $result.Stdout   | Should Match 'App individual'
     }
 
     # Menu interativo via .bat: incompativel com o runner headless do CI (stdin redirecionado
     # sem console -> stdout vazio). Roda em host Windows com console; pulado no GitHub Actions.
-    It 'lists profiles from the guided picker when menu option 5 is selected' -Skip:([bool]$env:GITHUB_ACTIONS) {
-        $result = Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '' -TimeoutMs 60000 -StdinText "5`n0`n"
+    It 'lists all profiles from the guided per-profile flow (menu option 3)' -Skip:([bool]$env:GITHUB_ACTIONS) {
+        # 3=instalacao por perfil; 0=voltar no seletor; <enter>=Pause; 0=sair do menu.
+        $result = Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '' -TimeoutMs 60000 -StdinText "3`n0`n`n0`n"
 
         $result.ExitCode | Should Be 0
+        $result.Stdout   | Should Match 'Instalacao guiada por perfil'
         $result.Stdout   | Should Match 'Perfis recomendados'
         $result.Stdout   | Should Match 'safe-base'
         $result.Stdout   | Should Match 'public-beta'

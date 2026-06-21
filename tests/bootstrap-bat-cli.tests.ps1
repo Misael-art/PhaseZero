@@ -233,7 +233,8 @@ Describe 'PhaseZero BAT launchers' {
     # (stdin redirecionado sem console -> install-cli.bat sai exit 0 com stdout vazio).
     # Roda normalmente em host Windows com console; pulado apenas no GitHub Actions.
     It 'keeps the guided app menu open long enough to pick by term and cancel after dry-run' -Skip:([bool]$env:GITHUB_ACTIONS) {
-        $stdin = "7`nzen`nN`n"
+        # 4=app individual; zen=termo; N=cancela apos dry-run; <enter>=Pause; 0=sair do menu.
+        $stdin = "4`nzen`nN`n`n0`n"
         $result = @(Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '' -StdinText $stdin -TimeoutMs 180000 | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
 
         $result.ExitCode | Should Be 0
