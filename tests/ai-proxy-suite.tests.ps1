@@ -275,12 +275,12 @@ Describe 'AI proxy suite support' {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
         $extractRoot = Join-Path $script:AiProxySuiteRoot 'extract'
         [System.IO.Compression.ZipFile]::ExtractToDirectory($bundlePath, $extractRoot)
+        # Normaliza para a forma longa: no runner $env:TEMP e 8.3 (RUNNER~1) e Get-ChildItem.FullName
+        # retorna a forma longa; sem isso o Substring deixa o final de "extract" (ct\) como prefixo.
+        Push-Location $extractRoot
+        try { $extractRoot = (Get-Location).Path } finally { Pop-Location }
         $names = @(Get-ChildItem -Path $extractRoot -Recurse -File | ForEach-Object { $_.FullName.Substring($extractRoot.Length + 1) })
         $allText = @(Get-ChildItem -Path $extractRoot -Recurse -File | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join [Environment]::NewLine
-
-        Write-Host ("DIAG1_BUNDLEPATH={0} SIZE={1}" -f [string]$bundle.path, [string]$bundle.sizeBytes)
-        Write-Host ("DIAG1_NAMES=" + (@($names) -join '|'))
-        Write-Host ("DIAG1_REPORT_TYPE=" + ($report.GetType().FullName) + " NULL=" + ($null -eq $report))
 
         (@($bundle.included) -contains 'ai-proxy-suite.json') | Should Be $true
         (@($names) -contains 'ai-proxy-suite.json') | Should Be $true
