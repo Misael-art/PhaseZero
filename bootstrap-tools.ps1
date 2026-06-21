@@ -1612,12 +1612,12 @@ function Invoke-BootstrapAuditMode {
             $probeList = @()
             if ($probeScript) { $probeList = @($probeScript) }
             if ($probeList.Count -gt 0) {
-                $found = Test-WingetProbePathsOnDisk -ProbePaths $probeList
+                $wingetId = [string]($def | Select-Object -ExpandProperty Id -ErrorAction SilentlyContinue)
+                $found = (Test-WingetProbePathsOnDisk -ProbePaths $probeList) -or (Test-BootstrapWingetPortableArtifact -Id $wingetId)
                 if ($found) {
                     $status = 'Healthy'
                     $detail = 'ProbePaths encontrado.'
                 } else {
-                    $wingetId = [string]($def | Select-Object -ExpandProperty Id -ErrorAction SilentlyContinue)
                     if (-not [string]::IsNullOrWhiteSpace($wingetId) -and $wingetExe) {
                         $presence = Invoke-AuditWingetPresence -Id $wingetId
                         $probeSource = [string]$presence.ProbeSource
@@ -1747,7 +1747,7 @@ function Invoke-BootstrapAuditMode {
                     $probeList = @()
                     if ($probeScript) { $probeList = @($probeScript) }
                     if ($probeList.Count -gt 0) {
-                        $diskFound = Test-WingetProbePathsOnDisk -ProbePaths $probeList
+                        $diskFound = (Test-WingetProbePathsOnDisk -ProbePaths $probeList) -or (Test-BootstrapWingetPortableArtifact -Id $wid)
                         if ($diskFound) {
                             $status = 'Healthy'
                             $detail = "winget: pacote $wid presente; binario verificado em disco."
@@ -5661,6 +5661,22 @@ function Test-WingetProbePathsOnDisk {
     return $false
 }
 
+function Test-BootstrapWingetPortableArtifact {
+    # Fallback para pacotes winget instalados como "portable"/zip: ficam em
+    # %LOCALAPPDATA%\Microsoft\WinGet\Packages\<Id>_<source>\... e nao nos ProbePaths padrao
+    # (Program Files), gerando falso "ghost install". Procura qualquer .exe sob a pasta do pacote.
+    param([string]$Id)
+
+    if ([string]::IsNullOrWhiteSpace($Id) -or [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return $false }
+    $root = Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'
+    if (-not (Test-Path -LiteralPath $root)) { return $false }
+    foreach ($dir in @(Get-ChildItem -Path $root -Directory -Filter ("{0}_*" -f $Id) -ErrorAction SilentlyContinue)) {
+        $exe = @(Get-ChildItem -Path $dir.FullName -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($exe.Count -gt 0) { return $true }
+    }
+    return $false
+}
+
 function Get-BootstrapItemStatusInfo {
     # Modelo unico de 5 estados usado por CLI e UI. Ordem = legenda.
     return @(
@@ -5786,13 +5802,17 @@ function Test-BootstrapAppxPackageInstalled {
 function Test-BootstrapPackageArtifactsPresent {
     param(
         [string[]]$ProbePaths = @(),
-        [string[]]$AppxPackageNames = @()
+        [string[]]$AppxPackageNames = @(),
+        [string]$WingetId = ''
     )
 
     if (@($AppxPackageNames).Count -gt 0 -and (Test-BootstrapAppxPackageInstalled -Names $AppxPackageNames)) {
         return $true
     }
     if (@($ProbePaths).Count -gt 0 -and (Test-WingetProbePathsOnDisk -ProbePaths $ProbePaths)) {
+        return $true
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WingetId) -and (Test-BootstrapWingetPortableArtifact -Id $WingetId)) {
         return $true
     }
     return $false
@@ -6116,7 +6136,7 @@ function Ensure-WingetPackage {
         $diskVerified = $false
         $retryCount = 2
         while ($retryCount -gt 0 -and -not $diskVerified) {
-            $diskVerified = Test-BootstrapPackageArtifactsPresent -ProbePaths $ProbePaths -AppxPackageNames $AppxPackageNames
+            $diskVerified = Test-BootstrapPackageArtifactsPresent -ProbePaths $ProbePaths -AppxPackageNames $AppxPackageNames -WingetId $Id
             if (-not $diskVerified) {
                 if ($retryCount -gt 1) {
                     Write-Log ("winget: {0} pos-instalacao; aguardando binario em disco..." -f $DisplayName) 'WARN'
@@ -13429,7 +13449,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['explorerpatcher'] = New-BootstrapComponentDefinition -Name 'explorerpatcher' -Description 'Ajustes de shell do Windows para uso no Deck.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'valinet.ExplorerPatcher'; DisplayName = 'ExplorerPatcher'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Simplifica a UX do Windows em handheld e dock.'; ProbePaths = @("$env:LOCALAPPDATA\Microsoft\WinGet\Packages\valinet.ExplorerPatcher_*\ep_setup.exe", "$env:ProgramFiles\ExplorerPatcher\ep_setup.exe") }
     $catalog['mica-for-everyone'] = New-BootstrapComponentDefinition -Name 'mica-for-everyone' -Description 'Camada visual do Windows mais limpa e consistente.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'MicaForEveryone.MicaForEveryone'; DisplayName = 'Mica For Everyone'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Deixa a interface do Windows menos carregada para uso no Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Mica For Everyone\MicaForEveryone.exe", "$env:ProgramFiles\Mica For Everyone\MicaForEveryone.exe") }
     $catalog['compactgui'] = New-BootstrapComponentDefinition -Name 'compactgui' -Description 'Compacta instalacoes grandes para economizar espaco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'IridiumIO.CompactGUI'; DisplayName = 'CompactGUI'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Reduz pressao de storage no SSD interno do Deck.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\CompactGUI\CompactGUI.exe", "$env:ProgramFiles\CompactGUI\CompactGUI.exe") }
-    $catalog['treesize-free'] = New-BootstrapComponentDefinition -Name 'treesize-free' -Description 'Analise rapida de uso de disco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JAMSoftware.TreeSize.Free'; DisplayName = 'TreeSize Free'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra rapidamente o que esta consumindo espaco em SSD e SD.'; ProbePaths = @("$env:ProgramFiles\TreeSize Free\TreeSizeFree.exe", "${env:ProgramFiles(x86)}\TreeSize Free\TreeSizeFree.exe") }
+    $catalog['treesize-free'] = New-BootstrapComponentDefinition -Name 'treesize-free' -Description 'Analise rapida de uso de disco.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'JAMSoftware.TreeSize.Free'; DisplayName = 'TreeSize Free'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Mostra rapidamente o que esta consumindo espaco em SSD e SD.'; ProbePaths = @("$env:ProgramFiles\TreeSize Free\TreeSizeFree.exe", "${env:ProgramFiles(x86)}\TreeSize Free\TreeSizeFree.exe", "$env:LOCALAPPDATA\Programs\JAM Software\TreeSize Free\TreeSizeFree.exe") }
     $catalog['sysinternals-suite'] = New-BootstrapComponentDefinition -Name 'sysinternals-suite' -Description 'Sysinternals Suite para diagnostico local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.Sysinternals.Suite'; DisplayName = 'Sysinternals Suite'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Entrega Process Explorer, Process Monitor, Autoruns, TCPView e ferramentas essenciais de suporte.'; ProbePaths = @("$env:ProgramFiles\SysinternalsSuite\Procmon.exe", "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Microsoft.Sysinternals.Suite_*\Procmon.exe") }
     $catalog['crystaldiskinfo'] = New-BootstrapComponentDefinition -Name 'crystaldiskinfo' -Description 'CrystalDiskInfo para saude SMART/NVMe.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'CrystalDewWorld.CrystalDiskInfo'; DisplayName = 'CrystalDiskInfo'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a diagnosticar disco/SSD antes de culpar instaladores ou WSL.'; ProbePaths = @("$env:ProgramFiles\CrystalDiskInfo\DiskInfo64.exe", "$env:ProgramFiles\CrystalDiskInfo\DiskInfo.exe", "${env:LOCALAPPDATA}\Programs\CrystalDiskInfo\DiskInfo64.exe") }
     $catalog['hwinfo64'] = New-BootstrapComponentDefinition -Name 'hwinfo64' -Description 'HWiNFO para inventario e sensores.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'REALiX.HWiNFO'; DisplayName = 'HWiNFO'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Coleta inventario de hardware e sensores para suporte local sem SaaS.'; ProbePaths = @("$env:ProgramFiles\HWiNFO64\HWiNFO64.exe", "${env:LOCALAPPDATA}\Programs\HWiNFO64\HWiNFO64.exe") }
@@ -13437,7 +13457,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['windirstat'] = New-BootstrapComponentDefinition -Name 'windirstat' -Description 'WinDirStat para mapa visual de storage.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'WinDirStat.WinDirStat'; DisplayName = 'WinDirStat'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Alternativa conhecida para explicar consumo de disco em suporte.'; ProbePaths = @("$env:ProgramFiles\WinDirStat\windirstat.exe", "${env:ProgramFiles(x86)}\WinDirStat\windirstat.exe") }
     $catalog['latencymon'] = New-BootstrapComponentDefinition -Name 'latencymon' -Description 'LatencyMon para diagnostico de DPC/latencia.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Resplendence.LatencyMon'; DisplayName = 'LatencyMon'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a investigar stutter, audio dropouts e latencia em Deck/desktop.'; ProbePaths = @("$env:ProgramFiles\LatencyMon\LatMon.exe", "${env:ProgramFiles(x86)}\LatencyMon\LatMon.exe") }
     $catalog['windows-repair-toolbox'] = New-BootstrapComponentDefinition -Name 'windows-repair-toolbox' -Description 'Windows Repair Toolbox para recuperacao assistida.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Windows Repair Toolbox'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Ferramenta poderosa de recuperacao; fica manual para evitar baixar/executar utilitarios de terceiros sem revisao.'; Instructions = 'Instale e use manualmente somente durante atendimento de suporte confiavel.' }
-    $catalog['obs-studio'] = New-BootstrapComponentDefinition -Name 'obs-studio' -Description 'Captura e producao de video.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'OBSProject.OBSStudio'; DisplayName = 'OBS Studio'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre captura de gameplay e producao de conteudo no Deck.'; ProbePaths = @("$env:ProgramFiles\obs-studio\bin\64bit\obs64.exe", "${env:ProgramFiles(x86)}\obs-studio\bin\32bit\obs32.exe") }
+    $catalog['obs-studio'] = New-BootstrapComponentDefinition -Name 'obs-studio' -Description 'Captura e producao de video.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'OBSProject.OBSStudio'; DisplayName = 'OBS Studio'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Cobre captura de gameplay e producao de conteudo no Deck.'; ProbePaths = @("$env:ProgramFiles\obs-studio\bin\64bit\obs64.exe", "${env:ProgramFiles(x86)}\obs-studio\bin\32bit\obs32.exe", "$env:LOCALAPPDATA\Microsoft\WinGet\Packages\OBSProject.OBSStudio_*\bin\64bit\obs64.exe") }
     $catalog['driver-store-explorer'] = New-BootstrapComponentDefinition -Name 'driver-store-explorer' -Description 'Backup e auditoria do driver store.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'lostindark.DriverStoreExplorer'; DisplayName = 'Driver Store Explorer'; Stage = 'payload'; Provisioning = 'winget'; ValueReason = 'Ajuda a preservar drivers especificos do Deck para reinstalacao offline.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Driver Store Explorer\Rapr.exe", "$env:ProgramFiles\Driver Store Explorer\Rapr.exe") }
     $catalog['lossless-scaling'] = New-BootstrapComponentDefinition -Name 'lossless-scaling' -Description 'Frame generation pago e otimizado para jogos no Deck.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Lossless Scaling'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Entrega ganho real de fluidez, mas exige compra/licenca no Steam.'; ProbePaths = @('${env:ProgramFiles(x86)}\Steam\steamapps\appmanifest_993090.acf'); Instructions = 'Instale pelo Steam com licença válida antes de rodar novamente o perfil ou exclua o componente.' }
     $catalog['macrium-reflect'] = New-BootstrapComponentDefinition -Name 'macrium-reflect' -Description 'Imagem golden do SSD para restore rapido.' -Optional $true -Kind 'manual-required' -Data @{ DisplayName = 'Macrium Reflect'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Cria uma imagem completa do Deck, mas exige instalacao/licenciamento manual.'; Instructions = 'Instale manualmente o Macrium Reflect antes de usar o perfil de backup.' }
