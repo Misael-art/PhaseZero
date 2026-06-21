@@ -21379,6 +21379,112 @@ function Get-BootstrapWindowsNpxLaunch {
     return [ordered]@{ command = 'cmd'; args = @($newArgs.ToArray()) }
 }
 
+function Get-BootstrapMcpRepairTargets {
+    # Clientes cujo config MCP usa o formato { mcpServers|servers: { nome: { command, args } } }
+    # e e passivel de reparo automatico de comandos 'npx' puros (nao-lancaveis no Windows).
+    $map = [ordered]@{
+        'claude-desktop' = (Get-BootstrapClaudeDesktopConfigPath)
+        'cursor'         = (Get-BootstrapCursorMcpConfigPath)
+        'windsurf'       = (Get-BootstrapWindsurfMcpConfigPath)
+        'trae'           = (Get-BootstrapTraeMcpConfigPath)
+        'roo'            = (Get-BootstrapRooMcpConfigPath)
+        'cline'          = (Get-BootstrapClineMcpConfigPath)
+        'vscode'         = (Get-BootstrapVsCodeMcpConfigPath)
+    }
+    $targets = New-Object System.Collections.Generic.List[object]
+    foreach ($key in $map.Keys) {
+        $p = [string]$map[$key]
+        if (-not [string]::IsNullOrWhiteSpace($p)) { $targets.Add([ordered]@{ id = [string]$key; path = $p }) | Out-Null }
+    }
+    return @($targets.ToArray())
+}
+
+function Repair-BootstrapMcpServerMap {
+    # Reescreve entradas com command 'npx' puro para 'cmd /c npx ...' (Windows-safe), idempotente
+    # (Get-BootstrapWindowsNpxLaunch retorna $null para entradas ja encapsuladas ou nao-npx).
+    # Muta o hashtable recebido; retorna o numero de entradas alteradas.
+    param([Parameter(Mandatory = $true)][hashtable]$ServerMap)
+
+    $changed = 0
+    foreach ($name in @($ServerMap.Keys)) {
+        $entry = ConvertTo-BootstrapHashtable -InputObject $ServerMap[$name]
+        if (-not ($entry -is [hashtable]) -or -not $entry.ContainsKey('command')) { continue }
+        $serverArgs = @()
+        if ($entry.ContainsKey('args')) { $serverArgs = @($entry['args']) }
+        $wrap = Get-BootstrapWindowsNpxLaunch -Command ([string]$entry['command']) -Args $serverArgs
+        if (-not $wrap) { continue }
+        $entry['command'] = [string]$wrap['command']
+        $entry['args'] = @($wrap['args'])
+        $ServerMap[$name] = $entry
+        $changed++
+    }
+    return $changed
+}
+
+function Invoke-BootstrapMcpConfigRepair {
+    # Doctor/reparo: varre os configs MCP dos clientes e reescreve comandos 'npx' puros para
+    # 'cmd /c npx ...' (causa de "Could not attach" no Windows). Backup .bak antes de gravar,
+    # idempotente, DryRun reporta sem mutar. -ConfigPaths injeta alvos (testes).
+    param(
+        [hashtable]$State,
+        [string[]]$ConfigPaths = @(),
+        [switch]$DryRun
+    )
+
+    $targets = if (@($ConfigPaths).Count -gt 0) {
+        @($ConfigPaths | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [ordered]@{ id = (Split-Path -Path ([string]$_) -Leaf); path = [string]$_ } })
+    } else {
+        Get-BootstrapMcpRepairTargets
+    }
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($t in $targets) {
+        $path = [string]$t.path
+        if (-not (Test-Path -LiteralPath $path)) {
+            $results.Add([ordered]@{ id = [string]$t.id; path = $path; status = 'absent'; fixed = 0 }) | Out-Null
+            continue
+        }
+        $data = $null
+        try { $data = Read-BootstrapJsonFile -Path $path } catch {
+            $results.Add([ordered]@{ id = [string]$t.id; path = $path; status = 'invalid-json'; fixed = 0 }) | Out-Null
+            continue
+        }
+        if (-not ($data -is [hashtable])) {
+            $results.Add([ordered]@{ id = [string]$t.id; path = $path; status = 'not-object'; fixed = 0 }) | Out-Null
+            continue
+        }
+
+        $totalChanged = 0
+        foreach ($containerKey in @('mcpServers', 'servers')) {
+            if ($data.ContainsKey($containerKey) -and ($data[$containerKey] -is [hashtable])) {
+                $serverMap = ConvertTo-BootstrapHashtable -InputObject $data[$containerKey]
+                $count = Repair-BootstrapMcpServerMap -ServerMap $serverMap
+                if ($count -gt 0) { $data[$containerKey] = $serverMap; $totalChanged += $count }
+            }
+        }
+
+        if ($totalChanged -eq 0) {
+            $results.Add([ordered]@{ id = [string]$t.id; path = $path; status = 'ok'; fixed = 0 }) | Out-Null
+            continue
+        }
+        if ($DryRun) {
+            $results.Add([ordered]@{ id = [string]$t.id; path = $path; status = 'would-fix'; fixed = $totalChanged }) | Out-Null
+            continue
+        }
+        try { Copy-Item -LiteralPath $path -Destination ($path + '.bak') -Force -ErrorAction Stop } catch {
+            Write-Log ("Reparo MCP: backup falhou para {0}: {1}" -f $path, $_.Exception.Message) 'WARN'
+        }
+        Write-BootstrapJsonFile -Path $path -Value $data
+        if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
+            try { Register-BootstrapChange -State $State -Type File -Target $path -Operation 'repair-mcp-npx' -Component ([string]$t.id) } catch { }
+        }
+        $results.Add([ordered]@{ id = [string]$t.id; path = $path; status = 'fixed'; fixed = $totalChanged }) | Out-Null
+    }
+
+    $totalFixed = (@($results | Where-Object { $_.status -in @('fixed', 'would-fix') } | ForEach-Object { [int]$_.fixed } | Measure-Object -Sum).Sum)
+    return [ordered]@{ dryRun = [bool]$DryRun; totalFixed = [int]$totalFixed; targets = @($results.ToArray()) }
+}
+
 function ConvertTo-BootstrapMcpServerEntry {
     param(
         [Parameter(Mandatory = $true)][hashtable]$ServerDefinition,
@@ -28638,6 +28744,8 @@ function New-BootstrapAiConfigDoctorReport {
     $hermes = Get-BootstrapHermesAiConfigReport
     $openclaw = Get-BootstrapOpenClawAiConfigReport
     $aiProxies = New-BootstrapAiProxySuiteDoctorReport
+    $mcpNpxRepair = $null
+    try { $mcpNpxRepair = Invoke-BootstrapMcpConfigRepair -DryRun } catch { $mcpNpxRepair = [ordered]@{ dryRun = $true; totalFixed = 0; targets = @(); error = [string]$_.Exception.Message } }
     $manual = (@($targets | Where-Object { [bool]$_['manualRequired'] }).Count -gt 0)
     $drift = @($targets | Where-Object { [string]$_['drift'] -eq 'drift' })
     $started.Stop()
@@ -28649,6 +28757,7 @@ function New-BootstrapAiConfigDoctorReport {
         providers = @($providers)
         targets = @($targets)
         mcps = $mcpHealth
+        mcpNpxRepair = $mcpNpxRepair
         drift = @($drift)
         applied = @()
         skipped = @()
