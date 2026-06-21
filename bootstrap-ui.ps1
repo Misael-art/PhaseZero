@@ -279,6 +279,13 @@ function Get-UiPageIds {
     return @('health', 'welcome', 'selection', 'host-setup', 'app-tuning', 'ai-tools', 'api-center', 'api-catalog', 'steamdeck-control', 'dual-boot', 'review', 'run')
 }
 
+function Get-UiWizardStepIds {
+    # Sequencia linear do fluxo (botoes Voltar/Avancar e contador de passo). Exclui 'health'
+    # (dashboard de entrada) e 'api-catalog' (drill-down de detalhe), que sao acessados pela
+    # navegacao lateral e por botoes proprios -- nao fazem parte do passo a passo.
+    return @('welcome', 'selection', 'host-setup', 'app-tuning', 'ai-tools', 'api-center', 'steamdeck-control', 'dual-boot', 'review', 'run')
+}
+
 function Get-UiStartPageId {
     return 'health'
 }
@@ -809,6 +816,20 @@ function Get-UiStatusLabel {
     }
 }
 
+function ConvertTo-UiCanonicalStatus {
+    # Normaliza os varios vocabularios de status (componentes, AI tools, MCPs) para os 5 estados
+    # canonicos de cor usados por Get-UiStatusHex. Retorna '' quando nao reconhece (cor neutra).
+    param([string]$Raw)
+    switch -Regex (([string]$Raw).Trim().ToLowerInvariant()) {
+        '^(error|unhealthy|auth-failed|blocked|failed|broken)$'                            { return 'error' }
+        '^(optimized-tested|optimized|tested)$'                                             { return 'optimized-tested' }
+        '^(configured|healthy|ready|active|passed|ok)$'                                     { return 'configured' }
+        '^(installed|installed-unconfigured|manual|login-required|needs-config|degraded)$'  { return 'installed-unconfigured' }
+        '^(not-installed|missing|absent|none|unavailable|)$'                                { return 'not-installed' }
+        default                                                                            { return '' }
+    }
+}
+
 #
 # XAML Definition
 #
@@ -1260,6 +1281,21 @@ function Get-UiStatusLabel {
             <Setter Property="Foreground" Value="#CBD5E1"/>
             <Setter Property="Background" Value="Transparent"/>
             <Style.Triggers>
+                <DataTrigger Binding="{Binding statusCanonical}" Value="error">
+                    <Setter Property="Foreground" Value="#EF4444"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding statusCanonical}" Value="not-installed">
+                    <Setter Property="Foreground" Value="#FFFFFF"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding statusCanonical}" Value="installed-unconfigured">
+                    <Setter Property="Foreground" Value="#FACC15"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding statusCanonical}" Value="configured">
+                    <Setter Property="Foreground" Value="#3B82F6"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding statusCanonical}" Value="optimized-tested">
+                    <Setter Property="Foreground" Value="#22C55E"/>
+                </DataTrigger>
                 <Trigger Property="IsKeyboardFocusWithin" Value="True">
                     <Setter Property="BorderBrush" Value="{StaticResource FocusVisualBrush}"/>
                     <Setter Property="BorderThickness" Value="1"/>
@@ -1604,6 +1640,14 @@ function Get-UiStatusLabel {
                     <Border Grid.Column="2" Style="{StaticResource Card}">
                         <DockPanel>
                             <TextBlock x:Name="ComponentsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="COMPONENTES"/>
+                            <WrapPanel DockPanel.Dock="Top" Margin="0,2,0,4">
+                                <TextBlock Text="Status:" Foreground="#94A3B8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="&#9679; nao instalado" Foreground="#FFFFFF" FontSize="11" Margin="0,0,10,0"/>
+                                <TextBlock Text="&#9679; nao configurado" Foreground="#FACC15" FontSize="11" Margin="0,0,10,0"/>
+                                <TextBlock Text="&#9679; configurado" Foreground="#3B82F6" FontSize="11" Margin="0,0,10,0"/>
+                                <TextBlock Text="&#9679; otimizado/testado" Foreground="#22C55E" FontSize="11" Margin="0,0,10,0"/>
+                                <TextBlock Text="&#9679; erro" Foreground="#EF4444" FontSize="11" Margin="0,0,10,0"/>
+                            </WrapPanel>
                             <TreeView x:Name="ComponentsTree" Background="Transparent" BorderThickness="0"
                                       Foreground="#CBD5E1" Margin="0,4,0,0"/>
                         </DockPanel>
@@ -1965,6 +2009,14 @@ function Get-UiStatusLabel {
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
                             <TextBlock Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="FERRAMENTAS OPCIONAIS"/>
+                            <WrapPanel DockPanel.Dock="Top" Margin="0,2,0,4">
+                                <TextBlock Text="Status:" Foreground="#94A3B8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                                <TextBlock Text="&#9679; nao instalado" Foreground="#FFFFFF" FontSize="11" Margin="0,0,10,0"/>
+                                <TextBlock Text="&#9679; nao configurado" Foreground="#FACC15" FontSize="11" Margin="0,0,10,0"/>
+                                <TextBlock Text="&#9679; configurado" Foreground="#3B82F6" FontSize="11" Margin="0,0,10,0"/>
+                                <TextBlock Text="&#9679; otimizado/testado" Foreground="#22C55E" FontSize="11" Margin="0,0,10,0"/>
+                                <TextBlock Text="&#9679; erro" Foreground="#EF4444" FontSize="11" Margin="0,0,10,0"/>
+                            </WrapPanel>
                             <DataGrid x:Name="AiToolsGrid" Style="{StaticResource DarkGrid}" Height="500" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Extended" IsReadOnly="False">
                                 <DataGrid.Columns>
                                     <DataGridCheckBoxColumn Header="Ativo" Binding="{Binding active, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="70" ElementStyle="{StaticResource DarkGridCheckBoxElement}" EditingElementStyle="{StaticResource DarkGridCheckBoxEditing}"/>
@@ -4966,6 +5018,7 @@ function Refresh-AiToolsControls {
                 tool = [string]$row['tool']
                 name = [string]$row['name']
                 status = [string]$row['status']
+                statusCanonical = (ConvertTo-UiCanonicalStatus -Raw ([string]$row['status']))
                 version = [string]$row['version']
                 support = [string]$row['support']
                 commandPath = [string]$row['commandPath']
@@ -4973,7 +5026,7 @@ function Refresh-AiToolsControls {
                 docs = [string]$row['docs']
             })
         }
-        Load-WpfGridRows -Grid $ui.AiToolsGrid -Items $viewRows -Columns @('active','tool','name','status','version','support','commandPath','message','docs')
+        Load-WpfGridRows -Grid $ui.AiToolsGrid -Items $viewRows -Columns @('active','tool','name','status','statusCanonical','version','support','commandPath','message','docs')
         $installedCount = @($rows | Where-Object { [string]$_['status'] -in @('installed','configured') }).Count
         $manualCount = @($rows | Where-Object { [string]$_['status'] -eq 'manual' }).Count
         $markedCount = @($selectedLookup.Keys).Count
@@ -5526,10 +5579,6 @@ function Navigate-ToPage {
         $navButtons[$i].IsChecked = ([string]$navButtonTargets[$i] -eq $activePageId)
     }
 
-    # Back/Next state
-    $ui.BackButton.IsEnabled = ($Index -gt 0)
-    $ui.NextButton.IsEnabled = ($Index -lt ($pageIds.Count - 1))
-
     $stepName = switch ($pageIds[$Index]) {
         'welcome'          { $ui.Strings.Welcome }
         'selection'        { $ui.Strings.Selection }
@@ -5544,7 +5593,24 @@ function Navigate-ToPage {
         'review'           { $ui.Strings.Review }
         default            { $ui.Strings.Run }
     }
-    $ui.StepLabel.Text = "{0} / {1}  -  {2}" -f ($Index + 1), $pageIds.Count, $stepName
+
+    # Voltar/Avancar e contador seguem a sequencia do wizard (sem health/api-catalog).
+    $stepIds = @(Get-UiWizardStepIds)
+    $stepPos = [Array]::IndexOf($stepIds, [string]$pageIds[$Index])
+    if ($stepPos -ge 0) {
+        $ui.BackButton.IsEnabled = ($stepPos -gt 0)
+        $ui.NextButton.IsEnabled = ($stepPos -lt ($stepIds.Count - 1))
+        $ui.StepLabel.Text = "{0} / {1}  -  {2}" -f ($stepPos + 1), $stepIds.Count, $stepName
+    } elseif ([string]$pageIds[$Index] -eq 'api-catalog') {
+        $ui.BackButton.IsEnabled = $true   # volta para a Central de APIs
+        $ui.NextButton.IsEnabled = $false
+        $ui.StepLabel.Text = $stepName
+    } else {
+        # health (dashboard de entrada): sem passo; "Avancar" entra no fluxo.
+        $ui.BackButton.IsEnabled = $false
+        $ui.NextButton.IsEnabled = $true
+        $ui.StepLabel.Text = $stepName
+    }
 
     switch ($pageIds[$Index]) {
         'selection'         { Refresh-SelectionTrees; Refresh-SelectionSummary }
@@ -5556,6 +5622,38 @@ function Navigate-ToPage {
         'steamdeck-control' { Refresh-SteamDeckControls }
         'dual-boot'         { Refresh-DualBootControls }
         'review'            { Refresh-ReviewPage; Refresh-HostSetupControls }
+    }
+}
+
+function Navigate-WizardStep {
+    # Voltar/Avancar dentro da sequencia do wizard (Get-UiWizardStepIds).
+    param([Parameter(Mandatory = $true)][int]$Delta)
+
+    $pageIds = @(Get-UiPageIds)
+    $stepIds = @(Get-UiWizardStepIds)
+    $currentId = [string]$pageIds[$ui.CurrentPageIndex]
+    $stepPos = [Array]::IndexOf($stepIds, $currentId)
+
+    if ($stepPos -ge 0) {
+        $target = $stepPos + $Delta
+        if ($target -ge 0 -and $target -lt $stepIds.Count) {
+            $idx = [Array]::IndexOf($pageIds, [string]$stepIds[$target])
+            if ($idx -ge 0) { Navigate-ToPage -Index $idx }
+        }
+        return
+    }
+
+    if ($currentId -eq 'api-catalog') {
+        # Pagina de detalhe: Voltar/Avancar retornam para a Central de APIs.
+        $idx = [Array]::IndexOf($pageIds, 'api-center')
+        if ($idx -ge 0) { Navigate-ToPage -Index $idx }
+        return
+    }
+
+    # health (dashboard de entrada): "Avancar" inicia o fluxo no primeiro passo.
+    if ($Delta -gt 0) {
+        $idx = [Array]::IndexOf($pageIds, [string]$stepIds[0])
+        if ($idx -ge 0) { Navigate-ToPage -Index $idx }
     }
 }
 
@@ -7735,13 +7833,8 @@ for ($i = 0; $i -lt $navButtons.Count; $i++) {
 }
 
 # Back / Next / Finish
-$ui.BackButton.Add_Click({
-    if ($ui.CurrentPageIndex -gt 0) { Navigate-ToPage -Index ($ui.CurrentPageIndex - 1) }
-})
-$ui.NextButton.Add_Click({
-    $pageCount = @(Get-UiPageIds).Count
-    if ($ui.CurrentPageIndex -lt ($pageCount - 1)) { Navigate-ToPage -Index ($ui.CurrentPageIndex + 1) }
-})
+$ui.BackButton.Add_Click({ Navigate-WizardStep -Delta -1 })
+$ui.NextButton.Add_Click({ Navigate-WizardStep -Delta 1 })
 $ui.FinishButton.Add_Click({
     Save-UiState -State $ui.State -Path $UiStatePath
     $window.Close()
