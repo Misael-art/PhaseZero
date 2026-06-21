@@ -278,6 +278,10 @@ Describe 'AI proxy suite support' {
         $names = @(Get-ChildItem -Path $extractRoot -Recurse -File | ForEach-Object { $_.FullName.Substring($extractRoot.Length + 1) })
         $allText = @(Get-ChildItem -Path $extractRoot -Recurse -File | ForEach-Object { Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8 }) -join [Environment]::NewLine
 
+        Write-Host ("DIAG1_BUNDLEPATH={0} SIZE={1}" -f [string]$bundle.path, [string]$bundle.sizeBytes)
+        Write-Host ("DIAG1_NAMES=" + (@($names) -join '|'))
+        Write-Host ("DIAG1_REPORT_TYPE=" + ($report.GetType().FullName) + " NULL=" + ($null -eq $report))
+
         (@($bundle.included) -contains 'ai-proxy-suite.json') | Should Be $true
         (@($names) -contains 'ai-proxy-suite.json') | Should Be $true
         $allText | Should Not Match 'API_KEY|QWEN_PASSWORD|SERVICE_TOKEN|USER_ID|XIAOMI_CHATBOT_PH|sk-'
