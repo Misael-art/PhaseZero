@@ -28744,6 +28744,8 @@ function New-BootstrapAiConfigDoctorReport {
     $hermes = Get-BootstrapHermesAiConfigReport
     $openclaw = Get-BootstrapOpenClawAiConfigReport
     $aiProxies = New-BootstrapAiProxySuiteDoctorReport
+    $mcpNpxRepair = $null
+    try { $mcpNpxRepair = Invoke-BootstrapMcpConfigRepair -DryRun } catch { $mcpNpxRepair = [ordered]@{ dryRun = $true; totalFixed = 0; targets = @(); error = [string]$_.Exception.Message } }
     $manual = (@($targets | Where-Object { [bool]$_['manualRequired'] }).Count -gt 0)
     $drift = @($targets | Where-Object { [string]$_['drift'] -eq 'drift' })
     $started.Stop()
@@ -28755,6 +28757,7 @@ function New-BootstrapAiConfigDoctorReport {
         providers = @($providers)
         targets = @($targets)
         mcps = $mcpHealth
+        mcpNpxRepair = $mcpNpxRepair
         drift = @($drift)
         applied = @()
         skipped = @()
