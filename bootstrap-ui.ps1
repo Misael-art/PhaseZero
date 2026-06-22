@@ -7112,6 +7112,42 @@ $ui.ApiImportButton.Add_Click({
 
 $ui.ApiApplyButton.Add_Click({
     try {
+        # "Aplicar nos apps" grava segredos nos configs de varios apps. Antes de executar,
+        # confirma listando os providers validados (state=passed) e os apps-alvo afetados.
+        $usable = @()
+        $targetApps = @()
+        try {
+            $inv = Get-BootstrapApiInventory -SecretsData (Get-BootstrapSecretsData).Data
+            foreach ($p in @($inv.providers)) {
+                if ([string]$p.activeValidationState -eq 'passed' -and -not [string]::IsNullOrWhiteSpace([string]$p.activeCredentialId)) {
+                    $usable += @([string]$p.displayName)
+                    foreach ($a in @($p.autoAppliedApps)) {
+                        if (-not [string]::IsNullOrWhiteSpace([string]$a) -and (@($targetApps) -notcontains [string]$a)) { $targetApps += @([string]$a) }
+                    }
+                }
+            }
+        } catch {
+            Write-UiLog -Level 'WARN' -Message ("Nao foi possivel pre-visualizar o alcance de Aplicar nos apps: {0}" -f $_.Exception.Message)
+        }
+
+        if (@($usable).Count -eq 0) {
+            Set-ApiCenterStatusMessage -Channel 'Aplicacao APIs' -Message 'Nenhuma credencial ativa e validada (state=passed). Nada a aplicar: valide e ative uma credencial primeiro.'
+            return
+        }
+
+        $confirmMessage = @(
+            ("Gravar credenciais de {0} provider(s) validado(s) nos configs dos apps suportados:" -f @($usable).Count)
+            ''
+            ("Providers: {0}" -f (@($usable) -join ', '))
+            ("Apps-alvo: {0}" -f $(if (@($targetApps).Count -gt 0) { (@($targetApps) -join ', ') } else { 'apps suportados detectados no host' }))
+            ''
+            'Segredos serao escritos nos arquivos de configuracao desses apps. Continuar?'
+        ) -join [Environment]::NewLine
+        if (-not (Confirm-UiCriticalAction -Title 'Confirmar: Aplicar nos apps' -Message $confirmMessage)) {
+            Set-ApiCenterStatusMessage -Channel 'Aplicacao APIs' -Message ("Aplicacao cancelada. {0} provider(s) seriam aplicados: {1}" -f @($usable).Count, (@($usable) -join ', '))
+            return
+        }
+
         $applyResult = Invoke-BootstrapApiApply
         $applyDiagnostics = if ($applyResult -and $applyResult.PSObject.Properties['diagnostics']) { $applyResult.diagnostics } else { $null }
         Set-ApiCenterStatusMessage -Channel 'Aplicacao APIs' -Message 'APIs aplicadas nos apps suportados.' -Diagnostics $applyDiagnostics
