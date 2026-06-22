@@ -59,57 +59,57 @@ $powershellExe = Get-SteamDeckWindowsPowerShellPath
 Assert-SteamDeckFileExists -Path $powershellExe -Description 'Windows PowerShell executable'
 
 do {
-    $state = Read-JsonFile -Path $StatePath
-    if (-not $state) {
-        $state = [ordered]@{
-            lastCandidateMode = $null
-            candidateCount = 0
-            lastAppliedMode = $null
-            lastAppliedAt = $null
-        }
-    }
-
-    $json = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $detectScript -SettingsPath $SettingsPath
-    $detection = $json | ConvertFrom-Json
-    Write-JsonFile -Path $currentDetectionPath -Value $detection
-
-    if ($state.lastCandidateMode -eq $detection.mode) {
-        $state.candidateCount = [int]$state.candidateCount + 1
-    } else {
-        $state.lastCandidateMode = $detection.mode
-        $state.candidateCount = 1
-    }
-
-    $cooldownReady = $true
-    if ($state.lastAppliedAt) {
-        try {
-            $lastAppliedAt = [datetime]$state.lastAppliedAt
-            $cooldownReady = ((Get-Date) - $lastAppliedAt).TotalSeconds -ge $CooldownSeconds
-        } catch {
-            $cooldownReady = $true
-        }
-    }
-
-    if (($state.candidateCount -ge $StableSamples) -and $cooldownReady -and ($state.lastAppliedMode -ne $detection.mode)) {
-        $applyScript = switch ($detection.mode) {
-            'HANDHELD' { $handheldScript }
-            'DOCKED_MONITOR' { $dockMonitorScript }
-            'DOCKED_TV' { $dockTvScript }
-            'UNCLASSIFIED_EXTERNAL' { $dockMonitorScript }
-            default { $null }
+    # Isolamento por iteracao: uma falha transitoria (deteccao/WMI/JSON/apply) registra no log
+    # e a proxima iteracao continua -- o daemon nao morre. (Sem isso, EAP=Stop encerraria o watcher.)
+    try {
+        $state = Read-JsonFile -Path $StatePath
+        if (-not $state) {
+            $state = [ordered]@{
+                lastCandidateMode = $null
+                candidateCount = 0
+                lastAppliedMode = $null
+                lastAppliedAt = $null
+            }
         }
 
-        if ($applyScript -and (Test-Path $applyScript)) {
-            Write-WatcherLog "Applying mode $($detection.mode)"
-            & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $applyScript -SettingsPath $SettingsPath -DetectionPath $currentDetectionPath | Out-Null
-            $state.lastAppliedMode = $detection.mode
-            $state.lastAppliedAt = (Get-Date).ToString('o')
+        $detection = $null
+        $json = & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $detectScript -SettingsPath $SettingsPath
+        if ($json) {
+            try { $detection = ($json | ConvertFrom-Json) } catch { $detection = $null }
+        }
+
+        if ($null -eq $detection -or ($detection.PSObject.Properties.Name -notcontains 'mode') -or [string]::IsNullOrWhiteSpace([string]$detection.mode)) {
+            Write-WatcherLog 'Deteccao indisponivel nesta iteracao; mantendo estado e tentando novamente.'
         } else {
-            Write-WatcherLog "No apply script found for mode $($detection.mode)"
-        }
-    }
+            Write-JsonFile -Path $currentDetectionPath -Value $detection
 
-    Write-JsonFile -Path $StatePath -Value $state
+            $decision = Get-SteamDeckModeWatcherDecision -DetectedMode ([string]$detection.mode) -State $state -StableSamples $StableSamples -CooldownSeconds $CooldownSeconds
+            $state = $decision.State
+
+            if ($decision.ShouldApply) {
+                $applyScript = switch ([string]$decision.ApplyMode) {
+                    'HANDHELD' { $handheldScript }
+                    'DOCKED_MONITOR' { $dockMonitorScript }
+                    'DOCKED_TV' { $dockTvScript }
+                    'UNCLASSIFIED_EXTERNAL' { $dockMonitorScript }
+                    default { $null }
+                }
+
+                if ($applyScript -and (Test-Path $applyScript)) {
+                    Write-WatcherLog "Applying mode $($decision.ApplyMode)"
+                    & $powershellExe -NoProfile -ExecutionPolicy Bypass -File $applyScript -SettingsPath $SettingsPath -DetectionPath $currentDetectionPath | Out-Null
+                    $state['lastAppliedMode'] = [string]$decision.ApplyMode
+                    $state['lastAppliedAt'] = (Get-Date).ToString('o')
+                } else {
+                    Write-WatcherLog "No apply script found for mode $($decision.ApplyMode)"
+                }
+            }
+
+            Write-JsonFile -Path $StatePath -Value $state
+        }
+    } catch {
+        try { Write-WatcherLog ("Erro na iteracao (continuando): {0}" -f $_.Exception.Message) } catch { }
+    }
 
     if (-not $RunOnce) {
         Start-Sleep -Seconds $PollIntervalSeconds

@@ -5325,20 +5325,25 @@ function Refresh-PendingExternalClassification {
 }
 
 function Refresh-SteamDeckControls {
-    $ui.SettingsBundle = Get-BootstrapSteamDeckSettingsData -RequestedSteamDeckVersion ([string]$ui.State.steamDeckVersion) -ResolvedSteamDeckVersion 'lcd'
-    $settings = ConvertTo-BootstrapHashtable -InputObject $ui.SettingsBundle.Data
-    $detection = Get-UiSteamDeckLiveDetectionData -Settings $settings
-    Load-WpfGridRows -Grid $ui.MonitorProfilesGrid -Items @(Get-UiSteamDeckProfileRows -Settings $settings -Detection $detection) -Columns @('primary','target','status','manufacturer','product','serial','mode','layout','resolutionPolicy')
-    Load-WpfGridRows -Grid $ui.MonitorFamiliesGrid -Items @(Get-UiSteamDeckFamilyRows -Settings $settings -Detection $detection)  -Columns @('primary','status','manufacturer','product','namePattern','mode','layout','resolutionPolicy')
-    $ui.GenericModeCombo.SelectedItem      = [string]$settings.genericExternal.mode
-    $ui.GenericLayoutTextBox.Text          = [string]$settings.genericExternal.layout
-    $ui.GenericResolutionTextBox.Text      = [string]$settings.genericExternal.resolutionPolicy
-    $ui.DisplayModeCombo.SelectedItem      = if (Test-BootstrapMapContainsKey -Map $settings -Key 'displayMode') { [string]$settings.displayMode } else { 'extend' }
-    $ui.HandheldSessionTextBox.Text        = [string]$settings.sessionProfiles.HANDHELD
-    $ui.DockTvSessionTextBox.Text          = [string]$settings.sessionProfiles.DOCKED_TV
-    $ui.DockMonitorSessionTextBox.Text     = [string]$settings.sessionProfiles.DOCKED_MONITOR
-    Refresh-SteamDeckStatus
-    Refresh-PendingExternalClassification
+    try {
+        $ui.SettingsBundle = Get-BootstrapSteamDeckSettingsData -RequestedSteamDeckVersion ([string]$ui.State.steamDeckVersion) -ResolvedSteamDeckVersion 'lcd'
+        $settings = ConvertTo-BootstrapHashtable -InputObject $ui.SettingsBundle.Data
+        $detection = Get-UiSteamDeckLiveDetectionData -Settings $settings
+        Load-WpfGridRows -Grid $ui.MonitorProfilesGrid -Items @(Get-UiSteamDeckProfileRows -Settings $settings -Detection $detection) -Columns @('primary','target','status','manufacturer','product','serial','mode','layout','resolutionPolicy')
+        Load-WpfGridRows -Grid $ui.MonitorFamiliesGrid -Items @(Get-UiSteamDeckFamilyRows -Settings $settings -Detection $detection)  -Columns @('primary','status','manufacturer','product','namePattern','mode','layout','resolutionPolicy')
+        $ui.GenericModeCombo.SelectedItem      = [string]$settings.genericExternal.mode
+        $ui.GenericLayoutTextBox.Text          = [string]$settings.genericExternal.layout
+        $ui.GenericResolutionTextBox.Text      = [string]$settings.genericExternal.resolutionPolicy
+        $ui.DisplayModeCombo.SelectedItem      = if (Test-BootstrapMapContainsKey -Map $settings -Key 'displayMode') { [string]$settings.displayMode } else { 'extend' }
+        $ui.HandheldSessionTextBox.Text        = [string]$settings.sessionProfiles.HANDHELD
+        $ui.DockTvSessionTextBox.Text          = [string]$settings.sessionProfiles.DOCKED_TV
+        $ui.DockMonitorSessionTextBox.Text     = [string]$settings.sessionProfiles.DOCKED_MONITOR
+        Refresh-SteamDeckStatus
+        Refresh-PendingExternalClassification
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("Falha ao atualizar Steam Deck: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Steam Deck: falha ao ler configuracoes/deteccao - $($_.Exception.Message)"
+    }
 }
 
 function Capture-SteamDeckSettingsFromControls {
