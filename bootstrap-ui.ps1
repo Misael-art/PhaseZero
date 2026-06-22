@@ -2463,6 +2463,15 @@ function ConvertTo-UiCanonicalStatus {
                                     <Button x:Name="BackupWindowsBootButton" Grid.Column="4" Style="{StaticResource GhostBtn}" Content="Backup BCD" Height="34" Margin="0,0,8,0"/>
                                     <Button x:Name="ApplyWindowsBootButton" Grid.Column="5" Style="{StaticResource PrimaryBtn}" Content="Aplicar BCD" Height="34"/>
                                 </Grid>
+                                <TextBlock Text="Recuperacao: restaure o BCD a partir de um backup criado por este app, caso algo de errado." Foreground="#94A3B8" FontSize="11" TextWrapping="Wrap" Margin="0,12,0,4"/>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox x:Name="BcdBackupCombo" Grid.Column="0" Style="{StaticResource DarkCombo}" Margin="0,0,12,0"/>
+                                    <Button x:Name="RestoreBcdButton" Grid.Column="1" Style="{StaticResource GhostBtn}" Foreground="{StaticResource WarnBrush}" Content="Restaurar BCD do backup" Height="34"/>
+                                </Grid>
                             </StackPanel>
                         </DockPanel>
                     </Border>
@@ -2922,6 +2931,8 @@ $ui = [ordered]@{
     WindowsBootTimeoutTextBox = (Get-Control 'WindowsBootTimeoutTextBox')
     BackupWindowsBootButton = (Get-Control 'BackupWindowsBootButton')
     ApplyWindowsBootButton = (Get-Control 'ApplyWindowsBootButton')
+    BcdBackupCombo        = (Get-Control 'BcdBackupCombo')
+    RestoreBcdButton      = (Get-Control 'RestoreBcdButton')
     BcdCleanupStatusText  = (Get-Control 'BcdCleanupStatusText')
     BcdCleanupButton      = (Get-Control 'BcdCleanupButton')
     RefreshDualBootButton = (Get-Control 'RefreshDualBootButton')
@@ -5488,8 +5499,20 @@ function Refresh-DualBootControls {
         $ui.WindowsBootTimeoutTextBox.IsEnabled = [bool]$bootState.IsAdmin
         $ui.ApplyWindowsBootButton.IsEnabled = [bool]$bootState.IsAdmin
         $ui.BackupWindowsBootButton.IsEnabled = [bool]$bootState.IsAdmin
+        $bcdBackups = @(Get-BootstrapBcdBackups)
+        $ui.BcdBackupCombo.Items.Clear()
+        foreach ($bk in $bcdBackups) {
+            $cbi = New-Object System.Windows.Controls.ComboBoxItem
+            $cbi.Content = ("{0}  ({1})" -f [string]$bk.Name, [string]$bk.Created)
+            $cbi.Tag = [string]$bk.Path
+            [void]$ui.BcdBackupCombo.Items.Add($cbi)
+        }
+        if ($ui.BcdBackupCombo.Items.Count -gt 0) { $ui.BcdBackupCombo.SelectedIndex = 0 }
+        $hasBcdBackups = ($ui.BcdBackupCombo.Items.Count -gt 0)
+        $ui.BcdBackupCombo.IsEnabled = $hasBcdBackups
+        $ui.RestoreBcdButton.IsEnabled = ([bool]$bootState.IsAdmin -and $hasBcdBackups)
         if (-not [bool]$bootState.IsAdmin) {
-            $ui.WindowsBootStatusText.Text += " | Execute como Administrador para alterar default/timeout ou gerar backup."
+            $ui.WindowsBootStatusText.Text += " | Execute como Administrador para alterar default/timeout, gerar backup ou restaurar."
         }
         if (-not [string]::IsNullOrWhiteSpace([string]$bootState.CommandError)) {
             $ui.WindowsBootStatusText.Text += " | bcdedit: $($bootState.CommandError)"
@@ -5502,6 +5525,7 @@ function Refresh-DualBootControls {
         $ui.WindowsBootTimeoutTextBox.IsEnabled = $false
         $ui.ApplyWindowsBootButton.IsEnabled = $false
         $ui.BackupWindowsBootButton.IsEnabled = $false
+        $ui.RestoreBcdButton.IsEnabled = $false
     }
 
     $phantomCount = -1
@@ -7798,6 +7822,8 @@ $ui.FixFastStartupButton.Add_Click({
         $res = Repair-BootstrapFastStartup
         if ($res.Changed) {
             $ui.StatusLabel.Text = "Fast Startup desabilitado com sucesso."
+        } else {
+            $ui.StatusLabel.Text = "Fast Startup ja estava desabilitado. Nenhuma alteracao necessaria."
         }
         Refresh-DualBootControls
     } catch {
@@ -7806,18 +7832,25 @@ $ui.FixFastStartupButton.Add_Click({
 })
 
 $ui.RebootToLinuxButton.Add_Click({
-    if ($ui.DualBootTargetCombo.SelectedItem) {
-        $guid = [string]$ui.DualBootTargetCombo.SelectedItem.Tag
-        $targetText = [string]$ui.DualBootTargetCombo.SelectedItem.Content
-        if (-not (Confirm-UiCriticalAction -Title 'Confirmar reboot' -Message "Destino: $targetText`nEfeito: define boot one-time e reinicia o Windows agora.`nCancelamento: feche esta janela." -RequiredToken 'REINICIAR')) { return }
-        try {
-            $res = Invoke-BootstrapRebootToLinux -PreferredEntryGuid $guid -Force
-            if ($res.Rebooted) {
-                # UI vai fechar logo logo pelo shutdown
-            }
-        } catch {
-            $ui.StatusLabel.Text = "Erro: $_"
+    if (-not $ui.DualBootTargetCombo.SelectedItem) {
+        $ui.StatusLabel.Text = 'Selecione um destino de boot (Linux/SteamOS) antes de reiniciar.'
+        return
+    }
+    $guid = [string]$ui.DualBootTargetCombo.SelectedItem.Tag
+    $targetText = [string]$ui.DualBootTargetCombo.SelectedItem.Content
+    if (-not (Confirm-UiCriticalAction -Title 'Confirmar reboot' -Message "Destino: $targetText`nEfeito: define boot one-time e reinicia o Windows agora.`nCancelamento: feche esta janela." -RequiredToken 'REINICIAR')) {
+        $ui.StatusLabel.Text = 'Reboot cancelado.'
+        return
+    }
+    try {
+        $res = Invoke-BootstrapRebootToLinux -PreferredEntryGuid $guid -Force
+        if ($res.Rebooted) {
+            $ui.StatusLabel.Text = "Reiniciando para $targetText em 3 segundos..."
+        } else {
+            $ui.StatusLabel.Text = "Boot one-time definido para $targetText. Reinicie quando estiver pronto."
         }
+    } catch {
+        $ui.StatusLabel.Text = "Erro: $_"
     }
 })
 
@@ -7844,6 +7877,9 @@ $ui.ApplyWindowsBootButton.Add_Click({
             if (-not [int]::TryParse($timeoutText, [ref]$parsedTimeout)) {
                 throw 'Timeout precisa ser numero inteiro entre 0 e 600.'
             }
+            if ($parsedTimeout -lt 0 -or $parsedTimeout -gt 600) {
+                throw 'Timeout precisa ficar entre 0 e 600 segundos.'
+            }
             $timeout = $parsedTimeout
         }
         if (-not (Confirm-UiCriticalAction -Title 'Confirmar BCD' -Message "Aplicar BCD vai alterar o Windows Boot Manager. Um backup sera criado antes da alteracao. Default: $defaultId Timeout: $timeout")) { return }
@@ -7860,14 +7896,41 @@ $ui.BcdCleanupButton.Add_Click({
         if (-not (Confirm-UiCriticalAction -Title 'Confirmar BCD cleanup' -Message 'A limpeza de BCD cria backup e remove entradas fantasmas detectadas. Revise o backup no status apos concluir.')) { return }
         $ui.BcdCleanupButton.IsEnabled = $false
         $ui.BcdCleanupStatusText.Text = "Realizando backup e limpando..."
-        $res = Repair-BootstrapPhantomEntries
-        if ($res.Success) {
-            $ui.StatusLabel.Text = "Removidas $($res.Removed) entradas fantasmas. Backup em: $($res.Backup)"
+        try {
+            $res = Repair-BootstrapPhantomEntries
+            if ($res.Success) {
+                $ui.StatusLabel.Text = "Removidas $($res.Removed) entradas fantasmas. Backup em: $($res.Backup)"
+            }
+        } finally {
+            # Reabilita sempre (Refresh-DualBootControls reavalia visibilidade/estado conforme phantoms restantes).
+            $ui.BcdCleanupButton.IsEnabled = $true
+            Refresh-DualBootControls
         }
-        Refresh-DualBootControls
     } catch {
         $ui.StatusLabel.Text = "Erro na limpeza: $_"
         $ui.BcdCleanupButton.IsEnabled = $true
+    }
+})
+
+$ui.RestoreBcdButton.Add_Click({
+    if (-not $ui.BcdBackupCombo.SelectedItem) {
+        $ui.StatusLabel.Text = 'Selecione um backup de BCD para restaurar.'
+        return
+    }
+    $backupPath = [string]$ui.BcdBackupCombo.SelectedItem.Tag
+    $backupName = [string]$ui.BcdBackupCombo.SelectedItem.Content
+    if (-not (Confirm-UiCriticalAction -Title 'Confirmar restauracao de BCD' -Message ("Restaurar o Windows Boot Manager a partir do backup:`n`n{0}`n`nIsto sobrescreve a configuracao de boot atual (bcdedit /import). Continuar?" -f $backupName) -RequiredToken 'RESTAURAR')) {
+        $ui.StatusLabel.Text = 'Restauracao de BCD cancelada.'
+        return
+    }
+    try {
+        $res = Restore-BootstrapWindowsBootManager -BackupPath $backupPath
+        if ($res.Restored) {
+            $ui.StatusLabel.Text = "BCD restaurado a partir de: $backupName"
+        }
+        Refresh-DualBootControls
+    } catch {
+        $ui.StatusLabel.Text = "Erro ao restaurar BCD: $_"
     }
 })
 

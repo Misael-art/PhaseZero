@@ -8364,6 +8364,29 @@ function Backup-BootstrapWindowsBootManager {
     return $backupPath
 }
 
+function Get-BootstrapBcdBackups {
+    # Lista os backups de BCD (.bak) criados por Backup-BootstrapWindowsBootManager, mais novos primeiro.
+    $backupDir = Join-Path (Get-BootstrapDataRoot) 'bcd-backups'
+    if (-not (Test-Path -LiteralPath $backupDir)) { return @() }
+    return @(Get-ChildItem -Path $backupDir -Filter 'bcd_backup_*.bak' -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        ForEach-Object { [ordered]@{ Path = $_.FullName; Name = $_.Name; Created = $_.LastWriteTime.ToString('yyyy-MM-dd HH:mm:ss') } })
+}
+
+function Restore-BootstrapWindowsBootManager {
+    # Recuperacao: restaura o BCD a partir de um backup .bak (bcdedit /import). Requer administrador.
+    param([Parameter(Mandatory = $true)][string]$BackupPath)
+
+    if (-not (Test-IsAdmin)) { throw 'Restore-BootstrapWindowsBootManager requer privilegios de administrador.' }
+    if ([string]::IsNullOrWhiteSpace($BackupPath) -or -not (Test-Path -LiteralPath $BackupPath -PathType Leaf)) {
+        throw "Backup de BCD nao encontrado: $BackupPath"
+    }
+    $output = & bcdedit /import "$BackupPath" 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Falha ao restaurar BCD a partir de '$BackupPath': $output" }
+    Write-Log "BCD restaurado a partir do backup: $BackupPath"
+    return [ordered]@{ Success = $true; Restored = $true; BackupPath = $BackupPath }
+}
+
 function Set-BootstrapWindowsBootManager {
     param(
         [AllowNull()][string]$DefaultId = '',
