@@ -63,6 +63,7 @@ function New-CliOptions {
         Batch          = ''
         IncludeSecrets = $false
         InstallWebapps = $false
+        RepairMcp      = $false
         DryRun         = $false
         Yes            = $false
         NoAdmin        = $false
@@ -177,6 +178,8 @@ function Read-CliArgs {
             }
             'includesecrets' { $opts.IncludeSecrets = $true }
             'installwebapps' { $opts.InstallWebapps = $true }
+            'repair-mcp' { $opts.RepairMcp = $true }
+            'repairmcp' { $opts.RepairMcp = $true }
             'dryrun' { $opts.DryRun = $true }
             'yes' { $opts.Yes = $true }
             'y' { $opts.Yes = $true }
@@ -263,6 +266,10 @@ function Write-CliUsage {
     Write-CliOut ''
     Write-CliOut 'Web apps (todos de uma vez):'
     Write-CliOut '  install-cli.bat --install-webapps --yes'
+    Write-CliOut ''
+    Write-CliOut 'Reparar configs MCP (npx puro -> cmd /c npx), corrige "Could not attach":'
+    Write-CliOut '  install-cli.bat --repair-mcp           (mostra o plano, dry-run)'
+    Write-CliOut '  install-cli.bat --repair-mcp --yes     (aplica, com backup .bak)'
 }
 
 function ConvertTo-CliCleanReply {
@@ -1608,6 +1615,37 @@ if ([bool]$script:Options.Help) {
     exit 0
 }
 
+function Invoke-CliMcpRepair {
+    # Repara configs MCP dos clientes (npx puro -> cmd /c npx). Dry-run por padrao; --yes aplica.
+    param([Parameter(Mandatory = $true)]$Options)
+
+    $apply = ([bool]$Options.Yes -and -not [bool]$Options.DryRun)
+    Write-CliOut ''
+    Write-CliOut ("[reparo MCP] {0}..." -f $(if ($apply) { 'aplicando' } else { 'pre-visualizando (dry-run)' })) Green
+    Write-CliOut ''
+
+    $preview = Invoke-BootstrapMcpConfigRepair -DryRun
+    foreach ($t in @($preview.targets)) {
+        $color = if ([int]$t.fixed -gt 0) { [System.ConsoleColor]::Yellow } elseif ([string]$t.status -eq 'absent') { [System.ConsoleColor]::DarkGray } else { [System.ConsoleColor]::Green }
+        Write-CliOut ("  {0,-16} {1,-10} npx-puro={2}  {3}" -f [string]$t.id, [string]$t.status, [int]$t.fixed, [string]$t.path) $color
+    }
+    Write-CliOut ''
+
+    if ([int]$preview.totalFixed -eq 0) {
+        Write-CliOut 'Nenhum comando "npx" puro encontrado nos configs MCP. Nada a reparar.' Green
+        return
+    }
+    if (-not $apply) {
+        Write-CliOut ("{0} entrada(s) seriam corrigidas. Para aplicar (com backup .bak): .\install-cli.bat --repair-mcp --yes" -f [int]$preview.totalFixed) Cyan
+        return
+    }
+
+    $result = Invoke-BootstrapMcpConfigRepair
+    Write-CliOut ("[reparo MCP] {0} entrada(s) corrigida(s) (backups .bak criados)." -f [int]$result.totalFixed) Green
+    $verify = Invoke-BootstrapMcpConfigRepair -DryRun
+    Write-CliOut ("Verificacao: npx puros restantes = {0}" -f [int]$verify.totalFixed) $(if ([int]$verify.totalFixed -eq 0) { [System.ConsoleColor]::Green } else { [System.ConsoleColor]::Yellow })
+}
+
 function Invoke-CliLifecycleActions {
     # Executa export/import/factory-reset (individual por --item/--app/--config ou em lote --batch).
     # Backend ja carregado em library mode. Retorna $false se nao houver acao de ciclo de vida.
@@ -1697,6 +1735,13 @@ try {
     Write-CliOut "[ERRO] Falha ao carregar catalogo: $($_.Exception.Message)"
     if (-not [bool]$script:Options.NonInteractive) { Pause }
     exit 1
+}
+
+# Reparo de configs MCP (npx puro -> cmd /c npx) nos clientes. --repair-mcp mostra o plano (dry-run);
+# adicione --yes para aplicar de fato (com backup .bak por arquivo).
+if ([bool]$script:Options.RepairMcp) {
+    Invoke-CliMcpRepair -Options $script:Options
+    exit 0
 }
 
 # Acoes de ciclo de vida de configuracao (export/import/factory-reset, individual ou em lote).
