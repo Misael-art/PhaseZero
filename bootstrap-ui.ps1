@@ -1935,7 +1935,9 @@ function Get-UiHealthTextCanonicalStatus {
                     </Grid>
                     <WrapPanel Margin="0,0,0,16">
                         <Button x:Name="HealthCopyDiagnosticButton" Style="{StaticResource GhostBtn}" Content="Copiar diagnóstico" Height="32" Margin="0,0,8,0"/>
-                        <Button x:Name="HealthRepairMcpButton" Style="{StaticResource GhostBtn}" Content="Reparar MCPs (npx)" Height="32" ToolTip="Reescreve comandos 'npx' puros para 'cmd /c npx' nos configs MCP dos apps (corrige 'Could not attach'). Backup .bak por arquivo."/>
+                        <Button x:Name="HealthRepairMcpButton" Style="{StaticResource GhostBtn}" Content="Reparar MCPs (npx)" Height="32" Margin="0,0,8,0" ToolTip="Reescreve comandos 'npx' puros para 'cmd /c npx' nos configs MCP dos apps (corrige 'Could not attach'). Backup .bak por arquivo."/>
+                        <Button x:Name="HealthDriftCheckButton" Style="{StaticResource GhostBtn}" Content="Verificar drift" Height="32" Margin="0,0,8,0" ToolTip="Compara a saude atual com o baseline e reporta regressoes (o que piorou desde a ultima referencia)."/>
+                        <Button x:Name="HealthDriftScheduleButton" Style="{StaticResource GhostBtn}" Content="Agendar drift semanal" Height="32" ToolTip="Liga/desliga uma verificacao de drift semanal (tarefa agendada por-usuario)."/>
                     </WrapPanel>
 
                     <Border Style="{StaticResource Card}">
@@ -2880,6 +2882,8 @@ $ui = [ordered]@{
     HealthRepairPlanButton = (Get-Control 'HealthRepairPlanButton')
     HealthCopyDiagnosticButton = (Get-Control 'HealthCopyDiagnosticButton')
     HealthRepairMcpButton = (Get-Control 'HealthRepairMcpButton')
+    HealthDriftCheckButton = (Get-Control 'HealthDriftCheckButton')
+    HealthDriftScheduleButton = (Get-Control 'HealthDriftScheduleButton')
     HealthDoctorTextBox   = (Get-Control 'HealthDoctorTextBox')
 
     # App Tuning
@@ -7419,6 +7423,53 @@ $ui.HealthRepairMcpButton.Add_Click({
         $ui.StatusLabel.Text = "Erro no reparo de MCP: $($_.Exception.Message)"
     }
 })
+
+function Update-UiDriftScheduleButton {
+    try {
+        $state = Get-BootstrapDriftCheckTaskState
+        $ui.HealthDriftScheduleButton.Content = if ([bool]$state.registered) { 'Remover drift semanal' } else { 'Agendar drift semanal' }
+    } catch { }
+}
+
+$ui.HealthDriftCheckButton.Add_Click({
+    try {
+        $ui.StatusLabel.Text = 'Verificando drift (rodando Doctor e comparando com o baseline)...'
+        $drift = Invoke-BootstrapDriftCheck
+        if (-not $drift.baselineExisted) {
+            $ui.StatusLabel.Text = 'Drift: baseline criado agora (primeira referencia). Rode novamente depois para detectar regressoes.'
+        } elseif ([int]$drift.regressionCount -eq 0) {
+            $ui.StatusLabel.Text = 'Drift: nenhuma regressao desde o baseline. Tudo estavel.'
+        } else {
+            $list = (@($drift.regressions) | ForEach-Object { "{0} ({1}->{2})" -f $_.id, $_.from, $_.to }) -join ', '
+            $ui.StatusLabel.Text = ("Drift: {0} regressao(oes) detectada(s): {1}" -f [int]$drift.regressionCount, $list)
+        }
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("Falha na verificacao de drift: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Erro na verificacao de drift: $($_.Exception.Message)"
+    }
+})
+
+$ui.HealthDriftScheduleButton.Add_Click({
+    try {
+        $state = Get-BootstrapDriftCheckTaskState
+        if ([bool]$state.registered) {
+            $r = Unregister-BootstrapDriftCheckTask
+            $ui.StatusLabel.Text = "Agendamento de drift removido ($([string]$r.status))."
+        } else {
+            $r = Register-BootstrapDriftCheckTask -ScriptPath $backendScriptPath
+            if ([string]$r.status -eq 'registered') {
+                $ui.StatusLabel.Text = 'Drift agendado: verificacao semanal (segunda, 09:00).'
+            } else {
+                $ui.StatusLabel.Text = ("Nao foi possivel agendar o drift: {0}" -f [string]$r.reason)
+            }
+        }
+        Update-UiDriftScheduleButton
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("Falha ao agendar drift: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Erro ao agendar drift: $($_.Exception.Message)"
+    }
+})
+Update-UiDriftScheduleButton
 
 function Copy-HealthDiagnostic {
     try {

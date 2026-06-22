@@ -64,6 +64,7 @@ function New-CliOptions {
         IncludeSecrets = $false
         InstallWebapps = $false
         RepairMcp      = $false
+        DriftCheck     = $false
         DryRun         = $false
         Yes            = $false
         NoAdmin        = $false
@@ -180,6 +181,8 @@ function Read-CliArgs {
             'installwebapps' { $opts.InstallWebapps = $true }
             'repair-mcp' { $opts.RepairMcp = $true }
             'repairmcp' { $opts.RepairMcp = $true }
+            'drift-check' { $opts.DriftCheck = $true }
+            'driftcheck' { $opts.DriftCheck = $true }
             'dryrun' { $opts.DryRun = $true }
             'yes' { $opts.Yes = $true }
             'y' { $opts.Yes = $true }
@@ -270,6 +273,9 @@ function Write-CliUsage {
     Write-CliOut 'Reparar configs MCP (npx puro -> cmd /c npx), corrige "Could not attach":'
     Write-CliOut '  install-cli.bat --repair-mcp           (mostra o plano, dry-run)'
     Write-CliOut '  install-cli.bat --repair-mcp --yes     (aplica, com backup .bak)'
+    Write-CliOut ''
+    Write-CliOut 'Verificar drift (Doctor vs baseline, reporta regressoes):'
+    Write-CliOut '  install-cli.bat --drift-check'
 }
 
 function ConvertTo-CliCleanReply {
@@ -1741,6 +1747,22 @@ try {
 # adicione --yes para aplicar de fato (com backup .bak por arquivo).
 if ([bool]$script:Options.RepairMcp) {
     Invoke-CliMcpRepair -Options $script:Options
+    exit 0
+}
+
+# Verificacao de drift: roda o Doctor e compara com o baseline, reportando regressoes.
+if ([bool]$script:Options.DriftCheck) {
+    Write-CliOut ''
+    Write-CliOut '[drift] verificando (Doctor + comparacao com baseline)...' Green
+    $drift = Invoke-BootstrapDriftCheck
+    if (-not $drift.baselineExisted) {
+        Write-CliOut 'Baseline criado agora (primeira referencia). Rode de novo depois para detectar regressoes.' Cyan
+    } elseif ([int]$drift.regressionCount -eq 0) {
+        Write-CliOut 'Nenhuma regressao desde o baseline. Tudo estavel.' Green
+    } else {
+        Write-CliOut ("{0} regressao(oes):" -f [int]$drift.regressionCount) Yellow
+        foreach ($r in @($drift.regressions)) { Write-CliOut ("  {0}: {1} -> {2}" -f [string]$r.id, [string]$r.from, [string]$r.to) Yellow }
+    }
     exit 0
 }
 

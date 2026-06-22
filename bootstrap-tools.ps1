@@ -24,6 +24,7 @@
     [switch]$ListApps,
     [switch]$ListComponents,
     [switch]$Doctor,
+    [switch]$DriftCheck,
     [switch]$SupportBundle,
     [switch]$AiConfigDoctor,
     [switch]$AiConfigSync,
@@ -29145,6 +29146,150 @@ function New-BootstrapSteamDeckDoctorReport {
     }
 }
 
+function Get-BootstrapCheckSeverityRank {
+    # Rank de saude para diff de drift: 0=ok, 1=atencao, 2=critico. Maior = pior.
+    param([string]$Status)
+    switch -Regex (([string]$Status).Trim().ToLowerInvariant()) {
+        '^(error|critical|corrupt|blocked|failed|rejected|expired|unhealthy|ghostinstall|broken)$' { return 2 }
+        '^(warning|missing|notdetected|absent|pending|degraded|manual-review|manual|unknown)$' { return 1 }
+        default { return 0 }
+    }
+}
+
+function Get-BootstrapDriftChecksMap {
+    # Extrai o mapa id->status de um snapshot (hashtable em processo ou PSCustomObject de JSON).
+    param([AllowNull()]$Snapshot)
+    $result = @{}
+    if ($null -eq $Snapshot) { return $result }
+    $checks = Get-BootstrapNamedValue -Object $Snapshot -Name 'checks' -Default $null
+    if ($null -eq $checks) { return $result }
+    $checks = ConvertTo-BootstrapHashtable -InputObject $checks
+    if ($checks -is [System.Collections.IDictionary]) {
+        foreach ($k in @($checks.Keys)) { $result[[string]$k] = [string]$checks[$k] }
+    }
+    return $result
+}
+
+function Get-BootstrapDriftSnapshotFromDoctor {
+    # Snapshot estavel (id->status) a partir dos checks do doctor report.
+    param([Parameter(Mandatory = $true)]$DoctorReport)
+    $map = [ordered]@{}
+    $checks = @(Get-BootstrapNamedValue -Object $DoctorReport -Name 'checks' -Default @())
+    foreach ($c in @($checks)) {
+        $id = [string](Get-BootstrapNamedValue -Object $c -Name 'id' -Default '')
+        if ([string]::IsNullOrWhiteSpace($id)) { continue }
+        $map[$id] = [string](Get-BootstrapNamedValue -Object $c -Name 'status' -Default '')
+    }
+    return [ordered]@{ generatedAt = (Get-Date).ToString('o'); checks = $map }
+}
+
+function Compare-BootstrapDriftSnapshot {
+    # Regressoes = checks cujo rank de severidade piorou em relacao ao baseline. Puro/testavel.
+    param([AllowNull()]$Baseline, [AllowNull()]$Current)
+    $baseMap = Get-BootstrapDriftChecksMap -Snapshot $Baseline
+    $curMap = Get-BootstrapDriftChecksMap -Snapshot $Current
+    $regressions = New-Object System.Collections.Generic.List[object]
+    foreach ($id in @($curMap.Keys)) {
+        if (-not $baseMap.ContainsKey($id)) { continue }  # check novo nao e regressao
+        $from = [string]$baseMap[$id]
+        $to = [string]$curMap[$id]
+        if ((Get-BootstrapCheckSeverityRank -Status $to) -gt (Get-BootstrapCheckSeverityRank -Status $from)) {
+            $regressions.Add([ordered]@{ id = $id; from = $from; to = $to }) | Out-Null
+        }
+    }
+    return @($regressions.ToArray())
+}
+
+function Get-BootstrapDriftBaselinePath { return (Join-Path (Get-BootstrapDataRoot) 'drift-baseline.json') }
+function Get-BootstrapDriftLastPath { return (Join-Path (Get-BootstrapDataRoot) 'drift-last.json') }
+function Get-BootstrapDriftCheckTaskName { return 'BootstrapTools-DriftCheck' }
+
+function Invoke-BootstrapDriftCheck {
+    # Roda o doctor, compara com o baseline persistido e grava o ultimo resultado. Na primeira vez
+    # (ou com -UpdateBaseline) salva o baseline e nao reporta regressoes.
+    param([switch]$UpdateBaseline)
+
+    $doctor = New-BootstrapDoctorReport
+    $snapshot = Get-BootstrapDriftSnapshotFromDoctor -DoctorReport $doctor
+    $baselinePath = Get-BootstrapDriftBaselinePath
+    $baseline = $null
+    if (Test-Path -LiteralPath $baselinePath) { try { $baseline = Read-BootstrapJsonFile -Path $baselinePath } catch { $baseline = $null } }
+    $baselineExisted = ($null -ne $baseline)
+
+    $regressions = @()
+    if ($baselineExisted -and -not $UpdateBaseline) {
+        $regressions = @(Compare-BootstrapDriftSnapshot -Baseline $baseline -Current $snapshot)
+    }
+    if (-not $baselineExisted -or $UpdateBaseline) {
+        Write-BootstrapJsonFile -Path $baselinePath -Value $snapshot
+    }
+
+    $result = [ordered]@{
+        checkedAt = [string]$snapshot.generatedAt
+        baselineExisted = [bool]$baselineExisted
+        doctorStatus = [string]$doctor.status
+        regressionCount = @($regressions).Count
+        regressions = @($regressions)
+    }
+    Write-BootstrapJsonFile -Path (Get-BootstrapDriftLastPath) -Value $result
+    return $result
+}
+
+function Get-BootstrapDriftCheckTaskState {
+    $name = Get-BootstrapDriftCheckTaskName
+    if (Get-Command -Name Get-ScheduledTask -ErrorAction SilentlyContinue) {
+        $t = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+        return [ordered]@{ registered = [bool]$t; task = $name }
+    }
+    return [ordered]@{ registered = $false; task = $name }
+}
+
+function Register-BootstrapDriftCheckTask {
+    # Agenda verificacao de drift semanal (por-usuario, sem elevacao quando possivel).
+    param([Parameter(Mandatory = $true)][string]$ScriptPath)
+
+    $name = Get-BootstrapDriftCheckTaskName
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $argLine = ('-NoProfile -ExecutionPolicy Bypass -File "{0}" -DriftCheck -NonInteractive' -f $ScriptPath)
+
+    if (Get-Command -Name Register-ScheduledTask -ErrorAction SilentlyContinue) {
+        try {
+            $existing = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+            if ($existing) { Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction SilentlyContinue }
+            $action = New-ScheduledTaskAction -Execute $ps -Argument $argLine
+            $trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At ([datetime]'09:00')
+            $principal = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) -LogonType Interactive -RunLevel Limited
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+            Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'PhaseZero: verificacao semanal de drift (Doctor) e alerta de regressoes.' -ErrorAction Stop | Out-Null
+            return [ordered]@{ status = 'registered'; task = $name; method = 'register-scheduledtask' }
+        } catch {
+            Write-Log ("drift: Register-ScheduledTask falhou ({0}); tentando schtasks." -f $_.Exception.Message) 'WARN'
+        }
+    }
+    $schtasksExe = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+    if (-not (Test-Path $schtasksExe)) { return [ordered]@{ status = 'skipped'; task = $name; reason = 'schtasks.exe nao encontrado.' } }
+    $tr = ('"{0}" {1}' -f $ps, $argLine)
+    $exit = Invoke-NativeWithLog -Exe $schtasksExe -Args @('/Create', '/SC', 'WEEKLY', '/D', 'MON', '/ST', '09:00', '/TN', $name, '/TR', $tr, '/F', '/RU', $env:USERNAME)
+    if ($exit -ne 0) { return [ordered]@{ status = 'failed'; task = $name; reason = ("schtasks-exit={0}" -f $exit) } }
+    return [ordered]@{ status = 'registered'; task = $name; method = 'schtasks' }
+}
+
+function Unregister-BootstrapDriftCheckTask {
+    $name = Get-BootstrapDriftCheckTaskName
+    if (Get-Command -Name Unregister-ScheduledTask -ErrorAction SilentlyContinue) {
+        try {
+            $existing = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+            if ($existing) { Unregister-ScheduledTask -TaskName $name -Confirm:$false -ErrorAction Stop; return [ordered]@{ status = 'removed'; task = $name } }
+            return [ordered]@{ status = 'absent'; task = $name }
+        } catch {
+            Write-Log ("drift: Unregister-ScheduledTask falhou ({0}); tentando schtasks." -f $_.Exception.Message) 'WARN'
+        }
+    }
+    $schtasksExe = Join-Path $env:SystemRoot 'System32\schtasks.exe'
+    if (Test-Path $schtasksExe) { [void](Invoke-NativeWithLog -Exe $schtasksExe -Args @('/Delete', '/TN', $name, '/F')) }
+    return [ordered]@{ status = 'removed'; task = $name }
+}
+
 function New-BootstrapDoctorReport {
     param(
         [int]$AuditTimeoutSeconds = 180,
@@ -30982,6 +31127,7 @@ $useBootstrapRotateSecretsMode = (
 )
 
 $useBootstrapDoctorMode = $Doctor
+$useBootstrapDriftCheckMode = $DriftCheck
 $useBootstrapSupportBundleMode = $SupportBundle
 $useBootstrapAiConfigDoctorMode = $AiConfigDoctor
 $useBootstrapAiConfigSyncMode = $AiConfigSync
@@ -30990,6 +31136,7 @@ $useBootstrapReleasePackMode = $ReleasePack
 
 $useBootstrapProfileMode = (
     -not $useBootstrapRotateSecretsMode -and
+    -not $useBootstrapDriftCheckMode -and
     -not $useBootstrapSupportBundleMode -and
     -not $useBootstrapAiConfigDoctorMode -and
     -not $useBootstrapAiConfigSyncMode -and
@@ -31037,6 +31184,30 @@ if (-not $isDotSourced) {
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
                 Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'doctor' })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            Stop-BootstrapProcess 1
+        }
+    }
+
+    if ($useBootstrapDriftCheckMode) {
+        try {
+            $drift = Invoke-BootstrapDriftCheck
+            if (-not $drift.baselineExisted) {
+                Write-Log 'Drift: baseline criado nesta execucao (primeira vez). Sem comparacao.'
+            } elseif ([int]$drift.regressionCount -eq 0) {
+                Write-Log 'Drift: nenhuma regressao detectada desde o baseline.'
+            } else {
+                Write-Log ("Drift: {0} regressao(oes) detectada(s): {1}" -f [int]$drift.regressionCount, ((@($drift.regressions) | ForEach-Object { "{0} ({1}->{2})" -f $_.id, $_.from, $_.to }) -join ', ')) 'WARN'
+            }
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{ status = 'success'; exitCode = 0; mode = 'drift-check'; drift = $drift })
+            }
+            Stop-BootstrapProcess 0
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'drift-check' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'
