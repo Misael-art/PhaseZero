@@ -1931,7 +1931,10 @@ function Get-UiHealthTextCanonicalStatus {
                             </StackPanel>
                         </Border>
                     </Grid>
-                    <Button x:Name="HealthCopyDiagnosticButton" Style="{StaticResource GhostBtn}" Content="Copiar diagnóstico" Height="32" Margin="0,0,0,16"/>
+                    <WrapPanel Margin="0,0,0,16">
+                        <Button x:Name="HealthCopyDiagnosticButton" Style="{StaticResource GhostBtn}" Content="Copiar diagnóstico" Height="32" Margin="0,0,8,0"/>
+                        <Button x:Name="HealthRepairMcpButton" Style="{StaticResource GhostBtn}" Content="Reparar MCPs (npx)" Height="32" ToolTip="Reescreve comandos 'npx' puros para 'cmd /c npx' nos configs MCP dos apps (corrige 'Could not attach'). Backup .bak por arquivo."/>
+                    </WrapPanel>
 
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
@@ -2873,6 +2876,7 @@ $ui = [ordered]@{
     HealthSupportBundleButton = (Get-Control 'HealthSupportBundleButton')
     HealthRepairPlanButton = (Get-Control 'HealthRepairPlanButton')
     HealthCopyDiagnosticButton = (Get-Control 'HealthCopyDiagnosticButton')
+    HealthRepairMcpButton = (Get-Control 'HealthRepairMcpButton')
     HealthDoctorTextBox   = (Get-Control 'HealthDoctorTextBox')
 
     # App Tuning
@@ -7380,6 +7384,34 @@ $ui.HealthRepairPlanButton.Add_Click({
     if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
     Navigate-ToPage -Index $runIdx
     Start-RunExecution -MaintenanceIntent 'repair-plan'
+})
+
+$ui.HealthRepairMcpButton.Add_Click({
+    try {
+        $preview = Invoke-BootstrapMcpConfigRepair -DryRun
+        if ([int]$preview.totalFixed -eq 0) {
+            $ui.StatusLabel.Text = 'Reparo MCP: nenhum comando "npx" puro encontrado nos configs. Nada a reparar.'
+            return
+        }
+        $affected = @($preview.targets | Where-Object { [int]$_.fixed -gt 0 } | ForEach-Object { ("{0} ({1})" -f [string]$_.id, [int]$_.fixed) })
+        $msg = @(
+            ("Corrigir {0} comando(s) 'npx' puro(s) -> 'cmd /c npx' nos configs MCP:" -f [int]$preview.totalFixed)
+            ''
+            ("Clientes: {0}" -f (@($affected) -join ', '))
+            ''
+            'Um backup .bak e criado por arquivo antes de gravar. Continuar?'
+        ) -join [Environment]::NewLine
+        if (-not (Confirm-UiCriticalAction -Title 'Confirmar reparo de MCPs' -Message $msg)) {
+            $ui.StatusLabel.Text = 'Reparo MCP cancelado.'
+            return
+        }
+        $result = Invoke-BootstrapMcpConfigRepair
+        $verify = Invoke-BootstrapMcpConfigRepair -DryRun
+        $ui.StatusLabel.Text = ("Reparo MCP: {0} entrada(s) corrigida(s) (backups .bak). Restantes: {1}. Reinicie os apps para reconectar." -f [int]$result.totalFixed, [int]$verify.totalFixed)
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("Falha no reparo de MCP: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Erro no reparo de MCP: $($_.Exception.Message)"
+    }
 })
 
 function Copy-HealthDiagnostic {
