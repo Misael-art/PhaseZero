@@ -1657,10 +1657,12 @@ function Get-UiHealthTextCanonicalStatus {
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="" FontSize="16" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="#94A3B8"/>
                         <TextBox x:Name="FilterTextBox" Grid.Column="1" Style="{StaticResource DarkInput}" Height="34" ToolTip="Filtro por nome ou descrição. Várias palavras: todas devem aparecer (ex.: dotnet core). Hífens são ignorados (dotnetcore encontra dotnet-core)."/>
-                        <Button x:Name="ClearAllSelectionButton" Grid.Column="2" Style="{StaticResource GhostBtn}" Content=" Limpar tudo" Margin="10,0,0,0" Height="34"/>
+                        <Button x:Name="RefreshStatusButton" Grid.Column="2" Style="{StaticResource GhostBtn}" Content="Atualizar status" Margin="10,0,0,0" Height="34" ToolTip="Recalcula o status de cada componente ao vivo (instalado/configurado), inclusive apps winget portateis, e recolore a lista."/>
+                        <Button x:Name="ClearAllSelectionButton" Grid.Column="3" Style="{StaticResource GhostBtn}" Content=" Limpar tudo" Margin="10,0,0,0" Height="34"/>
                     </Grid>
                 </StackPanel>
 
@@ -2813,6 +2815,7 @@ $ui = [ordered]@{
     SelectionTitleLabel   = (Get-Control 'SelectionTitleLabel')
     FilterTextBox         = (Get-Control 'FilterTextBox')
     ClearAllSelectionButton = (Get-Control 'ClearAllSelectionButton')
+    RefreshStatusButton    = (Get-Control 'RefreshStatusButton')
     ProfilesLabel         = (Get-Control 'ProfilesLabel')
     ProfilesTree          = (Get-Control 'ProfilesTree')
     ComponentsLabel       = (Get-Control 'ComponentsLabel')
@@ -3879,6 +3882,9 @@ function Refresh-SelectionTrees {
             $cb.Content   = if ([string]::IsNullOrWhiteSpace($badgeSuffix)) { $componentName } else { "$componentName $badgeSuffix" }
             $cb.IsChecked = (($isExplicitComponent -or $isResolvedComponent) -and -not $isExcludedComponent)
             $componentStatus = if ($component.PSObject.Properties.Name -contains 'status') { [string]$component.status } else { '' }
+            if (($ui.ContainsKey('ComponentStatusLive')) -and ($null -ne $ui.ComponentStatusLive) -and ($ui.ComponentStatusLive.Contains($componentName))) {
+                $componentStatus = [string]$ui.ComponentStatusLive[$componentName]
+            }
             $cb.Foreground = Get-UiStatusBrush -Status $componentStatus
             $cb.Style = $window.FindResource('DarkCheck')
             $cb.Tag = @{ kind = 'component'; item = $component; name = $componentName; explicit = $isExplicitComponent; resolved = $isResolvedComponent; excluded = $isExcludedComponent; canExclude = $canExcludeComponent }
@@ -7461,6 +7467,21 @@ $ui.ClearAllSelectionButton.Add_Click({
     )
     if ($answer -ne [System.Windows.MessageBoxResult]::Yes) { return }
     Clear-UiAllSelections
+})
+
+$ui.RefreshStatusButton.Add_Click({
+    try {
+        $ui.StatusLabel.Text = 'Atualizando status dos componentes (ao vivo)...'
+        $ui['ComponentStatusLive'] = Get-BootstrapComponentStatusMap
+        Refresh-SelectionTrees
+        Refresh-SelectionSummary
+        $total = @($ui.ComponentStatusLive.Keys).Count
+        $installed = @($ui.ComponentStatusLive.Values | Where-Object { [string]$_ -ne 'not-installed' }).Count
+        $ui.StatusLabel.Text = "Status atualizado: $installed de $total componente(s) detectado(s) como instalado(s)/configurado(s)."
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("Falha ao atualizar status: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Erro ao atualizar status: $($_.Exception.Message)"
+    }
 })
 
 function Set-UiComponentEnabled {

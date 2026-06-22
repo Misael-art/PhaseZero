@@ -65,4 +65,30 @@ Describe 'winget portable / per-user artifact detection' {
         $tree = @($catalog['treesize-free'].ProbePaths)
         ($tree -join '|') | Should Match 'LOCALAPPDATA|Programs\\JAM Software\\TreeSize Free'
     }
+
+    It 'Get-BootstrapItemStatus detects a winget-portable install via -WingetId when ProbePaths miss' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $work = Join-Path $env:TEMP ("pz-st-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        $pkg = Join-Path $work 'Microsoft\WinGet\Packages\OBSProject.OBSStudio_x\bin\64bit'
+        New-Item -ItemType Directory -Path $pkg -Force | Out-Null
+        Set-Content -Path (Join-Path $pkg 'obs64.exe') -Value 'x' -Encoding Ascii
+        $prev = $env:LOCALAPPDATA
+        try {
+            $env:LOCALAPPDATA = $work
+            Get-BootstrapItemStatus -Kind 'app' -Id 'obs-studio' -ProbePaths @('C:\nope\x.exe') -WingetId 'OBSProject.OBSStudio' -Cache @{} | Should Be 'installed-unconfigured'
+            Get-BootstrapItemStatus -Kind 'app' -Id 'obs-studio' -ProbePaths @('C:\nope\x.exe') -Cache @{} | Should Be 'not-installed'
+        } finally {
+            $env:LOCALAPPDATA = $prev
+            Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Get-BootstrapComponentStatusMap returns a status for every catalog component' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $map = Get-BootstrapComponentStatusMap
+        $catalog = Get-BootstrapComponentCatalog
+        @($map.Keys).Count | Should Be @($catalog.Keys).Count
+        $valid = @('error','not-installed','installed-unconfigured','configured','optimized-tested')
+        foreach ($v in @($map.Values)) { ($valid -contains [string]$v) | Should Be $true }
+    }
 }

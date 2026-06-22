@@ -5746,6 +5746,7 @@ function Get-BootstrapItemStatus {
         [Parameter(Mandatory = $true)][string]$Id,
         [string[]]$ProbePaths = @(),
         [string[]]$CommandNames = @(),
+        [string]$WingetId = '',
         [switch]$ErrorFlag,
         [hashtable]$Cache
     )
@@ -5769,6 +5770,10 @@ function Get-BootstrapItemStatus {
             if (-not [string]::IsNullOrWhiteSpace([string]$cmd) -and (Get-Command -Name ([string]$cmd) -ErrorAction SilentlyContinue)) { $installed = $true; break }
         }
     }
+    # Fallback barato p/ pacotes winget instalados como portable/zip (ex.: OBS) fora dos ProbePaths.
+    if (-not $installed -and -not [string]::IsNullOrWhiteSpace($WingetId) -and (Test-BootstrapWingetPortableArtifact -Id $WingetId)) {
+        $installed = $true
+    }
 
     if (-not $installed) { return 'not-installed' }
 
@@ -5776,6 +5781,22 @@ function Get-BootstrapItemStatus {
     $cachedRank = Get-BootstrapItemStatusRank -Status $cachedStatus
     if ($cachedRank -ge (Get-BootstrapItemStatusRank -Status 'configured')) { return $cachedStatus }
     return 'installed-unconfigured'
+}
+
+function Get-BootstrapComponentStatusMap {
+    # Mapa name->status (5 estados) recomputado ao vivo para todos os componentes, com cache fresco
+    # e deteccao enriquecida (ProbePaths + winget-portable). Usado pelo "Atualizar status" da UI.
+    $cache = Read-BootstrapItemStatusCache
+    $catalog = Get-BootstrapComponentCatalog
+    $map = [ordered]@{}
+    foreach ($name in @($catalog.Keys)) {
+        $def = $catalog[$name]
+        $probe = @()
+        if ($def.PSObject.Properties.Name -contains 'ProbePaths') { $probe = @($def.ProbePaths) }
+        $wid = if ($def.PSObject.Properties.Name -contains 'Id') { [string]$def.Id } else { '' }
+        $map[[string]$name] = Get-BootstrapItemStatus -Kind 'app' -Id ([string]$def.Name) -ProbePaths $probe -WingetId $wid -Cache $cache
+    }
+    return $map
 }
 
 function Test-BootstrapAppxPackageInstalled {
@@ -13669,7 +13690,8 @@ function Get-BootstrapUiContract {
         if ($requiresInteractiveLogin) { $badges.Add('Requer login') | Out-Null }
         $componentProbePaths = @()
         if ($componentDef.PSObject.Properties.Name -contains 'ProbePaths') { $componentProbePaths = @($componentDef.ProbePaths) }
-        $componentStatus = Get-BootstrapItemStatus -Kind 'app' -Id ([string]$componentDef.Name) -ProbePaths $componentProbePaths -Cache $statusCache
+        $componentWingetId = if ($componentDef.PSObject.Properties.Name -contains 'Id') { [string]$componentDef.Id } else { '' }
+        $componentStatus = Get-BootstrapItemStatus -Kind 'app' -Id ([string]$componentDef.Name) -ProbePaths $componentProbePaths -WingetId $componentWingetId -Cache $statusCache
         [ordered]@{
             name = $componentDef.Name
             description = $componentDef.Description
