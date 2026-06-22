@@ -275,3 +275,60 @@ function Get-SteamDeckSteamInputConflictAudit {
         reason = 'Desktop Layout ativo no Steam pode duplicar input quando outro stack controla mouse/controle no Windows.'
     }
 }
+
+function Get-SteamDeckModeWatcherDecision {
+    <#
+    .SYNOPSIS
+        Logica pura de debounce/cooldown do ModeWatcher: dada a deteccao atual e o estado,
+        decide se um novo modo deve ser aplicado. Sem efeitos colaterais (testavel).
+    #>
+    param(
+        [AllowNull()][string]$DetectedMode,
+        [AllowNull()]$State,
+        [int]$StableSamples = 2,
+        [int]$CooldownSeconds = 5,
+        [Nullable[datetime]]$Now = $null
+    )
+
+    if ($null -eq $Now) { $Now = Get-Date }
+
+    $s = @{ lastCandidateMode = $null; candidateCount = 0; lastAppliedMode = $null; lastAppliedAt = $null }
+    if ($null -ne $State) {
+        foreach ($k in @('lastCandidateMode', 'candidateCount', 'lastAppliedMode', 'lastAppliedAt')) {
+            $v = Get-SteamDeckSettingMember -Object $State -Name $k -Default $null
+            if ($null -ne $v) { $s[$k] = $v }
+        }
+    }
+
+    # Debounce: conta amostras consecutivas do mesmo modo; troca de modo reinicia a contagem.
+    if ([string]$s['lastCandidateMode'] -eq [string]$DetectedMode) {
+        $s['candidateCount'] = [int]$s['candidateCount'] + 1
+    } else {
+        $s['lastCandidateMode'] = $DetectedMode
+        $s['candidateCount'] = 1
+    }
+
+    # Cooldown: evita reaplicar logo apos a ultima aplicacao.
+    $cooldownReady = $true
+    if ($s['lastAppliedAt']) {
+        try {
+            $cooldownReady = (($Now - [datetime]$s['lastAppliedAt']).TotalSeconds -ge $CooldownSeconds)
+        } catch {
+            $cooldownReady = $true
+        }
+    }
+
+    $shouldApply = (
+        ([int]$s['candidateCount'] -ge $StableSamples) -and
+        $cooldownReady -and
+        ([string]$s['lastAppliedMode'] -ne [string]$DetectedMode) -and
+        (-not [string]::IsNullOrWhiteSpace([string]$DetectedMode))
+    )
+
+    return [ordered]@{
+        State = $s
+        ShouldApply = [bool]$shouldApply
+        ApplyMode = $(if ($shouldApply) { [string]$DetectedMode } else { '' })
+        CooldownReady = [bool]$cooldownReady
+    }
+}
