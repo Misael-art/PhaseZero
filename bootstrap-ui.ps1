@@ -830,6 +830,52 @@ function ConvertTo-UiCanonicalStatus {
     }
 }
 
+function Get-UiAppTuningCanonicalStatus {
+    # Mapeia os estados do AppTuning (installed/configured/updated) para os 5 estados canonicos.
+    param([string]$Installed, [string]$Configured, [string]$Updated)
+    $inst = ([string]$Installed).Trim().ToLowerInvariant()
+    $conf = ([string]$Configured).Trim().ToLowerInvariant()
+    $upd = ([string]$Updated).Trim().ToLowerInvariant()
+    if ($inst -eq 'missing' -or [string]::IsNullOrWhiteSpace($inst)) { return 'not-installed' }
+    if ($conf -eq 'not-configured') { return 'installed-unconfigured' }
+    if ($conf -in @('configured', 'planned')) {
+        if ($upd -in @('current', 'ok', 'up-to-date', 'updated', 'optimized')) { return 'optimized-tested' }
+        return 'configured'
+    }
+    return 'installed-unconfigured'
+}
+
+function Get-UiApiCanonicalStatus {
+    # Mapeia o estado de validacao de credencial/provider para os 5 estados canonicos.
+    param([string]$State)
+    switch (([string]$State).Trim().ToLowerInvariant()) {
+        'passed' { return 'optimized-tested' }
+        'failed' { return 'error' }
+        'rejected' { return 'error' }
+        'expired' { return 'error' }
+        'error' { return 'error' }
+        'pending' { return 'installed-unconfigured' }
+        'running' { return 'installed-unconfigured' }
+        'untested' { return 'installed-unconfigured' }
+        default { return 'not-installed' }
+    }
+}
+
+function Get-UiHealthTextCanonicalStatus {
+    # Deriva o estado canonico a partir do rotulo no texto "Card: LABEL - detalhe".
+    param([string]$Text)
+    $t = [string]$Text
+    $label = if ($t -match ':\s*([^-\r\n]+)') { ($matches[1]).Trim() } else { $t.Trim() }
+    switch -Regex ($label) {
+        '^OK$'                  { return 'optimized-tested' }
+        '^Aten'                 { return 'installed-unconfigured' }
+        '^(Critico|Cr.tico)$'   { return 'error' }
+        '^Bloqueado$'           { return 'error' }
+        '^Ausente$'             { return 'not-installed' }
+        default                 { return '' }
+    }
+}
+
 #
 # XAML Definition
 #
@@ -1777,6 +1823,13 @@ function ConvertTo-UiCanonicalStatus {
                 <StackPanel>
                     <TextBlock x:Name="HealthTitleLabel" Style="{StaticResource PageTitle}" Text="Saúde"/>
                     <TextBlock x:Name="HealthSummaryLabel" Style="{StaticResource PageSubtitle}" Text="Diagnóstico local, pacote de suporte e fila manual de reparo." TextWrapping="Wrap"/>
+                    <WrapPanel Margin="0,0,0,10">
+                        <TextBlock Text="Apos rodar Doctor:" Foreground="#94A3B8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="&#9679; OK" Foreground="#22C55E" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; atencao" Foreground="#FACC15" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; ausente" Foreground="#FFFFFF" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; critico/bloqueado" Foreground="#EF4444" FontSize="11" Margin="0,0,10,0"/>
+                    </WrapPanel>
 
                     <Border Style="{StaticResource Card}" Margin="0,0,0,16">
                         <StackPanel>
@@ -1894,6 +1947,13 @@ function ConvertTo-UiCanonicalStatus {
                 <StackPanel>
                     <TextBlock x:Name="AppTuningTitleLabel" Style="{StaticResource PageTitle}" Text="Otimizar Apps"/>
                     <TextBlock x:Name="AppTuningSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Pre-configure ferramentas instaladas por categoria e perfil, com defaults seguros." TextWrapping="Wrap"/>
+                    <WrapPanel Margin="0,0,0,10">
+                        <TextBlock Text="Status:" Foreground="#94A3B8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="&#9679; nao instalado" Foreground="#FFFFFF" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; nao configurado" Foreground="#FACC15" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; configurado" Foreground="#3B82F6" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; otimizado/atualizado" Foreground="#22C55E" FontSize="11" Margin="0,0,10,0"/>
+                    </WrapPanel>
 
                     <Border Style="{StaticResource Card}" Margin="0,0,0,14">
                     <Grid>
@@ -2041,6 +2101,13 @@ function ConvertTo-UiCanonicalStatus {
                 <StackPanel>
                     <TextBlock x:Name="ApiCenterTitleLabel" Style="{StaticResource PageTitle}" Text="Central de APIs"/>
                     <TextBlock Style="{StaticResource PageSubtitle}" Text="Inventario seguro de chaves, validacao, rotacao e uso por app. Segredos ficam mascarados por padrao." TextWrapping="Wrap"/>
+                    <WrapPanel Margin="0,0,0,10">
+                        <TextBlock Text="Validacao:" Foreground="#94A3B8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="&#9679; sem credencial" Foreground="#FFFFFF" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; pendente" Foreground="#FACC15" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; validada" Foreground="#22C55E" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; falhou/expirou" Foreground="#EF4444" FontSize="11" Margin="0,0,10,0"/>
+                    </WrapPanel>
 
                     <Border Background="#1A1D2E" CornerRadius="10" Padding="14,10" Margin="0,0,0,14">
                         <DockPanel>
@@ -4196,11 +4263,12 @@ function Refresh-AppTuningControls {
                 installedStateRaw = [string]$item.installedState
                 configuredStateRaw = [string]$item.configuredState
                 updatedStateRaw = [string]$item.updatedState
+                statusCanonical = (Get-UiAppTuningCanonicalStatus -Installed ([string]$item.installedState) -Configured ([string]$item.configuredState) -Updated ([string]$item.updatedState))
                 admin = [string]$item.requiresAdmin
                 installComponents = (@($item.installComponents) -join ', ')
             })
         }
-        Load-WpfGridRows -Grid $ui.AppTuningItemsGrid -Items $rows -Columns @('active','id','installComponents','category','app','optimization','description','profile','risk','badges','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','installedStateRaw','configuredStateRaw','updatedStateRaw','admin')
+        Load-WpfGridRows -Grid $ui.AppTuningItemsGrid -Items $rows -Columns @('active','id','installComponents','category','app','optimization','description','profile','risk','badges','securityImpact','rollbackScope','safetyNotes','installed','configured','updated','installedStateRaw','configuredStateRaw','updatedStateRaw','statusCanonical','admin')
         $installedCount = @($statusRows | Where-Object { [string]$_.installedState -eq 'installed' }).Count
         $configuredCount = @($statusRows | Where-Object { [string]$_.configuredState -in @('configured','planned') }).Count
         $securityImpactCount = @($plan.items | Where-Object { [bool]$_.securityImpact }).Count
@@ -5171,6 +5239,7 @@ function Refresh-ApiCenterControls {
                 total = [string]$provider.totalCredentials
                 active = [string]$provider.activeCredentialId
                 state = [string]$provider.activeValidationState
+                statusCanonical = (Get-UiApiCanonicalStatus -State ([string]$provider.activeValidationState))
                 autoApps = (@($provider.autoAppliedApps) -join ', ')
                 manualApps = (@($provider.manualOnlyApps) -join ', ')
             })
@@ -5181,6 +5250,7 @@ function Refresh-ApiCenterControls {
                     display = [string]$credential.displayName
                     active = [string]$credential.active
                     state = [string]$credential.validationState
+                    statusCanonical = (Get-UiApiCanonicalStatus -State ([string]$credential.validationState))
                     preview = [string]$credential.secretPreview
                 })
             }
@@ -5228,8 +5298,8 @@ function Refresh-ApiCenterControls {
             })
         }
 
-        Load-WpfGridRows -Grid $ui.ApiProviderSummaryGrid -Items $providerRows -Columns @('provider','total','active','state','autoApps','manualApps')
-        Load-WpfGridRows -Grid $ui.ApiCredentialGrid -Items $credentialRows -Columns @('provider','id','display','active','state','preview')
+        Load-WpfGridRows -Grid $ui.ApiProviderSummaryGrid -Items $providerRows -Columns @('provider','total','active','state','statusCanonical','autoApps','manualApps')
+        Load-WpfGridRows -Grid $ui.ApiCredentialGrid -Items $credentialRows -Columns @('provider','id','display','active','state','statusCanonical','preview')
         Load-WpfGridRows -Grid $ui.ApiUsageGrid -Items $usageRows -Columns @('app','autoApplied','manualOnly','available')
         Load-WpfGridRows -Grid $ui.ApiCreateGrid -Items $createRows -Columns @('provider','fields','signup','docs')
         Refresh-ApiProviderCombos
@@ -6661,6 +6731,20 @@ function Finalize-RunFromResult {
             $ui.HealthAiMemoryStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'ai-memory'
             $ui.HealthAionUiStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'aionui'
             $ui.HealthRollbackStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'rollback'
+            # Guia visual: aplica a logica de 5 cores ao status de cada card apos a verificacao.
+            foreach ($healthTb in @(
+                $ui.HealthWslStatusText, $ui.HealthWingetStatusText, $ui.HealthRebootStatusText,
+                $ui.HealthSecretsStatusText, $ui.HealthDeckStatusText, $ui.HealthGithubStatusText,
+                $ui.HealthAiUsagebarStatusText, $ui.HealthAiMemoryStatusText, $ui.HealthAionUiStatusText,
+                $ui.HealthRollbackStatusText)) {
+                if ($null -eq $healthTb) { continue }
+                $canon = Get-UiHealthTextCanonicalStatus -Text ([string]$healthTb.Text)
+                if (-not [string]::IsNullOrWhiteSpace($canon)) {
+                    $healthTb.Foreground = Get-UiStatusBrush -Status $canon
+                } else {
+                    $healthTb.Foreground = Get-UiBrush '#CBD5E1'
+                }
+            }
             $ui.HealthDoctorTextBox.Text = ($result | ConvertTo-Json -Depth 8)
         }
     } catch {
