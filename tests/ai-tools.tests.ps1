@@ -486,7 +486,7 @@ Describe 'AI coding tool support' {
         $raw = Get-Content -LiteralPath $uiScriptPath -Raw
 
         $raw | Should Match 'AI Coding Tools'
-        foreach ($name in @('PageAiTools','AiToolsGrid','AiToolsInstallButton','AiToolsValidateButton','AiToolsConfigureButton','AiToolsUninstallButton','AiToolsDocsButton','AiToolsStatusLabel')) {
+        foreach ($name in @('PageAiTools','AiToolsGrid','AiToolsInstallButton','AiToolsValidateButton','AiToolsConfigureButton','AiToolsUninstallButton','AiToolsClearButton','AiToolsDocsButton','AiToolsStatusLabel')) {
             $raw | Should Match $name
         }
         $raw | Should Not Match 'Configurao|Verso|RPIDOS|Configuraes|sade|Resolucao'

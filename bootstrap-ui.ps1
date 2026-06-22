@@ -1991,15 +1991,16 @@ function ConvertTo-UiCanonicalStatus {
             <ScrollViewer x:Name="PageAiTools" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
                     <TextBlock x:Name="AiToolsTitleLabel" Style="{StaticResource PageTitle}" Text="AI Coding Tools"/>
-                    <TextBlock x:Name="AiToolsSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Marque uma ou mais ferramentas e instale, valide, configure, desinstale ou abra docs oficiais." TextWrapping="Wrap"/>
+                    <TextBlock x:Name="AiToolsSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Marque (coluna Ativo) uma ou mais ferramentas; as acoes abaixo atuam em TODAS as marcadas. Use Limpar selecao para desmarcar tudo." TextWrapping="Wrap"/>
 
                     <Border Background="#1A1D2E" CornerRadius="8" Padding="14,10" Margin="0,0,0,14">
                         <DockPanel>
                             <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right">
-                                <Button x:Name="AiToolsInstallButton" Style="{StaticResource GhostBtn}" Content="Instalar marcadas" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsInstallButton" Style="{StaticResource PrimaryBtn}" Content="Instalar marcadas" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsConfigureButton" Style="{StaticResource GhostBtn}" Content="Configurar marcadas" Margin="0,0,8,0" Height="32"/>
                                 <Button x:Name="AiToolsValidateButton" Style="{StaticResource GhostBtn}" Content="Validar marcadas" Margin="0,0,8,0" Height="32"/>
-                                <Button x:Name="AiToolsConfigureButton" Style="{StaticResource PrimaryBtn}" Content="Configurar marcadas" Margin="0,0,8,0" Height="32"/>
                                 <Button x:Name="AiToolsUninstallButton" Style="{StaticResource GhostBtn}" Foreground="{StaticResource WarnBrush}" Content="Desinstalar marcadas" Margin="0,0,8,0" Height="32"/>
+                                <Button x:Name="AiToolsClearButton" Style="{StaticResource GhostBtn}" Content="Limpar selecao" Margin="0,0,8,0" Height="32"/>
                                 <Button x:Name="AiToolsDocsButton" Style="{StaticResource GhostBtn}" Content="Abrir docs" Height="32"/>
                             </WrapPanel>
                             <TextBlock x:Name="AiToolsStatusLabel" Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center"/>
@@ -2834,6 +2835,7 @@ $ui = [ordered]@{
     AiToolsValidateButton = (Get-Control 'AiToolsValidateButton')
     AiToolsConfigureButton = (Get-Control 'AiToolsConfigureButton')
     AiToolsUninstallButton = (Get-Control 'AiToolsUninstallButton')
+    AiToolsClearButton    = (Get-Control 'AiToolsClearButton')
     AiToolsDocsButton     = (Get-Control 'AiToolsDocsButton')
 
     # API Center
@@ -5082,11 +5084,23 @@ function Invoke-UiAiToolAction {
 
     $toolNames = @(Get-SelectedAiToolNameList)
     if ($toolNames.Count -eq 0) {
-        $ui.AiToolsStatusLabel.Text = 'Marque uma ou mais ferramentas.'
+        $ui.AiToolsStatusLabel.Text = 'Nenhuma ferramenta marcada. Marque na coluna Ativo (ou selecione uma linha) e tente de novo.'
         return
     }
-    if ($Action -eq 'uninstall') {
-        if (-not (Confirm-UiCriticalAction -Title 'Confirmar desinstalação' -Message "Desinstalar artefatos gerenciados pelo projeto para: $(@($toolNames) -join ', ')")) { return }
+    # Confirma acoes mutadoras listando exatamente as ferramentas afetadas, para evitar acao
+    # acidental quando ha varias marcadas (a marcacao persiste entre sessoes).
+    $actionVerb = switch ($Action) {
+        'install'   { 'Instalar' }
+        'configure' { 'Configurar/otimizar' }
+        'uninstall' { 'Desinstalar (remove artefatos gerenciados)' }
+        default     { '' }
+    }
+    if (-not [string]::IsNullOrWhiteSpace($actionVerb)) {
+        $list = (@($toolNames) -join ', ')
+        if (-not (Confirm-UiCriticalAction -Title ("Confirmar: {0}" -f $Action) -Message ("{0} {1} ferramenta(s) marcada(s):`n`n{2}" -f $actionVerb, @($toolNames).Count, $list))) {
+            $ui.AiToolsStatusLabel.Text = ("Acao '{0}' cancelada. {1} marcada(s): {2}" -f $Action, @($toolNames).Count, (@($toolNames) -join ', '))
+            return
+        }
     }
 
     $summaries = @()
@@ -5127,6 +5141,20 @@ function Open-SelectedAiToolDocumentation {
         $ui.AiToolsStatusLabel.Text = "Docs abertas: $(@($opened) -join ', ')"
     } catch {
         $ui.AiToolsStatusLabel.Text = "Erro ao abrir docs: $($_.Exception.Message)"
+    }
+}
+
+function Clear-UiAiToolSelection {
+    # Desmarca todas as ferramentas (estado persistido + grid) e atualiza o status.
+    # Le primeiro o grid para contar corretamente as marcacoes atuais (ainda nao sincronizadas).
+    $previous = @(Read-AiToolSelectionFromControl)
+    $ui.State.selectedAiTools = @()
+    Save-UiState -State $ui.State -Path $UiStatePath
+    Refresh-AiToolsControls
+    if (@($previous).Count -gt 0) {
+        $ui.AiToolsStatusLabel.Text = ("Selecao limpa ({0} desmarcada(s))." -f @($previous).Count)
+    } else {
+        $ui.AiToolsStatusLabel.Text = 'Nenhuma ferramenta estava marcada.'
     }
 }
 
@@ -7714,6 +7742,7 @@ $ui.AiToolsInstallButton.Add_Click({ Invoke-UiAiToolAction -Action 'install' })
 $ui.AiToolsValidateButton.Add_Click({ Invoke-UiAiToolAction -Action 'validate' })
 $ui.AiToolsConfigureButton.Add_Click({ Invoke-UiAiToolAction -Action 'configure' })
 $ui.AiToolsUninstallButton.Add_Click({ Invoke-UiAiToolAction -Action 'uninstall' })
+$ui.AiToolsClearButton.Add_Click({ Clear-UiAiToolSelection })
 $ui.AiToolsDocsButton.Add_Click({ Open-SelectedAiToolDocumentation })
 
 # Steam Deck control
