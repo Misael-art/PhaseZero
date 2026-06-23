@@ -52,6 +52,14 @@ Describe 'Bootstrap UI launcher' {
         $raw | Should Not Match '\$result\s*=\s*Invoke-BootstrapMcpConfigRepair\s*\r?\n\s*\$verify\s*=\s*Invoke-BootstrapMcpConfigRepair -DryRun'
     }
 
+    It 'agrupa os perfis por familia na arvore de perfis (Servidor caseiro)' {
+        $raw = Get-Content -LiteralPath $uiScriptPath -Raw
+
+        $raw | Should Match '\$familyNodes'
+        $raw | Should Match '\$profile\.family'
+        $raw | Should Match '\$familyNodes\[\$familyName\]\.Items\.Add'
+    }
+
     It 'supports smoke test execution from Windows PowerShell file mode' {
         $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $uiStatePath = Join-Path $script:TestDataRoot 'ui-state.json'

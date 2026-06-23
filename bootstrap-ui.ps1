@@ -3845,9 +3845,23 @@ function Refresh-SelectionTrees {
     $ui.SuppressSelectionEvents = $true
     try {
         $ui.ProfilesTree.Items.Clear()
+        $familyNodes = [ordered]@{}
         foreach ($profile in @($ui.Contract.profiles | Where-Object {
             Test-UiContractSelectionFilter -Name ([string]$_.name) -Description ([string]$_.description) -FilterNormalized $filter
         })) {
+            $familyName = [string]$profile.family
+            if ([string]::IsNullOrWhiteSpace($familyName)) { $familyName = 'Geral' }
+            if (-not $familyNodes.Contains($familyName)) {
+                $familyItem = New-Object System.Windows.Controls.TreeViewItem
+                $familyHeader = New-Object System.Windows.Controls.TextBlock
+                $familyHeader.Text = $familyName
+                $familyHeader.FontWeight = 'Bold'
+                $familyHeader.Foreground = Get-UiBrush '#94A3B8'
+                $familyItem.Header = $familyHeader
+                $familyItem.IsExpanded = $true
+                $familyNodes[$familyName] = $familyItem
+                [void]$ui.ProfilesTree.Items.Add($familyItem)
+            }
             $item = New-Object System.Windows.Controls.TreeViewItem
             $item.Header   = $profile.name
             $item.Tag      = @{ kind = 'profile'; item = $profile }
@@ -3884,7 +3898,7 @@ function Refresh-SelectionTrees {
                     $ui.DetailsTextBox.Text = Get-SelectionDetailsText -Item $this.Tag.item -Kind $this.Tag.kind
                 }
             })
-            [void]$ui.ProfilesTree.Items.Add($item)
+            [void]$familyNodes[$familyName].Items.Add($item)
         }
 
         $ui.ComponentsTree.Items.Clear()
