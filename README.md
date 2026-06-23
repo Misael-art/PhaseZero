@@ -86,6 +86,19 @@ Diagnostico local:
 - `full-workstation`: perfil amplo com stacks desktop, IA, containers, creator, social e utilitarios. Nunca deve ser default silencioso.
 - `legacy`: compatibilidade com fluxo historico.
 
+### Servidor caseiro (mantem o Windows; nao e Umbrel/DietPi)
+
+Familia de perfis que transforma o PC **mantendo o Windows** (homelab via Docker/WSL2 + Tailscale; o SO **nao** e substituido). 6 modos:
+
+- `server-llm`: LLM local (Ollama) + Windows enxugado (menor RAM, reversivel).
+- `server-homelab`: servidor caseiro (Drive/midia/cofre/monitor) via Docker/WSL2 + acesso remoto Tailscale.
+- `server-homelab-hermes`: servidor caseiro + Hermes para atuacao remota.
+- `server-llm-hermes`: LLM local + Hermes remoto, com SO enxugado.
+- `server-llm-homelab`: LLM local + servidor caseiro, com SO enxugado.
+- `server-llm-homelab-hermes`: tudo combinado, com SO enxugado.
+
+Componentes envolvidos (opt-in): `os-slim-server` (enxuga RAM, reversivel via `-Rollback`), `homelab-stack` (core leve: Portainer/Jellyfin/Syncthing/Vaultwarden/Uptime Kuma; extras opt-in: Nextcloud/Grafana/Paperless-ngx/n8n), `hermes-remote` (Hermes + Tailscale), e o add-on opt-in `llamacpp-server` (offload hibrido GPU/CPU). Segredos sempre via `.env`/ambiente, nunca embutidos. Exponha os servicos apenas pela rede Tailscale.
+
 ## Transcricoes tecnicas
 
 - Matriz fechada: `docs/video-transcript-integration.md` cobre 58 titulos com Destino final definido.
