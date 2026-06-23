@@ -28,10 +28,17 @@ Describe 'Windows home server: profiles' {
             foreach ($item in @($profiles[$name].Items)) { $catalog.Contains($item) | Should Be $true }
         }
     }
-    It 'expoe os 6 perfis de servidor no contrato da UI/CLI' {
+    It 'expoe os 6 perfis de servidor no contrato da UI/CLI com a familia "Servidor caseiro"' {
         $contract = Get-BootstrapUiContract
         $names = @($contract.profiles | ForEach-Object { [string]$_.name })
         foreach ($p in $expected.Keys) { $names -contains $p | Should Be $true }
+        foreach ($entry in @($contract.profiles | Where-Object { [string]$_.name -like 'server-*' })) {
+            [string]$entry.family | Should Be 'Servidor caseiro'
+        }
+        # cada entrada de perfil tem o campo family
+        foreach ($entry in @($contract.profiles)) {
+            ($entry.PSObject.Properties.Name -contains 'family') -or ($entry.Contains('family')) | Should Be $true
+        }
     }
     It 'resolve o perfil mais completo a componentes (com dependencias) sem erro' {
         $res = Resolve-BootstrapComponents -SelectedProfiles @('server-llm-homelab-hermes')
@@ -123,6 +130,27 @@ Describe 'Windows home server: llama.cpp offload autocalc' {
         $catalog.Contains('llamacpp-server') | Should Be $true
         [bool]$catalog['llamacpp-server'].Optional | Should Be $true
     }
+    It 'seleciona o asset Windows x64 correto por preferencia de GPU' {
+        $assets = @(
+            'cudart-llama-bin-win-cu12.4-x64.zip',
+            'llama-b4458-bin-win-cuda-cu12.4-x64.zip',
+            'llama-b4458-bin-win-vulkan-x64.zip',
+            'llama-b4458-bin-win-cpu-x64.zip',
+            'llama-b4458-bin-win-hip-radeon-x64.zip',
+            'llama-b4458-bin-ubuntu-x64.zip'
+        )
+        Select-BootstrapLlamaCppAsset -AssetNames $assets -Prefer 'cuda' | Should Be 'llama-b4458-bin-win-cuda-cu12.4-x64.zip'
+        Select-BootstrapLlamaCppAsset -AssetNames $assets -Prefer 'vulkan' | Should Be 'llama-b4458-bin-win-vulkan-x64.zip'
+        Select-BootstrapLlamaCppAsset -AssetNames $assets -Prefer 'cpu' | Should Be 'llama-b4458-bin-win-cpu-x64.zip'
+    }
+    It 'nunca escolhe o cudart (runtime) como binario principal' {
+        $assets = @('cudart-llama-bin-win-cu12.4-x64.zip')
+        Select-BootstrapLlamaCppAsset -AssetNames $assets -Prefer 'cuda' | Should Be $null
+    }
+    It 'retorna null quando nao ha asset Windows x64' {
+        Select-BootstrapLlamaCppAsset -AssetNames @('llama-b4458-bin-ubuntu-x64.zip', 'llama-b4458-bin-macos-arm64.zip') -Prefer 'cpu' | Should Be $null
+    }
+
     It 'o launcher run-llamacpp.ps1 existe e tem fallback de offload' {
         $launcher = Join-Path (Split-Path -Parent $scriptPath) 'assets/home-server/run-llamacpp.ps1'
         Test-Path $launcher | Should Be $true

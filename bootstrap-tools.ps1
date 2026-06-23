@@ -7822,6 +7822,40 @@ function Get-BootstrapLlamaOffloadPlan {
     return [ordered]@{ gpuLayers = 0; cpuThreads = $physicalCores; lowVram = $true; insufficient = $true; vramUtilGB = $vramUtil }
 }
 
+function Select-BootstrapLlamaCppAsset {
+    # Escolhe o asset Windows x64 do release do llama.cpp conforme a preferencia de GPU. Deterministico
+    # (testavel). Exclui o pacote 'cudart' (runtime CUDA, nao o binario principal). Retorna $null se nao
+    # houver asset Windows x64 adequado.
+    param(
+        [string[]]$AssetNames,
+        [ValidateSet('cuda', 'vulkan', 'cpu')][string]$Prefer = 'cpu'
+    )
+
+    $win = @($AssetNames | Where-Object { $_ -match 'bin-win' -and $_ -match 'x64' -and $_ -notmatch '^cudart' })
+    if (@($win).Count -eq 0) { return $null }
+
+    $order = switch ($Prefer) {
+        'cuda'   { @('bin-win-cuda', 'bin-win-vulkan', 'bin-win-cpu') }
+        'vulkan' { @('bin-win-vulkan', 'bin-win-cpu') }
+        default  { @('bin-win-cpu') }
+    }
+    foreach ($pat in $order) {
+        $hit = @($win | Where-Object { $_ -match [regex]::Escape($pat) }) | Select-Object -First 1
+        if ($hit) { return [string]$hit }
+    }
+    return $null
+}
+
+function Get-BootstrapLlamaCppGpuPreference {
+    # Detecta o fornecedor da GPU para escolher o build do llama.cpp (cuda/vulkan/cpu). Best-effort.
+    $names = @()
+    try { $names = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction Stop | ForEach-Object { [string]$_.Name }) } catch { $names = @() }
+    $joined = ($names -join ' ').ToLowerInvariant()
+    if ($joined -match 'nvidia|geforce|rtx|quadro|tesla') { return 'cuda' }
+    if ($joined -match 'amd|radeon|intel|arc') { return 'vulkan' }
+    return 'cpu'
+}
+
 function Ensure-BootstrapLlamaCppServer {
     # Componente opt-in (experimental): provisiona o launcher resiliente do llama.cpp para servir um
     # LLM local em :8080 com offload hibrido GPU/CPU. Baixa do release oficial fica como passo guiado
@@ -7845,7 +7879,35 @@ function Ensure-BootstrapLlamaCppServer {
     } else {
         Write-Log ("llama.cpp server: launcher-fonte ausente: {0}" -f $launcherSrc) 'WARN'
     }
-    Write-Log 'llama.cpp server: baixe o release oficial (llama-server.exe) em https://github.com/ggml-org/llama.cpp/releases e um modelo GGUF; rode run-llamacpp.ps1 -ModelPath <gguf>. O launcher reduz --n-gpu-layers automaticamente em caso de estouro de VRAM.'
+    # Fetch real do binario (best-effort, NAO-FATAL): release oficial -> asset por GPU detectada.
+    try {
+        $pref = Get-BootstrapLlamaCppGpuPreference
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/ggml-org/llama.cpp/releases/latest' -Headers @{ 'User-Agent' = 'PhaseZero-Bootstrap' } -ErrorAction Stop
+        $assetNames = @($rel.assets | ForEach-Object { [string]$_.name })
+        $pick = Select-BootstrapLlamaCppAsset -AssetNames $assetNames -Prefer $pref
+        if ($pick) {
+            $assetObj = @($rel.assets | Where-Object { [string]$_.name -eq $pick })[0]
+            $dlUrl = [string]$assetObj.browser_download_url
+            $downloadRoot = Join-Path $targetDir 'downloads'
+            [void][System.IO.Directory]::CreateDirectory($downloadRoot)
+            $zipPath = Join-Path $downloadRoot $pick
+            Write-Log ("llama.cpp server: baixando build '{0}' ({1}, GPU={2})..." -f $pick, [string]$rel.tag_name, $pref)
+            Invoke-WebRequest -Uri $dlUrl -OutFile $zipPath -UseBasicParsing -Headers @{ 'User-Agent' = 'PhaseZero-Bootstrap' } -ErrorAction Stop
+            Expand-Archive -LiteralPath $zipPath -DestinationPath $targetDir -Force
+            $serverExe = Get-ChildItem -LiteralPath $targetDir -Recurse -Filter 'llama-server.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($serverExe) {
+                Write-Log ("llama.cpp server: binario instalado em {0} (build {1})." -f $serverExe.FullName, [string]$rel.tag_name)
+            } else {
+                Write-Log 'llama.cpp server: zip extraido, mas llama-server.exe nao encontrado; verifique o release.' 'WARN'
+            }
+        } else {
+            Write-Log ("llama.cpp server: nenhum asset Windows x64 adequado no release (GPU={0}); baixe manualmente." -f $pref) 'WARN'
+        }
+    } catch {
+        Write-Log ("llama.cpp server: download automatico do binario falhou ({0}); use o passo guiado manual." -f $_.Exception.Message) 'WARN'
+    }
+    Write-Log 'llama.cpp server: baixe um modelo GGUF e rode run-llamacpp.ps1 -ModelPath <gguf>. O launcher reduz --n-gpu-layers automaticamente em caso de estouro de VRAM.'
 }
 
 function Ensure-BootstrapHermesRemote {
@@ -13986,6 +14048,15 @@ function New-BootstrapSelectionObject {
     }
 }
 
+function Get-BootstrapProfileFamily {
+    # Agrupa perfis em familias para a UI/CLI poderem rotular/agrupar (ex.: a familia de servidor).
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $n = [string]$Name
+    if ($n -match '^server-') { return 'Servidor caseiro' }
+    if ($n -match '^steamdeck-') { return 'Steam Deck' }
+    return 'Geral'
+}
+
 function Get-BootstrapUiContract {
     $profiles = Get-BootstrapProfileCatalog
     $components = Get-BootstrapComponentCatalog
@@ -14009,6 +14080,7 @@ function Get-BootstrapUiContract {
             name = $profileDef.Name
             description = $profileDef.Description
             items = @($profileDef.Items)
+            family = (Get-BootstrapProfileFamily -Name $profileDef.Name)
         }
     }
 
