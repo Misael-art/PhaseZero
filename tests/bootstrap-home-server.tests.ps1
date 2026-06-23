@@ -5,6 +5,38 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath -BootstrapUiLibraryMode
 
+Describe 'Windows home server: llama.cpp offload autocalc' {
+    It 'aloca todas as camadas na GPU quando o modelo cabe na VRAM' {
+        $p = Get-BootstrapLlamaOffloadPlan -VramGB 24 -RamGB 32 -ModelSizeGB 12 -TotalLayers 80
+        [int]$p.gpuLayers | Should Be 80
+        [bool]$p.lowVram | Should Be $false
+        [bool]$p.insufficient | Should Be $false
+    }
+    It 'faz split hibrido proporcional com margem quando o modelo excede a VRAM' {
+        $p = Get-BootstrapLlamaOffloadPlan -VramGB 8 -RamGB 32 -ModelSizeGB 20 -TotalLayers 80
+        ([int]$p.gpuLayers -gt 0 -and [int]$p.gpuLayers -lt 80) | Should Be $true
+        [bool]$p.lowVram | Should Be $true
+        [bool]$p.insufficient | Should Be $false
+    }
+    It 'sinaliza hardware insuficiente quando nem soma VRAM+RAM cabe' {
+        $p = Get-BootstrapLlamaOffloadPlan -VramGB 4 -RamGB 4 -ModelSizeGB 20 -TotalLayers 80
+        [bool]$p.insufficient | Should Be $true
+    }
+    It 'declara o componente llamacpp-server como opt-in' {
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('llamacpp-server') | Should Be $true
+        [bool]$catalog['llamacpp-server'].Optional | Should Be $true
+    }
+    It 'o launcher run-llamacpp.ps1 existe e tem fallback de offload' {
+        $launcher = Join-Path (Split-Path -Parent $scriptPath) 'assets/home-server/run-llamacpp.ps1'
+        Test-Path $launcher | Should Be $true
+        $raw = Get-Content $launcher -Raw
+        $raw | Should Match '--n-gpu-layers'
+        $raw | Should Match '--flash-attn'
+        $raw | Should Match '8080'
+    }
+}
+
 Describe 'Windows home server: os-slim-server' {
     It 'declara o componente os-slim-server como opt-in e do Kind correto' {
         $catalog = Get-BootstrapComponentCatalog

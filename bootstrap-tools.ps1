@@ -7792,6 +7792,62 @@ function Ensure-BootstrapOsSlimServer {
     Write-Log ("OS slim server: {0}." -f $(if ($dry) { 'plano calculado (dry-run)' } else { 'enxugamento reversivel aplicado' }))
 }
 
+function Get-BootstrapLlamaOffloadPlan {
+    # Calcula o plano de offload do llama.cpp (camadas na GPU vs CPU) para um modelo GGUF, dado o
+    # hardware. Deterministico e sem efeitos colaterais (testavel). Porta da logica do parecer tecnico.
+    param(
+        [Parameter(Mandatory = $true)][double]$VramGB,
+        [Parameter(Mandatory = $true)][double]$RamGB,
+        [Parameter(Mandatory = $true)][double]$ModelSizeGB,
+        [Parameter(Mandatory = $true)][int]$TotalLayers,
+        [double]$SystemMarginGB = 1.0
+    )
+
+    $vramUtil = $VramGB - $SystemMarginGB
+    $physicalCores = [Math]::Max(2, [int]([Environment]::ProcessorCount / 2))
+
+    # Cenario 1: o modelo cabe inteiro na VRAM utilizavel -> performance maxima.
+    if ($ModelSizeGB -lt $vramUtil) {
+        return [ordered]@{ gpuLayers = $TotalLayers; cpuThreads = 1; lowVram = $false; insufficient = $false; vramUtilGB = $vramUtil }
+    }
+
+    # Cenario 2: excede a VRAM mas cabe na soma VRAM+RAM -> split hibrido proporcional.
+    if ($ModelSizeGB -lt ($vramUtil + $RamGB)) {
+        $fraction = if ($ModelSizeGB -gt 0) { $vramUtil / $ModelSizeGB } else { 0 }
+        $gpuLayers = [Math]::Max(1, [int]($TotalLayers * $fraction) - 2)
+        return [ordered]@{ gpuLayers = $gpuLayers; cpuThreads = $physicalCores; lowVram = $true; insufficient = $false; vramUtilGB = $vramUtil }
+    }
+
+    # Cenario 3: nem a soma cabe.
+    return [ordered]@{ gpuLayers = 0; cpuThreads = $physicalCores; lowVram = $true; insufficient = $true; vramUtilGB = $vramUtil }
+}
+
+function Ensure-BootstrapLlamaCppServer {
+    # Componente opt-in (experimental): provisiona o launcher resiliente do llama.cpp para servir um
+    # LLM local em :8080 com offload hibrido GPU/CPU. Baixa do release oficial fica como passo guiado
+    # (driver/binarios de terceiros); o componente garante o launcher e instrucoes. Respeita -DryRun.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $dry = [bool]$State.DryRun
+    $root = Get-BootstrapAiInstallRoot -InstallRoot ''
+    $targetDir = Join-Path $root 'llamacpp'
+    $launcherSrc = Join-Path $PSScriptRoot 'assets\home-server\run-llamacpp.ps1'
+    $launcherDst = Join-Path $targetDir 'run-llamacpp.ps1'
+
+    Write-Log ("llama.cpp server: {0} (destino {1})..." -f $(if ($dry) { 'dry-run' } else { 'provisionando launcher' }), $targetDir)
+    if ($dry) { return }
+
+    if (-not (Test-Path -LiteralPath $targetDir)) { $null = New-Item -Path $targetDir -ItemType Directory -Force }
+    if (Test-Path -LiteralPath $launcherSrc) {
+        Register-BootstrapFileChange -State $State -Target $launcherDst -Operation 'llamacpp-launcher' -Component 'llamacpp-server'
+        Copy-Item -LiteralPath $launcherSrc -Destination $launcherDst -Force
+        Write-Log ("llama.cpp server: launcher instalado em {0}" -f $launcherDst)
+    } else {
+        Write-Log ("llama.cpp server: launcher-fonte ausente: {0}" -f $launcherSrc) 'WARN'
+    }
+    Write-Log 'llama.cpp server: baixe o release oficial (llama-server.exe) em https://github.com/ggml-org/llama.cpp/releases e um modelo GGUF; rode run-llamacpp.ps1 -ModelPath <gguf>. O launcher reduz --n-gpu-layers automaticamente em caso de estouro de VRAM.'
+}
+
 function Install-BootstrapAiUsagebarComponent {
     param([Parameter(Mandatory = $true)][hashtable]$State)
     $null = $State
@@ -13577,6 +13633,8 @@ function Get-BootstrapComponentCatalog {
     # Enxuga o Windows para uso como servidor (menor RAM). Reversivel via -Rollback; nunca remove
     # arquivos do usuario nem desabilita o shell. Usado pelos perfis de servidor com LLM local.
     $catalog['os-slim-server'] = New-BootstrapComponentDefinition -Name 'os-slim-server' -Description 'Enxuga o Windows para servidor (desliga telemetria, busca, efeitos visuais, apps de fundo, Game Bar; tudo reversivel).' -Optional $true -DependsOn @('system-core') -Kind 'os-slim-server' -Data @{ DisplayName = 'Enxugar Windows (servidor)'; Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Reduz uso de RAM/IO para rodar LLM local ou servicos de servidor; reversivel via rollback.'; riskLevel = 'experimental' }
+    # llama.cpp server: LLM local opt-in com offload hibrido GPU/CPU e launcher resiliente (:8080).
+    $catalog['llamacpp-server'] = New-BootstrapComponentDefinition -Name 'llamacpp-server' -Description 'Servidor LLM local via llama.cpp (offload hibrido GPU/CPU, API OpenAI-compativel em :8080). Opt-in, experimental.' -Optional $true -DependsOn @('system-core') -Kind 'llamacpp-server' -RequiresNetwork $true -Data @{ DisplayName = 'llama.cpp server (LLM local)'; Stage = 'payload'; Provisioning = 'builtin'; ValueReason = 'Roda modelos GGUF grandes em hardware de consumo com controle fino de offload VRAM/RAM.'; riskLevel = 'experimental'; officialSource = 'https://github.com/ggml-org/llama.cpp'; manualReason = 'Exige baixar o release oficial (llama-server.exe) e um modelo GGUF manualmente; o componente instala o launcher resiliente e calcula o offload, mas o download do modelo e dos binarios e guiado.'; requiresGpu = $false; requiresInteractiveLogin = $false }
     $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar: monitor de uso/plano (TUI/CLI no Windows, Waybar no Linux) por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
     $catalog['ai-memory'] = New-BootstrapComponentDefinition -Name 'ai-memory' -Description 'AI Memory: memoria de longo prazo e handoff de contexto entre agentes via servidor loopback + MCP + hooks. Binario nativo Windows verificado ou fallback Cargo.' -DependsOn @('git-core', 'rustup') -Kind 'ai-memory' -EstimatedSizeGB 0.3 -RequiresNetwork $true
     $catalog['aionui'] = New-BootstrapComponentDefinition -Name 'aionui' -Description 'AionUI desktop app via winget oficial iOfficeAI.AionUi ou instalador oficial.' -Kind 'aionui' -EstimatedSizeGB 0.4 -RequiresNetwork $true
@@ -27715,6 +27773,9 @@ function Invoke-BootstrapComponent {
         }
         'os-slim-server' {
             Ensure-BootstrapOsSlimServer -State $State
+        }
+        'llamacpp-server' {
+            Ensure-BootstrapLlamaCppServer -State $State
         }
         'ai-usagebar' {
             Install-BootstrapAiUsagebarComponent -State $State
