@@ -7848,6 +7848,76 @@ function Ensure-BootstrapLlamaCppServer {
     Write-Log 'llama.cpp server: baixe o release oficial (llama-server.exe) em https://github.com/ggml-org/llama.cpp/releases e um modelo GGUF; rode run-llamacpp.ps1 -ModelPath <gguf>. O launcher reduz --n-gpu-layers automaticamente em caso de estouro de VRAM.'
 }
 
+function Get-BootstrapHomelabComposePath {
+    # Resolve o diretorio de estado do homelab-stack (onde os composes/.env sao copiados).
+    param([AllowNull()][hashtable]$State = $null)
+    $root = Get-BootstrapAiInstallRoot -InstallRoot ''
+    return (Join-Path (Join-Path $root 'homelab') 'docker-compose.homelab.yml')
+}
+
+function New-BootstrapHomelabSecret {
+    # Segredo aleatorio para o .env do homelab (nunca hardcode no compose). Sem dependencias externas.
+    return (([guid]::NewGuid().ToString('N')) + ([guid]::NewGuid().ToString('N')))
+}
+
+function Ensure-BootstrapHomelabStack {
+    # Provisiona o stack de homelab via Docker (backend WSL2): camada CORE leve (Portainer, Jellyfin,
+    # Syncthing, Vaultwarden, Uptime Kuma). Extras pesados (Nextcloud/Grafana/Paperless/n8n) ficam no
+    # compose de extras, aplicados manualmente/opt-in. Segredos gerados no .env (nunca inline). -DryRun.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $dry = [bool]$State.DryRun
+    $composeDst = Get-BootstrapHomelabComposePath -State $State
+    $stackDir = Split-Path -Parent $composeDst
+    $extrasDst = Join-Path $stackDir 'docker-compose.extras.yml'
+    $envPath = Join-Path $stackDir '.env'
+    $coreSrc = Join-Path $PSScriptRoot 'assets\home-server\docker-compose.homelab.yml'
+    $extrasSrc = Join-Path $PSScriptRoot 'assets\home-server\docker-compose.extras.yml'
+
+    Write-Log ("homelab-stack: {0} (destino {1})..." -f $(if ($dry) { 'dry-run' } else { 'provisionando' }), $stackDir)
+    if ($dry) { return }
+
+    if (-not (Test-Path -LiteralPath $stackDir)) { $null = New-Item -Path $stackDir -ItemType Directory -Force }
+
+    foreach ($pair in @(@{ Src = $coreSrc; Dst = $composeDst }, @{ Src = $extrasSrc; Dst = $extrasDst })) {
+        if (Test-Path -LiteralPath $pair.Src) {
+            Register-BootstrapFileChange -State $State -Target $pair.Dst -Operation 'homelab-compose' -Component 'homelab-stack'
+            Copy-Item -LiteralPath $pair.Src -Destination $pair.Dst -Force
+        } else {
+            Write-Log ("homelab-stack: compose-fonte ausente: {0}" -f $pair.Src) 'WARN'
+        }
+    }
+
+    # .env com segredos gerados (idempotente: nao rotaciona se ja existe). Nunca logar os valores.
+    if (-not (Test-Path -LiteralPath $envPath)) {
+        Register-BootstrapFileChange -State $State -Target $envPath -Operation 'homelab-env' -Component 'homelab-stack'
+        $envLines = @(
+            ("VW_ADMIN_TOKEN={0}" -f (New-BootstrapHomelabSecret)),
+            'VW_SIGNUPS_ALLOWED=false',
+            ("NEXTCLOUD_DB_ROOT_PASSWORD={0}" -f (New-BootstrapHomelabSecret)),
+            ("NEXTCLOUD_DB_PASSWORD={0}" -f (New-BootstrapHomelabSecret)),
+            ("GRAFANA_ADMIN_PASSWORD={0}" -f (New-BootstrapHomelabSecret)),
+            ("PAPERLESS_SECRET_KEY={0}" -f (New-BootstrapHomelabSecret)),
+            ("N8N_ENCRYPTION_KEY={0}" -f (New-BootstrapHomelabSecret))
+        )
+        [System.IO.File]::WriteAllText($envPath, ($envLines -join [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+        Write-Log 'homelab-stack: .env gerado com segredos aleatorios (valores mascarados).'
+    }
+
+    if (-not (Test-DockerReady)) {
+        Write-Log 'homelab-stack: Docker indisponivel (instale/abra Docker Desktop ou habilite docker no WSL2). Composes/.env prontos; suba manualmente com: docker compose -f docker-compose.homelab.yml up -d' 'WARN'
+        return
+    }
+
+    $dockerExe = [string](Resolve-CommandPath -Name 'docker')
+    $up = Invoke-BootstrapCommandCapture -Exe $dockerExe -Args @('compose', '--project-directory', $stackDir, '-f', $composeDst, 'up', '-d')
+    if ([int]$up.ExitCode -ne 0) {
+        Write-Log ("homelab-stack: 'docker compose up' falhou (exit={0}); suba manualmente apos checar o Docker." -f [int]$up.ExitCode) 'WARN'
+        return
+    }
+    Write-Log 'homelab-stack: camada CORE no ar (Portainer :9000, Jellyfin :8096, Syncthing :8384, Vaultwarden :8222, Uptime Kuma :3001). Extras opt-in: docker compose -f docker-compose.extras.yml up -d. Exponha apenas via Tailscale.'
+}
+
 function Install-BootstrapAiUsagebarComponent {
     param([Parameter(Mandatory = $true)][hashtable]$State)
     $null = $State
@@ -13633,6 +13703,9 @@ function Get-BootstrapComponentCatalog {
     # Enxuga o Windows para uso como servidor (menor RAM). Reversivel via -Rollback; nunca remove
     # arquivos do usuario nem desabilita o shell. Usado pelos perfis de servidor com LLM local.
     $catalog['os-slim-server'] = New-BootstrapComponentDefinition -Name 'os-slim-server' -Description 'Enxuga o Windows para servidor (desliga telemetria, busca, efeitos visuais, apps de fundo, Game Bar; tudo reversivel).' -Optional $true -DependsOn @('system-core') -Kind 'os-slim-server' -Data @{ DisplayName = 'Enxugar Windows (servidor)'; Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Reduz uso de RAM/IO para rodar LLM local ou servicos de servidor; reversivel via rollback.'; riskLevel = 'experimental' }
+    # homelab-stack: servidor caseiro via Docker/WSL2 (core leve: Portainer/Jellyfin/Syncthing/
+    # Vaultwarden/Uptime Kuma; extras pesados opt-in no compose de extras). Segredos no .env gerado.
+    $catalog['homelab-stack'] = New-BootstrapComponentDefinition -Name 'homelab-stack' -Description 'Servidor caseiro via Docker/WSL2: Portainer (dashboard), Jellyfin (midia), Syncthing (drive leve), Vaultwarden (cofre), Uptime Kuma (monitor). Extras opt-in: Nextcloud/Grafana/Paperless/n8n.' -Optional $true -DependsOn @('wsl-core', 'docker') -Kind 'homelab-stack' -RequiresNetwork $true -Data @{ DisplayName = 'Homelab (Docker/WSL2)'; Stage = 'payload'; Provisioning = 'builtin'; ValueReason = 'Centraliza armazenamento, midia, cofre e monitoramento de forma local e soberana; exposicao remota via Tailscale.'; riskLevel = 'experimental'; officialSource = 'https://docs.docker.com/compose/' }
     # llama.cpp server: LLM local opt-in com offload hibrido GPU/CPU e launcher resiliente (:8080).
     $catalog['llamacpp-server'] = New-BootstrapComponentDefinition -Name 'llamacpp-server' -Description 'Servidor LLM local via llama.cpp (offload hibrido GPU/CPU, API OpenAI-compativel em :8080). Opt-in, experimental.' -Optional $true -DependsOn @('system-core') -Kind 'llamacpp-server' -RequiresNetwork $true -Data @{ DisplayName = 'llama.cpp server (LLM local)'; Stage = 'payload'; Provisioning = 'builtin'; ValueReason = 'Roda modelos GGUF grandes em hardware de consumo com controle fino de offload VRAM/RAM.'; riskLevel = 'experimental'; officialSource = 'https://github.com/ggml-org/llama.cpp'; manualReason = 'Exige baixar o release oficial (llama-server.exe) e um modelo GGUF manualmente; o componente instala o launcher resiliente e calcula o offload, mas o download do modelo e dos binarios e guiado.'; requiresGpu = $false; requiresInteractiveLogin = $false }
     $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar: monitor de uso/plano (TUI/CLI no Windows, Waybar no Linux) por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
@@ -27776,6 +27849,9 @@ function Invoke-BootstrapComponent {
         }
         'llamacpp-server' {
             Ensure-BootstrapLlamaCppServer -State $State
+        }
+        'homelab-stack' {
+            Ensure-BootstrapHomelabStack -State $State
         }
         'ai-usagebar' {
             Install-BootstrapAiUsagebarComponent -State $State

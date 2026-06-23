@@ -5,6 +5,36 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath -BootstrapUiLibraryMode
 
+Describe 'Windows home server: homelab-stack' {
+    It 'declara homelab-stack opt-in dependente de wsl-core e docker' {
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('homelab-stack') | Should Be $true
+        [bool]$catalog['homelab-stack'].Optional | Should Be $true
+        @($catalog['homelab-stack'].DependsOn) -contains 'wsl-core' | Should Be $true
+        @($catalog['homelab-stack'].DependsOn) -contains 'docker' | Should Be $true
+    }
+    It 'o compose core existe e referencia os servicos leves padrao' {
+        $compose = Join-Path (Split-Path -Parent $scriptPath) 'assets/home-server/docker-compose.homelab.yml'
+        Test-Path $compose | Should Be $true
+        $raw = Get-Content $compose -Raw
+        foreach ($svc in @('portainer','jellyfin','syncthing','vaultwarden','uptime-kuma')) { $raw | Should Match $svc }
+    }
+    It 'o compose de extras existe e referencia os servicos pesados opt-in' {
+        $extras = Join-Path (Split-Path -Parent $scriptPath) 'assets/home-server/docker-compose.extras.yml'
+        Test-Path $extras | Should Be $true
+        $raw = Get-Content $extras -Raw
+        foreach ($svc in @('nextcloud','grafana','prometheus','paperless','n8n')) { $raw | Should Match $svc }
+    }
+    It 'nenhum compose embute segredos em texto puro (apenas placeholders ${...})' {
+        foreach ($f in @('docker-compose.homelab.yml','docker-compose.extras.yml')) {
+            $p = Join-Path (Split-Path -Parent $scriptPath) ("assets/home-server/{0}" -f $f)
+            $raw = Get-Content $p -Raw
+            $raw | Should Not Match 'Bearer\s+[A-Za-z0-9]'
+            $raw | Should Not Match '(PASSWORD|TOKEN|SECRET_KEY|ENCRYPTION_KEY)=(?!\$\{)[A-Za-z0-9]'
+        }
+    }
+}
+
 Describe 'Windows home server: llama.cpp offload autocalc' {
     It 'aloca todas as camadas na GPU quando o modelo cabe na VRAM' {
         $p = Get-BootstrapLlamaOffloadPlan -VramGB 24 -RamGB 32 -ModelSizeGB 12 -TotalLayers 80

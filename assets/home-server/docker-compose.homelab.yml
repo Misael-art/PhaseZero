@@ -1,0 +1,74 @@
+# PhaseZero homelab-stack — camada CORE (leve). Rode via: docker compose -f docker-compose.homelab.yml up -d
+# Segredos NUNCA inline: vêm do .env ao lado (gerado pelo componente homelab-stack) ou do ambiente.
+# Exponha estes serviços apenas atrás do Tailscale; não publique HTTP cru na WAN.
+name: phasezero-homelab
+
+services:
+  # Camada amigável de gestão (equivalente ao CasaOS/Umbrel no Windows/WSL2)
+  portainer:
+    image: portainer/portainer-ce:latest
+    container_name: phasezero-portainer
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
+  # Servidor de mídia
+  jellyfin:
+    image: jellyfin/jellyfin:latest
+    container_name: phasezero-jellyfin
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    volumes:
+      - jellyfin_config:/config
+      - jellyfin_cache:/cache
+      - ${HOMELAB_MEDIA_DIR:-./media}:/media
+
+  # "Drive" leve (sync P2P) — alternativa de baixo RAM ao Nextcloud
+  syncthing:
+    image: syncthing/syncthing:latest
+    container_name: phasezero-syncthing
+    restart: unless-stopped
+    hostname: phasezero-syncthing
+    ports:
+      - "8384:8384"
+      - "22000:22000/tcp"
+      - "22000:22000/udp"
+    volumes:
+      - syncthing_data:/var/syncthing
+
+  # Cofre de senhas (Bitwarden-compatível). Só atrás de Tailscale/HTTPS.
+  vaultwarden:
+    image: vaultwarden/server:latest
+    container_name: phasezero-vaultwarden
+    restart: unless-stopped
+    environment:
+      - ADMIN_TOKEN=${VW_ADMIN_TOKEN}
+      - SIGNUPS_ALLOWED=${VW_SIGNUPS_ALLOWED:-false}
+    ports:
+      - "8222:80"
+    volumes:
+      - vaultwarden_data:/data
+
+  # Monitoramento de uptime + alertas (camada "self-healing" amigável)
+  uptime-kuma:
+    image: louislam/uptime-kuma:latest
+    container_name: phasezero-uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - uptimekuma_data:/app/data
+
+volumes:
+  portainer_data:
+  jellyfin_config:
+  jellyfin_cache:
+  syncthing_data:
+  vaultwarden_data:
+  uptimekuma_data:
