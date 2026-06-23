@@ -36,6 +36,89 @@ function Invoke-PhaseZeroCliCoherenceTest {
 }
 
 Describe 'CLI and UI coherence' {
+    It 'preserves excluded configs in the printed apply command' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-exclude-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--config-category browser-startup --exclude-config zen-browser-privacy-prefs --dry-run --yes --no-admin --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+
+            $run.ExitCode | Should Be 0
+            $applyLine = [regex]::Match($run.Stdout, '(?m)^Aplicar:\s*(?<cmd>.+)$')
+            $applyLine.Success | Should Be $true
+            [string]$applyLine.Groups['cmd'].Value | Should Match '--config-category\s+browser-startup'
+            [string]$applyLine.Groups['cmd'].Value | Should Match '--exclude-config\s+zen-browser-privacy-prefs'
+            [string]$applyLine.Groups['cmd'].Value | Should Match '--yes'
+            [string]$applyLine.Groups['cmd'].Value | Should Not Match '--dry-run'
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'reports a missing option value without treating the next flag as a selection' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-missing-value-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--config --dry-run --yes --no-admin --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+
+            $run.ExitCode | Should Be 2
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.mode | Should Be 'argument-parse'
+            [string]$json.error | Should Match 'Valor ausente.*--config'
+            [string]$json.error | Should Not Match "configuracao encontrado para '--dry-run'"
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'writes result json for MCP repair dry-run' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-mcp-repair-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--repair-mcp --dry-run --yes --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+
+            $run.ExitCode | Should Be 0
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.mode | Should Be 'mcp-repair'
+            [bool]$json.dryRun | Should Be $true
+            $json.PSObject.Properties.Name -contains 'targets' | Should Be $true
+            $json.PSObject.Properties.Name -contains 'artifactPaths' | Should Be $true
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'uses a guarded backend process helper instead of raw Start-Process wait in CLI execution paths' {
+        $raw = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'install-cli.ps1') -Raw
+
+        $raw | Should Match 'function Invoke-CliBackendProcess'
+        $raw | Should Match 'WaitForExit\(\$TimeoutMs\)'
+        $raw | Should Match 'Write-CliLegacyFailureResult'
+        $raw | Should Not Match '\$dryProcess\s*=\s*Start-Process -FilePath ''powershell\.exe'' -ArgumentList \$dryArgs -NoNewWindow -PassThru -Wait'
+        $raw | Should Not Match '\$installProcess\s*=\s*Start-Process -FilePath ''powershell\.exe'' -ArgumentList \$installArgs -NoNewWindow -PassThru -Wait'
+    }
+
+    It 'writes common envelope fields for lifecycle dry-run' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-lifecycle-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        $exportDir = Join-Path $env:TEMP ("phasezero-export-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--item cursor --export-config "{0}" --dry-run --yes --result-path "{1}" --log-path "{2}"' -f $exportDir, $resultPath, $logPath)
+
+            $run.ExitCode | Should Be 0
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.mode | Should Be 'config-lifecycle'
+            [bool]$json.dryRun | Should Be $true
+            $json.PSObject.Properties.Name -contains 'artifactPaths' | Should Be $true
+            $json.PSObject.Properties.Name -contains 'diagnostics' | Should Be $true
+            $json.PSObject.Properties.Name -contains 'rollback' | Should Be $true
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $exportDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'lists a unified numbered catalog and resolves its first number through --item' {
         $list = Invoke-PhaseZeroCliCoherenceTest -Arguments '--list-items'
 

@@ -634,6 +634,34 @@ function Register-BootstrapChange {
     Save-BootstrapChangeManifest -State $State
 }
 
+function Register-BootstrapFileChange {
+    # Registra uma mutacao de arquivo com BACKUP do conteudo atual ANTES da escrita. Deve ser
+    # chamada antes de gravar/sobrescrever o alvo para que o rollback restaure o original (e nao
+    # apague um config pre-existente). Se o arquivo nao existir, o rollback apenas remove o criado.
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$Target,
+        [string]$Operation = 'file-update',
+        [string]$Component = '',
+        [AllowNull()]$NewValue = $null
+    )
+
+    $oldValue = $null
+    if (Test-Path -LiteralPath $Target) {
+        $manifestPath = Get-BootstrapChangeManifestPath -State $State
+        $backupRoot = Join-Path (Split-Path -Path $manifestPath -Parent) 'file-backups'
+        $null = New-Item -Path $backupRoot -ItemType Directory -Force
+        $leaf = Split-Path -Path $Target -Leaf
+        if ([string]::IsNullOrWhiteSpace($leaf)) { $leaf = 'file' }
+        $backupPath = Join-Path $backupRoot ("{0}-{1}.bak" -f ([Guid]::NewGuid().ToString('N')), $leaf)
+        Copy-Item -LiteralPath $Target -Destination $backupPath -Force -ErrorAction Stop
+        $oldValue = $backupPath
+    }
+
+    $rollbackAction = if ($oldValue) { 'restore-file-backup' } else { 'remove-created-file' }
+    Register-BootstrapChange -State $State -Type File -Target $Target -OldValue $oldValue -NewValue $NewValue -Operation $Operation -Component $Component -RollbackAction $rollbackAction -Reversible 'partial'
+}
+
 function Get-BootstrapChangeManifestPath {
     param([Parameter(Mandatory = $true)][hashtable]$State)
     if (-not [string]::IsNullOrWhiteSpace([string]$State.ChangeManifestPath)) { return [string]$State.ChangeManifestPath }
@@ -7909,6 +7937,62 @@ function Get-BootstrapLinuxPartitions {
     return @($linuxPartitions)
 }
 
+# ---------------------------------------------------------------------------------------------------
+# Btrfs dual-boot (Windows <-> SteamOS). REGRA INEGOCIAVEL: este modulo NUNCA formata/particiona.
+# Nenhuma funcao abaixo chama Format-Volume, Initialize-Disk, Clear-Disk, mkfs ou diskpart. Apenas
+# detecta, audita prontidao, instala (guiado) o driver WinBtrfs e mapeia permissao. Leitura+escrita
+# sao providas pelo proprio WinBtrfs apos instalado; o gate de Fast Startup evita corrupcao.
+# ---------------------------------------------------------------------------------------------------
+function Get-BootstrapWinBtrfsState {
+    # Detecta o driver WinBtrfs (maharmstone/btrfs) instalado no Windows. Nao monta nem altera nada.
+    $driverPath = Join-Path $env:SystemRoot 'System32\drivers\btrfs.sys'
+    $installed = (Test-Path -LiteralPath $driverPath)
+    $serviceState = ''
+    try {
+        if (Get-Command -Name Get-Service -ErrorAction SilentlyContinue) {
+            $svc = Get-Service -Name 'btrfs' -ErrorAction SilentlyContinue
+            if ($svc) { $installed = $true; $serviceState = [string]$svc.Status }
+        }
+    } catch { }
+    return [ordered]@{ installed = [bool]$installed; driverPath = $driverPath; serviceState = $serviceState }
+}
+
+function Get-BootstrapBtrfsReadiness {
+    # Auditoria de prontidao para acesso btrfs no dual-boot. Sem efeitos colaterais; seguro em lib mode.
+    $fast = Get-BootstrapFastStartupStatus
+    $rebootReasons = @()
+    try { $rebootReasons = @(Get-BootstrapPendingRebootReasons) } catch { $rebootReasons = @() }
+    $winbtrfs = Get-BootstrapWinBtrfsState
+    $partitions = @()
+    if (-not $BootstrapUiLibraryMode) {
+        try { $partitions = @(Get-BootstrapLinuxPartitions) } catch { $partitions = @() }
+    }
+
+    $checks = [ordered]@{
+        'fast-startup-off' = $(if ($fast.Enabled) { 'warning' } else { 'healthy' })
+        'winbtrfs-driver'  = $(if ($winbtrfs.installed) { 'healthy' } else { 'not-installed' })
+        'linux-partitions' = $(if (@($partitions).Count -gt 0) { 'healthy' } else { 'warning' })
+    }
+    $recommendations = New-Object System.Collections.Generic.List[string]
+    if ($fast.Enabled) { $recommendations.Add('Desligue Fast Startup/hibernacao (aba Dual Boot) antes de montar btrfs R/W; senao a FS fica suja e pode corromper.') | Out-Null }
+    if (-not $winbtrfs.installed) { $recommendations.Add('Instale o WinBtrfs (componente winbtrfs, guiado) para ler/escrever btrfs no Windows.') | Out-Null }
+    $recommendations.Add('Para o Linux ver o dono correto, use uid/gid=1000 nas opcoes do volume WinBtrfs.') | Out-Null
+    $recommendations.Add('Este modulo NUNCA formata particoes. Faca backup antes de habilitar escrita.') | Out-Null
+
+    return [ordered]@{
+        fastStartupEnabled = [bool]$fast.Enabled
+        pendingReboot = (@($rebootReasons).Count -gt 0)
+        winbtrfsInstalled = [bool]$winbtrfs.installed
+        winbtrfsServiceState = [string]$winbtrfs.serviceState
+        linuxPartitionCount = @($partitions).Count
+        partitions = @($partitions)
+        checks = $checks
+        recommendations = @($recommendations.ToArray())
+        readWriteSupported = [bool]$winbtrfs.installed
+        neverFormats = $true
+    }
+}
+
 function Get-BootstrapEfiEntries {
     if (-not (Test-IsAdmin)) { return $null }
     $entries = @()
@@ -13447,6 +13531,10 @@ function Get-BootstrapComponentCatalog {
     $catalog['visual-studio-community'] = New-BootstrapComponentDefinition -Name 'visual-studio-community' -Description 'Visual Studio Community 2022.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudio.2022.Community'; DisplayName = 'Visual Studio Community 2022'; ProbePaths = @("$env:ProgramFiles\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe") }
     $catalog['steam'] = New-BootstrapComponentDefinition -Name 'steam' -Description 'Steam.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.Steam'; DisplayName = 'Steam'; ProbePaths = @("${env:ProgramFiles(x86)}\Steam\steam.exe", "$env:ProgramFiles\Steam\steam.exe") }
     $catalog['steamcmd'] = New-BootstrapComponentDefinition -Name 'steamcmd' -Description 'SteamCMD.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.SteamCMD'; DisplayName = 'SteamCMD'; ProbePaths = @("${env:ProgramFiles(x86)}\Steam\steamapps\common\SteamCMD\steamcmd.exe", "$env:ProgramFiles\Steam\steamapps\common\SteamCMD\steamcmd.exe") }
+    # WinBtrfs: driver de kernel (maharmstone/btrfs) que da LEITURA e ESCRITA em particoes Btrfs do
+    # Linux/SteamOS no dual-boot. manual-required (guiado): admin + reboot, instalacao silenciosa de
+    # driver fica fora por seguranca. NUNCA formata; exige Fast Startup OFF antes de escrever.
+    $catalog['winbtrfs'] = New-BootstrapComponentDefinition -Name 'winbtrfs' -Description 'WinBtrfs: driver Windows para LER e ESCREVER nas particoes Btrfs do SteamOS no dual-boot (nunca formata).' -Optional $true -DependsOn @('system-core') -Kind 'manual-required' -RequiresNetwork $true -Data @{ DisplayName = 'WinBtrfs (Btrfs R/W no Windows)'; Stage = 'verify'; Provisioning = 'manual-required'; RequiresAdmin = $true; RequiresReboot = $true; ValueReason = 'Acessa (leitura e escrita) as particoes Btrfs do SteamOS a partir do Windows no dual-boot.'; ProbePaths = @("$env:SystemRoot\System32\drivers\btrfs.sys"); Instructions = 'Baixe o release oficial em https://github.com/maharmstone/btrfs/releases, rode o instalador como Administrador e reinicie. ANTES desligue Fast Startup/hibernacao (aba Dual Boot) para a FS nao corromper. Para o Linux ver o dono correto, use uid/gid=1000 nas opcoes do volume WinBtrfs. ESTE MODULO NUNCA FORMATA NADA; faca backup antes de escrever.'; riskLevel = 'experimental'; officialSource = 'https://github.com/maharmstone/btrfs'; manualReason = 'Driver de kernel de terceiros: exige admin, reboot e aceitar risco de estabilidade; nunca formata particoes.'; requiresGpu = $false; requiresInteractiveLogin = $false }
     # EmuDeck for Windows: instalador GUI oficial (beta, sem paridade com SteamOS) que configura
     # ES-DE + RetroArch + emuladores + Steam ROM Manager. Por ser wizard interativo e autoatualizavel,
     # fica como manual-required (guiado), opt-in. Pre-reqs reais ja no catalogo (steam/sevenzip/vcpp-redist).
@@ -20316,10 +20404,10 @@ function Ensure-BootstrapMimoCodeConfig {
         try { Copy-Item -LiteralPath $configPath -Destination ($configPath + '.bak') -Force -ErrorAction Stop }
         catch { Write-Log ("Nao foi possivel gravar backup do config MiMo Code: {0}" -f $_.Exception.Message) 'WARN' }
     }
-    Write-BootstrapJsonFile -Path $configPath -Value $config
     if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
-        try { Register-BootstrapChange -State $State -Type File -Target $configPath -OldValue $null -NewValue 'mimocode-provider' -Operation 'configure-mimocode' -Component 'mimo-code' } catch { }
+        try { Register-BootstrapFileChange -State $State -Target $configPath -NewValue 'mimocode-provider' -Operation 'configure-mimocode' -Component 'mimo-code' } catch { }
     }
+    Write-BootstrapJsonFile -Path $configPath -Value $config
     Write-Log ("MiMo Code configurado com provider OpenAI-compatible '{0}' (chave mascarada) em {1}" -f $providerName, $configPath)
     return [ordered]@{ status = 'configured'; provider = $providerName; path = $configPath }
 }
@@ -20485,6 +20573,9 @@ function Import-BootstrapItemConfig {
                 try { Copy-Item -LiteralPath ([string]$targetPath) -Destination (([string]$targetPath) + '.bak') -Force -ErrorAction Stop } catch { }
             }
 
+            if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
+                try { Register-BootstrapFileChange -State $State -Target ([string]$targetPath) -Operation 'import-item-config' -Component $desc.id } catch { }
+            }
             if ($isJson) {
                 $targetData = @{}
                 if (Test-Path -LiteralPath ([string]$targetPath)) {
@@ -20494,9 +20585,6 @@ function Import-BootstrapItemConfig {
                 Write-BootstrapJsonFile -Path ([string]$targetPath) -Value $merged
             } else {
                 Copy-Item -LiteralPath $srcFile -Destination ([string]$targetPath) -Force
-            }
-            if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
-                try { Register-BootstrapChange -State $State -Type File -Target ([string]$targetPath) -Operation 'import-item-config' -Component $desc.id } catch { }
             }
             $applied.Add($leaf) | Out-Null
         }
@@ -20545,10 +20633,10 @@ function Invoke-BootstrapItemFactoryReset {
         if (Test-Path -LiteralPath $path) {
             try { Copy-Item -LiteralPath $path -Destination ($path + '.pre-reset.bak') -Force -ErrorAction Stop } catch { }
         }
-        Copy-Item -LiteralPath $baseline -Destination $path -Force
         if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
-            try { Register-BootstrapChange -State $State -Type File -Target $path -Operation 'factory-reset' -Component $desc.id } catch { }
+            try { Register-BootstrapFileChange -State $State -Target $path -Operation 'factory-reset' -Component $desc.id } catch { }
         }
+        Copy-Item -LiteralPath $baseline -Destination $path -Force
         $restored.Add((Split-Path -Path $path -Leaf)) | Out-Null
     }
     if (-not $DryRun -and $restored.Count -gt 0) { Set-BootstrapItemStatus -Kind 'app' -Id $desc.id -Status 'installed-unconfigured' }
@@ -21528,7 +21616,11 @@ function Get-BootstrapWindowsNpxLaunch {
     # causando "Could not attach to MCP server". Encapsula em `cmd /c npx ...` (forma padrao e
     # robusta no Windows). Mantemos a forma canonica 'npx' internamente; este wrap so e aplicado
     # na serializacao final de cada cliente. Retorna $null quando nao se aplica.
-    param([string]$Command, [string[]]$Args = @())
+    [CmdletBinding()]
+    param(
+        [string]$Command,
+        [Alias('Args')][string[]]$CommandArgs = @()
+    )
 
     if (-not (Test-BootstrapHostIsWindows)) { return $null }
     if ([string]::IsNullOrWhiteSpace($Command)) { return $null }
@@ -21539,14 +21631,32 @@ function Get-BootstrapWindowsNpxLaunch {
     $newArgs = New-Object System.Collections.Generic.List[string]
     $newArgs.Add('/c') | Out-Null
     $newArgs.Add('npx') | Out-Null
-    foreach ($a in @($Args)) { $newArgs.Add([string]$a) | Out-Null }
+    foreach ($a in @($CommandArgs)) { $newArgs.Add([string]$a) | Out-Null }
     return [ordered]@{ command = 'cmd'; args = @($newArgs.ToArray()) }
+}
+
+function Get-BootstrapManagedMcpRepairEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [ValidateSet('standard', 'vscode')][string]$Format = 'standard'
+    )
+
+    $managedServers = Get-BootstrapManagedMcpServers -ManagedProviders @{}
+    if (-not ($managedServers -is [System.Collections.IDictionary]) -or -not $managedServers.Contains($Name)) {
+        return $null
+    }
+
+    $serverDefinition = ConvertTo-BootstrapHashtable -InputObject $managedServers[$Name]
+    if (-not ($serverDefinition -is [System.Collections.IDictionary])) { return $null }
+    return (ConvertTo-BootstrapMcpServerEntry -ServerDefinition $serverDefinition -Format $Format)
 }
 
 function Get-BootstrapMcpRepairTargets {
     # Clientes cujo config MCP usa o formato { mcpServers|servers: { nome: { command, args } } }
     # e e passivel de reparo automatico de comandos 'npx' puros (nao-lancaveis no Windows).
+    $userHome = Get-BootstrapUserHomePath
     $map = [ordered]@{
+        'claude-code'    = $(if ($userHome) { Join-Path $userHome '.claude\settings.json' } else { $null })
         'claude-desktop' = (Get-BootstrapClaudeDesktopConfigPath)
         'cursor'         = (Get-BootstrapCursorMcpConfigPath)
         'windsurf'       = (Get-BootstrapWindsurfMcpConfigPath)
@@ -21565,9 +21675,12 @@ function Get-BootstrapMcpRepairTargets {
 
 function Repair-BootstrapMcpServerMap {
     # Reescreve entradas com command 'npx' puro para 'cmd /c npx ...' (Windows-safe), idempotente
-    # (Get-BootstrapWindowsNpxLaunch retorna $null para entradas ja encapsuladas ou nao-npx).
+    # e cura configs gerados por versoes antigas que truncaram para `cmd /c npx` sem pacote.
     # Muta o hashtable recebido; retorna o numero de entradas alteradas.
-    param([Parameter(Mandatory = $true)][hashtable]$ServerMap)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$ServerMap,
+        [ValidateSet('standard', 'vscode')][string]$Format = 'standard'
+    )
 
     $changed = 0
     foreach ($name in @($ServerMap.Keys)) {
@@ -21575,11 +21688,33 @@ function Repair-BootstrapMcpServerMap {
         if (-not ($entry -is [hashtable]) -or -not $entry.ContainsKey('command')) { continue }
         $serverArgs = @()
         if ($entry.ContainsKey('args')) { $serverArgs = @($entry['args']) }
-        $wrap = Get-BootstrapWindowsNpxLaunch -Command ([string]$entry['command']) -Args $serverArgs
-        if (-not $wrap) { continue }
-        $entry['command'] = [string]$wrap['command']
-        $entry['args'] = @($wrap['args'])
-        $ServerMap[$name] = $entry
+        $command = [string]$entry['command']
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($command)
+        $replacement = $null
+
+        if ([string]::Equals($base, 'npx', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $replacement = Get-BootstrapWindowsNpxLaunch -Command $command -CommandArgs $serverArgs
+        } elseif ([string]::Equals($base, 'cmd', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $arg0 = if (@($serverArgs).Count -gt 0) { [string]$serverArgs[0] } else { '' }
+            $arg1 = if (@($serverArgs).Count -gt 1) { [string]$serverArgs[1] } else { '' }
+            $hasLauncherOnly = (
+                (@($serverArgs).Count -eq 0) -or
+                (@($serverArgs).Count -eq 1 -and [string]::Equals($arg0, 'npx', [System.StringComparison]::OrdinalIgnoreCase)) -or
+                (@($serverArgs).Count -eq 2 -and [string]::Equals($arg0, '/c', [System.StringComparison]::OrdinalIgnoreCase) -and [string]::Equals($arg1, 'npx', [System.StringComparison]::OrdinalIgnoreCase))
+            )
+            $missingCmdSwitch = (@($serverArgs).Count -gt 0 -and [string]::Equals($arg0, 'npx', [System.StringComparison]::OrdinalIgnoreCase))
+            if ($hasLauncherOnly) {
+                $replacement = Get-BootstrapManagedMcpRepairEntry -Name ([string]$name) -Format $Format
+            } elseif ($missingCmdSwitch) {
+                $fixedArgs = New-Object System.Collections.Generic.List[string]
+                $fixedArgs.Add('/c') | Out-Null
+                foreach ($a in @($serverArgs)) { $fixedArgs.Add([string]$a) | Out-Null }
+                $replacement = [ordered]@{ command = 'cmd'; args = @($fixedArgs.ToArray()) }
+            }
+        }
+
+        if (-not ($replacement -is [System.Collections.IDictionary])) { continue }
+        $ServerMap[$name] = ConvertTo-BootstrapHashtable -InputObject $replacement
         $changed++
     }
     return $changed
@@ -21622,7 +21757,8 @@ function Invoke-BootstrapMcpConfigRepair {
         foreach ($containerKey in @('mcpServers', 'servers')) {
             if ($data.ContainsKey($containerKey) -and ($data[$containerKey] -is [hashtable])) {
                 $serverMap = ConvertTo-BootstrapHashtable -InputObject $data[$containerKey]
-                $count = Repair-BootstrapMcpServerMap -ServerMap $serverMap
+                $format = if ([string]::Equals($containerKey, 'servers', [System.StringComparison]::OrdinalIgnoreCase)) { 'vscode' } else { 'standard' }
+                $count = Repair-BootstrapMcpServerMap -ServerMap $serverMap -Format $format
                 if ($count -gt 0) { $data[$containerKey] = $serverMap; $totalChanged += $count }
             }
         }
@@ -21638,10 +21774,10 @@ function Invoke-BootstrapMcpConfigRepair {
         try { Copy-Item -LiteralPath $path -Destination ($path + '.bak') -Force -ErrorAction Stop } catch {
             Write-Log ("Reparo MCP: backup falhou para {0}: {1}" -f $path, $_.Exception.Message) 'WARN'
         }
-        Write-BootstrapJsonFile -Path $path -Value $data
         if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
-            try { Register-BootstrapChange -State $State -Type File -Target $path -Operation 'repair-mcp-npx' -Component ([string]$t.id) } catch { }
+            try { Register-BootstrapFileChange -State $State -Target $path -Operation 'repair-mcp-npx' -Component ([string]$t.id) } catch { }
         }
+        Write-BootstrapJsonFile -Path $path -Value $data
         $results.Add([ordered]@{ id = [string]$t.id; path = $path; status = 'fixed'; fixed = $totalChanged }) | Out-Null
     }
 
@@ -21670,7 +21806,7 @@ function ConvertTo-BootstrapMcpServerEntry {
 
     # Robustez Windows: encapsular comandos stdio 'npx' em `cmd /c npx ...` na saida final.
     if (($effectiveDefinition -is [System.Collections.IDictionary]) -and $effectiveDefinition.ContainsKey('command') -and -not $effectiveDefinition.ContainsKey('url')) {
-        $npxWrap = Get-BootstrapWindowsNpxLaunch -Command ([string]$effectiveDefinition['command']) -Args @($effectiveDefinition['args'])
+        $npxWrap = Get-BootstrapWindowsNpxLaunch -Command ([string]$effectiveDefinition['command']) -CommandArgs @($effectiveDefinition['args'])
         if ($npxWrap) {
             $effectiveDefinition = ConvertTo-BootstrapHashtable -InputObject $effectiveDefinition
             $effectiveDefinition['command'] = [string]$npxWrap['command']

@@ -2561,6 +2561,20 @@ function Get-UiHealthTextCanonicalStatus {
                         </DockPanel>
                     </Border>
 
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                        <DockPanel>
+                            <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="BTRFS (STEAMOS) - LEITURA/ESCRITA"/>
+                            <StackPanel Margin="0,8,0,0">
+                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,8" Text="Acessa as particoes Btrfs do SteamOS no Windows via WinBtrfs (R/W). Requer Fast Startup OFF. Este modulo NUNCA formata nada."/>
+                                <TextBlock x:Name="BtrfsStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Clique em Verificar Btrfs."/>
+                                <WrapPanel Margin="0,10,0,0">
+                                    <Button x:Name="BtrfsCheckButton" Style="{StaticResource GhostBtn}" Content="Verificar Btrfs" Height="34" Margin="0,0,8,0"/>
+                                    <Button x:Name="BtrfsInstallButton" Style="{StaticResource PrimaryBtn}" Content="WinBtrfs (release oficial)" Height="34"/>
+                                </WrapPanel>
+                            </StackPanel>
+                        </DockPanel>
+                    </Border>
+
                     <Button x:Name="RefreshDualBootButton" Style="{StaticResource GhostBtn}" Content=" Recarregar Status" Width="180" HorizontalAlignment="Left" Height="34"/>
                 </StackPanel>
             </ScrollViewer>
@@ -3014,6 +3028,9 @@ $ui = [ordered]@{
     BcdCleanupStatusText  = (Get-Control 'BcdCleanupStatusText')
     BcdCleanupButton      = (Get-Control 'BcdCleanupButton')
     RefreshDualBootButton = (Get-Control 'RefreshDualBootButton')
+    BtrfsStatusText       = (Get-Control 'BtrfsStatusText')
+    BtrfsCheckButton      = (Get-Control 'BtrfsCheckButton')
+    BtrfsInstallButton    = (Get-Control 'BtrfsInstallButton')
 
     # Review
     ReviewTitleLabel      = (Get-Control 'ReviewTitleLabel')
@@ -7415,9 +7432,22 @@ $ui.HealthRepairMcpButton.Add_Click({
             $ui.StatusLabel.Text = 'Reparo MCP cancelado.'
             return
         }
-        $result = Invoke-BootstrapMcpConfigRepair
-        $verify = Invoke-BootstrapMcpConfigRepair -DryRun
-        $ui.StatusLabel.Text = ("Reparo MCP: {0} entrada(s) corrigida(s) (backups .bak). Restantes: {1}. Reinicie os apps para reconectar." -f [int]$result.totalFixed, [int]$verify.totalFixed)
+        # Roda o reparo via install-cli.bat (processo separado) para produzir result.json/log
+        # versionaveis, sem bloquear a thread WPF nem deixar a acao sem artefato.
+        $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+        $artifacts = New-UiRunArtifactSet -Timestamp $timestamp
+        $ui.CurrentLogPath = [string]$artifacts.LogPath
+        $ui.CurrentResultPath = [string]$artifacts.ResultPath
+        $installCli = Join-Path $PSScriptRoot 'install-cli.bat'
+        $repairArgs = @(
+            '--repair-mcp',
+            '--yes',
+            '--result-path', [string]$ui.CurrentResultPath,
+            '--log-path', [string]$ui.CurrentLogPath
+        )
+        Start-Process -FilePath $installCli -ArgumentList (ConvertTo-ArgumentString -Tokens $repairArgs) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
+        $ui.StatusLabel.Text = ("Reparo MCP iniciado. Result: {0}" -f [string]$ui.CurrentResultPath)
+        Update-RunArtifactButtons
     } catch {
         Write-UiLog -Level 'ERROR' -Message ("Falha no reparo de MCP: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
         $ui.StatusLabel.Text = "Erro no reparo de MCP: $($_.Exception.Message)"
@@ -8009,6 +8039,37 @@ $ui.RefreshReviewButton.Add_Click({ Refresh-ReviewPage })
 
 # Dual Boot
 $ui.RefreshDualBootButton.Add_Click({ Refresh-DualBootControls })
+
+$ui.BtrfsCheckButton.Add_Click({
+    try {
+        $r = Get-BootstrapBtrfsReadiness
+        $fast = if ($r.fastStartupEnabled) { 'LIGADO (desligue!)' } else { 'desligado (ok)' }
+        $drv = if ($r.winbtrfsInstalled) { "instalado ($([string]$r.winbtrfsServiceState))" } else { 'ausente' }
+        $lines = @(
+            ("Fast Startup: {0}" -f $fast),
+            ("WinBtrfs (driver R/W): {0}" -f $drv),
+            ("Particoes Linux detectadas: {0}" -f [int]$r.linuxPartitionCount),
+            ("Leitura/escrita disponivel: {0}" -f $(if ($r.readWriteSupported) { 'sim' } else { 'nao (instale o WinBtrfs)' })),
+            'Este modulo NUNCA formata particoes.'
+        )
+        if (@($r.recommendations).Count -gt 0) { $lines += ('Recomendacoes: ' + ((@($r.recommendations)) -join ' | ')) }
+        $ui.BtrfsStatusText.Text = ($lines -join [Environment]::NewLine)
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("Falha ao verificar Btrfs: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.BtrfsStatusText.Text = "Erro ao verificar Btrfs: $($_.Exception.Message)"
+    }
+})
+
+$ui.BtrfsInstallButton.Add_Click({
+    # Instalacao guiada: abre o release oficial do WinBtrfs. Driver de kernel -> admin + reboot.
+    # NAO instala silenciosamente nem formata nada.
+    try {
+        Start-Process 'https://github.com/maharmstone/btrfs/releases' | Out-Null
+        $ui.StatusLabel.Text = 'WinBtrfs: abri o release oficial. Rode como Administrador, reinicie e mantenha Fast Startup OFF. Nunca formate as particoes.'
+    } catch {
+        $ui.StatusLabel.Text = "Nao foi possivel abrir o release do WinBtrfs: $($_.Exception.Message)"
+    }
+})
 
 $ui.FixFastStartupButton.Add_Click({
     try {

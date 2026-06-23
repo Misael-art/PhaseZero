@@ -80,6 +80,60 @@ function ConvertTo-CliKey {
     return (($Token.TrimStart('-','/')) -replace '-', '').ToLowerInvariant()
 }
 
+function Test-CliTokenLooksLikeOption {
+    param([AllowNull()][string]$Token)
+    if ([string]::IsNullOrWhiteSpace($Token)) { return $false }
+    return ([string]$Token -match '^(--?|/)[A-Za-z][A-Za-z0-9-]*$')
+}
+
+function Get-CliRawOptionValue {
+    param(
+        [string[]]$Tokens,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    $wanted = @{}
+    foreach ($name in @($Names)) {
+        $wanted[(ConvertTo-CliKey -Token $name)] = $true
+    }
+
+    for ($i = 0; $i -lt @($Tokens).Count; $i++) {
+        $token = [string]$Tokens[$i]
+        if ($token -match '^(--?[^=]+)=(.*)$') {
+            $key = ConvertTo-CliKey -Token $matches[1]
+            if ($wanted.ContainsKey($key)) { return [string]$matches[2] }
+            continue
+        }
+        if ($token -match '^[-/]') {
+            $key = ConvertTo-CliKey -Token $token
+            if ($wanted.ContainsKey($key) -and (($i + 1) -lt @($Tokens).Count)) {
+                $candidate = [string]$Tokens[$i + 1]
+                if (-not (Test-CliTokenLooksLikeOption -Token $candidate)) { return $candidate }
+            }
+        }
+    }
+    return ''
+}
+
+function Read-CliRequiredOptionValue {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Tokens,
+        [Parameter(Mandatory = $true)][ref]$Index,
+        [Parameter(Mandatory = $true)][string]$OptionName
+    )
+
+    $next = [int]$Index.Value + 1
+    if ($next -ge @($Tokens).Count) {
+        throw "Valor ausente para $OptionName."
+    }
+    $candidate = [string]$Tokens[$next]
+    if (Test-CliTokenLooksLikeOption -Token $candidate) {
+        throw "Valor ausente para $OptionName."
+    }
+    $Index.Value = $next
+    return $candidate
+}
+
 function Read-CliArgs {
     param([string[]]$Tokens)
     $opts = New-CliOptions
@@ -97,7 +151,7 @@ function Read-CliArgs {
 
         switch ($key) {
             'profile' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.Profile = $value
             }
             'noninteractive' { $opts.NonInteractive = $true }
@@ -114,48 +168,48 @@ function Read-CliArgs {
             'listitems' { $opts.ListItems = $true }
             'listitem' { $opts.ListItems = $true }
             'tool' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Tool += @($value) }
             }
             'allaitools' { $opts.AllAiTools = $true }
             'item' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Item += @($value) }
             }
             'app' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.App += @($value) }
             }
             'component' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Component += @($value) }
             }
             'config' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
             }
             'configuration' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
             }
             'apptuningitem' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
             }
             'configcategory' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ConfigCategory += @($value) }
             }
             'apptuningcategory' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ConfigCategory += @($value) }
             }
             'excludeconfig' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ExcludeConfig += @($value) }
             }
             'excludeapptuningitem' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ExcludeConfig += @($value) }
             }
             'install' { $opts.Install = $true }
@@ -166,15 +220,15 @@ function Read-CliArgs {
             'factoryreset' { $opts.FactoryReset = $true }
             'resetdefault' { $opts.FactoryReset = $true }
             'exportconfig' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.ExportConfig = $value
             }
             'importconfig' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.ImportConfig = $value
             }
             'batch' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.Batch = $value
             }
             'includesecrets' { $opts.IncludeSecrets = $true }
@@ -188,15 +242,15 @@ function Read-CliArgs {
             'y' { $opts.Yes = $true }
             'noadmin' { $opts.NoAdmin = $true }
             'installroot' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.InstallRoot = $value
             }
             'resultpath' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.ResultPath = $value
             }
             'logpath' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.LogPath = $value
             }
             'help' { $opts.Help = $true }
@@ -1064,7 +1118,7 @@ function Invoke-CliMenuProfileFlow {
         '-Profile', $profileChoice,
         '-DryRun', '-NonInteractive', '-SkipManualRequirements'
     )
-    $dryExit = [int](Start-Process -FilePath 'powershell.exe' -ArgumentList $dryArgs -NoNewWindow -PassThru -Wait).ExitCode
+    $dryExit = [int](Invoke-CliBackendProcess -ArgumentList $dryArgs -OperationName 'dry-run').ExitCode
     if ($dryExit -ne 0) {
         Write-CliOut ("[ERRO] Dry-run falhou (codigo {0})." -f $dryExit) Red
         Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow
@@ -1088,7 +1142,7 @@ function Invoke-CliMenuProfileFlow {
         '-Profile', $profileChoice,
         '-NonInteractive', '-SkipManualRequirements'
     )
-    $installExit = [int](Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait).ExitCode
+    $installExit = [int](Invoke-CliBackendProcess -ArgumentList $installArgs -OperationName 'apply').ExitCode
     Write-CliOut ''
     if ($installExit -eq 0) {
         Write-Header 'SUCESSO: perfil instalado'
@@ -1135,7 +1189,7 @@ function Invoke-CliMenuBackendIntent {
         ("-{0}" -f $Intent),
         '-DryRun','-NonInteractive'
     )
-    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $argsList -NoNewWindow -PassThru -Wait
+    $process = Invoke-CliBackendProcess -ArgumentList $argsList -OperationName 'dry-run'
     $exit = [int]$process.ExitCode
     if ($exit -ne 0) {
         Write-CliOut ''
@@ -1305,35 +1359,30 @@ function New-CliIsolatedBackendArgs {
     return (Add-CliBackendArtifactArg -ArgumentList $backendArgs)
 }
 
+function Add-CliCommandOptionValues {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Parts,
+        [Parameter(Mandatory = $true)][string]$OptionName,
+        [AllowNull()]$Values
+    )
+
+    foreach ($value in @($Values)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        $Parts.Add($OptionName) | Out-Null
+        $Parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
+    }
+}
+
 function Format-CliApplyCommand {
     param([Parameter(Mandatory = $true)]$Options)
 
     $parts = New-Object System.Collections.Generic.List[string]
     $parts.Add('.\install-cli.bat') | Out-Null
-    foreach ($value in @($Options.App)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-            $parts.Add('--app') | Out-Null
-            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
-        }
-    }
-    foreach ($value in @($Options.Component)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-            $parts.Add('--component') | Out-Null
-            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
-        }
-    }
-    foreach ($value in @($Options.Config)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-            $parts.Add('--config') | Out-Null
-            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
-        }
-    }
-    foreach ($value in @($Options.ConfigCategory)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-            $parts.Add('--config-category') | Out-Null
-            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
-        }
-    }
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--app' -Values $Options.App
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--component' -Values $Options.Component
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--config' -Values $Options.Config
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--config-category' -Values $Options.ConfigCategory
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--exclude-config' -Values $Options.ExcludeConfig
     $parts.Add('--yes') | Out-Null
     return ($parts.ToArray() -join ' ')
 }
@@ -1342,6 +1391,90 @@ function Format-CliCommandToken {
     param([Parameter(Mandatory = $true)][string]$Value)
     if ($Value -match '[\s"]') { return ('"{0}"' -f ($Value -replace '"', '\"')) }
     return $Value
+}
+
+function ConvertTo-CliCommandLineArgument {
+    param([AllowNull()][string]$Token)
+
+    if ($null -eq $Token) { return '""' }
+    $text = [string]$Token
+    if ($text.Length -eq 0) { return '""' }
+    if ($text -notmatch '[\s"`&\(\)\^]') { return $text }
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    for ($i = 0; $i -lt $text.Length; $i++) {
+        $ch = $text[$i]
+        if ($ch -eq [char]'\') {
+            $backslashes++
+            continue
+        }
+        if ($ch -eq [char]'"') {
+            if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+            [void]$builder.Append('\"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$builder.Append($ch)
+    }
+    if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function ConvertTo-CliArgumentString {
+    param([string[]]$Tokens)
+    return [string]::Join(' ', @($Tokens | ForEach-Object { ConvertTo-CliCommandLineArgument -Token ([string]$_) }))
+}
+
+function Invoke-CliBackendProcess {
+    # Lanca o backend (powershell.exe) com timeout e captura de stdout/stderr em arquivos ao lado do
+    # result.json. Substitui o `Start-Process -Wait` cru (sem timeout, sem captura) das rotas CLI.
+    param(
+        [Parameter(Mandatory = $true)][string[]]$ArgumentList,
+        [Parameter(Mandatory = $true)][string]$OperationName,
+        [int]$TimeoutMs = 1800000
+    )
+
+    $stdoutPath = [System.IO.Path]::ChangeExtension([string]$script:Options.ResultPath, ".$OperationName.stdout.log")
+    $stderrPath = [System.IO.Path]::ChangeExtension([string]$script:Options.ResultPath, ".$OperationName.stderr.log")
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'powershell.exe'
+    $startInfo.Arguments = ConvertTo-CliArgumentString -Tokens $ArgumentList
+    $startInfo.WorkingDirectory = $PSScriptRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        $null = $process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutMs)) {
+            try { $process.Kill() } catch { }
+            $message = ("{0} excedeu timeout de {1}ms." -f $OperationName, $TimeoutMs)
+            Write-CliLegacyFailureResult -Message $message -ExitCode 124 -Mode $OperationName -HowToFix 'Revise stdout/stderr/log e rode novamente com escopo menor ou Doctor.'
+            return [pscustomobject]@{ ExitCode = 124; TimedOut = $true; StdoutPath = $stdoutPath; StderrPath = $stderrPath }
+        }
+        $stdout = [string]$stdoutTask.GetAwaiter().GetResult()
+        $stderr = [string]$stderrTask.GetAwaiter().GetResult()
+        [System.IO.File]::WriteAllText($stdoutPath, $stdout, [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText($stderrPath, $stderr, [System.Text.UTF8Encoding]::new($false))
+        # Ecoa a saida capturada ao final (nao ao vivo) para preservar visibilidade do backend.
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) { Write-Host $stdout.TrimEnd() }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) { Write-Host $stderr.TrimEnd() -ForegroundColor Yellow }
+        return [pscustomobject]@{ ExitCode = [int]$process.ExitCode; TimedOut = $false; StdoutPath = $stdoutPath; StderrPath = $stderrPath }
+    } finally {
+        try { $process.Dispose() } catch { }
+    }
 }
 
 function Update-CliResultFileMode {
@@ -1448,7 +1581,7 @@ function Invoke-CliBootstrapSelectionMode {
         Write-CliOut ''
         Write-CliOut '[1/2] Dry-run individual...' Green
         $dryArgs = New-CliIsolatedBackendArgs -Options $Options -DryRun:$true
-        $dryProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $dryArgs -NoNewWindow -PassThru -Wait
+        $dryProcess = Invoke-CliBackendProcess -ArgumentList $dryArgs -OperationName 'dry-run'
         $dryExit = [int]$dryProcess.ExitCode
         Update-CliResultFileMode -Mode 'isolated' -ExitCode $dryExit
         if ($dryExit -ne 0) {
@@ -1483,7 +1616,7 @@ function Invoke-CliBootstrapSelectionMode {
     Write-CliOut ''
     Write-CliOut '[2/2] Aplicando selecao individual...' Green
     $installArgs = New-CliIsolatedBackendArgs -Options $Options -DryRun:$false
-    $installProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait
+    $installProcess = Invoke-CliBackendProcess -ArgumentList $installArgs -OperationName 'apply'
     $installExit = [int]$installProcess.ExitCode
     Update-CliResultFileMode -Mode 'isolated' -ExitCode $installExit
 
@@ -1605,7 +1738,20 @@ function Invoke-CliAiToolsMode {
     if ($ReturnExit) { return $exitCode } else { exit $exitCode }
 }
 
-$script:Options = Read-CliArgs -Tokens @($args)
+$rawResultPath = Get-CliRawOptionValue -Tokens @($args) -Names @('--result-path', '-ResultPath')
+$rawLogPath = Get-CliRawOptionValue -Tokens @($args) -Names @('--log-path', '-LogPath')
+try {
+    $script:Options = Read-CliArgs -Tokens @($args)
+} catch {
+    $script:Options = New-CliOptions
+    $root = if ($env:TEMP) { $env:TEMP } else { $PSScriptRoot }
+    $script:Options.LogPath = if ([string]::IsNullOrWhiteSpace($rawLogPath)) { Join-Path $root ("phasezero-install-cli-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date)) } else { $rawLogPath }
+    $script:Options.ResultPath = if ([string]::IsNullOrWhiteSpace($rawResultPath)) { Join-Path $root ("phasezero-install-cli-{0:yyyyMMdd-HHmmss}.result.json" -f (Get-Date)) } else { $rawResultPath }
+    Write-CliLegacyFailureResult -Message $_.Exception.Message -ExitCode 2 -Mode 'argument-parse' -HowToFix 'Informe valor apos a opcao ou use --help para exemplos.'
+    Write-CliOut ("Result: {0}" -f [string]$script:Options.ResultPath) Yellow
+    Write-CliOut ("Log:    {0}" -f [string]$script:Options.LogPath) Yellow
+    exit 2
+}
 
 if ([string]::IsNullOrWhiteSpace([string]$script:Options.LogPath)) {
     $root = if ($env:TEMP) { $env:TEMP } else { $PSScriptRoot }
@@ -1637,19 +1783,48 @@ function Invoke-CliMcpRepair {
     }
     Write-CliOut ''
 
+    $payload = [ordered]@{
+        status = 'success'
+        mode = 'mcp-repair'
+        action = $(if ($apply) { 'apply' } else { 'dry-run' })
+        dryRun = (-not $apply)
+        totalFixed = [int]$preview.totalFixed
+        targets = @($preview.targets)
+        verification = $null
+        message = ''
+        nextSteps = @()
+    }
+
     if ([int]$preview.totalFixed -eq 0) {
         Write-CliOut 'Nenhum comando "npx" puro encontrado nos configs MCP. Nada a reparar.' Green
-        return
+        $payload['message'] = 'Nenhum comando npx puro encontrado nos configs MCP.'
+        $payload['nextSteps'] = @('Nada a reparar.')
+        Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
+        return 0
     }
     if (-not $apply) {
         Write-CliOut ("{0} entrada(s) seriam corrigidas. Para aplicar (com backup .bak): .\install-cli.bat --repair-mcp --yes" -f [int]$preview.totalFixed) Cyan
-        return
+        $payload['message'] = ("{0} entrada(s) seriam corrigidas." -f [int]$preview.totalFixed)
+        $payload['nextSteps'] = @('.\install-cli.bat --repair-mcp --yes')
+        Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
+        return 0
     }
 
     $result = Invoke-BootstrapMcpConfigRepair
     Write-CliOut ("[reparo MCP] {0} entrada(s) corrigida(s) (backups .bak criados)." -f [int]$result.totalFixed) Green
     $verify = Invoke-BootstrapMcpConfigRepair -DryRun
     Write-CliOut ("Verificacao: npx puros restantes = {0}" -f [int]$verify.totalFixed) $(if ([int]$verify.totalFixed -eq 0) { [System.ConsoleColor]::Green } else { [System.ConsoleColor]::Yellow })
+
+    $payload['dryRun'] = $false
+    $payload['action'] = 'apply'
+    $payload['totalFixed'] = [int]$result.totalFixed
+    $payload['targets'] = @($result.targets)
+    $payload['verification'] = $verify
+    $payload['status'] = if ([int]$verify.totalFixed -eq 0) { 'success' } else { 'warning' }
+    $payload['message'] = ("Reparo MCP corrigiu {0} entrada(s); restantes={1}." -f [int]$result.totalFixed, [int]$verify.totalFixed)
+    $payload['nextSteps'] = @('Reinicie os apps MCP/IDE para reconectar.')
+    Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
+    return $(if ([int]$verify.totalFixed -eq 0) { 0 } else { 1 })
 }
 
 function Invoke-CliLifecycleActions {
@@ -1694,12 +1869,27 @@ function Invoke-CliLifecycleActions {
         }
     } catch {
         Write-CliOut ("[ERRO] Ciclo de vida falhou: {0}" -f $_.Exception.Message) Red
+        Write-CliJsonResult -Payload ([ordered]@{
+            status = 'error'
+            mode = 'config-lifecycle'
+            action = $action
+            dryRun = $dry
+            error = $_.Exception.Message
+            howToFix = 'Revise item/path informado e rode --list-items para confirmar o alvo.'
+        }) -ResultPath ([string]$Options.ResultPath)
         exit 1
     }
 
-    if (-not [string]::IsNullOrWhiteSpace([string]$Options.ResultPath)) {
-        try { Write-BootstrapJsonFile -Path ([string]$Options.ResultPath) -Value $result; Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow } catch { }
+    $payload = [ordered]@{
+        status = 'success'
+        mode = 'config-lifecycle'
+        action = $action
+        dryRun = $dry
+        count = $(if ($result -is [System.Collections.IDictionary] -and $result.Contains('count')) { [int]$result['count'] } else { @($ids).Count })
+        result = $result
+        message = '[ciclo de vida] concluido.'
     }
+    Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
     Write-CliOut '[ciclo de vida] concluido.' Green
     return $true
 }
@@ -1746,8 +1936,7 @@ try {
 # Reparo de configs MCP (npx puro -> cmd /c npx) nos clientes. --repair-mcp mostra o plano (dry-run);
 # adicione --yes para aplicar de fato (com backup .bak por arquivo).
 if ([bool]$script:Options.RepairMcp) {
-    Invoke-CliMcpRepair -Options $script:Options
-    exit 0
+    exit (Invoke-CliMcpRepair -Options $script:Options)
 }
 
 # Verificacao de drift: roda o Doctor e compara com o baseline, reportando regressoes.
@@ -1763,6 +1952,14 @@ if ([bool]$script:Options.DriftCheck) {
         Write-CliOut ("{0} regressao(oes):" -f [int]$drift.regressionCount) Yellow
         foreach ($r in @($drift.regressions)) { Write-CliOut ("  {0}: {1} -> {2}" -f [string]$r.id, [string]$r.from, [string]$r.to) Yellow }
     }
+    $payload = [ordered]@{
+        status = $(if ([int]$drift.regressionCount -gt 0) { 'warning' } else { 'success' })
+        mode = 'drift-check'
+        dryRun = $true
+        drift = $drift
+        message = $(if (-not $drift.baselineExisted) { 'Baseline criado agora.' } elseif ([int]$drift.regressionCount -eq 0) { 'Nenhuma regressao desde o baseline.' } else { ("{0} regressao(oes)." -f [int]$drift.regressionCount) })
+    }
+    Write-CliJsonResult -Payload $payload -ResultPath ([string]$script:Options.ResultPath)
     exit 0
 }
 
@@ -1925,7 +2122,7 @@ if (-not [bool]$script:Options.SkipDryRun) {
         '-Profile', $profileChoice,
         '-DryRun', '-NonInteractive', '-SkipManualRequirements'
     )
-    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $dryArgs -NoNewWindow -PassThru -Wait
+    $process = Invoke-CliBackendProcess -ArgumentList $dryArgs -OperationName 'dry-run'
     $dryExit = $process.ExitCode
 
     if ($dryExit -ne 0) {
@@ -1971,7 +2168,7 @@ $installArgs = Add-CliBackendArtifactArg -ArgumentList @(
     '-Profile', $profileChoice,
     '-NonInteractive', '-SkipManualRequirements'
 )
-$installProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait
+$installProcess = Invoke-CliBackendProcess -ArgumentList $installArgs -OperationName 'apply'
 $installExit = $installProcess.ExitCode
 
 Write-CliOut ''
