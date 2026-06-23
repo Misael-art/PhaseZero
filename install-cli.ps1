@@ -1305,35 +1305,30 @@ function New-CliIsolatedBackendArgs {
     return (Add-CliBackendArtifactArg -ArgumentList $backendArgs)
 }
 
+function Add-CliCommandOptionValues {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.Generic.List[string]]$Parts,
+        [Parameter(Mandatory = $true)][string]$OptionName,
+        [AllowNull()]$Values
+    )
+
+    foreach ($value in @($Values)) {
+        if ([string]::IsNullOrWhiteSpace([string]$value)) { continue }
+        $Parts.Add($OptionName) | Out-Null
+        $Parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
+    }
+}
+
 function Format-CliApplyCommand {
     param([Parameter(Mandatory = $true)]$Options)
 
     $parts = New-Object System.Collections.Generic.List[string]
     $parts.Add('.\install-cli.bat') | Out-Null
-    foreach ($value in @($Options.App)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-            $parts.Add('--app') | Out-Null
-            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
-        }
-    }
-    foreach ($value in @($Options.Component)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-            $parts.Add('--component') | Out-Null
-            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
-        }
-    }
-    foreach ($value in @($Options.Config)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-            $parts.Add('--config') | Out-Null
-            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
-        }
-    }
-    foreach ($value in @($Options.ConfigCategory)) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$value)) {
-            $parts.Add('--config-category') | Out-Null
-            $parts.Add((Format-CliCommandToken -Value ([string]$value))) | Out-Null
-        }
-    }
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--app' -Values $Options.App
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--component' -Values $Options.Component
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--config' -Values $Options.Config
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--config-category' -Values $Options.ConfigCategory
+    Add-CliCommandOptionValues -Parts $parts -OptionName '--exclude-config' -Values $Options.ExcludeConfig
     $parts.Add('--yes') | Out-Null
     return ($parts.ToArray() -join ' ')
 }

@@ -36,6 +36,24 @@ function Invoke-PhaseZeroCliCoherenceTest {
 }
 
 Describe 'CLI and UI coherence' {
+    It 'preserves excluded configs in the printed apply command' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-exclude-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--config-category browser-startup --exclude-config zen-browser-privacy-prefs --dry-run --yes --no-admin --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+
+            $run.ExitCode | Should Be 0
+            $applyLine = [regex]::Match($run.Stdout, '(?m)^Aplicar:\s*(?<cmd>.+)$')
+            $applyLine.Success | Should Be $true
+            [string]$applyLine.Groups['cmd'].Value | Should Match '--config-category\s+browser-startup'
+            [string]$applyLine.Groups['cmd'].Value | Should Match '--exclude-config\s+zen-browser-privacy-prefs'
+            [string]$applyLine.Groups['cmd'].Value | Should Match '--yes'
+            [string]$applyLine.Groups['cmd'].Value | Should Not Match '--dry-run'
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'lists a unified numbered catalog and resolves its first number through --item' {
         $list = Invoke-PhaseZeroCliCoherenceTest -Arguments '--list-items'
 
