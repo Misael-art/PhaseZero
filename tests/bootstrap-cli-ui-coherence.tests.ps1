@@ -54,6 +54,23 @@ Describe 'CLI and UI coherence' {
         }
     }
 
+    It 'reports a missing option value without treating the next flag as a selection' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-missing-value-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--config --dry-run --yes --no-admin --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+
+            $run.ExitCode | Should Be 2
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.mode | Should Be 'argument-parse'
+            [string]$json.error | Should Match 'Valor ausente.*--config'
+            [string]$json.error | Should Not Match "configuracao encontrado para '--dry-run'"
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'lists a unified numbered catalog and resolves its first number through --item' {
         $list = Invoke-PhaseZeroCliCoherenceTest -Arguments '--list-items'
 

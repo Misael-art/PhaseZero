@@ -80,6 +80,60 @@ function ConvertTo-CliKey {
     return (($Token.TrimStart('-','/')) -replace '-', '').ToLowerInvariant()
 }
 
+function Test-CliTokenLooksLikeOption {
+    param([AllowNull()][string]$Token)
+    if ([string]::IsNullOrWhiteSpace($Token)) { return $false }
+    return ([string]$Token -match '^(--?|/)[A-Za-z][A-Za-z0-9-]*$')
+}
+
+function Get-CliRawOptionValue {
+    param(
+        [string[]]$Tokens,
+        [Parameter(Mandatory = $true)][string[]]$Names
+    )
+
+    $wanted = @{}
+    foreach ($name in @($Names)) {
+        $wanted[(ConvertTo-CliKey -Token $name)] = $true
+    }
+
+    for ($i = 0; $i -lt @($Tokens).Count; $i++) {
+        $token = [string]$Tokens[$i]
+        if ($token -match '^(--?[^=]+)=(.*)$') {
+            $key = ConvertTo-CliKey -Token $matches[1]
+            if ($wanted.ContainsKey($key)) { return [string]$matches[2] }
+            continue
+        }
+        if ($token -match '^[-/]') {
+            $key = ConvertTo-CliKey -Token $token
+            if ($wanted.ContainsKey($key) -and (($i + 1) -lt @($Tokens).Count)) {
+                $candidate = [string]$Tokens[$i + 1]
+                if (-not (Test-CliTokenLooksLikeOption -Token $candidate)) { return $candidate }
+            }
+        }
+    }
+    return ''
+}
+
+function Read-CliRequiredOptionValue {
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Tokens,
+        [Parameter(Mandatory = $true)][ref]$Index,
+        [Parameter(Mandatory = $true)][string]$OptionName
+    )
+
+    $next = [int]$Index.Value + 1
+    if ($next -ge @($Tokens).Count) {
+        throw "Valor ausente para $OptionName."
+    }
+    $candidate = [string]$Tokens[$next]
+    if (Test-CliTokenLooksLikeOption -Token $candidate) {
+        throw "Valor ausente para $OptionName."
+    }
+    $Index.Value = $next
+    return $candidate
+}
+
 function Read-CliArgs {
     param([string[]]$Tokens)
     $opts = New-CliOptions
@@ -97,7 +151,7 @@ function Read-CliArgs {
 
         switch ($key) {
             'profile' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.Profile = $value
             }
             'noninteractive' { $opts.NonInteractive = $true }
@@ -114,48 +168,48 @@ function Read-CliArgs {
             'listitems' { $opts.ListItems = $true }
             'listitem' { $opts.ListItems = $true }
             'tool' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Tool += @($value) }
             }
             'allaitools' { $opts.AllAiTools = $true }
             'item' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Item += @($value) }
             }
             'app' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.App += @($value) }
             }
             'component' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Component += @($value) }
             }
             'config' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
             }
             'configuration' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
             }
             'apptuningitem' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.Config += @($value) }
             }
             'configcategory' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ConfigCategory += @($value) }
             }
             'apptuningcategory' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ConfigCategory += @($value) }
             }
             'excludeconfig' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ExcludeConfig += @($value) }
             }
             'excludeapptuningitem' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.ExcludeConfig += @($value) }
             }
             'install' { $opts.Install = $true }
@@ -166,15 +220,15 @@ function Read-CliArgs {
             'factoryreset' { $opts.FactoryReset = $true }
             'resetdefault' { $opts.FactoryReset = $true }
             'exportconfig' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.ExportConfig = $value
             }
             'importconfig' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.ImportConfig = $value
             }
             'batch' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.Batch = $value
             }
             'includesecrets' { $opts.IncludeSecrets = $true }
@@ -188,15 +242,15 @@ function Read-CliArgs {
             'y' { $opts.Yes = $true }
             'noadmin' { $opts.NoAdmin = $true }
             'installroot' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.InstallRoot = $value
             }
             'resultpath' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.ResultPath = $value
             }
             'logpath' {
-                if ($null -eq $value) { $i++; $value = [string]$Tokens[$i] }
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.LogPath = $value
             }
             'help' { $opts.Help = $true }
@@ -1600,7 +1654,20 @@ function Invoke-CliAiToolsMode {
     if ($ReturnExit) { return $exitCode } else { exit $exitCode }
 }
 
-$script:Options = Read-CliArgs -Tokens @($args)
+$rawResultPath = Get-CliRawOptionValue -Tokens @($args) -Names @('--result-path', '-ResultPath')
+$rawLogPath = Get-CliRawOptionValue -Tokens @($args) -Names @('--log-path', '-LogPath')
+try {
+    $script:Options = Read-CliArgs -Tokens @($args)
+} catch {
+    $script:Options = New-CliOptions
+    $root = if ($env:TEMP) { $env:TEMP } else { $PSScriptRoot }
+    $script:Options.LogPath = if ([string]::IsNullOrWhiteSpace($rawLogPath)) { Join-Path $root ("phasezero-install-cli-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date)) } else { $rawLogPath }
+    $script:Options.ResultPath = if ([string]::IsNullOrWhiteSpace($rawResultPath)) { Join-Path $root ("phasezero-install-cli-{0:yyyyMMdd-HHmmss}.result.json" -f (Get-Date)) } else { $rawResultPath }
+    Write-CliLegacyFailureResult -Message $_.Exception.Message -ExitCode 2 -Mode 'argument-parse' -HowToFix 'Informe valor apos a opcao ou use --help para exemplos.'
+    Write-CliOut ("Result: {0}" -f [string]$script:Options.ResultPath) Yellow
+    Write-CliOut ("Log:    {0}" -f [string]$script:Options.LogPath) Yellow
+    exit 2
+}
 
 if ([string]::IsNullOrWhiteSpace([string]$script:Options.LogPath)) {
     $root = if ($env:TEMP) { $env:TEMP } else { $PSScriptRoot }
