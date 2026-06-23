@@ -1866,12 +1866,27 @@ function Invoke-CliLifecycleActions {
         }
     } catch {
         Write-CliOut ("[ERRO] Ciclo de vida falhou: {0}" -f $_.Exception.Message) Red
+        Write-CliJsonResult -Payload ([ordered]@{
+            status = 'error'
+            mode = 'config-lifecycle'
+            action = $action
+            dryRun = $dry
+            error = $_.Exception.Message
+            howToFix = 'Revise item/path informado e rode --list-items para confirmar o alvo.'
+        }) -ResultPath ([string]$Options.ResultPath)
         exit 1
     }
 
-    if (-not [string]::IsNullOrWhiteSpace([string]$Options.ResultPath)) {
-        try { Write-BootstrapJsonFile -Path ([string]$Options.ResultPath) -Value $result; Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow } catch { }
+    $payload = [ordered]@{
+        status = 'success'
+        mode = 'config-lifecycle'
+        action = $action
+        dryRun = $dry
+        count = $(if ($result -is [System.Collections.IDictionary] -and $result.Contains('count')) { [int]$result['count'] } else { @($ids).Count })
+        result = $result
+        message = '[ciclo de vida] concluido.'
     }
+    Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
     Write-CliOut '[ciclo de vida] concluido.' Green
     return $true
 }
@@ -1934,6 +1949,14 @@ if ([bool]$script:Options.DriftCheck) {
         Write-CliOut ("{0} regressao(oes):" -f [int]$drift.regressionCount) Yellow
         foreach ($r in @($drift.regressions)) { Write-CliOut ("  {0}: {1} -> {2}" -f [string]$r.id, [string]$r.from, [string]$r.to) Yellow }
     }
+    $payload = [ordered]@{
+        status = $(if ([int]$drift.regressionCount -gt 0) { 'warning' } else { 'success' })
+        mode = 'drift-check'
+        dryRun = $true
+        drift = $drift
+        message = $(if (-not $drift.baselineExisted) { 'Baseline criado agora.' } elseif ([int]$drift.regressionCount -eq 0) { 'Nenhuma regressao desde o baseline.' } else { ("{0} regressao(oes)." -f [int]$drift.regressionCount) })
+    }
+    Write-CliJsonResult -Payload $payload -ResultPath ([string]$script:Options.ResultPath)
     exit 0
 }
 

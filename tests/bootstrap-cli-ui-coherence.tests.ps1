@@ -99,6 +99,26 @@ Describe 'CLI and UI coherence' {
         $raw | Should Not Match '\$installProcess\s*=\s*Start-Process -FilePath ''powershell\.exe'' -ArgumentList \$installArgs -NoNewWindow -PassThru -Wait'
     }
 
+    It 'writes common envelope fields for lifecycle dry-run' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-lifecycle-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        $exportDir = Join-Path $env:TEMP ("phasezero-export-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--item cursor --export-config "{0}" --dry-run --yes --result-path "{1}" --log-path "{2}"' -f $exportDir, $resultPath, $logPath)
+
+            $run.ExitCode | Should Be 0
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.mode | Should Be 'config-lifecycle'
+            [bool]$json.dryRun | Should Be $true
+            $json.PSObject.Properties.Name -contains 'artifactPaths' | Should Be $true
+            $json.PSObject.Properties.Name -contains 'diagnostics' | Should Be $true
+            $json.PSObject.Properties.Name -contains 'rollback' | Should Be $true
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $exportDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'lists a unified numbered catalog and resolves its first number through --item' {
         $list = Invoke-PhaseZeroCliCoherenceTest -Arguments '--list-items'
 
