@@ -99,7 +99,7 @@ Describe 'Bootstrap quality gates' {
             $hasMutation = (@($commands | Where-Object { $mutatingCommands -contains $_ }).Count -gt 0)
             if (-not $hasMutation) { continue }
 
-            $hasChangeRegistration = (@($commands | Where-Object { $_ -eq 'Register-BootstrapChange' }).Count -gt 0)
+            $hasChangeRegistration = (@($commands | Where-Object { $_ -in @('Register-BootstrapChange', 'Register-BootstrapFileChange') }).Count -gt 0)
             if ($hasChangeRegistration) { continue }
 
             if ($allowList -notcontains $functionAst.Name) {
