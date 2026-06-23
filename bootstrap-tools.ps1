@@ -21528,7 +21528,11 @@ function Get-BootstrapWindowsNpxLaunch {
     # causando "Could not attach to MCP server". Encapsula em `cmd /c npx ...` (forma padrao e
     # robusta no Windows). Mantemos a forma canonica 'npx' internamente; este wrap so e aplicado
     # na serializacao final de cada cliente. Retorna $null quando nao se aplica.
-    param([string]$Command, [string[]]$Args = @())
+    [CmdletBinding()]
+    param(
+        [string]$Command,
+        [Alias('Args')][string[]]$CommandArgs = @()
+    )
 
     if (-not (Test-BootstrapHostIsWindows)) { return $null }
     if ([string]::IsNullOrWhiteSpace($Command)) { return $null }
@@ -21539,14 +21543,32 @@ function Get-BootstrapWindowsNpxLaunch {
     $newArgs = New-Object System.Collections.Generic.List[string]
     $newArgs.Add('/c') | Out-Null
     $newArgs.Add('npx') | Out-Null
-    foreach ($a in @($Args)) { $newArgs.Add([string]$a) | Out-Null }
+    foreach ($a in @($CommandArgs)) { $newArgs.Add([string]$a) | Out-Null }
     return [ordered]@{ command = 'cmd'; args = @($newArgs.ToArray()) }
+}
+
+function Get-BootstrapManagedMcpRepairEntry {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [ValidateSet('standard', 'vscode')][string]$Format = 'standard'
+    )
+
+    $managedServers = Get-BootstrapManagedMcpServers -ManagedProviders @{}
+    if (-not ($managedServers -is [System.Collections.IDictionary]) -or -not $managedServers.Contains($Name)) {
+        return $null
+    }
+
+    $serverDefinition = ConvertTo-BootstrapHashtable -InputObject $managedServers[$Name]
+    if (-not ($serverDefinition -is [System.Collections.IDictionary])) { return $null }
+    return (ConvertTo-BootstrapMcpServerEntry -ServerDefinition $serverDefinition -Format $Format)
 }
 
 function Get-BootstrapMcpRepairTargets {
     # Clientes cujo config MCP usa o formato { mcpServers|servers: { nome: { command, args } } }
     # e e passivel de reparo automatico de comandos 'npx' puros (nao-lancaveis no Windows).
+    $userHome = Get-BootstrapUserHomePath
     $map = [ordered]@{
+        'claude-code'    = $(if ($userHome) { Join-Path $userHome '.claude\settings.json' } else { $null })
         'claude-desktop' = (Get-BootstrapClaudeDesktopConfigPath)
         'cursor'         = (Get-BootstrapCursorMcpConfigPath)
         'windsurf'       = (Get-BootstrapWindsurfMcpConfigPath)
@@ -21565,9 +21587,12 @@ function Get-BootstrapMcpRepairTargets {
 
 function Repair-BootstrapMcpServerMap {
     # Reescreve entradas com command 'npx' puro para 'cmd /c npx ...' (Windows-safe), idempotente
-    # (Get-BootstrapWindowsNpxLaunch retorna $null para entradas ja encapsuladas ou nao-npx).
+    # e cura configs gerados por versoes antigas que truncaram para `cmd /c npx` sem pacote.
     # Muta o hashtable recebido; retorna o numero de entradas alteradas.
-    param([Parameter(Mandatory = $true)][hashtable]$ServerMap)
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$ServerMap,
+        [ValidateSet('standard', 'vscode')][string]$Format = 'standard'
+    )
 
     $changed = 0
     foreach ($name in @($ServerMap.Keys)) {
@@ -21575,11 +21600,33 @@ function Repair-BootstrapMcpServerMap {
         if (-not ($entry -is [hashtable]) -or -not $entry.ContainsKey('command')) { continue }
         $serverArgs = @()
         if ($entry.ContainsKey('args')) { $serverArgs = @($entry['args']) }
-        $wrap = Get-BootstrapWindowsNpxLaunch -Command ([string]$entry['command']) -Args $serverArgs
-        if (-not $wrap) { continue }
-        $entry['command'] = [string]$wrap['command']
-        $entry['args'] = @($wrap['args'])
-        $ServerMap[$name] = $entry
+        $command = [string]$entry['command']
+        $base = [System.IO.Path]::GetFileNameWithoutExtension($command)
+        $replacement = $null
+
+        if ([string]::Equals($base, 'npx', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $replacement = Get-BootstrapWindowsNpxLaunch -Command $command -CommandArgs $serverArgs
+        } elseif ([string]::Equals($base, 'cmd', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $arg0 = if (@($serverArgs).Count -gt 0) { [string]$serverArgs[0] } else { '' }
+            $arg1 = if (@($serverArgs).Count -gt 1) { [string]$serverArgs[1] } else { '' }
+            $hasLauncherOnly = (
+                (@($serverArgs).Count -eq 0) -or
+                (@($serverArgs).Count -eq 1 -and [string]::Equals($arg0, 'npx', [System.StringComparison]::OrdinalIgnoreCase)) -or
+                (@($serverArgs).Count -eq 2 -and [string]::Equals($arg0, '/c', [System.StringComparison]::OrdinalIgnoreCase) -and [string]::Equals($arg1, 'npx', [System.StringComparison]::OrdinalIgnoreCase))
+            )
+            $missingCmdSwitch = (@($serverArgs).Count -gt 0 -and [string]::Equals($arg0, 'npx', [System.StringComparison]::OrdinalIgnoreCase))
+            if ($hasLauncherOnly) {
+                $replacement = Get-BootstrapManagedMcpRepairEntry -Name ([string]$name) -Format $Format
+            } elseif ($missingCmdSwitch) {
+                $fixedArgs = New-Object System.Collections.Generic.List[string]
+                $fixedArgs.Add('/c') | Out-Null
+                foreach ($a in @($serverArgs)) { $fixedArgs.Add([string]$a) | Out-Null }
+                $replacement = [ordered]@{ command = 'cmd'; args = @($fixedArgs.ToArray()) }
+            }
+        }
+
+        if (-not ($replacement -is [System.Collections.IDictionary])) { continue }
+        $ServerMap[$name] = ConvertTo-BootstrapHashtable -InputObject $replacement
         $changed++
     }
     return $changed
@@ -21622,7 +21669,8 @@ function Invoke-BootstrapMcpConfigRepair {
         foreach ($containerKey in @('mcpServers', 'servers')) {
             if ($data.ContainsKey($containerKey) -and ($data[$containerKey] -is [hashtable])) {
                 $serverMap = ConvertTo-BootstrapHashtable -InputObject $data[$containerKey]
-                $count = Repair-BootstrapMcpServerMap -ServerMap $serverMap
+                $format = if ([string]::Equals($containerKey, 'servers', [System.StringComparison]::OrdinalIgnoreCase)) { 'vscode' } else { 'standard' }
+                $count = Repair-BootstrapMcpServerMap -ServerMap $serverMap -Format $format
                 if ($count -gt 0) { $data[$containerKey] = $serverMap; $totalChanged += $count }
             }
         }
@@ -21670,7 +21718,7 @@ function ConvertTo-BootstrapMcpServerEntry {
 
     # Robustez Windows: encapsular comandos stdio 'npx' em `cmd /c npx ...` na saida final.
     if (($effectiveDefinition -is [System.Collections.IDictionary]) -and $effectiveDefinition.ContainsKey('command') -and -not $effectiveDefinition.ContainsKey('url')) {
-        $npxWrap = Get-BootstrapWindowsNpxLaunch -Command ([string]$effectiveDefinition['command']) -Args @($effectiveDefinition['args'])
+        $npxWrap = Get-BootstrapWindowsNpxLaunch -Command ([string]$effectiveDefinition['command']) -CommandArgs @($effectiveDefinition['args'])
         if ($npxWrap) {
             $effectiveDefinition = ConvertTo-BootstrapHashtable -InputObject $effectiveDefinition
             $effectiveDefinition['command'] = [string]$npxWrap['command']

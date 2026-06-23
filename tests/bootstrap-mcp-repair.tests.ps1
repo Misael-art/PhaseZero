@@ -12,6 +12,32 @@ function New-McpRepairTempConfig {
 }
 
 Describe 'MCP config repair (npx -> cmd /c npx)' {
+    It 'includes Claude Code user settings in repair targets' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $targets = @(Get-BootstrapMcpRepairTargets)
+
+        (@($targets | Where-Object { [string]$_.id -eq 'claude-code' }).Count -gt 0) | Should Be $true
+    }
+
+    It 'wraps npx while preserving the complete argument list' {
+        . $scriptPath -BootstrapUiLibraryMode
+        if (-not (Test-BootstrapHostIsWindows)) { return }
+        $wrap = Get-BootstrapWindowsNpxLaunch -Command 'npx' -CommandArgs @('-y', '@playwright/mcp@latest', '--isolated')
+
+        [string]$wrap.command | Should Be 'cmd'
+        @($wrap.args) | Should Be @('/c', 'npx', '-y', '@playwright/mcp@latest', '--isolated')
+    }
+
+    It 'serializes managed stdio servers with the full npx package arguments' {
+        . $scriptPath -BootstrapUiLibraryMode
+        if (-not (Test-BootstrapHostIsWindows)) { return }
+        $server = New-BootstrapManagedMcpCommandServer -Command 'npx' -Args @('-y', 'chrome-devtools-mcp@latest', '--isolated')
+        $entry = ConvertTo-BootstrapMcpServerEntry -ServerDefinition $server -Format 'standard'
+
+        [string]$entry.command | Should Be 'cmd'
+        @($entry.args) | Should Be @('/c', 'npx', '-y', 'chrome-devtools-mcp@latest', '--isolated')
+    }
+
     It 'rewrites bare npx stdio servers to cmd /c npx and preserves other entries' {
         . $scriptPath -BootstrapUiLibraryMode
         if (-not (Test-BootstrapHostIsWindows)) { return }
@@ -24,6 +50,8 @@ Describe 'MCP config repair (npx -> cmd /c npx)' {
             [string]$after.mcpServers.playwright.command | Should Be 'cmd'
             @($after.mcpServers.playwright.args)[0] | Should Be '/c'
             @($after.mcpServers.playwright.args)[1] | Should Be 'npx'
+            @($after.mcpServers.playwright.args) | Should Be @('/c', 'npx', '-y', '@playwright/mcp@latest', '--isolated')
+            @($after.mcpServers.context7.args) | Should Be @('/c', 'npx', '-y', 'mcp-remote@latest', 'https://mcp.context7.com/mcp')
             [string]$after.mcpServers.serena.command | Should Be 'serena'
             [string]$after.mcpServers.box.url | Should Be 'https://mcp.box.com'
             (Test-Path ($cfg + '.bak')) | Should Be $true
@@ -73,6 +101,21 @@ Describe 'MCP config repair (npx -> cmd /c npx)' {
             [int]$r.totalFixed | Should Be 1
             $after = Get-Content $cfg -Raw | ConvertFrom-Json
             [string]$after.servers.pw.command | Should Be 'cmd'
+        } finally { Remove-Item -LiteralPath $cfg, ($cfg + '.bak') -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'repairs managed entries previously truncated to cmd /c npx only' {
+        . $scriptPath -BootstrapUiLibraryMode
+        if (-not (Test-BootstrapHostIsWindows)) { return }
+        $cfg = New-McpRepairTempConfig -Json '{"mcpServers":{"desktop-commander":{"command":"cmd","args":["/c","npx"],"enabled":true},"chrome-devtools":{"command":"cmd","args":["/c","npx"],"enabled":true},"playwright":{"command":"cmd","args":["/c","npx"],"enabled":true},"serena":{"command":"serena","args":["start-mcp-server","--project-from-cwd"]}}}'
+        try {
+            $r = Invoke-BootstrapMcpConfigRepair -ConfigPaths @($cfg)
+            [int]$r.totalFixed | Should Be 3
+            $after = Get-Content $cfg -Raw | ConvertFrom-Json
+            @($after.mcpServers.'desktop-commander'.args) | Should Be @('/c', 'npx', '-y', '@wonderwhy-er/desktop-commander@latest', '--no-onboarding')
+            @($after.mcpServers.'chrome-devtools'.args) | Should Be @('/c', 'npx', '-y', 'chrome-devtools-mcp@latest', '--isolated')
+            @($after.mcpServers.playwright.args) | Should Be @('/c', 'npx', '-y', '@playwright/mcp@latest', '--isolated')
+            @($after.mcpServers.serena.args) | Should Be @('start-mcp-server', '--project-from-cwd')
         } finally { Remove-Item -LiteralPath $cfg, ($cfg + '.bak') -Force -ErrorAction SilentlyContinue }
     }
 }
