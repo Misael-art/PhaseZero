@@ -1468,6 +1468,9 @@ function Invoke-CliBackendProcess {
         $stderr = [string]$stderrTask.GetAwaiter().GetResult()
         [System.IO.File]::WriteAllText($stdoutPath, $stdout, [System.Text.UTF8Encoding]::new($false))
         [System.IO.File]::WriteAllText($stderrPath, $stderr, [System.Text.UTF8Encoding]::new($false))
+        # Ecoa a saida capturada ao final (nao ao vivo) para preservar visibilidade do backend.
+        if (-not [string]::IsNullOrWhiteSpace($stdout)) { Write-Host $stdout.TrimEnd() }
+        if (-not [string]::IsNullOrWhiteSpace($stderr)) { Write-Host $stderr.TrimEnd() -ForegroundColor Yellow }
         return [pscustomobject]@{ ExitCode = [int]$process.ExitCode; TimedOut = $false; StdoutPath = $stdoutPath; StderrPath = $stderrPath }
     } finally {
         try { $process.Dispose() } catch { }
