@@ -9642,6 +9642,7 @@ function Get-BootstrapAppTuningInstallComponents {
 
     $map = @{
         'steam-big-picture-session' = @('steam')
+        'emudeck-bigpicture-srm' = @('emudeck')
         'playnite-fullscreen' = @('playnite')
         'heroic-library-paths' = @('heroic')
         'rtss-frame-presets' = @('rtss')
