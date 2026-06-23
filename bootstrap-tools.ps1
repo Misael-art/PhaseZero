@@ -7909,6 +7909,62 @@ function Get-BootstrapLinuxPartitions {
     return @($linuxPartitions)
 }
 
+# ---------------------------------------------------------------------------------------------------
+# Btrfs dual-boot (Windows <-> SteamOS). REGRA INEGOCIAVEL: este modulo NUNCA formata/particiona.
+# Nenhuma funcao abaixo chama Format-Volume, Initialize-Disk, Clear-Disk, mkfs ou diskpart. Apenas
+# detecta, audita prontidao, instala (guiado) o driver WinBtrfs e mapeia permissao. Leitura+escrita
+# sao providas pelo proprio WinBtrfs apos instalado; o gate de Fast Startup evita corrupcao.
+# ---------------------------------------------------------------------------------------------------
+function Get-BootstrapWinBtrfsState {
+    # Detecta o driver WinBtrfs (maharmstone/btrfs) instalado no Windows. Nao monta nem altera nada.
+    $driverPath = Join-Path $env:SystemRoot 'System32\drivers\btrfs.sys'
+    $installed = (Test-Path -LiteralPath $driverPath)
+    $serviceState = ''
+    try {
+        if (Get-Command -Name Get-Service -ErrorAction SilentlyContinue) {
+            $svc = Get-Service -Name 'btrfs' -ErrorAction SilentlyContinue
+            if ($svc) { $installed = $true; $serviceState = [string]$svc.Status }
+        }
+    } catch { }
+    return [ordered]@{ installed = [bool]$installed; driverPath = $driverPath; serviceState = $serviceState }
+}
+
+function Get-BootstrapBtrfsReadiness {
+    # Auditoria de prontidao para acesso btrfs no dual-boot. Sem efeitos colaterais; seguro em lib mode.
+    $fast = Get-BootstrapFastStartupStatus
+    $rebootReasons = @()
+    try { $rebootReasons = @(Get-BootstrapPendingRebootReasons) } catch { $rebootReasons = @() }
+    $winbtrfs = Get-BootstrapWinBtrfsState
+    $partitions = @()
+    if (-not $BootstrapUiLibraryMode) {
+        try { $partitions = @(Get-BootstrapLinuxPartitions) } catch { $partitions = @() }
+    }
+
+    $checks = [ordered]@{
+        'fast-startup-off' = $(if ($fast.Enabled) { 'warning' } else { 'healthy' })
+        'winbtrfs-driver'  = $(if ($winbtrfs.installed) { 'healthy' } else { 'not-installed' })
+        'linux-partitions' = $(if (@($partitions).Count -gt 0) { 'healthy' } else { 'warning' })
+    }
+    $recommendations = New-Object System.Collections.Generic.List[string]
+    if ($fast.Enabled) { $recommendations.Add('Desligue Fast Startup/hibernacao (aba Dual Boot) antes de montar btrfs R/W; senao a FS fica suja e pode corromper.') | Out-Null }
+    if (-not $winbtrfs.installed) { $recommendations.Add('Instale o WinBtrfs (componente winbtrfs, guiado) para ler/escrever btrfs no Windows.') | Out-Null }
+    $recommendations.Add('Para o Linux ver o dono correto, use uid/gid=1000 nas opcoes do volume WinBtrfs.') | Out-Null
+    $recommendations.Add('Este modulo NUNCA formata particoes. Faca backup antes de habilitar escrita.') | Out-Null
+
+    return [ordered]@{
+        fastStartupEnabled = [bool]$fast.Enabled
+        pendingReboot = (@($rebootReasons).Count -gt 0)
+        winbtrfsInstalled = [bool]$winbtrfs.installed
+        winbtrfsServiceState = [string]$winbtrfs.serviceState
+        linuxPartitionCount = @($partitions).Count
+        partitions = @($partitions)
+        checks = $checks
+        recommendations = @($recommendations.ToArray())
+        readWriteSupported = [bool]$winbtrfs.installed
+        neverFormats = $true
+    }
+}
+
 function Get-BootstrapEfiEntries {
     if (-not (Test-IsAdmin)) { return $null }
     $entries = @()
@@ -13447,6 +13503,10 @@ function Get-BootstrapComponentCatalog {
     $catalog['visual-studio-community'] = New-BootstrapComponentDefinition -Name 'visual-studio-community' -Description 'Visual Studio Community 2022.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudio.2022.Community'; DisplayName = 'Visual Studio Community 2022'; ProbePaths = @("$env:ProgramFiles\Microsoft Visual Studio\2022\Community\Common7\IDE\devenv.exe") }
     $catalog['steam'] = New-BootstrapComponentDefinition -Name 'steam' -Description 'Steam.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.Steam'; DisplayName = 'Steam'; ProbePaths = @("${env:ProgramFiles(x86)}\Steam\steam.exe", "$env:ProgramFiles\Steam\steam.exe") }
     $catalog['steamcmd'] = New-BootstrapComponentDefinition -Name 'steamcmd' -Description 'SteamCMD.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Valve.SteamCMD'; DisplayName = 'SteamCMD'; ProbePaths = @("${env:ProgramFiles(x86)}\Steam\steamapps\common\SteamCMD\steamcmd.exe", "$env:ProgramFiles\Steam\steamapps\common\SteamCMD\steamcmd.exe") }
+    # WinBtrfs: driver de kernel (maharmstone/btrfs) que da LEITURA e ESCRITA em particoes Btrfs do
+    # Linux/SteamOS no dual-boot. manual-required (guiado): admin + reboot, instalacao silenciosa de
+    # driver fica fora por seguranca. NUNCA formata; exige Fast Startup OFF antes de escrever.
+    $catalog['winbtrfs'] = New-BootstrapComponentDefinition -Name 'winbtrfs' -Description 'WinBtrfs: driver Windows para LER e ESCREVER nas particoes Btrfs do SteamOS no dual-boot (nunca formata).' -Optional $true -DependsOn @('system-core') -Kind 'manual-required' -RequiresNetwork $true -Data @{ DisplayName = 'WinBtrfs (Btrfs R/W no Windows)'; Stage = 'verify'; Provisioning = 'manual-required'; RequiresAdmin = $true; RequiresReboot = $true; ValueReason = 'Acessa (leitura e escrita) as particoes Btrfs do SteamOS a partir do Windows no dual-boot.'; ProbePaths = @("$env:SystemRoot\System32\drivers\btrfs.sys"); Instructions = 'Baixe o release oficial em https://github.com/maharmstone/btrfs/releases, rode o instalador como Administrador e reinicie. ANTES desligue Fast Startup/hibernacao (aba Dual Boot) para a FS nao corromper. Para o Linux ver o dono correto, use uid/gid=1000 nas opcoes do volume WinBtrfs. ESTE MODULO NUNCA FORMATA NADA; faca backup antes de escrever.'; riskLevel = 'experimental'; officialSource = 'https://github.com/maharmstone/btrfs'; manualReason = 'Driver de kernel de terceiros: exige admin, reboot e aceitar risco de estabilidade; nunca formata particoes.'; requiresGpu = $false; requiresInteractiveLogin = $false }
     # EmuDeck for Windows: instalador GUI oficial (beta, sem paridade com SteamOS) que configura
     # ES-DE + RetroArch + emuladores + Steam ROM Manager. Por ser wizard interativo e autoatualizavel,
     # fica como manual-required (guiado), opt-in. Pre-reqs reais ja no catalogo (steam/sevenzip/vcpp-redist).
