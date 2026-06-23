@@ -93,6 +93,25 @@ Describe 'Resilience Architecture' {
     }
 
     Context 'Rollback' {
+        It 'restores an existing file from a registered rollback backup' {
+            $tempDir = Join-Path $env:TEMP ('bootstrap-file-rollback-test-' + ([Guid]::NewGuid().ToString()))
+            $null = New-Item -Path $tempDir -ItemType Directory -Force
+            try {
+                $target = Join-Path $tempDir 'config.json'
+                [System.IO.File]::WriteAllText($target, 'before', [System.Text.UTF8Encoding]::new($false))
+                $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $tempDir -ResolvedCloneBaseDir $tempDir
+                $state.ChangeManifestPath = Join-Path $tempDir 'changes.json'
+
+                Register-BootstrapFileChange -State $state -Target $target -Operation 'test-file-update' -Component 'test'
+                [System.IO.File]::WriteAllText($target, 'after', [System.Text.UTF8Encoding]::new($false))
+                Invoke-BootstrapRollback -ChangesPath $state.ChangeManifestPath | Out-Null
+
+                [string](Get-Content -LiteralPath $target -Raw) | Should Be 'before'
+            } finally {
+                Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+
         It 'Registers changes and rolls them back' {
             $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot 'C:\' -ResolvedCloneBaseDir 'C:\'
             Mock Remove-ItemProperty

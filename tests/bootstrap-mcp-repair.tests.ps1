@@ -118,4 +118,32 @@ Describe 'MCP config repair (npx -> cmd /c npx)' {
             @($after.mcpServers.serena.args) | Should Be @('start-mcp-server', '--project-from-cwd')
         } finally { Remove-Item -LiteralPath $cfg, ($cfg + '.bak') -Force -ErrorAction SilentlyContinue }
     }
+
+    It 'registers a file backup so rollback restores repaired MCP config instead of deleting it' {
+        . $scriptPath -BootstrapUiLibraryMode
+        if (-not (Test-BootstrapHostIsWindows)) { return }
+        $root = Join-Path $env:TEMP ("pz-mcprepair-rollback-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        $null = New-Item -Path $root -ItemType Directory -Force
+        $cfg = Join-Path $root 'mcp.json'
+        $original = '{"mcpServers":{"pw":{"command":"npx","args":["-y","x"]}}}'
+        Set-Content -LiteralPath $cfg -Value $original -Encoding UTF8
+        try {
+            $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $root -ResolvedCloneBaseDir $root
+            $state.ChangeManifestPath = Join-Path $root 'changes.json'
+
+            $r = Invoke-BootstrapMcpConfigRepair -ConfigPaths @($cfg) -State $state
+            [int]$r.totalFixed | Should Be 1
+            Test-Path -LiteralPath $state.ChangeManifestPath | Should Be $true
+            $manifest = Get-Content -LiteralPath $state.ChangeManifestPath -Raw | ConvertFrom-Json
+            [string]$manifest.changes[0].Type | Should Be 'File'
+            [string]::IsNullOrWhiteSpace([string]$manifest.changes[0].OldValue) | Should Be $false
+            Test-Path -LiteralPath ([string]$manifest.changes[0].OldValue) | Should Be $true
+
+            Invoke-BootstrapRollback -ChangesPath $state.ChangeManifestPath | Out-Null
+            Test-Path -LiteralPath $cfg | Should Be $true
+            (Get-Content -LiteralPath $cfg -Raw) | Should Match '"command"\s*:\s*"npx"'
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
 }

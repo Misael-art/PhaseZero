@@ -634,6 +634,34 @@ function Register-BootstrapChange {
     Save-BootstrapChangeManifest -State $State
 }
 
+function Register-BootstrapFileChange {
+    # Registra uma mutacao de arquivo com BACKUP do conteudo atual ANTES da escrita. Deve ser
+    # chamada antes de gravar/sobrescrever o alvo para que o rollback restaure o original (e nao
+    # apague um config pre-existente). Se o arquivo nao existir, o rollback apenas remove o criado.
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$Target,
+        [string]$Operation = 'file-update',
+        [string]$Component = '',
+        [AllowNull()]$NewValue = $null
+    )
+
+    $oldValue = $null
+    if (Test-Path -LiteralPath $Target) {
+        $manifestPath = Get-BootstrapChangeManifestPath -State $State
+        $backupRoot = Join-Path (Split-Path -Path $manifestPath -Parent) 'file-backups'
+        $null = New-Item -Path $backupRoot -ItemType Directory -Force
+        $leaf = Split-Path -Path $Target -Leaf
+        if ([string]::IsNullOrWhiteSpace($leaf)) { $leaf = 'file' }
+        $backupPath = Join-Path $backupRoot ("{0}-{1}.bak" -f ([Guid]::NewGuid().ToString('N')), $leaf)
+        Copy-Item -LiteralPath $Target -Destination $backupPath -Force -ErrorAction Stop
+        $oldValue = $backupPath
+    }
+
+    $rollbackAction = if ($oldValue) { 'restore-file-backup' } else { 'remove-created-file' }
+    Register-BootstrapChange -State $State -Type File -Target $Target -OldValue $oldValue -NewValue $NewValue -Operation $Operation -Component $Component -RollbackAction $rollbackAction -Reversible 'partial'
+}
+
 function Get-BootstrapChangeManifestPath {
     param([Parameter(Mandatory = $true)][hashtable]$State)
     if (-not [string]::IsNullOrWhiteSpace([string]$State.ChangeManifestPath)) { return [string]$State.ChangeManifestPath }
@@ -20376,10 +20404,10 @@ function Ensure-BootstrapMimoCodeConfig {
         try { Copy-Item -LiteralPath $configPath -Destination ($configPath + '.bak') -Force -ErrorAction Stop }
         catch { Write-Log ("Nao foi possivel gravar backup do config MiMo Code: {0}" -f $_.Exception.Message) 'WARN' }
     }
-    Write-BootstrapJsonFile -Path $configPath -Value $config
     if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
-        try { Register-BootstrapChange -State $State -Type File -Target $configPath -OldValue $null -NewValue 'mimocode-provider' -Operation 'configure-mimocode' -Component 'mimo-code' } catch { }
+        try { Register-BootstrapFileChange -State $State -Target $configPath -NewValue 'mimocode-provider' -Operation 'configure-mimocode' -Component 'mimo-code' } catch { }
     }
+    Write-BootstrapJsonFile -Path $configPath -Value $config
     Write-Log ("MiMo Code configurado com provider OpenAI-compatible '{0}' (chave mascarada) em {1}" -f $providerName, $configPath)
     return [ordered]@{ status = 'configured'; provider = $providerName; path = $configPath }
 }
@@ -20545,6 +20573,9 @@ function Import-BootstrapItemConfig {
                 try { Copy-Item -LiteralPath ([string]$targetPath) -Destination (([string]$targetPath) + '.bak') -Force -ErrorAction Stop } catch { }
             }
 
+            if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
+                try { Register-BootstrapFileChange -State $State -Target ([string]$targetPath) -Operation 'import-item-config' -Component $desc.id } catch { }
+            }
             if ($isJson) {
                 $targetData = @{}
                 if (Test-Path -LiteralPath ([string]$targetPath)) {
@@ -20554,9 +20585,6 @@ function Import-BootstrapItemConfig {
                 Write-BootstrapJsonFile -Path ([string]$targetPath) -Value $merged
             } else {
                 Copy-Item -LiteralPath $srcFile -Destination ([string]$targetPath) -Force
-            }
-            if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
-                try { Register-BootstrapChange -State $State -Type File -Target ([string]$targetPath) -Operation 'import-item-config' -Component $desc.id } catch { }
             }
             $applied.Add($leaf) | Out-Null
         }
@@ -20605,10 +20633,10 @@ function Invoke-BootstrapItemFactoryReset {
         if (Test-Path -LiteralPath $path) {
             try { Copy-Item -LiteralPath $path -Destination ($path + '.pre-reset.bak') -Force -ErrorAction Stop } catch { }
         }
-        Copy-Item -LiteralPath $baseline -Destination $path -Force
         if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
-            try { Register-BootstrapChange -State $State -Type File -Target $path -Operation 'factory-reset' -Component $desc.id } catch { }
+            try { Register-BootstrapFileChange -State $State -Target $path -Operation 'factory-reset' -Component $desc.id } catch { }
         }
+        Copy-Item -LiteralPath $baseline -Destination $path -Force
         $restored.Add((Split-Path -Path $path -Leaf)) | Out-Null
     }
     if (-not $DryRun -and $restored.Count -gt 0) { Set-BootstrapItemStatus -Kind 'app' -Id $desc.id -Status 'installed-unconfigured' }
@@ -21746,10 +21774,10 @@ function Invoke-BootstrapMcpConfigRepair {
         try { Copy-Item -LiteralPath $path -Destination ($path + '.bak') -Force -ErrorAction Stop } catch {
             Write-Log ("Reparo MCP: backup falhou para {0}: {1}" -f $path, $_.Exception.Message) 'WARN'
         }
-        Write-BootstrapJsonFile -Path $path -Value $data
         if (($State -is [hashtable]) -and $State.ContainsKey('Changes')) {
-            try { Register-BootstrapChange -State $State -Type File -Target $path -Operation 'repair-mcp-npx' -Component ([string]$t.id) } catch { }
+            try { Register-BootstrapFileChange -State $State -Target $path -Operation 'repair-mcp-npx' -Component ([string]$t.id) } catch { }
         }
+        Write-BootstrapJsonFile -Path $path -Value $data
         $results.Add([ordered]@{ id = [string]$t.id; path = $path; status = 'fixed'; fixed = $totalChanged }) | Out-Null
     }
 
