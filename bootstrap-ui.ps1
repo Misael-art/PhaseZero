@@ -7432,9 +7432,22 @@ $ui.HealthRepairMcpButton.Add_Click({
             $ui.StatusLabel.Text = 'Reparo MCP cancelado.'
             return
         }
-        $result = Invoke-BootstrapMcpConfigRepair
-        $verify = Invoke-BootstrapMcpConfigRepair -DryRun
-        $ui.StatusLabel.Text = ("Reparo MCP: {0} entrada(s) corrigida(s) (backups .bak). Restantes: {1}. Reinicie os apps para reconectar." -f [int]$result.totalFixed, [int]$verify.totalFixed)
+        # Roda o reparo via install-cli.bat (processo separado) para produzir result.json/log
+        # versionaveis, sem bloquear a thread WPF nem deixar a acao sem artefato.
+        $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+        $artifacts = New-UiRunArtifactSet -Timestamp $timestamp
+        $ui.CurrentLogPath = [string]$artifacts.LogPath
+        $ui.CurrentResultPath = [string]$artifacts.ResultPath
+        $installCli = Join-Path $PSScriptRoot 'install-cli.bat'
+        $repairArgs = @(
+            '--repair-mcp',
+            '--yes',
+            '--result-path', [string]$ui.CurrentResultPath,
+            '--log-path', [string]$ui.CurrentLogPath
+        )
+        Start-Process -FilePath $installCli -ArgumentList (ConvertTo-ArgumentString -Tokens $repairArgs) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
+        $ui.StatusLabel.Text = ("Reparo MCP iniciado. Result: {0}" -f [string]$ui.CurrentResultPath)
+        Update-RunArtifactButtons
     } catch {
         Write-UiLog -Level 'ERROR' -Message ("Falha no reparo de MCP: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
         $ui.StatusLabel.Text = "Erro no reparo de MCP: $($_.Exception.Message)"

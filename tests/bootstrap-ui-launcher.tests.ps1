@@ -42,6 +42,16 @@ Describe 'Bootstrap UI launcher' {
         Remove-Variable -Scope Script -Name TestDataRoot -ErrorAction SilentlyContinue
     }
 
+    It 'routes MCP repair through an artifact-producing command instead of direct synchronous repair' {
+        $raw = Get-Content -LiteralPath $uiScriptPath -Raw
+
+        $raw | Should Match 'HealthRepairMcpButton\.Add_Click'
+        $raw | Should Match '--repair-mcp'
+        $raw | Should Match '--result-path'
+        $raw | Should Match '--log-path'
+        $raw | Should Not Match '\$result\s*=\s*Invoke-BootstrapMcpConfigRepair\s*\r?\n\s*\$verify\s*=\s*Invoke-BootstrapMcpConfigRepair -DryRun'
+    }
+
     It 'supports smoke test execution from Windows PowerShell file mode' {
         $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         $uiStatePath = Join-Path $script:TestDataRoot 'ui-state.json'
