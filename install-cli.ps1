@@ -1699,19 +1699,48 @@ function Invoke-CliMcpRepair {
     }
     Write-CliOut ''
 
+    $payload = [ordered]@{
+        status = 'success'
+        mode = 'mcp-repair'
+        action = $(if ($apply) { 'apply' } else { 'dry-run' })
+        dryRun = (-not $apply)
+        totalFixed = [int]$preview.totalFixed
+        targets = @($preview.targets)
+        verification = $null
+        message = ''
+        nextSteps = @()
+    }
+
     if ([int]$preview.totalFixed -eq 0) {
         Write-CliOut 'Nenhum comando "npx" puro encontrado nos configs MCP. Nada a reparar.' Green
-        return
+        $payload['message'] = 'Nenhum comando npx puro encontrado nos configs MCP.'
+        $payload['nextSteps'] = @('Nada a reparar.')
+        Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
+        return 0
     }
     if (-not $apply) {
         Write-CliOut ("{0} entrada(s) seriam corrigidas. Para aplicar (com backup .bak): .\install-cli.bat --repair-mcp --yes" -f [int]$preview.totalFixed) Cyan
-        return
+        $payload['message'] = ("{0} entrada(s) seriam corrigidas." -f [int]$preview.totalFixed)
+        $payload['nextSteps'] = @('.\install-cli.bat --repair-mcp --yes')
+        Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
+        return 0
     }
 
     $result = Invoke-BootstrapMcpConfigRepair
     Write-CliOut ("[reparo MCP] {0} entrada(s) corrigida(s) (backups .bak criados)." -f [int]$result.totalFixed) Green
     $verify = Invoke-BootstrapMcpConfigRepair -DryRun
     Write-CliOut ("Verificacao: npx puros restantes = {0}" -f [int]$verify.totalFixed) $(if ([int]$verify.totalFixed -eq 0) { [System.ConsoleColor]::Green } else { [System.ConsoleColor]::Yellow })
+
+    $payload['dryRun'] = $false
+    $payload['action'] = 'apply'
+    $payload['totalFixed'] = [int]$result.totalFixed
+    $payload['targets'] = @($result.targets)
+    $payload['verification'] = $verify
+    $payload['status'] = if ([int]$verify.totalFixed -eq 0) { 'success' } else { 'warning' }
+    $payload['message'] = ("Reparo MCP corrigiu {0} entrada(s); restantes={1}." -f [int]$result.totalFixed, [int]$verify.totalFixed)
+    $payload['nextSteps'] = @('Reinicie os apps MCP/IDE para reconectar.')
+    Write-CliJsonResult -Payload $payload -ResultPath ([string]$Options.ResultPath)
+    return $(if ([int]$verify.totalFixed -eq 0) { 0 } else { 1 })
 }
 
 function Invoke-CliLifecycleActions {
@@ -1808,8 +1837,7 @@ try {
 # Reparo de configs MCP (npx puro -> cmd /c npx) nos clientes. --repair-mcp mostra o plano (dry-run);
 # adicione --yes para aplicar de fato (com backup .bak por arquivo).
 if ([bool]$script:Options.RepairMcp) {
-    Invoke-CliMcpRepair -Options $script:Options
-    exit 0
+    exit (Invoke-CliMcpRepair -Options $script:Options)
 }
 
 # Verificacao de drift: roda o Doctor e compara com o baseline, reportando regressoes.

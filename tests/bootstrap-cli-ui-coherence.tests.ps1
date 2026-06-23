@@ -71,6 +71,24 @@ Describe 'CLI and UI coherence' {
         }
     }
 
+    It 'writes result json for MCP repair dry-run' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-coherence-mcp-repair-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')
+        try {
+            $run = Invoke-PhaseZeroCliCoherenceTest -Arguments ('--repair-mcp --dry-run --yes --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath)
+
+            $run.ExitCode | Should Be 0
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.mode | Should Be 'mcp-repair'
+            [bool]$json.dryRun | Should Be $true
+            $json.PSObject.Properties.Name -contains 'targets' | Should Be $true
+            $json.PSObject.Properties.Name -contains 'artifactPaths' | Should Be $true
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'lists a unified numbered catalog and resolves its first number through --item' {
         $list = Invoke-PhaseZeroCliCoherenceTest -Arguments '--list-items'
 
