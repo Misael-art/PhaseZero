@@ -5,6 +5,72 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath -BootstrapUiLibraryMode
 
+Describe 'Windows home server: profiles' {
+    $expected = @{
+        'server-llm'                = @('ollama', 'os-slim-server')
+        'server-homelab'            = @('homelab-stack', 'tailscale')
+        'server-homelab-hermes'     = @('homelab-stack', 'tailscale', 'hermes-remote')
+        'server-llm-hermes'         = @('ollama', 'hermes-remote', 'os-slim-server')
+        'server-llm-homelab'        = @('ollama', 'homelab-stack', 'tailscale', 'os-slim-server')
+        'server-llm-homelab-hermes' = @('ollama', 'homelab-stack', 'tailscale', 'hermes-remote', 'os-slim-server')
+    }
+    It 'define os 6 perfis de servidor com os componentes corretos' {
+        $profiles = Get-BootstrapProfileCatalog
+        foreach ($name in $expected.Keys) {
+            $profiles.Contains($name) | Should Be $true
+            foreach ($item in $expected[$name]) { @($profiles[$name].Items) -contains $item | Should Be $true }
+        }
+    }
+    It 'todos os itens dos 6 perfis existem no catalogo de componentes' {
+        $catalog = Get-BootstrapComponentCatalog
+        $profiles = Get-BootstrapProfileCatalog
+        foreach ($name in $expected.Keys) {
+            foreach ($item in @($profiles[$name].Items)) { $catalog.Contains($item) | Should Be $true }
+        }
+    }
+    It 'expoe os 6 perfis de servidor no contrato da UI/CLI' {
+        $contract = Get-BootstrapUiContract
+        $names = @($contract.profiles | ForEach-Object { [string]$_.name })
+        foreach ($p in $expected.Keys) { $names -contains $p | Should Be $true }
+    }
+    It 'resolve o perfil mais completo a componentes (com dependencias) sem erro' {
+        $res = Resolve-BootstrapComponents -SelectedProfiles @('server-llm-homelab-hermes')
+        $resolved = @($res.ResolvedComponents)
+        foreach ($item in @('ollama', 'homelab-stack', 'hermes-remote', 'os-slim-server', 'tailscale')) {
+            $resolved -contains $item | Should Be $true
+        }
+        # dependencias transitivas presentes
+        foreach ($dep in @('wsl-core', 'docker', 'hermes')) { $resolved -contains $dep | Should Be $true }
+    }
+}
+
+Describe 'Windows home server: hermes-remote' {
+    It 'declara hermes-remote opt-in dependente de hermes e tailscale' {
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('hermes-remote') | Should Be $true
+        [bool]$catalog['hermes-remote'].Optional | Should Be $true
+        @($catalog['hermes-remote'].DependsOn) -contains 'hermes' | Should Be $true
+        @($catalog['hermes-remote'].DependsOn) -contains 'tailscale' | Should Be $true
+    }
+    It 'NUNCA embute authkey/token no codigo (usa env/secrets)' {
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+        $fn = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Ensure-BootstrapHermesRemote' }, $true))[0]
+        $fn | Should Not BeNullOrEmpty
+        $fn.Extent.Text | Should Not Match 'tskey-[A-Za-z0-9]|--authkey[= ]+[A-Za-z0-9]'
+    }
+    It 'em dry-run nao executa tailscale up nem reparo' {
+        Mock -CommandName Invoke-BootstrapCommandCapture -MockWith { [pscustomobject]@{ ExitCode = 0; Output = @() } }
+        Mock -CommandName Invoke-BootstrapMcpConfigRepair -MockWith { [ordered]@{ totalFixed = 0; targets = @() } }
+        Mock -CommandName Ensure-HermesProjectOpenCloudConfig -MockWith {}
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $env:TEMP -ResolvedCloneBaseDir $env:TEMP
+        $state.DryRun = $true
+        Ensure-BootstrapHermesRemote -State $state
+        Assert-MockCalled -CommandName Invoke-BootstrapCommandCapture -Times 0 -Scope It
+        Assert-MockCalled -CommandName Invoke-BootstrapMcpConfigRepair -Times 0 -Scope It
+    }
+}
+
 Describe 'Windows home server: homelab-stack' {
     It 'declara homelab-stack opt-in dependente de wsl-core e docker' {
         $catalog = Get-BootstrapComponentCatalog

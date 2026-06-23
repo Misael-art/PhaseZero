@@ -7848,6 +7848,36 @@ function Ensure-BootstrapLlamaCppServer {
     Write-Log 'llama.cpp server: baixe o release oficial (llama-server.exe) em https://github.com/ggml-org/llama.cpp/releases e um modelo GGUF; rode run-llamacpp.ps1 -ModelPath <gguf>. O launcher reduz --n-gpu-layers automaticamente em caso de estouro de VRAM.'
 }
 
+function Ensure-BootstrapHermesRemote {
+    # Habilita o Hermes para atuacao remota: garante a config OpenCloud do projeto, cura o launch dos
+    # MCP (Windows-safe) e conecta o Tailscale (authkey via TS_AUTHKEY/secrets, NUNCA hardcode). O
+    # Hermes deve ser acessado apenas pela rede Tailscale, nunca em 0.0.0.0 publico. Respeita -DryRun.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $dry = [bool]$State.DryRun
+    Write-Log ("hermes-remote: {0}..." -f $(if ($dry) { 'dry-run (sem alteracoes)' } else { 'configurando atuacao remota' }))
+    if ($dry) { return }
+
+    try { Ensure-HermesProjectOpenCloudConfig -State $State } catch { Write-Log ("hermes-remote: config OpenCloud nao ajustada: {0}" -f $_.Exception.Message) 'WARN' }
+    try {
+        $hermesCfg = Get-BootstrapHermesConfigPath -State $State
+        if ($hermesCfg) { $null = Invoke-BootstrapMcpConfigRepair -ConfigPaths @($hermesCfg) -State $State }
+    } catch { Write-Log ("hermes-remote: reparo MCP do Hermes falhou: {0}" -f $_.Exception.Message) 'WARN' }
+
+    $authKey = [string]$env:TS_AUTHKEY
+    $tailscaleExe = [string](Resolve-CommandPath -Name 'tailscale')
+    if ([string]::IsNullOrWhiteSpace($tailscaleExe)) {
+        Write-Log 'hermes-remote: tailscale.exe nao encontrado (o componente tailscale e dependencia). Instale e rode novamente.' 'WARN'
+    } elseif (-not [string]::IsNullOrWhiteSpace($authKey)) {
+        $up = Invoke-BootstrapCommandCapture -Exe $tailscaleExe -Args @('up', '--authkey', $authKey, '--accept-dns=true')
+        if ([int]$up.ExitCode -eq 0) { Write-Log 'hermes-remote: Tailscale conectado via authkey (valor mascarado).' }
+        else { Write-Log ("hermes-remote: 'tailscale up' falhou (exit={0}); rode manualmente." -f [int]$up.ExitCode) 'WARN' }
+    } else {
+        Write-Log 'hermes-remote: defina TS_AUTHKEY (env/secrets) para conectar o Tailscale sem interacao, ou rode "tailscale up" manualmente. Exponha o Hermes apenas pela interface Tailscale.'
+    }
+    Write-Log 'hermes-remote: pronto. Atue no Hermes remotamente apenas pela rede Tailscale.'
+}
+
 function Get-BootstrapHomelabComposePath {
     # Resolve o diretorio de estado do homelab-stack (onde os composes/.env sao copiados).
     param([AllowNull()][hashtable]$State = $null)
@@ -13703,6 +13733,8 @@ function Get-BootstrapComponentCatalog {
     # Enxuga o Windows para uso como servidor (menor RAM). Reversivel via -Rollback; nunca remove
     # arquivos do usuario nem desabilita o shell. Usado pelos perfis de servidor com LLM local.
     $catalog['os-slim-server'] = New-BootstrapComponentDefinition -Name 'os-slim-server' -Description 'Enxuga o Windows para servidor (desliga telemetria, busca, efeitos visuais, apps de fundo, Game Bar; tudo reversivel).' -Optional $true -DependsOn @('system-core') -Kind 'os-slim-server' -Data @{ DisplayName = 'Enxugar Windows (servidor)'; Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Reduz uso de RAM/IO para rodar LLM local ou servicos de servidor; reversivel via rollback.'; riskLevel = 'experimental' }
+    # hermes-remote: habilita o Hermes para atuacao remota via Tailscale (sem expor porta publica).
+    $catalog['hermes-remote'] = New-BootstrapComponentDefinition -Name 'hermes-remote' -Description 'Hermes para atuacao remota: config OpenCloud + Tailscale (acesso seguro sem porta publica).' -Optional $true -DependsOn @('hermes', 'tailscale') -Kind 'hermes-remote' -RequiresNetwork $true -Data @{ DisplayName = 'Hermes remoto (Tailscale)'; Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Permite operar o agente Hermes do servidor caseiro a distancia, com seguranca de rede mesh.'; riskLevel = 'experimental'; officialSource = 'https://github.com/NousResearch/hermes-agent' }
     # homelab-stack: servidor caseiro via Docker/WSL2 (core leve: Portainer/Jellyfin/Syncthing/
     # Vaultwarden/Uptime Kuma; extras pesados opt-in no compose de extras). Segredos no .env gerado.
     $catalog['homelab-stack'] = New-BootstrapComponentDefinition -Name 'homelab-stack' -Description 'Servidor caseiro via Docker/WSL2: Portainer (dashboard), Jellyfin (midia), Syncthing (drive leve), Vaultwarden (cofre), Uptime Kuma (monitor). Extras opt-in: Nextcloud/Grafana/Paperless/n8n.' -Optional $true -DependsOn @('wsl-core', 'docker') -Kind 'homelab-stack' -RequiresNetwork $true -Data @{ DisplayName = 'Homelab (Docker/WSL2)'; Stage = 'payload'; Provisioning = 'builtin'; ValueReason = 'Centraliza armazenamento, midia, cofre e monitoramento de forma local e soberana; exposicao remota via Tailscale.'; riskLevel = 'experimental'; officialSource = 'https://docs.docker.com/compose/' }
@@ -13854,6 +13886,14 @@ function Get-BootstrapProfileCatalog {
     $catalog['public-beta'] = New-BootstrapProfileDefinition -Name 'public-beta' -Description 'Primeira instalacao confiavel para beta publico; maior que safe-base, sem WSL/Docker/IA pesada/gaming.' -Items @('safe-base', 'powershell', 'powertoys', 'brave', 'bootstrap-secrets', 'vscode', 'vscode-extensions', 'bootstrap-mcps')
     $catalog['base'] = New-BootstrapProfileDefinition -Name 'base' -Description 'Base universal para maquina nova com navegadores, utilitarios e atalhos web.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'imagemagick', 'sevenzip', 'powershell', 'terminal', 'powertoys', 'github-cli', 'chrome', 'brave', 'notepadpp', 'webapps')
     $catalog['containers'] = New-BootstrapProfileDefinition -Name 'containers' -Description 'WSL e Docker.' -Items @('wsl-core', 'wsl-ui', 'docker')
+    # Familia "Servidor caseiro" (mantem o Windows; nao e Umbrel/DietPi). 6 modos combinando LLM local
+    # (Ollama; llama.cpp e add-on opt-in), homelab Docker/WSL2, Hermes remoto e enxugamento de SO.
+    $catalog['server-llm'] = New-BootstrapProfileDefinition -Name 'server-llm' -Description 'Servidor dedicado a LLM local (Ollama) com Windows enxugado para menor RAM.' -Items @('ollama', 'os-slim-server')
+    $catalog['server-homelab'] = New-BootstrapProfileDefinition -Name 'server-homelab' -Description 'Servidor caseiro (Drive/midia/cofre/monitor via Docker/WSL2) com acesso remoto por Tailscale.' -Items @('homelab-stack', 'tailscale')
+    $catalog['server-homelab-hermes'] = New-BootstrapProfileDefinition -Name 'server-homelab-hermes' -Description 'Servidor caseiro + Hermes para atuacao remota (Tailscale).' -Items @('homelab-stack', 'tailscale', 'hermes-remote')
+    $catalog['server-llm-hermes'] = New-BootstrapProfileDefinition -Name 'server-llm-hermes' -Description 'LLM local + Hermes remoto, com Windows enxugado para menor RAM.' -Items @('ollama', 'hermes-remote', 'os-slim-server')
+    $catalog['server-llm-homelab'] = New-BootstrapProfileDefinition -Name 'server-llm-homelab' -Description 'LLM local + servidor caseiro, com Windows enxugado para menor RAM.' -Items @('ollama', 'homelab-stack', 'tailscale', 'os-slim-server')
+    $catalog['server-llm-homelab-hermes'] = New-BootstrapProfileDefinition -Name 'server-llm-homelab-hermes' -Description 'Tudo: LLM local + servidor caseiro + Hermes remoto, com Windows enxugado.' -Items @('ollama', 'homelab-stack', 'tailscale', 'hermes-remote', 'os-slim-server')
     $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'mimo-code', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'ai-memory', 'aionui', 'headroom-ai', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli', 'supermaven-vscode')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
@@ -27852,6 +27892,9 @@ function Invoke-BootstrapComponent {
         }
         'homelab-stack' {
             Ensure-BootstrapHomelabStack -State $State
+        }
+        'hermes-remote' {
+            Ensure-BootstrapHermesRemote -State $State
         }
         'ai-usagebar' {
             Install-BootstrapAiUsagebarComponent -State $State
