@@ -21664,6 +21664,7 @@ function Get-BootstrapMcpRepairTargets {
         'roo'            = (Get-BootstrapRooMcpConfigPath)
         'cline'          = (Get-BootstrapClineMcpConfigPath)
         'vscode'         = (Get-BootstrapVsCodeMcpConfigPath)
+        'hermes'         = (Get-BootstrapHermesConfigPath)
     }
     $targets = New-Object System.Collections.Generic.List[object]
     foreach ($key in $map.Keys) {

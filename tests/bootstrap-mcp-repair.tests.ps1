@@ -19,6 +19,26 @@ Describe 'MCP config repair (npx -> cmd /c npx)' {
         (@($targets | Where-Object { [string]$_.id -eq 'claude-code' }).Count -gt 0) | Should Be $true
     }
 
+    It 'includes the Hermes OpenCloud project config in repair targets' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $targets = @(Get-BootstrapMcpRepairTargets)
+
+        (@($targets | Where-Object { [string]$_.id -eq 'hermes' }).Count -gt 0) | Should Be $true
+    }
+
+    It 'heals a Hermes-style config with a bare npx remote entry (bonsai launch fix)' {
+        . $scriptPath -BootstrapUiLibraryMode
+        if (-not (Test-BootstrapHostIsWindows)) { return }
+        $cfg = New-McpRepairTempConfig -Json '{"tool":"hermes","mcpServers":{"bonsai":{"command":"npx","args":["-y","mcp-remote@latest","https://mcp.bonsai-rx.org/mcp","--header","Authorization: Bearer TOKEN"],"enabled":true}}}'
+        try {
+            $r = Invoke-BootstrapMcpConfigRepair -ConfigPaths @($cfg)
+            [int]$r.totalFixed | Should Be 1
+            $after = Get-Content $cfg -Raw | ConvertFrom-Json
+            [string]$after.mcpServers.bonsai.command | Should Be 'cmd'
+            @($after.mcpServers.bonsai.args) | Should Be @('/c', 'npx', '-y', 'mcp-remote@latest', 'https://mcp.bonsai-rx.org/mcp', '--header', 'Authorization: Bearer TOKEN')
+        } finally { Remove-Item -LiteralPath $cfg, ($cfg + '.bak') -Force -ErrorAction SilentlyContinue }
+    }
+
     It 'wraps npx while preserving the complete argument list' {
         . $scriptPath -BootstrapUiLibraryMode
         if (-not (Test-BootstrapHostIsWindows)) { return }
