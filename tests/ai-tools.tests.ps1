@@ -124,6 +124,24 @@ Describe 'AI coding tool support' {
         (@($catalog['aionui'].Aliases) -contains 'aion-ui') | Should Be $true
     }
 
+    It 'declares ai-jail as an opt-in WSL sandbox tool and plans a dry-run install' {
+        . $toolsScriptPath -BootstrapUiLibraryMode
+
+        $catalog = Get-BootstrapAiToolCatalog
+        $catalog.Contains('ai-jail') | Should Be $true
+        [string]$catalog['ai-jail'].InstallSupport | Should Be 'wsl-installer'
+        [string]$catalog['ai-jail'].GitHubRepo | Should Be 'akitaonrails/ai-jail'
+        [bool]$catalog['ai-jail'].DefaultProfileAllowed | Should Be $false
+
+        $plan = Invoke-BootstrapAiToolAction -ToolName 'ai-jail' -Action 'install' -InstallRoot $script:AiToolsTestRoot -ProjectRoot $repoRoot -DryRun -Yes
+        [string]$plan.tool | Should Be 'ai-jail'
+        [string]$plan.status | Should Be 'planned'
+
+        $cmd = Get-BootstrapAiJailWslInstallCommand
+        $cmd | Should Match 'ai-jail-linux'
+        $cmd | Should Match 'bubblewrap'
+    }
+
     It 'declares transcript opt-in AI tools with official sources and dry-run support' {
         . $toolsScriptPath -BootstrapUiLibraryMode
 
