@@ -15129,6 +15129,20 @@ function Get-BootstrapAiToolCatalog {
         ProbePaths     = @('$env:USERPROFILE\.hermes\hermes-agent')
         Notes          = 'Repo oficial validado. WSL2 segue preferido quando saudavel; Windows nativo beta usa install.ps1 oficial e data dir em LOCALAPPDATA.'
     }
+    $catalog['ai-jail'] = [ordered]@{
+        ToolName       = 'ai-jail'
+        DisplayName    = 'ai-jail (sandbox de agentes)'
+        CommandNames   = @()
+        VersionArgs    = @('--version')
+        DocsUrl        = 'https://github.com/akitaonrails/ai-jail'
+        GitHubRepo     = 'akitaonrails/ai-jail'
+        PackageName    = ''
+        InstallSupport = 'wsl-installer'
+        RiskLevel      = 'experimental'
+        DefaultProfileAllowed = $false
+        ProbePaths     = @()
+        Notes          = 'Sandbox (Rust, GPL-3.0) para agentes de IA (Claude Code/Codex/OpenCode). NAO roda nativo no Windows: instalado e usado DENTRO do WSL2 (bubblewrap + Landlock/seccomp), enjaulando agentes rodados no WSL contra /mnt/c. Opt-in; nao sandboxa agentes do Windows host.'
+    }
     $catalog['hermes-desktop'] = [ordered]@{
         ToolName       = 'hermes-desktop'
         DisplayName    = 'Hermes Desktop'
@@ -18756,6 +18770,82 @@ function Install-BootstrapHermesAgentWsl {
     return (New-BootstrapAiToolResult -ToolName 'hermes-agent' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'Hermes Agent instalado e validado no WSL2.' -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath 'wsl.exe bash -lc hermes' -Version $version)
 }
 
+function Get-BootstrapAiJailWslInstallCommand {
+    # Bash (rodado dentro do WSL2): baixa a release linux do ai-jail para ~/.local/bin e tenta
+    # instalar bubblewrap (best-effort, sem travar em senha). Nao usa cargo (evita toolchain Rust).
+    return @'
+set -e
+arch=$(uname -m)
+case "$arch" in x86_64|amd64) A=x86_64;; aarch64|arm64) A=aarch64;; *) A=x86_64;; esac
+mkdir -p "$HOME/.local/bin"
+url="https://github.com/akitaonrails/ai-jail/releases/latest/download/ai-jail-linux-${A}.tar.gz"
+curl -fsSL "$url" | tar -xz -C "$HOME/.local/bin"
+chmod +x "$HOME/.local/bin/ai-jail" 2>/dev/null || true
+if ! command -v bwrap >/dev/null 2>&1; then
+  if command -v apt-get >/dev/null 2>&1; then sudo -n apt-get install -y bubblewrap >/dev/null 2>&1 || true; fi
+  if ! command -v bwrap >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1; then sudo -n dnf install -y bubblewrap >/dev/null 2>&1 || true; fi
+  if ! command -v bwrap >/dev/null 2>&1 && command -v pacman >/dev/null 2>&1; then sudo -n pacman -S --noconfirm bubblewrap >/dev/null 2>&1 || true; fi
+fi
+if command -v bwrap >/dev/null 2>&1; then echo "BWRAP=ok"; else echo "BWRAP=missing"; fi
+"$HOME/.local/bin/ai-jail" --version
+'@
+}
+
+function Install-BootstrapAiJailWsl {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $command = Get-BootstrapAiJailWslInstallCommand
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'ai-jail' -Action 'install' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'WSL2: baixa release linux do ai-jail para ~/.local/bin + bubblewrap (best-effort).' -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+
+    $install = Invoke-BootstrapWslBashCommand -Command $command -TimeoutMs 900000
+    if ([int]$install['exitCode'] -ne 0) {
+        $detail = ([string]$install['stderr']).Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) { $detail = ([string]$install['stdout']).Trim() }
+        throw ("Falha ao instalar ai-jail no WSL2 (exit={0}). {1}" -f [int]$install['exitCode'], $detail)
+    }
+
+    $stdout = [string]$install['stdout']
+    $bwrapOk = ($stdout -match 'BWRAP=ok')
+    $message = if ($bwrapOk) {
+        'ai-jail instalado e validado no WSL2 (bubblewrap presente). Use dentro do WSL: ai-jail claude.'
+    } else {
+        'ai-jail instalado no WSL2, mas bubblewrap NAO foi detectado (faltou sudo/pacote). Instale manualmente no WSL: sudo apt install bubblewrap.'
+    }
+    $version = ''
+    foreach ($line in @($stdout -split "`n")) {
+        $trim = $line.Trim()
+        if ($trim -and $trim -notmatch '^BWRAP=') { $version = $trim }
+    }
+    return (New-BootstrapAiToolResult -ToolName 'ai-jail' -Action 'install' -Status 'installed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message $message -Docs ([string]$CatalogEntry['DocsUrl']) -CommandPath 'wsl.exe bash -lc ai-jail' -Version $version)
+}
+
+function Uninstall-BootstrapAiJailWsl {
+    param(
+        [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
+        [Parameter(Mandatory = $true)][string]$InstallRoot,
+        [string]$ProjectRoot = '',
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+    $command = 'rm -f "$HOME/.local/bin/ai-jail" && echo removed'
+    if ($DryRun) {
+        return (New-BootstrapAiToolResult -ToolName 'ai-jail' -Action 'uninstall' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'WSL2: remove ~/.local/bin/ai-jail (bubblewrap e configs .ai-jail por projeto sao preservados).' -Docs ([string]$CatalogEntry['DocsUrl']))
+    }
+    $r = Invoke-BootstrapWslBashCommand -Command $command -TimeoutMs 120000
+    if ([int]$r['exitCode'] -ne 0) {
+        throw ("Falha ao remover ai-jail no WSL2 (exit={0}). {1}" -f [int]$r['exitCode'], ([string]$r['stderr']).Trim())
+    }
+    return (New-BootstrapAiToolResult -ToolName 'ai-jail' -Action 'uninstall' -Status 'uninstalled' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-jail removido do WSL2 (~/.local/bin). bubblewrap e .ai-jail por projeto preservados.' -Docs ([string]$CatalogEntry['DocsUrl']))
+}
+
 function Get-BootstrapAiUsagebarReleaseAsset {
     param(
         [Parameter(Mandatory = $true)][System.Collections.IDictionary]$CatalogEntry,
@@ -19719,6 +19809,7 @@ function Invoke-BootstrapAiToolAction {
             'npm-prefix' { return (Install-BootstrapAiNpmTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
             'wsl-installer' {
                 if ($name -eq 'hermes-agent') { return (Install-BootstrapHermesAgentWsl -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
+                if ($name -eq 'ai-jail') { return (Install-BootstrapAiJailWsl -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
             }
             'github-release' {
                 if ($name -eq 'rtk') { return (Install-BootstrapRtkTool -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
@@ -19747,6 +19838,7 @@ function Invoke-BootstrapAiToolAction {
         switch ([string]$entry['InstallSupport']) {
             'npm-prefix' { return (Uninstall-BootstrapAiNpmTool -ToolName $name -CatalogEntry $entry -InstallRoot $root -DryRun:$DryRun) }
             'wsl-installer' {
+                if ($name -eq 'ai-jail') { return (Uninstall-BootstrapAiJailWsl -CatalogEntry $entry -InstallRoot $root -ProjectRoot $project -DryRun:$DryRun) }
                 $status = if ($DryRun) { 'planned' } else { 'manual' }
                 return (New-BootstrapAiToolResult -ToolName $name -Action $Action -Status $status -InstallRoot $root -ProjectRoot $project -Message 'Remocao do Hermes Agent em WSL2 requer decisao manual para preservar ~/.hermes e dados do usuario.' -Docs ([string]$entry['DocsUrl']))
             }
