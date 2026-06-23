@@ -7717,6 +7717,81 @@ function Ensure-Hermes {
     Ensure-HermesProjectOpenCloudConfig -State $State
 }
 
+function Ensure-BootstrapOsSlimServer {
+    # Enxuga o Windows para uso como servidor (menor RAM), de forma REVERSIVEL. Cada mutacao e
+    # registrada (Register-BootstrapChange / Set-BootstrapServiceStartupTypes -State) para -Rollback.
+    # NUNCA remove arquivos do usuario nem desabilita o shell grafico (Explorer/Winlogon); mantem o
+    # SO utilizavel. Respeita -DryRun (nao muta o host). Mutacoes que exigem admin sao nao-fatais.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $dry = [bool]$State.DryRun
+    Write-Log ("OS slim server: {0}..." -f $(if ($dry) { 'dry-run (sem alteracoes)' } else { 'aplicando enxugamento reversivel' }))
+
+    # 1. Servicos nao-essenciais para servidor headless -> estado anterior salvo no manifesto.
+    $serviceAdjustments = @(
+        [pscustomobject]@{ Name = 'DiagTrack';       StartType = 'Disabled' }  # telemetria (Connected User Experiences)
+        [pscustomobject]@{ Name = 'dmwappushservice'; StartType = 'Manual' }    # WAP Push (telemetria)
+        [pscustomobject]@{ Name = 'WSearch';          StartType = 'Disabled' }  # indexacao/busca (RAM/IO)
+        [pscustomobject]@{ Name = 'SysMain';          StartType = 'Disabled' }  # Superfetch (RAM/IO)
+    )
+    if (-not $dry) {
+        Set-BootstrapServiceStartupTypes -State $State -ServiceAdjustments $serviceAdjustments -StopService
+    }
+
+    # 2. Tweaks de registro HKCU (efeitos visuais, apps de fundo, Game Bar/DVR), cada um registrado.
+    $registryTweaks = @(
+        [pscustomobject]@{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects'; Name = 'VisualFXSetting'; Value = 2 }
+        [pscustomobject]@{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications'; Name = 'GlobalUserDisabled'; Value = 1 }
+        [pscustomobject]@{ Path = 'HKCU:\Software\Microsoft\GameBar'; Name = 'AppCaptureEnabled'; Value = 0 }
+        [pscustomobject]@{ Path = 'HKCU:\System\GameConfigStore'; Name = 'GameDVR_Enabled'; Value = 0 }
+    )
+    foreach ($tweak in $registryTweaks) {
+        if ($dry) { continue }
+        try {
+            $old = $null
+            if (Test-Path -LiteralPath $tweak.Path) {
+                $existing = Get-ItemProperty -LiteralPath $tweak.Path -Name $tweak.Name -ErrorAction SilentlyContinue
+                if ($existing) { $old = $existing.$($tweak.Name) }
+            } else {
+                $null = New-Item -Path $tweak.Path -Force -ErrorAction Stop
+            }
+            Register-BootstrapChange -State $State -Type 'Registry' -Target $tweak.Path -Name $tweak.Name -OldValue $old -NewValue $tweak.Value -Operation 'os-slim-tweak' -Component 'os-slim-server'
+            Set-ItemProperty -LiteralPath $tweak.Path -Name $tweak.Name -Value $tweak.Value -Force -ErrorAction Stop
+        } catch {
+            Write-Log ("OS slim server: tweak {0}\{1} nao aplicado: {2}" -f $tweak.Path, $tweak.Name, $_.Exception.Message) 'WARN'
+        }
+    }
+
+    # 3. Autostart do OneDrive: removido de forma REVERSIVEL (registra valor atual antes de remover).
+    if (-not $dry) {
+        $runPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+        try {
+            if (Test-Path -LiteralPath $runPath) {
+                $runItem = Get-ItemProperty -LiteralPath $runPath -ErrorAction SilentlyContinue
+                if ($runItem) {
+                    foreach ($prop in @($runItem.PSObject.Properties)) {
+                        if ($prop.Name -like 'PS*') { continue }
+                        if ($prop.Name -like 'OneDrive*') {
+                            Register-BootstrapChange -State $State -Type 'Registry' -Target $runPath -Name $prop.Name -OldValue $prop.Value -NewValue $null -Operation 'os-slim-disable-onedrive' -Component 'os-slim-server'
+                            Remove-ItemProperty -LiteralPath $runPath -Name $prop.Name -ErrorAction Stop
+                            Write-Log ("OS slim server: autostart removido (reversivel) -> {0}" -f $prop.Name)
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-Log ("OS slim server: autostart OneDrive nao ajustado: {0}" -f $_.Exception.Message) 'WARN'
+        }
+    }
+
+    # 4. Fast Startup/hibernacao desligados (reusa helper existente; exige admin, nao-fatal).
+    if (-not $dry -and (Test-IsAdmin)) {
+        try { $null = Repair-BootstrapFastStartup } catch { Write-Log ("OS slim server: Fast Startup nao ajustado: {0}" -f $_.Exception.Message) 'WARN' }
+    }
+
+    Write-Log ("OS slim server: {0}." -f $(if ($dry) { 'plano calculado (dry-run)' } else { 'enxugamento reversivel aplicado' }))
+}
+
 function Install-BootstrapAiUsagebarComponent {
     param([Parameter(Mandatory = $true)][hashtable]$State)
     $null = $State
@@ -13363,6 +13438,7 @@ function Get-BootstrapComponentStage {
         'wsl-core' { return 'runtime' }
         'steamdeck-settings' { return 'config' }
         'steamdeck-automation' { return 'config' }
+        'os-slim-server' { return 'config' }
         'manual-required' { return 'verify' }
         default { return 'payload' }
     }
@@ -13498,6 +13574,9 @@ function Get-BootstrapComponentCatalog {
     $catalog['mimo-code'] = New-BootstrapComponentDefinition -Name 'mimo-code' -Description 'MiMo Code CLI (fork agentico do OpenCode, Xiaomi MiMo) via npm -g. Configura provider OpenAI-compatible validado quando disponivel; senao usa MiMo Auto (gratis).' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@mimo-ai/cli'; DisplayName = 'MiMo Code (@mimo-ai/cli)'; CommandNames = @('mimo') } -RequiresNetwork $true
     $catalog['openclaw'] = New-BootstrapComponentDefinition -Name 'openclaw' -Description 'OpenClaw via npm.' -DependsOn @('node-core') -Kind 'openclaw'
     $catalog['hermes'] = New-BootstrapComponentDefinition -Name 'hermes' -Description 'Hermes Agent via WSL2 + OpenCloud config no projeto.' -DependsOn @('wsl-core') -Kind 'hermes'
+    # Enxuga o Windows para uso como servidor (menor RAM). Reversivel via -Rollback; nunca remove
+    # arquivos do usuario nem desabilita o shell. Usado pelos perfis de servidor com LLM local.
+    $catalog['os-slim-server'] = New-BootstrapComponentDefinition -Name 'os-slim-server' -Description 'Enxuga o Windows para servidor (desliga telemetria, busca, efeitos visuais, apps de fundo, Game Bar; tudo reversivel).' -Optional $true -DependsOn @('system-core') -Kind 'os-slim-server' -Data @{ DisplayName = 'Enxugar Windows (servidor)'; Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Reduz uso de RAM/IO para rodar LLM local ou servicos de servidor; reversivel via rollback.'; riskLevel = 'experimental' }
     $catalog['ai-usagebar'] = New-BootstrapComponentDefinition -Name 'ai-usagebar' -Description 'AI Usagebar: monitor de uso/plano (TUI/CLI no Windows, Waybar no Linux) por release Linux verificada ou fallback Cargo Windows.' -DependsOn @('git-core', 'rustup') -Kind 'ai-usagebar' -EstimatedSizeGB 1.2 -RequiresNetwork $true
     $catalog['ai-memory'] = New-BootstrapComponentDefinition -Name 'ai-memory' -Description 'AI Memory: memoria de longo prazo e handoff de contexto entre agentes via servidor loopback + MCP + hooks. Binario nativo Windows verificado ou fallback Cargo.' -DependsOn @('git-core', 'rustup') -Kind 'ai-memory' -EstimatedSizeGB 0.3 -RequiresNetwork $true
     $catalog['aionui'] = New-BootstrapComponentDefinition -Name 'aionui' -Description 'AionUI desktop app via winget oficial iOfficeAI.AionUi ou instalador oficial.' -Kind 'aionui' -EstimatedSizeGB 0.4 -RequiresNetwork $true
@@ -27633,6 +27712,9 @@ function Invoke-BootstrapComponent {
         }
         'hermes' {
             Ensure-Hermes -State $State
+        }
+        'os-slim-server' {
+            Ensure-BootstrapOsSlimServer -State $State
         }
         'ai-usagebar' {
             Install-BootstrapAiUsagebarComponent -State $State
