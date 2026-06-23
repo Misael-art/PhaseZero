@@ -89,6 +89,16 @@ Describe 'CLI and UI coherence' {
         }
     }
 
+    It 'uses a guarded backend process helper instead of raw Start-Process wait in CLI execution paths' {
+        $raw = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'install-cli.ps1') -Raw
+
+        $raw | Should Match 'function Invoke-CliBackendProcess'
+        $raw | Should Match 'WaitForExit\(\$TimeoutMs\)'
+        $raw | Should Match 'Write-CliLegacyFailureResult'
+        $raw | Should Not Match '\$dryProcess\s*=\s*Start-Process -FilePath ''powershell\.exe'' -ArgumentList \$dryArgs -NoNewWindow -PassThru -Wait'
+        $raw | Should Not Match '\$installProcess\s*=\s*Start-Process -FilePath ''powershell\.exe'' -ArgumentList \$installArgs -NoNewWindow -PassThru -Wait'
+    }
+
     It 'lists a unified numbered catalog and resolves its first number through --item' {
         $list = Invoke-PhaseZeroCliCoherenceTest -Arguments '--list-items'
 

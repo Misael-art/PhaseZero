@@ -1118,7 +1118,7 @@ function Invoke-CliMenuProfileFlow {
         '-Profile', $profileChoice,
         '-DryRun', '-NonInteractive', '-SkipManualRequirements'
     )
-    $dryExit = [int](Start-Process -FilePath 'powershell.exe' -ArgumentList $dryArgs -NoNewWindow -PassThru -Wait).ExitCode
+    $dryExit = [int](Invoke-CliBackendProcess -ArgumentList $dryArgs -OperationName 'dry-run').ExitCode
     if ($dryExit -ne 0) {
         Write-CliOut ("[ERRO] Dry-run falhou (codigo {0})." -f $dryExit) Red
         Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Yellow
@@ -1142,7 +1142,7 @@ function Invoke-CliMenuProfileFlow {
         '-Profile', $profileChoice,
         '-NonInteractive', '-SkipManualRequirements'
     )
-    $installExit = [int](Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait).ExitCode
+    $installExit = [int](Invoke-CliBackendProcess -ArgumentList $installArgs -OperationName 'apply').ExitCode
     Write-CliOut ''
     if ($installExit -eq 0) {
         Write-Header 'SUCESSO: perfil instalado'
@@ -1189,7 +1189,7 @@ function Invoke-CliMenuBackendIntent {
         ("-{0}" -f $Intent),
         '-DryRun','-NonInteractive'
     )
-    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $argsList -NoNewWindow -PassThru -Wait
+    $process = Invoke-CliBackendProcess -ArgumentList $argsList -OperationName 'dry-run'
     $exit = [int]$process.ExitCode
     if ($exit -ne 0) {
         Write-CliOut ''
@@ -1393,6 +1393,87 @@ function Format-CliCommandToken {
     return $Value
 }
 
+function ConvertTo-CliCommandLineArgument {
+    param([AllowNull()][string]$Token)
+
+    if ($null -eq $Token) { return '""' }
+    $text = [string]$Token
+    if ($text.Length -eq 0) { return '""' }
+    if ($text -notmatch '[\s"`&\(\)\^]') { return $text }
+
+    $builder = New-Object System.Text.StringBuilder
+    [void]$builder.Append('"')
+    $backslashes = 0
+    for ($i = 0; $i -lt $text.Length; $i++) {
+        $ch = $text[$i]
+        if ($ch -eq [char]'\') {
+            $backslashes++
+            continue
+        }
+        if ($ch -eq [char]'"') {
+            if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+            [void]$builder.Append('\"')
+            $backslashes = 0
+            continue
+        }
+        if ($backslashes -gt 0) {
+            [void]$builder.Append(('\' * $backslashes))
+            $backslashes = 0
+        }
+        [void]$builder.Append($ch)
+    }
+    if ($backslashes -gt 0) { [void]$builder.Append(('\' * ($backslashes * 2))) }
+    [void]$builder.Append('"')
+    return $builder.ToString()
+}
+
+function ConvertTo-CliArgumentString {
+    param([string[]]$Tokens)
+    return [string]::Join(' ', @($Tokens | ForEach-Object { ConvertTo-CliCommandLineArgument -Token ([string]$_) }))
+}
+
+function Invoke-CliBackendProcess {
+    # Lanca o backend (powershell.exe) com timeout e captura de stdout/stderr em arquivos ao lado do
+    # result.json. Substitui o `Start-Process -Wait` cru (sem timeout, sem captura) das rotas CLI.
+    param(
+        [Parameter(Mandatory = $true)][string[]]$ArgumentList,
+        [Parameter(Mandatory = $true)][string]$OperationName,
+        [int]$TimeoutMs = 1800000
+    )
+
+    $stdoutPath = [System.IO.Path]::ChangeExtension([string]$script:Options.ResultPath, ".$OperationName.stdout.log")
+    $stderrPath = [System.IO.Path]::ChangeExtension([string]$script:Options.ResultPath, ".$OperationName.stderr.log")
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'powershell.exe'
+    $startInfo.Arguments = ConvertTo-CliArgumentString -Tokens $ArgumentList
+    $startInfo.WorkingDirectory = $PSScriptRoot
+    $startInfo.UseShellExecute = $false
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    try {
+        $null = $process.Start()
+        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+        $stderrTask = $process.StandardError.ReadToEndAsync()
+        if (-not $process.WaitForExit($TimeoutMs)) {
+            try { $process.Kill() } catch { }
+            $message = ("{0} excedeu timeout de {1}ms." -f $OperationName, $TimeoutMs)
+            Write-CliLegacyFailureResult -Message $message -ExitCode 124 -Mode $OperationName -HowToFix 'Revise stdout/stderr/log e rode novamente com escopo menor ou Doctor.'
+            return [pscustomobject]@{ ExitCode = 124; TimedOut = $true; StdoutPath = $stdoutPath; StderrPath = $stderrPath }
+        }
+        $stdout = [string]$stdoutTask.GetAwaiter().GetResult()
+        $stderr = [string]$stderrTask.GetAwaiter().GetResult()
+        [System.IO.File]::WriteAllText($stdoutPath, $stdout, [System.Text.UTF8Encoding]::new($false))
+        [System.IO.File]::WriteAllText($stderrPath, $stderr, [System.Text.UTF8Encoding]::new($false))
+        return [pscustomobject]@{ ExitCode = [int]$process.ExitCode; TimedOut = $false; StdoutPath = $stdoutPath; StderrPath = $stderrPath }
+    } finally {
+        try { $process.Dispose() } catch { }
+    }
+}
+
 function Update-CliResultFileMode {
     param(
         [Parameter(Mandatory = $true)][string]$Mode,
@@ -1497,7 +1578,7 @@ function Invoke-CliBootstrapSelectionMode {
         Write-CliOut ''
         Write-CliOut '[1/2] Dry-run individual...' Green
         $dryArgs = New-CliIsolatedBackendArgs -Options $Options -DryRun:$true
-        $dryProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $dryArgs -NoNewWindow -PassThru -Wait
+        $dryProcess = Invoke-CliBackendProcess -ArgumentList $dryArgs -OperationName 'dry-run'
         $dryExit = [int]$dryProcess.ExitCode
         Update-CliResultFileMode -Mode 'isolated' -ExitCode $dryExit
         if ($dryExit -ne 0) {
@@ -1532,7 +1613,7 @@ function Invoke-CliBootstrapSelectionMode {
     Write-CliOut ''
     Write-CliOut '[2/2] Aplicando selecao individual...' Green
     $installArgs = New-CliIsolatedBackendArgs -Options $Options -DryRun:$false
-    $installProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait
+    $installProcess = Invoke-CliBackendProcess -ArgumentList $installArgs -OperationName 'apply'
     $installExit = [int]$installProcess.ExitCode
     Update-CliResultFileMode -Mode 'isolated' -ExitCode $installExit
 
@@ -2015,7 +2096,7 @@ if (-not [bool]$script:Options.SkipDryRun) {
         '-Profile', $profileChoice,
         '-DryRun', '-NonInteractive', '-SkipManualRequirements'
     )
-    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $dryArgs -NoNewWindow -PassThru -Wait
+    $process = Invoke-CliBackendProcess -ArgumentList $dryArgs -OperationName 'dry-run'
     $dryExit = $process.ExitCode
 
     if ($dryExit -ne 0) {
@@ -2061,7 +2142,7 @@ $installArgs = Add-CliBackendArtifactArg -ArgumentList @(
     '-Profile', $profileChoice,
     '-NonInteractive', '-SkipManualRequirements'
 )
-$installProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList $installArgs -NoNewWindow -PassThru -Wait
+$installProcess = Invoke-CliBackendProcess -ArgumentList $installArgs -OperationName 'apply'
 $installExit = $installProcess.ExitCode
 
 Write-CliOut ''
