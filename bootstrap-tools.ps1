@@ -13903,6 +13903,51 @@ function Get-BootstrapEmulationSharedLayout {
     }
 }
 
+function Merge-BootstrapHydraEmulatorConfig {
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][object[]]$Entries,
+        [switch]$HydraProcessRunning,
+        [switch]$Force
+    )
+
+    if ($HydraProcessRunning -and -not $Force) {
+        return [pscustomobject]@{ status = 'blocked-process-running'; changed = $false; path = $ConfigPath }
+    }
+
+    $parent = Split-Path -Path $ConfigPath -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -Path $parent -ItemType Directory -Force | Out-Null
+    }
+
+    $data = [ordered]@{}
+    if (Test-Path -LiteralPath $ConfigPath) {
+        $raw = Get-Content -LiteralPath $ConfigPath -Raw
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+            foreach ($prop in $parsed.PSObject.Properties) {
+                $data[$prop.Name] = $prop.Value
+            }
+        }
+    }
+
+    foreach ($entry in @($Entries)) {
+        $systemKey = [string]$entry.systemKey
+        if ([string]::IsNullOrWhiteSpace($systemKey)) { continue }
+        $data[$systemKey] = [ordered]@{
+            enabled = $true
+            emulator_name = [string]$entry.emulatorName
+            executable_path = [string]$entry.executablePath
+            roms_directory = [string]$entry.romsDirectory
+            default_flags = [string]$entry.defaultFlags
+        }
+    }
+
+    $json = $data | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($ConfigPath, $json, [System.Text.UTF8Encoding]::new($false))
+    return [pscustomobject]@{ status = 'updated'; changed = $true; path = $ConfigPath }
+}
+
 function Get-BootstrapEmulationTuningRecommendation {
     param([Parameter(Mandatory = $true)]$HostProfile)
 
