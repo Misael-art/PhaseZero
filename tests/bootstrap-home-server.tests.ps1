@@ -226,6 +226,41 @@ Describe 'Windows home server: llama.cpp offload autocalc' {
     }
 }
 
+Describe 'System optimization apps (opt-in, guiados)' {
+    It 'declara sparkle-optimizer (thedogecraft) como manual-required experimental com fonte oficial' {
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('sparkle-optimizer') | Should Be $true
+        $def = $catalog['sparkle-optimizer']
+        [string]$def.Kind | Should Be 'manual-required'
+        [bool]$def.Optional | Should Be $true
+        [string]$def.officialSource | Should Match 'thedogecraft/sparkle'
+        ([string]$def.manualReason) | Should Not Be ''
+    }
+    It 'corrige o rotulo do componente sparkle existente (xishang0128 = Mihomo GUI, nao otimizador)' {
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('sparkle') | Should Be $true
+        ([string]$catalog['sparkle'].Description) | Should Match 'Mihomo|Clash|proxy'
+        ([string]$catalog['sparkle'].Description) | Should Not Match 'otimizador|debloat'
+    }
+    It 'declara performance-v4 como manual-required experimental (MS Store)' {
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('performance-v4') | Should Be $true
+        $def = $catalog['performance-v4']
+        [string]$def.Kind | Should Be 'manual-required'
+        [bool]$def.Optional | Should Be $true
+        ([string]$def.Instructions) | Should Match 'Store|9N5N9D6JB8VT'
+    }
+    It 'nao inclui esses otimizadores em nenhum perfil seguro' {
+        $profiles = Get-BootstrapProfileCatalog
+        foreach ($safe in @('safe-base', 'recommended', 'public-beta')) {
+            if ($profiles.Contains($safe)) {
+                @($profiles[$safe].Items) -contains 'sparkle-optimizer' | Should Be $false
+                @($profiles[$safe].Items) -contains 'performance-v4' | Should Be $false
+            }
+        }
+    }
+}
+
 Describe 'Windows home server: os-slim-server' {
     It 'declara o componente os-slim-server como opt-in e do Kind correto' {
         $catalog = Get-BootstrapComponentCatalog
