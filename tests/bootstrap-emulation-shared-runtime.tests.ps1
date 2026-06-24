@@ -55,6 +55,46 @@ Describe 'Shared emulation runtime catalog' {
     }
 }
 
+Describe 'Unified emulation host profile and launcher cohesion' {
+    It 'marks Playnite (frontend) runtime source policy like other launchers' {
+        $catalog = Get-BootstrapComponentCatalog
+        [string]$catalog['playnite'].runtimeSourcePolicy | Should Be 'points-to-canonical-or-audited-duplicate'
+    }
+
+    It 'declares a single emulation-complete host profile that pulls every canonical item and dependency' {
+        $profiles = Get-BootstrapProfileCatalog
+        $profiles.Contains('emulation-complete') | Should Be $true
+
+        $resolved = @((Resolve-BootstrapComponents -SelectedProfiles @('emulation-complete')).ResolvedComponents)
+        foreach ($item in @(
+            'emulation-shared-runtime', 'duckstation', 'pcsx2', 'rpcs3', 'chdman-tools',
+            'hydra-launcher', 'hydra-duckstation-integration', 'hydra-pcsx2-integration',
+            'hydra-rpcs3-integration', 'hydra-switch-integration', 'switch-emulation-runtime'
+        )) {
+            $resolved -contains $item | Should Be $true
+        }
+        foreach ($dep in @('system-core', 'vcpp-redist', 'directx-runtime')) {
+            $resolved -contains $dep | Should Be $true
+        }
+    }
+
+    It 'does not leak the emulation host profile into steamdeck recommended/full' {
+        $profiles = Get-BootstrapProfileCatalog
+        @($profiles['steamdeck-recommended'].Items) -contains 'emulation-complete' | Should Be $false
+        @($profiles['steamdeck-full'].Items) -contains 'emulation-complete' | Should Be $false
+    }
+
+    It 'groups emulation profiles under a single UI family' {
+        (Get-BootstrapProfileFamily -Name 'emulation-complete') | Should Be 'Emulacao'
+        (Get-BootstrapProfileFamily -Name 'emulation-hydra-ps2-ps3') | Should Be 'Emulacao'
+
+        $contract = Get-BootstrapUiContract
+        $entry = @($contract.profiles | Where-Object { [string]$_.name -eq 'emulation-complete' })[0]
+        $entry | Should Not BeNullOrEmpty
+        [string]$entry.family | Should Be 'Emulacao'
+    }
+}
+
 Describe 'Unified emulation metadata and save policy' {
     It 'exposes a single top-level metadata root' {
         $layout = Get-BootstrapEmulationSharedLayout -Root 'X:\Emulation'
