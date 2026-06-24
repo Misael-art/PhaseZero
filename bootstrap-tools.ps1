@@ -7822,6 +7822,104 @@ function Get-BootstrapLlamaOffloadPlan {
     return [ordered]@{ gpuLayers = 0; cpuThreads = $physicalCores; lowVram = $true; insufficient = $true; vramUtilGB = $vramUtil }
 }
 
+function Get-BootstrapLlamaPerformanceProfile {
+    # Perfis de performance do LLM local (llama.cpp): otimizar velocidade de token, capacidade
+    # (qualidade/contexto) ou moderado. Deterministico (testavel). Mapeia para flags reais do
+    # llama-server (--ctx-size, --cache-type-k/v, --flash-attn) e um quant tier GGUF sugerido.
+    param([ValidateSet('speed', 'capacity', 'moderate')][string]$Mode = 'moderate')
+
+    switch ($Mode) {
+        'speed' {
+            return [ordered]@{
+                mode = 'speed'; priority = 'Maxima velocidade de token (t/s)'; ctxSize = 2048;
+                cacheTypeK = 'q4_0'; cacheTypeV = 'q4_0'; flashAttn = $true; batchSize = 512;
+                quantTier = 'Q4_K_M'; maxGpuOffload = $true;
+                description = 'Quant menor + KV cache q4_0 + contexto curto: mais tokens/s, menos qualidade/contexto.'
+            }
+        }
+        'capacity' {
+            return [ordered]@{
+                mode = 'capacity'; priority = 'Maxima capacidade (qualidade e contexto)'; ctxSize = 8192;
+                cacheTypeK = 'f16'; cacheTypeV = 'f16'; flashAttn = $true; batchSize = 512;
+                quantTier = 'Q6_K'; maxGpuOffload = $false;
+                description = 'Quant maior + KV cache f16 + contexto longo: melhor qualidade/contexto, menos tokens/s.'
+            }
+        }
+        default {
+            return [ordered]@{
+                mode = 'moderate'; priority = 'Equilibrio entre velocidade e capacidade'; ctxSize = 4096;
+                cacheTypeK = 'q8_0'; cacheTypeV = 'q8_0'; flashAttn = $true; batchSize = 512;
+                quantTier = 'Q4_K_M'; maxGpuOffload = $true;
+                description = 'Quant equilibrado + KV cache q8_0 + contexto medio: bom meio-termo.'
+            }
+        }
+    }
+}
+
+function Get-BootstrapGgufDownloadUrl {
+    # Monta a URL de download direto de um GGUF no Hugging Face (resolve/main). Deterministico.
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [Parameter(Mandatory = $true)][string]$File
+    )
+    return ("https://huggingface.co/{0}/resolve/main/{1}" -f $Repo.Trim('/'), $File)
+}
+
+function Get-BootstrapGgufModelCatalog {
+    # Catalogo curado de modelos GGUF recomendados, marcados por perfil de performance. Sugestoes
+    # (o usuario pode baixar outro). Tamanhos aproximados. Sem efeitos colaterais.
+    return @(
+        [ordered]@{ id = 'qwen2.5-3b-speed';    repo = 'Qwen/Qwen2.5-3B-Instruct-GGUF';  file = 'qwen2.5-3b-instruct-q4_k_m.gguf';  profile = 'speed';    quant = 'Q4_K_M'; sizeGB = 2.0;  displayName = 'Qwen2.5 3B Instruct (Q4_K_M)' }
+        [ordered]@{ id = 'qwen2.5-7b-moderate'; repo = 'Qwen/Qwen2.5-7B-Instruct-GGUF';  file = 'qwen2.5-7b-instruct-q4_k_m.gguf';  profile = 'moderate'; quant = 'Q4_K_M'; sizeGB = 4.7;  displayName = 'Qwen2.5 7B Instruct (Q4_K_M)' }
+        [ordered]@{ id = 'qwen2.5-14b-capacity'; repo = 'Qwen/Qwen2.5-14B-Instruct-GGUF'; file = 'qwen2.5-14b-instruct-q6_k.gguf';     profile = 'capacity'; quant = 'Q6_K';   sizeGB = 12.1; displayName = 'Qwen2.5 14B Instruct (Q6_K)' }
+    )
+}
+
+function Resolve-BootstrapGgufModelForProfile {
+    # Escolhe um modelo recomendado do catalogo para o perfil de performance pedido. Deterministico.
+    param([ValidateSet('speed', 'capacity', 'moderate')][string]$Mode = 'moderate')
+    $catalog = @(Get-BootstrapGgufModelCatalog)
+    $match = @($catalog | Where-Object { [string]$_.profile -eq $Mode }) | Select-Object -First 1
+    if (-not $match) { $match = @($catalog | Where-Object { [string]$_.profile -eq 'moderate' }) | Select-Object -First 1 }
+    return $match
+}
+
+function Install-BootstrapGgufModel {
+    # Baixa (guiado) um GGUF do Hugging Face para o diretorio de modelos. Best-effort, registra o
+    # arquivo criado para rollback. Respeita -DryRun. Modelos sao grandes: so baixa quando chamado.
+    param(
+        [Parameter(Mandatory = $true)][string]$Repo,
+        [Parameter(Mandatory = $true)][string]$File,
+        [Parameter(Mandatory = $true)][string]$ModelsDir,
+        [AllowNull()][hashtable]$State = $null,
+        [switch]$DryRun
+    )
+
+    $url = Get-BootstrapGgufDownloadUrl -Repo $Repo -File $File
+    $dest = Join-Path $ModelsDir $File
+    if ($DryRun) {
+        return [ordered]@{ status = 'planned'; url = $url; path = $dest }
+    }
+
+    if (Test-Path -LiteralPath $dest) {
+        return [ordered]@{ status = 'already-present'; url = $url; path = $dest }
+    }
+    [void][System.IO.Directory]::CreateDirectory($ModelsDir)
+    if ($State -is [hashtable]) {
+        try { Register-BootstrapFileChange -State $State -Target $dest -Operation 'gguf-download' -Component 'llamacpp-server' } catch { }
+    }
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Write-Log ("GGUF: baixando {0} de {1} (pode levar varios minutos)..." -f $File, $Repo)
+        Invoke-WebRequest -Uri $url -OutFile $dest -UseBasicParsing -Headers @{ 'User-Agent' = 'PhaseZero-Bootstrap' } -ErrorAction Stop
+        Write-Log ("GGUF: modelo salvo em {0}" -f $dest)
+        return [ordered]@{ status = 'downloaded'; url = $url; path = $dest }
+    } catch {
+        Write-Log ("GGUF: download falhou ({0}); baixe manualmente de {1}" -f $_.Exception.Message, $url) 'WARN'
+        return [ordered]@{ status = 'failed'; url = $url; path = $dest; error = $_.Exception.Message }
+    }
+}
+
 function Select-BootstrapLlamaCppAsset {
     # Escolhe o asset Windows x64 do release do llama.cpp conforme a preferencia de GPU. Deterministico
     # (testavel). Exclui o pacote 'cudart' (runtime CUDA, nao o binario principal). Retorna $null se nao
@@ -7907,7 +8005,15 @@ function Ensure-BootstrapLlamaCppServer {
     } catch {
         Write-Log ("llama.cpp server: download automatico do binario falhou ({0}); use o passo guiado manual." -f $_.Exception.Message) 'WARN'
     }
-    Write-Log 'llama.cpp server: baixe um modelo GGUF e rode run-llamacpp.ps1 -ModelPath <gguf>. O launcher reduz --n-gpu-layers automaticamente em caso de estouro de VRAM.'
+    # Guia de modelos: recomenda um GGUF por perfil de performance (velocidade/moderado/capacidade).
+    Write-Log 'llama.cpp server: escolha o foco com -PerfMode no launcher (speed = mais t/s, capacity = qualidade/contexto, moderate = equilibrio). Modelos GGUF recomendados por perfil:'
+    foreach ($mode in @('speed', 'moderate', 'capacity')) {
+        $m = Resolve-BootstrapGgufModelForProfile -Mode $mode
+        if ($m) {
+            Write-Log ("  [{0}] {1} (~{2}GB) -> {3}" -f $mode, [string]$m.displayName, [double]$m.sizeGB, (Get-BootstrapGgufDownloadUrl -Repo $m.repo -File $m.file))
+        }
+    }
+    Write-Log 'llama.cpp server: baixe o GGUF (Install-BootstrapGgufModel ou manual) e rode run-llamacpp.ps1 -ModelPath <gguf> -PerfMode <speed|capacity|moderate>. O launcher reduz --n-gpu-layers automaticamente em caso de estouro de VRAM.'
 }
 
 function Ensure-BootstrapHermesRemote {

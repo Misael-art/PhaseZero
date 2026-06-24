@@ -151,6 +151,71 @@ Describe 'Windows home server: llama.cpp offload autocalc' {
         Select-BootstrapLlamaCppAsset -AssetNames @('llama-b4458-bin-ubuntu-x64.zip', 'llama-b4458-bin-macos-arm64.zip') -Prefer 'cpu' | Should Be $null
     }
 
+    It 'expoe 3 perfis de performance (velocidade/capacidade/moderado) com trade-offs coerentes' {
+        $speed = Get-BootstrapLlamaPerformanceProfile -Mode 'speed'
+        $moderate = Get-BootstrapLlamaPerformanceProfile -Mode 'moderate'
+        $capacity = Get-BootstrapLlamaPerformanceProfile -Mode 'capacity'
+
+        # contexto cresce de velocidade -> moderado -> capacidade
+        ([int]$speed.ctxSize -lt [int]$moderate.ctxSize) | Should Be $true
+        ([int]$moderate.ctxSize -lt [int]$capacity.ctxSize) | Should Be $true
+        # KV cache: velocidade quantiza agressivo; capacidade mantem f16
+        [string]$speed.cacheTypeK | Should Be 'q4_0'
+        [string]$capacity.cacheTypeK | Should Be 'f16'
+        # cada perfil sugere um quant tier e tem flash-attn
+        foreach ($p in @($speed, $moderate, $capacity)) {
+            [bool]$p.flashAttn | Should Be $true
+            ([string]$p.quantTier) | Should Match '^(IQ|Q)\d'
+            ([string]$p.priority) | Should Not Be ''
+        }
+    }
+    It 'rejeita modo de performance invalido' {
+        $threw = $false
+        try { Get-BootstrapLlamaPerformanceProfile -Mode 'turbo' | Out-Null } catch { $threw = $true }
+        $threw | Should Be $true
+    }
+    It 'o launcher aceita -PerfMode e aplica --cache-type/--ctx-size/--flash-attn' {
+        $launcher = Join-Path (Split-Path -Parent $scriptPath) 'assets/home-server/run-llamacpp.ps1'
+        $raw = Get-Content $launcher -Raw
+        $raw | Should Match '\$PerfMode'
+        $raw | Should Match '--cache-type-k'
+        $raw | Should Match '--cache-type-v'
+    }
+
+    It 'monta a URL de download GGUF do Hugging Face corretamente' {
+        $url = Get-BootstrapGgufDownloadUrl -Repo 'Qwen/Qwen2.5-7B-Instruct-GGUF' -File 'qwen2.5-7b-instruct-q4_k_m.gguf'
+        $url | Should Be 'https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf'
+    }
+    It 'expoe um catalogo curado de modelos GGUF marcados por perfil de performance' {
+        $catalog = @(Get-BootstrapGgufModelCatalog)
+        $catalog.Count | Should BeGreaterThan 0
+        foreach ($m in $catalog) {
+            ([string]$m.repo) | Should Not Be ''
+            ([string]$m.file) | Should Match '\.gguf$'
+            ([string]$m.profile) | Should Match '^(speed|capacity|moderate)$'
+            ([double]$m.sizeGB -gt 0) | Should Be $true
+        }
+        # ha pelo menos um modelo para cada perfil
+        foreach ($p in @('speed', 'moderate', 'capacity')) {
+            (@($catalog | Where-Object { [string]$_.profile -eq $p }).Count -gt 0) | Should Be $true
+        }
+    }
+    It 'resolve um modelo recomendado para cada perfil de performance' {
+        foreach ($p in @('speed', 'moderate', 'capacity')) {
+            $m = Resolve-BootstrapGgufModelForProfile -Mode $p
+            [string]$m.profile | Should Be $p
+            [string]$m.file | Should Match '\.gguf$'
+            (Get-BootstrapGgufDownloadUrl -Repo $m.repo -File $m.file) | Should Match '^https://huggingface\.co/'
+        }
+    }
+    It 'em dry-run o download de modelo nao baixa nada' {
+        Mock -CommandName Invoke-WebRequest -MockWith {}
+        $dir = Join-Path $env:TEMP ("gguf-dry-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        $res = Install-BootstrapGgufModel -Repo 'Qwen/Qwen2.5-7B-Instruct-GGUF' -File 'qwen2.5-7b-instruct-q4_k_m.gguf' -ModelsDir $dir -DryRun
+        [string]$res.status | Should Be 'planned'
+        Assert-MockCalled -CommandName Invoke-WebRequest -Times 0 -Scope It
+    }
+
     It 'o launcher run-llamacpp.ps1 existe e tem fallback de offload' {
         $launcher = Join-Path (Split-Path -Parent $scriptPath) 'assets/home-server/run-llamacpp.ps1'
         Test-Path $launcher | Should Be $true

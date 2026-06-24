@@ -14,9 +14,13 @@
 param(
     [string]$ServerExe = (Join-Path $PSScriptRoot 'llama-server.exe'),
     [Parameter(Mandatory = $true)][string]$ModelPath,
+    # Perfil de performance: 'speed' (mais t/s), 'capacity' (qualidade/contexto), 'moderate' (equilibrio).
+    [ValidateSet('speed', 'capacity', 'moderate')][string]$PerfMode = 'moderate',
     [int]$GpuLayers = 22,
     [int]$Threads = [Math]::Max(2, [Environment]::ProcessorCount / 2),
-    [int]$ContextSize = 4096,
+    [int]$ContextSize = 0,
+    [string]$CacheTypeK = '',
+    [string]$CacheTypeV = '',
     [int]$Port = 8080,
     [int]$MinGpuLayers = 0,
     [int]$DecrementStep = 3
@@ -27,14 +31,27 @@ $ErrorActionPreference = 'Stop'
 if (-not (Test-Path -LiteralPath $ServerExe)) { throw "llama-server nao encontrado: $ServerExe" }
 if (-not (Test-Path -LiteralPath $ModelPath)) { throw "Modelo GGUF nao encontrado: $ModelPath" }
 
+# Defaults por perfil de performance (sobreponiveis por argumento). Espelha
+# Get-BootstrapLlamaPerformanceProfile do PhaseZero.
+$perf = switch ($PerfMode) {
+    'speed'    { @{ ctx = 2048; ck = 'q4_0'; cv = 'q4_0' } }
+    'capacity' { @{ ctx = 8192; ck = 'f16';  cv = 'f16'  } }
+    default    { @{ ctx = 4096; ck = 'q8_0'; cv = 'q8_0' } }
+}
+if ($ContextSize -le 0) { $ContextSize = [int]$perf.ctx }
+if ([string]::IsNullOrWhiteSpace($CacheTypeK)) { $CacheTypeK = [string]$perf.ck }
+if ([string]::IsNullOrWhiteSpace($CacheTypeV)) { $CacheTypeV = [string]$perf.cv }
+
 $layers = [int]$GpuLayers
 while ($true) {
-    Write-Host ("[llama.cpp] iniciando: gpu-layers={0} threads={1} ctx={2} porta={3}" -f $layers, $Threads, $ContextSize, $Port)
+    Write-Host ("[llama.cpp] iniciando: perf={0} gpu-layers={1} threads={2} ctx={3} kv={4}/{5} porta={6}" -f $PerfMode, $layers, $Threads, $ContextSize, $CacheTypeK, $CacheTypeV, $Port)
     $serverArgs = @(
         '-m', $ModelPath,
         '--n-gpu-layers', $layers,
         '--threads', $Threads,
         '--ctx-size', $ContextSize,
+        '--cache-type-k', $CacheTypeK,
+        '--cache-type-v', $CacheTypeV,
         '--flash-attn',
         '--port', $Port,
         '--host', '127.0.0.1'
