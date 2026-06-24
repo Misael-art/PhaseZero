@@ -71,3 +71,29 @@ Describe 'Shared emulation runtime layout' {
         [string]$layout.systems.ps3.storage.policy | Should Be 'single-rpcs3-dev_hdd0-root'
     }
 }
+
+Describe 'Emulator config plan safety' {
+    It 'plans PS2 and PS3 config writes without sharing unsafe caches' {
+        $layout = Get-BootstrapEmulationSharedLayout -Root 'X:\Emulation'
+        $tuning = Get-BootstrapEmulationTuningRecommendation -HostProfile ([pscustomobject]@{
+            IsSteamDeck = $true
+            LogicalProcessors = 8
+            MemoryGB = 16
+            GpuVendor = 'AMD'
+            SupportsVulkan = $true
+            PowerMode = 'battery'
+            StorageClass = 'sd-or-usb'
+        })
+
+        $plan = New-BootstrapEmulationConfigPlan -Layout $layout -Tuning $tuning
+
+        [string]$plan.pcsx2.iniPath | Should Match 'PCSX2\.ini$'
+        [string]$plan.pcsx2.values.Graphics.Renderer | Should Be 'Vulkan'
+        [string]$plan.rpcs3.yamlPath | Should Match 'global_config\.yml$'
+        [string]$plan.rpcs3.values.Core.PPU_Decoder | Should Be 'LLVM'
+        [string]$plan.rpcs3.values.Core.SPU_Threads | Should Be 'auto'
+        [bool]$plan.pcsx2.cacheSharedAcrossVersions | Should Be $false
+        [bool]$plan.rpcs3.cacheSharedAcrossVersions | Should Be $false
+        [bool]$plan.destructiveStorageWrites | Should Be $false
+    }
+}

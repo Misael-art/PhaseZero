@@ -13903,6 +13903,44 @@ function Get-BootstrapEmulationSharedLayout {
     }
 }
 
+function New-BootstrapEmulationConfigPlan {
+    param(
+        [Parameter(Mandatory = $true)]$Layout,
+        [Parameter(Mandatory = $true)]$Tuning
+    )
+
+    return [ordered]@{
+        destructiveStorageWrites = $false
+        pcsx2 = [ordered]@{
+            iniPath = [System.IO.Path]::Combine([string]$Layout.systems.ps2.emulatorKey, 'inis\PCSX2.ini')
+            values = [ordered]@{
+                EmuCore = [ordered]@{ CdvdFastBoot = [bool]$Tuning.ps2.fastBoot }
+                Graphics = [ordered]@{
+                    Renderer = [string]$Tuning.ps2.renderer
+                    AspectRatio = '16:9'
+                    AnisotropicFiltering = '4x'
+                }
+            }
+            cacheSharedAcrossVersions = [bool]$Layout.systems.ps2.cache.shareAcrossVersions
+        }
+        rpcs3 = [ordered]@{
+            yamlPath = [System.IO.Path]::Combine([string]$Layout.systems.ps3.emulatorKey, 'config\global_config.yml')
+            values = [ordered]@{
+                Core = [ordered]@{
+                    PPU_Decoder = [string]$Tuning.ps3.ppuDecoder
+                    SPU_Decoder = [string]$Tuning.ps3.spuDecoder
+                    SPU_Threads = [string]$Tuning.ps3.spuThreads
+                }
+                Video = [ordered]@{
+                    Renderer = [string]$Tuning.ps3.renderer
+                    Shader_Compilation_Mode = 'AsyncWithPrecompiler'
+                }
+            }
+            cacheSharedAcrossVersions = [bool]$Layout.systems.ps3.cache.shareAcrossVersions
+        }
+    }
+}
+
 function Merge-BootstrapHydraEmulatorConfig {
     param(
         [Parameter(Mandatory = $true)][string]$ConfigPath,
