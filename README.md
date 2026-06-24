@@ -99,7 +99,7 @@ Familia de perfis que transforma o PC **mantendo o Windows** (homelab via Docker
 
 Componentes envolvidos (opt-in): `os-slim-server` (enxuga RAM, reversivel via `-Rollback`), `homelab-stack` (core leve: Portainer/Jellyfin/Syncthing/Vaultwarden/Uptime Kuma; extras opt-in: Nextcloud/Grafana/Paperless-ngx/n8n), `hermes-remote` (Hermes + Tailscale), e o add-on opt-in `llamacpp-server` (offload hibrido GPU/CPU). Segredos sempre via `.env`/ambiente, nunca embutidos. Exponha os servicos apenas pela rede Tailscale.
 
-**LLM local — perfis de performance e modelos:** o `llamacpp-server` baixa o binario do release oficial conforme a GPU (cuda/vulkan/cpu) e oferece 3 focos via `-PerfMode` no launcher `run-llamacpp.ps1`:
+**LLM local - perfis de performance e modelos:** o `llamacpp-server` baixa o binario do release oficial conforme a GPU (cuda/vulkan/cpu) e oferece 3 focos via `-PerfMode` no launcher `run-llamacpp.ps1`:
 
 - `speed`: mais tokens/s (quant menor, KV cache `q4_0`, contexto curto).
 - `capacity`: mais qualidade/contexto (quant maior, KV cache `f16`, contexto longo).
