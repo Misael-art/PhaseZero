@@ -55,6 +55,42 @@ Describe 'Shared emulation runtime catalog' {
     }
 }
 
+Describe 'DuckStation PS1 shared runtime (Hydra Classic v4)' {
+    It 'declares canonical DuckStation runtime and pointer-only Hydra integration' {
+        $catalog = Get-BootstrapComponentCatalog
+
+        $catalog.Contains('duckstation') | Should Be $true
+        $catalog.Contains('hydra-duckstation-integration') | Should Be $true
+
+        [string]$catalog['duckstation'].sharedRuntimeKey | Should Be 'duckstation'
+        [string]$catalog['duckstation'].firmwarePolicy | Should Be 'user-provided-only'
+        [string]$catalog['duckstation'].romPolicy | Should Be 'user-owned-paths-only'
+        [string]$catalog['duckstation'].Instructions | Should Match 'BIOS'
+        [string]$catalog['duckstation'].Instructions | Should Not Match 'Invoke-WebRequest.*scph'
+
+        [string]$catalog['hydra-duckstation-integration'].Kind | Should Be 'alias'
+        [string]$catalog['hydra-duckstation-integration'].systemKey | Should Be 'playstation1'
+        [string]$catalog['hydra-duckstation-integration'].launcherMode | Should Be 'pointer-only'
+    }
+
+    It 'extends shared layout with PS1 paths and isolated cache' {
+        $layout = Get-BootstrapEmulationSharedLayout -Root 'X:\Emulation'
+
+        [string]$layout.systems.ps1.emulatorKey | Should Be 'duckstation'
+        [string]$layout.systems.ps1.firmware.policy | Should Be 'user-provided-only'
+        [bool]$layout.systems.ps1.cache.shareAcrossVersions | Should Be $false
+        [bool]$layout.systems.ps1.saves.shareWithLaunchers | Should Be $true
+    }
+
+    It 'adds DuckStation to shared profile and Hydra pointer to the Hydra profile' {
+        $profiles = Get-BootstrapProfileCatalog
+
+        @($profiles['emulation-shared'].Items) -contains 'duckstation' | Should Be $true
+        @($profiles['emulation-hydra-ps2-ps3'].Items) -contains 'hydra-duckstation-integration' | Should Be $true
+        @($profiles['steamdeck-recommended'].Items) -contains 'duckstation' | Should Be $false
+    }
+}
+
 Describe 'Shared emulation runtime layout' {
     It 'classifies shareable and isolated paths by emulator and data kind' {
         $layout = Get-BootstrapEmulationSharedLayout -Root 'X:\Emulation'
