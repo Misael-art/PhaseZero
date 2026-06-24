@@ -8059,12 +8059,22 @@ $ui.BtrfsCheckButton.Add_Click({
         $r = Get-BootstrapBtrfsReadiness
         $fast = if ($r.fastStartupEnabled) { 'LIGADO (desligue!)' } else { 'desligado (ok)' }
         $drv = if ($r.winbtrfsInstalled) { "instalado ($([string]$r.winbtrfsServiceState))" } else { 'ausente' }
+        $levelText = switch ([string]$r.accessLevel) {
+            'blocked' { 'BLOQUEADO (sem acesso)' }
+            'unsafe' { 'INSEGURO (resolva os bloqueios antes de montar)' }
+            'read-only-ok' { 'SOMENTE LEITURA ok (escrita NAO habilitada)' }
+            'write-opt-in' { 'leitura ok; ESCRITA disponivel apenas opt-in com backup' }
+            default { [string]$r.accessLevel }
+        }
+        $blockers = if (@($r.blockedReasons).Count -gt 0) { (@($r.blockedReasons) -join ', ') } else { 'nenhum' }
         $lines = @(
+            ("Nivel de acesso: {0}" -f $levelText),
+            ("Bloqueios: {0}" -f $blockers),
             ("Fast Startup: {0}" -f $fast),
-            ("WinBtrfs (driver R/W): {0}" -f $drv),
+            ("WinBtrfs (driver): {0}" -f $drv),
             ("Particoes Linux detectadas: {0}" -f [int]$r.linuxPartitionCount),
-            ("Leitura/escrita disponivel: {0}" -f $(if ($r.readWriteSupported) { 'sim' } else { 'nao (instale o WinBtrfs)' })),
-            'Este modulo NUNCA formata particoes.'
+            ("Somente leitura: {0} | Escrita (opt-in): {1}" -f $(if ($r.readOnlySupported) { 'sim' } else { 'nao' }), $(if ($r.readWriteSupported) { 'sim' } else { 'nao' })),
+            'Este modulo NUNCA formata particoes. Backup antes de escrever.'
         )
         if (@($r.recommendations).Count -gt 0) { $lines += ('Recomendacoes: ' + ((@($r.recommendations)) -join ' | ')) }
         $ui.BtrfsStatusText.Text = ($lines -join [Environment]::NewLine)

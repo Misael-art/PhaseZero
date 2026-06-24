@@ -8434,6 +8434,46 @@ function Get-BootstrapWinBtrfsState {
     return [ordered]@{ installed = [bool]$installed; driverPath = $driverPath; serviceState = $serviceState }
 }
 
+function Get-BootstrapBtrfsAccessLevel {
+    # Matriz de seguranca de acesso btrfs (deterministica, sem efeitos colaterais). Substitui o antigo
+    # readWriteSupported=winbtrfsInstalled, que ignorava Fast Startup, reboot, servico e particao.
+    # Niveis: blocked (sem acesso) | unsafe (montar arriscaria corromper) | read-only-ok (leitura segura,
+    # escrita NAO habilitada) | write-opt-in (todos os gates passam; escrita so com opt-in + backup).
+    param(
+        [bool]$WinbtrfsInstalled,
+        [string]$ServiceState = '',
+        [bool]$FastStartupEnabled,
+        [bool]$PendingReboot,
+        [int]$LinuxPartitionCount
+    )
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $serviceRunning = [string]::Equals([string]$ServiceState, 'Running', [System.StringComparison]::OrdinalIgnoreCase)
+    $serviceKnownStopped = (-not [string]::IsNullOrWhiteSpace([string]$ServiceState)) -and (-not $serviceRunning)
+
+    if (-not $WinbtrfsInstalled) {
+        $reasons.Add('winbtrfs-not-installed') | Out-Null
+        return [ordered]@{ level = 'blocked'; blockedReasons = @($reasons.ToArray()) }
+    }
+    if ($serviceKnownStopped) {
+        $reasons.Add('winbtrfs-service-not-running') | Out-Null
+        return [ordered]@{ level = 'blocked'; blockedReasons = @($reasons.ToArray()) }
+    }
+
+    if ($FastStartupEnabled) { $reasons.Add('fast-startup-on') | Out-Null }
+    if ($PendingReboot) { $reasons.Add('pending-reboot') | Out-Null }
+    if ($FastStartupEnabled -or $PendingReboot) {
+        return [ordered]@{ level = 'unsafe'; blockedReasons = @($reasons.ToArray()) }
+    }
+
+    if ($LinuxPartitionCount -le 0) {
+        $reasons.Add('no-btrfs-partition-detected') | Out-Null
+        return [ordered]@{ level = 'read-only-ok'; blockedReasons = @($reasons.ToArray()) }
+    }
+
+    return [ordered]@{ level = 'write-opt-in'; blockedReasons = @() }
+}
+
 function Get-BootstrapBtrfsReadiness {
     # Auditoria de prontidao para acesso btrfs no dual-boot. Sem efeitos colaterais; seguro em lib mode.
     $fast = Get-BootstrapFastStartupStatus
@@ -8456,16 +8496,32 @@ function Get-BootstrapBtrfsReadiness {
     $recommendations.Add('Para o Linux ver o dono correto, use uid/gid=1000 nas opcoes do volume WinBtrfs.') | Out-Null
     $recommendations.Add('Este modulo NUNCA formata particoes. Faca backup antes de habilitar escrita.') | Out-Null
 
+    $pendingReboot = (@($rebootReasons).Count -gt 0)
+    $access = Get-BootstrapBtrfsAccessLevel -WinbtrfsInstalled ([bool]$winbtrfs.installed) -ServiceState ([string]$winbtrfs.serviceState) -FastStartupEnabled ([bool]$fast.Enabled) -PendingReboot $pendingReboot -LinuxPartitionCount (@($partitions).Count)
+    $accessLevel = [string]$access.level
+    $readWrite = ($accessLevel -eq 'write-opt-in')
+    $readOnly = ($accessLevel -in @('read-only-ok', 'write-opt-in'))
+    foreach ($reason in @($access.blockedReasons)) {
+        switch ([string]$reason) {
+            'winbtrfs-service-not-running' { $recommendations.Add('Servico WinBtrfs parado: inicie-o (admin) ou reinicie apos instalar/atualizar o driver.') | Out-Null }
+            'pending-reboot' { $recommendations.Add('Reinicie o Windows: ha reboot pendente antes de montar btrfs com seguranca.') | Out-Null }
+            'no-btrfs-partition-detected' { $recommendations.Add('Nenhuma particao Linux/Btrfs detectada: leitura pode ser feita manualmente, mas a escrita fica bloqueada ate confirmar o alvo.') | Out-Null }
+        }
+    }
+
     return [ordered]@{
         fastStartupEnabled = [bool]$fast.Enabled
-        pendingReboot = (@($rebootReasons).Count -gt 0)
+        pendingReboot = $pendingReboot
         winbtrfsInstalled = [bool]$winbtrfs.installed
         winbtrfsServiceState = [string]$winbtrfs.serviceState
         linuxPartitionCount = @($partitions).Count
         partitions = @($partitions)
         checks = $checks
         recommendations = @($recommendations.ToArray())
-        readWriteSupported = [bool]$winbtrfs.installed
+        accessLevel = $accessLevel
+        blockedReasons = @($access.blockedReasons)
+        readWriteSupported = [bool]$readWrite
+        readOnlySupported = [bool]$readOnly
         neverFormats = $true
     }
 }

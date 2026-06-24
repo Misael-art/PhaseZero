@@ -30,6 +30,47 @@ Describe 'Btrfs dual-boot support (read/write, never formats)' {
         ([string]$s.driverPath) | Should Match 'btrfs\.sys'
     }
 
+    It 'computes a safety access matrix (blocked|unsafe|read-only-ok|write-opt-in) from real gates' {
+        # sem driver -> blocked
+        $a = Get-BootstrapBtrfsAccessLevel -WinbtrfsInstalled $false -ServiceState '' -FastStartupEnabled $false -PendingReboot $false -LinuxPartitionCount 2
+        [string]$a.level | Should Be 'blocked'
+        (@($a.blockedReasons) -contains 'winbtrfs-not-installed') | Should Be $true
+
+        # driver instalado mas servico parado -> blocked
+        $b = Get-BootstrapBtrfsAccessLevel -WinbtrfsInstalled $true -ServiceState 'Stopped' -FastStartupEnabled $false -PendingReboot $false -LinuxPartitionCount 2
+        [string]$b.level | Should Be 'blocked'
+        (@($b.blockedReasons) -contains 'winbtrfs-service-not-running') | Should Be $true
+
+        # Fast Startup ligado -> unsafe (FS pode ficar suja)
+        $c = Get-BootstrapBtrfsAccessLevel -WinbtrfsInstalled $true -ServiceState 'Running' -FastStartupEnabled $true -PendingReboot $false -LinuxPartitionCount 2
+        [string]$c.level | Should Be 'unsafe'
+        (@($c.blockedReasons) -contains 'fast-startup-on') | Should Be $true
+
+        # reboot pendente -> unsafe
+        $d = Get-BootstrapBtrfsAccessLevel -WinbtrfsInstalled $true -ServiceState 'Running' -FastStartupEnabled $false -PendingReboot $true -LinuxPartitionCount 2
+        [string]$d.level | Should Be 'unsafe'
+        (@($d.blockedReasons) -contains 'pending-reboot') | Should Be $true
+
+        # tudo ok mas sem particao detectada -> read-only-ok (nao habilita escrita)
+        $e = Get-BootstrapBtrfsAccessLevel -WinbtrfsInstalled $true -ServiceState 'Running' -FastStartupEnabled $false -PendingReboot $false -LinuxPartitionCount 0
+        [string]$e.level | Should Be 'read-only-ok'
+
+        # todos os gates passam -> write-opt-in
+        $f = Get-BootstrapBtrfsAccessLevel -WinbtrfsInstalled $true -ServiceState 'Running' -FastStartupEnabled $false -PendingReboot $false -LinuxPartitionCount 2
+        [string]$f.level | Should Be 'write-opt-in'
+        @($f.blockedReasons).Count | Should Be 0
+    }
+
+    It 'readiness exposes accessLevel/blockedReasons and gates readWriteSupported to write-opt-in only' {
+        $r = Get-BootstrapBtrfsReadiness
+        ($r.Contains('accessLevel')) | Should Be $true
+        ($r.Contains('blockedReasons')) | Should Be $true
+        ($r.Contains('readOnlySupported')) | Should Be $true
+        @('blocked', 'unsafe', 'read-only-ok', 'write-opt-in') -contains [string]$r.accessLevel | Should Be $true
+        [bool]$r.readWriteSupported | Should Be ([string]$r.accessLevel -eq 'write-opt-in')
+        [bool]$r.readOnlySupported | Should Be ([string]$r.accessLevel -in @('read-only-ok', 'write-opt-in'))
+    }
+
     It 'declares the winbtrfs component as guided (manual-required) enabling read/write, never formatting' {
         $catalog = Get-BootstrapComponentCatalog
         $catalog.Contains('winbtrfs') | Should Be $true
