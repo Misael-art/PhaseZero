@@ -13862,6 +13862,47 @@ function Get-BootstrapUsesSteamDeckFlow {
     return $false
 }
 
+function Get-BootstrapEmulationSharedLayout {
+    param([string]$Root = '')
+
+    if ([string]::IsNullOrWhiteSpace($Root)) {
+        $Root = Join-Path $env:USERPROFILE 'Games\Emulation'
+    }
+
+    # [System.IO.Path]::Combine evita validacao de drive (Join-Path lanca em drive inexistente p.ex. X:).
+    return [ordered]@{
+        root = $Root
+        emulators = [System.IO.Path]::Combine($Root, 'emulators')
+        tools = [System.IO.Path]::Combine($Root, 'tools')
+        roms = [System.IO.Path]::Combine($Root, 'roms')
+        firmware = [System.IO.Path]::Combine($Root, 'firmware')
+        saves = [System.IO.Path]::Combine($Root, 'saves')
+        cache = [System.IO.Path]::Combine($Root, 'cache')
+        mods = [System.IO.Path]::Combine($Root, 'mods')
+        systems = [ordered]@{
+            ps2 = [ordered]@{
+                emulatorKey = 'pcsx2'
+                executable = [System.IO.Path]::Combine($Root, 'emulators\pcsx2\pcsx2-qt.exe')
+                roms = [System.IO.Path]::Combine($Root, 'roms\ps2')
+                firmware = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'firmware\ps2\bios'); policy = 'user-provided-only'; shareWithLaunchers = $true }
+                saves = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'saves\ps2\memcards'); policy = 'canonical-pcsx2-memory-cards'; shareWithLaunchers = $true }
+                cache = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'cache\pcsx2'); policy = 'per-emulator-version-and-gpu'; shareAcrossVersions = $false }
+                mods = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'mods\ps2'); policy = 'game-specific-user-managed'; shareWithLaunchers = $true }
+            }
+            ps3 = [ordered]@{
+                emulatorKey = 'rpcs3'
+                executable = [System.IO.Path]::Combine($Root, 'emulators\rpcs3\rpcs3.exe')
+                roms = [System.IO.Path]::Combine($Root, 'roms\ps3')
+                firmware = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'firmware\ps3\PS3UPDAT.PUP'); policy = 'official-or-user-provided'; shareWithLaunchers = $true }
+                saves = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'emulators\rpcs3\dev_hdd0\home\00000001\savedata'); policy = 'single-rpcs3-dev_hdd0-root'; shareWithLaunchers = $true }
+                storage = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'emulators\rpcs3\dev_hdd0'); policy = 'single-rpcs3-dev_hdd0-root'; destructiveWrites = $false }
+                cache = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'cache\rpcs3'); policy = 'per-rpcs3-version-and-gpu'; shareAcrossVersions = $false }
+                mods = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'mods\ps3'); policy = 'game-specific-user-managed'; shareWithLaunchers = $true }
+            }
+        }
+    }
+}
+
 function Get-BootstrapComponentCatalog {
     $catalog = [ordered]@{}
 

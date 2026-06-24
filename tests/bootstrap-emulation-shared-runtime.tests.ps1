@@ -54,3 +54,20 @@ Describe 'Shared emulation runtime catalog' {
         @($profiles['steamdeck-full'].Items) -contains 'emulation-hydra-ps2-ps3' | Should Be $false
     }
 }
+
+Describe 'Shared emulation runtime layout' {
+    It 'classifies shareable and isolated paths by emulator and data kind' {
+        $layout = Get-BootstrapEmulationSharedLayout -Root 'X:\Emulation'
+
+        [string]$layout.root | Should Be 'X:\Emulation'
+        [string]$layout.systems.ps2.emulatorKey | Should Be 'pcsx2'
+        [string]$layout.systems.ps3.emulatorKey | Should Be 'rpcs3'
+
+        [string]$layout.systems.ps2.firmware.policy | Should Be 'user-provided-only'
+        [bool]$layout.systems.ps2.cache.shareAcrossVersions | Should Be $false
+        [bool]$layout.systems.ps3.cache.shareAcrossVersions | Should Be $false
+        [bool]$layout.systems.ps2.saves.shareWithLaunchers | Should Be $true
+        [bool]$layout.systems.ps3.saves.shareWithLaunchers | Should Be $true
+        [string]$layout.systems.ps3.storage.policy | Should Be 'single-rpcs3-dev_hdd0-root'
+    }
+}
