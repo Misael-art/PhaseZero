@@ -13899,6 +13899,18 @@ function Get-BootstrapEmulationSharedLayout {
                 cache = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'cache\rpcs3'); policy = 'per-rpcs3-version-and-gpu'; shareAcrossVersions = $false }
                 mods = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'mods\ps3'); policy = 'game-specific-user-managed'; shareWithLaunchers = $true }
             }
+            switch = [ordered]@{
+                emulatorKey = 'switch'
+                selectedRuntimePolicy = 'user-selects-one-source-verified-family'
+                roms = [System.IO.Path]::Combine($Root, 'roms\switch')
+                keys = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'firmware\switch\keys'); policy = 'user-provided-own-console-only'; maskInLogs = $true; shareWithLaunchers = $false }
+                firmware = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'firmware\switch\firmware'); policy = 'user-provided-own-console-only'; shareWithLaunchers = $false }
+                nand = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'state\switch\nand'); policy = 'per-emulator-family'; shareAcrossEmulatorFamilies = $false }
+                saves = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'saves\switch'); policy = 'backup-export-import-only'; shareAcrossEmulatorFamilies = $false; shareWithLaunchers = $true }
+                cache = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'cache\switch'); policy = 'per-emulator-version-and-gpu'; shareAcrossEmulatorFamilies = $false }
+                mods = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'mods\switch'); policy = 'per-title-and-engine-family'; shareAcrossEmulatorFamilies = $false }
+                metadata = [ordered]@{ path = [System.IO.Path]::Combine($Root, 'metadata\switch'); policy = 'frontend-safe-artwork-and-library-data'; shareWithLaunchers = $true }
+            }
         }
     }
 }
@@ -14030,6 +14042,86 @@ function Get-BootstrapEmulationTuningRecommendation {
             forceKillDefault = $false
             resetHydraStateOnlyWhenApiProbePasses = $true
         }
+    }
+}
+
+function Get-BootstrapSwitchEmulatorCandidateCatalog {
+    function New-BootstrapSwitchEmulatorCandidate {
+        param(
+            [Parameter(Mandatory = $true)][string]$Id,
+            [Parameter(Mandatory = $true)][string]$DisplayName,
+            [Parameter(Mandatory = $true)][string]$Language,
+            [Parameter(Mandatory = $true)][string]$DefaultStatus,
+            [Parameter(Mandatory = $true)][string]$SourceTrust,
+            [Parameter(Mandatory = $true)][string]$SharedRuntimeKey
+        )
+
+        return [pscustomobject][ordered]@{
+            id = $Id
+            displayName = $DisplayName
+            language = $Language
+            defaultStatus = $DefaultStatus
+            sourceTrust = $SourceTrust
+            sharedRuntimeKey = $SharedRuntimeKey
+            systemKey = 'nintendo-switch'
+            keysPolicy = 'user-provided-own-console-only'
+            firmwarePolicy = 'user-provided-own-console-only'
+            contentPolicy = 'user-owned-paths-only'
+            autoInstallAllowed = $false
+        }
+    }
+
+    return @(
+        New-BootstrapSwitchEmulatorCandidate -Id 'ryujinx-family' -DisplayName 'Ryujinx family' -Language 'C#' -DefaultStatus 'manual-review' -SourceTrust 'verify-current-source-before-use' -SharedRuntimeKey 'switch-ryujinx-family'
+        New-BootstrapSwitchEmulatorCandidate -Id 'yuzu-family' -DisplayName 'Yuzu family' -Language 'C++' -DefaultStatus 'reference-only' -SourceTrust 'discontinued-or-legacy-reference' -SharedRuntimeKey 'switch-yuzu-family'
+        New-BootstrapSwitchEmulatorCandidate -Id 'suyu-family' -DisplayName 'Suyu family' -Language 'C++' -DefaultStatus 'manual-review' -SourceTrust 'verify-current-source-before-use' -SharedRuntimeKey 'switch-suyu-family'
+        New-BootstrapSwitchEmulatorCandidate -Id 'sudachi-family' -DisplayName 'Sudachi family' -Language 'C++' -DefaultStatus 'manual-review' -SourceTrust 'verify-current-source-before-use' -SharedRuntimeKey 'switch-sudachi-family'
+        New-BootstrapSwitchEmulatorCandidate -Id 'torzu-family' -DisplayName 'Torzu family' -Language 'C++' -DefaultStatus 'manual-review' -SourceTrust 'verify-current-source-before-use' -SharedRuntimeKey 'switch-torzu-family'
+        New-BootstrapSwitchEmulatorCandidate -Id 'citron-family' -DisplayName 'Citron family' -Language 'C++' -DefaultStatus 'manual-review' -SourceTrust 'verify-current-source-before-use' -SharedRuntimeKey 'switch-citron-family'
+        New-BootstrapSwitchEmulatorCandidate -Id 'eden-family' -DisplayName 'Eden family' -Language 'C++' -DefaultStatus 'manual-review' -SourceTrust 'verify-current-source-before-use' -SharedRuntimeKey 'switch-eden-family'
+    )
+}
+
+function Get-BootstrapSwitchEmulationTuningRecommendation {
+    param([Parameter(Mandatory = $true)]$HostProfile)
+
+    $supportsVulkan = [bool]$HostProfile.SupportsVulkan
+    $isDeck = [bool]$HostProfile.IsSteamDeck
+    $memoryGb = [int]$HostProfile.MemoryGB
+    $logicalProcessors = [int]$HostProfile.LogicalProcessors
+
+    if (-not $supportsVulkan) {
+        return [ordered]@{
+            profile = 'compatibility-review'
+            renderer = 'manual'
+            consoleMode = 'handheld'
+            resolutionScale = 1.0
+            asyncShadersWhenSupported = $false
+            autoApply = $false
+            reason = 'Vulkan unavailable; user should review GPU driver and emulator compatibility.'
+        }
+    }
+
+    if ($isDeck -or $memoryGb -lt 16 -or $logicalProcessors -lt 8) {
+        return [ordered]@{
+            profile = 'handheld-balanced'
+            renderer = 'Vulkan'
+            consoleMode = 'handheld'
+            resolutionScale = 1.0
+            asyncShadersWhenSupported = $true
+            autoApply = $false
+            reason = 'Conservative handheld profile for battery, thermals and shader stutter control.'
+        }
+    }
+
+    return [ordered]@{
+        profile = 'docked-balanced'
+        renderer = 'Vulkan'
+        consoleMode = 'docked'
+        resolutionScale = 2.0
+        asyncShadersWhenSupported = $true
+        autoApply = $false
+        reason = 'Desktop-capable host; still requires user review before applying.'
     }
 }
 
@@ -14215,6 +14307,12 @@ function Get-BootstrapComponentCatalog {
     $catalog['hydra-pcsx2-integration'] = New-BootstrapComponentDefinition -Name 'hydra-pcsx2-integration' -Description 'Hydra Classic pointer to canonical PCSX2 runtime.' -Optional $true -DependsOn @('hydra-launcher', 'pcsx2') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Writes only launcher pointers to PCSX2; does not install a duplicate emulator.'; configTarget = '$env:APPDATA\hydra\emulators_config.json'; systemKey = 'playstation2'; launcherMode = 'pointer-only' }
     $catalog['hydra-rpcs3-integration'] = New-BootstrapComponentDefinition -Name 'hydra-rpcs3-integration' -Description 'Hydra Classic pointer to canonical RPCS3 runtime.' -Optional $true -DependsOn @('hydra-launcher', 'rpcs3') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Writes only launcher pointers to RPCS3; does not install a duplicate emulator.'; configTarget = '$env:APPDATA\hydra\emulators_config.json'; systemKey = 'playstation3'; launcherMode = 'pointer-only' }
     $catalog['nuovo-emulation-intake'] = New-BootstrapComponentDefinition -Name 'nuovo-emulation-intake' -Description 'Nuovo emulator/front-end intake placeholder until technical source is provided.' -Optional $true -DependsOn @('emulation-shared-runtime') -Kind 'manual-required' -Data @{ DisplayName = 'Nuovo'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Tracks user request without guessing install/config behavior.'; Instructions = 'Provide Nuovo technical source, config paths, supported systems and CLI flags before implementation.'; intakeStatus = 'blocked-missing-source'; riskLevel = 'blocked' }
+    $catalog['switch-emulation-runtime'] = New-BootstrapComponentDefinition -Name 'switch-emulation-runtime' -Description 'Nintendo Switch emulator runtime intake with source trust and user-owned content gates.' -Optional $true -DependsOn @('emulation-shared-runtime', 'vcpp-redist', 'directx-runtime') -Kind 'manual-required' -Data @{ DisplayName = 'Nintendo Switch emulation runtime'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Centralizes Switch emulator selection without duplicating binaries across Hydra, Steam ROM Manager, EmuDeck or Playnite.'; Instructions = 'Select one source-verified emulator family. Provide only your own console-derived keys, firmware and game dumps. PhaseZero never downloads keys, firmware, updates, DLC or games.'; sharedRuntimeKey = 'switch'; keysPolicy = 'user-provided-own-console-only'; firmwarePolicy = 'user-provided-own-console-only'; romPolicy = 'user-owned-paths-only'; autoInstallAllowed = $false; riskLevel = 'manual' }
+    foreach ($candidate in Get-BootstrapSwitchEmulatorCandidateCatalog) {
+        $componentId = 'switch-emulator-{0}' -f [string]$candidate.id
+        $catalog[$componentId] = New-BootstrapComponentDefinition -Name $componentId -Description ("Nintendo Switch emulator candidate: {0}." -f [string]$candidate.displayName) -Optional $true -DependsOn @('switch-emulation-runtime') -Kind 'manual-required' -Data @{ DisplayName = [string]$candidate.displayName; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Candidate is tracked for user choice and diagnostics only; no automatic install.'; Instructions = 'Verify current source, license, release integrity and project status before use. Provide only user-owned keys, firmware and game dumps.'; systemKey = [string]$candidate.systemKey; sharedRuntimeKey = [string]$candidate.sharedRuntimeKey; keysPolicy = [string]$candidate.keysPolicy; firmwarePolicy = [string]$candidate.firmwarePolicy; contentPolicy = [string]$candidate.contentPolicy; autoInstallAllowed = $false; defaultStatus = [string]$candidate.defaultStatus; sourceTrust = [string]$candidate.sourceTrust; riskLevel = 'manual' }
+    }
+    $catalog['hydra-switch-integration'] = New-BootstrapComponentDefinition -Name 'hydra-switch-integration' -Description 'Hydra Classic pointer to the selected canonical Nintendo Switch emulator runtime.' -Optional $true -DependsOn @('hydra-launcher', 'switch-emulation-runtime') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Writes only launcher pointers after one Switch emulator family is selected and source-verified.'; configTarget = '$env:APPDATA\hydra\emulators_config.json'; systemKey = 'nintendoswitch'; launcherMode = 'pointer-only'; requiresSelectedRuntime = $true }
     $catalog['autohotkey-runtime'] = New-BootstrapComponentDefinition -Name 'autohotkey-runtime' -Description 'Runtime base para hotkeys e fallback manual do Steam Deck.' -DependsOn @('autohotkey') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Permite hotkeys fisicos e fallback local sem depender do Steam.' }
     $catalog['powershell-core-runtime'] = New-BootstrapComponentDefinition -Name 'powershell-core-runtime' -Description 'PowerShell Core pronto para componentes futuros.' -DependsOn @('powershell') -Kind 'alias' -Data @{ Stage = 'runtime'; Provisioning = 'winget'; ValueReason = 'Provisiona pwsh antes de qualquer componente futuro que precise dele.' }
     # vigembus-runtime: o driver .sys vai para System32\drivers (driver store). A pasta Program Files
@@ -14340,6 +14438,8 @@ function Get-BootstrapProfileCatalog {
     $catalog['gaming'] = New-BootstrapProfileDefinition -Name 'gaming' -Description 'Steam e ferramentas relacionadas.' -Items @('steam', 'steamcmd')
     $catalog['emulation-shared'] = New-BootstrapProfileDefinition -Name 'emulation-shared' -Description 'Shared emulator runtime without launcher-specific duplication.' -Items @('emulation-shared-runtime', 'pcsx2', 'rpcs3', 'chdman-tools', 'nuovo-emulation-intake')
     $catalog['emulation-hydra-ps2-ps3'] = New-BootstrapProfileDefinition -Name 'emulation-hydra-ps2-ps3' -Description 'Opt-in Hydra pointers to canonical PCSX2 and RPCS3 runtimes.' -Items @('emulation-shared', 'emulation-shared-runtime', 'hydra-launcher', 'hydra-pcsx2-integration', 'hydra-rpcs3-integration')
+    $catalog['emulation-switch-safe-intake'] = New-BootstrapProfileDefinition -Name 'emulation-switch-safe-intake' -Description 'Opt-in Nintendo Switch emulator intake with legal/content gates and no auto-install.' -Items @('emulation-shared-runtime', 'switch-emulation-runtime', 'switch-emulator-ryujinx-family', 'switch-emulator-yuzu-family', 'switch-emulator-suyu-family', 'switch-emulator-sudachi-family', 'switch-emulator-torzu-family', 'switch-emulator-citron-family', 'switch-emulator-eden-family')
+    $catalog['emulation-hydra-switch'] = New-BootstrapProfileDefinition -Name 'emulation-hydra-switch' -Description 'Hydra pointer integration for one selected canonical Nintendo Switch emulator.' -Items @('emulation-switch-safe-intake', 'switch-emulation-runtime', 'hydra-launcher', 'hydra-switch-integration')
     $catalog['steamdeck-essentials'] = New-BootstrapProfileDefinition -Name 'steamdeck-essentials' -Description 'Base handheld do Steam Deck em Windows.' -Items @('base', 'steam', 'playnite', 'heroic', 'rtss', 'special-k', 'vcpp-redist', 'directx-runtime', 'vigembus-runtime', 'steamdeck-tools-runtime', 'steamdeck-tools', 'autohotkey-runtime')
     $catalog['steamdeck-input'] = New-BootstrapProfileDefinition -Name 'steamdeck-input' -Description 'Perfis de input, hotkeys e automacao de controle.' -Items @('steamdeck-settings', 'steamdeck-automation', 'steamdeck-tweaks', 'console-session-manager', 'dev-session-manager', 'display-classifier', 'recovery-hotkeys', 'steamdeck-input-conflict-audit', 'console-readiness-audit')
     $catalog['steamdeck-input-advanced'] = New-BootstrapProfileDefinition -Name 'steamdeck-input-advanced' -Description 'Stacks alternativos opt-in: Handheld Companion e GlosSI.' -Items @('handheld-companion', 'glossi', 'steamdeck-input-conflict-audit')
