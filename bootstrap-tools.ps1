@@ -13962,6 +13962,45 @@ function New-BootstrapEmulationConfigPlan {
     }
 }
 
+function Merge-BootstrapHydraClassicConfig {
+    # Liga as flags de conteudo classico/retro do Hydra v4 (config.json) preservando chaves
+    # desconhecidas. Nao escreve com Hydra em execucao salvo -Force. Sem download de nada.
+    param(
+        [Parameter(Mandatory = $true)][string]$ConfigPath,
+        [bool]$DisplayClassicContent = $true,
+        [bool]$EnableRetroUIFeatures = $true,
+        [switch]$HydraProcessRunning,
+        [switch]$Force
+    )
+
+    if ($HydraProcessRunning -and -not $Force) {
+        return [pscustomobject]@{ status = 'blocked-process-running'; changed = $false; path = $ConfigPath }
+    }
+
+    $parent = Split-Path -Path $ConfigPath -Parent
+    if (-not [string]::IsNullOrWhiteSpace($parent)) {
+        New-Item -Path $parent -ItemType Directory -Force | Out-Null
+    }
+
+    $data = [ordered]@{}
+    if (Test-Path -LiteralPath $ConfigPath) {
+        $raw = Get-Content -LiteralPath $ConfigPath -Raw
+        if (-not [string]::IsNullOrWhiteSpace($raw)) {
+            $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+            foreach ($prop in $parsed.PSObject.Properties) {
+                $data[$prop.Name] = $prop.Value
+            }
+        }
+    }
+
+    $data['displayClassicContent'] = [bool]$DisplayClassicContent
+    $data['enableRetroUIFeatures'] = [bool]$EnableRetroUIFeatures
+
+    $json = $data | ConvertTo-Json -Depth 10
+    [System.IO.File]::WriteAllText($ConfigPath, $json, [System.Text.UTF8Encoding]::new($false))
+    return [pscustomobject]@{ status = 'updated'; changed = $true; path = $ConfigPath }
+}
+
 function Merge-BootstrapHydraEmulatorConfig {
     param(
         [Parameter(Mandatory = $true)][string]$ConfigPath,

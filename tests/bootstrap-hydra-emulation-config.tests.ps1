@@ -28,6 +28,40 @@ Describe 'Hydra shared emulator config merge' {
         }
     }
 
+    It 'enables Hydra Classic content flags while preserving unknown config keys' {
+        $root = Join-Path $env:TEMP ('pz-hydra-classic-' + [Guid]::NewGuid().ToString('N'))
+        $cfg = Join-Path $root 'config.json'
+        New-Item -Path $root -ItemType Directory -Force | Out-Null
+        try {
+            '{"theme":"dark","language":"pt","custom":{"keep":true}}' | Set-Content -LiteralPath $cfg -Encoding UTF8
+
+            $result = Merge-BootstrapHydraClassicConfig -ConfigPath $cfg
+
+            [bool]$result.changed | Should Be $true
+            $json = Get-Content -LiteralPath $cfg -Raw | ConvertFrom-Json
+            [string]$json.theme | Should Be 'dark'
+            [bool]$json.custom.keep | Should Be $true
+            [bool]$json.displayClassicContent | Should Be $true
+            [bool]$json.enableRetroUIFeatures | Should Be $true
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'does not write classic flags when Hydra is running unless force' {
+        $root = Join-Path $env:TEMP ('pz-hydra-classic-lock-' + [Guid]::NewGuid().ToString('N'))
+        $cfg = Join-Path $root 'config.json'
+        New-Item -Path $root -ItemType Directory -Force | Out-Null
+        try {
+            '{}' | Set-Content -LiteralPath $cfg -Encoding UTF8
+            $result = Merge-BootstrapHydraClassicConfig -ConfigPath $cfg -HydraProcessRunning:$true
+            [bool]$result.changed | Should Be $false
+            [string]$result.status | Should Be 'blocked-process-running'
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'does not write when Hydra is running unless force is explicit' {
         $root = Join-Path $env:TEMP ('pz-hydra-lock-' + [Guid]::NewGuid().ToString('N'))
         $cfg = Join-Path $root 'emulators_config.json'
