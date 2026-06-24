@@ -14045,6 +14045,23 @@ function Get-BootstrapEmulationTuningRecommendation {
     }
 }
 
+function Get-BootstrapEmulationFriendlyFixCatalog {
+    $switchMessage = 'Use apenas arquivos do usuario, extraidos do proprio console e jogos proprios. PhaseZero nao baixa keys, firmware, jogos, updates, DLC ou mods.'
+
+    return @(
+        [pscustomobject][ordered]@{ id = 'switch-missing-keys'; system = 'switch'; title = 'Switch: keys ausentes'; mode = 'guided-user-content'; safeAction = 'open-shared-switch-keys-folder'; destructiveDefault = $false; requiresBackup = $false; userMessage = $switchMessage; blockedActions = @('download-keys','bypass-decryption') }
+        [pscustomobject][ordered]@{ id = 'switch-firmware-mismatch'; system = 'switch'; title = 'Switch: firmware incompativel'; mode = 'guided-user-content'; safeAction = 'open-shared-switch-firmware-folder'; destructiveDefault = $false; requiresBackup = $false; userMessage = $switchMessage; blockedActions = @('download-firmware') }
+        [pscustomobject][ordered]@{ id = 'switch-black-screen'; system = 'switch'; title = 'Switch: tela preta'; mode = 'diagnose-renderer'; safeAction = 'recommend-renderer-and-driver-check'; destructiveDefault = $false; requiresBackup = $false; userMessage = 'Verifica Vulkan/GPU/driver, perfil handheld/docked e mods do usuario antes de alterar configs.'; blockedActions = @('delete-user-data') }
+        [pscustomobject][ordered]@{ id = 'switch-controller-not-working'; system = 'switch'; title = 'Switch: controle nao detectado'; mode = 'guided-input-profile'; safeAction = 'show-input-stack-conflicts'; destructiveDefault = $false; requiresBackup = $false; userMessage = 'Audita Steam Input, ViGEm, Handheld Companion, GlosSI e mapeamento por emulador; perfil de input fica por usuario antes de gravar.'; blockedActions = @('disable-input-drivers') }
+        [pscustomobject][ordered]@{ id = 'switch-stutter-shader-cache'; system = 'switch'; title = 'Switch: stutter/cache shader'; mode = 'guided-cleanup'; safeAction = 'backup-then-clear-selected-cache'; destructiveDefault = $false; requiresBackup = $true; userMessage = 'Cache shader fica por emulador, versao e GPU. Limpeza exige backup e selecao do usuario.'; blockedActions = @('clear-all-caches') }
+        [pscustomobject][ordered]@{ id = 'switch-low-fps-host-capacity'; system = 'switch'; title = 'Switch: FPS baixo'; mode = 'host-capacity-profile'; safeAction = 'recommend-resolution-mode-and-power-profile'; destructiveDefault = $false; requiresBackup = $false; userMessage = 'Escolhe perfil por CPU, RAM, GPU, Vulkan, bateria e storage do usuario.'; blockedActions = @('force-overclock') }
+        [pscustomobject][ordered]@{ id = 'switch-mod-conflict'; system = 'switch'; title = 'Switch: conflito de mods'; mode = 'audit-only'; safeAction = 'list-mods-per-title-and-engine'; destructiveDefault = $false; requiresBackup = $false; userMessage = 'Mods do usuario ficam por titulo e familia de emulador; PhaseZero so audita e permite desativacao guiada.'; blockedActions = @('delete-mods') }
+        [pscustomobject][ordered]@{ id = 'switch-duplicate-runtime'; system = 'switch'; title = 'Switch: runtimes duplicados'; mode = 'audit-only'; safeAction = 'report-duplicate-emulator-roots'; destructiveDefault = $false; requiresBackup = $false; userMessage = 'Detecta duplicacao entre Hydra, EmuDeck, Playnite e Steam ROM Manager; runtimes do usuario nao sao removidos automaticamente.'; blockedActions = @('uninstall-runtime') }
+        [pscustomobject][ordered]@{ id = 'switch-save-backup'; system = 'switch'; title = 'Switch: backup de saves'; mode = 'backup-only'; safeAction = 'snapshot-selected-save-roots'; destructiveDefault = $false; requiresBackup = $true; userMessage = 'Saves do usuario nao sao compartilhados entre familias por escrita direta; use backup, exportacao e importacao guiada.'; blockedActions = @('overwrite-saves') }
+        [pscustomobject][ordered]@{ id = 'switch-vulkan-driver'; system = 'switch'; title = 'Switch: Vulkan/driver'; mode = 'readiness-check'; safeAction = 'run-gpu-vulkan-readiness'; destructiveDefault = $false; requiresBackup = $false; userMessage = 'Verifica driver e suporte Vulkan antes de recomendar renderer. Usuario escolhe aplicar.'; blockedActions = @('install-unverified-driver') }
+    )
+}
+
 function Get-BootstrapSwitchEmulatorCandidateCatalog {
     function New-BootstrapSwitchEmulatorCandidate {
         param(
