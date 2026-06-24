@@ -7792,6 +7792,84 @@ function Ensure-BootstrapOsSlimServer {
     Write-Log ("OS slim server: {0}." -f $(if ($dry) { 'plano calculado (dry-run)' } else { 'enxugamento reversivel aplicado' }))
 }
 
+function Ensure-BootstrapGpeditHardening {
+    # Aplica o pacote de hardening de privacidade/telemetria/IA do gpedit (Configuracao do Computador
+    # e do Usuario) como tweaks de registro REVERSIVEIS (Apply-BootstrapRegistryDword registra o valor
+    # anterior para -Rollback). NAO inclui o bloqueio agressivo "Forcar Negacao" de privacidade de apps
+    # (camera/mic/local), que pode quebrar apps legitimos. NAO mexe no shell nem remove arquivos.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $dry = [bool]$State.DryRun
+    Write-Log ("gpedit hardening: {0}..." -f $(if ($dry) { 'dry-run (sem alteracoes)' } else { 'aplicando politicas reversiveis' }))
+    if ($dry) { return }
+
+    # Cada item: Path (HKLM/HKCU Policies), Name, Value (DWORD). Politicas documentadas equivalentes
+    # ao que o gpedit grava. Reversiveis individualmente.
+    $policies = @(
+        # 1. Telemetria (Permitir Dados de Diagnostico -> 0)
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowTelemetry'; Value = 0 }
+        # 2. Compatibilidade de Aplicativos (telemetria/inventario/PCA/Steps Recorder/engine)
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat'; Name = 'AITEnable'; Value = 0 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableInventory'; Value = 1 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat'; Name = 'DisablePCA'; Value = 1 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableUAR'; Value = 1 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AppCompat'; Name = 'DisableEngine'; Value = 1 }
+        # 3. Conteudo de Nuvem (experiencias do consumidor/dicas/conteudo otimizado)
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableWindowsConsumerFeatures'; Value = 1 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableSoftLanding'; Value = 1 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableCloudOptimizedContent'; Value = 1 }
+        # 4. Atualizacao automatica de dados de fala
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Speech'; Name = 'AllowSpeechModelUpdate'; Value = 0 }
+        # 5. Explorador: insights baseados em conta/recentes
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Explorer'; Name = 'DisableGraphRecentItems'; Value = 1 }
+        # 6. IA do Windows: Recall / analise de dados
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsAI'; Name = 'DisableAIDataAnalysis'; Value = 1 }
+        # 7. Instalacao por Push
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\PushToInstall'; Name = 'DisablePushToInstall'; Value = 1 }
+        # 8. Fornecedor de Local do Windows
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LocationAndSensors'; Name = 'DisableWindowsLocationProvider'; Value = 1 }
+        # 9. Localizar Meu Dispositivo
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\FindMyDevice'; Name = 'AllowFindMyDevice'; Value = 0 }
+        # 10. Loja: download/instalacao automatica de updates
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\WindowsStore'; Name = 'AutoDownload'; Value = 2 }
+        # 11-12. Edge: preload e pre-inicializacao
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\Main'; Name = 'AllowPrelaunch'; Value = 0 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\MicrosoftEdge\TabPreloader'; Name = 'AllowTabPreloading'; Value = 0 }
+        # 13. Pesquisar: Cortana, pesquisa na nuvem, web em pesquisa
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'AllowCortana'; Value = 0 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'AllowCloudSearch'; Value = 0 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'ConnectedSearchUseWeb'; Value = 0 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'DisableWebSearch'; Value = 1 }
+        # 16-17. Relatorios de Erros do Windows
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting'; Name = 'Disabled'; Value = 1 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Error Reporting'; Name = 'LoggingDisabled'; Value = 1 }
+        # 18. Nao sincronizar configuracoes
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableSettingSync'; Value = 2 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\SettingSync'; Name = 'DisableSettingSyncUserOverride'; Value = 1 }
+        # 19. Widgets
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh'; Name = 'AllowNewsAndInterests'; Value = 0 }
+        # 23. Desligar o ID de anuncio
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\AdvertisingInfo'; Name = 'DisabledByGroupPolicy'; Value = 1 }
+        # 24. Activity Feed / Timeline / Clipboard sync
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'EnableActivityFeed'; Value = 0 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'PublishUserActivities'; Value = 0 }
+        @{ Path = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'UploadUserActivities'; Value = 0 }
+        # 22. (Usuario) Menu Iniciar: nao manter historico de documentos recentes
+        @{ Path = 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'; Name = 'NoRecentDocsHistory'; Value = 1 }
+    )
+
+    $applied = 0
+    foreach ($p in $policies) {
+        try {
+            Apply-BootstrapRegistryDword -State $State -Path $p.Path -Name $p.Name -Value $p.Value
+            $applied++
+        } catch {
+            Write-Log ("gpedit hardening: politica {0}\{1} nao aplicada: {2}" -f $p.Path, $p.Name, $_.Exception.Message) 'WARN'
+        }
+    }
+    Write-Log ("gpedit hardening: {0} politica(s) reversivel(eis) aplicada(s). (Bloqueio agressivo de privacidade de apps NAO incluido por padrao.)" -f $applied)
+}
+
 function Get-BootstrapLlamaOffloadPlan {
     # Calcula o plano de offload do llama.cpp (camadas na GPU vs CPU) para um modelo GGUF, dado o
     # hardware. Deterministico e sem efeitos colaterais (testavel). Porta da logica do parecer tecnico.
@@ -13763,6 +13841,7 @@ function Get-BootstrapComponentStage {
         'steamdeck-settings' { return 'config' }
         'steamdeck-automation' { return 'config' }
         'os-slim-server' { return 'config' }
+        'gpedit-hardening' { return 'config' }
         'manual-required' { return 'verify' }
         default { return 'payload' }
     }
@@ -13905,6 +13984,9 @@ function Get-BootstrapComponentCatalog {
     $catalog['performance-v4'] = New-BootstrapComponentDefinition -Name 'performance-v4' -Description 'Performance V4: utilitario de otimizacao da Microsoft Store. Opt-in, experimental; instalacao manual.' -Optional $true -DependsOn @('system-core') -Kind 'manual-required' -Data @{ DisplayName = 'Performance V4'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Ajustes de performance sob demanda via app da Loja.'; Instructions = 'Instale pela Microsoft Store (winget --source msstore --id 9N5N9D6JB8VT, ou ms-windows-store://pdp/?productid=9N5N9D6JB8VT) e rode novamente. App de loja sem reputacao verificada — revise as otimizacoes antes de aplicar.'; ProbePaths = @(); riskLevel = 'experimental'; officialSource = 'https://apps.microsoft.com/detail/9N5N9D6JB8VT'; manualReason = 'App da Microsoft Store sem reputacao verificada; instalacao/uso manual e revisao recomendada.'; requiresGpu = $false; requiresInteractiveLogin = $false }
     # Enxuga o Windows para uso como servidor (menor RAM). Reversivel via -Rollback; nunca remove
     # arquivos do usuario nem desabilita o shell. Usado pelos perfis de servidor com LLM local.
+    # Hardening de privacidade/telemetria/IA equivalente ao pacote do gpedit (Computador + Usuario).
+    # Reversivel via -Rollback; nao inclui o bloqueio agressivo de privacidade de apps por padrao.
+    $catalog['gpedit-hardening'] = New-BootstrapComponentDefinition -Name 'gpedit-hardening' -Description 'Hardening de privacidade/telemetria/IA via politicas (telemetria, conteudo de nuvem, Cortana/web search, Recall, widgets, activity feed, advertising id, WER, etc.). Reversivel.' -Optional $true -DependsOn @('system-core') -Kind 'gpedit-hardening' -Data @{ DisplayName = 'Hardening de privacidade (gpedit)'; Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Reduz telemetria/coleta e desativa recursos invasivos de forma reversivel; equivalente ao pacote de politicas do gpedit.'; riskLevel = 'experimental' }
     $catalog['os-slim-server'] = New-BootstrapComponentDefinition -Name 'os-slim-server' -Description 'Enxuga o Windows para servidor (desliga telemetria, busca, efeitos visuais, apps de fundo, Game Bar; tudo reversivel).' -Optional $true -DependsOn @('system-core') -Kind 'os-slim-server' -Data @{ DisplayName = 'Enxugar Windows (servidor)'; Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Reduz uso de RAM/IO para rodar LLM local ou servicos de servidor; reversivel via rollback.'; riskLevel = 'experimental' }
     # hermes-remote: habilita o Hermes para atuacao remota via Tailscale (sem expor porta publica).
     $catalog['hermes-remote'] = New-BootstrapComponentDefinition -Name 'hermes-remote' -Description 'Hermes para atuacao remota: config OpenCloud + Tailscale (acesso seguro sem porta publica).' -Optional $true -DependsOn @('hermes', 'tailscale') -Kind 'hermes-remote' -RequiresNetwork $true -Data @{ DisplayName = 'Hermes remoto (Tailscale)'; Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Permite operar o agente Hermes do servidor caseiro a distancia, com seguranca de rede mesh.'; riskLevel = 'experimental'; officialSource = 'https://github.com/NousResearch/hermes-agent' }
@@ -28069,6 +28151,9 @@ function Invoke-BootstrapComponent {
         }
         'os-slim-server' {
             Ensure-BootstrapOsSlimServer -State $State
+        }
+        'gpedit-hardening' {
+            Ensure-BootstrapGpeditHardening -State $State
         }
         'llamacpp-server' {
             Ensure-BootstrapLlamaCppServer -State $State

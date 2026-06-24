@@ -226,6 +226,46 @@ Describe 'Windows home server: llama.cpp offload autocalc' {
     }
 }
 
+Describe 'gpedit hardening (privacidade/telemetria, reversivel)' {
+    It 'declara o componente gpedit-hardening opt-in' {
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('gpedit-hardening') | Should Be $true
+        [bool]$catalog['gpedit-hardening'].Optional | Should Be $true
+        [string]$catalog['gpedit-hardening'].Kind | Should Be 'gpedit-hardening'
+    }
+    It 'todas as mutacoes passam por Apply-BootstrapRegistryDword (registradas p/ rollback)' {
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+        $fn = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Ensure-BootstrapGpeditHardening' }, $true))[0]
+        $fn | Should Not BeNullOrEmpty
+        $cmds = @($fn.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true) | ForEach-Object { ($_.GetCommandName() -split '\\')[-1] })
+        # nao usa escrita de registro crua sem registrar
+        (@($cmds | Where-Object { $_ -in @('Set-ItemProperty', 'New-ItemProperty', 'Remove-Item') }).Count) | Should Be 0
+        (@($cmds | Where-Object { $_ -eq 'Apply-BootstrapRegistryDword' }).Count -gt 0) | Should Be $true
+    }
+    It 'NAO inclui o bloqueio agressivo de privacidade de apps (Forcar Negacao) por padrao' {
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+        $fn = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Ensure-BootstrapGpeditHardening' }, $true))[0]
+        $fn.Extent.Text | Should Not Match 'LetAppsAccessCamera|LetAppsAccessMicrophone|LetAppsRunInBackground'
+    }
+    It 'em dry-run nao escreve no registro' {
+        Mock -CommandName Apply-BootstrapRegistryDword -MockWith {}
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $env:TEMP -ResolvedCloneBaseDir $env:TEMP
+        $state.DryRun = $true
+        Ensure-BootstrapGpeditHardening -State $state
+        Assert-MockCalled -CommandName Apply-BootstrapRegistryDword -Times 0 -Scope It
+    }
+    It 'aplica politicas-chave do PDF (telemetria, widgets, advertising id, activity feed)' {
+        $tokens = $null; $errors = $null
+        $ast = [System.Management.Automation.Language.Parser]::ParseFile($scriptPath, [ref]$tokens, [ref]$errors)
+        $fn = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Ensure-BootstrapGpeditHardening' }, $true))[0]
+        foreach ($k in @('DataCollection', 'AllowNewsAndInterests', 'AdvertisingInfo', 'EnableActivityFeed', 'CloudContent', 'PushToInstall')) {
+            $fn.Extent.Text | Should Match $k
+        }
+    }
+}
+
 Describe 'System optimization apps (opt-in, guiados)' {
     It 'declara sparkle-optimizer (thedogecraft) como manual-required experimental com fonte oficial' {
         $catalog = Get-BootstrapComponentCatalog
