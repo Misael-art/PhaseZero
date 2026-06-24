@@ -13903,6 +13903,53 @@ function Get-BootstrapEmulationSharedLayout {
     }
 }
 
+function Get-BootstrapEmulationTuningRecommendation {
+    param([Parameter(Mandatory = $true)]$HostProfile)
+
+    $supportsVulkan = [bool]$HostProfile.SupportsVulkan
+    $isDeck = [bool]$HostProfile.IsSteamDeck
+    $logicalProcessors = [int]$HostProfile.LogicalProcessors
+    $memoryGb = [int]$HostProfile.MemoryGB
+    $storageClass = [string]$HostProfile.StorageClass
+
+    $profileName = 'desktop-balanced'
+    if (-not $supportsVulkan) {
+        $profileName = 'compatibility'
+    } elseif ($isDeck) {
+        $profileName = 'handheld-balanced'
+    } elseif ($logicalProcessors -ge 12 -and $memoryGb -ge 32) {
+        $profileName = 'desktop-performance'
+    }
+
+    $ps2Renderer = if ($supportsVulkan) { 'Vulkan' } else { 'Direct3D12' }
+    $media = if ($storageClass -match 'sd|usb|hdd') { 'prefer-chd-after-verification' } else { 'iso-or-chd-user-choice' }
+    $ps3Mode = if ($supportsVulkan -and $memoryGb -ge 16) { 'standard' } else { 'manual-compatibility-review' }
+
+    return [ordered]@{
+        profile = $profileName
+        ps2 = [ordered]@{
+            frontend = 'PCSX2-Qt'
+            renderer = $ps2Renderer
+            fastBoot = $true
+            mediaFormatRecommendation = $media
+            libretroRecommended = $false
+        }
+        ps3 = [ordered]@{
+            frontend = 'RPCS3'
+            renderer = $(if ($supportsVulkan) { 'Vulkan' } else { 'manual' })
+            ppuDecoder = 'LLVM'
+            spuDecoder = 'LLVM'
+            spuThreads = 'auto'
+            mode = $ps3Mode
+        }
+        watchdog = [ordered]@{
+            reportFirst = $true
+            forceKillDefault = $false
+            resetHydraStateOnlyWhenApiProbePasses = $true
+        }
+    }
+}
+
 function Get-BootstrapComponentCatalog {
     $catalog = [ordered]@{}
 
