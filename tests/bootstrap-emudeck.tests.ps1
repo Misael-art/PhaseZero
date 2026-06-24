@@ -6,6 +6,11 @@ $scriptPath = Join-Path $repoRoot 'bootstrap-tools.ps1'
 . $scriptPath -BootstrapUiLibraryMode
 
 Describe 'EmuDeck for Windows incorporation' {
+    It 'marks EmuDeck runtime source policy as canonical-or-audited-duplicate' {
+        $catalog = Get-BootstrapComponentCatalog
+        [string]$catalog['emudeck'].runtimeSourcePolicy | Should Be 'points-to-canonical-or-audited-duplicate'
+    }
+
     It 'declares the emudeck component as guided (manual-required) with real prerequisites' {
         $catalog = Get-BootstrapComponentCatalog
         $catalog.Contains('emudeck') | Should Be $true

@@ -55,6 +55,25 @@ Describe 'Shared emulation runtime catalog' {
     }
 }
 
+Describe 'Unified emulation metadata and save policy' {
+    It 'exposes a single top-level metadata root' {
+        $layout = Get-BootstrapEmulationSharedLayout -Root 'X:\Emulation'
+        [string]$layout.metadata | Should Match 'metadata$'
+    }
+    It 'gives every Sony system a single metadata (artwork/images/videos) source shared with launchers' {
+        $layout = Get-BootstrapEmulationSharedLayout -Root 'X:\Emulation'
+        foreach ($sys in @('ps1', 'ps2', 'ps3')) {
+            [string]$layout.systems.$sys.metadata.policy | Should Be 'frontend-safe-artwork-and-library-data'
+            [bool]$layout.systems.$sys.metadata.shareWithLaunchers | Should Be $true
+        }
+    }
+    It 'documents the PS3 save location as a conscious single-root exception' {
+        $layout = Get-BootstrapEmulationSharedLayout -Root 'X:\Emulation'
+        [string]$layout.systems.ps3.saves.policy | Should Be 'single-rpcs3-dev_hdd0-root'
+        [bool]$layout.systems.ps3.saves.outsideSharedSavesRoot | Should Be $true
+    }
+}
+
 Describe 'DuckStation PS1 shared runtime (Hydra Classic v4)' {
     It 'declares canonical DuckStation runtime and pointer-only Hydra integration' {
         $catalog = Get-BootstrapComponentCatalog
