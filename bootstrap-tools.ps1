@@ -8567,21 +8567,229 @@ function Get-BootstrapEfiEntries {
     return @($entries)
 }
 
+function Get-BootstrapFileSystemRootCandidates {
+    param([string[]]$RootPaths = @())
+
+    $roots = New-Object System.Collections.Generic.List[string]
+    if (@($RootPaths).Count -gt 0) {
+        foreach ($root in @($RootPaths)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$root)) { $roots.Add([string]$root) | Out-Null }
+        }
+    } else {
+        try {
+            foreach ($drive in @(Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+                if (-not [string]::IsNullOrWhiteSpace([string]$drive.Root)) { $roots.Add([string]$drive.Root) | Out-Null }
+            }
+        } catch { }
+    }
+
+    return @($roots.ToArray() | Select-Object -Unique | Where-Object { Test-Path -LiteralPath $_ })
+}
+
+function Get-BootstrapSteamOsEfiInstallations {
+    param([string[]]$RootPaths = @())
+
+    $installations = New-Object System.Collections.Generic.List[object]
+    foreach ($root in @(Get-BootstrapFileSystemRootCandidates -RootPaths $RootPaths)) {
+        $efiDir = Join-Path ([string]$root) 'EFI\steamos'
+        $grubPath = Join-Path $efiDir 'grubx64.efi'
+        $grubConfigPath = Join-Path $efiDir 'grub.cfg'
+        if (-not (Test-Path -LiteralPath $grubPath -PathType Leaf)) { continue }
+        if (-not (Test-Path -LiteralPath $grubConfigPath -PathType Leaf)) { continue }
+
+        $customConfigPath = Join-Path $efiDir 'custom.cfg'
+        $fallbackBootPath = Join-Path (Join-Path ([string]$root) 'EFI\Boot') 'bootx64.efi'
+        $grubConfig = ''
+        $customConfig = ''
+        try { $grubConfig = [System.IO.File]::ReadAllText($grubConfigPath) } catch { $grubConfig = '' }
+        if (Test-Path -LiteralPath $customConfigPath -PathType Leaf) {
+            try { $customConfig = [System.IO.File]::ReadAllText($customConfigPath) } catch { $customConfig = '' }
+        }
+        $fallbackMatches = $false
+        if (Test-Path -LiteralPath $fallbackBootPath -PathType Leaf) {
+            try {
+                $fallbackItem = Get-Item -LiteralPath $fallbackBootPath -ErrorAction Stop
+                $grubItem = Get-Item -LiteralPath $grubPath -ErrorAction Stop
+                $fallbackMatches = ([int64]$fallbackItem.Length -eq [int64]$grubItem.Length)
+                if ($fallbackMatches -and (Get-Command -Name Get-FileHash -ErrorAction SilentlyContinue)) {
+                    $fallbackMatches = ((Get-FileHash -LiteralPath $fallbackBootPath -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $grubPath -Algorithm SHA256).Hash)
+                }
+            } catch { $fallbackMatches = $false }
+        }
+
+        $hasWindowsEntry = (($grubConfig + "`n" + $customConfig) -match '(?i)Windows Boot Manager|bootmgfw\.efi')
+        $installations.Add([pscustomobject][ordered]@{
+            root = [string]$root
+            efiPath = $efiDir
+            grubPath = $grubPath
+            grubConfigPath = $grubConfigPath
+            customConfigPath = $customConfigPath
+            customConfigExists = (Test-Path -LiteralPath $customConfigPath -PathType Leaf)
+            customConfigManaged = ($customConfig -match '(?m)^# BEGIN PHASEZERO GRUB DUAL BOOT\s*$')
+            grubConfigHasWindowsEntry = [bool]$hasWindowsEntry
+            grubConfigTimeoutZero = ($grubConfig -match '(?m)^\s*timeout\s*=\s*0\s*$')
+            fallbackBootPath = $fallbackBootPath
+            fallbackBootExists = (Test-Path -LiteralPath $fallbackBootPath -PathType Leaf)
+            fallbackBootMatchesGrub = [bool]$fallbackMatches
+        }) | Out-Null
+    }
+
+    return @($installations.ToArray())
+}
+
+function Merge-BootstrapGrubMarkedTextBlock {
+    param(
+        [AllowNull()][string]$Content,
+        [Parameter(Mandatory = $true)][string]$Body,
+        [string]$Label = 'PHASEZERO GRUB DUAL BOOT'
+    )
+
+    $startMarker = "# BEGIN $Label"
+    $endMarker = "# END $Label"
+    $block = ($startMarker + [Environment]::NewLine + $Body.Trim() + [Environment]::NewLine + $endMarker)
+    $current = if ($null -eq $Content) { '' } else { [string]$Content }
+    $pattern = '(?s)# BEGIN ' + [regex]::Escape($Label) + '.*?# END ' + [regex]::Escape($Label)
+    if ($current -match $pattern) {
+        $updated = [regex]::Replace($current, $pattern, [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $block }, 1)
+    } elseif ([string]::IsNullOrWhiteSpace($current)) {
+        $updated = $block + [Environment]::NewLine
+    } else {
+        $updated = $current.TrimEnd() + [Environment]::NewLine + [Environment]::NewLine + $block + [Environment]::NewLine
+    }
+
+    return [ordered]@{ content = $updated; changed = ($updated -ne $current) }
+}
+
+function Get-BootstrapSteamOsGrubDualBootBlock {
+    return (@(
+        'set timeout=5',
+        'set timeout_style=menu',
+        '',
+        'menuentry "Windows Boot Manager" --class windows --class os {',
+        '    insmod part_gpt',
+        '    insmod fat',
+        '    if search --no-floppy --file --set=windows_esp /EFI/Microsoft/Boot/bootmgfw.efi; then',
+        '        chainloader ($windows_esp)/EFI/Microsoft/Boot/bootmgfw.efi',
+        '    else',
+        '        echo "Windows Boot Manager not found: /EFI/Microsoft/Boot/bootmgfw.efi"',
+        '        sleep 5',
+        '    fi',
+        '}'
+    ) -join [Environment]::NewLine)
+}
+
+function Ensure-BootstrapSteamOsGrubDualBootMenu {
+    param(
+        [string[]]$RootPaths = @(),
+        [AllowNull()][hashtable]$State = $null,
+        [switch]$DryRun
+    )
+
+    $rows = New-Object System.Collections.Generic.List[object]
+    $changedAny = $false
+    $body = Get-BootstrapSteamOsGrubDualBootBlock
+    foreach ($install in @(Get-BootstrapSteamOsEfiInstallations -RootPaths $RootPaths)) {
+        $path = [string]$install.customConfigPath
+        $current = ''
+        if (Test-Path -LiteralPath $path -PathType Leaf) {
+            try { $current = [System.IO.File]::ReadAllText($path) } catch { $current = '' }
+        }
+        $merged = Merge-BootstrapGrubMarkedTextBlock -Content $current -Body $body
+        $changed = [bool]$merged.changed
+        $backupPath = ''
+        if ($changed) {
+            $changedAny = $true
+            if (-not $DryRun) {
+                if ($State) {
+                    Register-BootstrapFileChange -State $State -Target $path -Operation 'steamos-grub-custom-cfg' -Component 'dual-boot' -NewValue 'phasezero-grub-dual-boot'
+                } elseif (Test-Path -LiteralPath $path -PathType Leaf) {
+                    $backupPath = Join-Path (Split-Path -Path $path -Parent) ("custom.cfg.phasezero-{0}.bak" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+                    Copy-Item -LiteralPath $path -Destination $backupPath -Force
+                }
+                Write-BootstrapTextFile -Path $path -Content ([string]$merged.content)
+            }
+        }
+        $rows.Add([pscustomobject][ordered]@{
+            root = [string]$install.root
+            customConfigPath = $path
+            changed = $changed
+            dryRun = [bool]$DryRun
+            backupPath = $backupPath
+        }) | Out-Null
+    }
+
+    return [ordered]@{ success = $true; changed = $changedAny; dryRun = [bool]$DryRun; installations = @($rows.ToArray()) }
+}
+
+function Ensure-BootstrapSteamOsEfiFallbackBootloader {
+    param(
+        [string[]]$RootPaths = @(),
+        [AllowNull()][hashtable]$State = $null,
+        [switch]$DryRun
+    )
+
+    $rows = New-Object System.Collections.Generic.List[object]
+    $changedAny = $false
+    foreach ($install in @(Get-BootstrapSteamOsEfiInstallations -RootPaths $RootPaths)) {
+        $source = [string]$install.grubPath
+        $target = [string]$install.fallbackBootPath
+        $changed = -not [bool]$install.fallbackBootMatchesGrub
+        $backupPath = ''
+        if ($changed) {
+            $changedAny = $true
+            if (-not $DryRun) {
+                $parent = Split-Path -Path $target -Parent
+                if ($parent) { New-Item -Path $parent -ItemType Directory -Force | Out-Null }
+                if ($State) {
+                    Register-BootstrapFileChange -State $State -Target $target -Operation 'steamos-efi-fallback-bootloader' -Component 'dual-boot' -NewValue 'phasezero-steamos-grub-fallback'
+                } elseif (Test-Path -LiteralPath $target -PathType Leaf) {
+                    $backupPath = Join-Path $parent ("bootx64.efi.phasezero-{0}.bak" -f (Get-Date -Format 'yyyyMMdd_HHmmss'))
+                    Copy-Item -LiteralPath $target -Destination $backupPath -Force
+                }
+                Copy-Item -LiteralPath $source -Destination $target -Force
+            }
+        }
+        $rows.Add([pscustomobject][ordered]@{
+            root = [string]$install.root
+            source = $source
+            target = $target
+            changed = $changed
+            dryRun = [bool]$DryRun
+            backupPath = $backupPath
+        }) | Out-Null
+    }
+
+    return [ordered]@{ success = $true; changed = $changedAny; dryRun = [bool]$DryRun; installations = @($rows.ToArray()) }
+}
+
 function Get-BootstrapGrubPresence {
-    if (-not (Test-IsAdmin)) { return @{ Detected = $null; Path = ''; Confidence = 'unknown'; EntryId = ''; EntryDesc = '' } }
+    param([AllowNull()]$SteamOsEfiInstallations = $null)
+
     $result = @{ Detected = $false; Path = ''; Confidence = 'none'; EntryId = ''; EntryDesc = '' }
-    $efiEntries = @(Get-BootstrapEfiEntries)
-    foreach ($entry in $efiEntries) {
-        if ($entry.Type -ne 'entry') { continue }
-        $p = [string]$entry.Path
-        $d = [string]$entry.Description
-        if ($p -match 'grubx64\.efi|shimx64\.efi' -or $d -match 'ubuntu|fedora|bazzite|steamos|linux|grub|refind|Pop!_OS|manjaro|arch|debian|opensuse|nixos') {
-            $result.Detected   = $true
-            $result.Path       = $p
+    if (Test-IsAdmin) {
+        $efiEntries = @(Get-BootstrapEfiEntries)
+        foreach ($entry in $efiEntries) {
+            if ($entry.Type -ne 'entry') { continue }
+            $p = [string]$entry.Path
+            $d = [string]$entry.Description
+            if ($p -match 'grubx64\.efi|shimx64\.efi' -or $d -match 'ubuntu|fedora|bazzite|steamos|linux|grub|refind|Pop!_OS|manjaro|arch|debian|opensuse|nixos') {
+                $result.Detected   = $true
+                $result.Path       = $p
+                $result.Confidence = 'high'
+                $result.EntryId    = $entry.Id
+                $result.EntryDesc  = $d
+                break
+            }
+        }
+    }
+    if (-not $result.Detected) {
+        $steamOsEfi = if ($null -ne $SteamOsEfiInstallations) { @($SteamOsEfiInstallations) } else { @(Get-BootstrapSteamOsEfiInstallations) }
+        if (@($steamOsEfi).Count -gt 0) {
+            $first = @($steamOsEfi)[0]
+            $result.Detected = $true
+            $result.Path = [string]$first.grubPath
             $result.Confidence = 'high'
-            $result.EntryId    = $entry.Id
-            $result.EntryDesc  = $d
-            break
+            $result.EntryDesc = 'SteamOS GRUB (EFI file)'
         }
     }
     if (-not $result.Detected) {
@@ -8607,7 +8815,8 @@ function Get-BootstrapDualBootInfo {
     $fastStartup   = Get-BootstrapFastStartupStatus
     $bitlocker     = Get-BootstrapBitLockerStatus
     $linuxParts    = @(Get-BootstrapLinuxPartitions)
-    $grub          = ConvertTo-BootstrapHashtable -InputObject (Get-BootstrapGrubPresence)
+    $steamOsEfi    = @(Get-BootstrapSteamOsEfiInstallations)
+    $grub          = ConvertTo-BootstrapHashtable -InputObject (Get-BootstrapGrubPresence -SteamOsEfiInstallations $steamOsEfi)
     if (-not $grub.ContainsKey('Detected')) { $grub['Detected'] = $false }
     if (-not $grub.ContainsKey('Path')) { $grub['Path'] = '' }
     if (-not $grub.ContainsKey('Confidence')) { $grub['Confidence'] = 'none' }
@@ -8640,6 +8849,7 @@ function Get-BootstrapDualBootInfo {
         GrubEntryId     = if ($grub.EntryId) { [string]$grub.EntryId } else { '' }
         GrubEntryDesc   = if ($grub.EntryDesc) { [string]$grub.EntryDesc } else { '' }
         LinuxPartitions = @($linuxParts)
+        SteamOsEfiInstallations = @($steamOsEfi)
         EfiEntries      = $efiEntries
         FastStartup     = $fastStartup
         BitLocker       = $bitlocker
@@ -8749,8 +8959,23 @@ function Get-BootstrapDualBootRecommendations {
     if ($DualBootInfo.GrubDetected) {
         $recs.Add('[INFO] GRUB detectado: ' + $DualBootInfo.GrubEfiPath)
     }
+    $steamOsEfi = @()
+    try { $steamOsEfi = @($DualBootInfo.SteamOsEfiInstallations) } catch { $steamOsEfi = @() }
+    if ($steamOsEfi.Count -gt 0) {
+        $needsCustom = @($steamOsEfi | Where-Object { -not [bool]$_.customConfigManaged -or -not [bool]$_.grubConfigHasWindowsEntry })
+        if ($needsCustom.Count -gt 0) {
+            $recs.Add('[ACAO] Aplicar custom.cfg gerenciado do GRUB SteamOS para mostrar Windows Boot Manager e timeout seguro.')
+        }
+        $needsFallback = @($steamOsEfi | Where-Object { -not [bool]$_.fallbackBootMatchesGrub })
+        if ($needsFallback.Count -gt 0) {
+            $recs.Add('[ACAO] Instalar fallback UEFI EFI\Boot\bootx64.efi apontando para o GRUB SteamOS quando NVRAM/boot order falha.')
+        }
+    }
     if ($DualBootInfo.LinuxPartitions.Count -gt 0) {
         $recs.Add("[INFO] $($DualBootInfo.LinuxPartitions.Count) particao(oes) Linux detectada(s).")
+    }
+    if (-not [bool]$DualBootInfo.IsAdmin) {
+        $recs.Add('[ACAO] Execute como Administrador para auditar/priorizar a entrada SteamOS no firmware quando o power-on cai direto na BIOS.')
     }
     $recs.Add('[DICA] Use o menu UEFI da BIOS (F12/F2/Del) como alternativa segura para trocar de SO.')
     return @($recs.ToArray())
@@ -8998,6 +9223,56 @@ function Get-BootstrapWindowsBootManagerState {
     }
 }
 
+function Get-BootstrapFirmwareBootManagerState {
+    param([AllowNull()][string]$BcdText = $null)
+
+    $rawText = $BcdText
+    $commandError = ''
+    if ([string]::IsNullOrWhiteSpace($rawText)) {
+        try {
+            $rawText = (& bcdedit /enum firmware /v 2>&1 | Out-String)
+        } catch {
+            $commandError = $_.Exception.Message
+            $rawText = ''
+        }
+    }
+
+    $entries = @(ConvertFrom-BootstrapBcdEditOutput -Text $rawText)
+    $fwbootmgr = $entries | Where-Object { [string]$_.identifier -eq '{fwbootmgr}' } | Select-Object -First 1
+    $displayOrder = @()
+    $bootSequence = ''
+    if ($fwbootmgr) {
+        $displayOrder = @((Get-BootstrapBcdProperty -Entry $fwbootmgr -Names @('displayorder','ordemdeexibicao','ordemexibicao')) | ForEach-Object { [string]$_ } | Where-Object { $_ -match '^\{.+\}$' })
+        $bootSequence = [string](@(Get-BootstrapBcdProperty -Entry $fwbootmgr -Names @('bootsequence','sequenciadeinicializacao','sequênciadeinicialização'))[0])
+    }
+
+    $entryRows = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in @($entries)) {
+        $id = ([string]$entry.identifier).Trim().ToLowerInvariant()
+        if ([string]::IsNullOrWhiteSpace($id) -or $id -eq '{fwbootmgr}') { continue }
+        $description = Get-BootstrapBcdDescription -Entry $entry
+        $path = [string](@(Get-BootstrapBcdProperty -Entry $entry -Names @('path','caminho'))[0])
+        $isSteamOs = ($description -match '(?i)steamos|steam|linux|grub|bazzite|arch') -or ($path -match '(?i)\\EFI\\steamos\\grubx64\.efi|grubx64\.efi|shimx64\.efi')
+        $entryRows.Add([pscustomobject][ordered]@{
+            id = $id
+            description = $description
+            path = $path
+            inDisplayOrder = (@($displayOrder) -contains $id)
+            isSteamOsCandidate = [bool]$isSteamOs
+        }) | Out-Null
+    }
+
+    return [ordered]@{
+        IsAdmin = Test-IsAdmin
+        CommandError = $commandError
+        DisplayOrder = @($displayOrder)
+        BootSequence = $bootSequence
+        Entries = @($entryRows.ToArray())
+        SteamOsCandidates = @($entryRows.ToArray() | Where-Object { $_.isSteamOsCandidate })
+        RawText = $rawText
+    }
+}
+
 function Backup-BootstrapWindowsBootManager {
     if (-not (Test-IsAdmin)) { throw 'Backup-BootstrapWindowsBootManager requer privilegios de administrador.' }
     $backupDir = Join-Path (Get-BootstrapDataRoot) 'bcd-backups'
@@ -9009,6 +9284,44 @@ function Backup-BootstrapWindowsBootManager {
     }
     Write-Log "BCD backup criado: $backupPath"
     return $backupPath
+}
+
+function Set-BootstrapFirmwareBootDefault {
+    param(
+        [Parameter(Mandatory = $true)][string]$EntryGuid,
+        [AllowNull()][string]$BcdText = $null,
+        [switch]$ClearBootSequence,
+        [switch]$DryRun
+    )
+
+    $state = Get-BootstrapFirmwareBootManagerState -BcdText $BcdText
+    $normalized = ([string]$EntryGuid).Trim().ToLowerInvariant()
+    $entryIds = @($state.Entries | ForEach-Object { [string]$_.id })
+    if (@($entryIds) -notcontains $normalized) { throw "Entrada firmware desconhecida: $EntryGuid" }
+
+    $actions = New-Object System.Collections.Generic.List[string]
+    $actions.Add("displayorder-addfirst=$normalized") | Out-Null
+    if ($ClearBootSequence -or -not [string]::IsNullOrWhiteSpace([string]$state.BootSequence)) {
+        $actions.Add('clear-bootsequence') | Out-Null
+    }
+
+    if ($DryRun) {
+        return [ordered]@{ Success = $true; Changed = $false; DryRun = $true; Backup = ''; TargetGuid = $normalized; Actions = @($actions.ToArray()) }
+    }
+    if (-not (Test-IsAdmin)) { throw 'Set-BootstrapFirmwareBootDefault requer privilegios de administrador.' }
+
+    $backupPath = Backup-BootstrapWindowsBootManager
+    $output = & bcdedit /set '{fwbootmgr}' displayorder $normalized /addfirst 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "Falha ao priorizar entrada firmware: $output" }
+
+    if (@($actions.ToArray()) -contains 'clear-bootsequence') {
+        $deleteOutput = & bcdedit /deletevalue '{fwbootmgr}' bootsequence 2>&1
+        if ($LASTEXITCODE -ne 0 -and ([string]$deleteOutput -notmatch '(?i)(not found|não.*encontr|nao.*encontr|elemento.*não|elemento.*nao)')) {
+            throw "Falha ao limpar bootsequence firmware: $deleteOutput"
+        }
+    }
+
+    return [ordered]@{ Success = $true; Changed = $true; DryRun = $false; Backup = $backupPath; TargetGuid = $normalized; Actions = @($actions.ToArray()) }
 }
 
 function Get-BootstrapBcdBackups {

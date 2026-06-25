@@ -72,6 +72,102 @@ osdevice                unknown
         @($state.Entries | Where-Object { $_.id -eq '{11111111-1111-1111-1111-111111111111}' })[0].isDefault | Should Be $true
     }
 
+    It 'detects SteamOS EFI GRUB files without firmware admin access' {
+        $root = Join-Path $env:TEMP ("pz-steamos-efi-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $efi = Join-Path $root 'EFI\steamos'
+            New-Item -ItemType Directory -Path $efi -Force | Out-Null
+            Set-Content -Path (Join-Path $efi 'grubx64.efi') -Value 'efi' -Encoding Ascii
+            Set-Content -Path (Join-Path $efi 'grub.cfg') -Value 'timeout=0' -Encoding Ascii
+
+            $installs = @(Get-BootstrapSteamOsEfiInstallations -RootPaths @($root))
+            $grub = Get-BootstrapGrubPresence -SteamOsEfiInstallations $installs
+
+            $installs.Count | Should Be 1
+            [bool]$installs[0].customConfigManaged | Should Be $false
+            [bool]$installs[0].grubConfigTimeoutZero | Should Be $true
+            [bool]$grub.Detected | Should Be $true
+            [string]$grub.Confidence | Should Be 'high'
+        } finally {
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    It 'writes a managed SteamOS GRUB Windows chainloader custom.cfg without replacing user content' {
+        $root = Join-Path $env:TEMP ("pz-steamos-custom-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $efi = Join-Path $root 'EFI\steamos'
+            New-Item -ItemType Directory -Path $efi -Force | Out-Null
+            Set-Content -Path (Join-Path $efi 'grubx64.efi') -Value 'efi' -Encoding Ascii
+            Set-Content -Path (Join-Path $efi 'grub.cfg') -Value 'source custom.cfg' -Encoding Ascii
+            Set-Content -Path (Join-Path $efi 'custom.cfg') -Value '# user entry' -Encoding Ascii
+
+            $result = Ensure-BootstrapSteamOsGrubDualBootMenu -RootPaths @($root)
+            $custom = Get-Content -Path (Join-Path $efi 'custom.cfg') -Raw
+
+            [bool]$result.changed | Should Be $true
+            $custom | Should Match '# user entry'
+            $custom | Should Match '# BEGIN PHASEZERO GRUB DUAL BOOT'
+            $custom | Should Match 'Windows Boot Manager'
+            $custom | Should Match 'bootmgfw\.efi'
+            $custom | Should Match 'set timeout=5'
+        } finally {
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    It 'installs SteamOS GRUB as the safe UEFI fallback bootloader' {
+        $root = Join-Path $env:TEMP ("pz-steamos-fallback-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $efi = Join-Path $root 'EFI\steamos'
+            New-Item -ItemType Directory -Path $efi -Force | Out-Null
+            Set-Content -Path (Join-Path $efi 'grubx64.efi') -Value 'grub-binary' -Encoding Ascii
+            Set-Content -Path (Join-Path $efi 'grub.cfg') -Value 'source custom.cfg' -Encoding Ascii
+
+            $result = Ensure-BootstrapSteamOsEfiFallbackBootloader -RootPaths @($root)
+            $fallback = Join-Path $root 'EFI\Boot\bootx64.efi'
+
+            [bool]$result.changed | Should Be $true
+            (Test-Path -LiteralPath $fallback) | Should Be $true
+            (Get-Content -LiteralPath $fallback -Raw) | Should Match 'grub-binary'
+        } finally {
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    It 'parses firmware boot manager SteamOS candidates and plans persistent boot order safely' {
+        $sample = @'
+Firmware Boot Manager
+---------------------
+identifier              {fwbootmgr}
+displayorder            {aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}
+                        {bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb}
+bootsequence            {fwsetup}
+
+Firmware Application (101fffff)
+-------------------------------
+identifier              {aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}
+description             SteamOS
+path                    \EFI\steamos\grubx64.efi
+
+Firmware Application (101fffff)
+-------------------------------
+identifier              {bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb}
+description             Windows Boot Manager
+path                    \EFI\Microsoft\Boot\bootmgfw.efi
+'@
+
+        $state = Get-BootstrapFirmwareBootManagerState -BcdText $sample
+        $plan = Set-BootstrapFirmwareBootDefault -EntryGuid '{aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}' -BcdText $sample -DryRun
+
+        @($state.SteamOsCandidates).Count | Should Be 1
+        [string]$state.SteamOsCandidates[0].description | Should Be 'SteamOS'
+        [string]$state.BootSequence | Should Be '{fwsetup}'
+        [bool]$plan.DryRun | Should Be $true
+        (@($plan.Actions) -contains 'displayorder-addfirst={aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa}') | Should Be $true
+        (@($plan.Actions) -contains 'clear-bootsequence') | Should Be $true
+    }
+
     It 'checks dictionary keys for hashtable and ordered dictionary safely' {
         $plain = @{ alpha = 1 }
         $ordered = [ordered]@{ beta = 2 }
