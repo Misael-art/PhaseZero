@@ -8388,7 +8388,11 @@ function Get-BootstrapBitLockerStatus {
 }
 
 function Get-BootstrapLinuxPartitions {
-    if ($BootstrapUiLibraryMode) { return @() }
+    param(
+        [switch]$Force
+    )
+
+    if ($BootstrapUiLibraryMode -and -not $Force) { return @() }
     $linuxPartitions = @()
     try {
         $partitions = Get-Partition -ErrorAction SilentlyContinue
@@ -8476,13 +8480,17 @@ function Get-BootstrapBtrfsAccessLevel {
 
 function Get-BootstrapBtrfsReadiness {
     # Auditoria de prontidao para acesso btrfs no dual-boot. Sem efeitos colaterais; seguro em lib mode.
+    param(
+        [switch]$ScanPartitions
+    )
+
     $fast = Get-BootstrapFastStartupStatus
     $rebootReasons = @()
     try { $rebootReasons = @(Get-BootstrapPendingRebootReasons) } catch { $rebootReasons = @() }
     $winbtrfs = Get-BootstrapWinBtrfsState
     $partitions = @()
-    if (-not $BootstrapUiLibraryMode) {
-        try { $partitions = @(Get-BootstrapLinuxPartitions) } catch { $partitions = @() }
+    if ((-not $BootstrapUiLibraryMode) -or $ScanPartitions) {
+        try { $partitions = @(Get-BootstrapLinuxPartitions -Force:$ScanPartitions) } catch { $partitions = @() }
     }
 
     $checks = [ordered]@{

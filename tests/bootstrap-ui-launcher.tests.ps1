@@ -792,6 +792,12 @@ param(
         $raw | Should Match 'Remove-UiStringValue'
     }
 
+    It 'runs the Btrfs UI readiness check with real partition scan enabled' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'Get-BootstrapBtrfsReadiness -ScanPartitions'
+    }
+
     It 'does not ship known mojibake in visible UI strings' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 

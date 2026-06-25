@@ -24,6 +24,20 @@ Describe 'Btrfs dual-boot support (read/write, never formats)' {
         (@($r.recommendations) -join ' ') | Should Match 'NUNCA formata'
     }
 
+    It 'scans Linux partitions in library mode when explicitly requested' {
+        Mock Get-BootstrapFastStartupStatus { @{ Enabled = $false; Safe = $true; RegistryPath = 'HKLM:\probe'; Value = 0 } }
+        Mock Get-BootstrapPendingRebootReasons { @() }
+        Mock Get-BootstrapWinBtrfsState { [ordered]@{ installed = $true; driverPath = 'C:\Windows\System32\drivers\btrfs.sys'; serviceState = 'Running' } }
+        Mock Get-Partition { @([pscustomobject]@{ DiskNumber = 0; PartitionNumber = 8; Size = (727.5 * 1GB); Type = 'Unknown'; GptType = '{933ac7e1-2eb4-4f13-b844-0e14e2aef915}' }) }
+        Mock Get-Volume { [pscustomobject]@{ FileSystemType = 'Unknown' } }
+
+        $r = Get-BootstrapBtrfsReadiness -ScanPartitions
+
+        [int]$r.linuxPartitionCount | Should Be 1
+        [string]$r.accessLevel | Should Be 'write-opt-in'
+        Assert-MockCalled Get-Partition -Times 1
+    }
+
     It 'exposes WinBtrfs driver state shape' {
         $s = Get-BootstrapWinBtrfsState
         ($s.Contains('installed')) | Should Be $true

@@ -8056,7 +8056,7 @@ $ui.RefreshDualBootButton.Add_Click({ Refresh-DualBootControls })
 
 $ui.BtrfsCheckButton.Add_Click({
     try {
-        $r = Get-BootstrapBtrfsReadiness
+        $r = Get-BootstrapBtrfsReadiness -ScanPartitions
         $fast = if ($r.fastStartupEnabled) { 'LIGADO (desligue!)' } else { 'desligado (ok)' }
         $drv = if ($r.winbtrfsInstalled) { "instalado ($([string]$r.winbtrfsServiceState))" } else { 'ausente' }
         $levelText = switch ([string]$r.accessLevel) {
