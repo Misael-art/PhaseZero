@@ -14750,6 +14750,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['claude-config'] = New-BootstrapComponentDefinition -Name 'claude-config' -Description 'Defaults e hooks do Claude Code.' -DependsOn @('git-core', 'claude-code', 'bootstrap-secrets') -Kind 'claude-config'
     $catalog['claude-plugins'] = New-BootstrapComponentDefinition -Name 'claude-plugins' -Description 'Instala plugins do Claude Code (LSP, markdown, code-review).' -DependsOn @('claude-code', 'claude-config') -Kind 'claude-plugins'
     $catalog['agent-skills'] = New-BootstrapComponentDefinition -Name 'agent-skills' -Description 'Instala e ativa skills de agentes, incluindo Caveman por padrao.' -DependsOn @('claude-config', 'vscode-extensions') -Kind 'agent-skills'
+    $catalog['agent-compat-runtime'] = New-BootstrapComponentDefinition -Name 'agent-compat-runtime' -Description 'Runtime declarativo de compatibilidade entre Caveman, RTK, ai-memory e regras Ponytail para IDEs/CLIs.' -DependsOn @('system-core') -Kind 'builtin' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Evita conflitos: style=Caveman, shell=RTK quando presente, memory=ai-memory quando presente, architecture=Ponytail apenas por workspace.'; riskLevel = 'safe' }
     $catalog['promptfoo'] = New-BootstrapComponentDefinition -Name 'promptfoo' -Description 'promptfoo via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'promptfoo'; DisplayName = 'promptfoo'; CommandNames = @('promptfoo', 'pf') }
     $catalog['openwebui'] = New-BootstrapComponentDefinition -Name 'openwebui' -Description 'Open WebUI via Docker (porta 3000).' -DependsOn @('docker') -Kind 'openwebui'
     $catalog['aider'] = New-BootstrapComponentDefinition -Name 'aider' -Description 'aider via uv tool.' -DependsOn @('python-core') -Kind 'uvtool' -Data @{ Package = 'aider-chat'; CommandName = 'aider'; DisplayName = 'aider (aider-chat)'; VersionArgs = @('--version') }
@@ -14904,7 +14905,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['server-llm-hermes'] = New-BootstrapProfileDefinition -Name 'server-llm-hermes' -Description 'LLM local + Hermes remoto, com Windows enxugado para menor RAM.' -Items @('ollama', 'hermes-remote', 'os-slim-server')
     $catalog['server-llm-homelab'] = New-BootstrapProfileDefinition -Name 'server-llm-homelab' -Description 'LLM local + servidor caseiro, com Windows enxugado para menor RAM.' -Items @('ollama', 'homelab-stack', 'tailscale', 'os-slim-server')
     $catalog['server-llm-homelab-hermes'] = New-BootstrapProfileDefinition -Name 'server-llm-homelab-hermes' -Description 'Tudo: LLM local + servidor caseiro + Hermes remoto, com Windows enxugado.' -Items @('ollama', 'homelab-stack', 'tailscale', 'hermes-remote', 'os-slim-server')
-    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'mimo-code', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'ai-memory', 'aionui', 'headroom-ai', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'aider', 'goose', 'repo-gemini-cli', 'supermaven-vscode')
+    $catalog['ai'] = New-BootstrapProfileDefinition -Name 'ai' -Description 'Desktops, CLIs e proxies locais de IA.' -Items @('claude-desktop', 'claude-code', 'cursor', 'windsurf', 'warp', 'trae', 'opencode-desktop', 'vscode', 'vscode-insiders', 'antigravity', 'autoclaw', 'perplexity', 'codex-installer', 'ollama', 'cherry-studio', 'lm-studio', 'pinokio', 'zed', 'opencode', 'gemini-cli', 'kilo-cli', 'bonsai-cli', 'grok-cli', 'qwen-code', 'copilot-cli', 'codex-cli', 'openclaude-cli', 'mimo-code', 'openclaw', 'hermes', 'kimiproxy', 'qwenproxy', 'deepsproxy', 'mimo-ai-proxy', 'antigravity-openai-adapter', 'dockernativemanager', 'ai-proxy-suite', 'ai-usagebar', 'ai-memory', 'aionui', 'headroom-ai', 'promptfoo', 'bootstrap-secrets', 'bootstrap-mcps', 'vscode-extensions', 'claude-config', 'claude-plugins', 'agent-skills', 'agent-compat-runtime', 'aider', 'goose', 'repo-gemini-cli', 'supermaven-vscode')
     $catalog['dev-ai'] = New-BootstrapProfileDefinition -Name 'dev-ai' -Description 'Alias explicito para pilha de IA pesada; opt-in.' -Items @('ai')
     $catalog['automation'] = New-BootstrapProfileDefinition -Name 'automation' -Description 'Automação local.' -Items @('n8n')
     $catalog['security'] = New-BootstrapProfileDefinition -Name 'security' -Description 'Gestores de senha e nuvem.' -Items @('1password', 'proton-drive', 'proton-pass')
@@ -25651,6 +25652,263 @@ function Ensure-BootstrapPhaseZeroToolRuleFiles {
     }
 }
 
+function Get-BootstrapPonytailTemplatePath {
+    return (Join-Path $PSScriptRoot 'assets\agent-skills\ponytail-architecture-runtime.md')
+}
+
+function Get-BootstrapPonytailRuleBody {
+    $templatePath = Get-BootstrapPonytailTemplatePath
+    if (Test-Path $templatePath) {
+        return ((Get-Content -Path $templatePath -Raw -Encoding utf8).Trim())
+    }
+    return @'
+Ponytail architecture runtime.
+Use only inside detected Ponytail workspaces or explicit opt-in.
+Keep frontend declarative; Rust/Tauri owns file I/O, schema validation, and SGDK code generation.
+Ledger Schema sgdk-import/v4 is the source of truth.
+'@.Trim()
+}
+
+function Test-BootstrapPonytailWorkspace {
+    param([string]$WorkspaceRoot = (Get-Location).Path)
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $false }
+
+    $srcTauri = Join-Path $root 'src-tauri'
+    $cargoToml = Join-Path $root 'Cargo.toml'
+    $hasTauri = (Test-Path -LiteralPath $srcTauri -PathType Container)
+    if (-not $hasTauri -and (Test-Path -LiteralPath $cargoToml -PathType Leaf)) {
+        try {
+            $hasTauri = ((Get-Content -LiteralPath $cargoToml -Raw -ErrorAction Stop) -match '(?i)\btauri\b')
+        } catch { $hasTauri = $false }
+    }
+    if (-not $hasTauri) { return $false }
+
+    $signalPaths = @(
+        (Join-Path $root 'Cargo.toml'),
+        (Join-Path $root 'package.json'),
+        (Join-Path $root 'config\project_state.json'),
+        (Join-Path $root 'config\project.json'),
+        (Join-Path $root 'src-tauri\src\main.rs')
+    )
+    foreach ($path in @($signalPaths)) {
+        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+        try {
+            $text = Get-Content -LiteralPath $path -Raw -ErrorAction Stop
+            if ($text -match '(?i)(ponytail|sgdk|sgdk-import|SpriteMetadata|generate_sgdk_code)') { return $true }
+        } catch { }
+    }
+
+    foreach ($relative in @('sgdk', 'assets\sprites', 'resources\sprites')) {
+        if (Test-Path -LiteralPath (Join-Path $root $relative)) { return $true }
+    }
+    return $false
+}
+
+function Ensure-BootstrapPonytailRuleFiles {
+    param(
+        [string]$WorkspaceRoot = (Get-Location).Path,
+        [switch]$Force
+    )
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $detected = Test-BootstrapPonytailWorkspace -WorkspaceRoot $root
+    if (-not $Force -and -not $detected) {
+        return [ordered]@{
+            status = 'skipped'
+            reason = 'ponytail-not-detected'
+            workspaceRoot = $root
+            updated = $false
+            files = @()
+        }
+    }
+
+    $body = Get-BootstrapPonytailRuleBody
+    $targets = @(
+        @{ id = 'cursor'; path = (Join-Path $root '.cursor\rules\ponytail-architecture.mdc'); header = 'cursor' },
+        @{ id = 'windsurf'; path = (Join-Path $root '.windsurf\rules\ponytail-architecture.md'); header = 'windsurf' },
+        @{ id = 'cline'; path = (Join-Path $root '.clinerules\ponytail-architecture.md'); header = 'none' },
+        @{ id = 'githubCopilot'; path = (Join-Path $root '.github\copilot-instructions.md'); header = 'none' },
+        @{ id = 'agents'; path = (Join-Path $root 'AGENTS.md'); header = 'none' }
+    )
+    $records = @()
+    $updated = $false
+    foreach ($target in $targets) {
+        $changed = Write-BootstrapMarkedRuleFile -Path ([string]$target.path) -Body $body -HeaderKind ([string]$target.header) -Label 'PONYTAIL ARCHITECTURE'
+        $updated = ($updated -or $changed)
+        $records += @([ordered]@{
+            id = [string]$target.id
+            path = [string]$target.path
+            updated = $changed
+        })
+    }
+
+    return [ordered]@{
+        status = 'applied'
+        reason = if ($detected) { 'ponytail-detected' } else { 'forced' }
+        workspaceRoot = $root
+        updated = $updated
+        files = @($records)
+    }
+}
+
+function Resolve-BootstrapAgentCompatToolPath {
+    param([Parameter(Mandatory = $true)][ValidateSet('rtk','ai-memory')][string]$Name)
+
+    $commandName = $Name
+    $path = Resolve-CommandPath -Name $commandName
+    if (-not [string]::IsNullOrWhiteSpace([string]$path)) { return [string]$path }
+
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $aiRoot = Get-BootstrapAiInstallRoot -InstallRoot ''
+    $aiBin = Get-BootstrapAiBinDir -InstallRoot $aiRoot
+    switch ($Name) {
+        'rtk' {
+            $candidates.Add((Join-Path $aiBin 'rtk.exe')) | Out-Null
+            if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+                $candidates.Add((Join-Path $env:USERPROFILE '.local\bin\rtk.exe')) | Out-Null
+                $candidates.Add((Join-Path $env:USERPROFILE '.cargo\bin\rtk.exe')) | Out-Null
+            }
+        }
+        'ai-memory' {
+            $memoryPath = Get-BootstrapAiMemoryExePath
+            if (-not [string]::IsNullOrWhiteSpace([string]$memoryPath)) { $candidates.Add([string]$memoryPath) | Out-Null }
+            $candidates.Add((Join-Path $aiBin 'ai-memory.exe')) | Out-Null
+            if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) {
+                $candidates.Add((Join-Path $env:USERPROFILE '.cargo\bin\ai-memory.exe')) | Out-Null
+            }
+        }
+    }
+
+    foreach ($candidate in @($candidates.ToArray() | Select-Object -Unique)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$candidate) -and (Test-Path -LiteralPath ([string]$candidate) -PathType Leaf)) {
+            return [string]$candidate
+        }
+    }
+    return ''
+}
+
+function Get-BootstrapAgentCompatTargetCatalog {
+    param([string]$WorkspaceRoot = (Get-Location).Path)
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    return [ordered]@{
+        codex = [ordered]@{ displayName = 'Codex'; ruleFiles = @((Join-Path $root 'AGENTS.md')); mcp = @((Join-Path $root '.codex\config.toml')) }
+        claudeCode = [ordered]@{ displayName = 'Claude Code'; ruleFiles = @((Join-Path $root 'CLAUDE.md'), (Join-Path $root 'AGENTS.md')); mcp = @((Join-Path $env:USERPROFILE '.claude\settings.json')) }
+        cursor = [ordered]@{ displayName = 'Cursor'; ruleFiles = @((Join-Path $root '.cursor\rules\phasezero-tools.mdc')); mcp = @((Get-BootstrapCursorMcpConfigPath)) }
+        windsurf = [ordered]@{ displayName = 'Windsurf'; ruleFiles = @((Join-Path $root '.windsurf\rules\phasezero-tools.md')); mcp = @((Get-BootstrapWindsurfMcpConfigPath)) }
+        vsCode = [ordered]@{ displayName = 'VS Code'; ruleFiles = @((Join-Path $root '.github\copilot-instructions.md')); mcp = @((Get-BootstrapVsCodeMcpConfigPath)) }
+        zed = [ordered]@{ displayName = 'Zed'; ruleFiles = @(); mcp = @((Get-BootstrapZedConfigPath)) }
+        openCode = [ordered]@{ displayName = 'OpenCode'; ruleFiles = @((Join-Path $root 'AGENTS.md')); mcp = @((Get-BootstrapOpenCodeConfigPath)) }
+        cline = [ordered]@{ displayName = 'Cline'; ruleFiles = @((Join-Path $root '.clinerules\phasezero-tools.md')); mcp = @((Get-BootstrapClineMcpConfigPath)) }
+        roo = [ordered]@{ displayName = 'Roo Code'; ruleFiles = @(); mcp = @((Get-BootstrapRooMcpConfigPath)) }
+        geminiCli = [ordered]@{ displayName = 'Gemini CLI'; ruleFiles = @((Join-Path $root 'AGENTS.md')); mcp = @() }
+    }
+}
+
+function Get-BootstrapAgentCompatPlan {
+    param([string]$WorkspaceRoot = (Get-Location).Path)
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $rtkPath = Resolve-BootstrapAgentCompatToolPath -Name 'rtk'
+    $memoryPath = Resolve-BootstrapAgentCompatToolPath -Name 'ai-memory'
+    $ponytailDetected = Test-BootstrapPonytailWorkspace -WorkspaceRoot $root
+    $cavemanTemplate = Get-BootstrapCavemanTemplatePath
+
+    $targets = [ordered]@{}
+    $targetCatalog = Get-BootstrapAgentCompatTargetCatalog -WorkspaceRoot $root
+    foreach ($targetId in @($targetCatalog.Keys)) {
+        $target = ConvertTo-BootstrapHashtable -InputObject $targetCatalog[$targetId]
+        $paths = @(@($target['ruleFiles']) + @($target['mcp']) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+        $present = $false
+        foreach ($candidate in @($paths)) {
+            if (Test-Path -LiteralPath ([string]$candidate)) { $present = $true; break }
+        }
+        $targets[$targetId] = [ordered]@{
+            displayName = [string]$target['displayName']
+            configuredArtifactPresent = $present
+            ruleFiles = @($target['ruleFiles'])
+            mcpFiles = @($target['mcp'])
+        }
+    }
+
+    $mode = if (-not [string]::IsNullOrWhiteSpace($rtkPath) -and -not [string]::IsNullOrWhiteSpace($memoryPath)) { 'ready' } else { 'degraded' }
+    return [ordered]@{
+        schemaVersion = 'agent-compat/v1'
+        generatedAt = (Get-Date).ToString('o')
+        workspaceRoot = $root
+        mode = $mode
+        tools = [ordered]@{
+            caveman = [ordered]@{ status = if (Test-Path -LiteralPath $cavemanTemplate) { 'available' } else { 'fallback' }; path = $cavemanTemplate; role = 'style' }
+            rtk = [ordered]@{ status = if ([string]::IsNullOrWhiteSpace($rtkPath)) { 'absent' } else { 'available' }; path = $rtkPath; role = 'shell-compression' }
+            aiMemory = [ordered]@{ status = if ([string]::IsNullOrWhiteSpace($memoryPath)) { 'absent' } else { 'available' }; path = $memoryPath; role = 'memory-handoff' }
+            ponytail = [ordered]@{ status = if ($ponytailDetected) { 'active' } else { 'inactive' }; path = Get-BootstrapPonytailTemplatePath; role = 'workspace-architecture' }
+        }
+        policies = [ordered]@{
+            caveman = 'always-on-style'
+            rtk = if ([string]::IsNullOrWhiteSpace($rtkPath)) { 'degraded' } else { 'strict' }
+            aiMemory = if ([string]::IsNullOrWhiteSpace($memoryPath)) { 'degraded' } else { 'wired' }
+            ponytail = if ($ponytailDetected) { 'workspace-only' } else { 'inactive' }
+        }
+        targets = $targets
+        conflictRules = @(
+            'style=caveman',
+            'shell=rtk-when-present',
+            'memory=ai-memory-when-present',
+            'architecture=ponytail-workspace-only',
+            'no-duplicate-wrappers',
+            'no-secrets-in-rules'
+        )
+    }
+}
+
+function Get-BootstrapAgentCompatStatePath {
+    return (Join-Path (Get-BootstrapDataRoot) 'agent-compat-state.json')
+}
+
+function Ensure-BootstrapAgentCompatRuntime {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [AllowNull()]$ComponentDef = $null
+    )
+
+    $workspaceRoot = if ($State -and $State.ContainsKey('CloneBaseDir') -and -not [string]::IsNullOrWhiteSpace([string]$State.CloneBaseDir)) { [string]$State.CloneBaseDir } else { (Get-Location).Path }
+    $plan = Get-BootstrapAgentCompatPlan -WorkspaceRoot $workspaceRoot
+    $dryRun = [bool]$State.DryRun
+    if ($dryRun) {
+        $phaseZeroRules = [ordered]@{ status = 'planned'; updated = $false; workspaceRoot = $workspaceRoot }
+        $ponytailRules = if ([string]$plan.tools.ponytail.status -eq 'active') {
+            [ordered]@{ status = 'planned'; reason = 'ponytail-detected'; updated = $false; workspaceRoot = $workspaceRoot }
+        } else {
+            [ordered]@{ status = 'skipped'; reason = 'ponytail-not-detected'; updated = $false; workspaceRoot = $workspaceRoot }
+        }
+    } else {
+        $phaseZeroRules = Ensure-BootstrapPhaseZeroToolRuleFiles -WorkspaceRoot $workspaceRoot
+        $ponytailRules = Ensure-BootstrapPonytailRuleFiles -WorkspaceRoot $workspaceRoot
+    }
+
+    $summary = [ordered]@{
+        status = 'completed'
+        dryRun = $dryRun
+        statePath = Get-BootstrapAgentCompatStatePath
+        plan = $plan
+        phaseZeroRules = $phaseZeroRules
+        ponytailRules = $ponytailRules
+    }
+
+    if (-not $dryRun) {
+        Write-BootstrapJsonFile -Path ([string]$summary.statePath) -Value $summary
+        Write-Log ("Agent compat runtime sincronizado: {0}; mode={1}" -f [string]$summary.statePath, [string]$plan.mode)
+    } else {
+        Write-Log ("Agent compat runtime dry-run: mode={0}; workspace={1}" -f [string]$plan.mode, $workspaceRoot)
+    }
+
+    $State.AgentCompatStatePath = [string]$summary.statePath
+    $State.AgentCompatSummary = $summary
+    return $summary
+}
+
 function Invoke-BootstrapPhaseZeroPostConfig {
     param(
         [hashtable]$State,
@@ -28903,6 +29161,7 @@ function Ensure-BootstrapBuiltinComponent {
     switch ($Name) {
         'emulation-shared-runtime' { return (Ensure-BootstrapEmulationSharedRuntime -State $State -ComponentDef $ComponentDef) }
         'dualboot-manager' { return (Ensure-BootstrapDualBootManager -State $State) }
+        'agent-compat-runtime' { return (Ensure-BootstrapAgentCompatRuntime -State $State -ComponentDef $ComponentDef) }
         default { throw "Componente builtin sem executor: $Name" }
     }
 }

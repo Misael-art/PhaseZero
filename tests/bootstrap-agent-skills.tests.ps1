@@ -143,4 +143,83 @@ Keep this custom line.
         (Test-Path (Join-Path $workspaceRoot '.github\copilot-instructions.md')) | Should Be $true
         (Test-Path (Join-Path $workspaceRoot 'AGENTS.md')) | Should Be $true
     }
+
+    It 'documents degraded RTK and ai-memory behavior in the shared tools rule' {
+        $body = Get-BootstrapPhaseZeroToolRuleBody
+
+        [string]$body | Should Match 'degraded'
+        [string]$body | Should Match 'rtk missing'
+        [string]$body | Should Match 'ai-memory missing'
+        [string]$body | Should Match 'Ponytail'
+    }
+
+    It 'resolves agent-compat-runtime after agent-skills in the ai profile' {
+        $resolution = Resolve-BootstrapComponents -SelectedProfiles @('ai') -SelectedComponents @() -ExcludedComponents @()
+        $resolved = @($resolution.ResolvedComponents)
+
+        $agentSkillsIndex = [array]::IndexOf($resolved, 'agent-skills')
+        $compatIndex = [array]::IndexOf($resolved, 'agent-compat-runtime')
+
+        $agentSkillsIndex | Should BeGreaterThan -1
+        $compatIndex | Should BeGreaterThan -1
+        $agentSkillsIndex | Should BeLessThan $compatIndex
+    }
+
+    It 'plans agent compatibility as degraded when RTK and ai-memory are absent' {
+        Mock Resolve-CommandPath { return $null }
+
+        $workspaceRoot = Join-Path $script:TestDataRoot 'workspace-compat'
+        New-Item -Path $workspaceRoot -ItemType Directory -Force | Out-Null
+
+        $plan = Get-BootstrapAgentCompatPlan -WorkspaceRoot $workspaceRoot
+
+        [string]$plan.schemaVersion | Should Be 'agent-compat/v1'
+        [string]$plan.mode | Should Be 'degraded'
+        [string]$plan.tools.rtk.status | Should Be 'absent'
+        [string]$plan.tools.aiMemory.status | Should Be 'absent'
+        [string]$plan.tools.caveman.status | Should Be 'available'
+        [string]$plan.tools.ponytail.status | Should Be 'inactive'
+        [string]$plan.policies.rtk | Should Be 'degraded'
+        [string]$plan.policies.aiMemory | Should Be 'degraded'
+    }
+
+    It 'skips Ponytail rules outside a Ponytail workspace' {
+        $workspaceRoot = Join-Path $script:TestDataRoot 'workspace-not-ponytail'
+        New-Item -Path $workspaceRoot -ItemType Directory -Force | Out-Null
+
+        $result = Ensure-BootstrapPonytailRuleFiles -WorkspaceRoot $workspaceRoot
+
+        [string]$result.status | Should Be 'skipped'
+        [string]$result.reason | Should Be 'ponytail-not-detected'
+        (Test-Path (Join-Path $workspaceRoot '.cursor\rules\ponytail-architecture.mdc')) | Should Be $false
+    }
+
+    It 'writes Ponytail architecture rules only for detected Tauri SGDK workspaces' {
+        $workspaceRoot = Join-Path $script:TestDataRoot 'workspace-ponytail'
+        New-Item -Path (Join-Path $workspaceRoot 'src-tauri') -ItemType Directory -Force | Out-Null
+        New-Item -Path (Join-Path $workspaceRoot 'config') -ItemType Directory -Force | Out-Null
+        Set-Content -Path (Join-Path $workspaceRoot 'Cargo.toml') -Encoding utf8 -Value @'
+[package]
+name = "ponytail"
+version = "0.1.0"
+
+[dependencies]
+tauri = "2"
+'@
+        Set-Content -Path (Join-Path $workspaceRoot 'config\project_state.json') -Encoding utf8 -Value '{"schema":"sgdk-import/v4","project":"Ponytail"}'
+
+        $first = Ensure-BootstrapPonytailRuleFiles -WorkspaceRoot $workspaceRoot
+        $second = Ensure-BootstrapPonytailRuleFiles -WorkspaceRoot $workspaceRoot
+        $cursorPath = Join-Path $workspaceRoot '.cursor\rules\ponytail-architecture.mdc'
+        $content = Get-Content -Path $cursorPath -Raw
+
+        [string]$first.status | Should Be 'applied'
+        [bool]$first.updated | Should Be $true
+        [bool]$second.updated | Should Be $false
+        $content | Should Match 'BEGIN PONYTAIL ARCHITECTURE'
+        $content | Should Match 'Ledger Schema'
+        $content | Should Match 'Tauri'
+        (Test-Path (Join-Path $workspaceRoot '.windsurf\rules\ponytail-architecture.md')) | Should Be $true
+        (Test-Path (Join-Path $workspaceRoot 'AGENTS.md')) | Should Be $true
+    }
 }
