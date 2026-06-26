@@ -3141,7 +3141,13 @@ function Invoke-BootstrapExecutionPreflight {
     $pendingRebootReasons = @(Get-BootstrapPendingRebootReasons)
     $pendingRebootDetails = @(Get-BootstrapPendingRebootDetails -Reasons $pendingRebootReasons)
     $pendingRebootMsiBlockers = @(Get-BootstrapMsiHostilePendingRebootReasons -Reasons $pendingRebootReasons)
-    $pendingRebootSeverity = if ($pendingRebootMsiBlockers.Count -gt 0) { 'blocker-for-msi-ghost' } else { 'warning' }
+    $blocksInstallForPendingReboot = (
+        $pendingRebootReasons.Count -gt 0 -and
+        (-not [bool]$State.DryRun) -and
+        (-not [bool]$script:AllowPendingReboot) -and
+        [bool]$requirements.RequiresWinget
+    )
+    $pendingRebootSeverity = if ($blocksInstallForPendingReboot) { 'blocked-for-install' } elseif ($pendingRebootMsiBlockers.Count -gt 0) { 'blocker-for-msi-ghost' } else { 'warning' }
     if ($pendingRebootReasons.Count -gt 0) {
         Write-Log ("Reinicio pendente detectado: {0}. Instalacoes podem falhar (Store/winget/WSL). Recomendo reiniciar antes de prosseguir." -f ($pendingRebootReasons -join ', ')) 'WARN'
         $renameDetails = @($pendingRebootDetails | Where-Object { [string]$_.reason -eq 'PendingFileRenameOperations' })
@@ -3152,6 +3158,11 @@ function Invoke-BootstrapExecutionPreflight {
         }
         if ($script:RequireNoPendingReboot) {
             throw ("Preflight: reinicio pendente e flag -RequireNoPendingReboot ativa. Motivos: {0}. Reinicie o Windows e execute novamente." -f ($pendingRebootReasons -join ', '))
+        }
+        if ($blocksInstallForPendingReboot) {
+            $message = "Preflight: reinicio pendente antes de instalacao winget/MSI. Motivos: {0}. Reinicie o Windows e execute novamente ou use -AllowPendingReboot conscientemente." -f ($pendingRebootReasons -join ', ')
+            Write-Log $message 'WARN'
+            throw (New-BootstrapBlockedException -Message $message -Kind 'pending-reboot-before-install' -Action 'restart-required' -Reasons $pendingRebootReasons)
         }
         if ($pendingRebootMsiBlockers.Count -gt 0) {
             Write-Log ("Preflight: reinicio pendente classificado como bloqueio para recuperacao de ghost MSI ({0}); componentes afetados retornarao status=blocked antes de instalar." -f ($pendingRebootMsiBlockers -join ', ')) 'WARN'
@@ -6113,7 +6124,8 @@ function Ensure-WingetPackage {
 
     $exitCode = -1
     $softCodes = $script:WingetSoftSuccessExitCodes
-    $isNonAdminSkippable = ($AllowFailureWhenNotAdmin -and (-not (Test-IsAdmin)))
+    $isAdmin = Test-IsAdmin
+    $isNonAdminSkippable = ($AllowFailureWhenNotAdmin -and (-not $isAdmin))
     $nonRetryableCodes = @($script:WingetNonRetryableInstallExitCodes)
     if ($isNonAdminSkippable) {
         $nonRetryableCodes += @(124, -1978335226)
@@ -6140,6 +6152,18 @@ function Ensure-WingetPackage {
             Action = 'rerun-elevated-or-install-manually'
         }
     }
+    $handleMachineScopeWithoutAdmin = {
+        param([int]$Code)
+        if ($AllowFailureWhenNotAdmin) {
+            $skip = & $resolveSkip $Code
+            Write-Log $skip.Message 'WARN'
+            Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason $skip.Reason -Message $skip.Message -Action $skip.Action -PackageId $Id -DisplayName $DisplayName -ExitCode $Code
+            return $true
+        }
+        $message = "$DisplayName requer machine-scope ou instalador sem --scope, mas esta execucao nao esta elevada (exit=$Code). Execute como Administrador ou instale manualmente."
+        Write-Log $message 'WARN'
+        throw (New-BootstrapBlockedException -Message $message -Kind 'winget-machine-scope-requires-admin' -Action 'rerun-elevated-or-install-manually' -Reasons @('not-admin', $Id))
+    }
     if ($PreferUserScope) {
         $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsSilent) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
         if ($exitCode -ne 0 -and $isNonAdminSkippable -and (($exitCode -eq 124) -or ($nonRetryableCodes -contains $exitCode))) {
@@ -6162,11 +6186,17 @@ function Ensure-WingetPackage {
             Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason $skip.Reason -Message $skip.Message -Action $skip.Action -PackageId $Id -DisplayName $DisplayName -ExitCode $exitCode
             return
         }
+        if ($exitCode -ne 0 -and -not $isAdmin) {
+            if (& $handleMachineScopeWithoutAdmin $exitCode) { return }
+        }
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --scope user (winget). Tentando novamente sem --scope..." 'WARN'
         }
     }
     if ($exitCode -ne 0) {
+        if (-not $isAdmin) {
+            if (& $handleMachineScopeWithoutAdmin $exitCode) { return }
+        }
         $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsSilent -OperationName "$DisplayName via winget --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
@@ -28742,6 +28772,141 @@ function Invoke-BootstrapSteamDeckZeroTouchProvisioning {
     }
 }
 
+function Get-BootstrapEmulationSharedRuntimeDirectories {
+    param([Parameter(Mandatory = $true)]$Layout)
+
+    $directories = New-Object System.Collections.Generic.List[string]
+    $seen = @{}
+    function Add-EmulationDir {
+        param(
+            [AllowNull()][string]$Path,
+            [bool]$TreatAsFile = $false
+        )
+        if ([string]::IsNullOrWhiteSpace($Path)) { return }
+        $expanded = ConvertTo-BootstrapExpandedPath -Path $Path
+        if ([string]::IsNullOrWhiteSpace($expanded)) { return }
+        $dir = $expanded
+        if ($TreatAsFile -or [System.IO.Path]::HasExtension($expanded)) {
+            $dir = Split-Path -Path $expanded -Parent
+        }
+        if ([string]::IsNullOrWhiteSpace($dir)) { return }
+        if (-not $seen.ContainsKey($dir)) {
+            $seen[$dir] = $true
+            $directories.Add($dir) | Out-Null
+        }
+    }
+
+    foreach ($top in @('root','emulators','tools','roms','firmware','saves','cache','mods','metadata')) {
+        try { Add-EmulationDir -Path ([string]$Layout[$top]) } catch { }
+    }
+
+    foreach ($systemName in @('ps1','ps2','ps3','switch')) {
+        $system = $null
+        try { $system = $Layout.systems[$systemName] } catch { $system = $null }
+        if (-not $system) { continue }
+        foreach ($key in @('executable')) {
+            try { Add-EmulationDir -Path ([string]$system[$key]) -TreatAsFile $true } catch { }
+        }
+        foreach ($key in @('roms','firmware','keys','saves','storage','nand','cache','mods','metadata')) {
+            try {
+                $value = $system[$key]
+                if ($value -is [System.Collections.IDictionary]) {
+                    Add-EmulationDir -Path ([string]$value['path'])
+                } else {
+                    Add-EmulationDir -Path ([string]$value)
+                }
+            } catch { }
+        }
+    }
+
+    return @($directories.ToArray())
+}
+
+function Ensure-BootstrapEmulationSharedRuntime {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    $root = ''
+    if ($ComponentDef.PSObject.Properties.Name -contains 'sharedRootDefault') {
+        $root = ConvertTo-BootstrapExpandedPath -Path ([string]$ComponentDef.sharedRootDefault)
+    }
+    if ([string]::IsNullOrWhiteSpace($root)) {
+        $root = Join-Path $env:USERPROFILE 'Games\Emulation'
+    }
+
+    $layout = Get-BootstrapEmulationSharedLayout -Root $root
+    $dirs = @(Get-BootstrapEmulationSharedRuntimeDirectories -Layout $layout)
+    $created = 0
+    $planned = 0
+    foreach ($dir in $dirs) {
+        if (Test-Path -LiteralPath $dir -PathType Container) { continue }
+        if ([bool]$State.DryRun) {
+            $planned++
+            continue
+        }
+        $null = New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop
+        $created++
+        if ($State.ContainsKey('Changes')) {
+            Register-BootstrapChange -State $State -Type Directory -Target $dir -OldValue $null -NewValue 'created' -Operation 'emulation-shared-runtime-directory' -Component 'emulation-shared-runtime'
+        }
+    }
+
+    Write-Log ("Emulation shared runtime: root={0}; dirs={1}; created={2}; planned={3}; dryRun={4}" -f [string]$layout.root, $dirs.Count, $created, $planned, [bool]$State.DryRun)
+    return [ordered]@{
+        status = 'completed'
+        root = [string]$layout.root
+        directories = @($dirs)
+        created = $created
+        planned = $planned
+        dryRun = [bool]$State.DryRun
+    }
+}
+
+function Ensure-BootstrapDualBootManager {
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $info = Get-BootstrapDualBootInfo
+    foreach ($rec in @(Get-BootstrapDualBootRecommendations -DualBootInfo $info)) {
+        Write-Log ("dualboot-manager: {0}" -f [string]$rec)
+    }
+
+    $steamOsEfi = @()
+    try { $steamOsEfi = @($info.SteamOsEfiInstallations) } catch { $steamOsEfi = @() }
+    if (-not [bool]$info.IsDualBoot -and $steamOsEfi.Count -eq 0) {
+        Write-Log 'dualboot-manager: nenhum dual boot SteamOS/GRUB detectado; sem alteracoes.'
+        return [ordered]@{ status = 'skipped'; reason = 'dualboot-not-detected'; dryRun = [bool]$State.DryRun }
+    }
+
+    $dryRun = [bool]$State.DryRun
+    $menu = Ensure-BootstrapSteamOsGrubDualBootMenu -State $State -DryRun:$dryRun
+    $fallback = Ensure-BootstrapSteamOsEfiFallbackBootloader -State $State -DryRun:$dryRun
+    Write-Log ("dualboot-manager: grubCustomChanged={0}; fallbackChanged={1}; dryRun={2}" -f [bool]$menu.changed, [bool]$fallback.changed, $dryRun)
+
+    return [ordered]@{
+        status = 'completed'
+        dryRun = $dryRun
+        info = $info
+        grubCustom = $menu
+        fallback = $fallback
+    }
+}
+
+function Ensure-BootstrapBuiltinComponent {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$ComponentDef
+    )
+
+    switch ($Name) {
+        'emulation-shared-runtime' { return (Ensure-BootstrapEmulationSharedRuntime -State $State -ComponentDef $ComponentDef) }
+        'dualboot-manager' { return (Ensure-BootstrapDualBootManager -State $State) }
+        default { throw "Componente builtin sem executor: $Name" }
+    }
+}
+
 function Invoke-BootstrapComponent {
     param(
         [Parameter(Mandatory = $true)][string]$Name,
@@ -28768,6 +28933,9 @@ function Invoke-BootstrapComponent {
 
     switch ($componentDef.Kind) {
         'alias' { }
+        'builtin' {
+            Ensure-BootstrapBuiltinComponent -Name $Name -State $State -ComponentDef $componentDef | Out-Null
+        }
         'system-core' { Ensure-BootstrapSystemCore -State $State }
         'git-core' { Ensure-BootstrapGitCore -State $State }
         'node-core' { Ensure-BootstrapNodeCore -State $State }

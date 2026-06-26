@@ -99,6 +99,15 @@ Describe 'CLI and UI coherence' {
         $raw | Should Not Match '\$installProcess\s*=\s*Start-Process -FilePath ''powershell\.exe'' -ArgumentList \$installArgs -NoNewWindow -PassThru -Wait'
     }
 
+    It 'keeps apply backend timeout configurable and longer than large profile installs' {
+        $raw = Get-Content -LiteralPath (Join-Path $script:RepoRoot 'install-cli.ps1') -Raw
+
+        $raw | Should Match 'BackendTimeoutMs'
+        $raw | Should Match 'PHASEZERO_CLI_APPLY_TIMEOUT_MS'
+        $raw | Should Match '7200000'
+        $raw | Should Not Match '\[int\]\$TimeoutMs\s*=\s*1800000'
+    }
+
     It 'writes common envelope fields for lifecycle dry-run' {
         $resultPath = Join-Path $env:TEMP ("phasezero-coherence-lifecycle-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
         $logPath = [System.IO.Path]::ChangeExtension($resultPath, '.log')

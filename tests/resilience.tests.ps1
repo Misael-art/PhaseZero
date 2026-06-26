@@ -1031,6 +1031,30 @@ Welcome to .NET 8.0!
             @($state.Warnings.ToArray()).Count | Should Be 1
         }
 
+        It 'Ensure-WingetPackage bloqueia fallback machine sem admin para pacote requerido' {
+            Mock Test-WingetPackageInstalled { return $false }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
+            Mock Test-IsAdmin { return $false }
+            Mock Invoke-NativeWithRetry { return -1978335216 }
+            Mock Refresh-SessionPath { throw 'Refresh-SessionPath nao deve executar quando pacote foi bloqueado' }
+            Mock Write-Log { }
+
+            $caught = $null
+            try {
+                Ensure-WingetPackage -WingetPath 'C:\Fake\winget.exe' -Id 'Microsoft.DotNet.SDK.8' -DisplayName 'Microsoft .NET SDK 8' -PreferUserScope $true -AllowFailureWhenNotAdmin $false
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'winget-machine-scope-requires-admin'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'rerun-elevated-or-install-manually'
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Microsoft .NET SDK 8 via winget --scope user --silent' } -Times 1 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Microsoft .NET SDK 8 via winget --silent' } -Times 0 -Exactly
+            Assert-MockCalled Invoke-NativeWithRetry -ParameterFilter { $OperationName -eq 'Microsoft .NET SDK 8 via winget' } -Times 0 -Exactly
+        }
+
         It 'Ensure-WingetPackage pula apos timeout user-scope sem retentar non-silent em non-admin' {
             Mock Test-WingetPackageInstalled { return $false }
             Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
@@ -1080,6 +1104,52 @@ Welcome to .NET 8.0!
                 $sel = New-BootstrapSelectionObject -SelectedProfiles @() -SelectedComponents @('system-core') -ExcludedComponents @()
                 $state = New-BootstrapState -Selection $sel -ResolvedWorkspaceRoot 'C:\' -ResolvedCloneBaseDir 'C:\'
                 { Invoke-BootstrapExecutionPreflight -State $state -ResolvedComponents @('system-core') } | Should Throw 'RequireNoPendingReboot'
+            } finally {
+                $script:RequireNoPendingReboot = $prev
+                $script:AllowPendingReboot = $prevAllow
+            }
+        }
+
+        It 'Invoke-BootstrapExecutionPreflight bloqueia apply winget quando ha reboot pendente por padrao' {
+            $prev = $script:RequireNoPendingReboot
+            $prevAllow = $script:AllowPendingReboot
+            try {
+                $script:RequireNoPendingReboot = $false
+                $script:AllowPendingReboot = $false
+                Mock Test-BootstrapDiskSpace { }
+                Mock Get-BootstrapPreflightRequirements {
+                    return [ordered]@{
+                        RequiresNetwork = $false
+                        RequiresWinget = $true
+                        ConnectivityGroups = @()
+                    }
+                }
+                Mock Get-BootstrapPendingRebootReasons { return @('PendingFileRenameOperations') }
+                Mock Get-BootstrapPendingFileRenameOperationRecords {
+                    return @(
+                        [pscustomobject]@{
+                            source = '\??\C:\Windows\System32\drivers\sample.sys'
+                            destination = ''
+                            category = 'driver'
+                            msiHostile = $false
+                        }
+                    )
+                }
+                Mock Get-Winget { throw 'Get-Winget nao deve executar antes do bloqueio de reboot' }
+                $sel = New-BootstrapSelectionObject -SelectedProfiles @() -SelectedComponents @('dotnet-core') -ExcludedComponents @()
+                $state = New-BootstrapState -Selection $sel -ResolvedWorkspaceRoot 'C:\' -ResolvedCloneBaseDir 'C:\' -IsDryRun:$false
+
+                $caught = $null
+                try {
+                    Invoke-BootstrapExecutionPreflight -State $state -ResolvedComponents @('system-core','dotnet-core')
+                } catch {
+                    $caught = $_
+                }
+
+                $caught | Should Not Be $null
+                [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+                [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'pending-reboot-before-install'
+                [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'restart-required'
             } finally {
                 $script:RequireNoPendingReboot = $prev
                 $script:AllowPendingReboot = $prevAllow

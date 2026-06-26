@@ -165,6 +165,41 @@ Describe 'Shared emulation runtime layout' {
         [bool]$layout.systems.ps3.saves.shareWithLaunchers | Should Be $true
         [string]$layout.systems.ps3.storage.policy | Should Be 'single-rpcs3-dev_hdd0-root'
     }
+
+    It 'executes emulation-shared-runtime builtin and creates canonical empty roots' {
+        $root = Join-Path $env:TEMP ("pz-emulation-runtime-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        $previousUserProfile = $env:USERPROFILE
+        try {
+            $env:USERPROFILE = $root
+            $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $root -ResolvedCloneBaseDir $root -IsDryRun:$false
+
+            { Invoke-BootstrapComponent -Name 'emulation-shared-runtime' -State $state } | Should Not Throw
+
+            $sharedRoot = Join-Path $root 'Games\Emulation'
+            foreach ($relative in @(
+                '',
+                'emulators',
+                'roms\ps1',
+                'roms\ps2',
+                'roms\ps3',
+                'roms\switch',
+                'firmware\ps2\bios',
+                'firmware\switch\keys',
+                'saves\ps1\memcards',
+                'cache\rpcs3',
+                'metadata\switch'
+            )) {
+                $path = if ([string]::IsNullOrWhiteSpace($relative)) { $sharedRoot } else { Join-Path $sharedRoot $relative }
+                Test-Path -LiteralPath $path -PathType Container | Should Be $true
+            }
+            $state.Completed.ContainsKey('emulation-shared-runtime') | Should Be $true
+        } finally {
+            $env:USERPROFILE = $previousUserProfile
+            if (Test-Path -LiteralPath $root) {
+                Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
 }
 
 Describe 'Emulator config plan safety' {

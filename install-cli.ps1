@@ -68,6 +68,7 @@ function New-CliOptions {
         DryRun         = $false
         Yes            = $false
         NoAdmin        = $false
+        BackendTimeoutMs = 0
         InstallRoot    = ''
         ResultPath     = ''
         LogPath        = ''
@@ -84,6 +85,22 @@ function Test-CliTokenLooksLikeOption {
     param([AllowNull()][string]$Token)
     if ([string]::IsNullOrWhiteSpace($Token)) { return $false }
     return ([string]$Token -match '^(--?|/)[A-Za-z][A-Za-z0-9-]*$')
+}
+
+function ConvertTo-CliTimeoutMs {
+    param(
+        [AllowNull()][string]$Value,
+        [string]$OptionName = 'timeout'
+    )
+
+    $parsed = 0
+    if ([string]::IsNullOrWhiteSpace($Value) -or -not [int]::TryParse([string]$Value, [ref]$parsed)) {
+        throw "Valor invalido para ${OptionName}: '$Value'. Use milissegundos inteiros."
+    }
+    if ($parsed -lt 60000 -or $parsed -gt 86400000) {
+        throw "Valor invalido para ${OptionName}: $parsed. Use entre 60000 e 86400000 ms."
+    }
+    return $parsed
 }
 
 function Get-CliRawOptionValue {
@@ -241,6 +258,10 @@ function Read-CliArgs {
             'yes' { $opts.Yes = $true }
             'y' { $opts.Yes = $true }
             'noadmin' { $opts.NoAdmin = $true }
+            'backendtimeoutms' {
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
+                $opts.BackendTimeoutMs = ConvertTo-CliTimeoutMs -Value $value -OptionName $token
+            }
             'installroot' {
                 if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
                 $opts.InstallRoot = $value
@@ -323,6 +344,10 @@ function Write-CliUsage {
     Write-CliOut ''
     Write-CliOut 'Web apps (todos de uma vez):'
     Write-CliOut '  install-cli.bat --install-webapps --yes'
+    Write-CliOut ''
+    Write-CliOut 'Timeout backend:'
+    Write-CliOut '  install-cli.bat -Profile PhaseZero --backend-timeout-ms 7200000'
+    Write-CliOut '  Env: PHASEZERO_CLI_APPLY_TIMEOUT_MS=7200000'
     Write-CliOut ''
     Write-CliOut 'Reparar configs MCP (npx puro -> cmd /c npx), corrige "Could not attach":'
     Write-CliOut '  install-cli.bat --repair-mcp           (mostra o plano, dry-run)'
@@ -1432,15 +1457,51 @@ function ConvertTo-CliArgumentString {
     return [string]::Join(' ', @($Tokens | ForEach-Object { ConvertTo-CliCommandLineArgument -Token ([string]$_) }))
 }
 
+function Get-CliBackendTimeoutMs {
+    param(
+        [string]$OperationName = '',
+        [int]$RequestedTimeoutMs = 0
+    )
+
+    if ($RequestedTimeoutMs -gt 0) { return $RequestedTimeoutMs }
+
+    try {
+        if ($script:Options -and ($script:Options.Contains('BackendTimeoutMs')) -and [int]$script:Options.BackendTimeoutMs -gt 0) {
+            return [int]$script:Options.BackendTimeoutMs
+        }
+    } catch { }
+
+    $envNames = if ([string]$OperationName -eq 'apply') {
+        @('PHASEZERO_CLI_APPLY_TIMEOUT_MS', 'PHASEZERO_CLI_BACKEND_TIMEOUT_MS')
+    } elseif ([string]$OperationName -eq 'dry-run') {
+        @('PHASEZERO_CLI_DRYRUN_TIMEOUT_MS', 'PHASEZERO_CLI_BACKEND_TIMEOUT_MS')
+    } else {
+        @('PHASEZERO_CLI_BACKEND_TIMEOUT_MS')
+    }
+
+    foreach ($name in $envNames) {
+        $raw = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ([string]::IsNullOrWhiteSpace($raw)) { $raw = [Environment]::GetEnvironmentVariable($name, 'User') }
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+        try { return (ConvertTo-CliTimeoutMs -Value $raw -OptionName $name) }
+        catch { Write-CliOut ("[AVISO] Ignorando {0}: {1}" -f $name, $_.Exception.Message) Yellow }
+    }
+
+    if ([string]$OperationName -eq 'apply') { return 7200000 }
+    if ([string]$OperationName -eq 'dry-run') { return 1800000 }
+    return 3600000
+}
+
 function Invoke-CliBackendProcess {
     # Lanca o backend (powershell.exe) com timeout e captura de stdout/stderr em arquivos ao lado do
     # result.json. Substitui o `Start-Process -Wait` cru (sem timeout, sem captura) das rotas CLI.
     param(
         [Parameter(Mandatory = $true)][string[]]$ArgumentList,
         [Parameter(Mandatory = $true)][string]$OperationName,
-        [int]$TimeoutMs = 1800000
+        [int]$TimeoutMs = 0
     )
 
+    $TimeoutMs = Get-CliBackendTimeoutMs -OperationName $OperationName -RequestedTimeoutMs $TimeoutMs
     $stdoutPath = [System.IO.Path]::ChangeExtension([string]$script:Options.ResultPath, ".$OperationName.stdout.log")
     $stderrPath = [System.IO.Path]::ChangeExtension([string]$script:Options.ResultPath, ".$OperationName.stderr.log")
     $startInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -1461,7 +1522,7 @@ function Invoke-CliBackendProcess {
         if (-not $process.WaitForExit($TimeoutMs)) {
             try { $process.Kill() } catch { }
             $message = ("{0} excedeu timeout de {1}ms." -f $OperationName, $TimeoutMs)
-            Write-CliLegacyFailureResult -Message $message -ExitCode 124 -Mode $OperationName -HowToFix 'Revise stdout/stderr/log e rode novamente com escopo menor ou Doctor.'
+            Write-CliLegacyFailureResult -Message $message -ExitCode 124 -Mode $OperationName -HowToFix 'Revise stdout/stderr/log e rode novamente com escopo menor, --backend-timeout-ms maior, PHASEZERO_CLI_APPLY_TIMEOUT_MS, ou Doctor.'
             return [pscustomobject]@{ ExitCode = 124; TimedOut = $true; StdoutPath = $stdoutPath; StderrPath = $stderrPath }
         }
         $stdout = [string]$stdoutTask.GetAwaiter().GetResult()

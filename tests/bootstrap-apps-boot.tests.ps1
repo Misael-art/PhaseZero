@@ -135,6 +135,44 @@ osdevice                unknown
         }
     }
 
+    It 'executes dualboot-manager builtin instead of failing unsupported kind' {
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot 'C:\ws' -ResolvedCloneBaseDir 'C:\clones' -IsDryRun:$true
+        Mock Get-BootstrapDualBootInfo {
+            return @{
+                IsDualBoot = $true
+                GrubDetected = $true
+                GrubEfiPath = 'D:\EFI\steamos\grubx64.efi'
+                LinuxPartitions = @()
+                SteamOsEfiInstallations = @(
+                    [pscustomobject]@{
+                        root = 'D:\'
+                        customConfigManaged = $false
+                        grubConfigHasWindowsEntry = $false
+                        fallbackBootMatchesGrub = $false
+                    }
+                )
+                FastStartup = @{ Enabled = $false }
+                BitLocker = @{ CEnabled = $false }
+                IsAdmin = $true
+                Warnings = @()
+            }
+        }
+        Mock Get-BootstrapDualBootRecommendations { return @('[ACAO] aplicar GRUB seguro') }
+        Mock Ensure-BootstrapSteamOsGrubDualBootMenu {
+            return [ordered]@{ success = $true; changed = $false; dryRun = [bool]$DryRun; installations = @() }
+        }
+        Mock Ensure-BootstrapSteamOsEfiFallbackBootloader {
+            return [ordered]@{ success = $true; changed = $false; dryRun = [bool]$DryRun; installations = @() }
+        }
+        Mock Write-Log {}
+
+        { Invoke-BootstrapComponent -Name 'dualboot-manager' -State $state } | Should Not Throw
+
+        $state.Completed.ContainsKey('dualboot-manager') | Should Be $true
+        Assert-MockCalled Ensure-BootstrapSteamOsGrubDualBootMenu -Times 1 -Exactly -Scope It
+        Assert-MockCalled Ensure-BootstrapSteamOsEfiFallbackBootloader -Times 1 -Exactly -Scope It
+    }
+
     It 'parses firmware boot manager SteamOS candidates and plans persistent boot order safely' {
         $sample = @'
 Firmware Boot Manager
