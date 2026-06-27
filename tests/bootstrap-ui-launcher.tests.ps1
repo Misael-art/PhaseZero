@@ -900,3 +900,62 @@ param(
         }
     }
 }
+
+Describe 'Health scoped validation per card' {
+    It 'renders the 10 health cards as clickable scope buttons with tooltips' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $expected = @{
+            'HealthWslCard' = 'wsl'; 'HealthWingetCard' = 'winget'; 'HealthRebootCard' = 'reboot';
+            'HealthSecretsCard' = 'secrets'; 'HealthGithubCard' = 'github'; 'HealthAiUsagebarCard' = 'ai-usagebar';
+            'HealthAiMemoryCard' = 'ai-memory'; 'HealthAionUiCard' = 'aionui'; 'HealthDeckCard' = 'steamdeck';
+            'HealthRollbackCard' = 'rollback'
+        }
+        foreach ($name in $expected.Keys) {
+            $raw | Should Match ([regex]::Escape('x:Name="' + $name + '"'))
+            $raw | Should Match ([regex]::Escape('Tag="' + $expected[$name] + '"'))
+        }
+        $raw | Should Match 'HealthCardButton'
+        $raw | Should Match 'Validar somente'
+    }
+
+    It 'wires each card click to a scoped doctor run' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        foreach ($scope in @('wsl','winget','reboot','secrets','github','ai-usagebar','ai-memory','aionui','steamdeck','rollback')) {
+            $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope '" + $scope + "'"))
+        }
+        # O helper de card deve disparar Start-RunExecution com intent doctor e o escopo do card.
+        $raw | Should Match "Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope \`$Scope"
+    }
+
+    It 'adds Gestao tokens/memoria, Otimizacao Windows, Validar MCPs and MSVC buttons with their scopes' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $raw | Should Match ([regex]::Escape('x:Name="HealthAgentToolsButton"'))
+        $raw | Should Match ([regex]::Escape('Gestão tokens/memória'))
+        $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'agent-tools'"))
+        $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'windows-optimization'"))
+        $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'mcp'"))
+        $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'msvc'"))
+        $raw | Should Match ([regex]::Escape('x:Name="HealthValidateMcpButton"'))
+    }
+
+    It 'passes -DoctorScope to the backend for doctor runs' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $raw | Should Match "tokens \+= @\('-DoctorScope'"
+    }
+
+    It 'builds a human summary above the JSON for the last result' {
+        Import-UiFunctionsForTest -Names @('Get-UiDoctorHumanSummary')
+        $result = [pscustomobject]@{
+            status = 'warning'
+            doctor = [pscustomobject]@{
+                status = 'degraded'
+                scopes = @('agent-tools')
+                agentTools = [pscustomobject]@{ status = 'degraded'; summary = 'RTK=absent; ai-memory=available' }
+            }
+        }
+        $summary = Get-UiDoctorHumanSummary -Result $result -Scopes @('agent-tools')
+        $summary | Should Match 'agent-tools'
+        $summary | Should Match 'Tokens/memoria'
+        $summary | Should Match 'RTK=absent'
+    }
+}

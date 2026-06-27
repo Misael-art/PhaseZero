@@ -619,3 +619,50 @@ api_key = "sk-or-v1-inlinePhaseZeroSecret1234567890"
         Test-Path -LiteralPath $bundlePath | Should Be $true
     }
 }
+
+Describe 'Doctor scope gating' {
+    It 'runs only the winget scope and skips WSL/secrets/SteamDeck probes' {
+        $report = New-BootstrapDoctorReport -Scopes @('winget')
+        @($report.scopes) | Should Be @('winget')
+        $null -ne $report.wslRepair | Should Be $false
+        $null -ne $report.secrets | Should Be $false
+        $null -ne $report.deck | Should Be $false
+
+        $ids = @($report.checks | ForEach-Object { [string]$_.id })
+        ($ids -contains 'winget') | Should Be $true
+        ($ids -contains 'wsl') | Should Be $false
+        ($ids -contains 'secrets-manifest') | Should Be $false
+        ($ids -contains 'pending-reboot') | Should Be $false
+    }
+
+    It 'returns RTK/ai-memory/Caveman/Headroom/Ponytail/Graphify for the agent-tools scope' {
+        $report = New-BootstrapDoctorReport -Scopes @('agent-tools')
+        $null -ne $report.agentTools | Should Be $true
+        foreach ($k in @('rtk','aiMemory','caveman','headroom','ponytail','aiContextFrugality','graphify')) {
+            (@($report.agentTools.tools.Keys) -contains $k) | Should Be $true
+        }
+    }
+
+    It 'keeps Graphify as a safe placeholder that never errors the Doctor' {
+        $report = New-BootstrapDoctorReport -Scopes @('agent-tools')
+        [string]$report.agentTools.tools.graphify.status | Should Be 'notConfigured'
+        [bool]$report.agentTools.tools.graphify.placeholder | Should Be $true
+        ([string]$report.status -ne 'error') | Should Be $true
+    }
+
+    It 'builds a RepairPlan that only contains agent-tools components for that scope' {
+        $report = New-BootstrapDoctorReport -Scopes @('agent-tools')
+        $plan = New-BootstrapRepairPlan -DoctorReport $report
+        $allowed = @('rtk','ai-memory','agent-skills','agent-compat-runtime','headroom-ai','headroom-agent-context-compression','ai-context-frugality-pack')
+        foreach ($item in @($plan.items)) {
+            [string]$item.component | Should Not Be ''
+            ($allowed -contains [string]$item.component) | Should Be $true
+        }
+    }
+
+    It 'normalizes empty/unknown scopes to all' {
+        (Resolve-BootstrapDoctorScopes -Scopes @()) | Should Be @('all')
+        (Resolve-BootstrapDoctorScopes -Scopes @('bogus')) | Should Be @('all')
+        (Resolve-BootstrapDoctorScopes -Scopes @('winget','bogus')) | Should Be @('winget')
+    }
+}

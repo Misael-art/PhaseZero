@@ -1252,6 +1252,37 @@ function Get-UiHealthTextCanonicalStatus {
             <Setter Property="Padding"         Value="16"/>
         </Style>
 
+        <!-- Clickable health card: looks like a Card but is an actionable Button (validacao por escopo) -->
+        <Style x:Key="HealthCardButton" TargetType="Button">
+            <Setter Property="Cursor"                   Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="VerticalContentAlignment"   Value="Top"/>
+            <Setter Property="Foreground"               Value="#CBD5E1"/>
+            <Setter Property="SnapsToDevicePixels"      Value="True"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="CardBorder" Background="#1A1D2E" BorderBrush="#2D3148" BorderThickness="1" CornerRadius="12" Padding="16">
+                            <ContentPresenter HorizontalAlignment="Stretch" VerticalAlignment="Top"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#4F46E5"/>
+                                <Setter TargetName="CardBorder" Property="Background"  Value="#1F2336"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#6366F1"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="CardBorder" Property="Opacity" Value="0.55"/>
+                                <Setter Property="Cursor" Value="Wait"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Section label -->
         <Style x:Key="SectionLabel" TargetType="TextBlock">
             <Setter Property="Foreground"  Value="#94A3B8"/>
@@ -1841,66 +1872,66 @@ function Get-UiHealthTextCanonicalStatus {
                     </Border>
 
                     <UniformGrid Columns="4" Margin="0,0,0,16">
-                        <Border Style="{StaticResource Card}" Margin="0,0,8,8">
+                        <Button x:Name="HealthWslCard" Tag="wsl" Style="{StaticResource HealthCardButton}" Margin="0,0,8,8" ToolTip="Validar somente WSL">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="WSL"/>
                                 <TextBlock x:Name="HealthWslStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="WSL: Ausente"/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,8,8">
+                        </Button>
+                        <Button x:Name="HealthWingetCard" Tag="winget" Style="{StaticResource HealthCardButton}" Margin="0,0,8,8" ToolTip="Validar somente winget">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="winget"/>
                                 <TextBlock x:Name="HealthWingetStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="winget: Ausente"/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,8,8">
+                        </Button>
+                        <Button x:Name="HealthRebootCard" Tag="reboot" Style="{StaticResource HealthCardButton}" Margin="0,0,8,8" ToolTip="Validar somente reinicializacao pendente">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="Reboot"/>
                                 <TextBlock x:Name="HealthRebootStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Reboot: OK"/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,0,8">
+                        </Button>
+                        <Button x:Name="HealthSecretsCard" Tag="secrets" Style="{StaticResource HealthCardButton}" Margin="0,0,0,8" ToolTip="Validar somente segredos">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="Secrets"/>
                                 <TextBlock x:Name="HealthSecretsStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Secrets: Atenção"/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                        </Button>
+                        <Button x:Name="HealthGithubCard" Tag="github" Style="{StaticResource HealthCardButton}" Margin="0,0,8,0" ToolTip="Validar somente GitHub CLI">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="GitHub CLI"/>
                                 <TextBlock x:Name="HealthGithubStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="GitHub CLI: não verificado."/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                        </Button>
+                        <Button x:Name="HealthAiUsagebarCard" Tag="ai-usagebar" Style="{StaticResource HealthCardButton}" Margin="0,0,8,0" ToolTip="Validar somente ai-usagebar">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="ai-usagebar"/>
                                 <TextBlock x:Name="HealthAiUsagebarStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="ai-usagebar: Ausente"/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                        </Button>
+                        <Button x:Name="HealthAiMemoryCard" Tag="ai-memory" Style="{StaticResource HealthCardButton}" Margin="0,0,8,0" ToolTip="Validar somente ai-memory">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="ai-memory"/>
                                 <TextBlock x:Name="HealthAiMemoryStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="ai-memory: Ausente"/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                        </Button>
+                        <Button x:Name="HealthAionUiCard" Tag="aionui" Style="{StaticResource HealthCardButton}" Margin="0,0,8,0" ToolTip="Validar somente AionUI">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="AionUI"/>
                                 <TextBlock x:Name="HealthAionUiStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="AionUI: Ausente"/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,8,0">
+                        </Button>
+                        <Button x:Name="HealthDeckCard" Tag="steamdeck" Style="{StaticResource HealthCardButton}" Margin="0,0,8,0" ToolTip="Validar somente Steam Deck">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="Steam Deck"/>
                                 <TextBlock x:Name="HealthDeckStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Steam Deck: não verificado."/>
                             </StackPanel>
-                        </Border>
-                        <Border Style="{StaticResource Card}" Margin="0,0,0,0">
+                        </Button>
+                        <Button x:Name="HealthRollbackCard" Tag="rollback" Style="{StaticResource HealthCardButton}" Margin="0,0,0,0" ToolTip="Validar somente rollback/gate">
                             <StackPanel>
                                 <TextBlock Style="{StaticResource SectionLabel}" Text="Rollback"/>
                                 <TextBlock x:Name="HealthRollbackStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Rollback: Crítico/Bloqueado se confirmação faltar."/>
                             </StackPanel>
-                        </Border>
+                        </Button>
                     </UniformGrid>
 
                     <Grid Margin="0,0,0,16">
@@ -1934,10 +1965,14 @@ function Get-UiHealthTextCanonicalStatus {
                         </Border>
                     </Grid>
                     <WrapPanel Margin="0,0,0,16">
-                        <Button x:Name="HealthCopyDiagnosticButton" Style="{StaticResource GhostBtn}" Content="Copiar diagnóstico" Height="32" Margin="0,0,8,0"/>
-                        <Button x:Name="HealthRepairMcpButton" Style="{StaticResource GhostBtn}" Content="Reparar MCPs (npx)" Height="32" Margin="0,0,8,0" ToolTip="Reescreve comandos 'npx' puros para 'cmd /c npx' nos configs MCP dos apps (corrige 'Could not attach'). Backup .bak por arquivo."/>
-                        <Button x:Name="HealthDriftCheckButton" Style="{StaticResource GhostBtn}" Content="Verificar drift" Height="32" Margin="0,0,8,0" ToolTip="Compara a saude atual com o baseline e reporta regressoes (o que piorou desde a ultima referencia)."/>
-                        <Button x:Name="HealthDriftScheduleButton" Style="{StaticResource GhostBtn}" Content="Agendar drift semanal" Height="32" ToolTip="Liga/desliga uma verificacao de drift semanal (tarefa agendada por-usuario)."/>
+                        <Button x:Name="HealthAgentToolsButton" Style="{StaticResource PrimaryBtn}" Content="Gestão tokens/memória" Height="32" Margin="0,0,8,8" ToolTip="Valida RTK, ai-memory, Caveman, Headroom, Ponytail e frugality; Graphify fica como placeholder. Reparos exigem confirmacao."/>
+                        <Button x:Name="HealthMsvcButton" Style="{StaticResource GhostBtn}" Content="MSVC no host" Height="32" Margin="0,0,8,8" ToolTip="Valida/repara o toolchain MSVC (cl.exe, DLLs do runtime VC++) no host."/>
+                        <Button x:Name="HealthWindowsOptButton" Style="{StaticResource GhostBtn}" Content="Otimização Windows" Height="32" Margin="0,0,8,8" ToolTip="Audit-only: mostra recomendacoes HostHealth/AppTuning sem aplicar nenhum tweak."/>
+                        <Button x:Name="HealthValidateMcpButton" Style="{StaticResource GhostBtn}" Content="Validar MCPs" Height="32" Margin="0,0,8,8" ToolTip="Valida (sem reparar) o estado dos MCPs gerenciados."/>
+                        <Button x:Name="HealthCopyDiagnosticButton" Style="{StaticResource GhostBtn}" Content="Copiar diagnóstico" Height="32" Margin="0,0,8,8"/>
+                        <Button x:Name="HealthRepairMcpButton" Style="{StaticResource GhostBtn}" Content="Reparar MCPs (npx)" Height="32" Margin="0,0,8,8" ToolTip="Reescreve comandos 'npx' puros para 'cmd /c npx' nos configs MCP dos apps (corrige 'Could not attach'). Backup .bak por arquivo."/>
+                        <Button x:Name="HealthDriftCheckButton" Style="{StaticResource GhostBtn}" Content="Verificar drift" Height="32" Margin="0,0,8,8" ToolTip="Compara a saude atual com o baseline e reporta regressoes (o que piorou desde a ultima referencia)."/>
+                        <Button x:Name="HealthDriftScheduleButton" Style="{StaticResource GhostBtn}" Content="Agendar drift semanal" Height="32" Margin="0,0,0,8" ToolTip="Liga/desliga uma verificacao de drift semanal (tarefa agendada por-usuario)."/>
                     </WrapPanel>
 
                     <Border Style="{StaticResource Card}">
@@ -2772,6 +2807,10 @@ $ui = [ordered]@{
     PendingRebootReasons  = @()
     # 'none' = instalação/perfil normal; 'audit' / 'rollback' apenas quando disparado pelos botões de manutenção.
     MaintenanceMode          = 'none'
+    # Escopo do Doctor por card/area (default 'all'); cada card clicado define o seu antes do run.
+    DoctorScope              = 'all'
+    # Card de saude atualmente em verificacao (para atualizar so ele ao terminar).
+    DoctorScopeCard          = ''
 
     # Window
     Window                = $window
@@ -2899,6 +2938,21 @@ $ui = [ordered]@{
     HealthDriftCheckButton = (Get-Control 'HealthDriftCheckButton')
     HealthDriftScheduleButton = (Get-Control 'HealthDriftScheduleButton')
     HealthDoctorTextBox   = (Get-Control 'HealthDoctorTextBox')
+    # Cards de saude clicaveis (validacao por escopo) + botoes de gestao
+    HealthWslCard          = (Get-Control 'HealthWslCard')
+    HealthWingetCard       = (Get-Control 'HealthWingetCard')
+    HealthRebootCard       = (Get-Control 'HealthRebootCard')
+    HealthSecretsCard      = (Get-Control 'HealthSecretsCard')
+    HealthGithubCard       = (Get-Control 'HealthGithubCard')
+    HealthAiUsagebarCard   = (Get-Control 'HealthAiUsagebarCard')
+    HealthAiMemoryCard     = (Get-Control 'HealthAiMemoryCard')
+    HealthAionUiCard       = (Get-Control 'HealthAionUiCard')
+    HealthDeckCard         = (Get-Control 'HealthDeckCard')
+    HealthRollbackCard     = (Get-Control 'HealthRollbackCard')
+    HealthAgentToolsButton = (Get-Control 'HealthAgentToolsButton')
+    HealthMsvcButton       = (Get-Control 'HealthMsvcButton')
+    HealthWindowsOptButton = (Get-Control 'HealthWindowsOptButton')
+    HealthValidateMcpButton = (Get-Control 'HealthValidateMcpButton')
 
     # App Tuning
     AppTuningTitleLabel   = (Get-Control 'AppTuningTitleLabel')
@@ -5875,7 +5929,12 @@ function Build-BackendArguments {
     if ([string]::IsNullOrWhiteSpace($maint)) { $maint = 'none' }
     if ($maint -eq 'rollback') { $tokens += @('-Rollback') }
     if ($maint -eq 'audit') { $tokens += @('-Audit') }
-    if ($maint -eq 'doctor') { $tokens += @('-Doctor') }
+    if ($maint -eq 'doctor') {
+        $tokens += @('-Doctor')
+        $doctorScope = [string]$ui.DoctorScope
+        if ([string]::IsNullOrWhiteSpace($doctorScope)) { $doctorScope = 'all' }
+        $tokens += @('-DoctorScope', $doctorScope)
+    }
     if ($maint -eq 'support-bundle') { $tokens += @('-SupportBundle') }
     if ($maint -eq 'repair-plan') { $tokens += @('-RepairPlan') }
     $tokens += @('-SteamDeckVersion', [string]$ui.State.steamDeckVersion)
@@ -6637,6 +6696,74 @@ function Get-UiDoctorCheckById {
     }
 }
 
+function Get-UiDoctorHumanSummary {
+    # Resumo humano (curto) do resultado do Doctor para mostrar acima do JSON em ULTIMO RESULTADO.
+    param(
+        [Parameter(Mandatory = $true)]$Result,
+        [AllowNull()][string[]]$Scopes = @()
+    )
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $scopeText = if (@($Scopes).Count -gt 0) { (@($Scopes) -join ', ') } else { 'all' }
+    $overall = ''
+    try { $overall = [string]$Result.doctor.status } catch { $overall = '' }
+    if ([string]::IsNullOrWhiteSpace($overall)) { try { $overall = [string]$Result.status } catch { $overall = '' } }
+    $lines.Add(("Doctor [{0}] -> {1}" -f $scopeText, $(if ([string]::IsNullOrWhiteSpace($overall)) { 'concluido' } else { $overall }))) | Out-Null
+
+    # Destaques por area presente no relatorio.
+    try {
+        $at = $Result.doctor.agentTools
+        if ($null -ne $at) {
+            $lines.Add(("Tokens/memoria: {0}. {1}" -f [string]$at.status, [string]$at.summary)) | Out-Null
+        }
+    } catch { }
+    try {
+        $wo = $Result.doctor.windowsOptimization
+        if ($null -ne $wo) { $lines.Add([string]$wo.summary) | Out-Null }
+    } catch { }
+    try {
+        $mcp = $Result.doctor.mcp
+        if ($null -ne $mcp) { $lines.Add([string]$mcp.summary) | Out-Null }
+    } catch { }
+    try {
+        $msvc = $Result.doctor.msvc
+        if ($null -ne $msvc) { $lines.Add([string]$msvc.summary) | Out-Null }
+    } catch { }
+
+    return ($lines.ToArray() -join [Environment]::NewLine)
+}
+
+function Set-UiHealthCardsEnabled {
+    # Liga/desliga todos os cards de saude clicaveis (evita cliques concorrentes durante um run).
+    param([bool]$Enabled)
+    foreach ($name in @('HealthWslCard','HealthWingetCard','HealthRebootCard','HealthSecretsCard',
+                        'HealthGithubCard','HealthAiUsagebarCard','HealthAiMemoryCard','HealthAionUiCard',
+                        'HealthDeckCard','HealthRollbackCard')) {
+        try { if ($ui.ContainsKey($name) -and $null -ne $ui[$name]) { $ui[$name].IsEnabled = $Enabled } } catch { }
+    }
+}
+
+function Invoke-UiHealthScopedDoctor {
+    # Handler compartilhado dos cards: mostra "verificando...", desabilita os cards, navega para a
+    # página de execução e dispara o Doctor SOMENTE no escopo do card clicado.
+    param(
+        [Parameter(Mandatory = $true)][string]$Scope,
+        [AllowNull()]$StatusTextBlock = $null
+    )
+    try {
+        if ($null -ne $StatusTextBlock) {
+            $StatusTextBlock.Text = 'verificando...'
+            $StatusTextBlock.Foreground = Get-UiBrush '#FBBF24'
+        }
+    } catch { }
+    $ui.DoctorScopeCard = $Scope
+    Set-UiHealthCardsEnabled -Enabled $false
+    $runIdx = @($ui.PageNames).IndexOf('PageRun')
+    if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
+    Navigate-ToPage -Index $runIdx
+    Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope $Scope
+}
+
 function Get-UiHealthCardStatusText {
     param(
         [Parameter(Mandatory = $true)]$Result,
@@ -6795,34 +6922,50 @@ function Finalize-RunFromResult {
         $modeText = [string]$result.mode
         if ($modeText -in @('doctor','support-bundle','repair-plan')) {
             $ui.HealthStatusText.Text = $statusText
-            $ui.HealthWslStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'wsl'
-            $ui.HealthWingetStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'winget'
-            $ui.HealthRebootStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'reboot'
-            $ui.HealthSecretsStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'secrets'
-            $ui.HealthDeckStatusText.Text = Get-UiDeckStatusTextFromResult -Result $result
-            $ui.HealthGithubStatusText.Text = Get-UiGithubCliStatusTextFromResult -Result $result
-            $ui.HealthAiUsagebarStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'ai-usagebar'
-            $ui.HealthAiMemoryStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'ai-memory'
-            $ui.HealthAionUiStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'aionui'
-            $ui.HealthRollbackStatusText.Text = Get-UiHealthCardStatusText -Result $result -Card 'rollback'
-            # Guia visual: aplica a logica de 5 cores ao status de cada card apos a verificacao.
-            foreach ($healthTb in @(
-                $ui.HealthWslStatusText, $ui.HealthWingetStatusText, $ui.HealthRebootStatusText,
-                $ui.HealthSecretsStatusText, $ui.HealthDeckStatusText, $ui.HealthGithubStatusText,
-                $ui.HealthAiUsagebarStatusText, $ui.HealthAiMemoryStatusText, $ui.HealthAionUiStatusText,
-                $ui.HealthRollbackStatusText)) {
-                if ($null -eq $healthTb) { continue }
-                $canon = Get-UiHealthTextCanonicalStatus -Text ([string]$healthTb.Text)
-                if (-not [string]::IsNullOrWhiteSpace($canon)) {
-                    $healthTb.Foreground = Get-UiStatusBrush -Status $canon
-                } else {
-                    $healthTb.Foreground = Get-UiBrush '#CBD5E1'
-                }
+
+            # Escopo do resultado: 'all' (ou ausente) atualiza todos os cards; senao so os pedidos.
+            $resultScopes = @()
+            try { $resultScopes = @($result.doctor.scopes) } catch { $resultScopes = @() }
+            if (@($resultScopes).Count -eq 0) { try { $resultScopes = @($result.scopes) } catch { $resultScopes = @() } }
+            $scopeIsAll = ((@($resultScopes).Count -eq 0) -or (@($resultScopes) -contains 'all'))
+            $cardMap = @(
+                @{ Scope = 'wsl';         Tb = $ui.HealthWslStatusText;        Card = 'wsl' },
+                @{ Scope = 'winget';      Tb = $ui.HealthWingetStatusText;     Card = 'winget' },
+                @{ Scope = 'reboot';      Tb = $ui.HealthRebootStatusText;     Card = 'reboot' },
+                @{ Scope = 'secrets';     Tb = $ui.HealthSecretsStatusText;    Card = 'secrets' },
+                @{ Scope = 'ai-usagebar'; Tb = $ui.HealthAiUsagebarStatusText; Card = 'ai-usagebar' },
+                @{ Scope = 'ai-memory';   Tb = $ui.HealthAiMemoryStatusText;   Card = 'ai-memory' },
+                @{ Scope = 'aionui';      Tb = $ui.HealthAionUiStatusText;     Card = 'aionui' },
+                @{ Scope = 'rollback';    Tb = $ui.HealthRollbackStatusText;   Card = 'rollback' }
+            )
+            foreach ($entry in $cardMap) {
+                if (-not ($scopeIsAll -or (@($resultScopes) -contains [string]$entry.Scope))) { continue }
+                $tb = $entry.Tb
+                if ($null -eq $tb) { continue }
+                $tb.Text = Get-UiHealthCardStatusText -Result $result -Card ([string]$entry.Card)
+                $canon = Get-UiHealthTextCanonicalStatus -Text ([string]$tb.Text)
+                if (-not [string]::IsNullOrWhiteSpace($canon)) { $tb.Foreground = Get-UiStatusBrush -Status $canon } else { $tb.Foreground = Get-UiBrush '#CBD5E1' }
             }
-            $ui.HealthDoctorTextBox.Text = ($result | ConvertTo-Json -Depth 8)
+            if ($scopeIsAll -or (@($resultScopes) -contains 'steamdeck')) {
+                $ui.HealthDeckStatusText.Text = Get-UiDeckStatusTextFromResult -Result $result
+                $canon = Get-UiHealthTextCanonicalStatus -Text ([string]$ui.HealthDeckStatusText.Text)
+                if (-not [string]::IsNullOrWhiteSpace($canon)) { $ui.HealthDeckStatusText.Foreground = Get-UiStatusBrush -Status $canon } else { $ui.HealthDeckStatusText.Foreground = Get-UiBrush '#CBD5E1' }
+            }
+            if ($scopeIsAll -or (@($resultScopes) -contains 'github')) {
+                $ui.HealthGithubStatusText.Text = Get-UiGithubCliStatusTextFromResult -Result $result
+                $canon = Get-UiHealthTextCanonicalStatus -Text ([string]$ui.HealthGithubStatusText.Text)
+                if (-not [string]::IsNullOrWhiteSpace($canon)) { $ui.HealthGithubStatusText.Foreground = Get-UiStatusBrush -Status $canon } else { $ui.HealthGithubStatusText.Foreground = Get-UiBrush '#CBD5E1' }
+            }
+
+            # ULTIMO RESULTADO: resumo humano primeiro, JSON completo abaixo.
+            $human = Get-UiDoctorHumanSummary -Result $result -Scopes $resultScopes
+            $json = ($result | ConvertTo-Json -Depth 8)
+            $ui.HealthDoctorTextBox.Text = ($human + [Environment]::NewLine + [Environment]::NewLine + '--- JSON ---' + [Environment]::NewLine + $json)
         }
     } catch {
     }
+    # Reabilita os cards de saude apos a verificacao (scoped ou completa).
+    try { Set-UiHealthCardsEnabled -Enabled $true; $ui.DoctorScopeCard = '' } catch { }
     Complete-RunExecution -StatusText $statusText
 }
 
@@ -6909,8 +7052,12 @@ function Confirm-UiCriticalAction {
 function Start-RunExecution {
     param(
         [ValidateSet('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan')]
-        [string]$MaintenanceIntent = 'none'
+        [string]$MaintenanceIntent = 'none',
+        [string]$DoctorScope = 'all'
     )
+    # Define o escopo do Doctor para este run; default 'all' preserva o comportamento legado.
+    if ([string]::IsNullOrWhiteSpace($DoctorScope)) { $DoctorScope = 'all' }
+    $ui.DoctorScope = $DoctorScope
     if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
         $ui.RunStatusLabel.Text = "$($ui.Strings.RunStarted) Aguarde a execução atual finalizar."
         return
@@ -7410,8 +7557,29 @@ $ui.HealthDoctorButton.Add_Click({
     $runIdx = @($ui.PageNames).IndexOf('PageRun')
     if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
     Navigate-ToPage -Index $runIdx
-    Start-RunExecution -MaintenanceIntent 'doctor'
+    Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope 'all'
 })
+
+# Cards de saude clicaveis: cada um valida SOMENTE o seu escopo.
+$ui.HealthWslCard.Add_Click({        Invoke-UiHealthScopedDoctor -Scope 'wsl'         -StatusTextBlock $ui.HealthWslStatusText })
+$ui.HealthWingetCard.Add_Click({     Invoke-UiHealthScopedDoctor -Scope 'winget'      -StatusTextBlock $ui.HealthWingetStatusText })
+$ui.HealthRebootCard.Add_Click({     Invoke-UiHealthScopedDoctor -Scope 'reboot'      -StatusTextBlock $ui.HealthRebootStatusText })
+$ui.HealthSecretsCard.Add_Click({    Invoke-UiHealthScopedDoctor -Scope 'secrets'     -StatusTextBlock $ui.HealthSecretsStatusText })
+$ui.HealthGithubCard.Add_Click({     Invoke-UiHealthScopedDoctor -Scope 'github'      -StatusTextBlock $ui.HealthGithubStatusText })
+$ui.HealthAiUsagebarCard.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'ai-usagebar' -StatusTextBlock $ui.HealthAiUsagebarStatusText })
+$ui.HealthAiMemoryCard.Add_Click({   Invoke-UiHealthScopedDoctor -Scope 'ai-memory'   -StatusTextBlock $ui.HealthAiMemoryStatusText })
+$ui.HealthAionUiCard.Add_Click({     Invoke-UiHealthScopedDoctor -Scope 'aionui'      -StatusTextBlock $ui.HealthAionUiStatusText })
+$ui.HealthDeckCard.Add_Click({       Invoke-UiHealthScopedDoctor -Scope 'steamdeck'   -StatusTextBlock $ui.HealthDeckStatusText })
+$ui.HealthRollbackCard.Add_Click({   Invoke-UiHealthScopedDoctor -Scope 'rollback'    -StatusTextBlock $ui.HealthRollbackStatusText })
+
+# Gestao tokens/memoria: valida RTK/ai-memory/Caveman/Headroom/Ponytail/frugality (Graphify placeholder).
+$ui.HealthAgentToolsButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'agent-tools' })
+# Otimizacao Windows: audit-only (HostHealth/AppTuning), sem aplicar tweak.
+$ui.HealthWindowsOptButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'windows-optimization' })
+# Validar MCPs: somente validacao (separado de "Reparar MCPs (npx)").
+$ui.HealthValidateMcpButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'mcp' })
+# MSVC no host: valida cl.exe e DLLs do runtime VC++ (repair via vcpp-redist na fila de reparo).
+$ui.HealthMsvcButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'msvc' })
 
 $ui.HealthSupportBundleButton.Add_Click({
     $runIdx = @($ui.PageNames).IndexOf('PageRun')

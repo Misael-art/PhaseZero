@@ -24,6 +24,7 @@
     [switch]$ListApps,
     [switch]$ListComponents,
     [switch]$Doctor,
+    [string[]]$DoctorScope = @('all'),
     [switch]$DriftCheck,
     [switch]$SupportBundle,
     [switch]$AiConfigDoctor,
@@ -32594,11 +32595,197 @@ function Unregister-BootstrapDriftCheckTask {
     return [ordered]@{ status = 'removed'; task = $name }
 }
 
+function Get-BootstrapDoctorScopeCatalog {
+    # Escopos validos do Doctor por card/area. 'all' executa tudo (comportamento legado).
+    return @('wsl', 'winget', 'reboot', 'secrets', 'github', 'ai-usagebar', 'ai-memory',
+             'aionui', 'steamdeck', 'rollback', 'mcp', 'agent-tools', 'windows-optimization', 'msvc', 'all')
+}
+
+function Resolve-BootstrapDoctorScopes {
+    # Normaliza a lista de escopos pedida. Vazio/nulo -> 'all'. Tokens desconhecidos sao ignorados.
+    param([AllowNull()][string[]]$Scopes)
+
+    if ($null -eq $Scopes -or @($Scopes).Count -eq 0) { return @('all') }
+    $valid = Get-BootstrapDoctorScopeCatalog
+    $resolved = @($Scopes | ForEach-Object { [string]$_ } | Where-Object { $valid -contains $_ } | Select-Object -Unique)
+    if (@($resolved).Count -eq 0) { return @('all') }
+    return @($resolved)
+}
+
+function Test-BootstrapDoctorScope {
+    # True se o probe nomeado deve rodar para a lista de escopos resolvida.
+    param(
+        [Parameter(Mandatory = $true)][string[]]$Scopes,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+    if (@($Scopes) -contains 'all') { return $true }
+    return (@($Scopes) -contains $Name)
+}
+
+function New-BootstrapAgentToolsDoctorReport {
+    # Valida o ecossistema de tokens/memoria/agentes: RTK, ai-memory, Caveman, Headroom, Ponytail,
+    # ai-context-frugality. Graphify retorna placeholder seguro (notConfigured) sem falhar o Doctor.
+    param([string]$WorkspaceRoot = (Get-Location).Path)
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { $WorkspaceRoot }
+    $plan = Get-BootstrapAgentCompatPlan -WorkspaceRoot $root
+
+    # RTK / ai-memory / Caveman / Ponytail vem do plano de compatibilidade.
+    $rtkStatus = [string]$plan.tools.rtk.status        # available | absent
+    $memStatus = [string]$plan.tools.aiMemory.status   # available | absent
+    $cavemanStatus = [string]$plan.tools.caveman.status # available | fallback
+    $ponytailStatus = [string]$plan.tools.ponytail.status # active | inactive
+
+    # Headroom: presenca do binario.
+    $headroomPath = Resolve-CommandPath -Name 'headroom'
+    $headroomStatus = if ([string]::IsNullOrWhiteSpace($headroomPath)) { 'absent' } else { 'available' }
+
+    # ai-context-frugality: presenca dos artefatos do pack no workspace.
+    $frugalityArtifacts = @(
+        (Join-Path $root '.aiderignore'),
+        (Join-Path $root 'AGENTS.md'),
+        (Join-Path $root 'CLAUDE.md')
+    )
+    $frugalityPresent = $false
+    foreach ($a in $frugalityArtifacts) { if (Test-Path -LiteralPath $a) { $frugalityPresent = $true; break } }
+    $frugalityStatus = if ($frugalityPresent) { 'configured' } else { 'notConfigured' }
+
+    $tools = [ordered]@{
+        rtk = [ordered]@{ id = 'rtk'; displayName = 'RTK (shell compression)'; status = $rtkStatus; configured = ($rtkStatus -eq 'available'); path = [string]$plan.tools.rtk.path; repairComponent = 'rtk' }
+        aiMemory = [ordered]@{ id = 'ai-memory'; displayName = 'ai-memory'; status = $memStatus; configured = ($memStatus -eq 'available'); path = [string]$plan.tools.aiMemory.path; repairComponent = 'ai-memory' }
+        caveman = [ordered]@{ id = 'caveman'; displayName = 'Caveman (style)'; status = $cavemanStatus; configured = ($cavemanStatus -eq 'available'); path = [string]$plan.tools.caveman.path; repairComponent = 'agent-skills' }
+        headroom = [ordered]@{ id = 'headroom'; displayName = 'Headroom'; status = $headroomStatus; configured = ($headroomStatus -eq 'available'); path = [string]$headroomPath; repairComponent = 'headroom-ai' }
+        ponytail = [ordered]@{ id = 'ponytail'; displayName = 'Ponytail (workspace architecture)'; status = $ponytailStatus; configured = ($ponytailStatus -eq 'active'); path = [string]$plan.tools.ponytail.path; repairComponent = 'agent-compat-runtime' }
+        aiContextFrugality = [ordered]@{ id = 'ai-context-frugality'; displayName = 'AI context frugality pack'; status = $frugalityStatus; configured = $frugalityPresent; repairComponent = 'ai-context-frugality-pack' }
+        graphify = [ordered]@{ id = 'graphify'; displayName = 'Graphify'; status = 'notConfigured'; configured = $false; placeholder = $true; action = 'informar fonte oficial'; repairComponent = '' }
+    }
+
+    # Degradado se RTK ou ai-memory ausentes (impacto direto em tokens/memoria). Graphify placeholder
+    # NUNCA derruba o status.
+    $degraded = (($rtkStatus -eq 'absent') -or ($memStatus -eq 'absent'))
+    $status = if ($degraded) { 'degraded' } else { 'healthy' }
+
+    return [ordered]@{
+        schemaVersion = 'agent-tools-doctor/v1'
+        id = 'agent-tools'
+        status = $status
+        generatedAt = (Get-Date).ToString('o')
+        workspaceRoot = $root
+        mode = [string]$plan.mode
+        tools = $tools
+        graphifyPlaceholder = $true
+        summary = ("RTK={0}; ai-memory={1}; Caveman={2}; Headroom={3}; Ponytail={4}; frugality={5}; Graphify=placeholder" -f $rtkStatus, $memStatus, $cavemanStatus, $headroomStatus, $ponytailStatus, $frugalityStatus)
+    }
+}
+
+function New-BootstrapWindowsOptimizationDoctorReport {
+    # Audit-only: lista recomendacoes de HostHealth/AppTuning sem aplicar nenhum tweak.
+    $modes = @()
+    try { $modes = @(Get-BootstrapHostHealthModes) } catch { $modes = @() }
+
+    $tuningRecommended = @()
+    try {
+        $catalog = Get-BootstrapAppTuningCatalog
+        foreach ($cat in @($catalog.categories)) {
+            foreach ($item in @($cat.items)) {
+                $rec = $false
+                try { $rec = [bool]$item.recommended } catch { $rec = $false }
+                if ($rec) {
+                    $tuningRecommended += @([ordered]@{ id = [string]$item.id; category = [string]$cat.id; displayName = [string]$item.displayName; risk = [string]$item.risk })
+                }
+            }
+        }
+    } catch { }
+
+    return [ordered]@{
+        schemaVersion = 'windows-optimization-doctor/v1'
+        id = 'windows-optimization'
+        status = 'info'
+        auditOnly = $true
+        generatedAt = (Get-Date).ToString('o')
+        hostHealthModes = @($modes)
+        recommendedTuning = @($tuningRecommended)
+        summary = ("Audit-only: {0} modo(s) HostHealth; {1} item(ns) AppTuning recomendado(s). Nenhum tweak aplicado." -f @($modes).Count, @($tuningRecommended).Count)
+    }
+}
+
+function New-BootstrapManagedMcpDoctorReport {
+    # Valida (sem reparar) o estado dos MCPs gerenciados. Apenas leitura.
+    $servers = @()
+    try { $servers = @(Get-BootstrapManagedMcpServers) } catch { $servers = @() }
+    $targets = @()
+    try { $targets = @(Get-BootstrapManagedMcpCapableTargets) } catch { $targets = @() }
+    $statePath = ''
+    try { $statePath = Get-BootstrapMcpStatePath } catch { $statePath = '' }
+    $stateExists = (-not [string]::IsNullOrWhiteSpace($statePath) -and (Test-Path -LiteralPath $statePath -PathType Leaf))
+
+    return [ordered]@{
+        schemaVersion = 'mcp-doctor/v1'
+        id = 'mcp'
+        status = $(if ($stateExists) { 'healthy' } else { 'info' })
+        generatedAt = (Get-Date).ToString('o')
+        serverCount = @($servers).Count
+        targetCount = @($targets).Count
+        statePath = $statePath
+        stateExists = $stateExists
+        summary = ("MCPs gerenciados: {0} servidor(es) sobre {1} alvo(s); state={2}." -f @($servers).Count, @($targets).Count, $(if ($stateExists) { 'presente' } else { 'ausente' }))
+    }
+}
+
+function New-BootstrapMsvcDoctorReport {
+    # Valida o toolchain MSVC no host: DLLs do runtime VC++ (vcruntime140/msvcp140) e cl.exe.
+    # Apenas leitura; o reparo das DLLs vai pela fila (componente vcpp-redist), cl.exe e manual.
+    $system32 = Join-Path $env:SystemRoot 'System32'
+    $runtimeDlls = @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
+    $dllRows = New-Object System.Collections.Generic.List[object]
+    $missingDll = $false
+    foreach ($dll in $runtimeDlls) {
+        $path = Join-Path $system32 $dll
+        $present = Test-Path -LiteralPath $path -PathType Leaf
+        if (-not $present) { $missingDll = $true }
+        $dllRows.Add([ordered]@{ name = $dll; present = [bool]$present; path = $path }) | Out-Null
+    }
+
+    # cl.exe: PATH direto ou via vswhere (Build Tools / VS).
+    $clPath = Resolve-CommandPath -Name 'cl.exe'
+    if ([string]::IsNullOrWhiteSpace($clPath)) { $clPath = Resolve-CommandPath -Name 'cl' }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    $vsInstall = ''
+    if ([string]::IsNullOrWhiteSpace($clPath) -and (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+        try {
+            $probe = Invoke-BootstrapDoctorCommandProbe -Label 'vswhere-vc' -CommandName $vswhere -CommandArgs @('-products','*','-requires','Microsoft.VisualStudio.Component.VC.Tools.x86.x64','-property','installationPath','-format','value') -TimeoutMs 4000
+            if ($probe -and ($probe.PSObject.Properties.Name -contains 'stdout')) { $vsInstall = ([string]$probe.stdout).Trim() }
+        } catch { $vsInstall = '' }
+    }
+    $clAvailable = (-not [string]::IsNullOrWhiteSpace($clPath)) -or (-not [string]::IsNullOrWhiteSpace($vsInstall))
+
+    $status = if ($missingDll) { 'critical' } elseif (-not $clAvailable) { 'warning' } else { 'healthy' }
+    $repairComponent = if ($missingDll) { 'vcpp-redist' } else { '' }
+
+    return [ordered]@{
+        schemaVersion = 'msvc-doctor/v1'
+        id = 'msvc'
+        status = $status
+        generatedAt = (Get-Date).ToString('o')
+        runtimeDlls = @($dllRows.ToArray())
+        runtimeDllsMissing = [bool]$missingDll
+        clExePath = [string]$clPath
+        vsInstallationPath = [string]$vsInstall
+        compilerAvailable = [bool]$clAvailable
+        repairComponent = $repairComponent
+        summary = ("MSVC: runtime DLLs {0}; cl.exe {1}{2}" -f $(if ($missingDll) { 'AUSENTES (instale vcpp-redist)' } else { 'OK' }), $(if ($clAvailable) { 'presente' } else { 'ausente (instale VS Build Tools - VC.Tools.x86.x64)' }), $(if (-not $clAvailable -and [string]::IsNullOrWhiteSpace($clPath)) { '' } else { '' }))
+    }
+}
+
 function New-BootstrapDoctorReport {
     param(
         [int]$AuditTimeoutSeconds = 180,
-        [int]$AuditComponentTimeoutSeconds = 30
+        [int]$AuditComponentTimeoutSeconds = 30,
+        [string[]]$Scopes = @('all')
     )
+
+    $Scopes = Resolve-BootstrapDoctorScopes -Scopes $Scopes
+    $isAll = (@($Scopes) -contains 'all')
 
     $started = [Diagnostics.Stopwatch]::StartNew()
     $checks = New-Object System.Collections.Generic.List[object]
@@ -32628,81 +32815,99 @@ function New-BootstrapDoctorReport {
         path = $dataRoot
         summary = "DataRoot: $dataRoot"
     })
-    $checks.Add((Get-BootstrapSecretsManifestHealth))
-    $secretsDoctor = New-BootstrapSecretsDoctorReport
-    $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport
-    $aiMemoryDoctor = New-BootstrapAiMemoryDoctorReport
-    $aionUiDoctor = Get-BootstrapAionUiDoctorReport -ValidateProviders
-    $aiConfigDoctor = New-BootstrapAiConfigDoctorReport
-    $aiProxyDoctor = New-BootstrapAiProxySuiteDoctorReport
-    $wslRepairDoctor = New-BootstrapWslRepairDoctorReport
-
-    $rebootReasons = @()
-    try { $rebootReasons = @(Get-BootstrapPendingRebootReasons) } catch { $rebootReasons = @() }
-    $checks.Add([ordered]@{
-        id = 'pending-reboot'
-        status = $(if ($rebootReasons.Count -gt 0) { 'warning' } else { 'healthy' })
-        severity = $(if ($rebootReasons.Count -gt 0) { 'warning' } else { 'info' })
-        pending = ($rebootReasons.Count -gt 0)
-        reasons = @($rebootReasons)
-        summary = $(if ($rebootReasons.Count -gt 0) { "Reinicio pendente: $($rebootReasons -join ', ')" } else { 'Sem reinicio pendente detectado.' })
-    })
-
-    foreach ($tool in @(
-            @{ Label = 'winget'; CommandName = 'winget'; Args = @('--version') },
-            @{ Label = 'git'; CommandName = 'git'; Args = @('--version') },
-            @{ Label = 'node'; CommandName = 'node'; Args = @('-v') },
-            @{ Label = 'npm'; CommandName = 'npm'; Args = @('--version') },
-            @{ Label = 'dotnet'; CommandName = 'dotnet'; Args = @('--version') },
-            @{ Label = 'python'; CommandName = 'python'; Args = @('--version') },
-            @{ Label = 'gh'; CommandName = 'gh'; Args = @('--version') }
-        )) {
-        $checks.Add((Invoke-BootstrapDoctorCommandProbe -Label ([string]$tool['Label']) -CommandName ([string]$tool['CommandName']) -CommandArgs @($tool['Args']) -TimeoutMs 3000))
-    }
-    $githubCliAuth = Get-BootstrapGithubCliAuthHealth
-    $checks.Add($githubCliAuth)
-    $checks.Add((Get-BootstrapWslDoctorHealth))
-    $checks.Add((Get-BootstrapUiContractHealth))
-    $checks.Add([ordered]@{
-        id = 'rollback-gate'
-        status = $(if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'tests\bootstrap-quality-gates.tests.ps1')) { 'healthy' } else { 'warning' })
-        severity = $(if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'tests\bootstrap-quality-gates.tests.ps1')) { 'info' } else { 'warning' })
-        summary = 'Rollback/mutation gate coberto por tests/bootstrap-quality-gates.tests.ps1.'
-    })
-
+    # --- Probes condicionados por escopo. 'all' executa tudo (comportamento legado). ----------
+    $secretsDoctor = $null; $aiUsagebarDoctor = $null; $aiMemoryDoctor = $null
+    $aionUiDoctor = $null; $aiConfigDoctor = $null; $aiProxyDoctor = $null
+    $wslRepairDoctor = $null; $githubCliAuth = $null; $deckReport = $null
+    $agentToolsDoctor = $null; $windowsOptimizationDoctor = $null; $mcpDoctor = $null; $msvcDoctor = $null
     $auditRows = @()
     $auditSummary = [pscustomobject](New-BootstrapAuditSeveritySummary -Rows @())
-    try {
-        $resolution = Resolve-BootstrapComponents -SelectedProfiles @('safe-base') -SelectedComponents @() -ExcludedComponents @()
-        $auditRows = @(Invoke-BootstrapAuditMode -Resolution $resolution -TimeoutSeconds $AuditTimeoutSeconds -ComponentTimeoutSeconds $AuditComponentTimeoutSeconds)
-        $auditSummary = New-BootstrapAuditSeveritySummary -Rows $auditRows
-    } catch {
+
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'secrets') {
+        $checks.Add((Get-BootstrapSecretsManifestHealth))
+        $secretsDoctor = New-BootstrapSecretsDoctorReport
+    }
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'ai-usagebar') { $aiUsagebarDoctor = New-BootstrapAiUsagebarDoctorReport }
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'ai-memory')   { $aiMemoryDoctor = New-BootstrapAiMemoryDoctorReport }
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'aionui')      { $aionUiDoctor = Get-BootstrapAionUiDoctorReport -ValidateProviders }
+    if ($isAll) {
+        $aiConfigDoctor = New-BootstrapAiConfigDoctorReport
+        $aiProxyDoctor = New-BootstrapAiProxySuiteDoctorReport
+    }
+
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'reboot') {
+        $rebootReasons = @()
+        try { $rebootReasons = @(Get-BootstrapPendingRebootReasons) } catch { $rebootReasons = @() }
         $checks.Add([ordered]@{
-            id = 'audit'
-            status = 'error'
-            severity = 'warning'
-            summary = "Audit resumido falhou: $($_.Exception.Message)"
+            id = 'pending-reboot'
+            status = $(if ($rebootReasons.Count -gt 0) { 'warning' } else { 'healthy' })
+            severity = $(if ($rebootReasons.Count -gt 0) { 'warning' } else { 'info' })
+            pending = ($rebootReasons.Count -gt 0)
+            reasons = @($rebootReasons)
+            summary = $(if ($rebootReasons.Count -gt 0) { "Reinicio pendente: $($rebootReasons -join ', ')" } else { 'Sem reinicio pendente detectado.' })
         })
     }
 
-    $phaseZeroBaseline = $null
-    try {
-        $phaseZeroBaseline = Invoke-BootstrapPhaseZeroBaselineProbe
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'winget') {
+        foreach ($tool in @(
+                @{ Label = 'winget'; CommandName = 'winget'; Args = @('--version') },
+                @{ Label = 'git'; CommandName = 'git'; Args = @('--version') },
+                @{ Label = 'node'; CommandName = 'node'; Args = @('-v') },
+                @{ Label = 'npm'; CommandName = 'npm'; Args = @('--version') },
+                @{ Label = 'dotnet'; CommandName = 'dotnet'; Args = @('--version') },
+                @{ Label = 'python'; CommandName = 'python'; Args = @('--version') },
+                @{ Label = 'gh'; CommandName = 'gh'; Args = @('--version') }
+            )) {
+            $checks.Add((Invoke-BootstrapDoctorCommandProbe -Label ([string]$tool['Label']) -CommandName ([string]$tool['CommandName']) -CommandArgs @($tool['Args']) -TimeoutMs 3000))
+        }
+    }
+
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'github') {
+        $githubCliAuth = Get-BootstrapGithubCliAuthHealth
+        $checks.Add($githubCliAuth)
+    }
+
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'wsl') {
+        $wslRepairDoctor = New-BootstrapWslRepairDoctorReport
+        $checks.Add((Get-BootstrapWslDoctorHealth))
+    }
+
+    if ($isAll) { $checks.Add((Get-BootstrapUiContractHealth)) }
+
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'rollback') {
         $checks.Add([ordered]@{
-            id = 'phasezero-baseline'
-            status = 'healthy'
-            severity = 'info'
-            summary = 'PhaseZero baseline audit concluido.'
-            phasezeroBaseline = $phaseZeroBaseline
-        })
-    } catch {
-        $checks.Add([ordered]@{
-            id = 'phasezero-baseline'
-            status = 'error'
-            severity = 'warning'
-            summary = "PhaseZero baseline audit falhou: $($_.Exception.Message)"
+            id = 'rollback-gate'
+            status = $(if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'tests\bootstrap-quality-gates.tests.ps1')) { 'healthy' } else { 'warning' })
+            severity = $(if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'tests\bootstrap-quality-gates.tests.ps1')) { 'info' } else { 'warning' })
+            summary = 'Rollback/mutation gate coberto por tests/bootstrap-quality-gates.tests.ps1.'
         })
     }
+
+    # Probes novos (cards/botoes dedicados): rodam SOMENTE quando o escopo e pedido explicitamente,
+    # nunca em 'all', para nao adicionar latencia ao Doctor completo/SupportBundle (legado).
+    if (@($Scopes) -contains 'agent-tools')          { $agentToolsDoctor = New-BootstrapAgentToolsDoctorReport }
+    if (@($Scopes) -contains 'windows-optimization') { $windowsOptimizationDoctor = New-BootstrapWindowsOptimizationDoctorReport }
+    if (@($Scopes) -contains 'mcp')                  { $mcpDoctor = New-BootstrapManagedMcpDoctorReport }
+    if (@($Scopes) -contains 'msvc')                 { $msvcDoctor = New-BootstrapMsvcDoctorReport }
+
+    # Audit pesado e baseline: somente no escopo 'all' (scoped fica rapido e focado).
+    if ($isAll) {
+        try {
+            $resolution = Resolve-BootstrapComponents -SelectedProfiles @('safe-base') -SelectedComponents @() -ExcludedComponents @()
+            $auditRows = @(Invoke-BootstrapAuditMode -Resolution $resolution -TimeoutSeconds $AuditTimeoutSeconds -ComponentTimeoutSeconds $AuditComponentTimeoutSeconds)
+            $auditSummary = New-BootstrapAuditSeveritySummary -Rows $auditRows
+        } catch {
+            $checks.Add([ordered]@{ id = 'audit'; status = 'error'; severity = 'warning'; summary = "Audit resumido falhou: $($_.Exception.Message)" })
+        }
+        try {
+            $phaseZeroBaseline = Invoke-BootstrapPhaseZeroBaselineProbe
+            $checks.Add([ordered]@{ id = 'phasezero-baseline'; status = 'healthy'; severity = 'info'; summary = 'PhaseZero baseline audit concluido.'; phasezeroBaseline = $phaseZeroBaseline })
+        } catch {
+            $checks.Add([ordered]@{ id = 'phasezero-baseline'; status = 'error'; severity = 'warning'; summary = "PhaseZero baseline audit falhou: $($_.Exception.Message)" })
+        }
+    }
+
+    if (Test-BootstrapDoctorScope -Scopes $Scopes -Name 'steamdeck') { $deckReport = New-BootstrapSteamDeckDoctorReport }
 
     $hasError = (@($checks | Where-Object { [string]($_['severity']) -eq 'error' }).Count -gt 0)
     $hasWarning = (@($checks | Where-Object { [string]($_['severity']) -eq 'warning' }).Count -gt 0)
@@ -32711,30 +32916,22 @@ function New-BootstrapDoctorReport {
     } catch {
         Write-Verbose $_.Exception.Message
     }
+    foreach ($scoped in @($deckReport, $wslRepairDoctor, $aionUiDoctor, $agentToolsDoctor, $msvcDoctor)) {
+        if ($null -eq $scoped) { continue }
+        try {
+            if ([string]$scoped['status'] -in @('warning','critical','blocked','degraded','error')) { $hasWarning = $true }
+        } catch {
+            Write-Verbose $_.Exception.Message
+        }
+    }
     $started.Stop()
 
-    $deckReport = New-BootstrapSteamDeckDoctorReport
-    try {
-        if ([string]$deckReport['status'] -in @('warning','critical')) { $hasWarning = $true }
-    } catch {
-        Write-Verbose $_.Exception.Message
-    }
-    try {
-        if ([string]$wslRepairDoctor['status'] -in @('warning','critical','blocked')) { $hasWarning = $true }
-    } catch {
-        Write-Verbose $_.Exception.Message
-    }
-    try {
-        if ([string]$aionUiDoctor['status'] -in @('warning','critical','blocked')) { $hasWarning = $true }
-    } catch {
-        Write-Verbose $_.Exception.Message
-    }
-
-    return [ordered]@{
+    $result = [ordered]@{
         schemaVersion = 1
         status = $(if ($hasError) { 'error' } elseif ($hasWarning) { 'warning' } else { 'success' })
         generatedAt = (Get-Date).ToString('o')
         durationMs = [long]$started.ElapsedMilliseconds
+        scopes = @($Scopes)
         checks = @($checks.ToArray())
         secrets = $secretsDoctor
         aiUsagebar = $aiUsagebarDoctor
@@ -32748,6 +32945,11 @@ function New-BootstrapDoctorReport {
         auditSummary = $auditSummary
         auditResults = @($auditRows)
     }
+    if ($null -ne $agentToolsDoctor)          { $result['agentTools'] = $agentToolsDoctor }
+    if ($null -ne $windowsOptimizationDoctor) { $result['windowsOptimization'] = $windowsOptimizationDoctor }
+    if ($null -ne $mcpDoctor)                 { $result['mcp'] = $mcpDoctor }
+    if ($null -ne $msvcDoctor)                { $result['msvc'] = $msvcDoctor }
+    return $result
 }
 
 function Add-BootstrapRepairPlanItem {
@@ -32823,6 +33025,51 @@ function New-BootstrapRepairPlan {
             if ($severity -notin @('NeedsInstall','NeedsRepair','RequiresRestart','ManualAction')) { continue }
             $risk = if ($severity -eq 'RequiresRestart') { 'high' } elseif ($severity -eq 'ManualAction') { 'medium' } else { 'low' }
             Add-BootstrapRepairPlanItem -Items $items -Id ("repair-{0}" -f $component) -Component $component -Risk $risk -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand "$repoCommand -Component $component -DryRun -NonInteractive" -ExecuteCommand "$repoCommand -Component $component -NonInteractive" -Reason ([string]$row.HowToFix)
+        }
+
+        # MSVC: DLLs do runtime VC++ ausentes -> reparo via componente vcpp-redist.
+        $msvc = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('msvc')) {
+                $msvc = $DoctorReport['msvc']
+            } elseif ($DoctorReport.PSObject.Properties['msvc']) {
+                $msvc = $DoctorReport.msvc
+            }
+        } catch { $msvc = $null }
+        if ($msvc) {
+            $msvcComponent = ''
+            try { $msvcComponent = [string]$msvc['repairComponent'] } catch { $msvcComponent = '' }
+            if (-not [string]::IsNullOrWhiteSpace($msvcComponent)) {
+                Add-BootstrapRepairPlanItem -Items $items -Id 'repair-msvc-runtime' -Component $msvcComponent -Risk 'low' -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand "$repoCommand -Component $msvcComponent -DryRun -NonInteractive" -ExecuteCommand "$repoCommand -Component $msvcComponent -NonInteractive" -Reason ('Runtime MSVC (VC++) ausente; reinstale o redistribuivel. ' + [string]$msvc['summary']) -ConfirmationRequired:$true
+            }
+        }
+
+        # Gestao tokens/memoria: itens de reparo das ferramentas de agente nao configuradas.
+        # Graphify e placeholder seguro (sem repairComponent) e NUNCA entra no plano.
+        $agentTools = $null
+        try {
+            if ($DoctorReport -is [System.Collections.IDictionary] -and $DoctorReport.Contains('agentTools')) {
+                $agentTools = $DoctorReport['agentTools']
+            } elseif ($DoctorReport.PSObject.Properties['agentTools']) {
+                $agentTools = $DoctorReport.agentTools
+            }
+        } catch { $agentTools = $null }
+        if ($agentTools) {
+            $toolsMap = $null
+            try { $toolsMap = $agentTools['tools'] } catch { $toolsMap = $null }
+            if ($toolsMap) {
+                foreach ($toolKey in @($toolsMap.Keys)) {
+                    $tool = $toolsMap[$toolKey]
+                    $configured = $false
+                    try { $configured = [bool]$tool['configured'] } catch { $configured = $false }
+                    $component = ''
+                    try { $component = [string]$tool['repairComponent'] } catch { $component = '' }
+                    if ($configured -or [string]::IsNullOrWhiteSpace($component)) { continue }
+                    $displayName = ''
+                    try { $displayName = [string]$tool['displayName'] } catch { $displayName = $component }
+                    Add-BootstrapRepairPlanItem -Items $items -Id ("repair-{0}" -f $component) -Component $component -Risk 'low' -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand "$repoCommand -Component $component -DryRun -NonInteractive" -ExecuteCommand "$repoCommand -Component $component -NonInteractive" -Reason ("Ferramenta de tokens/memoria nao configurada: {0}." -f $displayName) -ConfirmationRequired:$true
+                }
+            }
         }
     }
 
@@ -33343,8 +33590,9 @@ function Invoke-BootstrapReleasePackMode {
 }
 
 function Invoke-BootstrapDoctorMode {
-    Write-Log "Modo: Doctor"
-    $doctor = New-BootstrapDoctorReport -AuditTimeoutSeconds $AuditTimeoutSeconds -AuditComponentTimeoutSeconds $AuditComponentTimeoutSeconds
+    $scopes = Resolve-BootstrapDoctorScopes -Scopes $DoctorScope
+    Write-Log ("Modo: Doctor (scopes={0})" -f (@($scopes) -join ','))
+    $doctor = New-BootstrapDoctorReport -AuditTimeoutSeconds $AuditTimeoutSeconds -AuditComponentTimeoutSeconds $AuditComponentTimeoutSeconds -Scopes $scopes
     $repairPlan = New-BootstrapRepairPlan -DoctorReport $doctor
     $status = [string]$doctor['status']
     if ($status -eq 'error') { $status = 'warning' }
