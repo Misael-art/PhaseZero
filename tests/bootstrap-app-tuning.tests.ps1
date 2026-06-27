@@ -347,6 +347,95 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         $classification.blocking | Should Be $false
     }
 
+    It 'classifies PT-BR registry permission failures as non-blocking warnings' {
+        $item = [ordered]@{
+            id = 'chrome-background-off'
+            category = 'browser-startup'
+        }
+
+        $classification = Get-BootstrapAppTuningFailureClassification -Item $item -ErrorMessage 'Acesso ao Registro solicitado não é permitido.' -ExceptionType 'System.Management.Automation.MethodInvocationException'
+
+        $classification.severity | Should Be 'warning'
+        $classification.classification | Should Be 'permission-denied'
+        $classification.blocking | Should Be $false
+    }
+
+    It 'normalizes returned registry permission failures as non-blocking warnings' {
+        $result = Normalize-BootstrapAppTuningItemResult -Result ([ordered]@{
+            id = 'chrome-background-off'
+            status = 'failed'
+            error = 'Acesso ao Registro solicitado não é permitido.'
+            blocking = $true
+        })
+
+        [string]$result.status | Should Be 'failed'
+        [string]$result.severity | Should Be 'warning'
+        [string]$result.classification | Should Be 'permission-denied'
+        [bool]$result.blocking | Should Be $false
+    }
+
+    It 'marks browser startup success as non-blocking' {
+        Mock Apply-BootstrapRegistryDword {
+            return [ordered]@{ path = $Path; name = $Name; value = $Value; status = 'applied' }
+        }
+
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $TestDrive -ResolvedCloneBaseDir $TestDrive -AppTuningMode 'custom'
+        $result = Apply-BrowserStartupTuning -State $state -Item ([ordered]@{ id = 'chrome-background-off'; category = 'browser-startup'; installed = $true })
+
+        [string]$result.status | Should Be 'applied'
+        [bool]$result.blocking | Should Be $false
+    }
+
+    It 'marks browser startup registry permission failures as non-blocking' {
+        Mock Apply-BootstrapRegistryDword {
+            return [ordered]@{ path = $Path; name = $Name; value = $Value; status = 'failed'; error = 'Acesso ao Registro solicitado não é permitido.' }
+        }
+
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $TestDrive -ResolvedCloneBaseDir $TestDrive -AppTuningMode 'custom'
+        $result = Apply-BrowserStartupTuning -State $state -Item ([ordered]@{ id = 'chrome-background-off'; category = 'browser-startup'; installed = $true })
+
+        [string]$result.status | Should Be 'failed'
+        [string]$result.severity | Should Be 'warning'
+        [string]$result.classification | Should Be 'permission-denied'
+        [bool]$result.blocking | Should Be $false
+    }
+
+    It 'continues AppTuning when a browser registry tweak is denied' {
+        Mock Get-BootstrapInstalledAppInventory { return (New-AppTuningInventoryFixture -InstalledApps @('google chrome')) }
+        Mock Invoke-BootstrapAppTuningItem {
+            if ([string]$Item.id -eq 'chrome-background-off') {
+                throw 'Acesso ao Registro solicitado não é permitido.'
+            }
+            return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'applied' }
+        }
+
+        $state = New-BootstrapState -Selection @{} -ResolvedWorkspaceRoot $TestDrive -ResolvedCloneBaseDir $TestDrive -AppTuningMode 'custom'
+        $state.AppTuningReportRoot = Join-Path $TestDrive 'apptuning-report'
+        $plan = [ordered]@{
+            mode = 'custom'
+            categories = @('browser-startup')
+            requestedCategories = @('browser-startup')
+            requestedItems = @('chrome-background-off','edge-background-off')
+            excludedItems = @()
+            skippedItems = @()
+            installedInventory = New-AppTuningInventoryFixture -InstalledApps @('google chrome')
+            items = @(
+                [ordered]@{ id = 'chrome-background-off'; category = 'browser-startup'; installed = $true; status = 'pending'; targetApps = @('google chrome') },
+                [ordered]@{ id = 'edge-background-off'; category = 'browser-startup'; installed = $true; status = 'pending'; targetApps = @('microsoft edge') }
+            )
+        }
+
+        { Invoke-BootstrapAppTuning -State $state -Plan $plan } | Should Not Throw
+
+        @($state.AppTuningResults.ToArray()).Count | Should Be 2
+        $chrome = @($state.AppTuningResults.ToArray() | Where-Object { [string]$_['id'] -eq 'chrome-background-off' })[0]
+        [string]$chrome.status | Should Be 'failed'
+        [string]$chrome.severity | Should Be 'warning'
+        [bool]$chrome.blocking | Should Be $false
+        $resultJson = Get-Content -LiteralPath (Join-Path $state.AppTuningReportRoot 'result.json') -Raw | ConvertFrom-Json
+        @($resultJson.blockingFailures).Count | Should Be 0
+    }
+
     It 'classifies local execution failures as blocking' {
         $item = [ordered]@{
             id = 'notepadpp-defaults'

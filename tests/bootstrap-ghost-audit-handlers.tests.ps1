@@ -83,6 +83,20 @@ Describe 'Bootstrap ghost-audit extras (powertoys/terminal/docker)' {
             $paths = @($opencodeDesktop.ProbePaths)
             (@($paths | Where-Object { $_ -match 'OpenCode\\OpenCode\.exe' })).Count | Should BeGreaterThan 0
         }
+
+        It 'desktop AI apps cover current winget install locations and known machine-scope packages' {
+            $catalog = Get-BootstrapComponentCatalog
+
+            @(@($catalog['opencode-desktop'].ProbePaths) | Where-Object { $_ -match '@opencode-aidesktop\\OpenCode\.exe' }).Count | Should BeGreaterThan 0
+            @(@($catalog['perplexity'].ProbePaths) | Where-Object { $_ -match 'Perplexity\\Comet\\Application\\comet\.exe' }).Count | Should BeGreaterThan 0
+            @(@($catalog['ollama'].ProbePaths) | Where-Object { $_ -match 'Programs\\Ollama\\ollama\.exe' }).Count | Should BeGreaterThan 0
+            @(@($catalog['zed'].ProbePaths) | Where-Object { $_ -match 'Programs\\Zed\\Zed\.exe' }).Count | Should BeGreaterThan 0
+
+            [bool]$catalog['go-core'].PreferUserScope | Should Be $false
+            [bool]$catalog['autoclaw'].PreferUserScope | Should Be $false
+            [bool]$catalog['perplexity'].PreferUserScope | Should Be $false
+            [bool]$catalog['zed'].PreferUserScope | Should Be $false
+        }
     }
 
     Context 'Contrato generico de auditoria' {
@@ -92,9 +106,10 @@ Describe 'Bootstrap ghost-audit extras (powertoys/terminal/docker)' {
             $raw | Should Match 'GhostInstall'
         }
 
-        It 'usa Test-WingetProbePathsOnDisk no fallback generico para suportar globs' {
+        It 'usa verificador generico enriquecido no fallback para suportar globs, portable e registro' {
             $raw = Get-Content -LiteralPath $scriptPath -Raw
-            $raw | Should Match 'Test-WingetProbePathsOnDisk -ProbePaths \$probeList'
+            $raw | Should Match 'Test-BootstrapPackageArtifactsPresent -ProbePaths \$probeList'
+            $raw | Should Match 'Test-BootstrapWingetRegistryArtifact -Id \$WingetId'
         }
     }
 

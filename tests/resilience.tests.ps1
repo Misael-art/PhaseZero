@@ -533,6 +533,53 @@ Describe 'Resilience Architecture' {
             [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'rerun-elevated-or-repair-wsl'
         }
 
+        It 'marks WSL repair as restart-required after enabling Windows features' {
+            Mock Test-IsAdmin { return $true }
+            Mock Get-WindowsOptionalFeatureState { return 'Disabled' }
+            Mock Invoke-NativeWithLog { return 0 }
+            Mock Invoke-NativeCaptureWithLog { return @{ exitCode = 0; stdout = ''; stderr = ''; timedOut = $false } }
+            Mock Write-Log {}
+            $caught = $null
+
+            try {
+                Repair-BootstrapWslCorruption -WslExe 'C:\Windows\System32\wsl.exe' -State @{}
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'wsl-requires-reboot'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'restart-and-resume'
+        }
+
+        It 'stops WSL core setup after newly enabled features and asks for resume' {
+            Mock Ensure-BootstrapSystemCore {}
+            Mock Test-IsAdmin { return $true }
+            Mock Resolve-CommandPath {
+                param([string]$Name)
+                if ($Name -eq 'wsl.exe') { return 'C:\Windows\System32\wsl.exe' }
+                return $null
+            }
+            Mock Assert-BootstrapWslNotCorrupt { return @{ exitCode = 0; stdout = ''; stderr = ''; timedOut = $false } }
+            Mock Get-WindowsOptionalFeatureState { return 'Disabled' }
+            Mock Invoke-NativeWithLog { return 0 }
+            Mock Invoke-NativeCaptureWithLog { throw 'wsl --update must not run before reboot after enabling features' }
+            Mock Write-Log {}
+            $caught = $null
+
+            try {
+                Ensure-WslCore -State @{}
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'wsl-requires-reboot'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'restart-and-resume'
+        }
+
         It 'marks WSL as restart-required when only the AppX package is present' {
             $catalog = @{
                 'wsl-core' = New-BootstrapComponentDefinition -Name 'wsl-core' -Description 'WSL' -Optional $false -Kind 'wsl-core'
@@ -1075,6 +1122,34 @@ Welcome to .NET 8.0!
             [string]$state.ComponentStatus['antigravity'].status | Should Be 'skipped'
             [int]$state.SkippedComponents[0].exitCode | Should Be 124
         }
+
+        It 'Ensure-WingetPackage treats NO_APPLICATIONS_FOUND as install failure not soft success' {
+            Mock Test-WingetPackageInstalled { return $false }
+            Mock Get-BootstrapMsiHostilePendingRebootReasons { return @() }
+            Mock Test-IsAdmin { return $true }
+            Mock Test-BootstrapPackageArtifactsPresent { return $false }
+            Mock Refresh-SessionPath { throw 'Refresh-SessionPath must not run after package-not-found install failure' }
+            Mock Invoke-NativeWithRetry {
+                param([string]$Exe, [string[]]$Args, [string]$OperationName, [int[]]$SoftSuccessExitCodes)
+                if ($SoftSuccessExitCodes -contains -1978335212) { throw 'NO_APPLICATIONS_FOUND must not be a winget install soft success' }
+                return -1978335212
+            }
+            Mock Write-Log { }
+
+            $caught = $null
+            try {
+                Ensure-WingetPackage -WingetPath 'C:\Fake\winget.exe' -Id 'iOfficeAI.AionUi' -DisplayName 'AionUI' -PreferUserScope $false -AllowFailureWhenNotAdmin $false -ProbePaths @('C:\missing\aionui.exe')
+            } catch {
+                $caught = $_
+            }
+
+            $caught | Should Not Be $null
+            [string]$caught.Exception.Data['BootstrapStatus'] | Should Be 'blocked'
+            [string]$caught.Exception.Data['BootstrapBlockerKind'] | Should Be 'winget-package-not-found'
+            [string]$caught.Exception.Data['BootstrapAction'] | Should Be 'check-winget-id-or-source'
+            Assert-MockCalled Test-BootstrapPackageArtifactsPresent -Times 1 -Exactly -Scope It
+            Assert-MockCalled Refresh-SessionPath -Times 0 -Exactly -Scope It
+        }
     }
 
     Context 'Perfis e preflight manual/reboot' {
@@ -1534,7 +1609,7 @@ exit 0
 
         It 'Test-WingetSoftSuccessExit reconhece todos os codigos catalogados' {
             Test-WingetSoftSuccessExit -ExitCode -1978335189 | Should Be $true
-            Test-WingetSoftSuccessExit -ExitCode -1978335212 | Should Be $true
+            Test-WingetSoftSuccessExit -ExitCode -1978335212 | Should Be $false
             Test-WingetSoftSuccessExit -ExitCode -1978335215 | Should Be $true
             Test-WingetSoftSuccessExit -ExitCode 0 | Should Be $false
             Test-WingetSoftSuccessExit -ExitCode -1 | Should Be $false

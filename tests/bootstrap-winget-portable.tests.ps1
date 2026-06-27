@@ -57,6 +57,55 @@ Describe 'winget portable / per-user artifact detection' {
         }
     }
 
+    It 'detects executable artifacts from uninstall registry rows when fixed ProbePaths miss' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $work = Join-Path $env:TEMP ("pz-regartifact-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        $appDir = Join-Path $work 'Perplexity\Comet\Application'
+        New-Item -ItemType Directory -Path $appDir -Force | Out-Null
+        $exePath = Join-Path $appDir 'comet.exe'
+        Set-Content -Path $exePath -Value 'stub' -Encoding Ascii
+        try {
+            $rows = @(
+                [pscustomobject]@{
+                    DisplayName = 'Perplexity Comet'
+                    Publisher = 'Perplexity AI'
+                    InstallLocation = (Split-Path -Parent $appDir)
+                    DisplayIcon = ('"{0}",0' -f $exePath)
+                    PSChildName = 'Perplexity.Comet'
+                    URLInfoAbout = 'https://www.perplexity.ai/'
+                }
+            )
+            Test-BootstrapRegistryArtifactRows -Id 'Perplexity.Comet' -Rows $rows | Should Be $true
+        } finally {
+            Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'ignores uninstall and setup executables from registry artifact rows' {
+        . $scriptPath -BootstrapUiLibraryMode
+        $work = Join-Path $env:TEMP ("pz-regartifact-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        New-Item -ItemType Directory -Path $work -Force | Out-Null
+        $uninstallPath = Join-Path $work 'unins000.exe'
+        $setupPath = Join-Path $work 'setup.exe'
+        Set-Content -Path $uninstallPath -Value 'stub' -Encoding Ascii
+        Set-Content -Path $setupPath -Value 'stub' -Encoding Ascii
+        try {
+            $rows = @(
+                [pscustomobject]@{
+                    DisplayName = 'AionUI'
+                    Publisher = 'iOfficeAI'
+                    InstallLocation = $work
+                    DisplayIcon = ('"{0}"' -f $uninstallPath)
+                    PSChildName = 'iOfficeAI.AionUi'
+                    URLInfoAbout = ''
+                }
+            )
+            Test-BootstrapRegistryArtifactRows -Id 'iOfficeAI.AionUi' -Rows $rows | Should Be $false
+        } finally {
+            Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'obs-studio and treesize-free catalog entries include the real install locations in ProbePaths' {
         . $scriptPath -BootstrapUiLibraryMode
         $catalog = Get-BootstrapComponentCatalog

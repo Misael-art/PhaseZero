@@ -493,7 +493,7 @@ function Invoke-BootstrapRollback {
                         $uninstallArgs = @('uninstall', '-e', '--id', $target, '--purge', '--disable-interactivity')
                         try {
                             $exit = Invoke-NativeWithLog -Exe $winget -Args $uninstallArgs
-                            if ($exit -eq 0 -or ($script:WingetSoftSuccessExitCodes -contains $exit)) {
+                            if ($exit -eq 0 -or ($script:WingetUninstallSoftSuccessExitCodes -contains $exit)) {
                                 Write-Log ("Rollback manifest Package removido: {0}" -f $target)
                             } else {
                                 Write-Log ("Rollback manifest Package: winget uninstall {0} retornou exit={1}." -f $target, $exit) 'WARN'
@@ -1642,7 +1642,7 @@ function Invoke-BootstrapAuditMode {
             if ($probeScript) { $probeList = @($probeScript) }
             if ($probeList.Count -gt 0) {
                 $wingetId = [string]($def | Select-Object -ExpandProperty Id -ErrorAction SilentlyContinue)
-                $found = (Test-WingetProbePathsOnDisk -ProbePaths $probeList) -or (Test-BootstrapWingetPortableArtifact -Id $wingetId)
+                $found = Test-BootstrapPackageArtifactsPresent -ProbePaths $probeList -WingetId $wingetId
                 if ($found) {
                     $status = 'Healthy'
                     $detail = 'ProbePaths encontrado.'
@@ -1776,7 +1776,7 @@ function Invoke-BootstrapAuditMode {
                     $probeList = @()
                     if ($probeScript) { $probeList = @($probeScript) }
                     if ($probeList.Count -gt 0) {
-                        $diskFound = (Test-WingetProbePathsOnDisk -ProbePaths $probeList) -or (Test-BootstrapWingetPortableArtifact -Id $wid)
+                        $diskFound = Test-BootstrapPackageArtifactsPresent -ProbePaths $probeList -WingetId $wid
                         if ($diskFound) {
                             $status = 'Healthy'
                             $detail = "winget: pacote $wid presente; binario verificado em disco."
@@ -3286,23 +3286,34 @@ function Invoke-BootstrapExecutionPreflight {
     Write-Log 'Preflight operacional concluido.'
 }
 
-# Exit codes do winget que NAO indicam falha real e nao devem disparar retry-loop.
+# Exit codes de operacoes winget de pacote que NAO indicam falha real e nao devem disparar retry-loop.
 # Documentacao: https://learn.microsoft.com/en-us/windows/package-manager/winget/returnCodes
 # - -1978335189 (0x8A15002B) APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE: pacote ja instalado, nada a atualizar.
-# - -1978335212 (0x8A150014) APPINSTALLER_CLI_ERROR_NO_APPLICATIONS_FOUND: pacote nao encontrado em list (esperado).
 # - -1978335215 (0x8A150011) APPINSTALLER_CLI_ERROR_PACKAGE_ALREADY_INSTALLED.
+# Nao incluir -1978335212 aqui: em winget list significa "nao instalado", mas em winget install
+# significa pacote indisponivel para o criterio informado.
 # Em PowerShell 5.1 esses codigos sao truncados para o int32 nativo; quando o LASTEXITCODE retorna
 # como -1 cru, vem de Win32 (API saida sem traduzir o HRESULT). Tratamos ambos.
 $script:WingetSoftSuccessExitCodes = @(
     -1978335189,
-    -1978335212,
     -1978335215
+)
+
+# Codigos de saida do winget em que "list" sem correspondencia significa pacote nao instalado
+# (comportamento normal, nao falha operacional).
+$script:WingetListExitCodesNotInstalled = @(
+    -1978335212
+)
+
+$script:WingetUninstallSoftSuccessExitCodes = @(
+    @($script:WingetSoftSuccessExitCodes) + @($script:WingetListExitCodesNotInstalled)
 )
 
 $script:WingetNonRetryableInstallExitCodes = @(
     -1978335231,
     -1978335230,
     -1978335207,
+    -1978335212,
     -1978335216
 )
 
@@ -5059,12 +5070,17 @@ function Ensure-WindowsOptionalFeatureEnabled {
     $state = Get-WindowsOptionalFeatureState -FeatureName $FeatureName
     if ($state -eq 'Enabled') {
         Write-Log "$DisplayName já habilitado."
-        return
+        return [ordered]@{ featureName = $FeatureName; displayName = $DisplayName; previousState = $state; status = 'enabled'; changed = $false; restartRequired = $false; exitCode = 0 }
+    }
+
+    if ($state -eq 'EnablePending') {
+        Write-Log "$DisplayName ja esta pendente de reinicio." 'WARN'
+        return [ordered]@{ featureName = $FeatureName; displayName = $DisplayName; previousState = $state; status = 'requires-reboot'; changed = $false; restartRequired = $true; exitCode = 3010 }
     }
 
     if (-not (Test-IsAdmin)) {
         Write-Log "$DisplayName requer privilégios de administrador para habilitar. Pulando." 'WARN'
-        return
+        return [ordered]@{ featureName = $FeatureName; displayName = $DisplayName; previousState = $state; status = 'skipped'; changed = $false; restartRequired = $false; exitCode = $null }
     }
 
     Write-Log "Habilitando recurso do Windows: $DisplayName ($FeatureName)..."
@@ -5077,6 +5093,35 @@ function Ensure-WindowsOptionalFeatureEnabled {
     )
     if (($exitCode -ne 0) -and ($exitCode -ne 3010)) { throw "Falha ao habilitar recurso do Windows: $DisplayName (exit=$exitCode)." }
     Write-Log "$DisplayName habilitado. Pode ser necessario reiniciar o Windows." 'WARN'
+    return [ordered]@{ featureName = $FeatureName; displayName = $DisplayName; previousState = $state; status = 'requires-reboot'; changed = $true; restartRequired = $true; exitCode = $exitCode }
+}
+
+function Test-BootstrapWindowsFeatureResultsRequireReboot {
+    param([AllowNull()][object[]]$Results)
+
+    foreach ($result in @($Results)) {
+        $row = ConvertTo-BootstrapHashtable -InputObject $result
+        if ($row -is [hashtable] -and (Test-BootstrapMapContainsKey -Map $row -Key 'restartRequired') -and [bool]$row['restartRequired']) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function New-BootstrapWslRestartRequiredException {
+    param([AllowNull()][object[]]$FeatureResults)
+
+    $features = @()
+    foreach ($result in @($FeatureResults)) {
+        $row = ConvertTo-BootstrapHashtable -InputObject $result
+        if ($row -is [hashtable] -and (Test-BootstrapMapContainsKey -Map $row -Key 'restartRequired') -and [bool]$row['restartRequired']) {
+            $name = if (Test-BootstrapMapContainsKey -Map $row -Key 'displayName') { [string]$row['displayName'] } else { [string]$row['featureName'] }
+            if (-not [string]::IsNullOrWhiteSpace($name)) { $features += @($name) }
+        }
+    }
+    if ($features.Count -eq 0) { $features = @('WSL/VirtualMachinePlatform') }
+    $message = "WSL habilitou recurso(s) do Windows ou encontrou feature em estado pendente ({0}). Reinicie o Windows e rode novamente com -Resume antes de tentar reparar Microsoft.WSL." -f ($features -join ', ')
+    return (New-BootstrapBlockedException -Message $message -Kind 'wsl-requires-reboot' -Action 'restart-and-resume' -Reasons (@('wsl-feature-requires-reboot') + $features))
 }
 
 function Get-BootstrapWindowsCapabilityState {
@@ -5125,7 +5170,7 @@ function Ensure-BootstrapWindowsFeatureComponent {
     foreach ($feature in $features) {
         $oldState = Get-WindowsOptionalFeatureState -FeatureName $feature
         if ($oldState -eq 'Enabled') { continue }
-        Ensure-WindowsOptionalFeatureEnabled -FeatureName $feature -DisplayName $feature
+        $null = Ensure-WindowsOptionalFeatureEnabled -FeatureName $feature -DisplayName $feature
         Register-BootstrapChange -State $State -Type WindowsFeature -Target $feature -OldValue $oldState -NewValue 'Enabled' -Operation 'enable-windows-feature' -Component $ComponentName
         $changed.Add($feature)
     }
@@ -5611,7 +5656,7 @@ function Ensure-WslUi {
         return
     }
 
-    Ensure-WindowsOptionalFeatureEnabled -FeatureName 'Microsoft-Windows-Subsystem-Linux' -DisplayName 'Microsoft-Windows-Subsystem-Linux (WSL)'
+    $null = Ensure-WindowsOptionalFeatureEnabled -FeatureName 'Microsoft-Windows-Subsystem-Linux' -DisplayName 'Microsoft-Windows-Subsystem-Linux (WSL)'
     Ensure-WingetPackage -WingetPath $WingetPath -Id 'Microsoft.EdgeWebView2Runtime' -DisplayName 'Microsoft Edge WebView2 Runtime'
 
     try {
@@ -5715,6 +5760,176 @@ function Test-BootstrapWingetPortableArtifact {
         if ($exe.Count -gt 0) { return $true }
     }
     return $false
+}
+
+function ConvertTo-BootstrapArtifactComparableText {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    return [regex]::Replace(([string]$Value).ToLowerInvariant(), '[^a-z0-9]+', '')
+}
+
+function Get-BootstrapRegistryArtifactSearchTerms {
+    param([string]$Id)
+
+    if ([string]::IsNullOrWhiteSpace($Id)) { return @() }
+    $ignored = @{
+        app = $true
+        com = $true
+        desktop = $true
+        inc = $true
+        installer = $true
+        llc = $true
+        ltd = $true
+        microsoft = $true
+        net = $true
+        org = $true
+        setup = $true
+        team = $true
+        windows = $true
+    }
+    $terms = New-Object System.Collections.Generic.List[string]
+    foreach ($part in @(([string]$Id) -split '[\.\-_\s]+')) {
+        $term = ConvertTo-BootstrapArtifactComparableText -Value $part
+        if ($term.Length -lt 3) { continue }
+        if ($ignored.ContainsKey($term)) { continue }
+        if (-not $terms.Contains($term)) { $terms.Add($term) }
+    }
+    return @($terms.ToArray())
+}
+
+function ConvertFrom-BootstrapRegistryExecutableReference {
+    param([AllowNull()][string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+    $text = ([string]$Value).Trim()
+    if ($text -match '^\s*"([^"]+?\.exe)"') { return [string]$matches[1] }
+    if ($text -match '^\s*([^,"]+?\.exe)(?:,.*)?\s*$') { return ([string]$matches[1]).Trim() }
+    if ($text -match '([A-Za-z]:\\[^,"]+?\.exe)') { return ([string]$matches[1]).Trim() }
+    return ''
+}
+
+function Test-BootstrapRegistryArtifactExecutableName {
+    param([AllowNull()][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $leaf = Split-Path -Path ([string]$Path) -Leaf
+    if ([string]::IsNullOrWhiteSpace($leaf)) { return $false }
+    return ($leaf -notmatch '(?i)^(unins\d*|uninstall|setup|install|installer|update|updater|elevate|elevator|vc_redist|vcredist|dotnet).*\.exe$')
+}
+
+function Test-BootstrapRegistryArtifactPathMatchesTerms {
+    param(
+        [AllowNull()][string]$Path,
+        [string[]]$Terms = @()
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $text = ConvertTo-BootstrapArtifactComparableText -Value $Path
+    foreach ($term in @(Get-BootstrapNonEmptyStringArray -Values $Terms)) {
+        if ($text.Contains($term)) { return $true }
+    }
+    return $false
+}
+
+function Test-BootstrapRegistryArtifactPath {
+    param(
+        [AllowNull()][string]$Path,
+        [string[]]$Terms = @()
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $false }
+    $expanded = ConvertTo-BootstrapExpandedPath -Path ([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($expanded)) { return $false }
+    $expanded = $expanded.Trim('"')
+
+    $item = $null
+    try { $item = Get-Item -LiteralPath $expanded -ErrorAction SilentlyContinue } catch { $item = $null }
+    if (-not $item) { return $false }
+
+    if (-not $item.PSIsContainer) {
+        return ((Test-BootstrapRegistryArtifactExecutableName -Path $item.FullName) -and (Test-BootstrapRegistryArtifactPathMatchesTerms -Path $item.FullName -Terms $Terms))
+    }
+
+    $executables = @()
+    try {
+        $executables = @(Get-ChildItem -LiteralPath $item.FullName -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue | Select-Object -First 50)
+    } catch {
+        $executables = @()
+    }
+    foreach ($exe in @($executables)) {
+        if ((Test-BootstrapRegistryArtifactExecutableName -Path $exe.FullName) -and (Test-BootstrapRegistryArtifactPathMatchesTerms -Path $exe.FullName -Terms $Terms)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Test-BootstrapRegistryArtifactRows {
+    param(
+        [string]$Id,
+        [object[]]$Rows = @()
+    )
+
+    $terms = @(Get-BootstrapRegistryArtifactSearchTerms -Id $Id)
+    if ($terms.Count -eq 0) { return $false }
+
+    foreach ($row in @($Rows)) {
+        if ($null -eq $row) { continue }
+        $textFields = @(
+            (Get-BootstrapHintField -Hint $row -Name 'DisplayName')
+            (Get-BootstrapHintField -Hint $row -Name 'Publisher')
+            (Get-BootstrapHintField -Hint $row -Name 'InstallLocation')
+            (Get-BootstrapHintField -Hint $row -Name 'DisplayIcon')
+            (Get-BootstrapHintField -Hint $row -Name 'URLInfoAbout')
+            (Get-BootstrapHintField -Hint $row -Name 'PSChildName')
+            (Get-BootstrapHintField -Hint $row -Name 'PSPath')
+        )
+        $rowText = ConvertTo-BootstrapArtifactComparableText -Value (($textFields | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }) -join ' ')
+        $rowMatchesId = $false
+        foreach ($term in @($terms)) {
+            if ($rowText.Contains($term)) { $rowMatchesId = $true; break }
+        }
+        if (-not $rowMatchesId) { continue }
+
+        $iconPath = ConvertFrom-BootstrapRegistryExecutableReference -Value (Get-BootstrapHintField -Hint $row -Name 'DisplayIcon')
+        if ((Test-BootstrapRegistryArtifactPath -Path $iconPath -Terms $terms)) { return $true }
+
+        $installLocation = Get-BootstrapHintField -Hint $row -Name 'InstallLocation'
+        if ((Test-BootstrapRegistryArtifactPath -Path $installLocation -Terms $terms)) { return $true }
+    }
+    return $false
+}
+
+function Get-BootstrapWingetRegistryArtifactRows {
+    $roots = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in @(Get-ItemProperty -Path $roots -ErrorAction SilentlyContinue)) {
+        $rows.Add([ordered]@{
+            DisplayName = (Get-BootstrapHintField -Hint $entry -Name 'DisplayName')
+            Publisher = (Get-BootstrapHintField -Hint $entry -Name 'Publisher')
+            InstallLocation = (Get-BootstrapHintField -Hint $entry -Name 'InstallLocation')
+            DisplayIcon = (Get-BootstrapHintField -Hint $entry -Name 'DisplayIcon')
+            URLInfoAbout = (Get-BootstrapHintField -Hint $entry -Name 'URLInfoAbout')
+            PSChildName = (Get-BootstrapHintField -Hint $entry -Name 'PSChildName')
+            PSPath = (Get-BootstrapHintField -Hint $entry -Name 'PSPath')
+        })
+    }
+    return @($rows.ToArray())
+}
+
+function Test-BootstrapWingetRegistryArtifact {
+    param([string]$Id)
+
+    if ([string]::IsNullOrWhiteSpace($Id)) { return $false }
+    $rows = @()
+    try { $rows = @(Get-BootstrapWingetRegistryArtifactRows) } catch { $rows = @() }
+    if ($rows.Count -eq 0) { return $false }
+    return (Test-BootstrapRegistryArtifactRows -Id $Id -Rows $rows)
 }
 
 function Get-BootstrapItemStatusInfo {
@@ -5876,6 +6091,9 @@ function Test-BootstrapPackageArtifactsPresent {
     if (-not [string]::IsNullOrWhiteSpace($WingetId) -and (Test-BootstrapWingetPortableArtifact -Id $WingetId)) {
         return $true
     }
+    if (-not [string]::IsNullOrWhiteSpace($WingetId) -and (Test-BootstrapWingetRegistryArtifact -Id $WingetId)) {
+        return $true
+    }
     return $false
 }
 
@@ -5926,7 +6144,7 @@ function Invoke-BootstrapGhostPackageRecovery {
     # 1. winget uninstall (com retry/backoff)
     $uninstallArgs = @('uninstall', '-e', '--id', $Id, '--purge', '--disable-interactivity')
     try {
-        $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $uninstallArgs -OperationName ("Ghost-recovery: winget uninstall {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+        $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $uninstallArgs -OperationName ("Ghost-recovery: winget uninstall {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetUninstallSoftSuccessExitCodes
         if ($exit -eq 0) { $cleaned = $true }
     } catch {
         Write-Log ("Ghost-recovery: excecao em winget uninstall de {0}: {1}" -f $DisplayName, $_.Exception.Message) 'WARN'
@@ -5935,7 +6153,7 @@ function Invoke-BootstrapGhostPackageRecovery {
     if (-not $cleaned) {
         $forceArgs = @('uninstall', '-e', '--id', $Id, '--purge', '--force', '--disable-interactivity')
         try {
-            $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $forceArgs -OperationName ("Ghost-recovery: winget uninstall --force {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+            $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $forceArgs -OperationName ("Ghost-recovery: winget uninstall --force {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetUninstallSoftSuccessExitCodes
             if ($exit -eq 0) { $cleaned = $true }
         } catch {
             Write-Log ("Ghost-recovery: excecao em winget --force de {0}: {1}" -f $DisplayName, $_.Exception.Message) 'WARN'
@@ -5945,7 +6163,7 @@ function Invoke-BootstrapGhostPackageRecovery {
     if (-not $cleaned) {
         $allVersionsArgs = @('uninstall', '-e', '--id', $Id, '--all-versions', '--purge', '--force', '--disable-interactivity')
         try {
-            $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $allVersionsArgs -OperationName ("Ghost-recovery: winget uninstall --all-versions {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+            $exit = Invoke-NativeWithRetry -Exe $WingetPath -Args $allVersionsArgs -OperationName ("Ghost-recovery: winget uninstall --all-versions {0}" -f $DisplayName) -MaxAttempts 2 -InitialDelaySeconds 2 -SoftSuccessExitCodes $script:WingetUninstallSoftSuccessExitCodes
             if ($exit -eq 0) { $cleaned = $true }
         } catch {
             Write-Log ("Ghost-recovery: excecao em winget --all-versions de {0}: {1}" -f $DisplayName, $_.Exception.Message) 'WARN'
@@ -6164,8 +6382,21 @@ function Ensure-WingetPackage {
         Write-Log $message 'WARN'
         throw (New-BootstrapBlockedException -Message $message -Kind 'winget-machine-scope-requires-admin' -Action 'rerun-elevated-or-install-manually' -Reasons @('not-admin', $Id))
     }
+    $handlePackageNotFound = {
+        param([int]$Code)
+        if ($Code -ne -1978335212) { return $false }
+        $message = "{0} indisponivel no winget para o criterio informado (id={1}, exit={2}, 0x8A150014). Verifique Id/source/arquitetura ou instale manualmente." -f $DisplayName, $Id, $Code
+        if ($AllowFailureWhenNotAdmin) {
+            Write-Log $message 'WARN'
+            Register-BootstrapComponentSkip -State $State -ComponentName $ComponentName -Reason 'winget-package-not-found' -Message $message -Action 'check-winget-id-or-source' -PackageId $Id -DisplayName $DisplayName -ExitCode $Code
+            return $true
+        }
+        Write-Log $message 'WARN'
+        throw (New-BootstrapBlockedException -Message $message -Kind 'winget-package-not-found' -Action 'check-winget-id-or-source' -Reasons @('NO_APPLICATIONS_FOUND', $Id))
+    }
     if ($PreferUserScope) {
         $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsSilent) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
+        if (& $handlePackageNotFound $exitCode) { return }
         if ($exitCode -ne 0 -and $isNonAdminSkippable -and (($exitCode -eq 124) -or ($nonRetryableCodes -contains $exitCode))) {
             $skip = & $resolveSkip $exitCode
             Write-Log $skip.Message 'WARN'
@@ -6179,6 +6410,7 @@ function Ensure-WingetPackage {
         } elseif ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --scope user --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
             $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args (@($commonArgsBase) + @('--scope', 'user')) -OperationName "$DisplayName via winget --scope user" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
+            if (& $handlePackageNotFound $exitCode) { return }
         }
         if ($exitCode -ne 0 -and $isNonAdminSkippable) {
             $skip = & $resolveSkip $exitCode
@@ -6198,9 +6430,11 @@ function Ensure-WingetPackage {
             if (& $handleMachineScopeWithoutAdmin $exitCode) { return }
         }
         $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsSilent -OperationName "$DisplayName via winget --silent" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
+        if (& $handlePackageNotFound $exitCode) { return }
         if ($exitCode -ne 0) {
             Write-Log "Falha ao instalar $DisplayName com --silent (winget). Tentando novamente em modo nao-silent..." 'WARN'
             $exitCode = Invoke-NativeWithRetry -Exe $WingetPath -Args $commonArgsBase -OperationName "$DisplayName via winget" -MaxAttempts $wingetInstallMaxAttempts -InitialDelaySeconds $wingetInitialDelaySeconds -TimeoutMs $wingetInstallTimeoutMs -SoftSuccessExitCodes $softCodes -NonRetryableExitCodes $nonRetryableCodes
+            if (& $handlePackageNotFound $exitCode) { return }
         }
     }
     if ($exitCode -ne 0) {
@@ -6250,12 +6484,6 @@ function Ensure-WingetPackage {
 
     Write-Log "Instalação concluída: $DisplayName"
 }
-
-# Codigos de saida do winget em que "list" sem correspondencia significa pacote nao instalado (comportamento normal, nao falha operacional).
-# Ver: https://github.com/microsoft/winget-cli/blob/master/doc/windows/package-manager/winget/returnCodes.md (0x8A150014)
-$script:WingetListExitCodesNotInstalled = @(
-    -1978335212
-)
 
 function Invoke-WingetListIdProbe {
     <#
@@ -10001,7 +10229,7 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'zcode' -DisplayName 'ZCode (Z.ai)' -Components @('zcode') -TargetApps @('zcode','z code','z.ai zcode') -ProbePaths @('$env:LOCALAPPDATA\Programs\ZCode\ZCode.exe','$env:ProgramFiles\ZCode\ZCode.exe','$env:APPDATA\ai.z.zcode\store.json') -Profiles @('desktop','dev') -Category 'ia'
         New-BootstrapOnDemandAppDefinition -Id 'windsurf' -DisplayName 'Windsurf' -Components @('windsurf') -TargetApps @('windsurf') -ProbePaths @('$env:LOCALAPPDATA\Programs\Windsurf\Windsurf.exe','$env:APPDATA\Windsurf\User') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'trae' -DisplayName 'Trae' -Components @('trae') -TargetApps @('trae') -ProbePaths @('$env:LOCALAPPDATA\Programs\Trae\Trae.exe') -Profiles @('desktop','dev')
-        New-BootstrapOnDemandAppDefinition -Id 'zed' -DisplayName 'Zed' -Components @('zed') -TargetApps @('zed') -ProbePaths @('$env:LOCALAPPDATA\Programs\Zed\Zed.exe','$env:APPDATA\Zed\settings.json') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'zed' -DisplayName 'Zed' -Components @('zed') -TargetApps @('zed') -ProbePaths @('$env:LOCALAPPDATA\Programs\Zed\Zed.exe','$env:LOCALAPPDATA\Programs\Zed\bin\zed.exe','$env:APPDATA\Zed\settings.json') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'git' -DisplayName 'Git' -Components @('git-core') -TargetApps @('git') -ProbePaths @('$env:ProgramFiles\Git\cmd\git.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'node' -DisplayName 'Node.js LTS' -Components @('node-core') -TargetApps @('node.js','node') -ProbePaths @('$env:ProgramFiles\nodejs\node.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'python' -DisplayName 'Python' -Components @('python-core') -TargetApps @('python') -ProbePaths @('$env:LOCALAPPDATA\Programs\Python') -Profiles @('desktop','dev')
@@ -10020,7 +10248,7 @@ function Get-BootstrapOnDemandAppDefinitions {
         New-BootstrapOnDemandAppDefinition -Id 'codex-cli' -DisplayName 'Codex CLI' -Components @('codex-cli') -TargetApps @('codex') -ProbePaths @('$env:APPDATA\npm\codex.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'gemini-cli' -DisplayName 'Gemini CLI' -Components @('gemini-cli') -TargetApps @('gemini') -ProbePaths @('$env:APPDATA\npm\gemini.cmd') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'kilo-cli' -DisplayName 'Kilo CLI' -Components @('kilo-cli') -TargetApps @('kilo','kilocode') -ProbePaths @('$env:APPDATA\npm\kilo.cmd','$env:APPDATA\npm\kilocode.cmd','$env:USERPROFILE\.local\share\kilo\auth.json') -Profiles @('desktop','dev')
-        New-BootstrapOnDemandAppDefinition -Id 'ollama' -DisplayName 'Ollama' -Components @('ollama') -TargetApps @('ollama') -ProbePaths @('$env:LOCALAPPDATA\Programs\Ollama\ollama.exe') -Profiles @('desktop','dev')
+        New-BootstrapOnDemandAppDefinition -Id 'ollama' -DisplayName 'Ollama' -Components @('ollama') -TargetApps @('ollama') -ProbePaths @('$env:LOCALAPPDATA\Programs\Ollama\ollama.exe','$env:LOCALAPPDATA\Programs\Ollama\ollama app.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'lm-studio' -DisplayName 'LM Studio' -Components @('lm-studio') -TargetApps @('lm studio') -ProbePaths @('$env:LOCALAPPDATA\Programs\LM Studio\LM Studio.exe') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'cherry-studio' -DisplayName 'Cherry Studio' -Components @('cherry-studio') -TargetApps @('cherry studio') -ProbePaths @('$env:APPDATA\CherryStudio') -Profiles @('desktop','dev')
         New-BootstrapOnDemandAppDefinition -Id 'pinokio' -DisplayName 'Pinokio' -Components @('pinokio') -TargetApps @('pinokio') -ProbePaths @('$env:LOCALAPPDATA\Programs\Pinokio') -Profiles @('desktop','dev')
@@ -14609,7 +14837,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['git-lfs'] = New-BootstrapComponentDefinition -Name 'git-lfs' -Description 'Git LFS e inicialização local.' -DependsOn @('git-core') -Kind 'git-lfs' -EstimatedSizeGB 0.1 -RequiresNetwork $true
     $catalog['node-core'] = New-BootstrapComponentDefinition -Name 'node-core' -Description 'Node.js LTS e npm global bin.' -DependsOn @('system-core') -Optional $false -Kind 'node-core' -EstimatedSizeGB 1.0 -RequiresNetwork $true -VersionCheckCommand 'node -v'
     $catalog['python-core'] = New-BootstrapComponentDefinition -Name 'python-core' -Description 'Python 3.13, PATH e uv.' -DependsOn @('system-core') -Optional $false -Kind 'python-core' -EstimatedSizeGB 1.5 -RequiresNetwork $true -VersionCheckCommand 'python --version'
-    $catalog['go-core'] = New-BootstrapComponentDefinition -Name 'go-core' -Description 'Go toolchain para proxies locais em Go.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'GoLang.Go'; DisplayName = 'Go'; ProbePaths = @("$env:ProgramFiles\Go\bin\go.exe", "${env:LOCALAPPDATA}\Programs\Go\bin\go.exe") } -EstimatedSizeGB 0.8 -RequiresNetwork $true -VersionCheckCommand 'go version'
+    $catalog['go-core'] = New-BootstrapComponentDefinition -Name 'go-core' -Description 'Go toolchain para proxies locais em Go.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; PreferUserScope = $false; Id = 'GoLang.Go'; DisplayName = 'Go'; ProbePaths = @("$env:ProgramFiles\Go\bin\go.exe", "${env:LOCALAPPDATA}\Programs\Go\bin\go.exe") } -EstimatedSizeGB 0.8 -RequiresNetwork $true -VersionCheckCommand 'go version'
     $catalog['java-core'] = New-BootstrapComponentDefinition -Name 'java-core' -Description 'Temurin JDK 17.' -DependsOn @('system-core') -Optional $false -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'EclipseAdoptium.Temurin.17.JDK'; DisplayName = 'Java JDK (Temurin 17)'; ProbePaths = @("$env:ProgramFiles\Eclipse Adoptium\jdk-17*\bin\java.exe") } -EstimatedSizeGB 2.0 -RequiresNetwork $true -VersionCheckCommand 'java -version'
     $catalog['dotnet-core'] = New-BootstrapComponentDefinition -Name 'dotnet-core' -Description 'Microsoft .NET SDK 8 (LTS), PATH e verificacao dotnet --list-sdks. Palavras-chave na busca da UI: dotnet, dotnet core, net8, sdk8, winget Microsoft.DotNet.SDK.8.' -DependsOn @('system-core') -Optional $false -Kind 'dotnet-core' -EstimatedSizeGB 1.2 -RequiresNetwork $true -VersionCheckCommand 'dotnet --list-sdks'
     $catalog['imagemagick'] = New-BootstrapComponentDefinition -Name 'imagemagick' -Description 'ImageMagick.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ImageMagick.ImageMagick'; DisplayName = 'ImageMagick'; ProbePaths = @("$env:ProgramFiles\ImageMagick-*\magick.exe", "$env:ProgramFiles\ImageMagick\magick.exe") }
@@ -14637,14 +14865,14 @@ function Get-BootstrapComponentCatalog {
     $catalog['windsurf'] = New-BootstrapComponentDefinition -Name 'windsurf' -Description 'Windsurf.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Codeium.Windsurf'; DisplayName = 'Windsurf'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Windsurf\Windsurf.exe", "$env:ProgramFiles\Windsurf\Windsurf.exe") }
     $catalog['warp'] = New-BootstrapComponentDefinition -Name 'warp' -Description 'Warp terminal.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Warp.Warp'; DisplayName = 'Warp'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Warp\Warp.exe", "$env:ProgramFiles\Warp\Warp.exe") }
     $catalog['trae'] = New-BootstrapComponentDefinition -Name 'trae' -Description 'Trae desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ByteDance.Trae'; DisplayName = 'Trae'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Trae\Trae.exe", "$env:ProgramFiles\Trae\Trae.exe") }
-    $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\OpenCode Desktop\OpenCode Desktop.exe", "$env:ProgramFiles\OpenCode Desktop\OpenCode Desktop.exe", "$env:ProgramFiles\OpenCode\OpenCode.exe") }
+    $catalog['opencode-desktop'] = New-BootstrapComponentDefinition -Name 'opencode-desktop' -Description 'OpenCode Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'SST.OpenCodeDesktop'; DisplayName = 'OpenCode Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\@opencode-aidesktop\OpenCode.exe", "${env:LOCALAPPDATA}\Programs\OpenCode Desktop\OpenCode Desktop.exe", "$env:ProgramFiles\OpenCode Desktop\OpenCode Desktop.exe", "$env:ProgramFiles\OpenCode\OpenCode.exe") }
     $catalog['vscode'] = New-BootstrapComponentDefinition -Name 'vscode' -Description 'VS Code estável.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode'; DisplayName = 'Visual Studio Code'; ProbePaths = @("$env:ProgramFiles\Microsoft VS Code\Code.exe", "${env:LOCALAPPDATA}\Programs\Microsoft VS Code\Code.exe") }
     $catalog['vscode-insiders'] = New-BootstrapComponentDefinition -Name 'vscode-insiders' -Description 'VS Code Insiders.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Microsoft.VisualStudioCode.Insiders'; DisplayName = 'Visual Studio Code - Insiders'; ProbePaths = @("$env:ProgramFiles\Microsoft VS Code Insiders\Code - Insiders.exe", "${env:LOCALAPPDATA}\Programs\Microsoft VS Code Insiders\Code - Insiders.exe") }
     $catalog['antigravity'] = New-BootstrapComponentDefinition -Name 'antigravity' -Description 'Google Antigravity.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Google.Antigravity'; DisplayName = 'Antigravity'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Antigravity\Antigravity.exe", "${env:LOCALAPPDATA}\Google\Antigravity\Antigravity.exe", "$env:ProgramFiles\Google\Antigravity\Antigravity.exe") }
-    $catalog['autoclaw'] = New-BootstrapComponentDefinition -Name 'autoclaw' -Description 'AutoClaw.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZhipuAI.AutoClaw'; DisplayName = 'AutoClaw'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\AutoClaw\AutoClaw.exe", "$env:ProgramFiles\AutoClaw\AutoClaw.exe") }
-    $catalog['perplexity'] = New-BootstrapComponentDefinition -Name 'perplexity' -Description 'Perplexity Comet.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Perplexity.Comet'; DisplayName = 'Perplexity'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Comet\Comet.exe", "$env:ProgramFiles\Comet\Comet.exe") }
+    $catalog['autoclaw'] = New-BootstrapComponentDefinition -Name 'autoclaw' -Description 'AutoClaw.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; PreferUserScope = $false; Id = 'ZhipuAI.AutoClaw'; DisplayName = 'AutoClaw'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\AutoClaw\AutoClaw.exe", "$env:ProgramFiles\AutoClaw\AutoClaw.exe") }
+    $catalog['perplexity'] = New-BootstrapComponentDefinition -Name 'perplexity' -Description 'Perplexity Comet.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; PreferUserScope = $false; Id = 'Perplexity.Comet'; DisplayName = 'Perplexity'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Comet\Comet.exe", "$env:ProgramFiles\Perplexity\Comet\Application\comet.exe", "$env:ProgramFiles\Comet\Comet.exe") }
     $catalog['codex-installer'] = New-BootstrapComponentDefinition -Name 'codex-installer' -Description 'Codex installer desktop via winget.' -DependsOn @('system-core', 'vcpp-redist') -Kind 'codex-installer'
-    $catalog['ollama'] = New-BootstrapComponentDefinition -Name 'ollama' -Description 'Ollama local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Ollama.Ollama'; DisplayName = 'Ollama'; ProbePaths = @("${env:LOCALAPPDATA}\Ollama\ollama.exe", "$env:ProgramFiles\Ollama\ollama.exe") }
+    $catalog['ollama'] = New-BootstrapComponentDefinition -Name 'ollama' -Description 'Ollama local.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Ollama.Ollama'; DisplayName = 'Ollama'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Ollama\ollama.exe", "${env:LOCALAPPDATA}\Programs\Ollama\ollama app.exe", "${env:LOCALAPPDATA}\Ollama\ollama.exe", "$env:ProgramFiles\Ollama\ollama.exe") }
     $catalog['cherry-studio'] = New-BootstrapComponentDefinition -Name 'cherry-studio' -Description 'Cherry Studio.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'kangfenmao.CherryStudio'; DisplayName = 'Cherry Studio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Cherry Studio\Cherry Studio.exe", "$env:ProgramFiles\Cherry Studio\Cherry Studio.exe") }
     $catalog['lm-studio'] = New-BootstrapComponentDefinition -Name 'lm-studio' -Description 'LM Studio local LLM.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'LMStudio.LMStudio'; DisplayName = 'LM Studio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\LM Studio\LM Studio.exe", "$env:ProgramFiles\LM Studio\LM Studio.exe") }
     $catalog['pinokio'] = New-BootstrapComponentDefinition -Name 'pinokio' -Description 'Pinokio AI Browser.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Pinokio.Pinokio'; DisplayName = 'Pinokio'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Pinokio\Pinokio.exe", "$env:ProgramFiles\Pinokio\Pinokio.exe") }
@@ -14702,7 +14930,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['webapp-slack'] = New-BootstrapComponentDefinition -Name 'webapp-slack' -Description 'Atalho web app Slack na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Slack'; Url = 'https://slack.com/'; CategoryFolder = 'Comunicação' }
     $catalog['webapp-zoom'] = New-BootstrapComponentDefinition -Name 'webapp-zoom' -Description 'Atalho web app Zoom na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Zoom'; Url = 'https://zoom.us/'; CategoryFolder = 'Comunicação' }
     $catalog['webapp-google-meet'] = New-BootstrapComponentDefinition -Name 'webapp-google-meet' -Description 'Atalho web app Google Meet na Area de Trabalho.' -DependsOn @('system-core') -Kind 'web-app-shortcut' -Data @{ DisplayName = 'Google Meet'; Url = 'https://meet.google.com/'; CategoryFolder = 'Comunicação' }
-    $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'ZedIndustries.Zed'; DisplayName = 'Zed'; ProbePaths = @("${env:LOCALAPPDATA}\Zed\Zed.exe", "$env:ProgramFiles\Zed\Zed.exe") }
+    $catalog['zed'] = New-BootstrapComponentDefinition -Name 'zed' -Description 'Zed editor.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; PreferUserScope = $false; Id = 'ZedIndustries.Zed'; DisplayName = 'Zed'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Zed\Zed.exe", "${env:LOCALAPPDATA}\Programs\Zed\bin\zed.exe", "${env:LOCALAPPDATA}\Zed\Zed.exe", "$env:ProgramFiles\Zed\Zed.exe") }
     $catalog['zcode'] = New-BootstrapComponentDefinition -Name 'zcode' -Description 'ZCode (IDE de IA da Z.ai). Instalacao manual; o bootstrap valida presenca e aplica segredos/MCP gerenciados quando o app esta instalado.' -Optional $true -DependsOn @('system-core') -Kind 'manual-required' -Data @{ DisplayName = 'ZCode (Z.ai)'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Recebe segredos validados e o catalogo MCP gerenciado; o instalador oficial exige download/login manual em zcode.z.ai.'; Instructions = 'Instale o ZCode em https://zcode.z.ai/en e rode novamente para aplicar segredos/MCP gerenciados.'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\ZCode\ZCode.exe", "${env:LOCALAPPDATA}\Programs\zcode\ZCode.exe", "$env:ProgramFiles\ZCode\ZCode.exe", "$env:APPDATA\ai.z.zcode\store.json") }
     $catalog['opencode'] = New-BootstrapComponentDefinition -Name 'opencode' -Description 'OpenCode CLI via script oficial.' -DependsOn @('git-core') -Kind 'opencode'
     $catalog['gemini-cli'] = New-BootstrapComponentDefinition -Name 'gemini-cli' -Description 'Gemini CLI via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = '@google/gemini-cli'; DisplayName = 'Gemini CLI (@google/gemini-cli)'; CommandNames = @('gemini') }
@@ -15744,8 +15972,12 @@ function Repair-BootstrapWslCorruption {
 
     try { $null = Invoke-NativeCaptureWithLog -Exe $WslExe -Args @('--shutdown') -TimeoutMs 30000 -InputText "`n" } catch { }
 
-    Ensure-WindowsOptionalFeatureEnabled -FeatureName 'Microsoft-Windows-Subsystem-Linux' -DisplayName 'Windows Subsystem for Linux'
-    Ensure-WindowsOptionalFeatureEnabled -FeatureName 'VirtualMachinePlatform' -DisplayName 'Virtual Machine Platform'
+    $featureResults = @()
+    $featureResults += @(Ensure-WindowsOptionalFeatureEnabled -FeatureName 'Microsoft-Windows-Subsystem-Linux' -DisplayName 'Windows Subsystem for Linux')
+    $featureResults += @(Ensure-WindowsOptionalFeatureEnabled -FeatureName 'VirtualMachinePlatform' -DisplayName 'Virtual Machine Platform')
+    if (Test-BootstrapWindowsFeatureResultsRequireReboot -Results $featureResults) {
+        throw (New-BootstrapWslRestartRequiredException -FeatureResults $featureResults)
+    }
 
     $pkg = $null
     try {
@@ -15825,8 +16057,12 @@ function Ensure-WslCore {
         return
     }
 
-    Ensure-WindowsOptionalFeatureEnabled -FeatureName 'Microsoft-Windows-Subsystem-Linux' -DisplayName 'Windows Subsystem for Linux'
-    Ensure-WindowsOptionalFeatureEnabled -FeatureName 'VirtualMachinePlatform' -DisplayName 'Virtual Machine Platform'
+    $featureResults = @()
+    $featureResults += @(Ensure-WindowsOptionalFeatureEnabled -FeatureName 'Microsoft-Windows-Subsystem-Linux' -DisplayName 'Windows Subsystem for Linux')
+    $featureResults += @(Ensure-WindowsOptionalFeatureEnabled -FeatureName 'VirtualMachinePlatform' -DisplayName 'Virtual Machine Platform')
+    if (Test-BootstrapWindowsFeatureResultsRequireReboot -Results $featureResults) {
+        throw (New-BootstrapWslRestartRequiredException -FeatureResults $featureResults)
+    }
 
     $wslExe = Resolve-CommandPath -Name 'wsl.exe'
     if (-not $wslExe) {
@@ -20023,7 +20259,7 @@ function Install-BootstrapAionUiComponentPackage {
 
     $probePaths = @($CatalogEntry['ProbePaths'])
     $allowFailure = [bool]$NoAdmin
-    Ensure-WingetPackage -WingetPath $winget -Id ([string]$CatalogEntry['WingetId']) -DisplayName 'AionUI' -PreferUserScope $true -AllowFailureWhenNotAdmin $allowFailure -ProbePaths $probePaths -State $State -ComponentName 'aionui'
+    Ensure-WingetPackage -WingetPath $winget -Id ([string]$CatalogEntry['WingetId']) -DisplayName 'AionUI' -PreferUserScope $false -AllowFailureWhenNotAdmin $allowFailure -ProbePaths $probePaths -State $State -ComponentName 'aionui'
     $info = Get-BootstrapAionUiInstallInfo
     if (-not [bool]$info['installed']) {
         $status = if ($allowFailure -and -not (Test-IsAdmin)) { 'blocked' } else { 'manual' }
@@ -27221,18 +27457,26 @@ function Apply-BrowserStartupTuning {
     $errorMsg = ''
     if ($failed.Count -gt 0) {
         $errorMsg = [string]$failed[0].error
-        if ($errorMsg -match 'acesso.*negado' -or $errorMsg -match 'localizar.*caminho' -or $errorMsg -match 'UnauthorizedAccess') {
-            $isRecoverableError = $true
-        }
+        $isRecoverableError = Test-BootstrapAppTuningRecoverableError -Message $errorMsg -ExceptionType ''
     }
+    $hasFailure = ($failed.Count -gt 0)
+    $hasBlockingFailure = ($hasFailure -and -not $isRecoverableError)
 
-    return [ordered]@{
+    $result = [ordered]@{
         id = [string]$Item.id
-        status = if ($failed.Count -gt 0) { 'failed' } else { 'applied' }
+        status = if ($hasFailure) { 'failed' } else { 'applied' }
         changes = @($changes)
-        blocking = (-not $isRecoverableError)
+        blocking = $hasBlockingFailure
         error = $errorMsg
     }
+    if ($hasFailure -and $isRecoverableError) {
+        $result['severity'] = 'warning'
+        $result['classification'] = 'permission-denied'
+    } elseif ($hasFailure) {
+        $result['severity'] = 'blocking'
+        $result['classification'] = 'execution-failure'
+    }
+    return $result
 }
 
 function Ensure-BootstrapPlayniteFullscreenConfig {
@@ -28563,6 +28807,33 @@ function Test-BootstrapApiRelatedErrorMessage {
     )
 }
 
+function Test-BootstrapAppTuningRecoverableError {
+    param(
+        [AllowNull()][string]$Message,
+        [AllowNull()][string]$ExceptionType
+    )
+
+    $messageText = if ([string]::IsNullOrWhiteSpace($Message)) { '' } else { [string]$Message }
+    $exceptionText = if ([string]::IsNullOrWhiteSpace($ExceptionType)) { '' } else { [string]$ExceptionType }
+    $messageComparable = ConvertTo-BootstrapArtifactComparableText -Value $messageText
+
+    return (
+        $messageText -match '(?i)acesso.*negado' -or
+        $messageText -match '(?i)n[aã]o\s+(e|é)\s+permitido' -or
+        ($messageComparable.Contains('registro') -and $messageComparable.Contains('permitido')) -or
+        ($messageComparable.Contains('acesso') -and $messageComparable.Contains('permitido')) -or
+        $messageText -match '(?i)localizar.*caminho' -or
+        $messageText -match '(?i)access is not allowed' -or
+        $messageText -match '(?i)access is denied' -or
+        $messageText -match '(?i)not permitted' -or
+        $messageText -match '(?i)requested registry access' -or
+        $messageText -match '(?i)unauthorized' -or
+        $messageText -match '(?i)cannot find.*path' -or
+        $exceptionText -match '(?i)UnauthorizedAccess' -or
+        $exceptionText -match '(?i)SecurityException'
+    )
+}
+
 function Get-BootstrapAppTuningFailureClassification {
     param(
         [Parameter(Mandatory = $true)]$Item,
@@ -28591,17 +28862,7 @@ function Get-BootstrapAppTuningFailureClassification {
     # ("Requested registry access is not allowed.") ou UnauthorizedAccessException.
     # Sem isso, um unico ajuste admin-only (ex.: edge-background-off) abortava TODA a fase
     # de AppTuning + HostHealth em vez de pular como os componentes admin-only fazem.
-    $permissionDenied = (
-        $message -match 'acesso.*negado' -or
-        $message -match 'localizar.*caminho' -or
-        $message -match '(?i)access is not allowed' -or
-        $message -match '(?i)access is denied' -or
-        $message -match '(?i)requested registry access' -or
-        $message -match '(?i)unauthorized' -or
-        $message -match '(?i)cannot find.*path' -or
-        $ExceptionType -match 'UnauthorizedAccess' -or
-        $ExceptionType -match 'SecurityException'
-    )
+    $permissionDenied = Test-BootstrapAppTuningRecoverableError -Message $message -ExceptionType $ExceptionType
     if ($permissionDenied) {
         return [ordered]@{
             severity = 'warning'
@@ -28701,9 +28962,17 @@ function Normalize-BootstrapAppTuningItemResult {
         if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking')) { $itemResult['blocking'] = $false }
     }
     if ($status -eq 'failed') {
-        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'severity')) { $itemResult['severity'] = 'blocking' }
-        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'classification')) { $itemResult['classification'] = 'execution-failure' }
-        if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking')) { $itemResult['blocking'] = $true }
+        $errorMessage = if (Test-BootstrapMapContainsKey -Map $itemResult -Key 'error') { [string]$itemResult['error'] } elseif (Test-BootstrapMapContainsKey -Map $itemResult -Key 'reason') { [string]$itemResult['reason'] } elseif (Test-BootstrapMapContainsKey -Map $itemResult -Key 'note') { [string]$itemResult['note'] } else { '' }
+        $exceptionType = if (Test-BootstrapMapContainsKey -Map $itemResult -Key 'exceptionType') { [string]$itemResult['exceptionType'] } else { '' }
+        if (Test-BootstrapAppTuningRecoverableError -Message $errorMessage -ExceptionType $exceptionType) {
+            $itemResult['severity'] = 'warning'
+            $itemResult['classification'] = 'permission-denied'
+            $itemResult['blocking'] = $false
+        } else {
+            if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'severity')) { $itemResult['severity'] = 'blocking' }
+            if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'classification')) { $itemResult['classification'] = 'execution-failure' }
+            if (-not (Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking')) { $itemResult['blocking'] = $true }
+        }
     }
 
     return $itemResult
