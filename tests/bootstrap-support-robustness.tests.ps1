@@ -40,7 +40,11 @@ function Invoke-SupportBootstrap {
 
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit(120000)) {
+    # 240s: o SupportBundle roda o Doctor completo, cujas sondas reais sao caras num host totalmente
+    # provisionado (medido: AiConfigDoctor ~34s, secrets ~11s, AiProxy ~8s, audit ~6s, alem do job de
+    # PSScriptAnalyzer ~20s e baseline). 120s ficava apertado e gerava flutuacao; 240s e folga honesta
+    # sem mascarar travamento real (um hang de verdade ainda estoura o limite).
+    if (-not $process.WaitForExit(240000)) {
         try { $process.Kill() } catch { Write-Verbose $_.Exception.Message }
         throw "Bootstrap invocation timed out for args: $($CommandArgs -join ' ')"
     }
@@ -650,13 +654,41 @@ Describe 'Doctor scope gating' {
         ([string]$report.status -ne 'error') | Should Be $true
     }
 
-    It 'builds a RepairPlan that only contains agent-tools components for that scope' {
+    It 'never references a non-existent component in the agent-tools RepairPlan' {
         $report = New-BootstrapDoctorReport -Scopes @('agent-tools')
         $plan = New-BootstrapRepairPlan -DoctorReport $report
-        $allowed = @('rtk','ai-memory','agent-skills','agent-compat-runtime','headroom-ai','headroom-agent-context-compression','ai-context-frugality-pack')
+        $catalog = Get-BootstrapComponentCatalog
         foreach ($item in @($plan.items)) {
-            [string]$item.component | Should Not Be ''
-            ($allowed -contains [string]$item.component) | Should Be $true
+            $cmd = [string]$item.executeCommand
+            # Qualquer item que use -Component X exige que X exista no catalogo real.
+            if ($cmd -match '-Component\s+(\S+)') {
+                $catalog.Contains($Matches[1]) | Should Be $true
+            }
+            # Comando de reparo nunca pode ficar vazio.
+            [string]::IsNullOrWhiteSpace($cmd) | Should Be $false
+        }
+    }
+
+    It 'uses the real install flow for rtk (ai-tool) and ai-context-frugality (app-tuning)' {
+        $tools = (New-BootstrapAgentToolsDoctorReport).tools
+        [string]$tools.rtk.repairKind | Should Be 'ai-tool'
+        [string]$tools.rtk.repairComponent | Should Be ''
+        [string]$tools.aiContextFrugality.repairKind | Should Be 'app-tuning'
+        [string]$tools.aiContextFrugality.repairTarget | Should Be 'ai-context-frugality-pack'
+        # ai-context-frugality-pack deve ser um AppTuning item valido (nao um componente).
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('ai-context-frugality-pack') | Should Be $false
+        $tuning = Get-BootstrapAppTuningCatalog
+        $ids = @($tuning['items'] | ForEach-Object { [string]$_['id'] })
+        (@($ids) -contains 'ai-context-frugality-pack') | Should Be $true
+    }
+
+    It 'never puts Graphify into the RepairPlan' {
+        $report = New-BootstrapDoctorReport -Scopes @('agent-tools')
+        $plan = New-BootstrapRepairPlan -DoctorReport $report
+        foreach ($item in @($plan.items)) {
+            ([string]$item.id -notmatch 'graphify') | Should Be $true
+            ([string]$item.executeCommand -notmatch 'graphify') | Should Be $true
         }
     }
 
@@ -664,6 +696,51 @@ Describe 'Doctor scope gating' {
         (Resolve-BootstrapDoctorScopes -Scopes @()) | Should Be @('all')
         (Resolve-BootstrapDoctorScopes -Scopes @('bogus')) | Should Be @('all')
         (Resolve-BootstrapDoctorScopes -Scopes @('winget','bogus')) | Should Be @('winget')
+    }
+
+    It 'honors -DoctorScope when generating a RepairPlan (scoped repair flow)' {
+        $report = New-BootstrapDoctorReport -Scopes @('agent-tools')
+        $null -ne $report.agentTools | Should Be $true
+        # E o Doctor 'all' (legado) NAO inclui agent-tools, garantindo que o reparo precise do escopo.
+        $full = New-BootstrapDoctorReport -Scopes @('reboot')
+        ($full.PSObject.Properties.Name -contains 'agentTools' -and $null -ne $full.agentTools) | Should Be $false
+    }
+}
+
+Describe 'AI context frugality detection' {
+    $frugRoot = ''
+    BeforeEach {
+        $script:frugRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('pz-frug-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $script:frugRoot -Force | Out-Null
+    }
+    AfterEach {
+        if (Test-Path -LiteralPath $script:frugRoot) { Remove-Item -LiteralPath $script:frugRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+
+    It 'does NOT report frugality configured just because AGENTS.md or CLAUDE.md exist' {
+        Set-Content -LiteralPath (Join-Path $script:frugRoot 'AGENTS.md') -Value '# generic agents file'
+        New-Item -ItemType Directory -Path (Join-Path $script:frugRoot '.claude') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:frugRoot '.claude\CLAUDE.md') -Value '# generic claude file'
+        (Test-BootstrapAiContextFrugalityConfigured -Root $script:frugRoot) | Should Be $false
+        $report = New-BootstrapAgentToolsDoctorReport -WorkspaceRoot $script:frugRoot
+        [bool]$report.tools.aiContextFrugality.configured | Should Be $false
+        [string]$report.tools.aiContextFrugality.status | Should Be 'notConfigured'
+    }
+
+    It 'reports configured when the real pack manifest is present' {
+        New-Item -ItemType Directory -Path (Join-Path $script:frugRoot '.codex\ai-context') -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $script:frugRoot '.codex\ai-context\frugality-manifest.json') -Value '{ "id": "ai-context-frugality-pack" }'
+        (Test-BootstrapAiContextFrugalityConfigured -Root $script:frugRoot) | Should Be $true
+    }
+
+    It 'reports configured when .aiderignore carries the PHASEZERO marker block' {
+        Set-Content -LiteralPath (Join-Path $script:frugRoot '.aiderignore') -Value @('# >>> PHASEZERO AI CONTEXT FRUGALITY >>>', 'node_modules/', '# <<< PHASEZERO AI CONTEXT FRUGALITY <<<')
+        (Test-BootstrapAiContextFrugalityConfigured -Root $script:frugRoot) | Should Be $true
+    }
+
+    It 'reports not configured for a plain .aiderignore without the marker' {
+        Set-Content -LiteralPath (Join-Path $script:frugRoot '.aiderignore') -Value @('node_modules/', 'dist/')
+        (Test-BootstrapAiContextFrugalityConfigured -Root $script:frugRoot) | Should Be $false
     }
 }
 

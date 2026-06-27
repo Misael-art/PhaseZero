@@ -32632,9 +32632,37 @@ function Test-BootstrapDoctorScope {
     return (@($Scopes) -contains $Name)
 }
 
+function Test-BootstrapAiContextFrugalityConfigured {
+    # True somente quando o pack de frugality realmente foi instalado: exige artefatos unicos do
+    # pack (.codex\ai-context\frugality-manifest.json / repo-skeleton.json / doc) OU o bloco marcado
+    # 'PHASEZERO AI CONTEXT FRUGALITY' no .aiderignore. NUNCA marca configurado so por AGENTS.md/CLAUDE.md.
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    foreach ($unique in @(
+            (Join-Path $Root '.codex\ai-context\frugality-manifest.json'),
+            (Join-Path $Root '.codex\ai-context\repo-skeleton.json'),
+            (Join-Path $Root '.codex\context-packs\ai-context-frugality.md')
+        )) {
+        if (Test-Path -LiteralPath $unique -PathType Leaf) { return $true }
+    }
+
+    $aiderIgnore = Join-Path $Root '.aiderignore'
+    if (Test-Path -LiteralPath $aiderIgnore -PathType Leaf) {
+        try {
+            $text = Get-Content -LiteralPath $aiderIgnore -Raw -ErrorAction Stop
+            if ($text -match 'PHASEZERO AI CONTEXT FRUGALITY') { return $true }
+        } catch {
+            Write-Verbose $_.Exception.Message
+        }
+    }
+    return $false
+}
+
 function New-BootstrapAgentToolsDoctorReport {
     # Valida o ecossistema de tokens/memoria/agentes: RTK, ai-memory, Caveman, Headroom, Ponytail,
     # ai-context-frugality. Graphify retorna placeholder seguro (notConfigured) sem falhar o Doctor.
+    # Cada ferramenta declara um repairKind/repairTarget com FLUXO REAL (component | app-tuning |
+    # ai-tool | none); RepairPlan nunca emite comando inexistente.
     param([string]$WorkspaceRoot = (Get-Location).Path)
 
     $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { $WorkspaceRoot }
@@ -32650,24 +32678,20 @@ function New-BootstrapAgentToolsDoctorReport {
     $headroomPath = Resolve-CommandPath -Name 'headroom'
     $headroomStatus = if ([string]::IsNullOrWhiteSpace($headroomPath)) { 'absent' } else { 'available' }
 
-    # ai-context-frugality: presenca dos artefatos do pack no workspace.
-    $frugalityArtifacts = @(
-        (Join-Path $root '.aiderignore'),
-        (Join-Path $root 'AGENTS.md'),
-        (Join-Path $root 'CLAUDE.md')
-    )
-    $frugalityPresent = $false
-    foreach ($a in $frugalityArtifacts) { if (Test-Path -LiteralPath $a) { $frugalityPresent = $true; break } }
+    # ai-context-frugality: exige artefatos reais do pack (nao basta AGENTS.md/CLAUDE.md existir).
+    $frugalityPresent = Test-BootstrapAiContextFrugalityConfigured -Root $root
     $frugalityStatus = if ($frugalityPresent) { 'configured' } else { 'notConfigured' }
 
+    # repairKind: 'component' = .\bootstrap-tools.ps1 -Component <target>; 'app-tuning' =
+    # -AppTuningItem <target>; 'ai-tool' = install-cli --tool <target>; 'none' = sem reparo automatico.
     $tools = [ordered]@{
-        rtk = [ordered]@{ id = 'rtk'; displayName = 'RTK (shell compression)'; status = $rtkStatus; configured = ($rtkStatus -eq 'available'); path = [string]$plan.tools.rtk.path; repairComponent = 'rtk' }
-        aiMemory = [ordered]@{ id = 'ai-memory'; displayName = 'ai-memory'; status = $memStatus; configured = ($memStatus -eq 'available'); path = [string]$plan.tools.aiMemory.path; repairComponent = 'ai-memory' }
-        caveman = [ordered]@{ id = 'caveman'; displayName = 'Caveman (style)'; status = $cavemanStatus; configured = ($cavemanStatus -eq 'available'); path = [string]$plan.tools.caveman.path; repairComponent = 'agent-skills' }
-        headroom = [ordered]@{ id = 'headroom'; displayName = 'Headroom'; status = $headroomStatus; configured = ($headroomStatus -eq 'available'); path = [string]$headroomPath; repairComponent = 'headroom-ai' }
-        ponytail = [ordered]@{ id = 'ponytail'; displayName = 'Ponytail (workspace architecture)'; status = $ponytailStatus; configured = ($ponytailStatus -eq 'active'); path = [string]$plan.tools.ponytail.path; repairComponent = 'agent-compat-runtime' }
-        aiContextFrugality = [ordered]@{ id = 'ai-context-frugality'; displayName = 'AI context frugality pack'; status = $frugalityStatus; configured = $frugalityPresent; repairComponent = 'ai-context-frugality-pack' }
-        graphify = [ordered]@{ id = 'graphify'; displayName = 'Graphify'; status = 'notConfigured'; configured = $false; placeholder = $true; action = 'informar fonte oficial'; repairComponent = '' }
+        rtk = [ordered]@{ id = 'rtk'; displayName = 'RTK (shell compression)'; status = $rtkStatus; configured = ($rtkStatus -eq 'available'); path = [string]$plan.tools.rtk.path; repairKind = 'ai-tool'; repairTarget = 'rtk'; repairComponent = '' }
+        aiMemory = [ordered]@{ id = 'ai-memory'; displayName = 'ai-memory'; status = $memStatus; configured = ($memStatus -eq 'available'); path = [string]$plan.tools.aiMemory.path; repairKind = 'component'; repairTarget = 'ai-memory'; repairComponent = 'ai-memory' }
+        caveman = [ordered]@{ id = 'caveman'; displayName = 'Caveman (style)'; status = $cavemanStatus; configured = ($cavemanStatus -eq 'available'); path = [string]$plan.tools.caveman.path; repairKind = 'component'; repairTarget = 'agent-skills'; repairComponent = 'agent-skills' }
+        headroom = [ordered]@{ id = 'headroom'; displayName = 'Headroom'; status = $headroomStatus; configured = ($headroomStatus -eq 'available'); path = [string]$headroomPath; repairKind = 'component'; repairTarget = 'headroom-ai'; repairComponent = 'headroom-ai' }
+        ponytail = [ordered]@{ id = 'ponytail'; displayName = 'Ponytail (workspace architecture)'; status = $ponytailStatus; configured = ($ponytailStatus -eq 'active'); path = [string]$plan.tools.ponytail.path; repairKind = 'component'; repairTarget = 'agent-compat-runtime'; repairComponent = 'agent-compat-runtime' }
+        aiContextFrugality = [ordered]@{ id = 'ai-context-frugality'; displayName = 'AI context frugality pack'; status = $frugalityStatus; configured = $frugalityPresent; repairKind = 'app-tuning'; repairTarget = 'ai-context-frugality-pack'; repairComponent = '' }
+        graphify = [ordered]@{ id = 'graphify'; displayName = 'Graphify'; status = 'notConfigured'; configured = $false; placeholder = $true; action = 'informar fonte oficial'; repairKind = 'none'; repairTarget = ''; repairComponent = '' }
     }
 
     # Degradado se RTK ou ai-memory ausentes (impacto direto em tokens/memoria). Graphify placeholder
@@ -32696,13 +32720,10 @@ function New-BootstrapWindowsOptimizationDoctorReport {
     $tuningRecommended = @()
     try {
         $catalog = Get-BootstrapAppTuningCatalog
-        foreach ($cat in @($catalog.categories)) {
-            foreach ($item in @($cat.items)) {
-                $rec = $false
-                try { $rec = [bool]$item.recommended } catch { $rec = $false }
-                if ($rec) {
-                    $tuningRecommended += @([ordered]@{ id = [string]$item.id; category = [string]$cat.id; displayName = [string]$item.displayName; risk = [string]$item.risk })
-                }
+        # Catalogo e OrderedDictionary com uma lista plana 'items'; recomendado = defaultMode 'recommended'.
+        foreach ($item in @($catalog['items'])) {
+            if ([string]$item['defaultMode'] -eq 'recommended') {
+                $tuningRecommended += @([ordered]@{ id = [string]$item['id']; category = [string]$item['category']; displayName = [string]$item['displayName']; risk = [string]$item['riskTier'] })
             }
         }
     } catch {
@@ -33170,6 +33191,8 @@ function New-BootstrapRepairPlan {
             }
         } catch { $agentTools = $null }
         if ($agentTools) {
+            $componentCatalog = $null
+            try { $componentCatalog = Get-BootstrapComponentCatalog } catch { $componentCatalog = $null }
             $toolsMap = $null
             try { $toolsMap = $agentTools['tools'] } catch { $toolsMap = $null }
             if ($toolsMap) {
@@ -33177,12 +33200,40 @@ function New-BootstrapRepairPlan {
                     $tool = $toolsMap[$toolKey]
                     $configured = $false
                     try { $configured = [bool]$tool['configured'] } catch { $configured = $false }
-                    $component = ''
-                    try { $component = [string]$tool['repairComponent'] } catch { $component = '' }
-                    if ($configured -or [string]::IsNullOrWhiteSpace($component)) { continue }
+                    if ($configured) { continue }
+
+                    $repairKind = ''
+                    try { $repairKind = [string]$tool['repairKind'] } catch { $repairKind = '' }
+                    $target = ''
+                    try { $target = [string]$tool['repairTarget'] } catch { $target = '' }
                     $displayName = ''
-                    try { $displayName = [string]$tool['displayName'] } catch { $displayName = $component }
-                    Add-BootstrapRepairPlanItem -Items $items -Id ("repair-{0}" -f $component) -Component $component -Risk 'low' -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand "$repoCommand -Component $component -DryRun -NonInteractive" -ExecuteCommand "$repoCommand -Component $component -NonInteractive" -Reason ("Ferramenta de tokens/memoria nao configurada: {0}." -f $displayName) -ConfirmationRequired:$true
+                    try { $displayName = [string]$tool['displayName'] } catch { $displayName = $target }
+                    if ([string]::IsNullOrWhiteSpace($target)) { continue } # graphify/none: sem reparo automatico
+
+                    $dryRunCommand = ''
+                    $executeCommand = ''
+                    switch ($repairKind) {
+                        'component' {
+                            # So emite -Component quando o componente REALMENTE existe no catalogo.
+                            if ($null -ne $componentCatalog -and $componentCatalog.Contains($target)) {
+                                $dryRunCommand = "$repoCommand -Component $target -DryRun -NonInteractive"
+                                $executeCommand = "$repoCommand -Component $target -NonInteractive"
+                            }
+                        }
+                        'app-tuning' {
+                            $dryRunCommand = "$repoCommand -AppTuningItem $target -DryRun -NonInteractive"
+                            $executeCommand = "$repoCommand -AppTuningItem $target -NonInteractive"
+                        }
+                        'ai-tool' {
+                            # Ferramentas de IA (ex.: rtk) instalam pelo fluxo install-cli, nao por -Component.
+                            $dryRunCommand = ".\install-cli.bat --tool $target --install --dry-run --yes"
+                            $executeCommand = ".\install-cli.bat --tool $target --install --yes"
+                        }
+                        default { }
+                    }
+                    if ([string]::IsNullOrWhiteSpace($executeCommand)) { continue } # sem executor real: nao adiciona item
+
+                    Add-BootstrapRepairPlanItem -Items $items -Id ("repair-agent-{0}" -f $target) -Component $target -Risk 'low' -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand $dryRunCommand -ExecuteCommand $executeCommand -Reason ("Ferramenta de tokens/memoria nao configurada: {0}." -f $displayName) -ConfirmationRequired:$true
                 }
             }
         }
@@ -33805,7 +33856,10 @@ function Invoke-BootstrapRepairPlanMode {
         return [pscustomobject]@{ ExitCode = 2; Status = 'blocked'; ItemCount = $itemCount }
     }
 
-    $doctor = New-BootstrapDoctorReport -AuditTimeoutSeconds $AuditTimeoutSeconds -AuditComponentTimeoutSeconds $AuditComponentTimeoutSeconds
+    # RepairPlan honra -DoctorScope: permite gerar um plano focado (ex.: agent-tools/tokens-memoria)
+    # em vez do Doctor completo. Sem scope, mantem o comportamento legado ('all').
+    $repairScopes = Resolve-BootstrapDoctorScopes -Scopes $DoctorScope
+    $doctor = New-BootstrapDoctorReport -AuditTimeoutSeconds $AuditTimeoutSeconds -AuditComponentTimeoutSeconds $AuditComponentTimeoutSeconds -Scopes $repairScopes
     $repairPlan = New-BootstrapRepairPlan -DoctorReport $doctor
     if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
         Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value ([ordered]@{
@@ -33813,11 +33867,12 @@ function Invoke-BootstrapRepairPlanMode {
             exitCode = 0
             mode = 'repair-plan'
             generatedAt = (Get-Date).ToString('o')
+            scopes = @($repairScopes)
             doctor = $doctor
             repairPlan = $repairPlan
         })
     }
-    Write-Log ("RepairPlan gerado: {0} item(ns)." -f @($repairPlan['items']).Count)
+    Write-Log ("RepairPlan gerado (scopes={0}): {1} item(ns)." -f (@($repairScopes) -join ','), @($repairPlan['items']).Count)
     return [pscustomobject]@{ ExitCode = 0; Status = 'success'; ItemCount = @($repairPlan['items']).Count }
 }
 

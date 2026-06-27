@@ -1966,6 +1966,7 @@ function Get-UiHealthTextCanonicalStatus {
                     </Grid>
                     <WrapPanel Margin="0,0,0,16">
                         <Button x:Name="HealthAgentToolsButton" Style="{StaticResource PrimaryBtn}" Content="Gestão tokens/memória" Height="32" Margin="0,0,8,8" ToolTip="Valida RTK, ai-memory, Caveman, Headroom, Ponytail e frugality; Graphify fica como placeholder. Reparos exigem confirmacao."/>
+                        <Button x:Name="HealthAgentToolsRepairButton" Style="{StaticResource GhostBtn}" Content="Reparar tokens/memória" Height="32" Margin="0,0,8,8" ToolTip="Gera um RepairPlan apenas do escopo tokens/memoria e aplica com confirmacao. Nao grava segredos; Graphify nao e reparado."/>
                         <Button x:Name="HealthMsvcButton" Style="{StaticResource GhostBtn}" Content="MSVC no host" Height="32" Margin="0,0,8,8" ToolTip="Valida/repara o toolchain MSVC (cl.exe, DLLs do runtime VC++) no host."/>
                         <Button x:Name="HealthWindowsOptButton" Style="{StaticResource GhostBtn}" Content="Otimização Windows" Height="32" Margin="0,0,8,8" ToolTip="Audit-only: mostra recomendacoes HostHealth/AppTuning sem aplicar nenhum tweak."/>
                         <Button x:Name="HealthValidateMcpButton" Style="{StaticResource GhostBtn}" Content="Validar MCPs" Height="32" Margin="0,0,8,8" ToolTip="Valida (sem reparar) o estado dos MCPs gerenciados."/>
@@ -2950,6 +2951,7 @@ $ui = [ordered]@{
     HealthDeckCard         = (Get-Control 'HealthDeckCard')
     HealthRollbackCard     = (Get-Control 'HealthRollbackCard')
     HealthAgentToolsButton = (Get-Control 'HealthAgentToolsButton')
+    HealthAgentToolsRepairButton = (Get-Control 'HealthAgentToolsRepairButton')
     HealthMsvcButton       = (Get-Control 'HealthMsvcButton')
     HealthWindowsOptButton = (Get-Control 'HealthWindowsOptButton')
     HealthValidateMcpButton = (Get-Control 'HealthValidateMcpButton')
@@ -5929,14 +5931,15 @@ function Build-BackendArguments {
     if ([string]::IsNullOrWhiteSpace($maint)) { $maint = 'none' }
     if ($maint -eq 'rollback') { $tokens += @('-Rollback') }
     if ($maint -eq 'audit') { $tokens += @('-Audit') }
-    if ($maint -eq 'doctor') {
-        $tokens += @('-Doctor')
+    if ($maint -eq 'doctor') { $tokens += @('-Doctor') }
+    if ($maint -eq 'support-bundle') { $tokens += @('-SupportBundle') }
+    if ($maint -eq 'repair-plan') { $tokens += @('-RepairPlan') }
+    # Doctor e RepairPlan honram o escopo selecionado (ex.: card individual ou tokens/memoria).
+    if ($maint -in @('doctor', 'repair-plan')) {
         $doctorScope = [string]$ui.DoctorScope
         if ([string]::IsNullOrWhiteSpace($doctorScope)) { $doctorScope = 'all' }
         $tokens += @('-DoctorScope', $doctorScope)
     }
-    if ($maint -eq 'support-bundle') { $tokens += @('-SupportBundle') }
-    if ($maint -eq 'repair-plan') { $tokens += @('-RepairPlan') }
     $tokens += @('-SteamDeckVersion', [string]$ui.State.steamDeckVersion)
     $tokens += @('-HostHealth',       [string]$activeHostHealth)
     $tokens += @('-AppTuning',        [string]$activeAppTuningMode)
@@ -6739,8 +6742,10 @@ function Set-UiHealthCardsEnabled {
 }
 
 function Invoke-UiHealthScopedDoctor {
-    # Handler compartilhado dos cards: mostra "verificando...", desabilita os cards, navega para a
-    # página de execução e dispara o Doctor SOMENTE no escopo do card clicado.
+    # Handler compartilhado dos cards: valida SOMENTE o escopo do card clicado, PERMANECENDO na tela
+    # Saude (o usuario pediu validar o "quadrinho" ali). Mostra "verificando...", desabilita os cards
+    # e dispara o Doctor scoped; o handler de conclusao atualiza so o card e o ULTIMO RESULTADO.
+    # O run continua produzindo log/result.json (artefatos preservados), apenas sem trocar de pagina.
     param(
         [Parameter(Mandatory = $true)][string]$Scope,
         [AllowNull()]$StatusTextBlock = $null
@@ -6753,10 +6758,30 @@ function Invoke-UiHealthScopedDoctor {
     } catch { Write-Verbose $_.Exception.Message }
     $ui.DoctorScopeCard = $Scope
     Set-UiHealthCardsEnabled -Enabled $false
+    $ui.StatusLabel.Text = ("Saude: validando escopo '{0}'..." -f $Scope)
+    Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope $Scope
+}
+
+function Invoke-UiHealthAgentToolsRepair {
+    # Reparo seguro de tokens/memoria: valida primeiro (escopo agent-tools), gera um RepairPlan
+    # SCOPED, exige confirmacao e roda o fluxo de reparo preservando log/result.json. Graphify nunca
+    # entra; cada item exige confirmacao no backend (manual-confirmation).
+    $msg = @(
+        'Validar e reparar Gestao tokens/memoria (RTK, ai-memory, Caveman, Headroom, Ponytail, frugality).'
+        ''
+        'Sera gerado um RepairPlan apenas do escopo tokens/memoria. Nenhum segredo e gravado, nenhum bloco'
+        'Caveman/RTK/ai-memory/Ponytail e sobrescrito e Graphify continua placeholder (sem reparo).'
+        ''
+        'Cada item exige confirmacao antes de aplicar. Continuar?'
+    ) -join [Environment]::NewLine
+    if (-not (Confirm-UiCriticalAction -Title 'Reparar tokens/memoria' -Message $msg)) {
+        $ui.StatusLabel.Text = 'Reparo tokens/memoria cancelado.'
+        return
+    }
     $runIdx = @($ui.PageNames).IndexOf('PageRun')
     if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
     Navigate-ToPage -Index $runIdx
-    Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope $Scope
+    Start-RunExecution -MaintenanceIntent 'repair-plan' -DoctorScope 'agent-tools'
 }
 
 function Get-UiHealthCardStatusText {
@@ -7569,6 +7594,7 @@ $ui.HealthRollbackCard.Add_Click({   Invoke-UiHealthScopedDoctor -Scope 'rollbac
 
 # Gestao tokens/memoria: valida RTK/ai-memory/Caveman/Headroom/Ponytail/frugality (Graphify placeholder).
 $ui.HealthAgentToolsButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'agent-tools' })
+$ui.HealthAgentToolsRepairButton.Add_Click({ Invoke-UiHealthAgentToolsRepair })
 # Otimizacao Windows: audit-only (HostHealth/AppTuning), sem aplicar tweak.
 $ui.HealthWindowsOptButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'windows-optimization' })
 # Validar MCPs: somente validacao (separado de "Reparar MCPs (npx)").

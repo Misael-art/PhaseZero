@@ -959,3 +959,37 @@ Describe 'Health scoped validation per card' {
         $summary | Should Match 'RTK=absent'
     }
 }
+
+Describe 'Health tokens/memory validation and repair flow' {
+    It 'wires Gestao tokens/memoria to validate with the agent-tools scope' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $raw | Should Match ([regex]::Escape('x:Name="HealthAgentToolsButton"'))
+        $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'agent-tools'"))
+    }
+
+    It 'adds a confirmation-gated repair that passes the agent-tools scope to a scoped RepairPlan' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $raw | Should Match ([regex]::Escape('x:Name="HealthAgentToolsRepairButton"'))
+        $raw | Should Match ([regex]::Escape('Invoke-UiHealthAgentToolsRepair'))
+        # O reparo confirma antes de aplicar e roda repair-plan com o escopo correto.
+        $raw | Should Match 'Confirm-UiCriticalAction'
+        $raw | Should Match "Start-RunExecution -MaintenanceIntent 'repair-plan' -DoctorScope 'agent-tools'"
+    }
+
+    It 'passes -DoctorScope to the backend for both doctor and repair-plan runs' {
+        Import-UiFunctionsForTest -Names @('Build-BackendArguments')
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        # repair-plan tambem precisa emitir -DoctorScope (nao so doctor).
+        $raw | Should Match "maint -in @\('doctor', 'repair-plan'\)"
+        $raw | Should Match "tokens \+= @\('-DoctorScope'"
+    }
+
+    It 'keeps card validation on the Health page (no navigation away for scoped card clicks)' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $body = [regex]::Match($raw, 'function Invoke-UiHealthScopedDoctor.*?\n\}', 'Singleline').Value
+        $body | Should Not Be ''
+        # O handler de card NAO deve navegar para outra pagina (fica na tela Saude).
+        ($body -match 'Navigate-ToPage') | Should Be $false
+        $body | Should Match "Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope \`$Scope"
+    }
+}
