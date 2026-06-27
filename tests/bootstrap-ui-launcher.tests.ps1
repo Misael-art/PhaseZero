@@ -967,13 +967,23 @@ Describe 'Health tokens/memory validation and repair flow' {
         $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'agent-tools'"))
     }
 
-    It 'adds a confirmation-gated repair that passes the agent-tools scope to a scoped RepairPlan' {
+    It 'adds a confirmation-gated repair that computes a scoped plan and applies each item by its real flow' {
         $raw = Get-Content -Path $uiScriptPath -Raw
         $raw | Should Match ([regex]::Escape('x:Name="HealthAgentToolsRepairButton"'))
         $raw | Should Match ([regex]::Escape('Invoke-UiHealthAgentToolsRepair'))
-        # O reparo confirma antes de aplicar e roda repair-plan com o escopo correto.
-        $raw | Should Match 'Confirm-UiCriticalAction'
-        $raw | Should Match "Start-RunExecution -MaintenanceIntent 'repair-plan' -DoctorScope 'agent-tools'"
+        $body = [regex]::Match($raw, 'function Invoke-UiHealthAgentToolsRepair.*?\n\}', 'Singleline').Value
+        $body | Should Not Be ''
+        # Confirma antes de aplicar.
+        $body | Should Match 'Confirm-UiCriticalAction'
+        # Gera o plano scoped em processo (agent-tools) e NAO so um repair-plan que nao aplica.
+        $body | Should Match 'New-BootstrapAgentToolsDoctorReport'
+        $body | Should Match 'New-BootstrapRepairPlan'
+        # Aplica de fato cada item pelo seu fluxo real, com artefatos.
+        $body | Should Match "repairKind -eq 'component'"
+        $body | Should Match "repairKind -eq 'app-tuning'"
+        $body | Should Match "repairKind -eq 'ai-tool'"
+        $body | Should Match '-ResultPath'
+        $body | Should Match 'install-cli'
     }
 
     It 'passes -DoctorScope to the backend for both doctor and repair-plan runs' {

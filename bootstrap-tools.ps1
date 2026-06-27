@@ -32888,11 +32888,20 @@ function Ensure-BootstrapMsvcBuildEnv {
             Write-Log 'msvc-build-env: (dry-run) instalaria Microsoft.VisualStudio.2022.BuildTools (VC.Tools.x86.x64) e importaria vcvars64.'
             return [ordered]@{ status = 'planned'; toolsetPath = ''; installedNow = $false; envImported = $false; dryRun = $true }
         }
+        # SEGURANCA: a instalacao do VS Build Tools e pesada (varios GB) e muta o host. NUNCA roda em
+        # library mode (testes) e so roda quando explicitamente liberada via PHASEZERO_ALLOW_MSVC_BUILDTOOLS_INSTALL.
+        # Sem opt-in, reporta guia acionavel em vez de instalar sozinho.
+        $allowInstall = (-not $BootstrapUiLibraryMode) -and ('1','true','yes' -contains ([string]$env:PHASEZERO_ALLOW_MSVC_BUILDTOOLS_INSTALL).ToLowerInvariant())
+        if (-not $allowInstall) {
+            $cmd = 'winget install -e --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --includeRecommended"'
+            Write-Log ("msvc-build-env: toolset VC ausente. Instalacao automatica desligada por seguranca; defina PHASEZERO_ALLOW_MSVC_BUILDTOOLS_INSTALL=1 para liberar, ou rode manualmente: {0}" -f $cmd) 'WARN'
+            return [ordered]@{ status = 'requires-install'; toolsetPath = ''; installedNow = $false; envImported = $false; repairCommand = $cmd; dryRun = $false }
+        }
         $winget = ''
         try { $winget = [string]$State.Winget } catch { $winget = '' }
         if ([string]::IsNullOrWhiteSpace($winget)) { $winget = Resolve-CommandPath -Name 'winget' }
         if (-not [string]::IsNullOrWhiteSpace($winget)) {
-            Write-Log 'msvc-build-env: toolset VC ausente; instalando Microsoft.VisualStudio.2022.BuildTools (VC.Tools.x86.x64)...'
+            Write-Log 'msvc-build-env: toolset VC ausente; instalando Microsoft.VisualStudio.2022.BuildTools (VC.Tools.x86.x64) (opt-in liberado)...'
             $override = '--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --includeRecommended'
             $wingetArgs = @('install', '-e', '--id', 'Microsoft.VisualStudio.2022.BuildTools', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--override', $override)
             $exit = Invoke-NativeWithRetry -Exe $winget -Args $wingetArgs -OperationName 'VS Build Tools (VC.Tools) via winget' -MaxAttempts 2 -InitialDelaySeconds 3 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
@@ -33092,19 +33101,26 @@ function Add-BootstrapRepairPlanItem {
     param(
         [Parameter(Mandatory = $true)]$Items,
         [Parameter(Mandatory = $true)][string]$Id,
-        [Parameter(Mandatory = $true)][string]$Component,
+        [AllowEmptyString()][string]$Component = '',
         [ValidateSet('low','medium','high')][string]$Risk = 'medium',
         [bool]$RequiresAdmin = $false,
         [bool]$RollbackAvailable = $false,
         [string]$DryRunCommand = '',
         [string]$ExecuteCommand = '',
         [string]$Reason = '',
-        [bool]$ConfirmationRequired = $true
+        [bool]$ConfirmationRequired = $true,
+        # repairKind documenta a natureza do reparo: 'component' (component e um id real do catalogo),
+        # 'app-tuning' (target e um AppTuning item), 'ai-tool' (install-cli --tool). Target carrega o id
+        # alvo independe do tipo. Consumidores que tratam 'component' como catalogo DEVEM checar repairKind.
+        [ValidateSet('component','app-tuning','ai-tool','reboot','other')][string]$RepairKind = 'component',
+        [string]$Target = ''
     )
 
     $Items.Add([ordered]@{
         id = $Id
         component = $Component
+        repairKind = $RepairKind
+        target = $Target
         risk = $Risk
         requiresAdmin = [bool]$RequiresAdmin
         rollbackAvailable = [bool]$RollbackAvailable
@@ -33212,10 +33228,13 @@ function New-BootstrapRepairPlan {
 
                     $dryRunCommand = ''
                     $executeCommand = ''
+                    # 'component' so e mantido quando o id existe MESMO no catalogo (campo component fica
+                    # vazio para app-tuning/ai-tool, evitando ambiguidade para consumidores).
+                    $componentField = ''
                     switch ($repairKind) {
                         'component' {
-                            # So emite -Component quando o componente REALMENTE existe no catalogo.
                             if ($null -ne $componentCatalog -and $componentCatalog.Contains($target)) {
+                                $componentField = $target
                                 $dryRunCommand = "$repoCommand -Component $target -DryRun -NonInteractive"
                                 $executeCommand = "$repoCommand -Component $target -NonInteractive"
                             }
@@ -33233,7 +33252,7 @@ function New-BootstrapRepairPlan {
                     }
                     if ([string]::IsNullOrWhiteSpace($executeCommand)) { continue } # sem executor real: nao adiciona item
 
-                    Add-BootstrapRepairPlanItem -Items $items -Id ("repair-agent-{0}" -f $target) -Component $target -Risk 'low' -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand $dryRunCommand -ExecuteCommand $executeCommand -Reason ("Ferramenta de tokens/memoria nao configurada: {0}." -f $displayName) -ConfirmationRequired:$true
+                    Add-BootstrapRepairPlanItem -Items $items -Id ("repair-agent-{0}" -f $target) -Component $componentField -RepairKind $repairKind -Target $target -Risk 'low' -RequiresAdmin:$false -RollbackAvailable:$false -DryRunCommand $dryRunCommand -ExecuteCommand $executeCommand -Reason ("Ferramenta de tokens/memoria nao configurada: {0}." -f $displayName) -ConfirmationRequired:$true
                 }
             }
         }

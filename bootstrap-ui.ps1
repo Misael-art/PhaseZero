@@ -6763,25 +6763,79 @@ function Invoke-UiHealthScopedDoctor {
 }
 
 function Invoke-UiHealthAgentToolsRepair {
-    # Reparo seguro de tokens/memoria: valida primeiro (escopo agent-tools), gera um RepairPlan
-    # SCOPED, exige confirmacao e roda o fluxo de reparo preservando log/result.json. Graphify nunca
-    # entra; cada item exige confirmacao no backend (manual-confirmation).
+    # Reparo seguro de tokens/memoria: valida em processo (escopo agent-tools), gera o RepairPlan
+    # SCOPED, exige confirmacao com a lista exata e APLICA cada item pelo seu fluxo real (componente,
+    # AppTuning item, ou install-cli --tool), preservando log/result.json. Graphify nunca entra; nenhum
+    # segredo e gravado; blocos Caveman/RTK/ai-memory/Ponytail nao sao sobrescritos.
+    if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
+        $ui.StatusLabel.Text = 'Aguarde a execução atual finalizar antes de reparar tokens/memória.'
+        return
+    }
+
+    # 1) Validacao + plano scoped, em processo (a UI carrega o backend em library mode).
+    $report = $null
+    $items = @()
+    try {
+        $report = New-BootstrapAgentToolsDoctorReport
+        # checks/auditResults vazios evitam que o loop compartilhado do RepairPlan itere sobre $null.
+        $plan = New-BootstrapRepairPlan -DoctorReport ([ordered]@{ agentTools = $report; checks = @(); auditResults = @() })
+        $items = @($plan.items | Where-Object { [string]$_.id -like 'repair-agent-*' })
+    } catch {
+        $ui.StatusLabel.Text = ("Falha ao gerar plano de tokens/memoria: {0}" -f $_.Exception.Message)
+        return
+    }
+    if (@($items).Count -eq 0) {
+        $ui.StatusLabel.Text = 'Tokens/memoria: tudo configurado, nada a reparar.'
+        return
+    }
+
+    # 2) Confirmacao com a lista exata de itens (e seus fluxos).
+    $lines = @($items | ForEach-Object { ("- {0}  [{1}]  -> {2}" -f [string]$_.target, [string]$_.repairKind, [string]$_.executeCommand) })
     $msg = @(
-        'Validar e reparar Gestao tokens/memoria (RTK, ai-memory, Caveman, Headroom, Ponytail, frugality).'
+        'Aplicar reparo de tokens/memoria nos itens nao configurados abaixo.'
         ''
-        'Sera gerado um RepairPlan apenas do escopo tokens/memoria. Nenhum segredo e gravado, nenhum bloco'
-        'Caveman/RTK/ai-memory/Ponytail e sobrescrito e Graphify continua placeholder (sem reparo).'
+    ) + $lines + @(
         ''
-        'Cada item exige confirmacao antes de aplicar. Continuar?'
-    ) -join [Environment]::NewLine
-    if (-not (Confirm-UiCriticalAction -Title 'Reparar tokens/memoria' -Message $msg)) {
+        'Nenhum segredo e gravado; Graphify nao e reparado; blocos existentes nao sao sobrescritos.'
+        'Continuar?'
+    )
+    if (-not (Confirm-UiCriticalAction -Title 'Reparar tokens/memoria' -Message ($msg -join [Environment]::NewLine))) {
         $ui.StatusLabel.Text = 'Reparo tokens/memoria cancelado.'
         return
     }
-    $runIdx = @($ui.PageNames).IndexOf('PageRun')
-    if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
-    Navigate-ToPage -Index $runIdx
-    Start-RunExecution -MaintenanceIntent 'repair-plan' -DoctorScope 'agent-tools'
+
+    # 3) Aplica: componentes + AppTuning numa unica invocacao do backend; ai-tool (rtk) via install-cli.
+    #    Todos produzem result.json/log versionaveis.
+    $components = @($items | Where-Object { [string]$_.repairKind -eq 'component' -and -not [string]::IsNullOrWhiteSpace([string]$_.target) } | ForEach-Object { [string]$_.target })
+    $appTuning  = @($items | Where-Object { [string]$_.repairKind -eq 'app-tuning' } | ForEach-Object { [string]$_.target })
+    $aiTools    = @($items | Where-Object { [string]$_.repairKind -eq 'ai-tool' } | ForEach-Object { [string]$_.target })
+
+    $launched = New-Object System.Collections.Generic.List[string]
+    $timestamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+
+    if (@($components).Count -gt 0 -or @($appTuning).Count -gt 0) {
+        $artifacts = New-UiRunArtifactSet -Timestamp $timestamp
+        $ui.CurrentLogPath = [string]$artifacts.LogPath
+        $ui.CurrentResultPath = [string]$artifacts.ResultPath
+        $tokens = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $backendScriptPath, '-NonInteractive')
+        if (@($components).Count -gt 0) { $tokens += @('-Component') + @($components) }
+        if (@($appTuning).Count -gt 0) { $tokens += @('-AppTuningItem') + @($appTuning) }
+        $tokens += @('-LogPath', [string]$artifacts.LogPath, '-ResultPath', [string]$artifacts.ResultPath)
+        $psExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        Start-Process -FilePath $psExe -ArgumentList (ConvertTo-ArgumentString -Tokens $tokens) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
+        $launched.Add(("componentes/apptuning -> {0}" -f [string]$artifacts.ResultPath)) | Out-Null
+    }
+
+    foreach ($tool in @($aiTools)) {
+        $aiArtifacts = New-UiRunArtifactSet -Timestamp ("{0}-{1}" -f $timestamp, $tool)
+        $installCli = Join-Path $PSScriptRoot 'install-cli.bat'
+        $aiArgs = @('--tool', $tool, '--install', '--yes', '--result-path', [string]$aiArtifacts.ResultPath, '--log-path', [string]$aiArtifacts.LogPath)
+        Start-Process -FilePath $installCli -ArgumentList (ConvertTo-ArgumentString -Tokens $aiArgs) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
+        $launched.Add(("{0} -> {1}" -f $tool, [string]$aiArtifacts.ResultPath)) | Out-Null
+    }
+
+    Update-RunArtifactButtons
+    $ui.StatusLabel.Text = ("Reparo tokens/memoria iniciado ({0} acao(es)). Artefatos: {1}" -f @($launched).Count, (@($launched) -join '; '))
 }
 
 function Get-UiHealthCardStatusText {

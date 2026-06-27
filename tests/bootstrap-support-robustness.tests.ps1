@@ -666,6 +666,30 @@ Describe 'Doctor scope gating' {
             }
             # Comando de reparo nunca pode ficar vazio.
             [string]::IsNullOrWhiteSpace($cmd) | Should Be $false
+            # O campo 'component' so pode nomear um componente REAL do catalogo (ou ficar vazio);
+            # repairKind desambigua app-tuning/ai-tool.
+            if (-not [string]::IsNullOrWhiteSpace([string]$item.component)) {
+                $catalog.Contains([string]$item.component) | Should Be $true
+                [string]$item.repairKind | Should Be 'component'
+            }
+            (@('component','app-tuning','ai-tool','reboot','other') -contains [string]$item.repairKind) | Should Be $true
+        }
+    }
+
+    It 'sets repairKind/target and leaves component empty for ai-tool and app-tuning repairs' {
+        $report = New-BootstrapDoctorReport -Scopes @('agent-tools')
+        $plan = New-BootstrapRepairPlan -DoctorReport $report
+        $rtk = @($plan.items | Where-Object { [string]$_.target -eq 'rtk' })
+        if (@($rtk).Count -gt 0) {
+            [string]$rtk[0].repairKind | Should Be 'ai-tool'
+            [string]$rtk[0].component | Should Be ''
+            ([string]$rtk[0].executeCommand -match 'install-cli') | Should Be $true
+        }
+        $frug = @($plan.items | Where-Object { [string]$_.target -eq 'ai-context-frugality-pack' })
+        if (@($frug).Count -gt 0) {
+            [string]$frug[0].repairKind | Should Be 'app-tuning'
+            [string]$frug[0].component | Should Be ''
+            ([string]$frug[0].executeCommand -match '-AppTuningItem ai-context-frugality-pack') | Should Be $true
         }
     }
 
@@ -776,5 +800,22 @@ Describe 'MSVC build environment and aider/goose baseline' {
     It 'imports the MSVC environment best-effort without throwing when the toolset is absent' {
         { Import-BootstrapMsvcEnvironment | Out-Null } | Should Not Throw
         (Import-BootstrapMsvcEnvironment) -is [bool] | Should Be $true
+    }
+
+    It 'never auto-installs VS Build Tools in library mode / without explicit opt-in' {
+        Mock Get-BootstrapMsvcInstallationPath { '' }
+        Mock Import-BootstrapMsvcEnvironment { $false }
+        Mock Invoke-NativeWithRetry { throw 'winget must not run for msvc-build-env without opt-in' }
+        $prev = $env:PHASEZERO_ALLOW_MSVC_BUILDTOOLS_INSTALL
+        try {
+            $env:PHASEZERO_ALLOW_MSVC_BUILDTOOLS_INSTALL = ''
+            $r = Ensure-BootstrapMsvcBuildEnv -State @{ DryRun = $false }
+            [string]$r.status | Should Be 'requires-install'
+            [bool]$r.installedNow | Should Be $false
+            [string]::IsNullOrWhiteSpace([string]$r.repairCommand) | Should Be $false
+            Assert-MockCalled Invoke-NativeWithRetry -Times 0
+        } finally {
+            $env:PHASEZERO_ALLOW_MSVC_BUILDTOOLS_INSTALL = $prev
+        }
     }
 }
