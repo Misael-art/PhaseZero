@@ -666,3 +666,38 @@ Describe 'Doctor scope gating' {
         (Resolve-BootstrapDoctorScopes -Scopes @('winget','bogus')) | Should Be @('winget')
     }
 }
+
+Describe 'MSVC build environment and aider/goose baseline' {
+    It 'registers msvc-build-env as a builtin component' {
+        $catalog = Get-BootstrapComponentCatalog
+        $catalog.Contains('msvc-build-env') | Should Be $true
+        [string]$catalog['msvc-build-env'].Kind | Should Be 'builtin'
+    }
+
+    It 'makes aider depend on msvc-build-env so the compiler env is primed first' {
+        $catalog = Get-BootstrapComponentCatalog
+        (@($catalog['aider'].DependsOn) -contains 'msvc-build-env') | Should Be $true
+    }
+
+    It 'includes msvc-build-env, aider and goose in the PhaseZero baseline profile' {
+        $profiles = Get-BootstrapProfileCatalog
+        foreach ($item in @('msvc-build-env','aider','goose')) {
+            (@($profiles['PhaseZero'].Items) -contains $item) | Should Be $true
+        }
+    }
+
+    It 'routes MSVC repair to msvc-build-env when the compiler is absent' {
+        $report = New-BootstrapDoctorReport -Scopes @('msvc')
+        if (-not $report.msvc.compilerAvailable -and -not $report.msvc.runtimeDllsMissing) {
+            [string]$report.msvc.repairComponent | Should Be 'msvc-build-env'
+        } else {
+            # Host ja tem cl.exe ou DLLs ausentes; apenas garante um repairComponent valido/coerente.
+            (@('', 'msvc-build-env', 'vcpp-redist') -contains [string]$report.msvc.repairComponent) | Should Be $true
+        }
+    }
+
+    It 'imports the MSVC environment best-effort without throwing when the toolset is absent' {
+        { Import-BootstrapMsvcEnvironment | Out-Null } | Should Not Throw
+        (Import-BootstrapMsvcEnvironment) -is [bool] | Should Be $true
+    }
+}

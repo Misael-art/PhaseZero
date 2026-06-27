@@ -7779,6 +7779,10 @@ function Ensure-UvToolPackage {
     $null = New-Item -Path $localBin -ItemType Directory -Force
     $env:UV_TOOL_BIN_DIR = $localBin
 
+    # Prime o ambiente MSVC (cl.exe/INCLUDE/LIB) para o caso de a dependencia precisar compilar wheel
+    # nativa; best-effort e idempotente (no-op se cl.exe ja resolve ou se o toolset nao existir).
+    try { [void](Import-BootstrapMsvcEnvironment) } catch { }
+
     Write-Log "Instalando $DisplayName ($Package) via uv tool..."
     $installCommandArgs = @('tool', 'install', '--reinstall') + $sanitizedInstallArgs + @($Package)
     $exitCode = Invoke-NativeWithRetry -Exe $uvExe -Args $installCommandArgs -OperationName "$DisplayName via uv tool"
@@ -8808,7 +8812,9 @@ function Get-BootstrapCandidateVolumeRoots {
                 FileSystem  = [string]$v.FileSystemType
             }) | Out-Null
         }
-    } catch { }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
     return @($roots.ToArray())
 }
 
@@ -8903,7 +8909,9 @@ function Get-BootstrapDeckEmulationRoot {
         $readiness = Get-BootstrapBtrfsReadiness -ScanPartitions:$ScanVolumes
         $accessLevel = [string]$readiness.accessLevel
         $writable = ($accessLevel -eq 'write-opt-in')
-    } catch { }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
 
     return [ordered]@{
         found             = [bool]$deckHome.found
@@ -15203,7 +15211,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['agent-compat-runtime'] = New-BootstrapComponentDefinition -Name 'agent-compat-runtime' -Description 'Runtime declarativo de compatibilidade entre Caveman, RTK, ai-memory e regras Ponytail para IDEs/CLIs.' -DependsOn @('system-core') -Kind 'builtin' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Evita conflitos: style=Caveman, shell=RTK quando presente, memory=ai-memory quando presente, architecture=Ponytail apenas por workspace.'; riskLevel = 'safe' }
     $catalog['promptfoo'] = New-BootstrapComponentDefinition -Name 'promptfoo' -Description 'promptfoo via npm -g.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'promptfoo'; DisplayName = 'promptfoo'; CommandNames = @('promptfoo', 'pf') }
     $catalog['openwebui'] = New-BootstrapComponentDefinition -Name 'openwebui' -Description 'Open WebUI via Docker (porta 3000).' -DependsOn @('docker') -Kind 'openwebui'
-    $catalog['aider'] = New-BootstrapComponentDefinition -Name 'aider' -Description 'aider via uv tool.' -DependsOn @('python-core') -Kind 'uvtool' -Data @{ Package = 'aider-chat'; CommandName = 'aider'; DisplayName = 'aider (aider-chat)'; VersionArgs = @('--version') }
+    $catalog['aider'] = New-BootstrapComponentDefinition -Name 'aider' -Description 'aider via uv tool.' -DependsOn @('python-core', 'msvc-build-env') -Kind 'uvtool' -Data @{ Package = 'aider-chat'; CommandName = 'aider'; DisplayName = 'aider (aider-chat)'; VersionArgs = @('--version') }
     $catalog['goose'] = New-BootstrapComponentDefinition -Name 'goose' -Description 'goose CLI.' -DependsOn @('git-core') -Kind 'goose'
     $catalog['repo-gemini-cli'] = New-BootstrapComponentDefinition -Name 'repo-gemini-cli' -Description 'Clone do repositório gemini-cli.' -DependsOn @('git-core') -Kind 'repo-clone' -Data @{ RepoUrl = 'https://github.com/heartyguy/gemini-cli'; TargetName = 'gemini-cli' }
     $catalog['n8n'] = New-BootstrapComponentDefinition -Name 'n8n' -Description 'n8n global via npm.' -DependsOn @('node-core') -Kind 'npm' -Data @{ Package = 'n8n'; DisplayName = 'n8n'; CommandNames = @('n8n') }
@@ -15240,6 +15248,7 @@ function Get-BootstrapComponentCatalog {
     # --- Emulacao compartilhada com o HOME do Steam Deck (Btrfs) -------------------------------
     $catalog['steamdeck-home-detect'] = New-BootstrapComponentDefinition -Name 'steamdeck-home-detect' -Description 'Descobre e valida (read-only) o HOME do Steam Deck montado via WinBtrfs e expoe o root de emulacao.' -Optional $true -DependsOn @('winbtrfs') -Kind 'builtin' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Permite reusar ROMs/BIOS/midia/saves do SteamOS sem duplicar no Windows.'; sharingPolicy = 'deck-home-source-of-truth'; riskLevel = 'safe' }
     $catalog['emulation-deck-shared-media'] = New-BootstrapComponentDefinition -Name 'emulation-deck-shared-media' -Description 'Canonicaliza a midia de scraping (storage/downloaded_media) e cria links de compatibilidade, de forma nao-destrutiva.' -Optional $true -DependsOn @('steamdeck-home-detect') -Kind 'builtin' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Maximiza compatibilidade de scrapers entre frontends sem mover/apagar a midia existente.'; sharingPolicy = 'canonical-media-with-compat-links'; riskLevel = 'safe' }
+    $catalog['msvc-build-env'] = New-BootstrapComponentDefinition -Name 'msvc-build-env' -Description 'Toolchain de build MSVC (cl.exe via vcvars64): localiza por vswhere, instala VS Build Tools (VC.Tools.x86.x64) se ausente e ativa o ambiente para builds nativos (ex.: wheels do aider).' -Optional $true -DependsOn @('system-core') -Kind 'builtin' -RequiresNetwork $true -Data @{ Stage = 'payload'; Provisioning = 'builtin'; ValueReason = 'Habilita compilacao de dependencias nativas (cl.exe/INCLUDE/LIB) para uv tool/pip; corrige aider e afins que falham sem o compilador.'; riskLevel = 'safe' }
     $catalog['emulation-frontend-pointing'] = New-BootstrapComponentDefinition -Name 'emulation-frontend-pointing' -Description 'Aponta ES-DE/Pegasus/Playnite para os roots compartilhados (Deck ou local), sem duplicar dados.' -Optional $true -DependsOn @('steamdeck-home-detect') -Kind 'builtin' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Os frontends Windows leem ROMs/midia do HOME do Deck, sem copia.'; sharingPolicy = 'pointer-only'; riskLevel = 'safe' }
     $catalog['emulation-desktop-shortcuts'] = New-BootstrapComponentDefinition -Name 'emulation-desktop-shortcuts' -Description 'Cria a pasta "Emulacao" no Desktop com atalhos para emuladores/frontends instalados e icone proprio.' -Optional $true -DependsOn @('steamdeck-home-detect') -Kind 'builtin' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Acesso rapido a toda a stack de emulacao do perfil.'; riskLevel = 'safe' }
 
@@ -15398,7 +15407,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['workspace'] = New-BootstrapProfileDefinition -Name 'workspace' -Description 'Layout em F:\Steam\Steamapps e Dev.' -Items @('workspace-layout', 'pycharm-community', 'dotnet-core')
     $catalog['webapps'] = New-BootstrapProfileDefinition -Name 'webapps' -Description 'Atalhos web (PWA) de Office, nuvem, multimidia, comunicacao e IA na area de trabalho.' -Items @('webapp-photopea', 'webapp-whatsapp-web', 'webapp-xiaomi-ai-studio', 'webapp-manus', 'webapp-kimi', 'webapp-google-docs', 'webapp-z-ai', 'webapp-gemini-web', 'webapp-google-ai-studio', 'webapp-v0-dev', 'webapp-bolt-new', 'webapp-lovable-dev', 'webapp-google-sheets', 'webapp-google-slides', 'webapp-google-calendar', 'webapp-gmail', 'webapp-office-word', 'webapp-office-excel', 'webapp-office-powerpoint', 'webapp-trello', 'webapp-notion', 'webapp-google-keep', 'webapp-onedrive', 'webapp-google-drive', 'webapp-dropbox', 'webapp-mega', 'webapp-icloud', 'webapp-youtube', 'webapp-netflix', 'webapp-spotify', 'webapp-prime-video', 'webapp-telegram-web', 'webapp-discord', 'webapp-slack', 'webapp-zoom', 'webapp-google-meet')
     $catalog['virtualization'] = New-BootstrapProfileDefinition -Name 'virtualization' -Description 'Plataformas de virtualizacao opt-in (admin + reboot): Hyper-V e Windows Hypervisor Platform.' -Items @('hyper-v', 'hyper-v-tools', 'windows-hypervisor-platform')
-    $catalog['PhaseZero'] = New-BootstrapProfileDefinition -Name 'PhaseZero' -Description 'Baseline obrigatorio do projeto: runtimes, ferramentas, plataformas e atalhos web que todo host deve ter instalados e configurados.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp', 'powershell', 'chrome', 'wsl-core', 'wsl-ui', 'docker', 'unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community', 'steam', 'steamcmd', 'webapps')
+    $catalog['PhaseZero'] = New-BootstrapProfileDefinition -Name 'PhaseZero' -Description 'Baseline obrigatorio do projeto: runtimes, ferramentas, plataformas e atalhos web que todo host deve ter instalados e configurados.' -Items @('git-core', 'git-lfs', 'node-core', 'python-core', 'java-core', 'dotnet-core', 'sevenzip', 'terminal', 'github-cli', 'notepadpp', 'powershell', 'chrome', 'wsl-core', 'wsl-ui', 'docker', 'unity-hub', 'cmake', 'llvm', 'rustup', 'visual-studio-community', 'msvc-build-env', 'aider', 'goose', 'steam', 'steamcmd', 'webapps')
     $catalog['full-workstation'] = New-BootstrapProfileDefinition -Name 'full-workstation' -Description 'Workstation ampla com base, containers, IA, criacao, workspace, seguranca, social e utilitarios; opt-in.' -Items @('base', 'containers', 'dev-ai', 'creator', 'workspace', 'security', 'social', 'utilities')
     $catalog['recommended'] = New-BootstrapProfileDefinition -Name 'recommended' -Description 'Alias seguro para safe-base. Use full-workstation para instalacao ampla.' -Items @('safe-base')
     $catalog['full'] = New-BootstrapProfileDefinition -Name 'full' -Description 'Instala tudo; perfil amplo opt-in.' -Items @('full-workstation', 'automation', 'game-dev', 'gaming', 'webapps', 'virtualization')
@@ -30118,7 +30127,7 @@ function Get-BootstrapDirectoryReparseTarget {
     $isReparse = (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq [System.IO.FileAttributes]::ReparsePoint)
     if (-not $isReparse) { return '' }
     $target = ''
-    try { if ($item.PSObject.Properties.Name -contains 'Target' -and $item.Target) { $target = @($item.Target)[0] } } catch { }
+    try { if ($item.PSObject.Properties.Name -contains 'Target' -and $item.Target) { $target = @($item.Target)[0] } } catch { Write-Verbose $_.Exception.Message }
     return [string]$target
 }
 
@@ -30537,6 +30546,7 @@ function Ensure-BootstrapBuiltinComponent {
         'emulation-shared-runtime' { return (Ensure-BootstrapEmulationSharedRuntime -State $State -ComponentDef $ComponentDef) }
         'steamdeck-home-detect' { return (Ensure-BootstrapSteamDeckHomeDetect -State $State) }
         'emulation-deck-shared-media' { return (Ensure-BootstrapDeckMediaCanonical -State $State) }
+        'msvc-build-env' { return (Ensure-BootstrapMsvcBuildEnv -State $State) }
         'emulation-frontend-pointing' { return (Ensure-BootstrapEmulationFrontendPaths -State $State) }
         'emulation-desktop-shortcuts' { return (Ensure-BootstrapEmulationDesktopShortcuts -State $State) }
         'dualboot-manager' { return (Ensure-BootstrapDualBootManager -State $State) }
@@ -32695,7 +32705,9 @@ function New-BootstrapWindowsOptimizationDoctorReport {
                 }
             }
         }
-    } catch { }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
 
     return [ordered]@{
         schemaVersion = 'windows-optimization-doctor/v1'
@@ -32760,7 +32772,8 @@ function New-BootstrapMsvcDoctorReport {
     $clAvailable = (-not [string]::IsNullOrWhiteSpace($clPath)) -or (-not [string]::IsNullOrWhiteSpace($vsInstall))
 
     $status = if ($missingDll) { 'critical' } elseif (-not $clAvailable) { 'warning' } else { 'healthy' }
-    $repairComponent = if ($missingDll) { 'vcpp-redist' } else { '' }
+    # DLLs do runtime ausentes -> vcpp-redist; compilador (cl.exe) ausente -> msvc-build-env.
+    $repairComponent = if ($missingDll) { 'vcpp-redist' } elseif (-not $clAvailable) { 'msvc-build-env' } else { '' }
 
     return [ordered]@{
         schemaVersion = 'msvc-doctor/v1'
@@ -32775,6 +32788,108 @@ function New-BootstrapMsvcDoctorReport {
         repairComponent = $repairComponent
         summary = ("MSVC: runtime DLLs {0}; cl.exe {1}{2}" -f $(if ($missingDll) { 'AUSENTES (instale vcpp-redist)' } else { 'OK' }), $(if ($clAvailable) { 'presente' } else { 'ausente (instale VS Build Tools - VC.Tools.x86.x64)' }), $(if (-not $clAvailable -and [string]::IsNullOrWhiteSpace($clPath)) { '' } else { '' }))
     }
+}
+
+function Get-BootstrapVsWherePath {
+    foreach ($c in @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'),
+        (Join-Path $env:ProgramFiles 'Microsoft Visual Studio\Installer\vswhere.exe')
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($c) -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
+    }
+    return ''
+}
+
+function Get-BootstrapMsvcInstallationPath {
+    # installationPath de uma instalacao VS/BuildTools com o toolset VC.Tools.x86.x64 (via vswhere).
+    $vswhere = Get-BootstrapVsWherePath
+    if ([string]::IsNullOrWhiteSpace($vswhere)) { return '' }
+    try {
+        $out = & $vswhere -products '*' -requires 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64' -latest -property installationPath 2>$null
+        $path = ([string]($out | Select-Object -First 1)).Trim()
+        if (-not [string]::IsNullOrWhiteSpace($path) -and (Test-Path -LiteralPath $path)) { return $path }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    return ''
+}
+
+function Get-BootstrapVcvars64Path {
+    param([string]$InstallationPath = '')
+    $root = if ([string]::IsNullOrWhiteSpace($InstallationPath)) { Get-BootstrapMsvcInstallationPath } else { $InstallationPath }
+    if ([string]::IsNullOrWhiteSpace($root)) { return '' }
+    $vcvars = Join-Path $root 'VC\Auxiliary\Build\vcvars64.bat'
+    if (Test-Path -LiteralPath $vcvars -PathType Leaf) { return $vcvars }
+    return ''
+}
+
+function Import-BootstrapMsvcEnvironment {
+    # Carrega o ambiente do MSVC (cl.exe/INCLUDE/LIB/PATH) no processo atual via vcvars64.bat.
+    # Idempotente: no-op se cl.exe ja resolve. Best-effort: retorna $false sem lancar se indisponivel.
+    param([switch]$Force)
+
+    if (-not $Force) {
+        $cl = Resolve-CommandPath -Name 'cl.exe'
+        if (-not [string]::IsNullOrWhiteSpace($cl)) { return $true }
+    }
+    $vcvars = Get-BootstrapVcvars64Path
+    if ([string]::IsNullOrWhiteSpace($vcvars)) { return $false }
+
+    try {
+        $captured = & cmd /c ('"{0}" >NUL 2>&1 && set' -f $vcvars)
+        $importNames = @('PATH','INCLUDE','LIB','LIBPATH','VCINSTALLDIR','VCToolsInstallDir',
+                         'WindowsSdkDir','WindowsSDKVersion','UCRTVersion','UniversalCRTSdkDir',
+                         'VSCMD_ARG_HOST_ARCH','VSCMD_ARG_TGT_ARCH','VSINSTALLDIR')
+        foreach ($line in @($captured)) {
+            $idx = ([string]$line).IndexOf('=')
+            if ($idx -lt 1) { continue }
+            $name = ([string]$line).Substring(0, $idx)
+            $value = ([string]$line).Substring($idx + 1)
+            if ($importNames -contains $name) { Set-Item -Path ("Env:{0}" -f $name) -Value $value -Force }
+        }
+        $cl = Resolve-CommandPath -Name 'cl.exe'
+        return (-not [string]::IsNullOrWhiteSpace($cl))
+    } catch {
+        Write-Log ("MSVC env: falha ao importar vcvars64: {0}" -f $_.Exception.Message) 'WARN'
+        return $false
+    }
+}
+
+function Ensure-BootstrapMsvcBuildEnv {
+    # Garante o toolset MSVC (cl.exe). Se ausente, instala VS Build Tools (VC.Tools.x86.x64) via
+    # winget e importa vcvars64 no processo. Nunca formata; idempotente.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $installPath = Get-BootstrapMsvcInstallationPath
+    $installedNow = $false
+    if ([string]::IsNullOrWhiteSpace($installPath)) {
+        if ([bool]$State.DryRun) {
+            Write-Log 'msvc-build-env: (dry-run) instalaria Microsoft.VisualStudio.2022.BuildTools (VC.Tools.x86.x64) e importaria vcvars64.'
+            return [ordered]@{ status = 'planned'; toolsetPath = ''; installedNow = $false; envImported = $false; dryRun = $true }
+        }
+        $winget = ''
+        try { $winget = [string]$State.Winget } catch { $winget = '' }
+        if ([string]::IsNullOrWhiteSpace($winget)) { $winget = Resolve-CommandPath -Name 'winget' }
+        if (-not [string]::IsNullOrWhiteSpace($winget)) {
+            Write-Log 'msvc-build-env: toolset VC ausente; instalando Microsoft.VisualStudio.2022.BuildTools (VC.Tools.x86.x64)...'
+            $override = '--quiet --wait --norestart --add Microsoft.VisualStudio.Workload.VCTools --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --includeRecommended'
+            $wingetArgs = @('install', '-e', '--id', 'Microsoft.VisualStudio.2022.BuildTools', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity', '--override', $override)
+            $exit = Invoke-NativeWithRetry -Exe $winget -Args $wingetArgs -OperationName 'VS Build Tools (VC.Tools) via winget' -MaxAttempts 2 -InitialDelaySeconds 3 -SoftSuccessExitCodes $script:WingetSoftSuccessExitCodes
+            $installedNow = ($exit -eq 0)
+            if ($State.ContainsKey('Changes')) {
+                try { Register-BootstrapChange -State $State -Type Package -Target 'Microsoft.VisualStudio.2022.BuildTools' -Name 'VS Build Tools (VC.Tools.x86.x64)' -OldValue $null -NewValue @{ Source = 'winget' } -Operation 'winget-install' -RollbackAction 'winget-uninstall' -Reversible 'partial' -Component 'msvc-build-env' } catch { Write-Verbose $_.Exception.Message }
+            }
+            $installPath = Get-BootstrapMsvcInstallationPath
+        } else {
+            Write-Log 'msvc-build-env: winget ausente; instale VS Build Tools (VC.Tools.x86.x64) manualmente.' 'WARN'
+        }
+    }
+
+    $imported = Import-BootstrapMsvcEnvironment -Force
+    $cl = Resolve-CommandPath -Name 'cl.exe'
+    $status = if (-not [string]::IsNullOrWhiteSpace($cl)) { 'completed' } else { 'degraded' }
+    Write-Log ("msvc-build-env: toolsetPath={0}; installedNow={1}; envImported={2}; cl={3}" -f $(if ($installPath) { $installPath } else { 'ausente' }), $installedNow, $imported, $(if ($cl) { $cl } else { 'ausente' }))
+    return [ordered]@{ status = $status; toolsetPath = [string]$installPath; installedNow = [bool]$installedNow; envImported = [bool]$imported; clPath = [string]$cl; dryRun = [bool]$State.DryRun }
 }
 
 function New-BootstrapDoctorReport {
@@ -34169,8 +34284,10 @@ function Invoke-BootstrapProfileMode {
     Write-BootstrapCommandSummary -Label 'pip' -CommandName 'pip' -Args @('--version')
     Write-BootstrapCommandSummary -Label 'claude' -CommandName 'claude' -Args @('--version')
     Write-BootstrapCommandSummary -Label 'gh' -CommandName 'gh' -Args @('--version')
-    Write-BootstrapCommandSummary -Label 'aider' -CommandName 'aider' -Args @('--version')
-    Write-BootstrapCommandSummary -Label 'goose' -CommandName 'goose' -Args @('--version')
+    # aider/goose so aparecem no resumo quando foram selecionados nesta execucao (evita WARN falso
+    # "NAO ENCONTRADO" em perfis que nao os incluem).
+    if ($state.Completed.ContainsKey('aider')) { Write-BootstrapCommandSummary -Label 'aider' -CommandName 'aider' -Args @('--version') }
+    if ($state.Completed.ContainsKey('goose')) { Write-BootstrapCommandSummary -Label 'goose' -CommandName 'goose' -Args @('--version') }
     Write-BootstrapCommandSummary -Label 'wsl' -CommandName 'wsl.exe' -Args @('--version')
 
     $opencodeExe = Join-Path (Join-Path (Get-BootstrapUserHomePath) '.opencode\bin') 'opencode.exe'

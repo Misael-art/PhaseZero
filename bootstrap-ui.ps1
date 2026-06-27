@@ -6711,24 +6711,19 @@ function Get-UiDoctorHumanSummary {
     $lines.Add(("Doctor [{0}] -> {1}" -f $scopeText, $(if ([string]::IsNullOrWhiteSpace($overall)) { 'concluido' } else { $overall }))) | Out-Null
 
     # Destaques por area presente no relatorio.
-    try {
-        $at = $Result.doctor.agentTools
-        if ($null -ne $at) {
-            $lines.Add(("Tokens/memoria: {0}. {1}" -f [string]$at.status, [string]$at.summary)) | Out-Null
+    foreach ($area in @('agentTools','windowsOptimization','mcp','msvc')) {
+        try {
+            $section = $Result.doctor.$area
+            if ($null -eq $section) { continue }
+            if ($area -eq 'agentTools') {
+                $lines.Add(("Tokens/memoria: {0}. {1}" -f [string]$section.status, [string]$section.summary)) | Out-Null
+            } else {
+                $lines.Add([string]$section.summary) | Out-Null
+            }
+        } catch {
+            Write-Verbose $_.Exception.Message
         }
-    } catch { }
-    try {
-        $wo = $Result.doctor.windowsOptimization
-        if ($null -ne $wo) { $lines.Add([string]$wo.summary) | Out-Null }
-    } catch { }
-    try {
-        $mcp = $Result.doctor.mcp
-        if ($null -ne $mcp) { $lines.Add([string]$mcp.summary) | Out-Null }
-    } catch { }
-    try {
-        $msvc = $Result.doctor.msvc
-        if ($null -ne $msvc) { $lines.Add([string]$msvc.summary) | Out-Null }
-    } catch { }
+    }
 
     return ($lines.ToArray() -join [Environment]::NewLine)
 }
@@ -6739,7 +6734,7 @@ function Set-UiHealthCardsEnabled {
     foreach ($name in @('HealthWslCard','HealthWingetCard','HealthRebootCard','HealthSecretsCard',
                         'HealthGithubCard','HealthAiUsagebarCard','HealthAiMemoryCard','HealthAionUiCard',
                         'HealthDeckCard','HealthRollbackCard')) {
-        try { if ($ui.ContainsKey($name) -and $null -ne $ui[$name]) { $ui[$name].IsEnabled = $Enabled } } catch { }
+        try { if ($ui.ContainsKey($name) -and $null -ne $ui[$name]) { $ui[$name].IsEnabled = $Enabled } } catch { Write-Verbose $_.Exception.Message }
     }
 }
 
@@ -6755,7 +6750,7 @@ function Invoke-UiHealthScopedDoctor {
             $StatusTextBlock.Text = 'verificando...'
             $StatusTextBlock.Foreground = Get-UiBrush '#FBBF24'
         }
-    } catch { }
+    } catch { Write-Verbose $_.Exception.Message }
     $ui.DoctorScopeCard = $Scope
     Set-UiHealthCardsEnabled -Enabled $false
     $runIdx = @($ui.PageNames).IndexOf('PageRun')
@@ -6965,7 +6960,7 @@ function Finalize-RunFromResult {
     } catch {
     }
     # Reabilita os cards de saude apos a verificacao (scoped ou completa).
-    try { Set-UiHealthCardsEnabled -Enabled $true; $ui.DoctorScopeCard = '' } catch { }
+    try { Set-UiHealthCardsEnabled -Enabled $true; $ui.DoctorScopeCard = '' } catch { Write-UiLog -Level 'WARN' -Message ("reset health cards: {0}" -f $_.Exception.Message) }
     Complete-RunExecution -StatusText $statusText
 }
 
