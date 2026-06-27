@@ -8792,6 +8792,130 @@ function Get-BootstrapBtrfsReadiness {
     }
 }
 
+function Get-BootstrapCandidateVolumeRoots {
+    # Enumera volumes Windows com letra atribuida. Funcao isolada para permitir Mock nos testes.
+    # Retorna objetos { Root; DriveLetter; FileSystem }. Sem efeitos colaterais.
+    $roots = New-Object System.Collections.Generic.List[object]
+    try {
+        $volumes = Get-Volume -ErrorAction SilentlyContinue
+        foreach ($v in $volumes) {
+            $letter = [string]$v.DriveLetter
+            if ([string]::IsNullOrWhiteSpace($letter)) { continue }
+            $roots.Add([pscustomobject]@{
+                Root        = ('{0}:\' -f $letter)
+                DriveLetter = $letter
+                FileSystem  = [string]$v.FileSystemType
+            }) | Out-Null
+        }
+    } catch { }
+    return @($roots.ToArray())
+}
+
+function Get-BootstrapSteamDeckHome {
+    # Descoberta dinamica (SEM hardcode de letra) do HOME do Steam Deck montado via WinBtrfs.
+    # Varre todos os volumes com letra procurando a arvore EmuDeck e valida antes de confiar.
+    # Read-only: nunca escreve. Seguro em library mode salvo -ScanVolumes.
+    param(
+        [switch]$ScanVolumes
+    )
+
+    $result = [ordered]@{
+        found             = $false
+        deckHome          = ''
+        emulationRoot     = ''
+        driveLetter       = ''
+        fileSystem        = ''
+        validationReasons = @()
+    }
+
+    if ($BootstrapUiLibraryMode -and -not $ScanVolumes) { return $result }
+
+    # Subcaminhos relativos onde o HOME do Deck costuma aparecer quando a particao raiz (subvol @)
+    # do SteamOS e montada: '@\deck' (subvol cru), 'deck' e 'home\deck'.
+    $homeRelCandidates = @('@\deck', 'deck', 'home\deck')
+    $emulationMarkers = @('roms', 'bios', 'storage', 'tools', 'saves')
+
+    $linuxPartitionCount = 0
+    try { $linuxPartitionCount = @(Get-BootstrapLinuxPartitions -Force:$ScanVolumes).Count } catch { $linuxPartitionCount = 0 }
+
+    foreach ($vol in @(Get-BootstrapCandidateVolumeRoots)) {
+        foreach ($rel in $homeRelCandidates) {
+            $homeCandidate = [System.IO.Path]::Combine([string]$vol.Root, $rel)
+            $emulationCandidate = [System.IO.Path]::Combine($homeCandidate, 'Emulation')
+            if (-not (Test-Path -LiteralPath $emulationCandidate -PathType Container)) { continue }
+
+            $reasons = New-Object System.Collections.Generic.List[string]
+
+            # Validacao 1: legibilidade real do diretorio.
+            $childNames = @()
+            try { $childNames = @(Get-ChildItem -LiteralPath $emulationCandidate -Force -ErrorAction Stop | Select-Object -ExpandProperty Name) }
+            catch { $reasons.Add('emulation-root-unreadable') | Out-Null }
+
+            # Validacao 2: marcadores da arvore EmuDeck/ES-DE.
+            $hasMarker = $false
+            foreach ($m in $emulationMarkers) {
+                if ($childNames -contains $m) { $hasMarker = $true; break }
+            }
+            if (-not $hasMarker) { $reasons.Add('no-emudeck-markers') | Out-Null }
+
+            # Validacao 3 (soft): filesystem nao-Windows (Btrfs/Unknown/RAW) ou ha particao Linux.
+            $fs = [string]$vol.FileSystem
+            $looksNonWindowsFs = ([string]::IsNullOrWhiteSpace($fs) -or $fs -in @('Btrfs', 'Unknown', 'RAW'))
+            if (-not $looksNonWindowsFs -and $linuxPartitionCount -le 0) {
+                $reasons.Add('volume-not-linux-backed') | Out-Null
+            }
+
+            if ($reasons.Count -eq 0) {
+                $result.found = $true
+                $result.deckHome = $homeCandidate
+                $result.emulationRoot = $emulationCandidate
+                $result.driveLetter = [string]$vol.DriveLetter
+                $result.fileSystem = $fs
+                $result.validationReasons = @()
+                return $result
+            }
+
+            # Guarda o melhor "quase" para diagnostico, mas segue procurando um valido.
+            if (-not $result.found -and $result.validationReasons.Count -eq 0) {
+                $result.deckHome = $homeCandidate
+                $result.emulationRoot = $emulationCandidate
+                $result.driveLetter = [string]$vol.DriveLetter
+                $result.fileSystem = $fs
+                $result.validationReasons = @($reasons.ToArray())
+            }
+        }
+    }
+
+    return $result
+}
+
+function Get-BootstrapDeckEmulationRoot {
+    # Resolve o root de emulacao do Deck (se valido) cruzado com a prontidao Btrfs (acesso R/O vs R/W).
+    param(
+        [switch]$ScanVolumes
+    )
+
+    $deckHome = Get-BootstrapSteamDeckHome -ScanVolumes:$ScanVolumes
+    $accessLevel = 'unknown'
+    $writable = $false
+    try {
+        $readiness = Get-BootstrapBtrfsReadiness -ScanPartitions:$ScanVolumes
+        $accessLevel = [string]$readiness.accessLevel
+        $writable = ($accessLevel -eq 'write-opt-in')
+    } catch { }
+
+    return [ordered]@{
+        found             = [bool]$deckHome.found
+        emulationRoot     = [string]$deckHome.emulationRoot
+        deckHome          = [string]$deckHome.deckHome
+        driveLetter       = [string]$deckHome.driveLetter
+        accessLevel       = $accessLevel
+        writable          = [bool]$writable
+        readable          = ([bool]$deckHome.found -and ($accessLevel -in @('read-only-ok', 'write-opt-in')))
+        validationReasons = @($deckHome.validationReasons)
+    }
+}
+
 function Get-BootstrapEfiEntries {
     if (-not (Test-IsAdmin)) { return $null }
     $entries = @()
@@ -10447,6 +10571,7 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'llamacpp-mtp-template'; category = 'dev-ai'; displayName = 'llama.cpp MTP diagnostic'; description = 'Template de diagnostico para llama.cpp server com MTP/speculative decoding sem baixar modelo.'; targetApps = @('llama.cpp','llamacpp','llama-server'); probePaths = @('$env:USERPROFILE\.llama.cpp\llama-server.exe','$env:LOCALAPPDATA\llama.cpp\llama-server.exe'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('diagnostic','manual-action','audit'); rollback = @('manual'); riskTier = 'experimental'; rollbackScope = 'manual'; safetyNotes = @('Nao baixa modelos', 'Nao altera servidor automaticamente', 'Use somente com modelo/binario que suportam MTP'); installComponents = @('llamacpp-server') }
         [ordered]@{ id = 'agent-config-claude-rtk-template'; category = 'agent-config'; displayName = 'Claude/RTK agent config template'; description = 'Template local para documentar uso de RTK, Claude e providers BYOK sem gravar chaves.'; targetApps = @('claude code','rtk','codex','opencode'); probePaths = @('$env:USERPROFILE\.claude\settings.json','$env:USERPROFILE\.codex\config.toml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('config-template','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'file-template'; safetyNotes = @('Nao grava segredos', 'Template manual', 'Revisar antes de aplicar'); installComponents = @('bootstrap-secrets','agent-skills') }
         [ordered]@{ id = 'headroom-agent-context-compression'; category = 'agent-config'; displayName = 'Headroom agent context compression'; description = 'Gera helper local para Headroom em Claude Code, Codex, Aider, Cursor, Copilot, Gemini, OpenClaw, n8n e MCP sem gravar chaves.'; targetApps = @('headroom','claude code','codex','aider','cursor','copilot','gemini','openclaw','n8n','mcp','opencode'); probePaths = @('$env:USERPROFILE\.local\bin\headroom.exe','$env:APPDATA\Python\Scripts\headroom.exe','.codex\context-packs\headroom-agent-integration.md'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('config-template','wrapper-template','audit'); rollback = @('backup-file','manual'); riskTier = 'manual'; rollbackScope = 'file-template'; safetyNotes = @('Nao grava segredos', 'Nao executa wrap automaticamente', 'OpenCode fica proxy/manual ate wrapper upstream maduro'); requiresInteractiveLogin = $false; installComponents = @('headroom-ai') }
+        [ordered]@{ id = 'ai-context-frugality-pack'; category = 'agent-config'; displayName = 'AI context frugality pack'; description = 'Gera regras seguras de higiene de contexto, .aiderignore conservador e skeleton map local para CLIs/IDEs de IA.'; targetApps = @('codex','claude code','aider','headroom','cursor','windsurf','zed','opencode'); probePaths = @('AGENTS.md','.aiderignore','.codex\context-packs\ai-context-frugality.md','.codex\ai-context\repo-skeleton.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('config-template','skeleton-map','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'backup-file'; safetyNotes = @('Nao grava segredos', 'Nao executa reset de sessao', 'Nao ignora lockfiles', 'Skeleton sem corpos de funcao'); requiresInteractiveLogin = $false; installComponents = @() }
         [ordered]@{ id = 'knowledge-vault-obsidian-template'; category = 'knowledge-vault'; displayName = 'Obsidian transcript vault template'; description = 'Template manual de vault Obsidian para transcricoes tecnicas e memoria de projeto.'; targetApps = @('obsidian'); probePaths = @('$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe','$env:USERPROFILE\Documents\Obsidian'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'manual'; safetyNotes = @('Nao cria sync remoto', 'Nao instala plugins automaticamente', 'Vault fica sob controle do usuario'); installComponents = @('obsidian') }
         [ordered]@{ id = 'n8n-youtube-workflow-template'; category = 'workflow-automation'; displayName = 'n8n YouTube transcript workflow template'; description = 'Template manual para fluxo n8n de coleta/transcricao, sem credenciais ou execucao automatica.'; targetApps = @('n8n','youtube'); probePaths = @('$env:APPDATA\npm\n8n.cmd','$env:APPDATA\npm\n8n.ps1'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('workflow-template','manual-action','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'manual'; safetyNotes = @('Requer login/API keys do usuario', 'Nao agenda jobs automaticamente', 'Validar fontes e direitos antes de baixar audio'); requiresInteractiveLogin = $true; installComponents = @('n8n') }
         [ordered]@{ id = 'reverse-proxy-traefik-pack'; category = 'container-hosting'; displayName = 'Traefik reverse proxy pack'; description = 'Gera stack Traefik local com rede proxy-net, dashboard local, volumes persistentes e TLS-ready.'; targetApps = @('docker','traefik','reverse proxy'); probePaths = @('$env:APPDATA\Docker','.phasezero\container-hosting\traefik\docker-compose.yml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','docker-network','doctor','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('Docker local apenas', 'Cria somente rede Docker proxy-net quando engine estiver disponivel', 'Nao abre portas de apps gerados'); aliases = @('traefik','reverse-proxy','proxy-net'); badges = @('Docker','Seguro'); installComponents = @('docker') }
@@ -14563,6 +14688,102 @@ function Get-BootstrapEmulationSharedLayout {
     }
 }
 
+function Get-BootstrapDeckEmulationMediaCompatMap {
+    # Pastas canonicas "reais" + links de compatibilidade (alias -> alvo canonico) para scrapers.
+    return [ordered]@{
+        canonical = @('box2dfront', 'screenshot', 'video', 'marquee', 'bezel', 'wheel', 'titlescreen', 'manual', 'fanart', 'physicalmedia', 'box3dfront', 'boxback', 'miximage')
+        compat = [ordered]@{
+            'cover'        = 'box2dfront'
+            'boxFront'     = 'box2dfront'
+            'box2dback'    = 'boxback'
+            'snap'         = 'video'
+            'logo'         = 'wheel'
+            'wheelcarbon'  = 'wheel'
+            'titleshot'    = 'titlescreen'
+            'support'      = 'physicalmedia'
+            'background'   = 'fanart'
+        }
+    }
+}
+
+function Get-BootstrapDeckEmulationShortnames {
+    # Shortnames ES-DE/EmuDeck dos sistemas suportados/comuns. Usados nas pastas roms/<shortname>
+    # e storage/downloaded_media/<shortname>.
+    return @('snes', 'nes', 'n64', 'gc', 'wii', 'gb', 'gba', 'gbc', 'nds', '3ds', 'switch',
+             'psx', 'ps2', 'ps3', 'psp', 'genesis', 'megadrive', 'saturn', 'dreamcast',
+             'segacd', 'gamegear', 'mastersystem', 'arcade', 'mame', 'fbneo', 'atari2600')
+}
+
+function Get-BootstrapDeckEmulationLayout {
+    # Layout no padrao EmuDeck/ES-DE (shortname), distinto do layout PS-centrico de
+    # Get-BootstrapEmulationSharedLayout. Usado quando apontamos para o HOME do Deck (ou um root
+    # local equivalente). Sem efeitos colaterais.
+    param([Parameter(Mandatory = $true)][string]$Root)
+
+    $combine = { param($a, $b) [System.IO.Path]::Combine($a, $b) }
+    return [ordered]@{
+        root  = $Root
+        # leitura compartilhada (ROMs/BIOS/midia): seguro apontar mesmo em read-only.
+        bios  = [ordered]@{ path = (& $combine $Root 'bios');  access = 'read-shared' }
+        tools = [ordered]@{ path = (& $combine $Root 'tools'); access = 'read-shared' }
+        roms  = [ordered]@{ path = (& $combine $Root 'roms');  access = 'read-shared' }
+        media = [ordered]@{ path = (& $combine $Root 'storage\downloaded_media'); access = 'read-shared' }
+        # escrita (saves/states/cache): so no Deck quando write-opt-in; senao local Windows.
+        saves  = [ordered]@{ path = (& $combine $Root 'saves');  access = 'write-gated' }
+        states = [ordered]@{ path = (& $combine $Root 'states'); access = 'write-gated' }
+        cache  = [ordered]@{ path = (& $combine $Root 'storage\cache'); access = 'write-gated' }
+        shortnames = @(Get-BootstrapDeckEmulationShortnames)
+        mediaCompat = (Get-BootstrapDeckEmulationMediaCompatMap)
+    }
+}
+
+function Resolve-BootstrapEmulationRoots {
+    # Ponto unico de resolucao de roots consumido por midia/frontends/atalhos.
+    # Precedencia: HOME do Deck valido e legivel -> leitura no Deck; escrita no Deck so se
+    # write-opt-in. Senao, fallback transparente para o root local do Windows.
+    param(
+        $DeckInfo = $null,
+        [switch]$ScanVolumes
+    )
+
+    if ($null -eq $DeckInfo) {
+        $DeckInfo = Get-BootstrapDeckEmulationRoot -ScanVolumes:$ScanVolumes
+    }
+
+    $windowsRoot = Join-Path $env:USERPROFILE 'Games\Emulation'
+
+    $deckFound = [bool]$DeckInfo.found
+    $deckReadable = ($deckFound -and [bool]$DeckInfo.readable)
+    $deckWritable = ($deckFound -and [bool]$DeckInfo.writable)
+    $deckRoot = [string]$DeckInfo.emulationRoot
+
+    $readRoot  = if ($deckReadable) { $deckRoot } else { $windowsRoot }
+    $writeRoot = if ($deckWritable) { $deckRoot } else { $windowsRoot }
+
+    $readLayout  = Get-BootstrapDeckEmulationLayout -Root $readRoot
+    $writeLayout = Get-BootstrapDeckEmulationLayout -Root $writeRoot
+
+    return [ordered]@{
+        deckFound    = $deckFound
+        deckReadable = $deckReadable
+        deckWritable = $deckWritable
+        accessLevel  = [string]$DeckInfo.accessLevel
+        windowsRoot  = $windowsRoot
+        readRoot     = $readRoot
+        writeRoot    = $writeRoot
+        # caminhos efetivos por tipo de dado
+        bios   = [string]$readLayout.bios.path
+        tools  = [string]$readLayout.tools.path
+        roms   = [string]$readLayout.roms.path
+        media  = [string]$readLayout.media.path
+        saves  = [string]$writeLayout.saves.path
+        states = [string]$writeLayout.states.path
+        cache  = [string]$writeLayout.cache.path
+        readLayout  = $readLayout
+        writeLayout = $writeLayout
+    }
+}
+
 function New-BootstrapEmulationConfigPlan {
     param(
         [Parameter(Mandatory = $true)]$Layout,
@@ -15015,6 +15236,12 @@ function Get-BootstrapComponentCatalog {
     $catalog['hydra-duckstation-integration'] = New-BootstrapComponentDefinition -Name 'hydra-duckstation-integration' -Description 'Hydra Classic pointer to canonical DuckStation runtime.' -Optional $true -DependsOn @('hydra-launcher', 'duckstation') -Kind 'alias' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Writes only launcher pointers to DuckStation; does not install a duplicate emulator.'; configTarget = '$env:APPDATA\hydra\emulators_config.json'; systemKey = 'playstation1'; launcherMode = 'pointer-only' }
     $catalog['nuovo-emulation-intake'] = New-BootstrapComponentDefinition -Name 'nuovo-emulation-intake' -Description 'Nuovo emulator/front-end intake placeholder until technical source is provided.' -Optional $true -DependsOn @('emulation-shared-runtime') -Kind 'manual-required' -Data @{ DisplayName = 'Nuovo'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Tracks user request without guessing install/config behavior.'; Instructions = 'Provide Nuovo technical source, config paths, supported systems and CLI flags before implementation.'; intakeStatus = 'blocked-missing-source'; riskLevel = 'blocked' }
     $catalog['switch-emulation-runtime'] = New-BootstrapComponentDefinition -Name 'switch-emulation-runtime' -Description 'Nintendo Switch emulator runtime intake with source trust and user-owned content gates.' -Optional $true -DependsOn @('emulation-shared-runtime', 'vcpp-redist', 'directx-runtime') -Kind 'manual-required' -Data @{ DisplayName = 'Nintendo Switch emulation runtime'; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Centralizes Switch emulator selection without duplicating binaries across Hydra, Steam ROM Manager, EmuDeck or Playnite.'; Instructions = 'Select one source-verified emulator family. Provide only your own console-derived keys, firmware and game dumps. PhaseZero never downloads keys, firmware, updates, DLC or games.'; sharedRuntimeKey = 'switch'; keysPolicy = 'user-provided-own-console-only'; firmwarePolicy = 'user-provided-own-console-only'; romPolicy = 'user-owned-paths-only'; autoInstallAllowed = $false; riskLevel = 'manual' }
+    # --- Emulacao compartilhada com o HOME do Steam Deck (Btrfs) -------------------------------
+    $catalog['steamdeck-home-detect'] = New-BootstrapComponentDefinition -Name 'steamdeck-home-detect' -Description 'Descobre e valida (read-only) o HOME do Steam Deck montado via WinBtrfs e expoe o root de emulacao.' -Optional $true -DependsOn @('winbtrfs') -Kind 'builtin' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Permite reusar ROMs/BIOS/midia/saves do SteamOS sem duplicar no Windows.'; sharingPolicy = 'deck-home-source-of-truth'; riskLevel = 'safe' }
+    $catalog['emulation-deck-shared-media'] = New-BootstrapComponentDefinition -Name 'emulation-deck-shared-media' -Description 'Canonicaliza a midia de scraping (storage/downloaded_media) e cria links de compatibilidade, de forma nao-destrutiva.' -Optional $true -DependsOn @('steamdeck-home-detect') -Kind 'builtin' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Maximiza compatibilidade de scrapers entre frontends sem mover/apagar a midia existente.'; sharingPolicy = 'canonical-media-with-compat-links'; riskLevel = 'safe' }
+    $catalog['emulation-frontend-pointing'] = New-BootstrapComponentDefinition -Name 'emulation-frontend-pointing' -Description 'Aponta ES-DE/Pegasus/Playnite para os roots compartilhados (Deck ou local), sem duplicar dados.' -Optional $true -DependsOn @('steamdeck-home-detect') -Kind 'builtin' -Data @{ Stage = 'config'; Provisioning = 'builtin'; ValueReason = 'Os frontends Windows leem ROMs/midia do HOME do Deck, sem copia.'; sharingPolicy = 'pointer-only'; riskLevel = 'safe' }
+    $catalog['emulation-desktop-shortcuts'] = New-BootstrapComponentDefinition -Name 'emulation-desktop-shortcuts' -Description 'Cria a pasta "Emulacao" no Desktop com atalhos para emuladores/frontends instalados e icone proprio.' -Optional $true -DependsOn @('steamdeck-home-detect') -Kind 'builtin' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Acesso rapido a toda a stack de emulacao do perfil.'; riskLevel = 'safe' }
+
     foreach ($candidate in Get-BootstrapSwitchEmulatorCandidateCatalog) {
         $componentId = 'switch-emulator-{0}' -f [string]$candidate.id
         $catalog[$componentId] = New-BootstrapComponentDefinition -Name $componentId -Description ("Nintendo Switch emulator candidate: {0}." -f [string]$candidate.displayName) -Optional $true -DependsOn @('switch-emulation-runtime') -Kind 'manual-required' -Data @{ DisplayName = [string]$candidate.displayName; Stage = 'verify'; Provisioning = 'manual-required'; ValueReason = 'Candidate is tracked for user choice and diagnostics only; no automatic install.'; Instructions = 'Verify current source, license, release integrity and project status before use. Provide only user-owned keys, firmware and game dumps.'; systemKey = [string]$candidate.systemKey; sharedRuntimeKey = [string]$candidate.sharedRuntimeKey; keysPolicy = [string]$candidate.keysPolicy; firmwarePolicy = [string]$candidate.firmwarePolicy; contentPolicy = [string]$candidate.contentPolicy; autoInstallAllowed = $false; defaultStatus = [string]$candidate.defaultStatus; sourceTrust = [string]$candidate.sourceTrust; riskLevel = 'manual' }
@@ -15151,6 +15378,10 @@ function Get-BootstrapProfileCatalog {
     # (runtime compartilhado, emuladores PS1/PS2/PS3, Switch source-gated, tools, launcher Hydra com
     # ponteiros). Fonte unica via Hydra; NAO inclui EmuDeck (stack paralela) para evitar duplicacao.
     $catalog['emulation-complete'] = New-BootstrapProfileDefinition -Name 'emulation-complete' -Description 'Instalacao completa e coesa de emulacao no host (runtime unico, PS1/PS2/PS3, Switch source-gated, chdman, Hydra + ponteiros).' -Items @('emulation-hydra-ps2-ps3', 'emulation-hydra-switch')
+    # Compartilhamento com o HOME do Steam Deck (Btrfs): detecta o HOME, reaproveita ROMs/BIOS/
+    # midia/saves do SteamOS sem duplicar, aponta os frontends Windows e cria a pasta de atalhos.
+    # Opt-in; nunca entra em steamdeck-recommended/steamdeck-full por padrao.
+    $catalog['emulation-steamdeck-shared'] = New-BootstrapProfileDefinition -Name 'emulation-steamdeck-shared' -Description 'Emulacao Windows reusando o HOME do Steam Deck (Btrfs): deteccao, midia canonica, frontends apontados e atalhos no Desktop.' -Items @('winbtrfs', 'steamdeck-home-detect', 'emulation-deck-shared-media', 'emulation-shared', 'emulation-frontend-pointing', 'emulation-desktop-shortcuts')
     $catalog['steamdeck-essentials'] = New-BootstrapProfileDefinition -Name 'steamdeck-essentials' -Description 'Base handheld do Steam Deck em Windows.' -Items @('base', 'steam', 'playnite', 'heroic', 'rtss', 'special-k', 'vcpp-redist', 'directx-runtime', 'vigembus-runtime', 'steamdeck-tools-runtime', 'steamdeck-tools', 'autohotkey-runtime')
     $catalog['steamdeck-input'] = New-BootstrapProfileDefinition -Name 'steamdeck-input' -Description 'Perfis de input, hotkeys e automacao de controle.' -Items @('steamdeck-settings', 'steamdeck-automation', 'steamdeck-tweaks', 'console-session-manager', 'dev-session-manager', 'display-classifier', 'recovery-hotkeys', 'steamdeck-input-conflict-audit', 'console-readiness-audit')
     $catalog['steamdeck-input-advanced'] = New-BootstrapProfileDefinition -Name 'steamdeck-input-advanced' -Description 'Stacks alternativos opt-in: Handheld Companion e GlosSI.' -Items @('handheld-companion', 'glossi', 'steamdeck-input-conflict-audit')
@@ -27993,6 +28224,444 @@ switch ($Action) {
     }
 }
 
+function ConvertTo-BootstrapWorkspaceRelativePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Root,
+        [Parameter(Mandatory = $true)][string]$Path
+    )
+
+    try {
+        $rootFull = [System.IO.Path]::GetFullPath($Root)
+        if (-not $rootFull.EndsWith([System.IO.Path]::DirectorySeparatorChar)) {
+            $rootFull += [System.IO.Path]::DirectorySeparatorChar
+        }
+        $pathFull = [System.IO.Path]::GetFullPath($Path)
+        $rootUri = New-Object System.Uri($rootFull)
+        $pathUri = New-Object System.Uri($pathFull)
+        return ([System.Uri]::UnescapeDataString($rootUri.MakeRelativeUri($pathUri).ToString())).Replace('\', '/')
+    } catch {
+        return ([string]$Path).Replace('\', '/')
+    }
+}
+
+function Write-BootstrapMarkedTemplateFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Body,
+        [Parameter(Mandatory = $true)][string]$Label,
+        [ValidateSet('html','hash')][string]$MarkerStyle = 'html'
+    )
+
+    $parent = Split-Path -Path $Path -Parent
+    if ($parent) { $null = New-Item -Path $parent -ItemType Directory -Force }
+
+    $current = if (Test-Path -LiteralPath $Path) { Get-Content -LiteralPath $Path -Raw -ErrorAction SilentlyContinue } else { '' }
+    $merged = if ($MarkerStyle -eq 'hash') {
+        Merge-BootstrapGrubMarkedTextBlock -Content $current -Body $Body -Label $Label
+    } else {
+        Merge-BootstrapMarkedTextBlock -Content $current -Body $Body -Label $Label
+    }
+    if (-not [bool]$merged.changed) {
+        return [ordered]@{ path = $Path; status = 'configured'; backup = '' }
+    }
+
+    $backup = ''
+    if (Test-Path -LiteralPath $Path) {
+        $backup = Backup-BootstrapFile -Path $Path
+    }
+    Write-BootstrapAtomicText -Path $Path -Content ([string]$merged.content)
+    return [ordered]@{ path = $Path; status = 'applied'; backup = $backup }
+}
+
+function Get-BootstrapAiContextFrugalityAiderIgnoreBody {
+    return @(
+        '# PhaseZero AI context frugality',
+        '# Keep reproducibility lockfiles visible by default.',
+        '',
+        '.codex/ai-context/',
+        '.codex/context-packs/',
+        '.phasezero/tmp/',
+        '.phasezero/cache/',
+        '',
+        'node_modules/',
+        '.next/',
+        '.nuxt/',
+        '.turbo/',
+        'dist/',
+        'build/',
+        'out/',
+        'coverage/',
+        '',
+        '.pytest_cache/',
+        '.mypy_cache/',
+        '.ruff_cache/',
+        '__pycache__/',
+        '',
+        'target/debug/',
+        'target/release/',
+        '',
+        '*.log',
+        '*.tmp',
+        '*.bak',
+        'hs_err_pid*.log'
+    ) -join [Environment]::NewLine
+}
+
+function Get-BootstrapAiContextFrugalityAgentsBody {
+    return @(
+        'AI context frugality:',
+        '- Start with scoped files, recent diffs, tests, and `.codex/ai-context/repo-skeleton.md` before broad scans.',
+        '- Keep lockfiles, manifests, migrations, schemas, and security configs visible unless user explicitly narrows scope.',
+        '- Prefer small task batches and compact handoffs over long hidden context.',
+        '- Headroom/wrappers stay explicit; do not auto-wrap CLIs or IDEs from rules.',
+        '- Never paste secrets into prompts, config files, skeleton maps, or logs.'
+    ) -join [Environment]::NewLine
+}
+
+function Get-BootstrapAiContextFrugalityClaudeBody {
+    return @(
+        'PhaseZero context frugality:',
+        '- Read `.codex/ai-context/repo-skeleton.md` for a symbol map before loading large files.',
+        '- Keep generated/build/cache folders out of routine context.',
+        '- Preserve lockfiles and project manifests in review context.',
+        '- Provider prompt caching belongs in provider adapters or docs, not generic project rules.',
+        '- No background session reset automation is generated by this pack.'
+    ) -join [Environment]::NewLine
+}
+
+function Get-BootstrapAiContextFrugalityDoc {
+    return @(
+        '# AI Context Frugality Pack',
+        '',
+        'Purpose: reduce noisy AI context for IDEs and CLIs without hiding reproducibility or security-critical files.',
+        '',
+        'Generated policy:',
+        '- Aider receives a conservative `.aiderignore` managed block for build, cache, log and generated context artifacts.',
+        '- Codex receives a short `AGENTS.md` managed block that coexists with Caveman, RTK, ai-memory and Ponytail rules.',
+        '- Claude receives a project-scoped `.claude/CLAUDE.md` managed block.',
+        '- Repository skeleton files summarize symbols without function bodies.',
+        '',
+        'Safety:',
+        '- No secrets are written.',
+        '- No CLI/IDE wrapper runs automatically.',
+        '- No background session reset automation is created.',
+        '- Lockfiles remain visible by default.',
+        '- Provider prompt caching stays in provider-specific adapters or documentation.'
+    ) -join [Environment]::NewLine
+}
+
+function Get-BootstrapAiContextSourceFiles {
+    param([Parameter(Mandatory = $true)][string]$WorkspaceRoot)
+
+    $root = [System.IO.Path]::GetFullPath($WorkspaceRoot)
+    $skipDirs = @('.git', '.codex', '.claude', '.phasezero', 'node_modules', '.next', '.nuxt', '.turbo', 'dist', 'build', 'out', 'coverage', 'target', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache')
+    $extensions = @('.ps1', '.psm1', '.psd1', '.js', '.jsx', '.ts', '.tsx', '.py', '.rs', '.go')
+    $files = New-Object System.Collections.Generic.List[object]
+    $queue = New-Object System.Collections.Generic.Queue[System.IO.DirectoryInfo]
+
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return @() }
+    $queue.Enqueue((Get-Item -LiteralPath $root))
+
+    while ($queue.Count -gt 0) {
+        $dir = $queue.Dequeue()
+        foreach ($childDir in @(Get-ChildItem -LiteralPath $dir.FullName -Directory -Force -ErrorAction SilentlyContinue)) {
+            if ($skipDirs -contains [string]$childDir.Name) { continue }
+            $queue.Enqueue($childDir)
+        }
+        foreach ($file in @(Get-ChildItem -LiteralPath $dir.FullName -File -Force -ErrorAction SilentlyContinue)) {
+            $ext = ([string]$file.Extension).ToLowerInvariant()
+            if ($extensions -notcontains $ext) { continue }
+            $relative = ConvertTo-BootstrapWorkspaceRelativePath -Root $root -Path $file.FullName
+            $files.Add([ordered]@{ path = $file.FullName; relative = $relative; extension = $ext }) | Out-Null
+        }
+    }
+
+    return @($files.ToArray() | Sort-Object -Property relative)
+}
+
+function Get-BootstrapAiContextLanguage {
+    param([Parameter(Mandatory = $true)][string]$Extension)
+
+    switch ($Extension.ToLowerInvariant()) {
+        '.ps1' { return 'powershell' }
+        '.psm1' { return 'powershell' }
+        '.psd1' { return 'powershell-data' }
+        '.js' { return 'javascript' }
+        '.jsx' { return 'javascript' }
+        '.ts' { return 'typescript' }
+        '.tsx' { return 'typescript' }
+        '.py' { return 'python' }
+        '.rs' { return 'rust' }
+        '.go' { return 'go' }
+        default { return 'unknown' }
+    }
+}
+
+function Test-BootstrapTreeSitterAvailable {
+    $cmd = Get-Command -Name 'tree-sitter' -ErrorAction SilentlyContinue | Select-Object -First 1
+    return ($null -ne $cmd)
+}
+
+function Get-BootstrapPowerShellAstSymbols {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $tokens = $null
+    $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors)
+    $hasParseErrors = ($errors -and @($errors).Count -gt 0)
+
+    $symbols = New-Object System.Collections.Generic.List[object]
+    $functions = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+    foreach ($fn in @($functions | Sort-Object { $_.Extent.StartLineNumber }, Name)) {
+        $parameters = New-Object System.Collections.Generic.List[string]
+        if ($fn.Body -and $fn.Body.ParamBlock) {
+            foreach ($paramAst in @($fn.Body.ParamBlock.Parameters)) {
+                $parameters.Add(('$' + [string]$paramAst.Name.VariablePath.UserPath)) | Out-Null
+            }
+        }
+        $symbols.Add([ordered]@{
+            kind = 'function'
+            name = [string]$fn.Name
+            line = [int]$fn.Extent.StartLineNumber
+            parameters = @($parameters.ToArray())
+        }) | Out-Null
+    }
+
+    if ($hasParseErrors -and $symbols.Count -eq 0) {
+        return [ordered]@{ status = 'skipped'; reason = 'parse-error'; symbols = @() }
+    }
+
+    return [ordered]@{ status = 'parsed'; reason = $(if ($hasParseErrors) { 'parse-error-recovered' } else { '' }); symbols = @($symbols.ToArray()) }
+}
+
+function Get-BootstrapLineBasedSymbolsAfterTreeSitter {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Language
+    )
+
+    $symbols = New-Object System.Collections.Generic.List[object]
+    $lines = Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue
+    for ($i = 0; $i -lt @($lines).Count; $i++) {
+        $line = [string]$lines[$i]
+        $name = ''
+        $kind = 'function'
+        switch ($Language) {
+            'javascript' {
+                if ($line -match '^\s*(export\s+)?(async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(') { $name = $matches[3] }
+                elseif ($line -match '^\s*(export\s+)?(const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(async\s*)?\(') { $name = $matches[3] }
+            }
+            'typescript' {
+                if ($line -match '^\s*(export\s+)?(async\s+)?function\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*\(') { $name = $matches[3] }
+                elseif ($line -match '^\s*(export\s+)?(const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(async\s*)?\(') { $name = $matches[3] }
+                elseif ($line -match '^\s*(export\s+)?(interface|type|class)\s+([A-Za-z_$][A-Za-z0-9_$]*)') { $kind = $matches[2]; $name = $matches[3] }
+            }
+            'python' {
+                if ($line -match '^\s*(async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(') { $name = $matches[2] }
+                elseif ($line -match '^\s*class\s+([A-Za-z_][A-Za-z0-9_]*)') { $kind = 'class'; $name = $matches[1] }
+            }
+            'rust' {
+                if ($line -match '^\s*(pub(\([^)]*\))?\s+)?(async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(') { $name = $matches[4] }
+                elseif ($line -match '^\s*(pub\s+)?(struct|enum|trait|impl)\s+([A-Za-z_][A-Za-z0-9_]*)') { $kind = $matches[2]; $name = $matches[3] }
+            }
+            'go' {
+                if ($line -match '^\s*func\s+(\([^)]+\)\s*)?([A-Za-z_][A-Za-z0-9_]*)\s*\(') { $name = $matches[2] }
+                elseif ($line -match '^\s*type\s+([A-Za-z_][A-Za-z0-9_]*)\s+(struct|interface)') { $kind = $matches[2]; $name = $matches[1] }
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($name)) {
+            $symbols.Add([ordered]@{ kind = $kind; name = $name; line = ($i + 1); parameters = @() }) | Out-Null
+        }
+    }
+    return @($symbols.ToArray())
+}
+
+function Get-BootstrapTreeSitterSymbols {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Language
+    )
+
+    if (-not (Test-BootstrapTreeSitterAvailable)) {
+        return [ordered]@{ status = 'skipped'; reason = 'tree-sitter-missing'; symbols = @() }
+    }
+
+    $cmd = Get-Command -Name 'tree-sitter' -ErrorAction SilentlyContinue | Select-Object -First 1
+    $commandPath = if ($cmd -and -not [string]::IsNullOrWhiteSpace([string]$cmd.Source)) { [string]$cmd.Source } else { 'tree-sitter' }
+    $output = $null
+    try {
+        $output = & $commandPath parse --quiet $Path 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return [ordered]@{ status = 'skipped'; reason = 'tree-sitter-parser-unavailable'; symbols = @() }
+        }
+    } catch {
+        return [ordered]@{ status = 'skipped'; reason = 'tree-sitter-parser-unavailable'; symbols = @() }
+    }
+
+    return [ordered]@{ status = 'parsed'; reason = ''; symbols = @(Get-BootstrapLineBasedSymbolsAfterTreeSitter -Path $Path -Language $Language) }
+}
+
+function New-BootstrapAiContextSkeleton {
+    param([Parameter(Mandatory = $true)][string]$WorkspaceRoot)
+
+    $root = [System.IO.Path]::GetFullPath($WorkspaceRoot)
+    $fileEntries = New-Object System.Collections.Generic.List[object]
+    $parsedCount = 0
+    $skippedCount = 0
+
+    foreach ($file in @(Get-BootstrapAiContextSourceFiles -WorkspaceRoot $root)) {
+        $language = Get-BootstrapAiContextLanguage -Extension ([string]$file.extension)
+        $parse = $null
+        $parser = ''
+
+        if ($language -eq 'powershell' -or $language -eq 'powershell-data') {
+            $parser = 'powershell-ast'
+            $parse = Get-BootstrapPowerShellAstSymbols -Path ([string]$file.path)
+        } elseif ($language -in @('javascript', 'typescript', 'python', 'rust', 'go')) {
+            $parser = 'tree-sitter'
+            $parse = Get-BootstrapTreeSitterSymbols -Path ([string]$file.path) -Language $language
+        } else {
+            $parser = 'none'
+            $parse = [ordered]@{ status = 'skipped'; reason = 'unsupported-language'; symbols = @() }
+        }
+
+        if ([string]$parse.status -eq 'parsed') { $parsedCount++ } else { $skippedCount++ }
+        $fileEntries.Add([ordered]@{
+            path = [string]$file.relative
+            language = $language
+            parser = $parser
+            status = [string]$parse.status
+            reason = [string]$parse.reason
+            symbols = @($parse.symbols)
+        }) | Out-Null
+    }
+
+    return [ordered]@{
+        version = 1
+        root = $root
+        policy = [ordered]@{
+            noFunctionBodies = $true
+            secretsRedacted = $true
+            generatedFoldersSkipped = $true
+        }
+        summary = [ordered]@{
+            files = $fileEntries.Count
+            parsed = $parsedCount
+            skipped = $skippedCount
+        }
+        files = @($fileEntries.ToArray())
+    }
+}
+
+function ConvertTo-BootstrapAiContextSkeletonMarkdown {
+    param([Parameter(Mandatory = $true)]$Skeleton)
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# Repo Skeleton') | Out-Null
+    $lines.Add('') | Out-Null
+    $lines.Add(('Files: {0}; parsed: {1}; skipped: {2}' -f [int]$Skeleton.summary.files, [int]$Skeleton.summary.parsed, [int]$Skeleton.summary.skipped)) | Out-Null
+    foreach ($file in @($Skeleton.files)) {
+        $lines.Add('') | Out-Null
+        $lines.Add(('## {0}' -f [string]$file.path)) | Out-Null
+        if ([string]$file.status -ne 'parsed') {
+            $lines.Add(('- skipped: {0}' -f [string]$file.reason)) | Out-Null
+            continue
+        }
+        if (@($file.symbols).Count -eq 0) {
+            $lines.Add('- no top-level symbols found') | Out-Null
+            continue
+        }
+        foreach ($symbol in @($file.symbols)) {
+            $params = @($symbol.parameters) -join ', '
+            $suffix = if ([string]::IsNullOrWhiteSpace($params)) { '' } else { "($params)" }
+            $lines.Add(('- {0} {1}{2} line {3}' -f [string]$symbol.kind, [string]$symbol.name, $suffix, [int]$symbol.line)) | Out-Null
+        }
+    }
+    return (@($lines.ToArray()) -join [Environment]::NewLine)
+}
+
+function Ensure-BootstrapAiContextFrugalityPack {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $contextDir = Join-Path $root '.codex\context-packs'
+    $aiContextDir = Join-Path $root '.codex\ai-context'
+    $docPath = Join-Path $contextDir 'ai-context-frugality.md'
+    $manifestPath = Join-Path $aiContextDir 'frugality-manifest.json'
+    $skeletonJsonPath = Join-Path $aiContextDir 'repo-skeleton.json'
+    $skeletonMarkdownPath = Join-Path $aiContextDir 'repo-skeleton.md'
+    $aiderIgnorePath = Join-Path $root '.aiderignore'
+    $agentsPath = Join-Path $root 'AGENTS.md'
+    $claudePath = Join-Path $root '.claude\CLAUDE.md'
+
+    $null = New-Item -Path $contextDir -ItemType Directory -Force
+    $null = New-Item -Path $aiContextDir -ItemType Directory -Force
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $results.Add((Write-BootstrapManagedTemplateFile -Path $docPath -Content (Get-BootstrapAiContextFrugalityDoc))) | Out-Null
+    $results.Add((Write-BootstrapMarkedTemplateFile -Path $aiderIgnorePath -Body (Get-BootstrapAiContextFrugalityAiderIgnoreBody) -Label 'PHASEZERO AI CONTEXT FRUGALITY' -MarkerStyle 'hash')) | Out-Null
+    $results.Add((Write-BootstrapMarkedTemplateFile -Path $agentsPath -Body (Get-BootstrapAiContextFrugalityAgentsBody) -Label 'PHASEZERO AI CONTEXT FRUGALITY')) | Out-Null
+    $results.Add((Write-BootstrapMarkedTemplateFile -Path $claudePath -Body (Get-BootstrapAiContextFrugalityClaudeBody) -Label 'PHASEZERO AI CONTEXT FRUGALITY')) | Out-Null
+
+    $skeleton = New-BootstrapAiContextSkeleton -WorkspaceRoot $root
+    $skeletonMarkdown = ConvertTo-BootstrapAiContextSkeletonMarkdown -Skeleton $skeleton
+    $results.Add((Write-BootstrapManagedTemplateFile -Path $skeletonMarkdownPath -Content $skeletonMarkdown)) | Out-Null
+
+    $existingSkeletonJson = if (Test-Path -LiteralPath $skeletonJsonPath) { Get-Content -LiteralPath $skeletonJsonPath -Raw -ErrorAction SilentlyContinue } else { '' }
+    $skeletonJson = [string]((ConvertTo-BootstrapObjectGraph -InputObject $skeleton) | ConvertTo-Json -Depth 12)
+    if ($existingSkeletonJson -eq $skeletonJson) {
+        $results.Add([ordered]@{ path = $skeletonJsonPath; status = 'configured'; backup = '' }) | Out-Null
+    } else {
+        $backup = ''
+        if (Test-Path -LiteralPath $skeletonJsonPath) { $backup = Backup-BootstrapFile -Path $skeletonJsonPath }
+        Write-BootstrapJsonFile -Path $skeletonJsonPath -Value $skeleton
+        $results.Add([ordered]@{ path = $skeletonJsonPath; status = 'applied'; backup = $backup }) | Out-Null
+    }
+
+    $manifest = [ordered]@{
+        version = 1
+        id = 'ai-context-frugality-pack'
+        root = $root
+        generatedFiles = @(
+            (ConvertTo-BootstrapWorkspaceRelativePath -Root $root -Path $docPath),
+            (ConvertTo-BootstrapWorkspaceRelativePath -Root $root -Path $manifestPath),
+            (ConvertTo-BootstrapWorkspaceRelativePath -Root $root -Path $skeletonJsonPath),
+            (ConvertTo-BootstrapWorkspaceRelativePath -Root $root -Path $skeletonMarkdownPath),
+            (ConvertTo-BootstrapWorkspaceRelativePath -Root $root -Path $aiderIgnorePath),
+            (ConvertTo-BootstrapWorkspaceRelativePath -Root $root -Path $agentsPath),
+            (ConvertTo-BootstrapWorkspaceRelativePath -Root $root -Path $claudePath)
+        )
+        policy = [ordered]@{
+            noSecrets = $true
+            lockfilesPreserved = @('package-lock.json', 'pnpm-lock.yaml', 'yarn.lock', 'Cargo.lock')
+            automaticWrappers = $false
+            sessionResetAutomation = $false
+            genericPromptCachingInjection = $false
+            generatedIgnoreFile = '.aiderignore'
+        }
+        skeleton = $skeleton.summary
+    }
+    $existingManifestJson = if (Test-Path -LiteralPath $manifestPath) { Get-Content -LiteralPath $manifestPath -Raw -ErrorAction SilentlyContinue } else { '' }
+    $manifestJson = [string]((ConvertTo-BootstrapObjectGraph -InputObject $manifest) | ConvertTo-Json -Depth 12)
+    if ($existingManifestJson -eq $manifestJson) {
+        $results.Add([ordered]@{ path = $manifestPath; status = 'configured'; backup = '' }) | Out-Null
+    } else {
+        $backup = ''
+        if (Test-Path -LiteralPath $manifestPath) { $backup = Backup-BootstrapFile -Path $manifestPath }
+        Write-BootstrapJsonFile -Path $manifestPath -Value $manifest
+        $results.Add([ordered]@{ path = $manifestPath; status = 'applied'; backup = $backup }) | Out-Null
+    }
+
+    $changed = @(@($results.ToArray()) | Where-Object { [string]$_.status -eq 'applied' }).Count -gt 0
+    return [ordered]@{
+        status = if ($changed) { 'applied' } else { 'configured' }
+        root = $root
+        paths = @($results.ToArray() | ForEach-Object { [string]$_.path })
+        files = @($results.ToArray())
+        skeleton = $skeleton.summary
+    }
+}
+
 function Write-BootstrapManagedTemplateFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -28785,6 +29454,16 @@ function Apply-AgentConfigTuning {
                 manifest = $result
             }
         }
+        'ai-context-frugality-pack' {
+            $workspace = if ($State -and $State.ContainsKey('CloneBaseDir') -and -not [string]::IsNullOrWhiteSpace([string]$State['CloneBaseDir'])) { [string]$State['CloneBaseDir'] } else { (Get-Location).Path }
+            $result = Ensure-BootstrapAiContextFrugalityPack -WorkspaceRoot $workspace
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$result.status
+                note = 'AI context frugality pack generated with conservative ignores and skeleton map.'
+                manifest = $result
+            }
+        }
         default {
             return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'Agent config template audited; no secrets changed.' }
         }
@@ -29391,6 +30070,432 @@ function Ensure-BootstrapEmulationSharedRuntime {
     }
 }
 
+function Ensure-BootstrapSteamDeckHomeDetect {
+    # Descoberta + auditoria (read-only) do HOME do Steam Deck. Nao escreve nada; apenas reporta.
+    # Guarda o resultado em State para os componentes seguintes (media/frontends) consumirem.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $info = Get-BootstrapDeckEmulationRoot -ScanVolumes
+    if ([bool]$info.found) {
+        Write-Log ("steamdeck-home-detect: HOME do Deck em {0} (drive {1}); emulationRoot={2}; accessLevel={3}; writable={4}" -f [string]$info.deckHome, [string]$info.driveLetter, [string]$info.emulationRoot, [string]$info.accessLevel, [bool]$info.writable)
+        if (-not [bool]$info.writable) {
+            Write-Log 'steamdeck-home-detect: acesso somente-leitura; ROMs/BIOS/midia serao lidos do Deck, mas saves/states/cache ficam locais no Windows ate o acesso virar write-opt-in (desligue Fast Startup, inicie o servico WinBtrfs e reinicie se pendente).' 'WARN'
+        }
+    } else {
+        $reasonText = if (@($info.validationReasons).Count -gt 0) { @($info.validationReasons) -join ', ' } else { 'nenhum volume com arvore Emulation valida' }
+        Write-Log ("steamdeck-home-detect: HOME do Deck nao encontrado/validado ({0}) - usando root local Windows para a emulacao." -f $reasonText)
+    }
+
+    if ($State.ContainsKey('DeckEmulation')) {
+        $State['DeckEmulation'] = $info
+    } else {
+        $State.Add('DeckEmulation', $info)
+    }
+
+    return [ordered]@{
+        status            = 'completed'
+        found             = [bool]$info.found
+        emulationRoot     = [string]$info.emulationRoot
+        accessLevel       = [string]$info.accessLevel
+        writable          = [bool]$info.writable
+        readable          = [bool]$info.readable
+        validationReasons = @($info.validationReasons)
+        dryRun            = [bool]$State.DryRun
+    }
+}
+
+function Get-BootstrapDirectoryReparseTarget {
+    # Retorna o alvo de uma junction/symlink de diretorio, ou '' se nao for reparse point.
+    # Diretorio normal -> ''. Item inexistente -> $null.
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    try {
+        $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+    } catch {
+        return $null
+    }
+    $isReparse = (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq [System.IO.FileAttributes]::ReparsePoint)
+    if (-not $isReparse) { return '' }
+    $target = ''
+    try { if ($item.PSObject.Properties.Name -contains 'Target' -and $item.Target) { $target = @($item.Target)[0] } } catch { }
+    return [string]$target
+}
+
+function Ensure-BootstrapDeckMediaCanonical {
+    # Canonicaliza storage/downloaded_media/<shortname> (pastas reais + junctions de compat),
+    # de forma NAO-DESTRUTIVA. Escrita so quando o root de midia e gravavel (Deck write-opt-in
+    # ou root local Windows). Em read-only no Deck: apenas relata o plano com WARN.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $deckInfo = $null
+    if ($State.ContainsKey('DeckEmulation')) { $deckInfo = $State['DeckEmulation'] }
+    $roots = Resolve-BootstrapEmulationRoots -DeckInfo $deckInfo -ScanVolumes
+    $compatMap = Get-BootstrapDeckEmulationMediaCompatMap
+
+    $mediaRoot = [string]$roots.media
+    $romsRoot = [string]$roots.roms
+
+    # Midia em Deck somente-leitura nao pode ser escrita; midia local sempre pode.
+    $canWrite = ((-not [bool]$roots.deckReadable) -or [bool]$roots.deckWritable)
+    $dryRun = ([bool]$State.DryRun -or -not $canWrite)
+    if (-not $canWrite) {
+        Write-Log ("emulation-deck-shared-media: root de midia em acesso somente-leitura ({0}); apenas planejando, sem escrita." -f [string]$roots.accessLevel) 'WARN'
+    }
+
+    # Sistemas a processar: shortnames que ja existem em midia OU em roms (nao cria sistema novo).
+    $systems = New-Object System.Collections.Generic.List[string]
+    foreach ($base in @($mediaRoot, $romsRoot)) {
+        if ([string]::IsNullOrWhiteSpace($base) -or -not (Test-Path -LiteralPath $base -PathType Container)) { continue }
+        try {
+            foreach ($d in @(Get-ChildItem -LiteralPath $base -Directory -Force -ErrorAction Stop)) {
+                if (-not $systems.Contains($d.Name)) { $systems.Add($d.Name) | Out-Null }
+            }
+        } catch { }
+    }
+
+    $created = 0; $planned = 0; $linksCreated = 0; $linksPlanned = 0; $warnings = 0
+
+    foreach ($sn in $systems) {
+        $snMedia = [System.IO.Path]::Combine($mediaRoot, $sn)
+
+        foreach ($canon in @($compatMap.canonical)) {
+            $canonPath = [System.IO.Path]::Combine($snMedia, $canon)
+            if (Test-Path -LiteralPath $canonPath -PathType Container) { continue }
+            if ($dryRun) { $planned++; continue }
+            $null = New-Item -ItemType Directory -Path $canonPath -Force -ErrorAction Stop
+            $created++
+            if ($State.ContainsKey('Changes')) {
+                Register-BootstrapChange -State $State -Type Directory -Target $canonPath -OldValue $null -NewValue 'created' -Operation 'emulation-media-canonical-dir' -Component 'emulation-deck-shared-media'
+            }
+        }
+
+        foreach ($alias in $compatMap.compat.Keys) {
+            $canon = [string]$compatMap.compat[$alias]
+            $aliasPath = [System.IO.Path]::Combine($snMedia, $alias)
+            $canonPath = [System.IO.Path]::Combine($snMedia, $canon)
+
+            $existingTarget = Get-BootstrapDirectoryReparseTarget -Path $aliasPath
+            if ($null -ne $existingTarget) {
+                if ($existingTarget -eq '') {
+                    # Pasta real ja ocupa o nome do alias: nunca sobrescreve.
+                    Write-Log ("emulation-deck-shared-media: '{0}' ja e uma pasta real (nao-junction) em {1}; mantida, sem alterar." -f $alias, $snMedia) 'WARN'
+                    $warnings++
+                } elseif (-not (Test-Path -LiteralPath $aliasPath)) {
+                    # Reparse point quebrado (alvo inacessivel): nao remove, apenas reporta.
+                    Write-Log ("emulation-deck-shared-media: link '{0}' em {1} esta quebrado (alvo '{2}'); reportado, sem remover." -f $alias, $snMedia, $existingTarget) 'WARN'
+                    $warnings++
+                }
+                # Junction valida (existingTarget != '') -> no-op idempotente.
+                continue
+            }
+
+            # Alias ausente: cria junction apontando para a pasta canonica.
+            if ($dryRun) { $linksPlanned++; continue }
+            if (-not (Test-Path -LiteralPath $canonPath -PathType Container)) {
+                $null = New-Item -ItemType Directory -Path $canonPath -Force -ErrorAction Stop
+            }
+            try {
+                $null = New-Item -ItemType Junction -Path $aliasPath -Target $canonPath -ErrorAction Stop
+                $linksCreated++
+                if ($State.ContainsKey('Changes')) {
+                    Register-BootstrapChange -State $State -Type Directory -Target $aliasPath -OldValue $null -NewValue ('junction->' + $canon) -Operation 'emulation-media-compat-junction' -Component 'emulation-deck-shared-media'
+                }
+            } catch {
+                Write-Log ("emulation-deck-shared-media: falha ao criar junction '{0}' -> '{1}' em {2}: {3}" -f $alias, $canon, $snMedia, $_.Exception.Message) 'WARN'
+                $warnings++
+            }
+        }
+    }
+
+    Write-Log ("emulation-deck-shared-media: mediaRoot={0}; sistemas={1}; dirs(created={2},planned={3}); links(created={4},planned={5}); warnings={6}; dryRun={7}" -f $mediaRoot, $systems.Count, $created, $planned, $linksCreated, $linksPlanned, $warnings, $dryRun)
+    return [ordered]@{
+        status        = 'completed'
+        mediaRoot     = $mediaRoot
+        systems       = @($systems.ToArray())
+        dirsCreated   = $created
+        dirsPlanned   = $planned
+        linksCreated  = $linksCreated
+        linksPlanned  = $linksPlanned
+        warnings      = $warnings
+        writable      = $canWrite
+        dryRun        = $dryRun
+    }
+}
+
+function Test-BootstrapProcessRunning {
+    # True se algum processo com um dos nomes informados estiver em execucao. Sem efeitos.
+    param([string[]]$Names = @())
+    foreach ($n in $Names) {
+        if ([string]::IsNullOrWhiteSpace($n)) { continue }
+        try {
+            $p = Get-Process -Name $n -ErrorAction SilentlyContinue
+            if ($p) { return $true }
+        } catch { }
+    }
+    return $false
+}
+
+function Set-BootstrapEsdePaths {
+    # Aponta ROMDirectory e MediaDirectory do ES-DE para os roots resolvidos, preservando as
+    # demais chaves (merge-safe), com backup antes de escrever. Nao escreve com o ES-DE rodando.
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$RomDir,
+        [Parameter(Mandatory = $true)][string]$MediaDir
+    )
+
+    $candidates = @(
+        (Join-Path $env:USERPROFILE 'ES-DE\settings\es_settings.xml'),
+        (Join-Path $env:USERPROFILE '.emulationstation\es_settings.xml')
+    )
+    $settingsPath = $null
+    foreach ($c in $candidates) { if (Test-Path -LiteralPath $c -PathType Leaf) { $settingsPath = $c; break } }
+    if (-not $settingsPath) {
+        return [ordered]@{ frontend = 'es-de'; status = 'skipped'; reason = 'es_settings.xml nao encontrado' }
+    }
+    if (Test-BootstrapProcessRunning -Names @('ES-DE', 'emulationstation')) {
+        Write-Log 'frontend-pointing: ES-DE em execucao; pulando escrita para nao corromper config.' 'WARN'
+        return [ordered]@{ frontend = 'es-de'; status = 'skipped'; reason = 'frontend-running' }
+    }
+
+    [xml]$xml = Get-Content -LiteralPath $settingsPath -Raw
+    $changed = $false
+    $apply = @{ 'ROMDirectory' = $RomDir; 'MediaDirectory' = $MediaDir }
+    foreach ($name in $apply.Keys) {
+        $value = [string]$apply[$name]
+        $node = $xml.SelectSingleNode(("/*/string[@name='{0}']" -f $name))
+        if ($null -eq $node) {
+            $node = $xml.CreateElement('string')
+            $node.SetAttribute('name', $name)
+            $node.SetAttribute('value', $value)
+            $null = $xml.DocumentElement.AppendChild($node)
+            $changed = $true
+        } elseif ([string]$node.value -ne $value) {
+            $node.value = $value
+            $changed = $true
+        }
+    }
+
+    if (-not $changed) {
+        return [ordered]@{ frontend = 'es-de'; status = 'unchanged'; path = $settingsPath }
+    }
+    if ([bool]$State.DryRun) {
+        return [ordered]@{ frontend = 'es-de'; status = 'planned'; path = $settingsPath }
+    }
+
+    $backup = Backup-BootstrapFile -Path $settingsPath
+    $xml.Save($settingsPath)
+    if ($State.ContainsKey('Changes')) {
+        Register-BootstrapChange -State $State -Type File -Target $settingsPath -OldValue $backup -NewValue 'esde-paths-pointed' -Operation 'emulation-frontend-pointing' -Component 'emulation-frontend-pointing'
+    }
+    Write-Log ("frontend-pointing: ES-DE apontado para roms={0}; media={1} ({2})" -f $RomDir, $MediaDir, $settingsPath)
+    return [ordered]@{ frontend = 'es-de'; status = 'updated'; path = $settingsPath; backup = $backup }
+}
+
+function Set-BootstrapPegasusPaths {
+    # Adiciona (sem duplicar) o root de ROMs ao game_dirs do Pegasus. Nao-destrutivo: so anexa.
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][string]$RomDir
+    )
+
+    $gameDirsPath = Join-Path $env:APPDATA 'pegasus-frontend\game_dirs.txt'
+    $pegasusDir = Split-Path -Parent $gameDirsPath
+    if (-not (Test-Path -LiteralPath $pegasusDir -PathType Container)) {
+        return [ordered]@{ frontend = 'pegasus'; status = 'skipped'; reason = 'pegasus-frontend nao encontrado' }
+    }
+    if (Test-BootstrapProcessRunning -Names @('pegasus-fe', 'pegasus-frontend')) {
+        Write-Log 'frontend-pointing: Pegasus em execucao; pulando escrita.' 'WARN'
+        return [ordered]@{ frontend = 'pegasus'; status = 'skipped'; reason = 'frontend-running' }
+    }
+
+    $existing = @()
+    if (Test-Path -LiteralPath $gameDirsPath -PathType Leaf) {
+        $existing = @(Get-Content -LiteralPath $gameDirsPath -ErrorAction SilentlyContinue)
+    }
+    if (@($existing | ForEach-Object { $_.Trim() }) -contains $RomDir) {
+        return [ordered]@{ frontend = 'pegasus'; status = 'unchanged'; path = $gameDirsPath }
+    }
+    if ([bool]$State.DryRun) {
+        return [ordered]@{ frontend = 'pegasus'; status = 'planned'; path = $gameDirsPath }
+    }
+
+    $backup = ''
+    if (Test-Path -LiteralPath $gameDirsPath -PathType Leaf) { $backup = Backup-BootstrapFile -Path $gameDirsPath }
+    $newContent = @($existing) + @($RomDir)
+    Set-Content -LiteralPath $gameDirsPath -Value $newContent -Encoding UTF8
+    if ($State.ContainsKey('Changes')) {
+        Register-BootstrapChange -State $State -Type File -Target $gameDirsPath -OldValue $backup -NewValue 'pegasus-romdir-appended' -Operation 'emulation-frontend-pointing' -Component 'emulation-frontend-pointing'
+    }
+    Write-Log ("frontend-pointing: Pegasus game_dir adicionado: {0}" -f $RomDir)
+    return [ordered]@{ frontend = 'pegasus'; status = 'updated'; path = $gameDirsPath; backup = $backup }
+}
+
+function Get-BootstrapPlaynitePointerGuidance {
+    # Playnite guarda as libs de emulacao no proprio DB (LiteDB); nao editamos por fora para nao
+    # corromper. Retorna orientacao pointer-only para o usuario.
+    param([Parameter(Mandatory = $true)][string]$RomDir)
+    $installed = (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'Playnite\Playnite.DesktopApp.exe')) -or
+                 (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Playnite\Playnite.DesktopApp.exe'))
+    if (-not $installed) {
+        return [ordered]@{ frontend = 'playnite'; status = 'skipped'; reason = 'playnite nao encontrado' }
+    }
+    return [ordered]@{ frontend = 'playnite'; status = 'manual-pointer'; reason = ("Em Playnite > Bibliotecas > Emulacao, aponte os diretorios de ROMs para {0} (nao editamos o DB do Playnite por seguranca)." -f $RomDir) }
+}
+
+function Ensure-BootstrapEmulationFrontendPaths {
+    # Aponta os frontends Windows detectados para os roots compartilhados resolvidos (Deck ou
+    # fallback local), sem duplicar dados. Merge-safe, backup, guard de processo, dry-run.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $deckInfo = $null
+    if ($State.ContainsKey('DeckEmulation')) { $deckInfo = $State['DeckEmulation'] }
+    $roots = Resolve-BootstrapEmulationRoots -DeckInfo $deckInfo -ScanVolumes
+
+    $results = New-Object System.Collections.Generic.List[object]
+    foreach ($writer in @(
+        { Set-BootstrapEsdePaths -State $State -RomDir ([string]$roots.roms) -MediaDir ([string]$roots.media) },
+        { Set-BootstrapPegasusPaths -State $State -RomDir ([string]$roots.roms) },
+        { Get-BootstrapPlaynitePointerGuidance -RomDir ([string]$roots.roms) }
+    )) {
+        try { $results.Add((& $writer)) | Out-Null }
+        catch { $results.Add([ordered]@{ frontend = 'unknown'; status = 'failed'; reason = $_.Exception.Message }) | Out-Null }
+    }
+
+    Write-Log ("emulation-frontend-pointing: roms={0}; media={1}; resultados={2}" -f [string]$roots.roms, [string]$roots.media, ((@($results | ForEach-Object { "{0}:{1}" -f [string]$_.frontend, [string]$_.status }) -join ', ')))
+    return [ordered]@{
+        status   = 'completed'
+        roms     = [string]$roots.roms
+        media    = [string]$roots.media
+        deckFound = [bool]$roots.deckFound
+        results  = @($results.ToArray())
+        dryRun   = [bool]$State.DryRun
+    }
+}
+
+function Get-BootstrapEmulationShortcutTargets {
+    # Resolve {DisplayName, Exe} dos emuladores/frontends do perfil de emulacao que estao
+    # instalados em disco (via ProbePaths do catalogo + caminhos conhecidos de ES-DE/Pegasus).
+    $catalog = Get-BootstrapComponentCatalog
+    $targets = New-Object System.Collections.Generic.List[object]
+    $seen = @{}
+
+    $componentIds = @('pcsx2', 'rpcs3', 'duckstation', 'playnite', 'hydra-launcher')
+    foreach ($id in $componentIds) {
+        if (-not $catalog.Contains($id)) { continue }
+        $def = $catalog[$id]
+        $display = if ($def.PSObject.Properties.Name -contains 'DisplayName' -and $def.DisplayName) { [string]$def.DisplayName } else { $id }
+        $probePaths = @()
+        if ($def.PSObject.Properties.Name -contains 'ProbePaths') { $probePaths = @($def.ProbePaths) }
+        foreach ($p in $probePaths) {
+            $exp = ConvertTo-BootstrapExpandedPath -Path ([string]$p)
+            if ([string]::IsNullOrWhiteSpace($exp)) { continue }
+            if (-not $exp.ToLower().EndsWith('.exe')) { continue }
+            if (Test-Path -LiteralPath $exp -PathType Leaf) {
+                if (-not $seen.ContainsKey($exp)) {
+                    $seen[$exp] = $true
+                    $targets.Add([pscustomobject]@{ DisplayName = $display; Exe = $exp }) | Out-Null
+                }
+                break
+            }
+        }
+    }
+
+    # Frontends sem componente winget dedicado: caminhos conhecidos.
+    $extra = [ordered]@{
+        'ES-DE'   = @((Join-Path $env:USERPROFILE 'ES-DE\ES-DE.exe'), (Join-Path ${env:ProgramFiles} 'ES-DE\ES-DE.exe'))
+        'Pegasus' = @((Join-Path $env:APPDATA 'pegasus-frontend\pegasus-fe.exe'), (Join-Path ${env:LOCALAPPDATA} 'Programs\pegasus-frontend\pegasus-fe.exe'))
+    }
+    foreach ($name in $extra.Keys) {
+        foreach ($exe in $extra[$name]) {
+            if ([string]::IsNullOrWhiteSpace($exe)) { continue }
+            if (Test-Path -LiteralPath $exe -PathType Leaf) {
+                if (-not $seen.ContainsKey($exe)) {
+                    $seen[$exe] = $true
+                    $targets.Add([pscustomobject]@{ DisplayName = $name; Exe = $exe }) | Out-Null
+                }
+                break
+            }
+        }
+    }
+
+    return @($targets.ToArray())
+}
+
+function Ensure-BootstrapEmulationDesktopShortcuts {
+    # Cria a pasta Desktop\Emulacao com atalhos para emuladores/frontends instalados e aplica um
+    # icone de pasta (desktop.ini). Nao-destrutivo: reaproveita pasta/atalhos existentes.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $desktop = Get-BootstrapDesktopPath
+    if ([string]::IsNullOrWhiteSpace($desktop)) {
+        Write-Log 'emulation-desktop-shortcuts: nao foi possivel resolver a Area de Trabalho.' 'WARN'
+        return [ordered]@{ status = 'skipped'; reason = 'desktop-unresolved' }
+    }
+    $folder = Join-Path $desktop 'Emulação'
+    $targets = @(Get-BootstrapEmulationShortcutTargets)
+    if ($targets.Count -eq 0) {
+        Write-Log 'emulation-desktop-shortcuts: nenhum emulador/frontend instalado detectado; nada a fazer.'
+        return [ordered]@{ status = 'completed'; folder = $folder; created = 0; planned = 0; targets = 0; dryRun = [bool]$State.DryRun }
+    }
+
+    if ([bool]$State.DryRun) {
+        Write-Log ("emulation-desktop-shortcuts: planejado folder={0}; atalhos={1}" -f $folder, $targets.Count)
+        return [ordered]@{ status = 'completed'; folder = $folder; created = 0; planned = $targets.Count; targets = $targets.Count; dryRun = $true }
+    }
+
+    if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+        $null = New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop
+        if ($State.ContainsKey('Changes')) {
+            Register-BootstrapChange -State $State -Type Directory -Target $folder -OldValue $null -NewValue 'created' -Operation 'emulation-desktop-folder' -Component 'emulation-desktop-shortcuts'
+        }
+    }
+
+    $created = 0
+    $shell = New-Object -ComObject WScript.Shell
+    foreach ($t in $targets) {
+        $lnk = Join-Path $folder (('{0}.lnk' -f $t.DisplayName))
+        try {
+            $sc = $shell.CreateShortcut($lnk)
+            $sc.TargetPath = [string]$t.Exe
+            $sc.WorkingDirectory = (Split-Path -Parent ([string]$t.Exe))
+            $sc.IconLocation = ('{0},0' -f [string]$t.Exe)
+            $sc.Description = ('Emulacao: {0}' -f [string]$t.DisplayName)
+            $sc.Save()
+            $created++
+            if ($State.ContainsKey('Changes')) {
+                Register-BootstrapChange -State $State -Type File -Target $lnk -OldValue $null -NewValue ([string]$t.Exe) -Operation 'emulation-desktop-shortcut' -Component 'emulation-desktop-shortcuts'
+            }
+        } catch {
+            Write-Log ("emulation-desktop-shortcuts: falha ao criar atalho '{0}': {1}" -f [string]$t.DisplayName, $_.Exception.Message) 'WARN'
+        }
+    }
+
+    # Icone da pasta via desktop.ini (merge nao-destrutivo da chave de icone).
+    try {
+        $iconExe = [string]$targets[0].Exe
+        $iniPath = Join-Path $folder 'desktop.ini'
+        $iniLines = @()
+        if (Test-Path -LiteralPath $iniPath -PathType Leaf) {
+            $iniLines = @(Get-Content -LiteralPath $iniPath -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*(IconResource|IconFile|IconIndex)\s*=' -and $_ -notmatch '^\s*\[\.ShellClassInfo\]\s*$' })
+        }
+        $newIni = @('[.ShellClassInfo]', ('IconResource={0},0' -f $iconExe)) + @($iniLines | Where-Object { $_ -and $_.Trim() -ne '' })
+        # Remove atributos para reescrever, depois reaplica Hidden+System no arquivo e System na pasta.
+        if (Test-Path -LiteralPath $iniPath) { attrib -h -s $iniPath 2>$null | Out-Null }
+        Set-Content -LiteralPath $iniPath -Value $newIni -Encoding Default
+        attrib +h +s $iniPath 2>$null | Out-Null
+        attrib +s $folder 2>$null | Out-Null
+        if ($State.ContainsKey('Changes')) {
+            Register-BootstrapChange -State $State -Type File -Target $iniPath -OldValue $null -NewValue 'folder-icon' -Operation 'emulation-desktop-icon' -Component 'emulation-desktop-shortcuts'
+        }
+    } catch {
+        Write-Log ("emulation-desktop-shortcuts: falha ao aplicar icone da pasta: {0}" -f $_.Exception.Message) 'WARN'
+    }
+
+    Write-Log ("emulation-desktop-shortcuts: folder={0}; atalhos criados/atualizados={1}/{2}" -f $folder, $created, $targets.Count)
+    return [ordered]@{ status = 'completed'; folder = $folder; created = $created; planned = 0; targets = $targets.Count; dryRun = $false }
+}
+
 function Ensure-BootstrapDualBootManager {
     param([Parameter(Mandatory = $true)][hashtable]$State)
 
@@ -29429,6 +30534,10 @@ function Ensure-BootstrapBuiltinComponent {
 
     switch ($Name) {
         'emulation-shared-runtime' { return (Ensure-BootstrapEmulationSharedRuntime -State $State -ComponentDef $ComponentDef) }
+        'steamdeck-home-detect' { return (Ensure-BootstrapSteamDeckHomeDetect -State $State) }
+        'emulation-deck-shared-media' { return (Ensure-BootstrapDeckMediaCanonical -State $State) }
+        'emulation-frontend-pointing' { return (Ensure-BootstrapEmulationFrontendPaths -State $State) }
+        'emulation-desktop-shortcuts' { return (Ensure-BootstrapEmulationDesktopShortcuts -State $State) }
         'dualboot-manager' { return (Ensure-BootstrapDualBootManager -State $State) }
         'agent-compat-runtime' { return (Ensure-BootstrapAgentCompatRuntime -State $State -ComponentDef $ComponentDef) }
         default { throw "Componente builtin sem executor: $Name" }
