@@ -5658,7 +5658,7 @@ function Refresh-DualBootControls {
     }
     $ui.DualBootStatusText.Text = ($statusLines -join [Environment]::NewLine)
 
-    $prereqs = Test-BootstrapDualBootPrerequisites
+    $prereqs = @(Test-BootstrapDualBootPrerequisites)
     $fsIssue = $prereqs | Where-Object { $_.Id -eq 'fast-startup' } | Select-Object -First 1
     if ($prereqs.Count -eq 0 -or (-not $fsIssue)) {
         $ui.FixFastStartupButton.Visibility = 'Collapsed'
@@ -8501,7 +8501,14 @@ $ui.ClassifyTvButton.Add_Click({ Classify-PendingExternalDisplay -Choice 'TvGame
 $ui.RefreshReviewButton.Add_Click({ Refresh-ReviewPage })
 
 # Dual Boot
-$ui.RefreshDualBootButton.Add_Click({ Refresh-DualBootControls })
+$ui.RefreshDualBootButton.Add_Click({
+    try {
+        Refresh-DualBootControls
+    } catch {
+        Write-UiLog -Level 'ERROR' -Message ("Falha ao recarregar Windows e Linux: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Erro ao recarregar status Windows/Linux: $($_.Exception.Message)"
+    }
+})
 
 $ui.BtrfsCheckButton.Add_Click({
     try {
