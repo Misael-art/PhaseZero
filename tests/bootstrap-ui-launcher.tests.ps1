@@ -1003,3 +1003,66 @@ Describe 'Health tokens/memory validation and repair flow' {
         $body | Should Match "Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope \`$Scope"
     }
 }
+
+Describe 'Health drive labels UI and CLI flow' {
+    It 'renders a dedicated drive labels panel with diagnose, advanced apply and result grid' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match ([regex]::Escape('x:Name="HealthDriveLabelsButton"'))
+        $raw | Should Match ([regex]::Escape('Diagnosticar drives'))
+        $raw | Should Match ([regex]::Escape('x:Name="HealthDriveLabelsAdvancedCheck"'))
+        $raw | Should Match ([regex]::Escape('x:Name="HealthDriveLabelsApplyButton"'))
+        $raw | Should Match ([regex]::Escape('Aplicar rótulos seguros'))
+        $raw | Should Match ([regex]::Escape('x:Name="HealthDriveLabelsGrid"'))
+        $raw | Should Match 'PARTI'
+    }
+
+    It 'routes drive diagnosis and apply through dedicated backend modes' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match "ValidateSet\('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan', 'partition-labels', 'partition-labels-apply'\)"
+        $raw | Should Match "Start-RunExecution -MaintenanceIntent 'partition-labels'"
+        $raw | Should Match "Start-RunExecution -MaintenanceIntent 'partition-labels-apply'"
+        $raw | Should Match "maint -eq 'partition-labels'"
+        $raw | Should Match "tokens \+= @\('-PartitionLabels'\)"
+        $raw | Should Match "maint -eq 'partition-labels-apply'"
+        $raw | Should Match "tokens \+= @\('-PartitionLabels', '-ApplyPartitionLabels'\)"
+        $raw | Should Match "'-PartitionLabels'"
+        $raw | Should Match "'-ApplyPartitionLabels'"
+    }
+
+    It 'gates drive label application behind advanced mode, typed confirmation and env opt-in' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+        $body = [regex]::Match($raw, 'function Invoke-UiHealthPartitionLabelsApply.*?\n\}', 'Singleline').Value
+
+        $body | Should Not Be ''
+        $body | Should Match 'HealthDriveLabelsAdvancedCheck'
+        $body | Should Match 'Confirm-UiCriticalAction'
+        $body | Should Match 'RequiredToken'
+        $body | Should Match 'APLICAR ROTULOS'
+        $body | Should Match 'PHASEZERO_PARTITION_LABEL_APPLY'
+    }
+
+    It 'updates the Health panel from partition-labels results without navigating away' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        $raw | Should Match 'function Update-UiPartitionLabelsHealthResult'
+        $raw | Should Match "modeText -eq 'partition-labels'"
+        $raw | Should Match 'Update-UiPartitionLabelsHealthResult -Result \$result'
+        $raw | Should Match 'HealthDriveLabelsGrid'
+    }
+
+    It 'formats empty partition-label results without Count/null errors' {
+        Import-UiFunctionsForTest -Names @('Get-UiObjectValue','Get-UiObjectArray','ConvertTo-UiBoolean','Get-UiPartitionLabelPlanFromResult','Get-UiPartitionLabelRows','Get-UiPartitionLabelSummaryText')
+        $result = [pscustomobject]@{
+            mode = 'partition-labels'
+            status = 'success'
+            plan = [pscustomobject]@{}
+            counts = [pscustomobject]@{ total = 0; renameable = 0; blocked = 0; guideOnly = 0 }
+            partitionLabels = [pscustomobject]@{ result = [pscustomobject]@{} }
+        }
+
+        @((Get-UiPartitionLabelRows -Result $result)).Count | Should Be 0
+        (Get-UiPartitionLabelSummaryText -Result $result) | Should Match '0 part'
+    }
+}

@@ -30,6 +30,8 @@
     [switch]$AiConfigDoctor,
     [switch]$AiConfigSync,
     [switch]$RepairPlan,
+    [switch]$PartitionLabels,
+    [switch]$ApplyPartitionLabels,
     [switch]$ReleasePack,
     [string]$ReleaseVersion = '',
     [string]$ReleaseOutputDir = '',
@@ -588,7 +590,7 @@ function Invoke-BootstrapRollback {
 function Register-BootstrapChange {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
-        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'DefenderExclusion', 'Clone', 'SecretsRotation', 'WindowsFeature', 'WindowsCapability', 'FirewallRule')][string]$Type,
+        [Parameter(Mandatory = $true)][ValidateSet('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Package', 'NpmGlobal', 'UvTool', 'ChocolateyPackage', 'Shortcut', 'Task', 'Service', 'DefenderExclusion', 'Clone', 'SecretsRotation', 'WindowsFeature', 'WindowsCapability', 'FirewallRule', 'VolumeLabel')][string]$Type,
         [Parameter(Mandatory = $true)][string]$Target,
         [AllowNull()]$OldValue,
         [string]$Name,
@@ -613,11 +615,12 @@ function Register-BootstrapChange {
             'DefenderExclusion' { 'remove-defender-exclusion' }
             'SecretsRotation' { 'restore-active-credential' }
             'FirewallRule' { 'remove-firewall-rule' }
+            'VolumeLabel' { 'restore-volume-label' }
             default { 'manual-review' }
         }
     }
     if ([string]::IsNullOrWhiteSpace($Reversible)) {
-        $Reversible = if ($Type -in @('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Shortcut', 'Task', 'Service', 'Clone', 'SecretsRotation')) { 'partial' } else { 'manual' }
+        $Reversible = if ($Type -in @('Registry', 'File', 'Directory', 'Path', 'EnvVar', 'Shortcut', 'Task', 'Service', 'Clone', 'SecretsRotation', 'VolumeLabel')) { 'partial' } else { 'manual' }
     }
     $change = [ordered]@{
         Type = $Type
@@ -9370,16 +9373,17 @@ function Get-BootstrapPhysicalDisksSnapshot {
             $partRows = New-Object System.Collections.Generic.List[object]
             try {
                 foreach ($p in @(Get-Partition -DiskNumber $d.Number -ErrorAction SilentlyContinue)) {
-                    $fs = ''; $drive = ''
+                    $fs = ''; $drive = ''; $label = ''
                     try {
                         $vol = Get-Volume -Partition $p -ErrorAction SilentlyContinue
-                        if ($vol) { $fs = [string]$vol.FileSystemType; $drive = [string]$vol.DriveLetter }
+                        if ($vol) { $fs = [string]$vol.FileSystemType; $drive = [string]$vol.DriveLetter; $label = [string]$vol.FileSystemLabel }
                     } catch { Write-Verbose $_.Exception.Message }
                     $partRows.Add([pscustomobject]@{
                         PartitionNumber = [int]$p.PartitionNumber
                         Type            = [string]$p.Type
                         SizeGB          = [math]::Round($p.Size / 1GB, 1)
                         FileSystem      = $fs
+                        FileSystemLabel = $label
                         DriveLetter     = $drive
                         IsBoot          = [bool]$p.IsBoot
                         IsSystem        = [bool]$p.IsSystem
@@ -9415,30 +9419,389 @@ function Test-BootstrapDiskHasWindows {
     return $false
 }
 
+function Test-BootstrapOsInstallDiskRemovable {
+    param([Parameter(Mandatory = $true)]$Disk)
+
+    $busType = ([string]$Disk.BusType).Trim()
+    if ($busType -in @('USB', 'SD')) { return $true }
+
+    $friendlyName = ([string]$Disk.FriendlyName).Trim()
+    if ($friendlyName -match '(?i)(\busb\b|\bflash\b|\bsdxc\b|\bsd card\b|\bcard reader\b|\bstorage device\b)') { return $true }
+    return $false
+}
+
+function Test-BootstrapOsInstallPartitionLinuxLike {
+    param([Parameter(Mandatory = $true)]$Partition)
+
+    if ([bool]$Partition.IsSystem -or [bool]$Partition.IsBoot) { return $false }
+
+    $type = (([string]$Partition.Type).Trim()).ToLowerInvariant()
+    if ($type -in @('system', 'reserved', 'recovery')) { return $false }
+
+    $fs = (([string]$Partition.FileSystem).Trim()).ToLowerInvariant()
+    if ($fs -in @('ntfs', 'refs', 'fat', 'fat32', 'exfat')) { return $false }
+    if ($fs -in @('', 'unknown', 'raw', 'ext4', 'btrfs', 'ext3', 'xfs')) { return $true }
+    if ($type -in @('unknown', 'linux')) { return $true }
+    if ($type -match 'linux') { return $true }
+
+    return $false
+}
+
 function Get-BootstrapOsInstallDiskTopology {
-    # Classifica cada disco fisico: tem Windows? e candidato dedicado a Linux? Read-only.
+    # Classifica cada disco fisico: Windows, removivel e candidato interno dedicado Linux. Read-only.
     $rows = New-Object System.Collections.Generic.List[object]
     foreach ($d in @(Get-BootstrapPhysicalDisksSnapshot)) {
+        $partitions = @($d.Partitions)
         $hasWindows = Test-BootstrapDiskHasWindows -Disk $d
-        $linuxLike = @($d.Partitions | Where-Object { [string]$_.FileSystem -in @('', 'Unknown', 'RAW', 'ext4', 'btrfs', 'ext3', 'xfs') })
+        $isRemovable = Test-BootstrapOsInstallDiskRemovable -Disk $d
+        $installSizeOk = ([double]$d.SizeGB -ge 64)
+        $linuxLike = @($partitions | Where-Object { Test-BootstrapOsInstallPartitionLinuxLike -Partition $_ })
+        $onlyLinuxOrEmpty = (($partitions.Count -eq 0) -or ($linuxLike.Count -eq $partitions.Count))
+        $isDedicatedLinuxCandidate = ((-not [bool]$hasWindows) -and (-not [bool]$isRemovable) -and [bool]$installSizeOk -and [bool]$onlyLinuxOrEmpty)
         $rows.Add([ordered]@{
             diskNumber                = [int]$d.Number
             friendlyName              = [string]$d.FriendlyName
             sizeGB                    = [double]$d.SizeGB
             busType                   = [string]$d.BusType
-            partitionCount            = @($d.Partitions).Count
+            partitionCount            = $partitions.Count
             linuxPartitionCount       = @($linuxLike).Count
             hasWindows                = [bool]$hasWindows
-            isDedicatedLinuxCandidate = (-not [bool]$hasWindows)
-            partitions                = @($d.Partitions)
+            isRemovable               = [bool]$isRemovable
+            installSizeOk             = [bool]$installSizeOk
+            onlyLinuxOrEmpty          = [bool]$onlyLinuxOrEmpty
+            isDedicatedLinuxCandidate = [bool]$isDedicatedLinuxCandidate
+            partitions                = @($partitions)
         }) | Out-Null
     }
     return @($rows.ToArray())
 }
 
+function Get-BootstrapOsInstallManualPartitionTargets {
+    param([AllowNull()][object[]]$Topology = $null)
+
+    if ($null -eq $Topology) { $Topology = @(Get-BootstrapOsInstallDiskTopology) }
+
+    $targets = New-Object System.Collections.Generic.List[object]
+    foreach ($d in @($Topology)) {
+        if (-not [bool]$d.hasWindows) { continue }
+        if ([bool]$d.isRemovable) { continue }
+        foreach ($p in @($d.partitions)) {
+            if (-not (Test-BootstrapOsInstallPartitionLinuxLike -Partition $p)) { continue }
+            if ([double]$p.SizeGB -lt 32) { continue }
+            $targets.Add([ordered]@{
+                diskNumber      = [int]$d.diskNumber
+                partitionNumber = [int]$p.PartitionNumber
+                sizeGB          = [double]$p.SizeGB
+                fileSystem      = [string]$p.FileSystem
+                type            = [string]$p.Type
+                method          = 'native-installer-manual-partition'
+                reason          = 'mixed-disk-linux-partition-manual-only'
+            }) | Out-Null
+        }
+    }
+    return @($targets.ToArray())
+}
+
+function ConvertTo-BootstrapSafeVolumeLabel {
+    param(
+        [AllowNull()][string]$Text,
+        [int]$MaxLength = 16
+    )
+
+    $value = ([string]$Text).Trim().ToUpperInvariant()
+    $value = [regex]::Replace($value, '[^A-Z0-9-]+', '-')
+    $value = [regex]::Replace($value, '-+', '-').Trim('-')
+    if ([string]::IsNullOrWhiteSpace($value)) { $value = 'PZ-VOLUME' }
+    if ($value.Length -gt $MaxLength) { $value = $value.Substring(0, $MaxLength).Trim('-') }
+    return $value
+}
+
+function Get-BootstrapPartitionPedagogicalRole {
+    param(
+        [Parameter(Mandatory = $true)]$Disk,
+        [Parameter(Mandatory = $true)]$Partition,
+        [Parameter(Mandatory = $true)][bool]$DiskHasWindows,
+        [Parameter(Mandatory = $true)][bool]$DiskIsRemovable
+    )
+
+    $type = (([string]$Partition.Type).Trim()).ToLowerInvariant()
+    $fs = (([string]$Partition.FileSystem).Trim()).ToLowerInvariant()
+    $drive = ([string]$Partition.DriveLetter).Trim()
+    $label = (([string]$Partition.FileSystemLabel).Trim()).ToLowerInvariant()
+
+    if ([bool]$Partition.IsSystem -or $type -eq 'system') { return 'efi-system' }
+    if ((-not $DiskIsRemovable) -and ($fs -in @('fat', 'fat32')) -and ([double]$Partition.SizeGB -le 1) -and ($label -match 'efi|esp|system|boot')) { return 'efi-system' }
+    if ($type -eq 'recovery') { return 'windows-recovery' }
+    if ([bool]$Partition.IsBoot -or $drive -eq 'C') { return 'windows-system' }
+    if (Test-BootstrapOsInstallPartitionLinuxLike -Partition $Partition) {
+        if ($DiskHasWindows) { return 'steamos-linux-manual' }
+        return 'linux-dedicated'
+    }
+    if ($DiskIsRemovable) {
+        if (($fs -in @('exfat', 'fat', 'fat32')) -and ([double]$Partition.SizeGB -lt 64)) { return 'removable-install' }
+        return 'removable-media'
+    }
+    if ((-not [string]::IsNullOrWhiteSpace($drive)) -and ($fs -in @('ntfs', 'refs', 'exfat', 'fat', 'fat32'))) { return 'windows-data' }
+    return 'manual-review'
+}
+
+function Get-BootstrapPartitionRoleLabel {
+    param(
+        [Parameter(Mandatory = $true)][string]$Role,
+        [AllowNull()][string]$DriveLetter = ''
+    )
+
+    $drive = ([string]$DriveLetter).Trim().TrimEnd(':').ToUpperInvariant()
+    switch ($Role) {
+        'efi-system' { return 'PZ-EFI-SYS' }
+        'windows-recovery' { return 'PZ-WIN-REC' }
+        'windows-system' { return $(if ([string]::IsNullOrWhiteSpace($drive)) { 'PZ-WIN-SYS' } else { "PZ-WIN-$drive" }) }
+        'steamos-linux-manual' { return 'PZ-DECK-LINUX' }
+        'linux-dedicated' { return 'PZ-LINUX' }
+        'removable-install' { return 'PZ-USB-INSTALL' }
+        'removable-media' { return 'PZ-USB-MEDIA' }
+        'windows-data' { return $(if ([string]::IsNullOrWhiteSpace($drive)) { 'PZ-DATA' } else { "PZ-DATA-$drive" }) }
+        default { return 'PZ-REVIEW' }
+    }
+}
+
+function New-BootstrapPartitionLabelEntry {
+    param(
+        [Parameter(Mandatory = $true)]$Disk,
+        [Parameter(Mandatory = $true)]$Partition
+    )
+
+    $diskHasWindows = Test-BootstrapDiskHasWindows -Disk $Disk
+    $diskIsRemovable = Test-BootstrapOsInstallDiskRemovable -Disk $Disk
+    $role = Get-BootstrapPartitionPedagogicalRole -Disk $Disk -Partition $Partition -DiskHasWindows:$diskHasWindows -DiskIsRemovable:$diskIsRemovable
+    $drive = ([string]$Partition.DriveLetter).Trim().TrimEnd(':').ToUpperInvariant()
+    $currentLabel = ([string]$Partition.FileSystemLabel).Trim()
+    $proposedLabel = ConvertTo-BootstrapSafeVolumeLabel -Text (Get-BootstrapPartitionRoleLabel -Role $role -DriveLetter $drive)
+    $fs = (([string]$Partition.FileSystem).Trim()).ToLowerInvariant()
+
+    $reasons = New-Object System.Collections.Generic.List[string]
+    if ([string]::IsNullOrWhiteSpace($drive)) { $reasons.Add('no-drive-letter') | Out-Null }
+    if ($fs -notin @('ntfs', 'refs', 'exfat', 'fat', 'fat32')) { $reasons.Add('unsupported-filesystem') | Out-Null }
+    if ($role -in @('efi-system', 'windows-recovery', 'windows-system')) { $reasons.Add('protected-windows-volume') | Out-Null }
+    if ($role -in @('steamos-linux-manual', 'linux-dedicated')) { $reasons.Add('linux-or-unknown-filesystem') | Out-Null }
+    if ($diskIsRemovable) { $reasons.Add('removable-volume') | Out-Null }
+    if ($currentLabel -eq $proposedLabel) { $reasons.Add('label-already-set') | Out-Null }
+
+    $canRename = (($role -eq 'windows-data') -and ($reasons.Count -eq 0))
+    $action = if ($canRename) {
+        'rename'
+    } elseif ($currentLabel -eq $proposedLabel) {
+        'unchanged'
+    } elseif ($role -in @('steamos-linux-manual', 'linux-dedicated', 'removable-install', 'removable-media')) {
+        'guide-only'
+    } else {
+        'blocked'
+    }
+
+    $letterText = if ([string]::IsNullOrWhiteSpace($drive)) { 'sem letra' } else { "$drive`:" }
+    $fsText = if ([string]::IsNullOrWhiteSpace($Partition.FileSystem)) { 'Linux/Unknown' } else { [string]$Partition.FileSystem }
+    $displayName = "Disco $([int]$Disk.Number) / Particao $([int]$Partition.PartitionNumber) - $letterText - $([double]$Partition.SizeGB)GB - $fsText"
+
+    return [pscustomobject][ordered]@{
+        identity        = ('D{0}P{1}' -f [int]$Disk.Number, [int]$Partition.PartitionNumber)
+        diskNumber      = [int]$Disk.Number
+        partitionNumber = [int]$Partition.PartitionNumber
+        driveLetter     = $drive
+        sizeGB          = [double]$Partition.SizeGB
+        fileSystem      = [string]$Partition.FileSystem
+        currentLabel    = $currentLabel
+        proposedLabel   = $proposedLabel
+        role            = $role
+        displayName     = $displayName
+        action          = $action
+        canRename       = [bool]$canRename
+        reasons         = @($reasons.ToArray())
+        explanation     = switch ($role) {
+            'efi-system' { 'Boot EFI: identifica inicializacao; nao renomear.' }
+            'windows-recovery' { 'Recovery Windows: manutencao do sistema; nao renomear.' }
+            'windows-system' { 'Windows principal: volume do sistema; nao renomear automaticamente.' }
+            'steamos-linux-manual' { 'SteamOS/Linux em disco misto: confirmar pelo disco, particao e tamanho no instalador; Windows nao renomeia.' }
+            'linux-dedicated' { 'Linux dedicado: usar como alvo apenas se o usuario confirmar no instalador.' }
+            'removable-install' { 'Midia removivel/instalador: usar para boot ou transferencia; nao virar alvo de instalacao.' }
+            'removable-media' { 'Midia removivel: revisar manualmente antes de renomear.' }
+            'windows-data' { 'Dados Windows: pode receber rotulo pedagogico se aplicacao explicita estiver ligada.' }
+            default { 'Revisao manual: sinais insuficientes para renomear com seguranca.' }
+        }
+    }
+}
+
+function Get-BootstrapPartitionLabelPlan {
+    $entries = New-Object System.Collections.Generic.List[object]
+    foreach ($d in @(Get-BootstrapPhysicalDisksSnapshot)) {
+        foreach ($p in @($d.Partitions)) {
+            $entries.Add((New-BootstrapPartitionLabelEntry -Disk $d -Partition $p)) | Out-Null
+        }
+    }
+    $renameable = @($entries.ToArray() | Where-Object { [bool]$_.canRename })
+    return [ordered]@{
+        schemaVersion   = 'partition-labels/v1'
+        generatedAt     = (Get-Date).ToString('o')
+        entries         = @($entries.ToArray())
+        renameableCount = $renameable.Count
+        applyOptInEnv   = 'PHASEZERO_PARTITION_LABEL_APPLY=1'
+        safetyModel     = 'read-only by default; only mounted non-system data volumes can be renamed'
+    }
+}
+
+function Set-BootstrapVolumeLabel {
+    param(
+        [Parameter(Mandatory = $true)][string]$DriveLetter,
+        [Parameter(Mandatory = $true)][string]$NewFileSystemLabel
+    )
+
+    $drive = ([string]$DriveLetter).Trim().TrimEnd(':').ToUpperInvariant()
+    Set-Volume -DriveLetter $drive -NewFileSystemLabel $NewFileSystemLabel -ErrorAction Stop
+    return [ordered]@{ status = 'renamed'; driveLetter = $drive; newLabel = $NewFileSystemLabel }
+}
+
+function Invoke-BootstrapPartitionLabelPlan {
+    param(
+        [Parameter(Mandatory = $true)]$Plan,
+        [switch]$Apply
+    )
+
+    $changed = New-Object System.Collections.Generic.List[object]
+    $skipped = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in @($Plan.entries)) {
+        if (-not [bool]$entry.canRename) {
+            $skipped.Add($entry) | Out-Null
+            continue
+        }
+        if (-not $Apply) {
+            $skipped.Add($entry) | Out-Null
+            continue
+        }
+        $result = Set-BootstrapVolumeLabel -DriveLetter ([string]$entry.driveLetter) -NewFileSystemLabel ([string]$entry.proposedLabel)
+        $changed.Add([ordered]@{ entry = $entry; result = $result }) | Out-Null
+    }
+    return [ordered]@{
+        status       = $(if ($Apply) { 'completed' } else { 'planned' })
+        apply        = [bool]$Apply
+        changedCount = $changed.Count
+        skippedCount = $skipped.Count
+        changed      = @($changed.ToArray())
+        skipped      = @($skipped.ToArray())
+    }
+}
+
+function Get-BootstrapPartitionLabelPlanEntries {
+    param([AllowNull()]$Plan)
+
+    if ($null -eq $Plan) { return @() }
+    try {
+        if ($Plan -is [System.Collections.IDictionary]) {
+            if ($Plan.Contains('entries')) { return @($Plan['entries']) }
+            return @()
+        }
+        if ($Plan.PSObject.Properties['entries']) { return @($Plan.entries) }
+    } catch {
+        return @()
+    }
+    return @()
+}
+
+function Get-BootstrapPartitionLabelPlanCounts {
+    param([AllowNull()]$Plan)
+
+    $entries = @(Get-BootstrapPartitionLabelPlanEntries -Plan $Plan)
+    $renameable = @($entries | Where-Object {
+        try { [bool]$_.canRename } catch { $false }
+    })
+    $blocked = @($entries | Where-Object {
+        try { [string]$_.action -eq 'blocked' } catch { $false }
+    })
+    $guideOnly = @($entries | Where-Object {
+        try { [string]$_.action -eq 'guide-only' } catch { $false }
+    })
+    $unchanged = @($entries | Where-Object {
+        try { [string]$_.action -eq 'unchanged' } catch { $false }
+    })
+
+    return [ordered]@{
+        total      = [int]$entries.Count
+        renameable = [int]$renameable.Count
+        blocked    = [int]$blocked.Count
+        guideOnly  = [int]$guideOnly.Count
+        unchanged  = [int]$unchanged.Count
+    }
+}
+
+function Test-BootstrapPartitionLabelApplyOptIn {
+    $value = ([string]$env:PHASEZERO_PARTITION_LABEL_APPLY).Trim().ToLowerInvariant()
+    return (@('1', 'true', 'yes', 'y', 'sim', 'on') -contains $value)
+}
+
+function Invoke-BootstrapPartitionLabelsMode {
+    param(
+        [switch]$Apply,
+        [switch]$DryRun
+    )
+
+    Write-Log ("Modo: PartitionLabels (apply={0}; dryRun={1})" -f [bool]$Apply, [bool]$DryRun)
+    $plan = Get-BootstrapPartitionLabelPlan
+    $counts = Get-BootstrapPartitionLabelPlanCounts -Plan $plan
+    $applyOptIn = Test-BootstrapPartitionLabelApplyOptIn
+    $shouldApply = ([bool]$Apply -and [bool]$applyOptIn -and -not [bool]$DryRun)
+
+    Write-Log ("PartitionLabels: particoes={0}; renomeaveis={1}; bloqueadas={2}; guia={3}; optIn={4}" -f [int]$counts.total, [int]$counts.renameable, [int]$counts.blocked, [int]$counts.guideOnly, [bool]$applyOptIn)
+    foreach ($entry in @(Get-BootstrapPartitionLabelPlanEntries -Plan $plan)) {
+        $reasonText = ''
+        try { $reasonText = (@($entry.reasons) -join ',') } catch { $reasonText = '' }
+        Write-Log ("PartitionLabels: {0}; papel={1}; atual='{2}'; sugerido='{3}'; acao={4}; motivo=[{5}]" -f [string]$entry.displayName, [string]$entry.role, [string]$entry.currentLabel, [string]$entry.proposedLabel, [string]$entry.action, $reasonText)
+    }
+
+    $result = Invoke-BootstrapPartitionLabelPlan -Plan $plan -Apply:$shouldApply
+    $payload = [ordered]@{
+        status = 'success'
+        exitCode = 0
+        mode = 'partition-labels'
+        generatedAt = (Get-Date).ToString('o')
+        logPath = $script:LogPath
+        resultPath = $script:ResultPath
+        applyRequested = [bool]$Apply
+        applyOptIn = [bool]$applyOptIn
+        dryRun = [bool]$DryRun
+        counts = $counts
+        plan = $plan
+        partitionLabels = [ordered]@{
+            status = [string]$result.status
+            result = $result
+        }
+    }
+
+    if ([bool]$Apply -and -not [bool]$applyOptIn) {
+        $payload['status'] = 'blocked'
+        $payload['exitCode'] = 2
+        $payload['blockerKind'] = 'partition-label-apply-opt-in-missing'
+        $payload['action'] = 'set-env-and-rerun'
+        $payload['error'] = 'Aplicacao de rotulos exige confirmacao explicita por ambiente.'
+        $payload['howToFix'] = 'Revise a grade/resultado. Para aplicar somente volumes seguros, defina PHASEZERO_PARTITION_LABEL_APPLY=1 e rode -ApplyPartitionLabels novamente.'
+        Write-Log 'PartitionLabels: apply bloqueado; PHASEZERO_PARTITION_LABEL_APPLY=1 ausente.' 'WARN'
+    } elseif ([bool]$Apply -and [bool]$DryRun) {
+        $payload['status'] = 'warning'
+        $payload['exitCode'] = 0
+        $payload['howToFix'] = 'DryRun ativo: nenhuma alteracao foi aplicada.'
+        Write-Log 'PartitionLabels: DryRun ativo; nenhuma alteracao aplicada.' 'WARN'
+    } elseif ($shouldApply) {
+        Write-Log ("PartitionLabels: aplicacao concluida; alterados={0}; pulados={1}" -f [int]$result.changedCount, [int]$result.skippedCount)
+    } else {
+        Write-Log 'PartitionLabels: diagnostico concluido; nenhuma alteracao aplicada.'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+        Write-BootstrapExecutionResultFile -Path $script:ResultPath -Value $payload
+    }
+    return $payload
+}
+
 function Test-BootstrapOsInstallTargetSafe {
     # REGRA DURA: um disco com qualquer particao do Windows NUNCA e alvo seguro para raw passthrough
-    # ou instalador disco-inteiro. So disco dedicado libera esses metodos.
+    # ou instalador disco-inteiro. So disco interno dedicado, grande e Linux/vazio libera esses metodos.
     param([Parameter(Mandatory = $true)][int]$DiskNumber)
 
     $disk = @(Get-BootstrapOsInstallDiskTopology | Where-Object { [int]$_.diskNumber -eq $DiskNumber })
@@ -9448,7 +9811,10 @@ function Test-BootstrapOsInstallTargetSafe {
     $d = $disk[0]
     $reasons = New-Object System.Collections.Generic.List[string]
     if ([bool]$d.hasWindows) { $reasons.Add('disk-contains-windows-partitions') | Out-Null }
-    $safe = ($reasons.Count -eq 0)
+    if ([bool]$d.isRemovable) { $reasons.Add('disk-is-removable') | Out-Null }
+    if (-not [bool]$d.installSizeOk) { $reasons.Add('disk-too-small') | Out-Null }
+    if (-not [bool]$d.onlyLinuxOrEmpty) { $reasons.Add('disk-has-non-linux-partitions') | Out-Null }
+    $safe = ([bool]$d.isDedicatedLinuxCandidate -and ($reasons.Count -eq 0))
     return [ordered]@{
         diskNumber     = $DiskNumber
         safe           = [bool]$safe
@@ -9495,6 +9861,8 @@ function Get-BootstrapOsInstallPlan {
     try { $dualBoot = Get-BootstrapDualBootInfo } catch { $dualBoot = $null }
 
     $dedicated = @($topology | Where-Object { [bool]$_.isDedicatedLinuxCandidate })
+    $manualPartitionTargets = @(Get-BootstrapOsInstallManualPartitionTargets -Topology $topology)
+    $removableTargets = @($topology | Where-Object { [bool]$_.isRemovable })
     $recommendedTarget = if (@($dedicated).Count -gt 0) { [int]@($dedicated)[0].diskNumber } else { $null }
 
     $catalog = Get-BootstrapOsImageCatalog
@@ -9504,6 +9872,7 @@ function Get-BootstrapOsInstallPlan {
     $blockReasons = New-Object System.Collections.Generic.List[string]
     if ($null -eq $recommendedTarget) {
         $blockReasons.Add('no-dedicated-disk') | Out-Null
+        $blockReasons.Add('no-dedicated-internal-linux-disk') | Out-Null
     } else {
         $safety = Test-BootstrapOsInstallTargetSafe -DiskNumber $recommendedTarget
         $eligibleMethods = @($safety.allowedMethods)
@@ -9525,6 +9894,8 @@ function Get-BootstrapOsInstallPlan {
         image             = $image
         topology          = $topology
         recommendedTarget = $recommendedTarget
+        manualPartitionTargets = @($manualPartitionTargets)
+        removableTargets  = @($removableTargets)
         eligibleMethods   = @($eligibleMethods)
         blockReasons      = @($blockReasons.ToArray())
         warnings          = @($warnings)
@@ -9612,6 +9983,39 @@ function Ensure-BootstrapOsInstallDetect {
         Write-Log 'os-install-detect: nenhum metodo automatizado elegivel (sem disco dedicado seguro). PhaseZero so faz deteccao/guia; nunca grava em disco do Windows.' 'WARN'
     }
     return [ordered]@{ status = 'completed'; readOnly = $true; plan = $plan; dryRun = [bool]$State.DryRun }
+}
+
+function Ensure-BootstrapPartitionLabels {
+    # Plano pedagogico de rotulos. Por padrao nao altera nada; rename real exige opt-in via ambiente.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $plan = Get-BootstrapPartitionLabelPlan
+    $applyOptIn = ([string]$env:PHASEZERO_PARTITION_LABEL_APPLY).Trim().ToLowerInvariant() -in @('1', 'true', 'yes', 'on')
+
+    Write-Log ("partition-labels: {0} particao(oes); renomeaveis={1}; optIn={2}; dryRun={3}" -f @($plan.entries).Count, [int]$plan.renameableCount, [bool]$applyOptIn, [bool]$State.DryRun)
+    foreach ($entry in @($plan.entries)) {
+        Write-Log ("partition-labels: {0}; papel={1}; atual='{2}'; sugerido='{3}'; acao={4}; motivo=[{5}]" -f [string]$entry.displayName, [string]$entry.role, [string]$entry.currentLabel, [string]$entry.proposedLabel, [string]$entry.action, (@($entry.reasons) -join ','))
+    }
+
+    if ([bool]$State.DryRun -or (-not $applyOptIn)) {
+        $result = Invoke-BootstrapPartitionLabelPlan -Plan $plan
+        if (-not $applyOptIn) {
+            Write-Log 'partition-labels: plano gerado. Para aplicar rotulos seguros, defina PHASEZERO_PARTITION_LABEL_APPLY=1 e rode novamente.' 'WARN'
+        }
+        return [ordered]@{ status = 'planned'; plan = $plan; result = $result; dryRun = [bool]$State.DryRun; applyOptIn = [bool]$applyOptIn }
+    }
+
+    $result = Invoke-BootstrapPartitionLabelPlan -Plan $plan -Apply
+    foreach ($change in @($result.changed)) {
+        $entry = $change.entry
+        Write-Log ("partition-labels: rotulo aplicado em {0}: '{1}' -> '{2}'" -f [string]$entry.driveLetter, [string]$entry.currentLabel, [string]$entry.proposedLabel)
+        if ($State.ContainsKey('Changes')) {
+            try {
+                Register-BootstrapChange -State $State -Type VolumeLabel -Target ("{0}:" -f [string]$entry.driveLetter) -OldValue ([string]$entry.currentLabel) -NewValue ([string]$entry.proposedLabel) -Operation 'partition-label-rename' -RollbackAction 'restore-volume-label' -Reversible 'full' -Component 'os-partition-labels'
+            } catch { Write-Verbose $_.Exception.Message }
+        }
+    }
+    return [ordered]@{ status = 'completed'; plan = $plan; result = $result; dryRun = $false; applyOptIn = $true }
 }
 
 function Ensure-BootstrapOsInstallVm {
@@ -10564,6 +10968,23 @@ function Test-BootstrapSafeDefaultProfileSelection {
     return $true
 }
 
+function Test-BootstrapOsInstallOnlyProfileSelection {
+    param(
+        [Parameter(Mandatory = $true)]$Selection,
+        [Parameter(Mandatory = $true)]$Resolution
+    )
+
+    $selectedProfiles = @($Selection.Profiles | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $selectedComponents = @($Selection.Components)
+    $expandedProfiles = @($Resolution.ExpandedProfiles | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    if ($selectedComponents.Count -gt 0) { return $false }
+    if ($selectedProfiles.Count -eq 0) { return $false }
+    foreach ($profileName in @($selectedProfiles + $expandedProfiles)) {
+        if ($profileName -ne 'steamos-install') { return $false }
+    }
+    return $true
+}
+
 function Get-BootstrapDefaultHostHealthMode {
     param(
         [Parameter(Mandatory = $true)]$Selection,
@@ -10581,6 +11002,9 @@ function Get-BootstrapDefaultHostHealthMode {
         return 'off'
     }
     if (Test-BootstrapSafeDefaultProfileSelection -Selection $Selection -Resolution $Resolution) {
+        return 'off'
+    }
+    if (Test-BootstrapOsInstallOnlyProfileSelection -Selection $Selection -Resolution $Resolution) {
         return 'off'
     }
 
@@ -11230,6 +11654,9 @@ function Get-BootstrapDefaultAppTuningMode {
         return 'off'
     }
     if (Test-BootstrapSafeDefaultProfileSelection -Selection $Selection -Resolution $Resolution) {
+        return 'off'
+    }
+    if (Test-BootstrapOsInstallOnlyProfileSelection -Selection $Selection -Resolution $Resolution) {
         return 'off'
     }
     return 'recommended'
@@ -15733,6 +16160,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['dualboot-manager'] = New-BootstrapComponentDefinition -Name 'dualboot-manager' -Description 'Dual boot detection, safety guardrails and reboot management.' -DependsOn @('system-core') -Optional $true -Kind 'builtin' -Data @{}
     # --- Instalacao assistida de SteamOS/Bazzite (opt-in; NUNCA grava no disco do Windows) ---------
     $catalog['os-install-detect'] = New-BootstrapComponentDefinition -Name 'os-install-detect' -Description 'Detecta host (Steam Deck->SteamOS / PC->Bazzite), topologia de disco e alvo seguro para instalar Linux. Read-only.' -Optional $true -DependsOn @('system-core') -Kind 'builtin' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Mostra imagem recomendada, disco dedicado seguro e metodos elegiveis sem tocar em disco.'; riskLevel = 'safe' }
+    $catalog['os-partition-labels'] = New-BootstrapComponentDefinition -Name 'os-partition-labels' -Description 'Diagnostica particoes e gera rotulos pedagogicos seguros. Aplica somente em volumes de dados montados com PHASEZERO_PARTITION_LABEL_APPLY=1.' -Optional $true -DependsOn @('os-install-detect') -Kind 'builtin' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Ajuda o usuario a reconhecer Windows, SteamOS/Linux, midia removivel e volumes de dados sem tocar em particoes criticas.'; riskLevel = 'safe'; optInEnv = 'PHASEZERO_PARTITION_LABEL_APPLY=1' }
     $catalog['os-install-vm'] = New-BootstrapComponentDefinition -Name 'os-install-vm' -Description 'Metodo 2: estagia instalacao em VM isolada com raw passthrough do disco DEDICADO (so Bazzite/ISO). Nao roda o install destrutivo.' -Optional $true -DependsOn @('os-install-detect') -Kind 'builtin' -RequiresNetwork $true -Data @{ Stage = 'verify'; Provisioning = 'builtin'; RequiresAdmin = $true; ValueReason = 'Instala dentro de uma VM que so enxerga o disco dedicado, mantendo o Windows isolado.'; riskLevel = 'experimental' }
     $catalog['os-install-native'] = New-BootstrapComponentDefinition -Name 'os-install-native' -Description 'Metodo 1: baixa+verifica (sha256) a imagem e estagia para USB (Ventoy/Rufus); particionamento fica manual no instalador.' -Optional $true -DependsOn @('os-install-detect') -Kind 'builtin' -RequiresNetwork $true -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Prepara a midia oficial verificada; a gravacao do disco fica manual e isolada no instalador Linux.'; riskLevel = 'experimental' }
 
@@ -15791,7 +16219,7 @@ function Get-BootstrapProfileCatalog {
     $catalog['steamdeck-full'] = New-BootstrapProfileDefinition -Name 'steamdeck-full' -Description 'Camada completa Steam Deck, incluindo storage/capture/backup e bloqueadores manuais.' -Items @('steamdeck-recommended', 'steamdeck-storage', 'steamdeck-capture', 'steamdeck-backup', 'steamdeck-zero-touch', 'epic-games', 'msi-afterburner', 'lossless-scaling', 'joyshockmapper', 'vibrancegui', 'steamdeck-driver-pack', 'steamdeck-amd-nebula-driver', 'steamdeck-storage-driver', 'steamdeck-wifi-driver', 'steamdeck-bluetooth-driver')
     # Instalacao assistida de SteamOS/Bazzite: deteccao + ambos os metodos + gerenciador de dual-boot
     # ja existente para ligar o boot apos instalar. Opt-in; NUNCA em recommended/full.
-    $catalog['steamos-install'] = New-BootstrapProfileDefinition -Name 'steamos-install' -Description 'Instalacao assistida e segura de SteamOS (Steam Deck) ou Bazzite (PC) num disco DEDICADO, a partir do Windows. Nunca grava no disco do Windows.' -Items @('os-install-detect', 'os-install-vm', 'os-install-native', 'dualboot-manager')
+    $catalog['steamos-install'] = New-BootstrapProfileDefinition -Name 'steamos-install' -Description 'Instalacao assistida e segura de SteamOS (Steam Deck) ou Bazzite (PC) num disco DEDICADO, a partir do Windows. Nunca grava no disco do Windows.' -Items @('os-install-detect', 'os-partition-labels', 'os-install-vm', 'os-install-native', 'dualboot-manager')
     $catalog['workspace'] = New-BootstrapProfileDefinition -Name 'workspace' -Description 'Layout em F:\Steam\Steamapps e Dev.' -Items @('workspace-layout', 'pycharm-community', 'dotnet-core')
     $catalog['webapps'] = New-BootstrapProfileDefinition -Name 'webapps' -Description 'Atalhos web (PWA) de Office, nuvem, multimidia, comunicacao e IA na area de trabalho.' -Items @('webapp-photopea', 'webapp-whatsapp-web', 'webapp-xiaomi-ai-studio', 'webapp-manus', 'webapp-kimi', 'webapp-google-docs', 'webapp-z-ai', 'webapp-gemini-web', 'webapp-google-ai-studio', 'webapp-v0-dev', 'webapp-bolt-new', 'webapp-lovable-dev', 'webapp-google-sheets', 'webapp-google-slides', 'webapp-google-calendar', 'webapp-gmail', 'webapp-office-word', 'webapp-office-excel', 'webapp-office-powerpoint', 'webapp-trello', 'webapp-notion', 'webapp-google-keep', 'webapp-onedrive', 'webapp-google-drive', 'webapp-dropbox', 'webapp-mega', 'webapp-icloud', 'webapp-youtube', 'webapp-netflix', 'webapp-spotify', 'webapp-prime-video', 'webapp-telegram-web', 'webapp-discord', 'webapp-slack', 'webapp-zoom', 'webapp-google-meet')
     $catalog['virtualization'] = New-BootstrapProfileDefinition -Name 'virtualization' -Description 'Plataformas de virtualizacao opt-in (admin + reboot): Hyper-V e Windows Hypervisor Platform.' -Items @('hyper-v', 'hyper-v-tools', 'windows-hypervisor-platform')
@@ -30939,6 +31367,7 @@ function Ensure-BootstrapBuiltinComponent {
         'emulation-desktop-shortcuts' { return (Ensure-BootstrapEmulationDesktopShortcuts -State $State) }
         'dualboot-manager' { return (Ensure-BootstrapDualBootManager -State $State) }
         'os-install-detect' { return (Ensure-BootstrapOsInstallDetect -State $State) }
+        'os-partition-labels' { return (Ensure-BootstrapPartitionLabels -State $State) }
         'os-install-vm' { return (Ensure-BootstrapOsInstallVm -State $State -ComponentDef $ComponentDef) }
         'os-install-native' { return (Ensure-BootstrapOsInstallNative -State $State -ComponentDef $ComponentDef) }
         'agent-compat-runtime' { return (Ensure-BootstrapAgentCompatRuntime -State $State -ComponentDef $ComponentDef) }
@@ -35266,6 +35695,7 @@ $useBootstrapSupportBundleMode = $SupportBundle
 $useBootstrapAiConfigDoctorMode = $AiConfigDoctor
 $useBootstrapAiConfigSyncMode = $AiConfigSync
 $useBootstrapRepairPlanMode = ($RepairPlan -or -not [string]::IsNullOrWhiteSpace($ExecuteRepairPlan))
+$useBootstrapPartitionLabelsMode = ($PartitionLabels -or $ApplyPartitionLabels)
 $useBootstrapReleasePackMode = $ReleasePack
 
 $useBootstrapProfileMode = (
@@ -35275,6 +35705,7 @@ $useBootstrapProfileMode = (
     -not $useBootstrapAiConfigDoctorMode -and
     -not $useBootstrapAiConfigSyncMode -and
     -not $useBootstrapRepairPlanMode -and
+    -not $useBootstrapPartitionLabelsMode -and
     -not $useBootstrapReleasePackMode -and (
         $UiContractJson -or
         $ListProfiles -or
@@ -35412,6 +35843,20 @@ if (-not $isDotSourced) {
         } catch {
             if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
                 Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'release-pack' })
+            }
+            Write-Log $_.Exception.Message 'ERROR'
+            Write-Log "Log salvo em: $script:LogPath" 'ERROR'
+            Stop-BootstrapProcess 1
+        }
+    }
+
+    if ($useBootstrapPartitionLabelsMode) {
+        try {
+            $partitionLabelsModeResult = Invoke-BootstrapPartitionLabelsMode -Apply:$ApplyPartitionLabels -DryRun:$DryRun
+            Stop-BootstrapProcess ([int]$partitionLabelsModeResult['exitCode'])
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($script:ResultPath)) {
+                Write-BootstrapExecutionErrorResultFromRecord -Path $script:ResultPath -ErrorRecord $_ -Extra ([ordered]@{ phase = 'partition-labels' })
             }
             Write-Log $_.Exception.Message 'ERROR'
             Write-Log "Log salvo em: $script:LogPath" 'ERROR'

@@ -1976,6 +1976,31 @@ function Get-UiHealthTextCanonicalStatus {
                         <Button x:Name="HealthDriftScheduleButton" Style="{StaticResource GhostBtn}" Content="Agendar drift semanal" Height="32" Margin="0,0,0,8" ToolTip="Liga/desliga uma verificacao de drift semanal (tarefa agendada por-usuario)."/>
                     </WrapPanel>
 
+                    <Border Style="{StaticResource Card}" Margin="0,0,0,16">
+                        <DockPanel>
+                            <StackPanel DockPanel.Dock="Top">
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="DRIVES E PARTIÇÕES"/>
+                                <TextBlock x:Name="HealthDriveLabelsStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Margin="0,0,0,10" Text="Diagnostique discos, partições Windows/Linux/SteamOS e rótulos sugeridos antes de aplicar qualquer alteração."/>
+                                <WrapPanel Margin="0,0,0,10">
+                                    <Button x:Name="HealthDriveLabelsButton" Style="{StaticResource PrimaryBtn}" Content="Diagnosticar drives" Height="32" Margin="0,0,8,8" ToolTip="Lê discos/partições e monta um mapa pedagógico. Não altera nada."/>
+                                    <CheckBox x:Name="HealthDriveLabelsAdvancedCheck" Style="{StaticResource DarkCheck}" Content="Modo avançado" Margin="0,7,12,8" ToolTip="Libera a ação de aplicar rótulos apenas após confirmação explícita."/>
+                                    <Button x:Name="HealthDriveLabelsApplyButton" Style="{StaticResource GhostBtn}" Content="Aplicar rótulos seguros" Height="32" Margin="0,0,8,8" IsEnabled="False" ToolTip="Renomeia somente volumes de dados Windows elegíveis. Exige modo avançado e token digitado."/>
+                                </WrapPanel>
+                            </StackPanel>
+                            <DataGrid x:Name="HealthDriveLabelsGrid" Style="{StaticResource DarkGrid}" Height="190" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Partição" Binding="{Binding identity}" Width="0.65*"/>
+                                    <DataGridTextColumn Header="Drive" Binding="{Binding drive}" Width="0.45*"/>
+                                    <DataGridTextColumn Header="Papel" Binding="{Binding role}" Width="1.0*"/>
+                                    <DataGridTextColumn Header="Atual" Binding="{Binding currentLabel}" Width="0.75*"/>
+                                    <DataGridTextColumn Header="Sugerido" Binding="{Binding proposedLabel}" Width="0.85*"/>
+                                    <DataGridTextColumn Header="Ação" Binding="{Binding action}" Width="0.75*"/>
+                                    <DataGridTextColumn Header="Motivo" Binding="{Binding reasons}" Width="1.5*"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                        </DockPanel>
+                    </Border>
+
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
                             <TextBlock Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="ULTIMO RESULTADO"/>
@@ -2955,6 +2980,11 @@ $ui = [ordered]@{
     HealthMsvcButton       = (Get-Control 'HealthMsvcButton')
     HealthWindowsOptButton = (Get-Control 'HealthWindowsOptButton')
     HealthValidateMcpButton = (Get-Control 'HealthValidateMcpButton')
+    HealthDriveLabelsStatusText = (Get-Control 'HealthDriveLabelsStatusText')
+    HealthDriveLabelsButton = (Get-Control 'HealthDriveLabelsButton')
+    HealthDriveLabelsAdvancedCheck = (Get-Control 'HealthDriveLabelsAdvancedCheck')
+    HealthDriveLabelsApplyButton = (Get-Control 'HealthDriveLabelsApplyButton')
+    HealthDriveLabelsGrid = (Get-Control 'HealthDriveLabelsGrid')
 
     # App Tuning
     AppTuningTitleLabel   = (Get-Control 'AppTuningTitleLabel')
@@ -5934,6 +5964,8 @@ function Build-BackendArguments {
     if ($maint -eq 'doctor') { $tokens += @('-Doctor') }
     if ($maint -eq 'support-bundle') { $tokens += @('-SupportBundle') }
     if ($maint -eq 'repair-plan') { $tokens += @('-RepairPlan') }
+    if ($maint -eq 'partition-labels') { $tokens += @('-PartitionLabels') }
+    if ($maint -eq 'partition-labels-apply') { $tokens += @('-PartitionLabels', '-ApplyPartitionLabels') }
     # Doctor e RepairPlan honram o escopo selecionado (ex.: card individual ou tokens/memoria).
     if ($maint -in @('doctor', 'repair-plan')) {
         $doctorScope = [string]$ui.DoctorScope
@@ -5994,6 +6026,8 @@ function Get-UiBackendParameterBindingSpec {
         '-Doctor',
         '-SupportBundle',
         '-RepairPlan',
+        '-PartitionLabels',
+        '-ApplyPartitionLabels',
         '-UiContractJson',
         '-BootstrapUiLibraryMode',
         '-SecretsList',
@@ -6179,8 +6213,9 @@ function Start-BackendWorker {
     $adminNeededForRun = ($ui.Preview -and @($ui.Preview.AdminReasons).Count -gt 0 -and -not (Test-IsAdmin))
     $maintMode = [string]$ui.MaintenanceMode
     if ([string]::IsNullOrWhiteSpace($maintMode)) { $maintMode = 'none' }
-    $maintenanceSkipsElevation = ($maintMode -in @('audit','rollback','doctor','support-bundle','repair-plan'))
-    $needsAdmin = ($adminNeededForRun -and -not $maintenanceSkipsElevation)
+    $maintenanceSkipsElevation = ($maintMode -in @('audit','rollback','doctor','support-bundle','repair-plan','partition-labels'))
+    $maintenanceNeedsAdmin = ($maintMode -eq 'partition-labels-apply' -and -not (Test-IsAdmin))
+    $needsAdmin = (($adminNeededForRun -and -not $maintenanceSkipsElevation) -or $maintenanceNeedsAdmin)
     $backendRoot = [System.IO.Path]::GetDirectoryName($backendScriptPath)
     if ([string]::IsNullOrWhiteSpace($backendRoot)) { $backendRoot = $PSScriptRoot }
     $argumentLength = 0
@@ -6603,10 +6638,12 @@ function Get-UiRunStatusTextFromResult {
         if ($mode -eq 'doctor') { return 'Doctor concluido. Abra Resultado para ver checks, audit resumido e fila de reparo.' }
         if ($mode -eq 'support-bundle') { return 'Support bundle exportado. Abra Resultado para ver o caminho do zip.' }
         if ($mode -eq 'repair-plan') { return 'Fila de reparo gerada. Abra Resultado para revisar as acoes.' }
+        if ($mode -eq 'partition-labels') { return (Get-UiPartitionLabelSummaryText -Result $Result) }
         return $runCompleted
     } elseif ($status -eq 'warning') {
         if ($mode -eq 'doctor') { return 'Doctor concluido com avisos. Abra Resultado para ver checks e fila de reparo.' }
         if ($mode -eq 'support-bundle') { return 'Support bundle exportado com avisos. Abra Resultado para ver detalhes.' }
+        if ($mode -eq 'partition-labels') { return (Get-UiPartitionLabelSummaryText -Result $Result) }
         if ($mode -eq 'audit') {
             $bad = 0
             if ($values.ContainsKey('auditSummary') -and $null -ne $values['auditSummary']) {
@@ -6617,6 +6654,7 @@ function Get-UiRunStatusTextFromResult {
             return 'Concluido com avisos. Verifique o log.'
         }
     } elseif ($status -eq 'blocked') {
+        if ($mode -eq 'partition-labels') { return (Get-UiPartitionLabelSummaryText -Result $Result) }
         $err = Get-ResultTextValue -Name 'error' -Default 'ação do usuário necessária.'
         $fix = Get-ResultTextValue -Name 'howToFix' -Default 'Revise a ação indicada e execute novamente.'
         $kind = Get-ResultTextValue -Name 'blockerKind' -Default 'blocked'
@@ -6731,6 +6769,106 @@ function Get-UiDoctorHumanSummary {
     return ($lines.ToArray() -join [Environment]::NewLine)
 }
 
+function Get-UiPartitionLabelPlanFromResult {
+    param([AllowNull()]$Result)
+
+    $plan = Get-UiObjectValue -Object $Result -Name 'plan'
+    if ($null -ne $plan) { return $plan }
+    $partitionLabels = Get-UiObjectValue -Object $Result -Name 'partitionLabels'
+    return (Get-UiObjectValue -Object $partitionLabels -Name 'plan')
+}
+
+function Get-UiPartitionLabelRows {
+    param([AllowNull()]$Result)
+
+    $plan = Get-UiPartitionLabelPlanFromResult -Result $Result
+    $entries = @(Get-UiObjectArray -Value (Get-UiObjectValue -Object $plan -Name 'entries'))
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($entry in $entries) {
+        $drive = [string](Get-UiObjectValue -Object $entry -Name 'driveLetter')
+        if ([string]::IsNullOrWhiteSpace($drive)) { $drive = 'sem letra' } else { $drive = ($drive.Trim().TrimEnd(':').ToUpperInvariant() + ':') }
+        $reasons = @(Get-UiObjectArray -Value (Get-UiObjectValue -Object $entry -Name 'reasons')) | ForEach-Object { [string]$_ }
+        $rows.Add([ordered]@{
+            identity = [string](Get-UiObjectValue -Object $entry -Name 'identity')
+            drive = $drive
+            role = [string](Get-UiObjectValue -Object $entry -Name 'role')
+            currentLabel = [string](Get-UiObjectValue -Object $entry -Name 'currentLabel')
+            proposedLabel = [string](Get-UiObjectValue -Object $entry -Name 'proposedLabel')
+            action = [string](Get-UiObjectValue -Object $entry -Name 'action')
+            reasons = ($reasons -join ', ')
+        }) | Out-Null
+    }
+    return @($rows.ToArray())
+}
+
+function Get-UiPartitionLabelSummaryText {
+    param([AllowNull()]$Result)
+
+    $rows = @(Get-UiPartitionLabelRows -Result $Result)
+    $counts = Get-UiObjectValue -Object $Result -Name 'counts'
+    $total = [int]$rows.Count
+    try {
+        $countTotal = Get-UiObjectValue -Object $counts -Name 'total'
+        if ($null -ne $countTotal) { $total = [int]$countTotal }
+    } catch { $total = [int]$rows.Count }
+
+    $renameable = @($rows | Where-Object { [string]$_.action -eq 'rename' }).Count
+    $blocked = @($rows | Where-Object { [string]$_.action -eq 'blocked' }).Count
+    $guideOnly = @($rows | Where-Object { [string]$_.action -eq 'guide-only' }).Count
+    try {
+        $v = Get-UiObjectValue -Object $counts -Name 'renameable'
+        if ($null -ne $v) { $renameable = [int]$v }
+    } catch { }
+    try {
+        $v = Get-UiObjectValue -Object $counts -Name 'blocked'
+        if ($null -ne $v) { $blocked = [int]$v }
+    } catch { }
+    try {
+        $v = Get-UiObjectValue -Object $counts -Name 'guideOnly'
+        if ($null -ne $v) { $guideOnly = [int]$v }
+    } catch { }
+
+    $partitionLabels = Get-UiObjectValue -Object $Result -Name 'partitionLabels'
+    $planResult = Get-UiObjectValue -Object $partitionLabels -Name 'result'
+    $changed = 0
+    $skipped = 0
+    try { $changed = [int](Get-UiObjectValue -Object $planResult -Name 'changedCount' -Default 0) } catch { $changed = 0 }
+    try { $skipped = [int](Get-UiObjectValue -Object $planResult -Name 'skippedCount' -Default 0) } catch { $skipped = 0 }
+
+    $status = [string](Get-UiObjectValue -Object $Result -Name 'status' -Default 'success')
+    $applyRequested = ConvertTo-UiBoolean -Value (Get-UiObjectValue -Object $Result -Name 'applyRequested' -Default $false)
+    $modeText = if ($applyRequested) { 'aplicação' } else { 'diagnóstico' }
+    return ("Drives: {0} particao(oes); {1} renomeavel(is); {2} bloqueada(s); {3} guia/manual; alterados={4}; pulados={5}; modo={6}; status={7}." -f $total, $renameable, $blocked, $guideOnly, $changed, $skipped, $modeText, $status)
+}
+
+function Update-UiPartitionLabelsHealthResult {
+    param([Parameter(Mandatory = $true)]$Result)
+
+    $summary = Get-UiPartitionLabelSummaryText -Result $Result
+    $rows = @(Get-UiPartitionLabelRows -Result $Result)
+    try {
+        Load-WpfGridRows -Grid $ui.HealthDriveLabelsGrid -Items $rows -Columns @('identity','drive','role','currentLabel','proposedLabel','action','reasons')
+    } catch {
+        Write-UiLog -Level 'WARN' -Message ("Falha ao atualizar grade de drives: {0}" -f $_.Exception.Message)
+    }
+    try {
+        $ui.HealthDriveLabelsStatusText.Text = $summary
+        $canon = switch ([string](Get-UiObjectValue -Object $Result -Name 'status' -Default 'success')) {
+            'success' { 'healthy' }
+            'warning' { 'warning' }
+            'blocked' { 'blocked' }
+            'error' { 'critical' }
+            default { 'healthy' }
+        }
+        $ui.HealthDriveLabelsStatusText.Foreground = Get-UiStatusBrush -Status $canon
+        $ui.HealthStatusText.Text = $summary
+        $json = ($Result | ConvertTo-Json -Depth 8)
+        $ui.HealthDoctorTextBox.Text = ($summary + [Environment]::NewLine + [Environment]::NewLine + '--- JSON ---' + [Environment]::NewLine + $json)
+    } catch {
+        Write-UiLog -Level 'WARN' -Message ("Falha ao atualizar resumo de drives: {0}" -f $_.Exception.Message)
+    }
+}
+
 function Set-UiHealthCardsEnabled {
     # Liga/desliga todos os cards de saude clicaveis (evita cliques concorrentes durante um run).
     param([bool]$Enabled)
@@ -6760,6 +6898,65 @@ function Invoke-UiHealthScopedDoctor {
     Set-UiHealthCardsEnabled -Enabled $false
     $ui.StatusLabel.Text = ("Saude: validando escopo '{0}'..." -f $Scope)
     Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope $Scope
+}
+
+function Update-UiHealthDriveLabelsApplyButton {
+    try {
+        $ui.HealthDriveLabelsApplyButton.IsEnabled = [bool]$ui.HealthDriveLabelsAdvancedCheck.IsChecked
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+}
+
+function Invoke-UiHealthPartitionLabels {
+    if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
+        $ui.StatusLabel.Text = 'Aguarde a execução atual finalizar antes de diagnosticar drives.'
+        return
+    }
+    try {
+        $ui.HealthDriveLabelsStatusText.Text = 'Drives: diagnosticando discos e partições...'
+        $ui.HealthDriveLabelsStatusText.Foreground = Get-UiBrush '#FBBF24'
+    } catch { Write-Verbose $_.Exception.Message }
+    $ui.StatusLabel.Text = 'Saude: diagnosticando drives/partições...'
+    Start-RunExecution -MaintenanceIntent 'partition-labels'
+}
+
+function Invoke-UiHealthPartitionLabelsApply {
+    if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
+        $ui.StatusLabel.Text = 'Aguarde a execução atual finalizar antes de aplicar rótulos.'
+        return
+    }
+    if (-not [bool]$ui.HealthDriveLabelsAdvancedCheck.IsChecked) {
+        $ui.StatusLabel.Text = 'Rótulos de drives: marque Modo avançado antes de aplicar.'
+        [void][System.Windows.MessageBox]::Show('Marque Modo avançado, rode o diagnóstico e revise a grade antes de aplicar rótulos.', 'Bootstrap UI - Drives', [System.Windows.MessageBoxButton]::OK, [System.Windows.MessageBoxImage]::Warning)
+        return
+    }
+
+    $message = @(
+        'Aplicar rótulos pedagógicos somente em volumes Windows de dados elegíveis.'
+        ''
+        'Bloqueios mantidos: EFI, Recovery, Windows do sistema, Linux/SteamOS, removíveis e partições sem letra.'
+        'O backend também exige PHASEZERO_PARTITION_LABEL_APPLY=1 nesta execução.'
+        ''
+        'Digite o token para confirmar.'
+    ) -join [Environment]::NewLine
+    if (-not (Confirm-UiCriticalAction -Title 'Aplicar rótulos de drives' -Message $message -RequiredToken 'APLICAR ROTULOS')) {
+        $ui.StatusLabel.Text = 'Aplicação de rótulos cancelada.'
+        return
+    }
+
+    $previous = $env:PHASEZERO_PARTITION_LABEL_APPLY
+    try {
+        $env:PHASEZERO_PARTITION_LABEL_APPLY = '1'
+        $ui.StatusLabel.Text = 'Saude: aplicando rótulos seguros nos drives elegíveis...'
+        Start-RunExecution -MaintenanceIntent 'partition-labels-apply'
+    } finally {
+        if ($null -ne $previous) {
+            $env:PHASEZERO_PARTITION_LABEL_APPLY = $previous
+        } else {
+            Remove-Item Env:\PHASEZERO_PARTITION_LABEL_APPLY -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Invoke-UiHealthAgentToolsRepair {
@@ -6994,7 +7191,9 @@ function Finalize-RunFromResult {
     $statusText = Get-UiRunStatusTextFromResult -Result $result -Strings $ui.Strings
     try {
         $modeText = [string]$result.mode
-        if ($modeText -in @('doctor','support-bundle','repair-plan')) {
+        if ($modeText -eq 'partition-labels') {
+            Update-UiPartitionLabelsHealthResult -Result $result
+        } elseif ($modeText -in @('doctor','support-bundle','repair-plan')) {
             $ui.HealthStatusText.Text = $statusText
 
             # Escopo do resultado: 'all' (ou ausente) atualiza todos os cards; senao so os pedidos.
@@ -7125,7 +7324,7 @@ function Confirm-UiCriticalAction {
 
 function Start-RunExecution {
     param(
-        [ValidateSet('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan')]
+        [ValidateSet('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan', 'partition-labels', 'partition-labels-apply')]
         [string]$MaintenanceIntent = 'none',
         [string]$DoctorScope = 'all'
     )
@@ -7655,6 +7854,12 @@ $ui.HealthWindowsOptButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'windo
 $ui.HealthValidateMcpButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'mcp' })
 # MSVC no host: valida cl.exe e DLLs do runtime VC++ (repair via vcpp-redist na fila de reparo).
 $ui.HealthMsvcButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'msvc' })
+# Drives/particoes: diagnostico read-only e aplicacao protegida por modo avancado + token.
+$ui.HealthDriveLabelsButton.Add_Click({ Invoke-UiHealthPartitionLabels })
+$ui.HealthDriveLabelsApplyButton.Add_Click({ Invoke-UiHealthPartitionLabelsApply })
+$ui.HealthDriveLabelsAdvancedCheck.Add_Checked({ Update-UiHealthDriveLabelsApplyButton })
+$ui.HealthDriveLabelsAdvancedCheck.Add_Unchecked({ Update-UiHealthDriveLabelsApplyButton })
+Update-UiHealthDriveLabelsApplyButton
 
 $ui.HealthSupportBundleButton.Add_Click({
     $runIdx = @($ui.PageNames).IndexOf('PageRun')
@@ -7773,7 +7978,8 @@ function Copy-HealthDiagnostic {
                 [string]$ui.HealthAiMemoryStatusText.Text,
                 [string]$ui.HealthAionUiStatusText.Text,
                 [string]$ui.HealthDeckStatusText.Text,
-                [string]$ui.HealthRollbackStatusText.Text
+                [string]$ui.HealthRollbackStatusText.Text,
+                [string]$ui.HealthDriveLabelsStatusText.Text
             ) -join [Environment]::NewLine
         }
         [System.Windows.Clipboard]::SetText($text)
