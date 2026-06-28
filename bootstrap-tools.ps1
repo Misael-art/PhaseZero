@@ -290,12 +290,25 @@ function Test-BootstrapDiskSpace {
     )
     $minSystemGB = 2.0
     $minWorkspaceGB = 1.0
+    $componentCount = @($ResolvedComponents).Count
+    $profileCount = 0
+    $selectionComponentCount = 0
+    $appTuningSelectionCount = 0
+    try { $profileCount = @($Selection.Profiles).Count } catch { $profileCount = 0 }
+    try { $selectionComponentCount = @($Selection.Components).Count } catch { $selectionComponentCount = 0 }
+    try { $appTuningSelectionCount += @($Selection.AppTuningItems).Count } catch { }
+    try { $appTuningSelectionCount += @($Selection.AppTuningCategories).Count } catch { }
+    $configOnlyAppTuning = ($componentCount -eq 0 -and $profileCount -eq 0 -and $selectionComponentCount -eq 0 -and $appTuningSelectionCount -gt 0)
 
     if (@($Selection.Profiles) -contains 'full') {
         $minSystemGB = 15.0
         $minWorkspaceGB = 5.0
     } elseif ($ResolvedComponents.Count -gt 50) {
         $minSystemGB = 10.0
+    } elseif ($configOnlyAppTuning) {
+        $minSystemGB = 0.1
+        $minWorkspaceGB = 0.1
+        Write-Log 'Preflight: ajuste/configuração sem instalação detectado; usando limite mínimo de disco reduzido.'
     }
 
     $systemFree = Get-BootstrapFreeSpace -Path $env:SystemDrive
@@ -8485,6 +8498,16 @@ function Install-BootstrapAiMemoryComponent {
     # configure = task de servidor loopback + wiring MCP/hooks por agente detectado (idempotente).
     $configure = Set-BootstrapAiMemoryConfig -InstallRoot $root -ProjectRoot $project
     Write-Log ("ai-memory configure: {0} {1}" -f [string]$configure.status, [string]$configure.message)
+    # SDCard sync (ja acionado dentro de Set-BootstrapAiMemoryConfig; log extra aqui)
+    if ($configure.Contains('sdSync') -and $configure['sdSync']) {
+        $sync = $configure['sdSync']
+        if ($sync.sdCardFound) {
+            Write-Log ("ai-memory sd-sync: direcao={0} synced={1}" -f $sync.direction, $sync.synced) 'INFO'
+        }
+    }
+    if ($configure.Contains('syncTask') -and $configure['syncTask']) {
+        Write-Log ("ai-memory sync-task: {0}" -f [string]$configure['syncTask']['status']) 'INFO'
+    }
 }
 
 function Install-BootstrapAionUiComponent {
@@ -21834,6 +21857,21 @@ function Get-BootstrapAiMemoryReleaseAsset {
     throw ("Asset ai-memory '{0}' nao definido no catalogo." -f $Key)
 }
 
+function Get-BootstrapAiMemoryDataDir {
+    # Retorna o diretorio de dados do ai-memory.
+    # Padrao Windows: $env:LOCALAPPDATA\ai-memory.
+    # Aceita override via env var AI_MEMORY_DATA_DIR.
+    if (-not [string]::IsNullOrWhiteSpace($env:AI_MEMORY_DATA_DIR)) {
+        return [string]$env:AI_MEMORY_DATA_DIR
+    }
+    $localAppData = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $env:LOCALAPPDATA
+    } else {
+        Join-Path $env:USERPROFILE 'AppData\Local'
+    }
+    return (Join-Path $localAppData 'ai-memory')
+}
+
 function Get-BootstrapAiMemoryDetectedAgents {
     # Mapeia agentes instalados para os identificadores --client/--agent do ai-memory.
     $agents = New-Object System.Collections.Generic.List[string]
@@ -22122,6 +22160,18 @@ function Set-BootstrapAiMemoryConfig {
     $result['serverTask'] = $task
     $result['agents'] = @($agents)
     $result['wiring'] = @($wiring)
+
+    # Sync com SDCard + registra task agendada (criada sempre para capturar SDCard futuro)
+    if (-not $DryRun) {
+        $syncResult = Sync-BootstrapAiMemoryWithSdCard -DryRun:$DryRun
+        $result['sdSync'] = $syncResult
+        $taskResult = Ensure-BootstrapAiMemorySyncTask -DryRun:$DryRun
+        $result['syncTask'] = $taskResult
+    } else {
+        $result['sdSync'] = [ordered]@{ schemaVersion = 1; sdCardFound = $false; direction = 'planned' }
+        $result['syncTask'] = [ordered]@{ status = 'planned'; task = 'BootstrapTools-AiMemorySync' }
+    }
+
     return $result
 }
 
@@ -22155,6 +22205,449 @@ function Uninstall-BootstrapAiMemory {
     }
     Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
     return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'uninstall' -Status 'removed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-memory gerenciado e task removidos; dados de memoria do usuario preservados.' -Docs 'https://github.com/akitaonrails/ai-memory')
+}
+
+function Find-BootstrapAiMemorySdCard {
+    # Varre drives removiveis (DriveType=2) procurando pasta "Ai-memory" na raiz.
+    # Retorna path completo ou $null.
+    try {
+        $drives = Get-CimInstance -ClassName Win32_LogicalDisk -ErrorAction SilentlyContinue |
+            Where-Object { $_.DriveType -eq 2 }
+        foreach ($drive in $drives) {
+            $candidate = Join-Path $drive.DeviceID 'Ai-memory'
+            if (Test-Path -LiteralPath $candidate) {
+                Write-Log "ai-memory: SDCard encontrado em $candidate" 'INFO'
+                return $candidate
+            }
+        }
+    } catch {
+        Write-Log ("ai-memory: Find-BootstrapAiMemorySdCard WMI falhou ({0})" -f $_.Exception.Message) 'WARN'
+    }
+    # Fallback: drive literal F:\Ai-memory
+    $fallback = 'F:\Ai-memory'
+    if (Test-Path -LiteralPath $fallback) {
+        Write-Log "ai-memory: SDCard fallback em $fallback" 'INFO'
+        return $fallback
+    }
+    Write-Log 'ai-memory: Nenhum SDCard com pasta Ai-memory encontrado.' 'INFO'
+    return $null
+}
+
+function Export-BootstrapAiMemoryToSdCard {
+    <#
+    .SYNOPSIS
+        Exporta dados locais do ai-memory (wiki/raw/db/config) para SDCard.
+    .DESCRIPTION
+        wiki/ usa git push para bare repo no SDCard.
+        raw/ e db/ usam robocopy /MIR.
+        config.toml copiado direto.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$SdCardPath,
+        [Parameter(Mandatory = $true)][string]$DataDir,
+        [switch]$DryRun
+    )
+    Write-Log "ai-memory: Exportando dados para SDCard $SdCardPath" 'INFO'
+
+    $results = New-Object System.Collections.Generic.List[object]
+
+    # Cria estrutura no SDCard
+    if (-not $DryRun) {
+        $null = New-Item -Path $SdCardPath -ItemType Directory -Force
+        $null = New-Item -Path (Join-Path $SdCardPath 'raw') -ItemType Directory -Force
+        $null = New-Item -Path (Join-Path $SdCardPath 'db') -ItemType Directory -Force
+    }
+
+    # wiki/ - git push para bare repo no SDCard
+    $wikiLocal = Join-Path $DataDir 'wiki'
+    $wikiBareSd = Join-Path $SdCardPath 'wiki.git'
+    if (Test-Path -LiteralPath $wikiLocal) {
+        # Inicializa bare repo no SDCard se necessario
+        if (-not (Test-Path -LiteralPath $wikiBareSd)) {
+            if (-not $DryRun) {
+                $null = New-Item -Path $wikiBareSd -ItemType Directory -Force
+                $initResult = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('init', '--bare', $wikiBareSd) -TimeoutMs 30000
+                if ([int]$initResult['exitCode'] -ne 0) {
+                    $results.Add([ordered]@{ component = 'wiki.git'; status = 'failed'; detail = "git init --bare exit $($initResult.exitCode)" })
+                    Write-Log "ai-memory: wiki.git init --bare falhou (exit $($initResult.exitCode))" 'WARN'
+                }
+            }
+        }
+        if (-not $DryRun) {
+            $pushResult = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('-C', $wikiLocal, 'push', $wikiBareSd, 'HEAD:main') -TimeoutMs 60000
+            if ([int]$pushResult['exitCode'] -ne 0) {
+                $results.Add([ordered]@{ component = 'wiki'; status = 'failed'; detail = "git push exit $($pushResult.exitCode)" })
+                Write-Log "ai-memory: git push wiki falhou (exit $($pushResult.exitCode))" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'wiki'; status = 'exported'; detail = 'git push ok' })
+                Write-Log 'ai-memory: wiki exportado via git push' 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'wiki'; status = 'planned'; detail = 'git push to bare repo' })
+        }
+    }
+
+    # raw/ - robocopy /MIR
+    $rawLocal = Join-Path $DataDir 'raw'
+    $rawSd = Join-Path $SdCardPath 'raw'
+    if (Test-Path -LiteralPath $rawLocal) {
+        if (-not $DryRun) {
+            $rcArgs = @($rawLocal, $rawSd, '/MIR', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS')
+            $rcResult = Invoke-BootstrapAiNativeCommand -Exe 'robocopy' -Args $rcArgs -TimeoutMs 120000
+            $rcExit = [int]$rcResult['exitCode']
+            if ($rcExit -ge 8) {
+                $results.Add([ordered]@{ component = 'raw'; status = 'failed'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: robocopy raw falhou (exit $rcExit)" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'raw'; status = 'exported'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: raw exportado (robocopy exit $rcExit)" 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'raw'; status = 'planned'; detail = 'robocopy /MIR' })
+        }
+    }
+
+    # db/ - robocopy /MIR
+    $dbLocal = Join-Path $DataDir 'db'
+    $dbSd = Join-Path $SdCardPath 'db'
+    if (Test-Path -LiteralPath $dbLocal) {
+        if (-not $DryRun) {
+            $rcArgs = @($dbLocal, $dbSd, '/MIR', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS')
+            $rcResult = Invoke-BootstrapAiNativeCommand -Exe 'robocopy' -Args $rcArgs -TimeoutMs 120000
+            $rcExit = [int]$rcResult['exitCode']
+            if ($rcExit -ge 8) {
+                $results.Add([ordered]@{ component = 'db'; status = 'failed'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: robocopy db falhou (exit $rcExit)" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'db'; status = 'exported'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: db exportado (robocopy exit $rcExit)" 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'db'; status = 'planned'; detail = 'robocopy /MIR' })
+        }
+    }
+
+    # config.toml
+    $configLocal = Join-Path $DataDir 'config.toml'
+    $configSd = Join-Path $SdCardPath 'config.toml'
+    if (Test-Path -LiteralPath $configLocal) {
+        if (-not $DryRun) {
+            Copy-Item -LiteralPath $configLocal -Destination $configSd -Force -ErrorAction SilentlyContinue
+            $results.Add([ordered]@{ component = 'config.toml'; status = 'exported'; detail = '' })
+        } else {
+            $results.Add([ordered]@{ component = 'config.toml'; status = 'planned'; detail = 'Copy-Item' })
+        }
+    }
+
+    return @($results.ToArray())
+}
+
+function Import-BootstrapAiMemoryFromSdCard {
+    <#
+    .SYNOPSIS
+        Importa dados do SDCard para o diretorio local do ai-memory.
+    .DESCRIPTION
+        wiki/ usa git pull (ou git clone se local vazio).
+        raw/ e db/ usam robocopy /MIR /XO (exclude older = newest-wins).
+        config.toml copiado apenas se local nao existe.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$SdCardPath,
+        [Parameter(Mandatory = $true)][string]$DataDir,
+        [switch]$DryRun
+    )
+    Write-Log "ai-memory: Importando dados do SDCard $SdCardPath" 'INFO'
+
+    $results = New-Object System.Collections.Generic.List[object]
+
+    if (-not $DryRun) {
+        $null = New-Item -Path $DataDir -ItemType Directory -Force
+    }
+
+    # wiki/ - git pull ou git clone
+    $wikiLocal = Join-Path $DataDir 'wiki'
+    $wikiBareSd = Join-Path $SdCardPath 'wiki.git'
+    if (Test-Path -LiteralPath $wikiBareSd) {
+        if (Test-Path -LiteralPath $wikiLocal) {
+            # git pull via remote sd-card
+            if (-not $DryRun) {
+                # Verifica se remote sd-card ja existe
+                $remoteCheck = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('-C', $wikiLocal, 'remote', 'get-url', 'sd-card') -TimeoutMs 10000
+                if ([int]$remoteCheck['exitCode'] -ne 0) {
+                    Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('-C', $wikiLocal, 'remote', 'add', 'sd-card', $wikiBareSd) -TimeoutMs 10000 | Out-Null
+                }
+                $pullResult = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('-C', $wikiLocal, 'pull', 'sd-card', 'main') -TimeoutMs 60000
+                if ([int]$pullResult['exitCode'] -ne 0) {
+                    $results.Add([ordered]@{ component = 'wiki'; status = 'failed'; detail = "git pull exit $($pullResult.exitCode)" })
+                    Write-Log "ai-memory: git pull wiki falhou (exit $($pullResult.exitCode))" 'WARN'
+                } else {
+                    $results.Add([ordered]@{ component = 'wiki'; status = 'imported'; detail = 'git pull ok' })
+                    Write-Log 'ai-memory: wiki importado via git pull' 'INFO'
+                }
+            } else {
+                $results.Add([ordered]@{ component = 'wiki'; status = 'planned'; detail = 'git pull from bare repo' })
+            }
+        } else {
+            # git clone
+            if (-not $DryRun) {
+                $cloneResult = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('clone', $wikiBareSd, $wikiLocal) -TimeoutMs 60000
+                if ([int]$cloneResult['exitCode'] -ne 0) {
+                    $results.Add([ordered]@{ component = 'wiki'; status = 'failed'; detail = "git clone exit $($cloneResult.exitCode)" })
+                    Write-Log "ai-memory: git clone wiki falhou (exit $($cloneResult.exitCode))" 'WARN'
+                } else {
+                    $results.Add([ordered]@{ component = 'wiki'; status = 'imported'; detail = 'git clone ok' })
+                    Write-Log 'ai-memory: wiki clonado do SDCard' 'INFO'
+                }
+            } else {
+                $results.Add([ordered]@{ component = 'wiki'; status = 'planned'; detail = 'git clone from bare repo' })
+            }
+        }
+    }
+
+    # raw/ - robocopy /MIR /XO (newest-wins)
+    $rawSd = Join-Path $SdCardPath 'raw'
+    $rawLocal = Join-Path $DataDir 'raw'
+    if (Test-Path -LiteralPath $rawSd) {
+        if (-not $DryRun) {
+            $null = New-Item -Path $rawLocal -ItemType Directory -Force
+            $rcArgs = @($rawSd, $rawLocal, '/MIR', '/XO', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS')
+            $rcResult = Invoke-BootstrapAiNativeCommand -Exe 'robocopy' -Args $rcArgs -TimeoutMs 120000
+            $rcExit = [int]$rcResult['exitCode']
+            if ($rcExit -ge 8) {
+                $results.Add([ordered]@{ component = 'raw'; status = 'failed'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: robocopy raw import falhou (exit $rcExit)" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'raw'; status = 'imported'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: raw importado (robocopy exit $rcExit)" 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'raw'; status = 'planned'; detail = 'robocopy /MIR /XO' })
+        }
+    }
+
+    # db/ - robocopy /MIR /XO
+    $dbSd = Join-Path $SdCardPath 'db'
+    $dbLocal = Join-Path $DataDir 'db'
+    if (Test-Path -LiteralPath $dbSd) {
+        if (-not $DryRun) {
+            $null = New-Item -Path $dbLocal -ItemType Directory -Force
+            $rcArgs = @($dbSd, $dbLocal, '/MIR', '/XO', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS')
+            $rcResult = Invoke-BootstrapAiNativeCommand -Exe 'robocopy' -Args $rcArgs -TimeoutMs 120000
+            $rcExit = [int]$rcResult['exitCode']
+            if ($rcExit -ge 8) {
+                $results.Add([ordered]@{ component = 'db'; status = 'failed'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: robocopy db import falhou (exit $rcExit)" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'db'; status = 'imported'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: db importado (robocopy exit $rcExit)" 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'db'; status = 'planned'; detail = 'robocopy /MIR /XO' })
+        }
+    }
+
+    # config.toml (apenas se local nao existe)
+    $configSd = Join-Path $SdCardPath 'config.toml'
+    $configLocal = Join-Path $DataDir 'config.toml'
+    $sdCardHasConfig = Test-Path -LiteralPath $configSd
+    $localHasConfig = Test-Path -LiteralPath $configLocal
+    if ($sdCardHasConfig -and (-not $localHasConfig)) {
+        if (-not $DryRun) {
+            Copy-Item -LiteralPath $configSd -Destination $configLocal -Force -ErrorAction SilentlyContinue
+            $results.Add([ordered]@{ component = 'config.toml'; status = 'imported'; detail = '' })
+        } else {
+            $results.Add([ordered]@{ component = 'config.toml'; status = 'planned'; detail = 'Copy-Item if missing' })
+        }
+    }
+
+    return ([object[]]$results.ToArray())
+}
+
+function Sync-BootstrapAiMemoryWithSdCard {
+    <#
+    .SYNOPSIS
+        Orquestrador de sync bidirecional ai-memory entre host e SDCard.
+    .DESCRIPTION
+        Fluxo:
+        1. Find-BootstrapAiMemorySdCard
+        2. Decide direcao (export/import/bidirectional/none)
+        3. Executa Export/Import conforme estado
+        4. Escreve .phasezero-sync.json no SDCard
+    #>
+    param(
+        [string]$InstallRoot = '',
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+
+    # 1. Encontra SDCard
+    $sdCardPath = Find-BootstrapAiMemorySdCard
+    if (-not $sdCardPath) {
+        return [ordered]@{
+            schemaVersion = 1
+            sdCardFound  = $false
+            sdCardPath   = ''
+            dataDir      = ''
+            direction    = 'none'
+            results      = @()
+            synced       = $false
+        }
+    }
+
+    # 2. Data dir local
+    $dataDir = Get-BootstrapAiMemoryDataDir
+    $localExists = Test-Path -LiteralPath $dataDir
+    $sdCardHasData = (Test-Path -LiteralPath (Join-Path $sdCardPath 'wiki.git')) -or
+                     (Test-Path -LiteralPath (Join-Path $sdCardPath 'raw')) -or
+                     (Test-Path -LiteralPath (Join-Path $sdCardPath 'db'))
+
+    # 3. Decide direcao
+    if (-not $localExists -and -not $sdCardHasData) {
+        Write-Log 'ai-memory: Sync pulado - ambos local e SDCard vazios.' 'INFO'
+        return [ordered]@{
+            schemaVersion = 1
+            sdCardFound  = $true
+            sdCardPath   = $sdCardPath
+            dataDir      = $dataDir
+            direction    = 'none'
+            results      = @()
+            synced       = $false
+        }
+    }
+
+    if (-not $localExists -and $sdCardHasData) {
+        Write-Log 'ai-memory: Sync direcao=import (SDCard tem dados, local vazio)' 'INFO'
+        $results = Import-BootstrapAiMemoryFromSdCard -SdCardPath $sdCardPath -DataDir $dataDir -DryRun:$DryRun
+        $direction = 'import'
+    } elseif ($localExists -and -not $sdCardHasData) {
+        Write-Log 'ai-memory: Sync direcao=export (local tem dados, SDCard vazio)' 'INFO'
+        $results = Export-BootstrapAiMemoryToSdCard -SdCardPath $sdCardPath -DataDir $dataDir -DryRun:$DryRun
+        $direction = 'export'
+    } else {
+        Write-Log 'ai-memory: Sync direcao=bidirectional (ambos tem dados, newest-wins)' 'INFO'
+        $exportResults = New-Object System.Collections.Generic.List[object]
+        $exportTemp = Export-BootstrapAiMemoryToSdCard -SdCardPath $sdCardPath -DataDir $dataDir -DryRun:$DryRun
+        if ($exportTemp) { foreach ($item in $exportTemp) { $exportResults.Add($item) | Out-Null } }
+        $importResults = New-Object System.Collections.Generic.List[object]
+        $importTemp = Import-BootstrapAiMemoryFromSdCard -SdCardPath $sdCardPath -DataDir $dataDir -DryRun:$DryRun
+        if ($importTemp) { foreach ($item in $importTemp) { $importResults.Add($item) | Out-Null } }
+        $combined = New-Object System.Collections.Generic.List[object]
+        foreach ($item in $exportResults) { $combined.Add($item) | Out-Null }
+        foreach ($item in $importResults) { $combined.Add($item) | Out-Null }
+        $results = @($combined.ToArray())
+        $direction = 'bidirectional'
+    }
+
+    # 4. Escreve manifest .phasezero-sync.json
+    $anyFailed = (@($results | Where-Object { $_ -and $_.status -eq 'failed' }).Count) -gt 0
+    $synced = (-not $anyFailed) -and (@($results).Count -gt 0)
+
+    if (-not $DryRun -and $synced) {
+        $hostname = if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { $env:COMPUTERNAME } else { 'unknown' }
+        $manifest = [ordered]@{
+            lastSync   = (Get-Date).ToString('o')
+            sourceHost = $hostname
+            sourceUser = $env:USERNAME
+            direction  = $direction
+            components = @($results)
+        }
+        $manifestPath = Join-Path $sdCardPath '.phasezero-sync.json'
+        $manifestJson = ConvertTo-Json -InputObject $manifest -Depth 5
+        Write-BootstrapAtomicText -Path $manifestPath -Content $manifestJson
+    }
+
+    return [ordered]@{
+        schemaVersion = 1
+        sdCardFound  = $true
+        sdCardPath   = $sdCardPath
+        dataDir      = $dataDir
+        direction    = $direction
+        results      = @($results)
+        synced       = $synced
+    }
+}
+
+function Ensure-BootstrapAiMemorySyncTask {
+    <#
+    .SYNOPSIS
+        Cria scheduled task para sync automatico do ai-memory com SDCard.
+    .DESCRIPTION
+        Triggers: logon + diario 12pm.
+        Executa launcher .ps1 que dot-source bootstrap-tools.ps1 e chama Sync-BootstrapAiMemoryWithSdCard.
+    #>
+    param(
+        [string]$BootstrapScriptPath = '',
+        [switch]$DryRun
+    )
+    $taskName = 'BootstrapTools-AiMemorySync'
+
+    if ([string]::IsNullOrWhiteSpace($BootstrapScriptPath)) {
+        $BootstrapScriptPath = $PSCommandPath
+    }
+
+    $aiRoot = Get-BootstrapAiInstallRoot -InstallRoot ''
+    $launcherDir = Get-BootstrapAiMemoryInstallDir -InstallRoot $aiRoot
+    $launcherPath = Join-Path $launcherDir 'ai-memory-sync-launcher.ps1'
+
+    $launcherContent = @"
+# ai-memory SDCard sync launcher - gerado por PhaseZero BootstrapTools
+# Nao edite manualmente; reexecute a instalacao para recriar.
+param()
+`$ErrorActionPreference = 'Stop'
+`$logPath = Join-Path '$launcherDir' 'ai-memory-sync-launcher.log'
+try {
+    . '$BootstrapScriptPath'
+    `$result = Sync-BootstrapAiMemoryWithSdCard
+    if (`$result.synced) {
+        "OK direcao=`$(`$result.direction) sdCard=`$(`$result.sdCardPath)" | Out-File -LiteralPath `$logPath -Force
+    } else {
+        "SKIP razao=sdCardFound=`$(`$result.sdCardFound)" | Out-File -LiteralPath `$logPath -Force
+    }
+} catch {
+    "ERROR `$_" | Out-File -LiteralPath `$logPath -Force
+    exit 1
+}
+exit 0
+"@
+
+    if ($DryRun) {
+        return [ordered]@{
+            status   = 'planned'
+            task     = $taskName
+            launcher = $launcherPath
+            script   = $BootstrapScriptPath
+        }
+    }
+
+    try {
+        Write-BootstrapAtomicText -Path $launcherPath -Content $launcherContent
+    } catch {
+        return [ordered]@{ status = 'failed'; task = $taskName; reason = "launcher-write: $($_.Exception.Message)" }
+    }
+
+    if (Get-Command -Name Register-ScheduledTask -ErrorAction SilentlyContinue) {
+        try {
+            $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
+
+            $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcherPath`""
+            $triggers = @(
+                (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
+                (New-ScheduledTaskTrigger -Daily -At 12pm)
+            )
+            $principal = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) -LogonType Interactive -RunLevel Limited
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromHours(1))
+            $settings.Hidden = $true
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Description 'Sincroniza ai-memory com SDCard (wiki/raw/db) no logon e diariamente.' -ErrorAction Stop | Out-Null
+            Write-Log "ai-memory: Sync task '$taskName' registrada (logon + diario 12pm)" 'INFO'
+            return [ordered]@{ status = 'registered'; task = $taskName; method = 'register-scheduledtask' }
+        } catch {
+            Write-Log ("ai-memory: Register-ScheduledTask sync falhou ({0})" -f $_.Exception.Message) 'WARN'
+            return [ordered]@{ status = 'failed'; task = $taskName; reason = $_.Exception.Message; method = 'register-scheduledtask' }
+        }
+    }
+
+    return [ordered]@{ status = 'skipped'; task = $taskName; reason = 'Register-ScheduledTask cmdlet nao disponivel' }
 }
 
 function Uninstall-BootstrapAiNpmTool {
@@ -30483,6 +30976,20 @@ function Normalize-BootstrapAppTuningItemResult {
     return $itemResult
 }
 
+function Convert-BootstrapAppTuningResultToItemStatus {
+    param([AllowNull()]$Result)
+
+    $resultMap = ConvertTo-BootstrapHashtable -InputObject $Result
+    if (-not ($resultMap -is [hashtable]) -or -not (Test-BootstrapMapContainsKey -Map $resultMap -Key 'status')) { return '' }
+    switch ([string]$resultMap['status']) {
+        'applied'    { return 'configured' }
+        'configured' { return 'configured' }
+        'unchanged'  { return 'configured' }
+        'audited'    { return 'optimized-tested' }
+        default      { return '' }
+    }
+}
+
 function Invoke-BootstrapAppTuning {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
@@ -30544,6 +31051,12 @@ function Invoke-BootstrapAppTuning {
         if ($itemResult -is [System.Collections.IDictionary]) {
             if ((Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking') -and [bool]$itemResult['blocking']) {
                 $blockingFailures += @($itemResult)
+            }
+            if (-not [bool]$State.DryRun) {
+                $visualStatus = Convert-BootstrapAppTuningResultToItemStatus -Result $itemResult
+                if (-not [string]::IsNullOrWhiteSpace($itemId) -and -not [string]::IsNullOrWhiteSpace($visualStatus)) {
+                    Set-BootstrapItemStatus -Kind 'config' -Id $itemId -Status $visualStatus
+                }
             }
             $State.AppTuningResults.Add($itemResult)
         }
@@ -32760,18 +33273,40 @@ function New-BootstrapAiMemoryDoctorReport {
         }
     }
 
+    # Status sync SDCard
+    $sdCardFound = $false
+    $sdCardPath = ''
+    $lastSync = ''
+    try {
+        $found = Find-BootstrapAiMemorySdCard
+        if ($found) {
+            $sdCardFound = $true
+            $sdCardPath = $found
+            $manifestPath = Join-Path $found '.phasezero-sync.json'
+            if (Test-Path -LiteralPath $manifestPath) {
+                try {
+                    $syncManifest = Microsoft.PowerShell.Management\Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    $lastSync = [string]$syncManifest.lastSync
+                } catch { }
+            }
+        }
+    } catch { }
+
     return [ordered]@{
-        schemaVersion = 1
-        installed = $installed
-        configured = ($installed -and ($serverReachable -or $mcpConfigured))
+        schemaVersion  = 1
+        installed      = $installed
+        configured     = ($installed -and ($serverReachable -or $mcpConfigured))
         serverReachable = $serverReachable
-        mcpConfigured = $mcpConfigured
-        commandStatus = $commandStatus
-        commandPath = [string]$exePath
-        serverUrl = [string]$serverUrl
-        version = [string]$version
+        mcpConfigured  = $mcpConfigured
+        commandStatus  = $commandStatus
+        commandPath    = [string]$exePath
+        serverUrl      = [string]$serverUrl
+        version        = [string]$version
         detectedAgents = @($agents)
-        notes = 'Beta: servidor loopback opt-in; handoff entre Claude Code/Codex/OpenCode.'
+        sdCardFound    = $sdCardFound
+        sdCardPath     = [string]$sdCardPath
+        lastSync       = [string]$lastSync
+        notes          = 'Beta: servidor loopback opt-in; handoff entre Claude Code/Codex/OpenCode. SDCard sync automatico.'
     }
 }
 
