@@ -9333,6 +9333,387 @@ function Repair-BootstrapFastStartup {
     return @{ Changed = $true; PreviousValue = $previousValue }
 }
 
+# --- Instalacao assistida de SteamOS/Bazzite (deteccao + seguranca; NUNCA grava em disco) -------
+
+function Get-BootstrapHostManufacturerModel {
+    # Wrapper mockavel da identificacao do host (Win32_ComputerSystem). Read-only.
+    $result = [ordered]@{ manufacturer = ''; model = '' }
+    try {
+        $cs = Get-CimInstance -ClassName Win32_ComputerSystem -OperationTimeoutSec 5 -ErrorAction Stop
+        $result.manufacturer = [string]$cs.Manufacturer
+        $result.model = [string]$cs.Model
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    return $result
+}
+
+function Get-BootstrapOsInstallHostProfile {
+    # Imagem recomendada conforme o host: Steam Deck Valve (Jupiter/Galileo) -> SteamOS recovery
+    # oficial; qualquer outro host -> Bazzite (SteamOS-like para PC generico). Read-only.
+    $hw = Get-BootstrapHostManufacturerModel
+    $isDeck = ([string]$hw.manufacturer -match 'Valve') -and ([string]$hw.model -match 'Jupiter|Galileo')
+    return [ordered]@{
+        hostType         = $(if ($isDeck) { 'steam-deck' } else { 'generic-pc' })
+        isSteamDeck      = [bool]$isDeck
+        manufacturer     = [string]$hw.manufacturer
+        model            = [string]$hw.model
+        recommendedImage = $(if ($isDeck) { 'steamos-recovery' } else { 'bazzite' })
+    }
+}
+
+function Get-BootstrapPhysicalDisksSnapshot {
+    # Lista mockavel de discos fisicos + particoes (read-only). Base da analise de topologia.
+    $disks = New-Object System.Collections.Generic.List[object]
+    try {
+        foreach ($d in @(Get-Disk -ErrorAction SilentlyContinue)) {
+            $partRows = New-Object System.Collections.Generic.List[object]
+            try {
+                foreach ($p in @(Get-Partition -DiskNumber $d.Number -ErrorAction SilentlyContinue)) {
+                    $fs = ''; $drive = ''
+                    try {
+                        $vol = Get-Volume -Partition $p -ErrorAction SilentlyContinue
+                        if ($vol) { $fs = [string]$vol.FileSystemType; $drive = [string]$vol.DriveLetter }
+                    } catch { Write-Verbose $_.Exception.Message }
+                    $partRows.Add([pscustomobject]@{
+                        PartitionNumber = [int]$p.PartitionNumber
+                        Type            = [string]$p.Type
+                        SizeGB          = [math]::Round($p.Size / 1GB, 1)
+                        FileSystem      = $fs
+                        DriveLetter     = $drive
+                        IsBoot          = [bool]$p.IsBoot
+                        IsSystem        = [bool]$p.IsSystem
+                    }) | Out-Null
+                }
+            } catch { Write-Verbose $_.Exception.Message }
+            $disks.Add([pscustomobject]@{
+                Number       = [int]$d.Number
+                FriendlyName = [string]$d.FriendlyName
+                SizeGB       = [math]::Round($d.Size / 1GB, 1)
+                BusType      = [string]$d.BusType
+                Partitions   = @($partRows.ToArray())
+            }) | Out-Null
+        }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+    return @($disks.ToArray())
+}
+
+function Test-BootstrapDiskHasWindows {
+    # True se o disco contem QUALQUER sinal do Windows: particao do sistema/boot ativa, Recovery,
+    # letra C: ou filesystem NTFS/ReFS. Conservador de proposito: na duvida, marca como Windows
+    # (falso-positivo bloqueia o disco; falso-negativo seria catastrofico).
+    param([Parameter(Mandatory = $true)]$Disk)
+
+    foreach ($p in @($Disk.Partitions)) {
+        if ([bool]$p.IsSystem -or [bool]$p.IsBoot) { return $true }
+        if ([string]$p.Type -eq 'Recovery') { return $true }
+        if ([string]$p.DriveLetter -eq 'C') { return $true }
+        if ([string]$p.FileSystem -in @('NTFS', 'ReFS')) { return $true }
+    }
+    return $false
+}
+
+function Get-BootstrapOsInstallDiskTopology {
+    # Classifica cada disco fisico: tem Windows? e candidato dedicado a Linux? Read-only.
+    $rows = New-Object System.Collections.Generic.List[object]
+    foreach ($d in @(Get-BootstrapPhysicalDisksSnapshot)) {
+        $hasWindows = Test-BootstrapDiskHasWindows -Disk $d
+        $linuxLike = @($d.Partitions | Where-Object { [string]$_.FileSystem -in @('', 'Unknown', 'RAW', 'ext4', 'btrfs', 'ext3', 'xfs') })
+        $rows.Add([ordered]@{
+            diskNumber                = [int]$d.Number
+            friendlyName              = [string]$d.FriendlyName
+            sizeGB                    = [double]$d.SizeGB
+            busType                   = [string]$d.BusType
+            partitionCount            = @($d.Partitions).Count
+            linuxPartitionCount       = @($linuxLike).Count
+            hasWindows                = [bool]$hasWindows
+            isDedicatedLinuxCandidate = (-not [bool]$hasWindows)
+            partitions                = @($d.Partitions)
+        }) | Out-Null
+    }
+    return @($rows.ToArray())
+}
+
+function Test-BootstrapOsInstallTargetSafe {
+    # REGRA DURA: um disco com qualquer particao do Windows NUNCA e alvo seguro para raw passthrough
+    # ou instalador disco-inteiro. So disco dedicado libera esses metodos.
+    param([Parameter(Mandatory = $true)][int]$DiskNumber)
+
+    $disk = @(Get-BootstrapOsInstallDiskTopology | Where-Object { [int]$_.diskNumber -eq $DiskNumber })
+    if (@($disk).Count -eq 0) {
+        return [ordered]@{ diskNumber = $DiskNumber; safe = $false; isDedicated = $false; reasons = @('disk-not-found'); allowedMethods = @() }
+    }
+    $d = $disk[0]
+    $reasons = New-Object System.Collections.Generic.List[string]
+    if ([bool]$d.hasWindows) { $reasons.Add('disk-contains-windows-partitions') | Out-Null }
+    $safe = ($reasons.Count -eq 0)
+    return [ordered]@{
+        diskNumber     = $DiskNumber
+        safe           = [bool]$safe
+        isDedicated    = [bool]$d.isDedicatedLinuxCandidate
+        reasons        = @($reasons.ToArray())
+        # Passthrough e disco-inteiro so num disco dedicado; senao nenhum metodo automatizado.
+        allowedMethods = $(if ($safe) { @('vm-raw-passthrough', 'native-installer') } else { @() })
+    }
+}
+
+function Get-BootstrapOsImageCatalog {
+    # Catalogo de imagens. URLs multi-GB/variantes mudam por release: a recovery da Valve nao publica
+    # SHA256 estavel (manual-verify) e o Bazzite publica SHA256 por release no GitHub. O download real
+    # (nos componentes) EXIGE url+sha256 resolvidos e verifica antes de usar; sem verificacao, recusa.
+    return [ordered]@{
+        'steamos-recovery' = [ordered]@{
+            displayName    = 'SteamOS Recovery (Valve, oficial)'
+            kind           = 'raw-img'
+            url            = 'https://steamdeck-images.steamos.cloud/recovery/steamdeck-recovery-4.img.bz2'
+            sha256         = ''
+            checksumPolicy = 'manual-verify'
+            target         = 'steam-deck'
+            officialSource = 'https://store.steampowered.com/steamos/buildyourown'
+            notes          = 'Imagem .img crua: grave em USB e reimageie o Steam Deck. NAO e caminho suportado em VM/disco generico.'
+        }
+        'bazzite' = [ordered]@{
+            displayName    = 'Bazzite (SteamOS-like, PC generico)'
+            kind           = 'iso'
+            url            = ''
+            sha256         = ''
+            checksumPolicy = 'github-release-sha256'
+            target         = 'generic-pc'
+            officialSource = 'https://bazzite.gg/'
+            notes          = 'ISO com instalador proprio. Baixe a variante adequada (bazzite-deck p/ handhelds, bazzite p/ desktop) e informe o SHA256 publicado no release.'
+        }
+    }
+}
+
+function Get-BootstrapOsInstallPlan {
+    # Junta host + topologia + alvo recomendado + imagem + metodos elegiveis num relatorio read-only.
+    $hostProfile = Get-BootstrapOsInstallHostProfile
+    $topology = @(Get-BootstrapOsInstallDiskTopology)
+    $dualBoot = $null
+    try { $dualBoot = Get-BootstrapDualBootInfo } catch { $dualBoot = $null }
+
+    $dedicated = @($topology | Where-Object { [bool]$_.isDedicatedLinuxCandidate })
+    $recommendedTarget = if (@($dedicated).Count -gt 0) { [int]@($dedicated)[0].diskNumber } else { $null }
+
+    $catalog = Get-BootstrapOsImageCatalog
+    $image = $catalog[[string]$hostProfile.recommendedImage]
+
+    $eligibleMethods = @()
+    $blockReasons = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $recommendedTarget) {
+        $blockReasons.Add('no-dedicated-disk') | Out-Null
+    } else {
+        $safety = Test-BootstrapOsInstallTargetSafe -DiskNumber $recommendedTarget
+        $eligibleMethods = @($safety.allowedMethods)
+        foreach ($r in @($safety.reasons)) { $blockReasons.Add($r) | Out-Null }
+    }
+    # SteamOS recovery (raw .img) nao roda em VM: VM so vale para Bazzite (ISO).
+    if ([string]$hostProfile.recommendedImage -eq 'steamos-recovery') {
+        $eligibleMethods = @($eligibleMethods | Where-Object { $_ -ne 'vm-raw-passthrough' })
+    }
+
+    $warnings = @()
+    if ($dualBoot) { try { $warnings = @($dualBoot.Warnings) } catch { $warnings = @() } }
+
+    return [ordered]@{
+        schemaVersion     = 'os-install/v1'
+        generatedAt       = (Get-Date).ToString('o')
+        host              = $hostProfile
+        recommendedImage  = [string]$hostProfile.recommendedImage
+        image             = $image
+        topology          = $topology
+        recommendedTarget = $recommendedTarget
+        eligibleMethods   = @($eligibleMethods)
+        blockReasons      = @($blockReasons.ToArray())
+        warnings          = @($warnings)
+        neverWritesDisk   = $true
+    }
+}
+
+function Get-BootstrapVBoxManagePath {
+    # Caminho do VBoxManage.exe (VirtualBox). Mockavel. '' se ausente.
+    foreach ($c in @(
+        (Join-Path $env:ProgramFiles 'Oracle\VirtualBox\VBoxManage.exe'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Oracle\VirtualBox\VBoxManage.exe')
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($c) -and (Test-Path -LiteralPath $c -PathType Leaf)) { return $c }
+    }
+    $cmd = Resolve-CommandPath -Name 'VBoxManage'
+    if (-not [string]::IsNullOrWhiteSpace($cmd)) { return $cmd }
+    return ''
+}
+
+function New-BootstrapRawVmdkPlan {
+    # Plano (sem efeito) do .vmdk raw que mapeia o disco fisico DEDICADO para a VM. So gera o comando
+    # quando o disco e seguro (sem particoes do Windows); senao retorna blocked com motivo.
+    param(
+        [Parameter(Mandatory = $true)][int]$DiskNumber,
+        [Parameter(Mandatory = $true)][string]$OutputPath
+    )
+
+    $safety = Test-BootstrapOsInstallTargetSafe -DiskNumber $DiskNumber
+    if (-not [bool]$safety.safe) {
+        return [ordered]@{ status = 'blocked'; reasons = @($safety.reasons); diskNumber = $DiskNumber }
+    }
+    $physical = "\\.\PhysicalDrive$DiskNumber"
+    return [ordered]@{
+        status        = 'ready'
+        diskNumber    = $DiskNumber
+        physicalDrive = $physical
+        vmdkPath      = $OutputPath
+        command       = @('internalcommands', 'createrawvmdk', '-filename', $OutputPath, '-rawdisk', $physical)
+    }
+}
+
+function Get-BootstrapOsInstallStagingRoot {
+    return (Join-Path (Get-BootstrapDataRoot) 'os-install')
+}
+
+function Resolve-BootstrapOsImageDownload {
+    # Resolve url+sha256 para a imagem. So aceita quando ambos vierem de fonte explicita (env ou
+    # ComponentDef); imagens multi-GB nao sao hardcoded e o checksum e OBRIGATORIO antes de usar.
+    param(
+        [Parameter(Mandatory = $true)][string]$ImageKey,
+        [AllowNull()]$ComponentDef = $null
+    )
+    $catalog = Get-BootstrapOsImageCatalog
+    $entry = if ($catalog.Contains($ImageKey)) { $catalog[$ImageKey] } else { $null }
+
+    $url = [string]$env:PHASEZERO_OS_IMAGE_URL
+    $sha = [string]$env:PHASEZERO_OS_IMAGE_SHA256
+    if ([string]::IsNullOrWhiteSpace($url) -and $ComponentDef) { try { $url = [string]$ComponentDef.ImageUrl } catch { } }
+    if ([string]::IsNullOrWhiteSpace($sha) -and $ComponentDef) { try { $sha = [string]$ComponentDef.ImageSha256 } catch { } }
+    if ([string]::IsNullOrWhiteSpace($url) -and $entry) { $url = [string]$entry.url }
+
+    $hasUrl = -not [string]::IsNullOrWhiteSpace($url)
+    $hasSha = -not [string]::IsNullOrWhiteSpace($sha)
+    return [ordered]@{
+        imageKey       = $ImageKey
+        url            = $url
+        sha256         = $sha
+        officialSource = $(if ($entry) { [string]$entry.officialSource } else { '' })
+        resolved       = ($hasUrl -and $hasSha)
+        missing        = @(@(if (-not $hasUrl) { 'url' }) + @(if (-not $hasSha) { 'sha256' }))
+    }
+}
+
+function Ensure-BootstrapOsInstallDetect {
+    # Componente read-only: gera e loga o plano de instalacao (host, imagem, topologia, alvo seguro,
+    # metodos elegiveis). NUNCA escreve nada.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $plan = Get-BootstrapOsInstallPlan
+    Write-Log ("os-install-detect: host={0}; imagem={1}; alvoDisco={2}; metodos=[{3}]; bloqueios=[{4}]" -f `
+        [string]$plan.host.hostType, [string]$plan.recommendedImage, $(if ($null -ne $plan.recommendedTarget) { $plan.recommendedTarget } else { 'nenhum' }), (@($plan.eligibleMethods) -join ','), (@($plan.blockReasons) -join ','))
+    foreach ($w in @($plan.warnings)) { Write-Log ("os-install-detect: aviso dual-boot: {0}" -f [string]$w) 'WARN' }
+    if (@($plan.eligibleMethods).Count -eq 0) {
+        Write-Log 'os-install-detect: nenhum metodo automatizado elegivel (sem disco dedicado seguro). PhaseZero so faz deteccao/guia; nunca grava em disco do Windows.' 'WARN'
+    }
+    return [ordered]@{ status = 'completed'; readOnly = $true; plan = $plan; dryRun = [bool]$State.DryRun }
+}
+
+function Ensure-BootstrapOsInstallVm {
+    # Metodo 2 (VM isolada, raw passthrough). Estagia somente; NUNCA roda o install destrutivo.
+    # Bloqueia se: imagem raw SteamOS (nao roda em VM), sem disco dedicado seguro, sem VirtualBox,
+    # sem admin, ou imagem sem url+sha256 verificavel.
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [AllowNull()]$ComponentDef = $null
+    )
+
+    $plan = Get-BootstrapOsInstallPlan
+    $imageKey = [string]$plan.recommendedImage
+    if ($imageKey -eq 'steamos-recovery') {
+        Write-Log 'os-install-vm: a recovery do SteamOS e imagem .img crua e NAO instala via VM; use os-install-native (USB de recovery).' 'WARN'
+        return [ordered]@{ status = 'blocked'; reason = 'steamos-recovery-not-vm-installable'; image = $imageKey; dryRun = [bool]$State.DryRun }
+    }
+    $target = $plan.recommendedTarget
+    if ($null -eq $target) {
+        Write-Log 'os-install-vm: bloqueado: nenhum disco dedicado seguro detectado.' 'WARN'
+        return [ordered]@{ status = 'blocked'; reason = 'no-dedicated-disk'; dryRun = [bool]$State.DryRun }
+    }
+    $stagingRoot = Get-BootstrapOsInstallStagingRoot
+    $vmdkPath = Join-Path $stagingRoot ("rawdisk-{0}.vmdk" -f $target)
+    $vmdkPlan = New-BootstrapRawVmdkPlan -DiskNumber $target -OutputPath $vmdkPath
+    if ([string]$vmdkPlan.status -eq 'blocked') {
+        Write-Log ("os-install-vm: bloqueado por seguranca do disco: {0}" -f (@($vmdkPlan.reasons) -join ',')) 'WARN'
+        return [ordered]@{ status = 'blocked'; reason = 'unsafe-target'; reasons = @($vmdkPlan.reasons); dryRun = [bool]$State.DryRun }
+    }
+
+    $download = Resolve-BootstrapOsImageDownload -ImageKey $imageKey -ComponentDef $ComponentDef
+    if ([bool]$State.DryRun) {
+        Write-Log ("os-install-vm: (dry-run) criaria vmdk para {0} via: VBoxManage {1}" -f [string]$vmdkPlan.physicalDrive, (@($vmdkPlan.command) -join ' '))
+        return [ordered]@{ status = 'planned'; image = $imageKey; target = $target; vmdkPlan = $vmdkPlan; imageResolved = [bool]$download.resolved; dryRun = $true }
+    }
+
+    if (-not (Test-IsAdmin)) {
+        Write-Log 'os-install-vm: requer administrador para mapear o disco fisico.' 'WARN'
+        return [ordered]@{ status = 'blocked'; reason = 'requires-admin'; dryRun = $false }
+    }
+    $vbox = Get-BootstrapVBoxManagePath
+    if ([string]::IsNullOrWhiteSpace($vbox)) {
+        Write-Log 'os-install-vm: VirtualBox (VBoxManage) nao encontrado. Instale o VirtualBox e rode novamente.' 'WARN'
+        return [ordered]@{ status = 'blocked'; reason = 'virtualbox-missing'; dryRun = $false }
+    }
+    if (-not [bool]$download.resolved) {
+        Write-Log ("os-install-vm: imagem sem {0}. Informe PHASEZERO_OS_IMAGE_URL e PHASEZERO_OS_IMAGE_SHA256 (verificado) da fonte oficial: {1}" -f (@($download.missing) -join '+'), [string]$download.officialSource) 'WARN'
+        return [ordered]@{ status = 'blocked'; reason = 'image-url-or-sha-missing'; missing = @($download.missing); officialSource = [string]$download.officialSource; dryRun = $false }
+    }
+
+    $null = New-Item -ItemType Directory -Path $stagingRoot -Force -ErrorAction SilentlyContinue
+    & $vbox @($vmdkPlan.command) 2>&1 | ForEach-Object { Write-Log ("VBoxManage: {0}" -f $_) }
+    if ($State.ContainsKey('Changes')) {
+        try { Register-BootstrapChange -State $State -Type File -Target $vmdkPath -OldValue $null -NewValue 'raw-vmdk-created' -Operation 'os-install-raw-vmdk' -RollbackAction 'delete-file' -Reversible 'full' -Component 'os-install-vm' } catch { Write-Verbose $_.Exception.Message }
+    }
+    Write-Log ("os-install-vm: vmdk criado em {0}. Proximo passo MANUAL: abra o VirtualBox como Administrador, crie a VM, anexe este vmdk e a ISO, instale confirmando a particao do disco dedicado. O Windows fica invisivel/isolado." -f $vmdkPath)
+    return [ordered]@{ status = 'completed'; image = $imageKey; target = $target; vmdkPath = $vmdkPath; startedInstall = $false; dryRun = $false }
+}
+
+function Ensure-BootstrapOsInstallNative {
+    # Metodo 1 (boot nativo do instalador). Baixa+verifica e estagia a imagem + guia; o
+    # particionamento/format fica MANUAL no instalador. NUNCA grava no disco do sistema a partir do Windows.
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [AllowNull()]$ComponentDef = $null
+    )
+
+    $plan = Get-BootstrapOsInstallPlan
+    $imageKey = [string]$plan.recommendedImage
+    $download = Resolve-BootstrapOsImageDownload -ImageKey $imageKey -ComponentDef $ComponentDef
+    $stagingRoot = Get-BootstrapOsInstallStagingRoot
+
+    if ([bool]$State.DryRun) {
+        Write-Log ("os-install-native: (dry-run) baixaria/verificaria a imagem '{0}' e prepararia USB (Ventoy)/boot. Particionamento fica manual no instalador." -f $imageKey)
+        return [ordered]@{ status = 'planned'; image = $imageKey; imageResolved = [bool]$download.resolved; officialSource = [string]$download.officialSource; dryRun = $true }
+    }
+    if (-not [bool]$download.resolved) {
+        Write-Log ("os-install-native: imagem sem {0}. Informe PHASEZERO_OS_IMAGE_URL e PHASEZERO_OS_IMAGE_SHA256 da fonte oficial: {1}" -f (@($download.missing) -join '+'), [string]$download.officialSource) 'WARN'
+        return [ordered]@{ status = 'blocked'; reason = 'image-url-or-sha-missing'; missing = @($download.missing); officialSource = [string]$download.officialSource; dryRun = $false }
+    }
+
+    $null = New-Item -ItemType Directory -Path $stagingRoot -Force -ErrorAction SilentlyContinue
+    $imageName = [System.IO.Path]::GetFileName(([uri][string]$download.url).AbsolutePath)
+    if ([string]::IsNullOrWhiteSpace($imageName)) { $imageName = ("{0}.img" -f $imageKey) }
+    $imagePath = Join-Path $stagingRoot $imageName
+
+    if (-not (Test-Path -LiteralPath $imagePath -PathType Leaf)) {
+        Invoke-WebRequestWithRetry -Uri ([string]$download.url) -OutFile $imagePath -OperationName ("download da imagem {0}" -f $imageKey)
+    }
+    $actual = (Get-BootstrapFileSha256 -Path $imagePath)
+    if ($actual -ne ([string]$download.sha256).ToLowerInvariant()) {
+        Write-Log ("os-install-native: SHA256 da imagem NAO confere (esperado {0}, obtido {1}); arquivo descartado." -f [string]$download.sha256, $actual) 'WARN'
+        try { Remove-Item -LiteralPath $imagePath -Force -ErrorAction SilentlyContinue } catch { }
+        return [ordered]@{ status = 'blocked'; reason = 'sha256-mismatch'; dryRun = $false }
+    }
+    if ($State.ContainsKey('Changes')) {
+        try { Register-BootstrapChange -State $State -Type File -Target $imagePath -OldValue $null -NewValue 'os-image-staged' -Operation 'os-install-image-staged' -RollbackAction 'delete-file' -Reversible 'full' -Component 'os-install-native' } catch { Write-Verbose $_.Exception.Message }
+    }
+    Write-Log ("os-install-native: imagem verificada (sha256 ok) em {0}. Proximo passo MANUAL: grave em USB com Ventoy/Rufus e dê boot pelo USB; no instalador escolha particionamento MANUAL e selecione o disco dedicado. PhaseZero nao grava no disco do sistema." -f $imagePath)
+    return [ordered]@{ status = 'completed'; image = $imageKey; imagePath = $imagePath; verified = $true; usbWritten = $false; dryRun = $false }
+}
+
 function Get-BootstrapDualBootRecommendations {
     param([AllowNull()]$DualBootInfo)
     if ($null -eq $DualBootInfo) { $DualBootInfo = Get-BootstrapDualBootInfo }
@@ -15350,6 +15731,10 @@ function Get-BootstrapComponentCatalog {
     $catalog['sparkle'] = New-BootstrapComponentDefinition -Name 'sparkle' -Description 'Sparkle (xishang0128): GUI do Mihomo/Clash, um cliente proxy de rede.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'xishang0128.Sparkle'; DisplayName = 'Sparkle (Mihomo GUI)'; ProbePaths = @("${env:LOCALAPPDATA}\Programs\Sparkle\Sparkle.exe", "$env:ProgramFiles\Sparkle\Sparkle.exe") }
     $catalog['jdownloader'] = New-BootstrapComponentDefinition -Name 'jdownloader' -Description 'JDownloader 2.' -DependsOn @('java-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'AppWork.JDownloader'; DisplayName = 'JDownloader 2'; ProbePaths = @("${env:LOCALAPPDATA}\JDownloader 2\JDownloader2.exe", "$env:ProgramFiles\JDownloader 2\JDownloader2.exe") }
     $catalog['dualboot-manager'] = New-BootstrapComponentDefinition -Name 'dualboot-manager' -Description 'Dual boot detection, safety guardrails and reboot management.' -DependsOn @('system-core') -Optional $true -Kind 'builtin' -Data @{}
+    # --- Instalacao assistida de SteamOS/Bazzite (opt-in; NUNCA grava no disco do Windows) ---------
+    $catalog['os-install-detect'] = New-BootstrapComponentDefinition -Name 'os-install-detect' -Description 'Detecta host (Steam Deck->SteamOS / PC->Bazzite), topologia de disco e alvo seguro para instalar Linux. Read-only.' -Optional $true -DependsOn @('system-core') -Kind 'builtin' -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Mostra imagem recomendada, disco dedicado seguro e metodos elegiveis sem tocar em disco.'; riskLevel = 'safe' }
+    $catalog['os-install-vm'] = New-BootstrapComponentDefinition -Name 'os-install-vm' -Description 'Metodo 2: estagia instalacao em VM isolada com raw passthrough do disco DEDICADO (so Bazzite/ISO). Nao roda o install destrutivo.' -Optional $true -DependsOn @('os-install-detect') -Kind 'builtin' -RequiresNetwork $true -Data @{ Stage = 'verify'; Provisioning = 'builtin'; RequiresAdmin = $true; ValueReason = 'Instala dentro de uma VM que so enxerga o disco dedicado, mantendo o Windows isolado.'; riskLevel = 'experimental' }
+    $catalog['os-install-native'] = New-BootstrapComponentDefinition -Name 'os-install-native' -Description 'Metodo 1: baixa+verifica (sha256) a imagem e estagia para USB (Ventoy/Rufus); particionamento fica manual no instalador.' -Optional $true -DependsOn @('os-install-detect') -Kind 'builtin' -RequiresNetwork $true -Data @{ Stage = 'verify'; Provisioning = 'builtin'; ValueReason = 'Prepara a midia oficial verificada; a gravacao do disco fica manual e isolada no instalador Linux.'; riskLevel = 'experimental' }
 
     return $catalog
 }
@@ -15404,6 +15789,9 @@ function Get-BootstrapProfileCatalog {
     $catalog['steamdeck-backup'] = New-BootstrapProfileDefinition -Name 'steamdeck-backup' -Description 'Backup de drivers e imagem golden.' -Items @('driver-store-explorer', 'macrium-reflect')
     $catalog['steamdeck-recommended'] = New-BootstrapProfileDefinition -Name 'steamdeck-recommended' -Description 'Experiencia recomendada para este Steam Deck.' -Items @('steamdeck-essentials', 'steamdeck-input', 'steamdeck-power', 'steamdeck-dock', 'steamdeck-connectivity', 'steamdeck-qol', 'steamdeck-shell-menu', 'steamdeck-sharedvram-launch-options')
     $catalog['steamdeck-full'] = New-BootstrapProfileDefinition -Name 'steamdeck-full' -Description 'Camada completa Steam Deck, incluindo storage/capture/backup e bloqueadores manuais.' -Items @('steamdeck-recommended', 'steamdeck-storage', 'steamdeck-capture', 'steamdeck-backup', 'steamdeck-zero-touch', 'epic-games', 'msi-afterburner', 'lossless-scaling', 'joyshockmapper', 'vibrancegui', 'steamdeck-driver-pack', 'steamdeck-amd-nebula-driver', 'steamdeck-storage-driver', 'steamdeck-wifi-driver', 'steamdeck-bluetooth-driver')
+    # Instalacao assistida de SteamOS/Bazzite: deteccao + ambos os metodos + gerenciador de dual-boot
+    # ja existente para ligar o boot apos instalar. Opt-in; NUNCA em recommended/full.
+    $catalog['steamos-install'] = New-BootstrapProfileDefinition -Name 'steamos-install' -Description 'Instalacao assistida e segura de SteamOS (Steam Deck) ou Bazzite (PC) num disco DEDICADO, a partir do Windows. Nunca grava no disco do Windows.' -Items @('os-install-detect', 'os-install-vm', 'os-install-native', 'dualboot-manager')
     $catalog['workspace'] = New-BootstrapProfileDefinition -Name 'workspace' -Description 'Layout em F:\Steam\Steamapps e Dev.' -Items @('workspace-layout', 'pycharm-community', 'dotnet-core')
     $catalog['webapps'] = New-BootstrapProfileDefinition -Name 'webapps' -Description 'Atalhos web (PWA) de Office, nuvem, multimidia, comunicacao e IA na area de trabalho.' -Items @('webapp-photopea', 'webapp-whatsapp-web', 'webapp-xiaomi-ai-studio', 'webapp-manus', 'webapp-kimi', 'webapp-google-docs', 'webapp-z-ai', 'webapp-gemini-web', 'webapp-google-ai-studio', 'webapp-v0-dev', 'webapp-bolt-new', 'webapp-lovable-dev', 'webapp-google-sheets', 'webapp-google-slides', 'webapp-google-calendar', 'webapp-gmail', 'webapp-office-word', 'webapp-office-excel', 'webapp-office-powerpoint', 'webapp-trello', 'webapp-notion', 'webapp-google-keep', 'webapp-onedrive', 'webapp-google-drive', 'webapp-dropbox', 'webapp-mega', 'webapp-icloud', 'webapp-youtube', 'webapp-netflix', 'webapp-spotify', 'webapp-prime-video', 'webapp-telegram-web', 'webapp-discord', 'webapp-slack', 'webapp-zoom', 'webapp-google-meet')
     $catalog['virtualization'] = New-BootstrapProfileDefinition -Name 'virtualization' -Description 'Plataformas de virtualizacao opt-in (admin + reboot): Hyper-V e Windows Hypervisor Platform.' -Items @('hyper-v', 'hyper-v-tools', 'windows-hypervisor-platform')
@@ -30550,6 +30938,9 @@ function Ensure-BootstrapBuiltinComponent {
         'emulation-frontend-pointing' { return (Ensure-BootstrapEmulationFrontendPaths -State $State) }
         'emulation-desktop-shortcuts' { return (Ensure-BootstrapEmulationDesktopShortcuts -State $State) }
         'dualboot-manager' { return (Ensure-BootstrapDualBootManager -State $State) }
+        'os-install-detect' { return (Ensure-BootstrapOsInstallDetect -State $State) }
+        'os-install-vm' { return (Ensure-BootstrapOsInstallVm -State $State -ComponentDef $ComponentDef) }
+        'os-install-native' { return (Ensure-BootstrapOsInstallNative -State $State -ComponentDef $ComponentDef) }
         'agent-compat-runtime' { return (Ensure-BootstrapAgentCompatRuntime -State $State -ComponentDef $ComponentDef) }
         default { throw "Componente builtin sem executor: $Name" }
     }
