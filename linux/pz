@@ -31,6 +31,8 @@ Usage:
   pz emulation emudeck install Install EmuDeck AppImage launcher
   pz emulation eden install   Install Eden Steam Deck AppImage launcher
   pz emulation eden integrate Integrate Eden with EmuDeck (ES-DE, SRM, paths)
+  pz emulation citron install Install Citron Switch emulator AppImage
+  pz emulation citron integrate Integrate Citron with EmuDeck (ES-DE, SRM, paths)
   pz emulation hydra install  Install Hydra AppImage + SteamOS shortcut
   pz emulation bios import <path> Import user-owned BIOS files from local path
   pz emulation switch import-keys <path> Import user-owned Switch keys from local path
@@ -126,11 +128,12 @@ cmd_emulation() {
         blocked-sources|policy) bash "$PZ_ROOT/linux/emulation/bios.sh" blocked-sources ;;
         emudeck)      bash "$PZ_ROOT/linux/emulation/emudeck.sh" "${target:-status}" "$extra" ;;
         eden)         bash "$PZ_ROOT/linux/emulation/eden.sh" "${target:-status}" "$extra" ;;
+        citron)       bash "$PZ_ROOT/linux/emulation/citron.sh" "${target:-status}" "$extra" ;;
         hydra)        bash "$PZ_ROOT/linux/emulation/hydra.sh" "${target:-status}" "$extra" ;;
         bios)         bash "$PZ_ROOT/linux/emulation/bios.sh" "${target:-status}" "$extra" ;;
         switch)       bash "$PZ_ROOT/linux/emulation/bios.sh" "switch-${target:-status}" "$extra" ;;
         setup|install) bash "$PZ_ROOT/linux/emulation/setup-emulation.sh" "${target:-install}" ;;
-        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|eden|bios|switch|setup)"; return 1 ;;
+        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|eden|citron|bios|switch|setup)"; return 1 ;;
     esac
 }
 

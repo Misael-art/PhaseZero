@@ -26,6 +26,9 @@ test -d "$PZ_EMULATION_ROOT/roms/switch"
 "$REPO_ROOT/linux/pz" emulation eden dry-run >/dev/null
 "$REPO_ROOT/linux/pz" emulation eden integrate >/dev/null
 "$REPO_ROOT/linux/pz" emulation eden status | jq -e '.emudeckInstalled == false' >/dev/null
+"$REPO_ROOT/linux/pz" emulation citron dry-run >/dev/null
+"$REPO_ROOT/linux/pz" emulation citron integrate >/dev/null
+"$REPO_ROOT/linux/pz" emulation citron status | jq -e '.emudeckInstalled == false' >/dev/null
 "$REPO_ROOT/linux/pz" emulation hydra dry-run >/dev/null
 "$REPO_ROOT/linux/pz" emulation hydra status | jq -e '.policyInstalled == false' >/dev/null
 "$REPO_ROOT/linux/pz" install emulation-linux --dry-run >/dev/null
@@ -40,6 +43,7 @@ printf 'fake-prod-keys\n' > "$TMP_ROOT/source-keys/prod.keys"
 "$REPO_ROOT/linux/pz" emulation switch import-keys "$TMP_ROOT/source-keys" >/dev/null
 test -f "$PZ_EMULATION_ROOT/firmware/switch/keys/prod.keys"
 test -f "$XDG_DATA_HOME/eden/keys/prod.keys"
+test -f "$XDG_DATA_HOME/citron/keys/prod.keys"
 
 mkdir -p "$TMP_ROOT/source-fw"
 printf 'fake-fw\n' > "$TMP_ROOT/source-fw/firmware.nca"

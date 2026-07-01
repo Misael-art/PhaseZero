@@ -151,6 +151,8 @@ integrate_with_emudeck() {
 
     pz_info "integrating Eden with EmuDeck"
 
+    sync_eden_user_content
+
     install -d "$toolsPath/launchers" 2>/dev/null || true
     if [ -f "$emudeck_backend/tools/launchers/eden.sh" ]; then
         cp "$emudeck_backend/tools/launchers/eden.sh" "$toolsPath/launchers/eden.sh"
