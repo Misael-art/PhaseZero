@@ -1,0 +1,216 @@
+#!/usr/bin/env bash
+# pz - PhaseZero Linux CLI entrypoint
+set -euo pipefail
+
+PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+source "$PZ_ROOT/linux/lib/common.sh"
+source "$PZ_ROOT/linux/lib/pacman.sh"
+
+PZ_SUBCOMMANDS="install steamdeck emulation ai doctor support-bundle repair-plan tune help version"
+
+usage() {
+    cat <<EOF
+PhaseZero Linux - profile bootstrap & automation
+
+Usage:
+  pz install <profile>         Bootstrap a profile (safe-base, dev-ai, gaming, ...)
+  pz install <profile> --dry-run
+  pz steamdeck <mode>          Apply Steam Deck mode (handheld|docked-tv|docked-monitor)
+  pz steamdeck watch           Start mode-watcher daemon
+  pz steamdeck keyboard        Toggle Steam/desktop virtual keyboard
+  pz steamdeck console [mode]  Apply mode and launch Steam Gamepad UI
+  pz steamdeck dev [mode]      Apply desktop/dev session mode
+  pz steamdeck hotkeys install Install Ctrl+Alt+F1..F6 shortcuts
+  pz steamdeck watcher install Install dynamic mode-watcher user service
+  pz steamdeck privileged status Manage TDP/GPU privileged bridge
+  pz steamdeck boot status   Manage GRUB SteamOS-like console boot entry
+  pz steamdeck status         Print SteamOS UX status JSON
+  pz steamdeck launch-options List Steam launch option presets
+  pz emulation layout         Create shared Emulation folders
+  pz emulation emudeck install Install EmuDeck AppImage launcher
+  pz emulation eden install   Install Eden Steam Deck AppImage launcher
+  pz emulation eden integrate Integrate Eden with EmuDeck (ES-DE, SRM, paths)
+  pz emulation hydra install  Install Hydra AppImage + SteamOS shortcut
+  pz emulation bios import <path> Import user-owned BIOS files from local path
+  pz emulation switch import-keys <path> Import user-owned Switch keys from local path
+  pz emulation switch import-firmware <path> Import user-owned Switch firmware from local path
+  pz emulation status         Print emulation status JSON
+  pz ai setup <tool>           Setup AI tool (ollama|webui|claude|opencode|all)
+  pz ai secrets rotate         Rotate AI API keys
+  pz ai mcp install <server>   Install MCP server
+  pz ai mcp list               List installed MCP servers
+  pz doctor                    Run full system diagnostics
+  pz support-bundle            Generate support tarball
+  pz repair-plan               Generate repair plan
+  pz tune <area>               Apply tuning (browser|gaming|dev)
+  pz help                      Show this help
+  pz version                   Show version
+
+Profiles:
+  safe-base                Essentials: firewall, codecs, browser, timeshift
+  dev-ai                   Dev + AI toolchain: node, python, rust, ollama, claude, opencode
+  gaming                   Gaming stack: steam, heroic, lutris, mangohud, gamemode
+  steamdeck-linux          SteamOS-like UX: hotkeys, virtual keyboard, Gamepad UI
+  emulation-linux          EmuDeck/Eden + shared emulation layout
+  homelab                  Docker homelab: jellyfin, nextcloud, vaultwarden
+  full-workstation         All profiles combined
+
+Environment:
+  PZ_PROFILES_DIR          Override profiles directory (default: \$PZ_ROOT/profiles)
+EOF
+}
+
+cmd_version() {
+    if [ -f "$PZ_ROOT/version.json" ]; then
+        jq -r '"PhaseZero Linux v\(.version) (\(.channel))"' "$PZ_ROOT/version.json"
+    else
+        echo "PhaseZero Linux"
+    fi
+}
+
+cmd_install() {
+    local profile="" dry_run=0 arg
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run|-n) dry_run=1 ;;
+            *) [ -z "$profile" ] && profile="$arg" ;;
+        esac
+    done
+    [ -z "$profile" ] && { pz_error "usage: pz install <profile>"; return 1; }
+    local profiles_dir="${PZ_PROFILES_DIR:-$PZ_ROOT/profiles}"
+    local profile_file="$profiles_dir/$profile.json"
+    if [ ! -f "$profile_file" ]; then
+        # try looking up by naming convention
+        profile_file=$(find "$profiles_dir" -maxdepth 1 -name "${profile}*" -type f 2>/dev/null | head -1)
+        [ -z "$profile_file" ] && { pz_error "profile not found: $profile"; return 1; }
+    fi
+    pz_info "running profile: $profile ($profile_file)"
+    if [ "$dry_run" = "1" ]; then
+        PZ_DRY_RUN=1 pz_run_profile "$profile_file"
+    else
+        pz_run_profile "$profile_file"
+    fi
+}
+
+cmd_steamdeck() {
+    local action="${1:-}" target="${2:-}"
+    [ -z "$action" ] && { pz_error "usage: pz steamdeck (handheld|docked-tv|docked-monitor|watch|keyboard|console|dev|hotkeys|watcher|privileged|boot)"; return 1; }
+    source "$PZ_ROOT/linux/steamdeck/common.sh"
+    source "$PZ_ROOT/linux/steamdeck/input-actions.sh"
+    case "$action" in
+        handheld)     steamdeck_apply_handheld ;;
+        docked-tv)    steamdeck_apply_docked_tv ;;
+        docked-monitor) steamdeck_apply_docked_monitor ;;
+        watch)        steamdeck_mode_watcher ;;
+        detect)       steamdeck_detect_mode ;;
+        keyboard|virtual-keyboard) steamdeck_toggle_virtual_keyboard ;;
+        console)      steamdeck_start_console_session "${target:-auto}" ;;
+        dev|desktop)  steamdeck_start_dev_session "${target:-docked-monitor}" ;;
+        hotkeys)      bash "$PZ_ROOT/linux/steamdeck/install-hotkeys.sh" "${target:-install}" ;;
+        watcher)      bash "$PZ_ROOT/linux/steamdeck/install-mode-watcher.sh" "${target:-install}" ;;
+        privileged)   bash "$PZ_ROOT/linux/steamdeck/install-privileged-controls.sh" "${target:-status}" ;;
+        boot)         bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" "${target:-status}" ;;
+        status)       bash "$PZ_ROOT/linux/steamdeck/status.sh" ;;
+        launch-options) bash "$PZ_ROOT/linux/steamdeck/launch-options.sh" "${target:-list}" "${3:-balanced}" ;;
+        ux)           bash "$PZ_ROOT/linux/steamdeck/install-hotkeys.sh" "${target:-install}" ;;
+        *)            pz_error "unknown steamdeck mode: $action"; return 1 ;;
+    esac
+}
+
+cmd_emulation() {
+    local action="${1:-status}" target="${2:-}" extra="${3:-}"
+    case "$action" in
+        layout)       bash "$PZ_ROOT/linux/emulation/bios.sh" layout ;;
+        status)       bash "$PZ_ROOT/linux/emulation/bios.sh" status ;;
+        blocked-sources|policy) bash "$PZ_ROOT/linux/emulation/bios.sh" blocked-sources ;;
+        emudeck)      bash "$PZ_ROOT/linux/emulation/emudeck.sh" "${target:-status}" "$extra" ;;
+        eden)         bash "$PZ_ROOT/linux/emulation/eden.sh" "${target:-status}" "$extra" ;;
+        hydra)        bash "$PZ_ROOT/linux/emulation/hydra.sh" "${target:-status}" "$extra" ;;
+        bios)         bash "$PZ_ROOT/linux/emulation/bios.sh" "${target:-status}" "$extra" ;;
+        switch)       bash "$PZ_ROOT/linux/emulation/bios.sh" "switch-${target:-status}" "$extra" ;;
+        setup|install) bash "$PZ_ROOT/linux/emulation/setup-emulation.sh" "${target:-install}" ;;
+        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|eden|bios|switch|setup)"; return 1 ;;
+    esac
+}
+
+cmd_ai() {
+    local sub="${1:-}" target="${2:-}"
+    [ -z "$sub" ] && { pz_error "usage: pz ai (setup|secrets|mcp) ..."; return 1; }
+    case "$sub" in
+        setup)
+            [ -z "$target" ] && target="all"
+            case "$target" in
+                ollama)   bash "$PZ_ROOT/linux/ai/setup-ollama.sh" ;;
+                webui)    bash "$PZ_ROOT/linux/ai/setup-open-webui.sh" ;;
+                claude)   bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" ;;
+                opencode) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" ;;
+                all)
+                    bash "$PZ_ROOT/linux/ai/setup-ollama.sh"
+                    bash "$PZ_ROOT/linux/ai/setup-open-webui.sh"
+                    bash "$PZ_ROOT/linux/ai/setup-claude-code.sh"
+                    bash "$PZ_ROOT/linux/ai/setup-opencode.sh"
+                    ;;
+                *) pz_error "unknown tool: $target"; return 1 ;;
+            esac
+            ;;
+        secrets)
+            case "${target:-rotate}" in
+                rotate) bash "$PZ_ROOT/linux/ai/rotate-secrets.sh" ;;
+                *) pz_error "usage: pz ai secrets rotate"; return 1 ;;
+            esac
+            ;;
+        mcp)
+            case "${target:-list}" in
+                install) bash "$PZ_ROOT/linux/ai/mcp-manager.sh" install "${3:-}" ;;
+                list)    bash "$PZ_ROOT/linux/ai/mcp-manager.sh" list ;;
+                remove)  bash "$PZ_ROOT/linux/ai/mcp-manager.sh" remove "${3:-}" ;;
+                *)       pz_error "usage: pz ai mcp (install|list|remove) [name]"; return 1 ;;
+            esac
+            ;;
+        *) pz_error "unknown ai subcommand: $sub"; return 1 ;;
+    esac
+}
+
+cmd_doctor() {
+    bash "$PZ_ROOT/linux/audit/doctor.sh"
+}
+
+cmd_support_bundle() {
+    bash "$PZ_ROOT/linux/audit/support-bundle.sh"
+}
+
+cmd_repair_plan() {
+    bash "$PZ_ROOT/linux/audit/repair-plan.sh"
+}
+
+cmd_tune() {
+    local area="${1:-}"
+    [ -z "$area" ] && { pz_error "usage: pz tune (browser|gaming|dev)"; return 1; }
+    case "$area" in
+        browser) bash "$PZ_ROOT/linux/tuning/browser-hardening.sh" ;;
+        gaming)  bash "$PZ_ROOT/linux/tuning/gaming-tweaks.sh" ;;
+        dev)     bash "$PZ_ROOT/linux/tuning/dev-tweaks.sh" ;;
+        *)       pz_error "unknown tune area: $area"; return 1 ;;
+    esac
+}
+
+main() {
+    local cmd="${1:-help}"
+    shift 2>/dev/null || true
+    case "$cmd" in
+        install)       cmd_install "$@" ;;
+        steamdeck)     cmd_steamdeck "$@" ;;
+        emulation)     cmd_emulation "$@" ;;
+        ai)            cmd_ai "$@" ;;
+        doctor)        cmd_doctor "$@" ;;
+        support-bundle) cmd_support_bundle "$@" ;;
+        repair-plan)   cmd_repair_plan "$@" ;;
+        tune)          cmd_tune "$@" ;;
+        version|--version|-v) cmd_version ;;
+        help|--help|-h|"") usage ;;
+        *)             pz_error "unknown command: $cmd"; usage; return 1 ;;
+    esac
+}
+
+main "$@"
