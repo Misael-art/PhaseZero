@@ -16,10 +16,15 @@ EDEN_KEYS="$EDEN_SHARE/keys"
 EDEN_FIRMWARE="$EDEN_SHARE/nand/system/Contents/registered"
 
 write_eden_wrapper() {
+    bash "$PZ_ROOT/linux/emulation/performance.sh" apply >/dev/null
     pz_emulation_write_file "$EDEN_WRAPPER" 0755 <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 app="$EDEN_LINK"
+performance="$PZ_LOCAL_BIN/phasezero-emulation-launch"
+if [ -x "\$performance" ]; then
+    exec "\$performance" switch -- "\$app" "\$@"
+fi
 if command -v gamemoderun >/dev/null 2>&1; then
     exec env MANGOHUD=1 gamemoderun "\$app" "\$@"
 fi
@@ -42,6 +47,8 @@ EOF
 }
 
 configure_eden_dirs() {
+    [ -L "$EDEN_KEYS" ] && rm -f "$EDEN_KEYS"
+    [ -L "$EDEN_FIRMWARE" ] && rm -f "$EDEN_FIRMWARE"
     install -d "$EDEN_SHARE" "$EDEN_CONFIG" "$EDEN_KEYS" "$EDEN_FIRMWARE"
     jq -n \
         --arg root "$PZ_EMULATION_ROOT" \
@@ -54,7 +61,31 @@ configure_eden_dirs() {
 }
 
 sync_eden_user_content() {
+    local ryujinx r_keys r_fw
+    ryujinx=$(pz_emulation_switch_ryujinx_paths)
+
+    if [ "$ryujinx" != "null" ]; then
+        r_keys=$(jq -r '.keys // empty' <<< "$ryujinx")
+        r_fw=$(jq -r '.firmware // empty' <<< "$ryujinx")
+
+        if [ -n "$r_keys" ]; then
+            install -d "$(dirname "$EDEN_KEYS")"
+            rm -rf "$EDEN_KEYS"
+            ln -sfn "$r_keys" "$EDEN_KEYS"
+            pz_info "Eden keys → symlink to Ryujinx"
+        fi
+        if [ -n "$r_fw" ]; then
+            install -d "$(dirname "$EDEN_FIRMWARE")"
+            rm -rf "$EDEN_FIRMWARE"
+            ln -sfn "$r_fw" "$EDEN_FIRMWARE"
+            pz_info "Eden firmware → symlink to Ryujinx"
+        fi
+        return 0
+    fi
+
     local key
+    [ -L "$EDEN_KEYS" ] && rm -f "$EDEN_KEYS"
+    [ -L "$EDEN_FIRMWARE" ] && rm -f "$EDEN_FIRMWARE"
     install -d "$EDEN_KEYS" "$EDEN_FIRMWARE"
     for key in prod.keys title.keys; do
         [ -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" ] && cp -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" "$EDEN_KEYS/$key"

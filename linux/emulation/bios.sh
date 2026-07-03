@@ -31,25 +31,22 @@ copy_key_file() {
     esac
 }
 
-sync_eden_keys() {
-    local key
-    install -d "$EDEN_KEYS"
-    for key in prod.keys title.keys; do
-        [ -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" ] && cp -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" "$EDEN_KEYS/$key"
-    done
-    return 0
-}
+sync_eden_keys() { bash "$PZ_ROOT/linux/emulation/eden.sh" configure; }
 
-sync_citron_keys() {
-    local key
-    install -d "$CITRON_KEYS"
-    for key in prod.keys title.keys; do
-        [ -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" ] && cp -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" "$CITRON_KEYS/$key"
-    done
-    return 0
-}
+sync_citron_keys() { bash "$PZ_ROOT/linux/emulation/citron.sh" configure; }
 
 import_switch_keys() {
+    local ryujinx
+    ryujinx=$(pz_emulation_switch_ryujinx_paths)
+
+    if [ "$ryujinx" != "null" ] && jq -e '.hasKeys == true' <<< "$ryujinx" >/dev/null 2>&1; then
+        pz_info "Ryujinx keys found at $(jq -r '.keys' <<< "$ryujinx")"
+        pz_info "Sync via symlink (sem duplicação)"
+        sync_eden_keys
+        sync_citron_keys
+        return 0
+    fi
+
     local found=0 file
     [ -n "$SOURCE" ] || { pz_error "usage: pz emulation switch import-keys <local-path>"; return 1; }
     pz_emulation_require_local_source "$SOURCE"
@@ -86,17 +83,22 @@ extract_or_copy_firmware() {
     esac
 }
 
-sync_eden_firmware() {
-    install -d "$EDEN_FIRMWARE"
-    find "$PZ_EMULATION_ROOT/firmware/switch/firmware" -type f -name '*.nca' -exec cp -n {} "$EDEN_FIRMWARE"/ \; 2>/dev/null || true
-}
+sync_eden_firmware() { bash "$PZ_ROOT/linux/emulation/eden.sh" configure; }
 
-sync_citron_firmware() {
-    install -d "$CITRON_FIRMWARE"
-    find "$PZ_EMULATION_ROOT/firmware/switch/firmware" -type f -name '*.nca' -exec cp -n {} "$CITRON_FIRMWARE"/ \; 2>/dev/null || true
-}
+sync_citron_firmware() { bash "$PZ_ROOT/linux/emulation/citron.sh" configure; }
 
 import_switch_firmware() {
+    local ryujinx
+    ryujinx=$(pz_emulation_switch_ryujinx_paths)
+
+    if [ "$ryujinx" != "null" ] && jq -e '.hasFirmware == true' <<< "$ryujinx" >/dev/null 2>&1; then
+        pz_info "Ryujinx firmware found at $(jq -r '.firmware' <<< "$ryujinx")"
+        pz_info "Sync via symlink (sem duplicação)"
+        sync_eden_firmware
+        sync_citron_firmware
+        return 0
+    fi
+
     [ -n "$SOURCE" ] || { pz_error "usage: pz emulation switch import-firmware <local-path>"; return 1; }
     pz_emulation_require_local_source "$SOURCE"
     pz_emulation_ensure_layout

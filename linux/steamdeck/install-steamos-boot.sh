@@ -1,0 +1,387 @@
+#!/usr/bin/env bash
+# install-steamos-boot.sh - install GRUB entry for SteamOS-like console boot
+set -euo pipefail
+
+PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$PZ_ROOT/linux/lib/common.sh"
+
+ACTION="${1:-status}"
+TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
+[ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
+
+HELPER_SOURCE="$PZ_ROOT/linux/steamdeck/steamos-boot-prepare.sh"
+SESSION_SOURCE="$PZ_ROOT/linux/steamdeck/steamos-session.sh"
+SESSION_SELECT_SOURCE="$PZ_ROOT/linux/steamdeck/os-session-select.sh"
+HELPER_TARGET="/usr/local/lib/phasezero/steamos-boot-prepare"
+SESSION_TARGET="/usr/local/lib/phasezero/steamos-session"
+SESSION_SELECT_TARGET="/usr/lib/os-session-select"
+SERVICE_FILE="/etc/systemd/system/phasezero-steamos-boot-prepare.service"
+SESSION_FILE="/usr/share/wayland-sessions/phasezero-steamos.desktop"
+GRUB_SCRIPT="/etc/grub.d/42_phasezero_steamos"
+GRUB_HANDHELD_DROPIN="/etc/default/grub.d/09-phasezero-handheld.cfg"
+GRUB_CFG="/boot/grub/grub.cfg"
+GRUB_ENV="/boot/grub/grubenv"
+SDDM_CONF="/etc/sddm.conf.d/90-phasezero-steamos.conf"
+BOOT_ENTRY="PhaseZero SteamOS Console"
+
+need_root() {
+    [ "$EUID" -eq 0 ] && return 0
+    pz_error "root required. run: sudo $PZ_ROOT/linux/steamdeck/install-steamos-boot.sh install"
+    return 1
+}
+
+need_root_action() {
+    local action="$1"
+    shift || true
+    [ "$EUID" -eq 0 ] && return 0
+
+    if command -v pkexec >/dev/null 2>&1 && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then
+        exec pkexec bash "$0" "$action" "$@"
+    fi
+
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo bash "$0" "$action" "$@"
+    fi
+
+    pz_error "root required for $action. install pkexec or run: sudo $PZ_ROOT/linux/steamdeck/install-steamos-boot.sh $action"
+    return 1
+}
+
+latest_kernel_version() {
+    find /boot -maxdepth 1 -type f -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null |
+        sort -V | tail -1 | sed 's/^vmlinuz-//'
+}
+
+root_uuid() {
+    findmnt -no UUID / 2>/dev/null | head -1
+}
+
+root_subvol() {
+    findmnt -no OPTIONS / 2>/dev/null | tr ',' '\n' | awk -F= '$1 == "subvol" {print $2; exit}'
+}
+
+target_home() {
+    getent passwd "$TARGET_USER" | cut -d: -f6
+}
+
+steam_plus_fallback_content() {
+    cat <<'EOF'
+#!/bin/bash
+# PhaseZero managed: Big Picture Plus fallback when OpenGamepadUI is absent.
+
+if ! command -v opengamepadui >/dev/null 2>&1; then
+    CLIENTCMD="steam -gamepadui -steamos3"
+fi
+EOF
+}
+
+install_steam_plus_fallback() {
+    local home dir file
+    home="$(target_home)"
+    [ -n "$home" ] || { pz_warn "could not resolve home for $TARGET_USER; skipped Steam Plus fallback"; return 0; }
+    dir="$home/.config/gamescope-session-plus/sessions.d"
+    file="$dir/steam-plus"
+    install -d -o "$TARGET_USER" -g "$TARGET_USER" "$dir"
+    steam_plus_fallback_content > "$file"
+    chown "$TARGET_USER:$TARGET_USER" "$file"
+    chmod 0644 "$file"
+    pz_info "Steam Plus fallback installed: $file"
+}
+
+boot_reboot_desktop_content() {
+    cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=PhaseZero Reboot to SteamOS Plus
+Comment=Set one-shot GRUB boot to SteamOS Plus and reboot
+Exec=pkexec bash $PZ_ROOT/linux/steamdeck/install-steamos-boot.sh next-reboot
+Terminal=false
+Categories=Game;System;
+EOF
+}
+
+session_desktop_content() {
+    cat <<EOF
+[Desktop Entry]
+Name=PhaseZero SteamOS Console
+Comment=Steam Gamepad UI with direct desktop handoff
+Exec=$SESSION_TARGET
+Type=Application
+DesktopNames=gamescope
+EOF
+}
+
+grub_handheld_dropin_content() {
+    local product gfxmode
+    product="$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || true)"
+    gfxmode="${PZ_GRUB_HANDHELD_GFXMODE:-auto}"
+    case "$product" in
+        Jupiter|Galileo) gfxmode="${PZ_GRUB_HANDHELD_GFXMODE:-800x600,640x480,auto}" ;;
+    esac
+    cat <<EOF
+# PhaseZero managed: portable GRUB input and landscape-safe framebuffer.
+GRUB_TIMEOUT_STYLE=menu
+GRUB_TIMEOUT=${PZ_GRUB_HANDHELD_TIMEOUT:-5}
+GRUB_GFXMODE="$gfxmode"
+GRUB_GFXPAYLOAD_LINUX=keep
+GRUB_TERMINAL_INPUT="console usb_keyboard at_keyboard"
+GRUB_PRELOAD_MODULES="\${GRUB_PRELOAD_MODULES:-part_gpt part_msdos} usb usb_keyboard ehci ohci uhci at_keyboard"
+EOF
+}
+
+install_boot_desktop_entry() {
+    local home dir file
+    home="$(target_home)"
+    [ -n "$home" ] || { pz_warn "could not resolve home for $TARGET_USER; skipped SteamOS reboot launcher"; return 0; }
+    dir="$home/.local/share/applications"
+    file="$dir/phasezero-reboot-steamos-plus.desktop"
+    install -d -o "$TARGET_USER" -g "$TARGET_USER" "$dir"
+    boot_reboot_desktop_content > "$file"
+    chown "$TARGET_USER:$TARGET_USER" "$file"
+    chmod 0644 "$file"
+    pz_info "SteamOS reboot launcher installed: $file"
+}
+
+grub_script_content() {
+    local uuid version kernel initrd kernel_rel initrd_rel amd_ucode_rel intel_ucode_rel subvol rootflags=""
+    uuid="$(root_uuid)"
+    version="$(latest_kernel_version)"
+    [ -n "$uuid" ] || { pz_error "could not resolve root UUID"; return 1; }
+    [ -n "$version" ] || { pz_error "could not resolve /boot/vmlinuz-*"; return 1; }
+    kernel="/boot/vmlinuz-$version"
+    initrd="/boot/initramfs-$version.img"
+    [ -f "$kernel" ] || { pz_error "missing kernel: $kernel"; return 1; }
+    [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
+    kernel_rel="$(grub-mkrelpath "$kernel")"
+    initrd_rel="$(grub-mkrelpath "$initrd")"
+    amd_ucode_rel="$([ -f /boot/amd-ucode.img ] && grub-mkrelpath /boot/amd-ucode.img || true)"
+    intel_ucode_rel="$([ -f /boot/intel-ucode.img ] && grub-mkrelpath /boot/intel-ucode.img || true)"
+    subvol="$(root_subvol || true)"
+    [ -n "$subvol" ] && rootflags=" rootflags=subvol=$subvol"
+
+    cat <<EOF
+#!/usr/bin/env bash
+exec tail -n +3 "\$0"
+# PhaseZero managed GRUB entry. Re-run linux/pz steamdeck boot install after kernel changes.
+menuentry '$BOOT_ENTRY' --class steamos --class gnu-linux --class gnu --class os {
+    insmod part_gpt
+    insmod btrfs
+    search --no-floppy --fs-uuid --set=root $uuid
+    echo 'Booting PhaseZero SteamOS Console...'
+    linux $kernel_rel root=UUID=$uuid rw$rootflags quiet splash phasezero.steamos=1
+    initrd $amd_ucode_rel $intel_ucode_rel $initrd_rel
+}
+EOF
+}
+
+service_content() {
+    cat <<EOF
+[Unit]
+Description=PhaseZero SteamOS-like GRUB boot session switch
+DefaultDependencies=no
+After=local-fs.target
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+Environment=PZ_STEAMOS_BOOT_USER=$TARGET_USER
+ExecStart=$HELPER_TARGET
+
+[Install]
+WantedBy=graphical.target
+EOF
+}
+
+install_boot() {
+    need_root
+    install -d /usr/local/lib/phasezero
+    install -m 0755 "$HELPER_SOURCE" "$HELPER_TARGET"
+    install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
+    install -m 0755 "$SESSION_SELECT_SOURCE" "$SESSION_SELECT_TARGET"
+    install -d "$(dirname "$SESSION_FILE")" "$(dirname "$GRUB_HANDHELD_DROPIN")"
+    session_desktop_content > "$SESSION_FILE"
+    chmod 0644 "$SESSION_FILE"
+    grub_handheld_dropin_content > "$GRUB_HANDHELD_DROPIN"
+    chmod 0644 "$GRUB_HANDHELD_DROPIN"
+    service_content > "$SERVICE_FILE"
+    chmod 0644 "$SERVICE_FILE"
+    install_steam_plus_fallback
+    install_boot_desktop_entry
+    grub_script_content > "$GRUB_SCRIPT"
+    chmod 0755 "$GRUB_SCRIPT"
+    systemctl daemon-reload
+    systemctl enable phasezero-steamos-boot-prepare.service >/dev/null
+    if command -v update-grub >/dev/null 2>&1; then
+        update-grub
+    else
+        grub-mkconfig -o /boot/grub/grub.cfg
+    fi
+    pz_info "PhaseZero SteamOS GRUB boot entry installed"
+}
+
+refresh_grub_config() {
+    if command -v update-grub >/dev/null 2>&1; then
+        update-grub
+    else
+        grub-mkconfig -o "$GRUB_CFG"
+    fi
+}
+
+grub_cfg_entry_state() {
+    if [ -r "$GRUB_CFG" ]; then
+        grep -Fq "menuentry '$BOOT_ENTRY'" "$GRUB_CFG" && echo present || echo missing
+    elif [ "$EUID" -eq 0 ] && [ -f "$GRUB_CFG" ]; then
+        grep -Fq "menuentry '$BOOT_ENTRY'" "$GRUB_CFG" && echo present || echo missing
+    else
+        echo unknown-permission
+    fi
+}
+
+ensure_boot_entry_ready() {
+    local state
+    if [ ! -x "$HELPER_TARGET" ] || [ ! -x "$GRUB_SCRIPT" ]; then
+        pz_warn "SteamOS GRUB boot files incomplete; reinstalling"
+        install_boot
+        return 0
+    fi
+
+    state="$(grub_cfg_entry_state)"
+    if [ "$state" = "missing" ]; then
+        pz_warn "SteamOS GRUB menuentry missing from $GRUB_CFG; regenerating"
+        refresh_grub_config
+        state="$(grub_cfg_entry_state)"
+    fi
+
+    if [ "$state" != "present" ]; then
+        pz_error "SteamOS GRUB menuentry not confirmed: $state"
+        return 1
+    fi
+}
+
+set_next_boot_root() {
+    command -v grub-reboot >/dev/null 2>&1 || { pz_error "grub-reboot missing"; return 1; }
+    ensure_boot_entry_ready
+    grub-reboot "$BOOT_ENTRY"
+    pz_info "next boot set to: $BOOT_ENTRY"
+    pz_info "run: systemctl reboot"
+}
+
+set_next_boot() {
+    need_root_action next
+    set_next_boot_root
+}
+
+set_default_boot() {
+    need_root_action set-default
+    command -v grub-set-default >/dev/null 2>&1 || { pz_error "grub-set-default missing"; return 1; }
+    ensure_boot_entry_ready
+    grub-set-default "$BOOT_ENTRY"
+    pz_warn "permanent GRUB default set to: $BOOT_ENTRY"
+}
+
+clear_next_boot() {
+    need_root_action clear-next
+    command -v grub-editenv >/dev/null 2>&1 || { pz_error "grub-editenv missing"; return 1; }
+    grub-editenv - unset next_entry >/dev/null 2>&1 || true
+    pz_info "cleared GRUB one-shot next_entry"
+}
+
+next_reboot() {
+    need_root_action next-reboot
+    set_next_boot_root
+    pz_info "rebooting into SteamOS Plus"
+    systemctl reboot
+}
+
+remove_boot() {
+    need_root
+    systemctl disable phasezero-steamos-boot-prepare.service >/dev/null 2>&1 || true
+    rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$SESSION_FILE" "$SESSION_TARGET" "$GRUB_HANDHELD_DROPIN"
+    if [ -f "$SESSION_SELECT_TARGET" ] && grep -q 'PhaseZero managed' "$SESSION_SELECT_TARGET" 2>/dev/null; then
+        rm -f "$SESSION_SELECT_TARGET"
+    fi
+    if [ -f "$SDDM_CONF" ] && grep -q 'PhaseZero managed' "$SDDM_CONF" 2>/dev/null; then
+        rm -f "$SDDM_CONF"
+    fi
+    systemctl daemon-reload
+    if command -v update-grub >/dev/null 2>&1; then
+        update-grub
+    else
+        grub-mkconfig -o /boot/grub/grub.cfg
+    fi
+    pz_info "PhaseZero SteamOS GRUB boot entry removed"
+}
+
+status_boot() {
+    local home cmdline_marker="no" grub_default="" grub_timeout="" grub_entry_state="" grub_next_entry="" grub_saved_entry=""
+    if grep -qw 'phasezero.steamos=1' /proc/cmdline 2>/dev/null; then
+        cmdline_marker="yes"
+    fi
+    grub_default="$(awk -F= '$1 == "GRUB_DEFAULT" {gsub(/\047|"/, "", $2); print $2; exit}' /etc/default/grub 2>/dev/null || true)"
+    grub_timeout="$(
+        (
+            [ -f /etc/default/grub ] && . /etc/default/grub
+            for dropin in /etc/default/grub.d/*.cfg; do
+                [ -f "$dropin" ] && . "$dropin"
+            done
+            printf '%s\n' "${GRUB_TIMEOUT:-}"
+        ) 2>/dev/null
+    )"
+    grub_entry_state="$(grub_cfg_entry_state)"
+    if command -v grub-editenv >/dev/null 2>&1; then
+        grub_next_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}')"
+        grub_saved_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "saved_entry" {print $2; exit}')"
+    fi
+    echo "helper: $HELPER_TARGET"
+    [ -x "$HELPER_TARGET" ] && echo "helper_installed: yes" || echo "helper_installed: no"
+    [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
+    systemctl is-enabled phasezero-steamos-boot-prepare.service 2>/dev/null || true
+    [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
+    echo "grub_cfg_entry: $grub_entry_state"
+    echo "grub_default: ${grub_default:-unknown}"
+    echo "grub_timeout: ${grub_timeout:-unknown}"
+    echo "grub_next_entry: ${grub_next_entry:-none}"
+    echo "grub_saved_entry: ${grub_saved_entry:-none}"
+    [ -f "$SDDM_CONF" ] && echo "active_sddm_steamos_conf: yes" || echo "active_sddm_steamos_conf: no"
+    echo "current_boot_steamos: $cmdline_marker"
+    echo "target_user: $TARGET_USER"
+    home="$(target_home || true)"
+    if [ -n "${home:-}" ] && [ -f "$home/.config/gamescope-session-plus/sessions.d/steam-plus" ]; then
+        echo "steam_plus_fallback: yes"
+    else
+        echo "steam_plus_fallback: no"
+    fi
+    [ -x "$SESSION_TARGET" ] && echo "session_wrapper: yes" || echo "session_wrapper: no"
+    [ -x "$SESSION_SELECT_TARGET" ] && echo "session_select_hook: yes" || echo "session_select_hook: no"
+    [ -f "$GRUB_HANDHELD_DROPIN" ] && echo "grub_handheld_profile: yes" || echo "grub_handheld_profile: no"
+    echo "session_preference: phasezero-steamos.desktop"
+    echo "deck_grub_input: console+usb-hid; analog unsupported by GRUB"
+    echo "recommended_direct_boot: sudo $PZ_ROOT/linux/steamdeck/install-steamos-boot.sh next-reboot"
+}
+
+dry_run_boot() {
+    echo "PhaseZero SteamOS boot dry-run"
+    echo "  helper: $HELPER_TARGET"
+    echo "  service: $SERVICE_FILE"
+    echo "  grub: $GRUB_SCRIPT"
+    echo "  target_user: $TARGET_USER"
+    echo "  root_uuid: $(root_uuid || true)"
+    echo "  kernel: $(latest_kernel_version || true)"
+    echo "  session: phasezero-steamos.desktop -> gamescope -> direct Plasma handoff"
+    echo "  handheld GRUB: 800x600 landscape-safe mode on Valve Jupiter/Galileo; console+USB HID input"
+    echo "  one-shot boot: sudo $PZ_ROOT/linux/steamdeck/install-steamos-boot.sh next"
+    echo "  one-shot reboot: sudo $PZ_ROOT/linux/steamdeck/install-steamos-boot.sh next-reboot"
+    echo "  note: Steam Deck controller input is not reliable inside GRUB; use one-shot boot from Linux"
+}
+
+case "$ACTION" in
+    install) install_boot ;;
+    remove) remove_boot ;;
+    status) status_boot ;;
+    next|set-next) set_next_boot ;;
+    next-reboot|reboot-steamos|reboot) next_reboot ;;
+    set-default) set_default_boot ;;
+    clear-next) clear_next_boot ;;
+    dry-run|plan) dry_run_boot ;;
+    *) pz_error "usage: install-steamos-boot.sh (install|remove|status|next|next-reboot|set-default|clear-next|dry-run)"; exit 1 ;;
+esac

@@ -1,0 +1,13 @@
+[Unit]
+Description=PhaseZero Steam Deck mode watcher
+Documentation=https://github.com/anomalyco/PhaseZero
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/share/phasezero-linux/linux/steamdeck/mode-watcher.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -7,4 +7,5 @@ Pattern: [thing] [action] [reason]. [next step].
 ACTIVE EVERY RESPONSE. No revert after many turns. No filler drift.
 Code/commits/PRs: normal.
 Off: "stop caveman" / "normal mode".
+
 <!-- END BOOTSTRAP CAVEMAN -->

@@ -1,0 +1,863 @@
+#!/usr/bin/env bash
+# waydroid.sh - Waydroid automation and direct GRUB boot for PhaseZero Linux hosts
+set -euo pipefail
+
+PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$PZ_ROOT/linux/lib/common.sh"
+
+ACTION="${1:-status}"
+[ $# -gt 0 ] && shift || true
+
+TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
+[ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
+if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    target_home_root="$(getent passwd "$TARGET_USER" | cut -d: -f6 || true)"
+    [ -n "$target_home_root" ] && export HOME="$target_home_root"
+fi
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero"
+CONFIG_FILE="${PZ_WAYDROID_CONFIG:-$CONFIG_DIR/waydroid.conf}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/waydroid"
+APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+BOOT_HELPER_SOURCE="$PZ_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
+SESSION_SOURCE="$PZ_ROOT/linux/waydroid/waydroid-session.sh"
+BOOT_HELPER_TARGET="/usr/local/lib/phasezero/waydroid-boot-prepare"
+SESSION_TARGET="/usr/local/lib/phasezero/waydroid-session"
+ROOT_ENV_FILE="/etc/phasezero/waydroid.env"
+SERVICE_FILE="/etc/systemd/system/phasezero-waydroid-boot-prepare.service"
+WAYLAND_SESSION_FILE="/usr/share/wayland-sessions/phasezero-waydroid.desktop"
+XSESSION_FILE="/usr/share/xsessions/phasezero-waydroid.desktop"
+GRUB_SCRIPT="/etc/grub.d/44_phasezero_waydroid"
+GRUB_CFG="/boot/grub/grub.cfg"
+SDDM_CONF="/etc/sddm.conf.d/92-phasezero-waydroid.conf"
+BOOT_ENTRY="PhaseZero Waydroid"
+
+DRY_RUN="${PZ_DRY_RUN:-0}"
+JSON_OUT=0
+WITH_BOOT=0
+INIT_ANDROID=0
+IMAGE_TYPE="${PZ_WAYDROID_IMAGE_TYPE:-VANILLA}"
+SESSION_RESTARTS="${PZ_WAYDROID_SESSION_RESTARTS:-3}"
+INIT_ATTEMPTS="${PZ_WAYDROID_INIT_ATTEMPTS:-3}"
+PREFETCH_IMAGES="${PZ_WAYDROID_PREFETCH_IMAGES:-1}"
+PREINSTALLED_DIR="${PZ_WAYDROID_PREINSTALLED_DIR:-/etc/waydroid-extra/images}"
+OPTIMIZE_HOST="${PZ_WAYDROID_OPTIMIZE:-1}"
+PREFETCH_SYSTEM_PATH=""
+PREFETCH_VENDOR_PATH=""
+
+usage() {
+    cat <<EOF
+PhaseZero Waydroid - Android container automation
+
+Usage:
+  pz waydroid status
+  pz waydroid plan [--json]
+  pz waydroid install [--with-boot] [--init] [--image-type VANILLA|GAPPS]
+  pz waydroid repair [--init] [--image-type VANILLA|GAPPS]
+  pz waydroid optimize [--dry-run]
+  pz waydroid launch
+  pz waydroid boot status
+  pz waydroid boot install
+  pz waydroid boot next
+  pz waydroid boot next-reboot
+  pz waydroid boot remove
+  pz waydroid boot dry-run
+
+Notes:
+  Direct boot adds a GRUB entry with phasezero.waydroid=1.
+  SDDM autologin starts a minimal Wayland kiosk session for Waydroid.
+  Package/profile install is separate: pz install waydroid-linux.
+EOF
+}
+
+parse_options() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) JSON_OUT=1; shift ;;
+            --dry-run|-n) DRY_RUN=1; shift ;;
+            --with-boot) WITH_BOOT=1; shift ;;
+            --init) INIT_ANDROID=1; shift ;;
+            --image-type) IMAGE_TYPE="${2:-VANILLA}"; shift 2 ;;
+            --image-type=*) IMAGE_TYPE="${1#*=}"; shift ;;
+            --restart-attempts) SESSION_RESTARTS="${2:-3}"; shift 2 ;;
+            --restart-attempts=*) SESSION_RESTARTS="${1#*=}"; shift ;;
+            --init-attempts) INIT_ATTEMPTS="${2:-3}"; shift 2 ;;
+            --init-attempts=*) INIT_ATTEMPTS="${1#*=}"; shift ;;
+            --no-prefetch) PREFETCH_IMAGES=0; shift ;;
+            --optimize) OPTIMIZE_HOST=1; shift ;;
+            --no-optimize) OPTIMIZE_HOST=0; shift ;;
+            --help|-h) usage; exit 0 ;;
+            *) pz_error "unknown waydroid option: $1"; return 1 ;;
+        esac
+    done
+}
+
+command_path() {
+    command -v "$1" 2>/dev/null || true
+}
+
+compositor_path() {
+    local path
+    path="$(command_path cage)"
+    [ -n "$path" ] && { printf '%s\n' "$path"; return 0; }
+    path="$(command_path kwin_wayland)"
+    [ -n "$path" ] && { printf '%s\n' "$path"; return 0; }
+    path="$(command_path weston)"
+    [ -n "$path" ] && { printf '%s\n' "$path"; return 0; }
+    return 0
+}
+
+target_home() {
+    getent passwd "$TARGET_USER" | cut -d: -f6
+}
+
+chown_target_user() {
+    [ "$EUID" -eq 0 ] || return 0
+    chown "$TARGET_USER:$TARGET_USER" "$@" 2>/dev/null || true
+}
+
+load_config() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    # PhaseZero writes this file as shell-escaped KEY=VALUE pairs.
+    # shellcheck disable=SC1090
+    . "$CONFIG_FILE"
+}
+
+effective_config() {
+    load_config
+    IMAGE_TYPE="${PZ_WAYDROID_IMAGE_TYPE:-$IMAGE_TYPE}"
+    SESSION_RESTARTS="${PZ_WAYDROID_SESSION_RESTARTS:-$SESSION_RESTARTS}"
+    INIT_ATTEMPTS="${PZ_WAYDROID_INIT_ATTEMPTS:-$INIT_ATTEMPTS}"
+    PREFETCH_IMAGES="${PZ_WAYDROID_PREFETCH_IMAGES:-$PREFETCH_IMAGES}"
+    PREINSTALLED_DIR="${PZ_WAYDROID_PREINSTALLED_DIR:-$PREINSTALLED_DIR}"
+    OPTIMIZE_HOST="${PZ_WAYDROID_OPTIMIZE:-$OPTIMIZE_HOST}"
+}
+
+write_config() {
+    install -d "$CONFIG_DIR"
+    {
+        printf '# PhaseZero managed Waydroid config\n'
+        printf 'PZ_WAYDROID_IMAGE_TYPE=%q\n' "$IMAGE_TYPE"
+        printf 'PZ_WAYDROID_SESSION_RESTARTS=%q\n' "$SESSION_RESTARTS"
+        printf 'PZ_WAYDROID_INIT_ATTEMPTS=%q\n' "$INIT_ATTEMPTS"
+        printf 'PZ_WAYDROID_PREFETCH_IMAGES=%q\n' "$PREFETCH_IMAGES"
+        printf 'PZ_WAYDROID_PREINSTALLED_DIR=%q\n' "$PREINSTALLED_DIR"
+        printf 'PZ_WAYDROID_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
+    } > "$CONFIG_FILE"
+    chown_target_user "$CONFIG_FILE"
+    pz_info "wrote $CONFIG_FILE"
+}
+
+run_privileged_noninteractive() {
+    if [ "$EUID" -eq 0 ]; then
+        "$@"
+        return $?
+    fi
+    if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        sudo -n "$@"
+        return $?
+    fi
+    return 1
+}
+
+write_root_value() {
+    local path="$1" value="$2" label="${3:-$path}"
+    [ -e "$path" ] || return 0
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would set $label -> $value"
+        return 0
+    fi
+    if [ -w "$path" ]; then
+        printf '%s\n' "$value" > "$path" 2>/dev/null || true
+        return 0
+    fi
+    if run_privileged_noninteractive tee "$path" >/dev/null <<< "$value"; then
+        return 0
+    fi
+    pz_warn "$label requires root; skipped non-interactive write"
+}
+
+sysctl_set_noninteractive() {
+    local key="$1" value="$2"
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would sysctl $key=$value"
+        return 0
+    fi
+    if [ "$EUID" -eq 0 ]; then
+        sysctl -w "$key=$value" >/dev/null 2>&1 || true
+    elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        sudo -n sysctl -w "$key=$value" >/dev/null 2>&1 || true
+    fi
+}
+
+apply_host_optimizations() {
+    [ "$OPTIMIZE_HOST" = "1" ] || return 0
+    pz_info "applying Waydroid host optimizations"
+    command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl set performance >/dev/null 2>&1 || true
+    sysctl_set_noninteractive vm.swappiness 1
+    sysctl_set_noninteractive vm.vfs_cache_pressure 50
+    sysctl_set_noninteractive vm.dirty_background_ratio 5
+    sysctl_set_noninteractive vm.dirty_ratio 20
+    sysctl_set_noninteractive kernel.nmi_watchdog 0
+    write_root_value /sys/kernel/mm/transparent_hugepage/enabled madvise "transparent hugepages mode"
+    write_root_value /sys/kernel/mm/transparent_hugepage/defrag madvise "transparent hugepages defrag"
+    local governor
+    for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -e "$governor" ] || continue
+        write_root_value "$governor" performance "CPU governor"
+    done
+}
+
+binder_filesystem_available() {
+    grep -qw binder /proc/filesystems 2>/dev/null
+}
+
+binder_devices_available() {
+    [ -e /dev/binder ] || [ -e /dev/binderfs/binder ] || [ -e /dev/vndbinder ] || [ -e /dev/hwbinder ]
+}
+
+waydroid_initialized() {
+    [ -e /var/lib/waydroid/waydroid_base.prop ] || return 1
+    if [ -e /var/lib/waydroid/images/system.img ] && [ -e /var/lib/waydroid/images/vendor.img ]; then
+        return 0
+    fi
+    [ -e "$PREINSTALLED_DIR/system.img" ] && [ -e "$PREINSTALLED_DIR/vendor.img" ]
+}
+
+service_state() {
+    local svc="$1" mode="$2" value
+    case "$mode" in
+        active) value="$(systemctl is-active "$svc" 2>/dev/null || true)" ;;
+        enabled) value="$(systemctl is-enabled "$svc" 2>/dev/null || true)" ;;
+        *) value="unknown" ;;
+    esac
+    printf '%s\n' "${value:-unknown}"
+}
+
+install_user_files() {
+    install -d "$APPLICATIONS_DIR" "$SYSTEMD_USER_DIR"
+    cat > "$APPLICATIONS_DIR/phasezero-waydroid.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=PhaseZero Waydroid
+Comment=Start optimized Waydroid Android session
+Exec=$PZ_ROOT/linux/pz waydroid launch
+Terminal=false
+Categories=System;Utility;
+EOF
+    cat > "$APPLICATIONS_DIR/phasezero-reboot-waydroid.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=PhaseZero Reboot to Waydroid
+Comment=Set one-shot GRUB boot to Waydroid and reboot
+Exec=pkexec bash $PZ_ROOT/linux/waydroid/waydroid.sh boot next-reboot
+Terminal=false
+Categories=System;
+EOF
+    cat > "$SYSTEMD_USER_DIR/phasezero-waydroid.service" <<EOF
+[Unit]
+Description=PhaseZero Waydroid optimized session
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$PZ_ROOT/linux/pz waydroid launch
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+    chown_target_user \
+        "$APPLICATIONS_DIR/phasezero-waydroid.desktop" \
+        "$APPLICATIONS_DIR/phasezero-reboot-waydroid.desktop" \
+        "$SYSTEMD_USER_DIR/phasezero-waydroid.service"
+    pz_info "installed Waydroid user launcher and service"
+}
+
+ensure_binder_runtime() {
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would ensure binder runtime"
+        return 0
+    fi
+    if [ "$EUID" -ne 0 ]; then
+        pz_warn "binder runtime setup requires root; skipped"
+        return 0
+    fi
+    modprobe binder_linux devices="binder,hwbinder,vndbinder" >/dev/null 2>&1 || true
+    if [ ! -d /dev/binderfs ] && binder_filesystem_available; then
+        install -d /dev/binderfs
+        mount -t binder binder /dev/binderfs >/dev/null 2>&1 || true
+    fi
+}
+
+ensure_waydroid_service() {
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would enable/start waydroid-container"
+        return 0
+    fi
+    if [ "$EUID" -ne 0 ]; then
+        pz_warn "waydroid-container service setup requires root; skipped"
+        return 0
+    fi
+    systemctl list-unit-files waydroid-container.service >/dev/null 2>&1 || return 0
+    systemctl enable waydroid-container.service >/dev/null 2>&1 || true
+    systemctl start waydroid-container.service >/dev/null 2>&1 || true
+}
+
+waydroid_ota_url() {
+    local image_type="${IMAGE_TYPE^^}"
+    case "$1" in
+        system) printf 'https://ota.waydro.id/system/lineage/waydroid_x86_64/%s.json\n' "$image_type" ;;
+        vendor) printf 'https://ota.waydro.id/vendor/waydroid_x86_64/MAINLINE.json\n' ;;
+    esac
+}
+
+prefetch_waydroid_archive() {
+    local kind="$1" ota metadata url size checksum filename cache_dir cache_path part_path actual_size actual_checksum
+    local sourceforge_path mirror download_url downloaded=0
+    ota="$(waydroid_ota_url "$kind")"
+    metadata="$(curl -fsSL --retry 5 --retry-all-errors --connect-timeout 20 "$ota")" || {
+        pz_warn "Waydroid $kind OTA metadata unavailable: $ota"
+        return 1
+    }
+    url="$(jq -r '.response[0].url // empty' <<< "$metadata")"
+    size="$(jq -r '.response[0].size // 0' <<< "$metadata")"
+    checksum="$(jq -r '.response[0].id // empty' <<< "$metadata")"
+    filename="$(jq -r '.response[0].filename // empty' <<< "$metadata")"
+    [ -n "$url" ] && [ -n "$filename" ] && [ "$size" -gt 0 ] || {
+        pz_warn "Waydroid $kind OTA metadata invalid"
+        return 1
+    }
+    cache_dir="/var/lib/waydroid/cache_http"
+    cache_path="$cache_dir/${filename//\//_}_$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
+    part_path="${cache_path}.part"
+    install -d "$cache_dir"
+    actual_size="$(stat -c %s "$cache_path" 2>/dev/null || echo 0)"
+    if [ "$actual_size" -ne "$size" ]; then
+        pz_info "fetching Waydroid $kind image: expected=$size bytes"
+        rm -f "$part_path"
+        sourceforge_path="${url#*projects/waydroid/files/}"
+        sourceforge_path="${sourceforge_path%/download}"
+        for mirror in ${PZ_WAYDROID_SOURCEFORGE_MIRRORS:-pilotfiber phoenixnap}; do
+            download_url="https://${mirror}.dl.sourceforge.net/project/waydroid/$sourceforge_path"
+            pz_info "trying SourceForge mirror=$mirror"
+            if curl -fsSL --retry 10 --retry-all-errors --connect-timeout 20 \
+                --speed-time 30 --speed-limit 32768 --output "$part_path" "$download_url"; then
+                actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
+                if [ "$actual_size" -eq "$size" ]; then
+                    downloaded=1
+                    break
+                fi
+            fi
+            rm -f "$part_path"
+        done
+        if [ "$downloaded" != "1" ]; then
+            pz_info "trying canonical Waydroid URL"
+            curl -fsSL --retry 10 --retry-all-errors --connect-timeout 20 \
+                --speed-time 30 --speed-limit 32768 --output "$part_path" "$url"
+        fi
+        actual_size="$(stat -c %s "$part_path" 2>/dev/null || echo 0)"
+        [ "$actual_size" -eq "$size" ] || {
+            pz_warn "Waydroid $kind image incomplete: $actual_size/$size bytes"
+            return 1
+        }
+        mv -f "$part_path" "$cache_path"
+    fi
+    actual_size="$(stat -c %s "$cache_path" 2>/dev/null || echo 0)"
+    [ "$actual_size" -eq "$size" ] || {
+        pz_warn "Waydroid $kind image incomplete: $actual_size/$size bytes"
+        return 1
+    }
+    if [ -n "$checksum" ] && [ "${#checksum}" -eq 64 ]; then
+        actual_checksum="$(sha256sum "$cache_path" | awk '{print $1}')"
+        if [ "$actual_checksum" != "$checksum" ]; then
+            rm -f "$cache_path"
+            pz_warn "Waydroid $kind image checksum mismatch"
+            return 1
+        fi
+    fi
+    pz_info "Waydroid $kind image cache verified"
+    case "$kind" in
+        system) PREFETCH_SYSTEM_PATH="$cache_path" ;;
+        vendor) PREFETCH_VENDOR_PATH="$cache_path" ;;
+    esac
+}
+
+prefetch_waydroid_images() {
+    [ "$PREFETCH_IMAGES" = "1" ] || return 0
+    command -v curl >/dev/null 2>&1 || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would resume and verify Waydroid system/vendor image caches"
+        return 0
+    fi
+    prefetch_waydroid_archive system
+    prefetch_waydroid_archive vendor
+    install -d "$PREINSTALLED_DIR"
+    rm -f "$PREINSTALLED_DIR/system.img" "$PREINSTALLED_DIR/vendor.img"
+    unzip -oq "$PREFETCH_SYSTEM_PATH" -d "$PREINSTALLED_DIR"
+    unzip -oq "$PREFETCH_VENDOR_PATH" -d "$PREINSTALLED_DIR"
+    [ -s "$PREINSTALLED_DIR/system.img" ] && [ -s "$PREINSTALLED_DIR/vendor.img" ] || {
+        pz_warn "Waydroid preinstalled image extraction incomplete"
+        return 1
+    }
+    pz_info "Waydroid preinstalled images staged: $PREINSTALLED_DIR"
+}
+
+maybe_init_waydroid() {
+    local attempt
+    [ "$INIT_ANDROID" = "1" ] || return 0
+    if ! command -v waydroid >/dev/null 2>&1; then
+        pz_warn "waydroid command missing; cannot initialize Android image"
+        return 0
+    fi
+    if waydroid_initialized; then
+        pz_info "Waydroid image already initialized"
+        return 0
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would run waydroid init -s $IMAGE_TYPE (attempts=$INIT_ATTEMPTS)"
+        return 0
+    fi
+    if [ "$EUID" -ne 0 ]; then
+        pz_error "root required for Waydroid image init"
+        return 1
+    fi
+    for attempt in $(seq 1 "$INIT_ATTEMPTS"); do
+        pz_info "Waydroid init attempt $attempt/$INIT_ATTEMPTS"
+        prefetch_waydroid_images || pz_warn "resumable prefetch failed; Waydroid downloader will retry"
+        if waydroid init -f -i "$PREINSTALLED_DIR" -s "$IMAGE_TYPE"; then
+            return 0
+        fi
+        waydroid_initialized && return 0
+        sleep 3
+    done
+    pz_error "Waydroid init failed after $INIT_ATTEMPTS attempt(s)"
+    return 1
+}
+
+cmd_install() {
+    parse_options "$@"
+    effective_config
+    write_config
+    install_user_files
+    if [ "$WITH_BOOT" = "1" ]; then
+        install_boot
+    fi
+}
+
+cmd_repair() {
+    parse_options "$@"
+    effective_config
+    write_config
+    install_user_files
+    apply_host_optimizations
+    ensure_binder_runtime
+    ensure_waydroid_service
+    maybe_init_waydroid
+}
+
+cmd_optimize() {
+    parse_options "$@"
+    effective_config
+    apply_host_optimizations
+}
+
+cmd_launch() {
+    parse_options "$@"
+    effective_config
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "$PZ_ROOT/linux/waydroid/waydroid-session.sh"
+        echo "Waydroid launcher dry-run"
+        echo "  waydroid: $(command_path waydroid || true)"
+        echo "  compositor: $(compositor_path || echo missing)"
+        echo "  restart_attempts: $SESSION_RESTARTS"
+        return 0
+    fi
+    write_config
+    install_user_files
+    exec "$PZ_ROOT/linux/waydroid/waydroid-session.sh"
+}
+
+status_json() {
+    effective_config
+    local config="no" waydroid_bin cage_bin weston_bin kwin_bin dbus_bin binder_fs="no" binder_dev="no" initialized="no"
+    local waydroid_active waydroid_enabled boot_helper="no" session_launcher="no" boot_service="no" boot_grub current_marker="no"
+    [ -f "$CONFIG_FILE" ] && config="yes"
+    waydroid_bin="$(command_path waydroid)"
+    cage_bin="$(command_path cage)"
+    weston_bin="$(command_path weston)"
+    kwin_bin="$(command_path kwin_wayland)"
+    dbus_bin="$(command_path dbus-run-session)"
+    binder_filesystem_available && binder_fs="yes"
+    binder_devices_available && binder_dev="yes"
+    waydroid_initialized && initialized="yes"
+    waydroid_active="$(service_state waydroid-container active)"
+    waydroid_enabled="$(service_state waydroid-container enabled)"
+    [ -x "$BOOT_HELPER_TARGET" ] && boot_helper="yes"
+    [ -x "$SESSION_TARGET" ] && session_launcher="yes"
+    [ -f "$SERVICE_FILE" ] && boot_service="yes"
+    boot_grub="$(grub_cfg_entry_state)"
+    grep -qw 'phasezero.waydroid=1' /proc/cmdline 2>/dev/null && current_marker="yes"
+    jq -n \
+        --arg configFile "$CONFIG_FILE" \
+        --arg configInstalled "$config" \
+        --arg waydroid "$waydroid_bin" \
+        --arg cage "$cage_bin" \
+        --arg weston "$weston_bin" \
+        --arg kwin "$kwin_bin" \
+        --arg dbus "$dbus_bin" \
+        --arg binderFs "$binder_fs" \
+        --arg binderDev "$binder_dev" \
+        --arg initialized "$initialized" \
+        --arg serviceActive "$waydroid_active" \
+        --arg serviceEnabled "$waydroid_enabled" \
+        --arg imageType "$IMAGE_TYPE" \
+        --arg restartAttempts "$SESSION_RESTARTS" \
+        --arg initAttempts "$INIT_ATTEMPTS" \
+        --arg prefetchImages "$PREFETCH_IMAGES" \
+        --arg preinstalledDir "$PREINSTALLED_DIR" \
+        --arg bootHelper "$boot_helper" \
+        --arg sessionLauncher "$session_launcher" \
+        --arg bootService "$boot_service" \
+        --arg grubEntry "$boot_grub" \
+        --arg currentMarker "$current_marker" \
+        '{
+            config: {path: $configFile, installed: ($configInstalled == "yes")},
+            host: {
+                waydroid: $waydroid,
+                cage: $cage,
+                weston: $weston,
+                kwinWayland: $kwin,
+                dbusRunSession: $dbus,
+                binderFilesystem: ($binderFs == "yes"),
+                binderDevices: ($binderDev == "yes")
+            },
+            android: {
+                initialized: ($initialized == "yes"),
+                imageType: $imageType,
+                serviceActive: $serviceActive,
+                serviceEnabled: $serviceEnabled,
+                restartAttempts: ($restartAttempts|tonumber),
+                initAttempts: ($initAttempts|tonumber),
+                resumablePrefetch: ($prefetchImages == "1"),
+                preinstalledDir: $preinstalledDir
+            },
+            boot: {
+                helperInstalled: ($bootHelper == "yes"),
+                sessionLauncherInstalled: ($sessionLauncher == "yes"),
+                serviceInstalled: ($bootService == "yes"),
+                grubCfgEntry: $grubEntry,
+                currentBootWaydroid: ($currentMarker == "yes")
+            }
+        }'
+}
+
+print_status() {
+    parse_options "$@"
+    status_json
+}
+
+print_plan() {
+    parse_options "$@"
+    effective_config
+    if [ "$JSON_OUT" = "1" ]; then
+        status_json
+        return 0
+    fi
+    echo "PhaseZero Waydroid plan"
+    echo "  waydroid: $(command_path waydroid || true)"
+    echo "  compositor: $(compositor_path || echo missing)"
+    echo "  binder_filesystem: $(binder_filesystem_available && echo yes || echo no)"
+    echo "  binder_devices: $(binder_devices_available && echo yes || echo no)"
+    echo "  initialized: $(waydroid_initialized && echo yes || echo no)"
+    echo "  service_active: $(service_state waydroid-container active)"
+    echo "  image_type: $IMAGE_TYPE"
+    echo "  init_attempts: $INIT_ATTEMPTS"
+    echo "  resumable_prefetch: $PREFETCH_IMAGES"
+    echo "  user_launcher: $APPLICATIONS_DIR/phasezero-waydroid.desktop"
+    echo "  direct_boot: sudo $PZ_ROOT/linux/waydroid/waydroid.sh boot install"
+}
+
+need_root() {
+    [ "$EUID" -eq 0 ] && return 0
+    pz_error "root required. run: sudo $PZ_ROOT/linux/waydroid/waydroid.sh boot install"
+    return 1
+}
+
+need_root_action() {
+    local action="$1"
+    shift || true
+    [ "$EUID" -eq 0 ] && return 0
+    if command -v pkexec >/dev/null 2>&1 && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then
+        exec pkexec bash "$0" boot "$action" "$@"
+    fi
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo bash "$0" boot "$action" "$@"
+    fi
+    pz_error "root required for boot $action"
+    return 1
+}
+
+latest_kernel_version() {
+    find /boot -maxdepth 1 -type f -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null |
+        sort -V | tail -1 | sed 's/^vmlinuz-//'
+}
+
+root_uuid() {
+    findmnt -no UUID / 2>/dev/null | head -1
+}
+
+root_subvol() {
+    findmnt -no OPTIONS / 2>/dev/null | tr ',' '\n' | awk -F= '$1 == "subvol" {print $2; exit}'
+}
+
+session_desktop_content() {
+    cat <<EOF
+[Desktop Entry]
+Name=PhaseZero Waydroid
+Comment=Start PhaseZero Waydroid without desktop login
+Exec=$SESSION_TARGET
+Type=Application
+DesktopNames=PhaseZeroWaydroid
+EOF
+}
+
+root_env_content() {
+    cat <<EOF
+# PhaseZero managed Waydroid boot environment
+PZ_WAYDROID_REPO=$PZ_ROOT
+PZ_WAYDROID_BOOT_USER=$TARGET_USER
+PZ_WAYDROID_IMAGE_TYPE=$IMAGE_TYPE
+PZ_WAYDROID_SESSION_RESTARTS=$SESSION_RESTARTS
+PZ_WAYDROID_INIT_ATTEMPTS=$INIT_ATTEMPTS
+PZ_WAYDROID_PREFETCH_IMAGES=$PREFETCH_IMAGES
+PZ_WAYDROID_PREINSTALLED_DIR=$PREINSTALLED_DIR
+PZ_WAYDROID_OPTIMIZE=$OPTIMIZE_HOST
+EOF
+}
+
+boot_service_content() {
+    cat <<EOF
+[Unit]
+Description=PhaseZero Waydroid GRUB boot session switch
+DefaultDependencies=no
+After=local-fs.target systemd-modules-load.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+Environment=PZ_WAYDROID_BOOT_USER=$TARGET_USER
+ExecStart=$BOOT_HELPER_TARGET
+
+[Install]
+WantedBy=graphical.target
+EOF
+}
+
+grub_script_content() {
+    local uuid version kernel initrd kernel_rel initrd_rel amd_ucode_rel intel_ucode_rel subvol rootflags=""
+    uuid="$(root_uuid)"
+    version="$(latest_kernel_version)"
+    [ -n "$uuid" ] || { pz_error "could not resolve root UUID"; return 1; }
+    [ -n "$version" ] || { pz_error "could not resolve /boot/vmlinuz-*"; return 1; }
+    kernel="/boot/vmlinuz-$version"
+    initrd="/boot/initramfs-$version.img"
+    [ -f "$kernel" ] || { pz_error "missing kernel: $kernel"; return 1; }
+    [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
+    kernel_rel="$(grub-mkrelpath "$kernel")"
+    initrd_rel="$(grub-mkrelpath "$initrd")"
+    amd_ucode_rel="$([ -f /boot/amd-ucode.img ] && grub-mkrelpath /boot/amd-ucode.img || true)"
+    intel_ucode_rel="$([ -f /boot/intel-ucode.img ] && grub-mkrelpath /boot/intel-ucode.img || true)"
+    subvol="$(root_subvol || true)"
+    [ -n "$subvol" ] && rootflags=" rootflags=subvol=$subvol"
+
+    cat <<EOF
+#!/usr/bin/env bash
+exec tail -n +3 "\$0"
+# PhaseZero managed GRUB entry. Re-run linux/pz waydroid boot install after kernel changes.
+menuentry '$BOOT_ENTRY' --class android --class gnu-linux --class gnu --class os {
+    insmod part_gpt
+    insmod btrfs
+    search --no-floppy --fs-uuid --set=root $uuid
+    echo 'Booting PhaseZero Waydroid...'
+    linux $kernel_rel root=UUID=$uuid rw$rootflags quiet splash phasezero.waydroid=1
+    initrd $amd_ucode_rel $intel_ucode_rel $initrd_rel
+}
+EOF
+}
+
+refresh_grub_config() {
+    if command -v update-grub >/dev/null 2>&1; then
+        update-grub
+    else
+        grub-mkconfig -o "$GRUB_CFG"
+    fi
+}
+
+grub_cfg_entry_state() {
+    if [ -r "$GRUB_CFG" ]; then
+        grep -Fq "menuentry '$BOOT_ENTRY'" "$GRUB_CFG" && echo present || echo missing
+    elif [ "$EUID" -eq 0 ] && [ -f "$GRUB_CFG" ]; then
+        grep -Fq "menuentry '$BOOT_ENTRY'" "$GRUB_CFG" && echo present || echo missing
+    else
+        echo unknown-permission
+    fi
+}
+
+install_boot() {
+    need_root
+    effective_config
+    install -d /usr/local/lib/phasezero /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
+    install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
+    install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
+    root_env_content > "$ROOT_ENV_FILE"
+    chmod 0644 "$ROOT_ENV_FILE"
+    session_desktop_content > "$WAYLAND_SESSION_FILE"
+    session_desktop_content > "$XSESSION_FILE"
+    chmod 0644 "$WAYLAND_SESSION_FILE" "$XSESSION_FILE"
+    boot_service_content > "$SERVICE_FILE"
+    chmod 0644 "$SERVICE_FILE"
+    grub_script_content > "$GRUB_SCRIPT"
+    chmod 0755 "$GRUB_SCRIPT"
+    ensure_binder_runtime
+    ensure_waydroid_service
+    systemctl daemon-reload
+    systemctl enable phasezero-waydroid-boot-prepare.service >/dev/null
+    refresh_grub_config
+    pz_info "PhaseZero Waydroid GRUB boot entry installed"
+}
+
+remove_boot() {
+    need_root
+    systemctl disable phasezero-waydroid-boot-prepare.service >/dev/null 2>&1 || true
+    rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$WAYLAND_SESSION_FILE" "$XSESSION_FILE" "$BOOT_HELPER_TARGET" "$SESSION_TARGET" "$ROOT_ENV_FILE"
+    if [ -f "$SDDM_CONF" ] && grep -q 'PhaseZero managed' "$SDDM_CONF" 2>/dev/null; then
+        rm -f "$SDDM_CONF"
+    fi
+    systemctl daemon-reload
+    refresh_grub_config
+    pz_info "PhaseZero Waydroid GRUB boot entry removed"
+}
+
+ensure_boot_entry_ready() {
+    local state
+    if [ ! -x "$BOOT_HELPER_TARGET" ] || [ ! -x "$GRUB_SCRIPT" ]; then
+        pz_warn "Waydroid GRUB boot files incomplete; reinstalling"
+        install_boot
+        return 0
+    fi
+    state="$(grub_cfg_entry_state)"
+    if [ "$state" = "missing" ]; then
+        pz_warn "Waydroid GRUB menuentry missing from $GRUB_CFG; regenerating"
+        refresh_grub_config
+        state="$(grub_cfg_entry_state)"
+    fi
+    if [ "$state" != "present" ]; then
+        pz_error "Waydroid GRUB menuentry not confirmed: $state"
+        return 1
+    fi
+}
+
+set_next_boot_root() {
+    command -v grub-reboot >/dev/null 2>&1 || { pz_error "grub-reboot missing"; return 1; }
+    ensure_boot_entry_ready
+    grub-reboot "$BOOT_ENTRY"
+    pz_info "next boot set to: $BOOT_ENTRY"
+    pz_info "run: systemctl reboot"
+}
+
+set_next_boot() {
+    need_root_action next
+    set_next_boot_root
+}
+
+next_reboot() {
+    need_root_action next-reboot
+    set_next_boot_root
+    pz_info "rebooting into Waydroid"
+    systemctl reboot
+}
+
+set_default_boot() {
+    need_root_action set-default
+    command -v grub-set-default >/dev/null 2>&1 || { pz_error "grub-set-default missing"; return 1; }
+    ensure_boot_entry_ready
+    grub-set-default "$BOOT_ENTRY"
+    pz_warn "permanent GRUB default set to: $BOOT_ENTRY"
+}
+
+clear_next_boot() {
+    need_root_action clear-next
+    command -v grub-editenv >/dev/null 2>&1 || { pz_error "grub-editenv missing"; return 1; }
+    grub-editenv - unset next_entry >/dev/null 2>&1 || true
+    pz_info "cleared GRUB one-shot next_entry"
+}
+
+status_boot() {
+    local grub_next_entry="" grub_saved_entry="" cmdline_marker="no"
+    grep -qw 'phasezero.waydroid=1' /proc/cmdline 2>/dev/null && cmdline_marker="yes"
+    if command -v grub-editenv >/dev/null 2>&1; then
+        grub_next_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}')"
+        grub_saved_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "saved_entry" {print $2; exit}')"
+    fi
+    echo "helper: $BOOT_HELPER_TARGET"
+    [ -x "$BOOT_HELPER_TARGET" ] && echo "helper_installed: yes" || echo "helper_installed: no"
+    [ -x "$SESSION_TARGET" ] && echo "session_launcher_installed: yes" || echo "session_launcher_installed: no"
+    [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
+    systemctl is-enabled phasezero-waydroid-boot-prepare.service 2>/dev/null || true
+    [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
+    echo "grub_cfg_entry: $(grub_cfg_entry_state)"
+    echo "grub_next_entry: ${grub_next_entry:-none}"
+    echo "grub_saved_entry: ${grub_saved_entry:-none}"
+    [ -f "$SDDM_CONF" ] && echo "active_sddm_waydroid_conf: yes" || echo "active_sddm_waydroid_conf: no"
+    echo "current_boot_waydroid: $cmdline_marker"
+    echo "target_user: $TARGET_USER"
+    echo "session: phasezero-waydroid.desktop"
+    echo "recommended_direct_boot: sudo $PZ_ROOT/linux/waydroid/waydroid.sh boot next-reboot"
+}
+
+dry_run_boot() {
+    echo "PhaseZero Waydroid boot dry-run"
+    echo "  helper: $BOOT_HELPER_TARGET"
+    echo "  session_launcher: $SESSION_TARGET"
+    echo "  service: $SERVICE_FILE"
+    echo "  grub: $GRUB_SCRIPT"
+    echo "  target_user: $TARGET_USER"
+    echo "  root_uuid: $(root_uuid || true)"
+    echo "  kernel: $(latest_kernel_version || true)"
+    echo "  session: phasezero-waydroid.desktop"
+    echo "  one-shot boot: sudo $PZ_ROOT/linux/waydroid/waydroid.sh boot next"
+    echo "  one-shot reboot: sudo $PZ_ROOT/linux/waydroid/waydroid.sh boot next-reboot"
+}
+
+cmd_boot() {
+    local sub="${1:-status}"
+    [ $# -gt 0 ] && shift || true
+    case "$sub" in
+        install) install_boot "$@" ;;
+        remove) remove_boot "$@" ;;
+        status) status_boot "$@" ;;
+        next|set-next) set_next_boot "$@" ;;
+        next-reboot|reboot-waydroid|reboot) next_reboot "$@" ;;
+        set-default) set_default_boot "$@" ;;
+        clear-next) clear_next_boot "$@" ;;
+        dry-run|plan) dry_run_boot "$@" ;;
+        *) pz_error "usage: waydroid boot (install|remove|status|next|next-reboot|set-default|clear-next|dry-run)"; exit 1 ;;
+    esac
+}
+
+case "$ACTION" in
+    status) print_status "$@" ;;
+    plan|dry-run) print_plan "$@" ;;
+    install|setup) cmd_install "$@" ;;
+    repair) cmd_repair "$@" ;;
+    optimize|tune) cmd_optimize "$@" ;;
+    launch|start|run) cmd_launch "$@" ;;
+    boot) cmd_boot "$@" ;;
+    help|--help|-h|"") usage ;;
+    *) pz_error "usage: waydroid (status|plan|install|repair|optimize|launch|boot)"; exit 1 ;;
+esac

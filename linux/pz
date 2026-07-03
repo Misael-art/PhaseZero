@@ -7,7 +7,7 @@ PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 source "$PZ_ROOT/linux/lib/pacman.sh"
 
-PZ_SUBCOMMANDS="install steamdeck emulation ai doctor support-bundle repair-plan tune help version"
+PZ_SUBCOMMANDS="install steamdeck windows-vm waydroid emulation ai doctor support-bundle repair-plan tune ui help version"
 
 usage() {
     cat <<EOF
@@ -19,13 +19,30 @@ Usage:
   pz steamdeck <mode>          Apply Steam Deck mode (handheld|docked-tv|docked-monitor)
   pz steamdeck watch           Start mode-watcher daemon
   pz steamdeck keyboard        Toggle Steam/desktop virtual keyboard
+  pz steamdeck keyboard status Show virtual keyboard provider/config
+  pz steamdeck keyboard repair Configure KDE/Maliit virtual keyboard
   pz steamdeck console [mode]  Apply mode and launch Steam Gamepad UI
   pz steamdeck dev [mode]      Apply desktop/dev session mode
   pz steamdeck hotkeys install Install Ctrl+Alt+F1..F6 shortcuts
   pz steamdeck watcher install Install dynamic mode-watcher user service
   pz steamdeck privileged status Manage TDP/GPU privileged bridge
   pz steamdeck boot status   Manage GRUB SteamOS-like console boot entry
+  pz steamdeck plugins status Manage Decky Loader + curated Big Picture plugins
+  pz steamdeck runtime-diagnose [file] Analyze Steam runtime diagnostic JSON
   pz steamdeck status         Print SteamOS UX status JSON
+  pz windows-vm status        Print QEMU/KVM Windows VM status JSON
+  pz windows-vm discover      Discover existing Windows VM disks on host
+  pz windows-vm plan --iso PATH Preview Windows VM plan
+  pz windows-vm install --iso PATH Create disk/config/launchers
+  pz windows-vm optimize      Apply temporary Linux host tuning for QEMU
+  pz windows-vm launch        Launch configured Windows VM
+  pz windows-vm boot status   Manage direct GRUB Windows VM boot entry
+  pz waydroid status          Print Waydroid Android container status JSON
+  pz waydroid plan            Preview Waydroid kiosk/direct boot plan
+  pz waydroid install         Create Waydroid config/launchers
+  pz waydroid repair          Apply Waydroid host/service repair
+  pz waydroid launch          Launch optimized Waydroid session
+  pz waydroid boot status     Manage direct GRUB Waydroid boot entry
   pz steamdeck launch-options List Steam launch option presets
   pz emulation layout         Create shared Emulation folders
   pz emulation emudeck install Install EmuDeck AppImage launcher
@@ -34,26 +51,85 @@ Usage:
   pz emulation citron install Install Citron Switch emulator AppImage
   pz emulation citron integrate Integrate Citron with EmuDeck (ES-DE, SRM, paths)
   pz emulation hydra install  Install Hydra AppImage + SteamOS shortcut
-  pz emulation bios import <path> Import user-owned BIOS files from local path
-  pz emulation switch import-keys <path> Import user-owned Switch keys from local path
-  pz emulation switch import-firmware <path> Import user-owned Switch firmware from local path
-  pz emulation status         Print emulation status JSON
-  pz ai setup <tool>           Setup AI tool (ollama|webui|claude|opencode|all)
+  pz emulation hydra configure Configure Hydra Classic + emulator entries
+  pz emulation srm configure  Configure Steam ROM Manager paths/parsers
+  pz emulation ps1 configure  Configure DuckStation paths
+  pz emulation ps2 configure  Configure PCSX2 paths
+  pz emulation ps3 import-game <path> Import user-owned PS3 dump
+  pz emulation ps3 import-pkg <path> Import user-owned PS3 PKG
+  pz emulation ps3 import-rap <path> Import user-owned PS3 RAP license
+  pz emulation performance status Adaptive Switch/PS3/PS4 performance status
+  pz emulation performance apply Install adaptive profiles and launcher
+  pz emulation performance prepare-lsfg Install verified LSFG Vulkan layer
+  pz emulation lua status      Check Lua/LuaJIT/LuaRocks readiness
+  pz emulation steam-tools status Check Steam helper tools
+   pz emulation retrodeck status  Audit RetroDECK shared ecosystem
+   pz emulation retrodeck plan    Preview RetroDECK migrations and links
+   pz emulation retrodeck integrate Share ROMs, BIOS, saves, states and media
+   pz emulation retrodeck repair  Repair RetroDECK ecosystem links
+   pz emulation shared status   Shared content status across consumers
+   pz emulation shared plan     Plan shared content linking (dry-run)
+   pz emulation shared apply    Apply shared content symlinks/rsync
+   pz emulation shared repair   Repair shared content links
+   pz emulation media status    Emulation media status
+   pz emulation media index     Build media-index.json
+   pz emulation media plan      Plan media canonicalization (dry-run)
+   pz emulation media apply     Apply media canonicalization
+   pz emulation media repair    Repair media paths
+   pz emulation pc-games status Audit local PC games from roms/steam
+   pz emulation pc-games plan   Plan ES-DE/Heroic/Hydra/SRM launchers
+   pz emulation pc-games repair Apply resilient PC game frontend integration
+  pz emulation shortcuts status Audit desktop/AppImage launchers
+  pz emulation shortcuts plan   Plan launcher cleanup
+  pz emulation shortcuts repair Repair menu launchers and hide duplicates
+   pz emulation launchbox status Audit LaunchBox portable/Wine integration
+   pz emulation launchbox plan   Plan LaunchBox ROM/media/emulator bridges
+   pz emulation launchbox repair Apply LaunchBox Wine, ROM, media and emulator bridges
+   pz emulation frontends status Audit BigBox/Steam/ES-DE/SRM/Heroic switcher
+   pz emulation frontends plan   Plan cross-frontend switcher integration
+   pz emulation frontends repair Apply cross-frontend switcher integration
+   pz emulation fixes list      List friendly Linux emulation fixes
+   pz emulation bios import <path> Import user-owned BIOS files from local path
+   pz emulation switch import-keys <path> Import user-owned Switch keys from local path
+   pz emulation switch import-firmware <path> Import user-owned Switch firmware from local path
+   pz emulation doctor          Run full emulation diagnostics
+   pz emulation status         Print emulation status JSON
+  pz ai status                 Print Linux AI stack status JSON
+  pz ai doctor                 Diagnose Linux AI/MCP config
+  pz ai repair                 Repair Linux AI/MCP config safely
+  pz ai menu                   Open friendly terminal AI manager
+  pz ai desktop status         Check Claude/Codex desktop apps and updater
+  pz ai desktop install-claude Install official Claude Desktop for current user
+  pz ai desktop repair-codex   Repair failed Codex Desktop local update
+  pz ai desktop repair         Repair desktop apps and automatic updates
+  pz ai compat status          Check RTK/Caveman/Headroom/ai-memory agent runtime
+  pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
+  pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|all)
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
+  pz ai mcp sync [target]      Sync safe MCP servers to all/target clients
+  pz ai mcp sync-all [target]  Explicitly sync all MCP servers to all/target clients
+  pz ai mcp repair [target]    Remove broken PhaseZero MCPs and reinstall safe defaults
+  pz ai mcp status             Print MCP status JSON
   pz ai mcp list               List installed MCP servers
   pz doctor                    Run full system diagnostics
   pz support-bundle            Generate support tarball
   pz repair-plan               Generate repair plan
-  pz tune <area>               Apply tuning (browser|gaming|dev)
-  pz help                      Show this help
-  pz version                   Show version
+   pz tune <area>               Apply tuning (browser|gaming|dev)
+   pz ui                        Open web dashboard (defaults to server --port auto + browser)
+   pz ui server [--port PORT]   Start web dashboard server only
+   pz ui tui                    Open terminal UI (whiptail)
+   pz ui status                 Print UI server status
+   pz help                      Show this help
+   pz version                   Show version
 
 Profiles:
   safe-base                Essentials: firewall, codecs, browser, timeshift
   dev-ai                   Dev + AI toolchain: node, python, rust, ollama, claude, opencode
   gaming                   Gaming stack: steam, heroic, lutris, mangohud, gamemode
   steamdeck-linux          SteamOS-like UX: hotkeys, virtual keyboard, Gamepad UI
+  windows-vm-linux         QEMU/KVM Windows VM with host shares, USB redirection, direct GRUB boot
+  waydroid-linux           Waydroid Android container with kiosk session and direct GRUB boot
   emulation-linux          EmuDeck/Eden + shared emulation layout
   homelab                  Docker homelab: jellyfin, nextcloud, vaultwarden
   full-workstation         All profiles combined
@@ -97,7 +173,7 @@ cmd_install() {
 
 cmd_steamdeck() {
     local action="${1:-}" target="${2:-}"
-    [ -z "$action" ] && { pz_error "usage: pz steamdeck (handheld|docked-tv|docked-monitor|watch|keyboard|console|dev|hotkeys|watcher|privileged|boot)"; return 1; }
+    [ -z "$action" ] && { pz_error "usage: pz steamdeck (handheld|docked-tv|docked-monitor|watch|keyboard|console|dev|hotkeys|watcher|privileged|boot|plugins)"; return 1; }
     source "$PZ_ROOT/linux/steamdeck/common.sh"
     source "$PZ_ROOT/linux/steamdeck/input-actions.sh"
     case "$action" in
@@ -106,13 +182,22 @@ cmd_steamdeck() {
         docked-monitor) steamdeck_apply_docked_monitor ;;
         watch)        steamdeck_mode_watcher ;;
         detect)       steamdeck_detect_mode ;;
-        keyboard|virtual-keyboard) steamdeck_toggle_virtual_keyboard ;;
+        keyboard|virtual-keyboard)
+            case "${target:-toggle}" in
+                toggle|"") steamdeck_toggle_virtual_keyboard ;;
+                status) steamdeck_virtual_keyboard_status ;;
+                configure|install|repair) steamdeck_configure_virtual_keyboard ;;
+                *) pz_error "usage: pz steamdeck keyboard (toggle|status|configure|repair)"; return 1 ;;
+            esac
+            ;;
         console)      steamdeck_start_console_session "${target:-auto}" ;;
         dev|desktop)  steamdeck_start_dev_session "${target:-docked-monitor}" ;;
         hotkeys)      bash "$PZ_ROOT/linux/steamdeck/install-hotkeys.sh" "${target:-install}" ;;
         watcher)      bash "$PZ_ROOT/linux/steamdeck/install-mode-watcher.sh" "${target:-install}" ;;
         privileged)   bash "$PZ_ROOT/linux/steamdeck/install-privileged-controls.sh" "${target:-status}" ;;
         boot)         bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" "${target:-status}" ;;
+        plugins|decky|decky-plugins) bash "$PZ_ROOT/linux/steamdeck/plugins.sh" "${target:-status}" "${3:-}" "${4:-}" ;;
+        runtime|runtime-diagnose|steam-runtime) bash "$PZ_ROOT/linux/steamdeck/steam-runtime-diagnose.sh" "${target:-diagnose}" "${3:-}" ;;
         status)       bash "$PZ_ROOT/linux/steamdeck/status.sh" ;;
         launch-options) bash "$PZ_ROOT/linux/steamdeck/launch-options.sh" "${target:-list}" "${3:-balanced}" ;;
         ux)           bash "$PZ_ROOT/linux/steamdeck/install-hotkeys.sh" "${target:-install}" ;;
@@ -121,38 +206,137 @@ cmd_steamdeck() {
 }
 
 cmd_emulation() {
-    local action="${1:-status}" target="${2:-}" extra="${3:-}"
+    local action="${1:-status}" target="${2:-}"
+    shift 2 2>/dev/null || true
+    local extra=("$@")
+    local has_json=false
+    local e
+    for e in "${extra[@]}"; do [ "$e" = "--json" ] && has_json=true; done
     case "$action" in
-        layout)       bash "$PZ_ROOT/linux/emulation/bios.sh" layout ;;
-        status)       bash "$PZ_ROOT/linux/emulation/bios.sh" status ;;
-        blocked-sources|policy) bash "$PZ_ROOT/linux/emulation/bios.sh" blocked-sources ;;
-        emudeck)      bash "$PZ_ROOT/linux/emulation/emudeck.sh" "${target:-status}" "$extra" ;;
-        eden)         bash "$PZ_ROOT/linux/emulation/eden.sh" "${target:-status}" "$extra" ;;
-        citron)       bash "$PZ_ROOT/linux/emulation/citron.sh" "${target:-status}" "$extra" ;;
-        hydra)        bash "$PZ_ROOT/linux/emulation/hydra.sh" "${target:-status}" "$extra" ;;
-        bios)         bash "$PZ_ROOT/linux/emulation/bios.sh" "${target:-status}" "$extra" ;;
-        switch)       bash "$PZ_ROOT/linux/emulation/bios.sh" "switch-${target:-status}" "$extra" ;;
-        setup|install) bash "$PZ_ROOT/linux/emulation/setup-emulation.sh" "${target:-install}" ;;
-        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|eden|citron|bios|switch|setup)"; return 1 ;;
+        layout)       bash "$PZ_ROOT/linux/emulation/bios.sh" layout "${extra[@]}" ;;
+        status)       bash "$PZ_ROOT/linux/emulation/bios.sh" status "${extra[@]}" ;;
+        blocked-sources|policy) bash "$PZ_ROOT/linux/emulation/bios.sh" blocked-sources "${extra[@]}" ;;
+        emudeck)      bash "$PZ_ROOT/linux/emulation/emudeck.sh" "${target:-status}" "${extra[@]}" ;;
+        eden)         bash "$PZ_ROOT/linux/emulation/eden.sh" "${target:-status}" "${extra[@]}" ;;
+        citron)       bash "$PZ_ROOT/linux/emulation/citron.sh" "${target:-status}" "${extra[@]}" ;;
+        hydra)        bash "$PZ_ROOT/linux/emulation/hydra.sh" "${target:-status}" "${extra[@]}" ;;
+        srm|steam-rom-manager) bash "$PZ_ROOT/linux/emulation/srm.sh" "${target:-status}" "${extra[@]}" ;;
+        ps1|psx)      bash "$PZ_ROOT/linux/emulation/sony.sh" ps1 "${target:-status}" "${extra[@]}" ;;
+        ps2)          bash "$PZ_ROOT/linux/emulation/sony.sh" ps2 "${target:-status}" "${extra[@]}" ;;
+        ps3|rpcs3)    bash "$PZ_ROOT/linux/emulation/ps3.sh" "${target:-status}" "${extra[@]}" ;;
+        performance|perf|optimization|optimizations) bash "$PZ_ROOT/linux/emulation/performance.sh" "${target:-status}" "${extra[@]}" ;;
+        lua)          bash "$PZ_ROOT/linux/emulation/lua.sh" "${target:-status}" "${extra[@]}" ;;
+        steam-tools)  bash "$PZ_ROOT/linux/emulation/steam-tools.sh" "${target:-status}" "${extra[@]}" ;;
+        retrodeck)    bash "$PZ_ROOT/linux/emulation/retrodeck.sh" "${target:-status}" "${extra[@]}" ;;
+        shared)       bash "$PZ_ROOT/linux/emulation/shared-content.sh" "${target:-status}" "${extra[@]}" ;;
+        media)        bash "$PZ_ROOT/linux/emulation/media.sh" "${target:-status}" "${extra[@]}" ;;
+        pc-games|pcgames|steam-games) bash "$PZ_ROOT/linux/emulation/pc-games.sh" "${target:-status}" "${extra[@]}" ;;
+        shortcuts|desktop-shortcuts|launchers) bash "$PZ_ROOT/linux/emulation/shortcuts.sh" "${target:-status}" "${extra[@]}" ;;
+        launchbox|bigbox) bash "$PZ_ROOT/linux/emulation/launchbox.sh" "${target:-status}" "${extra[@]}" ;;
+        frontends|frontend-switcher) bash "$PZ_ROOT/linux/emulation/frontends.sh" "${target:-status}" "${extra[@]}" ;;
+        fixes)        bash "$PZ_ROOT/linux/emulation/fixes.sh" "${target:-list}" "${extra[@]}" ;;
+        bios)         bash "$PZ_ROOT/linux/emulation/bios.sh" "${target:-status}" "${extra[@]}" ;;
+        switch)       bash "$PZ_ROOT/linux/emulation/bios.sh" "switch-${target:-status}" "${extra[@]}" ;;
+        doctor)       local rc=0
+                      if $has_json; then
+                          bash "$PZ_ROOT/linux/emulation/shared-content.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/media.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/pc-games.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/shortcuts.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/launchbox.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/frontends.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/performance.sh" status || rc=1
+                      else
+                          bash "$PZ_ROOT/linux/emulation/shared-content.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/media.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/pc-games.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/shortcuts.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/launchbox.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/frontends.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/performance.sh" status || rc=1
+                      fi
+                      return "$rc" ;;
+        setup|install) bash "$PZ_ROOT/linux/emulation/setup-emulation.sh" "${target:-install}" "${extra[@]}" ;;
+        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|retrodeck|eden|citron|hydra|srm|ps1|ps2|ps3|performance|lua|steam-tools|fixes|bios|switch|shared|media|pc-games|shortcuts|launchbox|frontends|doctor|setup)"; return 1 ;;
     esac
+}
+
+cmd_windows_vm() {
+    bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$@"
+}
+
+cmd_waydroid() {
+    bash "$PZ_ROOT/linux/waydroid/waydroid.sh" "$@"
 }
 
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
-    [ -z "$sub" ] && { pz_error "usage: pz ai (setup|secrets|mcp) ..."; return 1; }
+    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|compat|secrets|mcp) ..."; return 1; }
     case "$sub" in
+        status)
+            bash "$PZ_ROOT/linux/ai/status.sh"
+            ;;
+        doctor)
+            bash "$PZ_ROOT/linux/ai/mcp-manager.sh" doctor
+            ;;
+        repair)
+            bash "$PZ_ROOT/linux/ai/mcp-manager.sh" repair all
+            bash "$PZ_ROOT/linux/ai/setup-ides.sh" configure >/dev/null || pz_warn "IDE integration repair skipped"
+            ;;
+        menu|ui)
+            bash "$PZ_ROOT/linux/ai/menu.sh"
+            ;;
+        desktop|desktop-apps)
+            shift
+            bash "$PZ_ROOT/linux/ai/desktop-apps.sh" "${@:-status}"
+            ;;
+        compat|agent-compat|tools)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" "${@:-status}"
+            ;;
+        admin|admin-bridge|bigsudo)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" "${@:-status}"
+            ;;
         setup)
             [ -z "$target" ] && target="all"
             case "$target" in
+                codex)    bash "$PZ_ROOT/linux/ai/setup-codex.sh" ;;
                 ollama)   bash "$PZ_ROOT/linux/ai/setup-ollama.sh" ;;
                 webui)    bash "$PZ_ROOT/linux/ai/setup-open-webui.sh" ;;
                 claude)   bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" ;;
+                desktop|desktop-apps)
+                    bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-claude
+                    bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-services
+                    ;;
                 opencode) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" ;;
+                hermes)   bash "$PZ_ROOT/linux/ai/setup-hermes.sh" ;;
+                openclaw) bash "$PZ_ROOT/linux/ai/setup-openclaw.sh" ;;
+                memory|ai-memory) bash "$PZ_ROOT/linux/ai/setup-memory.sh" setup ;;
+                admin|admin-bridge|bigsudo) bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" setup ;;
+                rtk)      bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" install-rtk ;;
+                caveman|caverman) bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" rules ;;
+                headroom) bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" headroom ;;
+                frugality|ai-context-frugality) bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" frugality ;;
+                compat|agent-compat|tools) bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" setup ;;
+                ides|ide) bash "$PZ_ROOT/linux/ai/setup-ides.sh" configure ;;
+                ide-apps|ides-apps) bash "$PZ_ROOT/linux/ai/setup-ides.sh" install-apps ;;
+                usagebar|ai-usagebar) bash "$PZ_ROOT/linux/ai/setup-usagebar.sh" setup ;;
                 all)
+                    bash "$PZ_ROOT/linux/ai/setup-codex.sh"
                     bash "$PZ_ROOT/linux/ai/setup-ollama.sh"
                     bash "$PZ_ROOT/linux/ai/setup-open-webui.sh"
                     bash "$PZ_ROOT/linux/ai/setup-claude-code.sh"
+                    bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-claude
+                    bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-services
                     bash "$PZ_ROOT/linux/ai/setup-opencode.sh"
+                    bash "$PZ_ROOT/linux/ai/setup-hermes.sh"
+                    bash "$PZ_ROOT/linux/ai/setup-openclaw.sh"
+                    bash "$PZ_ROOT/linux/ai/setup-memory.sh" setup
+                    bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" setup
+                    bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" setup
+                    bash "$PZ_ROOT/linux/ai/setup-usagebar.sh" setup
+                    bash "$PZ_ROOT/linux/ai/setup-ides.sh" configure
                     ;;
                 *) pz_error "unknown tool: $target"; return 1 ;;
             esac
@@ -165,10 +349,15 @@ cmd_ai() {
             ;;
         mcp)
             case "${target:-list}" in
-                install) bash "$PZ_ROOT/linux/ai/mcp-manager.sh" install "${3:-}" ;;
+                install) bash "$PZ_ROOT/linux/ai/mcp-manager.sh" install "${3:-}" "${4:-all}" ;;
+                sync) bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync "${3:-all}" ;;
+                sync-all|configure-all) bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync-all "${3:-all}" ;;
+                repair)  bash "$PZ_ROOT/linux/ai/mcp-manager.sh" repair "${3:-all}" ;;
+                doctor)  bash "$PZ_ROOT/linux/ai/mcp-manager.sh" doctor ;;
+                status)  bash "$PZ_ROOT/linux/ai/mcp-manager.sh" status ;;
                 list)    bash "$PZ_ROOT/linux/ai/mcp-manager.sh" list ;;
-                remove)  bash "$PZ_ROOT/linux/ai/mcp-manager.sh" remove "${3:-}" ;;
-                *)       pz_error "usage: pz ai mcp (install|list|remove) [name]"; return 1 ;;
+                remove)  bash "$PZ_ROOT/linux/ai/mcp-manager.sh" remove "${3:-}" "${4:-all}" ;;
+                *)       pz_error "usage: pz ai mcp (install|sync|sync-all|repair|doctor|status|list|remove) [name] [target]"; return 1 ;;
             esac
             ;;
         *) pz_error "unknown ai subcommand: $sub"; return 1 ;;
@@ -198,18 +387,58 @@ cmd_tune() {
     esac
 }
 
+cmd_ui() {
+    local action="${1:-server}" port="${2:-auto}"
+    case "$action" in
+        server)
+            local port_arg=""
+            [ "$port" != "auto" ] && port_arg="--port $port"
+            python3 "$PZ_ROOT/linux/ui/server.py" $port_arg
+            ;;
+        tui)
+            bash "$PZ_ROOT/linux/ui/tui.sh"
+            ;;
+        status)
+            local pid_file="$PZ_STATE/ui-server.pid"
+            if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+                echo "UI server running (pid $(cat "$pid_file"))"
+            else
+                echo "UI server not running"
+            fi
+            ;;
+        open|"")
+            # start server in background and open browser
+            local log_file="$PZ_STATE/ui-server.log"
+            mkdir -p "$PZ_STATE"
+            python3 "$PZ_ROOT/linux/ui/server.py" --daemon "$log_file" &
+            local pid=$!
+            echo "$pid" > "$PZ_STATE/ui-server.pid"
+            sleep 1
+            xdg-open "http://127.0.0.1:8080" 2>/dev/null || true
+            echo "Dashboard: http://127.0.0.1:8080 (pid $pid)"
+            ;;
+        *)
+            pz_error "usage: pz ui (server|tui|status|open)"
+            return 1
+            ;;
+    esac
+}
+
 main() {
     local cmd="${1:-help}"
     shift 2>/dev/null || true
     case "$cmd" in
         install)       cmd_install "$@" ;;
         steamdeck)     cmd_steamdeck "$@" ;;
+        windows-vm|windows|winvm|win-vm) cmd_windows_vm "$@" ;;
+        waydroid|android) cmd_waydroid "$@" ;;
         emulation)     cmd_emulation "$@" ;;
         ai)            cmd_ai "$@" ;;
         doctor)        cmd_doctor "$@" ;;
         support-bundle) cmd_support_bundle "$@" ;;
         repair-plan)   cmd_repair_plan "$@" ;;
         tune)          cmd_tune "$@" ;;
+        ui)            cmd_ui "$@" ;;
         version|--version|-v) cmd_version ;;
         help|--help|-h|"") usage ;;
         *)             pz_error "unknown command: $cmd"; usage; return 1 ;;

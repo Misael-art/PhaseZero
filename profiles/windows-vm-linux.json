@@ -1,0 +1,59 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "windows-vm-linux",
+  "description": "Linux Windows VM host: QEMU/KVM, OVMF, TPM, SPICE USB redirection, Samba shares and direct GRUB boot tooling",
+  "os": ["linux"],
+  "packages": {
+    "linux": {
+      "pacman": [
+        "qemu-base",
+        "qemu-desktop",
+        "libvirt",
+        "virt-viewer",
+        "edk2-ovmf",
+        "swtpm",
+        "samba",
+        "spice-gtk",
+        "usbredir",
+        "power-profiles-daemon",
+        "cpupower",
+        "numactl",
+        "acl",
+        "jq"
+      ],
+      "yay": [],
+      "flatpak": []
+    },
+    "windows": {
+      "winget": [],
+      "choco": []
+    }
+  },
+  "scripts": {
+    "linux": [
+      "linux/windows-vm/windows-vm.sh"
+    ],
+    "windows": []
+  },
+  "configs": {
+    "linux": [
+      "linux/windows-vm/windows-vm.sh",
+      "linux/windows-vm/windows-vm-boot-prepare.sh",
+      "linux/windows-vm/windows-vm-session.sh"
+    ],
+    "windows": []
+  },
+  "systemd": {
+    "linux": {
+      "enable": [],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.max_map_count": 2147483642
+      }
+    }
+  }
+}

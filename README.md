@@ -23,6 +23,120 @@ PhaseZero e um instalador e auditor Windows para pos-instalacao segura. O alvo m
 
 Sem winget em maquina limpa, o bootstrap tenta caminho seguro de App Installer oficial (`https://aka.ms/getwinget`) quando aplicavel. Se PATH/sessao ainda nao enxergar winget depois do bootstrap, a UI/CLI devem orientar logoff, nova sessao ou reboot em vez de falhar de modo opaco.
 
+### Linux (expansao aditiva)
+
+A trilha Linux fica isolada em `linux/pz` e usa perfis `profiles/*.json`. Ela nao substitui os fluxos Windows.
+
+```bash
+linux/pz help
+linux/pz install safe-base
+linux/pz install steamdeck-linux
+linux/pz steamdeck detect
+linux/pz steamdeck hotkeys dry-run
+linux/pz steamdeck keyboard
+linux/pz steamdeck console
+linux/pz steamdeck boot dry-run
+linux/pz windows-vm plan --iso /path/to/Win11.iso
+linux/pz windows-vm discover
+sudo linux/windows-vm/windows-vm.sh adopt --disk /var/lib/libvirt/images/win11.qcow2
+linux/pz windows-vm install --iso /path/to/Win11.iso
+linux/pz windows-vm optimize --dry-run
+linux/pz windows-vm launch --fullscreen
+linux/pz windows-vm boot dry-run
+linux/pz install waydroid-linux --dry-run
+linux/pz waydroid status
+linux/pz waydroid install
+linux/pz waydroid repair --init
+linux/pz waydroid launch
+linux/pz waydroid boot dry-run
+linux/pz emulation setup
+linux/pz emulation eden install
+linux/pz emulation hydra install
+linux/pz emulation hydra configure
+linux/pz emulation srm configure
+linux/pz emulation ps3 import-game /path/to/local/ps3-dump
+linux/pz emulation ps3 import-pkg /path/to/local/pkg
+linux/pz emulation ps3 import-rap /path/to/local/rap
+linux/pz emulation lua status
+linux/pz emulation steam-tools status
+linux/pz emulation fixes list
+linux/pz emulation bios import /path/to/local/bios-dump
+```
+
+`steamdeck-linux` e opt-in. O foco inicial e experiencia estilo SteamOS: Steam Gamepad UI, atalhos `Ctrl+Alt+F1..F6`, teclado virtual por Steam/wvkbd/onboard/maliit, watcher de modo com debounce e tuning de jogos.
+
+`windows-vm-linux` e opt-in. Automatiza VM Windows em QEMU/KVM a partir de uma ISO indicada pelo usuario. Antes de criar disco novo, detecta dominios Windows em `qemu:///system` e imagens instaladas; dominio libvirt existente vira default, preservando snapshot, firmware e hardware virtual originais. Sem dominio, usa QEMU direto com CPU `host`, KVM, OVMF, TPM 2.0, audio, SPICE USB redirection, SMB e virtiofs. O viewer SPICE compartilha os links de `HOME`, `/mnt/sdcard`, removiveis e `/mnt`; quatro canais USB cobrem pendrives, perifericos e leitores smartcard USB.
+
+`waydroid-linux` e opt-in. Automatiza Waydroid como Android em container no host Linux, com detecao de binder, servico `waydroid-container`, compositor kiosk Wayland (`cage` preferido, `kwin_wayland` fallback), launchers do usuario e boot direto via GRUB/SDDM. `repair --init` baixa sistema/vendor por mirrors SourceForge com retry, valida tamanho e SHA-256, prepara runtime e inicializa Android; sem `--init`, nao baixa imagens.
+
+`emulation-linux` e opt-in. Instala launchers do EmuDeck/Eden/Citron/Hydra, configura Hydra Classic e Steam ROM Manager com emuladores detectados, prepara Lua/LuaJIT, audita Steam helper tools e cria layout compartilhado `~/Emulation`. Em Steam Deck real (DMI Valve/Jupiter/Galileo/Sephiroth), EmuDeck usa o `EmuDeck.desktop` do desktop do usuario e PhaseZero cria um wrapper que chama esse launcher; em PC Linux generico, usa o AppImage direto. BIOS, firmware, keys, ROMs, updates e DLC nao sao baixados: use importacao local de dumps proprios.
+
+Boot direto estilo SteamOS:
+
+```bash
+linux/pz steamdeck boot dry-run
+sudo linux/steamdeck/install-steamos-boot.sh install
+```
+
+Isso adiciona uma entrada GRUB `PhaseZero SteamOS Console`. Ela inicializa o mesmo Linux com `phasezero.steamos=1`; um servico antes do SDDM seleciona `phasezero-steamos.desktop`. Ao escolher Desktop na Steam, o hook `steamos-session-select` encerra gamescope e inicia Plasma na mesma sessao, sem novo login. Em Valve Jupiter/Galileo, drop-in GRUB usa `800x600` landscape, timeout de 5 segundos e terminais `console`, `usb_keyboard` e `at_keyboard`. GRUB nao possui API de joystick analogico; boot one-shot pelos launchers evita depender de entrada pre-kernel.
+
+Boot direto Windows VM:
+
+```bash
+linux/pz windows-vm install --iso /path/to/Win11.iso
+linux/pz windows-vm discover
+sudo linux/windows-vm/windows-vm.sh adopt --disk /path/to/existing/windows.qcow2
+linux/pz windows-vm launch --dry-run
+sudo linux/windows-vm/windows-vm.sh boot install
+sudo linux/windows-vm/windows-vm.sh boot next-reboot
+```
+
+Isso adiciona uma entrada GRUB `PhaseZero Windows VM`. Ela inicializa o mesmo Linux com `phasezero.windowsvm=1`; um servico antes do SDDM seleciona `phasezero-windows-vm.desktop`, que inicia o dominio libvirt descoberto ou o QEMU direto em tela cheia. Saida fica em `~/.local/state/phasezero/windows-vm/session.log`; falha retorna ao Plasma. Em QEMU direto, use `\\10.0.2.4\qemu`. Em dominio libvirt, SPICE WebDAV usa o mesmo diretorio de links.
+
+Se `discover` encontrar uma instalacao existente sem leitura para o usuario, `adopt` aplica ACL/chmod quando executado com root e grava essa imagem como default. Sem instalacao existente legivel, `install --iso` cria o qcow2 novo e segue o fluxo normal.
+
+Boot direto Waydroid:
+
+```bash
+linux/pz waydroid install
+linux/pz waydroid repair --init
+sudo linux/waydroid/waydroid.sh boot install
+sudo linux/waydroid/waydroid.sh boot next-reboot
+```
+
+Isso adiciona uma entrada GRUB `PhaseZero Waydroid`. Ela inicializa o mesmo Linux com `phasezero.waydroid=1`; um servico antes do SDDM aplica tuning, prepara binder, inicia `waydroid-container` e seleciona a sessao `phasezero-waydroid.desktop` sem login manual. A sessao abre Waydroid em modo kiosk e tenta reiniciar a UI algumas vezes antes de cair para o desktop. Boot normal remove a configuracao SDDM gerenciada.
+
+Hydra:
+
+```bash
+linux/pz emulation hydra install
+linux/pz emulation hydra configure
+linux/pz emulation hydra steam-shortcut
+```
+
+Hydra entra como AppImage local, launcher desktop, atalho Steam, flags Hydra Classic e `emulators_config.json` para DuckStation/PCSX2/RPCS3 quando detectados. PhaseZero nao configura fontes de download, repacks, torrents, cracks ou bypasses; integra apenas biblioteca/launcher para jogos do usuario.
+
+Steam ROM Manager:
+
+```bash
+linux/pz emulation srm configure
+linux/pz emulation srm status
+```
+
+SRM usa o AppImage/`steamrommanager.sh` do EmuDeck quando disponivel, aponta `steamDirectory` para a Steam local, `romsDirectory` para `~/Emulation/roms`, `retroarchPath` para o launcher EmuDeck e normaliza parsers Eden/Citron/DuckStation/PCSX2/RPCS3.
+
+PS3/RPCS3:
+
+```bash
+linux/pz emulation ps3 configure
+linux/pz emulation ps3 import-game /path/to/local/ps3-dump
+linux/pz emulation ps3 import-firmware /path/to/local/PS3UPDAT.PUP
+linux/pz emulation ps3 import-pkg /path/to/local/pkg-or-folder
+linux/pz emulation ps3 import-rap /path/to/local/rap-or-folder
+```
+
+PS3 e local-only: dumps, PKG, RAP e firmware devem vir do usuario. PhaseZero configura VFS RPCS3, instala firmware/PKG via RPCS3 quando possivel e reconfigura Hydra/SRM; nao adiciona fontes remotas de jogos.
+
 ## Uso Seguro
 
 UI:
@@ -83,6 +197,8 @@ Diagnostico local:
 - `recommended`: alias seguro/compat para `safe-base`.
 - `public-beta`: primeira instalacao confiavel; inclui base segura, PowerShell, PowerToys, Brave, VS Code, secrets e MCPs. Nao inclui WSL/Docker/IA desktop/gaming.
 - `dev-ai`: pilha de IA/dev por escolha explicita.
+- `steamdeck-linux`: expansao Linux opt-in para experiencia SteamOS-like em Steam Deck/handhelds: hotkeys, teclado virtual, Big Picture/Gamepad UI e tuning de jogos.
+- `emulation-linux`: expansao Linux opt-in para EmuDeck/Eden/Citron/Hydra/SRM, Lua, Steam helper tools, launchers desktop e layout de emulacao com conteudo do usuario importado localmente.
 - `full-workstation`: perfil amplo com stacks desktop, IA, containers, creator, social e utilitarios. Nunca deve ser default silencioso.
 - `legacy`: compatibilidade com fluxo historico.
 

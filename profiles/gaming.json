@@ -1,0 +1,72 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "gaming",
+  "description": "Gaming setup: Steam, emulators, performance tools",
+  "os": ["linux", "windows"],
+  "packages": {
+    "linux": {
+      "pacman": [
+        "steam",
+        "steam-devices",
+        "gamescope",
+        "gamescope-dbus",
+        "mangohud",
+        "gamemode",
+        "lutris",
+        "heroic-games-launcher-bin",
+        "wine",
+        "winetricks",
+        "proton-ge-custom-bin",
+        "protontricks",
+        "git",
+        "git-lfs",
+        "github-cli",
+        "lib32-mangohud",
+        "lib32-gamemode",
+        "vulkan-radeon",
+        "lib32-vulkan-radeon",
+        "vulkan-tools",
+        "ryzenadj",
+        "ananicy-git",
+        "corectrl",
+        "discord",
+        "obs-studio",
+        "goverlay"
+      ],
+      "yay": [
+        "heroic-games-launcher-bin",
+        "proton-ge-custom-bin",
+        "ananicy-git"
+      ],
+      "flatpak": []
+    },
+    "windows": {
+      "winget": ["Valve.Steam"],
+      "choco": ["steam", "discord"]
+    }
+  },
+  "scripts": {
+    "linux": [
+      "linux/tuning/git-config.sh",
+      "linux/tuning/gaming-tweaks.sh"
+    ],
+    "windows": []
+  },
+  "configs": {
+    "linux": []
+  },
+  "systemd": {
+    "linux": {
+      "enable": ["ananicy", "gamemoded"],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.max_map_count": 2147483642,
+        "kernel.nmi_watchdog": 0
+      }
+    }
+  }
+}

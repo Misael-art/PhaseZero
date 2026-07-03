@@ -14,8 +14,13 @@ export PZ_EMULATION_ROOT="$TMP_ROOT/Emulation"
 export PZ_APPLICATIONS_DIR="$TMP_ROOT/Applications"
 export PZ_LOCAL_BIN="$TMP_ROOT/bin"
 export PZ_RPCS3_APP=""
+export PZ_EMULATION_DMI_DIR="$TMP_ROOT/dmi-generic"
 
-mkdir -p "$HOME"
+mkdir -p "$HOME" "$PZ_EMULATION_DMI_DIR"
+printf 'Generic PC\n' > "$PZ_EMULATION_DMI_DIR/product_name"
+printf 'GenericVendor\n' > "$PZ_EMULATION_DMI_DIR/sys_vendor"
+printf 'GenericBoard\n' > "$PZ_EMULATION_DMI_DIR/board_name"
+printf 'GenericVendor\n' > "$PZ_EMULATION_DMI_DIR/board_vendor"
 
 "$REPO_ROOT/linux/pz" emulation layout >/dev/null
 test -d "$PZ_EMULATION_ROOT/bios"
@@ -25,6 +30,7 @@ test -d "$PZ_EMULATION_ROOT/roms/ps4"
 
 "$REPO_ROOT/linux/pz" emulation status | jq -e '.userContent.policy == "local-user-owned-import-only"' >/dev/null
 "$REPO_ROOT/linux/pz" emulation emudeck dry-run >/dev/null
+"$REPO_ROOT/linux/pz" emulation emudeck status | jq -e '.host.class == "linux-pc" and .launcher.kind == "appimage"' >/dev/null
 "$REPO_ROOT/linux/pz" emulation eden dry-run >/dev/null
 "$REPO_ROOT/linux/pz" emulation eden integrate >/dev/null
 "$REPO_ROOT/linux/pz" emulation eden status | jq -e '.emudeckInstalled == false' >/dev/null
@@ -45,6 +51,47 @@ test -d "$PZ_EMULATION_ROOT/roms/ps4"
 "$REPO_ROOT/linux/pz" emulation performance status | jq -e '.configValid == true and .runtimeInstalled == true' >/dev/null
 "$REPO_ROOT/linux/pz" emulation fixes list | jq -e 'length >= 11' >/dev/null
 "$REPO_ROOT/linux/pz" install emulation-linux --dry-run >/dev/null
+
+DECK_DMI="$TMP_ROOT/dmi-steamdeck"
+DECK_HOME="$TMP_ROOT/deck-home"
+DECK_ROOT="$TMP_ROOT/deck-Emulation"
+DECK_APPS="$TMP_ROOT/deck-Applications"
+DECK_BIN="$TMP_ROOT/deck-bin"
+DECK_DESKTOP_SOURCE="$TMP_ROOT/official/EmuDeck.desktop"
+mkdir -p "$DECK_DMI" "$DECK_HOME" "$(dirname "$DECK_DESKTOP_SOURCE")"
+printf 'Jupiter\n' > "$DECK_DMI/product_name"
+printf '1\n' > "$DECK_DMI/product_version"
+printf 'Valve\n' > "$DECK_DMI/sys_vendor"
+printf 'Jupiter\n' > "$DECK_DMI/board_name"
+printf 'Valve\n' > "$DECK_DMI/board_vendor"
+printf '8\n' > "$DECK_DMI/chassis_type"
+cat > "$DECK_DESKTOP_SOURCE" <<'EOF'
+	[Desktop Entry]
+	Name=Install EmuDeck
+	Exec=sh -c 'curl -L https://raw.githubusercontent.com/dragoonDorise/EmuDeck/main/install.sh | bash'
+	Terminal=true
+	Type=Application
+EOF
+HOME="$DECK_HOME" \
+XDG_CONFIG_HOME="$DECK_HOME/.config" \
+XDG_DATA_HOME="$DECK_HOME/.local/share" \
+PZ_EMULATION_ROOT="$DECK_ROOT" \
+PZ_APPLICATIONS_DIR="$DECK_APPS" \
+PZ_LOCAL_BIN="$DECK_BIN" \
+PZ_EMULATION_DMI_DIR="$DECK_DMI" \
+PZ_EMUDECK_STEAMDECK_DESKTOP_URL="file://$DECK_DESKTOP_SOURCE" \
+    "$REPO_ROOT/linux/pz" emulation emudeck install >/dev/null
+test -x "$DECK_HOME/Desktop/EmuDeck.desktop"
+! grep -q $'^\t' "$DECK_HOME/Desktop/EmuDeck.desktop"
+test -x "$DECK_BIN/phasezero-emudeck"
+HOME="$DECK_HOME" \
+XDG_CONFIG_HOME="$DECK_HOME/.config" \
+XDG_DATA_HOME="$DECK_HOME/.local/share" \
+PZ_EMULATION_ROOT="$DECK_ROOT" \
+PZ_APPLICATIONS_DIR="$DECK_APPS" \
+PZ_LOCAL_BIN="$DECK_BIN" \
+PZ_EMULATION_DMI_DIR="$DECK_DMI" \
+    "$REPO_ROOT/linux/pz" emulation emudeck status | jq -e '.host.class == "steam-deck" and .launcher.kind == "steamdeck-desktop" and .steamDeckDesktop.installed == true and .appImageInstalled == false' >/dev/null
 
 touch "$PZ_APPLICATIONS_DIR/DuckStation.AppImage" "$PZ_APPLICATIONS_DIR/pcsx2-Qt.AppImage" "$PZ_APPLICATIONS_DIR/rpcs3.AppImage"
 chmod +x "$PZ_APPLICATIONS_DIR/DuckStation.AppImage" "$PZ_APPLICATIONS_DIR/pcsx2-Qt.AppImage" "$PZ_APPLICATIONS_DIR/rpcs3.AppImage"
@@ -86,6 +133,46 @@ jq -e --arg view "$PZ_EMULATION_ROOT/.phasezero/scan-safe/roms/switch" '
   (.[] | select(.configTitle == "Sony PlayStation 3 - RPCS3 (Extracted ISO/PSN)") | (.parserInputs.glob | startswith("{${title}@(.iso"))) and
   (.[] | select(.configTitle == "Sony PlayStation 4 - ShadPS4 (Shortcut)") | .parserInputs.glob == "${title}@(.desktop)")
 ' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
+
+mkdir -p "$PZ_EMULATION_ROOT/roms/steam/GOG Game" "$PZ_EMULATION_ROOT/roms/steam/Native Game"
+cat > "$PZ_EMULATION_ROOT/roms/steam/GOG Game/goggame-1.info" <<'JSON'
+{
+  "name": "GOG Game",
+  "playTasks": [
+    {"category": "game", "isPrimary": true, "name": "GOG Game", "path": "GOGGame.exe", "arguments": "-safe", "type": "FileTask"},
+    {"category": "game", "name": "GOG Game Launcher", "path": "Launcher.exe", "type": "FileTask"}
+  ]
+}
+JSON
+echo "exe" > "$PZ_EMULATION_ROOT/roms/steam/GOG Game/GOGGame.exe"
+echo "launcher" > "$PZ_EMULATION_ROOT/roms/steam/GOG Game/Launcher.exe"
+echo "uninstall" > "$PZ_EMULATION_ROOT/roms/steam/GOG Game/unins000.exe"
+cat > "$PZ_EMULATION_ROOT/roms/steam/Native Game/Native Game.sh" <<'SH'
+#!/usr/bin/env bash
+echo native
+SH
+chmod +x "$PZ_EMULATION_ROOT/roms/steam/Native Game/Native Game.sh"
+cat > "$PZ_EMULATION_ROOT/roms/steam/Standalone.sh" <<'SH'
+#!/usr/bin/env bash
+echo standalone
+SH
+chmod +x "$PZ_EMULATION_ROOT/roms/steam/Standalone.sh"
+PZ_EMULATION_FORCE_APPLY=1 "$REPO_ROOT/linux/pz" emulation pc-games repair >/dev/null
+"$REPO_ROOT/linux/pz" emulation pc-games status --json | jq -e '.discovered == 3 and .heroicManagedGames == 3 and .hydraConfigured == true and .esdeGamelistInstalled == true' >/dev/null
+jq -e '
+  (.games | length == 3) and
+  (.games[] | select(.slug == "gog-game") | .target | endswith("GOGGame.exe")) and
+  (.games[] | select(.slug == "gog-game") | .runner == "wine")
+' "$PZ_EMULATION_ROOT/metadata/pc-games/catalog.json" >/dev/null
+test -x "$PZ_EMULATION_ROOT/tools/pc-games/launchers/gog-game.sh"
+test -f "$XDG_DATA_HOME/applications/phasezero-pc-gog-game.desktop"
+jq -e '[.games[] | select(.app_name | startswith("phasezero-pc-"))] | length == 3 and all(.install.platform == "Linux")' "$XDG_CONFIG_HOME/heroic/sideload_apps/library.json" >/dev/null
+jq -e '.pcgames.enabled == true and .pcgames.roms_directory == "'"$PZ_EMULATION_ROOT/tools/pc-games/launchers"'"' "$XDG_CONFIG_HOME/hydralauncher/emulators_config.json" >/dev/null
+grep -q '<name>steam</name>' "$HOME/ES-DE/custom_systems/es_systems.xml"
+grep -q "$PZ_EMULATION_ROOT/tools/pc-games/launchers" "$HOME/ES-DE/custom_systems/es_systems.xml"
+grep -q '<path>./gog-game.sh</path>' "$PZ_EMULATION_ROOT/metadata/gamelists/steam/gamelist.xml"
+jq -e '.[] | select(.configTitle == "PC Games - PhaseZero") | .romDirectory == "'"$PZ_EMULATION_ROOT/tools/pc-games/launchers"'" and .executable.path == "/bin/bash"' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
+python3 "$REPO_ROOT/linux/emulation/pc-games.py" --dry-run launch gog-game | jq -e '.runner == "wine" and (.command | any(test("wine$")))' >/dev/null
 
 mkdir -p "$TMP_ROOT/ps3-game/PS3_GAME"
 printf 'fake-param\n' > "$TMP_ROOT/ps3-game/PS3_GAME/PARAM.SFO"

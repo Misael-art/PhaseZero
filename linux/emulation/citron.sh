@@ -28,10 +28,15 @@ resolve_citron_name() {
 }
 
 write_citron_wrapper() {
+    bash "$PZ_ROOT/linux/emulation/performance.sh" apply >/dev/null
     pz_emulation_write_file "$CITRON_WRAPPER" 0755 <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 app="$CITRON_LINK"
+performance="$PZ_LOCAL_BIN/phasezero-emulation-launch"
+if [ -x "\$performance" ]; then
+    exec "\$performance" switch -- "\$app" "\$@"
+fi
 if command -v gamemoderun >/dev/null 2>&1; then
     exec env MANGOHUD=1 gamemoderun "\$app" "\$@"
 fi
@@ -54,6 +59,8 @@ EOF
 }
 
 configure_citron_dirs() {
+    [ -L "$CITRON_KEYS" ] && rm -f "$CITRON_KEYS"
+    [ -L "$CITRON_FIRMWARE" ] && rm -f "$CITRON_FIRMWARE"
     install -d "$CITRON_SHARE" "$CITRON_CONFIG" "$CITRON_KEYS" "$CITRON_FIRMWARE"
     jq -n \
         --arg root "$PZ_EMULATION_ROOT" \
@@ -66,7 +73,31 @@ configure_citron_dirs() {
 }
 
 sync_citron_user_content() {
+    local ryujinx r_keys r_fw
+    ryujinx=$(pz_emulation_switch_ryujinx_paths)
+
+    if [ "$ryujinx" != "null" ]; then
+        r_keys=$(jq -r '.keys // empty' <<< "$ryujinx")
+        r_fw=$(jq -r '.firmware // empty' <<< "$ryujinx")
+
+        if [ -n "$r_keys" ]; then
+            install -d "$(dirname "$CITRON_KEYS")"
+            rm -rf "$CITRON_KEYS"
+            ln -sfn "$r_keys" "$CITRON_KEYS"
+            pz_info "Citron keys → symlink to Ryujinx"
+        fi
+        if [ -n "$r_fw" ]; then
+            install -d "$(dirname "$CITRON_FIRMWARE")"
+            rm -rf "$CITRON_FIRMWARE"
+            ln -sfn "$r_fw" "$CITRON_FIRMWARE"
+            pz_info "Citron firmware → symlink to Ryujinx"
+        fi
+        return 0
+    fi
+
     local key
+    [ -L "$CITRON_KEYS" ] && rm -f "$CITRON_KEYS"
+    [ -L "$CITRON_FIRMWARE" ] && rm -f "$CITRON_FIRMWARE"
     install -d "$CITRON_KEYS" "$CITRON_FIRMWARE"
     for key in prod.keys title.keys; do
         [ -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" ] && cp -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" "$CITRON_KEYS/$key"
@@ -234,6 +265,10 @@ EOF
 
 status_citron() {
     local emudeck_installed=false emudeck_integrated=false
+    local status_app="$CITRON_APP"
+    if [ ! -f "$status_app" ] && [ -e "$CITRON_LINK" ]; then
+        status_app="$(readlink -f "$CITRON_LINK" 2>/dev/null || echo "$CITRON_LINK")"
+    fi
     if [ -d "$HOME/.config/EmuDeck" ]; then
         emudeck_installed=true
         local s
@@ -242,14 +277,14 @@ status_citron() {
     fi
     jq -n \
         --arg url "$PZ_CITRON_RELEASE_API" \
-        --arg app "$CITRON_APP" \
+        --arg app "$status_app" \
         --arg link "$CITRON_LINK" \
         --arg wrapper "$CITRON_WRAPPER" \
         --arg desktop "$CITRON_DESKTOP" \
         --arg share "$CITRON_SHARE" \
         --arg keys "$CITRON_KEYS" \
         --arg firmware "$CITRON_FIRMWARE" \
-        --arg sha256 "$(pz_emulation_sha256_or_empty "$CITRON_APP")" \
+        --arg sha256 "$(pz_emulation_sha256_or_empty "$status_app")" \
         --argjson installed "$([ -x "$CITRON_LINK" ] && echo true || echo false)" \
         --argjson linkInstalled "$([ -x "$CITRON_LINK" ] && echo true || echo false)" \
         --argjson wrapperInstalled "$([ -x "$CITRON_WRAPPER" ] && echo true || echo false)" \

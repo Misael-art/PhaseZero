@@ -1,0 +1,574 @@
+{
+  "version": 1,
+  "description": "PhaseZero UI action allowlist - only these actions can be executed via the UI",
+  "actions": [
+    {
+      "name": "steamdeck.status",
+      "label": "Ver status Steam Deck",
+      "command": "bash linux/steamdeck/status.sh",
+      "mutable": false,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.handheld",
+      "label": "Modo portátil",
+      "command": "bash linux/steamdeck/apply-handheld.sh",
+      "mutable": true,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.docked-tv",
+      "label": "Modo dock TV",
+      "command": "bash linux/steamdeck/apply-docked-tv.sh",
+      "mutable": true,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.docked-monitor",
+      "label": "Modo dock monitor",
+      "command": "bash linux/steamdeck/apply-docked-monitor.sh",
+      "mutable": true,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.detect-mode",
+      "label": "Detectar modo atual",
+      "command": "bash linux/steamdeck/detect-mode.sh",
+      "mutable": false,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.kb",
+      "label": "Alternar teclado virtual",
+      "command": "bash linux/steamdeck/input-actions.sh toggle-keyboard",
+      "mutable": true,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.kb-status",
+      "label": "Status teclado virtual",
+      "command": "bash linux/steamdeck/input-actions.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.kb-repair",
+      "label": "Configurar teclado virtual",
+      "command": "bash linux/steamdeck/input-actions.sh configure",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.hotkeys-install",
+      "label": "Instalar hotkeys",
+      "command": "bash linux/steamdeck/install-hotkeys.sh install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.boot-status",
+      "label": "Status boot GRUB",
+      "command": "bash linux/steamdeck/install-steamos-boot.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.boot-next-reboot",
+      "label": "Reiniciar no SteamOS Plus",
+      "command": "bash linux/steamdeck/install-steamos-boot.sh next-reboot",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-status",
+      "label": "Status Decky/plugins",
+      "command": "bash linux/steamdeck/plugins.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-install",
+      "label": "Instalar Decky completo",
+      "command": "bash linux/steamdeck/plugins.sh install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-install-privileged",
+      "label": "Instalar Decky privilegiado",
+      "command": "bash linux/steamdeck/plugins.sh install-decky-privileged",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-install-plugins",
+      "label": "Instalar plugins Decky",
+      "command": "bash linux/steamdeck/plugins.sh install-plugins",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-repair",
+      "label": "Reparar Decky/plugins",
+      "command": "bash linux/steamdeck/plugins.sh repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-repair-privileged",
+      "label": "Reparar plugins privilegiado",
+      "command": "bash linux/steamdeck/plugins.sh install-plugins-privileged",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-powertools-repair",
+      "label": "Reparar PowerTools",
+      "command": "bash linux/steamdeck/plugins.sh install-plugin-privileged PowerTools",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-install-themes",
+      "label": "Instalar temas CSS Loader",
+      "command": "bash linux/steamdeck/plugins.sh install-themes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-enable-cef",
+      "label": "Ativar CEF Debug",
+      "command": "bash linux/steamdeck/plugins.sh enable-cef-debug",
+      "mutable": true,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "steamdeck.plugins-prepare-ui",
+      "label": "Preparar Steam UI Decky",
+      "command": "bash linux/steamdeck/plugins.sh prepare-ui",
+      "mutable": true,
+      "require_plan": false,
+      "module": "steamdeck"
+    },
+    {
+      "name": "windows-vm.status",
+      "label": "Status Windows VM",
+      "command": "bash linux/windows-vm/windows-vm.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "windows-vm"
+    },
+    {
+      "name": "windows-vm.boot-status",
+      "label": "Status boot Windows VM",
+      "command": "bash linux/windows-vm/windows-vm.sh boot status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "windows-vm"
+    },
+    {
+      "name": "windows-vm.discover",
+      "label": "Descobrir Windows VM",
+      "command": "bash linux/windows-vm/windows-vm.sh discover --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "windows-vm"
+    },
+    {
+      "name": "windows-vm.optimize",
+      "label": "Otimizar host VM",
+      "command": "bash linux/windows-vm/windows-vm.sh optimize",
+      "mutable": true,
+      "require_plan": true,
+      "module": "windows-vm"
+    },
+    {
+      "name": "windows-vm.adopt",
+      "label": "Adotar Windows existente",
+      "command": "bash linux/windows-vm/windows-vm.sh adopt",
+      "mutable": true,
+      "require_plan": true,
+      "module": "windows-vm"
+    },
+    {
+      "name": "windows-vm.launch",
+      "label": "Abrir Windows VM",
+      "command": "bash linux/windows-vm/windows-vm.sh launch --fullscreen",
+      "mutable": true,
+      "require_plan": true,
+      "module": "windows-vm"
+    },
+    {
+      "name": "windows-vm.boot-next-reboot",
+      "label": "Reiniciar na Windows VM",
+      "command": "bash linux/windows-vm/windows-vm.sh boot next-reboot",
+      "mutable": true,
+      "require_plan": true,
+      "module": "windows-vm"
+    },
+    {
+      "name": "waydroid.status",
+      "label": "Status Waydroid",
+      "command": "bash linux/waydroid/waydroid.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "waydroid"
+    },
+    {
+      "name": "waydroid.plan",
+      "label": "Plano Waydroid",
+      "command": "bash linux/waydroid/waydroid.sh plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "waydroid"
+    },
+    {
+      "name": "waydroid.repair",
+      "label": "Reparar Waydroid",
+      "command": "bash linux/waydroid/waydroid.sh repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "waydroid"
+    },
+    {
+      "name": "waydroid.launch",
+      "label": "Abrir Waydroid",
+      "command": "bash linux/waydroid/waydroid.sh launch",
+      "mutable": true,
+      "require_plan": true,
+      "module": "waydroid"
+    },
+    {
+      "name": "waydroid.boot-status",
+      "label": "Status boot Waydroid",
+      "command": "bash linux/waydroid/waydroid.sh boot status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "waydroid"
+    },
+    {
+      "name": "waydroid.boot-next-reboot",
+      "label": "Reiniciar no Waydroid",
+      "command": "bash linux/waydroid/waydroid.sh boot next-reboot",
+      "mutable": true,
+      "require_plan": true,
+      "module": "waydroid"
+    },
+    {
+      "name": "emulation.status",
+      "label": "Status emulação",
+      "command": "bash linux/emulation/bios.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.retrodeck.status",
+      "label": "Status ecossistema RetroDECK",
+      "command": "bash linux/emulation/retrodeck.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.retrodeck.plan",
+      "label": "Plano integração RetroDECK",
+      "command": "bash linux/emulation/retrodeck.sh plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.retrodeck.integrate",
+      "label": "Integrar RetroDECK",
+      "command": "bash linux/emulation/retrodeck.sh integrate",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.retrodeck.repair",
+      "label": "Reparar integração RetroDECK",
+      "command": "bash linux/emulation/retrodeck.sh repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.shared.status",
+      "label": "Status conteúdo compartilhado",
+      "command": "bash linux/emulation/shared-content.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.shared.plan",
+      "label": "Plano conteúdo compartilhado",
+      "command": "bash linux/emulation/shared-content.sh plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.shared.apply",
+      "label": "Aplicar conteúdo compartilhado",
+      "command": "bash linux/emulation/shared-content.sh apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.shared.repair",
+      "label": "Reparar conteúdo compartilhado",
+      "command": "bash linux/emulation/shared-content.sh repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.media.status",
+      "label": "Status mídia",
+      "command": "bash linux/emulation/media.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.media.index",
+      "label": "Indexar mídia",
+      "command": "bash linux/emulation/media.sh index",
+      "mutable": true,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.media.apply",
+      "label": "Aplicar mídia canônica",
+      "command": "bash linux/emulation/media.sh apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.media.repair",
+      "label": "Reparar mídia",
+      "command": "bash linux/emulation/media.sh repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.pc-games.status",
+      "label": "Status jogos PC",
+      "command": "bash linux/emulation/pc-games.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.pc-games.plan",
+      "label": "Plano jogos PC",
+      "command": "bash linux/emulation/pc-games.sh plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.pc-games.repair",
+      "label": "Reparar jogos PC",
+      "command": "bash linux/emulation/pc-games.sh repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.shortcuts.status",
+      "label": "Status atalhos AppImage",
+      "command": "bash linux/emulation/shortcuts.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.shortcuts.plan",
+      "label": "Plano atalhos AppImage",
+      "command": "bash linux/emulation/shortcuts.sh plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.shortcuts.repair",
+      "label": "Reparar atalhos AppImage",
+      "command": "bash linux/emulation/shortcuts.sh repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.emudeck.status",
+      "label": "Status EmuDeck",
+      "command": "bash linux/emulation/emudeck.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.emudeck.install",
+      "label": "Instalar EmuDeck",
+      "command": "bash linux/emulation/emudeck.sh install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.srm.status",
+      "label": "Status SRM",
+      "command": "bash linux/emulation/srm.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.srm.configure",
+      "label": "Configurar SRM",
+      "command": "bash linux/emulation/srm.sh configure",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.eden.status",
+      "label": "Status Eden",
+      "command": "bash linux/emulation/eden.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.eden.install",
+      "label": "Instalar Eden",
+      "command": "bash linux/emulation/eden.sh install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.performance.status",
+      "label": "Status performance emuladores",
+      "command": "bash linux/emulation/performance.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.performance.apply",
+      "label": "Aplicar perfis Switch/PS3/PS4",
+      "command": "bash linux/emulation/performance.sh apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.performance.prepare-lsfg",
+      "label": "Preparar LSFG 2x verificado",
+      "command": "bash linux/emulation/performance.sh prepare-lsfg",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.hydra.status",
+      "label": "Status Hydra",
+      "command": "bash linux/emulation/hydra.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.fixes.list",
+      "label": "Listar reparos amigáveis",
+      "command": "bash linux/emulation/fixes.sh list",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "ai.status",
+      "label": "Status IA",
+      "command": "bash linux/ai/status.sh",
+      "mutable": false,
+      "require_plan": false,
+      "module": "ai"
+    },
+    {
+      "name": "ai.mcp.status",
+      "label": "Status MCP",
+      "command": "bash linux/ai/mcp-manager.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "ai"
+    },
+    {
+      "name": "ai.mcp.sync",
+      "label": "Sincronizar MCPs",
+      "command": "bash linux/ai/mcp-manager.sh sync all",
+      "mutable": true,
+      "require_plan": true,
+      "module": "ai"
+    },
+    {
+      "name": "system.doctor",
+      "label": "Diagnóstico completo",
+      "command": "bash linux/audit/doctor.sh",
+      "mutable": false,
+      "require_plan": false,
+      "module": "system"
+    },
+    {
+      "name": "system.repair-plan",
+      "label": "Plano de reparo",
+      "command": "bash linux/audit/repair-plan.sh",
+      "mutable": false,
+      "require_plan": false,
+      "module": "system"
+    },
+    {
+      "name": "system.support-bundle",
+      "label": "Gerar bundle de suporte",
+      "command": "bash linux/audit/support-bundle.sh",
+      "mutable": true,
+      "require_plan": false,
+      "module": "system"
+    },
+    {
+      "name": "profiles.list",
+      "label": "Listar profiles",
+      "command": "ls linux/../profiles/*.json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "system"
+    }
+  ]
+}

@@ -1,0 +1,107 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "dev-ai",
+  "description": "Developer workstation + AI toolchain setup",
+  "os": ["linux", "windows"],
+  "packages": {
+    "linux": {
+      "pacman": [
+        "nodejs",
+        "npm",
+        "pnpm",
+        "python",
+        "python-pip",
+        "python-pipx",
+        "uv",
+        "rust",
+        "cargo",
+        "go",
+        "base-devel",
+        "cmake",
+        "make",
+        "gcc",
+        "clang",
+        "lldb",
+        "jq",
+        "yq",
+        "curl",
+        "gnupg",
+        "libarchive",
+        "rsync",
+        "zstd",
+        "ripgrep",
+        "fd",
+        "fzf",
+        "bat",
+        "eza",
+        "zoxide",
+        "tmux",
+        "neovim",
+        "code",
+        "docker",
+        "docker-compose",
+        "ollama",
+        "redis",
+        "postgresql",
+        "sqlite",
+        "git",
+        "git-lfs",
+        "github-cli",
+        "direnv",
+        "openssh",
+        "tailscale",
+        "pass",
+        "age"
+      ],
+      "yay": [],
+      "flatpak": []
+    },
+    "windows": {
+      "winget": ["Ollama.Ollama", "Git.Git", "OpenJS.NodeJS", "Microsoft.VisualStudioCode"],
+      "choco": ["nodejs", "python", "rust", "docker-desktop"]
+    }
+  },
+  "scripts": {
+    "linux": [
+      "linux/tuning/git-config.sh",
+      "linux/ai/setup-admin-bridge.sh",
+      "linux/ai/setup-agent-compat.sh",
+      "linux/ai/setup-ollama.sh",
+      "linux/ai/setup-open-webui.sh",
+      "linux/ai/setup-claude-code.sh",
+      "linux/ai/setup-desktop-apps.sh",
+      "linux/ai/setup-opencode.sh",
+      "linux/ai/setup-hermes.sh",
+      "linux/ai/setup-openclaw.sh",
+      "linux/ai/setup-memory.sh",
+      "linux/ai/setup-usagebar.sh",
+      "linux/ai/setup-ides.sh"
+    ],
+    "windows": ["Setup-AITools.ps1"]
+  },
+  "configs": {
+    "linux": [
+      "linux/ai/templates/opencode.jsonc",
+      "linux/ai/templates/secrets.json",
+      "assets/mcp/servers/context7.json",
+      "assets/mcp/servers/sentry.json"
+    ],
+    "windows": [".mcp.json"]
+  },
+  "systemd": {
+    "linux": {
+      "enable": ["docker", "ollama", "sshd", "tailscaled"],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.swappiness": 10,
+        "fs.inotify.max_user_watches": 1048576,
+        "net.core.rmem_max": 134217728,
+        "net.core.wmem_max": 134217728
+      }
+    }
+  }
+}

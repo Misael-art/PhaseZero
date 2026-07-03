@@ -215,7 +215,7 @@ pz_media_switch_primary_files() {
 pz_media_steam_aux_dir() {
     local name="${1,,}"
     case "$name" in
-        media|metadata|tools|cache|caches|patches|updates|update|dlc|mods|saves|screenshots|videos|covers|manuals|backups|temp|tmp|lost+found)
+        .phasezero*|media|metadata|tools|cache|caches|patches|updates|update|dlc|mods|saves|screenshots|videos|covers|manuals|backups|temp|tmp|lost+found)
             return 0
             ;;
         *) return 1 ;;

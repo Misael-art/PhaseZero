@@ -1,0 +1,1450 @@
+#!/usr/bin/env bash
+# windows-vm.sh - QEMU/KVM Windows VM automation for PhaseZero Linux hosts
+set -euo pipefail
+
+PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+source "$PZ_ROOT/linux/lib/common.sh"
+
+ACTION="${1:-status}"
+[ $# -gt 0 ] && shift || true
+
+TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
+[ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
+if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+    target_home_root="$(getent passwd "$TARGET_USER" | cut -d: -f6 || true)"
+    [ -n "$target_home_root" ] && export HOME="$target_home_root"
+fi
+
+VM_NAME_DEFAULT="PhaseZero-Windows"
+VM_DIR_DEFAULT="$HOME/VirtualMachines/PhaseZero-Windows"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero"
+CONFIG_FILE="${PZ_WINDOWS_VM_CONFIG:-$CONFIG_DIR/windows-vm.conf}"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/phasezero-windows-vm"
+APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+
+BOOT_HELPER_SOURCE="$PZ_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
+SESSION_SOURCE="$PZ_ROOT/linux/windows-vm/windows-vm-session.sh"
+BOOT_HELPER_TARGET="/usr/local/lib/phasezero/windows-vm-boot-prepare"
+SESSION_TARGET="/usr/local/lib/phasezero/windows-vm-session"
+ROOT_ENV_FILE="/etc/phasezero/windows-vm.env"
+SERVICE_FILE="/etc/systemd/system/phasezero-windows-vm-boot-prepare.service"
+WAYLAND_SESSION_FILE="/usr/share/wayland-sessions/phasezero-windows-vm.desktop"
+XSESSION_FILE="/usr/share/xsessions/phasezero-windows-vm.desktop"
+GRUB_SCRIPT="/etc/grub.d/43_phasezero_windows_vm"
+GRUB_CFG="/boot/grub/grub.cfg"
+SDDM_CONF="/etc/sddm.conf.d/91-phasezero-windows-vm.conf"
+BOOT_ENTRY="PhaseZero Windows VM"
+
+ISO_PATH=""
+ISO_EXPLICIT=0
+VIRTIO_ISO=""
+VM_DIR=""
+DISK_PATH=""
+DISK_SIZE="256G"
+EXPLICIT_DISK=0
+RAM_MB=""
+CPUS=""
+USB_MODE=""
+FULLSCREEN=0
+DRY_RUN="${PZ_DRY_RUN:-0}"
+JSON_OUT=0
+WITH_BOOT=0
+PCI_DEVICES=""
+EXTRA_ARGS=""
+LIBVIRT_DOMAIN=""
+EXPLICIT_DOMAIN=0
+RAW_QEMU=0
+DISPLAY_MODE="gtk"
+OPTIMIZE_HOST="${PZ_WINDOWS_VM_OPTIMIZE:-1}"
+
+usage() {
+    cat <<EOF
+PhaseZero Windows VM - QEMU/KVM Windows automation
+
+Usage:
+  pz windows-vm status
+  pz windows-vm discover [--json]
+  pz windows-vm adopt [--disk PATH]
+  pz windows-vm plan --iso <windows.iso> [--json]
+  pz windows-vm install --iso <windows.iso> [--disk-size 256G] [--ram 8192|8G] [--cpus N] [--dry-run]
+  pz windows-vm optimize [--dry-run]
+  pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--dry-run]
+  pz windows-vm boot status
+  pz windows-vm boot install
+  pz windows-vm boot next
+  pz windows-vm boot next-reboot
+  pz windows-vm boot remove
+  pz windows-vm boot dry-run
+
+Access:
+  home, /mnt/sdcard, /run/media/\$USER and /mnt are exposed through SMB and virtiofs when available.
+  USB redirection is enabled by default. Raw usb-host passthrough requires --usb-mode all or peripherals.
+  PCI/GPU passthrough is opt-in through PZ_WINDOWS_VM_PCI_DEVICES="0000:xx:yy.z ...".
+EOF
+}
+
+parse_options() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --iso) ISO_PATH="${2:-}"; ISO_EXPLICIT=1; shift 2 ;;
+            --iso=*) ISO_PATH="${1#*=}"; ISO_EXPLICIT=1; shift ;;
+            --virtio-iso) VIRTIO_ISO="${2:-}"; shift 2 ;;
+            --virtio-iso=*) VIRTIO_ISO="${1#*=}"; shift ;;
+            --vm-dir) VM_DIR="${2:-}"; shift 2 ;;
+            --vm-dir=*) VM_DIR="${1#*=}"; shift ;;
+            --disk) DISK_PATH="${2:-}"; EXPLICIT_DISK=1; shift 2 ;;
+            --disk=*) DISK_PATH="${1#*=}"; EXPLICIT_DISK=1; shift ;;
+            --disk-size) DISK_SIZE="${2:-}"; shift 2 ;;
+            --disk-size=*) DISK_SIZE="${1#*=}"; shift ;;
+            --ram) RAM_MB="$(normalize_ram_mb "${2:-}")"; shift 2 ;;
+            --ram=*) RAM_MB="$(normalize_ram_mb "${1#*=}")"; shift ;;
+            --cpus) CPUS="${2:-}"; shift 2 ;;
+            --cpus=*) CPUS="${1#*=}"; shift ;;
+            --usb-mode) USB_MODE="${2:-}"; shift 2 ;;
+            --usb-mode=*) USB_MODE="${1#*=}"; shift ;;
+            --pci) PCI_DEVICES="${PCI_DEVICES:+$PCI_DEVICES }${2:-}"; shift 2 ;;
+            --pci=*) PCI_DEVICES="${PCI_DEVICES:+$PCI_DEVICES }${1#*=}"; shift ;;
+            --extra-qemu) EXTRA_ARGS="${EXTRA_ARGS:+$EXTRA_ARGS }${2:-}"; shift 2 ;;
+            --extra-qemu=*) EXTRA_ARGS="${EXTRA_ARGS:+$EXTRA_ARGS }${1#*=}"; shift ;;
+            --domain) LIBVIRT_DOMAIN="${2:-}"; EXPLICIT_DOMAIN=1; shift 2 ;;
+            --domain=*) LIBVIRT_DOMAIN="${1#*=}"; EXPLICIT_DOMAIN=1; shift ;;
+            --raw-qemu) RAW_QEMU=1; shift ;;
+            --headless) DISPLAY_MODE="none"; shift ;;
+            --optimize) OPTIMIZE_HOST=1; shift ;;
+            --no-optimize) OPTIMIZE_HOST=0; shift ;;
+            --fullscreen) FULLSCREEN=1; shift ;;
+            --with-boot) WITH_BOOT=1; shift ;;
+            --json) JSON_OUT=1; shift ;;
+            --dry-run|-n) DRY_RUN=1; shift ;;
+            --help|-h) usage; exit 0 ;;
+            *) pz_error "unknown windows-vm option: $1"; return 1 ;;
+        esac
+    done
+}
+
+run_privileged_noninteractive() {
+    if [ "$EUID" -eq 0 ]; then
+        "$@"
+        return $?
+    fi
+    if command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        sudo -n "$@"
+        return $?
+    fi
+    return 1
+}
+
+write_root_value() {
+    local path="$1" value="$2" label="${3:-$path}"
+    [ -e "$path" ] || return 0
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would set $label -> $value"
+        return 0
+    fi
+    if [ -w "$path" ]; then
+        printf '%s\n' "$value" > "$path" 2>/dev/null || true
+        return 0
+    fi
+    if run_privileged_noninteractive tee "$path" >/dev/null <<< "$value"; then
+        return 0
+    fi
+    pz_warn "$label requires root; skipped non-interactive write"
+    return 0
+}
+
+sysctl_set_noninteractive() {
+    local key="$1" value="$2"
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would sysctl $key=$value"
+        return 0
+    fi
+    if [ "$EUID" -eq 0 ]; then
+        sysctl -w "$key=$value" >/dev/null 2>&1 || true
+    elif command -v sudo >/dev/null 2>&1 && sudo -n true >/dev/null 2>&1; then
+        sudo -n sysctl -w "$key=$value" >/dev/null 2>&1 || true
+    fi
+}
+
+apply_host_optimizations() {
+    [ "$OPTIMIZE_HOST" = "1" ] || return 0
+    pz_info "applying Windows VM host optimizations"
+    command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl set performance >/dev/null 2>&1 || true
+    sysctl_set_noninteractive vm.swappiness 1
+    sysctl_set_noninteractive vm.vfs_cache_pressure 50
+    sysctl_set_noninteractive vm.dirty_background_ratio 5
+    sysctl_set_noninteractive vm.dirty_ratio 20
+    sysctl_set_noninteractive kernel.nmi_watchdog 0
+    write_root_value /sys/kernel/mm/transparent_hugepage/enabled madvise "transparent hugepages mode"
+    write_root_value /sys/kernel/mm/transparent_hugepage/defrag madvise "transparent hugepages defrag"
+    write_root_value /sys/kernel/mm/ksm/run 1 "KSM"
+    write_root_value /sys/kernel/mm/ksm/pages_to_scan 1000 "KSM pages_to_scan"
+    write_root_value /sys/kernel/mm/ksm/sleep_millisecs 20 "KSM sleep_millisecs"
+    local governor
+    for governor in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+        [ -e "$governor" ] || continue
+        write_root_value "$governor" performance "CPU governor"
+    done
+}
+
+json_escape() {
+    jq -Rs . <<< "${1:-}" | tr -d '\n'
+}
+
+normalize_ram_mb() {
+    local value="$1"
+    [ -n "$value" ] || { echo ""; return 0; }
+    case "$value" in
+        *G|*g) echo "$(( ${value%[Gg]} * 1024 ))" ;;
+        *M|*m) echo "${value%[Mm]}" ;;
+        *) echo "$value" ;;
+    esac
+}
+
+shell_join() {
+    local out="" arg
+    for arg in "$@"; do
+        printf -v arg '%q' "$arg"
+        out="${out:+$out }$arg"
+    done
+    printf '%s\n' "$out"
+}
+
+command_path() {
+    command -v "$1" 2>/dev/null || true
+}
+
+virtiofsd_path() {
+    command -v virtiofsd 2>/dev/null || {
+        [ -x /usr/lib/virtiofsd ] && printf '%s\n' /usr/lib/virtiofsd
+    } || true
+}
+
+target_home() {
+    getent passwd "$TARGET_USER" | cut -d: -f6
+}
+
+chown_target_user() {
+    [ "$EUID" -eq 0 ] || return 0
+    chown "$TARGET_USER:$TARGET_USER" "$@" 2>/dev/null || true
+}
+
+target_user_can_rw() {
+    local path="$1"
+    if [ "$EUID" -eq 0 ] && command -v runuser >/dev/null 2>&1; then
+        runuser -u "$TARGET_USER" -- sh -c 'test -r "$1" && test -w "$1"' sh "$path" 2>/dev/null
+        return $?
+    fi
+    [ -r "$path" ] && [ -w "$path" ]
+}
+
+default_ram_mb() {
+    local total reserve ram
+    total="$(awk '/MemTotal:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || echo 8192)"
+    reserve=2048
+    ram=$(( total * 70 / 100 ))
+    [ "$ram" -gt $(( total - reserve )) ] && ram=$(( total - reserve ))
+    [ "$ram" -lt 4096 ] && ram=$(( total / 2 ))
+    [ "$ram" -lt 2048 ] && ram=2048
+    echo "$ram"
+}
+
+default_cpus() {
+    local total cpus
+    total="$(nproc 2>/dev/null || echo 2)"
+    cpus="$total"
+    [ "$total" -gt 4 ] && cpus=$(( total - 1 ))
+    [ "$total" -gt 8 ] && cpus=$(( total - 2 ))
+    [ "$cpus" -lt 2 ] && cpus=2
+    echo "$cpus"
+}
+
+disk_actual_bytes() {
+    local path="$1" info value
+    [ -f "$path" ] || { echo 0; return 0; }
+    if command -v qemu-img >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        info="$(qemu-img info --output=json "$path" 2>/dev/null || true)"
+        if [ -n "$info" ]; then
+            value="$(jq -r '."actual-size" // 0' <<< "$info" 2>/dev/null || true)"
+            echo "${value:-0}"
+            return 0
+        fi
+        stat -c %s "$path" 2>/dev/null || echo 0
+    else
+        stat -c %s "$path" 2>/dev/null || echo 0
+    fi
+}
+
+disk_virtual_bytes() {
+    local path="$1" info value
+    [ -f "$path" ] || { echo 0; return 0; }
+    if command -v qemu-img >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        info="$(qemu-img info --output=json "$path" 2>/dev/null || true)"
+        if [ -n "$info" ]; then
+            value="$(jq -r '."virtual-size" // 0' <<< "$info" 2>/dev/null || true)"
+            echo "${value:-0}"
+            return 0
+        fi
+        echo 0
+    else
+        echo 0
+    fi
+}
+
+disk_looks_installed() {
+    local path="$1" actual virtual min_actual=$((5 * 1024 * 1024 * 1024)) min_virtual=$((32 * 1024 * 1024 * 1024))
+    actual="$(disk_actual_bytes "$path")"
+    virtual="$(disk_virtual_bytes "$path")"
+    [ "${actual:-0}" -ge "$min_actual" ] && return 0
+    [ "${virtual:-0}" -ge "$min_virtual" ] && [ "${actual:-0}" -ge $((1024 * 1024 * 1024)) ] && return 0
+    return 1
+}
+
+find_existing_windows_disk() {
+    local base path
+    for path in \
+        "$VM_DIR_DEFAULT/phasezero-windows.qcow2" \
+        "$HOME/VirtualMachines/PhaseZero-Windows/phasezero-windows.qcow2" \
+        "$HOME/VirtualMachines/Windows/Windows.qcow2" \
+        "$HOME/VirtualMachines/Windows11/Windows11.qcow2" \
+        "$HOME/.local/share/libvirt/images/windows.qcow2" \
+        "$HOME/.local/share/libvirt/images/win11.qcow2" \
+        "/var/lib/libvirt/images/windows.qcow2" \
+        "/var/lib/libvirt/images/win11.qcow2"; do
+        [ -f "$path" ] && disk_looks_installed "$path" && { printf '%s\n' "$path"; return 0; }
+    done
+    for base in "$HOME/VirtualMachines" "$HOME/.local/share/libvirt/images" "/var/lib/libvirt/images" "$HOME" "/mnt/sdcard"; do
+        [ -d "$base" ] || continue
+        path="$(find "$base" -maxdepth 4 -type f \( -iname '*win*.qcow2' -o -iname '*windows*.qcow2' -o -iname '*win*.img' -o -iname '*windows*.img' -o -iname '*win*.raw' -o -iname '*windows*.raw' -o -iname '*win*.vmdk' -o -iname '*windows*.vmdk' \) 2>/dev/null | sort | while IFS= read -r candidate; do disk_looks_installed "$candidate" && { printf '%s\n' "$candidate"; break; }; done | sed -n '1p' || true)"
+        [ -n "$path" ] && { printf '%s\n' "$path"; return 0; }
+    done
+    return 0
+}
+
+find_usable_existing_windows_disk() {
+    local candidate
+    candidate="$(find_existing_windows_disk | sed -n '1p')"
+    [ -n "$candidate" ] && [ -r "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    return 0
+}
+
+find_existing_windows_disk_any() {
+    local base path
+    for path in \
+        "$VM_DIR_DEFAULT/phasezero-windows.qcow2" \
+        "$HOME/VirtualMachines/PhaseZero-Windows/phasezero-windows.qcow2"; do
+        [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
+    done
+    for base in "$HOME/VirtualMachines" "$HOME/.local/share/libvirt/images" "/var/lib/libvirt/images" "$HOME" "/mnt/sdcard"; do
+        [ -d "$base" ] || continue
+        path="$(find "$base" -maxdepth 4 -type f \( -iname '*win*.qcow2' -o -iname '*windows*.qcow2' -o -iname '*win*.img' -o -iname '*windows*.img' -o -iname '*win*.raw' -o -iname '*windows*.raw' -o -iname '*win*.vmdk' -o -iname '*windows*.vmdk' \) 2>/dev/null | sort | sed -n '1p' || true)"
+        [ -n "$path" ] && { printf '%s\n' "$path"; return 0; }
+    done
+    return 0
+}
+
+libvirt_uri() {
+    printf '%s\n' "${PZ_WINDOWS_VM_LIBVIRT_URI:-qemu:///system}"
+}
+
+find_existing_windows_domain() {
+    command -v virsh >/dev/null 2>&1 || return 0
+    local uri domain source
+    uri="$(libvirt_uri)"
+    while IFS= read -r domain; do
+        [ -n "$domain" ] || continue
+        case "${domain,,}" in
+            *win*|*windows*)
+                printf '%s\n' "$domain"
+                return 0
+                ;;
+        esac
+        while IFS= read -r source; do
+            case "${source,,}" in
+                *win*|*windows*)
+                    printf '%s\n' "$domain"
+                    return 0
+                    ;;
+            esac
+        done < <(virsh -c "$uri" domblklist "$domain" --details 2>/dev/null | awk '$2 == "disk" {print $4}')
+    done < <(virsh -c "$uri" list --all --name 2>/dev/null)
+    return 0
+}
+
+libvirt_domain_disk() {
+    local domain="$1"
+    [ -n "$domain" ] || return 0
+    virsh -c "$(libvirt_uri)" domblklist "$domain" --details 2>/dev/null |
+        awk '$2 == "disk" {print $4; exit}'
+}
+
+discovered_windows_disk() {
+    find_usable_existing_windows_disk | sed -n '1p'
+}
+
+disk_format() {
+    local path="$1" info fmt
+    if [ -f "$path" ] && command -v qemu-img >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+        info="$(qemu-img info --output=json "$path" 2>/dev/null || true)"
+        fmt="$(jq -r '.format // empty' <<< "$info" 2>/dev/null || true)"
+        [ -n "$fmt" ] && { printf '%s\n' "$fmt"; return 0; }
+    fi
+    case "$path" in
+        *.qcow2) echo qcow2 ;;
+        *.vmdk) echo vmdk ;;
+        *.raw) echo raw ;;
+        *.img) echo raw ;;
+        *) echo qcow2 ;;
+    esac
+}
+
+discovery_json() {
+    local installed usable any configured installed_like="no" usable_like="no" any_like="no" configured_like="no" installed_readable="no" usable_readable="no" any_readable="no" configured_readable="no"
+    installed="$(find_existing_windows_disk | sed -n '1p')"
+    usable="$(find_usable_existing_windows_disk | sed -n '1p')"
+    any="$(find_existing_windows_disk_any | sed -n '1p')"
+    configured="${PZ_WINDOWS_VM_DISK:-}"
+    [ -z "$configured" ] && [ -f "$CONFIG_FILE" ] && configured="$(bash -c '. "$0"; printf "%s\n" "${PZ_WINDOWS_VM_DISK:-}"' "$CONFIG_FILE" 2>/dev/null || true)"
+    if [ -n "$installed" ]; then
+        installed_like="yes"
+        [ -r "$installed" ] && installed_readable="yes"
+    fi
+    if [ -n "$usable" ]; then
+        usable_like="yes"
+        [ -r "$usable" ] && usable_readable="yes"
+    fi
+    if [ -n "$any" ] && disk_looks_installed "$any"; then
+        any_like="yes"
+    fi
+    if [ -n "$any" ] && [ -r "$any" ]; then
+        any_readable="yes"
+    fi
+    if [ -n "$configured" ] && [ -f "$configured" ] && disk_looks_installed "$configured"; then
+        configured_like="yes"
+    fi
+    if [ -n "$configured" ] && [ -r "$configured" ]; then
+        configured_readable="yes"
+    fi
+    jq -n \
+        --arg installed "$installed" \
+        --arg usable "$usable" \
+        --arg any "$any" \
+        --arg configured "$configured" \
+        --arg installedLike "$installed_like" \
+        --arg usableLike "$usable_like" \
+        --arg anyLike "$any_like" \
+        --arg configuredLike "$configured_like" \
+        --arg installedReadable "$installed_readable" \
+        --arg usableReadable "$usable_readable" \
+        --arg anyReadable "$any_readable" \
+        --arg configuredReadable "$configured_readable" \
+        '{
+            configuredDisk: {path: $configured, installedLike: ($configuredLike == "yes"), readable: ($configuredReadable == "yes")},
+            discoveredInstalledDisk: {path: $installed, installedLike: ($installedLike == "yes"), readable: ($installedReadable == "yes"), usable: (($installedLike == "yes") and ($installedReadable == "yes"))},
+            discoveredUsableDisk: {path: $usable, installedLike: ($usableLike == "yes"), readable: ($usableReadable == "yes"), usable: (($usableLike == "yes") and ($usableReadable == "yes"))},
+            discoveredAnyDisk: {path: $any, installedLike: ($anyLike == "yes"), readable: ($anyReadable == "yes")}
+        }'
+}
+
+detect_windows_iso() {
+    local base found
+    for base in /mnt/sdcard/Steam "$HOME/Downloads" "$HOME" /mnt/sdcard; do
+        [ -d "$base" ] || continue
+        found="$(find "$base" -maxdepth 4 -type f \( -iname '*win*.iso' -o -iname '*windows*.iso' \) 2>/dev/null | sort | sed -n '1p' || true)"
+        [ -n "$found" ] && { printf '%s\n' "$found"; return 0; }
+    done
+    return 0
+}
+
+detect_virtio_iso() {
+    local path
+    for path in \
+        "$HOME/Downloads/virtio-win.iso" \
+        "/usr/share/virtio/virtio-win.iso" \
+        "/var/lib/libvirt/images/virtio-win.iso" \
+        "/mnt/sdcard/Steam/virtio-win.iso"; do
+        [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
+    done
+    return 0
+}
+
+ovmf_code_path() {
+    local path
+    for path in \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/OVMF/OVMF_CODE.secboot.fd \
+        /usr/share/OVMF/OVMF_CODE.fd; do
+        [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
+    done
+    return 0
+}
+
+ovmf_vars_template() {
+    local path
+    for path in \
+        /usr/share/edk2/x64/OVMF_VARS.4m.fd \
+        /usr/share/OVMF/OVMF_VARS.fd; do
+        [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
+    done
+    return 0
+}
+
+load_config() {
+    [ -f "$CONFIG_FILE" ] || return 0
+    # PhaseZero writes this file as shell-escaped KEY=VALUE pairs.
+    # shellcheck disable=SC1090
+    . "$CONFIG_FILE"
+}
+
+effective_config() {
+    load_config
+    local discovered_disk="${PZ_WINDOWS_VM_DISCOVERED_DISK:-$(discovered_windows_disk)}"
+    VM_NAME="${PZ_WINDOWS_VM_NAME:-$VM_NAME_DEFAULT}"
+    VM_DIR="${VM_DIR:-${PZ_WINDOWS_VM_DIR:-$VM_DIR_DEFAULT}}"
+    local configured_disk="${PZ_WINDOWS_VM_DISK:-}"
+    if [ "$EXPLICIT_DISK" -eq 0 ] && [ -n "$configured_disk" ] && [ -n "$discovered_disk" ] && ! disk_looks_installed "$configured_disk"; then
+        configured_disk=""
+    fi
+    DISK_PATH="${DISK_PATH:-${configured_disk:-${discovered_disk:-$VM_DIR/phasezero-windows.qcow2}}}"
+    if [ "$EXPLICIT_DOMAIN" -eq 0 ]; then
+        LIBVIRT_DOMAIN="${LIBVIRT_DOMAIN:-${PZ_WINDOWS_VM_LIBVIRT_DOMAIN:-$(find_existing_windows_domain)}}"
+    fi
+    if [ -n "$LIBVIRT_DOMAIN" ]; then
+        local domain_disk
+        domain_disk="$(libvirt_domain_disk "$LIBVIRT_DOMAIN")"
+        [ -n "$domain_disk" ] && [ "$EXPLICIT_DISK" -eq 0 ] && DISK_PATH="$domain_disk"
+    fi
+    ISO_PATH="${ISO_PATH:-${PZ_WINDOWS_VM_ISO:-$(detect_windows_iso)}}"
+    VIRTIO_ISO="${VIRTIO_ISO:-${PZ_WINDOWS_VM_VIRTIO_ISO:-$(detect_virtio_iso)}}"
+    RAM_MB="${RAM_MB:-${PZ_WINDOWS_VM_RAM_MB:-$(default_ram_mb)}}"
+    CPUS="${CPUS:-${PZ_WINDOWS_VM_CPUS:-$(default_cpus)}}"
+    USB_MODE="${USB_MODE:-${PZ_WINDOWS_VM_USB_MODE:-redir}}"
+    PCI_DEVICES="${PCI_DEVICES:-${PZ_WINDOWS_VM_PCI_DEVICES:-}}"
+    EXTRA_ARGS="${EXTRA_ARGS:-${PZ_WINDOWS_VM_EXTRA_ARGS:-}}"
+    OVMF_CODE="${PZ_WINDOWS_VM_OVMF_CODE:-$(ovmf_code_path)}"
+    OVMF_VARS="${PZ_WINDOWS_VM_OVMF_VARS:-$VM_DIR/OVMF_VARS.fd}"
+    SHARE_ROOT="${PZ_WINDOWS_VM_SHARE_ROOT:-$VM_DIR/shares}"
+    TPM_DIR="${PZ_WINDOWS_VM_TPM_DIR:-$VM_DIR/tpm}"
+    local configured_source="${PZ_WINDOWS_VM_DISK_SOURCE:-new}"
+    DISK_SOURCE="$configured_source"
+    if [ "$EXPLICIT_DISK" -eq 1 ]; then
+        DISK_SOURCE="explicit"
+    elif [ -n "${PZ_WINDOWS_VM_DISK:-}" ] && [ "$DISK_PATH" = "${PZ_WINDOWS_VM_DISK:-}" ]; then
+        if [ "$configured_source" = "new" ]; then
+            DISK_SOURCE="config"
+        fi
+    elif [ -n "$discovered_disk" ] && [ "$DISK_PATH" = "$discovered_disk" ]; then
+        DISK_SOURCE="discovered-installed"
+    fi
+}
+
+write_config() {
+    install -d "$CONFIG_DIR"
+    {
+        printf '# PhaseZero managed Windows VM config\n'
+        printf 'PZ_WINDOWS_VM_NAME=%q\n' "$VM_NAME"
+        printf 'PZ_WINDOWS_VM_DIR=%q\n' "$VM_DIR"
+        printf 'PZ_WINDOWS_VM_DISK=%q\n' "$DISK_PATH"
+        printf 'PZ_WINDOWS_VM_LIBVIRT_DOMAIN=%q\n' "$LIBVIRT_DOMAIN"
+        printf 'PZ_WINDOWS_VM_LIBVIRT_URI=%q\n' "$(libvirt_uri)"
+        printf 'PZ_WINDOWS_VM_ISO=%q\n' "$ISO_PATH"
+        printf 'PZ_WINDOWS_VM_VIRTIO_ISO=%q\n' "$VIRTIO_ISO"
+        printf 'PZ_WINDOWS_VM_RAM_MB=%q\n' "$RAM_MB"
+        printf 'PZ_WINDOWS_VM_CPUS=%q\n' "$CPUS"
+        printf 'PZ_WINDOWS_VM_USB_MODE=%q\n' "$USB_MODE"
+        printf 'PZ_WINDOWS_VM_OVMF_CODE=%q\n' "$OVMF_CODE"
+        printf 'PZ_WINDOWS_VM_OVMF_VARS=%q\n' "$OVMF_VARS"
+        printf 'PZ_WINDOWS_VM_SHARE_ROOT=%q\n' "$SHARE_ROOT"
+        printf 'PZ_WINDOWS_VM_TPM_DIR=%q\n' "$TPM_DIR"
+        printf 'PZ_WINDOWS_VM_PCI_DEVICES=%q\n' "$PCI_DEVICES"
+        printf 'PZ_WINDOWS_VM_EXTRA_ARGS=%q\n' "$EXTRA_ARGS"
+        printf 'PZ_WINDOWS_VM_DISK_SOURCE=%q\n' "$DISK_SOURCE"
+        printf 'PZ_WINDOWS_VM_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
+    } > "$CONFIG_FILE"
+    chown_target_user "$CONFIG_DIR" "$CONFIG_FILE"
+    pz_info "wrote $CONFIG_FILE"
+}
+
+ensure_vm_storage() {
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would create VM directories under $VM_DIR"
+    else
+        install -d "$VM_DIR" "$STATE_DIR" "$RUNTIME_DIR"
+    fi
+    if [ ! -f "$DISK_PATH" ]; then
+        if [ "$DRY_RUN" = "1" ]; then
+            pz_info "dry-run: would create qcow2 disk: $DISK_PATH ($DISK_SIZE)"
+        else
+            qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE"
+            pz_info "created qcow2 disk: $DISK_PATH"
+        fi
+    fi
+    if [ ! -f "$OVMF_VARS" ]; then
+        local vars_template
+        vars_template="$(ovmf_vars_template)"
+        [ -n "$vars_template" ] || { pz_error "OVMF_VARS template missing"; return 1; }
+        if [ "$DRY_RUN" = "1" ]; then
+            pz_info "dry-run: would copy OVMF vars: $vars_template -> $OVMF_VARS"
+        else
+            cp "$vars_template" "$OVMF_VARS"
+            chown_target_user "$OVMF_VARS"
+            pz_info "created OVMF vars: $OVMF_VARS"
+        fi
+    fi
+}
+
+desktop_entry_content() {
+    cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=PhaseZero Windows VM
+Comment=Launch PhaseZero Windows VM
+Exec=$PZ_ROOT/linux/pz windows-vm launch --fullscreen
+Terminal=false
+Categories=System;Utility;
+EOF
+}
+
+boot_reboot_desktop_content() {
+    local exec_line terminal
+    if command -v pkexec >/dev/null 2>&1; then
+        exec_line="pkexec bash $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+        terminal=false
+    else
+        exec_line="$PZ_ROOT/linux/pz windows-vm boot next-reboot"
+        terminal=true
+    fi
+    cat <<EOF
+[Desktop Entry]
+Type=Application
+Name=PhaseZero Reboot to Windows VM
+Comment=Set one-shot GRUB boot to PhaseZero Windows VM and reboot
+Exec=$exec_line
+Terminal=$terminal
+Categories=System;Utility;
+EOF
+}
+
+user_service_content() {
+    cat <<EOF
+[Unit]
+Description=PhaseZero Windows VM
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$PZ_ROOT/linux/pz windows-vm launch --fullscreen
+Restart=no
+
+[Install]
+WantedBy=default.target
+EOF
+}
+
+install_user_files() {
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would write $APPLICATIONS_DIR/phasezero-windows-vm.desktop"
+        pz_info "dry-run: would write $APPLICATIONS_DIR/phasezero-reboot-windows-vm.desktop"
+        pz_info "dry-run: would write $SYSTEMD_USER_DIR/phasezero-windows-vm.service"
+        return 0
+    fi
+    install -d "$APPLICATIONS_DIR" "$SYSTEMD_USER_DIR"
+    desktop_entry_content > "$APPLICATIONS_DIR/phasezero-windows-vm.desktop"
+    boot_reboot_desktop_content > "$APPLICATIONS_DIR/phasezero-reboot-windows-vm.desktop"
+    user_service_content > "$SYSTEMD_USER_DIR/phasezero-windows-vm.service"
+    chown_target_user "$APPLICATIONS_DIR" "$APPLICATIONS_DIR/phasezero-windows-vm.desktop" "$APPLICATIONS_DIR/phasezero-reboot-windows-vm.desktop" "$SYSTEMD_USER_DIR" "$SYSTEMD_USER_DIR/phasezero-windows-vm.service"
+    pz_info "installed user launcher and service"
+}
+
+require_iso_for_install() {
+    if [ -f "$DISK_PATH" ] && disk_looks_installed "$DISK_PATH"; then
+        return 0
+    fi
+    [ -n "$ISO_PATH" ] || { pz_error "Windows ISO missing. Use --iso /path/to/Windows.iso"; return 1; }
+    [ -f "$ISO_PATH" ] || { pz_error "Windows ISO not found: $ISO_PATH"; return 1; }
+}
+
+install_vm() {
+    parse_options "$@"
+    effective_config
+    require_iso_for_install
+    [ -n "$OVMF_CODE" ] || { pz_error "OVMF code firmware missing. Install edk2-ovmf."; return 1; }
+    command -v qemu-img >/dev/null 2>&1 || { pz_error "qemu-img missing. Install qemu-base/qemu-desktop."; return 1; }
+    ensure_vm_storage
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would write $CONFIG_FILE"
+        install_user_files
+        pz_info "dry-run: Windows VM user-space install planned"
+        return 0
+    fi
+    write_config
+    install_user_files
+    if [ "$WITH_BOOT" = "1" ]; then
+        install_boot
+    else
+        pz_info "Windows VM user-space install complete"
+        pz_info "direct GRUB boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot install"
+    fi
+}
+
+ensure_share_links() {
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would prepare SMB share root: $SHARE_ROOT"
+        return 0
+    fi
+    install -d "$SHARE_ROOT"
+    ln -sfn "$HOME" "$SHARE_ROOT/home"
+    [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
+    [ -d "/run/media/$USER" ] && ln -sfn "/run/media/$USER" "$SHARE_ROOT/removable"
+    [ -d "/media/$USER" ] && ln -sfn "/media/$USER" "$SHARE_ROOT/media"
+    [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
+}
+
+audio_driver() {
+    local help
+    help="$(qemu-system-x86_64 -audiodev help 2>&1 || true)"
+    grep -qx 'pipewire' <<< "$help" && { echo pipewire; return 0; }
+    grep -qx 'pa' <<< "$help" && { echo pa; return 0; }
+    echo none
+}
+
+QEMU_ARGS=()
+CLEANUP_PIDS=()
+TPM_PID_FILE=""
+VIRTIOFS_COUNT=0
+
+cleanup_runtime() {
+    local pid
+    for pid in "${CLEANUP_PIDS[@]:-}"; do
+        kill "$pid" >/dev/null 2>&1 || true
+    done
+    if [ -n "${TPM_PID_FILE:-}" ] && [ -f "$TPM_PID_FILE" ]; then
+        kill "$(cat "$TPM_PID_FILE" 2>/dev/null)" >/dev/null 2>&1 || true
+    fi
+}
+
+start_virtiofs_share() {
+    local tag="$1" path="$2" daemon sock pid
+    [ -d "$path" ] || return 0
+    daemon="$(virtiofsd_path)"
+    [ -n "$daemon" ] || return 0
+    sock="$RUNTIME_DIR/virtiofs-$tag.sock"
+    rm -f "$sock"
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would start virtiofsd tag=$tag path=$path socket=$sock"
+    else
+        "$daemon" --shared-dir "$path" --socket-path "$sock" --cache auto --sandbox none --inode-file-handles=never --log-level warn &
+        pid=$!
+        CLEANUP_PIDS+=("$pid")
+        local i
+        for i in $(seq 1 50); do
+            [ -S "$sock" ] && break
+            sleep 0.05
+        done
+        if [ ! -S "$sock" ]; then
+            pz_warn "virtiofsd socket did not become ready for $tag; share skipped"
+            return 0
+        fi
+    fi
+    QEMU_ARGS+=("-chardev" "socket,id=charfs_$tag,path=$sock")
+    QEMU_ARGS+=("-device" "vhost-user-fs-pci,chardev=charfs_$tag,tag=$tag")
+    VIRTIOFS_COUNT=$((VIRTIOFS_COUNT + 1))
+}
+
+start_tpm() {
+    command -v swtpm >/dev/null 2>&1 || return 0
+    install -d "$TPM_DIR" "$RUNTIME_DIR"
+    local sock="$RUNTIME_DIR/swtpm.sock"
+    TPM_PID_FILE="$RUNTIME_DIR/swtpm.pid"
+    rm -f "$sock" "$TPM_PID_FILE"
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would start swtpm socket: $sock"
+    else
+        swtpm socket --tpm2 \
+            --tpmstate "dir=$TPM_DIR" \
+            --ctrl "type=unixio,path=$sock,terminate" \
+            --pid "file=$TPM_PID_FILE" \
+            --log "file=$STATE_DIR/swtpm.log,level=20" \
+            --daemon
+        local i
+        for i in $(seq 1 50); do
+            [ -S "$sock" ] && break
+            sleep 0.05
+        done
+    fi
+    QEMU_ARGS+=("-chardev" "socket,id=chrtpm,path=$sock")
+    QEMU_ARGS+=("-tpmdev" "emulator,id=tpm0,chardev=chrtpm")
+    QEMU_ARGS+=("-device" "tpm-tis,tpmdev=tpm0")
+}
+
+add_usb_redirection() {
+    local idx
+    QEMU_ARGS+=("-device" "qemu-xhci,id=xhci,p2=8,p3=8")
+    QEMU_ARGS+=("-device" "usb-kbd,bus=xhci.0")
+    QEMU_ARGS+=("-device" "usb-tablet,bus=xhci.0")
+    case "$USB_MODE" in
+        redir|peripherals|all)
+            for idx in 0 1 2 3; do
+                QEMU_ARGS+=("-chardev" "spicevmc,id=usbredir$idx,name=usbredir")
+                QEMU_ARGS+=("-device" "usb-redir,chardev=usbredir$idx,id=usbredir$idx")
+            done
+            ;;
+    esac
+}
+
+add_raw_usb_devices() {
+    local mode="$1" dev vendor product bus addr class
+    [ "$mode" = "all" ] || [ "$mode" = "peripherals" ] || return 0
+    for dev in /sys/bus/usb/devices/*; do
+        [ -f "$dev/idVendor" ] && [ -f "$dev/idProduct" ] || continue
+        vendor="$(cat "$dev/idVendor" 2>/dev/null || true)"
+        product="$(cat "$dev/idProduct" 2>/dev/null || true)"
+        bus="$(cat "$dev/busnum" 2>/dev/null || true)"
+        addr="$(cat "$dev/devnum" 2>/dev/null || true)"
+        class="$(cat "$dev/bDeviceClass" 2>/dev/null || true)"
+        [ "$class" = "09" ] && continue
+        if [ "$mode" = "peripherals" ] && [ "$class" = "08" ]; then
+            continue
+        fi
+        [ -n "$vendor" ] && [ -n "$product" ] && [ -n "$bus" ] && [ -n "$addr" ] || continue
+        QEMU_ARGS+=("-device" "usb-host,hostbus=$((10#$bus)),hostaddr=$((10#$addr))")
+    done
+}
+
+add_pci_devices() {
+    local dev
+    for dev in $PCI_DEVICES; do
+        [[ "$dev" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]$ ]] || {
+            pz_warn "invalid PCI id skipped: $dev"
+            continue
+        }
+        QEMU_ARGS+=("-device" "vfio-pci,host=$dev")
+    done
+}
+
+build_qemu_args() {
+    local audio netdev accel_cpu accel_machine
+    QEMU_ARGS=()
+    VIRTIOFS_COUNT=0
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would prepare runtime dir: $RUNTIME_DIR"
+    else
+        install -d "$RUNTIME_DIR" "$STATE_DIR"
+    fi
+    ensure_share_links
+    start_virtiofs_share hosthome "$HOME"
+    [ -d /mnt/sdcard ] && start_virtiofs_share sdcard /mnt/sdcard
+    [ -d "/run/media/$USER" ] && start_virtiofs_share removable "/run/media/$USER"
+    [ -d "/media/$USER" ] && start_virtiofs_share media "/media/$USER"
+    [ -d /mnt ] && start_virtiofs_share mnt /mnt
+    start_tpm
+
+    QEMU_ARGS+=("-name" "$VM_NAME")
+    if [ -e /dev/kvm ]; then
+        accel_machine="q35,accel=kvm,kernel_irqchip=split"
+        accel_cpu="host,hv_relaxed,hv_vapic,hv_spinlocks=0x1fff,hv_time,hv_vpindex,hv_runtime,hv_synic,hv_stimer,hv_reset,hv_frequencies"
+        QEMU_ARGS+=("-enable-kvm")
+    else
+        accel_machine="q35,accel=tcg"
+        accel_cpu="max"
+    fi
+    QEMU_ARGS+=("-machine" "$accel_machine")
+    QEMU_ARGS+=("-cpu" "$accel_cpu")
+    QEMU_ARGS+=("-smp" "$CPUS,sockets=1,cores=$CPUS,threads=1")
+    QEMU_ARGS+=("-m" "${RAM_MB}M")
+    if [ "$VIRTIOFS_COUNT" -gt 0 ]; then
+        QEMU_ARGS+=("-object" "memory-backend-memfd,id=mem,size=${RAM_MB}M,share=on")
+        QEMU_ARGS+=("-numa" "node,memdev=mem")
+    fi
+    QEMU_ARGS+=("-drive" "if=pflash,format=raw,readonly=on,file=$OVMF_CODE")
+    QEMU_ARGS+=("-drive" "if=pflash,format=raw,file=$OVMF_VARS")
+    QEMU_ARGS+=("-device" "intel-iommu,intremap=on,caching-mode=on")
+    QEMU_ARGS+=("-drive" "if=none,id=system,file=$DISK_PATH,format=$(disk_format "$DISK_PATH"),cache=none,discard=unmap,aio=io_uring")
+    QEMU_ARGS+=("-device" "nvme,drive=system,serial=PZWINVM0")
+    if [ "$ISO_EXPLICIT" = "1" ] && [ -n "$ISO_PATH" ] && [ -f "$ISO_PATH" ]; then
+        QEMU_ARGS+=("-cdrom" "$ISO_PATH")
+        QEMU_ARGS+=("-boot" "order=d,menu=on")
+    else
+        QEMU_ARGS+=("-boot" "menu=on")
+    fi
+    if [ -n "$VIRTIO_ISO" ] && [ -f "$VIRTIO_ISO" ]; then
+        QEMU_ARGS+=("-drive" "file=$VIRTIO_ISO,media=cdrom,readonly=on,index=3")
+    fi
+    QEMU_ARGS+=("-device" "virtio-vga")
+    QEMU_ARGS+=("-device" "virtio-rng-pci")
+    QEMU_ARGS+=("-device" "virtio-balloon-pci")
+    add_usb_redirection
+    add_raw_usb_devices "$USB_MODE"
+    audio="$(audio_driver)"
+    if [ "$audio" != "none" ]; then
+        QEMU_ARGS+=("-audiodev" "$audio,id=audio0")
+        QEMU_ARGS+=("-device" "ich9-intel-hda")
+        QEMU_ARGS+=("-device" "hda-duplex,audiodev=audio0")
+    fi
+    netdev="user,id=net0,hostname=pz-winvm,hostfwd=tcp:127.0.0.1:33890-:3389,hostfwd=tcp:127.0.0.1:59850-:5985"
+    if command -v smbd >/dev/null 2>&1; then
+        netdev="$netdev,smb=$SHARE_ROOT"
+    fi
+    QEMU_ARGS+=("-netdev" "$netdev")
+    QEMU_ARGS+=("-device" "e1000e,netdev=net0,mac=52:54:00:50:5a:00")
+    QEMU_ARGS+=("-spice" "port=5930,disable-ticketing=on")
+    QEMU_ARGS+=("-device" "virtio-serial-pci")
+    QEMU_ARGS+=("-chardev" "spicevmc,id=vdagent,name=vdagent")
+    QEMU_ARGS+=("-device" "virtserialport,chardev=vdagent,name=com.redhat.spice.0")
+    if [ "$DISPLAY_MODE" = "none" ]; then
+        QEMU_ARGS+=("-display" "none")
+    else
+        QEMU_ARGS+=("-display" "gtk,show-cursor=on")
+        [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
+    fi
+    add_pci_devices
+    if [ -n "$EXTRA_ARGS" ]; then
+        # Intentional shell split for expert-only extra QEMU args.
+        # shellcheck disable=SC2206
+        local extra=( $EXTRA_ARGS )
+        QEMU_ARGS+=("${extra[@]}")
+    fi
+}
+
+launch_libvirt_domain() {
+    local uri state display viewer_args=()
+    uri="$(libvirt_uri)"
+    command -v virsh >/dev/null 2>&1 || {
+        pz_error "virsh missing for discovered domain: $LIBVIRT_DOMAIN"
+        return 1
+    }
+    if [ "$DRY_RUN" = "1" ]; then
+        echo "virsh -c $uri start $LIBVIRT_DOMAIN"
+        if [ "$DISPLAY_MODE" != "none" ]; then
+            echo "virt-viewer/spicy fullscreen domain=$LIBVIRT_DOMAIN"
+        fi
+        return 0
+    fi
+    ensure_share_links
+    state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+    if [ "$state" != "running" ]; then
+        virsh -c "$uri" start "$LIBVIRT_DOMAIN"
+    fi
+    if [ "$DISPLAY_MODE" = "none" ]; then
+        pz_info "Windows libvirt domain running headless: $LIBVIRT_DOMAIN"
+        return 0
+    fi
+    if command -v spicy >/dev/null 2>&1; then
+        local attempt
+        for attempt in $(seq 1 100); do
+            display="$(virsh -c "$uri" domdisplay "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+            [ -n "$display" ] && break
+            sleep 0.1
+        done
+        [ -n "${display:-}" ] || {
+            pz_error "SPICE display unavailable for domain: $LIBVIRT_DOMAIN"
+            return 1
+        }
+        [ "$FULLSCREEN" = "1" ] && viewer_args+=(-f)
+        exec spicy --uri "$display" --spice-shared-dir="$SHARE_ROOT" --spice-smartcard "${viewer_args[@]}"
+    fi
+    if command -v virt-viewer >/dev/null 2>&1; then
+        [ "$FULLSCREEN" = "1" ] && viewer_args+=(--full-screen)
+        exec virt-viewer --connect "$uri" --wait --reconnect "${viewer_args[@]}" "$LIBVIRT_DOMAIN"
+    fi
+    pz_error "install virt-viewer or spice-gtk to display domain: $LIBVIRT_DOMAIN"
+    return 1
+}
+
+attach_libvirt_device_config() {
+    local domain="$1" xml="$2" tmp
+    tmp="$(mktemp)"
+    printf '%s\n' "$xml" > "$tmp"
+    if ! virsh -c "$(libvirt_uri)" attach-device "$domain" "$tmp" --config >/dev/null 2>&1; then
+        rm -f "$tmp"
+        return 1
+    fi
+    rm -f "$tmp"
+}
+
+optimize_libvirt_domain() {
+    [ -n "$LIBVIRT_DOMAIN" ] || return 0
+    command -v virsh >/dev/null 2>&1 || return 0
+    local uri state xml redir_count cdrom_target
+    uri="$(libvirt_uri)"
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would tune libvirt domain=$LIBVIRT_DOMAIN ram=${RAM_MB}M cpus=$CPUS"
+        pz_info "dry-run: would eject install ISO and ensure four SPICE USB channels plus smartcard"
+        return 0
+    fi
+    state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+    if [ "$state" = "running" ]; then
+        pz_warn "domain running; persistent libvirt tuning deferred"
+        return 0
+    fi
+    virsh -c "$uri" setmaxmem "$LIBVIRT_DOMAIN" "${RAM_MB}M" --config >/dev/null || true
+    virsh -c "$uri" setmem "$LIBVIRT_DOMAIN" "${RAM_MB}M" --config >/dev/null || true
+    virsh -c "$uri" setvcpus "$LIBVIRT_DOMAIN" "$CPUS" --maximum --config >/dev/null || true
+    virsh -c "$uri" setvcpus "$LIBVIRT_DOMAIN" "$CPUS" --config >/dev/null || true
+    cdrom_target="$(virsh -c "$uri" domblklist "$LIBVIRT_DOMAIN" --details 2>/dev/null | awk '$2 == "cdrom" && $4 != "-" {print $3; exit}')"
+    if [ -n "$cdrom_target" ]; then
+        virsh -c "$uri" change-media "$LIBVIRT_DOMAIN" "$cdrom_target" --eject --config >/dev/null || true
+    fi
+    xml="$(virsh -c "$uri" dumpxml "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+    redir_count="$(grep -c "<redirdev " <<< "$xml" || true)"
+    while [ "$redir_count" -lt 4 ]; do
+        attach_libvirt_device_config "$LIBVIRT_DOMAIN" "<redirdev bus='usb' type='spicevmc'/>" || break
+        redir_count=$((redir_count + 1))
+    done
+    if ! grep -q "<smartcard " <<< "$xml"; then
+        attach_libvirt_device_config "$LIBVIRT_DOMAIN" "<smartcard mode='host'/>" ||
+            pz_warn "libvirt smartcard passthrough unavailable; SPICE client support remains enabled"
+    fi
+    pz_info "libvirt domain tuned: $LIBVIRT_DOMAIN ram=${RAM_MB}M cpus=$CPUS usbredir=$redir_count"
+}
+
+launch_vm() {
+    parse_options "$@"
+    [ "${PZ_WINDOWS_VM_FULLSCREEN:-0}" = "1" ] && FULLSCREEN=1
+    effective_config
+    trap cleanup_runtime EXIT INT TERM
+    apply_host_optimizations
+    if [ -n "$LIBVIRT_DOMAIN" ] && [ "$RAW_QEMU" != "1" ]; then
+        launch_libvirt_domain
+        return $?
+    fi
+    [ -n "$OVMF_CODE" ] || { pz_error "OVMF code firmware missing. Install edk2-ovmf."; return 1; }
+    [ -f "$DISK_PATH" ] || { pz_error "VM disk missing: $DISK_PATH. Run: $PZ_ROOT/linux/pz windows-vm install --iso <windows.iso>"; return 1; }
+    [ -f "$OVMF_VARS" ] || { pz_error "OVMF vars missing: $OVMF_VARS. Run install again."; return 1; }
+    command -v qemu-system-x86_64 >/dev/null 2>&1 || { pz_error "qemu-system-x86_64 missing"; return 1; }
+    build_qemu_args
+    if [ "$DRY_RUN" = "1" ]; then
+        shell_join qemu-system-x86_64 "${QEMU_ARGS[@]}"
+        return 0
+    fi
+    pz_info "Windows VM shares: \\\\10.0.2.4\\qemu"
+    pz_info "SPICE USB redirection: spice://127.0.0.1:5930"
+    if command -v ionice >/dev/null 2>&1; then
+        exec ionice -c 2 -n 0 qemu-system-x86_64 "${QEMU_ARGS[@]}"
+    fi
+    exec qemu-system-x86_64 "${QEMU_ARGS[@]}"
+}
+
+status_json() {
+    effective_config
+    local kvm="no" config="no" disk="no" iso="no" ovmf="no" vars="no" qemu="" qemu_img="" virtiofs="" smbd="" swtpm_bin="" boot_helper="no" boot_service="no" boot_grub="unknown" current_marker="no" installed_like="no" discovery
+    local domain_state="missing" domain_disk=""
+    [ -e /dev/kvm ] && kvm="yes"
+    [ -f "$CONFIG_FILE" ] && config="yes"
+    [ -f "$DISK_PATH" ] && disk="yes"
+    if [ -f "$DISK_PATH" ] && disk_looks_installed "$DISK_PATH"; then
+        installed_like="yes"
+    fi
+    [ -n "$ISO_PATH" ] && [ -f "$ISO_PATH" ] && iso="yes"
+    [ -n "$OVMF_CODE" ] && [ -f "$OVMF_CODE" ] && ovmf="yes"
+    [ -f "$OVMF_VARS" ] && vars="yes"
+    qemu="$(command_path qemu-system-x86_64)"
+    qemu_img="$(command_path qemu-img)"
+    virtiofs="$(virtiofsd_path)"
+    smbd="$(command_path smbd)"
+    swtpm_bin="$(command_path swtpm)"
+    if [ -n "$LIBVIRT_DOMAIN" ]; then
+        domain_state="$(virsh -c "$(libvirt_uri)" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || echo unavailable)"
+        domain_disk="$(libvirt_domain_disk "$LIBVIRT_DOMAIN")"
+    fi
+    [ -x "$BOOT_HELPER_TARGET" ] && boot_helper="yes"
+    [ -f "$SERVICE_FILE" ] && boot_service="yes"
+    boot_grub="$(grub_cfg_entry_state)"
+    grep -qw 'phasezero.windowsvm=1' /proc/cmdline 2>/dev/null && current_marker="yes"
+    discovery="$(discovery_json)"
+    jq -n \
+        --arg configFile "$CONFIG_FILE" \
+        --arg configInstalled "$config" \
+        --arg vmDir "$VM_DIR" \
+        --arg disk "$DISK_PATH" \
+        --arg diskExists "$disk" \
+        --arg iso "$ISO_PATH" \
+        --arg isoExists "$iso" \
+        --arg ramMb "$RAM_MB" \
+        --arg cpus "$CPUS" \
+        --arg usbMode "$USB_MODE" \
+        --arg diskSource "$DISK_SOURCE" \
+        --arg libvirtDomain "$LIBVIRT_DOMAIN" \
+        --arg libvirtUri "$(libvirt_uri)" \
+        --arg libvirtState "$domain_state" \
+        --arg libvirtDisk "$domain_disk" \
+        --arg diskInstalledLike "$installed_like" \
+        --arg kvm "$kvm" \
+        --arg qemu "$qemu" \
+        --arg qemuImg "$qemu_img" \
+        --arg ovmfCode "$OVMF_CODE" \
+        --arg ovmfCodeExists "$ovmf" \
+        --arg ovmfVars "$OVMF_VARS" \
+        --arg ovmfVarsExists "$vars" \
+        --arg virtiofsd "$virtiofs" \
+        --arg smbd "$smbd" \
+        --arg swtpm "$swtpm_bin" \
+        --arg bootHelper "$boot_helper" \
+        --arg bootService "$boot_service" \
+        --arg grubEntry "$boot_grub" \
+        --arg currentMarker "$current_marker" \
+        --argjson discovery "$discovery" \
+        '{
+            config: {path: $configFile, installed: ($configInstalled == "yes")},
+            vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode},
+            libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != "")},
+            host: {kvm: ($kvm == "yes"), qemu: $qemu, qemuImg: $qemuImg, ovmfCode: $ovmfCode, ovmfCodeExists: ($ovmfCodeExists == "yes"), ovmfVars: $ovmfVars, ovmfVarsExists: ($ovmfVarsExists == "yes"), virtiofsd: $virtiofsd, smbd: $smbd, swtpm: $swtpm},
+            discovery: $discovery,
+            boot: {helperInstalled: ($bootHelper == "yes"), serviceInstalled: ($bootService == "yes"), grubCfgEntry: $grubEntry, currentBootWindowsVm: ($currentMarker == "yes")}
+        }'
+}
+
+print_status() {
+    status_json
+}
+
+print_discover() {
+    parse_options "$@"
+    if [ "$JSON_OUT" = "1" ]; then
+        discovery_json
+        return 0
+    fi
+    local discovery
+    discovery="$(discovery_json)"
+    echo "PhaseZero Windows VM discovery"
+    echo "  configured_disk: $(jq -r '.configuredDisk.path // ""' <<< "$discovery")"
+    echo "  discovered_installed_disk: $(jq -r '.discoveredInstalledDisk.path // ""' <<< "$discovery")"
+    echo "  discovered_installed_usable: $(jq -r '.discoveredInstalledDisk.usable // false' <<< "$discovery")"
+    echo "  discovered_usable_disk: $(jq -r '.discoveredUsableDisk.path // ""' <<< "$discovery")"
+    echo "  discovered_any_disk: $(jq -r '.discoveredAnyDisk.path // ""' <<< "$discovery")"
+}
+
+cmd_optimize() {
+    parse_options "$@"
+    effective_config
+    apply_host_optimizations
+    optimize_libvirt_domain
+}
+
+cmd_adopt() {
+    parse_options "$@"
+    local target="${DISK_PATH:-$(find_existing_windows_disk | sed -n '1p')}"
+    [ -n "$target" ] || { pz_error "no existing Windows VM disk found"; return 1; }
+    [ -f "$target" ] || { pz_error "existing disk not found: $target"; return 1; }
+    disk_looks_installed "$target" || { pz_error "disk does not look like an installed Windows VM: $target"; return 1; }
+    if ! target_user_can_rw "$target"; then
+        if [ "$EUID" -ne 0 ]; then
+            pz_error "existing disk is not readable. run: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh adopt --disk '$target'"
+            return 1
+        fi
+        if command -v setfacl >/dev/null 2>&1; then
+            setfacl -m "u:$TARGET_USER:rw" "$target" || true
+        else
+            chmod g+rw "$target" || true
+        fi
+    fi
+    target_user_can_rw "$target" || { pz_error "could not grant $TARGET_USER read/write access to existing disk: $target"; return 1; }
+    DISK_PATH="$target"
+    EXPLICIT_DISK=1
+    effective_config
+    DISK_PATH="$target"
+    DISK_SOURCE="adopted-existing"
+    ensure_vm_storage
+    write_config
+    install_user_files
+    pz_info "adopted existing Windows VM disk: $target"
+}
+
+print_plan() {
+    parse_options "$@"
+    effective_config
+    if [ "$JSON_OUT" = "1" ]; then
+        status_json
+        return 0
+    fi
+    echo "PhaseZero Windows VM plan"
+    echo "  iso: ${ISO_PATH:-missing}"
+    echo "  disk: $DISK_PATH ($DISK_SIZE)"
+    echo "  disk_source: $DISK_SOURCE"
+    echo "  disk_installed_like: $([ -f "$DISK_PATH" ] && disk_looks_installed "$DISK_PATH" && echo yes || echo no)"
+    echo "  ram_mb: $RAM_MB"
+    echo "  cpus: $CPUS"
+    echo "  kvm: $([ -e /dev/kvm ] && echo yes || echo no)"
+    echo "  ovmf: ${OVMF_CODE:-missing}"
+    echo "  tpm: $(command_path swtpm || echo missing)"
+    echo "  home_share: $HOME"
+    echo "  sdcard_share: $([ -d /mnt/sdcard ] && echo /mnt/sdcard || echo missing)"
+    echo "  removable_share: $([ -d "/run/media/$USER" ] && echo "/run/media/$USER" || echo missing)"
+    echo "  smb_unc: \\\\10.0.2.4\\qemu"
+    echo "  spice_usb: spice://127.0.0.1:5930"
+    echo "  direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot install"
+}
+
+need_root() {
+    [ "$EUID" -eq 0 ] && return 0
+    pz_error "root required. run: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot install"
+    return 1
+}
+
+need_root_action() {
+    local action="$1"
+    shift || true
+    [ "$EUID" -eq 0 ] && return 0
+    if command -v pkexec >/dev/null 2>&1 && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then
+        exec pkexec bash "$0" boot "$action" "$@"
+    fi
+    if command -v sudo >/dev/null 2>&1; then
+        exec sudo bash "$0" boot "$action" "$@"
+    fi
+    pz_error "root required for boot $action"
+    return 1
+}
+
+latest_kernel_version() {
+    find /boot -maxdepth 1 -type f -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null |
+        sort -V | tail -1 | sed 's/^vmlinuz-//'
+}
+
+root_uuid() {
+    findmnt -no UUID / 2>/dev/null | head -1
+}
+
+root_subvol() {
+    findmnt -no OPTIONS / 2>/dev/null | tr ',' '\n' | awk -F= '$1 == "subvol" {print $2; exit}'
+}
+
+session_desktop_content() {
+    cat <<EOF
+[Desktop Entry]
+Name=PhaseZero Windows VM
+Comment=Start PhaseZero Windows VM without desktop login
+Exec=$SESSION_TARGET
+Type=Application
+DesktopNames=PhaseZeroWindowsVM
+EOF
+}
+
+root_env_content() {
+    cat <<EOF
+# PhaseZero managed Windows VM boot environment
+PZ_WINDOWS_VM_REPO=$PZ_ROOT
+PZ_WINDOWS_VM_BOOT_USER=$TARGET_USER
+EOF
+}
+
+boot_service_content() {
+    cat <<EOF
+[Unit]
+Description=PhaseZero Windows VM GRUB boot session switch
+DefaultDependencies=no
+After=local-fs.target
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+Environment=PZ_WINDOWS_VM_BOOT_USER=$TARGET_USER
+ExecStart=$BOOT_HELPER_TARGET
+
+[Install]
+WantedBy=graphical.target
+EOF
+}
+
+grub_script_content() {
+    local uuid version kernel initrd kernel_rel initrd_rel amd_ucode_rel intel_ucode_rel subvol rootflags=""
+    uuid="$(root_uuid)"
+    version="$(latest_kernel_version)"
+    [ -n "$uuid" ] || { pz_error "could not resolve root UUID"; return 1; }
+    [ -n "$version" ] || { pz_error "could not resolve /boot/vmlinuz-*"; return 1; }
+    kernel="/boot/vmlinuz-$version"
+    initrd="/boot/initramfs-$version.img"
+    [ -f "$kernel" ] || { pz_error "missing kernel: $kernel"; return 1; }
+    [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
+    kernel_rel="$(grub-mkrelpath "$kernel")"
+    initrd_rel="$(grub-mkrelpath "$initrd")"
+    amd_ucode_rel="$([ -f /boot/amd-ucode.img ] && grub-mkrelpath /boot/amd-ucode.img || true)"
+    intel_ucode_rel="$([ -f /boot/intel-ucode.img ] && grub-mkrelpath /boot/intel-ucode.img || true)"
+    subvol="$(root_subvol || true)"
+    [ -n "$subvol" ] && rootflags=" rootflags=subvol=$subvol"
+
+    cat <<EOF
+#!/usr/bin/env bash
+exec tail -n +3 "\$0"
+# PhaseZero managed GRUB entry. Re-run linux/pz windows-vm boot install after kernel changes.
+menuentry '$BOOT_ENTRY' --class windows --class gnu-linux --class gnu --class os {
+    insmod part_gpt
+    insmod btrfs
+    search --no-floppy --fs-uuid --set=root $uuid
+    echo 'Booting PhaseZero Windows VM...'
+    linux $kernel_rel root=UUID=$uuid rw$rootflags quiet splash phasezero.windowsvm=1
+    initrd $amd_ucode_rel $intel_ucode_rel $initrd_rel
+}
+EOF
+}
+
+refresh_grub_config() {
+    if command -v update-grub >/dev/null 2>&1; then
+        update-grub
+    else
+        grub-mkconfig -o "$GRUB_CFG"
+    fi
+}
+
+grub_cfg_entry_state() {
+    if [ -r "$GRUB_CFG" ]; then
+        grep -Fq "menuentry '$BOOT_ENTRY'" "$GRUB_CFG" && echo present || echo missing
+    elif [ "$EUID" -eq 0 ] && [ -f "$GRUB_CFG" ]; then
+        grep -Fq "menuentry '$BOOT_ENTRY'" "$GRUB_CFG" && echo present || echo missing
+    else
+        echo unknown-permission
+    fi
+}
+
+install_boot() {
+    need_root
+    install -d /usr/local/lib/phasezero /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
+    install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
+    install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
+    root_env_content > "$ROOT_ENV_FILE"
+    chmod 0644 "$ROOT_ENV_FILE"
+    session_desktop_content > "$WAYLAND_SESSION_FILE"
+    session_desktop_content > "$XSESSION_FILE"
+    chmod 0644 "$WAYLAND_SESSION_FILE" "$XSESSION_FILE"
+    boot_service_content > "$SERVICE_FILE"
+    chmod 0644 "$SERVICE_FILE"
+    grub_script_content > "$GRUB_SCRIPT"
+    chmod 0755 "$GRUB_SCRIPT"
+    systemctl daemon-reload
+    systemctl enable phasezero-windows-vm-boot-prepare.service >/dev/null
+    refresh_grub_config
+    pz_info "PhaseZero Windows VM GRUB boot entry installed"
+}
+
+remove_boot() {
+    need_root
+    systemctl disable phasezero-windows-vm-boot-prepare.service >/dev/null 2>&1 || true
+    rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$WAYLAND_SESSION_FILE" "$XSESSION_FILE" "$BOOT_HELPER_TARGET" "$SESSION_TARGET" "$ROOT_ENV_FILE"
+    if [ -f "$SDDM_CONF" ] && grep -q 'PhaseZero managed' "$SDDM_CONF" 2>/dev/null; then
+        rm -f "$SDDM_CONF"
+    fi
+    systemctl daemon-reload
+    refresh_grub_config
+    pz_info "PhaseZero Windows VM GRUB boot entry removed"
+}
+
+ensure_boot_entry_ready() {
+    local state
+    if [ ! -x "$BOOT_HELPER_TARGET" ] || [ ! -x "$GRUB_SCRIPT" ]; then
+        pz_warn "Windows VM GRUB boot files incomplete; reinstalling"
+        install_boot
+        return 0
+    fi
+    state="$(grub_cfg_entry_state)"
+    if [ "$state" = "missing" ]; then
+        pz_warn "Windows VM GRUB menuentry missing from $GRUB_CFG; regenerating"
+        refresh_grub_config
+        state="$(grub_cfg_entry_state)"
+    fi
+    if [ "$state" != "present" ]; then
+        pz_error "Windows VM GRUB menuentry not confirmed: $state"
+        return 1
+    fi
+}
+
+set_next_boot_root() {
+    command -v grub-reboot >/dev/null 2>&1 || { pz_error "grub-reboot missing"; return 1; }
+    ensure_boot_entry_ready
+    grub-reboot "$BOOT_ENTRY"
+    pz_info "next boot set to: $BOOT_ENTRY"
+    pz_info "run: systemctl reboot"
+}
+
+set_next_boot() {
+    need_root_action next
+    set_next_boot_root
+}
+
+next_reboot() {
+    need_root_action next-reboot
+    set_next_boot_root
+    pz_info "rebooting into Windows VM"
+    systemctl reboot
+}
+
+set_default_boot() {
+    need_root_action set-default
+    command -v grub-set-default >/dev/null 2>&1 || { pz_error "grub-set-default missing"; return 1; }
+    ensure_boot_entry_ready
+    grub-set-default "$BOOT_ENTRY"
+    pz_warn "permanent GRUB default set to: $BOOT_ENTRY"
+}
+
+clear_next_boot() {
+    need_root_action clear-next
+    command -v grub-editenv >/dev/null 2>&1 || { pz_error "grub-editenv missing"; return 1; }
+    grub-editenv - unset next_entry >/dev/null 2>&1 || true
+    pz_info "cleared GRUB one-shot next_entry"
+}
+
+status_boot() {
+    local grub_next_entry="" grub_saved_entry="" cmdline_marker="no"
+    grep -qw 'phasezero.windowsvm=1' /proc/cmdline 2>/dev/null && cmdline_marker="yes"
+    if command -v grub-editenv >/dev/null 2>&1; then
+        grub_next_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}')"
+        grub_saved_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "saved_entry" {print $2; exit}')"
+    fi
+    echo "helper: $BOOT_HELPER_TARGET"
+    [ -x "$BOOT_HELPER_TARGET" ] && echo "helper_installed: yes" || echo "helper_installed: no"
+    [ -x "$SESSION_TARGET" ] && echo "session_launcher_installed: yes" || echo "session_launcher_installed: no"
+    [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
+    systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || true
+    [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
+    echo "grub_cfg_entry: $(grub_cfg_entry_state)"
+    echo "grub_next_entry: ${grub_next_entry:-none}"
+    echo "grub_saved_entry: ${grub_saved_entry:-none}"
+    [ -f "$SDDM_CONF" ] && echo "active_sddm_windows_vm_conf: yes" || echo "active_sddm_windows_vm_conf: no"
+    echo "current_boot_windows_vm: $cmdline_marker"
+    echo "target_user: $TARGET_USER"
+    echo "session: phasezero-windows-vm.desktop"
+    echo "recommended_direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+}
+
+dry_run_boot() {
+    echo "PhaseZero Windows VM boot dry-run"
+    echo "  helper: $BOOT_HELPER_TARGET"
+    echo "  session_launcher: $SESSION_TARGET"
+    echo "  service: $SERVICE_FILE"
+    echo "  grub: $GRUB_SCRIPT"
+    echo "  target_user: $TARGET_USER"
+    echo "  root_uuid: $(root_uuid || true)"
+    echo "  kernel: $(latest_kernel_version || true)"
+    echo "  session: phasezero-windows-vm.desktop"
+    echo "  one-shot boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next"
+    echo "  one-shot reboot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+}
+
+cmd_boot() {
+    local sub="${1:-status}"
+    [ $# -gt 0 ] && shift || true
+    case "$sub" in
+        install) install_boot "$@" ;;
+        remove) remove_boot "$@" ;;
+        status) status_boot "$@" ;;
+        next|set-next) set_next_boot "$@" ;;
+        next-reboot|reboot-windows-vm|reboot) next_reboot "$@" ;;
+        set-default) set_default_boot "$@" ;;
+        clear-next) clear_next_boot "$@" ;;
+        dry-run|plan) dry_run_boot "$@" ;;
+        *) pz_error "usage: windows-vm boot (install|remove|status|next|next-reboot|set-default|clear-next|dry-run)"; exit 1 ;;
+    esac
+}
+
+case "$ACTION" in
+    status) parse_options "$@"; print_status ;;
+    discover|detect) print_discover "$@" ;;
+    adopt|use-existing) cmd_adopt "$@" ;;
+    plan|dry-run) print_plan "$@" ;;
+    install|setup) install_vm "$@" ;;
+    optimize|tune) cmd_optimize "$@" ;;
+    launch|start|run) launch_vm "$@" ;;
+    boot) cmd_boot "$@" ;;
+    help|--help|-h|"") usage ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|launch|boot)"; exit 1 ;;
+esac

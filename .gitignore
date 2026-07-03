@@ -1,5 +1,7 @@
 # Ignore dependencies
 node_modules/
+__pycache__/
+*.pyc
 
 # Ignore logs
 *.log
@@ -13,6 +15,7 @@ gemini-cli/
 
 # Ignore local bootstrap state and secrets
 .bootstrap-tools/
+secrets/
 # Never commit backup dumps
 .bootstrap-tools/*.bak
 .bootstrap-tools/ui-runs/

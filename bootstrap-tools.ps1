@@ -6792,7 +6792,16 @@ function Ensure-GitAndBash {
         Ensure-WingetPackage -WingetPath $WingetPath -Id 'Git.Git' -DisplayName 'Git for Windows' -ProbePaths @("$env:ProgramFiles\Git\cmd\git.exe", "${env:ProgramFiles(x86)}\Git\cmd\git.exe")
         $git = Get-GitExe
     }
-    if (-not $git) { throw 'Falha ao localizar git.exe apos a instalação.' }
+    if (-not $git) {
+        $choco = Get-Command choco -ErrorAction SilentlyContinue
+        if ($choco) {
+            Write-Log 'Git for Windows nao localizado apos winget; tentando fallback Chocolatey git.install.' 'WARN'
+            & $choco.Source install git.install -y --force
+            Refresh-SessionPath
+            $git = Get-GitExe
+        }
+    }
+    if (-not $git) { throw 'winget e chocolatey falharam. Instale Git for Windows manualmente.' }
     $git = [string](@($git)[0]).Trim()
     $gitVersion = & $git --version
     Write-Log "git: $gitVersion ($git)"

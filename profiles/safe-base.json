@@ -1,0 +1,68 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "safe-base",
+  "description": "Minimal safe bootstrap: essentials for daily use",
+  "os": ["linux", "windows"],
+  "packages": {
+    "linux": {
+      "pacman": [
+        "firefox",
+        "keepassxc",
+        "syncthing",
+        "ufw",
+        "rsync",
+        "unzip",
+        "p7zip",
+        "git",
+        "git-lfs",
+        "github-cli",
+        "vim",
+        "htop",
+        "btop",
+        "fastfetch",
+        "timeshift",
+        "pipewire-audio",
+        "pipewire-pulse",
+        "wireplumber",
+        "ffmpeg",
+        "gst-plugins-good",
+        "gst-plugins-bad",
+        "gst-plugins-ugly",
+        "gst-libav",
+        "codecs",
+        "noto-fonts",
+        "noto-fonts-emoji",
+        "noto-fonts-cjk"
+      ],
+      "yay": [],
+      "flatpak": []
+    },
+    "windows": {
+      "winget": [],
+      "choco": []
+    }
+  },
+  "scripts": {
+    "linux": [
+      "linux/tuning/git-config.sh"
+    ],
+    "windows": []
+  },
+  "configs": {
+    "linux": []
+  },
+  "systemd": {
+    "linux": {
+      "enable": ["syncthing"],
+      "user": ["syncthing"]
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.swappiness": 10,
+        "fs.inotify.max_user_watches": 65536
+      }
+    }
+  }
+}
