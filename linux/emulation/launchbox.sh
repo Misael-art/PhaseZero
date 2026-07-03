@@ -105,7 +105,9 @@ Name=LaunchBox
 Comment=LaunchBox managed by PhaseZero
 Exec=$PZ_LAUNCHBOX_WRAPPER
 Terminal=false
+Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/launchbox.svg
 Categories=Game;Emulator;
+X-PhaseZero-Managed=true
 EOF
     pz_emulation_write_file "$PZ_BIGBOX_DESKTOP" 0644 <<EOF
 [Desktop Entry]
@@ -114,7 +116,9 @@ Name=Big Box
 Comment=Big Box managed by PhaseZero
 Exec=$PZ_BIGBOX_WRAPPER
 Terminal=false
+Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/bigbox.svg
 Categories=Game;Emulator;
+X-PhaseZero-Managed=true
 EOF
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
 }

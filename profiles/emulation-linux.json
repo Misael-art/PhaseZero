@@ -53,6 +53,8 @@
       "linux/emulation/eden.sh",
       "linux/emulation/citron.sh",
       "linux/emulation/hydra.sh",
+      "linux/emulation/heroic.sh",
+      "linux/emulation/heroic.py",
       "linux/emulation/srm.sh",
       "linux/emulation/sony.sh",
       "linux/emulation/ps3.sh",

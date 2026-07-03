@@ -52,6 +52,7 @@ Usage:
   pz emulation citron integrate Integrate Citron with EmuDeck (ES-DE, SRM, paths)
   pz emulation hydra install  Install Hydra AppImage + SteamOS shortcut
   pz emulation hydra configure Configure Hydra Classic + emulator entries
+  pz emulation heroic repair  Optimize Heroic defaults and KDE menu hygiene
   pz emulation srm configure  Configure Steam ROM Manager paths/parsers
   pz emulation ps1 configure  Configure DuckStation paths
   pz emulation ps2 configure  Configure PCSX2 paths
@@ -220,6 +221,7 @@ cmd_emulation() {
         eden)         bash "$PZ_ROOT/linux/emulation/eden.sh" "${target:-status}" "${extra[@]}" ;;
         citron)       bash "$PZ_ROOT/linux/emulation/citron.sh" "${target:-status}" "${extra[@]}" ;;
         hydra)        bash "$PZ_ROOT/linux/emulation/hydra.sh" "${target:-status}" "${extra[@]}" ;;
+        heroic)       bash "$PZ_ROOT/linux/emulation/heroic.sh" "${target:-status}" "${extra[@]}" ;;
         srm|steam-rom-manager) bash "$PZ_ROOT/linux/emulation/srm.sh" "${target:-status}" "${extra[@]}" ;;
         ps1|psx)      bash "$PZ_ROOT/linux/emulation/sony.sh" ps1 "${target:-status}" "${extra[@]}" ;;
         ps2)          bash "$PZ_ROOT/linux/emulation/sony.sh" ps2 "${target:-status}" "${extra[@]}" ;;
@@ -241,7 +243,10 @@ cmd_emulation() {
                       if $has_json; then
                           bash "$PZ_ROOT/linux/emulation/shared-content.sh" status --json || rc=1
                           bash "$PZ_ROOT/linux/emulation/media.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/srm.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/ps3.sh" status || rc=1
                           bash "$PZ_ROOT/linux/emulation/pc-games.sh" status --json || rc=1
+                          bash "$PZ_ROOT/linux/emulation/heroic.sh" status --json || rc=1
                           bash "$PZ_ROOT/linux/emulation/shortcuts.sh" status --json || rc=1
                           bash "$PZ_ROOT/linux/emulation/launchbox.sh" status --json || rc=1
                           bash "$PZ_ROOT/linux/emulation/frontends.sh" status --json || rc=1
@@ -249,7 +254,10 @@ cmd_emulation() {
                       else
                           bash "$PZ_ROOT/linux/emulation/shared-content.sh" status || rc=1
                           bash "$PZ_ROOT/linux/emulation/media.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/srm.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/ps3.sh" status || rc=1
                           bash "$PZ_ROOT/linux/emulation/pc-games.sh" status || rc=1
+                          bash "$PZ_ROOT/linux/emulation/heroic.sh" status || rc=1
                           bash "$PZ_ROOT/linux/emulation/shortcuts.sh" status || rc=1
                           bash "$PZ_ROOT/linux/emulation/launchbox.sh" status || rc=1
                           bash "$PZ_ROOT/linux/emulation/frontends.sh" status || rc=1
@@ -257,7 +265,7 @@ cmd_emulation() {
                       fi
                       return "$rc" ;;
         setup|install) bash "$PZ_ROOT/linux/emulation/setup-emulation.sh" "${target:-install}" "${extra[@]}" ;;
-        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|retrodeck|eden|citron|hydra|srm|ps1|ps2|ps3|performance|lua|steam-tools|fixes|bios|switch|shared|media|pc-games|shortcuts|launchbox|frontends|doctor|setup)"; return 1 ;;
+        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|retrodeck|eden|citron|hydra|heroic|srm|ps1|ps2|ps3|performance|lua|steam-tools|fixes|bios|switch|shared|media|pc-games|shortcuts|launchbox|frontends|doctor|setup)"; return 1 ;;
     esac
 }
 

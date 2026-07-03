@@ -119,6 +119,7 @@ EMULATOR_KEY_TO_BAT = {
 
 
 SYSTEM_RULES = [
+    ("phasezerofrontends", "frontends"),
     ("microsoftxbox360livearcade", "xbox360"),
     ("microsoftxbox360", "xbox360"),
     ("microsoftxbox", "xbox"),
@@ -209,6 +210,9 @@ IGNORED_ROM_DIRS = {
 }
 SYSTEM_SOURCE_SUBDIRS = {
     "xbox360": "roms",
+}
+SPECIAL_SYSTEM_DIRS = {
+    "frontends": ("tools", "launchers", "frontends"),
 }
 
 
@@ -357,6 +361,9 @@ def clear_managed_symlinks(directory: Path) -> None:
 
 
 def source_rom_dir(ctx: LaunchBoxContext, system: str) -> Path:
+    special = SPECIAL_SYSTEM_DIRS.get(system)
+    if special:
+        return ctx.emulation_root.joinpath(*special)
     root = ctx.roms_root / system
     subdir = SYSTEM_SOURCE_SUBDIRS.get(system)
     if subdir and (root / subdir).is_dir():
@@ -386,6 +393,12 @@ def should_link_rom_entry(path: Path) -> bool:
     if path.is_dir() and folded in IGNORED_ROM_DIRS:
         return False
     return has_rom_content(path)
+
+
+def should_link_entry(path: Path, system: str) -> bool:
+    if system == "frontends":
+        return path.is_file() and path.suffix.lower() == ".sh"
+    return should_link_rom_entry(path)
 
 
 def ensure_compat_alias(ctx: LaunchBoxContext, alias: str, system: str, apply: bool) -> dict[str, object]:
@@ -419,7 +432,7 @@ def ensure_compat_alias(ctx: LaunchBoxContext, alias: str, system: str, apply: b
         for child in sorted(rom_dir.iterdir(), key=lambda p: p.name.casefold()):
             if child.name == "media":
                 continue
-            if not should_link_rom_entry(child):
+            if not should_link_entry(child, system):
                 continue
             link = alias_dir / child.name
             status = link_replace(child, link)

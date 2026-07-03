@@ -172,6 +172,11 @@ normalize_srm_parsers() {
 
     backup_srm_file "$SRM_CONFIGS"
     tmp="$(mktemp)"
+    jq '
+        map(select((.configTitle // "") != ""))
+    ' "$SRM_CONFIGS" > "$tmp"
+    mv "$tmp" "$SRM_CONFIGS"
+    tmp="$(mktemp)"
     jq \
         --arg eden "$PZ_LOCAL_BIN/phasezero-eden" \
         --arg citron "$PZ_LOCAL_BIN/phasezero-citron" \
@@ -191,7 +196,8 @@ normalize_srm_parsers() {
         --arg shadps4Args '"${filePath}"' \
         'map(
             if .configTitle == "Nintendo Switch - Eden" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = $switchView
                 | .parserInputs = (.parserInputs // {})
                 | .parserInputs.glob = $switchGlob
@@ -200,7 +206,8 @@ normalize_srm_parsers() {
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
             elif .configTitle == "Nintendo Switch - Citron" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = $switchView
                 | .parserInputs = (.parserInputs // {})
                 | .parserInputs.glob = $switchGlob
@@ -209,35 +216,40 @@ normalize_srm_parsers() {
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
             elif .configTitle == "Nintendo Switch - Ryujinx" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = $switchView
                 | .parserInputs = (.parserInputs // {})
                 | .parserInputs.glob = $switchGlob
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
             elif .configTitle == "Microsoft Xbox 360 - Xenia" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = "${romsdirglobal}/xbox360/roms"
                 | .parserInputs = (.parserInputs // {})
                 | .parserInputs.glob = $xbox360Glob
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
             elif .configTitle == "Sony PlayStation - DuckStation" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = "${romsdirglobal}/psx"
                 | .executable.path = $duck
                 | .executableArgs = $duckArgs
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
             elif .configTitle == "Sony PlayStation 2 - PCSX2" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = "${romsdirglobal}/ps2"
                 | .executable.path = $pcsx2
                 | .executableArgs = $pcsx2Args
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
             elif .configTitle == "Sony PlayStation 3 - RPCS3 (Extracted ISO/PSN)" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = "${romsdirglobal}/ps3"
                 | .parserInputs = (.parserInputs // {})
                 | .parserInputs.glob = $ps3Glob
@@ -246,14 +258,16 @@ normalize_srm_parsers() {
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
             elif .configTitle == "Sony PlayStation 3 - RPCS3 (Installed PKG)" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = $ps3pkg
                 | .executable.path = $rpcs3
                 | .executableArgs = $rpcs3Args
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
             elif .configTitle == "Sony PlayStation 4 - ShadPS4 (Shortcut)" then
-                .steamDirectory = "${steamdirglobal}"
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = "${romsdirglobal}/ps4/shortcuts"
                 | .parserInputs = (.parserInputs // {})
                 | .parserInputs.glob = "${title}@(.desktop)"
@@ -261,6 +275,31 @@ normalize_srm_parsers() {
                 | .executableArgs = $shadps4Args
                 | .disabled = false
                 | .userAccounts.specifiedAccounts = ["Global"]
+            elif .phasezeroManaged == true then
+                .parserType = (.parserType // "Glob")
+                | .steamDirectory = (.steamDirectory // "${steamdirglobal}")
+                | .userAccounts = (.userAccounts // {specifiedAccounts:["Global"]})
+                | .userAccounts.specifiedAccounts = (.userAccounts.specifiedAccounts // ["Global"])
+                | .executable = (.executable // {})
+                | .executable.shortcutPassthrough = (.executable.shortcutPassthrough // false)
+                | .executable.appendArgsToExecutable = (.executable.appendArgsToExecutable // true)
+                | .executableModifier = (.executableModifier // "\"${exePath}\"")
+                | .startInDirectory = (.startInDirectory // "")
+                | .titleModifier = (.titleModifier // "${fuzzyTitle}")
+                | .onlineImageQueries = (.onlineImageQueries // ["${fuzzyTitle}"])
+                | .imagePool = (.imagePool // "${fuzzyTitle}")
+                | .imageProviders = (.imageProviders // ["sgdb"])
+                | .titleFromVariable = (.titleFromVariable // {caseInsensitiveVariables:false, skipFileIfVariableWasNotFound:false, limitToGroups:[]})
+                | .fuzzyMatch = (.fuzzyMatch // {replaceDiacritics:true, removeCharacters:true, removeBrackets:true})
+                | .imageProviderAPIs = (.imageProviderAPIs // {sgdb:{nsfw:false, humor:false, imageMotionTypes:["static"], styles:[], stylesHero:[], stylesLogo:[], stylesIcon:[]}})
+                | .controllers = (.controllers // {ps4:null, ps5:null, xbox360:null, xboxone:null, switch_joycon_left:null, switch_joycon_right:null, switch_pro:null, neptune:null})
+                | .defaultImage = (.defaultImage // {long:"", tall:"", hero:"", logo:"", icon:""})
+                | .localImages = (.localImages // {long:"", tall:"", hero:"", logo:"", icon:""})
+                | .steamInputEnabled = (.steamInputEnabled // "1")
+                | .drmProtect = (.drmProtect // false)
+                | .disabled = false
+                | .version = 25
+                | .presetVersion = 19
             else . end
         )' "$SRM_CONFIGS" > "$tmp"
     mv "$tmp" "$SRM_CONFIGS"
@@ -315,7 +354,9 @@ Name=Steam ROM Manager
 Comment=Steam ROM Manager managed by PhaseZero
 Exec=$SRM_WRAPPER
 Terminal=false
+Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/srm.svg
 Categories=Game;Emulator;
+X-PhaseZero-Managed=true
 EOF
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
 }
@@ -326,8 +367,10 @@ srm_configured_bool() {
     jq -e --arg steam "$STEAM_ROOT" --arg roms "$PZ_EMULATION_ROOT/roms" \
         '.environmentVariables.steamDirectory == $steam and .environmentVariables.romsDirectory == $roms' "$SRM_SETTINGS" >/dev/null 2>&1 || { echo false; return 0; }
     jq -e '
-        [.[].configTitle] as $titles
-        | ($titles | index("Nintendo Switch - Eden")) != null
+        ([.[] | select((.configTitle // "") == "" or (.parserType // "") == "")] | length == 0) as $valid
+        | [.[].configTitle] as $titles
+        | $valid
+        and ($titles | index("Nintendo Switch - Eden")) != null
         and ($titles | index("Nintendo Switch - Citron")) != null
         and ($titles | index("Sony PlayStation - DuckStation")) != null
         and ($titles | index("Sony PlayStation 2 - PCSX2")) != null
@@ -338,16 +381,18 @@ srm_configured_bool() {
 }
 
 status_srm() {
-    local app launcher config_count managed_count settings_exists=false configs_exists=false
+    local app launcher config_count managed_count invalid_count settings_exists=false configs_exists=false
     app="$(find_srm_appimage)"
     launcher="$(find_srm_launcher)"
     [ -f "$SRM_SETTINGS" ] && settings_exists=true
     [ -f "$SRM_CONFIGS" ] && configs_exists=true
     config_count=0
     managed_count=0
+    invalid_count=0
     if [ -f "$SRM_CONFIGS" ] && jq empty "$SRM_CONFIGS" >/dev/null 2>&1; then
         config_count="$(jq 'length' "$SRM_CONFIGS")"
         managed_count="$(jq '[.[] | select(.configTitle | test("Nintendo Switch - (Eden|Citron)|Sony PlayStation - DuckStation|Sony PlayStation 2 - PCSX2|Sony PlayStation 3 - RPCS3|Sony PlayStation 4 - ShadPS4"; "i"))] | length' "$SRM_CONFIGS")"
+        invalid_count="$(jq '[.[] | select((.configTitle // "") == "" or (.parserType // "") == "")] | length' "$SRM_CONFIGS")"
     fi
     jq -n \
         --arg appImage "$app" \
@@ -367,8 +412,9 @@ status_srm() {
         --argjson configurationsInstalled "$configs_exists" \
         --argjson configurationsCount "$config_count" \
         --argjson managedParsers "$managed_count" \
+        --argjson invalidParsers "$invalid_count" \
         --argjson configured "$(srm_configured_bool)" \
-        '{appImage: $appImage, launcher: $launcher, wrapper: $wrapper, desktop: $desktop, settings: $settings, configurations: $configs, steamRoot: $steamRoot, romsRoot: $romsRoot, retroarchPath: $retroarchPath, appImageInstalled: $appImageInstalled, launcherInstalled: $launcherInstalled, wrapperInstalled: $wrapperInstalled, desktopInstalled: $desktopInstalled, settingsInstalled: $settingsInstalled, configurationsInstalled: $configurationsInstalled, configurationsCount: $configurationsCount, managedParsers: $managedParsers, configured: $configured}'
+        '{appImage: $appImage, launcher: $launcher, wrapper: $wrapper, desktop: $desktop, settings: $settings, configurations: $configs, steamRoot: $steamRoot, romsRoot: $romsRoot, retroarchPath: $retroarchPath, appImageInstalled: $appImageInstalled, launcherInstalled: $launcherInstalled, wrapperInstalled: $wrapperInstalled, desktopInstalled: $desktopInstalled, settingsInstalled: $settingsInstalled, configurationsInstalled: $configurationsInstalled, configurationsCount: $configurationsCount, managedParsers: $managedParsers, invalidParsers: $invalidParsers, configured: $configured}'
 }
 
 configure_srm() {

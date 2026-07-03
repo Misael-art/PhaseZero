@@ -483,7 +483,8 @@ exec {shell_quote(ctx.launcher_bin)} {shell_quote(game.slug)} "$@"
 """
 
 
-def desktop_text(game: Game) -> str:
+def desktop_text(ctx: Context, game: Game) -> str:
+    icon = ctx.emulation_root / "media" / "icons" / "phasezero" / "pc-game.svg"
     return f"""[Desktop Entry]
 Type=Application
 Name={game.title}
@@ -491,8 +492,11 @@ Comment=PC game managed by PhaseZero
 Exec={game.launch_script}
 Path={game.root if game.root.is_dir() else game.root.parent}
 Terminal=false
-Categories=Game;
+Icon={icon}
+Categories=Game;X-PhaseZero-PC;
+NoDisplay=true
 StartupNotify=false
+X-PhaseZero-Managed=true
 X-PhaseZero-PC-Game=true
 X-PhaseZero-Slug={game.slug}
 """
@@ -518,6 +522,44 @@ def catalog_json(ctx: Context, games: list[Game]) -> dict[str, Any]:
         "gamelist": str(ctx.gamelist_path),
         "games": [game.to_json() for game in games],
     }
+
+
+def first_media_uri(ctx: Context, game: Game, kinds: list[str]) -> str | None:
+    names = {
+        game.title.casefold(),
+        game.root.name.casefold(),
+        game.slug.casefold(),
+        norm_name(game.title).casefold(),
+    }
+    roots = [
+        ctx.emulation_root / "tools" / "downloaded_media" / "steam",
+        ctx.emulation_root / "media" / "steamgrid" / "steam",
+    ]
+    for root in roots:
+        for kind in kinds:
+            folder = root / kind
+            if not folder.is_dir():
+                continue
+            for path in sorted(folder.iterdir(), key=lambda item: item.name.casefold()):
+                if not path.is_file():
+                    continue
+                stems = {path.stem.casefold(), norm_name(path.stem).casefold()}
+                if names & stems:
+                    return path.resolve().as_uri()
+    return None
+
+
+def heroic_art(ctx: Context, game: Game) -> dict[str, str]:
+    square = first_media_uri(ctx, game, ["covers", "3dboxes", "miximages", "grid", "icon"])
+    cover = first_media_uri(ctx, game, ["fanart", "screenshots", "titlescreens", "hero", "miximages", "covers"])
+    data: dict[str, str] = {}
+    if square:
+        data["art_square"] = square
+    if cover:
+        data["art_cover"] = cover
+    elif square:
+        data["art_cover"] = square
+    return data
 
 
 def esde_system_block(ctx: Context, flatpak: bool = False) -> ET.Element:
@@ -639,6 +681,7 @@ def merge_heroic_library(ctx: Context, games: list[Game], dry_run: bool) -> Path
         app_name = f"phasezero-pc-{game.slug}"
         by_app[app_name] = {
             **by_app.get(app_name, {}),
+            **heroic_art(ctx, game),
             "runner": "sideload",
             "app_name": app_name,
             "title": game.title,
@@ -684,14 +727,53 @@ def merge_srm_parser(ctx: Context, dry_run: bool) -> Path:
     parser = {
         "configTitle": "PC Games - PhaseZero",
         "parserType": "Glob",
+        "executableModifier": '"${exePath}"',
         "steamDirectory": "${steamdirglobal}",
         "romDirectory": str(ctx.launchers_dir),
+        "startInDirectory": str(ctx.launchers_dir),
+        "titleModifier": "${fuzzyTitle}",
+        "onlineImageQueries": ["${fuzzyTitle}"],
+        "imagePool": "${fuzzyTitle}",
+        "imageProviders": ["sgdb"],
         "parserInputs": {"glob": "${title}@(.sh|.SH)"},
-        "executable": {"path": "/bin/bash"},
+        "executable": {"path": "/bin/bash", "shortcutPassthrough": False, "appendArgsToExecutable": True},
         "executableArgs": '"${filePath}"',
         "userAccounts": {"specifiedAccounts": ["Global"]},
         "steamCategories": ["${PC Games}", "${PhaseZero}"],
+        "titleFromVariable": {
+            "caseInsensitiveVariables": False,
+            "skipFileIfVariableWasNotFound": False,
+            "limitToGroups": [],
+        },
+        "fuzzyMatch": {"replaceDiacritics": True, "removeCharacters": True, "removeBrackets": True},
+        "imageProviderAPIs": {
+            "sgdb": {
+                "nsfw": False,
+                "humor": False,
+                "imageMotionTypes": ["static"],
+                "styles": [],
+                "stylesHero": [],
+                "stylesLogo": [],
+                "stylesIcon": [],
+            }
+        },
+        "controllers": {
+            "ps4": None,
+            "ps5": None,
+            "xbox360": None,
+            "xboxone": None,
+            "switch_joycon_left": None,
+            "switch_joycon_right": None,
+            "switch_pro": None,
+            "neptune": None,
+        },
+        "defaultImage": {"long": "", "tall": "", "hero": "", "logo": "", "icon": ""},
+        "localImages": {"long": "", "tall": "", "hero": "", "logo": "", "icon": ""},
+        "steamInputEnabled": "1",
+        "drmProtect": False,
         "disabled": False,
+        "version": 25,
+        "presetVersion": 19,
         "phasezeroManaged": True,
     }
     found = False
@@ -730,7 +812,7 @@ def apply(ctx: Context, dry_run: bool = False) -> dict[str, Any]:
     write_text(ctx.launcher_bin, launcher_bin_text(ctx), 0o755, dry_run=dry_run, backup=False)
     for game in games:
         write_text(game.launch_script, launch_script_text(ctx, game), 0o755, dry_run=dry_run, backup=False)
-        text = desktop_text(game)
+        text = desktop_text(ctx, game)
         write_text(game.desktop_file, text, 0o644, dry_run=dry_run, backup=False)
         write_text(game.menu_file, text, 0o644, dry_run=dry_run, backup=True)
     write_text(ctx.gamelist_path, gamelist_text(games), 0o644, dry_run=dry_run, backup=True)

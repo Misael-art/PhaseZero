@@ -121,7 +121,10 @@ write_heroic_wrapper() {
     pz_emulation_write_file "$PZ_HEROIC_WRAPPER" 0755 <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+PZ_ROOT="$PZ_ROOT"
+export PZ_EMULATION_ROOT="$PZ_EMULATION_ROOT"
 appimage="$appimage"
+python3 "\$PZ_ROOT/linux/emulation/heroic.py" session --mode auto >/dev/null 2>&1 || true
 if command -v heroic >/dev/null 2>&1; then
     exec heroic "\$@"
 fi
@@ -169,6 +172,15 @@ write_frontend_launchers() {
     install -d "$PZ_FRONTENDS_DIR"
     while IFS='|' read -r id title file target; do
         [ -n "$id" ] || continue
+        if [ "$id" = "heroic" ]; then
+            pz_emulation_write_file "$PZ_FRONTENDS_DIR/$file" 0755 <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export PZ_HEROIC_CONSOLE_MODE="\${PZ_HEROIC_CONSOLE_MODE:-1}"
+exec "$PZ_FRONTEND_WRAPPER" "$id" "\$@"
+EOF
+            continue
+        fi
         pz_emulation_write_file "$PZ_FRONTENDS_DIR/$file" 0755 <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
@@ -185,7 +197,7 @@ Name=Steam Big Picture
 Comment=Steam Big Picture managed by PhaseZero
 Exec=$PZ_STEAM_BIGPICTURE_WRAPPER
 Terminal=false
-Icon=steam
+Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/steam.svg
 Categories=Game;
 X-PhaseZero-Managed=true
 EOF
@@ -196,7 +208,7 @@ Name=Heroic Launcher
 Comment=Heroic Launcher managed by PhaseZero
 Exec=$PZ_HEROIC_WRAPPER
 Terminal=false
-Icon=heroic
+Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/heroic.svg
 Categories=Game;
 X-PhaseZero-Managed=true
 EOF
@@ -207,7 +219,7 @@ Name=PhaseZero Frontends
 Comment=Switch emulation frontend experience
 Exec=$PZ_FRONTEND_WRAPPER
 Terminal=true
-Icon=applications-games
+Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/frontends.svg
 Categories=Game;Emulator;
 X-PhaseZero-Managed=true
 EOF

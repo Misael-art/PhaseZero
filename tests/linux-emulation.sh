@@ -15,6 +15,7 @@ export PZ_APPLICATIONS_DIR="$TMP_ROOT/Applications"
 export PZ_LOCAL_BIN="$TMP_ROOT/bin"
 export PZ_RPCS3_APP=""
 export PZ_EMULATION_DMI_DIR="$TMP_ROOT/dmi-generic"
+export PZ_EMULATION_FORCE_APPLY=1
 
 mkdir -p "$HOME" "$PZ_EMULATION_DMI_DIR"
 printf 'Generic PC\n' > "$PZ_EMULATION_DMI_DIR/product_name"
@@ -106,6 +107,7 @@ cat > "$HOME/.config/EmuDeck/backend/configs/steam-rom-manager/userData/userSett
 JSON
 cat > "$HOME/.config/EmuDeck/backend/configs/steam-rom-manager/userData/userConfigurations.json" <<'JSON'
 [
+  {"configTitle":"","parserType":"Manual","romDirectory":"","executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":false},
   {"configTitle":"Nintendo Switch - Eden","parserInputs":{"glob":"**/${title}@(.nsp|.NSP)"},"executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
   {"configTitle":"Nintendo Switch - Citron","parserInputs":{"glob":"**/${title}@(.nsp|.NSP)"},"executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
   {"configTitle":"Nintendo Switch - Ryujinx","parserInputs":{"glob":"**/${title}@(.nsp|.NSP)"},"executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
@@ -120,11 +122,13 @@ mkdir -p "$PZ_EMULATION_ROOT/tools/launchers/srm" "$PZ_EMULATION_ROOT/tools/laun
 touch "$PZ_EMULATION_ROOT/tools/Steam-ROM-Manager.AppImage" "$PZ_EMULATION_ROOT/tools/launchers/srm/steamrommanager.sh" "$PZ_EMULATION_ROOT/tools/launchers/retroarch.sh"
 chmod +x "$PZ_EMULATION_ROOT/tools/Steam-ROM-Manager.AppImage" "$PZ_EMULATION_ROOT/tools/launchers/srm/steamrommanager.sh" "$PZ_EMULATION_ROOT/tools/launchers/retroarch.sh"
 "$REPO_ROOT/linux/pz" emulation srm configure >/dev/null
-"$REPO_ROOT/linux/pz" emulation srm status | jq -e '.configured == true and .managedParsers >= 5' >/dev/null
+"$REPO_ROOT/linux/pz" emulation srm status | jq -e '.configured == true and .managedParsers >= 5 and .invalidParsers == 0' >/dev/null
 jq -e --arg steam "$HOME/.local/share/Steam" --arg roms "$PZ_EMULATION_ROOT/roms" '.environmentVariables.steamDirectory == $steam and .environmentVariables.romsDirectory == $roms and .autoKillSteam == true' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userSettings.json" >/dev/null
+jq -e '[.[] | select((.configTitle // "") == "" or (.parserType // "") == "")] | length == 0' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
 jq -e --arg runtime "$PZ_LOCAL_BIN/phasezero-eden" '
     .[] | select(.configTitle == "Nintendo Switch - Eden")
     | .executable.path == $runtime
+    and .parserType == "Glob"
     and (.executableArgs | contains("%command%") | not)
 ' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
 jq -e --arg view "$PZ_EMULATION_ROOT/.phasezero/scan-safe/roms/switch" '
@@ -135,6 +139,9 @@ jq -e --arg view "$PZ_EMULATION_ROOT/.phasezero/scan-safe/roms/switch" '
 ' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
 
 mkdir -p "$PZ_EMULATION_ROOT/roms/steam/GOG Game" "$PZ_EMULATION_ROOT/roms/steam/Native Game"
+mkdir -p "$PZ_EMULATION_ROOT/tools/downloaded_media/steam/covers" "$PZ_EMULATION_ROOT/tools/downloaded_media/steam/fanart"
+printf 'cover\n' > "$PZ_EMULATION_ROOT/tools/downloaded_media/steam/covers/GOG Game.png"
+printf 'fanart\n' > "$PZ_EMULATION_ROOT/tools/downloaded_media/steam/fanart/GOG Game.jpg"
 cat > "$PZ_EMULATION_ROOT/roms/steam/GOG Game/goggame-1.info" <<'JSON'
 {
   "name": "GOG Game",
@@ -167,11 +174,13 @@ jq -e '
 test -x "$PZ_EMULATION_ROOT/tools/pc-games/launchers/gog-game.sh"
 test -f "$XDG_DATA_HOME/applications/phasezero-pc-gog-game.desktop"
 jq -e '[.games[] | select(.app_name | startswith("phasezero-pc-"))] | length == 3 and all(.install.platform == "Linux")' "$XDG_CONFIG_HOME/heroic/sideload_apps/library.json" >/dev/null
+jq -e '.games[] | select(.app_name == "phasezero-pc-gog-game") | (.art_square | startswith("file://")) and (.art_cover | startswith("file://"))' "$XDG_CONFIG_HOME/heroic/sideload_apps/library.json" >/dev/null
 jq -e '.pcgames.enabled == true and .pcgames.roms_directory == "'"$PZ_EMULATION_ROOT/tools/pc-games/launchers"'"' "$XDG_CONFIG_HOME/hydralauncher/emulators_config.json" >/dev/null
 grep -q '<name>steam</name>' "$HOME/ES-DE/custom_systems/es_systems.xml"
 grep -q "$PZ_EMULATION_ROOT/tools/pc-games/launchers" "$HOME/ES-DE/custom_systems/es_systems.xml"
 grep -q '<path>./gog-game.sh</path>' "$PZ_EMULATION_ROOT/metadata/gamelists/steam/gamelist.xml"
 jq -e '.[] | select(.configTitle == "PC Games - PhaseZero") | .romDirectory == "'"$PZ_EMULATION_ROOT/tools/pc-games/launchers"'" and .executable.path == "/bin/bash"' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
+jq -e '.[] | select(.configTitle == "PC Games - PhaseZero") | .version == 25 and .presetVersion == 19 and .executable.appendArgsToExecutable == true and (.imageProviders | index("sgdb")) != null and .titleModifier == "${fuzzyTitle}"' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
 python3 "$REPO_ROOT/linux/emulation/pc-games.py" --dry-run launch gog-game | jq -e '.runner == "wine" and (.command | any(test("wine$")))' >/dev/null
 
 mkdir -p "$TMP_ROOT/ps3-game/PS3_GAME"
@@ -185,6 +194,11 @@ printf 'fake-pup\n' > "$TMP_ROOT/PS3UPDAT.PUP"
 "$REPO_ROOT/linux/pz" emulation ps3 import-firmware "$TMP_ROOT/PS3UPDAT.PUP" >/dev/null
 test -f "$PZ_EMULATION_ROOT/firmware/ps3/PS3UPDAT.PUP"
 "$REPO_ROOT/linux/pz" emulation ps3 status | jq -e '.vfsConfigured == true and .rapFiles == 1 and .firmwareFiles == 1' >/dev/null
+PZ_EMULATION_FORCE_APPLY=1 "$REPO_ROOT/linux/pz" emulation ps3 configure >/dev/null
+"$REPO_ROOT/linux/pz" emulation ps3 status | jq -e '.wrapperInstalled == true and .esdeConfigured == true and .retrodeckConfigured == true' >/dev/null
+test -x "$PZ_LOCAL_BIN/phasezero-rpcs3"
+grep -q 'phasezero-rpcs3 --no-gui %ROM%' "$HOME/ES-DE/custom_systems/es_systems.xml"
+grep -q 'flatpak-spawn --host .*phasezero-rpcs3 --no-gui %ROM%' "$HOME/retrodeck/ES-DE/custom_systems/es_systems.xml"
 
 mkdir -p "$TMP_ROOT/source-bios"
 printf 'fake-bios\n' > "$TMP_ROOT/source-bios/scph5501.bin"

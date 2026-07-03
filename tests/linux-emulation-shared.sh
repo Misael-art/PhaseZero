@@ -208,13 +208,57 @@ test -x "$PZ_LOCAL_BIN/phasezero-frontend" || { echo "FAIL: frontend router miss
 test -x "$PZ_LOCAL_BIN/phasezero-steam-big-picture" || { echo "FAIL: Steam Big Picture wrapper missing"; exit 1; }
 test -x "$PZ_LOCAL_BIN/phasezero-heroic" || { echo "FAIL: Heroic wrapper missing"; exit 1; }
 test -x "$PZ_EMULATION_ROOT/tools/launchers/frontends/bigbox.sh" || { echo "FAIL: BigBox frontend launcher missing"; exit 1; }
+grep -q 'heroic.py" session --mode auto' "$PZ_LOCAL_BIN/phasezero-heroic" || { echo "FAIL: Heroic wrapper does not tune session"; exit 1; }
+grep -q 'PZ_HEROIC_CONSOLE_MODE' "$PZ_EMULATION_ROOT/tools/launchers/frontends/heroic.sh" || { echo "FAIL: Heroic frontend launcher does not request console mode"; exit 1; }
 grep -q '<name>frontends</name>' "$HOME/ES-DE/custom_systems/es_systems.xml" || { echo "FAIL: ES-DE frontends system missing"; exit 1; }
 jq -e 'map(select(.configTitle == "Frontends - PhaseZero")) | length == 1' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null || { echo "FAIL: SRM frontends parser missing"; exit 1; }
 jq -e '.games | map(select(.app_name == "phasezero-frontend-bigbox")) | length == 1' "$XDG_CONFIG_HOME/heroic/sideload_apps/library.json" >/dev/null || { echo "FAIL: Heroic BigBox entry missing"; exit 1; }
 grep -q 'PhaseZero Frontends' "$LB_ROOT/Data/Platforms/PhaseZero Frontends.xml" || { echo "FAIL: LaunchBox frontends platform missing"; exit 1; }
 grep -q 'PhaseZero Frontend Switcher' "$LB_ROOT/Data/Emulators.xml" || { echo "FAIL: LaunchBox frontend emulator missing"; exit 1; }
+test -L "$PZ_EMULATION_ROOT/tools/launchers/Roms/PhaseZero Frontends/bigbox.sh" || { echo "FAIL: LaunchBox frontends symlink missing"; exit 1; }
+test "$(readlink "$PZ_EMULATION_ROOT/tools/launchers/Roms/PhaseZero Frontends/bigbox.sh")" = "$PZ_EMULATION_ROOT/tools/launchers/frontends/bigbox.sh" || { echo "FAIL: LaunchBox frontends symlink wrong target"; exit 1; }
+PZ_LAUNCHBOX_SKIP_WINEBOOT=1 PZ_LAUNCHBOX_SKIP_FONTS=1 "$REPO_ROOT/linux/pz" emulation launchbox status --json | jq -e '.aliasesUnresolved | index("PhaseZero Frontends") == null' >/dev/null || { echo "FAIL: LaunchBox frontends alias unresolved"; exit 1; }
 python3 "$REPO_ROOT/linux/emulation/steam-shortcut.py" status --steam-root "$HOME/.local/share/Steam" --app-name "Big Box" >/dev/null || { echo "FAIL: Steam Big Box shortcut missing"; exit 1; }
 PZ_LAUNCHBOX_SKIP_WINEBOOT=1 PZ_LAUNCHBOX_SKIP_FONTS=1 "$REPO_ROOT/linux/pz" emulation frontends status --json | jq -e '.routerInstalled == true and .launcherCount == .expectedLaunchers and .srmParserInstalled == true and .heroicManagedFrontends >= 6 and .steamShortcuts.frontendsFound >= 6 and .launchbox.platformInstalled == true' >/dev/null || { echo "FAIL: frontends status JSON invalid"; exit 1; }
+
+# === Heroic defaults and KDE menu hygiene ===
+mkdir -p "$XDG_CONFIG_HOME/heroic" "$XDG_DATA_HOME/applications"
+cat > "$XDG_CONFIG_HOME/heroic/config.json" <<'JSON'
+{"version":"test","defaultSettings":{"addDesktopShortcuts":true,"autoInstallDxvk":false,"verboseLogs":true}}
+JSON
+cat > "$XDG_DATA_HOME/applications/phasezero-pc-menu-test.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Menu Test
+Exec=$PZ_EMULATION_ROOT/tools/pc-games/launchers/menu-test.sh
+Categories=Game;
+EOF
+cat > "$XDG_DATA_HOME/applications/phasezero-es-de.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=ES-DE
+Exec=$PZ_LOCAL_BIN/phasezero-es-de
+Categories=Game;
+EOF
+cat > "$XDG_DATA_HOME/applications/ES-DE.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Name=ES-DE
+Exec=/tmp/duplicate-es-de
+Categories=Game;
+EOF
+"$REPO_ROOT/linux/pz" emulation heroic repair >/dev/null
+jq -e --arg install "$PZ_EMULATION_ROOT/roms/steam" --arg prefix "$PZ_EMULATION_ROOT/storage/pc-prefixes/heroic" '.defaultSettings.addDesktopShortcuts == false and .defaultSettings.addStartMenuShortcuts == false and .defaultSettings.autoInstallDxvk == true and .defaultSettings.autoInstallVkd3d == true and .defaultSettings.autoInstallDxvkNvapi == true and .defaultSettings.enableEsync == true and .defaultSettings.enableFsync == true and .defaultSettings.defaultInstallPath == $install and .defaultSettings.defaultWinePrefixDir == $prefix and (.defaultSettings.useGameMode | type == "boolean")' "$XDG_CONFIG_HOME/heroic/config.json" >/dev/null || { echo "FAIL: Heroic optimized defaults missing"; exit 1; }
+jq -e '.defaultSettings.autoUpdateGames == false and .defaultSettings.hideChangelogsOnStartup == true and .defaultSettings.startInConsoleMode == false and .defaultSettings.noTrayIcon == true and .defaultSettings.exitToTray == false and .defaultSettings.startInTray == false and .defaultSettings.framelessWindow == false and .defaultSettings.enableWineWayland == false and .defaultSettings.enableWoW64 == false and .defaultSettings.enableFSRHack == false and .defaultSettings.FsrSharpnessStrenght == 2 and .defaultSettings.downloadNoHttps == false and .defaultSettings.disableGOGPresence == true and .defaultSettings.discordRPC == false and .defaultSettings.disable_controller == false and .defaultSettings.allowInstallationBrokenAnticheat == false and .defaultSettings.experimentalFeatures.cometSupport == true and .defaultSettings.experimentalFeatures.zoomPlatform == false' "$XDG_CONFIG_HOME/heroic/config.json" >/dev/null || { echo "FAIL: Heroic experience defaults missing"; exit 1; }
+PZ_HEROIC_CONSOLE_MODE=1 "$REPO_ROOT/linux/pz" emulation heroic session --mode auto --json | jq -e '.gameSession == true and .startInConsoleMode == true' >/dev/null || { echo "FAIL: Heroic game session not detected"; exit 1; }
+jq -e '.defaultSettings.startInConsoleMode == true' "$XDG_CONFIG_HOME/heroic/config.json" >/dev/null || { echo "FAIL: Heroic console mode not enabled for game session"; exit 1; }
+PZ_HEROIC_CONSOLE_MODE=0 "$REPO_ROOT/linux/pz" emulation heroic session --mode auto --json | jq -e '.gameSession == false and .startInConsoleMode == false' >/dev/null || { echo "FAIL: Heroic desktop session not detected"; exit 1; }
+jq -e '.defaultSettings.startInConsoleMode == false' "$XDG_CONFIG_HOME/heroic/config.json" >/dev/null || { echo "FAIL: Heroic console mode not disabled for desktop session"; exit 1; }
+test -f "$PZ_EMULATION_ROOT/media/icons/phasezero/heroic.svg" || { echo "FAIL: Heroic icon missing"; exit 1; }
+grep -q '^NoDisplay=true$' "$XDG_DATA_HOME/applications/phasezero-pc-menu-test.desktop" || { echo "FAIL: PhaseZero PC menu entry not hidden"; exit 1; }
+grep -q 'pc-game.svg$' "$XDG_DATA_HOME/applications/phasezero-pc-menu-test.desktop" || { echo "FAIL: PhaseZero PC menu icon missing"; exit 1; }
+grep -q '^NoDisplay=true$' "$XDG_DATA_HOME/applications/ES-DE.desktop" || { echo "FAIL: duplicate ES-DE launcher not hidden"; exit 1; }
+"$REPO_ROOT/linux/pz" emulation heroic status --json | jq -e '.optimizedDefaults == true and .iconsInstalled == true and .visiblePhaseZeroPcGames == 0 and .hiddenDuplicates >= 1 and .phasezeroWithoutIcon == 0' >/dev/null || { echo "FAIL: Heroic status JSON invalid"; exit 1; }
 
 # pz emulation doctor runs both shared + media status
 "$REPO_ROOT/linux/pz" emulation doctor >/dev/null 2>&1 || true

@@ -162,7 +162,10 @@ Name=EmuDeck (PhaseZero)
 Comment=$comment
 Exec=$EMUDECK_WRAPPER
 Terminal=false
+Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/emulator.svg
 Categories=Game;Emulator;
+StartupNotify=false
+X-PhaseZero-Managed=true
 EOF
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
 }
