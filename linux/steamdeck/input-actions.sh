@@ -30,6 +30,19 @@ steamdeck_steam_running() {
     pgrep -x steam >/dev/null 2>&1 || pgrep -f steamwebhelper >/dev/null 2>&1
 }
 
+steamdeck_pid_is_kwin_managed() {
+    # maliit-keyboard spawned by kwin_wayland is the KDE input method client;
+    # killing it never shows a keyboard, KWin just respawns it.
+    local pid="$1" ppid parent_comm
+    ppid="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
+    [ -n "$ppid" ] || return 1
+    parent_comm="$(ps -o comm= -p "$ppid" 2>/dev/null | tr -d ' ')"
+    case "$parent_comm" in
+        kwin_wayland*) return 0 ;;
+    esac
+    return 1
+}
+
 steamdeck_kde_virtual_keyboard_supported() {
     command -v qdbus6 >/dev/null 2>&1 || return 1
     qdbus6 org.kde.KWin /VirtualKeyboard >/dev/null 2>&1 || return 1
@@ -69,6 +82,7 @@ steamdeck_configure_virtual_keyboard() {
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         pz_info "dry-run: would enable KDE virtual keyboard in $kwinrc"
         [ -n "$method" ] && pz_info "dry-run: would set KDE input method to $method"
+        steamdeck_ensure_terminal_keyboard
         return 0
     fi
 
@@ -93,6 +107,8 @@ steamdeck_configure_virtual_keyboard() {
     current_enabled="$(kreadconfig6 --file kwinrc --group Wayland --key VirtualKeyboardEnabled 2>/dev/null || true)"
     current_method="$(kreadconfig6 --file kwinrc --group Wayland --key InputMethod 2>/dev/null || true)"
     pz_info "KDE virtual keyboard configured: enabled=${current_enabled:-unknown} inputMethod=${current_method:-unknown}"
+
+    steamdeck_ensure_terminal_keyboard
 }
 
 steamdeck_kde_deactivate_virtual_keyboard() {
@@ -123,19 +139,67 @@ steamdeck_kde_open_virtual_keyboard() {
     fi
 
     if [ "$active" = "true" ]; then
+        # Maliit only surfaces for clients that request text-input; terminals
+        # never do, so drop the half-active state before falling back.
         pz_warn "KDE virtual keyboard active but not visible; trying fallback"
+        steamdeck_kde_deactivate_virtual_keyboard >/dev/null 2>&1 || true
     fi
 
     return 1
 }
 
+steamdeck_admin_run() {
+    if pz_can_sudo_noninteractive; then
+        sudo -n "$@"
+    elif command -v phasezero-admin >/dev/null 2>&1; then
+        phasezero-admin "$@"
+    else
+        return 127
+    fi
+}
+
+steamdeck_ensure_terminal_keyboard() {
+    # KWin/Maliit never shows for terminal apps (no text-input protocol), so a
+    # standalone keyboard like wvkbd is required for typing into Konsole & co.
+    local candidate
+    for candidate in wvkbd-mobintl wvkbd onboard; do
+        command -v "$candidate" >/dev/null 2>&1 && return 0
+    done
+
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_info "dry-run: would install wvkbd (terminal-capable virtual keyboard)"
+        return 0
+    fi
+
+    if ! command -v pacman >/dev/null 2>&1; then
+        pz_warn "no terminal-capable virtual keyboard found; install wvkbd manually"
+        return 0
+    fi
+
+    pz_info "installing wvkbd (terminal-capable virtual keyboard)"
+    if steamdeck_admin_run pacman -S --needed --noconfirm wvkbd; then
+        pz_info "wvkbd installed"
+    else
+        pz_warn "could not install wvkbd automatically; run: sudo pacman -S wvkbd"
+    fi
+}
+
 steamdeck_stop_virtual_keyboard() {
     local stopped=0
-    local name
-    for name in wvkbd-mobintl wvkbd onboard maliit-keyboard; do
+    local name pid
+    for name in wvkbd-mobintl wvkbd onboard; do
         if pgrep -x "$name" >/dev/null 2>&1; then
             pkill -x "$name" >/dev/null 2>&1 || true
             pz_info "stopped virtual keyboard: $name"
+            stopped=1
+        fi
+    done
+
+    # only standalone maliit instances; the KWin-managed one must stay alive
+    for pid in $(pgrep -x maliit-keyboard 2>/dev/null); do
+        if ! steamdeck_pid_is_kwin_managed "$pid"; then
+            kill "$pid" >/dev/null 2>&1 || true
+            pz_info "stopped standalone maliit-keyboard (pid $pid)"
             stopped=1
         fi
     done
@@ -154,15 +218,33 @@ steamdeck_request_steam_keyboard() {
 }
 
 steamdeck_start_keyboard_binary() {
-    local candidate
+    local candidate pid
     for candidate in wvkbd-mobintl wvkbd onboard maliit-keyboard; do
-        if command -v "$candidate" >/dev/null 2>&1; then
-            steamdeck_run_detached "virtual keyboard" "$candidate"
+        command -v "$candidate" >/dev/null 2>&1 || continue
+
+        # standalone maliit is pointless under KWin: the compositor already
+        # manages its own instance via the input-method protocol
+        if [ "$candidate" = "maliit-keyboard" ] && steamdeck_kde_virtual_keyboard_supported; then
+            continue
+        fi
+
+        if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+            pz_info "dry-run: would start virtual keyboard: $candidate"
             return 0
         fi
+
+        nohup "$candidate" >/dev/null 2>&1 &
+        pid="$!"
+        disown "$pid" 2>/dev/null || true
+        sleep 0.4
+        if kill -0 "$pid" 2>/dev/null; then
+            pz_info "started virtual keyboard: $candidate (pid $pid)"
+            return 0
+        fi
+        pz_warn "$candidate exited immediately (compositor may not support it); trying next"
     done
 
-    pz_error "no virtual keyboard found. install wvkbd, onboard, or maliit-keyboard."
+    pz_error "no working virtual keyboard found. install wvkbd, onboard, or maliit-keyboard."
     return 1
 }
 
@@ -274,10 +356,15 @@ steamdeck_start_dev_session() {
 if [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     case "${1:-keyboard}" in
         keyboard|virtual-keyboard|toggle|toggle-keyboard) steamdeck_toggle_virtual_keyboard ;;
+        open|show|open-keyboard) steamdeck_open_virtual_keyboard ;;
+        close|hide|close-keyboard)
+            steamdeck_kde_deactivate_virtual_keyboard >/dev/null 2>&1 || true
+            steamdeck_stop_virtual_keyboard || true
+            ;;
         configure|install|repair|configure-keyboard|install-keyboard) steamdeck_configure_virtual_keyboard ;;
         status|status-keyboard) steamdeck_virtual_keyboard_status ;;
         console) steamdeck_start_console_session "${2:-auto}" ;;
         dev|desktop) steamdeck_start_dev_session "${2:-docked-monitor}" ;;
-        *) pz_error "usage: input-actions.sh (keyboard|configure|status|console|dev)"; exit 1 ;;
+        *) pz_error "usage: input-actions.sh (keyboard|open|close|configure|status|console|dev)"; exit 1 ;;
     esac
 fi

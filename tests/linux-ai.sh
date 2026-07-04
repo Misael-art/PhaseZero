@@ -72,6 +72,13 @@ test -f "$PZ_WORKSPACE_ROOT/.vscode/extensions.json"
 test -f "$XDG_CONFIG_HOME/nvim/lua/phasezero_ai.lua"
 jq -e '.recommendations | index("GitHub.copilot")' "$PZ_WORKSPACE_ROOT/.vscode/extensions.json" >/dev/null
 
+"$REPO_ROOT/linux/ai/setup-opencode.sh" dry-run | jq -e '.tool == "opencode" and .launcher == "opencode-deck"' >/dev/null
+"$REPO_ROOT/linux/ai/setup-opencode.sh" desktop-integration >/dev/null
+test -x "$PZ_LOCAL_BIN/opencode-deck"
+bash -n "$PZ_LOCAL_BIN/opencode-deck"
+test -f "$XDG_DATA_HOME/applications/phasezero-opencode.desktop"
+grep -q "opencode-deck" "$XDG_DATA_HOME/applications/phasezero-opencode.desktop"
+
 "$REPO_ROOT/linux/ai/setup-memory.sh" dry-run | jq -e '.tool == "ai-memory"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-usagebar.sh" dry-run | jq -e '.tool == "ai-usagebar"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-hermes.sh" dry-run | jq -e '.tool == "hermes"' >/dev/null
