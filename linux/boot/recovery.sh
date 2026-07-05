@@ -187,7 +187,7 @@ validate_efi_safe() {
 }
 
 safe_menu_timeout() {
-    local timeout="${PZ_GRUB_SAFE_MENU_TIMEOUT:-10}"
+    local timeout="${PZ_GRUB_SAFE_MENU_TIMEOUT:-20}"
     case "$timeout" in
         ""|*[!0-9]*) pz_error "PZ_GRUB_SAFE_MENU_TIMEOUT must be an integer"; return 1 ;;
     esac
@@ -227,6 +227,10 @@ cmd_install_safe_menu() {
     safe_menu_dropin_content > "$tmp"
     install -m 0644 "$tmp" "$SAFE_MENU_DROPIN"
     rm -f "$tmp"
+    if command -v grub-editenv >/dev/null 2>&1; then
+        grub-editenv - unset menu_auto_hide >/dev/null 2>&1 || true
+        grub-editenv - unset menu_show_once >/dev/null 2>&1 || true
+    fi
     pz_boot_refresh_grub_config /boot/grub/grub.cfg
     pz_boot_validate_grub_cfg_safe /boot/grub/grub.cfg
     pz_boot_validate_active_efi_safe

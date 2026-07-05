@@ -70,10 +70,14 @@ session_is_running() {
     waydroid status 2>/dev/null | grep -Eq '^Session:[[:space:]]*RUNNING$'
 }
 
+android_platform_ready() {
+    waydroid app list >/dev/null 2>&1
+}
+
 wait_for_waydroid() {
     local i
-    for i in $(seq 1 60); do
-        session_is_running && return 0
+    for i in $(seq 1 120); do
+        session_is_running && android_platform_ready && return 0
         sleep 1
     done
     return 1
@@ -98,22 +102,34 @@ start_waydroid_session() {
         log "Waydroid session did not reach RUNNING state"
         return 1
     fi
-    log "Waydroid session reached RUNNING state"
+    log "Waydroid Android platform ready"
 }
 
 run_waydroid_ui_loop() {
     local max="${PZ_WAYDROID_SESSION_RESTARTS:-3}" attempt=0 rc=0
-    start_waydroid_session || fallback_desktop
-    while :; do
+    while [ "$attempt" -lt "$max" ]; do
         attempt=$((attempt + 1))
+        start_waydroid_session || {
+            log "Waydroid startup failed attempt=$attempt"
+            sleep 3
+            continue
+        }
         log "starting Waydroid full UI attempt=$attempt"
         set +e
         waydroid show-full-ui >> "$LOG_FILE" 2>&1
         rc=$?
         set -e
-        log "Waydroid full UI exited rc=$rc attempt=$attempt"
-        [ "$attempt" -ge "$max" ] && break
-        sleep 2
+        if [ "$rc" -eq 0 ]; then
+            log "Waydroid full UI accepted; monitoring Android session"
+            while session_is_running; do
+                sleep 2
+            done
+            log "Waydroid session stopped after UI launch"
+        else
+            log "Waydroid full UI failed rc=$rc attempt=$attempt"
+        fi
+        waydroid session stop >> "$LOG_FILE" 2>&1 || true
+        sleep 3
     done
     fallback_desktop
 }

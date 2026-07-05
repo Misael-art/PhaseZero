@@ -18,9 +18,10 @@ bash -n "$REPO_ROOT/linux/pz"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+bash -n "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh"
 jq empty "$REPO_ROOT/profiles/waydroid-linux.json"
 
-"$REPO_ROOT/linux/pz" waydroid status | jq -e '.host | has("binderFilesystem") and has("kwinWayland")' >/dev/null
+"$REPO_ROOT/linux/pz" waydroid status | jq -e '(.host | has("binderFilesystem") and has("kwinWayland")) and (.access | has("sharesReady") and has("usbBusShared"))' >/dev/null
 plan_output="$("$REPO_ROOT/linux/pz" waydroid plan)"
 grep -q 'PhaseZero Waydroid plan' <<< "$plan_output"
 boot_output="$("$REPO_ROOT/linux/pz" waydroid boot dry-run)"
@@ -56,18 +57,50 @@ session_validation="$(
 grep -q 'waydroid_session_ready=yes' <<< "$session_validation"
 ! grep -q 'startkde-biglinux' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 grep -q 'session_is_running' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+grep -q 'android_platform_ready' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+grep -q 'full UI accepted; monitoring Android session' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+
+shares_root="$TMP_ROOT/shares"
+mkdir -p "$HOME/Desktop" "$HOME/Downloads" "$shares_root/sdcard" "$shares_root/removable" \
+    "$shares_root/media" "$shares_root/mnt" "$shares_root/usb" "$shares_root/android"
+printf '# base\n' > "$shares_root/config_base"
+printf '# runtime\n' > "$shares_root/config"
+shares_status="$(
+    PZ_WAYDROID_SHARE_TEST_MODE=1 \
+    PZ_WAYDROID_SHARE_SKIP_ACL=1 \
+    PZ_WAYDROID_BOOT_USER="$(id -un)" \
+    PZ_WAYDROID_TARGET_HOME="$HOME" \
+    PZ_WAYDROID_LXC_SHARES_CONFIG="$shares_root/shares.conf" \
+    PZ_WAYDROID_LXC_CONFIG_BASE="$shares_root/config_base" \
+    PZ_WAYDROID_LXC_CONFIG="$shares_root/config" \
+    PZ_WAYDROID_ANDROID_MEDIA_ROOT="$shares_root/android" \
+    PZ_WAYDROID_SDCARD_PATH="$shares_root/sdcard" \
+    PZ_WAYDROID_REMOVABLE_PATH="$shares_root/removable" \
+    PZ_WAYDROID_MEDIA_PATH="$shares_root/media" \
+    PZ_WAYDROID_MOUNTS_PATH="$shares_root/mnt" \
+    PZ_WAYDROID_USB_BUS_PATH="$shares_root/usb" \
+        "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh" install
+)"
+grep -q '^shares_ready: yes$' <<< "$shares_status"
+grep -q '^usb_bus_shared: yes$' <<< "$shares_status"
+grep -Fqx "lxc.include = $shares_root/shares.conf" "$shares_root/config_base"
+grep -Fq ' data/media/0/Host/SDCard ' "$shares_root/shares.conf"
+grep -Fq ' dev/bus/usb ' "$shares_root/shares.conf"
+test -d "$shares_root/android/Host/SDCard"
 
 sddm_test_dir="$TMP_ROOT/sddm"
 PZ_BOOT_CMDLINE='quiet phasezero.waydroid=1' \
 PZ_SDDM_CONF_DIR="$sddm_test_dir" \
 PZ_WAYDROID_BOOT_USER=tester \
 PZ_WAYDROID_SKIP_RUNTIME=1 \
+PZ_WAYDROID_SHARES_HELPER="$TMP_ROOT/missing-shares-helper" \
     "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
 grep -q '^User=tester$' "$sddm_test_dir/92-phasezero-waydroid.conf"
 grep -q '^Session=phasezero-waydroid.desktop$' "$sddm_test_dir/92-phasezero-waydroid.conf"
 PZ_BOOT_CMDLINE='quiet splash' \
 PZ_SDDM_CONF_DIR="$sddm_test_dir" \
 PZ_WAYDROID_SKIP_RUNTIME=1 \
+PZ_WAYDROID_SHARES_HELPER="$TMP_ROOT/missing-shares-helper" \
     "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
 test ! -e "$sddm_test_dir/92-phasezero-waydroid.conf"
 
@@ -80,6 +113,8 @@ test -f "$XDG_DATA_HOME/applications/phasezero-waydroid.desktop"
 test -f "$XDG_CONFIG_HOME/systemd/user/phasezero-waydroid.service"
 "$REPO_ROOT/linux/pz" waydroid status | jq -e '.config.installed == true and (.android | has("serviceActive")) and (.boot | has("grubCfgEntry"))' >/dev/null
 "$REPO_ROOT/linux/pz" waydroid status | jq -e '.android.resumablePrefetch == true' >/dev/null
+shares_plan="$("$REPO_ROOT/linux/pz" waydroid shares dry-run)"
+grep -q 'Internal storage/Host' <<< "$shares_plan"
 grep -q 'PZ_WAYDROID_SOURCEFORGE_MIRRORS' "$REPO_ROOT/linux/waydroid/waydroid.sh"
 "$REPO_ROOT/linux/pz" install waydroid-linux --dry-run >/dev/null
 

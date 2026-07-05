@@ -12,6 +12,7 @@ SESSION="phasezero-waydroid.desktop"
 BINDERFS_DIR="${PZ_WAYDROID_BINDERFS_DIR:-/dev/binderfs}"
 LXC_CONFIG_BASE="${PZ_WAYDROID_LXC_CONFIG_BASE:-/usr/lib/waydroid/data/configs/config_base}"
 LXC_CONFIG="${PZ_WAYDROID_LXC_CONFIG:-/var/lib/waydroid/lxc/waydroid/config}"
+SHARES_HELPER="${PZ_WAYDROID_SHARES_HELPER:-/usr/local/lib/phasezero/waydroid-shares-prepare}"
 
 log() {
     local msg="phasezero-waydroid-boot: $*"
@@ -79,6 +80,17 @@ repair_lxc_post_stop_hook() {
     done
 }
 
+ensure_shared_access() {
+    [ -x "$SHARES_HELPER" ] || {
+        log "Waydroid shared-access helper missing"
+        return 0
+    }
+    if ! PZ_WAYDROID_BOOT_USER="$TARGET_USER" "$SHARES_HELPER" status 2>/dev/null | grep -q '^shares_ready: yes$'; then
+        PZ_WAYDROID_BOOT_USER="$TARGET_USER" "$SHARES_HELPER" install >/dev/null
+        log "Waydroid host storage and USB shares repaired"
+    fi
+}
+
 start_waydroid_container() {
     systemctl list-unit-files waydroid-container.service >/dev/null 2>&1 || {
         log "waydroid-container.service missing"
@@ -98,6 +110,7 @@ remove_managed_conf() {
 
 ensure_binder_runtime
 repair_lxc_post_stop_hook
+ensure_shared_access
 
 if printf '%s\n' "$CMDLINE" | grep -qw 'phasezero.waydroid=1'; then
     apply_waydroid_tuning

@@ -10,7 +10,7 @@ ACTION="${1:-status}"
 
 TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
 [ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
-if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+if [ "$EUID" -eq 0 ]; then
     target_home_root="$(getent passwd "$TARGET_USER" | cut -d: -f6 || true)"
     [ -n "$target_home_root" ] && export HOME="$target_home_root"
 fi
@@ -28,6 +28,9 @@ BOOT_HELPER_SOURCE="$PZ_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 SESSION_SOURCE="$PZ_ROOT/linux/windows-vm/windows-vm-session.sh"
 BOOT_HELPER_TARGET="/usr/local/lib/phasezero/windows-vm-boot-prepare"
 SESSION_TARGET="/usr/local/lib/phasezero/windows-vm-session"
+RUNTIME_ROOT="/usr/local/lib/phasezero/windows-vm-runtime"
+RUNTIME_LAUNCHER="$RUNTIME_ROOT/linux/windows-vm/windows-vm.sh"
+RUNTIME_COMMON="$RUNTIME_ROOT/linux/lib/common.sh"
 ROOT_ENV_FILE="/etc/phasezero/windows-vm.env"
 SERVICE_FILE="/etc/systemd/system/phasezero-windows-vm-boot-prepare.service"
 WAYLAND_SESSION_FILE="/usr/share/wayland-sessions/phasezero-windows-vm.desktop"
@@ -37,6 +40,10 @@ GRUB_CFG="/boot/grub/grub.cfg"
 SDDM_CONF="/etc/sddm.conf.d/91-phasezero-windows-vm.conf"
 BOOT_ENTRY="PhaseZero Windows VM"
 BOOT_ID="phasezero-windows-vm"
+SAMBA_CONF="${PZ_WINDOWS_VM_SAMBA_CONF:-/etc/samba/smb.conf}"
+SAMBA_BEGIN="# BEGIN PHASEZERO WINDOWS VM SHARES"
+SAMBA_END="# END PHASEZERO WINDOWS VM SHARES"
+USB_UDEV_RULE="${PZ_WINDOWS_VM_USB_UDEV_RULE:-/etc/udev/rules.d/72-phasezero-windows-vm-usb.rules}"
 
 ISO_PATH=""
 ISO_EXPLICIT=0
@@ -48,6 +55,8 @@ EXPLICIT_DISK=0
 RAM_MB=""
 CPUS=""
 USB_MODE=""
+USB_AUTO_FILTER=""
+SMB_HOST=""
 FULLSCREEN=0
 DRY_RUN="${PZ_DRY_RUN:-0}"
 JSON_OUT=0
@@ -57,6 +66,7 @@ EXTRA_ARGS=""
 LIBVIRT_DOMAIN=""
 EXPLICIT_DOMAIN=0
 RAW_QEMU=0
+RAW_DISK_BUS="nvme"
 DISPLAY_MODE="gtk"
 OPTIMIZE_HOST="${PZ_WINDOWS_VM_OPTIMIZE:-1}"
 
@@ -72,6 +82,7 @@ Usage:
   pz windows-vm install --iso <windows.iso> [--disk-size 256G] [--ram 8192|8G] [--cpus N] [--dry-run]
   pz windows-vm optimize [--dry-run]
   pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--dry-run]
+  pz windows-vm shares (status|install|remove|dry-run)
   pz windows-vm boot status
   pz windows-vm boot install
   pz windows-vm boot next
@@ -105,6 +116,8 @@ parse_options() {
             --cpus=*) CPUS="${1#*=}"; shift ;;
             --usb-mode) USB_MODE="${2:-}"; shift 2 ;;
             --usb-mode=*) USB_MODE="${1#*=}"; shift ;;
+            --usb-auto-filter) USB_AUTO_FILTER="${2:-}"; shift 2 ;;
+            --usb-auto-filter=*) USB_AUTO_FILTER="${1#*=}"; shift ;;
             --pci) PCI_DEVICES="${PCI_DEVICES:+$PCI_DEVICES }${2:-}"; shift 2 ;;
             --pci=*) PCI_DEVICES="${PCI_DEVICES:+$PCI_DEVICES }${1#*=}"; shift ;;
             --extra-qemu) EXTRA_ARGS="${EXTRA_ARGS:+$EXTRA_ARGS }${2:-}"; shift 2 ;;
@@ -377,7 +390,22 @@ libvirt_domain_disk() {
     local domain="$1"
     [ -n "$domain" ] || return 0
     virsh -c "$(libvirt_uri)" domblklist "$domain" --details 2>/dev/null |
-        awk '$2 == "disk" {print $4; exit}'
+        awk '$2 == "disk" && !seen++ {print $4}'
+}
+
+libvirt_domain_xml_value() {
+    local domain="$1" xpath="$2"
+    [ -n "$domain" ] && command -v xmllint >/dev/null 2>&1 || return 0
+    virsh -c "$(libvirt_uri)" dumpxml "$domain" 2>/dev/null |
+        xmllint --xpath "string($xpath)" - 2>/dev/null || true
+}
+
+libvirt_domain_nvram() {
+    libvirt_domain_xml_value "$1" "/domain/os/nvram"
+}
+
+libvirt_domain_disk_bus() {
+    libvirt_domain_xml_value "$1" "/domain/devices/disk[@device='disk'][1]/target/@bus"
 }
 
 discovered_windows_disk() {
@@ -513,19 +541,28 @@ effective_config() {
         LIBVIRT_DOMAIN="${LIBVIRT_DOMAIN:-${PZ_WINDOWS_VM_LIBVIRT_DOMAIN:-$(find_existing_windows_domain)}}"
     fi
     if [ -n "$LIBVIRT_DOMAIN" ]; then
-        local domain_disk
+        local domain_disk domain_bus
         domain_disk="$(libvirt_domain_disk "$LIBVIRT_DOMAIN")"
         [ -n "$domain_disk" ] && [ "$EXPLICIT_DISK" -eq 0 ] && DISK_PATH="$domain_disk"
+        domain_bus="$(libvirt_domain_disk_bus "$LIBVIRT_DOMAIN")"
+        [ -n "$domain_bus" ] && RAW_DISK_BUS="$domain_bus"
     fi
     ISO_PATH="${ISO_PATH:-${PZ_WINDOWS_VM_ISO:-$(detect_windows_iso)}}"
     VIRTIO_ISO="${VIRTIO_ISO:-${PZ_WINDOWS_VM_VIRTIO_ISO:-$(detect_virtio_iso)}}"
     RAM_MB="${RAM_MB:-${PZ_WINDOWS_VM_RAM_MB:-$(default_ram_mb)}}"
     CPUS="${CPUS:-${PZ_WINDOWS_VM_CPUS:-$(default_cpus)}}"
     USB_MODE="${USB_MODE:-${PZ_WINDOWS_VM_USB_MODE:-redir}}"
+    USB_AUTO_FILTER="${USB_AUTO_FILTER:-${PZ_WINDOWS_VM_USB_AUTO_FILTER:-0x08,-1,-1,-1,1}}"
+    SMB_HOST="${PZ_WINDOWS_VM_SMB_HOST:-$(libvirt_gateway)}"
     PCI_DEVICES="${PCI_DEVICES:-${PZ_WINDOWS_VM_PCI_DEVICES:-}}"
     EXTRA_ARGS="${EXTRA_ARGS:-${PZ_WINDOWS_VM_EXTRA_ARGS:-}}"
     OVMF_CODE="${PZ_WINDOWS_VM_OVMF_CODE:-$(ovmf_code_path)}"
     OVMF_VARS="${PZ_WINDOWS_VM_OVMF_VARS:-$VM_DIR/OVMF_VARS.fd}"
+    if [ -n "$LIBVIRT_DOMAIN" ]; then
+        local domain_nvram
+        domain_nvram="$(libvirt_domain_nvram "$LIBVIRT_DOMAIN")"
+        [ -f "$domain_nvram" ] && OVMF_VARS="$domain_nvram"
+    fi
     SHARE_ROOT="${PZ_WINDOWS_VM_SHARE_ROOT:-$VM_DIR/shares}"
     TPM_DIR="${PZ_WINDOWS_VM_TPM_DIR:-$VM_DIR/tpm}"
     local configured_source="${PZ_WINDOWS_VM_DISK_SOURCE:-new}"
@@ -555,6 +592,8 @@ write_config() {
         printf 'PZ_WINDOWS_VM_RAM_MB=%q\n' "$RAM_MB"
         printf 'PZ_WINDOWS_VM_CPUS=%q\n' "$CPUS"
         printf 'PZ_WINDOWS_VM_USB_MODE=%q\n' "$USB_MODE"
+        printf 'PZ_WINDOWS_VM_USB_AUTO_FILTER=%q\n' "$USB_AUTO_FILTER"
+        printf 'PZ_WINDOWS_VM_SMB_HOST=%q\n' "$SMB_HOST"
         printf 'PZ_WINDOWS_VM_OVMF_CODE=%q\n' "$OVMF_CODE"
         printf 'PZ_WINDOWS_VM_OVMF_VARS=%q\n' "$OVMF_VARS"
         printf 'PZ_WINDOWS_VM_SHARE_ROOT=%q\n' "$SHARE_ROOT"
@@ -701,6 +740,284 @@ ensure_share_links() {
     [ -d "/run/media/$USER" ] && ln -sfn "/run/media/$USER" "$SHARE_ROOT/removable"
     [ -d "/media/$USER" ] && ln -sfn "/media/$USER" "$SHARE_ROOT/media"
     [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
+}
+
+libvirt_gateway() {
+    local gateway=""
+    if command -v virsh >/dev/null 2>&1; then
+        gateway="$(virsh -c "$(libvirt_uri)" net-dumpxml default 2>/dev/null |
+            awk -F"'" '/<ip address=/{if (!seen++) print $2}')"
+    fi
+    printf '%s\n' "${gateway:-192.168.122.1}"
+}
+
+samba_block_content() {
+    local home removable media
+    home="$(target_home)"
+    removable="/run/media/$TARGET_USER"
+    media="/media/$TARGET_USER"
+    cat <<EOF
+$SAMBA_BEGIN
+[PZHome]
+    comment = PhaseZero host home
+    path = $home
+    browseable = yes
+    read only = no
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+    force create mode = 0600
+    force directory mode = 0700
+    veto files = /.ssh/.gnupg/.aws/.kube/
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
+[PZSDCard]
+    comment = PhaseZero SD card
+    path = /mnt/sdcard
+    browseable = yes
+    read only = no
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
+[PZRemovable]
+    comment = PhaseZero removable media
+    path = $removable
+    browseable = yes
+    read only = no
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
+[PZMedia]
+    comment = PhaseZero media mounts
+    path = $media
+    browseable = yes
+    read only = no
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
+[PZMounts]
+    comment = PhaseZero host mounts
+    path = /mnt
+    browseable = yes
+    read only = no
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+$SAMBA_END
+EOF
+}
+
+strip_managed_samba_block() {
+    local input="$1" output="$2"
+    awk -v begin="$SAMBA_BEGIN" -v end="$SAMBA_END" '
+        $0 == begin {skip=1; next}
+        $0 == end {skip=0; next}
+        !skip {print}
+    ' "$input" > "$output"
+}
+
+samba_shares_managed() {
+    [ -r "$SAMBA_CONF" ] &&
+        grep -Fqx "$SAMBA_BEGIN" "$SAMBA_CONF" &&
+        grep -Fqx "$SAMBA_END" "$SAMBA_CONF" &&
+        command -v testparm >/dev/null 2>&1 &&
+        testparm -s "$SAMBA_CONF" >/dev/null 2>&1
+}
+
+samba_shares_reachable() {
+    command -v smbclient >/dev/null 2>&1 &&
+        smbclient -N //127.0.0.1/PZHome -c 'quit' >/dev/null 2>&1 &&
+        smbclient -N //127.0.0.1/PZSDCard -c 'quit' >/dev/null 2>&1
+}
+
+windows_usb_udev_content() {
+    cat <<'EOF'
+# PhaseZero: active-seat access for external USB passthrough.
+# SPICE auto-redirection remains restricted to mass-storage interfaces.
+ACTION!="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_INTEGRATION}=="external", MODE="0660", TAG+="uaccess"
+ACTION!="remove", SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ENV{ID_USB_INTERFACES}=="*:08????:*", MODE="0660", TAG+="uaccess"
+EOF
+}
+
+windows_usb_udev_managed() {
+    [ -r "$USB_UDEV_RULE" ] && cmp -s <(windows_usb_udev_content) "$USB_UDEV_RULE"
+}
+
+configure_windows_usb_access() {
+    [ "$EUID" -eq 0 ] || {
+        pz_error "root required to configure Windows VM USB access"
+        return 1
+    }
+    install -d "$(dirname "$USB_UDEV_RULE")"
+    windows_usb_udev_content > "$USB_UDEV_RULE"
+    chmod 0644 "$USB_UDEV_RULE"
+    command -v udevadm >/dev/null 2>&1 || return 0
+    udevadm control --reload-rules
+    udevadm trigger --subsystem-match=usb --action=change
+    udevadm settle --timeout=10 || true
+}
+
+configure_windows_samba_shares() {
+    [ "$EUID" -eq 0 ] || {
+        pz_error "root required to configure Windows VM host shares"
+        return 1
+    }
+    command -v testparm >/dev/null 2>&1 || {
+        pz_error "testparm missing; install Samba"
+        return 1
+    }
+    [ -f "$SAMBA_CONF" ] || {
+        pz_error "Samba config missing: $SAMBA_CONF"
+        return 1
+    }
+    local tmp backup_dir
+    tmp="$(mktemp)"
+    strip_managed_samba_block "$SAMBA_CONF" "$tmp"
+    printf '\n' >> "$tmp"
+    samba_block_content >> "$tmp"
+    testparm -s "$tmp" >/dev/null
+    backup_dir="/var/lib/phasezero/windows-vm/samba-backups"
+    install -d -m 0700 "$backup_dir"
+    cp -a "$SAMBA_CONF" "$backup_dir/smb.conf.$(date +%Y%m%d-%H%M%S)"
+    install -m 0644 "$tmp" "$SAMBA_CONF"
+    rm -f "$tmp"
+    install -d -o "$TARGET_USER" -g "$TARGET_USER" "/run/media/$TARGET_USER" "/media/$TARGET_USER"
+    systemctl enable --now smb.service >/dev/null 2>&1 || systemctl restart smbd.service >/dev/null 2>&1 || true
+    systemctl restart smb.service >/dev/null 2>&1 || systemctl restart smbd.service >/dev/null 2>&1 || true
+    if command -v ufw >/dev/null 2>&1; then
+        ufw allow in on virbr0 to any port 445 proto tcp comment 'PhaseZero Windows VM SMB' >/dev/null 2>&1 || true
+    fi
+    samba_shares_reachable || {
+        pz_error "managed Samba shares failed local reachability test"
+        return 1
+    }
+    configure_windows_usb_access
+    pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts"
+}
+
+remove_windows_samba_shares() {
+    [ "$EUID" -eq 0 ] || {
+        pz_error "root required to remove Windows VM host shares"
+        return 1
+    }
+    [ -f "$SAMBA_CONF" ] || return 0
+    local tmp
+    tmp="$(mktemp)"
+    strip_managed_samba_block "$SAMBA_CONF" "$tmp"
+    testparm -s "$tmp" >/dev/null
+    install -m 0644 "$tmp" "$SAMBA_CONF"
+    rm -f "$tmp"
+    rm -f "$USB_UDEV_RULE"
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules
+        udevadm trigger --subsystem-match=usb --action=change
+    fi
+    systemctl restart smb.service >/dev/null 2>&1 || systemctl restart smbd.service >/dev/null 2>&1 || true
+    pz_info "PhaseZero Windows Samba shares removed"
+}
+
+libvirt_usb_redir_count() {
+    [ -n "$LIBVIRT_DOMAIN" ] || { echo 0; return 0; }
+    virsh -c "$(libvirt_uri)" dumpxml "$LIBVIRT_DOMAIN" 2>/dev/null |
+        awk '/<redirdev /{count++} END{print count+0}'
+}
+
+usb_accessible_device_count() {
+    local count=0 device
+    for device in /dev/bus/usb/*/*; do
+        [ -c "$device" ] || continue
+        [ -r "$device" ] && [ -w "$device" ] && count=$((count + 1))
+    done
+    echo "$count"
+}
+
+share_links_ready() {
+    [ -L "$SHARE_ROOT/home" ] &&
+        [ -L "$SHARE_ROOT/sdcard" ] &&
+        [ -L "$SHARE_ROOT/mnt" ]
+}
+
+grant_raw_qemu_disk_access() {
+    local disk="${1:-$DISK_PATH}" chain_json path
+    [ "$EUID" -eq 0 ] || return 0
+    [ -f "$disk" ] || return 0
+    command -v setfacl >/dev/null 2>&1 || {
+        pz_warn "setfacl missing; raw QEMU fallback cannot access libvirt-owned disks"
+        return 0
+    }
+    chain_json="$(qemu-img info --backing-chain --output=json "$disk" 2>/dev/null || true)"
+    if [ -n "$chain_json" ] && command -v jq >/dev/null 2>&1; then
+        while IFS= read -r path; do
+            [ -f "$path" ] || continue
+            setfacl -m "u:$TARGET_USER:rw-" "$path"
+        done < <(jq -r 'if type == "array" then .[].filename else .filename end // empty' <<< "$chain_json")
+    else
+        setfacl -m "u:$TARGET_USER:rw-" "$disk"
+    fi
+    [ -f "$OVMF_VARS" ] && setfacl -m "u:$TARGET_USER:rw-" "$OVMF_VARS"
+}
+
+cmd_shares() {
+    local sub="${1:-status}"
+    [ $# -gt 0 ] && shift || true
+    parse_options "$@"
+    effective_config
+    case "$sub" in
+        install|repair)
+            need_root
+            ensure_share_links
+            configure_windows_samba_shares
+            optimize_libvirt_domain
+            ;;
+        remove)
+            need_root
+            remove_windows_samba_shares
+            ;;
+        dry-run|plan)
+            echo "Windows VM shared access plan"
+            echo "  SMB host: \\\\$(libvirt_gateway)\\PZHome"
+            echo "  SD card: \\\\$(libvirt_gateway)\\PZSDCard"
+            echo "  removable: \\\\$(libvirt_gateway)\\PZRemovable"
+            echo "  mounts: \\\\$(libvirt_gateway)\\PZMounts"
+            echo "  SPICE shared directory: $SHARE_ROOT"
+            echo "  USB auto filter: $USB_AUTO_FILTER"
+            echo "  USB permissions: active-seat udev access for external devices"
+            return 0
+            ;;
+        status) ;;
+        *)
+            pz_error "usage: windows-vm shares (status|install|repair|remove|dry-run)"
+            return 1
+            ;;
+    esac
+    echo "samba_managed: $(samba_shares_managed && echo yes || echo no)"
+    echo "samba_reachable: $(samba_shares_reachable && echo yes || echo no)"
+    echo "smb_host: $(libvirt_gateway)"
+    echo "share_links: $(share_links_ready && echo yes || echo no)"
+    echo "usb_redir_channels: $(libvirt_usb_redir_count)"
+    echo "usb_auto_filter: ${USB_AUTO_FILTER:-disabled}"
 }
 
 audio_driver() {
@@ -861,9 +1178,15 @@ build_qemu_args() {
     fi
     QEMU_ARGS+=("-drive" "if=pflash,format=raw,readonly=on,file=$OVMF_CODE")
     QEMU_ARGS+=("-drive" "if=pflash,format=raw,file=$OVMF_VARS")
-    QEMU_ARGS+=("-device" "intel-iommu,intremap=on,caching-mode=on")
     QEMU_ARGS+=("-drive" "if=none,id=system,file=$DISK_PATH,format=$(disk_format "$DISK_PATH"),cache=none,discard=unmap,aio=io_uring")
-    QEMU_ARGS+=("-device" "nvme,drive=system,serial=PZWINVM0")
+    case "$RAW_DISK_BUS" in
+        sata|ide) QEMU_ARGS+=("-device" "ide-hd,drive=system,bus=ide.0,bootindex=1") ;;
+        virtio) QEMU_ARGS+=("-device" "virtio-blk-pci,drive=system,bootindex=1") ;;
+        *) QEMU_ARGS+=("-device" "nvme,drive=system,serial=PZWINVM0,bootindex=1") ;;
+    esac
+    if [ -n "$PCI_DEVICES" ]; then
+        QEMU_ARGS+=("-device" "intel-iommu,intremap=on,caching-mode=on")
+    fi
     if [ "$ISO_EXPLICIT" = "1" ] && [ -n "$ISO_PATH" ] && [ -f "$ISO_PATH" ]; then
         QEMU_ARGS+=("-cdrom" "$ISO_PATH")
         QEMU_ARGS+=("-boot" "order=d,menu=on")
@@ -926,7 +1249,15 @@ launch_libvirt_domain() {
     ensure_share_links
     state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
     if [ "$state" != "running" ]; then
-        virsh -c "$uri" start "$LIBVIRT_DOMAIN"
+        if ! virsh -c "$uri" start "$LIBVIRT_DOMAIN"; then
+            pz_error "failed to start libvirt domain: $LIBVIRT_DOMAIN"
+            return 1
+        fi
+        state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+        [ "$state" = "running" ] || {
+            pz_error "libvirt domain did not reach running state: $LIBVIRT_DOMAIN ($state)"
+            return 1
+        }
     fi
     if [ "$DISPLAY_MODE" = "none" ]; then
         pz_info "Windows libvirt domain running headless: $LIBVIRT_DOMAIN"
@@ -943,6 +1274,10 @@ launch_libvirt_domain() {
             pz_error "SPICE display unavailable for domain: $LIBVIRT_DOMAIN"
             return 1
         }
+        if [ -n "$USB_AUTO_FILTER" ] && [ "$USB_MODE" != "none" ]; then
+            viewer_args+=("--spice-usbredir-auto-redirect-filter=$USB_AUTO_FILTER")
+            viewer_args+=("--spice-usbredir-redirect-on-connect=$USB_AUTO_FILTER")
+        fi
         [ "$FULLSCREEN" = "1" ] && viewer_args+=(-f)
         exec spicy --uri "$display" --spice-shared-dir="$SHARE_ROOT" --spice-smartcard "${viewer_args[@]}"
     fi
@@ -975,6 +1310,7 @@ optimize_libvirt_domain() {
         pz_info "dry-run: would eject install ISO and ensure four SPICE USB channels plus smartcard"
         return 0
     fi
+    grant_raw_qemu_disk_access "$DISK_PATH"
     state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
     if [ "$state" = "running" ]; then
         pz_warn "domain running; persistent libvirt tuning deferred"
@@ -984,7 +1320,7 @@ optimize_libvirt_domain() {
     virsh -c "$uri" setmem "$LIBVIRT_DOMAIN" "${RAM_MB}M" --config >/dev/null || true
     virsh -c "$uri" setvcpus "$LIBVIRT_DOMAIN" "$CPUS" --maximum --config >/dev/null || true
     virsh -c "$uri" setvcpus "$LIBVIRT_DOMAIN" "$CPUS" --config >/dev/null || true
-    cdrom_target="$(virsh -c "$uri" domblklist "$LIBVIRT_DOMAIN" --details 2>/dev/null | awk '$2 == "cdrom" && $4 != "-" {print $3; exit}')"
+    cdrom_target="$(virsh -c "$uri" domblklist "$LIBVIRT_DOMAIN" --details 2>/dev/null | awk '$2 == "cdrom" && $4 != "-" && !seen++ {print $3}')"
     if [ -n "$cdrom_target" ]; then
         virsh -c "$uri" change-media "$LIBVIRT_DOMAIN" "$cdrom_target" --eject --config >/dev/null || true
     fi
@@ -1008,8 +1344,12 @@ launch_vm() {
     trap cleanup_runtime EXIT INT TERM
     apply_host_optimizations
     if [ -n "$LIBVIRT_DOMAIN" ] && [ "$RAW_QEMU" != "1" ]; then
-        launch_libvirt_domain
-        return $?
+        if launch_libvirt_domain; then
+            return 0
+        fi
+        pz_warn "libvirt domain start failed; falling back to direct QEMU/KVM"
+        LIBVIRT_DOMAIN=""
+        RAW_QEMU=1
     fi
     [ -n "$OVMF_CODE" ] || { pz_error "OVMF code firmware missing. Install edk2-ovmf."; return 1; }
     [ -f "$DISK_PATH" ] || { pz_error "VM disk missing: $DISK_PATH. Run: $PZ_ROOT/linux/pz windows-vm install --iso <windows.iso>"; return 1; }
@@ -1030,7 +1370,7 @@ launch_vm() {
 
 status_json() {
     effective_config
-    local kvm="no" config="no" disk="no" iso="no" ovmf="no" vars="no" qemu="" qemu_img="" virtiofs="" smbd="" swtpm_bin="" boot_helper="no" boot_service="no" boot_grub="unknown" current_marker="no" installed_like="no" boot_current="no" discovery
+    local kvm="no" config="no" disk="no" iso="no" ovmf="no" vars="no" qemu="" qemu_img="" virtiofs="" smbd="" swtpm_bin="" boot_helper="no" boot_service="no" boot_grub="unknown" current_marker="no" installed_like="no" boot_current="no" samba_managed="no" samba_reachable="no" share_links="no" usb_udev_managed="no" discovery
     local domain_state="missing" domain_disk=""
     [ -e /dev/kvm ] && kvm="yes"
     [ -f "$CONFIG_FILE" ] && config="yes"
@@ -1052,6 +1392,10 @@ status_json() {
     fi
     [ -x "$BOOT_HELPER_TARGET" ] && boot_helper="yes"
     [ -f "$SERVICE_FILE" ] && boot_service="yes"
+    samba_shares_managed && samba_managed="yes"
+    samba_shares_reachable && samba_reachable="yes"
+    share_links_ready && share_links="yes"
+    windows_usb_udev_managed && usb_udev_managed="yes"
     boot_artifacts_current && boot_current="yes"
     boot_grub="$(grub_cfg_entry_state)"
     grep -qw 'phasezero.windowsvm=1' /proc/cmdline 2>/dev/null && current_marker="yes"
@@ -1067,6 +1411,16 @@ status_json() {
         --arg ramMb "$RAM_MB" \
         --arg cpus "$CPUS" \
         --arg usbMode "$USB_MODE" \
+        --arg usbAutoFilter "$USB_AUTO_FILTER" \
+        --arg usbUdevManaged "$usb_udev_managed" \
+        --arg usbRedirChannels "$(libvirt_usb_redir_count)" \
+        --arg usbAccessibleDevices "$(usb_accessible_device_count)" \
+        --arg shareRoot "$SHARE_ROOT" \
+        --arg shareLinks "$share_links" \
+        --arg sambaManaged "$samba_managed" \
+        --arg sambaReachable "$samba_reachable" \
+        --arg smbHost "$SMB_HOST" \
+        --arg spicy "$(command_path spicy)" \
         --arg diskSource "$DISK_SOURCE" \
         --arg libvirtDomain "$LIBVIRT_DOMAIN" \
         --arg libvirtUri "$(libvirt_uri)" \
@@ -1096,6 +1450,20 @@ status_json() {
             vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode},
             libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != "")},
             host: {kvm: ($kvm == "yes"), qemu: $qemu, qemuImg: $qemuImg, ovmfCode: $ovmfCode, ovmfCodeExists: ($ovmfCodeExists == "yes"), ovmfVars: $ovmfVars, ovmfVarsExists: ($ovmfVarsExists == "yes"), virtiofsd: $virtiofsd, smbd: $smbd, swtpm: $swtpm},
+            access: {
+                shareRoot: $shareRoot,
+                shareLinksReady: ($shareLinks == "yes"),
+                sambaManaged: ($sambaManaged == "yes"),
+                sambaReachable: ($sambaReachable == "yes"),
+                smbHost: $smbHost,
+                shares: ["PZHome", "PZSDCard", "PZRemovable", "PZMedia", "PZMounts"],
+                spiceClient: $spicy,
+                usbMode: $usbMode,
+                usbAutoFilter: $usbAutoFilter,
+                usbUdevManaged: ($usbUdevManaged == "yes"),
+                usbRedirChannels: ($usbRedirChannels|tonumber),
+                usbAccessibleDevices: ($usbAccessibleDevices|tonumber)
+            },
             discovery: $discovery,
             boot: {helperInstalled: ($bootHelper == "yes"), serviceInstalled: ($bootService == "yes"), artifactsCurrent: ($bootArtifactsCurrent == "yes"), configuredRepo: $bootConfiguredRepo, configuredUser: $bootConfiguredUser, grubCfgEntry: $grubEntry, currentBootWindowsVm: ($currentMarker == "yes")}
         }'
@@ -1251,6 +1619,7 @@ root_env_content() {
     printf '%s\n' '# PhaseZero managed Windows VM boot environment'
     printf 'PZ_WINDOWS_VM_REPO=%q\n' "$PZ_ROOT"
     printf 'PZ_WINDOWS_VM_BOOT_USER=%q\n' "$TARGET_USER"
+    printf 'PZ_WINDOWS_VM_RUNTIME_LAUNCHER=%q\n' "$RUNTIME_LAUNCHER"
 }
 
 root_env_value() {
@@ -1267,6 +1636,8 @@ root_env_value() {
 boot_artifacts_current() {
     [ -x "$BOOT_HELPER_TARGET" ] &&
         [ -x "$SESSION_TARGET" ] &&
+        [ -x "$RUNTIME_LAUNCHER" ] &&
+        [ -r "$RUNTIME_COMMON" ] &&
         [ -f "$SERVICE_FILE" ] &&
         [ -f "$WAYLAND_SESSION_FILE" ] &&
         [ -f "$XSESSION_FILE" ] &&
@@ -1274,6 +1645,8 @@ boot_artifacts_current() {
         [ -x "$GRUB_SCRIPT" ] || return 1
     cmp -s "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
     cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
+    cmp -s "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER" || return 1
+    cmp -s "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON" || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_REPO)" = "$PZ_ROOT" ] || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_BOOT_USER)" = "$TARGET_USER" ] || return 1
     grep -Fqx "Exec=$SESSION_TARGET" "$WAYLAND_SESSION_FILE" || return 1
@@ -1353,9 +1726,15 @@ install_boot() {
     pz_boot_preflight_grub
     pz_boot_validate_active_efi_safe
     pz_boot_backup_bundle "windows-vm-boot-install"
-    install -d /usr/local/lib/phasezero /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
+    effective_config
+    ensure_share_links
+    configure_windows_samba_shares
+    optimize_libvirt_domain
+    install -d /usr/local/lib/phasezero "$RUNTIME_ROOT/linux/windows-vm" "$RUNTIME_ROOT/linux/lib" /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
     install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
     install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
+    install -m 0755 "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER"
+    install -m 0644 "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON"
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
     session_desktop_content > "$WAYLAND_SESSION_FILE"
@@ -1385,6 +1764,7 @@ remove_boot() {
     pz_boot_backup_bundle "windows-vm-boot-remove"
     systemctl disable phasezero-windows-vm-boot-prepare.service >/dev/null 2>&1 || true
     rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$WAYLAND_SESSION_FILE" "$XSESSION_FILE" "$BOOT_HELPER_TARGET" "$SESSION_TARGET" "$ROOT_ENV_FILE"
+    rm -rf "$RUNTIME_ROOT"
     if [ -f "$SDDM_CONF" ] && grep -q 'PhaseZero managed' "$SDDM_CONF" 2>/dev/null; then
         rm -f "$SDDM_CONF"
     fi
@@ -1461,6 +1841,7 @@ status_boot() {
     echo "helper: $BOOT_HELPER_TARGET"
     [ -x "$BOOT_HELPER_TARGET" ] && echo "helper_installed: yes" || echo "helper_installed: no"
     [ -x "$SESSION_TARGET" ] && echo "session_launcher_installed: yes" || echo "session_launcher_installed: no"
+    [ -x "$RUNTIME_LAUNCHER" ] && echo "runtime_launcher_installed: yes" || echo "runtime_launcher_installed: no"
     [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
     systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || true
     [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
@@ -1484,6 +1865,7 @@ dry_run_boot() {
     echo "PhaseZero Windows VM boot dry-run"
     echo "  helper: $BOOT_HELPER_TARGET"
     echo "  session_launcher: $SESSION_TARGET"
+    echo "  runtime_launcher: $RUNTIME_LAUNCHER"
     echo "  service: $SERVICE_FILE"
     echo "  grub: $GRUB_SCRIPT"
     echo "  target_user: $TARGET_USER"
@@ -1521,8 +1903,9 @@ case "$ACTION" in
     plan|dry-run) print_plan "$@" ;;
     install|setup) install_vm "$@" ;;
     optimize|tune) cmd_optimize "$@" ;;
+    shares|access) cmd_shares "$@" ;;
     launch|start|run) launch_vm "$@" ;;
     boot) cmd_boot "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|launch|boot)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|launch|boot)"; exit 1 ;;
 esac

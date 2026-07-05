@@ -7,9 +7,15 @@ ENV_FILE="${PZ_WINDOWS_VM_ENV_FILE:-/etc/phasezero/windows-vm.env}"
 
 CONFIGURED_REPO="${PZ_WINDOWS_VM_REPO:-}"
 PZ_WINDOWS_VM_REPO_FALLBACK="${PZ_WINDOWS_VM_REPO_FALLBACK:-/mnt/sdcard/Projects/PhaseZero}"
+RUNTIME_LAUNCHER="${PZ_WINDOWS_VM_RUNTIME_LAUNCHER:-/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/windows-vm.sh}"
 
 resolve_pz_bin() {
     local candidate
+    if [ -x "$RUNTIME_LAUNCHER" ]; then
+        PZ_WINDOWS_VM_REPO=""
+        PZ_BIN="$RUNTIME_LAUNCHER"
+        return 0
+    fi
     for candidate in \
         "$CONFIGURED_REPO" \
         "$PZ_WINDOWS_VM_REPO_FALLBACK" \
@@ -40,7 +46,7 @@ if [ "${1:-}" = "--validate" ]; then
         printf 'windows_vm_session_ready=no configured_repo=%s\n' "${CONFIGURED_REPO:-missing}"
         exit 1
     }
-    printf 'windows_vm_session_ready=yes repo=%s launcher=%s\n' "${PZ_WINDOWS_VM_REPO:-PATH}" "$PZ_BIN"
+    printf 'windows_vm_session_ready=yes repo=%s launcher=%s\n' "${PZ_WINDOWS_VM_REPO:-runtime}" "$PZ_BIN"
     exit 0
 fi
 

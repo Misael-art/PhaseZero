@@ -10,7 +10,7 @@ ACTION="${1:-status}"
 
 TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
 [ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
-if [ "$EUID" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+if [ "$EUID" -eq 0 ]; then
     target_home_root="$(getent passwd "$TARGET_USER" | cut -d: -f6 || true)"
     [ -n "$target_home_root" ] && export HOME="$target_home_root"
 fi
@@ -23,8 +23,10 @@ SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 BOOT_HELPER_SOURCE="$PZ_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
 SESSION_SOURCE="$PZ_ROOT/linux/waydroid/waydroid-session.sh"
+SHARES_SOURCE="$PZ_ROOT/linux/waydroid/waydroid-shares-prepare.sh"
 BOOT_HELPER_TARGET="/usr/local/lib/phasezero/waydroid-boot-prepare"
 SESSION_TARGET="/usr/local/lib/phasezero/waydroid-session"
+SHARES_TARGET="/usr/local/lib/phasezero/waydroid-shares-prepare"
 ROOT_ENV_FILE="/etc/phasezero/waydroid.env"
 SERVICE_FILE="/etc/systemd/system/phasezero-waydroid-boot-prepare.service"
 WAYLAND_SESSION_FILE="/usr/share/wayland-sessions/phasezero-waydroid.desktop"
@@ -48,6 +50,7 @@ INIT_ATTEMPTS="${PZ_WAYDROID_INIT_ATTEMPTS:-3}"
 PREFETCH_IMAGES="${PZ_WAYDROID_PREFETCH_IMAGES:-1}"
 PREINSTALLED_DIR="${PZ_WAYDROID_PREINSTALLED_DIR:-/etc/waydroid-extra/images}"
 OPTIMIZE_HOST="${PZ_WAYDROID_OPTIMIZE:-1}"
+SHARE_EXTRA="${PZ_WAYDROID_SHARE_EXTRA:-}"
 PREFETCH_SYSTEM_PATH=""
 PREFETCH_VENDOR_PATH=""
 
@@ -62,6 +65,7 @@ Usage:
   pz waydroid repair [--init] [--image-type VANILLA|GAPPS]
   pz waydroid optimize [--dry-run]
   pz waydroid launch
+  pz waydroid shares (status|install|remove|dry-run)
   pz waydroid boot status
   pz waydroid boot install
   pz waydroid boot next
@@ -137,6 +141,7 @@ effective_config() {
     PREFETCH_IMAGES="${PZ_WAYDROID_PREFETCH_IMAGES:-$PREFETCH_IMAGES}"
     PREINSTALLED_DIR="${PZ_WAYDROID_PREINSTALLED_DIR:-$PREINSTALLED_DIR}"
     OPTIMIZE_HOST="${PZ_WAYDROID_OPTIMIZE:-$OPTIMIZE_HOST}"
+    SHARE_EXTRA="${PZ_WAYDROID_SHARE_EXTRA:-$SHARE_EXTRA}"
 }
 
 write_config() {
@@ -149,6 +154,7 @@ write_config() {
         printf 'PZ_WAYDROID_PREFETCH_IMAGES=%q\n' "$PREFETCH_IMAGES"
         printf 'PZ_WAYDROID_PREINSTALLED_DIR=%q\n' "$PREINSTALLED_DIR"
         printf 'PZ_WAYDROID_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
+        printf 'PZ_WAYDROID_SHARE_EXTRA=%q\n' "$SHARE_EXTRA"
     } > "$CONFIG_FILE"
     chown_target_user "$CONFIG_FILE"
     pz_info "wrote $CONFIG_FILE"
@@ -347,6 +353,63 @@ ensure_waydroid_service() {
     systemctl start waydroid-container.service >/dev/null 2>&1 || true
 }
 
+waydroid_shares_status() {
+    local helper="$SHARES_TARGET"
+    [ -x "$helper" ] || helper="$SHARES_SOURCE"
+    [ -f "$helper" ] || return 1
+    PZ_WAYDROID_BOOT_USER="$TARGET_USER" \
+        PZ_WAYDROID_SHARE_EXTRA="$SHARE_EXTRA" \
+        bash "$helper" status
+}
+
+waydroid_shares_value() {
+    local key="$1"
+    waydroid_shares_status 2>/dev/null | awk -F': ' -v key="$key" '$1 == key {value=$2} END {print value}'
+}
+
+configure_waydroid_shared_access() {
+    if [ "$DRY_RUN" = "1" ]; then
+        PZ_WAYDROID_BOOT_USER="$TARGET_USER" \
+            PZ_WAYDROID_SHARE_EXTRA="$SHARE_EXTRA" \
+            bash "$SHARES_SOURCE" dry-run
+        return 0
+    fi
+    [ "$EUID" -eq 0 ] || {
+        pz_warn "Waydroid shared access setup requires root; skipped"
+        return 0
+    }
+    install -d /usr/local/lib/phasezero
+    install -m 0755 "$SHARES_SOURCE" "$SHARES_TARGET"
+    PZ_WAYDROID_BOOT_USER="$TARGET_USER" \
+        PZ_WAYDROID_SHARE_EXTRA="$SHARE_EXTRA" \
+        "$SHARES_TARGET" install
+}
+
+cmd_shares() {
+    local sub="${1:-status}"
+    effective_config
+    case "$sub" in
+        install|repair)
+            need_root
+            configure_waydroid_shared_access
+            ;;
+        remove)
+            need_root
+            [ -x "$SHARES_TARGET" ] && PZ_WAYDROID_BOOT_USER="$TARGET_USER" "$SHARES_TARGET" remove
+            ;;
+        dry-run|plan)
+            PZ_WAYDROID_BOOT_USER="$TARGET_USER" bash "$SHARES_SOURCE" dry-run
+            return 0
+            ;;
+        status) ;;
+        *)
+            pz_error "usage: waydroid shares (status|install|repair|remove|dry-run)"
+            return 1
+            ;;
+    esac
+    waydroid_shares_status
+}
+
 waydroid_ota_url() {
     local image_type="${IMAGE_TYPE^^}"
     case "$1" in
@@ -498,6 +561,7 @@ cmd_repair() {
     ensure_binder_runtime
     repair_lxc_post_stop_hook
     ensure_waydroid_service
+    configure_waydroid_shared_access
     maybe_init_waydroid
 }
 
@@ -526,7 +590,8 @@ cmd_launch() {
 status_json() {
     effective_config
     local config="no" waydroid_bin cage_bin weston_bin kwin_bin dbus_bin binder_fs="no" binder_dev="no" binder_mounted="no" initialized="no" lxc_hook_safe="no"
-    local waydroid_active waydroid_enabled boot_helper="no" session_launcher="no" boot_service="no" boot_current="no" boot_grub current_marker="no"
+    local waydroid_active waydroid_enabled boot_helper="no" session_launcher="no" shares_helper="no" boot_service="no" boot_current="no" boot_grub current_marker="no"
+    local shares_ready="no" shares_mount_count="0" shares_android_root="" shares_usb="no"
     [ -f "$CONFIG_FILE" ] && config="yes"
     waydroid_bin="$(command_path waydroid)"
     cage_bin="$(command_path cage)"
@@ -542,10 +607,16 @@ status_json() {
     waydroid_enabled="$(service_state waydroid-container enabled)"
     [ -x "$BOOT_HELPER_TARGET" ] && boot_helper="yes"
     [ -x "$SESSION_TARGET" ] && session_launcher="yes"
+    [ -x "$SHARES_TARGET" ] && shares_helper="yes"
     [ -f "$SERVICE_FILE" ] && boot_service="yes"
     boot_artifacts_current && boot_current="yes"
     boot_grub="$(grub_cfg_entry_state)"
     grep -qw 'phasezero.waydroid=1' /proc/cmdline 2>/dev/null && current_marker="yes"
+    shares_ready="$(waydroid_shares_value shares_ready)"
+    shares_mount_count="$(waydroid_shares_value mount_count)"
+    shares_android_root="$(waydroid_shares_value android_host_root)"
+    shares_usb="$(waydroid_shares_value usb_bus_shared)"
+    [[ "$shares_mount_count" =~ ^[0-9]+$ ]] || shares_mount_count=0
     jq -n \
         --arg configFile "$CONFIG_FILE" \
         --arg configInstalled "$config" \
@@ -568,12 +639,17 @@ status_json() {
         --arg preinstalledDir "$PREINSTALLED_DIR" \
         --arg bootHelper "$boot_helper" \
         --arg sessionLauncher "$session_launcher" \
+        --arg sharesHelper "$shares_helper" \
         --arg bootService "$boot_service" \
         --arg bootArtifactsCurrent "$boot_current" \
         --arg bootConfiguredRepo "$(root_env_value PZ_WAYDROID_REPO)" \
         --arg bootConfiguredUser "$(root_env_value PZ_WAYDROID_BOOT_USER)" \
         --arg grubEntry "$boot_grub" \
         --arg currentMarker "$current_marker" \
+        --arg sharesReady "$shares_ready" \
+        --arg sharesMountCount "$shares_mount_count" \
+        --arg sharesAndroidRoot "$shares_android_root" \
+        --arg sharesUsb "$shares_usb" \
         '{
             config: {path: $configFile, installed: ($configInstalled == "yes")},
             host: {
@@ -596,6 +672,13 @@ status_json() {
                 resumablePrefetch: ($prefetchImages == "1"),
                 preinstalledDir: $preinstalledDir,
                 lxcPostStopHookSafe: ($lxcHookSafe == "yes")
+            },
+            access: {
+                sharesHelperInstalled: ($sharesHelper == "yes"),
+                sharesReady: ($sharesReady == "yes"),
+                mountCount: ($sharesMountCount|tonumber),
+                androidHostRoot: $sharesAndroidRoot,
+                usbBusShared: ($sharesUsb == "yes")
             },
             boot: {
                 helperInstalled: ($bootHelper == "yes"),
@@ -711,6 +794,7 @@ root_env_content() {
     printf 'PZ_WAYDROID_PREFETCH_IMAGES=%q\n' "$PREFETCH_IMAGES"
     printf 'PZ_WAYDROID_PREINSTALLED_DIR=%q\n' "$PREINSTALLED_DIR"
     printf 'PZ_WAYDROID_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
+    printf 'PZ_WAYDROID_SHARE_EXTRA=%q\n' "$SHARE_EXTRA"
 }
 
 root_env_value() {
@@ -726,6 +810,7 @@ root_env_value() {
 boot_artifacts_current() {
     [ -x "$BOOT_HELPER_TARGET" ] &&
         [ -x "$SESSION_TARGET" ] &&
+        [ -x "$SHARES_TARGET" ] &&
         [ -f "$SERVICE_FILE" ] &&
         [ -f "$WAYLAND_SESSION_FILE" ] &&
         [ -f "$XSESSION_FILE" ] &&
@@ -733,6 +818,7 @@ boot_artifacts_current() {
         [ -x "$GRUB_SCRIPT" ] || return 1
     cmp -s "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
     cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
+    cmp -s "$SHARES_SOURCE" "$SHARES_TARGET" || return 1
     [ "$(root_env_value PZ_WAYDROID_REPO)" = "$PZ_ROOT" ] || return 1
     [ "$(root_env_value PZ_WAYDROID_BOOT_USER)" = "$TARGET_USER" ] || return 1
     grep -Fqx "Exec=$SESSION_TARGET" "$WAYLAND_SESSION_FILE" || return 1
@@ -753,6 +839,7 @@ Before=display-manager.service
 [Service]
 Type=oneshot
 Environment=PZ_WAYDROID_BOOT_USER=$TARGET_USER
+EnvironmentFile=-$ROOT_ENV_FILE
 ExecStart=$BOOT_HELPER_TARGET
 
 [Install]
@@ -816,6 +903,7 @@ install_boot() {
     install -d /usr/local/lib/phasezero /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
     install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
     install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
+    install -m 0755 "$SHARES_SOURCE" "$SHARES_TARGET"
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
     session_desktop_content > "$WAYLAND_SESSION_FILE"
@@ -827,6 +915,7 @@ install_boot() {
     chmod 0755 "$GRUB_SCRIPT"
     ensure_binder_runtime
     repair_lxc_post_stop_hook
+    configure_waydroid_shared_access
     ensure_waydroid_service
     systemctl daemon-reload
     systemctl enable phasezero-waydroid-boot-prepare.service >/dev/null
@@ -847,7 +936,7 @@ remove_boot() {
     pz_boot_validate_active_efi_safe
     pz_boot_backup_bundle "waydroid-boot-remove"
     systemctl disable phasezero-waydroid-boot-prepare.service >/dev/null 2>&1 || true
-    rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$WAYLAND_SESSION_FILE" "$XSESSION_FILE" "$BOOT_HELPER_TARGET" "$SESSION_TARGET" "$ROOT_ENV_FILE"
+    rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$WAYLAND_SESSION_FILE" "$XSESSION_FILE" "$BOOT_HELPER_TARGET" "$SESSION_TARGET" "$SHARES_TARGET" "$ROOT_ENV_FILE"
     if [ -f "$SDDM_CONF" ] && grep -q 'PhaseZero managed' "$SDDM_CONF" 2>/dev/null; then
         rm -f "$SDDM_CONF"
     fi
@@ -984,7 +1073,8 @@ case "$ACTION" in
     repair) cmd_repair "$@" ;;
     optimize|tune) cmd_optimize "$@" ;;
     launch|start|run) cmd_launch "$@" ;;
+    shares|access) cmd_shares "$@" ;;
     boot) cmd_boot "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: waydroid (status|plan|install|repair|optimize|launch|boot)"; exit 1 ;;
+    *) pz_error "usage: waydroid (status|plan|install|repair|optimize|launch|shares|boot)"; exit 1 ;;
 esac

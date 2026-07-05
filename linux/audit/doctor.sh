@@ -249,7 +249,7 @@ if jq -e '.access.shareLinksReady == true and .access.sambaManaged == true and .
 else
     check WINVM09 "Windows host storage shares ready" WARN "run: phasezero-admin linux/pz windows-vm shares install"
 fi
-if jq -e '.access.usbMode == "redir" and .access.usbRedirChannels > 0' <<< "$winvm_status" >/dev/null 2>&1; then
+if jq -e '.access.usbMode == "redir" and .access.usbRedirChannels > 0 and .access.usbUdevManaged == true' <<< "$winvm_status" >/dev/null 2>&1; then
     check WINVM10 "Windows USB redirection ready" PASS "$(jq -r '.access.usbRedirChannels|tostring' <<< "$winvm_status") SPICE channels"
 else
     check WINVM10 "Windows USB redirection ready" WARN "run: phasezero-admin linux/pz windows-vm shares repair"

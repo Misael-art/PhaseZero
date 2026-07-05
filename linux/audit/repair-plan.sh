@@ -189,7 +189,7 @@ fi
 if ! jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and (.boot.grubCfgEntry == "present" or .boot.grubCfgEntry == "unknown-permission")' <<< "$winvm_status" >/dev/null 2>&1; then
     add_item "WINVM03" "medium" "Windows VM direct boot missing or stale" "sudo linux/windows-vm/windows-vm.sh boot install"
 fi
-if ! jq -e '.access.shareLinksReady == true and .access.sambaManaged == true and .access.sambaReachable == true and .access.usbMode == "redir" and .access.usbRedirChannels > 0' <<< "$winvm_status" >/dev/null 2>&1; then
+if ! jq -e '.access.shareLinksReady == true and .access.sambaManaged == true and .access.sambaReachable == true and .access.usbMode == "redir" and .access.usbRedirChannels > 0 and .access.usbUdevManaged == true' <<< "$winvm_status" >/dev/null 2>&1; then
     add_item "WINVM05" "high" "Windows VM host storage or USB redirection is incomplete" "phasezero-admin linux/pz windows-vm shares install"
 fi
 
