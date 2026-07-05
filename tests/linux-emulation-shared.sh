@@ -353,7 +353,7 @@ test -f "$PZ_EMULATION_ROOT/media/icons/phasezero/heroic.svg" || { echo "FAIL: H
 grep -q '^NoDisplay=true$' "$XDG_DATA_HOME/applications/phasezero-pc-menu-test.desktop" || { echo "FAIL: PhaseZero PC menu entry not hidden"; exit 1; }
 grep -q 'pc-game.svg$' "$XDG_DATA_HOME/applications/phasezero-pc-menu-test.desktop" || { echo "FAIL: PhaseZero PC menu icon missing"; exit 1; }
 grep -q '^NoDisplay=true$' "$XDG_DATA_HOME/applications/ES-DE.desktop" || { echo "FAIL: duplicate ES-DE launcher not hidden"; exit 1; }
-"$REPO_ROOT/linux/pz" emulation heroic status --json | jq -e '.optimizedDefaults == true and .iconsInstalled == true and .visiblePhaseZeroPcGames == 0 and .hiddenDuplicates >= 1 and .phasezeroWithoutIcon == 0' >/dev/null || { echo "FAIL: Heroic status JSON invalid"; exit 1; }
+"$REPO_ROOT/linux/pz" emulation heroic status --json | jq -e '.optimizedDefaults == true and .iconsInstalled == true and .visiblePhaseZeroPcGames == 0 and .hiddenDuplicates >= 1 and .phasezeroWithoutIcon == 0 and .heroicManagedEntries >= 6 and .heroicArtworkComplete == .heroicManagedEntries and .heroicWithoutArtwork == 0' >/dev/null || { echo "FAIL: Heroic status JSON invalid"; exit 1; }
 
 # pz emulation doctor runs both shared + media status
 "$REPO_ROOT/linux/pz" emulation doctor >/dev/null 2>&1 || true

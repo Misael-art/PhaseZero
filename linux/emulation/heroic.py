@@ -293,6 +293,51 @@ def ensure_icons(ctx: Context, dry_run: bool) -> dict[str, str]:
     return icons
 
 
+def fallback_icon_for_app(ctx: Context, app_name: str) -> Path:
+    if app_name.startswith("phasezero-pc-"):
+        name = "pc-game"
+    elif app_name.startswith("phasezero-frontend-"):
+        frontend = app_name.removeprefix("phasezero-frontend-")
+        name = {
+            "bigbox": "bigbox",
+            "launchbox": "launchbox",
+            "es-de": "es-de",
+            "steam-big-picture": "steam",
+            "srm": "srm",
+            "heroic": "heroic",
+        }.get(frontend, "frontends")
+    else:
+        name = "phasezero"
+    return ctx.icon_dir / f"{name}.svg"
+
+
+def ensure_heroic_artwork(ctx: Context, dry_run: bool) -> dict[str, int]:
+    data = load_json(ctx.heroic_library, {})
+    games = data.get("games", []) if isinstance(data, dict) else []
+    if not isinstance(games, list):
+        games = []
+    counts = {"managed": 0, "complete": 0, "fallbacks": 0}
+    changed = False
+    for game in games:
+        if not isinstance(game, dict):
+            continue
+        app_name = str(game.get("app_name", ""))
+        if not app_name.startswith("phasezero-"):
+            continue
+        counts["managed"] += 1
+        fallback = fallback_icon_for_app(ctx, app_name).resolve().as_uri()
+        for field in ("art_square", "art_cover"):
+            if not game.get(field):
+                game[field] = fallback
+                counts["fallbacks"] += 1
+                changed = True
+        if game.get("art_square") and game.get("art_cover"):
+            counts["complete"] += 1
+    if changed:
+        write_json(ctx.heroic_library, data, dry_run=dry_run, backup=True)
+    return counts
+
+
 def desktop_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
@@ -430,6 +475,7 @@ def apply(ctx: Context, dry_run: bool = False) -> dict[str, Any]:
     if ctx.heroic_store_config.exists():
         store_config = optimize_config(ctx.heroic_store_config, ctx, dry_run)
     menu = organize_desktops(ctx, dry_run)
+    artwork = ensure_heroic_artwork(ctx, dry_run)
     data = {
         "schemaVersion": 1,
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -437,6 +483,7 @@ def apply(ctx: Context, dry_run: bool = False) -> dict[str, Any]:
         "storeConfig": store_config,
         "icons": icons,
         "menu": menu,
+        "artwork": artwork,
         "policy": "safe-defaults-no-game-content-downloads",
     }
     if not dry_run:
@@ -459,6 +506,17 @@ def status(ctx: Context) -> dict[str, Any]:
             hidden_duplicates += 1
         if path.name.startswith("phasezero-") and "Icon=" not in text:
             phasezero_without_icon += 1
+    library = load_json(ctx.heroic_library, {})
+    library_games = library.get("games", []) if isinstance(library, dict) else []
+    managed_library = [
+        game
+        for game in library_games
+        if isinstance(game, dict) and str(game.get("app_name", "")).startswith("phasezero-")
+    ]
+    artwork_complete = sum(
+        bool(game.get("art_square")) and bool(game.get("art_cover"))
+        for game in managed_library
+    )
     desired = desired_defaults(ctx, defaults if isinstance(defaults, dict) else {})
     optimized = isinstance(defaults, dict) and all(
         defaults.get(k) == v for k, v in desired.items() if k not in SESSION_MUTABLE_DEFAULTS
@@ -478,6 +536,9 @@ def status(ctx: Context) -> dict[str, Any]:
         "visiblePhaseZeroPcGames": visible_pc,
         "hiddenDuplicates": hidden_duplicates,
         "phasezeroWithoutIcon": phasezero_without_icon,
+        "heroicManagedEntries": len(managed_library),
+        "heroicArtworkComplete": artwork_complete,
+        "heroicWithoutArtwork": len(managed_library) - artwork_complete,
     }
 
 
@@ -490,6 +551,11 @@ def print_plan(data: dict[str, Any]) -> None:
         f"{data['menu']['pcHidden']} PC game entries hidden, "
         f"{data['menu']['duplicatesHidden']} duplicates hidden, "
         f"{data['menu']['iconsSet']} icons set"
+    )
+    print(
+        "  artwork: "
+        f"{data['artwork']['complete']}/{data['artwork']['managed']} complete, "
+        f"{data['artwork']['fallbacks']} fallbacks"
     )
 
 
