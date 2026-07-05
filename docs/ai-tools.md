@@ -30,6 +30,7 @@ Escopo: integrações opcionais. Nenhuma chave real entra no repositório.
 | --- | --- | --- | --- | --- |
 | `claude-code` | `npm install -g --prefix <root> @anthropic-ai/claude-code` | `claude --version` | Manual/login/chave oficial | Remove pacote/prefixo/PATH gerenciado |
 | `opencode` | `npm install -g --prefix <root> opencode-ai` | `opencode --version` | Manual/provider oficial | Remove pacote/prefixo/PATH gerenciado |
+| `oh-my-openagent` (OMO) | Linux: `bunx oh-my-openagent install --no-tui --platform=opencode` (exige Bun; provider-agnostic por padrão, telemetria off) | `bunx oh-my-openagent doctor --platform=opencode --json` (`exitCode 0`) | Plugin registrado em `~/.config/opencode/opencode.jsonc`; `oh-my-openagent.json` com agentes/categorias; providers via `PZ_OMO_*` | `linux/pz ai omo disable` (desregistra) ou `uninstall` (remove config) |
 | `openclaw` | Linux: `npm install -g --prefix <root> openclaw@latest` | `openclaw --version`, `openclaw doctor` | Linux: baseline non-interactive, MCP, ai-memory hooks; daemon guiado via `openclaw onboard --install-daemon` | Remove pacote/prefixo/PATH gerenciado |
 | `rtk` | Windows: release GitHub; Linux: release GitHub `rtk-*-linux-*.tar.gz` com SHA-256 de `checksums.txt` | `rtk --version` | `rtk init`, `rtk gain`; no Linux via `linux/pz ai setup rtk` | Remove binario gerenciado em `~/.local/bin` |
 | `antigravity-workflows` | Sem binário | Arquivos locais | Gera `.antigravity/workflows/*.md` | Manual, para preservar edições |
@@ -68,6 +69,10 @@ Entrada: `linux/pz ai`.
 ```bash
 linux/pz ai status
 linux/pz ai setup opencode
+linux/pz ai setup omo          # oh-my-openagent plugin para OpenCode (opt-in)
+linux/pz ai omo doctor         # bunx oh-my-openagent doctor --platform=opencode
+linux/pz ai omo status         # status JSON (bun, opencode, plugin registrado)
+linux/pz ai omo disable        # desregistra o plugin (evita consumo em background)
 linux/pz ai setup codex
 linux/pz ai setup claude
 linux/pz ai desktop install-claude
@@ -107,6 +112,7 @@ Automacoes Linux:
 - `linux/ai/setup-ides.sh`: gera recomendações `.vscode/extensions.json`, sincroniza MCP seguro em VS Code workspace/user, Cursor, Zed e ZCode, adiciona helper Neovim opcional e grava estado em `~/.local/state/phasezero/ai/ides.json`.
 - `linux/ai/mcp-manager.sh`: sincroniza MCP seguro por padrao (`ai-memory` loopback), repara configs quebradas, e permite install explicito de remotos em OpenCode (`mcp`), Claude/Claude Desktop, Codex TOML, VS Code, Cursor, Zed, ZCode, Hermes YAML e OpenClaw JSON.
 - `linux/ai/setup-usagebar.sh`: instala `ai-usagebar-bin` quando AUR existe e cria config por env vars.
+- `linux/ai/setup-omo.sh`: instala/configura o plugin `oh-my-openagent` (OMO) para OpenCode. Garante Bun (pacman, fallback instalador oficial em `~/.bun`) e `ast-grep` opcional (skill `/refactor`); registra o plugin via `bunx oh-my-openagent install --no-tui --platform=opencode` (nunca install global); telemetria off por padrão (`OMO_DISABLE_POSTHOG=1`, sobrescreva com `PZ_OMO_TELEMETRY=1`); provider-agnostic por padrão (`PZ_OMO_CLAUDE/OPENAI/GEMINI/COPILOT` ou `PZ_OMO_INSTALL_ARGS`). Subcomandos `doctor|status|enable|disable|uninstall|dry-run`; `disable` desregistra o plugin do `opencode.jsonc`/`tui.json` preservando o MCP `ai-memory`.
 
 O perfil `profiles/dev-ai.json` preserva Windows e expande só Linux com `python-pipx`, `uv`, `git`, `github-cli`, `direnv` e scripts AI novos.
 
@@ -136,3 +142,5 @@ Resultados estruturados:
 - RTK no Linux usa somente release oficial `rtk-ai/rtk`, asset por arquitetura e checksum publicado. Se RTK estiver ausente, PhaseZero fica em modo degradado e comandos seguem diretos.
 - Headroom nunca auto-envolve agentes. O usuario chama `linux/ai/headroom-agent.sh wrap-codex`, `wrap-claude`, `proxy` ou `mcp-install` conscientemente.
 - Admin bridge nunca grava senha, nunca cria sudoers passwordless e nunca executa comando privilegiado em validação. Ele só padroniza o caminho: `phasezero-admin <cmd>` ou `bigsudo <cmd>`.
+- `oh-my-openagent` (OMO) é opt-in e nunca entra no `ai setup all`: é um harness de agentes autônomos de laço longo que gera tráfego de API pesado (a doc oficial recomenda Claude Opus, mas o esquema é neutro). O wrapper PhaseZero instala provider-agnostic (nenhuma assinatura forçada; nenhuma ToS de provedor é engajada até o usuário optar via `PZ_OMO_*`), deixa telemetria off por padrão e expõe `linux/pz ai omo disable` para desregistrar o plugin durante testes manuais longos, evitando consumo fantasma de tokens por sub-agentes ociosos. Ao habilitar um provedor, respeite os limites de taxa/uso dele — automações de alto volume podem violar políticas e levar a bloqueios de conta, independentemente do provedor.
+- OMO Ultimate exige Bun e OpenCode ≥ 1.4. Observação de host: com o CLI `opencode` do repo em 1.17.7 e `opencode-desktop` 1.17.11 compartilhando o mesmo banco (`~/.local/share/opencode/opencode.db`), o `opencode run` do CLI pode falhar com `no such column: replacement_seq` (skew de versão, reproduzível com `--pure`, alheio ao OMO). O plugin carrega normalmente no `opencode-desktop` 1.17.11 (agente Sisyphus visível). Para alinhar o CLI, use a mesma versão do desktop.

@@ -139,6 +139,7 @@ trap 'rm -f "$tmp_runtime" "$tmp_clis" "$tmp_ides" "$tmp_services"' EXIT
 
 command_record node node --version >> "$tmp_runtime"
 command_record npm npm --version >> "$tmp_runtime"
+command_record bun bun --version >> "$tmp_runtime"
 command_record pnpm pnpm --version >> "$tmp_runtime"
 command_record python3 python3 --version >> "$tmp_runtime"
 command_record uv uv --version >> "$tmp_runtime"

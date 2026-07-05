@@ -113,7 +113,8 @@ Usage:
   pz ai desktop repair         Repair desktop apps and automatic updates
   pz ai compat status          Check RTK/Caveman/Headroom/ai-memory agent runtime
   pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
-  pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|all)
+  pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
+  pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|all)
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
   pz ai mcp sync [target]      Sync safe MCP servers to all/target clients
@@ -291,10 +292,14 @@ cmd_boot() {
 
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
-    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|compat|secrets|mcp) ..."; return 1; }
+    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|omo|compat|secrets|mcp) ..."; return 1; }
     case "$sub" in
         status)
             bash "$PZ_ROOT/linux/ai/status.sh"
+            ;;
+        omo|openagent|oh-my-openagent)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-omo.sh" "${@:-status}"
             ;;
         doctor)
             bash "$PZ_ROOT/linux/ai/mcp-manager.sh" doctor
@@ -330,6 +335,7 @@ cmd_ai() {
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-services
                     ;;
                 opencode) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" ;;
+                omo|openagent|oh-my-openagent) bash "$PZ_ROOT/linux/ai/setup-omo.sh" setup ;;
                 hermes)   bash "$PZ_ROOT/linux/ai/setup-hermes.sh" ;;
                 openclaw) bash "$PZ_ROOT/linux/ai/setup-openclaw.sh" ;;
                 memory|ai-memory) bash "$PZ_ROOT/linux/ai/setup-memory.sh" setup ;;

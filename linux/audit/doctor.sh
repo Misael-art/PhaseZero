@@ -531,6 +531,19 @@ if jq -e '.desktopApps.codexDesktop.guardEnabled == true and .desktopApps.update
 else
     check AI_DESKTOP_UPDATE_TIMER "AI desktop automatic updates enabled" WARN "run: linux/pz ai desktop install-services"
 fi
+
+# oh-my-openagent (OMO) is an opt-in OpenCode plugin; report state without
+# requiring it (config-only status, no bunx spawn).
+omo_status="$(bash "$PZ_ROOT/linux/ai/setup-omo.sh" status 2>/dev/null || echo '{}')"
+if jq -e '.plugin.registered == true' <<< "$omo_status" >/dev/null 2>&1; then
+    if jq -e '.bun.present == true' <<< "$omo_status" >/dev/null 2>&1; then
+        check AI_OMO "oh-my-openagent OpenCode plugin" PASS "registered; verify: linux/pz ai omo doctor"
+    else
+        check AI_OMO "oh-my-openagent OpenCode plugin" WARN "plugin registered but bun missing; run: linux/pz ai setup omo"
+    fi
+else
+    check AI_OMO "oh-my-openagent OpenCode plugin" INFO "optional; enable with: linux/pz ai setup omo"
+fi
 if jq -e '.github.installed == true and .github.authenticated == true' <<< "$ai_status" >/dev/null 2>&1; then
     check DEV_GITHUB_AUTH "GitHub CLI authenticated" PASS "gh auth status"
 elif jq -e '.github.installed == true' <<< "$ai_status" >/dev/null 2>&1; then

@@ -329,6 +329,13 @@ if ! jq -e '.clis.opencode.available == true' <<< "$ai_status" >/dev/null 2>&1; 
     add_item "AI03" "medium" "OpenCode CLI missing" "linux/pz ai setup opencode"
 fi
 
+# oh-my-openagent: only flag the broken half-installed state (plugin registered
+# but its bun runtime absent); never nag to install an opt-in agent framework.
+omo_repair_status="$(bash "$PZ_ROOT/linux/ai/setup-omo.sh" status 2>/dev/null || echo '{}')"
+if jq -e '.plugin.registered == true and .bun.present == false' <<< "$omo_repair_status" >/dev/null 2>&1; then
+    add_item "AI16" "medium" "oh-my-openagent plugin registered but bun runtime missing (OpenCode cannot load it)" "linux/pz ai setup omo"
+fi
+
 if ! jq -e '.clis.claude.available == true' <<< "$ai_status" >/dev/null 2>&1; then
     add_item "AI04" "medium" "Claude Code CLI missing" "linux/pz ai setup claude"
 fi

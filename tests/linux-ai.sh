@@ -79,6 +79,21 @@ bash -n "$PZ_LOCAL_BIN/opencode-deck"
 test -f "$XDG_DATA_HOME/applications/phasezero-opencode.desktop"
 grep -q "opencode-deck" "$XDG_DATA_HOME/applications/phasezero-opencode.desktop"
 
+# oh-my-openagent (OMO) wrapper: status contract, dry-run safety, and the
+# enable/disable round-trip must preserve the opencode.jsonc MCP block.
+"$REPO_ROOT/linux/ai/setup-omo.sh" status | jq -e '.tool == "omo" and (.plugin.registered | type == "boolean") and (.bun.present | type == "boolean") and .telemetryOff == true' >/dev/null
+"$REPO_ROOT/linux/ai/setup-omo.sh" dry-run >/dev/null
+if [ -f "$XDG_CONFIG_HOME/opencode/opencode.jsonc" ]; then
+    "$REPO_ROOT/linux/ai/setup-omo.sh" enable >/dev/null
+    "$REPO_ROOT/linux/ai/setup-omo.sh" status | jq -e '.plugin.registered == true' >/dev/null
+    jq -e '(.plugin // []) | any(startswith("oh-my-openagent"))' "$XDG_CONFIG_HOME/opencode/opencode.jsonc" >/dev/null
+    jq -e '.mcp."ai-memory".url | test("mcp$")' "$XDG_CONFIG_HOME/opencode/opencode.jsonc" >/dev/null
+    "$REPO_ROOT/linux/ai/setup-omo.sh" disable >/dev/null
+    "$REPO_ROOT/linux/ai/setup-omo.sh" status | jq -e '.plugin.registered == false' >/dev/null
+    jq -e '.mcp."ai-memory".url | test("mcp$")' "$XDG_CONFIG_HOME/opencode/opencode.jsonc" >/dev/null
+fi
+"$REPO_ROOT/linux/pz" ai omo status | jq -e '.tool == "omo"' >/dev/null
+
 "$REPO_ROOT/linux/ai/setup-memory.sh" dry-run | jq -e '.tool == "ai-memory"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-usagebar.sh" dry-run | jq -e '.tool == "ai-usagebar"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-hermes.sh" dry-run | jq -e '.tool == "hermes"' >/dev/null
