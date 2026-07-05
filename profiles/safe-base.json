@@ -35,7 +35,7 @@
         "noto-fonts-cjk"
       ],
       "yay": [],
-      "flatpak": []
+      "flatpak": ["com.microsoft.Edge"]
     },
     "windows": {
       "winget": [],
