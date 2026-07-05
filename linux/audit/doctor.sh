@@ -237,10 +237,12 @@ if jq -e '.host.smbd != "" and .host.virtiofsd != ""' <<< "$winvm_status" >/dev/
 else
     check WINVM05 "Host folder sharing available" WARN "install samba and virtiofsd/qemu"
 fi
-if jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.grubCfgEntry == "present"' <<< "$winvm_status" >/dev/null 2>&1; then
-    check WINVM06 "Windows VM direct GRUB boot installed" PASS "one-shot boot ready"
+if jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and .boot.grubCfgEntry == "present"' <<< "$winvm_status" >/dev/null 2>&1; then
+    check WINVM06 "Windows VM direct GRUB boot installed" PASS "boot artifacts current"
+elif jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and .boot.grubCfgEntry == "unknown-permission"' <<< "$winvm_status" >/dev/null 2>&1; then
+    check WINVM06 "Windows VM direct GRUB boot installed" INFO "artifacts current; generated GRUB entry needs privileged verification"
 else
-    check WINVM06 "Windows VM direct GRUB boot installed" INFO "optional: sudo linux/windows-vm/windows-vm.sh boot install"
+    check WINVM06 "Windows VM direct GRUB boot installed" WARN "run: sudo linux/windows-vm/windows-vm.sh boot install"
 fi
 
 header "Waydroid"

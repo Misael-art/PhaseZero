@@ -26,6 +26,10 @@ write_value() {
 }
 
 apply_vm_tuning() {
+    if [ "${PZ_WINDOWS_VM_SKIP_TUNING:-0}" = "1" ]; then
+        log "host VM tuning skipped by environment"
+        return 0
+    fi
     command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl set performance >/dev/null 2>&1 || true
     sysctl -w vm.swappiness=1 >/dev/null 2>&1 || true
     sysctl -w vm.vfs_cache_pressure=50 >/dev/null 2>&1 || true

@@ -38,6 +38,35 @@ grep -q -- "--hotkey=w" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -q 'grub-reboot "$BOOT_ID"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 target_status="$("$REPO_ROOT/linux/pz" windows-vm boot --target-root / status)"
 grep -q 'target_root: /' <<< "$target_status"
+grep -q 'artifacts_current:' <<< "$target_status"
+
+stale_env="$TMP_ROOT/windows-vm-stale.env"
+cat > "$stale_env" <<EOF
+PZ_WINDOWS_VM_REPO=/phasezero-live
+PZ_WINDOWS_VM_BOOT_USER=biglinux
+EOF
+session_validation="$(
+    PZ_WINDOWS_VM_ENV_FILE="$stale_env" \
+    PZ_WINDOWS_VM_REPO_FALLBACK="$REPO_ROOT" \
+    "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
+)"
+grep -q 'windows_vm_session_ready=yes' <<< "$session_validation"
+grep -Fq "repo=$REPO_ROOT" <<< "$session_validation"
+! grep -q 'startkde-biglinux' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+
+sddm_test_dir="$TMP_ROOT/sddm"
+PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \
+PZ_SDDM_CONF_DIR="$sddm_test_dir" \
+PZ_WINDOWS_VM_BOOT_USER=tester \
+PZ_WINDOWS_VM_SKIP_TUNING=1 \
+    "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
+grep -q '^User=tester$' "$sddm_test_dir/91-phasezero-windows-vm.conf"
+grep -q '^Session=phasezero-windows-vm.desktop$' "$sddm_test_dir/91-phasezero-windows-vm.conf"
+PZ_BOOT_CMDLINE='quiet splash' \
+PZ_SDDM_CONF_DIR="$sddm_test_dir" \
+    "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
+test ! -e "$sddm_test_dir/91-phasezero-windows-vm.conf"
+
 PZ_DRY_RUN=1 "$REPO_ROOT/linux/pz" windows-vm install --iso "$iso" --disk-size 64M --ram 2048 --cpus 2 >/dev/null
 test ! -f "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
 "$REPO_ROOT/linux/pz" windows-vm install --iso "$iso" --disk-size 64M --ram 2048 --cpus 2 >/dev/null

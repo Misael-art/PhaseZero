@@ -186,8 +186,8 @@ if jq -e '.discovery.discoveredInstalledDisk.installedLike == true and .discover
     blocked_disk="$(jq -r '.discovery.discoveredInstalledDisk.path' <<< "$winvm_status")"
     add_item "WINVM04" "medium" "Existing Windows VM install detected but not readable by current user" "sudo linux/windows-vm/windows-vm.sh adopt --disk '$blocked_disk'"
 fi
-if ! jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.grubCfgEntry == "present"' <<< "$winvm_status" >/dev/null 2>&1; then
-    add_item "WINVM03" "low" "Optional direct GRUB boot into Windows VM not installed" "sudo linux/windows-vm/windows-vm.sh boot install"
+if ! jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and (.boot.grubCfgEntry == "present" or .boot.grubCfgEntry == "unknown-permission")' <<< "$winvm_status" >/dev/null 2>&1; then
+    add_item "WINVM03" "medium" "Windows VM direct boot missing or stale" "sudo linux/windows-vm/windows-vm.sh boot install"
 fi
 
 # Waydroid
