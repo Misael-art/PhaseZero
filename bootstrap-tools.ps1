@@ -9044,6 +9044,7 @@ function Get-BootstrapSteamOsEfiInstallations {
         }
 
         $hasWindowsEntry = (($grubConfig + "`n" + $customConfig) -match '(?i)Windows Boot Manager|bootmgfw\.efi')
+        $dangerousPrefix = Test-BootstrapGrubEfiDangerousPrefix -Path $grubPath
         $installations.Add([pscustomobject][ordered]@{
             root = [string]$root
             efiPath = $efiDir
@@ -9057,10 +9058,28 @@ function Get-BootstrapSteamOsEfiInstallations {
             fallbackBootPath = $fallbackBootPath
             fallbackBootExists = (Test-Path -LiteralPath $fallbackBootPath -PathType Leaf)
             fallbackBootMatchesGrub = [bool]$fallbackMatches
+            grubEfiDangerousPrefix = [bool]$dangerousPrefix
         }) | Out-Null
     }
 
     return @($installations.ToArray())
+}
+
+function Test-BootstrapGrubEfiDangerousPrefix {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+    } catch {
+        return $false
+    }
+
+    if ($text -match 'hd6,gpt2') { return $true }
+    if ($text -match '\(,gpt[0-9]+\)/@/boot/grub') { return $true }
+    if ($text -match '\(hd[0-9]+,gpt[0-9]+\)/@/boot/grub') { return $true }
+    return $false
 }
 
 function Merge-BootstrapGrubMarkedTextBlock {
@@ -9161,9 +9180,14 @@ function Ensure-BootstrapSteamOsEfiFallbackBootloader {
         $target = [string]$install.fallbackBootPath
         $changed = -not [bool]$install.fallbackBootMatchesGrub
         $backupPath = ''
+        $blocked = [bool]$install.grubEfiDangerousPrefix
         if ($changed) {
-            $changedAny = $true
-            if (-not $DryRun) {
+            if ($blocked) {
+                Write-Log "dualboot-manager: refusing EFI fallback copy from GRUB with dangerous disk-order prefix: $source"
+            } else {
+                $changedAny = $true
+            }
+            if ((-not $blocked) -and (-not $DryRun)) {
                 $parent = Split-Path -Path $target -Parent
                 if ($parent) { New-Item -Path $parent -ItemType Directory -Force | Out-Null }
                 if ($State) {
@@ -9179,9 +9203,11 @@ function Ensure-BootstrapSteamOsEfiFallbackBootloader {
             root = [string]$install.root
             source = $source
             target = $target
-            changed = $changed
+            changed = ($changed -and -not $blocked)
             dryRun = [bool]$DryRun
             backupPath = $backupPath
+            blocked = $blocked
+            blockReason = if ($blocked) { 'dangerous-grub-efi-prefix' } else { '' }
         }) | Out-Null
     }
 

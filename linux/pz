@@ -7,7 +7,7 @@ PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 source "$PZ_ROOT/linux/lib/pacman.sh"
 
-PZ_SUBCOMMANDS="install steamdeck windows-vm waydroid emulation ai doctor support-bundle repair-plan tune ui help version"
+PZ_SUBCOMMANDS="install steamdeck windows-vm waydroid emulation boot ai doctor support-bundle repair-plan tune ui help version"
 
 usage() {
     cat <<EOF
@@ -43,6 +43,14 @@ Usage:
   pz waydroid repair          Apply Waydroid host/service repair
   pz waydroid launch          Launch optimized Waydroid session
   pz waydroid boot status     Manage direct GRUB Waydroid boot entry
+  pz boot status              Boot recovery status
+  pz boot menu                Show Linux-side boot selector
+  pz boot choose <choice>     Set one-shot boot: normal|steamos|windows|waydroid|emergency
+  pz boot install-safe-menu   Make GRUB menu visible with safe timeout
+  pz boot card                Print GRUB rescue commands for this host
+  pz boot install-card        Write GRUB rescue card to host and ESP
+  pz boot install-efi-fallback [--active] [--fallback] Install UUID-based standalone PhaseZero EFI
+  pz boot emergency-shell next One-shot boot into rescue.target
   pz steamdeck launch-options List Steam launch option presets
   pz emulation layout         Create shared Emulation folders
   pz emulation emudeck install Install EmuDeck AppImage launcher
@@ -277,6 +285,10 @@ cmd_waydroid() {
     bash "$PZ_ROOT/linux/waydroid/waydroid.sh" "$@"
 }
 
+cmd_boot() {
+    bash "$PZ_ROOT/linux/boot/recovery.sh" "$@"
+}
+
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
     [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|compat|secrets|mcp) ..."; return 1; }
@@ -441,6 +453,7 @@ main() {
         windows-vm|windows|winvm|win-vm) cmd_windows_vm "$@" ;;
         waydroid|android) cmd_waydroid "$@" ;;
         emulation)     cmd_emulation "$@" ;;
+        boot)          cmd_boot "$@" ;;
         ai)            cmd_ai "$@" ;;
         doctor)        cmd_doctor "$@" ;;
         support-bundle) cmd_support_bundle "$@" ;;

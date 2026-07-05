@@ -31,6 +31,13 @@ grep -q 'smb_unc' <<< "$plan_output"
 grep -q 'disk_source' <<< "$plan_output"
 boot_output="$("$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
 grep -q 'one-shot boot' <<< "$boot_output"
+grep -q 'pz_boot_validate_active_efi_safe' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -q 'pz_boot_require_current_root_target' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -q 'BOOT_ID="phasezero-windows-vm"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -q -- "--hotkey=w" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -q 'grub-reboot "$BOOT_ID"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+target_status="$("$REPO_ROOT/linux/pz" windows-vm boot --target-root / status)"
+grep -q 'target_root: /' <<< "$target_status"
 PZ_DRY_RUN=1 "$REPO_ROOT/linux/pz" windows-vm install --iso "$iso" --disk-size 64M --ram 2048 --cpus 2 >/dev/null
 test ! -f "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
 "$REPO_ROOT/linux/pz" windows-vm install --iso "$iso" --disk-size 64M --ram 2048 --cpus 2 >/dev/null
@@ -42,7 +49,7 @@ grep -q 'qemu-system-x86_64' <<< "$launch_output"
 domain_launch_output="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run)"
 grep -Eq 'virsh -c .* start|qemu-system-x86_64' <<< "$domain_launch_output"
 grep -q 'session.log' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
-"$REPO_ROOT/linux/pz" windows-vm status | jq -e '.config.installed == true and .vm.isoExists == true and (.vm.diskSource == "config" or .vm.diskSource == "discovered-installed" or .vm.diskSource == "adopted-existing") and (.vm | has("installedLike"))' >/dev/null
+"$REPO_ROOT/linux/pz" windows-vm status | jq -e '.config.installed == true and .vm.isoExists == true and (.vm.diskSource == "new" or .vm.diskSource == "config" or .vm.diskSource == "discovered-installed" or .vm.diskSource == "adopted-existing") and (.vm | has("installedLike"))' >/dev/null
 "$REPO_ROOT/linux/pz" install windows-vm-linux --dry-run >/dev/null
 
 echo "linux-windows-vm smoke ok"

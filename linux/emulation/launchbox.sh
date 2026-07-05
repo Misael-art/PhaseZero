@@ -78,6 +78,105 @@ launchbox_install_fonts() {
     fi
 }
 
+launchbox_apply_bigbox_safe_settings() {
+    [ "${PZ_LAUNCHBOX_BIGBOX_SAFE_SETTINGS:-1}" = "1" ] || return 0
+    python3 - "$PZ_LAUNCHBOX_ROOT" <<'PY'
+import shutil
+import sys
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+def upsert(path: Path, parent_tag: str, values: dict[str, str]) -> None:
+    if not path.exists():
+        return
+    try:
+        tree = ET.parse(path)
+    except ET.ParseError:
+        return
+    doc = tree.getroot()
+    parent = doc.find(parent_tag)
+    if parent is None:
+        parent = doc
+    changed = False
+    for key, value in values.items():
+        node = parent.find(key)
+        if node is None:
+            node = ET.SubElement(parent, key)
+            changed = True
+        if (node.text or "") != value:
+            node.text = value
+            changed = True
+    if not changed:
+        return
+    shutil.copy2(path, path.with_name(f"{path.name}.bak.{int(time.time())}"))
+    ET.indent(tree, space="  ")
+    path.write_text('<?xml version="1.0" standalone="yes"?>\n' + ET.tostring(doc, encoding="unicode") + "\n", encoding="utf-8")
+
+upsert(
+    root / "Data" / "BigBoxSettings.xml",
+    "BigBoxSettings",
+    {
+        "Theme": "Default",
+        "StartupTheme": "Default",
+        "PauseTheme": "Default",
+        "VideoPlaybackEngine": "VLC",
+        "ShowStartupSplashScreen": "false",
+        "UseStartupScreen": "false",
+        "PlayStartupSound": "false",
+        "PlaySelectSound": "false",
+        "PlayBackSound": "false",
+        "PlayNavigationSound": "false",
+        "AutoPlayMusicGamesList": "false",
+        "AutoPlayMusicGameDetails": "false",
+        "GamesUseBackgroundVideos": "false",
+        "PlatformsUseRandomGameVideos": "false",
+        "PlatformsUseBackgroundVideos": "false",
+        "ShowGameMenuPlayVideo": "false",
+        "ShowGameMenuViewVideoFullscreen": "false",
+        "ShowGameMenuViewModelFullscreen": "false",
+        "BackgroundFade": "0",
+        "FrameRate": "60",
+        "MarqueeMonitorIndex": "-1",
+        "MarqueeScreenCompatibilityMode": "None",
+    },
+)
+upsert(
+    root / "Data" / "Settings.xml",
+    "Settings",
+    {
+        "ShowLaunchBoxSplashScreen": "false",
+        "UseStartupScreen": "false",
+        "VideoPlaybackEngine": "VLC",
+        "ShowDetailsVideo": "false",
+        "AutoPlayDetailsVideo": "false",
+        "ShowPlatformVideo": "false",
+        "VideoCheck": "false",
+        "DebugLog": "true",
+    },
+)
+PY
+}
+
+launchbox_prepare_wine_runtime() {
+    export WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX"
+    export WINEDEBUG="${WINEDEBUG:--all}"
+    export WINEESYNC="${WINEESYNC:-1}"
+    if command -v wine >/dev/null 2>&1; then
+        timeout 20s wine winecfg -v win10 >/dev/null 2>&1 || true
+        timeout 15s wine reg add "HKCU\\Software\\Microsoft\\Avalon.Graphics" \
+            /v DisableHWAcceleration /t REG_DWORD /d 1 /f >/dev/null 2>&1 || true
+    fi
+    if [ "${PZ_LAUNCHBOX_FORCE_X11:-1}" = "1" ]; then
+        unset WAYLAND_DISPLAY
+        export GDK_BACKEND=x11
+        export SDL_VIDEODRIVER=x11
+        export QT_QPA_PLATFORM=xcb
+    fi
+}
+
 launchbox_write_wrappers() {
     pz_emulation_write_file "$PZ_LAUNCHBOX_WRAPPER" 0755 <<EOF
 #!/usr/bin/env bash
@@ -132,6 +231,7 @@ cmd_integrate() {
     launchbox_python apply
     launchbox_configure_wine
     launchbox_install_fonts
+    launchbox_apply_bigbox_safe_settings
     launchbox_write_wrappers
     launchbox_write_desktop_entries
     pz_info "LaunchBox integrated: $PZ_LAUNCHBOX_ROOT"
@@ -264,17 +364,31 @@ cmd_launch() {
     command -v wine >/dev/null 2>&1 || { pz_error "wine missing"; return 1; }
     launchbox_configure_wine
     launchbox_install_fonts
+    if [ "${PZ_LAUNCHBOX_AUTO_REPAIR:-1}" = "1" ]; then
+        launchbox_python repair >/dev/null || pz_warn "LaunchBox data repair reported warnings"
+    fi
+    launchbox_apply_bigbox_safe_settings
+    launchbox_prepare_wine_runtime
     cd "$PZ_LAUNCHBOX_ROOT"
-    exec env WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX" WINEDEBUG="${WINEDEBUG:-fixme-all}" wine "$PZ_LAUNCHBOX_ROOT/LaunchBox.exe" "$@"
+    exec wine "$PZ_LAUNCHBOX_ROOT/LaunchBox.exe" "$@"
 }
 
 cmd_bigbox() {
-    [ -f "$PZ_LAUNCHBOX_ROOT/BigBox.exe" ] || { pz_error "BigBox.exe not found: $PZ_LAUNCHBOX_ROOT"; return 1; }
+    local bigbox="$PZ_LAUNCHBOX_ROOT/BigBox.exe"
+    [ -f "$bigbox" ] || { pz_error "BigBox.exe not found: $PZ_LAUNCHBOX_ROOT"; return 1; }
     command -v wine >/dev/null 2>&1 || { pz_error "wine missing"; return 1; }
     launchbox_configure_wine
     launchbox_install_fonts
+    if [ "${PZ_LAUNCHBOX_AUTO_REPAIR:-1}" = "1" ]; then
+        launchbox_python repair >/dev/null || pz_warn "LaunchBox data repair reported warnings"
+    fi
+    launchbox_apply_bigbox_safe_settings
+    if [ "${PZ_LAUNCHBOX_USE_CORE_BIGBOX:-0}" = "1" ] && [ -f "$PZ_LAUNCHBOX_ROOT/Core/BigBox.exe" ]; then
+        bigbox="$PZ_LAUNCHBOX_ROOT/Core/BigBox.exe"
+    fi
+    launchbox_prepare_wine_runtime
     cd "$PZ_LAUNCHBOX_ROOT"
-    exec env WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX" WINEDEBUG="${WINEDEBUG:-fixme-all}" wine "$PZ_LAUNCHBOX_ROOT/BigBox.exe" "$@"
+    exec wine "$bigbox" "$@"
 }
 
 case "$ACTION" in

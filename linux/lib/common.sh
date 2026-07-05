@@ -84,6 +84,296 @@ pz_require_root() {
     fi
 }
 
+pz_boot_target_root() {
+    local root="${PZ_BOOT_TARGET_ROOT:-/}"
+    [ -n "$root" ] || root="/"
+    if command -v realpath >/dev/null 2>&1 && [ -e "$root" ]; then
+        realpath -m "$root"
+    else
+        printf '%s\n' "$root"
+    fi
+}
+
+pz_boot_path() {
+    local rel="${1:-/}" target
+    target="$(pz_boot_target_root)"
+    rel="/${rel#/}"
+    if [ "$target" = "/" ]; then
+        printf '%s\n' "$rel"
+    else
+        printf '%s%s\n' "${target%/}" "$rel"
+    fi
+}
+
+pz_boot_require_current_root_target() {
+    local target
+    target="$(pz_boot_target_root)"
+    if [ "$target" != "/" ]; then
+        pz_error "target-root mutation must run inside target chroot. use: arch-chroot $target"
+        return 1
+    fi
+}
+
+pz_boot_mount_value() {
+    local field="$1" target
+    target="$(pz_boot_target_root)"
+    findmnt -no "$field" -T "$target" 2>/dev/null | head -1
+}
+
+pz_boot_root_uuid() {
+    pz_boot_mount_value UUID
+}
+
+pz_boot_root_subvol() {
+    pz_boot_mount_value OPTIONS | tr ',' '\n' | awk -F= '$1 == "subvol" {print $2; exit}'
+}
+
+pz_boot_root_fstype() {
+    pz_boot_mount_value FSTYPE
+}
+
+pz_boot_latest_kernel_version() {
+    local boot_dir
+    boot_dir="$(pz_boot_path /boot)"
+    find "$boot_dir" -maxdepth 1 -type f -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null |
+        sort -V | tail -1 | sed 's/^vmlinuz-//'
+}
+
+pz_boot_grub_relpath() {
+    local target fstype subvol
+    target="$(pz_boot_target_root)"
+    fstype="$(pz_boot_root_fstype || true)"
+    subvol="$(pz_boot_root_subvol || true)"
+    if [ "$target" = "/" ] && command -v grub-mkrelpath >/dev/null 2>&1 && [ -d /boot/grub ]; then
+        grub-mkrelpath /boot/grub
+        return 0
+    fi
+    if [ "$fstype" = "btrfs" ] && [ -n "$subvol" ]; then
+        printf '%s\n' "${subvol%/}/boot/grub"
+    else
+        printf '%s\n' "/boot/grub"
+    fi
+}
+
+pz_boot_file_relpath() {
+    local rel="${1:-}" target fstype subvol
+    rel="/${rel#/}"
+    target="$(pz_boot_target_root)"
+    fstype="$(pz_boot_root_fstype || true)"
+    subvol="$(pz_boot_root_subvol || true)"
+    if [ "$target" = "/" ] && command -v grub-mkrelpath >/dev/null 2>&1 && [ -e "$rel" ]; then
+        grub-mkrelpath "$rel"
+        return 0
+    fi
+    if [ "$fstype" = "btrfs" ] && [ -n "$subvol" ]; then
+        printf '%s\n' "${subvol%/}$rel"
+    else
+        printf '%s\n' "$rel"
+    fi
+}
+
+pz_boot_esp_dir() {
+    pz_boot_path "${PZ_BOOT_ESP_DIR:-/boot/efi}"
+}
+
+pz_boot_file_state() {
+    local path="$1" parent
+    if [ -e "$path" ]; then
+        echo present
+        return 0
+    fi
+    parent="$(dirname "$path")"
+    while [ "$parent" != "/" ] && [ ! -e "$parent" ]; do
+        parent="$(dirname "$parent")"
+    done
+    if [ -e "$parent" ] && [ ! -x "$parent" ]; then
+        echo permission-denied
+    else
+        echo missing
+    fi
+}
+
+pz_boot_refuse_live_root() {
+    local source fstype target
+    target="$(pz_boot_target_root)"
+    source="$(findmnt -no SOURCE -T "$target" 2>/dev/null | head -1 || true)"
+    fstype="$(findmnt -no FSTYPE -T "$target" 2>/dev/null | head -1 || true)"
+
+    if [ "${PZ_ALLOW_LIVE_BOOT_MUTATION:-0}" = "1" ]; then
+        pz_warn "PZ_ALLOW_LIVE_BOOT_MUTATION=1 set; live-root boot guard bypassed"
+        return 0
+    fi
+
+    if [ -d /run/miso/bootmnt ] && { [ -z "$source" ] || [[ "$source" != /dev/* ]]; }; then
+        pz_error "refusing GRUB mutation from live/root overlay target: $target. chroot into target root or set PZ_ALLOW_LIVE_BOOT_MUTATION=1"
+        return 1
+    fi
+
+    case "$fstype" in
+        overlay|squashfs|iso9660)
+            pz_error "refusing GRUB mutation on live filesystem type: $fstype target=$target"
+            return 1
+            ;;
+    esac
+}
+
+pz_boot_preflight_grub() {
+    pz_boot_refuse_live_root
+    command -v grub-mkrelpath >/dev/null 2>&1 || { pz_error "grub-mkrelpath missing"; return 1; }
+    if ! command -v update-grub >/dev/null 2>&1 && ! command -v grub-mkconfig >/dev/null 2>&1; then
+        pz_error "update-grub/grub-mkconfig missing"
+        return 1
+    fi
+    [ -d "$(pz_boot_path /boot/grub)" ] || { pz_error "$(pz_boot_path /boot/grub) missing"; return 1; }
+    [ -n "$(pz_boot_root_uuid)" ] || { pz_error "could not resolve target root UUID"; return 1; }
+    [ -n "$(pz_boot_latest_kernel_version)" ] || { pz_error "could not resolve /boot/vmlinuz-*"; return 1; }
+    if [ ! -d "$(pz_boot_esp_dir)" ]; then
+        pz_error "ESP not mounted at $(pz_boot_esp_dir)"
+        return 1
+    fi
+}
+
+pz_boot_backup_bundle() {
+    local reason="${1:-grub-mutation}" ts base dir target
+    ts="$(date '+%Y%m%d-%H%M%S')"
+    target="$(pz_boot_target_root)"
+    base="$(pz_boot_path /var/lib/phasezero/boot-backups)"
+    install -d "$base"
+    dir="$(mktemp -d "$base/${ts}.XXXXXX")"
+    [ -f "$(pz_boot_path /etc/default/grub)" ] && cp -a "$(pz_boot_path /etc/default/grub)" "$dir/grub.default" 2>/dev/null || true
+    [ -d "$(pz_boot_path /etc/default/grub.d)" ] && cp -a "$(pz_boot_path /etc/default/grub.d)" "$dir/grub.d.default" 2>/dev/null || true
+    [ -d "$(pz_boot_path /etc/grub.d)" ] && cp -a "$(pz_boot_path /etc/grub.d)" "$dir/grub.d.scripts" 2>/dev/null || true
+    [ -f "$(pz_boot_path /boot/grub/grub.cfg)" ] && cp -a "$(pz_boot_path /boot/grub/grub.cfg)" "$dir/grub.cfg" 2>/dev/null || true
+    [ -f "$(pz_boot_path /boot/grub/grubenv)" ] && cp -a "$(pz_boot_path /boot/grub/grubenv)" "$dir/grubenv" 2>/dev/null || true
+    [ -d "$(pz_boot_esp_dir)/EFI" ] && cp -a "$(pz_boot_esp_dir)/EFI" "$dir/EFI" 2>/dev/null || true
+    lsblk -f > "$dir/lsblk-f.txt" 2>&1 || true
+    blkid > "$dir/blkid.txt" 2>&1 || true
+    findmnt > "$dir/findmnt.txt" 2>&1 || true
+    if command -v efibootmgr >/dev/null 2>&1; then
+        efibootmgr -v > "$dir/efibootmgr-v.txt" 2>&1 || true
+    fi
+    printf '%s\n' "$reason" > "$dir/reason.txt"
+    printf '%s\n' "$target" > "$dir/target-root.txt"
+    pz_info "boot backup bundle: $dir"
+}
+
+pz_boot_refresh_grub_config() {
+    local cfg="${1:-/boot/grub/grub.cfg}" log log_dir log_target rc=0
+    pz_boot_require_current_root_target
+    log="$(mktemp)"
+    if command -v update-grub >/dev/null 2>&1; then
+        update-grub 2>&1 | tee "$log" || rc=$?
+    else
+        grub-mkconfig -o "$cfg" 2>&1 | tee "$log" || rc=$?
+    fi
+    log_dir="/var/lib/phasezero/boot-logs"
+    install -d "$log_dir" 2>/dev/null || log_dir="$PZ_STATE/boot-logs"
+    install -d "$log_dir"
+    log_target="$log_dir/grub-refresh-$(date '+%Y%m%d-%H%M%S').log"
+    cp "$log" "$log_target" 2>/dev/null || true
+    if [ "$rc" -ne 0 ]; then
+        pz_error "GRUB config refresh failed rc=$rc log=$log_target"
+        rm -f "$log"
+        return "$rc"
+    fi
+    if grep -Eiq '(^|[[:space:]])error:' "$log"; then
+        pz_error "GRUB config refresh reported errors log=$log_target"
+        rm -f "$log"
+        return 1
+    fi
+    rm -f "$log"
+    pz_info "GRUB config refresh log: $log_target"
+}
+
+pz_boot_validate_grub_cfg_safe() {
+    local cfg="${1:-/boot/grub/grub.cfg}"
+    [ -f "$cfg" ] || { pz_error "missing GRUB config: $cfg"; return 1; }
+    if grep -Eq 'terminal_input console usb_keyboard at_keyboard|insmod at_keyboard|set gfxmode=800x600,640x480,auto' "$cfg"; then
+        pz_error "unsafe global GRUB input/video settings detected in $cfg"
+        return 1
+    fi
+}
+
+pz_boot_efi_has_dangerous_prefix() {
+    local path="$1"
+    [ -f "$path" ] || return 2
+    strings -a "$path" |
+        grep -Eq 'hd6,gpt2|\(,gpt[0-9]+\)/@/boot/grub|\(hd[0-9]+,gpt[0-9]+\)/@/boot/grub'
+}
+
+pz_boot_validate_efi_safe() {
+    local path="$1"
+    [ -f "$path" ] || { pz_error "missing EFI binary: $path"; return 1; }
+    if pz_boot_efi_has_dangerous_prefix "$path"; then
+        pz_error "dangerous disk-order GRUB prefix detected in $path"
+        return 1
+    fi
+}
+
+pz_boot_active_efi_path() {
+    local esp boot_current line efi_rel candidate
+    esp="$(pz_boot_esp_dir)"
+    if command -v efibootmgr >/dev/null 2>&1; then
+        boot_current="$(efibootmgr 2>/dev/null | awk '$1 == "BootCurrent:" {print $2; exit}' || true)"
+        if [ -n "$boot_current" ]; then
+            line="$(efibootmgr -v 2>/dev/null | awk -v entry="Boot${boot_current}" '$1 ~ "^" entry {print; exit}' || true)"
+            if [[ "$line" =~ (\\EFI\\[^[:space:]]+\.efi) ]]; then
+                efi_rel="${BASH_REMATCH[1]//\\//}"
+                printf '%s/%s\n' "${esp%/}" "${efi_rel#/}"
+                return 0
+            fi
+        fi
+    fi
+    for candidate in "$esp/EFI/BigLinux/grubx64.efi" "$esp/EFI/boot/bootx64.efi" "$esp/EFI/Boot/bootx64.efi"; do
+        [ -e "$candidate" ] && { printf '%s\n' "$candidate"; return 0; }
+    done
+    return 1
+}
+
+pz_boot_efi_prefix_state() {
+    local path="$1" state
+    state="$(pz_boot_file_state "$path")"
+    case "$state" in
+        present)
+            if pz_boot_efi_has_dangerous_prefix "$path"; then
+                echo dangerous
+            else
+                echo safe
+            fi
+            ;;
+        *) echo "$state" ;;
+    esac
+}
+
+pz_boot_validate_active_efi_safe() {
+    local path state
+    path="$(pz_boot_active_efi_path 2>/dev/null || true)"
+    if [ -z "$path" ]; then
+        pz_warn "active EFI loader path not detected; skipping prefix validation"
+        return 0
+    fi
+    state="$(pz_boot_efi_prefix_state "$path")"
+    case "$state" in
+        safe) return 0 ;;
+        permission-denied)
+            pz_warn "active EFI loader requires root/permission for prefix validation: $path"
+            return 0
+            ;;
+        missing)
+            pz_warn "active EFI loader path missing: $path"
+            return 0
+            ;;
+        dangerous)
+            pz_error "active EFI loader has dangerous disk-order GRUB prefix: $path"
+            return 1
+            ;;
+        *)
+            pz_warn "active EFI loader validation inconclusive: $state $path"
+            return 0
+            ;;
+    esac
+}
+
 pz_rollback_register() {
     local action="$1" target="$2" backup="$3"
     local entry

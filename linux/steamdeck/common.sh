@@ -101,7 +101,10 @@ steamdeck_apply_privileged_mode() {
 
 steamdeck_detect_mode() {
     local connector
-    connector="$(steamdeck_list_connected_external_connectors | head -1)"
+    connector=""
+    while IFS= read -r connector; do
+        break
+    done < <(steamdeck_list_connected_external_connectors)
     if [ -z "$connector" ]; then
         echo "handheld"
         return 0

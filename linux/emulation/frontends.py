@@ -447,6 +447,7 @@ def update_launchbox_platforms(ctx: Context, dry_run: bool) -> bool:
     if platform is None:
         platform = ET.SubElement(root, "Platform")
     fields = {
+        "Category": "Computers",
         "Name": "PhaseZero Frontends",
         "NestedName": "PhaseZero Frontends",
         "SortTitle": "PhaseZero Frontends",

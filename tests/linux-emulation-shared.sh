@@ -148,7 +148,7 @@ test -d "$XDG_CONFIG_HOME/hydralauncher/leveldb" && { echo "FAIL: Hydra LevelDB 
 
 # === LaunchBox compatibility tree and emulator bridge ===
 LB_ROOT="$PZ_EMULATION_ROOT/tools/launchers/LaunchBox"
-mkdir -p "$LB_ROOT/Data/Platforms" "$PZ_EMULATION_ROOT/roms/switch" "$PZ_EMULATION_ROOT/tools/downloaded_media/switch/videos"
+mkdir -p "$LB_ROOT/Data/Platforms" "$LB_ROOT/Data/Playlists" "$PZ_EMULATION_ROOT/roms/switch" "$PZ_EMULATION_ROOT/tools/downloaded_media/switch/videos"
 cat > "$LB_ROOT/LaunchBox.exe" <<'EOF'
 stub
 EOF
@@ -170,6 +170,74 @@ cat > "$LB_ROOT/Data/Emulators.xml" <<'XML'
     <ID>ra</ID>
     <Title>Retroarch</Title>
   </Emulator>
+</LaunchBox>
+XML
+cat > "$LB_ROOT/Data/BigBoxSettings.xml" <<'XML'
+<?xml version="1.0" standalone="yes"?>
+<LaunchBox>
+  <BigBoxSettings>
+    <Theme>Pulse</Theme>
+    <StartupTheme>StageBox</StartupTheme>
+    <VideoPlaybackEngine>VLC</VideoPlaybackEngine>
+    <ShowStartupSplashScreen>true</ShowStartupSplashScreen>
+    <UseStartupScreen>true</UseStartupScreen>
+    <PlatformsUseRandomGameVideos>true</PlatformsUseRandomGameVideos>
+  </BigBoxSettings>
+</LaunchBox>
+XML
+cat > "$LB_ROOT/Data/Settings.xml" <<'XML'
+<?xml version="1.0" standalone="yes"?>
+<LaunchBox>
+  <Settings>
+    <ShowLaunchBoxSplashScreen>true</ShowLaunchBoxSplashScreen>
+    <UseStartupScreen>true</UseStartupScreen>
+    <ShowDetailsVideo>true</ShowDetailsVideo>
+    <VideoCheck>true</VideoCheck>
+  </Settings>
+</LaunchBox>
+XML
+cat > "$LB_ROOT/Data/Platforms.xml" <<'XML'
+<?xml version="1.0" standalone="yes"?>
+<LaunchBox>
+  <Platform>
+    <Category />
+    <Name>Nintendo Switch</Name>
+  </Platform>
+  <Platform>
+    <Category />
+    <Name>PhaseZero Frontends</Name>
+  </Platform>
+  <PlatformCategory>
+    <Name>Consoles</Name>
+    <NestedName>Consoles</NestedName>
+    <Category />
+  </PlatformCategory>
+  <PlatformCategory>
+    <Name>Computers</Name>
+    <NestedName>Computers</NestedName>
+    <Category />
+  </PlatformCategory>
+</LaunchBox>
+XML
+cat > "$LB_ROOT/Data/Parents.xml" <<'XML'
+<?xml version="1.0" standalone="yes"?>
+<LaunchBox>
+  <Parent>
+    <PlatformName>Nintendo Switch</PlatformName>
+    <PlaylistId />
+    <PlatformCategoryName />
+    <ParentPlatformName />
+    <ParentPlaylistId />
+    <ParentPlatformCategoryName>Consoles</ParentPlatformCategoryName>
+  </Parent>
+  <Parent>
+    <PlatformName />
+    <PlaylistId />
+    <PlatformCategoryName>Consoles</PlatformCategoryName>
+    <ParentPlatformName />
+    <ParentPlaylistId />
+    <ParentPlatformCategoryName />
+  </Parent>
 </LaunchBox>
 XML
 cat > "$LB_ROOT/Data/Platforms/Nintendo Switch.xml" <<'XML'
@@ -194,6 +262,32 @@ test -L "$PZ_EMULATION_ROOT/tools/launchers/Roms/Nintendo Switch/Base Game.nsp" 
 test "$(readlink "$PZ_EMULATION_ROOT/tools/launchers/Roms/Nintendo Switch/Base Game.nsp")" = "$PZ_EMULATION_ROOT/roms/switch/Base Game.nsp" || { echo "FAIL: LaunchBox ROM symlink wrong target"; exit 1; }
 test -L "$PZ_EMULATION_ROOT/tools/launchers/Roms/Nintendo Switch/media" || { echo "FAIL: LaunchBox media symlink missing"; exit 1; }
 test "$(readlink "$PZ_EMULATION_ROOT/tools/launchers/Roms/Nintendo Switch/media")" = "$PZ_EMULATION_ROOT/tools/downloaded_media/switch" || { echo "FAIL: LaunchBox media symlink wrong target"; exit 1; }
+grep -q '<Theme>Default</Theme>' "$LB_ROOT/Data/BigBoxSettings.xml" || { echo "FAIL: BigBox safe theme missing"; exit 1; }
+grep -q '<VideoPlaybackEngine>VLC</VideoPlaybackEngine>' "$LB_ROOT/Data/BigBoxSettings.xml" || { echo "FAIL: BigBox VLC engine missing"; exit 1; }
+grep -q '<UseStartupScreen>false</UseStartupScreen>' "$LB_ROOT/Data/BigBoxSettings.xml" || { echo "FAIL: BigBox startup screen not disabled"; exit 1; }
+grep -q '<VideoPlaybackEngine>VLC</VideoPlaybackEngine>' "$LB_ROOT/Data/Settings.xml" || { echo "FAIL: LaunchBox VLC engine missing"; exit 1; }
+grep -q '<ShowDetailsVideo>false</ShowDetailsVideo>' "$LB_ROOT/Data/Settings.xml" || { echo "FAIL: LaunchBox video safe setting missing"; exit 1; }
+python3 - "$LB_ROOT/Data/Parents.xml" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+
+root = ET.parse(sys.argv[1]).getroot()
+bad_root = []
+phasezero_parent = False
+for parent in root.findall("Parent"):
+    values = {child.tag: (child.text or "").strip() for child in parent}
+    if values.get("PlatformCategoryName") and not any(
+        values.get(key)
+        for key in ("PlatformName", "PlaylistId", "ParentPlatformName", "ParentPlaylistId", "ParentPlatformCategoryName")
+    ):
+        bad_root.append(values.get("PlatformCategoryName"))
+    if values.get("PlatformName") == "PhaseZero Frontends" and values.get("ParentPlatformCategoryName") == "Computers":
+        phasezero_parent = True
+if bad_root:
+    raise SystemExit(f"FAIL: LaunchBox root category parent rows not removed: {bad_root}")
+if not phasezero_parent:
+    raise SystemExit("FAIL: LaunchBox PhaseZero Frontends parent missing")
+PY
 test -f "$PZ_EMULATION_ROOT/tools/launchers/emulators/PhaseZero/eden.bat" || { echo "FAIL: LaunchBox Eden batch wrapper missing"; exit 1; }
 grep -q '..\\emulators\\PhaseZero\\eden.bat' "$LB_ROOT/Data/Emulators.xml" || { echo "FAIL: LaunchBox Emulators.xml not rewritten"; exit 1; }
 test -x "$PZ_LOCAL_BIN/phasezero-launchbox" || { echo "FAIL: phasezero-launchbox wrapper missing"; exit 1; }
@@ -215,6 +309,7 @@ jq -e 'map(select(.configTitle == "Frontends - PhaseZero")) | length == 1' "$XDG
 jq -e '.games | map(select(.app_name == "phasezero-frontend-bigbox")) | length == 1' "$XDG_CONFIG_HOME/heroic/sideload_apps/library.json" >/dev/null || { echo "FAIL: Heroic BigBox entry missing"; exit 1; }
 grep -q 'PhaseZero Frontends' "$LB_ROOT/Data/Platforms/PhaseZero Frontends.xml" || { echo "FAIL: LaunchBox frontends platform missing"; exit 1; }
 grep -q 'PhaseZero Frontend Switcher' "$LB_ROOT/Data/Emulators.xml" || { echo "FAIL: LaunchBox frontend emulator missing"; exit 1; }
+grep -q '<Category>Computers</Category>' "$LB_ROOT/Data/Platforms.xml" || { echo "FAIL: LaunchBox frontends category missing"; exit 1; }
 test -L "$PZ_EMULATION_ROOT/tools/launchers/Roms/PhaseZero Frontends/bigbox.sh" || { echo "FAIL: LaunchBox frontends symlink missing"; exit 1; }
 test "$(readlink "$PZ_EMULATION_ROOT/tools/launchers/Roms/PhaseZero Frontends/bigbox.sh")" = "$PZ_EMULATION_ROOT/tools/launchers/frontends/bigbox.sh" || { echo "FAIL: LaunchBox frontends symlink wrong target"; exit 1; }
 PZ_LAUNCHBOX_SKIP_WINEBOOT=1 PZ_LAUNCHBOX_SKIP_FONTS=1 "$REPO_ROOT/linux/pz" emulation launchbox status --json | jq -e '.aliasesUnresolved | index("PhaseZero Frontends") == null' >/dev/null || { echo "FAIL: LaunchBox frontends alias unresolved"; exit 1; }

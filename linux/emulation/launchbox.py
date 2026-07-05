@@ -215,6 +215,40 @@ SPECIAL_SYSTEM_DIRS = {
     "frontends": ("tools", "launchers", "frontends"),
 }
 
+ARCADE_SYSTEMS = {"arcade", "atomiswave", "cps1", "cps2", "cps3", "model2", "model3"}
+HANDHELD_SYSTEMS = {
+    "atari7800portable",
+    "gamegear",
+    "gb",
+    "gba",
+    "gbc",
+    "lynx",
+    "n3ds",
+    "nds",
+    "ngp",
+    "psp",
+    "psvita",
+    "ws",
+    "wsc",
+}
+COMPUTER_SYSTEMS = {
+    "amiga",
+    "amigacd32",
+    "amstradcpc",
+    "atarist",
+    "c64",
+    "fmtowns",
+    "frontends",
+    "msx",
+    "msx2",
+    "msxturbor",
+    "pc88",
+    "pc98",
+    "windows",
+    "x68000",
+    "zxspectrum",
+}
+
 
 def norm(value: str) -> str:
     value = unicodedata.normalize("NFKD", value)
@@ -261,6 +295,7 @@ class LaunchBoxContext:
         self.drive_root = self.phasezero_dir / "drives"
         self.data_dir = self.launchbox_root / "Data"
         self.emulators_xml = self.data_dir / "Emulators.xml"
+        self.parents_xml = self.data_dir / "Parents.xml"
 
 
 def backup_path(path: Path, ctx: LaunchBoxContext, label: str) -> Path:
@@ -522,6 +557,134 @@ def write_launchbox_xml(tree: ET.ElementTree, path: Path) -> None:
     path.write_text('<?xml version="1.0" standalone="yes"?>\n' + body + "\n", encoding="utf-8")
 
 
+def xml_text(node: ET.Element | None) -> str:
+    if node is None or node.text is None:
+        return ""
+    return node.text.strip()
+
+
+def set_child_text(parent: ET.Element, tag: str, value: str) -> bool:
+    node = parent.find(tag)
+    if node is None:
+        node = ET.SubElement(parent, tag)
+        node.text = value
+        return True
+    if (node.text or "") == value:
+        return False
+    node.text = value
+    return True
+
+
+def category_for_platform(name: str) -> str:
+    if name == "PhaseZero Frontends":
+        return "Computers"
+    system = system_for_alias(name)
+    if system in ARCADE_SYSTEMS:
+        return "Arcade"
+    if system in HANDHELD_SYSTEMS:
+        return "Handhelds"
+    if system in COMPUTER_SYSTEMS:
+        return "Computers"
+    return "Consoles"
+
+
+def platform_and_category_names(ctx: LaunchBoxContext) -> tuple[set[str], set[str]]:
+    platforms: set[str] = set()
+    categories: set[str] = set()
+    tree = parse_xml(ctx.data_dir / "Platforms.xml")
+    if tree is None:
+        return platforms, categories
+    for platform in tree.getroot().findall("Platform"):
+        name = xml_text(platform.find("Name"))
+        if name:
+            platforms.add(name)
+    for category in tree.getroot().findall("PlatformCategory"):
+        name = xml_text(category.find("Name"))
+        if name:
+            categories.add(name)
+    return platforms, categories
+
+
+def sanitize_parents_xml(ctx: LaunchBoxContext, apply: bool) -> dict[str, object]:
+    tree = parse_xml(ctx.parents_xml)
+    if tree is None:
+        return {
+            "path": str(ctx.parents_xml),
+            "exists": False,
+            "changed": 0,
+            "removedEmpty": 0,
+            "removedRootCategories": 0,
+            "addedPlatformParents": 0,
+        }
+
+    root = tree.getroot()
+    platforms, categories = platform_and_category_names(ctx)
+    if not categories:
+        categories = {"Arcade", "Computers", "Consoles", "Handhelds"}
+
+    changed = removed_empty = removed_root_categories = added_platform_parents = 0
+    platform_parented: set[str] = set()
+    remove_nodes: list[ET.Element] = []
+
+    for parent in root.findall("Parent"):
+        platform_name = xml_text(parent.find("PlatformName"))
+        playlist_id = xml_text(parent.find("PlaylistId"))
+        category_name = xml_text(parent.find("PlatformCategoryName"))
+        parent_platform = xml_text(parent.find("ParentPlatformName"))
+        parent_playlist = xml_text(parent.find("ParentPlaylistId"))
+        parent_category = xml_text(parent.find("ParentPlatformCategoryName"))
+
+        if platform_name:
+            platform_parented.add(platform_name)
+
+        has_identity = bool(platform_name or playlist_id or category_name)
+        has_parent = bool(parent_platform or parent_playlist or parent_category)
+        if not has_identity:
+            remove_nodes.append(parent)
+            removed_empty += 1
+            continue
+        if category_name and not platform_name and not playlist_id and not has_parent:
+            remove_nodes.append(parent)
+            removed_root_categories += 1
+
+    for parent in remove_nodes:
+        root.remove(parent)
+        changed += 1
+
+    for name in sorted(platforms - platform_parented, key=str.casefold):
+        category = category_for_platform(name)
+        if category not in categories:
+            category = "Consoles"
+        parent = ET.SubElement(root, "Parent")
+        ET.SubElement(parent, "PlatformName").text = name
+        ET.SubElement(parent, "PlaylistId").text = ""
+        ET.SubElement(parent, "PlatformCategoryName").text = ""
+        ET.SubElement(parent, "ParentPlatformName").text = ""
+        ET.SubElement(parent, "ParentPlaylistId").text = ""
+        ET.SubElement(parent, "ParentPlatformCategoryName").text = category
+        changed += 1
+        added_platform_parents += 1
+
+    if apply and changed:
+        backup_path(ctx.parents_xml, ctx, "Parents.xml")
+        write_launchbox_xml(tree, ctx.parents_xml)
+
+    return {
+        "path": str(ctx.parents_xml),
+        "exists": True,
+        "changed": changed,
+        "removedEmpty": removed_empty,
+        "removedRootCategories": removed_root_categories,
+        "addedPlatformParents": added_platform_parents,
+    }
+
+
+def sanitize_launchbox_data(ctx: LaunchBoxContext, apply: bool) -> dict[str, object]:
+    return {
+        "parentsXml": sanitize_parents_xml(ctx, apply),
+    }
+
+
 def normalize_emulator_title(title: str) -> str:
     title = title.strip().lower()
     title = title.replace(" ", "")
@@ -653,6 +816,7 @@ def compat_tree_status(ctx: LaunchBoxContext) -> dict[str, int]:
 def run(action: str, json_output: bool) -> int:
     ctx = LaunchBoxContext()
     apply = action in {"apply", "integrate", "repair"}
+    launchbox_data = sanitize_launchbox_data(ctx, apply)
     aliases, unresolved = collect_aliases(ctx)
     compat = [
         ensure_compat_alias(ctx, alias, system, apply)
@@ -670,6 +834,7 @@ def run(action: str, json_output: bool) -> int:
         "wineDrives": ensure_wine_drives(ctx, apply),
         "batWrappers": write_bat_wrappers(ctx, apply),
         "emulatorsXml": update_emulators_xml(ctx, apply),
+        "launchboxData": launchbox_data,
         "compatTree": compat_tree_status(ctx),
         "paths": sample_path_status(ctx),
     }
@@ -689,6 +854,13 @@ def run(action: str, json_output: bool) -> int:
         )
         print(f"  wrappers: {len(data['batWrappers'])} planned")
         print(f"  emulators: {len(data['emulatorsXml']['configured'])} configured")
+        parent_fix = data["launchboxData"]["parentsXml"]
+        if parent_fix["exists"]:
+            print(
+                "  parents.xml: "
+                f"{parent_fix['changed']} changes, "
+                f"{parent_fix['removedRootCategories']} root category rows removed"
+            )
         paths = data["paths"]
         print(
             "  sampled LaunchBox DB paths: "

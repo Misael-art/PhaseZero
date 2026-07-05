@@ -76,9 +76,12 @@ Boot direto estilo SteamOS:
 ```bash
 linux/pz steamdeck boot dry-run
 sudo linux/steamdeck/install-steamos-boot.sh install
+sudo linux/pz boot install-safe-menu
+linux/pz boot menu
+sudo linux/pz boot choose steamos --reboot
 ```
 
-Isso adiciona uma entrada GRUB `PhaseZero SteamOS Console`. Ela inicializa o mesmo Linux com `phasezero.steamos=1`; um servico antes do SDDM seleciona `phasezero-steamos.desktop`. Ao escolher Desktop na Steam, o hook `steamos-session-select` encerra gamescope e inicia Plasma na mesma sessao, sem novo login. Em Valve Jupiter/Galileo, drop-in GRUB usa `800x600` landscape, timeout de 5 segundos e terminais `console`, `usb_keyboard` e `at_keyboard`. GRUB nao possui API de joystick analogico; boot one-shot pelos launchers evita depender de entrada pre-kernel.
+Isso adiciona uma entrada GRUB `PhaseZero SteamOS Console`. Ela inicializa o mesmo Linux com `phasezero.steamos=1`; um servico antes do SDDM seleciona `phasezero-steamos.desktop`. Ao escolher Desktop na Steam, o hook `steamos-session-select` encerra gamescope e inicia Plasma na mesma sessao, sem novo login. `linux/pz boot install-safe-menu` deixa o menu GRUB visivel com timeout seguro, sem alterar input/video global. As entradas PhaseZero usam IDs estaveis e hotkeys de teclado (`s`, `w`, `a`, `e`), mas D-pad/analogico do Steam Deck em GRUB depende de firmware e nao e confiavel. Prefira `linux/pz boot menu` ou launchers one-shot no Linux antes de reiniciar.
 
 Boot direto Windows VM:
 

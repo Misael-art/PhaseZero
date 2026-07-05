@@ -422,6 +422,42 @@ elif [ -x /usr/local/lib/phasezero/steamos-boot-prepare ] && [ -x /etc/grub.d/42
 else
     check BOOT01 "PhaseZero SteamOS GRUB entry installed" INFO "optional: sudo linux/steamdeck/install-steamos-boot.sh install"
 fi
+boot_recovery_status="$(bash "$PZ_ROOT/linux/boot/recovery.sh" status 2>/dev/null || true)"
+boot_recovery_card="$(awk -F': ' '$1 ~ /recovery_card$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_phasezero_efi="$(awk -F': ' '$1 ~ /phasezero_efi$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_active_efi="$(awk -F': ' '$1 ~ /active_efi$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_active_efi_prefix="$(awk -F': ' '$1 ~ /active_efi_prefix$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_safe_menu_profile="$(awk -F': ' '$1 ~ /safe_menu_profile$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_safe_menu_timeout="$(awk -F': ' '$1 ~ /safe_menu_timeout$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_emergency_entry="$(awk -F': ' '$1 ~ /emergency_shell_entry$/ {print $2; exit}' <<< "$boot_recovery_status")"
+if [ -n "$boot_recovery_card" ] && [ "$boot_recovery_card" != "missing" ]; then
+    check BOOT02 "GRUB rescue card available" PASS "$boot_recovery_card"
+else
+    check BOOT02 "GRUB rescue card available" INFO "optional: sudo linux/pz boot install-card"
+fi
+if [[ "$boot_phasezero_efi" == permission-denied* ]]; then
+    check BOOT03 "PhaseZero standalone EFI fallback available" INFO "permission denied; verify with: sudo linux/pz boot status"
+elif [ -n "$boot_phasezero_efi" ] && [ "$boot_phasezero_efi" != "missing" ]; then
+    check BOOT03 "PhaseZero standalone EFI fallback available" PASS "$boot_phasezero_efi"
+else
+    check BOOT03 "PhaseZero standalone EFI fallback available" INFO "optional: sudo linux/pz boot install-efi-fallback"
+fi
+case "$boot_active_efi_prefix" in
+    safe) check BOOT05 "Active EFI GRUB prefix safe" PASS "$boot_active_efi" ;;
+    dangerous) check BOOT05 "Active EFI GRUB prefix safe" FAIL "dangerous disk-order prefix in $boot_active_efi; run: sudo linux/pz boot install-efi-fallback --active --fallback" ;;
+    permission-denied) check BOOT05 "Active EFI GRUB prefix safe" INFO "permission denied; verify with: sudo linux/pz boot status" ;;
+    *) check BOOT05 "Active EFI GRUB prefix safe" INFO "unknown; verify with: sudo linux/pz boot status" ;;
+esac
+case "$boot_safe_menu_profile" in
+    installed*) check BOOT06 "GRUB menu visible with safe timeout" PASS "${boot_safe_menu_timeout:-installed}" ;;
+    permission-denied*) check BOOT06 "GRUB menu visible with safe timeout" INFO "permission denied; verify with: sudo linux/pz boot status" ;;
+    *) check BOOT06 "GRUB menu visible with safe timeout" WARN "run: sudo linux/pz boot install-safe-menu" ;;
+esac
+if [ "$boot_emergency_entry" = "installed" ]; then
+    check BOOT04 "Emergency shell GRUB entry inactive" WARN "temporary entry installed; clear after use: sudo linux/pz boot emergency-shell clear"
+else
+    check BOOT04 "Emergency shell GRUB entry inactive" PASS "not installed"
+fi
 
 header "Security"
 systemctl is-active ufw &>/dev/null && check SEC01 "UFW firewall active" PASS "" || check SEC01 "UFW firewall active" WARN "inactive"

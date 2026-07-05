@@ -281,6 +281,33 @@ if [ ! -x /usr/local/lib/phasezero/steamos-boot-prepare ] || [ ! -x /etc/grub.d/
 elif [ "$boot_entry_state" = "missing" ]; then
     add_item "BOOT02" "medium" "PhaseZero SteamOS GRUB entry missing from generated grub.cfg" "sudo linux/steamdeck/install-steamos-boot.sh install"
 fi
+boot_recovery_status="$(bash "$PZ_ROOT/linux/boot/recovery.sh" status 2>/dev/null || true)"
+boot_recovery_card="$(awk -F': ' '$1 ~ /recovery_card$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_phasezero_efi="$(awk -F': ' '$1 ~ /phasezero_efi$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_active_efi_prefix="$(awk -F': ' '$1 ~ /active_efi_prefix$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_safe_menu_profile="$(awk -F': ' '$1 ~ /safe_menu_profile$/ {print $2; exit}' <<< "$boot_recovery_status")"
+boot_emergency_entry="$(awk -F': ' '$1 ~ /emergency_shell_entry$/ {print $2; exit}' <<< "$boot_recovery_status")"
+if [ -z "$boot_recovery_card" ] || [ "$boot_recovery_card" = "missing" ]; then
+    add_item "BOOTREC01" "low" "GRUB rescue card not installed" "sudo linux/pz boot install-card"
+fi
+if [ -z "$boot_phasezero_efi" ] || [ "$boot_phasezero_efi" = "missing" ]; then
+    add_item "BOOTREC02" "low" "UUID-based PhaseZero standalone EFI fallback not installed" "sudo linux/pz boot install-efi-fallback"
+elif [[ "$boot_phasezero_efi" == permission-denied* ]]; then
+    add_item "BOOTREC04" "low" "EFI fallback status needs privileged verification" "sudo linux/pz boot status"
+fi
+if [ "$boot_active_efi_prefix" = "dangerous" ]; then
+    add_item "BOOTEFI01" "high" "Active EFI GRUB loader has dangerous disk-order prefix" "sudo linux/pz boot install-efi-fallback --active --fallback"
+elif [ "$boot_active_efi_prefix" = "permission-denied" ]; then
+    add_item "BOOTEFI02" "low" "Active EFI GRUB prefix needs privileged verification" "sudo linux/pz boot status"
+fi
+if [ -z "$boot_safe_menu_profile" ] || [ "$boot_safe_menu_profile" = "missing" ]; then
+    add_item "BOOTMENU01" "medium" "GRUB menu is not forced visible with a safe timeout for Steam Deck selection" "sudo linux/pz boot install-safe-menu"
+elif [[ "$boot_safe_menu_profile" == permission-denied* ]]; then
+    add_item "BOOTMENU02" "low" "GRUB safe menu profile needs privileged verification" "sudo linux/pz boot status"
+fi
+if [ "$boot_emergency_entry" = "installed" ]; then
+    add_item "BOOTREC03" "medium" "Temporary emergency shell GRUB entry still installed" "sudo linux/pz boot emergency-shell clear"
+fi
 
 # Development profile gaps
 if missing_any_command go; then

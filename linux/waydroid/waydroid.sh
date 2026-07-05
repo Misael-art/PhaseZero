@@ -33,6 +33,7 @@ GRUB_SCRIPT="/etc/grub.d/44_phasezero_waydroid"
 GRUB_CFG="/boot/grub/grub.cfg"
 SDDM_CONF="/etc/sddm.conf.d/92-phasezero-waydroid.conf"
 BOOT_ENTRY="PhaseZero Waydroid"
+BOOT_ID="phasezero-waydroid"
 
 DRY_RUN="${PZ_DRY_RUN:-0}"
 JSON_OUT=0
@@ -602,17 +603,38 @@ need_root_action() {
     return 1
 }
 
+parse_boot_common_args() {
+    local parsed=()
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --target-root)
+                [ -n "${2:-}" ] || { pz_error "--target-root requires a path"; return 1; }
+                export PZ_BOOT_TARGET_ROOT="$2"
+                shift 2
+                ;;
+            --target-root=*)
+                export PZ_BOOT_TARGET_ROOT="${1#*=}"
+                shift
+                ;;
+            *)
+                parsed+=("$1")
+                shift
+                ;;
+        esac
+    done
+    PZ_BOOT_PARSED_ARGS=("${parsed[@]}")
+}
+
 latest_kernel_version() {
-    find /boot -maxdepth 1 -type f -name 'vmlinuz-*' -printf '%f\n' 2>/dev/null |
-        sort -V | tail -1 | sed 's/^vmlinuz-//'
+    pz_boot_latest_kernel_version
 }
 
 root_uuid() {
-    findmnt -no UUID / 2>/dev/null | head -1
+    pz_boot_root_uuid
 }
 
 root_subvol() {
-    findmnt -no OPTIONS / 2>/dev/null | tr ',' '\n' | awk -F= '$1 == "subvol" {print $2; exit}'
+    pz_boot_root_subvol
 }
 
 session_desktop_content() {
@@ -679,7 +701,7 @@ grub_script_content() {
 #!/usr/bin/env bash
 exec tail -n +3 "\$0"
 # PhaseZero managed GRUB entry. Re-run linux/pz waydroid boot install after kernel changes.
-menuentry '$BOOT_ENTRY' --class android --class gnu-linux --class gnu --class os {
+menuentry '$BOOT_ENTRY' --id='$BOOT_ID' --hotkey=a --class android --class gnu-linux --class gnu --class os {
     insmod part_gpt
     insmod btrfs
     search --no-floppy --fs-uuid --set=root $uuid
@@ -691,11 +713,7 @@ EOF
 }
 
 refresh_grub_config() {
-    if command -v update-grub >/dev/null 2>&1; then
-        update-grub
-    else
-        grub-mkconfig -o "$GRUB_CFG"
-    fi
+    pz_boot_refresh_grub_config "$GRUB_CFG"
 }
 
 grub_cfg_entry_state() {
@@ -710,6 +728,10 @@ grub_cfg_entry_state() {
 
 install_boot() {
     need_root
+    pz_boot_require_current_root_target
+    pz_boot_preflight_grub
+    pz_boot_validate_active_efi_safe
+    pz_boot_backup_bundle "waydroid-boot-install"
     effective_config
     install -d /usr/local/lib/phasezero /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
     install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
@@ -728,11 +750,17 @@ install_boot() {
     systemctl daemon-reload
     systemctl enable phasezero-waydroid-boot-prepare.service >/dev/null
     refresh_grub_config
+    pz_boot_validate_grub_cfg_safe "$GRUB_CFG"
+    pz_boot_validate_active_efi_safe
     pz_info "PhaseZero Waydroid GRUB boot entry installed"
 }
 
 remove_boot() {
     need_root
+    pz_boot_require_current_root_target
+    pz_boot_preflight_grub
+    pz_boot_validate_active_efi_safe
+    pz_boot_backup_bundle "waydroid-boot-remove"
     systemctl disable phasezero-waydroid-boot-prepare.service >/dev/null 2>&1 || true
     rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$WAYLAND_SESSION_FILE" "$XSESSION_FILE" "$BOOT_HELPER_TARGET" "$SESSION_TARGET" "$ROOT_ENV_FILE"
     if [ -f "$SDDM_CONF" ] && grep -q 'PhaseZero managed' "$SDDM_CONF" 2>/dev/null; then
@@ -740,6 +768,8 @@ remove_boot() {
     fi
     systemctl daemon-reload
     refresh_grub_config
+    pz_boot_validate_grub_cfg_safe "$GRUB_CFG"
+    pz_boot_validate_active_efi_safe
     pz_info "PhaseZero Waydroid GRUB boot entry removed"
 }
 
@@ -763,10 +793,11 @@ ensure_boot_entry_ready() {
 }
 
 set_next_boot_root() {
+    pz_boot_require_current_root_target
     command -v grub-reboot >/dev/null 2>&1 || { pz_error "grub-reboot missing"; return 1; }
     ensure_boot_entry_ready
-    grub-reboot "$BOOT_ENTRY"
-    pz_info "next boot set to: $BOOT_ENTRY"
+    grub-reboot "$BOOT_ID"
+    pz_info "next boot set to: $BOOT_ENTRY ($BOOT_ID)"
     pz_info "run: systemctl reboot"
 }
 
@@ -786,8 +817,8 @@ set_default_boot() {
     need_root_action set-default
     command -v grub-set-default >/dev/null 2>&1 || { pz_error "grub-set-default missing"; return 1; }
     ensure_boot_entry_ready
-    grub-set-default "$BOOT_ENTRY"
-    pz_warn "permanent GRUB default set to: $BOOT_ENTRY"
+    grub-set-default "$BOOT_ID"
+    pz_warn "permanent GRUB default set to: $BOOT_ENTRY ($BOOT_ID)"
 }
 
 clear_next_boot() {
@@ -816,7 +847,10 @@ status_boot() {
     [ -f "$SDDM_CONF" ] && echo "active_sddm_waydroid_conf: yes" || echo "active_sddm_waydroid_conf: no"
     echo "current_boot_waydroid: $cmdline_marker"
     echo "target_user: $TARGET_USER"
+    echo "target_root: $(pz_boot_target_root)"
     echo "session: phasezero-waydroid.desktop"
+    echo "grub_entry_id: $BOOT_ID"
+    echo "grub_hotkey: a"
     echo "recommended_direct_boot: sudo $PZ_ROOT/linux/waydroid/waydroid.sh boot next-reboot"
 }
 
@@ -830,11 +864,15 @@ dry_run_boot() {
     echo "  root_uuid: $(root_uuid || true)"
     echo "  kernel: $(latest_kernel_version || true)"
     echo "  session: phasezero-waydroid.desktop"
+    echo "  grub entry id: $BOOT_ID"
+    echo "  grub hotkey: a (keyboard only; Steam Deck controls remain firmware-dependent)"
     echo "  one-shot boot: sudo $PZ_ROOT/linux/waydroid/waydroid.sh boot next"
     echo "  one-shot reboot: sudo $PZ_ROOT/linux/waydroid/waydroid.sh boot next-reboot"
 }
 
 cmd_boot() {
+    parse_boot_common_args "$@"
+    set -- "${PZ_BOOT_PARSED_ARGS[@]}"
     local sub="${1:-status}"
     [ $# -gt 0 ] && shift || true
     case "$sub" in

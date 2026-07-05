@@ -2,6 +2,7 @@
 node_modules/
 __pycache__/
 *.pyc
+src-tauri/target/
 
 # Ignore logs
 *.log
