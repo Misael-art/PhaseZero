@@ -244,6 +244,16 @@ elif jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and
 else
     check WINVM06 "Windows VM direct GRUB boot installed" WARN "run: sudo linux/windows-vm/windows-vm.sh boot install"
 fi
+if jq -e '.access.shareLinksReady == true and .access.sambaManaged == true and .access.sambaReachable == true' <<< "$winvm_status" >/dev/null 2>&1; then
+    check WINVM09 "Windows host storage shares ready" PASS "$(jq -r '.access.shares | join(", ")' <<< "$winvm_status")"
+else
+    check WINVM09 "Windows host storage shares ready" WARN "run: phasezero-admin linux/pz windows-vm shares install"
+fi
+if jq -e '.access.usbMode == "redir" and .access.usbRedirChannels > 0' <<< "$winvm_status" >/dev/null 2>&1; then
+    check WINVM10 "Windows USB redirection ready" PASS "$(jq -r '.access.usbRedirChannels|tostring' <<< "$winvm_status") SPICE channels"
+else
+    check WINVM10 "Windows USB redirection ready" WARN "run: phasezero-admin linux/pz windows-vm shares repair"
+fi
 
 header "Waydroid"
 waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"
@@ -293,6 +303,11 @@ if jq -e '.android.lxcPostStopHookSafe == true' <<< "$waydroid_status" >/dev/nul
     check WAYDROID09 "Waydroid LXC stop hook" PASS "executable no-op hook"
 else
     check WAYDROID09 "Waydroid LXC stop hook" WARN "run: sudo linux/waydroid/waydroid.sh repair"
+fi
+if jq -e '.access.sharesHelperInstalled == true and .access.sharesReady == true and .access.mountCount > 0 and .access.usbBusShared == true' <<< "$waydroid_status" >/dev/null 2>&1; then
+    check WAYDROID10 "Waydroid host storage and USB shares ready" PASS "$(jq -r '.access.mountCount|tostring' <<< "$waydroid_status") managed mounts"
+else
+    check WAYDROID10 "Waydroid host storage and USB shares ready" WARN "run: phasezero-admin linux/pz waydroid shares install"
 fi
 
 header "Emulation"
@@ -530,6 +545,17 @@ if jq -e '.desktopApps.codexDesktop.guardEnabled == true and .desktopApps.update
     check AI_DESKTOP_UPDATE_TIMER "AI desktop automatic updates enabled" PASS "user timer + Codex guard"
 else
     check AI_DESKTOP_UPDATE_TIMER "AI desktop automatic updates enabled" WARN "run: linux/pz ai desktop install-services"
+fi
+
+# OpenCode CLI must stay in version lockstep with opencode-desktop (they share
+# one SQLite DB); a skew crashes the older one on the migrated schema.
+oc_ver_status="$(bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status 2>/dev/null || echo '{}')"
+if jq -e '.desktop != null' <<< "$oc_ver_status" >/dev/null 2>&1; then
+    if jq -e '.inSync == true' <<< "$oc_ver_status" >/dev/null 2>&1; then
+        check AI_OPENCODE_SYNC "OpenCode CLI/desktop in lockstep" PASS "$(jq -r '.cli' <<< "$oc_ver_status") == desktop"
+    else
+        check AI_OPENCODE_SYNC "OpenCode CLI/desktop in lockstep" WARN "CLI $(jq -r '.cli // "none"' <<< "$oc_ver_status") vs desktop $(jq -r '.desktop' <<< "$oc_ver_status"); run: linux/pz ai opencode sync"
+    fi
 fi
 
 # oh-my-openagent (OMO) is an opt-in OpenCode plugin; report state without

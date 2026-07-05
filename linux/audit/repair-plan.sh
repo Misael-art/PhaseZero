@@ -189,6 +189,9 @@ fi
 if ! jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and (.boot.grubCfgEntry == "present" or .boot.grubCfgEntry == "unknown-permission")' <<< "$winvm_status" >/dev/null 2>&1; then
     add_item "WINVM03" "medium" "Windows VM direct boot missing or stale" "sudo linux/windows-vm/windows-vm.sh boot install"
 fi
+if ! jq -e '.access.shareLinksReady == true and .access.sambaManaged == true and .access.sambaReachable == true and .access.usbMode == "redir" and .access.usbRedirChannels > 0' <<< "$winvm_status" >/dev/null 2>&1; then
+    add_item "WINVM05" "high" "Windows VM host storage or USB redirection is incomplete" "phasezero-admin linux/pz windows-vm shares install"
+fi
 
 # Waydroid
 waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"
@@ -209,6 +212,9 @@ if ! jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and
 fi
 if ! jq -e '.android.lxcPostStopHookSafe == true' <<< "$waydroid_status" >/dev/null 2>&1; then
     add_item "WAYDROID06" "medium" "Waydroid LXC post-stop hook is not executable" "sudo linux/waydroid/waydroid.sh repair"
+fi
+if ! jq -e '.access.sharesHelperInstalled == true and .access.sharesReady == true and .access.mountCount > 0 and .access.usbBusShared == true' <<< "$waydroid_status" >/dev/null 2>&1; then
+    add_item "WAYDROID07" "high" "Waydroid host storage or USB bus access is incomplete" "phasezero-admin linux/pz waydroid shares install"
 fi
 
 # Emulation stack
@@ -329,11 +335,17 @@ if ! jq -e '.clis.opencode.available == true' <<< "$ai_status" >/dev/null 2>&1; 
     add_item "AI03" "medium" "OpenCode CLI missing" "linux/pz ai setup opencode"
 fi
 
+# OpenCode CLI/desktop version skew corrupts the shared DB for the older one.
+oc_ver_repair="$(bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status 2>/dev/null || echo '{}')"
+if jq -e '.desktop != null and .inSync == false' <<< "$oc_ver_repair" >/dev/null 2>&1; then
+    add_item "AI17" "high" "OpenCode CLI ($(jq -r '.cli // "none"' <<< "$oc_ver_repair")) and desktop ($(jq -r '.desktop' <<< "$oc_ver_repair")) versions differ; shared DB skew breaks the CLI" "linux/pz ai opencode sync"
+fi
+
 # oh-my-openagent: only flag the broken half-installed state (plugin registered
 # but its bun runtime absent); never nag to install an opt-in agent framework.
 omo_repair_status="$(bash "$PZ_ROOT/linux/ai/setup-omo.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.plugin.registered == true and .bun.present == false' <<< "$omo_repair_status" >/dev/null 2>&1; then
-    add_item "AI16" "medium" "oh-my-openagent plugin registered but bun runtime missing (OpenCode cannot load it)" "linux/pz ai setup omo"
+    add_item "AI18" "medium" "oh-my-openagent plugin registered but bun runtime missing (OpenCode cannot load it)" "linux/pz ai setup omo"
 fi
 
 if ! jq -e '.clis.claude.available == true' <<< "$ai_status" >/dev/null 2>&1; then

@@ -8,6 +8,9 @@ OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.jsonc"
 NPM_PREFIX="${PZ_NPM_PREFIX:-$HOME/.local/share/npm}"
 LOCAL_BIN="${PZ_LOCAL_BIN:-$HOME/.local/bin}"
 APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+OPENCODE_DB="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/opencode.db"
+SYNC_HOOK_FILE="/etc/pacman.d/hooks/phasezero-opencode-sync.hook"
+SYNC_HOOK_SCRIPT="/usr/local/lib/phasezero/opencode-sync-hook"
 
 # Terminals whose OSC 52 clipboard write works out of the box, preference order.
 # kitty first: it also implements text-input-v3, which KWin needs to surface the
@@ -30,27 +33,181 @@ opencode_npm_managed() {
     [ -x "$NPM_PREFIX/bin/opencode" ]
 }
 
-install_or_update_opencode() {
-    if opencode_npm_managed; then
-        pz_info "updating npm-managed opencode in $NPM_PREFIX"
-        npm install -g --prefix "$NPM_PREFIX" opencode-ai@latest
-    elif command -v opencode >/dev/null 2>&1; then
-        pz_info "opencode managed outside npm prefix ($(command -v opencode)); update it via the system package manager"
-    else
-        mkdir -p "$NPM_PREFIX"
-        pz_info "installing opencode-ai into user npm prefix: $NPM_PREFIX"
-        npm install -g --prefix "$NPM_PREFIX" opencode-ai@latest
-        export PATH="$NPM_PREFIX/bin:$PATH"
-        command -v opencode &>/dev/null || pz_warn "opencode installed but not on PATH; add $NPM_PREFIX/bin"
-    fi
-}
-
 link_managed_bin() {
     local command_name="$1" source_path="$2"
     [ -x "$source_path" ] || return 0
     mkdir -p "$LOCAL_BIN"
     ln -sfn "$source_path" "$LOCAL_BIN/$command_name"
     pz_info "linked $command_name into $LOCAL_BIN"
+}
+
+# --- version orchestration (CLI <-> desktop lockstep) ------------------------
+#
+# The opencode CLI and opencode-desktop share one SQLite DB
+# (~/.local/share/opencode/opencode.db). Its schema is migrated forward by
+# whichever binary is newest. If the CLI and desktop drift apart, the older one
+# crashes on the migrated schema (e.g. `no such column: replacement_seq`).
+#
+# Guarantee: pin the CLI to the *exact* desktop version. Newer would migrate the
+# DB and break the desktop; older breaks the CLI. We install the CLI from npm
+# into the user prefix and link it into ~/.local/bin, which precedes /usr/bin on
+# PATH, so it shadows any system (pacman) opencode without root.
+
+version_of() { grep -oE '[0-9]+\.[0-9]+\.[0-9]+' <<< "${1:-}" | head -1; }
+
+opencode_cli_version() {
+    command -v opencode >/dev/null 2>&1 || return 0
+    version_of "$(opencode --version 2>/dev/null)"
+}
+
+opencode_cli_path() { command -v opencode 2>/dev/null || true; }
+
+opencode_desktop_version() {
+    command -v pacman >/dev/null 2>&1 || return 0
+    version_of "$(pacman -Q opencode-desktop-bin 2>/dev/null)"
+}
+
+cli_is_managed() {
+    local cp; cp="$(opencode_cli_path)"
+    [ -n "$cp" ] || return 1
+    [ "$(readlink -f "$cp" 2>/dev/null)" = "$(readlink -f "$NPM_PREFIX/bin/opencode" 2>/dev/null)" ]
+}
+
+resolve_cli_target() {
+    if [ -n "${PZ_OPENCODE_VERSION:-}" ]; then printf '%s\n' "$PZ_OPENCODE_VERSION"; return 0; fi
+    local dv; dv="$(opencode_desktop_version)"
+    if [ -n "$dv" ]; then printf '%s\n' "$dv"; return 0; fi
+    local cv; cv="$(opencode_cli_version)"
+    if [ -n "$cv" ]; then printf '%s\n' "$cv"; return 0; fi
+    printf 'latest\n'
+}
+
+backup_opencode_db() {
+    [ -f "$OPENCODE_DB" ] || return 0
+    local bak="${OPENCODE_DB}.pz-bak"
+    # Root is btrfs here: reflink is an instant COW copy that costs no space
+    # until the files diverge. Fall back to a plain copy elsewhere.
+    if cp --reflink=auto -f "$OPENCODE_DB" "$bak" 2>/dev/null || cp -f "$OPENCODE_DB" "$bak" 2>/dev/null; then
+        pz_info "backed up opencode.db -> $bak"
+    fi
+}
+
+align_cli_to() {
+    local target="$1" current
+    current="$(opencode_cli_version)"
+
+    if [ "$current" = "$target" ] && cli_is_managed; then
+        pz_info "opencode CLI already pinned to $target (managed)"
+        return 0
+    fi
+
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_info "dry-run: would pin opencode CLI to $target via npm and link into $LOCAL_BIN"
+        return 0
+    fi
+
+    pz_check_deps npm
+    backup_opencode_db
+    mkdir -p "$NPM_PREFIX"
+    pz_info "pinning opencode CLI to $target (npm user prefix, shadows system opencode)"
+    if ! npm install -g --prefix "$NPM_PREFIX" "opencode-ai@$target"; then
+        pz_error "npm install opencode-ai@$target failed"
+        return 1
+    fi
+    link_managed_bin opencode "$NPM_PREFIX/bin/opencode"
+    hash -r 2>/dev/null || true
+
+    local resolved; resolved="$(opencode_cli_version)"
+    if [ "$resolved" = "$target" ] && cli_is_managed; then
+        pz_info "opencode CLI now $resolved (in lockstep with desktop/target)"
+    elif [ "$resolved" = "$target" ]; then
+        pz_info "opencode CLI resolves to $resolved"
+    else
+        pz_warn "opencode CLI resolves to ${resolved:-none}, not $target: $LOCAL_BIN may sit behind /usr/bin on PATH."
+        pz_warn "managed binary is $NPM_PREFIX/bin/opencode; ensure $LOCAL_BIN precedes /usr/bin, or remove the system opencode package."
+    fi
+}
+
+opencode_sync() {
+    local dv; dv="$(opencode_desktop_version)"
+    # A lone system CLI with no desktop cannot skew; leave it untouched unless a
+    # version is explicitly requested or the CLI is already npm-managed.
+    if [ -z "$dv" ] && [ -z "${PZ_OPENCODE_VERSION:-}" ] && ! cli_is_managed && command -v opencode >/dev/null 2>&1; then
+        pz_info "no opencode-desktop and CLI is system-managed; no lockstep needed"
+        return 0
+    fi
+    local target; target="$(resolve_cli_target)"
+    if [ -n "$dv" ]; then
+        pz_info "opencode-desktop $dv present; aligning CLI to it (shared DB: $OPENCODE_DB)"
+    fi
+    align_cli_to "$target"
+}
+
+opencode_version_status() {
+    local cv dv cp target insync=true
+    cv="$(opencode_cli_version)"; dv="$(opencode_desktop_version)"
+    cp="$(opencode_cli_path)"; target="$(resolve_cli_target)"
+    [ -n "$dv" ] && { [ "$cv" = "$dv" ] && insync=true || insync=false; }
+    jq -n \
+        --arg cli "$cv" --arg cliPath "$cp" --arg desktop "$dv" \
+        --arg target "$target" --arg db "$OPENCODE_DB" \
+        --argjson managed "$(cli_is_managed && echo true || echo false)" \
+        --argjson inSync "$insync" \
+        --argjson dbPresent "$([ -f "$OPENCODE_DB" ] && echo true || echo false)" \
+        --argjson hook "$([ -f "$SYNC_HOOK_FILE" ] && echo true || echo false)" \
+        '{
+            tool: "opencode-version",
+            cli: (if $cli == "" then null else $cli end),
+            cliPath: (if $cliPath == "" then null else $cliPath end),
+            cliManaged: $managed,
+            desktop: (if $desktop == "" then null else $desktop end),
+            target: $target,
+            inSync: $inSync,
+            autoSyncHook: $hook,
+            db: {path: $db, present: $dbPresent}
+        }'
+}
+
+install_sync_hook() {
+    local user; user="$(id -un)"
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_info "dry-run: would install pacman hook re-pinning the CLI after opencode/opencode-desktop-bin upgrades"
+        return 0
+    fi
+    local tmp_script tmp_hook
+    tmp_script="$(mktemp)"; tmp_hook="$(mktemp)"
+    cat > "$tmp_script" <<EOF
+#!/usr/bin/env bash
+# PhaseZero: keep the opencode CLI pinned to the opencode-desktop version.
+# Installed by linux/ai/setup-opencode.sh install-hook.
+exec runuser -l "$user" -c 'bash "$PZ_ROOT/linux/ai/setup-opencode.sh" sync'
+EOF
+    cat > "$tmp_hook" <<EOF
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = opencode
+Target = opencode-desktop-bin
+
+[Action]
+Description = PhaseZero: re-pin opencode CLI to the opencode-desktop version
+When = PostTransaction
+Exec = $SYNC_HOOK_SCRIPT
+EOF
+    if admin_run install -Dm755 "$tmp_script" "$SYNC_HOOK_SCRIPT" &&
+        admin_run install -Dm644 "$tmp_hook" "$SYNC_HOOK_FILE"; then
+        pz_info "installed opencode auto-sync pacman hook ($SYNC_HOOK_FILE)"
+    else
+        pz_warn "could not install pacman hook (needs root); run manually: linux/pz ai opencode sync after opencode updates"
+    fi
+    rm -f "$tmp_script" "$tmp_hook"
+}
+
+remove_sync_hook() {
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then pz_info "dry-run: would remove opencode auto-sync pacman hook"; return 0; fi
+    admin_run rm -f "$SYNC_HOOK_FILE" "$SYNC_HOOK_SCRIPT" 2>/dev/null || true
+    pz_info "removed opencode auto-sync pacman hook (if present)"
 }
 
 find_osc52_terminal() {
@@ -191,12 +348,27 @@ case "${1:-setup}" in
     setup)
         pz_check_deps npm jq
         setup_templates
-        install_or_update_opencode
-        link_managed_bin opencode "$NPM_PREFIX/bin/opencode"
+        # Orchestrated CLI install: when a desktop is present, pin the CLI to
+        # its exact version so the shared DB never skews; otherwise install/keep
+        # a working CLI.
+        opencode_sync
         ensure_clipboard_stack
         write_deck_launcher
         bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync opencode >/dev/null || pz_warn "OpenCode MCP sync failed"
         pz_info "OpenCode setup complete. Config at $OPENCODE_CONFIG"
+        ;;
+    sync|align)
+        # Re-pin the CLI to the opencode-desktop version (idempotent).
+        opencode_sync
+        ;;
+    version-status|version)
+        opencode_version_status
+        ;;
+    install-hook)
+        install_sync_hook
+        ;;
+    remove-hook)
+        remove_sync_hook
         ;;
     desktop-integration)
         # launcher + desktop entry only; no package installs, no npm, no MCP sync
@@ -207,7 +379,7 @@ case "${1:-setup}" in
         print_dry_run
         ;;
     *)
-        pz_error "usage: setup-opencode.sh (setup|desktop-integration|dry-run)"
+        pz_error "usage: setup-opencode.sh (setup|sync|version-status|install-hook|remove-hook|desktop-integration|dry-run)"
         exit 1
         ;;
 esac

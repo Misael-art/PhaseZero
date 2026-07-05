@@ -114,6 +114,7 @@ Usage:
   pz ai compat status          Check RTK/Caveman/Headroom/ai-memory agent runtime
   pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
+  pz ai opencode <action>      OpenCode CLI<->desktop version lockstep (sync|status|install-hook)
   pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|all)
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
@@ -300,6 +301,17 @@ cmd_ai() {
         omo|openagent|oh-my-openagent)
             shift
             bash "$PZ_ROOT/linux/ai/setup-omo.sh" "${@:-status}"
+            ;;
+        opencode)
+            shift
+            case "${1:-version-status}" in
+                sync|align) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" sync ;;
+                status|version-status) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status ;;
+                install-hook) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" install-hook ;;
+                remove-hook) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" remove-hook ;;
+                setup) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" setup ;;
+                *) pz_error "usage: pz ai opencode (sync|status|install-hook|remove-hook|setup)"; return 1 ;;
+            esac
             ;;
         doctor)
             bash "$PZ_ROOT/linux/ai/mcp-manager.sh" doctor

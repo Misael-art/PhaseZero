@@ -94,6 +94,12 @@ if [ -f "$XDG_CONFIG_HOME/opencode/opencode.jsonc" ]; then
 fi
 "$REPO_ROOT/linux/pz" ai omo status | jq -e '.tool == "omo"' >/dev/null
 
+# OpenCode CLI<->desktop version lockstep: status contract + dry-run safety.
+"$REPO_ROOT/linux/ai/setup-opencode.sh" version-status | jq -e '.tool == "opencode-version" and (.inSync | type == "boolean") and (.cliManaged | type == "boolean") and (.autoSyncHook | type == "boolean")' >/dev/null
+PZ_DRY_RUN=1 "$REPO_ROOT/linux/ai/setup-opencode.sh" sync >/dev/null
+PZ_DRY_RUN=1 "$REPO_ROOT/linux/ai/setup-opencode.sh" install-hook >/dev/null
+"$REPO_ROOT/linux/pz" ai opencode status | jq -e '.tool == "opencode-version"' >/dev/null
+
 "$REPO_ROOT/linux/ai/setup-memory.sh" dry-run | jq -e '.tool == "ai-memory"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-usagebar.sh" dry-run | jq -e '.tool == "ai-usagebar"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-hermes.sh" dry-run | jq -e '.tool == "hermes"' >/dev/null
