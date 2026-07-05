@@ -195,7 +195,7 @@ waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null
 if ! jq -e '.host.waydroid != "" and (.host.cage != "" or .host.kwinWayland != "" or .host.weston != "")' <<< "$waydroid_status" >/dev/null 2>&1; then
     add_item "WAYDROID01" "medium" "Waydroid host packages or compositor missing" "linux/pz install waydroid-linux --dry-run"
 fi
-if ! jq -e '.host.binderFilesystem == true and .host.binderDevices == true' <<< "$waydroid_status" >/dev/null 2>&1; then
+if ! jq -e '.host.binderFilesystem == true and .host.binderDevices == true and .host.binderMounted == true' <<< "$waydroid_status" >/dev/null 2>&1; then
     add_item "WAYDROID02" "medium" "Waydroid binder runtime not ready" "sudo linux/waydroid/waydroid.sh repair"
 fi
 if ! jq -e '.android.serviceEnabled == "enabled" or .android.serviceActive == "active"' <<< "$waydroid_status" >/dev/null 2>&1; then
@@ -204,8 +204,11 @@ fi
 if ! jq -e '.android.initialized == true' <<< "$waydroid_status" >/dev/null 2>&1; then
     add_item "WAYDROID04" "medium" "Waydroid Android image not initialized" "sudo linux/waydroid/waydroid.sh repair --init"
 fi
-if ! jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.grubCfgEntry == "present"' <<< "$waydroid_status" >/dev/null 2>&1; then
-    add_item "WAYDROID05" "low" "Optional direct GRUB boot into Waydroid not installed" "sudo linux/waydroid/waydroid.sh boot install"
+if ! jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and (.boot.grubCfgEntry == "present" or .boot.grubCfgEntry == "unknown-permission")' <<< "$waydroid_status" >/dev/null 2>&1; then
+    add_item "WAYDROID05" "medium" "Waydroid direct boot missing or stale" "sudo linux/waydroid/waydroid.sh boot install"
+fi
+if ! jq -e '.android.lxcPostStopHookSafe == true' <<< "$waydroid_status" >/dev/null 2>&1; then
+    add_item "WAYDROID06" "medium" "Waydroid LXC post-stop hook is not executable" "sudo linux/waydroid/waydroid.sh repair"
 fi
 
 # Emulation stack

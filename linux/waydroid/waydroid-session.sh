@@ -2,12 +2,41 @@
 # waydroid-session.sh - resilient kiosk session launcher for Waydroid
 set -euo pipefail
 
-ENV_FILE="/etc/phasezero/waydroid.env"
+ENV_FILE="${PZ_WAYDROID_ENV_FILE:-/etc/phasezero/waydroid.env}"
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 
-PZ_WAYDROID_REPO="${PZ_WAYDROID_REPO:-/mnt/sdcard/Projects/PhaseZero}"
-SESSION_TARGET="/usr/local/lib/phasezero/waydroid-session"
-[ -x "$SESSION_TARGET" ] || SESSION_TARGET="$PZ_WAYDROID_REPO/linux/waydroid/waydroid-session.sh"
+CONFIGURED_REPO="${PZ_WAYDROID_REPO:-}"
+PZ_WAYDROID_REPO_FALLBACK="${PZ_WAYDROID_REPO_FALLBACK:-/mnt/sdcard/Projects/PhaseZero}"
+SESSION_TARGET="${PZ_WAYDROID_SESSION_TARGET:-/usr/local/lib/phasezero/waydroid-session}"
+
+resolve_session_target() {
+    local candidate
+    [ -x "$SESSION_TARGET" ] && return 0
+    for candidate in \
+        "$CONFIGURED_REPO" \
+        "$PZ_WAYDROID_REPO_FALLBACK" \
+        "$HOME/Projects/PhaseZero" \
+        "$HOME/PhaseZero"; do
+        [ -n "$candidate" ] || continue
+        if [ -x "$candidate/linux/waydroid/waydroid-session.sh" ]; then
+            PZ_WAYDROID_REPO="$candidate"
+            SESSION_TARGET="$candidate/linux/waydroid/waydroid-session.sh"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolve_session_target || true
+
+if [ "${1:-}" = "--validate" ]; then
+    [ -x "$SESSION_TARGET" ] && command -v waydroid >/dev/null 2>&1 || {
+        printf 'waydroid_session_ready=no configured_repo=%s target=%s\n' "${CONFIGURED_REPO:-missing}" "$SESSION_TARGET"
+        exit 1
+    }
+    printf 'waydroid_session_ready=yes configured_repo=%s target=%s\n' "${CONFIGURED_REPO:-missing}" "$SESSION_TARGET"
+    exit 0
+fi
 
 export XDG_CURRENT_DESKTOP="${XDG_CURRENT_DESKTOP:-PhaseZeroWaydroid}"
 export XDG_SESSION_DESKTOP="${XDG_SESSION_DESKTOP:-phasezero-waydroid}"
@@ -24,10 +53,8 @@ log() {
 }
 
 fallback_desktop() {
+    waydroid session stop >> "$LOG_FILE" 2>&1 || true
     log "falling back to desktop"
-    if [ -x /usr/bin/startkde-biglinux ]; then
-        exec /usr/bin/startkde-biglinux wayland
-    fi
     if command -v startplasma-wayland >/dev/null 2>&1; then
         exec startplasma-wayland
     fi
@@ -39,10 +66,14 @@ fallback_desktop() {
     exit 1
 }
 
+session_is_running() {
+    waydroid status 2>/dev/null | grep -Eq '^Session:[[:space:]]*RUNNING$'
+}
+
 wait_for_waydroid() {
     local i
-    for i in $(seq 1 30); do
-        waydroid status >/dev/null 2>&1 && return 0
+    for i in $(seq 1 60); do
+        session_is_running && return 0
         sleep 1
     done
     return 1
@@ -57,13 +88,22 @@ start_waydroid_session() {
         log "Waydroid image not initialized"
         fallback_desktop
     fi
+    if session_is_running; then
+        log "reusing running Waydroid session"
+        return 0
+    fi
+    waydroid session stop >> "$LOG_FILE" 2>&1 || true
     waydroid session start >> "$LOG_FILE" 2>&1 &
-    wait_for_waydroid || log "waydroid status did not become ready before UI launch"
+    if ! wait_for_waydroid; then
+        log "Waydroid session did not reach RUNNING state"
+        return 1
+    fi
+    log "Waydroid session reached RUNNING state"
 }
 
 run_waydroid_ui_loop() {
     local max="${PZ_WAYDROID_SESSION_RESTARTS:-3}" attempt=0 rc=0
-    start_waydroid_session
+    start_waydroid_session || fallback_desktop
     while :; do
         attempt=$((attempt + 1))
         log "starting Waydroid full UI attempt=$attempt"

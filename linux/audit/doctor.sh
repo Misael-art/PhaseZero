@@ -257,10 +257,10 @@ if jq -e '.host.binderFilesystem == true' <<< "$waydroid_status" >/dev/null 2>&1
 else
     check WAYDROID02 "Binder filesystem available" WARN "load binder_linux or use a kernel with binder support"
 fi
-if jq -e '.host.binderDevices == true' <<< "$waydroid_status" >/dev/null 2>&1; then
+if jq -e '.host.binderDevices == true and .host.binderMounted == true' <<< "$waydroid_status" >/dev/null 2>&1; then
     check WAYDROID03 "Binder devices mounted" PASS "binder device present"
 else
-    check WAYDROID03 "Binder devices mounted" INFO "run: sudo linux/waydroid/waydroid.sh repair"
+    check WAYDROID03 "Binder devices mounted" WARN "run: sudo linux/waydroid/waydroid.sh repair"
 fi
 if jq -e '.host.cage != "" or .host.kwinWayland != "" or .host.weston != ""' <<< "$waydroid_status" >/dev/null 2>&1; then
     check WAYDROID04 "Wayland kiosk compositor available" PASS "cage/kwin/weston"
@@ -282,10 +282,17 @@ if jq -e '.android.resumablePrefetch == true' <<< "$waydroid_status" >/dev/null 
 else
     check WAYDROID08 "Waydroid image download resilience" WARN "reinstall current Waydroid automation"
 fi
-if jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.grubCfgEntry == "present"' <<< "$waydroid_status" >/dev/null 2>&1; then
-    check WAYDROID07 "Waydroid direct GRUB boot installed" PASS "one-shot boot ready"
+if jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and .boot.grubCfgEntry == "present"' <<< "$waydroid_status" >/dev/null 2>&1; then
+    check WAYDROID07 "Waydroid direct GRUB boot installed" PASS "boot artifacts current"
+elif jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and .boot.grubCfgEntry == "unknown-permission"' <<< "$waydroid_status" >/dev/null 2>&1; then
+    check WAYDROID07 "Waydroid direct GRUB boot installed" INFO "artifacts current; generated GRUB entry needs privileged verification"
 else
-    check WAYDROID07 "Waydroid direct GRUB boot installed" INFO "optional: sudo linux/waydroid/waydroid.sh boot install"
+    check WAYDROID07 "Waydroid direct GRUB boot installed" WARN "run: sudo linux/waydroid/waydroid.sh boot install"
+fi
+if jq -e '.android.lxcPostStopHookSafe == true' <<< "$waydroid_status" >/dev/null 2>&1; then
+    check WAYDROID09 "Waydroid LXC stop hook" PASS "executable no-op hook"
+else
+    check WAYDROID09 "Waydroid LXC stop hook" WARN "run: sudo linux/waydroid/waydroid.sh repair"
 fi
 
 header "Emulation"

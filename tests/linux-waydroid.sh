@@ -32,6 +32,45 @@ grep -q -- "--hotkey=a" "$REPO_ROOT/linux/waydroid/waydroid.sh"
 grep -q 'grub-reboot "$BOOT_ID"' "$REPO_ROOT/linux/waydroid/waydroid.sh"
 target_status="$("$REPO_ROOT/linux/pz" waydroid boot --target-root / status)"
 grep -q 'target_root: /' <<< "$target_status"
+grep -q 'artifacts_current:' <<< "$target_status"
+
+stale_env="$TMP_ROOT/waydroid-stale.env"
+cat > "$stale_env" <<EOF
+PZ_WAYDROID_REPO=/phasezero-live
+PZ_WAYDROID_BOOT_USER=biglinux
+EOF
+fake_bin="$TMP_ROOT/bin"
+mkdir -p "$fake_bin"
+cat > "$fake_bin/waydroid" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$fake_bin/waydroid"
+session_validation="$(
+    PATH="$fake_bin:$PATH" \
+    PZ_WAYDROID_ENV_FILE="$stale_env" \
+    PZ_WAYDROID_REPO_FALLBACK="$REPO_ROOT" \
+    PZ_WAYDROID_SESSION_TARGET="$REPO_ROOT/linux/waydroid/waydroid-session.sh" \
+    "$REPO_ROOT/linux/waydroid/waydroid-session.sh" --validate
+)"
+grep -q 'waydroid_session_ready=yes' <<< "$session_validation"
+! grep -q 'startkde-biglinux' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+grep -q 'session_is_running' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+
+sddm_test_dir="$TMP_ROOT/sddm"
+PZ_BOOT_CMDLINE='quiet phasezero.waydroid=1' \
+PZ_SDDM_CONF_DIR="$sddm_test_dir" \
+PZ_WAYDROID_BOOT_USER=tester \
+PZ_WAYDROID_SKIP_RUNTIME=1 \
+    "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
+grep -q '^User=tester$' "$sddm_test_dir/92-phasezero-waydroid.conf"
+grep -q '^Session=phasezero-waydroid.desktop$' "$sddm_test_dir/92-phasezero-waydroid.conf"
+PZ_BOOT_CMDLINE='quiet splash' \
+PZ_SDDM_CONF_DIR="$sddm_test_dir" \
+PZ_WAYDROID_SKIP_RUNTIME=1 \
+    "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
+test ! -e "$sddm_test_dir/92-phasezero-waydroid.conf"
+
 PZ_DRY_RUN=1 "$REPO_ROOT/linux/pz" waydroid optimize >/dev/null
 launch_output="$("$REPO_ROOT/linux/pz" waydroid launch --dry-run)"
 grep -q 'Waydroid launcher dry-run' <<< "$launch_output"

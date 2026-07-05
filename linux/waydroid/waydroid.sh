@@ -34,6 +34,9 @@ GRUB_CFG="/boot/grub/grub.cfg"
 SDDM_CONF="/etc/sddm.conf.d/92-phasezero-waydroid.conf"
 BOOT_ENTRY="PhaseZero Waydroid"
 BOOT_ID="phasezero-waydroid"
+BINDERFS_DIR="${PZ_WAYDROID_BINDERFS_DIR:-/dev/binderfs}"
+LXC_CONFIG_BASE="${PZ_WAYDROID_LXC_CONFIG_BASE:-/usr/lib/waydroid/data/configs/config_base}"
+LXC_CONFIG="${PZ_WAYDROID_LXC_CONFIG:-/var/lib/waydroid/lxc/waydroid/config}"
 
 DRY_RUN="${PZ_DRY_RUN:-0}"
 JSON_OUT=0
@@ -216,7 +219,20 @@ binder_filesystem_available() {
 }
 
 binder_devices_available() {
-    [ -e /dev/binder ] || [ -e /dev/binderfs/binder ] || [ -e /dev/vndbinder ] || [ -e /dev/hwbinder ]
+    [ -e /dev/binder ] || [ -e "$BINDERFS_DIR/binder" ] || [ -e /dev/vndbinder ] || [ -e /dev/hwbinder ]
+}
+
+binder_runtime_mounted() {
+    mountpoint -q "$BINDERFS_DIR" 2>/dev/null
+}
+
+lxc_post_stop_hook_safe() {
+    local file
+    for file in "$LXC_CONFIG_BASE" "$LXC_CONFIG"; do
+        [ -f "$file" ] || continue
+        grep -Fqx 'lxc.hook.post-stop = /dev/null' "$file" && return 1
+    done
+    return 0
 }
 
 waydroid_initialized() {
@@ -288,10 +304,33 @@ ensure_binder_runtime() {
         return 0
     fi
     modprobe binder_linux devices="binder,hwbinder,vndbinder" >/dev/null 2>&1 || true
-    if [ ! -d /dev/binderfs ] && binder_filesystem_available; then
-        install -d /dev/binderfs
-        mount -t binder binder /dev/binderfs >/dev/null 2>&1 || true
+    if binder_filesystem_available; then
+        install -d "$BINDERFS_DIR"
+        if ! binder_runtime_mounted; then
+            mount -t binder binder "$BINDERFS_DIR" >/dev/null 2>&1 ||
+                pz_warn "failed to mount binder filesystem at $BINDERFS_DIR"
+        fi
     fi
+    binder_devices_available || pz_warn "binder device missing after runtime setup"
+}
+
+repair_lxc_post_stop_hook() {
+    if [ "$DRY_RUN" = "1" ]; then
+        pz_info "dry-run: would repair non-executable Waydroid LXC post-stop hook"
+        return 0
+    fi
+    if [ "$EUID" -ne 0 ]; then
+        pz_warn "Waydroid LXC hook repair requires root; skipped"
+        return 0
+    fi
+    local file
+    for file in "$LXC_CONFIG_BASE" "$LXC_CONFIG"; do
+        [ -f "$file" ] || continue
+        if grep -Fqx 'lxc.hook.post-stop = /dev/null' "$file"; then
+            sed -i 's|^lxc\.hook\.post-stop = /dev/null$|lxc.hook.post-stop = /usr/bin/true|' "$file"
+            pz_info "repaired Waydroid LXC post-stop hook: $file"
+        fi
+    done
 }
 
 ensure_waydroid_service() {
@@ -457,6 +496,7 @@ cmd_repair() {
     install_user_files
     apply_host_optimizations
     ensure_binder_runtime
+    repair_lxc_post_stop_hook
     ensure_waydroid_service
     maybe_init_waydroid
 }
@@ -485,8 +525,8 @@ cmd_launch() {
 
 status_json() {
     effective_config
-    local config="no" waydroid_bin cage_bin weston_bin kwin_bin dbus_bin binder_fs="no" binder_dev="no" initialized="no"
-    local waydroid_active waydroid_enabled boot_helper="no" session_launcher="no" boot_service="no" boot_grub current_marker="no"
+    local config="no" waydroid_bin cage_bin weston_bin kwin_bin dbus_bin binder_fs="no" binder_dev="no" binder_mounted="no" initialized="no" lxc_hook_safe="no"
+    local waydroid_active waydroid_enabled boot_helper="no" session_launcher="no" boot_service="no" boot_current="no" boot_grub current_marker="no"
     [ -f "$CONFIG_FILE" ] && config="yes"
     waydroid_bin="$(command_path waydroid)"
     cage_bin="$(command_path cage)"
@@ -495,12 +535,15 @@ status_json() {
     dbus_bin="$(command_path dbus-run-session)"
     binder_filesystem_available && binder_fs="yes"
     binder_devices_available && binder_dev="yes"
+    binder_runtime_mounted && binder_mounted="yes"
+    lxc_post_stop_hook_safe && lxc_hook_safe="yes"
     waydroid_initialized && initialized="yes"
     waydroid_active="$(service_state waydroid-container active)"
     waydroid_enabled="$(service_state waydroid-container enabled)"
     [ -x "$BOOT_HELPER_TARGET" ] && boot_helper="yes"
     [ -x "$SESSION_TARGET" ] && session_launcher="yes"
     [ -f "$SERVICE_FILE" ] && boot_service="yes"
+    boot_artifacts_current && boot_current="yes"
     boot_grub="$(grub_cfg_entry_state)"
     grep -qw 'phasezero.waydroid=1' /proc/cmdline 2>/dev/null && current_marker="yes"
     jq -n \
@@ -513,6 +556,8 @@ status_json() {
         --arg dbus "$dbus_bin" \
         --arg binderFs "$binder_fs" \
         --arg binderDev "$binder_dev" \
+        --arg binderMounted "$binder_mounted" \
+        --arg lxcHookSafe "$lxc_hook_safe" \
         --arg initialized "$initialized" \
         --arg serviceActive "$waydroid_active" \
         --arg serviceEnabled "$waydroid_enabled" \
@@ -524,6 +569,9 @@ status_json() {
         --arg bootHelper "$boot_helper" \
         --arg sessionLauncher "$session_launcher" \
         --arg bootService "$boot_service" \
+        --arg bootArtifactsCurrent "$boot_current" \
+        --arg bootConfiguredRepo "$(root_env_value PZ_WAYDROID_REPO)" \
+        --arg bootConfiguredUser "$(root_env_value PZ_WAYDROID_BOOT_USER)" \
         --arg grubEntry "$boot_grub" \
         --arg currentMarker "$current_marker" \
         '{
@@ -535,7 +583,8 @@ status_json() {
                 kwinWayland: $kwin,
                 dbusRunSession: $dbus,
                 binderFilesystem: ($binderFs == "yes"),
-                binderDevices: ($binderDev == "yes")
+                binderDevices: ($binderDev == "yes"),
+                binderMounted: ($binderMounted == "yes")
             },
             android: {
                 initialized: ($initialized == "yes"),
@@ -545,12 +594,16 @@ status_json() {
                 restartAttempts: ($restartAttempts|tonumber),
                 initAttempts: ($initAttempts|tonumber),
                 resumablePrefetch: ($prefetchImages == "1"),
-                preinstalledDir: $preinstalledDir
+                preinstalledDir: $preinstalledDir,
+                lxcPostStopHookSafe: ($lxcHookSafe == "yes")
             },
             boot: {
                 helperInstalled: ($bootHelper == "yes"),
                 sessionLauncherInstalled: ($sessionLauncher == "yes"),
                 serviceInstalled: ($bootService == "yes"),
+                artifactsCurrent: ($bootArtifactsCurrent == "yes"),
+                configuredRepo: $bootConfiguredRepo,
+                configuredUser: $bootConfiguredUser,
                 grubCfgEntry: $grubEntry,
                 currentBootWaydroid: ($currentMarker == "yes")
             }
@@ -649,17 +702,44 @@ EOF
 }
 
 root_env_content() {
-    cat <<EOF
-# PhaseZero managed Waydroid boot environment
-PZ_WAYDROID_REPO=$PZ_ROOT
-PZ_WAYDROID_BOOT_USER=$TARGET_USER
-PZ_WAYDROID_IMAGE_TYPE=$IMAGE_TYPE
-PZ_WAYDROID_SESSION_RESTARTS=$SESSION_RESTARTS
-PZ_WAYDROID_INIT_ATTEMPTS=$INIT_ATTEMPTS
-PZ_WAYDROID_PREFETCH_IMAGES=$PREFETCH_IMAGES
-PZ_WAYDROID_PREINSTALLED_DIR=$PREINSTALLED_DIR
-PZ_WAYDROID_OPTIMIZE=$OPTIMIZE_HOST
-EOF
+    printf '%s\n' '# PhaseZero managed Waydroid boot environment'
+    printf 'PZ_WAYDROID_REPO=%q\n' "$PZ_ROOT"
+    printf 'PZ_WAYDROID_BOOT_USER=%q\n' "$TARGET_USER"
+    printf 'PZ_WAYDROID_IMAGE_TYPE=%q\n' "$IMAGE_TYPE"
+    printf 'PZ_WAYDROID_SESSION_RESTARTS=%q\n' "$SESSION_RESTARTS"
+    printf 'PZ_WAYDROID_INIT_ATTEMPTS=%q\n' "$INIT_ATTEMPTS"
+    printf 'PZ_WAYDROID_PREFETCH_IMAGES=%q\n' "$PREFETCH_IMAGES"
+    printf 'PZ_WAYDROID_PREINSTALLED_DIR=%q\n' "$PREINSTALLED_DIR"
+    printf 'PZ_WAYDROID_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
+}
+
+root_env_value() {
+    local name="$1"
+    [ -r "$ROOT_ENV_FILE" ] || return 0
+    (
+        set +u
+        . "$ROOT_ENV_FILE"
+        printf '%s\n' "${!name:-}"
+    )
+}
+
+boot_artifacts_current() {
+    [ -x "$BOOT_HELPER_TARGET" ] &&
+        [ -x "$SESSION_TARGET" ] &&
+        [ -f "$SERVICE_FILE" ] &&
+        [ -f "$WAYLAND_SESSION_FILE" ] &&
+        [ -f "$XSESSION_FILE" ] &&
+        [ -f "$ROOT_ENV_FILE" ] &&
+        [ -x "$GRUB_SCRIPT" ] || return 1
+    cmp -s "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
+    cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
+    [ "$(root_env_value PZ_WAYDROID_REPO)" = "$PZ_ROOT" ] || return 1
+    [ "$(root_env_value PZ_WAYDROID_BOOT_USER)" = "$TARGET_USER" ] || return 1
+    grep -Fqx "Exec=$SESSION_TARGET" "$WAYLAND_SESSION_FILE" || return 1
+    grep -Fqx "Exec=$SESSION_TARGET" "$XSESSION_FILE" || return 1
+    grep -Fqx "ExecStart=$BOOT_HELPER_TARGET" "$SERVICE_FILE" || return 1
+    grep -Fq "phasezero.waydroid=1" "$GRUB_SCRIPT" || return 1
+    grep -Fq -- "--id='$BOOT_ID'" "$GRUB_SCRIPT" || return 1
 }
 
 boot_service_content() {
@@ -746,12 +826,17 @@ install_boot() {
     grub_script_content > "$GRUB_SCRIPT"
     chmod 0755 "$GRUB_SCRIPT"
     ensure_binder_runtime
+    repair_lxc_post_stop_hook
     ensure_waydroid_service
     systemctl daemon-reload
     systemctl enable phasezero-waydroid-boot-prepare.service >/dev/null
     refresh_grub_config
     pz_boot_validate_grub_cfg_safe "$GRUB_CFG"
     pz_boot_validate_active_efi_safe
+    boot_artifacts_current || {
+        pz_error "Waydroid boot artifact validation failed after install"
+        return 1
+    }
     pz_info "PhaseZero Waydroid GRUB boot entry installed"
 }
 
@@ -775,8 +860,8 @@ remove_boot() {
 
 ensure_boot_entry_ready() {
     local state
-    if [ ! -x "$BOOT_HELPER_TARGET" ] || [ ! -x "$GRUB_SCRIPT" ]; then
-        pz_warn "Waydroid GRUB boot files incomplete; reinstalling"
+    if ! boot_artifacts_current; then
+        pz_warn "Waydroid GRUB boot files missing or stale; reinstalling"
         install_boot
         return 0
     fi
@@ -829,8 +914,9 @@ clear_next_boot() {
 }
 
 status_boot() {
-    local grub_next_entry="" grub_saved_entry="" cmdline_marker="no"
+    local grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
     grep -qw 'phasezero.waydroid=1' /proc/cmdline 2>/dev/null && cmdline_marker="yes"
+    boot_artifacts_current && artifacts_current="yes"
     if command -v grub-editenv >/dev/null 2>&1; then
         grub_next_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}')"
         grub_saved_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "saved_entry" {print $2; exit}')"
@@ -841,6 +927,9 @@ status_boot() {
     [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
     systemctl is-enabled phasezero-waydroid-boot-prepare.service 2>/dev/null || true
     [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
+    echo "artifacts_current: $artifacts_current"
+    echo "configured_repo: $(root_env_value PZ_WAYDROID_REPO)"
+    echo "configured_boot_user: $(root_env_value PZ_WAYDROID_BOOT_USER)"
     echo "grub_cfg_entry: $(grub_cfg_entry_state)"
     echo "grub_next_entry: ${grub_next_entry:-none}"
     echo "grub_saved_entry: ${grub_saved_entry:-none}"
