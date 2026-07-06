@@ -296,6 +296,11 @@ class LaunchBoxContext:
         self.data_dir = self.launchbox_root / "Data"
         self.emulators_xml = self.data_dir / "Emulators.xml"
         self.parents_xml = self.data_dir / "Parents.xml"
+        self.import_report = self.phasezero_dir / "esde-import.json"
+        self.installer = env_path(
+            "PZ_LAUNCHBOX_INSTALLER",
+            str(self.launchbox_root / "_hidden" / "_hidden" / "LaunchBox-13.5-Setup.exe"),
+        )
 
 
 def backup_path(path: Path, ctx: LaunchBoxContext, label: str) -> Path:
@@ -813,6 +818,36 @@ def compat_tree_status(ctx: LaunchBoxContext) -> dict[str, int]:
     return {"managedAliases": managed_aliases, "links": links, "mediaLinks": media_links}
 
 
+def import_status(ctx: LaunchBoxContext) -> dict[str, object]:
+    if not ctx.import_report.is_file():
+        return {"exists": False, "path": str(ctx.import_report)}
+    try:
+        data = json.loads(ctx.import_report.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"exists": True, "valid": False, "path": str(ctx.import_report)}
+    return {
+        "exists": True,
+        "valid": True,
+        "path": str(ctx.import_report),
+        "platforms": int(data.get("platforms", 0)),
+        "games": int(data.get("games", 0)),
+        "mediaLinks": int(data.get("mediaLinks", 0)),
+        "romLinks": int(data.get("romLinks", 0)),
+    }
+
+
+def installer_status(ctx: LaunchBoxContext) -> dict[str, object]:
+    exists = ctx.installer.is_file()
+    size = ctx.installer.stat().st_size if exists else 0
+    return {
+        "path": str(ctx.installer),
+        "exists": exists,
+        "size": size,
+        "validSize": size >= 250 * 1024 * 1024,
+        "expectedVersion": "13.5",
+    }
+
+
 def run(action: str, json_output: bool) -> int:
     ctx = LaunchBoxContext()
     apply = action in {"apply", "integrate", "repair"}
@@ -835,6 +870,8 @@ def run(action: str, json_output: bool) -> int:
         "batWrappers": write_bat_wrappers(ctx, apply),
         "emulatorsXml": update_emulators_xml(ctx, apply),
         "launchboxData": launchbox_data,
+        "esdeImport": import_status(ctx),
+        "installer": installer_status(ctx),
         "compatTree": compat_tree_status(ctx),
         "paths": sample_path_status(ctx),
     }
@@ -844,6 +881,13 @@ def run(action: str, json_output: bool) -> int:
         print("=== LaunchBox Integration ===")
         print(f"  root: {data['launchboxRoot']}")
         print(f"  installed: {data['installed']}")
+        imported = data["esdeImport"]
+        if imported.get("valid"):
+            print(
+                "  ES-DE import: "
+                f"{imported['platforms']} platforms, {imported['games']} games, "
+                f"{imported['mediaLinks']} media links"
+            )
         print(f"  compat ROMs: {data['compatRoms']}")
         print(f"  aliases: {data['aliasesResolved']} resolved, {len(data['aliasesUnresolved'])} unresolved")
         tree = data["compatTree"]

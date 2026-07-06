@@ -283,6 +283,38 @@
       "module": "emulation"
     },
     {
+      "name": "emulation.launchbox.status",
+      "label": "Status LaunchBox",
+      "command": "bash linux/emulation/launchbox.sh status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.launchbox.install-clean",
+      "label": "Instalar LaunchBox 13.5",
+      "command": "bash linux/emulation/launchbox.sh install-clean",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.launchbox.import-esde",
+      "label": "Sincronizar LaunchBox com ES-DE",
+      "command": "bash linux/emulation/launchbox.sh import-esde",
+      "mutable": true,
+      "require_plan": true,
+      "module": "emulation"
+    },
+    {
+      "name": "emulation.launchbox.verify",
+      "label": "Testar LaunchBox e Big Box",
+      "command": "bash linux/emulation/launchbox.sh verify --real",
+      "mutable": false,
+      "require_plan": false,
+      "module": "emulation"
+    },
+    {
       "name": "emulation.retrodeck.status",
       "label": "Status ecossistema RetroDECK",
       "command": "bash linux/emulation/retrodeck.sh status",

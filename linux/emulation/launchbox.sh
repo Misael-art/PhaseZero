@@ -10,6 +10,9 @@ PZ_LAUNCHBOX_ROOT="${PZ_LAUNCHBOX_ROOT:-$PZ_EMULATION_ROOT/tools/launchers/Launc
 PZ_LAUNCHBOX_WINEPREFIX="${PZ_LAUNCHBOX_WINEPREFIX:-$PZ_LAUNCHBOX_ROOT/.phasezero/wineprefix}"
 PZ_LAUNCHBOX_COMPAT_ROMS="${PZ_LAUNCHBOX_COMPAT_ROMS:-$PZ_EMULATION_ROOT/tools/launchers/Roms}"
 PZ_LAUNCHBOX_SCRIPT="$PZ_ROOT/linux/emulation/launchbox.py"
+PZ_LAUNCHBOX_IMPORTER="$PZ_ROOT/linux/emulation/launchbox_import.py"
+PZ_LAUNCHBOX_INSTALLER="${PZ_LAUNCHBOX_INSTALLER:-$PZ_LAUNCHBOX_ROOT/_hidden/_hidden/LaunchBox-13.5-Setup.exe}"
+PZ_LAUNCHBOX_LOCK="${XDG_RUNTIME_DIR:-/tmp}/phasezero-launchbox-install.lock"
 PZ_LAUNCHBOX_WRAPPER="$PZ_LOCAL_BIN/phasezero-launchbox"
 PZ_BIGBOX_WRAPPER="$PZ_LOCAL_BIN/phasezero-bigbox"
 PZ_LAUNCHBOX_DESKTOP="$PZ_DESKTOP_DIR/phasezero-launchbox.desktop"
@@ -75,6 +78,83 @@ launchbox_install_fonts() {
             /usr/share/fonts/noto/NotoSans-Regular.ttf; do
             [ -f "$font" ] && cp -f "$font" "$PZ_LAUNCHBOX_WINEPREFIX/drive_c/windows/Fonts/" || true
         done
+    fi
+}
+
+launchbox_install_runtime_dependencies() {
+    [ "${PZ_LAUNCHBOX_SKIP_RUNTIME:-0}" = "1" ] && return 0
+    command -v winetricks >/dev/null 2>&1 || {
+        pz_error "winetricks missing; clean LaunchBox runtime cannot be prepared"
+        return 1
+    }
+    local verb
+    for verb in corefonts dotnet48 d3dcompiler_47 vcrun2022 dxvk; do
+        pz_info "LaunchBox Wine dependency: $verb"
+        timeout "${PZ_LAUNCHBOX_WINETRICKS_TIMEOUT:-30m}" \
+            env WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX" WINEDEBUG=-all \
+            winetricks -q "$verb" >/dev/null || {
+                pz_error "winetricks failed: $verb"
+                return 1
+            }
+    done
+}
+
+launchbox_validate_installer() {
+    local installer="${1:-$PZ_LAUNCHBOX_INSTALLER}"
+    python3 - "$installer" <<'PY'
+import hashlib
+import json
+import struct
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(f"LaunchBox 13.5 installer missing: {path}")
+if path.name != "LaunchBox-13.5-Setup.exe":
+    raise SystemExit(f"unexpected installer name/version: {path.name}")
+size = path.stat().st_size
+if size < 250 * 1024 * 1024:
+    raise SystemExit(f"LaunchBox 13.5 installer invalid: {size} bytes (expected >250 MiB)")
+with path.open("rb") as stream:
+    if stream.read(2) != b"MZ":
+        raise SystemExit("LaunchBox installer is not a PE executable")
+    stream.seek(0x3C)
+    pe_offset = struct.unpack("<I", stream.read(4))[0]
+    stream.seek(pe_offset)
+    if stream.read(4) != b"PE\0\0":
+        raise SystemExit("LaunchBox installer has an invalid PE header")
+    stream.seek(pe_offset + 24)
+    magic = struct.unpack("<H", stream.read(2))[0]
+    data_offset = 112 if magic == 0x20B else 96 if magic == 0x10B else 0
+    if not data_offset:
+        raise SystemExit("LaunchBox installer has an unsupported PE format")
+    stream.seek(pe_offset + 24 + data_offset + (8 * 4))
+    certificate_offset, certificate_size = struct.unpack("<II", stream.read(8))
+    if not certificate_offset or certificate_size < 8:
+        raise SystemExit("LaunchBox installer has no Authenticode certificate table")
+digest = hashlib.sha256()
+with path.open("rb") as stream:
+    for block in iter(lambda: stream.read(1024 * 1024), b""):
+        digest.update(block)
+print(json.dumps({
+    "path": str(path),
+    "size": size,
+    "sha256": digest.hexdigest(),
+    "authenticodeTable": True,
+    "expectedVersion": "13.5",
+}))
+PY
+    if command -v osslsigncode >/dev/null 2>&1; then
+        osslsigncode verify -in "$installer" >/dev/null || {
+            pz_error "LaunchBox installer Authenticode verification failed"
+            return 1
+        }
+    elif [ "${PZ_LAUNCHBOX_ALLOW_UNVERIFIED_SIGNATURE:-0}" != "1" ]; then
+        pz_error "osslsigncode missing; Authenticode chain cannot be verified"
+        return 1
+    else
+        pz_warn "Authenticode chain verification explicitly bypassed"
     fi
 }
 
@@ -222,8 +302,22 @@ EOF
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
 }
 
+launchbox_data_valid() {
+    python3 - "$PZ_LAUNCHBOX_ROOT" <<'PY' >/dev/null 2>&1
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+root = Path(sys.argv[1])
+for relative in ("Data/Platforms.xml", "Data/Parents.xml", "Data/Emulators.xml"):
+    ET.parse(root / relative)
+PY
+}
+
 cmd_integrate() {
     [ -f "$PZ_LAUNCHBOX_ROOT/LaunchBox.exe" ] || { pz_error "LaunchBox.exe not found: $PZ_LAUNCHBOX_ROOT"; return 1; }
+    [ -f "$PZ_LAUNCHBOX_ROOT/BigBox.exe" ] || { pz_error "BigBox.exe not found: $PZ_LAUNCHBOX_ROOT"; return 1; }
+    launchbox_data_valid || { pz_error "LaunchBox Data XML missing or invalid; use install-clean/import-esde"; return 1; }
     pz_emulation_abort_if_frontend_running
     pz_emulation_ensure_layout
     bash "$PZ_ROOT/linux/emulation/shared-content.sh" repair >/dev/null || pz_warn "shared-content repair reported warnings"
@@ -235,6 +329,193 @@ cmd_integrate() {
     launchbox_write_wrappers
     launchbox_write_desktop_entries
     pz_info "LaunchBox integrated: $PZ_LAUNCHBOX_ROOT"
+}
+
+cmd_import_esde() {
+    [ -f "$PZ_LAUNCHBOX_ROOT/LaunchBox.exe" ] || {
+        pz_error "valid LaunchBox installation required before ES-DE import"
+        return 1
+    }
+    pz_emulation_abort_if_frontend_running
+    local backup="$PZ_LAUNCHBOX_ROOT/.phasezero/backups/Data.$(date +%Y%m%d-%H%M%S)"
+    install -d "$(dirname "$backup")"
+    [ ! -d "$PZ_LAUNCHBOX_ROOT/Data" ] || mv "$PZ_LAUNCHBOX_ROOT/Data" "$backup"
+    if ! python3 "$PZ_LAUNCHBOX_IMPORTER" import-esde "$@"; then
+        rm -rf "$PZ_LAUNCHBOX_ROOT/Data"
+        [ ! -d "$backup" ] || mv "$backup" "$PZ_LAUNCHBOX_ROOT/Data"
+        pz_error "ES-DE import failed; previous LaunchBox Data restored"
+        return 1
+    fi
+    launchbox_python repair >/dev/null
+    launchbox_apply_bigbox_safe_settings
+    launchbox_write_wrappers
+    launchbox_write_desktop_entries
+}
+
+launchbox_verify_structure() {
+    [ -s "$PZ_LAUNCHBOX_ROOT/LaunchBox.exe" ] || { pz_error "LaunchBox.exe missing"; return 1; }
+    [ -s "$PZ_LAUNCHBOX_ROOT/BigBox.exe" ] || { pz_error "BigBox.exe missing"; return 1; }
+    [ -f "$PZ_LAUNCHBOX_ROOT/.phasezero/esde-import.json" ] || {
+        pz_error "ES-DE import report missing"
+        return 1
+    }
+    python3 - "$PZ_LAUNCHBOX_ROOT" <<'PY'
+import json
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+root = Path(sys.argv[1])
+report = json.loads((root / ".phasezero/esde-import.json").read_text(encoding="utf-8"))
+if report.get("games", 0) < 1 or report.get("platforms", 0) < 1:
+    raise SystemExit("LaunchBox ES-DE import is empty")
+for path in [
+    root / "Data/Platforms.xml",
+    root / "Data/Parents.xml",
+    root / "Data/Emulators.xml",
+    *sorted((root / "Data/Platforms").glob("*.xml")),
+]:
+    ET.parse(path)
+print(json.dumps({
+    "installed": True,
+    "platforms": report["platforms"],
+    "games": report["games"],
+    "mediaLinks": report["mediaLinks"],
+}))
+PY
+}
+
+launchbox_verify_installed_version() {
+    [ "${PZ_LAUNCHBOX_SKIP_VERSION_CHECK:-0}" = "1" ] && return 0
+    local candidate
+    for candidate in "$PZ_LAUNCHBOX_ROOT/LaunchBox.exe" "$PZ_LAUNCHBOX_ROOT/Core/LaunchBox.dll"; do
+        [ -f "$candidate" ] || continue
+        if strings -a "$candidate" 2>/dev/null | grep -Eq '(^|[^0-9])13[.]5([.]0([.]0)?)?([^0-9]|$)'; then
+            return 0
+        fi
+        if strings -el "$candidate" 2>/dev/null | grep -Eq '(^|[^0-9])13[.]5([.]0([.]0)?)?([^0-9]|$)'; then
+            return 0
+        fi
+    done
+    pz_error "installed LaunchBox version 13.5 could not be confirmed"
+    return 1
+}
+
+launchbox_verify_visual() {
+    command -v xdotool >/dev/null 2>&1 || { pz_error "xdotool required for real BigBox verification"; return 1; }
+    command -v import >/dev/null 2>&1 || { pz_error "ImageMagick import required for real BigBox verification"; return 1; }
+    command -v identify >/dev/null 2>&1 || { pz_error "ImageMagick identify required for real BigBox verification"; return 1; }
+    launchbox_verify_visual_app "LaunchBox.exe" '^LaunchBox' "launchbox"
+    launchbox_verify_visual_app "BigBox.exe" 'Big Box\\|BigBox' "bigbox"
+}
+
+launchbox_verify_visual_app() {
+    local executable="$1" title_pattern="$2" label="$3"
+    local shot="${TMPDIR:-/tmp}/phasezero-${label}-verify-$$.png"
+    local pid window variance
+    launchbox_prepare_wine_runtime
+    (
+        cd "$PZ_LAUNCHBOX_ROOT"
+        wine "$PZ_LAUNCHBOX_ROOT/$executable"
+    ) >"/tmp/phasezero-${label}-verify.log" 2>&1 &
+    pid=$!
+    window=""
+    for _ in $(seq 1 90); do
+        window="$(xdotool search --onlyvisible --name "$title_pattern" 2>/dev/null | tail -n 1 || true)"
+        [ -n "$window" ] && break
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 1
+    done
+    if [ -z "$window" ]; then
+        kill "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+        pz_error "$label visible window not found"
+        return 1
+    fi
+    import -window "$window" "$shot"
+    variance="$(identify -format '%[standard-deviation]' "$shot")"
+    python3 - "$variance" <<'PY'
+import sys
+if float(sys.argv[1]) < 0.01:
+    raise SystemExit("frontend screenshot is blank or effectively monochrome")
+PY
+    xdotool windowactivate "$window" key Right
+    sleep 2
+    kill "$pid" 2>/dev/null || true
+    wineserver -k >/dev/null 2>&1 || true
+    wait "$pid" 2>/dev/null || true
+    pz_info "$label visual verification passed: $shot"
+}
+
+cmd_verify() {
+    local real=0
+    [ "${1:-}" = "--real" ] && real=1
+    launchbox_verify_structure
+    [ "$real" = "0" ] || launchbox_verify_visual
+}
+
+cmd_install_clean() {
+    command -v flock >/dev/null 2>&1 || { pz_error "flock missing"; return 1; }
+    exec 9>"$PZ_LAUNCHBOX_LOCK"
+    flock -n 9 || { pz_error "another LaunchBox installation is running"; return 1; }
+    launchbox_validate_installer "$PZ_LAUNCHBOX_INSTALLER"
+    pz_emulation_abort_if_frontend_running
+    command -v wine >/dev/null 2>&1 || { pz_error "wine missing"; return 1; }
+
+    local active_root="$PZ_LAUNCHBOX_ROOT"
+    local active_prefix="$PZ_LAUNCHBOX_WINEPREFIX"
+    local parent stage backup windows_stage timestamp
+    parent="$(dirname "$active_root")"
+    timestamp="$(date +%Y%m%d-%H%M%S)"
+    stage="$parent/.LaunchBox.stage.$timestamp.$$"
+    backup="$parent/LaunchBox.preinstall.$timestamp"
+    install -d "$stage"
+
+    PZ_LAUNCHBOX_ROOT="$stage"
+    PZ_LAUNCHBOX_WINEPREFIX="$stage/.phasezero/wineprefix"
+    export PZ_LAUNCHBOX_ROOT PZ_LAUNCHBOX_WINEPREFIX
+    trap 'rm -rf "${stage:-}"' ERR INT TERM
+    launchbox_configure_wine
+    launchbox_install_runtime_dependencies
+    windows_stage="$(WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX" winepath -w "$stage")"
+    pz_info "Installing LaunchBox 13.5 into staging: $stage"
+    timeout "${PZ_LAUNCHBOX_SETUP_TIMEOUT:-30m}" \
+        env WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX" WINEDEBUG=-all \
+        wine "$PZ_LAUNCHBOX_INSTALLER" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=$windows_stage"
+    [ -s "$stage/LaunchBox.exe" ] && [ -s "$stage/BigBox.exe" ] || {
+        pz_error "LaunchBox setup completed without expected executables"
+        return 1
+    }
+    launchbox_verify_installed_version
+    install -D -m 0644 "$PZ_LAUNCHBOX_INSTALLER" \
+        "$stage/_hidden/_hidden/LaunchBox-13.5-Setup.exe"
+    [ -f "$active_root/License.xml" ] && cp -a "$active_root/License.xml" "$stage/"
+    [ -f "$active_root/BigBox.dxvk-cache" ] && cp -a "$active_root/BigBox.dxvk-cache" "$stage/"
+    python3 "$PZ_LAUNCHBOX_IMPORTER" import-esde
+    launchbox_apply_bigbox_safe_settings
+    launchbox_verify_structure
+    launchbox_verify_visual
+
+    PZ_LAUNCHBOX_ROOT="$active_root"
+    PZ_LAUNCHBOX_WINEPREFIX="$active_prefix"
+    export PZ_LAUNCHBOX_ROOT PZ_LAUNCHBOX_WINEPREFIX
+    mv "$active_root" "$backup"
+    if ! mv "$stage" "$active_root"; then
+        mv "$backup" "$active_root"
+        pz_error "LaunchBox promotion failed; previous root restored"
+        return 1
+    fi
+    trap - ERR INT TERM
+    launchbox_write_wrappers
+    launchbox_write_desktop_entries
+    bash "$PZ_ROOT/linux/emulation/frontends.sh" repair >/dev/null || pz_warn "frontend refresh reported warnings"
+    if ! cmd_verify; then
+        mv "$active_root" "$parent/LaunchBox.failed.$timestamp"
+        mv "$backup" "$active_root"
+        pz_error "post-promotion verification failed; previous root restored"
+        return 1
+    fi
+    pz_info "LaunchBox 13.5 clean install promoted. Previous root: $backup"
 }
 
 launchbox_clean_arg() {
@@ -315,10 +596,14 @@ launchbox_emulator_script() {
     case "$1" in
         azahar|citra) echo "$PZ_EMULATION_ROOT/tools/launchers/azahar.sh" ;;
         cemu) echo "$PZ_EMULATION_ROOT/tools/launchers/cemu.sh" ;;
+        dolphin|wii|gamecube) echo "$PZ_EMULATION_ROOT/tools/launchers/dolphin-emu.sh" ;;
+        flycast|dreamcast|naomi|atomiswave) echo "$PZ_EMULATION_ROOT/tools/launchers/flycast.sh" ;;
         citron) echo "$PZ_EMULATION_ROOT/tools/launchers/citron.sh" ;;
         duckstation|psx) echo "$PZ_EMULATION_ROOT/tools/launchers/duckstation.sh" ;;
         eden|yuzu|switch) echo "$PZ_EMULATION_ROOT/tools/launchers/eden.sh" ;;
         pcsx2|ps2) echo "$PZ_EMULATION_ROOT/tools/launchers/pcsx2-qt.sh" ;;
+        model2) echo "$PZ_EMULATION_ROOT/tools/launchers/model-2-emulator.sh" ;;
+        supermodel|model3) echo "$PZ_EMULATION_ROOT/tools/launchers/supermodel.sh" ;;
         retroarch) echo "$PZ_EMULATION_ROOT/tools/launchers/retroarch.sh" ;;
         rpcs3|ps3) echo "$PZ_EMULATION_ROOT/tools/launchers/rpcs3.sh" ;;
         ryujinx) echo "$PZ_EMULATION_ROOT/tools/launchers/ryujinx.sh" ;;
@@ -326,6 +611,54 @@ launchbox_emulator_script() {
         xemu|xbox) echo "$PZ_EMULATION_ROOT/tools/launchers/xemu-emu.sh" ;;
         xenia|xbox360) echo "$PZ_EMULATION_ROOT/tools/launchers/xenia.sh" ;;
         *) return 1 ;;
+    esac
+}
+
+cmd_system() {
+    local system="${1:-}" mode core rom launcher
+    [ -n "$system" ] || { pz_error "usage: launchbox.sh system <esde-system> <rom>"; return 1; }
+    shift || true
+    rom="$(launchbox_path_arg "${1:-}")"
+    case "$system" in
+        mastersystem|genesis|gamegear|megadrive) mode=retroarch; core=genesis_plus_gx ;;
+        sfc|snes|snesna) mode=retroarch; core=snes9x ;;
+        saturn|saturnjp) mode=retroarch; core=mednafen_saturn ;;
+        x68000) mode=retroarch; core=px68k ;;
+        sega32xna) mode=retroarch; core=picodrive ;;
+        neogeocdjp) mode=retroarch; core=neocd ;;
+        switch) mode=eden ;;
+        psx) mode=duckstation ;;
+        n3ds) mode=azahar ;;
+        ps2) mode=pcsx2 ;;
+        ps3) mode=rpcs3 ;;
+        wii) mode=dolphin ;;
+        wiiu) mode=cemu ;;
+        naomi|dreamcast|atomiswave) mode=flycast ;;
+        model2) mode=model2 ;;
+        model3) mode=supermodel ;;
+        steam|frontends|emulators) mode=shell ;;
+        *) pz_error "unsupported ES-DE system: $system"; return 1 ;;
+    esac
+    if [ "$mode" = "shell" ]; then
+        [ -e "$rom" ] || { pz_error "shell target missing: $rom"; return 1; }
+        case "$rom" in
+            *.desktop) exec gio launch "$rom" ;;
+            *) chmod +x "$rom" 2>/dev/null || true; exec "$rom" ;;
+        esac
+    fi
+    if [ "$mode" = "retroarch" ]; then
+        launcher="$PZ_EMULATION_ROOT/tools/launchers/retroarch.sh"
+        exec "$launcher" -L "$HOME/.var/app/org.libretro.RetroArch/config/retroarch/cores/${core}_libretro.so" "$rom"
+    fi
+    case "$mode" in
+        eden|azahar) cmd_game "$mode" -f -g "$rom" ;;
+        duckstation) cmd_game "$mode" -batch "$rom" ;;
+        pcsx2) cmd_game "$mode" -batch "$rom" ;;
+        rpcs3) cmd_game "$mode" --no-gui "$rom" ;;
+        dolphin) cmd_game "$mode" -b -e "$rom" ;;
+        cemu) cmd_game "$mode" -g "$rom" ;;
+        model2) cmd_game "$mode" "$(basename "${rom%.*}")" ;;
+        *) cmd_game "$mode" "$rom" ;;
     esac
 }
 
@@ -394,13 +727,17 @@ cmd_bigbox() {
 case "$ACTION" in
     status) shift || true; launchbox_python status "$@" ;;
     plan|dry-run) shift || true; launchbox_python plan "$@" ;;
-    integrate|apply|repair|install) cmd_integrate ;;
+    install-clean) shift || true; cmd_install_clean "$@" ;;
+    import-esde) shift || true; cmd_import_esde "$@" ;;
+    verify) shift || true; cmd_verify "$@" ;;
+    integrate|apply|repair) cmd_integrate ;;
     launch|open) shift || true; cmd_launch "$@" ;;
     bigbox|big-box) shift || true; cmd_bigbox "$@" ;;
     game) shift || true; cmd_game "$@" ;;
+    system) shift || true; cmd_system "$@" ;;
     frontend) shift || true; cmd_frontend "$@" ;;
     *)
-        pz_error "usage: launchbox.sh (status|plan|integrate|repair|launch|bigbox|game|frontend)"
+        pz_error "usage: launchbox.sh (status|plan|install-clean|import-esde|verify|repair|launch|bigbox|game|system|frontend)"
         exit 1
         ;;
 esac

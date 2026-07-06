@@ -102,6 +102,10 @@ Usage:
   pz emulation shortcuts repair Repair menu launchers and hide duplicates
    pz emulation launchbox status Audit LaunchBox portable/Wine integration
    pz emulation launchbox plan   Plan LaunchBox ROM/media/emulator bridges
+   pz emulation launchbox install-clean Install LaunchBox 13.5 in a fresh Wine prefix
+   pz emulation launchbox import-esde Rebuild LaunchBox library from ES-DE
+   pz emulation launchbox verify Verify LaunchBox data and executables
+   pz emulation launchbox verify --real Verify BigBox rendering on this host
    pz emulation launchbox repair Apply LaunchBox Wine, ROM, media and emulator bridges
    pz emulation frontends status Audit BigBox/Steam/ES-DE/SRM/Heroic switcher
    pz emulation frontends plan   Plan cross-frontend switcher integration
