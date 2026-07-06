@@ -153,6 +153,7 @@ $PZ_EMULATION_ROOT
 $PZ_EMULATION_ROOT/bios
 $PZ_EMULATION_ROOT/roms
 $PZ_EMULATION_ROOT/roms/switch
+$PZ_EMULATION_ROOT/roms/switch/nsp
 $PZ_EMULATION_ROOT/roms/psx
 $PZ_EMULATION_ROOT/roms/ps2
 $PZ_EMULATION_ROOT/roms/ps3
@@ -210,6 +211,7 @@ $PZ_EMULATION_ROOT/metadata/gamelists/steam
 $PZ_EMULATION_ROOT/metadata/pc-games
 $PZ_EMULATION_ROOT/metadata/frontends
 $PZ_EMULATION_ROOT/metadata/switch
+$PZ_EMULATION_ROOT/metadata/switch/nsz-conversions
 $PZ_EMULATION_ROOT/storage/pc-prefixes
 $PZ_EMULATION_ROOT/firmware
 $PZ_EMULATION_ROOT/firmware/ps3

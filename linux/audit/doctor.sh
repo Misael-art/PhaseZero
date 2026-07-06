@@ -557,6 +557,14 @@ if jq -e '.desktop != null' <<< "$oc_ver_status" >/dev/null 2>&1; then
         check AI_OPENCODE_SYNC "OpenCode CLI/desktop in lockstep" WARN "CLI $(jq -r '.cli // "none"' <<< "$oc_ver_status") vs desktop $(jq -r '.desktop' <<< "$oc_ver_status"); run: linux/pz ai opencode sync"
     fi
 fi
+# A model must be usable or opencode/desktop reply "Interrupted" to every prompt.
+if jq -e '.model != null' <<< "$oc_ver_status" >/dev/null 2>&1; then
+    if jq -e '.model.usable == true' <<< "$oc_ver_status" >/dev/null 2>&1; then
+        check AI_OPENCODE_MODEL "OpenCode has a usable model" PASS "$(jq -r 'if .model.hasCredentials then "cloud credentials" else "local Ollama provider" end' <<< "$oc_ver_status")"
+    else
+        check AI_OPENCODE_MODEL "OpenCode has a usable model" WARN "no provider — chats will be interrupted; run: opencode auth login, or linux/pz ai opencode local-model"
+    fi
+fi
 
 # oh-my-openagent (OMO) is an opt-in OpenCode plugin; report state without
 # requiring it (config-only status, no bunx spawn).

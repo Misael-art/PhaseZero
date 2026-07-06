@@ -23,6 +23,7 @@ case "$ACTION" in
         bash "$PZ_ROOT/linux/emulation/ps3.sh" configure
         bash "$PZ_ROOT/linux/emulation/performance.sh" apply
         bash "$PZ_ROOT/linux/emulation/steam-tools.sh" status
+        bash "$PZ_ROOT/linux/emulation/nsz.sh" install
         bash "$PZ_ROOT/linux/emulation/retrodeck.sh" integrate
         bash "$PZ_ROOT/linux/emulation/pc-games.sh" repair
         bash "$PZ_ROOT/linux/emulation/shortcuts.sh" repair
@@ -44,6 +45,7 @@ case "$ACTION" in
         bash "$PZ_ROOT/linux/emulation/ps3.sh" dry-run
         bash "$PZ_ROOT/linux/emulation/performance.sh" plan
         bash "$PZ_ROOT/linux/emulation/steam-tools.sh" dry-run
+        bash "$PZ_ROOT/linux/emulation/nsz.sh" plan
         bash "$PZ_ROOT/linux/emulation/retrodeck.sh" plan
         bash "$PZ_ROOT/linux/emulation/pc-games.sh" plan
         bash "$PZ_ROOT/linux/emulation/shortcuts.sh" plan

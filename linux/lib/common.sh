@@ -424,7 +424,18 @@ pz_run_profile() {
     local yay_pkgs
     yay_pkgs=$(jq -r '.packages.linux.yay // [] | .[]' "$profile_file" 2>/dev/null || true)
     local flatpak_pkgs
-    flatpak_pkgs=$(jq -r '.packages.linux.flatpak // [] | .[]' "$profile_file" 2>/dev/null || true)
+    flatpak_pkgs=$(jq -r '
+      if .packages.linux.flatpak | type == "object"
+      then .packages.linux.flatpak.packages // [] | .[]
+      else .packages.linux.flatpak // [] | .[]
+      end
+    ' "$profile_file" 2>/dev/null || true)
+    local flatpak_raw
+    flatpak_raw=$(jq -r '.packages.linux.flatpak // empty' "$profile_file" 2>/dev/null || true)
+    local flatpak_is_object=false
+    if [ -n "$flatpak_raw" ]; then
+        echo "$flatpak_raw" | jq -e '. | type == "object"' >/dev/null 2>&1 && flatpak_is_object=true
+    fi
     local scripts
     scripts=$(jq -r '.scripts.linux // [] | .[]' "$profile_file" 2>/dev/null || true)
     local system_services
@@ -460,6 +471,11 @@ pz_run_profile() {
         done <<< "$yay_pkgs"
     fi
 
+    if [ "$flatpak_is_object" = true ]; then
+        source "$PZ_ROOT/linux/lib/flatpak.sh"
+        PZ_DRY_RUN="$dry_run" pz_flatpak_setup_from_profile "$profile_file"
+    fi
+
     if [ -n "$flatpak_pkgs" ]; then
         [ "$dry_run" = "1" ] && pz_info "planning flatpak packages..." || pz_info "installing flatpak packages..."
         while IFS= read -r pkg; do
@@ -468,7 +484,11 @@ pz_run_profile() {
                 pz_info "would install flatpak package: $pkg"
                 continue
             fi
-            flatpak install -y flathub "$pkg"
+            local remote_name="flathub"
+            if [ "$flatpak_is_object" = true ]; then
+                remote_name=$(jq -r '.packages.linux.flatpak.remotes[0].name // "flathub"' "$profile_file" 2>/dev/null || echo "flathub")
+            fi
+            flatpak install -y "$remote_name" "$pkg"
             pz_rollback_register package "$pkg" ""
         done <<< "$flatpak_pkgs"
     fi

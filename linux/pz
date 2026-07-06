@@ -7,7 +7,7 @@ PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 source "$PZ_ROOT/linux/lib/pacman.sh"
 
-PZ_SUBCOMMANDS="install steamdeck windows-vm waydroid emulation boot ai doctor support-bundle repair-plan tune ui help version"
+PZ_SUBCOMMANDS="install steamdeck windows-vm waydroid emulation boot ai flatpak doctor support-bundle repair-plan tune ui help version"
 
 usage() {
     cat <<EOF
@@ -48,10 +48,19 @@ Usage:
   pz boot choose <choice>     Set one-shot boot: normal|steamos|windows|waydroid|emergency
   pz boot install-safe-menu   Make GRUB menu visible with safe timeout
   pz boot card                Print GRUB rescue commands for this host
-  pz boot install-card        Write GRUB rescue card to host and ESP
-  pz boot install-efi-fallback [--active] [--fallback] Install UUID-based standalone PhaseZero EFI
-  pz boot emergency-shell next One-shot boot into rescue.target
-  pz steamdeck launch-options List Steam launch option presets
+   pz boot install-card        Write GRUB rescue card to host and ESP
+   pz boot install-efi-fallback [--active] [--fallback] Install UUID-based standalone PhaseZero EFI
+   pz boot emergency-shell next One-shot boot into rescue.target
+   pz steamdeck launch-options List Steam launch option presets
+   pz flatpak status           Show flatpak status JSON
+   pz flatpak audit            Check for remote/override/runtime conflicts
+   pz flatpak audit --repair   Fix detected conflicts
+   pz flatpak remotes          List configured remotes
+   pz flatpak remote add <name> <url>  Add a remote
+   pz flatpak remote remove <name>     Remove a remote
+   pz flatpak overrides apply [--global|--app=<id>] [--steamdeck]  Apply gaming overrides
+   pz flatpak overrides remove [--global|--app=<id>]  Remove gaming overrides
+   pz flatpak steamdeck-compat Full Steam Deck flatpak compat setup
   pz emulation layout         Create shared Emulation folders
   pz emulation emudeck install Install EmuDeck AppImage launcher
   pz emulation eden install   Install Eden Steam Deck AppImage launcher
@@ -99,8 +108,13 @@ Usage:
    pz emulation frontends repair Apply cross-frontend switcher integration
    pz emulation fixes list      List friendly Linux emulation fixes
    pz emulation bios import <path> Import user-owned BIOS files from local path
-   pz emulation switch import-keys <path> Import user-owned Switch keys from local path
-   pz emulation switch import-firmware <path> Import user-owned Switch firmware from local path
+  pz emulation switch import-keys <path> Import user-owned Switch keys from local path
+  pz emulation switch import-firmware <path> Import user-owned Switch firmware from local path
+   pz emulation nsz status        Audit NSZ converter, keys and disk space
+   pz emulation nsz install       Install pinned NSZ converter for current user
+   pz emulation nsz plan [path]   Plan safe NSZ to NSP conversion
+   pz emulation nsz convert <path> Convert local NSZ files atomically
+   pz emulation nsz apply --yes   Convert all, dedupe and clean verified sources
    pz emulation doctor          Run full emulation diagnostics
    pz emulation status         Print emulation status JSON
   pz ai status                 Print Linux AI stack status JSON
@@ -114,7 +128,7 @@ Usage:
   pz ai compat status          Check RTK/Caveman/Headroom/ai-memory agent runtime
   pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
-  pz ai opencode <action>      OpenCode CLI<->desktop version lockstep (sync|status|install-hook)
+  pz ai opencode <action>      OpenCode CLI<->desktop lockstep + local model (sync|status|local-model|install-hook)
   pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|all)
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
@@ -180,6 +194,10 @@ cmd_install() {
     else
         pz_run_profile "$profile_file"
     fi
+}
+
+cmd_flatpak() {
+    bash "$PZ_ROOT/linux/flatpak/setup-remotes.sh" "$@"
 }
 
 cmd_steamdeck() {
@@ -249,6 +267,7 @@ cmd_emulation() {
         fixes)        bash "$PZ_ROOT/linux/emulation/fixes.sh" "${target:-list}" "${extra[@]}" ;;
         bios)         bash "$PZ_ROOT/linux/emulation/bios.sh" "${target:-status}" "${extra[@]}" ;;
         switch)       bash "$PZ_ROOT/linux/emulation/bios.sh" "switch-${target:-status}" "${extra[@]}" ;;
+        nsz|nsz-to-nsp) bash "$PZ_ROOT/linux/emulation/nsz.sh" "${target:-status}" "${extra[@]}" ;;
         doctor)       local rc=0
                       if $has_json; then
                           bash "$PZ_ROOT/linux/emulation/shared-content.sh" status --json || rc=1
@@ -275,7 +294,7 @@ cmd_emulation() {
                       fi
                       return "$rc" ;;
         setup|install) bash "$PZ_ROOT/linux/emulation/setup-emulation.sh" "${target:-install}" "${extra[@]}" ;;
-        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|retrodeck|eden|citron|hydra|heroic|srm|ps1|ps2|ps3|performance|lua|steam-tools|fixes|bios|switch|shared|media|pc-games|shortcuts|launchbox|frontends|doctor|setup)"; return 1 ;;
+        *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|retrodeck|eden|citron|hydra|heroic|srm|ps1|ps2|ps3|performance|lua|steam-tools|fixes|bios|switch|nsz|shared|media|pc-games|shortcuts|launchbox|frontends|doctor|setup)"; return 1 ;;
     esac
 }
 
@@ -307,10 +326,11 @@ cmd_ai() {
             case "${1:-version-status}" in
                 sync|align) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" sync ;;
                 status|version-status) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status ;;
+                local-model|ollama) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" local-model ;;
                 install-hook) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" install-hook ;;
                 remove-hook) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" remove-hook ;;
                 setup) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" setup ;;
-                *) pz_error "usage: pz ai opencode (sync|status|install-hook|remove-hook|setup)"; return 1 ;;
+                *) pz_error "usage: pz ai opencode (sync|status|local-model|install-hook|remove-hook|setup)"; return 1 ;;
             esac
             ;;
         doctor)
@@ -468,6 +488,7 @@ main() {
     case "$cmd" in
         install)       cmd_install "$@" ;;
         steamdeck)     cmd_steamdeck "$@" ;;
+        flatpak)       cmd_flatpak "$@" ;;
         windows-vm|windows|winvm|win-vm) cmd_windows_vm "$@" ;;
         waydroid|android) cmd_waydroid "$@" ;;
         emulation)     cmd_emulation "$@" ;;

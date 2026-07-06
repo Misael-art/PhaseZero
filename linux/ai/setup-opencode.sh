@@ -155,6 +155,9 @@ opencode_version_status() {
         --argjson inSync "$insync" \
         --argjson dbPresent "$([ -f "$OPENCODE_DB" ] && echo true || echo false)" \
         --argjson hook "$([ -f "$SYNC_HOOK_FILE" ] && echo true || echo false)" \
+        --argjson creds "$(opencode_has_credentials && echo true || echo false)" \
+        --argjson usable "$(opencode_has_usable_model && echo true || echo false)" \
+        --argjson localProvider "$([ -f "$OPENCODE_CONFIG" ] && jq -e '.provider.ollama.models | length > 0' "$OPENCODE_CONFIG" >/dev/null 2>&1 && echo true || echo false)" \
         '{
             tool: "opencode-version",
             cli: (if $cli == "" then null else $cli end),
@@ -164,6 +167,7 @@ opencode_version_status() {
             target: $target,
             inSync: $inSync,
             autoSyncHook: $hook,
+            model: {hasCredentials: $creds, localProvider: $localProvider, usable: $usable},
             db: {path: $db, present: $dbPresent}
         }'
 }
@@ -318,6 +322,86 @@ print_dry_run() {
         }'
 }
 
+# --- local model provider (Ollama) ------------------------------------------
+#
+# With no authenticated cloud provider, every model opencode/OMO reference needs
+# credentials, so any chat is "Interrupted" immediately. If the host runs Ollama
+# we wire it as a key-free local provider so opencode has a usable model. Local
+# inference is CPU-slow on weak APUs (the Deck); a small model keeps it usable.
+
+OLLAMA_URL="${PZ_OLLAMA_URL:-http://127.0.0.1:11434}"
+OPENCODE_AUTH="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json"
+
+ollama_models() {
+    # Always exit 0: an unreachable Ollama (curl 7 under pipefail) must not abort
+    # callers running with set -e.
+    { curl -fsS "$OLLAMA_URL/api/tags" 2>/dev/null || true; } | jq -r '.models[].name' 2>/dev/null || true
+}
+
+opencode_has_credentials() {
+    [ -f "$OPENCODE_AUTH" ] && [ "$(jq 'length' "$OPENCODE_AUTH" 2>/dev/null || echo 0)" -gt 0 ]
+}
+
+# opencode has a usable model if it has cloud credentials OR a local provider.
+opencode_has_usable_model() {
+    opencode_has_credentials && return 0
+    [ -f "$OPENCODE_CONFIG" ] && jq -e '.provider.ollama.models | length > 0' "$OPENCODE_CONFIG" >/dev/null 2>&1
+}
+
+pick_local_default() {
+    local models m
+    models="$(ollama_models)"
+    [ -n "$models" ] || return 1
+    # smallest/fastest tool-capable first, for responsiveness on CPU-only hosts
+    for m in qwen2.5-coder:1.5b qwen2.5-coder:3b llama3.2:3b llama3.2:1b llama3.1:latest gemma3:latest; do
+        grep -qx "$m" <<< "$models" && { printf 'ollama/%s\n' "$m"; return 0; }
+    done
+    printf 'ollama/%s\n' "$(head -1 <<< "$models")"
+}
+
+configure_local_model() {
+    command -v jq >/dev/null 2>&1 || { pz_warn "jq required for local model config"; return 0; }
+    local models; models="$(ollama_models)"
+    if [ -z "$models" ]; then
+        pz_warn "Ollama not reachable at $OLLAMA_URL; skipping local model."
+        pz_warn "Either start Ollama (pz has models via 'ollama pull'), or authenticate a cloud provider: opencode auth login"
+        return 0
+    fi
+
+    local default; default="${PZ_OPENCODE_LOCAL_MODEL:-$(pick_local_default)}"
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_info "dry-run: would add Ollama provider ($(wc -w <<< "$models") models) and default to $default"
+        return 0
+    fi
+
+    local models_json tmp
+    models_json="$(jq -Rn '[inputs] | map({(.): {name: (. + " (local)"), tools: true, options: {num_ctx: 8192}}}) | add' <<< "$models")"
+    mkdir -p "$(dirname "$OPENCODE_CONFIG")"
+    [ -f "$OPENCODE_CONFIG" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$OPENCODE_CONFIG"
+    cp "$OPENCODE_CONFIG" "${OPENCODE_CONFIG}.bak.$(date +%s)"
+    tmp="$(mktemp)"
+    # Set the default model only when the host has no cloud credentials (nothing
+    # else would work) or no model is set yet; never override a user's choice.
+    jq --argjson models "$models_json" --arg url "$OLLAMA_URL/v1" --arg default "$default" \
+       --argjson noCreds "$(opencode_has_credentials && echo false || echo true)" '
+        .provider.ollama = {
+            "npm": "@ai-sdk/openai-compatible",
+            "name": "Ollama (local)",
+            "options": {"baseURL": $url, "apiKey": "ollama"},
+            "models": $models
+        }
+        | (if ($noCreds and ((.model // "") == "" or (.model | startswith("ollama/") | not)))
+             or ((.model // "") == "")
+           then .model = $default else . end)
+    ' "$OPENCODE_CONFIG" > "$tmp" && mv "$tmp" "$OPENCODE_CONFIG"
+
+    pz_info "configured opencode Ollama provider; default model: $(jq -r '.model // "unset"' "$OPENCODE_CONFIG")"
+    pz_info "Local models are key-free but CPU-slow on the Deck APU; first reply can take ~1-2 min. For speed: GPU/ROCm ollama, a smaller model, or a cloud key (opencode auth login)."
+    if [ -f "$OPENCODE_CONFIG" ] && jq -e '(.plugin // []) | any(startswith("oh-my-openagent"))' "$OPENCODE_CONFIG" >/dev/null 2>&1; then
+        pz_warn "OMO is enabled: its Sisyphus 'ultraworker' agent is too heavy for local CPU models. For a responsive local desktop: linux/pz ai omo disable"
+    fi
+}
+
 setup_templates() {
     mkdir -p "$(dirname "$OPENCODE_CONFIG")"
     if [ ! -f "$OPENCODE_CONFIG" ]; then
@@ -355,11 +439,19 @@ case "${1:-setup}" in
         ensure_clipboard_stack
         write_deck_launcher
         bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync opencode >/dev/null || pz_warn "OpenCode MCP sync failed"
+        # Keyless host with Ollama running: wire a local model so opencode has
+        # something to answer with instead of "Interrupted".
+        if ! opencode_has_credentials && [ -n "$(ollama_models)" ]; then
+            configure_local_model
+        fi
         pz_info "OpenCode setup complete. Config at $OPENCODE_CONFIG"
         ;;
     sync|align)
         # Re-pin the CLI to the opencode-desktop version (idempotent).
         opencode_sync
+        ;;
+    local-model|ollama)
+        configure_local_model
         ;;
     version-status|version)
         opencode_version_status
@@ -379,7 +471,7 @@ case "${1:-setup}" in
         print_dry_run
         ;;
     *)
-        pz_error "usage: setup-opencode.sh (setup|sync|version-status|install-hook|remove-hook|desktop-integration|dry-run)"
+        pz_error "usage: setup-opencode.sh (setup|sync|version-status|local-model|install-hook|remove-hook|desktop-integration|dry-run)"
         exit 1
         ;;
 esac

@@ -95,9 +95,11 @@ fi
 "$REPO_ROOT/linux/pz" ai omo status | jq -e '.tool == "omo"' >/dev/null
 
 # OpenCode CLI<->desktop version lockstep: status contract + dry-run safety.
-"$REPO_ROOT/linux/ai/setup-opencode.sh" version-status | jq -e '.tool == "opencode-version" and (.inSync | type == "boolean") and (.cliManaged | type == "boolean") and (.autoSyncHook | type == "boolean")' >/dev/null
+"$REPO_ROOT/linux/ai/setup-opencode.sh" version-status | jq -e '.tool == "opencode-version" and (.inSync | type == "boolean") and (.cliManaged | type == "boolean") and (.autoSyncHook | type == "boolean") and (.model.usable | type == "boolean")' >/dev/null
 PZ_DRY_RUN=1 "$REPO_ROOT/linux/ai/setup-opencode.sh" sync >/dev/null
 PZ_DRY_RUN=1 "$REPO_ROOT/linux/ai/setup-opencode.sh" install-hook >/dev/null
+# local-model config is dry-run safe and reachable via pz (skips cleanly if no Ollama)
+PZ_DRY_RUN=1 PZ_OLLAMA_URL="http://127.0.0.1:1" "$REPO_ROOT/linux/ai/setup-opencode.sh" local-model >/dev/null
 "$REPO_ROOT/linux/pz" ai opencode status | jq -e '.tool == "opencode-version"' >/dev/null
 
 "$REPO_ROOT/linux/ai/setup-memory.sh" dry-run | jq -e '.tool == "ai-memory"' >/dev/null

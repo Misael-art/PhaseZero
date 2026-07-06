@@ -44,6 +44,8 @@ test -d "$PZ_EMULATION_ROOT/roms/ps4"
 "$REPO_ROOT/linux/pz" emulation lua dry-run >/dev/null
 "$REPO_ROOT/linux/pz" emulation steam-tools status | jq -e '.tools | has("protontricks") and has("steamRomManager")' >/dev/null
 "$REPO_ROOT/linux/pz" emulation steam-tools dry-run >/dev/null
+"$REPO_ROOT/linux/pz" emulation nsz status | jq -e '.source.count == 0 and .policy == "local-user-owned-content-only"' >/dev/null
+"$REPO_ROOT/linux/pz" emulation nsz plan "$PZ_EMULATION_ROOT/roms/switch" | jq -e '.execution == "sequential" and .sourcePolicy == "preserve-by-default"' >/dev/null
 "$REPO_ROOT/linux/pz" emulation srm dry-run >/dev/null
 "$REPO_ROOT/linux/pz" emulation srm status | jq -e '.configured | type == "boolean"' >/dev/null
 "$REPO_ROOT/linux/pz" emulation ps3 dry-run >/dev/null
@@ -211,6 +213,89 @@ printf 'fake-prod-keys\n' > "$TMP_ROOT/source-keys/prod.keys"
 test -f "$PZ_EMULATION_ROOT/firmware/switch/keys/prod.keys"
 test -f "$XDG_DATA_HOME/eden/keys/prod.keys"
 test -f "$XDG_DATA_HOME/citron/keys/prod.keys"
+
+FAKE_NSZ_BIN="$TMP_ROOT/fake-nsz"
+cat > "$FAKE_NSZ_BIN" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+output=""
+source=""
+decompress=0
+verify=0
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -D) decompress=1; shift ;;
+        -V|--verify) verify=1; shift ;;
+        --output) output="$2"; shift 2 ;;
+        --threads) shift 2 ;;
+        *) source="$1"; shift ;;
+    esac
+done
+if [ "$decompress" -eq 1 ]; then
+    case "$(basename "$source")" in
+        Broken*) exit 9 ;;
+    esac
+    mkdir -p "$output"
+    base="$(basename "${source%.*}")"
+    printf 'PFS0phasezero-test-payload\n' > "$output/$base.nsp"
+elif [ "$verify" -eq 1 ]; then
+    [ "$(head -c 4 "$source")" = "PFS0" ]
+fi
+EOF
+chmod +x "$FAKE_NSZ_BIN"
+
+printf 'fake-prod-keys\n' > "$PZ_EMULATION_ROOT/firmware/switch/keys/prod.keys"
+printf 'compressed-one\n' > "$PZ_EMULATION_ROOT/roms/switch/one.nsz"
+PZ_NSZ_BIN="$FAKE_NSZ_BIN" PZ_NSZ_RESERVE_BYTES=0 PZ_NSZ_EXPANSION_RATIO=1 \
+    "$REPO_ROOT/linux/pz" emulation nsz convert "$PZ_EMULATION_ROOT/roms/switch/one.nsz" >/dev/null
+test -f "$PZ_EMULATION_ROOT/roms/switch/one.nsz"
+test -f "$PZ_EMULATION_ROOT/roms/switch/nsp/one.nsp"
+test "$(head -c 4 "$PZ_EMULATION_ROOT/roms/switch/nsp/one.nsp")" = "PFS0"
+
+printf 'compressed-two\n' > "$PZ_EMULATION_ROOT/roms/switch/two.nsz"
+PZ_NSZ_BIN="$FAKE_NSZ_BIN" PZ_NSZ_RESERVE_BYTES=0 PZ_NSZ_EXPANSION_RATIO=1 \
+    "$REPO_ROOT/linux/pz" emulation nsz convert "$PZ_EMULATION_ROOT/roms/switch/two.nsz" --delete-source --yes >/dev/null
+test ! -e "$PZ_EMULATION_ROOT/roms/switch/two.nsz"
+test -f "$PZ_EMULATION_ROOT/roms/switch/nsp/two.nsp"
+jq -e 'select(.status == "completed" and .sourceRemoved == true)' "$PZ_EMULATION_ROOT"/metadata/switch/nsz-conversions/*.json >/dev/null
+
+mkdir -p "$PZ_EMULATION_ROOT/roms/switch/dedupe"
+printf 'same-compressed-data\n' > "$PZ_EMULATION_ROOT/roms/switch/dedupe/Game.nsz"
+cp "$PZ_EMULATION_ROOT/roms/switch/dedupe/Game.nsz" \
+   "$PZ_EMULATION_ROOT/roms/switch/dedupe/Game (1.00 GB).nsz"
+PZ_NSZ_BIN="$FAKE_NSZ_BIN" PZ_NSZ_RESERVE_BYTES=0 PZ_NSZ_EXPANSION_RATIO=1 \
+    "$REPO_ROOT/linux/pz" emulation nsz plan "$PZ_EMULATION_ROOT/roms/switch/dedupe" |
+    jq -e '.confirmedDuplicates == 1 and .duplicateConflicts == 0' >/dev/null
+PZ_NSZ_BIN="$FAKE_NSZ_BIN" PZ_NSZ_RESERVE_BYTES=0 PZ_NSZ_EXPANSION_RATIO=1 \
+    "$REPO_ROOT/linux/pz" emulation nsz apply "$PZ_EMULATION_ROOT/roms/switch/dedupe" --yes >/dev/null
+test ! -e "$PZ_EMULATION_ROOT/roms/switch/dedupe/Game.nsz"
+test ! -e "$PZ_EMULATION_ROOT/roms/switch/dedupe/Game (1.00 GB).nsz"
+test -f "$PZ_EMULATION_ROOT/roms/switch/nsp/Game.nsp"
+
+mkdir -p "$PZ_EMULATION_ROOT/roms/switch/conflict"
+printf 'first\n' > "$PZ_EMULATION_ROOT/roms/switch/conflict/Conflict.nsz"
+printf 'second\n' > "$PZ_EMULATION_ROOT/roms/switch/conflict/Conflict (2.00 GB).nsz"
+if PZ_NSZ_BIN="$FAKE_NSZ_BIN" PZ_NSZ_RESERVE_BYTES=0 PZ_NSZ_EXPANSION_RATIO=1 \
+    "$REPO_ROOT/linux/pz" emulation nsz apply "$PZ_EMULATION_ROOT/roms/switch/conflict" --yes >/dev/null 2>&1; then
+    echo "expected normalized-name conflict to block apply" >&2
+    exit 1
+fi
+test -f "$PZ_EMULATION_ROOT/roms/switch/conflict/Conflict.nsz"
+test -f "$PZ_EMULATION_ROOT/roms/switch/conflict/Conflict (2.00 GB).nsz"
+
+mkdir -p "$PZ_EMULATION_ROOT/roms/switch/broken"
+printf 'broken-data\n' > "$PZ_EMULATION_ROOT/roms/switch/broken/Broken Game.nsz"
+if PZ_NSZ_BIN="$FAKE_NSZ_BIN" PZ_NSZ_RESERVE_BYTES=0 PZ_NSZ_EXPANSION_RATIO=1 \
+    "$REPO_ROOT/linux/pz" emulation nsz apply "$PZ_EMULATION_ROOT/roms/switch/broken" --yes >/dev/null 2>&1; then
+    echo "expected broken NSZ apply to report failure" >&2
+    exit 1
+fi
+test ! -e "$PZ_EMULATION_ROOT/roms/switch/broken/Broken Game.nsz"
+test -f "$PZ_EMULATION_ROOT/.phasezero/quarantine/nsz/Broken Game.nsz"
+! find "$PZ_EMULATION_ROOT/roms/switch/nsp/.phasezero-staging/nsz-to-nsp" \
+    -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .
+jq -e 'select(.status == "failed-verification" and .sourcePreserved == true and .quarantine != null)' \
+    "$PZ_EMULATION_ROOT"/metadata/switch/nsz-conversions/failed-*.json >/dev/null
 
 mkdir -p "$TMP_ROOT/source-fw"
 printf 'fake-fw\n' > "$TMP_ROOT/source-fw/firmware.nca"

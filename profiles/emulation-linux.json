@@ -62,6 +62,7 @@
       "linux/emulation/performance-launch.sh",
       "linux/emulation/lua.sh",
       "linux/emulation/steam-tools.sh",
+      "linux/emulation/nsz.sh",
       "linux/emulation/fixes.sh",
       "linux/emulation/retrodeck.sh",
       "linux/emulation/shared-content.sh",

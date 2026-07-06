@@ -61,6 +61,11 @@ linux/pz emulation lua status
 linux/pz emulation steam-tools status
 linux/pz emulation fixes list
 linux/pz emulation bios import /path/to/local/bios-dump
+linux/pz emulation nsz install
+linux/pz emulation nsz plan /path/to/local/nsz
+linux/pz emulation nsz convert /path/to/local/nsz
+linux/pz emulation nsz convert /path/to/local/nsz --delete-source --yes
+linux/pz emulation nsz apply --yes
 ```
 
 `steamdeck-linux` e opt-in. O foco inicial e experiencia estilo SteamOS: Steam Gamepad UI, atalhos `Ctrl+Alt+F1..F6`, teclado virtual por Steam/wvkbd/onboard/maliit, watcher de modo com debounce e tuning de jogos.
@@ -70,6 +75,8 @@ linux/pz emulation bios import /path/to/local/bios-dump
 `waydroid-linux` e opt-in. Automatiza Waydroid como Android em container no host Linux, com detecao de binder, servico `waydroid-container`, compositor kiosk Wayland (`cage` preferido, `kwin_wayland` fallback), launchers do usuario e boot direto via GRUB/SDDM. `repair --init` baixa sistema/vendor por mirrors SourceForge com retry, valida tamanho e SHA-256, prepara runtime e inicializa Android; sem `--init`, nao baixa imagens.
 
 `emulation-linux` e opt-in. Instala launchers do EmuDeck/Eden/Citron/Hydra, configura Hydra Classic e Steam ROM Manager com emuladores detectados, prepara Lua/LuaJIT, audita Steam helper tools e cria layout compartilhado `~/Emulation`. Em Steam Deck real (DMI Valve/Jupiter/Galileo/Sephiroth), EmuDeck usa o `EmuDeck.desktop` do desktop do usuario e PhaseZero cria um wrapper que chama esse launcher; em PC Linux generico, usa o AppImage direto. BIOS, firmware, keys, ROMs, updates e DLC nao sao baixados: use importacao local de dumps proprios.
+
+Conversao NSZ para NSP usa `nsz==4.6.1` isolado. Processamento sequencial reduz pico de disco. Saida nasce em staging no mesmo filesystem, passa por verificacao upstream, cabecalho PFS0 e SHA-256, depois recebe publicacao atomica em `~/Emulation/roms/switch/nsp`. Fonte permanece por padrao. `--delete-source --yes` remove cada NSZ somente depois da verificacao e registro JSON em `~/Emulation/metadata/switch/nsz-conversions`. `apply --yes` normaliza sufixos de tamanho, confirma duplicatas por SHA-256, remove apenas copias identicas e converte toda a biblioteca sob lock exclusivo. Conflitos permanecem intactos. Somente dumps locais proprios.
 
 Boot direto estilo SteamOS:
 

@@ -37,7 +37,32 @@
         "wvkbd",
         "swhkd"
       ],
-      "flatpak": []
+      "flatpak": {
+        "remotes": [
+          {
+            "name": "flathub",
+            "url": "https://dl.flathub.org/repo/flathub.flatpakrepo",
+            "required": true
+          },
+          {
+            "name": "flathub-beta",
+            "url": "https://flathub.org/beta-repo/flathub-beta.flatpakrepo",
+            "required": false
+          }
+        ],
+        "overrides": {
+          "steamdeck": true
+        },
+        "packages": [
+          "com.valvesoftware.Steam",
+          "org.libretro.RetroArch",
+          "net.lutris.Lutris",
+          "com.heroicgameslauncher.hgl",
+          "org.prismlauncher.PrismLauncher",
+          "org.freedesktop.Platform.Compat.i386",
+          "org.freedesktop.Platform.GL32.default"
+        ]
+      }
     },
     "windows": {
       "winget": [],
