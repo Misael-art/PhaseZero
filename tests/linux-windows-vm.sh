@@ -56,7 +56,84 @@ session_validation="$(
 )"
 grep -q 'windows_vm_session_ready=yes' <<< "$session_validation"
 grep -Fq "repo=$REPO_ROOT" <<< "$session_validation"
+grep -q 'launcher_kind=dispatcher' <<< "$session_validation"
+grep -q 'windows-vm launch --fullscreen' <<< "$session_validation"
 ! grep -q 'startkde-biglinux' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+
+session_bin="$TMP_ROOT/session-bin"
+fake_repo="$TMP_ROOT/fake-repo"
+fake_runtime="$session_bin/windows-vm-runtime"
+runtime_args_file="$TMP_ROOT/runtime-args"
+runtime_count_file="$TMP_ROOT/runtime-count"
+dispatcher_args_file="$TMP_ROOT/dispatcher-args"
+plasma_marker="$TMP_ROOT/plasma-started"
+mkdir -p "$session_bin" "$fake_repo/linux"
+cat > "$fake_runtime" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$PZ_WINDOWS_VM_TEST_ARGS_FILE"
+printf 'attempt\n' >> "$PZ_WINDOWS_VM_TEST_COUNT_FILE"
+exit 23
+EOF
+cat > "$fake_repo/linux/pz" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$PZ_WINDOWS_VM_TEST_ARGS_FILE"
+exit 29
+EOF
+cat > "$session_bin/startplasma-wayland" <<'EOF'
+#!/usr/bin/env bash
+printf 'started\n' > "$PZ_WINDOWS_VM_TEST_PLASMA_FILE"
+EOF
+chmod +x "$fake_runtime" "$fake_repo/linux/pz" "$session_bin/startplasma-wayland"
+
+runtime_validation="$(
+    PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
+    PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+        "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
+)"
+grep -q 'launcher_kind=runtime' <<< "$runtime_validation"
+grep -Fq "command=$fake_runtime launch --fullscreen " <<< "$runtime_validation"
+
+set +e
+PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
+PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
+PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
+    timeout 3 "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+runtime_loop_rc=$?
+set -e
+test "$runtime_loop_rc" -eq 124
+test "$(head -n 1 "$runtime_args_file")" = "launch --fullscreen"
+test "$(wc -l < "$runtime_count_file")" -ge 2
+test ! -e "$plasma_marker"
+
+set +e
+PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-dispatcher.env" \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$TMP_ROOT/missing-runtime" \
+PZ_WINDOWS_VM_REPO_FALLBACK="$fake_repo" \
+PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_TEST_ARGS_FILE="$dispatcher_args_file" \
+PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
+PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
+    timeout 2 "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+dispatcher_loop_rc=$?
+set -e
+test "$dispatcher_loop_rc" -eq 124
+test "$(head -n 1 "$dispatcher_args_file")" = "windows-vm launch --fullscreen"
+test ! -e "$plasma_marker"
+
+PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-fallback.env" \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+PZ_WINDOWS_VM_DESKTOP_FALLBACK=1 \
+PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
+PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
+PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
+    "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+test -e "$plasma_marker"
 
 sddm_test_dir="$TMP_ROOT/sddm"
 PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \

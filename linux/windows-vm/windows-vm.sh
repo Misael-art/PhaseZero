@@ -1620,6 +1620,8 @@ root_env_content() {
     printf 'PZ_WINDOWS_VM_REPO=%q\n' "$PZ_ROOT"
     printf 'PZ_WINDOWS_VM_BOOT_USER=%q\n' "$TARGET_USER"
     printf 'PZ_WINDOWS_VM_RUNTIME_LAUNCHER=%q\n' "$RUNTIME_LAUNCHER"
+    printf 'PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=%q\n' "${PZ_WINDOWS_VM_SESSION_RETRY_SECONDS:-5}"
+    printf 'PZ_WINDOWS_VM_DESKTOP_FALLBACK=%q\n' "${PZ_WINDOWS_VM_DESKTOP_FALLBACK:-0}"
 }
 
 root_env_value() {
