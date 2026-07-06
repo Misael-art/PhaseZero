@@ -410,7 +410,10 @@ pz_media_configure_ryujinx() {
         }
         tmp="$(mktemp)"
         jq --arg source "$source" --arg view "$PZ_SCAN_SAFE_SWITCH" \
-            '.game_dirs = (((.game_dirs // []) | map(select(. != $source and . != $view))) + [$view] | unique)' \
+            '.game_dirs = (((.game_dirs // []) |
+                map(select(. == $view or ((startswith($source + "/") | not) and . != $source))) |
+                map(select((ascii_downcase | test("/(nintendo switch \\(update\\)|nintendo switch \\(dlc\\)|mods?|firmware|_backup|torrent)(/|$)")) | not))
+            ) + [$view] | unique)' \
             "$config" > "$tmp"
         if ! cmp -s "$config" "$tmp"; then
             cp "$config" "$config.phasezero.bak"

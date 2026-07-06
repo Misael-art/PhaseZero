@@ -5,6 +5,10 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
+# virsh output is parsed (domstate, domblklist); force C locale so state
+# strings stay "running" instead of localized ("executando", ...).
+virsh() { LC_ALL=C command virsh "$@"; }
+
 ACTION="${1:-status}"
 [ $# -gt 0 ] && shift || true
 
@@ -363,7 +367,7 @@ libvirt_uri() {
 }
 
 find_existing_windows_domain() {
-    command -v virsh >/dev/null 2>&1 || return 0
+    type -P virsh >/dev/null 2>&1 || return 0
     local uri domain source
     uri="$(libvirt_uri)"
     while IFS= read -r domain; do
@@ -744,7 +748,7 @@ ensure_share_links() {
 
 libvirt_gateway() {
     local gateway=""
-    if command -v virsh >/dev/null 2>&1; then
+    if type -P virsh >/dev/null 2>&1; then
         gateway="$(virsh -c "$(libvirt_uri)" net-dumpxml default 2>/dev/null |
             awk -F"'" '/<ip address=/{if (!seen++) print $2}')"
     fi
@@ -1235,7 +1239,7 @@ build_qemu_args() {
 launch_libvirt_domain() {
     local uri state display viewer_args=()
     uri="$(libvirt_uri)"
-    command -v virsh >/dev/null 2>&1 || {
+    type -P virsh >/dev/null 2>&1 || {
         pz_error "virsh missing for discovered domain: $LIBVIRT_DOMAIN"
         return 1
     }
@@ -1250,10 +1254,20 @@ launch_libvirt_domain() {
     state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
     if [ "$state" != "running" ]; then
         if ! virsh -c "$uri" start "$LIBVIRT_DOMAIN"; then
-            pz_error "failed to start libvirt domain: $LIBVIRT_DOMAIN"
-            return 1
+            # "start" fails when the domain is already active; re-check before
+            # declaring failure so we still attach the viewer to a live VM.
+            state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+            [ "$state" = "running" ] || {
+                pz_error "failed to start libvirt domain: $LIBVIRT_DOMAIN"
+                return 1
+            }
         fi
-        state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+        local wait_attempt
+        for wait_attempt in $(seq 1 30); do
+            state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+            [ "$state" = "running" ] && break
+            sleep 1
+        done
         [ "$state" = "running" ] || {
             pz_error "libvirt domain did not reach running state: $LIBVIRT_DOMAIN ($state)"
             return 1
@@ -1302,7 +1316,7 @@ attach_libvirt_device_config() {
 
 optimize_libvirt_domain() {
     [ -n "$LIBVIRT_DOMAIN" ] || return 0
-    command -v virsh >/dev/null 2>&1 || return 0
+    type -P virsh >/dev/null 2>&1 || return 0
     local uri state xml redir_count cdrom_target
     uri="$(libvirt_uri)"
     if [ "$DRY_RUN" = "1" ]; then
@@ -1347,6 +1361,16 @@ launch_vm() {
         if launch_libvirt_domain; then
             return 0
         fi
+        local fallback_state
+        fallback_state="$(virsh -c "$(libvirt_uri)" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+        case "$fallback_state" in
+            running|paused|"pmsuspended")
+                # Domain holds the disk write lock; direct QEMU would just
+                # loop on lock errors. Let the caller retry the viewer.
+                pz_error "libvirt domain is $fallback_state; not falling back to direct QEMU: $LIBVIRT_DOMAIN"
+                return 1
+                ;;
+        esac
         pz_warn "libvirt domain start failed; falling back to direct QEMU/KVM"
         LIBVIRT_DOMAIN=""
         RAW_QEMU=1

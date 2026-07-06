@@ -29,6 +29,8 @@ A trilha Linux fica isolada em `linux/pz` e usa perfis `profiles/*.json`. Ela na
 
 ```bash
 linux/pz help
+linux/pz ui                        # Central de Controle nativa Qt6
+linux/pz ui web                    # Dashboard web legado
 linux/pz install safe-base
 linux/pz install steamdeck-linux
 linux/pz steamdeck detect
@@ -36,6 +38,7 @@ linux/pz steamdeck hotkeys dry-run
 linux/pz steamdeck keyboard
 linux/pz steamdeck console
 linux/pz steamdeck boot dry-run
+linux/pz steamdeck conveniences install
 linux/pz windows-vm plan --iso /path/to/Win11.iso
 linux/pz windows-vm discover
 sudo linux/windows-vm/windows-vm.sh adopt --disk /var/lib/libvirt/images/win11.qcow2
@@ -54,6 +57,8 @@ linux/pz emulation eden install
 linux/pz emulation hydra install
 linux/pz emulation hydra configure
 linux/pz emulation srm configure
+linux/pz emulation optimizer plan
+linux/pz emulation optimizer apply-all
 linux/pz emulation ps3 import-game /path/to/local/ps3-dump
 linux/pz emulation ps3 import-pkg /path/to/local/pkg
 linux/pz emulation ps3 import-rap /path/to/local/rap
@@ -66,6 +71,9 @@ linux/pz emulation nsz plan /path/to/local/nsz
 linux/pz emulation nsz convert /path/to/local/nsz
 linux/pz emulation nsz convert /path/to/local/nsz --delete-source --yes
 linux/pz emulation nsz apply --yes
+linux/pz ai proxies plan all
+linux/pz ai proxies install all
+linux/pz ai proxies status all
 ```
 
 `steamdeck-linux` e opt-in. O foco inicial e experiencia estilo SteamOS: Steam Gamepad UI, atalhos `Ctrl+Alt+F1..F6`, teclado virtual por Steam/wvkbd/onboard/maliit, watcher de modo com debounce e tuning de jogos.
@@ -133,7 +141,40 @@ linux/pz emulation srm configure
 linux/pz emulation srm status
 ```
 
-SRM usa o AppImage/`steamrommanager.sh` do EmuDeck quando disponivel, aponta `steamDirectory` para a Steam local, `romsDirectory` para `~/Emulation/roms`, `retroarchPath` para o launcher EmuDeck e normaliza parsers Eden/Citron/DuckStation/PCSX2/RPCS3.
+SRM usa o AppImage/`steamrommanager.sh` do EmuDeck quando disponivel, aponta `steamDirectory` para a Steam local, `romsDirectory` para `~/Emulation/roms`, `retroarchPath` para o launcher EmuDeck e importa todos os parsers validos do template EmuDeck. Caminhos absolutos antigos sao tornados portaveis. Switch usa exclusivamente a view segura gerada pelo PhaseZero; `Nintendo Switch (Update)`, `Nintendo Switch (DLC)`, `Mods`, `Firmware`, `_backup` e `Torrent` nunca entram no parser Ryujinx.
+
+Launchers SteamOS:
+
+```bash
+linux/pz steamdeck conveniences plan
+linux/pz steamdeck conveniences install
+linux/pz emulation frontends repair
+```
+
+Instala Return to Gaming Mode, Windows VM e Waydroid em `~/.local/bin` e `~/.local/share/applications`. Os tres sao propagados para Steam, ES-DE, SRM, Heroic e LaunchBox junto aos demais frontends. `Return.desktop` chama `phasezero-return`, que usa o seletor de sessao SteamOS do PhaseZero.
+
+Otimizacoes por jogo:
+
+```bash
+linux/pz emulation optimizer status
+linux/pz emulation optimizer plan
+linux/pz emulation optimizer apply <game-id>
+linux/pz emulation optimizer apply-all
+```
+
+As 14 entradas documentadas escrevem configuracoes nativas idempotentes em DuckStation, PCSX2 e Dolphin. Roots XDG e Flatpak sao detectados. `emulation setup` aplica a biblioteca automaticamente; dry-run apenas mostra o plano. Detalhes em `docs/emulation-game-optimizer-plan.md`.
+
+Suite Linux de proxies de IA:
+
+```bash
+linux/pz ai proxies plan all
+linux/pz ai proxies install all
+linux/pz ai proxies status all
+linux/pz ai proxies start <id>
+linux/pz ai proxies stop <id>
+```
+
+Os dez repositorios suportados ficam em `~/.local/share/phasezero/ai-proxies`. Projetos Node usam runtime Node 24 isolado; projetos Go recebem binario nativo. Servicos systemd de usuario sao instalados, mas permanecem desativados ate configuracao explicita de credenciais. Veja `docs/linux-ai-proxies.md`.
 
 PS3/RPCS3:
 

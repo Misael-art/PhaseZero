@@ -116,6 +116,22 @@ append_template_parser_by_title() {
     mv "$tmp" "$SRM_CONFIGS"
 }
 
+merge_all_template_parsers() {
+    local source="$EMUDECK_SRM_USERDATA/userConfigurations.json" tmp
+    [ -f "$source" ] && jq empty "$source" >/dev/null 2>&1 || return 0
+    tmp="$(mktemp)"
+    jq --slurpfile src "$source" '
+        . as $current
+        | ($current | map(.configTitle // "") | unique) as $titles
+        | $current + ($src[0] | map(
+            (.configTitle // "") as $title
+            | select($title != "" and (($titles | index($title)) == null))
+        ))
+        | unique_by(.configTitle)
+    ' "$SRM_CONFIGS" > "$tmp"
+    mv "$tmp" "$SRM_CONFIGS"
+}
+
 backup_srm_file() {
     local file="$1"
     [ -f "$file" ] && cp "$file" "${file}.bak.$(date +%s)" 2>/dev/null || true
@@ -159,6 +175,7 @@ merge_srm_settings() {
 
 normalize_srm_parsers() {
     local tmp
+    merge_all_template_parsers
     append_template_parser_by_title "Nintendo Switch - Eden"
     append_template_parser_by_title "Nintendo Switch - Citron"
     append_template_parser_by_title "Nintendo Switch - Ryujinx"
@@ -195,7 +212,13 @@ normalize_srm_parsers() {
         --arg rpcs3Args '--no-gui "${filePath}"' \
         --arg shadps4Args '"${filePath}"' \
         'map(
-            if .configTitle == "Nintendo Switch - Eden" then
+            .romDirectory = (
+                if ((.romDirectory // "") | startswith("/home/")) and
+                   ((.romDirectory // "") | contains("/Emulation/roms/"))
+                then "${romsdirglobal}/" + ((.romDirectory | split("/Emulation/roms/"))[1])
+                else .romDirectory end
+            )
+            | if .configTitle == "Nintendo Switch - Eden" then
                 .parserType = (.parserType // "Glob")
                 | .steamDirectory = "${steamdirglobal}"
                 | .romDirectory = $switchView

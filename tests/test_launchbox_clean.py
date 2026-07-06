@@ -19,6 +19,12 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_esde_datetime_is_normalized_for_launchbox():
+    assert launchbox_import.launchbox_datetime("19940623T000000") == "1994-06-23T00:00:00"
+    assert launchbox_import.launchbox_datetime("19940623") == "1994-06-23T00:00:00"
+    assert launchbox_import.launchbox_datetime("") == ""
+
+
 def test_esde_import_is_tolerant_complete_and_idempotent(tmp_path, monkeypatch):
     home = tmp_path / "home"
     roms = tmp_path / "roms"

@@ -20,6 +20,9 @@ es-de|ES-DE|es-de.sh|$PZ_LOCAL_BIN/phasezero-es-de
 steam-big-picture|Steam Big Picture|steam-big-picture.sh|$PZ_STEAM_BIGPICTURE_WRAPPER
 srm|Steam ROM Manager|srm.sh|$PZ_LOCAL_BIN/phasezero-srm
 heroic|Heroic Launcher|heroic.sh|$PZ_HEROIC_WRAPPER
+return|Return to Gaming Mode|return.sh|$PZ_LOCAL_BIN/phasezero-return
+windows-vm|Windows VM|windows-vm.sh|$PZ_LOCAL_BIN/phasezero-windows-vm
+waydroid|Waydroid|waydroid.sh|$PZ_LOCAL_BIN/phasezero-waydroid
 EOF
 }
 
@@ -228,6 +231,7 @@ EOF
 
 ensure_base_frontends() {
     pz_emulation_ensure_layout
+    bash "$PZ_ROOT/linux/steamdeck/convenience-launchers.sh" install >/dev/null
     if [ -f "${PZ_LAUNCHBOX_ROOT:-$PZ_EMULATION_ROOT/tools/launchers/LaunchBox}/LaunchBox.exe" ] &&
         { [ ! -x "$PZ_LOCAL_BIN/phasezero-bigbox" ] || [ ! -x "$PZ_LOCAL_BIN/phasezero-launchbox" ]; }; then
         bash "$PZ_ROOT/linux/emulation/launchbox.sh" repair >/dev/null || pz_warn "LaunchBox repair skipped"
@@ -259,7 +263,7 @@ cmd_status() {
 cmd_launch() {
     local id="${1:-}" target=""
     [ -n "$id" ] || {
-        echo "usage: phasezero-frontend <bigbox|launchbox|es-de|steam-big-picture|srm|heroic>" >&2
+        echo "usage: phasezero-frontend <bigbox|launchbox|es-de|steam-big-picture|srm|heroic|return|windows-vm|waydroid>" >&2
         frontend_rows | awk -F'|' '{printf "  %-18s %s\n", $1, $2}' >&2
         return 2
     }
@@ -270,6 +274,9 @@ cmd_launch() {
         steam-big-picture|big-picture|steam) target="$PZ_STEAM_BIGPICTURE_WRAPPER" ;;
         srm|steam-rom-manager) target="$PZ_LOCAL_BIN/phasezero-srm" ;;
         heroic|heroic-launcher) target="$PZ_HEROIC_WRAPPER" ;;
+        return|gaming-mode) target="$PZ_LOCAL_BIN/phasezero-return" ;;
+        windows-vm|windows) target="$PZ_LOCAL_BIN/phasezero-windows-vm" ;;
+        waydroid|android) target="$PZ_LOCAL_BIN/phasezero-waydroid" ;;
         *) pz_error "unknown frontend: $id"; return 2 ;;
     esac
     if [ ! -x "$target" ]; then

@@ -273,6 +273,20 @@ def add_text(parent: ET.Element, tag: str, value: str) -> None:
     ET.SubElement(parent, tag).text = value
 
 
+def launchbox_datetime(value: str) -> str:
+    match = re.fullmatch(
+        r"(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2}))?",
+        value.strip(),
+    )
+    if not match:
+        return value
+    year, month, day, hour, minute, second = match.groups()
+    return (
+        f"{year}-{month}-{day}T"
+        f"{hour or '00'}:{minute or '00'}:{second or '00'}"
+    )
+
+
 def game_node(game: Game, emulator_id: str) -> ET.Element:
     node = ET.Element("Game")
     relative = game.path.relative_to(game.system.rom_dir)
@@ -290,7 +304,7 @@ def game_node(game: Game, emulator_id: str) -> ET.Element:
     add_text(node, "Developer", game.metadata.get("developer", ""))
     add_text(node, "Publisher", game.metadata.get("publisher", ""))
     add_text(node, "Genre", game.metadata.get("genre", ""))
-    add_text(node, "ReleaseDate", game.metadata.get("releasedate", ""))
+    add_text(node, "ReleaseDate", launchbox_datetime(game.metadata.get("releasedate", "")))
     add_text(node, "PlayMode", game.metadata.get("players", ""))
     add_text(node, "Favorite", str(game.metadata.get("favorite", "") == "true").lower())
     add_text(node, "Completed", str(game.metadata.get("completed", "") == "true").lower())
@@ -317,15 +331,11 @@ def replace_managed_dir(path: Path) -> None:
 
 def unique_media_name(directory: Path, title: str, source: Path) -> Path:
     safe = re.sub(r'[<>:"/\\|?*]', "_", title).strip().rstrip(".") or source.stem
-    candidate = directory / f"{safe}{source.suffix.lower()}"
-    if not candidate.exists() and not candidate.is_symlink():
-        return candidate
-    token = stable_id("media", str(source))[:8]
-    candidate = directory / f"{safe} ({token}){source.suffix.lower()}"
-    index = 2
+    index = 1
+    candidate = directory / f"{safe}-{index:02d}{source.suffix.lower()}"
     while candidate.exists() or candidate.is_symlink():
-        candidate = directory / f"{safe} ({token}-{index}){source.suffix.lower()}"
         index += 1
+        candidate = directory / f"{safe}-{index:02d}{source.suffix.lower()}"
     return candidate
 
 

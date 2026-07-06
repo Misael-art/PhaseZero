@@ -301,6 +301,7 @@ class LaunchBoxContext:
             "PZ_LAUNCHBOX_INSTALLER",
             str(self.launchbox_root / "_hidden" / "_hidden" / "LaunchBox-13.5-Setup.exe"),
         )
+        self.expected_version = os.environ.get("PZ_LAUNCHBOX_VERSION", "13.5")
 
 
 def backup_path(path: Path, ctx: LaunchBoxContext, label: str) -> Path:
@@ -844,7 +845,7 @@ def installer_status(ctx: LaunchBoxContext) -> dict[str, object]:
         "exists": exists,
         "size": size,
         "validSize": size >= 250 * 1024 * 1024,
-        "expectedVersion": "13.5",
+        "expectedVersion": ctx.expected_version,
     }
 
 

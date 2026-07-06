@@ -29,6 +29,7 @@ case "$ACTION" in
         bash "$PZ_ROOT/linux/emulation/shortcuts.sh" repair
         bash "$PZ_ROOT/linux/emulation/launchbox.sh" integrate
         bash "$PZ_ROOT/linux/emulation/frontends.sh" repair
+        bash "$PZ_ROOT/linux/emulation/optimizers.sh" apply-all
         bash "$PZ_ROOT/linux/emulation/heroic.sh" repair
         bash "$PZ_ROOT/linux/emulation/bios.sh" status
         ;;
@@ -51,6 +52,7 @@ case "$ACTION" in
         bash "$PZ_ROOT/linux/emulation/shortcuts.sh" plan
         bash "$PZ_ROOT/linux/emulation/launchbox.sh" plan
         bash "$PZ_ROOT/linux/emulation/frontends.sh" plan
+        bash "$PZ_ROOT/linux/emulation/optimizers.sh" plan
         bash "$PZ_ROOT/linux/emulation/heroic.sh" plan
         ;;
     status)

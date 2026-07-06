@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.phasezero.ControlCenter</id>
+  <name>PhaseZero</name>
+  <summary>Central de controle para automação Linux segura</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>Interface gráfica nativa para perfis, Steam Deck, Windows VM,
+    Waydroid, emulação, boot, Flatpak e ferramentas de IA do PhaseZero.</p>
+    <p>Toda mutação passa por preview, confirmação explícita e resultado
+    persistido.</p>
+  </description>
+  <launchable type="desktop-id">io.phasezero.ControlCenter.desktop</launchable>
+  <url type="homepage">https://github.com/Misael-art/PhaseZero</url>
+  <developer id="io.phasezero">
+    <name>PhaseZero</name>
+  </developer>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.1.0" date="2026-07-06"/>
+    <release version="1.0.0" date="2026-07-05"/>
+  </releases>
+</component>

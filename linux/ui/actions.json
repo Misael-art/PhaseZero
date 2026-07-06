@@ -292,7 +292,7 @@
     },
     {
       "name": "emulation.launchbox.install-clean",
-      "label": "Instalar LaunchBox 13.5",
+      "label": "Instalar LaunchBox",
       "command": "bash linux/emulation/launchbox.sh install-clean",
       "mutable": true,
       "require_plan": true,

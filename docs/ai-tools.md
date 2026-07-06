@@ -107,6 +107,7 @@ Automacoes Linux:
 - `linux/ai/setup-agent-compat.sh`: instala RTK Linux por release GitHub verificada, aplica `rtk init`, instala Headroom via `uv`/`pipx`, reaplica regras Caveman/PhaseZero, mantém Ponytail limitado a workspace detectado, gera pack `ai-context-frugality` e status `agentCompat`.
 - `linux/ai/setup-admin-bridge.sh`: cria `phasezero-admin`, detecta/instala `bigsudo`, fornece fallback `pkexec`/`sudo`, escreve estado/env user e sincroniza regra para agentes/IDEs.
 - `linux/ai/headroom-agent.sh`: helper explícito para `headroom status/proxy/wrap-*`; wrappers não rodam automaticamente.
+- `linux/ai/proxy-suite.sh`: instala e gerencia dez proxies Linux com runtime Node 24 isolado, build Go e units systemd de usuário desativadas por padrão. Contrato completo em `docs/linux-ai-proxies.md`.
 - `linux/ai/desktop-apps.sh`: instala Claude Desktop pelo repositorio apt oficial Anthropic em prefixo atomico do usuario. Valida assinatura, fingerprint e SHA-256. Corrige o pipeline do Codex Desktop Linux, habilita guarda de workspace e timer user.
 - `linux/ai/setup-codex.sh`: instala/atualiza `@openai/codex` no prefixo npm do usuario e publica symlink em `~/.local/bin`.
 - `linux/ai/setup-memory.sh`: instala `ai-memory` por AUR (`ai-memory-bin`) quando disponivel; fallback Docker wrapper; fallback build Cargo. Configura serviço user loopback `127.0.0.1:49374` e roda `install-mcp`/`install-hooks` para agentes detectados.

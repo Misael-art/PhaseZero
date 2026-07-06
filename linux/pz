@@ -29,6 +29,7 @@ Usage:
   pz steamdeck boot status   Manage GRUB SteamOS-like console boot entry
   pz steamdeck plugins status Manage Decky Loader + curated Big Picture plugins
   pz steamdeck runtime-diagnose [file] Analyze Steam runtime diagnostic JSON
+  pz steamdeck conveniences install Install Return/Windows VM/Waydroid launchers
   pz steamdeck status         Print SteamOS UX status JSON
   pz windows-vm status        Print QEMU/KVM Windows VM status JSON
   pz windows-vm discover      Discover existing Windows VM disks on host
@@ -48,19 +49,19 @@ Usage:
   pz boot choose <choice>     Set one-shot boot: normal|steamos|windows|waydroid|emergency
   pz boot install-safe-menu   Make GRUB menu visible with safe timeout
   pz boot card                Print GRUB rescue commands for this host
-   pz boot install-card        Write GRUB rescue card to host and ESP
-   pz boot install-efi-fallback [--active] [--fallback] Install UUID-based standalone PhaseZero EFI
-   pz boot emergency-shell next One-shot boot into rescue.target
-   pz steamdeck launch-options List Steam launch option presets
-   pz flatpak status           Show flatpak status JSON
-   pz flatpak audit            Check for remote/override/runtime conflicts
-   pz flatpak audit --repair   Fix detected conflicts
-   pz flatpak remotes          List configured remotes
-   pz flatpak remote add <name> <url>  Add a remote
-   pz flatpak remote remove <name>     Remove a remote
-   pz flatpak overrides apply [--global|--app=<id>] [--steamdeck]  Apply gaming overrides
-   pz flatpak overrides remove [--global|--app=<id>]  Remove gaming overrides
-   pz flatpak steamdeck-compat Full Steam Deck flatpak compat setup
+  pz boot install-card        Write GRUB rescue card to host and ESP
+  pz boot install-efi-fallback [--active] [--fallback] Install UUID-based standalone PhaseZero EFI
+  pz boot emergency-shell next One-shot boot into rescue.target
+  pz steamdeck launch-options List Steam launch option presets
+  pz flatpak status           Show flatpak status JSON
+  pz flatpak audit            Check for remote/override/runtime conflicts
+  pz flatpak audit --repair   Fix detected conflicts
+  pz flatpak remotes          List configured remotes
+  pz flatpak remote add <name> <url>  Add a remote
+  pz flatpak remote remove <name>     Remove a remote
+  pz flatpak overrides apply [--global|--app=<id>] [--steamdeck]  Apply gaming overrides
+  pz flatpak overrides remove [--global|--app=<id>]  Remove gaming overrides
+  pz flatpak steamdeck-compat Full Steam Deck flatpak compat setup
   pz emulation layout         Create shared Emulation folders
   pz emulation emudeck install Install EmuDeck AppImage launcher
   pz emulation eden install   Install Eden Steam Deck AppImage launcher
@@ -81,46 +82,48 @@ Usage:
   pz emulation performance prepare-lsfg Install verified LSFG Vulkan layer
   pz emulation lua status      Check Lua/LuaJIT/LuaRocks readiness
   pz emulation steam-tools status Check Steam helper tools
-   pz emulation retrodeck status  Audit RetroDECK shared ecosystem
-   pz emulation retrodeck plan    Preview RetroDECK migrations and links
-   pz emulation retrodeck integrate Share ROMs, BIOS, saves, states and media
-   pz emulation retrodeck repair  Repair RetroDECK ecosystem links
-   pz emulation shared status   Shared content status across consumers
-   pz emulation shared plan     Plan shared content linking (dry-run)
-   pz emulation shared apply    Apply shared content symlinks/rsync
-   pz emulation shared repair   Repair shared content links
-   pz emulation media status    Emulation media status
-   pz emulation media index     Build media-index.json
-   pz emulation media plan      Plan media canonicalization (dry-run)
-   pz emulation media apply     Apply media canonicalization
-   pz emulation media repair    Repair media paths
-   pz emulation pc-games status Audit local PC games from roms/steam
-   pz emulation pc-games plan   Plan ES-DE/Heroic/Hydra/SRM launchers
-   pz emulation pc-games repair Apply resilient PC game frontend integration
+  pz emulation retrodeck status  Audit RetroDECK shared ecosystem
+  pz emulation retrodeck plan    Preview RetroDECK migrations and links
+  pz emulation retrodeck integrate Share ROMs, BIOS, saves, states and media
+  pz emulation retrodeck repair  Repair RetroDECK ecosystem links
+  pz emulation shared status   Shared content status across consumers
+  pz emulation shared plan     Plan shared content linking (dry-run)
+  pz emulation shared apply    Apply shared content symlinks/rsync
+  pz emulation shared repair   Repair shared content links
+  pz emulation media status    Emulation media status
+  pz emulation media index     Build media-index.json
+  pz emulation media plan      Plan media canonicalization (dry-run)
+  pz emulation media apply     Apply media canonicalization
+  pz emulation media repair    Repair media paths
+  pz emulation pc-games status Audit local PC games from roms/steam
+  pz emulation pc-games plan   Plan ES-DE/Heroic/Hydra/SRM launchers
+  pz emulation pc-games repair Apply resilient PC game frontend integration
   pz emulation shortcuts status Audit desktop/AppImage launchers
   pz emulation shortcuts plan   Plan launcher cleanup
   pz emulation shortcuts repair Repair menu launchers and hide duplicates
-   pz emulation launchbox status Audit LaunchBox portable/Wine integration
-   pz emulation launchbox plan   Plan LaunchBox ROM/media/emulator bridges
-   pz emulation launchbox install-clean Install LaunchBox 13.5 in a fresh Wine prefix
-   pz emulation launchbox import-esde Rebuild LaunchBox library from ES-DE
-   pz emulation launchbox verify Verify LaunchBox data and executables
-   pz emulation launchbox verify --real Verify BigBox rendering on this host
-   pz emulation launchbox repair Apply LaunchBox Wine, ROM, media and emulator bridges
-   pz emulation frontends status Audit BigBox/Steam/ES-DE/SRM/Heroic switcher
-   pz emulation frontends plan   Plan cross-frontend switcher integration
-   pz emulation frontends repair Apply cross-frontend switcher integration
-   pz emulation fixes list      List friendly Linux emulation fixes
-   pz emulation bios import <path> Import user-owned BIOS files from local path
+  pz emulation launchbox status Audit LaunchBox portable/Wine integration
+  pz emulation launchbox plan   Plan LaunchBox ROM/media/emulator bridges
+  pz emulation launchbox install-clean Install LaunchBox 13.5 in a fresh Wine prefix
+  pz emulation launchbox import-esde Rebuild LaunchBox library from ES-DE
+  pz emulation launchbox verify Verify LaunchBox data and executables
+  pz emulation launchbox verify --real Verify BigBox rendering on this host
+  pz emulation launchbox repair Apply LaunchBox Wine, ROM, media and emulator bridges
+  pz emulation frontends status Audit BigBox/Steam/ES-DE/SRM/Heroic switcher
+  pz emulation frontends plan   Plan cross-frontend switcher integration
+  pz emulation frontends repair Apply cross-frontend switcher integration
+  pz emulation fixes list      List friendly Linux emulation fixes
+  pz emulation bios import <path> Import user-owned BIOS files from local path
   pz emulation switch import-keys <path> Import user-owned Switch keys from local path
   pz emulation switch import-firmware <path> Import user-owned Switch firmware from local path
-   pz emulation nsz status        Audit NSZ converter, keys and disk space
-   pz emulation nsz install       Install pinned NSZ converter for current user
-   pz emulation nsz plan [path]   Plan safe NSZ to NSP conversion
-   pz emulation nsz convert <path> Convert local NSZ files atomically
-   pz emulation nsz apply --yes   Convert all, dedupe and clean verified sources
-   pz emulation doctor          Run full emulation diagnostics
-   pz emulation status         Print emulation status JSON
+  pz emulation nsz status        Audit NSZ converter, keys and disk space
+  pz emulation nsz install       Install pinned NSZ converter for current user
+  pz emulation nsz plan [path]   Plan safe NSZ to NSP conversion
+  pz emulation nsz convert <path> Convert local NSZ files atomically
+  pz emulation nsz apply --yes   Convert all, dedupe and clean verified sources
+  pz emulation doctor          Run full emulation diagnostics
+  pz emulation optimizer status List documented per-game configs
+  pz emulation optimizer apply-all Apply all per-game configs
+  pz emulation status         Print emulation status JSON
   pz ai status                 Print Linux AI stack status JSON
   pz ai doctor                 Diagnose Linux AI/MCP config
   pz ai repair                 Repair Linux AI/MCP config safely
@@ -141,16 +144,20 @@ Usage:
   pz ai mcp repair [target]    Remove broken PhaseZero MCPs and reinstall safe defaults
   pz ai mcp status             Print MCP status JSON
   pz ai mcp list               List installed MCP servers
+  pz ai proxies status         Status Linux AI proxy suite
+  pz ai proxies install [id]   Install/update all or one Linux AI proxy
   pz doctor                    Run full system diagnostics
   pz support-bundle            Generate support tarball
   pz repair-plan               Generate repair plan
-   pz tune <area>               Apply tuning (browser|gaming|dev)
-   pz ui                        Open web dashboard (defaults to server --port auto + browser)
-   pz ui server [--port PORT]   Start web dashboard server only
-   pz ui tui                    Open terminal UI (whiptail)
-   pz ui status                 Print UI server status
-   pz help                      Show this help
-   pz version                   Show version
+  pz tune <area>               Apply tuning (browser|gaming|dev)
+  pz ui                        Open native Linux control center
+  pz ui native                 Open native Qt6/PySide6 control center
+  pz ui web [PORT]             Open legacy local web dashboard
+  pz ui server [--port PORT]   Start web dashboard server only
+  pz ui tui                    Open terminal UI (whiptail)
+  pz ui status                 Print UI server status
+  pz help                      Show this help
+  pz version                   Show version
 
 Profiles:
   safe-base                Essentials: firewall, codecs, browser, timeshift
@@ -233,6 +240,7 @@ cmd_steamdeck() {
         runtime|runtime-diagnose|steam-runtime) bash "$PZ_ROOT/linux/steamdeck/steam-runtime-diagnose.sh" "${target:-diagnose}" "${3:-}" ;;
         status)       bash "$PZ_ROOT/linux/steamdeck/status.sh" ;;
         launch-options) bash "$PZ_ROOT/linux/steamdeck/launch-options.sh" "${target:-list}" "${3:-balanced}" ;;
+        conveniences|convenience|launchers) bash "$PZ_ROOT/linux/steamdeck/convenience-launchers.sh" "${target:-status}" ;;
         ux)           bash "$PZ_ROOT/linux/steamdeck/install-hotkeys.sh" "${target:-install}" ;;
         *)            pz_error "unknown steamdeck mode: $action"; return 1 ;;
     esac
@@ -298,6 +306,7 @@ cmd_emulation() {
                       fi
                       return "$rc" ;;
         setup|install) bash "$PZ_ROOT/linux/emulation/setup-emulation.sh" "${target:-install}" "${extra[@]}" ;;
+        optimizer|optimizers|optimize|game-optimizer) bash "$PZ_ROOT/linux/emulation/optimizers.sh" "${target:-status}" "${extra[@]}" ;;
         *)            pz_error "usage: pz emulation (layout|status|blocked-sources|emudeck|retrodeck|eden|citron|hydra|heroic|srm|ps1|ps2|ps3|performance|lua|steam-tools|fixes|bios|switch|nsz|shared|media|pc-games|shortcuts|launchbox|frontends|doctor|setup)"; return 1 ;;
     esac
 }
@@ -358,6 +367,10 @@ cmd_ai() {
         admin|admin-bridge|bigsudo)
             shift
             bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" "${@:-status}"
+            ;;
+        proxies|proxy|ai-proxy-suite)
+            shift
+            bash "$PZ_ROOT/linux/ai/proxy-suite.sh" "${@:-status}"
             ;;
         setup)
             [ -z "$target" ] && target="all"
@@ -450,8 +463,11 @@ cmd_tune() {
 }
 
 cmd_ui() {
-    local action="${1:-server}" port="${2:-auto}"
+    local action="${1:-native}" port="${2:-auto}"
     case "$action" in
+        native|app|desktop|"")
+            bash "$PZ_ROOT/linux/ui/native.sh" "${@:2}"
+            ;;
         server)
             local port_arg=""
             [ "$port" != "auto" ] && port_arg="--port $port"
@@ -468,19 +484,21 @@ cmd_ui() {
                 echo "UI server not running"
             fi
             ;;
-        open|"")
+        web|open)
             # start server in background and open browser
             local log_file="$PZ_STATE/ui-server.log"
+            local web_port="$port"
+            [ "$web_port" = "auto" ] && web_port=8080
             mkdir -p "$PZ_STATE"
-            python3 "$PZ_ROOT/linux/ui/server.py" --daemon "$log_file" &
+            python3 "$PZ_ROOT/linux/ui/server.py" --port "$web_port" --daemon "$log_file" &
             local pid=$!
             echo "$pid" > "$PZ_STATE/ui-server.pid"
             sleep 1
-            xdg-open "http://127.0.0.1:8080" 2>/dev/null || true
-            echo "Dashboard: http://127.0.0.1:8080 (pid $pid)"
+            xdg-open "http://127.0.0.1:$web_port" 2>/dev/null || true
+            echo "Dashboard: http://127.0.0.1:$web_port (pid $pid)"
             ;;
         *)
-            pz_error "usage: pz ui (server|tui|status|open)"
+            pz_error "usage: pz ui (native|web|server|tui|status)"
             return 1
             ;;
     esac

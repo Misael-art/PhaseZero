@@ -11,6 +11,32 @@ PZ_LOCAL_BIN="${PZ_LOCAL_BIN:-$HOME/.local/bin}"
 PZ_DESKTOP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 PZ_EMULATION_STATE="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/emulation"
 
+pz_ini_set() {
+    local file="$1" section="$2" key="$3" value="$4" tmp
+    install -d "$(dirname "$file")"
+    [ -f "$file" ] || printf '[%s]\n' "$section" > "$file"
+    tmp="$(mktemp)"
+    awk -v section="$section" -v key="$key" -v value="$value" '
+        BEGIN { active=0; section_seen=0; wrote=0 }
+        $0 == "[" section "]" { active=1; section_seen=1; print; next }
+        /^\[/ {
+            if (active && !wrote) { print key " = " value; wrote=1 }
+            active=0; print; next
+        }
+        active && $0 ~ "^[[:space:]]*" key "[[:space:]]*=" {
+            if (!wrote) { print key " = " value; wrote=1 }
+            next
+        }
+        { print }
+        END {
+            if (!section_seen) print "[" section "]"
+            if (!wrote) print key " = " value
+        }
+    ' "$file" > "$tmp"
+    [ -f "$file" ] && cp "$file" "$file.phasezero.bak" 2>/dev/null || true
+    mv "$tmp" "$file"
+}
+
 PZ_EDEN_VERSION="${PZ_EDEN_VERSION:-v0.2.1}"
 PZ_EDEN_APPIMAGE_NAME="Eden-Linux-${PZ_EDEN_VERSION}-steamdeck-clang-pgo.AppImage"
 PZ_EDEN_APPIMAGE_URL="${PZ_EDEN_APPIMAGE_URL:-https://stable.eden-emu.dev/${PZ_EDEN_VERSION}/$PZ_EDEN_APPIMAGE_NAME}"

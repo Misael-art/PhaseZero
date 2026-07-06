@@ -114,6 +114,7 @@ cat > "$HOME/.config/EmuDeck/backend/configs/steam-rom-manager/userData/userConf
   {"configTitle":"Nintendo Switch - Citron","parserInputs":{"glob":"**/${title}@(.nsp|.NSP)"},"executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
   {"configTitle":"Nintendo Switch - Ryujinx","parserInputs":{"glob":"**/${title}@(.nsp|.NSP)"},"executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
   {"configTitle":"Microsoft Xbox 360 - Xenia","parserInputs":{"glob":"**/${title}@(.iso|.xex)"},"executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
+  {"configTitle":"Atari 2600 - RetroArch","parserType":"Glob","romDirectory":"/home/olduser/Emulation/roms/atari2600","parserInputs":{"glob":"${title}@(.a26|.bin)"},"executable":{"path":"/usr/bin/retroarch"},"userAccounts":{"specifiedAccounts":["Global"]},"disabled":false},
   {"configTitle":"Sony PlayStation - DuckStation","executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
   {"configTitle":"Sony PlayStation 2 - PCSX2","executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
   {"configTitle":"Sony PlayStation 3 - RPCS3 (Extracted ISO/PSN)","parserInputs":{"glob":"**/${title}/PS3_GAME/USRDIR/EBOOT.BIN"},"executable":{"path":""},"userAccounts":{"specifiedAccounts":[]},"disabled":true},
@@ -133,6 +134,22 @@ jq -e --arg runtime "$PZ_LOCAL_BIN/phasezero-eden" '
     and .parserType == "Glob"
     and (.executableArgs | contains("%command%") | not)
 ' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
+jq -e '
+  .[] | select(.configTitle == "Atari 2600 - RetroArch")
+  | .romDirectory == "${romsdirglobal}/atari2600"
+' "$XDG_CONFIG_HOME/steam-rom-manager/userData/userConfigurations.json" >/dev/null
+
+mkdir -p "$PZ_EMULATION_ROOT/roms/switch/Nintendo Switch (Update)" \
+  "$PZ_EMULATION_ROOT/roms/switch/Nintendo Switch (DLC)" \
+  "$PZ_EMULATION_ROOT/roms/switch/Mods" "$PZ_EMULATION_ROOT/roms/switch/Firmware" \
+  "$PZ_EMULATION_ROOT/roms/switch/_backup" "$PZ_EMULATION_ROOT/roms/switch/Torrent"
+mkdir -p "$XDG_CONFIG_HOME/Ryujinx"
+jq -n --arg root "$PZ_EMULATION_ROOT/roms/switch" \
+  '{game_dirs:[$root,($root+"/Nintendo Switch (Update)"),($root+"/Nintendo Switch (DLC)"),($root+"/Mods"),($root+"/Firmware"),($root+"/_backup"),($root+"/Torrent"),"/games/external"]}' \
+  > "$XDG_CONFIG_HOME/Ryujinx/Config.json"
+"$REPO_ROOT/linux/pz" emulation media prepare-scan >/dev/null
+jq -e --arg view "$PZ_EMULATION_ROOT/.phasezero/scan-safe/roms/switch" \
+  '.game_dirs == ["/games/external",$view]' "$XDG_CONFIG_HOME/Ryujinx/Config.json" >/dev/null
 jq -e --arg view "$PZ_EMULATION_ROOT/.phasezero/scan-safe/roms/switch" '
   ([.[] | select(.configTitle | test("Nintendo Switch - (Eden|Citron|Ryujinx)"))] | all(.romDirectory == $view and (.parserInputs.glob | startswith("${title}@")))) and
   (.[] | select(.configTitle == "Microsoft Xbox 360 - Xenia") | .romDirectory == "${romsdirglobal}/xbox360/roms" and (.parserInputs.glob | contains("default.xex"))) and

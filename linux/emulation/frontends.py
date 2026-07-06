@@ -57,6 +57,27 @@ FRONTENDS = [
         "description": "Launch Heroic through PhaseZero.",
         "icon": "heroic",
     },
+    {
+        "id": "return",
+        "title": "Return to Gaming Mode",
+        "file": "return.sh",
+        "description": "Return from desktop to SteamOS/Gamepad UI.",
+        "icon": "steamdeck-gaming-return",
+    },
+    {
+        "id": "windows-vm",
+        "title": "Windows VM",
+        "file": "windows-vm.sh",
+        "description": "Launch the configured Windows VM.",
+        "icon": "computer",
+    },
+    {
+        "id": "waydroid",
+        "title": "Waydroid",
+        "file": "waydroid.sh",
+        "description": "Launch the optimized Android session.",
+        "icon": "phone",
+    },
 ]
 
 

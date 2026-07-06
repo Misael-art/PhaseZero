@@ -8,6 +8,8 @@ echo "=== UI bash -n checks ==="
 bash -n "$REPO_ROOT/linux/lib/json-envelope.sh" && echo "  json-envelope.sh OK"
 bash -n "$REPO_ROOT/linux/ui/tui.sh" && echo "  tui.sh OK"
 python3 -c "compile(open('$REPO_ROOT/linux/ui/server.py').read(), 'server.py', 'exec'); print('  server.py OK')"
+python3 -m py_compile "$REPO_ROOT"/linux/ui_native/*.py
+bash -n "$REPO_ROOT/linux/ui/native.sh" && echo "  native.sh OK"
 bash -n "$REPO_ROOT/linux/pz" && echo "  pz OK"
 bash -n "$REPO_ROOT/linux/emulation/shared-content.sh" && echo "  shared-content.sh OK"
 bash -n "$REPO_ROOT/linux/emulation/media.sh" && echo "  media.sh OK"
@@ -150,5 +152,15 @@ echo "=== No regressions: existing commands ==="
 
 echo "=== TUI script syntax ==="
 bash -n "$REPO_ROOT/linux/ui/tui.sh" >/dev/null 2>&1 && echo "  tui syntax ok"
+
+echo "=== Native Qt UI ==="
+if python3 -c 'import PySide6' >/dev/null 2>&1; then
+    QT_QPA_PLATFORM=offscreen python3 -m linux.ui_native --smoke-test \
+        --screenshot "$XDG_STATE_HOME/native-ui-smoke.png"
+    test -s "$XDG_STATE_HOME/native-ui-smoke.png"
+    pytest -q "$REPO_ROOT/tests/test_linux_native_ui.py"
+else
+    echo "  PySide6 unavailable; native runtime test skipped"
+fi
 
 echo "=== UI smoke ok ==="

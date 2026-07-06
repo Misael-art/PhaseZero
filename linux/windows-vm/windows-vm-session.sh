@@ -75,6 +75,24 @@ install -d "$STATE_DIR"
 exec >>"$LOG_FILE" 2>&1
 printf '%s starting Windows VM boot session\n' "$(date -Iseconds)"
 
+# SDDM Wayland sessions start without a compositor; spicy/virt-viewer/QEMU-gtk
+# need one or they die with "gtk initialization failed" (black screen).
+# PZ_WINDOWS_VM_COMPOSITOR=0 skips the wrap (tests, external compositor).
+if [ "${PZ_WINDOWS_VM_COMPOSITOR:-auto}" != "0" ] \
+    && [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] \
+    && [ "${PZ_WINDOWS_VM_INSIDE_COMPOSITOR:-0}" != "1" ]; then
+    if command -v cage >/dev/null 2>&1; then
+        printf '%s starting cage compositor for VM viewer\n' "$(date -Iseconds)"
+        exec dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 cage -- "$0"
+    fi
+    if command -v kwin_wayland >/dev/null 2>&1; then
+        printf '%s starting kwin_wayland compositor for VM viewer\n' "$(date -Iseconds)"
+        exec dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 \
+            kwin_wayland --no-lockscreen --no-global-shortcuts --xwayland --exit-with-session "$0"
+    fi
+    printf '%s no compositor available (cage/kwin_wayland); viewer may fail\n' "$(date -Iseconds)"
+fi
+
 if [ -n "$CONFIGURED_REPO" ] && [ "$CONFIGURED_REPO" != "${PZ_WINDOWS_VM_REPO:-}" ]; then
     printf '%s stale configured repo %s; using %s\n' \
         "$(date -Iseconds)" "$CONFIGURED_REPO" "${PZ_WINDOWS_VM_REPO:-$LAUNCHER_KIND}"

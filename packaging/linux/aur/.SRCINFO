@@ -1,0 +1,18 @@
+pkgbase = phasezero-control-center
+	pkgdesc = PhaseZero native Linux control center
+	pkgver = 1.1.0
+	pkgrel = 1
+	url = https://github.com/Misael-art/PhaseZero
+	arch = any
+	license = MIT
+	depends = python
+	depends = pyside6
+	depends = bash
+	depends = jq
+	depends = polkit
+	optdepends = flatpak: Flatpak management
+	optdepends = bigsudo: graphical admin bridge
+	source = PhaseZero-1.1.0.tar.gz::https://github.com/Misael-art/PhaseZero/archive/refs/tags/v1.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = phasezero-control-center

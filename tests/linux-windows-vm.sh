@@ -95,6 +95,7 @@ grep -Fq "command=$fake_runtime launch --fullscreen " <<< "$runtime_validation"
 
 set +e
 PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
@@ -111,6 +112,7 @@ test ! -e "$plasma_marker"
 
 set +e
 PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-dispatcher.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$TMP_ROOT/missing-runtime" \
 PZ_WINDOWS_VM_REPO_FALLBACK="$fake_repo" \
@@ -126,6 +128,7 @@ test "$(head -n 1 "$dispatcher_args_file")" = "windows-vm launch --fullscreen"
 test ! -e "$plasma_marker"
 
 PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-fallback.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_DESKTOP_FALLBACK=1 \
@@ -134,6 +137,41 @@ PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
 PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
     "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
 test -e "$plasma_marker"
+
+echo "=== Session: compositor bootstrap for headless boot ==="
+compositor_marker="$TMP_ROOT/cage-marker"
+cat > "$session_bin/cage" <<EOF
+#!/usr/bin/env bash
+echo "\$@" >> "$compositor_marker"
+shift            # drop --
+exec "\$@"
+EOF
+cat > "$session_bin/dbus-run-session" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "--" ] && shift
+exec "$@"
+EOF
+chmod +x "$session_bin/cage" "$session_bin/dbus-run-session"
+set +e
+env -u DISPLAY -u WAYLAND_DISPLAY \
+PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
+PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
+PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
+    timeout 3 "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+compositor_rc=$?
+set -e
+test "$compositor_rc" -eq 124
+test -e "$compositor_marker"
+echo "  compositor bootstrap ok"
+
+echo "=== windows-vm.sh: locale-stable virsh parsing ==="
+grep -q 'virsh() { LC_ALL=C command virsh' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -q 'not falling back to direct QEMU' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+echo "  virsh locale + fallback guard ok"
 
 sddm_test_dir="$TMP_ROOT/sddm"
 PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \

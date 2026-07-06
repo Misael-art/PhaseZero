@@ -1,0 +1,12 @@
+Package: phasezero-control-center
+Version: 1.1.0
+Section: admin
+Priority: optional
+Architecture: all
+Maintainer: PhaseZero <noreply@phasezero.local>
+Depends: python3 (>= 3.10), python3-pyside6.qtwidgets, bash, jq
+Recommends: policykit-1, flatpak
+Homepage: https://github.com/Misael-art/PhaseZero
+Description: PhaseZero native Linux control center
+ Native Qt6 interface for safe previews, profiles, Steam Deck, Windows VM,
+ Waydroid, emulation, boot recovery, Flatpak and AI tooling.

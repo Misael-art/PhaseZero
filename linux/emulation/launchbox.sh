@@ -12,6 +12,7 @@ PZ_LAUNCHBOX_COMPAT_ROMS="${PZ_LAUNCHBOX_COMPAT_ROMS:-$PZ_EMULATION_ROOT/tools/l
 PZ_LAUNCHBOX_SCRIPT="$PZ_ROOT/linux/emulation/launchbox.py"
 PZ_LAUNCHBOX_IMPORTER="$PZ_ROOT/linux/emulation/launchbox_import.py"
 PZ_LAUNCHBOX_INSTALLER="${PZ_LAUNCHBOX_INSTALLER:-$PZ_LAUNCHBOX_ROOT/_hidden/_hidden/LaunchBox-13.5-Setup.exe}"
+PZ_LAUNCHBOX_VERSION="${PZ_LAUNCHBOX_VERSION:-13.5}"
 PZ_LAUNCHBOX_LOCK="${XDG_RUNTIME_DIR:-/tmp}/phasezero-launchbox-install.lock"
 PZ_LAUNCHBOX_WRAPPER="$PZ_LOCAL_BIN/phasezero-launchbox"
 PZ_BIGBOX_WRAPPER="$PZ_LOCAL_BIN/phasezero-bigbox"
@@ -101,21 +102,24 @@ launchbox_install_runtime_dependencies() {
 
 launchbox_validate_installer() {
     local installer="${1:-$PZ_LAUNCHBOX_INSTALLER}"
-    python3 - "$installer" <<'PY'
+    python3 - "$installer" "$PZ_LAUNCHBOX_VERSION" "${PZ_LAUNCHBOX_ALLOW_UNVERIFIED_SIGNATURE:-0}" <<'PY'
 import hashlib
 import json
+import re
 import struct
 import sys
 from pathlib import Path
 
 path = Path(sys.argv[1])
+expected_version = sys.argv[2]
+allow_unverified = sys.argv[3] == "1"
 if not path.is_file():
-    raise SystemExit(f"LaunchBox 13.5 installer missing: {path}")
-if path.name != "LaunchBox-13.5-Setup.exe":
+    raise SystemExit(f"LaunchBox {expected_version} installer missing: {path}")
+if not re.search(rf"(?<![0-9]){re.escape(expected_version)}(?![0-9])", path.name):
     raise SystemExit(f"unexpected installer name/version: {path.name}")
 size = path.stat().st_size
 if size < 250 * 1024 * 1024:
-    raise SystemExit(f"LaunchBox 13.5 installer invalid: {size} bytes (expected >250 MiB)")
+    raise SystemExit(f"LaunchBox {expected_version} installer invalid: {size} bytes (expected >250 MiB)")
 with path.open("rb") as stream:
     if stream.read(2) != b"MZ":
         raise SystemExit("LaunchBox installer is not a PE executable")
@@ -131,7 +135,7 @@ with path.open("rb") as stream:
         raise SystemExit("LaunchBox installer has an unsupported PE format")
     stream.seek(pe_offset + 24 + data_offset + (8 * 4))
     certificate_offset, certificate_size = struct.unpack("<II", stream.read(8))
-    if not certificate_offset or certificate_size < 8:
+    if (not certificate_offset or certificate_size < 8) and not allow_unverified:
         raise SystemExit("LaunchBox installer has no Authenticode certificate table")
 digest = hashlib.sha256()
 with path.open("rb") as stream:
@@ -141,8 +145,8 @@ print(json.dumps({
     "path": str(path),
     "size": size,
     "sha256": digest.hexdigest(),
-    "authenticodeTable": True,
-    "expectedVersion": "13.5",
+    "authenticodeTable": bool(certificate_offset and certificate_size >= 8),
+    "expectedVersion": expected_version,
 }))
 PY
     if command -v osslsigncode >/dev/null 2>&1; then
@@ -277,6 +281,8 @@ EOF
 }
 
 launchbox_write_desktop_entries() {
+    local bigbox_nodisplay=false
+    [ -f "$PZ_LAUNCHBOX_ROOT/License.xml" ] || bigbox_nodisplay=true
     pz_emulation_write_file "$PZ_LAUNCHBOX_DESKTOP" 0644 <<EOF
 [Desktop Entry]
 Type=Application
@@ -297,6 +303,7 @@ Exec=$PZ_BIGBOX_WRAPPER
 Terminal=false
 Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/bigbox.svg
 Categories=Game;Emulator;
+NoDisplay=$bigbox_nodisplay
 X-PhaseZero-Managed=true
 EOF
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
@@ -387,17 +394,18 @@ PY
 
 launchbox_verify_installed_version() {
     [ "${PZ_LAUNCHBOX_SKIP_VERSION_CHECK:-0}" = "1" ] && return 0
-    local candidate
+    local candidate version_re
+    version_re="${PZ_LAUNCHBOX_VERSION//./[.]}"
     for candidate in "$PZ_LAUNCHBOX_ROOT/LaunchBox.exe" "$PZ_LAUNCHBOX_ROOT/Core/LaunchBox.dll"; do
         [ -f "$candidate" ] || continue
-        if strings -a "$candidate" 2>/dev/null | grep -Eq '(^|[^0-9])13[.]5([.]0([.]0)?)?([^0-9]|$)'; then
+        if strings -a "$candidate" 2>/dev/null | grep -Eq "(^|[^0-9])${version_re}([.]0([.]0)?)?([^0-9]|$)"; then
             return 0
         fi
-        if strings -el "$candidate" 2>/dev/null | grep -Eq '(^|[^0-9])13[.]5([.]0([.]0)?)?([^0-9]|$)'; then
+        if strings -el "$candidate" 2>/dev/null | grep -Eq "(^|[^0-9])${version_re}([.]0([.]0)?)?([^0-9]|$)"; then
             return 0
         fi
     done
-    pz_error "installed LaunchBox version 13.5 could not be confirmed"
+    pz_error "installed LaunchBox version $PZ_LAUNCHBOX_VERSION could not be confirmed"
     return 1
 }
 
@@ -406,13 +414,14 @@ launchbox_verify_visual() {
     command -v import >/dev/null 2>&1 || { pz_error "ImageMagick import required for real BigBox verification"; return 1; }
     command -v identify >/dev/null 2>&1 || { pz_error "ImageMagick identify required for real BigBox verification"; return 1; }
     launchbox_verify_visual_app "LaunchBox.exe" '^LaunchBox' "launchbox"
-    launchbox_verify_visual_app "BigBox.exe" 'Big Box\\|BigBox' "bigbox"
+    [ "${PZ_LAUNCHBOX_REQUIRE_BIGBOX:-1}" = "0" ] ||
+        launchbox_verify_visual_app "BigBox.exe" 'Big Box\\|BigBox' "bigbox"
 }
 
 launchbox_verify_visual_app() {
     local executable="$1" title_pattern="$2" label="$3"
     local shot="${TMPDIR:-/tmp}/phasezero-${label}-verify-$$.png"
-    local pid window variance
+    local pid window variance dimensions width height
     launchbox_prepare_wine_runtime
     (
         cd "$PZ_LAUNCHBOX_ROOT"
@@ -420,10 +429,17 @@ launchbox_verify_visual_app() {
     ) >"/tmp/phasezero-${label}-verify.log" 2>&1 &
     pid=$!
     window=""
-    for _ in $(seq 1 90); do
+    for _ in $(seq 1 "${PZ_LAUNCHBOX_VERIFY_TIMEOUT:-180}"); do
         window="$(xdotool search --onlyvisible --name "$title_pattern" 2>/dev/null | tail -n 1 || true)"
-        [ -n "$window" ] && break
-        kill -0 "$pid" 2>/dev/null || break
+        if [ -n "$window" ]; then
+            dimensions="$(xdotool getwindowgeometry --shell "$window" 2>/dev/null || true)"
+            width="$(printf '%s\n' "$dimensions" | awk -F= '$1=="WIDTH" {print $2}')"
+            height="$(printf '%s\n' "$dimensions" | awk -F= '$1=="HEIGHT" {print $2}')"
+            if [ "${width:-0}" -ge 640 ] && [ "${height:-0}" -ge 360 ]; then
+                break
+            fi
+            window=""
+        fi
         sleep 1
     done
     if [ -z "$window" ]; then
@@ -434,6 +450,15 @@ launchbox_verify_visual_app() {
     fi
     import -window "$window" "$shot"
     variance="$(identify -format '%[standard-deviation]' "$shot")"
+    dimensions="$(identify -format '%w %h' "$shot")"
+    read -r width height <<<"$dimensions"
+    if [ "$width" -lt 640 ] || [ "$height" -lt 360 ]; then
+        kill "$pid" 2>/dev/null || true
+        wineserver -k >/dev/null 2>&1 || true
+        wait "$pid" 2>/dev/null || true
+        pz_error "$label rendered only a small error/dialog window: ${width}x${height}"
+        return 1
+    fi
     python3 - "$variance" <<'PY'
 import sys
 if float(sys.argv[1]) < 0.01:
@@ -478,7 +503,7 @@ cmd_install_clean() {
     launchbox_configure_wine
     launchbox_install_runtime_dependencies
     windows_stage="$(WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX" winepath -w "$stage")"
-    pz_info "Installing LaunchBox 13.5 into staging: $stage"
+    pz_info "Installing LaunchBox $PZ_LAUNCHBOX_VERSION into staging: $stage"
     timeout "${PZ_LAUNCHBOX_SETUP_TIMEOUT:-30m}" \
         env WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX" WINEDEBUG=-all \
         wine "$PZ_LAUNCHBOX_INSTALLER" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=$windows_stage"
@@ -488,9 +513,17 @@ cmd_install_clean() {
     }
     launchbox_verify_installed_version
     install -D -m 0644 "$PZ_LAUNCHBOX_INSTALLER" \
-        "$stage/_hidden/_hidden/LaunchBox-13.5-Setup.exe"
-    [ -f "$active_root/License.xml" ] && cp -a "$active_root/License.xml" "$stage/"
-    [ -f "$active_root/BigBox.dxvk-cache" ] && cp -a "$active_root/BigBox.dxvk-cache" "$stage/"
+        "$stage/install/$(basename "$PZ_LAUNCHBOX_INSTALLER")"
+    if [ -n "${PZ_LAUNCHBOX_LICENSE:-}" ] && [ -f "$PZ_LAUNCHBOX_LICENSE" ]; then
+        cp -a "$PZ_LAUNCHBOX_LICENSE" "$stage/License.xml"
+    elif [ -f "$active_root/License.xml" ]; then
+        cp -a "$active_root/License.xml" "$stage/"
+    fi
+    if [ -f "$active_root/BigBox.dxvk-cache" ]; then
+        cp -a "$active_root/BigBox.dxvk-cache" "$stage/"
+    elif [ -f "$active_root/_hidden/BigBox.dxvk-cache" ]; then
+        cp -a "$active_root/_hidden/BigBox.dxvk-cache" "$stage/BigBox.dxvk-cache"
+    fi
     python3 "$PZ_LAUNCHBOX_IMPORTER" import-esde
     launchbox_apply_bigbox_safe_settings
     launchbox_verify_structure
@@ -515,7 +548,7 @@ cmd_install_clean() {
         pz_error "post-promotion verification failed; previous root restored"
         return 1
     fi
-    pz_info "LaunchBox 13.5 clean install promoted. Previous root: $backup"
+    pz_info "LaunchBox $PZ_LAUNCHBOX_VERSION clean install promoted. Previous root: $backup"
 }
 
 launchbox_clean_arg() {

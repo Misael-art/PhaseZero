@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# GUI-only sudo compatibility shim. Keeps user-scoped work as user and routes
+# only commands explicitly prefixed with sudo through PhaseZero's PolicyKit bridge.
+set -euo pipefail
+
+if [ "${1:-}" = "-n" ]; then
+    shift
+    exec /usr/bin/sudo -n "$@"
+fi
+
+if command -v phasezero-admin >/dev/null 2>&1; then
+    exec phasezero-admin "$@"
+elif command -v bigsudo >/dev/null 2>&1; then
+    exec bigsudo "$@"
+elif command -v pkexec >/dev/null 2>&1; then
+    exec pkexec "$@"
+fi
+
+echo "PhaseZero: graphical admin bridge missing; run linux/pz ai setup admin" >&2
+exit 77
