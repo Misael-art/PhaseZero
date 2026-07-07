@@ -342,10 +342,109 @@ opencode_has_credentials() {
     [ -f "$OPENCODE_AUTH" ] && [ "$(jq 'length' "$OPENCODE_AUTH" 2>/dev/null || echo 0)" -gt 0 ]
 }
 
-# opencode has a usable model if it has cloud credentials OR a local provider.
+# --- keyless cloud free models (opencode Zen) --------------------------------
+#
+# opencode.ai serves several "*-free" Zen models that need NO auth and answer in
+# ~1s. A local Ollama default is keyless too, but CPU inference on weak APUs is
+# slow enough that the first token can exceed opencode-desktop's request timeout,
+# and the chat shows "Interrompido"/"Interrupted". So we prefer a fast keyless
+# Zen free model as the *default* (e.g. deepseek-v4-flash-free) and keep Ollama
+# as an offline-capable provider the user can switch to explicitly.
+ZEN_FREE_PREFERENCE=(
+    opencode/deepseek-v4-flash-free
+    opencode/mimo-v2.5-free
+    opencode/north-mini-code-free
+    opencode/nemotron-3-ultra-free
+    opencode/big-pickle
+)
+
+# Cache `opencode models` (a few seconds to run) for the life of the process.
+_OPENCODE_MODELS_CACHE=""
+_OPENCODE_MODELS_CACHED=0
+opencode_available_models() {
+    if [ "$_OPENCODE_MODELS_CACHED" = "0" ]; then
+        command -v opencode >/dev/null 2>&1 &&
+            _OPENCODE_MODELS_CACHE="$(timeout 30 opencode models 2>/dev/null || true)"
+        _OPENCODE_MODELS_CACHED=1
+    fi
+    printf '%s\n' "$_OPENCODE_MODELS_CACHE"
+}
+
+# Print the first keyless Zen free model opencode actually exposes (honours
+# PZ_OPENCODE_FREE_MODEL override), or non-zero if none is reachable.
+pick_zen_free_default() {
+    local models m
+    models="$(opencode_available_models)"
+    [ -n "$models" ] || return 1
+    if [ -n "${PZ_OPENCODE_FREE_MODEL:-}" ]; then
+        grep -qxF "$PZ_OPENCODE_FREE_MODEL" <<<"$models" &&
+            { printf '%s\n' "$PZ_OPENCODE_FREE_MODEL"; return 0; }
+    fi
+    for m in "${ZEN_FREE_PREFERENCE[@]}"; do
+        grep -qxF "$m" <<<"$models" && { printf '%s\n' "$m"; return 0; }
+    done
+    return 1
+}
+
+opencode_config_model() {
+    [ -f "$OPENCODE_CONFIG" ] || return 0
+    jq -r '.model // ""' "$OPENCODE_CONFIG" 2>/dev/null || true
+}
+
+# opencode has a usable model if it has cloud credentials, a local provider, or a
+# non-local default model already set (e.g. a keyless Zen free model).
 opencode_has_usable_model() {
     opencode_has_credentials && return 0
-    [ -f "$OPENCODE_CONFIG" ] && jq -e '.provider.ollama.models | length > 0' "$OPENCODE_CONFIG" >/dev/null 2>&1
+    [ -f "$OPENCODE_CONFIG" ] && jq -e '.provider.ollama.models | length > 0' "$OPENCODE_CONFIG" >/dev/null 2>&1 && return 0
+    local m; m="$(opencode_config_model)"
+    [ -n "$m" ] && [[ "$m" != ollama/* ]]
+}
+
+# Heal the default so the very first desktop/CLI chat answers instead of hanging.
+# Only touches hosts without cloud credentials, and only overrides an empty or
+# Ollama default (never a user's explicit cloud/proxy choice).
+configure_free_default_model() {
+    command -v jq >/dev/null 2>&1 || { pz_warn "jq required for free model default"; return 0; }
+    opencode_has_credentials && return 0
+
+    local model small current models
+    model="$(pick_zen_free_default || true)"
+    if [ -z "$model" ]; then
+        pz_warn "no keyless opencode free model reachable (offline?); leaving default model unchanged"
+        return 0
+    fi
+    models="$(opencode_available_models)"
+    for small in "${ZEN_FREE_PREFERENCE[@]}"; do
+        [ "$small" != "$model" ] && grep -qxF "$small" <<<"$models" && break
+        small=""
+    done
+    [ -n "$small" ] || small="$model"
+
+    current="$(opencode_config_model)"
+    if [ -n "$current" ] && [[ "$current" != ollama/* ]]; then
+        pz_info "opencode default model already set to $current; leaving as-is"
+        return 0
+    fi
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_info "dry-run: would set opencode default model to $model (small_model: $small)"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$OPENCODE_CONFIG")"
+    [ -f "$OPENCODE_CONFIG" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$OPENCODE_CONFIG"
+    cp "$OPENCODE_CONFIG" "${OPENCODE_CONFIG}.bak.$(date +%s)"
+    local tmp; tmp="$(mktemp)"
+    jq --arg model "$model" --arg small "$small" '.model = $model | .small_model = $small' \
+        "$OPENCODE_CONFIG" > "$tmp" && mv "$tmp" "$OPENCODE_CONFIG"
+    # opencode-desktop and CLI both read this dir; if a bare opencode.json also
+    # exists, keep its default in lockstep so neither surface hangs on Ollama.
+    local sibling="${OPENCODE_CONFIG%jsonc}json"
+    if [ "$sibling" != "$OPENCODE_CONFIG" ] && [ -f "$sibling" ] && jq empty "$sibling" >/dev/null 2>&1; then
+        tmp="$(mktemp)"
+        jq --arg model "$model" --arg small "$small" '.model = $model | .small_model = $small' \
+            "$sibling" > "$tmp" && mv "$tmp" "$sibling"
+    fi
+    pz_info "opencode default model set to keyless free model: $model (fallback small_model: $small)"
 }
 
 pick_local_default() {
@@ -382,17 +481,14 @@ configure_local_model() {
     tmp="$(mktemp)"
     # Set the default model only when the host has no cloud credentials (nothing
     # else would work) or no model is set yet; never override a user's choice.
-    jq --argjson models "$models_json" --arg url "$OLLAMA_URL/v1" --arg default "$default" \
-       --argjson noCreds "$(opencode_has_credentials && echo false || echo true)" '
+    jq --argjson models "$models_json" --arg url "$OLLAMA_URL/v1" --arg default "$default" '
         .provider.ollama = {
             "npm": "@ai-sdk/openai-compatible",
             "name": "Ollama (local)",
             "options": {"baseURL": $url, "apiKey": "ollama"},
             "models": $models
         }
-        | (if ($noCreds and ((.model // "") == "" or (.model | startswith("ollama/") | not)))
-             or ((.model // "") == "")
-           then .model = $default else . end)
+        | (if ((.model // "") == "") then .model = $default else . end)
     ' "$OPENCODE_CONFIG" > "$tmp" && mv "$tmp" "$OPENCODE_CONFIG"
 
     pz_info "configured opencode Ollama provider; default model: $(jq -r '.model // "unset"' "$OPENCODE_CONFIG")"
@@ -439,10 +535,12 @@ case "${1:-setup}" in
         ensure_clipboard_stack
         write_deck_launcher
         bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync opencode >/dev/null || pz_warn "OpenCode MCP sync failed"
-        # Keyless host with Ollama running: wire a local model so opencode has
-        # something to answer with instead of "Interrupted".
-        if ! opencode_has_credentials && [ -n "$(ollama_models)" ]; then
-            configure_local_model
+        # Keyless host: wire Ollama as an offline provider (when present) but make
+        # the DEFAULT a fast keyless Zen free model, so the first chat answers
+        # instead of hanging on slow local inference ("Interrompido").
+        if ! opencode_has_credentials; then
+            [ -n "$(ollama_models)" ] && configure_local_model
+            configure_free_default_model
         fi
         pz_info "OpenCode setup complete. Config at $OPENCODE_CONFIG"
         ;;
@@ -452,6 +550,12 @@ case "${1:-setup}" in
         ;;
     local-model|ollama)
         configure_local_model
+        ;;
+    free-model|free|zen)
+        # Heal the default to a fast keyless opencode Zen free model (fixes the
+        # "Interrompido" caused by a slow local Ollama default).
+        [ -n "$(ollama_models)" ] && ! opencode_has_credentials && configure_local_model
+        configure_free_default_model
         ;;
     version-status|version)
         opencode_version_status
@@ -471,7 +575,7 @@ case "${1:-setup}" in
         print_dry_run
         ;;
     *)
-        pz_error "usage: setup-opencode.sh (setup|sync|version-status|local-model|install-hook|remove-hook|desktop-integration|dry-run)"
+        pz_error "usage: setup-opencode.sh (setup|sync|version-status|local-model|free-model|install-hook|remove-hook|desktop-integration|dry-run)"
         exit 1
         ;;
 esac

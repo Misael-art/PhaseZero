@@ -7,7 +7,7 @@ PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 source "$PZ_ROOT/linux/lib/pacman.sh"
 
-PZ_SUBCOMMANDS="install steamdeck windows-vm waydroid emulation boot ai flatpak doctor support-bundle repair-plan tune ui help version"
+PZ_SUBCOMMANDS="install steamdeck windows-vm waydroid emulation server boot ai flatpak doctor support-bundle repair-plan tune ui help version"
 
 usage() {
     cat <<EOF
@@ -37,13 +37,21 @@ Usage:
   pz windows-vm install --iso PATH Create disk/config/launchers
   pz windows-vm optimize      Apply temporary Linux host tuning for QEMU
   pz windows-vm launch        Launch configured Windows VM
+  pz windows-vm host-access <a> Host->guest: mount VM disk (mount [--rw]|unmount|status)
   pz windows-vm boot status   Manage direct GRUB Windows VM boot entry
   pz waydroid status          Print Waydroid Android container status JSON
   pz waydroid plan            Preview Waydroid kiosk/direct boot plan
   pz waydroid install         Create Waydroid config/launchers
   pz waydroid repair          Apply Waydroid host/service repair
   pz waydroid launch          Launch optimized Waydroid session
+  pz waydroid host-access <a> Host->guest: browse Android storage (link|unlink|status)
   pz waydroid boot status     Manage direct GRUB Waydroid boot entry
+  pz server status            Home server (LLM/homelab/boot) status
+  pz server llm <action>      Local LLM server (install|expose-lan|restore|status)
+  pz server homelab <action>  Homelab Docker stack (up|down|restart|tailscale|status) [--extras]
+  pz server hermes <action>   Hermes remote actuation (setup|start|status)
+  pz server slim <action>     Reversible OS slimming (apply [--aggressive]|restore|status)
+  pz server boot <action>     GRUB Homelab entry (install|remove|status|next-reboot) [--llm --homelab --hermes]
   pz boot status              Boot recovery status
   pz boot menu                Show Linux-side boot selector
   pz boot selector            Open visual pre-reboot boot selector
@@ -136,7 +144,7 @@ Usage:
   pz ai compat status          Check RTK/Caveman/Headroom/ai-memory agent runtime
   pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
-  pz ai opencode <action>      OpenCode CLI<->desktop lockstep + local model (sync|status|local-model|install-hook)
+  pz ai opencode <action>      OpenCode CLI<->desktop lockstep + models (sync|status|local-model|free-model|install-hook)
   pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|all)
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
@@ -146,7 +154,9 @@ Usage:
   pz ai mcp status             Print MCP status JSON
   pz ai mcp list               List installed MCP servers
   pz ai proxies status         Status Linux AI proxy suite
-  pz ai proxies install [id]   Install/update all or one Linux AI proxy
+  pz ai proxies install [id]   Install/update all or one Linux AI proxy (also wires IDEs)
+  pz ai proxies configure-ides Wire proxies into opencode/opencode-desktop/zcode
+  pz ai proxies test           Honest probe: /v1/models + chat per proxy (JSON)
   pz doctor                    Run full system diagnostics
   pz support-bundle            Generate support tarball
   pz repair-plan               Generate repair plan
@@ -169,6 +179,12 @@ Profiles:
   waydroid-linux           Waydroid Android container with kiosk session and direct GRUB boot
   emulation-linux          EmuDeck/Eden + shared emulation layout
   homelab                  Docker homelab: jellyfin, nextcloud, vaultwarden
+  server-llm               Local LLM (Ollama) + slim reversible headless boot
+  server-homelab           Home server (Docker/Tailscale): drive, media, vault, monitor
+  server-homelab-hermes    Home server + Hermes remote actuation
+  server-llm-hermes        Local LLM + Hermes, slim OS
+  server-llm-homelab       Local LLM + home server, slim OS
+  server-llm-homelab-hermes  Everything combined, slim OS
   full-workstation         All profiles combined
 
 Environment:
@@ -324,6 +340,26 @@ cmd_boot() {
     bash "$PZ_ROOT/linux/boot/recovery.sh" "$@"
 }
 
+cmd_server() {
+    local sub="${1:-status}"
+    shift 2>/dev/null || true
+    case "$sub" in
+        status)
+            bash "$PZ_ROOT/linux/server/llm-server.sh" status
+            bash "$PZ_ROOT/linux/server/homelab-stack.sh" status
+            bash "$PZ_ROOT/linux/server/install-homelab-boot.sh" status
+            ;;
+        llm)      bash "$PZ_ROOT/linux/server/llm-server.sh" "${1:-status}" "${@:2}" ;;
+        homelab)  bash "$PZ_ROOT/linux/server/homelab-stack.sh" "${1:-status}" "${@:2}" ;;
+        up)       bash "$PZ_ROOT/linux/server/homelab-stack.sh" up "$@" ;;
+        down)     bash "$PZ_ROOT/linux/server/homelab-stack.sh" down ;;
+        hermes)   bash "$PZ_ROOT/linux/server/hermes-remote.sh" "${1:-status}" "${@:2}" ;;
+        slim)     bash "$PZ_ROOT/linux/server/os-slim.sh" "${1:-status}" "${@:2}" ;;
+        boot)     bash "$PZ_ROOT/linux/server/install-homelab-boot.sh" "${1:-status}" "${@:2}" ;;
+        *) pz_error "usage: pz server (status|llm|homelab|up|down|hermes|slim|boot) ..."; return 1 ;;
+    esac
+}
+
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
     [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|omo|compat|secrets|mcp) ..."; return 1; }
@@ -341,10 +377,11 @@ cmd_ai() {
                 sync|align) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" sync ;;
                 status|version-status) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status ;;
                 local-model|ollama) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" local-model ;;
+                free-model|free|zen) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" free-model ;;
                 install-hook) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" install-hook ;;
                 remove-hook) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" remove-hook ;;
                 setup) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" setup ;;
-                *) pz_error "usage: pz ai opencode (sync|status|local-model|install-hook|remove-hook|setup)"; return 1 ;;
+                *) pz_error "usage: pz ai opencode (sync|status|local-model|free-model|install-hook|remove-hook|setup)"; return 1 ;;
             esac
             ;;
         doctor)
@@ -515,6 +552,7 @@ main() {
         windows-vm|windows|winvm|win-vm) cmd_windows_vm "$@" ;;
         waydroid|android) cmd_waydroid "$@" ;;
         emulation)     cmd_emulation "$@" ;;
+        server)        cmd_server "$@" ;;
         boot)          cmd_boot "$@" ;;
         ai)            cmd_ai "$@" ;;
         doctor)        cmd_doctor "$@" ;;

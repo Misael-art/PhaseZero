@@ -1,0 +1,32 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "server-llm-homelab",
+  "description": "Local LLM (Ollama) + home server (Docker/Tailscale), on a slim reversible headless boot",
+  "os": ["linux"],
+  "packages": {
+    "linux": {
+      "pacman": ["ollama", "docker", "docker-compose", "git", "rsync", "tailscale", "jq", "curl"],
+      "yay": [],
+      "flatpak": []
+    }
+  },
+  "scripts": {
+    "linux": ["linux/server/apply-server-llm-homelab.sh"]
+  },
+  "systemd": {
+    "linux": {
+      "enable": ["ollama", "docker", "tailscaled"],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.swappiness": 10,
+        "net.ipv4.ip_forward": 1,
+        "vm.max_map_count": 262144,
+        "fs.inotify.max_user_watches": 65536
+      }
+    }
+  }
+}

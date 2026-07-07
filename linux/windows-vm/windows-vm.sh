@@ -1936,8 +1936,9 @@ case "$ACTION" in
     install|setup) install_vm "$@" ;;
     optimize|tune) cmd_optimize "$@" ;;
     shares|access) cmd_shares "$@" ;;
+    host-access|guest-disk|browse-guest) bash "$PZ_ROOT/linux/windows-vm/host-access.sh" "$@" ;;
     launch|start|run) launch_vm "$@" ;;
     boot) cmd_boot "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|launch|boot)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|launch|boot)"; exit 1 ;;
 esac

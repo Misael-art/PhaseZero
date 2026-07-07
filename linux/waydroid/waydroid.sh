@@ -1080,7 +1080,8 @@ case "$ACTION" in
     optimize|tune) cmd_optimize "$@" ;;
     launch|start|run) cmd_launch "$@" ;;
     shares|access) cmd_shares "$@" ;;
+    host-access|browse-guest|internal) bash "$PZ_ROOT/linux/waydroid/host-access.sh" "${@:-status}" ;;
     boot) cmd_boot "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: waydroid (status|plan|install|repair|optimize|launch|shares|boot)"; exit 1 ;;
+    *) pz_error "usage: waydroid (status|plan|install|repair|optimize|launch|shares|host-access|boot)"; exit 1 ;;
 esac

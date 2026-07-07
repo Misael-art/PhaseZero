@@ -1,0 +1,29 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "server-llm-hermes",
+  "description": "Local LLM (Ollama) + Hermes remote actuation, on a slim reversible headless boot",
+  "os": ["linux"],
+  "packages": {
+    "linux": {
+      "pacman": ["ollama", "git", "curl", "jq", "python", "tailscale"],
+      "yay": [],
+      "flatpak": []
+    }
+  },
+  "scripts": {
+    "linux": ["linux/server/apply-server-llm-hermes.sh"]
+  },
+  "systemd": {
+    "linux": {
+      "enable": ["ollama", "tailscaled"],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.swappiness": 10
+      }
+    }
+  }
+}

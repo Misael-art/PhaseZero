@@ -119,6 +119,14 @@ PUBLICSHARE Public
 TEMPLATES Templates
 EOF
 
+    # Opt-in: expose the whole home (incl. dotfiles) instead of just XDG folders.
+    # Default stays XDG-only so Android apps never see ~/.ssh, keys, tokens, etc.
+    if [ "${PZ_WAYDROID_SHARE_FULL_HOME:-0}" = "1" ] && [ -d "$TARGET_HOME" ]; then
+        ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/Home/All"
+        grant_media_access "$TARGET_HOME"
+        add_mount "$tmp" "$TARGET_HOME" "data/media/0/Host/Home/All"
+    fi
+
     install -d -o "$TARGET_USER" -g "$TARGET_USER" "$REMOVABLE_PATH" "$MEDIA_PATH"
     ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/SDCard" "$ANDROID_MEDIA_ROOT/Host/Removable" \
         "$ANDROID_MEDIA_ROOT/Host/Media" "$ANDROID_MEDIA_ROOT/Host/Mounts" "$ANDROID_MEDIA_ROOT/Host/Extra"
