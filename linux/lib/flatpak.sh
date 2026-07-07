@@ -162,15 +162,13 @@ pz_flatpak_audit() {
     echo "--- Runtimes ---"
     flatpak list --runtime --columns=application,branch,origin 2>/dev/null | sort -u
 
-    local runtimes
+    local runtimes multi_branch
     runtimes=$(flatpak list --runtime --columns=application,branch 2>/dev/null | awk '{print $1, $2}' | sort -u)
-    local dupes
-    dupes=$(echo "$runtimes" | awk 'NR>1 {print $1}' | sort | uniq -d)
-    if [ -n "$dupes" ]; then
-        echo "WARN: duplicate runtime branches:"
-        echo "$dupes" | while read -r app; do
-            echo "  $app"
-            conflicts=$((conflicts + 1))
+    multi_branch=$(echo "$runtimes" | awk 'NF >= 2 {print $1}' | sort | uniq -d)
+    if [ -n "$multi_branch" ]; then
+        echo "INFO: multiple runtime branches installed (normal when apps target different runtimes):"
+        echo "$multi_branch" | while read -r app; do
+            [ -n "$app" ] && echo "  $app"
         done
     fi
 
@@ -183,12 +181,16 @@ pz_flatpak_audit() {
     echo "system: $system_overrides"
 
     echo "--- Install Scope ---"
-    local system_apps user_apps
-    system_apps=$(flatpak list --system --columns=application 2>/dev/null | grep -v '^$' | wc -l)
-    user_apps=$(flatpak list --user --columns=application 2>/dev/null | grep -v '^$' | wc -l)
+    local system_apps user_apps duplicate_apps
+    system_apps=$(flatpak list --system --app --columns=application 2>/dev/null | grep -v '^$' | wc -l)
+    user_apps=$(flatpak list --user --app --columns=application 2>/dev/null | grep -v '^$' | wc -l)
+    duplicate_apps=$(comm -12 \
+        <(flatpak list --system --app --columns=application 2>/dev/null | sort -u) \
+        <(flatpak list --user --app --columns=application 2>/dev/null | sort -u) || true)
     echo "system: $system_apps apps, user: $user_apps apps"
-    if [ "$system_apps" -gt 0 ] && [ "$user_apps" -gt 0 ]; then
-        echo "WARN: apps installed in both system and user scopes"
+    if [ -n "$duplicate_apps" ]; then
+        echo "WARN: apps installed in both system and user scopes:"
+        echo "$duplicate_apps" | sed 's/^/  /'
         conflicts=$((conflicts + 1))
     fi
 
