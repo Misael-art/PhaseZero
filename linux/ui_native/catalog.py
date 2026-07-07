@@ -11,6 +11,7 @@ CATEGORIES = (
     ("Steam Deck", "input-gaming", "Modos, controles e SteamOS UX"),
     ("Windows VM", "computer", "QEMU/KVM e boot direto"),
     ("Waydroid", "phone", "Android, reparo e kiosk"),
+    ("Servidor", "network-server", "LLM local, homelab e Hermes"),
     ("Emulação", "applications-games", "Emuladores, mídia e integrações"),
     ("Boot Direto", "system-reboot", "GRUB, recuperação e próxima sessão"),
     ("Flatpak", "system-software-install", "Remotes, overrides e compatibilidade"),
@@ -72,6 +73,12 @@ def build_catalog(root: Path) -> list[ActionSpec]:
         "waydroid-linux": ("Waydroid Linux", "Android container e sessão kiosk.", "Android"),
         "emulation-linux": ("Emulação Linux", "EmuDeck, frontends e layout compartilhado.", "Emulação"),
         "homelab": ("Homelab", "Docker, mídia, nuvem e monitoramento.", "Servidor"),
+        "server-llm": ("Servidor LLM", "Ollama local + boot enxuto reversível.", "Servidor"),
+        "server-homelab": ("Servidor Homelab", "Docker + Tailscale: drive, mídia, cofre, monitor.", "Servidor"),
+        "server-homelab-hermes": ("Homelab + Hermes", "Servidor caseiro com atuação remota Hermes.", "Servidor"),
+        "server-llm-hermes": ("LLM + Hermes", "LLM local + Hermes remoto, SO enxuto.", "Servidor"),
+        "server-llm-homelab": ("LLM + Homelab", "LLM local + servidor caseiro, SO enxuto.", "Servidor"),
+        "server-llm-homelab-hermes": ("Servidor completo", "LLM + homelab + Hermes combinados.", "Servidor"),
         "full-workstation": ("Workstation completa", "Composição ampla; opt-in explícito.", "Abrangente"),
     }
     for profile_file in sorted((root / "profiles").glob("*.json")):
@@ -137,6 +144,24 @@ def build_catalog(root: Path) -> list[ActionSpec]:
             _a("waydroid.launch", "Waydroid", "Abrir Waydroid", "Inicia sessão otimizada.", ("waydroid", "launch"), "media-playback-start", mutable=True, preview=("waydroid", "status", "--json")),
             _a("waydroid.boot.install", "Waydroid", "Instalar boot direto", "Entrada GRUB para sessão Android.", ("waydroid", "boot", "install"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True),
             _a("waydroid.boot.next", "Waydroid", "Próximo boot Android", "Agenda sessão Waydroid.", ("waydroid", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True),
+            _a("waydroid.host-access", "Waydroid", "Acesso host → Android", "Link para o armazenamento interno do Waydroid.", ("waydroid", "host-access", "link"), "folder-remote", mutable=True, preview=("waydroid", "host-access", "status")),
+        ]
+    )
+    actions.append(
+        _a("windows.host-access", "Windows VM", "Acesso host → disco VM", "Monta o disco da VM no host (libguestfs).", ("windows-vm", "host-access", "mount"), "drive-harddisk", mutable=True, preview=("windows-vm", "host-access", "status")),
+    )
+
+    actions.extend(
+        [
+            _a("server.status", "Servidor", "Status servidor", "LLM local, homelab e entrada GRUB.", ("server", "status"), "network-server", badge="JSON"),
+            _a("server.llm", "Servidor", "Instalar LLM local", "Ollama como servidor (opcional LAN).", ("server", "llm", "install"), "applications-science", mutable=True, preview=("server", "llm", "status")),
+            _a("server.homelab.up", "Servidor", "Subir homelab", "Stack Docker: mídia, cofre, monitor.", ("server", "homelab", "up"), "server-database", mutable=True, preview=("server", "homelab", "status"), badge="Docker"),
+            _a("server.homelab.down", "Servidor", "Parar homelab", "Encerra a stack (volumes preservados).", ("server", "homelab", "down"), "media-playback-stop", mutable=True, preview=("server", "homelab", "status")),
+            _a("server.hermes", "Servidor", "Configurar Hermes", "Atuação remota via Tailscale.", ("server", "hermes", "setup"), "network-transmit-receive", mutable=True, preview=("server", "hermes", "status")),
+            _a("server.slim", "Servidor", "Enxugar SO", "Desliga serviços de desktop (reversível).", ("server", "slim", "apply"), "preferences-system-performance", mutable=True, preview=("server", "slim", "status"), elevated=True, badge="Reversível"),
+            _a("server.slim.restore", "Servidor", "Reverter enxugamento", "Restaura serviços desligados.", ("server", "slim", "restore"), "edit-undo", mutable=True, preview=("server", "slim", "status"), elevated=True),
+            _a("server.boot.install", "Servidor", "Instalar boot Homelab", "Entrada GRUB headless enxuta.", ("server", "boot", "install", "--llm", "--homelab"), "system-reboot", mutable=True, preview=("server", "boot", "dry-run", "--llm", "--homelab"), elevated=True),
+            _a("server.boot.next", "Servidor", "Próximo boot Homelab", "Agenda sessão servidor headless.", ("server", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("server", "boot", "status"), elevated=True),
         ]
     )
 
@@ -158,6 +183,7 @@ def build_catalog(root: Path) -> list[ActionSpec]:
         ("launchbox-sync", "Sincronizar LaunchBox", "Reconstrói biblioteca usando ROMs e mídia do ES-DE.", ("emulation", "launchbox", "import-esde"), ("emulation", "launchbox", "status")),
         ("launchbox-verify", "Verificar LaunchBox", "Valida executáveis, XML, capas e contagens.", ("emulation", "launchbox", "verify"), ("emulation", "launchbox", "status")),
         ("bigbox-test", "Testar Big Box", "Confirma janela visível e imagem não preta.", ("emulation", "launchbox", "verify", "--real"), ("emulation", "launchbox", "status")),
+        ("controllers", "Controles Steam Deck", "Perfil de gamepad para Ryujinx e RPCS3.", ("emulation", "controllers", "apply"), ("emulation", "controllers", "status")),
         ("frontends", "Reparar frontends", "Switcher BigBox, Steam, ES-DE e Heroic.", ("emulation", "frontends", "repair"), ("emulation", "frontends", "plan")),
         ("performance", "Aplicar performance", "Perfis adaptativos Switch/PS3/PS4.", ("emulation", "performance", "apply"), ("emulation", "performance", "plan")),
         ("lsfg", "Preparar LSFG", "Instala layer Vulkan verificada.", ("emulation", "performance", "prepare-lsfg"), ("emulation", "performance", "status")),
@@ -228,6 +254,7 @@ def build_catalog(root: Path) -> list[ActionSpec]:
         ("compat", "Agent compatibility", "RTK, Caveman, Headroom e memória.", ("ai", "compat", "setup"), ("ai", "compat", "status")),
         ("admin", "Admin bridge", "Instala phasezero-admin/bigsudo.", ("ai", "setup", "admin"), ("ai", "admin", "status")),
         ("opencode", "Sincronizar OpenCode", "Alinha CLI e desktop.", ("ai", "opencode", "sync"), ("ai", "opencode", "status")),
+        ("opencode-free", "Modelo free OpenCode", "Corrige 'Interrompido' com modelo free (deepseek-flash).", ("ai", "opencode", "free-model"), ("ai", "opencode", "status")),
         ("omo", "Instalar OMO", "Plugin oh-my-openagent.", ("ai", "omo", "setup"), ("ai", "omo", "status")),
         ("memory", "Instalar ai-memory", "Memória persistente de agentes.", ("ai", "setup", "memory"), ("ai", "status")),
         ("ollama", "Instalar Ollama", "Runtime local de modelos.", ("ai", "setup", "ollama"), ("ai", "status")),
@@ -236,6 +263,8 @@ def build_catalog(root: Path) -> list[ActionSpec]:
         ("ides", "Configurar IDEs", "Integrações de agentes.", ("ai", "setup", "ides"), ("ai", "status")),
         ("mcp-sync", "Sincronizar MCPs", "Sincroniza defaults seguros.", ("ai", "mcp", "sync", "all"), ("ai", "mcp", "status")),
         ("proxies", "Instalar proxies IA", "Suite Linux OpenAI-compatible.", ("ai", "proxies", "install", "all"), ("ai", "proxies", "status")),
+        ("proxies-ides", "Configurar proxies nas IDEs", "Wire opencode/opencode-desktop/zcode.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
+        ("proxies-test", "Testar proxies IA", "Probe honesto /v1/models + chat.", ("ai", "proxies", "test"), None),
     ]
     for key, title, description, args, preview in ai_rows:
         actions.append(

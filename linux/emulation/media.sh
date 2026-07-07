@@ -491,6 +491,24 @@ retroarch|thumbnails|$PZ_MEDIA_ROOT/retroarch/thumbnails|$PZ_XDG_CONFIG_HOME/ret
 ppsspp|screenshots|$PZ_MEDIA_ROOT/psp/screenshots|$PZ_XDG_CONFIG_HOME/ppsspp/PSP/SCREENSHOT
 rpcs3|screenshots|$PZ_MEDIA_ROOT/ps3/screenshots|$PZ_XDG_CONFIG_HOME/rpcs3/screenshots
 LINKS
+    # Flatpak emulators store config under ~/.var/app/<id>/... instead of the
+    # native XDG paths above, so their media dirs were never linked to canonical
+    # (e.g. flatpak RetroArch showed no box art while ES-DE/frontends had media).
+    if [ -d "$HOME/.var/app/org.libretro.RetroArch/config/retroarch" ]; then
+        printf 'retroarch|thumbnails|%s|%s\n' \
+            "$PZ_MEDIA_ROOT/retroarch/thumbnails" \
+            "$HOME/.var/app/org.libretro.RetroArch/config/retroarch/thumbnails"
+    fi
+    if [ -d "$HOME/.var/app/org.duckstation.DuckStation/config/duckstation" ]; then
+        printf 'duckstation|covers|%s|%s\n' \
+            "$PZ_MEDIA_ROOT/psx/covers" \
+            "$HOME/.var/app/org.duckstation.DuckStation/config/duckstation/covers"
+    fi
+    if [ -d "$HOME/.var/app/net.pcsx2.PCSX2/config/PCSX2" ]; then
+        printf 'pcsx2|covers|%s|%s\n' \
+            "$PZ_MEDIA_ROOT/ps2/covers" \
+            "$HOME/.var/app/net.pcsx2.PCSX2/config/PCSX2/covers"
+    fi
 }
 
 pz_media_link_status() {
