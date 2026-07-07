@@ -12,8 +12,10 @@ from PySide6.QtWidgets import QApplication
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from linux.ui_native.boot_selector import BootSelectorWindow
     from linux.ui_native.main_window import MainWindow
 else:
+    from .boot_selector import BootSelectorWindow
     from .main_window import MainWindow
 
 
@@ -86,6 +88,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--screenshot", default="")
     parser.add_argument("--light", action="store_true")
+    parser.add_argument("--boot-selector", action="store_true")
     return parser.parse_args()
 
 
@@ -98,8 +101,11 @@ def main() -> int:
     app.setDesktopFileName("io.phasezero.ControlCenter")
     app.setQuitOnLastWindowClosed(True)
     apply_theme(app, "light" if args.light else "dark")
-    window = MainWindow(ROOT, initial_category=args.category)
-    window.theme_changed.connect(lambda theme: apply_theme(app, theme))
+    if args.boot_selector:
+        window = BootSelectorWindow(ROOT, smoke_test=args.smoke_test)
+    else:
+        window = MainWindow(ROOT, initial_category=args.category)
+        window.theme_changed.connect(lambda theme: apply_theme(app, theme))
     window.show()
     if args.smoke_test:
         def finish() -> None:

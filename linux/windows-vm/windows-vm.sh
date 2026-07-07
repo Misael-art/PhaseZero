@@ -30,8 +30,10 @@ SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
 BOOT_HELPER_SOURCE="$PZ_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 SESSION_SOURCE="$PZ_ROOT/linux/windows-vm/windows-vm-session.sh"
+DISPLAY_SESSION_SOURCE="$PZ_ROOT/linux/steamdeck/display-session.sh"
 BOOT_HELPER_TARGET="/usr/local/lib/phasezero/windows-vm-boot-prepare"
 SESSION_TARGET="/usr/local/lib/phasezero/windows-vm-session"
+DISPLAY_SESSION_TARGET="/usr/local/lib/phasezero/display-session"
 RUNTIME_ROOT="/usr/local/lib/phasezero/windows-vm-runtime"
 RUNTIME_LAUNCHER="$RUNTIME_ROOT/linux/windows-vm/windows-vm.sh"
 RUNTIME_COMMON="$RUNTIME_ROOT/linux/lib/common.sh"
@@ -1644,6 +1646,7 @@ root_env_content() {
     printf 'PZ_WINDOWS_VM_REPO=%q\n' "$PZ_ROOT"
     printf 'PZ_WINDOWS_VM_BOOT_USER=%q\n' "$TARGET_USER"
     printf 'PZ_WINDOWS_VM_RUNTIME_LAUNCHER=%q\n' "$RUNTIME_LAUNCHER"
+    printf 'PZ_DISPLAY_SESSION_HELPER=%q\n' "$DISPLAY_SESSION_TARGET"
     printf 'PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=%q\n' "${PZ_WINDOWS_VM_SESSION_RETRY_SECONDS:-5}"
     printf 'PZ_WINDOWS_VM_DESKTOP_FALLBACK=%q\n' "${PZ_WINDOWS_VM_DESKTOP_FALLBACK:-0}"
 }
@@ -1660,8 +1663,9 @@ root_env_value() {
 }
 
 boot_artifacts_current() {
-    [ -x "$BOOT_HELPER_TARGET" ] &&
+        [ -x "$BOOT_HELPER_TARGET" ] &&
         [ -x "$SESSION_TARGET" ] &&
+        [ -r "$DISPLAY_SESSION_TARGET" ] &&
         [ -x "$RUNTIME_LAUNCHER" ] &&
         [ -r "$RUNTIME_COMMON" ] &&
         [ -f "$SERVICE_FILE" ] &&
@@ -1671,6 +1675,7 @@ boot_artifacts_current() {
         [ -x "$GRUB_SCRIPT" ] || return 1
     cmp -s "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
     cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
+    cmp -s "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET" || return 1
     cmp -s "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER" || return 1
     cmp -s "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON" || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_REPO)" = "$PZ_ROOT" ] || return 1
@@ -1759,6 +1764,7 @@ install_boot() {
     install -d /usr/local/lib/phasezero "$RUNTIME_ROOT/linux/windows-vm" "$RUNTIME_ROOT/linux/lib" /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
     install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
     install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
+    install -m 0644 "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET"
     install -m 0755 "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER"
     install -m 0644 "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON"
     root_env_content > "$ROOT_ENV_FILE"

@@ -15,6 +15,7 @@ export XDG_RUNTIME_DIR="$TMP_ROOT/run"
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 
 bash -n "$REPO_ROOT/linux/pz"
+bash -n "$REPO_ROOT/linux/steamdeck/display-session.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
@@ -55,10 +56,58 @@ session_validation="$(
     "$REPO_ROOT/linux/waydroid/waydroid-session.sh" --validate
 )"
 grep -q 'waydroid_session_ready=yes' <<< "$session_validation"
+grep -q 'display_profile=' <<< "$session_validation"
+grep -q 'compositor=' <<< "$session_validation"
 ! grep -q 'startkde-biglinux' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 grep -q 'session_is_running' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 grep -q 'android_platform_ready' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 grep -q 'full UI accepted; monitoring Android session' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+grep -q 'PZ_WAYDROID_DESKTOP_FALLBACK' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+grep -q 'desktop fallback disabled' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+
+gamescope_args_file="$TMP_ROOT/waydroid-gamescope-args"
+display_dmi="$TMP_ROOT/display-dmi"
+display_sys="$TMP_ROOT/display-sys"
+mkdir -p "$display_dmi" "$display_sys/class/drm/card1-eDP-1"
+printf 'Jupiter\n' > "$display_dmi/product_name"
+printf 'connected\n' > "$display_sys/class/drm/card1-eDP-1/status"
+cat > "$fake_bin/dbus-run-session" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "--" ] && shift
+exec "$@"
+EOF
+cat > "$fake_bin/gamescope" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "$gamescope_args_file"
+exit 77
+EOF
+chmod +x "$fake_bin/dbus-run-session" "$fake_bin/gamescope"
+gamescope_validation="$(
+    env -u DISPLAY -u WAYLAND_DISPLAY \
+    PATH="$fake_bin:/usr/bin:/bin" \
+    PZ_DISPLAY_DMI_ROOT="$display_dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
+    PZ_WAYDROID_ENV_FILE="$stale_env" \
+    PZ_WAYDROID_REPO_FALLBACK="$REPO_ROOT" \
+    PZ_WAYDROID_SESSION_TARGET="$REPO_ROOT/linux/waydroid/waydroid-session.sh" \
+        "$REPO_ROOT/linux/waydroid/waydroid-session.sh" --validate
+)"
+grep -q 'display_profile=steamdeck-lcd-handheld' <<< "$gamescope_validation"
+grep -q 'compositor=gamescope' <<< "$gamescope_validation"
+grep -q -- '--force-orientation right' <<< "$gamescope_validation"
+set +e
+env -u DISPLAY -u WAYLAND_DISPLAY \
+PATH="$fake_bin:/usr/bin:/bin" \
+PZ_DISPLAY_DMI_ROOT="$display_dmi" \
+PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
+PZ_WAYDROID_ENV_FILE="$stale_env" \
+PZ_WAYDROID_REPO_FALLBACK="$REPO_ROOT" \
+PZ_WAYDROID_SESSION_TARGET="$REPO_ROOT/linux/waydroid/waydroid-session.sh" \
+    timeout 3 "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+gamescope_rc=$?
+set -e
+test "$gamescope_rc" -eq 77
+grep -q -- '--backend drm --expose-wayland --force-orientation right -W 1280 -H 800 -w 1280 -h 800 --force-windows-fullscreen --' "$gamescope_args_file"
 
 shares_root="$TMP_ROOT/shares"
 mkdir -p "$HOME/Desktop" "$HOME/Downloads" "$shares_root/sdcard" "$shares_root/removable" \

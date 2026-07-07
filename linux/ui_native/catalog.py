@@ -195,7 +195,8 @@ def build_catalog(root: Path) -> list[ActionSpec]:
     actions.extend(
         [
             _a("boot.status", "Boot Direto", "Status boot", "Audita GRUB, ESP e entradas PhaseZero.", ("boot", "status"), "system-reboot"),
-            _a("boot.menu", "Boot Direto", "Abrir seletor", "Escolhe próxima sessão visualmente.", ("boot", "menu"), "view-list-icons", mutable=True, preview=("boot", "status")),
+            _a("boot.selector", "Boot Direto", "Seletor visual", "Escolhe próxima sessão antes do reboot.", ("boot", "selector"), "view-list-icons"),
+            _a("boot.menu", "Boot Direto", "Abrir menu texto", "Lista escolhas de próxima sessão.", ("boot", "menu"), "view-list-icons"),
             _a("boot.safe-menu", "Boot Direto", "Instalar menu seguro", "Mantém GRUB visível com timeout.", ("boot", "install-safe-menu"), "security-high", mutable=True, preview=("boot", "safe-menu", "dry-run"), elevated=True, badge="Protegido"),
             _a("boot.card", "Boot Direto", "Cartão de recuperação", "Mostra comandos de resgate deste host.", ("boot", "card"), "help-browser"),
             _a("boot.install-card", "Boot Direto", "Salvar cartão", "Grava cartão no host e ESP.", ("boot", "install-card"), "document-save", mutable=True, preview=("boot", "card"), elevated=True),

@@ -433,7 +433,9 @@ PhaseZero boot choices
 
 Use:
   linux/pz boot choose <choice>
+  linux/pz boot choose <choice> --dry-run
   linux/pz boot choose <choice> --reboot
+  linux/pz boot selector
 
 GRUB hotkeys when keyboard input works:
   s SteamOS, w Windows VM, a Waydroid, e Emergency
@@ -443,6 +445,46 @@ Steam Deck note:
   Install the safe visible GRUB menu with: sudo linux/pz boot install-safe-menu
   Prefer this Linux-side selector or desktop launchers before reboot.
 EOF
+}
+
+boot_choice_id() {
+    case "$1" in
+        normal|default|linux|biglinux) printf '%s\n' "" ;;
+        steamos|steam|gamepad) printf '%s\n' "phasezero-steamos" ;;
+        windows|windows-vm|win) printf '%s\n' "phasezero-windows-vm" ;;
+        waydroid|android) printf '%s\n' "phasezero-waydroid" ;;
+        emergency|rescue) printf '%s\n' "phasezero-emergency-shell" ;;
+        *) return 1 ;;
+    esac
+}
+
+boot_next_entry() {
+    command -v grub-editenv >/dev/null 2>&1 || return 1
+    grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}'
+}
+
+validate_next_entry() {
+    local expected="$1" actual
+    command -v grub-editenv >/dev/null 2>&1 || { pz_warn "grub-editenv missing; next_entry validation skipped"; return 0; }
+    actual="$(boot_next_entry || true)"
+    if [ -z "$expected" ]; then
+        [ -z "$actual" ] || { pz_error "next_entry validation failed: expected empty, got $actual"; return 1; }
+    else
+        [ "$actual" = "$expected" ] || { pz_error "next_entry validation failed: expected $expected, got ${actual:-empty}"; return 1; }
+    fi
+    pz_info "next_entry validated: ${actual:-default}"
+}
+
+cmd_selector() {
+    if [ -x "$PZ_ROOT/linux/ui/native.sh" ]; then
+        exec "$PZ_ROOT/linux/ui/native.sh" --boot-selector
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        cd "$PZ_ROOT"
+        exec python3 -m linux.ui_native --boot-selector
+    fi
+    pz_error "native UI unavailable; use: linux/pz boot menu"
+    return 1
 }
 
 cmd_menu() {
@@ -459,15 +501,24 @@ cmd_menu() {
 }
 
 cmd_choose() {
-    local choice="${1:-}" reboot=0 arg
-    [ -n "$choice" ] || { pz_error "usage: linux/pz boot choose (normal|steamos|windows|waydroid|emergency) [--reboot]"; return 1; }
+    local choice="${1:-}" reboot=0 dry_run=0 arg expected
+    [ -n "$choice" ] || { pz_error "usage: linux/pz boot choose (normal|steamos|windows|waydroid|emergency) [--dry-run] [--reboot]"; return 1; }
     shift || true
     for arg in "$@"; do
         case "$arg" in
             --reboot) reboot=1 ;;
-            *) pz_error "usage: linux/pz boot choose (normal|steamos|windows|waydroid|emergency) [--reboot]"; return 1 ;;
+            --dry-run|-n) dry_run=1 ;;
+            *) pz_error "usage: linux/pz boot choose (normal|steamos|windows|waydroid|emergency) [--dry-run] [--reboot]"; return 1 ;;
         esac
     done
+    expected="$(boot_choice_id "$choice")" || { pz_error "unknown boot choice: $choice"; return 1; }
+    if [ "$dry_run" = "1" ]; then
+        echo "PhaseZero boot choose dry-run"
+        echo "  choice: $choice"
+        echo "  next_entry: ${expected:-default}"
+        echo "  would_reboot: $([ "$reboot" = "1" ] && echo yes || echo no)"
+        return 0
+    fi
 
     case "$choice" in
         normal|default|linux|biglinux)
@@ -478,21 +529,12 @@ cmd_choose() {
             pz_info "one-shot GRUB entry cleared; next boot uses distro default"
             ;;
         steamos|steam|gamepad)
-            if [ "$reboot" = "1" ]; then
-                exec bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" next-reboot
-            fi
             bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" next
             ;;
         windows|windows-vm|win)
-            if [ "$reboot" = "1" ]; then
-                exec bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" boot next-reboot
-            fi
             bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" boot next
             ;;
         waydroid|android)
-            if [ "$reboot" = "1" ]; then
-                exec bash "$PZ_ROOT/linux/waydroid/waydroid.sh" boot next-reboot
-            fi
             bash "$PZ_ROOT/linux/waydroid/waydroid.sh" boot next
             ;;
         emergency|rescue)
@@ -503,6 +545,7 @@ cmd_choose() {
             return 1
             ;;
     esac
+    validate_next_entry "$expected"
 
     if [ "$reboot" = "1" ]; then
         pz_info "rebooting"
@@ -519,7 +562,8 @@ case "$ACTION" in
     install-card|install-recovery-card) cmd_install_card ;;
     install-efi-fallback|efi-fallback|repair-active-efi) cmd_install_efi_fallback "$@" ;;
     emergency-shell|emergency) shift || true; cmd_emergency "${1:-status}" ;;
+    selector|visual-selector|gui) cmd_selector ;;
     menu|choices|select) cmd_menu ;;
     choose|next) shift || true; cmd_choose "$@" ;;
-    *) pz_error "usage: linux/pz boot (status|menu|choose|safe-menu|install-safe-menu|card|install-card|install-efi-fallback [--active] [--fallback]|emergency-shell)"; exit 1 ;;
+    *) pz_error "usage: linux/pz boot (status|menu|selector|choose|safe-menu|install-safe-menu|card|install-card|install-efi-fallback [--active] [--fallback]|emergency-shell)"; exit 1 ;;
 esac

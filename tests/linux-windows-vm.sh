@@ -18,6 +18,7 @@ iso="$TMP_ROOT/Win11_test.iso"
 printf 'fake iso for dry-run tests\n' > "$iso"
 
 bash -n "$REPO_ROOT/linux/pz"
+bash -n "$REPO_ROOT/linux/steamdeck/display-session.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
@@ -58,6 +59,8 @@ grep -q 'windows_vm_session_ready=yes' <<< "$session_validation"
 grep -Fq "repo=$REPO_ROOT" <<< "$session_validation"
 grep -q 'launcher_kind=dispatcher' <<< "$session_validation"
 grep -q 'windows-vm launch --fullscreen' <<< "$session_validation"
+grep -q 'display_profile=' <<< "$session_validation"
+grep -q 'compositor=' <<< "$session_validation"
 ! grep -q 'startkde-biglinux' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
 
 session_bin="$TMP_ROOT/session-bin"
@@ -91,7 +94,7 @@ runtime_validation="$(
         "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
 )"
 grep -q 'launcher_kind=runtime' <<< "$runtime_validation"
-grep -Fq "command=$fake_runtime launch --fullscreen " <<< "$runtime_validation"
+grep -Fq "command=$fake_runtime launch --fullscreen" <<< "$runtime_validation"
 
 set +e
 PATH="$session_bin:/usr/bin:/bin" \
@@ -140,16 +143,58 @@ test -e "$plasma_marker"
 
 echo "=== Session: compositor bootstrap for headless boot ==="
 compositor_marker="$TMP_ROOT/cage-marker"
+gamescope_args_file="$TMP_ROOT/gamescope-args"
+display_dmi="$TMP_ROOT/display-dmi"
+display_sys="$TMP_ROOT/display-sys"
+mkdir -p "$display_dmi" "$display_sys/class/drm/card1-eDP-1"
+printf 'Jupiter\n' > "$display_dmi/product_name"
+printf 'connected\n' > "$display_sys/class/drm/card1-eDP-1/status"
+cat > "$session_bin/dbus-run-session" <<'EOF'
+#!/usr/bin/env bash
+[ "$1" = "--" ] && shift
+exec "$@"
+EOF
+cat > "$session_bin/gamescope" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" > "$gamescope_args_file"
+exit 77
+EOF
+chmod +x "$session_bin/dbus-run-session" "$session_bin/gamescope"
+gamescope_validation="$(
+    env -u DISPLAY -u WAYLAND_DISPLAY \
+    PATH="$session_bin:/usr/bin:/bin" \
+    PZ_DISPLAY_DMI_ROOT="$display_dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
+    PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
+    PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+        "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
+)"
+grep -q 'display_profile=steamdeck-lcd-handheld' <<< "$gamescope_validation"
+grep -q 'compositor=gamescope' <<< "$gamescope_validation"
+grep -q -- '--force-orientation right' <<< "$gamescope_validation"
+set +e
+env -u DISPLAY -u WAYLAND_DISPLAY \
+PATH="$session_bin:/usr/bin:/bin" \
+PZ_DISPLAY_DMI_ROOT="$display_dmi" \
+PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
+PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
+PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
+PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
+    timeout 3 "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+gamescope_rc=$?
+set -e
+test "$gamescope_rc" -eq 77
+grep -q -- '--backend drm --expose-wayland --force-orientation right -W 1280 -H 800 -w 1280 -h 800 --force-windows-fullscreen --' "$gamescope_args_file"
+rm -f "$session_bin/gamescope" "$gamescope_args_file"
+
 cat > "$session_bin/cage" <<EOF
 #!/usr/bin/env bash
 echo "\$@" >> "$compositor_marker"
 shift            # drop --
 exec "\$@"
-EOF
-cat > "$session_bin/dbus-run-session" <<'EOF'
-#!/usr/bin/env bash
-[ "$1" = "--" ] && shift
-exec "$@"
 EOF
 chmod +x "$session_bin/cage" "$session_bin/dbus-run-session"
 set +e

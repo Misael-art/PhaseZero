@@ -19,6 +19,32 @@ find "$REPO_ROOT/linux" -type f -name '*.sh' -exec bash -n {} \;
 
 jq empty "$REPO_ROOT"/profiles/*.json
 
+display_root="$TMP_ROOT/display"
+mkdir -p "$display_root/dmi" "$display_root/sys/class/drm/card1-eDP-1" "$display_root/sys/class/drm/card1-DP-1"
+printf 'Jupiter\n' > "$display_root/dmi/product_name"
+printf 'connected\n' > "$display_root/sys/class/drm/card1-eDP-1/status"
+printf 'disconnected\n' > "$display_root/sys/class/drm/card1-DP-1/status"
+display_profile="$(
+    PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_profile"
+)"
+test "$display_profile" = "steamdeck-lcd-handheld"
+printf 'connected\n' > "$display_root/sys/class/drm/card1-DP-1/status"
+display_profile="$(
+    PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_profile"
+)"
+test "$display_profile" = "steamdeck-docked"
+printf 'GenericBox\n' > "$display_root/dmi/product_name"
+display_profile="$(
+    PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_profile"
+)"
+test "$display_profile" = "generic"
+
 "$REPO_ROOT/linux/pz" help >/dev/null
 "$REPO_ROOT/linux/pz" steamdeck detect >/dev/null
 "$REPO_ROOT/linux/pz" steamdeck keyboard status | jq -e '.provider' >/dev/null

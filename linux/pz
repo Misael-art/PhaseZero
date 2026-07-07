@@ -46,6 +46,7 @@ Usage:
   pz waydroid boot status     Manage direct GRUB Waydroid boot entry
   pz boot status              Boot recovery status
   pz boot menu                Show Linux-side boot selector
+  pz boot selector            Open visual pre-reboot boot selector
   pz boot choose <choice>     Set one-shot boot: normal|steamos|windows|waydroid|emergency
   pz boot install-safe-menu   Make GRUB menu visible with safe timeout
   pz boot card                Print GRUB rescue commands for this host

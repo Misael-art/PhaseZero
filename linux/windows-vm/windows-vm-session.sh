@@ -8,10 +8,41 @@ ENV_FILE="${PZ_WINDOWS_VM_ENV_FILE:-/etc/phasezero/windows-vm.env}"
 CONFIGURED_REPO="${PZ_WINDOWS_VM_REPO:-}"
 PZ_WINDOWS_VM_REPO_FALLBACK="${PZ_WINDOWS_VM_REPO_FALLBACK:-/mnt/sdcard/Projects/PhaseZero}"
 RUNTIME_LAUNCHER="${PZ_WINDOWS_VM_RUNTIME_LAUNCHER:-/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/windows-vm.sh}"
+DISPLAY_SESSION_HELPER="${PZ_DISPLAY_SESSION_HELPER:-/usr/local/lib/phasezero/display-session}"
 RETRY_SECONDS="${PZ_WINDOWS_VM_SESSION_RETRY_SECONDS:-5}"
 DESKTOP_FALLBACK="${PZ_WINDOWS_VM_DESKTOP_FALLBACK:-0}"
 LAUNCHER_KIND=""
 LAUNCHER_ARGS=()
+
+load_display_session_helper() {
+    local candidate
+    for candidate in \
+        "$DISPLAY_SESSION_HELPER" \
+        "$CONFIGURED_REPO/linux/steamdeck/display-session.sh" \
+        "$PZ_WINDOWS_VM_REPO_FALLBACK/linux/steamdeck/display-session.sh" \
+        "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/steamdeck/display-session.sh"; do
+        [ -n "$candidate" ] || continue
+        if [ -r "$candidate" ]; then
+            # shellcheck disable=SC1090
+            . "$candidate"
+            return 0
+        fi
+    done
+
+    pz_display_profile() { printf '%s\n' "generic"; }
+    pz_display_external_connectors_csv() { printf '%s\n' ""; }
+    pz_display_gamescope_orientation() { printf '%s\n' "${PZ_STEAMDECK_LCD_ORIENTATION:-right}"; }
+    pz_display_gamescope_width() { printf '%s\n' "${PZ_STEAMDECK_LCD_LOGICAL_WIDTH:-1280}"; }
+    pz_display_gamescope_height() { printf '%s\n' "${PZ_STEAMDECK_LCD_LOGICAL_HEIGHT:-800}"; }
+    pz_display_shell_join() {
+        local out="" arg
+        for arg in "$@"; do
+            printf -v arg '%q' "$arg"
+            out="${out:+$out }$arg"
+        done
+        printf '%s\n' "$out"
+    }
+}
 
 resolve_launcher() {
     local candidate
@@ -50,18 +81,122 @@ resolve_launcher() {
 
 PZ_BIN=""
 resolve_launcher || true
+load_display_session_helper
 
 launcher_command() {
-    printf '%q ' "$PZ_BIN" "${LAUNCHER_ARGS[@]}"
+    pz_display_shell_join "$PZ_BIN" "${LAUNCHER_ARGS[@]}"
+}
+
+display_profile() {
+    pz_display_profile
+}
+
+external_connectors() {
+    pz_display_external_connectors_csv
+}
+
+session_has_display() {
+    [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ] || [ "${PZ_WINDOWS_VM_INSIDE_COMPOSITOR:-0}" = "1" ]
+}
+
+compositor_kind() {
+    local requested="${PZ_WINDOWS_VM_COMPOSITOR:-auto}" profile
+    session_has_display && { printf '%s\n' "existing-session"; return 0; }
+    [ "$requested" = "0" ] && { printf '%s\n' "none"; return 0; }
+    profile="$(display_profile)"
+
+    case "$requested" in
+        gamescope)
+            command -v gamescope >/dev/null 2>&1 && printf '%s\n' "gamescope" || printf '%s\n' "missing-gamescope"
+            return 0
+            ;;
+        kwin|kwin_wayland)
+            command -v kwin_wayland >/dev/null 2>&1 && printf '%s\n' "kwin" || printf '%s\n' "missing-kwin"
+            return 0
+            ;;
+        cage)
+            command -v cage >/dev/null 2>&1 && printf '%s\n' "cage" || printf '%s\n' "missing-cage"
+            return 0
+            ;;
+    esac
+
+    if [ "$profile" = "steamdeck-lcd-handheld" ]; then
+        if command -v gamescope >/dev/null 2>&1; then
+            printf '%s\n' "gamescope"
+        elif command -v kwin_wayland >/dev/null 2>&1; then
+            printf '%s\n' "kwin"
+        elif [ "${PZ_STEAMDECK_HANDHELD_ALLOW_CAGE:-0}" = "1" ] && command -v cage >/dev/null 2>&1; then
+            printf '%s\n' "cage"
+        else
+            printf '%s\n' "none"
+        fi
+        return 0
+    fi
+
+    if command -v cage >/dev/null 2>&1; then
+        printf '%s\n' "cage"
+    elif command -v kwin_wayland >/dev/null 2>&1; then
+        printf '%s\n' "kwin"
+    else
+        printf '%s\n' "none"
+    fi
+}
+
+compositor_reason() {
+    case "$1" in
+        existing-session) printf '%s\n' "display-already-present" ;;
+        gamescope) printf '%s\n' "steamdeck-lcd-handheld-landscape" ;;
+        kwin) printf '%s\n' "fallback-kwin-wayland" ;;
+        cage)
+            if [ "$(display_profile)" = "steamdeck-lcd-handheld" ]; then
+                printf '%s\n' "explicit-handheld-cage-fallback"
+            else
+                printf '%s\n' "default-kiosk-compositor"
+            fi
+            ;;
+        missing-*) printf '%s\n' "requested-compositor-missing" ;;
+        none) printf '%s\n' "no-compositor-wrap" ;;
+        *) printf '%s\n' "unknown" ;;
+    esac
+}
+
+compositor_command() {
+    local kind="$1"
+    case "$kind" in
+        gamescope)
+            pz_display_shell_join \
+                dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 gamescope \
+                --backend drm \
+                --expose-wayland \
+                --force-orientation "$(pz_display_gamescope_orientation)" \
+                -W "$(pz_display_gamescope_width)" \
+                -H "$(pz_display_gamescope_height)" \
+                -w "$(pz_display_gamescope_width)" \
+                -h "$(pz_display_gamescope_height)" \
+                --force-windows-fullscreen \
+                -- "$0"
+            ;;
+        cage)
+            pz_display_shell_join dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 cage -- "$0"
+            ;;
+        kwin)
+            pz_display_shell_join dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 \
+                kwin_wayland --no-lockscreen --no-global-shortcuts --xwayland --exit-with-session "$0"
+            ;;
+        *) printf '%s\n' "" ;;
+    esac
 }
 
 if [ "${1:-}" = "--validate" ]; then
+    kind="$(compositor_kind)"
     [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ] || {
-        printf 'windows_vm_session_ready=no configured_repo=%s\n' "${CONFIGURED_REPO:-missing}"
+        printf 'windows_vm_session_ready=no configured_repo=%s display_profile=%s external_connectors=%s compositor=%s reason=%s\n' \
+            "${CONFIGURED_REPO:-missing}" "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_reason "$kind")"
         exit 1
     }
-    printf 'windows_vm_session_ready=yes repo=%s launcher=%s launcher_kind=%s command=%s\n' \
-        "${PZ_WINDOWS_VM_REPO:-runtime}" "$PZ_BIN" "$LAUNCHER_KIND" "$(launcher_command)"
+    printf 'windows_vm_session_ready=yes repo=%s launcher=%s launcher_kind=%s command=%s display_profile=%s external_connectors=%s compositor=%s compositor_command=%s reason=%s\n' \
+        "${PZ_WINDOWS_VM_REPO:-runtime}" "$PZ_BIN" "$LAUNCHER_KIND" "$(launcher_command)" \
+        "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_command "$kind")" "$(compositor_reason "$kind")"
     exit 0
 fi
 
@@ -77,21 +212,35 @@ printf '%s starting Windows VM boot session\n' "$(date -Iseconds)"
 
 # SDDM Wayland sessions start without a compositor; spicy/virt-viewer/QEMU-gtk
 # need one or they die with "gtk initialization failed" (black screen).
-# PZ_WINDOWS_VM_COMPOSITOR=0 skips the wrap (tests, external compositor).
-if [ "${PZ_WINDOWS_VM_COMPOSITOR:-auto}" != "0" ] \
-    && [ -z "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] \
-    && [ "${PZ_WINDOWS_VM_INSIDE_COMPOSITOR:-0}" != "1" ]; then
-    if command -v cage >/dev/null 2>&1; then
-        printf '%s starting cage compositor for VM viewer\n' "$(date -Iseconds)"
+# Steam Deck LCD handheld needs Gamescope rotation because the panel is portrait.
+kind="$(compositor_kind)"
+printf '%s display_profile=%s external_connectors=%s compositor=%s reason=%s command=%s\n' \
+    "$(date -Iseconds)" "$(display_profile)" "$(external_connectors)" "$kind" \
+    "$(compositor_reason "$kind")" "$(compositor_command "$kind")"
+case "$kind" in
+    gamescope)
+        exec dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 gamescope \
+            --backend drm \
+            --expose-wayland \
+            --force-orientation "$(pz_display_gamescope_orientation)" \
+            -W "$(pz_display_gamescope_width)" \
+            -H "$(pz_display_gamescope_height)" \
+            -w "$(pz_display_gamescope_width)" \
+            -h "$(pz_display_gamescope_height)" \
+            --force-windows-fullscreen \
+            -- "$0"
+        ;;
+    cage)
         exec dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 cage -- "$0"
-    fi
-    if command -v kwin_wayland >/dev/null 2>&1; then
-        printf '%s starting kwin_wayland compositor for VM viewer\n' "$(date -Iseconds)"
+        ;;
+    kwin)
         exec dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 \
             kwin_wayland --no-lockscreen --no-global-shortcuts --xwayland --exit-with-session "$0"
-    fi
-    printf '%s no compositor available (cage/kwin_wayland); viewer may fail\n' "$(date -Iseconds)"
-fi
+        ;;
+    missing-*)
+        printf '%s requested compositor unavailable: %s\n' "$(date -Iseconds)" "$kind"
+        ;;
+esac
 
 if [ -n "$CONFIGURED_REPO" ] && [ "$CONFIGURED_REPO" != "${PZ_WINDOWS_VM_REPO:-}" ]; then
     printf '%s stale configured repo %s; using %s\n' \

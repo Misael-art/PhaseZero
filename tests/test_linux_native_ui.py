@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from linux.ui_native.catalog import CATEGORIES, build_catalog, catalog_manifest
+from linux.ui_native.boot_selector import BOOT_CHOICES, build_boot_selector_program
 from linux.ui_native.command_runner import build_program
 from linux.ui_native.models import ActionSpec
 from linux.ui_native.result_parser import parse_json_output, severity_for
@@ -96,6 +97,21 @@ def test_elevated_program_prefers_phasezero_admin(catalog):
     assert args[1:] == ["boot", "install-safe-menu"]
 
 
+def test_boot_selector_uses_admin_bridge_without_shell():
+    with patch("linux.ui_native.boot_selector.shutil.which") as which:
+        which.side_effect = lambda name: "/usr/bin/bigsudo" if name == "bigsudo" else None
+        program, args = build_boot_selector_program(ROOT, "windows", reboot=True)
+    assert program == "/usr/bin/bigsudo"
+    assert args == [str(ROOT / "linux" / "pz"), "boot", "choose", "windows", "--reboot"]
+    assert [choice.key for choice in BOOT_CHOICES] == [
+        "normal",
+        "steamos",
+        "windows",
+        "waydroid",
+        "emergency",
+    ]
+
+
 def test_json_parser_accepts_logs_before_envelope():
     text = 'INFO: checking\n{"status":"warn","checks":[{"name":"x"}]}\n'
     assert parse_json_output(text)["status"] == "warn"
@@ -143,6 +159,34 @@ def test_native_gui_offscreen_smoke(tmp_path):
     assert result.returncode == 0, result.stderr
     assert screenshot.exists()
     assert screenshot.stat().st_size > 20_000
+
+
+def test_boot_selector_offscreen_smoke(tmp_path):
+    screenshot = tmp_path / "boot-selector.png"
+    state = tmp_path / "state"
+    env = os.environ.copy()
+    env["QT_QPA_PLATFORM"] = "offscreen"
+    env["XDG_STATE_HOME"] = str(state)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "linux.ui_native",
+            "--boot-selector",
+            "--smoke-test",
+            "--screenshot",
+            str(screenshot),
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert screenshot.exists()
+    assert screenshot.stat().st_size > 10_000
 
 
 def test_profile_preview_runs_without_mutation(tmp_path):

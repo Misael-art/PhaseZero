@@ -24,9 +24,11 @@ SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 BOOT_HELPER_SOURCE="$PZ_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
 SESSION_SOURCE="$PZ_ROOT/linux/waydroid/waydroid-session.sh"
 SHARES_SOURCE="$PZ_ROOT/linux/waydroid/waydroid-shares-prepare.sh"
+DISPLAY_SESSION_SOURCE="$PZ_ROOT/linux/steamdeck/display-session.sh"
 BOOT_HELPER_TARGET="/usr/local/lib/phasezero/waydroid-boot-prepare"
 SESSION_TARGET="/usr/local/lib/phasezero/waydroid-session"
 SHARES_TARGET="/usr/local/lib/phasezero/waydroid-shares-prepare"
+DISPLAY_SESSION_TARGET="/usr/local/lib/phasezero/display-session"
 ROOT_ENV_FILE="/etc/phasezero/waydroid.env"
 SERVICE_FILE="/etc/systemd/system/phasezero-waydroid-boot-prepare.service"
 WAYLAND_SESSION_FILE="/usr/share/wayland-sessions/phasezero-waydroid.desktop"
@@ -795,6 +797,7 @@ root_env_content() {
     printf 'PZ_WAYDROID_PREINSTALLED_DIR=%q\n' "$PREINSTALLED_DIR"
     printf 'PZ_WAYDROID_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
     printf 'PZ_WAYDROID_SHARE_EXTRA=%q\n' "$SHARE_EXTRA"
+    printf 'PZ_DISPLAY_SESSION_HELPER=%q\n' "$DISPLAY_SESSION_TARGET"
 }
 
 root_env_value() {
@@ -808,9 +811,10 @@ root_env_value() {
 }
 
 boot_artifacts_current() {
-    [ -x "$BOOT_HELPER_TARGET" ] &&
+        [ -x "$BOOT_HELPER_TARGET" ] &&
         [ -x "$SESSION_TARGET" ] &&
         [ -x "$SHARES_TARGET" ] &&
+        [ -r "$DISPLAY_SESSION_TARGET" ] &&
         [ -f "$SERVICE_FILE" ] &&
         [ -f "$WAYLAND_SESSION_FILE" ] &&
         [ -f "$XSESSION_FILE" ] &&
@@ -819,6 +823,7 @@ boot_artifacts_current() {
     cmp -s "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
     cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
     cmp -s "$SHARES_SOURCE" "$SHARES_TARGET" || return 1
+    cmp -s "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET" || return 1
     [ "$(root_env_value PZ_WAYDROID_REPO)" = "$PZ_ROOT" ] || return 1
     [ "$(root_env_value PZ_WAYDROID_BOOT_USER)" = "$TARGET_USER" ] || return 1
     grep -Fqx "Exec=$SESSION_TARGET" "$WAYLAND_SESSION_FILE" || return 1
@@ -904,6 +909,7 @@ install_boot() {
     install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
     install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
     install -m 0755 "$SHARES_SOURCE" "$SHARES_TARGET"
+    install -m 0644 "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET"
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
     session_desktop_content > "$WAYLAND_SESSION_FILE"
