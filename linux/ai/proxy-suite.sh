@@ -22,7 +22,7 @@ proxy_rows() {
 kimiproxy|https://github.com/pedrofariasx/kimiproxy.git|3010|node
 qwen-worker-proxy|https://github.com/aptdnfapt/qwen-worker-proxy.git|0|worker
 qwenproxy|https://github.com/pedrofariasx/qwenproxy.git|3011|node
-antigravity-proxy|https://github.com/pedrofariasx/antigravity-proxy.git|8080|node
+antigravity-proxy|https://github.com/pedrofariasx/antigravity-proxy.git|8090|node
 antigravity-openai-adapter|https://github.com/pedrofariasx/antigravity-openai-adapter.git|8081|node
 ollieproxy|https://github.com/pedrofariasx/ollieproxy.git|3002|node
 airlock|https://github.com/pedrofariasx/airlock.git|0|library

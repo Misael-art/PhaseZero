@@ -112,6 +112,22 @@ port_busy_bool() {
 steam_cef_port_bool() { port_busy_bool 8080; }
 decky_port_bool() { port_busy_bool 1337; }
 
+# Real conflict = :8080 held by a process that is NOT Steam's CEF (steamwebhelper).
+# Steam's CSS Loader / Decky attach to Steam over :8080, so a squatter there (e.g.
+# an AI proxy defaulting to 8080) silently breaks CSS Loader with the health-check
+# "Cannot connect to host 127.0.0.1:8080" seen in its logs.
+steam_cef_conflict_bool() {
+    command -v ss >/dev/null 2>&1 || { echo false; return; }
+    local owners
+    owners="$(ss -ltnp "sport = :8080" 2>/dev/null | grep ':8080' || true)"
+    [ -n "$owners" ] || { echo false; return; }
+    if printf '%s' "$owners" | grep -qiE 'steamwebhelper|"steam"|/steam'; then
+        echo false
+    else
+        echo true
+    fi
+}
+
 plugin_catalog() {
     cat <<'EOF'
 PowerTools|PowerTools|PowerTools|database|https://gitlab.com/NGnius/PowerTools||PowerTools|TDP, SMT, CPU/GPU power controls; needs privileged Decky service for full plugin control.
@@ -355,6 +371,7 @@ status_json() {
         --argjson pluginDirExists "$([ -d "$PZ_DECKY_PLUGINS_DIR" ] && echo true || echo false)" \
         --argjson pluginDirWritable "$([ -w "$PZ_DECKY_PLUGINS_DIR" ] && echo true || echo false)" \
         --argjson steamCefPort "$(steam_cef_port_bool)" \
+        --argjson steamCefConflict "$(steam_cef_conflict_bool)" \
         --argjson deckyPort "$(decky_port_bool)" \
         --argjson dualServiceConflict "$(decky_dual_service_conflict_bool)" \
         --argjson losslessScalingInstalled "$(lossless_scaling_installed_bool)" \
@@ -387,7 +404,7 @@ status_json() {
                     steamCef8080Listening: $steamCefPort,
                     decky1337Listening: $deckyPort
                 },
-                portConflicts: {port8080: false, port1337: false}
+                portConflicts: {port8080: $steamCefConflict, port1337: false}
             },
             bigPicture: {
                 command: "steam -gamepadui -steamos3",
