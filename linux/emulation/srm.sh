@@ -440,6 +440,41 @@ status_srm() {
         '{appImage: $appImage, launcher: $launcher, wrapper: $wrapper, desktop: $desktop, settings: $settings, configurations: $configs, steamRoot: $steamRoot, romsRoot: $romsRoot, retroarchPath: $retroarchPath, appImageInstalled: $appImageInstalled, launcherInstalled: $launcherInstalled, wrapperInstalled: $wrapperInstalled, desktopInstalled: $desktopInstalled, settingsInstalled: $settingsInstalled, configurationsInstalled: $configurationsInstalled, configurationsCount: $configurationsCount, managedParsers: $managedParsers, invalidParsers: $invalidParsers, configured: $configured}'
 }
 
+retroarch_cores_dir() {
+    local d
+    for d in \
+        "$HOME/.var/app/org.libretro.RetroArch/config/retroarch/cores" \
+        "$HOME/.config/retroarch/cores" \
+        "$PZ_EMULATION_ROOT/tools/retroarch/cores" \
+        /usr/lib/libretro; do
+        [ -d "$d" ] && { printf '%s\n' "$d"; return 0; }
+    done
+    printf '%s\n' "$HOME/.var/app/org.libretro.RetroArch/config/retroarch/cores"
+}
+
+ensure_srm_user_variables() {
+    # EmuDeck-style parsers reference user variables ${romsdirglobal},
+    # ${steamdirglobal}, ${retroarchpath} and ${racores}. SRM only expands these
+    # when they are defined in userVariables.json. This file ships as "{}", so
+    # every parser resolves to a literal "${romsdirglobal}/..." path that does
+    # not exist and SRM traverses NOTHING (and RetroArch parsers launch nothing).
+    local vars_file="$SRM_USERDATA/userVariables.json" tmp
+    mkdir -p "$SRM_USERDATA"
+    if ! { [ -f "$vars_file" ] && jq empty "$vars_file" >/dev/null 2>&1; }; then
+        echo '{}' > "$vars_file"
+    fi
+    backup_srm_file "$vars_file"
+    tmp="$(mktemp)"
+    jq \
+        --arg roms "$PZ_EMULATION_ROOT/roms" \
+        --arg steam "$STEAM_ROOT" \
+        --arg retro "$(retroarch_launcher)" \
+        --arg cores "$(retroarch_cores_dir)" \
+        '. + {romsdirglobal: $roms, steamdirglobal: $steam, retroarchpath: $retro, racores: $cores}' \
+        "$vars_file" > "$tmp" && mv "$tmp" "$vars_file"
+    pz_info "SRM user variables set (romsdirglobal=$PZ_EMULATION_ROOT/roms, steamdirglobal=$STEAM_ROOT)"
+}
+
 configure_srm() {
     pz_emulation_ensure_layout
     bash "$PZ_ROOT/linux/emulation/media.sh" prepare-scan >/dev/null
@@ -449,6 +484,7 @@ configure_srm() {
     ensure_srm_settings
     ensure_srm_configurations
     merge_srm_settings
+    ensure_srm_user_variables
     write_shadps4_srm_wrapper
     normalize_srm_parsers
     write_srm_wrapper

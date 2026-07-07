@@ -352,6 +352,12 @@ pz_media_write_noload() {
 
 pz_media_apply_scan_markers() {
     local root="$PZ_EMULATION_ROOT/roms" dir
+    # Heal stale markers: a noload.txt sitting directly in a system root
+    # (roms/<system>/noload.txt) makes ES-DE skip the ENTIRE system ("Not
+    # populating system ... as a noload.txt file is present"). The marker is only
+    # ever meant for auxiliary SUBtrees, so remove any that landed on a system
+    # root (e.g. a legacy switch-root marker that hid all Switch games).
+    find "$root" -mindepth 2 -maxdepth 2 -name noload.txt -delete 2>/dev/null || true
     if [ -d "$root/switch" ]; then
         while IFS= read -r -d '' dir; do pz_media_write_noload "$dir"; done \
             < <(find "$root/switch" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null)

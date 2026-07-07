@@ -117,6 +117,8 @@ Usage:
   pz emulation launchbox verify Verify LaunchBox data and executables
   pz emulation launchbox verify --real Verify BigBox rendering on this host
   pz emulation launchbox repair Apply LaunchBox Wine, ROM, media and emulator bridges
+  pz emulation controllers status Audit Ryujinx/RPCS3 Steam Deck pad profiles
+  pz emulation controllers apply  Apply default Steam Deck controller profiles
   pz emulation frontends status Audit BigBox/Steam/ES-DE/SRM/Heroic switcher
   pz emulation frontends plan   Plan cross-frontend switcher integration
   pz emulation frontends repair Apply cross-frontend switcher integration
@@ -293,6 +295,7 @@ cmd_emulation() {
         shortcuts|desktop-shortcuts|launchers) bash "$PZ_ROOT/linux/emulation/shortcuts.sh" "${target:-status}" "${extra[@]}" ;;
         launchbox|bigbox) bash "$PZ_ROOT/linux/emulation/launchbox.sh" "${target:-status}" "${extra[@]}" ;;
         frontends|frontend-switcher) bash "$PZ_ROOT/linux/emulation/frontends.sh" "${target:-status}" "${extra[@]}" ;;
+        controllers|controller|gamepad|pads) bash "$PZ_ROOT/linux/emulation/controllers.sh" "${target:-status}" "${extra[@]}" ;;
         fixes)        bash "$PZ_ROOT/linux/emulation/fixes.sh" "${target:-list}" "${extra[@]}" ;;
         bios)         bash "$PZ_ROOT/linux/emulation/bios.sh" "${target:-status}" "${extra[@]}" ;;
         switch)       bash "$PZ_ROOT/linux/emulation/bios.sh" "switch-${target:-status}" "${extra[@]}" ;;
