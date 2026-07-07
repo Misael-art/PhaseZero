@@ -250,8 +250,14 @@ launchbox_prepare_wine_runtime() {
     export WINEESYNC="${WINEESYNC:-1}"
     if command -v wine >/dev/null 2>&1; then
         timeout 20s wine winecfg -v win10 >/dev/null 2>&1 || true
+        # BigBox is WPF. DisableHWAcceleration=1 forces software rendering, which
+        # is slow and can leave artwork half-drawn ("lento / imagem incompleta").
+        # With DXVK in the prefix, GPU rendering is both faster and correct, so
+        # default to HW acceleration ON. Set PZ_LAUNCHBOX_DISABLE_HWACCEL=1 only
+        # as a fallback if this GPU/driver yields a black screen under Wine.
+        local hwaccel_disable="${PZ_LAUNCHBOX_DISABLE_HWACCEL:-0}"
         timeout 15s wine reg add "HKCU\\Software\\Microsoft\\Avalon.Graphics" \
-            /v DisableHWAcceleration /t REG_DWORD /d 1 /f >/dev/null 2>&1 || true
+            /v DisableHWAcceleration /t REG_DWORD /d "$hwaccel_disable" /f >/dev/null 2>&1 || true
     fi
     if [ "${PZ_LAUNCHBOX_FORCE_X11:-1}" = "1" ]; then
         unset WAYLAND_DISPLAY
