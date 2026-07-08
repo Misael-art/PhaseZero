@@ -49,6 +49,26 @@ gate de compatibilidade CasaOS opt-in. UI nativa e dashboard web legado atualiza
   "Failed to import encodings module" sem nenhum erro no build. O script agora
   usa por padrão um diretório temporário (`/tmp`, tmpfs); `PZ_APPIMAGE_WORK`
   continua disponível para quem sabe que seu filesystem é seguro.
+- **Empacotamento (Flatpak)**: `build-flatpak.sh` exigia que o `--state-dir` do
+  `flatpak-builder` ficasse no mesmo filesystem do diretório de build/repo (ele
+  usa hardlinks entre os dois); agora todos os três (`state`, `build`, `repo`)
+  vão por padrão para um diretório `/tmp` (tmpfs) recém-criado.
+- **Bit de execução perdido no git**: este repositório tem `core.fileMode=false`
+  (necessário porque o checkout roda sobre um mount FUSE/NTFS-3g, que não reporta
+  mudanças de permissão de forma confiável) — isso fez o modo rastreado pelo git
+  de `linux/pz`, `linux/ui/native.sh` e outros scripts de entrada regredir para
+  não-executável, embora funcionassem localmente (tudo aqui é chamado via
+  `bash script.sh` explícito). O `.deb`/`.rpm`/AppImage não foram afetados (usam
+  `cp -a` da árvore de trabalho local), mas o pacote AUR e o Flatpak buscam a
+  fonte de um `git clone`/tarball da tag publicada — e um `git clone` limpo do
+  GitHub também teria `linux/pz` sem permissão de execução, quebrando o uso
+  documentado no README (`linux/pz <comando>`, sem prefixo `bash`). Corrigido o
+  modo rastreado pelo git para os scripts que o README/empacotamento invocam
+  diretamente; o manifesto do Flatpak ganhou um `chmod +x` defensivo adicional.
+
+**Nota:** a tag `v1.3.0` foi movida (recriada apontando para o commit com esta
+correção) pouco depois da publicação inicial, já que o bug do bit de execução
+afeta a fonte buscada pelo AUR/Flatpak diretamente pela tag.
 
 ## [1.2.0] - 2026-07-07
 
