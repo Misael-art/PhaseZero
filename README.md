@@ -27,6 +27,23 @@ Sem winget em maquina limpa, o bootstrap tenta caminho seguro de App Installer o
 
 A trilha Linux fica isolada em `linux/pz` e usa perfis `profiles/*.json`. Ela nao substitui os fluxos Windows.
 
+#### Instalar o Control Center nativo
+
+A [pagina de Releases](https://github.com/Misael-art/PhaseZero/releases/latest) publica o app nativo Qt6/PySide6 (`phasezero-control-center`) em cinco formatos, gerados e verificados a partir do mesmo `packaging/linux/`:
+
+| Formato | Comando |
+|---|---|
+| Arch/BigLinux/Manjaro (pacman) | `sudo pacman -U phasezero-control-center-*.pkg.tar` |
+| Debian/Ubuntu (.deb) | `sudo apt install ./phasezero-control-center_*_all.deb` |
+| Fedora/openSUSE (.rpm) | `sudo dnf install ./phasezero-control-center-*.noarch.rpm` |
+| Universal (AppImage) | `chmod +x PhaseZero-*.AppImage && ./PhaseZero-*.AppImage` |
+| Flatpak | `flatpak install --user PhaseZero-*.flatpak` |
+| AUR | pacote `phasezero-control-center` (`.SRCINFO`/`PKGBUILD` em `packaging/linux/aur/`) |
+
+`SHA256SUMS-<versao>` acompanha cada release; confira com `sha256sum -c`. O pacote instala `phasezero-control-center` (binario) e um atalho de desktop (`io.phasezero.ControlCenter.desktop`); a UI so chama `linux/pz` com argumentos de um catalogo allowlisted, nunca implementa instalacao ou mutacao por conta propria. Detalhes de empacotamento e build local em [`linux/ui_native/README.md`](linux/ui_native/README.md).
+
+Para a trilha CLI completa (perfis, Steam Deck, VM, emulacao, servidor caseiro) sem instalar pacote, use um checkout do repositorio e chame `linux/pz` diretamente:
+
 ```bash
 linux/pz help
 linux/pz ui                        # Central de Controle nativa Qt6
