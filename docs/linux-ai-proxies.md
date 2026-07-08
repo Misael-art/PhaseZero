@@ -15,18 +15,22 @@ linux/pz ai proxies stop ollieproxy
 
 ## Catálogo
 
+Portas alinhadas ao catálogo Windows (3010-3013) para não colidir com open-webui/grafana (`:3000`) nem uptime-kuma (`:3001`). A antigravity-proxy saiu de `:8080` (reservada ao CEF do Steam, usado pelo Decky/CSS Loader) para `:8090`.
+
 | ID | Upstream | Tipo | Porta PhaseZero |
 |---|---|---|---:|
-| `kimiproxy` | `pedrofariasx/kimiproxy` | Node | 3000 |
+| `kimiproxy` | `pedrofariasx/kimiproxy` | Node | 3010 |
 | `qwen-worker-proxy` | `aptdnfapt/qwen-worker-proxy` | Cloudflare Worker | externa |
-| `qwenproxy` | `pedrofariasx/qwenproxy` | Node | 3001 |
-| `antigravity-proxy` | `pedrofariasx/antigravity-proxy` | Node | 8080 |
+| `qwenproxy` | `pedrofariasx/qwenproxy` | Node | 3011 |
+| `antigravity-proxy` | `pedrofariasx/antigravity-proxy` | Node | 8090 |
 | `antigravity-openai-adapter` | `pedrofariasx/antigravity-openai-adapter` | Node | 8081 |
 | `ollieproxy` | `pedrofariasx/ollieproxy` | Node | 3002 |
 | `airlock` | `pedrofariasx/airlock` | biblioteca Node | externa |
 | `unlimited-ai-proxy` | `pedrofariasx/unlimited-ai-proxy` | Node | 8787 |
-| `deepsproxy` | `pedrofariasx/deepsproxy` | Node | 3004 |
-| `mimo-ai-proxy` | `pedrofariasx/mimo-ai-proxy` | Go | 3005 |
+| `deepsproxy` | `pedrofariasx/deepsproxy` | Node | 3012 |
+| `mimo-ai-proxy` | `pedrofariasx/mimo-ai-proxy` | Go | 3013 |
+
+IDEs: `pz ai proxies configure-ides` conecta kimi/qwen/deeps/mimo ao opencode, opencode-desktop e zcode (providers `phasezero-*`) e grava `~/.config/phasezero/ai-proxies/ide-defaults.env`. O chat via proxy exige `npm run login` uma vez por proxy (sessão Playwright). `pz ai proxies test` é um probe honesto (`/v1/models` + chat).
 
 ## Portabilidade
 

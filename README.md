@@ -57,6 +57,8 @@ linux/pz emulation eden install
 linux/pz emulation hydra install
 linux/pz emulation hydra configure
 linux/pz emulation srm configure
+linux/pz emulation controllers apply     # perfil de gamepad Steam Deck (Ryujinx/RPCS3)
+linux/pz emulation media apply           # unifica midia canonica (inclui RetroArch flatpak)
 linux/pz emulation optimizer plan
 linux/pz emulation optimizer apply-all
 linux/pz emulation ps3 import-game /path/to/local/ps3-dump
@@ -71,18 +73,32 @@ linux/pz emulation nsz plan /path/to/local/nsz
 linux/pz emulation nsz convert /path/to/local/nsz
 linux/pz emulation nsz convert /path/to/local/nsz --delete-source --yes
 linux/pz emulation nsz apply --yes
+linux/pz ai opencode free-model          # corrige "Interrompido" com modelo free (deepseek-flash)
 linux/pz ai proxies plan all
 linux/pz ai proxies install all
-linux/pz ai proxies status all
+linux/pz ai proxies configure-ides       # opencode/opencode-desktop/zcode
+linux/pz ai proxies test                 # probe honesto /v1/models + chat
+linux/pz windows-vm host-access status   # host -> disco da VM (guestmount)
+linux/pz waydroid host-access link       # host -> armazenamento interno do Waydroid
+linux/pz server status
+linux/pz install server-llm              # LLM local (Ollama) + boot enxuto reversivel
+linux/pz install server-homelab          # Docker/Tailscale: drive, midia, cofre, monitor
+linux/pz install server-llm-homelab-hermes
+linux/pz server homelab up
+sudo linux/pz server boot install --llm --homelab   # entrada GRUB Homelab headless
 ```
 
 `steamdeck-linux` e opt-in. O foco inicial e experiencia estilo SteamOS: Steam Gamepad UI, atalhos `Ctrl+Alt+F1..F6`, teclado virtual por Steam/wvkbd/onboard/maliit, watcher de modo com debounce e tuning de jogos.
 
-`windows-vm-linux` e opt-in. Automatiza VM Windows em QEMU/KVM a partir de uma ISO indicada pelo usuario. Antes de criar disco novo, detecta dominios Windows em `qemu:///system` e imagens instaladas; dominio libvirt existente vira default, preservando snapshot, firmware e hardware virtual originais. Sem dominio, usa QEMU direto com CPU `host`, KVM, OVMF, TPM 2.0, audio, SPICE USB redirection, SMB e virtiofs. O viewer SPICE compartilha os links de `HOME`, `/mnt/sdcard`, removiveis e `/mnt`; quatro canais USB cobrem pendrives, perifericos e leitores smartcard USB.
+`windows-vm-linux` e opt-in. Automatiza VM Windows em QEMU/KVM a partir de uma ISO indicada pelo usuario. Antes de criar disco novo, detecta dominios Windows em `qemu:///system` e imagens instaladas; dominio libvirt existente vira default, preservando snapshot, firmware e hardware virtual originais. Sem dominio, usa QEMU direto com CPU `host`, KVM, OVMF, TPM 2.0, audio, SPICE USB redirection, SMB e virtiofs. Compartilhamento host->guest: `HOME` e `/mnt/sdcard` sao bind-montados (nao symlinks, que o smbd embutido do QEMU nao atravessa) sob `RUNTIME_DIR` e expostos no SMB embutido do SLIRP em `\\10.0.2.4\qemu` (pastas `home/` e `sdcard/`); virtiofs continua expondo `HOME`. O acesso reverso guest->host usa `pz windows-vm host-access` (monta o disco da VM via libguestfs com a VM desligada). Quatro canais USB cobrem pendrives, perifericos e leitores smartcard USB.
 
 `waydroid-linux` e opt-in. Automatiza Waydroid como Android em container no host Linux, com detecao de binder, servico `waydroid-container`, compositor kiosk Wayland (`cage` preferido, `kwin_wayland` fallback), launchers do usuario e boot direto via GRUB/SDDM. `repair --init` baixa sistema/vendor por mirrors SourceForge com retry, valida tamanho e SHA-256, prepara runtime e inicializa Android; sem `--init`, nao baixa imagens.
 
-`emulation-linux` e opt-in. Instala launchers do EmuDeck/Eden/Citron/Hydra, configura Hydra Classic e Steam ROM Manager com emuladores detectados, prepara Lua/LuaJIT, audita Steam helper tools e cria layout compartilhado `~/Emulation`. Em Steam Deck real (DMI Valve/Jupiter/Galileo/Sephiroth), EmuDeck usa o `EmuDeck.desktop` do desktop do usuario e PhaseZero cria um wrapper que chama esse launcher; em PC Linux generico, usa o AppImage direto. BIOS, firmware, keys, ROMs, updates e DLC nao sao baixados: use importacao local de dumps proprios.
+`emulation-linux` e opt-in. Instala launchers do EmuDeck/Eden/Citron/Hydra, configura Hydra Classic e Steam ROM Manager com emuladores detectados, prepara Lua/LuaJIT, audita Steam helper tools e cria layout compartilhado `~/Emulation`. Em Steam Deck real (DMI Valve/Jupiter/Galileo/Sephiroth), EmuDeck usa o `EmuDeck.desktop` do desktop do usuario e PhaseZero cria um wrapper que chama esse launcher; em PC Linux generico, usa o AppImage direto. BIOS, firmware, keys, ROMs, updates e DLC nao sao baixados: use importacao local de dumps proprios. O Steam ROM Manager resolve `${romsdirglobal}`, `${steamdirglobal}`, `${retroarchpath}` e `${racores}` pelas variaveis de ambiente das Settings (`raCoresDirectory` aponta para os cores do RetroArch, senao "Test/Parse" falha com "invalid configuration"). `pz emulation controllers apply` aplica o perfil de gamepad Steam Deck (Ryujinx/RPCS3 via Steam Input), `pz emulation media apply` unifica a midia canonica inclusive para RetroArch flatpak, e o BigBox roda com aceleracao de hardware (DXVK) em vez de renderizacao por software.
+
+Servidor caseiro (opt-in). Seis perfis compoem LLM local, homelab e Hermes: `server-llm` (Ollama + boot enxuto reversivel), `server-homelab` (Docker/Tailscale com drive/midia/cofre/monitor), `server-homelab-hermes`, `server-llm-hermes`, `server-llm-homelab` e `server-llm-homelab-hermes`. `pz server (status|llm|homelab|hermes|slim|boot)` gerencia os componentes. `sudo pz server boot install --llm --homelab` cria a entrada GRUB `PhaseZero Homelab (headless)`, que inicia o Linux em `multi-user.target` com `phasezero.homelab=1` (SO enxuto reversivel — o boot normal fica intacto); um oneshot sobe Ollama, a stack Docker e o Hermes conforme `/etc/phasezero/server-mode.env`. O enxugamento permanente e opt-in e reversivel via `pz server slim (apply|restore)`.
+
+IA e agentes no Linux: `pz ai opencode free-model` corrige o "Interrompido" do OpenCode (CLI e desktop) definindo um modelo free keyless do OpenCode Zen (`deepseek-v4-flash-free`) como padrao, mantendo o Ollama como provider offline. `pz ai proxies configure-ides` conecta os proxies pedrofariasx (kimi/qwen/deeps/mimo, portas 3010-3013) ao opencode, opencode-desktop e zcode; o chat via proxy exige um `npm run login` unico por proxy (mesma trava do Windows). Caverman, RTK, ai-memory e Headroom sao suportados e configurados (`pz ai compat status`). A Central de Controle nativa (Qt6/PySide6, `pz ui`) foi redesenhada no estilo EmuDeck: dashboard "Welcome back" com cards de acao, sidebar agrupada, badges de estado por cor, tema escuro roxo e toasts de conclusao.
 
 Conversao NSZ para NSP usa `nsz==4.6.1` isolado. Processamento sequencial reduz pico de disco. Saida nasce em staging no mesmo filesystem, passa por verificacao upstream, cabecalho PFS0 e SHA-256, depois recebe publicacao atomica em `~/Emulation/roms/switch/nsp`. Fonte permanece por padrao. `--delete-source --yes` remove cada NSZ somente depois da verificacao e registro JSON em `~/Emulation/metadata/switch/nsz-conversions`. `apply --yes` normaliza sufixos de tamanho, confirma duplicatas por SHA-256, remove apenas copias identicas e converte toda a biblioteca sob lock exclusivo. Conflitos permanecem intactos. Somente dumps locais proprios.
 
