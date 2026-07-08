@@ -31,6 +31,7 @@ modules:
     build-commands:
       - install -d /app/lib/phasezero /app/bin /app/share/applications /app/share/metainfo /app/share/icons/hicolor/scalable/apps
       - cp -a linux profiles version.json /app/lib/phasezero/
+      - chmod +x /app/lib/phasezero/linux/pz /app/lib/phasezero/linux/ui/native.sh
       - install -Dm755 packaging/linux/phasezero-control-center /app/bin/phasezero-control-center
       - install -Dm644 packaging/linux/io.phasezero.ControlCenter.desktop /app/share/applications/io.phasezero.ControlCenter.desktop
       - install -Dm644 packaging/linux/io.phasezero.ControlCenter.metainfo.xml /app/share/metainfo/io.phasezero.ControlCenter.metainfo.xml
