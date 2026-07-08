@@ -13,6 +13,6 @@ pkgbase = phasezero-control-center
 	optdepends = flatpak: Flatpak management
 	optdepends = bigsudo: graphical admin bridge
 	source = PhaseZero-1.3.0.tar.gz::https://github.com/Misael-art/PhaseZero/archive/refs/tags/v1.3.0.tar.gz
-	sha256sums = fb4fb06ade99b64c4f460cdc25cc9393c9411e8422b90fcf7be87dfc53e05f9a
+	sha256sums = 00007f4788d0ab3398f2fdbec74744de832df6db90c6a760f6f924408ebd39fb
 
 pkgname = phasezero-control-center
