@@ -37,11 +37,18 @@ gate de compatibilidade CasaOS opt-in. UI nativa e dashboard web legado atualiza
   gate de compatibilidade CasaOS (Ubuntu ok, Arch bloqueado).
 
 ### Corrigido
-- **Empacotamento**: `packaging/linux/deb/build-deb.sh` e `.../rpm/build-rpm.sh`
-  copiavam `control`/`.spec` sem sincronizar o campo `Version` com `version.json` —
-  um `.deb`/`.rpm` publicado podia reportar a versão anterior. Os scripts agora
-  derivam a versão de `version.json` na cópia de build, sem alterar os arquivos
-  versionados.
+- **Empacotamento (.deb/.rpm)**: `packaging/linux/deb/build-deb.sh` e
+  `.../rpm/build-rpm.sh` copiavam `control`/`.spec` sem sincronizar o campo
+  `Version` com `version.json` — um `.deb`/`.rpm` publicado podia reportar a
+  versão anterior. Os scripts agora derivam a versão de `version.json` na cópia
+  de build, sem alterar os arquivos versionados.
+- **Empacotamento (AppImage)**: `build-appimage.sh` construía o AppDir dentro do
+  checkout do repositório; em filesystems FUSE (ex.: NTFS-3g), a compactação
+  paralela do `mksquashfs` podia descartar silenciosamente arquivos da stdlib do
+  Python (`encodings/` incluído), gerando um AppImage que falhava ao abrir com
+  "Failed to import encodings module" sem nenhum erro no build. O script agora
+  usa por padrão um diretório temporário (`/tmp`, tmpfs); `PZ_APPIMAGE_WORK`
+  continua disponível para quem sabe que seu filesystem é seguro.
 
 ## [1.2.0] - 2026-07-07
 
