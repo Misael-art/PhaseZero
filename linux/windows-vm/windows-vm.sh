@@ -735,17 +735,59 @@ install_vm() {
     fi
 }
 
+vm_admin_run() {
+    if pz_can_sudo_noninteractive; then sudo -n "$@"
+    elif command -v phasezero-admin >/dev/null 2>&1; then phasezero-admin "$@"
+    else return 127; fi
+}
+
+# QEMU's built-in SMB (\\10.0.2.4\qemu) serves ONE directory and does NOT follow
+# symlinks that point outside it, so the old symlink share root left the guest with
+# empty home/ and sdcard/ folders. Bind mounts are real directories smbd traverses
+# fine. We populate a share root under RUNTIME_DIR (outside $HOME, so bind-mounting
+# $HOME cannot recurse) and expose that; sets the global EFFECTIVE_SMB_DIR.
+SHARE_BIND_ROOT="$RUNTIME_DIR/shares"
 ensure_share_links() {
     if [ "$DRY_RUN" = "1" ]; then
-        pz_info "dry-run: would prepare SMB share root: $SHARE_ROOT"
+        pz_info "dry-run: would bind-mount host home + /mnt/sdcard into $SHARE_BIND_ROOT for SMB"
+        EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
         return 0
     fi
+    local ok=1 pair name target
+    install -d "$SHARE_BIND_ROOT" 2>/dev/null || ok=0
+    if [ "$ok" = "1" ]; then
+        for pair in "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
+            name="${pair%%:*}"; target="${pair#*:}"
+            [ -d "$target" ] || continue
+            install -d "$SHARE_BIND_ROOT/$name"
+            mountpoint -q "$SHARE_BIND_ROOT/$name" && continue
+            vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
+        done
+    fi
+    if [ "$ok" = "1" ] && mountpoint -q "$SHARE_BIND_ROOT/home"; then
+        EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
+        pz_info "host folders bind-mounted for SMB: \\\\10.0.2.4\\qemu -> home, sdcard, removable, media, mnt"
+        return 0
+    fi
+    # Fallback (no root): symlink share root. QEMU smbd will not follow these into
+    # the guest, so home/sdcard may look empty there — virtiofs still exposes home.
     install -d "$SHARE_ROOT"
     ln -sfn "$HOME" "$SHARE_ROOT/home"
     [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
     [ -d "/run/media/$USER" ] && ln -sfn "/run/media/$USER" "$SHARE_ROOT/removable"
     [ -d "/media/$USER" ] && ln -sfn "/media/$USER" "$SHARE_ROOT/media"
     [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
+    EFFECTIVE_SMB_DIR="$SHARE_ROOT"
+    pz_warn "no root for bind mounts; SMB share uses symlinks (guest home/sdcard may be empty). Run: sudo pz windows-vm shares install, or use virtiofs."
+}
+
+# Unmount the bind-mount share root (called on teardown / shares clean).
+clean_share_binds() {
+    local name
+    for name in home sdcard removable media mnt; do
+        mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null &&
+            vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
+    done
 }
 
 libvirt_gateway() {
@@ -999,25 +1041,33 @@ cmd_shares() {
             ;;
         remove)
             need_root
+            clean_share_binds
             remove_windows_samba_shares
+            ;;
+        clean)
+            clean_share_binds
+            pz_info "Windows VM share bind mounts removed"
+            return 0
             ;;
         dry-run|plan)
             echo "Windows VM shared access plan"
-            echo "  SMB host: \\\\$(libvirt_gateway)\\PZHome"
-            echo "  SD card: \\\\$(libvirt_gateway)\\PZSDCard"
-            echo "  removable: \\\\$(libvirt_gateway)\\PZRemovable"
-            echo "  mounts: \\\\$(libvirt_gateway)\\PZMounts"
-            echo "  SPICE shared directory: $SHARE_ROOT"
+            echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> home/ and sdcard/ (bind-mounted)"
+            echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZHome, PZSDCard"
+            echo "  bind-mount root: $SHARE_BIND_ROOT"
             echo "  USB auto filter: $USB_AUTO_FILTER"
             echo "  USB permissions: active-seat udev access for external devices"
             return 0
             ;;
         status) ;;
         *)
-            pz_error "usage: windows-vm shares (status|install|repair|remove|dry-run)"
+            pz_error "usage: windows-vm shares (status|install|repair|remove|clean|dry-run)"
             return 1
             ;;
     esac
+    echo "builtin_smb_unc: \\\\10.0.2.4\\qemu (home/, sdcard/)"
+    echo "bind_root: $SHARE_BIND_ROOT"
+    echo "home_bound: $(mountpoint -q "$SHARE_BIND_ROOT/home" 2>/dev/null && echo yes || echo no)"
+    echo "sdcard_bound: $(mountpoint -q "$SHARE_BIND_ROOT/sdcard" 2>/dev/null && echo yes || echo no)"
     echo "samba_managed: $(samba_shares_managed && echo yes || echo no)"
     echo "samba_reachable: $(samba_shares_reachable && echo yes || echo no)"
     echo "smb_host: $(libvirt_gateway)"
@@ -1215,7 +1265,7 @@ build_qemu_args() {
     fi
     netdev="user,id=net0,hostname=pz-winvm,hostfwd=tcp:127.0.0.1:33890-:3389,hostfwd=tcp:127.0.0.1:59850-:5985"
     if command -v smbd >/dev/null 2>&1; then
-        netdev="$netdev,smb=$SHARE_ROOT"
+        netdev="$netdev,smb=${EFFECTIVE_SMB_DIR:-$SHARE_ROOT}"
     fi
     QEMU_ARGS+=("-netdev" "$netdev")
     QEMU_ARGS+=("-device" "e1000e,netdev=net0,mac=52:54:00:50:5a:00")

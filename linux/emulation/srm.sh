@@ -152,18 +152,26 @@ ensure_srm_appimage_link() {
 }
 
 merge_srm_settings() {
-    local tmp retro
+    local tmp retro cores
     retro="$(retroarch_launcher)"
+    cores="$(retroarch_cores_dir)"
     backup_srm_file "$SRM_SETTINGS"
     tmp="$(mktemp)"
+    # SRM resolves the parser tokens ${steamdirglobal}, ${romsdirglobal},
+    # ${retroarchpath} and ${racores} from these Settings environment variables
+    # (NOT from userVariables.json). raCoresDirectory was left empty, so every
+    # RetroArch parser's "-L ${racores}/<core>.so" became invalid and SRM refused
+    # to parse/test them ("Can not test invalid configuration!").
     jq \
         --arg steam "$STEAM_ROOT" \
         --arg roms "$PZ_EMULATION_ROOT/roms" \
         --arg retro "$retro" \
+        --arg cores "$cores" \
         '.environmentVariables = (.environmentVariables // {})
         | .environmentVariables.steamDirectory = $steam
         | .environmentVariables.romsDirectory = $roms
         | .environmentVariables.retroarchPath = $retro
+        | .environmentVariables.raCoresDirectory = $cores
         | .environmentVariables.userAccounts = (.environmentVariables.userAccounts // [])
         | .autoKillSteam = true
         | .autoRestartSteam = true
@@ -452,29 +460,6 @@ retroarch_cores_dir() {
     printf '%s\n' "$HOME/.var/app/org.libretro.RetroArch/config/retroarch/cores"
 }
 
-ensure_srm_user_variables() {
-    # EmuDeck-style parsers reference user variables ${romsdirglobal},
-    # ${steamdirglobal}, ${retroarchpath} and ${racores}. SRM only expands these
-    # when they are defined in userVariables.json. This file ships as "{}", so
-    # every parser resolves to a literal "${romsdirglobal}/..." path that does
-    # not exist and SRM traverses NOTHING (and RetroArch parsers launch nothing).
-    local vars_file="$SRM_USERDATA/userVariables.json" tmp
-    mkdir -p "$SRM_USERDATA"
-    if ! { [ -f "$vars_file" ] && jq empty "$vars_file" >/dev/null 2>&1; }; then
-        echo '{}' > "$vars_file"
-    fi
-    backup_srm_file "$vars_file"
-    tmp="$(mktemp)"
-    jq \
-        --arg roms "$PZ_EMULATION_ROOT/roms" \
-        --arg steam "$STEAM_ROOT" \
-        --arg retro "$(retroarch_launcher)" \
-        --arg cores "$(retroarch_cores_dir)" \
-        '. + {romsdirglobal: $roms, steamdirglobal: $steam, retroarchpath: $retro, racores: $cores}' \
-        "$vars_file" > "$tmp" && mv "$tmp" "$vars_file"
-    pz_info "SRM user variables set (romsdirglobal=$PZ_EMULATION_ROOT/roms, steamdirglobal=$STEAM_ROOT)"
-}
-
 configure_srm() {
     pz_emulation_ensure_layout
     bash "$PZ_ROOT/linux/emulation/media.sh" prepare-scan >/dev/null
@@ -484,7 +469,6 @@ configure_srm() {
     ensure_srm_settings
     ensure_srm_configurations
     merge_srm_settings
-    ensure_srm_user_variables
     write_shadps4_srm_wrapper
     normalize_srm_parsers
     write_srm_wrapper
