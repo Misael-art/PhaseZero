@@ -30,11 +30,26 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .catalog import CATEGORIES, build_catalog
+from .catalog import (
+    CATEGORIES,
+    DASHBOARD,
+    DASHBOARD_QUICK,
+    DASHBOARD_TOOLS,
+    SIDEBAR_GROUPS,
+    build_catalog,
+)
 from .command_runner import CommandRunner, state_dir
 from .models import ActionSpec, OperationResult
 from .result_parser import severity_for
-from .widgets import ActionCard, HeaderBar, PreviewDialog, ResultDialog, themed_icon
+from .widgets import (
+    ActionCard,
+    HeaderBar,
+    PreviewDialog,
+    ResultDialog,
+    SectionHeader,
+    Toast,
+    themed_icon,
+)
 
 
 class MainWindow(QMainWindow):
@@ -44,11 +59,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.root = root
         self.catalog = build_catalog(root)
+        self.by_id = {action.id: action for action in self.catalog}
+        self.cat_meta = {row[0]: row for row in (DASHBOARD, *CATEGORIES)}
         self.runner = CommandRunner(root, self)
-        self.current_category = initial_category or CATEGORIES[0][0]
+        self.current_category = initial_category or DASHBOARD[0]
         self.pending_action: ActionSpec | None = None
         self.pending_value = ""
         self.cards: list[ActionCard] = []
+        self.dashboard_cards: list[ActionCard] = []
         self.sidebar_buttons: dict[str, QPushButton] = {}
         self.dark_theme = True
         self._maximized = False
@@ -90,27 +108,43 @@ class MainWindow(QMainWindow):
 
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(218)
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(12, 18, 12, 12)
-        sidebar_layout.setSpacing(5)
-        section = QLabel("MÓDULOS")
-        section.setObjectName("sectionLabel")
-        sidebar_layout.addWidget(section)
-        for category, icon_name, tooltip in CATEGORIES:
-            button = QPushButton(category.replace("&", "&&"))
-            button.setObjectName("sidebarButton")
-            button.setCheckable(True)
-            button.setToolTip(tooltip)
-            button.setIcon(themed_icon(self, icon_name, QStyle.SP_FileDialogDetailedView))
-            button.clicked.connect(lambda _checked=False, name=category: self.show_category(name))
-            self.sidebar_buttons[category] = button
-            sidebar_layout.addWidget(button)
+        sidebar.setFixedWidth(230)
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QFrame.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        sidebar_inner = QWidget()
+        sidebar_layout = QVBoxLayout(sidebar_inner)
+        sidebar_layout.setContentsMargins(12, 8, 10, 12)
+        sidebar_layout.setSpacing(3)
+        # EmuDeck-style grouped sidebar: section captions + icon-and-text items.
+        for group_title, categories in SIDEBAR_GROUPS:
+            section = QLabel(group_title.upper())
+            section.setObjectName("sectionLabel")
+            sidebar_layout.addWidget(section)
+            for category in categories:
+                meta = self.cat_meta.get(category)
+                if meta is None:
+                    continue
+                button = QPushButton(category.replace("&", "&&"))
+                button.setObjectName("sidebarButton")
+                button.setCheckable(True)
+                button.setCursor(Qt.PointingHandCursor)
+                button.setToolTip(meta[2])
+                button.setIcon(themed_icon(self, meta[1], QStyle.SP_FileDialogDetailedView))
+                button.clicked.connect(lambda _checked=False, name=category: self.show_category(name))
+                self.sidebar_buttons[category] = button
+                sidebar_layout.addWidget(button)
         sidebar_layout.addStretch()
+        sidebar_scroll.setWidget(sidebar_inner)
+        outer_sidebar_layout = QVBoxLayout(sidebar)
+        outer_sidebar_layout.setContentsMargins(0, 10, 0, 0)
+        outer_sidebar_layout.setSpacing(0)
+        outer_sidebar_layout.addWidget(sidebar_scroll, 1)
         self.system_label = QLabel("Host: verificando…")
         self.system_label.setObjectName("sidebarStatus")
         self.system_label.setWordWrap(True)
-        sidebar_layout.addWidget(self.system_label)
+        outer_sidebar_layout.addWidget(self.system_label)
         body_layout.addWidget(sidebar)
 
         main = QWidget()
@@ -136,7 +170,7 @@ class MainWindow(QMainWindow):
         self.search.setClearButtonEnabled(True)
         self.search.setMinimumWidth(320)
         self.search.setAccessibleName("Busca de ações")
-        self.search.textChanged.connect(self.rebuild_cards)
+        self.search.textChanged.connect(self.on_search)
         top.addWidget(self.search)
         theme = QPushButton()
         theme.setObjectName("iconButton")
@@ -165,6 +199,8 @@ class MainWindow(QMainWindow):
             main_layout.addWidget(banner)
 
         self.stack = QStackedWidget()
+        self.dashboard_page = self._build_dashboard_page()
+        self.stack.addWidget(self.dashboard_page)
         self.actions_page = QWidget()
         action_page_layout = QVBoxLayout(self.actions_page)
         action_page_layout.setContentsMargins(0, 0, 0, 0)
@@ -223,6 +259,52 @@ class MainWindow(QMainWindow):
         operation_layout.addWidget(self.log_view)
         main_layout.addWidget(operation)
         QTimer.singleShot(0, self._host_summary)
+
+    def _build_dashboard_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        host = QWidget()
+        host_layout = QVBoxLayout(host)
+        host_layout.setContentsMargins(2, 2, 8, 8)
+        host_layout.setSpacing(14)
+
+        welcome = QLabel("Bem-vindo de volta ao PhaseZero 👋")
+        welcome.setObjectName("welcomeTitle")
+        host_layout.addWidget(welcome)
+        subtitle = QLabel("Escaneie, escolha um card e execute — sem decorar caminhos de menu.")
+        subtitle.setObjectName("welcomeSubtitle")
+        host_layout.addWidget(subtitle)
+
+        host_layout.addWidget(SectionHeader("Ações rápidas", "As tarefas mais comuns, em destaque."))
+        host_layout.addWidget(self._dashboard_grid(DASHBOARD_QUICK, hero=True, columns=2))
+
+        host_layout.addWidget(SectionHeader("Ferramentas & utilidades", "Atalhos para status e reparos."))
+        host_layout.addWidget(self._dashboard_grid(DASHBOARD_TOOLS, hero=False, columns=3))
+        host_layout.addStretch()
+
+        scroll.setWidget(host)
+        layout.addWidget(scroll)
+        return page
+
+    def _dashboard_grid(self, ids: tuple[str, ...], *, hero: bool, columns: int) -> QWidget:
+        holder = QWidget()
+        grid = QGridLayout(holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
+        actions = [self.by_id[a] for a in ids if a in self.by_id]
+        for index, action in enumerate(actions):
+            card = ActionCard(action, hero=hero)
+            card.requested.connect(self.request_action)
+            self.dashboard_cards.append(card)
+            grid.addWidget(card, index // columns, index % columns)
+        for column in range(columns):
+            grid.setColumnStretch(column, 1)
+        return holder
 
     def _build_results_page(self) -> QWidget:
         page = QWidget()
@@ -294,20 +376,35 @@ class MainWindow(QMainWindow):
         self.current_category = category
         for name, button in self.sidebar_buttons.items():
             button.setChecked(name == category)
-        if category == "Resultados":
+        if self.search.text().strip():
+            self.search.clear()  # leaving a category cancels an active search
+        meta = self.cat_meta.get(category)
+        if category == DASHBOARD[0]:
+            self.stack.setCurrentWidget(self.dashboard_page)
+            self.page_title.setText("Início")
+            self.page_subtitle.setText(meta[2] if meta else "")
+        elif category == "Resultados":
             self.stack.setCurrentWidget(self.results_page)
             self.page_title.setText("Resultados")
             self.page_subtitle.setText("Histórico, logs e result.json")
             self.load_history()
         else:
             self.stack.setCurrentWidget(self.actions_page)
-            meta = next(row for row in CATEGORIES if row[0] == category)
             self.page_title.setText(category)
-            self.page_subtitle.setText(meta[2])
+            self.page_subtitle.setText(meta[2] if meta else "")
             self.rebuild_cards()
 
+    def on_search(self, text: str) -> None:
+        if text.strip():
+            self.stack.setCurrentWidget(self.actions_page)
+            self.page_title.setText("Busca")
+            self.page_subtitle.setText(f"Resultados para “{text.strip()}”")
+            self.rebuild_cards()
+        else:
+            self.show_category(self.current_category)
+
     def rebuild_cards(self) -> None:
-        if self.current_category == "Resultados":
+        if self.current_category in ("Resultados", DASHBOARD[0]) and not self.search.text().strip():
             return
         while self.grid.count():
             item = self.grid.takeAt(0)
@@ -393,7 +490,7 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
         self.progress.show()
-        for card in self.cards:
+        for card in (*self.cards, *self.dashboard_cards):
             card.setEnabled(False)
         self.append_output(f"$ {command}\n", False)
 
@@ -422,8 +519,9 @@ class MainWindow(QMainWindow):
         self.status_dot.setObjectName("statusSuccess" if severity == "success" else "statusWarning" if severity == "warning" else "statusError")
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)
-        for card in self.cards:
+        for card in (*self.cards, *self.dashboard_cards):
             card.setEnabled(True)
+        action_title = self.pending_action.title if self.pending_action is not None else "Operação"
         if start_failed:
             pass  # operation_start_failed already told the user
         elif result.preview and self.pending_action is not None:
@@ -438,8 +536,15 @@ class MainWindow(QMainWindow):
         else:
             formatted = self._format_result(result)
             ResultDialog(result, formatted, self).exec()
+            toast_state = "success" if severity == "success" else "warning" if severity == "warning" else "error"
+            verb = "concluída" if result.ok else "falhou"
+            self._toast(f"{action_title} {verb}", toast_state)
         self.pending_action = None
         self.pending_value = ""
+
+    def _toast(self, message: str, state: str) -> None:
+        toast = Toast(self, message, state)
+        toast.popup()
 
     def _format_result(self, result: OperationResult) -> str:
         blocks = []

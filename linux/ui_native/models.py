@@ -31,6 +31,33 @@ class ActionSpec:
             (self.title, self.description, self.category, self.badge, *self.args, *self.keywords)
         ).casefold()
 
+    @property
+    def variant(self) -> str:
+        """Visual weight of the primary button: danger / primary / secondary."""
+        if self.badge in {"Alto risco", "Resgate"}:
+            return "danger"
+        if self.mutable:
+            return "primary"
+        return "secondary"
+
+    @property
+    def state(self) -> str:
+        """Semantic colour of the badge chip (EmuDeck-style status colours)."""
+        mapping = {
+            "Alto risco": "error",
+            "Resgate": "error",
+            "Reparo": "warning",
+            "Requer ISO": "warning",
+            "Reversível": "success",
+            "Protegido": "success",
+            "Seguro": "success",
+        }
+        if self.badge in mapping:
+            return mapping[self.badge]
+        if self.elevated:
+            return "warning"
+        return "info"
+
 
 @dataclass
 class OperationResult:

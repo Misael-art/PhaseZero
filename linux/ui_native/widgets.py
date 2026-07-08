@@ -1,12 +1,21 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QPoint, Qt, Signal
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QPoint,
+    QPropertyAnimation,
+    Qt,
+    QTimer,
+    Signal,
+)
 from PySide6.QtGui import QColor, QIcon, QMouseEvent
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFrame,
     QGraphicsDropShadowEffect,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -23,6 +32,11 @@ from .models import ActionSpec, OperationResult
 def themed_icon(widget: QWidget, name: str, fallback: QStyle.StandardPixmap) -> QIcon:
     icon = QIcon.fromTheme(name)
     return icon if not icon.isNull() else widget.style().standardIcon(fallback)
+
+
+def _repolish(widget: QWidget) -> None:
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
 
 
 class HeaderBar(QFrame):
@@ -49,6 +63,11 @@ class HeaderBar(QFrame):
         layout.addWidget(mark)
         layout.addLayout(title_box)
         layout.addStretch()
+        # Language chips stay visible (EmuDeck keeps locale selection in the open).
+        for flag in ("🇧🇷", "🇺🇸"):
+            chip = QLabel(flag)
+            chip.setObjectName("langChip")
+            layout.addWidget(chip)
         for icon_name, fallback, signal, object_name in [
             ("window-minimize", QStyle.SP_TitleBarMinButton, self.minimize_requested, "windowButton"),
             ("window-maximize", QStyle.SP_TitleBarMaxButton, self.maximize_requested, "windowButton"),
@@ -64,7 +83,6 @@ class HeaderBar(QFrame):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
             handle = self.window().windowHandle()
-            # startSystemMove works on Wayland, where manual move() is ignored.
             if handle is not None and handle.startSystemMove():
                 self._drag_position = None
             else:
@@ -88,51 +106,90 @@ class HeaderBar(QFrame):
         super().mouseDoubleClickEvent(event)
 
 
+class SectionHeader(QWidget):
+    """A dashboard section heading: bold title + subtle caption."""
+
+    def __init__(self, title: str, caption: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(2, 8, 2, 2)
+        layout.setSpacing(1)
+        label = QLabel(title)
+        label.setObjectName("sectionHeading")
+        layout.addWidget(label)
+        if caption:
+            cap = QLabel(caption)
+            cap.setObjectName("sectionCaption")
+            layout.addWidget(cap)
+
+
 class ActionCard(QFrame):
     requested = Signal(object)
 
-    def __init__(self, action: ActionSpec, parent: QWidget | None = None) -> None:
+    def __init__(self, action: ActionSpec, *, hero: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.action = action
         self.setObjectName("actionCard")
-        self.setProperty("mutable", action.mutable)
-        self.setMinimumSize(270, 172)
-        self.setMaximumHeight(196)
+        self.setProperty("variant", action.variant)
+        self.setProperty("hero", hero)
+        if hero:
+            self.setMinimumSize(300, 150)
+            self.setMaximumHeight(172)
+        else:
+            self.setMinimumSize(272, 168)
+            self.setMaximumHeight(196)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.PointingHandCursor)
         self.installEventFilter(self)
         shadow = QGraphicsDropShadowEffect(self)
-        shadow.setBlurRadius(22)
-        shadow.setOffset(0, 5)
-        shadow.setColor(QColor(0, 0, 0, 80))
+        shadow.setBlurRadius(26 if hero else 20)
+        shadow.setOffset(0, 6)
+        shadow.setColor(QColor(0, 0, 0, 110 if hero else 80))
         self.setGraphicsEffect(shadow)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(18, 16, 18, 16)
         outer.setSpacing(9)
+
         heading = QHBoxLayout()
-        icon = QLabel()
-        icon.setPixmap(themed_icon(self, action.icon, QStyle.SP_ComputerIcon).pixmap(30, 30))
-        icon.setFixedSize(38, 38)
-        icon.setObjectName("cardIcon")
-        heading.addWidget(icon)
-        heading.addStretch()
+        heading.setSpacing(12)
+        icon_tile = QLabel()
+        icon_tile.setObjectName("cardIconHero" if hero else "cardIcon")
+        px = 34 if hero else 28
+        icon_tile.setPixmap(themed_icon(self, action.icon, QStyle.SP_ComputerIcon).pixmap(px, px))
+        icon_tile.setFixedSize(56 if hero else 46, 56 if hero else 46)
+        icon_tile.setAlignment(Qt.AlignCenter)
+        heading.addWidget(icon_tile)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(1)
+        title = QLabel(action.title)
+        title.setObjectName("cardTitleHero" if hero else "cardTitle")
+        title.setWordWrap(True)
+        title_box.addWidget(title)
+        if action.elevated:
+            lock = QLabel("🔒 requer admin")
+            lock.setObjectName("cardLock")
+            title_box.addWidget(lock)
+        heading.addLayout(title_box, 1)
         if action.badge:
             badge = QLabel(action.badge)
             badge.setObjectName("badge")
-            heading.addWidget(badge)
+            badge.setProperty("state", action.state)
+            badge.setAlignment(Qt.AlignCenter)
+            heading.addWidget(badge, 0, Qt.AlignTop)
         outer.addLayout(heading)
-        title = QLabel(action.title)
-        title.setObjectName("cardTitle")
-        outer.addWidget(title)
+
         description = QLabel(action.description)
         description.setObjectName("cardDescription")
         description.setWordWrap(True)
-        description.setMinimumHeight(38)
-        outer.addWidget(description)
-        outer.addStretch()
+        outer.addWidget(description, 1)
+
         button = QPushButton("Pré-visualizar" if action.mutable else "Executar")
-        button.setObjectName("primaryButton" if action.mutable else "secondaryButton")
+        button.setObjectName(
+            {"danger": "dangerButton", "primary": "primaryButton"}.get(action.variant, "secondaryButton")
+        )
+        button.setCursor(Qt.PointingHandCursor)
         button.setIcon(
             themed_icon(
                 self,
@@ -150,6 +207,83 @@ class ActionCard(QFrame):
                 return True
         return super().eventFilter(watched, event)
 
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        # Clicking anywhere on the card (not just the button) triggers it.
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.requested.emit(self.action)
+        super().mouseReleaseEvent(event)
+
+
+class StatusPill(QFrame):
+    """A coloured status chip for checklists (BIOS Checker style)."""
+
+    def __init__(self, label: str, state: str, detail: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("statusPill")
+        self.setProperty("state", state)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 7, 12, 7)
+        dot = QLabel("●")
+        dot.setObjectName("pillDot")
+        dot.setProperty("state", state)
+        text = QLabel(label)
+        text.setObjectName("pillLabel")
+        layout.addWidget(dot)
+        layout.addWidget(text)
+        layout.addStretch()
+        if detail:
+            det = QLabel(detail)
+            det.setObjectName("pillDetail")
+            layout.addWidget(det)
+
+
+class Toast(QFrame):
+    """Auto-dismissing toast in the top-right of its parent."""
+
+    def __init__(self, parent: QWidget, message: str, state: str = "success") -> None:
+        super().__init__(parent)
+        self.setObjectName("toast")
+        self.setProperty("state", state)
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        icon = QLabel({"success": "✓", "error": "✕", "warning": "!"}.get(state, "ℹ"))
+        icon.setObjectName("toastIcon")
+        icon.setProperty("state", state)
+        text = QLabel(message)
+        text.setObjectName("toastText")
+        text.setWordWrap(True)
+        layout.addWidget(icon)
+        layout.addWidget(text, 1)
+        self._effect = QGraphicsOpacityEffect(self)
+        self.setGraphicsEffect(self._effect)
+        self._anim = QPropertyAnimation(self._effect, b"opacity", self)
+
+    def popup(self, msecs: int = 3200) -> None:
+        self.adjustSize()
+        parent = self.parentWidget()
+        if parent is not None:
+            self.move(parent.width() - self.width() - 26, 20)
+        self.show()
+        self.raise_()
+        self._effect.setOpacity(0.0)
+        self._anim.stop()
+        self._anim.setDuration(220)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.start()
+        QTimer.singleShot(msecs, self._fade_out)
+
+    def _fade_out(self) -> None:
+        self._anim.stop()
+        self._anim.setDuration(320)
+        self._anim.setStartValue(1.0)
+        self._anim.setEndValue(0.0)
+        self._anim.setEasingCurve(QEasingCurve.InCubic)
+        self._anim.finished.connect(self.deleteLater)
+        self._anim.start()
+
 
 class PreviewDialog(QDialog):
     def __init__(self, result: OperationResult, parent: QWidget | None = None) -> None:
@@ -160,7 +294,7 @@ class PreviewDialog(QDialog):
         title = QLabel("Preview concluído")
         title.setObjectName("dialogTitle")
         summary = QLabel(
-            "Nenhuma mutação executada. Revise saída abaixo. Confirmação executará comando real."
+            "Nenhuma mutação executada. Revise a saída abaixo. Confirmar executará o comando real."
         )
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")

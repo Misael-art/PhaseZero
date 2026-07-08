@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -27,42 +28,46 @@ def stylesheet(theme: str) -> str:
     text = STYLE.read_text()
     text = text.replace("@THEME@", theme)
     if theme == "light":
+        # Map the EmuDeck dark palette onto a light one. #7c4dff (accent) and pure
+        # #ffffff (text on accent) are intentionally kept so buttons stay legible.
         replacements = {
-            "#111820": "#eef3f5",
-            "#18222b": "#f7fafb",
-            "#273640": "#cbd8de",
-            "#eef8fb": "#14242c",
-            "#91a6b3": "#5c707a",
-            "#0c1218": "#e2eaee",
-            "#25323b": "#c4d1d7",
-            "#627985": "#607681",
-            "#aabcc6": "#40545e",
-            "#effbff": "#10242d",
-            "#17242d": "#d5e4e9",
-            "#e8fbff": "#062f3a",
-            "#16333c": "#bfeef4",
-            "#607781": "#60737b",
-            "#f4fbfd": "#10232c",
-            "#31434e": "#afc1c9",
-            "#e8f2f7": "#172932",
-            "#172129": "#f8fbfc",
-            "#1a2730": "#ffffff",
-            "#1a252e": "#ffffff",
-            "#2b3a45": "#c8d6dc",
-            "#202e38": "#edf7f8",
-            "#f0f8fb": "#152832",
-            "#dceaf0": "#1a3039",
-            "#25323d": "#dae5e9",
-            "#344652": "#b5c7ce",
-            "#30424e": "#cbdde3",
-            "#151f27": "#f6f9fa",
-            "#293943": "#c6d5db",
-            "#d8e6eb": "#20343d",
-            "#091016": "#f8fbfc",
-            "#c9e4ec": "#18313b",
+            # backgrounds / surfaces
+            "#1e1e2e": "#f1f1f6",
+            "#232336": "#ffffff",
+            "#191926": "#e8e8f0",
+            "#2a2a3c": "#ffffff",
+            "#252536": "#ffffff",
+            "#15151f": "#f6f6fa",
+            "#2d2747": "#ece7fb",
+            "#33334a": "#e0e0ea",
+            "#32324a": "#eeeef6",
+            "#262636": "#f4f4f8",
+            "#22222f": "#eeeef4",
+            # borders
+            "#34344a": "#d5d5e0",
+            "#2e2e44": "#d8d8e2",
+            "#2b2b40": "#d8d8e2",
+            "#3a3a4c": "#d0d0dc",
+            "#45455c": "#c6c6d4",
+            "#4a4a60": "#c6c6d4",
+            "#4a3d7a": "#c9bdf0",
+            # text
+            "#f4f4fa": "#1a1a24",
+            "#f5f5fa": "#1a1a24",
+            "#f2f2f7": "#1c1c26",
+            "#e8e8f0": "#20202c",
+            "#dcdce6": "#24242e",
+            "#cfcfe0": "#2a2a36",
+            "#b7b7c8": "#3a3a48",
+            "#a0a0b0": "#5a5a68",
+            "#8a8aa0": "#6a6a78",
+            "#6a6a82": "#8a8a98",
         }
-        for old, new in replacements.items():
-            text = text.replace(old, new)
+        # Single-pass substitution: a replacement's output must never be re-mapped
+        # by a later rule (e.g. sidebar bg #191926 -> #e8e8f0 must not then be
+        # re-darkened by the #e8e8f0 text rule).
+        pattern = re.compile("|".join(re.escape(key) for key in replacements))
+        text = pattern.sub(lambda match: replacements[match.group(0)], text)
     return text
 
 
@@ -71,14 +76,14 @@ def apply_theme(app: QApplication, theme: str) -> None:
     app.setStyleSheet(stylesheet(theme))
     palette = QPalette()
     if theme == "dark":
-        palette.setColor(QPalette.Window, QColor("#111820"))
-        palette.setColor(QPalette.WindowText, QColor("#e8f2f7"))
-        palette.setColor(QPalette.Base, QColor("#0c1218"))
-        palette.setColor(QPalette.Text, QColor("#e8f2f7"))
-        palette.setColor(QPalette.Button, QColor("#202c36"))
-        palette.setColor(QPalette.ButtonText, QColor("#e8f2f7"))
-        palette.setColor(QPalette.Highlight, QColor("#00bcd4"))
-        palette.setColor(QPalette.HighlightedText, QColor("#071116"))
+        palette.setColor(QPalette.Window, QColor("#1e1e2e"))
+        palette.setColor(QPalette.WindowText, QColor("#f2f2f7"))
+        palette.setColor(QPalette.Base, QColor("#191926"))
+        palette.setColor(QPalette.Text, QColor("#f2f2f7"))
+        palette.setColor(QPalette.Button, QColor("#3a3a4c"))
+        palette.setColor(QPalette.ButtonText, QColor("#f2f2f7"))
+        palette.setColor(QPalette.Highlight, QColor("#7c4dff"))
+        palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
     app.setPalette(palette)
 
 
