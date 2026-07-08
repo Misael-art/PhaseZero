@@ -12,6 +12,10 @@ mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/phasezero" "$PKG/usr/bin" \
     "$PKG/usr/share/applications" "$PKG/usr/share/metainfo" \
     "$PKG/usr/share/icons/hicolor/scalable/apps"
 cp "$ROOT/packaging/linux/deb/control" "$PKG/DEBIAN/control"
+# The tracked control file's Version field is documentation, not the build input;
+# always stamp the copy with version.json so a shipped .deb never reports a stale
+# version if the tracked file falls out of sync.
+sed -i "s/^Version:.*/Version: $VERSION/" "$PKG/DEBIAN/control"
 cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/version.json" "$PKG/usr/lib/phasezero/"
 find "$PKG/usr/lib/phasezero" -type d -name __pycache__ -exec rm -rf {} +
 install -m755 "$ROOT/packaging/linux/phasezero-control-center" "$PKG/usr/bin/"

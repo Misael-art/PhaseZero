@@ -3,6 +3,46 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.3.0] - 2026-07-08
+
+Foco: Homelab CX — o servidor caseiro (Docker Compose) ganha status/plano rico,
+geração segura de segredos, modos de acesso explícitos, backup/restore/update e um
+gate de compatibilidade CasaOS opt-in. UI nativa e dashboard web legado atualizados.
+
+### Adicionado
+- **`pz server homelab`** ganhou `plan`, `open <app>`, `logs <app>`, `backup`,
+  `restore --source PATH --yes`, `update` e `repair`, todos com saída JSON estruturada
+  (`status`, `blockers`, `nextSteps`, `apps[]` com URL/bind/volumes/estado).
+- **Segredos gerados automaticamente**: `pz server homelab repair`/`up` cria um `.env`
+  seguro (`chmod 600`, fora do repositório) com tokens/senhas aleatórios para
+  Vaultwarden, Nextcloud, Grafana, Paperless e n8n; nunca inline no compose.
+- **Modos de acesso explícitos**: `--access local` (padrão, tudo em `127.0.0.1`),
+  `--access tailscale` (expõe apps sensíveis apenas no IP Tailscale, bloqueado se
+  deslogado) e `--access lan` (opt-in, `0.0.0.0`). Nenhuma porta fica exposta à WAN
+  por padrão.
+- **Imagens Docker fixadas por tag** (Portainer, Jellyfin, Syncthing, Vaultwarden,
+  Uptime Kuma, Nextcloud, Grafana, Prometheus, Paperless, n8n) — sem `:latest` —
+  com overrides `PZ_IMAGE_*` para quem quiser trocar a versão.
+- **`pz server casaos`** (`status`/`plan`/`install`): gate de compatibilidade para
+  CasaOS real. Detecta distro/arquitetura e bloqueia Arch/SteamOS/BigLinux/Manjaro;
+  instalação permanece opt-in (`--yes`) mesmo em hosts compatíveis (Debian/Ubuntu/
+  Raspberry Pi OS). O caminho padrão do PhaseZero continua sendo a stack Docker
+  Compose + Portainer.
+- **UI nativa**: 26 novos cards na categoria Servidor (status, planos, subir/parar,
+  abrir apps, logs, backup/restaurar/atualizar, Tailscale, CasaOS). **Dashboard web
+  legado**: nova página "Servidor" e lista de perfis `server-*` atualizada.
+- **Testes**: `tests/linux-homelab.sh` cobre sintaxe, tags fixadas, binds seguros,
+  bloqueio por segredo ausente, `.env` sem vazar segredo, `docker compose config`,
+  bloqueio por Tailscale deslogado, URLs de `open`, dry-runs de backup/restore e o
+  gate de compatibilidade CasaOS (Ubuntu ok, Arch bloqueado).
+
+### Corrigido
+- **Empacotamento**: `packaging/linux/deb/build-deb.sh` e `.../rpm/build-rpm.sh`
+  copiavam `control`/`.spec` sem sincronizar o campo `Version` com `version.json` —
+  um `.deb`/`.rpm` publicado podia reportar a versão anterior. Os scripts agora
+  derivam a versão de `version.json` na cópia de build, sem alterar os arquivos
+  versionados.
+
 ## [1.2.0] - 2026-07-07
 
 Foco: trilha Linux — IA/agentes, servidor caseiro, correções de emulação/Steam Deck

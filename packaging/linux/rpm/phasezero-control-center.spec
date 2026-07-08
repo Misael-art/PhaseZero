@@ -1,5 +1,5 @@
 Name:           phasezero-control-center
-Version:        1.1.0
+Version:        1.3.0
 Release:        1%{?dist}
 Summary:        PhaseZero native Linux control center
 License:        MIT
@@ -38,5 +38,8 @@ install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_data
 %{_datadir}/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg
 
 %changelog
+* Wed Jul 08 2026 PhaseZero <noreply@phasezero.local> - 1.3.0-1
+- Homelab CX: rich JSON status/plan, secret generation, access modes
+  (local/tailscale/lan), open/logs/backup/restore/update, CasaOS compatibility gate.
 * Mon Jul 06 2026 PhaseZero <noreply@phasezero.local> - 1.1.0-1
 - SRM coverage, safe Switch scanning, launchers, game optimizers and AI proxies.

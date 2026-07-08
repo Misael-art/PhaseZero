@@ -15,7 +15,11 @@ cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/version.json" "$SOURCE/"
 cp -a "$ROOT/packaging/linux" "$SOURCE/packaging/"
 find "$SOURCE" -type d -name __pycache__ -exec rm -rf {} +
 tar -C "$TOP/source" -czf "$TOP/SOURCES/v$VERSION.tar.gz" "PhaseZero-$VERSION"
-rpmbuild -bb --define "_topdir $TOP" \
-    "$ROOT/packaging/linux/rpm/phasezero-control-center.spec"
+# Build from a copy of the spec, stamped with version.json's Version: the tracked
+# .spec is documentation between releases and must not be mutated by a build.
+SPEC="$TOP/SPECS/phasezero-control-center.spec"
+cp "$ROOT/packaging/linux/rpm/phasezero-control-center.spec" "$SPEC"
+sed -i "s/^Version:.*/Version:        $VERSION/" "$SPEC"
+rpmbuild -bb --define "_topdir $TOP" "$SPEC"
 mkdir -p "$OUT"
 find "$TOP/RPMS" -type f -name '*.rpm' -exec cp -f {} "$OUT/" \;
