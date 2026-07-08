@@ -547,6 +547,91 @@
       "module": "emulation"
     },
     {
+      "name": "server.status",
+      "label": "Status servidor",
+      "command": "bash linux/pz server status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "server"
+    },
+    {
+      "name": "server.homelab.status",
+      "label": "Status Homelab",
+      "command": "bash linux/server/homelab-stack.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "server"
+    },
+    {
+      "name": "server.homelab.plan",
+      "label": "Plano Homelab",
+      "command": "bash linux/server/homelab-stack.sh plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "server"
+    },
+    {
+      "name": "server.homelab.repair",
+      "label": "Preparar Homelab",
+      "command": "bash linux/server/homelab-stack.sh repair",
+      "plan_command": "bash linux/server/homelab-stack.sh plan",
+      "mutable": true,
+      "require_plan": true,
+      "module": "server"
+    },
+    {
+      "name": "server.homelab.up",
+      "label": "Subir Homelab local",
+      "command": "bash linux/server/homelab-stack.sh up --access local",
+      "plan_command": "bash linux/server/homelab-stack.sh plan --access local",
+      "mutable": true,
+      "require_plan": true,
+      "module": "server"
+    },
+    {
+      "name": "server.homelab.down",
+      "label": "Parar Homelab",
+      "command": "bash linux/server/homelab-stack.sh down",
+      "plan_command": "bash linux/server/homelab-stack.sh status",
+      "mutable": true,
+      "require_plan": true,
+      "module": "server"
+    },
+    {
+      "name": "server.homelab.backup",
+      "label": "Backup Homelab",
+      "command": "bash linux/server/homelab-stack.sh backup",
+      "plan_command": "bash linux/server/homelab-stack.sh backup --dry-run",
+      "mutable": true,
+      "require_plan": true,
+      "module": "server"
+    },
+    {
+      "name": "server.homelab.update",
+      "label": "Atualizar Homelab",
+      "command": "bash linux/server/homelab-stack.sh update",
+      "plan_command": "bash linux/server/homelab-stack.sh update --dry-run",
+      "mutable": true,
+      "require_plan": true,
+      "module": "server"
+    },
+    {
+      "name": "server.casaos.status",
+      "label": "Status CasaOS",
+      "command": "bash linux/server/casaos.sh status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "server"
+    },
+    {
+      "name": "server.casaos.plan",
+      "label": "Plano CasaOS",
+      "command": "bash linux/server/casaos.sh plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "server"
+    },
+    {
       "name": "ai.status",
       "label": "Status IA",
       "command": "bash linux/ai/status.sh",

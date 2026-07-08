@@ -48,7 +48,8 @@ Usage:
   pz waydroid boot status     Manage direct GRUB Waydroid boot entry
   pz server status            Home server (LLM/homelab/boot) status
   pz server llm <action>      Local LLM server (install|expose-lan|restore|status)
-  pz server homelab <action>  Homelab Docker stack (up|down|restart|tailscale|status) [--extras]
+  pz server homelab <action>  Homelab Docker stack (plan|up|down|open|logs|backup|restore|update|repair) [--extras]
+  pz server casaos <action>   CasaOS opt-in compatibility gate (status|plan|install)
   pz server hermes <action>   Hermes remote actuation (setup|start|status)
   pz server slim <action>     Reversible OS slimming (apply [--aggressive]|restore|status)
   pz server boot <action>     GRUB Homelab entry (install|remove|status|next-reboot) [--llm --homelab --hermes]
@@ -350,16 +351,18 @@ cmd_server() {
         status)
             bash "$PZ_ROOT/linux/server/llm-server.sh" status
             bash "$PZ_ROOT/linux/server/homelab-stack.sh" status
+            bash "$PZ_ROOT/linux/server/casaos.sh" status
             bash "$PZ_ROOT/linux/server/install-homelab-boot.sh" status
             ;;
         llm)      bash "$PZ_ROOT/linux/server/llm-server.sh" "${1:-status}" "${@:2}" ;;
         homelab)  bash "$PZ_ROOT/linux/server/homelab-stack.sh" "${1:-status}" "${@:2}" ;;
+        casaos)   bash "$PZ_ROOT/linux/server/casaos.sh" "${1:-status}" "${@:2}" ;;
         up)       bash "$PZ_ROOT/linux/server/homelab-stack.sh" up "$@" ;;
         down)     bash "$PZ_ROOT/linux/server/homelab-stack.sh" down ;;
         hermes)   bash "$PZ_ROOT/linux/server/hermes-remote.sh" "${1:-status}" "${@:2}" ;;
         slim)     bash "$PZ_ROOT/linux/server/os-slim.sh" "${1:-status}" "${@:2}" ;;
         boot)     bash "$PZ_ROOT/linux/server/install-homelab-boot.sh" "${1:-status}" "${@:2}" ;;
-        *) pz_error "usage: pz server (status|llm|homelab|up|down|hermes|slim|boot) ..."; return 1 ;;
+        *) pz_error "usage: pz server (status|llm|homelab|casaos|up|down|hermes|slim|boot) ..."; return 1 ;;
     esac
 }
 

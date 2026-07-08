@@ -94,6 +94,32 @@ def run_module_status(module):
         ok, out, err = run_bash(["bash", "linux/ai/status.sh"])
         c = [{"name": "ai.status", "status": "ok" if ok else "warn", "message": ""}]
         return build_envelope("ai", "ok" if ok else "warn", checks=c)
+    elif module == "server":
+        checks = []
+        ok, out, err = run_bash(["bash", "linux/server/homelab-stack.sh", "status"])
+        if ok and out.strip():
+            try:
+                homelab = json.loads(out)
+                checks.append({"name": "homelab.docker", "status": "ok" if homelab.get("docker", {}).get("reachable") else "warn", "message": "Docker daemon"})
+                checks.append({"name": "homelab.env", "status": "ok" if homelab.get("env", {}).get("exists") else "warn", "message": homelab.get("paths", {}).get("envFile", "")})
+                blockers = homelab.get("blockers", [])
+                checks.append({"name": "homelab.blockers", "status": "ok" if not blockers else "blocked", "message": ", ".join(blockers[:3])})
+                for app in homelab.get("apps", [])[:8]:
+                    checks.append({"name": f"homelab.{app.get('key')}", "status": "running" if app.get("running") else "warn", "message": app.get("url", "")})
+            except json.JSONDecodeError:
+                checks.append({"name": "homelab.status", "status": "warn", "message": "json parse error"})
+        else:
+            checks.append({"name": "homelab.status", "status": "warn", "message": err[:160]})
+
+        ok, out, err = run_bash(["bash", "linux/server/casaos.sh", "status"])
+        if ok and out.strip():
+            try:
+                casaos = json.loads(out)
+                checks.append({"name": "casaos.status", "status": "ok" if casaos.get("status") in ("installed", "available") else "warn", "message": casaos.get("status", "")})
+            except json.JSONDecodeError:
+                checks.append({"name": "casaos.status", "status": "warn", "message": "json parse error"})
+        status = "ok" if all(c.get("status") in ("ok", "running") for c in checks) else "warn"
+        return build_envelope("server", status, checks=checks)
     else:
         return build_envelope(module, "warn", checks=[{"name": "unknown", "status": "warn", "message": f"unknown module: {module}"}])
 
@@ -161,7 +187,7 @@ class PZHTTPHandler(http.server.BaseHTTPRequestHandler):
             mime = mime_map.get(ext, "application/octet-stream")
             self._send_file(fpath, mime)
         elif path == "/api/modules":
-            mods = ["system", "steamdeck", "emulation", "ai"]
+            mods = ["system", "steamdeck", "emulation", "server", "ai"]
             self._send_json({"modules": mods})
         elif path.startswith("/api/status/"):
             module = path.removeprefix("/api/status/")
@@ -175,7 +201,7 @@ class PZHTTPHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(build_envelope("system", "blocked", blockers=["invalid token"]), 401)
                 return
             results = {}
-            for mod in ["system", "steamdeck", "emulation", "ai"]:
+            for mod in ["system", "steamdeck", "emulation", "server", "ai"]:
                 results[mod] = run_module_status(mod)
             self._send_json(results)
         elif path == "/api/actions":
@@ -206,7 +232,7 @@ class PZHTTPHandler(http.server.BaseHTTPRequestHandler):
             entry = self.allowlist[action_name]
             if entry.get("require_plan", False) and not confirmed:
                 # return plan first
-                plan_cmd = entry["command"].split()
+                plan_cmd = entry.get("plan_command", entry["command"]).split()
                 ok, out, err = run_bash(plan_cmd)
                 return self._send_json(build_envelope(
                     entry["module"], "ok" if ok else "warn",

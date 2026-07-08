@@ -6,7 +6,7 @@ name: phasezero-homelab-extras
 services:
   # "Drive" completo (alternativa pesada ao Syncthing)
   nextcloud-db:
-    image: mariadb:11
+    image: ${PZ_IMAGE_MARIADB:-mariadb:11.8.3}
     container_name: phasezero-nextcloud-db
     restart: unless-stopped
     environment:
@@ -18,7 +18,7 @@ services:
       - nextcloud_db:/var/lib/mysql
 
   nextcloud:
-    image: nextcloud:latest
+    image: ${PZ_IMAGE_NEXTCLOUD:-nextcloud:31.0.6}
     container_name: phasezero-nextcloud
     restart: unless-stopped
     depends_on:
@@ -29,60 +29,60 @@ services:
       - MYSQL_USER=nextcloud
       - MYSQL_PASSWORD=${NEXTCLOUD_DB_PASSWORD}
     ports:
-      - "8080:80"
+      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:8080:80"
     volumes:
       - nextcloud_data:/var/www/html
 
   # Observabilidade
   prometheus:
-    image: prom/prometheus:latest
+    image: ${PZ_IMAGE_PROMETHEUS:-prom/prometheus:v3.5.0}
     container_name: phasezero-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:9090:9090"
     volumes:
       - prometheus_data:/prometheus
 
   node-exporter:
-    image: prom/node-exporter:latest
+    image: ${PZ_IMAGE_NODE_EXPORTER:-prom/node-exporter:v1.9.1}
     container_name: phasezero-node-exporter
     restart: unless-stopped
     ports:
-      - "9100:9100"
+      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:9100:9100"
 
   grafana:
-    image: grafana/grafana:latest
+    image: ${PZ_IMAGE_GRAFANA:-grafana/grafana:12.0.2}
     container_name: phasezero-grafana
     restart: unless-stopped
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
     ports:
-      - "3000:3000"
+      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:3000:3000"
     volumes:
       - grafana_data:/var/lib/grafana
 
   # OCR de documentos
   paperless:
-    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    image: ${PZ_IMAGE_PAPERLESS:-ghcr.io/paperless-ngx/paperless-ngx:2.16.3}
     container_name: phasezero-paperless
     restart: unless-stopped
     environment:
       - PAPERLESS_SECRET_KEY=${PAPERLESS_SECRET_KEY}
     ports:
-      - "8010:8000"
+      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:8010:8000"
     volumes:
       - paperless_data:/usr/src/paperless/data
       - paperless_media:/usr/src/paperless/media
 
   # Workflows/automação
   n8n:
-    image: docker.n8n.io/n8nio/n8n:latest
+    image: ${PZ_IMAGE_N8N:-docker.n8n.io/n8nio/n8n:1.100.1}
     container_name: phasezero-n8n
     restart: unless-stopped
     environment:
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
     ports:
-      - "5678:5678"
+      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:5678:5678"
     volumes:
       - n8n_data:/home/node/.n8n
 

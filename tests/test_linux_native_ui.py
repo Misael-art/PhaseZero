@@ -49,6 +49,7 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
         "emulation",
         "boot",
         "flatpak",
+        "server",
         "ai",
         "doctor",
         "support-bundle",

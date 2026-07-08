@@ -46,6 +46,7 @@ function showPage(id) {
   else if (id === 'steamdeck') loadSteamDeck();
   else if (id === 'emulation') loadEmulation();
   else if (id === 'media') loadMedia();
+  else if (id === 'server') loadServer();
   else if (id === 'ai') loadAI();
   else if (id === 'profiles') loadProfiles();
   else if (id === 'doctor') loadDoctor();
@@ -167,6 +168,34 @@ async function loadMedia() {
   }
 }
 
+/* ---- Server ---- */
+async function loadServer() {
+  const container = document.getElementById('server-content');
+  container.innerHTML = '<div class="spinner"></div>';
+  try {
+    const data = await api('GET', '/status/server');
+    let html = '<div class="cards">';
+    html += `<div class="card"><div class="stat-label">Status</div><div class="stat">${badge(data.status)}</div></div>`;
+    html += `<div class="card"><div class="stat-label">Checks</div><div class="stat">${(data.checks||[]).length}</div></div>`;
+    html += '</div>';
+    if (data.checks && data.checks.length) {
+      html += '<table><tr><th>Item</th><th>Status</th><th>Detalhe</th></tr>';
+      for (const c of data.checks) html += `<tr><td>${c.name}</td><td>${badge(c.status)}</td><td>${c.message||''}</td></tr>`;
+      html += '</table>';
+    }
+    html += '<div style="margin-top:1rem"><h3>Ações</h3>';
+    html += actionButtons('server', [
+      'server.homelab.status','server.homelab.plan','server.homelab.repair',
+      'server.homelab.up','server.homelab.down','server.homelab.backup','server.homelab.update',
+      'server.casaos.status','server.casaos.plan'
+    ]);
+    html += '</div>';
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<div class="badge blocked">${e.message}</div>`;
+  }
+}
+
 /* ---- AI ---- */
 async function loadAI() {
   const container = document.getElementById('ai-content');
@@ -197,7 +226,11 @@ async function loadProfiles() {
     let html = '<div class="cards">';
     html += `<div class="card"><div class="stat-label">Profiles disponíveis</div></div>`;
     html += '</div><table><tr><th>Profile</th><th>Descrição</th><th></th></tr>';
-    const profiles = ['safe-base','dev-ai','gaming','steamdeck-linux','emulation-linux','homelab','full-workstation'];
+    const profiles = [
+      'safe-base','dev-ai','gaming','steamdeck-linux','windows-vm-linux','waydroid-linux',
+      'emulation-linux','homelab','server-llm','server-homelab','server-homelab-hermes',
+      'server-llm-hermes','server-llm-homelab','server-llm-homelab-hermes','full-workstation'
+    ];
     for (const p of profiles) {
       html += `<tr><td>${p}</td><td style="color:var(--text-dim)">Ver descrição</td>
         <td><button class="btn btn-secondary btn-sm" onclick="showPlan('profiles.${p}')">Ver perfil</button></td></tr>`;
@@ -267,8 +300,12 @@ function showConfirmModal(action) {
 }
 
 function actionButtons(module, actions) {
+  const confirmPattern = /(apply|install|repair|up|down|backup|restore|update|next-reboot|optimize|launch|configure|sync|tailscale)/;
   return `<div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.5rem">
-    ${actions.map(a => `<button class="btn btn-${a.includes('apply')||a.includes('install')||a.includes('repair') ? 'danger' : 'secondary'} btn-sm" onclick="runAction('${a}', ${a.includes('apply')||a.includes('install')||a.includes('repair')})">${a.split('.').pop()}</button>`).join('')}
+    ${actions.map(a => {
+      const needsConfirm = confirmPattern.test(a);
+      return `<button class="btn btn-${needsConfirm ? 'danger' : 'secondary'} btn-sm" onclick="runAction('${a}', ${needsConfirm})">${a.split('.').pop()}</button>`;
+    }).join('')}
   </div>
   <div id="action-output"></div>`;
 }
