@@ -3,10 +3,23 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 OUT="${1:-$ROOT/dist}"
-WORK="${PZ_APPIMAGE_WORK:-$ROOT/build/appimage}"
-APPDIR="$WORK/PhaseZero.AppDir"
 PYTHON="${PYTHON:-python3}"
 APPIMAGETOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
+
+# The AppDir must NOT live on a FUSE-backed filesystem (NTFS-3g, sshfs, ...):
+# appimagetool's parallel mksquashfs can silently drop files under I/O pressure
+# there (observed on an NTFS-3g SD-card checkout: ~80 stdlib files including
+# encodings/ vanished with no error, producing an AppImage that failed at
+# startup with "Fatal Python error: Failed to import encodings module"). Default
+# to a fresh dir under /tmp (tmpfs on most distros); pass PZ_APPIMAGE_WORK to
+# override, but keep it off FUSE/network mounts.
+WORK="${PZ_APPIMAGE_WORK:-}"
+CLEANUP_WORK=0
+if [ -z "$WORK" ]; then
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/pz-appimage-build.XXXXXX")"
+    CLEANUP_WORK=1
+fi
+APPDIR="$WORK/PhaseZero.AppDir"
 
 [ -n "$APPIMAGETOOL" ] || {
     echo "appimagetool missing: set APPIMAGETOOL=/path/to/appimagetool" >&2
@@ -53,3 +66,5 @@ rm -rf "$SMOKE_DIR"
 VERSION="$(jq -r .version "$ROOT/version.json" 2>/dev/null || echo 1.0.0)"
 mkdir -p "$OUT"
 ARCH="${ARCH:-$(uname -m)}" "$APPIMAGETOOL" "$APPDIR" "$OUT/PhaseZero-$VERSION-$(uname -m).AppImage"
+[ "$CLEANUP_WORK" = 1 ] && rm -rf "$WORK"
+true
