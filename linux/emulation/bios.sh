@@ -38,32 +38,71 @@ sync_citron_keys() { bash "$PZ_ROOT/linux/emulation/citron.sh" configure; }
 import_switch_keys() {
     local ryujinx
     ryujinx=$(pz_emulation_switch_ryujinx_paths)
-
-    if [ "$ryujinx" != "null" ] && jq -e '.hasKeys == true' <<< "$ryujinx" >/dev/null 2>&1; then
-        pz_info "Ryujinx keys found at $(jq -r '.keys' <<< "$ryujinx")"
-        pz_info "Sync via symlink (sem duplicação)"
-        sync_eden_keys
-        sync_citron_keys
-        return 0
-    fi
-
-    local found=0 file
-    [ -n "$SOURCE" ] || { pz_error "usage: pz emulation switch import-keys <local-path>"; return 1; }
-    pz_emulation_require_local_source "$SOURCE"
     pz_emulation_ensure_layout
-    if [ -d "$SOURCE" ]; then
-        while IFS= read -r -d '' file; do
+
+    # The central store (firmware/switch/keys) is the single source of truth.
+    # Populate it first from any source we can find: an explicit SOURCE arg, or
+    # Ryujinx's existing keys. This fixes the bug where "import" succeeded but
+    # left the central store empty (so Eden/Citron/NZ could not find keys and
+    # re-prompted in Game Mode).
+    local central_keydir="$PZ_EMULATION_ROOT/firmware/switch/keys"
+    install -d "$central_keydir"
+
+    if [ -n "$SOURCE" ]; then
+        pz_emulation_require_local_source "$SOURCE"
+        local found=0 file
+        if [ -d "$SOURCE" ]; then
+            while IFS= read -r -d '' file; do
+                found=1
+                copy_key_file "$file"
+            done < <(find "$SOURCE" -maxdepth 1 -type f \( -name 'prod.keys' -o -name 'title.keys' \) -print0)
+        else
             found=1
-            copy_key_file "$file"
-        done < <(find "$SOURCE" -maxdepth 1 -type f \( -name 'prod.keys' -o -name 'title.keys' \) -print0)
+            copy_key_file "$SOURCE"
+        fi
+        [ "$found" -eq 1 ] || { pz_error "no prod.keys/title.keys found in $SOURCE"; return 1; }
+    elif [ "$ryujinx" != "null" ] && jq -e '.hasKeys == true' <<< "$ryujinx" >/dev/null 2>&1; then
+        # No explicit source, but Ryujinx already has keys: back-fill the central
+        # store from Ryujinx so Eden/Citron/NZ can link to the central path.
+        local ryu_keys; ryu_keys="$(jq -r '.keys' <<< "$ryujinx")"
+        pz_info "back-filling central key store from Ryujinx: $ryu_keys"
+        local kf
+        for kf in prod.keys title.keys; do
+            [ -f "$ryu_keys/$kf" ] && cp -f "$ryu_keys/$kf" "$central_keydir/$kf"
+        done
     else
-        found=1
-        copy_key_file "$SOURCE"
+        pz_error "usage: pz emulation switch import-keys <local-path> (or place prod.keys in Ryujinx first)"
+        return 1
     fi
-    [ "$found" -eq 1 ] || { pz_error "no prod.keys/title.keys found in $SOURCE"; return 1; }
+
+    # Ensure Ryujinx itself reads the central store (link its keys dir in).
+    link_ryujinx_to_central
+
     sync_eden_keys
     sync_citron_keys
-    pz_info "Switch keys imported from local source"
+    pz_info "Switch keys centralized at $central_keydir"
+}
+
+link_ryujinx_to_central() {
+    # Point Ryujinx's keys dir at the central store so every emulator shares one
+    # copy. Best-effort: skip if the user keeps real keys in Ryujinx only.
+    local central_keydir="$PZ_EMULATION_ROOT/firmware/switch/keys"
+    local ryu_config="$HOME/.config/Ryujinx/system"
+    [ -f "$central_keydir/prod.keys" ] || return 0
+    [ -d "$ryu_config" ] || return 0
+    local target="$ryu_config/keys"
+    # Already linked to the central store?
+    [ -L "$target" ] && [ "$(readlink -f "$target")" = "$(readlink -f "$central_keydir")" ] && return 0
+    # If Ryujinx has its own real key files, keep them but ensure the central has
+    # a copy (handled above); do not clobber a working Ryujinx setup.
+    if [ -d "$target" ] && [ ! -L "$target" ]; then
+        if [ ! -e "$target/prod.keys" ]; then
+            rmdir "$target" 2>/dev/null || true
+            ln -sfn "$central_keydir" "$target"
+        fi
+    else
+        ln -sfn "$central_keydir" "$target"
+    fi
 }
 
 extract_or_copy_firmware() {
@@ -90,22 +129,28 @@ sync_citron_firmware() { bash "$PZ_ROOT/linux/emulation/citron.sh" configure; }
 import_switch_firmware() {
     local ryujinx
     ryujinx=$(pz_emulation_switch_ryujinx_paths)
+    pz_emulation_ensure_layout
+    local central_fw="$PZ_EMULATION_ROOT/firmware/switch/firmware"
+    install -d "$central_fw"
 
-    if [ "$ryujinx" != "null" ] && jq -e '.hasFirmware == true' <<< "$ryujinx" >/dev/null 2>&1; then
-        pz_info "Ryujinx firmware found at $(jq -r '.firmware' <<< "$ryujinx")"
-        pz_info "Sync via symlink (sem duplicação)"
-        sync_eden_firmware
-        sync_citron_firmware
-        return 0
+    if [ -n "$SOURCE" ]; then
+        pz_emulation_require_local_source "$SOURCE"
+        extract_or_copy_firmware "$SOURCE" "$central_fw"
+    elif [ "$ryujinx" != "null" ] && jq -e '.hasFirmware == true' <<< "$ryujinx" >/dev/null 2>&1; then
+        local ryu_fw; ryu_fw="$(jq -r '.firmware' <<< "$ryujinx")"
+        pz_info "back-filling central firmware store from Ryujinx: $ryu_fw"
+        # Firmware is a registered dir tree; sync new files only.
+        if [ -d "$ryu_fw" ]; then
+            ( cd "$ryu_fw" && tar cf - . 2>/dev/null ) | ( cd "$central_fw" && tar xf - 2>/dev/null || true )
+        fi
+    else
+        pz_error "usage: pz emulation switch import-firmware <local-path> (or install firmware in Ryujinx first)"
+        return 1
     fi
 
-    [ -n "$SOURCE" ] || { pz_error "usage: pz emulation switch import-firmware <local-path>"; return 1; }
-    pz_emulation_require_local_source "$SOURCE"
-    pz_emulation_ensure_layout
-    extract_or_copy_firmware "$SOURCE" "$PZ_EMULATION_ROOT/firmware/switch/firmware"
     sync_eden_firmware
     sync_citron_firmware
-    pz_info "Switch firmware imported from local source"
+    pz_info "Switch firmware centralized at $central_fw"
 }
 
 case "$ACTION" in

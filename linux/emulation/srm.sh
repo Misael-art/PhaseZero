@@ -138,16 +138,21 @@ backup_srm_file() {
 }
 
 ensure_srm_appimage_link() {
-    local app target
+    local app target alt_target
     app="$(find_srm_appimage)"
     target="$PZ_EMULATION_ROOT/tools/Steam-ROM-Manager.AppImage"
+    alt_target="$PZ_EMULATION_ROOT/tools/srm/Steam-ROM-Manager.AppImage"
     [ -n "$app" ] || return 0
     chmod +x "$app" 2>/dev/null || true
-    [ "$app" = "$target" ] && return 0
-    if [ ! -e "$target" ]; then
+    if [ "$app" != "$target" ] && [ ! -e "$target" ]; then
         install -d "$(dirname "$target")"
         ln -sfn "$app" "$target"
-        pz_info "linked Steam ROM Manager AppImage: $target -> $app"
+        pz_info "linked SRM AppImage: $target -> $app"
+    fi
+    if [ ! -e "$alt_target" ]; then
+        install -d "$(dirname "$alt_target")"
+        ln -sfn "$app" "$alt_target"
+        pz_info "linked SRM AppImage: $alt_target -> $app"
     fi
 }
 
@@ -181,6 +186,146 @@ merge_srm_settings() {
     mv "$tmp" "$SRM_SETTINGS"
 }
 
+# PhaseZero-managed SRM parsers for systems that EmuDeck templates do not ship
+# (or that the user wants regardless of EmuDeck being installed). Each entry is
+# a complete Glob parser marked phasezeroManaged so normalize_srm_parsers fills
+# in the SRM defaults for it. Roms are read from ${romsdirglobal}/<system> and
+# launched via the PhaseZero launcher scripts under tools/launchers.
+phasezero_managed_parsers_json() {
+    local retro
+    retro="$(retroarch_launcher)"
+    cat <<EOF
+[
+  {
+    "configTitle": "Nintendo GameCube - Dolphin",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/gc",
+    "parserInputs": {"glob": "\${title}@(.gcm|.GCM|.iso|.ISO|.gcz|.GCZ)"},
+    "executable": {"path": "$PZ_EMULATION_ROOT/tools/launchers/dolphin-emu.sh", "appendArgsToExecutable": true},
+    "executableArgs": "-b -e \"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  },
+  {
+    "configTitle": "Nintendo Wii - Dolphin",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/wii",
+    "parserInputs": {"glob": "\${title}@(.iso|.ISO|.wbfs|.WBFS|.wad|.WAD|.gcz|.GCZ)"},
+    "executable": {"path": "$PZ_EMULATION_ROOT/tools/launchers/dolphin-emu.sh", "appendArgsToExecutable": true},
+    "executableArgs": "-b -e \"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  },
+  {
+    "configTitle": "Nintendo Wii U - Cemu",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/wiiu",
+    "parserInputs": {"glob": "\${title}@(.wua|.WUA|.wud|.WUD|.wux|.WUX|.rpx|.RPX)"},
+    "executable": {"path": "$PZ_EMULATION_ROOT/tools/launchers/cemu.sh", "appendArgsToExecutable": true},
+    "executableArgs": "-g -f \"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  },
+  {
+    "configTitle": "Nintendo 64 - RetroArch",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/n64",
+    "parserInputs": {"glob": "\${title}@(.z64|.Z64|.n64|.N64|.v64|.V64)"},
+    "executable": {"path": "$retro", "appendArgsToExecutable": true},
+    "executableArgs": "-L \${racores}/mupen64plus_next_libretro.so -f \"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  },
+  {
+    "configTitle": "Super Nintendo - RetroArch",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/snes",
+    "parserInputs": {"glob": "\${title}@(.sfc|.SFC|.smc|.SMC|.fig|.FIG)"},
+    "executable": {"path": "$retro", "appendArgsToExecutable": true},
+    "executableArgs": "-L \${racores}/snes9x_libretro.so -f \"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  },
+  {
+    "configTitle": "Nintendo Entertainment System - RetroArch",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/nes",
+    "parserInputs": {"glob": "\${title}@(.nes|.NES|.fds|.FDS)"},
+    "executable": {"path": "$retro", "appendArgsToExecutable": true},
+    "executableArgs": "-L \${racores}/nestopia_libretro.so -f \"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  },
+  {
+    "configTitle": "Nintendo Game Boy Advance - RetroArch",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/gba",
+    "parserInputs": {"glob": "\${title}@(.gba|.GBA)"},
+    "executable": {"path": "$retro", "appendArgsToExecutable": true},
+    "executableArgs": "-L \${racores}/mgba_libretro.so -f \"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  },
+  {
+    "configTitle": "Nintendo Game Boy - RetroArch",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/gb",
+    "parserInputs": {"glob": "\${title}@(.gb|.GB|.gbc|.GBC)"},
+    "executable": {"path": "$retro", "appendArgsToExecutable": true},
+    "executableArgs": "-L \${racores}/gambatte_libretro.so -f \"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  },
+  {
+    "configTitle": "Sony PSP - PPSSPP",
+    "parserType": "Glob",
+    "steamDirectory": "\${steamdirglobal}",
+    "romDirectory": "\${romsdirglobal}/psp",
+    "parserInputs": {"glob": "\${title}@(.iso|.ISO|.cso|.CSO|.pbp|.PBP)"},
+    "executable": {"path": "$PZ_EMULATION_ROOT/tools/launchers/ppsspp.sh", "appendArgsToExecutable": true},
+    "executableArgs": "\"\${filePath}\"",
+    "executableModifier": "\"\${exePath}\"",
+    "disabled": false,
+    "version": 25, "presetVersion": 19, "phasezeroManaged": true
+  }
+]
+EOF
+}
+
+append_phasezero_managed_parsers() {
+    local managed tmp existing_titles
+    managed="$(mktemp)"
+    phasezero_managed_parsers_json > "$managed"
+    jq empty "$managed" >/dev/null 2>&1 || { rm -f "$managed"; return 0; }
+    [ -s "$SRM_CONFIGS" ] || printf '[]' > "$SRM_CONFIGS"
+    jq empty "$SRM_CONFIGS" >/dev/null 2>&1 || printf '[]' > "$SRM_CONFIGS"
+    tmp="$(mktemp)"
+    # Merge managed parsers; skip titles already present so user edits persist.
+    jq --slurpfile m "$managed" '
+        . as $cur
+        | ($cur | map(.configTitle // "") | unique) as $have
+        | $cur + ($m[0] | map(select((.configTitle // "") as $t | ($have | index($t)) == null)))
+    ' "$SRM_CONFIGS" > "$tmp"
+    mv "$tmp" "$SRM_CONFIGS"
+    rm -f "$managed"
+}
+
 normalize_srm_parsers() {
     local tmp
     merge_all_template_parsers
@@ -194,6 +339,7 @@ normalize_srm_parsers() {
     append_template_parser_by_title "Sony PlayStation 3 - RPCS3 (Extracted ISO/PSN)"
     append_template_parser_by_title "Sony PlayStation 3 - RPCS3 (Installed PKG)"
     append_template_parser_by_title "Sony PlayStation 4 - ShadPS4 (Shortcut)"
+    append_phasezero_managed_parsers
 
     backup_srm_file "$SRM_CONFIGS"
     tmp="$(mktemp)"
@@ -364,13 +510,13 @@ write_srm_wrapper() {
     pz_emulation_write_file "$SRM_WRAPPER" 0755 <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-launcher="$launcher"
 app="$app"
-if [ -n "\$launcher" ] && [ -f "\$launcher" ]; then
-    exec "\$launcher" "\$@"
-fi
+launcher="$launcher"
 if [ -n "\$app" ] && [ -f "\$app" ]; then
     exec "\$app" "\$@"
+fi
+if [ -n "\$launcher" ] && [ -f "\$launcher" ]; then
+    exec "\$launcher" "\$@"
 fi
 echo "Steam ROM Manager not found. Run EmuDeck or place AppImage in $PZ_EMULATION_ROOT/tools." >&2
 exit 1
@@ -461,6 +607,11 @@ retroarch_cores_dir() {
 }
 
 configure_srm() {
+    local skip_if_configured="${1:-false}"
+    if [ "$skip_if_configured" = "true" ] && [ -f "$SRM_STATE" ] && [ -f "$SRM_WRAPPER" ]; then
+        pz_info "SRM already configured; use 'configure' (without --skip) to force reconfigure"
+        return 0
+    fi
     pz_emulation_ensure_layout
     bash "$PZ_ROOT/linux/emulation/media.sh" prepare-scan >/dev/null
     bash "$PZ_ROOT/linux/emulation/performance.sh" apply >/dev/null
@@ -503,7 +654,11 @@ open_srm() {
 }
 
 case "$ACTION" in
-    configure|integrate) configure_srm ;;
+    configure|integrate)
+        skip="false"
+        [ "${2:-}" = "--skip-if-configured" ] && skip="true"
+        configure_srm "$skip"
+        ;;
     status) status_srm ;;
     dry-run|plan) dry_run_srm ;;
     open|launch) open_srm ;;

@@ -50,6 +50,35 @@ def media_lookup(root: Path, media_types: tuple[str, ...]) -> dict[tuple[str, st
     return result
 
 
+def media_file_list(root: Path, media_types: tuple[str, ...]) -> list[dict[str, str]]:
+    """Flat list of every media file under root, with its system/stem/type/path."""
+    files: list[dict[str, str]] = []
+    if not root.is_dir():
+        return files
+    for system_dir in root.iterdir():
+        if not system_dir.is_dir():
+            continue
+        for media_type in media_types:
+            type_dir = system_dir / media_type
+            if not type_dir.is_dir():
+                continue
+            try:
+                entries = sorted(os.scandir(type_dir), key=lambda item: item.name.casefold())
+            except OSError:
+                continue
+            for item in entries:
+                if not item.is_file(follow_symlinks=True):
+                    continue
+                stem = os.path.splitext(item.name)[0]
+                files.append({
+                    "system": system_dir.name.casefold(),
+                    "stem": stem.casefold(),
+                    "type": media_type,
+                    "path": str(item.path),
+                })
+    return files
+
+
 def read_records(path: Path, width: int) -> list[tuple[str, ...]]:
     fields = path.read_bytes().split(b"\0")
     if fields and fields[-1] == b"":
@@ -75,6 +104,9 @@ def main() -> int:
     total_roms = 0
     total_ignored = 0
     total_media = 0
+    # (system, stem) keys that have at least one indexed rom — used to detect
+    # media files whose rom no longer exists (orphaned media).
+    rom_keys: set[tuple[str, str]] = set()
 
     for system, count in read_records(args.ignored, 2):
         ignored_count = int(count)
@@ -90,6 +122,7 @@ def main() -> int:
             continue
 
         key = (system.casefold(), stem.casefold())
+        rom_keys.add(key)
         esde = esde_media.get(key, {})
         steamgrid = steamgrid_media.get(key, {})
         roms[stem] = {
@@ -105,14 +138,25 @@ def main() -> int:
         total_media += sum(len(files) for files in esde.values())
         total_media += sum(len(files) for files in steamgrid.values())
 
+    # Orphaned media: files whose (system, stem) has no indexed rom.
+    orphaned: list[dict[str, str]] = []
+    for entry in media_file_list(args.media_root, ESDE_TYPES):
+        if (entry["system"], entry["stem"]) not in rom_keys:
+            orphaned.append({"source": "es-de", **entry})
+    for entry in media_file_list(args.steamgrid_root, STEAMGRID_TYPES):
+        if (entry["system"], entry["stem"]) not in rom_keys:
+            orphaned.append({"source": "steamgrid", **entry})
+
     output = {
         "version": 2,
         "generated": dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "systems": systems,
+        "orphanedMedia": orphaned,
         "stats": {
             "roms_indexed": total_roms,
             "roms_ignored": total_ignored,
             "media_files": total_media,
+            "orphaned_media": len(orphaned),
         },
     }
     args.output.write_text(json.dumps(output, ensure_ascii=False, separators=(",", ":")) + "\n", encoding="utf-8")

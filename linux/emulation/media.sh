@@ -7,13 +7,14 @@ source "$PZ_ROOT/linux/emulation/common.sh"
 source "$PZ_ROOT/linux/lib/json-envelope.sh"
 
 PZ_JSON=false
+PZ_APPLY=false
 args=()
 for arg in "$@"; do
-    if [ "$arg" = "--json" ]; then
-        PZ_JSON=true
-    else
-        args+=("$arg")
-    fi
+    case "$arg" in
+        --json) PZ_JSON=true ;;
+        --apply) PZ_APPLY=true ;;
+        *) args+=("$arg") ;;
+    esac
 done
 
 ACTION="${args[0]:-status}"
@@ -176,10 +177,17 @@ pz_media_srm_settings_path() {
 }
 
 pz_media_ignored_rom_dirs() {
+    # Documentation/reference list of Switch subfolders excluded from rom
+    # scanning. The live exclusion uses noload.txt markers (applied to every
+    # immediate subdir of roms/switch) + the scan-safe symlink view, so this
+    # list is advisory — keep it aligned with the real folder names.
     cat <<DIRS
 Nintendo Switch (Update)
-Nintendo Switch (MOD)
 Nintendo Switch (DLC)
+Torrent
+Mods
+Firmware
+_backup
 DIRS
 }
 
@@ -1066,15 +1074,78 @@ cmd_status_json() {
     pz_json_envelope_end
 }
 
+cmd_clean() {
+    # Detect media files whose rom no longer exists (orphaned) and move them to
+    # a dated backup dir under .phasezero/backups. Dry-run by default; pass
+    # --apply to actually move. Never deletes in place.
+    cmd_index >/dev/null 2>&1 || cmd_index >/dev/null
+    local orphaned count
+    orphaned="$(jq -r '.orphanedMedia[]?.path // empty' "$PZ_MEDIA_INDEX" 2>/dev/null || true)"
+    count="$(printf '%s\n' "$orphaned" | sed '/^$/d' | wc -l | tr -d ' ')"
+
+    if $PZ_JSON; then
+        jq '{orphaned: (.stats.orphaned_media // 0), files: (.orphanedMedia // [])}' "$PZ_MEDIA_INDEX"
+        return 0
+    fi
+
+    echo "=== Media Clean ==="
+    echo "orphaned media files: $count"
+    if [ "$count" -eq 0 ]; then
+        echo "nothing to clean"
+        return 0
+    fi
+    # Show up to 20 sample paths. Avoid a `head -N` in a pipe: under
+    # `set -o pipefail` head closing early surfaces as SIGPIPE (exit 141) and
+    # aborts the whole script before the move loop runs.
+    local shown=0
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        printf '  %s\n' "$path"
+        shown=$((shown + 1))
+        [ "$shown" -ge 20 ] && break
+    done <<< "$orphaned"
+    [ "$count" -gt 20 ] && echo "  ... and $((count - 20)) more"
+
+    if ! $PZ_APPLY; then
+        echo "(dry-run; pass --apply to move orphaned media to backup)"
+        return 0
+    fi
+
+    local backup_dir stamp
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    backup_dir="$PZ_EMULATION_ROOT/.phasezero/backups/orphaned-media-$stamp"
+    install -d "$backup_dir"
+    local moved=0 path rel dest
+    while IFS= read -r path; do
+        [ -n "$path" ] || continue
+        [ -f "$path" ] || continue
+        # Preserve a relative path under the backup dir so files can be restored.
+        case "$path" in
+            "$PZ_MEDIA_ROOT"/*) rel="downloaded_media/${path#"$PZ_MEDIA_ROOT"/}" ;;
+            "$PZ_STEAMGRID_ROOT"/*) rel="steamgrid/${path#"$PZ_STEAMGRID_ROOT"/}" ;;
+            *) rel="misc/$(basename "$path")" ;;
+        esac
+        dest="$backup_dir/$rel"
+        install -d "$(dirname "$dest")"
+        if mv -f "$path" "$dest" 2>/dev/null; then
+            moved=$((moved + 1))
+        fi
+    done <<< "$orphaned"
+    pz_info "moved $moved orphaned media file(s) to $backup_dir"
+    echo "moved: $moved -> $backup_dir"
+    echo "to restore: cp -a $backup_dir/* <original-tree>"
+}
+
 case "$ACTION" in
     status) if $PZ_JSON; then cmd_status_json; else cmd_status; fi ;;
     index)  cmd_index ;;
     plan)   cmd_plan ;;
     apply)  cmd_apply ;;
     repair) cmd_repair ;;
+    clean|cleanup|prune) cmd_clean ;;
     prepare-scan|scan-policy) cmd_prepare_scan ;;
     *)
-        pz_error "usage: media.sh (status|index|plan|apply|repair|prepare-scan)"
+        pz_error "usage: media.sh (status|index|plan|apply|repair|clean [--apply]|prepare-scan)"
         exit 1
         ;;
 esac

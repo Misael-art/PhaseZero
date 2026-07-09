@@ -94,7 +94,10 @@ linux/pz ai opencode free-model          # corrige "Interrompido" com modelo fre
 linux/pz ai proxies plan all
 linux/pz ai proxies install all
 linux/pz ai proxies configure-ides       # opencode/opencode-desktop/zcode
+linux/pz ai proxies auth all             # status redigido de login/sessao
+linux/pz ai proxies login kimiproxy      # Chromium visivel; idem qwenproxy/deepsproxy
 linux/pz ai proxies test                 # probe honesto /v1/models + chat
+linux/pz ai token-economy status         # RTK, Headroom, ai-memory, frugality
 linux/pz windows-vm host-access status   # host -> disco da VM (guestmount)
 linux/pz waydroid host-access link       # host -> armazenamento interno do Waydroid
 linux/pz server status
@@ -126,7 +129,7 @@ Servidor caseiro (opt-in). Seis perfis compoem LLM local, homelab e Hermes: `ser
 
 `pz server homelab` cobre o ciclo de vida completo do stack Docker Compose (Portainer, Jellyfin, Syncthing, Vaultwarden, Uptime Kuma no core; Nextcloud, Grafana, Prometheus, Paperless e n8n como extras opt-in). `status`/`plan` retornam JSON estruturado com Docker, Tailscale, modo de acesso, segredos (presenca, nunca o valor), apps (URL/bind/estado/volumes), `blockers` e `nextSteps`. `repair`/`up` geram um `.env` local seguro (`chmod 600`, fora do git) com segredos aleatorios para Vaultwarden/Nextcloud/Grafana/Paperless/n8n; sem segredo obrigatorio presente, o servico correspondente fica listado em `blockers` e nao sobe. O acesso e sempre explicito via `--access local|tailscale|lan`: `local` (padrao) fixa tudo em `127.0.0.1`; `tailscale` expoe apps sensiveis apenas no IP Tailscale e e bloqueado se a conta estiver deslogada; `lan` e opt-in (`0.0.0.0`) para a rede local. Nenhuma porta fica aberta para a WAN por padrao. Imagens Docker sao fixadas por tag (sem `:latest`, override via `PZ_IMAGE_*`). `open <app>` resolve a URL respeitando o bind atual; `logs <app>`, `backup`/`restore --source PATH --yes` (tar.gz por volume nomeado) e `update` (backup automatico antes de `pull`/`up`) completam o ciclo. `pz server casaos (status|plan|install)` e um gate de compatibilidade para CasaOS real: detecta distro/arquitetura, bloqueia Arch/SteamOS/BigLinux/Manjaro, e mesmo em host compativel (Debian/Ubuntu/Raspberry Pi OS) a instalacao exige `--yes` explicito — o caminho padrao do PhaseZero continua sendo a stack Docker Compose + Portainer acima.
 
-IA e agentes no Linux: `pz ai opencode free-model` corrige o "Interrompido" do OpenCode (CLI e desktop) definindo um modelo free keyless do OpenCode Zen (`deepseek-v4-flash-free`) como padrao, mantendo o Ollama como provider offline. `pz ai proxies configure-ides` conecta os proxies pedrofariasx (kimi/qwen/deeps/mimo, portas 3010-3013) ao opencode, opencode-desktop e zcode; o chat via proxy exige um `npm run login` unico por proxy (mesma trava do Windows). Caverman, RTK, ai-memory e Headroom sao suportados e configurados (`pz ai compat status`). A Central de Controle nativa (Qt6/PySide6, `pz ui`) foi redesenhada no estilo EmuDeck: dashboard "Welcome back" com cards de acao, sidebar agrupada, badges de estado por cor, tema escuro roxo e toasts de conclusao.
+IA e agentes no Linux: `pz ai opencode free-model` corrige o "Interrompido" do OpenCode (CLI e desktop) definindo um modelo free keyless do OpenCode Zen (`deepseek-v4-flash-free`) como padrao, mantendo o Ollama como provider offline. `pz ai proxies configure-ides` conecta os proxies pedrofariasx (kimi/qwen/deeps/mimo, portas 3010-3013) ao opencode, opencode-desktop e zcode; `pz ai proxies auth` mostra prontidao redigida sem nomes/valores de segredos, e `pz ai proxies login kimiproxy|qwenproxy|deepsproxy` abre Chromium visivel para gravar a sessao web. Mimo usa sessao via `.env` local, como no Windows. Caveman, RTK, ai-memory, Headroom e o pack `ai-context-frugality` sao suportados e configurados (`pz ai compat status` ou `pz ai token-economy status`), sem auto-envolver Codex/Claude em wrappers. A Central de Controle nativa (Qt6/PySide6, `pz ui`) foi redesenhada no estilo EmuDeck: dashboard "Welcome back" com cards de acao, sidebar agrupada, badges de estado por cor, tema escuro roxo e toasts de conclusao.
 
 Conversao NSZ para NSP usa `nsz==4.6.1` isolado. Processamento sequencial reduz pico de disco. Saida nasce em staging no mesmo filesystem, passa por verificacao upstream, cabecalho PFS0 e SHA-256, depois recebe publicacao atomica em `~/Emulation/roms/switch/nsp`. Fonte permanece por padrao. `--delete-source --yes` remove cada NSZ somente depois da verificacao e registro JSON em `~/Emulation/metadata/switch/nsz-conversions`. `apply --yes` normaliza sufixos de tamanho, confirma duplicatas por SHA-256, remove apenas copias identicas e converte toda a biblioteca sob lock exclusivo. Conflitos permanecem intactos. Somente dumps locais proprios.
 
@@ -185,7 +188,13 @@ linux/pz emulation srm configure
 linux/pz emulation srm status
 ```
 
-SRM usa o AppImage/`steamrommanager.sh` do EmuDeck quando disponivel, aponta `steamDirectory` para a Steam local, `romsDirectory` para `~/Emulation/roms`, `retroarchPath` para o launcher EmuDeck e importa todos os parsers validos do template EmuDeck. Caminhos absolutos antigos sao tornados portaveis. Switch usa exclusivamente a view segura gerada pelo PhaseZero; `Nintendo Switch (Update)`, `Nintendo Switch (DLC)`, `Mods`, `Firmware`, `_backup` e `Torrent` nunca entram no parser Ryujinx.
+SRM usa o AppImage/`steamrommanager.sh` do EmuDeck quando disponivel, aponta `steamDirectory` para a Steam local, `romsDirectory` para `~/Emulation/roms`, `retroarchPath` para o launcher EmuDeck e importa todos os parsers validos do template EmuDeck. Alem dos parsers do EmuDeck, o PhaseZero adiciona parsers proprios (`phasezeroManaged`) para GameCube (Dolphin), Wii (Dolphin), Wii U (Cemu), N64/SNES/NES/GBA/GB (RetroArch cores) e PSP (PPSSPP), de forma que ROMs desses sistemas tambem viram shortcuts Steam no Big Picture mesmo sem o EmuDeck. Caminhos absolutos antigos sao tornados portaveis. Switch usa exclusivamente a view segura gerada pelo PhaseZero; `Nintendo Switch (Update)`, `Nintendo Switch (DLC)`, `Mods`, `Firmware`, `_backup` e `Torrent` nunca entram no parser Ryujinx.
+
+Keys/firmware centralizados: o store canonico fica em `~/Emulation/firmware/switch/{keys,firmware}`. `pz emulation switch import-keys <dir>` e `import-firmware <dir>` sempre populam o central (mesmo quando o Ryujinx ja tem keys), e Eden/Citron/Ryujinx linkam a ele por ordem de prioridade central > Ryujinx > copia. Isso elimina o prompt reincidente de keys/firmware ao abrir emuladores no SteamOS Game Mode. Pastas de compatibilidade (`keys`, `texturepacks`, `hdpacks`) viram symlinks para o canonico quando vazias, evitando duplicacao.
+
+Limpeza de midia orfa: apos remover ROMs, capas associadas ficavam orfaas poluindo o host. `pz emulation media clean` lista midia sem ROM correspondente (dry-run); `--apply` move para `~/Emulation/.phasezero/backups/orphaned-media-<data>/` (backup restauravel, nunca delete direto). Disponivel tambem como card "Limpar midia orfa" na Central de Controle.
+
+Pre-requisitos SteamOS: a entrada GRUB `PhaseZero SteamOS Console` exige `gamescope-session-plus`, `steam` e `sddm` instalados. Sem algum deles, a sessao cai em Plasma com log de diagnostico (`steamos-session.log`) indicando o pacote faltante.
 
 Launchers SteamOS:
 
@@ -214,11 +223,16 @@ Suite Linux de proxies de IA:
 linux/pz ai proxies plan all
 linux/pz ai proxies install all
 linux/pz ai proxies status all
+linux/pz ai proxies auth all
+linux/pz ai proxies login kimiproxy
+linux/pz ai proxies login qwenproxy
+linux/pz ai proxies login deepsproxy
+linux/pz ai proxies test
 linux/pz ai proxies start <id>
 linux/pz ai proxies stop <id>
 ```
 
-Os dez repositorios suportados ficam em `~/.local/share/phasezero/ai-proxies`. Projetos Node usam runtime Node 24 isolado; projetos Go recebem binario nativo. Servicos systemd de usuario sao instalados, mas permanecem desativados ate configuracao explicita de credenciais. Veja `docs/linux-ai-proxies.md`.
+Os dez repositorios suportados ficam em `~/.local/share/phasezero/ai-proxies`. Projetos Node usam runtime Node 24 isolado; projetos Go recebem binario nativo. Servicos systemd de usuario usam bind local por padrao (`PZ_BIND_HOST=127.0.0.1`) e permanecem desativados ate configuracao explicita de credenciais, exceto quando `test/start/login` ativa o provider escolhido. O contrato Windows (`webValidation`) foi portado para Linux como `auth`: browser-session para Kimi/Qwen/DeepSeek, env-session para Mimo, sem vazar nomes/valores sensiveis no JSON. Veja `docs/linux-ai-proxies.md`.
 
 PS3/RPCS3:
 

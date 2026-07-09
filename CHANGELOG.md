@@ -3,6 +3,82 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.4.1] - 2026-07-09
+
+Foco: correções de emulação e experiência SteamOS — Steam ROM Manager, centralização
+de keys/firmware, pastas duplicadas, mídia órfã e robustez de sessão Game Mode.
+
+### Corrigido
+- **Steam ROM Manager — parsers faltantes**: `normalize_srm_parsers` só cobria
+  Switch/PSX/PS2/PS3/PS4/Xbox360. Adicionados parsers PhaseZero-managed para
+  GameCube, Wii, Wii U, N64, SNES, NES, GBA, GB e PSP apontando para os launchers
+  corretos (Dolphin, Cemu, RetroArch cores, PPSSPP). Essas ROMs agora viram
+  shortcuts Steam e aparecem no Big Picture.
+- **Keys/firmware centralizados quebrados no Game Mode**: `import_switch_keys`
+  short-circuitava quando o Ryujinx já tinha keys, deixando o store central
+  (`~/Emulation/firmware/switch/keys`) vazio; Eden/Citron linkavam ao Ryujinx em
+  vez do central. Agora o store central é sempre populado e Eden/Citron/Ryujinx
+  linkam a ele (prioridade central > Ryujinx > cópia). Corrige o prompt
+  reincidente de keys/firmware ao abrir emuladores no SteamOS Game Mode.
+- **Pastas Emulation duplicadas**: layout canônico não declarava `keys`,
+  `hdpacks`, `texturepacks`. `pz_emulation_consolidate_aliases` agora cria
+  symlinks de compatibilidade (`keys → firmware/switch/keys`,
+  `texturepacks/hdpacks → texture_packs`) para dirs vazios, sem clobber de
+  conteúdo real do usuário.
+- **Mídia órfã não limpa**: o índice de mídia mapeava rom→mídia mas nunca
+  computava o inverso. `media-index.py` agora emite `orphanedMedia` (mídia sem
+  rom correspondente) e `media.sh clean [--apply]` move esses arquivos para
+  `~/Emulation/.phasezero/backups/orphaned-media-<data>/` (backup, não delete).
+- **Eden EmuDeck SRM glob recursivo**: o template opcional em
+  `~/.config/EmuDeck/.../nintendo_switch_eden.json` usava glob `**/` recursivo,
+  que descia em `Nintendo Switch (DLC)/(Update)`, `Mods`, `Firmware`, `_backup`,
+  `Torrent`. Agora usa glob não-recursivo `${title}@`, alinhado ao SRM ativo.
+- **SteamOS session robustez**: `steamos-session.sh` agora valida `steam` além
+  de `gamescope-session-plus` e registra instruções de instalação quando algum
+  falta, antes de cair para desktop (antes do fallback silencioso para Plasma).
+
+### Adicionado
+- **Ação `emulation media clean`** exposta no `pz`, `catalog.py` (card "Limpar
+  mídia órfã") e `actions.json` regenerado. Dry-run por padrão; `--apply` move
+  para backup.
+
+### Notas
+- **SteamOS pré-requisitos**: a entrada GRUB `PhaseZero SteamOS Console` exige
+  `gamescope-session-plus`, `steam` e `sddm` instalados (todos verificados no
+  host). Sem eles, a sessão cai em Plasma com log de diagnóstico.
+
+## [1.4.0] - 2026-07-09
+
+Foco: fechamento de lacunas Linux/Windows — autenticação dos proxies de IA,
+economia de contexto para Codex/Claude e release de pacotes atualizados.
+
+### Adicionado
+- **Proxies de IA Linux — auth/login**: `pz ai proxies auth [id]` retorna
+  `webValidation` redigido compatível com o contrato Windows; Kimi/Qwen/DeepSeek
+  usam `browser-session` e Mimo usa `env-session`.
+- **Login real via UI/CLI**: `pz ai proxies login kimiproxy|qwenproxy|deepsproxy`
+  abre Chromium visível, para o serviço user antes do login para evitar lock
+  Playwright headless, grava log/estado em `~/.local/state/phasezero/ai-proxies/`
+  e reinicia o serviço após o fluxo terminar.
+- **Central de Controle**: novos cards "Auth proxies IA" e login dedicado para
+  Kimi, Qwen e DeepSeek.
+- **Token economy**: `pz ai token-economy status` como alias explícito de
+  compatibilidade para validar RTK, ai-memory, Headroom e `ai-context-frugality`
+  em Codex/Claude sem auto-wrappers.
+
+### Corrigido
+- **Portabilidade Windows→Linux**: o status de autenticação dos proxies agora
+  espelha `webValidation.required/kind/status` sem vazar nomes ou valores de
+  credenciais; Mimo reporta apenas grupos genéricos faltantes.
+- **Bind seguro por padrão**: wrappers Linux definem `PZ_BIND_HOST=127.0.0.1`;
+  Kimi/Deep/Mimo recebem patch compat local para não expor listeners em `0.0.0.0`
+  quando executados como serviços PhaseZero.
+- **Teste Linux de proxies**: `tests/linux-ai-proxies.sh` foi isolado de configs
+  reais do usuário e corrigido para a porta Mimo 3013.
+- **Documentação Linux/Windows**: README, `docs/ai-tools.md` e
+  `docs/linux-ai-proxies.md` documentam login, auth, token economy e paridade
+  Windows/Linux.
+
 ## [1.3.0] - 2026-07-08
 
 Foco: Homelab CX — o servidor caseiro (Docker Compose) ganha status/plano rico,

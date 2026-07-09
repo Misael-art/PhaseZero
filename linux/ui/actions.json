@@ -729,6 +729,14 @@
       "module": "Emulação"
     },
     {
+      "name": "emulation.media-clean",
+      "label": "Limpar mídia órfã",
+      "command": "linux/pz emulation media clean --apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
       "name": "emulation.pc-games",
       "label": "Reparar jogos PC",
       "command": "linux/pz emulation pc-games repair",

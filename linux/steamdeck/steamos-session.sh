@@ -42,7 +42,15 @@ if ! command -v opengamepadui >/dev/null 2>&1; then
 fi
 
 if ! command -v "$GAMESCOPE_BIN" >/dev/null 2>&1 && [ ! -x "$GAMESCOPE_BIN" ]; then
-    log "gamescope-session-plus missing"
+    log "gamescope-session-plus missing; falling back to desktop session"
+    log "install it to get Game Mode: sudo pacman -S gamescope-session-plus"
+    log "also ensure 'steam' and 'sddm' are installed for the SteamOS boot flow"
+    start_desktop
+fi
+
+if ! command -v steam >/dev/null 2>&1; then
+    log "steam binary missing; Game Mode cannot start"
+    log "install it: sudo pacman -S steam"
     start_desktop
 fi
 

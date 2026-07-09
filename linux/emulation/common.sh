@@ -257,7 +257,42 @@ pz_emulation_ensure_layout() {
         [ -z "$dir" ] && continue
         install -d "$dir"
     done < <(pz_emulation_layout_dirs)
+    pz_emulation_consolidate_aliases
     pz_info "emulation layout ready: $PZ_EMULATION_ROOT"
+}
+
+# Compatibility aliases for the Emulation tree. Several consumers (EmuDeck,
+# RetroDECK, older scripts) reference slightly different top-level names than
+# the canonical layout. Rather than let duplicate real directories accumulate,
+# point the alternate names at the canonical location via symlink.
+pz_emulation_consolidate_aliases() {
+    # Each entry: <canonical> <alias>  -> ln -sfn canonical alias
+    # Note: state/ and states/ are BOTH canonical and kept as real dirs (state/
+    # holds switch/nand; states/ is the RetroDECK save-state tree) — no alias.
+    local entries=(
+        "$PZ_EMULATION_ROOT/texture_packs|$PZ_EMULATION_ROOT/texturepacks"
+        "$PZ_EMULATION_ROOT/texture_packs|$PZ_EMULATION_ROOT/hdpacks"
+        "$PZ_EMULATION_ROOT/firmware/switch/keys|$PZ_EMULATION_ROOT/keys"
+    )
+    local canonical alias entry
+    for entry in "${entries[@]}"; do
+        canonical="${entry%%|*}"
+        alias="${entry##*|}"
+        [ -n "$canonical" ] && [ -n "$alias" ] || continue
+        [ "$canonical" = "$alias" ] && continue
+        # Skip if the alias is already a symlink pointing at the canonical target.
+        if [ -L "$alias" ] && [ "$(readlink -f "$alias")" = "$(readlink -f "$canonical")" ]; then
+            continue
+        fi
+        # Only convert when the alias is absent or an empty dir; never clobber
+        # a real (populated) directory the user may rely on.
+        if [ -e "$alias" ] && [ ! -L "$alias" ]; then
+            local count
+            count="$(find "$alias" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
+            [ "$count" -eq 0 ] && rmdir "$alias" 2>/dev/null || continue
+        fi
+        ln -sfn "$canonical" "$alias" 2>/dev/null || true
+    done
 }
 
 pz_emulation_write_file() {

@@ -61,36 +61,54 @@ configure_eden_dirs() {
 }
 
 sync_eden_user_content() {
+    local central_keys="$PZ_EMULATION_ROOT/firmware/switch/keys"
+    local central_fw="$PZ_EMULATION_ROOT/firmware/switch/firmware"
     local ryujinx r_keys r_fw
     ryujinx=$(pz_emulation_switch_ryujinx_paths)
 
-    if [ "$ryujinx" != "null" ]; then
-        r_keys=$(jq -r '.keys // empty' <<< "$ryujinx")
-        r_fw=$(jq -r '.firmware // empty' <<< "$ryujinx")
+    install -d "$(dirname "$EDEN_KEYS")" "$(dirname "$EDEN_FIRMWARE")"
+    # Clear any pre-existing keys/firmware path (symlink OR empty dir) so the
+    # link below replaces it in place instead of creating a nested symlink.
+    if [ -L "$EDEN_KEYS" ] || { [ -d "$EDEN_KEYS" ] && [ -z "$(ls -A "$EDEN_KEYS" 2>/dev/null)" ]; }; then
+        rm -rf "$EDEN_KEYS"
+    fi
+    if [ -L "$EDEN_FIRMWARE" ] || { [ -d "$EDEN_FIRMWARE" ] && [ -z "$(ls -A "$EDEN_FIRMWARE" 2>/dev/null)" ]; }; then
+        rm -rf "$EDEN_FIRMWARE"
+    fi
 
-        if [ -n "$r_keys" ]; then
-            install -d "$(dirname "$EDEN_KEYS")"
-            rm -rf "$EDEN_KEYS"
-            ln -sfn "$r_keys" "$EDEN_KEYS"
-            pz_info "Eden keys → symlink to Ryujinx"
-        fi
-        if [ -n "$r_fw" ]; then
-            install -d "$(dirname "$EDEN_FIRMWARE")"
-            rm -rf "$EDEN_FIRMWARE"
-            ln -sfn "$r_fw" "$EDEN_FIRMWARE"
-            pz_info "Eden firmware → symlink to Ryujinx"
+    # Priority 1: the central store (firmware/switch/{keys,firmware}).
+    if [ -f "$central_keys/prod.keys" ]; then
+        ln -sfn "$central_keys" "$EDEN_KEYS"
+        pz_info "Eden keys → central store"
+        if [ -d "$central_fw" ] && [ -n "$(find "$central_fw" -maxdepth 1 -name '*.nca' -print -quit 2>/dev/null)" ]; then
+            ln -sfn "$central_fw" "$EDEN_FIRMWARE"
+            pz_info "Eden firmware → central store"
+        else
+            install -d "$EDEN_FIRMWARE"
         fi
         return 0
     fi
 
-    local key
-    [ -L "$EDEN_KEYS" ] && rm -f "$EDEN_KEYS"
-    [ -L "$EDEN_FIRMWARE" ] && rm -f "$EDEN_FIRMWARE"
+    # Priority 2: Ryujinx's own keys/firmware.
+    if [ "$ryujinx" != "null" ]; then
+        r_keys=$(jq -r '.keys // empty' <<< "$ryujinx")
+        r_fw=$(jq -r '.firmware // empty' <<< "$ryujinx")
+        if [ -n "$r_keys" ] && [ -f "$r_keys/prod.keys" ]; then
+            ln -sfn "$r_keys" "$EDEN_KEYS"
+            pz_info "Eden keys → symlink to Ryujinx"
+        else
+            install -d "$EDEN_KEYS"
+        fi
+        if [ -n "$r_fw" ]; then
+            ln -sfn "$r_fw" "$EDEN_FIRMWARE"
+            pz_info "Eden firmware → symlink to Ryujinx"
+        else
+            install -d "$EDEN_FIRMWARE"
+        fi
+        return 0
+    fi
+
     install -d "$EDEN_KEYS" "$EDEN_FIRMWARE"
-    for key in prod.keys title.keys; do
-        [ -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" ] && cp -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" "$EDEN_KEYS/$key"
-    done
-    find "$PZ_EMULATION_ROOT/firmware/switch/firmware" -type f -name '*.nca' -exec cp -n {} "$EDEN_FIRMWARE"/ \; 2>/dev/null || true
     return 0
 }
 
@@ -276,7 +294,7 @@ integrate_with_emudeck() {
     "appendArgsToExecutable": false
   },
   "parserInputs": {
-    "glob": "**/${title}@(.kip|.KIP|.nca|.NCA|.nro|.NRO|.nso|.NSO|.nsp|.NSP|.xci|.XCI)"
+    "glob": "${title}@(.nro|.NRO|.nsp|.NSP|.xci|.XCI)"
   },
   "titleFromVariable": {
     "limitToGroups": "",

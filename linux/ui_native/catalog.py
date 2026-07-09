@@ -217,6 +217,7 @@ def build_catalog(root: Path) -> list[ActionSpec]:
         ("retrodeck", "Integrar RetroDECK", "Compartilha ROMs, BIOS, saves e mídia.", ("emulation", "retrodeck", "integrate"), ("emulation", "retrodeck", "plan")),
         ("shared", "Aplicar conteúdo compartilhado", "Links e cópias seguras entre frontends.", ("emulation", "shared", "apply"), ("emulation", "shared", "plan")),
         ("media", "Aplicar mídia canônica", "Normaliza capas e metadados.", ("emulation", "media", "apply"), ("emulation", "media", "plan")),
+        ("media-clean", "Limpar mídia órfã", "Move capas de ROMs removidas para backup.", ("emulation", "media", "clean", "--apply"), ("emulation", "media", "clean")),
         ("pc-games", "Reparar jogos PC", "Integra Heroic, Hydra, SRM e ES-DE.", ("emulation", "pc-games", "repair"), ("emulation", "pc-games", "plan")),
         ("shortcuts", "Reparar atalhos", "Remove duplicatas e corrige AppImages.", ("emulation", "shortcuts", "repair"), ("emulation", "shortcuts", "plan")),
         ("launchbox-install", "Instalar LaunchBox 13.5", "Instalação limpa, transacional e isolada.", ("emulation", "launchbox", "install-clean"), ("emulation", "launchbox", "status")),
@@ -304,6 +305,10 @@ def build_catalog(root: Path) -> list[ActionSpec]:
         ("mcp-sync", "Sincronizar MCPs", "Sincroniza defaults seguros.", ("ai", "mcp", "sync", "all"), ("ai", "mcp", "status")),
         ("proxies", "Instalar proxies IA", "Suite Linux OpenAI-compatible.", ("ai", "proxies", "install", "all"), ("ai", "proxies", "status")),
         ("proxies-ides", "Configurar proxies nas IDEs", "Wire opencode/opencode-desktop/zcode.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
+        ("proxies-auth", "Auth proxies IA", "Status redigido de login/sessão.", ("ai", "proxies", "auth", "all"), None),
+        ("proxies-login-kimi", "Login Kimi", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "kimiproxy"), ("ai", "proxies", "auth", "kimiproxy")),
+        ("proxies-login-qwen", "Login Qwen", "Abre fluxo manual de browser do QwenProxy.", ("ai", "proxies", "login", "qwenproxy"), ("ai", "proxies", "auth", "qwenproxy")),
+        ("proxies-login-deeps", "Login DeepSeek", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "deepsproxy"), ("ai", "proxies", "auth", "deepsproxy")),
         ("proxies-test", "Testar proxies IA", "Probe honesto /v1/models + chat.", ("ai", "proxies", "test"), None),
     ]
     for key, title, description, args, preview in ai_rows:

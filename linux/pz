@@ -105,6 +105,7 @@ Usage:
   pz emulation media plan      Plan media canonicalization (dry-run)
   pz emulation media apply     Apply media canonicalization
   pz emulation media repair    Repair media paths
+  pz emulation media clean     List orphaned media (rom deleted); --apply moves to backup
   pz emulation pc-games status Audit local PC games from roms/steam
   pz emulation pc-games plan   Plan ES-DE/Heroic/Hydra/SRM launchers
   pz emulation pc-games repair Apply resilient PC game frontend integration

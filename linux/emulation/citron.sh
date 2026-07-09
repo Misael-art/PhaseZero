@@ -73,36 +73,54 @@ configure_citron_dirs() {
 }
 
 sync_citron_user_content() {
+    local central_keys="$PZ_EMULATION_ROOT/firmware/switch/keys"
+    local central_fw="$PZ_EMULATION_ROOT/firmware/switch/firmware"
     local ryujinx r_keys r_fw
     ryujinx=$(pz_emulation_switch_ryujinx_paths)
 
-    if [ "$ryujinx" != "null" ]; then
-        r_keys=$(jq -r '.keys // empty' <<< "$ryujinx")
-        r_fw=$(jq -r '.firmware // empty' <<< "$ryujinx")
+    install -d "$(dirname "$CITRON_KEYS")" "$(dirname "$CITRON_FIRMWARE")"
+    if [ -L "$CITRON_KEYS" ] || { [ -d "$CITRON_KEYS" ] && [ -z "$(ls -A "$CITRON_KEYS" 2>/dev/null)" ]; }; then
+        rm -rf "$CITRON_KEYS"
+    fi
+    if [ -L "$CITRON_FIRMWARE" ] || { [ -d "$CITRON_FIRMWARE" ] && [ -z "$(ls -A "$CITRON_FIRMWARE" 2>/dev/null)" ]; }; then
+        rm -rf "$CITRON_FIRMWARE"
+    fi
 
-        if [ -n "$r_keys" ]; then
-            install -d "$(dirname "$CITRON_KEYS")"
-            rm -rf "$CITRON_KEYS"
-            ln -sfn "$r_keys" "$CITRON_KEYS"
-            pz_info "Citron keys → symlink to Ryujinx"
-        fi
-        if [ -n "$r_fw" ]; then
-            install -d "$(dirname "$CITRON_FIRMWARE")"
-            rm -rf "$CITRON_FIRMWARE"
-            ln -sfn "$r_fw" "$CITRON_FIRMWARE"
-            pz_info "Citron firmware → symlink to Ryujinx"
+    # Priority 1: the central store (firmware/switch/{keys,firmware}). Link to it
+    # when it actually has content so every emulator shares one source of truth.
+    if [ -f "$central_keys/prod.keys" ]; then
+        ln -sfn "$central_keys" "$CITRON_KEYS"
+        pz_info "Citron keys → central store"
+        if [ -d "$central_fw" ] && [ -n "$(find "$central_fw" -maxdepth 1 -name '*.nca' -print -quit 2>/dev/null)" ]; then
+            ln -sfn "$central_fw" "$CITRON_FIRMWARE"
+            pz_info "Citron firmware → central store"
+        else
+            install -d "$CITRON_FIRMWARE"
         fi
         return 0
     fi
 
-    local key
-    [ -L "$CITRON_KEYS" ] && rm -f "$CITRON_KEYS"
-    [ -L "$CITRON_FIRMWARE" ] && rm -f "$CITRON_FIRMWARE"
+    # Priority 2: Ryujinx's own keys/firmware (when the central store is empty).
+    if [ "$ryujinx" != "null" ]; then
+        r_keys=$(jq -r '.keys // empty' <<< "$ryujinx")
+        r_fw=$(jq -r '.firmware // empty' <<< "$ryujinx")
+        if [ -n "$r_keys" ] && [ -f "$r_keys/prod.keys" ]; then
+            ln -sfn "$r_keys" "$CITRON_KEYS"
+            pz_info "Citron keys → symlink to Ryujinx"
+        else
+            install -d "$CITRON_KEYS"
+        fi
+        if [ -n "$r_fw" ]; then
+            ln -sfn "$r_fw" "$CITRON_FIRMWARE"
+            pz_info "Citron firmware → symlink to Ryujinx"
+        else
+            install -d "$CITRON_FIRMWARE"
+        fi
+        return 0
+    fi
+
+    # Priority 3: nothing to link to — leave empty dirs (emulator will prompt).
     install -d "$CITRON_KEYS" "$CITRON_FIRMWARE"
-    for key in prod.keys title.keys; do
-        [ -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" ] && cp -f "$PZ_EMULATION_ROOT/firmware/switch/keys/$key" "$CITRON_KEYS/$key"
-    done
-    find "$PZ_EMULATION_ROOT/firmware/switch/firmware" -type f -name '*.nca' -exec cp -n {} "$CITRON_FIRMWARE"/ \; 2>/dev/null || true
     return 0
 }
 
