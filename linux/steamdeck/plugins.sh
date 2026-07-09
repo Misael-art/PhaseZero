@@ -112,6 +112,27 @@ port_busy_bool() {
 steam_cef_port_bool() { port_busy_bool 8080; }
 decky_port_bool() { port_busy_bool 1337; }
 
+# Wait for Decky's websocket on :1337 to come up. The loader service can be
+# "enabled" a few seconds before it actually listens, so store installs via WS
+# silently fail and only succeed on a later retry. Mirrors prepare_steam_ui's
+# CEF :8080 wait. Override the budget with PZ_DECKY_READY_TIMEOUT.
+wait_decky_ready() {
+    local budget="${PZ_DECKY_READY_TIMEOUT:-30}" i
+    if [ "$(decky_port_bool)" = true ]; then
+        return 0
+    fi
+    pz_info "waiting up to ${budget}s for Decky loader (:1337)..."
+    for i in $(seq 1 "$budget"); do
+        if [ "$(decky_port_bool)" = true ]; then
+            pz_info "Decky loader ready on :1337 (after ${i}s)"
+            return 0
+        fi
+        sleep 1
+    done
+    pz_warn "Decky loader did not listen on :1337 within ${budget}s; WS installs may fall back to zip"
+    return 1
+}
+
 # Real conflict = :8080 held by a process that is NOT Steam's CEF (steamwebhelper).
 # Steam's CSS Loader / Decky attach to Steam over :8080, so a squatter there (e.g.
 # an AI proxy defaulting to 8080) silently breaks CSS Loader with the health-check
@@ -873,6 +894,10 @@ install_curated_plugins() {
     require_cmds curl jq
     ensure_plugin_dirs
     repair_permissions
+    # Store installs go through Decky's websocket on :1337. Wait for it so the
+    # first run after a loader install does not silently fail and only succeed
+    # on a later retry (the intermittent CSS Loader symptom).
+    wait_decky_ready || true
     while IFS='|' read -r id display store mode homepage repo candidates note; do
         [ -z "$id" ] && continue
         path="$(plugin_path_by_candidates "$candidates" || true)"
@@ -1042,19 +1067,29 @@ install_curated_themes() {
 
 restart_decky_loader() {
     reconcile_decky_services
+    # A non-Steam process squatting :8080 (e.g. an AI proxy) breaks CSS Loader
+    # and other CEF-attached plugins after a Decky restart. Surface it so the
+    # user knows plugins will keep failing until the squatter is gone.
+    if [ "$(steam_cef_conflict_bool)" = true ]; then
+        pz_warn "port 8080 is held by a non-Steam process; CSS Loader will fail until it is freed"
+        pz_warn "stop the squatter (often an AI proxy) or run: linux/pz ai proxy status"
+    fi
     if [ "$(service_state system)" != "" ] && pz_can_sudo_noninteractive; then
         sudo -n systemctl restart plugin_loader.service 2>/dev/null && {
             pz_info "restarted system plugin_loader.service"
+            wait_decky_ready || true
             return 0
         }
     fi
     if [ "$(service_state system)" = "active" ]; then
         pz_info "system plugin_loader.service already active"
+        wait_decky_ready || true
         return 0
     fi
     if systemctl --user list-unit-files plugin_loader.service >/dev/null 2>&1; then
         systemctl --user restart plugin_loader.service 2>/dev/null && {
             pz_info "restarted user plugin_loader.service"
+            wait_decky_ready || true
             return 0
         }
     fi
@@ -1156,6 +1191,7 @@ EOF
 
 install_all() {
     install_decky_loader
+    wait_decky_ready || true
     install_curated_plugins
     install_curated_themes
     reconcile_decky_services

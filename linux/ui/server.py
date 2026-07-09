@@ -29,7 +29,42 @@ def ensure_token():
     return TOKEN_FILE.read_text().strip()
 
 
+def _actions_from_catalog():
+    """Build the web/TUI allowlist from the live native catalog.
+
+    The native UI (linux/ui_native/catalog.py) is the single source of truth for
+    the action set. Mapping ActionSpec -> the legacy web schema (name/label/
+    command/module/mutable) keeps every implemented function reachable from the
+    web and TUI surfaces, which previously read a hand-maintained snapshot
+    (linux/ui/actions.json) that had drifted behind the catalog.
+    """
+    import sys as _sys
+    if str(PZ_ROOT) not in _sys.path:
+        _sys.path.insert(0, str(PZ_ROOT))
+    try:
+        from linux.ui_native.catalog import build_catalog
+    except Exception:
+        return None
+    actions = {}
+    for spec in build_catalog(PZ_ROOT):
+        command = " ".join(["linux/pz", *spec.args])
+        actions[spec.id] = {
+            "name": spec.id,
+            "label": spec.title,
+            "command": command,
+            "mutable": bool(spec.mutable),
+            "require_plan": bool(spec.mutable),
+            "module": spec.category,
+        }
+    return actions
+
+
 def load_actions():
+    live = _actions_from_catalog()
+    if live is not None:
+        return live
+    # Fallback: the static allowlist snapshot (kept for environments where the
+    # native catalog module cannot be imported).
     if ALLOWLIST_FILE.exists():
         data = json.loads(ALLOWLIST_FILE.read_text())
         return {a["name"]: a for a in data.get("actions", [])}

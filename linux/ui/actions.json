@@ -1,691 +1,1244 @@
 {
-  "version": 1,
-  "description": "PhaseZero UI action allowlist - only these actions can be executed via the UI",
   "actions": [
-    {
-      "name": "steamdeck.status",
-      "label": "Ver status Steam Deck",
-      "command": "bash linux/steamdeck/status.sh",
-      "mutable": false,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.handheld",
-      "label": "Modo portátil",
-      "command": "bash linux/steamdeck/apply-handheld.sh",
-      "mutable": true,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.docked-tv",
-      "label": "Modo dock TV",
-      "command": "bash linux/steamdeck/apply-docked-tv.sh",
-      "mutable": true,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.docked-monitor",
-      "label": "Modo dock monitor",
-      "command": "bash linux/steamdeck/apply-docked-monitor.sh",
-      "mutable": true,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.detect-mode",
-      "label": "Detectar modo atual",
-      "command": "bash linux/steamdeck/detect-mode.sh",
-      "mutable": false,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.kb",
-      "label": "Alternar teclado virtual",
-      "command": "bash linux/steamdeck/input-actions.sh toggle-keyboard",
-      "mutable": true,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.kb-status",
-      "label": "Status teclado virtual",
-      "command": "bash linux/steamdeck/input-actions.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.kb-repair",
-      "label": "Configurar teclado virtual",
-      "command": "bash linux/steamdeck/input-actions.sh configure",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.hotkeys-install",
-      "label": "Instalar hotkeys",
-      "command": "bash linux/steamdeck/install-hotkeys.sh install",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.boot-status",
-      "label": "Status boot GRUB",
-      "command": "bash linux/steamdeck/install-steamos-boot.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.boot-next-reboot",
-      "label": "Reiniciar no SteamOS Plus",
-      "command": "bash linux/steamdeck/install-steamos-boot.sh next-reboot",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-status",
-      "label": "Status Decky/plugins",
-      "command": "bash linux/steamdeck/plugins.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-install",
-      "label": "Instalar Decky completo",
-      "command": "bash linux/steamdeck/plugins.sh install",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-install-privileged",
-      "label": "Instalar Decky privilegiado",
-      "command": "bash linux/steamdeck/plugins.sh install-decky-privileged",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-install-plugins",
-      "label": "Instalar plugins Decky",
-      "command": "bash linux/steamdeck/plugins.sh install-plugins",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-repair",
-      "label": "Reparar Decky/plugins",
-      "command": "bash linux/steamdeck/plugins.sh repair",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-repair-privileged",
-      "label": "Reparar plugins privilegiado",
-      "command": "bash linux/steamdeck/plugins.sh install-plugins-privileged",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-powertools-repair",
-      "label": "Reparar PowerTools",
-      "command": "bash linux/steamdeck/plugins.sh install-plugin-privileged PowerTools",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-install-themes",
-      "label": "Instalar temas CSS Loader",
-      "command": "bash linux/steamdeck/plugins.sh install-themes",
-      "mutable": true,
-      "require_plan": true,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-enable-cef",
-      "label": "Ativar CEF Debug",
-      "command": "bash linux/steamdeck/plugins.sh enable-cef-debug",
-      "mutable": true,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "steamdeck.plugins-prepare-ui",
-      "label": "Preparar Steam UI Decky",
-      "command": "bash linux/steamdeck/plugins.sh prepare-ui",
-      "mutable": true,
-      "require_plan": false,
-      "module": "steamdeck"
-    },
-    {
-      "name": "windows-vm.status",
-      "label": "Status Windows VM",
-      "command": "bash linux/windows-vm/windows-vm.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "windows-vm"
-    },
-    {
-      "name": "windows-vm.boot-status",
-      "label": "Status boot Windows VM",
-      "command": "bash linux/windows-vm/windows-vm.sh boot status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "windows-vm"
-    },
-    {
-      "name": "windows-vm.discover",
-      "label": "Descobrir Windows VM",
-      "command": "bash linux/windows-vm/windows-vm.sh discover --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "windows-vm"
-    },
-    {
-      "name": "windows-vm.optimize",
-      "label": "Otimizar host VM",
-      "command": "bash linux/windows-vm/windows-vm.sh optimize",
-      "mutable": true,
-      "require_plan": true,
-      "module": "windows-vm"
-    },
-    {
-      "name": "windows-vm.adopt",
-      "label": "Adotar Windows existente",
-      "command": "bash linux/windows-vm/windows-vm.sh adopt",
-      "mutable": true,
-      "require_plan": true,
-      "module": "windows-vm"
-    },
-    {
-      "name": "windows-vm.launch",
-      "label": "Abrir Windows VM",
-      "command": "bash linux/windows-vm/windows-vm.sh launch --fullscreen",
-      "mutable": true,
-      "require_plan": true,
-      "module": "windows-vm"
-    },
-    {
-      "name": "windows-vm.boot-next-reboot",
-      "label": "Reiniciar na Windows VM",
-      "command": "bash linux/windows-vm/windows-vm.sh boot next-reboot",
-      "mutable": true,
-      "require_plan": true,
-      "module": "windows-vm"
-    },
-    {
-      "name": "waydroid.status",
-      "label": "Status Waydroid",
-      "command": "bash linux/waydroid/waydroid.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "waydroid"
-    },
-    {
-      "name": "waydroid.plan",
-      "label": "Plano Waydroid",
-      "command": "bash linux/waydroid/waydroid.sh plan",
-      "mutable": false,
-      "require_plan": false,
-      "module": "waydroid"
-    },
-    {
-      "name": "waydroid.repair",
-      "label": "Reparar Waydroid",
-      "command": "bash linux/waydroid/waydroid.sh repair",
-      "mutable": true,
-      "require_plan": true,
-      "module": "waydroid"
-    },
-    {
-      "name": "waydroid.launch",
-      "label": "Abrir Waydroid",
-      "command": "bash linux/waydroid/waydroid.sh launch",
-      "mutable": true,
-      "require_plan": true,
-      "module": "waydroid"
-    },
-    {
-      "name": "waydroid.boot-status",
-      "label": "Status boot Waydroid",
-      "command": "bash linux/waydroid/waydroid.sh boot status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "waydroid"
-    },
-    {
-      "name": "waydroid.boot-next-reboot",
-      "label": "Reiniciar no Waydroid",
-      "command": "bash linux/waydroid/waydroid.sh boot next-reboot",
-      "mutable": true,
-      "require_plan": true,
-      "module": "waydroid"
-    },
-    {
-      "name": "emulation.status",
-      "label": "Status emulação",
-      "command": "bash linux/emulation/bios.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.launchbox.status",
-      "label": "Status LaunchBox",
-      "command": "bash linux/emulation/launchbox.sh status --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.launchbox.install-clean",
-      "label": "Instalar LaunchBox",
-      "command": "bash linux/emulation/launchbox.sh install-clean",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.launchbox.import-esde",
-      "label": "Sincronizar LaunchBox com ES-DE",
-      "command": "bash linux/emulation/launchbox.sh import-esde",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.launchbox.verify",
-      "label": "Testar LaunchBox e Big Box",
-      "command": "bash linux/emulation/launchbox.sh verify --real",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.retrodeck.status",
-      "label": "Status ecossistema RetroDECK",
-      "command": "bash linux/emulation/retrodeck.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.retrodeck.plan",
-      "label": "Plano integração RetroDECK",
-      "command": "bash linux/emulation/retrodeck.sh plan",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.retrodeck.integrate",
-      "label": "Integrar RetroDECK",
-      "command": "bash linux/emulation/retrodeck.sh integrate",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.retrodeck.repair",
-      "label": "Reparar integração RetroDECK",
-      "command": "bash linux/emulation/retrodeck.sh repair",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.shared.status",
-      "label": "Status conteúdo compartilhado",
-      "command": "bash linux/emulation/shared-content.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.shared.plan",
-      "label": "Plano conteúdo compartilhado",
-      "command": "bash linux/emulation/shared-content.sh plan",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.shared.apply",
-      "label": "Aplicar conteúdo compartilhado",
-      "command": "bash linux/emulation/shared-content.sh apply",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.shared.repair",
-      "label": "Reparar conteúdo compartilhado",
-      "command": "bash linux/emulation/shared-content.sh repair",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.media.status",
-      "label": "Status mídia",
-      "command": "bash linux/emulation/media.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.media.index",
-      "label": "Indexar mídia",
-      "command": "bash linux/emulation/media.sh index",
-      "mutable": true,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.media.apply",
-      "label": "Aplicar mídia canônica",
-      "command": "bash linux/emulation/media.sh apply",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.media.repair",
-      "label": "Reparar mídia",
-      "command": "bash linux/emulation/media.sh repair",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.pc-games.status",
-      "label": "Status jogos PC",
-      "command": "bash linux/emulation/pc-games.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.pc-games.plan",
-      "label": "Plano jogos PC",
-      "command": "bash linux/emulation/pc-games.sh plan",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.pc-games.repair",
-      "label": "Reparar jogos PC",
-      "command": "bash linux/emulation/pc-games.sh repair",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.shortcuts.status",
-      "label": "Status atalhos AppImage",
-      "command": "bash linux/emulation/shortcuts.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.shortcuts.plan",
-      "label": "Plano atalhos AppImage",
-      "command": "bash linux/emulation/shortcuts.sh plan",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.shortcuts.repair",
-      "label": "Reparar atalhos AppImage",
-      "command": "bash linux/emulation/shortcuts.sh repair",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.emudeck.status",
-      "label": "Status EmuDeck",
-      "command": "bash linux/emulation/emudeck.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.emudeck.install",
-      "label": "Instalar EmuDeck",
-      "command": "bash linux/emulation/emudeck.sh install",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.srm.status",
-      "label": "Status SRM",
-      "command": "bash linux/emulation/srm.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.srm.configure",
-      "label": "Configurar SRM",
-      "command": "bash linux/emulation/srm.sh configure",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.eden.status",
-      "label": "Status Eden",
-      "command": "bash linux/emulation/eden.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.eden.install",
-      "label": "Instalar Eden",
-      "command": "bash linux/emulation/eden.sh install",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.performance.status",
-      "label": "Status performance emuladores",
-      "command": "bash linux/emulation/performance.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.performance.apply",
-      "label": "Aplicar perfis Switch/PS3/PS4",
-      "command": "bash linux/emulation/performance.sh apply",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.performance.prepare-lsfg",
-      "label": "Preparar LSFG 2x verificado",
-      "command": "bash linux/emulation/performance.sh prepare-lsfg",
-      "mutable": true,
-      "require_plan": true,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.hydra.status",
-      "label": "Status Hydra",
-      "command": "bash linux/emulation/hydra.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "emulation.fixes.list",
-      "label": "Listar reparos amigáveis",
-      "command": "bash linux/emulation/fixes.sh list",
-      "mutable": false,
-      "require_plan": false,
-      "module": "emulation"
-    },
-    {
-      "name": "server.status",
-      "label": "Status servidor",
-      "command": "bash linux/pz server status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "server"
-    },
-    {
-      "name": "server.homelab.status",
-      "label": "Status Homelab",
-      "command": "bash linux/server/homelab-stack.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "server"
-    },
-    {
-      "name": "server.homelab.plan",
-      "label": "Plano Homelab",
-      "command": "bash linux/server/homelab-stack.sh plan",
-      "mutable": false,
-      "require_plan": false,
-      "module": "server"
-    },
-    {
-      "name": "server.homelab.repair",
-      "label": "Preparar Homelab",
-      "command": "bash linux/server/homelab-stack.sh repair",
-      "plan_command": "bash linux/server/homelab-stack.sh plan",
-      "mutable": true,
-      "require_plan": true,
-      "module": "server"
-    },
-    {
-      "name": "server.homelab.up",
-      "label": "Subir Homelab local",
-      "command": "bash linux/server/homelab-stack.sh up --access local",
-      "plan_command": "bash linux/server/homelab-stack.sh plan --access local",
-      "mutable": true,
-      "require_plan": true,
-      "module": "server"
-    },
-    {
-      "name": "server.homelab.down",
-      "label": "Parar Homelab",
-      "command": "bash linux/server/homelab-stack.sh down",
-      "plan_command": "bash linux/server/homelab-stack.sh status",
-      "mutable": true,
-      "require_plan": true,
-      "module": "server"
-    },
-    {
-      "name": "server.homelab.backup",
-      "label": "Backup Homelab",
-      "command": "bash linux/server/homelab-stack.sh backup",
-      "plan_command": "bash linux/server/homelab-stack.sh backup --dry-run",
-      "mutable": true,
-      "require_plan": true,
-      "module": "server"
-    },
-    {
-      "name": "server.homelab.update",
-      "label": "Atualizar Homelab",
-      "command": "bash linux/server/homelab-stack.sh update",
-      "plan_command": "bash linux/server/homelab-stack.sh update --dry-run",
-      "mutable": true,
-      "require_plan": true,
-      "module": "server"
-    },
-    {
-      "name": "server.casaos.status",
-      "label": "Status CasaOS",
-      "command": "bash linux/server/casaos.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "server"
-    },
-    {
-      "name": "server.casaos.plan",
-      "label": "Plano CasaOS",
-      "command": "bash linux/server/casaos.sh plan",
-      "mutable": false,
-      "require_plan": false,
-      "module": "server"
-    },
-    {
-      "name": "ai.status",
-      "label": "Status IA",
-      "command": "bash linux/ai/status.sh",
-      "mutable": false,
-      "require_plan": false,
-      "module": "ai"
-    },
-    {
-      "name": "ai.mcp.status",
-      "label": "Status MCP",
-      "command": "bash linux/ai/mcp-manager.sh status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "ai"
-    },
-    {
-      "name": "ai.mcp.sync",
-      "label": "Sincronizar MCPs",
-      "command": "bash linux/ai/mcp-manager.sh sync all",
-      "mutable": true,
-      "require_plan": true,
-      "module": "ai"
-    },
     {
       "name": "system.doctor",
       "label": "Diagnóstico completo",
-      "command": "bash linux/audit/doctor.sh",
+      "command": "linux/pz doctor",
       "mutable": false,
       "require_plan": false,
-      "module": "system"
+      "module": "Visão geral"
     },
     {
       "name": "system.repair-plan",
       "label": "Plano de reparo",
-      "command": "bash linux/audit/repair-plan.sh",
+      "command": "linux/pz repair-plan",
       "mutable": false,
       "require_plan": false,
-      "module": "system"
+      "module": "Visão geral"
     },
     {
       "name": "system.support-bundle",
-      "label": "Gerar bundle de suporte",
-      "command": "bash linux/audit/support-bundle.sh",
+      "label": "Bundle de suporte",
+      "command": "linux/pz support-bundle",
       "mutable": true,
-      "require_plan": false,
-      "module": "system"
+      "require_plan": true,
+      "module": "Visão geral"
     },
     {
-      "name": "profiles.list",
-      "label": "Listar profiles",
-      "command": "ls linux/../profiles/*.json",
+      "name": "system.version",
+      "label": "Versão PhaseZero",
+      "command": "linux/pz version",
       "mutable": false,
       "require_plan": false,
-      "module": "system"
+      "module": "Visão geral"
+    },
+    {
+      "name": "profile.dev-ai",
+      "label": "Dev + IA",
+      "command": "linux/pz install dev-ai",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.emulation-linux",
+      "label": "Emulação Linux",
+      "command": "linux/pz install emulation-linux",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.full-workstation",
+      "label": "Workstation completa",
+      "command": "linux/pz install full-workstation",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.gaming",
+      "label": "Gaming",
+      "command": "linux/pz install gaming",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.homelab",
+      "label": "Homelab",
+      "command": "linux/pz install homelab",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.safe-base",
+      "label": "Base segura",
+      "command": "linux/pz install safe-base",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.server-homelab-hermes",
+      "label": "Homelab + Hermes",
+      "command": "linux/pz install server-homelab-hermes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.server-homelab",
+      "label": "Servidor Homelab",
+      "command": "linux/pz install server-homelab",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.server-llm-hermes",
+      "label": "LLM + Hermes",
+      "command": "linux/pz install server-llm-hermes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.server-llm-homelab-hermes",
+      "label": "Servidor completo",
+      "command": "linux/pz install server-llm-homelab-hermes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.server-llm-homelab",
+      "label": "LLM + Homelab",
+      "command": "linux/pz install server-llm-homelab",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.server-llm",
+      "label": "Servidor LLM",
+      "command": "linux/pz install server-llm",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.steamdeck-linux",
+      "label": "Steam Deck Linux",
+      "command": "linux/pz install steamdeck-linux",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.waydroid-linux",
+      "label": "Waydroid Linux",
+      "command": "linux/pz install waydroid-linux",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "profile.windows-vm-linux",
+      "label": "Windows VM",
+      "command": "linux/pz install windows-vm-linux",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Perfis"
+    },
+    {
+      "name": "steamdeck.status",
+      "label": "Status geral",
+      "command": "linux/pz steamdeck status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.detect",
+      "label": "Detectar modo",
+      "command": "linux/pz steamdeck detect",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.handheld",
+      "label": "Modo portátil",
+      "command": "linux/pz steamdeck handheld",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.docked-tv",
+      "label": "Dock TV",
+      "command": "linux/pz steamdeck docked-tv",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.docked-monitor",
+      "label": "Dock monitor",
+      "command": "linux/pz steamdeck docked-monitor",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.keyboard.toggle",
+      "label": "Teclado virtual",
+      "command": "linux/pz steamdeck keyboard",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.keyboard.repair",
+      "label": "Reparar teclado",
+      "command": "linux/pz steamdeck keyboard repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.console",
+      "label": "Abrir console",
+      "command": "linux/pz steamdeck console auto",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.desktop",
+      "label": "Abrir desktop",
+      "command": "linux/pz steamdeck dev docked-monitor",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.hotkeys",
+      "label": "Instalar hotkeys",
+      "command": "linux/pz steamdeck hotkeys install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.watcher",
+      "label": "Instalar watcher",
+      "command": "linux/pz steamdeck watcher install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.privileged",
+      "label": "Controles privilegiados",
+      "command": "linux/pz steamdeck privileged install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.boot",
+      "label": "Boot SteamOS",
+      "command": "linux/pz steamdeck boot install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.plugins",
+      "label": "Instalar Decky",
+      "command": "linux/pz steamdeck plugins install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.plugins.repair",
+      "label": "Reparar Decky",
+      "command": "linux/pz steamdeck plugins repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.launch-options",
+      "label": "Launch options",
+      "command": "linux/pz steamdeck launch-options",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.runtime",
+      "label": "Diagnóstico runtime",
+      "command": "linux/pz steamdeck runtime-diagnose",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "windows.status",
+      "label": "Status Windows VM",
+      "command": "linux/pz windows-vm status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Windows VM"
+    },
+    {
+      "name": "windows.discover",
+      "label": "Descobrir instalações",
+      "command": "linux/pz windows-vm discover --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Windows VM"
+    },
+    {
+      "name": "windows.plan",
+      "label": "Planejar instalação",
+      "command": "linux/pz windows-vm plan --iso {input}",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Windows VM"
+    },
+    {
+      "name": "windows.install",
+      "label": "Instalar Windows VM",
+      "command": "linux/pz windows-vm install --iso {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM"
+    },
+    {
+      "name": "windows.adopt",
+      "label": "Adotar disco Windows",
+      "command": "linux/pz windows-vm adopt --disk {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM"
+    },
+    {
+      "name": "windows.optimize",
+      "label": "Otimizar host",
+      "command": "linux/pz windows-vm optimize",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM"
+    },
+    {
+      "name": "windows.launch",
+      "label": "Abrir Windows",
+      "command": "linux/pz windows-vm launch --fullscreen",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM"
+    },
+    {
+      "name": "windows.boot.install",
+      "label": "Instalar boot direto",
+      "command": "linux/pz windows-vm boot install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM"
+    },
+    {
+      "name": "windows.boot.next",
+      "label": "Próximo boot Windows",
+      "command": "linux/pz windows-vm boot next-reboot",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM"
+    },
+    {
+      "name": "waydroid.status",
+      "label": "Status Waydroid",
+      "command": "linux/pz waydroid status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Waydroid"
+    },
+    {
+      "name": "waydroid.plan",
+      "label": "Plano Waydroid",
+      "command": "linux/pz waydroid plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Waydroid"
+    },
+    {
+      "name": "waydroid.install",
+      "label": "Instalar Waydroid",
+      "command": "linux/pz waydroid install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid"
+    },
+    {
+      "name": "waydroid.repair",
+      "label": "Reparar Waydroid",
+      "command": "linux/pz waydroid repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid"
+    },
+    {
+      "name": "waydroid.launch",
+      "label": "Abrir Waydroid",
+      "command": "linux/pz waydroid launch",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid"
+    },
+    {
+      "name": "waydroid.boot.install",
+      "label": "Instalar boot direto",
+      "command": "linux/pz waydroid boot install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid"
+    },
+    {
+      "name": "waydroid.boot.next",
+      "label": "Próximo boot Android",
+      "command": "linux/pz waydroid boot next-reboot",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid"
+    },
+    {
+      "name": "waydroid.host-access",
+      "label": "Acesso host → Android",
+      "command": "linux/pz waydroid host-access link",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid"
+    },
+    {
+      "name": "windows.host-access",
+      "label": "Acesso host → disco VM",
+      "command": "linux/pz windows-vm host-access mount",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM"
+    },
+    {
+      "name": "server.status",
+      "label": "Status servidor",
+      "command": "linux/pz server status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.llm",
+      "label": "Instalar LLM local",
+      "command": "linux/pz server llm install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.status",
+      "label": "Status Homelab",
+      "command": "linux/pz server homelab status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.plan",
+      "label": "Plano Homelab",
+      "command": "linux/pz server homelab plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.repair",
+      "label": "Preparar Homelab",
+      "command": "linux/pz server homelab repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.up",
+      "label": "Subir homelab local",
+      "command": "linux/pz server homelab up --access local",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.up-tailscale",
+      "label": "Subir via Tailscale",
+      "command": "linux/pz server homelab up --access tailscale",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.up-extras",
+      "label": "Subir extras Homelab",
+      "command": "linux/pz server homelab up --extras --access tailscale",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.down",
+      "label": "Parar homelab",
+      "command": "linux/pz server homelab down",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.open-portainer",
+      "label": "Abrir Portainer",
+      "command": "linux/pz server homelab open portainer",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.open-jellyfin",
+      "label": "Abrir Jellyfin",
+      "command": "linux/pz server homelab open jellyfin",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.open-vaultwarden",
+      "label": "Abrir Vaultwarden",
+      "command": "linux/pz server homelab open vaultwarden",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.open-kuma",
+      "label": "Abrir Uptime Kuma",
+      "command": "linux/pz server homelab open uptime-kuma",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.logs",
+      "label": "Logs Portainer",
+      "command": "linux/pz server homelab logs portainer",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.backup",
+      "label": "Backup Homelab",
+      "command": "linux/pz server homelab backup",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.restore",
+      "label": "Restaurar Homelab",
+      "command": "linux/pz server homelab restore --source {input} --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.update",
+      "label": "Atualizar Homelab",
+      "command": "linux/pz server homelab update",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.homelab.tailscale",
+      "label": "Autenticar Tailscale",
+      "command": "linux/pz server homelab tailscale",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.casaos.status",
+      "label": "Status CasaOS",
+      "command": "linux/pz server casaos status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.casaos.plan",
+      "label": "Plano CasaOS",
+      "command": "linux/pz server casaos plan",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.casaos.install",
+      "label": "Instalar CasaOS",
+      "command": "linux/pz server casaos install --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.hermes",
+      "label": "Configurar Hermes",
+      "command": "linux/pz server hermes setup",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.slim",
+      "label": "Enxugar SO",
+      "command": "linux/pz server slim apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.slim.restore",
+      "label": "Reverter enxugamento",
+      "command": "linux/pz server slim restore",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.boot.install",
+      "label": "Instalar boot Homelab",
+      "command": "linux/pz server boot install --llm --homelab",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "server.boot.next",
+      "label": "Próximo boot Homelab",
+      "command": "linux/pz server boot next-reboot",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Servidor"
+    },
+    {
+      "name": "emulation.status",
+      "label": "Status emulação",
+      "command": "linux/pz emulation status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.setup",
+      "label": "Setup completo",
+      "command": "linux/pz emulation setup install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.layout",
+      "label": "Criar layout",
+      "command": "linux/pz emulation layout",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.emudeck",
+      "label": "Instalar EmuDeck",
+      "command": "linux/pz emulation emudeck install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.eden",
+      "label": "Instalar Eden",
+      "command": "linux/pz emulation eden install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.citron",
+      "label": "Instalar Citron",
+      "command": "linux/pz emulation citron install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.hydra",
+      "label": "Instalar Hydra",
+      "command": "linux/pz emulation hydra install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.srm",
+      "label": "Configurar SRM",
+      "command": "linux/pz emulation srm configure",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.retrodeck",
+      "label": "Integrar RetroDECK",
+      "command": "linux/pz emulation retrodeck integrate",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.shared",
+      "label": "Aplicar conteúdo compartilhado",
+      "command": "linux/pz emulation shared apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.media",
+      "label": "Aplicar mídia canônica",
+      "command": "linux/pz emulation media apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.pc-games",
+      "label": "Reparar jogos PC",
+      "command": "linux/pz emulation pc-games repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.shortcuts",
+      "label": "Reparar atalhos",
+      "command": "linux/pz emulation shortcuts repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.launchbox-install",
+      "label": "Instalar LaunchBox 13.5",
+      "command": "linux/pz emulation launchbox install-clean",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.launchbox-sync",
+      "label": "Sincronizar LaunchBox",
+      "command": "linux/pz emulation launchbox import-esde",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.launchbox-verify",
+      "label": "Verificar LaunchBox",
+      "command": "linux/pz emulation launchbox verify",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.bigbox-test",
+      "label": "Testar Big Box",
+      "command": "linux/pz emulation launchbox verify --real",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.controllers",
+      "label": "Controles Steam Deck",
+      "command": "linux/pz emulation controllers apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.frontends",
+      "label": "Reparar frontends",
+      "command": "linux/pz emulation frontends repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.performance",
+      "label": "Aplicar performance",
+      "command": "linux/pz emulation performance apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.lsfg",
+      "label": "Preparar LSFG",
+      "command": "linux/pz emulation performance prepare-lsfg",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.lua",
+      "label": "Instalar Lua",
+      "command": "linux/pz emulation lua install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.steam-tools",
+      "label": "Instalar Steam tools",
+      "command": "linux/pz emulation steam-tools install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.heroic",
+      "label": "Reparar Heroic",
+      "command": "linux/pz emulation heroic repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.doctor",
+      "label": "Diagnóstico emulação",
+      "command": "linux/pz emulation doctor --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.fixes",
+      "label": "Reparos amigáveis",
+      "command": "linux/pz emulation fixes list",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.optimizers",
+      "label": "Aplicar configs por jogo",
+      "command": "linux/pz emulation optimizer apply-all",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.bios",
+      "label": "Importar BIOS",
+      "command": "linux/pz emulation bios import {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.keys",
+      "label": "Importar Switch keys",
+      "command": "linux/pz emulation switch import-keys {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.firmware",
+      "label": "Importar firmware",
+      "command": "linux/pz emulation switch import-firmware {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.nsz",
+      "label": "Converter NSZ",
+      "command": "linux/pz emulation nsz convert {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.ps3-game",
+      "label": "Importar jogo PS3",
+      "command": "linux/pz emulation ps3 import-game {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "boot.status",
+      "label": "Status boot",
+      "command": "linux/pz boot status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.selector",
+      "label": "Seletor visual",
+      "command": "linux/pz boot selector",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.menu",
+      "label": "Abrir menu texto",
+      "command": "linux/pz boot menu",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.safe-menu",
+      "label": "Instalar menu seguro",
+      "command": "linux/pz boot install-safe-menu",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.card",
+      "label": "Cartão de recuperação",
+      "command": "linux/pz boot card",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.install-card",
+      "label": "Salvar cartão",
+      "command": "linux/pz boot install-card",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.efi",
+      "label": "Instalar EFI fallback",
+      "command": "linux/pz boot install-efi-fallback --fallback",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.normal",
+      "label": "Próximo: Linux normal",
+      "command": "linux/pz boot choose normal",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.steamos",
+      "label": "Próximo: SteamOS",
+      "command": "linux/pz boot choose steamos",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.windows",
+      "label": "Próximo: Windows VM",
+      "command": "linux/pz boot choose windows",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.waydroid",
+      "label": "Próximo: Waydroid",
+      "command": "linux/pz boot choose waydroid",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "boot.emergency",
+      "label": "Próximo: emergência",
+      "command": "linux/pz boot emergency-shell next",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto"
+    },
+    {
+      "name": "flatpak.status",
+      "label": "Status Flatpak",
+      "command": "linux/pz flatpak status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Flatpak"
+    },
+    {
+      "name": "flatpak.audit",
+      "label": "Auditar Flatpak",
+      "command": "linux/pz flatpak audit",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Flatpak"
+    },
+    {
+      "name": "flatpak.repair",
+      "label": "Reparar Flatpak",
+      "command": "linux/pz flatpak audit --repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Flatpak"
+    },
+    {
+      "name": "flatpak.remotes",
+      "label": "Listar remotes",
+      "command": "linux/pz flatpak remotes",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Flatpak"
+    },
+    {
+      "name": "flatpak.steamdeck",
+      "label": "Compatibilidade Steam Deck",
+      "command": "linux/pz flatpak steamdeck-compat",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Flatpak"
+    },
+    {
+      "name": "flatpak.rollback",
+      "label": "Rollback",
+      "command": "linux/pz flatpak rollback",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Flatpak"
+    },
+    {
+      "name": "ai.status",
+      "label": "Status IA",
+      "command": "linux/pz ai status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.doctor",
+      "label": "Diagnóstico MCP",
+      "command": "linux/pz ai doctor",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.repair",
+      "label": "Reparar MCP/IDE",
+      "command": "linux/pz ai repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.desktop",
+      "label": "Reparar apps desktop",
+      "command": "linux/pz ai desktop repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.compat",
+      "label": "Agent compatibility",
+      "command": "linux/pz ai compat setup",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.admin",
+      "label": "Admin bridge",
+      "command": "linux/pz ai setup admin",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.opencode",
+      "label": "Sincronizar OpenCode",
+      "command": "linux/pz ai opencode sync",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.opencode-free",
+      "label": "Modelo free OpenCode",
+      "command": "linux/pz ai opencode free-model",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.omo",
+      "label": "Instalar OMO",
+      "command": "linux/pz ai omo setup",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.memory",
+      "label": "Instalar ai-memory",
+      "command": "linux/pz ai setup memory",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.ollama",
+      "label": "Instalar Ollama",
+      "command": "linux/pz ai setup ollama",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.webui",
+      "label": "Instalar Open WebUI",
+      "command": "linux/pz ai setup webui",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.usagebar",
+      "label": "Instalar UsageBar",
+      "command": "linux/pz ai setup usagebar",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.ides",
+      "label": "Configurar IDEs",
+      "command": "linux/pz ai setup ides",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.mcp-sync",
+      "label": "Sincronizar MCPs",
+      "command": "linux/pz ai mcp sync all",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.proxies",
+      "label": "Instalar proxies IA",
+      "command": "linux/pz ai proxies install all",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.proxies-ides",
+      "label": "Configurar proxies nas IDEs",
+      "command": "linux/pz ai proxies configure-ides",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.proxies-auth",
+      "label": "Auth proxies IA",
+      "command": "linux/pz ai proxies auth all",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.proxies-login-kimi",
+      "label": "Login Kimi",
+      "command": "linux/pz ai proxies login kimiproxy",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.proxies-login-qwen",
+      "label": "Login Qwen",
+      "command": "linux/pz ai proxies login qwenproxy",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.proxies-login-deeps",
+      "label": "Login DeepSeek",
+      "command": "linux/pz ai proxies login deepsproxy",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "ai.proxies-test",
+      "label": "Testar proxies IA",
+      "command": "linux/pz ai proxies test",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev"
+    },
+    {
+      "name": "tune.browser",
+      "label": "Hardening navegador",
+      "command": "linux/pz tune browser",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Ajustes"
+    },
+    {
+      "name": "tune.gaming",
+      "label": "Ajustes gaming",
+      "command": "linux/pz tune gaming",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Ajustes"
+    },
+    {
+      "name": "tune.dev",
+      "label": "Ajustes dev",
+      "command": "linux/pz tune dev",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Ajustes"
     }
   ]
 }

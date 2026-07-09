@@ -40,6 +40,7 @@ HELPER_TARGET="/usr/local/lib/phasezero/steamos-boot-prepare"
 SESSION_TARGET="/usr/local/lib/phasezero/steamos-session"
 SESSION_SELECT_TARGET="/usr/lib/os-session-select"
 SERVICE_FILE="/etc/systemd/system/phasezero-steamos-boot-prepare.service"
+RESUME_SLEEP_UNIT="/etc/systemd/system/systemd-suspend.service.d/phasezero-clear-freeze.conf"
 SESSION_FILE="/usr/share/wayland-sessions/phasezero-steamos.desktop"
 GRUB_SCRIPT="/etc/grub.d/42_phasezero_steamos"
 GRUB_HANDHELD_DROPIN="/etc/default/grub.d/09-phasezero-handheld.cfg"
@@ -198,6 +199,22 @@ WantedBy=graphical.target
 EOF
 }
 
+resume_dropin_content() {
+    # A systemd-suspend dropin that clears the console-frozen marker on wake.
+    # The runtime dir is per-uid; resolve it for the target user so the marker
+    # written by os-session-select (same uid) is removed after a real suspend.
+    local uid runtime_dir
+    uid="$(id -u "$TARGET_USER" 2>/dev/null || printf '%s' "$(id -u)")"
+    runtime_dir="/run/user/$uid/phasezero-steamos"
+    cat <<EOF
+# PhaseZero managed: clear the SteamOS console-frozen marker on resume so the
+# session repaints and the "Desligar" toggle returns to its ready state.
+[Service]
+ExecStartPost=/usr/bin/install -d -o $TARGET_USER -g $TARGET_USER '$runtime_dir'
+ExecStartPost=/usr/bin/rm -f '$runtime_dir/console-frozen'
+EOF
+}
+
 install_boot() {
     need_root
     pz_boot_require_current_root_target
@@ -214,6 +231,7 @@ install_boot() {
     rm -f "$GRUB_HANDHELD_DROPIN"
     service_content > "$SERVICE_FILE"
     chmod 0644 "$SERVICE_FILE"
+    install_resume_dropin
     install_steam_plus_fallback
     install_boot_desktop_entry
     grub_script_content > "$GRUB_SCRIPT"
@@ -224,6 +242,13 @@ install_boot() {
     pz_boot_validate_grub_cfg_safe "$GRUB_CFG"
     pz_boot_validate_active_efi_safe
     pz_info "PhaseZero SteamOS GRUB boot entry installed"
+}
+
+install_resume_dropin() {
+    install -d "$(dirname "$RESUME_SLEEP_UNIT")"
+    resume_dropin_content > "$RESUME_SLEEP_UNIT"
+    chmod 0644 "$RESUME_SLEEP_UNIT"
+    pz_info "console-frozen resume dropin installed: $RESUME_SLEEP_UNIT"
 }
 
 refresh_grub_config() {
@@ -304,7 +329,7 @@ remove_boot() {
     pz_boot_validate_active_efi_safe
     pz_boot_backup_bundle "steamdeck-boot-remove"
     systemctl disable phasezero-steamos-boot-prepare.service >/dev/null 2>&1 || true
-    rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$SESSION_FILE" "$SESSION_TARGET" "$GRUB_HANDHELD_DROPIN"
+    rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$SESSION_FILE" "$SESSION_TARGET" "$GRUB_HANDHELD_DROPIN" "$RESUME_SLEEP_UNIT"
     if [ -f "$SESSION_SELECT_TARGET" ] && grep -q 'PhaseZero managed' "$SESSION_SELECT_TARGET" 2>/dev/null; then
         rm -f "$SESSION_SELECT_TARGET"
     fi
@@ -343,6 +368,7 @@ status_boot() {
     [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
     systemctl is-enabled phasezero-steamos-boot-prepare.service 2>/dev/null || true
     [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
+    [ -f "$RESUME_SLEEP_UNIT" ] && echo "console_freeze_resume_dropin: yes" || echo "console_freeze_resume_dropin: no"
     echo "grub_cfg_entry: $grub_entry_state"
     echo "grub_default: ${grub_default:-unknown}"
     echo "grub_timeout: ${grub_timeout:-unknown}"

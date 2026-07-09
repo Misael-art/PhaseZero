@@ -129,6 +129,18 @@ align_cli_to() {
 }
 
 opencode_sync() {
+    # Lock guard: the async pacman hook can fire overlapping runs if multiple
+    # opencode packages upgrade in one transaction. Bail out silently if another
+    # sync is already in flight.
+    local lock_dir="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/phasezero-opencode-sync.lock"
+    if mkdir "$lock_dir" 2>/dev/null; then
+        # Use the literal path in the trap (not the local var) so cleanup works
+        # even after the function returns and the local goes out of scope.
+        trap "rmdir '$lock_dir' 2>/dev/null || true" EXIT
+    else
+        pz_info "opencode sync already in progress; skipping"
+        return 0
+    fi
     local dv; dv="$(opencode_desktop_version)"
     # A lone system CLI with no desktop cannot skew; leave it untouched unless a
     # version is explicitly requested or the CLI is already npm-managed.
@@ -173,7 +185,11 @@ opencode_version_status() {
 }
 
 install_sync_hook() {
-    local user; user="$(id -un)"
+    local user
+    # When invoked via bigsudo/pkexec/sudo the effective user is root; resolve
+    # the real invoking user so the async sync runs in their session/HOME (npm
+    # prefix, opencode DB live there).
+    user="${SUDO_USER:-${PKEXEC_USER:-$(id -un)}}"
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         pz_info "dry-run: would install pacman hook re-pinning the CLI after opencode/opencode-desktop-bin upgrades"
         return 0
@@ -184,7 +200,21 @@ install_sync_hook() {
 #!/usr/bin/env bash
 # PhaseZero: keep the opencode CLI pinned to the opencode-desktop version.
 # Installed by linux/ai/setup-opencode.sh install-hook.
-exec runuser -l "$user" -c 'bash "$PZ_ROOT/linux/ai/setup-opencode.sh" sync'
+#
+# Runs ASYNC: the sync shells out to npm (network), which can take long enough
+# to abort or time out a pacman/pamac PostTransaction and roll the whole update
+# back. Instead of blocking the transaction, we dispatch the sync as a detached
+# user job (systemd-run --user when available, nohup otherwise) and return at
+# once. A lock guard prevents overlapping syncs.
+user="$user"
+sync_cmd='bash "$PZ_ROOT/linux/ai/setup-opencode.sh" sync'
+if command -v systemd-run >/dev/null 2>&1; then
+    runuser -l "\$user" -c "systemd-run --user --unit=phasezero-opencode-sync --quiet -- bash -lc \"\$sync_cmd\"" >/dev/null 2>&1 || \
+        runuser -l "\$user" -c "setsid nohup bash -lc \"\$sync_cmd\" >/dev/null 2>&1 &" >/dev/null 2>&1 || true
+else
+    runuser -l "\$user" -c "setsid nohup bash -lc \"\$sync_cmd\" >/dev/null 2>&1 &" >/dev/null 2>&1 || true
+fi
+exit 0
 EOF
     cat > "$tmp_hook" <<EOF
 [Trigger]
@@ -201,7 +231,7 @@ Exec = $SYNC_HOOK_SCRIPT
 EOF
     if admin_run install -Dm755 "$tmp_script" "$SYNC_HOOK_SCRIPT" &&
         admin_run install -Dm644 "$tmp_hook" "$SYNC_HOOK_FILE"; then
-        pz_info "installed opencode auto-sync pacman hook ($SYNC_HOOK_FILE)"
+        pz_info "installed opencode auto-sync pacman hook (async; $SYNC_HOOK_FILE)"
     else
         pz_warn "could not install pacman hook (needs root); run manually: linux/pz ai opencode sync after opencode updates"
     fi

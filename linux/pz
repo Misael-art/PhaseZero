@@ -145,6 +145,7 @@ Usage:
   pz ai desktop repair-codex   Repair failed Codex Desktop local update
   pz ai desktop repair         Repair desktop apps and automatic updates
   pz ai compat status          Check RTK/Caveman/Headroom/ai-memory agent runtime
+  pz ai token-economy status   Alias for compat status and context-frugality audit
   pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
   pz ai opencode <action>      OpenCode CLI<->desktop lockstep + models (sync|status|local-model|free-model|install-hook)
@@ -159,6 +160,8 @@ Usage:
   pz ai proxies status         Status Linux AI proxy suite
   pz ai proxies install [id]   Install/update all or one Linux AI proxy (also wires IDEs)
   pz ai proxies configure-ides Wire proxies into opencode/opencode-desktop/zcode
+  pz ai proxies auth [id]      Redacted auth/login readiness for proxy suite
+  pz ai proxies login <id>     Open headed browser login for kimi/qwen/deeps
   pz ai proxies test           Honest probe: /v1/models + chat per proxy (JSON)
   pz doctor                    Run full system diagnostics
   pz support-bundle            Generate support tarball
@@ -368,7 +371,7 @@ cmd_server() {
 
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
-    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|omo|compat|secrets|mcp) ..."; return 1; }
+    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|omo|compat|token-economy|secrets|mcp) ..."; return 1; }
     case "$sub" in
         status)
             bash "$PZ_ROOT/linux/ai/status.sh"
@@ -404,7 +407,7 @@ cmd_ai() {
             shift
             bash "$PZ_ROOT/linux/ai/desktop-apps.sh" "${@:-status}"
             ;;
-        compat|agent-compat|tools)
+        compat|agent-compat|tools|token-economy|tokens)
             shift
             bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" "${@:-status}"
             ;;
@@ -513,11 +516,13 @@ cmd_ui() {
             bash "$PZ_ROOT/linux/ui/native.sh" "${@:2}"
             ;;
         server)
+            ui_regenerate_allowlist
             local port_arg=""
             [ "$port" != "auto" ] && port_arg="--port $port"
             python3 "$PZ_ROOT/linux/ui/server.py" $port_arg
             ;;
         tui)
+            ui_regenerate_allowlist
             bash "$PZ_ROOT/linux/ui/tui.sh"
             ;;
         status)
@@ -534,6 +539,7 @@ cmd_ui() {
             local web_port="$port"
             [ "$web_port" = "auto" ] && web_port=8080
             mkdir -p "$PZ_STATE"
+            ui_regenerate_allowlist
             python3 "$PZ_ROOT/linux/ui/server.py" --port "$web_port" --daemon "$log_file" &
             local pid=$!
             echo "$pid" > "$PZ_STATE/ui-server.pid"
@@ -546,6 +552,33 @@ cmd_ui() {
             return 1
             ;;
     esac
+}
+
+ui_regenerate_allowlist() {
+    # Refresh the web/TUI allowlist snapshot from the live native catalog so the
+    # fallback (used when catalog.py cannot be imported at server runtime) also
+    # exposes every implemented function. Best-effort: failures are non-fatal.
+    python3 - "$PZ_ROOT" "$PZ_ROOT/linux/ui/actions.json" <<'PY' >/dev/null 2>&1 || true
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
+sys.path.insert(0, str(root))
+try:
+    from linux.ui_native.catalog import build_catalog
+except Exception:
+    sys.exit(0)
+actions = []
+for spec in build_catalog(root):
+    actions.append({
+        "name": spec.id,
+        "label": spec.title,
+        "command": " ".join(["linux/pz", *spec.args]),
+        "mutable": bool(spec.mutable),
+        "require_plan": bool(spec.mutable),
+        "module": spec.category,
+    })
+dest.write_text(json.dumps({"actions": actions}, ensure_ascii=False, indent=2) + "\n")
+PY
 }
 
 main() {
