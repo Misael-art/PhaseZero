@@ -58,8 +58,12 @@ class StatusLoader(QObject):
         process.setProperty("timeout_timer", timer)
 
     def fetch_action(self, action: ActionSpec) -> None:
-        """Fetch status for an ActionSpec using its args directly."""
-        self.fetch(action.id, list(action.args))
+        """Fetch status using the action's explicit read-only status contract."""
+        args = action.status_args or action.args
+        if any(token.startswith("{") and token.endswith("}") for token in args):
+            self.status_failed.emit(action.id, "status requires parameters")
+            return
+        self.fetch(action.id, list(args))
 
     def cancel(self, action_id: str) -> None:
         process = self._processes.pop(action_id, None)
@@ -71,6 +75,9 @@ class StatusLoader(QObject):
     def cancel_all(self) -> None:
         for action_id in list(self._processes.keys()):
             self.cancel(action_id)
+
+    def running(self, action_id: str) -> bool:
+        return action_id in self._processes
 
     def _on_finished(self, action_id: str, exit_code: int, process: QProcess) -> None:
         if action_id not in self._processes or not isValid(process):

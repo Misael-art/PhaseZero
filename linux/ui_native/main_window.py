@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QTimer, Qt, Signal
@@ -19,6 +20,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizeGrip,
     QStackedWidget,
+    QStatusBar,
     QStyle,
     QVBoxLayout,
     QWidget,
@@ -31,6 +33,7 @@ from .pages.registry import PageRegistry
 from .result_parser import severity_for
 from .widgets import (
     ActionCard,
+    Breadcrumb,
     HeaderBar,
     ParameterDialog,
     PreviewDialog,
@@ -64,6 +67,11 @@ class MainWindow(QMainWindow):
         self._host_process: QProcess | None = None
         self._closing = False
         self.progress_dialog: ProgressDialog | None = None
+        self._operation_started_at: float | None = None
+        self._failure_count = 0
+        self._elapsed_timer = QTimer(self)
+        self._elapsed_timer.setInterval(1000)
+        self._elapsed_timer.timeout.connect(self._update_elapsed)
         self._search_relayout_timer = QTimer(self)
         self._search_relayout_timer.setSingleShot(True)
         self._search_relayout_timer.setInterval(120)
@@ -123,6 +131,8 @@ class MainWindow(QMainWindow):
                 button.setCheckable(True)
                 button.setCursor(Qt.PointingHandCursor)
                 button.setToolTip(meta[2])
+                button.setAccessibleName(f"Abrir {category}")
+                button.setAccessibleDescription(meta[2])
                 button.setIcon(themed_icon(self, meta[1], QStyle.SP_FileDialogDetailedView))
                 button.clicked.connect(lambda _checked=False, name=category: self.show_category(name))
                 self.sidebar_buttons[category] = button
@@ -145,6 +155,9 @@ class MainWindow(QMainWindow):
         main_layout.setContentsMargins(24, 18, 24, 14)
         main_layout.setSpacing(14)
         body_layout.addWidget(main, 1)
+
+        self.breadcrumb = Breadcrumb()
+        main_layout.addWidget(self.breadcrumb)
 
         top = QHBoxLayout()
         title_box = QVBoxLayout()
@@ -173,6 +186,7 @@ class MainWindow(QMainWindow):
         else:
             theme.setIcon(theme_icon)
         theme.clicked.connect(self.toggle_theme)
+        theme.setAccessibleName("Alternar tema claro ou escuro")
         top.addWidget(theme)
         main_layout.addLayout(top)
 
@@ -225,6 +239,7 @@ class MainWindow(QMainWindow):
 
         operation = QFrame()
         operation.setObjectName("operationPanel")
+        operation.setAccessibleName("Operação atual")
         operation_layout = QVBoxLayout(operation)
         operation_layout.setContentsMargins(14, 10, 14, 10)
         operation_layout.setSpacing(8)
@@ -233,6 +248,8 @@ class MainWindow(QMainWindow):
         self.status_dot.setObjectName("statusIdle")
         self.status_text = QLabel("Pronto")
         self.status_text.setObjectName("statusText")
+        self.elapsed_label = QLabel("")
+        self.elapsed_label.setObjectName("operationElapsed")
         self.command_label = QLabel("")
         self.command_label.setObjectName("pathLabel")
         self.command_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -240,10 +257,12 @@ class MainWindow(QMainWindow):
         self.cancel_button.setObjectName("dangerButton")
         self.cancel_button.setEnabled(False)
         self.cancel_button.clicked.connect(self.runner.cancel)
+        self.cancel_button.setAccessibleDescription("Interrompe processo em andamento")
         self.toggle_logs_button = QPushButton("Logs")
         self.toggle_logs_button.clicked.connect(self.toggle_logs)
         status_row.addWidget(self.status_dot)
         status_row.addWidget(self.status_text)
+        status_row.addWidget(self.elapsed_label)
         status_row.addWidget(self.command_label, 1)
         status_row.addWidget(self.toggle_logs_button)
         status_row.addWidget(self.cancel_button)
@@ -263,7 +282,22 @@ class MainWindow(QMainWindow):
         self.log_view.hide()
         operation_layout.addWidget(self.log_view)
         main_layout.addWidget(operation)
+        self._build_global_status_bar()
         QTimer.singleShot(0, self._host_summary)
+
+    def _build_global_status_bar(self) -> None:
+        bar = QStatusBar(self)
+        bar.setObjectName("globalStatusBar")
+        bar.setSizeGripEnabled(False)
+        self.global_state = QLabel("Pronto")
+        self.global_state.setObjectName("globalState")
+        self.global_state.setAccessibleName("Estado global")
+        self.global_context = QLabel("Nenhuma falha pendente")
+        self.global_context.setObjectName("globalContext")
+        self.global_context.setAccessibleName("Resumo de falhas")
+        bar.addWidget(self.global_state, 1)
+        bar.addPermanentWidget(self.global_context)
+        self.setStatusBar(bar)
 
     def _connect_runner(self) -> None:
         self.runner.started.connect(self.operation_started)
@@ -327,6 +361,11 @@ class MainWindow(QMainWindow):
         if self.search.text().strip():
             self.search.clear()
         meta = self.cat_meta.get(category)
+        section = next(
+            (title for title, categories in SIDEBAR_GROUPS if category in categories),
+            "Navegação",
+        )
+        self.breadcrumb.set_path(section, category)
         page = self.registry.page_for(category)
         if page is not None:
             self.stack.setCurrentWidget(page)
@@ -334,12 +373,15 @@ class MainWindow(QMainWindow):
             self.page_subtitle.setText(meta[2] if meta else "")
             if hasattr(page, "reload"):
                 page.reload()
+        self.global_state.setText(f"Página: {category}")
 
     def on_search(self, text: str) -> None:
         if text.strip():
             self.stack.setCurrentIndex(self._search_page_idx)
             self.page_title.setText("Busca")
             self.page_subtitle.setText(f"Resultados para “{text.strip()}”")
+            self.breadcrumb.set_path("Navegação", "Busca")
+            self.global_state.setText("Busca global")
             self.rebuild_search()
         else:
             self.show_category(self.current_category)
@@ -417,6 +459,10 @@ class MainWindow(QMainWindow):
         self.status_dot.style().polish(self.status_dot)
         self.command_label.setText(command)
         self.cancel_button.setEnabled(True)
+        self._operation_started_at = time.monotonic()
+        self._elapsed_timer.start()
+        self._update_elapsed()
+        self.global_state.setText(self.status_text.text())
         self.progress.setRange(0, 0)
         self.progress.show()
         self.registry.block_all(True)
@@ -441,6 +487,10 @@ class MainWindow(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
         if self.progress_dialog is not None:
             self.progress_dialog.append_output(text, error)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if lines:
+            tail = lines[-1]
+            self.global_state.setText(("Erro: " if error else "Executando: ") + tail[:120])
 
     def update_progress(self, value: int) -> None:
         self.progress.setRange(0, 100)
@@ -452,17 +502,23 @@ class MainWindow(QMainWindow):
         start_failed = self._start_failed
         self._start_failed = False
         self.progress.hide()
+        self._elapsed_timer.stop()
+        self._update_elapsed(final=True)
         if self.progress_dialog is not None:
             self.progress_dialog.finish()
             self.progress_dialog.deleteLater()
             self.progress_dialog = None
         self.cancel_button.setEnabled(False)
         self.status_text.setText("Concluído" if result.ok else "Falhou")
+        self.global_state.setText(self.status_text.text())
         severity = severity_for(result.parsed, result.exit_code)
         self.status_dot.setObjectName("statusSuccess" if severity == "success" else "statusWarning" if severity == "warning" else "statusError")
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)
         self.registry.block_all(False)
+        if not result.ok:
+            self._failure_count += 1
+        self._update_failure_summary()
         for card in self._search_cards:
             card.setEnabled(True)
         if self._closing:
@@ -523,7 +579,39 @@ class MainWindow(QMainWindow):
         self.progress.hide()
         self.cancel_button.setEnabled(False)
         self.status_text.setText("Falha ao iniciar")
+        self._elapsed_timer.stop()
+        self._operation_started_at = None
+        self.elapsed_label.clear()
+        self.global_state.setText("Falha ao iniciar")
+        self._failure_count += 1
+        self._update_failure_summary()
         QMessageBox.critical(self, "Falha ao iniciar", message)
+
+    def _update_elapsed(self, *, final: bool = False) -> None:
+        if self._operation_started_at is None:
+            if not final:
+                self.elapsed_label.clear()
+            return
+        elapsed = max(0, int(time.monotonic() - self._operation_started_at))
+        minutes, seconds = divmod(elapsed, 60)
+        self.elapsed_label.setText(f"{minutes:02d}:{seconds:02d}")
+        self.elapsed_label.setAccessibleName(f"Tempo decorrido: {minutes} minutos e {seconds} segundos")
+        if final:
+            self._operation_started_at = None
+
+    def _update_failure_summary(self) -> None:
+        if self._failure_count:
+            text = f"{self._failure_count} falha{'s' if self._failure_count != 1 else ''} pendente{'s' if self._failure_count != 1 else ''}"
+            self.global_context.setText(text)
+            self.global_context.setProperty("state", "error")
+            results = self.sidebar_buttons.get("Resultados")
+            if results is not None:
+                results.setText(f"Resultados ({self._failure_count})")
+        else:
+            self.global_context.setText("Nenhuma falha pendente")
+            self.global_context.setProperty("state", "success")
+        self.global_context.style().unpolish(self.global_context)
+        self.global_context.style().polish(self.global_context)
 
     def cancel_or_clear(self) -> None:
         if self.runner.running:

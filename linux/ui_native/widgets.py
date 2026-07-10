@@ -137,6 +137,31 @@ class SectionHeader(QWidget):
             layout.addWidget(cap)
 
 
+class Breadcrumb(QFrame):
+    """Compact, accessible location indicator for category navigation."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("breadcrumb")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._label = QLabel("PhaseZero")
+        self._label.setObjectName("breadcrumbText")
+        self._label.setAccessibleName("Localização atual")
+        layout.addWidget(self._label)
+        layout.addStretch()
+
+    def set_path(self, section: str, page: str) -> None:
+        parts = ["PhaseZero", section, page]
+        text = "  ›  ".join(part for index, part in enumerate(parts) if part and part not in parts[:index])
+        self._label.setText(text)
+        self._label.setAccessibleDescription(f"Página atual: {page}; seção: {section}")
+
+    @property
+    def text(self) -> str:
+        return self._label.text()
+
+
 class ActionCard(QFrame):
     requested = Signal(object)
 

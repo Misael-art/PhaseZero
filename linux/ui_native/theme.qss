@@ -286,6 +286,33 @@ QPushButton:disabled {
     border: 1px solid {{border_subtle}};
     border-radius: {{radius_md}}px;
 }
+#breadcrumbText {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+    font-weight: 600;
+}
+#contextStatus {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    margin-bottom: {{space_sm}}px;
+}
+#contextStatusText { color: {{text_dim}}; font-weight: 600; }
+#contextStatusText[state="success"] { color: {{success}}; }
+#contextStatusText[state="warning"] { color: {{warning}}; }
+#contextStatusText[state="error"] { color: {{error}}; }
+#operationElapsed {
+    color: {{text_dim}};
+    font-family: {{font_mono}};
+}
+#globalStatusBar {
+    color: {{text_dim}};
+    background: {{surface_header}};
+    border-top: 1px solid {{border_subtle}};
+}
+#globalState, #globalContext { padding: 2px {{space_sm}}px; }
+#globalContext[state="success"] { color: {{success}}; }
+#globalContext[state="error"] { color: {{error}}; }
 #warningBanner {
     background: {{warning_bg}};
     border: 1px solid {{warning_border}};
