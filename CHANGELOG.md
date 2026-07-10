@@ -3,12 +3,23 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
-## [1.4.1] - 2026-07-09
+## [1.4.1] - 2026-07-10
 
 Foco: correções de emulação e experiência SteamOS — Steam ROM Manager, centralização
 de keys/firmware, pastas duplicadas, mídia órfã e robustez de sessão Game Mode.
 
 ### Corrigido
+- **Decky no SteamOS**: preparação e validação transacional dos bundles impede
+  carregar plugins incompletos (`frontend_bundle not OK`/imports dinâmicos);
+  pacotes inválidos são preservados ou isolados sem substituir instalação válida.
+- **Fundação visual**: temas claro/escuro usam tokens semânticos validados, sem
+  hex residual no QSS, com contraste AA nos pares essenciais e shimmer sem vazamento.
+- **Execução resiliente**: status assíncrono sanitiza stderr, expira, cancela e
+  limpa processos deterministicamente; resultados ficam privados e argumentos
+  continuam sem shell.
+- **Portabilidade preparada**: estado, permissões, elevação, abertura de caminhos
+  e encerramento de processos foram isolados; plataforma Windows simulada não
+  expõe ações Linux nem seletor de boot.
 - **Steam ROM Manager — parsers faltantes**: `normalize_srm_parsers` só cobria
   Switch/PSX/PS2/PS3/PS4/Xbox360. Adicionados parsers PhaseZero-managed para
   GameCube, Wii, Wii U, N64, SNES, NES, GBA, GB e PSP apontando para os launchers
@@ -41,6 +52,15 @@ de keys/firmware, pastas duplicadas, mídia órfã e robustez de sessão Game Mo
 - **Ação `emulation media clean`** exposta no `pz`, `catalog.py` (card "Limpar
   mídia órfã") e `actions.json` regenerado. Dry-run por padrão; `--apply` move
   para backup.
+- **Central de Controle nativa completa**: catálogo canônico com 247 ações,
+  parâmetros tipados, busca global e seção contextual Avançado cobre comandos
+  Linux públicos e todos os perfis sem exigir descoberta pelo terminal.
+- **UX operacional**: skeleton sem flash para respostas rápidas, saúde assíncrona,
+  preview seguro, confirmação explícita para alto risco, progresso cancelável,
+  resultado/histórico, breadcrumb, barra de estado persistente e navegação por teclado.
+- **Contrato público**: `linux/pz commands --json` expõe o mesmo catálogo usado
+  pela UI; gates detectam IDs/comandos duplicados, parâmetros ausentes, ações
+  mutáveis sem preview e funções não renderizadas.
 
 ### Notas
 - **SteamOS pré-requisitos**: a entrada GRUB `PhaseZero SteamOS Console` exige
