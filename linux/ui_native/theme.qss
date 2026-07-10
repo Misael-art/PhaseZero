@@ -407,3 +407,101 @@ QToolTip {
     padding: 6px;
     border-radius: 6px;
 }
+
+/* ---- Compound widgets from category pages ---------------------------- */
+/* QTabBar (emulationTabs): EmuDeck-style flat tabs. */
+QTabBar::tab {
+    color: {{text_dim}};
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    padding: {{space_sm}}px {{space_lg}}px;
+    font-weight: 600;
+}
+QTabBar::tab:selected {
+    color: {{text_strong}};
+    border-bottom: 2px solid {{accent}};
+}
+QTabBar::tab:hover:!selected {
+    color: {{text}};
+    border-bottom: 2px solid {{accent_border}};
+}
+#emulationTabs::pane {
+    border: 0;
+    background: transparent;
+}
+
+/* QTableView / QTableWidget (historyTable): results history grid. */
+#historyTable {
+    color: {{text}};
+    background: {{surface_inset}};
+    alternate-background-color: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    gridline-color: {{border_divider}};
+}
+#historyTable::item {
+    padding: 4px {{space_sm}}px;
+}
+#historyTable::item:selected {
+    background: {{surface_selected}};
+    color: {{text_strong}};
+}
+
+/* QComboBox (profileCombo): dropdown selectors. */
+QComboBox {
+    color: {{text}};
+    background: {{surface_input}};
+    border: 1px solid {{border}};
+    border-radius: {{radius_md}}px;
+    padding: {{space_sm}}px {{space_md}}px;
+    min-height: 34px;
+}
+QComboBox:hover {
+    border-color: {{accent_border}};
+}
+QComboBox:focus {
+    border-color: {{accent}};
+}
+QComboBox::drop-down {
+    border: 0;
+    width: 26px;
+}
+QComboBox QAbstractItemView {
+    color: {{text}};
+    background: {{surface}};
+    border: 1px solid {{border_strong}};
+    border-radius: {{radius_sm}}px;
+    selection-background-color: {{surface_selected}};
+    selection-color: {{text_strong}};
+    padding: {{space_xs}}px;
+}
+#profileCombo {
+    min-width: 400px;
+}
+
+/* QCheckBox (toolCheck, tuneCheck): list-item checkboxes. */
+QCheckBox {
+    color: {{text}};
+    spacing: {{space_sm}}px;
+    padding: {{space_xs}}px 0;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: {{radius_sm}}px;
+    border: 1px solid {{border_strong}};
+    background: {{surface_input}};
+}
+QCheckBox::indicator:hover {
+    border-color: {{accent}};
+}
+QCheckBox::indicator:checked {
+    background: {{accent}};
+    border-color: {{accent_hover}};
+    image: none;
+}
+#toolCheck, #tuneCheck {
+    font-size: {{text_base}}px;
+    padding: {{space_sm}}px 0;
+}
