@@ -55,3 +55,20 @@ def test_stop_shimmer_clears_property(app):
     start_shimmer(tile)
     stop_shimmer(tile)
     assert tile.property("shimmer") != "true"
+
+
+def test_status_loader_creates(app):
+    from linux.ui_native.status_loader import StatusLoader
+    from pathlib import Path
+    loader = StatusLoader(Path(ROOT))
+    assert loader is not None
+    assert hasattr(loader, "status_ready")
+    assert hasattr(loader, "status_failed")
+
+
+def test_status_loader_resolves_pz(app):
+    from linux.ui_native.status_loader import StatusLoader
+    loader = StatusLoader(ROOT)
+    pz = loader._pz_path()
+    assert pz.exists()
+    assert pz.name == "pz"
