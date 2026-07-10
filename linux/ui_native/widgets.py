@@ -237,6 +237,84 @@ class StatusPill(QFrame):
             layout.addWidget(det)
 
 
+class SkeletonTile(QFrame):
+    """Gray pulsing block that mimics a layout element during loading."""
+
+    def __init__(self, width: int, height: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("skeletonTile")
+        self.setFixedSize(width, height)
+
+
+_SHIMMER_ANIMATIONS: dict[int, QPropertyAnimation] = {}
+
+
+def start_shimmer(widget: QWidget) -> None:
+    """Start a shimmer opacity loop on a skeleton widget."""
+    effect = QGraphicsOpacityEffect(widget)
+    widget.setGraphicsEffect(effect)
+    anim = QPropertyAnimation(effect, b"opacity", widget)
+    anim.setDuration(1200)
+    anim.setStartValue(0.4)
+    anim.setKeyValueAt(0.5, 1.0)
+    anim.setEndValue(0.4)
+    anim.setEasingCurve(QEasingCurve.InOutSine)
+    anim.setLoopCount(-1)
+    widget.setProperty("shimmer", "true")
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+    anim.start()
+    _SHIMMER_ANIMATIONS[id(widget)] = anim
+
+
+def stop_shimmer(widget: QWidget) -> None:
+    """Stop shimmer on a widget and reset its appearance."""
+    anim = _SHIMMER_ANIMATIONS.pop(id(widget), None)
+    if anim is not None:
+        anim.stop()
+        anim.deleteLater()
+    widget.setProperty("shimmer", "")
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+class SkeletonCard(QFrame):
+    """Mimics an ActionCard: icon tile + title + description + button placeholder."""
+
+    def __init__(self, *, hero: bool = False, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("skeletonCard")
+        self.setProperty("hero", hero)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(18, 16, 18, 16)
+        outer.setSpacing(9)
+        heading = QHBoxLayout()
+        heading.setSpacing(12)
+        heading.addWidget(SkeletonTile(46, 46))
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title_col.addWidget(SkeletonTile(160, 14))
+        title_col.addWidget(SkeletonTile(100, 10))
+        heading.addLayout(title_col, 1)
+        outer.addLayout(heading)
+        outer.addWidget(SkeletonTile(220, 12))
+        outer.addWidget(SkeletonTile(120, 32))
+
+
+class SkeletonPill(QFrame):
+    """Mimics a StatusPill: dot + label + detail placeholders."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("skeletonPill")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 7, 12, 7)
+        layout.addWidget(SkeletonTile(8, 8))   # dot
+        layout.addWidget(SkeletonTile(140, 14))  # label
+        layout.addStretch()
+        layout.addWidget(SkeletonTile(80, 10))   # detail
+
+
 class Toast(QFrame):
     """Auto-dismissing toast in the top-right of its parent."""
 

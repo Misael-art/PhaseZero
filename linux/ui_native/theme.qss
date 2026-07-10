@@ -340,6 +340,29 @@ QProgressBar::chunk {
 #pillDot[state="warning"] { color: {{warning}}; }
 #pillDot[state="info"] { color: {{accent}}; }
 
+/* ---- Skeleton loaders ------------------------------------------------ */
+#skeletonTile {
+    background: {{skeleton_base}};
+    border-radius: {{radius_sm}}px;
+}
+#skeletonTile[shimmer="true"] {
+    background: {{skeleton_shimmer}};
+}
+#skeletonCard {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: {{radius_lg}}px;
+}
+#skeletonCard[hero="true"] {
+    background: {{surface_hero}};
+    border: 1px solid {{accent_border}};
+}
+#skeletonPill {
+    background: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+
 /* ---- Toast ----------------------------------------------------------- */
 #toast {
     background: {{surface}};
