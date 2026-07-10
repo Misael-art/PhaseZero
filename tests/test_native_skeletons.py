@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from PySide6.QtWidgets import QApplication
+from PySide6.QtTest import QTest
 
 
 @pytest.fixture(scope="module")
@@ -94,6 +95,30 @@ def test_base_page_show_skeletons_populates(app):
     assert len(cards) == 0
 
 
+def test_loading_threshold_avoids_fast_flash(app):
+    from linux.ui_native.pages.base import BasePage
+    from linux.ui_native.command_runner import CommandRunner
+    from linux.ui_native.widgets import SkeletonCard
+    page = BasePage(ROOT, CommandRunner(ROOT), [], {})
+    page.begin_loading(lambda: page.show_skeletons(count=1), delay_ms=200)
+    QTest.qWait(50)
+    page.finish_loading()
+    QTest.qWait(180)
+    assert not page.findChildren(SkeletonCard)
+
+
+def test_skeleton_shimmer_lifecycle(app):
+    from linux.ui_native.widgets import SkeletonCard, SkeletonTile
+    card = SkeletonCard()
+    card.show()
+    QTest.qWait(10)
+    tiles = card.findChildren(SkeletonTile)
+    assert tiles and all(tile.property("shimmer") == "true" for tile in tiles)
+    card.hide()
+    QTest.qWait(10)
+    assert all(tile.property("shimmer") != "true" for tile in tiles)
+
+
 def test_overview_page_shows_skeletons_on_reload(app, qtbot=None):
     """OverviewPage.reload() should show skeletons then load status."""
     from pathlib import Path
@@ -107,6 +132,8 @@ def test_overview_page_shows_skeletons_on_reload(app, qtbot=None):
     page = OverviewPage(Path(ROOT), CommandRunner(Path(ROOT)), catalog, by_id)
     page.build()
     page.reload()
-    # After reload, skeletons should be visible (before status resolves)
+    QTest.qWait(250)
+    # Slow status shows skeletons; a fast result may already show status pills.
     skeletons = page.findChildren(SkeletonPill)
     assert len(skeletons) > 0 or len(page.findChildren(StatusPill)) > 0
+    page.cancel_status()

@@ -3,8 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
+from shiboken6 import isValid
 
+from .models import ActionSpec
 from .result_parser import parse_json_output
+
+_SECRET_PATTERNS = (
+    (r"(?i)(token|secret|password|api[_-]?key)\s*[:=]\s*\S+", r"\1=[REDACTED]"),
+    (r"(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{16,}", "[REDACTED]"),
+)
 
 
 class StatusLoader(QObject):
@@ -50,13 +57,13 @@ class StatusLoader(QObject):
         timer.start(15000)
         process.setProperty("timeout_timer", timer)
 
-    def fetch_action(self, action) -> None:
+    def fetch_action(self, action: ActionSpec) -> None:
         """Fetch status for an ActionSpec using its args directly."""
         self.fetch(action.id, list(action.args))
 
     def cancel(self, action_id: str) -> None:
         process = self._processes.pop(action_id, None)
-        if process is not None and process.state() != QProcess.NotRunning:
+        if process is not None and isValid(process) and process.state() != QProcess.NotRunning:
             process.kill()
             process.waitForFinished(1000)
         self._cleanup_process(action_id, process)
@@ -66,36 +73,48 @@ class StatusLoader(QObject):
             self.cancel(action_id)
 
     def _on_finished(self, action_id: str, exit_code: int, process: QProcess) -> None:
-        if action_id not in self._processes:
+        if action_id not in self._processes or not isValid(process):
             return  # already handled by timeout/error
         stdout = bytes(process.readAllStandardOutput().data()).decode("utf-8", errors="replace")
+        stderr = bytes(process.readAllStandardError().data()).decode("utf-8", errors="replace")
         self._cleanup_process(action_id, process)
         if exit_code != 0:
-            self.status_failed.emit(action_id, f"exit code {exit_code}")
+            detail = self._redact(stderr.strip())[:500]
+            message = f"exit code {exit_code}" + (f": {detail}" if detail else "")
+            self.status_failed.emit(action_id, message)
             return
         parsed = parse_json_output(stdout)
         self.status_ready.emit(action_id, stdout, parsed)
 
     def _on_error(self, action_id: str, error: QProcess.ProcessError, process: QProcess) -> None:
-        if action_id not in self._processes:
+        if action_id not in self._processes or not isValid(process):
             return
         if error == QProcess.FailedToStart:
             self._cleanup_process(action_id, process)
             self.status_failed.emit(action_id, "failed to start")
 
     def _on_timeout(self, action_id: str, process: QProcess) -> None:
-        if action_id not in self._processes:
+        if action_id not in self._processes or not isValid(process):
             return
-        self._cleanup_process(action_id, process)
         if process.state() != QProcess.NotRunning:
             process.kill()
+            process.waitForFinished(1000)
+        self._cleanup_process(action_id, process)
         self.status_failed.emit(action_id, "timed out")
 
     def _cleanup_process(self, action_id: str, process: QProcess | None) -> None:
-        timer = process.property("timeout_timer") if process else None
+        timer = process.property("timeout_timer") if process is not None and isValid(process) else None
         if timer is not None:
             timer.stop()
             timer.deleteLater()
         self._processes.pop(action_id, None)
-        if process is not None:
+        if process is not None and isValid(process):
             process.deleteLater()
+
+    @staticmethod
+    def _redact(text: str) -> str:
+        import re
+
+        for pattern, replacement in _SECRET_PATTERNS:
+            text = re.sub(pattern, replacement, text)
+        return text

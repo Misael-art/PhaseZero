@@ -246,11 +246,11 @@ class SkeletonTile(QFrame):
         self.setFixedSize(width, height)
 
 
-_SHIMMER_ANIMATIONS: dict[int, QPropertyAnimation] = {}
-
-
 def start_shimmer(widget: QWidget) -> None:
     """Start a shimmer opacity loop on a skeleton widget."""
+    existing = getattr(widget, "_phasezero_shimmer", None)
+    if existing is not None:
+        return
     effect = QGraphicsOpacityEffect(widget)
     widget.setGraphicsEffect(effect)
     anim = QPropertyAnimation(effect, b"opacity", widget)
@@ -264,15 +264,16 @@ def start_shimmer(widget: QWidget) -> None:
     widget.style().unpolish(widget)
     widget.style().polish(widget)
     anim.start()
-    _SHIMMER_ANIMATIONS[id(widget)] = anim
+    widget._phasezero_shimmer = anim  # type: ignore[attr-defined]
 
 
 def stop_shimmer(widget: QWidget) -> None:
     """Stop shimmer on a widget and reset its appearance."""
-    anim = _SHIMMER_ANIMATIONS.pop(id(widget), None)
+    anim = getattr(widget, "_phasezero_shimmer", None)
     if anim is not None:
         anim.stop()
         anim.deleteLater()
+        widget._phasezero_shimmer = None  # type: ignore[attr-defined]
     widget.setProperty("shimmer", "")
     widget.style().unpolish(widget)
     widget.style().polish(widget)
@@ -300,6 +301,16 @@ class SkeletonCard(QFrame):
         outer.addWidget(SkeletonTile(220, 12))
         outer.addWidget(SkeletonTile(120, 32))
 
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        for tile in self.findChildren(SkeletonTile):
+            start_shimmer(tile)
+
+    def hideEvent(self, event) -> None:
+        for tile in self.findChildren(SkeletonTile):
+            stop_shimmer(tile)
+        super().hideEvent(event)
+
 
 class SkeletonPill(QFrame):
     """Mimics a StatusPill: dot + label + detail placeholders."""
@@ -313,6 +324,16 @@ class SkeletonPill(QFrame):
         layout.addWidget(SkeletonTile(140, 14))  # label
         layout.addStretch()
         layout.addWidget(SkeletonTile(80, 10))   # detail
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        for tile in self.findChildren(SkeletonTile):
+            start_shimmer(tile)
+
+    def hideEvent(self, event) -> None:
+        for tile in self.findChildren(SkeletonTile):
+            stop_shimmer(tile)
+        super().hideEvent(event)
 
 
 class Toast(QFrame):

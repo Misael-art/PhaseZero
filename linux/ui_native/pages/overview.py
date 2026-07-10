@@ -9,7 +9,7 @@ from PySide6.QtWidgets import (
 
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
-from ..widgets import StatusPill, SectionHeader, SkeletonPill, themed_icon
+from ..widgets import StatusPill, SectionHeader, SkeletonPill, SkeletonTile, stop_shimmer, themed_icon
 from .base import BasePage
 
 STATUS_ACTION_IDS = ("system.doctor",)
@@ -41,19 +41,25 @@ class OverviewPage(BasePage):
         self.status_loader.status_failed.connect(self._on_status_failed)
 
     def reload(self) -> None:
-        """Show skeleton pills, then fetch real status."""
+        """Fetch health asynchronously; placeholders appear only after 200 ms."""
         self._clear_pills()
+        self.begin_loading(self._show_status_skeletons)
+        action = self.find("system.doctor")
+        if action is not None:
+            self.status_loader.fetch_action(action)
+        else:
+            self._on_status_failed("system.doctor", "ação indisponível")
+
+    def _show_status_skeletons(self) -> None:
         for _ in range(4):
             self._pills_container.addWidget(SkeletonPill())
-        for aid in STATUS_ACTION_IDS:
-            action = self.find(aid)
-            if action is not None:
-                self.status_loader.fetch_action(action)
 
     def _clear_pills(self) -> None:
         while self._pills_container.count():
             item = self._pills_container.takeAt(0)
             if item.widget():
+                for tile in item.widget().findChildren(SkeletonTile):
+                    stop_shimmer(tile)
                 item.widget().deleteLater()
 
     def _populate_action_pills(self) -> None:
@@ -66,10 +72,38 @@ class OverviewPage(BasePage):
             self._pills_container.addWidget(self._make_pill_action(action))
 
     def _on_status_ready(self, action_id: str, stdout: str, parsed: object) -> None:
-        self._populate_action_pills()
+        self._loading_timer.stop()
+        self._loading_callback = None
+        self._clear_pills()
+        rows = parsed if isinstance(parsed, list) else []
+        counts = {"PASS": 0, "WARN": 0, "FAIL": 0, "ERROR": 0, "INFO": 0}
+        for row in rows:
+            text = str(row)
+            for key in counts:
+                if text.startswith(f"[{key}]"):
+                    counts[key] += 1
+                    break
+        total = sum(counts.values())
+        if total:
+            self._pills_container.addWidget(StatusPill("Verificações aprovadas", "success", str(counts["PASS"])))
+            self._pills_container.addWidget(StatusPill("Avisos", "warning", str(counts["WARN"] + counts["INFO"])))
+            self._pills_container.addWidget(StatusPill("Falhas", "error", str(counts["FAIL"] + counts["ERROR"])))
+        else:
+            self._pills_container.addWidget(StatusPill("Diagnóstico concluído", "success", "saída disponível"))
+        for aid in PILL_ACTION_IDS:
+            action = self.by_id.get(aid)
+            if action is not None:
+                self._pills_container.addWidget(self._make_pill_action(action))
 
     def _on_status_failed(self, action_id: str, error: str) -> None:
-        self._populate_action_pills()
+        self._loading_timer.stop()
+        self._loading_callback = None
+        self._clear_pills()
+        self._pills_container.addWidget(StatusPill("Diagnóstico indisponível", "error", error))
+        for aid in PILL_ACTION_IDS:
+            action = self.by_id.get(aid)
+            if action is not None:
+                self._pills_container.addWidget(self._make_pill_action(action))
 
     def _make_pill_action(self, action: ActionSpec) -> QFrame:
         card = QFrame()

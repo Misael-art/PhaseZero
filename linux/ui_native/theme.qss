@@ -67,7 +67,7 @@ QMainWindow {
     padding: {{space_md}}px {{space_sm}}px 4px {{space_sm}}px;
 }
 #sidebarButton {
-    color: #b7b7c8;
+    color: {{text_dim}};
     background: transparent;
     border: 0;
     border-radius: {{radius_md}}px;
@@ -120,7 +120,7 @@ QMainWindow {
     font-weight: 700;
 }
 #sectionCaption {
-    color: #8a8aa0;
+    color: {{text_dim}};
     font-size: {{text_sm}}px;
 }
 #searchBox {
@@ -152,7 +152,7 @@ QScrollArea, QScrollArea > QWidget > QWidget {
     border: 1px solid {{accent}};
 }
 #actionCard[variant="danger"]:hover, #actionCard[variant="danger"]:focus {
-    border: 1px solid #e5595a;
+    border: 1px solid {{danger_hover}};
 }
 #actionCard[hero="true"] {
     background: {{surface_hero}};
@@ -192,7 +192,7 @@ QScrollArea, QScrollArea > QWidget > QWidget {
     font-weight: 600;
 }
 #pathLabel {
-    color: #8a8aa0;
+    color: {{text_dim}};
 }
 
 /* ---- Badges (state colours) ------------------------------------------ */
@@ -206,22 +206,22 @@ QScrollArea, QScrollArea > QWidget > QWidget {
     border: 1px solid {{border_strong}};
 }
 #badge[state="success"] {
-    color: #c8e6a3;
+    color: {{success}};
     background: {{success_bg}};
     border: 1px solid {{success_border}};
 }
 #badge[state="warning"] {
-    color: #ffcf8f;
+    color: {{warning}};
     background: {{warning_bg}};
     border: 1px solid {{warning_border}};
 }
 #badge[state="error"] {
-    color: #ffb3b3;
+    color: {{error}};
     background: {{error_bg}};
     border: 1px solid {{error_border}};
 }
 #badge[state="info"] {
-    color: #c3b3ff;
+    color: {{info}};
     background: {{info_bg}};
     border: 1px solid {{accent_border}};
 }
@@ -238,7 +238,7 @@ QPushButton {
 }
 QPushButton:hover {
     background: {{border_strong}};
-    border-color: #56566f;
+    border-color: {{border_strong}};
 }
 QPushButton:pressed {
     background: {{surface_pressed}};
@@ -292,7 +292,7 @@ QPushButton:disabled {
     border-radius: {{radius_md}}px;
 }
 #warningText {
-    color: #ffcf8f;
+    color: {{warning}};
     font-weight: 600;
 }
 #statusText {
@@ -334,7 +334,7 @@ QProgressBar::chunk {
 #statusPill[state="warning"] { border-left: 3px solid {{warning}}; }
 #statusPill[state="info"] { border-left: 3px solid {{accent}}; }
 #pillLabel { color: {{text}}; font-weight: 600; }
-#pillDetail { color: #8a8aa0; font-size: {{text_sm}}px; }
+#pillDetail { color: {{text_dim}}; font-size: {{text_sm}}px; }
 #pillDot[state="success"] { color: {{success}}; }
 #pillDot[state="error"] { color: {{error}}; }
 #pillDot[state="warning"] { color: {{warning}}; }
@@ -421,7 +421,7 @@ QScrollBar::handle:vertical {
     border-radius: 5px;
 }
 QScrollBar::handle:vertical:hover {
-    background: #56566f;
+    background: {{border_strong}};
 }
 QToolTip {
     color: {{text}};

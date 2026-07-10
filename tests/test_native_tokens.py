@@ -48,6 +48,29 @@ def test_every_placeholder_resolves():
     assert not missing, f"Placeholders without token field: {missing}"
 
 
+def test_qss_has_no_literal_hex_colors():
+    qss_raw = (ROOT / "linux" / "ui_native" / "theme.qss").read_text(encoding="utf-8")
+    assert not re.findall(r"#[0-9a-fA-F]{3,8}\b", qss_raw)
+
+
+def _luminance(color: str) -> float:
+    values = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4 for value in values]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(foreground: str, background: str) -> float:
+    high, low = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def test_core_text_pairs_meet_wcag_aa():
+    for tokens in (DARK, LIGHT):
+        assert _contrast(tokens.text, tokens.bg) >= 4.5
+        assert _contrast(tokens.text_dim, tokens.bg) >= 4.5
+        assert _contrast(tokens.on_accent, tokens.accent) >= 4.5
+
+
 def test_app_apply_theme_uses_tokens():
     """apply_theme should set stylesheet from render_qss, not regex-rewrite."""
     import linux.ui_native.app as app_mod
