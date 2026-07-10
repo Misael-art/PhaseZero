@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPushButton, QScrollArea,
     QStyle, QVBoxLayout, QWidget,
@@ -10,35 +9,67 @@ from PySide6.QtWidgets import (
 
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
-from ..widgets import StatusPill, SectionHeader, themed_icon
+from ..widgets import StatusPill, SectionHeader, SkeletonPill, themed_icon
 from .base import BasePage
+
+STATUS_ACTION_IDS = ("system.doctor",)
+PILL_ACTION_IDS = ("system.doctor", "system.repair-plan", "system.support-bundle", "system.version")
 
 
 class OverviewPage(BasePage):
-    """Health checks, audit, and support — status pills + action buttons."""
+    """Health checks, audit, and support — status pills with async loading."""
 
     def build(self) -> None:
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        inner = QWidget()
-        layout = QVBoxLayout(inner)
-        layout.setContentsMargins(2, 2, 8, 8)
-        layout.setSpacing(14)
+        self._inner = QWidget()
+        self._layout_main = QVBoxLayout(self._inner)
+        self._layout_main.setContentsMargins(2, 2, 8, 8)
+        self._layout_main.setSpacing(14)
+        self._layout_main.addWidget(SectionHeader("Diagnóstico", "Auditoria completa do sistema"))
 
-        layout.addWidget(SectionHeader("Diagnóstico", "Auditoria completa do sistema"))
-        pills_layout = QVBoxLayout()
-        pills_layout.setSpacing(8)
-        for aid in ("system.doctor", "system.repair-plan", "system.support-bundle", "system.version"):
+        self._pills_container = QVBoxLayout()
+        self._pills_container.setSpacing(8)
+        self._layout_main.addLayout(self._pills_container)
+        self._layout_main.addStretch()
+
+        scroll.setWidget(self._inner)
+        self._layout.addWidget(scroll)
+
+        self.status_loader.status_ready.connect(self._on_status_ready)
+        self.status_loader.status_failed.connect(self._on_status_failed)
+
+    def reload(self) -> None:
+        """Show skeleton pills, then fetch real status."""
+        self._clear_pills()
+        for _ in range(4):
+            self._pills_container.addWidget(SkeletonPill())
+        for aid in STATUS_ACTION_IDS:
+            action = self.find(aid)
+            if action is not None:
+                self.status_loader.fetch_action(action)
+
+    def _clear_pills(self) -> None:
+        while self._pills_container.count():
+            item = self._pills_container.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+    def _populate_action_pills(self) -> None:
+        """Populate the standard action pills (non-status actions)."""
+        self._clear_pills()
+        for aid in PILL_ACTION_IDS:
             action = self.by_id.get(aid)
             if action is None:
                 continue
-            pills_layout.addWidget(self._make_pill_action(action))
-        layout.addLayout(pills_layout)
-        layout.addStretch()
+            self._pills_container.addWidget(self._make_pill_action(action))
 
-        scroll.setWidget(inner)
-        self._layout.addWidget(scroll)
+    def _on_status_ready(self, action_id: str, stdout: str, parsed: object) -> None:
+        self._populate_action_pills()
+
+    def _on_status_failed(self, action_id: str, error: str) -> None:
+        self._populate_action_pills()
 
     def _make_pill_action(self, action: ActionSpec) -> QFrame:
         card = QFrame()

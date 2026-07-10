@@ -92,3 +92,21 @@ def test_base_page_show_skeletons_populates(app):
     page.clear_skeletons()
     cards = page.findChildren(SkeletonCard)
     assert len(cards) == 0
+
+
+def test_overview_page_shows_skeletons_on_reload(app, qtbot=None):
+    """OverviewPage.reload() should show skeletons then load status."""
+    from pathlib import Path
+    from linux.ui_native.pages.overview import OverviewPage
+    from linux.ui_native.command_runner import CommandRunner
+    from linux.ui_native.catalog import build_catalog
+    from linux.ui_native.widgets import SkeletonPill, StatusPill
+
+    catalog = build_catalog(Path(ROOT))
+    by_id = {a.id: a for a in catalog}
+    page = OverviewPage(Path(ROOT), CommandRunner(Path(ROOT)), catalog, by_id)
+    page.build()
+    page.reload()
+    # After reload, skeletons should be visible (before status resolves)
+    skeletons = page.findChildren(SkeletonPill)
+    assert len(skeletons) > 0 or len(page.findChildren(StatusPill)) > 0
