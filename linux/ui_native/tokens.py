@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from pathlib import Path
 
 STYLE_DIR = Path(__file__).resolve().parent
@@ -251,7 +251,6 @@ LIGHT = ThemeTokens(
 def render_qss(tokens: ThemeTokens) -> str:
     """Read theme.qss and substitute every {{token}} placeholder."""
     text = QSS_PATH.read_text(encoding="utf-8")
-    _field_names = {f.name for f in fields(tokens)}
 
     def _sub(match: re.Match[str]) -> str:
         name = match.group(1)
