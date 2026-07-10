@@ -46,3 +46,13 @@ def test_every_placeholder_resolves():
     field_names = {f.name for f in __import__("dataclasses").fields(ThemeTokens)}
     missing = placeholders - field_names
     assert not missing, f"Placeholders without token field: {missing}"
+
+
+def test_app_apply_theme_uses_tokens(monkeypatch):
+    """apply_theme should set stylesheet from render_qss, not regex-rewrite."""
+    import linux.ui_native.app as app_mod
+    # stylesheet() must delegate to render_qss, not contain the old replacements dict
+    source = Path(app_mod.__file__).read_text(encoding="utf-8")
+    # The old regex-rewrite had a 'replacements = {' block — must be gone.
+    assert "replacements = {" not in source
+    assert "from .tokens import" in source or "from linux.ui_native.tokens import" in source

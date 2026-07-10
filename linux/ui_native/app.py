@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import os
-import re
 import sys
 from pathlib import Path
 
@@ -15,75 +13,29 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from linux.ui_native.boot_selector import BootSelectorWindow
     from linux.ui_native.main_window import MainWindow
+    from linux.ui_native.tokens import DARK, LIGHT, render_qss
 else:
     from .boot_selector import BootSelectorWindow
     from .main_window import MainWindow
+    from .tokens import DARK, LIGHT, render_qss
 
 
 ROOT = Path(__file__).resolve().parents[2]
-STYLE = Path(__file__).with_name("theme.qss")
-
-
-def stylesheet(theme: str) -> str:
-    text = STYLE.read_text()
-    text = text.replace("@THEME@", theme)
-    if theme == "light":
-        # Map the EmuDeck dark palette onto a light one. #7c4dff (accent) and pure
-        # #ffffff (text on accent) are intentionally kept so buttons stay legible.
-        replacements = {
-            # backgrounds / surfaces
-            "#1e1e2e": "#f1f1f6",
-            "#232336": "#ffffff",
-            "#191926": "#e8e8f0",
-            "#2a2a3c": "#ffffff",
-            "#252536": "#ffffff",
-            "#15151f": "#f6f6fa",
-            "#2d2747": "#ece7fb",
-            "#33334a": "#e0e0ea",
-            "#32324a": "#eeeef6",
-            "#262636": "#f4f4f8",
-            "#22222f": "#eeeef4",
-            # borders
-            "#34344a": "#d5d5e0",
-            "#2e2e44": "#d8d8e2",
-            "#2b2b40": "#d8d8e2",
-            "#3a3a4c": "#d0d0dc",
-            "#45455c": "#c6c6d4",
-            "#4a4a60": "#c6c6d4",
-            "#4a3d7a": "#c9bdf0",
-            # text
-            "#f4f4fa": "#1a1a24",
-            "#f5f5fa": "#1a1a24",
-            "#f2f2f7": "#1c1c26",
-            "#e8e8f0": "#20202c",
-            "#dcdce6": "#24242e",
-            "#cfcfe0": "#2a2a36",
-            "#b7b7c8": "#3a3a48",
-            "#a0a0b0": "#5a5a68",
-            "#8a8aa0": "#6a6a78",
-            "#6a6a82": "#8a8a98",
-        }
-        # Single-pass substitution: a replacement's output must never be re-mapped
-        # by a later rule (e.g. sidebar bg #191926 -> #e8e8f0 must not then be
-        # re-darkened by the #e8e8f0 text rule).
-        pattern = re.compile("|".join(re.escape(key) for key in replacements))
-        text = pattern.sub(lambda match: replacements[match.group(0)], text)
-    return text
 
 
 def apply_theme(app: QApplication, theme: str) -> None:
+    tokens = LIGHT if theme == "light" else DARK
     app.setStyle("Fusion")
-    app.setStyleSheet(stylesheet(theme))
+    app.setStyleSheet(render_qss(tokens))
     palette = QPalette()
-    if theme == "dark":
-        palette.setColor(QPalette.Window, QColor("#1e1e2e"))
-        palette.setColor(QPalette.WindowText, QColor("#f2f2f7"))
-        palette.setColor(QPalette.Base, QColor("#191926"))
-        palette.setColor(QPalette.Text, QColor("#f2f2f7"))
-        palette.setColor(QPalette.Button, QColor("#3a3a4c"))
-        palette.setColor(QPalette.ButtonText, QColor("#f2f2f7"))
-        palette.setColor(QPalette.Highlight, QColor("#7c4dff"))
-        palette.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    palette.setColor(QPalette.Window, QColor(tokens.bg))
+    palette.setColor(QPalette.WindowText, QColor(tokens.text))
+    palette.setColor(QPalette.Base, QColor(tokens.surface_inset))
+    palette.setColor(QPalette.Text, QColor(tokens.text))
+    palette.setColor(QPalette.Button, QColor(tokens.surface))
+    palette.setColor(QPalette.ButtonText, QColor(tokens.text))
+    palette.setColor(QPalette.Highlight, QColor(tokens.accent))
+    palette.setColor(QPalette.HighlightedText, QColor(tokens.on_accent))
     app.setPalette(palette)
 
 
