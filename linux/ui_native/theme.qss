@@ -1,140 +1,140 @@
-/* PhaseZero native UI — EmuDeck-inspired dark theme. @THEME@ */
+/* PhaseZero native UI — EmuDeck-inspired theme. Semantic tokens interpolated by render_qss(). */
 * {
-    font-family: "Inter", "Noto Sans", "Segoe UI", sans-serif;
-    font-size: 13px;
+    font-family: {{font_ui}};
+    font-size: {{text_base}}px;
 }
 QMainWindow {
     background: transparent;
 }
 #appShell {
-    background: #1e1e2e;
-    border: 1px solid #34344a;
-    border-radius: 16px;
+    background: {{bg}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_lg}}px;
 }
 #headerBar {
     min-height: 52px;
-    background: #232336;
-    border-bottom: 1px solid #2e2e44;
-    border-top-left-radius: 16px;
-    border-top-right-radius: 16px;
+    background: {{surface_header}};
+    border-bottom: 1px solid {{border_divider}};
+    border-top-left-radius: {{radius_lg}}px;
+    border-top-right-radius: {{radius_lg}}px;
 }
 #brandMark {
     min-width: 36px;
     min-height: 36px;
     max-width: 36px;
     max-height: 36px;
-    border-radius: 10px;
-    background: #7c4dff;
-    color: #ffffff;
+    border-radius: {{radius_md}}px;
+    background: {{accent}};
+    color: {{on_accent}};
     font-weight: 800;
     qproperty-alignment: AlignCenter;
 }
 #windowTitle {
-    color: #f4f4fa;
-    font-size: 15px;
+    color: {{text_strong}};
+    font-size: {{text_lg}}px;
     font-weight: 700;
 }
 #windowSubtitle {
-    color: #a0a0b0;
-    font-size: 10px;
+    color: {{text_dim}};
+    font-size: {{text_xs}}px;
 }
 #langChip {
-    font-size: 15px;
+    font-size: {{text_lg}}px;
     padding: 0 4px;
 }
 #windowButton, #closeButton, #iconButton {
     border: 0;
-    border-radius: 8px;
+    border-radius: {{radius_sm}}px;
     background: transparent;
 }
 #windowButton:hover, #iconButton:hover {
-    background: #34344a;
+    background: {{border_subtle}};
 }
 #closeButton:hover {
-    background: #e53935;
+    background: {{error}};
 }
 
 /* ---- Sidebar --------------------------------------------------------- */
 #sidebar {
-    background: #191926;
-    border-right: 1px solid #2b2b40;
-    border-bottom-left-radius: 16px;
+    background: {{surface_inset}};
+    border-right: 1px solid {{border_divider}};
+    border-bottom-left-radius: {{radius_lg}}px;
 }
 #sectionLabel {
-    color: #6a6a82;
-    font-size: 10px;
+    color: {{text_muted}};
+    font-size: {{text_xs}}px;
     font-weight: 800;
-    padding: 12px 10px 4px 10px;
+    padding: {{space_md}}px {{space_sm}}px 4px {{space_sm}}px;
 }
 #sidebarButton {
     color: #b7b7c8;
     background: transparent;
     border: 0;
-    border-radius: 10px;
+    border-radius: {{radius_md}}px;
     min-height: 38px;
-    padding: 3px 12px;
+    padding: 3px {{space_md}}px;
     text-align: left;
-    font-size: 13px;
+    font-size: {{text_base}}px;
 }
 #sidebarButton:hover {
-    color: #ffffff;
-    background: #24243a;
+    color: {{on_accent}};
+    background: {{surface_alt}};
 }
 #sidebarButton:checked {
-    color: #ffffff;
-    background: #2b2444;
-    border-left: 3px solid #7c4dff;
+    color: {{on_accent}};
+    background: {{surface_selected}};
+    border-left: 3px solid {{accent}};
     font-weight: 600;
 }
 #sidebarStatus {
-    color: #6a6a82;
-    font-size: 10px;
-    padding: 9px 10px;
+    color: {{text_muted}};
+    font-size: {{text_xs}}px;
+    padding: 9px {{space_sm}}px;
 }
 
 /* ---- Content header -------------------------------------------------- */
 #content {
-    background: #1e1e2e;
+    background: {{bg}};
 }
 #pageTitle {
-    color: #f4f4fa;
-    font-size: 26px;
+    color: {{text_strong}};
+    font-size: {{text_2xl}}px;
     font-weight: 800;
 }
 #pageSubtitle {
-    color: #a0a0b0;
-    font-size: 12px;
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
 }
 #welcomeTitle {
-    color: #f4f4fa;
+    color: {{text_strong}};
     font-size: 30px;
     font-weight: 800;
 }
 #welcomeSubtitle {
-    color: #a0a0b0;
-    font-size: 13px;
+    color: {{text_dim}};
+    font-size: {{text_base}}px;
 }
 #sectionHeading {
-    color: #f4f4fa;
-    font-size: 16px;
+    color: {{text_strong}};
+    font-size: {{text_lg}}px;
     font-weight: 700;
 }
 #sectionCaption {
     color: #8a8aa0;
-    font-size: 11px;
+    font-size: {{text_sm}}px;
 }
 #searchBox {
     min-height: 38px;
-    border: 1px solid #3a3a4c;
-    border-radius: 11px;
-    padding: 0 14px;
-    color: #f2f2f7;
-    background: #252536;
-    selection-background-color: #7c4dff;
+    border: 1px solid {{border}};
+    border-radius: {{radius_md}}px;
+    padding: 0 {{space_md}}px;
+    color: {{text}};
+    background: {{surface_input}};
+    selection-background-color: {{accent}};
 }
 #searchBox:focus {
-    border: 1px solid #7c4dff;
-    background: #2a2a3c;
+    border: 1px solid {{accent}};
+    background: {{surface_alt}};
 }
 QScrollArea, QScrollArea > QWidget > QWidget {
     background: transparent;
@@ -143,52 +143,52 @@ QScrollArea, QScrollArea > QWidget > QWidget {
 
 /* ---- Cards ----------------------------------------------------------- */
 #actionCard {
-    background: #2a2a3c;
-    border: 1px solid #3a3a4c;
-    border-radius: 15px;
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: {{radius_lg}}px;
 }
 #actionCard:hover, #actionCard:focus {
-    background: #32324a;
-    border: 1px solid #7c4dff;
+    background: {{surface_alt}};
+    border: 1px solid {{accent}};
 }
 #actionCard[variant="danger"]:hover, #actionCard[variant="danger"]:focus {
     border: 1px solid #e5595a;
 }
 #actionCard[hero="true"] {
-    background: #2d2747;
-    border: 1px solid #4a3d7a;
+    background: {{surface_hero}};
+    border: 1px solid {{accent_border}};
 }
 #actionCard[hero="true"]:hover, #actionCard[hero="true"]:focus {
-    background: #352c55;
-    border: 1px solid #7c4dff;
+    background: {{surface_hero_alt}};
+    border: 1px solid {{accent}};
 }
 #cardIcon {
-    background: #33334a;
-    border-radius: 11px;
+    background: {{border_subtle}};
+    border-radius: {{radius_md}}px;
     qproperty-alignment: AlignCenter;
 }
 #cardIconHero {
-    background: #7c4dff;
+    background: {{accent}};
     border-radius: 13px;
     qproperty-alignment: AlignCenter;
 }
 #cardTitle {
-    color: #f5f5fa;
-    font-size: 15px;
+    color: {{text_strong}};
+    font-size: {{text_lg}}px;
     font-weight: 700;
 }
 #cardTitleHero {
-    color: #f4f4fa;
+    color: {{text_strong}};
     font-size: 17px;
     font-weight: 800;
 }
 #cardDescription {
-    color: #a0a0b0;
-    font-size: 12px;
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
 }
 #cardLock {
-    color: #ff9800;
-    font-size: 10px;
+    color: {{warning}};
+    font-size: {{text_xs}}px;
     font-weight: 600;
 }
 #pathLabel {
@@ -197,194 +197,194 @@ QScrollArea, QScrollArea > QWidget > QWidget {
 
 /* ---- Badges (state colours) ------------------------------------------ */
 #badge {
-    border-radius: 8px;
+    border-radius: {{radius_sm}}px;
     padding: 3px 9px;
-    font-size: 10px;
+    font-size: {{text_xs}}px;
     font-weight: 800;
-    color: #cfcfe0;
-    background: #34344a;
-    border: 1px solid #45455c;
+    color: {{text_log}};
+    background: {{border_subtle}};
+    border: 1px solid {{border_strong}};
 }
 #badge[state="success"] {
     color: #c8e6a3;
-    background: #2c3a1f;
-    border: 1px solid #4d6b2c;
+    background: {{success_bg}};
+    border: 1px solid {{success_border}};
 }
 #badge[state="warning"] {
     color: #ffcf8f;
-    background: #3d2f16;
-    border: 1px solid #7a5a20;
+    background: {{warning_bg}};
+    border: 1px solid {{warning_border}};
 }
 #badge[state="error"] {
     color: #ffb3b3;
-    background: #3d1f1f;
-    border: 1px solid #7a2e2e;
+    background: {{error_bg}};
+    border: 1px solid {{error_border}};
 }
 #badge[state="info"] {
     color: #c3b3ff;
-    background: #2c2547;
-    border: 1px solid #4a3d7a;
+    background: {{info_bg}};
+    border: 1px solid {{accent_border}};
 }
 
 /* ---- Buttons --------------------------------------------------------- */
 QPushButton {
-    color: #e8e8f0;
-    background: #3a3a4c;
-    border: 1px solid #45455c;
-    border-radius: 10px;
+    color: {{text}};
+    background: {{border}};
+    border: 1px solid {{border_strong}};
+    border-radius: {{radius_md}}px;
     min-height: 34px;
-    padding: 0 14px;
+    padding: 0 {{space_md}}px;
     font-weight: 600;
 }
 QPushButton:hover {
-    background: #45455c;
+    background: {{border_strong}};
     border-color: #56566f;
 }
 QPushButton:pressed {
-    background: #2f2f40;
+    background: {{surface_pressed}};
 }
 QPushButton:disabled {
-    color: #6a6a82;
-    background: #262636;
-    border-color: #33334a;
+    color: {{text_muted}};
+    background: {{surface_disabled}};
+    border-color: {{border_subtle}};
 }
 #primaryButton {
-    color: #ffffff;
-    background: #7c4dff;
-    border-color: #8f66ff;
+    color: {{on_accent}};
+    background: {{accent}};
+    border-color: {{accent_hover}};
     font-weight: 700;
 }
 #primaryButton:hover {
-    background: #8f66ff;
+    background: {{accent_hover}};
 }
 #primaryButton:pressed {
-    background: #6a3ce6;
+    background: {{accent_pressed}};
 }
 #secondaryButton {
-    color: #e8e8f0;
-    background: #3a3a4c;
-    border-color: #4a4a60;
+    color: {{text}};
+    background: {{border}};
+    border-color: {{border_strong}};
 }
 #dangerButton {
-    color: #ffffff;
-    background: #e53935;
-    border-color: #ef5350;
+    color: {{on_accent}};
+    background: {{error}};
+    border-color: {{danger_hover}};
     font-weight: 700;
 }
 #dangerButton:hover {
-    background: #ef5350;
+    background: {{danger_hover}};
 }
 #dangerButton:disabled {
-    color: #6a6a82;
-    background: #2c2230;
-    border-color: #4a2f3a;
+    color: {{text_muted}};
+    background: {{danger_disabled_bg}};
+    border-color: {{danger_disabled_border}};
 }
 
 /* ---- Operation panel & status --------------------------------------- */
 #operationPanel {
-    background: #232336;
-    border: 1px solid #33334a;
-    border-radius: 12px;
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
 }
 #warningBanner {
-    background: #3d2f16;
-    border: 1px solid #7a5a20;
-    border-radius: 10px;
+    background: {{warning_bg}};
+    border: 1px solid {{warning_border}};
+    border-radius: {{radius_md}}px;
 }
 #warningText {
     color: #ffcf8f;
     font-weight: 600;
 }
 #statusText {
-    color: #e8e8f0;
+    color: {{text}};
     font-weight: 600;
 }
-#statusIdle { color: #6a6a82; }
-#statusRunning { color: #7c4dff; }
-#statusSuccess { color: #7cb342; }
-#statusWarning { color: #ff9800; }
-#statusError { color: #e53935; }
+#statusIdle { color: {{text_muted}}; }
+#statusRunning { color: {{accent}}; }
+#statusSuccess { color: {{success}}; }
+#statusWarning { color: {{warning}}; }
+#statusError { color: {{error}}; }
 QProgressBar {
     border: 0;
-    background: #33334a;
+    background: {{border_subtle}};
     border-radius: 3px;
 }
 QProgressBar::chunk {
-    background: #7c4dff;
+    background: {{accent}};
     border-radius: 3px;
 }
 #logView {
-    color: #cfcfe0;
-    background: #15151f;
-    border: 1px solid #2e2e44;
-    border-radius: 10px;
-    font-family: "JetBrains Mono", "Cascadia Code", monospace;
-    font-size: 11px;
-    padding: 8px;
+    color: {{text_log}};
+    background: {{log_bg}};
+    border: 1px solid {{border_divider}};
+    border-radius: {{radius_md}}px;
+    font-family: {{font_mono}};
+    font-size: {{text_sm}}px;
+    padding: {{space_sm}}px;
 }
 
 /* ---- Status pills (checklists) --------------------------------------- */
 #statusPill {
-    background: #262636;
-    border: 1px solid #33334a;
-    border-radius: 10px;
+    background: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
 }
-#statusPill[state="success"] { border-left: 3px solid #7cb342; }
-#statusPill[state="error"] { border-left: 3px solid #e53935; }
-#statusPill[state="warning"] { border-left: 3px solid #ff9800; }
-#statusPill[state="info"] { border-left: 3px solid #7c4dff; }
-#pillLabel { color: #e8e8f0; font-weight: 600; }
-#pillDetail { color: #8a8aa0; font-size: 11px; }
-#pillDot[state="success"] { color: #7cb342; }
-#pillDot[state="error"] { color: #e53935; }
-#pillDot[state="warning"] { color: #ff9800; }
-#pillDot[state="info"] { color: #7c4dff; }
+#statusPill[state="success"] { border-left: 3px solid {{success}}; }
+#statusPill[state="error"] { border-left: 3px solid {{error}}; }
+#statusPill[state="warning"] { border-left: 3px solid {{warning}}; }
+#statusPill[state="info"] { border-left: 3px solid {{accent}}; }
+#pillLabel { color: {{text}}; font-weight: 600; }
+#pillDetail { color: #8a8aa0; font-size: {{text_sm}}px; }
+#pillDot[state="success"] { color: {{success}}; }
+#pillDot[state="error"] { color: {{error}}; }
+#pillDot[state="warning"] { color: {{warning}}; }
+#pillDot[state="info"] { color: {{accent}}; }
 
 /* ---- Toast ----------------------------------------------------------- */
 #toast {
-    background: #2a2a3c;
-    border: 1px solid #45455c;
-    border-radius: 12px;
+    background: {{surface}};
+    border: 1px solid {{border_strong}};
+    border-radius: {{radius_md}}px;
     min-width: 260px;
     max-width: 420px;
 }
-#toast[state="success"] { border-left: 4px solid #7cb342; }
-#toast[state="error"] { border-left: 4px solid #e53935; }
-#toast[state="warning"] { border-left: 4px solid #ff9800; }
-#toastText { color: #f2f2f7; font-weight: 600; }
-#toastIcon { font-size: 15px; font-weight: 800; }
-#toastIcon[state="success"] { color: #7cb342; }
-#toastIcon[state="error"] { color: #e53935; }
-#toastIcon[state="warning"] { color: #ff9800; }
+#toast[state="success"] { border-left: 4px solid {{success}}; }
+#toast[state="error"] { border-left: 4px solid {{error}}; }
+#toast[state="warning"] { border-left: 4px solid {{warning}}; }
+#toastText { color: {{text}}; font-weight: 600; }
+#toastIcon { font-size: {{text_lg}}px; font-weight: 800; }
+#toastIcon[state="success"] { color: {{success}}; }
+#toastIcon[state="error"] { color: {{error}}; }
+#toastIcon[state="warning"] { color: {{warning}}; }
 
 /* ---- Dialogs & misc -------------------------------------------------- */
 #dialogTitle, #successTitle, #errorTitle {
     font-size: 21px;
     font-weight: 700;
 }
-#dialogTitle, #successTitle { color: #7cb342; }
-#errorTitle { color: #e53935; }
+#dialogTitle, #successTitle { color: {{success}}; }
+#errorTitle { color: {{error}}; }
 QDialog {
-    color: #f2f2f7;
-    background: #1e1e2e;
+    color: {{text}};
+    background: {{bg}};
 }
 QTreeWidget {
-    color: #dcdce6;
-    background: #191926;
-    alternate-background-color: #22222f;
-    border: 1px solid #33334a;
-    border-radius: 10px;
+    color: {{text_log}};
+    background: {{surface_inset}};
+    alternate-background-color: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
 }
 QHeaderView::section {
-    color: #a0a0b0;
-    background: #232336;
+    color: {{text_dim}};
+    background: {{surface_header}};
     border: 0;
-    border-bottom: 1px solid #33334a;
+    border-bottom: 1px solid {{border_subtle}};
     padding: 7px;
 }
 #emptyState {
-    color: #6a6a82;
-    font-size: 16px;
+    color: {{text_muted}};
+    font-size: {{text_lg}}px;
     qproperty-alignment: AlignCenter;
     min-height: 180px;
 }
@@ -394,16 +394,16 @@ QScrollBar:vertical {
 }
 QScrollBar::handle:vertical {
     min-height: 30px;
-    background: #3a3a4c;
+    background: {{border}};
     border-radius: 5px;
 }
 QScrollBar::handle:vertical:hover {
     background: #56566f;
 }
 QToolTip {
-    color: #f2f2f7;
-    background: #2a2a3c;
-    border: 1px solid #45455c;
+    color: {{text}};
+    background: {{surface}};
+    border: 1px solid {{border_strong}};
     padding: 6px;
     border-radius: 6px;
 }
