@@ -52,7 +52,7 @@ de keys/firmware, pastas duplicadas, mídia órfã e robustez de sessão Game Mo
 - **Ação `emulation media clean`** exposta no `pz`, `catalog.py` (card "Limpar
   mídia órfã") e `actions.json` regenerado. Dry-run por padrão; `--apply` move
   para backup.
-- **Central de Controle nativa completa**: catálogo canônico com 247 ações,
+- **Central de Controle nativa completa**: catálogo canônico com 250 ações,
   parâmetros tipados, busca global e seção contextual Avançado cobre comandos
   Linux públicos e todos os perfis sem exigir descoberta pelo terminal.
 - **UX operacional**: skeleton sem flash para respostas rápidas, saúde assíncrona,
