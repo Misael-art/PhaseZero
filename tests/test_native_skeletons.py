@@ -72,3 +72,23 @@ def test_status_loader_resolves_pz(app):
     pz = loader._pz_path()
     assert pz.exists()
     assert pz.name == "pz"
+
+
+def test_base_page_has_skeleton_hooks(app):
+    from linux.ui_native.pages.base import BasePage
+    assert hasattr(BasePage, "show_skeletons")
+    assert hasattr(BasePage, "clear_skeletons")
+
+
+def test_base_page_show_skeletons_populates(app):
+    from pathlib import Path
+    from linux.ui_native.pages.base import BasePage
+    from linux.ui_native.command_runner import CommandRunner
+    from linux.ui_native.widgets import SkeletonCard
+    page = BasePage(Path(ROOT), CommandRunner(Path(ROOT)), [], {})
+    page.show_skeletons(count=3)
+    cards = page.findChildren(SkeletonCard)
+    assert len(cards) == 3
+    page.clear_skeletons()
+    cards = page.findChildren(SkeletonCard)
+    assert len(cards) == 0
