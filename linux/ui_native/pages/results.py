@@ -6,16 +6,16 @@ import re
 import zipfile
 from pathlib import Path
 
-from PySide6.QtCore import QUrl, Qt
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QFileDialog, QFrame, QHBoxLayout, QHeaderView, QPlainTextEdit,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
-from ..command_runner import CommandRunner, state_dir
+from ..command_runner import CommandRunner
 from ..models import ActionSpec
+from ..platform import open_path, state_dir
 from .base import BasePage
 
 
@@ -175,7 +175,7 @@ class ResultsPage(BasePage):
     def _open_folder(self) -> None:
         folder = state_dir().parent
         folder.mkdir(parents=True, exist_ok=True)
-        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder))):
+        if not open_path(folder):
             QMessageBox.warning(self, "Abrir pasta", f"Não foi possível abrir {folder}")
 
     def _export(self) -> None:

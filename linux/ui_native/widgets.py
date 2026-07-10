@@ -12,9 +12,8 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
     Signal,
-    QUrl,
 )
-from PySide6.QtGui import QColor, QDesktopServices, QIcon, QMouseEvent
+from PySide6.QtGui import QColor, QIcon, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -41,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from .models import ActionSpec, OperationResult
+from .platform import open_path
 
 
 def themed_icon(widget: QWidget, name: str, fallback: QStyle.StandardPixmap) -> QIcon:
@@ -724,9 +724,7 @@ class ResultDialog(StatefulDialog):
         copy.clicked.connect(lambda: QApplication.clipboard().setText(formatted))
         if result.result_path is not None:
             open_folder = self.add_action("Abrir pasta", QDialogButtonBox.ActionRole)
-            open_folder.clicked.connect(
-                lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.result_path.parent)))
-            )
+            open_folder.clicked.connect(lambda: open_path(result.result_path.parent))
         history = self.add_action("Ver histórico", QDialogButtonBox.ActionRole)
         history.clicked.connect(self.history_requested.emit)
         close = self.add_action("Fechar", QDialogButtonBox.AcceptRole, variant="primaryButton")

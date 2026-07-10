@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from .models import ActionParameter, ActionSpec
+from .platform import current_platform
 
 CATEGORIES = (
     ("Visão geral", "view-dashboard", "Saúde, auditoria e suporte"),
@@ -127,7 +128,7 @@ def _p(
     return ActionParameter(name, label, kind, required, choices, placeholder)
 
 
-def build_catalog(root: Path) -> list[ActionSpec]:
+def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSpec]:
     actions: list[ActionSpec] = [
         _a("system.doctor", "Visão geral", "Diagnóstico completo", "Audita host, boot, jogos, IA e integrações.", ("doctor",), "dialog-information", badge="Seguro"),
         _a("system.repair-plan", "Visão geral", "Plano de reparo", "Gera recomendações sem alterar sistema.", ("repair-plan",), "document-properties", badge="Seguro"),
@@ -508,7 +509,8 @@ def build_catalog(root: Path) -> list[ActionSpec]:
     )
 
     validate_catalog(actions)
-    return actions
+    selected_platform = current_platform(platform_name)
+    return [action for action in actions if selected_platform in action.platforms]
 
 
 def validate_catalog(actions: list[ActionSpec]) -> None:
@@ -541,7 +543,7 @@ def validate_catalog(actions: list[ActionSpec]) -> None:
             raise ValueError(f"action {item.id} lacks parameters: {sorted(missing)}")
 
 
-def catalog_manifest(root: Path) -> dict[str, object]:
+def catalog_manifest(root: Path, platform_name: str | None = None) -> dict[str, object]:
     return {
         "schemaVersion": 2,
         "categories": [row[0] for row in CATEGORIES],
@@ -573,7 +575,7 @@ def catalog_manifest(root: Path) -> dict[str, object]:
                     for parameter in item.parameters
                 ],
             }
-            for item in build_catalog(root)
+            for item in build_catalog(root, platform_name)
         ],
     }
 

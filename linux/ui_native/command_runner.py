@@ -4,14 +4,20 @@ import json
 import os
 import re
 import shlex
-import shutil
-import signal
 from datetime import datetime, timezone
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from .models import ActionSpec, OperationResult
+from .platform import (
+    admin_bridge,
+    configure_process_group,
+    secure_directory,
+    secure_file,
+    state_dir,
+    terminate_process_group,
+)
 from .result_parser import parse_json_output
 
 CAPTURE_LIMIT = 8 * 1024 * 1024
@@ -19,11 +25,6 @@ CAPTURE_LIMIT = 8 * 1024 * 1024
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def state_dir() -> Path:
-    base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")).expanduser()
-    return base / "phasezero" / "control-center"
 
 
 def build_program(
@@ -39,7 +40,7 @@ def build_program(
     if any(token.startswith("{") and token.endswith("}") for token in args):
         raise ValueError(f"input required for {action.id}")
     if action.elevated and not preview:
-        bridge = shutil.which("phasezero-admin") or shutil.which("bigsudo") or shutil.which("pkexec")
+        bridge = admin_bridge()
         if not bridge:
             raise RuntimeError("elevação indisponível; execute `linux/pz ai setup admin`")
         return bridge, [pz, *args]
@@ -103,10 +104,7 @@ class CommandRunner(QObject):
         admin_bin = str(self.root / "linux" / "ui_native" / "admin-bin")
         env.insert("PATH", admin_bin + os.pathsep + env.value("PATH"))
         process.setProcessEnvironment(env)
-        if hasattr(process, "setUnixProcessParameters"):
-            parameters = QProcess.UnixProcessParameters()
-            parameters.flags = QProcess.UnixProcessFlag.CreateNewSession
-            process.setUnixProcessParameters(parameters)
+        configure_process_group(process)
         process.setProgram(program)
         process.setArguments(args)
         process.setProcessChannelMode(QProcess.SeparateChannels)
@@ -124,14 +122,7 @@ class CommandRunner(QObject):
         if not self.running or self.process is None:
             return
         process = self.process
-        pid = process.processId()
-        if pid:
-            try:
-                os.killpg(pid, signal.SIGTERM)
-            except OSError:
-                process.terminate()
-        else:
-            process.terminate()
+        terminate_process_group(process)
         QTimer.singleShot(
             2000,
             lambda: process.kill() if process.state() != QProcess.NotRunning else None,
@@ -145,14 +136,7 @@ class CommandRunner(QObject):
         self.cancel()
         if process.waitForFinished(timeout_ms):
             return
-        pid = process.processId()
-        if pid:
-            try:
-                os.killpg(pid, signal.SIGKILL)
-            except OSError:
-                process.kill()
-        else:
-            process.kill()
+        terminate_process_group(process, force=True)
         process.waitForFinished(1000)
 
     def _capture(self, text: str, *, stderr: bool) -> None:
@@ -230,27 +214,13 @@ class CommandRunner(QObject):
             parsed=parsed,
         )
         try:
-            private_state = state_dir()
-            private_state.mkdir(parents=True, exist_ok=True, mode=0o700)
-            destination = private_state / "results"
-            destination.mkdir(exist_ok=True, mode=0o700)
-            try:
-                private_state.chmod(0o700)
-                destination.chmod(0o700)
-            except OSError:
-                pass
+            private_state = secure_directory(state_dir())
+            destination = secure_directory(private_state / "results")
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             safe_id = re.sub(r"[^a-zA-Z0-9_.-]", "-", action.id)
             result_path = destination / f"{stamp}-{safe_id}.json"
-            temporary = result_path.with_suffix(".tmp")
             payload = json.dumps(result.to_dict(), ensure_ascii=False, indent=2) + "\n"
-            with temporary.open("x", encoding="utf-8") as handle:
-                try:
-                    os.chmod(handle.fileno(), 0o600)
-                except OSError:
-                    pass
-                handle.write(payload)
-            temporary.replace(result_path)
+            secure_file(result_path, payload)
             result.result_path = result_path
         except OSError as exc:
             result.stderr += f"\nfailed to persist result: {exc}\n"

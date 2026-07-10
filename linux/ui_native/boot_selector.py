@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import shlex
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -23,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from .widgets import themed_icon
+from .platform import admin_bridge
 
 
 @dataclass(frozen=True)
@@ -40,10 +40,6 @@ BOOT_CHOICES = (
     BootChoice("waydroid", "Waydroid", "Próximo boot abre Android kiosk.", "phone"),
     BootChoice("emergency", "Emergência", "Próximo boot entra em rescue.target.", "dialog-warning"),
 )
-
-
-def admin_bridge() -> str:
-    return shutil.which("phasezero-admin") or shutil.which("bigsudo") or shutil.which("pkexec") or ""
 
 
 def build_boot_selector_program(root: Path, choice: str, *, reboot: bool) -> tuple[str, list[str]]:

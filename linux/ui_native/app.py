@@ -14,10 +14,12 @@ if __package__ in {None, ""}:
     from linux.ui_native.boot_selector import BootSelectorWindow
     from linux.ui_native.main_window import MainWindow
     from linux.ui_native.tokens import DARK, LIGHT, render_qss
+    from linux.ui_native.platform import current_platform
 else:
     from .boot_selector import BootSelectorWindow
     from .main_window import MainWindow
     from .tokens import DARK, LIGHT, render_qss
+    from .platform import current_platform
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +61,10 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(True)
     apply_theme(app, "light" if args.light else "dark")
     if args.boot_selector:
+        if current_platform() != "linux":
+            parser_message = "Seletor de boot disponível somente no Linux."
+            print(parser_message, file=sys.stderr)
+            return 2
         window = BootSelectorWindow(ROOT, smoke_test=args.smoke_test)
     else:
         window = MainWindow(ROOT, initial_category=args.category)

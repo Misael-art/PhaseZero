@@ -95,7 +95,7 @@ def test_build_program_never_uses_shell(catalog):
 
 def test_elevated_program_prefers_phasezero_admin(catalog):
     action = next(item for item in catalog if item.id == "boot.safe-menu")
-    with patch("linux.ui_native.command_runner.shutil.which") as which:
+    with patch("linux.ui_native.platform.shutil.which") as which:
         which.side_effect = lambda name: "/usr/bin/phasezero-admin" if name == "phasezero-admin" else None
         program, args = build_program(ROOT, action, preview=False)
     assert program == "/usr/bin/phasezero-admin"
@@ -104,7 +104,7 @@ def test_elevated_program_prefers_phasezero_admin(catalog):
 
 
 def test_boot_selector_uses_admin_bridge_without_shell():
-    with patch("linux.ui_native.boot_selector.shutil.which") as which:
+    with patch("linux.ui_native.platform.shutil.which") as which:
         which.side_effect = lambda name: "/usr/bin/bigsudo" if name == "bigsudo" else None
         program, args = build_boot_selector_program(ROOT, "windows", reboot=True)
     assert program == "/usr/bin/bigsudo"
