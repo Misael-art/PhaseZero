@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import re
+import shlex
+import time
+
 from PySide6.QtCore import (
     QEasingCurve,
     QEvent,
@@ -8,9 +12,11 @@ from PySide6.QtCore import (
     Qt,
     QTimer,
     Signal,
+    QUrl,
 )
-from PySide6.QtGui import QColor, QIcon, QMouseEvent
+from PySide6.QtGui import QColor, QDesktopServices, QIcon, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QDialogButtonBox,
     QCheckBox,
@@ -24,6 +30,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -511,54 +518,191 @@ class Toast(QFrame):
         self._anim.start()
 
 
-class PreviewDialog(QDialog):
-    def __init__(self, result: OperationResult, parent: QWidget | None = None) -> None:
+STATE_ICONS = {"success": "✓", "warning": "⚠", "error": "✕", "info": "ℹ", "running": "◐"}
+
+
+def sanitized_command(command: list[str]) -> str:
+    output: list[str] = []
+    redact_next = False
+    for token in command:
+        if redact_next:
+            output.append("[REDACTED]")
+            redact_next = False
+            continue
+        output.append(token)
+        redact_next = bool(re.search(r"(?i)(token|secret|password|api[_-]?key)$", token.lstrip("-")))
+    return shlex.join(output)
+
+
+class StatefulDialog(QDialog):
+    """Accessible dialog foundation with semantic state header and action footer."""
+
+    def __init__(self, title: str, state: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Confirmar operação")
-        self.setMinimumSize(720, 520)
-        layout = QVBoxLayout(self)
-        title = QLabel("Preview concluído")
-        title.setObjectName("dialogTitle")
-        summary = QLabel(
-            "Nenhuma mutação executada. Revise a saída abaixo. Confirmar executará o comando real."
-        )
+        self.setObjectName("statefulDialog")
+        self.setProperty("state", state)
+        self.setWindowTitle(title)
+        self.setMinimumSize(760, 540)
+        outer = QVBoxLayout(self)
+        header = QHBoxLayout()
+        icon = QLabel(STATE_ICONS.get(state, "ℹ"))
+        icon.setObjectName("dialogStateIcon")
+        icon.setProperty("state", state)
+        icon.setAccessibleName(f"Estado: {state}")
+        heading = QLabel(title)
+        heading.setObjectName("dialogTitle")
+        header.addWidget(icon)
+        header.addWidget(heading, 1)
+        outer.addLayout(header)
+        self.body = QVBoxLayout()
+        outer.addLayout(self.body, 1)
+        self.footer = QDialogButtonBox()
+        outer.addWidget(self.footer)
+
+    def add_action(
+        self,
+        label: str,
+        role: QDialogButtonBox.ButtonRole,
+        *,
+        variant: str = "",
+        enabled: bool = True,
+    ) -> QPushButton:
+        button = self.footer.addButton(label, role)
+        if variant:
+            button.setObjectName(variant)
+        button.setEnabled(enabled)
+        return button
+
+
+class PreviewDialog(StatefulDialog):
+    def __init__(
+        self,
+        result: OperationResult,
+        action: ActionSpec | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__("Confirmar operação", "success" if result.ok else "error", parent)
+        self.action = action
+        summary = QLabel("Preview concluído. Nenhuma mutação foi executada.")
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")
-        output = QPlainTextEdit()
-        output.setReadOnly(True)
-        output.setObjectName("logView")
-        output.setPlainText(result.stdout + ("\n[stderr]\n" + result.stderr if result.stderr else ""))
-        buttons = QDialogButtonBox()
-        cancel = buttons.addButton("Voltar", QDialogButtonBox.RejectRole)
-        confirm = buttons.addButton("Confirmar e aplicar", QDialogButtonBox.AcceptRole)
-        confirm.setObjectName("dangerButton")
-        confirm.setEnabled(result.ok)
+        self.body.addWidget(summary)
+        chips = QHBoxLayout()
+        chips.addWidget(StatusPill("Preview", "success" if result.ok else "error"))
+        chips.addWidget(StatusPill("Admin", "warning" if action and action.elevated else "info", "necessário" if action and action.elevated else "não"))
+        chips.addStretch()
+        self.body.addLayout(chips)
+        command = QLineEdit(sanitized_command(result.command))
+        command.setObjectName("commandBar")
+        command.setReadOnly(True)
+        command.setAccessibleName("Comando sanitizado")
+        self.body.addWidget(command)
+        self.output = QPlainTextEdit()
+        self.output.setReadOnly(True)
+        self.output.setObjectName("logView")
+        self.output.setPlainText(result.stdout + ("\n[stderr]\n" + result.stderr if result.stderr else ""))
+        self.body.addWidget(self.output, 1)
+        copy = self.add_action("Copiar saída", QDialogButtonBox.ActionRole)
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(self.output.toPlainText()))
+        cancel = self.add_action("Voltar", QDialogButtonBox.RejectRole)
+        self.confirm = self.add_action(
+            "Confirmar e aplicar",
+            QDialogButtonBox.AcceptRole,
+            variant="dangerButton" if action and action.risk == "high" else "primaryButton",
+            enabled=result.ok and not (action and action.risk == "high"),
+        )
+        if action and action.risk == "high":
+            warning = QLabel("Alto risco: digite CONFIRMAR para liberar a execução.")
+            warning.setObjectName("errorTitle")
+            self.confirmation = QLineEdit()
+            self.confirmation.setPlaceholderText("CONFIRMAR")
+            self.confirmation.setAccessibleName("Confirmação de alto risco")
+            self.confirmation.textChanged.connect(
+                lambda text: self.confirm.setEnabled(result.ok and text.strip() == "CONFIRMAR")
+            )
+            self.body.insertWidget(1, warning)
+            self.body.insertWidget(2, self.confirmation)
         cancel.clicked.connect(self.reject)
-        confirm.clicked.connect(self.accept)
-        layout.addWidget(title)
-        layout.addWidget(summary)
-        layout.addWidget(output, 1)
-        layout.addWidget(buttons)
+        self.confirm.clicked.connect(self.accept)
 
 
-class ResultDialog(QDialog):
+class ProgressDialog(StatefulDialog):
+    cancel_requested = Signal()
+
+    def __init__(self, title: str, command: str, parent: QWidget | None = None) -> None:
+        super().__init__(title, "running", parent)
+        self._started = time.monotonic()
+        self._running = True
+        self.command = QLineEdit(command)
+        self.command.setObjectName("commandBar")
+        self.command.setReadOnly(True)
+        self.body.addWidget(self.command)
+        self.elapsed = QLabel("Tempo: 00:00")
+        self.elapsed.setObjectName("pathLabel")
+        self.body.addWidget(self.elapsed)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 0)
+        self.body.addWidget(self.progress)
+        self.log = QPlainTextEdit()
+        self.log.setObjectName("logView")
+        self.log.setReadOnly(True)
+        self.log.document().setMaximumBlockCount(300)
+        self.body.addWidget(self.log, 1)
+        cancel = self.add_action("Cancelar operação", QDialogButtonBox.RejectRole, variant="dangerButton")
+        cancel.clicked.connect(self.cancel_requested.emit)
+        self._timer = QTimer(self)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start(1000)
+
+    def _tick(self) -> None:
+        elapsed = int(time.monotonic() - self._started)
+        self.elapsed.setText(f"Tempo: {elapsed // 60:02d}:{elapsed % 60:02d}")
+
+    def append_output(self, text: str, error: bool = False) -> None:
+        prefix = "[stderr] " if error else ""
+        self.log.appendPlainText(prefix + text.rstrip())
+        scrollbar = self.log.verticalScrollBar()
+        scrollbar.setValue(scrollbar.maximum())
+
+    def set_progress(self, value: int) -> None:
+        self.progress.setRange(0, 100)
+        self.progress.setValue(value)
+
+    def finish(self) -> None:
+        self._running = False
+        self._timer.stop()
+        self.accept()
+
+    def reject(self) -> None:
+        if self._running:
+            self.cancel_requested.emit()
+            return
+        super().reject()
+
+
+class ResultDialog(StatefulDialog):
+    history_requested = Signal()
+
     def __init__(self, result: OperationResult, formatted: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Resultado")
-        self.setMinimumSize(720, 520)
-        layout = QVBoxLayout(self)
-        title = QLabel("Operação concluída" if result.ok else "Operação falhou")
-        title.setObjectName("successTitle" if result.ok else "errorTitle")
+        super().__init__("Operação concluída" if result.ok else "Operação falhou", "success" if result.ok else "error", parent)
+        self.formatted = formatted
         path = QLabel(f"result.json: {result.result_path}")
         path.setObjectName("pathLabel")
         path.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.body.addWidget(path)
         output = QPlainTextEdit()
         output.setReadOnly(True)
         output.setObjectName("logView")
         output.setPlainText(formatted)
-        close = QPushButton("Fechar")
+        self.body.addWidget(output, 1)
+        copy = self.add_action("Copiar resultado", QDialogButtonBox.ActionRole)
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(formatted))
+        if result.result_path is not None:
+            open_folder = self.add_action("Abrir pasta", QDialogButtonBox.ActionRole)
+            open_folder.clicked.connect(
+                lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(result.result_path.parent)))
+            )
+        history = self.add_action("Ver histórico", QDialogButtonBox.ActionRole)
+        history.clicked.connect(self.history_requested.emit)
+        close = self.add_action("Fechar", QDialogButtonBox.AcceptRole, variant="primaryButton")
         close.clicked.connect(self.accept)
-        layout.addWidget(title)
-        layout.addWidget(path)
-        layout.addWidget(output, 1)
-        layout.addWidget(close)

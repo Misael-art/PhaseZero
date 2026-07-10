@@ -34,6 +34,7 @@ from .widgets import (
     HeaderBar,
     ParameterDialog,
     PreviewDialog,
+    ProgressDialog,
     ResultDialog,
     Toast,
     themed_icon,
@@ -62,6 +63,7 @@ class MainWindow(QMainWindow):
         self._search_cards: list[ActionCard] = []
         self._host_process: QProcess | None = None
         self._closing = False
+        self.progress_dialog: ProgressDialog | None = None
         self._search_relayout_timer = QTimer(self)
         self._search_relayout_timer.setSingleShot(True)
         self._search_relayout_timer.setInterval(120)
@@ -421,6 +423,11 @@ class MainWindow(QMainWindow):
         for card in self._search_cards:
             card.setEnabled(False)
         self.append_output(f"$ {command}\n", False)
+        if not self.runner.preview:
+            title = self.pending_action.title if self.pending_action is not None else "Executando operação"
+            self.progress_dialog = ProgressDialog(title, command, self)
+            self.progress_dialog.cancel_requested.connect(self.runner.cancel)
+            self.progress_dialog.show()
 
     def append_output(self, text: str, error: bool) -> None:
         if error:
@@ -432,15 +439,23 @@ class MainWindow(QMainWindow):
             self.log_view.setTextCursor(cursor)
         scrollbar = self.log_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+        if self.progress_dialog is not None:
+            self.progress_dialog.append_output(text, error)
 
     def update_progress(self, value: int) -> None:
         self.progress.setRange(0, 100)
         self.progress.setValue(value)
+        if self.progress_dialog is not None:
+            self.progress_dialog.set_progress(value)
 
     def operation_completed(self, result: OperationResult) -> None:
         start_failed = self._start_failed
         self._start_failed = False
         self.progress.hide()
+        if self.progress_dialog is not None:
+            self.progress_dialog.finish()
+            self.progress_dialog.deleteLater()
+            self.progress_dialog = None
         self.cancel_button.setEnabled(False)
         self.status_text.setText("Concluído" if result.ok else "Falhou")
         severity = severity_for(result.parsed, result.exit_code)
@@ -460,7 +475,7 @@ class MainWindow(QMainWindow):
         if start_failed:
             pass  # operation_start_failed already told the user
         elif result.preview and self.pending_action is not None:
-            dialog = PreviewDialog(result, self)
+            dialog = PreviewDialog(result, self.pending_action, self)
             if dialog.exec() == PreviewDialog.Accepted:
                 self.log_view.appendPlainText("\n--- execução confirmada ---\n")
                 try:
@@ -472,7 +487,9 @@ class MainWindow(QMainWindow):
             self._action_queue.clear()
         else:
             formatted = self._format_result(result)
-            ResultDialog(result, formatted, self).exec()
+            dialog = ResultDialog(result, formatted, self)
+            dialog.history_requested.connect(lambda: self.show_category("Resultados"))
+            dialog.exec()
             toast_state = "success" if severity == "success" else "warning" if severity == "warning" else "error"
             verb = "concluída" if result.ok else "falhou"
             self._toast(f"{action_title} {verb}", toast_state)

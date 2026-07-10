@@ -533,6 +533,31 @@ QComboBox QAbstractItemView {
     background: {{surface_alt}};
 }
 
+#statefulDialog {
+    background: {{bg}};
+}
+#dialogStateIcon {
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: {{radius_lg}}px;
+    qproperty-alignment: AlignCenter;
+    font-size: {{text_xl}}px;
+    font-weight: 800;
+}
+#dialogStateIcon[state="success"] { color: {{success}}; background: {{success_bg}}; }
+#dialogStateIcon[state="warning"] { color: {{warning}}; background: {{warning_bg}}; }
+#dialogStateIcon[state="error"] { color: {{error}}; background: {{error_bg}}; }
+#dialogStateIcon[state="info"] { color: {{info}}; background: {{info_bg}}; }
+#dialogStateIcon[state="running"] { color: {{accent}}; background: {{info_bg}}; }
+#commandBar {
+    color: {{text_log}};
+    background: {{log_bg}};
+    border: 1px solid {{border_divider}};
+    border-radius: {{radius_sm}}px;
+    padding: {{space_sm}}px;
+    font-family: {{font_mono}};
+}
+
 /* QCheckBox (toolCheck, tuneCheck): list-item checkboxes. */
 QCheckBox {
     color: {{text}};
