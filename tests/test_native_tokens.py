@@ -48,7 +48,7 @@ def test_every_placeholder_resolves():
     assert not missing, f"Placeholders without token field: {missing}"
 
 
-def test_app_apply_theme_uses_tokens(monkeypatch):
+def test_app_apply_theme_uses_tokens():
     """apply_theme should set stylesheet from render_qss, not regex-rewrite."""
     import linux.ui_native.app as app_mod
     # stylesheet() must delegate to render_qss, not contain the old replacements dict
