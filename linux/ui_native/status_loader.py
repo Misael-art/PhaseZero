@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QProcess, QTimer, Signal
@@ -67,6 +66,8 @@ class StatusLoader(QObject):
             self.cancel(action_id)
 
     def _on_finished(self, action_id: str, exit_code: int, process: QProcess) -> None:
+        if action_id not in self._processes:
+            return  # already handled by timeout/error
         stdout = bytes(process.readAllStandardOutput().data()).decode("utf-8", errors="replace")
         self._cleanup_process(action_id, process)
         if exit_code != 0:
@@ -76,11 +77,16 @@ class StatusLoader(QObject):
         self.status_ready.emit(action_id, stdout, parsed)
 
     def _on_error(self, action_id: str, error: QProcess.ProcessError, process: QProcess) -> None:
+        if action_id not in self._processes:
+            return
         if error == QProcess.FailedToStart:
             self._cleanup_process(action_id, process)
             self.status_failed.emit(action_id, "failed to start")
 
     def _on_timeout(self, action_id: str, process: QProcess) -> None:
+        if action_id not in self._processes:
+            return
+        self._cleanup_process(action_id, process)
         if process.state() != QProcess.NotRunning:
             process.kill()
         self.status_failed.emit(action_id, "timed out")
