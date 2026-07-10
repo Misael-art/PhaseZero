@@ -13,15 +13,22 @@ from PySide6.QtGui import QColor, QIcon, QMouseEvent
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFormLayout,
     QFrame,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QStyle,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -235,6 +242,126 @@ class StatusPill(QFrame):
             det = QLabel(detail)
             det.setObjectName("pillDetail")
             layout.addWidget(det)
+
+
+class AdvancedActionsPanel(QFrame):
+    """Collapsed contextual access to uncommon or administrative actions."""
+
+    requested = Signal(object)
+
+    def __init__(self, actions: list[ActionSpec], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("advancedPanel")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        toggle = QToolButton()
+        toggle.setObjectName("advancedToggle")
+        toggle.setText(f"Avançado ({len(actions)})")
+        toggle.setCheckable(True)
+        toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toggle.setArrowType(Qt.RightArrow)
+        toggle.setAccessibleName("Mostrar ações avançadas")
+        layout.addWidget(toggle)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setMaximumHeight(300)
+        content = QWidget()
+        rows = QVBoxLayout(content)
+        rows.setContentsMargins(4, 4, 4, 4)
+        rows.setSpacing(6)
+        for action in actions:
+            button = QPushButton(f"{action.title}  —  {action.description}")
+            button.setObjectName("advancedAction")
+            button.setProperty("actionId", action.id)
+            button.setToolTip(" ".join(action.args))
+            button.setAccessibleName(action.title)
+            button.clicked.connect(lambda _checked=False, item=action: self.requested.emit(item))
+            rows.addWidget(button)
+        rows.addStretch()
+        scroll.setWidget(content)
+        scroll.hide()
+        toggle.toggled.connect(scroll.setVisible)
+        toggle.toggled.connect(lambda checked: toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow))
+        layout.addWidget(scroll)
+
+
+class ParameterDialog(QDialog):
+    """Typed argument form; command tokens are never evaluated by a shell."""
+
+    def __init__(self, action: ActionSpec, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.action = action
+        self.setWindowTitle(action.title)
+        self.setMinimumWidth(560)
+        layout = QVBoxLayout(self)
+        description = QLabel(action.description)
+        description.setWordWrap(True)
+        description.setObjectName("cardDescription")
+        layout.addWidget(description)
+        form = QFormLayout()
+        self._fields: dict[str, QWidget] = {}
+        for parameter in action.parameters:
+            if parameter.kind == "choice":
+                field = QComboBox()
+                field.addItems(parameter.choices)
+            elif parameter.kind == "boolean":
+                field = QCheckBox(parameter.label)
+            else:
+                field = QLineEdit()
+                field.setPlaceholderText(parameter.placeholder)
+                if parameter.kind in {"file", "path"}:
+                    row = QWidget()
+                    row_layout = QHBoxLayout(row)
+                    row_layout.setContentsMargins(0, 0, 0, 0)
+                    row_layout.addWidget(field, 1)
+                    browse = QPushButton("Selecionar…")
+                    browse.clicked.connect(
+                        lambda _checked=False, item=parameter, target=field: self._browse(item.kind, target)
+                    )
+                    row_layout.addWidget(browse)
+                    form.addRow(parameter.label + (":" if parameter.required else " (opcional):"), row)
+                    self._fields[parameter.name] = field
+                    continue
+            field.setAccessibleName(parameter.label)
+            form.addRow(parameter.label + (":" if parameter.required else " (opcional):"), field)
+            self._fields[parameter.name] = field
+        layout.addLayout(form)
+        self.error = QLabel("")
+        self.error.setObjectName("errorTitle")
+        layout.addWidget(self.error)
+        buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+        buttons.button(QDialogButtonBox.Ok).setText("Continuar")
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _browse(self, kind: str, target: QLineEdit) -> None:
+        if kind == "file":
+            value, _ = QFileDialog.getOpenFileName(self, "Selecionar arquivo")
+        else:
+            value = QFileDialog.getExistingDirectory(self, "Selecionar pasta")
+        if value:
+            target.setText(value)
+
+    def _validate(self) -> None:
+        values = self.values()
+        missing = [parameter.label for parameter in self.action.parameters if parameter.required and not values.get(parameter.name)]
+        if missing:
+            self.error.setText("Preencha: " + ", ".join(missing))
+            return
+        self.accept()
+
+    def values(self) -> dict[str, str]:
+        values: dict[str, str] = {}
+        for name, field in self._fields.items():
+            if isinstance(field, QComboBox):
+                values[name] = field.currentText()
+            elif isinstance(field, QCheckBox):
+                values[name] = "true" if field.isChecked() else ""
+            elif isinstance(field, QLineEdit):
+                values[name] = field.text().strip()
+        return values
 
 
 class SkeletonTile(QFrame):

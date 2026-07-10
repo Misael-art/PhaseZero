@@ -503,6 +503,36 @@ QComboBox QAbstractItemView {
     min-width: 400px;
 }
 
+#advancedPanel {
+    background: {{surface_inset}};
+    border-top: 1px solid {{border_divider}};
+    padding: {{space_sm}}px;
+}
+#advancedToggle {
+    color: {{text_dim}};
+    background: transparent;
+    border: 0;
+    padding: {{space_sm}}px;
+    font-weight: 700;
+    text-align: left;
+}
+#advancedToggle:hover {
+    color: {{text_strong}};
+    background: {{surface_alt}};
+}
+#advancedAction {
+    color: {{text}};
+    background: {{surface}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_sm}}px;
+    padding: {{space_sm}}px {{space_md}}px;
+    text-align: left;
+}
+#advancedAction:hover, #advancedAction:focus {
+    border-color: {{accent}};
+    background: {{surface_alt}};
+}
+
 /* QCheckBox (toolCheck, tuneCheck): list-item checkboxes. */
 QCheckBox {
     color: {{text}};

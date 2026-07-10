@@ -44,6 +44,7 @@ class ProfilesPage(BasePage):
         self.combo.setObjectName("profileCombo")
         self.combo.setMinimumWidth(400)
         for action in sorted(self.actions, key=lambda a: a.title):
+            self.mark_represented(action)
             self.combo.addItem(action.title, action.id)
         self.combo.currentIndexChanged.connect(self._on_select)
         form.addRow("Perfil:", self.combo)

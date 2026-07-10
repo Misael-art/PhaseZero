@@ -49,6 +49,9 @@ class TuningPage(BasePage):
         layout.addWidget(SectionHeader("Ajustes do sistema", "Marque as áreas e aplique."))
 
         for area in TUNE_AREAS:
+            action = self.find(f"tune.{area}")
+            if action is None:
+                continue
             cb = QCheckBox(f"  {TUNE_LABELS.get(area, area)}")
             cb.setObjectName("tuneCheck")
             cb.setToolTip(TUNE_DESCRIPTIONS.get(area, ""))

@@ -27,11 +27,16 @@ def state_dir() -> Path:
 
 
 def build_program(
-    root: Path, action: ActionSpec, *, preview: bool, value: str = ""
+    root: Path,
+    action: ActionSpec,
+    *,
+    preview: bool,
+    value: str = "",
+    values: dict[str, str] | None = None,
 ) -> tuple[str, list[str]]:
     pz = str(root / "linux" / "pz")
-    args = action.resolved_args(value, preview=preview)
-    if "{input}" in args or (action.input_kind and not value):
+    args = action.resolved_args(value, preview=preview, values=values)
+    if any(token.startswith("{") and token.endswith("}") for token in args):
         raise ValueError(f"input required for {action.id}")
     if action.elevated and not preview:
         bridge = shutil.which("phasezero-admin") or shutil.which("bigsudo") or shutil.which("pkexec")
@@ -71,10 +76,17 @@ class CommandRunner(QObject):
     def running(self) -> bool:
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
-    def start(self, action: ActionSpec, *, preview: bool = False, value: str = "") -> None:
+    def start(
+        self,
+        action: ActionSpec,
+        *,
+        preview: bool = False,
+        value: str = "",
+        values: dict[str, str] | None = None,
+    ) -> None:
         if self.running:
             raise RuntimeError("operation already running")
-        program, args = build_program(self.root, action, preview=preview, value=value)
+        program, args = build_program(self.root, action, preview=preview, value=value, values=values)
         self.action = action
         self.preview = preview
         self.command = [program, *args]

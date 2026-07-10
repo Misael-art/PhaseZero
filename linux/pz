@@ -176,6 +176,7 @@ Usage:
   pz ui server [--port PORT]   Start web dashboard server only
   pz ui tui                    Open terminal UI (whiptail)
   pz ui status                 Print UI server status
+  pz commands --json           Print canonical public UI action contract
   pz help                      Show this help
   pz version                   Show version
 
@@ -659,6 +660,24 @@ dest.write_text(json.dumps({"actions": actions}, ensure_ascii=False, indent=2) +
 PY
 }
 
+cmd_commands() {
+    local format="${1:---json}"
+    [ "$format" = "--json" ] || {
+        pz_error "usage: pz commands --json"
+        return 2
+    }
+    PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 - "$PZ_ROOT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+from linux.ui_native.catalog import catalog_manifest
+
+print(json.dumps(catalog_manifest(root), ensure_ascii=False, indent=2))
+PY
+}
+
 main() {
     local cmd="${1:-help}"
     shift 2>/dev/null || true
@@ -677,6 +696,7 @@ main() {
         repair-plan)   cmd_repair_plan "$@" ;;
         tune)          cmd_tune "$@" ;;
         ui)            cmd_ui "$@" ;;
+        commands)      cmd_commands "$@" ;;
         webapp|webapps) exec "$PZ_ROOT/linux/ui/webapp.sh" "$@" ;;
         games|jogos)   exec "$PZ_ROOT/linux/ui/games.sh" "$@" ;;
         version|--version|-v) cmd_version ;;

@@ -6,6 +6,16 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class ActionParameter:
+    name: str
+    label: str
+    kind: str = "text"
+    required: bool = True
+    choices: tuple[str, ...] = field(default_factory=tuple)
+    placeholder: str = ""
+
+
+@dataclass(frozen=True)
 class ActionSpec:
     id: str
     category: str
@@ -20,10 +30,40 @@ class ActionSpec:
     input_label: str = ""
     input_kind: str = ""
     keywords: tuple[str, ...] = field(default_factory=tuple)
+    group: str = "Geral"
+    visibility: str = "standard"
+    platforms: tuple[str, ...] = ("linux",)
+    risk: str = "normal"
+    status_args: tuple[str, ...] | None = None
+    parameters: tuple[ActionParameter, ...] = field(default_factory=tuple)
+    result_view: str = "auto"
 
-    def resolved_args(self, value: str = "", *, preview: bool = False) -> list[str]:
+    def resolved_args(
+        self,
+        value: str = "",
+        *,
+        preview: bool = False,
+        values: dict[str, str] | None = None,
+    ) -> list[str]:
         source = self.preview_args if preview and self.preview_args is not None else self.args
-        return [value if token == "{input}" else token for token in source]
+        resolved_values = dict(values or {})
+        if value:
+            resolved_values.setdefault("input", value)
+        output: list[str] = []
+        for token in source:
+            if token.startswith("{") and token.endswith("}"):
+                name = token[1:-1]
+                output.append(resolved_values.get(name, token))
+            else:
+                output.append(token)
+        return output
+
+    @property
+    def parameter_names(self) -> tuple[str, ...]:
+        names = [parameter.name for parameter in self.parameters]
+        if self.input_kind and "input" not in names:
+            names.append("input")
+        return tuple(names)
 
     @property
     def searchable_text(self) -> str:

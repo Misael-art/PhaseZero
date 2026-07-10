@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
-from .models import ActionSpec
+from .models import ActionParameter, ActionSpec
 
 CATEGORIES = (
     ("Visão geral", "view-dashboard", "Saúde, auditoria e suporte"),
@@ -16,6 +17,7 @@ CATEGORIES = (
     ("Boot Direto", "system-reboot", "GRUB, recuperação e próxima sessão"),
     ("Flatpak", "system-software-install", "Remotes, overrides e compatibilidade"),
     ("IA & Dev", "applications-development", "Agentes, MCPs e ferramentas"),
+    ("Aplicativos", "applications-other", "Web apps, jogos e menus do desktop"),
     ("Ajustes", "preferences-system", "Gaming, navegador e desenvolvimento"),
     ("Resultados", "text-x-log", "Histórico local de operações"),
 )
@@ -29,6 +31,7 @@ SIDEBAR_GROUPS = (
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Ajustes")),
     ("IA & Dev", ("IA & Dev",)),
+    ("Desktop", ("Aplicativos",)),
     ("Histórico", ("Resultados",)),
 )
 
@@ -59,24 +62,69 @@ def _a(
     input_label: str = "",
     input_kind: str = "",
     keywords: tuple[str, ...] = (),
+    group: str = "",
+    visibility: str = "",
+    platforms: tuple[str, ...] = ("linux",),
+    risk: str = "",
+    parameters: tuple[ActionParameter, ...] = (),
+    result_view: str = "auto",
 ) -> ActionSpec:
     if mutable and preview is None:
         raise ValueError(f"mutable action lacks safe preview: {action_id}")
+    family = action_id.split(".", 1)[0]
+    inferred_group = group or {
+        "system": "Saúde e suporte",
+        "profile": "Instalação",
+        "steamdeck": "SteamOS",
+        "windows": "Windows VM",
+        "waydroid": "Android",
+        "server": "Serviços",
+        "emulation": "Emulação",
+        "boot": "Boot e recuperação",
+        "flatpak": "Aplicativos",
+        "ai": "IA e agentes",
+        "desktop": "Desktop",
+        "tune": "Ajustes",
+    }.get(family, "Geral")
+    inferred_risk = risk or ("high" if badge in {"Alto risco", "Resgate"} else "elevated" if elevated else "normal")
+    inferred_visibility = visibility or ("advanced" if inferred_risk in {"high", "elevated"} else "standard")
+    inferred_parameters = parameters
+    if input_kind and not inferred_parameters:
+        inferred_parameters = (ActionParameter("input", input_label or "Entrada", input_kind),)
     return ActionSpec(
-        action_id,
-        category,
-        title,
-        description,
-        args,
-        icon,
-        mutable,
-        preview,
-        elevated,
-        badge,
-        input_label,
-        input_kind,
-        keywords,
+        id=action_id,
+        category=category,
+        title=title,
+        description=description,
+        args=args,
+        icon=icon,
+        mutable=mutable,
+        preview_args=preview,
+        elevated=elevated,
+        badge=badge,
+        input_label=input_label,
+        input_kind=input_kind,
+        keywords=keywords,
+        group=inferred_group,
+        visibility=inferred_visibility,
+        platforms=platforms,
+        risk=inferred_risk,
+        status_args=preview if mutable else args,
+        parameters=inferred_parameters,
+        result_view=result_view,
     )
+
+
+def _p(
+    name: str,
+    label: str,
+    kind: str = "text",
+    *,
+    required: bool = True,
+    choices: tuple[str, ...] = (),
+    placeholder: str = "",
+) -> ActionParameter:
+    return ActionParameter(name, label, kind, required, choices, placeholder)
 
 
 def build_catalog(root: Path) -> list[ActionSpec]:
@@ -355,25 +403,175 @@ def build_catalog(root: Path) -> list[ActionSpec]:
             )
         )
 
+    # Public CLI variants not promoted as primary flows. They remain fully
+    # discoverable in the contextual Advanced panel for their category.
+    actions.extend(
+        [
+            _a("steamdeck.keyboard.status", "Steam Deck", "Status do teclado", "Provider e configuração do teclado virtual.", ("steamdeck", "keyboard", "status"), "input-keyboard", visibility="advanced"),
+            _a("steamdeck.watcher.status", "Steam Deck", "Status do watcher", "Estado do serviço de detecção de dock.", ("steamdeck", "watcher", "status"), "system-run", visibility="advanced"),
+            _a("steamdeck.privileged.status", "Steam Deck", "Status privilegiado", "Estado da bridge TDP/GPU.", ("steamdeck", "privileged", "status"), "security-high", visibility="advanced"),
+            _a("steamdeck.boot.status", "Steam Deck", "Status do boot SteamOS", "Audita entrada e sessão SteamOS.", ("steamdeck", "boot", "status"), "system-reboot", visibility="advanced"),
+            _a("steamdeck.plugins.status", "Steam Deck", "Status Decky", "Saúde de loader, CEF e plugins.", ("steamdeck", "plugins", "status"), "application-x-addon", visibility="advanced"),
+            _a("steamdeck.conveniences", "Steam Deck", "Instalar conveniências", "Atalhos Return, Windows VM e Waydroid.", ("steamdeck", "conveniences", "install"), "applications-system", mutable=True, preview=("steamdeck", "status"), visibility="advanced"),
+            _a("steamdeck.removable.status", "Steam Deck", "Status de removíveis", "Audita auto-mount USB.", ("steamdeck", "removable", "status"), "drive-removable-media", visibility="advanced"),
+            _a("steamdeck.display.status", "Steam Deck", "Status do display", "Audita TV/monitor para Game Mode.", ("steamdeck", "display", "status"), "video-display", visibility="advanced"),
+
+            _a("windows.host-access.status", "Windows VM", "Status acesso ao disco", "Estado da montagem host→guest.", ("windows-vm", "host-access", "status"), "drive-harddisk", visibility="advanced"),
+            _a("windows.host-access.unmount", "Windows VM", "Desmontar disco da VM", "Desmonta acesso host antes de iniciar Windows.", ("windows-vm", "host-access", "unmount"), "media-eject", mutable=True, preview=("windows-vm", "host-access", "status"), visibility="advanced"),
+            _a("windows.boot.status", "Windows VM", "Status boot Windows", "Audita entrada de boot direto.", ("windows-vm", "boot", "status"), "system-reboot", visibility="advanced"),
+
+            _a("waydroid.host.status", "Waydroid", "Status armazenamento Android", "Estado do link host→Android.", ("waydroid", "host-access", "status"), "folder-open", visibility="advanced"),
+            _a("waydroid.host.unlink", "Waydroid", "Desvincular armazenamento", "Remove link host→Android sem apagar dados.", ("waydroid", "host-access", "unlink"), "edit-unlink", mutable=True, preview=("waydroid", "host-access", "status"), visibility="advanced"),
+            _a("waydroid.boot.status", "Waydroid", "Status boot Waydroid", "Audita entrada de boot Android.", ("waydroid", "boot", "status"), "system-reboot", visibility="advanced"),
+
+            _a("server.llm.status", "Servidor", "Status LLM", "Estado do Ollama e exposição de rede.", ("server", "llm", "status"), "network-server", visibility="advanced"),
+            _a("server.llm.expose", "Servidor", "Expor LLM na LAN", "Habilita acesso LAN ao LLM local.", ("server", "llm", "expose-lan"), "network-wired", mutable=True, preview=("server", "llm", "status"), visibility="advanced"),
+            _a("server.llm.restore", "Servidor", "Restaurar LLM local", "Remove exposição e restaura defaults.", ("server", "llm", "restore"), "edit-undo", mutable=True, preview=("server", "llm", "status"), visibility="advanced"),
+            _a("server.hermes.status", "Servidor", "Status Hermes", "Estado da atuação remota.", ("server", "hermes", "status"), "network-transmit-receive", visibility="advanced"),
+            _a("server.hermes.start", "Servidor", "Iniciar Hermes", "Inicia atuação remota configurada.", ("server", "hermes", "start"), "media-playback-start", mutable=True, preview=("server", "hermes", "status"), visibility="advanced"),
+            _a("server.slim.status", "Servidor", "Status modo enxuto", "Serviços afetados pelo slimming.", ("server", "slim", "status"), "preferences-system-performance", visibility="advanced"),
+            _a("server.boot.status", "Servidor", "Status boot servidor", "Audita entrada headless.", ("server", "boot", "status"), "system-reboot", visibility="advanced"),
+            _a("server.boot.remove", "Servidor", "Remover boot servidor", "Remove entrada GRUB headless.", ("server", "boot", "remove"), "edit-delete", mutable=True, preview=("server", "boot", "status"), elevated=True, visibility="advanced"),
+
+            _a("emulation.eden-integrate", "Emulação", "Integrar Eden", "Integra Eden com ES-DE, SRM e paths.", ("emulation", "eden", "integrate"), "applications-games", mutable=True, preview=("emulation", "eden", "dry-run"), visibility="advanced"),
+            _a("emulation.citron-integrate", "Emulação", "Integrar Citron", "Integra Citron com ES-DE, SRM e paths.", ("emulation", "citron", "integrate"), "applications-games", mutable=True, preview=("emulation", "citron", "dry-run"), visibility="advanced"),
+            _a("emulation.hydra-configure", "Emulação", "Configurar Hydra", "Configura Hydra Classic e emuladores.", ("emulation", "hydra", "configure"), "applications-games", mutable=True, preview=("emulation", "hydra", "status"), visibility="advanced"),
+            _a("emulation.ps1", "Emulação", "Configurar PlayStation 1", "Configura paths DuckStation.", ("emulation", "ps1", "configure"), "applications-games", mutable=True, preview=("emulation", "status"), visibility="advanced"),
+            _a("emulation.ps2", "Emulação", "Configurar PlayStation 2", "Configura paths PCSX2.", ("emulation", "ps2", "configure"), "applications-games", mutable=True, preview=("emulation", "status"), visibility="advanced"),
+            _a("emulation.ps3-pkg", "Emulação", "Importar PKG PS3", "Importa PKG obtido legalmente.", ("emulation", "ps3", "import-pkg", "{input}"), "package-x-generic", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione PKG PS3", "file"),), visibility="advanced"),
+            _a("emulation.ps3-rap", "Emulação", "Importar RAP PS3", "Importa licença RAP própria.", ("emulation", "ps3", "import-rap", "{input}"), "dialog-password", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione RAP", "file"),), visibility="advanced"),
+            _a("emulation.performance.status", "Emulação", "Status performance", "Audita perfis adaptativos.", ("emulation", "performance", "status"), "utilities-system-monitor", visibility="advanced"),
+            _a("emulation.dualscreen.status", "Emulação", "Detectar telas", "Detecta Deck e display externo.", ("emulation", "dualscreen", "detect"), "video-display", visibility="advanced"),
+            _a("emulation.lua.status", "Emulação", "Status Lua", "Audita Lua, LuaJIT e LuaRocks.", ("emulation", "lua", "status"), "utilities-terminal", visibility="advanced"),
+            _a("emulation.steam-tools.status", "Emulação", "Status Steam tools", "Audita ferramentas auxiliares Steam.", ("emulation", "steam-tools", "status"), "applications-games", visibility="advanced"),
+            _a("emulation.retrodeck.status", "Emulação", "Status RetroDECK", "Audita ecossistema compartilhado.", ("emulation", "retrodeck", "status"), "applications-games", visibility="advanced"),
+            _a("emulation.retrodeck.plan", "Emulação", "Plano RetroDECK", "Prévia de migrações e links.", ("emulation", "retrodeck", "plan"), "document-properties", visibility="advanced"),
+            _a("emulation.retrodeck.repair", "Emulação", "Reparar RetroDECK", "Repara links do ecossistema.", ("emulation", "retrodeck", "repair"), "tools-check-spelling", mutable=True, preview=("emulation", "retrodeck", "plan"), visibility="advanced"),
+            _a("emulation.shared.status", "Emulação", "Status conteúdo compartilhado", "Audita ROMs, saves e BIOS.", ("emulation", "shared", "status"), "folder-sync", visibility="advanced"),
+            _a("emulation.shared.plan", "Emulação", "Plano conteúdo compartilhado", "Prévia de links e cópias.", ("emulation", "shared", "plan"), "document-properties", visibility="advanced"),
+            _a("emulation.shared.repair", "Emulação", "Reparar conteúdo compartilhado", "Repara links entre consumidores.", ("emulation", "shared", "repair"), "tools-check-spelling", mutable=True, preview=("emulation", "shared", "plan"), visibility="advanced"),
+            _a("emulation.media.status", "Emulação", "Status de mídia", "Audita capas e metadados.", ("emulation", "media", "status"), "image-x-generic", visibility="advanced"),
+            _a("emulation.media.index", "Emulação", "Indexar mídia", "Reconstrói media-index.json.", ("emulation", "media", "index"), "view-refresh", mutable=True, preview=("emulation", "media", "status"), visibility="advanced"),
+            _a("emulation.media.plan", "Emulação", "Plano de mídia", "Prévia de canonicalização.", ("emulation", "media", "plan"), "document-properties", visibility="advanced"),
+            _a("emulation.media.repair", "Emulação", "Reparar mídia", "Repara paths de mídia.", ("emulation", "media", "repair"), "tools-check-spelling", mutable=True, preview=("emulation", "media", "plan"), visibility="advanced"),
+            _a("emulation.pc-games.status", "Emulação", "Status jogos PC", "Audita jogos locais e Steam.", ("emulation", "pc-games", "status"), "applications-games", visibility="advanced"),
+            _a("emulation.pc-games.plan", "Emulação", "Plano jogos PC", "Prévia de launchers.", ("emulation", "pc-games", "plan"), "document-properties", visibility="advanced"),
+            _a("emulation.shortcuts.status", "Emulação", "Status atalhos", "Audita launchers AppImage.", ("emulation", "shortcuts", "status"), "application-x-desktop", visibility="advanced"),
+            _a("emulation.shortcuts.plan", "Emulação", "Plano atalhos", "Prévia de limpeza de launchers.", ("emulation", "shortcuts", "plan"), "document-properties", visibility="advanced"),
+            _a("emulation.launchbox.status", "Emulação", "Status LaunchBox", "Audita integração Wine.", ("emulation", "launchbox", "status"), "applications-games", visibility="advanced"),
+            _a("emulation.launchbox.plan", "Emulação", "Plano LaunchBox", "Prévia de bridges ROM/mídia.", ("emulation", "launchbox", "plan"), "document-properties", visibility="advanced"),
+            _a("emulation.launchbox.repair", "Emulação", "Reparar LaunchBox", "Repara Wine, ROMs e mídia.", ("emulation", "launchbox", "repair"), "tools-check-spelling", mutable=True, preview=("emulation", "launchbox", "plan"), visibility="advanced"),
+            _a("emulation.controllers.status", "Emulação", "Status controles", "Audita perfis Ryujinx/RPCS3.", ("emulation", "controllers", "status"), "input-gaming", visibility="advanced"),
+            _a("emulation.frontends.status", "Emulação", "Status frontends", "Audita switcher de frontends.", ("emulation", "frontends", "status"), "view-grid", visibility="advanced"),
+            _a("emulation.frontends.plan", "Emulação", "Plano frontends", "Prévia da integração cruzada.", ("emulation", "frontends", "plan"), "document-properties", visibility="advanced"),
+            _a("emulation.nsz.status", "Emulação", "Status NSZ", "Audita conversor, keys e espaço.", ("emulation", "nsz", "status"), "document-export", visibility="advanced"),
+            _a("emulation.nsz.plan", "Emulação", "Plano NSZ", "Prévia de conversão para arquivo ou pasta.", ("emulation", "nsz", "plan", "{input}"), "document-properties", parameters=(_p("input", "Selecione NSZ ou pasta", "path"),), visibility="advanced"),
+            _a("emulation.nsz.install", "Emulação", "Instalar NSZ", "Instala conversor fixado para usuário.", ("emulation", "nsz", "install"), "system-software-install", mutable=True, preview=("emulation", "nsz", "status"), visibility="advanced"),
+            _a("emulation.nsz.apply", "Emulação", "Converter todos NSZ", "Converte, deduplica e limpa fontes verificadas.", ("emulation", "nsz", "apply", "--yes"), "document-export", mutable=True, preview=("emulation", "nsz", "plan"), risk="high", visibility="advanced"),
+            _a("emulation.optimizer.status", "Emulação", "Status configs por jogo", "Lista configurações documentadas.", ("emulation", "optimizer", "status"), "preferences-system-gaming", visibility="advanced"),
+
+            _a("flatpak.remote.add", "Flatpak", "Adicionar remote", "Adiciona repositório Flatpak.", ("flatpak", "remote", "add", "{name}", "{url}"), "list-add", mutable=True, preview=("flatpak", "remotes"), parameters=(_p("name", "Nome do remote"), _p("url", "URL do remote", "text", placeholder="https://…")), visibility="advanced"),
+            _a("flatpak.remote.remove", "Flatpak", "Remover remote", "Remove repositório Flatpak.", ("flatpak", "remote", "remove", "{name}"), "list-remove", mutable=True, preview=("flatpak", "remotes"), parameters=(_p("name", "Nome do remote"),), visibility="advanced"),
+            _a("flatpak.overrides.apply", "Flatpak", "Aplicar overrides globais", "Aplica overrides gaming ao usuário.", ("flatpak", "overrides", "apply", "--global"), "preferences-system", mutable=True, preview=("flatpak", "audit"), visibility="advanced"),
+            _a("flatpak.overrides.remove", "Flatpak", "Remover overrides globais", "Remove overrides PhaseZero.", ("flatpak", "overrides", "remove", "--global"), "edit-undo", mutable=True, preview=("flatpak", "audit"), visibility="advanced"),
+
+            _a("ai.desktop.status", "IA & Dev", "Status apps IA", "Audita Claude/Codex desktop.", ("ai", "desktop", "status"), "applications-development", visibility="advanced"),
+            _a("ai.desktop.claude", "IA & Dev", "Instalar Claude Desktop", "Instala app oficial para usuário.", ("ai", "desktop", "install-claude"), "system-software-install", mutable=True, preview=("ai", "desktop", "status"), visibility="advanced"),
+            _a("ai.desktop.codex", "IA & Dev", "Reparar Codex Desktop", "Repara atualização local falha.", ("ai", "desktop", "repair-codex"), "tools-check-spelling", mutable=True, preview=("ai", "desktop", "status"), visibility="advanced"),
+            _a("ai.token-economy", "IA & Dev", "Economia de tokens", "Audita contexto e runtime de agentes.", ("ai", "token-economy", "status"), "utilities-system-monitor", visibility="advanced"),
+            _a("ai.admin.status", "IA & Dev", "Status admin bridge", "Audita elevação PhaseZero.", ("ai", "admin", "status"), "security-high", visibility="advanced"),
+            _a("ai.omo.status", "IA & Dev", "Status OMO", "Audita oh-my-openagent.", ("ai", "omo", "status"), "applications-development", visibility="advanced"),
+            _a("ai.omo.doctor", "IA & Dev", "Diagnóstico OMO", "Diagnostica plugin OpenCode.", ("ai", "omo", "doctor"), "system-search", visibility="advanced"),
+            _a("ai.omo.enable", "IA & Dev", "Ativar OMO", "Ativa plugin OpenCode.", ("ai", "omo", "enable"), "media-playback-start", mutable=True, preview=("ai", "omo", "status"), visibility="advanced"),
+            _a("ai.omo.disable", "IA & Dev", "Desativar OMO", "Desativa plugin sem remover.", ("ai", "omo", "disable"), "media-playback-pause", mutable=True, preview=("ai", "omo", "status"), visibility="advanced"),
+            _a("ai.omo.uninstall", "IA & Dev", "Remover OMO", "Remove plugin OpenCode.", ("ai", "omo", "uninstall"), "edit-delete", mutable=True, preview=("ai", "omo", "status"), risk="high", visibility="advanced"),
+            _a("ai.opencode.status", "IA & Dev", "Status OpenCode", "Audita CLI, desktop e modelos.", ("ai", "opencode", "status"), "applications-development", visibility="advanced"),
+            _a("ai.opencode.local", "IA & Dev", "Modelo local OpenCode", "Configura modelo Ollama local.", ("ai", "opencode", "local-model"), "applications-development", mutable=True, preview=("ai", "opencode", "status"), visibility="advanced"),
+            _a("ai.opencode.hook", "IA & Dev", "Instalar hook OpenCode", "Instala sincronização automática.", ("ai", "opencode", "install-hook"), "system-run", mutable=True, preview=("ai", "opencode", "status"), visibility="advanced"),
+            _a("ai.secrets.rotate", "IA & Dev", "Rotacionar secrets IA", "Rotaciona chaves gerenciadas sem exibi-las.", ("ai", "secrets", "rotate"), "dialog-password", mutable=True, preview=("ai", "status"), risk="high", visibility="advanced"),
+            _a("ai.mcp.status", "IA & Dev", "Status MCP", "Audita servidores MCP.", ("ai", "mcp", "status"), "network-server", visibility="advanced"),
+            _a("ai.mcp.list", "IA & Dev", "Listar MCPs", "Lista servidores instalados.", ("ai", "mcp", "list"), "view-list-details", visibility="advanced"),
+            _a("ai.mcp.install", "IA & Dev", "Instalar MCP", "Instala servidor MCP pelo identificador.", ("ai", "mcp", "install", "{server}"), "system-software-install", mutable=True, preview=("ai", "mcp", "status"), parameters=(_p("server", "Servidor MCP"),), visibility="advanced"),
+            _a("ai.mcp.repair", "IA & Dev", "Reparar MCPs", "Remove quebrados e reinstala defaults seguros.", ("ai", "mcp", "repair", "all"), "tools-check-spelling", mutable=True, preview=("ai", "mcp", "status"), visibility="advanced"),
+            _a("ai.proxies.status", "IA & Dev", "Status proxies IA", "Audita suite OpenAI-compatible.", ("ai", "proxies", "status"), "network-server", visibility="advanced"),
+            _a("ai.setup.tool", "IA & Dev", "Instalar ferramenta IA", "Executa setup seguro para uma ferramenta pública.", ("ai", "setup", "{tool}"), "system-software-install", mutable=True, preview=("ai", "status"), parameters=(_p("tool", "Ferramenta", "choice", choices=("codex", "ollama", "webui", "claude", "desktop", "opencode", "omo", "hermes", "openclaw", "memory", "admin", "rtk", "caveman", "headroom", "compat", "ides", "ide-apps", "usagebar", "all")),), visibility="advanced"),
+            _a("ai.mcp.sync-target", "IA & Dev", "Sincronizar MCP por cliente", "Sincroniza servidores seguros no cliente escolhido.", ("ai", "mcp", "sync", "{target}"), "folder-sync", mutable=True, preview=("ai", "mcp", "status"), parameters=(_p("target", "Cliente", "choice", choices=("all", "codex", "claude", "opencode", "vscode")),), visibility="advanced"),
+            _a("ai.proxies.install-one", "IA & Dev", "Instalar proxy específico", "Instala ou atualiza um proxy da suite.", ("ai", "proxies", "install", "{proxy}"), "network-server", mutable=True, preview=("ai", "proxies", "status"), parameters=(_p("proxy", "Proxy", "choice", choices=("all", "kimiproxy", "qwenproxy", "deepsproxy")),), visibility="advanced"),
+
+            _a("desktop.webapps.status", "Aplicativos", "Status web apps", "Lista launchers web instalados.", ("webapp", "status"), "applications-internet", visibility="standard"),
+            _a("desktop.webapps.install", "Aplicativos", "Instalar web app", "Cria launcher isolado para serviço web.", ("webapp", "install", "{slug}"), "applications-internet", mutable=True, preview=("webapp", "status"), parameters=(_p("slug", "Identificador do web app"),), visibility="standard"),
+            _a("desktop.webapps.all", "Aplicativos", "Instalar todos web apps", "Instala catálogo completo de launchers.", ("webapp", "install-all"), "applications-internet", mutable=True, preview=("webapp", "status"), visibility="advanced"),
+            _a("desktop.games.status", "Aplicativos", "Status menu de jogos", "Lista jogos e emuladores detectados.", ("games", "status"), "applications-games", visibility="standard"),
+            _a("desktop.games.scan", "Aplicativos", "Escanear jogos", "Detecta jogos, frontends e emuladores.", ("games", "scan"), "system-search", visibility="standard"),
+            _a("desktop.games.install", "Aplicativos", "Instalar menus de jogos", "Cria launchers para itens detectados.", ("games", "install-all"), "applications-games", mutable=True, preview=("games", "status"), visibility="standard"),
+        ]
+    )
+
+    validate_catalog(actions)
+    return actions
+
+
+def validate_catalog(actions: list[ActionSpec]) -> None:
     ids = [item.id for item in actions]
     if len(ids) != len(set(ids)):
         raise ValueError("duplicate action id in native UI catalog")
-    return actions
+    categories = {row[0] for row in CATEGORIES}
+    for item in actions:
+        if item.category not in categories:
+            raise ValueError(f"unknown category for {item.id}: {item.category}")
+        if item.visibility not in {"primary", "standard", "advanced"}:
+            raise ValueError(f"invalid visibility for {item.id}: {item.visibility}")
+        if item.risk not in {"normal", "elevated", "high"}:
+            raise ValueError(f"invalid risk for {item.id}: {item.risk}")
+        if item.mutable and item.preview_args is None:
+            raise ValueError(f"mutable action lacks preview: {item.id}")
+        if not item.platforms:
+            raise ValueError(f"action lacks platform: {item.id}")
+        names = item.parameter_names
+        if len(names) != len(set(names)):
+            raise ValueError(f"duplicate parameter for {item.id}")
+        placeholders = {
+            match.group(1)
+            for token in (*item.args, *(item.preview_args or ()))
+            for match in [re.fullmatch(r"\{([A-Za-z0-9_-]+)\}", token)]
+            if match
+        }
+        missing = placeholders - set(names)
+        if missing:
+            raise ValueError(f"action {item.id} lacks parameters: {sorted(missing)}")
 
 
 def catalog_manifest(root: Path) -> dict[str, object]:
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "categories": [row[0] for row in CATEGORIES],
         "actions": [
             {
                 "id": item.id,
                 "category": item.category,
                 "title": item.title,
+                "description": item.description,
                 "args": list(item.args),
                 "previewArgs": list(item.preview_args) if item.preview_args else None,
+                "statusArgs": list(item.status_args) if item.status_args else None,
                 "mutable": item.mutable,
                 "elevated": item.elevated,
+                "group": item.group,
+                "visibility": item.visibility,
+                "platforms": list(item.platforms),
+                "risk": item.risk,
+                "resultView": item.result_view,
+                "parameters": [
+                    {
+                        "name": parameter.name,
+                        "label": parameter.label,
+                        "kind": parameter.kind,
+                        "required": parameter.required,
+                        "choices": list(parameter.choices),
+                        "placeholder": parameter.placeholder,
+                    }
+                    for parameter in item.parameters
+                ],
             }
             for item in build_catalog(root)
         ],

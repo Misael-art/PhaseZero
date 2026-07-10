@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QGridLayout, QVBoxLayout, QWidget
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
 from ..status_loader import StatusLoader
-from ..widgets import SkeletonCard, SkeletonTile, stop_shimmer
+from ..widgets import AdvancedActionsPanel, SkeletonCard, SkeletonTile, stop_shimmer
 
 
 class BasePage(QWidget):
@@ -39,6 +39,8 @@ class BasePage(QWidget):
         self._loading_timer.setSingleShot(True)
         self._loading_callback = None
         self._loading_timer.timeout.connect(self._show_delayed_loading)
+        self._represented_ids: set[str] = set()
+        self._advanced_ids: set[str] = set()
 
     def build(self) -> None:
         pass
@@ -113,4 +115,23 @@ class BasePage(QWidget):
             self.request_action(action)
 
     def find(self, action_id: str) -> ActionSpec | None:
-        return self.by_id.get(action_id)
+        action = self.by_id.get(action_id)
+        if action is not None and action.category in {item.category for item in self.actions}:
+            self._represented_ids.add(action.id)
+        return action
+
+    def mark_represented(self, action: ActionSpec) -> None:
+        self._represented_ids.add(action.id)
+
+    def finalize_action_coverage(self) -> None:
+        remaining = [action for action in self.actions if action.id not in self._represented_ids]
+        if not remaining:
+            return
+        panel = AdvancedActionsPanel(remaining)
+        panel.requested.connect(self.request_action)
+        self._advanced_ids = {action.id for action in remaining}
+        self._layout.addWidget(panel)
+
+    @property
+    def represented_action_ids(self) -> set[str]:
+        return self._represented_ids | self._advanced_ids

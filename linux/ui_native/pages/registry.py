@@ -17,6 +17,7 @@ from .emulation import EmulationPage
 from .boot import BootPage
 from .flatpak import FlatpakPage
 from .ai_dev import AiDevPage
+from .applications import ApplicationsPage
 from .tuning import TuningPage
 from .results import ResultsPage
 
@@ -46,6 +47,7 @@ class PageRegistry:
         "Boot Direto": BootPage,
         "Flatpak": FlatpakPage,
         "IA & Dev": AiDevPage,
+        "Aplicativos": ApplicationsPage,
         "Ajustes": TuningPage,
         "Resultados": ResultsPage,
     }
@@ -55,6 +57,7 @@ class PageRegistry:
             actions = [a for a in self.catalog if a.category == category]
             page = page_cls(self.root, self.runner, actions, by_id=self.by_id)
             page.build()
+            page.finalize_action_coverage()
             self._pages[category] = page
 
     def page_for(self, category: str) -> BasePage | None:

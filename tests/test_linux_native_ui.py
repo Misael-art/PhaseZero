@@ -58,7 +58,9 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
         "support-bundle",
         "repair-plan",
         "tune",
-        "version",
+            "version",
+            "webapp",
+            "games",
     }
     for item in catalog:
         assert item.args[0] in valid_commands
@@ -149,7 +151,7 @@ def test_results_export_excludes_auth_files_and_redacts_secrets(tmp_path):
 
 def test_manifest_serializes_catalog(catalog):
     manifest = catalog_manifest(ROOT)
-    assert manifest["schemaVersion"] == 1
+    assert manifest["schemaVersion"] == 2
     assert len(manifest["actions"]) == len(catalog)
     json.dumps(manifest)
 

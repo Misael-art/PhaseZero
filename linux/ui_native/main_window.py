@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QProcess, QTimer, Qt, Signal
+from PySide6.QtCore import QProcess, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence
 from PySide6.QtWidgets import (
-    QFileDialog,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -33,6 +32,7 @@ from .result_parser import severity_for
 from .widgets import (
     ActionCard,
     HeaderBar,
+    ParameterDialog,
     PreviewDialog,
     ResultDialog,
     Toast,
@@ -53,6 +53,7 @@ class MainWindow(QMainWindow):
         self.current_category = initial_category or DASHBOARD[0]
         self.pending_action: ActionSpec | None = None
         self.pending_value = ""
+        self.pending_values: dict[str, str] = {}
         self._action_queue: list[ActionSpec] = []
         self.sidebar_buttons: dict[str, QPushButton] = {}
         self.dark_theme = True
@@ -387,34 +388,25 @@ class MainWindow(QMainWindow):
     def request_action(self, action: ActionSpec) -> None:
         if self.runner.running:
             return
-        value = ""
-        if action.input_kind:
-            value = self._request_input(action)
-            if not value:
+        values: dict[str, str] = {}
+        if action.parameters:
+            dialog = ParameterDialog(action, self)
+            if dialog.exec() != ParameterDialog.Accepted:
                 return
+            values = dialog.values()
         self.pending_action = action
-        self.pending_value = value
+        self.pending_value = values.get("input", "")
+        self.pending_values = values
         self.log_view.clear()
         self.log_view.show()
         try:
-            self.runner.start(action, preview=action.mutable, value=value)
+            self.runner.start(action, preview=action.mutable, values=values)
         except (ValueError, RuntimeError) as exc:
             self.pending_action = None
             self.pending_value = ""
+            self.pending_values = {}
             self._action_queue.clear()
             QMessageBox.warning(self, "Não foi possível iniciar", str(exc))
-
-    def _request_input(self, action: ActionSpec) -> str:
-        if action.input_kind == "file":
-            value, _ = QFileDialog.getOpenFileName(self, action.input_label, QDir.homePath())
-            return value
-        if action.input_kind == "path":
-            value = QFileDialog.getExistingDirectory(self, action.input_label, QDir.homePath())
-            if value:
-                return value
-            value, _ = QFileDialog.getOpenFileName(self, action.input_label, QDir.homePath())
-            return value
-        return ""
 
     def operation_started(self, command: str) -> None:
         self.status_text.setText("Pré-visualizando…" if self.runner.preview else "Executando…")
@@ -461,6 +453,7 @@ class MainWindow(QMainWindow):
         if self._closing:
             self.pending_action = None
             self.pending_value = ""
+            self.pending_values = {}
             self._action_queue.clear()
             return
         action_title = self.pending_action.title if self.pending_action is not None else "Operação"
@@ -471,7 +464,7 @@ class MainWindow(QMainWindow):
             if dialog.exec() == PreviewDialog.Accepted:
                 self.log_view.appendPlainText("\n--- execução confirmada ---\n")
                 try:
-                    self.runner.start(self.pending_action, preview=False, value=self.pending_value)
+                    self.runner.start(self.pending_action, preview=False, values=self.pending_values)
                     return
                 except (ValueError, RuntimeError) as exc:
                     self._action_queue.clear()
@@ -485,6 +478,7 @@ class MainWindow(QMainWindow):
             self._toast(f"{action_title} {verb}", toast_state)
         self.pending_action = None
         self.pending_value = ""
+        self.pending_values = {}
         if result.ok and self._action_queue:
             next_action = self._action_queue.pop(0)
             QTimer.singleShot(0, lambda: self.request_action(next_action))
