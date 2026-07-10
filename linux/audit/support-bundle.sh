@@ -6,24 +6,33 @@ source "$PZ_ROOT/linux/lib/common.sh"
 
 pz_check_deps jq tar
 
-BUNDLE_DIR=$(mktemp -d)
-BUNDLE_NAME="phasezero-support-$(hostname -s)-$(date +%Y%m%d-%H%M%S)"
-BUNDLE_PATH="/tmp/${BUNDLE_NAME}.tar.gz"
+umask 077
+BUNDLE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/phasezero-support-stage.XXXXXX")"
+BUNDLE_PATH="$(mktemp "${TMPDIR:-/tmp}/phasezero-support-$(hostname -s)-$(date +%Y%m%d-%H%M%S).XXXXXX.tar.gz")"
+cleanup() { rm -rf -- "$BUNDLE_DIR"; }
+trap cleanup EXIT INT TERM
 
 pz_info "collecting support bundle..."
 
 # Create bundle structure
 mkdir -p "$BUNDLE_DIR"/{system,configs,services,doctor,steamdeck,docker,steamos-ux,windows-vm,waydroid,emulation,ai}
 
+redact_stream() {
+    sed -E \
+        -e 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1<redacted>/g' \
+        -e 's/("(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|authorization|auth[_-]?token|client[_-]?secret|private[_-]?key|password|passwd|cookie|session([_-]?id)?)"[[:space:]]*:[[:space:]]*")[^"]+/\1<redacted>/Ig' \
+        -e 's/^([[:space:]]*(api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|token|authorization|auth[_-]?token|client[_-]?secret|private[_-]?key|password|passwd|cookie|session([_-]?id)?)[[:space:]]*:[[:space:]]*).+/\1<redacted>/Ig' \
+        -e 's/((access[_-]?token|refresh[_-]?token|id[_-]?token|client[_-]?secret|api[_-]?key|token|password|session)[=])[^&[:space:]]+/\1<redacted>/Ig' \
+        -e 's/((Cookie|Set-Cookie):[[:space:]]*).+/\1<redacted>/Ig' \
+        -e 's/((OPENAI|ANTHROPIC|OPENROUTER|DEEPSEEK|GEMINI|GOOGLE|GITHUB|SENTRY|BONSAI|FIRECRAWL|CONTEXT7)[A-Z0-9_]*=).+/\1<redacted>/g' \
+        -e 's/^([[:space:]]*(export[[:space:]]+)?[A-Z0-9_]*(API[_-]?KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH)[A-Z0-9_]*[[:space:]]*=).*/\1<redacted>/Ig' \
+        -e 's/(^|[^A-Za-z0-9])(gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,})/\1<redacted>/g'
+}
+
 redact_to() {
     local src="$1" dst="$2"
     [ -f "$src" ] || return 0
-    sed -E \
-        -e 's/(Bearer )[A-Za-z0-9._~+\/=-]+/\1<redacted>/g' \
-        -e 's/("(api[_-]?key|token|authorization|auth_token|password)"[[:space:]]*:[[:space:]]*")[^"]+/\1<redacted>/Ig' \
-        -e 's/^([[:space:]]*(api[_-]?key|token|authorization|auth_token|password)[[:space:]]*:[[:space:]]*).+/\1<redacted>/Ig' \
-        -e 's/((OPENAI|ANTHROPIC|OPENROUTER|DEEPSEEK|GEMINI|GOOGLE|GITHUB|SENTRY|BONSAI|FIRECRAWL|CONTEXT7)[A-Z0-9_]*=).+/\1<redacted>/g' \
-        "$src" > "$dst"
+    redact_stream < "$src" > "$dst"
 }
 
 # System info
@@ -36,8 +45,8 @@ lsblk > "$BUNDLE_DIR/system/lsblk.txt" 2>/dev/null || true
 df -h > "$BUNDLE_DIR/system/df.txt" 2>/dev/null || true
 free -h > "$BUNDLE_DIR/system/free.txt" 2>/dev/null || true
 uptime > "$BUNDLE_DIR/system/uptime.txt" 2>/dev/null || true
-dmesg | tail -200 > "$BUNDLE_DIR/system/dmesg.txt" 2>/dev/null || true
-journalctl -n 500 --no-pager > "$BUNDLE_DIR/system/journal.txt" 2>/dev/null || true
+dmesg 2>/dev/null | tail -200 | redact_stream > "$BUNDLE_DIR/system/dmesg.txt" || true
+journalctl -n 500 --no-pager 2>/dev/null | redact_stream > "$BUNDLE_DIR/system/journal.txt" || true
 pacman -Qe > "$BUNDLE_DIR/system/packages-explicit.txt" 2>/dev/null || true
 pacman -Q > "$BUNDLE_DIR/system/packages-all.txt" 2>/dev/null || true
 
@@ -46,7 +55,7 @@ for cfg in "$PZ_ROOT/version.json" "$PZ_ROOT/profiles/"*.json; do
     [ -f "$cfg" ] && cp "$cfg" "$BUNDLE_DIR/configs/"
 done
 mkdir -p "$BUNDLE_DIR/configs/user"
-[ -f ~/.bashrc ] && cp ~/.bashrc "$BUNDLE_DIR/configs/user/"
+[ -f ~/.bashrc ] && redact_to ~/.bashrc "$BUNDLE_DIR/configs/user/bashrc"
 [ -f ~/.config/opencode/opencode.jsonc ] && redact_to ~/.config/opencode/opencode.jsonc "$BUNDLE_DIR/configs/user/opencode.jsonc"
 
 # Services
@@ -54,7 +63,7 @@ systemctl list-units --type=service --state=running --no-pager > "$BUNDLE_DIR/se
 systemctl list-units --type=service --state=failed --no-pager > "$BUNDLE_DIR/services/failed.txt" 2>/dev/null || true
 
 # Doctor output
-bash "$PZ_ROOT/linux/audit/doctor.sh" > "$BUNDLE_DIR/doctor/doctor.txt" 2>&1 || true
+bash "$PZ_ROOT/linux/audit/doctor.sh" 2>&1 | redact_stream > "$BUNDLE_DIR/doctor/doctor.txt" || true
 
 # Steam Deck
 if [ -f /sys/devices/virtual/dmi/id/product_name ]; then
@@ -79,7 +88,7 @@ ss -ltnp 'sport = :8080 or sport = :1337' > "$BUNDLE_DIR/steamos-ux/decky-ports.
 [ -f ~/.config/sxhkd/sxhkdrc ] && cp ~/.config/sxhkd/sxhkdrc "$BUNDLE_DIR/steamos-ux/sxhkdrc"
 [ -f ~/.config/swhkd/swhkdrc ] && cp ~/.config/swhkd/swhkdrc "$BUNDLE_DIR/steamos-ux/swhkdrc"
 [ -f ~/.config/gamescope-session-plus/sessions.d/steam-plus ] && cp ~/.config/gamescope-session-plus/sessions.d/steam-plus "$BUNDLE_DIR/steamos-ux/steam-plus-fallback"
-[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/steamos/session.log" ] && cp "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/steamos/session.log" "$BUNDLE_DIR/steamos-ux/session.log"
+[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/steamos/session.log" ] && redact_to "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/steamos/session.log" "$BUNDLE_DIR/steamos-ux/session.log"
 [ -f ~/.config/systemd/user/phasezero-steamdeck-mode-watcher.service ] && cp ~/.config/systemd/user/phasezero-steamdeck-mode-watcher.service "$BUNDLE_DIR/steamos-ux/mode-watcher.service"
 ls -la ~/.local/share/applications/phasezero-*.desktop > "$BUNDLE_DIR/steamos-ux/desktop-entries.txt" 2>/dev/null || true
 
@@ -96,8 +105,8 @@ python3 "$PZ_ROOT/linux/emulation/steam-shortcut.py" status --app-name Hydra > "
 find "${PZ_EMULATION_ROOT:-$HOME/Emulation}" -maxdepth 3 -type d > "$BUNDLE_DIR/emulation/layout.txt" 2>/dev/null || true
 ls -la "${PZ_APPLICATIONS_DIR:-$HOME/Applications}"/EmuDeck.AppImage "${PZ_APPLICATIONS_DIR:-$HOME/Applications}"/Eden*.AppImage "${PZ_APPLICATIONS_DIR:-$HOME/Applications}"/Hydra.AppImage > "$BUNDLE_DIR/emulation/appimages.txt" 2>/dev/null || true
 mkdir -p "$BUNDLE_DIR/emulation/hydra-config"
-[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/config.json" ] && cp "${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/config.json" "$BUNDLE_DIR/emulation/hydra-config/config.json"
-[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/emulators_config.json" ] && cp "${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/emulators_config.json" "$BUNDLE_DIR/emulation/hydra-config/emulators_config.json"
+[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/config.json" ] && redact_to "${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/config.json" "$BUNDLE_DIR/emulation/hydra-config/config.json"
+[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/emulators_config.json" ] && redact_to "${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/emulators_config.json" "$BUNDLE_DIR/emulation/hydra-config/emulators_config.json"
 [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/emulation/hydra-policy.json" ] && cp "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/emulation/hydra-policy.json" "$BUNDLE_DIR/emulation/hydra-config/hydra-policy.json"
 [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/emulation-performance.json" ] && cp "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/emulation-performance.json" "$BUNDLE_DIR/emulation/performance-config.json"
 mkdir -p "$BUNDLE_DIR/emulation/srm-config"
@@ -108,8 +117,8 @@ bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" status > "$BUNDLE_DIR/st
 # Windows VM
 bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" status > "$BUNDLE_DIR/windows-vm/status.json" 2>&1 || true
 bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" boot status > "$BUNDLE_DIR/windows-vm/boot-status.txt" 2>&1 || true
-[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/windows-vm.conf" ] && cp "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/windows-vm.conf" "$BUNDLE_DIR/windows-vm/windows-vm.conf"
-[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/session.log" ] && cp "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/session.log" "$BUNDLE_DIR/windows-vm/session.log"
+[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/windows-vm.conf" ] && redact_to "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/windows-vm.conf" "$BUNDLE_DIR/windows-vm/windows-vm.conf"
+[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/session.log" ] && redact_to "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/session.log" "$BUNDLE_DIR/windows-vm/session.log"
 virsh -c qemu:///system list --all > "$BUNDLE_DIR/windows-vm/libvirt-domains.txt" 2>&1 || true
 winvm_domain="$(jq -r '.libvirt.domain // empty' "$BUNDLE_DIR/windows-vm/status.json" 2>/dev/null || true)"
 [ -n "$winvm_domain" ] && virsh -c qemu:///system dominfo "$winvm_domain" > "$BUNDLE_DIR/windows-vm/libvirt-domain.txt" 2>&1 || true
@@ -120,8 +129,8 @@ bash "$PZ_ROOT/linux/waydroid/waydroid.sh" boot status > "$BUNDLE_DIR/waydroid/b
 command -v waydroid > "$BUNDLE_DIR/waydroid/waydroid-path.txt" 2>/dev/null || true
 systemctl status waydroid-container --no-pager > "$BUNDLE_DIR/waydroid/container-service.txt" 2>&1 || true
 ls -la /dev/binder* /dev/binderfs /dev/vndbinder /dev/hwbinder > "$BUNDLE_DIR/waydroid/binder-devices.txt" 2>&1 || true
-[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/waydroid.conf" ] && cp "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/waydroid.conf" "$BUNDLE_DIR/waydroid/waydroid.conf"
-[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/waydroid/session.log" ] && cp "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/waydroid/session.log" "$BUNDLE_DIR/waydroid/session.log"
+[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/waydroid.conf" ] && redact_to "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/waydroid.conf" "$BUNDLE_DIR/waydroid/waydroid.conf"
+[ -f "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/waydroid/session.log" ] && redact_to "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/waydroid/session.log" "$BUNDLE_DIR/waydroid/session.log"
 
 # AI
 bash "$PZ_ROOT/linux/ai/status.sh" > "$BUNDLE_DIR/ai/status.json" 2>&1 || true
@@ -156,7 +165,8 @@ docker info > "$BUNDLE_DIR/docker/info.txt" 2>/dev/null || true
 
 # Compress
 tar -czf "$BUNDLE_PATH" -C "$(dirname "$BUNDLE_DIR")" "$(basename "$BUNDLE_DIR")"
-rm -rf "$BUNDLE_DIR"
+cleanup
+trap - EXIT INT TERM
 
 echo "Support bundle: $BUNDLE_PATH"
 echo "Size: $(du -h "$BUNDLE_PATH" | cut -f1)"

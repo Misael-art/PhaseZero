@@ -1,329 +1,328 @@
-/* PhaseZero UI Dashboard - frontend logic */
+/* PhaseZero UI Dashboard - safe, catalog-driven frontend */
+'use strict';
+
 const API_BASE = '/api';
-let TOKEN = (document.querySelector('meta[name="token"]')||{}).content || '';
+const STATUS_TIMEOUT_MS = 180_000;
+const ACTION_TIMEOUT_MS = 31 * 60_000;
+let actionsPromise;
+let actionMap = new Map();
 
-function headers() {
-  return {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${TOKEN}`,
-  };
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>'"]/g, char => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
+  })[char]);
 }
 
-async function api(method, path, body) {
-  const opts = { method, headers: headers() };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(`${API_BASE}${path}`, opts);
-  return r.json();
+async function api(method, path, body, timeoutMs = STATUS_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const options = {
+      method,
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal,
+    };
+    if (body !== undefined) {
+      options.headers['Content-Type'] = 'application/json';
+      options.body = JSON.stringify(body);
+    }
+    const response = await fetch(`${API_BASE}${path}`, options);
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      throw new Error(`Resposta inválida do servidor (HTTP ${response.status})`);
+    }
+    const data = await response.json();
+    if (!response.ok) {
+      const detail = (data.blockers || []).join('; ') || `HTTP ${response.status}`;
+      throw new Error(detail);
+    }
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError') throw new Error('Tempo limite excedido');
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
-/* ---- Status rendering helpers ---- */
 function badge(status) {
-  const map = { ok: 'ok', warn: 'warn', blocked: 'blocked', error: 'blocked', running: 'running' };
-  return `<span class="badge ${map[status] || 'warn'}">${status}</span>`;
+  const normalized = String(status || 'warn').toLowerCase();
+  const classes = { ok: 'ok', warn: 'warn', blocked: 'blocked', error: 'blocked', running: 'running' };
+  return `<span class="badge ${classes[normalized] || 'warn'}">${escapeHtml(normalized)}</span>`;
 }
 
-function checkIndicator(status) {
-  const colors = { ok: '#00e676', warn: '#ffc107', error: '#ff5252', blocked: '#ff5252' };
-  return `<span class="check-indicator" style="background:${colors[status] || '#9090b0'}"></span>`;
+function spinner(label = 'Carregando…') {
+  return `<div class="loading" role="status"><span class="spinner"></span>${escapeHtml(label)}</div>`;
 }
 
-function el(tag, attrs, ...children) {
-  const e = document.createElement(tag);
-  if (attrs) for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
-  for (const c of children) e.append(c);
-  return e;
+function errorBlock(error) {
+  return `<div class="notice error" role="alert">${escapeHtml(error.message || error)}</div>`;
 }
 
-/* ---- Page rendering ---- */
+function renderChecks(checks, nameLabel = 'Item') {
+  if (!Array.isArray(checks) || checks.length === 0) {
+    return '<div class="notice">Nenhum check retornado.</div>';
+  }
+  const rows = checks.map(check => `<tr>
+    <td>${escapeHtml(check.name)}</td>
+    <td>${badge(check.status)}</td>
+    <td>${escapeHtml(check.message)}</td>
+  </tr>`).join('');
+  return `<div class="table-wrap"><table><thead><tr><th>${escapeHtml(nameLabel)}</th><th>Status</th><th>Detalhe</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function statusCards(data) {
+  return `<div class="cards">
+    <div class="card"><div class="stat-label">Status</div><div class="stat">${badge(data.status)}</div></div>
+    <div class="card"><div class="stat-label">Checks</div><div class="stat">${escapeHtml((data.checks || []).length)}</div></div>
+  </div>`;
+}
+
+async function allActions() {
+  if (!actionsPromise) {
+    actionsPromise = api('GET', '/actions').then(data => {
+      const actions = Array.isArray(data.actions) ? data.actions : [];
+      actionMap = new Map(actions.map(action => [action.name, action]));
+      return actions;
+    }).catch(error => {
+      actionsPromise = undefined;
+      throw error;
+    });
+  }
+  return actionsPromise;
+}
+
+async function actionsFor(moduleName, predicate = () => true) {
+  return (await allActions())
+    .filter(action => action.module === moduleName && predicate(action))
+    .sort((left, right) => String(left.label).localeCompare(String(right.label), 'pt-BR'));
+}
+
+function actionButtons(actions) {
+  if (!actions.length) return '<div class="notice">Nenhuma ação disponível.</div>';
+  return `<div class="action-section"><h3>Ações</h3><div class="action-grid">${actions.map(action => {
+    const variant = action.mutable ? 'danger' : 'secondary';
+    return `<button class="btn btn-${variant} btn-sm" type="button" data-action="${escapeHtml(action.name)}">
+      ${escapeHtml(action.label || action.name)}
+    </button>`;
+  }).join('')}</div></div>`;
+}
+
 function showPage(id) {
-  document.querySelectorAll('.page').forEach(p => p.style.display = 'none');
-  document.querySelectorAll('.sidebar nav a').forEach(a => a.classList.remove('active'));
-  const page = document.getElementById(id);
-  if (page) page.style.display = 'block';
-  const link = document.querySelector(`.sidebar nav a[href="#${id}"]`);
-  if (link) link.classList.add('active');
-  if (id === 'overview') loadOverview();
-  else if (id === 'steamdeck') loadSteamDeck();
-  else if (id === 'emulation') loadEmulation();
-  else if (id === 'media') loadMedia();
-  else if (id === 'server') loadServer();
-  else if (id === 'ai') loadAI();
-  else if (id === 'profiles') loadProfiles();
-  else if (id === 'doctor') loadDoctor();
+  const page = document.getElementById(id) || document.getElementById('overview');
+  document.querySelectorAll('.page').forEach(item => { item.hidden = item !== page; });
+  document.querySelectorAll('.sidebar nav a').forEach(link => {
+    const active = link.getAttribute('href') === `#${page.id}`;
+    link.classList.toggle('active', active);
+    if (active) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+  const loaders = {
+    overview: loadOverview, steamdeck: loadSteamDeck, emulation: loadEmulation,
+    media: loadMedia, server: loadServer, ai: loadAI,
+    profiles: loadProfiles, doctor: loadDoctor,
+  };
+  loaders[page.id]?.();
 }
 
-/* ---- Overview ---- */
 async function loadOverview() {
   const container = document.getElementById('overview-content');
-  container.innerHTML = '<div class="spinner"></div> Loading...';
+  container.innerHTML = spinner('Verificando host…');
   try {
     const data = await api('GET', '/status');
-    let html = '<div class="cards">';
     let allOk = true;
-    for (const [mod, info] of Object.entries(data)) {
-      const s = info.status || 'warn';
-      if (s !== 'ok') allOk = false;
-      html += `<div class="card">
-        <div class="stat-label">${mod}</div>
-        <div class="stat">${badge(s)}</div>
-        <div style="font-size:.75rem;color:var(--text-dim);margin-top:.5rem">${(info.checks||[]).length} checks</div>
-      </div>`;
-    }
-    html += '</div>';
-    html += `<div style="padding:1rem;background:var(--surface);border-radius:8px;border:1px solid var(--border)">
-      <strong>Status geral:</strong> ${allOk ? badge('ok') + ' Sistema saudável' : badge('warn') + ' Requer atenção'}
-    </div>`;
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = `<div class="badge blocked">Erro: ${e.message}</div>`;
-  }
+    const cards = Object.entries(data).map(([moduleName, info]) => {
+      const status = info.status || 'warn';
+      if (status !== 'ok') allOk = false;
+      return `<div class="card"><div class="stat-label">${escapeHtml(moduleName)}</div>
+        <div class="stat">${badge(status)}</div>
+        <div class="card-detail">${escapeHtml((info.checks || []).length)} checks</div></div>`;
+    }).join('');
+    container.innerHTML = `<div class="cards">${cards}</div>
+      <div class="notice"><strong>Status geral:</strong> ${allOk ? `${badge('ok')} Sistema saudável` : `${badge('warn')} Requer atenção`}</div>`;
+  } catch (error) { container.innerHTML = errorBlock(error); }
 }
 
-/* ---- Steam Deck ---- */
-async function loadSteamDeck() {
-  const container = document.getElementById('steamdeck-content');
-  container.innerHTML = '<div class="spinner"></div>';
+async function loadModulePage(containerId, statusModule, catalogModule, predicate = () => true) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = spinner();
   try {
-    const data = await api('GET', '/status/steamdeck');
-    let html = '<div class="cards">';
-    html += `<div class="card"><div class="stat-label">Status</div><div class="stat">${badge(data.status)}</div></div>`;
-    html += '</div>';
-    if (data.checks && data.checks.length) {
-      html += '<table><tr><th>Check</th><th>Status</th><th>Detalhe</th></tr>';
-      for (const c of data.checks) html += `<tr><td>${c.name}</td><td>${badge(c.status)}</td><td>${c.message||''}</td></tr>`;
-      html += '</table>';
-    }
-    html += actionButtons('steamdeck', [
-      'steamdeck.handheld','steamdeck.docked-tv','steamdeck.docked-monitor',
-      'steamdeck.kb','steamdeck.kb-repair',
-      'steamdeck.plugins-status','steamdeck.plugins-install','steamdeck.plugins-install-privileged','steamdeck.plugins-install-plugins',
-      'steamdeck.plugins-repair','steamdeck.plugins-repair-privileged','steamdeck.plugins-powertools-repair',
-      'steamdeck.plugins-install-themes','steamdeck.plugins-enable-cef','steamdeck.plugins-prepare-ui',
-      'steamdeck.boot-status','steamdeck.boot-next-reboot'
+    const [data, actions] = await Promise.all([
+      api('GET', `/status/${statusModule}`), actionsFor(catalogModule, predicate),
     ]);
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = `<div class="badge blocked">${e.message}</div>`;
-  }
+    container.innerHTML = `${statusCards(data)}${renderChecks(data.checks)}${actionButtons(actions)}`;
+  } catch (error) { container.innerHTML = errorBlock(error); }
 }
 
-/* ---- Emulation ---- */
-async function loadEmulation() {
-  const container = document.getElementById('emulation-content');
-  container.innerHTML = '<div class="spinner"></div>';
-  try {
-    const data = await api('GET', '/status/emulation');
-    let html = '<div class="cards">';
-    html += `<div class="card"><div class="stat-label">Status</div><div class="stat">${badge(data.status)}</div></div>`;
-    html += `<div class="card"><div class="stat-label">Checks</div><div class="stat">${(data.checks||[]).length}</div></div>`;
-    html += '</div>';
-    if (data.checks && data.checks.length) {
-      html += '<table><tr><th>Check</th><th>Status</th><th>Detalhe</th></tr>';
-      for (const c of data.checks) {
-        const name = c.name || '';
-        let label = name;
-        if (name.startsWith('shared.')) label = name.replace('shared.', 'Compartilhado: ');
-        else if (name.startsWith('media.')) label = name.replace('media.', 'Mídia: ');
-        html += `<tr><td>${label}</td><td>${badge(c.status)}</td><td>${c.message||''}</td></tr>`;
-      }
-      html += '</table>';
-    }
-    html += '<div style="margin-top:1rem"><h3>Ações</h3>';
-    html += actionButtons('emulation', [
-      'emulation.retrodeck.status','emulation.retrodeck.plan','emulation.retrodeck.integrate','emulation.retrodeck.repair',
-      'emulation.shared.status','emulation.shared.plan','emulation.shared.apply',
-      'emulation.media.status','emulation.media.index','emulation.media.apply',
-      'emulation.performance.status','emulation.performance.apply','emulation.performance.prepare-lsfg',
-      'emulation.emudeck.status','emulation.fixes.list'
-    ]);
-    html += '</div>';
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = `<div class="badge blocked">${e.message}</div>`;
-  }
-}
+function loadSteamDeck() { return loadModulePage('steamdeck-content', 'steamdeck', 'Steam Deck'); }
+function loadEmulation() { return loadModulePage('emulation-content', 'emulation', 'Emulação'); }
+function loadServer() { return loadModulePage('server-content', 'server', 'Servidor'); }
+function loadAI() { return loadModulePage('ai-content', 'ai', 'IA & Dev'); }
 
-/* ---- Media ---- */
 async function loadMedia() {
   const container = document.getElementById('media-content');
-  container.innerHTML = '<div class="spinner"></div>';
+  container.innerHTML = spinner();
   try {
-    const data = await api('GET', '/status/emulation');
-    const mediaChecks = (data.checks||[]).filter(c => c.name.startsWith('media.'));
-    let html = '<div class="cards">';
-    html += `<div class="card"><div class="stat-label">Status</div><div class="stat">${badge(data.status)}</div></div>`;
-    html += `<div class="card"><div class="stat-label">Checks de mídia</div><div class="stat">${mediaChecks.length}</div></div>`;
-    html += '</div>';
-    if (mediaChecks.length) {
-      html += '<table><tr><th>Item</th><th>Status</th><th>Detalhe</th></tr>';
-      for (const c of mediaChecks) {
-        const name = c.name.replace('media.', '');
-        html += `<tr><td>${name}</td><td>${badge(c.status)}</td><td>${c.message||''}</td></tr>`;
-      }
-      html += '</table>';
-    }
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = `<div class="badge blocked">${e.message}</div>`;
-  }
-}
-
-/* ---- Server ---- */
-async function loadServer() {
-  const container = document.getElementById('server-content');
-  container.innerHTML = '<div class="spinner"></div>';
-  try {
-    const data = await api('GET', '/status/server');
-    let html = '<div class="cards">';
-    html += `<div class="card"><div class="stat-label">Status</div><div class="stat">${badge(data.status)}</div></div>`;
-    html += `<div class="card"><div class="stat-label">Checks</div><div class="stat">${(data.checks||[]).length}</div></div>`;
-    html += '</div>';
-    if (data.checks && data.checks.length) {
-      html += '<table><tr><th>Item</th><th>Status</th><th>Detalhe</th></tr>';
-      for (const c of data.checks) html += `<tr><td>${c.name}</td><td>${badge(c.status)}</td><td>${c.message||''}</td></tr>`;
-      html += '</table>';
-    }
-    html += '<div style="margin-top:1rem"><h3>Ações</h3>';
-    html += actionButtons('server', [
-      'server.homelab.status','server.homelab.plan','server.homelab.repair',
-      'server.homelab.up','server.homelab.down','server.homelab.backup','server.homelab.update',
-      'server.casaos.status','server.casaos.plan'
+    const [data, actions] = await Promise.all([
+      api('GET', '/status/emulation'),
+      actionsFor('Emulação', action => /\.(media|media-clean|shared|bios|keys|firmware|nsz|ps3-game)$/.test(action.name)),
     ]);
-    html += '</div>';
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = `<div class="badge blocked">${e.message}</div>`;
-  }
+    const checks = (data.checks || []).filter(check => String(check.name || '').startsWith('media.'));
+    container.innerHTML = `${statusCards({ status: data.status, checks })}${renderChecks(checks)}${actionButtons(actions)}`;
+  } catch (error) { container.innerHTML = errorBlock(error); }
 }
 
-/* ---- AI ---- */
-async function loadAI() {
-  const container = document.getElementById('ai-content');
-  container.innerHTML = '<div class="spinner"></div>';
-  try {
-    const data = await api('GET', '/status/ai');
-    let html = '<div class="cards">';
-    html += `<div class="card"><div class="stat-label">Status</div><div class="stat">${badge(data.status)}</div></div>`;
-    html += '</div>';
-    if (data.checks && data.checks.length) {
-      html += '<table><tr><th>Check</th><th>Status</th><th>Detalhe</th></tr>';
-      for (const c of data.checks) html += `<tr><td>${c.name}</td><td>${badge(c.status)}</td><td>${c.message||''}</td></tr>`;
-      html += '</table>';
-    }
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = `<div class="badge blocked">${e.message}</div>`;
-  }
-}
-
-/* ---- Profiles ---- */
 async function loadProfiles() {
   const container = document.getElementById('profiles-content');
-  container.innerHTML = '<div class="spinner"></div>';
+  container.innerHTML = spinner();
   try {
-    const data = await api('GET', '/actions');
-    const profileActions = (data.actions||[]).filter(a => a.name.startsWith('profiles.'));
-    let html = '<div class="cards">';
-    html += `<div class="card"><div class="stat-label">Profiles disponíveis</div></div>`;
-    html += '</div><table><tr><th>Profile</th><th>Descrição</th><th></th></tr>';
-    const profiles = [
-      'safe-base','dev-ai','gaming','steamdeck-linux','windows-vm-linux','waydroid-linux',
-      'emulation-linux','homelab','server-llm','server-homelab','server-homelab-hermes',
-      'server-llm-hermes','server-llm-homelab','server-llm-homelab-hermes','full-workstation'
-    ];
-    for (const p of profiles) {
-      html += `<tr><td>${p}</td><td style="color:var(--text-dim)">Ver descrição</td>
-        <td><button class="btn btn-secondary btn-sm" onclick="showPlan('profiles.${p}')">Ver perfil</button></td></tr>`;
-    }
-    html += '</table>';
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = `<div class="badge blocked">${e.message}</div>`;
-  }
+    const actions = await actionsFor('Perfis');
+    const rows = actions.map(action => `<tr><td>${escapeHtml(action.label)}</td><td><button class="btn btn-danger btn-sm" type="button" data-action="${escapeHtml(action.name)}">Pré-visualizar</button></td></tr>`).join('');
+    container.innerHTML = `<div class="table-wrap"><table><thead><tr><th>Perfil</th><th>Ação</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  } catch (error) { container.innerHTML = errorBlock(error); }
 }
 
-/* ---- Doctor ---- */
 async function loadDoctor() {
   const container = document.getElementById('doctor-content');
-  container.innerHTML = '<div class="spinner"></div>';
+  container.innerHTML = spinner();
   try {
-    const data = await api('GET', '/status/system');
-    let html = `<div class="cards">
-      <div class="card"><div class="stat-label">Sistema</div><div class="stat">${badge(data.status)}</div></div>
-    </div>`;
-    html += actionButtons('doctor', ['system.doctor','system.repair-plan','system.support-bundle']);
-    html += '<div id="doctor-output" style="margin-top:1rem"></div>';
-    container.innerHTML = html;
-  } catch (e) {
-    container.innerHTML = `<div class="badge blocked">${e.message}</div>`;
-  }
+    const [data, actions] = await Promise.all([api('GET', '/status/system'), actionsFor('Visão geral')]);
+    container.innerHTML = `${statusCards(data)}${renderChecks(data.checks)}${actionButtons(actions)}`;
+  } catch (error) { container.innerHTML = errorBlock(error); }
 }
 
-/* ---- Actions ---- */
-async function runAction(action, requireConfirm) {
-  if (requireConfirm) {
-    showConfirmModal(action);
+function actionOutput(html) {
+  const output = document.getElementById('action-output');
+  output.innerHTML = html;
+  output.hidden = false;
+  output.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function renderActionResult(data) {
+  const logs = (data.logs || []).map(log => `<pre class="log-viewer ${escapeHtml(log.level)}">${escapeHtml(log.message)}</pre>`).join('');
+  const blockers = (data.blockers || []).map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  return `<div class="notice"><div>Status: ${badge(data.status)}</div>${blockers ? `<ul>${blockers}</ul>` : ''}${logs}</div>`;
+}
+
+async function runAction(action, inputValue = '') {
+  actionOutput(spinner('Executando…'));
+  try {
+    const data = await api('POST', '/action', {
+      action: action.name, confirmed: true, input: inputValue,
+    }, ACTION_TIMEOUT_MS);
+    actionOutput(renderActionResult(data));
+  } catch (error) { actionOutput(errorBlock(error)); }
+}
+
+function makeModal(action) {
+  document.querySelector('.modal-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  const modal = document.createElement('div');
+  modal.className = 'modal';
+  modal.setAttribute('role', 'dialog');
+  modal.setAttribute('aria-modal', 'true');
+  const title = document.createElement('h3');
+  title.textContent = action.mutable ? 'Revisar e confirmar' : 'Executar ação';
+  const description = document.createElement('p');
+  description.textContent = action.label || action.name;
+  modal.append(title, description);
+
+  let input;
+  if (action.inputKind) {
+    const label = document.createElement('label');
+    label.className = 'field-label';
+    label.textContent = action.inputLabel || 'Caminho no host';
+    input = document.createElement('input');
+    input.className = 'path-input';
+    input.type = 'text';
+    input.autocomplete = 'off';
+    input.placeholder = '/caminho/no/host';
+    label.appendChild(input);
+    modal.appendChild(label);
+  }
+
+  const preview = document.createElement('div');
+  preview.className = 'modal-preview';
+  modal.appendChild(preview);
+  const buttons = document.createElement('div');
+  buttons.className = 'modal-buttons';
+  const cancel = document.createElement('button');
+  cancel.className = 'btn btn-secondary';
+  cancel.type = 'button';
+  cancel.textContent = 'Cancelar';
+  cancel.addEventListener('click', () => overlay.remove());
+  const confirm = document.createElement('button');
+  confirm.className = action.mutable ? 'btn btn-danger' : 'btn btn-primary';
+  confirm.type = 'button';
+  confirm.textContent = action.mutable ? 'Gerar prévia' : 'Executar';
+  buttons.append(cancel, confirm);
+  modal.appendChild(buttons);
+  overlay.appendChild(modal);
+  overlay.addEventListener('click', event => { if (event.target === overlay) overlay.remove(); });
+  document.body.appendChild(overlay);
+  (input || confirm).focus();
+  return { overlay, preview, confirm, input };
+}
+
+async function requestAction(action) {
+  if (!action.mutable && !action.inputKind) {
+    await runAction(action);
     return;
   }
-  const output = document.getElementById('action-output');
-  if (output) output.innerHTML = '<div class="spinner"></div> Executando...';
-  try {
-    const data = await api('POST', '/action', { action, confirmed: true });
-    if (output) {
-      let html = `<div style="margin-top:1rem;background:var(--surface);padding:1rem;border-radius:8px">
-        <div>Status: ${badge(data.status)}</div>`;
-      if (data.logs) for (const l of data.logs) {
-        html += `<div class="log-viewer"><span class="${l.level}">[${l.level}]</span> ${l.message}</div>`;
-      }
-      html += '</div>';
-      output.innerHTML = html;
-    }
-  } catch (e) {
-    if (output) output.innerHTML = `<div class="badge blocked">Erro: ${e.message}</div>`;
+  const ui = makeModal(action);
+  if (!action.mutable) {
+    ui.confirm.addEventListener('click', () => {
+      const value = ui.input?.value.trim() || '';
+      if (ui.input && !value) { ui.input.focus(); return; }
+      ui.overlay.remove();
+      runAction(action, value);
+    });
+    return;
   }
+
+  ui.confirm.addEventListener('click', async () => {
+    const inputValue = ui.input?.value.trim() || '';
+    if (ui.input && !inputValue) { ui.input.focus(); return; }
+    ui.confirm.disabled = true;
+    ui.preview.innerHTML = spinner('Gerando prévia segura…');
+    try {
+      const data = await api('POST', '/action', {
+        action: action.name, confirmed: false, input: inputValue,
+      }, ACTION_TIMEOUT_MS);
+      ui.preview.innerHTML = renderActionResult(data);
+      const apply = ui.confirm.cloneNode(true);
+      apply.textContent = 'Confirmar e aplicar';
+      apply.disabled = data.status !== 'ok';
+      ui.confirm.replaceWith(apply);
+      apply.addEventListener('click', () => {
+        ui.overlay.remove();
+        runAction(action, inputValue);
+      }, { once: true });
+    } catch (error) {
+      ui.preview.innerHTML = errorBlock(error);
+      ui.confirm.disabled = false;
+    }
+  });
 }
 
-function showConfirmModal(action) {
-  const existing = document.querySelector('.modal-overlay');
-  if (existing) existing.remove();
-  const overlay = el('div', { class: 'modal-overlay', onclick: e => { if (e.target === overlay) overlay.remove(); } });
-  const modal = el('div', { class: 'modal' });
-  modal.innerHTML = `<h3>Confirmar ação</h3>
-    <p>Tem certeza que deseja executar <strong>${action}</strong>?</p>
-    <p style="font-size:.8rem;color:var(--text-dim);margin-top:.5rem">Ação mutável requer confirmação explícita.</p>
-    <div class="modal-buttons">
-      <button class="btn btn-secondary" onclick="this.closest('.modal-overlay').remove()">Cancelar</button>
-      <button class="btn btn-primary" onclick="runAction('${action}', false); this.closest('.modal-overlay').remove()">Confirmar</button>
-    </div>`;
-  overlay.appendChild(modal);
-  document.body.appendChild(overlay);
-}
+document.addEventListener('click', event => {
+  const button = event.target.closest('[data-action]');
+  if (!button) return;
+  const action = actionMap.get(button.dataset.action);
+  if (action) requestAction(action);
+});
 
-function actionButtons(module, actions) {
-  const confirmPattern = /(apply|install|repair|up|down|backup|restore|update|next-reboot|optimize|launch|configure|sync|tailscale)/;
-  return `<div style="display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.5rem">
-    ${actions.map(a => {
-      const needsConfirm = confirmPattern.test(a);
-      return `<button class="btn btn-${needsConfirm ? 'danger' : 'secondary'} btn-sm" onclick="runAction('${a}', ${needsConfirm})">${a.split('.').pop()}</button>`;
-    }).join('')}
-  </div>
-  <div id="action-output"></div>`;
-}
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') document.querySelector('.modal-overlay')?.remove();
+});
 
-function showPlan(action) {
-  alert(`Plano para ${action}: execute via terminal com\npz ${action.replace('.', ' ')}`);
-}
-
-/* ---- Init ---- */
 document.addEventListener('DOMContentLoaded', () => {
-  // Hash routing
   function hashRoute() {
-    const hash = window.location.hash.slice(1) || 'overview';
-    showPage(hash);
+    showPage(window.location.hash.slice(1) || 'overview');
   }
   window.addEventListener('hashchange', hashRoute);
-  // fix template token
-  const meta = document.querySelector('meta[name="token"]');
-  if (meta) TOKEN = meta.content;
+  allActions().catch(error => actionOutput(errorBlock(error)));
   hashRoute();
 });

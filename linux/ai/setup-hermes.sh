@@ -43,15 +43,28 @@ install_hermes() {
         return 0
     fi
 
-    local tmp args=()
-    tmp="$(mktemp)"
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh -o "$tmp"
+    local tmp size rc=0 args=()
+    tmp="$(mktemp "${TMPDIR:-/tmp}/phasezero-hermes.XXXXXX")"
+    if ! curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 \
+        --connect-timeout 15 --max-time 120 \
+        https://hermes-agent.nousresearch.com/install.sh -o "$tmp"; then
+        rm -f -- "$tmp"
+        pz_error "Hermes installer download failed"
+        return 1
+    fi
+    size="$(wc -c < "$tmp")"
+    if [ "$size" -lt 256 ] || [ "$size" -gt 2097152 ] || ! head -n 1 "$tmp" | grep -q '^#!'; then
+        rm -f -- "$tmp"
+        pz_error "Hermes installer failed content validation (size=$size)"
+        return 1
+    fi
     args+=(--skip-setup --non-interactive)
     [ "${PZ_HERMES_SKIP_BROWSER:-0}" = "1" ] && args+=(--skip-browser)
     [ "${PZ_HERMES_INCLUDE_DESKTOP:-0}" = "1" ] && args+=(--include-desktop)
     pz_info "installing Hermes Agent into $HERMES_HOME"
-    HERMES_HOME="$HERMES_HOME" timeout "$INSTALL_TIMEOUT" bash "$tmp" "${args[@]}"
-    rm -f "$tmp"
+    HERMES_HOME="$HERMES_HOME" timeout "$INSTALL_TIMEOUT" bash "$tmp" "${args[@]}" || rc=$?
+    rm -f -- "$tmp"
+    [ "$rc" -eq 0 ] || { pz_error "Hermes installer failed (exit=$rc)"; return "$rc"; }
 
     if [ -x "$HOME/.local/bin/hermes" ]; then
         link_managed_bin "$HOME/.local/bin/hermes"

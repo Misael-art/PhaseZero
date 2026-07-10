@@ -159,7 +159,7 @@ protondb-decky|ProtonDB Badges|protondb-decky|database|https://github.com/OMGDuk
 hltb-for-deck|HLTB for Deck|hltb-for-deck|database|https://github.com/SDH-Stewardship/hltb-for-deck||hltb-for-deck,HLTB-for-Deck|HowLongToBeat estimates in game pages.
 decky-steamgriddb|SteamGridDB|decky-steamgriddb|database|https://github.com/SteamGridDB/decky-steamgriddb||decky-steamgriddb,SteamGridDB|Artwork management from Game Mode.
 decky-storage-cleaner|Storage Cleaner|decky-storage-cleaner|database|https://github.com/mcarlucci/decky-storage-cleaner||decky-storage-cleaner,StorageCleaner|Shader/compatdata cleanup from Game Mode.
-decky-game-settings|DeckSettings|decky-game-settings|database|https://github.com/SteamDeckHomebrew/decky-game-settings||decky-game-settings,DeckSettings|Community settings reference.
+decky-game-settings|Deck Settings|Deck Settings|database|https://github.com/SteamDeckHomebrew/decky-game-settings||decky-game-settings,DeckSettings|Community settings reference.
 Bluetooth|Bluetooth|Bluetooth|database|https://github.com/Outpox/Bluetooth||Bluetooth|Bluetooth quick settings from Decky.
 vibrantDeck|vibrantDeck|vibrantDeck|database|https://github.com/libvibrant/vibrantDeck||vibrantDeck|Display vibrance/saturation controls.
 EmuDecky|EmuDecky|EmuDecky|database|https://github.com/EmuDeck/EmuDecky||EmuDecky|EmuDeck integration in Game Mode.
@@ -167,7 +167,7 @@ decky-autoflatpaks|AutoFlatpaks|decky-autoflatpaks|database|https://github.com/j
 decky-ludusavi|Ludusavi|decky-ludusavi|database|https://github.com/mtkennerly/ludusavi-decky||decky-ludusavi,Ludusavi|Save backup integration.
 decky-wine-cellar|Wine Cellar|decky-wine-cellar|database|https://github.com/SteamDeckHomebrew/decky-wine-cellar||decky-wine-cellar,WineCellar|Wine/Proton management helper.
 decky-lsfg-vk|Decky LSFG-VK|decky-lsfg-vk|database|https://github.com/xXJSONDeruloXx/decky-lsfg-vk|xXJSONDeruloXx/decky-lsfg-vk|decky-lsfg-vk,Decky.LSFG-VK,Decky-LSFG-VK|Requires Lossless Scaling Steam app and per-game launch option.
-NonSteamLaunchers|NonSteamLaunchers|NonSteamLaunchers|database|https://github.com/moraroy/NonSteamLaunchersDecky|moraroy/NonSteamLaunchersDecky|NonSteamLaunchers,NonSteamLaunchersDecky|Decky store preferred; database snapshot fallback available.
+NonSteamLaunchers|NonSteamLaunchers|NonSteamLaunchers|unsupported|https://github.com/moraroy/NonSteamLaunchersDecky||NonSteamLaunchers,NonSteamLaunchersDecky|No packaged Decky artifact is currently published; incomplete source snapshots are quarantined. Use PhaseZero non-Steam launcher integration.
 EOF
 }
 
@@ -225,7 +225,8 @@ plugin_path_by_candidates() {
                 fi
             done
         fi
-    done < <(find "$PZ_DECKY_PLUGINS_DIR" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort)
+    done < <(find "$PZ_DECKY_PLUGINS_DIR" -maxdepth 1 -mindepth 1 -type d \
+        ! -name '.phasezero-*' ! -name '*.bak.*' 2>/dev/null | sort)
 }
 
 plugin_version() {
@@ -245,15 +246,13 @@ plugin_health_json() {
     elif [ ! -f "$path/plugin.json" ]; then
         ok=false
         issue="plugin.json missing"
-    elif [ ! -f "$path/main.py" ]; then
-        if [ -f "$path/package.json" ] &&
-            jq -e '.type == "module"' "$path/package.json" >/dev/null 2>&1 &&
-            [ -f "$path/dist/index.js" ]; then
-            ok=true
-        else
-            ok=false
-            issue="plugin backend or frontend bundle missing"
-        fi
+    elif ! jq -e 'type == "object" and ((.name // .id // "") | type == "string" and length > 0)' \
+        "$path/plugin.json" >/dev/null 2>&1; then
+        ok=false
+        issue="plugin.json invalid"
+    elif [ ! -f "$path/dist/index.js" ] || [ ! -s "$path/dist/index.js" ] || [ ! -r "$path/dist/index.js" ]; then
+        ok=false
+        issue="frontend bundle missing or empty: dist/index.js"
     fi
 
     if [ "$ok" = true ] && [ "$id" = "PowerTools" ]; then
@@ -267,8 +266,23 @@ plugin_health_json() {
     jq -n --argjson ok "$ok" --arg issue "$issue" '{ok: $ok, issue: $issue}'
 }
 
+plugin_frontend_reachable_json() {
+    local path="$1" name encoded status
+    if [ "${PZ_DECKY_RUNTIME_PROBE:-1}" != 1 ] || [ -z "$path" ] || \
+        [ ! -f "$path/plugin.json" ] || [ "$(decky_port_bool)" != true ]; then
+        echo null
+        return 0
+    fi
+    name="$(jq -er '.name | select(type == "string" and length > 0)' "$path/plugin.json" 2>/dev/null || true)"
+    [ -n "$name" ] || { echo false; return 0; }
+    encoded="$(jq -rn --arg value "$name" '$value | @uri')"
+    status="$(curl -sS -o /dev/null -w '%{http_code}' --connect-timeout 1 --max-time 3 \
+        "http://127.0.0.1:1337/plugins/$encoded/dist/index.js" 2>/dev/null || true)"
+    [ "$status" = 200 ] && echo true || echo false
+}
+
 plugins_json() {
-    local arr="[]" id display store mode homepage repo candidates note path installed version health healthy health_issue requires_lossless lossless_ready privileged_required privileged_ready
+    local arr="[]" id display store mode homepage repo candidates note path installed version health healthy health_issue frontend_reachable requires_lossless lossless_ready privileged_required privileged_ready installable
     while IFS='|' read -r id display store mode homepage repo candidates note; do
         [ -z "$id" ] && continue
         path="$(plugin_path_by_candidates "$candidates" || true)"
@@ -279,6 +293,7 @@ plugins_json() {
         health="$(plugin_health_json "$id" "$path")"
         healthy="$(jq -r '.ok' <<< "$health")"
         health_issue="$(jq -r '.issue' <<< "$health")"
+        frontend_reachable="$(plugin_frontend_reachable_json "$path")"
         requires_lossless=false
         lossless_ready=true
         if [ "$id" = "decky-lsfg-vk" ]; then
@@ -291,6 +306,8 @@ plugins_json() {
             privileged_required=true
             privileged_ready="$(decky_privileged_service_bool)"
         fi
+        installable=true
+        [ "$mode" = "unsupported" ] && installable=false
         arr="$(jq \
             --arg id "$id" \
             --arg displayName "$display" \
@@ -305,10 +322,12 @@ plugins_json() {
             --arg healthIssue "$health_issue" \
             --argjson installed "$installed" \
             --argjson healthy "$healthy" \
+            --argjson frontendReachable "$frontend_reachable" \
             --argjson requiresLossless "$requires_lossless" \
             --argjson losslessReady "$lossless_ready" \
             --argjson privilegedRequired "$privileged_required" \
             --argjson privilegedReady "$privileged_ready" \
+            --argjson installable "$installable" \
             '. += [{
                 id: $id,
                 displayName: $displayName,
@@ -319,6 +338,7 @@ plugins_json() {
                 candidates: ($candidates | split(",")),
                 installed: $installed,
                 healthy: $healthy,
+                frontendReachable: $frontendReachable,
                 healthIssue: $healthIssue,
                 path: $path,
                 version: $version,
@@ -326,6 +346,7 @@ plugins_json() {
                 losslessScalingReady: $losslessReady,
                 requiresPrivilegedDecky: $privilegedRequired,
                 privilegedDeckyReady: $privilegedReady,
+                installable: $installable,
                 note: $note
             }]' <<< "$arr")"
     done < <(plugin_catalog)
@@ -365,12 +386,13 @@ themes_json() {
 }
 
 status_json() {
-    local plugins themes powertools_ready css_installed animation_installed
+    local plugins themes powertools_ready css_installed animation_installed plugins_ready
     plugins="$(plugins_json)"
     themes="$(themes_json)"
     powertools_ready="$(jq -r '[.[] | select(.id == "PowerTools" and .installed == true and .healthy == true)] | length > 0' <<< "$plugins")"
     css_installed="$(jq -r '[.[] | select(.id == "SDH-CssLoader" and .installed == true)] | length > 0' <<< "$plugins")"
     animation_installed="$(jq -r '[.[] | select(.id == "SDH-AnimationChanger" and .installed == true)] | length > 0' <<< "$plugins")"
+    plugins_ready="$(jq -r '[.[] | select(.installable == true)] | all(.installed and .healthy and (.frontendReachable != false))' <<< "$plugins")"
     jq -n \
         --arg deckyHome "$PZ_DECKY_HOME" \
         --arg pluginsDir "$PZ_DECKY_PLUGINS_DIR" \
@@ -401,6 +423,7 @@ status_json() {
         --argjson powerToolsReady "$powertools_ready" \
         --argjson cssLoaderInstalled "$css_installed" \
         --argjson animationChangerInstalled "$animation_installed" \
+        --argjson pluginsReady "$plugins_ready" \
         --argjson plugins "$plugins" \
         --argjson themes "$themes" \
         '{
@@ -445,6 +468,7 @@ status_json() {
                 tdpFallbackReady: $phasezeroTdpBridge,
                 themePluginReady: $cssLoaderInstalled,
                 animationPluginReady: $animationChangerInstalled,
+                curatedPluginsReady: $pluginsReady,
                 steamUiDebugReady: ($cefDebug and $steamCefPort),
                 deckyMenuReady: ($installed and $serviceActive and $cefDebug and $deckyPort and $steamCefPort and ($dualServiceConflict | not))
             },
@@ -476,6 +500,22 @@ ensure_plugin_dirs() {
     install -d "$PZ_DECKY_PLUGINS_DIR" "$PZ_DECKY_THEMES_DIR" "$PZ_DECKY_CACHE"
 }
 
+migrate_legacy_plugin_backups() {
+    local backup_dir path target
+    [ -d "$PZ_DECKY_PLUGINS_DIR" ] || return 0
+    backup_dir="$PZ_DECKY_HOME/plugin-backups"
+    while IFS= read -r -d '' path; do
+        if [ ! -w "$PZ_DECKY_PLUGINS_DIR" ] && [ "$EUID" -ne 0 ]; then
+            pz_warn "legacy plugin backup remains loadable; elevated repair required: $path"
+            return 1
+        fi
+        install -d "$backup_dir"
+        target="$backup_dir/$(basename "$path").migrated.$(date +%Y%m%d%H%M%S).$$"
+        mv "$path" "$target"
+        pz_info "moved legacy plugin backup outside loader path: $target"
+    done < <(find "$PZ_DECKY_PLUGINS_DIR" -maxdepth 1 -mindepth 1 -type d -name '*.bak.*' -print0 2>/dev/null)
+}
+
 enable_cef_debug() {
     local path
     for path in \
@@ -495,13 +535,8 @@ repair_permissions() {
         if [ -w "$path" ]; then
             continue
         fi
-        if pz_can_sudo_noninteractive; then
-            sudo -n chown -R "$USER:$USER" "$path"
-            pz_info "fixed ownership: $path"
-        else
-            pz_warn "not writable: $path"
-            pz_warn "run: sudo chown -R $USER:$USER $path"
-        fi
+        pz_warn "not writable: $path"
+        pz_warn "use Decky websocket install or: linux/pz steamdeck plugins repair-plugins-privileged"
     done
 }
 
@@ -542,8 +577,89 @@ deckbrew_plugin_json() {
         head -c 1048576
 }
 
+validate_zip_archive() {
+    local zip="$1"
+    require_cmds python3
+    python3 - "$zip" <<'PY'
+import os
+import stat
+import sys
+import zipfile
+from pathlib import PurePosixPath
+
+archive = sys.argv[1]
+max_entries = int(os.environ.get("PZ_DECKY_ZIP_MAX_ENTRIES", "20000"))
+max_file = int(os.environ.get("PZ_DECKY_ZIP_MAX_FILE_BYTES", str(256 * 1024 * 1024)))
+max_total = int(os.environ.get("PZ_DECKY_ZIP_MAX_TOTAL_BYTES", str(512 * 1024 * 1024)))
+
+try:
+    with zipfile.ZipFile(archive) as handle:
+        entries = handle.infolist()
+        if not entries or len(entries) > max_entries:
+            raise ValueError(f"invalid archive entry count: {len(entries)}")
+        total = 0
+        for entry in entries:
+            raw = entry.filename
+            normalized = raw.replace("\\", "/")
+            path = PurePosixPath(normalized)
+            if (
+                not raw
+                or raw.startswith(("/", "\\"))
+                or "\x00" in raw
+                or len(raw) > 1024
+                or (len(raw) >= 2 and raw[1] == ":")
+                or any(part in ("", ".", "..") for part in path.parts)
+            ):
+                raise ValueError(f"unsafe archive path: {raw!r}")
+            mode = (entry.external_attr >> 16) & 0xFFFF
+            kind = stat.S_IFMT(mode)
+            if kind not in (0, stat.S_IFREG, stat.S_IFDIR):
+                raise ValueError(f"unsupported archive entry type: {raw!r}")
+            if entry.flag_bits & 0x1:
+                raise ValueError(f"encrypted archive entry: {raw!r}")
+            if entry.file_size > max_file:
+                raise ValueError(f"archive entry too large: {raw!r}")
+            total += entry.file_size
+            if total > max_total:
+                raise ValueError("archive expands beyond configured limit")
+            if entry.compress_size and entry.file_size / entry.compress_size > 1000:
+                raise ValueError(f"suspicious compression ratio: {raw!r}")
+        corrupt = handle.testzip()
+        if corrupt:
+            raise ValueError(f"archive CRC failure: {corrupt!r}")
+except (OSError, ValueError, zipfile.BadZipFile) as exc:
+    print(f"unsafe or invalid Decky package: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+find_packaged_plugin_root() {
+    local extracted="$1" bundle root found=""
+    while IFS= read -r -d '' bundle; do
+        root="${bundle%/dist/index.js}"
+        [ -f "$root/plugin.json" ] || continue
+        if [ -n "$found" ] && [ "$found" != "$root" ]; then
+            pz_error "multiple Decky plugin roots found in package"
+            return 1
+        fi
+        found="$root"
+    done < <(find "$extracted" -maxdepth 8 -type f -path '*/dist/index.js' -print0 2>/dev/null)
+    [ -n "$found" ] || {
+        pz_error "complete Decky package not found (plugin.json + dist/index.js required)"
+        return 1
+    }
+    printf '%s\n' "$found"
+}
+
+safe_download_url() {
+    case "$1" in
+        https://*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
 download_remote_binaries_for_plugin() {
-    local plugin_dir="$1" package_json bin_dir name url hash target got_hash
+    local plugin_dir="$1" package_json bin_dir name url hash target partial got_hash
     package_json="$plugin_dir/package.json"
     [ -f "$package_json" ] || return 0
     if ! jq -e '.remote_binary and (.remote_binary | length > 0)' "$package_json" >/dev/null 2>&1; then
@@ -555,15 +671,29 @@ download_remote_binaries_for_plugin() {
     install -d "$bin_dir"
     while IFS=$'\t' read -r name url hash; do
         [ -n "$name" ] && [ -n "$url" ] && [ -n "$hash" ] || continue
+        [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || {
+            pz_error "unsafe remote binary name: $name"
+            return 1
+        }
+        safe_download_url "$url" || {
+            pz_error "remote binary URL must use HTTPS: $name"
+            return 1
+        }
+        [[ "$hash" =~ ^[A-Fa-f0-9]{64}$ ]] || {
+            pz_error "invalid remote binary checksum: $name"
+            return 1
+        }
         target="$bin_dir/$name"
+        partial="$target.part.$$"
         pz_info "downloading plugin binary: $(basename "$plugin_dir")/$name"
-        curl -fL --retry 3 --connect-timeout 15 -o "$target" "$url"
-        got_hash="$(sha256sum "$target" | awk '{print $1}')"
+        curl -fL --retry 3 --connect-timeout 15 --max-time 300 --max-filesize 268435456 -o "$partial" "$url"
+        got_hash="$(sha256sum "$partial" | awk '{print $1}')"
         if [ "$got_hash" != "$hash" ]; then
-            rm -f "$target"
+            rm -f "$partial"
             pz_error "remote binary checksum mismatch: $name"
             return 1
         fi
+        mv "$partial" "$target"
         chmod +x "$target"
     done < <(jq -r '.remote_binary[] | [.name, .url, .sha256hash] | @tsv' "$package_json")
 }
@@ -711,38 +841,62 @@ database_archive_asset() {
     esac
 }
 
-install_zip_plugin() {
-    local id="$1" zip="$2" target_name="$3" tmp plugin_root target backup
-    require_cmds unzip jq
-    ensure_plugin_dirs
+install_zip_plugin() (
+    local id="$1" zip="$2" target_name="$3" tmp stage_dir staged_plugin plugin_root target backup="" backup_dir health
+    require_cmds unzip jq python3 || return 1
+    ensure_plugin_dirs || return 1
+    [[ "$target_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || {
+        pz_error "unsafe plugin target name: $target_name"
+        return 1
+    }
     if [ ! -w "$PZ_DECKY_PLUGINS_DIR" ] && [ "$EUID" -ne 0 ]; then
         pz_warn "plugin dir is not writable: $PZ_DECKY_PLUGINS_DIR"
         return 1
     fi
-    tmp="$(mktemp -d)"
-    unzip -q "$zip" -d "$tmp"
-    plugin_root="$(find "$tmp" -maxdepth 4 -type f -name plugin.json -printf '%h\n' 2>/dev/null | head -1)"
-    if [ -z "$plugin_root" ]; then
+    tmp="$(mktemp -d)" || return 1
+    stage_dir="$(mktemp -d "$PZ_DECKY_PLUGINS_DIR/.phasezero-install.XXXXXX")" || {
         rm -rf "$tmp"
-        pz_error "plugin.json not found in $zip"
+        return 1
+    }
+    trap 'rm -rf "$tmp" "$stage_dir"' EXIT
+    validate_zip_archive "$zip" || return 1
+    unzip -q -- "$zip" -d "$tmp" || return 1
+    if find "$tmp" -type l -print -quit | grep -q .; then
+        pz_error "Decky package contains symbolic links"
+        return 1
+    fi
+    if ! plugin_root="$(find_packaged_plugin_root "$tmp")"; then
+        return 1
+    fi
+    staged_plugin="$stage_dir/$target_name"
+    install -d "$staged_plugin" || return 1
+    cp -a "$plugin_root"/. "$staged_plugin"/ || return 1
+    download_remote_binaries_for_plugin "$staged_plugin" || return 1
+    health="$(plugin_health_json "$id" "$staged_plugin")" || return 1
+    if [ "$(jq -r '.ok' <<< "$health")" != true ]; then
+        pz_error "$id package failed validation: $(jq -r '.issue' <<< "$health")"
         return 1
     fi
     target="$PZ_DECKY_PLUGINS_DIR/$target_name"
-    if [ -e "$target" ]; then
-        backup="${target}.bak.$(date +%s)"
+    if [ -e "$target" ] || [ -L "$target" ]; then
+        backup_dir="$PZ_DECKY_HOME/plugin-backups"
+        install -d "$backup_dir" || return 1
+        backup="$backup_dir/${target_name}.bak.$(date +%Y%m%d%H%M%S).$$"
         if ! mv "$target" "$backup"; then
-            rm -rf "$tmp"
             pz_warn "could not backup plugin: $target"
             return 1
         fi
         pz_info "backup plugin: $backup"
     fi
-    install -d "$target"
-    cp -a "$plugin_root"/. "$target"/
-    download_remote_binaries_for_plugin "$target"
-    rm -rf "$tmp"
+    if ! mv "$staged_plugin" "$target"; then
+        pz_error "could not activate plugin: $target"
+        if [ -n "$backup" ] && [ ! -e "$target" ]; then
+            mv "$backup" "$target" || pz_error "automatic rollback failed: $backup -> $target"
+        fi
+        return 1
+    fi
     pz_info "installed Decky plugin: $id -> $target"
-}
+)
 
 install_store_plugin_via_decky() {
     local artifact="$1" name="$2" version="$3" hash="$4" client="$PZ_ROOT/linux/steamdeck/decky-ws-client.py"
@@ -754,27 +908,52 @@ PY
     python3 "$client" install-plugin --artifact "$artifact" --name "$name" --version "$version" --hash "$hash"
 }
 
+wait_plugin_healthy() {
+    local id="$1" candidates="$2" budget="${PZ_DECKY_PLUGIN_READY_TIMEOUT:-20}" i path health
+    for ((i = 1; i <= budget; i++)); do
+        path="$(plugin_path_by_candidates "$candidates" || true)"
+        health="$(plugin_health_json "$id" "$path")"
+        if [ "$(jq -r '.ok' <<< "$health")" = true ]; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 install_store_plugin() {
-    local id="$1" store="$2" display="$3" candidates="$4" entry store_name version hash artifact zip got_hash
+    local id="$1" store="$2" display="$3" candidates="$4" entry store_name version safe_version hash artifact zip partial got_hash
     require_cmds curl jq sha256sum unzip
     entry="$(deckbrew_plugin_json "$store" "$display" "$id" || true)"
     if [ -z "$entry" ]; then
-        pz_warn "$id: Deckbrew store entry not found; trying source fallback"
+        pz_warn "$id: Deckbrew store entry not found"
         return 1
     fi
     store_name="$(jq -r '.name // empty' <<< "$entry")"
     version="$(jq -r '.versions[0].name // empty' <<< "$entry")"
     hash="$(jq -r '.versions[0].hash // empty' <<< "$entry")"
     artifact="$(jq -r '.versions[0].artifact // empty' <<< "$entry")"
-    [ -n "$artifact" ] && [ "$artifact" != "null" ] || artifact="$PZ_DECKBREW_CDN_URL/$hash.zip"
-    [ -n "$version" ] && [ -n "$hash" ] || {
-        pz_warn "$id: Deckbrew version/hash missing; trying source fallback"
+    [ -n "$version" ] && [[ "$hash" =~ ^[A-Fa-f0-9]{64}$ ]] || {
+        pz_warn "$id: Deckbrew version/hash invalid"
+        return 1
+    }
+    if [ -z "$artifact" ] || [ "$artifact" = "null" ] || ! safe_download_url "$artifact"; then
+        artifact="$PZ_DECKBREW_CDN_URL/$hash.zip"
+    fi
+    safe_download_url "$artifact" || {
+        pz_warn "$id: Deckbrew package URL must use HTTPS"
         return 1
     }
     install -d "$PZ_DECKY_CACHE"
-    zip="$PZ_DECKY_CACHE/${id}-${version}.deckbrew.zip"
+    safe_version="${version//[^A-Za-z0-9._-]/_}"
+    zip="$PZ_DECKY_CACHE/${id}-${safe_version}.deckbrew.zip"
+    partial="$zip.part.$$"
     pz_info "downloading $id from Deckbrew store: $version"
-    curl -fL --retry 3 --connect-timeout 15 -o "$zip" "$artifact"
+    if ! curl -fL --retry 3 --connect-timeout 15 --max-time 300 --max-filesize 268435456 -o "$partial" "$artifact"; then
+        rm -f "$partial"
+        return 1
+    fi
+    mv "$partial" "$zip"
     got_hash="$(sha256sum "$zip" | awk '{print $1}')"
     if [ "$got_hash" != "$hash" ]; then
         rm -f "$zip"
@@ -782,8 +961,11 @@ install_store_plugin() {
         return 1
     fi
     if [ "$EUID" -ne 0 ] && [ "${PZ_DECKY_STORE_VIA_WS:-1}" = "1" ] && install_store_plugin_via_decky "file://$zip" "$store_name" "$version" "$hash"; then
-        pz_info "installed Decky store plugin through loader: $store_name $version"
-        return 0
+        if wait_plugin_healthy "$id" "$candidates"; then
+            pz_info "installed and verified Decky store plugin through loader: $store_name $version"
+            return 0
+        fi
+        pz_warn "$id: Decky Loader reported success but installed package did not become healthy"
     fi
     install_zip_plugin "$id" "$zip" "${candidates%%,*}"
 }
@@ -794,34 +976,60 @@ install_release_zip_plugin() {
     IFS=$'\t' read -r asset_name asset_url < <(github_latest_asset "$repo" "$regex")
     if [ -z "${asset_url:-}" ]; then
         pz_warn "$id: release ZIP not found; use Decky store/developer ZIP install"
-        return 0
+        return 1
     fi
+    safe_download_url "$asset_url" || { pz_warn "$id: release package URL must use HTTPS"; return 1; }
     install -d "$PZ_DECKY_CACHE"
     zip="$PZ_DECKY_CACHE/$asset_name"
     pz_info "downloading $id: $asset_name"
-    curl -fsSL --retry 3 --connect-timeout 15 -o "$zip" "$asset_url"
+    curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 --max-filesize 268435456 -o "$zip" "$asset_url"
     target_name="${candidates%%,*}"
     install_zip_plugin "$id" "$zip" "$target_name"
 }
 
 install_database_plugin() {
     local id="$1" candidates="$2" asset_name asset_url zip target_name
-    IFS=$'\t' read -r asset_name asset_url < <(database_archive_asset "$id")
+    IFS=$'\t' read -r asset_name asset_url < <(database_archive_asset "$id" || true)
     if [ -z "${asset_url:-}" ]; then
-        pz_warn "$id: Decky database archive not resolvable; trying git fallback"
-        install_database_git_plugin "$id" "$candidates"
-        return $?
+        pz_warn "$id: packaged Decky artifact unavailable"
+        return 1
     fi
+    safe_download_url "$asset_url" || {
+        pz_warn "$id: Decky database archive URL must use HTTPS"
+        return 1
+    }
     install -d "$PZ_DECKY_CACHE"
     zip="$PZ_DECKY_CACHE/$asset_name"
     pz_info "downloading $id from Decky plugin database"
-    if ! curl -fsSL --retry 3 --connect-timeout 15 -o "$zip" "$asset_url"; then
-        pz_warn "$id: archive download failed; trying git fallback"
-        install_database_git_plugin "$id" "$candidates"
-        return $?
+    if ! curl -fsSL --retry 3 --connect-timeout 15 --max-time 300 --max-filesize 268435456 -o "$zip.part.$$" "$asset_url"; then
+        rm -f "$zip.part.$$"
+        pz_warn "$id: packaged archive download failed"
+        return 1
     fi
+    mv "$zip.part.$$" "$zip"
     target_name="${candidates%%,*}"
-    install_zip_plugin "$id" "$zip" "$target_name" || install_database_git_plugin "$id" "$candidates"
+    install_zip_plugin "$id" "$zip" "$target_name"
+}
+
+quarantine_broken_plugin() {
+    local id="$1" candidates="$2" path health disabled_dir target
+    path="$(plugin_path_by_candidates "$candidates" || true)"
+    [ -n "$path" ] || return 0
+    health="$(plugin_health_json "$id" "$path")"
+    [ "$(jq -r '.ok' <<< "$health")" != true ] || return 0
+    case "$path" in
+        "$PZ_DECKY_PLUGINS_DIR"/*) ;;
+        *) pz_error "refusing to quarantine path outside plugin directory: $path"; return 1 ;;
+    esac
+    if [ ! -w "$PZ_DECKY_PLUGINS_DIR" ] && [ "$EUID" -ne 0 ]; then
+        pz_warn "$id cannot be quarantined without elevated write access: $path"
+        return 1
+    fi
+    disabled_dir="$PZ_DECKY_HOME/disabled-plugins"
+    install -d "$disabled_dir"
+    target="$disabled_dir/$(basename "$path").disabled.$(date +%Y%m%d%H%M%S).$$"
+    mv "$path" "$target"
+    pz_warn "quarantined incomplete Decky plugin: $id -> $target"
 }
 
 install_catalog_plugin() {
@@ -832,7 +1040,7 @@ install_catalog_plugin() {
                 return 0
             fi
             if [ ! -w "$PZ_DECKY_PLUGINS_DIR" ] && [ "$EUID" -ne 0 ]; then
-                pz_warn "$id: direct source fallback skipped; plugin dir is not writable"
+                pz_warn "$id: direct packaged fallback skipped; plugin dir is not writable"
                 pz_warn "run: linux/pz steamdeck plugins install-plugin-privileged $id"
                 return 1
             fi
@@ -844,49 +1052,15 @@ install_catalog_plugin() {
         store)
             install_store_plugin "$id" "$store" "$display" "$candidates"
             ;;
+        unsupported)
+            pz_error "$id: no verified packaged Decky artifact is available"
+            return 1
+            ;;
         *)
             pz_warn "$id: unknown install mode $mode"
             return 1
             ;;
     esac
-}
-
-install_database_git_plugin() {
-    local id="$1" candidates="$2" meta repo sha tmp plugin_root target backup
-    require_cmds git jq
-    ensure_plugin_dirs
-    meta="$(curl -fsSL "https://api.github.com/repos/SteamDeckHomebrew/decky-plugin-database/contents/plugins/$id?ref=main")" || {
-        pz_warn "$id: Decky database metadata unavailable"
-        return 1
-    }
-    repo="$(jq -r '.submodule_git_url // empty' <<< "$meta")"
-    sha="$(jq -r '.sha // empty' <<< "$meta")"
-    [ -n "$repo" ] || { pz_warn "$id: no source repository in Decky database"; return 1; }
-    tmp="$(mktemp -d)"
-    if ! git clone --filter=blob:none "$repo" "$tmp/repo" >/dev/null 2>&1; then
-        rm -rf "$tmp"
-        pz_warn "$id: git clone failed: $repo"
-        return 1
-    fi
-    if [ -n "$sha" ]; then
-        git -C "$tmp/repo" checkout "$sha" >/dev/null 2>&1 || true
-    fi
-    plugin_root="$(find "$tmp/repo" -maxdepth 4 -type f -name plugin.json -printf '%h\n' 2>/dev/null | head -1)"
-    if [ -z "$plugin_root" ]; then
-        rm -rf "$tmp"
-        pz_warn "$id: plugin.json not found after git clone"
-        return 1
-    fi
-    target="$PZ_DECKY_PLUGINS_DIR/${candidates%%,*}"
-    if [ -e "$target" ]; then
-        backup="${target}.bak.$(date +%s)"
-        mv "$target" "$backup"
-        pz_info "backup plugin: $backup"
-    fi
-    install -d "$target"
-    cp -a "$plugin_root"/. "$target"/
-    rm -rf "$tmp"
-    pz_info "installed Decky plugin via git fallback: $id -> $target"
 }
 
 install_curated_plugins() {
@@ -903,6 +1077,14 @@ install_curated_plugins() {
         path="$(plugin_path_by_candidates "$candidates" || true)"
         health="$(plugin_health_json "$id" "$path")"
         healthy="$(jq -r '.ok' <<< "$health")"
+        if [ "$mode" = "unsupported" ]; then
+            if [ -n "$path" ] && [ "$healthy" != true ]; then
+                quarantine_broken_plugin "$id" "$candidates" || failures=$((failures + 1))
+            else
+                pz_info "$display skipped: no verified packaged Decky artifact available"
+            fi
+            continue
+        fi
         if [ -n "$path" ] && [ "$healthy" = true ] && [ "$PZ_DECKY_FORCE" != "1" ]; then
             pz_info "$display already installed: $path"
             continue
@@ -922,8 +1104,10 @@ install_curated_plugins() {
                 ;;
         esac
     done < <(plugin_catalog)
-    [ "$failures" -eq 0 ] || pz_warn "$failures curated plugin(s) failed; status will show remaining gaps"
-    return 0
+    if [ "$failures" -ne 0 ]; then
+        pz_warn "$failures curated plugin(s) failed; status will show remaining gaps"
+        return 1
+    fi
 }
 
 install_one_plugin() {
@@ -946,13 +1130,9 @@ install_one_plugin_privileged() {
     enable_cef_debug
     if [ "$EUID" -eq 0 ]; then
         PZ_DECKY_FORCE=1 PZ_DECKY_STORE_VIA_WS=0 install_one_plugin "$requested"
-    elif command -v pkexec >/dev/null 2>&1 && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then
-        pkexec env HOME="$HOME" USER="$USER" PZ_DECKY_FORCE=1 PZ_DECKY_STORE_VIA_WS=0 bash "$0" install-plugin "$requested"
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo env HOME="$HOME" USER="$USER" PZ_DECKY_FORCE=1 PZ_DECKY_STORE_VIA_WS=0 bash "$0" install-plugin "$requested"
     else
-        pz_error "privileged plugin repair requires pkexec or sudo"
-        return 1
+        pz_admin_run env HOME="$HOME" USER="$USER" PZ_DECKY_FORCE=1 PZ_DECKY_STORE_VIA_WS=0 \
+            bash "$0" install-plugin "$requested"
     fi
     restart_decky_loader
 }
@@ -961,15 +1141,47 @@ install_curated_plugins_privileged() {
     enable_cef_debug
     if [ "$EUID" -eq 0 ]; then
         PZ_DECKY_FORCE=1 PZ_DECKY_STORE_VIA_WS=0 install_curated_plugins
-    elif command -v pkexec >/dev/null 2>&1 && { [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ]; }; then
-        pkexec env HOME="$HOME" USER="$USER" PZ_DECKY_FORCE=1 PZ_DECKY_STORE_VIA_WS=0 bash "$0" install-plugins
-    elif command -v sudo >/dev/null 2>&1; then
-        sudo env HOME="$HOME" USER="$USER" PZ_DECKY_FORCE=1 PZ_DECKY_STORE_VIA_WS=0 bash "$0" install-plugins
     else
-        pz_error "privileged plugin repair requires pkexec or sudo"
-        return 1
+        pz_admin_run env HOME="$HOME" USER="$USER" PZ_DECKY_FORCE=1 PZ_DECKY_STORE_VIA_WS=0 \
+            bash "$0" install-plugins
     fi
     restart_decky_loader
+}
+
+repair_broken_plugins() {
+    local id display store mode homepage repo candidates note path health failures=0 repaired=0
+    require_cmds curl jq
+    ensure_plugin_dirs
+    while IFS='|' read -r id display store mode homepage repo candidates note; do
+        [ -n "$id" ] || continue
+        path="$(plugin_path_by_candidates "$candidates" || true)"
+        [ -n "$path" ] || continue
+        health="$(plugin_health_json "$id" "$path")"
+        [ "$(jq -r '.ok' <<< "$health")" != true ] || continue
+        pz_warn "$display incomplete: $(jq -r '.issue' <<< "$health")"
+        if [ "$mode" = "unsupported" ]; then
+            quarantine_broken_plugin "$id" "$candidates" || failures=$((failures + 1))
+        elif install_catalog_plugin "$id" "$store" "$display" "$mode" "$repo" "$candidates"; then
+            repaired=$((repaired + 1))
+        else
+            failures=$((failures + 1))
+        fi
+    done < <(plugin_catalog)
+    pz_info "Decky repair completed: $repaired package(s) replaced, $failures failure(s)"
+    [ "$failures" -eq 0 ]
+}
+
+repair_broken_plugins_privileged() {
+    local result=0
+    enable_cef_debug
+    if [ "$EUID" -eq 0 ]; then
+        PZ_DECKY_STORE_VIA_WS=0 repair_broken_plugins || result=1
+    else
+        pz_admin_run env HOME="$HOME" USER="$USER" PZ_DECKY_STORE_VIA_WS=0 \
+            bash "$0" repair-broken || result=1
+    fi
+    restart_decky_loader
+    return "$result"
 }
 
 phasezero_theme_content() {
@@ -1020,6 +1232,16 @@ install_phasezero_theme() {
     pz_info "installed CSS Loader theme: $dir"
 }
 
+migrate_legacy_theme_resources() {
+    local legacy="$PZ_DECKY_THEMES_DIR/resources" backup
+    [ -d "$legacy" ] || return 0
+    [ ! -f "$legacy/theme.json" ] || return 0
+    backup="$PZ_DECKY_HOME/theme-resources-backups/resources.$(date +%Y%m%d%H%M%S).$$"
+    install -d "$(dirname "$backup")"
+    mv "$legacy" "$backup"
+    pz_info "moved non-theme resources outside CSS Loader scan path: $backup"
+}
+
 install_github_dir_theme() {
     local display="$1" source="$2" repo subdir zip tmp root
     repo="${source%%:*}"
@@ -1031,12 +1253,12 @@ install_github_dir_theme() {
     zip="$PZ_DECKY_CACHE/themes/${repo//\//-}.zip"
     tmp="$(mktemp -d)"
     curl -fL --retry 3 --connect-timeout 15 -o "$zip" "https://github.com/$repo/archive/refs/heads/main.zip"
+    validate_zip_archive "$zip" || { rm -rf "$tmp"; return 1; }
     unzip -q "$zip" -d "$tmp"
     root="$(find "$tmp" -maxdepth 1 -mindepth 1 -type d | head -1)"
     [ -d "$root/$subdir" ] || { rm -rf "$tmp"; pz_error "theme dir not found in archive: $subdir"; return 1; }
-    rm -rf "$PZ_DECKY_THEMES_DIR/$display"
+    rm -rf "${PZ_DECKY_THEMES_DIR:?}/$display"
     cp -a "$root/$subdir" "$PZ_DECKY_THEMES_DIR/$display"
-    [ -d "$root/resources" ] && cp -a "$root/resources" "$PZ_DECKY_THEMES_DIR/resources"
     rm -rf "$tmp"
     pz_info "installed CSS Loader theme: $display"
 }
@@ -1058,6 +1280,7 @@ install_theme() {
 
 install_curated_themes() {
     local id failures=0
+    migrate_legacy_theme_resources
     for id in phasezero obsidian round centered-home; do
         install_theme "$id" || failures=$((failures + 1))
     done
@@ -1074,12 +1297,12 @@ restart_decky_loader() {
         pz_warn "port 8080 is held by a non-Steam process; CSS Loader will fail until it is freed"
         pz_warn "stop the squatter (often an AI proxy) or run: linux/pz ai proxy status"
     fi
-    if [ "$(service_state system)" != "" ] && pz_can_sudo_noninteractive; then
-        sudo -n systemctl restart plugin_loader.service 2>/dev/null && {
+    if [ "$(service_state system)" != "" ] && [ "$(service_state system)" != "unknown" ]; then
+        if pz_admin_run systemctl restart plugin_loader.service 2>/dev/null; then
             pz_info "restarted system plugin_loader.service"
             wait_decky_ready || true
             return 0
-        }
+        fi
     fi
     if [ "$(service_state system)" = "active" ]; then
         pz_info "system plugin_loader.service already active"
@@ -1097,7 +1320,7 @@ restart_decky_loader() {
 }
 
 prepare_steam_ui() {
-    local restart="${1:-no}" i
+    local restart="${1:-no}" i budget="${PZ_STEAM_READY_TIMEOUT:-180}" unit="phasezero-steam-bootstrap.service"
     enable_cef_debug
     reconcile_decky_services
     if [ "$(steam_cef_port_bool)" = true ]; then
@@ -1117,17 +1340,24 @@ prepare_steam_ui() {
     fi
 
     if command -v steam >/dev/null 2>&1; then
-        nohup steam -gamepadui -steamos3 -cef-enable-debugging >/dev/null 2>&1 &
-        disown $! 2>/dev/null || true
-        for i in $(seq 1 30); do
+        if command -v systemd-run >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
+            systemctl --user stop "$unit" >/dev/null 2>&1 || true
+            systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
+            systemd-run --user --unit="${unit%.service}" --collect --service-type=exec \
+                --working-directory="$HOME" steam -gamepadui -steamos3 -cef-enable-debugging >/dev/null
+        else
+            setsid -f steam -gamepadui -steamos3 -cef-enable-debugging >/dev/null 2>&1
+        fi
+        pz_info "waiting up to ${budget}s for Steam CEF; client updates may delay first start"
+        for ((i = 1; i <= budget; i++)); do
             if [ "$(steam_cef_port_bool)" = true ]; then
-                pz_info "Steam Gamepad UI ready with CEF debug"
+                pz_info "Steam Gamepad UI ready with CEF debug after ${i}s"
                 return 0
             fi
             sleep 1
         done
         if pgrep -x steam >/dev/null 2>&1 || pgrep -f steamwebhelper >/dev/null 2>&1; then
-            pz_warn "Steam started, but CEF debug port 8080 is not listening yet"
+            pz_warn "Steam started, but CEF debug port 8080 is not listening after ${budget}s"
             pz_warn "verify Steam Gamepad UI is visible; then run: linux/pz steamdeck plugins status"
         else
             pz_warn "Steam Gamepad UI did not stay running"
@@ -1146,7 +1376,7 @@ PhaseZero Decky plugins dry-run
   Permissions: verify plugin/theme dirs are writable
   CEF debug: enable ~/.steam/steam/.cef-enable-remote-debugging
   Plugins: install curated set from Decky plugin database where possible
-  Store packages: prefer Deckbrew package/CDN with remote binary download, then source fallback
+  Store packages: require checksum-verified Deckbrew package/CDN; never install raw source trees
   TDP plugin: PowerTools, requires privileged system Decky service for full control
   TDP fallback: PhaseZero privileged ryzenadj bridge
   Themes: CSS Loader + PhaseZero/Obsidian/Round/Centered-Home under $PZ_DECKY_THEMES_DIR
@@ -1184,7 +1414,8 @@ Notes:
   PowerTools repair: use install-plugin-privileged when backend is missing.
   PhaseZero TDP fallback: sudo linux/steamdeck/install-privileged-controls.sh install.
   Decky LSFG-VK: requires Lossless Scaling Steam app and launch option ~/lsfg %command%.
-  NonSteamLaunchers: plugin can add third-party launcher shortcuts from Game Mode.
+  NonSteamLaunchers: no verified Decky bundle currently published; incomplete snapshots are quarantined.
+  Alternative: use PhaseZero non-Steam launcher integration.
   CSS Loader: themes live under $PZ_DECKY_THEMES_DIR.
 EOF
 }
@@ -1200,12 +1431,17 @@ install_all() {
 }
 
 repair_all() {
+    local result=0
     ensure_plugin_dirs
     enable_cef_debug
     reconcile_decky_services
     repair_permissions
+    migrate_legacy_plugin_backups || result=1
+    migrate_legacy_theme_resources || result=1
+    repair_broken_plugins || result=1
     restart_decky_loader
     status_json
+    return "$result"
 }
 
 theme_action() {
@@ -1219,12 +1455,20 @@ theme_action() {
     esac
 }
 
+if [ "${PZ_DECKY_LIB_ONLY:-0}" = "1" ]; then
+    if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+        return 0
+    fi
+    exit 0
+fi
+
 case "$ACTION" in
     status|json) status_json ;;
     dry-run|plan) dry_run_plan ;;
     install|setup) install_all ;;
     plugins|install-plugins) install_curated_plugins ;;
-    install-plugins-privileged|repair-plugins-privileged) install_curated_plugins_privileged ;;
+    install-plugins-privileged) install_curated_plugins_privileged ;;
+    repair-plugins-privileged|repair-broken-privileged) repair_broken_plugins_privileged ;;
     install-plugin) install_one_plugin "${1:-}" ;;
     install-plugin-privileged|repair-plugin-privileged) install_one_plugin_privileged "${1:-}" ;;
     theme|themes) theme_action "${1:-status}" "${2:-}" ;;
@@ -1234,7 +1478,8 @@ case "$ACTION" in
     install-decky-privileged|privileged|system-install) install_decky_loader_privileged ;;
     decky|install-decky) install_decky_loader ;;
     repair) repair_all ;;
+    repair-broken) repair_broken_plugins ;;
     restart|reload) restart_decky_loader ;;
     guide|help) print_guide ;;
-    *) pz_error "usage: plugins.sh (status|dry-run|install|install-decky|install-decky-privileged|install-plugins|install-plugins-privileged|install-plugin|install-plugin-privileged|install-themes|theme|enable-cef-debug|prepare-ui|repair|restart|guide)"; exit 1 ;;
+    *) pz_error "usage: plugins.sh (status|dry-run|install|install-decky|install-decky-privileged|install-plugins|install-plugins-privileged|repair-plugins-privileged|install-plugin|install-plugin-privileged|install-themes|theme|enable-cef-debug|prepare-ui|repair|restart|guide)"; exit 1 ;;
 esac

@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -13,10 +14,12 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from linux.ui_native.catalog import CATEGORIES, build_catalog, catalog_manifest
+from linux.ui_native import __version__
 from linux.ui_native.boot_selector import BOOT_CHOICES, build_boot_selector_program
 from linux.ui_native.command_runner import build_program
 from linux.ui_native.models import ActionSpec
 from linux.ui_native.result_parser import parse_json_output, severity_for
+from linux.ui_native.pages.results import create_safe_results_archive
 
 
 @pytest.fixture(scope="module")
@@ -117,6 +120,30 @@ def test_json_parser_accepts_logs_before_envelope():
     text = 'INFO: checking\n{"status":"warn","checks":[{"name":"x"}]}\n'
     assert parse_json_output(text)["status"] == "warn"
     assert severity_for(parse_json_output(text), 0) == "warning"
+
+
+def test_results_export_excludes_auth_files_and_redacts_secrets(tmp_path):
+    source = tmp_path / "phasezero"
+    results = source / "ui" / "results"
+    results.mkdir(parents=True)
+    (source / "ui-token").write_text("live-token", encoding="utf-8")
+    (results / "run.json").write_text(
+        '{"access_token":"secret-token","sha256":"safe-digest"}', encoding="utf-8"
+    )
+    (source / "pz.log").write_text(
+        "Authorization: Bearer bearer-secret\n", encoding="utf-8"
+    )
+    output = create_safe_results_archive(source, tmp_path / "export.zip")
+    assert output.stat().st_mode & 0o777 == 0o600
+    with zipfile.ZipFile(output) as archive:
+        assert sorted(archive.namelist()) == ["logs/pz.log", "results/run.json"]
+        content = "\n".join(
+            archive.read(name).decode("utf-8") for name in archive.namelist()
+        )
+    assert "live-token" not in content
+    assert "secret-token" not in content
+    assert "bearer-secret" not in content
+    assert content.count("[REDACTED]") >= 2
     assert severity_for(None, 1) == "error"
 
 
@@ -125,6 +152,28 @@ def test_manifest_serializes_catalog(catalog):
     assert manifest["schemaVersion"] == 1
     assert len(manifest["actions"]) == len(catalog)
     json.dumps(manifest)
+
+
+def test_native_version_comes_from_project_manifest():
+    assert __version__ == json.loads((ROOT / "version.json").read_text())["version"]
+
+
+def test_pages_route_actions_through_central_confirmation_flow():
+    page_dir = ROOT / "linux" / "ui_native" / "pages"
+    offenders = [
+        path.name for path in page_dir.glob("*.py")
+        if "self.runner.start(" in path.read_text(encoding="utf-8")
+    ]
+    assert offenders == []
+
+
+def test_rom_optimizer_requires_library_and_has_distinct_preview(catalog):
+    action = next(item for item in catalog if item.id == "emulation.rom-optimize")
+    assert action.input_kind == "path"
+    assert action.args == ("emulation", "rom-optimize", "{input}")
+    assert action.preview_args == (
+        "emulation", "rom-optimize", "{input}", "--dry-run", "--json",
+    )
 
 
 def test_appimage_bundle_is_standalone():

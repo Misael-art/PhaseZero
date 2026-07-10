@@ -76,6 +76,13 @@ installed_json_bool() {
     fi
 }
 
+validate_install_url() {
+    case "$INSTALL_URL" in
+        https://*) return 0 ;;
+        *) pz_error "CasaOS installer URL must use HTTPS: $INSTALL_URL"; return 2 ;;
+    esac
+}
+
 compat_json() {
     local id id_like pretty arch compatible=true blockers=() warnings=()
     id="$(os_value ID)"
@@ -174,8 +181,14 @@ cmd_install() {
     [ "$installed" = "false" ] || { pz_info "CasaOS already installed"; return 0; }
     [ "$compatible" = "true" ] || { echo "$data" | jq -r '.compatibility.blockers[]'; return 1; }
     [ "$YES" = "1" ] || { pz_error "CasaOS install is opt-in; pass --yes after reading plan"; return 2; }
+    validate_install_url || return $?
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
-        jq -n --arg url "$INSTALL_URL" '{action:"casaos.install", dryRun:true, command:["bash","-c","curl -fsSL " + $url + " | bash"]}'
+        jq -n --arg url "$INSTALL_URL" '{
+          action:"casaos.install",
+          dryRun:true,
+          download:["curl","--proto","=https","--tlsv1.2","--fail","--show-error","--location","--retry","3","--output","<temporary>",$url],
+          execute:["bash","<temporary>"]
+        }'
         return 0
     fi
     if [ "$EUID" -ne 0 ]; then
@@ -184,7 +197,24 @@ cmd_install() {
     fi
     command -v curl >/dev/null 2>&1 || { pz_error "curl missing"; return 1; }
     pz_info "installing CasaOS from official installer ($INSTALL_URL)"
-    curl -fsSL "$INSTALL_URL" | bash
+    local installer size rc=0
+    installer="$(mktemp "${TMPDIR:-/tmp}/phasezero-casaos.XXXXXX")"
+    if ! curl --proto '=https' --tlsv1.2 --fail --show-error --location \
+        --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 \
+        --output "$installer" "$INSTALL_URL"; then
+        rm -f "$installer"
+        pz_error "CasaOS installer download failed"
+        return 1
+    fi
+    size="$(wc -c < "$installer")"
+    if [ "$size" -lt 1024 ] || [ "$size" -gt 5242880 ] || ! bash -n "$installer"; then
+        rm -f "$installer"
+        pz_error "CasaOS installer failed size/syntax validation"
+        return 1
+    fi
+    bash "$installer" || rc=$?
+    rm -f "$installer"
+    return "$rc"
 }
 
 case "$ACTION" in

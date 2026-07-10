@@ -11,7 +11,8 @@ pz_harden_firefox() {
     [ -z "$profile_dir" ] && { pz_warn "no firefox profile found"; return; }
 
     local userjs="$profile_dir/user.js"
-    local backup="$userjs.bak.$(date +%s)"
+    local backup
+    backup="$userjs.bak.$(date +%s)"
     [ -f "$userjs" ] && cp "$userjs" "$backup"
 
     cat > "$userjs" <<'EOF'
@@ -54,9 +55,9 @@ user_pref("toolkit.telemetry.shutdownPingSender.enabled", false);
 user_pref("toolkit.telemetry.unified", false);
 user_pref("toolkit.telemetry.updatePing.enabled", false);
 user_pref("browser.ping-centre.telemetry", false);
-user_pref("browser.safebrowsing.downloads.remote.enabled", false);
-user_pref("browser.safebrowsing.malware.enabled", false);
-user_pref("browser.safebrowsing.phishing.enabled", false);
+user_pref("browser.safebrowsing.downloads.remote.enabled", true);
+user_pref("browser.safebrowsing.malware.enabled", true);
+user_pref("browser.safebrowsing.phishing.enabled", true);
 EOF
     pz_info "firefox hardened: $userjs"
 }

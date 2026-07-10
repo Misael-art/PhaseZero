@@ -9,7 +9,10 @@ Reset-BootstrapFileCmdlets
 $script:RealAiProxyCatalogForTests = Get-BootstrapAiProxyCatalog
 
 function New-AiProxySuiteTestRoot {
-    $root = Join-Path $env:TEMP ("PhaseZero AI Proxy Suite {0}" -f ([Guid]::NewGuid().ToString('N')))
+    $tempRoot = $env:TEMP
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMPDIR }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = [System.IO.Path]::GetTempPath() }
+    $root = Join-Path $tempRoot ("PhaseZero AI Proxy Suite {0}" -f ([Guid]::NewGuid().ToString('N')))
     $null = New-Item -Path $root -ItemType Directory -Force
     return $root
 }

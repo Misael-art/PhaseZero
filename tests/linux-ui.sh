@@ -19,7 +19,8 @@ python3 -m py_compile "$REPO_ROOT/linux/emulation/pc-games.py"
 
 echo "=== Server startup test ==="
 PORT=$(python3 -c "import socket; s=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()")
-export XDG_STATE_HOME="$(mktemp -d)"
+XDG_STATE_HOME="$(mktemp -d)"
+export XDG_STATE_HOME
 export HOME="$XDG_STATE_HOME"
 python3 "$REPO_ROOT/linux/ui/server.py" --port "$PORT" >/dev/null 2>&1 &
 SERVER_PID=$!
@@ -89,9 +90,11 @@ print('  block unknown action ok')
 "
 
 echo "=== API: mutable action requires confirmation ==="
-api_post "/api/action" '{"action":"emulation.shared.apply"}' "$TOKEN" | python3 -c "
+api_post "/api/action" '{"action":"emulation.shared"}' "$TOKEN" | python3 -c "
 import json,sys
 d=json.load(sys.stdin)
+assert d['status'] in ('ok', 'warn')
+assert 'confirmation required' in d.get('blockers', [])
 print('  blockers:', d.get('blockers', []))
 "
 

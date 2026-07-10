@@ -27,26 +27,26 @@ pz_json_append_check() {
     local name="$1" status="$2" message="$3"
     local entry
     entry="$(jq -n --arg n "$name" --arg s "$status" --arg m "$message" '{name: $n, status: $s, message: $m}')"
-    PZ_JSON_CHECKS="$(echo "$PZ_JSON_CHECKS" | jq ". + [$entry]")"
+    PZ_JSON_CHECKS="$(jq --argjson entry "$entry" '. + [$entry]' <<< "$PZ_JSON_CHECKS")"
 }
 
 pz_json_append_action() {
     local name="$1" label="$2" mutable="${3:-false}"
     local entry
     entry="$(jq -n --arg n "$name" --arg l "$label" --argjson m "$mutable" '{name: $n, label: $l, mutable: $m}')"
-    PZ_JSON_ACTIONS="$(echo "$PZ_JSON_ACTIONS" | jq ". + [$entry]")"
+    PZ_JSON_ACTIONS="$(jq --argjson entry "$entry" '. + [$entry]' <<< "$PZ_JSON_ACTIONS")"
 }
 
 pz_json_append_blocker() {
     local reason="$1"
-    PZ_JSON_BLOCKERS="$(echo "$PZ_JSON_BLOCKERS" | jq ". + [\"$reason\"]")"
+    PZ_JSON_BLOCKERS="$(jq --arg reason "$reason" '. + [$reason]' <<< "$PZ_JSON_BLOCKERS")"
 }
 
 pz_json_append_log() {
     local level="$1" message="$2"
     local entry
     entry="$(jq -n --arg l "$level" --arg m "$message" '{level: $l, message: $m}')"
-    PZ_JSON_LOGS="$(echo "$PZ_JSON_LOGS" | jq ". + [$entry]")"
+    PZ_JSON_LOGS="$(jq --argjson entry "$entry" '. + [$entry]' <<< "$PZ_JSON_LOGS")"
 }
 
 pz_json_envelope_end() {

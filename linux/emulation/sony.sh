@@ -80,7 +80,7 @@ configure_ps1() {
     ini_set "$DUCKSTATION_CONFIG" "Folders" "SaveStates" "$PZ_EMULATION_ROOT/saves/duckstation/states"
     ini_set "$DUCKSTATION_CONFIG" "GameList" "RecursivePaths" "$PS1_ROMS"
     bash "$PZ_ROOT/linux/emulation/hydra.sh" force-classic-config >/dev/null 2>&1 || true
-    bash "$PZ_ROOT/linux/emulation/srm.sh" configure >/dev/null 2>&1 || true
+    bash "$PZ_ROOT/linux/emulation/srm.sh" configure --skip-if-configured >/dev/null 2>&1 || true
     pz_info "PS1 DuckStation configured: $DUCKSTATION_CONFIG"
 }
 
@@ -95,7 +95,7 @@ configure_ps2() {
     ini_set "$PCSX2_CONFIG" "Folders" "Textures" "$PZ_EMULATION_ROOT/storage/pcsx2/textures"
     ini_set "$PCSX2_CONFIG" "GameList" "RecursivePaths" "$PS2_ROMS"
     bash "$PZ_ROOT/linux/emulation/hydra.sh" force-classic-config >/dev/null 2>&1 || true
-    bash "$PZ_ROOT/linux/emulation/srm.sh" configure >/dev/null 2>&1 || true
+    bash "$PZ_ROOT/linux/emulation/srm.sh" configure --skip-if-configured >/dev/null 2>&1 || true
     pz_info "PS2 PCSX2 configured: $PCSX2_CONFIG"
 }
 

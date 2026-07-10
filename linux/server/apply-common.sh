@@ -8,13 +8,14 @@ PZ_SERVER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_SERVER_ROOT/linux/lib/common.sh"
 
 pz_server_apply() {
-    local llm=0 homelab=0 hermes=0 extras=0 install_boot=1 flags=() a
+    local llm=0 homelab=0 hermes=0 with_extras=0 install_boot=1 a
+    local -a flags=()
     for a in "$@"; do
         case "$a" in
             --llm) llm=1 ;;
             --homelab) homelab=1 ;;
             --hermes) hermes=1 ;;
-            --extras) extras=1 ;;
+            --extras) with_extras=1 ;;
             --no-boot) install_boot=0 ;;
         esac
     done
@@ -26,10 +27,11 @@ pz_server_apply() {
     fi
     if [ "$homelab" = 1 ]; then
         pz_info "server: bringing up homelab stack"
-        local extra_flag=""; [ "$extras" = 1 ] && extra_flag="--extras"
-        bash "$PZ_SERVER_ROOT/linux/server/homelab-stack.sh" up $extra_flag || pz_warn "homelab stack reported issues"
+        local -a homelab_args=(up)
+        [ "$with_extras" = 1 ] && homelab_args+=(--extras)
+        bash "$PZ_SERVER_ROOT/linux/server/homelab-stack.sh" "${homelab_args[@]}" || pz_warn "homelab stack reported issues"
         flags+=(--homelab)
-        [ "$extras" = 1 ] && flags+=(--extras)
+        [ "$with_extras" = 1 ] && flags+=(--extras)
     fi
     if [ "$hermes" = 1 ]; then
         pz_info "server: configuring Hermes remote actuation"

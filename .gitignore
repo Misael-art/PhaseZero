@@ -3,6 +3,12 @@ node_modules/
 __pycache__/
 *.pyc
 src-tauri/target/
+.cargo-target/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Ignore logs
 *.log

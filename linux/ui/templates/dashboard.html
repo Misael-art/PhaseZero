@@ -2,8 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<meta name="token" content="{{TOKEN}}">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>PhaseZero</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -21,42 +20,43 @@
 <a href="#profiles"><span>Perfis</span></a>
 <a href="#doctor"><span>Diagnóstico</span></a>
 </nav>
-<div class="version">v1.0.0</div>
+<div class="version">localhost protegido</div>
 </aside>
 <main class="main">
 <div id="overview" class="page">
 <h2>Visão Geral</h2>
 <div id="overview-content"><div class="spinner"></div></div>
 </div>
-<div id="steamdeck" class="page" style="display:none">
+<div id="steamdeck" class="page" hidden>
 <h2>Steam Deck</h2>
 <div id="steamdeck-content"><div class="spinner"></div></div>
 </div>
-<div id="emulation" class="page" style="display:none">
+<div id="emulation" class="page" hidden>
 <h2>Emulação</h2>
 <div id="emulation-content"><div class="spinner"></div></div>
 </div>
-<div id="media" class="page" style="display:none">
+<div id="media" class="page" hidden>
 <h2>Biblioteca de Mídia</h2>
-<p style="color:var(--text-dim);font-size:.85rem">Cobertura por sistema, conflitos, SteamGrid, ES-DE, Hydra, SRM</p>
+<p class="page-hint">Cobertura por sistema, conflitos, SteamGrid, ES-DE, Hydra, SRM</p>
 <div id="media-content"><div class="spinner"></div></div>
 </div>
-<div id="server" class="page" style="display:none">
+<div id="server" class="page" hidden>
 <h2>Servidor</h2>
 <div id="server-content"><div class="spinner"></div></div>
 </div>
-<div id="ai" class="page" style="display:none">
+<div id="ai" class="page" hidden>
 <h2>Inteligência Artificial</h2>
 <div id="ai-content"><div class="spinner"></div></div>
 </div>
-<div id="profiles" class="page" style="display:none">
+<div id="profiles" class="page" hidden>
 <h2>Perfis</h2>
 <div id="profiles-content"><div class="spinner"></div></div>
 </div>
-<div id="doctor" class="page" style="display:none">
+<div id="doctor" class="page" hidden>
 <h2>Diagnóstico</h2>
 <div id="doctor-content"><div class="spinner"></div></div>
 </div>
+<div id="action-output" class="action-output" aria-live="polite" hidden></div>
 </main>
 </div>
 <script src="/static/app.js"></script>

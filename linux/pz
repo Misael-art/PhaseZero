@@ -7,8 +7,6 @@ PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 source "$PZ_ROOT/linux/lib/pacman.sh"
 
-PZ_SUBCOMMANDS="install steamdeck windows-vm waydroid emulation server boot ai flatpak doctor support-bundle repair-plan tune ui help version"
-
 usage() {
     cat <<EOF
 PhaseZero Linux - profile bootstrap & automation
@@ -31,6 +29,8 @@ Usage:
   pz steamdeck runtime-diagnose [file] Analyze Steam runtime diagnostic JSON
   pz steamdeck conveniences install Install Return/Windows VM/Waydroid launchers
   pz steamdeck status         Print SteamOS UX status JSON
+  pz steamdeck removable install Auto-mount USB removable devices (gated on Windows VM)
+  pz steamdeck display status Detect TV/monitor resolution for Game Mode
   pz windows-vm status        Print QEMU/KVM Windows VM status JSON
   pz windows-vm discover      Discover existing Windows VM disks on host
   pz windows-vm plan --iso PATH Preview Windows VM plan
@@ -88,6 +88,8 @@ Usage:
   pz emulation ps3 import-pkg <path> Import user-owned PS3 PKG
   pz emulation ps3 import-rap <path> Import user-owned PS3 RAP license
   pz emulation performance status Adaptive Switch/PS3/PS4 performance status
+  pz emulation rom-optimize <dir> Optimize ROM formats per-platform (CHD/RVZ/CSO/NSZ/ZIP)
+  pz emulation dualscreen apply <emu> Route dual-screen to Deck+TV (Desktop Mode, KWin)
   pz emulation performance apply Install adaptive profiles and launcher
   pz emulation performance prepare-lsfg Install verified LSFG Vulkan layer
   pz emulation lua status      Check Lua/LuaJIT/LuaRocks readiness
@@ -265,6 +267,8 @@ cmd_steamdeck() {
         status)       bash "$PZ_ROOT/linux/steamdeck/status.sh" ;;
         launch-options) bash "$PZ_ROOT/linux/steamdeck/launch-options.sh" "${target:-list}" "${3:-balanced}" ;;
         conveniences|convenience|launchers) bash "$PZ_ROOT/linux/steamdeck/convenience-launchers.sh" "${target:-status}" ;;
+        removable|removable-mount|usb-mount) bash "$PZ_ROOT/linux/steamdeck/install-removable-mount.sh" "${target:-status}" ;;
+        display)       bash "$PZ_ROOT/linux/steamdeck/display-session.sh" "${target:-status}" ;;
         ux)           bash "$PZ_ROOT/linux/steamdeck/install-hotkeys.sh" "${target:-install}" ;;
         *)            pz_error "unknown steamdeck mode: $action"; return 1 ;;
     esac
@@ -291,6 +295,11 @@ cmd_emulation() {
         ps2)          bash "$PZ_ROOT/linux/emulation/sony.sh" ps2 "${target:-status}" "${extra[@]}" ;;
         ps3|rpcs3)    bash "$PZ_ROOT/linux/emulation/ps3.sh" "${target:-status}" "${extra[@]}" ;;
         performance|perf|optimization|optimizations) bash "$PZ_ROOT/linux/emulation/performance.sh" "${target:-status}" "${extra[@]}" ;;
+        rom-optimize|romopt|rom-optimizer)
+            PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m linux.emulation.romopt.__main__ \
+                --rom-dir "${target:-$PZ_EMULATION_ROOT/roms}" "${extra[@]}" ;;
+        dualscreen|dual-screen)
+            bash "$PZ_ROOT/linux/emulation/dualscreen.sh" "${target:-status}" "${extra[@]}" ;;
         lua)          bash "$PZ_ROOT/linux/emulation/lua.sh" "${target:-status}" "${extra[@]}" ;;
         steam-tools)  bash "$PZ_ROOT/linux/emulation/steam-tools.sh" "${target:-status}" "${extra[@]}" ;;
         retrodeck)    bash "$PZ_ROOT/linux/emulation/retrodeck.sh" "${target:-status}" "${extra[@]}" ;;
@@ -512,24 +521,28 @@ cmd_tune() {
 
 cmd_ui() {
     local action="${1:-native}" port="${2:-auto}"
+    local -a port_args=()
     case "$action" in
         native|app|desktop|"")
             bash "$PZ_ROOT/linux/ui/native.sh" "${@:2}"
             ;;
         server)
             ui_regenerate_allowlist
-            local port_arg=""
-            [ "$port" != "auto" ] && port_arg="--port $port"
-            python3 "$PZ_ROOT/linux/ui/server.py" $port_arg
+            if [ "$port" != "auto" ]; then
+                pz_validate_tcp_port "$port" || return
+                port_args=(--port "$port")
+            fi
+            python3 "$PZ_ROOT/linux/ui/server.py" "${port_args[@]}"
             ;;
         tui)
             ui_regenerate_allowlist
             bash "$PZ_ROOT/linux/ui/tui.sh"
             ;;
         status)
-            local pid_file="$PZ_STATE/ui-server.pid"
-            if [ -f "$pid_file" ] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-                echo "UI server running (pid $(cat "$pid_file"))"
+            local pid_file="$PZ_STATE/ui-server.pid" server_pid=""
+            [ -f "$pid_file" ] && IFS= read -r server_pid < "$pid_file" || true
+            if [[ "$server_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$server_pid" 2>/dev/null; then
+                echo "UI server running (pid $server_pid)"
             else
                 echo "UI server not running"
             fi
@@ -538,14 +551,38 @@ cmd_ui() {
             # start server in background and open browser
             local log_file="$PZ_STATE/ui-server.log"
             local web_port="$port"
+            local token_file="$PZ_STATE/ui-token" ui_token="" attempt
             [ "$web_port" = "auto" ] && web_port=8080
+            pz_validate_tcp_port "$web_port" || return
             mkdir -p "$PZ_STATE"
             ui_regenerate_allowlist
             python3 "$PZ_ROOT/linux/ui/server.py" --port "$web_port" --daemon "$log_file" &
             local pid=$!
             echo "$pid" > "$PZ_STATE/ui-server.pid"
-            sleep 1
-            xdg-open "http://127.0.0.1:$web_port" 2>/dev/null || true
+            for ((attempt = 0; attempt < 50; attempt++)); do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    break
+                fi
+                if ui_token="$(pz_read_ui_token "$token_file" 2>/dev/null)" &&
+                    pz_ui_server_ready "$web_port" "$token_file"; then
+                    break
+                fi
+                sleep 0.1
+            done
+            if [ -z "$ui_token" ]; then
+                kill "$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+                rm -f -- "$PZ_STATE/ui-server.pid"
+                pz_error "UI server did not create a valid private token; log: $log_file"
+                return 1
+            fi
+            if command -v xdg-open >/dev/null 2>&1; then
+                xdg-open "http://127.0.0.1:$web_port/?token=$ui_token" 2>/dev/null ||
+                    pz_warn "browser opener failed; server remains available on loopback"
+            else
+                pz_warn "xdg-open missing; server remains available on loopback"
+            fi
+            ui_token=""
             echo "Dashboard: http://127.0.0.1:$web_port (pid $pid)"
             ;;
         *)
@@ -553,6 +590,46 @@ cmd_ui() {
             return 1
             ;;
     esac
+}
+
+pz_validate_tcp_port() {
+    local port="${1:-}"
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then
+        pz_error "invalid TCP port: ${port:-empty} (expected 1..65535)"
+        return 2
+    fi
+}
+
+pz_read_ui_token() {
+    local path="$1" token mode
+    [ -f "$path" ] && [ ! -L "$path" ] && [ -O "$path" ] || return 1
+    mode="$(stat -c '%a' "$path" 2>/dev/null || true)"
+    [ "$mode" = "600" ] || return 1
+    IFS= read -r token < "$path" || true
+    [[ "$token" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf '%s\n' "$token"
+}
+
+pz_ui_server_ready() {
+    local port="$1" token_file="$2"
+    python3 - "$port" "$token_file" <<'PY' >/dev/null 2>&1
+import http.client
+import json
+import pathlib
+import sys
+
+port = int(sys.argv[1])
+token = pathlib.Path(sys.argv[2]).read_text(encoding="ascii").strip()
+connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.25)
+try:
+    connection.request("GET", "/api/token-status", headers={"Authorization": f"Bearer {token}"})
+    response = connection.getresponse()
+    payload = json.loads(response.read())
+    if response.status != 200 or payload.get("valid") is not True:
+        raise SystemExit(1)
+finally:
+    connection.close()
+PY
 }
 
 ui_regenerate_allowlist() {
@@ -600,6 +677,8 @@ main() {
         repair-plan)   cmd_repair_plan "$@" ;;
         tune)          cmd_tune "$@" ;;
         ui)            cmd_ui "$@" ;;
+        webapp|webapps) exec "$PZ_ROOT/linux/ui/webapp.sh" "$@" ;;
+        games|jogos)   exec "$PZ_ROOT/linux/ui/games.sh" "$@" ;;
         version|--version|-v) cmd_version ;;
         help|--help|-h|"") usage ;;
         *)             pz_error "unknown command: $cmd"; usage; return 1 ;;

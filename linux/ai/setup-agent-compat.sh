@@ -59,7 +59,7 @@ install_rtk_release() {
         return 1
     }
     work="$(mktemp -d)"
-    trap "rm -rf '$work'; trap - RETURN" RETURN
+    trap 'rm -rf -- "${work:?}"; trap - RETURN' RETURN
     release="$(curl -fsSL "$RTK_REPO_API")"
     tag="$(jq -r '.tag_name // empty' <<< "$release")"
     asset_url="$(jq -r --arg asset "$asset" '.assets[]? | select(.name == $asset) | .browser_download_url' <<< "$release" | head -1)"
@@ -210,7 +210,7 @@ backup_managed_file() {
     [ -f "$path" ] || return 0
     backup_dir="$STATE_DIR/backups/agent-compat"
     mkdir -p "$backup_dir"
-    rel="${path#$WORKSPACE_ROOT/}"
+    rel="${path#"$WORKSPACE_ROOT"/}"
     backup_name="$(printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#__#g')"
     cp "$path" "$backup_dir/${backup_name}.bak.$(date +%s)" 2>/dev/null || true
 }
@@ -383,7 +383,7 @@ apply_frugality_pack() {
     local manifest="$ai_context_dir/frugality-manifest.json"
     local skeleton_json="$ai_context_dir/repo-skeleton.json"
     local skeleton_md="$ai_context_dir/repo-skeleton.md"
-    local body tmp
+    local tmp
     mkdir -p "$context_dir" "$ai_context_dir"
     pz_write_managed_file "$doc" <<'EOF'
 # AI Context Frugality Pack

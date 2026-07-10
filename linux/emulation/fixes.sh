@@ -31,7 +31,7 @@ apply_safe() {
     bash "$PZ_ROOT/linux/emulation/lua.sh" install || true
     bash "$PZ_ROOT/linux/emulation/steam-tools.sh" install || true
     bash "$PZ_ROOT/linux/emulation/hydra.sh" configure
-    bash "$PZ_ROOT/linux/emulation/srm.sh" configure || true
+    bash "$PZ_ROOT/linux/emulation/srm.sh" configure --skip-if-configured || true
     bash "$PZ_ROOT/linux/emulation/ps3.sh" configure || true
     bash "$PZ_ROOT/linux/emulation/performance.sh" apply || true
     bash "$PZ_ROOT/linux/emulation/hydra.sh" steam-shortcut || true

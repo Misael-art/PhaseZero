@@ -141,6 +141,8 @@ def build_catalog(root: Path) -> list[ActionSpec]:
             _a("steamdeck.plugins.repair", "Steam Deck", "Reparar Decky", "Restaura loader e plugins.", ("steamdeck", "plugins", "repair"), "tools-check-spelling", mutable=True, preview=("steamdeck", "plugins", "status"), badge="Reparo"),
             _a("steamdeck.launch-options", "Steam Deck", "Launch options", "Lista presets para jogos Steam.", ("steamdeck", "launch-options"), "document-properties"),
             _a("steamdeck.runtime", "Steam Deck", "Diagnóstico runtime", "Analisa runtime Steam e bibliotecas.", ("steamdeck", "runtime-diagnose"), "utilities-terminal"),
+            _a("steamdeck.removable", "Steam Deck", "Montar removíveis", "Auto-mount USB (ignora durante Windows VM).", ("steamdeck", "removable", "install"), "drive-removable-media", mutable=True, preview=("steamdeck", "removable", "status"), elevated=True),
+            _a("steamdeck.display", "Steam Deck", "Detectar display", "Resolução TV/monitor para Game Mode.", ("steamdeck", "display", "detect"), "video-display", mutable=True, preview=("steamdeck", "display", "status")),
         ]
     )
 
@@ -227,6 +229,12 @@ def build_catalog(root: Path) -> list[ActionSpec]:
         ("controllers", "Controles Steam Deck", "Perfil de gamepad para Ryujinx e RPCS3.", ("emulation", "controllers", "apply"), ("emulation", "controllers", "status")),
         ("frontends", "Reparar frontends", "Switcher BigBox, Steam, ES-DE e Heroic.", ("emulation", "frontends", "repair"), ("emulation", "frontends", "plan")),
         ("performance", "Aplicar performance", "Perfis adaptativos Switch/PS3/PS4.", ("emulation", "performance", "apply"), ("emulation", "performance", "plan")),
+        (
+            "rom-optimize", "Otimizar ROMs", "CHD/RVZ/CSO/NSZ/ZIP por plataforma.",
+            ("emulation", "rom-optimize", "{input}"),
+            ("emulation", "rom-optimize", "{input}", "--dry-run", "--json"),
+        ),
+        ("dualscreen", "Tela dupla Deck+TV", "Roteia 2 telas (3DS/Wii U/DS) p/ TV+Deck (Desktop Mode).", ("emulation", "dualscreen", "apply", "all"), ("emulation", "dualscreen", "detect")),
         ("lsfg", "Preparar LSFG", "Instala layer Vulkan verificada.", ("emulation", "performance", "prepare-lsfg"), ("emulation", "performance", "status")),
         ("lua", "Instalar Lua", "Lua, LuaJIT e LuaRocks.", ("emulation", "lua", "install"), ("emulation", "lua", "dry-run")),
         ("steam-tools", "Instalar Steam tools", "Ferramentas auxiliares e backups.", ("emulation", "steam-tools", "install"), ("emulation", "steam-tools", "dry-run")),
@@ -247,6 +255,8 @@ def build_catalog(root: Path) -> list[ActionSpec]:
                 mutable=preview is not None,
                 preview=preview,
                 badge="Preview" if preview else "",
+                input_label="Selecione a biblioteca de ROMs" if key == "rom-optimize" else "",
+                input_kind="path" if key == "rom-optimize" else "",
             )
         )
     actions.extend(

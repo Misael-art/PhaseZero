@@ -13,6 +13,7 @@ UNITS="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 RUNTIME="$ROOT/.runtime/node24"
 NODE_BIN="$RUNTIME/node_modules/node/bin/node"
 NPM_CLI="$RUNTIME/node_modules/npm/bin/npm-cli.js"
+PATCH_STATE_DIR="$ROOT/.phasezero-state"
 
 # Ports mirror the Windows catalog (3010-3013) to avoid colliding with common
 # local services: open-webui/grafana default to :3000 and uptime-kuma (homelab)
@@ -56,13 +57,117 @@ run_npm() {
     (cd "$dir" && PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" "$@")
 }
 
+# Parse dotenv as data. Never source it: a credential file must not execute shell.
+load_proxy_env() {
+    local file="$1" line key value
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        [[ "$line" =~ ^[[:space:]]*$ ]] && continue
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        if [[ ! "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=(.*)$ ]]; then
+            echo "invalid dotenv line in $file (expected NAME=value)" >&2
+            return 2
+        fi
+        key="${BASH_REMATCH[1]}"
+        value="${BASH_REMATCH[2]}"
+        value="${value#"${value%%[![:space:]]*}"}"
+        value="${value%"${value##*[![:space:]]}"}"
+        if [[ "$value" == \"*\" && "$value" == *\" ]] ||
+           [[ "$value" == \'*\' && "$value" == *\' ]]; then
+            value="${value:1:${#value}-2}"
+        fi
+        case "$key" in
+            PATH|IFS|CDPATH|ENV|BASH_ENV|SHELLOPTS|BASHOPTS|GLOBIGNORE|LD_*|DYLD_*|PYTHONPATH|PERL5OPT|RUBYOPT|NODE_OPTIONS)
+                echo "unsafe dotenv variable rejected in $file: $key" >&2
+                return 2
+                ;;
+        esac
+        export "${key?}=$value"
+    done < "$file"
+}
+
+managed_patch_file() {
+    case "$1" in
+        kimiproxy|deepsproxy) printf '%s\n' 'src/index.ts' ;;
+        mimo-ai-proxy) printf '%s\n' 'main.go' ;;
+        *) return 1 ;;
+    esac
+}
+
+restore_managed_loopback_patch() {
+    local id="$1" dir="$2" rel state file backup actual patched baseline backup_hash
+    rel="$(managed_patch_file "$id" 2>/dev/null || true)"
+    [ -n "$rel" ] || return 0
+    state="$PATCH_STATE_DIR/$id.json"
+    backup="$PATCH_STATE_DIR/$id.original"
+    file="$dir/$rel"
+    [ -f "$state" ] && [ -f "$file" ] && [ -f "$backup" ] || return 0
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+    patched="$(jq -r '.patchedSha256 // empty' "$state" 2>/dev/null || true)"
+    baseline="$(jq -r '.baselineSha256 // empty' "$state" 2>/dev/null || true)"
+    backup_hash="$(sha256sum "$backup" | awk '{print $1}')"
+    if [ -n "$patched" ] && [ "$actual" = "$patched" ] &&
+       [ -n "$baseline" ] && [ "$backup_hash" = "$baseline" ]; then
+        cp -p -- "$backup" "$file"
+        rm -f -- "$state" "$backup"
+        pz_info "restored managed loopback patch before update: $id"
+    else
+        pz_warn "managed proxy source changed after loopback patch; preserving local edits: $id/$rel"
+    fi
+}
+
+apply_loopback_patch() {
+    local id="$1" dir="$2" file rel baseline patched state backup
+    case "$id" in
+        kimiproxy|deepsproxy)
+            rel="src/index.ts"
+            file="$dir/$rel"
+            [ -f "$file" ] || { pz_error "loopback patch target missing: $id/$rel"; return 1; }
+            if grep -q 'process.env.PZ_BIND_HOST' "$file"; then return 0; fi
+            if grep -Eq 'hostname:.*(process\.env\.(HOST|BIND_HOST)|127\.0\.0\.1)' "$file"; then
+                pz_info "upstream already has configurable loopback bind: $id"
+                return 0
+            fi
+            baseline="$(sha256sum "$file" | awk '{print $1}')"
+            install -d "$PATCH_STATE_DIR"
+            backup="$PATCH_STATE_DIR/$id.original"
+            cp -p -- "$file" "$backup"
+            perl -0pi -e 's/serve\(\{\s*fetch: app\.fetch,\s*port\s*\}\);/serve({\n      fetch: app.fetch,\n      port,\n      hostname: process.env.PZ_BIND_HOST || process.env.HOST || "127.0.0.1"\n    });/g' "$file"
+            grep -q 'process.env.PZ_BIND_HOST' "$file" || { pz_error "loopback patch no longer matches upstream: $id"; return 1; }
+            ;;
+        mimo-ai-proxy)
+            rel="main.go"
+            file="$dir/$rel"
+            [ -f "$file" ] || { pz_error "loopback patch target missing: $id/$rel"; return 1; }
+            if grep -q 'PZ_BIND_HOST' "$file"; then return 0; fi
+            baseline="$(sha256sum "$file" | awk '{print $1}')"
+            install -d "$PATCH_STATE_DIR"
+            backup="$PATCH_STATE_DIR/$id.original"
+            cp -p -- "$file" "$backup"
+            perl -0pi -e 's|// For Docker environments, it'"'"'s safer to bind to 0\.0\.0\.0 explicitly\s*\n\s*address := "0\.0\.0\.0:" \+ port|host := os.Getenv("PZ_BIND_HOST")\n\tif host == "" {\n\t\thost = os.Getenv("HOST")\n\t}\n\tif host == "" {\n\t\thost = "127.0.0.1"\n\t}\n\taddress := host + ":" + port|s' "$file"
+            grep -q 'PZ_BIND_HOST' "$file" || { pz_error "loopback patch no longer matches upstream: $id"; return 1; }
+            ;;
+        *) return 0 ;;
+    esac
+    patched="$(sha256sum "$file" | awk '{print $1}')"
+    state="$PATCH_STATE_DIR/$id.json"
+    jq -n --arg id "$id" --arg file "$rel" --arg baselineSha256 "$baseline" \
+        --arg patchedSha256 "$patched" --arg appliedAt "$(date -Iseconds)" \
+        '{schemaVersion:1,id:$id,file:$file,baselineSha256:$baselineSha256,patchedSha256:$patchedSha256,appliedAt:$appliedAt}' \
+        > "$state"
+    pz_info "loopback bind patch applied: $id"
+}
+
 install_one() {
-    local id="$1" repo="$2" port="$3" kind="$4" dir="$ROOT/$id"
+    local id="$1" repo="$2" port="$3" kind="$4" dir
+    dir="$ROOT/$id"
     install -d "$ROOT" "$BIN" "$UNITS"
     if [ -d "$dir/.git" ]; then
+        restore_managed_loopback_patch "$id" "$dir"
         git -C "$dir" fetch --prune
         if [ "$(git -C "$dir" rev-parse HEAD)" != "$(git -C "$dir" rev-parse '@{upstream}')" ]; then
-            if [ -n "$(git -C "$dir" status --porcelain)" ]; then
+            if [ -n "$(git -C "$dir" status --porcelain --untracked-files=no)" ]; then
                 pz_warn "Update skipped for $id: managed checkout has local/generated changes"
             else
                 git -C "$dir" merge --ff-only '@{upstream}'
@@ -76,6 +181,7 @@ install_one() {
             if [ -f "$dir/package-lock.json" ]; then run_npm "$dir" ci --ignore-scripts=false
             elif [ -f "$dir/package.json" ]; then run_npm "$dir" install --ignore-scripts=false
             fi
+            apply_loopback_patch "$id" "$dir"
             if [ "$kind" = node ] && jq -er '.scripts.start // ""' "$dir/package.json" 2>/dev/null | grep -q 'dist/'; then
                 run_npm "$dir" run build
             fi
@@ -86,6 +192,7 @@ install_one() {
             esac
             ;;
         go)
+            apply_loopback_patch "$id" "$dir"
             if [ -f "$dir/go.mod" ]; then
                 install -d "$dir/.phasezero-bin"
                 (cd "$dir" && go build -o "$dir/.phasezero-bin/$id" .)
@@ -102,9 +209,13 @@ install_one() {
         pz_write_managed_file "$BIN/$id" user <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+$(declare -f load_proxy_env)
 cd "$dir"
-[ -f "\$HOME/.config/phasezero/ai-proxies/$id.env" ] && set -a && source "\$HOME/.config/phasezero/ai-proxies/$id.env" && set +a
+load_proxy_env "\$HOME/.config/phasezero/ai-proxies/$id.env"
 export PORT="\${PORT:-$port}"
+export PZ_BIND_HOST="\${PZ_BIND_HOST:-\${PHASEZERO_AI_PROXY_HOST:-127.0.0.1}}"
+export HOST="\$PZ_BIND_HOST"
+export BIND_HOST="\$PZ_BIND_HOST"
 export PATH="$RUNTIME/bin:\$PATH"
 $run_command
 EOF
@@ -129,6 +240,9 @@ EOF
 
 install_selected() {
     command -v git >/dev/null || { pz_error "git required"; return 1; }
+    command -v jq >/dev/null || { pz_error "jq required"; return 1; }
+    command -v sha256sum >/dev/null || { pz_error "sha256sum required"; return 1; }
+    command -v perl >/dev/null || { pz_error "perl required for safe loopback patching"; return 1; }
     ensure_node_runtime
     local id repo port kind count=0
     while IFS='|' read -r id repo port kind; do
@@ -215,11 +329,12 @@ upsert_env_var() {
 # Return (and persist) a stable local API key for a proxy, without clobbering any
 # other vars the user configured (QWEN_*, mimo tokens, ...).
 ensure_proxy_key() {
-    local id="$1" port="$2" file="$PROXY_ENV_DIR/$id.env" key=""
+    local id="$1" port="$2" file key=""
+    file="$PROXY_ENV_DIR/$id.env"
     [ -f "$file" ] && key="$(awk -F= '$1=="API_KEY"{print $2; exit}' "$file")"
     if [ -z "$key" ]; then
-        key="pz-$(head -c 24 /dev/urandom | base64 2>/dev/null | tr -dc 'a-zA-Z0-9' | head -c 28)"
-        [ -n "$key" ] || key="pz-$id-local"
+        key="pz-$(od -An -N24 -tx1 /dev/urandom 2>/dev/null | tr -d '[:space:]')"
+        [ "${#key}" -ge 35 ] || { pz_error "secure proxy key generation failed"; return 1; }
     fi
     upsert_env_var "$file" PORT "$port"
     upsert_env_var "$file" API_KEY "$key"
@@ -335,6 +450,179 @@ port_open() {
     timeout 2 bash -c "exec 3<>/dev/tcp/127.0.0.1/$1" 2>/dev/null
 }
 
+# --- Enable + OAuth login (UI "Habilitar" buttons) ---------------------------
+#
+# kimiproxy/qwenproxy/deepsproxy authenticate by scraping the vendor's own web
+# chat via a real, visible Playwright browser (`npm run login`), not a token
+# form — there is no headless OAuth endpoint to hit. mimo-ai-proxy is NOT
+# included here (it authenticates via manually-copied session tokens in its
+# .env, not a browser flow).
+#
+# On this host, launching `npm run login` through a spawned terminal emulator
+# (kitty/alacritty/...), or fully daemonizing it (nohup+disown), reliably made
+# Playwright pick chrome-headless-shell instead of a real visible window —
+# even with DISPLAY/WAYLAND_DISPLAY correctly inherited either way. Only a
+# plain `setsid`-detached child, launched directly (no terminal, no
+# nohup/disown), reliably launches headed and survives this script exiting
+# (background jobs of a non-interactive script are not SIGHUP'd on exit).
+LOGIN_CAPABLE_PROXIES=(kimiproxy qwenproxy deepsproxy)
+
+is_login_capable_proxy() {
+    local id="$1" p
+    for p in "${LOGIN_CAPABLE_PROXIES[@]}"; do [ "$p" = "$id" ] && return 0; done
+    return 1
+}
+
+dotenv_has_any_key() {
+    local file="$1"
+    shift
+    [ -f "$file" ] || return 1
+    awk -F= -v keys="$*" '
+        BEGIN { split(keys, wanted, " "); for (i in wanted) want[wanted[i]]=1 }
+        /^[[:space:]]*#/ { next }
+        {
+            key=$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+            val=$0
+            sub(/^[^=]*=/, "", val)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", val)
+            if (key in want && val != "") found=1
+        }
+        END { exit found ? 0 : 1 }
+    ' "$file"
+}
+
+mimo_missing_groups_json() {
+    local file="$1" missing=()
+    dotenv_has_any_key "$file" SERVICE_TOKEN SERVICE_TOKENS MIMO_SERVICE_TOKEN MIMO_SERVICE_TOKENS XIAOMI_SERVICE_TOKEN XIAOMI_SERVICE_TOKENS || missing+=("service-token-group")
+    dotenv_has_any_key "$file" USER_ID USER_IDS MIMO_USER_ID MIMO_USER_IDS XIAOMI_USER_ID XIAOMI_USER_IDS || missing+=("user-id-group")
+    dotenv_has_any_key "$file" XIAOMI_CHATBOT_PH XIAOMI_CHATBOT_PHS MIMO_XIAOMI_CHATBOT_PH MIMO_XIAOMI_CHATBOT_PHS || missing+=("chatbot-ph-group")
+    jq -cn '$ARGS.positional' --args "${missing[@]}"
+}
+
+auth_status_json() {
+    local first=true id repo port kind dir installed service env_file api_configured=false
+    local required=false web_kind="" web_status="not-applicable" command="" log_path="" missing_json="[]"
+    printf '['
+    while IFS='|' read -r id repo port kind; do
+        [ -n "$id" ] || continue
+        dir="$ROOT/$id"
+        env_file="$PROXY_ENV_DIR/$id.env"
+        installed=false; [ -d "$dir/.git" ] && installed=true
+        service="not-applicable"
+        { [ "$kind" = node ] || [ "$kind" = go ]; } &&
+            service="$(systemctl --user is-active "phasezero-$id.service" 2>/dev/null || true)"
+        api_configured=false
+        dotenv_has_any_key "$env_file" API_KEY && api_configured=true
+        required=false; web_kind=""; web_status="not-applicable"; command=""; log_path=""; missing_json="[]"
+        if is_login_capable_proxy "$id"; then
+            required=true
+            web_kind="browser-session"
+            command="linux/pz ai proxies login $id"
+            log_path="$PZ_STATE/ai-proxies/$id-login.log"
+            if ! $installed; then
+                web_status="not-installed"
+            elif [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+                web_status="gui-required"
+            else
+                web_status="ready-for-login"
+            fi
+        elif [ "$id" = "mimo-ai-proxy" ]; then
+            required=true
+            web_kind="env-session"
+            command="\$EDITOR $env_file"
+            missing_json="$(mimo_missing_groups_json "$env_file")"
+            if [ "$(jq 'length' <<< "$missing_json")" -eq 0 ]; then
+                web_status="configured"
+            else
+                web_status="missing-credentials"
+            fi
+        elif [ "$id" = "qwen-worker-proxy" ]; then
+            web_kind="external-deploy"
+            web_status="cloudflare-required"
+        elif [ "$id" = "airlock" ]; then
+            web_kind="library"
+            web_status="not-applicable"
+        else
+            web_kind="local-service"
+            web_status="not-required"
+        fi
+        $first || printf ','
+        first=false
+        jq -cn --arg id "$id" --arg repo "$repo" --arg kind "$kind" --arg path "$dir" \
+            --arg envPath "$env_file" --arg service "${service:-inactive}" --arg webKind "$web_kind" \
+            --arg webStatus "$web_status" --arg command "$command" --arg loginLog "$log_path" \
+            --argjson port "$port" --argjson installed "$installed" --argjson required "$required" \
+            --argjson apiKeyConfigured "$api_configured" --argjson missing "$missing_json" \
+            '{
+              id:$id, repo:$repo, kind:$kind, path:$path, port:$port,
+              installed:$installed, service:$service, envPath:$envPath,
+              apiKeyConfigured:$apiKeyConfigured,
+              webValidation:{
+                required:$required, kind:$webKind, status:$webStatus,
+                command:$command, loginLog:$loginLog, missing:$missing
+              }
+            }'
+    done < <(selected_rows)
+    printf ']\n'
+}
+
+login_proxy() {
+    local id="$1" dir="$ROOT/$1" log state login_pid
+    if ! is_login_capable_proxy "$id"; then
+        pz_error "no browser login flow for '$id' (supported: ${LOGIN_CAPABLE_PROXIES[*]})"
+        [ "$id" = "mimo-ai-proxy" ] && pz_error "mimo-ai-proxy authenticates via SERVICE_TOKEN/USER_ID in its .env, not browser login: $PROXY_ENV_DIR/mimo-ai-proxy.env"
+        return 2
+    fi
+    [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || { pz_error "browser login requires a graphical session (DISPLAY or WAYLAND_DISPLAY)"; return 3; }
+    [ -d "$dir/.git" ] || { pz_error "$id not installed; run: pz ai proxies install $id"; return 1; }
+    [ -f "$dir/package.json" ] && jq -er '.scripts.login // empty' "$dir/package.json" >/dev/null 2>&1 || {
+        pz_error "$id has no npm login script"
+        return 2
+    }
+    ensure_node_runtime >/dev/null
+
+    # The running proxy SERVER also opens Playwright against this same profile
+    # dir, headless (index.ts: initPlaywright(true, ...)). If the service is
+    # already up (or starts concurrently) it can win the profile lock before
+    # `npm run login` does, and the user never sees a real window — the login
+    # script silently ends up sharing the server's existing HEADLESS session.
+    # So: stop the service first (freeing the profile), let login claim it
+    # exclusively in headed mode, then restart the service once the login
+    # process exits, so it picks up the freshly saved cookies.
+    systemctl --user stop "phasezero-$id.service" >/dev/null 2>&1 || true
+
+    install -d "$PZ_STATE/ai-proxies"
+    log="$PZ_STATE/ai-proxies/$id-login.log"
+    state="$PZ_STATE/ai-proxies/$id-login.json"
+    : > "$log"
+
+    if [ "$id" = qwenproxy ]; then
+        # qwenproxy shows an interactive account-picker menu before opening the
+        # browser. Feed the whole answer sequence up front on stdin: Node's
+        # readline just blocks on each question() until a line is available,
+        # so it's fine that the actual OAuth login (indeterminate wall-clock
+        # time) happens between two already-queued lines. "M" = manual browser
+        # login, blank = "press enter to open browser", a generated label for
+        # the "enter email" prompt (informational only, not a real address),
+        # "Q" = quit the menu once the account is saved.
+        (cd "$dir" && printf 'M\n\nphasezero-login-%s\n\nQ\n' "$(date +%s)" | \
+            setsid env PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" run login) >"$log" 2>&1 &
+    else
+        (cd "$dir" && setsid env PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" run login) >"$log" 2>&1 &
+    fi
+    login_pid=$!
+    jq -n --arg id "$id" --arg log "$log" --arg startedAt "$(date -Iseconds)" --argjson pid "$login_pid" \
+        '{schemaVersion:1,id:$id,status:"started",pid:$pid,log:$log,startedAt:$startedAt,restartServiceAfterExit:true}' > "$state"
+
+    ( while kill -0 "$login_pid" 2>/dev/null; do sleep 2; done
+      systemctl --user enable --now "phasezero-$id.service" >/dev/null 2>&1 || true
+    ) >/dev/null 2>&1 &
+
+    pz_info "login window opening for $id (real chromium window, not headless) — complete the OAuth login there; phasezero-$id.service restarts automatically once you close it. Log: $log"
+    [ "$id" = qwenproxy ] && pz_info "qwenproxy: auto-selected 'manual browser login' from its account menu"
+}
+
 # Honest end-to-end probe. These proxies launch a Playwright/Chromium session
 # BEFORE binding (kimi/deepseek/mimo serve a static /v1/models; qwen's is dynamic
 # and needs a Qwen session), so we (1) warm every service in parallel, (2) wait
@@ -353,14 +641,14 @@ test_proxies() {
     done < <(proxy_rows)
 
     printf '['
-    local idx key url up i mcode ccode models chat model
+    local idx key url up i models chat model
     for idx in "${!ids[@]}"; do
         id="${ids[$idx]}"; port="${ports[$idx]}"
         key="$(awk -F= '$1=="API_KEY"{print $2; exit}' "$PROXY_ENV_DIR/$id.env" 2>/dev/null || true)"
         url="http://127.0.0.1:$port/v1"
         model="$(proxy_ide_rows | awk -F'|' -v i="$id" '$1==i{print $5}')"
         up=false
-        for i in $(seq 1 40); do port_open "$port" && { up=true; break; }; sleep 1; done
+        for ((i = 1; i <= 40; i++)); do port_open "$port" && { up=true; break; }; sleep 1; done
         models=unreachable; chat=unreachable
         if $up; then
             local mbody
@@ -393,9 +681,11 @@ case "$ACTION" in
         install_selected
         configure_ides
         ;;
+    auth|auth-status|login-status) auth_status_json ;;
     configure-ides|ides|configure) configure_ides ;;
     test|verify) test_proxies ;;
     start|enable) service_action start ;;
     stop|disable) service_action stop ;;
-    *) pz_error "usage: proxy-suite.sh (status|plan|install|configure-ides|test|start|stop) [all|id]"; exit 2 ;;
+    login) login_proxy "$TARGET" ;;
+    *) pz_error "usage: proxy-suite.sh (status|plan|install|configure-ides|auth|test|start|stop|login) [all|id]"; exit 2 ;;
 esac

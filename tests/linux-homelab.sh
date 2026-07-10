@@ -14,8 +14,23 @@ mkdir -p "$HOME" "$XDG_STATE_HOME" "$PZ_HOMELAB_STATE"
 echo "=== syntax ==="
 bash -n "$REPO_ROOT/linux/server/homelab-stack.sh"
 bash -n "$REPO_ROOT/linux/server/casaos.sh"
+bash -n "$REPO_ROOT/linux/server/apply-common.sh"
 bash -n "$REPO_ROOT/linux/pz"
 echo "  syntax ok"
+
+echo "=== server profile argument integrity ==="
+apply_capture="$TMP/apply-common.args"
+(
+    # shellcheck source=../linux/server/apply-common.sh
+    source "$REPO_ROOT/linux/server/apply-common.sh"
+    bash() { printf '%s\n' "$*" >> "$apply_capture"; }
+    pz_info() { :; }
+    pz_warn() { :; }
+    PZ_SERVER_INSTALL_BOOT=0 pz_server_apply --homelab --extras --no-boot
+)
+grep -Fq "$REPO_ROOT/linux/server/homelab-stack.sh up --extras" "$apply_capture"
+test "$(wc -l < "$apply_capture")" -eq 1
+echo "  profile args ok"
 
 echo "=== compose has pinned tags and safe binds ==="
 if rg -n ':latest' "$REPO_ROOT/assets/home-server/docker-compose."*.yml; then
@@ -96,6 +111,14 @@ PRETTY_NAME="Ubuntu Test"
 EOF
 PZ_CASAOS_OS_RELEASE="$TMP/ubuntu-os-release" "$REPO_ROOT/linux/pz" server casaos plan --json |
     jq -e '.status == "available" and .compatibility.compatible == true and (.compatibility.blockers | length == 0)' >/dev/null
+PZ_DRY_RUN=1 PZ_CASAOS_OS_RELEASE="$TMP/ubuntu-os-release" \
+    "$REPO_ROOT/linux/pz" server casaos install --yes |
+    jq -e '.dryRun == true and .download[0] == "curl" and .execute == ["bash", "<temporary>"] and (.download | index("=https"))' >/dev/null
+if PZ_DRY_RUN=1 PZ_CASAOS_OS_RELEASE="$TMP/ubuntu-os-release" PZ_CASAOS_INSTALL_URL='http://example.invalid/install.sh' \
+    "$REPO_ROOT/linux/pz" server casaos install --yes >/dev/null 2>&1; then
+    echo "FAIL: CasaOS accepted non-HTTPS installer URL"
+    exit 1
+fi
 
 cat > "$TMP/arch-os-release" <<'EOF'
 ID=arch

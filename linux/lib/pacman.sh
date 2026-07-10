@@ -4,30 +4,48 @@ set -euo pipefail
 
 pz_pkg_install() {
     local pkg="$1" manager="${2:-auto}"
+    [ -n "$pkg" ] || { pz_error "package name required"; return 2; }
+    [[ "$pkg" =~ ^[A-Za-z0-9@._+:-]+$ ]] || {
+        pz_error "invalid package name: $pkg"
+        return 2
+    }
     case "$manager" in
         pacman)
-            sudo pacman -S --needed --noconfirm "$pkg"
+            command -v pacman >/dev/null 2>&1 || { pz_error "pacman missing"; return 69; }
+            pz_admin_run pacman -S --needed --noconfirm "$pkg"
             ;;
         yay)
+            command -v yay >/dev/null 2>&1 || { pz_error "yay missing"; return 69; }
             yay -S --needed --noconfirm "$pkg"
             ;;
         paru)
+            command -v paru >/dev/null 2>&1 || { pz_error "paru missing"; return 69; }
             paru -S --needed --noconfirm "$pkg"
             ;;
         flatpak)
+            command -v flatpak >/dev/null 2>&1 || { pz_error "flatpak missing"; return 69; }
             flatpak install -y flathub "$pkg"
             ;;
         auto)
-            if pacman -Si "$pkg" &>/dev/null 2>&1; then
-                sudo pacman -S --needed --noconfirm "$pkg"
-            elif yay -Si "$pkg" &>/dev/null 2>&1; then
+            if command -v pacman >/dev/null 2>&1 && pacman -Si "$pkg" &>/dev/null; then
+                pz_admin_run pacman -S --needed --noconfirm "$pkg"
+            elif command -v yay >/dev/null 2>&1 && yay -Si "$pkg" &>/dev/null; then
                 yay -S --needed --noconfirm "$pkg"
-            else
+            elif command -v paru >/dev/null 2>&1 && paru -Si "$pkg" &>/dev/null; then
+                paru -S --needed --noconfirm "$pkg"
+            elif command -v flatpak >/dev/null 2>&1; then
                 flatpak install -y flathub "$pkg" 2>/dev/null || {
                     pz_error "could not install $pkg via any manager"
                     return 1
                 }
+            else
+                pz_error "no supported package manager available for $pkg"
+                return 69
             fi
+            ;;
+        *)
+            pz_error "unknown package manager: $manager"
+            return 2
             ;;
     esac
 }
@@ -51,7 +69,7 @@ pz_pkg_search() {
 }
 
 pz_pkg_update() {
-    sudo pacman -Syu --noconfirm
+    pz_admin_run pacman -Syu --noconfirm
     if command -v yay &>/dev/null; then
         yay -Sua --noconfirm
     fi
@@ -61,6 +79,12 @@ pz_pkg_update() {
 }
 
 pz_pkg_cleanup() {
-    sudo pacman -Sc --noconfirm
-    sudo pacman -Rns "$(pacman -Qdtq 2>/dev/null)" --noconfirm 2>/dev/null || true
+    local orphans=()
+    pz_admin_run pacman -Sc --noconfirm
+    mapfile -t orphans < <(pacman -Qdtq 2>/dev/null || true)
+    if [ "${#orphans[@]}" -gt 0 ]; then
+        pz_admin_run pacman -Rns --noconfirm "${orphans[@]}"
+    else
+        pz_info "no orphan packages to remove"
+    fi
 }

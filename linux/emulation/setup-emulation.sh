@@ -17,7 +17,7 @@ case "$ACTION" in
         bash "$PZ_ROOT/linux/emulation/citron.sh" install
         bash "$PZ_ROOT/linux/emulation/citron.sh" integrate
         bash "$PZ_ROOT/linux/emulation/hydra.sh" install
-        bash "$PZ_ROOT/linux/emulation/srm.sh" configure
+        bash "$PZ_ROOT/linux/emulation/srm.sh" configure --skip-if-configured
         bash "$PZ_ROOT/linux/emulation/sony.sh" ps1 configure
         bash "$PZ_ROOT/linux/emulation/sony.sh" ps2 configure
         bash "$PZ_ROOT/linux/emulation/ps3.sh" configure

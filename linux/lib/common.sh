@@ -6,7 +6,6 @@ PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PZ_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero"
 PZ_MANIFEST="$PZ_STATE/manifest.json"
 PZ_LOG="$PZ_STATE/pz.log"
-PZ_PROFILES="${PZ_ROOT}/profiles"
 
 mkdir -p "$PZ_STATE"
 
@@ -29,6 +28,21 @@ pz_can_sudo_noninteractive() {
     command -v sudo &>/dev/null && sudo -n true &>/dev/null
 }
 
+pz_admin_run() {
+    if [ "$EUID" -eq 0 ]; then
+        "$@"
+    elif command -v phasezero-admin >/dev/null 2>&1; then
+        phasezero-admin "$@"
+    elif command -v bigsudo >/dev/null 2>&1; then
+        bigsudo "$@"
+    elif [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; then
+        sudo -n "$@"
+    else
+        pz_error "admin bridge required; run: linux/pz ai setup admin"
+        return 77
+    fi
+}
+
 pz_write_managed_file() {
     local path="$1" scope="${2:-user}"
     local dir tmp backup
@@ -37,11 +51,11 @@ pz_write_managed_file() {
     cat > "$tmp"
 
     if [ "$scope" = "root" ] && [ "$EUID" -ne 0 ]; then
-        if [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; then
-            backup="${path}.bak.$(date +%s)"
-            [ -f "$path" ] && sudo -n cp "$path" "$backup" 2>/dev/null || true
-            sudo -n install -d "$dir"
-            sudo -n install -m 0644 "$tmp" "$path"
+        if command -v phasezero-admin >/dev/null 2>&1 || command -v bigsudo >/dev/null 2>&1 || { [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; }; then
+            backup="${path}.bak.$(date +%s).$$.${RANDOM:-0}"
+            [ -f "$path" ] && pz_admin_run cp "$path" "$backup" 2>/dev/null || true
+            pz_admin_run install -d "$dir"
+            pz_admin_run install -m 0644 "$tmp" "$path"
             rm -f "$tmp"
             pz_info "wrote $path"
             return 0
@@ -49,11 +63,11 @@ pz_write_managed_file() {
 
         rm -f "$tmp"
         pz_warn "$path requires root; skipped non-interactive write"
-        return 0
+        return 77
     fi
 
     mkdir -p "$dir"
-    [ -f "$path" ] && cp "$path" "${path}.bak.$(date +%s)" 2>/dev/null || true
+    [ -f "$path" ] && cp "$path" "${path}.bak.$(date +%s).$$.${RANDOM:-0}" 2>/dev/null || true
     install -m 0644 "$tmp" "$path"
     rm -f "$tmp"
     pz_info "wrote $path"
@@ -75,11 +89,13 @@ pz_check_deps() {
 
 pz_require_root() {
     if [ "$EUID" -ne 0 ]; then
-        if command -v bigsudo &>/dev/null; then
+        if command -v phasezero-admin &>/dev/null; then
+            exec phasezero-admin "$0" "$@"
+        elif command -v bigsudo &>/dev/null; then
             exec bigsudo "$0" "$@"
         else
-            echo "root required. run with sudo or install bigsudo."
-            return 1
+            pz_error "root required; run: linux/pz ai setup admin"
+            return 77
         fi
     fi
 }
@@ -406,6 +422,9 @@ pz_rollback() {
             file) cp "$backup" "$target" && pz_info "restored $target from $backup" ;;
             package) pz_info "rollback package $target: manual reinstall may be needed" ;;
             service) systemctl disable --now "$target" 2>/dev/null || true ;;
+            flatpak-remote)
+                command -v flatpak >/dev/null 2>&1 && flatpak remote-delete "$target" 2>/dev/null || true
+                ;;
         esac
     done
     rm -f "$PZ_MANIFEST"
@@ -414,12 +433,84 @@ pz_rollback() {
 
 pz_run_profile() {
     local profile_file="$1"
+    local profile_real profile_dir profile_name parent parent_file call_depth active_before
     if [ ! -f "$profile_file" ]; then
         pz_error "profile not found: $profile_file"
         return 1
     fi
+    command -v jq >/dev/null 2>&1 || { pz_error "jq is required to read profiles"; return 69; }
+    if ! jq -e 'type == "object" and (.name | type == "string" and length > 0)' "$profile_file" >/dev/null 2>&1; then
+        pz_error "invalid profile JSON or missing name: $profile_file"
+        return 2
+    fi
+    if ! jq -e '
+        ((.extends // []) | type == "array") and
+        ((.packages.linux.pacman // []) | type == "array") and
+        ((.packages.linux.yay // []) | type == "array") and
+        (((.packages.linux.flatpak // []) | type) as $t | $t == "array" or $t == "object") and
+        ((.scripts.linux // []) | type == "array") and
+        ((.systemd.linux.enable // []) | type == "array") and
+        ((.systemd.linux.user // []) | type == "array") and
+        ((.tuning.linux.sysctl // {}) | type == "object")
+    ' "$profile_file" >/dev/null 2>&1; then
+        pz_error "invalid Linux profile field type: $profile_file"
+        return 2
+    fi
+    if ! jq -e '(.os // ["linux"]) | type == "array" and index("linux") != null' "$profile_file" >/dev/null 2>&1; then
+        pz_error "profile does not support Linux: $profile_file"
+        return 2
+    fi
+
+    profile_real="$(realpath -e "$profile_file" 2>/dev/null || printf '%s' "$profile_file")"
+    profile_dir="$(dirname "$profile_real")"
+    profile_name="$(jq -r '.name' "$profile_file")"
+    call_depth="${PZ_PROFILE_CALL_DEPTH:-0}"
+    if [ "$call_depth" -eq 0 ]; then
+        PZ_PROFILE_VISITED='|'
+        PZ_PROFILE_ACTIVE='|'
+    fi
+    active_before="${PZ_PROFILE_ACTIVE:-|}"
+    case "$active_before" in
+        *"|$profile_real|"*)
+            pz_error "profile inheritance cycle detected at: $profile_name"
+            return 2
+            ;;
+    esac
+    case "${PZ_PROFILE_VISITED:-|}" in
+        *"|$profile_real|"*)
+            pz_info "profile already applied in composition: $profile_name"
+            return 0
+            ;;
+    esac
+    PZ_PROFILE_VISITED="${PZ_PROFILE_VISITED:-|}${profile_real}|"
+    PZ_PROFILE_ACTIVE="${active_before}${profile_real}|"
+    PZ_PROFILE_CALL_DEPTH=$((call_depth + 1))
+
+    while IFS= read -r parent; do
+        [ -n "$parent" ] || continue
+        if [[ ! "$parent" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            pz_error "invalid parent profile name in $profile_name: $parent"
+            PZ_PROFILE_CALL_DEPTH="$call_depth"
+            PZ_PROFILE_ACTIVE="$active_before"
+            return 2
+        fi
+        parent_file="$profile_dir/$parent.json"
+        if [ ! -f "$parent_file" ]; then
+            pz_error "parent profile not found: $parent_file"
+            PZ_PROFILE_CALL_DEPTH="$call_depth"
+            PZ_PROFILE_ACTIVE="$active_before"
+            return 1
+        fi
+        pz_info "profile $profile_name extends $parent"
+        pz_run_profile "$parent_file" || {
+            PZ_PROFILE_CALL_DEPTH="$call_depth"
+            PZ_PROFILE_ACTIVE="$active_before"
+            return 1
+        }
+    done < <(jq -er '(.extends // []) | if type == "array" then .[] else error("extends must be an array") end' "$profile_file")
+
     local dry_run="${PZ_DRY_RUN:-0}"
-    local packages_scripts
+    local packages
     packages=$(jq -r '.packages.linux.pacman // [] | .[]' "$profile_file" 2>/dev/null || true)
     local yay_pkgs
     yay_pkgs=$(jq -r '.packages.linux.yay // [] | .[]' "$profile_file" 2>/dev/null || true)
@@ -453,7 +544,7 @@ pz_run_profile() {
                 pz_info "would install pacman package: $pkg"
                 continue
             fi
-            sudo pacman -S --needed --noconfirm "$pkg"
+            pz_admin_run pacman -S --needed --noconfirm "$pkg"
             pz_rollback_register package "$pkg" ""
         done <<< "$packages"
     fi
@@ -497,7 +588,23 @@ pz_run_profile() {
         [ "$dry_run" = "1" ] && pz_info "planning setup scripts..." || pz_info "running setup scripts..."
         while IFS= read -r script; do
             [ -z "$script" ] && continue
-            local script_path="$PZ_ROOT/$script"
+            if [[ "$script" = /* || "/$script/" = *"/../"* ]]; then
+                pz_error "unsafe profile script path rejected: $script"
+                PZ_PROFILE_CALL_DEPTH="$call_depth"
+                PZ_PROFILE_ACTIVE="$active_before"
+                return 2
+            fi
+            local script_path
+            script_path="$(realpath -m "$PZ_ROOT/$script" 2>/dev/null || printf '%s/%s' "$PZ_ROOT" "$script")"
+            case "$script_path" in
+                "$PZ_ROOT"/*) ;;
+                *)
+                    pz_error "profile script escapes project root: $script"
+                    PZ_PROFILE_CALL_DEPTH="$call_depth"
+                    PZ_PROFILE_ACTIVE="$active_before"
+                    return 2
+                    ;;
+            esac
             if [ -f "$script_path" ]; then
                 if [ "$dry_run" = "1" ]; then
                     pz_info "would execute $script_path"
@@ -519,7 +626,7 @@ pz_run_profile() {
                 pz_info "would enable system service: $service"
                 continue
             fi
-            sudo systemctl enable --now "$service"
+            pz_admin_run systemctl enable --now "$service"
         done <<< "$system_services"
     fi
 
@@ -543,9 +650,11 @@ pz_run_profile() {
                 pz_info "would set sysctl: $entry"
                 continue
             fi
-            sudo sysctl -w "$entry"
+            pz_admin_run sysctl -w "$entry"
         done <<< "$sysctl_entries"
     fi
 
     pz_info "profile $profile_file complete"
+    PZ_PROFILE_CALL_DEPTH="$call_depth"
+    PZ_PROFILE_ACTIVE="$active_before"
 }

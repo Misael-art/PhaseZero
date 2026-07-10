@@ -14,7 +14,6 @@ PS3_PKG="$PS3_ROMS/pkg"
 PS3_FIRMWARE="$PZ_EMULATION_ROOT/firmware/ps3"
 RPCS3_DEV_HDD0="$PZ_EMULATION_ROOT/storage/rpcs3/dev_hdd0"
 RPCS3_EXDATA="$RPCS3_DEV_HDD0/home/00000001/exdata"
-PS3_STATE="$PZ_EMULATION_STATE/ps3.json"
 RPCS3_WRAPPER="$PZ_LOCAL_BIN/phasezero-rpcs3"
 
 detect_rpcs3() {
@@ -132,7 +131,7 @@ EOF
 }
 
 write_esde_system_file() {
-    local path="$1" flatpak="${2:-false}" tmp body
+    local path="$1" flatpak="${2:-false}" tmp
     tmp="$(mktemp)"
     if [ -f "$path" ]; then
         python3 - "$path" "$tmp" "$flatpak" "$RPCS3_WRAPPER" <<'PY'
@@ -240,7 +239,7 @@ copy_local_game() {
     fi
     configure_rpcs3_vfs
     bash "$PZ_ROOT/linux/emulation/hydra.sh" force-classic-config >/dev/null 2>&1 || true
-    bash "$PZ_ROOT/linux/emulation/srm.sh" configure >/dev/null 2>&1 || true
+    bash "$PZ_ROOT/linux/emulation/srm.sh" configure --skip-if-configured >/dev/null 2>&1 || true
     pz_info "PS3 local game imported into $PS3_ROMS"
 }
 
@@ -278,7 +277,7 @@ import_pkg() {
     fi
     [ "$found" -eq 1 ] || { pz_error "no .pkg files found in $SOURCE"; return 1; }
     configure_rpcs3_vfs
-    bash "$PZ_ROOT/linux/emulation/srm.sh" configure >/dev/null 2>&1 || true
+    bash "$PZ_ROOT/linux/emulation/srm.sh" configure --skip-if-configured >/dev/null 2>&1 || true
     pz_info "PS3 PKG staged in $PS3_PKG"
 }
 

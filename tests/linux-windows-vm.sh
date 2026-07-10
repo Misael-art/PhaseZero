@@ -202,6 +202,7 @@ env -u DISPLAY -u WAYLAND_DISPLAY \
 PATH="$session_bin:/usr/bin:/bin" \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+PZ_WINDOWS_VM_COMPOSITOR=cage \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
 PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
@@ -217,6 +218,41 @@ echo "=== windows-vm.sh: locale-stable virsh parsing ==="
 grep -q 'virsh() { LC_ALL=C command virsh' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -q 'not falling back to direct QEMU' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 echo "  virsh locale + fallback guard ok"
+
+echo "=== windows-vm.sh: precise Windows domain discovery ==="
+virsh_bin="$TMP_ROOT/virsh-bin"
+mkdir -p "$virsh_bin"
+cat > "$virsh_bin/virsh" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+    *" list --all --name")
+        printf '%s\n' darwin-builder win11-test
+        ;;
+    *" domblklist darwin-builder --details")
+        printf '%s\n' 'Type Device Target Source' 'file disk vda /var/lib/libvirt/images/darwin-linux.qcow2'
+        ;;
+    *" domblklist win11-test --details")
+        printf '%s\n' 'Type Device Target Source' 'file disk vda /var/lib/libvirt/images/Win11.qcow2'
+        ;;
+    *" domstate win11-test")
+        printf '%s\n' 'shut off'
+        ;;
+    *" dumpxml win11-test")
+        printf '%s\n' '<domain><devices><disk device="disk"><target bus="virtio"/></disk></devices></domain>'
+        ;;
+    *" net-dumpxml default")
+        printf '%s\n' "<network><ip address='192.168.122.1'/></network>"
+        ;;
+esac
+EOF
+chmod +x "$virsh_bin/virsh"
+domain_status="$(
+    PATH="$virsh_bin:$PATH" \
+    PZ_WINDOWS_VM_DISCOVERED_DISK="$TMP_ROOT/no-existing-disk.qcow2" \
+        "$REPO_ROOT/linux/pz" windows-vm status
+)"
+jq -e '.libvirt.domain == "win11-test" and .libvirt.preferred == true' <<< "$domain_status" >/dev/null
+echo "  precise domain discovery ok"
 
 sddm_test_dir="$TMP_ROOT/sddm"
 PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \

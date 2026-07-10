@@ -16,21 +16,17 @@ modules:
   - name: pyside6
     buildsystem: simple
     build-commands:
-      - pip3 install --no-index --find-links=. --prefix=/app PySide6==6.8.3
+      - pip3 install --no-index --find-links=. --prefix=/app PySide6_Essentials==6.8.3
     sources:
-      - type: file
-        path: PySide6-6.8.3-cp39-abi3-manylinux_2_28_x86_64.whl
       - type: file
         path: shiboken6-6.8.3-cp39-abi3-manylinux_2_28_x86_64.whl
       - type: file
         path: PySide6_Essentials-6.8.3-cp39-abi3-manylinux_2_28_x86_64.whl
-      - type: file
-        path: PySide6_Addons-6.8.3-cp39-abi3-manylinux_2_28_x86_64.whl
   - name: phasezero
     buildsystem: simple
     build-commands:
       - install -d /app/lib/phasezero /app/bin /app/share/applications /app/share/metainfo /app/share/icons/hicolor/scalable/apps
-      - cp -a linux profiles version.json /app/lib/phasezero/
+      - cp -a linux profiles assets version.json /app/lib/phasezero/
       - chmod +x /app/lib/phasezero/linux/pz /app/lib/phasezero/linux/ui/native.sh
       - install -Dm755 packaging/linux/phasezero-control-center /app/bin/phasezero-control-center
       - install -Dm644 packaging/linux/io.phasezero.ControlCenter.desktop /app/share/applications/io.phasezero.ControlCenter.desktop
@@ -39,4 +35,4 @@ modules:
     sources:
       - type: git
         url: https://github.com/Misael-art/PhaseZero.git
-        tag: v1.3.0
+        tag: v1.4.1

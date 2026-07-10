@@ -72,6 +72,7 @@ opencode_version_ok() {
 }
 
 ensure_bun() {
+    local installer="" size=0 rc=1
     command -v bun >/dev/null 2>&1 && return 0
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         pz_info "dry-run: would install bun (OMO Ultimate requires it)"
@@ -86,10 +87,20 @@ ensure_bun() {
     # Fall back to the official user-space installer (no root).
     if command -v curl >/dev/null 2>&1; then
         pz_info "installing bun via official installer into ~/.bun"
-        curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1 || true
         export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
+        installer="$(mktemp "${TMPDIR:-/tmp}/phasezero-bun.XXXXXX")"
+        if curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 \
+            --connect-timeout 15 --max-time 120 https://bun.sh/install -o "$installer"; then
+            size="$(wc -c < "$installer")"
+            if [ "$size" -ge 256 ] && [ "$size" -le 1048576 ] && head -n 1 "$installer" | grep -q '^#!'; then
+                if bash "$installer" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+            else
+                pz_warn "Bun installer failed content validation (size=$size)"
+            fi
+        fi
+        rm -f -- "$installer"
         export PATH="$BUN_INSTALL/bin:$PATH"
-        command -v bun >/dev/null 2>&1 && return 0
+        [ "$rc" -eq 0 ] && command -v bun >/dev/null 2>&1 && return 0
     fi
     pz_error "bun is required and could not be installed; install it and re-run"
     return 1

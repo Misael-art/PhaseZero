@@ -15,6 +15,9 @@ export PZ_APPLICATIONS_DIR="$TMP_ROOT/Applications"
 export PZ_LOCAL_BIN="$TMP_ROOT/bin"
 export PZ_APPIMAGE_DIR="$HOME/Appimage"
 export PZ_SHORTCUTS_DISABLE_RENDER_MENU=0
+# Keep the fixture independent from the physical host. On Steam Deck hardware
+# the repair path intentionally downloads the official interactive launcher.
+export PZ_EMULATION_HOST_CLASS=linux-pc
 
 apps_dir="$XDG_DATA_HOME/applications"
 mkdir -p "$HOME" "$apps_dir" "$PZ_APPLICATIONS_DIR" "$PZ_APPIMAGE_DIR" "$PZ_EMULATION_ROOT/tools"

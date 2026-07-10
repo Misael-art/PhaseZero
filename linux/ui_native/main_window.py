@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QDir, QTimer, Qt, Signal
+from PySide6.QtCore import QDir, QProcess, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -21,32 +19,22 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizeGrip,
-    QSplitter,
     QStackedWidget,
     QStyle,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from .catalog import (
-    CATEGORIES,
-    DASHBOARD,
-    DASHBOARD_QUICK,
-    DASHBOARD_TOOLS,
-    SIDEBAR_GROUPS,
-    build_catalog,
-)
-from .command_runner import CommandRunner, state_dir
+from .catalog import CATEGORIES, DASHBOARD, SIDEBAR_GROUPS, build_catalog
+from .command_runner import CommandRunner
 from .models import ActionSpec, OperationResult
+from .pages.registry import PageRegistry
 from .result_parser import severity_for
 from .widgets import (
     ActionCard,
     HeaderBar,
     PreviewDialog,
     ResultDialog,
-    SectionHeader,
     Toast,
     themed_icon,
 )
@@ -65,17 +53,18 @@ class MainWindow(QMainWindow):
         self.current_category = initial_category or DASHBOARD[0]
         self.pending_action: ActionSpec | None = None
         self.pending_value = ""
-        self.cards: list[ActionCard] = []
-        self.dashboard_cards: list[ActionCard] = []
+        self._action_queue: list[ActionSpec] = []
         self.sidebar_buttons: dict[str, QPushButton] = {}
         self.dark_theme = True
         self._maximized = False
         self._start_failed = False
-        self._last_columns = 0
-        self._relayout_timer = QTimer(self)
-        self._relayout_timer.setSingleShot(True)
-        self._relayout_timer.setInterval(120)
-        self._relayout_timer.timeout.connect(self._relayout_after_resize)
+        self._search_cards: list[ActionCard] = []
+        self._host_process: QProcess | None = None
+        self._closing = False
+        self._search_relayout_timer = QTimer(self)
+        self._search_relayout_timer.setSingleShot(True)
+        self._search_relayout_timer.setInterval(120)
+        self._search_relayout_timer.timeout.connect(self.rebuild_search)
 
         self.setWindowTitle("PhaseZero — Central de Controle")
         self.setMinimumSize(900, 600)
@@ -198,25 +187,37 @@ class MainWindow(QMainWindow):
             banner_layout.addStretch()
             main_layout.addWidget(banner)
 
+        self.registry = PageRegistry(self.root, self.runner)
+        for page in self.registry.pages():
+            page.action_requested.connect(self.request_action)
+            page.actions_requested.connect(self.request_actions)
         self.stack = QStackedWidget()
-        self.dashboard_page = self._build_dashboard_page()
-        self.stack.addWidget(self.dashboard_page)
-        self.actions_page = QWidget()
-        action_page_layout = QVBoxLayout(self.actions_page)
-        action_page_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setFrameShape(QFrame.NoFrame)
-        self.cards_host = QWidget()
-        self.grid = QGridLayout(self.cards_host)
-        self.grid.setContentsMargins(0, 4, 6, 8)
-        self.grid.setHorizontalSpacing(14)
-        self.grid.setVerticalSpacing(14)
-        self.scroll.setWidget(self.cards_host)
-        action_page_layout.addWidget(self.scroll)
-        self.stack.addWidget(self.actions_page)
-        self.results_page = self._build_results_page()
-        self.stack.addWidget(self.results_page)
+        # Add every category page from the registry in sidebar order.
+        seen: set[str] = set()
+        for _group_title, categories in SIDEBAR_GROUPS:
+            for category in categories:
+                if category in seen:
+                    continue
+                seen.add(category)
+                page = self.registry.page_for(category)
+                if page is not None:
+                    self.stack.addWidget(page)
+        # Search results page (keeps old ActionCard grid for cross-category search).
+        self.search_page = QWidget()
+        sp_layout = QVBoxLayout(self.search_page)
+        sp_layout.setContentsMargins(0, 0, 0, 0)
+        self.search_scroll = QScrollArea()
+        self.search_scroll.setWidgetResizable(True)
+        self.search_scroll.setFrameShape(QFrame.NoFrame)
+        self.search_host = QWidget()
+        self.search_grid = QGridLayout(self.search_host)
+        self.search_grid.setContentsMargins(0, 4, 6, 8)
+        self.search_grid.setHorizontalSpacing(14)
+        self.search_grid.setVerticalSpacing(14)
+        self.search_scroll.setWidget(self.search_host)
+        sp_layout.addWidget(self.search_scroll)
+        self.stack.addWidget(self.search_page)
+        self._search_page_idx = self.stack.count() - 1
         main_layout.addWidget(self.stack, 1)
 
         operation = QFrame()
@@ -254,87 +255,12 @@ class MainWindow(QMainWindow):
         self.log_view = QPlainTextEdit()
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
+        self.log_view.document().setMaximumBlockCount(10_000)
         self.log_view.setMaximumHeight(190)
         self.log_view.hide()
         operation_layout.addWidget(self.log_view)
         main_layout.addWidget(operation)
         QTimer.singleShot(0, self._host_summary)
-
-    def _build_dashboard_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        host = QWidget()
-        host_layout = QVBoxLayout(host)
-        host_layout.setContentsMargins(2, 2, 8, 8)
-        host_layout.setSpacing(14)
-
-        welcome = QLabel("Bem-vindo de volta ao PhaseZero 👋")
-        welcome.setObjectName("welcomeTitle")
-        host_layout.addWidget(welcome)
-        subtitle = QLabel("Escaneie, escolha um card e execute — sem decorar caminhos de menu.")
-        subtitle.setObjectName("welcomeSubtitle")
-        host_layout.addWidget(subtitle)
-
-        host_layout.addWidget(SectionHeader("Ações rápidas", "As tarefas mais comuns, em destaque."))
-        host_layout.addWidget(self._dashboard_grid(DASHBOARD_QUICK, hero=True, columns=2))
-
-        host_layout.addWidget(SectionHeader("Ferramentas & utilidades", "Atalhos para status e reparos."))
-        host_layout.addWidget(self._dashboard_grid(DASHBOARD_TOOLS, hero=False, columns=3))
-        host_layout.addStretch()
-
-        scroll.setWidget(host)
-        layout.addWidget(scroll)
-        return page
-
-    def _dashboard_grid(self, ids: tuple[str, ...], *, hero: bool, columns: int) -> QWidget:
-        holder = QWidget()
-        grid = QGridLayout(holder)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(14)
-        actions = [self.by_id[a] for a in ids if a in self.by_id]
-        for index, action in enumerate(actions):
-            card = ActionCard(action, hero=hero)
-            card.requested.connect(self.request_action)
-            self.dashboard_cards.append(card)
-            grid.addWidget(card, index // columns, index % columns)
-        for column in range(columns):
-            grid.setColumnStretch(column, 1)
-        return holder
-
-    def _build_results_page(self) -> QWidget:
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
-        toolbar = QHBoxLayout()
-        refresh = QPushButton("Atualizar")
-        refresh.clicked.connect(self.load_history)
-        folder = QPushButton("Abrir pasta")
-        folder.clicked.connect(self.open_results_folder)
-        export = QPushButton("Exportar ZIP")
-        export.clicked.connect(self.export_results)
-        toolbar.addWidget(refresh)
-        toolbar.addWidget(folder)
-        toolbar.addWidget(export)
-        toolbar.addStretch()
-        layout.addLayout(toolbar)
-        splitter = QSplitter()
-        self.history = QTreeWidget()
-        self.history.setHeaderLabels(["Operação", "Estado", "Data"])
-        self.history.setAlternatingRowColors(True)
-        self.history.itemSelectionChanged.connect(self.show_history_item)
-        self.history_detail = QPlainTextEdit()
-        self.history_detail.setReadOnly(True)
-        self.history_detail.setObjectName("logView")
-        splitter.addWidget(self.history)
-        splitter.addWidget(self.history_detail)
-        splitter.setSizes([360, 620])
-        layout.addWidget(splitter, 1)
-        return page
 
     def _connect_runner(self) -> None:
         self.runner.started.connect(self.operation_started)
@@ -359,96 +285,104 @@ class MainWindow(QMainWindow):
             self.addAction(action)
 
     def _host_summary(self) -> None:
-        try:
-            result = subprocess.run(
-                [str(self.root / "linux" / "pz"), "version"],
-                cwd=self.root,
-                capture_output=True,
-                text=True,
-                timeout=4,
-                check=False,
-            )
-            self.system_label.setText(result.stdout.strip() or "PhaseZero Linux")
-        except (OSError, subprocess.TimeoutExpired):
+        process = QProcess(self)
+        process.setProgram(str(self.root / "linux" / "pz"))
+        process.setArguments(["version"])
+        process.setWorkingDirectory(str(self.root))
+        process.finished.connect(self._host_summary_finished)
+        process.errorOccurred.connect(self._host_summary_error)
+        self._host_process = process
+        process.start()
+        QTimer.singleShot(4000, self._host_summary_timeout)
+
+    def _host_summary_timeout(self) -> None:
+        if self._host_process is not None and self._host_process.state() != QProcess.NotRunning:
+            self._host_process.kill()
+
+    def _host_summary_error(self, error: QProcess.ProcessError) -> None:
+        if error == QProcess.FailedToStart:
+            self._host_summary_finished()
+
+    def _host_summary_finished(self, *_args) -> None:
+        process = self._host_process
+        if process is None:
+            return
+        text = bytes(process.readAllStandardOutput().data()).decode("utf-8", errors="replace").strip()
+        if text:
+            self.system_label.setText(text)
+        else:
             self.system_label.setText("PhaseZero Linux")
+        self._host_process = None
+        process.deleteLater()
 
     def show_category(self, category: str) -> None:
+        if self.registry.page_for(category) is None:
+            category = DASHBOARD[0]
         self.current_category = category
         for name, button in self.sidebar_buttons.items():
             button.setChecked(name == category)
         if self.search.text().strip():
-            self.search.clear()  # leaving a category cancels an active search
+            self.search.clear()
         meta = self.cat_meta.get(category)
-        if category == DASHBOARD[0]:
-            self.stack.setCurrentWidget(self.dashboard_page)
-            self.page_title.setText("Início")
-            self.page_subtitle.setText(meta[2] if meta else "")
-        elif category == "Resultados":
-            self.stack.setCurrentWidget(self.results_page)
-            self.page_title.setText("Resultados")
-            self.page_subtitle.setText("Histórico, logs e result.json")
-            self.load_history()
-        else:
-            self.stack.setCurrentWidget(self.actions_page)
+        page = self.registry.page_for(category)
+        if page is not None:
+            self.stack.setCurrentWidget(page)
             self.page_title.setText(category)
             self.page_subtitle.setText(meta[2] if meta else "")
-            self.rebuild_cards()
+            if hasattr(page, "reload"):
+                page.reload()
 
     def on_search(self, text: str) -> None:
         if text.strip():
-            self.stack.setCurrentWidget(self.actions_page)
+            self.stack.setCurrentIndex(self._search_page_idx)
             self.page_title.setText("Busca")
             self.page_subtitle.setText(f"Resultados para “{text.strip()}”")
-            self.rebuild_cards()
+            self.rebuild_search()
         else:
             self.show_category(self.current_category)
 
-    def rebuild_cards(self) -> None:
-        if self.current_category in ("Resultados", DASHBOARD[0]) and not self.search.text().strip():
-            return
-        while self.grid.count():
-            item = self.grid.takeAt(0)
+    def rebuild_search(self) -> None:
+        while self.search_grid.count():
+            item = self.search_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        self.cards.clear()
+        self._search_cards.clear()
         query = self.search.text().strip().casefold()
         visible = [
-            action
-            for action in self.catalog
-            if (query and query in action.searchable_text)
-            or (not query and action.category == self.current_category)
+            action for action in self.catalog
+            if query and query in action.searchable_text
         ]
-        columns = self._column_count()
-        self._last_columns = columns
+        width = self.search_scroll.viewport().width()
+        columns = 3 if width >= 960 else 2 if width >= 620 else 1
         for index, action in enumerate(visible):
             card = ActionCard(action)
             card.requested.connect(self.request_action)
             card.setEnabled(not self.runner.running)
-            self.cards.append(card)
-            self.grid.addWidget(card, index // columns, index % columns)
-        for column in range(columns):
-            self.grid.setColumnStretch(column, 1)
+            self._search_cards.append(card)
+            self.search_grid.addWidget(card, index // columns, index % columns)
+        for col in range(columns):
+            self.search_grid.setColumnStretch(col, 1)
         if not visible:
             empty = QLabel("Nenhuma ação corresponde à busca.")
             empty.setObjectName("emptyState")
-            self.grid.addWidget(empty, 0, 0, 1, columns)
-        self.grid.setRowStretch((len(visible) + columns - 1) // columns, 1)
-
-    def _column_count(self) -> int:
-        width = self.scroll.viewport().width()
-        if width >= 960:
-            return 3
-        if width >= 620:
-            return 2
-        return 1
+            self.search_grid.addWidget(empty, 0, 0, 1, columns)
+        self.search_grid.setRowStretch((len(visible) + columns - 1) // columns, 1)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._relayout_timer.start()
+        if self.stack.currentIndex() == self._search_page_idx:
+            self._search_relayout_timer.start()
 
-    def _relayout_after_resize(self) -> None:
-        if self._column_count() != self._last_columns:
-            self.rebuild_cards()
+    def request_actions(self, actions: object) -> None:
+        """Run a user-selected batch sequentially, retaining confirmation gates."""
+        if self.runner.running:
+            return
+        selected = [action for action in list(actions) if isinstance(action, ActionSpec)]
+        if not selected:
+            self._toast("Nenhuma ação selecionada", "warning")
+            return
+        self._action_queue = selected[1:]
+        self.request_action(selected[0])
 
     def request_action(self, action: ActionSpec) -> None:
         if self.runner.running:
@@ -467,6 +401,7 @@ class MainWindow(QMainWindow):
         except (ValueError, RuntimeError) as exc:
             self.pending_action = None
             self.pending_value = ""
+            self._action_queue.clear()
             QMessageBox.warning(self, "Não foi possível iniciar", str(exc))
 
     def _request_input(self, action: ActionSpec) -> str:
@@ -490,7 +425,8 @@ class MainWindow(QMainWindow):
         self.cancel_button.setEnabled(True)
         self.progress.setRange(0, 0)
         self.progress.show()
-        for card in (*self.cards, *self.dashboard_cards):
+        self.registry.block_all(True)
+        for card in self._search_cards:
             card.setEnabled(False)
         self.append_output(f"$ {command}\n", False)
 
@@ -519,8 +455,14 @@ class MainWindow(QMainWindow):
         self.status_dot.setObjectName("statusSuccess" if severity == "success" else "statusWarning" if severity == "warning" else "statusError")
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)
-        for card in (*self.cards, *self.dashboard_cards):
+        self.registry.block_all(False)
+        for card in self._search_cards:
             card.setEnabled(True)
+        if self._closing:
+            self.pending_action = None
+            self.pending_value = ""
+            self._action_queue.clear()
+            return
         action_title = self.pending_action.title if self.pending_action is not None else "Operação"
         if start_failed:
             pass  # operation_start_failed already told the user
@@ -532,7 +474,9 @@ class MainWindow(QMainWindow):
                     self.runner.start(self.pending_action, preview=False, value=self.pending_value)
                     return
                 except (ValueError, RuntimeError) as exc:
+                    self._action_queue.clear()
                     QMessageBox.warning(self, "Não foi possível iniciar", str(exc))
+            self._action_queue.clear()
         else:
             formatted = self._format_result(result)
             ResultDialog(result, formatted, self).exec()
@@ -541,6 +485,11 @@ class MainWindow(QMainWindow):
             self._toast(f"{action_title} {verb}", toast_state)
         self.pending_action = None
         self.pending_value = ""
+        if result.ok and self._action_queue:
+            next_action = self._action_queue.pop(0)
+            QTimer.singleShot(0, lambda: self.request_action(next_action))
+        elif not result.ok:
+            self._action_queue.clear()
 
     def _toast(self, message: str, state: str) -> None:
         toast = Toast(self, message, state)
@@ -586,68 +535,6 @@ class MainWindow(QMainWindow):
         self.dark_theme = not self.dark_theme
         self.theme_changed.emit("dark" if self.dark_theme else "light")
 
-    def load_history(self) -> None:
-        self.history.clear()
-        result_dir = state_dir() / "results"
-        if not result_dir.exists():
-            return
-        for path in sorted(result_dir.glob("*.json"), reverse=True)[:250]:
-            try:
-                data = json.loads(path.read_text())
-            except (OSError, json.JSONDecodeError):
-                continue
-            item = QTreeWidgetItem(
-                [
-                    str(data.get("action", path.stem)),
-                    "OK" if data.get("ok") else "Falha",
-                    str(data.get("finishedAt", "")),
-                ]
-            )
-            item.setData(0, Qt.UserRole, str(path))
-            self.history.addTopLevelItem(item)
-        phasezero_state = state_dir().parent
-        for path in sorted(phasezero_state.glob("*.log")):
-            item = QTreeWidgetItem([path.name, "Log", ""])
-            item.setData(0, Qt.UserRole, str(path))
-            self.history.addTopLevelItem(item)
-        self.history.resizeColumnToContents(0)
-
-    def show_history_item(self) -> None:
-        items = self.history.selectedItems()
-        if not items:
-            return
-        path = Path(items[0].data(0, Qt.UserRole))
-        try:
-            if path.suffix == ".json":
-                data = json.loads(path.read_text())
-                text = json.dumps(data, ensure_ascii=False, indent=2)
-            else:
-                text = path.read_text(errors="replace")
-            self.history_detail.setPlainText(text)
-        except (OSError, json.JSONDecodeError) as exc:
-            self.history_detail.setPlainText(str(exc))
-
-    def open_results_folder(self) -> None:
-        folder = state_dir().parent
-        folder.mkdir(parents=True, exist_ok=True)
-        subprocess.Popen(["xdg-open", str(folder)])
-
-    def export_results(self) -> None:
-        source = state_dir().parent
-        source.mkdir(parents=True, exist_ok=True)
-        target, _ = QFileDialog.getSaveFileName(
-            self,
-            "Exportar logs e resultados",
-            str(Path.home() / "phasezero-results.zip"),
-            "Arquivo ZIP (*.zip)",
-        )
-        if not target:
-            return
-        if target.endswith(".zip"):
-            target = target[:-4]
-        archive = shutil.make_archive(target, "zip", source)
-        self.status_text.setText(f"Exportado: {archive}")
-
     def closeEvent(self, event: QCloseEvent) -> None:
         if self.runner.running:
             answer = QMessageBox.question(
@@ -660,5 +547,9 @@ class MainWindow(QMainWindow):
             if answer != QMessageBox.Yes:
                 event.ignore()
                 return
-            self.runner.cancel()
+        self._closing = True
+        self.runner.shutdown()
+        if self._host_process is not None:
+            self._host_process.kill()
+            self._host_process.waitForFinished(500)
         event.accept()

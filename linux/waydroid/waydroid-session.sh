@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ENV_FILE="${PZ_WAYDROID_ENV_FILE:-/etc/phasezero/waydroid.env}"
+# Generated PhaseZero environment path is configurable for tests.
+# shellcheck disable=SC1090
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 
 CONFIGURED_REPO="${PZ_WAYDROID_REPO:-}"
@@ -218,7 +220,7 @@ android_platform_ready() {
 
 wait_for_waydroid() {
     local i
-    for i in $(seq 1 120); do
+    for ((i = 0; i < 120; i++)); do
         session_is_running && android_platform_ready && return 0
         sleep 1
     done

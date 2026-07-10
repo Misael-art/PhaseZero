@@ -243,10 +243,9 @@ prune_claude_versions() {
 
 install_claude() {
     pz_check_deps bsdtar curl gpg gpgv jq sha256sum
-    local work cleanup_cmd deb ar_dir extracted stage final current_link installed
+    local work deb ar_dir extracted stage final current_link installed
     work="$(mktemp -d)"
-    printf -v cleanup_cmd 'rm -rf -- %q' "$work"
-    trap "$cleanup_cmd" EXIT
+    trap 'rm -rf -- "${work:?}"' EXIT
     read_claude_metadata "$work"
     installed="$(installed_claude_version || true)"
     if [ "$installed" = "$CLAUDE_VERSION" ] &&

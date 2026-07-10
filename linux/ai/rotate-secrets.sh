@@ -4,7 +4,7 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
-pz_check_deps pass age jq
+pz_check_deps pass age jq python3
 
 PASS_DIR="${PASSWORD_STORE_DIR:-$HOME/.password-store}/phasezero"
 SCHEMA="$PZ_ROOT/secrets/schema.json"
@@ -17,7 +17,7 @@ fi
 # Initialize pass if needed
 if [ ! -d "$HOME/.password-store" ]; then
     pz_info "initializing pass store"
-    local key
+    key=""
     key=$(gpg --list-secret-keys --keyid-format LONG 2>/dev/null | grep sec | head -1 | awk '{print $2}' | cut -d/ -f2)
     if [ -n "$key" ]; then
         pass init "$key"
@@ -39,7 +39,7 @@ rotate_entry() {
     fi
 
     # Prompt for new value
-    read -s -p "Enter new value for $key ($desc): " value
+    read -r -s -p "Enter new value for $key ($desc): " value
     echo
     if [ -n "$value" ]; then
         echo "$value" | pass insert -f "$pass_path" >/dev/null
@@ -63,12 +63,38 @@ apply_secret_to_config() {
         return
     fi
 
-    local backup="${target}.bak.$(date +%s)"
+    local backup
+    backup="${target}.bak.$(date +%s).$$"
     cp "$target" "$backup"
     pz_rollback_register file "$target" "$backup"
 
-    sed -i "s/$pattern/$value/g" "$target" 2>/dev/null || \
-        pz_warn "could not apply $key to $target (pattern: $pattern)"
+    if ! printf '%s' "$value" | python3 -c '
+import os
+import pathlib
+import sys
+import tempfile
+target = pathlib.Path(sys.argv[1])
+pattern = sys.argv[2]
+secret = sys.stdin.read()
+text = target.read_text(encoding="utf-8")
+if pattern not in text:
+    raise SystemExit(3)
+fd, temp_name = tempfile.mkstemp(prefix=f".{target.name}.", dir=target.parent)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text.replace(pattern, secret))
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temp_name, target.stat().st_mode & 0o777)
+    os.replace(temp_name, target)
+finally:
+    try:
+        os.unlink(temp_name)
+    except FileNotFoundError:
+        pass
+' "$target" "$pattern"; then
+        pz_warn "could not apply $key to $target (placeholder absent or write failed)"
+    fi
 }
 
 pz_info "secrets rotation for PhaseZero"

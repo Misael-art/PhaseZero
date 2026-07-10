@@ -106,7 +106,7 @@ case "$ACTION" in
     status)           cmd_status "$@" ;;
     audit)            cmd_audit "$@" ;;
     remotes|remote-list|list) cmd_remotes "$@" ;;
-    remote-add|remote-add|add)
+    remote-add|add)
         cmd_remote_add "${1:-}" "${2:-}"
         ;;
     remote-remove|remote-delete|remove)

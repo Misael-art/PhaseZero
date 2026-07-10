@@ -5,6 +5,7 @@ SELF="$(readlink -f "${BASH_SOURCE[0]}")"
 for root in \
     "${PHASEZERO_ROOT:-}" \
     "/usr/lib/phasezero" \
+    "/usr/lib64/phasezero" \
     "/app/lib/phasezero" \
     "$(cd "$(dirname "$SELF")/../.." 2>/dev/null && pwd)"
 do

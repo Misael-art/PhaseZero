@@ -48,6 +48,7 @@ Escopo: integrações opcionais. Nenhuma chave real entra no repositório.
 | `ai-memory` | Release nativa Windows `ai-memory-windows-x86_64.zip` verificada por sha256; fallback `cargo install` | `ai-memory status` / `ai-memory --help` | `install-mcp`/`install-hooks --apply` por agente detectado; servidor loopback `127.0.0.1:49374` via task de logon | Remove binario gerenciado e task; preserva `wiki/`/`raw/`/`db/` do usuario |
 | `headroom` | Linux: `uv tool install "headroom-ai[proxy]"` com fallback `pipx` | `headroom version` | Wrappers/proxy ficam explicitos via `linux/ai/headroom-agent.sh`; nada auto-wrap | Remove via `uv tool uninstall headroom-ai`/`pipx uninstall` |
 | `phasezero-admin` | Linux: wrapper local; usa `bigsudo` oficial, fallback `pkexec`, fallback `sudo`; instala `bigsudo` via pacman/pkexec quando ausente e disponivel | `phasezero-admin --status` | Variaveis `PHASEZERO_ADMIN*` e regras para CLIs/IDEs; sem senha armazenada e sem sudoers passwordless | Remove `~/.local/bin/phasezero-admin`/fallback e configs user |
+| `ai-proxy-suite` | Windows: git/npm/go por ferramenta; Linux: `linux/pz ai proxies install all` com Node 24 isolado | Windows: doctor/webValidation; Linux: `linux/pz ai proxies auth/test` | OpenAI-compatible providers kimi/qwen/deeps/mimo; browser-session ou env-session redigidos | Remove manual para preservar checkouts/sessões |
 
 ## CLI
 
@@ -91,6 +92,7 @@ linux/pz ai setup caveman
 linux/pz ai setup headroom
 linux/pz ai setup frugality
 linux/pz ai compat status
+linux/pz ai token-economy status
 linux/pz ai setup ides
 linux/pz ai setup hermes
 linux/pz ai setup openclaw
@@ -99,6 +101,11 @@ linux/pz ai mcp repair
 linux/pz ai mcp doctor
 linux/pz ai mcp status
 linux/pz ai menu
+linux/pz ai proxies auth all
+linux/pz ai proxies login kimiproxy
+linux/pz ai proxies login qwenproxy
+linux/pz ai proxies login deepsproxy
+linux/pz ai proxies test
 ```
 
 Automacoes Linux:
@@ -107,7 +114,7 @@ Automacoes Linux:
 - `linux/ai/setup-agent-compat.sh`: instala RTK Linux por release GitHub verificada, aplica `rtk init`, instala Headroom via `uv`/`pipx`, reaplica regras Caveman/PhaseZero, mantém Ponytail limitado a workspace detectado, gera pack `ai-context-frugality` e status `agentCompat`.
 - `linux/ai/setup-admin-bridge.sh`: cria `phasezero-admin`, detecta/instala `bigsudo`, fornece fallback `pkexec`/`sudo`, escreve estado/env user e sincroniza regra para agentes/IDEs.
 - `linux/ai/headroom-agent.sh`: helper explícito para `headroom status/proxy/wrap-*`; wrappers não rodam automaticamente.
-- `linux/ai/proxy-suite.sh`: instala e gerencia dez proxies Linux com runtime Node 24 isolado, build Go e units systemd de usuário desativadas por padrão. Contrato completo em `docs/linux-ai-proxies.md`.
+- `linux/ai/proxy-suite.sh`: instala e gerencia dez proxies Linux com runtime Node 24 isolado, build Go e units systemd de usuário desativadas por padrão. Porta o contrato Windows `webValidation`: `auth` retorna status redigido; `login` abre browser real para Kimi/Qwen/DeepSeek; Mimo fica por env-session local. Contrato completo em `docs/linux-ai-proxies.md`.
 - `linux/ai/desktop-apps.sh`: instala Claude Desktop pelo repositorio apt oficial Anthropic em prefixo atomico do usuario. Valida assinatura, fingerprint e SHA-256. Corrige o pipeline do Codex Desktop Linux, habilita guarda de workspace e timer user.
 - `linux/ai/setup-codex.sh`: instala/atualiza `@openai/codex` no prefixo npm do usuario e publica symlink em `~/.local/bin`.
 - `linux/ai/setup-memory.sh`: instala `ai-memory` por AUR (`ai-memory-bin`) quando disponivel; fallback Docker wrapper; fallback build Cargo. Configura serviço user loopback `127.0.0.1:49374` e roda `install-mcp`/`install-hooks` para agentes detectados.
@@ -145,7 +152,7 @@ Resultados estruturados:
 - `ai-usagebar` nao raspa APIs de billing com chaves brutas: Claude/Codex usam as credenciais OAuth gravadas pelos CLIs oficiais; Z.AI/OpenRouter/DeepSeek usam env vars vindas do manifesto validado (`validation.state == passed`). Z.AI permanece manual opt-in (zhipu-glm).
 - `ai-memory` e beta (autor pede uso com cautela). O servidor loopback `127.0.0.1:49374` e opt-in via task de logon; `install-mcp`/`install-hooks` so rodam para agentes detectados e sao idempotentes. Dados de memoria do usuario (`wiki/`, `raw/`, `db/`) sao preservados na desinstalacao.
 - RTK no Linux usa somente release oficial `rtk-ai/rtk`, asset por arquitetura e checksum publicado. Se RTK estiver ausente, PhaseZero fica em modo degradado e comandos seguem diretos.
-- Headroom nunca auto-envolve agentes. O usuario chama `linux/ai/headroom-agent.sh wrap-codex`, `wrap-claude`, `proxy` ou `mcp-install` conscientemente.
+- Headroom nunca auto-envolve agentes. O usuario chama `linux/ai/headroom-agent.sh wrap-codex`, `wrap-claude`, `proxy` ou `mcp-install` conscientemente. `linux/pz ai token-economy status` valida Codex/Claude por presença das regras, RTK, ai-memory, Headroom e `ai-context-frugality`; status `ready` não altera sessão ativa nem injeta wrapper.
 - Admin bridge nunca grava senha, nunca cria sudoers passwordless e nunca executa comando privilegiado em validação. Ele só padroniza o caminho: `phasezero-admin <cmd>` ou `bigsudo <cmd>`.
 - `oh-my-openagent` (OMO) é opt-in e nunca entra no `ai setup all`: é um harness de agentes autônomos de laço longo que gera tráfego de API pesado (a doc oficial recomenda Claude Opus, mas o esquema é neutro). O wrapper PhaseZero instala provider-agnostic (nenhuma assinatura forçada; nenhuma ToS de provedor é engajada até o usuário optar via `PZ_OMO_*`), deixa telemetria off por padrão e expõe `linux/pz ai omo disable` para desregistrar o plugin durante testes manuais longos, evitando consumo fantasma de tokens por sub-agentes ociosos. Ao habilitar um provedor, respeite os limites de taxa/uso dele — automações de alto volume podem violar políticas e levar a bloqueios de conta, independentemente do provedor.
 - OMO Ultimate exige Bun e OpenCode ≥ 1.4.

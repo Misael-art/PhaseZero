@@ -5,6 +5,7 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 source "$PZ_ROOT/linux/steamdeck/common.sh"
+source "$PZ_ROOT/linux/steamdeck/display-session.sh"
 
 json_escape() {
     jq -Rsa .
@@ -48,6 +49,13 @@ boot_grub_entry="$(awk -F': ' '$1 == "grub_cfg_entry" {print $2; exit}' <<< "$bo
 boot_next_entry="$(awk -F': ' '$1 == "grub_next_entry" {print $2; exit}' <<< "$boot_status_text")"
 boot_direct_note="$(awk -F': ' '$1 == "deck_grub_input" {print $2; exit}' <<< "$boot_status_text")"
 
+display_profile="$(pz_display_profile || echo unknown)"
+display_ext="$(pz_display_external_connectors_csv || true)"
+_session_vars="$(pz_display_resolved_session_vars 2>/dev/null || true)"
+screen_w="$(printf '%s\n' "$_session_vars" | sed -n '1p')"; [ -n "$screen_w" ] || screen_w=1280
+screen_h="$(printf '%s\n' "$_session_vars" | sed -n '2p')"; [ -n "$screen_h" ] || screen_h=800
+screen_conn="$(printf '%s\n' "$_session_vars" | sed -n '3p')"; [ -n "$screen_conn" ] || screen_conn='*,eDP-1'
+
 jq -n \
     --arg mode "$mode" \
     --arg steam "$(cmd_path steam)" \
@@ -66,6 +74,11 @@ jq -n \
     --argjson steamPlusFallback "$([ -f "$steam_plus_fallback" ] && echo true || echo false)" \
     --argjson virtualKeyboard "$virtual_keyboard_json" \
     --argjson deckyPlugins "$decky_plugins_json" \
+    --arg displayProfile "$display_profile" \
+    --arg displayExternal "$display_ext" \
+    --arg screenW "$screen_w" \
+    --arg screenH "$screen_h" \
+    --arg screenConn "$screen_conn" \
     '{
         mode: $mode,
         tools: {
@@ -88,6 +101,13 @@ jq -n \
             grubCfgEntry: $bootGrubEntry,
             nextEntry: $bootNextEntry,
             deckGrubInput: $bootDirectNote
+        },
+        display: {
+            profile: $displayProfile,
+            externalConnectors: $displayExternal,
+            screenWidth: $screenW,
+            screenHeight: $screenH,
+            outputConnector: $screenConn
         },
         plugins: $deckyPlugins
     }'

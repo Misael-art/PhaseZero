@@ -2,8 +2,6 @@
 # flatpak.sh - PhaseZero Flatpak remote/override management library
 set -euo pipefail
 
-PZ_FLATPAK_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/flatpak"
-
 pz_flatpak_require() {
     if ! command -v flatpak &>/dev/null; then
         pz_error "flatpak not installed"
@@ -18,7 +16,8 @@ pz_flatpak_has_remote() {
 
 pz_flatpak_remote_url() {
     local name="$1"
-    flatpak remote-info --show-url "$name" 2>/dev/null || true
+    flatpak remote-list --columns=name,url 2>/dev/null |
+        awk -F '\t' -v r="$name" '$1 == r {print $2; exit}' || true
 }
 
 pz_flatpak_remote_prio() {
@@ -30,8 +29,6 @@ pz_flatpak_remote_prio() {
 pz_flatpak_ensure_remote() {
     local name="$1" url="$2"
     shift 2
-    local prio="${PZ_FLATPAK_DEFAULT_PRIO:-10}"
-
     pz_flatpak_require || return 1
 
     if pz_flatpak_has_remote "$name"; then
@@ -117,29 +114,19 @@ pz_flatpak_override_steamdeck() {
 pz_flatpak_remove_overrides() {
     local app="${1:-}" scope="${2:-user}"
     pz_flatpak_require || return 1
-
-    local reset=(
-        --device=
-        --filesystem=
-        --share=
-        --socket=
-        --env=
-        --unset-env=DXVK_HUD
-        --unset-env=MANGOHUD
-        --unset-env=GAMESCOPE_WAYLAND_DISPLAY
-        --unset-env=STEAM_GAMESCOPE_ENABLED
-        --unset-env=STEAM_DISABLE_MANGOAPP
-        --unset-env=GAMESCOPE_LIMIT
-    )
+    case "$scope" in
+        user|system) ;;
+        *) pz_error "invalid flatpak scope: $scope"; return 2 ;;
+    esac
 
     if [ -z "$app" ]; then
         pz_info "removing global gaming flatpak overrides ($scope)"
-        flatpak override --"$scope" "${reset[@]}"
+        flatpak override --"$scope" --reset
         return 0
     fi
 
     pz_info "removing overrides for $app ($scope)"
-    flatpak override --"$scope" "${reset[@]}" "$app"
+    flatpak override --"$scope" --reset "$app"
 }
 
 pz_flatpak_audit() {
@@ -182,8 +169,8 @@ pz_flatpak_audit() {
 
     echo "--- Install Scope ---"
     local system_apps user_apps duplicate_apps
-    system_apps=$(flatpak list --system --app --columns=application 2>/dev/null | grep -v '^$' | wc -l)
-    user_apps=$(flatpak list --user --app --columns=application 2>/dev/null | grep -v '^$' | wc -l)
+    system_apps=$(flatpak list --system --app --columns=application 2>/dev/null | awk 'NF { count++ } END { print count + 0 }')
+    user_apps=$(flatpak list --user --app --columns=application 2>/dev/null | awk 'NF { count++ } END { print count + 0 }')
     duplicate_apps=$(comm -12 \
         <(flatpak list --system --app --columns=application 2>/dev/null | sort -u) \
         <(flatpak list --user --app --columns=application 2>/dev/null | sort -u) || true)
@@ -202,13 +189,14 @@ pz_flatpak_audit() {
         echo "OK: no conflicts detected"
     fi
 
+    [ "$conflicts" -lt 126 ] || conflicts=125
     return "$conflicts"
 }
 
 pz_flatpak_audit_repair() {
     pz_flatpak_require || return 1
-    pz_flatpak_audit
-    local rc=$?
+    local rc=0
+    pz_flatpak_audit || rc=$?
 
     if [ "$rc" -eq 0 ]; then
         return 0
@@ -331,11 +319,11 @@ pz_flatpak_status() {
     pz_flatpak_require 2>/dev/null || { echo '{"flatpak":false}'; return 0; }
 
     local remotes runtimes apps user_apps system_apps
-    remotes=$(flatpak remote-list --columns=name,url 2>/dev/null | wc -l)
-    runtimes=$(flatpak list --runtime --columns=application 2>/dev/null | grep -v '^$' | wc -l)
-    apps=$(flatpak list --app --columns=application 2>/dev/null | grep -v '^$' | wc -l)
-    user_apps=$(flatpak list --user --app --columns=application 2>/dev/null | grep -v '^$' | wc -l)
-    system_apps=$(flatpak list --system --app --columns=application 2>/dev/null | grep -v '^$' | wc -l)
+    remotes=$(flatpak remote-list --columns=name,url 2>/dev/null | awk 'NF { count++ } END { print count + 0 }')
+    runtimes=$(flatpak list --runtime --columns=application 2>/dev/null | awk 'NF { count++ } END { print count + 0 }')
+    apps=$(flatpak list --app --columns=application 2>/dev/null | awk 'NF { count++ } END { print count + 0 }')
+    user_apps=$(flatpak list --user --app --columns=application 2>/dev/null | awk 'NF { count++ } END { print count + 0 }')
+    system_apps=$(flatpak list --system --app --columns=application 2>/dev/null | awk 'NF { count++ } END { print count + 0 }')
 
     jq -n \
         --argjson flatpak true \

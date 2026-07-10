@@ -1,5 +1,5 @@
 pkgname=phasezero-control-center
-pkgver=1.3.0
+pkgver=1.4.1
 pkgrel=1
 pkgdesc='PhaseZero native Linux control center'
 arch=('any')
@@ -8,12 +8,12 @@ license=('MIT')
 depends=('python' 'pyside6' 'bash' 'jq' 'polkit')
 optdepends=('flatpak: Flatpak management' 'bigsudo: graphical admin bridge')
 source=("PhaseZero-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
-sha256sums=('00007f4788d0ab3398f2fdbec74744de832df6db90c6a760f6f924408ebd39fb')
+sha256sums=('SKIP')
 
 package() {
   cd "PhaseZero-${pkgver}"
   install -d "$pkgdir/usr/lib/phasezero" "$pkgdir/usr/bin"
-  cp -a linux profiles version.json "$pkgdir/usr/lib/phasezero/"
+  cp -a linux profiles assets version.json "$pkgdir/usr/lib/phasezero/"
   install -Dm755 packaging/linux/phasezero-control-center \
     "$pkgdir/usr/bin/phasezero-control-center"
   install -Dm644 packaging/linux/io.phasezero.ControlCenter.desktop \

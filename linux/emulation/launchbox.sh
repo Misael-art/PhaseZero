@@ -350,7 +350,8 @@ cmd_import_esde() {
         return 1
     }
     pz_emulation_abort_if_frontend_running
-    local backup="$PZ_LAUNCHBOX_ROOT/.phasezero/backups/Data.$(date +%Y%m%d-%H%M%S)"
+    local backup
+    backup="$PZ_LAUNCHBOX_ROOT/.phasezero/backups/Data.$(date +%Y%m%d-%H%M%S)"
     install -d "$(dirname "$backup")"
     [ ! -d "$PZ_LAUNCHBOX_ROOT/Data" ] || mv "$PZ_LAUNCHBOX_ROOT/Data" "$backup"
     if ! python3 "$PZ_LAUNCHBOX_IMPORTER" import-esde "$@"; then
@@ -426,13 +427,15 @@ launchbox_verify_visual() {
 
 launchbox_verify_visual_app() {
     local executable="$1" title_pattern="$2" label="$3"
-    local shot="${TMPDIR:-/tmp}/phasezero-${label}-verify-$$.png"
+    local shot log_file
+    shot="$(mktemp "${TMPDIR:-/tmp}/phasezero-${label}-verify.XXXXXX.png")"
+    log_file="$(mktemp "${TMPDIR:-/tmp}/phasezero-${label}-verify.XXXXXX.log")"
     local pid window variance dimensions width height
     launchbox_prepare_wine_runtime
     (
         cd "$PZ_LAUNCHBOX_ROOT"
         wine "$PZ_LAUNCHBOX_ROOT/$executable"
-    ) >"/tmp/phasezero-${label}-verify.log" 2>&1 &
+    ) >"$log_file" 2>&1 &
     pid=$!
     window=""
     for _ in $(seq 1 "${PZ_LAUNCHBOX_VERIFY_TIMEOUT:-180}"); do
@@ -451,7 +454,7 @@ launchbox_verify_visual_app() {
     if [ -z "$window" ]; then
         kill "$pid" 2>/dev/null || true
         wait "$pid" 2>/dev/null || true
-        pz_error "$label visible window not found"
+        pz_error "$label visible window not found; log: $log_file"
         return 1
     fi
     import -window "$window" "$shot"

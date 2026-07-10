@@ -28,6 +28,13 @@ footer() {
     echo "Total: $((PASS + WARN + FAIL + ERROR + INFO)) checks"
     [ "$FAIL" -gt 0 ] && echo ">>> Some checks FAILED" || echo ">>> All checks passed"
 }
+finish() {
+    footer
+    echo
+    echo "Results JSON:"
+    printf '%s\n' "${RESULTS[@]}" | jq -R . | jq -s .
+    [ "$FAIL" -eq 0 ] && [ "$ERROR" -eq 0 ]
+}
 
 header "System Info"
 echo "Host:       $(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || hostnamectl hostname)"
@@ -50,20 +57,27 @@ swap_total_gb=$((swap_total_mb / 1024))
 [ "$swap_total_mb" -ge 2048 ] 2>/dev/null && check MEM03 "Swap >= 2GB" PASS "${swap_total_gb}GB" || check MEM03 "Swap >= 2GB" WARN "${swap_total_gb}GB"
 
 header "Disk"
-LANG=C df -h --output=source,target,size,used,pcent 2>/dev/null | tail -n+2 > /tmp/pz_disk.txt
-while IFS=' ' read -r dev target size used pct; do
+root_dev=$(LANG=C df --output=source / 2>/dev/null | tail -1 | xargs)
+while IFS=' ' read -r dev target _size _used pct; do
     [ -z "$dev" ] && continue
+    [ "$dev" = "$root_dev" ] && continue
     case "$target" in
-        /tmp/.mount_*|/run/user/*|/var/lib/docker/overlay2/*/merged) continue ;;
+        /|/tmp/.mount_*|/run/user/*|/var/lib/docker/overlay2/*/merged) continue ;;
     esac
     pct_num=${pct%\%}
     [ "$pct_num" -gt 90 ] 2>/dev/null && check "DISK_$(echo "$target" | tr / _)" "$target usage" FAIL "$pct used"
     [ "$pct_num" -le 90 ] 2>/dev/null && [ "$pct_num" -gt 80 ] 2>/dev/null && check "DISK_$(echo "$target" | tr / _)" "$target usage" WARN "$pct used"
-done < /tmp/pz_disk.txt
-rm -f /tmp/pz_disk.txt
+done < <(LANG=C df -h --output=source,target,size,used,pcent 2>/dev/null | tail -n+2)
 
 root_pct=$(LANG=C df -h / | tail -1 | awk '{print $5}')
-check DISK_ROOT "root partition usage" PASS "$root_pct"
+root_pct_num=${root_pct%\%}
+if [ "$root_pct_num" -gt 90 ] 2>/dev/null; then
+    check DISK_ROOT "root partition usage" FAIL "$root_pct"
+elif [ "$root_pct_num" -gt 80 ] 2>/dev/null; then
+    check DISK_ROOT "root partition usage" WARN "$root_pct"
+else
+    check DISK_ROOT "root partition usage" PASS "$root_pct"
+fi
 
 root_fs=$(df -T / | tail -1 | awk '{print $2}')
 [[ "$root_fs" =~ btrfs|ext4|xfs ]] && check FS01 "Root filesystem type" PASS "$root_fs" || check FS01 "Root filesystem type" WARN "$root_fs"
@@ -74,11 +88,14 @@ fi
 
 header "CPU / Temperature"
 temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0)
-temp_c=$((temp / 1000))
-[ "$temp_c" -lt 85 ] && check CPU01 "CPU temperature < 85°C" PASS "${temp_c}°C" || check CPU01 "CPU temperature < 85°C" FAIL "${temp_c}°C"
+if [[ "$temp" =~ ^[0-9]+$ ]] && [ "$temp" -gt 0 ]; then
+    temp_c=$((temp / 1000))
+    [ "$temp_c" -lt 85 ] && check CPU01 "CPU temperature < 85°C" PASS "${temp_c}°C" || check CPU01 "CPU temperature < 85°C" FAIL "${temp_c}°C"
+else
+    check CPU01 "CPU temperature" INFO "sensor unavailable"
+fi
 
 load_1=$(uptime | awk -F'load average:' '{print $2}' | cut -d, -f1 | xargs)
-load_5=$(uptime | awk -F'load average:' '{print $2}' | cut -d, -f2 | xargs)
 cpus=$(nproc)
 awk -v loadavg="$load_1" -v cpus="$cpus" 'BEGIN { exit (loadavg < cpus ? 0 : 1) }' && check CPU02 "CPU load (1m) < cores" PASS "$load_1 / $cpus" || check CPU02 "CPU load (1m) < cores" WARN "$load_1 / $cpus"
 
@@ -94,6 +111,11 @@ header "Services"
 for svc in docker sshd NetworkManager bluetooth; do
     systemctl is-active "$svc" &>/dev/null && check "SVC_$svc" "$svc running" PASS "" || check "SVC_$svc" "$svc running" WARN "inactive"
 done
+
+if [ "${PZ_DOCTOR_SCOPE:-full}" = "system" ]; then
+    finish
+    exit $?
+fi
 
 header "Steam Deck"
 product=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || echo "")
@@ -656,7 +678,4 @@ else
     check AI_IDE "AI-capable IDE/editor available" WARN "install VS Code/Cursor/Windsurf/Zed/Neovim"
 fi
 
-footer
-echo
-echo "Results JSON:"
-printf '%s\n' "${RESULTS[@]}" | jq -R . | jq -s .
+finish

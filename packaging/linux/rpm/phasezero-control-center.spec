@@ -1,5 +1,5 @@
 Name:           phasezero-control-center
-Version:        1.3.0
+Version:        1.4.1
 Release:        1%{?dist}
 Summary:        PhaseZero native Linux control center
 License:        MIT
@@ -24,7 +24,7 @@ a safe preview and explicit confirmation.
 install -d %{buildroot}%{_libdir}/phasezero %{buildroot}%{_bindir}
 install -d %{buildroot}%{_datadir}/applications %{buildroot}%{_datadir}/metainfo
 install -d %{buildroot}%{_datadir}/icons/hicolor/scalable/apps
-cp -a linux profiles version.json %{buildroot}%{_libdir}/phasezero/
+cp -a linux profiles assets version.json %{buildroot}%{_libdir}/phasezero/
 install -m755 packaging/linux/phasezero-control-center %{buildroot}%{_bindir}/
 install -m644 packaging/linux/io.phasezero.ControlCenter.desktop %{buildroot}%{_datadir}/applications/
 install -m644 packaging/linux/io.phasezero.ControlCenter.metainfo.xml %{buildroot}%{_datadir}/metainfo/
@@ -38,6 +38,8 @@ install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_data
 %{_datadir}/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg
 
 %changelog
+* Thu Jul 09 2026 PhaseZero <noreply@phasezero.local> - 1.4.1-1
+- Installation, packaging and AI tooling robustness fixes.
 * Wed Jul 08 2026 PhaseZero <noreply@phasezero.local> - 1.3.0-1
 - Homelab CX: rich JSON status/plan, secret generation, access modes
   (local/tailscale/lan), open/logs/backup/restore/update, CasaOS compatibility gate.

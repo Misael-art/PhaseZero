@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 OUT="${1:-$ROOT/dist}"
 PYTHON="${PYTHON:-python3}"
 APPIMAGETOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
+PYTHON_BIN="$(command -v "$PYTHON" 2>/dev/null || true)"
 
 # The AppDir must NOT live on a FUSE-backed filesystem (NTFS-3g, sshfs, ...):
 # appimagetool's parallel mksquashfs can silently drop files under I/O pressure
@@ -15,23 +16,44 @@ APPIMAGETOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
 # override, but keep it off FUSE/network mounts.
 WORK="${PZ_APPIMAGE_WORK:-}"
 CLEANUP_WORK=0
+SMOKE_DIR=""
 if [ -z "$WORK" ]; then
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/pz-appimage-build.XXXXXX")"
     CLEANUP_WORK=1
 fi
+case "$WORK" in
+    ""|/|"$HOME"|"$ROOT") echo "unsafe AppImage work path: ${WORK:-<empty>}" >&2; exit 64 ;;
+esac
 APPDIR="$WORK/PhaseZero.AppDir"
+
+cleanup() {
+    [ -z "$SMOKE_DIR" ] || [ ! -d "$SMOKE_DIR" ] || rm -rf -- "$SMOKE_DIR"
+    if [ "$CLEANUP_WORK" = 1 ] && [ -n "$WORK" ] && [ -d "$WORK" ]; then
+        rm -rf -- "$WORK"
+    fi
+}
+trap cleanup EXIT
 
 [ -n "$APPIMAGETOOL" ] || {
     echo "appimagetool missing: set APPIMAGETOOL=/path/to/appimagetool" >&2
     exit 69
 }
+[ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ] || {
+    echo "python executable missing: $PYTHON" >&2
+    exit 69
+}
+command -v jq >/dev/null 2>&1 || { echo "jq missing" >&2; exit 69; }
+"$PYTHON_BIN" -m pip --version >/dev/null 2>&1 || { echo "python pip missing" >&2; exit 69; }
 
-rm -rf "$APPDIR"
+mkdir -p "$OUT"
+OUT="$(cd "$OUT" && pwd)"
+
+rm -rf -- "$APPDIR"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib/phasezero" \
     "$APPDIR/usr/lib/python3/site-packages" "$APPDIR/usr/share/applications" \
     "$APPDIR/usr/share/metainfo"
 
-cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/version.json" "$APPDIR/usr/lib/phasezero/"
+cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/assets" "$ROOT/version.json" "$APPDIR/usr/lib/phasezero/"
 find "$APPDIR/usr/lib/phasezero" -type d -name __pycache__ -exec rm -rf {} +
 cp "$ROOT/packaging/linux/appimage/AppRun" "$APPDIR/AppRun"
 cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.desktop" \
@@ -40,15 +62,26 @@ cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.desktop" \
     "$APPDIR/usr/share/applications/"
 cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.metainfo.xml" \
     "$APPDIR/usr/share/metainfo/"
-cp "$(command -v "$PYTHON")" "$APPDIR/usr/bin/python3"
-PY_VER="$("$PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-STDLIB="$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
-LIBPYTHON="$("$PYTHON" -c 'import sysconfig; print(sysconfig.get_config_var("LDLIBRARY"))')"
+cp "$PYTHON_BIN" "$APPDIR/usr/bin/python3"
+PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+STDLIB="$("$PYTHON_BIN" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
+LIBPYTHON_PATH="$("$PYTHON_BIN" - <<'PY'
+import os
+import sysconfig
+name = sysconfig.get_config_var("LDLIBRARY") or ""
+libdir = sysconfig.get_config_var("LIBDIR") or ""
+path = os.path.join(libdir, name) if name and libdir else ""
+print(path if os.path.isfile(path) else "")
+PY
+)"
+[ -d "$STDLIB" ] || { echo "python stdlib missing: $STDLIB" >&2; exit 1; }
 cp -a "$STDLIB" "$APPDIR/usr/lib/python$PY_VER"
-rm -rf "$APPDIR/usr/lib/python$PY_VER/site-packages"
-cp -a "/usr/lib/$LIBPYTHON"* "$APPDIR/usr/lib/"
+rm -rf -- "$APPDIR/usr/lib/python$PY_VER/site-packages"
+if [ -n "$LIBPYTHON_PATH" ]; then
+    cp -a "$LIBPYTHON_PATH" "$APPDIR/usr/lib/"
+fi
 
-"$PYTHON" -m pip install --disable-pip-version-check --no-compile \
+"$PYTHON_BIN" -m pip install --disable-pip-version-check --no-compile \
     --target "$APPDIR/usr/lib/python3/site-packages" \
     "PySide6==6.11.1" "shiboken6==6.11.1"
 
@@ -59,12 +92,12 @@ chmod +x "$APPDIR/AppRun" "$APPDIR/usr/lib/phasezero/linux/pz" \
     "$APPDIR/usr/lib/phasezero/linux/ui/native.sh"
 
 # Bundle sanity: the AppDir must run standalone from any cwd before packaging.
-SMOKE_DIR="$(mktemp -d)"
+SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pz-appimage-smoke.XXXXXX")"
 (cd "$SMOKE_DIR" && QT_QPA_PLATFORM=offscreen "$APPDIR/AppRun" --smoke-test)
-rm -rf "$SMOKE_DIR"
+rm -rf -- "$SMOKE_DIR"
+SMOKE_DIR=""
 
-VERSION="$(jq -r .version "$ROOT/version.json" 2>/dev/null || echo 1.0.0)"
-mkdir -p "$OUT"
-ARCH="${ARCH:-$(uname -m)}" "$APPIMAGETOOL" "$APPDIR" "$OUT/PhaseZero-$VERSION-$(uname -m).AppImage"
-[ "$CLEANUP_WORK" = 1 ] && rm -rf "$WORK"
-true
+VERSION="$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))' "$ROOT/version.json")"
+ARCH="${ARCH:-$(uname -m)}"
+export ARCH
+"$APPIMAGETOOL" "$APPDIR" "$OUT/PhaseZero-$VERSION-$ARCH.AppImage"

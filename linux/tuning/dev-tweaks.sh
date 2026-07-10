@@ -6,10 +6,11 @@ source "$PZ_ROOT/linux/lib/common.sh"
 
 pz_apply_sysctl() {
     local sysctl_conf="/etc/sysctl.d/99-phasezero-dev.conf"
-    local backup="$sysctl_conf.bak.$(date +%s)"
+    local backup
+    backup="$sysctl_conf.bak.$(date +%s)"
     [ -f "$sysctl_conf" ] && sudo cp "$sysctl_conf" "$backup"
 
-    cat | sudo tee "$sysctl_conf" >/dev/null <<'EOF'
+    sudo tee "$sysctl_conf" >/dev/null <<'EOF'
 # PhaseZero Dev Tweaks
 # Increase file watcher limit (Node.js, VS Code, watchers)
 fs.inotify.max_user_watches = 1048576

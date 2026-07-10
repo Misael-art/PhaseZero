@@ -289,6 +289,22 @@
       "module": "Steam Deck"
     },
     {
+      "name": "steamdeck.removable",
+      "label": "Montar removíveis",
+      "command": "linux/pz steamdeck removable install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
+      "name": "steamdeck.display",
+      "label": "Detectar display",
+      "command": "linux/pz steamdeck display detect",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck"
+    },
+    {
       "name": "windows.status",
       "label": "Status Windows VM",
       "command": "linux/pz windows-vm status",
@@ -804,6 +820,14 @@
       "name": "emulation.performance",
       "label": "Aplicar performance",
       "command": "linux/pz emulation performance apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Emulação"
+    },
+    {
+      "name": "emulation.rom-optimize",
+      "label": "Otimizar ROMs",
+      "command": "linux/pz emulation rom-optimize {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação"

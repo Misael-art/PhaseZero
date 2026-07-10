@@ -268,7 +268,7 @@ kde_write_all_shortcuts() {
 }
 
 verify_kde_shortcuts() {
-    local registered entry missing=0
+    local registered entry missing_count=0
     command -v qdbus6 >/dev/null 2>&1 || {
         pz_warn "qdbus6 missing; cannot verify kglobalaccel registration"
         return 0
@@ -290,10 +290,10 @@ verify_kde_shortcuts() {
             pz_info "kglobalaccel OK: $entry"
         else
             pz_warn "kglobalaccel MISSING: $entry"
-            missing=1
+            missing_count=1
         fi
     done
-    return "$missing"
+    return "$missing_count"
 }
 
 install_kde_shortcuts() {

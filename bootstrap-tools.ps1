@@ -5287,7 +5287,7 @@ function Install-BootstrapWinhanceComponent {
     $sourceUrl = [string]$ComponentDef.SourceUrl
     $installCommand = [string]$ComponentDef.InstallCommand
     if ([string]::IsNullOrWhiteSpace($sourceUrl)) { $sourceUrl = 'https://get.winhance.net/' }
-    if ([string]::IsNullOrWhiteSpace($installCommand)) { $installCommand = 'irm "https://get.winhance.net" | iex' }
+    if ([string]::IsNullOrWhiteSpace($installCommand)) { $installCommand = 'download-validate-execute https://get.winhance.net/' }
 
     if ([bool]$State.DryRun) {
         Write-Log ("DryRun: planejado instalar Winhance via fonte oficial: {0}; nenhuma otimizacao/tweak sera aplicada." -f $sourceUrl)
@@ -5307,9 +5307,23 @@ function Install-BootstrapWinhanceComponent {
     }
 
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $script = 'irm "https://get.winhance.net" | iex'
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    $scriptPath = Join-Path $tempRoot ("phasezero-winhance-{0}.ps1" -f ([Guid]::NewGuid().ToString('N')))
     Write-Log 'Instalando Winhance via instalador oficial. Nenhuma configuracao/tweak sera aplicado pelo PhaseZero.'
-    $exitCode = Invoke-NativeWithLog -Exe $powershellExe -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $script) -TimeoutMs 300000
+    try {
+        Invoke-WebRequestWithRetry -Uri $sourceUrl -OutFile $scriptPath -OperationName 'download do instalador Winhance'
+        $scriptInfo = Get-Item -LiteralPath $scriptPath -ErrorAction Stop
+        if ($scriptInfo.Length -lt 256 -or $scriptInfo.Length -gt 2097152) {
+            throw ("Instalador Winhance falhou validacao de tamanho: {0} bytes." -f $scriptInfo.Length)
+        }
+        $scriptText = Get-Content -LiteralPath $scriptPath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($scriptText) -or $scriptText -match '(?is)<\s*!?doctype\s+html|<\s*html\b') {
+            throw 'Instalador Winhance falhou validacao de conteudo.'
+        }
+        $exitCode = Invoke-NativeWithLog -Exe $powershellExe -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -TimeoutMs 300000
+    } finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
     if ($exitCode -ne 0) {
         throw ("Winhance installer oficial falhou (exit={0})." -f $exitCode)
     }
@@ -7886,7 +7900,18 @@ function Ensure-OpenCode {
         Write-Log "opencode ja instalado: $ver ($resolvedOpenCode)"
     } else {
         Write-Log 'Instalando opencode via script oficial...'
-        $exitCode = Invoke-NativeWithRetry -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://opencode.ai/install | bash') -OperationName 'instalacao do opencode via script oficial'
+        $installCommand = @'
+set -euo pipefail
+tmp=$(mktemp "${TMPDIR:-/tmp}/phasezero-opencode.XXXXXX")
+cleanup() { rm -f -- "$tmp"; }
+trap cleanup EXIT
+curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 https://opencode.ai/install -o "$tmp"
+size=$(wc -c < "$tmp")
+[ "$size" -ge 256 ] && [ "$size" -le 1048576 ]
+head -n 1 "$tmp" | grep -q '^#!'
+bash "$tmp"
+'@
+        $exitCode = Invoke-NativeWithRetry -Exe $BashPath -Args @('-lc', $installCommand) -OperationName 'instalacao do opencode via script oficial'
         if ($exitCode -ne 0) { throw "Falha ao instalar opencode via script oficial (exit=$exitCode)." }
         if (-not (Test-Path $exe)) { throw "Instalação do opencode concluída, mas nao encontrei: $exe" }
         $ver = & $exe --version
@@ -15953,7 +15978,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['openssh-client'] = New-BootstrapComponentDefinition -Name 'openssh-client' -Description 'OpenSSH Client via Windows capability.' -DependsOn @('system-core') -Kind 'windows-capability' -Data @{ DisplayName = 'OpenSSH Client'; CapabilityNames = @('OpenSSH.Client~~~~0.0.1.0'); CommandNames = @('ssh'); RequiresAdmin = $true; Stage = 'runtime'; Provisioning = 'windows-capability' }
     $catalog['openssh-server'] = New-BootstrapComponentDefinition -Name 'openssh-server' -Description 'OpenSSH Server via Windows capability; firewall Domain/Private somente.' -DependsOn @('openssh-client') -Kind 'windows-capability' -Data @{ DisplayName = 'OpenSSH Server'; CapabilityNames = @('OpenSSH.Server~~~~0.0.1.0'); ServiceName = 'sshd'; FirewallRuleName = 'PhaseZero OpenSSH Server Domain Private'; FirewallProfiles = @('Domain', 'Private'); RequiresAdmin = $true; Stage = 'runtime'; Provisioning = 'windows-capability' }
     $catalog['3d-viewer'] = New-BootstrapComponentDefinition -Name '3d-viewer' -Description 'Microsoft 3D Viewer via Microsoft Store/winget.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = '9NBLGGH42THS'; DisplayName = 'Microsoft 3D Viewer'; AppxPackageNames = @('Microsoft.Microsoft3DViewer'); ProbePaths = @("$env:ProgramFiles\WindowsApps\Microsoft.Microsoft3DViewer_*\3DViewer.exe") } -RequiresNetwork $true
-    $catalog['winhance'] = New-BootstrapComponentDefinition -Name 'winhance' -Description 'Winhance install/audit somente; nenhuma otimizacao agressiva aplicada.' -DependsOn @('system-core') -Kind 'winhance' -Data @{ AllowFailureWhenNotAdmin = $true; DisplayName = 'Winhance'; SourceUrl = 'https://get.winhance.net/'; InstallCommand = 'irm "https://get.winhance.net" | iex'; RepoUrl = 'https://github.com/memstechtips/Winhance'; ProbePaths = @("$env:ProgramFiles\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Programs\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Winhance\Winhance.exe", "C:\ProgramData\Winhance\Winhance.exe") } -RequiresNetwork $true
+    $catalog['winhance'] = New-BootstrapComponentDefinition -Name 'winhance' -Description 'Winhance install/audit somente; nenhuma otimizacao agressiva aplicada.' -DependsOn @('system-core') -Kind 'winhance' -Data @{ AllowFailureWhenNotAdmin = $true; DisplayName = 'Winhance'; SourceUrl = 'https://get.winhance.net/'; InstallCommand = 'download-validate-execute https://get.winhance.net/'; RepoUrl = 'https://github.com/memstechtips/Winhance'; ProbePaths = @("$env:ProgramFiles\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Programs\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Winhance\Winhance.exe", "C:\ProgramData\Winhance\Winhance.exe") } -RequiresNetwork $true
     $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Docker\Docker.exe", "${env:LOCALAPPDATA}\Docker\Docker Desktop.exe", "$env:ProgramFiles\Docker\Docker.exe", "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe") }
     $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\AnthropicClaude\claude.exe", "${env:LOCALAPPDATA}\AnthropicClaude\app-*\claude.exe", "${env:LOCALAPPDATA}\Programs\Claude\Claude.exe", "$env:ProgramFiles\Claude\Claude.exe") }
     $catalog['claude-code'] = New-BootstrapComponentDefinition -Name 'claude-code' -Description 'Claude Code CLI.' -DependsOn @('system-core') -Kind 'claude-code'
@@ -17849,7 +17874,7 @@ function Get-BootstrapAiToolCatalog {
         PackageName    = ''
         InstallSupport = 'wsl-installer'
         WindowsInstallSupport = 'native-powershell-beta'
-        WindowsInstallCommand = 'iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)'
+        WindowsInstallCommand = 'download-validate-execute official install.ps1'
         WindowsDataRoot = '$env:LOCALAPPDATA\hermes'
         ProbePaths     = @('$env:USERPROFILE\.hermes\hermes-agent')
         Notes          = 'Repo oficial validado. WSL2 segue preferido quando saudavel; Windows nativo beta usa install.ps1 oficial e data dir em LOCALAPPDATA.'
@@ -18152,10 +18177,15 @@ function Get-BootstrapAiInstallRoot {
     if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
         return [System.IO.Path]::GetFullPath($InstallRoot)
     }
+    $tempRoot = $env:TEMP
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMPDIR }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMP }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = [System.IO.Path]::GetTempPath() }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = (Get-Location).Path }
     $base = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         Join-Path $env:LOCALAPPDATA 'PhaseZero'
     } else {
-        Join-Path $env:TEMP 'PhaseZero'
+        Join-Path $tempRoot 'PhaseZero'
     }
     return (Join-Path $base 'ai-tools')
 }
@@ -21472,7 +21502,17 @@ function Install-BootstrapHermesAgentWsl {
 
     $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
     $installer = 'https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh'
-    $command = "curl -fsSL $installer | bash -s -- --skip-setup"
+    $command = @"
+set -euo pipefail
+tmp=`$(mktemp "`${TMPDIR:-/tmp}/phasezero-hermes.XXXXXX")
+cleanup() { rm -f -- "`$tmp"; }
+trap cleanup EXIT
+curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 '$installer' -o "`$tmp"
+size=`$(wc -c < "`$tmp")
+[ "`$size" -ge 256 ] && [ "`$size" -le 2097152 ]
+head -n 1 "`$tmp" | grep -q '^#!'
+bash "`$tmp" --skip-setup
+"@
     if ($DryRun) {
         return (New-BootstrapAiToolResult -ToolName 'hermes-agent' -Action 'install' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ("WSL2: {0}" -f $command) -Docs ([string]$CatalogEntry['DocsUrl']))
     }
@@ -21504,8 +21544,20 @@ arch=$(uname -m)
 case "$arch" in x86_64|amd64) A=x86_64;; aarch64|arm64) A=aarch64;; *) A=x86_64;; esac
 mkdir -p "$HOME/.local/bin"
 url="https://github.com/akitaonrails/ai-jail/releases/latest/download/ai-jail-linux-${A}.tar.gz"
-curl -fsSL "$url" | tar -xz -C "$HOME/.local/bin"
-chmod +x "$HOME/.local/bin/ai-jail" 2>/dev/null || true
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/phasezero-ai-jail.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+archive="$tmp/ai-jail.tar.gz"
+curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 "$url" -o "$archive"
+size=$(wc -c < "$archive")
+[ "$size" -ge 1024 ] && [ "$size" -le 268435456 ]
+tar -tzf "$archive" | grep -Eq '(^|/)ai-jail$'
+extract="$tmp/extract"
+mkdir -p "$extract"
+tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$extract"
+candidate=$(find "$extract" -maxdepth 4 -type f -name ai-jail -print)
+[ "$(printf '%s\n' "$candidate" | sed '/^$/d' | wc -l)" -eq 1 ]
+[ ! -L "$candidate" ] && [ -s "$candidate" ]
+install -m 0755 "$candidate" "$HOME/.local/bin/ai-jail"
 if ! command -v bwrap >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then sudo -n apt-get install -y bubblewrap >/dev/null 2>&1 || true; fi
   if ! command -v bwrap >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1; then sudo -n dnf install -y bubblewrap >/dev/null 2>&1 || true; fi
@@ -21869,8 +21921,11 @@ function Get-BootstrapAiMemoryExePath {
     $candidates = New-Object System.Collections.Generic.List[string]
     $candidates.Add((Join-Path (Get-BootstrapAiMemoryInstallDir -InstallRoot $root) 'ai-memory.exe')) | Out-Null
     $candidates.Add((Join-Path (Get-BootstrapAiBinDir -InstallRoot $root) 'ai-memory.exe')) | Out-Null
-    $cargoHome = Join-Path $env:USERPROFILE '.cargo\bin\ai-memory.exe'
-    $candidates.Add($cargoHome) | Out-Null
+    $userHome = Get-BootstrapUserHomePath
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $cargoHome = Join-Path $userHome '.cargo\bin\ai-memory.exe'
+        $candidates.Add($cargoHome) | Out-Null
+    }
     foreach ($candidate in @($candidates.ToArray())) {
         if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) { return $candidate }
     }
@@ -27198,9 +27253,7 @@ function Get-BootstrapCavemanTargetCatalog {
                 (New-BootstrapNativeCommandSpec -Exe 'claude' -Args @('plugin', 'marketplace', 'add', 'JuliusBrussee/caveman')),
                 (New-BootstrapNativeCommandSpec -Exe 'claude' -Args @('plugin', 'install', 'caveman@caveman'))
             )
-            fallbackCommands = @(
-                (New-BootstrapNativeCommandSpec -Exe 'powershell' -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex'))
-            )
+            fallbackCommands = @()
         }
         geminiCli = [ordered]@{
             displayName = 'Gemini CLI'
@@ -33460,7 +33513,9 @@ function Get-BootstrapHermesAiConfigReport {
     $catalog = Get-BootstrapAiToolCatalog
     $entry = $catalog['hermes-agent']
     $cmd = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot ''
-    $layout = if (-not [string]::IsNullOrWhiteSpace($cmd) -and $cmd -match '(?i)\\AppData\\Local\\hermes\\') { 'windows-native' } elseif (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.hermes')) { 'wsl-or-posix' } else { 'unknown' }
+    $userHome = Get-BootstrapUserHomePath
+    $hermesHome = if (-not [string]::IsNullOrWhiteSpace($userHome)) { Join-Path $userHome '.hermes' } else { '' }
+    $layout = if (-not [string]::IsNullOrWhiteSpace($cmd) -and $cmd -match '(?i)\\AppData\\Local\\hermes\\') { 'windows-native' } elseif (-not [string]::IsNullOrWhiteSpace($hermesHome) -and (Test-Path -LiteralPath $hermesHome)) { 'wsl-or-posix' } else { 'unknown' }
     return [ordered]@{
         installed = -not [string]::IsNullOrWhiteSpace($cmd)
         commandPath = [string]$cmd
@@ -34819,10 +34874,15 @@ function New-BootstrapSupportBundle {
 
     $started = [Diagnostics.Stopwatch]::StartNew()
     $timestamp = $script:RunId
+    $tempRoot = $env:TEMP
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMPDIR }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMP }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = [System.IO.Path]::GetTempPath() }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = (Get-Location).Path }
     if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
-        $DestinationPath = Join-Path $env:TEMP ("phasezero-support_{0}.zip" -f $timestamp)
+        $DestinationPath = Join-Path $tempRoot ("phasezero-support_{0}.zip" -f $timestamp)
     }
-    $staging = Join-Path $env:TEMP ("phasezero-support_{0}_{1}" -f $timestamp, ([Guid]::NewGuid().ToString('N')))
+    $staging = Join-Path $tempRoot ("phasezero-support_{0}_{1}" -f $timestamp, ([Guid]::NewGuid().ToString('N')))
     $null = New-Item -Path $staging -ItemType Directory -Force
     $null = New-Item -Path (Join-Path $staging 'logs') -ItemType Directory -Force
     try {
