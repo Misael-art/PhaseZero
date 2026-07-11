@@ -1,5 +1,5 @@
 pkgname=phasezero-control-center
-pkgver=1.4.1
+pkgver=1.5.0
 pkgrel=1
 pkgdesc='PhaseZero native Linux control center'
 arch=('any')

@@ -1,5 +1,5 @@
 Name:           phasezero-control-center
-Version:        1.4.1
+Version:        1.5.0
 Release:        1%{?dist}
 Summary:        PhaseZero native Linux control center
 License:        MIT
@@ -38,6 +38,9 @@ install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_data
 %{_datadir}/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg
 
 %changelog
+* Fri Jul 11 2026 PhaseZero <noreply@phasezero.local> - 1.5.0-1
+- Context inspector workspace and complete native UI information architecture.
+
 * Thu Jul 09 2026 PhaseZero <noreply@phasezero.local> - 1.4.1-1
 - Installation, packaging and AI tooling robustness fixes.
 * Wed Jul 08 2026 PhaseZero <noreply@phasezero.local> - 1.3.0-1

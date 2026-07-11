@@ -3,6 +3,34 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.5.0] - 2026-07-11
+
+Foco: reorganização completa da Central de Controle nativa para reduzir ruído,
+agrupar jornadas e tornar impacto/risco explícitos antes da execução.
+
+### Adicionado
+- **Workspace contextual**: módulos operacionais usam navegação secundária por
+  intenção (visão geral, sessão, biblioteca, frontends, controles, manutenção e
+  avançado), preservando acesso às 250 ações do catálogo.
+- **Inspetor de contexto**: seleção de uma ação mostra descrição, risco, resultado
+  esperado e comando seguro. Apenas o inspetor oferece o CTA Executar/Pré-visualizar.
+- **Componentes consistentes**: linhas semânticas, métricas reais do catálogo,
+  radio buttons para modos exclusivos do Steam Deck e disclosure para ações raras.
+- **Busca reorganizada**: resultados textuais agora usam lista selecionável e o
+  mesmo inspetor, em vez de grids extensos de cards e botões.
+
+### Corrigido
+- **Hierarquia visual**: remove pilhas de botões com mesma ênfase, barras de status
+  duplicadas, ícones genéricos repetidos e agrupamentos pouco claros.
+- **Acessibilidade**: alvos mínimos de 48 px, foco visível, labels persistentes,
+  descrições acessíveis e navegação completa por teclado.
+- **Portabilidade visual**: componentes usam Qt/PySide6, tokens semânticos e ícones
+  do tema/sistema com fallbacks, sem dependência de primitivas gráficas Linux.
+
+### Validação
+- Design QA comparado ao mock selecionado em 1586×992 e 1280×800.
+- 97 testes Python e todas as suites `tests/linux*.sh` aprovados.
+
 ## [1.4.1] - 2026-07-10
 
 Foco: correções de emulação e experiência SteamOS — Steam ROM Manager, centralização
