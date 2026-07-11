@@ -6,6 +6,8 @@ OUT="${1:-$ROOT/dist}"
 PYTHON="${PYTHON:-python3}"
 APPIMAGETOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
 PYTHON_BIN="$(command -v "$PYTHON" 2>/dev/null || true)"
+APPIMAGETOOL_URL="https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+APPIMAGETOOL_SHA256="a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0"
 
 # The AppDir must NOT live on a FUSE-backed filesystem (NTFS-3g, sshfs, ...):
 # appimagetool's parallel mksquashfs can silently drop files under I/O pressure
@@ -17,6 +19,7 @@ PYTHON_BIN="$(command -v "$PYTHON" 2>/dev/null || true)"
 WORK="${PZ_APPIMAGE_WORK:-}"
 CLEANUP_WORK=0
 SMOKE_DIR=""
+TOOL_TEMP=""
 if [ -z "$WORK" ]; then
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/pz-appimage-build.XXXXXX")"
     CLEANUP_WORK=1
@@ -27,6 +30,7 @@ esac
 APPDIR="$WORK/PhaseZero.AppDir"
 
 cleanup() {
+    [ -z "$TOOL_TEMP" ] || [ ! -f "$TOOL_TEMP" ] || rm -f -- "$TOOL_TEMP"
     [ -z "$SMOKE_DIR" ] || [ ! -d "$SMOKE_DIR" ] || rm -rf -- "$SMOKE_DIR"
     if [ "$CLEANUP_WORK" = 1 ] && [ -n "$WORK" ] && [ -d "$WORK" ]; then
         rm -rf -- "$WORK"
@@ -34,10 +38,29 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ -n "$APPIMAGETOOL" ] || {
-    echo "appimagetool missing: set APPIMAGETOOL=/path/to/appimagetool" >&2
-    exit 69
-}
+if [ -z "$APPIMAGETOOL" ]; then
+    case "$(uname -m)" in
+        x86_64|amd64) ;;
+        *) echo "appimagetool auto-download supports x86_64 only" >&2; exit 69 ;;
+    esac
+    command -v curl >/dev/null || { echo "curl missing for verified appimagetool download" >&2; exit 69; }
+    command -v sha256sum >/dev/null || { echo "sha256sum missing" >&2; exit 69; }
+    tool_cache="${XDG_CACHE_HOME:-$HOME/.cache}/phasezero/build-tools"
+    APPIMAGETOOL="$tool_cache/appimagetool-${APPIMAGETOOL_SHA256}.AppImage"
+    if [ ! -f "$APPIMAGETOOL" ]; then
+        mkdir -p "$tool_cache"
+        temporary="$APPIMAGETOOL.download.$$"
+        TOOL_TEMP="$temporary"
+        curl --fail --location --retry 3 --retry-delay 2 \
+            --output "$temporary" "$APPIMAGETOOL_URL"
+        printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$temporary" | sha256sum -c -
+        chmod 0755 "$temporary"
+        mv "$temporary" "$APPIMAGETOOL"
+        temporary=""
+        TOOL_TEMP=""
+    fi
+    printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$APPIMAGETOOL" | sha256sum -c -
+fi
 [ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ] || {
     echo "python executable missing: $PYTHON" >&2
     exit 69
