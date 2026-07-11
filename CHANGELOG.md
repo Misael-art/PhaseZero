@@ -3,6 +3,13 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.5.1] - 2026-07-11
+
+### Corrigido
+- **Atalho do menu iniciar**: o wrapper instalado no usuário agora resolve a própria
+  release antes de `/usr/lib/phasezero`, evitando abrir UI antiga quando o pacote
+  do sistema ainda está em versão anterior.
+
 ## [1.5.0] - 2026-07-11
 
 Foco: reorganização completa da Central de Controle nativa para reduzir ruído,
