@@ -183,6 +183,9 @@ def test_appimage_bundle_is_standalone():
     assert '"$PHASEZERO_ROOT:' in apprun, "linux.ui_native must resolve from any cwd"
     build = (ROOT / "packaging" / "linux" / "appimage" / "build-appimage.sh").read_text()
     assert "shiboken6==" in build, "PySide6 needs shiboken6 bundled explicitly"
+    assert "PySide6_Essentials==" in build, "AppImage should not bundle unused Qt addons"
+    assert 'PySide6==' not in build, "full PySide6 adds unused Qt modules to the AppImage"
+    assert ".appdata.xml" in build, "appimagetool must discover AppStream metadata"
     assert "--smoke-test" in build, "bundle must be smoke-tested before packaging"
 
 

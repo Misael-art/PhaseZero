@@ -61,7 +61,7 @@ cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.desktop" \
 cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.desktop" \
     "$APPDIR/usr/share/applications/"
 cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.metainfo.xml" \
-    "$APPDIR/usr/share/metainfo/"
+    "$APPDIR/usr/share/metainfo/io.phasezero.ControlCenter.appdata.xml"
 cp "$PYTHON_BIN" "$APPDIR/usr/bin/python3"
 PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 STDLIB="$("$PYTHON_BIN" -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')"
@@ -83,7 +83,7 @@ fi
 
 "$PYTHON_BIN" -m pip install --disable-pip-version-check --no-compile \
     --target "$APPDIR/usr/lib/python3/site-packages" \
-    "PySide6==6.11.1" "shiboken6==6.11.1"
+    "PySide6_Essentials==6.11.1" "shiboken6==6.11.1"
 
 cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.svg" \
     "$APPDIR/io.phasezero.ControlCenter.svg"
