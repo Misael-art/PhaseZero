@@ -11,11 +11,13 @@ from PySide6.QtWidgets import QApplication
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from linux.ui_native import __version__
     from linux.ui_native.boot_selector import BootSelectorWindow
     from linux.ui_native.main_window import MainWindow
     from linux.ui_native.tokens import DARK, LIGHT, render_qss
     from linux.ui_native.platform import current_platform
 else:
+    from . import __version__
     from .boot_selector import BootSelectorWindow
     from .main_window import MainWindow
     from .tokens import DARK, LIGHT, render_qss
@@ -43,6 +45,7 @@ def apply_theme(app: QApplication, theme: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="PhaseZero Central de Controle")
+    parser.add_argument("--version", action="version", version=f"PhaseZero {__version__}")
     parser.add_argument("--category", default="")
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--screenshot", default="")

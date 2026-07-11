@@ -37,7 +37,7 @@ Usage:
   pz windows-vm install --iso PATH Create disk/config/launchers
   pz windows-vm optimize      Apply temporary Linux host tuning for QEMU
   pz windows-vm launch        Launch configured Windows VM [--graphics <profile>]
-  pz windows-vm graphics <a>  GPU diagnostics + graphics profiles (status|plan|apply|remove|guest-guide)
+  pz windows-vm graphics <a>  GPU management (status|doctor|plan|apply|runtime|guest-guide)
   pz windows-vm host-access <a> Host->guest: mount VM disk (mount [--rw]|unmount|status)
   pz windows-vm boot status   Manage direct GRUB Windows VM boot entry
   pz waydroid status          Print Waydroid Android container status JSON
@@ -176,6 +176,12 @@ Usage:
   pz support-bundle            Generate support tarball
   pz repair-plan               Generate repair plan
   pz tune <area>               Apply tuning (browser|gaming|dev)
+  pz capabilities detect      Detect host/package compatibility as JSON
+  pz capabilities catalog     List trusted capabilities [--group ID]
+  pz capabilities plan        Preview --profile/--capability/--manifest selection
+  pz capabilities apply       Apply a confirmed plan
+  pz capabilities verify      Verify an operation
+  pz capabilities rollback    Revert only items installed by an operation
   pz ui                        Open native Linux control center
   pz ui native                 Open native Qt6/PySide6 control center
   pz ui web [PORT]             Open legacy local web dashboard
@@ -663,14 +669,20 @@ except Exception:
     sys.exit(0)
 actions = []
 for spec in build_catalog(root):
-    actions.append({
+    entry = {
         "name": spec.id,
         "label": spec.title,
         "command": " ".join(["linux/pz", *spec.args]),
         "mutable": bool(spec.mutable),
         "require_plan": bool(spec.mutable),
         "module": spec.category,
-    })
+        "elevated": bool(spec.elevated),
+        "input_kind": spec.input_kind,
+        "input_label": spec.input_label,
+    }
+    if spec.preview_args is not None:
+        entry["plan_command"] = " ".join(["linux/pz", *spec.preview_args])
+    actions.append(entry)
 dest.write_text(json.dumps({"actions": actions}, ensure_ascii=False, indent=2) + "\n")
 PY
 }
@@ -693,6 +705,11 @@ print(json.dumps(catalog_manifest(root), ensure_ascii=False, indent=2))
 PY
 }
 
+cmd_capabilities() {
+    PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m linux.capabilities "$@"
+}
+
 main() {
     local cmd="${1:-help}"
     shift 2>/dev/null || true
@@ -710,6 +727,7 @@ main() {
         support-bundle) cmd_support_bundle "$@" ;;
         repair-plan)   cmd_repair_plan "$@" ;;
         tune)          cmd_tune "$@" ;;
+        capabilities|capability|features|recursos) cmd_capabilities "$@" ;;
         ui)            cmd_ui "$@" ;;
         commands)      cmd_commands "$@" ;;
         webapp|webapps) exec "$PZ_ROOT/linux/ui/webapp.sh" "$@" ;;

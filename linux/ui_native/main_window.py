@@ -144,6 +144,7 @@ class MainWindow(QMainWindow):
                     "Emulação": QStyle.SP_DriveDVDIcon,
                     "Boot Direto": QStyle.SP_BrowserReload,
                     "Flatpak": QStyle.SP_DriveHDIcon,
+                    "Recursos": QStyle.SP_DesktopIcon,
                     "Ajustes": QStyle.SP_FileDialogDetailedView,
                     "IA & Dev": QStyle.SP_CommandLink,
                     "Aplicativos": QStyle.SP_DirIcon,
@@ -568,6 +569,14 @@ class MainWindow(QMainWindow):
         elif result.preview and self.pending_action is not None:
             dialog = PreviewDialog(result, self.pending_action, self)
             if dialog.exec() == PreviewDialog.Accepted:
+                try:
+                    self._bind_preview_result(self.pending_action, result)
+                except ValueError as exc:
+                    self._action_queue.clear()
+                    QMessageBox.warning(self, "Preview não aplicável", str(exc))
+                    self.pending_action = None
+                    self.pending_values = {}
+                    return
                 self.log_view.appendPlainText("\n--- execução confirmada ---\n")
                 try:
                     self.runner.start(self.pending_action, preview=False, values=self.pending_values)
@@ -592,6 +601,20 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.request_action(next_action))
         elif not result.ok:
             self._action_queue.clear()
+
+    def _bind_preview_result(self, action: ActionSpec, result: OperationResult) -> None:
+        if not action.preview_bindings:
+            return
+        if not isinstance(result.parsed, dict):
+            raise ValueError("preview não retornou resultado estruturado")
+        blockers = result.parsed.get("blockers")
+        if blockers:
+            raise ValueError("plano contém bloqueios; revise compatibilidade e fontes")
+        for parameter, result_key in action.preview_bindings:
+            value = result.parsed.get(result_key)
+            if not isinstance(value, (str, int)) or not str(value):
+                raise ValueError(f"preview não retornou {result_key}")
+            self.pending_values[parameter] = str(value)
 
     def _toast(self, message: str, state: str) -> None:
         toast = Toast(self, message, state)

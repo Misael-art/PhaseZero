@@ -24,6 +24,8 @@ GFX_DRI_DIR="${PZ_GFX_DRI_DIR:-/dev/dri}"
 GFX_KVM_PATH="${PZ_GFX_KVM_PATH:-/dev/kvm}"
 GFX_QEMU_BIN="${PZ_GFX_QEMU_BIN:-qemu-system-x86_64}"
 GFX_PCI_ROOT="${PZ_GFX_PCI_ROOT:-$GFX_SYS_ROOT/bus/pci/devices}"
+GFX_RUNTIME_TARGET_ROOT="${PZ_GFX_RUNTIME_TARGET_ROOT:-/}"
+GFX_RUNTIME_BACKUP_ROOT="${PZ_GFX_RUNTIME_BACKUP_ROOT:-$(printf '%s/var/lib/phasezero/backups/windows-vm-runtime' "${GFX_RUNTIME_TARGET_ROOT%/}")}"
 
 PROFILE=""
 JSON_OUT=0
@@ -31,6 +33,8 @@ EXPERIMENTAL=0
 ASSUME_YES=0
 DRY_RUN="${PZ_DRY_RUN:-0}"
 SAVE_GUIDE=0
+PCI_DEVICES_OPTION=""
+BACKUP_ID="latest"
 
 KNOWN_PROFILES="auto compat virtio-gl virtio-venus rutabaga vfio-looking-glass"
 
@@ -43,6 +47,10 @@ Usage:
   pz windows-vm graphics plan --profile <auto|compat|virtio-gl|virtio-venus|rutabaga|vfio-looking-glass> [--json]
   pz windows-vm graphics apply --profile <compat|virtio-gl> [--experimental --yes] [--dry-run]
   pz windows-vm graphics remove
+  pz windows-vm graphics doctor [--json]
+  pz windows-vm graphics runtime status [--json]
+  pz windows-vm graphics runtime install [--dry-run]
+  pz windows-vm graphics runtime rollback [--backup <id|latest>] [--dry-run]
   pz windows-vm graphics guest-guide [--save]
 
 Perfis:
@@ -59,13 +67,17 @@ EOF
 parse_options() {
     while [ $# -gt 0 ]; do
         case "$1" in
-            --profile) PROFILE="${2:-}"; shift 2 ;;
+            --profile) [ $# -ge 2 ] || { pz_error "--profile requires a value"; return 2; }; PROFILE="$2"; shift 2 ;;
             --profile=*) PROFILE="${1#*=}"; shift ;;
             --json) JSON_OUT=1; shift ;;
             --experimental) EXPERIMENTAL=1; shift ;;
             --yes|-y) ASSUME_YES=1; shift ;;
             --dry-run|-n) DRY_RUN=1; shift ;;
             --save) SAVE_GUIDE=1; shift ;;
+            --pci-devices) [ $# -ge 2 ] || { pz_error "--pci-devices requires a value"; return 2; }; PCI_DEVICES_OPTION="$2"; shift 2 ;;
+            --pci-devices=*) PCI_DEVICES_OPTION="${1#*=}"; shift ;;
+            --backup) [ $# -ge 2 ] || { pz_error "--backup requires a value"; return 2; }; BACKUP_ID="$2"; shift 2 ;;
+            --backup=*) BACKUP_ID="${1#*=}"; shift ;;
             --help|-h) usage; exit 0 ;;
             *) pz_error "unknown graphics option: $1"; return 1 ;;
         esac
@@ -77,6 +89,169 @@ load_config() {
     # PhaseZero writes this file as shell-escaped KEY=VALUE pairs.
     # shellcheck disable=SC1090
     . "$CONFIG_FILE"
+}
+
+runtime_target_path() {
+    local path="/${1#/}"
+    if [ "$GFX_RUNTIME_TARGET_ROOT" = "/" ]; then
+        printf '%s\n' "$path"
+    else
+        printf '%s%s\n' "${GFX_RUNTIME_TARGET_ROOT%/}" "$path"
+    fi
+}
+
+runtime_artifact_specs() {
+    cat <<EOF
+session|$PZ_ROOT/linux/windows-vm/windows-vm-session.sh|/usr/local/lib/phasezero/windows-vm-session|0755
+display|$PZ_ROOT/linux/steamdeck/display-session.sh|/usr/local/lib/phasezero/display-session|0644
+launcher|$PZ_ROOT/linux/windows-vm/windows-vm.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/windows-vm.sh|0755
+graphics|$PZ_ROOT/linux/windows-vm/graphics.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/graphics.sh|0755
+common|$PZ_ROOT/linux/lib/common.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/lib/common.sh|0644
+EOF
+}
+
+runtime_artifacts_json() {
+    local name source relative mode target installed current source_exists
+    local -a entries=()
+    while IFS='|' read -r name source relative mode; do
+        [ -n "$name" ] || continue
+        target="$(runtime_target_path "$relative")"
+        installed=no; current=no; source_exists=no
+        [ -f "$target" ] && installed=yes
+        [ -f "$source" ] && source_exists=yes
+        [ "$source_exists" = "yes" ] && [ "$installed" = "yes" ] && cmp -s "$source" "$target" && current=yes
+        entries+=("$(jq -n \
+            --arg name "$name" --arg source "$source" --arg target "$target" \
+            --arg mode "$mode" --arg installed "$installed" --arg current "$current" --arg sourceExists "$source_exists" \
+            '{name: $name, source: $source, target: $target, mode: $mode, sourceExists: ($sourceExists == "yes"), installed: ($installed == "yes"), current: ($current == "yes")}')")
+    done < <(runtime_artifact_specs)
+    printf '%s\n' "${entries[@]}" | jq -s .
+}
+
+runtime_status_json() {
+    local artifacts status
+    artifacts="$(runtime_artifacts_json)"
+    status="$(jq -r 'if all(.[]; .current) then "ok" elif any(.[]; .installed) then "needsrepair" else "needsinstall" end' <<< "$artifacts")"
+    jq -n \
+        --arg status "$status" \
+        --arg targetRoot "$GFX_RUNTIME_TARGET_ROOT" \
+        --arg backupRoot "$GFX_RUNTIME_BACKUP_ROOT" \
+        --argjson artifacts "$artifacts" \
+        '{schemaVersion: 1, status: $status, targetRoot: $targetRoot, backupRoot: $backupRoot, artifacts: $artifacts,
+          summary: {total: ($artifacts|length), current: ([$artifacts[]|select(.current)]|length), stale: ([$artifacts[]|select(.installed and (.current|not))]|length), missing: ([$artifacts[]|select(.installed|not)]|length)}}'
+}
+
+require_runtime_admin() {
+    [ "$GFX_RUNTIME_TARGET_ROOT" != "/" ] && return 0
+    [ "$EUID" -eq 0 ] && return 0
+    pz_error "runtime install/rollback requer admin bridge; use phasezero-admin ou a UI PhaseZero"
+    return 77
+}
+
+latest_runtime_backup() {
+    local path latest=""
+    for path in "$GFX_RUNTIME_BACKUP_ROOT"/*; do
+        [ -d "$path" ] || continue
+        latest="$(basename "$path")"
+    done
+    printf '%s\n' "$latest"
+}
+
+runtime_install() {
+    parse_options "$@"
+    local before
+    before="$(runtime_status_json)"
+    if [ "$DRY_RUN" = "1" ]; then
+        jq '. + {dryRun: true, operation: "install", wouldChange: [.artifacts[] | select(.current|not) | .name]}' <<< "$before"
+        return 0
+    fi
+    require_runtime_admin
+    if jq -e '.status == "ok"' <<< "$before" >/dev/null; then
+        [ "$JSON_OUT" = "1" ] || pz_info "Windows VM graphics runtime already current"
+        printf '%s\n' "$before"
+        return 0
+    fi
+
+    local backup_id backup_dir name source relative mode target backup_file existed
+    local -a manifest_entries=()
+    backup_id="$(date +%Y%m%d-%H%M%S)-$$"
+    backup_dir="$GFX_RUNTIME_BACKUP_ROOT/$backup_id"
+    install -d -m 0755 "$backup_dir/files"
+    while IFS='|' read -r name source relative mode; do
+        [ -f "$source" ] || { pz_error "runtime source missing: $source"; return 1; }
+        target="$(runtime_target_path "$relative")"
+        backup_file="$backup_dir/files$relative"
+        existed=no
+        if [ -f "$target" ]; then
+            existed=yes
+            install -d -m 0755 "$(dirname "$backup_file")"
+            cp -a "$target" "$backup_file"
+        fi
+        manifest_entries+=("$(jq -n --arg name "$name" --arg target "$target" --arg relative "$relative" --arg mode "$mode" --arg existed "$existed" '{name: $name, target: $target, relative: $relative, mode: $mode, existed: ($existed == "yes")}')")
+    done < <(runtime_artifact_specs)
+    printf '%s\n' "${manifest_entries[@]}" | jq -s --arg id "$backup_id" '{schemaVersion: 1, id: $id, artifacts: .}' > "$backup_dir/manifest.json"
+
+    while IFS='|' read -r name source relative mode; do
+        target="$(runtime_target_path "$relative")"
+        install -d -m 0755 "$(dirname "$target")"
+        install -m "$mode" "$source" "$target"
+    done < <(runtime_artifact_specs)
+    local after
+    after="$(runtime_status_json)"
+    jq -e '.status == "ok"' <<< "$after" >/dev/null || { pz_error "runtime verification failed; backup: $backup_id"; return 1; }
+    [ "$JSON_OUT" = "1" ] || pz_info "Windows VM graphics runtime updated; backup=$backup_id"
+    jq --arg backupId "$backup_id" '. + {operation: "install", backupId: $backupId}' <<< "$after"
+}
+
+runtime_rollback() {
+    parse_options "$@"
+    local selected="$BACKUP_ID"
+    [ "$selected" = "latest" ] && selected="$(latest_runtime_backup)"
+    [ -n "$selected" ] || { pz_error "runtime backup not found"; return 1; }
+    [[ "$selected" =~ ^[A-Za-z0-9._-]+$ ]] || { pz_error "invalid backup id: $selected"; return 1; }
+    local backup_dir="$GFX_RUNTIME_BACKUP_ROOT/$selected" manifest="$GFX_RUNTIME_BACKUP_ROOT/$selected/manifest.json"
+    [ -f "$manifest" ] || { pz_error "runtime backup manifest missing: $selected"; return 1; }
+    if [ "$DRY_RUN" = "1" ]; then
+        jq --arg id "$selected" '{schemaVersion: 1, status: "ok", dryRun: true, operation: "rollback", backupId: $id, artifacts: .artifacts}' "$manifest"
+        return 0
+    fi
+    require_runtime_admin
+    local entry target relative mode existed backup_file
+    while IFS= read -r entry; do
+        target="$(jq -r '.target' <<< "$entry")"
+        relative="$(jq -r '.relative' <<< "$entry")"
+        mode="$(jq -r '.mode' <<< "$entry")"
+        existed="$(jq -r '.existed' <<< "$entry")"
+        backup_file="$backup_dir/files$relative"
+        if [ "$existed" = "true" ]; then
+            [ -f "$backup_file" ] || { pz_error "runtime backup file missing: $backup_file"; return 1; }
+            install -d -m 0755 "$(dirname "$target")"
+            install -m "$mode" "$backup_file" "$target"
+        else
+            rm -f "$target"
+        fi
+    done < <(jq -c '.artifacts[]' "$manifest")
+    [ "$JSON_OUT" = "1" ] || pz_info "Windows VM graphics runtime rolled back: $selected"
+    jq --arg id "$selected" '. + {operation: "rollback", backupId: $id}' <<< "$(runtime_status_json)"
+}
+
+cmd_runtime() {
+    local sub="${1:-status}"
+    [ $# -gt 0 ] && shift || true
+    case "$sub" in
+        status)
+            parse_options "$@"
+            local json
+            json="$(runtime_status_json)"
+            if [ "$JSON_OUT" = "1" ]; then printf '%s\n' "$json"; else
+                echo "Windows VM graphics runtime: $(jq -r '.status' <<< "$json")"
+                jq -r '.artifacts[] | "  \(.name): " + (if .current then "current" elif .installed then "stale" else "missing" end)' <<< "$json"
+            fi
+            ;;
+        install|sync|repair) runtime_install "$@" ;;
+        rollback) runtime_rollback "$@" ;;
+        *) pz_error "usage: windows-vm graphics runtime (status|install|rollback)"; return 1 ;;
+    esac
 }
 
 libvirt_uri() {
@@ -335,7 +510,7 @@ collect_facts() {
     grep -qw 'spice-app' <<< "$display_help" && GFX_DISPLAY_SPICE_APP=yes
     GFX_LOOKING_GLASS="${PZ_GFX_LOOKING_GLASS_BIN:-$(command -v looking-glass-client 2>/dev/null || true)}"
     [ -n "$GFX_LOOKING_GLASS" ] && [ -x "$GFX_LOOKING_GLASS" ] || GFX_LOOKING_GLASS=""
-    GFX_PCI_DEVICES="${PZ_WINDOWS_VM_PCI_DEVICES:-}"
+    GFX_PCI_DEVICES="${PCI_DEVICES_OPTION:-${PZ_WINDOWS_VM_PCI_DEVICES:-}}"
     GFX_PROFILE_CONFIGURED="${PZ_WINDOWS_VM_GRAPHICS_PROFILE:-compat}"
     GFX_DOMAIN="$(find_windows_domain)"
     GFX_DOMAIN_STATE="$(domain_state "$GFX_DOMAIN")"
@@ -497,6 +672,61 @@ cmd_status() {
     echo "  configured_profile: $(jq -r '.config.profile' <<< "$json")"
     echo "  recommended_profile: $(jq -r '.recommended.profile' <<< "$json")"
     echo "  experimental_candidate: $(jq -r '.recommended.experimentalCandidate' <<< "$json")"
+}
+
+doctor_json() {
+    local graphics runtime
+    graphics="$(status_json)"
+    runtime="$(runtime_status_json)"
+    jq -n --argjson graphics "$graphics" --argjson runtime "$runtime" '
+        def configured_known: ["compat", "virtio-gl", "virtio-venus", "rutabaga", "vfio-looking-glass"] | index($graphics.config.profile) != null;
+        def profile_blocked:
+            (configured_known | not)
+            or ($graphics.config.profile == "virtio-gl" and (($graphics.profiles["virtio-gl"].eligible | not) or ($graphics.libvirt.domain != "")))
+            or ($graphics.config.profile == "virtio-venus")
+            or ($graphics.config.profile == "rutabaga")
+            or ($graphics.config.profile == "vfio-looking-glass");
+        def overall:
+            if (($graphics.host.kvm | not) or $graphics.qemu.binary == "") then "blocked"
+            elif profile_blocked or $runtime.status != "ok" then "needsrepair"
+            else "ok" end;
+        {
+            schemaVersion: 1,
+            status: overall,
+            configuredProfile: $graphics.config.profile,
+            effectiveProfile: (if profile_blocked then "compat" else $graphics.config.profile end),
+            checks: [
+                {name: "kvm", status: (if $graphics.host.kvm then "ok" else "blocked" end), detail: ($graphics.host.kvm|tostring)},
+                {name: "render-node", status: (if $graphics.host.selectedRenderNode != "" then "ok" else "blocked" end), detail: $graphics.host.selectedRenderNode},
+                {name: "qemu-virtio-gl", status: (if $graphics.qemu.virtioVgaGl and $graphics.qemu.displays.gtk then "ok" else "blocked" end), detail: $graphics.qemu.binary},
+                {name: "libvirt-video", status: "ok", detail: (($graphics.libvirt.videoModel // "") + "/" + ($graphics.libvirt.graphicsType // ""))},
+                {name: "runtime", status: $runtime.status, detail: (($runtime.summary.current|tostring) + "/" + ($runtime.summary.total|tostring) + " current")},
+                {name: "vfio", status: $graphics.vfio.viability, detail: ($graphics.vfio.blockers | join("; ")), optional: true}
+            ],
+            recommendedActions: ([
+                if profile_blocked then "linux/pz windows-vm graphics apply --profile compat" else empty end,
+                if $runtime.status != "ok" then "linux/pz windows-vm graphics runtime install" else empty end,
+                if $graphics.profiles["virtio-gl"].eligible then "linux/pz windows-vm graphics plan --profile virtio-gl" else empty end
+            ]),
+            graphics: $graphics,
+            runtime: $runtime,
+            bootSafety: "doctor e runtime nao alteram GRUB, EFI, initramfs, SDDM ou bind VFIO"
+        }'
+}
+
+cmd_doctor() {
+    parse_options "$@"
+    local json
+    json="$(doctor_json)"
+    if [ "$JSON_OUT" = "1" ]; then
+        printf '%s\n' "$json"
+        return 0
+    fi
+    echo "Windows VM graphics doctor: $(jq -r '.status' <<< "$json")"
+    echo "  configured_profile: $(jq -r '.configuredProfile' <<< "$json")"
+    echo "  effective_profile: $(jq -r '.effectiveProfile' <<< "$json")"
+    jq -r '.checks[] | "  \(.name): \(.status) \(.detail)"' <<< "$json"
+    jq -r '.recommendedActions[] | "  next: \(.)"' <<< "$json"
 }
 
 validate_profile() {
@@ -777,10 +1007,12 @@ cmd_guest_guide() {
 
 case "$ACTION" in
     status) cmd_status "$@" ;;
+    doctor|check) cmd_doctor "$@" ;;
     plan) cmd_plan "$@" ;;
     apply) cmd_apply "$@" ;;
     remove) cmd_remove "$@" ;;
+    runtime|maintenance) cmd_runtime "$@" ;;
     guest-guide|guide) cmd_guest_guide "$@" ;;
     help|--help|-h) usage ;;
-    *) pz_error "usage: windows-vm graphics (status|plan|apply|remove|guest-guide)"; exit 1 ;;
+    *) pz_error "usage: windows-vm graphics (status|doctor|plan|apply|remove|runtime|guest-guide)"; exit 1 ;;
 esac

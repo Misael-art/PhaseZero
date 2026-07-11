@@ -58,6 +58,7 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
         "support-bundle",
         "repair-plan",
         "tune",
+            "capabilities",
             "version",
             "webapp",
             "games",
@@ -97,15 +98,31 @@ def test_build_program_never_uses_shell(catalog):
 def test_windows_graphics_actions_are_safe_plans(catalog):
     actions = {item.id: item for item in catalog if item.id.startswith("windows.graphics.")}
     assert set(actions) == {
+        "windows.graphics.doctor",
         "windows.graphics.status",
         "windows.graphics.plan-gl",
+        "windows.graphics.test-gl",
         "windows.graphics.plan-vfio",
+        "windows.graphics.compat",
+        "windows.graphics.runtime-status",
+        "windows.graphics.runtime-install",
+        "windows.graphics.runtime-rollback",
         "windows.graphics.guest-guide",
     }
-    assert all(not action.mutable for action in actions.values())
+    mutable = {action.id for action in actions.values() if action.mutable}
+    assert mutable == {
+        "windows.graphics.compat",
+        "windows.graphics.runtime-install",
+        "windows.graphics.runtime-rollback",
+    }
+    assert all(actions[action_id].preview_args for action_id in mutable)
+    assert actions["windows.graphics.runtime-install"].elevated is True
+    assert actions["windows.graphics.runtime-rollback"].elevated is True
+    assert actions["windows.graphics.doctor"].args[-1] == "--json"
     assert actions["windows.graphics.status"].args[-1] == "--json"
-    assert actions["windows.graphics.plan-gl"].args[-1] == "virtio-gl"
-    assert actions["windows.graphics.plan-vfio"].args[-1] == "vfio-looking-glass"
+    assert "virtio-gl" in actions["windows.graphics.plan-gl"].args
+    assert "vfio-looking-glass" in actions["windows.graphics.plan-vfio"].args
+    assert actions["windows.graphics.plan-vfio"].parameter_names == ("input",)
 
 
 def test_elevated_program_prefers_phasezero_admin(catalog):
@@ -175,6 +192,15 @@ def test_native_version_comes_from_project_manifest():
     assert __version__ == json.loads((ROOT / "version.json").read_text())["version"]
 
 
+def test_native_launcher_reports_version_without_starting_qt():
+    result = subprocess.run(
+        [sys.executable, "-m", "linux.ui_native", "--version"],
+        cwd=ROOT, capture_output=True, text=True, timeout=10, check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == f"PhaseZero {__version__}"
+
+
 def test_pages_route_actions_through_central_confirmation_flow():
     page_dir = ROOT / "linux" / "ui_native" / "pages"
     offenders = [
@@ -202,6 +228,13 @@ def test_appimage_bundle_is_standalone():
     assert 'PySide6==' not in build, "full PySide6 adds unused Qt modules to the AppImage"
     assert ".appdata.xml" in build, "appimagetool must discover AppStream metadata"
     assert "--smoke-test" in build, "bundle must be smoke-tested before packaging"
+
+
+def test_linux_release_build_covers_all_formats_and_checksums():
+    build = (ROOT / "packaging" / "linux" / "build-all.sh").read_text()
+    for builder in ("deb", "rpm", "arch", "appimage", "flatpak"):
+        assert f'/{builder}/build-' in build
+    assert "sha256sum -c" in build
 
 
 def test_native_gui_offscreen_smoke(tmp_path):

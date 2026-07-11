@@ -43,17 +43,25 @@ class WindowsVMPage(BasePage):
                 install_layout.addWidget(self._action_row(action))
         layout.addWidget(install_box)
 
-        # Graphics acceleration (diagnostics + safe plans, v1)
+        # Graphics acceleration and runtime maintenance.
         graphics_box = QGroupBox("Gráficos e aceleração")
         graphics_layout = QVBoxLayout(graphics_box)
         for aid in (
+            "windows.graphics.doctor",
             "windows.graphics.status",
             "windows.graphics.plan-gl",
+            "windows.graphics.test-gl",
             "windows.graphics.plan-vfio",
+            "windows.graphics.compat",
+            "windows.graphics.runtime-status",
+            "windows.graphics.runtime-install",
+            "windows.graphics.runtime-rollback",
             "windows.graphics.guest-guide",
         ):
             action = self.find(aid)
             if action:
+                if aid == "windows.graphics.doctor":
+                    self._context_status_action = action
                 graphics_layout.addWidget(self._action_row(action))
         layout.addWidget(graphics_box)
 

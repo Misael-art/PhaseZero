@@ -36,6 +36,7 @@ class ActionSpec:
     risk: str = "normal"
     status_args: tuple[str, ...] | None = None
     parameters: tuple[ActionParameter, ...] = field(default_factory=tuple)
+    preview_bindings: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     result_view: str = "auto"
 
     def resolved_args(
@@ -61,6 +62,7 @@ class ActionSpec:
     @property
     def parameter_names(self) -> tuple[str, ...]:
         names = [parameter.name for parameter in self.parameters]
+        names.extend(name for name, _key in self.preview_bindings)
         if self.input_kind and "input" not in names:
             names.append("input")
         return tuple(names)

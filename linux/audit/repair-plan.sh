@@ -192,6 +192,13 @@ fi
 if ! jq -e '.access.shareLinksReady == true and .access.sambaManaged == true and .access.sambaReachable == true and .access.usbMode == "redir" and .access.usbRedirChannels > 0 and .access.usbUdevManaged == true' <<< "$winvm_status" >/dev/null 2>&1; then
     add_item "WINVM05" "high" "Windows VM host storage or USB redirection is incomplete" "phasezero-admin linux/pz windows-vm shares install"
 fi
+winvm_graphics="$(bash "$PZ_ROOT/linux/windows-vm/graphics.sh" doctor --json 2>/dev/null || echo '{}')"
+if ! jq -e '.runtime.status == "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
+    add_item "WINVM06" "medium" "Windows VM graphics runtime missing or stale" "phasezero-admin linux/pz windows-vm graphics runtime install --json"
+fi
+if jq -e '.configuredProfile != .effectiveProfile' <<< "$winvm_graphics" >/dev/null 2>&1; then
+    add_item "WINVM07" "medium" "Windows VM graphics profile is incompatible with current backend" "linux/pz windows-vm graphics apply --profile compat"
+fi
 
 # Waydroid
 waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"

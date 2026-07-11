@@ -865,14 +865,16 @@ class PreviewDialog(StatefulDialog):
         action: ActionSpec | None = None,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__("Confirmar operação", "success" if result.ok else "error", parent)
+        blockers = result.parsed.get("blockers") if isinstance(result.parsed, dict) else None
+        preview_ok = result.ok and not blockers
+        super().__init__("Confirmar operação", "success" if preview_ok else "error", parent)
         self.action = action
         summary = QLabel("Preview concluído. Nenhuma mutação foi executada.")
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")
         self.body.addWidget(summary)
         chips = QHBoxLayout()
-        chips.addWidget(StatusPill("Preview", "success" if result.ok else "error"))
+        chips.addWidget(StatusPill("Preview", "success" if preview_ok else "error"))
         chips.addWidget(StatusPill("Admin", "warning" if action and action.elevated else "info", "necessário" if action and action.elevated else "não"))
         chips.addStretch()
         self.body.addLayout(chips)
@@ -893,7 +895,7 @@ class PreviewDialog(StatefulDialog):
             "Confirmar e aplicar",
             QDialogButtonBox.AcceptRole,
             variant="dangerButton" if action and action.risk == "high" else "primaryButton",
-            enabled=result.ok and not (action and action.risk == "high"),
+            enabled=preview_ok and not (action and action.risk == "high"),
         )
         if action and action.risk == "high":
             warning = QLabel("Alto risco: digite CONFIRMAR para liberar a execução.")
@@ -902,7 +904,7 @@ class PreviewDialog(StatefulDialog):
             self.confirmation.setPlaceholderText("CONFIRMAR")
             self.confirmation.setAccessibleName("Confirmação de alto risco")
             self.confirmation.textChanged.connect(
-                lambda text: self.confirm.setEnabled(result.ok and text.strip() == "CONFIRMAR")
+                lambda text: self.confirm.setEnabled(preview_ok and text.strip() == "CONFIRMAR")
             )
             self.body.insertWidget(1, warning)
             self.body.insertWidget(2, self.confirmation)

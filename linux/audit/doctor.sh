@@ -276,6 +276,14 @@ if jq -e '.access.usbMode == "redir" and .access.usbRedirChannels > 0 and .acces
 else
     check WINVM10 "Windows USB redirection ready" WARN "run: phasezero-admin linux/pz windows-vm shares repair"
 fi
+winvm_graphics="$(bash "$PZ_ROOT/linux/windows-vm/graphics.sh" doctor --json 2>/dev/null || echo '{}')"
+if jq -e '.status == "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
+    check WINVM11 "Windows graphics integration" PASS "profile=$(jq -r '.effectiveProfile' <<< "$winvm_graphics"); runtime current"
+elif jq -e '.runtime.status != "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
+    check WINVM11 "Windows graphics integration" WARN "run: phasezero-admin linux/pz windows-vm graphics runtime install --json"
+else
+    check WINVM11 "Windows graphics integration" WARN "run: linux/pz windows-vm graphics doctor --json"
+fi
 
 header "Waydroid"
 waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"

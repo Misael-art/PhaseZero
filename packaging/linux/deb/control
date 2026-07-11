@@ -1,5 +1,5 @@
 Package: phasezero-control-center
-Version: 1.6.0
+Version: 1.7.0
 Section: admin
 Priority: optional
 Architecture: all
@@ -9,4 +9,4 @@ Recommends: policykit-1, flatpak
 Homepage: https://github.com/Misael-art/PhaseZero
 Description: PhaseZero native Linux control center
  Native Qt6 interface for safe previews, profiles, Steam Deck, Windows VM,
- Waydroid, emulation, boot recovery, Flatpak and AI tooling.
+ Waydroid, emulation, capabilities, boot recovery, Flatpak and AI tooling.

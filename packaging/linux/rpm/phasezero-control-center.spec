@@ -1,5 +1,5 @@
 Name:           phasezero-control-center
-Version:        1.6.0
+Version:        1.7.0
 Release:        1%{?dist}
 Summary:        PhaseZero native Linux control center
 License:        MIT
@@ -38,6 +38,9 @@ install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_data
 %{_datadir}/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg
 
 %changelog
+* Sat Jul 11 2026 PhaseZero <noreply@phasezero.local> - 1.7.0-1
+- Transactional Linux capabilities and contextual Windows graphics diagnostics.
+
 * Sat Jul 11 2026 PhaseZero <noreply@phasezero.local> - 1.6.0-1
 - Unified game library, native emulation journeys and reversible KDE menu.
 

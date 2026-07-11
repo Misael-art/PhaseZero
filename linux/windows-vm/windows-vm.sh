@@ -93,9 +93,11 @@ Usage:
   pz windows-vm optimize [--dry-run]
   pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--graphics <profile>] [--experimental] [--dry-run]
   pz windows-vm graphics status [--json]
+  pz windows-vm graphics doctor [--json]
   pz windows-vm graphics plan --profile <auto|compat|virtio-gl|virtio-venus|rutabaga|vfio-looking-glass> [--json]
   pz windows-vm graphics apply --profile <compat|virtio-gl> [--experimental --yes]
   pz windows-vm graphics remove
+  pz windows-vm graphics runtime (status|install|rollback)
   pz windows-vm graphics guest-guide [--save]
   pz windows-vm shares (status|install|remove|dry-run)
   pz windows-vm boot status

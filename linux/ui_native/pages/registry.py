@@ -47,6 +47,7 @@ class PageRegistry:
         "Emulação": EmulationPage,
         "Boot Direto": BootPage,
         "Flatpak": FlatpakPage,
+        "Recursos": CatalogWorkspacePage,
         "IA & Dev": AiDevPage,
         "Aplicativos": ApplicationsPage,
         "Ajustes": TuningPage,
@@ -56,7 +57,7 @@ class PageRegistry:
     def _build(self) -> None:
         workspace_categories = {
             "Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação",
-            "Boot Direto", "Flatpak", "IA & Dev", "Aplicativos",
+            "Boot Direto", "Flatpak", "Recursos", "IA & Dev", "Aplicativos",
         }
         for category, page_cls in self._CATEGORY_PAGES.items():
             actions = [a for a in self.catalog if a.category == category]

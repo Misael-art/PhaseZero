@@ -100,6 +100,23 @@ def action_section(category: str, action: ActionSpec) -> str:
 
 
 def grouped_actions(category: str, actions: list[ActionSpec]) -> OrderedDict[str, list[ActionSpec]]:
+    if category == "Recursos":
+        groups: OrderedDict[str, list[ActionSpec]] = OrderedDict()
+        preferred = (
+            "Visão geral", "Perfis prontos", "Gaming e streaming",
+            "Hardware e drivers", "Saúde e desempenho", "Segurança e privacidade",
+            "Backup e nuvem", "Desenvolvimento", "Criação e produtividade",
+            "Administração", "Educação", "Operação e recuperação",
+        )
+        for group in preferred:
+            matches = [action for action in actions if action.group == group]
+            if matches:
+                groups[group] = matches
+        for action in actions:
+            groups.setdefault(action.group, [])
+            if action not in groups[action.group]:
+                groups[action.group].append(action)
+        return groups
     groups: OrderedDict[str, list[ActionSpec]] = OrderedDict()
     for action in actions:
         groups.setdefault(action_section(category, action), []).append(action)

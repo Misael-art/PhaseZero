@@ -49,6 +49,12 @@ linux/pz help
 linux/pz ui                        # Central de Controle nativa Qt6
 linux/pz ui web                    # Dashboard web legado
 linux/pz install safe-base
+linux/pz capabilities detect                    # host, distro, GPU e providers
+linux/pz capabilities status                    # catálogo + estado instalado
+linux/pz capabilities plan --profile gaming-core # preview versionado, sem mutação
+linux/pz capabilities apply --plan-id ID --confirm TOKEN
+linux/pz capabilities verify --operation-id ID
+linux/pz capabilities rollback --operation-id ID --confirm TOKEN
 linux/pz install steamdeck-linux
 linux/pz steamdeck detect
 linux/pz steamdeck hotkeys dry-run
@@ -63,7 +69,9 @@ linux/pz windows-vm install --iso /path/to/Win11.iso
 linux/pz windows-vm optimize --dry-run
 linux/pz windows-vm launch --fullscreen
 linux/pz windows-vm graphics status --json
+linux/pz windows-vm graphics doctor --json
 linux/pz windows-vm graphics plan --profile auto
+linux/pz windows-vm graphics runtime install --dry-run
 linux/pz windows-vm boot dry-run
 linux/pz install waydroid-linux --dry-run
 linux/pz waydroid status
@@ -120,6 +128,8 @@ sudo linux/pz server boot install --llm --homelab   # entrada GRUB Homelab headl
 ```
 
 `steamdeck-linux` e opt-in. O foco inicial e experiencia estilo SteamOS: Steam Gamepad UI, atalhos `Ctrl+Alt+F1..F6`, teclado virtual por Steam/wvkbd/onboard/maliit, watcher de modo com debounce e tuning de jogos.
+
+Recursos Linux ficam na área **Recursos** da UI nativa e no contrato `pz capabilities`. O catálogo cobre gaming/streaming, hardware, saúde, segurança, backup, desenvolvimento, criação, administração e educação. Cada seleção segue `detect → plan → apply → verify → rollback`: plano e operação são JSON privados (`0700/0600`), fontes executáveis limitam-se a repositórios assinados da distribuição e Flathub, comandos usam argv sem shell, fallback Flatpak ocorre quando pacote nativo não existe, e rollback remove somente itens instalados pela própria operação. Serviços reversíveis selecionados (EarlyOOM, Ananicy, Docker, Cockpit, Tailscale e ZeroTier) são ativados explicitamente no plano e desativados pelo rollback; firewall, backend de rede e parâmetros de boot nunca são alterados implicitamente. Ideias de cobertura foram estudadas no LinuxToys; implementação PhaseZero é independente, sem copiar scripts GPL ou padrões inseguros de download executável.
 
 `windows-vm-linux` e opt-in. Automatiza VM Windows em QEMU/KVM a partir de uma ISO indicada pelo usuario. Antes de criar disco novo, detecta dominios Windows em `qemu:///system` e imagens instaladas; dominio libvirt existente vira default, preservando snapshot, firmware e hardware virtual originais. Sem dominio, usa QEMU direto com CPU `host`, KVM, OVMF, TPM 2.0, audio, SPICE USB redirection, SMB e virtiofs. Compartilhamento host->guest: `HOME` e `/mnt/sdcard` sao bind-montados (nao symlinks, que o smbd embutido do QEMU nao atravessa) sob `RUNTIME_DIR` e expostos no SMB embutido do SLIRP em `\\10.0.2.4\qemu` (pastas `home/` e `sdcard/`); virtiofs continua expondo `HOME`. O acesso reverso guest->host usa `pz windows-vm host-access` (monta o disco da VM via libguestfs com a VM desligada). Quatro canais USB cobrem pendrives, perifericos e leitores smartcard USB. Graficos: `pz windows-vm graphics` diagnostica GPU/render nodes/IOMMU e planeja perfis; o padrao permanece estavel (QXL/SPICE no libvirt, virtio-vga no QEMU direto). `virtio-gl` habilita caminho GL do host em teste opt-in via `launch --raw-qemu --graphics virtio-gl --experimental`, sem prometer 3D no driver Windows. Venus/rutabaga e VFIO/Looking Glass ficam plan-only na v1. Nenhum perfil altera GRUB, initramfs ou bind VFIO.
 

@@ -142,20 +142,24 @@ class BasePage(QWidget):
     def _install_context_status(self) -> None:
         if self._context_status is not None or not self.actions:
             return
-        candidates = [
-            action for action in self.actions
-            if not action.mutable
-            and action.status_args
-            and not action.parameters
-            and not any(token.startswith("{") for token in action.status_args)
-        ]
-        preferred = [
-            action for action in candidates
-            if any(term in action.id for term in (".status", ".doctor", ".check", ".list"))
-        ]
-        if not preferred and not candidates:
+        if self._context_status_action is None:
+            candidates = [
+                action for action in self.actions
+                if not action.mutable
+                and action.status_args
+                and not action.parameters
+                and not any(token.startswith("{") for token in action.status_args)
+            ]
+            preferred = [
+                action for action in candidates
+                if any(term in action.id for term in (".status", ".doctor", ".check", ".list"))
+            ]
+            if not preferred and not candidates:
+                return
+            self._context_status_action = (preferred or candidates)[0]
+        action = self._context_status_action
+        if action.mutable or action.parameters or not action.status_args:
             return
-        self._context_status_action = (preferred or candidates)[0]
         frame = QFrame()
         frame.setObjectName("contextStatus")
         row = QHBoxLayout(frame)

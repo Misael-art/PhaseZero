@@ -231,6 +231,31 @@ jq -e '(.blockers | join(" ")) | test("quebrar a sessao de boot")' <<< "$libvirt
 test ! -e "$XDG_STATE_HOME/phasezero/windows-vm/graphics/backups"
 echo "  libvirt inspection read-only ok"
 
+echo "=== runtime: status, dry-run, install, backup e rollback em root falso ==="
+runtime_root="$TMP_ROOT/runtime-root"
+runtime_env=("PZ_GFX_RUNTIME_TARGET_ROOT=$runtime_root")
+runtime_before="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime status --json)"
+jq -e '.status == "needsinstall" and .summary.missing == 5' <<< "$runtime_before" >/dev/null
+runtime_dry="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime install --dry-run --json)"
+jq -e '.dryRun == true and (.wouldChange | length) == 5' <<< "$runtime_dry" >/dev/null
+test ! -e "$runtime_root/usr/local/lib/phasezero"
+runtime_installed="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime install --json)"
+jq -e '.status == "ok" and .summary.current == 5 and (.backupId | length) > 0' <<< "$runtime_installed" >/dev/null
+runtime_launcher="$runtime_root/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/windows-vm.sh"
+printf 'stale launcher\n' > "$runtime_launcher"
+runtime_repaired="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime install --json)"
+jq -e '.status == "ok" and .summary.current == 5' <<< "$runtime_repaired" >/dev/null
+runtime_rollback_dry="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime rollback --backup latest --dry-run --json)"
+jq -e '.dryRun == true and .operation == "rollback"' <<< "$runtime_rollback_dry" >/dev/null
+runtime_rolled_back="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime rollback --backup latest --json)"
+jq -e '.status == "needsrepair" and .operation == "rollback"' <<< "$runtime_rolled_back" >/dev/null
+grep -q '^stale launcher$' "$runtime_launcher"
+test ! -e "$runtime_root/etc/default/grub"
+env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime install --json >/dev/null
+doctor_json="$(env "${runtime_env[@]}" "${gfx_env[@]}" PZ_GFX_SYSFS_ROOT="$sys_deck" "$REPO_ROOT/linux/pz" windows-vm graphics doctor --json)"
+jq -e '.status == "ok" and .runtime.status == "ok" and .effectiveProfile == "compat"' <<< "$doctor_json" >/dev/null
+echo "  runtime maintenance ok"
+
 echo "=== apply: dominio rodando bloqueia; gates --experimental/--yes ==="
 set +e
 env PATH="$virsh_bin:$PATH" PZ_TEST_DOMSTATE=running "${gfx_env[@]}" PZ_GFX_SYSFS_ROOT="$sys_deck" \

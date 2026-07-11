@@ -117,6 +117,8 @@ bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" status > "$BUNDLE_DIR/st
 # Windows VM
 bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" status > "$BUNDLE_DIR/windows-vm/status.json" 2>&1 || true
 bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" boot status > "$BUNDLE_DIR/windows-vm/boot-status.txt" 2>&1 || true
+bash "$PZ_ROOT/linux/windows-vm/graphics.sh" doctor --json > "$BUNDLE_DIR/windows-vm/graphics-doctor.json" 2>&1 || true
+bash "$PZ_ROOT/linux/windows-vm/graphics.sh" runtime status --json > "$BUNDLE_DIR/windows-vm/graphics-runtime.json" 2>&1 || true
 [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/windows-vm.conf" ] && redact_to "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/windows-vm.conf" "$BUNDLE_DIR/windows-vm/windows-vm.conf"
 [ -f "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/session.log" ] && redact_to "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/session.log" "$BUNDLE_DIR/windows-vm/session.log"
 virsh -c qemu:///system list --all > "$BUNDLE_DIR/windows-vm/libvirt-domains.txt" 2>&1 || true

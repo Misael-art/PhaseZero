@@ -17,6 +17,7 @@ CATEGORIES = (
     ("Emulação", "applications-games", "Emuladores, mídia e integrações"),
     ("Boot Direto", "system-reboot", "GRUB, recuperação e próxima sessão"),
     ("Flatpak", "system-software-install", "Remotes, overrides e compatibilidade"),
+    ("Recursos", "preferences-plugin", "Gaming, hardware, saúde e workstation"),
     ("IA & Dev", "applications-development", "Agentes, MCPs e ferramentas"),
     ("Aplicativos", "applications-other", "Web apps, jogos e menus do desktop"),
     ("Ajustes", "preferences-system", "Gaming, navegador e desenvolvimento"),
@@ -30,7 +31,7 @@ DASHBOARD = ("Início", "go-home", "Bem-vindo de volta ao PhaseZero")
 SIDEBAR_GROUPS = (
     ("Ações rápidas", ("Início", "Visão geral", "Perfis")),
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação")),
-    ("Sistema", ("Boot Direto", "Flatpak", "Ajustes")),
+    ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
     ("IA & Dev", ("IA & Dev",)),
     ("Desktop", ("Aplicativos",)),
     ("Histórico", ("Resultados",)),
@@ -68,6 +69,7 @@ def _a(
     platforms: tuple[str, ...] = ("linux",),
     risk: str = "",
     parameters: tuple[ActionParameter, ...] = (),
+    preview_bindings: tuple[tuple[str, str], ...] = (),
     result_view: str = "auto",
 ) -> ActionSpec:
     if mutable and preview is None:
@@ -83,6 +85,7 @@ def _a(
         "emulation": "Emulação",
         "boot": "Boot e recuperação",
         "flatpak": "Aplicativos",
+        "capability": "Recursos",
         "ai": "IA e agentes",
         "desktop": "Desktop",
         "tune": "Ajustes",
@@ -112,6 +115,7 @@ def _a(
         risk=inferred_risk,
         status_args=preview if mutable else args,
         parameters=inferred_parameters,
+        preview_bindings=preview_bindings,
         result_view=result_view,
     )
 
@@ -204,9 +208,15 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.adopt", "Windows VM", "Adotar disco Windows", "Integra instalação existente.", ("windows-vm", "adopt", "--disk", "{input}"), "drive-harddisk", mutable=True, preview=("windows-vm", "discover", "--json"), input_label="Selecione disco qcow2/raw", input_kind="file"),
             _a("windows.optimize", "Windows VM", "Otimizar host", "Ajustes temporários para QEMU.", ("windows-vm", "optimize"), "preferences-system-performance", mutable=True, preview=("windows-vm", "status")),
             _a("windows.launch", "Windows VM", "Abrir Windows", "Inicia VM configurada em tela cheia.", ("windows-vm", "launch", "--fullscreen"), "media-playback-start", mutable=True, preview=("windows-vm", "status")),
+            _a("windows.graphics.doctor", "Windows VM", "Diagnóstico gráfico", "Saúde consolidada de KVM, GPU, perfil, runtime e VFIO.", ("windows-vm", "graphics", "doctor", "--json"), "tools-report-bug", badge="JSON"),
             _a("windows.graphics.status", "Windows VM", "GPU status", "GPU, render nodes, IOMMU e perfis gráficos elegíveis.", ("windows-vm", "graphics", "status", "--json"), "video-display", badge="JSON"),
-            _a("windows.graphics.plan-gl", "Windows VM", "Plano VirtIO GL", "Plano de aceleração VirtIO GL (experimental, raw QEMU).", ("windows-vm", "graphics", "plan", "--profile", "virtio-gl"), "video-display", badge="Seguro"),
-            _a("windows.graphics.plan-vfio", "Windows VM", "Plano VFIO", "Plano GPU passthrough + Looking Glass (somente plano na v1).", ("windows-vm", "graphics", "plan", "--profile", "vfio-looking-glass"), "video-display", badge="Seguro"),
+            _a("windows.graphics.plan-gl", "Windows VM", "Plano VirtIO GL", "Valida caminho GL experimental sem alterar a VM.", ("windows-vm", "graphics", "plan", "--profile", "virtio-gl", "--json"), "video-display", badge="Seguro"),
+            _a("windows.graphics.test-gl", "Windows VM", "Validar comando GL", "Gera lançamento QEMU VirtIO GL completo em dry-run.", ("windows-vm", "launch", "--dry-run", "--raw-qemu", "--graphics", "virtio-gl", "--experimental", "--no-optimize"), "system-run", badge="Seguro"),
+            _a("windows.graphics.plan-vfio", "Windows VM", "Plano VFIO", "Valida GPU, áudio e grupos IOMMU; não vincula drivers.", ("windows-vm", "graphics", "plan", "--profile", "vfio-looking-glass", "--pci-devices", "{input}", "--json"), "video-display", badge="Seguro", input_label="Dispositivos PCI (GPU, áudio)", input_kind="text"),
+            _a("windows.graphics.compat", "Windows VM", "Restaurar gráfico compatível", "Define QXL/SPICE ou VirtIO VGA como perfil estável.", ("windows-vm", "graphics", "apply", "--profile", "compat"), "edit-undo", mutable=True, preview=("windows-vm", "graphics", "plan", "--profile", "compat", "--json"), badge="Reversível"),
+            _a("windows.graphics.runtime-status", "Windows VM", "Status do runtime gráfico", "Compara byte a byte a sessão instalada com as fontes atuais.", ("windows-vm", "graphics", "runtime", "status", "--json"), "system-search", badge="JSON"),
+            _a("windows.graphics.runtime-install", "Windows VM", "Atualizar runtime gráfico", "Sincroniza somente sessão e runtime Windows; cria backup e não toca GRUB.", ("windows-vm", "graphics", "runtime", "install", "--json"), "system-software-update", mutable=True, preview=("windows-vm", "graphics", "runtime", "install", "--dry-run", "--json"), elevated=True, badge="Reparo"),
+            _a("windows.graphics.runtime-rollback", "Windows VM", "Reverter runtime gráfico", "Restaura backup anterior da sessão gráfica Windows.", ("windows-vm", "graphics", "runtime", "rollback", "--backup", "latest", "--json"), "edit-undo", mutable=True, preview=("windows-vm", "graphics", "runtime", "rollback", "--backup", "latest", "--dry-run", "--json"), elevated=True, badge="Reversível"),
             _a("windows.graphics.guest-guide", "Windows VM", "Guia guest", "Checklist de drivers gráficos no Windows guest.", ("windows-vm", "graphics", "guest-guide"), "help-contents"),
             _a("windows.boot.install", "Windows VM", "Instalar boot direto", "Entrada GRUB para Windows VM.", ("windows-vm", "boot", "install"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
             _a("windows.boot.next", "Windows VM", "Próximo boot Windows", "Agenda uma sessão Windows VM.", ("windows-vm", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
@@ -559,6 +569,104 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ]
     )
 
+    # Capability expansion inspired by LinuxToys concepts, reimplemented as a
+    # signed-repository/Flatpak-only plan/apply/verify/rollback contract.
+    from linux.capabilities.catalog import CAPABILITIES, GROUPS, PROFILES
+
+    actions.extend(
+        [
+            _a(
+                "capability.detect", "Recursos", "Compatibilidade do host",
+                "Detecta distribuição, imutabilidade, GPU, sessão e providers confiáveis.",
+                ("capabilities", "detect"), "system-search",
+                group="Visão geral", visibility="primary", result_view="table",
+            ),
+            _a(
+                "capability.status", "Recursos", "Estado dos recursos",
+                "Mostra disponibilidade e instalação no host atual.",
+                ("capabilities", "status"), "view-list-details",
+                group="Visão geral", visibility="primary", result_view="table",
+            ),
+            _a(
+                "capability.profiles", "Recursos", "Perfis disponíveis",
+                "Lista composições prontas por jornada.",
+                ("capabilities", "profiles"), "view-list-tree",
+                group="Visão geral", visibility="standard", result_view="table",
+            ),
+            _a(
+                "capability.manifest.plan", "Recursos", "Planejar manifesto",
+                "Valida manifesto JSON versionado sem executar alterações.",
+                ("capabilities", "plan", "--manifest", "{manifest}"),
+                "document-preview", group="Perfis prontos", visibility="standard",
+                parameters=(_p("manifest", "Manifesto JSON", "file"),), result_view="table",
+            ),
+            _a(
+                "capability.apply", "Recursos", "Aplicar plano confirmado",
+                "Revalida fontes e aplica o plano pelo ID e token gerados.",
+                ("capabilities", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}"),
+                "system-software-install", mutable=True,
+                preview=("capabilities", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}", "--dry-run"),
+                elevated=True, badge="Protegido", group="Operação e recuperação",
+                visibility="standard", result_view="table",
+                parameters=(
+                    _p("plan_id", "ID do plano", placeholder="plan-…"),
+                    _p("confirm", "Token de confirmação", placeholder="Gerado pelo plano"),
+                ),
+            ),
+            _a(
+                "capability.verify", "Recursos", "Verificar operação",
+                "Confirma que cada recurso instalado pela operação continua presente.",
+                ("capabilities", "verify", "--operation-id", "{operation_id}"),
+                "dialog-ok", group="Operação e recuperação", visibility="standard",
+                parameters=(_p("operation_id", "ID da operação", placeholder="operation-…"),),
+                result_view="table",
+            ),
+            _a(
+                "capability.rollback", "Recursos", "Reverter operação",
+                "Remove somente recursos instalados pela operação; preserva preexistentes.",
+                ("capabilities", "rollback", "--operation-id", "{operation_id}", "--confirm", "{confirm}"),
+                "edit-undo", mutable=True,
+                preview=("capabilities", "rollback", "--operation-id", "{operation_id}", "--confirm", "{confirm}", "--dry-run"),
+                elevated=True, badge="Reversível", group="Operação e recuperação",
+                visibility="advanced", result_view="table",
+                parameters=(
+                    _p("operation_id", "ID da operação", placeholder="operation-…"),
+                    _p("confirm", "Token de rollback", placeholder="Gerado pela operação"),
+                ),
+            ),
+        ]
+    )
+    for profile_id, capability_ids in PROFILES.items():
+        actions.append(
+            _a(
+                f"capability.profile.{profile_id}", "Recursos",
+                profile_id.replace("-", " ").title(),
+                f"Cria plano seguro para {len(capability_ids)} recursos; nada é instalado nesta etapa.",
+                ("capabilities", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}"),
+                "document-preview", mutable=True,
+                preview=("capabilities", "plan", "--profile", profile_id),
+                preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
+                elevated=True, badge="Protegido", group="Perfis prontos", visibility="primary",
+                keywords=(profile_id, "perfil", "workstation"), result_view="table",
+            )
+        )
+    for capability in CAPABILITIES:
+        actions.append(
+            _a(
+                f"capability.plan.{capability.id}", "Recursos", capability.title,
+                capability.description,
+                ("capabilities", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}"),
+                "document-preview", mutable=True,
+                preview=("capabilities", "plan", "--capability", capability.id),
+                preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
+                elevated=True, group=GROUPS[capability.group],
+                visibility="advanced" if capability.risk == "high" else "standard",
+                risk=capability.risk, badge="Plano seguro",
+                keywords=(capability.id, capability.group, *capability.keywords),
+                result_view="table",
+            )
+        )
+
     validate_catalog(actions)
     selected_platform = current_platform(platform_name)
     return [action for action in actions if selected_platform in action.platforms]
@@ -624,6 +732,10 @@ def catalog_manifest(root: Path, platform_name: str | None = None) -> dict[str, 
                         "placeholder": parameter.placeholder,
                     }
                     for parameter in item.parameters
+                ],
+                "previewBindings": [
+                    {"parameter": parameter, "resultKey": result_key}
+                    for parameter, result_key in item.preview_bindings
                 ],
             }
             for item in build_catalog(root, platform_name)
