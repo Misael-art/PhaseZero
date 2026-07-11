@@ -20,6 +20,7 @@ from .ai_dev import AiDevPage
 from .applications import ApplicationsPage
 from .tuning import TuningPage
 from .results import ResultsPage
+from .workspace import CatalogWorkspacePage
 
 
 class PageRegistry:
@@ -53,8 +54,14 @@ class PageRegistry:
     }
 
     def _build(self) -> None:
+        workspace_categories = {
+            "Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação",
+            "Boot Direto", "Flatpak", "IA & Dev", "Aplicativos",
+        }
         for category, page_cls in self._CATEGORY_PAGES.items():
             actions = [a for a in self.catalog if a.category == category]
+            if category in workspace_categories:
+                page_cls = CatalogWorkspacePage
             page = page_cls(self.root, self.runner, actions, by_id=self.by_id)
             page.build()
             page.finalize_action_coverage()

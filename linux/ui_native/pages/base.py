@@ -17,6 +17,7 @@ class BasePage(QWidget):
 
     action_requested = Signal(object)
     actions_requested = Signal(object)
+    action_selected = Signal(object)
 
     def __init__(
         self,
@@ -159,13 +160,19 @@ class BasePage(QWidget):
         frame.setObjectName("contextStatus")
         row = QHBoxLayout(frame)
         row.setContentsMargins(12, 8, 12, 8)
+        copy = QVBoxLayout()
+        copy.setSpacing(1)
+        heading = QLabel("Saúde do módulo")
+        heading.setObjectName("contextStatusHeading")
         label = QLabel("Saúde: aguardando verificação")
         label.setObjectName("contextStatusText")
         label.setAccessibleName("Resumo de saúde da página")
+        copy.addWidget(heading)
+        copy.addWidget(label)
         retry = QPushButton("Atualizar")
         retry.setObjectName("secondaryButton")
         retry.clicked.connect(self.reload_context_status)
-        row.addWidget(label, 1)
+        row.addLayout(copy, 1)
         row.addWidget(retry)
         self._context_status = frame
         self._layout.insertWidget(0, frame)

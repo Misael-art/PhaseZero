@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QSizePolicy,
     QStyle,
     QToolButton,
@@ -46,6 +47,27 @@ from .platform import open_path
 def themed_icon(widget: QWidget, name: str, fallback: QStyle.StandardPixmap) -> QIcon:
     icon = QIcon.fromTheme(name)
     return icon if not icon.isNull() else widget.style().standardIcon(fallback)
+
+
+def action_icon(widget: QWidget, action: ActionSpec, size: int = 24) -> QIcon:
+    """Resolve a semantic system icon without shipping platform-specific assets."""
+    text = f"{action.id} {action.title}".casefold()
+    rules = (
+        (("status", "doctor", "diagnóst", "audit", "check"), QStyle.SP_DialogApplyButton),
+        (("repair", "reparo", "fix", "reset", "rollback"), QStyle.SP_BrowserReload),
+        (("install", "setup", "import", "download"), QStyle.SP_DialogApplyButton),
+        (("remove", "delete", "clean", "limpar"), QStyle.SP_TrashIcon),
+        (("folder", "path", "media", "library", "biblioteca"), QStyle.SP_DirOpenIcon),
+        (("launch", "start", "run", "boot", "session"), QStyle.SP_ComputerIcon),
+        (("settings", "config", "tune", "override"), QStyle.SP_FileDialogDetailedView),
+        (("network", "remote", "server", "mcp"), QStyle.SP_DriveNetIcon),
+    )
+    fallback = QStyle.SP_ComputerIcon
+    for terms, candidate in rules:
+        if any(term in text for term in terms):
+            fallback = candidate
+            break
+    return themed_icon(widget, action.icon, fallback)
 
 
 def _repolish(widget: QWidget) -> None:
@@ -316,6 +338,243 @@ class AdvancedActionsPanel(QFrame):
         toggle.toggled.connect(scroll.setVisible)
         toggle.toggled.connect(lambda checked: toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow))
         layout.addWidget(scroll)
+
+
+class ActionListRow(QFrame):
+    """Selectable action summary. Execution belongs to the context inspector."""
+
+    selected = Signal(object)
+
+    def __init__(self, action: ActionSpec, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.action = action
+        self.setObjectName("actionListRow")
+        self.setProperty("selected", False)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAccessibleName(action.title)
+        self.setAccessibleDescription(action.description)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 10, 12, 10)
+        row.setSpacing(12)
+        icon = QLabel()
+        icon.setObjectName("actionRowIcon")
+        icon.setPixmap(action_icon(self, action).pixmap(24, 24))
+        icon.setFixedSize(32, 32)
+        icon.setAlignment(Qt.AlignCenter)
+        row.addWidget(icon)
+        copy = QVBoxLayout()
+        copy.setSpacing(2)
+        title = QLabel(action.title)
+        title.setObjectName("actionRowTitle")
+        description = QLabel(action.description)
+        description.setObjectName("actionRowDescription")
+        description.setWordWrap(True)
+        copy.addWidget(title)
+        copy.addWidget(description)
+        row.addLayout(copy, 1)
+        if action.risk != "normal":
+            risk = QLabel("Alto risco" if action.risk == "high" else "Requer admin")
+            risk.setObjectName("riskChip")
+            risk.setProperty("risk", action.risk)
+            row.addWidget(risk)
+        next_button = QToolButton()
+        next_button.setObjectName("rowChevron")
+        next_button.setIcon(themed_icon(self, "go-next", QStyle.SP_ArrowRight))
+        next_button.setAccessibleName(f"Selecionar {action.title}")
+        next_button.clicked.connect(lambda: self.selected.emit(self.action))
+        row.addWidget(next_button)
+
+    def set_selected(self, selected: bool) -> None:
+        self.setProperty("selected", selected)
+        _repolish(self)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.selected.emit(self.action)
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.selected.emit(self.action)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class ContextRail(QFrame):
+    """Secondary navigation within one product module."""
+
+    section_changed = Signal(int)
+
+    def __init__(self, sections: list[str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("contextRail")
+        self.setFixedWidth(196)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(4)
+        self.buttons: list[QPushButton] = []
+        for index, section in enumerate(sections):
+            button = QPushButton(section)
+            button.setObjectName("contextRailButton")
+            button.setCheckable(True)
+            button.setMinimumHeight(48)
+            button.setAccessibleName(f"Abrir seção {section}")
+            icon_map = {
+                "Visão geral": QStyle.SP_DialogApplyButton,
+                "Biblioteca e mídia": QStyle.SP_DirOpenIcon,
+                "Frontends": QStyle.SP_FileDialogListView,
+                "Controles": QStyle.SP_ComputerIcon,
+                "Sessão": QStyle.SP_DesktopIcon,
+                "Plugins": QStyle.SP_DriveNetIcon,
+                "Manutenção": QStyle.SP_BrowserReload,
+                "Avançado": QStyle.SP_FileDialogDetailedView,
+            }
+            button.setIcon(self.style().standardIcon(icon_map.get(section, QStyle.SP_FileIcon)))
+            button.clicked.connect(lambda _checked=False, value=index: self.select(value))
+            layout.addWidget(button)
+            self.buttons.append(button)
+        layout.addStretch()
+        self.select(0, emit=False)
+
+    def select(self, index: int, *, emit: bool = True) -> None:
+        if not 0 <= index < len(self.buttons):
+            return
+        for current, button in enumerate(self.buttons):
+            button.setChecked(current == index)
+        if emit:
+            self.section_changed.emit(index)
+
+
+class ActionInspector(QFrame):
+    """Single execution surface for the currently selected action."""
+
+    requested = Signal(object)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.action: ActionSpec | None = None
+        self.setObjectName("actionInspector")
+        self.setMinimumWidth(270)
+        self.setMaximumWidth(310)
+        self.setAccessibleName("Inspetor de contexto")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 14)
+        layout.setSpacing(12)
+        layout.setAlignment(Qt.AlignTop)
+        heading = QLabel("Inspetor de contexto")
+        heading.setObjectName("inspectorHeading")
+        layout.addWidget(heading)
+        self.body = QStackedWidget()
+        empty_page = QWidget()
+        empty_layout = QVBoxLayout(empty_page)
+        empty_layout.setContentsMargins(0, 0, 0, 0)
+        empty_layout.setSpacing(12)
+        empty_title = QLabel("Nenhuma operação selecionada")
+        empty_title.setObjectName("inspectorTitle")
+        empty_layout.addWidget(empty_title)
+        self.empty = QLabel("Selecione uma operação para entender impacto, risco e resultado antes de executar.")
+        self.empty.setObjectName("inspectorEmpty")
+        self.empty.setWordWrap(True)
+        empty_layout.addWidget(self.empty)
+        for title, value in (
+            ("Saúde", "Aguardando seleção"),
+            ("Risco", "Será avaliado pela ação"),
+            ("Resultado esperado", "Detalhes aparecem aqui"),
+        ):
+            empty_layout.addWidget(self._section_label(title))
+            placeholder = QLabel(value)
+            placeholder.setObjectName("inspectorValue")
+            placeholder.setWordWrap(True)
+            empty_layout.addWidget(placeholder)
+        empty_layout.addStretch()
+        empty_execute = QPushButton("Executar")
+        empty_execute.setObjectName("primaryButton")
+        empty_execute.setMinimumHeight(48)
+        empty_execute.setEnabled(False)
+        empty_layout.addWidget(empty_execute)
+        self.content = QWidget()
+        content = QVBoxLayout(self.content)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(12)
+        self.icon = QLabel()
+        self.icon.setObjectName("inspectorIcon")
+        self.icon.setFixedSize(42, 42)
+        self.icon.setAlignment(Qt.AlignCenter)
+        self.title = QLabel()
+        self.title.setObjectName("inspectorTitle")
+        self.title.setWordWrap(True)
+        self.description = QLabel()
+        self.description.setObjectName("inspectorDescription")
+        self.description.setWordWrap(True)
+        content.addWidget(self.icon)
+        content.addWidget(self.title)
+        content.addWidget(self.description)
+        content.addWidget(self._section_label("Risco"))
+        self.risk = QLabel()
+        self.risk.setObjectName("inspectorValue")
+        self.risk.setWordWrap(True)
+        content.addWidget(self.risk)
+        content.addWidget(self._section_label("Resultado esperado"))
+        self.result = QLabel()
+        self.result.setObjectName("inspectorValue")
+        self.result.setWordWrap(True)
+        content.addWidget(self.result)
+        content.addWidget(self._section_label("Comando seguro"))
+        self.command = QLineEdit()
+        self.command.setObjectName("inspectorCommand")
+        self.command.setReadOnly(True)
+        content.addWidget(self.command)
+        content.addStretch()
+        self.execute = QPushButton("Selecionar operação")
+        self.execute.setObjectName("primaryButton")
+        self.execute.setMinimumHeight(48)
+        self.execute.setEnabled(False)
+        self.execute.clicked.connect(self._request)
+        content.addWidget(self.execute)
+        self.body.addWidget(empty_page)
+        self.body.addWidget(self.content)
+        layout.addWidget(self.body, 1)
+
+    def _section_label(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("inspectorSection")
+        return label
+
+    def set_action(self, action: ActionSpec) -> None:
+        self.action = action
+        self.body.setCurrentWidget(self.content)
+        self.icon.setPixmap(action_icon(self, action, 30).pixmap(30, 30))
+        self.title.setText(action.title)
+        self.description.setText(action.description)
+        risk_copy = {
+            "normal": "Normal — confirmação simples.",
+            "elevated": "Administrativo — requer bridge de elevação.",
+            "high": "Alto — preview válido e confirmação explícita.",
+        }
+        self.risk.setText(risk_copy[action.risk])
+        result_copy = {
+            "auto": "Saída estruturada, feedback de estado e registro no histórico.",
+            "log": "Log detalhado com opção de copiar e consultar no histórico.",
+            "table": "Dados organizados para inspeção e exportação.",
+            "path": "Arquivo ou pasta disponível para abertura ao concluir.",
+        }
+        self.result.setText(result_copy.get(action.result_view, result_copy["auto"]))
+        args = action.preview_args if action.mutable and action.preview_args else action.args
+        self.command.setText("linux/pz " + " ".join(args))
+        self.command.setCursorPosition(0)
+        self.execute.setText("Pré-visualizar" if action.mutable else "Executar")
+        self.execute.setEnabled(True)
+        self.execute.setAccessibleDescription(f"Executar com segurança: {action.title}")
+
+    def clear_action(self) -> None:
+        self.action = None
+        self.body.setCurrentIndex(0)
+
+    def _request(self) -> None:
+        if self.action is not None:
+            self.requested.emit(self.action)
 
 
 class ParameterDialog(QDialog):

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel, QStatusBar
+from PySide6.QtWidgets import QApplication, QLabel
 
 from linux.ui_native.command_runner import CommandRunner
 from linux.ui_native.models import ActionSpec
@@ -37,8 +37,8 @@ def test_main_window_has_persistent_status_and_grouped_breadcrumb(qapp):
     ):
         window = MainWindow(ROOT)
         window.show_category("Steam Deck")
-        assert window.statusBar().objectName() == "globalStatusBar"
-        assert isinstance(window.statusBar(), QStatusBar)
+        assert window.global_state.parent() is not None
+        assert window.global_context.parent() is not None
         assert "Plataformas" in window.breadcrumb.text
         assert "Steam Deck" in window.breadcrumb.text
         assert window.sidebar_buttons["Steam Deck"].isChecked()

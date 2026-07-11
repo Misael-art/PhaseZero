@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizeGrip,
     QStackedWidget,
-    QStatusBar,
     QStyle,
     QVBoxLayout,
     QWidget,
@@ -32,7 +31,8 @@ from .models import ActionSpec, OperationResult
 from .pages.registry import PageRegistry
 from .result_parser import severity_for
 from .widgets import (
-    ActionCard,
+    ActionInspector,
+    ActionListRow,
     Breadcrumb,
     HeaderBar,
     ParameterDialog,
@@ -63,7 +63,7 @@ class MainWindow(QMainWindow):
         self.dark_theme = True
         self._maximized = False
         self._start_failed = False
-        self._search_cards: list[ActionCard] = []
+        self._search_cards: list[QWidget] = []
         self._host_process: QProcess | None = None
         self._closing = False
         self.progress_dialog: ProgressDialog | None = None
@@ -78,7 +78,7 @@ class MainWindow(QMainWindow):
         self._search_relayout_timer.timeout.connect(self.rebuild_search)
 
         self.setWindowTitle("PhaseZero — Central de Controle")
-        self.setMinimumSize(900, 600)
+        self.setMinimumSize(1100, 680)
         self.resize(1280, 800)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self._build_ui()
@@ -133,7 +133,23 @@ class MainWindow(QMainWindow):
                 button.setToolTip(meta[2])
                 button.setAccessibleName(f"Abrir {category}")
                 button.setAccessibleDescription(meta[2])
-                button.setIcon(themed_icon(self, meta[1], QStyle.SP_FileDialogDetailedView))
+                fallback_icons = {
+                    "Início": QStyle.SP_DirHomeIcon,
+                    "Visão geral": QStyle.SP_DialogApplyButton,
+                    "Perfis": QStyle.SP_FileDialogListView,
+                    "Steam Deck": QStyle.SP_DriveDVDIcon,
+                    "Windows VM": QStyle.SP_ComputerIcon,
+                    "Waydroid": QStyle.SP_DriveHDIcon,
+                    "Servidor": QStyle.SP_DriveNetIcon,
+                    "Emulação": QStyle.SP_DriveDVDIcon,
+                    "Boot Direto": QStyle.SP_BrowserReload,
+                    "Flatpak": QStyle.SP_DriveHDIcon,
+                    "Ajustes": QStyle.SP_FileDialogDetailedView,
+                    "IA & Dev": QStyle.SP_CommandLink,
+                    "Aplicativos": QStyle.SP_DirIcon,
+                    "Resultados": QStyle.SP_FileDialogInfoView,
+                }
+                button.setIcon(themed_icon(self, meta[1], fallback_icons.get(category, QStyle.SP_FileIcon)))
                 button.clicked.connect(lambda _checked=False, name=category: self.show_category(name))
                 self.sidebar_buttons[category] = button
                 sidebar_layout.addWidget(button)
@@ -208,6 +224,7 @@ class MainWindow(QMainWindow):
         for page in self.registry.pages():
             page.action_requested.connect(self.request_action)
             page.actions_requested.connect(self.request_actions)
+            page.action_selected.connect(self.inspect_action)
         self.stack = QStackedWidget()
         # Add every category page from the registry in sidebar order.
         seen: set[str] = set()
@@ -235,7 +252,13 @@ class MainWindow(QMainWindow):
         sp_layout.addWidget(self.search_scroll)
         self.stack.addWidget(self.search_page)
         self._search_page_idx = self.stack.count() - 1
-        main_layout.addWidget(self.stack, 1)
+        workspace = QHBoxLayout()
+        workspace.setSpacing(14)
+        workspace.addWidget(self.stack, 1)
+        self.inspector = ActionInspector()
+        self.inspector.requested.connect(self.request_action)
+        workspace.addWidget(self.inspector)
+        main_layout.addLayout(workspace, 1)
 
         operation = QFrame()
         operation.setObjectName("operationPanel")
@@ -269,6 +292,7 @@ class MainWindow(QMainWindow):
         # Frameless window: QSizeGrip is the only mouse-resize affordance.
         status_row.addWidget(QSizeGrip(operation), 0, Qt.AlignBottom | Qt.AlignRight)
         operation_layout.addLayout(status_row)
+        self.operation_status_row = status_row
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         self.progress.setMaximumHeight(4)
@@ -286,18 +310,14 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._host_summary)
 
     def _build_global_status_bar(self) -> None:
-        bar = QStatusBar(self)
-        bar.setObjectName("globalStatusBar")
-        bar.setSizeGripEnabled(False)
         self.global_state = QLabel("Pronto")
         self.global_state.setObjectName("globalState")
         self.global_state.setAccessibleName("Estado global")
         self.global_context = QLabel("Nenhuma falha pendente")
         self.global_context.setObjectName("globalContext")
         self.global_context.setAccessibleName("Resumo de falhas")
-        bar.addWidget(self.global_state, 1)
-        bar.addPermanentWidget(self.global_context)
-        self.setStatusBar(bar)
+        self.operation_status_row.insertWidget(3, self.global_state, 1)
+        self.operation_status_row.insertWidget(4, self.global_context)
 
     def _connect_runner(self) -> None:
         self.runner.started.connect(self.operation_started)
@@ -356,6 +376,7 @@ class MainWindow(QMainWindow):
         if self.registry.page_for(category) is None:
             category = DASHBOARD[0]
         self.current_category = category
+        self.inspector.clear_action()
         for name, button in self.sidebar_buttons.items():
             button.setChecked(name == category)
         if self.search.text().strip():
@@ -374,6 +395,10 @@ class MainWindow(QMainWindow):
             if hasattr(page, "reload"):
                 page.reload()
         self.global_state.setText(f"Página: {category}")
+
+    def inspect_action(self, action: ActionSpec) -> None:
+        self.inspector.set_action(action)
+        self.global_state.setText(f"Selecionado: {action.title}")
 
     def on_search(self, text: str) -> None:
         if text.strip():
@@ -397,14 +422,13 @@ class MainWindow(QMainWindow):
             action for action in self.catalog
             if query and query in action.searchable_text
         ]
-        width = self.search_scroll.viewport().width()
-        columns = 3 if width >= 960 else 2 if width >= 620 else 1
+        columns = 1
         for index, action in enumerate(visible):
-            card = ActionCard(action)
-            card.requested.connect(self.request_action)
-            card.setEnabled(not self.runner.running)
-            self._search_cards.append(card)
-            self.search_grid.addWidget(card, index // columns, index % columns)
+            row = ActionListRow(action)
+            row.selected.connect(lambda item, widget=row: self._select_search_action(item, widget))
+            row.setEnabled(not self.runner.running)
+            self._search_cards.append(row)
+            self.search_grid.addWidget(row, index, 0)
         for col in range(columns):
             self.search_grid.setColumnStretch(col, 1)
         if not visible:
@@ -412,6 +436,12 @@ class MainWindow(QMainWindow):
             empty.setObjectName("emptyState")
             self.search_grid.addWidget(empty, 0, 0, 1, columns)
         self.search_grid.setRowStretch((len(visible) + columns - 1) // columns, 1)
+
+    def _select_search_action(self, action: ActionSpec, selected: ActionListRow) -> None:
+        for row in self._search_cards:
+            if isinstance(row, ActionListRow):
+                row.set_selected(row is selected)
+        self.inspect_action(action)
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -466,6 +496,7 @@ class MainWindow(QMainWindow):
         self.progress.setRange(0, 0)
         self.progress.show()
         self.registry.block_all(True)
+        self.inspector.setEnabled(False)
         for card in self._search_cards:
             card.setEnabled(False)
         self.append_output(f"$ {command}\n", False)
@@ -516,6 +547,7 @@ class MainWindow(QMainWindow):
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)
         self.registry.block_all(False)
+        self.inspector.setEnabled(True)
         if not result.ok:
             self._failure_count += 1
         self._update_failure_summary()

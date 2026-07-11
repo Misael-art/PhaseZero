@@ -298,6 +298,7 @@ QPushButton:disabled {
     margin-bottom: {{space_sm}}px;
 }
 #contextStatusText { color: {{text_dim}}; font-weight: 600; }
+#contextStatusHeading { color: {{text}}; font-size: {{text_sm}}px; font-weight: 700; }
 #contextStatusText[state="success"] { color: {{success}}; }
 #contextStatusText[state="warning"] { color: {{warning}}; }
 #contextStatusText[state="error"] { color: {{error}}; }
@@ -313,6 +314,148 @@ QPushButton:disabled {
 #globalState, #globalContext { padding: 2px {{space_sm}}px; }
 #globalContext[state="success"] { color: {{success}}; }
 #globalContext[state="error"] { color: {{error}}; }
+#choiceJourney {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#choiceJourney QRadioButton {
+    color: {{text}};
+    spacing: {{space_md}}px;
+    padding: 0 {{space_sm}}px;
+}
+
+/* ---- Context workspace ---------------------------------------------- */
+#moduleWorkspace { background: transparent; }
+#contextRail {
+    background: {{surface_inset}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#contextRailButton {
+    min-height: 48px;
+    color: {{text_dim}};
+    background: transparent;
+    border: 0;
+    border-left: 3px solid transparent;
+    border-radius: {{radius_sm}}px;
+    padding: 0 {{space_md}}px;
+    text-align: left;
+    font-weight: 600;
+}
+#contextRailButton:hover {
+    color: {{text}};
+    background: {{surface_alt}};
+}
+#contextRailButton:checked {
+    color: {{text}};
+    background: {{surface_selected}};
+    border-left-color: {{accent}};
+}
+#actionListSurface {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#actionListRow {
+    min-height: 62px;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid {{border_divider}};
+}
+#actionListRow:hover { background: {{surface_alt}}; }
+#actionListRow[selected="true"] {
+    background: {{surface_selected}};
+    border-left: 3px solid {{accent}};
+}
+#actionListRow:focus {
+    border: 2px solid {{accent_border}};
+}
+#actionRowIcon {
+    background: {{surface_inset}};
+    border-radius: {{radius_sm}}px;
+}
+#actionRowTitle {
+    color: {{text}};
+    font-size: {{text_base}}px;
+    font-weight: 650;
+}
+#actionRowDescription {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+}
+#riskChip {
+    color: {{warning}};
+    background: {{warning_bg}};
+    border-radius: {{radius_sm}}px;
+    padding: 4px 8px;
+    font-size: {{text_sm}}px;
+    font-weight: 600;
+}
+#riskChip[risk="high"] {
+    color: {{error}};
+    background: {{error_bg}};
+}
+#rowChevron {
+    min-width: 40px;
+    min-height: 40px;
+    background: transparent;
+    border: 0;
+}
+#advancedDisclosure {
+    min-height: 48px;
+    color: {{text}};
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    padding: 0 {{space_md}}px;
+    font-weight: 650;
+}
+#actionInspector {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#moduleFacts {
+    background: {{surface_inset}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#moduleFactValue { color: {{text}}; font-size: {{text_lg}}px; font-weight: 700; }
+#moduleFactLabel { color: {{text_dim}}; font-size: {{text_sm}}px; }
+#inspectorHeading {
+    color: {{text}};
+    font-size: {{text_lg}}px;
+    font-weight: 700;
+}
+#inspectorEmpty, #inspectorDescription, #inspectorValue {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+}
+#inspectorIcon {
+    background: {{surface_selected}};
+    border: 1px solid {{border_strong}};
+    border-radius: {{radius_md}}px;
+}
+#inspectorTitle {
+    color: {{text}};
+    font-size: {{text_lg}}px;
+    font-weight: 700;
+}
+#inspectorSection {
+    color: {{text}};
+    border-top: 1px solid {{border_divider}};
+    padding-top: {{space_md}}px;
+    font-weight: 650;
+}
+#inspectorCommand {
+    color: {{text_log}};
+    background: {{log_bg}};
+    border: 1px solid {{border_divider}};
+    border-radius: {{radius_sm}}px;
+    font-family: {{font_mono}};
+    padding: {{space_sm}}px;
+}
 #warningBanner {
     background: {{warning_bg}};
     border: 1px solid {{warning_border}};
