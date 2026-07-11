@@ -61,7 +61,8 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
             "version",
             "webapp",
             "games",
-    }
+            "ui",
+        }
     for item in catalog:
         assert item.args[0] in valid_commands
         if item.preview_args:
@@ -91,6 +92,20 @@ def test_build_program_never_uses_shell(catalog):
     program, args = build_program(ROOT, action, preview=True)
     assert program == str(ROOT / "linux" / "pz")
     assert args == ["install", "safe-base", "--dry-run"]
+
+
+def test_windows_graphics_actions_are_safe_plans(catalog):
+    actions = {item.id: item for item in catalog if item.id.startswith("windows.graphics.")}
+    assert set(actions) == {
+        "windows.graphics.status",
+        "windows.graphics.plan-gl",
+        "windows.graphics.plan-vfio",
+        "windows.graphics.guest-guide",
+    }
+    assert all(not action.mutable for action in actions.values())
+    assert actions["windows.graphics.status"].args[-1] == "--json"
+    assert actions["windows.graphics.plan-gl"].args[-1] == "virtio-gl"
+    assert actions["windows.graphics.plan-vfio"].args[-1] == "vfio-looking-glass"
 
 
 def test_elevated_program_prefers_phasezero_admin(catalog):

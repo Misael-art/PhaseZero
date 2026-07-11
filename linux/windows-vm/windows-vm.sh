@@ -36,6 +36,7 @@ SESSION_TARGET="/usr/local/lib/phasezero/windows-vm-session"
 DISPLAY_SESSION_TARGET="/usr/local/lib/phasezero/display-session"
 RUNTIME_ROOT="/usr/local/lib/phasezero/windows-vm-runtime"
 RUNTIME_LAUNCHER="$RUNTIME_ROOT/linux/windows-vm/windows-vm.sh"
+RUNTIME_GRAPHICS="$RUNTIME_ROOT/linux/windows-vm/graphics.sh"
 RUNTIME_COMMON="$RUNTIME_ROOT/linux/lib/common.sh"
 ROOT_ENV_FILE="/etc/phasezero/windows-vm.env"
 SERVICE_FILE="/etc/systemd/system/phasezero-windows-vm-boot-prepare.service"
@@ -75,6 +76,9 @@ RAW_QEMU=0
 RAW_DISK_BUS="nvme"
 DISPLAY_MODE="gtk"
 OPTIMIZE_HOST="${PZ_WINDOWS_VM_OPTIMIZE:-1}"
+GRAPHICS_PROFILE=""
+GRAPHICS_EXPERIMENTAL=0
+EXPLICIT_GRAPHICS=0
 
 usage() {
     cat <<EOF
@@ -87,7 +91,12 @@ Usage:
   pz windows-vm plan --iso <windows.iso> [--json]
   pz windows-vm install --iso <windows.iso> [--disk-size 256G] [--ram 8192|8G] [--cpus N] [--dry-run]
   pz windows-vm optimize [--dry-run]
-  pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--dry-run]
+  pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--graphics <profile>] [--experimental] [--dry-run]
+  pz windows-vm graphics status [--json]
+  pz windows-vm graphics plan --profile <auto|compat|virtio-gl|virtio-venus|rutabaga|vfio-looking-glass> [--json]
+  pz windows-vm graphics apply --profile <compat|virtio-gl> [--experimental --yes]
+  pz windows-vm graphics remove
+  pz windows-vm graphics guest-guide [--save]
   pz windows-vm shares (status|install|remove|dry-run)
   pz windows-vm boot status
   pz windows-vm boot install
@@ -131,6 +140,9 @@ parse_options() {
             --domain) LIBVIRT_DOMAIN="${2:-}"; EXPLICIT_DOMAIN=1; shift 2 ;;
             --domain=*) LIBVIRT_DOMAIN="${1#*=}"; EXPLICIT_DOMAIN=1; shift ;;
             --raw-qemu) RAW_QEMU=1; shift ;;
+            --graphics) GRAPHICS_PROFILE="${2:-}"; EXPLICIT_GRAPHICS=1; shift 2 ;;
+            --graphics=*) GRAPHICS_PROFILE="${1#*=}"; EXPLICIT_GRAPHICS=1; shift ;;
+            --experimental) GRAPHICS_EXPERIMENTAL=1; shift ;;
             --headless) DISPLAY_MODE="none"; shift ;;
             --optimize) OPTIMIZE_HOST=1; shift ;;
             --no-optimize) OPTIMIZE_HOST=0; shift ;;
@@ -565,6 +577,8 @@ effective_config() {
     SMB_HOST="${PZ_WINDOWS_VM_SMB_HOST:-$(libvirt_gateway)}"
     PCI_DEVICES="${PCI_DEVICES:-${PZ_WINDOWS_VM_PCI_DEVICES:-}}"
     EXTRA_ARGS="${EXTRA_ARGS:-${PZ_WINDOWS_VM_EXTRA_ARGS:-}}"
+    GRAPHICS_PROFILE="${GRAPHICS_PROFILE:-${PZ_WINDOWS_VM_GRAPHICS_PROFILE:-compat}}"
+    [ "$GRAPHICS_PROFILE" = "auto" ] && GRAPHICS_PROFILE=compat
     OVMF_CODE="${PZ_WINDOWS_VM_OVMF_CODE:-$(ovmf_code_path)}"
     OVMF_VARS="${PZ_WINDOWS_VM_OVMF_VARS:-$VM_DIR/OVMF_VARS.fd}"
     if [ -n "$LIBVIRT_DOMAIN" ]; then
@@ -611,6 +625,7 @@ write_config() {
         printf 'PZ_WINDOWS_VM_EXTRA_ARGS=%q\n' "$EXTRA_ARGS"
         printf 'PZ_WINDOWS_VM_DISK_SOURCE=%q\n' "$DISK_SOURCE"
         printf 'PZ_WINDOWS_VM_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
+        printf 'PZ_WINDOWS_VM_GRAPHICS_PROFILE=%q\n' "${PZ_WINDOWS_VM_GRAPHICS_PROFILE:-compat}"
     } > "$CONFIG_FILE"
     chown_target_user "$CONFIG_DIR" "$CONFIG_FILE"
     pz_info "wrote $CONFIG_FILE"
@@ -1255,7 +1270,11 @@ build_qemu_args() {
     if [ -n "$VIRTIO_ISO" ] && [ -f "$VIRTIO_ISO" ]; then
         QEMU_ARGS+=("-drive" "file=$VIRTIO_ISO,media=cdrom,readonly=on,index=3")
     fi
-    QEMU_ARGS+=("-device" "virtio-vga")
+    if [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
+        QEMU_ARGS+=("-device" "virtio-vga-gl")
+    else
+        QEMU_ARGS+=("-device" "virtio-vga")
+    fi
     QEMU_ARGS+=("-device" "virtio-rng-pci")
     QEMU_ARGS+=("-device" "virtio-balloon-pci")
     add_usb_redirection
@@ -1278,6 +1297,9 @@ build_qemu_args() {
     QEMU_ARGS+=("-device" "virtserialport,chardev=vdagent,name=com.redhat.spice.0")
     if [ "$DISPLAY_MODE" = "none" ]; then
         QEMU_ARGS+=("-display" "none")
+    elif [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
+        QEMU_ARGS+=("-display" "gtk,gl=on,show-cursor=on")
+        [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
     else
         QEMU_ARGS+=("-display" "gtk,show-cursor=on")
         [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
@@ -1406,10 +1428,84 @@ optimize_libvirt_domain() {
     pz_info "libvirt domain tuned: $LIBVIRT_DOMAIN ram=${RAM_MB}M cpus=$CPUS usbredir=$redir_count"
 }
 
+# v1 graphics contract: compat is the only profile allowed everywhere.
+# virtio-gl is raw-QEMU-only and experimental; venus/rutabaga/VFIO are
+# plan-only (see linux/windows-vm/graphics.sh). Never mutates a domain.
+guard_graphics_profile() {
+    case "$GRAPHICS_PROFILE" in
+        compat|"")
+            GRAPHICS_PROFILE=compat
+            return 0
+            ;;
+        virtio-gl)
+            if [ -n "$LIBVIRT_DOMAIN" ] && [ "$RAW_QEMU" != "1" ]; then
+                if [ "$EXPLICIT_GRAPHICS" != "1" ]; then
+                    pz_warn "perfil configurado virtio-gl requer QEMU direto; dominio libvirt $LIBVIRT_DOMAIN usara compat QXL/SPICE"
+                    GRAPHICS_PROFILE=compat
+                    return 0
+                fi
+                pz_error "graphics virtio-gl exige --raw-qemu na v1; dominio libvirt permanece QXL/SPICE"
+                return 1
+            fi
+            if [ "$EXPLICIT_GRAPHICS" = "1" ] && [ "$GRAPHICS_EXPERIMENTAL" != "1" ]; then
+                pz_error "graphics virtio-gl e experimental; adicione --experimental"
+                return 1
+            fi
+            local blockers=()
+            local gfx_kvm_path="${PZ_GFX_KVM_PATH:-/dev/kvm}"
+            local gfx_dri_dir="${PZ_GFX_DRI_DIR:-/dev/dri}"
+            local gfx_qemu_bin="${PZ_GFX_QEMU_BIN:-qemu-system-x86_64}"
+            local -a render_nodes=("$gfx_dri_dir"/renderD*)
+            [ -r "$gfx_kvm_path" ] && [ -w "$gfx_kvm_path" ] || blockers+=("KVM sem acesso read/write: $gfx_kvm_path")
+            if [ ! -e "${render_nodes[0]}" ]; then
+                blockers+=("render node ausente em $gfx_dri_dir")
+            elif [ ! -r "${render_nodes[0]}" ] || [ ! -w "${render_nodes[0]}" ]; then
+                blockers+=("render node sem acesso read/write: ${render_nodes[0]}")
+            fi
+            if ! command -v "$gfx_qemu_bin" >/dev/null 2>&1; then
+                blockers+=("QEMU ausente: $gfx_qemu_bin")
+            elif ! "$gfx_qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl'; then
+                blockers+=("QEMU sem device virtio-vga-gl")
+            elif ! "$gfx_qemu_bin" -display help 2>/dev/null | grep -qw gtk; then
+                blockers+=("QEMU sem display GTK necessario para gtk,gl=on")
+            fi
+            if [ "${#blockers[@]}" -gt 0 ]; then
+                local blocker
+                if [ "$DRY_RUN" = "1" ]; then
+                    for blocker in "${blockers[@]}"; do
+                        pz_warn "virtio-gl blocker (dry-run continua): $blocker"
+                    done
+                else
+                    pz_error "graphics virtio-gl bloqueado neste host:"
+                    for blocker in "${blockers[@]}"; do
+                        pz_error "  - $blocker"
+                    done
+                    pz_error "fallback: linux/pz windows-vm launch --graphics compat"
+                    return 1
+                fi
+            fi
+            return 0
+            ;;
+        virtio-venus|rutabaga)
+            pz_error "graphics $GRAPHICS_PROFILE bloqueado para Windows na v1 (driver guest nao validado). Veja: linux/pz windows-vm graphics plan --profile $GRAPHICS_PROFILE"
+            return 1
+            ;;
+        vfio-looking-glass)
+            pz_error "graphics vfio-looking-glass e plan-only na v1 (sem bind VFIO nem GRUB). Veja: linux/pz windows-vm graphics plan --profile vfio-looking-glass"
+            return 1
+            ;;
+        *)
+            pz_error "unknown graphics profile: $GRAPHICS_PROFILE (auto|compat|virtio-gl|virtio-venus|rutabaga|vfio-looking-glass)"
+            return 1
+            ;;
+    esac
+}
+
 launch_vm() {
     parse_options "$@"
     [ "${PZ_WINDOWS_VM_FULLSCREEN:-0}" = "1" ] && FULLSCREEN=1
     effective_config
+    guard_graphics_profile || return 1
     trap cleanup_runtime EXIT INT TERM
     apply_host_optimizations
     if [ -n "$LIBVIRT_DOMAIN" ] && [ "$RAW_QEMU" != "1" ]; then
@@ -1490,6 +1586,7 @@ status_json() {
         --arg ramMb "$RAM_MB" \
         --arg cpus "$CPUS" \
         --arg usbMode "$USB_MODE" \
+        --arg graphicsProfile "$GRAPHICS_PROFILE" \
         --arg usbAutoFilter "$USB_AUTO_FILTER" \
         --arg usbUdevManaged "$usb_udev_managed" \
         --arg usbRedirChannels "$(libvirt_usb_redir_count)" \
@@ -1526,7 +1623,7 @@ status_json() {
         --argjson discovery "$discovery" \
         '{
             config: {path: $configFile, installed: ($configInstalled == "yes")},
-            vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode},
+            vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode, graphicsProfile: $graphicsProfile},
             libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != "")},
             host: {kvm: ($kvm == "yes"), qemu: $qemu, qemuImg: $qemuImg, ovmfCode: $ovmfCode, ovmfCodeExists: ($ovmfCodeExists == "yes"), ovmfVars: $ovmfVars, ovmfVarsExists: ($ovmfVarsExists == "yes"), virtiofsd: $virtiofsd, smbd: $smbd, swtpm: $swtpm},
             access: {
@@ -1721,6 +1818,7 @@ boot_artifacts_current() {
         [ -x "$SESSION_TARGET" ] &&
         [ -r "$DISPLAY_SESSION_TARGET" ] &&
         [ -x "$RUNTIME_LAUNCHER" ] &&
+        [ -x "$RUNTIME_GRAPHICS" ] &&
         [ -r "$RUNTIME_COMMON" ] &&
         [ -f "$SERVICE_FILE" ] &&
         [ -f "$WAYLAND_SESSION_FILE" ] &&
@@ -1731,6 +1829,7 @@ boot_artifacts_current() {
     cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
     cmp -s "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET" || return 1
     cmp -s "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER" || return 1
+    cmp -s "$PZ_ROOT/linux/windows-vm/graphics.sh" "$RUNTIME_GRAPHICS" || return 1
     cmp -s "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON" || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_REPO)" = "$PZ_ROOT" ] || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_BOOT_USER)" = "$TARGET_USER" ] || return 1
@@ -1820,6 +1919,7 @@ install_boot() {
     install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
     install -m 0644 "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET"
     install -m 0755 "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER"
+    install -m 0755 "$PZ_ROOT/linux/windows-vm/graphics.sh" "$RUNTIME_GRAPHICS"
     install -m 0644 "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON"
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
@@ -1928,6 +2028,7 @@ status_boot() {
     [ -x "$BOOT_HELPER_TARGET" ] && echo "helper_installed: yes" || echo "helper_installed: no"
     [ -x "$SESSION_TARGET" ] && echo "session_launcher_installed: yes" || echo "session_launcher_installed: no"
     [ -x "$RUNTIME_LAUNCHER" ] && echo "runtime_launcher_installed: yes" || echo "runtime_launcher_installed: no"
+    [ -x "$RUNTIME_GRAPHICS" ] && echo "runtime_graphics_installed: yes" || echo "runtime_graphics_installed: no"
     [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
     systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || true
     [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
@@ -1952,6 +2053,7 @@ dry_run_boot() {
     echo "  helper: $BOOT_HELPER_TARGET"
     echo "  session_launcher: $SESSION_TARGET"
     echo "  runtime_launcher: $RUNTIME_LAUNCHER"
+    echo "  runtime_graphics: $RUNTIME_GRAPHICS"
     echo "  service: $SERVICE_FILE"
     echo "  grub: $GRUB_SCRIPT"
     echo "  target_user: $TARGET_USER"
@@ -1991,8 +2093,9 @@ case "$ACTION" in
     optimize|tune) cmd_optimize "$@" ;;
     shares|access) cmd_shares "$@" ;;
     host-access|guest-disk|browse-guest) bash "$PZ_ROOT/linux/windows-vm/host-access.sh" "$@" ;;
+    graphics|gpu) bash "$PZ_ROOT/linux/windows-vm/graphics.sh" "$@" ;;
     launch|start|run) launch_vm "$@" ;;
     boot) cmd_boot "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|launch|boot)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|launch|boot)"; exit 1 ;;
 esac

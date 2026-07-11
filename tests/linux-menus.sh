@@ -35,19 +35,31 @@ grep -Fxq 'Exec=xdg-open https://web.whatsapp.com' "$XDG_DATA_HOME/applications/
 "$REPO_ROOT/linux/ui/webapp.sh" install slack
 test -s "$XDG_DATA_HOME/icons/hicolor/256x256/apps/phz-slack.png"
 "$REPO_ROOT/linux/ui/webapp.sh" menu
-python3 - "$XDG_CONFIG_HOME/menus/applications-merged/phz-webapps.menu" <<'PY'
+python3 - "$XDG_CONFIG_HOME/menus/applications-merged/phasezero.menu" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
-ET.parse(sys.argv[1])
+root = ET.parse(sys.argv[1]).getroot()
+assert root.findtext("Name") == "Applications"
+assert any(menu.findtext("Name") == "PhaseZero" for menu in root.findall("Menu"))
 PY
 
 "$REPO_ROOT/linux/ui/games.sh" install steam
 grep -Fxq 'Exec=steam %f' "$XDG_DATA_HOME/applications/phz-game-steam.desktop"
 "$REPO_ROOT/linux/ui/games.sh" menu
-python3 - "$XDG_CONFIG_HOME/menus/applications-merged/phz-games.menu" <<'PY'
+python3 - "$XDG_CONFIG_HOME/menus/applications-merged/phasezero.menu" <<'PY'
 import sys
 import xml.etree.ElementTree as ET
-ET.parse(sys.argv[1])
+root = ET.parse(sys.argv[1]).getroot()
+files = [node.text for node in root.findall(".//Filename")]
+assert "phz-whatsapp.desktop" in files
+assert "phz-game-steam.desktop" in files
 PY
+
+test ! -e "$XDG_CONFIG_HOME/menus/applications-merged/phz-games.menu"
+test ! -e "$XDG_CONFIG_HOME/menus/applications-merged/phz-webapps.menu"
+menu_status="$($REPO_ROOT/linux/pz ui menu scan --json)"
+jq -e '.schema == "pz.desktop-menu/v1" and .readOnly == true and .summary.managedVisible == 3' <<< "$menu_status" >/dev/null
+
+"$REPO_ROOT/linux/pz" ui menu rollback --json | jq -e '.status == "ok"' >/dev/null
 
 echo "linux menu tests passed"

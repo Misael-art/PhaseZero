@@ -241,6 +241,23 @@ def main(argv: list[str] | None = None) -> int:
         if fmt_key in ARCHIVE_FORMATS or (
             fmt_key == "zip" and plat not in detect.CARTRIDGE_SYSTEMS
         ):
+            # A ZIP around an installable system is a package, not a
+            # compression job. Route it to the library planner instead of
+            # failing a recognized, compatible artifact as "unsupported".
+            if fmt_key in ("zip", "vpk") and plat == detect.P_VITA:
+                message = (
+                    "pacote instalável; use 'pz emulation library scan' "
+                    "para instalar no Vita3K"
+                )
+                print(f"  ✓ {message}")
+                results.append({
+                    "rom": str(rom),
+                    "status": "install_candidate",
+                    "platform": plat,
+                    "format": fmt_key,
+                    "hint": message,
+                })
+                continue
             message = f"archive input {fmt_key} is unsupported; source preserved"
             print(f"  ✗ {message}")
             results.append(_result_failure(rom, "unsupported_archive", message))
@@ -508,11 +525,17 @@ def main(argv: list[str] | None = None) -> int:
                 pass
 
     ok_count = sum(result["status"] == "ok" for result in results)
-    skip_count = sum(result["status"] in ("skip", "exists") for result in results)
+    skip_count = sum(
+        result["status"] in ("skip", "exists", "install_candidate")
+        for result in results
+    )
     preview_count = sum(
         result["status"] in ("would_convert", "would_rename") for result in results
     )
-    success_statuses = {"ok", "skip", "exists", "would_convert", "would_rename", "renamed"}
+    success_statuses = {
+        "ok", "skip", "exists", "would_convert", "would_rename", "renamed",
+        "install_candidate",
+    }
     fail_count = sum(result["status"] not in success_statuses for result in results)
     print(f"\n{'=' * 60}")
     print(

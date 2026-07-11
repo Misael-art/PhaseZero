@@ -244,66 +244,8 @@ EOF
 }
 
 cmd_menu() {
-    ensure_dirs
-
-    # Root directory
-    write_directory "Web Apps" "phz-webapps.directory" "applications-internet"
-
-    # Subgroup directories
-    write_directory "Comunicação"  "phz-communication.directory" "applications-internet"
-    write_directory "Mídia"        "phz-media.directory"        "applications-multimedia"
-    write_directory "IA"           "phz-ai.directory"           "applications-science"
-    write_directory "Nuvem & Docs" "phz-cloud.directory"        "folder-remote"
-    write_directory "Produtividade" "phz-productivity.directory" "office-applications"
-
-    # Build .menu XML with submenus
-    local menu_file="$MENUS_DIR/phz-webapps.menu"
-    mkdir -p "$(dirname "$menu_file")"
-
-    cat > "$menu_file" <<'MENUEOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"
- "http://www.freedesktop.org/standards/menu-spec/1.0/menu.dtd">
-<Menu>
-  <Name>Web Apps</Name>
-  <Directory>phz-webapps.directory</Directory>
-  <Include>
-    <Category>X-PhaseZero-WebApp</Category>
-  </Include>
-MENUEOF
-
-    for sub in "Comunicação" "Mídia" "IA" "Nuvem & Docs" "Produtividade"; do
-        local sub_dir sub_xml="$sub"
-        case "$sub" in
-            "Comunicação")  sub_dir="phz-communication.directory" ;;
-            "Mídia")        sub_dir="phz-media.directory" ;;
-            "IA")           sub_dir="phz-ai.directory" ;;
-            "Nuvem & Docs") sub_dir="phz-cloud.directory" ;;
-            "Produtividade") sub_dir="phz-productivity.directory" ;;
-        esac
-        [ "$sub" = "Nuvem & Docs" ] && sub_xml="Nuvem &amp; Docs"
-
-        cat >> "$menu_file" <<SUBEOF
-  <Menu>
-    <Name>$sub_xml</Name>
-    <Directory>$sub_dir</Directory>
-    <Include>
-SUBEOF
-        for entry in "${WEBAPPS[@]}"; do
-            IFS='|' read -r slug _ _ group _ <<< "$entry"
-            if [ "$group" = "$sub" ]; then
-                echo "      <Filename>phz-$slug.desktop</Filename>" >> "$menu_file"
-            fi
-        done
-        cat >> "$menu_file" <<SUBEOF
-    </Include>
-  </Menu>
-SUBEOF
-    done
-
-    echo "</Menu>" >> "$menu_file"
-    chmod 0644 "$menu_file"
-    echo "Generated $menu_file"
+    PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 "$PZ_ROOT/linux/ui/menu.py" apply
 }
 
 main() {

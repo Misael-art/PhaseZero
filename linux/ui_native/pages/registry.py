@@ -60,7 +60,7 @@ class PageRegistry:
         }
         for category, page_cls in self._CATEGORY_PAGES.items():
             actions = [a for a in self.catalog if a.category == category]
-            if category in workspace_categories:
+            if category in workspace_categories and category != "Emulação":
                 page_cls = CatalogWorkspacePage
             page = page_cls(self.root, self.runner, actions, by_id=self.by_id)
             page.build()

@@ -624,6 +624,36 @@ QTabBar::tab:hover:!selected {
     background: transparent;
 }
 
+/* Emulation task journeys and unified game library. */
+#journeyCard, #libraryOrigin, #libraryStepper {
+    background: {{surface}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_lg}}px;
+}
+#journeyCard:hover {
+    border-color: {{accent_border}};
+    background: {{surface_alt}};
+}
+#libraryStep {
+    color: {{text_dim}};
+    background: transparent;
+    border-radius: {{radius_md}}px;
+    padding: {{space_sm}}px;
+    font-weight: 650;
+}
+#libraryStep[state="active"] {
+    color: {{text_strong}};
+    background: {{surface_selected}};
+    border: 1px solid {{accent_border}};
+}
+#libraryStep[state="complete"] {
+    color: {{success}};
+    background: {{success_bg}};
+}
+#librarySourcePath, #libraryFilesPath {
+    min-height: 38px;
+}
+
 /* QTableView / QTableWidget (historyTable): results history grid. */
 #historyTable {
     color: {{text}};

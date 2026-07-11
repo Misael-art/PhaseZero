@@ -1,4 +1,34 @@
-# Menu Reorganization Plan
+# Menu PhaseZero unificado
+
+> Implementação atual: `linux/ui/menu.py`. Os scripts de jogos e web apps
+> materializam uma única raiz reversível; esta seção substitui o plano legado
+> de duas raízes descrito abaixo.
+
+```text
+PhaseZero
+├── Central de Controle
+├── Jogos e emulação
+│   ├── Biblioteca e favoritos
+│   ├── Frontends
+│   ├── Emuladores
+│   └── Ferramentas
+├── Apps web
+│   ├── Comunicação
+│   ├── Mídia
+│   ├── IA
+│   ├── Nuvem e documentos
+│   └── Produtividade
+└── Sistema e sessões
+    ├── Steam Deck
+    ├── Boot e recuperação
+    └── Máquinas e Android
+```
+
+Comandos: `pz ui menu scan|plan|apply|rollback`. Scan/plan são somente leitura.
+Apply usa escrita atômica e ledger privado `0600`. Jogos individuais permanecem
+ocultos, salvo `X-PhaseZero-Favorite=true` ou `X-PHZ-ShowInMenu=true`.
+
+## Histórico: estrutura anterior
 
 ## 1. XDG Menu Structure
 

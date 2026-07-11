@@ -257,6 +257,7 @@ class MainWindow(QMainWindow):
         workspace.addWidget(self.stack, 1)
         self.inspector = ActionInspector()
         self.inspector.requested.connect(self.request_action)
+        self.inspector.hide()
         workspace.addWidget(self.inspector)
         main_layout.addLayout(workspace, 1)
 
@@ -377,6 +378,7 @@ class MainWindow(QMainWindow):
             category = DASHBOARD[0]
         self.current_category = category
         self.inspector.clear_action()
+        self.inspector.hide()
         for name, button in self.sidebar_buttons.items():
             button.setChecked(name == category)
         if self.search.text().strip():
@@ -398,6 +400,7 @@ class MainWindow(QMainWindow):
 
     def inspect_action(self, action: ActionSpec) -> None:
         self.inspector.set_action(action)
+        self.inspector.show()
         self.global_state.setText(f"Selecionado: {action.title}")
 
     def on_search(self, text: str) -> None:

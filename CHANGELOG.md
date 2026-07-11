@@ -3,6 +3,37 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.6.0] - 2026-07-11
+
+Foco: biblioteca de jogos orientada por tarefas, instalação Vita3K resiliente e
+menu do desktop consolidado.
+
+### Adicionado
+- **Biblioteca unificada**: workflow nativo em cinco etapas — origem, análise,
+  plano, execução e validação — aceita biblioteca completa, pasta ou múltiplos
+  arquivos, com filtros, detalhes contextuais, cancelamento e rollback.
+- **Adapter PlayStation Vita**: identifica ZIP/VPK NoNpDrm pelo conteúdo e SFO,
+  bloqueia dumps incompatíveis, instala atomicamente em Vita3K, preserva origem
+  e verifica hashes. `PCSE01224.zip` foi instalado e validado no host real.
+- **Menu PhaseZero único**: consolida jogos/emuladores, web apps e sessões sob
+  uma raiz KDE; deduplica por comando, oculta jogos individuais não favoritos e
+  mantém ledger privado reversível.
+- **Diagnóstico gráfico Windows VM**: perfis compat/virtio-gl e planos seguros
+  para Venus, rutabaga e VFIO/Looking Glass, sem alterar GRUB ou bind VFIO.
+
+### Corrigido
+- **UI em 1280×800**: inspetor de contexto fica oculto até uma seleção; quatro
+  jornadas substituem a pilha de 71 ações da página principal de Emulação.
+- **ROM Vita em ZIP**: `rom-optimize` deixa de falhar como arquivo não suportado
+  e encaminha pacote instalável ao planner da biblioteca.
+- **Menu iniciar duplicado**: raízes legadas Jogos/Web Apps são removidas com
+  backup e launchers gerenciados deixam categorias globais.
+
+### Validação
+- 133 testes Python, suítes nativas/emulação/menu/Windows VM e smoke offscreen.
+- Instalação real Vita3K: 392 arquivos verificados, fonte SHA-256 preservada.
+- Menu KDE: 76 entradas únicas, 103 jogos/auxiliares ocultos e aplicação idempotente.
+
 ## [1.5.1] - 2026-07-11
 
 ### Corrigido

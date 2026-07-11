@@ -36,7 +36,8 @@ Usage:
   pz windows-vm plan --iso PATH Preview Windows VM plan
   pz windows-vm install --iso PATH Create disk/config/launchers
   pz windows-vm optimize      Apply temporary Linux host tuning for QEMU
-  pz windows-vm launch        Launch configured Windows VM
+  pz windows-vm launch        Launch configured Windows VM [--graphics <profile>]
+  pz windows-vm graphics <a>  GPU diagnostics + graphics profiles (status|plan|apply|remove|guest-guide)
   pz windows-vm host-access <a> Host->guest: mount VM disk (mount [--rw]|unmount|status)
   pz windows-vm boot status   Manage direct GRUB Windows VM boot entry
   pz waydroid status          Print Waydroid Android container status JSON
@@ -89,6 +90,11 @@ Usage:
   pz emulation ps3 import-rap <path> Import user-owned PS3 RAP license
   pz emulation performance status Adaptive Switch/PS3/PS4 performance status
   pz emulation rom-optimize <dir> Optimize ROM formats per-platform (CHD/RVZ/CSO/NSZ/ZIP)
+  pz emulation library scan    Scan game library (read-only; --scope library|directory|files)
+  pz emulation library plan    Build plan from a scan (--scan-id ID)
+  pz emulation library apply   Apply a plan (--plan-id ID --confirm TOKEN [--dry-run])
+  pz emulation library verify  Verify an applied operation (--operation-id ID)
+  pz emulation library rollback Roll back an applied operation (--operation-id ID)
   pz emulation dualscreen apply <emu> Route dual-screen to Deck+TV (Desktop Mode, KWin)
   pz emulation performance apply Install adaptive profiles and launcher
   pz emulation performance prepare-lsfg Install verified LSFG Vulkan layer
@@ -299,6 +305,11 @@ cmd_emulation() {
         rom-optimize|romopt|rom-optimizer)
             PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m linux.emulation.romopt.__main__ \
                 --rom-dir "${target:-$PZ_EMULATION_ROOT/roms}" "${extra[@]}" ;;
+        library|lib)
+            local library_args=()
+            [ -n "$target" ] && library_args+=("$target")
+            PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m linux.emulation.library \
+                "${library_args[@]}" "${extra[@]}" ;;
         dualscreen|dual-screen)
             bash "$PZ_ROOT/linux/emulation/dualscreen.sh" "${target:-status}" "${extra[@]}" ;;
         lua)          bash "$PZ_ROOT/linux/emulation/lua.sh" "${target:-status}" "${extra[@]}" ;;
@@ -548,6 +559,10 @@ cmd_ui() {
                 echo "UI server not running"
             fi
             ;;
+        menu)
+            PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+                python3 "$PZ_ROOT/linux/ui/menu.py" "${2:-scan}" "${@:3}"
+            ;;
         web|open)
             # start server in background and open browser
             local log_file="$PZ_STATE/ui-server.log"
@@ -587,7 +602,7 @@ cmd_ui() {
             echo "Dashboard: http://127.0.0.1:$web_port (pid $pid)"
             ;;
         *)
-            pz_error "usage: pz ui (native|web|server|tui|status)"
+            pz_error "usage: pz ui (native|web|server|tui|status|menu <scan|plan|apply|rollback>)"
             return 1
             ;;
     esac

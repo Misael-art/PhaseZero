@@ -204,6 +204,10 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.adopt", "Windows VM", "Adotar disco Windows", "Integra instalação existente.", ("windows-vm", "adopt", "--disk", "{input}"), "drive-harddisk", mutable=True, preview=("windows-vm", "discover", "--json"), input_label="Selecione disco qcow2/raw", input_kind="file"),
             _a("windows.optimize", "Windows VM", "Otimizar host", "Ajustes temporários para QEMU.", ("windows-vm", "optimize"), "preferences-system-performance", mutable=True, preview=("windows-vm", "status")),
             _a("windows.launch", "Windows VM", "Abrir Windows", "Inicia VM configurada em tela cheia.", ("windows-vm", "launch", "--fullscreen"), "media-playback-start", mutable=True, preview=("windows-vm", "status")),
+            _a("windows.graphics.status", "Windows VM", "GPU status", "GPU, render nodes, IOMMU e perfis gráficos elegíveis.", ("windows-vm", "graphics", "status", "--json"), "video-display", badge="JSON"),
+            _a("windows.graphics.plan-gl", "Windows VM", "Plano VirtIO GL", "Plano de aceleração VirtIO GL (experimental, raw QEMU).", ("windows-vm", "graphics", "plan", "--profile", "virtio-gl"), "video-display", badge="Seguro"),
+            _a("windows.graphics.plan-vfio", "Windows VM", "Plano VFIO", "Plano GPU passthrough + Looking Glass (somente plano na v1).", ("windows-vm", "graphics", "plan", "--profile", "vfio-looking-glass"), "video-display", badge="Seguro"),
+            _a("windows.graphics.guest-guide", "Windows VM", "Guia guest", "Checklist de drivers gráficos no Windows guest.", ("windows-vm", "graphics", "guest-guide"), "help-contents"),
             _a("windows.boot.install", "Windows VM", "Instalar boot direto", "Entrada GRUB para Windows VM.", ("windows-vm", "boot", "install"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
             _a("windows.boot.next", "Windows VM", "Próximo boot Windows", "Agenda uma sessão Windows VM.", ("windows-vm", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
         ]
@@ -310,6 +314,49 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         )
     actions.extend(
         [
+            _a(
+                "emulation.library.scan", "Emulação", "Analisar biblioteca",
+                "Varredura somente leitura da biblioteca canônica.",
+                ("emulation", "library", "scan", "--scope", "library", "--json"),
+                "system-search", badge="Somente leitura", group="Biblioteca de jogos",
+                result_view="table",
+            ),
+            _a(
+                "emulation.library.plan", "Emulação", "Criar plano da biblioteca",
+                "Gera plano seguro a partir de uma análise salva.",
+                ("emulation", "library", "plan", "--scan-id", "{scan_id}", "--json"),
+                "document-preview", group="Biblioteca de jogos",
+                parameters=(_p("scan_id", "ID da análise", placeholder="scan-…"),),
+                result_view="table",
+            ),
+            _a(
+                "emulation.library.apply", "Emulação", "Aplicar plano da biblioteca",
+                "Executa ações verificadas com staging; preserva originais.",
+                ("emulation", "library", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}", "--json"),
+                "media-playback-start", mutable=True,
+                preview=("emulation", "library", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}", "--dry-run", "--json"),
+                badge="Reversível", group="Biblioteca de jogos",
+                parameters=(
+                    _p("plan_id", "ID do plano", placeholder="plan-…"),
+                    _p("confirm", "Token de confirmação", placeholder="Gerado pelo plano"),
+                ),
+            ),
+            _a(
+                "emulation.library.verify", "Emulação", "Validar instalação",
+                "Confere hashes e estrutura após execução.",
+                ("emulation", "library", "verify", "--operation-id", "{operation_id}", "--json"),
+                "task-complete", group="Biblioteca de jogos",
+                parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),),
+            ),
+            _a(
+                "emulation.library.rollback", "Emulação", "Reverter instalação",
+                "Remove somente destinos criados pela operação; preserva origens.",
+                ("emulation", "library", "rollback", "--operation-id", "{operation_id}", "--json"),
+                "edit-undo", mutable=True,
+                preview=("emulation", "library", "verify", "--operation-id", "{operation_id}", "--json"),
+                badge="Reversível", group="Biblioteca de jogos", visibility="advanced",
+                parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),),
+            ),
             _a("emulation.bios", "Emulação", "Importar BIOS", "Importa BIOS obtida legalmente.", ("emulation", "bios", "import", "{input}"), "folder-open", mutable=True, preview=("emulation", "bios", "status"), input_label="Selecione pasta/arquivo BIOS", input_kind="path", badge="Arquivo local"),
             _a("emulation.keys", "Emulação", "Importar Switch keys", "Importa keys próprias.", ("emulation", "switch", "import-keys", "{input}"), "dialog-password", mutable=True, preview=("emulation", "status"), input_label="Selecione prod.keys", input_kind="file", badge="Arquivo local"),
             _a("emulation.firmware", "Emulação", "Importar firmware", "Importa firmware próprio.", ("emulation", "switch", "import-firmware", "{input}"), "folder-open", mutable=True, preview=("emulation", "status"), input_label="Selecione firmware", input_kind="path", badge="Arquivo local"),
@@ -500,6 +547,10 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("ai.proxies.install-one", "IA & Dev", "Instalar proxy específico", "Instala ou atualiza um proxy da suite.", ("ai", "proxies", "install", "{proxy}"), "network-server", mutable=True, preview=("ai", "proxies", "status"), parameters=(_p("proxy", "Proxy", "choice", choices=("all", "kimiproxy", "qwenproxy", "deepsproxy")),), visibility="advanced"),
 
             _a("desktop.webapps.status", "Aplicativos", "Status web apps", "Lista launchers web instalados.", ("webapp", "status"), "applications-internet", visibility="standard"),
+            _a("desktop.menu.scan", "Aplicativos", "Analisar menu PhaseZero", "Inventaria launchers, duplicatas e raízes legadas sem alterar o desktop.", ("ui", "menu", "scan", "--json"), "system-search", group="Menu PhaseZero", result_view="table", visibility="primary"),
+            _a("desktop.menu.plan", "Aplicativos", "Prévia da organização", "Mostra a árvore única PhaseZero e entradas que serão consolidadas.", ("ui", "menu", "plan", "--json"), "document-preview", group="Menu PhaseZero", result_view="table", visibility="primary"),
+            _a("desktop.menu.apply", "Aplicativos", "Organizar menu PhaseZero", "Cria uma raiz PhaseZero, consolida submenus e registra rollback.", ("ui", "menu", "apply", "--json"), "view-list-tree", mutable=True, preview=("ui", "menu", "plan", "--json"), badge="Reversível", group="Menu PhaseZero", visibility="primary"),
+            _a("desktop.menu.rollback", "Aplicativos", "Restaurar menu anterior", "Restaura menus e diretórios do último ledger privado.", ("ui", "menu", "rollback", "--json"), "edit-undo", mutable=True, preview=("ui", "menu", "scan", "--json"), badge="Reversível", group="Menu PhaseZero", visibility="advanced"),
             _a("desktop.webapps.install", "Aplicativos", "Instalar web app", "Cria launcher isolado para serviço web.", ("webapp", "install", "{slug}"), "applications-internet", mutable=True, preview=("webapp", "status"), parameters=(_p("slug", "Identificador do web app"),), visibility="standard"),
             _a("desktop.webapps.all", "Aplicativos", "Instalar todos web apps", "Instala catálogo completo de launchers.", ("webapp", "install-all"), "applications-internet", mutable=True, preview=("webapp", "status"), visibility="advanced"),
             _a("desktop.games.status", "Aplicativos", "Status menu de jogos", "Lista jogos e emuladores detectados.", ("games", "status"), "applications-games", visibility="standard"),

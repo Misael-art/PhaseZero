@@ -43,6 +43,20 @@ class WindowsVMPage(BasePage):
                 install_layout.addWidget(self._action_row(action))
         layout.addWidget(install_box)
 
+        # Graphics acceleration (diagnostics + safe plans, v1)
+        graphics_box = QGroupBox("Gráficos e aceleração")
+        graphics_layout = QVBoxLayout(graphics_box)
+        for aid in (
+            "windows.graphics.status",
+            "windows.graphics.plan-gl",
+            "windows.graphics.plan-vfio",
+            "windows.graphics.guest-guide",
+        ):
+            action = self.find(aid)
+            if action:
+                graphics_layout.addWidget(self._action_row(action))
+        layout.addWidget(graphics_box)
+
         # Host access + Boot
         system_box = QGroupBox("Sistema")
         system_layout = QVBoxLayout(system_box)
