@@ -38,7 +38,7 @@ install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_data
 %{_datadir}/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg
 
 %changelog
-* Fri Jul 11 2026 PhaseZero <noreply@phasezero.local> - 1.5.0-1
+* Sat Jul 11 2026 PhaseZero <noreply@phasezero.local> - 1.5.0-1
 - Context inspector workspace and complete native UI information architecture.
 
 * Thu Jul 09 2026 PhaseZero <noreply@phasezero.local> - 1.4.1-1
