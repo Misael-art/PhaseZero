@@ -22,15 +22,20 @@ bash "$HERE/deb/build-deb.sh" "$OUT"
 bash "$HERE/rpm/build-rpm.sh" "$OUT"
 bash "$HERE/arch/build-arch.sh" "$OUT"
 bash "$HERE/appimage/build-appimage.sh" "$OUT"
-bash "$HERE/flatpak/build-flatpak.sh" "$OUT"
+# Flatpak needs org.kde.Platform//6.11 and a privileged flatpak-builder sandbox,
+# which CI runners build in a dedicated job. Set PZ_SKIP_FLATPAK=1 to skip it
+# here without failing the artifact verification below.
+if [ "${PZ_SKIP_FLATPAK:-0}" != "1" ]; then
+    bash "$HERE/flatpak/build-flatpak.sh" "$OUT"
+fi
 
 artifacts=(
     "$OUT/phasezero-control-center_${VERSION}_all.deb"
     "$OUT/phasezero-control-center-${VERSION}-1.noarch.rpm"
     "$OUT/PhaseZero-${VERSION}-x86_64.AppImage"
-    "$OUT/PhaseZero-${VERSION}.flatpak"
     "$OUT/PhaseZero-${VERSION}-source.tar.gz"
 )
+[ "${PZ_SKIP_FLATPAK:-0}" = "1" ] || artifacts+=("$OUT/PhaseZero-${VERSION}.flatpak")
 while IFS= read -r package; do
     artifacts+=("$package")
 done < <(find "$OUT" -maxdepth 1 -type f -name "phasezero-control-center-${VERSION}-1-any.pkg.tar*" -print)
