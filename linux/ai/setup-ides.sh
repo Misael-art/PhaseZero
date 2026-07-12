@@ -65,6 +65,7 @@ install_extensions_for() {
 
 install_extensions() {
     install_extensions_for code
+    install_extensions_for code-oss
     install_extensions_for codium
     install_extensions_for cursor
     install_extensions_for windsurf

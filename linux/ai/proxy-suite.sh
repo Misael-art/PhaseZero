@@ -300,6 +300,9 @@ OPENCODE_JSON="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
 ZCODE_STORE="${XDG_CONFIG_HOME:-$HOME/.config}/ai.z.zcode/store.json"
 PROXY_ENV_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/ai-proxies"
 IDE_ENV_DEFAULTS="$PROXY_ENV_DIR/ide-defaults.env"
+CONTINUE_CONFIG="${PZ_CONTINUE_CONFIG:-$HOME/.continue/config.json}"
+CONTINUE_GLOBAL_CONTEXT="${PZ_CONTINUE_GLOBAL_CONTEXT:-$HOME/.continue/index/globalContext.json}"
+CONTINUE_EXTENSION="Continue.continue"
 
 # id|port|providerId|displayName|defaultModel|models(csv) — the user-facing four.
 # Ports mirror proxy_rows() above so the provider baseURL matches the listener.
@@ -314,6 +317,11 @@ EOF
 
 # The proxy the shared env defaults point at (user preference: deepseek flash free).
 IDE_DEFAULT_PROXY="${PZ_AI_PROXY_IDE_DEFAULT:-deepsproxy}"
+
+ordered_proxy_ide_rows() {
+    proxy_ide_rows | awk -F'|' -v preferred="$IDE_DEFAULT_PROXY" '$1 == preferred'
+    proxy_ide_rows | awk -F'|' -v preferred="$IDE_DEFAULT_PROXY" '$1 != preferred'
+}
 
 upsert_env_var() {
     local file="$1" key="$2" value="$3" tmp
@@ -374,6 +382,96 @@ configure_opencode_ide() {
         count=$((count + 1))
     done < <(proxy_ide_rows)
     pz_info "opencode/opencode-desktop: wired $count PhaseZero proxy providers (default model unchanged; select a proxy model after 'npm run login')"
+}
+
+ensure_continue_extensions() {
+    [ "${PZ_AI_PROXY_SKIP_EXTENSION_INSTALL:-0}" = 1 ] && return 0
+    local cli installed found=false
+    for cli in code code-oss codium cursor windsurf; do
+        command -v "$cli" >/dev/null 2>&1 || continue
+        found=true
+        installed="$("$cli" --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]' || true)"
+        if ! grep -qx 'continue.continue' <<< "$installed"; then
+            pz_info "installing Continue for $cli"
+            "$cli" --install-extension "$CONTINUE_EXTENSION" --force >/dev/null || {
+                pz_error "$cli could not install $CONTINUE_EXTENSION"
+                return 1
+            }
+        fi
+        "$cli" --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]' | grep -qx 'continue.continue' || {
+            pz_error "$CONTINUE_EXTENSION unavailable in $cli after installation"
+            return 1
+        }
+    done
+    $found || pz_warn "VS Code-compatible editor not found; Continue configuration was still generated"
+}
+
+configure_continue_ide() {
+    command -v jq >/dev/null 2>&1 || return 1
+    install -d -m 700 "$(dirname "$CONTINUE_CONFIG")"
+    if [ -f "$CONTINUE_CONFIG" ] && ! jq empty "$CONTINUE_CONFIG" >/dev/null 2>&1; then
+        pz_error "$CONTINUE_CONFIG is not strict JSON; refusing to overwrite user configuration"
+        return 1
+    fi
+    [ -f "$CONTINUE_CONFIG" ] || jq -n '{models:[]}' > "$CONTINUE_CONFIG"
+
+    local rows_file models_file tmp id port pid name default models key baseurl model title model_list
+    rows_file="$(mktemp)"
+    models_file="$(mktemp)"
+    tmp="$(mktemp)"
+    trap 'rm -f -- "$rows_file" "$models_file" "$tmp"' RETURN
+    : > "$rows_file"
+    while IFS='|' read -r id port pid name default models; do
+        [ -n "$id" ] || continue
+        key="$(ensure_proxy_key "$id" "$port")"
+        baseurl="http://127.0.0.1:$port/v1"
+        IFS=',' read -ra model_list <<< "$models"
+        for model in "${model_list[@]}"; do
+            title="[PhaseZero Proxy] ${name#PhaseZero } — $model"
+            jq -cn --arg title "$title" --arg model "$model" --arg apiBase "$baseurl" --arg apiKey "$key" \
+                '{title:$title,provider:"openai",model:$model,apiBase:$apiBase,apiKey:$apiKey,useLegacyCompletionsEndpoint:false}' \
+                >> "$rows_file"
+        done
+    done < <(ordered_proxy_ide_rows)
+    jq -s '.' "$rows_file" > "$models_file"
+    cp "$CONTINUE_CONFIG" "$CONTINUE_CONFIG.bak.$(date +%s)"
+    jq --slurpfile managed "$models_file" '
+      .models = (((.models // []) | if type == "array" then . else [] end)
+        | map(select(((.title // "") | startswith("[PhaseZero Proxy] ")) | not)))
+        + $managed[0]
+      | .allowAnonymousTelemetry = false
+    ' "$CONTINUE_CONFIG" > "$tmp"
+    mv "$tmp" "$CONTINUE_CONFIG"
+    chmod 600 "$CONTINUE_CONFIG"
+    find "$(dirname "$CONTINUE_CONFIG")" -maxdepth 1 -type f -name 'config.json.bak.*' -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | awk 'NR>5{sub(/^[^ ]+ /, ""); print}' | xargs -r rm -f --
+    trap - RETURN
+    rm -f -- "$rows_file" "$models_file"
+    configure_continue_selection
+    pz_info "Continue: configured $(jq '[.models[] | select((.title // "") | startswith("[PhaseZero Proxy] "))] | length' "$CONTINUE_CONFIG") proxy models for VS Code/Code-OSS"
+}
+
+configure_continue_selection() {
+    [ -f "$CONTINUE_GLOBAL_CONTEXT" ] || return 0
+    jq empty "$CONTINUE_GLOBAL_CONTEXT" >/dev/null 2>&1 || return 0
+    local default_title tmp
+    default_title="$(jq -r --arg url "http://127.0.0.1:$(proxy_ide_rows | awk -F'|' -v i="$IDE_DEFAULT_PROXY" '$1==i{print $2}')/v1" \
+        '[.models[] | select(.apiBase == $url)][0].title // empty' "$CONTINUE_CONFIG")"
+    [ -n "$default_title" ] || return 0
+    tmp="$(mktemp)"
+    jq --arg title "$default_title" '
+      if (.selectedModelsByProfileId | type) == "object" then
+        .selectedModelsByProfileId |= with_entries(
+          .value |= reduce ["chat","edit","apply"][] as $role (.;
+            if ((.[$role] // "") == "" or ((.[$role] // "") | startswith("[PhaseZero Proxy] ")))
+            then .[$role] = $title else . end))
+      else . end
+    ' "$CONTINUE_GLOBAL_CONTEXT" > "$tmp"
+    cp "$CONTINUE_GLOBAL_CONTEXT" "$CONTINUE_GLOBAL_CONTEXT.bak.$(date +%s)"
+    mv "$tmp" "$CONTINUE_GLOBAL_CONTEXT"
+    chmod 600 "$CONTINUE_GLOBAL_CONTEXT"
+    find "$(dirname "$CONTINUE_GLOBAL_CONTEXT")" -maxdepth 1 -type f -name 'globalContext.json.bak.*' -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | awk 'NR>5{sub(/^[^ ]+ /, ""); print}' | xargs -r rm -f --
 }
 
 write_ide_env_defaults() {
@@ -443,7 +541,9 @@ configure_ides() {
     configure_opencode_ide
     write_ide_env_defaults
     configure_zcode_ide
-    pz_info "Proxy IDE configuration complete. Chat via a proxy model needs a one-time login: cd $ROOT/<proxy> && PATH=\"$RUNTIME/bin:\$PATH\" npm run login"
+    ensure_continue_extensions
+    configure_continue_ide
+    pz_info "Proxy IDE configuration complete for OpenCode, VS Code, Code-OSS and ZCode. Browser proxies need one valid saved session."
 }
 
 port_open() {
@@ -492,6 +592,32 @@ dotenv_has_any_key() {
     ' "$file"
 }
 
+session_artifact_present() {
+    local id="$1" dir="$ROOT/$1"
+    case "$id" in
+        kimiproxy) [ -s "$dir/kimi_profile/Default/Cookies" ] ;;
+        qwenproxy) find "$dir/qwen_profiles" -type f -name Cookies -size +0c -print -quit 2>/dev/null | grep -q . ;;
+        deepsproxy) [ -s "$dir/deepseek_profile/Default/Cookies" ] ;;
+        *) return 1 ;;
+    esac
+}
+
+login_process_running() {
+    local id="$1" state="$PZ_STATE/ai-proxies/$1-login.json" pid cwd
+    [ -f "$state" ] || return 1
+    pid="$(jq -r '.pid // 0' "$state" 2>/dev/null || echo 0)"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    kill -0 "$pid" 2>/dev/null || return 1
+    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+    [ "$cwd" = "$ROOT/$id" ]
+}
+
+saved_login_status() {
+    local state="$PZ_STATE/ai-proxies/$1-login.json"
+    [ -f "$state" ] || return 1
+    [ "$(jq -r '.status // empty' "$state" 2>/dev/null || true)" = authenticated ]
+}
+
 mimo_missing_groups_json() {
     local file="$1" missing=()
     dotenv_has_any_key "$file" SERVICE_TOKEN SERVICE_TOKENS MIMO_SERVICE_TOKEN MIMO_SERVICE_TOKENS XIAOMI_SERVICE_TOKEN XIAOMI_SERVICE_TOKENS || missing+=("service-token-group")
@@ -522,6 +648,12 @@ auth_status_json() {
             log_path="$PZ_STATE/ai-proxies/$id-login.log"
             if ! $installed; then
                 web_status="not-installed"
+            elif saved_login_status "$id"; then
+                web_status="authenticated"
+            elif login_process_running "$id"; then
+                web_status="login-running"
+            elif session_artifact_present "$id"; then
+                web_status="session-present"
             elif [ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
                 web_status="gui-required"
             else
@@ -580,7 +712,19 @@ login_proxy() {
         pz_error "$id has no npm login script"
         return 2
     }
+    if login_process_running "$id"; then
+        pz_info "login already running for $id; use the existing browser window"
+        return 0
+    fi
     ensure_node_runtime >/dev/null
+
+    # Avoid reopening OAuth after a valid saved session. A real chat probe is
+    # authoritative; profile files alone may contain expired cookies.
+    if systemctl --user is-active --quiet "phasezero-$id.service" 2>/dev/null && proxy_chat_probe "$id"; then
+        record_login_authenticated "$id"
+        pz_info "$id already authenticated; login window not opened"
+        return 0
+    fi
 
     # The running proxy SERVER also opens Playwright against this same profile
     # dir, headless (index.ts: initPlaywright(true, ...)). If the service is
@@ -623,6 +767,44 @@ login_proxy() {
     [ "$id" = qwenproxy ] && pz_info "qwenproxy: auto-selected 'manual browser login' from its account menu"
 }
 
+record_login_authenticated() {
+    record_login_status "$1" authenticated
+}
+
+record_login_needs_login() {
+    record_login_status "$1" needs-login
+}
+
+record_login_status() {
+    local id="$1" status="$2" state="$PZ_STATE/ai-proxies/$1-login.json" tmp
+    install -d -m 700 "$PZ_STATE/ai-proxies"
+    tmp="$(mktemp)"
+    if [ -f "$state" ] && jq empty "$state" >/dev/null 2>&1; then
+        jq --arg status "$status" --arg checkedAt "$(date -Iseconds)" '.status=$status | .checkedAt=$checkedAt | .pid=0' "$state" > "$tmp"
+    else
+        jq -n --arg id "$id" --arg status "$status" --arg checkedAt "$(date -Iseconds)" \
+            '{schemaVersion:1,id:$id,status:$status,pid:0,checkedAt:$checkedAt}' > "$tmp"
+    fi
+    mv "$tmp" "$state"
+    chmod 600 "$state"
+}
+
+proxy_chat_probe() {
+    local id="$1" row port model key url code payload
+    row="$(proxy_ide_rows | awk -F'|' -v i="$id" '$1==i{print; exit}')"
+    [ -n "$row" ] || return 1
+    port="$(cut -d'|' -f2 <<< "$row")"
+    model="$(cut -d'|' -f5 <<< "$row")"
+    key="$(sed -n 's/^API_KEY=//p' "$PROXY_ENV_DIR/$id.env" 2>/dev/null | head -1)"
+    [ -n "$key" ] || return 1
+    port_open "$port" || return 1
+    url="http://127.0.0.1:$port/v1/chat/completions"
+    payload="$(jq -nc --arg model "$model" '{model:$model,messages:[{role:"user",content:"Reply only: OK"}],stream:false,max_tokens:8}')"
+    code="$(curl -s -m 35 -o /dev/null -w '%{http_code}' -X POST "$url" \
+        -H "Authorization: Bearer $key" -H 'Content-Type: application/json' --data "$payload" 2>/dev/null || true)"
+    [ "$code" = 200 ]
+}
+
 # Honest end-to-end probe. These proxies launch a Playwright/Chromium session
 # BEFORE binding (kimi/deepseek/mimo serve a static /v1/models; qwen's is dynamic
 # and needs a Qwen session), so we (1) warm every service in parallel, (2) wait
@@ -638,7 +820,7 @@ test_proxies() {
         proxy_ide_rows | awk -F'|' -v i="$id" '$1==i{f=1} END{exit f?0:1}' || continue
         systemctl --user start "phasezero-$id.service" >/dev/null 2>&1 || true
         ids+=("$id"); ports+=("$port")
-    done < <(proxy_rows)
+    done < <(selected_rows)
 
     printf '['
     local idx key url up i models chat model
@@ -664,6 +846,11 @@ test_proxies() {
                 -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
                 --data "$(jq -nc --arg m "$model" '{model:$m, messages:[{role:"user",content:"ping"}], stream:false, max_tokens:8}')" 2>/dev/null || true)"
             [ "$ccode" = "200" ] && chat=ok || chat=needs-login
+            if [ "$chat" = ok ]; then
+                record_login_authenticated "$id"
+            elif is_login_capable_proxy "$id"; then
+                record_login_needs_login "$id"
+            fi
         fi
         $first || printf ','
         first=false

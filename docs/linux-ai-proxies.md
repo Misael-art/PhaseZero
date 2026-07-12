@@ -13,7 +13,8 @@ linux/pz ai proxies auth all
 linux/pz ai proxies login kimiproxy
 linux/pz ai proxies login qwenproxy
 linux/pz ai proxies login deepsproxy
-linux/pz ai proxies test
+linux/pz ai proxies test deepsproxy
+linux/pz ai proxies test all
 linux/pz ai proxies start ollieproxy
 linux/pz ai proxies stop ollieproxy
 ```
@@ -35,7 +36,7 @@ Portas alinhadas ao catálogo Windows (3010-3013) para não colidir com open-web
 | `deepsproxy` | `pedrofariasx/deepsproxy` | Node | 3012 |
 | `mimo-ai-proxy` | `pedrofariasx/mimo-ai-proxy` | Go | 3013 |
 
-IDEs: `pz ai proxies configure-ides` conecta kimi/qwen/deeps/mimo ao opencode, opencode-desktop e zcode (providers `phasezero-*`) e grava `~/.config/phasezero/ai-proxies/ide-defaults.env`. O chat via proxy exige sessão web válida. `pz ai proxies auth` expõe o contrato redigido de autenticação; `pz ai proxies test` é um probe honesto (`/v1/models` + chat).
+IDEs: `pz ai proxies configure-ides` conecta kimi/qwen/deeps/mimo ao OpenCode/OpenCode Desktop (providers `phasezero-*`), VS Code/Code-OSS via Continue e ZCode. O comando instala `Continue.continue` nos editores detectados, atualiza `~/.continue/config.json` preservando modelos externos e grava `~/.config/phasezero/ai-proxies/ide-defaults.env`. O chat via proxy exige sessão web válida. `pz ai proxies auth` distingue sessão presente, login em andamento e autenticação validada; `pz ai proxies test <id>` é um probe real e restrito ao alvo (`/v1/models` + chat).
 
 ## Portabilidade
 
@@ -66,7 +67,7 @@ linux/pz ai proxies login deepsproxy
 linux/pz ai proxies test
 ```
 
-`login` abre Chromium real/visível via Playwright (`npm run login`) e para o serviço user antes de abrir o browser para evitar lock do perfil em modo headless. Ao fechar o fluxo, `phasezero-<id>.service` reinicia automaticamente e reaproveita cookies/sessão salvos. Logs ficam em `~/.local/state/phasezero/ai-proxies/<id>-login.log`; estado fica em `<id>-login.json`.
+`login` abre Chromium real/visível via Playwright (`npm run login`) e para o serviço user antes de abrir o browser para evitar lock do perfil em modo headless. Cliques repetidos reutilizam o fluxo em andamento. Se chat real já responde, login não reabre. Ao fechar o fluxo, `phasezero-<id>.service` reinicia automaticamente e reaproveita cookies/sessão salvos. Logs ficam em `~/.local/state/phasezero/ai-proxies/<id>-login.log`; estado fica em `<id>-login.json`.
 
 `qwenproxy` tem menu interativo antes do browser. PhaseZero seleciona o fluxo manual de browser e fornece um rótulo local gerado; o login real continua no Chromium visível.
 

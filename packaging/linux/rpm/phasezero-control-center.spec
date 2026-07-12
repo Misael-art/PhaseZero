@@ -1,5 +1,5 @@
 Name:           phasezero-control-center
-Version:        1.7.1
+Version:        1.7.2
 Release:        1%{?dist}
 Summary:        PhaseZero native Linux control center
 License:        MIT
@@ -38,6 +38,9 @@ install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_data
 %{_datadir}/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg
 
 %changelog
+* Sun Jul 12 2026 PhaseZero <noreply@phasezero.local> - 1.7.2-1
+- Fix idempotent proxy login and expose proxy models in OpenCode/VS Code/Code-OSS.
+
 * Sun Jul 12 2026 PhaseZero <noreply@phasezero.local> - 1.7.1-1
 - Canonical packaging, installation convergence, retention and verified self-update.
 

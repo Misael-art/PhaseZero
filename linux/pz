@@ -168,10 +168,10 @@ Usage:
   pz ai mcp list               List installed MCP servers
   pz ai proxies status         Status Linux AI proxy suite
   pz ai proxies install [id]   Install/update all or one Linux AI proxy (also wires IDEs)
-  pz ai proxies configure-ides Wire proxies into opencode/opencode-desktop/zcode
+  pz ai proxies configure-ides Wire proxies into OpenCode, VS Code/Code-OSS and ZCode
   pz ai proxies auth [id]      Redacted auth/login readiness for proxy suite
   pz ai proxies login <id>     Open headed browser login for kimi/qwen/deeps
-  pz ai proxies test           Honest probe: /v1/models + chat per proxy (JSON)
+  pz ai proxies test [id]      Honest target/all probe: /v1/models + chat (JSON)
   pz doctor                    Run full system diagnostics
   pz support-bundle            Generate support tarball
   pz repair-plan               Generate repair plan

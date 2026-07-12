@@ -441,7 +441,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("ides", "Configurar IDEs", "Integrações de agentes.", ("ai", "setup", "ides"), ("ai", "status")),
         ("mcp-sync", "Sincronizar MCPs", "Sincroniza defaults seguros.", ("ai", "mcp", "sync", "all"), ("ai", "mcp", "status")),
         ("proxies", "Instalar proxies IA", "Suite Linux OpenAI-compatible.", ("ai", "proxies", "install", "all"), ("ai", "proxies", "status")),
-        ("proxies-ides", "Configurar proxies nas IDEs", "Wire opencode/opencode-desktop/zcode.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
+        ("proxies-ides", "Configurar proxies nas IDEs", "Integra OpenCode, VS Code/Code-OSS e ZCode.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
         ("proxies-auth", "Auth proxies IA", "Status redigido de login/sessão.", ("ai", "proxies", "auth", "all"), None),
         ("proxies-login-kimi", "Login Kimi", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "kimiproxy"), ("ai", "proxies", "auth", "kimiproxy")),
         ("proxies-login-qwen", "Login Qwen", "Abre fluxo manual de browser do QwenProxy.", ("ai", "proxies", "login", "qwenproxy"), ("ai", "proxies", "auth", "qwenproxy")),
