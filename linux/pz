@@ -154,11 +154,20 @@ Usage:
   pz ai desktop repair-codex   Repair failed Codex Desktop local update
   pz ai desktop repair         Repair desktop apps and automatic updates
   pz ai compat status          Check RTK/Caveman/Headroom/ai-memory agent runtime
+  pz ai init [<dir>]           Inject PhaseZero agent rules + frugality pack into any project
+  pz ai init --dry-run [<dir>] Preview injection without writing
+  pz ai init --force [<dir>]   Refresh managed blocks on an initialized project
+  pz ai init --zcode [<dir>]   Also write opt-in .zcode/rules copies
+  pz ai init --only-rules | --only-frugality [<dir>]  Partial injection
+  pz ai init --status [<dir>]  Check project rules vs current sources
+  pz ai init --list            List registered projects
+  pz ai init --undo [<dir>]    Remove managed blocks/files from a project
   pz ai token-economy status   Alias for compat status and context-frugality audit
   pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
   pz ai opencode <action>      OpenCode CLI<->desktop lockstep + models (sync|status|local-model|free-model|install-hook)
-  pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|all)
+  pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|codexbar|all)
+  pz ai codexbar <action>      CodexBar CLI + KodexBar plasmoid (status|setup|install|plasmoid|configure|update|remove|repair|dry-run)
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
   pz ai mcp sync [target]      Sync safe MCP servers to all/target clients
@@ -406,7 +415,7 @@ cmd_server() {
 
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
-    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|omo|compat|token-economy|secrets|mcp) ..."; return 1; }
+    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|init|omo|compat|token-economy|secrets|mcp) ..."; return 1; }
     case "$sub" in
         status)
             bash "$PZ_ROOT/linux/ai/status.sh"
@@ -446,6 +455,10 @@ cmd_ai() {
             shift
             bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" "${@:-status}"
             ;;
+        init|initialize|bootstrap)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" init "$@"
+            ;;
         admin|admin-bridge|bigsudo)
             shift
             bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" "${@:-status}"
@@ -453,6 +466,20 @@ cmd_ai() {
         proxies|proxy|ai-proxy-suite)
             shift
             bash "$PZ_ROOT/linux/ai/proxy-suite.sh" "${@:-status}"
+            ;;
+        codexbar|kodexbar)
+            shift
+            local cb_action="${1:-status}"
+            shift 2>/dev/null || true
+            case "$cb_action" in
+                status|setup|repair|update|remove|dry-run|health|health-notify|enrich) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" "$cb_action" ;;
+                auth) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" auth "$@" ;;
+                watchdog) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" watchdog "${1:-status}" ;;
+                install|install-cli|cli) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" install-cli ;;
+                plasmoid|install-plasmoid) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" install-plasmoid ;;
+                configure|config) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" configure ;;
+                *) pz_error "usage: pz ai codexbar (status|setup|auth|health|watchdog|install|plasmoid|configure|update|remove|repair|dry-run)"; return 1 ;;
+            esac
             ;;
         setup)
             [ -z "$target" ] && target="all"
@@ -479,6 +506,7 @@ cmd_ai() {
                 ides|ide) bash "$PZ_ROOT/linux/ai/setup-ides.sh" configure ;;
                 ide-apps|ides-apps) bash "$PZ_ROOT/linux/ai/setup-ides.sh" install-apps ;;
                 usagebar|ai-usagebar) bash "$PZ_ROOT/linux/ai/setup-usagebar.sh" setup ;;
+                codexbar|kodexbar|codexbar-cli) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" setup ;;
                 all)
                     bash "$PZ_ROOT/linux/ai/setup-codex.sh"
                     bash "$PZ_ROOT/linux/ai/setup-ollama.sh"
