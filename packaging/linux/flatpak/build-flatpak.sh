@@ -62,10 +62,8 @@ cp "$HERE/io.phasezero.ControlCenter.yml" "$MANIFEST"
 # Git tag, but using it here would silently package stale remote code while a
 # maintainer validates local changes.
 rm -rf -- "$SOURCE"
-mkdir -p "$SOURCE/packaging"
-cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/assets" "$ROOT/version.json" "$SOURCE/"
-cp -a "$ROOT/packaging/linux" "$SOURCE/packaging/"
-find "$SOURCE" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+mkdir -p "$SOURCE"
+"$ROOT/packaging/linux/export-source.sh" "$SOURCE"
 python3 - "$MANIFEST" "$SOURCE" <<'PY'
 from pathlib import Path
 import re

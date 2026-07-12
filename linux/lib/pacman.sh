@@ -24,7 +24,7 @@ pz_pkg_install() {
             ;;
         flatpak)
             command -v flatpak >/dev/null 2>&1 || { pz_error "flatpak missing"; return 69; }
-            flatpak install -y flathub "$pkg"
+            flatpak --user install -y flathub "$pkg"
             ;;
         auto)
             if command -v pacman >/dev/null 2>&1 && pacman -Si "$pkg" &>/dev/null; then
@@ -34,7 +34,7 @@ pz_pkg_install() {
             elif command -v paru >/dev/null 2>&1 && paru -Si "$pkg" &>/dev/null; then
                 paru -S --needed --noconfirm "$pkg"
             elif command -v flatpak >/dev/null 2>&1; then
-                flatpak install -y flathub "$pkg" 2>/dev/null || {
+                flatpak --user install -y flathub "$pkg" 2>/dev/null || {
                     pz_error "could not install $pkg via any manager"
                     return 1
                 }
@@ -74,7 +74,7 @@ pz_pkg_update() {
         yay -Sua --noconfirm
     fi
     if command -v flatpak &>/dev/null; then
-        flatpak update -y
+        flatpak --user update -y
     fi
 }
 

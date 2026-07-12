@@ -9,17 +9,25 @@ from PySide6.QtWidgets import (
 
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
-from ..widgets import StatusPill, SectionHeader, SkeletonPill, SkeletonTile, stop_shimmer, themed_icon
+from ..widgets import ActionListRow, StatusPill, SectionHeader, SkeletonPill, SkeletonTile, stop_shimmer, themed_icon
 from .base import BasePage
 
 STATUS_ACTION_IDS = ("system.doctor",)
 PILL_ACTION_IDS = ("system.doctor", "system.repair-plan", "system.support-bundle", "system.version")
+INSTALL_ACTION_IDS = (
+    "system.installation.status", "system.self-update.check", "system.self-update.apply",
+    "system.installation.converge", "system.installation.prune",
+)
 
 
 class OverviewPage(BasePage):
     """Health checks, audit, and support — status pills with async loading."""
 
     def build(self) -> None:
+        for action_id in PILL_ACTION_IDS:
+            action = self.by_id.get(action_id)
+            if action is not None:
+                self.mark_represented(action)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -32,6 +40,24 @@ class OverviewPage(BasePage):
         self._pills_container = QVBoxLayout()
         self._pills_container.setSpacing(8)
         self._layout_main.addLayout(self._pills_container)
+        self._layout_main.addWidget(SectionHeader(
+            "Instalação PhaseZero",
+            "Versão ativa, atualização verificada, convergência de canais e retenção.",
+        ))
+        install_surface = QFrame()
+        install_surface.setObjectName("actionListSurface")
+        install_layout = QVBoxLayout(install_surface)
+        install_layout.setContentsMargins(0, 0, 0, 0)
+        install_layout.setSpacing(0)
+        for action_id in INSTALL_ACTION_IDS:
+            action = self.by_id.get(action_id)
+            if action is None:
+                continue
+            self.mark_represented(action)
+            row = ActionListRow(action)
+            row.selected.connect(self.action_selected.emit)
+            install_layout.addWidget(row)
+        self._layout_main.addWidget(install_surface)
         self._layout_main.addStretch()
 
         scroll.setWidget(self._inner)
@@ -106,6 +132,7 @@ class OverviewPage(BasePage):
                 self._pills_container.addWidget(self._make_pill_action(action))
 
     def _make_pill_action(self, action: ActionSpec) -> QFrame:
+        self.mark_represented(action)
         card = QFrame()
         card.setObjectName("actionCard")
         row = QHBoxLayout(card)

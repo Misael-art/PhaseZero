@@ -59,6 +59,8 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
         "repair-plan",
         "tune",
             "capabilities",
+            "installation",
+            "self-update",
             "version",
             "webapp",
             "games",

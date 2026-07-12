@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
 # common.sh - PhaseZero Linux shared library
 set -euo pipefail
+umask 077
 
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PZ_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero"
-PZ_MANIFEST="$PZ_STATE/manifest.json"
+PZ_OPERATION_ID="${PZ_OPERATION_ID:-legacy-$(date +%Y%m%d-%H%M%S)-${BASHPID:-$$}}"
+PZ_MANIFEST="${PZ_MANIFEST:-$PZ_STATE/operations/$PZ_OPERATION_ID.json}"
 PZ_LOG="$PZ_STATE/pz.log"
 
-mkdir -p "$PZ_STATE"
+mkdir -p "$PZ_STATE" "$PZ_STATE/operations"
+chmod 0700 "$PZ_STATE" "$PZ_STATE/operations" 2>/dev/null || true
+if [ -f "$PZ_LOG" ] && [ "$(stat -c %s "$PZ_LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+    mv -f "$PZ_LOG" "$PZ_LOG.1"
+fi
+touch "$PZ_LOG"
+chmod 0600 "$PZ_LOG" 2>/dev/null || true
 
 pz_log() {
     local level="$1" msg="$2"
@@ -421,6 +429,7 @@ pz_rollback() {
         case "$action" in
             file) cp "$backup" "$target" && pz_info "restored $target from $backup" ;;
             package) pz_info "rollback package $target: manual reinstall may be needed" ;;
+            flatpak-package) flatpak --user uninstall -y "$target" 2>/dev/null || true ;;
             service) systemctl disable --now "$target" 2>/dev/null || true ;;
             flatpak-remote)
                 command -v flatpak >/dev/null 2>&1 && flatpak remote-delete "$target" 2>/dev/null || true
@@ -451,7 +460,9 @@ pz_run_profile() {
         ((.scripts.linux // []) | type == "array") and
         ((.systemd.linux.enable // []) | type == "array") and
         ((.systemd.linux.user // []) | type == "array") and
-        ((.tuning.linux.sysctl // {}) | type == "object")
+        ((.tuning.linux.sysctl // {}) | type == "object") and
+        (((.packages.linux.pacman // []) + (.packages.linux.yay // [])) as $all |
+            ($all | length) == ($all | unique | length))
     ' "$profile_file" >/dev/null 2>&1; then
         pz_error "invalid Linux profile field type: $profile_file"
         return 2
@@ -536,6 +547,31 @@ pz_run_profile() {
     local sysctl_entries
     sysctl_entries=$(jq -r '.tuning.linux.sysctl // {} | to_entries[] | "\(.key)=\(.value)"' "$profile_file" 2>/dev/null || true)
 
+    if [ "$dry_run" != "1" ]; then
+        command -v pacman >/dev/null 2>&1 || {
+            pz_error "legacy profile '$profile_name' requires an Arch/pacman host; use 'pz capabilities' on other distributions"
+            return 69
+        }
+        local missing_packages=() pkg
+        while IFS= read -r pkg; do
+            [ -z "$pkg" ] && continue
+            pacman -Q "$pkg" >/dev/null 2>&1 || pacman -Si "$pkg" >/dev/null 2>&1 || missing_packages+=("pacman:$pkg")
+        done <<< "$packages"
+        if [ -n "$yay_pkgs" ]; then
+            command -v yay >/dev/null 2>&1 || missing_packages+=("tool:yay")
+            if command -v yay >/dev/null 2>&1; then
+                while IFS= read -r pkg; do
+                    [ -z "$pkg" ] && continue
+                    pacman -Q "$pkg" >/dev/null 2>&1 || yay -Si "$pkg" >/dev/null 2>&1 || missing_packages+=("yay:$pkg")
+                done <<< "$yay_pkgs"
+            fi
+        fi
+        if [ "${#missing_packages[@]}" -gt 0 ]; then
+            pz_error "profile preflight failed before mutation: ${missing_packages[*]}"
+            return 69
+        fi
+    fi
+
     if [ -n "$packages" ]; then
         [ "$dry_run" = "1" ] && pz_info "planning pacman packages..." || pz_info "installing pacman packages..."
         while IFS= read -r pkg; do
@@ -544,8 +580,10 @@ pz_run_profile() {
                 pz_info "would install pacman package: $pkg"
                 continue
             fi
+            local package_preexisting=0
+            pacman -Q "$pkg" >/dev/null 2>&1 && package_preexisting=1
             pz_admin_run pacman -S --needed --noconfirm "$pkg"
-            pz_rollback_register package "$pkg" ""
+            [ "$package_preexisting" = "1" ] || pz_rollback_register package "$pkg" ""
         done <<< "$packages"
     fi
 
@@ -557,8 +595,10 @@ pz_run_profile() {
                 pz_info "would install AUR package: $pkg"
                 continue
             fi
+            local package_preexisting=0
+            pacman -Q "$pkg" >/dev/null 2>&1 && package_preexisting=1
             yay -S --needed --noconfirm "$pkg"
-            pz_rollback_register package "$pkg" ""
+            [ "$package_preexisting" = "1" ] || pz_rollback_register package "$pkg" ""
         done <<< "$yay_pkgs"
     fi
 
@@ -579,8 +619,10 @@ pz_run_profile() {
             if [ "$flatpak_is_object" = true ]; then
                 remote_name=$(jq -r '.packages.linux.flatpak.remotes[0].name // "flathub"' "$profile_file" 2>/dev/null || echo "flathub")
             fi
-            flatpak install -y "$remote_name" "$pkg"
-            pz_rollback_register package "$pkg" ""
+            local flatpak_preexisting=0
+            flatpak --user info "$pkg" >/dev/null 2>&1 && flatpak_preexisting=1
+            flatpak --user install -y "$remote_name" "$pkg"
+            [ "$flatpak_preexisting" = "1" ] || pz_rollback_register flatpak-package "$pkg" ""
         done <<< "$flatpak_pkgs"
     fi
 

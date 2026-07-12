@@ -8,22 +8,25 @@ OUT="$(cd "$OUT" && pwd)"
 WORK="${PZ_DEB_WORK:-$ROOT/build/deb}"
 VERSION="$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))' "$ROOT/version.json")"
 PKG="$WORK/phasezero-control-center_${VERSION}_all"
+SOURCE="$WORK/source"
 
-rm -rf -- "$PKG"
+rm -rf -- "$PKG" "$SOURCE"
+mkdir -p "$SOURCE"
+"$ROOT/packaging/linux/export-source.sh" "$SOURCE"
 mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/phasezero" "$PKG/usr/bin" \
     "$PKG/usr/share/applications" "$PKG/usr/share/metainfo" \
     "$PKG/usr/share/icons/hicolor/scalable/apps"
-cp "$ROOT/packaging/linux/deb/control" "$PKG/DEBIAN/control"
+cp "$SOURCE/packaging/linux/deb/control" "$PKG/DEBIAN/control"
 # The tracked control file's Version field is documentation, not the build input;
 # always stamp the copy with version.json so a shipped .deb never reports a stale
 # version if the tracked file falls out of sync.
 sed -i "s/^Version:.*/Version: $VERSION/" "$PKG/DEBIAN/control"
-cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/assets" "$ROOT/version.json" "$PKG/usr/lib/phasezero/"
+cp -a "$SOURCE/linux" "$SOURCE/profiles" "$SOURCE/assets" "$SOURCE/version.json" "$PKG/usr/lib/phasezero/"
 find "$PKG/usr/lib/phasezero" -type d -name __pycache__ -exec rm -rf {} +
-install -m755 "$ROOT/packaging/linux/phasezero-control-center" "$PKG/usr/bin/"
-install -m644 "$ROOT/packaging/linux/io.phasezero.ControlCenter.desktop" "$PKG/usr/share/applications/"
-install -m644 "$ROOT/packaging/linux/io.phasezero.ControlCenter.metainfo.xml" "$PKG/usr/share/metainfo/"
-install -m644 "$ROOT/packaging/linux/io.phasezero.ControlCenter.svg" "$PKG/usr/share/icons/hicolor/scalable/apps/"
+install -m755 "$SOURCE/packaging/linux/phasezero-control-center" "$PKG/usr/bin/"
+install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.desktop" "$PKG/usr/share/applications/"
+install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.metainfo.xml" "$PKG/usr/share/metainfo/"
+install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.svg" "$PKG/usr/share/icons/hicolor/scalable/apps/"
 if command -v dpkg-deb >/dev/null 2>&1; then
     dpkg-deb --root-owner-group --build "$PKG" "$OUT/"
 else

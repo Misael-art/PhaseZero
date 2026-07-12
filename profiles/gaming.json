@@ -13,10 +13,8 @@
         "mangohud",
         "gamemode",
         "lutris",
-        "heroic-games-launcher-bin",
         "wine",
         "winetricks",
-        "proton-ge-custom-bin",
         "protontricks",
         "git",
         "git-lfs",
@@ -27,7 +25,6 @@
         "lib32-vulkan-radeon",
         "vulkan-tools",
         "ryzenadj",
-        "ananicy-git",
         "corectrl",
         "discord",
         "obs-studio",
@@ -55,9 +52,6 @@
           "gaming": true
         },
         "packages": [
-          "com.valvesoftware.Steam",
-          "net.lutris.Lutris",
-          "com.heroicgameslauncher.hgl",
           "org.freedesktop.Platform.Compat.i386",
           "org.freedesktop.Platform.GL32.default"
         ]

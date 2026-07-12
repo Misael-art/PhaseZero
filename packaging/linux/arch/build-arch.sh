@@ -13,20 +13,14 @@ cleanup() {
 trap cleanup EXIT
 
 command -v makepkg >/dev/null || { echo "makepkg missing" >&2; exit 69; }
-command -v git >/dev/null || { echo "git missing" >&2; exit 69; }
 mkdir -p "$OUT"
 cp "$ROOT/packaging/linux/aur/PKGBUILD" "$WORK/PKGBUILD"
 
 # Release builds use committed HEAD. This avoids downloading a remote tag and
 # guarantees package content matches the commit that passed local gates.
-git -C "$ROOT" diff --quiet --cached || {
-    echo "staged changes present; commit before Arch package build" >&2
-    exit 65
-}
-git -C "$ROOT" archive \
-    --format=tar.gz \
-    --prefix="PhaseZero-$VERSION/" \
-    -o "$WORK/PhaseZero-$VERSION.tar.gz" HEAD
+mkdir -p "$WORK/source/PhaseZero-$VERSION"
+"$ROOT/packaging/linux/export-source.sh" "$WORK/source/PhaseZero-$VERSION"
+tar -C "$WORK/source" -czf "$WORK/PhaseZero-$VERSION.tar.gz" "PhaseZero-$VERSION"
 
 (
     cd "$WORK"

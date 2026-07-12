@@ -222,6 +222,9 @@ class CommandRunner(QObject):
             payload = json.dumps(result.to_dict(), ensure_ascii=False, indent=2) + "\n"
             secure_file(result_path, payload)
             result.result_path = result_path
+            retained = sorted(destination.glob("*.json"), reverse=True)
+            for obsolete in retained[250:]:
+                obsolete.unlink(missing_ok=True)
         except OSError as exc:
             result.stderr += f"\nfailed to persist result: {exc}\n"
         self.process = None

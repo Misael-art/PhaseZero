@@ -182,6 +182,13 @@ Usage:
   pz capabilities apply       Apply a confirmed plan
   pz capabilities verify      Verify an operation
   pz capabilities rollback    Revert only items installed by an operation
+  pz installation status     Audit duplicate PhaseZero install channels
+  pz installation plan       Plan convergence to canonical user install
+  pz installation apply      Apply confirmed convergence plan
+  pz installation prune      Apply retention to managed state/backups
+  pz self-update check       Check latest verified PhaseZero release
+  pz self-update plan        Create verified user-update plan
+  pz self-update apply       Apply confirmed source-bundle update
   pz ui                        Open native Linux control center
   pz ui native                 Open native Qt6/PySide6 control center
   pz ui web [PORT]             Open legacy local web dashboard
@@ -658,33 +665,9 @@ ui_regenerate_allowlist() {
     # Refresh the web/TUI allowlist snapshot from the live native catalog so the
     # fallback (used when catalog.py cannot be imported at server runtime) also
     # exposes every implemented function. Best-effort: failures are non-fatal.
-    python3 - "$PZ_ROOT" "$PZ_ROOT/linux/ui/actions.json" <<'PY' >/dev/null 2>&1 || true
-import json, pathlib, sys
-root = pathlib.Path(sys.argv[1])
-dest = pathlib.Path(sys.argv[2])
-sys.path.insert(0, str(root))
-try:
-    from linux.ui_native.catalog import build_catalog
-except Exception:
-    sys.exit(0)
-actions = []
-for spec in build_catalog(root):
-    entry = {
-        "name": spec.id,
-        "label": spec.title,
-        "command": " ".join(["linux/pz", *spec.args]),
-        "mutable": bool(spec.mutable),
-        "require_plan": bool(spec.mutable),
-        "module": spec.category,
-        "elevated": bool(spec.elevated),
-        "input_kind": spec.input_kind,
-        "input_label": spec.input_label,
-    }
-    if spec.preview_args is not None:
-        entry["plan_command"] = " ".join(["linux/pz", *spec.preview_args])
-    actions.append(entry)
-dest.write_text(json.dumps({"actions": actions}, ensure_ascii=False, indent=2) + "\n")
-PY
+    local destination="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/ui-actions.json"
+    PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m linux.ui.generate_actions --root "$PZ_ROOT" "$destination" >/dev/null 2>&1 || true
 }
 
 cmd_commands() {
@@ -710,6 +693,16 @@ cmd_capabilities() {
         python3 -m linux.capabilities "$@"
 }
 
+cmd_installation() {
+    PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m linux.installation "$@"
+}
+
+cmd_self_update() {
+    PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m linux.installation.update_cli "$@"
+}
+
 main() {
     local cmd="${1:-help}"
     shift 2>/dev/null || true
@@ -728,6 +721,8 @@ main() {
         repair-plan)   cmd_repair_plan "$@" ;;
         tune)          cmd_tune "$@" ;;
         capabilities|capability|features|recursos) cmd_capabilities "$@" ;;
+        installation|installations) cmd_installation "$@" ;;
+        self-update|selfupdate|update-phasezero) cmd_self_update "$@" ;;
         ui)            cmd_ui "$@" ;;
         commands)      cmd_commands "$@" ;;
         webapp|webapps) exec "$PZ_ROOT/linux/ui/webapp.sh" "$@" ;;

@@ -138,6 +138,27 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         _a("system.repair-plan", "Visão geral", "Plano de reparo", "Gera recomendações sem alterar sistema.", ("repair-plan",), "document-properties", badge="Seguro"),
         _a("system.support-bundle", "Visão geral", "Bundle de suporte", "Coleta logs sanitizados para diagnóstico.", ("support-bundle",), "folder-download", mutable=True, preview=("doctor",), badge="Coleta"),
         _a("system.version", "Visão geral", "Versão PhaseZero", "Mostra versão e canal instalados.", ("version",), "help-about"),
+        _a("system.installation.status", "Visão geral", "Canais instalados", "Audita versões user, pacote nativo, Flatpak e raízes órfãs.", ("installation", "status"), "system-search", badge="JSON", group="Instalação PhaseZero", visibility="primary", result_view="table"),
+        _a(
+            "system.installation.converge", "Visão geral", "Convergir instalação",
+            "Preserva backup e mantém somente o canal de usuário verificado.",
+            ("installation", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}"),
+            "system-software-update", mutable=True,
+            preview=("installation", "plan", "--channel", "user"),
+            preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
+            elevated=True, badge="Alto risco", risk="high", group="Instalação PhaseZero",
+            visibility="advanced", result_view="table",
+        ),
+        _a("system.installation.prune", "Visão geral", "Aplicar retenção", "Mantém releases, resultados e backups recentes dentro dos limites.", ("installation", "prune"), "edit-clear", mutable=True, preview=("installation", "status"), badge="Reversível", group="Instalação PhaseZero", visibility="advanced"),
+        _a("system.self-update.check", "Visão geral", "Verificar atualização", "Consulta release oficial sem instalar.", ("self-update", "check"), "system-software-update", group="Instalação PhaseZero", visibility="primary"),
+        _a(
+            "system.self-update.apply", "Visão geral", "Atualizar PhaseZero",
+            "Baixa source bundle oficial, verifica dois SHA-256 e troca release atomicamente.",
+            ("self-update", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}"),
+            "system-software-update", mutable=True, preview=("self-update", "plan"),
+            preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
+            badge="Protegido", group="Instalação PhaseZero", visibility="primary",
+        ),
     ]
 
     profile_meta = {

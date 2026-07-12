@@ -13,8 +13,10 @@ CURRENT_LINK="$INSTALL_BASE/current"
 STAGE=""
 CURRENT_STAGE=""
 RELEASE_BACKUP=""
+SOURCE_TMP=""
 
 cleanup() {
+    [ -z "$SOURCE_TMP" ] || [ ! -d "$SOURCE_TMP" ] || rm -rf -- "$SOURCE_TMP"
     [ -z "$STAGE" ] || [ ! -e "$STAGE" ] || rm -rf -- "$STAGE"
     [ -z "$CURRENT_STAGE" ] || [ ! -L "$CURRENT_STAGE" ] || rm -f -- "$CURRENT_STAGE"
     if [ -n "$RELEASE_BACKUP" ] && [ -e "$RELEASE_BACKUP" ] && [ ! -e "$RELEASE_DIR" ]; then
@@ -24,12 +26,16 @@ cleanup() {
 trap cleanup EXIT
 
 install -d "$BIN_HOME" "$APP_DIR" "$ICON_DIR" "$INSTALL_BASE/releases"
+SOURCE_TMP="$(mktemp -d "$INSTALL_BASE/.source.XXXXXX")"
+"$ROOT/packaging/linux/export-source.sh" "$SOURCE_TMP"
 STAGE="$(mktemp -d "$INSTALL_BASE/.stage.XXXXXX")"
 install -d "$STAGE/packaging/linux"
-cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/assets" "$ROOT/version.json" "$STAGE/"
-install -m 0755 "$ROOT/packaging/linux/phasezero-control-center" \
+cp -a "$SOURCE_TMP/linux" "$SOURCE_TMP/profiles" "$SOURCE_TMP/assets" "$SOURCE_TMP/version.json" "$STAGE/"
+install -m 0755 "$SOURCE_TMP/packaging/linux/phasezero-control-center" \
     "$STAGE/packaging/linux/phasezero-control-center"
 find "$STAGE" -type d -name __pycache__ -prune -exec rm -rf -- {} +
+rm -rf -- "$SOURCE_TMP"
+SOURCE_TMP=""
 
 if [ -e "$RELEASE_DIR" ] || [ -L "$RELEASE_DIR" ]; then
     BACKUP_DIR="$INSTALL_BASE/backups"
@@ -57,6 +63,22 @@ mv "$APP_DIR/io.phasezero.ControlCenter.desktop.tmp" \
 chmod 644 "$APP_DIR/io.phasezero.ControlCenter.desktop"
 install -m644 "$ROOT/packaging/linux/io.phasezero.ControlCenter.svg" \
     "$ICON_DIR/io.phasezero.ControlCenter.svg"
+
+prune_install_tree() {
+    local base="$1" keep="$2" protected="${3:-}" index path
+    local -a entries=()
+    [ -d "$base" ] || return 0
+    mapfile -d '' entries < <(
+        find "$base" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\0' | sort -zrn
+    )
+    for ((index = keep; index < ${#entries[@]}; index++)); do
+        path="${entries[$index]#* }"
+        [ -n "$protected" ] && [ "$(readlink -f "$path")" = "$protected" ] && continue
+        rm -rf -- "$path"
+    done
+}
+prune_install_tree "$INSTALL_BASE/releases" 3 "$(readlink -f "$CURRENT_LINK")"
+prune_install_tree "$INSTALL_BASE/backups" 3
 
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true

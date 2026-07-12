@@ -78,6 +78,10 @@ def save(kind: str, record_id: str, payload: dict) -> Path:
         os.replace(temporary, path)
         os.chmod(path, 0o600)
         _secure_owner(path)
+        limits = {"plans": 50, "operations": 100, "rollbacks": 100}
+        retained = sorted(directory.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)
+        for obsolete in retained[limits.get(kind, 100):]:
+            obsolete.unlink(missing_ok=True)
     except BaseException:
         temporary.unlink(missing_ok=True)
         raise

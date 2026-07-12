@@ -23,7 +23,8 @@ import threading
 PZ_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
 STATE_DIR = pathlib.Path(os.environ.get("XDG_STATE_HOME", "~/.local/state")).expanduser() / "phasezero"
 TOKEN_FILE = STATE_DIR / "ui-token"
-ALLOWLIST_FILE = PZ_ROOT / "linux" / "ui" / "actions.json"
+RUNTIME_ALLOWLIST_FILE = STATE_DIR / "ui-actions.json"
+ALLOWLIST_FILE = RUNTIME_ALLOWLIST_FILE if RUNTIME_ALLOWLIST_FILE.is_file() else PZ_ROOT / "linux" / "ui" / "actions.json"
 STATIC_DIR = PZ_ROOT / "linux" / "ui" / "static"
 TEMPLATE_DIR = PZ_ROOT / "linux" / "ui" / "templates"
 UI_PORT = 8080

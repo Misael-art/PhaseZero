@@ -16,15 +16,13 @@ SOURCE="$TOP/source/PhaseZero-$VERSION"
 rm -rf -- "$TOP/BUILD" "$TOP/BUILDROOT" "$TOP/RPMS" "$TOP/SOURCES" \
     "$TOP/SPECS" "$TOP/SRPMS" "$TOP/source"
 mkdir -p "$TOP"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} \
-    "$SOURCE/packaging"
-cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/assets" "$ROOT/version.json" "$SOURCE/"
-cp -a "$ROOT/packaging/linux" "$SOURCE/packaging/"
-find "$SOURCE" -type d -name __pycache__ -exec rm -rf {} +
+    "$SOURCE"
+"$ROOT/packaging/linux/export-source.sh" "$SOURCE"
 tar -C "$TOP/source" -czf "$TOP/SOURCES/v$VERSION.tar.gz" "PhaseZero-$VERSION"
 # Build from a copy of the spec, stamped with version.json's Version: the tracked
 # .spec is documentation between releases and must not be mutated by a build.
 SPEC="$TOP/SPECS/phasezero-control-center.spec"
-cp "$ROOT/packaging/linux/rpm/phasezero-control-center.spec" "$SPEC"
+cp "$SOURCE/packaging/linux/rpm/phasezero-control-center.spec" "$SPEC"
 sed -i "s/^Version:.*/Version:        $VERSION/" "$SPEC"
 rpmbuild -bb --define "_topdir $TOP" "$SPEC"
 mkdir -p "$OUT"

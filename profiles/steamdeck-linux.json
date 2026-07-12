@@ -54,10 +54,7 @@
           "steamdeck": true
         },
         "packages": [
-          "com.valvesoftware.Steam",
           "org.libretro.RetroArch",
-          "net.lutris.Lutris",
-          "com.heroicgameslauncher.hgl",
           "org.prismlauncher.PrismLauncher",
           "org.freedesktop.Platform.Compat.i386",
           "org.freedesktop.Platform.GL32.default"

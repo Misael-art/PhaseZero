@@ -11,18 +11,18 @@ pz_flatpak_require() {
 
 pz_flatpak_has_remote() {
     local name="$1"
-    flatpak remote-list --columns=name 2>/dev/null | grep -qxF "$name"
+    flatpak --user remote-list --columns=name 2>/dev/null | grep -qxF "$name"
 }
 
 pz_flatpak_remote_url() {
     local name="$1"
-    flatpak remote-list --columns=name,url 2>/dev/null |
+    flatpak --user remote-list --columns=name,url 2>/dev/null |
         awk -F '\t' -v r="$name" '$1 == r {print $2; exit}' || true
 }
 
 pz_flatpak_remote_prio() {
     local name="$1"
-    flatpak remote-list --columns=name,priority 2>/dev/null |
+    flatpak --user remote-list --columns=name,priority 2>/dev/null |
         awk -v r="$name" '$1 == r {print $2; exit}' || echo ""
 }
 
@@ -44,7 +44,7 @@ pz_flatpak_ensure_remote() {
     fi
 
     pz_info "adding flatpak remote: $name"
-    flatpak remote-add --if-not-exists "$name" "$url"
+    flatpak --user remote-add --if-not-exists "$name" "$url"
     pz_rollback_register "flatpak-remote" "$name" ""
     pz_info "remote '$name' added"
 }
@@ -54,7 +54,7 @@ pz_flatpak_remove_remote() {
     pz_flatpak_require || return 1
     if pz_flatpak_has_remote "$name"; then
         pz_info "removing flatpak remote: $name"
-        flatpak remote-delete "$name"
+        flatpak --user remote-delete "$name"
     else
         pz_info "remote '$name' not present"
     fi

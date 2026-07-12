@@ -6,8 +6,17 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 OUT="${1:-$ROOT/dist}"
 VERSION="$(jq -er '.version | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+([+-][0-9A-Za-z.-]+)?$"))' "$ROOT/version.json")"
 
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m pytest -q \
+    "$ROOT/tests/test_installation_cohesion.py"
+
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
+
+SOURCE_WORK="$(mktemp -d "${TMPDIR:-/tmp}/pz-source-release.XXXXXX")"
+trap 'rm -rf -- "$SOURCE_WORK"' EXIT
+mkdir -p "$SOURCE_WORK/PhaseZero-$VERSION"
+"$HERE/export-source.sh" "$SOURCE_WORK/PhaseZero-$VERSION"
+tar -C "$SOURCE_WORK" -czf "$OUT/PhaseZero-$VERSION-source.tar.gz" "PhaseZero-$VERSION"
 
 bash "$HERE/deb/build-deb.sh" "$OUT"
 bash "$HERE/rpm/build-rpm.sh" "$OUT"
@@ -20,6 +29,7 @@ artifacts=(
     "$OUT/phasezero-control-center-${VERSION}-1.noarch.rpm"
     "$OUT/PhaseZero-${VERSION}-x86_64.AppImage"
     "$OUT/PhaseZero-${VERSION}.flatpak"
+    "$OUT/PhaseZero-${VERSION}-source.tar.gz"
 )
 while IFS= read -r package; do
     artifacts+=("$package")

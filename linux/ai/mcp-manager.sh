@@ -33,6 +33,16 @@ backup_config() {
     backup="$MCP_BACKUP_DIR/${label}.bak.$(date +%s%N)"
     cp "$cfg" "$backup"
     pz_rollback_register file "$cfg" "$backup"
+    local -a backups=()
+    mapfile -d '' backups < <(
+        find "$MCP_BACKUP_DIR" -maxdepth 1 -type f -name "${label}.bak.*" \
+            -printf '%T@ %p\0' | sort -zrn
+    )
+    local index path
+    for ((index = 5; index < ${#backups[@]}; index++)); do
+        path="${backups[$index]#* }"
+        rm -f -- "$path"
+    done
 }
 
 available_definitions() {

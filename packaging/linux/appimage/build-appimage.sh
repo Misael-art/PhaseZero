@@ -28,6 +28,7 @@ case "$WORK" in
     ""|/|"$HOME"|"$ROOT") echo "unsafe AppImage work path: ${WORK:-<empty>}" >&2; exit 64 ;;
 esac
 APPDIR="$WORK/PhaseZero.AppDir"
+SOURCE="$WORK/source"
 
 cleanup() {
     [ -z "$TOOL_TEMP" ] || [ ! -f "$TOOL_TEMP" ] || rm -f -- "$TOOL_TEMP"
@@ -71,19 +72,21 @@ command -v jq >/dev/null 2>&1 || { echo "jq missing" >&2; exit 69; }
 mkdir -p "$OUT"
 OUT="$(cd "$OUT" && pwd)"
 
-rm -rf -- "$APPDIR"
+rm -rf -- "$APPDIR" "$SOURCE"
+mkdir -p "$SOURCE"
+"$ROOT/packaging/linux/export-source.sh" "$SOURCE"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib/phasezero" \
     "$APPDIR/usr/lib/python3/site-packages" "$APPDIR/usr/share/applications" \
     "$APPDIR/usr/share/metainfo"
 
-cp -a "$ROOT/linux" "$ROOT/profiles" "$ROOT/assets" "$ROOT/version.json" "$APPDIR/usr/lib/phasezero/"
+cp -a "$SOURCE/linux" "$SOURCE/profiles" "$SOURCE/assets" "$SOURCE/version.json" "$APPDIR/usr/lib/phasezero/"
 find "$APPDIR/usr/lib/phasezero" -type d -name __pycache__ -exec rm -rf {} +
-cp "$ROOT/packaging/linux/appimage/AppRun" "$APPDIR/AppRun"
-cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.desktop" \
+cp "$SOURCE/packaging/linux/appimage/AppRun" "$APPDIR/AppRun"
+cp "$SOURCE/packaging/linux/io.phasezero.ControlCenter.desktop" \
     "$APPDIR/io.phasezero.ControlCenter.desktop"
-cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.desktop" \
+cp "$SOURCE/packaging/linux/io.phasezero.ControlCenter.desktop" \
     "$APPDIR/usr/share/applications/"
-cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.metainfo.xml" \
+cp "$SOURCE/packaging/linux/io.phasezero.ControlCenter.metainfo.xml" \
     "$APPDIR/usr/share/metainfo/io.phasezero.ControlCenter.appdata.xml"
 cp "$PYTHON_BIN" "$APPDIR/usr/bin/python3"
 PY_VER="$("$PYTHON_BIN" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
@@ -108,7 +111,7 @@ fi
     --target "$APPDIR/usr/lib/python3/site-packages" \
     "PySide6_Essentials==6.11.1" "shiboken6==6.11.1"
 
-cp "$ROOT/packaging/linux/io.phasezero.ControlCenter.svg" \
+cp "$SOURCE/packaging/linux/io.phasezero.ControlCenter.svg" \
     "$APPDIR/io.phasezero.ControlCenter.svg"
 ln -s "io.phasezero.ControlCenter.svg" "$APPDIR/.DirIcon"
 chmod +x "$APPDIR/AppRun" "$APPDIR/usr/lib/phasezero/linux/pz" \
