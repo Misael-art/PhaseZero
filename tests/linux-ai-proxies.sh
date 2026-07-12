@@ -19,7 +19,7 @@ grep -q 'PZ_BIND_HOST' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'unsafe dotenv variable rejected' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'secure proxy key generation failed' "$ROOT/linux/ai/proxy-suite.sh"
 status="$("$ROOT/linux/pz" ai proxies status)"
-[ "$(jq 'length' <<< "$status")" -eq 10 ]
+[ "$(jq 'length' <<< "$status")" -eq 11 ]
 jq -e 'map(.id) | index("qwen-worker-proxy") != null and index("unlimited-ai-proxy") != null' <<< "$status" >/dev/null
 jq -e '
   .[] | select(.id == "unlimited-ai-proxy") | .kind == "node" and .port == 8787
@@ -28,9 +28,9 @@ jq -e '
   .[] | select(.id == "mimo-ai-proxy") | .kind == "go" and .port == 3013
 ' <<< "$status" >/dev/null
 plan="$("$ROOT/linux/pz" ai proxies plan all)"
-[ "$(grep -c '^would install ' <<< "$plan")" -eq 10 ]
+[ "$(grep -c '^would install ' <<< "$plan")" -eq 11 ]
 auth="$("$ROOT/linux/pz" ai proxies auth all)"
-[ "$(jq 'length' <<< "$auth")" -eq 10 ]
+[ "$(jq 'length' <<< "$auth")" -eq 11 ]
 jq -e '
   .[] | select(.id == "qwenproxy") |
   .webValidation.required == true and

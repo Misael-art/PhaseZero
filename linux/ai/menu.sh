@@ -22,6 +22,11 @@ run_action() {
         compat-status) bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" status | jq '.' ;;
         setup-admin) bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" setup ;;
         admin-status) bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" status | jq '.' ;;
+        init-project)
+            printf 'Project dir [%s]: ' "$PWD"
+            read -r project_dir
+            bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" init "${project_dir:-$PWD}"
+            ;;
         setup-ides) bash "$PZ_ROOT/linux/ai/setup-ides.sh" configure ;;
         install-ide-apps) bash "$PZ_ROOT/linux/ai/setup-ides.sh" install-apps ;;
         setup-all) bash "$PZ_ROOT/linux/pz" ai setup all ;;
@@ -51,6 +56,7 @@ B. Setup admin bridge (bigsudo)
 N. Admin bridge status
 I. Setup IDE integration
 J. Install IDE apps
+P. Init project rules (inject PhaseZero into any project)
 A. Setup all AI tools
 0. Quit
 EOF
@@ -78,6 +84,7 @@ while true; do
         N|n) run_action admin-status ;;
         I|i) run_action setup-ides ;;
         J|j) run_action install-ide-apps ;;
+        P|p) run_action init-project ;;
         A|a) run_action setup-all ;;
         0) run_action quit ;;
         *) pz_warn "invalid option" ;;

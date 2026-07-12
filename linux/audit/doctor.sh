@@ -561,6 +561,32 @@ for tool in codex claude opencode hermes openclaw ollama; do
         esac
     fi
 done
+codexbar_health="$(bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" health 2>/dev/null || echo '{"verdict":"degraded","problems":["health_unavailable"]}')"
+if jq -e '.clis.codexbar.available == true' <<< "$ai_status" >/dev/null 2>&1; then
+    if jq -e '[.problems[]? | select(. == "cli_binary_corrupted" or . == "cli_integrity_baseline_missing")] | length == 0' <<< "$codexbar_health" >/dev/null 2>&1; then
+        check AI_CODEXBAR_CLI "CodexBar CLI integrity" PASS "$(jq -r '.clis.codexbar.path' <<< "$ai_status")"
+    else
+        check AI_CODEXBAR_CLI "CodexBar CLI integrity" FAIL "run: linux/pz ai codexbar repair"
+    fi
+else
+    check AI_CODEXBAR_CLI "CodexBar CLI available" WARN "run: linux/pz ai setup codexbar"
+fi
+if jq -e '.codexbarPlasmoid.configExists == true' <<< "$ai_status" >/dev/null 2>&1 \
+    && jq -e '[.problems[]? | select(startswith("config_"))] | length == 0' <<< "$codexbar_health" >/dev/null 2>&1; then
+    check AI_CODEXBAR_CONFIG "CodexBar config valid" PASS "$(jq -r '.codexbar.config.path // "resolved by CodexBar"' <<< "$ai_status")"
+else
+    check AI_CODEXBAR_CONFIG "CodexBar config valid" WARN "$(jq -r '[.problems[]? | select(startswith("config_"))] | join(", ")' <<< "$codexbar_health"); run: linux/pz ai codexbar repair"
+fi
+if jq -e '.verdict == "healthy"' <<< "$codexbar_health" >/dev/null 2>&1; then
+    check AI_CODEXBAR_USAGE "CodexBar providers return usage" PASS "enabled providers validated"
+else
+    check AI_CODEXBAR_USAGE "CodexBar providers return usage" WARN "$(jq -r '.problems | join(", ")' <<< "$codexbar_health")"
+fi
+if jq -e '.codexbarPlasmoid.installed == true' <<< "$ai_status" >/dev/null 2>&1; then
+    check AI_CODEXBAR_PLASMOID "KodexBar Plasma widget package" INFO "optional external QML; live updates blocked"
+else
+    check AI_CODEXBAR_PLASMOID "KodexBar Plasma widget package" INFO "not installed; native PhaseZero UI remains available"
+fi
 if jq -e '.desktopApps.claudeDesktop.installed == true' <<< "$ai_status" >/dev/null 2>&1; then
     check AI_CLAUDE_DESKTOP "Claude Desktop installed" PASS "$(jq -r '.desktopApps.claudeDesktop.version' <<< "$ai_status")"
 else

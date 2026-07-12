@@ -30,6 +30,7 @@ airlock|https://github.com/pedrofariasx/airlock.git|0|library
 unlimited-ai-proxy|https://github.com/pedrofariasx/unlimited-ai-proxy.git|8787|node
 deepsproxy|https://github.com/pedrofariasx/deepsproxy.git|3012|node
 mimo-ai-proxy|https://github.com/pedrofariasx/mimo-ai-proxy.git|3013|go
+9router|https://github.com/decolua/9router.git|20128|npm
 EOF
 }
 
@@ -161,6 +162,10 @@ apply_loopback_patch() {
 
 install_one() {
     local id="$1" repo="$2" port="$3" kind="$4" dir
+    if [ "$id" = 9router ] && [ "$kind" = npm ]; then
+        bash "$PZ_ROOT/linux/ai/9router-manager.sh" install
+        return
+    fi
     dir="$ROOT/$id"
     install -d "$ROOT" "$BIN" "$UNITS"
     if [ -d "$dir/.git" ]; then
@@ -260,8 +265,12 @@ status_json() {
     while IFS='|' read -r id repo port kind; do
         [ -n "$id" ] || continue
         dir="$ROOT/$id"; installed=false; service="not-applicable"
-        [ -d "$dir/.git" ] && installed=true
-        { [ "$kind" = node ] || [ "$kind" = go ]; } &&
+        if [ "$id" = 9router ]; then
+            [ -x "$dir/bin/9router" ] && installed=true
+        else
+            [ -d "$dir/.git" ] && installed=true
+        fi
+        { [ "$kind" = node ] || [ "$kind" = go ] || [ "$kind" = npm ]; } &&
             service="$(systemctl --user is-active "phasezero-$id.service" 2>/dev/null || true)"
         $first || printf ','
         first=false
@@ -275,7 +284,7 @@ status_json() {
 service_action() {
     local mode="$1" id repo port kind count=0
     while IFS='|' read -r id repo port kind; do
-        { [ "$kind" = node ] || [ "$kind" = go ]; } || continue
+        { [ "$kind" = node ] || [ "$kind" = go ] || [ "$kind" = npm ]; } || continue
         if [ "$mode" = start ]; then
             systemctl --user enable --now "phasezero-$id.service"
         else
@@ -634,9 +643,12 @@ auth_status_json() {
         [ -n "$id" ] || continue
         dir="$ROOT/$id"
         env_file="$PROXY_ENV_DIR/$id.env"
-        installed=false; [ -d "$dir/.git" ] && installed=true
+        installed=false
+        if [ "$id" = 9router ]; then [ -x "$dir/bin/9router" ] && installed=true
+        else [ -d "$dir/.git" ] && installed=true
+        fi
         service="not-applicable"
-        { [ "$kind" = node ] || [ "$kind" = go ]; } &&
+        { [ "$kind" = node ] || [ "$kind" = go ] || [ "$kind" = npm ]; } &&
             service="$(systemctl --user is-active "phasezero-$id.service" 2>/dev/null || true)"
         api_configured=false
         dotenv_has_any_key "$env_file" API_KEY && api_configured=true
@@ -668,6 +680,14 @@ auth_status_json() {
                 web_status="configured"
             else
                 web_status="missing-credentials"
+            fi
+        elif [ "$id" = "9router" ]; then
+            required=true
+            web_kind="dashboard-provider"
+            command="linux/pz ai 9router dashboard"
+            if ! $installed; then web_status="not-installed"
+            elif [ "$service" != active ]; then web_status="start-required"
+            else web_status="dashboard-ready"
             fi
         elif [ "$id" = "qwen-worker-proxy" ]; then
             web_kind="external-deploy"
@@ -870,7 +890,15 @@ case "$ACTION" in
         ;;
     auth|auth-status|login-status) auth_status_json ;;
     configure-ides|ides|configure) configure_ides ;;
-    test|verify) test_proxies ;;
+    test|verify)
+        if [ "$TARGET" = 9router ]; then
+            bash "$PZ_ROOT/linux/ai/9router-manager.sh" test | jq -s '.'
+        elif [ "$TARGET" = all ]; then
+            { test_proxies; bash "$PZ_ROOT/linux/ai/9router-manager.sh" test | jq -s '.'; } | jq -s 'add'
+        else
+            test_proxies
+        fi
+        ;;
     start|enable) service_action start ;;
     stop|disable) service_action stop ;;
     login) login_proxy "$TARGET" ;;

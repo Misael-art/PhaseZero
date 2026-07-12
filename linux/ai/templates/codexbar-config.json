@@ -1,0 +1,10 @@
+{
+  "_managedBy": "phasezero",
+  "version": 1,
+  "providers": [
+    { "id": "codex", "enabled": true, "source": "auto" },
+    { "id": "claude", "enabled": true, "source": "auto" },
+    { "id": "zai", "enabled": false, "source": "auto", "region": "global" },
+    { "id": "openai", "enabled": false, "source": "auto" }
+  ]
+}

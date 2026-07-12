@@ -157,9 +157,10 @@ dry_run() {
 
 case "${1:-configure}" in
     configure|setup) configure_ides ;;
+    recommendations|workspace-recommendations) write_workspace_recommendations ;;
     status) ide_status ;;
     install-apps|apps) install_apps ;;
     install-extensions) install_extensions ;;
     dry-run|plan) dry_run ;;
-    *) echo "usage: setup-ides.sh (configure|status|install-apps|install-extensions|dry-run)"; exit 1 ;;
+    *) echo "usage: setup-ides.sh (configure|recommendations|status|install-apps|install-extensions|dry-run)"; exit 1 ;;
 esac

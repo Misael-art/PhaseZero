@@ -168,6 +168,7 @@ command_record ai-usagebar ai-usagebar --help >> "$tmp_clis"
 command_record ai-usagebar-tui ai-usagebar-tui --help >> "$tmp_clis"
 command_record headroom headroom --version >> "$tmp_clis"
 command_record rtk rtk --version >> "$tmp_clis"
+command_record codexbar codexbar --version >> "$tmp_clis"
 
 ide_record vscode code "${XDG_CONFIG_HOME:-$HOME/.config}/Code/User/settings.json" >> "$tmp_ides"
 ide_record code-oss codium "${XDG_CONFIG_HOME:-$HOME/.config}/VSCodium/User/settings.json" >> "$tmp_ides"
@@ -195,6 +196,7 @@ desktop_apps="$(bash "$PZ_ROOT/linux/ai/desktop-apps.sh" status 2>/dev/null || j
 github="$(github_auth_record)"
 admin_bridge="$(bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,ready:false,backend:"missing"}')"
 agent_compat="$(bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,mode:"degraded",rules:{ok:false,files:[]},tools:{}}')"
+codexbar_status="$(bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,cli:{available:false,path:""},plasmoid:{installed:false},config:{exists:false}}')"
 
 rtk_available="$(jq -r '.rtk.available' <<< "$clis")"
 memory_available="$(jq -r '."ai-memory".available' <<< "$clis")"
@@ -230,6 +232,9 @@ if jq -e '.gh.available == true' <<< "$clis" >/dev/null && ! jq -e '.authenticat
 fi
 jq -e '.vscode.available == true or .cursor.available == true or .windsurf.available == true or .neovim.available == true' <<< "$ides" >/dev/null || echo "install an AI-capable IDE/editor" >> "$recommendations"
 jq -e '.claudeDesktop.installed == true' <<< "$desktop_apps" >/dev/null || echo "linux/pz ai desktop install-claude" >> "$recommendations"
+if command -v plasmashell >/dev/null 2>&1; then
+    jq -e '.codexbar.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai setup codexbar" >> "$recommendations"
+fi
 jq -e '.updater.timerEnabled == true and .codexDesktop.guardEnabled == true' <<< "$desktop_apps" >/dev/null || echo "linux/pz ai desktop install-services" >> "$recommendations"
 
 jq -cn \
@@ -245,6 +250,7 @@ jq -cn \
     --argjson github "$github" \
     --argjson adminBridge "$admin_bridge" \
     --argjson agentCompat "$agent_compat" \
+    --argjson codexbar "$codexbar_status" \
     --argjson memoryReachable "$memory_reach" \
     --argjson memoryConfigured "$memory_marker" \
     --arg hermesConfig "$HOME/.hermes/config.yaml" \
@@ -266,6 +272,14 @@ jq -cn \
       github: $github,
       adminBridge: $adminBridge,
       agentCompat: $agentCompat,
+      codexbarPlasmoid: {
+        installed: ($codexbar.plasmoid.installed // false),
+        plasmoidId: ($codexbar.plasmoid.id // ""),
+        cliPath: ($codexbar.cli.path // ""),
+        cliVersion: ($codexbar.cli.version // ""),
+        configExists: ($codexbar.config.exists // false)
+      },
+      codexbar: $codexbar,
       mcp: $mcp,
       agentConfigs: {
         hermes: {

@@ -8,6 +8,7 @@ source "$PZ_ROOT/linux/lib/common.sh"
 LOCAL_BIN="${PZ_LOCAL_BIN:-$HOME/.local/bin}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/ai"
 STATE_FILE="$STATE_DIR/agent-compat.json"
+PROJECTS_FILE="$STATE_DIR/projects.json"
 WORKSPACE_ROOT="${PZ_WORKSPACE_ROOT:-$PZ_ROOT}"
 RTK_REPO_API="${PZ_RTK_REPO_API:-https://api.github.com/repos/rtk-ai/rtk/releases/latest}"
 RTK_DOCS_URL="https://www.rtk-ai.app/docs/"
@@ -276,6 +277,12 @@ write_marked_block() {
     rm -f "$block"
 }
 
+# zcode is an OpenCode fork and reads AGENTS.md natively; the dedicated
+# .zcode/rules/ copies stay opt-in until upstream documents project rules.
+zcode_rules_enabled() {
+    [ "${PZ_INIT_ZCODE:-0}" = "1" ]
+}
+
 phasezero_targets() {
     printf '%s\t%s\t%s\n' "agents" "$WORKSPACE_ROOT/AGENTS.md" "none"
     printf '%s\t%s\t%s\n' "claude" "$WORKSPACE_ROOT/CLAUDE.md" "none"
@@ -284,6 +291,9 @@ phasezero_targets() {
     printf '%s\t%s\t%s\n' "cursor" "$WORKSPACE_ROOT/.cursor/rules/phasezero-tools.mdc" "cursor"
     printf '%s\t%s\t%s\n' "windsurf" "$WORKSPACE_ROOT/.windsurf/rules/phasezero-tools.md" "windsurf"
     printf '%s\t%s\t%s\n' "cline" "$WORKSPACE_ROOT/.clinerules/phasezero-tools.md" "none"
+    if zcode_rules_enabled; then
+        printf '%s\t%s\t%s\n' "zcode" "$WORKSPACE_ROOT/.zcode/rules/phasezero-tools.md" "none"
+    fi
 }
 
 caveman_targets() {
@@ -294,6 +304,9 @@ caveman_targets() {
     printf '%s\t%s\t%s\n' "cursor" "$WORKSPACE_ROOT/.cursor/rules/caveman.mdc" "cursor"
     printf '%s\t%s\t%s\n' "windsurf" "$WORKSPACE_ROOT/.windsurf/rules/caveman.md" "windsurf"
     printf '%s\t%s\t%s\n' "cline" "$WORKSPACE_ROOT/.clinerules/caveman.md" "none"
+    if zcode_rules_enabled; then
+        printf '%s\t%s\t%s\n' "zcode" "$WORKSPACE_ROOT/.zcode/rules/caveman.md" "none"
+    fi
 }
 
 rule_pairs() {
@@ -304,6 +317,9 @@ rule_pairs() {
     printf '%s\t%s\t%s\n' "cursor" "$WORKSPACE_ROOT/.cursor/rules/caveman.mdc" "$WORKSPACE_ROOT/.cursor/rules/phasezero-tools.mdc"
     printf '%s\t%s\t%s\n' "windsurf" "$WORKSPACE_ROOT/.windsurf/rules/caveman.md" "$WORKSPACE_ROOT/.windsurf/rules/phasezero-tools.md"
     printf '%s\t%s\t%s\n' "cline" "$WORKSPACE_ROOT/.clinerules/caveman.md" "$WORKSPACE_ROOT/.clinerules/phasezero-tools.md"
+    if zcode_rules_enabled; then
+        printf '%s\t%s\t%s\n' "zcode" "$WORKSPACE_ROOT/.zcode/rules/caveman.md" "$WORKSPACE_ROOT/.zcode/rules/phasezero-tools.md"
+    fi
 }
 
 is_ponytail_workspace() {
@@ -505,6 +521,277 @@ dry_run() {
         '{tool:"agent-compat",planned:["install RTK release with sha256 verification","run rtk init when available","install Headroom via uv/pipx","configure ai-memory service/hooks","apply Caveman and PhaseZero tool rules","apply Ponytail rules only when workspace detected","write AI context frugality pack","write status state"],workspaceRoot:$workspaceRoot,localBin:$localBin,rtkAsset:$rtkAsset}'
 }
 
+remove_marked_block() {
+    local path="$1" label="$2" kind="${3:-none}" begin end tmp
+    [ -f "$path" ] || return 0
+    if [ "$kind" = "hash" ]; then
+        begin="# >>> $label >>>"
+        end="# <<< $label <<<"
+    else
+        begin="<!-- BEGIN $label -->"
+        end="<!-- END $label -->"
+    fi
+    grep -qF "$begin" "$path" || return 0
+    tmp="$(mktemp)"
+    awk -v begin="$begin" -v end="$end" '
+        { clean = $0; sub(/\r$/, "", clean) }
+        clean == begin { in_block = 1; next }
+        clean == end { in_block = 0; next }
+        !in_block { print }
+    ' "$path" > "$tmp"
+    trim_trailing_blank_lines "$tmp"
+    backup_managed_file "$path"
+    if grep -q '[^[:space:]]' "$tmp"; then
+        mv "$tmp" "$path"
+        pz_info "removed $label block from $path"
+    else
+        rm -f "$tmp" "$path"
+        pz_info "removed $path"
+    fi
+}
+
+projects_file_init() {
+    mkdir -p "$STATE_DIR"
+    [ -f "$PROJECTS_FILE" ] || printf '{"schemaVersion":1,"projects":[]}\n' > "$PROJECTS_FILE"
+}
+
+rules_source_hash() {
+    local ponytail="${1:-false}"
+    local files=(
+        "$PZ_ROOT/assets/agent-skills/caveman-always-on.md"
+        "$PZ_ROOT/assets/agent-skills/phasezero-tools-always-on.md"
+    )
+    [ "$ponytail" = "true" ] && files+=("$PZ_ROOT/assets/agent-skills/ponytail-architecture-runtime.md")
+    cat "${files[@]}" | sha256sum | awk '{print "sha256-"$1}'
+}
+
+register_project() {
+    local path="$1" ponytail="$2" zcode="$3" hash="$4" rules_applied="$5" tmp
+    projects_file_init
+    tmp="$(mktemp)"
+    jq --arg path "$path" --arg at "$(date -Iseconds)" --arg hash "$hash" \
+        --argjson ponytail "$(bool_json "$ponytail")" \
+        --argjson zcode "$(bool_json "$zcode")" \
+        --argjson rulesApplied "$(bool_json "$rules_applied")" '
+        .projects = [.projects[] | select(.path != $path)] + [{
+            path: $path,
+            injectedAt: $at,
+            agents: (if $rulesApplied
+                then (["agents","claude","gemini","github-copilot","cursor","windsurf","cline"]
+                    + (if $zcode then ["zcode"] else [] end))
+                else [] end),
+            ponytail: $ponytail,
+            rulesHash: $hash,
+            lastStatus: "ready"
+        }]' "$PROJECTS_FILE" > "$tmp" && mv "$tmp" "$PROJECTS_FILE"
+}
+
+unregister_project() {
+    local path="$1" tmp
+    [ -f "$PROJECTS_FILE" ] || return 0
+    tmp="$(mktemp)"
+    jq --arg path "$path" '.projects = [.projects[] | select(.path != $path)]' \
+        "$PROJECTS_FILE" > "$tmp" && mv "$tmp" "$PROJECTS_FILE"
+}
+
+list_projects() {
+    projects_file_init
+    jq . "$PROJECTS_FILE"
+}
+
+init_planned_files() {
+    local only_rules="$1" only_frugality="$2"
+    if [ "$only_frugality" != "true" ]; then
+        caveman_targets | cut -f2
+        phasezero_targets | cut -f2
+    fi
+    if [ "$only_rules" != "true" ]; then
+        printf '%s\n' \
+            "$WORKSPACE_ROOT/.codex/context-packs/ai-context-frugality.md" \
+            "$WORKSPACE_ROOT/.codex/ai-context/frugality-manifest.json" \
+            "$WORKSPACE_ROOT/.codex/ai-context/repo-skeleton.json" \
+            "$WORKSPACE_ROOT/.codex/ai-context/repo-skeleton.md" \
+            "$WORKSPACE_ROOT/.aiderignore"
+    fi
+    if [ "$only_rules" != "true" ] && [ "$only_frugality" != "true" ]; then
+        printf '%s\n' "$WORKSPACE_ROOT/.vscode/extensions.json"
+    fi
+}
+
+init_status() {
+    local target="$1" ponytail=false frugality=false initialized=false
+    local record record_ponytail hash match=null rule_json
+    WORKSPACE_ROOT="$target"
+    [ -d "$target/.zcode/rules" ] && export PZ_INIT_ZCODE=1
+    is_ponytail_workspace "$target" && ponytail=true
+    rule_json="$(rule_records | jq -s .)"
+    frugality_configured && frugality=true
+    jq -e 'all(.[]; .caveman == true and .phasezeroTools == true)' <<< "$rule_json" >/dev/null && initialized=true
+    projects_file_init
+    record="$(jq -c --arg path "$target" '[.projects[] | select(.path == $path)] | first // null' "$PROJECTS_FILE")"
+    record_ponytail="$(jq -r 'if type == "object" then (.ponytail | tostring) else empty end' <<< "$record")"
+    case "$record_ponytail" in true|false) ;; *) record_ponytail="$ponytail" ;; esac
+    hash="$(rules_source_hash "$record_ponytail")"
+    if [ "$record" != "null" ]; then
+        if [ "$(jq -r '.rulesHash // ""' <<< "$record")" = "$hash" ]; then match=true; else match=false; fi
+    fi
+    jq -cn \
+        --arg path "$target" \
+        --arg sourceHash "$hash" \
+        --argjson rules "$rule_json" \
+        --argjson record "$record" \
+        --argjson initialized "$(bool_json "$initialized")" \
+        --argjson frugality "$(bool_json "$frugality")" \
+        --argjson ponytail "$(bool_json "$ponytail")" \
+        --argjson rulesHashMatch "$match" \
+        '{schemaVersion:1,action:"init-status",path:$path,initialized:$initialized,frugalityConfigured:$frugality,ponytailDetected:$ponytail,sourceRulesHash:$sourceHash,rulesHashMatch:$rulesHashMatch,registered:($record != null),record:$record,rules:$rules}'
+}
+
+init_undo_target() {
+    local path="$1" base
+    [ -e "$path" ] || return 0
+    base="$(basename "$path")"
+    case "$base" in
+        caveman.*|phasezero-tools.*)
+            backup_managed_file "$path"
+            rm -f "$path"
+            pz_info "removed $path"
+            ;;
+        *)
+            remove_marked_block "$path" "BOOTSTRAP CAVEMAN"
+            remove_marked_block "$path" "PHASEZERO TOOLS"
+            remove_marked_block "$path" "PONYTAIL ARCHITECTURE"
+            ;;
+    esac
+}
+
+init_undo() {
+    local target="$1" id path header dir
+    WORKSPACE_ROOT="$target"
+    [ -d "$target/.zcode/rules" ] && export PZ_INIT_ZCODE=1
+    while IFS=$'\t' read -r id path header; do
+        [ -n "$path" ] || continue
+        init_undo_target "$path"
+    done < <(caveman_targets; phasezero_targets)
+    remove_marked_block "$target/.aiderignore" "PHASEZERO AI CONTEXT FRUGALITY" "hash"
+    rm -f \
+        "$target/.codex/context-packs/ai-context-frugality.md" \
+        "$target/.codex/context-packs/ai-context-frugality.md.bak."* \
+        "$target/.codex/ai-context/frugality-manifest.json" \
+        "$target/.codex/ai-context/repo-skeleton.json" \
+        "$target/.codex/ai-context/repo-skeleton.md"
+    for dir in \
+        "$target/.codex/context-packs" "$target/.codex/ai-context" "$target/.codex" \
+        "$target/.cursor/rules" "$target/.cursor" \
+        "$target/.windsurf/rules" "$target/.windsurf" \
+        "$target/.clinerules" "$target/.zcode/rules" "$target/.zcode"; do
+        [ -d "$dir" ] && rmdir --ignore-fail-on-non-empty "$dir" 2>/dev/null || true
+    done
+    unregister_project "$target"
+    jq -cn --arg path "$target" \
+        '{schemaVersion:1,action:"init-undo",path:$path,removed:true,note:"managed blocks removed; fully-managed rule files deleted; .vscode/extensions.json kept (merged with user content)"}'
+}
+
+init_usage() {
+    cat >&2 <<'EOF'
+usage: setup-agent-compat.sh init [--dry-run] [--force] [--zcode] [--only-rules|--only-frugality] [<project-dir>]
+       setup-agent-compat.sh init --status [<project-dir>]
+       setup-agent-compat.sh init --list
+       setup-agent-compat.sh init --undo [<project-dir>]
+EOF
+}
+
+cmd_init() {
+    local target="" mode="apply" arg
+    local dry_run=false force=false zcode=false only_rules=false only_frugality=false
+    for arg in "$@"; do
+        case "$arg" in
+            --dry-run|-n) dry_run=true ;;
+            --force) force=true ;;
+            --zcode) zcode=true ;;
+            --only-rules) only_rules=true ;;
+            --only-frugality) only_frugality=true ;;
+            --status) mode="status" ;;
+            --list) mode="list" ;;
+            --undo) mode="undo" ;;
+            --help|-h) init_usage; return 0 ;;
+            -*) pz_error "unknown init flag: $arg"; init_usage; return 2 ;;
+            *) target="$arg" ;;
+        esac
+    done
+    if [ "$mode" = "list" ]; then
+        list_projects
+        return 0
+    fi
+    target="${target:-$PWD}"
+    target="$(realpath -m "$target" 2>/dev/null || printf '%s' "$target")"
+    [ -d "$target" ] || { pz_error "not a directory: $target"; return 1; }
+    case "$mode" in
+        status) init_status "$target"; return $? ;;
+        undo) init_undo "$target"; return $? ;;
+    esac
+    if [ "$only_rules" = "true" ] && [ "$only_frugality" = "true" ]; then
+        pz_error "--only-rules and --only-frugality are mutually exclusive"
+        return 2
+    fi
+    case "$target" in
+        /|"$HOME") pz_error "refusing to inject agent rules at $target"; return 1 ;;
+    esac
+    [ -w "$target" ] || { pz_error "directory not writable: $target"; return 1; }
+    [ "$zcode" = "true" ] && export PZ_INIT_ZCODE=1
+    WORKSPACE_ROOT="$target"
+
+    local ponytail=false
+    if is_ponytail_workspace "$target" || [ "${PZ_PONYTAIL_FORCE:-0}" = "1" ]; then
+        ponytail=true
+    fi
+    local hash
+    hash="$(rules_source_hash "$ponytail")"
+
+    if [ "$dry_run" = "true" ]; then
+        init_planned_files "$only_rules" "$only_frugality" | sort -u | jq -R . | jq -cs \
+            --arg path "$target" --arg hash "$hash" \
+            --argjson ponytail "$(bool_json "$ponytail")" \
+            --argjson zcode "$(bool_json "$zcode")" \
+            '{schemaVersion:1,action:"init",dryRun:true,path:$path,ponytail:$ponytail,zcode:$zcode,sourceRulesHash:$hash,plannedFiles:.}'
+        return 0
+    fi
+
+    if [ "$force" != "true" ] && [ "$only_frugality" != "true" ] &&
+        [ -f "$target/AGENTS.md" ] && grep -q 'BEGIN PHASEZERO TOOLS' "$target/AGENTS.md"; then
+        pz_warn "project already initialized: $target (use --force to refresh)"
+        jq -cn --arg path "$target" \
+            '{schemaVersion:1,action:"init",path:$path,status:"already-initialized",hint:"re-run with --force to refresh managed blocks"}'
+        return 3
+    fi
+
+    local wrote_rules=false wrote_frugality=false wrote_vscode=false
+    if [ "$only_frugality" != "true" ]; then
+        apply_rules
+        wrote_rules=true
+    fi
+    if [ "$only_rules" != "true" ]; then
+        apply_frugality_pack
+        wrote_frugality=true
+    fi
+    if [ "$only_rules" != "true" ] && [ "$only_frugality" != "true" ]; then
+        if PZ_WORKSPACE_ROOT="$target" bash "$PZ_ROOT/linux/ai/setup-ides.sh" recommendations >/dev/null; then
+            wrote_vscode=true
+        else
+            pz_warn "vscode workspace recommendations skipped"
+        fi
+    fi
+    register_project "$target" "$ponytail" "$zcode" "$hash" "$wrote_rules"
+    jq -cn \
+        --arg path "$target" --arg hash "$hash" --arg projectsFile "$PROJECTS_FILE" \
+        --argjson ponytail "$(bool_json "$ponytail")" \
+        --argjson zcode "$(bool_json "$zcode")" \
+        --argjson rules "$(bool_json "$wrote_rules")" \
+        --argjson frugality "$(bool_json "$wrote_frugality")" \
+        --argjson vscode "$(bool_json "$wrote_vscode")" \
+        '{schemaVersion:1,action:"init",path:$path,status:"ready",wrote:{rules:$rules,frugality:$frugality,vscodeRecommendations:$vscode},ponytail:$ponytail,zcode:$zcode,rulesHash:$hash,projectsFile:$projectsFile}'
+}
+
 setup_all() {
     install_rtk_fallback
     configure_rtk
@@ -541,5 +828,9 @@ case "${1:-setup}" in
     rtk-init)
         configure_rtk
         ;;
-    *) echo "usage: setup-agent-compat.sh (setup|status|dry-run|install-rtk|headroom|rules|frugality|rtk-init)" >&2; exit 1 ;;
+    init|initialize|bootstrap)
+        shift
+        cmd_init "$@"
+        ;;
+    *) echo "usage: setup-agent-compat.sh (setup|status|dry-run|install-rtk|headroom|rules|frugality|rtk-init|init)" >&2; exit 1 ;;
 esac

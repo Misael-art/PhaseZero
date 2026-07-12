@@ -59,6 +59,7 @@ def test_catalog_safety_and_parameters():
         (("ai", "opencode"), ("sync", "status", "local-model", "free-model", "install-hook")),
         (("ai", "mcp"), ("install", "sync", "repair", "status", "list")),
         (("ai", "proxies"), ("status", "install", "configure-ides", "auth", "login", "test")),
+        (("ai", "9router"), ("status", "install", "dashboard", "test", "provider", "combo", "usage")),
         (("flatpak", "remote"), ("add", "remove")),
         (("flatpak", "overrides"), ("apply", "remove")),
         (("waydroid", "host-access"), ("link", "unlink", "status")),

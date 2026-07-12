@@ -24,6 +24,11 @@ class AiDevPage(BasePage):
     ) -> None:
         super().__init__(root, runner, actions, by_id, parent)
         self.tool_checkboxes: dict[str, QCheckBox] = {}
+        self.router_service: QLabel | None = None
+        self.router_providers: QLabel | None = None
+        self.router_combos: QLabel | None = None
+        self.status_loader.status_ready.connect(self._router_status_ready)
+        self.status_loader.status_failed.connect(self._router_status_failed)
 
     def build(self) -> None:
         scroll = QScrollArea()
@@ -40,6 +45,37 @@ class AiDevPage(BasePage):
             action = self.find(aid)
             if action:
                 layout.addWidget(self._action_row(action))
+
+        codexbar_box = QGroupBox("CodexBar — uso e cotas")
+        codexbar_layout = QVBoxLayout(codexbar_box)
+        for aid in (
+            "ai.codexbar-status", "ai.codexbar-health", "ai.codexbar-setup",
+            "ai.codexbar-auth", "ai.codexbar-repair",
+        ):
+            action = self.find(aid)
+            if action:
+                codexbar_layout.addWidget(self._action_row(action))
+        layout.addWidget(codexbar_box)
+
+        router_box = QGroupBox("9Router — roteamento inteligente")
+        router_layout = QVBoxLayout(router_box)
+        summary = QFrame()
+        summary.setObjectName("moduleFacts")
+        facts = QHBoxLayout(summary)
+        facts.setContentsMargins(14, 10, 14, 10)
+        self.router_service = self._router_fact("Serviço", "Verificando…", facts)
+        self.router_providers = self._router_fact("Providers ativos", "—", facts)
+        self.router_combos = self._router_fact("Combos", "—", facts)
+        router_layout.addWidget(summary)
+        for aid in (
+            "ai.9router-status", "ai.9router-install", "ai.9router-dashboard",
+            "ai.9router-test", "ai.9router-secrets", "ai.9router-combos",
+            "ai.9router-usage",
+        ):
+            action = self.find(aid)
+            if action:
+                router_layout.addWidget(self._action_row(action))
+        layout.addWidget(router_box)
 
         # Proxies table
         proxy_box = QGroupBox("Proxies IA (OpenAI-compatible)")
@@ -86,6 +122,43 @@ class AiDevPage(BasePage):
 
         scroll.setWidget(inner)
         self._layout.addWidget(scroll)
+        self.reload()
+
+    @staticmethod
+    def _router_fact(label: str, value: str, layout: QHBoxLayout) -> QLabel:
+        box = QVBoxLayout()
+        value_label = QLabel(value)
+        value_label.setObjectName("moduleFactValue")
+        caption = QLabel(label)
+        caption.setObjectName("moduleFactLabel")
+        box.addWidget(value_label)
+        box.addWidget(caption)
+        layout.addLayout(box, 1)
+        return value_label
+
+    def reload(self) -> None:
+        super().reload()
+        action = self.by_id.get("ai.9router-status")
+        if action and not self.status_loader.running(action.id):
+            self.status_loader.fetch_action(action)
+
+    def _router_status_ready(self, action_id: str, _stdout: str, parsed: object) -> None:
+        if action_id != "ai.9router-status" or not isinstance(parsed, dict):
+            return
+        installed = bool(parsed.get("installed"))
+        healthy = bool(parsed.get("healthy"))
+        if self.router_service:
+            self.router_service.setText("Online" if healthy else "Parado" if installed else "Não instalado")
+        providers = parsed.get("providers") if isinstance(parsed.get("providers"), dict) else {}
+        combos = parsed.get("combos") if isinstance(parsed.get("combos"), dict) else {}
+        if self.router_providers:
+            self.router_providers.setText(str(providers.get("active", 0)))
+        if self.router_combos:
+            self.router_combos.setText(str(combos.get("total", 0)))
+
+    def _router_status_failed(self, action_id: str, _message: str) -> None:
+        if action_id == "ai.9router-status" and self.router_service:
+            self.router_service.setText("Indisponível")
 
     def _action_row(self, action: ActionSpec) -> QFrame:
         card = QFrame()

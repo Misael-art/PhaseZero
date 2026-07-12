@@ -75,6 +75,7 @@
       "linux/ai/setup-openclaw.sh",
       "linux/ai/setup-memory.sh",
       "linux/ai/setup-usagebar.sh",
+      "linux/ai/setup-codexbar.sh",
       "linux/ai/setup-ides.sh"
     ],
     "windows": ["Setup-AITools.ps1"]

@@ -167,7 +167,7 @@ Usage:
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
   pz ai opencode <action>      OpenCode CLI<->desktop lockstep + models (sync|status|local-model|free-model|install-hook)
   pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|codexbar|all)
-  pz ai codexbar <action>      CodexBar CLI + KodexBar plasmoid (status|setup|install|plasmoid|configure|update|remove|repair|dry-run)
+  pz ai codexbar <action>      CodexBar CLI + optional KodexBar plasmoid (status|setup|health|auth|watchdog|plasmoid|plasmoid-remove|repair)
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
   pz ai mcp sync [target]      Sync safe MCP servers to all/target clients
@@ -181,6 +181,12 @@ Usage:
   pz ai proxies auth [id]      Redacted auth/login readiness for proxy suite
   pz ai proxies login <id>     Open headed browser login for kimi/qwen/deeps
   pz ai proxies test [id]      Honest target/all probe: /v1/models + chat (JSON)
+  pz ai 9router status         Managed smart router health, providers and combos
+  pz ai 9router install        Install 9Router, loopback service and watchdog
+  pz ai 9router dashboard      Open local 9Router dashboard
+  pz ai 9router provider ...   Provider status, secret sync and removal
+  pz ai 9router combo ...      List, create, sync or switch fallback combos
+  pz ai 9router usage          Usage, latency and fallback telemetry
   pz doctor                    Run full system diagnostics
   pz support-bundle            Generate support tarball
   pz repair-plan               Generate repair plan
@@ -438,11 +444,25 @@ cmd_ai() {
             esac
             ;;
         doctor)
-            bash "$PZ_ROOT/linux/ai/mcp-manager.sh" doctor
+            local mcp_doctor codexbar_health codexbar_status
+            mcp_doctor="$(bash "$PZ_ROOT/linux/ai/mcp-manager.sh" doctor)"
+            codexbar_health="$(bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" health 2>/dev/null || jq -cn '{verdict:"degraded",problems:["health_unavailable"]}')"
+            codexbar_status="$(bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" status 2>/dev/null || jq -cn '{cli:{available:false},plasmoid:{installed:false},config:{exists:false}}')"
+            jq -cn --argjson mcp "$mcp_doctor" --argjson health "$codexbar_health" --argjson cbstatus "$codexbar_status" '
+              $mcp + {
+                schemaVersion: 2,
+                codexbar: {health:$health,status:$cbstatus},
+                problems: (($mcp.problems // []) + [
+                  $health.problems[]? | {severity:"warn",id:("codexbar-" + .),component:"codexbar"}
+                ]),
+                nextActions: (((($mcp.nextActions // []) +
+                  (if $health.verdict == "healthy" then [] else ["linux/pz ai codexbar repair","linux/pz ai codexbar auth --provider all"] end))) | unique)
+              }'
             ;;
         repair)
             bash "$PZ_ROOT/linux/ai/mcp-manager.sh" repair all
             bash "$PZ_ROOT/linux/ai/setup-ides.sh" configure >/dev/null || pz_warn "IDE integration repair skipped"
+            bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" repair || pz_warn "CodexBar CLI/config repair incomplete"
             ;;
         menu|ui)
             bash "$PZ_ROOT/linux/ai/menu.sh"
@@ -467,6 +487,10 @@ cmd_ai() {
             shift
             bash "$PZ_ROOT/linux/ai/proxy-suite.sh" "${@:-status}"
             ;;
+        9router|router9|smart-router)
+            shift
+            bash "$PZ_ROOT/linux/ai/9router-manager.sh" "${@:-status}"
+            ;;
         codexbar|kodexbar)
             shift
             local cb_action="${1:-status}"
@@ -477,8 +501,9 @@ cmd_ai() {
                 watchdog) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" watchdog "${1:-status}" ;;
                 install|install-cli|cli) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" install-cli ;;
                 plasmoid|install-plasmoid) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" install-plasmoid ;;
+                plasmoid-remove|remove-plasmoid|disable-plasmoid) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" remove-plasmoid ;;
                 configure|config) bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" configure ;;
-                *) pz_error "usage: pz ai codexbar (status|setup|auth|health|watchdog|install|plasmoid|configure|update|remove|repair|dry-run)"; return 1 ;;
+                *) pz_error "usage: pz ai codexbar (status|setup|auth|health|watchdog|install|plasmoid|plasmoid-remove|configure|update|remove|repair|dry-run)"; return 1 ;;
             esac
             ;;
         setup)
@@ -521,6 +546,7 @@ cmd_ai() {
                     bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" setup
                     bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" setup
                     bash "$PZ_ROOT/linux/ai/setup-usagebar.sh" setup
+                    bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" setup
                     bash "$PZ_ROOT/linux/ai/setup-ides.sh" configure
                     ;;
                 *) pz_error "unknown tool: $target"; return 1 ;;
@@ -751,6 +777,7 @@ main() {
         capabilities|capability|features|recursos) cmd_capabilities "$@" ;;
         installation|installations) cmd_installation "$@" ;;
         self-update|selfupdate|update-phasezero) cmd_self_update "$@" ;;
+        uninstall|desinstalar|remove-all) exec "$PZ_ROOT/linux/uninstall.sh" "$@" ;;
         ui)            cmd_ui "$@" ;;
         commands)      cmd_commands "$@" ;;
         webapp|webapps) exec "$PZ_ROOT/linux/ui/webapp.sh" "$@" ;;
