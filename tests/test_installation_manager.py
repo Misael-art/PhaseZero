@@ -38,10 +38,33 @@ def test_status_reports_channel_and_root_conflicts(tmp_path, monkeypatch):
     monkeypatch.setattr(manager, "_flatpak", lambda scope: {
         "installed": scope == "user", "scope": scope, "version": "2.0.0" if scope == "user" else "",
     })
+    monkeypatch.setattr(manager.shutil, "which", lambda _command: None)
     payload = manager.status()
     assert payload["status"] == "conflict"
     assert payload["activeChannels"] == ["user", "native", "flatpak-user"]
     assert len(payload["conflicts"]) == 3
+    assert payload["command"] == ""
+
+
+def test_status_prefers_target_user_launcher_when_root_path_cannot_see_it(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    current = home / ".local/share/phasezero/current"
+    current.mkdir(parents=True)
+    (current / "version.json").write_text('{"version":"2.0.0"}', encoding="utf-8")
+    launcher = home / ".local/bin/phasezero-control-center"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n", encoding="utf-8")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(manager, "_target_account", lambda: account(home))
+    monkeypatch.setattr(manager, "_native_package", lambda: {
+        "installed": False, "manager": "", "version": "", "alteredFiles": 0,
+    })
+    monkeypatch.setattr(manager, "_flatpak", lambda scope: {
+        "installed": False, "scope": scope, "version": "",
+    })
+    monkeypatch.setattr(manager, "SYSTEM_ROOTS", ())
+    monkeypatch.setattr(manager.shutil, "which", lambda _command: None)
+    assert manager.status()["command"] == str(launcher)
 
 
 def test_plan_is_private_and_never_removes_user_channel(tmp_path, monkeypatch):
@@ -83,7 +106,8 @@ def test_prune_keeps_bounded_history_per_category(tmp_path, monkeypatch):
     backups = home / ".local/share/phasezero/backups"
     results = home / ".local/state/phasezero/control-center/results"
     mcp = home / ".local/state/phasezero/backups/ai-mcp"
-    for directory in (releases, backups, results, mcp):
+    agent_compat = home / ".local/state/phasezero/ai/backups/agent-compat"
+    for directory in (releases, backups, results, mcp, agent_compat):
         directory.mkdir(parents=True)
     for index in range(7):
         (releases / str(index)).mkdir()
@@ -92,12 +116,14 @@ def test_prune_keeps_bounded_history_per_category(tmp_path, monkeypatch):
         (results / f"{index:03}.json").write_text("{}", encoding="utf-8")
     for index in range(9):
         (mcp / f"config.bak.{index:03}").write_text("x", encoding="utf-8")
+        (agent_compat / f"AGENTS.md.bak.{index:03}").write_text("x", encoding="utf-8")
     payload = manager.prune()
     assert payload["removedCount"] > 0
     assert len(list(releases.iterdir())) == 3
     assert len(list(backups.iterdir())) == 3
     assert len(list(results.iterdir())) == 250
     assert len(list(mcp.iterdir())) == 5
+    assert len(list(agent_compat.iterdir())) == 5
 
 
 def test_safe_source_extract_rejects_links_and_traversal(tmp_path):

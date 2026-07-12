@@ -114,6 +114,8 @@ def status() -> dict:
     existing_roots = [root for root in roots if root["exists"]]
     if len(existing_roots) > 1:
         conflicts.append("raízes de sistema duplicadas: " + ", ".join(root["path"] for root in existing_roots))
+    user_command = home / ".local/bin/phasezero-control-center"
+    command = str(user_command) if user_command.is_file() and os.access(user_command, os.X_OK) else (shutil.which("phasezero-control-center") or "")
     return {
         "schema": SCHEMA,
         "status": "conflict" if conflicts else "ok",
@@ -124,7 +126,7 @@ def status() -> dict:
         "flatpaks": flatpaks,
         "systemRoots": roots,
         "conflicts": conflicts,
-        "command": shutil.which("phasezero-control-center") or "",
+        "command": command,
     }
 
 
@@ -188,6 +190,11 @@ def _backup_root(root: Path, backup_dir: Path) -> Path:
         archive.add(root, arcname=root.as_posix().lstrip("/"), recursive=True)
     user, uid, gid, _home = _target_account()
     if os.geteuid() == 0:
+        # mkdir(parents=True) may create the installation parent as root.  The
+        # target user must retain access to plans, operations, and backups.
+        installation_dir = backup_dir.parent
+        os.chown(installation_dir, uid, gid)
+        os.chmod(installation_dir, 0o700)
         os.chown(destination, uid, gid)
         os.chown(backup_dir, uid, gid)
     os.chmod(destination, 0o600)
@@ -220,10 +227,16 @@ def prune() -> dict:
     keep_newest(base / "backups", 3)
     keep_newest(home / ".local/state/phasezero/control-center/results", 250, "*.json")
     keep_newest(home / ".local/state/phasezero/operations", 100, "*.json")
-    mcp = home / ".local/state/phasezero/backups/ai-mcp"
-    if mcp.exists():
+    backup_groups = (
+        home / ".local/state/phasezero/backups/ai-mcp",
+        home / ".local/state/phasezero/ai/backups/agent-compat",
+        home / ".local/state/phasezero/ai/backups/legacy-codex",
+    )
+    for backup_group in backup_groups:
+        if not backup_group.exists():
+            continue
         groups: dict[str, list[Path]] = {}
-        for item in mcp.glob("*.bak.*"):
+        for item in backup_group.glob("*.bak.*"):
             groups.setdefault(item.name.split(".bak.", 1)[0], []).append(item)
         for items in groups.values():
             for item in sorted(items, key=lambda path: path.stat().st_mtime, reverse=True)[5:]:
