@@ -513,6 +513,30 @@ else
     check BOOT04 "Emergency shell GRUB entry inactive" PASS "not installed"
 fi
 
+iso_boot_backend="$PZ_ROOT/linux/boot/iso-boot.sh"
+if [ -x "$iso_boot_backend" ]; then
+    iso_boot_status="$(bash "$iso_boot_backend" iso status --json 2>/dev/null || echo '{}')"
+    usb_boot_status="$(bash "$iso_boot_backend" usb status --json 2>/dev/null || echo '{}')"
+    grubfm_status="$(bash "$iso_boot_backend" grubfm status --json 2>/dev/null || echo '{}')"
+    if jq -e '.schemaVersion == 1' <<< "$iso_boot_status" >/dev/null 2>&1; then
+        unavailable_iso="$(jq '[.entries[] | select(.available != true)] | length' <<< "$iso_boot_status")"
+        [ "$unavailable_iso" -eq 0 ] && check BOOTISO01 "Registered ISO boot entries healthy" PASS "$(jq '.entries | length' <<< "$iso_boot_status") registered" || check BOOTISO01 "Registered ISO boot entries healthy" WARN "$unavailable_iso unavailable or changed"
+    else
+        check BOOTISO01 "Registered ISO boot entries healthy" FAIL "invalid manifest or backend output"
+    fi
+    if jq -e '.installed == true' <<< "$usb_boot_status" >/dev/null 2>&1; then
+        check BOOTUSB01 "Removable EFI boot generator installed" PASS "$(jq '.entries | length' <<< "$usb_boot_status") registered"
+    else
+        check BOOTUSB01 "Removable EFI boot generator installed" INFO "install with: sudo linux/pz boot usb install"
+    fi
+    case "$(jq -r '.state // "missing"' <<< "$grubfm_status")" in
+        installed) check BOOTFM01 "Experimental grubfm payload audited" INFO "installed; upstream archived; secureBoot=$(jq -r '.secureBoot' <<< "$grubfm_status")" ;;
+        *) check BOOTFM01 "Experimental grubfm payload audited" INFO "not installed (optional, upstream archived)" ;;
+    esac
+else
+    check BOOTISO01 "Dynamic ISO boot backend available" WARN "missing linux/boot/iso-boot.sh"
+fi
+
 header "Security"
 systemctl is-active ufw &>/dev/null && check SEC01 "UFW firewall active" PASS "" || check SEC01 "UFW firewall active" WARN "inactive"
 systemctl is-active sshd &>/dev/null && check SEC02 "SSH server running" PASS "" || check SEC02 "SSH server running" INFO "disabled (ok if not needed)"

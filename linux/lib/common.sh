@@ -300,13 +300,28 @@ pz_boot_refresh_grub_config() {
         rm -f "$log"
         return "$rc"
     fi
-    if grep -Eiq '(^|[[:space:]])error:' "$log"; then
+    if pz_boot_grub_log_has_fatal_errors "$log"; then
         pz_error "GRUB config refresh reported errors log=$log_target"
         rm -f "$log"
         return 1
     fi
+    if grep -Eiq '(^|[[:space:]])error:' "$log"; then
+        pz_warn "GRUB config refresh ignored os-prober warning for unaddressable hybrid/removable media log=$log_target"
+    fi
     rm -f "$log"
     pz_info "GRUB config refresh log: $log_target"
+}
+
+pz_boot_grub_log_has_fatal_errors() {
+    local log="$1" line
+    while IFS= read -r line; do
+        grep -Eiq '(^|[[:space:]])error:' <<< "$line" || continue
+        if [[ "$line" =~ ^grub-probe:\ error:\ cannot\ find\ a\ GRUB\ drive\ for\ /dev/[^.]+\.\ \ Check\ your\ device\.map\.$ ]]; then
+            continue
+        fi
+        return 0
+    done < "$log"
+    return 1
 }
 
 pz_boot_validate_grub_cfg_safe() {
@@ -316,6 +331,106 @@ pz_boot_validate_grub_cfg_safe() {
         pz_error "unsafe global GRUB input/video settings detected in $cfg"
         return 1
     fi
+}
+
+pz_boot_grub_dquote() {
+    local value="${1:-}"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    value="${value//\$/\\\$}"
+    value="${value//\`/\\\`}"
+    printf '"%s"' "$value"
+}
+
+pz_boot_valid_id() {
+    [[ "${1:-}" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]]
+}
+
+pz_boot_fs_module_for_fstype() {
+    case "${1:-}" in
+        btrfs) echo btrfs ;;
+        ext2|ext3|ext4) echo ext2 ;;
+        vfat|fat|fat16|fat32) echo fat ;;
+        ntfs|ntfs3|fuseblk) echo ntfs ;;
+        exfat) echo exfat ;;
+        xfs) echo xfs ;;
+        f2fs) echo f2fs ;;
+        iso9660) echo iso9660 ;;
+        *) return 1 ;;
+    esac
+}
+
+pz_boot_grub_module_available() {
+    local module="${1:-}" platform dir
+    [ -n "$module" ] || return 1
+    platform="${PZ_BOOT_GRUB_PLATFORM:-x86_64-efi}"
+    for dir in "$(pz_boot_path /boot/grub)/$platform" "/usr/lib/grub/$platform"; do
+        [ -f "$dir/$module.mod" ] && return 0
+    done
+    return 1
+}
+
+pz_boot_resolve_file_identity() {
+    local path="${1:-}" real source uuid fstype grub_path module
+    [ -f "$path" ] || { pz_error "file not found: $path"; return 1; }
+    real="$(realpath -e -- "$path")"
+    source="$(findmnt -no SOURCE -T "$real" 2>/dev/null | head -1 || true)"
+    uuid="$(findmnt -no UUID -T "$real" 2>/dev/null | head -1 || true)"
+    fstype="$(findmnt -no FSTYPE -T "$real" 2>/dev/null | head -1 || true)"
+    [ -n "$source" ] && [ -n "$uuid" ] && [ -n "$fstype" ] || {
+        pz_error "could not resolve filesystem identity for: $real"
+        return 1
+    }
+    case "$fstype" in
+        overlay|squashfs|fuse.*|nfs|nfs4|cifs|sshfs)
+            pz_error "filesystem unavailable to GRUB: $fstype ($real)"
+            return 1
+            ;;
+    esac
+    module="$(pz_boot_fs_module_for_fstype "$fstype" 2>/dev/null || true)"
+    [ -n "$module" ] || { pz_error "unsupported GRUB filesystem: $fstype"; return 1; }
+    pz_boot_grub_module_available "$module" || {
+        pz_error "GRUB module missing: $module.mod for $fstype"
+        return 1
+    }
+    grub_path="$(grub-mkrelpath "$real" 2>/dev/null || true)"
+    [ -n "$grub_path" ] || { pz_error "grub-mkrelpath failed: $real"; return 1; }
+    jq -n \
+        --arg hostPath "$real" \
+        --arg source "$source" \
+        --arg fsUuid "$uuid" \
+        --arg fsType "$fstype" \
+        --arg fsModule "$module" \
+        --arg grubPath "$grub_path" \
+        '{hostPath:$hostPath,source:$source,fsUuid:$fsUuid,fsType:$fsType,fsModule:$fsModule,grubPath:$grubPath}'
+}
+
+pz_boot_secure_boot_state() {
+    local var byte
+    if command -v mokutil >/dev/null 2>&1; then
+        case "$(mokutil --sb-state 2>/dev/null || true)" in
+            *enabled*) echo enabled; return 0 ;;
+            *disabled*) echo disabled; return 0 ;;
+        esac
+    fi
+    var="$(find /sys/firmware/efi/efivars -maxdepth 1 -type f -name 'SecureBoot-*' 2>/dev/null | head -1 || true)"
+    if [ -r "$var" ]; then
+        byte="$(od -An -t u1 -j 4 -N 1 "$var" 2>/dev/null | tr -d ' ' || true)"
+        [ "$byte" = "1" ] && { echo enabled; return 0; }
+        [ "$byte" = "0" ] && { echo disabled; return 0; }
+    fi
+    echo unknown
+}
+
+pz_boot_atomic_install() {
+    local source="${1:-}" target="${2:-}" mode="${3:-0644}" dir tmp
+    [ -f "$source" ] || { pz_error "atomic install source missing: $source"; return 1; }
+    dir="$(dirname "$target")"
+    install -d "$dir"
+    tmp="$(mktemp "$dir/.phasezero.XXXXXX")"
+    install -m "$mode" "$source" "$tmp"
+    sync -f "$tmp" 2>/dev/null || true
+    mv -f "$tmp" "$target"
 }
 
 pz_boot_efi_has_dangerous_prefix() {

@@ -324,6 +324,15 @@ fi
 if [ "$boot_emergency_entry" = "installed" ]; then
     add_item "BOOTREC03" "medium" "Temporary emergency shell GRUB entry still installed" "sudo linux/pz boot emergency-shell clear"
 fi
+if [ ! -x /etc/grub.d/46_phasezero_iso_loopback ] || [ ! -x /etc/grub.d/47_phasezero_removable_efi ]; then
+    add_item "BOOTISO01" "low" "Dynamic ISO/removable GRUB generators not installed" "sudo linux/pz boot iso install"
+fi
+if [ -x "$PZ_ROOT/linux/boot/iso-boot.sh" ]; then
+    iso_unavailable="$(bash "$PZ_ROOT/linux/boot/iso-boot.sh" iso status --json 2>/dev/null | jq '[.entries[] | select(.available != true)] | length' 2>/dev/null || echo 0)"
+    if [ "$iso_unavailable" -gt 0 ] 2>/dev/null; then
+        add_item "BOOTISO02" "medium" "$iso_unavailable registered ISO boot entries unavailable or changed" "linux/pz boot iso status --json"
+    fi
+fi
 
 # Development profile gaps
 if missing_any_command go; then

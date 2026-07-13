@@ -49,3 +49,17 @@ Campos desconhecidos falham. IDs desconhecidos falham. Dependências são ordena
 ## Portabilidade
 
 Catálogo separa compatibilidade, fonte e provider. Linux oferece Arch, Debian, Fedora, openSUSE e fallback Flatpak. Sistemas imutáveis preferem Flatpak e bloqueiam drivers incompatíveis. UI filtra por `platforms`; implementação Windows futura pode adicionar providers sem misturar chamadas Unix na camada visual.
+
+## Boot dinâmico de ISOs
+
+Contrato específico: `linux/pz boot iso|usb|grubfm`.
+
+- `iso inspect/scan/status`: read-only; identifica somente layouts conhecidos.
+- `iso add/remove/install`: manifesta ISO por UUID, caminho GRUB, perfil e SHA-256; toda escrita recompila e valida GRUB.
+- `usb discover/status`: inventaria mídia removível.
+- `usb add/remove/install`: registra `/EFI/BOOT/BOOTX64.EFI` por UUID; nunca persiste `/dev/sdX` ou `(hdN,gptN)`.
+- `grubfm inspect/status`: audita payload EFI local.
+- `grubfm install/remove`: experimental, exige SHA-256 explícito, upstream arquivado e Secure Boot desativado; sem download automático.
+- `boot choose iso:<id>|usb:<id>|grubfm`: agenda somente próximo boot via `grub-reboot`.
+
+Scripts gerados usam slots `46`–`48`, preservando entradas PhaseZero existentes. Mutação exige bridge admin, backup prévio, escrita atômica, `grub-mkconfig -o /boot/grub/grub.cfg`, validação de IDs e rollback em falha. ISO/EFI do usuário nunca é removido por rollback.

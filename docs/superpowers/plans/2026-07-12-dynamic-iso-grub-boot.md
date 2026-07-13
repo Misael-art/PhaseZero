@@ -1,7 +1,7 @@
 # Boot dinâmico de ISOs via GRUB — plano de implementação
 
 **Data:** 2026-07-12  
-**Estado:** planejado  
+**Estado:** implementado na v1.8.0  
 **Alvo:** PhaseZero Linux, Arch/Manjaro/BigLinux, GRUB 2, UEFI x86_64  
 **Escopo:** ISO local, chainload de mídia removível, GRUB2 File Manager opt-in, CLI e UI nativa
 

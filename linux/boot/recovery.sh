@@ -36,6 +36,7 @@ ESP_DIR="$(pz_boot_esp_dir)"
 PHASEZERO_EFI_DIR="$ESP_DIR/EFI/PhaseZero"
 PHASEZERO_EFI="$PHASEZERO_EFI_DIR/grubx64.efi"
 FALLBACK_EFI="$ESP_DIR/EFI/boot/bootx64.efi"
+ISO_BOOT="$PZ_ROOT/linux/boot/iso-boot.sh"
 
 need_root() {
     [ "$EUID" -eq 0 ] && return 0
@@ -305,6 +306,11 @@ cmd_status() {
         *) echo "  safe_menu_profile: missing" ;;
     esac
     [ -x "$EMERGENCY_GRUB_SCRIPT" ] && echo "  emergency_shell_entry: installed" || echo "  emergency_shell_entry: missing"
+    if [ -x "$ISO_BOOT" ]; then
+        bash "$ISO_BOOT" summary | sed '1d; s/^  /  dynamic_/'
+    else
+        echo "  dynamic_iso_boot: unavailable"
+    fi
 }
 
 cmd_card() {
@@ -430,6 +436,9 @@ PhaseZero boot choices
   windows       Next boot: Windows VM session
   waydroid      Next boot: Waydroid Android session
   emergency     Next boot: rescue.target root shell
+  iso:<id>      Next boot: registered local ISO
+  usb:<id>      Next boot: registered removable EFI
+  grubfm        Next boot: experimental ISO explorer
 
 Use:
   linux/pz boot choose <choice>
@@ -454,6 +463,9 @@ boot_choice_id() {
         windows|windows-vm|win) printf '%s\n' "phasezero-windows-vm" ;;
         waydroid|android) printf '%s\n' "phasezero-waydroid" ;;
         emergency|rescue) printf '%s\n' "phasezero-emergency-shell" ;;
+        iso:*) pz_boot_valid_id "${1#iso:}" && printf 'phasezero-iso-%s\n' "${1#iso:}" || return 1 ;;
+        usb:*) pz_boot_valid_id "${1#usb:}" && printf 'phasezero-removable-%s\n' "${1#usb:}" || return 1 ;;
+        grubfm|iso-explorer) printf '%s\n' "phasezero-grubfm" ;;
         *) return 1 ;;
     esac
 }
@@ -502,13 +514,13 @@ cmd_menu() {
 
 cmd_choose() {
     local choice="${1:-}" reboot=0 dry_run=0 arg expected
-    [ -n "$choice" ] || { pz_error "usage: linux/pz boot choose (normal|steamos|windows|waydroid|emergency) [--dry-run] [--reboot]"; return 1; }
+    [ -n "$choice" ] || { pz_error "usage: linux/pz boot choose (normal|steamos|windows|waydroid|emergency|iso:<id>|usb:<id>|grubfm) [--dry-run] [--reboot]"; return 1; }
     shift || true
     for arg in "$@"; do
         case "$arg" in
             --reboot) reboot=1 ;;
             --dry-run|-n) dry_run=1 ;;
-            *) pz_error "usage: linux/pz boot choose (normal|steamos|windows|waydroid|emergency) [--dry-run] [--reboot]"; return 1 ;;
+            *) pz_error "usage: linux/pz boot choose (normal|steamos|windows|waydroid|emergency|iso:<id>|usb:<id>|grubfm) [--dry-run] [--reboot]"; return 1 ;;
         esac
     done
     expected="$(boot_choice_id "$choice")" || { pz_error "unknown boot choice: $choice"; return 1; }
@@ -540,6 +552,15 @@ cmd_choose() {
         emergency|rescue)
             cmd_emergency_next
             ;;
+        iso:*)
+            bash "$ISO_BOOT" iso next "${choice#iso:}"
+            ;;
+        usb:*)
+            bash "$ISO_BOOT" usb next "${choice#usb:}"
+            ;;
+        grubfm|iso-explorer)
+            bash "$ISO_BOOT" grubfm next
+            ;;
         *)
             pz_error "unknown boot choice: $choice"
             return 1
@@ -562,8 +583,11 @@ case "$ACTION" in
     install-card|install-recovery-card) cmd_install_card ;;
     install-efi-fallback|efi-fallback|repair-active-efi) cmd_install_efi_fallback "$@" ;;
     emergency-shell|emergency) shift || true; cmd_emergency "${1:-status}" ;;
+    iso|usb|removable|grubfm|catalog)
+        exec bash "$ISO_BOOT" "$ACTION" "${@:2}"
+        ;;
     selector|visual-selector|gui) cmd_selector ;;
     menu|choices|select) cmd_menu ;;
     choose|next) shift || true; cmd_choose "$@" ;;
-    *) pz_error "usage: linux/pz boot (status|menu|selector|choose|safe-menu|install-safe-menu|card|install-card|install-efi-fallback [--active] [--fallback]|emergency-shell)"; exit 1 ;;
+    *) pz_error "usage: linux/pz boot (status|menu|selector|choose|iso|usb|grubfm|safe-menu|install-safe-menu|card|install-card|install-efi-fallback [--active] [--fallback]|emergency-shell)"; exit 1 ;;
 esac

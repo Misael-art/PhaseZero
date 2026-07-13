@@ -57,7 +57,10 @@ Usage:
   pz boot status              Boot recovery status
   pz boot menu                Show Linux-side boot selector
   pz boot selector            Open visual pre-reboot boot selector
-  pz boot choose <choice>     Set one-shot boot: normal|steamos|windows|waydroid|emergency
+  pz boot choose <choice>     Set one-shot boot: normal|steamos|windows|waydroid|emergency|iso:<id>|usb:<id>|grubfm
+  pz boot iso <action>        Manage local ISO loopback entries
+  pz boot usb <action>        Manage removable EFI entries by UUID
+  pz boot grubfm <action>     Manage experimental local grubfm EFI payload
   pz boot install-safe-menu   Make GRUB menu visible with safe timeout
   pz boot card                Print GRUB rescue commands for this host
   pz boot install-card        Write GRUB rescue card to host and ESP

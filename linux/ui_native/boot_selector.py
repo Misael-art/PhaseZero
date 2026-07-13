@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shlex
 import subprocess
 from dataclasses import dataclass
@@ -42,6 +43,31 @@ BOOT_CHOICES = (
 )
 
 
+def load_dynamic_boot_choices(root: Path) -> tuple[BootChoice, ...]:
+    command = [str(root / "linux" / "pz"), "boot", "catalog"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=5, check=False)
+        if result.returncode != 0:
+            return ()
+        payload = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return ()
+    choices: list[BootChoice] = []
+    for item in payload.get("choices", []):
+        if not item.get("available", False):
+            continue
+        key = str(item.get("key", ""))
+        title = str(item.get("title", ""))
+        description = str(item.get("description", ""))
+        if not key or not title:
+            continue
+        icon = "drive-removable-media" if key.startswith("usb:") else "media-optical"
+        if key == "grubfm":
+            icon = "folder-open"
+        choices.append(BootChoice(key, title, description, icon))
+    return tuple(choices)
+
+
 def build_boot_selector_program(root: Path, choice: str, *, reboot: bool) -> tuple[str, list[str]]:
     bridge = admin_bridge()
     if not bridge:
@@ -57,6 +83,7 @@ class BootSelectorWindow(QDialog):
     def __init__(self, root: Path, *, smoke_test: bool = False) -> None:
         super().__init__()
         self.root = root
+        self.boot_choices = BOOT_CHOICES + load_dynamic_boot_choices(root)
         self.choice_buttons: dict[int, str] = {}
         self.group = QButtonGroup(self)
         self.setWindowTitle("PhaseZero - Seletor de Boot")
@@ -76,7 +103,7 @@ class BootSelectorWindow(QDialog):
         outer.addWidget(title)
         outer.addWidget(subtitle)
 
-        for index, choice in enumerate(BOOT_CHOICES):
+        for index, choice in enumerate(self.boot_choices):
             card = QFrame()
             card.setObjectName("actionCard")
             row = QHBoxLayout(card)

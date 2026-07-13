@@ -3,6 +3,40 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.8.0] - 2026-07-12
+
+Foco: boot dinâmico seguro de ISOs e mídias removíveis pelo GRUB do host.
+
+### Adicionado
+- **ISO loopback tipada**: `pz boot iso` detecta e valida ArchISO,
+  SystemRescue, Ubuntu Casper, Debian Live e Grml; registra UUID, caminho GRUB,
+  kernel/initrd, metadados e SHA-256 antes de gerar entradas one-shot.
+- **Chainload removível por UUID**: `pz boot usb` descobre USB/SD, valida
+  `/EFI/BOOT/BOOTX64.EFI` em montagem somente leitura e evita ordinais
+  `(hdN,gptN)` e recursão no fallback EFI do host.
+- **GRUB2 File Manager opt-in**: `pz boot grubfm` aceita somente EFI x86_64
+  local com SHA-256 explícito, bloqueia Secure Boot não confirmado/desativado e
+  sinaliza upstream arquivado; nenhum payload é baixado automaticamente.
+- **Integração completa**: seletor Qt carrega ISOs/mídias disponíveis, catálogo
+  possui previews elevados, doctor/repair-plan auditam geradores e documentação
+  cobre instalação, one-shot e rollback.
+
+### Segurança
+- Escrita transacional em `/etc/grub.d/46`–`48`, backup prévio, instalação
+  atômica, recompilação obrigatória e restauração automática quando validação
+  falha. `/boot/grub/grub.cfg` nunca é editado diretamente.
+- Atualização GRUB diferencia erro fatal de aviso conhecido do `os-prober` para
+  mídia ISO híbrida sem drive GRUB; demais mensagens `error:` continuam fatais.
+- EFI ativo com prefixo ordinal foi reparado no host por bootstrap UUID antes
+  da instalação. USB BigLinux `3339-E139` foi registrado e entrada passou
+  `grub-script-check`; boot padrão permaneceu intacto.
+
+### Validação
+- `linux-iso-boot`, `linux-boot-recovery`, `linux-doctor`, `linux-menus` e
+  `linux-ui` aprovados.
+- 58 testes Python nativos aprovados; smoke Qt/UI adicional aprovou 23 testes.
+- Fixture ArchISO local confirmou detecção automática de label, kernel e initrd.
+
 ## [1.6.0] - 2026-07-11
 
 Foco: biblioteca de jogos orientada por tarefas, instalação Vita3K resiliente e

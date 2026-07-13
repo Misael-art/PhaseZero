@@ -4,7 +4,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-bash -n "$REPO_ROOT/linux/pz" "$REPO_ROOT/linux/lib/common.sh" "$REPO_ROOT/linux/boot/recovery.sh"
+bash -n "$REPO_ROOT/linux/pz" "$REPO_ROOT/linux/lib/common.sh" "$REPO_ROOT/linux/boot/recovery.sh" "$REPO_ROOT/linux/boot/iso-boot.sh"
 
 "$REPO_ROOT/linux/pz" boot status >/dev/null
 menu_output="$(PZ_BOOT_MENU_PRINT_ONLY=1 "$REPO_ROOT/linux/pz" boot menu)"
@@ -14,6 +14,9 @@ grep -q 'linux/pz boot choose <choice> --dry-run' <<< "$menu_output"
 grep -q 'linux/pz boot selector' <<< "$menu_output"
 grep -q 's SteamOS, w Windows VM, a Waydroid, e Emergency' <<< "$menu_output"
 grep -q 'install-safe-menu' <<< "$menu_output"
+grep -q 'iso:<id>' <<< "$menu_output"
+grep -q 'usb:<id>' <<< "$menu_output"
+grep -q 'grubfm' <<< "$menu_output"
 dry_run_output="$("$REPO_ROOT/linux/pz" boot choose windows --dry-run)"
 grep -q 'PhaseZero boot choose dry-run' <<< "$dry_run_output"
 grep -q 'next_entry: phasezero-windows-vm' <<< "$dry_run_output"
@@ -21,6 +24,12 @@ grep -q 'would_reboot: no' <<< "$dry_run_output"
 dry_run_reboot_output="$("$REPO_ROOT/linux/pz" boot choose waydroid --dry-run --reboot)"
 grep -q 'next_entry: phasezero-waydroid' <<< "$dry_run_reboot_output"
 grep -q 'would_reboot: yes' <<< "$dry_run_reboot_output"
+iso_dry_run="$("$REPO_ROOT/linux/pz" boot choose iso:arch-rescue --dry-run)"
+grep -q 'next_entry: phasezero-iso-arch-rescue' <<< "$iso_dry_run"
+usb_dry_run="$("$REPO_ROOT/linux/pz" boot choose usb:ventoy --dry-run)"
+grep -q 'next_entry: phasezero-removable-ventoy' <<< "$usb_dry_run"
+grubfm_dry_run="$("$REPO_ROOT/linux/pz" boot choose grubfm --dry-run)"
+grep -q 'next_entry: phasezero-grubfm' <<< "$grubfm_dry_run"
 target_status="$("$REPO_ROOT/linux/pz" boot status --target-root /)"
 grep -q 'target_root: /' <<< "$target_status"
 emergency_plan="$("$REPO_ROOT/linux/pz" boot emergency-shell dry-run)"
@@ -50,6 +59,10 @@ grep -q 'configfile (\\$root)' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'systemd.unit=rescue.target' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'pz_boot_preflight_grub' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'pz_boot_backup_bundle "boot-efi-fallback"' "$REPO_ROOT/linux/boot/recovery.sh"
+grep -q 'iso-boot.sh' "$REPO_ROOT/linux/boot/recovery.sh"
+grep -q '46_phasezero_iso_loopback' "$REPO_ROOT/linux/boot/iso-boot.sh"
+grep -q '47_phasezero_removable_efi' "$REPO_ROOT/linux/boot/iso-boot.sh"
+grep -q '48_phasezero_grubfm' "$REPO_ROOT/linux/boot/iso-boot.sh"
 
 ! grep -q 'init=/bin/bash' "$REPO_ROOT/linux/boot/recovery.sh"
 ! grep -q 'GRUB_TERMINAL_INPUT=' "$REPO_ROOT/linux/boot/recovery.sh"
@@ -64,6 +77,13 @@ grep -q 'pz_boot_backup_bundle "boot-efi-fallback"' "$REPO_ROOT/linux/boot/recov
 
 tmp_root="$(mktemp -d)"
 trap 'rm -rf "$tmp_root"' EXIT
+printf '%s\n' 'grub-probe: error: cannot find a GRUB drive for /dev/sdg1.  Check your device.map.' > "$tmp_root/os-prober-warning.log"
+if bash -c ". '$REPO_ROOT/linux/lib/common.sh'; pz_boot_grub_log_has_fatal_errors '$tmp_root/os-prober-warning.log'"; then
+    echo "known os-prober hybrid-media warning was treated as fatal" >&2
+    exit 1
+fi
+printf '%s\n' 'grub-mkconfig: error: syntax failure' > "$tmp_root/fatal-grub.log"
+bash -c ". '$REPO_ROOT/linux/lib/common.sh'; pz_boot_grub_log_has_fatal_errors '$tmp_root/fatal-grub.log'"
 printf '%s\n' '(,gpt2)/@/boot/grub' > "$tmp_root/dangerous-a.efi"
 printf '%s\n' '(hd6,gpt2)/@/boot/grub' > "$tmp_root/dangerous-b.efi"
 printf '%s\n' '(hd0,gpt1)/boot/grub2/sealed.tpm' > "$tmp_root/generic-help.efi"

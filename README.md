@@ -157,6 +157,20 @@ sudo linux/pz boot choose steamos --reboot
 
 Isso adiciona uma entrada GRUB `PhaseZero SteamOS Console`. Ela inicializa o mesmo Linux com `phasezero.steamos=1`; um servico antes do SDDM seleciona `phasezero-steamos.desktop`. Ao escolher Desktop na Steam, o hook `steamos-session-select` encerra gamescope e inicia Plasma na mesma sessao, sem novo login. `linux/pz boot install-safe-menu` deixa o menu GRUB visivel com timeout seguro, sem alterar input/video global. As entradas PhaseZero usam IDs estaveis e hotkeys de teclado (`s`, `w`, `a`, `e`), mas D-pad/analogico do Steam Deck em GRUB depende de firmware e nao e confiavel. Prefira `linux/pz boot menu` ou launchers one-shot no Linux antes de reiniciar.
 
+Boot dinâmico de ISOs e mídias removíveis:
+
+```bash
+linux/pz boot iso inspect /caminho/resgate.iso
+sudo linux/pz boot iso add /caminho/resgate.iso --profile=auto
+sudo linux/pz boot choose iso:<id> --reboot
+linux/pz boot usb discover --json
+sudo linux/pz boot usb add /dev/sdX1
+sudo linux/pz boot choose usb:<id> --reboot
+linux/pz boot grubfm status --json
+```
+
+Entradas gerenciadas ficam em `/etc/grub.d/46_phasezero_iso_loopback`, `47_phasezero_removable_efi` e `48_phasezero_grubfm`; `/boot/grub/grub.cfg` nunca é editado diretamente. ISOs usam perfil explícito/auto somente para layouts conhecidos (ArchISO, SystemRescue, Ubuntu Casper, Debian Live e Grml), UUID do filesystem e SHA-256. Mídia EFI usa UUID e `/EFI/BOOT/BOOTX64.EFI`, evitando ordinais `(hdN,gptN)` e recursão no fallback local. GRUB2 File Manager permanece experimental porque upstream foi arquivado: instalação aceita somente arquivo EFI local com SHA-256 fornecido, não baixa payload e bloqueia Secure Boot ativo.
+
 Boot direto Windows VM:
 
 ```bash

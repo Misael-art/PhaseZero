@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 
 from linux.ui_native.catalog import CATEGORIES, build_catalog, catalog_manifest
 from linux.ui_native import __version__
-from linux.ui_native.boot_selector import BOOT_CHOICES, build_boot_selector_program
+from linux.ui_native.boot_selector import BOOT_CHOICES, build_boot_selector_program, load_dynamic_boot_choices
 from linux.ui_native.command_runner import build_program
 from linux.ui_native.models import ActionSpec
 from linux.ui_native.result_parser import parse_json_output, severity_for
@@ -150,6 +150,37 @@ def test_boot_selector_uses_admin_bridge_without_shell():
         "waydroid",
         "emergency",
     ]
+
+
+def test_dynamic_boot_choices_are_loaded_without_shell():
+    payload = {
+        "schemaVersion": 1,
+        "choices": [
+            {"key": "iso:arch", "title": "Arch ISO", "description": "ready", "available": True},
+            {"key": "usb:gone", "title": "Gone", "description": "missing", "available": False},
+            {"key": "grubfm", "title": "Explorer", "description": "experimental", "available": True},
+        ],
+    }
+    completed = subprocess.CompletedProcess([], 0, stdout=json.dumps(payload), stderr="")
+    with patch("linux.ui_native.boot_selector.subprocess.run", return_value=completed) as run:
+        choices = load_dynamic_boot_choices(ROOT)
+    assert [choice.key for choice in choices] == ["iso:arch", "grubfm"]
+    assert run.call_args.args[0] == [str(ROOT / "linux" / "pz"), "boot", "catalog"]
+    assert run.call_args.kwargs["timeout"] == 5
+
+
+def test_dynamic_boot_catalog_actions_are_safe(catalog):
+    actions = {item.id: item for item in catalog if item.id.startswith("boot.iso.") or item.id.startswith("boot.usb.") or item.id.startswith("boot.grubfm.")}
+    assert set(actions) == {
+        "boot.iso.status", "boot.iso.add", "boot.usb.discover", "boot.usb.add",
+        "boot.grubfm.status", "boot.grubfm.install", "boot.grubfm.remove",
+    }
+    for action in actions.values():
+        if action.mutable:
+            assert action.preview_args
+            assert action.elevated
+    assert actions["boot.grubfm.install"].parameter_names == ("source", "sha256")
+    assert actions["boot.grubfm.install"].risk == "high"
 
 
 def test_json_parser_accepts_logs_before_envelope():

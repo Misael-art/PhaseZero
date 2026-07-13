@@ -58,7 +58,9 @@ class BootPage(BasePage):
         tool_ids = [
             "boot.status", "boot.selector", "boot.menu",
             "boot.safe-menu", "boot.card", "boot.install-card",
-            "boot.efi",
+            "boot.efi", "boot.iso.status", "boot.iso.add",
+            "boot.usb.discover", "boot.usb.add",
+            "boot.grubfm.status", "boot.grubfm.install", "boot.grubfm.remove",
         ]
         for aid in tool_ids:
             action = self.find(aid)

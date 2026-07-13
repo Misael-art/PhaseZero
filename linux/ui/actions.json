@@ -1748,6 +1748,87 @@
       "plan_command": "linux/pz boot emergency-shell dry-run"
     },
     {
+      "name": "boot.iso.status",
+      "label": "ISOs registradas",
+      "command": "linux/pz boot iso status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Boot Direto",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "boot.iso.add",
+      "label": "Registrar ISO",
+      "command": "linux/pz boot iso add {input} --profile=auto",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz boot iso add {input} --profile=auto --dry-run"
+    },
+    {
+      "name": "boot.usb.discover",
+      "label": "Descobrir mídias EFI",
+      "command": "linux/pz boot usb discover --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Boot Direto",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "boot.usb.add",
+      "label": "Registrar mídia EFI",
+      "command": "linux/pz boot usb add {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz boot usb add {input} --dry-run"
+    },
+    {
+      "name": "boot.grubfm.status",
+      "label": "Status explorador ISO",
+      "command": "linux/pz boot grubfm status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Boot Direto",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "boot.grubfm.install",
+      "label": "Instalar explorador ISO",
+      "command": "linux/pz boot grubfm install --source={source} --sha256={sha256}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz boot grubfm install --source={source} --sha256={sha256} --dry-run"
+    },
+    {
+      "name": "boot.grubfm.remove",
+      "label": "Remover explorador ISO",
+      "command": "linux/pz boot grubfm remove",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Boot Direto",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz boot grubfm remove --dry-run"
+    },
+    {
       "name": "flatpak.status",
       "label": "Status Flatpak",
       "command": "linux/pz flatpak status",
