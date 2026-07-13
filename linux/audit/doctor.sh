@@ -284,6 +284,17 @@ elif jq -e '.runtime.status != "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
 else
     check WINVM11 "Windows graphics integration" WARN "run: linux/pz windows-vm graphics doctor --json"
 fi
+winapps_status="$(bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" doctor 2>/dev/null || echo '{}')"
+if jq -e '.healthy == true' <<< "$winapps_status" >/dev/null 2>&1; then
+    check WINVM12 "WinBoat + WinPodX Podman host" PASS "verified AppImages; guests stopped by default"
+else
+    check WINVM12 "WinBoat + WinPodX Podman host" WARN "run: linux/pz windows-vm apps setup"
+fi
+if jq -e '.concurrency.safe == true' <<< "$winapps_status" >/dev/null 2>&1; then
+    check WINVM13 "Windows guest concurrency" PASS "one-guest policy available"
+else
+    check WINVM13 "Windows guest concurrency" WARN "stop competing Windows guests"
+fi
 
 header "Waydroid"
 waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"
@@ -618,6 +629,9 @@ else
 fi
 if jq -e '.desktopApps.codexDesktop.updateStatus != "failed"' <<< "$ai_status" >/dev/null 2>&1; then
     check AI_CODEX_DESKTOP_UPDATE "Codex Desktop updater healthy" PASS "$(jq -r '.desktopApps.codexDesktop.updateStatus' <<< "$ai_status")"
+elif jq -e '.desktopApps.codexDesktop.installedVersion != "" and .desktopApps.codexDesktop.guardActive == true' <<< "$ai_status" >/dev/null 2>&1; then
+    check AI_CODEX_DESKTOP_UPDATE "Codex Desktop updater healthy" WARN \
+        "candidate incompatible; guard preserved $(jq -r '.desktopApps.codexDesktop.installedVersion' <<< "$ai_status")"
 else
     check AI_CODEX_DESKTOP_UPDATE "Codex Desktop updater healthy" FAIL "run: linux/pz ai desktop repair-codex"
 fi
@@ -625,6 +639,25 @@ if jq -e '.desktopApps.codexDesktop.guardEnabled == true and .desktopApps.update
     check AI_DESKTOP_UPDATE_TIMER "AI desktop automatic updates enabled" PASS "user timer + Codex guard"
 else
     check AI_DESKTOP_UPDATE_TIMER "AI desktop automatic updates enabled" WARN "run: linux/pz ai desktop install-services"
+fi
+router_doctor="$(bash "$PZ_ROOT/linux/ai/9router-manager.sh" doctor 2>/dev/null || echo '{}')"
+if jq -e '.secure == true and .healthy == true' <<< "$router_doctor" >/dev/null 2>&1; then
+    check AI_9ROUTER "9Router local gateway" PASS "loopback; API key; private container bridge; passive watchdog"
+else
+    check AI_9ROUTER "9Router local gateway" WARN "run: linux/pz ai 9router install"
+fi
+odysseus_doctor="$(bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" doctor 2>/dev/null || echo '{}')"
+if jq -e '.secure == true' <<< "$odysseus_doctor" >/dev/null 2>&1; then
+    check AI_ODYSSEUS "Odysseus workspace" PASS "rootless; auth; pinned images"
+elif jq -e '.currentRelease == true' <<< "$odysseus_doctor" >/dev/null 2>&1; then
+    check AI_ODYSSEUS "Odysseus workspace" WARN "run: linux/pz ai odysseus doctor"
+else
+    check AI_ODYSSEUS "Odysseus workspace" INFO "optional: linux/pz ai odysseus install"
+fi
+if systemctl --user is-enabled phasezero-app-update-check.timer >/dev/null 2>&1; then
+    check AI_UPDATE_INVENTORY "PhaseZero app update inventory" PASS "daily check-only timer"
+else
+    check AI_UPDATE_INVENTORY "PhaseZero app update inventory" WARN "run: linux/pz updates install-service"
 fi
 
 # OpenCode CLI must stay in version lockstep with opencode-desktop (they share

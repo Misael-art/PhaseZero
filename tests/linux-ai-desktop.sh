@@ -32,9 +32,11 @@ status="$(
     "$SCRIPT" status
 )"
 jq -e '
-  .schemaVersion == 1 and
+  .schemaVersion == 2 and
   .claudeDesktop.installed == false and
   .claudeDesktop.source == "official-anthropic-apt" and
+  .qwenCodeDesktop.installed == false and
+  .qwenCodeDesktop.source == "official-qwen-github-release" and
   .codexDesktop.repairedPackageReady == false
 ' <<< "$status" >/dev/null || fail "clean status schema"
 
@@ -66,6 +68,8 @@ grep -q PHASEZERO_PKGEXT_COMPAT "$TMP/workspaces/candidate/builder/scripts/build
 
 help="$("$ROOT/linux/pz" help)"
 grep -q 'pz ai desktop install-claude' <<< "$help" || fail "CLI help integration"
+grep -q 'pz ai desktop install-qwen' <<< "$help" || fail "Qwen CLI help integration"
 grep -q 'setup-desktop-apps.sh' "$ROOT/profiles/dev-ai.json" || fail "dev-ai profile integration"
+grep -q 'install-qwen' "$ROOT/linux/ai/setup-desktop-apps.sh" || fail "Qwen setup integration"
 
 echo "PASS: linux AI desktop manager"

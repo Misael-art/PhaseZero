@@ -152,10 +152,13 @@ Usage:
   pz ai doctor                 Diagnose Linux AI/MCP config
   pz ai repair                 Repair Linux AI/MCP config safely
   pz ai menu                   Open friendly terminal AI manager
-  pz ai desktop status         Check Claude/Codex desktop apps and updater
+  pz ai desktop status         Check Claude/Qwen/Codex desktop apps and updater
   pz ai desktop install-claude Install official Claude Desktop for current user
+  pz ai desktop install-qwen   Install official Qwen Code Desktop AppImage
   pz ai desktop repair-codex   Repair failed Codex Desktop local update
   pz ai desktop repair         Repair desktop apps and automatic updates
+  pz windows-vm apps status    Check WinBoat/WinPodX, Podman, KVM and FreeRDP
+  pz windows-vm apps setup     Install and configure verified Windows frontends
   pz ai compat status          Check RTK/Caveman/Headroom/ai-memory agent runtime
   pz ai init [<dir>]           Inject PhaseZero agent rules + frugality pack into any project
   pz ai init --dry-run [<dir>] Preview injection without writing
@@ -190,6 +193,9 @@ Usage:
   pz ai 9router provider ...   Provider status, secret sync and removal
   pz ai 9router combo ...      List, create, sync or switch fallback combos
   pz ai 9router usage          Usage, latency and fallback telemetry
+  pz ai odysseus status        Audit pinned Odysseus workspace deployment
+  pz ai odysseus install       Provision rootless, loopback-only Odysseus stack
+  pz ai odysseus update        Update to verified official branch commit with rollback
   pz doctor                    Run full system diagnostics
   pz support-bundle            Generate support tarball
   pz repair-plan               Generate repair plan
@@ -207,6 +213,9 @@ Usage:
   pz self-update check       Check latest verified PhaseZero release
   pz self-update plan        Create verified user-update plan
   pz self-update apply       Apply confirmed source-bundle update
+  pz updates check           Unified PhaseZero apps and host update inventory
+  pz updates apply <app>     Explicit verified user-app update
+  pz updates install-service Enable daily check-only timer
   pz ui                        Open native Linux control center
   pz ui native                 Open native Qt6/PySide6 control center
   pz ui web [PORT]             Open legacy local web dashboard
@@ -494,6 +503,10 @@ cmd_ai() {
             shift
             bash "$PZ_ROOT/linux/ai/9router-manager.sh" "${@:-status}"
             ;;
+        odysseus|odysseus-os|workspace)
+            shift
+            bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" "${@:-status}"
+            ;;
         codexbar|kodexbar)
             shift
             local cb_action="${1:-status}"
@@ -760,6 +773,10 @@ cmd_self_update() {
         python3 -m linux.installation.update_cli "$@"
 }
 
+cmd_updates() {
+    bash "$PZ_ROOT/linux/updates/app-updates.sh" "$@"
+}
+
 main() {
     local cmd="${1:-help}"
     shift 2>/dev/null || true
@@ -780,6 +797,7 @@ main() {
         capabilities|capability|features|recursos) cmd_capabilities "$@" ;;
         installation|installations) cmd_installation "$@" ;;
         self-update|selfupdate|update-phasezero) cmd_self_update "$@" ;;
+        updates|app-updates|atualizacoes) cmd_updates "$@" ;;
         uninstall|desinstalar|remove-all) exec "$PZ_ROOT/linux/uninstall.sh" "$@" ;;
         ui)            cmd_ui "$@" ;;
         commands)      cmd_commands "$@" ;;

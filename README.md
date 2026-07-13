@@ -15,6 +15,8 @@ PhaseZero e um instalador e auditor Windows para pos-instalacao segura. O alvo m
 
 ## Requisitos
 
+Roteamento IA, Odysseus e atualização de apps: [docs/ai-routing-workspace.md](docs/ai-routing-workspace.md).
+
 - Windows 10/11.
 - Windows PowerShell 5.1.
 - Sessao interativa para a UI WPF.
@@ -182,7 +184,16 @@ sudo linux/windows-vm/windows-vm.sh boot install
 sudo linux/windows-vm/windows-vm.sh boot next-reboot
 ```
 
-Isso adiciona uma entrada GRUB `PhaseZero Windows VM`. Ela inicializa o mesmo Linux com `phasezero.windowsvm=1`; um servico antes do SDDM seleciona `phasezero-windows-vm.desktop`, que inicia o dominio libvirt descoberto ou o QEMU direto em tela cheia. Saida fica em `~/.local/state/phasezero/windows-vm/session.log`; falha retorna ao Plasma. Em QEMU direto, use `\\10.0.2.4\qemu`. Em dominio libvirt, SPICE WebDAV usa o mesmo diretorio de links.
+Isso adiciona uma entrada GRUB `PhaseZero Windows VM`. Ela inicializa o mesmo Linux com `phasezero.windowsvm=1`; um servico antes do SDDM seleciona `phasezero-windows-vm.desktop`, que inicia o dominio libvirt descoberto ou o QEMU direto em tela cheia. Saida fica em `~/.local/state/phasezero/windows-vm/session.log`; falha retorna ao Plasma. Em QEMU direto, use `\\10.0.2.4\qemu`. Em dominio libvirt, use `\\192.168.122.1\PZExchange` ou SPICE WebDAV.
+
+WinBoat e WinPodX com Podman rootless:
+
+```bash
+linux/pz windows-vm apps setup
+linux/pz windows-vm apps doctor
+```
+
+Detalhes de recursos, rede, compartilhamento e Steam Deck LCD: [docs/windows-container-frontends.md](docs/windows-container-frontends.md).
 
 Se `discover` encontrar uma instalacao existente sem leitura para o usuario, `adopt` aplica ACL/chmod quando executado com root e grava essa imagem como default. Sem instalacao existente legivel, `install --iso` cria o qcow2 novo e segue o fluxo normal.
 

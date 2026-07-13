@@ -94,11 +94,23 @@ def status() -> dict:
     native = _native_package()
     flatpaks = [_flatpak("user"), _flatpak("system")]
     roots = []
+    seen_root_objects: dict[tuple[int, int], str] = {}
     for root in SYSTEM_ROOTS:
+        identity: tuple[int, int] | None = None
+        if root.exists():
+            try:
+                stat = root.stat()
+                identity = (stat.st_dev, stat.st_ino)
+            except OSError:
+                pass
+        alias_of = seen_root_objects.get(identity) if identity else None
+        if identity and not alias_of:
+            seen_root_objects[identity] = str(root)
         roots.append({
             "path": str(root),
             "exists": root.exists(),
             "version": _version(root / "version.json") if root.exists() else "",
+            "aliasOf": alias_of or "",
         })
     channels = []
     if user_version:
@@ -111,7 +123,7 @@ def status() -> dict:
         conflicts.append("múltiplos canais instalados: " + ", ".join(channels))
     if native.get("alteredFiles"):
         conflicts.append(f"pacote nativo possui {native['alteredFiles']} arquivos alterados")
-    existing_roots = [root for root in roots if root["exists"]]
+    existing_roots = [root for root in roots if root["exists"] and not root["aliasOf"]]
     if len(existing_roots) > 1:
         conflicts.append("raízes de sistema duplicadas: " + ", ".join(root["path"] for root in existing_roots))
     user_command = home / ".local/bin/phasezero-control-center"
@@ -143,7 +155,7 @@ def create_plan(channel: str = "user") -> dict:
         if item["installed"]:
             actions.append({"kind": "remove-flatpak", "scope": item["scope"], "appId": APP_ID})
     for root in current["systemRoots"]:
-        if root["exists"]:
+        if root["exists"] and not root.get("aliasOf"):
             actions.append({"kind": "backup-remove-system-root", "path": root["path"]})
     actions.append({"kind": "prune-retention"})
     plan_id = state.new_id("install-plan")

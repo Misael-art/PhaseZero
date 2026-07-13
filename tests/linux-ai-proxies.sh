@@ -4,9 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-export XDG_CONFIG_HOME="$WORK/config"
-export XDG_STATE_HOME="$WORK/state"
 export HOME="$WORK/home"
+# proxy-suite.sh resolves opencode/zcode/ide-defaults under $XDG_CONFIG_HOME, so
+# keep it aligned with the seeded $HOME/.config tree (Continue already uses HOME).
+export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_STATE_HOME="$WORK/state"
 export PZ_AI_PROXY_SKIP_EXTENSION_INSTALL=1
 mkdir -p "$HOME/.config/opencode" "$HOME/.continue/index"
 printf '{}\n' > "$HOME/.config/opencode/opencode.json"
@@ -60,4 +62,14 @@ printf 'session-data\n' > "$HOME/.local/share/phasezero/ai-proxies/deepsproxy/de
 DISPLAY=:0 "$ROOT/linux/pz" ai proxies auth deepsproxy \
     | jq -e '.[0].webValidation.status == "session-present"' >/dev/null
 grep -q 'done < <(selected_rows)' "$ROOT/linux/ai/proxy-suite.sh"
+
+# Consolidated snapshot for the native UI "Proxies IA" page: same 11 proxies as
+# auth plus redacted IDE integration counters, in a single read-only command.
+detailed="$("$ROOT/linux/pz" ai proxies detailed-status)"
+jq -e '.schemaVersion == 1 and (.proxies | length == 11)' <<< "$detailed" >/dev/null
+jq -e '.proxies[] | select(.id == "deepsproxy") | .webValidation.kind == "browser-session"' <<< "$detailed" >/dev/null
+jq -e '.ide | has("envDefaults") and has("opencodeProviders") and has("continueModels") and has("zcodeProviders")' <<< "$detailed" >/dev/null
+jq -e '.ide.envDefaults == true and .ide.opencodeProviders >= 1 and .ide.continueModels == 11' <<< "$detailed" >/dev/null
+! grep -Eq 'API_KEY=|Bearer ' <<< "$detailed"
+grep -q 'restart) service_action restart ;;' "$ROOT/linux/ai/proxy-suite.sh"
 echo "linux-ai-proxies smoke ok"

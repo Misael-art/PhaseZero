@@ -21,6 +21,19 @@ if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         exit 65
     fi
     git -C "$ROOT" archive "${PZ_SOURCE_REF:-HEAD}" | tar -x -C "$DESTINATION"
+    if [ "${PZ_ALLOW_DIRTY_SOURCE:-0}" = "1" ]; then
+        changed=()
+        while IFS= read -r -d '' path; do
+            [ -e "$ROOT/$path" ] || [ -L "$ROOT/$path" ] || continue
+            changed+=("$path")
+        done < <(git -C "$ROOT" ls-files -z --modified --others --exclude-standard)
+        if [ "${#changed[@]}" -gt 0 ]; then
+            tar -C "$ROOT" -cf - -- "${changed[@]}" | tar -x -C "$DESTINATION"
+        fi
+        while IFS= read -r -d '' path; do
+            rm -rf -- "$DESTINATION/$path"
+        done < <(git -C "$ROOT" diff --name-only --diff-filter=D -z)
+    fi
 else
     # Verified source release archives contain no VCS metadata. Exclude runtime
     # caches and filesystem recovery ghosts when re-exporting such an archive.

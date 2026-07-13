@@ -74,7 +74,9 @@ prune_install_tree() {
     for ((index = keep; index < ${#entries[@]}; index++)); do
         path="${entries[$index]#* }"
         [ -n "$protected" ] && [ "$(readlink -f "$path")" = "$protected" ] && continue
-        rm -rf -- "$path"
+        if ! rm -rf -- "$path"; then
+            echo "Aviso: backup antigo não pôde ser removido: $path" >&2
+        fi
     done
 }
 prune_install_tree "$INSTALL_BASE/releases" 3 "$(readlink -f "$CURRENT_LINK")"

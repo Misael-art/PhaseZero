@@ -67,6 +67,28 @@ def test_status_prefers_target_user_launcher_when_root_path_cannot_see_it(tmp_pa
     assert manager.status()["command"] == str(launcher)
 
 
+def test_status_deduplicates_system_root_aliases(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    root = tmp_path / "usr-lib"
+    root.mkdir()
+    (root / "version.json").write_text('{"version":"2.0.0"}', encoding="utf-8")
+    alias = tmp_path / "usr-lib64"
+    alias.symlink_to(root, target_is_directory=True)
+    monkeypatch.setattr(manager, "_target_account", lambda: account(home))
+    monkeypatch.setattr(manager, "SYSTEM_ROOTS", (root, alias))
+    monkeypatch.setattr(manager, "_native_package", lambda: {
+        "installed": False, "manager": "", "version": "", "alteredFiles": 0,
+    })
+    monkeypatch.setattr(manager, "_flatpak", lambda scope: {
+        "installed": False, "scope": scope, "version": "",
+    })
+    monkeypatch.setattr(manager.shutil, "which", lambda _command: None)
+    payload = manager.status()
+    assert payload["status"] == "ok"
+    assert payload["systemRoots"][1]["aliasOf"] == str(root)
+
+
 def test_plan_is_private_and_never_removes_user_channel(tmp_path, monkeypatch):
     monkeypatch.setenv("PZ_CAPABILITIES_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.setattr(manager, "status", lambda: {

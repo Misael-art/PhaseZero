@@ -46,6 +46,14 @@ class AiDevPage(BasePage):
             if action:
                 layout.addWidget(self._action_row(action))
 
+        desktop_box = QGroupBox("Aplicativos IA desktop")
+        desktop_layout = QVBoxLayout(desktop_box)
+        for aid in ("ai.desktop.status", "ai.desktop.claude", "ai.desktop.qwen", "ai.desktop.codex"):
+            action = self.find(aid)
+            if action:
+                desktop_layout.addWidget(self._action_row(action))
+        layout.addWidget(desktop_box)
+
         codexbar_box = QGroupBox("CodexBar — uso e cotas")
         codexbar_layout = QVBoxLayout(codexbar_box)
         for aid in (
@@ -70,26 +78,32 @@ class AiDevPage(BasePage):
         for aid in (
             "ai.9router-status", "ai.9router-install", "ai.9router-dashboard",
             "ai.9router-test", "ai.9router-secrets", "ai.9router-combos",
-            "ai.9router-usage",
+            "ai.9router-usage", "ai.9router-client", "ai.9router-check", "ai.9router-update",
+            "ai.9router-doctor",
         ):
             action = self.find(aid)
             if action:
                 router_layout.addWidget(self._action_row(action))
         layout.addWidget(router_box)
 
-        # Proxies table
-        proxy_box = QGroupBox("Proxies IA (OpenAI-compatible)")
-        proxy_layout = QVBoxLayout(proxy_box)
-        proxy_ids = [
-            "ai.proxies", "ai.proxies-ides", "ai.proxies-auth",
-            "ai.proxies-login-kimi", "ai.proxies-login-qwen", "ai.proxies-login-deeps",
-            "ai.proxies-test",
-        ]
-        for aid in proxy_ids:
+        odysseus_box = QGroupBox("Odysseus — workspace IA agnóstico")
+        odysseus_layout = QVBoxLayout(odysseus_box)
+        for aid in (
+            "ai.odysseus-status", "ai.odysseus-install", "ai.odysseus-open", "ai.odysseus-check",
+            "ai.odysseus-update", "ai.odysseus-backup",
+        ):
             action = self.find(aid)
             if action:
-                proxy_layout.addWidget(self._action_row(action))
-        layout.addWidget(proxy_box)
+                odysseus_layout.addWidget(self._action_row(action))
+        layout.addWidget(odysseus_box)
+
+        updates_box = QGroupBox("Atualizações PhaseZero")
+        updates_layout = QVBoxLayout(updates_box)
+        for aid in ("ai.updates-status", "ai.updates-timer"):
+            action = self.find(aid)
+            if action:
+                updates_layout.addWidget(self._action_row(action))
+        layout.addWidget(updates_box)
 
         # Tool setup checklist
         setup_box = QGroupBox("Ferramentas (setup)")

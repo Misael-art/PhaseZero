@@ -51,6 +51,7 @@ SAMBA_CONF="${PZ_WINDOWS_VM_SAMBA_CONF:-/etc/samba/smb.conf}"
 SAMBA_BEGIN="# BEGIN PHASEZERO WINDOWS VM SHARES"
 SAMBA_END="# END PHASEZERO WINDOWS VM SHARES"
 USB_UDEV_RULE="${PZ_WINDOWS_VM_USB_UDEV_RULE:-/etc/udev/rules.d/72-phasezero-windows-vm-usb.rules}"
+EXCHANGE_DIR="${PZ_WINDOWS_VM_EXCHANGE_DIR:-$HOME/Shared/WindowsVM}"
 
 ISO_PATH=""
 ISO_EXPLICIT=0
@@ -100,6 +101,7 @@ Usage:
   pz windows-vm graphics runtime (status|install|rollback)
   pz windows-vm graphics guest-guide [--save]
   pz windows-vm shares (status|install|remove|dry-run)
+  pz windows-vm apps (status|setup|configure|doctor|install-winboat|install-winpodx|launch-winboat|launch-winpodx)
   pz windows-vm boot status
   pz windows-vm boot install
   pz windows-vm boot next
@@ -776,7 +778,8 @@ ensure_share_links() {
     local ok=1 pair name target
     install -d "$SHARE_BIND_ROOT" 2>/dev/null || ok=0
     if [ "$ok" = "1" ]; then
-        for pair in "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
+        mkdir -p "$EXCHANGE_DIR"
+        for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
             name="${pair%%:*}"; target="${pair#*:}"
             [ -d "$target" ] || continue
             install -d "$SHARE_BIND_ROOT/$name"
@@ -786,12 +789,14 @@ ensure_share_links() {
     fi
     if [ "$ok" = "1" ] && mountpoint -q "$SHARE_BIND_ROOT/home"; then
         EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
-        pz_info "host folders bind-mounted for SMB: \\\\10.0.2.4\\qemu -> home, sdcard, removable, media, mnt"
+        pz_info "host folders bind-mounted for SMB: \\\\10.0.2.4\\qemu -> exchange, home, sdcard, removable, media, mnt"
         return 0
     fi
     # Fallback (no root): symlink share root. QEMU smbd will not follow these into
     # the guest, so home/sdcard may look empty there — virtiofs still exposes home.
     install -d "$SHARE_ROOT"
+    mkdir -p "$EXCHANGE_DIR"
+    ln -sfn "$EXCHANGE_DIR" "$SHARE_ROOT/exchange"
     ln -sfn "$HOME" "$SHARE_ROOT/home"
     [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
     [ -d "/run/media/$USER" ] && ln -sfn "/run/media/$USER" "$SHARE_ROOT/removable"
@@ -804,7 +809,7 @@ ensure_share_links() {
 # Unmount the bind-mount share root (called on teardown / shares clean).
 clean_share_binds() {
     local name
-    for name in home sdcard removable media mnt; do
+    for name in exchange home sdcard removable media mnt; do
         mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null &&
             vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
     done
@@ -826,6 +831,22 @@ samba_block_content() {
     media="/media/$TARGET_USER"
     cat <<EOF
 $SAMBA_BEGIN
+[PZExchange]
+    comment = PhaseZero Windows exchange
+    path = $EXCHANGE_DIR
+    browseable = yes
+    read only = no
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+    smb encrypt = desired
+    follow symlinks = no
+    wide links = no
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
 [PZHome]
     comment = PhaseZero host home
     path = $home
@@ -916,8 +937,9 @@ samba_shares_managed() {
 
 samba_shares_reachable() {
     command -v smbclient >/dev/null 2>&1 &&
-        smbclient -N //127.0.0.1/PZHome -c 'quit' >/dev/null 2>&1 &&
-        smbclient -N //127.0.0.1/PZSDCard -c 'quit' >/dev/null 2>&1
+        smbclient -N //127.0.0.1/PZExchange -c 'ls' >/dev/null 2>&1 &&
+        smbclient -N //127.0.0.1/PZHome -c 'ls' >/dev/null 2>&1 &&
+        smbclient -N //127.0.0.1/PZSDCard -c 'ls' >/dev/null 2>&1
 }
 
 windows_usb_udev_content() {
@@ -960,7 +982,7 @@ configure_windows_samba_shares() {
         pz_error "Samba config missing: $SAMBA_CONF"
         return 1
     }
-    local tmp backup_dir
+    local tmp backup_dir fw_zone exchange_parent target_home_dir
     tmp="$(mktemp)"
     strip_managed_samba_block "$SAMBA_CONF" "$tmp"
     printf '\n' >> "$tmp"
@@ -971,18 +993,39 @@ configure_windows_samba_shares() {
     cp -a "$SAMBA_CONF" "$backup_dir/smb.conf.$(date +%Y%m%d-%H%M%S)"
     install -m 0644 "$tmp" "$SAMBA_CONF"
     rm -f "$tmp"
+    # Repair the canonical parent created by older root runs, then create every
+    # missing descendant as the desktop user.  Do not chown arbitrary override
+    # parents outside the target home.
+    exchange_parent="$(dirname "$EXCHANGE_DIR")"
+    target_home_dir="$(target_home)"
+    if [ "$exchange_parent" = "$target_home_dir/Shared" ]; then
+        install -d -m 0750 -o "$TARGET_USER" -g "$TARGET_USER" "$exchange_parent"
+    fi
+    # A root-owned 0700
+    # $HOME/Shared made smbd authenticate successfully but fail the first chdir.
+    runuser -u "$TARGET_USER" -- mkdir -p "$EXCHANGE_DIR" || {
+        pz_error "target user cannot create exchange directory: $EXCHANGE_DIR"
+        return 1
+    }
+    chown "$TARGET_USER:$TARGET_USER" "$EXCHANGE_DIR"
+    chmod 0770 "$EXCHANGE_DIR"
     install -d -o "$TARGET_USER" -g "$TARGET_USER" "/run/media/$TARGET_USER" "/media/$TARGET_USER"
     systemctl enable --now smb.service >/dev/null 2>&1 || systemctl restart smbd.service >/dev/null 2>&1 || true
     systemctl restart smb.service >/dev/null 2>&1 || systemctl restart smbd.service >/dev/null 2>&1 || true
     if command -v ufw >/dev/null 2>&1; then
         ufw allow in on virbr0 to any port 445 proto tcp comment 'PhaseZero Windows VM SMB' >/dev/null 2>&1 || true
     fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
+        fw_zone="$(firewall-cmd --get-zone-of-interface=virbr0 2>/dev/null || true)"
+        firewall-cmd --permanent --zone="${fw_zone:-libvirt}" --add-service=samba >/dev/null 2>&1 || true
+        firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
     samba_shares_reachable || {
         pz_error "managed Samba shares failed local reachability test"
         return 1
     }
     configure_windows_usb_access
-    pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts"
+    pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts"
 }
 
 remove_windows_samba_shares() {
@@ -1022,9 +1065,35 @@ usb_accessible_device_count() {
 }
 
 share_links_ready() {
-    [ -L "$SHARE_ROOT/home" ] &&
-        [ -L "$SHARE_ROOT/sdcard" ] &&
-        [ -L "$SHARE_ROOT/mnt" ]
+    local root
+    for root in "$SHARE_BIND_ROOT" /tmp/phasezero-windows-vm/shares; do
+        if mountpoint -q "$root/exchange" 2>/dev/null &&
+            mountpoint -q "$root/home" 2>/dev/null &&
+            mountpoint -q "$root/sdcard" 2>/dev/null &&
+            mountpoint -q "$root/mnt" 2>/dev/null; then
+            return 0
+        fi
+    done
+    [ -L "$SHARE_ROOT/exchange" ] && [ -L "$SHARE_ROOT/home" ] &&
+        [ -L "$SHARE_ROOT/sdcard" ] && [ -L "$SHARE_ROOT/mnt" ]
+}
+
+libvirt_webdav_channel_count() {
+    [ -n "$LIBVIRT_DOMAIN" ] || { echo 0; return 0; }
+    virsh -c "$(libvirt_uri)" dumpxml "$LIBVIRT_DOMAIN" 2>/dev/null |
+        awk '/<channel type=/{channel=1} channel && /org.spice-space.webdav.0/{count++; channel=0} /<\/channel>/{channel=0} END{print count+0}'
+}
+
+libvirt_network_state() {
+    type -P virsh >/dev/null 2>&1 || { printf missing; return; }
+    virsh -c "$(libvirt_uri)" net-info default 2>/dev/null |
+        awk -F: '/^Active:/{gsub(/^[[:space:]]+/,"",$2); print $2; found=1} END{if(!found) print "missing"}'
+}
+
+libvirt_interface_model() {
+    [ -n "$LIBVIRT_DOMAIN" ] || { printf missing; return; }
+    virsh -c "$(libvirt_uri)" dumpxml "$LIBVIRT_DOMAIN" 2>/dev/null |
+        awk -F"'" '/<model type=/{print $2; found=1; exit} END{if(!found) print "unknown"}'
 }
 
 grant_raw_qemu_disk_access() {
@@ -1072,7 +1141,8 @@ cmd_shares() {
         dry-run|plan)
             echo "Windows VM shared access plan"
             echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> home/ and sdcard/ (bind-mounted)"
-            echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZHome, PZSDCard"
+            echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard"
+            echo "  SPICE WebDAV: $EXCHANGE_DIR (requires spice-webdavd in Windows guest)"
             echo "  bind-mount root: $SHARE_BIND_ROOT"
             echo "  USB auto filter: $USB_AUTO_FILTER"
             echo "  USB permissions: active-seat udev access for external devices"
@@ -1091,6 +1161,10 @@ cmd_shares() {
     echo "samba_managed: $(samba_shares_managed && echo yes || echo no)"
     echo "samba_reachable: $(samba_shares_reachable && echo yes || echo no)"
     echo "smb_host: $(libvirt_gateway)"
+    echo "exchange_dir: $EXCHANGE_DIR"
+    echo "webdav_channels: $(libvirt_webdav_channel_count)"
+    echo "libvirt_network: $(libvirt_network_state)"
+    echo "libvirt_nic_model: $(libvirt_interface_model)"
     echo "share_links: $(share_links_ready && echo yes || echo no)"
     echo "usb_redir_channels: $(libvirt_usb_redir_count)"
     echo "usb_auto_filter: ${USB_AUTO_FILTER:-disabled}"
@@ -1229,6 +1303,7 @@ build_qemu_args() {
     fi
     ensure_share_links
     start_virtiofs_share hosthome "$HOME"
+    start_virtiofs_share exchange "$EXCHANGE_DIR"
     [ -d /mnt/sdcard ] && start_virtiofs_share sdcard /mnt/sdcard
     [ -d "/run/media/$USER" ] && start_virtiofs_share removable "/run/media/$USER"
     [ -d "/media/$USER" ] && start_virtiofs_share media "/media/$USER"
@@ -1400,7 +1475,7 @@ optimize_libvirt_domain() {
     uri="$(libvirt_uri)"
     if [ "$DRY_RUN" = "1" ]; then
         pz_info "dry-run: would tune libvirt domain=$LIBVIRT_DOMAIN ram=${RAM_MB}M cpus=$CPUS"
-        pz_info "dry-run: would eject install ISO and ensure four SPICE USB channels plus smartcard"
+        pz_info "dry-run: would eject install ISO and ensure four SPICE USB channels, WebDAV plus smartcard"
         return 0
     fi
     grant_raw_qemu_disk_access "$DISK_PATH"
@@ -1427,7 +1502,12 @@ optimize_libvirt_domain() {
         attach_libvirt_device_config "$LIBVIRT_DOMAIN" "<smartcard mode='host'/>" ||
             pz_warn "libvirt smartcard passthrough unavailable; SPICE client support remains enabled"
     fi
-    pz_info "libvirt domain tuned: $LIBVIRT_DOMAIN ram=${RAM_MB}M cpus=$CPUS usbredir=$redir_count"
+    if ! grep -q "org.spice-space.webdav.0" <<< "$xml"; then
+        attach_libvirt_device_config "$LIBVIRT_DOMAIN" \
+            "<channel type='spiceport'><source channel='org.spice-space.webdav.0'/><target type='virtio' name='org.spice-space.webdav.0'/></channel>" ||
+            pz_warn "SPICE WebDAV channel unavailable; Samba exchange remains active"
+    fi
+    pz_info "libvirt domain tuned: $LIBVIRT_DOMAIN ram=${RAM_MB}M cpus=$CPUS usbredir=$redir_count webdav=$(libvirt_webdav_channel_count)"
 }
 
 # v1 graphics contract: compat is the only profile allowed everywhere.
@@ -1598,6 +1678,10 @@ status_json() {
         --arg sambaManaged "$samba_managed" \
         --arg sambaReachable "$samba_reachable" \
         --arg smbHost "$SMB_HOST" \
+        --arg exchangeDir "$EXCHANGE_DIR" \
+        --arg webdavChannels "$(libvirt_webdav_channel_count)" \
+        --arg networkState "$(libvirt_network_state)" \
+        --arg nicModel "$(libvirt_interface_model)" \
         --arg spicy "$(command_path spicy)" \
         --arg diskSource "$DISK_SOURCE" \
         --arg libvirtDomain "$LIBVIRT_DOMAIN" \
@@ -1626,7 +1710,7 @@ status_json() {
         '{
             config: {path: $configFile, installed: ($configInstalled == "yes")},
             vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode, graphicsProfile: $graphicsProfile},
-            libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != "")},
+            libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != ""), network:"default", networkState:$networkState, nicModel:$nicModel},
             host: {kvm: ($kvm == "yes"), qemu: $qemu, qemuImg: $qemuImg, ovmfCode: $ovmfCode, ovmfCodeExists: ($ovmfCodeExists == "yes"), ovmfVars: $ovmfVars, ovmfVarsExists: ($ovmfVarsExists == "yes"), virtiofsd: $virtiofsd, smbd: $smbd, swtpm: $swtpm},
             access: {
                 shareRoot: $shareRoot,
@@ -1634,8 +1718,10 @@ status_json() {
                 sambaManaged: ($sambaManaged == "yes"),
                 sambaReachable: ($sambaReachable == "yes"),
                 smbHost: $smbHost,
-                shares: ["PZHome", "PZSDCard", "PZRemovable", "PZMedia", "PZMounts"],
+                exchangeDir: $exchangeDir,
+                shares: ["PZExchange", "PZHome", "PZSDCard", "PZRemovable", "PZMedia", "PZMounts"],
                 spiceClient: $spicy,
+                spiceWebdavChannels: ($webdavChannels|tonumber),
                 usbMode: $usbMode,
                 usbAutoFilter: $usbAutoFilter,
                 usbUdevManaged: ($usbUdevManaged == "yes"),
@@ -2096,8 +2182,9 @@ case "$ACTION" in
     shares|access) cmd_shares "$@" ;;
     host-access|guest-disk|browse-guest) bash "$PZ_ROOT/linux/windows-vm/host-access.sh" "$@" ;;
     graphics|gpu) bash "$PZ_ROOT/linux/windows-vm/graphics.sh" "$@" ;;
+    apps|frontends|containers) bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" "$@" ;;
     launch|start|run) launch_vm "$@" ;;
     boot) cmd_boot "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|launch|boot)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|boot)"; exit 1 ;;
 esac

@@ -147,6 +147,7 @@ class MainWindow(QMainWindow):
                     "Recursos": QStyle.SP_DesktopIcon,
                     "Ajustes": QStyle.SP_FileDialogDetailedView,
                     "IA & Dev": QStyle.SP_CommandLink,
+                    "Proxies IA": QStyle.SP_DriveNetIcon,
                     "Aplicativos": QStyle.SP_DirIcon,
                     "Resultados": QStyle.SP_FileDialogInfoView,
                 }

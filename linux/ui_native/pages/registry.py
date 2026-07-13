@@ -17,6 +17,7 @@ from .emulation import EmulationPage
 from .boot import BootPage
 from .flatpak import FlatpakPage
 from .ai_dev import AiDevPage
+from .ai_proxies import AiProxiesPage
 from .applications import ApplicationsPage
 from .tuning import TuningPage
 from .results import ResultsPage
@@ -49,6 +50,7 @@ class PageRegistry:
         "Flatpak": FlatpakPage,
         "Recursos": CatalogWorkspacePage,
         "IA & Dev": AiDevPage,
+        "Proxies IA": AiProxiesPage,
         "Aplicativos": ApplicationsPage,
         "Ajustes": TuningPage,
         "Resultados": ResultsPage,

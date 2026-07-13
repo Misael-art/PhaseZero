@@ -17,7 +17,12 @@ linux/pz ai proxies test deepsproxy
 linux/pz ai proxies test all
 linux/pz ai proxies start ollieproxy
 linux/pz ai proxies stop ollieproxy
+linux/pz ai proxies restart kimiproxy
+linux/pz ai proxies login all
+linux/pz ai proxies detailed-status
 ```
+
+`detailed-status` devolve em um único JSON redigido o estado de instalação, serviço, autenticação (`webValidation`) e os contadores de integração com IDEs (OpenCode, Continue, ZCode e `ide-defaults.env`). É o contrato consumido pela página **Proxies IA** da UI nativa, que também usa `start/stop/restart <id>` nos cards por proxy e `login all` para abrir o fluxo de navegador somente dos proxies browser-session ainda não autenticados.
 
 ## Catálogo
 

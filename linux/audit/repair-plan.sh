@@ -199,6 +199,13 @@ fi
 if jq -e '.configuredProfile != .effectiveProfile' <<< "$winvm_graphics" >/dev/null 2>&1; then
     add_item "WINVM07" "medium" "Windows VM graphics profile is incompatible with current backend" "linux/pz windows-vm graphics apply --profile compat"
 fi
+winapps_status="$(bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" doctor 2>/dev/null || echo '{}')"
+if ! jq -e '.healthy == true' <<< "$winapps_status" >/dev/null 2>&1; then
+    add_item "WINVM08" "medium" "WinBoat/WinPodX Podman host integration incomplete" "linux/pz windows-vm apps setup"
+fi
+if ! jq -e '.concurrency.safe == true' <<< "$winapps_status" >/dev/null 2>&1; then
+    add_item "WINVM09" "high" "Multiple Windows guest backends are active" "stop other Windows guests before launch"
+fi
 
 # Waydroid
 waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"

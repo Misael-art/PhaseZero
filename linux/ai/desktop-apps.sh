@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# desktop-apps.sh - trusted Claude Desktop install and Codex Desktop update repair.
+# desktop-apps.sh - trusted Claude/Qwen Desktop install and Codex Desktop update repair.
 set -euo pipefail
 
 PZ_ROOT="${PZ_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
@@ -19,6 +19,12 @@ CODEX_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/codex-update-manager/state.js
 CODEX_WORKSPACES="${PZ_CODEX_WORKSPACES:-${CODEX_WORKSPACES:-${XDG_CACHE_HOME:-$HOME/.cache}/codex-update-manager/workspaces}}"
 CODEX_SEED="${PZ_CODEX_UPDATE_BUILDER:-/opt/codex-desktop/update-builder}"
 CODEX_REPAIR_STATE="$PZ_STATE/codex-desktop-repair.json"
+QWEN_API_URL="${PZ_QWEN_API_URL:-https://api.github.com/repos/QwenLM/qwen-code/releases/tags/desktop-latest}"
+QWEN_RELEASE_BASE="https://github.com/QwenLM/qwen-code/releases/download/"
+QWEN_ROOT="${PZ_QWEN_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/phasezero/qwen-code-desktop}"
+QWEN_CACHE="${PZ_QWEN_CACHE:-${XDG_CACHE_HOME:-$HOME/.cache}/phasezero/qwen-code-desktop}"
+QWEN_STATE="$QWEN_ROOT/state.json"
+QWEN_CONFIG_DIR="${CRAFT_CONFIG_DIR:-$HOME/.craft-agent}"
 
 CLAUDE_VERSION=""
 CLAUDE_FILENAME=""
@@ -31,11 +37,14 @@ usage() {
 Usage: desktop-apps.sh <action>
 
 Actions:
-  status                 Print Claude/Codex desktop status JSON
+  status                 Print Claude/Qwen/Codex desktop status JSON
   install-claude         Install/update official Claude Desktop for current user
   update-claude          Update Claude Desktop when newer
   launch-claude          Launch installed Claude Desktop
   test-claude            Run binary/linkage and live launch checks
+  install-qwen           Install/update official Qwen Code Desktop AppImage
+  update-qwen            Alias for install-qwen
+  launch-qwen            Launch installed Qwen Code Desktop
   codex-guard-once       Repair existing Codex update workspaces
   codex-guard-watch      Watch and repair new Codex update workspaces
   repair-codex           Rebuild failed Codex Desktop candidate
@@ -85,6 +94,135 @@ verify_size_hash() {
         pz_error "SHA-256 mismatch for $file"
         return 1
     }
+}
+
+read_github_appimage_metadata() {
+    local api_url="$1" expected_name="$2" json asset digest url size
+    json="$(curl -fsSL --retry 3 --connect-timeout 15 \
+        -H 'Accept: application/vnd.github+json' "$api_url")"
+    asset="$(jq -ce --arg name "$expected_name" \
+        '.assets[] | select(.name == $name and .state == "uploaded")' <<< "$json")" || {
+        pz_error "official GitHub asset missing: $expected_name"
+        return 1
+    }
+    url="$(jq -r '.browser_download_url' <<< "$asset")"
+    size="$(jq -r '.size' <<< "$asset")"
+    digest="$(jq -r '.digest // empty' <<< "$asset")"
+    [[ "$url" == "$QWEN_RELEASE_BASE"*"/$expected_name" ]] || {
+        pz_error "unexpected Qwen release URL: $url"
+        return 1
+    }
+    [[ "$digest" =~ ^sha256:([0-9a-fA-F]{64})$ ]] || {
+        pz_error "Qwen release has no trusted SHA-256 digest"
+        return 1
+    }
+    jq -cn \
+        --arg version "$(jq -r '.name // .tag_name' <<< "$json")" \
+        --arg tag "$(jq -r '.tag_name' <<< "$json")" \
+        --arg publishedAt "$(jq -r '.published_at // empty' <<< "$json")" \
+        --arg url "$url" --arg size "$size" --arg sha256 "${BASH_REMATCH[1],,}" \
+        '{version:$version,tag:$tag,publishedAt:$publishedAt,url:$url,size:($size|tonumber),sha256:$sha256}'
+}
+
+write_qwen_launcher() {
+    mkdir -p "$LOCAL_BIN" "$QWEN_CONFIG_DIR"
+    chmod 0700 "$QWEN_CONFIG_DIR"
+    pz_write_managed_file "$LOCAL_BIN/qwen-code-desktop" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+appimage="$QWEN_ROOT/current/Qwen-Code-Desktop-x86_64.AppImage"
+if [ ! -x "\$appimage" ]; then
+    echo "Qwen Code Desktop not installed. Run: $PZ_ROOT/linux/pz ai desktop install-qwen" >&2
+    exit 1
+fi
+export CRAFT_CONFIG_DIR="\${CRAFT_CONFIG_DIR:-$QWEN_CONFIG_DIR}"
+export ELECTRON_OZONE_PLATFORM_HINT="\${ELECTRON_OZONE_PLATFORM_HINT:-auto}"
+if [ ! -e /dev/fuse ]; then
+    export APPIMAGE_EXTRACT_AND_RUN=1
+fi
+exec "\$appimage" "\$@"
+EOF
+    chmod 0755 "$LOCAL_BIN/qwen-code-desktop"
+}
+
+write_qwen_desktop_entry() {
+    mkdir -p "$APPLICATIONS_DIR"
+    pz_write_managed_file "$APPLICATIONS_DIR/qwen-code-desktop.desktop" <<EOF
+[Desktop Entry]
+Name=Qwen Code
+Comment=Local-first desktop coding agent
+GenericName=AI Coding Agent
+Keywords=AI;Code;Agent;Qwen;LLM;
+Exec=$LOCAL_BIN/qwen-code-desktop %U
+Icon=applications-development
+Type=Application
+StartupNotify=true
+StartupWMClass=Qwen Code
+Categories=Development;Utility;
+EOF
+    chmod 0644 "$APPLICATIONS_DIR/qwen-code-desktop.desktop"
+}
+
+install_qwen() {
+    pz_check_deps curl jq sha256sum
+    [ "$(uname -m)" = "x86_64" ] || {
+        pz_error "Qwen Code Desktop official AppImage supports x86_64 only"
+        return 1
+    }
+    local metadata version url size sha256 cache stage final link
+    metadata="$(read_github_appimage_metadata "$QWEN_API_URL" 'Qwen-Code-Desktop-x86_64.AppImage')"
+    version="$(jq -r '.version' <<< "$metadata")"
+    url="$(jq -r '.url' <<< "$metadata")"
+    size="$(jq -r '.size' <<< "$metadata")"
+    sha256="$(jq -r '.sha256' <<< "$metadata")"
+    cache="$QWEN_CACHE/Qwen-Code-Desktop-x86_64.AppImage"
+    mkdir -p "$QWEN_CACHE" "$QWEN_ROOT/versions"
+    if [ -x "$QWEN_ROOT/current/Qwen-Code-Desktop-x86_64.AppImage" ] &&
+        [ "$(jq -r '.sha256 // empty' "$QWEN_STATE" 2>/dev/null || true)" = "$sha256" ]; then
+        write_qwen_launcher
+        write_qwen_desktop_entry
+        pz_info "Qwen Code Desktop already current: $version"
+        return 0
+    fi
+    if [ -f "$cache" ] && ! verify_size_hash "$cache" "$size" "$sha256"; then
+        pz_warn "discarding invalid cached Qwen Code Desktop AppImage"
+        rm -f "$cache"
+    fi
+    if [ ! -f "$cache" ]; then
+        pz_info "downloading official Qwen Code Desktop: $version"
+        download_atomic "$url" "$cache"
+    fi
+    verify_size_hash "$cache" "$size" "$sha256"
+    stage="$QWEN_ROOT/versions/.${sha256:0:16}.stage.$$"
+    final="$QWEN_ROOT/versions/${sha256:0:16}"
+    rm -rf "$stage"
+    mkdir -p "$stage"
+    install -m 0755 "$cache" "$stage/Qwen-Code-Desktop-x86_64.AppImage"
+    printf '%s\n' "$version" > "$stage/version"
+    jq --arg installedAt "$(date -Iseconds)" '. + {installedAt:$installedAt,source:"official-qwen-github-release",userScoped:true}' \
+        <<< "$metadata" > "$stage/manifest.json"
+    rm -rf "$final"
+    mv "$stage" "$final"
+    link="$QWEN_ROOT/.current.$$"
+    ln -s "versions/${sha256:0:16}" "$link"
+    mv -Tf "$link" "$QWEN_ROOT/current"
+    cp "$final/manifest.json" "$QWEN_STATE"
+    chmod 0600 "$QWEN_STATE"
+    write_qwen_launcher
+    write_qwen_desktop_entry
+    command -v update-desktop-database >/dev/null 2>&1 &&
+        update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
+    pz_info "Qwen Code Desktop installed: $version"
+}
+
+launch_qwen() {
+    [ -x "$LOCAL_BIN/qwen-code-desktop" ] || {
+        pz_error "Qwen Code Desktop launcher missing"
+        return 1
+    }
+    nohup "$LOCAL_BIN/qwen-code-desktop" "$@" >"$PZ_STATE/qwen-code-desktop.log" 2>&1 &
+    disown || true
+    pz_info "Qwen Code Desktop launched"
 }
 
 read_claude_metadata() {
@@ -607,6 +745,11 @@ desktop_status() {
             fi
         fi
     fi
+    local qwen_version="" qwen_sha256=""
+    if [ -f "$QWEN_STATE" ]; then
+        qwen_version="$(jq -r '.version // empty' "$QWEN_STATE" 2>/dev/null || true)"
+        qwen_sha256="$(jq -r '.sha256 // empty' "$QWEN_STATE" 2>/dev/null || true)"
+    fi
     jq -n \
         --arg claudeVersion "$claude_version" \
         --arg claudeBinary "$CLAUDE_ROOT/current/app/claude-desktop" \
@@ -616,16 +759,22 @@ desktop_status() {
         --arg codexInstalled "$codex_installed" \
         --arg codexCandidate "$codex_candidate" \
         --arg repairedPackage "$repaired_package" \
+        --arg qwenVersion "$qwen_version" \
+        --arg qwenSha256 "$qwen_sha256" \
+        --arg qwenBinary "$QWEN_ROOT/current/Qwen-Code-Desktop-x86_64.AppImage" \
+        --arg qwenLauncher "$LOCAL_BIN/qwen-code-desktop" \
+        --arg qwenConfigDir "$QWEN_CONFIG_DIR" \
         --argjson claudeInstalled "$([ -x "$CLAUDE_ROOT/current/app/claude-desktop" ] && echo true || echo false)" \
         --argjson claudeLauncherOk "$([ -x "$LOCAL_BIN/claude-desktop" ] && echo true || echo false)" \
         --argjson claudeDesktopEntryOk "$([ -f "$APPLICATIONS_DIR/claude-desktop.desktop" ] && echo true || echo false)" \
+        --argjson qwenInstalled "$([ -x "$QWEN_ROOT/current/Qwen-Code-Desktop-x86_64.AppImage" ] && echo true || echo false)" \
         --argjson repairedReady "$repaired_ready" \
         --argjson guardActive "$(bool_json systemctl --user is-active phasezero-codex-desktop-guard.service)" \
         --argjson guardEnabled "$(bool_json systemctl --user is-enabled phasezero-codex-desktop-guard.service)" \
         --argjson timerActive "$(bool_json systemctl --user is-active phasezero-ai-desktop-update.timer)" \
         --argjson timerEnabled "$(bool_json systemctl --user is-enabled phasezero-ai-desktop-update.timer)" \
         '{
-          schemaVersion: 1,
+          schemaVersion: 2,
           claudeDesktop: {
             installed: $claudeInstalled,
             version: $claudeVersion,
@@ -636,6 +785,17 @@ desktop_status() {
             desktopEntryOk: $claudeDesktopEntryOk,
             source: "official-anthropic-apt",
             userScoped: true
+          },
+          qwenCodeDesktop: {
+            installed: $qwenInstalled,
+            version: $qwenVersion,
+            sha256: $qwenSha256,
+            binary: $qwenBinary,
+            launcher: $qwenLauncher,
+            configDir: $qwenConfigDir,
+            source: "official-qwen-github-release",
+            userScoped: true,
+            secretsManaged: false
           },
           codexDesktop: {
             installedVersion: $codexInstalled,
@@ -655,11 +815,13 @@ desktop_status() {
 
 update_all() {
     install_claude
+    install_qwen
     check_codex || pz_warn "Codex Desktop update check failed; run: $PZ_ROOT/linux/pz ai desktop repair-codex"
 }
 
 repair_all() {
     install_claude
+    install_qwen
     codex_guard_once
     if [ "$(jq -r '.status // empty' "$CODEX_STATE" 2>/dev/null || true)" = "failed" ]; then
         repair_codex
@@ -674,6 +836,8 @@ main() {
         install-claude|update-claude) install_claude ;;
         launch-claude) shift; launch_claude "$@" ;;
         test-claude) test_claude ;;
+        install-qwen|update-qwen) install_qwen ;;
+        launch-qwen) shift; launch_qwen "$@" ;;
         codex-guard-once) codex_guard_once ;;
         codex-guard-watch) codex_guard_watch ;;
         repair-codex) repair_codex ;;

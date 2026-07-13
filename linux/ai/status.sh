@@ -193,6 +193,8 @@ services="$(records_to_object < "$tmp_services")"
 mcp="$(bash "$PZ_ROOT/linux/ai/mcp-manager.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,definitions:[],targets:{}}')"
 open_webui="$(docker_container_record open-webui)"
 desktop_apps="$(bash "$PZ_ROOT/linux/ai/desktop-apps.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,claudeDesktop:{installed:false},codexDesktop:{},updater:{}}')"
+router_status="$(bash "$PZ_ROOT/linux/ai/9router-manager.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,installed:false,healthy:false}')"
+odysseus_status="$(bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,installed:false,healthy:false}')"
 github="$(github_auth_record)"
 admin_bridge="$(bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,ready:false,backend:"missing"}')"
 agent_compat="$(bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,mode:"degraded",rules:{ok:false,files:[]},tools:{}}')"
@@ -232,10 +234,13 @@ if jq -e '.gh.available == true' <<< "$clis" >/dev/null && ! jq -e '.authenticat
 fi
 jq -e '.vscode.available == true or .cursor.available == true or .windsurf.available == true or .neovim.available == true' <<< "$ides" >/dev/null || echo "install an AI-capable IDE/editor" >> "$recommendations"
 jq -e '.claudeDesktop.installed == true' <<< "$desktop_apps" >/dev/null || echo "linux/pz ai desktop install-claude" >> "$recommendations"
+jq -e '.qwenCodeDesktop.installed == true' <<< "$desktop_apps" >/dev/null || echo "linux/pz ai desktop install-qwen" >> "$recommendations"
 if command -v plasmashell >/dev/null 2>&1; then
     jq -e '.codexbar.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai setup codexbar" >> "$recommendations"
 fi
 jq -e '.updater.timerEnabled == true and .codexDesktop.guardEnabled == true' <<< "$desktop_apps" >/dev/null || echo "linux/pz ai desktop install-services" >> "$recommendations"
+jq -e '.healthy == true' <<< "$router_status" >/dev/null || echo "linux/pz ai 9router install" >> "$recommendations"
+jq -e '.healthy == true' <<< "$odysseus_status" >/dev/null || echo "linux/pz ai odysseus install" >> "$recommendations"
 
 jq -cn \
     --arg mode "$mode" \
@@ -247,6 +252,8 @@ jq -cn \
     --argjson mcp "$mcp" \
     --argjson openWebui "$open_webui" \
     --argjson desktopApps "$desktop_apps" \
+    --argjson router "$router_status" \
+    --argjson odysseus "$odysseus_status" \
     --argjson github "$github" \
     --argjson adminBridge "$admin_bridge" \
     --argjson agentCompat "$agent_compat" \
@@ -269,6 +276,8 @@ jq -cn \
       services: $services,
       containers: {openWebui: $openWebui},
       desktopApps: $desktopApps,
+      routing: {"9router": $router},
+      workspaces: {odysseus: $odysseus},
       github: $github,
       adminBridge: $adminBridge,
       agentCompat: $agentCompat,

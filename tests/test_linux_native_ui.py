@@ -61,6 +61,7 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
             "capabilities",
             "installation",
             "self-update",
+            "updates",
             "version",
             "webapp",
             "games",
@@ -181,6 +182,62 @@ def test_dynamic_boot_catalog_actions_are_safe(catalog):
             assert action.elevated
     assert actions["boot.grubfm.install"].parameter_names == ("source", "sha256")
     assert actions["boot.grubfm.install"].risk == "high"
+
+
+def test_proxies_page_has_dedicated_category_and_lifecycle_actions(catalog):
+    proxies = {item.id: item for item in catalog if item.category == "Proxies IA"}
+    expected = {
+        "ai.proxies", "ai.proxies-ides", "ai.proxies-auth", "ai.proxies-test",
+        "ai.proxies-login-all", "ai.proxies-start-all", "ai.proxies-stop-all",
+        "ai.proxies.detailed-status", "ai.proxies.restart-one",
+    }
+    assert expected <= set(proxies)
+    for suffix in ("kimi", "qwen", "deeps", "mimo"):
+        assert f"ai.proxies-start-{suffix}" in proxies
+        assert f"ai.proxies-stop-{suffix}" in proxies
+    for action in proxies.values():
+        if action.mutable:
+            assert action.preview_args
+    assert not any(item.id.startswith("ai.proxies") for item in catalog if item.category == "IA & Dev")
+
+
+def test_proxy_models_parse_detailed_status_and_gateways():
+    from linux.ui_native.proxy_models import (
+        PROXY_CARDS, parse_detailed_status, parse_gateway_status,
+    )
+
+    payload = {
+        "schemaVersion": 1,
+        "proxies": [
+            {
+                "id": "kimiproxy", "kind": "node", "port": 3010, "installed": True,
+                "service": "active", "apiKeyConfigured": True,
+                "webValidation": {"required": True, "kind": "browser-session", "status": "authenticated", "missing": []},
+            },
+            {
+                "id": "mimo-ai-proxy", "kind": "go", "port": 3013, "installed": True,
+                "service": "inactive", "apiKeyConfigured": False,
+                "webValidation": {"required": True, "kind": "env-session", "status": "missing-credentials", "missing": ["service-token-group"]},
+            },
+        ],
+        "ide": {
+            "envDefaults": True, "envDefaultsPath": "/tmp/ide-defaults.env",
+            "defaultProxy": "deepsproxy", "opencodeProviders": 4,
+            "continueModels": 11, "zcodeProviders": 4,
+        },
+    }
+    proxies, ide = parse_detailed_status(payload)
+    assert proxies["kimiproxy"].running and proxies["kimiproxy"].auth_state == "success"
+    assert not proxies["mimo-ai-proxy"].running
+    assert proxies["mimo-ai-proxy"].auth_missing == ("service-token-group",)
+    assert ide.env_defaults and ide.opencode_providers == 4 and ide.default_proxy == "deepsproxy"
+    assert {row[0] for row in PROXY_CARDS} <= {"kimiproxy", "qwenproxy", "deepsproxy", "mimo-ai-proxy"}
+
+    router = parse_gateway_status("9router", {"installed": True, "healthy": True, "providers": {"active": 3}, "combos": {"total": 5}})
+    assert router.label == "ativo" and "3 providers" in router.detail
+    odysseus = parse_gateway_status("odysseus", {"installed": True, "healthy": False, "endpoint": "http://127.0.0.1:4000"})
+    assert odysseus.label == "parado" and odysseus.state == "warning"
+    assert parse_gateway_status("9router", None).label == "não instalado"
 
 
 def test_json_parser_accepts_logs_before_envelope():

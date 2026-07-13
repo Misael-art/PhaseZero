@@ -74,6 +74,18 @@ def test_every_builder_uses_canonical_git_export():
         assert "export-source.sh" in text, relative
 
 
+def test_dirty_source_export_overlays_complete_worktree():
+    text = (ROOT / "packaging/linux/export-source.sh").read_text(encoding="utf-8")
+    assert "ls-files -z --modified --others --exclude-standard" in text
+    assert "diff --name-only --diff-filter=D -z" in text
+    assert 'tar -C "$ROOT" -cf - -- "${changed[@]}"' in text
+
+
+def test_user_install_pruning_cannot_abort_completed_install():
+    text = (ROOT / "packaging/linux/install-user.sh").read_text(encoding="utf-8")
+    assert 'if ! rm -rf -- "$path"' in text
+
+
 def test_static_action_snapshot_matches_native_catalog():
     from linux.ui_native.catalog import build_catalog
 

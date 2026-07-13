@@ -65,6 +65,14 @@ class WindowsVMPage(BasePage):
                 graphics_layout.addWidget(self._action_row(action))
         layout.addWidget(graphics_box)
 
+        apps_box = QGroupBox("WinBoat e WinPodX — Podman")
+        apps_layout = QVBoxLayout(apps_box)
+        for aid in ("windows.apps.status", "windows.apps.setup", "windows.apps.configure"):
+            action = self.find(aid)
+            if action:
+                apps_layout.addWidget(self._action_row(action))
+        layout.addWidget(apps_box)
+
         # Host access + Boot
         system_box = QGroupBox("Sistema")
         system_layout = QVBoxLayout(system_box)

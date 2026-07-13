@@ -3,6 +3,34 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [Não lançado]
+
+### Adicionado
+- Página dedicada "Proxies IA" na UI nativa: gateways 9Router/Odysseus, cards
+  por proxy com iniciar/parar, autenticação OAuth por navegador, integração com
+  IDEs e polling passivo de status.
+- `pz ai proxies detailed-status` (JSON consolidado de instalação, serviços,
+  autenticação e IDEs), `restart` e `login all` sequencial para proxies com
+  sessão de navegador.
+- 9Router com pacote verificado, atualização atômica, perfil de clientes e
+  watchdog passivo.
+- Odysseus fixado em commit oficial, provisionado com Podman rootless,
+  autenticação obrigatória e rollback.
+- Inventário unificado e timer check-only para updates PhaseZero, apps e host.
+- Qwen Code Desktop oficial `desktop-latest`, instalado por usuário com digest
+  SHA-256, launcher Wayland e diretório de configuração privado.
+- WinBoat e WinPodX oficiais com Podman rootless, recursos adequados aos 14 GiB
+  do Steam Deck, FreeRDP, multitouch e política de um guest Windows por vez.
+- Compartilhamento `PZExchange`, canal SPICE WebDAV e diagnóstico da rede/NIC
+  libvirt.
+
+### Corrigido
+- Auditoria deduplica aliases `/usr/lib` e `/usr/lib64` do mesmo inode.
+- Shares Windows validam listagem real e criam diretório de intercâmbio como o
+  usuário alvo.
+- Runtime gráfico Steam Deck LCD documenta e aplica Gamescope 1280×800 com
+  orientação `right`, evitando guest vertical no modo handheld.
+
 ## [1.8.4] - 2026-07-13
 
 ### Corrigido

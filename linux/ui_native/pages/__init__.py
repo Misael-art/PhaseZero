@@ -10,6 +10,7 @@ from .emulation import EmulationPage
 from .boot import BootPage
 from .flatpak import FlatpakPage
 from .ai_dev import AiDevPage
+from .ai_proxies import AiProxiesPage
 from .tuning import TuningPage
 from .overview import OverviewPage
 from .results import ResultsPage
@@ -19,5 +20,5 @@ __all__ = [
     "DashboardPage", "ProfilesPage", "SteamDeckPage",
     "WindowsVMPage", "WaydroidPage", "ServerPage",
     "EmulationPage", "BootPage", "FlatpakPage",
-    "AiDevPage", "TuningPage", "OverviewPage", "ResultsPage",
+    "AiDevPage", "AiProxiesPage", "TuningPage", "OverviewPage", "ResultsPage",
 ]

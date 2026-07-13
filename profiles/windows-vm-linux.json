@@ -15,6 +15,10 @@
         "samba",
         "spice-gtk",
         "usbredir",
+        "podman",
+        "podman-compose",
+        "freerdp",
+        "fuse2",
         "power-profiles-daemon",
         "cpupower",
         "numactl",
@@ -31,7 +35,8 @@
   },
   "scripts": {
     "linux": [
-      "linux/windows-vm/windows-vm.sh"
+      "linux/windows-vm/windows-vm.sh",
+      "linux/windows-vm/container-frontends.sh"
     ],
     "windows": []
   },
@@ -39,7 +44,8 @@
     "linux": [
       "linux/windows-vm/windows-vm.sh",
       "linux/windows-vm/windows-vm-boot-prepare.sh",
-      "linux/windows-vm/windows-vm-session.sh"
+      "linux/windows-vm/windows-vm-session.sh",
+      "linux/windows-vm/container-frontends.sh"
     ],
     "windows": []
   },

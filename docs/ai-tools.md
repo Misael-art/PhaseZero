@@ -80,6 +80,7 @@ linux/pz ai omo disable        # desregistra o plugin (evita consumo em backgrou
 linux/pz ai setup codex
 linux/pz ai setup claude
 linux/pz ai desktop install-claude
+linux/pz ai desktop install-qwen
 linux/pz ai desktop status
 linux/pz ai desktop repair-codex
 linux/pz ai desktop install-services
@@ -102,9 +103,12 @@ linux/pz ai mcp doctor
 linux/pz ai mcp status
 linux/pz ai menu
 linux/pz ai proxies auth all
+linux/pz ai proxies detailed-status
 linux/pz ai proxies login kimiproxy
 linux/pz ai proxies login qwenproxy
 linux/pz ai proxies login deepsproxy
+linux/pz ai proxies login all
+linux/pz ai proxies restart kimiproxy
 linux/pz ai proxies test
 ```
 
@@ -115,7 +119,7 @@ Automacoes Linux:
 - `linux/ai/setup-admin-bridge.sh`: cria `phasezero-admin`, detecta/instala `bigsudo`, fornece fallback `pkexec`/`sudo`, escreve estado/env user e sincroniza regra para agentes/IDEs.
 - `linux/ai/headroom-agent.sh`: helper explícito para `headroom status/proxy/wrap-*`; wrappers não rodam automaticamente.
 - `linux/ai/proxy-suite.sh`: instala e gerencia dez proxies Linux com runtime Node 24 isolado, build Go e units systemd de usuário desativadas por padrão. Porta o contrato Windows `webValidation`: `auth` retorna status redigido; `login` abre browser real para Kimi/Qwen/DeepSeek; Mimo fica por env-session local. Contrato completo em `docs/linux-ai-proxies.md`.
-- `linux/ai/desktop-apps.sh`: instala Claude Desktop pelo repositorio apt oficial Anthropic em prefixo atomico do usuario. Valida assinatura, fingerprint e SHA-256. Corrige o pipeline do Codex Desktop Linux, habilita guarda de workspace e timer user.
+- `linux/ai/desktop-apps.sh`: instala Claude Desktop pelo repositorio apt oficial Anthropic e Qwen Code Desktop pela release oficial `desktop-latest`, em prefixos atomicos do usuario. Valida assinatura/digestos e SHA-256. Corrige o pipeline do Codex Desktop Linux, habilita guarda de workspace e timer user.
 - `linux/ai/setup-codex.sh`: instala/atualiza `@openai/codex` no prefixo npm do usuario e publica symlink em `~/.local/bin`.
 - `linux/ai/setup-memory.sh`: instala `ai-memory` por AUR (`ai-memory-bin`) quando disponivel; fallback Docker wrapper; fallback build Cargo. Configura serviço user loopback `127.0.0.1:49374` e roda `install-mcp`/`install-hooks` para agentes detectados.
 - `linux/ai/setup-hermes.sh`: instala Hermes pelo instalador oficial em modo não interativo, escreve env template sem segredos, sincroniza MCPs em `~/.hermes/config.yaml` e instala o pacote Python `mcp` no venv quando disponível.
@@ -144,6 +148,7 @@ Resultados estruturados:
 - Chaves/API/login ficam em métodos oficiais das ferramentas ou SecretStore/Credential Manager; placeholders em docs.
 - No Linux, `rotate-secrets.sh` grava chaves no `pass`; aplicação de valor cru em config exige `PZ_AI_APPLY_RAW_SECRETS=1`.
 - Claude Desktop usa somente o repositorio oficial Anthropic. BigLinux extrai o `.deb` validado para `~/.local/share/phasezero`; nenhum AUR e nenhuma escrita root.
+- Qwen Code Desktop usa somente AppImage oficial `QwenLM/qwen-code`. Config compartilhada fica em `~/.craft-agent` com permissão 0700. Autenticação fica a cargo do usuário; PhaseZero não grava API keys. OAuth gratuito Qwen foi descontinuado em 15/04/2026, então use Alibaba Coding Plan, OpenRouter, Fireworks ou chave própria suportada pelo aplicativo.
 - Codex Desktop Linux continua sendo wrapper comunitario sobre o DMG macOS. PhaseZero valida o pacote pacman local e usa PolicyKit; Codex CLI permanece pacote oficial `@openai/codex`.
 - Hermes Agent não usa o pacote npm `hermes` como sinal oficial. Em Windows, o caminho automatizado suportado é WSL2; se `wsl.exe` retornar `Wsl/CallMsi/Install/REGDB_E_CLASSNOTREG`, o fluxo bloqueia cedo com `blockerKind=wsl-msi-registration-broken`.
 - Integrações sem método Windows oficial ou silent installer confirmado ficam `manual`.

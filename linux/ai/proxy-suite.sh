@@ -285,11 +285,11 @@ service_action() {
     local mode="$1" id repo port kind count=0
     while IFS='|' read -r id repo port kind; do
         { [ "$kind" = node ] || [ "$kind" = go ] || [ "$kind" = npm ]; } || continue
-        if [ "$mode" = start ]; then
-            systemctl --user enable --now "phasezero-$id.service"
-        else
-            systemctl --user disable --now "phasezero-$id.service"
-        fi
+        case "$mode" in
+            start) systemctl --user enable --now "phasezero-$id.service" ;;
+            restart) systemctl --user restart "phasezero-$id.service" ;;
+            *) systemctl --user disable --now "phasezero-$id.service" ;;
+        esac
         count=$((count + 1))
     done < <(selected_rows)
     [ "$count" -gt 0 ] || pz_warn "no local service for $TARGET"
@@ -719,6 +719,37 @@ auth_status_json() {
     printf ']\n'
 }
 
+# Read-only snapshot of what configure_ides has already wired, so the UI can
+# show integration health without mutating any IDE configuration.
+ide_status_json() {
+    local defaults=false opencode=0 continue_models=0 zcode=0 file
+    [ -f "$IDE_ENV_DEFAULTS" ] && defaults=true
+    for file in "$OPENCODE_JSON" "$OPENCODE_JSONC"; do
+        [ -f "$file" ] || continue
+        jq empty "$file" >/dev/null 2>&1 || continue
+        opencode="$(jq '[(.provider // {}) | keys[] | select(startswith("phasezero-"))] | length' "$file")"
+        [ "$opencode" -gt 0 ] && break
+    done
+    if [ -f "$CONTINUE_CONFIG" ] && jq empty "$CONTINUE_CONFIG" >/dev/null 2>&1; then
+        continue_models="$(jq '[.models[]? | select((.title // "") | startswith("[PhaseZero Proxy] "))] | length' "$CONTINUE_CONFIG")"
+    fi
+    if [ -f "$ZCODE_STORE" ] && jq empty "$ZCODE_STORE" >/dev/null 2>&1; then
+        zcode="$(jq '."phasezero-ai-proxies".providers // [] | length' "$ZCODE_STORE")"
+    fi
+    jq -cn --argjson envDefaults "$defaults" --argjson opencodeProviders "$opencode" \
+        --argjson continueModels "$continue_models" --argjson zcodeProviders "$zcode" \
+        --arg envDefaultsPath "$IDE_ENV_DEFAULTS" --arg defaultProxy "$IDE_DEFAULT_PROXY" \
+        '{envDefaults:$envDefaults, envDefaultsPath:$envDefaultsPath, defaultProxy:$defaultProxy,
+          opencodeProviders:$opencodeProviders, continueModels:$continueModels, zcodeProviders:$zcodeProviders}'
+}
+
+# One consolidated read-only payload for the native UI "Proxies IA" page:
+# install/service/auth per proxy plus IDE integration counters, in one call.
+detailed_status_json() {
+    jq -cn --argjson proxies "$(auth_status_json)" --argjson ide "$(ide_status_json)" \
+        '{schemaVersion:1, proxies:$proxies, ide:$ide}'
+}
+
 login_proxy() {
     local id="$1" dir="$ROOT/$1" log state login_pid
     if ! is_login_capable_proxy "$id"; then
@@ -889,6 +920,7 @@ case "$ACTION" in
         configure_ides
         ;;
     auth|auth-status|login-status) auth_status_json ;;
+    detailed-status|detailed|overview) detailed_status_json ;;
     configure-ides|ides|configure) configure_ides ;;
     test|verify)
         if [ "$TARGET" = 9router ]; then
@@ -901,6 +933,18 @@ case "$ACTION" in
         ;;
     start|enable) service_action start ;;
     stop|disable) service_action stop ;;
-    login) login_proxy "$TARGET" ;;
-    *) pz_error "usage: proxy-suite.sh (status|plan|install|configure-ides|auth|test|start|stop|login) [all|id]"; exit 2 ;;
+    restart) service_action restart ;;
+    login)
+        if [ "$TARGET" = all ]; then
+            # Batch OAuth: open one headed login per browser-session proxy that
+            # still needs it. login_proxy detaches and skips proxies already
+            # authenticated, so this stays honest and non-blocking.
+            for login_id in "${LOGIN_CAPABLE_PROXIES[@]}"; do
+                login_proxy "$login_id" || pz_warn "login flow failed to open for $login_id"
+            done
+        else
+            login_proxy "$TARGET"
+        fi
+        ;;
+    *) pz_error "usage: proxy-suite.sh (status|detailed-status|plan|install|configure-ides|auth|test|start|stop|restart|login) [all|id]"; exit 2 ;;
 esac
