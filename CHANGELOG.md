@@ -3,6 +3,12 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.8.4] - 2026-07-13
+
+### Corrigido
+- Backend ISO preserva modo executável nos pacotes e aparece disponível no
+  status geral mesmo quando invocado explicitamente por `bash`.
+
 ## [1.8.3] - 2026-07-13
 
 ### Corrigido

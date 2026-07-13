@@ -306,7 +306,7 @@ cmd_status() {
         *) echo "  safe_menu_profile: missing" ;;
     esac
     [ -x "$EMERGENCY_GRUB_SCRIPT" ] && echo "  emergency_shell_entry: installed" || echo "  emergency_shell_entry: missing"
-    if [ -x "$ISO_BOOT" ]; then
+    if [ -f "$ISO_BOOT" ]; then
         bash "$ISO_BOOT" summary | sed '1d; s/^  /  dynamic_/'
     else
         echo "  dynamic_iso_boot: unavailable"
