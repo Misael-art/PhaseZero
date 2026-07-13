@@ -3,6 +3,14 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.8.1] - 2026-07-12
+
+### Corrigido
+- Release sincroniza `version.json` com metadados DEB, RPM, AUR, Flatpak e
+  AppStream antes do commit/tag.
+- Job de pacotes instala PySide6 antes do gate de coesão; job Flatpak usa imagem
+  oficial existente `gnome-48` conforme documentação upstream.
+
 ## [1.8.0] - 2026-07-12
 
 Foco: boot dinâmico seguro de ISOs e mídias removíveis pelo GRUB do host.

@@ -27,7 +27,7 @@ jobs:
       - name: Install build dependencies
         run: |
           pacman -Syu --noconfirm --needed \
-            base-devel git jq python python-pytest \
+            base-devel git jq python python-pytest pyside6 \
             dpkg rpm-tools squashfs-tools curl sudo
 
       - uses: actions/checkout@v4
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:kde-6.11
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
       options: --privileged
     steps:
       - uses: actions/checkout@v4

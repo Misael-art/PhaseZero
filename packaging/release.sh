@@ -48,12 +48,33 @@ if git -C "$ROOT" rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
 fi
 
 BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+RELEASE_DATE="${BUILT_AT%%T*}"
 tmp="$(mktemp)"
 jq --arg v "$NEW" --arg ch "$CHANNEL" --arg tag "release-$TAG" --arg at "$BUILT_AT" \
     '.version=$v | .channel=$ch | .commit=$tag | .builtAt=$at' "$VJSON" > "$tmp"
 mv "$tmp" "$VJSON"
 
-git -C "$ROOT" add version.json
+sed -i -E "s/^Version: [^[:space:]]+/Version: $NEW/" "$ROOT/packaging/linux/deb/control"
+sed -i -E "s/^Version:[[:space:]]+[^[:space:]]+/Version:        $NEW/" "$ROOT/packaging/linux/rpm/phasezero-control-center.spec"
+sed -i -E "s/^pkgver=.*/pkgver=$NEW/" "$ROOT/packaging/linux/aur/PKGBUILD"
+sed -i -E \
+    -e "s/^([[:space:]]*pkgver[[:space:]]*=[[:space:]]*).*/\\1$NEW/" \
+    -e "s#(source = PhaseZero-)[^.]*(\\.[^:]*)?#\\1$NEW.tar.gz::https://github.com/Misael-art/PhaseZero/archive/refs/tags/v$NEW.tar.gz#" \
+    "$ROOT/packaging/linux/aur/.SRCINFO"
+sed -i -E "s/^([[:space:]]*tag:[[:space:]]*)v.*/\\1v$NEW/" "$ROOT/packaging/linux/flatpak/io.phasezero.ControlCenter.yml"
+if ! grep -Fq "<release version=\"$NEW\"" "$ROOT/packaging/linux/io.phasezero.ControlCenter.metainfo.xml"; then
+    sed -i "/<releases>/a\\    <release version=\"$NEW\" date=\"$RELEASE_DATE\"/>" \
+        "$ROOT/packaging/linux/io.phasezero.ControlCenter.metainfo.xml"
+fi
+
+git -C "$ROOT" add \
+    version.json \
+    packaging/linux/deb/control \
+    packaging/linux/rpm/phasezero-control-center.spec \
+    packaging/linux/aur/PKGBUILD \
+    packaging/linux/aur/.SRCINFO \
+    packaging/linux/flatpak/io.phasezero.ControlCenter.yml \
+    packaging/linux/io.phasezero.ControlCenter.metainfo.xml
 git -C "$ROOT" commit -q -m "release: $TAG"
 git -C "$ROOT" tag -a "$TAG" -m "PhaseZero $TAG"
 echo "prepared $TAG (channel=$CHANNEL, builtAt=$BUILT_AT)"

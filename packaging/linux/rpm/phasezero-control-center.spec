@@ -1,5 +1,5 @@
 Name:           phasezero-control-center
-Version:        1.7.2
+Version:        1.8.0
 Release:        1%{?dist}
 Summary:        PhaseZero native Linux control center
 License:        MIT
