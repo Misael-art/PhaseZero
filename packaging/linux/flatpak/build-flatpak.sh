@@ -47,7 +47,6 @@ command -v flatpak-builder >/dev/null || {
 }
 command -v flatpak >/dev/null || { echo "flatpak missing" >&2; exit 69; }
 command -v python3 >/dev/null || { echo "python3 missing" >&2; exit 69; }
-python3 -m pip --version >/dev/null 2>&1 || { echo "python3 pip missing" >&2; exit 69; }
 
 case "$(uname -m)" in
     x86_64|amd64) ;;
@@ -87,10 +86,6 @@ if replacements != 1:
     raise SystemExit("unexpected PhaseZero source block in Flatpak manifest")
 manifest.write_text(text, encoding="utf-8")
 PY
-
-python3 -m pip download --only-binary=:all: --no-deps --python-version 312 \
-    --dest "$WORK" \
-    shiboken6==6.8.3 PySide6_Essentials==6.8.3
 
 rm -rf -- "$BUILD"
 flatpak-builder --force-clean --state-dir="$STATE" --repo="$REPO" \

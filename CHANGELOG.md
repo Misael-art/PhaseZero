@@ -3,6 +3,13 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.8.3] - 2026-07-13
+
+### Corrigido
+- CI nativo instala `python-pip`, necessário para empacotar PySide6 no AppImage.
+- Flatpak obtém wheels PySide6 por URLs fixas e valida SHA-256, sem depender de
+  arquivos locais ausentes no checkout.
+
 ## [1.8.2] - 2026-07-13
 
 ### Corrigido
