@@ -3,6 +3,12 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.8.2] - 2026-07-13
+
+### Corrigido
+- Builders invocam `export-source.sh` via `bash`, funcionando em checkout CI
+  onde scripts auxiliares preservados como modo `100644` não são executáveis.
+
 ## [1.8.1] - 2026-07-12
 
 ### Corrigido

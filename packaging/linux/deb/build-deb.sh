@@ -12,7 +12,7 @@ SOURCE="$WORK/source"
 
 rm -rf -- "$PKG" "$SOURCE"
 mkdir -p "$SOURCE"
-"$ROOT/packaging/linux/export-source.sh" "$SOURCE"
+bash "$ROOT/packaging/linux/export-source.sh" "$SOURCE"
 mkdir -p "$PKG/DEBIAN" "$PKG/usr/lib/phasezero" "$PKG/usr/bin" \
     "$PKG/usr/share/applications" "$PKG/usr/share/metainfo" \
     "$PKG/usr/share/icons/hicolor/scalable/apps"

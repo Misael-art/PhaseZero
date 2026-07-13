@@ -15,7 +15,7 @@ OUT="$(cd "$OUT" && pwd)"
 SOURCE_WORK="$(mktemp -d "${TMPDIR:-/tmp}/pz-source-release.XXXXXX")"
 trap 'rm -rf -- "$SOURCE_WORK"' EXIT
 mkdir -p "$SOURCE_WORK/PhaseZero-$VERSION"
-"$HERE/export-source.sh" "$SOURCE_WORK/PhaseZero-$VERSION"
+bash "$HERE/export-source.sh" "$SOURCE_WORK/PhaseZero-$VERSION"
 tar -C "$SOURCE_WORK" -czf "$OUT/PhaseZero-$VERSION-source.tar.gz" "PhaseZero-$VERSION"
 
 bash "$HERE/deb/build-deb.sh" "$OUT"

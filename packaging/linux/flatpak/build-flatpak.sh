@@ -63,7 +63,7 @@ cp "$HERE/io.phasezero.ControlCenter.yml" "$MANIFEST"
 # maintainer validates local changes.
 rm -rf -- "$SOURCE"
 mkdir -p "$SOURCE"
-"$ROOT/packaging/linux/export-source.sh" "$SOURCE"
+bash "$ROOT/packaging/linux/export-source.sh" "$SOURCE"
 python3 - "$MANIFEST" "$SOURCE" <<'PY'
 from pathlib import Path
 import re

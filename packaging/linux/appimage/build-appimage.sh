@@ -74,7 +74,7 @@ OUT="$(cd "$OUT" && pwd)"
 
 rm -rf -- "$APPDIR" "$SOURCE"
 mkdir -p "$SOURCE"
-"$ROOT/packaging/linux/export-source.sh" "$SOURCE"
+bash "$ROOT/packaging/linux/export-source.sh" "$SOURCE"
 mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/lib/phasezero" \
     "$APPDIR/usr/lib/python3/site-packages" "$APPDIR/usr/share/applications" \
     "$APPDIR/usr/share/metainfo"

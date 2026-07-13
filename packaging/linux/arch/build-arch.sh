@@ -19,7 +19,7 @@ cp "$ROOT/packaging/linux/aur/PKGBUILD" "$WORK/PKGBUILD"
 # Release builds use committed HEAD. This avoids downloading a remote tag and
 # guarantees package content matches the commit that passed local gates.
 mkdir -p "$WORK/source/PhaseZero-$VERSION"
-"$ROOT/packaging/linux/export-source.sh" "$WORK/source/PhaseZero-$VERSION"
+bash "$ROOT/packaging/linux/export-source.sh" "$WORK/source/PhaseZero-$VERSION"
 tar -C "$WORK/source" -czf "$WORK/PhaseZero-$VERSION.tar.gz" "PhaseZero-$VERSION"
 
 (

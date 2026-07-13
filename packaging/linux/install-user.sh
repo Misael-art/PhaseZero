@@ -27,7 +27,7 @@ trap cleanup EXIT
 
 install -d "$BIN_HOME" "$APP_DIR" "$ICON_DIR" "$INSTALL_BASE/releases"
 SOURCE_TMP="$(mktemp -d "$INSTALL_BASE/.source.XXXXXX")"
-"$ROOT/packaging/linux/export-source.sh" "$SOURCE_TMP"
+bash "$ROOT/packaging/linux/export-source.sh" "$SOURCE_TMP"
 STAGE="$(mktemp -d "$INSTALL_BASE/.stage.XXXXXX")"
 install -d "$STAGE/packaging/linux"
 cp -a "$SOURCE_TMP/linux" "$SOURCE_TMP/profiles" "$SOURCE_TMP/assets" "$SOURCE_TMP/version.json" "$STAGE/"
