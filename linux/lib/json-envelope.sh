@@ -71,3 +71,108 @@ pz_json_envelope_simple() {
     [ -n "$checks_extra" ] && PZ_JSON_CHECKS="$checks_extra"
     pz_json_envelope_end
 }
+
+# --- envelope result (correção 4) ----------------------------------------
+#
+# Contrato: TODO apply/preview termina com um result legível, inclusive quando
+# falha e inclusive em modo degradado. A UI e a CLI nunca ficam sem resposta.
+#
+#   { ok, code, summary, howToFix[], ledgerRef, logPath }
+#
+# `code` é o vocabulário fechado abaixo. `degraded` não é erro: a operação
+# rodou em dry-run porque faltou a admin bridge, e `howToFix` diz o que fazer.
+
+PZ_RESULT_CODES="ok degraded blocked failed refused"
+
+pz_result_valid_code() {
+    case " $PZ_RESULT_CODES " in *" ${1:-} "*) return 0 ;; *) return 1 ;; esac
+}
+
+# pz_result_envelope <code> <summary> [howToFix...]
+pz_result_envelope() {
+    local code="${1:-failed}" summary="${2:-}" ok
+    shift 2 2>/dev/null || shift $#
+    pz_result_valid_code "$code" || code="failed"
+    case "$code" in
+        ok|degraded) ok=true ;;
+        *) ok=false ;;
+    esac
+    [ -n "$summary" ] || summary="operação sem resumo"
+
+    local how_to_fix='[]'
+    if [ "$#" -gt 0 ]; then
+        how_to_fix="$(printf '%s\n' "$@" | jq -Rsc 'split("\n") | map(select(length > 0))')"
+    fi
+
+    jq -n \
+        --argjson ok "$ok" \
+        --arg code "$code" \
+        --arg summary "$summary" \
+        --argjson howToFix "$how_to_fix" \
+        --arg ledgerRef "$(command -v pz_ledger_ref >/dev/null 2>&1 && pz_ledger_ref || echo '')" \
+        --arg logPath "${PZ_LOG:-}" \
+        --arg module "${PZ_MODULE:-unknown}" \
+        --arg operationId "${PZ_OPERATION_ID:-unknown}" \
+        --argjson dryRun "$([ "${PZ_DRY_RUN:-0}" = "1" ] && echo true || echo false)" \
+        '{
+            ok: $ok,
+            code: $code,
+            summary: $summary,
+            howToFix: $howToFix,
+            ledgerRef: $ledgerRef,
+            logPath: $logPath,
+            module: $module,
+            operationId: $operationId,
+            dryRun: $dryRun
+        }'
+}
+
+# Envelope de degradação por falta de admin bridge.
+#
+# Existe porque `pz_result_envelope degraded "..." $(pz_admin_howtofix)` é uma
+# armadilha: a substituição sem aspas quebra as instruções em palavras soltas e
+# o usuário recebe howToFix=["Instale","a","admin",...]. Aqui as linhas são
+# lidas inteiras.
+#
+#   pz_result_degraded_admin <summary> [instrução extra]...
+pz_result_degraded_admin() {
+    local summary="${1:-mutação de sistema não aplicada}"
+    shift 2>/dev/null || true
+    local -a steps=()
+    local line
+    while IFS= read -r line; do
+        [ -n "$line" ] && steps+=("$line")
+    done < <(pz_admin_howtofix)
+    for line in "$@"; do
+        [ -n "$line" ] && steps+=("$line")
+    done
+    pz_result_envelope degraded "$summary" "${steps[@]}"
+}
+
+# Rede de segurança: instale com `trap` para que uma saída inesperada (erro
+# não tratado, set -e, sinal) ainda produza um envelope legível.
+#
+#   pz_result_guard_install "meu-modulo"
+#
+# Se o comando terminar normalmente e já tiver emitido um envelope, chame
+# `pz_result_emitted` antes de sair para desarmar a rede.
+PZ_RESULT_EMITTED=0
+
+pz_result_emitted() { PZ_RESULT_EMITTED=1; }
+
+pz_result_guard() {
+    local rc=$?
+    [ "${PZ_RESULT_EMITTED:-0}" = "1" ] && return 0
+    [ "$rc" -eq 0 ] && return 0
+    PZ_RESULT_EMITTED=1
+    pz_result_envelope failed \
+        "${PZ_MODULE:-operação} terminou com código $rc sem emitir resultado" \
+        "Consulte o log: ${PZ_LOG:-<log indisponível>}" \
+        "Reexecute com PZ_DEBUG=1 para rastreio detalhado"
+}
+
+pz_result_guard_install() {
+    PZ_MODULE="${1:-${PZ_MODULE:-unknown}}"
+    PZ_RESULT_EMITTED=0
+    trap pz_result_guard EXIT
+}

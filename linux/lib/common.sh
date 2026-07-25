@@ -58,6 +58,33 @@ pz_can_sudo_noninteractive() {
     command -v sudo &>/dev/null && sudo -n true &>/dev/null
 }
 
+# Código de saída reservado para "sem admin bridge". Chamadores que sabem
+# degradar tratam 77; quem não trata, propaga — mas nunca crasha calado.
+PZ_RC_NO_ADMIN=77
+
+# ready   = dá para escalar privilégio agora
+# degraded= não dá; o produto continua, só que em dry-run para mutações root
+pz_admin_mode() {
+    if [ "$EUID" -eq 0 ] \
+        || command -v phasezero-admin >/dev/null 2>&1 \
+        || command -v bigsudo >/dev/null 2>&1 \
+        || { [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; }; then
+        echo ready
+    else
+        echo degraded
+    fi
+}
+
+pz_admin_available() { [ "$(pz_admin_mode)" = "ready" ]; }
+
+# Mensagem acionável única, para não divergir entre CLI e UI.
+pz_admin_howtofix() {
+    printf '%s\n' \
+        "Instale a admin bridge: linux/pz ai setup admin" \
+        "Alternativa: rode o comando dentro de um shell root (bigsudo / phasezero-admin)" \
+        "Sem a bridge, mutações de sistema ficam em dry-run — nada foi alterado"
+}
+
 pz_admin_run() {
     if [ "$EUID" -eq 0 ]; then
         "$@"
@@ -68,10 +95,16 @@ pz_admin_run() {
     elif [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; then
         sudo -n "$@"
     else
-        pz_error "admin bridge required; run: linux/pz ai setup admin"
-        return 77
+        # DEGRADE, não crash: a operação root vira um no-op anunciado e o
+        # chamador recebe PZ_RC_NO_ADMIN para montar o envelope result.
+        PZ_DEGRADED=1
+        pz_warn "admin bridge ausente; degradando para dry-run: $*"
+        return "$PZ_RC_NO_ADMIN"
     fi
 }
+
+# Verdadeiro quando alguma chamada nesta execução foi degradada.
+pz_degraded() { [ "${PZ_DEGRADED:-0}" = "1" ]; }
 
 # --- backups centralizados ------------------------------------------------
 #
@@ -409,8 +442,9 @@ pz_require_root() {
         elif command -v bigsudo &>/dev/null; then
             exec bigsudo "$0" "$@"
         else
-            pz_error "root required; run: linux/pz ai setup admin"
-            return 77
+            PZ_DEGRADED=1
+            pz_warn "root required but admin bridge is missing; run: linux/pz ai setup admin"
+            return "$PZ_RC_NO_ADMIN"
         fi
     fi
 }
