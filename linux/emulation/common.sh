@@ -301,7 +301,7 @@ pz_emulation_write_file() {
     install -d "$dir"
     tmp="$(mktemp)"
     cat > "$tmp"
-    [ -f "$path" ] && cp "$path" "${path}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$path" user >/dev/null
     install -m "$mode" "$tmp" "$path"
     rm -f "$tmp"
     pz_info "wrote $path"

@@ -144,7 +144,7 @@ unregister_plugin_file() {
             .plugin |= (map(select((tostring | startswith($p)) | not)))
             | (if (.plugin | length) == 0 then del(.plugin) else . end)
         else . end' "$cfg" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
-    cp "$cfg" "${cfg}.bak.$(date +%s)"
+    pz_backup_file "$cfg" user >/dev/null
     mv "$tmp" "$cfg"
 }
 
@@ -156,14 +156,14 @@ register_plugin_file() {
     jq --arg spec "$OMO_SPEC" --arg p "$OMO_PLUGIN_PREFIX" '
         .plugin = ((.plugin // []) | map(select((tostring | startswith($p)) | not)) + [$spec])
     ' "$cfg" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
-    cp "$cfg" "${cfg}.bak.$(date +%s)"
+    pz_backup_file "$cfg" user >/dev/null
     mv "$tmp" "$cfg"
 }
 
 backup_opencode_config() {
     local f
     for f in "$OPENCODE_JSONC" "$OPENCODE_JSON"; do
-        [ -f "$f" ] && cp "$f" "${f}.bak.$(date +%s)"
+        pz_backup_file "$f" user >/dev/null
     done
     return 0
 }
@@ -257,7 +257,7 @@ do_uninstall() {
     command -v bun >/dev/null 2>&1 && omo_env bunx "$OMO_SPEC" cleanup >/dev/null 2>&1 || true
     local f
     for f in "$OMO_CONFIG" "$OMO_CONFIG_LEGACY" "$OPENCODE_DIR/tui.json"; do
-        [ -f "$f" ] && { cp "$f" "${f}.bak.$(date +%s)"; rm -f "$f"; pz_info "removed $f"; }
+        [ -f "$f" ] && { pz_backup_file "$f" user >/dev/null; rm -f "$f"; pz_info "removed $f"; }
     done
     pz_info "OMO uninstalled from OpenCode"
 }

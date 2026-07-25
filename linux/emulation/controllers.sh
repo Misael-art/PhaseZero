@@ -11,10 +11,9 @@ RYUJINX_REF="$EMUDECK_CFG/Ryujinx/Config.json"
 RPCS3_REF="$EMUDECK_CFG/rpcs3/input_configs/global/Default.yml"
 
 backup_file() {
-    local path="$1" backup
+    local path="$1"
     [ -f "$path" ] || return 0
-    backup="$path.phasezero.bak.$(date +%s%N).$$"
-    cp -p -- "$path" "$backup"
+    pz_backup_file "$path" user >/dev/null
 }
 
 atomic_jq() {

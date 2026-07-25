@@ -720,7 +720,9 @@ install_user_files() {
     fi
     install -d "$APPLICATIONS_DIR" "$SYSTEMD_USER_DIR"
     desktop_entry_content > "$APPLICATIONS_DIR/phasezero-windows-vm.desktop"
+    pz_record_created windows-vm "$APPLICATIONS_DIR/phasezero-windows-vm.desktop"
     boot_reboot_desktop_content > "$APPLICATIONS_DIR/phasezero-reboot-windows-vm.desktop"
+    pz_record_created windows-vm "$APPLICATIONS_DIR/phasezero-reboot-windows-vm.desktop"
     user_service_content > "$SYSTEMD_USER_DIR/phasezero-windows-vm.service"
     chown_target_user "$APPLICATIONS_DIR" "$APPLICATIONS_DIR/phasezero-windows-vm.desktop" "$APPLICATIONS_DIR/phasezero-reboot-windows-vm.desktop" "$SYSTEMD_USER_DIR" "$SYSTEMD_USER_DIR/phasezero-windows-vm.service"
     pz_info "installed user launcher and service"

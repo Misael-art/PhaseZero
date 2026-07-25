@@ -19,6 +19,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# store central de backups (linux/lib/pz_hostbackup.py)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import pz_hostbackup  # noqa: E402
+
+PZ_BACKUP_MODULE = "emulation"
+
 
 EXCLUDED_FILE_PREFIXES = (
     "unins",
@@ -117,7 +123,7 @@ def write_json(path: Path, data: Any, dry_run: bool = False, backup: bool = True
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     if backup and path.exists():
-        shutil.copy2(path, path.with_name(f"{path.name}.bak.{int(time.time())}"))
+        pz_hostbackup.backup_file(path, module=PZ_BACKUP_MODULE)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
@@ -128,7 +134,7 @@ def write_text(path: Path, text: str, mode: int = 0o644, dry_run: bool = False, 
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     if backup and path.exists() and path.read_text(encoding="utf-8", errors="replace") != text:
-        shutil.copy2(path, path.with_name(f"{path.name}.bak.{int(time.time())}"))
+        pz_hostbackup.backup_file(path, module=PZ_BACKUP_MODULE)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     tmp.write_text(text, encoding="utf-8")
     os.chmod(tmp, mode)
@@ -628,7 +634,7 @@ def upsert_esde_system(path: Path, ctx: Context, flatpak: bool, dry_run: bool) -
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        shutil.copy2(path, path.with_name(f"{path.name}.bak.{int(time.time())}"))
+        pz_hostbackup.backup_file(path, module=PZ_BACKUP_MODULE)
     tree.write(path, encoding="utf-8", xml_declaration=True)
 
 

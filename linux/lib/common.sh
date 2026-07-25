@@ -8,22 +8,32 @@ PZ_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero"
 PZ_OPERATION_ID="${PZ_OPERATION_ID:-legacy-$(date +%Y%m%d-%H%M%S)-${BASHPID:-$$}}"
 PZ_MANIFEST="${PZ_MANIFEST:-$PZ_STATE/operations/$PZ_OPERATION_ID.json}"
 PZ_LOG="$PZ_STATE/pz.log"
+PZ_BACKUP_ROOT="${PZ_BACKUP_ROOT:-$PZ_STATE/backups}"
+PZ_STATE_READY=0
 
-mkdir -p "$PZ_STATE" "$PZ_STATE/operations"
-chmod 0700 "$PZ_STATE" "$PZ_STATE/operations" 2>/dev/null || true
-if [ -f "$PZ_LOG" ] && [ "$(stat -c %s "$PZ_LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
-    mv -f "$PZ_LOG" "$PZ_LOG.1"
-fi
-touch "$PZ_LOG"
-chmod 0600 "$PZ_LOG" 2>/dev/null || true
+# O estado é criado SOB DEMANDA, nunca no `source`. Comandos puramente
+# informativos (`pz help`, `pz version`) não podem tocar o host.
+pz_state_init() {
+    [ "${PZ_STATE_READY:-0}" = "1" ] && return 0
+    mkdir -p "$PZ_STATE" "$PZ_STATE/operations"
+    chmod 0700 "$PZ_STATE" "$PZ_STATE/operations" 2>/dev/null || true
+    if [ -f "$PZ_LOG" ] && [ "$(stat -c %s "$PZ_LOG" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+        mv -f "$PZ_LOG" "$PZ_LOG.1"
+    fi
+    touch "$PZ_LOG"
+    chmod 0600 "$PZ_LOG" 2>/dev/null || true
+    PZ_STATE_READY=1
+}
 
 pz_log() {
     local level="$1" msg="$2"
+    pz_state_init
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $msg" >> "$PZ_LOG"
     case "$level" in
         ERROR) echo >&2 "ERROR: $msg" ;;
         WARN)  echo >&2 "WARN:  $msg" ;;
         INFO)  echo "INFO:  $msg" ;;
+        DEBUG) : ;;
         *)     echo "$msg" ;;
     esac
 }
@@ -31,6 +41,18 @@ pz_log() {
 pz_info() { pz_log INFO "$*"; }
 pz_warn() { pz_log WARN "$*"; }
 pz_error() { pz_log ERROR "$*"; }
+# DEBUG só vai para o arquivo de log: nunca polui stdout de envelopes JSON.
+# Também nunca CRIA o log — senão um dry-run puro passaria a sujar o host só
+# por ter emitido rastreio.
+pz_debug() {
+    [ -f "$PZ_LOG" ] || return 0
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [DEBUG] $*" >> "$PZ_LOG"
+}
+
+# O ledger é dependência dura das rotinas de mutação abaixo. Carregado aqui,
+# depois de pz_log/pz_debug existirem (ledger.sh usa ambos).
+# shellcheck source=linux/lib/ledger.sh
+source "$PZ_ROOT/linux/lib/ledger.sh"
 
 pz_can_sudo_noninteractive() {
     command -v sudo &>/dev/null && sudo -n true &>/dev/null
@@ -51,20 +73,275 @@ pz_admin_run() {
     fi
 }
 
+# --- backups centralizados ------------------------------------------------
+#
+# Backup NUNCA fica ao lado do arquivo original (isso é lixo no host do
+# usuário e escapa do uninstall). Layout canônico:
+#
+#   $PZ_STATE/backups/<sha256 do path original>/<basename>.bak.<epoch-ns>
+#   $PZ_STATE/backups/<sha256 do path original>/origin   <- path original
+#
+# `origin` existe para tornar o store auditável e permitir restore sem
+# recalcular hashes.
+
+pz_backup_path_key() {
+    local path="$1" real
+    real="$(realpath -m -- "$path" 2>/dev/null || printf '%s' "$path")"
+    printf '%s' "$real" | sha256sum | awk '{print $1}'
+}
+
+pz_backup_dir_for() {
+    printf '%s/%s\n' "$PZ_BACKUP_ROOT" "$(pz_backup_path_key "$1")"
+}
+
+# pz_backup_file <path> [scope]
+# Imprime o path do backup criado (ou nada, se o original não existe).
+# Respeita PZ_DRY_RUN: planeja o destino sem copiar.
+pz_backup_file() {
+    local path="${1:-}" scope="${2:-user}" real dir dest
+    [ -n "$path" ] || return 0
+    real="$(realpath -m -- "$path" 2>/dev/null || printf '%s' "$path")"
+    [ -f "$real" ] || [ -L "$real" ] || return 0
+
+    dir="$PZ_BACKUP_ROOT/$(pz_backup_path_key "$real")"
+    dest="$dir/$(basename "$real").bak.$(date +%s%N)"
+
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_debug "[dry] backup $real -> $dest"
+        printf '%s\n' "$dest"
+        return 0
+    fi
+
+    pz_state_init
+    mkdir -p "$dir"
+    chmod 0700 "$dir" 2>/dev/null || true
+    printf '%s\n' "$real" > "$dir/origin"
+
+    if [ "$scope" = "root" ] && [ "$EUID" -ne 0 ]; then
+        pz_admin_run cat "$real" > "$dest" 2>/dev/null || { rm -f "$dest"; return 0; }
+    else
+        cp -p "$real" "$dest" 2>/dev/null || return 0
+    fi
+
+    ledger_record \
+        --module "${PZ_MODULE:-common}" \
+        --action backup \
+        --modified "$real" \
+        --backup "$dest" \
+        --scope "$([ "$scope" = "root" ] && echo system || echo user)" \
+        --reversible true \
+        --rollback-cmd "cp -p -- $(printf '%q' "$dest") $(printf '%q' "$real")"
+
+    printf '%s\n' "$dest"
+}
+
+# Backup mais recente de <path>, com DUAL-READ: store novo primeiro, depois
+# os `.bak` legados gravados ao lado do original por versões anteriores.
+pz_backup_latest() {
+    local path="${1:-}" real dir newest base
+    [ -n "$path" ] || return 1
+    real="$(realpath -m -- "$path" 2>/dev/null || printf '%s' "$path")"
+
+    dir="$PZ_BACKUP_ROOT/$(pz_backup_path_key "$real")"
+    if [ -d "$dir" ]; then
+        newest="$(find "$dir" -maxdepth 1 -type f -name '*.bak.*' -printf '%T@ %p\n' 2>/dev/null \
+            | sort -rn | head -1 | cut -d' ' -f2- || true)"
+        if [ -n "$newest" ]; then
+            printf '%s\n' "$newest"
+            return 0
+        fi
+    fi
+
+    # legado: ${path}.bak.* e ${path}.phasezero.bak.*
+    base="$(basename "$real")"
+    newest="$(find "$(dirname "$real")" -maxdepth 1 -type f \
+        \( -name "$base.bak.*" -o -name "$base.phasezero.bak.*" \) \
+        -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)"
+    if [ -n "$newest" ]; then
+        printf '%s\n' "$newest"
+        return 0
+    fi
+    return 1
+}
+
+# pz_backup_prune <path> [keep] — mantém apenas os N backups mais recentes de
+# <path> no store central. Substitui os `find | head -N | xargs rm` que os
+# módulos faziam ao lado do arquivo original.
+pz_backup_prune() {
+    local path="${1:-}" keep="${2:-5}" dir
+    [ -n "$path" ] || return 0
+    dir="$PZ_BACKUP_ROOT/$(pz_backup_path_key "$path")"
+    [ -d "$dir" ] || return 0
+    [ "${PZ_DRY_RUN:-0}" = "1" ] && return 0
+    find "$dir" -maxdepth 1 -type f -name '*.bak.*' -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | awk -v keep="$keep" 'NR>keep{sub(/^[^ ]+ /, ""); print}' \
+        | xargs -r rm -f --
+    return 0
+}
+
+# pz_restore_file <path> [scope] — restaura do backup mais recente (dual-read).
+pz_restore_file() {
+    local path="${1:-}" scope="${2:-user}" src real
+    [ -n "$path" ] || return 1
+    real="$(realpath -m -- "$path" 2>/dev/null || printf '%s' "$path")"
+    if ! src="$(pz_backup_latest "$real")"; then
+        pz_warn "sem backup para restaurar: $real"
+        return 1
+    fi
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_info "[dry] restauraria $real de $src"
+        return 0
+    fi
+    if [ "$scope" = "root" ] && [ "$EUID" -ne 0 ]; then
+        pz_admin_run install -m 0644 "$src" "$real"
+    else
+        mkdir -p "$(dirname "$real")"
+        cp -p "$src" "$real"
+    fi
+    pz_info "restaurado $real de $src"
+}
+
+# Raízes varridas por migrate_legacy_baks. Curadoria explícita: só diretórios
+# onde o PhaseZero comprovadamente grava. Nunca varre $HOME inteiro e nunca
+# entra em ~/Emulation.
+pz_legacy_bak_roots() {
+    local cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+    local data="${XDG_DATA_HOME:-$HOME/.local/share}"
+    local state="${XDG_STATE_HOME:-$HOME/.local/state}"
+    printf '%s\n' \
+        "${PZ_LOCAL_BIN:-$HOME/.local/bin}" \
+        "$cfg/systemd/user" \
+        "$data/applications" \
+        "$cfg/phasezero" \
+        "$data/phasezero" \
+        "$state/phasezero" \
+        "$cfg/opencode" \
+        "$cfg/ai.z.zcode" \
+        "$cfg/codexbar" \
+        "$cfg/ai-usagebar" \
+        "$cfg/ai-memory" \
+        "$cfg/openclaw" \
+        "$cfg/omo" \
+        "$cfg/hydra" \
+        "$cfg/Code/User" \
+        "$cfg/kwinrulesrc.d" \
+        "$HOME/.continue" \
+        "$HOME/.codexbar" \
+        "$HOME/.9router" \
+        "$HOME/.codex"
+}
+
+# Arquivos soltos (não-diretórios) que o PhaseZero versiona e cujos `.bak`
+# legados ficam no diretório-pai compartilhado com dados do usuário.
+pz_legacy_bak_files() {
+    local cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+    printf '%s\n' \
+        "$HOME/.bashrc" \
+        "$HOME/.zshrc" \
+        "$HOME/.profile" \
+        "$cfg/kwinrulesrc" \
+        "$cfg/kglobalshortcutsrc" \
+        "$cfg/kwinrc"
+}
+
+pz_is_legacy_bak_name() {
+    # .bak.<epoch>[.<pid>[.<rand>]]  |  .bak.<epoch-ns>  |  .phasezero.bak.<...>
+    [[ "${1:-}" =~ \.(phasezero\.)?bak\.[0-9]+(\.[0-9]+)*(\.[A-Za-z0-9_-]+)?$ ]]
+}
+
+# Path original a partir do nome de um backup legado.
+pz_legacy_bak_origin() {
+    local bak="${1:-}"
+    printf '%s\n' "${bak%%.bak.*}" | sed 's/\.phasezero$//'
+}
+
+# migrate_legacy_baks — move `*.bak.*` legados do PhaseZero para o store
+# central. Idempotente (rodar duas vezes não muda nada) e dry-run-aware.
+# Critério de pronto: zero `*.bak.*` PhaseZero fora de $PZ_BACKUP_ROOT.
+migrate_legacy_baks() {
+    local preserve="$HOME/Emulation"
+    local moved=0 planned=0
+    local root file origin dir dest candidates=()
+
+    while IFS= read -r root; do
+        [ -d "$root" ] || continue
+        case "$root/" in "$preserve"/*) continue ;; esac
+        while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            candidates+=("$file")
+        done < <(find "$root" -type f -name '*.bak.*' 2>/dev/null)
+    done < <(pz_legacy_bak_roots)
+
+    while IFS= read -r file; do
+        [ -n "$file" ] || continue
+        [ -f "$file" ] || continue
+        candidates+=("$file")
+    done < <(
+        pz_legacy_bak_files | while IFS= read -r target; do
+            [ -n "$target" ] || continue
+            find "$(dirname "$target")" -maxdepth 1 -type f \
+                \( -name "$(basename "$target").bak.*" \
+                -o -name "$(basename "$target").phasezero.bak.*" \) 2>/dev/null
+        done
+    )
+
+    for file in ${candidates[@]+"${candidates[@]}"}; do
+        # já está no store central: nada a fazer (idempotência)
+        case "$file" in "$PZ_BACKUP_ROOT"/*) continue ;; esac
+        case "$file/" in "$preserve"/*) continue ;; esac
+        pz_is_legacy_bak_name "$file" || continue
+
+        origin="$(pz_legacy_bak_origin "$file")"
+        dir="$PZ_BACKUP_ROOT/$(pz_backup_path_key "$origin")"
+        dest="$dir/$(basename "$origin").bak.$(date +%s%N)"
+
+        if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+            printf '  [dry] migrar %s -> %s\n' "$file" "$dest"
+            planned=$((planned + 1))
+            continue
+        fi
+
+        pz_state_init
+        mkdir -p "$dir"
+        chmod 0700 "$dir" 2>/dev/null || true
+        printf '%s\n' "$origin" > "$dir/origin"
+        if mv -f -- "$file" "$dest" 2>/dev/null; then
+            moved=$((moved + 1))
+            ledger_record \
+                --module common \
+                --action migrate-legacy-backup \
+                --backup "$dest" \
+                --modified "$origin" \
+                --scope user \
+                --reversible false
+        else
+            pz_warn "não foi possível migrar backup legado: $file"
+        fi
+    done
+
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        pz_info "migração de backups legados (dry-run): $planned candidato(s)"
+    else
+        pz_info "migração de backups legados: $moved movido(s)"
+    fi
+    return 0
+}
+
 pz_write_managed_file() {
     local path="$1" scope="${2:-user}"
-    local dir tmp backup
+    local dir tmp backup existed=0
     dir="$(dirname "$path")"
     tmp="$(mktemp)"
     cat > "$tmp"
+    [ -f "$path" ] && existed=1
 
     if [ "$scope" = "root" ] && [ "$EUID" -ne 0 ]; then
         if command -v phasezero-admin >/dev/null 2>&1 || command -v bigsudo >/dev/null 2>&1 || { [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; }; then
-            backup="${path}.bak.$(date +%s).$$.${RANDOM:-0}"
-            [ -f "$path" ] && pz_admin_run cp "$path" "$backup" 2>/dev/null || true
+            backup="$(pz_backup_file "$path" root)"
             pz_admin_run install -d "$dir"
             pz_admin_run install -m 0644 "$tmp" "$path"
             rm -f "$tmp"
+            pz_write_managed_file_record "$path" system "$existed" "$backup"
             pz_info "wrote $path"
             return 0
         fi
@@ -75,10 +352,40 @@ pz_write_managed_file() {
     fi
 
     mkdir -p "$dir"
-    [ -f "$path" ] && cp "$path" "${path}.bak.$(date +%s).$$.${RANDOM:-0}" 2>/dev/null || true
+    backup="$(pz_backup_file "$path" user)"
     install -m 0644 "$tmp" "$path"
     rm -f "$tmp"
+    pz_write_managed_file_record "$path" user "$existed" "$backup"
     pz_info "wrote $path"
+}
+
+# Hook de ledger de pz_write_managed_file: arquivo novo entra como `created`
+# (o wipe pode removê-lo); arquivo pré-existente entra como `modified` com o
+# backup correspondente (o rollback restaura).
+pz_write_managed_file_record() {
+    local path="$1" scope="$2" existed="$3" backup="${4:-}"
+    local -a args=(--module "${PZ_MODULE:-common}" --action write-managed-file --scope "$scope")
+    if [ "$existed" = "1" ]; then
+        args+=(--modified "$path" --reversible true)
+        [ -n "$backup" ] && args+=(--backup "$backup" \
+            --rollback-cmd "cp -p -- $(printf '%q' "$backup") $(printf '%q' "$path")")
+    else
+        args+=(--created "$path" --reversible true \
+            --rollback-cmd "rm -f -- $(printf '%q' "$path")")
+    fi
+    ledger_record "${args[@]}"
+}
+
+# Atalho para mutações que NÃO passam por pz_write_managed_file (instalação de
+# binário, .desktop escrito com `cat >`, diretório de runtime criado à mão).
+# Use logo APÓS a mutação ter acontecido de fato.
+#   pz_record_created <module> <path> [scope]
+pz_record_created() {
+    local module="${1:-${PZ_MODULE:-unknown}}" path="${2:-}" scope="${3:-user}"
+    [ -n "$path" ] || return 0
+    ledger_record --module "$module" --action create-path --created "$path" \
+        --scope "$scope" --reversible true \
+        --rollback-cmd "rm -rf -- $(printf '%q' "$path")"
 }
 
 pz_check_deps() {
@@ -278,6 +585,13 @@ pz_boot_backup_bundle() {
     fi
     printf '%s\n' "$reason" > "$dir/reason.txt"
     printf '%s\n' "$target" > "$dir/target-root.txt"
+    ledger_record \
+        --module boot \
+        --action boot-backup-bundle \
+        --created "$dir" \
+        --backup "$dir" \
+        --scope system \
+        --reversible false
     pz_info "boot backup bundle: $dir"
 }
 
@@ -522,11 +836,37 @@ pz_rollback_register() {
         --arg backup "$backup" \
         --arg ts "$(date -Iseconds)" \
         '{action: $action, target: $target, backup: $backup, timestamp: $ts}')
+    pz_state_init
+    mkdir -p "$(dirname "$PZ_MANIFEST")"
     if [ -f "$PZ_MANIFEST" ]; then
         jq ". += [$entry]" "$PZ_MANIFEST" > "${PZ_MANIFEST}.tmp" && mv "${PZ_MANIFEST}.tmp" "$PZ_MANIFEST"
     else
         echo "[$entry]" > "$PZ_MANIFEST"
     fi
+
+    # espelha no ledger unificado (o manifesto por operação continua sendo a
+    # fonte do `pz_rollback` legado; o ledger é a fonte do wipe/uninstall)
+    case "$action" in
+        package)
+            ledger_record --module "${PZ_MODULE:-common}" --action install-package \
+                --package "pacman:$target" --scope system --reversible true \
+                --rollback-cmd "pacman -Rns --noconfirm $(printf '%q' "$target")" ;;
+        flatpak-package)
+            ledger_record --module "${PZ_MODULE:-common}" --action install-package \
+                --package "flatpak:$target" --scope user --reversible true \
+                --rollback-cmd "flatpak --user uninstall -y $(printf '%q' "$target")" ;;
+        flatpak-remote)
+            ledger_record --module "${PZ_MODULE:-common}" --action add-flatpak-remote \
+                --created "flatpak-remote:$target" --scope user --reversible true \
+                --rollback-cmd "flatpak remote-delete $(printf '%q' "$target")" ;;
+        service)
+            ledger_record --module "${PZ_MODULE:-common}" --action enable-service \
+                --service "system:$target" --scope system --reversible true \
+                --rollback-cmd "systemctl disable --now $(printf '%q' "$target")" ;;
+        file)
+            ledger_record --module "${PZ_MODULE:-common}" --action modify-file \
+                --modified "$target" ${backup:+--backup "$backup"} --scope user --reversible true ;;
+    esac
 }
 
 pz_rollback() {

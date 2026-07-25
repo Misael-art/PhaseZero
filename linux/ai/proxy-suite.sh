@@ -367,7 +367,7 @@ merge_opencode_provider() {
     fi
     local models_json tmp
     models_json="$(printf '%s' "$models_csv" | jq -R 'split(",") | map({(.): {}}) | add')"
-    cp "$file" "$file.bak.$(date +%s)"
+    pz_backup_file "$file" user >/dev/null
     tmp="$(mktemp)"
     jq --arg pid "$pid" --arg name "$name" --arg url "$baseurl" --arg key "$key" --argjson models "$models_json" '
         .provider = (.provider // {})
@@ -443,7 +443,7 @@ configure_continue_ide() {
         done
     done < <(ordered_proxy_ide_rows)
     jq -s '.' "$rows_file" > "$models_file"
-    cp "$CONTINUE_CONFIG" "$CONTINUE_CONFIG.bak.$(date +%s)"
+    pz_backup_file "$CONTINUE_CONFIG" user >/dev/null
     jq --slurpfile managed "$models_file" '
       .models = (((.models // []) | if type == "array" then . else [] end)
         | map(select(((.title // "") | startswith("[PhaseZero Proxy] ")) | not)))
@@ -452,8 +452,7 @@ configure_continue_ide() {
     ' "$CONTINUE_CONFIG" > "$tmp"
     mv "$tmp" "$CONTINUE_CONFIG"
     chmod 600 "$CONTINUE_CONFIG"
-    find "$(dirname "$CONTINUE_CONFIG")" -maxdepth 1 -type f -name 'config.json.bak.*' -printf '%T@ %p\n' 2>/dev/null \
-        | sort -rn | awk 'NR>5{sub(/^[^ ]+ /, ""); print}' | xargs -r rm -f --
+    pz_backup_prune "$CONTINUE_CONFIG" 5
     trap - RETURN
     rm -f -- "$rows_file" "$models_file"
     configure_continue_selection
@@ -476,11 +475,10 @@ configure_continue_selection() {
             then .[$role] = $title else . end))
       else . end
     ' "$CONTINUE_GLOBAL_CONTEXT" > "$tmp"
-    cp "$CONTINUE_GLOBAL_CONTEXT" "$CONTINUE_GLOBAL_CONTEXT.bak.$(date +%s)"
+    pz_backup_file "$CONTINUE_GLOBAL_CONTEXT" user >/dev/null
     mv "$tmp" "$CONTINUE_GLOBAL_CONTEXT"
     chmod 600 "$CONTINUE_GLOBAL_CONTEXT"
-    find "$(dirname "$CONTINUE_GLOBAL_CONTEXT")" -maxdepth 1 -type f -name 'globalContext.json.bak.*' -printf '%T@ %p\n' 2>/dev/null \
-        | sort -rn | awk 'NR>5{sub(/^[^ ]+ /, ""); print}' | xargs -r rm -f --
+    pz_backup_prune "$CONTINUE_GLOBAL_CONTEXT" 5
 }
 
 write_ide_env_defaults() {
@@ -537,7 +535,7 @@ configure_zcode_ide() {
         map({id: .[0], providerId: .[2], name: .[3],
              baseUrl: ("http://127.0.0.1:" + .[1] + "/v1"),
              defaultModel: .[4], models: (.[5] | split(","))})')"
-    cp "$ZCODE_STORE" "$ZCODE_STORE.bak.$(date +%s)"
+    pz_backup_file "$ZCODE_STORE" user >/dev/null
     tmp="$(mktemp)"
     jq --argjson providers "$rows_json" \
        '."phasezero-ai-proxies" = {source:"phasezero", providers:$providers}' \

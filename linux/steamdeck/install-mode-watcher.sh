@@ -44,9 +44,7 @@ write_unit() {
     fi
 
     install -d "$SYSTEMD_USER_DIR"
-    if [ -f "$UNIT_PATH" ]; then
-        cp "$UNIT_PATH" "${UNIT_PATH}.bak.$(date +%s)"
-    fi
+    pz_backup_file "$UNIT_PATH" user >/dev/null
     mode_watcher_unit > "$UNIT_PATH"
     systemctl --user daemon-reload
     pz_info "wrote $UNIT_PATH"

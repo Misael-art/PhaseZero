@@ -6,9 +6,7 @@ source "$PZ_ROOT/linux/lib/common.sh"
 
 pz_apply_sysctl() {
     local sysctl_conf="/etc/sysctl.d/99-phasezero-dev.conf"
-    local backup
-    backup="$sysctl_conf.bak.$(date +%s)"
-    [ -f "$sysctl_conf" ] && sudo cp "$sysctl_conf" "$backup"
+    pz_backup_file "$sysctl_conf" root >/dev/null
 
     sudo tee "$sysctl_conf" >/dev/null <<'EOF'
 # PhaseZero Dev Tweaks

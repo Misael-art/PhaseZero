@@ -18,7 +18,7 @@ ini_set() {
     local file="$1" section="$2" key="$3" value="$4" tmp
     install -d "$(dirname "$file")"
     [ -f "$file" ] || printf '[%s]\n' "$section" > "$file"
-    cp "$file" "${file}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$file" user >/dev/null
     tmp="$(mktemp)"
     awk -v section="$section" -v key="$key" -v value="$value" '
         BEGIN { in_section = 0; done = 0 }

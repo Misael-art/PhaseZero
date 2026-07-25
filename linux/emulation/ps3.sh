@@ -71,7 +71,7 @@ configure_rpcs3_vfs() {
 /games/: $PS3_ROMS/
 EOF
     else
-        cp "$RPCS3_VFS" "${RPCS3_VFS}.bak.$(date +%s)" 2>/dev/null || true
+        pz_backup_file "$RPCS3_VFS" user >/dev/null
         set_vfs_line "/dev_hdd0/:" "$RPCS3_DEV_HDD0/"
         set_vfs_line "/games/:" "$PS3_ROMS/"
     fi
@@ -186,7 +186,7 @@ ET.indent(tree, space="  ")
 tree.write(tmp, encoding="utf-8", xml_declaration=True)
 PY
         if ! cmp -s "$path" "$tmp"; then
-            cp "$path" "${path}.bak.$(date +%s)" 2>/dev/null || true
+            pz_backup_file "$path" user >/dev/null
             mv "$tmp" "$path"
         else
             rm -f "$tmp"
