@@ -1,5 +1,14 @@
 # Ignore dependencies
 node_modules/
+__pycache__/
+*.pyc
+src-tauri/target/
+.cargo-target/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
 
 # Ignore logs
 *.log
@@ -13,6 +22,7 @@ gemini-cli/
 
 # Ignore local bootstrap state and secrets
 .bootstrap-tools/
+secrets/
 # Never commit backup dumps
 .bootstrap-tools/*.bak
 .bootstrap-tools/ui-runs/
@@ -35,3 +45,6 @@ tests/_parse-check.ps1
 cookbook/
 add-trap-handler.ps1
 fix-backend-crash.ps1
+# ntfs-3g/exfat leaves orphaned .ghost- copies on the SD card after interrupted writes
+.ghost-ntfs-3g-*
+**/.ghost-ntfs-3g-*

@@ -1,0 +1,785 @@
+/* PhaseZero native UI — EmuDeck-inspired theme. Semantic tokens interpolated by render_qss(). */
+* {
+    font-family: {{font_ui}};
+    font-size: {{text_base}}px;
+}
+QMainWindow {
+    background: transparent;
+}
+#appShell {
+    background: {{bg}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_lg}}px;
+}
+#headerBar {
+    min-height: 52px;
+    background: {{surface_header}};
+    border-bottom: 1px solid {{border_divider}};
+    border-top-left-radius: {{radius_lg}}px;
+    border-top-right-radius: {{radius_lg}}px;
+}
+#brandMark {
+    min-width: 36px;
+    min-height: 36px;
+    max-width: 36px;
+    max-height: 36px;
+    border-radius: {{radius_md}}px;
+    background: {{accent}};
+    color: {{on_accent}};
+    font-weight: 800;
+    qproperty-alignment: AlignCenter;
+}
+#windowTitle {
+    color: {{text_strong}};
+    font-size: {{text_lg}}px;
+    font-weight: 700;
+}
+#windowSubtitle {
+    color: {{text_dim}};
+    font-size: {{text_xs}}px;
+}
+#langChip {
+    font-size: {{text_lg}}px;
+    padding: 0 4px;
+}
+#windowButton, #closeButton, #iconButton {
+    border: 0;
+    border-radius: {{radius_sm}}px;
+    background: transparent;
+}
+#windowButton:hover, #iconButton:hover {
+    background: {{border_subtle}};
+}
+#closeButton:hover {
+    background: {{error}};
+}
+
+/* ---- Sidebar --------------------------------------------------------- */
+#sidebar {
+    background: {{surface_inset}};
+    border-right: 1px solid {{border_divider}};
+    border-bottom-left-radius: {{radius_lg}}px;
+}
+#sectionLabel {
+    color: {{text_muted}};
+    font-size: {{text_xs}}px;
+    font-weight: 800;
+    padding: {{space_md}}px {{space_sm}}px 4px {{space_sm}}px;
+}
+#sidebarButton {
+    color: {{text_dim}};
+    background: transparent;
+    border: 0;
+    border-radius: {{radius_md}}px;
+    min-height: 38px;
+    padding: 3px {{space_md}}px;
+    text-align: left;
+    font-size: {{text_base}}px;
+}
+#sidebarButton:hover {
+    color: {{on_accent}};
+    background: {{surface_alt}};
+}
+#sidebarButton:checked {
+    color: {{on_accent}};
+    background: {{surface_selected}};
+    border-left: 3px solid {{accent}};
+    font-weight: 600;
+}
+#sidebarStatus {
+    color: {{text_muted}};
+    font-size: {{text_xs}}px;
+    padding: 9px {{space_sm}}px;
+}
+
+/* ---- Content header -------------------------------------------------- */
+#content {
+    background: {{bg}};
+}
+#pageTitle {
+    color: {{text_strong}};
+    font-size: {{text_2xl}}px;
+    font-weight: 800;
+}
+#pageSubtitle {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+}
+#welcomeTitle {
+    color: {{text_strong}};
+    font-size: 30px;
+    font-weight: 800;
+}
+#welcomeSubtitle {
+    color: {{text_dim}};
+    font-size: {{text_base}}px;
+}
+#sectionHeading {
+    color: {{text_strong}};
+    font-size: {{text_lg}}px;
+    font-weight: 700;
+}
+#sectionCaption {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+}
+#searchBox {
+    min-height: 38px;
+    border: 1px solid {{border}};
+    border-radius: {{radius_md}}px;
+    padding: 0 {{space_md}}px;
+    color: {{text}};
+    background: {{surface_input}};
+    selection-background-color: {{accent}};
+}
+#searchBox:focus {
+    border: 1px solid {{accent}};
+    background: {{surface_alt}};
+}
+QScrollArea, QScrollArea > QWidget > QWidget {
+    background: transparent;
+    border: 0;
+}
+
+/* ---- Cards ----------------------------------------------------------- */
+#actionCard {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: {{radius_lg}}px;
+}
+#actionCard:hover, #actionCard:focus {
+    background: {{surface_alt}};
+    border: 1px solid {{accent}};
+}
+#actionCard[variant="danger"]:hover, #actionCard[variant="danger"]:focus {
+    border: 1px solid {{danger_hover}};
+}
+#actionCard[hero="true"] {
+    background: {{surface_hero}};
+    border: 1px solid {{accent_border}};
+}
+#actionCard[hero="true"]:hover, #actionCard[hero="true"]:focus {
+    background: {{surface_hero_alt}};
+    border: 1px solid {{accent}};
+}
+#cardIcon {
+    background: {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    qproperty-alignment: AlignCenter;
+}
+#cardIconHero {
+    background: {{accent}};
+    border-radius: 13px;
+    qproperty-alignment: AlignCenter;
+}
+#cardTitle {
+    color: {{text_strong}};
+    font-size: {{text_lg}}px;
+    font-weight: 700;
+}
+#cardTitleHero {
+    color: {{text_strong}};
+    font-size: 17px;
+    font-weight: 800;
+}
+#cardDescription {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+}
+#cardLock {
+    color: {{warning}};
+    font-size: {{text_xs}}px;
+    font-weight: 600;
+}
+#pathLabel {
+    color: {{text_dim}};
+}
+
+/* ---- Badges (state colours) ------------------------------------------ */
+#badge {
+    border-radius: {{radius_sm}}px;
+    padding: 3px 9px;
+    font-size: {{text_xs}}px;
+    font-weight: 800;
+    color: {{text_log}};
+    background: {{border_subtle}};
+    border: 1px solid {{border_strong}};
+}
+#badge[state="success"] {
+    color: {{success}};
+    background: {{success_bg}};
+    border: 1px solid {{success_border}};
+}
+#badge[state="warning"] {
+    color: {{warning}};
+    background: {{warning_bg}};
+    border: 1px solid {{warning_border}};
+}
+#badge[state="error"] {
+    color: {{error}};
+    background: {{error_bg}};
+    border: 1px solid {{error_border}};
+}
+#badge[state="info"] {
+    color: {{info}};
+    background: {{info_bg}};
+    border: 1px solid {{accent_border}};
+}
+
+/* ---- Buttons --------------------------------------------------------- */
+QPushButton {
+    color: {{text}};
+    background: {{border}};
+    border: 1px solid {{border_strong}};
+    border-radius: {{radius_md}}px;
+    min-height: 34px;
+    padding: 0 {{space_md}}px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background: {{border_strong}};
+    border-color: {{border_strong}};
+}
+QPushButton:pressed {
+    background: {{surface_pressed}};
+}
+QPushButton:disabled {
+    color: {{text_muted}};
+    background: {{surface_disabled}};
+    border-color: {{border_subtle}};
+}
+#primaryButton {
+    color: {{on_accent}};
+    background: {{accent}};
+    border-color: {{accent_hover}};
+    font-weight: 700;
+}
+#primaryButton:hover {
+    background: {{accent_hover}};
+}
+#primaryButton:pressed {
+    background: {{accent_pressed}};
+}
+#secondaryButton {
+    color: {{text}};
+    background: {{border}};
+    border-color: {{border_strong}};
+}
+#dangerButton {
+    color: {{on_accent}};
+    background: {{error}};
+    border-color: {{danger_hover}};
+    font-weight: 700;
+}
+#dangerButton:hover {
+    background: {{danger_hover}};
+}
+#dangerButton:disabled {
+    color: {{text_muted}};
+    background: {{danger_disabled_bg}};
+    border-color: {{danger_disabled_border}};
+}
+
+/* ---- Operation panel & status --------------------------------------- */
+#operationPanel {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#breadcrumbText {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+    font-weight: 600;
+}
+#contextStatus {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    margin-bottom: {{space_sm}}px;
+}
+#contextStatusText { color: {{text_dim}}; font-weight: 600; }
+#contextStatusHeading { color: {{text}}; font-size: {{text_sm}}px; font-weight: 700; }
+#contextStatusText[state="success"] { color: {{success}}; }
+#contextStatusText[state="warning"] { color: {{warning}}; }
+#contextStatusText[state="error"] { color: {{error}}; }
+#operationElapsed {
+    color: {{text_dim}};
+    font-family: {{font_mono}};
+}
+#globalStatusBar {
+    color: {{text_dim}};
+    background: {{surface_header}};
+    border-top: 1px solid {{border_subtle}};
+}
+#globalState, #globalContext { padding: 2px {{space_sm}}px; }
+#globalContext[state="success"] { color: {{success}}; }
+#globalContext[state="error"] { color: {{error}}; }
+#choiceJourney {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#choiceJourney QRadioButton {
+    color: {{text}};
+    spacing: {{space_md}}px;
+    padding: 0 {{space_sm}}px;
+}
+
+/* ---- Context workspace ---------------------------------------------- */
+#moduleWorkspace { background: transparent; }
+#contextRail {
+    background: {{surface_inset}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#contextRailButton {
+    min-height: 48px;
+    color: {{text_dim}};
+    background: transparent;
+    border: 0;
+    border-left: 3px solid transparent;
+    border-radius: {{radius_sm}}px;
+    padding: 0 {{space_md}}px;
+    text-align: left;
+    font-weight: 600;
+}
+#contextRailButton:hover {
+    color: {{text}};
+    background: {{surface_alt}};
+}
+#contextRailButton:checked {
+    color: {{text}};
+    background: {{surface_selected}};
+    border-left-color: {{accent}};
+}
+#actionListSurface {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#actionListRow {
+    min-height: 62px;
+    background: transparent;
+    border: 0;
+    border-bottom: 1px solid {{border_divider}};
+}
+#actionListRow:hover { background: {{surface_alt}}; }
+#actionListRow[selected="true"] {
+    background: {{surface_selected}};
+    border-left: 3px solid {{accent}};
+}
+#actionListRow:focus {
+    border: 2px solid {{accent_border}};
+}
+#actionRowIcon {
+    background: {{surface_inset}};
+    border-radius: {{radius_sm}}px;
+}
+#actionRowTitle {
+    color: {{text}};
+    font-size: {{text_base}}px;
+    font-weight: 650;
+}
+#actionRowDescription {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+}
+#riskChip {
+    color: {{warning}};
+    background: {{warning_bg}};
+    border-radius: {{radius_sm}}px;
+    padding: 4px 8px;
+    font-size: {{text_sm}}px;
+    font-weight: 600;
+}
+#riskChip[risk="high"] {
+    color: {{error}};
+    background: {{error_bg}};
+}
+#rowChevron {
+    min-width: 40px;
+    min-height: 40px;
+    background: transparent;
+    border: 0;
+}
+#advancedDisclosure {
+    min-height: 48px;
+    color: {{text}};
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    padding: 0 {{space_md}}px;
+    font-weight: 650;
+}
+#actionInspector {
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#moduleFacts {
+    background: {{surface_inset}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#moduleFactValue { color: {{text}}; font-size: {{text_lg}}px; font-weight: 700; }
+#moduleFactLabel { color: {{text_dim}}; font-size: {{text_sm}}px; }
+#inspectorHeading {
+    color: {{text}};
+    font-size: {{text_lg}}px;
+    font-weight: 700;
+}
+#inspectorEmpty, #inspectorDescription, #inspectorValue {
+    color: {{text_dim}};
+    font-size: {{text_sm}}px;
+}
+#inspectorIcon {
+    background: {{surface_selected}};
+    border: 1px solid {{border_strong}};
+    border-radius: {{radius_md}}px;
+}
+#inspectorTitle {
+    color: {{text}};
+    font-size: {{text_lg}}px;
+    font-weight: 700;
+}
+#inspectorSection {
+    color: {{text}};
+    border-top: 1px solid {{border_divider}};
+    padding-top: {{space_md}}px;
+    font-weight: 650;
+}
+#inspectorCommand {
+    color: {{text_log}};
+    background: {{log_bg}};
+    border: 1px solid {{border_divider}};
+    border-radius: {{radius_sm}}px;
+    font-family: {{font_mono}};
+    padding: {{space_sm}}px;
+}
+#warningBanner {
+    background: {{warning_bg}};
+    border: 1px solid {{warning_border}};
+    border-radius: {{radius_md}}px;
+}
+#warningText {
+    color: {{warning}};
+    font-weight: 600;
+}
+#statusText {
+    color: {{text}};
+    font-weight: 600;
+}
+#statusIdle { color: {{text_muted}}; }
+#statusRunning { color: {{accent}}; }
+#statusSuccess { color: {{success}}; }
+#statusWarning { color: {{warning}}; }
+#statusError { color: {{error}}; }
+QProgressBar {
+    border: 0;
+    background: {{border_subtle}};
+    border-radius: 3px;
+}
+QProgressBar::chunk {
+    background: {{accent}};
+    border-radius: 3px;
+}
+#logView {
+    color: {{text_log}};
+    background: {{log_bg}};
+    border: 1px solid {{border_divider}};
+    border-radius: {{radius_md}}px;
+    font-family: {{font_mono}};
+    font-size: {{text_sm}}px;
+    padding: {{space_sm}}px;
+}
+
+/* ---- Status pills (checklists) --------------------------------------- */
+#statusPill {
+    background: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#statusPill[state="success"] { border-left: 3px solid {{success}}; }
+#statusPill[state="error"] { border-left: 3px solid {{error}}; }
+#statusPill[state="warning"] { border-left: 3px solid {{warning}}; }
+#statusPill[state="info"] { border-left: 3px solid {{accent}}; }
+#pillLabel { color: {{text}}; font-weight: 600; }
+#pillDetail { color: {{text_dim}}; font-size: {{text_sm}}px; }
+#pillDot[state="success"] { color: {{success}}; }
+#pillDot[state="error"] { color: {{error}}; }
+#pillDot[state="warning"] { color: {{warning}}; }
+#pillDot[state="info"] { color: {{accent}}; }
+
+/* ---- Skeleton loaders ------------------------------------------------ */
+#skeletonTile {
+    background: {{skeleton_base}};
+    border-radius: {{radius_sm}}px;
+}
+#skeletonTile[shimmer="true"] {
+    background: {{skeleton_shimmer}};
+}
+#skeletonCard {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: {{radius_lg}}px;
+}
+#skeletonCard[hero="true"] {
+    background: {{surface_hero}};
+    border: 1px solid {{accent_border}};
+}
+#skeletonPill {
+    background: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+
+/* ---- Toast ----------------------------------------------------------- */
+#toast {
+    background: {{surface}};
+    border: 1px solid {{border_strong}};
+    border-radius: {{radius_md}}px;
+    min-width: 260px;
+    max-width: 420px;
+}
+#toast[state="success"] { border-left: 4px solid {{success}}; }
+#toast[state="error"] { border-left: 4px solid {{error}}; }
+#toast[state="warning"] { border-left: 4px solid {{warning}}; }
+#toastText { color: {{text}}; font-weight: 600; }
+#toastIcon { font-size: {{text_lg}}px; font-weight: 800; }
+#toastIcon[state="success"] { color: {{success}}; }
+#toastIcon[state="error"] { color: {{error}}; }
+#toastIcon[state="warning"] { color: {{warning}}; }
+
+/* ---- Dialogs & misc -------------------------------------------------- */
+#dialogTitle, #successTitle, #errorTitle {
+    font-size: 21px;
+    font-weight: 700;
+}
+#dialogTitle, #successTitle { color: {{success}}; }
+#errorTitle { color: {{error}}; }
+QDialog {
+    color: {{text}};
+    background: {{bg}};
+}
+QTreeWidget {
+    color: {{text_log}};
+    background: {{surface_inset}};
+    alternate-background-color: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+QHeaderView::section {
+    color: {{text_dim}};
+    background: {{surface_header}};
+    border: 0;
+    border-bottom: 1px solid {{border_subtle}};
+    padding: 7px;
+}
+#emptyState {
+    color: {{text_muted}};
+    font-size: {{text_lg}}px;
+    qproperty-alignment: AlignCenter;
+    min-height: 180px;
+}
+QScrollBar:vertical {
+    width: 10px;
+    background: transparent;
+}
+QScrollBar::handle:vertical {
+    min-height: 30px;
+    background: {{border}};
+    border-radius: 5px;
+}
+QScrollBar::handle:vertical:hover {
+    background: {{border_strong}};
+}
+QToolTip {
+    color: {{text}};
+    background: {{surface}};
+    border: 1px solid {{border_strong}};
+    padding: 6px;
+    border-radius: 6px;
+}
+
+/* ---- Compound widgets from category pages ---------------------------- */
+/* QTabBar (emulationTabs): EmuDeck-style flat tabs. */
+QTabBar::tab {
+    color: {{text_dim}};
+    background: transparent;
+    border: 1px solid transparent;
+    border-bottom: 2px solid transparent;
+    padding: {{space_sm}}px {{space_lg}}px;
+    font-weight: 600;
+}
+QTabBar::tab:selected {
+    color: {{text_strong}};
+    border-bottom: 2px solid {{accent}};
+}
+QTabBar::tab:hover:!selected {
+    color: {{text}};
+    border-bottom: 2px solid {{accent_border}};
+}
+#emulationTabs::pane {
+    border: 0;
+    background: transparent;
+}
+
+/* Emulation task journeys and unified game library. */
+#journeyCard, #libraryOrigin, #libraryStepper {
+    background: {{surface}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_lg}}px;
+}
+#journeyCard:hover {
+    border-color: {{accent_border}};
+    background: {{surface_alt}};
+}
+#libraryStep {
+    color: {{text_dim}};
+    background: transparent;
+    border-radius: {{radius_md}}px;
+    padding: {{space_sm}}px;
+    font-weight: 650;
+}
+#libraryStep[state="active"] {
+    color: {{text_strong}};
+    background: {{surface_selected}};
+    border: 1px solid {{accent_border}};
+}
+#libraryStep[state="complete"] {
+    color: {{success}};
+    background: {{success_bg}};
+}
+#librarySourcePath, #libraryFilesPath {
+    min-height: 38px;
+}
+
+/* QTableView / QTableWidget (historyTable): results history grid. */
+#historyTable {
+    color: {{text}};
+    background: {{surface_inset}};
+    alternate-background-color: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    gridline-color: {{border_divider}};
+}
+#historyTable::item {
+    padding: 4px {{space_sm}}px;
+}
+#historyTable::item:selected {
+    background: {{surface_selected}};
+    color: {{text_strong}};
+}
+
+/* QComboBox (profileCombo): dropdown selectors. */
+QComboBox {
+    color: {{text}};
+    background: {{surface_input}};
+    border: 1px solid {{border}};
+    border-radius: {{radius_md}}px;
+    padding: {{space_sm}}px {{space_md}}px;
+    min-height: 34px;
+}
+QComboBox:hover {
+    border-color: {{accent_border}};
+}
+QComboBox:focus {
+    border-color: {{accent}};
+}
+QComboBox::drop-down {
+    border: 0;
+    width: 26px;
+}
+QComboBox QAbstractItemView {
+    color: {{text}};
+    background: {{surface}};
+    border: 1px solid {{border_strong}};
+    border-radius: {{radius_sm}}px;
+    selection-background-color: {{surface_selected}};
+    selection-color: {{text_strong}};
+    padding: {{space_xs}}px;
+}
+#profileCombo {
+    min-width: 400px;
+}
+
+#advancedPanel {
+    background: {{surface_inset}};
+    border-top: 1px solid {{border_divider}};
+    padding: {{space_sm}}px;
+}
+#advancedToggle {
+    color: {{text_dim}};
+    background: transparent;
+    border: 0;
+    padding: {{space_sm}}px;
+    font-weight: 700;
+    text-align: left;
+}
+#advancedToggle:hover {
+    color: {{text_strong}};
+    background: {{surface_alt}};
+}
+#advancedAction {
+    color: {{text}};
+    background: {{surface}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_sm}}px;
+    padding: {{space_sm}}px {{space_md}}px;
+    text-align: left;
+}
+#advancedAction:hover, #advancedAction:focus {
+    border-color: {{accent}};
+    background: {{surface_alt}};
+}
+
+#statefulDialog {
+    background: {{bg}};
+}
+#dialogStateIcon {
+    min-width: 44px;
+    min-height: 44px;
+    border-radius: {{radius_lg}}px;
+    qproperty-alignment: AlignCenter;
+    font-size: {{text_xl}}px;
+    font-weight: 800;
+}
+#dialogStateIcon[state="success"] { color: {{success}}; background: {{success_bg}}; }
+#dialogStateIcon[state="warning"] { color: {{warning}}; background: {{warning_bg}}; }
+#dialogStateIcon[state="error"] { color: {{error}}; background: {{error_bg}}; }
+#dialogStateIcon[state="info"] { color: {{info}}; background: {{info_bg}}; }
+#dialogStateIcon[state="running"] { color: {{accent}}; background: {{info_bg}}; }
+#commandBar {
+    color: {{text_log}};
+    background: {{log_bg}};
+    border: 1px solid {{border_divider}};
+    border-radius: {{radius_sm}}px;
+    padding: {{space_sm}}px;
+    font-family: {{font_mono}};
+}
+
+/* QCheckBox (toolCheck, tuneCheck): list-item checkboxes. */
+QCheckBox {
+    color: {{text}};
+    spacing: {{space_sm}}px;
+    padding: {{space_xs}}px 0;
+}
+QCheckBox::indicator {
+    width: 16px;
+    height: 16px;
+    border-radius: {{radius_sm}}px;
+    border: 1px solid {{border_strong}};
+    background: {{surface_input}};
+}
+QCheckBox::indicator:hover {
+    border-color: {{accent}};
+}
+QCheckBox::indicator:checked {
+    background: {{accent}};
+    border-color: {{accent_hover}};
+    image: none;
+}
+#toolCheck, #tuneCheck {
+    font-size: {{text_base}}px;
+    padding: {{space_sm}}px 0;
+}

@@ -59,7 +59,7 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 
 | Campo | Valor |
 |---|---|
-| Última atualização | 2026-05-27 (Support robustness + WSL Repair + BAT/UI/ReleasePack; Pester 392/392 verde nesta maquina) |
+| Última atualização | 2026-06-30 (Linux SteamOS-like UX expansion; Windows flows untouched nesta sessao) |
 | Agente responsável | Codex |
 | Branch ativa | `codex-bootstrap-secrets-rotation` |
 | Task em andamento | nenhuma |
@@ -80,6 +80,9 @@ Se um agente novo entra sem histórico: este arquivo + `CLAUDE.md` + `git log --
 - 2026-05-18 — Support Robustness Track implementado: modos `-Doctor`, `-SupportBundle`, `-RepairPlan`, `-ExecuteRepairPlan`; UI Saúde; perfil `public-beta`; apps opcionais de suporte; RunId único em log/result/support bundle para evitar colisão entre processos paralelos. Verificação: parse OK, PSScriptAnalyzer 0 errors/694 warnings, Pester completo **361/361 verde**, `bootstrap-ui.bat -SmokeTest` OK, `safe-base -DryRun` OK, `-Audit -DryRun` OK, `-Doctor -DryRun` OK.
 - 2026-05-19 — Steam Deck Support Read-Only Track implementado: `doctor.deck`, artefatos `deck-*.json` no SupportBundle, UI Saúde mostra status Steam Deck, UiContract `1.3.0` com `steamDeckDoctor`; execução read-only, sem reparos automáticos. Verificação: parse OK, PSScriptAnalyzer 0 errors/705 warnings, Pester completo **363/363 verde**, UI smoke OK, `-Doctor -DryRun` OK, `-SupportBundle -DryRun` OK.
 - 2026-06-03 - AI Proxy Suite corrigida para separar config/deps de runtime real; 4 proxies HTTP escutando e respondendo `/v1/models`, Antigravity degradado por upstream 503, Pester completo **454/454 verde**.
+- 2026-06-30 - Retomada expansao Linux SteamOS-like: avaliado trabalho previo em `linux/`, adicionados hotkeys/teclado virtual/Gamepad UI/perfil `steamdeck-linux`/doctor UX; atalhos aplicados no KDE Plasma 6 via `.desktop` + `kglobalshortcutsrc`; watcher user systemd dinamico instalado/ativo; writes privilegiados agora pulam sudo interativo; `install --dry-run` planeja perfil Linux; `tune gaming` aplica configs de usuario sem root; `repair-plan` corrigido e cobre pacotes SteamOS faltantes; apos instalacao manual de MangoHud/ryzenadj, doctor valida overlay/TDP tool; ponte privilegiada restrita criada para TDP/GPU via sudoers exato; Windows `.ps1`/`.bat`/`.ahk` nao alterados nesta entrega.
+- 2026-06-30 - Expansao Linux emulacao: adicionado `linux/pz emulation`, perfil `emulation-linux`, instaladores EmuDeck/Eden AppImage, layout compartilhado `~/Emulation`, importacao local de BIOS/firmware/keys e bloqueio explicito para download remoto de BIOS, firmware e prod.keys. Eden usa build Steam Deck PGO v0.2.1. Doctor/repair/support-bundle agora reportam estado de emulacao. Windows preservado.
+- 2026-06-30 - Jornada SteamOS/Hydra: criado plano tecnico e implementacao opt-in para entrada GRUB `PhaseZero SteamOS Console` via `phasezero.steamos=1` + SDDM gamescope session one-shot; instalador requer sudo e nao foi aplicado sem senha. Hydra Linux integrado por AppImage oficial, wrappers GameMode/MangoHud/gamescope, launcher desktop, atalho Steam `shortcuts.vdf` com backup e politica `user-owned-games-only`; fontes de download/repack/torrent/crack bloqueadas.
 
 ---
 

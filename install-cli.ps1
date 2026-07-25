@@ -65,6 +65,16 @@ function New-CliOptions {
         InstallWebapps = $false
         RepairMcp      = $false
         DriftCheck     = $false
+        Doctor         = $false
+        DoctorScope    = @()
+        SupportBundle  = $false
+        RepairPlan     = $false
+        PartitionLabels = $false
+        ApplyPartitionLabels = $false
+        AiConfigDoctor = $false
+        AiConfigSync   = $false
+        SecretsList    = $false
+        SecretsValidateAll = $false
         DryRun         = $false
         Yes            = $false
         NoAdmin        = $false
@@ -254,6 +264,38 @@ function Read-CliArgs {
             'repairmcp' { $opts.RepairMcp = $true }
             'drift-check' { $opts.DriftCheck = $true }
             'driftcheck' { $opts.DriftCheck = $true }
+            'doctor' { $opts.Doctor = $true }
+            'diagnostico' { $opts.Doctor = $true }
+            'doctorscope' {
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.DoctorScope += @($value) }
+            }
+            'doctor-scope' {
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.DoctorScope += @($value) }
+            }
+            'scope' {
+                if ($null -eq $value) { $value = Read-CliRequiredOptionValue -Tokens $Tokens -Index ([ref]$i) -OptionName $token }
+                if (-not [string]::IsNullOrWhiteSpace($value)) { $opts.DoctorScope += @($value) }
+            }
+            'supportbundle' { $opts.SupportBundle = $true }
+            'support-bundle' { $opts.SupportBundle = $true }
+            'repairplan' { $opts.RepairPlan = $true }
+            'repair-plan' { $opts.RepairPlan = $true }
+            'partitionlabels' { $opts.PartitionLabels = $true }
+            'partition-labels' { $opts.PartitionLabels = $true }
+            'diagnosepartitions' { $opts.PartitionLabels = $true }
+            'diagnose-partitions' { $opts.PartitionLabels = $true }
+            'applypartitionlabels' { $opts.ApplyPartitionLabels = $true; $opts.PartitionLabels = $true }
+            'apply-partition-labels' { $opts.ApplyPartitionLabels = $true; $opts.PartitionLabels = $true }
+            'aiconfigdoctor' { $opts.AiConfigDoctor = $true }
+            'ai-config-doctor' { $opts.AiConfigDoctor = $true }
+            'aiconfigsync' { $opts.AiConfigSync = $true }
+            'ai-config-sync' { $opts.AiConfigSync = $true }
+            'secretslist' { $opts.SecretsList = $true }
+            'secrets-list' { $opts.SecretsList = $true }
+            'secretsvalidateall' { $opts.SecretsValidateAll = $true }
+            'secrets-validate-all' { $opts.SecretsValidateAll = $true }
             'dryrun' { $opts.DryRun = $true }
             'yes' { $opts.Yes = $true }
             'y' { $opts.Yes = $true }
@@ -353,7 +395,20 @@ function Write-CliUsage {
     Write-CliOut '  install-cli.bat --repair-mcp           (mostra o plano, dry-run)'
     Write-CliOut '  install-cli.bat --repair-mcp --yes     (aplica, com backup .bak)'
     Write-CliOut ''
-    Write-CliOut 'Verificar drift (Doctor vs baseline, reporta regressoes):'
+    Write-CliOut 'Saúde e suporte:'
+    Write-CliOut '  install-cli.bat --doctor --doctor-scope agent-tools --yes'
+    Write-CliOut '  install-cli.bat --support-bundle --yes'
+    Write-CliOut '  install-cli.bat --repair-plan --doctor-scope agent-tools --yes'
+    Write-CliOut '  install-cli.bat --ai-config-doctor --yes'
+    Write-CliOut '  install-cli.bat --ai-config-sync --yes'
+    Write-CliOut '  install-cli.bat --secrets-list --yes'
+    Write-CliOut '  install-cli.bat --secrets-validate-all --yes'
+    Write-CliOut ''
+    Write-CliOut 'Drives e partições (seguro por padrão):'
+    Write-CliOut '  install-cli.bat --partition-labels --dry-run --yes'
+    Write-CliOut '  install-cli.bat --apply-partition-labels --yes   (aplica somente rótulos seguros; exige confirmação --yes)'
+    Write-CliOut ''
+    Write-CliOut 'Verificar mudanças (diagnóstico vs referência, reporta pioras):'
     Write-CliOut '  install-cli.bat --drift-check'
 }
 
@@ -367,6 +422,12 @@ function ConvertTo-CliCleanReply {
     # Chars construidos por code point para nao depender do encoding com que este arquivo e lido.
     foreach ($cp in @(0xFEFF, 0x200B, 0x200C, 0x200D)) {
         $text = $text.Replace([string][char]$cp, '')
+    }
+    foreach ($seq in @(
+        (([string][char]0x00EF) + ([string][char]0x00BB) + ([string][char]0x00BF)),
+        (([string][char]0x00B4) + ([string][char]0x2557) + ([string][char]0x2510))
+    )) {
+        $text = $text.Replace($seq, '')
     }
     return $text.Trim()
 }
@@ -739,28 +800,127 @@ function Resolve-CliEntryStatus {
 
     $probePaths = @()
     $commandNames = @()
+    $wingetId = ''
     if ($Kind -eq 'app') {
         $componentCatalog = Get-BootstrapComponentCatalog
         $component = [string]$Entry.component
         if (-not [string]::IsNullOrWhiteSpace($component) -and $componentCatalog.Contains($component)) {
             $def = $componentCatalog[$component]
             if ($def.PSObject.Properties.Name -contains 'ProbePaths') { $probePaths = @($def.ProbePaths) }
+            if ($def.PSObject.Properties.Name -contains 'Id') { $wingetId = [string]$def.Id }
         }
     } elseif ($Kind -eq 'tool') {
         $toolCatalog = Get-BootstrapAiToolCatalog
         if ($toolCatalog.Contains([string]$Entry.id)) {
             $commandNames = @((Get-CliCatalogValue -Entry $toolCatalog[[string]$Entry.id] -Name 'CommandNames' -Default @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
         }
+    } elseif ($Kind -eq 'config') {
+        $status = Resolve-CliConfigEntryStatus -Entry $Entry -Cache $Cache
+        return [pscustomobject]@{ status = $status; color = [System.ConsoleColor](Get-BootstrapItemStatusColor -Status $status); badge = (Get-CliStatusBadge -Status $status) }
     }
 
-    $status = Get-BootstrapItemStatus -Kind $Kind -Id ([string]$Entry.id) -ProbePaths $probePaths -CommandNames $commandNames -Cache $Cache
-    return [pscustomobject]@{ status = $status; color = [System.ConsoleColor](Get-BootstrapItemStatusColor -Status $status) }
+    $status = Get-BootstrapItemStatus -Kind $Kind -Id ([string]$Entry.id) -ProbePaths $probePaths -CommandNames $commandNames -WingetId $wingetId -Cache $Cache
+    return [pscustomobject]@{ status = $status; color = [System.ConsoleColor](Get-BootstrapItemStatusColor -Status $status); badge = (Get-CliStatusBadge -Status $status) }
+}
+
+function Get-CliCachedItemStatus {
+    param(
+        [Parameter(Mandatory = $true)][ValidateSet('app','config','tool')][string]$Kind,
+        [Parameter(Mandatory = $true)][string]$Id,
+        [hashtable]$Cache
+    )
+
+    if (-not $Cache) { return '' }
+    $key = "{0}:{1}" -f $Kind, $Id
+    if (-not $Cache.ContainsKey($key)) { return '' }
+    $entry = ConvertTo-BootstrapHashtable -InputObject $Cache[$key]
+    if (($entry -is [hashtable]) -and $entry.ContainsKey('status')) { return [string]$entry['status'] }
+    return ''
+}
+
+function Resolve-CliConfigEntryStatus {
+    param(
+        [Parameter(Mandatory = $true)]$Entry,
+        [hashtable]$Cache
+    )
+
+    $id = [string]$Entry.id
+    $cachedStatus = Get-CliCachedItemStatus -Kind 'config' -Id $id -Cache $Cache
+    if ($cachedStatus -eq 'error') { return 'error' }
+    if ((Get-BootstrapItemStatusRank -Status $cachedStatus) -ge (Get-BootstrapItemStatusRank -Status 'configured')) { return $cachedStatus }
+
+    $catalog = Get-BootstrapAppTuningCatalog
+    $item = $null
+    foreach ($candidate in @($catalog.items)) {
+        if ([string](Get-CliCatalogValue -Entry $candidate -Name 'id') -eq $id) {
+            $item = $candidate
+            break
+        }
+    }
+    if (-not $item) {
+        if ((Get-BootstrapItemStatusRank -Status $cachedStatus) -ge 0) { return $cachedStatus }
+        return 'not-installed'
+    }
+
+    try {
+        if (Test-BootstrapAppTuningRegistryConfigured -Item $item) { return 'configured' }
+    } catch {
+        Write-Verbose $_.Exception.Message
+    }
+
+    if ((Get-BootstrapItemStatusRank -Status $cachedStatus) -ge (Get-BootstrapItemStatusRank -Status 'installed-unconfigured')) {
+        return $cachedStatus
+    }
+
+    $installed = $false
+    try {
+        if (-not $script:CliStatusInstalledInventory) {
+            $script:CliStatusInstalledInventory = Get-BootstrapInstalledAppInventory
+        }
+        $installed = Test-BootstrapAppTuningItemInstalled -Item $item -InstalledInventory $script:CliStatusInstalledInventory
+    } catch {
+        $installed = $false
+    }
+
+    if (-not $installed) {
+        $componentCatalog = Get-BootstrapComponentCatalog
+        foreach ($component in @(Get-BootstrapAppTuningInstallComponents -Item $item)) {
+            $componentName = [string]$component
+            if ([string]::IsNullOrWhiteSpace($componentName) -or -not $componentCatalog.Contains($componentName)) { continue }
+            $def = $componentCatalog[$componentName]
+            $probe = @()
+            $wid = ''
+            if ($def.PSObject.Properties.Name -contains 'ProbePaths') { $probe = @($def.ProbePaths) }
+            if ($def.PSObject.Properties.Name -contains 'Id') { $wid = [string]$def.Id }
+            $componentStatus = Get-BootstrapItemStatus -Kind 'app' -Id $componentName -ProbePaths $probe -WingetId $wid -Cache $Cache
+            if ((Get-BootstrapItemStatusRank -Status $componentStatus) -ge (Get-BootstrapItemStatusRank -Status 'installed-unconfigured')) {
+                $installed = $true
+                break
+            }
+        }
+    }
+
+    if ($installed) { return 'installed-unconfigured' }
+    return 'not-installed'
+}
+
+function Get-CliStatusBadge {
+    param([Parameter(Mandatory = $true)][string]$Status)
+
+    switch ($Status) {
+        'error'                  { return '! erro' }
+        'not-installed'          { return '- nao instalado' }
+        'installed-unconfigured' { return '~ instalado' }
+        'configured'             { return '+ configurado' }
+        'optimized-tested'       { return 'OK testado' }
+        default                  { return '? desconhecido' }
+    }
 }
 
 function Write-CliStatusLegend {
     Write-CliOut 'Legenda de status:' Cyan
     foreach ($info in (Get-BootstrapItemStatusInfo)) {
-        Write-CliOut ('  * {0}' -f [string]$info.label) ([System.ConsoleColor][string]$info.color)
+        Write-CliOut ('  [{0}] {1}' -f (Get-CliStatusBadge -Status ([string]$info.status)), [string]$info.label) ([System.ConsoleColor][string]$info.color)
     }
     Write-CliOut ''
 }
@@ -786,11 +946,11 @@ function Write-CliCatalogEntries {
         $termPreview = Get-CliTermPreview -Terms @($entry.terms)
         $statusInfo = Resolve-CliEntryStatus -Kind $Kind -Entry $entry -Cache $statusCache
         if ($Kind -eq 'app') {
-            Write-CliOut ('{0,3}. [app] {1} | {2} | component: {3} | termos: {4} | source: {5}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.component, $termPreview, [string]$entry.source) $statusInfo.color
+            Write-CliOut ('{0,3}. [app] [{1}] {2} | {3} | component: {4} | termos: {5} | source: {6}' -f [int]$entry.number, [string]$statusInfo.badge, [string]$entry.id, [string]$entry.title, [string]$entry.component, $termPreview, [string]$entry.source) $statusInfo.color
         } elseif ($Kind -eq 'config') {
-            Write-CliOut ('{0,3}. [config] {1} | {2} | categoria: {3} | termos: {4} | acoes: {5} | risco: {6}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.actions, [string]$entry.risk) $statusInfo.color
+            Write-CliOut ('{0,3}. [config] [{1}] {2} | {3} | categoria: {4} | termos: {5} | acoes: {6} | risco: {7}' -f [int]$entry.number, [string]$statusInfo.badge, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.actions, [string]$entry.risk) $statusInfo.color
         } else {
-            Write-CliOut ('{0,3}. [tool] {1} | {2} | categoria: {3} | termos: {4} | source: {5}' -f [int]$entry.number, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.source) $statusInfo.color
+            Write-CliOut ('{0,3}. [tool] [{1}] {2} | {3} | categoria: {4} | termos: {5} | source: {6}' -f [int]$entry.number, [string]$statusInfo.badge, [string]$entry.id, [string]$entry.title, [string]$entry.category, $termPreview, [string]$entry.source) $statusInfo.color
         }
     }
     Write-CliOut ''
@@ -834,9 +994,10 @@ function Write-CliUnifiedCatalogEntries {
             Write-CliOut ("[{0}]" -f $currentGroup) Cyan
         }
         $statusInfo = Resolve-CliEntryStatus -Kind ([string]$item.kind) -Entry $entry -Cache $statusCache
-        Write-CliOut ('{0,3}. [{1}] {2} | {3} | acoes: {4} | risco: {5}' -f
+        Write-CliOut ('{0,3}. [{1}] [{2}] {3} | {4} | acoes: {5} | risco: {6}' -f
             [int]$item.number,
             [string]$item.kind,
+            [string]$statusInfo.badge,
             [string]$entry.id,
             [string]$entry.title,
             [string]$entry.actions,
@@ -1888,6 +2049,103 @@ function Invoke-CliMcpRepair {
     return $(if ([int]$verify.totalFixed -eq 0) { 0 } else { 1 })
 }
 
+function Test-CliMaintenanceModeRequested {
+    param([Parameter(Mandatory = $true)]$Options)
+
+    return (
+        [bool]$Options.Doctor -or
+        [bool]$Options.SupportBundle -or
+        [bool]$Options.RepairPlan -or
+        [bool]$Options.PartitionLabels -or
+        [bool]$Options.ApplyPartitionLabels -or
+        [bool]$Options.AiConfigDoctor -or
+        [bool]$Options.AiConfigSync -or
+        [bool]$Options.SecretsList -or
+        [bool]$Options.SecretsValidateAll -or
+        (@($Options.DoctorScope).Count -gt 0)
+    )
+}
+
+function Invoke-CliBackendMaintenanceMode {
+    param([Parameter(Mandatory = $true)]$Options)
+
+    $requested = New-Object System.Collections.Generic.List[string]
+    if ([bool]$Options.Doctor -or (@($Options.DoctorScope).Count -gt 0 -and -not [bool]$Options.RepairPlan)) { $requested.Add('doctor') | Out-Null }
+    if ([bool]$Options.SupportBundle) { $requested.Add('support-bundle') | Out-Null }
+    if ([bool]$Options.RepairPlan) { $requested.Add('repair-plan') | Out-Null }
+    if ([bool]$Options.PartitionLabels -or [bool]$Options.ApplyPartitionLabels) { $requested.Add('partition-labels') | Out-Null }
+    if ([bool]$Options.AiConfigDoctor) { $requested.Add('ai-config-doctor') | Out-Null }
+    if ([bool]$Options.AiConfigSync) { $requested.Add('ai-config-sync') | Out-Null }
+    if ([bool]$Options.SecretsList) { $requested.Add('secrets-list') | Out-Null }
+    if ([bool]$Options.SecretsValidateAll) { $requested.Add('secrets-validate-all') | Out-Null }
+
+    if ($requested.Count -eq 0) { return $false }
+    if ($requested.Count -gt 1) {
+        $message = ("Escolha apenas uma função de manutenção por execução. Recebido: {0}" -f (($requested.ToArray()) -join ', '))
+        Write-CliLegacyFailureResult -Message $message -ExitCode 2 -Mode 'maintenance-argument'
+        return 2
+    }
+
+    $mode = [string]$requested[0]
+    $backendArgs = @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass',
+        '-File', $ToolsPs1,
+        '-NonInteractive'
+    )
+    if ([bool]$Options.DryRun) { $backendArgs += @('-DryRun') }
+
+    switch ($mode) {
+        'doctor' {
+            $backendArgs += @('-Doctor')
+            if (@($Options.DoctorScope).Count -gt 0) { $backendArgs += @('-DoctorScope', ((@($Options.DoctorScope)) -join ',')) }
+        }
+        'support-bundle' { $backendArgs += @('-SupportBundle') }
+        'repair-plan' {
+            $backendArgs += @('-RepairPlan')
+            if (@($Options.DoctorScope).Count -gt 0) { $backendArgs += @('-DoctorScope', ((@($Options.DoctorScope)) -join ',')) }
+        }
+        'partition-labels' {
+            $backendArgs += @('-PartitionLabels')
+            if ([bool]$Options.ApplyPartitionLabels) {
+                if (-not [bool]$Options.Yes -and -not [bool]$Options.DryRun) {
+                    $message = 'Aplicar rótulos exige --yes. Sem --yes, rode --partition-labels --dry-run para revisar o plano.'
+                    Write-CliLegacyFailureResult -Message $message -ExitCode 2 -Mode 'partition-labels' -HowToFix 'Revise o diagnóstico e rode install-cli.bat --apply-partition-labels --yes apenas se concordar com os rótulos sugeridos.'
+                    return 2
+                }
+                $backendArgs += @('-ApplyPartitionLabels')
+            }
+        }
+        'ai-config-doctor' { $backendArgs += @('-AiConfigDoctor') }
+        'ai-config-sync' { $backendArgs += @('-AiConfigSync') }
+        'secrets-list' { $backendArgs += @('-SecretsList') }
+        'secrets-validate-all' { $backendArgs += @('-SecretsValidateAll') }
+    }
+
+    $backendArgs = Add-CliBackendArtifactArg -ArgumentList $backendArgs
+    Write-CliOut ''
+    Write-CliOut ("[manutenção] {0}..." -f $mode) Green
+    Write-CliOut ''
+
+    $previousPartitionApply = $env:PHASEZERO_PARTITION_LABEL_APPLY
+    try {
+        if ($mode -eq 'partition-labels' -and [bool]$Options.ApplyPartitionLabels -and [bool]$Options.Yes -and -not [bool]$Options.DryRun) {
+            $env:PHASEZERO_PARTITION_LABEL_APPLY = '1'
+        }
+        $process = Invoke-CliBackendProcess -ArgumentList $backendArgs -OperationName $mode
+    } finally {
+        if ($null -ne $previousPartitionApply) {
+            $env:PHASEZERO_PARTITION_LABEL_APPLY = $previousPartitionApply
+        } else {
+            Remove-Item Env:\PHASEZERO_PARTITION_LABEL_APPLY -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-CliOut ''
+    Write-CliOut ("Result: {0}" -f [string]$Options.ResultPath) Cyan
+    Write-CliOut ("Log:    {0}" -f [string]$Options.LogPath) Cyan
+    return [int]$process.ExitCode
+}
+
 function Invoke-CliLifecycleActions {
     # Executa export/import/factory-reset (individual por --item/--app/--config ou em lote --batch).
     # Backend ja carregado em library mode. Retorna $false se nao houver acao de ciclo de vida.
@@ -1992,6 +2250,10 @@ try {
     Write-CliOut "[ERRO] Falha ao carregar catalogo: $($_.Exception.Message)"
     if (-not [bool]$script:Options.NonInteractive) { Pause }
     exit 1
+}
+
+if (Test-CliMaintenanceModeRequested -Options $script:Options) {
+    exit (Invoke-CliBackendMaintenanceMode -Options $script:Options)
 }
 
 # Reparo de configs MCP (npx puro -> cmd /c npx) nos clientes. --repair-mcp mostra o plano (dry-run);

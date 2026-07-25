@@ -15,6 +15,8 @@ PhaseZero e um instalador e auditor Windows para pos-instalacao segura. O alvo m
 
 ## Requisitos
 
+Roteamento IA, Odysseus e atualização de apps: [docs/ai-routing-workspace.md](docs/ai-routing-workspace.md).
+
 - Windows 10/11.
 - Windows PowerShell 5.1.
 - Sessao interativa para a UI WPF.
@@ -22,6 +24,264 @@ PhaseZero e um instalador e auditor Windows para pos-instalacao segura. O alvo m
 - Pester 3.4.0 para rodar a suite local. `tests\run-pester.ps1` detecta a versao exata e tenta instalar em `CurrentUser` quando ausente; use `-NoInstall` para bloquear rede/mutacao e receber erro instrutivo.
 
 Sem winget em maquina limpa, o bootstrap tenta caminho seguro de App Installer oficial (`https://aka.ms/getwinget`) quando aplicavel. Se PATH/sessao ainda nao enxergar winget depois do bootstrap, a UI/CLI devem orientar logoff, nova sessao ou reboot em vez de falhar de modo opaco.
+
+### Linux (expansao aditiva)
+
+A trilha Linux fica isolada em `linux/pz` e usa perfis `profiles/*.json`. Ela nao substitui os fluxos Windows.
+
+#### Instalar o Control Center nativo
+
+A [pagina de Releases](https://github.com/Misael-art/PhaseZero/releases/latest) publica o app nativo Qt6/PySide6 (`phasezero-control-center`) em cinco formatos, gerados e verificados a partir do mesmo `packaging/linux/`:
+
+| Formato | Comando |
+|---|---|
+| Arch/BigLinux/Manjaro (pacman) | `sudo pacman -U phasezero-control-center-*.pkg.tar` |
+| Debian/Ubuntu (.deb) | `sudo apt install ./phasezero-control-center_*_all.deb` |
+| Fedora/openSUSE (.rpm) | `sudo dnf install ./phasezero-control-center-*.noarch.rpm` |
+| Universal (AppImage) | `chmod +x PhaseZero-*.AppImage && ./PhaseZero-*.AppImage` |
+| Flatpak | `flatpak install --user PhaseZero-*.flatpak` |
+| AUR | pacote `phasezero-control-center` (`.SRCINFO`/`PKGBUILD` em `packaging/linux/aur/`) |
+
+`SHA256SUMS-<versao>` acompanha cada release; confira com `sha256sum -c`. O pacote instala `phasezero-control-center` (binario) e um atalho de desktop (`io.phasezero.ControlCenter.desktop`); a UI so chama `linux/pz` com argumentos de um catalogo allowlisted, nunca implementa instalacao ou mutacao por conta propria. Detalhes de empacotamento e build local em [`linux/ui_native/README.md`](linux/ui_native/README.md).
+
+Para a trilha CLI completa (perfis, Steam Deck, VM, emulacao, servidor caseiro) sem instalar pacote, use um checkout do repositorio e chame `linux/pz` diretamente:
+
+```bash
+linux/pz help
+linux/pz ui                        # Central de Controle nativa Qt6
+linux/pz ui web                    # Dashboard web legado
+linux/pz install safe-base
+linux/pz capabilities detect                    # host, distro, GPU e providers
+linux/pz capabilities status                    # catálogo + estado instalado
+linux/pz capabilities plan --profile gaming-core # preview versionado, sem mutação
+linux/pz capabilities apply --plan-id ID --confirm TOKEN
+linux/pz capabilities verify --operation-id ID
+linux/pz capabilities rollback --operation-id ID --confirm TOKEN
+linux/pz install steamdeck-linux
+linux/pz steamdeck detect
+linux/pz steamdeck hotkeys dry-run
+linux/pz steamdeck keyboard
+linux/pz steamdeck console
+linux/pz steamdeck boot dry-run
+linux/pz steamdeck conveniences install
+linux/pz windows-vm plan --iso /path/to/Win11.iso
+linux/pz windows-vm discover
+sudo linux/windows-vm/windows-vm.sh adopt --disk /var/lib/libvirt/images/win11.qcow2
+linux/pz windows-vm install --iso /path/to/Win11.iso
+linux/pz windows-vm optimize --dry-run
+linux/pz windows-vm launch --fullscreen
+linux/pz windows-vm graphics status --json
+linux/pz windows-vm graphics doctor --json
+linux/pz windows-vm graphics plan --profile auto
+linux/pz windows-vm graphics runtime install --dry-run
+linux/pz windows-vm boot dry-run
+linux/pz install waydroid-linux --dry-run
+linux/pz waydroid status
+linux/pz waydroid install
+linux/pz waydroid repair --init
+linux/pz waydroid launch
+linux/pz waydroid boot dry-run
+linux/pz emulation setup
+linux/pz emulation eden install
+linux/pz emulation hydra install
+linux/pz emulation hydra configure
+linux/pz emulation srm configure
+linux/pz emulation controllers apply     # perfil de gamepad Steam Deck (Ryujinx/RPCS3)
+linux/pz emulation media apply           # unifica midia canonica (inclui RetroArch flatpak)
+linux/pz emulation optimizer plan
+linux/pz emulation optimizer apply-all
+linux/pz emulation ps3 import-game /path/to/local/ps3-dump
+linux/pz emulation ps3 import-pkg /path/to/local/pkg
+linux/pz emulation ps3 import-rap /path/to/local/rap
+linux/pz emulation lua status
+linux/pz emulation steam-tools status
+linux/pz emulation fixes list
+linux/pz emulation bios import /path/to/local/bios-dump
+linux/pz emulation nsz install
+linux/pz emulation nsz plan /path/to/local/nsz
+linux/pz emulation nsz convert /path/to/local/nsz
+linux/pz emulation nsz convert /path/to/local/nsz --delete-source --yes
+linux/pz emulation nsz apply --yes
+linux/pz ai opencode free-model          # corrige "Interrompido" com modelo free (deepseek-flash)
+linux/pz ai proxies plan all
+linux/pz ai proxies install all
+linux/pz ai proxies configure-ides       # opencode/opencode-desktop/zcode
+linux/pz ai proxies auth all             # status redigido de login/sessao
+linux/pz ai proxies login kimiproxy      # Chromium visivel; idem qwenproxy/deepsproxy
+linux/pz ai proxies test                 # probe honesto /v1/models + chat
+linux/pz ai token-economy status         # RTK, Headroom, ai-memory, frugality
+linux/pz windows-vm host-access status   # host -> disco da VM (guestmount)
+linux/pz waydroid host-access link       # host -> armazenamento interno do Waydroid
+linux/pz server status
+linux/pz install server-llm              # LLM local (Ollama) + boot enxuto reversivel
+linux/pz install server-homelab          # Docker/Tailscale: drive, midia, cofre, monitor
+linux/pz install server-llm-homelab-hermes
+linux/pz server homelab plan                          # blockers e proximos passos, sem alterar nada
+linux/pz server homelab repair --access local          # gera .env seguro (segredos aleatorios, chmod 600)
+linux/pz server homelab up --access local              # sobe core (Portainer/Jellyfin/Syncthing/Vaultwarden/Uptime Kuma)
+linux/pz server homelab up --extras --access tailscale  # + Nextcloud/Grafana/Prometheus/Paperless/n8n via Tailscale
+linux/pz server homelab open jellyfin                   # resolve e abre a URL do app
+linux/pz server homelab logs vaultwarden --follow
+linux/pz server homelab backup --extras                 # tar.gz por volume nomeado
+linux/pz server homelab restore --source PATH --yes
+linux/pz server homelab update                          # backup automatico + pull (tags fixadas) + up
+linux/pz server casaos plan                             # gate de compatibilidade (Debian/Ubuntu/RPi OS); Arch/SteamOS fica bloqueado
+sudo linux/pz server boot install --llm --homelab   # entrada GRUB Homelab headless
+```
+
+`steamdeck-linux` e opt-in. O foco inicial e experiencia estilo SteamOS: Steam Gamepad UI, atalhos `Ctrl+Alt+F1..F6`, teclado virtual por Steam/wvkbd/onboard/maliit, watcher de modo com debounce e tuning de jogos.
+
+Recursos Linux ficam na área **Recursos** da UI nativa e no contrato `pz capabilities`. O catálogo cobre gaming/streaming, hardware, saúde, segurança, backup, desenvolvimento, criação, administração e educação. Cada seleção segue `detect → plan → apply → verify → rollback`: plano e operação são JSON privados (`0700/0600`), fontes executáveis limitam-se a repositórios assinados da distribuição e Flathub, comandos usam argv sem shell, fallback Flatpak ocorre quando pacote nativo não existe, e rollback remove somente itens instalados pela própria operação. Serviços reversíveis selecionados (EarlyOOM, Ananicy, Docker, Cockpit, Tailscale e ZeroTier) são ativados explicitamente no plano e desativados pelo rollback; firewall, backend de rede e parâmetros de boot nunca são alterados implicitamente. Ideias de cobertura foram estudadas no LinuxToys; implementação PhaseZero é independente, sem copiar scripts GPL ou padrões inseguros de download executável.
+
+`windows-vm-linux` e opt-in. Automatiza VM Windows em QEMU/KVM a partir de uma ISO indicada pelo usuario. Antes de criar disco novo, detecta dominios Windows em `qemu:///system` e imagens instaladas; dominio libvirt existente vira default, preservando snapshot, firmware e hardware virtual originais. Sem dominio, usa QEMU direto com CPU `host`, KVM, OVMF, TPM 2.0, audio, SPICE USB redirection, SMB e virtiofs. Compartilhamento host->guest: `HOME` e `/mnt/sdcard` sao bind-montados (nao symlinks, que o smbd embutido do QEMU nao atravessa) sob `RUNTIME_DIR` e expostos no SMB embutido do SLIRP em `\\10.0.2.4\qemu` (pastas `home/` e `sdcard/`); virtiofs continua expondo `HOME`. O acesso reverso guest->host usa `pz windows-vm host-access` (monta o disco da VM via libguestfs com a VM desligada). Quatro canais USB cobrem pendrives, perifericos e leitores smartcard USB. Graficos: `pz windows-vm graphics` diagnostica GPU/render nodes/IOMMU e planeja perfis; o padrao permanece estavel (QXL/SPICE no libvirt, virtio-vga no QEMU direto). `virtio-gl` habilita caminho GL do host em teste opt-in via `launch --raw-qemu --graphics virtio-gl --experimental`, sem prometer 3D no driver Windows. Venus/rutabaga e VFIO/Looking Glass ficam plan-only na v1. Nenhum perfil altera GRUB, initramfs ou bind VFIO.
+
+`waydroid-linux` e opt-in. Automatiza Waydroid como Android em container no host Linux, com detecao de binder, servico `waydroid-container`, compositor kiosk Wayland (`cage` preferido, `kwin_wayland` fallback), launchers do usuario e boot direto via GRUB/SDDM. `repair --init` baixa sistema/vendor por mirrors SourceForge com retry, valida tamanho e SHA-256, prepara runtime e inicializa Android; sem `--init`, nao baixa imagens.
+
+`emulation-linux` e opt-in. Instala launchers do EmuDeck/Eden/Citron/Hydra, configura Hydra Classic e Steam ROM Manager com emuladores detectados, prepara Lua/LuaJIT, audita Steam helper tools e cria layout compartilhado `~/Emulation`. Em Steam Deck real (DMI Valve/Jupiter/Galileo/Sephiroth), EmuDeck usa o `EmuDeck.desktop` do desktop do usuario e PhaseZero cria um wrapper que chama esse launcher; em PC Linux generico, usa o AppImage direto. BIOS, firmware, keys, ROMs, updates e DLC nao sao baixados: use importacao local de dumps proprios. O Steam ROM Manager resolve `${romsdirglobal}`, `${steamdirglobal}`, `${retroarchpath}` e `${racores}` pelas variaveis de ambiente das Settings (`raCoresDirectory` aponta para os cores do RetroArch, senao "Test/Parse" falha com "invalid configuration"). `pz emulation controllers apply` aplica o perfil de gamepad Steam Deck (Ryujinx/RPCS3 via Steam Input), `pz emulation media apply` unifica a midia canonica inclusive para RetroArch flatpak, e o BigBox roda com aceleracao de hardware (DXVK) em vez de renderizacao por software.
+
+Servidor caseiro (opt-in). Seis perfis compoem LLM local, homelab e Hermes: `server-llm` (Ollama + boot enxuto reversivel), `server-homelab` (Docker/Tailscale com drive/midia/cofre/monitor), `server-homelab-hermes`, `server-llm-hermes`, `server-llm-homelab` e `server-llm-homelab-hermes`. `pz server (status|llm|homelab|casaos|hermes|slim|boot)` gerencia os componentes. `sudo pz server boot install --llm --homelab` cria a entrada GRUB `PhaseZero Homelab (headless)`, que inicia o Linux em `multi-user.target` com `phasezero.homelab=1` (SO enxuto reversivel — o boot normal fica intacto); um oneshot sobe Ollama, a stack Docker e o Hermes conforme `/etc/phasezero/server-mode.env`. O enxugamento permanente e opt-in e reversivel via `pz server slim (apply|restore)`.
+
+`pz server homelab` cobre o ciclo de vida completo do stack Docker Compose (Portainer, Jellyfin, Syncthing, Vaultwarden, Uptime Kuma no core; Nextcloud, Grafana, Prometheus, Paperless e n8n como extras opt-in). `status`/`plan` retornam JSON estruturado com Docker, Tailscale, modo de acesso, segredos (presenca, nunca o valor), apps (URL/bind/estado/volumes), `blockers` e `nextSteps`. `repair`/`up` geram um `.env` local seguro (`chmod 600`, fora do git) com segredos aleatorios para Vaultwarden/Nextcloud/Grafana/Paperless/n8n; sem segredo obrigatorio presente, o servico correspondente fica listado em `blockers` e nao sobe. O acesso e sempre explicito via `--access local|tailscale|lan`: `local` (padrao) fixa tudo em `127.0.0.1`; `tailscale` expoe apps sensiveis apenas no IP Tailscale e e bloqueado se a conta estiver deslogada; `lan` e opt-in (`0.0.0.0`) para a rede local. Nenhuma porta fica aberta para a WAN por padrao. Imagens Docker sao fixadas por tag (sem `:latest`, override via `PZ_IMAGE_*`). `open <app>` resolve a URL respeitando o bind atual; `logs <app>`, `backup`/`restore --source PATH --yes` (tar.gz por volume nomeado) e `update` (backup automatico antes de `pull`/`up`) completam o ciclo. `pz server casaos (status|plan|install)` e um gate de compatibilidade para CasaOS real: detecta distro/arquitetura, bloqueia Arch/SteamOS/BigLinux/Manjaro, e mesmo em host compativel (Debian/Ubuntu/Raspberry Pi OS) a instalacao exige `--yes` explicito — o caminho padrao do PhaseZero continua sendo a stack Docker Compose + Portainer acima.
+
+IA e agentes no Linux: `pz ai opencode free-model` corrige o "Interrompido" do OpenCode (CLI e desktop) definindo um modelo free keyless do OpenCode Zen (`deepseek-v4-flash-free`) como padrao, mantendo o Ollama como provider offline. `pz ai proxies configure-ides` conecta os proxies pedrofariasx (kimi/qwen/deeps/mimo, portas 3010-3013) ao opencode, opencode-desktop e zcode; `pz ai proxies auth` mostra prontidao redigida sem nomes/valores de segredos, e `pz ai proxies login kimiproxy|qwenproxy|deepsproxy` abre Chromium visivel para gravar a sessao web. Mimo usa sessao via `.env` local, como no Windows. Caveman, RTK, ai-memory, Headroom e o pack `ai-context-frugality` sao suportados e configurados (`pz ai compat status` ou `pz ai token-economy status`), sem auto-envolver Codex/Claude em wrappers. A Central de Controle nativa (Qt6/PySide6, `pz ui`) foi redesenhada no estilo EmuDeck: dashboard "Welcome back" com cards de acao, sidebar agrupada, badges de estado por cor, tema escuro roxo e toasts de conclusao.
+
+Conversao NSZ para NSP usa `nsz==4.6.1` isolado. Processamento sequencial reduz pico de disco. Saida nasce em staging no mesmo filesystem, passa por verificacao upstream, cabecalho PFS0 e SHA-256, depois recebe publicacao atomica em `~/Emulation/roms/switch/nsp`. Fonte permanece por padrao. `--delete-source --yes` remove cada NSZ somente depois da verificacao e registro JSON em `~/Emulation/metadata/switch/nsz-conversions`. `apply --yes` normaliza sufixos de tamanho, confirma duplicatas por SHA-256, remove apenas copias identicas e converte toda a biblioteca sob lock exclusivo. Conflitos permanecem intactos. Somente dumps locais proprios.
+
+Boot direto estilo SteamOS:
+
+```bash
+linux/pz steamdeck boot dry-run
+sudo linux/steamdeck/install-steamos-boot.sh install
+sudo linux/pz boot install-safe-menu
+linux/pz boot menu
+sudo linux/pz boot choose steamos --reboot
+```
+
+Isso adiciona uma entrada GRUB `PhaseZero SteamOS Console`. Ela inicializa o mesmo Linux com `phasezero.steamos=1`; um servico antes do SDDM seleciona `phasezero-steamos.desktop`. Ao escolher Desktop na Steam, o hook `steamos-session-select` encerra gamescope e inicia Plasma na mesma sessao, sem novo login. `linux/pz boot install-safe-menu` deixa o menu GRUB visivel com timeout seguro, sem alterar input/video global. As entradas PhaseZero usam IDs estaveis e hotkeys de teclado (`s`, `w`, `a`, `e`), mas D-pad/analogico do Steam Deck em GRUB depende de firmware e nao e confiavel. Prefira `linux/pz boot menu` ou launchers one-shot no Linux antes de reiniciar.
+
+Boot dinâmico de ISOs e mídias removíveis:
+
+```bash
+linux/pz boot iso inspect /caminho/resgate.iso
+sudo linux/pz boot iso add /caminho/resgate.iso --profile=auto
+sudo linux/pz boot choose iso:<id> --reboot
+linux/pz boot usb discover --json
+sudo linux/pz boot usb add /dev/sdX1
+sudo linux/pz boot choose usb:<id> --reboot
+linux/pz boot grubfm status --json
+```
+
+Entradas gerenciadas ficam em `/etc/grub.d/46_phasezero_iso_loopback`, `47_phasezero_removable_efi` e `48_phasezero_grubfm`; `/boot/grub/grub.cfg` nunca é editado diretamente. ISOs usam perfil explícito/auto somente para layouts conhecidos (ArchISO, SystemRescue, Ubuntu Casper, Debian Live e Grml), UUID do filesystem e SHA-256. Mídia EFI usa UUID e `/EFI/BOOT/BOOTX64.EFI`, evitando ordinais `(hdN,gptN)` e recursão no fallback local. GRUB2 File Manager permanece experimental porque upstream foi arquivado: instalação aceita somente arquivo EFI local com SHA-256 fornecido, não baixa payload e bloqueia Secure Boot ativo.
+
+Boot direto Windows VM:
+
+```bash
+linux/pz windows-vm install --iso /path/to/Win11.iso
+linux/pz windows-vm discover
+sudo linux/windows-vm/windows-vm.sh adopt --disk /path/to/existing/windows.qcow2
+linux/pz windows-vm launch --dry-run
+sudo linux/windows-vm/windows-vm.sh boot install
+sudo linux/windows-vm/windows-vm.sh boot next-reboot
+```
+
+Isso adiciona uma entrada GRUB `PhaseZero Windows VM`. Ela inicializa o mesmo Linux com `phasezero.windowsvm=1`; um servico antes do SDDM seleciona `phasezero-windows-vm.desktop`, que inicia o dominio libvirt descoberto ou o QEMU direto em tela cheia. Saida fica em `~/.local/state/phasezero/windows-vm/session.log`; falha retorna ao Plasma. Em QEMU direto, use `\\10.0.2.4\qemu`. Em dominio libvirt, use `\\192.168.122.1\PZExchange` ou SPICE WebDAV.
+
+WinBoat e WinPodX com Podman rootless:
+
+```bash
+linux/pz windows-vm apps setup
+linux/pz windows-vm apps doctor
+```
+
+Detalhes de recursos, rede, compartilhamento e Steam Deck LCD: [docs/windows-container-frontends.md](docs/windows-container-frontends.md).
+
+Se `discover` encontrar uma instalacao existente sem leitura para o usuario, `adopt` aplica ACL/chmod quando executado com root e grava essa imagem como default. Sem instalacao existente legivel, `install --iso` cria o qcow2 novo e segue o fluxo normal.
+
+Boot direto Waydroid:
+
+```bash
+linux/pz waydroid install
+linux/pz waydroid repair --init
+sudo linux/waydroid/waydroid.sh boot install
+sudo linux/waydroid/waydroid.sh boot next-reboot
+```
+
+Isso adiciona uma entrada GRUB `PhaseZero Waydroid`. Ela inicializa o mesmo Linux com `phasezero.waydroid=1`; um servico antes do SDDM aplica tuning, prepara binder, inicia `waydroid-container` e seleciona a sessao `phasezero-waydroid.desktop` sem login manual. A sessao abre Waydroid em modo kiosk e tenta reiniciar a UI algumas vezes antes de cair para o desktop. Boot normal remove a configuracao SDDM gerenciada.
+
+Hydra:
+
+```bash
+linux/pz emulation hydra install
+linux/pz emulation hydra configure
+linux/pz emulation hydra steam-shortcut
+```
+
+Hydra entra como AppImage local, launcher desktop, atalho Steam, flags Hydra Classic e `emulators_config.json` para DuckStation/PCSX2/RPCS3 quando detectados. PhaseZero nao configura fontes de download, repacks, torrents, cracks ou bypasses; integra apenas biblioteca/launcher para jogos do usuario.
+
+Steam ROM Manager:
+
+```bash
+linux/pz emulation srm configure
+linux/pz emulation srm status
+```
+
+SRM usa o AppImage/`steamrommanager.sh` do EmuDeck quando disponivel, aponta `steamDirectory` para a Steam local, `romsDirectory` para `~/Emulation/roms`, `retroarchPath` para o launcher EmuDeck e importa todos os parsers validos do template EmuDeck. Alem dos parsers do EmuDeck, o PhaseZero adiciona parsers proprios (`phasezeroManaged`) para GameCube (Dolphin), Wii (Dolphin), Wii U (Cemu), N64/SNES/NES/GBA/GB (RetroArch cores) e PSP (PPSSPP), de forma que ROMs desses sistemas tambem viram shortcuts Steam no Big Picture mesmo sem o EmuDeck. Caminhos absolutos antigos sao tornados portaveis. Switch usa exclusivamente a view segura gerada pelo PhaseZero; `Nintendo Switch (Update)`, `Nintendo Switch (DLC)`, `Mods`, `Firmware`, `_backup` e `Torrent` nunca entram no parser Ryujinx.
+
+Keys/firmware centralizados: o store canonico fica em `~/Emulation/firmware/switch/{keys,firmware}`. `pz emulation switch import-keys <dir>` e `import-firmware <dir>` sempre populam o central (mesmo quando o Ryujinx ja tem keys), e Eden/Citron/Ryujinx linkam a ele por ordem de prioridade central > Ryujinx > copia. Isso elimina o prompt reincidente de keys/firmware ao abrir emuladores no SteamOS Game Mode. Pastas de compatibilidade (`keys`, `texturepacks`, `hdpacks`) viram symlinks para o canonico quando vazias, evitando duplicacao.
+
+Limpeza de midia orfa: apos remover ROMs, capas associadas ficavam orfaas poluindo o host. `pz emulation media clean` lista midia sem ROM correspondente (dry-run); `--apply` move para `~/Emulation/.phasezero/backups/orphaned-media-<data>/` (backup restauravel, nunca delete direto). Disponivel tambem como card "Limpar midia orfa" na Central de Controle.
+
+Pre-requisitos SteamOS: a entrada GRUB `PhaseZero SteamOS Console` exige `gamescope-session-plus`, `steam` e `sddm` instalados. Sem algum deles, a sessao cai em Plasma com log de diagnostico (`steamos-session.log`) indicando o pacote faltante.
+
+Launchers SteamOS:
+
+```bash
+linux/pz steamdeck conveniences plan
+linux/pz steamdeck conveniences install
+linux/pz emulation frontends repair
+```
+
+Instala Return to Gaming Mode, Windows VM e Waydroid em `~/.local/bin` e `~/.local/share/applications`. Os tres sao propagados para Steam, ES-DE, SRM, Heroic e LaunchBox junto aos demais frontends. `Return.desktop` chama `phasezero-return`, que usa o seletor de sessao SteamOS do PhaseZero.
+
+Otimizacoes por jogo:
+
+```bash
+linux/pz emulation optimizer status
+linux/pz emulation optimizer plan
+linux/pz emulation optimizer apply <game-id>
+linux/pz emulation optimizer apply-all
+```
+
+As 14 entradas documentadas escrevem configuracoes nativas idempotentes em DuckStation, PCSX2 e Dolphin. Roots XDG e Flatpak sao detectados. `emulation setup` aplica a biblioteca automaticamente; dry-run apenas mostra o plano. Detalhes em `docs/emulation-game-optimizer-plan.md`.
+
+Suite Linux de proxies de IA:
+
+```bash
+linux/pz ai proxies plan all
+linux/pz ai proxies install all
+linux/pz ai proxies status all
+linux/pz ai proxies auth all
+linux/pz ai proxies login kimiproxy
+linux/pz ai proxies login qwenproxy
+linux/pz ai proxies login deepsproxy
+linux/pz ai proxies test
+linux/pz ai proxies start <id>
+linux/pz ai proxies stop <id>
+```
+
+Os dez repositorios suportados ficam em `~/.local/share/phasezero/ai-proxies`. Projetos Node usam runtime Node 24 isolado; projetos Go recebem binario nativo. Servicos systemd de usuario usam bind local por padrao (`PZ_BIND_HOST=127.0.0.1`) e permanecem desativados ate configuracao explicita de credenciais, exceto quando `test/start/login` ativa o provider escolhido. O contrato Windows (`webValidation`) foi portado para Linux como `auth`: browser-session para Kimi/Qwen/DeepSeek, env-session para Mimo, sem vazar nomes/valores sensiveis no JSON. Veja `docs/linux-ai-proxies.md`.
+
+PS3/RPCS3:
+
+```bash
+linux/pz emulation ps3 configure
+linux/pz emulation ps3 import-game /path/to/local/ps3-dump
+linux/pz emulation ps3 import-firmware /path/to/local/PS3UPDAT.PUP
+linux/pz emulation ps3 import-pkg /path/to/local/pkg-or-folder
+linux/pz emulation ps3 import-rap /path/to/local/rap-or-folder
+```
+
+PS3 e local-only: dumps, PKG, RAP e firmware devem vir do usuario. PhaseZero configura VFS RPCS3, instala firmware/PKG via RPCS3 quando possivel e reconfigura Hydra/SRM; nao adiciona fontes remotas de jogos.
 
 ## Uso Seguro
 
@@ -83,6 +343,8 @@ Diagnostico local:
 - `recommended`: alias seguro/compat para `safe-base`.
 - `public-beta`: primeira instalacao confiavel; inclui base segura, PowerShell, PowerToys, Brave, VS Code, secrets e MCPs. Nao inclui WSL/Docker/IA desktop/gaming.
 - `dev-ai`: pilha de IA/dev por escolha explicita.
+- `steamdeck-linux`: expansao Linux opt-in para experiencia SteamOS-like em Steam Deck/handhelds: hotkeys, teclado virtual, Big Picture/Gamepad UI e tuning de jogos.
+- `emulation-linux`: expansao Linux opt-in para EmuDeck/Eden/Citron/Hydra/SRM, Lua, Steam helper tools, launchers desktop e layout de emulacao com conteudo do usuario importado localmente.
 - `full-workstation`: perfil amplo com stacks desktop, IA, containers, creator, social e utilitarios. Nunca deve ser default silencioso.
 - `legacy`: compatibilidade com fluxo historico.
 

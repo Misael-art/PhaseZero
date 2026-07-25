@@ -1,0 +1,32 @@
+# >>> PHASEZERO AI CONTEXT FRUGALITY >>>
+# PhaseZero AI context frugality
+# Keep reproducibility lockfiles visible by default.
+
+.codex/ai-context/
+.codex/context-packs/
+.phasezero/tmp/
+.phasezero/cache/
+
+node_modules/
+.next/
+.nuxt/
+.turbo/
+dist/
+build/
+out/
+coverage/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+
+target/debug/
+target/release/
+
+*.log
+*.tmp
+*.bak
+hs_err_pid*.log
+
+# <<< PHASEZERO AI CONTEXT FRUGALITY <<<

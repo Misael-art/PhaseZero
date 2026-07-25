@@ -1,0 +1,26 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "full-workstation",
+  "description": "Full workstation: safe-base + dev-ai + gaming + homelab combined",
+  "os": ["linux", "windows"],
+  "extends": ["safe-base", "dev-ai", "gaming", "homelab"],
+  "packages": {
+    "linux": {
+      "pacman": [],
+      "yay": [],
+      "flatpak": []
+    },
+    "windows": {
+      "winget": [],
+      "choco": []
+    }
+  },
+  "scripts": {
+    "linux": [],
+    "windows": []
+  },
+  "configs": {
+    "linux": [],
+    "windows": []
+  }
+}

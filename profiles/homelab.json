@@ -1,0 +1,62 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "homelab",
+  "description": "Home server stack via Docker: media, cloud, monitoring, automation",
+  "os": ["linux", "windows"],
+  "packages": {
+    "linux": {
+      "pacman": [
+        "docker",
+        "docker-compose",
+        "git",
+        "git-lfs",
+        "github-cli",
+        "cockpit",
+        "cockpit-docker",
+        "cockpit-podman",
+        "netdata",
+        "tailscale",
+        "rsync",
+        "restic",
+        "borg",
+        "nginx",
+        "certbot",
+        "acme.sh"
+      ],
+      "yay": [],
+      "flatpak": []
+    },
+    "windows": {
+      "winget": ["Docker.DockerDesktop"],
+      "choco": ["docker-desktop", "tailscale"]
+    }
+  },
+  "scripts": {
+    "linux": [
+      "linux/tuning/dev-tweaks.sh"
+    ],
+    "windows": []
+  },
+  "configs": {
+    "linux": []
+  },
+  "systemd": {
+    "linux": {
+      "enable": ["docker", "cockpit.socket", "netdata", "tailscaled"],
+      "user": []
+    }
+  },
+  "docker_compose": {
+    "core": "assets/home-server/docker-compose.homelab.yml",
+    "extras": "assets/home-server/docker-compose.extras.yml"
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "net.ipv4.ip_forward": 1,
+        "vm.max_map_count": 262144,
+        "fs.inotify.max_user_watches": 65536
+      }
+    }
+  }
+}

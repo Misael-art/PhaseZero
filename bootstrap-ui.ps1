@@ -340,10 +340,10 @@ function Get-UiStrings {
                 AppTuningStatus     = 'Safe and reversible app tuning. Category app-install lists individual apps for on-demand installs.'
                 HealthTitle         = 'Health'
                 HealthSummary       = 'Local support diagnostics, export bundle and manual repair queue.'
-                HealthStatus        = 'Run Doctor to refresh local health.'
-                HealthDoctor        = 'Run Doctor'
-                HealthSupportBundle = 'Export support bundle'
-                HealthRepairPlan    = 'View repair queue'
+                HealthStatus        = 'Run diagnostics to refresh local health.'
+                HealthDoctor        = 'Run diagnostics'
+                HealthSupportBundle = 'Export support package'
+                HealthRepairPlan    = 'View repairs'
                 HealthCopyDiagnostic = 'Copy diagnostic'
                 HealthDeckStatus    = 'Steam Deck: not checked.'
                 HealthGithubStatus  = 'GitHub CLI: not checked.'
@@ -452,17 +452,17 @@ function Get-UiStrings {
                 SelectionDetails   = 'O que esta opcao faz'
                 QuickOptions       = 'Opções rápidas'
                 OptClaudePlugins   = 'Claude Code: plugins'
-                OptClaudeProjectMcps = 'Claude Code: sync MCP no projeto'
+                OptClaudeProjectMcps = 'Claude Code: conexões do projeto'
                 OptOpenWebUI       = 'IA local: Open WebUI (Docker)'
                 OptSkipManualRequirements = 'Pular requisitos manuais (bloqueantes)'
                 OptIgnoreManualRequirements = 'Ignorar requisitos manuais (apenas log)'
-                OptRequireNoPendingReboot = 'Abortar se houver reinicio pendente (preflight)'
+                OptRequireNoPendingReboot = 'Parar se houver reinício pendente'
                 OptOfflineMode     = 'Modo Offline (usa cache local)'
                 OptEnableResume    = 'Retomar instalação interrompida'
                 HostSetupTitle     = 'Preparação deste PC'
-                AppTuningTitle      = 'Otimizar Apps'
-                AppTuningSubtitle   = 'Pre-configure ferramentas instaladas por categoria e perfil, com defaults seguros.'
-                AppTuningMode       = 'AppTuning'
+                AppTuningTitle      = 'Otimizar apps'
+                AppTuningSubtitle   = 'Pré-configure ferramentas instaladas por categoria e perfil, com padrões seguros.'
+                AppTuningMode       = 'Modo de ajuste'
                 AppTuningCategories = 'Categorias'
                 AppTuningItems      = 'Itens'
                 AppTuningRecommended = 'Marcar recomendados'
@@ -475,17 +475,17 @@ function Get-UiStrings {
                 AppTuningRunNow     = 'Executar agora'
                 AppTuningOpenFolder = 'Abrir pasta'
                 AppTuningViewLog    = 'Ver log'
-                AppTuningStatus     = 'Otimização segura e reversível dos apps. Categoria app-install lista apps individuais sob demanda.'
+                AppTuningStatus     = 'Ajustes seguros e reversíveis. A categoria de instalação lista apps individuais sob demanda.'
                 HealthTitle         = 'Saúde'
                 HealthSummary       = 'Diagnóstico local, pacote de suporte e fila manual de reparo.'
-                HealthStatus        = 'Rode Doctor para atualizar a saúde local.'
-                HealthDoctor        = 'Rodar Doctor'
-                HealthSupportBundle = 'Exportar bundle'
-                HealthRepairPlan    = 'Ver fila de reparo'
+                HealthStatus        = 'Rode o diagnóstico para atualizar a saúde local.'
+                HealthDoctor        = 'Rodar diagnóstico'
+                HealthSupportBundle = 'Exportar pacote'
+                HealthRepairPlan    = 'Ver reparos'
                 HealthCopyDiagnostic = 'Copiar diagnóstico'
                 HealthDeckStatus    = 'Steam Deck: não verificado.'
                 HealthGithubStatus  = 'GitHub CLI: não verificado.'
-                AiToolsTitle        = 'AI Coding Tools'
+                AiToolsTitle        = 'Ferramentas de IA'
                 AiToolsStatus       = 'Marque uma ou mais ferramentas e instale, valide, configure, desinstale ou abra docs oficiais.'
                 AiToolsInstall      = 'Instalar marcadas'
                 AiToolsValidate     = 'Validar marcadas'
@@ -510,8 +510,8 @@ function Get-UiStrings {
                 ApiCatalogBack      = '<- Central de APIs'
                 HostHealth         = 'Nível de manutenção'
                 SteamDeckVersion   = 'Modelo do Steam Deck'
-                WorkspaceRoot      = 'Workspace Root'
-                CloneBaseDir       = 'Diretório Base de Clones'
+                WorkspaceRoot      = 'Pasta de trabalho'
+                CloneBaseDir       = 'Pasta base de clones'
                 Browse             = 'Selecionar'
                 AdminNeeds         = 'Revisão de Admin'
                 SteamDeckCenterTitle = 'Central do Steam Deck'
@@ -554,7 +554,7 @@ function Get-UiStrings {
                 Selection          = 'Escolher'
                 HostSetup          = 'Configurar PC'
                 Health             = 'Saúde'
-                AppTuning          = 'Otimização de apps (AppTuning)'
+                AppTuning          = 'Otimizar apps'
                 ApiCenter          = 'Chaves (APIs)'
                 SteamDeckControl   = 'Steam Deck'
                 DualBoot           = 'Windows e Linux'
@@ -1658,12 +1658,12 @@ function Get-UiHealthTextCanonicalStatus {
                             <DockPanel>
                                 <TextBlock x:Name="MaintenanceLabel" Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="MANUTENÇÃO E RESILIÊNCIA"/>
                                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                    <Button x:Name="DoctorQuickButton" Style="{StaticResource GhostBtn}" Content="  Doctor" Height="32" Margin="0,0,12,0"/>
-                                    <Button x:Name="SupportBundleQuickButton" Style="{StaticResource GhostBtn}" Content="  Bundle" Height="32" Margin="0,0,12,0"/>
-                                    <Button x:Name="AuditIntegrityButton" Style="{StaticResource GhostBtn}" Content="  Verificar Integridade (Audit)" Height="32" Margin="0,0,12,0"/>
-                                    <Button x:Name="RollbackChangesButton" Style="{StaticResource GhostBtn}" Content="  Reverter Tweaks (Rollback)" Foreground="{StaticResource WarnBrush}" Height="32" Margin="0,0,12,0"/>
+                                    <Button x:Name="DoctorQuickButton" Style="{StaticResource GhostBtn}" Content="  Diagnóstico" Height="32" Margin="0,0,12,0"/>
+                                    <Button x:Name="SupportBundleQuickButton" Style="{StaticResource GhostBtn}" Content="  Pacote de suporte" Height="32" Margin="0,0,12,0"/>
+                                    <Button x:Name="AuditIntegrityButton" Style="{StaticResource GhostBtn}" Content="  Verificar integridade" Height="32" Margin="0,0,12,0"/>
+                                    <Button x:Name="RollbackChangesButton" Style="{StaticResource GhostBtn}" Content="  Reverter ajustes" Foreground="{StaticResource WarnBrush}" Height="32" Margin="0,0,12,0"/>
                                     <TextBlock Foreground="#94A3B8" FontSize="11" VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="400"
-                                               Text="O Rollback reverte apenas ajustes de registro e sistema. Apps instalados devem ser removidos manualmente."/>
+                                               Text="A reversão desfaz apenas ajustes de registro e sistema. Apps instalados devem ser removidos manualmente."/>
                                 </StackPanel>
                             </DockPanel>
                         </Border>
@@ -1746,11 +1746,11 @@ function Get-UiHealthTextCanonicalStatus {
                                 <TextBlock x:Name="QuickOptionsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="OPÇÕES RÁPIDAS"/>
                                 <StackPanel Margin="0,6,0,0">
                                     <CheckBox x:Name="OptClaudePluginsCheckBox" Style="{StaticResource DarkCheck}" Content="Claude Code: plugins"/>
-                                    <CheckBox x:Name="OptClaudeProjectMcpsCheckBox" Style="{StaticResource DarkCheck}" Content="Claude Code: sync MCP no projeto"/>
+                                    <CheckBox x:Name="OptClaudeProjectMcpsCheckBox" Style="{StaticResource DarkCheck}" Content="Claude Code: conexões do projeto"/>
                                     <CheckBox x:Name="OptOpenWebUICheckBox" Style="{StaticResource DarkCheck}" Content="IA local: Open WebUI (Docker)"/>
                                     <CheckBox x:Name="OptSkipManualRequirementsCheckBox" Style="{StaticResource DarkCheck}" Content="Pular requisitos manuais (bloqueantes)"/>
                                     <CheckBox x:Name="OptIgnoreManualRequirementsCheckBox" Style="{StaticResource DarkCheck}" Content="Ignorar requisitos manuais (apenas log)"/>
-                                    <CheckBox x:Name="OptRequireNoPendingRebootCheckBox" Style="{StaticResource DarkCheck}" Content="Abortar se houver reinicio pendente (preflight)"/>
+                                    <CheckBox x:Name="OptRequireNoPendingRebootCheckBox" Style="{StaticResource DarkCheck}" Content="Parar se houver reinício pendente"/>
                                     <CheckBox x:Name="OptOfflineModeCheckBox" Style="{StaticResource DarkCheck}" Content="Modo Offline (usa cache local)"/>
                                     <CheckBox x:Name="OptEnableResumeCheckBox" Style="{StaticResource DarkCheck}" Content="Retomar instalacao interrompida"/>
                                 </StackPanel>
@@ -1813,7 +1813,7 @@ function Get-UiHealthTextCanonicalStatus {
                                 <RowDefinition Height="Auto"/>
                             </Grid.RowDefinitions>
 
-                            <TextBlock x:Name="HostHealthLabel"       Grid.Row="0" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="HostHealth"/>
+                            <TextBlock x:Name="HostHealthLabel"       Grid.Row="0" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Nível de manutenção"/>
                             <ComboBox  x:Name="HostHealthCombo"       Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
                             <TextBlock x:Name="SteamDeckVersionLabel" Grid.Row="2" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Versão Steam Deck"/>
                             <ComboBox  x:Name="SteamDeckVersionCombo" Grid.Row="2" Grid.Column="1" Style="{StaticResource DarkCombo}"/>
@@ -1857,17 +1857,17 @@ function Get-UiHealthTextCanonicalStatus {
                     <TextBlock x:Name="HealthTitleLabel" Style="{StaticResource PageTitle}" Text="Saúde"/>
                     <TextBlock x:Name="HealthSummaryLabel" Style="{StaticResource PageSubtitle}" Text="Diagnóstico local, pacote de suporte e fila manual de reparo." TextWrapping="Wrap"/>
                     <WrapPanel Margin="0,0,0,10">
-                        <TextBlock Text="Apos rodar Doctor:" Foreground="#94A3B8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
+                        <TextBlock Text="Após rodar diagnóstico:" Foreground="#94A3B8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
                         <TextBlock Text="&#9679; OK" Foreground="#22C55E" FontSize="11" Margin="0,0,10,0"/>
-                        <TextBlock Text="&#9679; atencao" Foreground="#FACC15" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; atenção" Foreground="#FACC15" FontSize="11" Margin="0,0,10,0"/>
                         <TextBlock Text="&#9679; ausente" Foreground="#FFFFFF" FontSize="11" Margin="0,0,10,0"/>
-                        <TextBlock Text="&#9679; critico/bloqueado" Foreground="#EF4444" FontSize="11" Margin="0,0,10,0"/>
+                        <TextBlock Text="&#9679; crítico/bloqueado" Foreground="#EF4444" FontSize="11" Margin="0,0,10,0"/>
                     </WrapPanel>
 
                     <Border Style="{StaticResource Card}" Margin="0,0,0,16">
                         <StackPanel>
                             <TextBlock Style="{StaticResource SectionLabel}" Text="STATUS"/>
-                            <TextBlock x:Name="HealthStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Rode Doctor para atualizar a saúde local."/>
+                            <TextBlock x:Name="HealthStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Rode o diagnóstico para atualizar a saúde local."/>
                         </StackPanel>
                     </Border>
 
@@ -1884,16 +1884,16 @@ function Get-UiHealthTextCanonicalStatus {
                                 <TextBlock x:Name="HealthWingetStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="winget: Ausente"/>
                             </StackPanel>
                         </Button>
-                        <Button x:Name="HealthRebootCard" Tag="reboot" Style="{StaticResource HealthCardButton}" Margin="0,0,8,8" ToolTip="Validar somente reinicializacao pendente">
+                        <Button x:Name="HealthRebootCard" Tag="reboot" Style="{StaticResource HealthCardButton}" Margin="0,0,8,8" ToolTip="Validar somente reinício pendente">
                             <StackPanel>
-                                <TextBlock Style="{StaticResource SectionLabel}" Text="Reboot"/>
-                                <TextBlock x:Name="HealthRebootStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Reboot: OK"/>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="Reinício"/>
+                                <TextBlock x:Name="HealthRebootStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Reinício: OK"/>
                             </StackPanel>
                         </Button>
-                        <Button x:Name="HealthSecretsCard" Tag="secrets" Style="{StaticResource HealthCardButton}" Margin="0,0,0,8" ToolTip="Validar somente segredos">
+                        <Button x:Name="HealthSecretsCard" Tag="secrets" Style="{StaticResource HealthCardButton}" Margin="0,0,0,8" ToolTip="Validar somente chaves e provedores">
                             <StackPanel>
-                                <TextBlock Style="{StaticResource SectionLabel}" Text="Secrets"/>
-                                <TextBlock x:Name="HealthSecretsStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Secrets: Atenção"/>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="Chaves"/>
+                                <TextBlock x:Name="HealthSecretsStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Chaves: Atenção"/>
                             </StackPanel>
                         </Button>
                         <Button x:Name="HealthGithubCard" Tag="github" Style="{StaticResource HealthCardButton}" Margin="0,0,8,0" ToolTip="Validar somente GitHub CLI">
@@ -1926,10 +1926,10 @@ function Get-UiHealthTextCanonicalStatus {
                                 <TextBlock x:Name="HealthDeckStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Steam Deck: não verificado."/>
                             </StackPanel>
                         </Button>
-                        <Button x:Name="HealthRollbackCard" Tag="rollback" Style="{StaticResource HealthCardButton}" Margin="0,0,0,0" ToolTip="Validar somente rollback/gate">
+                        <Button x:Name="HealthRollbackCard" Tag="rollback" Style="{StaticResource HealthCardButton}" Margin="0,0,0,0" ToolTip="Validar somente reversão segura">
                             <StackPanel>
-                                <TextBlock Style="{StaticResource SectionLabel}" Text="Rollback"/>
-                                <TextBlock x:Name="HealthRollbackStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Rollback: Crítico/Bloqueado se confirmação faltar."/>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="Reversão"/>
+                                <TextBlock x:Name="HealthRollbackStatusText" Foreground="#CBD5E1" FontSize="13" TextWrapping="Wrap" Text="Reversão: Crítico/Bloqueado se confirmação faltar."/>
                             </StackPanel>
                         </Button>
                     </UniformGrid>
@@ -1944,36 +1944,36 @@ function Get-UiHealthTextCanonicalStatus {
                         </Grid.ColumnDefinitions>
                         <Border Grid.Column="0" Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Style="{StaticResource SectionLabel}" Text="DOCTOR"/>
-                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Audit resumido, WSL, winget, reboot, secrets, contrato UI e logs."/>
-                                <Button x:Name="HealthDoctorButton" Style="{StaticResource PrimaryBtn}" Content="Rodar Doctor" Height="34"/>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="DIAGNÓSTICO"/>
+                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Verifica WSL, winget, reinício, chaves, contrato da UI e logs."/>
+                                <Button x:Name="HealthDoctorButton" Style="{StaticResource PrimaryBtn}" Content="Rodar diagnóstico" Height="34"/>
                             </StackPanel>
                         </Border>
                         <Border Grid.Column="2" Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Style="{StaticResource SectionLabel}" Text="SUPPORT BUNDLE"/>
-                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Export local sem secrets para diagnostico e suporte."/>
-                                <Button x:Name="HealthSupportBundleButton" Style="{StaticResource GhostBtn}" Content="Exportar bundle" Height="34"/>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="PACOTE DE SUPORTE"/>
+                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Exporta diagnóstico local sem segredos para suporte."/>
+                                <Button x:Name="HealthSupportBundleButton" Style="{StaticResource GhostBtn}" Content="Exportar pacote" Height="34"/>
                             </StackPanel>
                         </Border>
                         <Border Grid.Column="4" Style="{StaticResource Card}">
                             <StackPanel>
-                                <TextBlock Style="{StaticResource SectionLabel}" Text="REPAIR QUEUE"/>
-                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Fila de ações com risco, admin e rollback; execução manual."/>
-                                <Button x:Name="HealthRepairPlanButton" Style="{StaticResource GhostBtn}" Content="Ver fila de reparo" Height="34"/>
+                                <TextBlock Style="{StaticResource SectionLabel}" Text="REPAROS"/>
+                                <TextBlock Foreground="#94A3B8" FontSize="12" TextWrapping="Wrap" Margin="0,0,0,10" Text="Fila de ações com risco, admin e reversão; execução manual."/>
+                                <Button x:Name="HealthRepairPlanButton" Style="{StaticResource GhostBtn}" Content="Ver reparos" Height="34"/>
                             </StackPanel>
                         </Border>
                     </Grid>
                     <WrapPanel Margin="0,0,0,16">
-                        <Button x:Name="HealthAgentToolsButton" Style="{StaticResource PrimaryBtn}" Content="Gestão tokens/memória" Height="32" Margin="0,0,8,8" ToolTip="Valida RTK, ai-memory, Caveman, Headroom, Ponytail e frugality; Graphify fica como placeholder. Reparos exigem confirmacao."/>
-                        <Button x:Name="HealthAgentToolsRepairButton" Style="{StaticResource GhostBtn}" Content="Reparar tokens/memória" Height="32" Margin="0,0,8,8" ToolTip="Gera um RepairPlan apenas do escopo tokens/memoria e aplica com confirmacao. Nao grava segredos; Graphify nao e reparado."/>
-                        <Button x:Name="HealthMsvcButton" Style="{StaticResource GhostBtn}" Content="MSVC no host" Height="32" Margin="0,0,8,8" ToolTip="Valida/repara o toolchain MSVC (cl.exe, DLLs do runtime VC++) no host."/>
-                        <Button x:Name="HealthWindowsOptButton" Style="{StaticResource GhostBtn}" Content="Otimização Windows" Height="32" Margin="0,0,8,8" ToolTip="Audit-only: mostra recomendacoes HostHealth/AppTuning sem aplicar nenhum tweak."/>
-                        <Button x:Name="HealthValidateMcpButton" Style="{StaticResource GhostBtn}" Content="Validar MCPs" Height="32" Margin="0,0,8,8" ToolTip="Valida (sem reparar) o estado dos MCPs gerenciados."/>
+                        <Button x:Name="HealthAgentToolsButton" Style="{StaticResource PrimaryBtn}" Content="Tokens e memória IA" Height="32" Margin="0,0,8,8" ToolTip="Valida ferramentas de contexto, memória e economia de tokens usadas pelos assistentes."/>
+                        <Button x:Name="HealthAgentToolsRepairButton" Style="{StaticResource GhostBtn}" Content="Reparar tokens/memória" Height="32" Margin="0,0,8,8" ToolTip="Repara somente itens ausentes desse grupo, com confirmação e sem gravar segredos."/>
+                        <Button x:Name="HealthMsvcButton" Style="{StaticResource GhostBtn}" Content="Compilador Windows" Height="32" Margin="0,0,8,8" ToolTip="Valida ferramentas de compilação e bibliotecas do Windows usadas por dependências nativas."/>
+                        <Button x:Name="HealthWindowsOptButton" Style="{StaticResource GhostBtn}" Content="Otimizar Windows" Height="32" Margin="0,0,8,8" ToolTip="Mostra recomendações seguras de desempenho e manutenção sem aplicar alterações automáticas."/>
+                        <Button x:Name="HealthValidateMcpButton" Style="{StaticResource GhostBtn}" Content="Validar conexões de IA" Height="32" Margin="0,0,8,8" ToolTip="Valida as conexões locais usadas pelos IDEs e CLIs de IA, sem reparar."/>
                         <Button x:Name="HealthCopyDiagnosticButton" Style="{StaticResource GhostBtn}" Content="Copiar diagnóstico" Height="32" Margin="0,0,8,8"/>
-                        <Button x:Name="HealthRepairMcpButton" Style="{StaticResource GhostBtn}" Content="Reparar MCPs (npx)" Height="32" Margin="0,0,8,8" ToolTip="Reescreve comandos 'npx' puros para 'cmd /c npx' nos configs MCP dos apps (corrige 'Could not attach'). Backup .bak por arquivo."/>
-                        <Button x:Name="HealthDriftCheckButton" Style="{StaticResource GhostBtn}" Content="Verificar drift" Height="32" Margin="0,0,8,8" ToolTip="Compara a saude atual com o baseline e reporta regressoes (o que piorou desde a ultima referencia)."/>
-                        <Button x:Name="HealthDriftScheduleButton" Style="{StaticResource GhostBtn}" Content="Agendar drift semanal" Height="32" Margin="0,0,0,8" ToolTip="Liga/desliga uma verificacao de drift semanal (tarefa agendada por-usuario)."/>
+                        <Button x:Name="HealthRepairMcpButton" Style="{StaticResource GhostBtn}" Content="Reparar conexões de IA" Height="32" Margin="0,0,8,8" ToolTip="Corrige comandos de conexão local incompatíveis e cria backup antes de gravar."/>
+                        <Button x:Name="HealthDriftCheckButton" Style="{StaticResource GhostBtn}" Content="Verificar mudanças" Height="32" Margin="0,0,8,8" ToolTip="Compara a saúde atual com a última referência e mostra o que piorou."/>
+                        <Button x:Name="HealthDriftScheduleButton" Style="{StaticResource GhostBtn}" Content="Agendar verificação semanal" Height="32" Margin="0,0,0,8" ToolTip="Liga ou desliga uma verificação semanal em segundo plano para este usuário."/>
                     </WrapPanel>
 
                     <Border Style="{StaticResource Card}" Margin="0,0,0,16">
@@ -2003,7 +2003,7 @@ function Get-UiHealthTextCanonicalStatus {
 
                     <Border Style="{StaticResource Card}">
                         <DockPanel>
-                            <TextBlock Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="ULTIMO RESULTADO"/>
+                            <TextBlock Style="{StaticResource SectionLabel}" DockPanel.Dock="Top" Text="ÚLTIMO RESULTADO"/>
                             <TextBox x:Name="HealthDoctorTextBox" Style="{StaticResource DarkReadonly}" Height="220" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"/>
                         </DockPanel>
                     </Border>
@@ -2013,8 +2013,8 @@ function Get-UiHealthTextCanonicalStatus {
             <!--  APP TUNING PAGE  -->
             <ScrollViewer x:Name="PageAppTuning" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" Padding="32,28">
                 <StackPanel>
-                    <TextBlock x:Name="AppTuningTitleLabel" Style="{StaticResource PageTitle}" Text="Otimizar Apps"/>
-                    <TextBlock x:Name="AppTuningSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Pre-configure ferramentas instaladas por categoria e perfil, com defaults seguros." TextWrapping="Wrap"/>
+                    <TextBlock x:Name="AppTuningTitleLabel" Style="{StaticResource PageTitle}" Text="Otimizar apps"/>
+                    <TextBlock x:Name="AppTuningSubtitleLabel" Style="{StaticResource PageSubtitle}" Text="Pré-configure ferramentas instaladas por categoria e perfil, com padrões seguros." TextWrapping="Wrap"/>
                     <WrapPanel Margin="0,0,0,10">
                         <TextBlock Text="Status:" Foreground="#94A3B8" FontSize="11" Margin="0,0,8,0" VerticalAlignment="Center"/>
                         <TextBlock Text="&#9679; nao instalado" Foreground="#FFFFFF" FontSize="11" Margin="0,0,10,0"/>
@@ -2041,7 +2041,7 @@ function Get-UiHealthTextCanonicalStatus {
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
-                        <TextBlock x:Name="AppTuningModeLabel" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="AppTuning"/>
+                        <TextBlock x:Name="AppTuningModeLabel" Grid.Column="0" Foreground="#94A3B8" VerticalAlignment="Center" Text="Modo de ajuste"/>
                         <ComboBox x:Name="AppTuningModeCombo" Grid.Row="0" Grid.Column="1" Style="{StaticResource DarkCombo}" Margin="0,0,12,0"/>
                         <TextBlock Grid.Row="0" Grid.Column="2" Foreground="#94A3B8" VerticalAlignment="Center" Text="Busca" ToolTip="Filtre por categoria, app, ID, nome da otimização, descrição ou componente."/>
                         <TextBox x:Name="AppTuningSearchBox" Grid.Row="0" Grid.Column="3" Style="{StaticResource DarkInput}" Height="34" Margin="0,0,12,0" ToolTip="Digite parte do nome do app, categoria, item ou componente para buscar."/>
@@ -2065,7 +2065,7 @@ function Get-UiHealthTextCanonicalStatus {
                             <Button x:Name="AppTuningOpenFolderButton" Style="{StaticResource GhostBtn}" Content="Abrir pasta" Margin="0,0,8,0" Height="32"/>
                             <Button x:Name="AppTuningViewLogButton" Style="{StaticResource GhostBtn}" Content="Ver log" Height="32"/>
                         </WrapPanel>
-                        <TextBlock x:Name="AppTuningRiskWarningLabel" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="8" Margin="0,8,0,0" Foreground="#F59E0B" TextWrapping="Wrap" ToolTip="SecurityImpact gate for ai-agent-performance and other risky AppTuning items."/>
+                        <TextBlock x:Name="AppTuningRiskWarningLabel" Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="8" Margin="0,8,0,0" Foreground="#F59E0B" TextWrapping="Wrap" ToolTip="Aviso para itens com impacto de segurança ou risco operacional."/>
                     </Grid>
                 </Border>
 
@@ -2086,7 +2086,7 @@ function Get-UiHealthTextCanonicalStatus {
                     <Border Grid.Column="2" Style="{StaticResource Card}">
                         <DockPanel>
                             <TextBlock x:Name="AppTuningItemsLabel" DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="ITENS"/>
-                            <DataGrid x:Name="AppTuningItemsGrid" Style="{StaticResource DarkGrid}" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Extended" ToolTip="Badges: Seguro, Manual, Docker, BYOK">
+                            <DataGrid x:Name="AppTuningItemsGrid" Style="{StaticResource DarkGrid}" Margin="0,4,0,0" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Extended" ToolTip="Selos: Seguro, Manual, Docker, chave própria">
                                 <DataGrid.Columns>
                                     <DataGridCheckBoxColumn Header="Ativo" Binding="{Binding active, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Width="70" ElementStyle="{StaticResource DarkGridCheckBoxElement}" EditingElementStyle="{StaticResource DarkGridCheckBoxEditing}"/>
                                     <DataGridTextColumn Header="Id" Binding="{Binding id}" Width="0" Visibility="Collapsed"/>
@@ -2096,9 +2096,9 @@ function Get-UiHealthTextCanonicalStatus {
                                     <DataGridTextColumn Header="Otimização" Binding="{Binding optimization}" Width="1.8*"/>
                                     <DataGridTextColumn Header="Perfil" Binding="{Binding profile}" Width="1.2*"/>
                                     <DataGridTextColumn Header="Risco" Binding="{Binding risk}" Width="0.8*"/>
-                                    <DataGridTextColumn Header="Badges" Binding="{Binding badges}" Width="1.0*"/>
-                                    <DataGridTextColumn Header="SecurityImpact" Binding="{Binding securityImpact}" Width="0" Visibility="Collapsed"/>
-                                    <DataGridTextColumn Header="Rollback" Binding="{Binding rollbackScope}" Width="0.9*"/>
+                                    <DataGridTextColumn Header="Selos" Binding="{Binding badges}" Width="1.0*"/>
+                                    <DataGridTextColumn Header="Impacto de segurança" Binding="{Binding securityImpact}" Width="0" Visibility="Collapsed"/>
+                                    <DataGridTextColumn Header="Reversão" Binding="{Binding rollbackScope}" Width="0.9*"/>
                                     <DataGridTextColumn Header="Instalado" Binding="{Binding installed}" Width="0.8*"/>
                                     <DataGridTextColumn Header="Configurado" Binding="{Binding configured}" Width="0.9*"/>
                                     <DataGridTextColumn Header="Atualizado" Binding="{Binding updated}" Width="0.8*"/>
@@ -2617,7 +2617,7 @@ function Get-UiHealthTextCanonicalStatus {
                             <TextBlock DockPanel.Dock="Top" Style="{StaticResource SectionLabel}" Text="LIMPEZA DE BCD (MENU DO WINDOWS)"/>
                             <StackPanel Margin="0,8,0,0">
                                 <TextBlock x:Name="BcdCleanupStatusText" Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0,0,0,12"/>
-                                <Button x:Name="BcdCleanupButton" Style="{StaticResource PrimaryBtn}" Background="#F59E0B" Foreground="Black" Content=" Auditar e Limpar Menu Falso" Width="230" HorizontalAlignment="Left" Height="34"/>
+                                <Button x:Name="BcdCleanupButton" Style="{StaticResource PrimaryBtn}" Background="#F59E0B" Foreground="Black" Content=" Verificar e limpar menu falso" Width="230" HorizontalAlignment="Left" Height="34"/>
                             </StackPanel>
                         </DockPanel>
                     </Border>
@@ -2733,7 +2733,7 @@ function Get-UiHealthTextCanonicalStatus {
                         <TextBlock Text="—" Foreground="#3A405A" VerticalAlignment="Top" Margin="0,2,28,0" FontSize="14"/>
                         <StackPanel Orientation="Vertical" Margin="0,0,0,0">
                             <Border x:Name="RunTimelineStep5Dot" Width="14" Height="14" CornerRadius="7" Background="#3A405A" Margin="0,0,0,4"/>
-                            <TextBlock x:Name="RunTimelineStep5Label" Text="Bundle/Logs" Foreground="#94A3B8" FontSize="11"/>
+                            <TextBlock x:Name="RunTimelineStep5Label" Text="Pacote/Logs" Foreground="#94A3B8" FontSize="11"/>
                         </StackPanel>
                     </StackPanel>
                 </Border>
@@ -3711,7 +3711,7 @@ function Refresh-LocalizedText {
     $ui.HealthAiUsagebarStatusText.Text = 'ai-usagebar: Ausente'
     $ui.HealthAiMemoryStatusText.Text  = 'ai-memory: Ausente'
     $ui.HealthAionUiStatusText.Text    = 'AionUI: Ausente'
-    $ui.HealthRollbackStatusText.Text  = 'Rollback: OK'
+    $ui.HealthRollbackStatusText.Text  = 'Reversão: OK'
     $ui.HealthDoctorButton.Content     = $ui.Strings.HealthDoctor
     $ui.HealthSupportBundleButton.Content = $ui.Strings.HealthSupportBundle
     $ui.HealthRepairPlanButton.Content = $ui.Strings.HealthRepairPlan
@@ -4009,7 +4009,7 @@ function Refresh-SelectionTrees {
             $cb.Foreground = Get-UiStatusBrush -Status $componentStatus
             $cb.Style = $window.FindResource('DarkCheck')
             $cb.Tag = @{ kind = 'component'; item = $component; name = $componentName; explicit = $isExplicitComponent; resolved = $isResolvedComponent; excluded = $isExcludedComponent; canExclude = $canExcludeComponent }
-            $safetyTooltip = "Componente: $componentName`nStatus: $(Get-UiStatusLabel -Status $componentStatus)`nDescrição: $([string]$component.description)`nTipo: $([string]$component.kind)`nEstágio: $([string]$component.stage)`nRisco: $([string]$component.riskLevel)`nBadges: $(@(Get-UiComponentSafetyBadges -Component $component) -join ', ')`nFonte oficial: $([string]$component.officialSource)`nManual: $([string]$component.manualReason)`nGPU: $([string]$component.requiresGpu)`nLogin: $([string]$component.requiresInteractiveLogin)`nDepende de: $(@($component.dependsOn) -join ', ')"
+            $safetyTooltip = "Componente: $componentName`nStatus: $(Get-UiStatusLabel -Status $componentStatus)`nDescrição: $([string]$component.description)`nTipo: $([string]$component.kind)`nEstágio: $([string]$component.stage)`nRisco: $([string]$component.riskLevel)`nSelos: $(@(Get-UiComponentSafetyBadges -Component $component) -join ', ')`nFonte oficial: $([string]$component.officialSource)`nManual: $([string]$component.manualReason)`nGPU: $([string]$component.requiresGpu)`nLogin: $([string]$component.requiresInteractiveLogin)`nDepende de: $(@($component.dependsOn) -join ', ')"
             $cb.ToolTip = $safetyTooltip
             if ($isResolvedComponent -and -not $isExplicitComponent) {
                 $cb.Opacity = 0.82
@@ -4132,7 +4132,7 @@ function Refresh-SelectionSummary {
     try {
         $ui.Preview = Get-BootstrapPreviewData -SelectedProfiles $ui.State.selectedProfiles -SelectedComponents $ui.State.selectedComponents -ExcludedComponents $ui.State.excludedComponents -RequestedSteamDeckVersion $ui.State.steamDeckVersion -RequestedHostHealthMode $ui.State.hostHealth -RequestedAppTuningMode $ui.State.appTuningMode -RequestedAppTuningCategories $ui.State.selectedAppTuningCategories -RequestedAppTuningItems $ui.State.selectedAppTuningItems -ExcludedAppTuningItems $ui.State.excludedAppTuningItems -RequestedWorkspaceRoot $ui.State.workspaceRoot -ExplicitCloneBaseDir $ui.State.cloneBaseDir
         $impact = Get-UiSelectionImpact
-        $ui.SelectionSummaryLabel.Text = "Selecionados: $($impact.total) | Explicitos: $($impact.explicit) | Herdados/deps: $($impact.inherited) | Excluidos: $($impact.excluded) | Manual: $($impact.manual) | Admin: $($impact.admin) | Rede: $($impact.network) | Rollback parcial/manual: $($impact.partialOrManualRollback) | HostHealth: $($ui.Preview.ResolvedHostHealthMode) | AppTuning: $($ui.Preview.ResolvedAppTuningMode)"
+        $ui.SelectionSummaryLabel.Text = "Selecionados: $($impact.total) | Explícitos: $($impact.explicit) | Herdados/deps: $($impact.inherited) | Excluídos: $($impact.excluded) | Manual: $($impact.manual) | Admin: $($impact.admin) | Rede: $($impact.network) | Reversão parcial/manual: $($impact.partialOrManualRollback) | Manutenção: $($ui.Preview.ResolvedHostHealthMode) | Ajustes de apps: $($ui.Preview.ResolvedAppTuningMode)"
         $ui.SelectionErrorLabel.Text   = if ($invalidExcludes.Count -gt 0) { "Exclusoes invalidas removidas: $(@($invalidExcludes) -join ', ')" } else { '' }
     } catch {
         $ui.Preview = $null
@@ -4194,7 +4194,7 @@ function Repair-UiAppTuningState {
         }
     } catch {
         $normalizedMode = 'recommended'
-        $modeWarning = "Modo AppTuning inválido no estado atual. Ajustado para 'recommended'."
+        $modeWarning = "Modo de ajuste inválido no estado atual. Ajustado para 'recommended'."
     }
 
     $keptCategories = @()
@@ -4308,7 +4308,7 @@ function Refresh-AppTuningControls {
                 skippedItems = @()
                 installedInventory = $null
             }
-            $planWarnings += @("Não foi possível resolver seleção completa do AppTuning: $($_.Exception.Message)")
+            $planWarnings += @("Não foi possível resolver a seleção completa dos ajustes de apps: $($_.Exception.Message)")
         }
         $catalog = Get-BootstrapAppTuningCatalog
         $counts = Get-UiAppTuningCategoryCounts -Plan $plan
@@ -4415,10 +4415,10 @@ function Refresh-AppTuningControls {
         $configuredCount = @($statusRows | Where-Object { [string]$_.configuredState -in @('configured','planned') }).Count
         $securityImpactCount = @($plan.items | Where-Object { [bool]$_.securityImpact }).Count
         $riskyCount = @($plan.items | Where-Object { [string]$_.riskTier -in @('advanced','aggressive') }).Count
-        $ui.AppTuningStatusLabel.Text = "AppTuning: $($plan.mode) | apps: $installedCount/$(@($statusRows).Count) instalados | config: $configuredCount | selecionados: $(@($plan.items).Count) | exibidos: $filteredCount/$(@($statusRows).Count) | status: $statusFilter | risco: $riskFilter"
+        $ui.AppTuningStatusLabel.Text = "Ajustes: $($plan.mode) | apps: $installedCount/$(@($statusRows).Count) instalados | config: $configuredCount | selecionados: $(@($plan.items).Count) | exibidos: $filteredCount/$(@($statusRows).Count) | status: $statusFilter | risco: $riskFilter"
         if ($ui.AppTuningRiskWarningLabel) {
             if ($securityImpactCount -gt 0) {
-                $ui.AppTuningRiskWarningLabel.Text = "SecurityImpact: $securityImpactCount item(ns) selecionado(s). Preview mostra rollback; execução exige confirmação."
+                $ui.AppTuningRiskWarningLabel.Text = "Impacto de segurança: $securityImpactCount item(ns) selecionado(s). A revisão mostra reversão; execução exige confirmação."
             } elseif ($riskyCount -gt 0) {
                 $ui.AppTuningRiskWarningLabel.Text = "Risco avancado: $riskyCount item(ns) selecionado(s), sem impacto de seguranca declarado."
             } else {
@@ -4438,7 +4438,7 @@ function Refresh-AppTuningControls {
             $ui.AppTuningStatusLabel.Text += " | " + (@($planWarnings) -join ' ')
         }
     } catch {
-        $ui.AppTuningStatusLabel.Text = "AppTuning erro: $($_.Exception.Message)"
+        $ui.AppTuningStatusLabel.Text = "Erro nos ajustes de apps: $($_.Exception.Message)"
     }
 }
 
@@ -4768,7 +4768,7 @@ function Get-IsolatedComponentExecutionOverride {
 
 function Confirm-UiExecutionScope {
     param(
-        [ValidateSet('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan')]
+        [ValidateSet('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan', 'partition-labels', 'partition-labels-apply')]
         [string]$MaintenanceIntent = 'none'
     )
 
@@ -4857,15 +4857,15 @@ function Confirm-AppTuningSecurityImpact {
 
     $names = @($risky | ForEach-Object { [string]$_['id'] } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     $message = @(
-        'Itens com SecurityImpact ou risco agressivo selecionados:'
+        'Itens com impacto de segurança ou risco agressivo selecionados:'
         ''
         (@($names) -join [Environment]::NewLine)
         ''
-        'Confirme somente se deseja aplicar ajustes sensiveis e com rollback registrado.'
+        'Confirme somente se deseja aplicar ajustes sensíveis e com reversão registrada.'
     ) -join [Environment]::NewLine
     $answer = [System.Windows.MessageBox]::Show(
         $message,
-        'Bootstrap UI - SecurityImpact',
+        'Bootstrap UI - impacto de segurança',
         [System.Windows.MessageBoxButton]::YesNo,
         [System.Windows.MessageBoxImage]::Warning
     )
@@ -4915,7 +4915,7 @@ function Queue-AppTuningConfigure {
     $autoInstallComponents = New-Object System.Collections.Generic.List[string]
     $sourceRows = if ($Rows) { @($Rows) } else { @(Get-SelectedAppTuningRows) }
     if (-not (Confirm-AppTuningSecurityImpact -Rows $sourceRows)) {
-        $message = 'Config/Otimização cancelada: SecurityImpact não confirmado.'
+        $message = 'Configuração/otimização cancelada: impacto de segurança não confirmado.'
         Set-AppTuningActionFeedback -Message $message -Level 'warning'
         return [ordered]@{ status = 'warning'; message = $message; ids = @() }
     }
@@ -5770,10 +5770,10 @@ function Refresh-ReviewPage {
     if ($resolved -contains 'claude-config') { $effects += 'claude-config: atualiza ~/.claude/settings.json (backup).' }
     if ($resolved -contains 'claude-plugins') { $effects += 'claude-plugins: instala plugins via claude (rede).' }
     if ($resolved -contains 'hermes') { $effects += 'hermes: instala via npm + cria/atualiza .hermes/opencloud.json no projeto.' }
-    if ([bool]$ui.State.enableClaudeCodeProjectMcps) { $effects += 'claude-code MCPs: adiciona MCPs no projeto via "claude mcp add".' }
+    if ([bool]$ui.State.enableClaudeCodeProjectMcps) { $effects += 'Claude Code: adiciona conexões de IA no projeto via comando oficial.' }
     $ui.ReviewSideEffectsTextBox.Text = if ($effects.Count -gt 0) { $effects -join [Environment]::NewLine } else { '-' }
     $adminText = if (@($ui.Preview.AdminReasons).Count -gt 0) { @($ui.Preview.AdminReasons) -join '; ' } else { '-' }
-    $ui.ReviewMetaLabel.Text = "Escopo: $([string]$scopeSnapshot.scopeLabel)  |  Admin: $adminText  |  Settings: $($ui.SettingsBundle.Path)  |  UI state: $UiStatePath"
+    $ui.ReviewMetaLabel.Text = "Escopo: $([string]$scopeSnapshot.scopeLabel)  |  Admin: $adminText  |  Configurações: $($ui.SettingsBundle.Path)  |  Estado da UI: $UiStatePath"
     $ui.ReviewLinksLabel.Visibility = 'Collapsed'
     $ui.ReviewSettingsLink.IsEnabled = $false
     $ui.ReviewUiStateLink.IsEnabled = $false
@@ -6222,7 +6222,7 @@ function Start-BackendWorker {
     try { $argumentLength = ([string]$argumentString).Length } catch { $argumentLength = 0 }
     $safeArgumentLimit = 7600
     if ($argumentLength -gt $safeArgumentLimit) {
-        throw ("ArgumentList acima do limite seguro ({0}>{1}). Revise selecao/AppTuning e limpe historico antes de executar." -f $argumentLength, $safeArgumentLimit)
+        throw ("ArgumentList acima do limite seguro ({0}>{1}). Revise seleção/ajustes de apps e limpe histórico antes de executar." -f $argumentLength, $safeArgumentLimit)
     }
     $ui.CurrentBackendWasElevated = [bool]$needsAdmin
     Write-UiLog -Message ("Start-BackendWorker. NeedsAdmin={0}  ArgLength={1}  Exe={2}  Args={3}  WorkingDirectory={4}" -f $needsAdmin, $argumentLength, $powershellExe, $argumentString, $backendRoot)
@@ -6635,14 +6635,14 @@ function Get-UiRunStatusTextFromResult {
     $runFailed = if ($stringValues.ContainsKey('RunFailed')) { [string]$stringValues['RunFailed'] } else { 'Execução falhou.' }
 
     if ($status -eq 'success') {
-        if ($mode -eq 'doctor') { return 'Doctor concluido. Abra Resultado para ver checks, audit resumido e fila de reparo.' }
-        if ($mode -eq 'support-bundle') { return 'Support bundle exportado. Abra Resultado para ver o caminho do zip.' }
-        if ($mode -eq 'repair-plan') { return 'Fila de reparo gerada. Abra Resultado para revisar as acoes.' }
+        if ($mode -eq 'doctor') { return 'Diagnóstico concluído. Abra Resultado para ver verificações, resumo e reparos sugeridos.' }
+        if ($mode -eq 'support-bundle') { return 'Pacote de suporte exportado. Abra Resultado para ver o caminho do zip.' }
+        if ($mode -eq 'repair-plan') { return 'Lista de reparos gerada. Abra Resultado para revisar as ações.' }
         if ($mode -eq 'partition-labels') { return (Get-UiPartitionLabelSummaryText -Result $Result) }
         return $runCompleted
     } elseif ($status -eq 'warning') {
-        if ($mode -eq 'doctor') { return 'Doctor concluido com avisos. Abra Resultado para ver checks e fila de reparo.' }
-        if ($mode -eq 'support-bundle') { return 'Support bundle exportado com avisos. Abra Resultado para ver detalhes.' }
+        if ($mode -eq 'doctor') { return 'Diagnóstico concluído com avisos. Abra Resultado para ver verificações e reparos sugeridos.' }
+        if ($mode -eq 'support-bundle') { return 'Pacote de suporte exportado com avisos. Abra Resultado para ver detalhes.' }
         if ($mode -eq 'partition-labels') { return (Get-UiPartitionLabelSummaryText -Result $Result) }
         if ($mode -eq 'audit') {
             $bad = 0
@@ -6664,7 +6664,7 @@ function Get-UiRunStatusTextFromResult {
     } else {
         $err = Get-ResultTextValue -Name 'error' -Default 'sem detalhes (ver log).'
         $fix = Get-ResultTextValue -Name 'howToFix' -Default 'Abra Resultado/Log para detalhes.'
-        $rollbackText = if (Get-ResultBoolValue -Name 'rollbackAvailable') { 'Rollback disponível: Sim.' } else { 'Rollback disponível: Não.' }
+        $rollbackText = if (Get-ResultBoolValue -Name 'rollbackAvailable') { 'Reversão disponível: Sim.' } else { 'Reversão disponível: Não.' }
         $failedComponent = Get-ResultTextValue -Name 'failedComponent'
         if (-not [string]::IsNullOrWhiteSpace($failedComponent)) { $err = "Componente: $failedComponent. $err" }
         $statusText = "{0}  {1}" -f $runFailed, $err
@@ -6738,7 +6738,7 @@ function Get-UiDoctorCheckById {
 }
 
 function Get-UiDoctorHumanSummary {
-    # Resumo humano (curto) do resultado do Doctor para mostrar acima do JSON em ULTIMO RESULTADO.
+    # Resumo humano (curto) do resultado do diagnóstico para mostrar acima do JSON em ÚLTIMO RESULTADO.
     param(
         [Parameter(Mandatory = $true)]$Result,
         [AllowNull()][string[]]$Scopes = @()
@@ -6749,7 +6749,7 @@ function Get-UiDoctorHumanSummary {
     $overall = ''
     try { $overall = [string]$Result.doctor.status } catch { $overall = '' }
     if ([string]::IsNullOrWhiteSpace($overall)) { try { $overall = [string]$Result.status } catch { $overall = '' } }
-    $lines.Add(("Doctor [{0}] -> {1}" -f $scopeText, $(if ([string]::IsNullOrWhiteSpace($overall)) { 'concluido' } else { $overall }))) | Out-Null
+    $lines.Add(("Diagnóstico [{0}] -> {1}" -f $scopeText, $(if ([string]::IsNullOrWhiteSpace($overall)) { 'concluído' } else { $overall }))) | Out-Null
 
     # Destaques por area presente no relatorio.
     foreach ($area in @('agentTools','windowsOptimization','mcp','msvc')) {
@@ -6757,7 +6757,7 @@ function Get-UiDoctorHumanSummary {
             $section = $Result.doctor.$area
             if ($null -eq $section) { continue }
             if ($area -eq 'agentTools') {
-                $lines.Add(("Tokens/memoria: {0}. {1}" -f [string]$section.status, [string]$section.summary)) | Out-Null
+                $lines.Add(("Tokens/memória: {0}. {1}" -f [string]$section.status, [string]$section.summary)) | Out-Null
             } else {
                 $lines.Add([string]$section.summary) | Out-Null
             }
@@ -6880,9 +6880,9 @@ function Set-UiHealthCardsEnabled {
 }
 
 function Invoke-UiHealthScopedDoctor {
-    # Handler compartilhado dos cards: valida SOMENTE o escopo do card clicado, PERMANECENDO na tela
-    # Saude (o usuario pediu validar o "quadrinho" ali). Mostra "verificando...", desabilita os cards
-    # e dispara o Doctor scoped; o handler de conclusao atualiza so o card e o ULTIMO RESULTADO.
+    # Handler compartilhado dos cards: valida somente o escopo do card clicado, permanecendo na tela
+    # Saúde. Mostra "verificando...", desabilita os cards
+    # e dispara o diagnóstico scoped; o handler de conclusão atualiza só o card e o ÚLTIMO RESULTADO.
     # O run continua produzindo log/result.json (artefatos preservados), apenas sem trocar de pagina.
     param(
         [Parameter(Mandatory = $true)][string]$Scope,
@@ -6896,7 +6896,7 @@ function Invoke-UiHealthScopedDoctor {
     } catch { Write-Verbose $_.Exception.Message }
     $ui.DoctorScopeCard = $Scope
     Set-UiHealthCardsEnabled -Enabled $false
-    $ui.StatusLabel.Text = ("Saude: validando escopo '{0}'..." -f $Scope)
+    $ui.StatusLabel.Text = ("Saúde: validando '{0}'..." -f $Scope)
     Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope $Scope
 }
 
@@ -6917,7 +6917,7 @@ function Invoke-UiHealthPartitionLabels {
         $ui.HealthDriveLabelsStatusText.Text = 'Drives: diagnosticando discos e partições...'
         $ui.HealthDriveLabelsStatusText.Foreground = Get-UiBrush '#FBBF24'
     } catch { Write-Verbose $_.Exception.Message }
-    $ui.StatusLabel.Text = 'Saude: diagnosticando drives/partições...'
+    $ui.StatusLabel.Text = 'Saúde: diagnosticando drives/partições...'
     Start-RunExecution -MaintenanceIntent 'partition-labels'
 }
 
@@ -6948,7 +6948,7 @@ function Invoke-UiHealthPartitionLabelsApply {
     $previous = $env:PHASEZERO_PARTITION_LABEL_APPLY
     try {
         $env:PHASEZERO_PARTITION_LABEL_APPLY = '1'
-        $ui.StatusLabel.Text = 'Saude: aplicando rótulos seguros nos drives elegíveis...'
+        $ui.StatusLabel.Text = 'Saúde: aplicando rótulos seguros nos drives elegíveis...'
         Start-RunExecution -MaintenanceIntent 'partition-labels-apply'
     } finally {
         if ($null -ne $previous) {
@@ -6960,10 +6960,9 @@ function Invoke-UiHealthPartitionLabelsApply {
 }
 
 function Invoke-UiHealthAgentToolsRepair {
-    # Reparo seguro de tokens/memoria: valida em processo (escopo agent-tools), gera o RepairPlan
-    # SCOPED, exige confirmacao com a lista exata e APLICA cada item pelo seu fluxo real (componente,
-    # AppTuning item, ou install-cli --tool), preservando log/result.json. Graphify nunca entra; nenhum
-    # segredo e gravado; blocos Caveman/RTK/ai-memory/Ponytail nao sao sobrescritos.
+    # Reparo seguro de tokens/memória: valida em processo, gera plano limitado ao grupo,
+    # exige confirmação com a lista exata e aplica cada item pelo seu fluxo real.
+    # Nenhum segredo é gravado; blocos Caveman/RTK/ai-memory/Ponytail não são sobrescritos.
     if ($ui.RunProcess -and -not $ui.RunProcess.HasExited) {
         $ui.StatusLabel.Text = 'Aguarde a execução atual finalizar antes de reparar tokens/memória.'
         return
@@ -6978,31 +6977,30 @@ function Invoke-UiHealthAgentToolsRepair {
         $plan = New-BootstrapRepairPlan -DoctorReport ([ordered]@{ agentTools = $report; checks = @(); auditResults = @() })
         $items = @($plan.items | Where-Object { [string]$_.id -like 'repair-agent-*' })
     } catch {
-        $ui.StatusLabel.Text = ("Falha ao gerar plano de tokens/memoria: {0}" -f $_.Exception.Message)
+        $ui.StatusLabel.Text = ("Falha ao gerar plano de tokens/memória: {0}" -f $_.Exception.Message)
         return
     }
     if (@($items).Count -eq 0) {
-        $ui.StatusLabel.Text = 'Tokens/memoria: tudo configurado, nada a reparar.'
+        $ui.StatusLabel.Text = 'Tokens/memória: tudo configurado, nada a reparar.'
         return
     }
 
     # 2) Confirmacao com a lista exata de itens (e seus fluxos).
     $lines = @($items | ForEach-Object { ("- {0}  [{1}]  -> {2}" -f [string]$_.target, [string]$_.repairKind, [string]$_.executeCommand) })
     $msg = @(
-        'Aplicar reparo de tokens/memoria nos itens nao configurados abaixo.'
+        'Aplicar reparo de tokens/memória nos itens não configurados abaixo.'
         ''
     ) + $lines + @(
         ''
-        'Nenhum segredo e gravado; Graphify nao e reparado; blocos existentes nao sao sobrescritos.'
+        'Nenhum segredo é gravado; itens sem reparo seguro ficam só como orientação; blocos existentes não são sobrescritos.'
         'Continuar?'
     )
-    if (-not (Confirm-UiCriticalAction -Title 'Reparar tokens/memoria' -Message ($msg -join [Environment]::NewLine))) {
-        $ui.StatusLabel.Text = 'Reparo tokens/memoria cancelado.'
+    if (-not (Confirm-UiCriticalAction -Title 'Reparar tokens/memória' -Message ($msg -join [Environment]::NewLine))) {
+        $ui.StatusLabel.Text = 'Reparo de tokens/memória cancelado.'
         return
     }
 
-    # 3) Aplica: componentes + AppTuning numa unica invocacao do backend; ai-tool (rtk) via install-cli.
-    #    Todos produzem result.json/log versionaveis.
+    # 3) Aplica os itens reparáveis, sempre produzindo result.json/log.
     $components = @($items | Where-Object { [string]$_.repairKind -eq 'component' -and -not [string]::IsNullOrWhiteSpace([string]$_.target) } | ForEach-Object { [string]$_.target })
     $appTuning  = @($items | Where-Object { [string]$_.repairKind -eq 'app-tuning' } | ForEach-Object { [string]$_.target })
     $aiTools    = @($items | Where-Object { [string]$_.repairKind -eq 'ai-tool' } | ForEach-Object { [string]$_.target })
@@ -7032,7 +7030,7 @@ function Invoke-UiHealthAgentToolsRepair {
     }
 
     Update-RunArtifactButtons
-    $ui.StatusLabel.Text = ("Reparo tokens/memoria iniciado ({0} acao(es)). Artefatos: {1}" -f @($launched).Count, (@($launched) -join '; '))
+    $ui.StatusLabel.Text = ("Reparo de tokens/memória iniciado ({0} ação(ões)). Artefatos: {1}" -f @($launched).Count, (@($launched) -join '; '))
 }
 
 function Get-UiHealthCardStatusText {
@@ -7065,18 +7063,18 @@ function Get-UiHealthCardStatusText {
             }
             'reboot' {
                 $check = Get-UiDoctorCheckById -Result $Result -Id 'pending-reboot'
-                if ($null -eq $check) { return 'Reboot: OK' }
-                return ("Reboot: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
+                if ($null -eq $check) { return 'Reinício: OK' }
+                return ("Reinício: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
             }
             'secrets' {
                 if ($doctor.PSObject.Properties.Name -contains 'secrets' -and $null -ne $doctor.secrets) {
                     $bad = @($doctor.secrets.providers | Where-Object { [string]$_.status -in @('missing','rejected','expired','unknown') })
-                    if ($bad.Count -eq 0) { return 'Secrets: OK' }
-                    return ("Secrets: Atenção - {0} provider(s) precisam de ação" -f $bad.Count)
+                    if ($bad.Count -eq 0) { return 'Chaves: OK' }
+                    return ("Chaves: Atenção - {0} provedor(es) precisam de ação" -f $bad.Count)
                 }
                 $check = Get-UiDoctorCheckById -Result $Result -Id 'secrets'
-                if ($null -eq $check) { return 'Secrets: Ausente' }
-                return ("Secrets: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
+                if ($null -eq $check) { return 'Chaves: Ausente' }
+                return ("Chaves: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
             }
             'ai-usagebar' {
                 if ($doctor.PSObject.Properties.Name -contains 'aiUsagebar' -and $null -ne $doctor.aiUsagebar) {
@@ -7095,7 +7093,12 @@ function Get-UiHealthCardStatusText {
                     if (-not [bool]$mem.installed) { return 'ai-memory: Ausente' }
                     $server = if ([bool]$mem.serverReachable) { 'servidor ativo' } else { 'servidor parado' }
                     $label = if ([bool]$mem.configured) { 'OK' } else { 'Instalado' }
-                    return "ai-memory: $label - $server"
+                    $sync = ''
+                    if ([bool]$mem.sdCardFound) {
+                        $last = if (-not [string]::IsNullOrWhiteSpace([string]$mem.lastSync)) { " ultimo sync=$([string]$mem.lastSync)" } else { '' }
+                        $sync = " SDCard$last"
+                    }
+                    return "ai-memory: $label - $server$sync"
                 }
                 return 'ai-memory: Ausente'
             }
@@ -7115,8 +7118,8 @@ function Get-UiHealthCardStatusText {
             }
             'rollback' {
                 $check = Get-UiDoctorCheckById -Result $Result -Id 'rollback-gate'
-                if ($null -eq $check) { return 'Rollback: Ausente' }
-                return ("Rollback: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
+                if ($null -eq $check) { return 'Reversão: Ausente' }
+                return ("Reversão: {0} - {1}" -f (Get-UiHealthStatusLabel -Status ([string]$check.status)), [string]$check.summary)
             }
             default { return ("{0}: Ausente" -f $Card) }
         }
@@ -7845,14 +7848,14 @@ $ui.HealthAionUiCard.Add_Click({     Invoke-UiHealthScopedDoctor -Scope 'aionui'
 $ui.HealthDeckCard.Add_Click({       Invoke-UiHealthScopedDoctor -Scope 'steamdeck'   -StatusTextBlock $ui.HealthDeckStatusText })
 $ui.HealthRollbackCard.Add_Click({   Invoke-UiHealthScopedDoctor -Scope 'rollback'    -StatusTextBlock $ui.HealthRollbackStatusText })
 
-# Gestao tokens/memoria: valida RTK/ai-memory/Caveman/Headroom/Ponytail/frugality (Graphify placeholder).
+# Tokens e memória IA: valida ferramentas de contexto, memória e economia de tokens.
 $ui.HealthAgentToolsButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'agent-tools' })
 $ui.HealthAgentToolsRepairButton.Add_Click({ Invoke-UiHealthAgentToolsRepair })
-# Otimizacao Windows: audit-only (HostHealth/AppTuning), sem aplicar tweak.
+# Otimização Windows: só diagnostica, sem aplicar ajustes automáticos.
 $ui.HealthWindowsOptButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'windows-optimization' })
-# Validar MCPs: somente validacao (separado de "Reparar MCPs (npx)").
+# Validar conexões de IA: somente validação, separado do reparo.
 $ui.HealthValidateMcpButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'mcp' })
-# MSVC no host: valida cl.exe e DLLs do runtime VC++ (repair via vcpp-redist na fila de reparo).
+# Compilador Windows: valida cl.exe e DLLs do runtime VC++.
 $ui.HealthMsvcButton.Add_Click({ Invoke-UiHealthScopedDoctor -Scope 'msvc' })
 # Drives/particoes: diagnostico read-only e aplicacao protegida por modo avancado + token.
 $ui.HealthDriveLabelsButton.Add_Click({ Invoke-UiHealthPartitionLabels })
@@ -7879,19 +7882,19 @@ $ui.HealthRepairMcpButton.Add_Click({
     try {
         $preview = Invoke-BootstrapMcpConfigRepair -DryRun
         if ([int]$preview.totalFixed -eq 0) {
-            $ui.StatusLabel.Text = 'Reparo MCP: nenhum comando "npx" puro encontrado nos configs. Nada a reparar.'
+            $ui.StatusLabel.Text = 'Conexões de IA: nada a reparar.'
             return
         }
         $affected = @($preview.targets | Where-Object { [int]$_.fixed -gt 0 } | ForEach-Object { ("{0} ({1})" -f [string]$_.id, [int]$_.fixed) })
         $msg = @(
-            ("Corrigir {0} comando(s) 'npx' puro(s) -> 'cmd /c npx' nos configs MCP:" -f [int]$preview.totalFixed)
+            ("Corrigir {0} comando(s) de conexão local incompatível:" -f [int]$preview.totalFixed)
             ''
             ("Clientes: {0}" -f (@($affected) -join ', '))
             ''
-            'Um backup .bak e criado por arquivo antes de gravar. Continuar?'
+            'Um backup é criado por arquivo antes de gravar. Continuar?'
         ) -join [Environment]::NewLine
-        if (-not (Confirm-UiCriticalAction -Title 'Confirmar reparo de MCPs' -Message $msg)) {
-            $ui.StatusLabel.Text = 'Reparo MCP cancelado.'
+        if (-not (Confirm-UiCriticalAction -Title 'Reparar conexões de IA' -Message $msg)) {
+            $ui.StatusLabel.Text = 'Reparo de conexões de IA cancelado.'
             return
         }
         # Roda o reparo via install-cli.bat (processo separado) para produzir result.json/log
@@ -7908,36 +7911,36 @@ $ui.HealthRepairMcpButton.Add_Click({
             '--log-path', [string]$ui.CurrentLogPath
         )
         Start-Process -FilePath $installCli -ArgumentList (ConvertTo-ArgumentString -Tokens $repairArgs) -WorkingDirectory $PSScriptRoot -WindowStyle Hidden | Out-Null
-        $ui.StatusLabel.Text = ("Reparo MCP iniciado. Result: {0}" -f [string]$ui.CurrentResultPath)
+        $ui.StatusLabel.Text = ("Reparo de conexões de IA iniciado. Resultado: {0}" -f [string]$ui.CurrentResultPath)
         Update-RunArtifactButtons
     } catch {
-        Write-UiLog -Level 'ERROR' -Message ("Falha no reparo de MCP: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
-        $ui.StatusLabel.Text = "Erro no reparo de MCP: $($_.Exception.Message)"
+        Write-UiLog -Level 'ERROR' -Message ("Falha no reparo de conexões de IA: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Erro no reparo de conexões de IA: $($_.Exception.Message)"
     }
 })
 
 function Update-UiDriftScheduleButton {
     try {
         $state = Get-BootstrapDriftCheckTaskState
-        $ui.HealthDriftScheduleButton.Content = if ([bool]$state.registered) { 'Remover drift semanal' } else { 'Agendar drift semanal' }
+        $ui.HealthDriftScheduleButton.Content = if ([bool]$state.registered) { 'Remover verificação semanal' } else { 'Agendar verificação semanal' }
     } catch { }
 }
 
 $ui.HealthDriftCheckButton.Add_Click({
     try {
-        $ui.StatusLabel.Text = 'Verificando drift (rodando Doctor e comparando com o baseline)...'
+        $ui.StatusLabel.Text = 'Verificando mudanças desde a última referência...'
         $drift = Invoke-BootstrapDriftCheck
         if (-not $drift.baselineExisted) {
-            $ui.StatusLabel.Text = 'Drift: baseline criado agora (primeira referencia). Rode novamente depois para detectar regressoes.'
+            $ui.StatusLabel.Text = 'Mudanças: referência inicial criada agora. Rode novamente depois para comparar.'
         } elseif ([int]$drift.regressionCount -eq 0) {
-            $ui.StatusLabel.Text = 'Drift: nenhuma regressao desde o baseline. Tudo estavel.'
+            $ui.StatusLabel.Text = 'Mudanças: nenhuma piora desde a última referência. Tudo estável.'
         } else {
             $list = (@($drift.regressions) | ForEach-Object { "{0} ({1}->{2})" -f $_.id, $_.from, $_.to }) -join ', '
-            $ui.StatusLabel.Text = ("Drift: {0} regressao(oes) detectada(s): {1}" -f [int]$drift.regressionCount, $list)
+            $ui.StatusLabel.Text = ("Mudanças: {0} piora(s) detectada(s): {1}" -f [int]$drift.regressionCount, $list)
         }
     } catch {
-        Write-UiLog -Level 'ERROR' -Message ("Falha na verificacao de drift: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
-        $ui.StatusLabel.Text = "Erro na verificacao de drift: $($_.Exception.Message)"
+        Write-UiLog -Level 'ERROR' -Message ("Falha na verificação de mudanças: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Erro na verificação de mudanças: $($_.Exception.Message)"
     }
 })
 
@@ -7946,19 +7949,19 @@ $ui.HealthDriftScheduleButton.Add_Click({
         $state = Get-BootstrapDriftCheckTaskState
         if ([bool]$state.registered) {
             $r = Unregister-BootstrapDriftCheckTask
-            $ui.StatusLabel.Text = "Agendamento de drift removido ($([string]$r.status))."
+            $ui.StatusLabel.Text = "Verificação semanal removida ($([string]$r.status))."
         } else {
             $r = Register-BootstrapDriftCheckTask -ScriptPath $backendScriptPath
             if ([string]$r.status -eq 'registered') {
-                $ui.StatusLabel.Text = 'Drift agendado: verificacao semanal (segunda, 09:00).'
+                $ui.StatusLabel.Text = 'Verificação semanal agendada: segunda, 09:00.'
             } else {
-                $ui.StatusLabel.Text = ("Nao foi possivel agendar o drift: {0}" -f [string]$r.reason)
+                $ui.StatusLabel.Text = ("Não foi possível agendar a verificação semanal: {0}" -f [string]$r.reason)
             }
         }
         Update-UiDriftScheduleButton
     } catch {
-        Write-UiLog -Level 'ERROR' -Message ("Falha ao agendar drift: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
-        $ui.StatusLabel.Text = "Erro ao agendar drift: $($_.Exception.Message)"
+        Write-UiLog -Level 'ERROR' -Message ("Falha ao agendar verificação semanal: {0}`n{1}" -f $_.Exception.Message, $_.ScriptStackTrace)
+        $ui.StatusLabel.Text = "Erro ao agendar verificação semanal: $($_.Exception.Message)"
     }
 })
 Update-UiDriftScheduleButton
@@ -7992,7 +7995,7 @@ function Copy-HealthDiagnostic {
 $ui.HealthCopyDiagnosticButton.Add_Click({ Copy-HealthDiagnostic })
 
 $ui.RollbackChangesButton.Add_Click({
-    if (Confirm-UiCriticalAction -Title 'Confirmar rollback' -Message "Rollback vai reverter ajustes de registro/sistema criados pelo bootstrap. Apps instalados não serão removidos automaticamente. Log atual: $([string]$ui.CurrentLogPath)") {
+    if (Confirm-UiCriticalAction -Title 'Confirmar reversão' -Message "A reversão desfaz ajustes de registro/sistema criados pelo bootstrap. Apps instalados não serão removidos automaticamente. Log atual: $([string]$ui.CurrentLogPath)") {
         $runIdx = @($ui.PageNames).IndexOf('PageRun')
         if ($runIdx -lt 0) { $runIdx = [Math]::Max(0, $ui.PageNames.Count - 1) }
         Navigate-ToPage -Index $runIdx
@@ -8387,7 +8390,7 @@ $ui.AppTuningRunNowButton.Add_Click({
         Refresh-SelectionSummary
         Clear-ExecutionScopeOverride
         if (-not (Confirm-AppTuningSecurityImpact -Rows @(Get-ActiveAppTuningRows))) {
-            Set-AppTuningActionFeedback -Message 'Execução imediata cancelada: SecurityImpact não confirmado.' -Level 'warning'
+            Set-AppTuningActionFeedback -Message 'Execução imediata cancelada: impacto de segurança não confirmado.' -Level 'warning'
             return
         }
         $selectionCount = @($ui.State.selectedComponents).Count
@@ -8395,12 +8398,12 @@ $ui.AppTuningRunNowButton.Add_Click({
         $scopeMessage = @(
             'Escolha o escopo desta execução:'
             ''
-            'Sim = Isolado (somente AppTuning selecionado)'
-            'Não = Perfil atual (inclui perfil + AppTuning)'
+            'Sim = Isolado (somente ajustes de apps selecionados)'
+            'Não = Perfil atual (inclui perfil + ajustes de apps)'
             'Cancelar = abortar'
             ''
             ("Componentes selecionados: {0}" -f $selectionCount)
-            ("Itens AppTuning selecionados: {0}" -f $appTuningCount)
+            ("Itens de ajuste selecionados: {0}" -f $appTuningCount)
         ) -join [Environment]::NewLine
         $scopeAnswer = [System.Windows.MessageBox]::Show(
             $scopeMessage,
@@ -8437,7 +8440,7 @@ $ui.AppTuningRunNowButton.Add_Click({
             ''
             ("Escopo: {0}" -f [string]$ui.CurrentExecutionScopeLabel)
             ("Componentes no run: {0}" -f @($ui.ExecutionScopeOverride.selectedComponents).Count)
-            ("Itens AppTuning no run: {0}" -f @($ui.ExecutionScopeOverride.selectedAppTuningItems).Count)
+            ("Itens de ajuste nesta execução: {0}" -f @($ui.ExecutionScopeOverride.selectedAppTuningItems).Count)
             ''
             'A execução vai iniciar imediatamente.'
         ) -join [Environment]::NewLine
@@ -8573,7 +8576,7 @@ $ui.RebootToLinuxButton.Add_Click({
     $guid = [string]$ui.DualBootTargetCombo.SelectedItem.Tag
     $targetText = [string]$ui.DualBootTargetCombo.SelectedItem.Content
     if (-not (Confirm-UiCriticalAction -Title 'Confirmar reboot' -Message "Destino: $targetText`nEfeito: define boot one-time e reinicia o Windows agora.`nCancelamento: feche esta janela." -RequiredToken 'REINICIAR')) {
-        $ui.StatusLabel.Text = 'Reboot cancelado.'
+        $ui.StatusLabel.Text = 'Reinício cancelado.'
         return
     }
     try {
@@ -8748,7 +8751,7 @@ if ($SmokeTestWindow) {
         handlersRegistered = $true
         runTimeline        = [ordered]@{
             present       = ($null -ne (Get-Control 'RunTimelineStep1Dot'))
-            stages        = @('Preparando','Dry-run','Executando','result.json','Bundle/Logs')
+            stages        = @('Preparando','Dry-run','Executando','result.json','Pacote/Logs')
         }
     } | ConvertTo-Json -Depth 8
     return

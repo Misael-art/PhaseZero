@@ -1,9 +1,28 @@
 {
   "schema": "https://phasezero.local/schemas/version.json",
-  "version": "1.0.0",
-  "channel": "dev",
-  "commit": "265c62d016a5ec30517a14aa6390959437f93c6e",
-  "builtAt": "2026-05-08T00:00:00Z",
+  "version": "1.8.4",
+  "channel": "stable",
+  "platforms": [
+    "windows",
+    "linux"
+  ],
+  "commit": "release-v1.8.4",
+  "builtAt": "2026-07-13T08:08:31Z",
   "minimumPowerShellVersion": "5.1",
-  "minimumPesterVersion": "3.4.0"
+  "minimumPesterVersion": "3.4.0",
+  "linux": {
+    "minimumBashVersion": "4.0",
+    "supportedDistros": [
+      "arch",
+      "manjaro",
+      "biglinux",
+      "debian",
+      "ubuntu",
+      "fedora",
+      "opensuse"
+    ],
+    "packageManager": "native-or-flatpak",
+    "stateDir": "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero",
+    "configDir": "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero"
+  }
 }

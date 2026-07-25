@@ -1,0 +1,94 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "emulation-linux",
+  "description": "Linux emulation stack: EmuDeck, Eden, Citron, Hydra Classic integration, Lua runtime, Steam helper tools, shared local-only BIOS/firmware layout",
+  "os": ["linux"],
+  "packages": {
+    "linux": {
+      "pacman": [
+        "curl",
+        "git",
+        "git-lfs",
+        "github-cli",
+        "jq",
+        "python",
+        "lua",
+        "lua54",
+        "luajit",
+        "luarocks",
+        "unzip",
+        "p7zip",
+        "cabextract",
+        "desktop-file-utils",
+        "fuse2",
+        "gamemode",
+        "mangohud",
+        "wine",
+        "winetricks",
+        "protontricks",
+        "protonup-qt",
+        "retroarch",
+        "rsync",
+        "zsync"
+      ],
+      "yay": [],
+      "flatpak": []
+    },
+    "windows": {
+      "winget": [],
+      "choco": []
+    }
+  },
+  "scripts": {
+    "linux": [
+      "linux/tuning/git-config.sh",
+      "linux/emulation/setup-emulation.sh"
+    ],
+    "windows": []
+  },
+  "configs": {
+    "linux": [
+      "linux/emulation/common.sh",
+      "linux/emulation/emudeck.sh",
+      "linux/emulation/eden.sh",
+      "linux/emulation/citron.sh",
+      "linux/emulation/hydra.sh",
+      "linux/emulation/heroic.sh",
+      "linux/emulation/heroic.py",
+      "linux/emulation/srm.sh",
+      "linux/emulation/sony.sh",
+      "linux/emulation/ps3.sh",
+      "linux/emulation/performance.sh",
+      "linux/emulation/performance-launch.sh",
+      "linux/emulation/lua.sh",
+      "linux/emulation/steam-tools.sh",
+      "linux/emulation/nsz.sh",
+      "linux/emulation/fixes.sh",
+      "linux/emulation/retrodeck.sh",
+      "linux/emulation/shared-content.sh",
+      "linux/emulation/media.sh",
+      "linux/emulation/media-index.py",
+      "linux/emulation/media-gamelist.py",
+      "linux/emulation/launchbox.sh",
+      "linux/emulation/launchbox.py",
+      "linux/emulation/frontends.sh",
+      "linux/emulation/frontends.py",
+      "linux/emulation/pc-games.sh",
+      "linux/emulation/pc-games.py",
+      "linux/emulation/bios.sh",
+      "linux/emulation/steam-shortcut.py"
+    ],
+    "windows": []
+  },
+  "systemd": {
+    "linux": {
+      "enable": [],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {}
+    }
+  }
+}

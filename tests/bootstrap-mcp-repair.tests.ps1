@@ -107,7 +107,7 @@ Describe 'MCP config repair (npx -> cmd /c npx)' {
 
     It 'reports absent for missing config paths' {
         . $scriptPath -BootstrapUiLibraryMode
-        $missing = Join-Path $env:TEMP ("pz-mcprepair-missing-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $missing = Join-Path ([System.IO.Path]::GetTempPath()) ("pz-mcprepair-missing-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
         $r = Invoke-BootstrapMcpConfigRepair -ConfigPaths @($missing)
         [string]@($r.targets)[0].status | Should Be 'absent'
     }

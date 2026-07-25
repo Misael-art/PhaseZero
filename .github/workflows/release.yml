@@ -1,0 +1,142 @@
+name: release
+
+# Publishes a full set of Linux packages whenever a version tag is pushed.
+# Prepare a release with:  packaging/release.sh <version> --push
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Tag or ref to build (e.g. v1.7.3)'
+        required: false
+
+permissions:
+  contents: write   # needed to create the GitHub Release
+
+jobs:
+  # Native packages (deb, rpm, Arch, AppImage, source) built on Arch, which is
+  # the only distro shipping makepkg. makepkg refuses to run as root, so the
+  # build runs as an unprivileged user.
+  linux-packages:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+    steps:
+      - name: Install build dependencies
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel git jq python python-pip python-pytest pyside6 \
+            dpkg rpm-tools squashfs-tools curl sudo
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify tag matches version.json
+        run: |
+          set -euo pipefail
+          v="$(jq -r '.version' version.json)"
+          ref="${{ github.event.inputs.ref || github.ref_name }}"
+          expected="v$v"
+          if [ "$ref" != "$expected" ]; then
+            echo "tag/ref '$ref' does not match version.json ($expected)" >&2
+            exit 1
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Build native packages (unprivileged)
+        run: |
+          set -euo pipefail
+          useradd -m builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          sudo -u builder env \
+            PZ_SKIP_FLATPAK=1 \
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            bash packaging/linux/build-all.sh "$GITHUB_WORKSPACE/dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar*
+            dist/*.AppImage
+            dist/*-source.tar.gz
+          if-no-files-found: error
+
+  # Flatpak needs org.kde.Platform//6.11 and a privileged flatpak-builder
+  # sandbox. It runs in the flathub CI image and is best-effort: a failure here
+  # never blocks shipping the native packages.
+  flatpak:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Read version
+        run: echo "VERSION=$(jq -r '.version' version.json)" >> "$GITHUB_ENV"
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: PhaseZero-${{ env.VERSION }}.flatpak
+          manifest-path: packaging/linux/flatpak/io.phasezero.ControlCenter.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: PhaseZero-*.flatpak
+          if-no-files-found: warn
+
+  # Collect every artifact, produce one authoritative SHA256SUMS and publish
+  # the GitHub Release. Runs even if the flatpak job failed.
+  release:
+    runs-on: ubuntu-latest
+    needs: [linux-packages, flatpak]
+    if: always() && needs.linux-packages.result == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Read version
+        run: echo "VERSION=$(jq -r '.version' version.json)" >> "$GITHUB_ENV"
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: staging
+
+      - name: Flatten and checksum artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find staging -type f -exec cp -n {} dist/ \;
+          cd dist
+          ls -la
+          sha256sum -- * > "SHA256SUMS-$VERSION"
+          cat "SHA256SUMS-$VERSION"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION }}
+          name: PhaseZero v${{ env.VERSION }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.pkg.tar*
+            dist/*.AppImage
+            dist/*.flatpak
+            dist/*-source.tar.gz
+            dist/SHA256SUMS-*

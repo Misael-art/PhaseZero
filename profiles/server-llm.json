@@ -1,0 +1,29 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "server-llm",
+  "description": "Local LLM server (Ollama) on a slim, reversible headless boot (menor RAM)",
+  "os": ["linux"],
+  "packages": {
+    "linux": {
+      "pacman": ["ollama", "git", "curl", "jq"],
+      "yay": [],
+      "flatpak": []
+    }
+  },
+  "scripts": {
+    "linux": ["linux/server/apply-server-llm.sh"]
+  },
+  "systemd": {
+    "linux": {
+      "enable": ["ollama"],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.swappiness": 10
+      }
+    }
+  }
+}
