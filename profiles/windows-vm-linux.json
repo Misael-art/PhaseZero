@@ -23,7 +23,8 @@
         "cpupower",
         "numactl",
         "acl",
-        "jq"
+        "jq",
+        "libnewt"
       ],
       "yay": [],
       "flatpak": []

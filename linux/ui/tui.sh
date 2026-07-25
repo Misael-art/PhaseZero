@@ -257,10 +257,11 @@ doctor_menu() {
     done
 }
 
-# Verify whiptail available
-if ! command -v whiptail &>/dev/null; then
-    pz_error "whiptail not found. Install with: sudo pacman -S whiptail"
-    exit 1
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    # Verify whiptail available
+    if ! command -v whiptail &>/dev/null; then
+        pz_error "whiptail not found. Install with: sudo pacman -S whiptail"
+        exit 1
+    fi
+    main_menu
 fi
-
-main_menu

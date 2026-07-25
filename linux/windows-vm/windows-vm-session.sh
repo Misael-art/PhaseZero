@@ -252,6 +252,16 @@ case "$RETRY_SECONDS" in
 esac
 [ "$RETRY_SECONDS" -ge 1 ] || RETRY_SECONDS=1
 
+# Source rescue wizard for non-loop exit on missing disk
+PZ_WINDOWS_VM_SESSION_MAX_RETRIES="${PZ_WINDOWS_VM_SESSION_MAX_RETRIES:-3}"
+_RESCUE_SESSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
+for _rescue_sh in \
+    "${_RESCUE_SESSION_DIR}/rescue.sh" \
+    "/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/rescue.sh"; do
+    [ -f "$_rescue_sh" ] && source "$_rescue_sh" 2>/dev/null && break
+done
+unset _RESCUE_SESSION_DIR
+
 fallback_desktop() {
     [ "$DESKTOP_FALLBACK" = "1" ] || return 1
     printf '%s explicit desktop fallback enabled\n' "$(date -Iseconds)"
@@ -265,8 +275,21 @@ fallback_desktop() {
 }
 
 attempt=0
+rescue_attempted=0
 while :; do
     attempt=$((attempt + 1))
+    if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 0 ] && type vm_rescue_run >/dev/null 2>&1; then
+        printf '%s max retries reached; launching rescue wizard\n' "$(date -Iseconds)"
+        rescue_attempted=1
+        if vm_rescue_run; then
+            printf '%s rescue wizard succeeded; resetting retry counter\n' "$(date -Iseconds)"
+            attempt=0
+        else
+            printf '%s rescue wizard declined or failed; shutting down\n' "$(date -Iseconds)"
+        fi
+        sleep "$RETRY_SECONDS"
+        continue
+    fi
     if [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ]; then
         printf '%s launching Windows VM attempt=%s kind=%s command=%s\n' \
             "$(date -Iseconds)" "$attempt" "$LAUNCHER_KIND" "$(launcher_command)"

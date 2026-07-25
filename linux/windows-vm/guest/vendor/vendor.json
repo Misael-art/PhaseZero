@@ -1,0 +1,26 @@
+{
+  "pinned": true,
+  "components": {
+    "winfsp": {
+      "version": "2.0.23075",
+      "url": "https://github.com/winfsp/winfsp/releases/download/v2.0/winfsp-2.0.23075.msi",
+      "file": "winfsp-2.0.23075.msi",
+      "sha256": "6324dc81194a6a08f97b6aeca303cf5c2325c53ede153bae9fc4378f0838c101",
+      "description": "WinFsp - Windows File System Proxy (required by VirtioFS)"
+    },
+    "virtiofs": {
+      "version": "stable-virtio",
+      "url": "https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/stable-virtio/virtio-win-gt-x64.msi",
+      "file": "virtio-win-gt-x64.msi",
+      "sha256": "fafd93cb12b8a5df2668d3459d8b5589e7195a28424f9a40e16b50f462cf8fab",
+      "description": "Virtio-win Guest Tools (includes VirtioFS driver)"
+    },
+    "spice-webdavd": {
+      "version": "latest",
+      "url": "https://www.spice-space.org/download/windows/spice-webdavd/spice-webdavd-x64-latest.msi",
+      "file": "spice-webdavd-x64-latest.msi",
+      "sha256": "f278c17fca6b129eb5c9a46b8634af2ecfaf3bca8903eb9a5c7874f0e45f82b9",
+      "description": "SPICE WebDAV daemon for Windows"
+    }
+  }
+}

@@ -544,6 +544,7 @@ configure_zcode_ide() {
 }
 
 configure_ides() {
+    [ "${PZ_NO_IDES:-0}" = 1 ] && { pz_info "PZ_NO_IDES=1: skipping IDE configuration"; return 0; }
     command -v jq >/dev/null 2>&1 || { pz_error "jq required for IDE configuration"; return 1; }
     configure_opencode_ide
     write_ide_env_defaults

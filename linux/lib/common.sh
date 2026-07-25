@@ -1194,3 +1194,112 @@ pz_run_profile() {
 # FIM porque depende de pz_write_managed_file/pz_state_init acima.
 # shellcheck source=linux/lib/desktop.sh
 source "$PZ_ROOT/linux/lib/desktop.sh"
+
+pz_boot_detect_loader() {
+    local esp
+    if [ -d /sys/firmware/efi ]; then
+        if command -v bootctl >/dev/null 2>&1 && bootctl status 2>/dev/null | grep -q 'systemd-boot'; then
+            echo systemd-boot
+            return 0
+        fi
+        if [ -d "$(pz_boot_esp_dir)/EFI/refind" ] || [ -d "$(pz_boot_esp_dir)/EFI/REFIND" ]; then
+            echo refind
+            return 0
+        fi
+        if [ -f /boot/EFI/refind/refind_x64.efi ] || [ -f /efi/EFI/refind/refind_x64.efi ]; then
+            echo refind
+            return 0
+        fi
+        if [ -x /sbin/grub-mkconfig ] || [ -d /etc/grub.d ]; then
+            echo grub-efi
+            return 0
+        fi
+        echo efi-stub
+        return 0
+    fi
+    if [ -x /sbin/grub-mkconfig ] || [ -d /etc/grub.d ]; then
+        echo grub-bios
+        return 0
+    fi
+    echo unknown
+}
+
+pz_boot_systemd_boot_oneshot_entry() {
+    local entry_id="${1:-}" kernel="${2:-}" initrd="${3:-}" cmdline="${4:-}" esp loader_dir
+    esp="$(pz_boot_esp_dir)"
+    loader_dir="$esp/loader/entries"
+    install -d "$loader_dir"
+    printf 'title PhaseZero Windows VM\n' > "$loader_dir/$entry_id.conf"
+    printf 'sort-key phasezero-windows-vm\n' >> "$loader_dir/$entry_id.conf"
+    printf 'linux /%s\n' "${kernel#/}" >> "$loader_dir/$entry_id.conf"
+    printf 'initrd /%s\n' "${initrd#/}" >> "$loader_dir/$entry_id.conf"
+    printf 'options %s\n' "$cmdline phasezero.windowsvm=1" >> "$loader_dir/$entry_id.conf"
+    printf '%s\n' "$loader_dir/$entry_id.conf"
+}
+
+pz_boot_systemd_boot_set_oneshot() {
+    local entry_id="${1:-}" esp conf
+    esp="$(pz_boot_esp_dir)"
+    pz_boot_atomic_install "$esp/loader/entries/$entry_id.conf" "$esp/loader/entries/$entry_id.conf"
+    if command -v bootctl >/dev/null 2>&1; then
+        bootctl set-oneshot "$entry_id" 2>/dev/null || bootctl set-oneshot "$entry_id.conf" 2>/dev/null || pz_warn "bootctl set-oneshot failed for $entry_id"
+    elif command -v efibootmgr >/dev/null 2>&1; then
+        pz_warn "bootctl not available; cannot set systemd-boot oneshot via bootctl"
+    fi
+    pz_info "systemd-boot oneshot entry: $entry_id"
+}
+
+pz_boot_systemd_boot_remove_entry() {
+    local entry_id="${1:-}" esp
+    esp="$(pz_boot_esp_dir)"
+    rm -f "$esp/loader/entries/$entry_id.conf" 2>/dev/null || true
+    pz_info "systemd-boot entry removed: $entry_id"
+}
+
+pz_boot_refind_install_stanza() {
+    local entry_id="${1:-}" kernel="${2:-}" initrd="${3:-}" cmdline="${4:-}" esp refind_entries conf
+    esp="$(pz_boot_esp_dir)"
+    refind_entries="$esp/EFI/refind/entries"
+    install -d "$refind_entries" 2>/dev/null || refind_entries="/boot/EFI/refind/entries"
+    install -d "$refind_entries"
+    conf="$refind_entries/$entry_id.conf"
+    printf 'menuentry "PhaseZero Windows VM" {\n' > "$conf"
+    printf '    icon /EFI/refind/icons/os_linux.png\n' >> "$conf"
+    printf '    volume %s\n' "$(findmnt -no UUID -T "$(pz_boot_target_root)" 2>/dev/null | head -1)" >> "$conf"
+    printf '    loader /%s\n' "${kernel#/}" >> "$conf"
+    printf '    initrd /%s\n' "${initrd#/}" >> "$conf"
+    printf '    options "%s phasezero.windowsvm=1"\n' "$cmdline" >> "$conf"
+    printf '}\n' >> "$conf"
+    pz_info "rEFInd stanza written: $conf"
+}
+
+pz_boot_refind_remove_stanza() {
+    local entry_id="${1:-}" esp
+    for d in "$esp/EFI/refind/entries" "/boot/EFI/refind/entries"; do
+        rm -f "$d/$entry_id.conf" 2>/dev/null || true
+    done
+    pz_info "rEFInd stanza removed: $entry_id"
+}
+
+pz_boot_efi_stub_entry() {
+    local entry_id="${1:-}" kernel="${2:-}" initrd="${3:-}" cmdline="${4:-}" esp label
+    esp="$(pz_boot_esp_dir)"
+    label="PhaseZero Windows VM"
+    if command -v efibootmgr >/dev/null 2>&1; then
+        efibootmgr -c \
+            -L "$label" \
+            -l "\\EFI\\$(basename "$(dirname "$kernel")")\\$(basename "$kernel")" \
+            -u "initrd=\\$(basename "$initrd") $cmdline phasezero.windowsvm=1" \
+            2>/dev/null || pz_warn "efibootmgr failed to create NVRAM entry for $entry_id (SecureBoot may block this)"
+        return
+    fi
+    pz_warn "efibootmgr not available; cannot create EFI stub NVRAM entry for $entry_id"
+}
+
+pz_boot_efi_stub_remove() {
+    local entry_id="${1:-}"
+    if command -v efibootmgr >/dev/null 2>&1; then
+        efibootmgr -B -L "PhaseZero Windows VM" 2>/dev/null || true
+    fi
+    pz_info "EFI stub NVRAM entry removed"
+}

@@ -36,6 +36,7 @@ secrets/
 .rtk/
 .vscode/
 .claude/
+.zcode/
 .hermes/
 .serena/
 Microsoft/
@@ -48,3 +49,4 @@ fix-backend-crash.ps1
 # ntfs-3g/exfat leaves orphaned .ghost- copies on the SD card after interrupted writes
 .ghost-ntfs-3g-*
 **/.ghost-ntfs-3g-*
+linuxtoys-bin/
