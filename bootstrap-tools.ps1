@@ -22689,12 +22689,12 @@ try {
     . '$BootstrapScriptPath'
     `$result = Sync-BootstrapAiMemoryWithSdCard
     if (`$result.synced) {
-        "OK direcao=`$(`$result.direction) sdCard=`$(`$result.sdCardPath)" | Out-File -LiteralPath `$logPath -Force
+        "OK direcao=`$(`$result.direction) sdCard=`$(`$result.sdCardPath)" | Out-File -LiteralPath `$logPath -Encoding utf8 -Force
     } else {
-        "SKIP razao=sdCardFound=`$(`$result.sdCardFound)" | Out-File -LiteralPath `$logPath -Force
+        "SKIP razao=sdCardFound=`$(`$result.sdCardFound)" | Out-File -LiteralPath `$logPath -Encoding utf8 -Force
     }
 } catch {
-    "ERROR `$_" | Out-File -LiteralPath `$logPath -Force
+    "ERROR `$_" | Out-File -LiteralPath `$logPath -Encoding utf8 -Force
     exit 1
 }
 exit 0
