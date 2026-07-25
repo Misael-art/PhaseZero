@@ -263,7 +263,7 @@ service_state() {
 
 install_user_files() {
     install -d "$APPLICATIONS_DIR" "$SYSTEMD_USER_DIR"
-    cat > "$APPLICATIONS_DIR/phasezero-waydroid.desktop" <<EOF
+    pz_desktop_write_entry "$APPLICATIONS_DIR/phasezero-waydroid.desktop" system.machines <<EOF
 [Desktop Entry]
 Type=Application
 Name=PhaseZero Waydroid
@@ -272,8 +272,7 @@ Exec=$PZ_ROOT/linux/pz waydroid launch
 Terminal=false
 Categories=System;Utility;
 EOF
-    pz_record_created waydroid "$APPLICATIONS_DIR/phasezero-waydroid.desktop"
-    cat > "$APPLICATIONS_DIR/phasezero-reboot-waydroid.desktop" <<EOF
+    pz_desktop_write_entry "$APPLICATIONS_DIR/phasezero-reboot-waydroid.desktop" system.boot <<EOF
 [Desktop Entry]
 Type=Application
 Name=PhaseZero Reboot to Waydroid
@@ -282,7 +281,6 @@ Exec=pkexec bash $PZ_ROOT/linux/waydroid/waydroid.sh boot next-reboot
 Terminal=false
 Categories=System;
 EOF
-    pz_record_created waydroid "$APPLICATIONS_DIR/phasezero-reboot-waydroid.desktop"
     cat > "$SYSTEMD_USER_DIR/phasezero-waydroid.service" <<EOF
 [Unit]
 Description=PhaseZero Waydroid optimized session

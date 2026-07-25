@@ -87,13 +87,41 @@ def _read_desktop(path: Path) -> dict[str, str] | None:
 
 
 def _managed(path: Path, values: dict[str, str]) -> bool:
+    """Uma entrada é nossa se o nome, a categoria, a marca OU o Exec dizem isso.
+
+    O reconhecimento por Exec é a rede de segurança: um lançador que o projeto
+    criou sem prefixo `phasezero-` (por exemplo `claude-desktop.desktop`) ficava
+    invisível para o menu unificado e, carregando `Categories` padrão, aparecia
+    solto em Desenvolvimento/Jogos. Se o comando aponta para dentro do
+    namespace PhaseZero, a entrada é nossa independentemente do nome.
+    """
     filename = path.name.casefold()
     categories = values.get("Categories", "")
-    return (
+    if (
         filename.startswith(("phz-", "phasezero-", "io.phasezero."))
         or "X-PhaseZero" in categories
         or values.get("X-PhaseZero-Managed", "").casefold() == "true"
-    )
+    ):
+        return True
+    return _exec_in_phasezero_namespace(values.get("Exec", ""))
+
+
+_NAMESPACE_MARKERS = (
+    "/.local/bin/phasezero-",
+    "/.local/share/phasezero/",
+    "/.local/state/phasezero/",
+    "/usr/local/lib/phasezero/",
+    "/linux/pz ",
+)
+
+
+def _exec_in_phasezero_namespace(command: str) -> bool:
+    if not command:
+        return False
+    text = command.replace("\\", "/")
+    if text.rstrip().endswith("/linux/pz"):
+        return True
+    return any(marker in text for marker in _NAMESPACE_MARKERS)
 
 
 def _visible(path: Path, values: dict[str, str]) -> bool:
@@ -413,6 +441,33 @@ def apply() -> dict:
     }
 
 
+def _dirty_flag() -> Path:
+    return state_dir() / "dirty"
+
+
+def sync() -> dict:
+    """Reagrupa o menu só quando alguma instalação o deixou sujo.
+
+    Existe para o agrupamento não depender de o usuário lembrar de rodar
+    `menu apply` depois de cada instalação. Os instaladores marcam sujo
+    (`pz_menu_mark_dirty` em linux/lib/desktop.sh) e esta chamada é barata
+    quando não há nada a fazer.
+    """
+    flag = _dirty_flag()
+    if not flag.exists():
+        return {
+            "schema": SCHEMA,
+            "kind": "sync",
+            "status": "ok",
+            "applied": False,
+            "reason": "menu já sincronizado",
+        }
+    payload = apply()
+    flag.unlink(missing_ok=True)
+    payload.update(kind="sync", applied=True)
+    return payload
+
+
 def rollback() -> dict:
     manifests = sorted(state_dir().glob("apply-*.json"), reverse=True) if state_dir().is_dir() else []
     if not manifests:
@@ -433,10 +488,12 @@ def rollback() -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Menu PhaseZero unificado e reversível")
-    parser.add_argument("command", choices=("scan", "plan", "apply", "rollback"))
+    parser.add_argument("command", choices=("scan", "plan", "apply", "sync", "rollback"))
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
-    payload = {"scan": scan, "plan": plan, "apply": apply, "rollback": rollback}[args.command]()
+    payload = {
+        "scan": scan, "plan": plan, "apply": apply, "sync": sync, "rollback": rollback,
+    }[args.command]()
     if args.json:
         print(json.dumps(payload, ensure_ascii=False))
     else:

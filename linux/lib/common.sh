@@ -1189,3 +1189,8 @@ pz_run_profile() {
     PZ_PROFILE_CALL_DEPTH="$call_depth"
     PZ_PROFILE_ACTIVE="$active_before"
 }
+
+# Lançadores .desktop: agrupamento no menu + anti-duplicação. Carregado no
+# FIM porque depende de pz_write_managed_file/pz_state_init acima.
+# shellcheck source=linux/lib/desktop.sh
+source "$PZ_ROOT/linux/lib/desktop.sh"

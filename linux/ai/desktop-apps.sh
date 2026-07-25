@@ -147,7 +147,7 @@ EOF
 
 write_qwen_desktop_entry() {
     mkdir -p "$APPLICATIONS_DIR"
-    pz_write_managed_file "$APPLICATIONS_DIR/qwen-code-desktop.desktop" <<EOF
+    pz_desktop_write_entry "$APPLICATIONS_DIR/qwen-code-desktop.desktop" web.ai <<EOF
 [Desktop Entry]
 Name=Qwen Code
 Comment=Local-first desktop coding agent
@@ -328,7 +328,7 @@ EOF
 
 write_claude_desktop_entry() {
     mkdir -p "$APPLICATIONS_DIR"
-    pz_write_managed_file "$APPLICATIONS_DIR/claude-desktop.desktop" <<EOF
+    pz_desktop_write_entry "$APPLICATIONS_DIR/claude-desktop.desktop" web.ai <<EOF
 [Desktop Entry]
 Name=Claude
 Comment=Desktop application for Claude.ai

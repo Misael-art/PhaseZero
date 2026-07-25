@@ -134,10 +134,38 @@ PY
     return 1
 }
 
+# App IDs Flatpak dos web apps que TÊM equivalente nativo. Se o usuário já
+# instalou o nativo, o web app viraria um segundo ícone do mesmo serviço.
+webapp_flatpak_id() {
+    case "${1:-}" in
+        discord)   echo com.discordapp.Discord ;;
+        slack)     echo com.slack.Slack ;;
+        telegram)  echo org.telegram.desktop ;;
+        whatsapp)  echo io.github.mimbrero.WhatsAppDesktop ;;
+        zoom)      echo us.zoom.Zoom ;;
+        spotify)   echo com.spotify.Client ;;
+        notion)    echo notion.id ;;
+        obsidian)  echo md.obsidian.Obsidian ;;
+        figma)     echo io.github.Figma_Linux.figma_linux ;;
+        *)         echo "" ;;
+    esac
+}
+
+# Mapeia o grupo em português da tabela WEBAPPS para o grupo do menu unificado.
+webapp_menu_group() {
+    case "${1:-}" in
+        Comunicação|Comunicacao) echo web.communication ;;
+        Mídia|Midia)             echo web.media ;;
+        IA)                      echo web.ai ;;
+        "Nuvem e documentos"|"Nuvem & Docs"|Nuvem) echo web.cloud ;;
+        *)                       echo web.productivity ;;
+    esac
+}
+
 write_desktop() {
     local slug="$1" name="$2" url="$3" group="$4"
     local file="$APPLICATIONS_DIR/phz-$slug.desktop"
-    cat > "$file" <<EOF
+    cat <<EOF | pz_desktop_write_entry "$file" "$(webapp_menu_group "$group")"
 [Desktop Entry]
 Type=Application
 Name=$name
@@ -149,7 +177,6 @@ X-PHZ-Group=$group
 Terminal=false
 StartupNotify=true
 EOF
-    chmod 0644 "$file"
     echo "  desktop: $file"
 }
 
@@ -159,6 +186,18 @@ install_webapp() {
     IFS='|' read -r slug name url group icon_source <<< "$entry"
 
     echo "Installing $name ($slug)..."
+
+    # Não duplicar: se o usuário já tem o app nativo (pacote, flatpak, binário
+    # ou lançador de terceiro), o web app não é instalado por cima.
+    local guard_rc=0
+    pz_app_install_guard --name "$name" --bin "$slug" \
+        --flatpak "$(webapp_flatpak_id "$slug")" --desktop-exec "$slug" || guard_rc=$?
+    if [ "$guard_rc" = 3 ]; then
+        echo "  SKIP: $name já existe no sistema (use PZ_ALLOW_DUPLICATE=1 para forçar)"
+        echo ""
+        return 0
+    fi
+
     download_icon "$slug" "$icon_source" || true
     write_desktop "$slug" "$name" "$url" "$group"
     echo ""

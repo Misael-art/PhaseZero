@@ -41,6 +41,18 @@ class HostSandbox:
             return []
         return self.calls_log.read_text(encoding="utf-8").splitlines()
 
+    def declare_installed(self, tool: str, identifier: str) -> None:
+        """Declara que `identifier` já existe via `tool` (flatpak|pacman).
+
+        Os stubs respondem "não instalado" por padrão; sem isso, uma checagem
+        de duplicata passaria por acidente em vez de exercitar a lógica.
+        """
+        assert tool in ("flatpak", "pacman"), tool
+        assert self.calls_log is not None
+        db = self.calls_log.parent / f"installed-{tool}.txt"
+        with db.open("a", encoding="utf-8") as handle:
+            handle.write(identifier + "\n")
+
     def with_admin_bridge(self) -> "HostSandbox":
         """Sandbox irmão COM admin bridge (stub) resolvível.
 
@@ -226,8 +238,26 @@ def host_sandbox(tmp_path: Path) -> HostSandbox:
     # systemctl/flatpak/pacman falam com daemons e com o gerenciador de
     # pacotes REAIS do runner — HOME redirecionado não isola nada disso.
     # Stubs registram a chamada e saem com sucesso.
-    for name in ("systemctl", "flatpak", "pacman", "yay"):
+    for name in ("systemctl", "yay"):
         _write_recording_stub(stub_bin / name, name, calls_log)
+
+    # flatpak e pacman precisam responder "não instalado" por padrão, senão
+    # toda checagem de duplicata dá falso positivo e o teste vira tautologia.
+    # Os testes declaram o que "existe" escrevendo em installed-<tool>.txt.
+    for name, query in (("flatpak", "info"), ("pacman", "-Q")):
+        installed_db = tmp_path / f"installed-{name}.txt"
+        installed_db.write_text("", encoding="utf-8")
+        (stub_bin / name).write_text(
+            "#!/usr/bin/env bash\n"
+            f'printf "%s %s\\n" "{name}" "$*" >> "{calls_log}"\n'
+            f'if [ "${{1:-}}" = "{query}" ]; then\n'
+            f'  grep -qxF -- "${{2:-}}" "{installed_db}" 2>/dev/null && exit 0\n'
+            "  exit 1\n"
+            "fi\n"
+            "exit 0\n",
+            encoding="utf-8",
+        )
+        (stub_bin / name).chmod(0o755)
 
     env = dict(os.environ)
     env.update(

@@ -691,7 +691,7 @@ cmd_ui() {
             echo "Dashboard: http://127.0.0.1:$web_port (pid $pid)"
             ;;
         *)
-            pz_error "usage: pz ui (native|web|server|tui|status|menu <scan|plan|apply|rollback>)"
+            pz_error "usage: pz ui (native|web|server|tui|status|menu <scan|plan|apply|sync|rollback>)"
             return 1
             ;;
     esac
