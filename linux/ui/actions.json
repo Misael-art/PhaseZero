@@ -2647,6 +2647,64 @@
       "plan_command": "linux/pz doctor"
     },
     {
+      "name": "host.status",
+      "label": "Higiene do host",
+      "command": "linux/pz host status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Ajustes",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "host.backups.list",
+      "label": "Backups centralizados",
+      "command": "linux/pz host backups list",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Ajustes",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "host.backups.migrate",
+      "label": "Migrar backups legados",
+      "command": "linux/pz host backups migrate --apply",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Ajustes",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz host backups migrate"
+    },
+    {
+      "name": "host.prune",
+      "label": "Podar backups e logs",
+      "command": "linux/pz host prune",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Ajustes",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz host status"
+    },
+    {
+      "name": "host.wipe",
+      "label": "Remover pegada do PhaseZero",
+      "command": "linux/pz host wipe --apply --confirm PHASEZERO-WIPE",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Ajustes",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz host wipe"
+    },
+    {
       "name": "steamdeck.keyboard.status",
       "label": "Status do teclado",
       "command": "linux/pz steamdeck keyboard status",

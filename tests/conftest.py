@@ -41,6 +41,21 @@ class HostSandbox:
             return []
         return self.calls_log.read_text(encoding="utf-8").splitlines()
 
+    def with_admin_bridge(self) -> "HostSandbox":
+        """Sandbox irmão COM admin bridge (stub) resolvível.
+
+        O sandbox padrão é degradado de propósito. Use este quando o teste
+        precisar exercitar o caminho privilegiado — a bridge é um stub que
+        apenas registra a chamada, nunca escala privilégio de verdade.
+        """
+        assert self.calls_log is not None
+        stub_bin = Path(self.env["PATH"].split(os.pathsep)[0])
+        for name in ADMIN_BRIDGE_BINARIES:
+            target = stub_bin / name
+            if not target.exists():
+                _write_recording_stub(target, name, self.calls_log)
+        return self
+
     # --- paths --------------------------------------------------------
     @property
     def state(self) -> Path:
@@ -119,6 +134,63 @@ class HostSandbox:
 # namespace. Ficam fora da asserção de delta.
 _STATE_ANCESTORS = {".local", ".local/state"}
 
+# Nomes da admin bridge. O sandbox precisa poder garantir a AUSÊNCIA deles —
+# senão "degrade quando não há bridge" nunca é exercitado num runner que
+# por acaso tenha a bridge instalada.
+ADMIN_BRIDGE_BINARIES = ("phasezero-admin", "bigsudo")
+
+# Binários que os scripts realmente usam. Se sanear o PATH remover o diretório
+# que os continha, eles voltam como symlink dentro do stub_bin.
+_ESSENTIAL_BINARIES = (
+    "bash", "sh", "jq", "python3", "find", "sort", "head", "tail", "cut", "awk",
+    "gawk", "sed", "grep", "cat", "date", "mkdir", "chmod", "chown", "cp", "mv",
+    "rm", "ln", "install", "mktemp", "sha256sum", "md5sum", "wc", "tr", "basename",
+    "dirname", "realpath", "stat", "touch", "xargs", "numfmt", "du", "ls", "env",
+    "uname", "id", "printf", "test", "which", "command", "tee", "od", "strings",
+)
+
+
+def _write_recording_stub(path: Path, name: str, calls_log: Path) -> None:
+    path.write_text(
+        "#!/usr/bin/env bash\n"
+        f'printf "%s %s\\n" "{name}" "$*" >> "{calls_log}"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
+def _sanitized_path(stub_bin: Path) -> str:
+    """PATH sem nenhum diretório que contenha a admin bridge real do runner.
+
+    Sem isso, um runner com `phasezero-admin` instalado faria `pz_admin_mode`
+    responder `ready` dentro do sandbox e os testes de degradação passariam
+    por acidente, testando o caminho errado.
+    """
+    original = [Path(entry) for entry in os.environ.get("PATH", "").split(os.pathsep) if entry]
+    kept: list[Path] = []
+    dropped: list[Path] = []
+    for entry in original:
+        if any((entry / name).exists() for name in ADMIN_BRIDGE_BINARIES):
+            dropped.append(entry)
+        else:
+            kept.append(entry)
+
+    # o que sumiu junto com os diretórios descartados volta como symlink
+    if dropped:
+        for binary in _ESSENTIAL_BINARIES:
+            if any((entry / binary).exists() for entry in kept):
+                continue
+            for entry in dropped:
+                source = entry / binary
+                if source.exists():
+                    link = stub_bin / binary
+                    if not link.exists():
+                        link.symlink_to(source)
+                    break
+
+    return os.pathsep.join([str(stub_bin), *(str(entry) for entry in kept)])
+
 
 @pytest.fixture
 def host_sandbox(tmp_path: Path) -> HostSandbox:
@@ -154,15 +226,8 @@ def host_sandbox(tmp_path: Path) -> HostSandbox:
     # systemctl/flatpak/pacman falam com daemons e com o gerenciador de
     # pacotes REAIS do runner — HOME redirecionado não isola nada disso.
     # Stubs registram a chamada e saem com sucesso.
-    for name in ("systemctl", "flatpak", "pacman", "yay", "phasezero-admin", "bigsudo"):
-        stub = stub_bin / name
-        stub.write_text(
-            "#!/usr/bin/env bash\n"
-            f'printf "%s %s\\n" "{name}" "$*" >> "{calls_log}"\n'
-            "exit 0\n",
-            encoding="utf-8",
-        )
-        stub.chmod(0o755)
+    for name in ("systemctl", "flatpak", "pacman", "yay"):
+        _write_recording_stub(stub_bin / name, name, calls_log)
 
     env = dict(os.environ)
     env.update(
@@ -174,7 +239,9 @@ def host_sandbox(tmp_path: Path) -> HostSandbox:
             "XDG_CACHE_HOME": str(home / ".cache"),
             "PZ_USE_SUDO": "0",
             "PZ_OPERATION_ID": "test-operation",
-            "PATH": f"{stub_bin}{os.pathsep}{env.get('PATH', '')}",
+            # PATH saneado: sem admin bridge real do runner. O default do
+            # sandbox é DEGRADED; use `with_admin_bridge()` para o caminho ready.
+            "PATH": _sanitized_path(stub_bin),
         }
     )
     # não vaza estado do host real para dentro do sandbox

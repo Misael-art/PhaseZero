@@ -548,6 +548,72 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             )
         )
 
+    # Manutenção: higiene do host (ledger, backups centralizados, pegada).
+    # "Remover pegada" é destrutivo e só aparece no painel avançado; o preview
+    # sem --apply é a ação padrão, coerente com dry-run-by-default.
+    actions.extend(
+        [
+            _a(
+                "host.status",
+                "Ajustes",
+                "Higiene do host",
+                "Pegada do PhaseZero: ledger, backups e paths removíveis.",
+                ("host", "status"),
+                "drive-harddisk",
+                group="Manutenção",
+                keywords=("ledger", "backup", "pegada", "higiene", "limpeza"),
+            ),
+            _a(
+                "host.backups.list",
+                "Ajustes",
+                "Backups centralizados",
+                "Lista os backups guardados no namespace PhaseZero.",
+                ("host", "backups", "list"),
+                "document-save",
+                group="Manutenção",
+                keywords=("backup", "restaurar"),
+            ),
+            _a(
+                "host.backups.migrate",
+                "Ajustes",
+                "Migrar backups legados",
+                "Move .bak antigos de junto dos arquivos para o store central.",
+                ("host", "backups", "migrate", "--apply"),
+                "folder-sync",
+                mutable=True,
+                preview=("host", "backups", "migrate"),
+                group="Manutenção",
+                keywords=("backup", "legado", "migrar", "limpeza"),
+            ),
+            _a(
+                "host.prune",
+                "Ajustes",
+                "Podar backups e logs",
+                "Mantém apenas os backups recentes. Não desinstala nada.",
+                ("host", "prune"),
+                "edit-clear",
+                mutable=True,
+                preview=("host", "status"),
+                group="Manutenção",
+                keywords=("poda", "prune", "espaço", "limpeza"),
+            ),
+            _a(
+                "host.wipe",
+                "Ajustes",
+                "Remover pegada do PhaseZero",
+                "Remove tudo que o ledger registra. Preserva ~/Emulation.",
+                ("host", "wipe", "--apply", "--confirm", "PHASEZERO-WIPE"),
+                "edit-delete",
+                mutable=True,
+                preview=("host", "wipe"),
+                badge="Alto risco",
+                group="Manutenção",
+                visibility="advanced",
+                keywords=("desinstalar", "wipe", "remover", "limpar"),
+            ),
+        ]
+    )
+
     # Public CLI variants not promoted as primary flows. They remain fully
     # discoverable in the contextual Advanced panel for their category.
     actions.extend(

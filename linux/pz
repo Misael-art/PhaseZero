@@ -219,6 +219,9 @@ Usage:
   pz host status               Host hygiene: ledger, backups, footprint
   pz host backups migrate      Move legacy .bak files into the central store
   pz host backups list         List centralized backups
+  pz host prune [--keep N]     Prune old backups and rotated logs
+  pz host wipe                 Preview the ledger-driven host wipe
+  pz host wipe --apply --confirm PHASEZERO-WIPE   Remove the recorded footprint
   pz ui                        Open native Linux control center
   pz ui native                 Open native Qt6/PySide6 control center
   pz ui web [PORT]             Open legacy local web dashboard

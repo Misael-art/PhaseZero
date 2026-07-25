@@ -58,6 +58,7 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
         "support-bundle",
         "repair-plan",
         "tune",
+        "host",
             "capabilities",
             "installation",
             "self-update",
