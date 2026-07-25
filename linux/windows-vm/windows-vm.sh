@@ -154,6 +154,8 @@ parse_options() {
             --with-boot) WITH_BOOT=1; shift ;;
             --json) JSON_OUT=1; shift ;;
             --dry-run|-n) DRY_RUN=1; shift ;;
+            --rescue) PZ_WINDOWS_VM_RESCUE=1; shift ;;
+            --no-rescue) PZ_WINDOWS_VM_RESCUE=0; shift ;;
             --help|-h) usage; exit 0 ;;
             *) pz_error "unknown windows-vm option: $1"; return 1 ;;
         esac
@@ -1676,6 +1678,8 @@ launch_vm() {
     parse_options "$@"
     [ "${PZ_WINDOWS_VM_FULLSCREEN:-0}" = "1" ] && FULLSCREEN=1
     effective_config
+    local RESCUE_SOURCED=0
+    RESCUE_SOURCED=0
     guard_graphics_profile || return 1
     trap cleanup_runtime EXIT INT TERM
     apply_host_optimizations
@@ -1698,7 +1702,24 @@ launch_vm() {
         RAW_QEMU=1
     fi
     [ -n "$OVMF_CODE" ] || { pz_error "OVMF code firmware missing. Install edk2-ovmf."; return 1; }
-    [ -f "$DISK_PATH" ] || { pz_error "VM disk missing: $DISK_PATH. Run: $PZ_ROOT/linux/pz windows-vm install --iso <windows.iso>"; return 1; }
+    [ -f "$DISK_PATH" ] || {
+        if [ "$RESCUE_SOURCED" = "0" ] && [ -f "$PZ_ROOT/linux/windows-vm/rescue.sh" ]; then
+            source "$PZ_ROOT/linux/windows-vm/rescue.sh"
+            RESCUE_SOURCED=1
+        fi
+        if [ "${PZ_WINDOWS_VM_RESCUE:-1}" != "0" ] && [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ] && type vm_rescue_run >/dev/null 2>&1; then
+            if vm_rescue_run; then
+                effective_config
+                [ -f "$DISK_PATH" ] || { pz_error "VM disk still missing after rescue"; return 1; }
+            else
+                pz_error "VM disk missing: $DISK_PATH. Run: $PZ_ROOT/linux/pz windows-vm install --iso <windows.iso>"
+                return 1
+            fi
+        else
+            pz_error "VM disk missing: $DISK_PATH. Run: $PZ_ROOT/linux/pz windows-vm install --iso <windows.iso>"
+            return 1
+        fi
+    }
     [ -f "$OVMF_VARS" ] || { pz_error "OVMF vars missing: $OVMF_VARS. Run install again."; return 1; }
     command -v qemu-system-x86_64 >/dev/null 2>&1 || { pz_error "qemu-system-x86_64 missing"; return 1; }
     build_qemu_args

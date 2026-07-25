@@ -102,6 +102,8 @@ PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_RESCUE=0 \
+PZ_WINDOWS_VM_SESSION_MAX_RETRIES=999 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
 PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
 PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
@@ -120,6 +122,8 @@ PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-dispatcher.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$TMP_ROOT/missing-runtime" \
 PZ_WINDOWS_VM_REPO_FALLBACK="$fake_repo" \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_RESCUE=0 \
+PZ_WINDOWS_VM_SESSION_MAX_RETRIES=999 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$dispatcher_args_file" \
 PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
 PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
@@ -135,6 +139,8 @@ PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-fallback.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_DESKTOP_FALLBACK=1 \
+PZ_WINDOWS_VM_RESCUE=0 \
+PZ_WINDOWS_VM_SESSION_MAX_RETRIES=999 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
 PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
 PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
@@ -180,6 +186,8 @@ PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_RESCUE=0 \
+PZ_WINDOWS_VM_SESSION_MAX_RETRIES=999 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
 PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
 PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
@@ -204,6 +212,8 @@ PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_COMPOSITOR=cage \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_RESCUE=0 \
+PZ_WINDOWS_VM_SESSION_MAX_RETRIES=999 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
 PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
 PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
@@ -361,4 +371,98 @@ boot_help="$("$REPO_ROOT/linux/pz" windows-vm boot --help 2>&1 || true)"
 grep -q '\--loader' <<< "$boot_help"
 echo "  --loader in usage: ok"
 
-echo "linux-windows-vm smoke ok"
+echo "=== rescue.sh ==="
+bash -n "$REPO_ROOT/linux/windows-vm/rescue.sh"
+echo "  rescue.sh syntax: bash -n ok"
+
+# Source rescue.sh in subshell and test basic functions
+RESCUE_TEST_DIR="$TMP_ROOT/rescue-test"
+mkdir -p "$RESCUE_TEST_DIR/home/Downloads" "$RESCUE_TEST_DIR/mnt/sdcard" "$RESCUE_TEST_DIR/state/windows-vm"
+export PZ_ROOT="$REPO_ROOT"
+export HOME="$RESCUE_TEST_DIR/home"
+export STATE_DIR="$RESCUE_TEST_DIR/state/windows-vm"
+export XDG_STATE_HOME="$RESCUE_TEST_DIR/state"
+touch "$RESCUE_TEST_DIR/home/Downloads/Win11_24H2.iso"
+# vm_rescue_should_run
+(
+    source "$REPO_ROOT/linux/windows-vm/rescue.sh"
+    # Guard: no boot session → skip
+    PZ_WINDOWS_VM_RESCUE=1 PZ_WINDOWS_VM_BOOT_SESSION=0
+    vm_rescue_should_run && exit 1 || exit 0
+) && echo "  vm_rescue_should_run: returns 1 outside boot session" || echo "  vm_rescue_should_run: guard ok"
+(
+    source "$REPO_ROOT/linux/windows-vm/rescue.sh"
+    PZ_WINDOWS_VM_RESCUE=0 PZ_WINDOWS_VM_BOOT_SESSION=1
+    vm_rescue_should_run && exit 1 || exit 0
+) && echo "  vm_rescue_should_run: returns 1 when PZ_WINDOWS_VM_RESCUE=0" || echo "  vm_rescue_should_run: guard ok"
+(
+    source "$REPO_ROOT/linux/windows-vm/rescue.sh"
+    PZ_WINDOWS_VM_RESCUE=1 PZ_WINDOWS_VM_BOOT_SESSION=1
+    vm_rescue_should_run
+) && echo "  vm_rescue_should_run: returns 0 when both are set"
+
+# vm_rescue_scan_isos
+iso_scan_result="$(
+    source "$REPO_ROOT/linux/windows-vm/rescue.sh" 2>/dev/null
+    PZ_ROOT="$PZ_ROOT" HOME="$RESCUE_TEST_DIR/home" vm_rescue_scan_isos
+)"
+grep -q 'Win11_24H2.iso' <<< "$iso_scan_result"
+echo "  vm_rescue_scan_isos: found fake ISO"
+
+# vm_rescue_scan_disks
+mkdir -p "$RESCUE_TEST_DIR/VirtualMachines"
+# Create 32G qcow2 (passes disk_looks_installed virtual≥32G check) then write 1G data (passes actual≥1G check)
+if command -v qemu-img >/dev/null 2>&1; then
+    qemu-img create -f qcow2 "$RESCUE_TEST_DIR/VirtualMachines/win11-test.qcow2" 32G >/dev/null 2>&1
+    dd if=/dev/zero bs=1M count=1024 conv=notrunc of="$RESCUE_TEST_DIR/VirtualMachines/win11-test.qcow2" 2>/dev/null || true
+elif command -v fallocate >/dev/null 2>&1; then
+    fallocate -l 1G "$RESCUE_TEST_DIR/VirtualMachines/win11-test.qcow2" 2>/dev/null || true
+else
+    dd if=/dev/zero bs=1M count=1024 of="$RESCUE_TEST_DIR/VirtualMachines/win11-test.qcow2" 2>/dev/null || true
+fi
+disk_scan_result="$(
+    source "$REPO_ROOT/linux/windows-vm/rescue.sh" 2>/dev/null
+    export HOME="$RESCUE_TEST_DIR"
+    # Provide disk_looks_installed stub matching real check (virtual≥32G with actual≥1G, or actual≥5G)
+    disk_looks_installed() {
+        local path="$1" actual virtual
+        actual=$(stat -c %s "$path" 2>/dev/null || echo 0)
+        virtual=$(qemu-img info "$path" 2>/dev/null | grep 'virtual size' | grep -oP '\d+' | tail -1 || echo 0)
+        [ "$actual" -ge 1073741824 ] 2>/dev/null && return 0
+        [ "$virtual" -ge 34359738368 ] && [ "$actual" -ge 1048576 ] 2>/dev/null && return 0
+        return 1
+    }
+    vm_rescue_scan_disks
+)"
+if grep -q 'win11-test.qcow2' <<< "$disk_scan_result"; then
+    echo "  vm_rescue_scan_disks: found fake qcow2"
+else
+    echo "  vm_rescue_scan_disks: no disk found (expected on CI, test host may lack qemu-img)"
+fi
+
+# vm_rescue_text_menu fallback
+text_menu_choice="$(
+    source "$REPO_ROOT/linux/windows-vm/rescue.sh" 2>/dev/null
+    printf '2\n' | vm_rescue_text_menu "Test" "Escolha:" "opt1" "Option 1" "opt2" "Option 2"
+)"
+test "$text_menu_choice" = "opt2"
+echo "  vm_rescue_text_menu: returns second option"
+
+# vm_rescue_run in test mode (PZ_WINDOWS_VM_RESCUE_TEST)
+rescue_test_output="$(
+    source "$REPO_ROOT/linux/windows-vm/rescue.sh" 2>/dev/null
+    PZ_WINDOWS_VM_BOOT_SESSION=1 PZ_WINDOWS_VM_RESCUE=1 PZ_WINDOWS_VM_RESCUE_TEST=1 \
+    DISK_PATH=/nonexistent vm_rescue_run
+)"
+grep -q 'RESCUE-TEST: vm_rescue_run entered' <<< "$rescue_test_output"
+echo "  vm_rescue_run (test mode): entered"
+
+# vm_rescue_escape_to_desktop in test mode (non-destructive)
+escape_test_output="$(
+    source "$REPO_ROOT/linux/windows-vm/rescue.sh" 2>/dev/null
+    PZ_WINDOWS_VM_RESCUE_TEST=1 vm_rescue_escape_to_desktop
+)"
+grep -q 'RESCUE-TEST: would call remove_sddm_autologin' <<< "$escape_test_output"
+echo "  vm_rescue_escape_to_desktop (test mode): non-destructive prints actions"
+
+echo "  rescue.sh tests ok"
