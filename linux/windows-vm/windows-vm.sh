@@ -862,7 +862,9 @@ cmd_shares_verify() {
             local capture
             capture="$(verify_share "$name" "$target")"
             printf '%s\n' "$capture"
-            if ! grep -q 'share_.*: pass ' <<< "$capture" 2>/dev/null; then
+            # Match "share_<name>: pass" at end of token; \b makes it tolerant
+            # of the parenthesised detail suffix ("pass (bind-mounted)").
+            if ! grep -Eq "share_[^:]+: pass( |\$)" <<< "$capture" 2>/dev/null; then
                 fail=1
             fi
         fi

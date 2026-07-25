@@ -313,21 +313,38 @@ echo "  shares verify subcommand exists (in usage text)"
 echo "  shares verify ok"
 
 echo "=== shares verify runtime ==="
-# Text mode: must have shares_ok: line
-verify_output="$("$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares verify 2>/dev/null || true)"
+# Construct a degraded state: SHARE_BIND_ROOT under a temp XDG_RUNTIME_DIR
+# with no bind mounts, so verify_share reports "fail"/"not found".
+PZ_VERIFY_TMPROOT="$(mktemp -d)"
+PZ_VERIFY_RT="$PZ_VERIFY_TMPROOT/rt"
+mkdir -p "$PZ_VERIFY_RT/phasezero-windows-vm/shares"
+# Text mode: must emit shares_ok: line and return non-zero when degraded.
+# NOTE: command substitution propagates non-zero rc under `set -e`, so we
+# capture rc explicitly via a subshell rather than relying on $? after $(...).
+verify_output=""
+verify_rc_text=0
+verify_output="$(XDG_RUNTIME_DIR="$PZ_VERIFY_RT" "$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares verify 2>/dev/null)" || verify_rc_text=$?
 grep -q 'shares_ok:' <<< "$verify_output"
 echo "  shares verify text mode: shares_ok line present"
-# JSON mode via JSON_OUT env var
-verify_json="$(JSON_OUT=1 "$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares verify 2>/dev/null || true)"
-if jq -e '.ok == true or .ok == false' <<< "$verify_json" >/dev/null 2>&1; then
-    echo "  shares verify JSON mode: ok boolean present"
-else
-    # Try with explicit JSON_OUT env
-    verify_json="$(JSON_OUT=1 "$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares verify 2>/dev/null || true)"
-    jq -e '.ok == true or .ok == false' <<< "$verify_json" >/dev/null 2>&1 && echo "  shares verify JSON mode: ok boolean present (JSON_OUT=1)" || echo "  shares verify JSON mode: WARN jq parse failed (expected in no-root test env)"
-fi
-jq -e '.shares | type == "array"' <<< "$verify_json" >/dev/null 2>&1 && echo "  shares verify JSON mode: shares array present" || true
-jq -e 'has("failures")' <<< "$verify_json" >/dev/null 2>&1 && echo "  shares verify JSON mode: failures count present" || true
+# Contract: degraded state MUST return non-zero (no || true masking).
+[ "$verify_rc_text" -ne 0 ] || { echo "FAIL: shares verify text mode returned 0 on degraded state"; exit 1; }
+grep -q 'shares_ok: no' <<< "$verify_output"
+echo "  shares verify text mode: rc=$verify_rc_text on degraded state (non-zero contract holds)"
+# JSON mode via JSON_OUT env var.
+verify_json=""
+verify_rc_json=0
+verify_json="$(XDG_RUNTIME_DIR="$PZ_VERIFY_RT" JSON_OUT=1 "$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares verify 2>/dev/null)" || verify_rc_json=$?
+jq -e '.ok == true or .ok == false' >/dev/null 2>&1 <<< "$verify_json"
+echo "  shares verify JSON mode: ok boolean present"
+jq -e '.shares | type == "array"' >/dev/null 2>&1 <<< "$verify_json"
+echo "  shares verify JSON mode: shares array present"
+jq -e 'has("failures")' >/dev/null 2>&1 <<< "$verify_json"
+echo "  shares verify JSON mode: failures count present"
+# Contract: degraded JSON MUST report ok=false and non-zero rc.
+jq -e '.ok == false' >/dev/null 2>&1 <<< "$verify_json"
+[ "$verify_rc_json" -ne 0 ] || { echo "FAIL: shares verify JSON mode returned 0 on degraded state"; exit 1; }
+echo "  shares verify JSON mode: ok=false rc=$verify_rc_json on degraded state (contract holds)"
+rm -rf "$PZ_VERIFY_TMPROOT"
 echo "  shares verify runtime ok"
 boot_output="$("$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
 grep -q 'loader override' <<< "$boot_output"
