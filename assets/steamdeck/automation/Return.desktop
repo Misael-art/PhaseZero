@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Return to Gaming Mode
+Exec=phasezero-return
+Icon=steamdeck-gaming-return
+Terminal=false
+Type=Application
+StartupNotify=false
+Categories=Game;
+X-PhaseZero-Managed=true

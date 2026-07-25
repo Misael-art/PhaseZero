@@ -86,6 +86,7 @@ osdevice                unknown
             $installs.Count | Should Be 1
             [bool]$installs[0].customConfigManaged | Should Be $false
             [bool]$installs[0].grubConfigTimeoutZero | Should Be $true
+            [bool]$installs[0].grubEfiDangerousPrefix | Should Be $false
             [bool]$grub.Detected | Should Be $true
             [string]$grub.Confidence | Should Be 'high'
         } finally {
@@ -130,6 +131,29 @@ osdevice                unknown
             [bool]$result.changed | Should Be $true
             (Test-Path -LiteralPath $fallback) | Should Be $true
             (Get-Content -LiteralPath $fallback -Raw) | Should Match 'grub-binary'
+        } finally {
+            if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+    }
+
+    It 'refuses to copy a SteamOS GRUB fallback with a dangerous disk prefix' {
+        $root = Join-Path $env:TEMP ("pz-steamos-dangerous-fallback-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $efi = Join-Path $root 'EFI\steamos'
+            New-Item -ItemType Directory -Path $efi -Force | Out-Null
+            Set-Content -Path (Join-Path $efi 'grubx64.efi') -Value '(,gpt2)/@/boot/grub' -Encoding Ascii
+            Set-Content -Path (Join-Path $efi 'grub.cfg') -Value 'source custom.cfg' -Encoding Ascii
+
+            $installs = @(Get-BootstrapSteamOsEfiInstallations -RootPaths @($root))
+            $result = Ensure-BootstrapSteamOsEfiFallbackBootloader -RootPaths @($root)
+            $fallback = Join-Path $root 'EFI\Boot\bootx64.efi'
+
+            [bool]$installs[0].grubEfiDangerousPrefix | Should Be $true
+            [bool]$result.changed | Should Be $false
+            [bool]$result.installations[0].changed | Should Be $false
+            [bool]$result.installations[0].blocked | Should Be $true
+            [string]$result.installations[0].blockReason | Should Be 'dangerous-grub-efi-prefix'
+            (Test-Path -LiteralPath $fallback) | Should Be $false
         } finally {
             if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue }
         }

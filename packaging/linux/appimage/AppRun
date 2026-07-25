@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+HERE="$(dirname "$(readlink -f "$0")")"
+export PHASEZERO_ROOT="$HERE/usr/lib/phasezero"
+export PYTHONPATH="$PHASEZERO_ROOT:$HERE/usr/lib/python3/site-packages${PYTHONPATH:+:$PYTHONPATH}"
+export LD_LIBRARY_PATH="$HERE/usr/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export PYTHONHOME="$HERE/usr"
+exec "$HERE/usr/bin/python3" -m linux.ui_native "$@"

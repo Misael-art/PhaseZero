@@ -1,0 +1,57 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "waydroid-linux",
+  "description": "Linux Waydroid host: Android container, kiosk Wayland session, binder readiness and direct GRUB boot tooling",
+  "os": ["linux"],
+  "packages": {
+    "linux": {
+      "pacman": [
+        "waydroid",
+        "cage",
+        "dnsmasq",
+        "python-gbinder",
+        "lxc",
+        "nftables",
+        "power-profiles-daemon",
+        "cpupower",
+        "curl",
+        "wget",
+        "unzip",
+        "jq"
+      ],
+      "yay": [],
+      "flatpak": []
+    },
+    "windows": {
+      "winget": [],
+      "choco": []
+    }
+  },
+  "scripts": {
+    "linux": [
+      "linux/waydroid/waydroid.sh"
+    ],
+    "windows": []
+  },
+  "configs": {
+    "linux": [
+      "linux/waydroid/waydroid.sh",
+      "linux/waydroid/waydroid-boot-prepare.sh",
+      "linux/waydroid/waydroid-session.sh"
+    ],
+    "windows": []
+  },
+  "systemd": {
+    "linux": {
+      "enable": [],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.max_map_count": 2147483642
+      }
+    }
+  }
+}

@@ -290,12 +290,25 @@ function Test-BootstrapDiskSpace {
     )
     $minSystemGB = 2.0
     $minWorkspaceGB = 1.0
+    $componentCount = @($ResolvedComponents).Count
+    $profileCount = 0
+    $selectionComponentCount = 0
+    $appTuningSelectionCount = 0
+    try { $profileCount = @($Selection.Profiles).Count } catch { $profileCount = 0 }
+    try { $selectionComponentCount = @($Selection.Components).Count } catch { $selectionComponentCount = 0 }
+    try { $appTuningSelectionCount += @($Selection.AppTuningItems).Count } catch { }
+    try { $appTuningSelectionCount += @($Selection.AppTuningCategories).Count } catch { }
+    $configOnlyAppTuning = ($componentCount -eq 0 -and $profileCount -eq 0 -and $selectionComponentCount -eq 0 -and $appTuningSelectionCount -gt 0)
 
     if (@($Selection.Profiles) -contains 'full') {
         $minSystemGB = 15.0
         $minWorkspaceGB = 5.0
     } elseif ($ResolvedComponents.Count -gt 50) {
         $minSystemGB = 10.0
+    } elseif ($configOnlyAppTuning) {
+        $minSystemGB = 0.1
+        $minWorkspaceGB = 0.1
+        Write-Log 'Preflight: ajuste/configuração sem instalação detectado; usando limite mínimo de disco reduzido.'
     }
 
     $systemFree = Get-BootstrapFreeSpace -Path $env:SystemDrive
@@ -5274,7 +5287,7 @@ function Install-BootstrapWinhanceComponent {
     $sourceUrl = [string]$ComponentDef.SourceUrl
     $installCommand = [string]$ComponentDef.InstallCommand
     if ([string]::IsNullOrWhiteSpace($sourceUrl)) { $sourceUrl = 'https://get.winhance.net/' }
-    if ([string]::IsNullOrWhiteSpace($installCommand)) { $installCommand = 'irm "https://get.winhance.net" | iex' }
+    if ([string]::IsNullOrWhiteSpace($installCommand)) { $installCommand = 'download-validate-execute https://get.winhance.net/' }
 
     if ([bool]$State.DryRun) {
         Write-Log ("DryRun: planejado instalar Winhance via fonte oficial: {0}; nenhuma otimizacao/tweak sera aplicada." -f $sourceUrl)
@@ -5294,9 +5307,23 @@ function Install-BootstrapWinhanceComponent {
     }
 
     $powershellExe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $script = 'irm "https://get.winhance.net" | iex'
+    $tempRoot = [System.IO.Path]::GetTempPath()
+    $scriptPath = Join-Path $tempRoot ("phasezero-winhance-{0}.ps1" -f ([Guid]::NewGuid().ToString('N')))
     Write-Log 'Instalando Winhance via instalador oficial. Nenhuma configuracao/tweak sera aplicado pelo PhaseZero.'
-    $exitCode = Invoke-NativeWithLog -Exe $powershellExe -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $script) -TimeoutMs 300000
+    try {
+        Invoke-WebRequestWithRetry -Uri $sourceUrl -OutFile $scriptPath -OperationName 'download do instalador Winhance'
+        $scriptInfo = Get-Item -LiteralPath $scriptPath -ErrorAction Stop
+        if ($scriptInfo.Length -lt 256 -or $scriptInfo.Length -gt 2097152) {
+            throw ("Instalador Winhance falhou validacao de tamanho: {0} bytes." -f $scriptInfo.Length)
+        }
+        $scriptText = Get-Content -LiteralPath $scriptPath -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($scriptText) -or $scriptText -match '(?is)<\s*!?doctype\s+html|<\s*html\b') {
+            throw 'Instalador Winhance falhou validacao de conteudo.'
+        }
+        $exitCode = Invoke-NativeWithLog -Exe $powershellExe -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath) -TimeoutMs 300000
+    } finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
     if ($exitCode -ne 0) {
         throw ("Winhance installer oficial falhou (exit={0})." -f $exitCode)
     }
@@ -6779,7 +6806,16 @@ function Ensure-GitAndBash {
         Ensure-WingetPackage -WingetPath $WingetPath -Id 'Git.Git' -DisplayName 'Git for Windows' -ProbePaths @("$env:ProgramFiles\Git\cmd\git.exe", "${env:ProgramFiles(x86)}\Git\cmd\git.exe")
         $git = Get-GitExe
     }
-    if (-not $git) { throw 'Falha ao localizar git.exe apos a instalação.' }
+    if (-not $git) {
+        $choco = Get-Command choco -ErrorAction SilentlyContinue
+        if ($choco) {
+            Write-Log 'Git for Windows nao localizado apos winget; tentando fallback Chocolatey git.install.' 'WARN'
+            & $choco.Source install git.install -y --force
+            Refresh-SessionPath
+            $git = Get-GitExe
+        }
+    }
+    if (-not $git) { throw 'winget e chocolatey falharam. Instale Git for Windows manualmente.' }
     $git = [string](@($git)[0]).Trim()
     $gitVersion = & $git --version
     Write-Log "git: $gitVersion ($git)"
@@ -7864,7 +7900,18 @@ function Ensure-OpenCode {
         Write-Log "opencode ja instalado: $ver ($resolvedOpenCode)"
     } else {
         Write-Log 'Instalando opencode via script oficial...'
-        $exitCode = Invoke-NativeWithRetry -Exe $BashPath -Args @('-lc', 'set -e; curl -fsSL https://opencode.ai/install | bash') -OperationName 'instalacao do opencode via script oficial'
+        $installCommand = @'
+set -euo pipefail
+tmp=$(mktemp "${TMPDIR:-/tmp}/phasezero-opencode.XXXXXX")
+cleanup() { rm -f -- "$tmp"; }
+trap cleanup EXIT
+curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 https://opencode.ai/install -o "$tmp"
+size=$(wc -c < "$tmp")
+[ "$size" -ge 256 ] && [ "$size" -le 1048576 ]
+head -n 1 "$tmp" | grep -q '^#!'
+bash "$tmp"
+'@
+        $exitCode = Invoke-NativeWithRetry -Exe $BashPath -Args @('-lc', $installCommand) -OperationName 'instalacao do opencode via script oficial'
         if ($exitCode -ne 0) { throw "Falha ao instalar opencode via script oficial (exit=$exitCode)." }
         if (-not (Test-Path $exe)) { throw "Instalação do opencode concluída, mas nao encontrei: $exe" }
         $ver = & $exe --version
@@ -8485,6 +8532,16 @@ function Install-BootstrapAiMemoryComponent {
     # configure = task de servidor loopback + wiring MCP/hooks por agente detectado (idempotente).
     $configure = Set-BootstrapAiMemoryConfig -InstallRoot $root -ProjectRoot $project
     Write-Log ("ai-memory configure: {0} {1}" -f [string]$configure.status, [string]$configure.message)
+    # SDCard sync (ja acionado dentro de Set-BootstrapAiMemoryConfig; log extra aqui)
+    if ($configure.Contains('sdSync') -and $configure['sdSync']) {
+        $sync = $configure['sdSync']
+        if ($sync.sdCardFound) {
+            Write-Log ("ai-memory sd-sync: direcao={0} synced={1}" -f $sync.direction, $sync.synced) 'INFO'
+        }
+    }
+    if ($configure.Contains('syncTask') -and $configure['syncTask']) {
+        Write-Log ("ai-memory sync-task: {0}" -f [string]$configure['syncTask']['status']) 'INFO'
+    }
 }
 
 function Install-BootstrapAionUiComponent {
@@ -9012,6 +9069,7 @@ function Get-BootstrapSteamOsEfiInstallations {
         }
 
         $hasWindowsEntry = (($grubConfig + "`n" + $customConfig) -match '(?i)Windows Boot Manager|bootmgfw\.efi')
+        $dangerousPrefix = Test-BootstrapGrubEfiDangerousPrefix -Path $grubPath
         $installations.Add([pscustomobject][ordered]@{
             root = [string]$root
             efiPath = $efiDir
@@ -9025,10 +9083,28 @@ function Get-BootstrapSteamOsEfiInstallations {
             fallbackBootPath = $fallbackBootPath
             fallbackBootExists = (Test-Path -LiteralPath $fallbackBootPath -PathType Leaf)
             fallbackBootMatchesGrub = [bool]$fallbackMatches
+            grubEfiDangerousPrefix = [bool]$dangerousPrefix
         }) | Out-Null
     }
 
     return @($installations.ToArray())
+}
+
+function Test-BootstrapGrubEfiDangerousPrefix {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    try {
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+    } catch {
+        return $false
+    }
+
+    if ($text -match 'hd6,gpt2') { return $true }
+    if ($text -match '\(,gpt[0-9]+\)/@/boot/grub') { return $true }
+    if ($text -match '\(hd[0-9]+,gpt[0-9]+\)/@/boot/grub') { return $true }
+    return $false
 }
 
 function Merge-BootstrapGrubMarkedTextBlock {
@@ -9129,9 +9205,14 @@ function Ensure-BootstrapSteamOsEfiFallbackBootloader {
         $target = [string]$install.fallbackBootPath
         $changed = -not [bool]$install.fallbackBootMatchesGrub
         $backupPath = ''
+        $blocked = [bool]$install.grubEfiDangerousPrefix
         if ($changed) {
-            $changedAny = $true
-            if (-not $DryRun) {
+            if ($blocked) {
+                Write-Log "dualboot-manager: refusing EFI fallback copy from GRUB with dangerous disk-order prefix: $source"
+            } else {
+                $changedAny = $true
+            }
+            if ((-not $blocked) -and (-not $DryRun)) {
                 $parent = Split-Path -Path $target -Parent
                 if ($parent) { New-Item -Path $parent -ItemType Directory -Force | Out-Null }
                 if ($State) {
@@ -9147,9 +9228,11 @@ function Ensure-BootstrapSteamOsEfiFallbackBootloader {
             root = [string]$install.root
             source = $source
             target = $target
-            changed = $changed
+            changed = ($changed -and -not $blocked)
             dryRun = [bool]$DryRun
             backupPath = $backupPath
+            blocked = $blocked
+            blockReason = if ($blocked) { 'dangerous-grub-efi-prefix' } else { '' }
         }) | Out-Null
     }
 
@@ -15895,7 +15978,7 @@ function Get-BootstrapComponentCatalog {
     $catalog['openssh-client'] = New-BootstrapComponentDefinition -Name 'openssh-client' -Description 'OpenSSH Client via Windows capability.' -DependsOn @('system-core') -Kind 'windows-capability' -Data @{ DisplayName = 'OpenSSH Client'; CapabilityNames = @('OpenSSH.Client~~~~0.0.1.0'); CommandNames = @('ssh'); RequiresAdmin = $true; Stage = 'runtime'; Provisioning = 'windows-capability' }
     $catalog['openssh-server'] = New-BootstrapComponentDefinition -Name 'openssh-server' -Description 'OpenSSH Server via Windows capability; firewall Domain/Private somente.' -DependsOn @('openssh-client') -Kind 'windows-capability' -Data @{ DisplayName = 'OpenSSH Server'; CapabilityNames = @('OpenSSH.Server~~~~0.0.1.0'); ServiceName = 'sshd'; FirewallRuleName = 'PhaseZero OpenSSH Server Domain Private'; FirewallProfiles = @('Domain', 'Private'); RequiresAdmin = $true; Stage = 'runtime'; Provisioning = 'windows-capability' }
     $catalog['3d-viewer'] = New-BootstrapComponentDefinition -Name '3d-viewer' -Description 'Microsoft 3D Viewer via Microsoft Store/winget.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = '9NBLGGH42THS'; DisplayName = 'Microsoft 3D Viewer'; AppxPackageNames = @('Microsoft.Microsoft3DViewer'); ProbePaths = @("$env:ProgramFiles\WindowsApps\Microsoft.Microsoft3DViewer_*\3DViewer.exe") } -RequiresNetwork $true
-    $catalog['winhance'] = New-BootstrapComponentDefinition -Name 'winhance' -Description 'Winhance install/audit somente; nenhuma otimizacao agressiva aplicada.' -DependsOn @('system-core') -Kind 'winhance' -Data @{ AllowFailureWhenNotAdmin = $true; DisplayName = 'Winhance'; SourceUrl = 'https://get.winhance.net/'; InstallCommand = 'irm "https://get.winhance.net" | iex'; RepoUrl = 'https://github.com/memstechtips/Winhance'; ProbePaths = @("$env:ProgramFiles\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Programs\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Winhance\Winhance.exe", "C:\ProgramData\Winhance\Winhance.exe") } -RequiresNetwork $true
+    $catalog['winhance'] = New-BootstrapComponentDefinition -Name 'winhance' -Description 'Winhance install/audit somente; nenhuma otimizacao agressiva aplicada.' -DependsOn @('system-core') -Kind 'winhance' -Data @{ AllowFailureWhenNotAdmin = $true; DisplayName = 'Winhance'; SourceUrl = 'https://get.winhance.net/'; InstallCommand = 'download-validate-execute https://get.winhance.net/'; RepoUrl = 'https://github.com/memstechtips/Winhance'; ProbePaths = @("$env:ProgramFiles\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Programs\Winhance\Winhance.exe", "${env:LOCALAPPDATA}\Winhance\Winhance.exe", "C:\ProgramData\Winhance\Winhance.exe") } -RequiresNetwork $true
     $catalog['docker'] = New-BootstrapComponentDefinition -Name 'docker' -Description 'Docker Desktop.' -DependsOn @('wsl-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Docker.DockerDesktop'; DisplayName = 'Docker Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\Docker\Docker.exe", "${env:LOCALAPPDATA}\Docker\Docker Desktop.exe", "$env:ProgramFiles\Docker\Docker.exe", "$env:ProgramFiles\Docker\Docker\Docker Desktop.exe") }
     $catalog['claude-desktop'] = New-BootstrapComponentDefinition -Name 'claude-desktop' -Description 'Claude Desktop.' -DependsOn @('system-core') -Kind 'winget' -Data @{ AllowFailureWhenNotAdmin = $true; Id = 'Anthropic.Claude'; DisplayName = 'Claude Desktop'; ProbePaths = @("${env:LOCALAPPDATA}\AnthropicClaude\claude.exe", "${env:LOCALAPPDATA}\AnthropicClaude\app-*\claude.exe", "${env:LOCALAPPDATA}\Programs\Claude\Claude.exe", "$env:ProgramFiles\Claude\Claude.exe") }
     $catalog['claude-code'] = New-BootstrapComponentDefinition -Name 'claude-code' -Description 'Claude Code CLI.' -DependsOn @('system-core') -Kind 'claude-code'
@@ -17791,7 +17874,7 @@ function Get-BootstrapAiToolCatalog {
         PackageName    = ''
         InstallSupport = 'wsl-installer'
         WindowsInstallSupport = 'native-powershell-beta'
-        WindowsInstallCommand = 'iex (irm https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.ps1)'
+        WindowsInstallCommand = 'download-validate-execute official install.ps1'
         WindowsDataRoot = '$env:LOCALAPPDATA\hermes'
         ProbePaths     = @('$env:USERPROFILE\.hermes\hermes-agent')
         Notes          = 'Repo oficial validado. WSL2 segue preferido quando saudavel; Windows nativo beta usa install.ps1 oficial e data dir em LOCALAPPDATA.'
@@ -18094,10 +18177,15 @@ function Get-BootstrapAiInstallRoot {
     if (-not [string]::IsNullOrWhiteSpace($InstallRoot)) {
         return [System.IO.Path]::GetFullPath($InstallRoot)
     }
+    $tempRoot = $env:TEMP
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMPDIR }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMP }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = [System.IO.Path]::GetTempPath() }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = (Get-Location).Path }
     $base = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
         Join-Path $env:LOCALAPPDATA 'PhaseZero'
     } else {
-        Join-Path $env:TEMP 'PhaseZero'
+        Join-Path $tempRoot 'PhaseZero'
     }
     return (Join-Path $base 'ai-tools')
 }
@@ -21414,7 +21502,17 @@ function Install-BootstrapHermesAgentWsl {
 
     $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
     $installer = 'https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh'
-    $command = "curl -fsSL $installer | bash -s -- --skip-setup"
+    $command = @"
+set -euo pipefail
+tmp=`$(mktemp "`${TMPDIR:-/tmp}/phasezero-hermes.XXXXXX")
+cleanup() { rm -f -- "`$tmp"; }
+trap cleanup EXIT
+curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 120 '$installer' -o "`$tmp"
+size=`$(wc -c < "`$tmp")
+[ "`$size" -ge 256 ] && [ "`$size" -le 2097152 ]
+head -n 1 "`$tmp" | grep -q '^#!'
+bash "`$tmp" --skip-setup
+"@
     if ($DryRun) {
         return (New-BootstrapAiToolResult -ToolName 'hermes-agent' -Action 'install' -Status 'planned' -InstallRoot $root -ProjectRoot $ProjectRoot -Message ("WSL2: {0}" -f $command) -Docs ([string]$CatalogEntry['DocsUrl']))
     }
@@ -21446,8 +21544,20 @@ arch=$(uname -m)
 case "$arch" in x86_64|amd64) A=x86_64;; aarch64|arm64) A=aarch64;; *) A=x86_64;; esac
 mkdir -p "$HOME/.local/bin"
 url="https://github.com/akitaonrails/ai-jail/releases/latest/download/ai-jail-linux-${A}.tar.gz"
-curl -fsSL "$url" | tar -xz -C "$HOME/.local/bin"
-chmod +x "$HOME/.local/bin/ai-jail" 2>/dev/null || true
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/phasezero-ai-jail.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+archive="$tmp/ai-jail.tar.gz"
+curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 --connect-timeout 15 --max-time 180 "$url" -o "$archive"
+size=$(wc -c < "$archive")
+[ "$size" -ge 1024 ] && [ "$size" -le 268435456 ]
+tar -tzf "$archive" | grep -Eq '(^|/)ai-jail$'
+extract="$tmp/extract"
+mkdir -p "$extract"
+tar --no-same-owner --no-same-permissions -xzf "$archive" -C "$extract"
+candidate=$(find "$extract" -maxdepth 4 -type f -name ai-jail -print)
+[ "$(printf '%s\n' "$candidate" | sed '/^$/d' | wc -l)" -eq 1 ]
+[ ! -L "$candidate" ] && [ -s "$candidate" ]
+install -m 0755 "$candidate" "$HOME/.local/bin/ai-jail"
 if ! command -v bwrap >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then sudo -n apt-get install -y bubblewrap >/dev/null 2>&1 || true; fi
   if ! command -v bwrap >/dev/null 2>&1 && command -v dnf >/dev/null 2>&1; then sudo -n dnf install -y bubblewrap >/dev/null 2>&1 || true; fi
@@ -21811,8 +21921,11 @@ function Get-BootstrapAiMemoryExePath {
     $candidates = New-Object System.Collections.Generic.List[string]
     $candidates.Add((Join-Path (Get-BootstrapAiMemoryInstallDir -InstallRoot $root) 'ai-memory.exe')) | Out-Null
     $candidates.Add((Join-Path (Get-BootstrapAiBinDir -InstallRoot $root) 'ai-memory.exe')) | Out-Null
-    $cargoHome = Join-Path $env:USERPROFILE '.cargo\bin\ai-memory.exe'
-    $candidates.Add($cargoHome) | Out-Null
+    $userHome = Get-BootstrapUserHomePath
+    if (-not [string]::IsNullOrWhiteSpace($userHome)) {
+        $cargoHome = Join-Path $userHome '.cargo\bin\ai-memory.exe'
+        $candidates.Add($cargoHome) | Out-Null
+    }
     foreach ($candidate in @($candidates.ToArray())) {
         if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) { return $candidate }
     }
@@ -21832,6 +21945,21 @@ function Get-BootstrapAiMemoryReleaseAsset {
     $assets = $CatalogEntry['ReleaseAssets']
     if ($assets -is [System.Collections.IDictionary] -and $assets.Contains($Key)) { return $assets[$Key] }
     throw ("Asset ai-memory '{0}' nao definido no catalogo." -f $Key)
+}
+
+function Get-BootstrapAiMemoryDataDir {
+    # Retorna o diretorio de dados do ai-memory.
+    # Padrao Windows: $env:LOCALAPPDATA\ai-memory.
+    # Aceita override via env var AI_MEMORY_DATA_DIR.
+    if (-not [string]::IsNullOrWhiteSpace($env:AI_MEMORY_DATA_DIR)) {
+        return [string]$env:AI_MEMORY_DATA_DIR
+    }
+    $localAppData = if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        $env:LOCALAPPDATA
+    } else {
+        Join-Path $env:USERPROFILE 'AppData\Local'
+    }
+    return (Join-Path $localAppData 'ai-memory')
 }
 
 function Get-BootstrapAiMemoryDetectedAgents {
@@ -22122,6 +22250,18 @@ function Set-BootstrapAiMemoryConfig {
     $result['serverTask'] = $task
     $result['agents'] = @($agents)
     $result['wiring'] = @($wiring)
+
+    # Sync com SDCard + registra task agendada (criada sempre para capturar SDCard futuro)
+    if (-not $DryRun) {
+        $syncResult = Sync-BootstrapAiMemoryWithSdCard -DryRun:$DryRun
+        $result['sdSync'] = $syncResult
+        $taskResult = Ensure-BootstrapAiMemorySyncTask -DryRun:$DryRun
+        $result['syncTask'] = $taskResult
+    } else {
+        $result['sdSync'] = [ordered]@{ schemaVersion = 1; sdCardFound = $false; direction = 'planned' }
+        $result['syncTask'] = [ordered]@{ status = 'planned'; task = 'BootstrapTools-AiMemorySync' }
+    }
+
     return $result
 }
 
@@ -22155,6 +22295,449 @@ function Uninstall-BootstrapAiMemory {
     }
     Write-BootstrapAiToolManifest -InstallRoot $root -Manifest $manifest | Out-Null
     return (New-BootstrapAiToolResult -ToolName 'ai-memory' -Action 'uninstall' -Status 'removed' -InstallRoot $root -ProjectRoot $ProjectRoot -Message 'ai-memory gerenciado e task removidos; dados de memoria do usuario preservados.' -Docs 'https://github.com/akitaonrails/ai-memory')
+}
+
+function Find-BootstrapAiMemorySdCard {
+    # Varre drives removiveis (DriveType=2) procurando pasta "Ai-memory" na raiz.
+    # Retorna path completo ou $null.
+    try {
+        $drives = Get-CimInstance -ClassName Win32_LogicalDisk -ErrorAction SilentlyContinue |
+            Where-Object { $_.DriveType -eq 2 }
+        foreach ($drive in $drives) {
+            $candidate = Join-Path $drive.DeviceID 'Ai-memory'
+            if (Test-Path -LiteralPath $candidate) {
+                Write-Log "ai-memory: SDCard encontrado em $candidate" 'INFO'
+                return $candidate
+            }
+        }
+    } catch {
+        Write-Log ("ai-memory: Find-BootstrapAiMemorySdCard WMI falhou ({0})" -f $_.Exception.Message) 'WARN'
+    }
+    # Fallback: drive literal F:\Ai-memory
+    $fallback = 'F:\Ai-memory'
+    if (Test-Path -LiteralPath $fallback) {
+        Write-Log "ai-memory: SDCard fallback em $fallback" 'INFO'
+        return $fallback
+    }
+    Write-Log 'ai-memory: Nenhum SDCard com pasta Ai-memory encontrado.' 'INFO'
+    return $null
+}
+
+function Export-BootstrapAiMemoryToSdCard {
+    <#
+    .SYNOPSIS
+        Exporta dados locais do ai-memory (wiki/raw/db/config) para SDCard.
+    .DESCRIPTION
+        wiki/ usa git push para bare repo no SDCard.
+        raw/ e db/ usam robocopy /MIR.
+        config.toml copiado direto.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$SdCardPath,
+        [Parameter(Mandatory = $true)][string]$DataDir,
+        [switch]$DryRun
+    )
+    Write-Log "ai-memory: Exportando dados para SDCard $SdCardPath" 'INFO'
+
+    $results = New-Object System.Collections.Generic.List[object]
+
+    # Cria estrutura no SDCard
+    if (-not $DryRun) {
+        $null = New-Item -Path $SdCardPath -ItemType Directory -Force
+        $null = New-Item -Path (Join-Path $SdCardPath 'raw') -ItemType Directory -Force
+        $null = New-Item -Path (Join-Path $SdCardPath 'db') -ItemType Directory -Force
+    }
+
+    # wiki/ - git push para bare repo no SDCard
+    $wikiLocal = Join-Path $DataDir 'wiki'
+    $wikiBareSd = Join-Path $SdCardPath 'wiki.git'
+    if (Test-Path -LiteralPath $wikiLocal) {
+        # Inicializa bare repo no SDCard se necessario
+        if (-not (Test-Path -LiteralPath $wikiBareSd)) {
+            if (-not $DryRun) {
+                $null = New-Item -Path $wikiBareSd -ItemType Directory -Force
+                $initResult = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('init', '--bare', $wikiBareSd) -TimeoutMs 30000
+                if ([int]$initResult['exitCode'] -ne 0) {
+                    $results.Add([ordered]@{ component = 'wiki.git'; status = 'failed'; detail = "git init --bare exit $($initResult.exitCode)" })
+                    Write-Log "ai-memory: wiki.git init --bare falhou (exit $($initResult.exitCode))" 'WARN'
+                }
+            }
+        }
+        if (-not $DryRun) {
+            $pushResult = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('-C', $wikiLocal, 'push', $wikiBareSd, 'HEAD:main') -TimeoutMs 60000
+            if ([int]$pushResult['exitCode'] -ne 0) {
+                $results.Add([ordered]@{ component = 'wiki'; status = 'failed'; detail = "git push exit $($pushResult.exitCode)" })
+                Write-Log "ai-memory: git push wiki falhou (exit $($pushResult.exitCode))" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'wiki'; status = 'exported'; detail = 'git push ok' })
+                Write-Log 'ai-memory: wiki exportado via git push' 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'wiki'; status = 'planned'; detail = 'git push to bare repo' })
+        }
+    }
+
+    # raw/ - robocopy /MIR
+    $rawLocal = Join-Path $DataDir 'raw'
+    $rawSd = Join-Path $SdCardPath 'raw'
+    if (Test-Path -LiteralPath $rawLocal) {
+        if (-not $DryRun) {
+            $rcArgs = @($rawLocal, $rawSd, '/MIR', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS')
+            $rcResult = Invoke-BootstrapAiNativeCommand -Exe 'robocopy' -Args $rcArgs -TimeoutMs 120000
+            $rcExit = [int]$rcResult['exitCode']
+            if ($rcExit -ge 8) {
+                $results.Add([ordered]@{ component = 'raw'; status = 'failed'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: robocopy raw falhou (exit $rcExit)" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'raw'; status = 'exported'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: raw exportado (robocopy exit $rcExit)" 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'raw'; status = 'planned'; detail = 'robocopy /MIR' })
+        }
+    }
+
+    # db/ - robocopy /MIR
+    $dbLocal = Join-Path $DataDir 'db'
+    $dbSd = Join-Path $SdCardPath 'db'
+    if (Test-Path -LiteralPath $dbLocal) {
+        if (-not $DryRun) {
+            $rcArgs = @($dbLocal, $dbSd, '/MIR', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS')
+            $rcResult = Invoke-BootstrapAiNativeCommand -Exe 'robocopy' -Args $rcArgs -TimeoutMs 120000
+            $rcExit = [int]$rcResult['exitCode']
+            if ($rcExit -ge 8) {
+                $results.Add([ordered]@{ component = 'db'; status = 'failed'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: robocopy db falhou (exit $rcExit)" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'db'; status = 'exported'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: db exportado (robocopy exit $rcExit)" 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'db'; status = 'planned'; detail = 'robocopy /MIR' })
+        }
+    }
+
+    # config.toml
+    $configLocal = Join-Path $DataDir 'config.toml'
+    $configSd = Join-Path $SdCardPath 'config.toml'
+    if (Test-Path -LiteralPath $configLocal) {
+        if (-not $DryRun) {
+            Copy-Item -LiteralPath $configLocal -Destination $configSd -Force -ErrorAction SilentlyContinue
+            $results.Add([ordered]@{ component = 'config.toml'; status = 'exported'; detail = '' })
+        } else {
+            $results.Add([ordered]@{ component = 'config.toml'; status = 'planned'; detail = 'Copy-Item' })
+        }
+    }
+
+    return @($results.ToArray())
+}
+
+function Import-BootstrapAiMemoryFromSdCard {
+    <#
+    .SYNOPSIS
+        Importa dados do SDCard para o diretorio local do ai-memory.
+    .DESCRIPTION
+        wiki/ usa git pull (ou git clone se local vazio).
+        raw/ e db/ usam robocopy /MIR /XO (exclude older = newest-wins).
+        config.toml copiado apenas se local nao existe.
+    #>
+    param(
+        [Parameter(Mandatory = $true)][string]$SdCardPath,
+        [Parameter(Mandatory = $true)][string]$DataDir,
+        [switch]$DryRun
+    )
+    Write-Log "ai-memory: Importando dados do SDCard $SdCardPath" 'INFO'
+
+    $results = New-Object System.Collections.Generic.List[object]
+
+    if (-not $DryRun) {
+        $null = New-Item -Path $DataDir -ItemType Directory -Force
+    }
+
+    # wiki/ - git pull ou git clone
+    $wikiLocal = Join-Path $DataDir 'wiki'
+    $wikiBareSd = Join-Path $SdCardPath 'wiki.git'
+    if (Test-Path -LiteralPath $wikiBareSd) {
+        if (Test-Path -LiteralPath $wikiLocal) {
+            # git pull via remote sd-card
+            if (-not $DryRun) {
+                # Verifica se remote sd-card ja existe
+                $remoteCheck = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('-C', $wikiLocal, 'remote', 'get-url', 'sd-card') -TimeoutMs 10000
+                if ([int]$remoteCheck['exitCode'] -ne 0) {
+                    Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('-C', $wikiLocal, 'remote', 'add', 'sd-card', $wikiBareSd) -TimeoutMs 10000 | Out-Null
+                }
+                $pullResult = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('-C', $wikiLocal, 'pull', 'sd-card', 'main') -TimeoutMs 60000
+                if ([int]$pullResult['exitCode'] -ne 0) {
+                    $results.Add([ordered]@{ component = 'wiki'; status = 'failed'; detail = "git pull exit $($pullResult.exitCode)" })
+                    Write-Log "ai-memory: git pull wiki falhou (exit $($pullResult.exitCode))" 'WARN'
+                } else {
+                    $results.Add([ordered]@{ component = 'wiki'; status = 'imported'; detail = 'git pull ok' })
+                    Write-Log 'ai-memory: wiki importado via git pull' 'INFO'
+                }
+            } else {
+                $results.Add([ordered]@{ component = 'wiki'; status = 'planned'; detail = 'git pull from bare repo' })
+            }
+        } else {
+            # git clone
+            if (-not $DryRun) {
+                $cloneResult = Invoke-BootstrapAiNativeCommand -Exe 'git' -Args @('clone', $wikiBareSd, $wikiLocal) -TimeoutMs 60000
+                if ([int]$cloneResult['exitCode'] -ne 0) {
+                    $results.Add([ordered]@{ component = 'wiki'; status = 'failed'; detail = "git clone exit $($cloneResult.exitCode)" })
+                    Write-Log "ai-memory: git clone wiki falhou (exit $($cloneResult.exitCode))" 'WARN'
+                } else {
+                    $results.Add([ordered]@{ component = 'wiki'; status = 'imported'; detail = 'git clone ok' })
+                    Write-Log 'ai-memory: wiki clonado do SDCard' 'INFO'
+                }
+            } else {
+                $results.Add([ordered]@{ component = 'wiki'; status = 'planned'; detail = 'git clone from bare repo' })
+            }
+        }
+    }
+
+    # raw/ - robocopy /MIR /XO (newest-wins)
+    $rawSd = Join-Path $SdCardPath 'raw'
+    $rawLocal = Join-Path $DataDir 'raw'
+    if (Test-Path -LiteralPath $rawSd) {
+        if (-not $DryRun) {
+            $null = New-Item -Path $rawLocal -ItemType Directory -Force
+            $rcArgs = @($rawSd, $rawLocal, '/MIR', '/XO', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS')
+            $rcResult = Invoke-BootstrapAiNativeCommand -Exe 'robocopy' -Args $rcArgs -TimeoutMs 120000
+            $rcExit = [int]$rcResult['exitCode']
+            if ($rcExit -ge 8) {
+                $results.Add([ordered]@{ component = 'raw'; status = 'failed'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: robocopy raw import falhou (exit $rcExit)" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'raw'; status = 'imported'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: raw importado (robocopy exit $rcExit)" 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'raw'; status = 'planned'; detail = 'robocopy /MIR /XO' })
+        }
+    }
+
+    # db/ - robocopy /MIR /XO
+    $dbSd = Join-Path $SdCardPath 'db'
+    $dbLocal = Join-Path $DataDir 'db'
+    if (Test-Path -LiteralPath $dbSd) {
+        if (-not $DryRun) {
+            $null = New-Item -Path $dbLocal -ItemType Directory -Force
+            $rcArgs = @($dbSd, $dbLocal, '/MIR', '/XO', '/R:3', '/W:5', '/NP', '/NDL', '/NJH', '/NJS')
+            $rcResult = Invoke-BootstrapAiNativeCommand -Exe 'robocopy' -Args $rcArgs -TimeoutMs 120000
+            $rcExit = [int]$rcResult['exitCode']
+            if ($rcExit -ge 8) {
+                $results.Add([ordered]@{ component = 'db'; status = 'failed'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: robocopy db import falhou (exit $rcExit)" 'WARN'
+            } else {
+                $results.Add([ordered]@{ component = 'db'; status = 'imported'; detail = "robocopy exit $rcExit" })
+                Write-Log "ai-memory: db importado (robocopy exit $rcExit)" 'INFO'
+            }
+        } else {
+            $results.Add([ordered]@{ component = 'db'; status = 'planned'; detail = 'robocopy /MIR /XO' })
+        }
+    }
+
+    # config.toml (apenas se local nao existe)
+    $configSd = Join-Path $SdCardPath 'config.toml'
+    $configLocal = Join-Path $DataDir 'config.toml'
+    $sdCardHasConfig = Test-Path -LiteralPath $configSd
+    $localHasConfig = Test-Path -LiteralPath $configLocal
+    if ($sdCardHasConfig -and (-not $localHasConfig)) {
+        if (-not $DryRun) {
+            Copy-Item -LiteralPath $configSd -Destination $configLocal -Force -ErrorAction SilentlyContinue
+            $results.Add([ordered]@{ component = 'config.toml'; status = 'imported'; detail = '' })
+        } else {
+            $results.Add([ordered]@{ component = 'config.toml'; status = 'planned'; detail = 'Copy-Item if missing' })
+        }
+    }
+
+    return ([object[]]$results.ToArray())
+}
+
+function Sync-BootstrapAiMemoryWithSdCard {
+    <#
+    .SYNOPSIS
+        Orquestrador de sync bidirecional ai-memory entre host e SDCard.
+    .DESCRIPTION
+        Fluxo:
+        1. Find-BootstrapAiMemorySdCard
+        2. Decide direcao (export/import/bidirectional/none)
+        3. Executa Export/Import conforme estado
+        4. Escreve .phasezero-sync.json no SDCard
+    #>
+    param(
+        [string]$InstallRoot = '',
+        [switch]$DryRun
+    )
+    $root = Get-BootstrapAiInstallRoot -InstallRoot $InstallRoot
+
+    # 1. Encontra SDCard
+    $sdCardPath = Find-BootstrapAiMemorySdCard
+    if (-not $sdCardPath) {
+        return [ordered]@{
+            schemaVersion = 1
+            sdCardFound  = $false
+            sdCardPath   = ''
+            dataDir      = ''
+            direction    = 'none'
+            results      = @()
+            synced       = $false
+        }
+    }
+
+    # 2. Data dir local
+    $dataDir = Get-BootstrapAiMemoryDataDir
+    $localExists = Test-Path -LiteralPath $dataDir
+    $sdCardHasData = (Test-Path -LiteralPath (Join-Path $sdCardPath 'wiki.git')) -or
+                     (Test-Path -LiteralPath (Join-Path $sdCardPath 'raw')) -or
+                     (Test-Path -LiteralPath (Join-Path $sdCardPath 'db'))
+
+    # 3. Decide direcao
+    if (-not $localExists -and -not $sdCardHasData) {
+        Write-Log 'ai-memory: Sync pulado - ambos local e SDCard vazios.' 'INFO'
+        return [ordered]@{
+            schemaVersion = 1
+            sdCardFound  = $true
+            sdCardPath   = $sdCardPath
+            dataDir      = $dataDir
+            direction    = 'none'
+            results      = @()
+            synced       = $false
+        }
+    }
+
+    if (-not $localExists -and $sdCardHasData) {
+        Write-Log 'ai-memory: Sync direcao=import (SDCard tem dados, local vazio)' 'INFO'
+        $results = Import-BootstrapAiMemoryFromSdCard -SdCardPath $sdCardPath -DataDir $dataDir -DryRun:$DryRun
+        $direction = 'import'
+    } elseif ($localExists -and -not $sdCardHasData) {
+        Write-Log 'ai-memory: Sync direcao=export (local tem dados, SDCard vazio)' 'INFO'
+        $results = Export-BootstrapAiMemoryToSdCard -SdCardPath $sdCardPath -DataDir $dataDir -DryRun:$DryRun
+        $direction = 'export'
+    } else {
+        Write-Log 'ai-memory: Sync direcao=bidirectional (ambos tem dados, newest-wins)' 'INFO'
+        $exportResults = New-Object System.Collections.Generic.List[object]
+        $exportTemp = Export-BootstrapAiMemoryToSdCard -SdCardPath $sdCardPath -DataDir $dataDir -DryRun:$DryRun
+        if ($exportTemp) { foreach ($item in $exportTemp) { $exportResults.Add($item) | Out-Null } }
+        $importResults = New-Object System.Collections.Generic.List[object]
+        $importTemp = Import-BootstrapAiMemoryFromSdCard -SdCardPath $sdCardPath -DataDir $dataDir -DryRun:$DryRun
+        if ($importTemp) { foreach ($item in $importTemp) { $importResults.Add($item) | Out-Null } }
+        $combined = New-Object System.Collections.Generic.List[object]
+        foreach ($item in $exportResults) { $combined.Add($item) | Out-Null }
+        foreach ($item in $importResults) { $combined.Add($item) | Out-Null }
+        $results = @($combined.ToArray())
+        $direction = 'bidirectional'
+    }
+
+    # 4. Escreve manifest .phasezero-sync.json
+    $anyFailed = (@($results | Where-Object { $_ -and $_.status -eq 'failed' }).Count) -gt 0
+    $synced = (-not $anyFailed) -and (@($results).Count -gt 0)
+
+    if (-not $DryRun -and $synced) {
+        $hostname = if (-not [string]::IsNullOrWhiteSpace($env:COMPUTERNAME)) { $env:COMPUTERNAME } else { 'unknown' }
+        $manifest = [ordered]@{
+            lastSync   = (Get-Date).ToString('o')
+            sourceHost = $hostname
+            sourceUser = $env:USERNAME
+            direction  = $direction
+            components = @($results)
+        }
+        $manifestPath = Join-Path $sdCardPath '.phasezero-sync.json'
+        $manifestJson = ConvertTo-Json -InputObject $manifest -Depth 5
+        Write-BootstrapAtomicText -Path $manifestPath -Content $manifestJson
+    }
+
+    return [ordered]@{
+        schemaVersion = 1
+        sdCardFound  = $true
+        sdCardPath   = $sdCardPath
+        dataDir      = $dataDir
+        direction    = $direction
+        results      = @($results)
+        synced       = $synced
+    }
+}
+
+function Ensure-BootstrapAiMemorySyncTask {
+    <#
+    .SYNOPSIS
+        Cria scheduled task para sync automatico do ai-memory com SDCard.
+    .DESCRIPTION
+        Triggers: logon + diario 12pm.
+        Executa launcher .ps1 que dot-source bootstrap-tools.ps1 e chama Sync-BootstrapAiMemoryWithSdCard.
+    #>
+    param(
+        [string]$BootstrapScriptPath = '',
+        [switch]$DryRun
+    )
+    $taskName = 'BootstrapTools-AiMemorySync'
+
+    if ([string]::IsNullOrWhiteSpace($BootstrapScriptPath)) {
+        $BootstrapScriptPath = $PSCommandPath
+    }
+
+    $aiRoot = Get-BootstrapAiInstallRoot -InstallRoot ''
+    $launcherDir = Get-BootstrapAiMemoryInstallDir -InstallRoot $aiRoot
+    $launcherPath = Join-Path $launcherDir 'ai-memory-sync-launcher.ps1'
+
+    $launcherContent = @"
+# ai-memory SDCard sync launcher - gerado por PhaseZero BootstrapTools
+# Nao edite manualmente; reexecute a instalacao para recriar.
+param()
+`$ErrorActionPreference = 'Stop'
+`$logPath = Join-Path '$launcherDir' 'ai-memory-sync-launcher.log'
+try {
+    . '$BootstrapScriptPath'
+    `$result = Sync-BootstrapAiMemoryWithSdCard
+    if (`$result.synced) {
+        "OK direcao=`$(`$result.direction) sdCard=`$(`$result.sdCardPath)" | Out-File -LiteralPath `$logPath -Encoding utf8 -Force
+    } else {
+        "SKIP razao=sdCardFound=`$(`$result.sdCardFound)" | Out-File -LiteralPath `$logPath -Encoding utf8 -Force
+    }
+} catch {
+    "ERROR `$_" | Out-File -LiteralPath `$logPath -Encoding utf8 -Force
+    exit 1
+}
+exit 0
+"@
+
+    if ($DryRun) {
+        return [ordered]@{
+            status   = 'planned'
+            task     = $taskName
+            launcher = $launcherPath
+            script   = $BootstrapScriptPath
+        }
+    }
+
+    try {
+        Write-BootstrapAtomicText -Path $launcherPath -Content $launcherContent
+    } catch {
+        return [ordered]@{ status = 'failed'; task = $taskName; reason = "launcher-write: $($_.Exception.Message)" }
+    }
+
+    if (Get-Command -Name Register-ScheduledTask -ErrorAction SilentlyContinue) {
+        try {
+            $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            if ($existing) { Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue }
+
+            $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$launcherPath`""
+            $triggers = @(
+                (New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME)
+                (New-ScheduledTaskTrigger -Daily -At 12pm)
+            )
+            $principal = New-ScheduledTaskPrincipal -UserId ("{0}\{1}" -f $env:USERDOMAIN, $env:USERNAME) -LogonType Interactive -RunLevel Limited
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::FromHours(1))
+            $settings.Hidden = $true
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Description 'Sincroniza ai-memory com SDCard (wiki/raw/db) no logon e diariamente.' -ErrorAction Stop | Out-Null
+            Write-Log "ai-memory: Sync task '$taskName' registrada (logon + diario 12pm)" 'INFO'
+            return [ordered]@{ status = 'registered'; task = $taskName; method = 'register-scheduledtask' }
+        } catch {
+            Write-Log ("ai-memory: Register-ScheduledTask sync falhou ({0})" -f $_.Exception.Message) 'WARN'
+            return [ordered]@{ status = 'failed'; task = $taskName; reason = $_.Exception.Message; method = 'register-scheduledtask' }
+        }
+    }
+
+    return [ordered]@{ status = 'skipped'; task = $taskName; reason = 'Register-ScheduledTask cmdlet nao disponivel' }
 }
 
 function Uninstall-BootstrapAiNpmTool {
@@ -26670,9 +27253,7 @@ function Get-BootstrapCavemanTargetCatalog {
                 (New-BootstrapNativeCommandSpec -Exe 'claude' -Args @('plugin', 'marketplace', 'add', 'JuliusBrussee/caveman')),
                 (New-BootstrapNativeCommandSpec -Exe 'claude' -Args @('plugin', 'install', 'caveman@caveman'))
             )
-            fallbackCommands = @(
-                (New-BootstrapNativeCommandSpec -Exe 'powershell' -Args @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', 'irm https://raw.githubusercontent.com/JuliusBrussee/caveman/main/hooks/install.ps1 | iex'))
-            )
+            fallbackCommands = @()
         }
         geminiCli = [ordered]@{
             displayName = 'Gemini CLI'
@@ -30483,6 +31064,20 @@ function Normalize-BootstrapAppTuningItemResult {
     return $itemResult
 }
 
+function Convert-BootstrapAppTuningResultToItemStatus {
+    param([AllowNull()]$Result)
+
+    $resultMap = ConvertTo-BootstrapHashtable -InputObject $Result
+    if (-not ($resultMap -is [hashtable]) -or -not (Test-BootstrapMapContainsKey -Map $resultMap -Key 'status')) { return '' }
+    switch ([string]$resultMap['status']) {
+        'applied'    { return 'configured' }
+        'configured' { return 'configured' }
+        'unchanged'  { return 'configured' }
+        'audited'    { return 'optimized-tested' }
+        default      { return '' }
+    }
+}
+
 function Invoke-BootstrapAppTuning {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
@@ -30544,6 +31139,12 @@ function Invoke-BootstrapAppTuning {
         if ($itemResult -is [System.Collections.IDictionary]) {
             if ((Test-BootstrapMapContainsKey -Map $itemResult -Key 'blocking') -and [bool]$itemResult['blocking']) {
                 $blockingFailures += @($itemResult)
+            }
+            if (-not [bool]$State.DryRun) {
+                $visualStatus = Convert-BootstrapAppTuningResultToItemStatus -Result $itemResult
+                if (-not [string]::IsNullOrWhiteSpace($itemId) -and -not [string]::IsNullOrWhiteSpace($visualStatus)) {
+                    Set-BootstrapItemStatus -Kind 'config' -Id $itemId -Status $visualStatus
+                }
             }
             $State.AppTuningResults.Add($itemResult)
         }
@@ -32760,18 +33361,40 @@ function New-BootstrapAiMemoryDoctorReport {
         }
     }
 
+    # Status sync SDCard
+    $sdCardFound = $false
+    $sdCardPath = ''
+    $lastSync = ''
+    try {
+        $found = Find-BootstrapAiMemorySdCard
+        if ($found) {
+            $sdCardFound = $true
+            $sdCardPath = $found
+            $manifestPath = Join-Path $found '.phasezero-sync.json'
+            if (Test-Path -LiteralPath $manifestPath) {
+                try {
+                    $syncManifest = Microsoft.PowerShell.Management\Get-Content -LiteralPath $manifestPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    $lastSync = [string]$syncManifest.lastSync
+                } catch { }
+            }
+        }
+    } catch { }
+
     return [ordered]@{
-        schemaVersion = 1
-        installed = $installed
-        configured = ($installed -and ($serverReachable -or $mcpConfigured))
+        schemaVersion  = 1
+        installed      = $installed
+        configured     = ($installed -and ($serverReachable -or $mcpConfigured))
         serverReachable = $serverReachable
-        mcpConfigured = $mcpConfigured
-        commandStatus = $commandStatus
-        commandPath = [string]$exePath
-        serverUrl = [string]$serverUrl
-        version = [string]$version
+        mcpConfigured  = $mcpConfigured
+        commandStatus  = $commandStatus
+        commandPath    = [string]$exePath
+        serverUrl      = [string]$serverUrl
+        version        = [string]$version
         detectedAgents = @($agents)
-        notes = 'Beta: servidor loopback opt-in; handoff entre Claude Code/Codex/OpenCode.'
+        sdCardFound    = $sdCardFound
+        sdCardPath     = [string]$sdCardPath
+        lastSync       = [string]$lastSync
+        notes          = 'Beta: servidor loopback opt-in; handoff entre Claude Code/Codex/OpenCode. SDCard sync automatico.'
     }
 }
 
@@ -32890,7 +33513,9 @@ function Get-BootstrapHermesAiConfigReport {
     $catalog = Get-BootstrapAiToolCatalog
     $entry = $catalog['hermes-agent']
     $cmd = Resolve-BootstrapAiToolCommandPath -CatalogEntry $entry -InstallRoot ''
-    $layout = if (-not [string]::IsNullOrWhiteSpace($cmd) -and $cmd -match '(?i)\\AppData\\Local\\hermes\\') { 'windows-native' } elseif (Test-Path -LiteralPath (Join-Path $env:USERPROFILE '.hermes')) { 'wsl-or-posix' } else { 'unknown' }
+    $userHome = Get-BootstrapUserHomePath
+    $hermesHome = if (-not [string]::IsNullOrWhiteSpace($userHome)) { Join-Path $userHome '.hermes' } else { '' }
+    $layout = if (-not [string]::IsNullOrWhiteSpace($cmd) -and $cmd -match '(?i)\\AppData\\Local\\hermes\\') { 'windows-native' } elseif (-not [string]::IsNullOrWhiteSpace($hermesHome) -and (Test-Path -LiteralPath $hermesHome)) { 'wsl-or-posix' } else { 'unknown' }
     return [ordered]@{
         installed = -not [string]::IsNullOrWhiteSpace($cmd)
         commandPath = [string]$cmd
@@ -34249,10 +34874,15 @@ function New-BootstrapSupportBundle {
 
     $started = [Diagnostics.Stopwatch]::StartNew()
     $timestamp = $script:RunId
+    $tempRoot = $env:TEMP
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMPDIR }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = $env:TMP }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = [System.IO.Path]::GetTempPath() }
+    if ([string]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = (Get-Location).Path }
     if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
-        $DestinationPath = Join-Path $env:TEMP ("phasezero-support_{0}.zip" -f $timestamp)
+        $DestinationPath = Join-Path $tempRoot ("phasezero-support_{0}.zip" -f $timestamp)
     }
-    $staging = Join-Path $env:TEMP ("phasezero-support_{0}_{1}" -f $timestamp, ([Guid]::NewGuid().ToString('N')))
+    $staging = Join-Path $tempRoot ("phasezero-support_{0}_{1}" -f $timestamp, ([Guid]::NewGuid().ToString('N')))
     $null = New-Item -Path $staging -ItemType Directory -Force
     $null = New-Item -Path (Join-Path $staging 'logs') -ItemType Directory -Force
     try {

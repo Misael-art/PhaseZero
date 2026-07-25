@@ -1,0 +1,112 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "steamdeck-linux",
+  "description": "Linux Steam Deck / SteamOS-like UX: Steam Gamepad UI, virtual keyboard, hotkeys, gaming performance",
+  "os": ["linux"],
+  "packages": {
+    "linux": {
+      "pacman": [
+        "steam",
+        "steam-devices",
+        "gamescope",
+        "mangohud",
+        "gamemode",
+        "lib32-mangohud",
+        "lib32-gamemode",
+        "vulkan-radeon",
+        "lib32-vulkan-radeon",
+        "vulkan-tools",
+        "power-profiles-daemon",
+        "bluez",
+        "bluez-utils",
+        "maliit-keyboard",
+        "onboard",
+        "sxhkd",
+        "xorg-xrandr",
+        "wlr-randr",
+        "curl",
+        "git",
+        "git-lfs",
+        "github-cli",
+        "jq",
+        "unzip",
+        "bc",
+        "ryzenadj"
+      ],
+      "yay": [
+        "wvkbd",
+        "swhkd"
+      ],
+      "flatpak": {
+        "remotes": [
+          {
+            "name": "flathub",
+            "url": "https://dl.flathub.org/repo/flathub.flatpakrepo",
+            "required": true
+          },
+          {
+            "name": "flathub-beta",
+            "url": "https://flathub.org/beta-repo/flathub-beta.flatpakrepo",
+            "required": false
+          }
+        ],
+        "overrides": {
+          "steamdeck": true
+        },
+        "packages": [
+          "org.libretro.RetroArch",
+          "org.prismlauncher.PrismLauncher",
+          "org.freedesktop.Platform.Compat.i386",
+          "org.freedesktop.Platform.GL32.default"
+        ]
+      }
+    },
+    "windows": {
+      "winget": [],
+      "choco": []
+    }
+  },
+  "scripts": {
+    "linux": [
+      "linux/tuning/git-config.sh",
+      "linux/tuning/gaming-tweaks.sh",
+      "linux/steamdeck/install-hotkeys.sh",
+      "linux/steamdeck/install-mode-watcher.sh",
+      "linux/steamdeck/install-plugins.sh"
+    ],
+    "windows": []
+  },
+  "configs": {
+    "linux": [
+      "linux/steamdeck/mode-watcher.service",
+      "linux/steamdeck/install-mode-watcher.sh",
+      "linux/steamdeck/install-privileged-controls.sh",
+      "linux/steamdeck/privileged-control.sh",
+      "linux/steamdeck/install-steamos-boot.sh",
+      "linux/steamdeck/steamos-boot-prepare.sh",
+      "linux/steamdeck/install-plugins.sh",
+      "linux/steamdeck/plugins.sh"
+    ],
+    "windows": []
+  },
+  "systemd": {
+    "linux": {
+      "enable": [
+        "bluetooth",
+        "gamemoded",
+        "power-profiles-daemon"
+      ],
+      "user": [
+        "phasezero-steamdeck-hotkeys.service"
+      ]
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "vm.max_map_count": 2147483642,
+        "kernel.nmi_watchdog": 0
+      }
+    }
+  }
+}

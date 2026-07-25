@@ -1,0 +1,31 @@
+{
+  "schema": "https://phasezero.local/schemas/profile.json",
+  "name": "server-homelab-hermes",
+  "description": "Home server (Docker + Tailscale) plus Hermes for remote actuation",
+  "os": ["linux"],
+  "packages": {
+    "linux": {
+      "pacman": ["docker", "docker-compose", "git", "rsync", "tailscale", "jq", "python", "curl"],
+      "yay": [],
+      "flatpak": []
+    }
+  },
+  "scripts": {
+    "linux": ["linux/server/apply-server-homelab-hermes.sh"]
+  },
+  "systemd": {
+    "linux": {
+      "enable": ["docker", "tailscaled"],
+      "user": []
+    }
+  },
+  "tuning": {
+    "linux": {
+      "sysctl": {
+        "net.ipv4.ip_forward": 1,
+        "vm.max_map_count": 262144,
+        "fs.inotify.max_user_watches": 65536
+      }
+    }
+  }
+}

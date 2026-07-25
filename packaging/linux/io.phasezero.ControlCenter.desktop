@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=PhaseZero
+GenericName=Central de Controle
+Comment=Auditoria, instalação e recuperação Linux
+Exec=phasezero-control-center
+Icon=io.phasezero.ControlCenter
+Terminal=false
+Categories=Settings;
+Keywords=PhaseZero;Steam Deck;Waydroid;Emulation;KVM;GRUB;
+StartupNotify=true
+StartupWMClass=PhaseZero

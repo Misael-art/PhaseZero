@@ -1,0 +1,6 @@
+{
+  "type": "http",
+  "url": "https://mcp.context7.com/mcp",
+  "auto": false,
+  "description": "Context7 hosted MCP. Manual install only in Linux safe mode."
+}

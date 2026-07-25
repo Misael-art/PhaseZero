@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "PhaseZero MCP Server Definition",
+  "type": "object",
+  "required": ["type", "url"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": ["http", "stdio", "websocket"],
+      "description": "MCP transport type"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Server URL (http) or command (stdio)"
+    },
+    "headers": {
+      "type": "object",
+      "description": "HTTP headers for http transport",
+      "additionalProperties": { "type": "string" }
+    },
+    "args": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Command arguments for stdio transport"
+    },
+    "env": {
+      "type": "object",
+      "description": "Environment variables",
+      "additionalProperties": { "type": "string" }
+    }
+  }
+}
