@@ -174,11 +174,40 @@ Describe 'PhaseZero BAT launchers' {
         $configs = @(Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '--list-configs' | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
 
         $apps.ExitCode | Should Be 0
-        $apps.Stdout | Should Match '(?m)^\s*1\.\s+\[app\]\s+'
-        $apps.Stdout | Should Match '(?m)^\s*\d+\.\s+\[app\]\s+app-zen-browser\s+\|\s+Zen Browser\s+\|\s+component: zen-browser\s+\|\s+termos:'
+        $apps.Stdout | Should Match '(?m)^\s*1\.\s+\[app\]\s+\[[^\]]+\]\s+'
+        $apps.Stdout | Should Match '(?m)^\s*\d+\.\s+\[app\]\s+\[[^\]]+\]\s+app-zen-browser\s+\|\s+Zen Browser\s+\|\s+component: zen-browser\s+\|\s+termos:'
         $configs.ExitCode | Should Be 0
-        $configs.Stdout | Should Match '(?m)^\s*1\.\s+\[config\]\s+'
-        $configs.Stdout | Should Match '(?m)^\s*\d+\.\s+\[config\]\s+zen-browser-privacy-prefs\s+\|\s+Zen Browser privacy prefs\s+\|\s+categoria: browser-startup\s+\|\s+termos:'
+        $configs.Stdout | Should Match '(?m)^\s*1\.\s+\[config\]\s+\[[^\]]+\]\s+'
+        $configs.Stdout | Should Match '(?m)^\s*\d+\.\s+\[config\]\s+\[[^\]]+\]\s+zen-browser-privacy-prefs\s+\|\s+Zen Browser privacy prefs\s+\|\s+categoria: browser-startup\s+\|\s+termos:'
+    }
+
+    It 'shows cached config status markers in install-cli.bat config catalog' {
+        $previousDataRoot = $env:BOOTSTRAP_DATA_ROOT
+        $root = Join-Path $env:TEMP ("phasezero-config-status-{0}" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $env:BOOTSTRAP_DATA_ROOT = $root
+            New-Item -Path $root -ItemType Directory -Force | Out-Null
+            $statusPath = Join-Path $root 'item-status.json'
+            $cache = [ordered]@{
+                'config:zen-browser-privacy-prefs' = [ordered]@{
+                    status = 'configured'
+                    updatedAt = '2026-06-28T00:00:00.0000000-03:00'
+                }
+            }
+            [System.IO.File]::WriteAllText($statusPath, ($cache | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
+
+            $configs = @(Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '--list-configs' | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
+
+            $configs.ExitCode | Should Be 0
+            $configs.Stdout | Should Match '(?m)^\s*\d+\.\s+\[config\]\s+\[\+ configurado\]\s+zen-browser-privacy-prefs\s+\|'
+        } finally {
+            if ($null -ne $previousDataRoot) {
+                $env:BOOTSTRAP_DATA_ROOT = $previousDataRoot
+            } else {
+                Remove-Item Env:\BOOTSTRAP_DATA_ROOT -ErrorAction SilentlyContinue
+            }
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 
     It 'lists safe automation configs by category and accepts unified item aliases' {
@@ -187,7 +216,7 @@ Describe 'PhaseZero BAT launchers' {
         $configs.ExitCode | Should Be 0
         $configs.Stdout | Should Match '\[container-hosting\]'
         $configs.Stdout | Should Match '\[ai-edge-safe\]'
-        $configs.Stdout | Should Match '(?m)^\s*\d+\.\s+\[config\]\s+reverse-proxy-traefik-pack\s+\|'
+        $configs.Stdout | Should Match '(?m)^\s*\d+\.\s+\[config\]\s+\[[^\]]+\]\s+reverse-proxy-traefik-pack\s+\|'
         $configs.Stdout | Should Match 'acoes:'
         $configs.Stdout | Should Match 'risco:'
 
@@ -255,6 +284,34 @@ Describe 'PhaseZero BAT launchers' {
         @($result.Stdout -split '\r?\n' | Where-Object { $_.Length -gt 118 }).Count | Should Be 0
         $replacementCharacter = [string][char]0xFFFD
         $result.Stdout | Should Not Match ('Configurao|Verso|sade|RPIDOS|' + [regex]::Escape($replacementCharacter))
+    }
+
+    It 'exposes maintenance tools in install-cli.bat help' {
+        $result = @(Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments '--help' | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
+
+        $result.ExitCode | Should Be 0
+        [string]::IsNullOrWhiteSpace([string]$result.Stderr) | Should Be $true
+        foreach ($expected in @('--doctor','--support-bundle','--repair-plan','--partition-labels','--apply-partition-labels','--ai-config-doctor','--ai-config-sync','--secrets-list','--secrets-validate-all')) {
+            $result.Stdout | Should Match ([regex]::Escape($expected))
+        }
+    }
+
+    It 'runs partition label diagnosis from install-cli.bat as a safe backend mode' {
+        $resultPath = Join-Path $env:TEMP ("phasezero-bat-partition-labels-{0}.json" -f ([Guid]::NewGuid().ToString('N')))
+        $logPath = Join-Path $env:TEMP ("phasezero-bat-partition-labels-{0}.log" -f ([Guid]::NewGuid().ToString('N')))
+        try {
+            $args = '--partition-labels --dry-run --yes --result-path "{0}" --log-path "{1}"' -f $resultPath, $logPath
+            $result = @(Invoke-PhaseZeroBatForTest -FileName 'install-cli.bat' -Arguments $args -TimeoutMs 240000 | Where-Object { $null -ne $_ -and ($_.PSObject.Properties.Name -contains 'ExitCode') })[0]
+
+            $result.ExitCode | Should Be 0
+            [string]::IsNullOrWhiteSpace([string]$result.Stderr) | Should Be $true
+            Test-Path -LiteralPath $resultPath | Should Be $true
+            $json = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json -ErrorAction Stop
+            [string]$json.mode | Should Be 'partition-labels'
+            $json.partitionLabels | Should Not Be $null
+        } finally {
+            Remove-Item -LiteralPath $resultPath,$logPath -Force -ErrorAction SilentlyContinue
+        }
     }
 
     It 'quotes script paths and forwards all arguments from paths that may contain spaces' {

@@ -258,7 +258,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         )) {
             $raw | Should Match $controlName
         }
-        foreach ($label in @('WSL','winget','Reboot','Secrets','GitHub CLI','ai-usagebar','ai-memory','AionUI','Steam Deck','Rollback')) {
+        foreach ($label in @('WSL','winget','Reinício','Chaves','GitHub CLI','ai-usagebar','ai-memory','AionUI','Steam Deck','Reversão')) {
             $raw | Should Match ([regex]::Escape($label))
         }
         foreach ($statusText in @('OK','Aten.*o','Cr.*tico','Ausente','Bloqueado')) {
@@ -457,7 +457,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
         $raw | Should Match 'SecurityImpact'
         $raw | Should Match 'rollbackScope'
         $raw | Should Match 'Confirm-AppTuningSecurityImpact'
-        $raw | Should Match 'ai-agent-performance'
+        $raw | Should Match 'impacto de segurança'
         foreach ($risk in @('conservative','advanced','aggressive')) {
             $raw | Should Match $risk
         }
@@ -477,7 +477,7 @@ if (-not `$match.Success) { throw 'XAML block not found' }
     It 'surfaces compact AppTuning badges and artifact actions in the UI' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 
-        $raw | Should Match 'Header="Badges"'
+        $raw | Should Match 'Header="Selos"'
         $raw | Should Match 'Binding="\{Binding badges\}"'
         foreach ($buttonName in @('AppTuningOpenFolderButton','AppTuningViewLogButton')) {
             $raw | Should Match $buttonName
@@ -567,7 +567,7 @@ Load-WpfGridRows -Grid `$grid -Items @([ordered]@{ provider = 'OpenAI'; total = 
         $raw | Should Match 'Update-RunArtifactButtons'
         $raw | Should Match 'rollbackAvailable'
         $raw | Should Match 'howToFix'
-        $raw | Should Match 'Rollback disponível'
+        $raw | Should Match 'Reversão disponível'
     }
 
     It 'captures elevated backend stdout and stderr inside the elevated process' {
@@ -746,7 +746,7 @@ param(
         $raw | Should Match 'function Confirm-UiCriticalAction'
         $raw | Should Match 'CriticalAction'
         $raw | Should Match 'REINICIAR'
-        $raw | Should Match 'Confirmar rollback'
+        $raw | Should Match 'Confirmar reversão'
         $raw | Should Match 'Confirmar BCD'
     }
 
@@ -902,6 +902,58 @@ param(
 }
 
 Describe 'Health scoped validation per card' {
+    It 'uses plain Portuguese labels for Health primary actions and result areas' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        foreach ($expected in @(
+            'Text="Após rodar diagnóstico:"',
+            'Text="&#9679; atenção"',
+            'Text="&#9679; crítico/bloqueado"',
+            'Text="DIAGNÓSTICO"',
+            'Text="PACOTE DE SUPORTE"',
+            'Text="REPAROS"',
+            'Content="Rodar diagnóstico"',
+            'Content="Exportar pacote"',
+            'Content="Ver reparos"',
+            'Text="ÚLTIMO RESULTADO"'
+        )) {
+            $raw | Should Match ([regex]::Escape($expected))
+        }
+
+        foreach ($legacy in @(
+            'Text="Apos rodar Doctor:"',
+            'Text="DOCTOR"',
+            'Text="SUPPORT BUNDLE"',
+            'Text="REPAIR QUEUE"',
+            'Content="Rodar Doctor"',
+            'Content="Exportar bundle"',
+            'Content="Ver fila de reparo"',
+            'Text="ULTIMO RESULTADO"'
+        )) {
+            $raw | Should Not Match ([regex]::Escape($legacy))
+        }
+    }
+
+    It 'keeps technical repair terms out of visible Health action button content' {
+        $raw = Get-Content -Path $uiScriptPath -Raw
+
+        foreach ($expected in @(
+            'Content="Tokens e memória IA"',
+            'Content="Reparar tokens/memória"',
+            'Content="Compilador Windows"',
+            'Content="Otimizar Windows"',
+            'Content="Validar conexões de IA"',
+            'Content="Reparar conexões de IA"',
+            'Content="Verificar mudanças"',
+            'Content="Agendar verificação semanal"'
+        )) {
+            $raw | Should Match ([regex]::Escape($expected))
+        }
+
+        $visibleContent = @([regex]::Matches($raw, '<Button x:Name="Health[^"]+"[^>]*Content="([^"]+)"') | ForEach-Object { $_.Groups[1].Value })
+        @($visibleContent | Where-Object { $_ -match '\bMSVC\b|MCPs|npx|drift|Doctor|Bundle|Rollback|Audit' }).Count | Should Be 0
+    }
+
     It 'renders the 10 health cards as clickable scope buttons with tooltips' {
         $raw = Get-Content -Path $uiScriptPath -Raw
         $expected = @{
@@ -927,10 +979,10 @@ Describe 'Health scoped validation per card' {
         $raw | Should Match "Start-RunExecution -MaintenanceIntent 'doctor' -DoctorScope \`$Scope"
     }
 
-    It 'adds Gestao tokens/memoria, Otimizacao Windows, Validar MCPs and MSVC buttons with their scopes' {
+    It 'adds token memory, Windows optimization, AI connection and compiler buttons with their scopes' {
         $raw = Get-Content -Path $uiScriptPath -Raw
         $raw | Should Match ([regex]::Escape('x:Name="HealthAgentToolsButton"'))
-        $raw | Should Match ([regex]::Escape('Gestão tokens/memória'))
+        $raw | Should Match ([regex]::Escape('Tokens e memória IA'))
         $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'agent-tools'"))
         $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'windows-optimization'"))
         $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'mcp'"))
@@ -955,13 +1007,13 @@ Describe 'Health scoped validation per card' {
         }
         $summary = Get-UiDoctorHumanSummary -Result $result -Scopes @('agent-tools')
         $summary | Should Match 'agent-tools'
-        $summary | Should Match 'Tokens/memoria'
+        $summary | Should Match 'Tokens/memória'
         $summary | Should Match 'RTK=absent'
     }
 }
 
 Describe 'Health tokens/memory validation and repair flow' {
-    It 'wires Gestao tokens/memoria to validate with the agent-tools scope' {
+    It 'wires token memory validation to the agent-tools scope' {
         $raw = Get-Content -Path $uiScriptPath -Raw
         $raw | Should Match ([regex]::Escape('x:Name="HealthAgentToolsButton"'))
         $raw | Should Match ([regex]::Escape("Invoke-UiHealthScopedDoctor -Scope 'agent-tools'"))
@@ -1021,6 +1073,7 @@ Describe 'Health drive labels UI and CLI flow' {
         $raw = Get-Content -Path $uiScriptPath -Raw
 
         $raw | Should Match "ValidateSet\('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan', 'partition-labels', 'partition-labels-apply'\)"
+        $raw | Should Not Match "ValidateSet\('none', 'audit', 'rollback', 'doctor', 'support-bundle', 'repair-plan'\)"
         $raw | Should Match "Start-RunExecution -MaintenanceIntent 'partition-labels'"
         $raw | Should Match "Start-RunExecution -MaintenanceIntent 'partition-labels-apply'"
         $raw | Should Match "maint -eq 'partition-labels'"

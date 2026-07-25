@@ -1,0 +1,7 @@
+{
+  "type": "http",
+  "url": "https://mcp.sentry.dev/mcp",
+  "auto": false,
+  "oauth": {},
+  "description": "Sentry MCP. Requires client OAuth/login."
+}

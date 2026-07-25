@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+for root in \
+    "${PHASEZERO_ROOT:-}" \
+    "$(cd "$(dirname "$SELF")/../.." 2>/dev/null && pwd)" \
+    "/usr/lib/phasezero" \
+    "/usr/lib64/phasezero" \
+    "/app/lib/phasezero"
+do
+    if [ -n "$root" ] && [ -x "$root/linux/ui/native.sh" ]; then
+        exec "$root/linux/ui/native.sh" "$@"
+    fi
+done
+
+echo "PhaseZero installation not found" >&2
+exit 127

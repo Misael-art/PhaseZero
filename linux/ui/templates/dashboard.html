@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>PhaseZero</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="app">
+<aside class="sidebar">
+<h1>PhaseZero</h1>
+<nav>
+<a href="#overview"><span>Visão Geral</span></a>
+<a href="#steamdeck"><span>Steam Deck</span></a>
+<a href="#emulation"><span>Emulação</span></a>
+<a href="#media"><span>Biblioteca Mídia</span></a>
+<a href="#server"><span>Servidor</span></a>
+<a href="#ai"><span>IA</span></a>
+<a href="#profiles"><span>Perfis</span></a>
+<a href="#doctor"><span>Diagnóstico</span></a>
+</nav>
+<div class="version">localhost protegido</div>
+</aside>
+<main class="main">
+<div id="overview" class="page">
+<h2>Visão Geral</h2>
+<div id="overview-content"><div class="spinner"></div></div>
+</div>
+<div id="steamdeck" class="page" hidden>
+<h2>Steam Deck</h2>
+<div id="steamdeck-content"><div class="spinner"></div></div>
+</div>
+<div id="emulation" class="page" hidden>
+<h2>Emulação</h2>
+<div id="emulation-content"><div class="spinner"></div></div>
+</div>
+<div id="media" class="page" hidden>
+<h2>Biblioteca de Mídia</h2>
+<p class="page-hint">Cobertura por sistema, conflitos, SteamGrid, ES-DE, Hydra, SRM</p>
+<div id="media-content"><div class="spinner"></div></div>
+</div>
+<div id="server" class="page" hidden>
+<h2>Servidor</h2>
+<div id="server-content"><div class="spinner"></div></div>
+</div>
+<div id="ai" class="page" hidden>
+<h2>Inteligência Artificial</h2>
+<div id="ai-content"><div class="spinner"></div></div>
+</div>
+<div id="profiles" class="page" hidden>
+<h2>Perfis</h2>
+<div id="profiles-content"><div class="spinner"></div></div>
+</div>
+<div id="doctor" class="page" hidden>
+<h2>Diagnóstico</h2>
+<div id="doctor-content"><div class="spinner"></div></div>
+</div>
+<div id="action-output" class="action-output" aria-live="polite" hidden></div>
+</main>
+</div>
+<script src="/static/app.js"></script>
+</body>
+</html>

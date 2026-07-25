@@ -98,6 +98,129 @@ Describe 'Bootstrap AppTuning catalog and selection' {
         }
     }
 
+    It 'exposes AI context frugality pack as opt-in reversible agent config' {
+        $catalog = Get-BootstrapAppTuningCatalog
+        $item = $catalog.items | Where-Object { $_.id -eq 'ai-context-frugality-pack' } | Select-Object -First 1
+
+        $item | Should Not Be $null
+        [string]$item.category | Should Be 'agent-config'
+        [string]$item.defaultMode | Should Be 'opt-in'
+        [string]$item.rollbackScope | Should Be 'backup-file'
+        (@($item.actions) -contains 'config-template') | Should Be $true
+        (@($item.actions) -contains 'skeleton-map') | Should Be $true
+        (@($item.safetyNotes) -join "`n") | Should Match 'Nao grava segredos'
+        (@($item.safetyNotes) -join "`n") | Should Match 'Nao executa reset'
+        (@($item.safetyNotes) -join "`n") | Should Match 'Nao ignora lockfiles'
+    }
+
+    It 'generates AI context frugality files without unsafe ignores or session reset automation' {
+        $workspace = Join-Path $TestDrive 'frugality-workspace'
+        $null = New-Item -Path $workspace -ItemType Directory -Force
+        Set-Content -LiteralPath (Join-Path $workspace 'AGENTS.md') -Encoding UTF8 -Value @'
+# Existing Agents
+
+<!-- BEGIN BOOTSTRAP CAVEMAN -->
+Terse like caveman.
+<!-- END BOOTSTRAP CAVEMAN -->
+
+<!-- BEGIN PHASEZERO TOOLS -->
+Existing tool contract.
+<!-- END PHASEZERO TOOLS -->
+'@
+        Set-Content -LiteralPath (Join-Path $workspace '.aiderignore') -Encoding UTF8 -Value @'
+# user rule
+custom-local-cache/
+'@
+        Set-Content -LiteralPath (Join-Path $workspace 'sample.ps1') -Encoding UTF8 -Value @'
+function Invoke-SampleThing {
+    param([string]$Name, [int]$Count = 1)
+    return "$Name:$Count"
+}
+'@
+        $item = [ordered]@{
+            id = 'ai-context-frugality-pack'
+            category = 'agent-config'
+            installed = $true
+        }
+
+        $result = Invoke-BootstrapAppTuningItem -State @{ CloneBaseDir = $workspace } -Item $item
+
+        [string]$result.status | Should Match '^(applied|configured)$'
+        $contextDocPath = Join-Path $workspace '.codex\context-packs\ai-context-frugality.md'
+        $manifestPath = Join-Path $workspace '.codex\ai-context\frugality-manifest.json'
+        $skeletonJsonPath = Join-Path $workspace '.codex\ai-context\repo-skeleton.json'
+        $skeletonMarkdownPath = Join-Path $workspace '.codex\ai-context\repo-skeleton.md'
+        $claudePath = Join-Path $workspace '.claude\CLAUDE.md'
+
+        foreach ($path in @($contextDocPath, $manifestPath, $skeletonJsonPath, $skeletonMarkdownPath, $claudePath, (Join-Path $workspace '.aiderignore'), (Join-Path $workspace 'AGENTS.md'))) {
+            Test-Path -LiteralPath $path | Should Be $true
+        }
+        Test-Path -LiteralPath (Join-Path $workspace '.claudecodeignore') | Should Be $false
+
+        $agents = Get-Content -LiteralPath (Join-Path $workspace 'AGENTS.md') -Raw
+        $aider = Get-Content -LiteralPath (Join-Path $workspace '.aiderignore') -Raw
+        $doc = Get-Content -LiteralPath $contextDocPath -Raw
+        $allGenerated = ($agents + "`n" + $aider + "`n" + $doc + "`n" + (Get-Content -LiteralPath $claudePath -Raw))
+
+        $agents | Should Match ([regex]::Escape('<!-- BEGIN BOOTSTRAP CAVEMAN -->'))
+        $agents | Should Match ([regex]::Escape('<!-- BEGIN PHASEZERO TOOLS -->'))
+        $agents | Should Match ([regex]::Escape('<!-- BEGIN PHASEZERO AI CONTEXT FRUGALITY -->'))
+        $aider | Should Match 'custom-local-cache/'
+        $aider | Should Match '(?m)^# BEGIN PHASEZERO AI CONTEXT FRUGALITY\r?$'
+        $aider | Should Not Match '<!-- BEGIN PHASEZERO AI CONTEXT FRUGALITY -->'
+        $aider | Should Match '\.codex/ai-context/'
+        $aider | Should Not Match 'package-lock\.json|pnpm-lock\.yaml|Cargo\.lock'
+        $allGenerated | Should Not Match 'sua_chave_secreta|cache_control|tmux|/clear|\.claudecodeignore'
+
+        $skeleton = Get-Content -LiteralPath $skeletonJsonPath -Raw | ConvertFrom-Json
+        @($skeleton.files).Count | Should BeGreaterThan 0
+        ($skeleton.files | Where-Object { $_.path -eq 'sample.ps1' } | Select-Object -First 1).symbols[0].name | Should Be 'Invoke-SampleThing'
+    }
+
+    It 'keeps AI context frugality pack idempotent after first apply' {
+        $workspace = Join-Path $TestDrive 'frugality-idempotent'
+        $null = New-Item -Path $workspace -ItemType Directory -Force
+        Set-Content -LiteralPath (Join-Path $workspace 'sample.ps1') -Encoding UTF8 -Value 'function Get-Thing { param([string]$Name) $Name }'
+        $item = [ordered]@{
+            id = 'ai-context-frugality-pack'
+            category = 'agent-config'
+            installed = $true
+        }
+
+        $first = Invoke-BootstrapAppTuningItem -State @{ CloneBaseDir = $workspace } -Item $item
+        $paths = @(
+            (Join-Path $workspace '.codex\context-packs\ai-context-frugality.md'),
+            (Join-Path $workspace '.codex\ai-context\frugality-manifest.json'),
+            (Join-Path $workspace '.codex\ai-context\repo-skeleton.json'),
+            (Join-Path $workspace '.aiderignore'),
+            (Join-Path $workspace 'AGENTS.md'),
+            (Join-Path $workspace '.claude\CLAUDE.md')
+        )
+        $before = @{}
+        foreach ($path in $paths) { $before[$path] = Get-Content -LiteralPath $path -Raw }
+
+        $second = Invoke-BootstrapAppTuningItem -State @{ CloneBaseDir = $workspace } -Item $item
+
+        [string]$first.status | Should Be 'applied'
+        [string]$second.status | Should Be 'configured'
+        foreach ($path in $paths) {
+            (Get-Content -LiteralPath $path -Raw) | Should Be $before[$path]
+        }
+    }
+
+    It 'skips non-PowerShell skeleton files when tree-sitter is absent' {
+        $workspace = Join-Path $TestDrive 'frugality-no-tree-sitter'
+        $null = New-Item -Path $workspace -ItemType Directory -Force
+        Set-Content -LiteralPath (Join-Path $workspace 'agent.ts') -Encoding UTF8 -Value 'export function runAgent(name: string) { return name }'
+        Mock Test-BootstrapTreeSitterAvailable { return $false }
+
+        $result = New-BootstrapAiContextSkeleton -WorkspaceRoot $workspace
+
+        $file = $result.files | Where-Object { $_.path -eq 'agent.ts' } | Select-Object -First 1
+        [string]$file.status | Should Be 'skipped'
+        [string]$file.reason | Should Be 'tree-sitter-missing'
+    }
+
     It 'exposes conservative AI agent performance items with safety metadata' {
         $catalog = Get-BootstrapAppTuningCatalog
         $byId = @{}

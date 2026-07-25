@@ -29,6 +29,20 @@ Describe 'Resilience Architecture' {
             Assert-MockCalled Write-Log -ParameterFilter { $Message -match 'Espaco em disco insuficiente' -and $Level -eq 'WARN' }
         }
 
+        It 'Test-BootstrapDiskSpace does not block config-only AppTuning on a tight system drive' {
+            Mock Get-BootstrapFreeSpace { return 0.5 } # 0.5 GB
+            Mock Write-Log
+
+            $selection = @{
+                Profiles = @()
+                Components = @()
+                AppTuningItems = @('agent-config-claude-rtk-template')
+                AppTuningCategories = @()
+            }
+
+            { Test-BootstrapDiskSpace -Selection $selection -ResolvedComponents @() -ResolvedWorkspaceRoot '' } | Should Not Throw
+        }
+
         It 'Assert-BootstrapDiskSpace throws if space is low' {
             Mock Get-BootstrapFreeSpace { return 0.5 } # 0.5 GB
             { Assert-BootstrapDiskSpace -RequiredGB 1.0 } | Should Throw 'Espaco em disco insuficiente'
