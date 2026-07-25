@@ -1,5 +1,4 @@
 {
-  "schema": "https://phasezero.local/schemas/vendor-manifest.json",
   "pinned": true,
   "components": {
     "winfsp": {

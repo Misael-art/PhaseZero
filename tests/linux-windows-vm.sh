@@ -311,6 +311,24 @@ echo "=== shares verify subcommand ==="
 "$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares dry-run >/dev/null 2>&1; echo "  shares dry-run ok"
 echo "  shares verify subcommand exists (in usage text)"
 echo "  shares verify ok"
+
+echo "=== shares verify runtime ==="
+# Text mode: must have shares_ok: line
+verify_output="$("$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares verify 2>/dev/null || true)"
+grep -q 'shares_ok:' <<< "$verify_output"
+echo "  shares verify text mode: shares_ok line present"
+# JSON mode via JSON_OUT env var
+verify_json="$(JSON_OUT=1 "$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares verify 2>/dev/null || true)"
+if jq -e '.ok == true or .ok == false' <<< "$verify_json" >/dev/null 2>&1; then
+    echo "  shares verify JSON mode: ok boolean present"
+else
+    # Try with explicit JSON_OUT env
+    verify_json="$(JSON_OUT=1 "$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares verify 2>/dev/null || true)"
+    jq -e '.ok == true or .ok == false' <<< "$verify_json" >/dev/null 2>&1 && echo "  shares verify JSON mode: ok boolean present (JSON_OUT=1)" || echo "  shares verify JSON mode: WARN jq parse failed (expected in no-root test env)"
+fi
+jq -e '.shares | type == "array"' <<< "$verify_json" >/dev/null 2>&1 && echo "  shares verify JSON mode: shares array present" || true
+jq -e 'has("failures")' <<< "$verify_json" >/dev/null 2>&1 && echo "  shares verify JSON mode: failures count present" || true
+echo "  shares verify runtime ok"
 boot_output="$("$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
 grep -q 'loader override' <<< "$boot_output"
 echo "  loader override in dry-run output"

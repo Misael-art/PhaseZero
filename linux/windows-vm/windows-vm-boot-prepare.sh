@@ -163,11 +163,50 @@ remove_lightdm_autologin() {
     fi
 }
 
+write_lxdm_autologin() {
+    local conf="/etc/lxdm/lxdm.conf"
+    [ -f "$conf" ] || return 0
+    local block_start="# PhaseZero managed: Windows VM one-shot boot profile"
+    local block_end="# PhaseZero managed end"
+    if grep -q "$block_start" "$conf" 2>/dev/null; then
+        sed -i "/$block_start/,/$block_end/d" "$conf"
+    fi
+    cat >> "$conf" <<EOF
+$block_start
+autologin=$TARGET_USER
+session=/usr/local/lib/phasezero/windows-vm-session
+$block_end
+EOF
+    log "LXDM autologin written: $conf"
+}
+
+remove_lxdm_autologin() {
+    local conf="/etc/lxdm/lxdm.conf"
+    [ -f "$conf" ] || return 0
+    local block_start="# PhaseZero managed: Windows VM one-shot boot profile"
+    local block_end="# PhaseZero managed end"
+    if grep -q "$block_start" "$conf" 2>/dev/null; then
+        sed -i "/$block_start/,/$block_end/d" "$conf"
+        log "removed LXDM autologin from $conf"
+    fi
+}
+
 write_greetd_autologin() {
     local conf="/etc/greetd/config.toml"
     [ -f "$conf" ] || return 0
+    local manifest="/var/lib/phasezero/windows-vm/greetd-restore.toml"
+    local original_sha
+    original_sha="$(sha256sum "$conf" 2>/dev/null | awk '{print $1}' || true)"
+    install -d "$(dirname "$manifest")"
     local backup="$conf.phasezero-backup"
     cp -a "$conf" "$backup" 2>/dev/null || true
+    cat > "$manifest" <<EOF
+# PhaseZero managed: greetd restore manifest
+original_path = "$conf"
+backup_path = "$backup"
+original_sha256 = "${original_sha:-unavailable}"
+written_at = "$(date -Iseconds 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')"
+EOF
     cat > "$conf" <<EOF
 # PhaseZero managed: Windows VM one-shot boot profile
 [terminal]
@@ -177,20 +216,34 @@ vt = 1
 command = "/usr/local/lib/phasezero/windows-vm-session"
 user = "$TARGET_USER"
 EOF
-    log "greetd autologin written: $conf (backup: $backup)"
+    log "greetd autologin written: $conf (manifest: $manifest)"
 }
 
 remove_greetd_autologin() {
     local conf="/etc/greetd/config.toml"
-    local backup="$conf.phasezero-backup"
-    if [ -f "$conf" ] && grep -q 'PhaseZero managed' "$conf" 2>/dev/null; then
-        if [ -f "$backup" ]; then
-            cp -a "$backup" "$conf"
-            rm -f "$backup"
-            log "restored greetd config from backup"
+    local manifest="/var/lib/phasezero/windows-vm/greetd-restore.toml"
+    [ -f "$conf" ] || return 0
+    if grep -q 'PhaseZero managed' "$conf" 2>/dev/null; then
+        if [ -f "$manifest" ]; then
+            local backup original_sha current_sha
+            backup="$(grep '^backup_path' "$manifest" 2>/dev/null | awk -F'"' '{print $2}' || true)"
+            original_sha="$(grep '^original_sha256' "$manifest" 2>/dev/null | awk -F'"' '{print $2}' || true)"
+            if [ -n "$backup" ] && [ -f "$backup" ]; then
+                current_sha="$(sha256sum "$conf" 2>/dev/null | awk '{print $1}' || true)"
+                if [ -n "$original_sha" ] && [ "$original_sha" != "unavailable" ] && [ "$current_sha" != "$original_sha" ]; then
+                    log "WARN: greetd config modified since backup (expected SHA256=$original_sha, got $current_sha); refusing to clobber"
+                    log "WARN: backup preserved at $backup; manual restore required"
+                    log "WARN: remove $conf and restore $backup if safe"
+                    return 0
+                fi
+                cp -a "$backup" "$conf"
+                rm -f "$backup" "$manifest"
+                log "restored greetd config from manifest backup"
+            else
+                log "WARN: greetd manifest found but backup file missing; cannot restore"
+            fi
         else
-            rm -f "$conf"
-            log "removed greetd autologin (no backup available): $conf"
+            log "WARN: greetd config is PhaseZero managed but no manifest found; leaving in place"
         fi
     fi
 }
@@ -205,19 +258,19 @@ if printf '%s\n' "$CMDLINE" | grep -qw 'phasezero.windowsvm=1'; then
             write_sddm_autologin
             ;;
         gdm|gdm3)
-            ensure_autologin_group "$dm"
+            ensure_autologin_group "$current_dm"
             remove_gdm_autologin
             write_gdm_autologin
             ;;
         lightdm)
-            ensure_autologin_group "$dm"
+            ensure_autologin_group "$current_dm"
             remove_lightdm_autologin
             write_lightdm_autologin
             ;;
         lxdm)
-            ensure_autologin_group "$dm"
-            remove_lightdm_autologin
-            write_lightdm_autologin
+            ensure_autologin_group "$current_dm"
+            remove_lxdm_autologin
+            write_lxdm_autologin
             ;;
         greetd)
             remove_greetd_autologin
@@ -242,5 +295,6 @@ fi
 remove_sddm_autologin
 remove_gdm_autologin
 remove_lightdm_autologin
+remove_lxdm_autologin
 remove_greetd_autologin
 log "normal boot detected; all PhaseZero autologin blocks removed"

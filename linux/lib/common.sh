@@ -1237,7 +1237,8 @@ pz_boot_systemd_boot_set_oneshot() {
     esp="$(pz_boot_esp_dir)"
     pz_boot_atomic_install "$esp/loader/entries/$entry_id.conf" "$esp/loader/entries/$entry_id.conf"
     if command -v bootctl >/dev/null 2>&1; then
-        bootctl set-oneshot "$entry_id.conf" 2>/dev/null || true
+        # bootctl set-oneshot expects bare entry ID (no .conf suffix)
+        bootctl set-oneshot "$entry_id" 2>/dev/null || bootctl set-oneshot "$entry_id.conf" 2>/dev/null || pz_warn "bootctl set-oneshot failed for $entry_id"
     elif command -v efibootmgr >/dev/null 2>&1; then
         pz_warn "bootctl not available; cannot set systemd-boot oneshot via bootctl"
     fi

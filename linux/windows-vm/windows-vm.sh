@@ -67,7 +67,7 @@ USB_AUTO_FILTER=""
 SMB_HOST=""
 FULLSCREEN=0
 DRY_RUN="${PZ_DRY_RUN:-0}"
-JSON_OUT=0
+JSON_OUT="${JSON_OUT:-0}"
 WITH_BOOT=0
 PCI_DEVICES=""
 EXTRA_ARGS=""
@@ -838,7 +838,7 @@ verify_share() {
         detail="not found"
     fi
     if [ "${JSON_OUT:-0}" = "1" ]; then
-        jq -n \
+        jq -nc \
             --arg name "$name" \
             --arg result "$result" \
             --arg detail "$detail" \
@@ -849,31 +849,44 @@ verify_share() {
 }
 
 cmd_shares_verify() {
-    local all_pass=0 json_output="" line
+    local fail=0 json_output="" line result_field failures=0
     for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
         local name="${pair%%:*}" target="${pair#*:}"
         [ -d "$target" ] || continue
         if [ "${JSON_OUT:-0}" = "1" ]; then
             line="$(verify_share "$name" "$target")"
+            result_field="$(jq -r '.result' <<< "$line" 2>/dev/null || echo "fail")"
+            [ "$result_field" = "pass" ] || { fail=1; failures=$((failures + 1)); }
             json_output="$json_output$line,"
         else
-            verify_share "$name" "$target"
+            local capture
+            capture="$(verify_share "$name" "$target")"
+            printf '%s\n' "$capture"
+            if ! grep -q 'share_.*: pass ' <<< "$capture" 2>/dev/null; then
+                fail=1
+            fi
         fi
     done
     if [ "${JSON_OUT:-0}" = "1" ]; then
         json_output="${json_output%,}"
-        printf '{%s}\n' "$json_output"
+        printf '{"ok":%s,"failures":%d,"shares":[%s]}\n' \
+            "$([ "$fail" = "0" ] && echo true || echo false)" \
+            "$failures" "$json_output"
     fi
-    # Check SMB reachability
+    local samba_reachable=""
     if command -v smbclient >/dev/null 2>&1; then
         if smbclient -N -L "//127.0.0.1/PZHome" -I 127.0.0.1 -p 445 2>&1 | grep -q 'PZHome'; then
-            [ "${JSON_OUT:-0}" = "1" ] || echo "samba_home_reachable: yes"
+            samba_reachable="yes"
         else
-            [ "${JSON_OUT:-0}" = "1" ] || echo "samba_home_reachable: no"
-            all_pass=1
+            samba_reachable="no"
+            fail=1
         fi
     fi
-    return $all_pass
+    if [ "${JSON_OUT:-0}" != "1" ]; then
+        [ -n "$samba_reachable" ] && echo "samba_home_reachable: $samba_reachable"
+        printf 'shares_ok: %s\n' "$([ "$fail" = "0" ] && echo yes || echo no)"
+    fi
+    return $fail
 }
 
 # Unmount the bind-mount share root (called on teardown / shares clean).
@@ -1894,7 +1907,7 @@ need_root() {
     return 1
 }
 
- parse_boot_common_args() {
+parse_boot_common_args() {
     local parsed=()
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -2330,7 +2343,7 @@ set_default_boot() {
         systemd-boot)
             ensure_boot_entry_ready
             if command -v bootctl >/dev/null 2>&1; then
-                bootctl set-default "$BOOT_ID.conf" 2>/dev/null || true
+                bootctl set-default "$BOOT_ID" 2>/dev/null || bootctl set-default "$BOOT_ID.conf" 2>/dev/null || true
                 pz_warn "permanent systemd-boot default set to: $BOOT_ENTRY"
             else
                 pz_error "bootctl missing; cannot set systemd-boot default"
@@ -2338,7 +2351,13 @@ set_default_boot() {
             fi
             ;;
         refind)
-            pz_warn "rEFInd: set default selection in $esp/EFI/refind/refind.conf (default_selection)"
+            local esp
+            esp="$(pz_boot_esp_dir 2>/dev/null || true)"
+            if [ -n "$esp" ]; then
+                pz_warn "rEFInd: set default selection in $esp/EFI/refind/refind.conf (default_selection)"
+            else
+                pz_warn "rEFInd: set default selection manually (ESP not detected)"
+            fi
             ;;
         *)
             need_root_action set-default
