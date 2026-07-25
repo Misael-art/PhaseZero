@@ -64,8 +64,7 @@ apply_secret_to_config() {
     fi
 
     local backup
-    backup="${target}.bak.$(date +%s).$$"
-    cp "$target" "$backup"
+    backup="$(pz_backup_file "$target" user)"
     pz_rollback_register file "$target" "$backup"
 
     if ! printf '%s' "$value" | python3 -c '

@@ -164,14 +164,14 @@ PY
 
 launchbox_apply_bigbox_safe_settings() {
     [ "${PZ_LAUNCHBOX_BIGBOX_SAFE_SETTINGS:-1}" = "1" ] || return 0
-    python3 - "$PZ_LAUNCHBOX_ROOT" <<'PY'
-import shutil
+    python3 - "$PZ_LAUNCHBOX_ROOT" "$PZ_ROOT" <<'PY'
 import sys
-import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
 root = Path(sys.argv[1])
+sys.path.insert(0, str(Path(sys.argv[2]) / "linux" / "lib"))
+import pz_hostbackup  # noqa: E402
 
 def upsert(path: Path, parent_tag: str, values: dict[str, str]) -> None:
     if not path.exists():
@@ -195,7 +195,7 @@ def upsert(path: Path, parent_tag: str, values: dict[str, str]) -> None:
             changed = True
     if not changed:
         return
-    shutil.copy2(path, path.with_name(f"{path.name}.bak.{int(time.time())}"))
+    pz_hostbackup.backup_file(path, module="emulation")
     ET.indent(tree, space="  ")
     path.write_text('<?xml version="1.0" standalone="yes"?>\n' + ET.tostring(doc, encoding="unicode") + "\n", encoding="utf-8")
 

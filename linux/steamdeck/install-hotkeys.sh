@@ -29,9 +29,7 @@ write_managed_file() {
     fi
 
     install -d "$dir"
-    if [ -f "$path" ]; then
-        cp "$path" "${path}.bak.$(date +%s)"
-    fi
+    pz_backup_file "$path" user >/dev/null
     printf '%s\n' "$content" > "$path"
     pz_info "wrote $path"
 }
@@ -308,7 +306,7 @@ install_kde_shortcuts() {
         return 0
     fi
 
-    [ -f "$KGLOBALSHORTCUTSRC" ] && cp "$KGLOBALSHORTCUTSRC" "${KGLOBALSHORTCUTSRC}.bak.$(date +%s)"
+    pz_backup_file "$KGLOBALSHORTCUTSRC" user >/dev/null
 
     # sycoca must know the fresh desktop entries before the service component
     # can resolve their Exec lines

@@ -139,7 +139,7 @@ dualscreen_kwin_remove_all() {
 dualscreen_kwin_rewrite() {
     local tag="$1" blocks="$2" remove_all="$3"
     install -d "$(dirname "$KWINRULES")"
-    [ -f "$KWINRULES" ] && cp -p "$KWINRULES" "$KWINRULES.phasezero.bak.$(date +%s%N).$$"
+    pz_backup_file "$KWINRULES" user >/dev/null
     python3 - "$KWINRULES" "$blocks" "$tag" "$remove_all" <<'PY'
 import os
 import re
@@ -237,7 +237,7 @@ dualscreen_apply_cemu() {
     indices="$(dualscreen_kwin_indices)"
     if [ -n "$indices" ]; then ext_idx="${indices% *}"; int_idx="${indices#* }"; else ext_idx=0; int_idx=1; fi
 
-    cp "$settings" "$settings.phasezero.bak.$(date +%s)"
+    pz_backup_file "$settings" user >/dev/null
     # open_pad=true opens the GamePad view as a separate window; fullscreen=false
     # lets KWin control placement instead of Cemu grabbing one screen.
     sed -i -E 's#<open_pad>(true|false)</open_pad>#<open_pad>true</open_pad>#' "$settings"
@@ -263,7 +263,7 @@ dualscreen_apply_azahar() {
     indices="$(dualscreen_kwin_indices)"
     if [ -n "$indices" ]; then ext_idx="${indices% *}"; int_idx="${indices#* }"; else ext_idx=0; int_idx=1; fi
 
-    cp "$cfg" "$cfg.phasezero.bak.$(date +%s)"
+    pz_backup_file "$cfg" user >/dev/null
     # layout_option=5 = Separate Windows (top screen + bottom screen as 2 windows).
     pz_ini_set "$cfg" "Layout" "layout_option" "5"
     pz_ini_set "$cfg" "Layout" "layout_option\\default" "false"

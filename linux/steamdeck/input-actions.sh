@@ -86,7 +86,7 @@ steamdeck_configure_virtual_keyboard() {
         return 0
     fi
 
-    [ -f "$kwinrc" ] && cp "$kwinrc" "${kwinrc}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$kwinrc" user >/dev/null
 
     kwriteconfig6 --file kwinrc --group Wayland --key VirtualKeyboardEnabled true
     if [ -n "$method" ]; then

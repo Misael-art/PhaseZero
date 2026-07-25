@@ -7,10 +7,17 @@ import json
 import os
 import re
 import shutil
+import sys
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
+
+# store central de backups (linux/lib/pz_hostbackup.py)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+import pz_hostbackup  # noqa: E402
+
+PZ_BACKUP_MODULE = "emulation"
 
 
 ICON_SPECS = {
@@ -65,7 +72,7 @@ def write_json(path: Path, data: Any, dry_run: bool = False, backup: bool = True
         return True
     path.parent.mkdir(parents=True, exist_ok=True)
     if backup and path.exists():
-        shutil.copy2(path, path.with_name(f"{path.name}.bak.{int(time.time())}"))
+        pz_hostbackup.backup_file(path, module=PZ_BACKUP_MODULE)
     tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}")
     tmp.write_text(text, encoding="utf-8")
     tmp.replace(path)
@@ -414,7 +421,7 @@ def set_desktop_keys(path: Path, keys: dict[str, str | None], dry_run: bool) -> 
     if new_text != desktop_text(path):
         changed = True
     if changed and not dry_run:
-        shutil.copy2(path, path.with_name(f"{path.name}.bak.{int(time.time())}"))
+        pz_hostbackup.backup_file(path, module=PZ_BACKUP_MODULE)
         path.write_text(new_text, encoding="utf-8")
     return changed
 

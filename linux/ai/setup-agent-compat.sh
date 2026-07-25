@@ -95,6 +95,7 @@ install_rtk_release() {
         return 1
     }
     install -m 0755 "$rtk_found" "$LOCAL_BIN/rtk"
+    pz_record_created ai "$LOCAL_BIN/rtk"
     jq -n \
         --arg tag "$tag" \
         --arg asset "$asset" \
@@ -123,6 +124,7 @@ install_rtk_fallback() {
         fi
         cargo build --release --manifest-path "$src/Cargo.toml" --bin rtk
         install -m 0755 "$src/target/release/rtk" "$LOCAL_BIN/rtk"
+        pz_record_created ai "$LOCAL_BIN/rtk"
         pz_info "RTK built from source: $LOCAL_BIN/rtk"
         return 0
     fi
@@ -207,13 +209,9 @@ trim_trailing_blank_lines() {
 }
 
 backup_managed_file() {
-    local path="$1" rel backup_dir backup_name
+    local path="$1"
     [ -f "$path" ] || return 0
-    backup_dir="$STATE_DIR/backups/agent-compat"
-    mkdir -p "$backup_dir"
-    rel="${path#"$WORKSPACE_ROOT"/}"
-    backup_name="$(printf '%s' "$rel" | sed 's#[^A-Za-z0-9._-]#__#g')"
-    cp "$path" "$backup_dir/${backup_name}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$path" user >/dev/null
 }
 
 write_marked_block() {

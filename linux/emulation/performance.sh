@@ -100,7 +100,7 @@ write_config() {
     default_config > "$defaults"
     if [ -f "$CONFIG_FILE" ] && jq empty "$CONFIG_FILE" >/dev/null 2>&1; then
         cp "$CONFIG_FILE" "$current"
-        cp "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%s)"
+        pz_backup_file "$CONFIG_FILE" user >/dev/null
     else
         echo '{}' > "$current"
     fi
@@ -263,7 +263,7 @@ hdr_mode = false
 experimental_present_mode = "fifo"
 EOF
     elif ! grep -Fq 'exe = "phasezero"' "$LSFG_CONFIG"; then
-        cp "$LSFG_CONFIG" "${LSFG_CONFIG}.bak.$(date +%s)"
+        pz_backup_file "$LSFG_CONFIG" user >/dev/null
         cat >> "$LSFG_CONFIG" <<'EOF'
 
 [[game]]

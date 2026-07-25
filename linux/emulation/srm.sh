@@ -134,7 +134,7 @@ merge_all_template_parsers() {
 
 backup_srm_file() {
     local file="$1"
-    [ -f "$file" ] && cp "$file" "${file}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$file" user >/dev/null
 }
 
 ensure_srm_appimage_link() {

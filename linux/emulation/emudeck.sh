@@ -88,7 +88,7 @@ normalize_steamdeck_desktop() {
         pz_warn "EmuDeck.desktop normalization skipped; validation failed: $desktop"
         return 0
     fi
-    [ -f "$desktop" ] && cp "$desktop" "${desktop}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$desktop" user >/dev/null
     install -m 0755 "$tmp" "$desktop"
     rm -f "$tmp"
     pz_info "normalized Steam Deck EmuDeck.desktop: $desktop"
@@ -114,7 +114,7 @@ install_steamdeck_desktop() {
         pz_error "downloaded EmuDeck.desktop failed validation: $PZ_EMUDECK_STEAMDECK_DESKTOP_URL"
         return 1
     fi
-    [ -f "$target" ] && cp "$target" "${target}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$target" user >/dev/null
     install -m 0755 "$tmp" "$target"
     rm -f "$tmp"
     normalize_steamdeck_desktop "$target"

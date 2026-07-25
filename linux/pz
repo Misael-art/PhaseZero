@@ -216,6 +216,9 @@ Usage:
   pz updates check           Unified PhaseZero apps and host update inventory
   pz updates apply <app>     Explicit verified user-app update
   pz updates install-service Enable daily check-only timer
+  pz host status               Host hygiene: ledger, backups, footprint
+  pz host backups migrate      Move legacy .bak files into the central store
+  pz host backups list         List centralized backups
   pz ui                        Open native Linux control center
   pz ui native                 Open native Qt6/PySide6 control center
   pz ui web [PORT]             Open legacy local web dashboard
@@ -777,6 +780,10 @@ cmd_updates() {
     bash "$PZ_ROOT/linux/updates/app-updates.sh" "$@"
 }
 
+cmd_host() {
+    bash "$PZ_ROOT/linux/host.sh" "$@"
+}
+
 main() {
     local cmd="${1:-help}"
     shift 2>/dev/null || true
@@ -798,6 +805,7 @@ main() {
         installation|installations) cmd_installation "$@" ;;
         self-update|selfupdate|update-phasezero) cmd_self_update "$@" ;;
         updates|app-updates|atualizacoes) cmd_updates "$@" ;;
+        host|higiene)  cmd_host "$@" ;;
         uninstall|desinstalar|remove-all) exec "$PZ_ROOT/linux/uninstall.sh" "$@" ;;
         ui)            cmd_ui "$@" ;;
         commands)      cmd_commands "$@" ;;

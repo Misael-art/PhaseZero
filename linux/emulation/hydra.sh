@@ -75,7 +75,7 @@ merge_hydra_classic_config() {
             phasezeroPolicy: "user-owned-games-only"
         }' > "$tmp"
     fi
-    [ -f "$HYDRA_CLASSIC_CONFIG" ] && cp "$HYDRA_CLASSIC_CONFIG" "${HYDRA_CLASSIC_CONFIG}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$HYDRA_CLASSIC_CONFIG" user >/dev/null
     install -m 0644 "$tmp" "$HYDRA_CLASSIC_CONFIG"
     rm -f "$tmp"
     pz_info "Hydra Classic config written: $HYDRA_CLASSIC_CONFIG"
@@ -172,7 +172,7 @@ merge_hydra_emulators_config() {
             }' "$tmp" > "$next"
         mv "$next" "$tmp"
     done < <(jq -c '.[]' <<< "$entries")
-    [ -f "$HYDRA_EMULATORS_CONFIG" ] && cp "$HYDRA_EMULATORS_CONFIG" "${HYDRA_EMULATORS_CONFIG}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$HYDRA_EMULATORS_CONFIG" user >/dev/null
     install -m 0644 "$tmp" "$HYDRA_EMULATORS_CONFIG"
     rm -f "$tmp"
     pz_info "Hydra emulator config written: $HYDRA_EMULATORS_CONFIG"

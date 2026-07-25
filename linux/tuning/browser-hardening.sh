@@ -11,9 +11,7 @@ pz_harden_firefox() {
     [ -z "$profile_dir" ] && { pz_warn "no firefox profile found"; return; }
 
     local userjs="$profile_dir/user.js"
-    local backup
-    backup="$userjs.bak.$(date +%s)"
-    [ -f "$userjs" ] && cp "$userjs" "$backup"
+    pz_backup_file "$userjs" user >/dev/null
 
     cat > "$userjs" <<'EOF'
 // PhaseZero Firefox Hardening

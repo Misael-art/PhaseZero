@@ -325,9 +325,7 @@ pz_shortcut_strip_software_render() {
 
 pz_shortcut_hide_duplicate() {
     local file="$1"
-    install -d "$PZ_SHORTCUT_BACKUP_DIR"
-    local backup="$PZ_SHORTCUT_BACKUP_DIR/$(basename "$file").bak.$(date +%s)"
-    cp "$file" "$backup" 2>/dev/null || true
+    pz_backup_file "$file" user >/dev/null
     pz_shortcut_set_desktop_key "$file" "NoDisplay" "true"
     pz_shortcut_set_desktop_key "$file" "Hidden" "true"
     pz_info "hidden duplicate launcher: $file"

@@ -91,6 +91,7 @@ install_via_source() {
     fi
     cargo build --release --workspace --manifest-path "$src/Cargo.toml"
     install -m 0755 "$src/target/release/ai-memory" "$LOCAL_BIN/ai-memory"
+    pz_record_created ai "$LOCAL_BIN/ai-memory"
     export PATH="$LOCAL_BIN:$PATH"
 }
 

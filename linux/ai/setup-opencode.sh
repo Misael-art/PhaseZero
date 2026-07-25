@@ -462,7 +462,7 @@ configure_free_default_model() {
 
     mkdir -p "$(dirname "$OPENCODE_CONFIG")"
     [ -f "$OPENCODE_CONFIG" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$OPENCODE_CONFIG"
-    cp "$OPENCODE_CONFIG" "${OPENCODE_CONFIG}.bak.$(date +%s)"
+    pz_backup_file "$OPENCODE_CONFIG" user >/dev/null
     local tmp; tmp="$(mktemp)"
     jq --arg model "$model" --arg small "$small" '.model = $model | .small_model = $small' \
         "$OPENCODE_CONFIG" > "$tmp" && mv "$tmp" "$OPENCODE_CONFIG"
@@ -507,7 +507,7 @@ configure_local_model() {
     models_json="$(jq -Rn '[inputs] | map({(.): {name: (. + " (local)"), tools: true, options: {num_ctx: 8192}}}) | add' <<< "$models")"
     mkdir -p "$(dirname "$OPENCODE_CONFIG")"
     [ -f "$OPENCODE_CONFIG" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$OPENCODE_CONFIG"
-    cp "$OPENCODE_CONFIG" "${OPENCODE_CONFIG}.bak.$(date +%s)"
+    pz_backup_file "$OPENCODE_CONFIG" user >/dev/null
     tmp="$(mktemp)"
     # Set the default model only when the host has no cloud credentials (nothing
     # else would work) or no model is set yet; never override a user's choice.

@@ -272,6 +272,7 @@ Exec=$PZ_ROOT/linux/pz waydroid launch
 Terminal=false
 Categories=System;Utility;
 EOF
+    pz_record_created waydroid "$APPLICATIONS_DIR/phasezero-waydroid.desktop"
     cat > "$APPLICATIONS_DIR/phasezero-reboot-waydroid.desktop" <<EOF
 [Desktop Entry]
 Type=Application
@@ -281,6 +282,7 @@ Exec=pkexec bash $PZ_ROOT/linux/waydroid/waydroid.sh boot next-reboot
 Terminal=false
 Categories=System;
 EOF
+    pz_record_created waydroid "$APPLICATIONS_DIR/phasezero-reboot-waydroid.desktop"
     cat > "$SYSTEMD_USER_DIR/phasezero-waydroid.service" <<EOF
 [Unit]
 Description=PhaseZero Waydroid optimized session
@@ -295,6 +297,7 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 EOF
+    pz_record_created waydroid "$SYSTEMD_USER_DIR/phasezero-waydroid.service"
     chown_target_user \
         "$APPLICATIONS_DIR/phasezero-waydroid.desktop" \
         "$APPLICATIONS_DIR/phasezero-reboot-waydroid.desktop" \

@@ -38,7 +38,7 @@ write_workspace_recommendations() {
     else
         jq -n --argjson recs "$recs" '{recommendations:$recs}' > "$tmp"
     fi
-    [ -f "$EXTENSIONS_JSON" ] && cp "$EXTENSIONS_JSON" "${EXTENSIONS_JSON}.bak.$(date +%s)" 2>/dev/null || true
+    pz_backup_file "$EXTENSIONS_JSON" user >/dev/null
     mv "$tmp" "$EXTENSIONS_JSON"
     pz_info "wrote VS Code workspace extension recommendations: $EXTENSIONS_JSON"
 }

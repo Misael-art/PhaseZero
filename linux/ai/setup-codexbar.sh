@@ -141,6 +141,7 @@ install_cli_release() {
         return 1
     }
     install -m 0755 "$bin_found" "$LOCAL_BIN/codexbar"
+    pz_record_created ai "$LOCAL_BIN/codexbar"
     binary_checksum="$(sha256sum "$LOCAL_BIN/codexbar" | awk '{print $1}')"
     state_merge cli "$(jq -cn \
         --arg tag "$tag" \
@@ -728,7 +729,7 @@ remove_all() {
         pz_info "removed $LOCAL_BIN/codexbar"
     fi
     if [ -f "$CONFIG_FILE" ] && config_is_managed; then
-        cp "$CONFIG_FILE" "${CONFIG_FILE}.bak.$(date +%s)" 2>/dev/null || true
+        pz_backup_file "$CONFIG_FILE" user >/dev/null
         rm -f "$CONFIG_FILE"
         pz_info "removed managed config (backup kept next to it)"
     fi

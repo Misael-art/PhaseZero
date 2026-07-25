@@ -20,6 +20,13 @@ pz_systemd_enable() {
             pz_admin_run systemctl enable --now "$service"
             ;;
     esac
+    ledger_record \
+        --module "${PZ_MODULE:-systemd}" \
+        --action enable-service \
+        --service "$scope:$service" \
+        --scope "$scope" \
+        --reversible true \
+        --rollback-cmd "$([ "$scope" = user ] && echo 'systemctl --user' || echo 'systemctl') disable --now $(printf '%q' "$service")"
     pz_info "enabled and started $service ($scope)"
 }
 
@@ -56,7 +63,7 @@ pz_systemd_is_active() {
 
 pz_systemd_install_unit() {
     local unit_file="$1" scope="${2:-user}"
-    local target unit_name
+    local target unit_name backup="" existed=0
     pz_systemd_validate_scope "$scope" || return
     [ -f "$unit_file" ] || { pz_error "systemd unit missing: $unit_file"; return 1; }
     unit_name="$(basename "$unit_file")"
@@ -64,16 +71,31 @@ pz_systemd_install_unit() {
         user)
             target="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
             install -d "$target"
+            [ -f "$target/$unit_name" ] && existed=1
+            backup="$(pz_backup_file "$target/$unit_name" user)"
             install -m 0644 "$unit_file" "$target/$unit_name"
             systemctl --user daemon-reload
             ;;
         system)
             target="/etc/systemd/system"
             pz_admin_run install -d "$target"
+            [ -f "$target/$unit_name" ] && existed=1
+            backup="$(pz_backup_file "$target/$unit_name" root)"
             pz_admin_run install -m 0644 "$unit_file" "$target/$unit_name"
             pz_admin_run systemctl daemon-reload
             ;;
     esac
+    if [ "$existed" = "1" ]; then
+        ledger_record --module "${PZ_MODULE:-systemd}" --action install-unit \
+            --modified "$target/$unit_name" ${backup:+--backup "$backup"} \
+            --service "$scope:$unit_name" --scope "$scope" --reversible true \
+            --rollback-cmd "cp -p -- $(printf '%q' "${backup:-}") $(printf '%q' "$target/$unit_name")"
+    else
+        ledger_record --module "${PZ_MODULE:-systemd}" --action install-unit \
+            --created "$target/$unit_name" \
+            --service "$scope:$unit_name" --scope "$scope" --reversible true \
+            --rollback-cmd "rm -f -- $(printf '%q' "$target/$unit_name")"
+    fi
     pz_info "installed systemd unit: $unit_file → $target/$unit_name"
 }
 
