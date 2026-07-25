@@ -192,8 +192,9 @@ Usage:
   pz ai 9router dashboard      Open local 9Router dashboard
   pz ai 9router provider ...   Provider status, secret sync and removal
   pz ai 9router combo ...      List, create, sync or switch fallback combos
-  pz ai 9router usage          Usage, latency and fallback telemetry
-  pz ai odysseus status        Audit pinned Odysseus workspace deployment
+   pz ai 9router usage          Usage, latency and fallback telemetry
+   pz ai omniroute <action>     OmniRoute multi-provider router (install|status|combo|opencode|test|dashboard)
+   pz ai odysseus status        Audit pinned Odysseus workspace deployment
   pz ai odysseus install       Provision rootless, loopback-only Odysseus stack
   pz ai odysseus update        Update to verified official branch commit with rollback
   pz doctor                    Run full system diagnostics
@@ -509,6 +510,10 @@ cmd_ai() {
             shift
             bash "$PZ_ROOT/linux/ai/9router-manager.sh" "${@:-status}"
             ;;
+        omniroute|or|omni-route)
+            shift
+            bash "$PZ_ROOT/linux/ai/omniroute-manager.sh" "${@:-status}"
+            ;;
         odysseus|odysseus-os|workspace)
             shift
             bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" "${@:-status}"
@@ -691,7 +696,7 @@ cmd_ui() {
             echo "Dashboard: http://127.0.0.1:$web_port (pid $pid)"
             ;;
         *)
-            pz_error "usage: pz ui (native|web|server|tui|status|menu <scan|plan|apply|rollback>)"
+            pz_error "usage: pz ui (native|web|server|tui|status|menu <scan|plan|apply|sync|rollback>)"
             return 1
             ;;
     esac

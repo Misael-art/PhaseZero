@@ -16,19 +16,96 @@ WINPODX_CONFIG="${PZ_WINPODX_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/winpodx/w
 WINPODX_STORAGE="${PZ_WINPODX_STORAGE:-${XDG_DATA_HOME:-$HOME/.local/share}/winpodx/storage}"
 WINPODX_CLI="${PZ_WINPODX_CLI:-$LOCAL_BIN/winpodx}"
 
+winboat_status() { app_state_json winboat; }
+winpodx_status() { app_state_json winpodx; }
+
+GUEST_BUNDLE_SOURCE="$PZ_ROOT/linux/windows-vm/guest"
+GUEST_BUNDLE_VENDOR="$GUEST_BUNDLE_SOURCE/vendor"
+GUEST_EXCHANGE_DIR="${PZ_WINDOWS_VM_EXCHANGE_DIR:-$HOME/.local/share/phasezero/windows-vm/exchange}"
+
+vendor_msis() {
+    local bundle_dir="$1" manifest entry name url sha file tmp
+    manifest="$GUEST_BUNDLE_VENDOR/vendor.json"
+    [ -f "$manifest" ] || { pz_warn "vendor manifest not found: $manifest"; return 0; }
+    for entry in winfsp virtiofs spice-webdavd; do
+        name="$(jq -r ".components.$entry.file // empty" "$manifest")"
+        url="$(jq -r ".components.$entry.url // empty" "$manifest")"
+        sha="$(jq -r ".components.$entry.sha256 // empty" "$manifest")"
+        [ -n "$name" ] && [ -n "$sha" ] || { pz_warn "vendor/$entry missing file or sha256 in manifest"; continue; }
+        file="$GUEST_BUNDLE_VENDOR/$name"
+        if [ -f "$file" ]; then
+            local computed
+            computed="$(sha256sum "$file" | awk '{print $1}')"
+            if [ "${computed,,}" != "${sha,,}" ]; then
+                pz_warn "vendor/$name hash mismatch (computed=$computed expected=$sha); re-downloading"
+                tmp="/tmp/pz-vendor-$$-$name"
+                download_atomic "$url" "$tmp" || { pz_error "download failed for $name"; return 1; }
+                computed="$(sha256sum "$tmp" | awk '{print $1}')"
+                if [ "${computed,,}" != "${sha,,}" ]; then
+                    pz_error "download hash mismatch for $name: computed=$computed expected=$sha"
+                    rm -f "$tmp"
+                    return 1
+                fi
+                mv "$tmp" "$file"
+            fi
+        else
+            pz_info "vendor/$name not found locally; downloading"
+            tmp="/tmp/pz-vendor-$$-$name"
+            download_atomic "$url" "$tmp"
+            computed="$(sha256sum "$tmp" | awk '{print $1}')"
+            if [ "${computed,,}" != "${sha,,}" ]; then
+                pz_error "download hash mismatch for $name: computed=$computed expected=$sha"
+                rm -f "$tmp"
+                return 1
+            fi
+            mv "$tmp" "$file"
+        fi
+        cp "$file" "$bundle_dir/$name"
+        chmod 0644 "$bundle_dir/$name"
+        pz_info "vendored $name -> $bundle_dir/$name"
+    done
+}
+
+install_guest_bundle() {
+    local component="$1"
+    [ -d "$GUEST_BUNDLE_SOURCE" ] || { pz_error "guest bundle source missing: $GUEST_BUNDLE_SOURCE"; return 1; }
+    [ -d "$GUEST_EXCHANGE_DIR" ] || install -d "$GUEST_EXCHANGE_DIR"
+    local bundle_dir="$GUEST_EXCHANGE_DIR/phasezero-guest-setup"
+    install -d "$bundle_dir"
+    cp -a "$GUEST_BUNDLE_SOURCE/" "$bundle_dir/"
+    rm -rf "$bundle_dir/vendor" 2>/dev/null || true
+    vendor_msis "$bundle_dir" || pz_warn "vendor MSI download failed; guest will download at runtime"
+    pz_info "guest provisioning bundle copied to $bundle_dir"
+    pz_info "inside the Windows guest, run as Administrator:"
+    case "$component" in
+        virtiofs) pz_info "  powershell -ExecutionPolicy Bypass -File \"$bundle_dir\\Install-VirtioFS.ps1\"" ;;
+        spice-webdav) pz_info "  powershell -ExecutionPolicy Bypass -File \"$bundle_dir\\Install-VirtioFS.ps1\" -SkipVirtioFS" ;;
+        rdp) pz_info "  powershell -ExecutionPolicy Bypass -File \"$bundle_dir\\Enable-RdpShares.ps1\" -RestartService" ;;
+        all) pz_info "  powershell -ExecutionPolicy Bypass -File \"$bundle_dir\\Install-VirtioFS.ps1\"" ;;
+    esac
+    (cd "$bundle_dir" && find . -type f -not -name 'vendor.json' -exec sha256sum {} \; > "$bundle_dir/SHA256SUMS.txt")
+    pz_info "bundle SHA256: $bundle_dir/SHA256SUMS.txt"
+    if command -v pwsh >/dev/null 2>&1; then
+        pwsh -NoProfile -Command "Get-Command $bundle_dir/Install-VirtioFS.ps1 2>&1" >/dev/null 2>&1 && \
+            pz_info "PowerShell parse check: ok" || pz_warn "PowerShell parse check: skipped (no pwsh or parse-only mode)"
+    fi
+}
+
 usage() {
     cat <<'EOF'
 Usage: container-frontends.sh <action>
 
 Actions:
-  status             Print AppImage, Podman, KVM, RDP and pod status JSON
-  install-winboat    Install/update official WinBoat AppImage
-  install-winpodx    Install/update official WinPodX AppImage
-  configure          Apply Steam Deck-safe Podman profiles; does not provision Windows
-  setup              Install both apps and configure profiles
-  doctor             Validate complete host integration
-  launch-winboat     Launch WinBoat
-  launch-winpodx     Launch WinPodX
+  status                Print AppImage, Podman, KVM, RDP and pod status JSON
+  install-winboat       Install/update official WinBoat AppImage
+  install-winpodx       Install/update official WinPodX AppImage
+  install-virtiofs      Copy guest VirtioFS + SPICE + RDP provisioning bundle to exchange dir
+  install-spice-webdav  Copy guest SPICE WebDAV provisioning script to exchange dir
+  configure             Apply Steam Deck-safe Podman profiles; does not provision Windows
+  setup                 Install both apps and configure profiles
+  doctor                Validate complete host integration
+  launch-winboat        Launch WinBoat
+  launch-winpodx        Launch WinPodX
 EOF
 }
 
@@ -320,6 +397,8 @@ main() {
         doctor) doctor ;;
         install-winboat) install_app winboat "$WINBOAT_API" WinBoat ;;
         install-winpodx) install_app winpodx "$WINPODX_API" WinPodX ;;
+        install-virtiofs) install_guest_bundle all ;;
+        install-spice-webdav) install_guest_bundle spice-webdav ;;
         configure) configure_all ;;
         setup)
             install_app winboat "$WINBOAT_API" WinBoat

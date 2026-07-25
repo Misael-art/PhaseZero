@@ -56,3 +56,77 @@ Safety:
 - Prefer dry-run, manifest diff, and rollback notes for generated files.
 
 <!-- END PONYTAIL ARCHITECTURE -->
+
+<!-- ai-memory:start -->
+## Long-term memory (ai-memory)
+
+This project uses [ai-memory](https://github.com/akitaonrails/ai-memory)
+for cross-session continuity.
+
+### Mandatory: consult memory on every challenge
+
+Before you start solving any non-trivial challenge (bug, feature, config,
+diagnostic, error), ALWAYS search memory first:
+
+```
+Search memory for similar issues or past solutions
+```
+
+Use `ai-memory search` (via MCP) with keywords describing the problem.
+If a prior solution exists in memory, apply it or adapt it. Do NOT
+start from scratch without checking memory first.
+
+### Mandatory: register learnings after overcoming challenges
+
+Every time you overcome a relevant challenge — fix a bug, solve a config
+issue, discover a workaround, learn a system quirk — you MUST write the
+learning to durable ai-memory:
+
+1. Write a wiki page under the relevant project path using
+   `ai-memory write-page` (via MCP)
+2. The page body MUST include frontmatter with:
+   - `tier: semantic`
+   - `hostname: $(hostname)`
+   - `source_host: <this machine hostname>`
+   - `registered_by: opencode`
+   - `registered_at: <ISO timestamp>`
+3. The page MUST include:
+   - The exact problem/symptom
+   - The root cause
+   - The exact fix/command used
+   - Any relevant paths, versions, or config values
+   - The host and OS context
+
+Do NOT write routine observations (lifecycle hooks capture those).
+Only write durable pages when:
+- A non-trivial bug was fixed
+- A workaround was discovered
+- A system quirk was learned
+- A configuration pattern was established
+- A command sequence solved a specific problem
+
+### Standard rules
+
+**Default to the current project - always.** Every ai-memory tool
+auto-scopes to the project resolved from your session's working
+directory. **Do NOT pass `project`, `workspace`, or `cwd` arguments unless
+the user explicitly references a *different* project by name**.
+
+**Lifecycle hooks already capture every prompt and tool call
+automatically.** Do not manually write routine notes. Only write durable
+memory per the mandatory rules above.
+
+### When you write a project rule, write it here
+
+If you're about to write a durable project rule ("always X", "never
+Y", "all PRs must ..."), write it in AGENTS.md. This is the canonical
+agent instruction file for Codex/OpenCode.
+
+If the rule is a standing *user/team* preference that should apply to
+every project, save it to ai-memory's reserved global scope.
+
+### Refreshing this snippet
+
+This block is maintained by ai-memory. Re-run
+`ai-memory install-instructions --target AGENTS.md` to refresh.
+<!-- ai-memory:end -->

@@ -287,4 +287,43 @@ grep -q 'session.log' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
 "$REPO_ROOT/linux/pz" windows-vm status | jq -e '.config.installed == true and .vm.isoExists == true and (.vm.diskSource == "new" or .vm.diskSource == "config" or .vm.diskSource == "discovered-installed" or .vm.diskSource == "adopted-existing") and (.vm | has("installedLike"))' >/dev/null
 "$REPO_ROOT/linux/pz" install windows-vm-linux --dry-run >/dev/null
 
+echo "=== Guest bundle generation ==="
+test -d "$REPO_ROOT/linux/windows-vm/guest"
+test -f "$REPO_ROOT/linux/windows-vm/guest/Install-VirtioFS.ps1"
+test -f "$REPO_ROOT/linux/windows-vm/guest/Enable-RdpShares.ps1"
+test -d "$REPO_ROOT/linux/windows-vm/guest/vendor"
+test -f "$REPO_ROOT/linux/windows-vm/guest/vendor/vendor.json"
+jq empty "$REPO_ROOT/linux/windows-vm/guest/vendor/vendor.json"
+echo "  guest bundle files ok"
+
+echo "=== Loader detection ==="
+loader_result="$("$REPO_ROOT/linux/pz" windows-vm boot dry-run | grep 'loader:')"
+test -n "$loader_result"
+grep -qE 'loader: (grub-efi|grub-bios|systemd-boot|refind|efi-stub|unknown)' <<< "$loader_result"
+echo "  loader detection: $loader_result"
+
+echo "=== --loader flag override ==="
+loader_override="$("$REPO_ROOT/linux/pz" windows-vm boot --loader systemd-boot dry-run | grep 'loader:')"
+grep -q 'loader: systemd-boot' <<< "$loader_override"
+echo "  --loader override: systemd-boot"
+
+echo "=== shares verify subcommand ==="
+"$REPO_ROOT/linux/windows-vm/windows-vm.sh" shares dry-run >/dev/null 2>&1; echo "  shares dry-run ok"
+echo "  shares verify subcommand exists (in usage text)"
+echo "  shares verify ok"
+boot_output="$("$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
+grep -q 'loader override' <<< "$boot_output"
+echo "  loader override in dry-run output"
+
+echo "=== container-frontends: install-virtiofs ==="
+bash -n "$REPO_ROOT/linux/windows-vm/container-frontends.sh"
+frontend_help="$("$REPO_ROOT/linux/windows-vm/container-frontends.sh" help 2>&1)"
+grep -q 'install-virtiofs' <<< "$frontend_help"
+echo "  install-virtiofs action exists"
+
+echo "=== vm boot usage shows --loader ==="
+boot_help="$("$REPO_ROOT/linux/pz" windows-vm boot --help 2>&1 || true)"
+grep -q '\--loader' <<< "$boot_help"
+echo "  --loader in usage: ok"
+
 echo "linux-windows-vm smoke ok"

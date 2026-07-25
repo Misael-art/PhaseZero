@@ -772,30 +772,40 @@ vm_admin_run() {
 # $HOME cannot recurse) and expose that; sets the global EFFECTIVE_SMB_DIR.
 SHARE_BIND_ROOT="$RUNTIME_DIR/shares"
 ensure_share_links() {
+    local hard_fail="${1:-0}"
     if [ "$DRY_RUN" = "1" ]; then
         pz_info "dry-run: would bind-mount host home + /mnt/sdcard into $SHARE_BIND_ROOT for SMB"
         EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
         return 0
     fi
-    local ok=1 pair name target
-    install -d "$SHARE_BIND_ROOT" 2>/dev/null || ok=0
-    if [ "$ok" = "1" ]; then
-        mkdir -p "$EXCHANGE_DIR"
-        for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
-            name="${pair%%:*}"; target="${pair#*:}"
-            [ -d "$target" ] || continue
-            install -d "$SHARE_BIND_ROOT/$name"
-            mountpoint -q "$SHARE_BIND_ROOT/$name" && continue
-            vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
-        done
-    fi
+    local ok=1 pair name target attempt=0
+    while [ "$attempt" -le 1 ]; do
+        ok=1
+        install -d "$SHARE_BIND_ROOT" 2>/dev/null || ok=0
+        if [ "$ok" = "1" ]; then
+            mkdir -p "$EXCHANGE_DIR"
+            for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
+                name="${pair%%:*}"; target="${pair#*:}"
+                [ -d "$target" ] || continue
+                install -d "$SHARE_BIND_ROOT/$name"
+                mountpoint -q "$SHARE_BIND_ROOT/$name" && continue
+                vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
+            done
+        fi
+        [ "$ok" = "1" ] && break
+        [ "$attempt" -ge 1 ] && break
+        attempt=$((attempt + 1))
+        pz_warn "bind mount attempt $attempt failed; retrying once"
+    done
     if [ "$ok" = "1" ] && mountpoint -q "$SHARE_BIND_ROOT/home"; then
         EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
         pz_info "host folders bind-mounted for SMB: \\\\10.0.2.4\\qemu -> exchange, home, sdcard, removable, media, mnt"
         return 0
     fi
-    # Fallback (no root): symlink share root. QEMU smbd will not follow these into
-    # the guest, so home/sdcard may look empty there — virtiofs still exposes home.
+    if [ "$hard_fail" = "1" ]; then
+        pz_error "bind mounts failed and virtiofs unavailable; SMB shares will be empty in guest. Aborting boot install."
+        return 1
+    fi
     install -d "$SHARE_ROOT"
     mkdir -p "$EXCHANGE_DIR"
     ln -sfn "$EXCHANGE_DIR" "$SHARE_ROOT/exchange"
@@ -806,6 +816,64 @@ ensure_share_links() {
     [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
     EFFECTIVE_SMB_DIR="$SHARE_ROOT"
     pz_warn "no root for bind mounts; SMB share uses symlinks (guest home/sdcard may be empty). Run: sudo pz windows-vm shares install, or use virtiofs."
+}
+
+verify_share() {
+    local name="$1" expected_target="$2" result="fail" detail=""
+    if mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
+        local actual
+        actual="$(findmnt -no TARGET "$SHARE_BIND_ROOT/$name" 2>/dev/null || echo "")"
+        if [ "$actual" = "$expected_target" ] || [ -z "$expected_target" ]; then
+            result="pass"
+            detail="bind-mounted"
+        else
+            detail="bind-mounted (expected=$expected_target actual=$actual)"
+        fi
+    elif [ -L "$SHARE_ROOT/$name" ]; then
+        result="degraded"
+        detail="symlink (guest may not follow)"
+    elif [ -d "$SHARE_BIND_ROOT/$name" ]; then
+        detail="directory exists, not mounted"
+    else
+        detail="not found"
+    fi
+    if [ "${JSON_OUT:-0}" = "1" ]; then
+        jq -n \
+            --arg name "$name" \
+            --arg result "$result" \
+            --arg detail "$detail" \
+            '{name:$name,result:$result,detail:$detail}'
+    else
+        printf 'share_%s: %s (%s)\n' "$name" "$result" "$detail"
+    fi
+}
+
+cmd_shares_verify() {
+    local all_pass=0 json_output="" line
+    for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
+        local name="${pair%%:*}" target="${pair#*:}"
+        [ -d "$target" ] || continue
+        if [ "${JSON_OUT:-0}" = "1" ]; then
+            line="$(verify_share "$name" "$target")"
+            json_output="$json_output$line,"
+        else
+            verify_share "$name" "$target"
+        fi
+    done
+    if [ "${JSON_OUT:-0}" = "1" ]; then
+        json_output="${json_output%,}"
+        printf '{%s}\n' "$json_output"
+    fi
+    # Check SMB reachability
+    if command -v smbclient >/dev/null 2>&1; then
+        if smbclient -N -L "//127.0.0.1/PZHome" -I 127.0.0.1 -p 445 2>&1 | grep -q 'PZHome'; then
+            [ "${JSON_OUT:-0}" = "1" ] || echo "samba_home_reachable: yes"
+        else
+            [ "${JSON_OUT:-0}" = "1" ] || echo "samba_home_reachable: no"
+            all_pass=1
+        fi
+    fi
+    return $all_pass
 }
 
 # Unmount the bind-mount share root (called on teardown / shares clean).
@@ -1140,6 +1208,10 @@ cmd_shares() {
             pz_info "Windows VM share bind mounts removed"
             return 0
             ;;
+        verify)
+            cmd_shares_verify
+            return $?
+            ;;
         dry-run|plan)
             echo "Windows VM shared access plan"
             echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> home/ and sdcard/ (bind-mounted)"
@@ -1152,7 +1224,7 @@ cmd_shares() {
             ;;
         status) ;;
         *)
-            pz_error "usage: windows-vm shares (status|install|repair|remove|clean|dry-run)"
+            pz_error "usage: windows-vm shares (status|install|repair|remove|clean|verify|dry-run)"
             return 1
             ;;
     esac
@@ -1822,7 +1894,7 @@ need_root() {
     return 1
 }
 
-parse_boot_common_args() {
+ parse_boot_common_args() {
     local parsed=()
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -1835,6 +1907,15 @@ parse_boot_common_args() {
                 export PZ_BOOT_TARGET_ROOT="${1#*=}"
                 shift
                 ;;
+            --loader)
+                [ -n "${2:-}" ] || { pz_error "--loader requires auto|grub|systemd-boot|refind|efi-stub"; return 1; }
+                export PZ_BOOT_LOADER="$2"
+                shift 2
+                ;;
+            --loader=*)
+                export PZ_BOOT_LOADER="${1#*=}"
+                shift
+                ;;
             *)
                 parsed+=("$1")
                 shift
@@ -1842,6 +1923,91 @@ parse_boot_common_args() {
         esac
     done
     PZ_BOOT_PARSED_ARGS=("${parsed[@]}")
+}
+
+detected_loader() {
+    local loader="${PZ_BOOT_LOADER:-auto}"
+    if [ "$loader" = "auto" ]; then
+        loader="$(pz_boot_detect_loader)"
+    fi
+    echo "$loader"
+}
+
+loader_install_entry() {
+    local loader="$1" uuid version kernel initrd cmdline
+    uuid="$(root_uuid)"
+    version="$(latest_kernel_version)"
+    [ -n "$uuid" ] || { pz_error "could not resolve root UUID"; return 1; }
+    [ -n "$version" ] || { pz_error "could not resolve /boot/vmlinuz-*"; return 1; }
+    kernel="/boot/vmlinuz-$version"
+    initrd="/boot/initramfs-$version.img"
+    [ -f "$kernel" ] || { pz_error "missing kernel: $kernel"; return 1; }
+    [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
+    cmdline="root=UUID=$uuid rw quiet splash"
+    subvol="$(root_subvol || true)"
+    [ -n "$subvol" ] && cmdline="$cmdline rootflags=subvol=$subvol"
+
+    case "$loader" in
+        systemd-boot)
+            pz_boot_systemd_boot_oneshot_entry "$BOOT_ID" "$kernel" "$initrd" "$cmdline"
+            pz_boot_systemd_boot_set_oneshot "$BOOT_ID"
+            ;;
+        refind)
+            pz_boot_refind_install_stanza "$BOOT_ID" "$kernel" "$initrd" "$cmdline"
+            ;;
+        efi-stub)
+            pz_boot_efi_stub_entry "$BOOT_ID" "$kernel" "$initrd" "$cmdline"
+            ;;
+        grub-efi|grub-bios)
+            return 0
+            ;;
+        *)
+            pz_error "unsupported loader: $loader"
+            return 1
+            ;;
+    esac
+}
+
+loader_remove_entry() {
+    local loader="$1"
+    case "$loader" in
+        systemd-boot)
+            pz_boot_systemd_boot_remove_entry "$BOOT_ID"
+            ;;
+        refind)
+            pz_boot_refind_remove_stanza "$BOOT_ID"
+            ;;
+        efi-stub)
+            pz_boot_efi_stub_remove "$BOOT_ID"
+            ;;
+        grub-efi|grub-bios)
+            return 0
+            ;;
+        *)
+            pz_error "unsupported loader: $loader"
+            return 1
+            ;;
+    esac
+}
+
+loader_entry_state() {
+    local loader="$1"
+    case "$loader" in
+        systemd-boot)
+            local esp; esp="$(pz_boot_esp_dir)"
+            [ -f "$esp/loader/entries/$BOOT_ID.conf" ] && echo present || echo missing
+            ;;
+        refind)
+            local esp; esp="$(pz_boot_esp_dir)"
+            [ -f "$esp/EFI/refind/entries/$BOOT_ID.conf" ] && echo present || echo missing
+            ;;
+        grub-efi|grub-bios)
+            grub_cfg_entry_state
+            ;;
+        *)
+            echo unknown
+            ;;
+    esac
 }
 
 need_root_action() {
@@ -1904,6 +2070,8 @@ root_env_value() {
 }
 
 boot_artifacts_current() {
+    local loader
+    loader="$(detected_loader)"
         [ -x "$BOOT_HELPER_TARGET" ] &&
         [ -x "$SESSION_TARGET" ] &&
         [ -r "$DISPLAY_SESSION_TARGET" ] &&
@@ -1913,8 +2081,14 @@ boot_artifacts_current() {
         [ -f "$SERVICE_FILE" ] &&
         [ -f "$WAYLAND_SESSION_FILE" ] &&
         [ -f "$XSESSION_FILE" ] &&
-        [ -f "$ROOT_ENV_FILE" ] &&
-        [ -x "$GRUB_SCRIPT" ] || return 1
+        [ -f "$ROOT_ENV_FILE" ] || return 1
+    case "$loader" in
+        grub-efi|grub-bios)
+            [ -x "$GRUB_SCRIPT" ] || return 1
+            grep -Fq "phasezero.windowsvm=1" "$GRUB_SCRIPT" || return 1
+            grep -Fq -- "--id='$BOOT_ID'" "$GRUB_SCRIPT" || return 1
+            ;;
+    esac
     cmp -s "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
     cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
     cmp -s "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET" || return 1
@@ -1926,8 +2100,6 @@ boot_artifacts_current() {
     grep -Fqx "Exec=$SESSION_TARGET" "$WAYLAND_SESSION_FILE" || return 1
     grep -Fqx "Exec=$SESSION_TARGET" "$XSESSION_FILE" || return 1
     grep -Fqx "ExecStart=$BOOT_HELPER_TARGET" "$SERVICE_FILE" || return 1
-    grep -Fq "phasezero.windowsvm=1" "$GRUB_SCRIPT" || return 1
-    grep -Fq -- "--id='$BOOT_ID'" "$GRUB_SCRIPT" || return 1
 }
 
 boot_service_content() {
@@ -1995,13 +2167,13 @@ grub_cfg_entry_state() {
 }
 
 install_boot() {
+    local loader
     need_root
     pz_boot_require_current_root_target
-    pz_boot_preflight_grub
-    pz_boot_validate_active_efi_safe
-    pz_boot_backup_bundle "windows-vm-boot-install"
+    loader="$(detected_loader)"
+    pz_boot_backup_bundle "windows-vm-boot-install-${loader}"
     effective_config
-    ensure_share_links
+    ensure_share_links 1
     configure_windows_samba_shares
     optimize_libvirt_domain
     install -d /usr/local/lib/phasezero "$RUNTIME_ROOT/linux/windows-vm" "$RUNTIME_ROOT/linux/lib" /etc/phasezero /usr/share/wayland-sessions /usr/share/xsessions
@@ -2018,64 +2190,124 @@ install_boot() {
     chmod 0644 "$WAYLAND_SESSION_FILE" "$XSESSION_FILE"
     boot_service_content > "$SERVICE_FILE"
     chmod 0644 "$SERVICE_FILE"
-    grub_script_content > "$GRUB_SCRIPT"
-    chmod 0755 "$GRUB_SCRIPT"
-    systemctl daemon-reload
-    systemctl enable phasezero-windows-vm-boot-prepare.service >/dev/null
-    refresh_grub_config
-    pz_boot_validate_grub_cfg_safe "$GRUB_CFG"
-    pz_boot_validate_active_efi_safe
+    case "$loader" in
+        grub-efi|grub-bios)
+            pz_boot_preflight_grub
+            pz_boot_validate_active_efi_safe
+            grub_script_content > "$GRUB_SCRIPT"
+            chmod 0755 "$GRUB_SCRIPT"
+            systemctl daemon-reload
+            systemctl enable phasezero-windows-vm-boot-prepare.service >/dev/null
+            refresh_grub_config
+            pz_boot_validate_grub_cfg_safe "$GRUB_CFG"
+            pz_boot_validate_active_efi_safe
+            pz_info "PhaseZero Windows VM GRUB boot entry installed (loader=$loader)"
+            ;;
+        systemd-boot)
+            pz_boot_validate_active_efi_safe
+            rm -f "$GRUB_SCRIPT" 2>/dev/null || true
+            systemctl daemon-reload
+            systemctl enable phasezero-windows-vm-boot-prepare.service >/dev/null
+            loader_install_entry "$loader"
+            ;;
+        refind)
+            pz_boot_validate_active_efi_safe
+            rm -f "$GRUB_SCRIPT" 2>/dev/null || true
+            systemctl daemon-reload
+            systemctl enable phasezero-windows-vm-boot-prepare.service >/dev/null
+            loader_install_entry "$loader"
+            ;;
+        efi-stub)
+            pz_boot_validate_active_efi_safe
+            rm -f "$GRUB_SCRIPT" 2>/dev/null || true
+            systemctl daemon-reload
+            systemctl enable phasezero-windows-vm-boot-prepare.service >/dev/null
+            loader_install_entry "$loader"
+            ;;
+        *)
+            pz_error "unsupported bootloader: $loader"
+            return 1
+            ;;
+    esac
     boot_artifacts_current || {
-        pz_error "Windows VM boot artifact validation failed after install"
+        pz_error "Windows VM boot artifact validation failed after install (loader=$loader)"
         return 1
     }
-    pz_info "PhaseZero Windows VM GRUB boot entry installed"
+    pz_info "PhaseZero Windows VM boot entry installed (loader=$loader)"
 }
 
 remove_boot() {
+    local loader
     need_root
     pz_boot_require_current_root_target
-    pz_boot_preflight_grub
-    pz_boot_validate_active_efi_safe
-    pz_boot_backup_bundle "windows-vm-boot-remove"
+    loader="$(detected_loader)"
+    pz_boot_backup_bundle "windows-vm-boot-remove-${loader}"
     systemctl disable phasezero-windows-vm-boot-prepare.service >/dev/null 2>&1 || true
     rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$WAYLAND_SESSION_FILE" "$XSESSION_FILE" "$BOOT_HELPER_TARGET" "$SESSION_TARGET" "$ROOT_ENV_FILE"
     rm -rf "$RUNTIME_ROOT"
     if [ -f "$SDDM_CONF" ] && grep -q 'PhaseZero managed' "$SDDM_CONF" 2>/dev/null; then
         rm -f "$SDDM_CONF"
     fi
+    loader_remove_entry "$loader"
     systemctl daemon-reload
-    refresh_grub_config
-    pz_boot_validate_grub_cfg_safe "$GRUB_CFG"
-    pz_boot_validate_active_efi_safe
-    pz_info "PhaseZero Windows VM GRUB boot entry removed"
+    case "$loader" in
+        grub-efi|grub-bios)
+            pz_boot_preflight_grub
+            refresh_grub_config
+            pz_boot_validate_grub_cfg_safe "$GRUB_CFG"
+            pz_boot_validate_active_efi_safe
+            ;;
+        *)
+            pz_boot_validate_active_efi_safe
+            ;;
+    esac
+    pz_info "PhaseZero Windows VM boot entry removed (loader=$loader)"
 }
 
 ensure_boot_entry_ready() {
-    local state
+    local loader state
     if ! boot_artifacts_current; then
-        pz_warn "Windows VM GRUB boot files missing or stale; reinstalling"
+        pz_warn "Windows VM boot files missing or stale; reinstalling"
         install_boot
         return 0
     fi
-    state="$(grub_cfg_entry_state)"
+    loader="$(detected_loader)"
+    state="$(loader_entry_state "$loader")"
     if [ "$state" = "missing" ]; then
-        pz_warn "Windows VM GRUB menuentry missing from $GRUB_CFG; regenerating"
-        refresh_grub_config
-        state="$(grub_cfg_entry_state)"
+        pz_warn "Windows VM loader entry missing for $loader; reinstalling"
+        loader_install_entry "$loader"
+        state="$(loader_entry_state "$loader")"
     fi
     if [ "$state" != "present" ]; then
-        pz_error "Windows VM GRUB menuentry not confirmed: $state"
+        pz_error "Windows VM loader entry not confirmed: $state (loader=$loader)"
         return 1
     fi
 }
 
 set_next_boot_root() {
+    local loader
     pz_boot_require_current_root_target
-    command -v grub-reboot >/dev/null 2>&1 || { pz_error "grub-reboot missing"; return 1; }
-    ensure_boot_entry_ready
-    grub-reboot "$BOOT_ID"
-    pz_info "next boot set to: $BOOT_ENTRY ($BOOT_ID)"
+    loader="$(detected_loader)"
+    case "$loader" in
+        systemd-boot)
+            ensure_boot_entry_ready
+            pz_boot_systemd_boot_set_oneshot "$BOOT_ID"
+            ;;
+        refind)
+            ensure_boot_entry_ready
+            pz_info "rEFInd: select PhaseZero Windows VM from boot menu manually"
+            ;;
+        efi-stub)
+            ensure_boot_entry_ready
+            pz_info "EFI stub: entry should appear in UEFI boot menu as PhaseZero Windows VM"
+            ;;
+        *)
+            command -v grub-reboot >/dev/null 2>&1 || { pz_error "grub-reboot missing"; return 1; }
+            ensure_boot_entry_ready
+            grub-reboot "$BOOT_ID"
+            ;;
+    esac
+    pz_info "next boot set to: $BOOT_ENTRY ($BOOT_ID, loader=$loader)"
     pz_info "run: systemctl reboot"
 }
 
@@ -2092,22 +2324,51 @@ next_reboot() {
 }
 
 set_default_boot() {
-    need_root_action set-default
-    command -v grub-set-default >/dev/null 2>&1 || { pz_error "grub-set-default missing"; return 1; }
-    ensure_boot_entry_ready
-    grub-set-default "$BOOT_ID"
-    pz_warn "permanent GRUB default set to: $BOOT_ENTRY ($BOOT_ID)"
+    local loader
+    loader="$(detected_loader 2>/dev/null || echo grub-bios)"
+    case "$loader" in
+        systemd-boot)
+            ensure_boot_entry_ready
+            if command -v bootctl >/dev/null 2>&1; then
+                bootctl set-default "$BOOT_ID.conf" 2>/dev/null || true
+                pz_warn "permanent systemd-boot default set to: $BOOT_ENTRY"
+            else
+                pz_error "bootctl missing; cannot set systemd-boot default"
+                return 1
+            fi
+            ;;
+        refind)
+            pz_warn "rEFInd: set default selection in $esp/EFI/refind/refind.conf (default_selection)"
+            ;;
+        *)
+            need_root_action set-default
+            command -v grub-set-default >/dev/null 2>&1 || { pz_error "grub-set-default missing"; return 1; }
+            ensure_boot_entry_ready
+            grub-set-default "$BOOT_ID"
+            pz_warn "permanent GRUB default set to: $BOOT_ENTRY ($BOOT_ID)"
+            ;;
+    esac
 }
 
 clear_next_boot() {
+    local loader
     need_root_action clear-next
-    command -v grub-editenv >/dev/null 2>&1 || { pz_error "grub-editenv missing"; return 1; }
-    grub-editenv - unset next_entry >/dev/null 2>&1 || true
-    pz_info "cleared GRUB one-shot next_entry"
+    loader="$(detected_loader)"
+    case "$loader" in
+        systemd-boot)
+            command -v bootctl >/dev/null 2>&1 && bootctl set-default "" 2>/dev/null || true
+            ;;
+        *)
+            command -v grub-editenv >/dev/null 2>&1 || { pz_error "grub-editenv missing"; return 1; }
+            grub-editenv - unset next_entry >/dev/null 2>&1 || true
+            ;;
+    esac
+    pz_info "cleared one-shot next_entry (loader=$loader)"
 }
 
 status_boot() {
-    local grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
+    local loader="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
+    loader="$(detected_loader)"
     grep -qw 'phasezero.windowsvm=1' /proc/cmdline 2>/dev/null && cmdline_marker="yes"
     boot_artifacts_current && artifacts_current="yes"
     if command -v grub-editenv >/dev/null 2>&1; then
@@ -2122,10 +2383,12 @@ status_boot() {
     [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
     systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || true
     [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
+    echo "loader: $loader"
+    echo "loader_entry: $(loader_entry_state "$loader")"
     echo "artifacts_current: $artifacts_current"
     echo "configured_repo: $(root_env_value PZ_WINDOWS_VM_REPO)"
     echo "configured_boot_user: $(root_env_value PZ_WINDOWS_VM_BOOT_USER)"
-    echo "grub_cfg_entry: $(grub_cfg_entry_state)"
+    [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && echo "grub_cfg_entry: $(grub_cfg_entry_state)" || echo "grub_cfg_entry: n/a"
     echo "grub_next_entry: ${grub_next_entry:-none}"
     echo "grub_saved_entry: ${grub_saved_entry:-none}"
     [ -f "$SDDM_CONF" ] && echo "active_sddm_windows_vm_conf: yes" || echo "active_sddm_windows_vm_conf: no"
@@ -2134,12 +2397,14 @@ status_boot() {
     echo "target_root: $(pz_boot_target_root)"
     echo "session: phasezero-windows-vm.desktop"
     echo "grub_entry_id: $BOOT_ID"
-    echo "grub_hotkey: w"
     echo "recommended_direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
 }
 
 dry_run_boot() {
+    local loader
+    loader="$(detected_loader)"
     echo "PhaseZero Windows VM boot dry-run"
+    echo "  loader: $loader"
     echo "  helper: $BOOT_HELPER_TARGET"
     echo "  session_launcher: $SESSION_TARGET"
     echo "  runtime_launcher: $RUNTIME_LAUNCHER"
@@ -2151,9 +2416,10 @@ dry_run_boot() {
     echo "  kernel: $(latest_kernel_version || true)"
     echo "  session: phasezero-windows-vm.desktop"
     echo "  grub entry id: $BOOT_ID"
-    echo "  grub hotkey: w (keyboard only; Steam Deck controls remain firmware-dependent)"
+    [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && echo "  grub hotkey: w"
     echo "  one-shot boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next"
     echo "  one-shot reboot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+    echo "  loader override: --loader auto|grub|systemd-boot|refind|efi-stub"
 }
 
 cmd_boot() {
@@ -2170,7 +2436,7 @@ cmd_boot() {
         set-default) set_default_boot "$@" ;;
         clear-next) clear_next_boot "$@" ;;
         dry-run|plan) dry_run_boot "$@" ;;
-        *) pz_error "usage: windows-vm boot (install|remove|status|next|next-reboot|set-default|clear-next|dry-run)"; exit 1 ;;
+        *) pz_error "usage: windows-vm boot (install|remove|status|next|next-reboot|set-default|clear-next|dry-run) [--loader auto|grub|systemd-boot|refind|efi-stub] [--target-root /]"; exit 1 ;;
     esac
 }
 

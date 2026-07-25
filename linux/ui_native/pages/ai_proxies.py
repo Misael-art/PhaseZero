@@ -21,6 +21,18 @@ from .base import BasePage
 _DETAILED_KEY = "proxies.detailed-status"
 _POLL_MS = 15_000
 
+# Browser-session proxies whose OAuth is a headed Chromium flow. Maps the proxy
+# id to its catalog login action (the "Autenticar" affordance). mimo-ai-proxy is
+# absent on purpose: it authenticates via .env tokens, not a browser.
+LOGIN_ACTIONS: dict[str, str] = {
+    "kimiproxy": "ai.proxies-login-kimi",
+    "qwenproxy": "ai.proxies-login-qwen",
+    "deepsproxy": "ai.proxies-login-deeps",
+}
+
+# Auth statuses where opening the OAuth browser is the next useful step.
+_LOGIN_PENDING = {"ready-for-login", "session-present", "needs-login", "start-required"}
+
 
 def _set_state(widget: QWidget, state: str) -> None:
     widget.setProperty("state", state)
@@ -96,11 +108,6 @@ class AiProxiesPage(BasePage):
 
         auth_box = QGroupBox("Autenticação OAuth / credenciais")
         auth_layout = QVBoxLayout(auth_box)
-        login_actions = {
-            "kimiproxy": "ai.proxies-login-kimi",
-            "qwenproxy": "ai.proxies-login-qwen",
-            "deepsproxy": "ai.proxies-login-deeps",
-        }
         for proxy_id, name, _port, _suffix in PROXY_CARDS:
             row = QHBoxLayout()
             dot = QLabel("●")
@@ -113,7 +120,7 @@ class AiProxiesPage(BasePage):
             row.addWidget(dot)
             row.addWidget(title)
             row.addWidget(detail, 1)
-            login_button = self._action_button(login_actions.get(proxy_id, ""), "Abrir navegador")
+            login_button = self._action_button(LOGIN_ACTIONS.get(proxy_id, ""), "Abrir navegador")
             if login_button is not None:
                 row.addWidget(login_button)
             auth_layout.addLayout(row)
@@ -201,22 +208,38 @@ class AiProxiesPage(BasePage):
         service = QLabel("Verificando…")
         service.setObjectName("cardDescription")
         box.addWidget(service)
+        # Auth line carries its own colour dot so a running-but-unauthenticated
+        # proxy (service dot green, auth pending) is visually unambiguous.
+        auth_row = QHBoxLayout()
+        auth_row.setSpacing(6)
+        auth_dot = QLabel("●")
+        auth_dot.setObjectName("pillDot")
+        _set_state(auth_dot, "info")
         auth = QLabel("")
         auth.setObjectName("cardDescription")
         auth.setWordWrap(True)
-        box.addWidget(auth)
+        auth_row.addWidget(auth_dot, 0, Qt.AlignTop)
+        auth_row.addWidget(auth, 1)
+        box.addLayout(auth_row)
         controls = QHBoxLayout()
         controls.setSpacing(8)
         start = self._action_button(f"ai.proxies-start-{suffix}", "Iniciar")
+        if start is not None:
+            # Make the Start/Authenticate distinction explicit at the point of
+            # action: Start only brings the systemd service up, it never logs in.
+            start.setToolTip("Sobe o serviço systemd do proxy. Não abre o navegador nem autentica — use “Autenticar” para o login OAuth.")
         stop = self._action_button(f"ai.proxies-stop-{suffix}", "Parar")
-        for button in (start, stop):
+        # Browser-session proxies get an inline Authenticate button; mimo (env
+        # session) does not — its credentials come from its .env file.
+        login = self._action_button(LOGIN_ACTIONS.get(proxy_id, ""), "Autenticar")
+        for button in (start, stop, login):
             if button is not None:
                 controls.addWidget(button)
         controls.addStretch()
         box.addLayout(controls)
         self._cards[proxy_id] = {
             "dot": dot, "service": service, "auth": auth,
-            "start": start, "stop": stop,
+            "auth_dot": auth_dot, "start": start, "stop": stop, "login": login,
         }
         return card
 
@@ -229,6 +252,36 @@ class AiProxiesPage(BasePage):
         button.setToolTip(action.description)
         button.clicked.connect(lambda _checked=False, a=action: self.request_action(a))
         return button
+
+    @staticmethod
+    def _style_login_button(button: QPushButton, state: ProxyState) -> None:
+        """Adapt the per-card Authenticate button to the proxy's auth state."""
+        status = state.auth_status
+        if not state.installed:
+            enabled, text, emphasis = False, "Autenticar", "secondaryButton"
+            tooltip = "Instale o proxy antes de autenticar."
+        elif status == "login-running":
+            enabled, text, emphasis = False, "Login em andamento…", "secondaryButton"
+            tooltip = "Uma janela de login já está aberta. Conclua o OAuth no navegador."
+        elif status == "authenticated":
+            enabled, text, emphasis = True, "Reautenticar", "secondaryButton"
+            tooltip = "Sessão válida. Reabra o navegador para renovar o login, se necessário."
+        elif status == "gui-required":
+            enabled, text, emphasis = False, "Autenticar", "secondaryButton"
+            tooltip = "Requer sessão gráfica (DISPLAY/WAYLAND) para abrir o navegador."
+        elif status in _LOGIN_PENDING:
+            enabled, text, emphasis = True, "Autenticar", "primaryButton"
+            tooltip = "Abre o navegador para o login OAuth e salva a sessão do proxy."
+        else:
+            enabled, text, emphasis = True, "Autenticar", "secondaryButton"
+            tooltip = "Abre o navegador para o login OAuth e salva a sessão do proxy."
+        button.setEnabled(enabled)
+        button.setText(text)
+        button.setToolTip(tooltip)
+        if button.objectName() != emphasis:
+            button.setObjectName(emphasis)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
     # ----------------------------------------------------------------- status
     def reload(self) -> None:
@@ -295,8 +348,10 @@ class AiProxiesPage(BasePage):
             dot = refs.get("dot")
             service = refs.get("service")
             auth = refs.get("auth")
+            auth_dot = refs.get("auth_dot")
             start = refs.get("start")
             stop = refs.get("stop")
+            login = refs.get("login")
             if state is None:
                 if isinstance(service, QLabel):
                     service.setText("Sem dados")
@@ -305,6 +360,8 @@ class AiProxiesPage(BasePage):
                 _set_state(dot, "success" if state.running else "warning" if state.installed else "error")
             if isinstance(service, QLabel):
                 service.setText(f"Serviço: {state.service_label}")
+            if isinstance(auth_dot, QLabel):
+                _set_state(auth_dot, state.auth_state)
             if isinstance(auth, QLabel):
                 extra = f" — falta: {', '.join(state.auth_missing)}" if state.auth_missing else ""
                 auth.setText(f"Auth: {state.auth_label}{extra}")
@@ -312,6 +369,8 @@ class AiProxiesPage(BasePage):
                 start.setEnabled(state.installed and not state.running)
             if isinstance(stop, QPushButton):
                 stop.setEnabled(state.installed and state.running)
+            if isinstance(login, QPushButton):
+                self._style_login_button(login, state)
         for proxy_id, (dot, detail) in self._auth_rows.items():
             state = proxies.get(proxy_id)
             if state is None:

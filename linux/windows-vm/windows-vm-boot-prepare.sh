@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# windows-vm-boot-prepare.sh - switch SDDM session for PhaseZero Windows VM boot
+# windows-vm-boot-prepare.sh - detect DM, configure autologin for PhaseZero Windows VM boot
 set -euo pipefail
 
 TARGET_USER="${PZ_WINDOWS_VM_BOOT_USER:-misael}"
 CMDLINE="${PZ_BOOT_CMDLINE:-$(cat /proc/cmdline 2>/dev/null || true)}"
-CONF_DIR="${PZ_SDDM_CONF_DIR:-/etc/sddm.conf.d}"
-CONF_FILE="$CONF_DIR/91-phasezero-windows-vm.conf"
-STEAMOS_CONF="$CONF_DIR/90-phasezero-steamos.conf"
-WAYDROID_CONF="$CONF_DIR/92-phasezero-waydroid.conf"
 SESSION="phasezero-windows-vm.desktop"
 
 log() {
@@ -49,30 +45,202 @@ apply_vm_tuning() {
     log "host VM tuning applied"
 }
 
-if printf '%s\n' "$CMDLINE" | grep -qw 'phasezero.windowsvm=1'; then
-    apply_vm_tuning
-    install -d "$CONF_DIR"
-    if [ -f "$STEAMOS_CONF" ] && grep -q 'PhaseZero managed' "$STEAMOS_CONF" 2>/dev/null; then
-        rm -f "$STEAMOS_CONF"
+detect_display_manager() {
+    local dm_service dm_bin
+    dm_service="$(systemctl list-units --type=service --state=running 2>/dev/null | awk '$1 ~ /display-manager/ {print $1; exit}' || true)"
+    [ -z "$dm_service" ] && dm_service="$(systemctl list-units --type=service --state=running 2>/dev/null | awk '$1 ~ /(sddm|gdm|lightdm|lxdm|greetd)/ && $1 !~ /phasezero/ {print $1; exit}' || true)"
+    [ -z "$dm_service" ] && dm_service="$(systemctl list-units --type=service --state=running 2>/dev/null | awk '$1 ~ /(sddm|gdm|lightdm|lxdm|greetd)/ && $1 !~ /phasezero/ {print $1}')"
+    case "${dm_service,,}" in
+        sddm*) echo sddm; return 0 ;;
+        gdm3*) echo gdm3; return 0 ;;
+        gdm*) echo gdm; return 0 ;;
+        lightdm*) echo lightdm; return 0 ;;
+        lxdm*) echo lxdm; return 0 ;;
+        greetd*) echo greetd; return 0 ;;
+    esac
+    if command -v sddm >/dev/null 2>&1; then echo sddm; return 0; fi
+    if command -v gdm >/dev/null 2>&1 || command -v gdm3 >/dev/null 2>&1; then
+        command -v gdm3 >/dev/null 2>&1 && echo gdm3 || echo gdm
+        return 0
     fi
-    if [ -f "$WAYDROID_CONF" ] && grep -q 'PhaseZero managed' "$WAYDROID_CONF" 2>/dev/null; then
-        rm -f "$WAYDROID_CONF"
+    if command -v lightdm >/dev/null 2>&1; then echo lightdm; return 0; fi
+    if command -v lxdm >/dev/null 2>&1; then echo lxdm; return 0; fi
+    if command -v greetd >/dev/null 2>&1; then echo greetd; return 0; fi
+    echo none
+}
+
+ensure_autologin_group() {
+    local dm="$1" group=""
+    case "$dm" in
+        gdm|gdm3) group="gdm" ;;
+        lightdm) group="autologin" ;;
+        *) return 0 ;;
+    esac
+    if getent group "$group" >/dev/null 2>&1; then
+        if ! id -nG "$TARGET_USER" 2>/dev/null | grep -qw "$group"; then
+            if command -v groupmems >/dev/null 2>&1; then
+                groupmems -g "$group" -a "$TARGET_USER" 2>/dev/null || true
+                log "added $TARGET_USER to $group group"
+            elif command -v usermod >/dev/null 2>&1; then
+                usermod -aG "$group" "$TARGET_USER" 2>/dev/null || true
+                log "added $TARGET_USER to $group group (usermod)"
+            else
+                log "WARN: cannot add $TARGET_USER to $group group (no groupmems/usermod)"
+            fi
+        fi
     fi
-    cat > "$CONF_FILE" <<EOF
-# PhaseZero managed: Windows VM one-shot GRUB boot profile
+}
+
+write_sddm_autologin() {
+    local conf_dir="${PZ_SDDM_CONF_DIR:-/etc/sddm.conf.d}"
+    local conf_file="$conf_dir/91-phasezero-windows-vm.conf"
+    install -d "$conf_dir"
+    cat > "$conf_file" <<EOF
+# PhaseZero managed: Windows VM one-shot boot profile
 [Autologin]
 User=$TARGET_USER
 Session=$SESSION
 Relogin=true
 EOF
-    chmod 0644 "$CONF_FILE"
-    log "phasezero.windowsvm=1 detected; wrote SDDM autologin for user=$TARGET_USER session=$SESSION"
+    chmod 0644 "$conf_file"
+    log "SDDM autologin written: user=$TARGET_USER session=$SESSION"
+}
+
+remove_sddm_autologin() {
+    local conf_dir="${PZ_SDDM_CONF_DIR:-/etc/sddm.conf.d}"
+    local conf_file="$conf_dir/91-phasezero-windows-vm.conf"
+    if [ -f "$conf_file" ] && grep -q 'PhaseZero managed' "$conf_file" 2>/dev/null; then
+        rm -f "$conf_file"
+        log "removed SDDM autologin: $conf_file"
+    fi
+}
+
+write_gdm_autologin() {
+    local conf="/etc/gdm3/custom.conf"
+    [ -f "$conf" ] || conf="/etc/gdm/custom.conf"
+    [ -f "$conf" ] || touch "$conf"
+    if grep -q '# PhaseZero managed' "$conf" 2>/dev/null; then
+        sed -i '/# PhaseZero managed/,/AutomaticLogin.*/d' "$conf"
+    fi
+    cat >> "$conf" <<EOF
+# PhaseZero managed: Windows VM one-shot boot profile
+AutomaticLoginEnable=true
+AutomaticLogin=$TARGET_USER
+EOF
+    log "GDM autologin written: $conf"
+}
+
+remove_gdm_autologin() {
+    for conf in "/etc/gdm3/custom.conf" "/etc/gdm/custom.conf"; do
+        [ -f "$conf" ] || continue
+        if grep -q '# PhaseZero managed' "$conf" 2>/dev/null; then
+            sed -i '/# PhaseZero managed/,/AutomaticLogin=/d' "$conf"
+            log "removed GDM autologin from $conf"
+        fi
+    done
+}
+
+write_lightdm_autologin() {
+    local conf_dir="/etc/lightdm/lightdm.conf.d"
+    local conf_file="$conf_dir/91-phasezero-windows-vm.conf"
+    install -d "$conf_dir"
+    cat > "$conf_file" <<EOF
+# PhaseZero managed: Windows VM one-shot boot profile
+[Seat:*]
+autologin-user=$TARGET_USER
+autologin-session=$SESSION
+autologin-user-timeout=0
+EOF
+    chmod 0644 "$conf_file"
+    log "LightDM autologin written: $conf_file"
+}
+
+remove_lightdm_autologin() {
+    local conf_file="/etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf"
+    if [ -f "$conf_file" ] && grep -q 'PhaseZero managed' "$conf_file" 2>/dev/null; then
+        rm -f "$conf_file"
+        log "removed LightDM autologin: $conf_file"
+    fi
+}
+
+write_greetd_autologin() {
+    local conf="/etc/greetd/config.toml"
+    [ -f "$conf" ] || return 0
+    local backup="$conf.phasezero-backup"
+    cp -a "$conf" "$backup" 2>/dev/null || true
+    cat > "$conf" <<EOF
+# PhaseZero managed: Windows VM one-shot boot profile
+[terminal]
+vt = 1
+
+[default_session]
+command = "/usr/local/lib/phasezero/windows-vm-session"
+user = "$TARGET_USER"
+EOF
+    log "greetd autologin written: $conf (backup: $backup)"
+}
+
+remove_greetd_autologin() {
+    local conf="/etc/greetd/config.toml"
+    local backup="$conf.phasezero-backup"
+    if [ -f "$conf" ] && grep -q 'PhaseZero managed' "$conf" 2>/dev/null; then
+        if [ -f "$backup" ]; then
+            cp -a "$backup" "$conf"
+            rm -f "$backup"
+            log "restored greetd config from backup"
+        else
+            rm -f "$conf"
+            log "removed greetd autologin (no backup available): $conf"
+        fi
+    fi
+}
+
+if printf '%s\n' "$CMDLINE" | grep -qw 'phasezero.windowsvm=1'; then
+    apply_vm_tuning
+    current_dm="$(detect_display_manager)"
+    log "detected display manager: $current_dm"
+    case "$current_dm" in
+        sddm)
+            remove_sddm_autologin
+            write_sddm_autologin
+            ;;
+        gdm|gdm3)
+            ensure_autologin_group "$dm"
+            remove_gdm_autologin
+            write_gdm_autologin
+            ;;
+        lightdm)
+            ensure_autologin_group "$dm"
+            remove_lightdm_autologin
+            write_lightdm_autologin
+            ;;
+        lxdm)
+            ensure_autologin_group "$dm"
+            remove_lightdm_autologin
+            write_lightdm_autologin
+            ;;
+        greetd)
+            remove_greetd_autologin
+            write_greetd_autologin
+            ;;
+        none)
+            log "WARN: no display manager detected; boot may not autologin"
+            ;;
+    esac
+    # Remove any managed SteamOS/Waydroid blocks
+    conf_dir="${PZ_SDDM_CONF_DIR:-/etc/sddm.conf.d}"
+    for f in "$conf_dir/90-phasezero-steamos.conf" "$conf_dir/92-phasezero-waydroid.conf"; do
+        if [ -f "$f" ] && grep -q 'PhaseZero managed' "$f" 2>/dev/null; then
+            rm -f "$f"
+            log "removed stale DM block: $f"
+        fi
+    done
     exit 0
 fi
 
-if [ -f "$CONF_FILE" ] && grep -q 'PhaseZero managed' "$CONF_FILE" 2>/dev/null; then
-    rm -f "$CONF_FILE"
-    log "normal boot detected; removed stale SDDM Windows VM autologin"
-else
-    log "normal boot detected; no Windows VM autologin changes"
-fi
+# Normal boot: strip ALL managed DM blocks
+remove_sddm_autologin
+remove_gdm_autologin
+remove_lightdm_autologin
+remove_greetd_autologin
+log "normal boot detected; all PhaseZero autologin blocks removed"
