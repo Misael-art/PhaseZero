@@ -58,19 +58,22 @@ if [ -f "$SUBSYSTEMS_CONF" ]; then
 fi
 subsystem_opted() {
     local var="SUBSYSTEM_$1"
-    case "${!var:-never}" in
+    case "${!var:-opted}" in
         opted|partial) return 0 ;;
         never) return 1 ;;
     esac
 }
 
 header "Memory"
-total_mem_mb=$(LANG=C free -m | awk '/^Mem:/ {print $2 + 0}')
-avail_mem_mb=$(LANG=C free -m | awk '/^Mem:/ {print $7 + 0}')
-swap_total_mb=$(LANG=C free -m | awk '/^Swap:/ {print $2 + 0}')
-total_mem_gb=$((total_mem_mb / 1024))
-avail_mem_gb=$((avail_mem_mb / 1024))
-swap_total_gb=$((swap_total_mb / 1024))
+total_mem_mb=$(LANG=C free -m | awk '/^Mem:/ {if ($2 ~ /^[0-9]+$/) print $2; else print "nan"}')
+avail_mem_mb=$(LANG=C free -m | awk '/^Mem:/ {if ($7 ~ /^[0-9]+$/) print $7; else print "nan"}')
+swap_total_mb=$(LANG=C free -m | awk '/^Swap:/ {if ($2 ~ /^[0-9]+$/) print $2; else print "nan"}')
+[[ "$total_mem_mb" =~ ^[0-9]+$ ]] && total_mem_mb_num=$total_mem_mb || total_mem_mb_num=0
+[[ "$avail_mem_mb" =~ ^[0-9]+$ ]] && avail_mem_mb_num=$avail_mem_mb || avail_mem_mb_num=0
+[[ "$swap_total_mb" =~ ^[0-9]+$ ]] && swap_total_mb_num=$swap_total_mb || swap_total_mb_num=0
+total_mem_gb=$((total_mem_mb_num / 1024))
+avail_mem_gb=$((avail_mem_mb_num / 1024))
+swap_total_gb=$((swap_total_mb_num / 1024))
 if [[ "$total_mem_mb" =~ ^[0-9]+$ ]] && [ "$total_mem_mb" -ge 4096 ]; then
     check MEM01 "Total RAM >= 4GB" PASS "${total_mem_gb}GB"
 elif [[ "$total_mem_mb" =~ ^[0-9]+$ ]]; then
