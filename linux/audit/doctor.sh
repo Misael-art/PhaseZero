@@ -17,7 +17,7 @@ check() {
         INFO) INFO=$((INFO + 1)) ;;
     esac
     RESULTS+=("[$status] $id: $desc — $msg")
-    echo "[$status] $desc"
+    echo "[$status] $id: $desc"
 }
 
 header() { echo; echo "=== $1 ==="; }
@@ -44,17 +44,54 @@ echo "Uptime:     $(uptime -p)"
 echo "Shell:      $SHELL"
 echo "CPU:        $(LANG=C lscpu 2>/dev/null | grep 'Model name' | head -1 | cut -d: -f2 | xargs || echo 'N/A')"
 
+# Host profile — reused across multiple checks
+HOST_PROFILE=generic
+case "$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null)" in
+    Jupiter|Jupiter*) HOST_PROFILE=steamdeck-lcd ;;
+    Galileo|Galileo*)  HOST_PROFILE=steamdeck-oled ;;
+esac
+
+# Subsystems manifest — suppress checks for never-opted-in subsystems
+SUBSYSTEMS_CONF="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/subsystems.conf"
+if [ -f "$SUBSYSTEMS_CONF" ]; then
+    source "$SUBSYSTEMS_CONF"
+fi
+subsystem_opted() {
+    local var="SUBSYSTEM_$1"
+    case "${!var:-never}" in
+        opted|partial) return 0 ;;
+        never) return 1 ;;
+    esac
+}
+
 header "Memory"
-total_mem_mb=$(free -m | awk '/Mem:/ {print $2 + 0}')
-avail_mem_mb=$(free -m | awk '/Mem:/ {print $7 + 0}')
-swap_total_mb=$(free -m | awk '/Swap:/ {print $2 + 0}')
-total_mem_mb=${total_mem_mb:-0}; avail_mem_mb=${avail_mem_mb:-0}; swap_total_mb=${swap_total_mb:-0}
+total_mem_mb=$(LANG=C free -m | awk '/^Mem:/ {print $2 + 0}')
+avail_mem_mb=$(LANG=C free -m | awk '/^Mem:/ {print $7 + 0}')
+swap_total_mb=$(LANG=C free -m | awk '/^Swap:/ {print $2 + 0}')
 total_mem_gb=$((total_mem_mb / 1024))
 avail_mem_gb=$((avail_mem_mb / 1024))
 swap_total_gb=$((swap_total_mb / 1024))
-[ "$total_mem_mb" -ge 4096 ] 2>/dev/null && check MEM01 "Total RAM >= 4GB" PASS "${total_mem_gb}GB" || check MEM01 "Total RAM >= 4GB" WARN "${total_mem_gb}GB"
-[ "$avail_mem_mb" -ge 1024 ] 2>/dev/null && check MEM02 "Available RAM >= 1GB" PASS "${avail_mem_gb}GB" || check MEM02 "Available RAM >= 1GB" WARN "${avail_mem_gb}GB"
-[ "$swap_total_mb" -ge 2048 ] 2>/dev/null && check MEM03 "Swap >= 2GB" PASS "${swap_total_gb}GB" || check MEM03 "Swap >= 2GB" WARN "${swap_total_gb}GB"
+if [[ "$total_mem_mb" =~ ^[0-9]+$ ]] && [ "$total_mem_mb" -ge 4096 ]; then
+    check MEM01 "Total RAM >= 4GB" PASS "${total_mem_gb}GB"
+elif [[ "$total_mem_mb" =~ ^[0-9]+$ ]]; then
+    check MEM01 "Total RAM >= 4GB" WARN "${total_mem_gb}GB"
+else
+    check MEM01 "Total RAM >= 4GB" ERROR "parse fail: ${total_mem_mb}MB"
+fi
+if [[ "$avail_mem_mb" =~ ^[0-9]+$ ]] && [ "$avail_mem_mb" -ge 1024 ]; then
+    check MEM02 "Available RAM >= 1GB" PASS "${avail_mem_gb}GB"
+elif [[ "$avail_mem_mb" =~ ^[0-9]+$ ]]; then
+    check MEM02 "Available RAM >= 1GB" WARN "${avail_mem_gb}GB"
+else
+    check MEM02 "Available RAM >= 1GB" ERROR "parse fail: ${avail_mem_mb}MB"
+fi
+if [[ "$swap_total_mb" =~ ^[0-9]+$ ]] && [ "$swap_total_mb" -ge 2048 ]; then
+    check MEM03 "Swap >= 2GB" PASS "${swap_total_gb}GB"
+elif [[ "$swap_total_mb" =~ ^[0-9]+$ ]]; then
+    check MEM03 "Swap >= 2GB" WARN "${swap_total_gb}GB"
+else
+    check MEM03 "Swap >= 2GB" ERROR "parse fail: ${swap_total_mb}MB"
+fi
 
 header "Disk"
 root_dev=$(LANG=C df --output=source / 2>/dev/null | tail -1 | xargs)
@@ -62,18 +99,30 @@ while IFS=' ' read -r dev target _size _used pct; do
     [ -z "$dev" ] && continue
     [ "$dev" = "$root_dev" ] && continue
     case "$target" in
-        /|/tmp/.mount_*|/run/user/*|/var/lib/docker/overlay2/*/merged) continue ;;
+        /|/tmp/.mount_*|/run/user/*|/var/lib/docker/overlay2/*/merged|/var/lib/snapd/snap/*) continue ;;
     esac
-    pct_num=${pct%\%}
-    [ "$pct_num" -gt 90 ] 2>/dev/null && check "DISK_$(echo "$target" | tr / _)" "$target usage" FAIL "$pct used"
-    [ "$pct_num" -le 90 ] 2>/dev/null && [ "$pct_num" -gt 80 ] 2>/dev/null && check "DISK_$(echo "$target" | tr / _)" "$target usage" WARN "$pct used"
+    case "$(LANG=C df --output=fstype "$target" 2>/dev/null | tail -1)" in
+        squashfs|iso9660) continue ;;
+    esac
+    case "$dev" in
+        /dev/loop*) continue ;;
+    esac
+    pct_num=${pct//[!0-9]/}
+    if [[ ! "$pct_num" =~ ^[0-9]+$ ]]; then
+        check "DISK_$(echo "$target" | tr / _)" "$target usage" ERROR "malformed df output: $pct"
+        continue
+    fi
+    [ "$pct_num" -gt 90 ] && check "DISK_$(echo "$target" | tr / _)" "$target usage" FAIL "$pct used"
+    [ "$pct_num" -le 90 ] && [ "$pct_num" -gt 80 ] && check "DISK_$(echo "$target" | tr / _)" "$target usage" WARN "$pct used"
 done < <(LANG=C df -h --output=source,target,size,used,pcent 2>/dev/null | tail -n+2)
 
 root_pct=$(LANG=C df -h / | tail -1 | awk '{print $5}')
-root_pct_num=${root_pct%\%}
-if [ "$root_pct_num" -gt 90 ] 2>/dev/null; then
+root_pct_num=${root_pct//[!0-9]/}
+if [[ ! "$root_pct_num" =~ ^[0-9]+$ ]]; then
+    check DISK_ROOT "root partition usage" ERROR "malformed df output: $root_pct"
+elif [ "$root_pct_num" -gt 90 ]; then
     check DISK_ROOT "root partition usage" FAIL "$root_pct"
-elif [ "$root_pct_num" -gt 80 ] 2>/dev/null; then
+elif [ "$root_pct_num" -gt 80 ]; then
     check DISK_ROOT "root partition usage" WARN "$root_pct"
 else
     check DISK_ROOT "root partition usage" PASS "$root_pct"
@@ -105,7 +154,13 @@ lspci -nn | grep -qi "VGA.*AMD\|VGA.*ATI\|VanGogh" && check GPU01 "AMD GPU detec
 
 header "Network"
 ping -c 1 -W 2 8.8.8.8 &>/dev/null && check NET01 "Internet connectivity" PASS "" || check NET01 "Internet connectivity" FAIL ""
-command -v tailscale &>/dev/null && tailscale status 2>/dev/null | head -1 | grep -q "Connected" && check NET02 "Tailscale connected" PASS "" || check NET02 "Tailscale connected" WARN "not connected or not installed"
+if command -v tailscale &>/dev/null && tailscale status 2>/dev/null | head -1 | grep -q "Connected"; then
+    check NET02 "Tailscale connected" PASS ""
+elif [[ "$HOST_PROFILE" =~ ^steamdeck ]] && ! ip link show tailscale0 >/dev/null 2>&1; then
+    check NET02 "Tailscale connected" INFO "not configured on Steam Deck"
+else
+    check NET02 "Tailscale connected" WARN "not connected or not installed"
+fi
 
 header "Services"
 for svc in docker sshd NetworkManager bluetooth; do
@@ -118,8 +173,7 @@ if [ "${PZ_DOCTOR_SCOPE:-full}" = "system" ]; then
 fi
 
 header "Steam Deck"
-product=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || echo "")
-[ "$product" = "Jupiter" ] && check SD01 "Steam Deck hardware" PASS "Jupiter" || check SD01 "Steam Deck hardware" WARN "not Jupiter"
+[ "$HOST_PROFILE" != generic ] && check SD01 "Steam Deck hardware" PASS "$HOST_PROFILE" || check SD01 "Steam Deck hardware" WARN "not a Steam Deck"
 command -v gamescope &>/dev/null && check SD02 "Gamescope installed" PASS "$(gamescope --version 2>&1 | head -1)" || check SD02 "Gamescope installed" FAIL ""
 command -v steam &>/dev/null && check SD03 "Steam installed" PASS "" || check SD03 "Steam installed" FAIL ""
 
@@ -263,6 +317,8 @@ if jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .
     check WINVM06 "Windows VM direct GRUB boot installed" PASS "boot artifacts current"
 elif jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and .boot.grubCfgEntry == "unknown-permission"' <<< "$winvm_status" >/dev/null 2>&1; then
     check WINVM06 "Windows VM direct GRUB boot installed" INFO "artifacts current; generated GRUB entry needs privileged verification"
+elif [[ "$HOST_PROFILE" =~ ^steamdeck ]]; then
+    check WINVM06 "Windows VM direct GRUB boot installed" INFO "GRUB boot expected on Steam Deck; VM install will enable it"
 else
     check WINVM06 "Windows VM direct GRUB boot installed" WARN "run: sudo linux/windows-vm/windows-vm.sh boot install"
 fi
@@ -297,6 +353,9 @@ else
 fi
 
 header "Waydroid"
+if ! subsystem_opted WAYDROID; then
+    check WAYDROID00 "Waydroid subsystem" INFO "not opted in; run linux/pz install waydroid-linux to enable"
+else
 waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.host.waydroid != ""' <<< "$waydroid_status" >/dev/null 2>&1; then
     check WAYDROID01 "Waydroid command available" PASS "$(jq -r '.host.waydroid' <<< "$waydroid_status")"
@@ -337,6 +396,8 @@ if jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .
     check WAYDROID07 "Waydroid direct GRUB boot installed" PASS "boot artifacts current"
 elif jq -e '.boot.helperInstalled == true and .boot.serviceInstalled == true and .boot.artifactsCurrent == true and .boot.grubCfgEntry == "unknown-permission"' <<< "$waydroid_status" >/dev/null 2>&1; then
     check WAYDROID07 "Waydroid direct GRUB boot installed" INFO "artifacts current; generated GRUB entry needs privileged verification"
+elif [[ "$HOST_PROFILE" =~ ^steamdeck ]]; then
+    check WAYDROID07 "Waydroid direct GRUB boot installed" INFO "GRUB boot expected on Steam Deck; Waydroid install will enable it"
 else
     check WAYDROID07 "Waydroid direct GRUB boot installed" WARN "run: sudo linux/waydroid/waydroid.sh boot install"
 fi
@@ -349,6 +410,7 @@ if jq -e '.access.sharesHelperInstalled == true and .access.sharesReady == true 
     check WAYDROID10 "Waydroid host storage and USB shares ready" PASS "$(jq -r '.access.mountCount|tostring' <<< "$waydroid_status") managed mounts"
 else
     check WAYDROID10 "Waydroid host storage and USB shares ready" WARN "run: phasezero-admin linux/pz waydroid shares install"
+fi
 fi
 
 header "Emulation"
