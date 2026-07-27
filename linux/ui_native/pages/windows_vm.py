@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..command_runner import CommandRunner
-from ..models import ActionSpec
+from ..models import ActionSpec, OperationResult
 from ..widgets import SectionHeader, themed_icon
 from .base import BasePage
 
@@ -71,7 +71,14 @@ class WindowsVMPage(BasePage):
 
         self._edition_combo = QComboBox()
         self._edition_combo.setEnabled(False)
+        self._edition_combo.currentIndexChanged.connect(self._on_edition_changed)
         form.addRow("Edição:", self._edition_combo)
+
+        self._graphics_combo = QComboBox()
+        self._graphics_combo.addItem("compat (QXL, software)", "compat")
+        self._graphics_combo.addItem("virtio-gl (OpenGL, requer GPU host compatível)", "virtio-gl")
+        self._graphics_combo.currentIndexChanged.connect(self._on_graphics_changed)
+        form.addRow("Aceleração:", self._graphics_combo)
 
         plan_btn = QPushButton("Planejar instalação")
         plan_btn.setObjectName("secondaryButton")
@@ -114,6 +121,7 @@ class WindowsVMPage(BasePage):
             "windows.graphics.doctor",
             "windows.graphics.status",
             "windows.graphics.plan-gl",
+            "windows.graphics.plan-venus",
             "windows.graphics.test-gl",
             "windows.graphics.plan-vfio",
             "windows.graphics.compat",
@@ -162,6 +170,10 @@ class WindowsVMPage(BasePage):
         self._layout.addWidget(scroll)
 
         self._selected_iso = ""
+        self._selected_graphics = "compat"
+        self._selected_image_index = 1
+        self._inspect_result_pending = False
+        self.runner.completed.connect(self._on_op_complete)
 
     def _action_row(self, action: ActionSpec) -> QFrame:
         card = QFrame()
@@ -182,6 +194,16 @@ class WindowsVMPage(BasePage):
         row.addWidget(btn)
         return card
 
+    def _on_edition_changed(self, index: int) -> None:
+        data = self._edition_combo.itemData(index)
+        if data is not None:
+            self._selected_image_index = int(data)
+
+    def _on_graphics_changed(self, index: int) -> None:
+        data = self._graphics_combo.itemData(index)
+        if data is not None:
+            self._selected_graphics = str(data)
+
     def _select_iso(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Selecionar ISO do Windows", "",
@@ -193,17 +215,55 @@ class WindowsVMPage(BasePage):
         self._iso_path_label.setText(path)
         self._edition_combo.setEnabled(True)
         self._edition_combo.clear()
+        self._selected_image_index = 1
+        self._inspect_result_pending = True
 
         inspect = self.by_id.get("windows.media.inspect")
         if inspect:
             self.request_action(inspect)
 
+    def _apply_inspect_result(self, result: dict | None) -> None:
+        self._edition_combo.blockSignals(True)
+        self._edition_combo.clear()
+        self._inspect_result_pending = False
+        images = []
+        if result and isinstance(result, dict):
+            images = result.get("images") or []
+            if not isinstance(images, list):
+                images = []
+        if images:
+            for img in images:
+                idx = img.get("index", 1)
+                name = img.get("name", f"Image {idx}")
+                self._edition_combo.addItem(f"{idx}: {name}", idx)
+        else:
+            self._edition_combo.addItem("1: Padrão", 1)
+        self._edition_combo.blockSignals(False)
+        self._selected_image_index = int(self._edition_combo.currentData() or 1)
+
+    def _on_op_complete(self, result: OperationResult) -> None:
+        if self._inspect_result_pending and result.action_id == "windows.media.inspect":
+            self._apply_inspect_result(result.parsed if result.ok else None)
+
     def _request_plan(self) -> None:
         if not self._selected_iso:
             return
         plan = self.by_id.get("windows.provision.plan")
-        if plan:
-            self.request_action(plan)
+        if not plan:
+            return
+        try:
+            self.runner.start(
+                plan,
+                value=self._selected_iso,
+                values={
+                    "input": self._selected_iso,
+                    "graphics": self._selected_graphics,
+                    "image_index": str(self._selected_image_index),
+                },
+            )
+        except (ValueError, RuntimeError) as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Não foi possível iniciar", str(exc))
 
     def block_while_running(self, running: bool) -> None:
         self.setEnabled(not running)
