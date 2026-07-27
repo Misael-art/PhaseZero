@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import ModuleType
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QTextCursor
+from PySide6.QtWidgets import QApplication, QPlainTextEdit, QTextEdit
 
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.command_runner import CommandRunner
@@ -11,6 +14,36 @@ from linux.ui_native.pages.windows_vm import WindowsVMPage
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# Module paths under linux/ui_native/ to audit for import-time AttributeError
+UI_MODULES: list[str] = [
+    "linux.ui_native.catalog",
+    "linux.ui_native.command_runner",
+    "linux.ui_native.main_window",
+    "linux.ui_native.models",
+    "linux.ui_native.platform",
+    "linux.ui_native.result_parser",
+    "linux.ui_native.status_loader",
+    "linux.ui_native.widgets",
+    "linux.ui_native.tokens",
+    "linux.ui_native.pages.base",
+    "linux.ui_native.pages.overview",
+    "linux.ui_native.pages.dashboard",
+    "linux.ui_native.pages.windows_vm",
+    "linux.ui_native.pages.profiles",
+    "linux.ui_native.pages.steamdeck",
+    "linux.ui_native.pages.waydroid",
+    "linux.ui_native.pages.server",
+    "linux.ui_native.pages.emulation",
+    "linux.ui_native.pages.boot",
+    "linux.ui_native.pages.flatpak",
+    "linux.ui_native.pages.tuning",
+    "linux.ui_native.pages.ai_dev",
+    "linux.ui_native.pages.applications",
+    "linux.ui_native.pages.results",
+    "linux.ui_native.pages.workspace",
+    "linux.ui_native.pages.ai_proxies",
+]
 
 
 @pytest.fixture(scope="module")
@@ -145,3 +178,32 @@ def test_venus_catalog_entry_correct(page_and_catalog):
     assert venus.args[:4] == ("windows-vm", "graphics", "plan", "--profile")
     assert "virtio-venus" in venus.args
     assert "--json" in venus.args
+
+
+# ── PySide6 6.11 cursor-enum regression tests ──────────────────────
+
+def test_qtextcursor_moveoperation_end_accessible():
+    assert QTextCursor.MoveOperation.End is not None
+    assert isinstance(QTextCursor.MoveOperation.End, QTextCursor.MoveOperation)
+
+
+def test_append_output_cursor_path(qapp):
+    edit = QPlainTextEdit()
+    cursor = edit.textCursor()
+    cursor.movePosition(QTextCursor.MoveOperation.End)
+    cursor.insertText("cursor-path-ok")
+    edit.setTextCursor(cursor)
+    assert edit.toPlainText() == "cursor-path-ok"
+
+
+def test_qtextcursor_enums_at_runtime(qapp):
+    edit = QPlainTextEdit("hello world")
+    cursor = edit.textCursor()
+    cursor.movePosition(QTextCursor.MoveOperation.End)
+    assert cursor.position() == len("hello world")
+
+
+def test_ui_modules_import():
+    for mod_name in UI_MODULES:
+        mod = __import__(mod_name, fromlist=["_trash"])
+        assert isinstance(mod, ModuleType), f"{mod_name} did not import as module"
