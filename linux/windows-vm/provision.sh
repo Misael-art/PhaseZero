@@ -326,23 +326,41 @@ qga_shutdown() {
 
 graphics_preflight() {
     local op="$1" graphics="$2"
+    local kvm_path="${PZ_GFX_KVM_PATH:-/dev/kvm}"
+    local qemu_bin="${PZ_GFX_QEMU_BIN:-qemu-system-x86_64}"
     case "$graphics" in
         compat) return 0 ;;
         virtio-gl)
             local failures=()
-            [ -e /dev/kvm ] || failures+=("/dev/kvm not accessible")
-            local render_node=""
-            for node in /dev/dri/renderD*; do [ -r "$node" ] && [ -w "$node" ] && { render_node="$node"; break; }; done
-            [ -n "$render_node" ] || failures+=("no accessible /dev/dri/renderD* node (need mesa/virgl)")
-            if command -v qemu-system-x86_64 >/dev/null 2>&1; then
-                qemu-system-x86_64 -device help 2>/dev/null | grep -q 'virtio-vga-gl' || failures+=("QEMU lacks virtio-vga-gl device")
-            else failures+=("qemu-system-x86_64 not found"); fi
-            ldconfig -p 2>/dev/null | grep -q 'virglrenderer' || failures+=("virglrenderer library not found")
-            local has_amdgpu=0
-            for card in /sys/class/drm/card*/device/driver; do
-                [ -L "$card" ] && [ "$(readlink "$card")" = "amdgpu" ] && has_amdgpu=1
-            done
-            [ "$has_amdgpu" = "0" ] && log_operation "$op" "WARN: no AMDGPU driver bound (VM may lack device memory for virgl)"
+            [ -e "$kvm_path" ] || failures+=("$kvm_path not accessible")
+            local render_node="${PZ_GFX_RENDER_NODE:-}"
+            if [ -z "$render_node" ]; then
+                for node in /dev/dri/renderD*; do [ -r "$node" ] && [ -w "$node" ] && { render_node="$node"; break; }; done
+            fi
+            [ -n "$render_node" ] || failures+=("no accessible render node (need mesa/virgl)")
+            local has_virtio_vga_gl=0
+            if command -v "$qemu_bin" >/dev/null 2>&1; then
+                "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl' && has_virtio_vga_gl=1
+            fi
+            local qemu_has_virtio_vga_gl="${PZ_GFX_QEMU_VIRTIO_VGA_GL:-}"
+            if [ -n "$qemu_has_virtio_vga_gl" ]; then
+                [ "$qemu_has_virtio_vga_gl" = "1" ] && has_virtio_vga_gl=1 || has_virtio_vga_gl=0
+            fi
+            [ "$has_virtio_vga_gl" = "1" ] || failures+=("QEMU lacks virtio-vga-gl device")
+            local has_virgl=0
+            if [ -n "${PZ_GFX_VIRGL_PRESENT:-}" ]; then
+                [ "$PZ_GFX_VIRGL_PRESENT" = "1" ] && has_virgl=1
+            else
+                ldconfig -p 2>/dev/null | grep -q 'virglrenderer' && has_virgl=1
+            fi
+            [ "$has_virgl" = "1" ] || failures+=("virglrenderer library not found")
+            if [ -z "${PZ_GFX_AMDGPU_BOUND:-}" ]; then
+                local has_amdgpu=0
+                for card in /sys/class/drm/card*/device/driver; do
+                    [ -L "$card" ] && [ "$(readlink "$card")" = "amdgpu" ] && has_amdgpu=1
+                done
+                [ "$has_amdgpu" = "0" ] && log_operation "$op" "WARN: no AMDGPU driver bound (VM may lack device memory for virgl)"
+            fi
             if [ "${#failures[@]}" -gt 0 ]; then
                 for f in "${failures[@]}"; do log_operation "$op" "virtio-gl preflight FAIL: $f"; done
                 log_operation "$op" "fallback: --graphics compat (non-accelerated QXL)"

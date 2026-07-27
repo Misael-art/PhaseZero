@@ -336,12 +336,35 @@ else
     check WINVM10 "Windows USB redirection ready" WARN "run: phasezero-admin linux/pz windows-vm shares repair"
 fi
 winvm_graphics="$(bash "$PZ_ROOT/linux/windows-vm/graphics.sh" doctor --json 2>/dev/null || echo '{}')"
+winvm_gfx_effective="$(jq -r '.effectiveProfile // "unknown"' <<< "$winvm_graphics")"
+winvm_gfx_eligible="$(jq -r '.graphics.profiles["virtio-gl"].eligible // false' <<< "$winvm_graphics")"
+# Resolve user state dir (stable under sudo via SUDO_USER)
+winvm_user_home="${HOME}"
+[ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ] && winvm_user_home="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)" && winvm_user_home="${winvm_user_home:-$HOME}"
+winvm_ops_dir="${XDG_STATE_HOME:-$winvm_user_home/.local/state}/phasezero/operations"
+winvm_latest_resolved=""
+if [ -d "$winvm_ops_dir" ]; then
+    last_op_dir="$(ls -t "$winvm_ops_dir" 2>/dev/null | head -1)"
+    [ -n "$last_op_dir" ] && winvm_latest_resolved="$(jq -r '.graphicsResolved.profile // ""' "$winvm_ops_dir/$last_op_dir/operation.json" 2>/dev/null || true)"
+fi
+# Steam Deck VFIO note (VanGogh APU unica, sem VFIO)
+winvm_deck_note=""
+if grep -qi 'steam\|deck\|jupiter' /sys/devices/virtual/dmi/id/product_name 2>/dev/null; then
+    winvm_deck_note="; Steam Deck (VanGogh APU) VFIO passthrough nao suportado"
+fi
 if jq -e '.status == "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
-    check WINVM11 "Windows graphics integration" PASS "profile=$(jq -r '.effectiveProfile' <<< "$winvm_graphics"); runtime current"
+    if [ "$winvm_gfx_effective" = "compat" ] && [ "$winvm_gfx_eligible" = "true" ]; then
+        check WINVM11 "Windows graphics integration" WARN "perfil=compat mas virtio-gl elegivel; upgrade: linux/pz windows-vm graphics plan --profile virtio-gl$winvm_deck_note"
+    elif [ "$winvm_gfx_effective" = "compat" ]; then
+        check WINVM11 "Windows graphics integration" INFO "perfil=compat; virtio-gl nao elegivel; compat e o maximo viavel$winvm_deck_note"
+    else
+        resolved_detail="${winvm_latest_resolved:+ ultima resolucao: $winvm_latest_resolved}"
+        check WINVM11 "Windows graphics integration" PASS "profile=$winvm_gfx_effective; runtime current${resolved_detail}${winvm_deck_note}"
+    fi
 elif jq -e '.runtime.status != "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
-    check WINVM11 "Windows graphics integration" WARN "run: phasezero-admin linux/pz windows-vm graphics runtime install --json"
+    check WINVM11 "Windows graphics integration" WARN "run: phasezero-admin linux/pz windows-vm graphics runtime install --json$winvm_deck_note"
 else
-    check WINVM11 "Windows graphics integration" WARN "run: linux/pz windows-vm graphics doctor --json"
+    check WINVM11 "Windows graphics integration" WARN "run: linux/pz windows-vm graphics doctor --json$winvm_deck_note"
 fi
 winapps_status="$(bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" doctor 2>/dev/null || echo '{}')"
 if jq -e '.healthy == true' <<< "$winapps_status" >/dev/null 2>&1; then

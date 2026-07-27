@@ -164,6 +164,146 @@ CANCEL_STATE=$(cat "$CANCEL_TEST_DIR/phasezero/operations/test-cancel/operation.
 assert_eq "cancel changes state to cancelled" "cancelled" "$CANCEL_STATE"
 rm -rf "$CANCEL_TEST_DIR"
 
+# shellcheck source=linux/windows-vm/provision.sh
+source "$PROVISION_SCRIPT" 2>/dev/null || true
+
+echo ""
+echo "=== graphics: plan serialization ==="
+GFX_PLAN_DIR="$(mktemp -d)"
+GFX_VIRTIO=$(PZ_STATE="$GFX_PLAN_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --graphics virtio-gl --json 2>/dev/null | jq -r '.graphics // ""' 2>/dev/null || echo "")
+assert_eq "plan --graphics virtio-gl produces virtio-gl" "virtio-gl" "$GFX_VIRTIO"
+GFX_DEFAULT=$(PZ_STATE="$GFX_PLAN_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --json 2>/dev/null | jq -r '.graphics // ""' 2>/dev/null || echo "")
+assert_eq "plan without --graphics defaults to compat" "compat" "$GFX_DEFAULT"
+rm -rf "$GFX_PLAN_DIR"
+
+echo ""
+echo "=== graphics: preflight compat ==="
+GFX_COM_DIR="$(mktemp -d)"
+mkdir -p "$GFX_COM_DIR/gfx-test-compat"
+echo '{"id":"gfx-test-compat","checkpoint":"validate","state":"running","log":[]}' > "$GFX_COM_DIR/gfx-test-compat/operation.json"
+OPERATIONS_DIR="$GFX_COM_DIR" graphics_preflight "gfx-test-compat" "compat"
+assert_eq "preflight compat returns 0" "0" "$?"
+rm -rf "$GFX_COM_DIR"
+
+echo ""
+echo "=== graphics: preflight virtio-gl fail-loud ==="
+GFX_VGL_DIR="$(mktemp -d)"
+mkdir -p "$GFX_VGL_DIR/gfx-test-vgl"
+echo '{"id":"gfx-test-vgl","checkpoint":"validate","state":"running","log":[]}' > "$GFX_VGL_DIR/gfx-test-vgl/operation.json"
+OPERATIONS_DIR="$GFX_VGL_DIR" PZ_GFX_RENDER_NODE="" PZ_GFX_KVM_PATH="/nonexistent/kvm" \
+    PZ_GFX_QEMU_BIN="false" PZ_GFX_VIRGL_PRESENT=0 PZ_GFX_QEMU_VIRTIO_VGA_GL=0 \
+    graphics_preflight "gfx-test-vgl" "virtio-gl" && true
+assert_eq "preflight virtio-gl fails without resources" "1" "$?"
+LOG_TEXT=$(cat "$GFX_VGL_DIR/gfx-test-vgl/operation.json" | jq -r '.log[]' 2>/dev/null || echo "")
+assert_contains "preflight logs fallback message" "$LOG_TEXT" "fallback: --graphics compat"
+rm -rf "$GFX_VGL_DIR"
+
+echo ""
+echo "=== graphics: preflight unknown profile ==="
+GFX_UNK_DIR="$(mktemp -d)"
+mkdir -p "$GFX_UNK_DIR/gfx-test-unk"
+echo '{"id":"gfx-test-unk","checkpoint":"validate","state":"running","log":[]}' > "$GFX_UNK_DIR/gfx-test-unk/operation.json"
+OPERATIONS_DIR="$GFX_UNK_DIR" graphics_preflight "gfx-test-unk" "vfio-looking-glass" && true
+assert_eq "preflight unknown profile fails" "1" "$?"
+LOG_UNK=$(cat "$GFX_UNK_DIR/gfx-test-unk/operation.json" | jq -r '.log[]' 2>/dev/null || echo "")
+assert_contains "preflight logs unknown profile" "$LOG_UNK" "unknown graphics profile"
+rm -rf "$GFX_UNK_DIR"
+
+echo ""
+echo "=== graphics: resolve_qemu_args compat ==="
+GFX_RES_COM_DIR="$(mktemp -d)"
+mkdir -p "$GFX_RES_COM_DIR/gfx-resolve-compat"
+echo '{"id":"gfx-resolve-compat","state":"running","log":[]}' > "$GFX_RES_COM_DIR/gfx-resolve-compat/operation.json"
+GRAPHICS_VGA="" GRAPHICS_DISPLAY="" GRAPHICS_ACCEL_LOG=""
+OPERATIONS_DIR="$GFX_RES_COM_DIR" resolve_graphics_qemu_args "gfx-resolve-compat" "compat"
+assert_eq "resolve compat VGA" "-vga qxl" "$GRAPHICS_VGA"
+assert_eq "resolve compat display" "-display gtk" "$GRAPHICS_DISPLAY"
+assert_contains "resolve compat accel log" "$GRAPHICS_ACCEL_LOG" "NONE (QXL)"
+RESOLVED_PROFILE=$(cat "$GFX_RES_COM_DIR/gfx-resolve-compat/operation.json" | jq -r '.graphicsResolved.profile // ""' 2>/dev/null || echo "")
+assert_eq "resolve compat persists profile" "compat" "$RESOLVED_PROFILE"
+RESOLVED_VGA=$(cat "$GFX_RES_COM_DIR/gfx-resolve-compat/operation.json" | jq -r '.graphicsResolved.vgaDevice // ""' 2>/dev/null || echo "")
+assert_eq "resolve compat persists vgaDevice" "-vga qxl" "$RESOLVED_VGA"
+rm -rf "$GFX_RES_COM_DIR"
+
+echo ""
+echo "=== graphics: resolve_qemu_args virtio-gl ==="
+GFX_RES_VGL_DIR="$(mktemp -d)"
+mkdir -p "$GFX_RES_VGL_DIR/gfx-resolve-vgl"
+echo '{"id":"gfx-resolve-vgl","state":"running","log":[]}' > "$GFX_RES_VGL_DIR/gfx-resolve-vgl/operation.json"
+GRAPHICS_VGA="" GRAPHICS_DISPLAY="" GRAPHICS_ACCEL_LOG=""
+OPERATIONS_DIR="$GFX_RES_VGL_DIR" resolve_graphics_qemu_args "gfx-resolve-vgl" "virtio-gl"
+assert_eq "resolve vgl VGA" "-device virtio-vga-gl" "$GRAPHICS_VGA"
+assert_eq "resolve vgl display" "-display gtk,gl=on" "$GRAPHICS_DISPLAY"
+assert_contains "resolve vgl accel log" "$GRAPHICS_ACCEL_LOG" "virgl"
+RESOLVED_VGL_PROFILE=$(cat "$GFX_RES_VGL_DIR/gfx-resolve-vgl/operation.json" | jq -r '.graphicsResolved.profile // ""' 2>/dev/null || echo "")
+assert_eq "resolve vgl persists profile" "virtio-gl" "$RESOLVED_VGL_PROFILE"
+RESOLVED_VGL_VGA=$(cat "$GFX_RES_VGL_DIR/gfx-resolve-vgl/operation.json" | jq -r '.graphicsResolved.vgaDevice // ""' 2>/dev/null || echo "")
+assert_eq "resolve vgl persists vgaDevice" "-device virtio-vga-gl" "$RESOLVED_VGL_VGA"
+rm -rf "$GFX_RES_VGL_DIR"
+
+echo ""
+echo "=== graphics: run_relaunch qemu_args per profile ==="
+RL_DIR="$(mktemp -d)"
+mkdir -p "$RL_DIR/phasezero/vms/relaunch-test"
+SNAP_DISK_V="$RL_DIR/phasezero/vms/relaunch-test/disk.qcow2"
+SNAP_PATH_V="$RL_DIR/phasezero/vms/relaunch-test/golden-clean.qcow2"
+qemu-img create -f qcow2 "$SNAP_DISK_V" 64M 2>/dev/null
+qemu-img create -f qcow2 -b "$SNAP_DISK_V" -F qcow2 "$SNAP_PATH_V" 2>/dev/null
+mkdir -p "$RL_DIR/phasezero/operations/relaunch-compat"
+echo '{"id":"rl-plan","graphics":"compat","resources":{"ramMb":2048,"cpus":2},"iso":{"path":"'"$DUMMY_ISO"'","arch":"x64"}}' > "$RL_DIR/phasezero/operations/relaunch-compat/plan.json"
+echo '{"id":"relaunch-compat","state":"running","checkpoint":"relaunch","log":[]}' > "$RL_DIR/phasezero/operations/relaunch-compat/operation.json"
+echo "$RL_DIR/phasezero/vms/relaunch-test" > "$RL_DIR/phasezero/operations/relaunch-compat/vm_dir"
+touch "$RL_DIR/phasezero/ovmf_vars.fd"
+XDG_STATE_HOME="$RL_DIR" PZ_GFX_KVM_PATH="/dev/null" \
+    PZ_WINDOWS_VM_OVMF_CODE="$RL_DIR/phasezero/ovmf_vars.fd" \
+    PZ_GFX_RENDER_NODE="" PZ_GFX_VIRGL_PRESENT=0 PZ_GFX_QEMU_VIRTIO_VGA_GL=0 PZ_GFX_QEMU_BIN="true" \
+    bash -c '
+source "'"$PROVISION_SCRIPT"'" 2>/dev/null || true
+run_relaunch "relaunch-compat" 2>/dev/null || true
+' 2>/dev/null || true
+RL_LOG=$(cat "$RL_DIR/phasezero/operations/relaunch-compat/operation.json" 2>/dev/null | jq -r '.log[]' 2>/dev/null || echo "")
+assert_contains "relaunch compat logs NONE" "$RL_LOG" "NONE (QXL)"
+assert_contains "relaunch compat logs relaunch" "$RL_LOG" "relaunching with display"
+rm -rf "$RL_DIR"
+
+echo ""
+echo "=== graphics: headless invariant ==="
+SETUP_COUNT=$(grep -c '\-vga qxl' "$PROVISION_SCRIPT" 2>/dev/null || echo 0)
+HEADLESS_COUNT=$(grep -c '\-display none' "$PROVISION_SCRIPT" 2>/dev/null || echo 0)
+# setup, drivers, tweaks each have -vga qxl (3 total)
+# relaunch also has a -vga line but it's dynamic (GRAPHICS_VGA)
+assert_eq "at least 3 instances of -vga qxl (setup+drivers+tweaks)" "1" "$([ "$SETUP_COUNT" -ge 3 ] && echo 1 || echo 0)"
+assert_eq "at least 3 instances of -display none (setup+drivers+tweaks)" "1" "$([ "$HEADLESS_COUNT" -ge 3 ] && echo 1 || echo 0)"
+
+echo ""
+echo "=== graphics: QGA display-adapter check logic ==="
+# Verify base64 decoding of guest-exec-status out-data in isolation.
+# The full post-driver check runs inside provision.sh via qga_exec; we test
+# the parsing logic directly.
+MOCK_BASIC_DISPLAY=$(echo -n "Microsoft Basic Display Adapter" | base64 -w0 2>/dev/null || echo "")
+DECODED=$(echo "$MOCK_BASIC_DISPLAY" | base64 -d 2>/dev/null || echo "")
+assert_eq "QGA display base64 roundtrip" "Microsoft Basic Display Adapter" "$DECODED"
+# Verify grep detection of Basic Display
+BASIC_CHECK=$(echo "$DECODED" | grep -qi "Microsoft Basic Display" && echo "WARN" || echo "OK")
+assert_eq "QGA Basic Display triggers WARN" "WARN" "$BASIC_CHECK"
+# Verify VirtIO GPU does NOT trigger WARN
+VIRTIO_CHECK=$(echo "Red Hat VirtIO GPU DOD" | grep -qi "Microsoft Basic Display" && echo "WARN" || echo "OK")
+assert_eq "QGA VirtIO GPU does not trigger WARN" "OK" "$VIRTIO_CHECK"
+
+echo ""
+echo "=== graphics: venus plan (experimental) ==="
+VENUS_PLAN=$(bash "$PZ_ROOT/linux/windows-vm/graphics.sh" plan --profile virtio-venus --json 2>/dev/null || echo '{}')
+VENUS_ELIGIBLE=$(jq -r '.eligible' <<< "$VENUS_PLAN")
+VENUS_MODE=$(jq -r '.mode' <<< "$VENUS_PLAN")
+VENUS_ALLOW=$(jq -r '.applyAllowed' <<< "$VENUS_PLAN")
+VENUS_NOTES=$(jq -r '.notes' <<< "$VENUS_PLAN")
+assert_eq "venus plan eligible" "true" "$VENUS_ELIGIBLE"
+assert_eq "venus plan mode experimental" "experimental" "$VENUS_MODE"
+assert_eq "venus apply blocked" "false" "$VENUS_ALLOW"
+assert_contains "venus notes mention Vulkan" "$VENUS_NOTES" "Vulkan"
+assert_contains "venus notes mention experimental" "$VENUS_NOTES" "EXPERIMENTAL"
+assert_contains "venus notes mention Deck" "$VENUS_NOTES" "Steam Deck"
+
 rm -rf "$DUMMY_ISO" "$(dirname "$DUMMY_ISO")" "$PZ_STATE_DIR"
 
 echo ""

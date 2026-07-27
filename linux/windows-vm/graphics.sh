@@ -547,9 +547,10 @@ collect_facts() {
     fi
     [ "${#GFX_VFIO_BLOCKERS[@]}" -eq 0 ] && GFX_VFIO_VIABILITY="eligible-plan-only"
 
-    # venus/rutabaga: detected but apply is blocked for Windows guests in v1.
-    GFX_VENUS_BLOCKERS=("driver guest Windows para Venus nao validado (apply bloqueado na v1)")
-    [ "$GFX_QEMU_VENUS" = "yes" ] || GFX_VENUS_BLOCKERS+=("QEMU sem suporte venus em virtio-vga-gl")
+    # Venus: experimental plan eligible, but apply blocked for Windows guests in v1.
+    GFX_VENUS_BLOCKERS=()
+    [ "$GFX_QEMU_VENUS" = "yes" ] || GFX_VENUS_BLOCKERS+=("QEMU sem suporte venus em virtio-vga-gl (kernel 6.7+ e mesa 23+ exigidos)")
+    GFX_VENUS_APPLY_BLOCKED=("apply bloqueado na v1: driver guest Windows nao validado, prereqs nao fixados, sem cobertura de testes")
     GFX_RUTABAGA_BLOCKERS=("driver guest Windows para rutabaga/gfxstream nao validado (apply bloqueado na v1)")
     [ "$GFX_QEMU_RUTABAGA" = "yes" ] || GFX_RUTABAGA_BLOCKERS+=("QEMU sem device virtio-gpu-rutabaga")
 
@@ -641,7 +642,7 @@ status_json() {
             profiles: {
                 "compat": {eligible: true, mode: "stable", blockers: []},
                 "virtio-gl": {eligible: ($glEligible == "yes"), mode: "experimental", blockers: $glBlockers},
-                "virtio-venus": {eligible: false, mode: "experimental-blocked", blockers: $venusBlockers},
+                "virtio-venus": {eligible: ($venus == "yes"), mode: "experimental", blockers: $venusBlockers},
                 "rutabaga": {eligible: false, mode: "experimental-blocked", blockers: $rutabagaBlockers},
                 "vfio-looking-glass": {eligible: ($vfioViability == "eligible-plan-only"), mode: "plan-only", blockers: $vfioBlockers}
             }
@@ -771,11 +772,17 @@ plan_payload_json() {
             fi
             ;;
         virtio-venus)
-            eligible=no; mode=experimental-blocked; risk=high; apply_allowed=no
+            eligible=yes; mode=experimental; risk=high; apply_allowed=no
             apply_cmd=""
-            blockers=("${GFX_VENUS_BLOCKERS[@]:-}")
+            blockers=()
+            [ "$GFX_QEMU_VENUS" = "yes" ] || blockers+=("QEMU sem suporte venus (virtio-vga-gl,venus=on); kernel 6.7+ e mesa 23+ exigidos")
             qemu_args=("-device" "virtio-vga-gl,venus=on" "-display" "gtk,gl=on,show-cursor=on")
-            notes="Vulkan paravirtual (Mesa Venus); bloqueado para Windows ate validacao explicita do driver guest"
+            notes="EXPERIMENTAL: Vulkan paravirtual (Mesa Venus). Nao habilitado em provision.sh.\n"
+            notes+="Pre-requisitos: kernel >= 6.7, mesa >= 23 com venus, QEMU com virgl+venus, vulkan-radeon no host AMD.\n"
+            notes+="Funciona experimentalmente: Vulkan 1.x via venus renderer; D3D12 via rutabaga+zink (muito experimental).\n"
+            notes+="NAO funciona: D3D12 nativo sem rutabaga, DXGI swapchain, multi-adapter.\n"
+            notes+="Nota Steam Deck: VanGogh APU unica -- VFIO passthrough impossivel; Venus e o unico caminho de aceleracao Vulkan e e experimental.\n"
+            notes+="Nao integrado ao provision.sh: prereqs nao fixados, estabilidade do driver guest nao verificada, sem cobertura automatizada de testes."
             ;;
         rutabaga)
             eligible=no; mode=experimental-blocked; risk=high; apply_allowed=no
