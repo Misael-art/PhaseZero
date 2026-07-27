@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -516,7 +516,7 @@ class MainWindow(QMainWindow):
             self.log_view.appendPlainText("[stderr] " + text.rstrip())
         else:
             cursor = self.log_view.textCursor()
-            cursor.movePosition(cursor.End)
+            cursor.movePosition(QTextCursor.MoveOperation.End)
             cursor.insertText(text)
             self.log_view.setTextCursor(cursor)
         scrollbar = self.log_view.verticalScrollBar()
