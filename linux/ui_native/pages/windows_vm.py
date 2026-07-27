@@ -16,7 +16,7 @@ from .base import BasePage
 
 
 class WindowsVMPage(BasePage):
-    """Windows VM lifecycle page: status, install, launch, host-access, boot."""
+    """Windows VM lifecycle page."""
 
     def build(self) -> None:
         scroll = QScrollArea()
@@ -27,6 +27,60 @@ class WindowsVMPage(BasePage):
         layout.setContentsMargins(2, 2, 8, 8)
         layout.setSpacing(14)
 
+        # Install card (main flow)
+        install_card = QFrame()
+        install_card.setObjectName("installCard")
+        install_card.setStyleSheet(
+            "#installCard { background: palette(window); border: 1px solid palette(mid); "
+            "border-radius: 8px; padding: 16px; }"
+        )
+        card_layout = QVBoxLayout(install_card)
+        card_layout.setSpacing(10)
+
+        title_row = QHBoxLayout()
+        icon = QLabel()
+        icon.setPixmap(themed_icon(install_card, "system-software-install",
+                                   QStyle.SP_ComputerIcon).pixmap(32, 32))
+        icon.setFixedSize(40, 40)
+        title_row.addWidget(icon)
+        texts = QVBoxLayout()
+        title = QLabel("Instalar e otimizar Windows")
+        title.setObjectName("installCardTitle")
+        title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        desc = QLabel("Selecionar ISO, escolher edição e instalar.")
+        desc.setObjectName("installCardDesc")
+        desc.setStyleSheet("font-size: 12px; color: palette(mid);")
+        texts.addWidget(title)
+        texts.addWidget(desc)
+        title_row.addLayout(texts, 1)
+        card_layout.addLayout(title_row)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self._iso_path_label = QLabel("Nenhum ISO selecionado")
+        self._iso_path_label.setObjectName("isoPath")
+        self._iso_path_label.setWordWrap(True)
+        iso_row = QHBoxLayout()
+        iso_btn = QPushButton("Selecionar ISO")
+        iso_btn.setObjectName("primaryButton")
+        iso_btn.clicked.connect(self._select_iso)
+        iso_row.addWidget(self._iso_path_label, 1)
+        iso_row.addWidget(iso_btn)
+        form.addRow("ISO:", iso_row)
+
+        self._edition_combo = QComboBox()
+        self._edition_combo.setEnabled(False)
+        form.addRow("Edição:", self._edition_combo)
+
+        plan_btn = QPushButton("Planejar instalação")
+        plan_btn.setObjectName("secondaryButton")
+        plan_btn.clicked.connect(self._request_plan)
+        form.addRow("", plan_btn)
+
+        card_layout.addLayout(form)
+        layout.addWidget(install_card)
+
         # Status
         layout.addWidget(SectionHeader("Status", "Estado da VM Windows"))
         for aid in ("windows.status", "windows.discover"):
@@ -34,8 +88,18 @@ class WindowsVMPage(BasePage):
             if action:
                 layout.addWidget(self._action_row(action))
 
-        # Install & Launch
-        install_box = QGroupBox("Instalação e inicialização")
+        # Provision actions
+        layout.addWidget(SectionHeader("Instalação automática", "Acompanhe ou retome"))
+        for aid in ("windows.provision.plan", "windows.provision.start",
+                     "windows.provision.status", "windows.provision.watch",
+                     "windows.provision.resume", "windows.provision.cancel",
+                     "windows.provision.discard"):
+            action = self.find(aid)
+            if action:
+                layout.addWidget(self._action_row(action))
+
+        # Install & Launch (legacy)
+        install_box = QGroupBox("Instalação manual e inicialização")
         install_layout = QVBoxLayout(install_box)
         for aid in ("windows.plan", "windows.install", "windows.adopt", "windows.launch", "windows.optimize"):
             action = self.find(aid)
@@ -43,7 +107,7 @@ class WindowsVMPage(BasePage):
                 install_layout.addWidget(self._action_row(action))
         layout.addWidget(install_box)
 
-        # Graphics acceleration and runtime maintenance.
+        # Graphics
         graphics_box = QGroupBox("Gráficos e aceleração")
         graphics_layout = QVBoxLayout(graphics_box)
         for aid in (
@@ -65,7 +129,8 @@ class WindowsVMPage(BasePage):
                 graphics_layout.addWidget(self._action_row(action))
         layout.addWidget(graphics_box)
 
-        apps_box = QGroupBox("WinBoat e WinPodX — Podman")
+        # WinBoat/WinPodX
+        apps_box = QGroupBox("WinBoat e WinPodX")
         apps_layout = QVBoxLayout(apps_box)
         for aid in ("windows.apps.status", "windows.apps.setup", "windows.apps.configure"):
             action = self.find(aid)
@@ -73,7 +138,7 @@ class WindowsVMPage(BasePage):
                 apps_layout.addWidget(self._action_row(action))
         layout.addWidget(apps_box)
 
-        # Host access + Boot
+        # System
         system_box = QGroupBox("Sistema")
         system_layout = QVBoxLayout(system_box)
         for aid in ("windows.host-access", "windows.boot.install", "windows.boot.next"):
@@ -81,10 +146,22 @@ class WindowsVMPage(BasePage):
             if action:
                 system_layout.addWidget(self._action_row(action))
         layout.addWidget(system_box)
+
+        # Media
+        media_box = QGroupBox("Mídia")
+        media_layout = QVBoxLayout(media_box)
+        for aid in ("windows.media.inspect",):
+            action = self.find(aid)
+            if action:
+                media_layout.addWidget(self._action_row(action))
+        layout.addWidget(media_box)
+
         layout.addStretch()
 
         scroll.setWidget(inner)
         self._layout.addWidget(scroll)
+
+        self._selected_iso = ""
 
     def _action_row(self, action: ActionSpec) -> QFrame:
         card = QFrame()
@@ -104,6 +181,29 @@ class WindowsVMPage(BasePage):
         btn.clicked.connect(lambda: self.request_action(action))
         row.addWidget(btn)
         return card
+
+    def _select_iso(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Selecionar ISO do Windows", "",
+            "ISO files (*.iso);;All files (*.*)"
+        )
+        if not path:
+            return
+        self._selected_iso = path
+        self._iso_path_label.setText(path)
+        self._edition_combo.setEnabled(True)
+        self._edition_combo.clear()
+
+        inspect = self.by_id.get("windows.media.inspect")
+        if inspect:
+            self.request_action(inspect)
+
+    def _request_plan(self) -> None:
+        if not self._selected_iso:
+            return
+        plan = self.by_id.get("windows.provision.plan")
+        if plan:
+            self.request_action(plan)
 
     def block_while_running(self, running: bool) -> None:
         self.setEnabled(not running)

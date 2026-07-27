@@ -109,6 +109,15 @@ Usage:
   pz windows-vm boot remove
   pz windows-vm boot dry-run
 
+  pz windows-vm media inspect --iso PATH [--json]
+
+  pz windows-vm provision plan --iso PATH [--json]
+  pz windows-vm provision start --plan-id ID --confirm TOKEN [--json]
+  pz windows-vm provision status --operation-id ID [--json]
+  pz windows-vm provision watch --operation-id ID
+  pz windows-vm provision resume --operation-id ID
+  pz windows-vm provision cancel --operation-id ID [--remove-staging]
+
 Access:
   home, /mnt/sdcard, /run/media/\$USER and /mnt are exposed through SMB and virtiofs when available.
   USB redirection is enabled by default. Raw usb-host passthrough requires --usb-mode all or peripherals.
@@ -2493,6 +2502,8 @@ case "$ACTION" in
     apps|frontends|containers) bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" "$@" ;;
     launch|start|run) launch_vm "$@" ;;
     boot) cmd_boot "$@" ;;
+    media|iso) bash "$PZ_ROOT/linux/windows-vm/media-inspect.sh" "$@" ;;
+    provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|boot)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|boot|media|provision)"; exit 1 ;;
 esac
