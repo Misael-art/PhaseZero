@@ -303,6 +303,87 @@ fail_operation() {
     jq '.state = "failed" | .updatedAt = now' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
 }
 
+HAVE_SOCAT=0
+command -v socat >/dev/null 2>&1 && HAVE_SOCAT=1
+
+qga_ping() {
+    local sock="$1"
+    [ "$HAVE_SOCAT" != "1" ] && return 1
+    echo '{"execute":"guest-ping"}' | socat - UNIX-CONNECT:"$sock" 2>/dev/null | jq -e '.return' >/dev/null 2>&1
+}
+
+qga_exec() {
+    local sock="$1" cmd="$2"
+    [ "$HAVE_SOCAT" != "1" ] && { echo '{"return":{"pid":0}}'; return 1; }
+    echo "$cmd" | socat - UNIX-CONNECT:"$sock" 2>/dev/null || echo '{"return":{"pid":0}}'
+}
+
+qga_shutdown() {
+    local sock="$1"
+    [ "$HAVE_SOCAT" != "1" ] && return 1
+    echo '{"execute":"guest-shutdown"}' | socat - UNIX-CONNECT:"$sock" 2>/dev/null || true
+}
+
+graphics_preflight() {
+    local op="$1" graphics="$2"
+    case "$graphics" in
+        compat) return 0 ;;
+        virtio-gl)
+            local failures=()
+            [ -e /dev/kvm ] || failures+=("/dev/kvm not accessible")
+            local render_node=""
+            for node in /dev/dri/renderD*; do [ -r "$node" ] && [ -w "$node" ] && { render_node="$node"; break; }; done
+            [ -n "$render_node" ] || failures+=("no accessible /dev/dri/renderD* node (need mesa/virgl)")
+            if command -v qemu-system-x86_64 >/dev/null 2>&1; then
+                qemu-system-x86_64 -device help 2>/dev/null | grep -q 'virtio-vga-gl' || failures+=("QEMU lacks virtio-vga-gl device")
+            else failures+=("qemu-system-x86_64 not found"); fi
+            ldconfig -p 2>/dev/null | grep -q 'virglrenderer' || failures+=("virglrenderer library not found")
+            local has_amdgpu=0
+            for card in /sys/class/drm/card*/device/driver; do
+                [ -L "$card" ] && [ "$(readlink "$card")" = "amdgpu" ] && has_amdgpu=1
+            done
+            [ "$has_amdgpu" = "0" ] && log_operation "$op" "WARN: no AMDGPU driver bound (VM may lack device memory for virgl)"
+            if [ "${#failures[@]}" -gt 0 ]; then
+                for f in "${failures[@]}"; do log_operation "$op" "virtio-gl preflight FAIL: $f"; done
+                log_operation "$op" "fallback: --graphics compat (non-accelerated QXL)"
+                return 1
+            fi
+            log_operation "$op" "virtio-gl preflight: KVM OK, render node OK, QEMU OK, virgl OK"
+            return 0
+            ;;
+        *)
+            log_operation "$op" "FAIL: unknown graphics profile: $graphics (valid: compat, virtio-gl)"
+            return 1
+            ;;
+    esac
+}
+
+resolve_graphics_qemu_args() {
+    local op="$1" graphics="$2"
+    GRAPHICS_VGA="" GRAPHICS_DISPLAY="" GRAPHICS_ACCEL_LOG=""
+    case "$graphics" in
+        compat)
+            GRAPHICS_VGA="-vga qxl"
+            GRAPHICS_DISPLAY="-display gtk"
+            GRAPHICS_ACCEL_LOG="GPU acceleration: NONE (QXL)"
+            ;;
+        virtio-gl)
+            GRAPHICS_VGA="-device virtio-vga-gl"
+            GRAPHICS_DISPLAY="-display gtk,gl=on"
+            GRAPHICS_ACCEL_LOG="GPU acceleration: virgl (OpenGL only; no Vulkan/D3D)"
+            ;;
+        *)
+            log_operation "$op" "FAIL: unknown graphics profile: $graphics"
+            return 1
+            ;;
+    esac
+    local op_dir="$OPERATIONS_DIR/$op"
+    jq --arg resolved "$graphics" --arg vga "$GRAPHICS_VGA" --arg display "$GRAPHICS_DISPLAY" --arg accelLog "$GRAPHICS_ACCEL_LOG" \
+        '.graphicsResolved = {profile: $resolved, vgaDevice: $vga, displayArg: $display, accelLog: $accelLog}' \
+        "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
+    return 0
+}
+
 log_operation() {
     local op="$1" msg="$2"
     local op_dir="$OPERATIONS_DIR/$op"
@@ -327,6 +408,13 @@ run_validate() {
     local ovmf
     ovmf="$(jq -r '.iso.arch' "$plan_file")"
     [ "$ovmf" = "x64" ] || { log_operation "$op" "FAIL: unsupported architecture"; return 1; }
+
+    local graphics
+    graphics="$(jq -r '.graphics // "compat"' "$plan_file")"
+    graphics_preflight "$op" "$graphics" || { log_operation "$op" "FAIL: graphics preflight"; return 1; }
+    resolve_graphics_qemu_args "$op" "$graphics" || { log_operation "$op" "FAIL: graphics resolution"; return 1; }
+
+    log_operation "$op" "$GRAPHICS_ACCEL_LOG"
     log_operation "$op" "validation passed"
     return 0
 }
@@ -595,7 +683,7 @@ run_drivers() {
     local timeout=300 interval=5 elapsed=0
     while [ "$elapsed" -lt "$timeout" ]; do
         kill -0 "$qemu_pid" 2>/dev/null || break
-        if [ -S "$qga_sock" ] && echo '{"execute":"guest-ping"}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null | jq -e '.return' >/dev/null 2>&1; then
+        if [ -S "$qga_sock" ] && qga_ping "$qga_sock"; then
             qga_ok=1
             log_operation "$op" "QEMU Guest Agent ready after ${elapsed}s"
             break
@@ -623,7 +711,7 @@ run_drivers() {
             Write-Host VirtIO driver installation complete
         "'
         local exec_result
-        exec_result="$(echo '{"execute":"guest-exec","arguments":{"path":"powershell.exe","arg":["-Command","'"$ps_cmd"'"],"capture-output":true}}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null)"
+        exec_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec","arguments":{"path":"powershell.exe","arg":["-Command","'"$ps_cmd"'"],"capture-output":true}}')"
         local pid
         pid="$(echo "$exec_result" | jq -r '.return.pid // 0')"
         if [ "$pid" -gt 0 ]; then
@@ -631,7 +719,7 @@ run_drivers() {
             local wait_timeout=120 wait_elapsed=0
             while [ "$wait_elapsed" -lt "$wait_timeout" ]; do
                 local status_result
-                status_result="$(echo '{"execute":"guest-exec-status","arguments":{"pid":'"$pid"'}}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null)"
+                status_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$pid"'}}')"
                 local exited
                 exited="$(echo "$status_result" | jq -r '.return.exited // false')"
                 if [ "$exited" = "true" ]; then
@@ -644,10 +732,35 @@ run_drivers() {
                 wait_elapsed=$((wait_elapsed + 5))
             done
         fi
-        echo '{"execute":"guest-shutdown"}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null || true
+
+        # Post-driver display adapter check
+        local check_result
+        check_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec","arguments":{"path":"powershell.exe","arg":["-Command","(Get-PnpDevice -Class Display).Name"],"capture-output":true}}')"
+        local check_pid
+        check_pid="$(echo "$check_result" | jq -r '.return.pid // 0')"
+        if [ "$check_pid" -gt 0 ]; then
+            sleep 5
+            local check_status
+            check_status="$(qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$check_pid"'}}')"
+            local check_exited
+            check_exited="$(echo "$check_status" | jq -r '.return.exited // false')"
+            if [ "$check_exited" = "true" ]; then
+                local check_stdout
+                check_stdout="$(echo "$check_status" | jq -r '.["return"]["out-data"] // ""' | base64 -d 2>/dev/null || true)"
+                if echo "$check_stdout" | grep -qi "Microsoft Basic Display"; then
+                    log_operation "$op" "WARN: guest still on Microsoft Basic Display Adapter after driver install"
+                else
+                    log_operation "$op" "guest display adapter: $(echo "$check_stdout" | tr -d '\n\r')"
+                fi
+            fi
+        fi
+
+        qga_shutdown "$qga_sock"
         sleep 10
     else
-        log_operation "$op" "QGA not available after ${timeout}s; driver install deferred"
+        local reason="QGA not available after ${timeout}s"
+        [ "$HAVE_SOCAT" != "1" ] && reason="socat not installed (needed for QGA communication)"
+        log_operation "$op" "$reason; driver install deferred"
     fi
 
     wait "$qemu_pid" 2>/dev/null || true
@@ -696,7 +809,7 @@ run_tweaks() {
     local timeout=300 interval=5 elapsed=0
     while [ "$elapsed" -lt "$timeout" ]; do
         kill -0 "$qemu_pid" 2>/dev/null || break
-        if [ -S "$qga_sock" ] && echo '{"execute":"guest-ping"}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null | jq -e '.return' >/dev/null 2>&1; then
+        if [ -S "$qga_sock" ] && qga_ping "$qga_sock"; then
             qga_ok=1
             log_operation "$op" "QEMU Guest Agent ready after ${elapsed}s"
             break
@@ -724,7 +837,7 @@ run_tweaks() {
         )"
 
         local exec_result
-        exec_result="$(echo '{"execute":"guest-exec","arguments":{"path":"powershell.exe","arg":["-Command","'"$combined"'"],"capture-output":true}}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null)"
+        exec_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec","arguments":{"path":"powershell.exe","arg":["-Command","'"$combined"'"],"capture-output":true}}')"
         local pid
         pid="$(echo "$exec_result" | jq -r '.return.pid // 0')"
         if [ "$pid" -gt 0 ]; then
@@ -732,7 +845,7 @@ run_tweaks() {
             local wait_timeout=120 wait_elapsed=0
             while [ "$wait_elapsed" -lt "$wait_timeout" ]; do
                 local status_result
-                status_result="$(echo '{"execute":"guest-exec-status","arguments":{"pid":'"$pid"'}}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null)"
+                status_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$pid"'}}')"
                 local exited
                 exited="$(echo "$status_result" | jq -r '.return.exited // false')"
                 if [ "$exited" = "true" ]; then
@@ -745,10 +858,12 @@ run_tweaks() {
                 wait_elapsed=$((wait_elapsed + 5))
             done
         fi
-        echo '{"execute":"guest-shutdown"}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null || true
+        qga_shutdown "$qga_sock"
         sleep 10
     else
-        log_operation "$op" "QGA not available after ${timeout}s; tweaks deferred"
+        local reason="QGA not available after ${timeout}s"
+        [ "$HAVE_SOCAT" != "1" ] && reason="socat not installed (needed for QGA communication)"
+        log_operation "$op" "$reason; tweaks deferred"
     fi
 
     wait "$qemu_pid" 2>/dev/null || true
@@ -804,7 +919,6 @@ run_snapshot() {
 
 run_relaunch() {
     local op="$1"
-    log_operation "$op" "relaunching Windows VM from golden-clean snapshot"
     local vm_dir vm_dir_file="$OPERATIONS_DIR/$op/vm_dir"
     [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
     local snapshot_path="$vm_dir/golden-clean.qcow2"
@@ -816,6 +930,8 @@ run_relaunch() {
     local plan_file="$OPERATIONS_DIR/$op/plan.json"
     ram="$(jq -r '.resources.ramMb // 8192' "$plan_file")"
     cpus="$(jq -r '.resources.cpus // 4' "$plan_file")"
+    local graphics
+    graphics="$(jq -r '.graphics // "compat"' "$plan_file")"
 
     local ovmf_code ovmf_vars
     ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(find /usr -name 'OVMF_CODE.fd' 2>/dev/null | head -1)}"
@@ -823,6 +939,24 @@ run_relaunch() {
 
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found for relaunch"; return 1; }
     [ -f "$boot_disk" ] || { log_operation "$op" "boot disk not found for relaunch"; return 1; }
+
+    GRAPHICS_VGA=""; GRAPHICS_DISPLAY=""; GRAPHICS_ACCEL_LOG=""
+    case "$graphics" in
+        compat)
+            GRAPHICS_VGA="-vga qxl"
+            GRAPHICS_DISPLAY="-display gtk"
+            GRAPHICS_ACCEL_LOG="GPU acceleration: NONE (QXL)"
+            ;;
+        virtio-gl)
+            GRAPHICS_VGA="-device virtio-vga-gl"
+            GRAPHICS_DISPLAY="-display gtk,gl=on"
+            GRAPHICS_ACCEL_LOG="GPU acceleration: virgl (OpenGL only; no Vulkan/D3D)"
+            ;;
+        *)
+            log_operation "$op" "FAIL: unknown graphics profile: $graphics"
+            return 1
+            ;;
+    esac
 
     local qemu_args=(
         -machine q35,accel=kvm
@@ -835,8 +969,6 @@ run_relaunch() {
         -device nvme,serial=pzvm,drive=drive0
         -netdev user,id=net0
         -device virtio-net-pci,netdev=net0
-        -vga qxl
-        -display gtk
         -device virtio-serial-pci
         -chardev spicevmc,id=vdagent,name=vdagent
         -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
@@ -847,10 +979,13 @@ run_relaunch() {
         -device usb-kbd
     )
 
+    qemu_args+=($GRAPHICS_VGA)
+    qemu_args+=($GRAPHICS_DISPLAY)
     qemu_args+=(-chardev socket,path="$vm_dir/qga.sock",server=on,id=qga0)
     qemu_args+=(-device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0)
 
-    log_operation "$op" "relaunching with display (disk=$boot_disk)"
+    log_operation "$op" "$GRAPHICS_ACCEL_LOG"
+    log_operation "$op" "relaunching with display (disk=$boot_disk, graphics=$graphics)"
     qemu-system-x86_64 "${qemu_args[@]}" &
     local qemu_pid=$!
     echo "$qemu_pid" > "$vm_dir/qemu-pid"

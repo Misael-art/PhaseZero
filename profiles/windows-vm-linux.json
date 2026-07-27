@@ -23,7 +23,11 @@
         "cpupower",
         "numactl",
         "acl",
+        "virglrenderer",
+        "mesa",
+        "vulkan-radeon",
         "jq",
+        "socat",
         "libnewt"
       ],
       "yay": [],

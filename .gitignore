@@ -28,6 +28,10 @@ secrets/
 .bootstrap-tools/ui-runs/
 
 # Local run logs (diagnostico de instalacao real)
+
+# Test artifacts
+tests/.xdg/
+tests/.xdg_none/
 .runlogs/
 
 # Local IDE / agent worktrees
