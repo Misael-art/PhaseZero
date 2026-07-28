@@ -545,9 +545,13 @@ class MainWindow(QMainWindow):
             self.progress_dialog.deleteLater()
             self.progress_dialog = None
         self.cancel_button.setEnabled(False)
-        self.status_text.setText("Concluído" if result.ok else "Falhou")
+        action = self.pending_action
+        is_mutable = bool(action and action.mutable)
+        severity = severity_for(result.parsed, result.exit_code, mutable=is_mutable)
+        status_map = {"success": "Concluído", "warning": "Concluído com avisos", "error": "Falhou"}
+        status_label = status_map.get(severity, "Falhou")
+        self.status_text.setText(status_label)
         self.global_state.setText(self.status_text.text())
-        severity = severity_for(result.parsed, result.exit_code)
         self.status_dot.setObjectName("statusSuccess" if severity == "success" else "statusWarning" if severity == "warning" else "statusError")
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)
@@ -564,14 +568,14 @@ class MainWindow(QMainWindow):
             self.pending_values = {}
             self._action_queue.clear()
             return
-        action_title = self.pending_action.title if self.pending_action is not None else "Operação"
+        action_title = action.title if action is not None else "Operação"
         if start_failed:
             pass  # operation_start_failed already told the user
-        elif result.preview and self.pending_action is not None:
-            dialog = PreviewDialog(result, self.pending_action, self)
+        elif result.preview and action is not None:
+            dialog = PreviewDialog(result, action, self)
             if dialog.exec() == PreviewDialog.Accepted:
                 try:
-                    self._bind_preview_result(self.pending_action, result)
+                    self._bind_preview_result(action, result)
                 except ValueError as exc:
                     self._action_queue.clear()
                     QMessageBox.warning(self, "Preview não aplicável", str(exc))
@@ -580,7 +584,7 @@ class MainWindow(QMainWindow):
                     return
                 self.log_view.appendPlainText("\n--- execução confirmada ---\n")
                 try:
-                    self.runner.start(self.pending_action, preview=False, values=self.pending_values)
+                    self.runner.start(action, preview=False, values=self.pending_values)
                     return
                 except (ValueError, RuntimeError) as exc:
                     self._action_queue.clear()
@@ -588,12 +592,12 @@ class MainWindow(QMainWindow):
             self._action_queue.clear()
         else:
             formatted = self._format_result(result)
-            dialog = ResultDialog(result, formatted, self)
+            dialog = ResultDialog(result, formatted, self, severity=severity)
             dialog.history_requested.connect(lambda: self.show_category("Resultados"))
             dialog.exec()
-            toast_state = "success" if severity == "success" else "warning" if severity == "warning" else "error"
-            verb = "concluída" if result.ok else "falhou"
-            self._toast(f"{action_title} {verb}", toast_state)
+            verb_map = {"success": "concluída", "warning": "concluída com avisos", "error": "falhou"}
+            verb = verb_map.get(severity, "falhou")
+            self._toast(f"{action_title} {verb}", severity)
         self.pending_action = None
         self.pending_value = ""
         self.pending_values = {}

@@ -5,10 +5,11 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QFormLayout, QFrame, QGroupBox,
-    QHBoxLayout, QLabel, QPushButton, QScrollArea, QStyle,
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QStyle,
     QVBoxLayout, QWidget,
 )
 
+from ..catalog import WINDOWS_VM_GRAPHICS_OPTIONS
 from ..command_runner import CommandRunner
 from ..models import ActionSpec, OperationResult
 from ..widgets import SectionHeader, themed_icon
@@ -71,14 +72,30 @@ class WindowsVMPage(BasePage):
 
         self._edition_combo = QComboBox()
         self._edition_combo.setEnabled(False)
+        self._edition_combo.addItem("Selecione uma ISO primeiro", None)
         self._edition_combo.currentIndexChanged.connect(self._on_edition_changed)
         form.addRow("Edição:", self._edition_combo)
 
         self._graphics_combo = QComboBox()
-        self._graphics_combo.addItem("compat (QXL, software)", "compat")
-        self._graphics_combo.addItem("virtio-gl (OpenGL, requer GPU host compatível)", "virtio-gl")
+        for value, label, helper_text in WINDOWS_VM_GRAPHICS_OPTIONS:
+            self._graphics_combo.addItem(label, value)
+            idx = self._graphics_combo.count() - 1
+            self._graphics_combo.setItemData(idx, helper_text, Qt.ToolTipRole)
         self._graphics_combo.currentIndexChanged.connect(self._on_graphics_changed)
         form.addRow("Aceleração:", self._graphics_combo)
+
+        self._graphics_helper = QLabel()
+        self._graphics_helper.setWordWrap(True)
+        self._graphics_helper.setObjectName("graphicsHelper")
+        self._graphics_helper.setStyleSheet("font-size: 11px; color: palette(mid); padding: 2px 0;")
+        self._graphics_helper.setText(WINDOWS_VM_GRAPHICS_OPTIONS[0][2])
+        form.addRow("", self._graphics_helper)
+
+        self._custom_field = QLineEdit()
+        self._custom_field.setPlaceholderText("Perfil/args customizados")
+        self._custom_field.setVisible(False)
+        self._custom_field.setObjectName("customGraphicsField")
+        form.addRow("", self._custom_field)
 
         plan_btn = QPushButton("Planejar instalação")
         plan_btn.setObjectName("secondaryButton")
@@ -203,6 +220,10 @@ class WindowsVMPage(BasePage):
         data = self._graphics_combo.itemData(index)
         if data is not None:
             self._selected_graphics = str(data)
+        helper_text = self._graphics_combo.itemData(index, Qt.ToolTipRole) or ""
+        self._graphics_helper.setText(helper_text)
+        is_custom = data == "custom"
+        self._custom_field.setVisible(is_custom)
 
     def _select_iso(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -251,13 +272,18 @@ class WindowsVMPage(BasePage):
         plan = self.by_id.get("windows.provision.plan")
         if not plan:
             return
+        graphics = self._custom_field.text().strip() if self._selected_graphics == "custom" else self._selected_graphics
+        if self._selected_graphics == "custom" and not graphics:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Perfil não informado", "Digite um perfil gráfico no campo 'Perfil/args customizados'.")
+            return
         try:
             self.runner.start(
                 plan,
                 value=self._selected_iso,
                 values={
                     "input": self._selected_iso,
-                    "graphics": self._selected_graphics,
+                    "graphics": graphics,
                     "image_index": str(self._selected_image_index),
                 },
             )

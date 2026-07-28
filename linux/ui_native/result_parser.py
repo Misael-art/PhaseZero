@@ -31,9 +31,23 @@ def parse_json_output(text: str) -> Any:
     return max(candidates, key=lambda item: (item[0], item[1]))[2]
 
 
-def severity_for(value: Any, exit_code: int) -> str:
+def _has_output(value: Any) -> bool:
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value is not None
+
+
+def severity_for(value: Any, exit_code: int, *, mutable: bool = True, has_output: bool | None = None) -> str:
     if exit_code != 0:
-        return "error"
+        if mutable:
+            return "error"
+        if has_output is None:
+            has_output = _has_output(value)
+        return "warning" if has_output else "error"
     if not isinstance(value, dict):
         return "success"
     status = str(value.get("status", "")).casefold()
