@@ -98,13 +98,15 @@ def test_windows_vm_page_covers_provision_actions(page_and_catalog):
         assert pid in represented or pid in by_id, f"{pid} not registered"
 
 
-def test_graphics_combo_exists_with_both_options(page_and_catalog):
+def test_graphics_combo_exists_with_4_items(page_and_catalog):
     page, by_id, catalog = page_and_catalog
     combo = page._graphics_combo
     assert combo is not None
-    assert combo.count() == 2
+    assert combo.count() == 4
     assert combo.itemData(0) == "compat"
     assert combo.itemData(1) == "virtio-gl"
+    assert combo.itemData(2) == "virtio-venus"
+    assert combo.itemData(3) == "custom"
     assert combo.currentData() == "compat"
 
 
@@ -207,3 +209,107 @@ def test_ui_modules_import():
     for mod_name in UI_MODULES:
         mod = __import__(mod_name, fromlist=["_trash"])
         assert isinstance(mod, ModuleType), f"{mod_name} did not import as module"
+
+
+# ── Graphics pedagogy tests ─────────────────────────────────────────
+
+def test_graphics_helper_label_updates_on_selection_change(page_and_catalog):
+    page, by_id, catalog = page_and_catalog
+    combo = page._graphics_combo
+    helper = page._graphics_helper
+    # compat (index 0) by default
+    assert "lenta em 3D" in helper.text() or "Microsoft Basic" in helper.text()
+    # virtio-gl (index 1)
+    combo.setCurrentIndex(1)
+    assert "OpenGL" in helper.text() and "virgl" in helper.text()
+    # virtio-venus (index 2)
+    combo.setCurrentIndex(2)
+    assert "EXPERIMENTAL" in helper.text() and "Vulkan" in helper.text()
+    # custom (index 3)
+    combo.setCurrentIndex(3)
+    assert "customizado" in helper.text() or "personalizado" in helper.text()
+
+
+def test_custom_reveals_advanced_line_edit(page_and_catalog):
+    page, by_id, catalog = page_and_catalog
+    combo = page._graphics_combo
+    custom_field = page._custom_field
+    # default (compat) — custom field hidden (not explicitly shown)
+    assert custom_field.isHidden()
+    # custom — field visible (not hidden)
+    combo.setCurrentIndex(3)
+    assert not custom_field.isHidden()
+    # virtio-gl — field hidden again
+    combo.setCurrentIndex(1)
+    assert custom_field.isHidden()
+
+
+def test_edition_combo_placeholder_when_no_iso(page_and_catalog):
+    page, by_id, catalog = page_and_catalog
+    assert page._edition_combo.count() == 1
+    assert page._edition_combo.itemText(0) == "Selecione uma ISO primeiro"
+    assert not page._edition_combo.isEnabled()
+
+
+def test_catalog_graphics_param_kind_is_choice(page_and_catalog):
+    page, by_id, catalog = page_and_catalog
+    plan = by_id["windows.provision.plan"]
+    graphics_param = next(p for p in plan.parameters if p.name == "graphics")
+    assert graphics_param.kind == "choice"
+    assert "compat" in graphics_param.choices
+    assert "virtio-gl" in graphics_param.choices
+    assert "virtio-venus" in graphics_param.choices
+    assert "custom" in graphics_param.choices
+    assert len(graphics_param.choices) == 4
+
+
+def test_parameter_dialog_renders_combo_for_graphics(qapp):
+    from PySide6.QtWidgets import QComboBox
+    from linux.ui_native.widgets import ParameterDialog
+    from linux.ui_native.catalog import build_catalog
+    catalog = build_catalog(ROOT)
+    plan = next(a for a in catalog if a.id == "windows.provision.plan")
+    dialog = ParameterDialog(plan)
+    field = dialog._fields.get("graphics")
+    assert field is not None
+    assert isinstance(field, QComboBox)
+    assert field.count() == 4
+
+
+def test_parameter_dialog_custom_support(qapp):
+    from PySide6.QtWidgets import QComboBox, QLineEdit
+    from linux.ui_native.widgets import ParameterDialog
+    from linux.ui_native.catalog import build_catalog
+    catalog = build_catalog(ROOT)
+    plan = next(a for a in catalog if a.id == "windows.provision.plan")
+    dialog = ParameterDialog(plan)
+    custom_field = dialog._fields.get("graphics.custom")
+    assert custom_field is not None
+    assert isinstance(custom_field, QLineEdit)
+    # custom field is disabled by default (compat selected)
+    assert not custom_field.isEnabled()
+    combo = dialog._fields["graphics"]
+    combo.setCurrentText("custom")
+    assert custom_field.isEnabled()
+    custom_field.setText("my-profile")
+    # selecting compat disables custom
+    combo.setCurrentText("compat")
+    assert not custom_field.isEnabled()
+
+
+def test_custom_flow_passes_custom_value_in_plan(page_and_catalog):
+    page, by_id, catalog = page_and_catalog
+    page._selected_iso = "/fake.iso"
+    page._graphics_combo.setCurrentIndex(3)  # custom
+    page._custom_field.setText("my-custom-profile")
+    page._custom_field.setVisible(True)
+    graphics = page._custom_field.text().strip() if page._selected_graphics == "custom" else page._selected_graphics
+    assert graphics == "my-custom-profile"
+    plan = by_id["windows.provision.plan"]
+    args = plan.resolved_args(
+        value="/fake.iso",
+        values={"input": "/fake.iso", "graphics": graphics, "image_index": "1"},
+    )
+    assert "--graphics" in args
+    idx = args.index("--graphics") + 1
+    assert args[idx] == "my-custom-profile"

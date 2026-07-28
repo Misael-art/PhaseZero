@@ -596,6 +596,22 @@ class ParameterDialog(QDialog):
             if parameter.kind == "choice":
                 field = QComboBox()
                 field.addItems(parameter.choices)
+                if "custom" in parameter.choices:
+                    custom_row = QWidget()
+                    custom_layout = QHBoxLayout(custom_row)
+                    custom_layout.setContentsMargins(0, 0, 0, 0)
+                    custom_edit = QLineEdit()
+                    custom_edit.setPlaceholderText("Perfil/args customizados")
+                    custom_edit.setEnabled(False)
+                    custom_label = QLabel("Custom:")
+                    custom_label.setVisible(False)
+                    custom_layout.addWidget(custom_label)
+                    custom_layout.addWidget(custom_edit, 1)
+                    form.addRow("", custom_row)
+                    self._fields[f"{parameter.name}.custom"] = custom_edit
+                    field.currentTextChanged.connect(
+                        lambda text, e=custom_edit: e.setEnabled(text == "custom")
+                    )
             elif parameter.kind == "boolean":
                 field = QCheckBox(parameter.label)
             else:
@@ -645,13 +661,21 @@ class ParameterDialog(QDialog):
 
     def values(self) -> dict[str, str]:
         values: dict[str, str] = {}
+        custom_overrides: dict[str, str] = {}
         for name, field in self._fields.items():
             if isinstance(field, QComboBox):
                 values[name] = field.currentText()
             elif isinstance(field, QCheckBox):
                 values[name] = "true" if field.isChecked() else ""
             elif isinstance(field, QLineEdit):
-                values[name] = field.text().strip()
+                if name.endswith(".custom"):
+                    base = name[:-7]
+                    custom_text = field.text().strip()
+                    if custom_text:
+                        custom_overrides[base] = custom_text
+                else:
+                    values[name] = field.text().strip()
+        values.update(custom_overrides)
         return values
 
 

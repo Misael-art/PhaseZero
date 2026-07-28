@@ -49,6 +49,33 @@ DASHBOARD_TOOLS = (
     "server.status",
 )
 
+# Single source of truth for Windows VM provision graphics options.
+# Each entry: (value, combo_label, helper_text_pt).
+WINDOWS_VM_GRAPHICS_OPTIONS: list[tuple[str, str, str]] = [
+    ("compat", "compat (QXL, software)",
+     "Padrão. Funciona em qualquer host. Sem aceleração: Windows roda com "
+     "'Microsoft Basic Display Adapter'. Indicado se você não precisa de "
+     "jogos/vídeo ou se sua GPU não suporta virtio-gl. Resultado: interface "
+     "funcional mas lenta em 3D."),
+    ("virtio-gl", "virtio-gl (OpenGL parcial, virgl)",
+     "Aceleração OpenGL via virgl. Requer: GPU host com mesa/virglrenderer, "
+     "/dev/dri/renderD* acessível, QEMU com virtio-vga-gl. Resultado: "
+     "aplicativos OpenGL rodam; Vulkan/Direct3D não. Em Steam Deck (APU "
+     "VanGogh) é o máximo estável. Se o host não atender, o instalador "
+     "avisa e você volta para compat."),
+    ("virtio-venus", "virtio-venus (experimental — Vulkan)",
+     "EXPERIMENTAL. Vulkan paravirtual via Venus. Pré-requisitos não "
+     "fixados (kernel 6.7+, mesa 23+, crosvm). No Steam Deck, é o único "
+     "caminho de aceleração Vulkan, mas ainda instável. O plano "
+     "experimental pode ser consultado em 'Plano Venus'. Aplicar fica "
+     "bloqueado na v1."),
+    ("custom", "custom (avançado)",
+     "Permite digitar um perfil gráfico personalizado ou argumentos extras "
+     "do QEMU. Use apenas se você conhece os perfis aceitos pelo backend. "
+     "Se o perfil for inválido, o instalador rejeitará com uma mensagem "
+     "clara."),
+]
+
 
 def _a(
     action_id: str,
@@ -251,7 +278,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.media.inspect", "Windows VM", "Inspecionar ISO", "Valida ISO, SHA-256, arquitetura e listas edições disponíveis.", ("windows-vm", "media", "inspect", "--iso", "{input}"), "media-optical", input_label="Selecione ISO do Windows", input_kind="file", badge="JSON"),
             _a("windows.provision.plan", "Windows VM", "Planejar instalação automática", "Gera plano completo de instalação e otimização.", ("windows-vm", "provision", "plan", "--iso", "{input}", "--image-index", "{image_index}", "--graphics", "{graphics}", "--json"), "document-properties", badge="Seguro", parameters=(
                 _p("input", "Selecione ISO do Windows", kind="file"),
-                _p("graphics", "Aceleração gráfica", choices=("compat", "virtio-gl"), placeholder="compat"),
+                _p("graphics", "Aceleração gráfica", "choice", choices=tuple(v for v, _, _ in WINDOWS_VM_GRAPHICS_OPTIONS), placeholder="compat"),
                 _p("image_index", "Índice da edição Windows", placeholder="1"),
             )),
             _a("windows.provision.start", "Windows VM", "Instalar e otimizar Windows", "Executa instalação completa: setup, drivers, tweaks, snapshot.", ("windows-vm", "provision", "start", "--plan-id", "{plan_id}", "--confirm", "{confirm}", "--json"), "system-software-install", mutable=True, preview=("windows-vm", "provision", "plan", "--iso", "{input}", "--json"), preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken"), ("input", "iso.path")), badge="Alto risco", risk="high"),
