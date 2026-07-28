@@ -882,7 +882,7 @@ cmd_shares_verify() {
     fi
     local samba_reachable=""
     if command -v smbclient >/dev/null 2>&1; then
-        if smbclient -N -L "//127.0.0.1/PZHome" -I 127.0.0.1 -p 445 2>&1 | grep -q 'PZHome'; then
+        if smbclient -N -L "//127.0.0.1/PZHome" -I 127.0.0.1 -p 445 2>&1 | grep 'PZHome' >/dev/null; then
             samba_reachable="yes"
         else
             samba_reachable="no"
@@ -1267,8 +1267,8 @@ cmd_shares() {
 audio_driver() {
     local help
     help="$(qemu-system-x86_64 -audiodev help 2>&1 || true)"
-    grep -qx 'pipewire' <<< "$help" && { echo pipewire; return 0; }
-    grep -qx 'pa' <<< "$help" && { echo pa; return 0; }
+    grep -x 'pipewire' >/dev/null <<< "$help" && { echo pipewire; return 0; }
+    grep -x 'pa' >/dev/null <<< "$help" && { echo pa; return 0; }
     echo none
 }
 
@@ -1592,11 +1592,11 @@ optimize_libvirt_domain() {
         attach_libvirt_device_config "$LIBVIRT_DOMAIN" "<redirdev bus='usb' type='spicevmc'/>" || break
         redir_count=$((redir_count + 1))
     done
-    if ! grep -q "<smartcard " <<< "$xml"; then
+    if ! grep "<smartcard " >/dev/null <<< "$xml"; then
         attach_libvirt_device_config "$LIBVIRT_DOMAIN" "<smartcard mode='host'/>" ||
             pz_warn "libvirt smartcard passthrough unavailable; SPICE client support remains enabled"
     fi
-    if ! grep -q "org.spice-space.webdav.0" <<< "$xml"; then
+    if ! grep "org.spice-space.webdav.0" >/dev/null <<< "$xml"; then
         attach_libvirt_device_config "$LIBVIRT_DOMAIN" \
             "<channel type='spiceport'><source channel='org.spice-space.webdav.0'/><target type='virtio' name='org.spice-space.webdav.0'/></channel>" ||
             pz_warn "SPICE WebDAV channel unavailable; Samba exchange remains active"
@@ -1642,7 +1642,7 @@ guard_graphics_profile() {
                 blockers+=("QEMU ausente: $gfx_qemu_bin")
             elif ! "$gfx_qemu_bin" -device help 2>/dev/null | grep 'virtio-vga-gl' >/dev/null; then
                 blockers+=("QEMU sem device virtio-vga-gl")
-            elif ! "$gfx_qemu_bin" -display help 2>/dev/null | grep -qw gtk; then
+            elif ! "$gfx_qemu_bin" -display help 2>/dev/null | grep -w gtk >/dev/null; then
                 blockers+=("QEMU sem display GTK necessario para gtk,gl=on")
             fi
             if [ "${#blockers[@]}" -gt 0 ]; then
@@ -1768,7 +1768,7 @@ status_json() {
     windows_usb_udev_managed && usb_udev_managed="yes"
     boot_artifacts_current && boot_current="yes"
     boot_grub="$(grub_cfg_entry_state)"
-    grep -qw 'phasezero.windowsvm=1' /proc/cmdline 2>/dev/null && current_marker="yes"
+    grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && current_marker="yes"
     discovery="$(discovery_json)"
     jq -n \
         --arg configFile "$CONFIG_FILE" \
@@ -2284,7 +2284,7 @@ remove_boot() {
     systemctl disable phasezero-windows-vm-boot-prepare.service >/dev/null 2>&1 || true
     rm -f "$SERVICE_FILE" "$GRUB_SCRIPT" "$WAYLAND_SESSION_FILE" "$XSESSION_FILE" "$BOOT_HELPER_TARGET" "$SESSION_TARGET" "$ROOT_ENV_FILE"
     rm -rf "$RUNTIME_ROOT"
-    if [ -f "$SDDM_CONF" ] && grep -q 'PhaseZero managed' "$SDDM_CONF" 2>/dev/null; then
+    if [ -f "$SDDM_CONF" ] && grep 'PhaseZero managed' "$SDDM_CONF" >/dev/null 2>&1; then
         rm -f "$SDDM_CONF"
     fi
     loader_remove_entry "$loader"
@@ -2414,7 +2414,7 @@ clear_next_boot() {
 status_boot() {
     local loader="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
     loader="$(detected_loader)"
-    grep -qw 'phasezero.windowsvm=1' /proc/cmdline 2>/dev/null && cmdline_marker="yes"
+    grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && cmdline_marker="yes"
     boot_artifacts_current && artifacts_current="yes"
     if command -v grub-editenv >/dev/null 2>&1; then
         grub_next_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}')"

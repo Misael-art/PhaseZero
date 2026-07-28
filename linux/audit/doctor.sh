@@ -152,12 +152,12 @@ cpus=$(nproc)
 awk -v loadavg="$load_1" -v cpus="$cpus" 'BEGIN { exit (loadavg < cpus ? 0 : 1) }' && check CPU02 "CPU load (1m) < cores" PASS "$load_1 / $cpus" || check CPU02 "CPU load (1m) < cores" WARN "$load_1 / $cpus"
 
 header "GPU (AMD)"
-lspci -nn | grep -qi "VGA.*AMD\|VGA.*ATI\|VanGogh" && check GPU01 "AMD GPU detected" PASS "VanGogh 0405" || check GPU01 "AMD GPU detected" WARN "not found"
+lspci -nn | grep -i "VGA.*AMD\|VGA.*ATI\|VanGogh" >/dev/null && check GPU01 "AMD GPU detected" PASS "VanGogh 0405" || check GPU01 "AMD GPU detected" WARN "not found"
 [ -d /sys/class/drm/card1/device ] && check GPU02 "GPU device in sysfs" PASS "" || check GPU02 "GPU device in sysfs" FAIL ""
 
 header "Network"
 ping -c 1 -W 2 8.8.8.8 &>/dev/null && check NET01 "Internet connectivity" PASS "" || check NET01 "Internet connectivity" FAIL ""
-if command -v tailscale &>/dev/null && tailscale status 2>/dev/null | head -1 | grep -q "Connected"; then
+if command -v tailscale &>/dev/null && tailscale status 2>/dev/null | head -1 | grep "Connected" >/dev/null; then
     check NET02 "Tailscale connected" PASS ""
 elif [[ "$HOST_PROFILE" =~ ^steamdeck ]] && ! ip link show tailscale0 >/dev/null 2>&1; then
     check NET02 "Tailscale connected" INFO "not configured on Steam Deck"
@@ -203,7 +203,7 @@ fi
 
 if systemctl --user is-active phasezero-steamdeck-hotkeys.service &>/dev/null; then
     check UX07 "Steam Deck hotkeys active" PASS "sxhkd service"
-elif command -v qdbus6 &>/dev/null && qdbus6 org.kde.kglobalaccel 2>/dev/null | grep -q 'phasezero_.*_desktop'; then
+elif command -v qdbus6 &>/dev/null && qdbus6 org.kde.kglobalaccel 2>/dev/null | grep 'phasezero_.*_desktop' >/dev/null; then
     check UX07 "Steam Deck hotkeys active" PASS "KDE native shortcuts"
 else
     check UX07 "Steam Deck hotkeys active" WARN "inactive or compositor-native shortcuts required"
@@ -360,7 +360,7 @@ if [ -d "$winvm_ops_dir" ]; then
 fi
 # Steam Deck VFIO note (VanGogh APU unica, sem VFIO)
 winvm_deck_note=""
-if grep -qi 'steam\|deck\|jupiter' /sys/devices/virtual/dmi/id/product_name 2>/dev/null; then
+if grep -i 'steam\|deck\|jupiter' /sys/devices/virtual/dmi/id/product_name >/dev/null 2>&1; then
     winvm_deck_note="; Steam Deck (VanGogh APU) VFIO passthrough nao suportado"
 fi
 VIRGL_OK=false
@@ -594,12 +594,12 @@ elif command -v flatpak >/dev/null 2>&1 && flatpak info com.github.mtkennerly.lu
 else
     check ST04 "Ludusavi available" INFO "optional save backup tool"
 fi
-if command -v steam-rom-manager >/dev/null 2>&1 || find "$applications_dir" -maxdepth 1 -iname '*steam*rom*manager*.AppImage' -type f -perm -u+x 2>/dev/null | grep -q .; then
+if command -v steam-rom-manager >/dev/null 2>&1 || find "$applications_dir" -maxdepth 1 -iname '*steam*rom*manager*.AppImage' -type f -perm -u+x 2>/dev/null | grep . >/dev/null; then
     check ST05 "Steam ROM Manager available" PASS "found"
 else
     check ST05 "Steam ROM Manager available" INFO "optional; EmuDeck may manage SRM internally"
 fi
-if command -v boilr >/dev/null 2>&1 || find "$applications_dir" -maxdepth 1 -iname '*boilr*.AppImage' -type f -perm -u+x 2>/dev/null | grep -q .; then
+if command -v boilr >/dev/null 2>&1 || find "$applications_dir" -maxdepth 1 -iname '*boilr*.AppImage' -type f -perm -u+x 2>/dev/null | grep . >/dev/null; then
     check ST06 "BoilR available" PASS "found"
 else
     check ST06 "BoilR available" INFO "optional non-Steam importer"

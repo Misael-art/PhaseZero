@@ -833,7 +833,7 @@ run_drivers() {
             if [ "$check_exited" = "true" ]; then
                 local check_stdout
                 check_stdout="$(echo "$check_status" | jq -r '.["return"]["out-data"] // ""' | base64 -d 2>/dev/null || true)"
-                if echo "$check_stdout" | grep -qi "Microsoft Basic Display"; then
+                if echo "$check_stdout" | grep -i "Microsoft Basic Display" >/dev/null; then
                     log_operation "$op" "WARN: guest still on Microsoft Basic Display Adapter after driver install"
                 else
                     log_operation "$op" "guest display adapter: $(echo "$check_stdout" | tr -d '\n\r')"
