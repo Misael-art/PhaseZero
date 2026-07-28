@@ -373,7 +373,7 @@ if jq -e '.status == "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
     if [ "$winvm_gfx_effective" = "compat" ] && [ "$winvm_gfx_eligible" = "true" ]; then
         check WINVM11 "Windows graphics integration" WARN "perfil=compat mas virtio-gl elegivel; upgrade: linux/pz windows-vm graphics plan --profile virtio-gl$winvm_deck_note"
     elif [ "$winvm_gfx_effective" = "compat" ]; then
-        local gfx_blockers=""
+        gfx_blockers=""
         $VIRGL_OK || gfx_blockers="${gfx_blockers}virglrenderer "
         [ -n "$RENDER_NODE" ] || gfx_blockers="${gfx_blockers}render-node "
         [ -n "$gfx_blockers" ] && gfx_blockers=" (faltando: ${gfx_blockers%-})"
@@ -387,8 +387,7 @@ elif jq -e '.runtime.status != "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
 else
     check WINVM11 "Windows graphics integration" WARN "run: linux/pz windows-vm graphics doctor --json$winvm_deck_note"
 fi
-local preflight_json=""
-preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh --json" 2>/dev/null || echo '{}')"
+preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>/dev/null || echo '{}')"
 SWTPM_SOCKET_PATH="${XDG_RUNTIME_DIR:-/run/user/$UID}/swtpm.sock"
 if [ -S "$SWTPM_SOCKET_PATH" ]; then
     check WINVM14 "swtpm daemon running" PASS "$SWTPM_SOCKET_PATH"
@@ -398,13 +397,11 @@ else
     check WINVM14 "swtpm daemon running" WARN "install swtpm (pacman -S swtpm)"
 fi
 if echo "$preflight_json" | jq -e '.virtio.outdated == true' >/dev/null 2>&1; then
-    local virtio_latest virtio_pinned
     virtio_latest="$(echo "$preflight_json" | jq -r '.virtio.latest')"
     virtio_pinned="$(echo "$preflight_json" | jq -r '.virtio.pinned')"
     check WINVM15 "virtio-win up-to-date" WARN "pinned ${virtio_pinned}, latest ${virtio_latest} — run: linux/windows-vm/preflight.sh --auto-fix"
 else
-    local virtio_iso="${PZ_STATE}/windows-vm/vm/virtio-win.iso"
-    local virtio_version
+    virtio_iso="${PZ_STATE}/windows-vm/vm/virtio-win.iso"
     virtio_version="$(echo "$preflight_json" | jq -r '.virtio.latest // .virtio.pinned')"
     if [ -f "$virtio_iso" ]; then
         virtio_version="${virtio_version} (ISO cached)"
