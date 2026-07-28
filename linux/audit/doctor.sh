@@ -290,16 +290,21 @@ if jq -e '.host.kvm == true' <<< "$winvm_status" >/dev/null 2>&1; then
 else
     check WINVM02 "KVM device available" WARN "enable virtualization or fix /dev/kvm permissions"
 fi
-if jq -e '.host.ovmfCodeExists == true and .host.swtpm != ""' <<< "$winvm_status" >/dev/null 2>&1; then
+OVMF_CODE_PATH="$(pz_path_resolve ovmf_code \
+    /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
+    /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+    /usr/share/edk2-ovmf/OVMF_CODE.fd \
+    /usr/share/OVMF/OVMF_CODE.secboot.fd \
+    /usr/share/OVMF/OVMF_CODE.fd 2>/dev/null || true)"
+SWTPM_BIN_PATH="$(command -v swtpm || true)"
+if [ -n "$OVMF_CODE_PATH" ] && [ -n "$SWTPM_BIN_PATH" ]; then
     check WINVM03 "Windows 11 firmware/TPM ready" PASS "OVMF + swtpm"
-elif jq -e '.host.ovmfCodeExists == false' <<< "$winvm_status" >/dev/null 2>&1; then
-    if jq -e '.host.swtpm != ""' <<< "$winvm_status" >/dev/null 2>&1; then
-        check WINVM03 "Windows 11 firmware/TPM ready" WARN "OVMF not found — install edk2-ovmf (swtpm OK)"
-    else
-        check WINVM03 "Windows 11 firmware/TPM ready" WARN "install edk2-ovmf and swtpm (both missing)"
-    fi
-else
+elif [ -z "$OVMF_CODE_PATH" ] && [ -n "$SWTPM_BIN_PATH" ]; then
+    check WINVM03 "Windows 11 firmware/TPM ready" WARN "OVMF not found — install edk2-ovmf (swtpm OK)"
+elif [ -n "$OVMF_CODE_PATH" ] && [ -z "$SWTPM_BIN_PATH" ]; then
     check WINVM03 "Windows 11 firmware/TPM ready" WARN "swtpm missing — install swtpm (OVMF OK)"
+else
+    check WINVM03 "Windows 11 firmware/TPM ready" WARN "install edk2-ovmf and swtpm (both missing)"
 fi
 if jq -e '.config.installed == true and .vm.diskExists == true' <<< "$winvm_status" >/dev/null 2>&1; then
     check WINVM04 "Windows VM configured" PASS "$(jq -r '.vm.disk' <<< "$winvm_status")"
@@ -358,11 +363,21 @@ winvm_deck_note=""
 if grep -qi 'steam\|deck\|jupiter' /sys/devices/virtual/dmi/id/product_name 2>/dev/null; then
     winvm_deck_note="; Steam Deck (VanGogh APU) VFIO passthrough nao suportado"
 fi
+VIRGL_OK=false
+ldconfig -p 2>/dev/null | grep 'virglrenderer' >/dev/null && VIRGL_OK=true
+RENDER_NODE=""
+for node in /dev/dri/renderD*; do
+    [ -r "$node" ] && [ -w "$node" ] && { RENDER_NODE="$node"; break; }
+done
 if jq -e '.status == "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
     if [ "$winvm_gfx_effective" = "compat" ] && [ "$winvm_gfx_eligible" = "true" ]; then
         check WINVM11 "Windows graphics integration" WARN "perfil=compat mas virtio-gl elegivel; upgrade: linux/pz windows-vm graphics plan --profile virtio-gl$winvm_deck_note"
     elif [ "$winvm_gfx_effective" = "compat" ]; then
-        check WINVM11 "Windows graphics integration" INFO "perfil=compat; virtio-gl nao elegivel; compat e o maximo viavel$winvm_deck_note"
+        local gfx_blockers=""
+        $VIRGL_OK || gfx_blockers="${gfx_blockers}virglrenderer "
+        [ -n "$RENDER_NODE" ] || gfx_blockers="${gfx_blockers}render-node "
+        [ -n "$gfx_blockers" ] && gfx_blockers=" (faltando: ${gfx_blockers%-})"
+        check WINVM11 "Windows graphics integration" INFO "perfil=compat; virtio-gl nao elegivel${gfx_blockers}${winvm_deck_note}"
     else
         resolved_detail="${winvm_latest_resolved:+ ultima resolucao: $winvm_latest_resolved}"
         check WINVM11 "Windows graphics integration" PASS "profile=$winvm_gfx_effective; runtime current${resolved_detail}${winvm_deck_note}"
@@ -374,9 +389,10 @@ else
 fi
 local preflight_json=""
 preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh --json" 2>/dev/null || echo '{}')"
-if echo "$preflight_json" | jq -e '.swtpm.binary == true and .swtpm.running == true' >/dev/null 2>&1; then
-    check WINVM14 "swtpm daemon running" PASS "$(echo "$preflight_json" | jq -r '.swtpm.socket')"
-elif echo "$preflight_json" | jq -e '.swtpm.binary == true' >/dev/null 2>&1; then
+SWTPM_SOCKET_PATH="${XDG_RUNTIME_DIR:-/run/user/$UID}/swtpm.sock"
+if [ -S "$SWTPM_SOCKET_PATH" ]; then
+    check WINVM14 "swtpm daemon running" PASS "$SWTPM_SOCKET_PATH"
+elif [ -n "$SWTPM_BIN_PATH" ]; then
     check WINVM14 "swtpm daemon running" WARN "binary present but daemon not running — run: linux/windows-vm/preflight.sh --auto-fix"
 else
     check WINVM14 "swtpm daemon running" WARN "install swtpm (pacman -S swtpm)"
@@ -387,7 +403,13 @@ if echo "$preflight_json" | jq -e '.virtio.outdated == true' >/dev/null 2>&1; th
     virtio_pinned="$(echo "$preflight_json" | jq -r '.virtio.pinned')"
     check WINVM15 "virtio-win up-to-date" WARN "pinned ${virtio_pinned}, latest ${virtio_latest} — run: linux/windows-vm/preflight.sh --auto-fix"
 else
-    check WINVM15 "virtio-win up-to-date" PASS "$(echo "$preflight_json" | jq -r '.virtio.latest // .virtio.pinned')"
+    local virtio_iso="${PZ_STATE}/windows-vm/vm/virtio-win.iso"
+    local virtio_version
+    virtio_version="$(echo "$preflight_json" | jq -r '.virtio.latest // .virtio.pinned')"
+    if [ -f "$virtio_iso" ]; then
+        virtio_version="${virtio_version} (ISO cached)"
+    fi
+    check WINVM15 "virtio-win up-to-date" PASS "$virtio_version"
 fi
 
 winapps_status="$(bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" doctor 2>/dev/null || echo '{}')"
