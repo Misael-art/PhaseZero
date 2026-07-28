@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QTimer, Qt
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import QApplication
 
 if __package__ in {None, ""}:
@@ -25,6 +25,14 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _init_icon_theme() -> None:
+    icon_dir = ROOT / "assets" / "icons"
+    if icon_dir.is_dir():
+        paths = QIcon.themeSearchPaths()
+        if str(icon_dir) not in paths:
+            QIcon.setThemeSearchPaths([str(icon_dir), *paths])
 
 
 def apply_theme(app: QApplication, theme: str) -> None:
@@ -56,6 +64,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    _init_icon_theme()
     QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setApplicationName("PhaseZero")

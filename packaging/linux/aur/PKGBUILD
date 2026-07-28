@@ -22,4 +22,8 @@ package() {
     "$pkgdir/usr/share/metainfo/io.phasezero.ControlCenter.metainfo.xml"
   install -Dm644 packaging/linux/io.phasezero.ControlCenter.svg \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg"
+  # Install category/menu SVG icons
+  for icon in assets/icons/hicolor/scalable/apps/*.svg; do
+    install -Dm644 "$icon" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$(basename "$icon")"
+  done
 }

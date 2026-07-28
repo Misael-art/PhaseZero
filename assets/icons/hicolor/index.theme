@@ -1,0 +1,11 @@
+[Icon Theme]
+Name=PhaseZero
+Comment=PhaseZero Control Center icons
+Directories=scalable/apps
+
+[scalable/apps]
+Size=16
+MinSize=16
+MaxSize=256
+Type=Scalable
+Context=Applications

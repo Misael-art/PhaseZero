@@ -27,6 +27,8 @@ install -m755 "$SOURCE/packaging/linux/phasezero-control-center" "$PKG/usr/bin/"
 install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.desktop" "$PKG/usr/share/applications/"
 install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.metainfo.xml" "$PKG/usr/share/metainfo/"
 install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.svg" "$PKG/usr/share/icons/hicolor/scalable/apps/"
+# Install category/Menu SVG icons for XDG menu and Qt theme fallback
+install -m644 "$SOURCE/assets/icons/hicolor/scalable/apps/"*.svg "$PKG/usr/share/icons/hicolor/scalable/apps/"
 if command -v dpkg-deb >/dev/null 2>&1; then
     dpkg-deb --root-owner-group --build "$PKG" "$OUT/"
 else

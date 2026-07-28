@@ -29,13 +29,15 @@ install -m755 packaging/linux/phasezero-control-center %{buildroot}%{_bindir}/
 install -m644 packaging/linux/io.phasezero.ControlCenter.desktop %{buildroot}%{_datadir}/applications/
 install -m644 packaging/linux/io.phasezero.ControlCenter.metainfo.xml %{buildroot}%{_datadir}/metainfo/
 install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
+# Install category/menu SVG icons
+install -m644 assets/icons/hicolor/scalable/apps/*.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
 
 %files
 %{_bindir}/phasezero-control-center
 %{_libdir}/phasezero
 %{_datadir}/applications/io.phasezero.ControlCenter.desktop
 %{_datadir}/metainfo/io.phasezero.ControlCenter.metainfo.xml
-%{_datadir}/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg
+%{_datadir}/icons/hicolor/scalable/apps/*.svg
 
 %changelog
 * Sun Jul 12 2026 PhaseZero <noreply@phasezero.local> - 1.7.2-1
