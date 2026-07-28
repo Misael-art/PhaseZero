@@ -140,7 +140,10 @@ graphics_check() {
 
     [ -e /dev/kvm ] && KVM_ACCESS=true
 
-    if [ -f /usr/share/edk2-ovmf/OVMF_CODE.fd ] || [ -f /usr/share/OVMF/OVMF_CODE.fd ] || [ -f /usr/share/edk2/x64/OVMF_CODE.4m.fd ]; then
+    if pz_path_resolve ovmf_code \
+        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/edk2-ovmf/OVMF_CODE.fd \
+        /usr/share/OVMF/OVMF_CODE.fd >/dev/null 2>&1; then
         OVMF_PRESENT=true
     fi
 
@@ -249,6 +252,16 @@ main() {
         fi
         if $VIRTIO_OUTDATED; then
             virtio_auto_fix
+        fi
+        if ! $OVMF_PRESENT; then
+            pz_info "installing edk2-ovmf..."
+            pz_admin_run pacman -S --noconfirm edk2-ovmf 2>/dev/null || \
+                pz_warn "could not install edk2-ovmf (admin bridge needed)"
+        fi
+        if ! ldconfig -p 2>/dev/null | grep 'virglrenderer' >/dev/null; then
+            pz_info "installing virglrenderer..."
+            pz_admin_run pacman -S --noconfirm virglrenderer 2>/dev/null || \
+                pz_warn "could not install virglrenderer (admin bridge needed)"
         fi
     fi
 

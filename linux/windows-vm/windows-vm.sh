@@ -535,15 +535,11 @@ detect_virtio_iso() {
 }
 
 ovmf_code_path() {
-    local path
-    for path in \
+    pz_path_resolve ovmf_code \
         /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/edk2/x64/OVMF_CODE.4m.fd \
         /usr/share/OVMF/OVMF_CODE.secboot.fd \
-        /usr/share/OVMF/OVMF_CODE.fd; do
-        [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
-    done
-    return 0
+        /usr/share/OVMF/OVMF_CODE.fd || true
 }
 
 ovmf_vars_template() {

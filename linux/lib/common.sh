@@ -1303,3 +1303,20 @@ pz_boot_efi_stub_remove() {
     fi
     pz_info "EFI stub NVRAM entry removed"
 }
+
+# pz_path_resolve <name> [paths...]
+# Retorna primeiro path (arquivo ou diretório) existente, ou vazio.
+# Exemplo:
+#   OVMF_CODE="$(pz_path_resolve ovmf_code \
+#       /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+#       /usr/share/edk2-ovmf/OVMF_CODE.fd \
+#       /usr/share/OVMF/OVMF_CODE.fd)" || true
+pz_path_resolve() {
+    local name="$1" p
+    shift
+    [ $# -eq 0 ] && { pz_warn "pz_path_resolve($name): no paths given"; return 1; }
+    for p in "$@"; do
+        [ -e "$p" ] && { printf '%s\n' "$p"; return 0; }
+    done
+    return 1
+}

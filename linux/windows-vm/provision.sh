@@ -647,11 +647,18 @@ run_setup() {
     cpus="$(jq -r '.resources.cpus // 4' "$plan_file")"
 
     local ovmf_code ovmf_vars
-    ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(find /usr -name 'OVMF_CODE.fd' 2>/dev/null | head -1)}"
+    ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/OVMF/OVMF_CODE.secboot.fd \
+        /usr/share/OVMF/OVMF_CODE.fd || true)}"
     ovmf_vars="$vm_dir/OVMF_VARS.fd"
     if [ ! -f "$ovmf_vars" ]; then
-        local vars_template="${ovmf_code%CODE.fd}VARS.fd"
-        [ -f "$vars_template" ] && cp "$vars_template" "$ovmf_vars"
+        local vars_template
+        vars_template="$(pz_path_resolve ovmf_vars_template \
+            /usr/share/edk2/x64/OVMF_VARS.4m.fd \
+            /usr/share/OVMF/OVMF_VARS.fd 2>/dev/null || true)"
+        [ -n "$vars_template" ] && cp "$vars_template" "$ovmf_vars"
     fi
 
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
@@ -659,7 +666,6 @@ run_setup() {
 
     local qemu_args=(
         -machine q35,accel=kvm
-        -cpu host
         -smp "$cpus"
         -m "$ram"
         -drive file="$ovmf_code",if=pflash,format=raw,readonly=on
@@ -729,7 +735,11 @@ run_drivers() {
     local ram cpus
     ram="$(jq -r '.resources.ramMb // 8192' "$plan_file")"
     cpus="$(jq -r '.resources.cpus // 4' "$plan_file")"
-    local ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(find /usr -name 'OVMF_CODE.fd' 2>/dev/null | head -1)}"
+    local ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/OVMF/OVMF_CODE.secboot.fd \
+        /usr/share/OVMF/OVMF_CODE.fd || true)}"
     local ovmf_vars="$vm_dir/OVMF_VARS.fd"
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
 
@@ -857,7 +867,11 @@ run_tweaks() {
     local ram cpus
     ram="$(jq -r '.resources.ramMb // 8192' "$plan_file")"
     cpus="$(jq -r '.resources.cpus // 4' "$plan_file")"
-    local ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(find /usr -name 'OVMF_CODE.fd' 2>/dev/null | head -1)}"
+    local ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/OVMF/OVMF_CODE.secboot.fd \
+        /usr/share/OVMF/OVMF_CODE.fd || true)}"
     local ovmf_vars="$vm_dir/OVMF_VARS.fd"
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
 
@@ -1010,7 +1024,11 @@ run_relaunch() {
     graphics="$(jq -r '.graphics // "compat"' "$plan_file")"
 
     local ovmf_code ovmf_vars
-    ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(find /usr -name 'OVMF_CODE.fd' 2>/dev/null | head -1)}"
+    ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/OVMF/OVMF_CODE.secboot.fd \
+        /usr/share/OVMF/OVMF_CODE.fd || true)}"
     ovmf_vars="$vm_dir/OVMF_VARS.fd"
 
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found for relaunch"; return 1; }
