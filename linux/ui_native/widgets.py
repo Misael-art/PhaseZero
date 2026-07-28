@@ -993,8 +993,11 @@ class ProgressDialog(StatefulDialog):
 class ResultDialog(StatefulDialog):
     history_requested = Signal()
 
-    def __init__(self, result: OperationResult, formatted: str, parent: QWidget | None = None) -> None:
-        super().__init__("Operação concluída" if result.ok else "Operação falhou", "success" if result.ok else "error", parent)
+    def __init__(self, result: OperationResult, formatted: str, parent: QWidget | None = None, *, severity: str | None = None) -> None:
+        sev = severity or ("success" if result.ok else "error")
+        title_map = {"success": "Operação concluída", "warning": "Concluído com avisos", "error": "Operação falhou"}
+        title = title_map.get(sev, "Operação falhou")
+        super().__init__(title, sev, parent)
         self.formatted = formatted
         path = QLabel(f"result.json: {result.result_path}")
         path.setObjectName("pathLabel")

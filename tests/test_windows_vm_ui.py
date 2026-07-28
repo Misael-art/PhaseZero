@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QApplication, QPlainTextEdit, QTextEdit
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.command_runner import CommandRunner
 from linux.ui_native.pages.windows_vm import WindowsVMPage
+from linux.ui_native.result_parser import severity_for
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -313,3 +314,63 @@ def test_custom_flow_passes_custom_value_in_plan(page_and_catalog):
     assert "--graphics" in args
     idx = args.index("--graphics") + 1
     assert args[idx] == "my-custom-profile"
+
+
+# ── Severity classification tests ───────────────────────────────────
+
+def test_severity_diagnostic_nonzero_with_output_warning():
+    assert severity_for({"status": "ok", "checks": []}, exit_code=1, mutable=False) == "warning"
+    assert severity_for(["check1", "check2"], exit_code=1, mutable=False) == "warning"
+    assert severity_for("some output", exit_code=1, mutable=False) == "warning"
+    assert severity_for({"status": "ok"}, exit_code=1, mutable=False) == "warning"
+
+
+def test_severity_diagnostic_nonzero_no_output_error():
+    assert severity_for(None, exit_code=1, mutable=False) == "error"
+    assert severity_for({}, exit_code=1, mutable=False) == "error"
+    assert severity_for([], exit_code=1, mutable=False) == "error"
+    assert severity_for("", exit_code=1, mutable=False) == "error"
+
+
+def test_severity_mutable_nonzero_error():
+    assert severity_for({"k": 1}, exit_code=1, mutable=True) == "error"
+    assert severity_for(None, exit_code=1, mutable=True) == "error"
+
+
+def test_severity_exit_zero_success():
+    assert severity_for({"x": 1}, exit_code=0, mutable=False) == "success"
+    assert severity_for({"x": 1}, exit_code=0, mutable=True) == "success"
+    assert severity_for(None, exit_code=0, mutable=True) == "success"
+
+
+def test_severity_status_field_respected_on_exit_zero():
+    assert severity_for({"status": "degraded"}, exit_code=0, mutable=True) == "warning"
+    assert severity_for({"status": "failed"}, exit_code=0, mutable=True) == "error"
+    assert severity_for({"status": "warn"}, exit_code=0, mutable=False) == "warning"
+
+
+def test_severity_doctor_realworld_fixture():
+    fixture = [
+        "[FAIL] CPU01: CPU temperature <= 85°C — 95°C",
+        "[WARN] MEM01: Total RAM >= 4GB — 0GB",
+        "[PASS] DISK01: Disk space >= 10GB — 250GB",
+    ]
+    assert severity_for(fixture, exit_code=1, mutable=False) == "warning"
+
+
+def test_result_dialog_renders_warning_tone(qapp):
+    from linux.ui_native.widgets import ResultDialog
+    from linux.ui_native.models import OperationResult
+    result = OperationResult("system.doctor", ["doctor"], False, 1, "", "", "", "", parsed=["check"], result_path=None)
+    dialog = ResultDialog(result, "output", severity="warning")
+    assert "Concluído com avisos" in dialog.windowTitle()
+    assert dialog.property("state") == "warning"
+
+
+def test_mutable_install_failure_stays_error(qapp):
+    from linux.ui_native.widgets import ResultDialog
+    from linux.ui_native.models import OperationResult
+    result = OperationResult("windows.provision.start", ["provision"], False, 1, "", "", "", "", parsed=None, result_path=None)
+    dialog = ResultDialog(result, "output")
+    assert "Operação falhou" in dialog.windowTitle()
+    assert dialog.property("state") == "error"

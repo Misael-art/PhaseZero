@@ -118,6 +118,10 @@ class OperationResult:
     def ok(self) -> bool:
         return self.exit_code == 0
 
+    @property
+    def severity(self) -> str:
+        return "success" if self.exit_code == 0 else "error"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "schemaVersion": 1,
