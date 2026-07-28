@@ -738,6 +738,15 @@
       "input_label": "Selecione ISO do Windows"
     },
     {
+      "name": "windows.provision.preflight",
+      "label": "Pré-verificação do host",
+      "command": "windows-vm preflight --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Windows VM",
+      "elevated": false
+    },
+    {
       "name": "windows.provision.plan",
       "label": "Planejar instalação automática",
       "command": "windows-vm provision plan --iso {input} --image-index {image_index} --graphics {graphics} --json",

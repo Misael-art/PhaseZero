@@ -2503,7 +2503,8 @@ case "$ACTION" in
     launch|start|run) launch_vm "$@" ;;
     boot) cmd_boot "$@" ;;
     media|iso) bash "$PZ_ROOT/linux/windows-vm/media-inspect.sh" "$@" ;;
+    preflight|check|readiness) bash "$PZ_ROOT/linux/windows-vm/preflight.sh" "$@" ;;
     provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|boot|media|provision)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|boot|media|preflight|provision)"; exit 1 ;;
 esac
