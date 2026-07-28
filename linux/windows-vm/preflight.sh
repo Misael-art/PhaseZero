@@ -196,7 +196,7 @@ emit_json() {
         --argjson ramMb "$RAM_MB" \
         --argjson cpus "$CPUS" \
         --argjson diskGb "$DISK_GB" \
-        --argjson graphicsFailures "$(printf '%s\n' "${GRAPHICS_FAILURES[@]}" | jq -R . | jq -s -c . 2>/dev/null || echo '[]')" \
+        --argjson graphicsFailures "$(if [ "${#GRAPHICS_FAILURES[@]}" -eq 0 ]; then echo '[]'; else printf '%s\n' "${GRAPHICS_FAILURES[@]}" | jq -R . | jq -s -c .; fi)" \
         '{
             status: $status,
             swtpm: {
