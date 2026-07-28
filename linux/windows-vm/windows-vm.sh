@@ -1644,7 +1644,7 @@ guard_graphics_profile() {
             fi
             if ! command -v "$gfx_qemu_bin" >/dev/null 2>&1; then
                 blockers+=("QEMU ausente: $gfx_qemu_bin")
-            elif ! "$gfx_qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl'; then
+            elif ! "$gfx_qemu_bin" -device help 2>/dev/null | grep 'virtio-vga-gl' >/dev/null; then
                 blockers+=("QEMU sem device virtio-vga-gl")
             elif ! "$gfx_qemu_bin" -display help 2>/dev/null | grep -qw gtk; then
                 blockers+=("QEMU sem display GTK necessario para gtk,gl=on")

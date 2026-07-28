@@ -146,12 +146,12 @@ graphics_check() {
 
     local has_virtio_vga_gl=false
     if command -v "$qemu_bin" >/dev/null 2>&1; then
-        "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl' && has_virtio_vga_gl=true
+        "$qemu_bin" -device help 2>/dev/null | grep 'virtio-vga-gl' >/dev/null && has_virtio_vga_gl=true
     fi
     $has_virtio_vga_gl || GRAPHICS_FAILURES+=("QEMU lacks virtio-vga-gl device")
 
     local virgl_ok=false
-    ldconfig -p 2>/dev/null | grep -q 'virglrenderer' && virgl_ok=true
+    ldconfig -p 2>/dev/null | grep 'virglrenderer' >/dev/null && virgl_ok=true
     $virgl_ok || GRAPHICS_FAILURES+=("virglrenderer library not found")
 
     if [ -e /dev/kvm ] && [ -n "$render_node" ] && $has_virtio_vga_gl && $virgl_ok; then

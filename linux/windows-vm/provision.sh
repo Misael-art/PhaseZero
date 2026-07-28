@@ -385,7 +385,7 @@ graphics_preflight() {
             [ -n "$render_node" ] || failures+=("no accessible render node (need mesa/virgl)")
             local has_virtio_vga_gl=0
             if command -v "$qemu_bin" >/dev/null 2>&1; then
-                "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl' && has_virtio_vga_gl=1
+                "$qemu_bin" -device help 2>/dev/null | grep 'virtio-vga-gl' >/dev/null && has_virtio_vga_gl=1
             fi
             local qemu_has_virtio_vga_gl="${PZ_GFX_QEMU_VIRTIO_VGA_GL:-}"
             if [ -n "$qemu_has_virtio_vga_gl" ]; then
@@ -396,7 +396,7 @@ graphics_preflight() {
             if [ -n "${PZ_GFX_VIRGL_PRESENT:-}" ]; then
                 [ "$PZ_GFX_VIRGL_PRESENT" = "1" ] && has_virgl=1
             else
-                ldconfig -p 2>/dev/null | grep -q 'virglrenderer' && has_virgl=1
+                ldconfig -p 2>/dev/null | grep 'virglrenderer' >/dev/null && has_virgl=1
             fi
             [ "$has_virgl" = "1" ] || failures+=("virglrenderer library not found")
             if [ -z "${PZ_GFX_AMDGPU_BOUND:-}" ]; then
