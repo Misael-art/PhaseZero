@@ -20,7 +20,7 @@ assert_eq() {
 
 assert_contains() {
     local label="$1" haystack="$2" needle="$3"
-    if echo "$haystack" | grep -q "$needle"; then
+    if echo "$haystack" | grep -F -q "$needle"; then
         echo "  PASS: $label"
         PASS=$((PASS + 1))
     else
@@ -362,6 +362,16 @@ assert_eq "auto-fix completes without error" "0" "$HAS_ERROR"
 rm -rf "$PZ_STATE_DIR3"
 
 rm -rf "$DUMMY_ISO" "$(dirname "$DUMMY_ISO")" "$PZ_STATE_DIR"
+
+echo ""
+echo "=== resilient checks: preflight detection ==="
+
+RESILIENT_PREFLIGHT="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>/dev/null || echo '{}')"
+assert_contains "ovmf detected" "$RESILIENT_PREFLIGHT" '"ovmfPresent": true'
+assert_contains "graphics failures empty" "$RESILIENT_PREFLIGHT" '"failures": []'
+assert_contains "swtpm running" "$RESILIENT_PREFLIGHT" '"running": true'
+assert_contains "graphics supported" "$RESILIENT_PREFLIGHT" '"supported": true'
+assert_contains "virtio not outdated" "$RESILIENT_PREFLIGHT" '"outdated": false'
 
 echo ""
 echo "=== results ==="
