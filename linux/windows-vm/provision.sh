@@ -39,7 +39,7 @@ provision_plan() {
     local iso="" ram="" cpus="" disk_size="256G" lang="pt-BR" keyboard="pt-BR" timezone="America/Sao_Paulo"
     local user="phasezero" product_key="" tpm_bypass=0 graphics="compat" appx_deny="default"
     local image_index=1
-    local JSON_OUT=0 DRY_RUN=0
+    local JSON_OUT=0 DRY_RUN=0 AUTO_FIX=0
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -57,12 +57,18 @@ provision_plan() {
             --tpm-bypass) tpm_bypass=1; shift ;;
             --graphics) graphics="${2:-}"; shift 2 ;; --graphics=*) graphics="${1#*=}"; shift ;;
             --json) JSON_OUT=1; shift ;;
+            --auto-fix) AUTO_FIX=1; shift ;;
             -n|--dry-run) DRY_RUN=1; shift ;;
             *) pz_error "unknown plan option: $1"; return 1 ;;
         esac
     done
 
     [ -n "$iso" ] || { pz_error "--iso required"; return 1; }
+
+    if [ "$AUTO_FIX" = "1" ]; then
+        pz_info "running preflight with auto-fix..."
+        bash "$PZ_ROOT/linux/windows-vm/preflight.sh --auto-fix" 2>&1 || true
+    fi
 
     local iso_ok=1 iso_sha="" iso_arch="x64" iso_uefi=1 iso_errors="[]"
     if [ ! -f "$iso" ]; then iso_ok=0; iso_errors="[\"ISO not found\"]"; fi
@@ -83,9 +89,30 @@ provision_plan() {
     local virtio_url="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.262-1/virtio-win-0.1.262.iso"
     local virtio_sha_expected="9cfd0520453b262bb38c2d14bb5f24ccae4bd4e14ef85fc18ef9f1af3c4681a9"
 
+    local preflight_json preflight_status
+    preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>/dev/null || echo '{"status":"fail"}')"
+    preflight_status="$(echo "$preflight_json" | jq -r '.status // "fail"')"
+
     local blockers="[]"
     if [ "$iso_ok" != "1" ]; then
         blockers="[\"ISO file not found or unreadable\"]"
+    fi
+    if [ "$preflight_status" = "fail" ]; then
+        local swtpm_missing
+        swtpm_missing=$(echo "$preflight_json" | jq -r '.swtpm.binary == false' 2>/dev/null)
+        if [ "$swtpm_missing" = "true" ]; then
+            local fail_msg="swtpm binary not found — TPM 2.0 required for Windows 11"
+            blockers="$(echo "$blockers" | jq --arg m "$fail_msg" '. + [$m]')"
+        fi
+    fi
+
+    local warnings="[]"
+    if [ "$preflight_status" = "warn" ]; then
+        local swtpm_not_running virtio_outdated
+        swtpm_not_running=$(echo "$preflight_json" | jq -r '.swtpm.running == false' 2>/dev/null)
+        virtio_outdated=$(echo "$preflight_json" | jq -r '.virtio.outdated' 2>/dev/null)
+        [ "$swtpm_not_running" = "true" ] && warnings="$(echo "$warnings" | jq '. + ["swtpm daemon not running — VM may fail to boot with TPM error"]')"
+        [ "$virtio_outdated" = "true" ] && warnings="$(echo "$warnings" | jq '. + ["virtio-win outdated — latest may improve driver compatibility"]')"
     fi
 
     local destructive_ops="[]"
@@ -104,6 +131,8 @@ provision_plan() {
         --argjson isoUefi "$iso_uefi" \
         --argjson isoValid "$iso_ok" \
         --argjson blockers "$blockers" \
+        --argjson preflight "$preflight_json" \
+        --argjson warnings "$warnings" \
         --arg ram "$json_ram" \
         --arg cpus "$json_cpus" \
         --arg diskSize "$disk_size" \
@@ -136,6 +165,8 @@ provision_plan() {
             tpmBypass: $tpmBypass,
             profile: "performance-safe",
             destructiveOps: $destructiveOps,
+            preflight: $preflight,
+            warnings: $warnings,
             blockers: $blockers,
             createdAt: $createdAt
         }' > "$plan_file"
@@ -149,6 +180,11 @@ provision_plan() {
         if [ "$(echo "$blockers" | jq '. | length')" -gt 0 ]; then
             pz_warn "plan has blockers:"
             echo "$blockers" | jq -r '.[]' | while IFS= read -r b; do echo "  - $b"; done
+        fi
+        if [ "$(echo "$warnings" | jq '. | length')" -gt 0 ]; then
+            pz_warn "preflight warnings:"
+            echo "$warnings" | jq -r '.[]' | while IFS= read -r w; do echo "  - $w"; done
+            pz_info "run with --auto-fix to start swtpm and download latest virtio-win"
         fi
     fi
 }

@@ -366,6 +366,24 @@ elif jq -e '.runtime.status != "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
 else
     check WINVM11 "Windows graphics integration" WARN "run: linux/pz windows-vm graphics doctor --json$winvm_deck_note"
 fi
+local preflight_json=""
+preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh --json" 2>/dev/null || echo '{}')"
+if echo "$preflight_json" | jq -e '.swtpm.binary == true and .swtpm.running == true' >/dev/null 2>&1; then
+    check WINVM14 "swtpm daemon running" PASS "$(echo "$preflight_json" | jq -r '.swtpm.socket')"
+elif echo "$preflight_json" | jq -e '.swtpm.binary == true' >/dev/null 2>&1; then
+    check WINVM14 "swtpm daemon running" WARN "binary present but daemon not running — run: linux/windows-vm/preflight.sh --auto-fix"
+else
+    check WINVM14 "swtpm daemon running" WARN "install swtpm (pacman -S swtpm)"
+fi
+if echo "$preflight_json" | jq -e '.virtio.outdated == true' >/dev/null 2>&1; then
+    local virtio_latest virtio_pinned
+    virtio_latest="$(echo "$preflight_json" | jq -r '.virtio.latest')"
+    virtio_pinned="$(echo "$preflight_json" | jq -r '.virtio.pinned')"
+    check WINVM15 "virtio-win up-to-date" WARN "pinned ${virtio_pinned}, latest ${virtio_latest} — run: linux/windows-vm/preflight.sh --auto-fix"
+else
+    check WINVM15 "virtio-win up-to-date" PASS "$(echo "$preflight_json" | jq -r '.virtio.latest // .virtio.pinned')"
+fi
+
 winapps_status="$(bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" doctor 2>/dev/null || echo '{}')"
 if jq -e '.healthy == true' <<< "$winapps_status" >/dev/null 2>&1; then
     check WINVM12 "WinBoat + WinPodX Podman host" PASS "verified AppImages; guests stopped by default"

@@ -304,6 +304,63 @@ assert_contains "venus notes mention Vulkan" "$VENUS_NOTES" "Vulkan"
 assert_contains "venus notes mention experimental" "$VENUS_NOTES" "EXPERIMENTAL"
 assert_contains "venus notes mention Deck" "$VENUS_NOTES" "Steam Deck"
 
+echo ""
+echo "=== preflight: JSON output structure ==="
+PREFLIGHT_SCRIPT="$PZ_ROOT/linux/windows-vm/preflight.sh"
+PRE_OUT=$(bash "$PREFLIGHT_SCRIPT" --json 2>/dev/null || echo '{}')
+# Convert jq boolean output to "1"/"0" so assert_eq works
+pre_has() { echo "$PRE_OUT" | jq "has($1)" 2>/dev/null | grep -q true && echo 1 || echo 0; }
+pre_sub_has() { echo "$PRE_OUT" | jq ".$1 | has($2)" 2>/dev/null | grep -q true && echo 1 || echo 0; }
+assert_eq "preflight has status" "1" "$(pre_has '"status"')"
+assert_eq "preflight has swtpm" "1" "$(pre_has '"swtpm"')"
+assert_eq "preflight has virtio" "1" "$(pre_has '"virtio"')"
+assert_eq "preflight has graphics" "1" "$(pre_has '"graphics"')"
+assert_eq "preflight has resources" "1" "$(pre_has '"resources"')"
+assert_eq "swtpm has binary" "1" "$(pre_sub_has 'swtpm' '"binary"')"
+assert_eq "swtpm has running" "1" "$(pre_sub_has 'swtpm' '"running"')"
+assert_eq "virtio has pinned" "1" "$(pre_sub_has 'virtio' '"pinned"')"
+assert_eq "virtio has latest" "1" "$(pre_sub_has 'virtio' '"latest"')"
+assert_eq "virtio has outdated" "1" "$(pre_sub_has 'virtio' '"outdated"')"
+assert_eq "resources has ramMb" "1" "$(pre_sub_has 'resources' '"ramMb"')"
+assert_eq "resources has cpus" "1" "$(pre_sub_has 'resources' '"cpus"')"
+assert_eq "resources has diskGb" "1" "$(pre_sub_has 'resources' '"diskGb"')"
+assert_eq "resources has kvmAccess" "1" "$(pre_sub_has 'resources' '"kvmAccess"')"
+assert_eq "resources has ovmfPresent" "1" "$(pre_sub_has 'resources' '"ovmfPresent"')"
+
+echo ""
+echo "=== preflight: swtpm detection ==="
+SWTPM_BINARY=$(echo "$PRE_OUT" | jq -r '.swtpm.binary' 2>/dev/null || echo "false")
+if command -v swtpm >/dev/null 2>&1; then
+    assert_eq "swtpm binary detected when installed" "true" "$SWTPM_BINARY"
+else
+    assert_eq "swtpm binary not detected when missing" "false" "$SWTPM_BINARY"
+fi
+
+echo ""
+echo "=== provision plan includes preflight ==="
+# Create a fresh state dir for plan test
+PZ_STATE_DIR2="$(mktemp -d)"
+PLAN_PRE=$(PZ_STATE="$PZ_STATE_DIR2" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --json 2>/dev/null || echo '{}')
+assert_eq "plan has preflight field" "1" "$(echo "$PLAN_PRE" | jq 'has("preflight")' 2>/dev/null | grep -q true && echo 1 || echo 0)"
+PLAN_PRE_SWTPM=$(echo "$PLAN_PRE" | jq -r '.preflight.swtpm.binary' 2>/dev/null || echo "false")
+if command -v swtpm >/dev/null 2>&1; then
+    assert_eq "plan.preflight.swtpm matches host" "true" "$PLAN_PRE_SWTPM"
+fi
+PLAN_PRE_STATUS=$(echo "$PLAN_PRE" | jq -r '.preflight.status' 2>/dev/null || echo "")
+assert_eq "plan.preflight status is pass/warn/fail" "1" "$(echo "$PLAN_PRE_STATUS" | grep -cE '^(pass|warn|fail)$' || echo 0)"
+assert_eq "plan has warnings array" "1" "$(echo "$PLAN_PRE" | jq 'has("warnings")' 2>/dev/null | grep -q true && echo 1 || echo 0)"
+
+rm -rf "$PZ_STATE_DIR2"
+
+echo ""
+echo "=== preflight: auto-fix dry run ==="
+PZ_STATE_DIR3="$(mktemp -d)"
+AUTO_FIX_OUT=$(PZ_STATE="$PZ_STATE_DIR3" bash "$PREFLIGHT_SCRIPT" --auto-fix 2>&1 || true)
+HAS_ERROR=0
+echo "$AUTO_FIX_OUT" | grep -q '^ERROR' 2>/dev/null && HAS_ERROR=1
+assert_eq "auto-fix completes without error" "0" "$HAS_ERROR"
+rm -rf "$PZ_STATE_DIR3"
+
 rm -rf "$DUMMY_ISO" "$(dirname "$DUMMY_ISO")" "$PZ_STATE_DIR"
 
 echo ""

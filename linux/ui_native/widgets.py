@@ -902,6 +902,23 @@ class PreviewDialog(StatefulDialog):
         chips.addWidget(StatusPill("Admin", "warning" if action and action.elevated else "info", "necessário" if action and action.elevated else "não"))
         chips.addStretch()
         self.body.addLayout(chips)
+        if isinstance(result.parsed, dict):
+            warnings = result.parsed.get("warnings", None)
+            if warnings and isinstance(warnings, list) and len(warnings) > 0:
+                warn_box = QWidget()
+                warn_layout = QVBoxLayout(warn_box)
+                warn_layout.setContentsMargins(0, 0, 0, 0)
+                warn_layout.setSpacing(4)
+                for w in warnings:
+                    row = QHBoxLayout()
+                    row.setContentsMargins(0, 0, 0, 0)
+                    pill = StatusPill("atenção", "warning")
+                    label = QLabel(w)
+                    label.setWordWrap(True)
+                    row.addWidget(pill)
+                    row.addWidget(label, 1)
+                    warn_layout.addLayout(row)
+                self.body.addWidget(warn_box)
         command = QLineEdit(sanitized_command(result.command))
         command.setObjectName("commandBar")
         command.setReadOnly(True)

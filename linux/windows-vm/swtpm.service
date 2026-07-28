@@ -1,0 +1,18 @@
+[Unit]
+Description=SWTPM emulator — TPM 2.0 for QEMU VMs
+Documentation=man:swtpm(1)
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/swtpm socket --tpm2 \
+    --tpmstate dir=%h/.local/share/swtpm \
+    --ctrl type=unixio,path=%t/swtpm.sock,terminate \
+    --pid file=%t/swtpm.pid \
+    --log file=%h/.local/state/swtpm.log,level=20
+ExecStop=/usr/bin/swtpm_ioctl --unix %t/swtpm.sock shutdown
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

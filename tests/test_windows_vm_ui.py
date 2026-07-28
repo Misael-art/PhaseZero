@@ -374,3 +374,78 @@ def test_mutable_install_failure_stays_error(qapp):
     dialog = ResultDialog(result, "output")
     assert "Operação falhou" in dialog.windowTitle()
     assert dialog.property("state") == "error"
+
+
+def test_preview_dialog_shows_warnings(qapp):
+    from PySide6.QtWidgets import QLabel, QPlainTextEdit
+    from linux.ui_native.widgets import PreviewDialog
+    from linux.ui_native.models import OperationResult, ActionSpec
+    parsed = {
+        "id": "plan-test",
+        "warnings": ["swtpm daemon not running", "virtio-win outdated"],
+        "blockers": [],
+    }
+    action = ActionSpec(
+        id="windows.provision.plan",
+        category="Windows VM",
+        title="Planejar",
+        description="desc",
+        args=("windows-vm", "provision", "plan", "--json"),
+        icon="document-properties",
+        badge="Seguro",
+    )
+    result = OperationResult(
+        "windows.provision.plan",
+        ["windows-vm", "provision", "plan", "--json"],
+        True, 0, "output", "", "", "",
+        parsed=parsed, result_path=None,
+    )
+    dialog = PreviewDialog(result, action)
+    labels = dialog.findChildren(QLabel)
+    assert any("swtpm" in lbl.text() or "daemon not running" in lbl.text() for lbl in labels)
+    dialog.deleteLater()
+
+
+def test_preview_dialog_no_warnings_still_works(qapp):
+    from linux.ui_native.widgets import PreviewDialog
+    from linux.ui_native.models import OperationResult
+    parsed = {"id": "plan-test", "blockers": []}
+    result = OperationResult(
+        "windows.provision.plan",
+        ["windows-vm", "provision", "plan", "--json"],
+        True, 0, "output", "", "", "",
+        parsed=parsed, result_path=None,
+    )
+    dialog = PreviewDialog(result)
+    assert dialog.property("state") == "success"
+    assert dialog.confirm.isEnabled()
+    dialog.deleteLater()
+
+
+def test_preflight_json_in_plan_integration(request):
+    import json, subprocess, tempfile, os, shutil
+    root = os.path.join(os.path.dirname(__file__), "..")
+    dummy_iso = tempfile.mktemp(suffix=".iso")
+    with open(dummy_iso, "wb") as f:
+        f.write(b"\0" * 1024 * 1024)
+    state_dir = tempfile.mkdtemp()
+    env = {**os.environ, "PZ_STATE": state_dir}
+    proc = subprocess.run(
+        ["bash", f"{root}/linux/windows-vm/provision.sh", "plan",
+         "--iso", dummy_iso, "--json"],
+        capture_output=True, text=True, env=env, timeout=30,
+    )
+    os.unlink(dummy_iso)
+    shutil.rmtree(state_dir, ignore_errors=True)
+    assert proc.returncode == 0, f"plan stderr={proc.stderr}"
+    plan = json.loads(proc.stdout)
+    assert "preflight" in plan, f"plan keys: {list(plan.keys())}"
+    pf = plan["preflight"]
+    assert "status" in pf
+    assert pf["status"] in ("pass", "warn", "fail")
+    assert "swtpm" in pf
+    assert "virtio" in pf
+    assert "graphics" in pf
+    assert "resources" in pf
+    assert "warnings" in plan
+    assert isinstance(plan["warnings"], list)
