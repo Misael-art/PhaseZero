@@ -28,6 +28,7 @@ install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.desktop" "$PKG
 install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.metainfo.xml" "$PKG/usr/share/metainfo/"
 install -m644 "$SOURCE/packaging/linux/io.phasezero.ControlCenter.svg" "$PKG/usr/share/icons/hicolor/scalable/apps/"
 if command -v dpkg-deb >/dev/null 2>&1; then
+    chmod -R u=rwX,go=rX "$PKG"
     dpkg-deb --root-owner-group --build "$PKG" "$OUT/"
 else
     command -v ar >/dev/null || { echo "dpkg-deb/ar missing" >&2; exit 69; }
