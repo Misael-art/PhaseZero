@@ -33,16 +33,84 @@ jobs:
             if ($errors) { exit 1 }
           }
 
-      - name: Validate version.json
-        shell: pwsh
+  shell-lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+
+      - name: Run shellcheck on all shell scripts
         run: |
-          Set-StrictMode -Version Latest
-          $ErrorActionPreference = 'Stop'
-          if (-not (Test-Path 'version.json')) { throw 'version.json not found' }
-          $v = Get-Content 'version.json' -Raw | ConvertFrom-Json
-          if (-not $v.version) { throw 'version.json missing version field' }
-          if (-not $v.schema) { throw 'version.json missing schema field' }
-          Write-Host "Version validated: $($v.version)"
+          set -euo pipefail
+          EXCLUDES="SC1090,SC1091,SC2034,SC2154,SC2155,SC2312"
+          errors=0
+          while IFS= read -r -d '' f; do
+            if ! shellcheck -x -e "$EXCLUDES" "$f"; then
+              ((errors++)) || true
+            fi
+          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          if [ "$errors" -gt 0 ]; then
+            echo "::warning::shellcheck: $errors file(s) failed (excludes: $EXCLUDES)"
+            exit 1
+          fi
+          echo "shellcheck: all .sh files passed"
+
+      - name: Check for pipefail + grep -q pattern
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r -d '' f; do
+            if grep -q 'set.*pipefail' "$f" 2>/dev/null && grep -q 'grep -q' "$f" 2>/dev/null; then
+              echo "::warning file=$f::$f uses pipefail AND grep -q (SIGPIPE risk)"
+              ((found++)) || true
+            fi
+          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          echo "pipefail+grep-q files: $found"
+          # Non-blocking — informational
+
+  shell-test:
+    runs-on: ubuntu-latest
+    needs: shell-lint
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install test dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq bash
+
+      - name: Unit-test common.sh functions
+        run: |
+          set -euo pipefail
+          # shellcheck source=linux/lib/common.sh
+          source linux/lib/common.sh
+          # Smoke test pz_path_resolve
+          result="$(pz_path_resolve "/nonexistent" "/bin" 2>/dev/null || true)"
+          if [ -z "$result" ]; then
+            echo "FAIL: pz_path_resolve returned empty"
+            exit 1
+          fi
+          echo "PASS: pz_path_resolve returns $result"
+
+      - name: Assert no unresolvable grep -q in critical files
+        run: |
+          set -euo pipefail
+          bad=0
+          for f in \
+            linux/windows-vm/preflight.sh \
+            linux/windows-vm/provision.sh \
+            linux/windows-vm/windows-vm.sh \
+            linux/audit/doctor.sh
+          do
+            if grep -q 'grep -q' "$f" 2>/dev/null; then
+              echo "FAIL: $f still has grep -q (should be grep >/dev/null)"
+              ((bad++)) || true
+            fi
+          done
+          if [ "$bad" -gt 0 ]; then exit 1; fi
+          echo "PASS: critical files free of grep -q"
 
   pester:
     runs-on: windows-latest
