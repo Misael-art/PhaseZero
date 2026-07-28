@@ -9,8 +9,8 @@ SWTPM_RUNNING=false
 SWTPM_SOCKET=""
 SWTPM_PID=""
 SWTPM_SERVICE_INSTALLED=false
-VIRTIO_PINNED="0.1.262"
-VIRTIO_PINNED_SHA="9cfd0520453b262bb38c2d14bb5f24ccae4bd4e14ef85fc18ef9f1af3c4681a9"
+VIRTIO_PINNED="0.1.285"
+VIRTIO_PINNED_SHA="e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976331"
 VIRTIO_LATEST=""
 VIRTIO_LATEST_URL=""
 VIRTIO_OUTDATED=false
@@ -140,7 +140,7 @@ graphics_check() {
 
     [ -e /dev/kvm ] && KVM_ACCESS=true
 
-    if [ -f /usr/share/edk2-ovmf/OVMF_CODE.fd ] || [ -f /usr/share/OVMF/OVMF_CODE.fd ]; then
+    if [ -f /usr/share/edk2-ovmf/OVMF_CODE.fd ] || [ -f /usr/share/OVMF/OVMF_CODE.fd ] || [ -f /usr/share/edk2/x64/OVMF_CODE.4m.fd ]; then
         OVMF_PRESENT=true
     fi
 

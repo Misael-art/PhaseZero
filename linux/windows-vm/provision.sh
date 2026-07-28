@@ -86,8 +86,8 @@ provision_plan() {
     timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
     local virtio_source="auto"
-    local virtio_url="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.262-1/virtio-win-0.1.262.iso"
-    local virtio_sha_expected="9cfd0520453b262bb38c2d14bb5f24ccae4bd4e14ef85fc18ef9f1af3c4681a9"
+    local virtio_url="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.285-1/virtio-win-0.1.285.iso"
+    local virtio_sha_expected="e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976331"
 
     local preflight_json preflight_status preflight_stderr
     preflight_stderr="$(mktemp)" || true
