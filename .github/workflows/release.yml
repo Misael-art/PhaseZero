@@ -57,7 +57,7 @@ jobs:
             APPIMAGE_EXTRACT_AND_RUN=1 \
             bash packaging/linux/build-all.sh "$GITHUB_WORKSPACE/dist"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-packages
           path: |
@@ -91,7 +91,7 @@ jobs:
           manifest-path: packaging/linux/flatpak/io.phasezero.ControlCenter.yml
           cache-key: flatpak-builder-${{ github.sha }}
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: flatpak
           path: PhaseZero-*.flatpak
