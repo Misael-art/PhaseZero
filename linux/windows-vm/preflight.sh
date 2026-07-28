@@ -231,38 +231,93 @@ emit_json() {
         }'
 }
 
-main() {
-    local AUTO_FIX=false JSON_OUT=false
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --auto-fix) AUTO_FIX=true; shift ;;
-            --json) JSON_OUT=true; shift ;;
-            *) pz_error "unknown preflight option: $1"; return 1 ;;
-        esac
-    done
-
+run_checks() {
     resource_check
     swtpm_check
     virtio_check
     graphics_check
+}
+
+do_auto_fix() {
+    if ! $SWTPM_RUNNING; then
+        swtpm_auto_fix
+    fi
+    if $VIRTIO_OUTDATED; then
+        virtio_auto_fix
+    fi
+    if ! $OVMF_PRESENT; then
+        pz_info "installing edk2-ovmf..."
+        pz_admin_run pacman -S --noconfirm edk2-ovmf 2>/dev/null || \
+            pz_warn "could not install edk2-ovmf (admin bridge needed)"
+    fi
+    if ! ldconfig -p 2>/dev/null | grep 'virglrenderer' >/dev/null; then
+        pz_info "installing virglrenderer..."
+        pz_admin_run pacman -S --noconfirm virglrenderer 2>/dev/null || \
+            pz_warn "could not install virglrenderer (admin bridge needed)"
+    fi
+}
+
+emit_event() {
+    local transition="$1" key="$2" old_val="$3" new_val="$4"
+    jq -n \
+        --arg ts "$(date -Iseconds)" \
+        --arg transition "$transition" \
+        --arg key "$key" \
+        --arg old "$old_val" \
+        --arg new "$new_val" \
+        '{timestamp: $ts, transition: $transition, key: $key, old: $old, new: $new}'
+}
+
+watch_loop() {
+    local interval="${PZ_PREFLIGHT_WATCH_INTERVAL:-60}"
+    local prev_state=""
+    local cur_state key
+
+    run_checks
+    prev_state="$(emit_json 2>/dev/null || echo '{}')"
+
+    while true; do
+        sleep "$interval"
+        run_checks
+        cur_state="$(emit_json 2>/dev/null || echo '{}')"
+
+        for key in swtpm.running swtpm.binary virtio.outdated graphics.supported ovmfPresent; do
+            local old_val new_val
+            old_val="$(echo "$prev_state" | jq -r ".$key" 2>/dev/null || echo 'null')"
+            new_val="$(echo "$cur_state" | jq -r ".$key" 2>/dev/null || echo 'null')"
+            if [ "$old_val" != "$new_val" ] && [ "$old_val" != "null" ]; then
+                if [ "$new_val" = "true" ]; then
+                    emit_event recovered "$key" "$old_val" "$new_val"
+                elif [ "$new_val" = "false" ]; then
+                    emit_event degraded "$key" "$old_val" "$new_val"
+                fi
+            fi
+        done
+        prev_state="$cur_state"
+    done
+}
+
+main() {
+    local AUTO_FIX=false JSON_OUT=false WATCH=false
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --auto-fix) AUTO_FIX=true; shift ;;
+            --json) JSON_OUT=true; shift ;;
+            --watch) WATCH=true; shift ;;
+            --interval) PZ_PREFLIGHT_WATCH_INTERVAL="${2:-60}"; shift 2 ;;
+            *) pz_error "unknown preflight option: $1"; return 1 ;;
+        esac
+    done
+
+    run_checks
+
+    if $WATCH; then
+        watch_loop
+        return 0
+    fi
 
     if $AUTO_FIX; then
-        if ! $SWTPM_RUNNING; then
-            swtpm_auto_fix
-        fi
-        if $VIRTIO_OUTDATED; then
-            virtio_auto_fix
-        fi
-        if ! $OVMF_PRESENT; then
-            pz_info "installing edk2-ovmf..."
-            pz_admin_run pacman -S --noconfirm edk2-ovmf 2>/dev/null || \
-                pz_warn "could not install edk2-ovmf (admin bridge needed)"
-        fi
-        if ! ldconfig -p 2>/dev/null | grep 'virglrenderer' >/dev/null; then
-            pz_info "installing virglrenderer..."
-            pz_admin_run pacman -S --noconfirm virglrenderer 2>/dev/null || \
-                pz_warn "could not install virglrenderer (admin bridge needed)"
-        fi
+        do_auto_fix
     fi
 
     if $JSON_OUT; then
