@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shlex
 import time
+from pathlib import Path
 
 from PySide6.QtCore import (
     QEasingCurve,
@@ -44,9 +45,42 @@ from .models import ActionSpec, OperationResult
 from .platform import open_path
 
 
+_ICON_CACHE: dict[str, QIcon] = {}
+_PZ_ICON_DIR: Path | None = None
+
+
+def _pz_icon_dir() -> Path | None:
+    global _PZ_ICON_DIR
+    if _PZ_ICON_DIR is None:
+        candidates = [
+            Path(__file__).resolve().parents[2] / "assets" / "icons" / "hicolor" / "scalable" / "apps",
+            Path("/usr/lib/phasezero/assets/icons/hicolor/scalable/apps"),
+            Path("/usr/share/icons/hicolor/scalable/apps"),
+        ]
+        for c in candidates:
+            if c.is_dir():
+                _PZ_ICON_DIR = c
+                break
+    return _PZ_ICON_DIR
+
+
 def themed_icon(widget: QWidget, name: str, fallback: QStyle.StandardPixmap) -> QIcon:
+    cached = _ICON_CACHE.get(name)
+    if cached is not None:
+        return cached
     icon = QIcon.fromTheme(name)
-    return icon if not icon.isNull() else widget.style().standardIcon(fallback)
+    if icon.isNull():
+        d = _pz_icon_dir()
+        if d is not None:
+            for ext in ("svg", "png"):
+                p = d / f"{name}.{ext}"
+                if p.exists():
+                    icon = QIcon(str(p))
+                    break
+    if icon.isNull():
+        icon = widget.style().standardIcon(fallback)
+    _ICON_CACHE[name] = icon
+    return icon
 
 
 def action_icon(widget: QWidget, action: ActionSpec, size: int = 24) -> QIcon:

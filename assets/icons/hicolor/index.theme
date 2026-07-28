@@ -1,6 +1,6 @@
 [Icon Theme]
-Name=PhaseZero
-Comment=PhaseZero Control Center icons
+Name=hicolor
+Comment=PhaseZero Control Center icon fallback
 Directories=scalable/apps
 
 [scalable/apps]
