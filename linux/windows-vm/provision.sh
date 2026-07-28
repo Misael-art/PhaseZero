@@ -67,7 +67,7 @@ provision_plan() {
 
     if [ "$AUTO_FIX" = "1" ]; then
         pz_info "running preflight with auto-fix..."
-        bash "$PZ_ROOT/linux/windows-vm/preflight.sh --auto-fix" 2>&1 || true
+        bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --auto-fix 2>&1 || pz_warn "preflight auto-fix encountered errors"
     fi
 
     local iso_ok=1 iso_sha="" iso_arch="x64" iso_uefi=1 iso_errors="[]"
@@ -89,8 +89,17 @@ provision_plan() {
     local virtio_url="https://fedorapeople.org/groups/virt/virtio-win/direct-downloads/archive-virtio/virtio-win-0.1.262-1/virtio-win-0.1.262.iso"
     local virtio_sha_expected="9cfd0520453b262bb38c2d14bb5f24ccae4bd4e14ef85fc18ef9f1af3c4681a9"
 
-    local preflight_json preflight_status
-    preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>/dev/null || echo '{"status":"fail"}')"
+    local preflight_json preflight_status preflight_stderr
+    preflight_stderr="$(mktemp)" || true
+    preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>"${preflight_stderr:-/dev/null}" || {
+        pz_warn "preflight check failed — see diagnostics above"
+        echo '{"status":"fail"}'
+    })"
+    if [ -s "${preflight_stderr:-/dev/null}" ]; then
+        pz_warn "preflight diagnostics:"
+        sed 's/^/  /' "$preflight_stderr" >&2
+    fi
+    rm -f "${preflight_stderr:-}"
     preflight_status="$(echo "$preflight_json" | jq -r '.status // "fail"')"
 
     local blockers="[]"
@@ -493,23 +502,36 @@ run_assets() {
     virtio_expected="$(jq -r '.virtio.sha256 // ""' "$plan_file")"
 
     if [ -n "$virtio_url" ] && [ ! -f "$vm_dir/virtio-win.iso" ]; then
-        log_operation "$op" "downloading VirtIO drivers from $virtio_url"
-        local download_ok=0
-        if command -v curl >/dev/null 2>&1; then
-            curl -L -o "$vm_dir/virtio-win.iso" "$virtio_url" && download_ok=1 || true
-        elif command -v wget >/dev/null 2>&1; then
-            wget -O "$vm_dir/virtio-win.iso" "$virtio_url" && download_ok=1 || true
+        local preflight_cache="${PZ_STATE}/windows-vm/vm/virtio-win.iso"
+        if [ -f "$preflight_cache" ]; then
+            local cache_sha
+            cache_sha="$(sha256sum "$preflight_cache" 2>/dev/null | cut -d' ' -f1 || true)"
+            if [ -z "$virtio_expected" ] || [ "$cache_sha" = "$virtio_expected" ]; then
+                log_operation "$op" "reusing preflight-cached virtio-win.iso"
+                ln -f "$preflight_cache" "$vm_dir/virtio-win.iso"
+            else
+                log_operation "$op" "preflight cache SHA mismatch (expected=$virtio_expected cached=$cache_sha) — downloading fresh"
+            fi
         fi
-        if [ "$download_ok" = "1" ] && [ -n "$virtio_expected" ]; then
-            local actual
-            actual="$(sha256sum "$vm_dir/virtio-win.iso" | cut -d' ' -f1)"
-            if [ "$actual" != "$virtio_expected" ]; then
-                log_operation "$op" "FAIL: VirtIO SHA-256 mismatch (expected=$virtio_expected actual=$actual)"
+        if [ ! -f "$vm_dir/virtio-win.iso" ]; then
+            log_operation "$op" "downloading VirtIO drivers from $virtio_url"
+            local download_ok=0
+            if command -v curl >/dev/null 2>&1; then
+                curl -L -o "$vm_dir/virtio-win.iso" "$virtio_url" && download_ok=1 || true
+            elif command -v wget >/dev/null 2>&1; then
+                wget -O "$vm_dir/virtio-win.iso" "$virtio_url" && download_ok=1 || true
+            fi
+            if [ "$download_ok" = "1" ] && [ -n "$virtio_expected" ]; then
+                local actual
+                actual="$(sha256sum "$vm_dir/virtio-win.iso" | cut -d' ' -f1)"
+                if [ "$actual" != "$virtio_expected" ]; then
+                    log_operation "$op" "FAIL: VirtIO SHA-256 mismatch (expected=$virtio_expected actual=$actual)"
+                    return 1
+                fi
+            elif [ "$download_ok" != "1" ]; then
+                log_operation "$op" "FAIL: VirtIO download failed"
                 return 1
             fi
-        elif [ "$download_ok" != "1" ]; then
-            log_operation "$op" "FAIL: VirtIO download failed"
-            return 1
         fi
     fi
 

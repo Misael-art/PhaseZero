@@ -148,9 +148,11 @@ graphics_check() {
     if command -v "$qemu_bin" >/dev/null 2>&1; then
         "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl' && has_virtio_vga_gl=true
     fi
+    $has_virtio_vga_gl || GRAPHICS_FAILURES+=("QEMU lacks virtio-vga-gl device")
 
     local virgl_ok=false
     ldconfig -p 2>/dev/null | grep -q 'virglrenderer' && virgl_ok=true
+    $virgl_ok || GRAPHICS_FAILURES+=("virglrenderer library not found")
 
     if [ -e /dev/kvm ] && [ -n "$render_node" ] && $has_virtio_vga_gl && $virgl_ok; then
         GRAPHICS_SUPPORTED=true
@@ -194,7 +196,7 @@ emit_json() {
         --argjson ramMb "$RAM_MB" \
         --argjson cpus "$CPUS" \
         --argjson diskGb "$DISK_GB" \
-        --arg graphicsFailures "$(IFS=';'; echo "${GRAPHICS_FAILURES[*]}")" \
+        --argjson graphicsFailures "$(printf '%s\n' "${GRAPHICS_FAILURES[@]}" | jq -R . | jq -s -c . 2>/dev/null || echo '[]')" \
         '{
             status: $status,
             swtpm: {
@@ -214,7 +216,7 @@ emit_json() {
                 profile: $graphicsProfile,
                 supported: $graphicsSupported,
                 fallback: $graphicsFallback,
-                failures: ($graphicsFailures | split(";") | map(select(length > 0)))
+                failures: $graphicsFailures
             },
             resources: {
                 ramMb: $ramMb,

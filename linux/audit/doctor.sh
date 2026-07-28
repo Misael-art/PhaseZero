@@ -292,8 +292,14 @@ else
 fi
 if jq -e '.host.ovmfCodeExists == true and .host.swtpm != ""' <<< "$winvm_status" >/dev/null 2>&1; then
     check WINVM03 "Windows 11 firmware/TPM ready" PASS "OVMF + swtpm"
+elif jq -e '.host.ovmfCodeExists == false' <<< "$winvm_status" >/dev/null 2>&1; then
+    if jq -e '.host.swtpm != ""' <<< "$winvm_status" >/dev/null 2>&1; then
+        check WINVM03 "Windows 11 firmware/TPM ready" WARN "OVMF not found — install edk2-ovmf (swtpm OK)"
+    else
+        check WINVM03 "Windows 11 firmware/TPM ready" WARN "install edk2-ovmf and swtpm (both missing)"
+    fi
 else
-    check WINVM03 "Windows 11 firmware/TPM ready" WARN "install edk2-ovmf and swtpm"
+    check WINVM03 "Windows 11 firmware/TPM ready" WARN "swtpm missing — install swtpm (OVMF OK)"
 fi
 if jq -e '.config.installed == true and .vm.diskExists == true' <<< "$winvm_status" >/dev/null 2>&1; then
     check WINVM04 "Windows VM configured" PASS "$(jq -r '.vm.disk' <<< "$winvm_status")"
