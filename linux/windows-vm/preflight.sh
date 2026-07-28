@@ -93,7 +93,7 @@ virtio_check() {
         [ -z "$version" ] && version="$(echo "$url" | sed -n 's|.*virtio-win-\([0-9.]*\)/virtio-win.*|\1|p')" || true
         if [ -n "$version" ]; then
             VIRTIO_LATEST="$version"
-            [ "$VIRTIO_LATEST" != "$VIRTIO_PINNED" ] && VIRTIO_OUTDATED=true
+            [ "$VIRTIO_LATEST" != "$VIRTIO_PINNED" ] && VIRTIO_OUTDATED=true || true
         fi
     fi
 }
