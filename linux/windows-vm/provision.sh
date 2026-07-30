@@ -34,6 +34,43 @@ PLAN_ENDPOINT="${PZ_WINDOWS_VM_PLAN:-$PROVISION_DIR/plans}"
 ACTIVE_LOCK="$PROVISION_DIR/active.lock"
 
 PROVISION_CHECKPOINTS=("validate" "assets" "answer-media" "disk" "setup" "drivers" "tweaks" "verify" "snapshot" "relaunch")
+CP_WEIGHTS=(5 10 5 30 15 10 5 5 10 5)
+
+checkpoint_progress_start() {
+    local current="$1" total=0
+    for ((i=0; i<${#PROVISION_CHECKPOINTS[@]}; i++)); do
+        [ "${PROVISION_CHECKPOINTS[$i]}" = "$current" ] && break
+        total=$((total + CP_WEIGHTS[i]))
+    done
+    [ "$total" -gt 100 ] && total=100
+    echo $total
+}
+
+checkpoint_progress_end() {
+    local current="$1" total=0
+    for ((i=0; i<${#PROVISION_CHECKPOINTS[@]}; i++)); do
+        total=$((total + CP_WEIGHTS[i]))
+        [ "${PROVISION_CHECKPOINTS[$i]}" = "$current" ] && break
+    done
+    [ "$total" -gt 100 ] && total=100
+    echo $total
+}
+
+checkpoint_label() {
+    case "$1" in
+        validate)    echo "Validando ISO e pré-requisitos" ;;
+        assets)      echo "Baixando assets (virtio-win)" ;;
+        answer-media) echo "Preparando mídia de resposta" ;;
+        disk)        echo "Criando disco virtual (256G)" ;;
+        setup)       echo "Instalando Windows" ;;
+        drivers)     echo "Instalando drivers virtio" ;;
+        tweaks)      echo "Aplicando ajustes pós-instalação" ;;
+        verify)      echo "Verificando integridade" ;;
+        snapshot)    echo "Criando snapshot de restauração" ;;
+        relaunch)    echo "Preparando relaunch com display" ;;
+        *)           echo "$1" ;;
+    esac
+}
 
 provision_plan() {
     local iso="" ram="" cpus="" disk_size="256G" lang="pt-BR" keyboard="pt-BR" timezone="America/Sao_Paulo"
@@ -90,7 +127,7 @@ provision_plan() {
     local virtio_sha_expected="e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976331"
 
     local preflight_json preflight_status preflight_stderr
-    preflight_stderr="$(mktemp)" || true
+    preflight_stderr="$(pz_tempfile)" || true
     preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>"${preflight_stderr:-/dev/null}" || {
         pz_warn "preflight check failed — see diagnostics above"
         echo '{"status":"fail"}'
@@ -250,31 +287,41 @@ provision_start() {
     local timestamp
     timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+    local initial_label
+    initial_label="$(checkpoint_label "validate")"
     jq -n \
         --arg id "$operation_id" \
         --arg planId "$plan_id" \
         --arg state "running" \
         --arg checkpoint "validate" \
+        --arg currentLabel "$initial_label" \
         --arg createdAt "$timestamp" \
         '{
             id: $id, planId: $planId, state: $state,
-            checkpoint: $checkpoint, progress: 0,
+            checkpoint: $checkpoint, currentLabel: $currentLabel,
+            progress: 0,
             createdAt: $createdAt, updatedAt: $createdAt,
             checkpoints: {},
             log: []
         }' > "$op_dir/operation.json"
     chmod 0600 "$op_dir/operation.json"
 
-    pz_info "provision started: $operation_id"
-    echo "$operation_id"
+    if [ "$json" = "1" ]; then
+        jq -n \
+            --arg id "$operation_id" \
+            --arg state "running" \
+            --arg checkpoint "validate" \
+            --arg currentLabel "$initial_label" \
+            --arg activeLock "$ACTIVE_LOCK" \
+            '{operationId: $id, state: $state, checkpoint: $checkpoint, currentLabel: $currentLabel, progress: 0, activeLockPath: $activeLock}'
+    else
+        pz_info "provision started: $operation_id"
+        echo "$operation_id"
+    fi
 
     nohup bash "$PZ_ROOT/linux/windows-vm/provision.sh" run --operation-id "$operation_id" \
         > "$op_dir/worker.log" 2>&1 &
     disown
-
-    if [ "$json" = "1" ]; then
-        jq -n --arg id "$operation_id" --arg state "running" '{operationId: $id, state: $state}'
-    fi
 }
 
 provision_run() {
@@ -297,7 +344,23 @@ provision_run() {
         current_state="$(jq -r '.state // "running"' "$op_dir/operation.json")"
         [ "$current_state" = "running" ] || { pz_info "operation state changed to $current_state; stopping"; return 0; }
 
-        update_checkpoint "$operation_id" "$cp" "running"
+        # checkpoint done → skip on resume
+        local cp_status
+        cp_status="$(jq -r --arg cp "$cp" '.checkpoints[$cp] // ""' "$op_dir/operation.json")"
+        [ "$cp_status" = "done" ] && continue
+
+        local start_progress end_progress pre_label
+        start_progress="$(checkpoint_progress_start "$cp")"
+        end_progress="$(checkpoint_progress_end "$cp")"
+        pre_label="$(checkpoint_label "$cp")"
+        local pre_ts; pre_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        jq \
+            --arg p "$start_progress" \
+            --arg l "$pre_label" \
+            --arg cp "$cp" \
+            --arg ts "$pre_ts" \
+            '.checkpoint = $cp | .currentLabel = $l | .progress = ($p|tonumber) | .updatedAt = $ts' \
+            "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
 
         case "$cp" in
             validate)    run_validate "$operation_id" || { fail_operation "$operation_id" "validate"; return 1; } ;;
@@ -313,22 +376,20 @@ provision_run() {
         esac
 
         update_checkpoint "$operation_id" "$cp" "done"
-        local progress
-        progress="$(checkpoint_progress "$cp")"
-        jq --arg p "$progress" '.progress = ($p|tonumber) | .updatedAt = now' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
+
+        local post_ts; post_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        jq \
+            --arg p "$end_progress" \
+            --arg ts "$post_ts" \
+            '.progress = ($p|tonumber) | .updatedAt = $ts' \
+            "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
     done
 
-    jq '.state = "completed" | .updatedAt = now' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
+    local done_ts; done_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    jq --arg ts "$done_ts" '.state = "completed" | .progress = 100 | .updatedAt = $ts' \
+        "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
     rm -f "$ACTIVE_LOCK"
     pz_info "provision completed: $operation_id"
-}
-
-checkpoint_progress() {
-    local current="$1" idx=0 total=${#PROVISION_CHECKPOINTS[@]}
-    for ((i=0; i<total; i++)); do
-        [ "${PROVISION_CHECKPOINTS[$i]}" = "$current" ] && idx=$((i + 1))
-    done
-    echo $((idx * 100 / total))
 }
 
 update_checkpoint() {
@@ -345,7 +406,8 @@ fail_operation() {
     local op="$1" cp="$2"
     local op_dir="$OPERATIONS_DIR/$op"
     update_checkpoint "$op" "$cp" "failed"
-    jq '.state = "failed" | .updatedAt = now' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
+    local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    jq --arg ts "$ts" '.state = "failed" | .updatedAt = $ts' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
 }
 
 HAVE_SOCAT=0
@@ -1102,8 +1164,46 @@ provision_status() {
     [ -d "$op_dir" ] || { pz_error "operation not found: $operation_id"; return 1; }
     [ -f "$op_dir/operation.json" ] || { pz_error "operation metadata missing"; return 1; }
 
+    local vm_dir="" snapshot_path="" qemu_pid_raw="" qemu_pid_num=0
+    local vm_dir_file="$OPERATIONS_DIR/$operation_id/vm_dir"
+    [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
+    local snap_path_file="$OPERATIONS_DIR/$operation_id/snapshot_path"
+    [ -f "$snap_path_file" ] && snapshot_path="$(cat "$snap_path_file")"
+    if [ -n "$vm_dir" ] && [ -f "$vm_dir/qemu-pid" ]; then
+        qemu_pid_raw="$(cat "$vm_dir/qemu-pid")"
+    fi
+    [[ "$qemu_pid_raw" =~ ^[0-9]+$ ]] && qemu_pid_num="$qemu_pid_raw"
+    local qemu_running="false"
+    if [ "$qemu_pid_num" -gt 0 ]; then
+        if kill -0 "$qemu_pid_num" 2>/dev/null; then
+            local cmdline=""
+            [ -r "/proc/${qemu_pid_num}/cmdline" ] && cmdline="$(tr '\0' ' ' < "/proc/${qemu_pid_num}/cmdline")"
+            case "$cmdline" in
+                *qemu-system*|*qemu-kvm*) qemu_running="true" ;;
+            esac
+        fi
+    fi
+    local snapshot_exists="false"
+    [ -n "$snapshot_path" ] && [ -f "$snapshot_path" ] && snapshot_exists="true"
+    local libvirt_running="false"
+    if command -v virsh >/dev/null 2>&1; then
+        local dom_state
+        dom_state="$(virsh domstate phasezero-windows-vm 2>/dev/null || true)"
+        case "$dom_state" in
+            running|paused|idle) libvirt_running="true" ;;
+        esac
+    fi
+
     if [ "$json" = "1" ]; then
-        cat "$op_dir/operation.json"
+        jq -n \
+            --argjson op "$(cat "$op_dir/operation.json")" \
+            --arg vmDir "$vm_dir" \
+            --arg snapshotPath "$snapshot_path" \
+            --argjson snapshotExists "$snapshot_exists" \
+            --argjson qemuPid "$qemu_pid_num" \
+            --argjson qemuRunning "$qemu_running" \
+            --argjson libvirtRunning "$libvirt_running" \
+            '$op + {vmDir: $vmDir, snapshotPath: $snapshotPath, snapshotExists: $snapshotExists, qemuPid: $qemuPid, qemuRunning: $qemuRunning, libvirtRunning: $libvirtRunning}'
     else
         local state checkpoint progress
         state="$(jq -r '.state' "$op_dir/operation.json")"
@@ -1178,7 +1278,8 @@ provision_resume() {
         return 1
     fi
 
-    jq '.state = "running" | .updatedAt = now' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
+    local resume_ts; resume_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    jq --arg ts "$resume_ts" '.state = "running" | .updatedAt = $ts' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
     echo "$operation_id" > "$ACTIVE_LOCK"
 
     nohup bash "$PZ_ROOT/linux/windows-vm/provision.sh" run --operation-id "$operation_id" \
@@ -1216,7 +1317,8 @@ provision_cancel() {
         rm -f "$vm_dir/qemu-pid"
     fi
 
-    jq '.state = "cancelled" | .updatedAt = now' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
+    local cancel_ts; cancel_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    jq --arg ts "$cancel_ts" '.state = "cancelled" | .updatedAt = $ts' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
 
     local op_state
     op_state="$(jq -r '.checkpoint' "$op_dir/operation.json")"
@@ -1233,6 +1335,97 @@ provision_cancel() {
     pz_info "operation cancelled: $operation_id"
 }
 
+provision_shutdown() {
+    local operation_id="" json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --operation-id) operation_id="${2:-}"; shift 2 ;;
+            --operation-id=*) operation_id="${1#*=}"; shift ;;
+            --json) json=1; shift ;;
+            *) pz_error "unknown shutdown option: $1"; return 1 ;;
+        esac
+    done
+    [ -n "$operation_id" ] || { pz_error "--operation-id required"; return 1; }
+
+    local vm_dir vm_dir_file="$OPERATIONS_DIR/$operation_id/vm_dir"
+    [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
+    if [ -z "$vm_dir" ] || [ ! -d "$vm_dir" ]; then
+        [ "$json" = "1" ] && jq -n --arg operation_id "$operation_id" '{success: false, error: "vm_dir not found", operationId: $operation_id}' || pz_error "vm_dir not found"
+        return 1
+    fi
+
+    local qga_sock="$vm_dir/qga.sock"
+    if [ ! -S "$qga_sock" ]; then
+        [ "$json" = "1" ] && jq -n --arg operation_id "$operation_id" '{success: false, error: "QGA socket not found", operationId: $operation_id}' || pz_error "QGA socket not found"
+        return 1
+    fi
+
+    local have_socat=0
+    command -v socat >/dev/null 2>&1 && have_socat=1
+    if [ "$have_socat" != "1" ]; then
+        [ "$json" = "1" ] && jq -n --arg operation_id "$operation_id" '{success: false, error: "socat required for QGA shutdown", operationId: $operation_id}' || pz_error "socat required"
+        return 1
+    fi
+
+    local qemu_pid=""
+    local qemu_pid_file="$vm_dir/qemu-pid"
+    [ -f "$qemu_pid_file" ] && qemu_pid="$(cat "$qemu_pid_file")"
+
+    echo '{"execute":"guest-shutdown"}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null || true
+
+    local timeout=60 waited=0 shutdown_ok=0
+    while [ "$waited" -lt "$timeout" ]; do
+        # Check QEMU PID disappeared
+        local pid_alive=0
+        if [ -n "$qemu_pid" ]; then
+            [[ "$qemu_pid" =~ ^[0-9]+$ ]] && kill -0 "$qemu_pid" 2>/dev/null && pid_alive=1
+        fi
+
+        # Check libvirt domstate
+        local libvirt_alive=0
+        if command -v virsh >/dev/null 2>&1; then
+            local dom_state
+            dom_state="$(virsh domstate phasezero-windows-vm 2>/dev/null || true)"
+            case "$dom_state" in
+                running|paused|idle) libvirt_alive=1 ;;
+            esac
+        fi
+
+        if [ "$pid_alive" = "0" ] && [ "$libvirt_alive" = "0" ]; then
+            shutdown_ok=1
+            break
+        fi
+
+        if [ "$libvirt_alive" = "1" ] && [ "$pid_alive" = "1" ]; then
+            sleep 2
+            waited=$((waited + 2))
+            continue
+        fi
+
+        sleep 2
+        waited=$((waited + 2))
+    done
+
+    if [ "$shutdown_ok" != "1" ] && [ -n "$qemu_pid" ]; then
+        [[ "$qemu_pid" =~ ^[0-9]+$ ]] && kill "$qemu_pid" 2>/dev/null || true
+    fi
+
+    if [ "$json" = "1" ]; then
+        jq -n \
+            --argjson success "$([ "$shutdown_ok" = "1" ] && echo true || echo false)" \
+            --arg operation_id "$operation_id" \
+            --argjson waited "$waited" \
+            '{success: $success, operationId: $operation_id, waitedSeconds: $waited}'
+    else
+        if [ "$shutdown_ok" = "1" ]; then
+            pz_info "VM shutdown confirmed after ${waited}s"
+        else
+            pz_warn "VM did not shut down within ${timeout}s"
+        fi
+    fi
+    return $((1 - shutdown_ok))
+}
+
 usage() {
     cat <<EOF
 PhaseZero Windows VM Provisioning
@@ -1244,6 +1437,7 @@ Usage:
   provision watch --operation-id <id>
   provision resume --operation-id <id>
   provision cancel --operation-id <id> [--remove-staging]
+  provision shutdown --operation-id <id> [--json]
 
 Options:
   --iso PATH       Windows installation ISO
@@ -1274,6 +1468,7 @@ case "$ACTION" in
     watch|follow) provision_watch "$@" ;;
     resume|recover) provision_resume "$@" ;;
     cancel|stop) provision_cancel "$@" ;;
+    shutdown) provision_shutdown "$@" ;;
     help|--help|-h|"") usage ;;
     *) pz_error "unknown provision action: $ACTION"; usage; exit 1 ;;
 esac

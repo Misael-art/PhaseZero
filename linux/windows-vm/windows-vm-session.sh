@@ -44,9 +44,22 @@ load_display_session_helper() {
     }
 }
 
+# A arvore runtime so serve se estiver completa. Um common.sh sem ledger.sh /
+# desktop.sh aborta o launcher em todo retry e o boot GRUB fica em tela preta;
+# nesse caso e melhor cair para o repo completo (deb ou checkout).
+runtime_tree_usable() {
+    local root dep
+    [ -x "$RUNTIME_LAUNCHER" ] || return 1
+    root="${RUNTIME_LAUNCHER%/linux/windows-vm/windows-vm.sh}"
+    [ "$root" != "$RUNTIME_LAUNCHER" ] || return 0
+    for dep in linux/lib/common.sh linux/lib/ledger.sh linux/lib/desktop.sh; do
+        [ -r "$root/$dep" ] || return 1
+    done
+}
+
 resolve_launcher() {
     local candidate
-    if [ -x "$RUNTIME_LAUNCHER" ]; then
+    if runtime_tree_usable; then
         PZ_WINDOWS_VM_REPO=""
         PZ_BIN="$RUNTIME_LAUNCHER"
         LAUNCHER_KIND="runtime"
@@ -207,6 +220,11 @@ export PZ_WINDOWS_VM_OPTIMIZE="${PZ_WINDOWS_VM_OPTIMIZE:-0}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm"
 LOG_FILE="$STATE_DIR/session.log"
 install -d "$STATE_DIR"
+# Uma sessao presa em retry escreve algumas linhas por segundo; sem rotacao o
+# log cresce sem limite ate o proximo boot bem-sucedido.
+if [ -f "$LOG_FILE" ] && [ "$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+fi
 exec >>"$LOG_FILE" 2>&1
 printf '%s starting Windows VM boot session\n' "$(date -Iseconds)"
 
@@ -263,8 +281,9 @@ done
 unset _RESCUE_SESSION_DIR
 
 fallback_desktop() {
-    [ "$DESKTOP_FALLBACK" = "1" ] || return 1
-    printf '%s explicit desktop fallback enabled\n' "$(date -Iseconds)"
+    local force="${1:-0}"
+    [ "$force" = "1" ] || [ "$DESKTOP_FALLBACK" = "1" ] || return 1
+    printf '%s desktop fallback (force=%s)\n' "$(date -Iseconds)" "$force"
     if command -v startplasma-wayland >/dev/null 2>&1; then
         exec startplasma-wayland
     fi
@@ -278,17 +297,31 @@ attempt=0
 rescue_attempted=0
 while :; do
     attempt=$((attempt + 1))
-    if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 0 ] && type vm_rescue_run >/dev/null 2>&1; then
-        printf '%s max retries reached; launching rescue wizard\n' "$(date -Iseconds)"
+    if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 0 ]; then
         rescue_attempted=1
-        if vm_rescue_run; then
-            printf '%s rescue wizard succeeded; resetting retry counter\n' "$(date -Iseconds)"
-            attempt=0
+        if ! type vm_rescue_run >/dev/null 2>&1; then
+            printf '%s max retries reached and rescue wizard unavailable\n' "$(date -Iseconds)"
         else
-            printf '%s rescue wizard declined or failed; shutting down\n' "$(date -Iseconds)"
+            printf '%s max retries reached; launching rescue wizard\n' "$(date -Iseconds)"
+            if vm_rescue_run; then
+                printf '%s rescue wizard succeeded; resetting retry counter\n' "$(date -Iseconds)"
+                attempt=0
+            else
+                printf '%s rescue wizard declined or failed\n' "$(date -Iseconds)"
+            fi
         fi
         sleep "$RETRY_SECONDS"
         continue
+    fi
+    # Resgate ja tentado e ainda falhando: parar de girar. Um loop infinito
+    # dentro de um compositor vazio e exatamente a tela preta que o usuario ve.
+    if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 1 ]; then
+        printf '%s giving up after %s attempts; leaving Windows VM boot session\n' \
+            "$(date -Iseconds)" "$attempt"
+        fallback_desktop 1 || true
+        printf '%s no desktop session available; exiting so the display manager can recover\n' \
+            "$(date -Iseconds)"
+        exit 1
     fi
     if [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ]; then
         printf '%s launching Windows VM attempt=%s kind=%s command=%s\n' \

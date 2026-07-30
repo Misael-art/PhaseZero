@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from .catalog import CATEGORIES, DASHBOARD, SIDEBAR_GROUPS, build_catalog
 from .command_runner import CommandRunner
 from .models import ActionSpec, OperationResult
+from .provision_player import ProvisionPlayerWindow
 from .pages.registry import PageRegistry
 from .result_parser import severity_for
 from .widgets import (
@@ -473,6 +474,15 @@ class MainWindow(QMainWindow):
             if dialog.exec() != ParameterDialog.Accepted:
                 return
             values = dialog.values()
+
+        if action.id == "windows.provision.player":
+            ProvisionPlayerWindow.open(
+                self.root, self.runner, self,
+                iso=values.get("input", ""),
+                graphics=values.get("graphics", "compat"),
+                image_index=values.get("image_index", "1"),
+            )
+            return
         self.pending_action = action
         self.pending_value = values.get("input", "")
         self.pending_values = values

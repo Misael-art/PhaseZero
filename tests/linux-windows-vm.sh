@@ -23,6 +23,33 @@ bash -n "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
 jq empty "$REPO_ROOT/profiles/windows-vm-linux.json"
+weights=$(grep -oP 'CP_WEIGHTS=\(\K[^)]+' "$REPO_ROOT/linux/windows-vm/provision.sh")
+sum=0; for w in $weights; do sum=$((sum + w)); done
+test "$sum" -eq 100 || { echo "CP_WEIGHTS soma $sum, não 100" >&2; exit 1; }
+echo "  checkpoint weights sum=100 ok"
+
+echo "=== runtime tree: auto-contida para o boot GRUB ==="
+# common.sh carrega ledger.sh/desktop.sh no topo. Se a arvore instalada em
+# /usr/local/lib/phasezero/windows-vm-runtime nao levar essas dependencias, o
+# launcher aborta em todo retry e o boot pelo GRUB termina em tela preta.
+runtime_specs="$(sed -n '/^runtime_file_specs()/,/^}/p' "$REPO_ROOT/linux/windows-vm/windows-vm.sh")"
+gfx_specs="$(sed -n '/^runtime_artifact_specs()/,/^}/p' "$REPO_ROOT/linux/windows-vm/graphics.sh")"
+test -n "$runtime_specs"
+test -n "$gfx_specs"
+while read -r lib_dep; do
+    [ -n "$lib_dep" ] || continue
+    grep -Fq "linux/lib/$lib_dep" <<< "$runtime_specs" || {
+        echo "runtime_file_specs sem dependencia dura de common.sh: lib/$lib_dep" >&2; exit 1; }
+    grep -Fq "linux/lib/$lib_dep" <<< "$gfx_specs" || {
+        echo "runtime_artifact_specs sem dependencia dura de common.sh: lib/$lib_dep" >&2; exit 1; }
+done < <(sed -n 's#^source "$PZ_ROOT/linux/lib/\([a-z_-]*\.sh\)"#\1#p' "$REPO_ROOT/linux/lib/common.sh")
+for runtime_dep in windows-vm.sh graphics.sh rescue.sh; do
+    grep -Fq "linux/windows-vm/$runtime_dep" <<< "$runtime_specs" || {
+        echo "runtime_file_specs sem $runtime_dep" >&2; exit 1; }
+    grep -Fq "linux/windows-vm/$runtime_dep" <<< "$gfx_specs" || {
+        echo "runtime_artifact_specs sem $runtime_dep" >&2; exit 1; }
+done
+echo "  runtime manifests cobrem as dependencias de source"
 
 "$REPO_ROOT/linux/pz" windows-vm status | jq -e '(.host | (has("qemu") and has("kvm"))) and (.libvirt | (has("domain") and has("preferred"))) and (.access | (has("sambaManaged") and has("usbRedirChannels") and has("usbUdevManaged")))' >/dev/null
 "$REPO_ROOT/linux/pz" windows-vm discover --json | jq -e 'has("configuredDisk") and has("discoveredAnyDisk")' >/dev/null
@@ -43,6 +70,10 @@ grep -q 'grub-reboot "$BOOT_ID"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 target_status="$("$REPO_ROOT/linux/pz" windows-vm boot --target-root / status)"
 grep -q 'target_root: /' <<< "$target_status"
 grep -q 'artifacts_current:' <<< "$target_status"
+boot_json="$("$REPO_ROOT/linux/pz" windows-vm boot status --json 2>/dev/null || echo "")"
+jq -e '.bootLoader == "grub-efi" or .bootLoader == "systemd-boot" or .bootLoader == "grub-bios" or .bootLoader == "efi-stub" or .bootLoader == "refind" or .bootLoader == "none"' <<< "$boot_json" >/dev/null
+jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled")' <<< "$boot_json" >/dev/null
+echo "  boot status --json schema ok"
 
 stale_env="$TMP_ROOT/windows-vm-stale.env"
 cat > "$stale_env" <<EOF
@@ -146,6 +177,30 @@ PZ_WINDOWS_VM_TEST_COUNT_FILE="$runtime_count_file" \
 PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
     "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
 test -e "$plasma_marker"
+
+echo "=== Session: desiste em vez de girar em tela preta ==="
+# Launcher quebrado + resgate indisponivel nao pode virar loop infinito dentro
+# de um compositor vazio: e exatamente isso que o usuario ve como tela preta.
+giveup_args_file="$TMP_ROOT/giveup-args"
+giveup_plasma="$TMP_ROOT/giveup-plasma"
+set +e
+PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_COMPOSITOR=0 \
+PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-giveup.env" \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_RESCUE=0 \
+PZ_WINDOWS_VM_SESSION_MAX_RETRIES=2 \
+PZ_WINDOWS_VM_DESKTOP_FALLBACK=0 \
+PZ_WINDOWS_VM_TEST_ARGS_FILE="$giveup_args_file" \
+PZ_WINDOWS_VM_TEST_COUNT_FILE="$TMP_ROOT/giveup-count" \
+PZ_WINDOWS_VM_TEST_PLASMA_FILE="$giveup_plasma" \
+    timeout 30 "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+giveup_rc=$?
+set -e
+test "$giveup_rc" -ne 124
+test -e "$giveup_plasma"
+echo "  session gives up and falls back to desktop"
 
 echo "=== Session: compositor bootstrap for headless boot ==="
 compositor_marker="$TMP_ROOT/cage-marker"

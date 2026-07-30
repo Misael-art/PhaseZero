@@ -9,7 +9,29 @@ PZ_OPERATION_ID="${PZ_OPERATION_ID:-legacy-$(date +%Y%m%d-%H%M%S)-${BASHPID:-$$}
 PZ_MANIFEST="${PZ_MANIFEST:-$PZ_STATE/operations/$PZ_OPERATION_ID.json}"
 PZ_LOG="$PZ_STATE/pz.log"
 PZ_BACKUP_ROOT="${PZ_BACKUP_ROOT:-$PZ_STATE/backups}"
+PZ_TEMP_FILES=()
+PZ_CLEANUP_REGISTERED=0
 PZ_STATE_READY=0
+
+pz_tempfile() {
+    local t
+    t="$(mktemp "$@")"
+    PZ_TEMP_FILES+=("$t")
+    echo "$t"
+}
+
+pz_cleanup_temp() {
+    local rc=$?
+    if [ ${#PZ_TEMP_FILES[@]} -gt 0 ]; then
+        rm -f "${PZ_TEMP_FILES[@]}" 2>/dev/null || true
+    fi
+    return "$rc"
+}
+
+if [ "${PZ_CLEANUP_REGISTERED:-0}" = "0" ]; then
+    trap pz_cleanup_temp EXIT
+    PZ_CLEANUP_REGISTERED=1
+fi
 
 # O estado é criado SOB DEMANDA, nunca no `source`. Comandos puramente
 # informativos (`pz help`, `pz version`) não podem tocar o host.

@@ -2108,6 +2108,41 @@ root_env_value() {
     )
 }
 
+# Arvore runtime da sessao de boot. Precisa ser auto-contida: durante o boot
+# GRUB o repo do usuario pode nem estar montado, entao tudo que common.sh e
+# windows-vm.sh carregam com `source` tem que estar aqui. Faltando um arquivo,
+# a sessao falha em loop e o host mostra tela preta.
+runtime_file_specs() {
+    cat <<EOF
+$PZ_ROOT/linux/windows-vm/windows-vm.sh|$RUNTIME_LAUNCHER|0755
+$PZ_ROOT/linux/windows-vm/graphics.sh|$RUNTIME_GRAPHICS|0755
+$PZ_ROOT/linux/windows-vm/rescue.sh|$RUNTIME_ROOT/linux/windows-vm/rescue.sh|0644
+$PZ_ROOT/linux/lib/common.sh|$RUNTIME_COMMON|0644
+$PZ_ROOT/linux/lib/ledger.sh|$RUNTIME_ROOT/linux/lib/ledger.sh|0644
+$PZ_ROOT/linux/lib/desktop.sh|$RUNTIME_ROOT/linux/lib/desktop.sh|0644
+$PZ_ROOT/linux/lib/flatpak.sh|$RUNTIME_ROOT/linux/lib/flatpak.sh|0644
+EOF
+}
+
+install_runtime_tree() {
+    local src dst mode
+    while IFS='|' read -r src dst mode; do
+        [ -n "$src" ] || continue
+        [ -f "$src" ] || { pz_error "runtime source missing: $src"; return 1; }
+        install -d "$(dirname "$dst")"
+        install -m "$mode" "$src" "$dst"
+    done < <(runtime_file_specs)
+}
+
+runtime_tree_current() {
+    local src dst mode
+    while IFS='|' read -r src dst mode; do
+        [ -n "$src" ] || continue
+        [ -f "$dst" ] || return 1
+        cmp -s "$src" "$dst" || return 1
+    done < <(runtime_file_specs)
+}
+
 boot_artifacts_current() {
     local loader
     loader="$(detected_loader)"
@@ -2131,9 +2166,7 @@ boot_artifacts_current() {
     cmp -s "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
     cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
     cmp -s "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET" || return 1
-    cmp -s "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER" || return 1
-    cmp -s "$PZ_ROOT/linux/windows-vm/graphics.sh" "$RUNTIME_GRAPHICS" || return 1
-    cmp -s "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON" || return 1
+    runtime_tree_current || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_REPO)" = "$PZ_ROOT" ] || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_BOOT_USER)" = "$TARGET_USER" ] || return 1
     grep -Fqx "Exec=$SESSION_TARGET" "$WAYLAND_SESSION_FILE" || return 1
@@ -2219,9 +2252,7 @@ install_boot() {
     install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
     install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
     install -m 0644 "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET"
-    install -m 0755 "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER"
-    install -m 0755 "$PZ_ROOT/linux/windows-vm/graphics.sh" "$RUNTIME_GRAPHICS"
-    install -m 0644 "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON"
+    install_runtime_tree
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
     session_desktop_content > "$WAYLAND_SESSION_FILE"
@@ -2412,6 +2443,11 @@ clear_next_boot() {
 }
 
 status_boot() {
+    local json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in --json) json=1; shift ;; *) shift ;; esac
+    done
+
     local loader="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
     loader="$(detected_loader)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && cmdline_marker="yes"
@@ -2420,29 +2456,108 @@ status_boot() {
         grub_next_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}')"
         grub_saved_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "saved_entry" {print $2; exit}')"
     fi
-    echo "helper: $BOOT_HELPER_TARGET"
-    [ -x "$BOOT_HELPER_TARGET" ] && echo "helper_installed: yes" || echo "helper_installed: no"
-    [ -x "$SESSION_TARGET" ] && echo "session_launcher_installed: yes" || echo "session_launcher_installed: no"
-    [ -x "$RUNTIME_LAUNCHER" ] && echo "runtime_launcher_installed: yes" || echo "runtime_launcher_installed: no"
-    [ -x "$RUNTIME_GRAPHICS" ] && echo "runtime_graphics_installed: yes" || echo "runtime_graphics_installed: no"
-    [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
-    systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || true
-    [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
-    echo "loader: $loader"
-    echo "loader_entry: $(loader_entry_state "$loader")"
-    echo "artifacts_current: $artifacts_current"
-    echo "configured_repo: $(root_env_value PZ_WINDOWS_VM_REPO)"
-    echo "configured_boot_user: $(root_env_value PZ_WINDOWS_VM_BOOT_USER)"
-    [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && echo "grub_cfg_entry: $(grub_cfg_entry_state)" || echo "grub_cfg_entry: n/a"
-    echo "grub_next_entry: ${grub_next_entry:-none}"
-    echo "grub_saved_entry: ${grub_saved_entry:-none}"
-    [ -f "$SDDM_CONF" ] && echo "active_sddm_windows_vm_conf: yes" || echo "active_sddm_windows_vm_conf: no"
-    echo "current_boot_windows_vm: $cmdline_marker"
-    echo "target_user: $TARGET_USER"
-    echo "target_root: $(pz_boot_target_root)"
-    echo "session: phasezero-windows-vm.desktop"
-    echo "grub_entry_id: $BOOT_ID"
-    echo "recommended_direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+
+    local helper_installed="no" session_launcher_installed="no"
+    local runtime_launcher_installed="no" runtime_graphics_installed="no"
+    local service_installed="no" grub_script="no"
+    [ -x "$BOOT_HELPER_TARGET" ] && helper_installed="yes"
+    [ -x "$SESSION_TARGET" ] && session_launcher_installed="yes"
+    [ -x "$RUNTIME_LAUNCHER" ] && runtime_launcher_installed="yes"
+    [ -x "$RUNTIME_GRAPHICS" ] && runtime_graphics_installed="yes"
+    [ -f "$SERVICE_FILE" ] && service_installed="yes"
+    [ -x "$GRUB_SCRIPT" ] && grub_script="yes"
+    local service_enabled; service_enabled="$(systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || echo "disabled")"
+    local loader_entry; loader_entry="$(loader_entry_state "$loader")"
+    local grub_cfg_entry="n/a"
+    [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && grub_cfg_entry="$(grub_cfg_entry_state)"
+    local active_sddm="no"; [ -f "$SDDM_CONF" ] && active_sddm="yes"
+    local target_root; target_root="$(pz_boot_target_root)"
+    local configured_repo; configured_repo="$(root_env_value PZ_WINDOWS_VM_REPO)"
+    local configured_user; configured_user="$(root_env_value PZ_WINDOWS_VM_BOOT_USER)"
+    local boot_ready="no" one_shot_ready="no"
+    if [ "$artifacts_current" = "yes" ] && [ -n "$loader_entry" ] && [ "$loader_entry" != "missing" ] && [ "$service_enabled" = "enabled" ] && [ "$helper_installed" = "yes" ]; then
+        boot_ready="yes"
+        case "$loader" in
+            grub-efi|grub-bios|systemd-boot) one_shot_ready="yes" ;;
+        esac
+    fi
+
+    if [ "$json" = "1" ]; then
+        jq -n \
+            --arg helper "$BOOT_HELPER_TARGET" \
+            --arg helperInstalled "$helper_installed" \
+            --arg sessionLauncher "$SESSION_TARGET" \
+            --arg sessionLauncherInstalled "$session_launcher_installed" \
+            --arg runtimeLauncher "$RUNTIME_LAUNCHER" \
+            --arg runtimeLauncherInstalled "$runtime_launcher_installed" \
+            --arg runtimeGraphics "$RUNTIME_GRAPHICS" \
+            --arg runtimeGraphicsInstalled "$runtime_graphics_installed" \
+            --arg serviceFile "$SERVICE_FILE" \
+            --arg serviceInstalled "$service_installed" \
+            --arg serviceEnabled "$service_enabled" \
+            --arg grubScript "$GRUB_SCRIPT" \
+            --arg grubScriptExists "$grub_script" \
+            --arg bootLoader "$loader" \
+            --arg loaderEntry "$loader_entry" \
+            --argjson artifactsCurrent "$([ "$artifacts_current" = "yes" ] && echo true || echo false)" \
+            --arg configuredRepo "$configured_repo" \
+            --arg configuredBootUser "$configured_user" \
+            --arg grubCfgEntry "$grub_cfg_entry" \
+            --arg grubNextEntry "${grub_next_entry:-none}" \
+            --arg grubSavedEntry "${grub_saved_entry:-none}" \
+            --arg sddmConf "$SDDM_CONF" \
+            --arg activeSddm "$active_sddm" \
+            --argjson currentBootWindowsVm "$([ "$cmdline_marker" = "yes" ] && echo true || echo false)" \
+            --arg targetUser "$TARGET_USER" \
+            --arg targetRoot "$target_root" \
+            --arg session "phasezero-windows-vm.desktop" \
+            --arg grubEntryId "$BOOT_ID" \
+            --argjson bootReady "$([ "$boot_ready" = "yes" ] && echo true || echo false)" \
+            --argjson oneShotReady "$([ "$one_shot_ready" = "yes" ] && echo true || echo false)" \
+            '{
+                helper: $helper, helperInstalled: $helperInstalled,
+                sessionLauncher: $sessionLauncher, sessionLauncherInstalled: $sessionLauncherInstalled,
+                runtimeLauncher: $runtimeLauncher, runtimeLauncherInstalled: $runtimeLauncherInstalled,
+                runtimeGraphics: $runtimeGraphics, runtimeGraphicsInstalled: $runtimeGraphicsInstalled,
+                serviceFile: $serviceFile, serviceInstalled: $serviceInstalled, serviceEnabled: $serviceEnabled,
+                grubScript: $grubScript, grubScriptExists: $grubScriptExists,
+                bootLoader: $bootLoader, loaderEntry: $loaderEntry,
+                artifactsCurrent: $artifactsCurrent,
+                configuredRepo: $configuredRepo, configuredBootUser: $configuredBootUser,
+                grubCfgEntry: $grubCfgEntry,
+                grubNextEntry: $grubNextEntry, grubSavedEntry: $grubSavedEntry,
+                sddmConf: $sddmConf, activeSddm: $activeSddm,
+                currentBootWindowsVm: $currentBootWindowsVm,
+                targetUser: $targetUser, targetRoot: $targetRoot,
+                session: $session, grubEntryId: $grubEntryId,
+                bootReady: $bootReady,
+                oneShotReady: $oneShotReady
+            }'
+    else
+        echo "helper: $BOOT_HELPER_TARGET"
+        echo "helper_installed: $helper_installed"
+        echo "session_launcher_installed: $session_launcher_installed"
+        echo "runtime_launcher_installed: $runtime_launcher_installed"
+        echo "runtime_graphics_installed: $runtime_graphics_installed"
+        echo "service_installed: $service_installed"
+        echo "service_enabled: $service_enabled"
+        echo "grub_script: $grub_script"
+        echo "loader: $loader"
+        echo "loader_entry: $loader_entry"
+        echo "artifacts_current: $artifacts_current"
+        echo "configured_repo: $configured_repo"
+        echo "configured_boot_user: $configured_user"
+        echo "grub_cfg_entry: $grub_cfg_entry"
+        echo "grub_next_entry: ${grub_next_entry:-none}"
+        echo "grub_saved_entry: ${grub_saved_entry:-none}"
+        echo "active_sddm_windows_vm_conf: $active_sddm"
+        echo "current_boot_windows_vm: $cmdline_marker"
+        echo "target_user: $TARGET_USER"
+        echo "target_root: $target_root"
+        echo "session: phasezero-windows-vm.desktop"
+        echo "grub_entry_id: $BOOT_ID"
+        echo "recommended_direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+    fi
 }
 
 dry_run_boot() {

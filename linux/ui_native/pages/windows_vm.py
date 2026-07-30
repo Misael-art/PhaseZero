@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 from ..catalog import WINDOWS_VM_GRAPHICS_OPTIONS
 from ..command_runner import CommandRunner
 from ..models import ActionSpec, OperationResult
+from ..provision_player import ProvisionPlayerWindow
 from ..widgets import SectionHeader, themed_icon
 from .base import BasePage
 
@@ -101,6 +102,14 @@ class WindowsVMPage(BasePage):
         plan_btn.setObjectName("secondaryButton")
         plan_btn.clicked.connect(self._request_plan)
         form.addRow("", plan_btn)
+
+        player_btn = QPushButton("Preparar Windows e reiniciar")
+        player_btn.setObjectName("primaryButton")
+        player_btn.setStyleSheet(
+            "font-weight: bold; padding: 10px 16px;"
+        )
+        player_btn.clicked.connect(self._open_player)
+        form.addRow("", player_btn)
 
         card_layout.addLayout(form)
         layout.addWidget(install_card)
@@ -265,6 +274,15 @@ class WindowsVMPage(BasePage):
     def _on_op_complete(self, result: OperationResult) -> None:
         if self._inspect_result_pending and result.action_id == "windows.media.inspect":
             self._apply_inspect_result(result.parsed if result.ok else None)
+
+    def _open_player(self) -> None:
+        graphics = self._custom_field.text().strip() if self._selected_graphics == "custom" else self._selected_graphics
+        ProvisionPlayerWindow.open(
+            self.root, self.runner, self,
+            iso=self._selected_iso,
+            graphics=graphics,
+            image_index=str(self._selected_image_index),
+        )
 
     def _request_plan(self) -> None:
         if not self._selected_iso:

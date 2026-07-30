@@ -271,6 +271,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.apps.status", "Windows VM", "Status WinBoat/WinPodX", "Audita AppImages, Podman, KVM, RDP e concorrência.", ("windows-vm", "apps", "status"), "computer", badge="JSON"),
             _a("windows.apps.setup", "Windows VM", "Instalar WinBoat + WinPodX", "Instala releases oficiais verificadas e perfil Steam Deck.", ("windows-vm", "apps", "setup"), "system-software-install", mutable=True, preview=("windows-vm", "apps", "status"), badge="Podman"),
             _a("windows.apps.configure", "Windows VM", "Configurar Podman Windows", "Aplica recursos, RDP, compartilhamento e política de um guest.", ("windows-vm", "apps", "configure"), "preferences-system", mutable=True, preview=("windows-vm", "apps", "status"), badge="Reversível"),
+            _a("windows.boot.status-json", "Windows VM", "Boot status (JSON)", "Estado do boot em JSON para consumo programático.", ("windows-vm", "boot", "status", "--json"), "dialog-information", badge="JSON", visibility="advanced"),
             _a("windows.boot.install", "Windows VM", "Instalar boot direto", "Entrada GRUB para Windows VM.", ("windows-vm", "boot", "install"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
             _a("windows.boot.next", "Windows VM", "Próximo boot Windows", "Agenda uma sessão Windows VM.", ("windows-vm", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
 
@@ -288,6 +289,23 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.provision.resume", "Windows VM", "Retomar instalação", "Retoma instalação interrompida do último checkpoint.", ("windows-vm", "provision", "resume", "--operation-id", "{operation_id}"), "media-skip-forward", mutable=True, preview=("windows-vm", "provision", "status", "--operation-id", "{operation_id}", "--json"), parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),), badge="Reparo"),
             _a("windows.provision.cancel", "Windows VM", "Cancelar instalação", "Cancela operação ativa; preserva disco para retomada.", ("windows-vm", "provision", "cancel", "--operation-id", "{operation_id}"), "media-playback-stop", mutable=True, preview=("windows-vm", "provision", "status", "--operation-id", "{operation_id}", "--json"), parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),), badge="Alto risco", risk="high"),
             _a("windows.provision.discard", "Windows VM", "Descartar instalação", "Remove staging e libera recursos da instalação cancelada.", ("windows-vm", "provision", "cancel", "--operation-id", "{operation_id}", "--remove-staging"), "edit-delete", mutable=True, preview=("windows-vm", "provision", "status", "--operation-id", "{operation_id}", "--json"), parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),), badge="Alto risco", risk="high", visibility="advanced"),
+
+            # Player flow (janela dedicada)
+            _a("windows.provision.player", "Windows VM", "Preparar Windows e reiniciar",
+               "Orquestra plano, provisão, boot e reboot em janela dedicada.",
+               ("--internal-player",), "system-reboot",
+               mutable=True, elevated=False,
+               preview=("windows-vm", "provision", "plan", "--iso", "{input}", "--json"),
+               preview_bindings=(("input", "iso.path"),),
+               input_label="Selecione ISO do Windows",
+               input_kind="file",
+               parameters=(
+                   _p("graphics", "Aceleração gráfica", "choice",
+                      choices=tuple(v for v, _, _ in WINDOWS_VM_GRAPHICS_OPTIONS),
+                      placeholder="compat"),
+                   _p("image_index", "Índice da edição Windows", placeholder="1"),
+               ),
+               badge="Alto risco", risk="high"),
         ]
     )
 

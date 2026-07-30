@@ -10,6 +10,7 @@ from PySide6.QtWidgets import QApplication, QPlainTextEdit, QTextEdit
 
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.command_runner import CommandRunner
+from linux.ui_native.provision_player import ProvisionPlayerWindow, ST_IDLE, ST_DONE
 from linux.ui_native.pages.windows_vm import WindowsVMPage
 from linux.ui_native.result_parser import severity_for
 
@@ -31,6 +32,7 @@ UI_MODULES: list[str] = [
     "linux.ui_native.pages.overview",
     "linux.ui_native.pages.dashboard",
     "linux.ui_native.pages.windows_vm",
+    "linux.ui_native.provision_player",
     "linux.ui_native.pages.profiles",
     "linux.ui_native.pages.steamdeck",
     "linux.ui_native.pages.waydroid",
@@ -449,3 +451,48 @@ def test_preflight_json_in_plan_integration(request):
     assert "resources" in pf
     assert "warnings" in plan
     assert isinstance(plan["warnings"], list)
+
+
+def test_player_action_in_catalog(page_and_catalog):
+    _, by_id, catalog = page_and_catalog
+    player = by_id.get("windows.provision.player")
+    assert player is not None, "windows.provision.player not in catalog"
+    assert not player.elevated
+    assert player.mutable
+    assert player.input_kind == "file"
+    assert any(p.name == "graphics" for p in player.parameters)
+    assert any(p.name == "image_index" for p in player.parameters)
+
+
+def test_player_singleton(qapp):
+    from linux.ui_native.provision_player import ProvisionPlayerWindow
+    root = Path(__file__).resolve().parents[1]
+    runner = CommandRunner(root)
+    w1 = ProvisionPlayerWindow.open(root, runner, None, iso="/fake/test.iso")
+    w2 = ProvisionPlayerWindow.open(root, runner, None, iso="/fake/test2.iso")
+    assert w1 is w2, "open() deve retornar a mesma instância"
+    assert w1._iso == "/fake/test2.iso", "novo ISO deve atualizar a instância"
+    w1.close()
+    ProvisionPlayerWindow._instance = None
+
+
+def test_player_window_imports(qapp):
+    from linux.ui_native.provision_player import (
+        ProvisionPlayerWindow, ProvisionWorker,
+        StepIndicator, ST_IDLE, ST_DONE, ST_FAILED, ST_CANCELLED,
+    )
+    assert StepIndicator is not None
+    assert ProvisionPlayerWindow is not None
+    assert ProvisionWorker is not None
+
+
+def test_provision_weights_from_shell(qapp):
+    """CP_WEIGHTS soma 100."""
+    root = Path(__file__).resolve().parents[1]
+    script = root / "linux" / "windows-vm" / "provision.sh"
+    text = script.read_text(encoding="utf-8")
+    import re
+    m = re.search(r"CP_WEIGHTS=\(([^)]+)\)", text)
+    assert m, "CP_WEIGHTS array not found in provision.sh"
+    weights = [int(x) for x in m.group(1).split()]
+    assert sum(weights) == 100, f"CP_WEIGHTS sum={sum(weights)}, expected 100"

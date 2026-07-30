@@ -705,6 +705,17 @@
       "input_label": ""
     },
     {
+      "name": "windows.boot.status-json",
+      "label": "Boot status (JSON)",
+      "command": "windows-vm boot status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Windows VM",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "windows.boot.install",
       "label": "Instalar boot direto",
       "command": "windows-vm boot install",
@@ -822,6 +833,21 @@
       "elevated": false,
       "input_kind": "",
       "input_label": ""
+    },
+    {
+      "name": "windows.provision.player",
+      "label": "Preparar Windows e reiniciar",
+      "command": "--internal-player",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": true,
+      "input_kind": "file",
+      "input_label": "Selecione ISO do Windows",
+      "parameters": [
+        {"name": "graphics", "label": "Aceleração gráfica", "kind": "choice", "choices": ["compat", "virtio-gl", "virtio-venus", "rutabaga", "vfio-looking-glass", "custom"], "placeholder": "compat"},
+        {"name": "image_index", "label": "Índice da edição Windows", "kind": "text", "placeholder": "1"}
+      ]
     },
     {
       "name": "waydroid.status",
