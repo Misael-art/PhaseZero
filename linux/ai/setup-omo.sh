@@ -88,7 +88,7 @@ ensure_bun() {
     if command -v curl >/dev/null 2>&1; then
         pz_info "installing bun via official installer into ~/.bun"
         export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
-        installer="$(mktemp "${TMPDIR:-/tmp}/phasezero-bun.XXXXXX")"
+        installer="$(pz_tempfile "${TMPDIR:-/tmp}/phasezero-bun.XXXXXX")"
         if curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 \
             --connect-timeout 15 --max-time 120 https://bun.sh/install -o "$installer"; then
             size="$(wc -c < "$installer")"
@@ -138,7 +138,7 @@ unregister_plugin_file() {
     local cfg="$1" tmp
     [ -f "$cfg" ] || return 0
     jq . "$cfg" >/dev/null 2>&1 || { pz_warn "skip $cfg (not strict JSON)"; return 0; }
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg p "$OMO_PLUGIN_PREFIX" '
         if has("plugin") then
             .plugin |= (map(select((tostring | startswith($p)) | not)))
@@ -152,7 +152,7 @@ register_plugin_file() {
     local cfg="$1" tmp
     [ -f "$cfg" ] || return 0
     jq . "$cfg" >/dev/null 2>&1 || { pz_warn "skip $cfg (not strict JSON)"; return 0; }
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg spec "$OMO_SPEC" --arg p "$OMO_PLUGIN_PREFIX" '
         .plugin = ((.plugin // []) | map(select((tostring | startswith($p)) | not)) + [$spec])
     ' "$cfg" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }

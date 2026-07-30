@@ -110,7 +110,7 @@ append_template_parser_by_title() {
     [ -f "$EMUDECK_SRM_USERDATA/userConfigurations.json" ] || return 0
     jq -e --arg title "$title" 'map(.configTitle == $title) | any' "$SRM_CONFIGS" >/dev/null 2>&1 && return 0
     jq -e --arg title "$title" 'map(select(.configTitle == $title)) | length > 0' "$EMUDECK_SRM_USERDATA/userConfigurations.json" >/dev/null 2>&1 || return 0
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --slurpfile src "$EMUDECK_SRM_USERDATA/userConfigurations.json" --arg title "$title" \
         '. + ($src[0] | map(select(.configTitle == $title)))' "$SRM_CONFIGS" > "$tmp"
     mv "$tmp" "$SRM_CONFIGS"
@@ -119,7 +119,7 @@ append_template_parser_by_title() {
 merge_all_template_parsers() {
     local source="$EMUDECK_SRM_USERDATA/userConfigurations.json" tmp
     [ -f "$source" ] && jq empty "$source" >/dev/null 2>&1 || return 0
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --slurpfile src "$source" '
         . as $current
         | ($current | map(.configTitle // "") | unique) as $titles
@@ -161,7 +161,7 @@ merge_srm_settings() {
     retro="$(retroarch_launcher)"
     cores="$(retroarch_cores_dir)"
     backup_srm_file "$SRM_SETTINGS"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     # SRM resolves the parser tokens ${steamdirglobal}, ${romsdirglobal},
     # ${retroarchpath} and ${racores} from these Settings environment variables
     # (NOT from userVariables.json). raCoresDirectory was left empty, so every
@@ -310,12 +310,12 @@ EOF
 
 append_phasezero_managed_parsers() {
     local managed tmp existing_titles
-    managed="$(mktemp)"
+    managed="$(pz_tempfile)"
     phasezero_managed_parsers_json > "$managed"
     jq empty "$managed" >/dev/null 2>&1 || { rm -f "$managed"; return 0; }
     [ -s "$SRM_CONFIGS" ] || printf '[]' > "$SRM_CONFIGS"
     jq empty "$SRM_CONFIGS" >/dev/null 2>&1 || printf '[]' > "$SRM_CONFIGS"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     # Merge managed parsers; skip titles already present so user edits persist.
     jq --slurpfile m "$managed" '
         . as $cur
@@ -342,12 +342,12 @@ normalize_srm_parsers() {
     append_phasezero_managed_parsers
 
     backup_srm_file "$SRM_CONFIGS"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq '
         map(select((.configTitle // "") != ""))
     ' "$SRM_CONFIGS" > "$tmp"
     mv "$tmp" "$SRM_CONFIGS"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq \
         --arg eden "$PZ_LOCAL_BIN/phasezero-eden" \
         --arg citron "$PZ_LOCAL_BIN/phasezero-citron" \

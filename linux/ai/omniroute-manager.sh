@@ -70,7 +70,7 @@ env_upsert() {
     local key="$1" value="$2" tmp
     ensure_dirs
     [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     grep -vE "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
     printf '%s=%s\n' "$key" "$value" >> "$tmp"
     install -m 0600 "$tmp" "$ENV_FILE"
@@ -299,7 +299,7 @@ ensure_api_key() {
     local password
     password="$(env_get INITIAL_PASSWORD)"
 
-    payload="$(mktemp)"
+    payload="$(pz_tempfile)"
     jq -n --arg name "phasezero-managed" '{name:$name}' > "$payload"
 
     response="$(curl -fsS --max-time 10 -X POST "http://127.0.0.1:$port/api/keys" \
@@ -404,7 +404,7 @@ test_omniroute() {
         [ -n "$model" ] || model="$(jq -r '.data[0].id // empty' <<< "$body" 2>/dev/null || true)"
 
         if [ -n "$model" ]; then
-            payload="$(mktemp)"
+            payload="$(pz_tempfile)"
             jq -n --arg model "$model" '{model:$model,messages:[{role:"user",content:"Reply only: OK"}],stream:false,max_tokens:8}' > "$payload"
             chat_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 -X POST "http://127.0.0.1:$port/v1/chat/completions" \
                 -H "Authorization: Bearer $key" -H 'Content-Type: application/json' --data-binary "@$payload" 2>/dev/null || true)"
@@ -444,7 +444,7 @@ provider_sync() {
     while IFS=$'\t' read -r provider name secret; do
         case "$provider" in openai|anthropic|gemini|openrouter|deepseek|glm|kimi|minimask|qwen|mistral|groq|nvidia) ;; *) skipped=$((skipped + 1)); continue ;; esac
         [ -n "$secret" ] || { skipped=$((skipped + 1)); continue; }
-        payload="$(mktemp)"
+        payload="$(pz_tempfile)"
         jq -n --arg provider "$provider" --arg name "${name:-PhaseZero $provider}" --arg apiKey "$secret" \
             '{provider:$provider,name:$name,apiKey:$apiKey}' > "$payload"
         if response="$(api_request POST /api/providers "$payload" 2>/dev/null)" && jq -e '(.error // empty) == ""' <<< "$response" >/dev/null 2>&1; then
@@ -501,7 +501,7 @@ create_combo() {
     combos="$(api_request GET /api/combos 2>/dev/null || echo '{"combos":[]}')"
     id="$(jq -r --arg name "$name" '(.combos // .data // [])[] | select(.name==$name) | .id // empty' <<< "$combos" | head -1)"
 
-    payload="$(mktemp)"
+    payload="$(pz_tempfile)"
     jq -n --arg name "$name" --argjson models "$models_json" '{name:$name,models:$models}' > "$payload"
     if [ -n "$id" ]; then
         api_request PUT "/api/combos/$id" "$payload" >/dev/null 2>&1 || true
@@ -580,7 +580,7 @@ opencode_custom_provider() {
     pz_backup_file "$config_file" user >/dev/null
 
     local tmp
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg key "$key" --arg port "$port" '
         .provider.omniroute = {
             name: "OmniRoute Smart Router",

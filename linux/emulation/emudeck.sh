@@ -78,7 +78,7 @@ normalize_steamdeck_desktop() {
     if ! grep -Eq '^[[:space:]]+(\[Desktop Entry\]|[A-Za-z0-9_.-]+(\[[^]]+\])?=)' "$desktop"; then
         return 0
     fi
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     sed -E \
         -e 's/^[[:space:]]+(\[Desktop Entry\])/\1/' \
         -e 's/^[[:space:]]+([A-Za-z0-9_.-]+(\[[^]]+\])?=)/\1/' \

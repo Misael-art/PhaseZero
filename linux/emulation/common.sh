@@ -15,7 +15,7 @@ pz_ini_set() {
     local file="$1" section="$2" key="$3" value="$4" tmp
     install -d "$(dirname "$file")"
     [ -f "$file" ] || printf '[%s]\n' "$section" > "$file"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     awk -v section="$section" -v key="$key" -v value="$value" '
         BEGIN { active=0; section_seen=0; wrote=0 }
         $0 == "[" section "]" { active=1; section_seen=1; print; next }
@@ -299,7 +299,7 @@ pz_emulation_write_file() {
     local path="$1" mode="${2:-0644}" dir tmp
     dir="$(dirname "$path")"
     install -d "$dir"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     cat > "$tmp"
     pz_backup_file "$path" user >/dev/null
     install -m "$mode" "$tmp" "$path"

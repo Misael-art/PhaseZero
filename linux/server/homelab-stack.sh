@@ -148,7 +148,7 @@ random_secret() {
 env_set() {
     local key="$1" value="$2" tmp
     mkdir -p "$(dirname "$ENV_FILE")"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     if [ -f "$ENV_FILE" ]; then
         awk -v k="$key" -v v="$value" '
             BEGIN { done = 0 }

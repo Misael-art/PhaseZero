@@ -282,7 +282,7 @@ pz_shortcut_strip_software_render() {
     local file="$1" tmp
     [ -f "$file" ] || return 0
     grep -qi 'SoftwareRender\|Software Render' "$file" 2>/dev/null || return 0
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     awk '
         function clean_actions(line,    value,n,i,item,out,count) {
             sub(/^Actions=/, "", line)
@@ -333,7 +333,7 @@ pz_shortcut_hide_duplicate() {
 
 pz_shortcut_set_desktop_key() {
     local file="$1" key="$2" value="$3" tmp
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     awk -v key="$key" -v value="$value" '
         BEGIN { in_entry = 0; wrote = 0 }
         /^[[:space:]]*\[Desktop Entry\][[:space:]]*$/ {

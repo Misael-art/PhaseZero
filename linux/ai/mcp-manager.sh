@@ -233,7 +233,7 @@ ensure_json_config() {
         return 1
     fi
     backup_config "$cfg"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     if [ "$target" = "opencode" ]; then
         jq '.mcp = (if (.mcp | type) == "object" then .mcp else {} end) | del(.mcpServers)' "$cfg" > "$tmp"
     else
@@ -249,7 +249,7 @@ install_json_target() {
     ensure_json_config "$target" || return 0
     server="$(server_json_for_target "$target" "$json")"
     backup_config "$cfg"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg field "$field" --arg name "$name" --argjson server "$server" '.[$field][$name] = $server' "$cfg" > "$tmp"
     mv "$tmp" "$cfg"
     pz_info "MCP $name installed in $target config: $cfg"
@@ -265,7 +265,7 @@ remove_json_target() {
         return 0
     fi
     backup_config "$cfg"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     if [ "$target" = "opencode" ]; then
         jq --arg name "$name" 'del(.mcp[$name]) | del(.mcpServers)' "$cfg" > "$tmp"
     else
@@ -286,7 +286,7 @@ toml_array() {
 strip_codex_block() {
     local name="$1" cfg="$2" tmp
     [ -f "$cfg" ] || return 0
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     awk -v name="$name" -v begin="# BEGIN PHASEZERO MCP ${name}" -v end="# END PHASEZERO MCP ${name}" '
         $0 == begin {managed=1; next}
         $0 == end {managed=0; next}
@@ -315,7 +315,7 @@ install_codex_target() {
     [ -f "$cfg" ] || : > "$cfg"
     backup_config "$cfg"
     strip_codex_block "$name" "$cfg"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     {
         cat "$cfg"
         echo
@@ -396,7 +396,7 @@ hermes_server_yaml() {
 strip_hermes_block() {
     local name="$1" cfg="$2" tmp
     [ -f "$cfg" ] || return 0
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     awk -v begin="  # BEGIN PHASEZERO MCP ${name}" -v end="  # END PHASEZERO MCP ${name}" '
         $0 == begin {skip=1; next}
         $0 == end {skip=0; next}
@@ -408,7 +408,7 @@ strip_hermes_block() {
 strip_hermes_entry() {
     local name="$1" cfg="$2" tmp
     [ -f "$cfg" ] || return 0
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     awk -v key="  ${name}:" '
         /^mcp_servers:[[:space:]]*$/ {inmcp=1; print; next}
         inmcp == 1 && skip == 1 && $0 !~ /^ / && $0 !~ /^$/ {skip=0; inmcp=0}
@@ -438,7 +438,7 @@ install_hermes_target() {
     strip_hermes_block "$name" "$HERMES_CONFIG"
     strip_hermes_entry "$name" "$HERMES_CONFIG"
     block="$(hermes_server_yaml "$name" "$json")"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     inserted=0
     awk -v block="$block" '
         {
@@ -480,7 +480,7 @@ ensure_openclaw_config() {
     fi
     backup_config "$OPENCLAW_CONFIG"
     local tmp
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq '.mcp = (.mcp // {}) | .mcp.servers = (if (.mcp.servers | type) == "object" then .mcp.servers else {} end) | del(.mcpServers)' "$OPENCLAW_CONFIG" > "$tmp"
     mv "$tmp" "$OPENCLAW_CONFIG"
 }
@@ -490,7 +490,7 @@ install_openclaw_target() {
     ensure_openclaw_config || return 0
     server="$(server_json_for_target openclaw "$json")"
     backup_config "$OPENCLAW_CONFIG"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg name "$name" --argjson server "$server" '.mcp.servers[$name] = $server' "$OPENCLAW_CONFIG" > "$tmp"
     mv "$tmp" "$OPENCLAW_CONFIG"
     pz_info "MCP $name installed in openclaw config: $OPENCLAW_CONFIG"
@@ -504,7 +504,7 @@ remove_openclaw_target() {
         return 0
     fi
     backup_config "$OPENCLAW_CONFIG"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg name "$name" 'del(.mcp.servers[$name]) | del(.mcpServers)' "$OPENCLAW_CONFIG" > "$tmp"
     mv "$tmp" "$OPENCLAW_CONFIG"
     pz_info "MCP $name removed from openclaw config: $OPENCLAW_CONFIG"
@@ -543,7 +543,7 @@ install_zcode_target() {
         }])
     ' <<< "$storage")"
     backup_config "$ZCODE_STORE"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg storage "$new_storage" '."mcp-storage" = $storage' "$ZCODE_STORE" > "$tmp"
     mv "$tmp" "$ZCODE_STORE"
     pz_info "MCP $name installed in zcode store: $ZCODE_STORE"
@@ -562,7 +562,7 @@ remove_zcode_target() {
       | .state.servers = ((.state.servers // []) | map(select(.name != $name)))
     ' <<< "$storage")"
     backup_config "$ZCODE_STORE"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg storage "$new_storage" '."mcp-storage" = $storage' "$ZCODE_STORE" > "$tmp"
     mv "$tmp" "$ZCODE_STORE"
     pz_info "MCP $name removed from zcode store: $ZCODE_STORE"
@@ -738,8 +738,8 @@ definition_status_json() {
 
 mcp_status() {
     local tmp_defs tmp_targets defs targets
-    tmp_defs="$(mktemp)"
-    tmp_targets="$(mktemp)"
+    tmp_defs="$(pz_tempfile)"
+    tmp_targets="$(pz_tempfile)"
     while IFS= read -r name; do
         definition_status_json "$name" >> "$tmp_defs"
     done < <(definition_names)

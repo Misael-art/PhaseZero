@@ -204,7 +204,8 @@ gl_plan="$(env "${gfx_env[@]}" PZ_GFX_SYSFS_ROOT="$sys_deck" "$REPO_ROOT/linux/p
 jq -e '.plannedQemuArgs | test("virtio-vga-gl") and test("gl=on")' <<< "$gl_plan" >/dev/null
 jq -e '.eligible == true and .applyAllowed == true and .risk == "medium"' <<< "$gl_plan" >/dev/null
 venus_plan="$(env "${gfx_env[@]}" PZ_GFX_SYSFS_ROOT="$sys_deck" "$REPO_ROOT/linux/pz" windows-vm graphics plan --profile virtio-venus --json)"
-jq -e '.applyAllowed == false and .mode == "experimental-blocked"' <<< "$venus_plan" >/dev/null
+# venus expõe plano honesto (mode=experimental) mas nunca libera apply/launch.
+jq -e '.applyAllowed == false and .mode == "experimental"' <<< "$venus_plan" >/dev/null
 rutabaga_plan="$(env "${gfx_env[@]}" PZ_GFX_SYSFS_ROOT="$sys_deck" "$REPO_ROOT/linux/pz" windows-vm graphics plan --profile rutabaga --json)"
 jq -e '.applyAllowed == false' <<< "$rutabaga_plan" >/dev/null
 vfio_plan="$(env "${gfx_env[@]}" PZ_GFX_SYSFS_ROOT="$sys_deck" "$REPO_ROOT/linux/pz" windows-vm graphics plan --profile vfio-looking-glass --json)"
@@ -235,16 +236,19 @@ echo "=== runtime: status, dry-run, install, backup e rollback em root falso ===
 runtime_root="$TMP_ROOT/runtime-root"
 runtime_env=("PZ_GFX_RUNTIME_TARGET_ROOT=$runtime_root")
 runtime_before="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime status --json)"
-jq -e '.status == "needsinstall" and .summary.missing == 5' <<< "$runtime_before" >/dev/null
+jq -e '.status == "needsinstall" and .summary.missing == .summary.total' <<< "$runtime_before" >/dev/null
+# A arvore runtime tem que carregar sozinha no boot GRUB: sem ledger.sh/desktop.sh
+# o common.sh instalado aborta e a sessao vira tela preta.
+jq -e '[.artifacts[].name] | index("ledger") != null and index("desktop") != null and index("rescue") != null' <<< "$runtime_before" >/dev/null
 runtime_dry="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime install --dry-run --json)"
-jq -e '.dryRun == true and (.wouldChange | length) == 5' <<< "$runtime_dry" >/dev/null
+jq -e '.dryRun == true and (.wouldChange | length) == (.artifacts | length)' <<< "$runtime_dry" >/dev/null
 test ! -e "$runtime_root/usr/local/lib/phasezero"
 runtime_installed="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime install --json)"
-jq -e '.status == "ok" and .summary.current == 5 and (.backupId | length) > 0' <<< "$runtime_installed" >/dev/null
+jq -e '.status == "ok" and .summary.current == .summary.total and (.backupId | length) > 0' <<< "$runtime_installed" >/dev/null
 runtime_launcher="$runtime_root/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/windows-vm.sh"
 printf 'stale launcher\n' > "$runtime_launcher"
 runtime_repaired="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime install --json)"
-jq -e '.status == "ok" and .summary.current == 5' <<< "$runtime_repaired" >/dev/null
+jq -e '.status == "ok" and .summary.current == .summary.total' <<< "$runtime_repaired" >/dev/null
 runtime_rollback_dry="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime rollback --backup latest --dry-run --json)"
 jq -e '.dryRun == true and .operation == "rollback"' <<< "$runtime_rollback_dry" >/dev/null
 runtime_rolled_back="$(env "${runtime_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics runtime rollback --backup latest --json)"

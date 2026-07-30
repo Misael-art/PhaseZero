@@ -44,7 +44,7 @@ install_hermes() {
     fi
 
     local tmp size rc=0 args=()
-    tmp="$(mktemp "${TMPDIR:-/tmp}/phasezero-hermes.XXXXXX")"
+    tmp="$(pz_tempfile "${TMPDIR:-/tmp}/phasezero-hermes.XXXXXX")"
     if ! curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 \
         --connect-timeout 15 --max-time 120 \
         https://hermes-agent.nousresearch.com/install.sh -o "$tmp"; then

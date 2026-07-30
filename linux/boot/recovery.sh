@@ -224,7 +224,7 @@ cmd_install_safe_menu() {
     pz_boot_backup_bundle "boot-safe-menu"
     install -d "$(dirname "$SAFE_MENU_DROPIN")"
     local tmp
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     safe_menu_dropin_content > "$tmp"
     install -m 0644 "$tmp" "$SAFE_MENU_DROPIN"
     rm -f "$tmp"
@@ -349,7 +349,7 @@ cmd_install_efi_fallback() {
     done
 
     pz_boot_backup_bundle "boot-efi-fallback"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     bootstrap_config_content > "$tmp"
     install -d "$PHASEZERO_EFI_DIR"
     grub-mkstandalone \

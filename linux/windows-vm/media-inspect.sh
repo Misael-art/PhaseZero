@@ -39,7 +39,7 @@ media_inspect() {
     local images_json="[]"
     if command -v wiminfo >/dev/null 2>&1; then
         local mount_dir tmp_wim
-        tmp_wim="$(mktemp -d)"
+        tmp_wim="$(pz_tempfile -d)"
         if command -v mount >/dev/null 2>&1 && command -v losetup >/dev/null 2>&1; then
             local loop_dev
             loop_dev="$(losetup --show -f "$iso" 2>/dev/null || true)"

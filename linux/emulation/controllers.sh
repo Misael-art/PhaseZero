@@ -20,7 +20,7 @@ atomic_jq() {
     local path="$1"
     shift
     local tmp
-    tmp="$(mktemp "${path}.phasezero.tmp.XXXXXX")"
+    tmp="$(pz_tempfile "${path}.phasezero.tmp.XXXXXX")"
     if jq "$@" "$path" > "$tmp"; then
         chmod --reference="$path" "$tmp" 2>/dev/null || true
         mv -f -- "$tmp" "$path"
@@ -207,7 +207,7 @@ apply_rpcs3() {
         if [ ! -f "$active" ] || ! grep -Fxq '  global: Default' "$active"; then
             local tmp
             backup_file "$active"
-            tmp="$(mktemp "${active}.phasezero.tmp.XXXXXX")"
+            tmp="$(pz_tempfile "${active}.phasezero.tmp.XXXXXX")"
             if [ -f "$active" ]; then
                 awk '
                     BEGIN { in_active=0; saw_active=0; wrote=0 }

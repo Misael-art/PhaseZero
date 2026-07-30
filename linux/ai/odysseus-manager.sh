@@ -182,7 +182,7 @@ record_runtime_image() {
     local image tmp
     image="$(podman inspect phasezero-odysseus-odysseus-1 --format '{{.Image}}' 2>/dev/null || true)"
     [ -n "$image" ] || return 0
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg image "$image" '.runtimeImage=$image' "$MANIFEST" > "$tmp"
     install -m 0600 "$tmp" "$MANIFEST"
     rm -f "$tmp"
@@ -233,7 +233,7 @@ services:
 EOF
     chmod 0600 "$LOCK_FILE"
     local tmp
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg chroma "$chroma" --arg searx "$searx" --arg ntfy "$ntfy" \
         '.dependencyImages={chromadb:$chroma,searxng:$searx,ntfy:$ntfy}' "$MANIFEST" > "$tmp"
     install -m 0600 "$tmp" "$MANIFEST"
@@ -281,7 +281,7 @@ sed -E -i "s/setup_requires=\\[[^]]*\\]/setup_requires=[]/" ./*/setup.py' "$scri
     fi
     patch_hash="$(git -C "$CURRENT" diff -- Dockerfile docker/build-realesrgan-wheels.sh | sha256sum | awk '{print $1}')"
     [ -n "$patch_hash" ] || { pz_error "Odysseus build patch hash missing"; return 1; }
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg hash "$patch_hash" \
         '.localPatches=[{id:"phasezero-container-build-hardening",sha256:$hash,reason:"avoid Torch/CUDA setup_requires; force bounded IPv4 APT retries"}]' \
         "$MANIFEST" > "$tmp"

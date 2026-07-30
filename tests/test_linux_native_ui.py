@@ -67,6 +67,7 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
             "webapp",
             "games",
             "ui",
+        "--internal-player",
         }
     for item in catalog:
         assert item.args[0] in valid_commands

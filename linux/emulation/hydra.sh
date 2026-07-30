@@ -61,7 +61,7 @@ merge_hydra_classic_config() {
         return 0
     fi
     install -d "$HYDRA_CONFIG_DIR"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     if [ -f "$HYDRA_CLASSIC_CONFIG" ] && jq empty "$HYDRA_CLASSIC_CONFIG" >/dev/null 2>&1; then
         jq '.displayClassicContent = true
             | .enableRetroUIFeatures = true
@@ -142,7 +142,7 @@ merge_hydra_emulators_config() {
     fi
     install -d "$HYDRA_CONFIG_DIR"
     entries="$(hydra_emulator_entries_json)"
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     if [ -f "$HYDRA_EMULATORS_CONFIG" ] && jq empty "$HYDRA_EMULATORS_CONFIG" >/dev/null 2>&1; then
         cp "$HYDRA_EMULATORS_CONFIG" "$tmp"
     else
@@ -156,7 +156,7 @@ merge_hydra_emulators_config() {
         executable_path="$(jq -r '.executable_path' <<< "$entry")"
         roms_directory="$(jq -r '.roms_directory' <<< "$entry")"
         default_flags="$(jq -r '.default_flags' <<< "$entry")"
-        next="$(mktemp)"
+        next="$(pz_tempfile)"
         jq \
             --arg key "$system_key" \
             --arg name "$emulator_name" \

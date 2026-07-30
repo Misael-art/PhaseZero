@@ -422,7 +422,7 @@ pz_media_configure_ryujinx() {
             pz_warn "Ryujinx config ignored; invalid game_dirs: $config"
             continue
         }
-        tmp="$(mktemp)"
+        tmp="$(pz_tempfile)"
         jq --arg source "$source" --arg view "$PZ_SCAN_SAFE_SWITCH" \
             '.game_dirs = (((.game_dirs // []) |
                 map(select(. == $view or ((startswith($source + "/") | not) and . != $source))) |
@@ -455,8 +455,8 @@ pz_media_apply_esde_exclusions() {
     local sysdir="$PZ_EMULATION_ROOT/roms/switch" ignored gamelist changed error_log
     [ -d "$sysdir" ] || return 0
     [ -f "$PZ_MEDIA_GAMELIST_TOOL" ] || return 0
-    ignored="$(mktemp)"
-    error_log="$(mktemp)"
+    ignored="$(pz_tempfile)"
+    error_log="$(pz_tempfile)"
     pz_media_ignored_rom_paths "$sysdir" > "$ignored"
     while IFS= read -r gamelist; do
         [ -n "$gamelist" ] || continue
@@ -750,9 +750,9 @@ cmd_index() {
     }
 
     local records ignored output sys_dir sys stem relative_path entry_kind ignored_count
-    records="$(mktemp)"
-    ignored="$(mktemp)"
-    output="$(mktemp)"
+    records="$(pz_tempfile)"
+    ignored="$(pz_tempfile)"
+    output="$(pz_tempfile)"
 
     while IFS= read -r sys_dir; do
         [ -n "$sys_dir" ] || continue
@@ -919,7 +919,7 @@ cmd_apply() {
 
     local srm_settings; srm_settings="$(pz_media_srm_settings_path)"
     if [ -n "$srm_settings" ] && [ -f "$srm_settings" ]; then
-        local tmp; tmp="$(mktemp)"
+        local tmp; tmp="$(pz_tempfile)"
         jq --arg sg "$PZ_STEAMGRID_ROOT" \
             '(.environmentVariables.localImagesDirectory) //= $sg | if .environmentVariables.localImagesDirectory != $sg then .environmentVariables.localImagesDirectory = $sg else . end' \
             "$srm_settings" > "$tmp" && mv "$tmp" "$srm_settings"
@@ -971,7 +971,7 @@ cmd_repair() {
 
     local srm_settings; srm_settings="$(pz_media_srm_settings_path)"
     if [ -n "$srm_settings" ] && [ -f "$srm_settings" ]; then
-        local tmp; tmp="$(mktemp)"
+        local tmp; tmp="$(pz_tempfile)"
         jq --arg sg "$PZ_STEAMGRID_ROOT" \
             'if .environmentVariables.localImagesDirectory != $sg then .environmentVariables.localImagesDirectory = $sg else . end' \
             "$srm_settings" > "$tmp" && mv "$tmp" "$srm_settings"

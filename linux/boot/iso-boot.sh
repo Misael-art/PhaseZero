@@ -260,7 +260,7 @@ apply_manifest_file() {
     pz_boot_validate_active_efi_safe
     jq -e '.schemaVersion == 1 and (.entries | type == "array")' "$proposed" >/dev/null
     pz_boot_backup_bundle "dynamic-iso-boot"
-    tmpdir="$(mktemp -d)"; rollback="$tmpdir/rollback"; install -d "$rollback"
+    tmpdir="$(pz_tempfile -d)"; rollback="$tmpdir/rollback"; install -d "$rollback"
     config_old="$rollback/config"; iso_old="$rollback/iso"; usb_old="$rollback/usb"; fm_old="$rollback/grubfm"
     [ -f "$CONFIG" ] && cp -a "$CONFIG" "$config_old"
     [ -f "$ISO_SCRIPT" ] && cp -a "$ISO_SCRIPT" "$iso_old"
@@ -379,13 +379,13 @@ cmd_iso() {
             [ -n "$id" ] || id="$(slugify "$(basename "${path%.iso}")")"
             [ -n "$title" ] || title="ISO: $(basename "$path")"
             entry="$(iso_entry_json "$path" "$profile" "$id" "$title")"
-            proposed="$(mktemp)"; manifest_with_entry "$entry" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_with_entry "$entry" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
         remove)
             id="${REST[0]:-}"; [ -n "$id" ] || { pz_error "usage: boot iso remove ID [--dry-run]"; return 2; }
             [ "${REST[1]:-}" = --dry-run ] && dry=1
-            proposed="$(mktemp)"; manifest_without_entry "$id" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_without_entry "$id" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
         verify)
@@ -405,12 +405,12 @@ cmd_iso() {
             path="$(jq -r '.hostPath' <<< "$entry")"; profile="$(jq -r '.profile' <<< "$entry")"; title="$(jq -r '.title' <<< "$entry")"
             [ "${REST[1]:-}" = --dry-run ] && dry=1
             entry="$(iso_entry_json "$path" "$profile" "$id" "$title")"
-            proposed="$(mktemp)"; manifest_with_entry "$entry" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_with_entry "$entry" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
         install)
             [ "${REST[0]:-}" = --dry-run ] && { manifest_json; return 0; }
-            proposed="$(mktemp)"; manifest_json > "$proposed"; apply_manifest_file "$proposed"; rm -f "$proposed"
+            proposed="$(pz_tempfile)"; manifest_json > "$proposed"; apply_manifest_file "$proposed"; rm -f "$proposed"
             ;;
         next)
             id="${REST[0]:-}"; schedule_next iso "$id" "${REST[@]:1}"
@@ -433,7 +433,7 @@ usb_entry_json() {
         uuid="$(findmnt -no UUID -T "$root" | head -1)"; fstype="$(findmnt -no FSTYPE -T "$root" | head -1)"
     elif [ -b "$input" ]; then
         source="$(realpath -e "$input")"; uuid="$(blkid -s UUID -o value "$source")"; fstype="$(blkid -s TYPE -o value "$source")"
-        tmp="$(mktemp -d)"; mount_device_ro "$source" "$tmp"; root="$tmp"
+        tmp="$(pz_tempfile -d)"; mount_device_ro "$source" "$tmp"; root="$tmp"
     else
         pz_error "USB source must be mounted directory or block partition: $input"; return 2
     fi
@@ -465,16 +465,16 @@ cmd_usb() {
             [ -n "$title" ] || title="Removable EFI: $(basename "$input")"
             [ "$dry" -eq 1 ] || need_root
             entry="$(usb_entry_json "$input" "$id" "$title")"
-            proposed="$(mktemp)"; manifest_with_entry "$entry" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_with_entry "$entry" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
         remove)
             id="${REST[0]:-}"; [ -n "$id" ] || { pz_error "usage: boot usb remove ID [--dry-run]"; return 2; }
             [ "${REST[1]:-}" = --dry-run ] && dry=1
-            proposed="$(mktemp)"; manifest_without_entry "$id" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_without_entry "$id" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
-        install) proposed="$(mktemp)"; manifest_json > "$proposed"; [ "${REST[0]:-}" = --dry-run ] && cat "$proposed" || apply_manifest_file "$proposed"; rm -f "$proposed" ;;
+        install) proposed="$(pz_tempfile)"; manifest_json > "$proposed"; [ "${REST[0]:-}" = --dry-run ] && cat "$proposed" || apply_manifest_file "$proposed"; rm -f "$proposed" ;;
         next) id="${REST[0]:-}"; schedule_next removable-efi "$id" "${REST[@]:1}" ;;
         *) pz_error "usage: boot usb (status|discover|add|remove|install|next)"; return 2 ;;
     esac
@@ -518,16 +518,16 @@ cmd_grubfm() {
             [ "$secure" = disabled ] || { pz_error "Secure Boot must be confirmed disabled before grubfm install (state=$secure)"; return 1; }
             [ "$dry" -eq 0 ] || { jq --arg secureBoot "$secure" '. + {secureBoot:$secureBoot,wouldInstall:true}' <<< "$inspection"; return 0; }
             need_root; pz_boot_require_current_root_target; pz_boot_preflight_grub; pz_boot_backup_bundle "grubfm-install"
-            tmp="$(mktemp)"; install -m 0644 "$source" "$tmp"; pz_boot_atomic_install "$tmp" "$GRUBFM_EFI" 0644; rm -f "$tmp"
+            tmp="$(pz_tempfile)"; install -m 0644 "$source" "$tmp"; pz_boot_atomic_install "$tmp" "$GRUBFM_EFI" 0644; rm -f "$tmp"
             install -d "$(dirname "$ARTIFACTS")"
             jq --arg installedAt "$(date -Iseconds)" '. + {installedAt:$installedAt}' <<< "$inspection" > "$ARTIFACTS"
             chmod 0644 "$ARTIFACTS"
-            manifest="$(mktemp)"; manifest_json > "$manifest"; apply_manifest_file "$manifest"; rm -f "$manifest"
+            manifest="$(pz_tempfile)"; manifest_json > "$manifest"; apply_manifest_file "$manifest"; rm -f "$manifest"
             ;;
         remove)
             [ "${REST[0]:-}" = --dry-run ] && { grubfm_status_json | jq '. + {wouldRemove:true}'; return 0; }
             need_root; pz_boot_backup_bundle "grubfm-remove"; rm -f "$GRUBFM_EFI" "$ARTIFACTS"
-            manifest="$(mktemp)"; manifest_json > "$manifest"; apply_manifest_file "$manifest"; rm -f "$manifest"
+            manifest="$(pz_tempfile)"; manifest_json > "$manifest"; apply_manifest_file "$manifest"; rm -f "$manifest"
             ;;
         next) schedule_next grubfm "" "${REST[@]}" ;;
         *) pz_error "usage: boot grubfm (status|inspect|install|remove|next)"; return 2 ;;

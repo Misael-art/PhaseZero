@@ -260,7 +260,7 @@ ALTEOF
 
     if [ -f "$emudeck_home/settings.json" ] && command -v jq >/dev/null 2>&1; then
         local tmp
-        tmp="$(mktemp)"
+        tmp="$(pz_tempfile)"
         jq '.android.overwriteConfigEmus.citron.status = true' "$emudeck_home/settings.json" > "$tmp" 2>/dev/null && mv "$tmp" "$emudeck_home/settings.json" || rm -f "$tmp"
     fi
 
