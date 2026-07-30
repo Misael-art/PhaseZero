@@ -841,25 +841,36 @@ run_drivers() {
     done
 
     if [ "$qga_ok" = "1" ]; then
-        local ps_cmd='powershell -Command "
-            $d = (Get-Volume -FileSystemLabel VIRTIO).DriveLetter + ':' 2>$null;
-            if (-not $d) { $d = 'D:' };
-            if (Test-Path \"$d\setup.exe\") {
-                Write-Host Installing VirtIO drivers from $d;
-                Start-Process \"$d\setup.exe\" -ArgumentList '/S /NoRestart' -NoNewWindow -Wait
-            } elseif (Test-Path \"$d\virtio-win-gt-x64.msi\") {
-                Write-Host Installing VirtIO MSI from $d;
-                Start-Process msiexec.exe -ArgumentList \"/i \\\"$d\virtio-win-gt-x64.msi\\\" /qn /norestart\" -NoNewWindow -Wait
-            } else {
-                Write-Host Searching for .inf drivers in $d;
-                Get-ChildItem \"$d\" -Filter *.inf -Recurse | ForEach-Object {
-                    & pnputil /add-driver $_.FullName /install 2>&1 | Write-Host
-                }
-            };
-            Write-Host VirtIO driver installation complete
-        "'
+        local ps_script
+        ps_script=$(cat << 'PSEOF'
+$d = (Get-Volume -FileSystemLabel VIRTIO).DriveLetter + ':' 2>$null;
+if (-not $d) { $d = 'D:' };
+if (Test-Path "$d\setup.exe") {
+    Write-Host Installing VirtIO drivers from $d;
+    Start-Process "$d\setup.exe" -ArgumentList '/S /NoRestart' -NoNewWindow -Wait
+} elseif (Test-Path "$d\virtio-win-gt-x64.msi") {
+    Write-Host Installing VirtIO MSI from $d;
+    Start-Process msiexec.exe -ArgumentList "/i ""$d\virtio-win-gt-x64.msi"" /qn /norestart" -NoNewWindow -Wait
+} else {
+    Write-Host Searching for .inf drivers in $d;
+    Get-ChildItem "$d" -Filter *.inf -Recurse | ForEach-Object {
+        & pnputil /add-driver $_.FullName /install 2>&1 | Write-Host
+    }
+};
+Write-Host VirtIO driver installation complete
+PSEOF
+)
+        local qga_json
+        qga_json=$(jq -n --arg ps "$ps_script" '{
+            "execute": "guest-exec",
+            "arguments": {
+                "path": "powershell.exe",
+                "arg": ["-Command", $ps],
+                "capture-output": true
+            }
+        }')
         local exec_result
-        exec_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec","arguments":{"path":"powershell.exe","arg":["-Command","'"$ps_cmd"'"],"capture-output":true}}')"
+        exec_result="$(qga_exec "$qga_sock" "$qga_json")"
         local pid
         pid="$(echo "$exec_result" | jq -r '.return.pid // 0')"
         if [ "$pid" -gt 0 ]; then
@@ -882,8 +893,17 @@ run_drivers() {
         fi
 
         # Post-driver display adapter check
+        local check_qga
+        check_qga=$(jq -n '{
+            "execute": "guest-exec",
+            "arguments": {
+                "path": "powershell.exe",
+                "arg": ["-Command", "(Get-PnpDevice -Class Display).Name"],
+                "capture-output": true
+            }
+        }')
         local check_result
-        check_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec","arguments":{"path":"powershell.exe","arg":["-Command","(Get-PnpDevice -Class Display).Name"],"capture-output":true}}')"
+        check_result="$(qga_exec "$qga_sock" "$check_qga")"
         local check_pid
         check_pid="$(echo "$check_result" | jq -r '.return.pid // 0')"
         if [ "$check_pid" -gt 0 ]; then
@@ -975,21 +995,28 @@ run_tweaks() {
         tweaks_json="$(bash "$PZ_ROOT/linux/windows-vm/tweaks.sh" apply 2>/dev/null || echo '[]')"
         echo "$tweaks_json" > "$vm_dir/tweaks-manifest.json"
 
-        local ps_cmds=()
-        ps_cmds+=('Remove-AppxPackage -Package "*xbox*" -AllUsers -ErrorAction SilentlyContinue')
-        ps_cmds+=('powercfg /change standby-timeout-ac 0')
-        ps_cmds+=('powercfg /change hibernate-timeout-ac 0')
-        ps_cmds+=('powercfg /h off')
-        ps_cmds+=('Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 0 -Type DWord')
-        ps_cmds+=('Set-Service -Name wuauserv -StartupType Disabled -ErrorAction SilentlyContinue')
-        local combined
-        combined="$(
-            IFS=';'
-            echo "${ps_cmds[*]}"
-        )"
+        local tweaks_script
+        tweaks_script=$(cat << 'PSEOF'
+Remove-AppxPackage -Package "*xbox*" -AllUsers -ErrorAction SilentlyContinue
+powercfg /change standby-timeout-ac 0
+powercfg /change hibernate-timeout-ac 0
+powercfg /h off
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 0 -Type DWord
+Set-Service -Name wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
+PSEOF
+)
 
+        local tweaks_qga
+        tweaks_qga=$(jq -n --arg ps "$tweaks_script" '{
+            "execute": "guest-exec",
+            "arguments": {
+                "path": "powershell.exe",
+                "arg": ["-Command", $ps],
+                "capture-output": true
+            }
+        }')
         local exec_result
-        exec_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec","arguments":{"path":"powershell.exe","arg":["-Command","'"$combined"'"],"capture-output":true}}')"
+        exec_result="$(qga_exec "$qga_sock" "$tweaks_qga")"
         local pid
         pid="$(echo "$exec_result" | jq -r '.return.pid // 0')"
         if [ "$pid" -gt 0 ]; then

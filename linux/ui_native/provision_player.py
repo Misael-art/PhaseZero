@@ -295,9 +295,7 @@ class ProvisionPlayerWindow(QWidget):
         if cls._instance is not None:
             win = cls._instance
             win._resume_state()
-            win._iso = iso
-            win._graphics = graphics
-            win._image_index = image_index
+            win._apply_launch_params(iso, graphics, image_index)
             win._update_summary()
             win.show()
             win.raise_()
@@ -313,9 +311,9 @@ class ProvisionPlayerWindow(QWidget):
         super().__init__(parent)
         self._root = root
         self._runner = runner
-        self._iso = iso
-        self._graphics = graphics
-        self._image_index = image_index
+        self._iso = ""
+        self._graphics = "compat"
+        self._image_index = "1"
         self._plan_id = ""
         self._confirm_token = ""
         self._operation_id = ""
@@ -330,6 +328,8 @@ class ProvisionPlayerWindow(QWidget):
         self._closing = False
         self._discarding = False
 
+        self._resume_state()
+        self._apply_launch_params(iso, graphics, image_index)
         self.setWindowTitle("Preparar Windows e reiniciar")
         self.setMinimumSize(600, 500)
         self.resize(680, 560)
@@ -437,7 +437,6 @@ class ProvisionPlayerWindow(QWidget):
         self._elapsed_timer.timeout.connect(self._update_elapsed)
         self._elapsed_timer.setInterval(1000)
 
-        self._resume_state()
         self._update_summary()
         self.show()
 
@@ -465,12 +464,19 @@ class ProvisionPlayerWindow(QWidget):
             "graphics": self._graphics,
             "imageIndex": self._image_index,
             "operationId": self._operation_id,
-            "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
+        data["updatedAt"] = datetime.now(timezone.utc).isoformat()
         try:
+            PLAYER_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
             secure_file(PLAYER_STATE_PATH, json.dumps(data, indent=2))
         except OSError:
             pass
+
+    def _apply_launch_params(self, iso: str = "", graphics: str = "compat",
+                              image_index: str = "1") -> None:
+        self._iso = iso
+        self._graphics = graphics
+        self._image_index = image_index
 
     def _resume_state(self) -> None:
         if not PLAYER_STATE_PATH.exists():
@@ -481,9 +487,6 @@ class ProvisionPlayerWindow(QWidget):
             return
 
         prev = data.get("state", "")
-        self._iso = data.get("iso", self._iso)
-        self._graphics = data.get("graphics", self._graphics)
-        self._image_index = data.get("imageIndex", self._image_index)
         self._operation_id = data.get("operationId", "")
 
         if prev in (ST_PROVISIONING, ST_VALIDATING) and self._operation_id:

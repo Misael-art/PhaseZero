@@ -306,3 +306,25 @@ def test_discard_removes_state_file(qapp) -> None:
             QApplication.processEvents()
             time.sleep(0.05)
         _cleanup_player()
+
+
+def test_open_params_beat_persisted_state(qapp) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    _cleanup_player()
+    try:
+        PLAYER_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        PLAYER_STATE_PATH.write_text(json.dumps({
+            "state": "failed",
+            "iso": "/old.iso",
+            "graphics": "virtio-gl",
+            "imageIndex": "99",
+            "operationId": "",
+        }))
+        win = ProvisionPlayerWindow(ROOT, MagicMock(), None,
+                                    iso="/new.iso", graphics="compat",
+                                    image_index="2")
+        assert win._iso == "/new.iso", f"expected /new.iso, got {win._iso}"
+        assert win._graphics == "compat", f"expected compat, got {win._graphics}"
+        assert win._image_index == "2", f"expected 2, got {win._image_index}"
+    finally:
+        _cleanup_player()
