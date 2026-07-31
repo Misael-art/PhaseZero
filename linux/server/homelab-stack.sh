@@ -74,10 +74,20 @@ while [ "$#" -gt 0 ]; do
         *)
             case "$ACTION" in
                 open|logs)
-                    [ -z "$APP" ] && APP="$1" || { pz_error "unexpected argument: $1"; exit 2; }
+                    if [ -z "$APP" ]; then
+                        APP="$1"
+                    else
+                        pz_error "unexpected argument: $1"
+                        exit 2
+                    fi
                     ;;
                 restore)
-                    [ -z "$SOURCE" ] && SOURCE="$1" || { pz_error "unexpected argument: $1"; exit 2; }
+                    if [ -z "$SOURCE" ]; then
+                        SOURCE="$1"
+                    else
+                        pz_error "unexpected argument: $1"
+                        exit 2
+                    fi
                     ;;
                 *) pz_error "unexpected argument: $1"; usage; exit 2 ;;
             esac
@@ -148,6 +158,7 @@ random_secret() {
 env_set() {
     local key="$1" value="$2" tmp
     mkdir -p "$(dirname "$ENV_FILE")"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
     tmp="$(pz_tempfile)"
     if [ -f "$ENV_FILE" ]; then
         awk -v k="$key" -v v="$value" '
@@ -491,7 +502,9 @@ cmd_up() {
     run_compose config --services >/dev/null
     pz_info "starting homelab stack (project $PROJECT, extras=$WITH_EXTRAS, access=$ACCESS_MODE)"
     run_compose up -d
-    [ "$ACCESS_MODE" = "tailscale" ] && ensure_tailscale || true
+    if [ "$ACCESS_MODE" = "tailscale" ]; then
+        ensure_tailscale || true
+    fi
     cmd_plan
 }
 
@@ -620,7 +633,9 @@ cmd_repair() {
     if compose_available && [ -f "$CORE_FILE" ]; then
         run_compose config --services >/dev/null || pz_warn "compose config reported issues"
     fi
-    [ "$ACCESS_MODE" = "tailscale" ] && ensure_tailscale || true
+    if [ "$ACCESS_MODE" = "tailscale" ]; then
+        ensure_tailscale || true
+    fi
     cmd_plan
 }
 

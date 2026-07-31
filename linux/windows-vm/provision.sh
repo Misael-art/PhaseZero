@@ -580,9 +580,13 @@ run_assets() {
             log_operation "$op" "downloading VirtIO drivers from $virtio_url"
             local download_ok=0
             if command -v curl >/dev/null 2>&1; then
-                curl -L -o "$vm_dir/virtio-win.iso" "$virtio_url" && download_ok=1 || true
+                if curl -L -o "$vm_dir/virtio-win.iso" "$virtio_url"; then
+                    download_ok=1
+                fi
             elif command -v wget >/dev/null 2>&1; then
-                wget -O "$vm_dir/virtio-win.iso" "$virtio_url" && download_ok=1 || true
+                if wget -O "$vm_dir/virtio-win.iso" "$virtio_url"; then
+                    download_ok=1
+                fi
             fi
             if [ "$download_ok" = "1" ] && [ -n "$virtio_expected" ]; then
                 local actual
@@ -1458,7 +1462,9 @@ provision_shutdown() {
     done
 
     if [ "$shutdown_ok" != "1" ] && [ -n "$qemu_pid" ]; then
-        [[ "$qemu_pid" =~ ^[0-9]+$ ]] && kill "$qemu_pid" 2>/dev/null || true
+        if [[ "$qemu_pid" =~ ^[0-9]+$ ]]; then
+            kill "$qemu_pid" 2>/dev/null || true
+        fi
     fi
 
     if [ "$json" = "1" ]; then
@@ -1509,7 +1515,9 @@ EOF
 }
 
 ACTION="${1:-help}"
-[ $# -gt 0 ] && shift || true
+if [ $# -gt 0 ]; then
+    shift
+fi
 
 case "$ACTION" in
     plan|dry-run) provision_plan "$@" ;;

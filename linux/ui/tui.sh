@@ -59,6 +59,7 @@ pz_tui_run() {
 
 pz_tui_show_output() {
     local title="$1" tmp
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
     tmp="$(pz_tempfile)"
     shift 1
     "$@" > "$tmp" 2>&1 || true
@@ -226,7 +227,9 @@ ai_menu() {
 }
 
 profiles_menu() {
-    local tmp; tmp="$(pz_tempfile)"
+    local tmp
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     echo "Perfis disponíveis:" > "$tmp"
     for f in "$PZ_ROOT/profiles"/*.json; do
         local name; name="$(basename "$f" .json)"

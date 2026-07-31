@@ -284,6 +284,7 @@ pz_shortcut_strip_software_render() {
     local file="$1" tmp
     [ -f "$file" ] || return 0
     grep -qi 'SoftwareRender\|Software Render' "$file" 2>/dev/null || return 0
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
     tmp="$(pz_tempfile)"
     awk '
         function clean_actions(line,    value,n,i,item,out,count) {
@@ -335,6 +336,7 @@ pz_shortcut_hide_duplicate() {
 
 pz_shortcut_set_desktop_key() {
     local file="$1" key="$2" value="$3" tmp
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
     tmp="$(pz_tempfile)"
     awk -v key="$key" -v value="$value" '
         BEGIN { in_entry = 0; wrote = 0 }
@@ -459,7 +461,9 @@ cmd_repair() {
             pz_shortcut_hide_duplicate "$dup"
         done < <(pz_shortcut_duplicates_for_app "$id" "$desktop")
     done < <(pz_shortcut_apps)
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1
+    fi
     while IFS='|' read -r id name comment icon wrapper desktop candidates mode suffix mime; do
         [ -z "$id" ] && continue
         pz_shortcut_strip_software_render "$desktop"

@@ -12,7 +12,7 @@ grep -q '=== System Info ===' <<< "$output"
 grep -q '=== Services ===' <<< "$output"
 grep -q '=== Summary ===' <<< "$output"
 grep -q 'Results JSON:' <<< "$output"
-! grep -q '=== Steam Deck ===' <<< "$output"
+grep -q '=== Steam Deck ===' <<< "$output" && exit 1
 jq -e 'type == "array" and length >= 10' <<< "$(sed -n '/^Results JSON:$/,$p' <<< "$output" | tail -n +2)" >/dev/null
 if grep -q '\[FAIL\]\|\[ERROR\]' <<< "$output"; then
     test "$rc" -ne 0

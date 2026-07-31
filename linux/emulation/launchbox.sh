@@ -77,7 +77,9 @@ launchbox_install_fonts() {
         for font in \
             /usr/share/fonts/liberation/LiberationSans-Regular.ttf \
             /usr/share/fonts/noto/NotoSans-Regular.ttf; do
-            [ -f "$font" ] && cp -f "$font" "$PZ_LAUNCHBOX_WINEPREFIX/drive_c/windows/Fonts/" || true
+            if [ -f "$font" ]; then
+                cp -f "$font" "$PZ_LAUNCHBOX_WINEPREFIX/drive_c/windows/Fonts/" || true
+            fi
         done
     fi
 }
@@ -312,7 +314,9 @@ Categories=Game;Emulator;
 NoDisplay=$bigbox_nodisplay
 X-PhaseZero-Managed=true
 EOF
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    fi
 }
 
 launchbox_data_valid() {
@@ -516,10 +520,10 @@ cmd_install_clean() {
     timeout "${PZ_LAUNCHBOX_SETUP_TIMEOUT:-30m}" \
         env WINEPREFIX="$PZ_LAUNCHBOX_WINEPREFIX" WINEDEBUG=-all \
         wine "$PZ_LAUNCHBOX_INSTALLER" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- "/DIR=$windows_stage"
-    [ -s "$stage/LaunchBox.exe" ] && [ -s "$stage/BigBox.exe" ] || {
+    if [ ! -s "$stage/LaunchBox.exe" ] || [ ! -s "$stage/BigBox.exe" ]; then
         pz_error "LaunchBox setup completed without expected executables"
         return 1
-    }
+    fi
     launchbox_verify_installed_version
     install -D -m 0644 "$PZ_LAUNCHBOX_INSTALLER" \
         "$stage/install/$(basename "$PZ_LAUNCHBOX_INSTALLER")"

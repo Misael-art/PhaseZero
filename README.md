@@ -44,6 +44,8 @@ A [pagina de Releases](https://github.com/Misael-art/PhaseZero/releases/latest) 
 
 `SHA256SUMS-<versao>` acompanha cada release; confira com `sha256sum -c`. O pacote instala `phasezero-control-center` (binario) e um atalho de desktop (`io.phasezero.ControlCenter.desktop`); a UI so chama `linux/pz` com argumentos de um catalogo allowlisted, nunca implementa instalacao ou mutacao por conta propria. Detalhes de empacotamento e build local em [`linux/ui_native/README.md`](linux/ui_native/README.md).
 
+> **Nota de transparencia (v1.13.x):** a release v1.13.1 foi republicada apos a publicacao original e, por isso, os checksums listados nela diferem dos da primeira publicacao. A v1.13.1 atual e estavel, mas a **v1.13.2 e a versao autoritativa** para novas instalacoes; confira sempre o `SHA256SUMS` da versao mais recente.
+
 Para a trilha CLI completa (perfis, Steam Deck, VM, emulacao, servidor caseiro) sem instalar pacote, use um checkout do repositorio e chame `linux/pz` diretamente:
 
 ```bash

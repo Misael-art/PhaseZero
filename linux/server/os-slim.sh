@@ -72,7 +72,11 @@ cmd_restore() {
     while IFS= read -r svc; do
         [ -n "$svc" ] || continue
         if [ "${PZ_DRY_RUN:-0}" = "1" ]; then pz_info "dry-run: would re-enable $svc"; continue; fi
-        admin_run systemctl enable --now "$svc" >/dev/null 2>&1 && pz_info "restored: $svc" || pz_warn "could not restore $svc"
+        if admin_run systemctl enable --now "$svc" >/dev/null 2>&1; then
+            pz_info "restored: $svc"
+        else
+            pz_warn "could not restore $svc"
+        fi
     done < <(jq -r '.disabled[]?' "$STATE_FILE" 2>/dev/null)
     [ "${PZ_DRY_RUN:-0}" = "1" ] || { rm -f "$STATE_FILE"; pz_info "os-slim reverted; state cleared"; }
 }

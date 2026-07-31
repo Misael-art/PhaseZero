@@ -165,11 +165,11 @@ vm_rescue_do_install() {
         _vm_rescue_log "install_vm failed rc=$rc"
         return $rc
     }
-    [ -f "$DISK_PATH" ] && disk_looks_installed "$DISK_PATH" || {
+    if [ ! -f "$DISK_PATH" ] || ! disk_looks_installed "$DISK_PATH"; then
         _vm_rescue_log "disk not found/installed after install: $DISK_PATH"
         pz_error "disk not found after install"
         return 1
-    }
+    fi
     _vm_rescue_log "install complete: disk=$DISK_PATH"
     return 0
 }
@@ -230,15 +230,27 @@ vm_rescue_escape_to_desktop() {
             _vm_rescue_log "escape test mode - actions printed"
             return 0
         fi
-        [ -f /etc/sddm.conf.d/91-phasezero-windows-vm.conf ] && grep -q 'PhaseZero managed' /etc/sddm.conf.d/91-phasezero-windows-vm.conf 2>/dev/null && rm -f /etc/sddm.conf.d/91-phasezero-windows-vm.conf && _vm_rescue_log "sddm drop-in removed" || true
+        if [ -f /etc/sddm.conf.d/91-phasezero-windows-vm.conf ] && grep -q 'PhaseZero managed' /etc/sddm.conf.d/91-phasezero-windows-vm.conf 2>/dev/null; then
+            rm -f /etc/sddm.conf.d/91-phasezero-windows-vm.conf
+            _vm_rescue_log "sddm drop-in removed"
+        fi
         for _conf in /etc/gdm3/custom.conf /etc/gdm/custom.conf; do
             [ -f "$_conf" ] || continue
-            grep -q '# PhaseZero managed' "$_conf" 2>/dev/null && sed -i '/# PhaseZero managed/,/AutomaticLogin=/d' "$_conf" && _vm_rescue_log "gdm block removed: $_conf" || true
+            if grep -q '# PhaseZero managed' "$_conf" 2>/dev/null; then
+                sed -i '/# PhaseZero managed/,/AutomaticLogin=/d' "$_conf"
+                _vm_rescue_log "gdm block removed: $_conf"
+            fi
         done
-        [ -f /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf ] && grep -q 'PhaseZero managed' /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf 2>/dev/null && rm -f /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf && _vm_rescue_log "lightdm drop-in removed" || true
+        if [ -f /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf ] && grep -q 'PhaseZero managed' /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf 2>/dev/null; then
+            rm -f /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf
+            _vm_rescue_log "lightdm drop-in removed"
+        fi
         _lxdm_conf=/etc/lxdm/lxdm.conf
         if [ -f "$_lxdm_conf" ]; then
-            grep -q '# PhaseZero managed' "$_lxdm_conf" 2>/dev/null && sed -i '/# PhaseZero managed/,/# PhaseZero managed end/d' "$_lxdm_conf" && _vm_rescue_log "lxdm block removed: $_lxdm_conf" || true
+            if grep -q '# PhaseZero managed' "$_lxdm_conf" 2>/dev/null; then
+                sed -i '/# PhaseZero managed/,/# PhaseZero managed end/d' "$_lxdm_conf"
+                _vm_rescue_log "lxdm block removed: $_lxdm_conf"
+            fi
         fi
         if [ -f /etc/greetd/config.toml ] && grep -q 'PhaseZero managed' /etc/greetd/config.toml 2>/dev/null; then
             local greetd_backup="/etc/greetd/config.toml.phasezero-backup"

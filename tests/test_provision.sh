@@ -79,11 +79,11 @@ assert_eq "autounattend.xml exists" "1" "$([ -f "$OUT_DIR/autounattend.xml" ] &&
 
 # Validate XML structure
 if command -v xmllint >/dev/null 2>&1; then
-    xmllint --noout "$OUT_DIR/autounattend.xml" 2>/dev/null && {
+    if xmllint --noout "$OUT_DIR/autounattend.xml" 2>/dev/null; then
         assert_eq "autounattend.xml valid XML" "1" "1"
-    } || {
+    else
         assert_eq "autounattend.xml valid XML" "1" "0"
-    }
+    fi
 fi
 
 assert_contains "autounattend has disk config" "$(cat "$OUT_DIR/autounattend.xml")" "DiskConfiguration"

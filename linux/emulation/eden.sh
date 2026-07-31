@@ -43,7 +43,7 @@ Terminal=false
 Categories=Game;Emulator;
 MimeType=application/x-nx-nsp;application/x-nx-xci;
 EOF
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true; fi
 }
 
 configure_eden_dirs() {
@@ -252,6 +252,7 @@ integrate_with_emudeck() {
     local es_rules="$emudeck_backend/configs/emulationstation/custom_systems/es_find_rules.xml"
     if [ -f "$es_rules" ] && ! grep -q '<emulator name="EDEN">' "$es_rules" 2>/dev/null; then
         if command -v xmlstarlet >/dev/null 2>&1; then
+            # shellcheck disable=SC2016 # literal XPath var refs for xmlstarlet ed
             xmlstarlet ed -S --inplace \
                 -s '/ruleList' -t elem -n 'emulator' \
                 --var newEmu '$prev' \
@@ -341,8 +342,13 @@ ALTEOF
 
     if [ -f "$emudeck_home/settings.json" ] && command -v jq >/dev/null 2>&1; then
         local tmp
+        # shellcheck disable=SC2119 # pz_tempfile template arg optional; default mktemp template intended
         tmp="$(pz_tempfile)"
-        jq '.android.overwriteConfigEmus.eden.status = true' "$emudeck_home/settings.json" > "$tmp" 2>/dev/null && mv "$tmp" "$emudeck_home/settings.json" || rm -f "$tmp"
+        if jq '.android.overwriteConfigEmus.eden.status = true' "$emudeck_home/settings.json" > "$tmp" 2>/dev/null; then
+            mv "$tmp" "$emudeck_home/settings.json" || rm -f "$tmp"
+        else
+            rm -f "$tmp"
+        fi
     fi
 
     pz_info "Eden integrated with EmuDeck"

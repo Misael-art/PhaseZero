@@ -30,6 +30,7 @@ write_workspace_recommendations() {
     mkdir -p "$(dirname "$EXTENSIONS_JSON")"
     local recs tmp
     recs="$(recommended_extensions_json)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
     tmp="$(pz_tempfile)"
     if [ -f "$EXTENSIONS_JSON" ] && jq empty "$EXTENSIONS_JSON" >/dev/null 2>&1; then
         jq --argjson recs "$recs" '

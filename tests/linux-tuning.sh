@@ -25,10 +25,16 @@ jq empty "$chromium_policy"
 grep -Fq 'browser.safebrowsing.downloads.remote.enabled", true' "$userjs"
 grep -Fq 'browser.safebrowsing.malware.enabled", true' "$userjs"
 grep -Fq 'browser.safebrowsing.phishing.enabled", true' "$userjs"
-! grep -Eq 'browser\.safebrowsing\.(downloads\.remote|malware|phishing)\.enabled", false' "$userjs"
+if grep -Eq 'browser\.safebrowsing\.(downloads\.remote|malware|phishing)\.enabled", false' "$userjs"; then
+    echo "FAIL: safebrowsing still disabled in user.js"
+    exit 1
+fi
 
 bash "$REPO_ROOT/linux/tuning/browser-hardening.sh" >/dev/null
 find "${PZ_BACKUP_ROOT:-$XDG_STATE_HOME/backups}" -type f -name 'user.js.bak.*' -print -quit | grep -q .
-! grep -Fq 'cat | sudo tee' "$REPO_ROOT/linux/tuning/dev-tweaks.sh"
+if grep -Fq 'cat | sudo tee' "$REPO_ROOT/linux/tuning/dev-tweaks.sh"; then
+    echo "FAIL: dev-tweaks.sh still uses 'cat | sudo tee'"
+    exit 1
+fi
 
 echo "linux-tuning smoke ok"

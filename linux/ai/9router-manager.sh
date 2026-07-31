@@ -159,7 +159,9 @@ X-PhaseZero-MenuGroup=web.ai
 X-PhaseZero-Managed=true
 EOF
     chmod 0644 "$DASHBOARD_ENTRY"
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    fi
 
     pz_write_managed_file "$SYSTEMD_USER_DIR/$SERVICE" user <<EOF
 [Unit]
@@ -256,7 +258,9 @@ install_verified_package() (
         return 1
     }
     [ "$(service_state)" = active ] && was_active=true
-    $was_active && systemctl --user stop "$SERVICE" >/dev/null 2>&1 || true
+    if $was_active; then
+        systemctl --user stop "$SERVICE" >/dev/null 2>&1 || true
+    fi
     backup="$BACKUP_ROOT/$(installed_version)-$(date +%Y%m%d-%H%M%S)"
     if [ -e "$INSTALL_ROOT" ]; then mv "$INSTALL_ROOT" "$backup"; fi
     if ! mv "$stage" "$INSTALL_ROOT"; then
@@ -272,7 +276,9 @@ install_verified_package() (
             rm -rf "$INSTALL_ROOT"
             [ -e "$backup" ] && mv "$backup" "$INSTALL_ROOT"
             systemctl --user daemon-reload
-            $was_active && systemctl --user start "$SERVICE" >/dev/null 2>&1 || true
+            if $was_active; then
+                systemctl --user start "$SERVICE" >/dev/null 2>&1 || true
+            fi
             pz_error "9Router update failed health check; rollback applied"
             return 1
         fi
@@ -528,7 +534,10 @@ combo_list() {
 
 combo_create() {
     local name="${1:-}" csv="${2:-}" models payload
-    [ -n "$name" ] && [ -n "$csv" ] || { pz_error "usage: pz ai 9router combo create <name> <model1,model2>"; return 2; }
+    if [ -z "$name" ] || [ -z "$csv" ]; then
+        pz_error "usage: pz ai 9router combo create <name> <model1,model2>"
+        return 2
+    fi
     models="$(printf '%s' "$csv" | jq -R 'split(",") | map(select(length>0))')"
     payload="$(mktemp)"; jq -n --arg name "$name" --argjson models "$models" '{name:$name,models:$models}' > "$payload"
     api_request POST /api/combos "$payload" | jq 'del(.apiKey,.secret,.token)'

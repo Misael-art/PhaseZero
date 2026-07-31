@@ -36,6 +36,7 @@ runtime_specs="$(sed -n '/^runtime_file_specs()/,/^}/p' "$REPO_ROOT/linux/window
 gfx_specs="$(sed -n '/^runtime_artifact_specs()/,/^}/p' "$REPO_ROOT/linux/windows-vm/graphics.sh")"
 test -n "$runtime_specs"
 test -n "$gfx_specs"
+# shellcheck disable=SC2016 # sed pattern matches literal source lines
 while read -r lib_dep; do
     [ -n "$lib_dep" ] || continue
     grep -Fq "linux/lib/$lib_dep" <<< "$runtime_specs" || {
@@ -66,6 +67,7 @@ grep -q 'pz_boot_validate_active_efi_safe' "$REPO_ROOT/linux/windows-vm/windows-
 grep -q 'pz_boot_require_current_root_target' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -q 'BOOT_ID="phasezero-windows-vm"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -q -- "--hotkey=w" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+# shellcheck disable=SC2016 # literal "$BOOT_ID" text searched in script source
 grep -q 'grub-reboot "$BOOT_ID"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 target_status="$("$REPO_ROOT/linux/pz" windows-vm boot --target-root / status)"
 grep -q 'target_root: /' <<< "$target_status"
@@ -92,7 +94,7 @@ grep -q 'launcher_kind=dispatcher' <<< "$session_validation"
 grep -q 'windows-vm launch --fullscreen' <<< "$session_validation"
 grep -q 'display_profile=' <<< "$session_validation"
 grep -q 'compositor=' <<< "$session_validation"
-! grep -q 'startkde-biglinux' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+grep -q 'startkde-biglinux' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" && exit 1
 
 session_bin="$TMP_ROOT/session-bin"
 fake_repo="$TMP_ROOT/fake-repo"
@@ -442,16 +444,19 @@ touch "$RESCUE_TEST_DIR/home/Downloads/Win11_24H2.iso"
 (
     source "$REPO_ROOT/linux/windows-vm/rescue.sh"
     # Guard: no boot session → skip
+    # shellcheck disable=SC2030 # deliberate env override scoped to test subshell
     PZ_WINDOWS_VM_RESCUE=1 PZ_WINDOWS_VM_BOOT_SESSION=0
     vm_rescue_should_run && exit 1 || exit 0
 ) && echo "  vm_rescue_should_run: returns 1 outside boot session" || echo "  vm_rescue_should_run: guard ok"
 (
     source "$REPO_ROOT/linux/windows-vm/rescue.sh"
+    # shellcheck disable=SC2030 # deliberate env override scoped to test subshell
     PZ_WINDOWS_VM_RESCUE=0 PZ_WINDOWS_VM_BOOT_SESSION=1
     vm_rescue_should_run && exit 1 || exit 0
 ) && echo "  vm_rescue_should_run: returns 1 when PZ_WINDOWS_VM_RESCUE=0" || echo "  vm_rescue_should_run: guard ok"
 (
     source "$REPO_ROOT/linux/windows-vm/rescue.sh"
+    # shellcheck disable=SC2030 # deliberate env override scoped to test subshell
     PZ_WINDOWS_VM_RESCUE=1 PZ_WINDOWS_VM_BOOT_SESSION=1
     vm_rescue_should_run
 ) && echo "  vm_rescue_should_run: returns 0 when both are set"
@@ -477,6 +482,7 @@ else
 fi
 disk_scan_result="$(
     source "$REPO_ROOT/linux/windows-vm/rescue.sh" 2>/dev/null
+    # shellcheck disable=SC2030 # deliberate HOME re-scope inside command substitution
     export HOME="$RESCUE_TEST_DIR"
     # Provide disk_looks_installed stub matching real check (virtual≥32G with actual≥1G, or actual≥5G)
     disk_looks_installed() {

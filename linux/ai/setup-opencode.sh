@@ -461,6 +461,7 @@ configure_free_default_model() {
     fi
 
     mkdir -p "$(dirname "$OPENCODE_CONFIG")"
+    # shellcheck disable=SC2016 # intentional literal JSON key "$schema" in printf template
     [ -f "$OPENCODE_CONFIG" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$OPENCODE_CONFIG"
     pz_backup_file "$OPENCODE_CONFIG" user >/dev/null
     local tmp; tmp="$(mktemp)"
@@ -506,6 +507,7 @@ configure_local_model() {
     local models_json tmp
     models_json="$(jq -Rn '[inputs] | map({(.): {name: (. + " (local)"), tools: true, options: {num_ctx: 8192}}}) | add' <<< "$models")"
     mkdir -p "$(dirname "$OPENCODE_CONFIG")"
+    # shellcheck disable=SC2016 # intentional literal JSON key "$schema" in printf template
     [ -f "$OPENCODE_CONFIG" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$OPENCODE_CONFIG"
     pz_backup_file "$OPENCODE_CONFIG" user >/dev/null
     tmp="$(mktemp)"

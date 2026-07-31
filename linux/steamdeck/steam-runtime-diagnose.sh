@@ -12,9 +12,9 @@ repair_uri_handler() {
     fi
     xdg-mime default steam.desktop x-scheme-handler/steam 2>/dev/null || true
     xdg-mime default steam.desktop x-scheme-handler/steamlink 2>/dev/null || true
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true
-    command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 --noincremental >/dev/null 2>&1 || true
-    command -v kbuildsycoca5 >/dev/null 2>&1 && kbuildsycoca5 --noincremental >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$HOME/.local/share/applications" >/dev/null 2>&1 || true; fi
+    if command -v kbuildsycoca6 >/dev/null 2>&1; then kbuildsycoca6 --noincremental >/dev/null 2>&1 || true; fi
+    if command -v kbuildsycoca5 >/dev/null 2>&1; then kbuildsycoca5 --noincremental >/dev/null 2>&1 || true; fi
     echo "steam_uri_handler=$(xdg-mime query default x-scheme-handler/steam 2>/dev/null || true)"
     echo "steamlink_uri_handler=$(xdg-mime query default x-scheme-handler/steamlink 2>/dev/null || true)"
 }

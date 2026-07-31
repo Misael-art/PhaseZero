@@ -62,10 +62,10 @@ if [ -z "$APPIMAGETOOL" ]; then
     fi
     printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$APPIMAGETOOL" | sha256sum -c -
 fi
-[ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ] || {
+if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
     echo "python executable missing: $PYTHON" >&2
     exit 69
-}
+fi
 command -v jq >/dev/null 2>&1 || { echo "jq missing" >&2; exit 69; }
 "$PYTHON_BIN" -m pip --version >/dev/null 2>&1 || { echo "python pip missing" >&2; exit 69; }
 

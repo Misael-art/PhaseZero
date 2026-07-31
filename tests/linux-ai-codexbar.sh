@@ -91,7 +91,10 @@ printf '{"provider":{"zai":{"enabled":true,"options":{"apiKey":"zai-private","ba
     > "$HOME/.zcode/v2/config.json"
 auth="$("$ROOT/linux/ai/setup-codexbar.sh" auth --provider all)"
 jq -e '.providers.codex.state == "authenticated" and .providers.claude.state == "authenticated" and .providers.zai.state == "authenticated"' <<< "$auth" >/dev/null
-! grep -q 'zai-private\|access_token\|oauth.*token' <<< "$auth"
+if grep -q 'zai-private\|access_token\|oauth.*token' <<< "$auth"; then
+    echo "FAIL: secrets leaked into auth output"
+    exit 1
+fi
 
 step "health validates binary config and provider usage"
 "$ROOT/linux/ai/setup-codexbar.sh" health \

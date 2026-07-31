@@ -114,7 +114,7 @@ apply_one() {
 case "$ACTION" in
     check|status) check_all ;;
     check-state) write_state >/dev/null ;;
-    latest) [ -f "$STATE_FILE" ] && cat "$STATE_FILE" || check_all ;;
+    latest) if [ -f "$STATE_FILE" ]; then cat "$STATE_FILE"; else check_all; fi ;;
     apply|update) apply_one "${1:-}" ;;
     install-service|install-timer) install_timer ;;
     timer-status) systemctl --user status "$TIMER" --no-pager ;;

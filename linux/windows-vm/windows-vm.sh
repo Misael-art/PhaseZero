@@ -10,7 +10,9 @@ source "$PZ_ROOT/linux/lib/common.sh"
 virsh() { LC_ALL=C command virsh "$@"; }
 
 ACTION="${1:-status}"
-[ $# -gt 0 ] && shift || true
+if [ $# -gt 0 ]; then
+    shift || true
+fi
 
 TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
 [ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
@@ -218,7 +220,9 @@ sysctl_set_noninteractive() {
 apply_host_optimizations() {
     [ "$OPTIMIZE_HOST" = "1" ] || return 0
     pz_info "applying Windows VM host optimizations"
-    command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl set performance >/dev/null 2>&1 || true
+    if command -v powerprofilesctl >/dev/null 2>&1; then
+        powerprofilesctl set performance >/dev/null 2>&1 || true
+    fi
     sysctl_set_noninteractive vm.swappiness 1
     sysctl_set_noninteractive vm.vfs_cache_pressure 50
     sysctl_set_noninteractive vm.dirty_background_ratio 5
@@ -281,6 +285,7 @@ chown_target_user() {
 target_user_can_rw() {
     local path="$1"
     if [ "$EUID" -eq 0 ] && command -v runuser >/dev/null 2>&1; then
+        # shellcheck disable=SC2016 # intentional: $1 is the inner sh's positional arg
         runuser -u "$TARGET_USER" -- sh -c 'test -r "$1" && test -w "$1"' sh "$path" 2>/dev/null
         return $?
     fi
@@ -900,8 +905,9 @@ cmd_shares_verify() {
 clean_share_binds() {
     local name
     for name in exchange home sdcard removable media mnt; do
-        mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null &&
+        if mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
             vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
+        fi
     done
 }
 
@@ -1208,7 +1214,9 @@ grant_raw_qemu_disk_access() {
 
 cmd_shares() {
     local sub="${1:-status}"
-    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+        shift || true
+    fi
     parse_options "$@"
     effective_config
     case "$sub" in
@@ -1363,7 +1371,9 @@ add_raw_usb_devices() {
     local mode="$1" dev vendor product bus addr class
     [ "$mode" = "all" ] || [ "$mode" = "peripherals" ] || return 0
     for dev in /sys/bus/usb/devices/*; do
-        [ -f "$dev/idVendor" ] && [ -f "$dev/idProduct" ] || continue
+        if [ ! -f "$dev/idVendor" ] || [ ! -f "$dev/idProduct" ]; then
+            continue
+        fi
         vendor="$(cat "$dev/idVendor" 2>/dev/null || true)"
         product="$(cat "$dev/idProduct" 2>/dev/null || true)"
         bus="$(cat "$dev/busnum" 2>/dev/null || true)"
@@ -1373,7 +1383,9 @@ add_raw_usb_devices() {
         if [ "$mode" = "peripherals" ] && [ "$class" = "08" ]; then
             continue
         fi
-        [ -n "$vendor" ] && [ -n "$product" ] && [ -n "$bus" ] && [ -n "$addr" ] || continue
+        if [ -z "$vendor" ] || [ -z "$product" ] || [ -z "$bus" ] || [ -z "$addr" ]; then
+            continue
+        fi
         QEMU_ARGS+=("-device" "usb-host,hostbus=$((10#$bus)),hostaddr=$((10#$addr))")
     done
 }
@@ -2208,8 +2220,8 @@ grub_script_content() {
     [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
     kernel_rel="$(grub-mkrelpath "$kernel")"
     initrd_rel="$(grub-mkrelpath "$initrd")"
-    amd_ucode_rel="$([ -f /boot/amd-ucode.img ] && grub-mkrelpath /boot/amd-ucode.img || true)"
-    intel_ucode_rel="$([ -f /boot/intel-ucode.img ] && grub-mkrelpath /boot/intel-ucode.img || true)"
+    amd_ucode_rel="$(if [ -f /boot/amd-ucode.img ]; then grub-mkrelpath /boot/amd-ucode.img; fi)"
+    intel_ucode_rel="$(if [ -f /boot/intel-ucode.img ]; then grub-mkrelpath /boot/intel-ucode.img; fi)"
     subvol="$(root_subvol || true)"
     [ -n "$subvol" ] && rootflags=" rootflags=subvol=$subvol"
 
@@ -2436,7 +2448,9 @@ clear_next_boot() {
     loader="$(detected_loader)"
     case "$loader" in
         systemd-boot)
-            command -v bootctl >/dev/null 2>&1 && bootctl set-default "" 2>/dev/null || true
+            if command -v bootctl >/dev/null 2>&1; then
+                bootctl set-default "" 2>/dev/null || true
+            fi
             ;;
         *)
             command -v grub-editenv >/dev/null 2>&1 || { pz_error "grub-editenv missing"; return 1; }
@@ -2590,7 +2604,9 @@ cmd_boot() {
     parse_boot_common_args "$@"
     set -- "${PZ_BOOT_PARSED_ARGS[@]}"
     local sub="${1:-status}"
-    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+        shift || true
+    fi
     case "$sub" in
         install) install_boot "$@" ;;
         remove) remove_boot "$@" ;;

@@ -16,22 +16,31 @@ export XDG_RUNTIME_DIR="$TMP_ROOT/run"
 export PZ_WINDOWS_VM_LIBVIRT_URI="test:///default"
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 
+assert_grep_absent() {
+    local label="$1"
+    shift
+    if grep -q "$@"; then
+        echo "FAIL: $label" >&2
+        exit 1
+    fi
+}
+
 echo "=== static: parse + boot-safety invariants ==="
 bash -n "$REPO_ROOT/linux/pz"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/graphics.sh"
 # v1 contract: graphics layer never touches boot chain or VFIO binding.
 gfx="$REPO_ROOT/linux/windows-vm/graphics.sh"
-! grep -q 'grub-mkconfig' "$gfx"
-! grep -q 'grub-reboot' "$gfx"
-! grep -q 'update-grub' "$gfx"
-! grep -q 'mkinitcpio' "$gfx"
-! grep -q 'modprobe' "$gfx"
-! grep -q '/etc/sddm' "$gfx"
-! grep -q '/sys/bus/pci/drivers' "$gfx"
-! grep -q 'driver_override' "$gfx"
-! grep -q 'virsh define\|virsh -c .* define\|attach-device\|detach-device' "$gfx"
-! grep -q '/proc/cmdline' "$gfx"
+assert_grep_absent "graphics.sh references grub-mkconfig" 'grub-mkconfig' "$gfx"
+assert_grep_absent "graphics.sh references grub-reboot" 'grub-reboot' "$gfx"
+assert_grep_absent "graphics.sh references update-grub" 'update-grub' "$gfx"
+assert_grep_absent "graphics.sh references mkinitcpio" 'mkinitcpio' "$gfx"
+assert_grep_absent "graphics.sh references modprobe" 'modprobe' "$gfx"
+assert_grep_absent "graphics.sh references /etc/sddm" '/etc/sddm' "$gfx"
+assert_grep_absent "graphics.sh references /sys/bus/pci/drivers" '/sys/bus/pci/drivers' "$gfx"
+assert_grep_absent "graphics.sh references driver_override" 'driver_override' "$gfx"
+assert_grep_absent "graphics.sh references virsh define" 'virsh define\|virsh -c .* define\|attach-device\|detach-device' "$gfx"
+assert_grep_absent "graphics.sh references /proc/cmdline" '/proc/cmdline' "$gfx"
 echo "  boot-safety greps ok"
 
 echo "=== fixtures: fake sysfs, dri, kvm, qemu, virsh ==="
@@ -296,7 +305,7 @@ env "${gfx_env[@]}" PZ_GFX_SYSFS_ROOT="$sys_deck" "$REPO_ROOT/linux/pz" windows-
 grep -q '^PZ_WINDOWS_VM_GRAPHICS_PROFILE=virtio-gl$' "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
 test "$(grep -c '^PZ_WINDOWS_VM_GRAPHICS_PROFILE=' "$XDG_CONFIG_HOME/phasezero/windows-vm.conf")" -eq 1
 env "${gfx_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics remove >/dev/null
-! grep -q '^PZ_WINDOWS_VM_GRAPHICS_PROFILE=' "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
+assert_grep_absent "graphics profile config left after remove" '^PZ_WINDOWS_VM_GRAPHICS_PROFILE=' "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
 echo "  config apply/remove ok"
 
 echo "=== guest-guide: read-only por padrao; save explicito ==="
@@ -317,10 +326,10 @@ compat_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --
 grep -q 'qemu-system-x86_64' <<< "$compat_launch"
 grep -Eq -- '-device virtio-vga( |$)' <<< "$compat_launch"
 grep -Fq 'gtk\,show-cursor=on' <<< "$compat_launch"
-! grep -q 'virtio-vga-gl' <<< "$compat_launch"
-! grep -q 'gl=on' <<< "$compat_launch"
+assert_grep_absent "compat launch contains virtio-vga-gl" 'virtio-vga-gl' <<< "$compat_launch"
+assert_grep_absent "compat launch contains gl=on" 'gl=on' <<< "$compat_launch"
 default_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu)"
-! grep -q 'gl=on' <<< "$default_launch"
+assert_grep_absent "default launch contains gl=on" 'gl=on' <<< "$default_launch"
 gl_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
 grep -q -- '-device virtio-vga-gl' <<< "$gl_launch"
 grep -Fq 'gtk\,gl=on\,show-cursor=on' <<< "$gl_launch"
@@ -357,7 +366,7 @@ config_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu 2>
 grep -q -- '-device virtio-vga-gl' <<< "$config_launch"
 env "${gfx_env[@]}" "$REPO_ROOT/linux/pz" windows-vm graphics remove >/dev/null
 reset_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu)"
-! grep -q 'virtio-vga-gl' <<< "$reset_launch"
+assert_grep_absent "config-driven launch still contains virtio-vga-gl" 'virtio-vga-gl' <<< "$reset_launch"
 echo "  config-driven profile ok"
 
 echo "=== config profile: dominio libvirt faz fallback compat sem quebrar boot ==="

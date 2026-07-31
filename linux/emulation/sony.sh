@@ -19,6 +19,7 @@ ini_set() {
     install -d "$(dirname "$file")"
     [ -f "$file" ] || printf '[%s]\n' "$section" > "$file"
     pz_backup_file "$file" user >/dev/null
+    # shellcheck disable=SC2119 # pz_tempfile template arg optional; default mktemp template intended
     tmp="$(pz_tempfile)"
     awk -v section="$section" -v key="$key" -v value="$value" '
         BEGIN { in_section = 0; done = 0 }

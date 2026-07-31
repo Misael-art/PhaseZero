@@ -758,10 +758,10 @@ login_proxy() {
     fi
     [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || { pz_error "browser login requires a graphical session (DISPLAY or WAYLAND_DISPLAY)"; return 3; }
     [ -d "$dir/.git" ] || { pz_error "$id not installed; run: pz ai proxies install $id"; return 1; }
-    [ -f "$dir/package.json" ] && jq -er '.scripts.login // empty' "$dir/package.json" >/dev/null 2>&1 || {
+    if [ ! -f "$dir/package.json" ] || ! jq -er '.scripts.login // empty' "$dir/package.json" >/dev/null 2>&1; then
         pz_error "$id has no npm login script"
         return 2
-    }
+    fi
     if login_process_running "$id"; then
         pz_info "login already running for $id; use the existing browser window"
         return 0

@@ -254,7 +254,9 @@ do_uninstall() {
         return 0
     fi
     do_disable
-    command -v bun >/dev/null 2>&1 && omo_env bunx "$OMO_SPEC" cleanup >/dev/null 2>&1 || true
+    if command -v bun >/dev/null 2>&1; then
+        omo_env bunx "$OMO_SPEC" cleanup >/dev/null 2>&1 || true
+    fi
     local f
     for f in "$OMO_CONFIG" "$OMO_CONFIG_LEGACY" "$OPENCODE_DIR/tui.json"; do
         [ -f "$f" ] && { pz_backup_file "$f" user >/dev/null; rm -f "$f"; pz_info "removed $f"; }

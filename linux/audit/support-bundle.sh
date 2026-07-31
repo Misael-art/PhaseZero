@@ -69,7 +69,9 @@ bash "$PZ_ROOT/linux/audit/doctor.sh" 2>&1 | redact_stream > "$BUNDLE_DIR/doctor
 if [ -f /sys/devices/virtual/dmi/id/product_name ]; then
     cat /sys/devices/virtual/dmi/id/product_name > "$BUNDLE_DIR/steamdeck/product.txt"
 fi
-[ -d /sys/class/drm ] && ls -la /sys/class/drm/card1-*/status > "$BUNDLE_DIR/steamdeck/display-status.txt" 2>/dev/null || true
+if [ -d /sys/class/drm ]; then
+    ls -la /sys/class/drm/card1-*/status > "$BUNDLE_DIR/steamdeck/display-status.txt" 2>/dev/null || true
+fi
 cat /sys/class/power_supply/*/uevent > "$BUNDLE_DIR/steamdeck/power.txt" 2>/dev/null || true
 
 # SteamOS-like UX
@@ -111,7 +113,9 @@ mkdir -p "$BUNDLE_DIR/emulation/hydra-config"
 [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/emulation-performance.json" ] && cp "${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/emulation-performance.json" "$BUNDLE_DIR/emulation/performance-config.json"
 mkdir -p "$BUNDLE_DIR/emulation/srm-config"
 [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/steam-rom-manager/userData/userSettings.json" ] && cp "${XDG_CONFIG_HOME:-$HOME/.config}/steam-rom-manager/userData/userSettings.json" "$BUNDLE_DIR/emulation/srm-config/userSettings.json"
-[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/steam-rom-manager/userData/userConfigurations.json" ] && jq '[.[] | {configTitle, romDirectory, steamDirectory, executable: .executable.path, disabled}]' "${XDG_CONFIG_HOME:-$HOME/.config}/steam-rom-manager/userData/userConfigurations.json" > "$BUNDLE_DIR/emulation/srm-config/userConfigurations-summary.json" 2>/dev/null || true
+if [ -f "${XDG_CONFIG_HOME:-$HOME/.config}/steam-rom-manager/userData/userConfigurations.json" ]; then
+    jq '[.[] | {configTitle, romDirectory, steamDirectory, executable: .executable.path, disabled}]' "${XDG_CONFIG_HOME:-$HOME/.config}/steam-rom-manager/userData/userConfigurations.json" > "$BUNDLE_DIR/emulation/srm-config/userConfigurations-summary.json" 2>/dev/null || true
+fi
 bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" status > "$BUNDLE_DIR/steamos-ux/steamos-boot-status.txt" 2>&1 || true
 
 # Windows VM
@@ -123,7 +127,9 @@ bash "$PZ_ROOT/linux/windows-vm/graphics.sh" runtime status --json > "$BUNDLE_DI
 [ -f "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/session.log" ] && redact_to "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/session.log" "$BUNDLE_DIR/windows-vm/session.log"
 virsh -c qemu:///system list --all > "$BUNDLE_DIR/windows-vm/libvirt-domains.txt" 2>&1 || true
 winvm_domain="$(jq -r '.libvirt.domain // empty' "$BUNDLE_DIR/windows-vm/status.json" 2>/dev/null || true)"
-[ -n "$winvm_domain" ] && virsh -c qemu:///system dominfo "$winvm_domain" > "$BUNDLE_DIR/windows-vm/libvirt-domain.txt" 2>&1 || true
+if [ -n "$winvm_domain" ]; then
+    virsh -c qemu:///system dominfo "$winvm_domain" > "$BUNDLE_DIR/windows-vm/libvirt-domain.txt" 2>&1 || true
+fi
 
 # Waydroid
 bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status > "$BUNDLE_DIR/waydroid/status.json" 2>&1 || true

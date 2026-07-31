@@ -202,11 +202,11 @@ compositor_command() {
 
 if [ "${1:-}" = "--validate" ]; then
     kind="$(compositor_kind)"
-    [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ] || {
+    if [ -z "$PZ_BIN" ] || [ ! -x "$PZ_BIN" ] || [ -z "$LAUNCHER_KIND" ]; then
         printf 'windows_vm_session_ready=no configured_repo=%s display_profile=%s external_connectors=%s compositor=%s reason=%s\n' \
             "${CONFIGURED_REPO:-missing}" "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_reason "$kind")"
         exit 1
-    }
+    fi
     printf 'windows_vm_session_ready=yes repo=%s launcher=%s launcher_kind=%s command=%s display_profile=%s external_connectors=%s compositor=%s compositor_command=%s reason=%s\n' \
         "${PZ_WINDOWS_VM_REPO:-runtime}" "$PZ_BIN" "$LAUNCHER_KIND" "$(launcher_command)" \
         "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_command "$kind")" "$(compositor_reason "$kind")"
@@ -272,6 +272,7 @@ esac
 
 # Source rescue wizard for non-loop exit on missing disk
 PZ_WINDOWS_VM_SESSION_MAX_RETRIES="${PZ_WINDOWS_VM_SESSION_MAX_RETRIES:-3}"
+# shellcheck disable=SC2015 # cd/pwd fallback: empty dir acceptable when dirname fails
 _RESCUE_SESSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
 for _rescue_sh in \
     "${_RESCUE_SESSION_DIR}/rescue.sh" \

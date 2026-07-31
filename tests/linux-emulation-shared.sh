@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Smoke tests for PhaseZero Linux emulation shared-content and media.
+# shellcheck disable=SC2030,SC2031 # pz commands run in intentionally isolated subshell envs
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -148,7 +149,10 @@ grep -q 'value="'"$PZ_EMULATION_ROOT/tools/downloaded_media"'"' "$ESDE_SETTINGS"
 grep -q 'value="'"$PZ_EMULATION_ROOT/roms"'"' "$ESDE_SETTINGS" || { echo "FAIL: ES-DE ROMDirectory not updated"; exit 1; }
 
 # Hydra LevelDB not touched - verify it doesn't get created by our scripts
-test -d "$XDG_CONFIG_HOME/hydralauncher/leveldb" && { echo "FAIL: Hydra LevelDB should not be touched"; exit 1; } || true
+if test -d "$XDG_CONFIG_HOME/hydralauncher/leveldb"; then
+    echo "FAIL: Hydra LevelDB should not be touched"
+    exit 1
+fi
 
 # === LaunchBox compatibility tree and emulator bridge ===
 LB_ROOT="$PZ_EMULATION_ROOT/tools/launchers/LaunchBox"

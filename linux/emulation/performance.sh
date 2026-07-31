@@ -220,10 +220,12 @@ prepare_lsfg() {
     }
     url="$(jq -r '.remote_binary[]? | select(.name == "lsfg-vk_noui.zip") | .url // empty' "$LSFG_PACKAGE" | head -1)"
     digest="$(jq -r '.remote_binary[]? | select(.name == "lsfg-vk_noui.zip") | .sha256hash // empty' "$LSFG_PACKAGE" | head -1)"
-    [ -n "$url" ] && [ -n "$digest" ] || {
+    if [ -n "$url" ] && [ -n "$digest" ]; then
+        :
+    else
         pz_error "verified lsfg-vk artifact missing from Decky plugin metadata"
         return 3
-    }
+    fi
 
     archive="$(mktemp)"
     tmpdir="$(mktemp -d)"
@@ -233,10 +235,12 @@ prepare_lsfg() {
     unzip -q "$archive" -d "$tmpdir"
     extracted_lib="$(find "$tmpdir" -type f -name 'liblsfg-vk.so' -print -quit)"
     extracted_json="$(find "$tmpdir" -type f -name 'VkLayer_LS_frame_generation.json' -print -quit)"
-    [ -n "$extracted_lib" ] && [ -n "$extracted_json" ] || {
+    if [ -n "$extracted_lib" ] && [ -n "$extracted_json" ]; then
+        :
+    else
         pz_error "verified lsfg-vk archive lacks expected Vulkan layer files"
         return 3
-    }
+    fi
 
     install -d "$(dirname "$LSFG_LIBRARY")" "$(dirname "$LSFG_MANIFEST")" "$(dirname "$LSFG_CONFIG")"
     install -m 0755 "$extracted_lib" "$LSFG_LIBRARY"

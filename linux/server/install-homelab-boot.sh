@@ -57,8 +57,16 @@ grub_script_content() {
     [ -f "$kernel" ] || { pz_error "missing kernel: $kernel"; return 1; }
     [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
     kernel_rel="$(grub-mkrelpath "$kernel")"; initrd_rel="$(grub-mkrelpath "$initrd")"
-    amd_ucode_rel="$([ -f /boot/amd-ucode.img ] && grub-mkrelpath /boot/amd-ucode.img || true)"
-    intel_ucode_rel="$([ -f /boot/intel-ucode.img ] && grub-mkrelpath /boot/intel-ucode.img || true)"
+    if [ -f /boot/amd-ucode.img ]; then
+        amd_ucode_rel="$(grub-mkrelpath /boot/amd-ucode.img)"
+    else
+        amd_ucode_rel=""
+    fi
+    if [ -f /boot/intel-ucode.img ]; then
+        intel_ucode_rel="$(grub-mkrelpath /boot/intel-ucode.img)"
+    else
+        intel_ucode_rel=""
+    fi
     subvol="$(pz_boot_root_subvol || true)"
     [ -n "$subvol" ] && rootflags=" rootflags=subvol=$subvol"
     cat <<EOF

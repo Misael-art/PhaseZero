@@ -141,7 +141,11 @@ import_switch_firmware() {
         pz_info "back-filling central firmware store from Ryujinx: $ryu_fw"
         # Firmware is a registered dir tree; sync new files only.
         if [ -d "$ryu_fw" ]; then
-            ( cd "$ryu_fw" && tar cf - . 2>/dev/null ) | ( cd "$central_fw" && tar xf - 2>/dev/null || true )
+            ( cd "$ryu_fw" && tar cf - . 2>/dev/null ) | {
+                if ( cd "$central_fw" && tar xf - 2>/dev/null ); then
+                    :
+                fi
+            }
         fi
     else
         pz_error "usage: pz emulation switch import-firmware <local-path> (or install firmware in Ryujinx first)"

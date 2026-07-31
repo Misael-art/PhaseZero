@@ -16,10 +16,24 @@ export PZ_NPM_PREFIX="$TMP_ROOT/npm"
 
 mkdir -p "$HOME" "$PZ_WORKSPACE_ROOT" "$PZ_LOCAL_BIN"
 
-# make host opencode visible inside isolated HOME
-if command -v opencode >/dev/null 2>&1; then
-    ln -sfn "$(command -v opencode)" "$PZ_LOCAL_BIN/opencode"
-fi
+# Deterministic fake opencode inside the isolated HOME: the test must not
+# depend on a host opencode (symlinking it breaks on clean hosts and is
+# non-reproducible). The stub only answers --version with a valid semver;
+# it never touches the network or host state, and fails loudly on any other
+# invocation so accidental real calls are caught instead of silently faked.
+cat > "$PZ_LOCAL_BIN/opencode" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    --version)
+        printf 'opencode 1.4.2\n'
+        ;;
+    *)
+        printf 'opencode: test stub only supports --version\n' >&2
+        exit 1
+        ;;
+esac
+EOF
+chmod +x "$PZ_LOCAL_BIN/opencode"
 # ensure PZ_LOCAL_BIN is on PATH before any setup script runs
 export PATH="$PZ_LOCAL_BIN:$PATH"
 
@@ -118,7 +132,7 @@ PZ_DRY_RUN=1 PZ_OLLAMA_URL="http://127.0.0.1:1" "$REPO_ROOT/linux/ai/setup-openc
 
 # Smoke: AI managers gracefully report "not installed"
 for cmd in "9router status" "odysseus status" "omniroute status"; do
-    out=$("$REPO_ROOT/linux/pz" ai $cmd 2>/dev/null || true)
+    out=$("$REPO_ROOT/linux/pz" ai "$cmd" 2>/dev/null || true)
     jq -e '.status == "unavailable" or .error != null' <<< "$out" >/dev/null 2>&1 || \
         echo "  WARN: $cmd did not return error — may be installed"
 done

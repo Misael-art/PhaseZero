@@ -90,7 +90,9 @@ steamdeck_configure_virtual_keyboard() {
 
     kwriteconfig6 --file kwinrc --group Wayland --key VirtualKeyboardEnabled true
     if [ -n "$method" ]; then
+        # shellcheck disable=SC2016 # kwriteconfig6 key syntax is literal
         kwriteconfig6 --file kwinrc --group Wayland --key 'InputMethod[$e]' --delete >/dev/null 2>&1 || true
+        # shellcheck disable=SC2016 # kwriteconfig6 key syntax is literal
         kwriteconfig6 --file kwinrc --group Wayland --key 'InputMethod\x5b$e\x5d' --delete >/dev/null 2>&1 || true
         kwriteconfig6 --file kwinrc --group Wayland --key InputMethod "$method"
     else

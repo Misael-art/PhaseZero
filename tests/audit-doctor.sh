@@ -9,7 +9,9 @@ STUBBED_FILES=()
 
 mock_cleanup() {
     for f in "${STUBBED_FILES[@]}"; do
-        [ -f "$f.bak" ] && mv "$f.bak" "$f" 2>/dev/null || true
+        if [ -f "$f.bak" ]; then
+            mv "$f.bak" "$f" 2>/dev/null
+        fi
     done
     STUBBED_FILES=()
     rm -rf "$MOCK_BIN"
@@ -100,6 +102,7 @@ echo "{}"
 test_snap_not_fail() {
     rm -rf "$MOCK_BIN"
     stub_all_subscripts
+    # shellcheck disable=SC2016 # mock df body is a literal script written to MOCK_BIN
     mock_install_df '#!/usr/bin/env bash
 case "$1" in
     --output=source) echo "Filesystem"; echo "/dev/sda1"; exit 0 ;;
@@ -168,6 +171,7 @@ test_pct_malformed_error() {
     rm -rf "$MOCK_BIN"
     stub_all_subscripts
     mock_install_free "$(FREE_VALID)"
+    # shellcheck disable=SC2016 # mock df body is a literal script written to MOCK_BIN
     mock_install_df '#!/usr/bin/env bash
 case "$1" in
     --output=source) echo "Filesystem"; echo "/dev/sda1"; exit 0 ;;

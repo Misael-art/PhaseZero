@@ -132,7 +132,7 @@ else
 fi
 
 root_fs=$(df -T / | tail -1 | awk '{print $2}')
-[[ "$root_fs" =~ btrfs|ext4|xfs ]] && check FS01 "Root filesystem type" PASS "$root_fs" || check FS01 "Root filesystem type" WARN "$root_fs"
+if [[ "$root_fs" =~ btrfs|ext4|xfs ]]; then check FS01 "Root filesystem type" PASS "$root_fs"; else check FS01 "Root filesystem type" WARN "$root_fs"; fi
 
 if command -v btrfs &>/dev/null && timeout 5 btrfs filesystem show / &>/dev/null 2>&1; then
     check FS02 "Btrfs available" PASS "yes"
@@ -142,21 +142,21 @@ header "CPU / Temperature"
 temp=$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0)
 if [[ "$temp" =~ ^[0-9]+$ ]] && [ "$temp" -gt 0 ]; then
     temp_c=$((temp / 1000))
-    [ "$temp_c" -lt 85 ] && check CPU01 "CPU temperature < 85°C" PASS "${temp_c}°C" || check CPU01 "CPU temperature < 85°C" FAIL "${temp_c}°C"
+    if [ "$temp_c" -lt 85 ]; then check CPU01 "CPU temperature < 85°C" PASS "${temp_c}°C"; else check CPU01 "CPU temperature < 85°C" FAIL "${temp_c}°C"; fi
 else
     check CPU01 "CPU temperature" INFO "sensor unavailable"
 fi
 
 load_1=$(uptime | awk -F'load average:' '{print $2}' | cut -d, -f1 | xargs)
 cpus=$(nproc)
-awk -v loadavg="$load_1" -v cpus="$cpus" 'BEGIN { exit (loadavg < cpus ? 0 : 1) }' && check CPU02 "CPU load (1m) < cores" PASS "$load_1 / $cpus" || check CPU02 "CPU load (1m) < cores" WARN "$load_1 / $cpus"
+if awk -v loadavg="$load_1" -v cpus="$cpus" 'BEGIN { exit (loadavg < cpus ? 0 : 1) }'; then check CPU02 "CPU load (1m) < cores" PASS "$load_1 / $cpus"; else check CPU02 "CPU load (1m) < cores" WARN "$load_1 / $cpus"; fi
 
 header "GPU (AMD)"
-lspci -nn | grep -i "VGA.*AMD\|VGA.*ATI\|VanGogh" >/dev/null && check GPU01 "AMD GPU detected" PASS "VanGogh 0405" || check GPU01 "AMD GPU detected" WARN "not found"
-[ -d /sys/class/drm/card1/device ] && check GPU02 "GPU device in sysfs" PASS "" || check GPU02 "GPU device in sysfs" FAIL ""
+if lspci -nn | grep -i "VGA.*AMD\|VGA.*ATI\|VanGogh" >/dev/null; then check GPU01 "AMD GPU detected" PASS "VanGogh 0405"; else check GPU01 "AMD GPU detected" WARN "not found"; fi
+if [ -d /sys/class/drm/card1/device ]; then check GPU02 "GPU device in sysfs" PASS ""; else check GPU02 "GPU device in sysfs" FAIL ""; fi
 
 header "Network"
-ping -c 1 -W 2 8.8.8.8 &>/dev/null && check NET01 "Internet connectivity" PASS "" || check NET01 "Internet connectivity" FAIL ""
+if ping -c 1 -W 2 8.8.8.8 &>/dev/null; then check NET01 "Internet connectivity" PASS ""; else check NET01 "Internet connectivity" FAIL ""; fi
 if command -v tailscale &>/dev/null && tailscale status 2>/dev/null | head -1 | grep "Connected" >/dev/null; then
     check NET02 "Tailscale connected" PASS ""
 elif [[ "$HOST_PROFILE" =~ ^steamdeck ]] && ! ip link show tailscale0 >/dev/null 2>&1; then
@@ -167,7 +167,7 @@ fi
 
 header "Services"
 for svc in docker sshd NetworkManager bluetooth; do
-    systemctl is-active "$svc" &>/dev/null && check "SVC_$svc" "$svc running" PASS "" || check "SVC_$svc" "$svc running" WARN "inactive"
+    if systemctl is-active "$svc" &>/dev/null; then check "SVC_$svc" "$svc running" PASS ""; else check "SVC_$svc" "$svc running" WARN "inactive"; fi
 done
 
 if [ "${PZ_DOCTOR_SCOPE:-full}" = "system" ]; then
@@ -176,15 +176,15 @@ if [ "${PZ_DOCTOR_SCOPE:-full}" = "system" ]; then
 fi
 
 header "Steam Deck"
-[ "$HOST_PROFILE" != generic ] && check SD01 "Steam Deck hardware" PASS "$HOST_PROFILE" || check SD01 "Steam Deck hardware" WARN "not a Steam Deck"
-command -v gamescope &>/dev/null && check SD02 "Gamescope installed" PASS "$(gamescope --version 2>&1 | head -1)" || check SD02 "Gamescope installed" FAIL ""
-command -v steam &>/dev/null && check SD03 "Steam installed" PASS "" || check SD03 "Steam installed" FAIL ""
+if [ "$HOST_PROFILE" != generic ]; then check SD01 "Steam Deck hardware" PASS "$HOST_PROFILE"; else check SD01 "Steam Deck hardware" WARN "not a Steam Deck"; fi
+if command -v gamescope &>/dev/null; then check SD02 "Gamescope installed" PASS "$(gamescope --version 2>&1 | head -1)"; else check SD02 "Gamescope installed" FAIL ""; fi
+if command -v steam &>/dev/null; then check SD03 "Steam installed" PASS ""; else check SD03 "Steam installed" FAIL ""; fi
 
 header "SteamOS UX"
-command -v steam &>/dev/null && check UX01 "Steam client available" PASS "$(command -v steam)" || check UX01 "Steam client available" WARN "install steam"
-command -v gamescope &>/dev/null && check UX02 "Gamescope available" PASS "$(command -v gamescope)" || check UX02 "Gamescope available" WARN "install gamescope"
-command -v mangohud &>/dev/null && check UX03 "MangoHud available" PASS "$(command -v mangohud)" || check UX03 "MangoHud available" WARN "install mangohud"
-command -v gamemoderun &>/dev/null && check UX04 "GameMode launcher available" PASS "$(command -v gamemoderun)" || check UX04 "GameMode launcher available" WARN "install gamemode"
+if command -v steam &>/dev/null; then check UX01 "Steam client available" PASS "$(command -v steam)"; else check UX01 "Steam client available" WARN "install steam"; fi
+if command -v gamescope &>/dev/null; then check UX02 "Gamescope available" PASS "$(command -v gamescope)"; else check UX02 "Gamescope available" WARN "install gamescope"; fi
+if command -v mangohud &>/dev/null; then check UX03 "MangoHud available" PASS "$(command -v mangohud)"; else check UX03 "MangoHud available" WARN "install mangohud"; fi
+if command -v gamemoderun &>/dev/null; then check UX04 "GameMode launcher available" PASS "$(command -v gamemoderun)"; else check UX04 "GameMode launcher available" WARN "install gamemode"; fi
 
 vk_status="$(bash "$PZ_ROOT/linux/steamdeck/input-actions.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.kde.supported == true and .kde.available == true and .kde.enabled == true and (.kde.inputMethod | test("maliit"))' <<< "$vk_status" >/dev/null 2>&1; then
@@ -215,8 +215,8 @@ else
     check UX08 "Steam Deck mode watcher installed" WARN "run: linux/pz steamdeck watcher install"
 fi
 
-systemctl --user is-active phasezero-steamdeck-mode-watcher.service &>/dev/null && check UX09 "Steam Deck mode watcher active" PASS "" || check UX09 "Steam Deck mode watcher active" WARN "not running"
-command -v ryzenadj &>/dev/null && check UX10 "TDP control available" PASS "$(command -v ryzenadj)" || check UX10 "TDP control available" WARN "install ryzenadj for TDP limits"
+if systemctl --user is-active phasezero-steamdeck-mode-watcher.service &>/dev/null; then check UX09 "Steam Deck mode watcher active" PASS ""; else check UX09 "Steam Deck mode watcher active" WARN "not running"; fi
+if command -v ryzenadj &>/dev/null; then check UX10 "TDP control available" PASS "$(command -v ryzenadj)"; else check UX10 "TDP control available" WARN "install ryzenadj for TDP limits"; fi
 
 priv_helper="/usr/local/lib/phasezero/steamdeck-privileged-control"
 priv_dropin="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/phasezero-steamdeck-mode-watcher.service.d/10-privileged-controls.conf"
@@ -491,7 +491,7 @@ eden_app="$applications_dir/Eden.AppImage"
 hydra_app="$applications_dir/Hydra.AppImage"
 hydra_classic_config="${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/config.json"
 hydra_emulators_config="${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/emulators_config.json"
-[ -d "$emulation_root" ] && check EMU01 "Shared emulation root" PASS "$emulation_root" || check EMU01 "Shared emulation root" WARN "run: linux/pz emulation layout"
+if [ -d "$emulation_root" ]; then check EMU01 "Shared emulation root" PASS "$emulation_root"; else check EMU01 "Shared emulation root" WARN "run: linux/pz emulation layout"; fi
 emudeck_status="$(bash "$PZ_ROOT/linux/emulation/emudeck.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.launcher.installed == true and .launcher.kind == "steamdeck-desktop"' <<< "$emudeck_status" >/dev/null 2>&1; then
     emudeck_launcher="$(jq -r '.launcher.path' <<< "$emudeck_status")"
@@ -501,8 +501,8 @@ elif jq -e '.appImageInstalled == true' <<< "$emudeck_status" >/dev/null 2>&1 ||
 else
     check EMU02 "EmuDeck launcher installed" WARN "run: linux/pz emulation emudeck install"
 fi
-[ -x "$eden_app" ] && check EMU03 "Eden AppImage installed" PASS "$eden_app" || check EMU03 "Eden AppImage installed" WARN "run: linux/pz emulation eden install"
-[ -x "$hydra_app" ] && check EMU06 "Hydra AppImage installed" PASS "$hydra_app" || check EMU06 "Hydra AppImage installed" WARN "run: linux/pz emulation hydra install"
+if [ -x "$eden_app" ]; then check EMU03 "Eden AppImage installed" PASS "$eden_app"; else check EMU03 "Eden AppImage installed" WARN "run: linux/pz emulation eden install"; fi
+if [ -x "$hydra_app" ]; then check EMU06 "Hydra AppImage installed" PASS "$hydra_app"; else check EMU06 "Hydra AppImage installed" WARN "run: linux/pz emulation hydra install"; fi
 if python3 "$PZ_ROOT/linux/emulation/steam-shortcut.py" status --app-name Hydra >/dev/null 2>&1; then
     check EMU07 "Hydra Steam shortcut installed" PASS "Steam userdata"
 else
@@ -573,14 +573,14 @@ else
 fi
 
 header "Lua Runtime"
-command -v lua >/dev/null 2>&1 && check LUA01 "Lua installed" PASS "$(lua -v 2>&1 | head -1)" || check LUA01 "Lua installed" WARN "run: linux/pz emulation lua install"
-command -v lua5.4 >/dev/null 2>&1 && check LUA02 "Lua 5.4 installed" PASS "$(lua5.4 -v 2>&1 | head -1)" || check LUA02 "Lua 5.4 installed" WARN "run: linux/pz emulation lua install"
-command -v luajit >/dev/null 2>&1 && check LUA03 "LuaJIT installed" PASS "$(luajit -v 2>&1 | head -1)" || check LUA03 "LuaJIT installed" WARN "run: linux/pz emulation lua install"
-command -v luarocks >/dev/null 2>&1 && check LUA04 "LuaRocks installed" PASS "$(luarocks --version 2>/dev/null | head -1 | xargs)" || check LUA04 "LuaRocks installed" WARN "run: linux/pz emulation lua install"
+if command -v lua >/dev/null 2>&1; then check LUA01 "Lua installed" PASS "$(lua -v 2>&1 | head -1)"; else check LUA01 "Lua installed" WARN "run: linux/pz emulation lua install"; fi
+if command -v lua5.4 >/dev/null 2>&1; then check LUA02 "Lua 5.4 installed" PASS "$(lua5.4 -v 2>&1 | head -1)"; else check LUA02 "Lua 5.4 installed" WARN "run: linux/pz emulation lua install"; fi
+if command -v luajit >/dev/null 2>&1; then check LUA03 "LuaJIT installed" PASS "$(luajit -v 2>&1 | head -1)"; else check LUA03 "LuaJIT installed" WARN "run: linux/pz emulation lua install"; fi
+if command -v luarocks >/dev/null 2>&1; then check LUA04 "LuaRocks installed" PASS "$(luarocks --version 2>/dev/null | head -1 | xargs)"; else check LUA04 "LuaRocks installed" WARN "run: linux/pz emulation lua install"; fi
 
 header "Steam Tools"
-command -v protontricks >/dev/null 2>&1 && check ST01 "Protontricks installed" PASS "$(command -v protontricks)" || check ST01 "Protontricks installed" WARN "run: linux/pz emulation steam-tools install"
-command -v protonup-qt >/dev/null 2>&1 && check ST02 "ProtonUp-Qt installed" PASS "$(command -v protonup-qt)" || check ST02 "ProtonUp-Qt installed" WARN "run: linux/pz emulation steam-tools install"
+if command -v protontricks >/dev/null 2>&1; then check ST01 "Protontricks installed" PASS "$(command -v protontricks)"; else check ST01 "Protontricks installed" WARN "run: linux/pz emulation steam-tools install"; fi
+if command -v protonup-qt >/dev/null 2>&1; then check ST02 "ProtonUp-Qt installed" PASS "$(command -v protonup-qt)"; else check ST02 "ProtonUp-Qt installed" WARN "run: linux/pz emulation steam-tools install"; fi
 if command -v retroarch >/dev/null 2>&1; then
     check ST03 "RetroArch installed" PASS "$(command -v retroarch)"
 elif command -v flatpak >/dev/null 2>&1 && flatpak info org.libretro.RetroArch >/dev/null 2>&1; then
@@ -605,7 +605,7 @@ if command -v boilr >/dev/null 2>&1 || find "$applications_dir" -maxdepth 1 -ina
 else
     check ST06 "BoilR available" INFO "optional non-Steam importer"
 fi
-command -v steamtinkerlaunch >/dev/null 2>&1 && check ST07 "SteamTinkerLaunch available" PASS "$(command -v steamtinkerlaunch)" || check ST07 "SteamTinkerLaunch available" INFO "optional Proton/Wine per-game tool"
+if command -v steamtinkerlaunch >/dev/null 2>&1; then check ST07 "SteamTinkerLaunch available" PASS "$(command -v steamtinkerlaunch)"; else check ST07 "SteamTinkerLaunch available" INFO "optional Proton/Wine per-game tool"; fi
 
 header "SteamOS Boot"
 boot_status="$(bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" status 2>/dev/null || true)"
@@ -663,7 +663,7 @@ if [ -x "$iso_boot_backend" ]; then
     grubfm_status="$(bash "$iso_boot_backend" grubfm status --json 2>/dev/null || echo '{}')"
     if jq -e '.schemaVersion == 1' <<< "$iso_boot_status" >/dev/null 2>&1; then
         unavailable_iso="$(jq '[.entries[] | select(.available != true)] | length' <<< "$iso_boot_status")"
-        [ "$unavailable_iso" -eq 0 ] && check BOOTISO01 "Registered ISO boot entries healthy" PASS "$(jq '.entries | length' <<< "$iso_boot_status") registered" || check BOOTISO01 "Registered ISO boot entries healthy" WARN "$unavailable_iso unavailable or changed"
+        if [ "$unavailable_iso" -eq 0 ]; then check BOOTISO01 "Registered ISO boot entries healthy" PASS "$(jq '.entries | length' <<< "$iso_boot_status") registered"; else check BOOTISO01 "Registered ISO boot entries healthy" WARN "$unavailable_iso unavailable or changed"; fi
     else
         check BOOTISO01 "Registered ISO boot entries healthy" FAIL "invalid manifest or backend output"
     fi
@@ -681,12 +681,12 @@ else
 fi
 
 header "Security"
-systemctl is-active ufw &>/dev/null && check SEC01 "UFW firewall active" PASS "" || check SEC01 "UFW firewall active" WARN "inactive"
-systemctl is-active sshd &>/dev/null && check SEC02 "SSH server running" PASS "" || check SEC02 "SSH server running" INFO "disabled (ok if not needed)"
+if systemctl is-active ufw &>/dev/null; then check SEC01 "UFW firewall active" PASS ""; else check SEC01 "UFW firewall active" WARN "inactive"; fi
+if systemctl is-active sshd &>/dev/null; then check SEC02 "SSH server running" PASS ""; else check SEC02 "SSH server running" INFO "disabled (ok if not needed)"; fi
 
 header "Containers"
-timeout 5 docker ps &>/dev/null && check DOCKER01 "Docker daemon accessible" PASS "" || check DOCKER01 "Docker daemon accessible" FAIL ""
-docker_compose_ver=$(timeout 5 docker compose version 2>/dev/null | head -1) && check DOCKER02 "Docker Compose" PASS "${docker_compose_ver:-installed}" || check DOCKER02 "Docker Compose" FAIL ""
+if timeout 5 docker ps &>/dev/null; then check DOCKER01 "Docker daemon accessible" PASS ""; else check DOCKER01 "Docker daemon accessible" FAIL ""; fi
+if docker_compose_ver=$(timeout 5 docker compose version 2>/dev/null | head -1); then check DOCKER02 "Docker Compose" PASS "${docker_compose_ver:-installed}"; else check DOCKER02 "Docker Compose" FAIL ""; fi
 
 header "Development"
 tool_path() {
@@ -704,7 +704,7 @@ for tool in node npm python3 rustc cargo go jq git gh; do
             go) ver=$("$tool_bin" version 2>/dev/null | head -1) ;;
             *) ver=$("$tool_bin" --version 2>/dev/null | head -1) ;;
         esac
-        [ -n "$ver" ] && check "DEV_$tool" "$tool installed" PASS "$ver" || check "DEV_$tool" "$tool installed" FAIL "$tool_bin"
+        if [ -n "$ver" ]; then check "DEV_$tool" "$tool installed" PASS "$ver"; else check "DEV_$tool" "$tool installed" FAIL "$tool_bin"; fi
     else
         check "DEV_$tool" "$tool installed" FAIL ""
     fi
@@ -846,9 +846,11 @@ else
     check AI_OPENCLAW_DAEMON "OpenClaw daemon active" INFO "optional: linux/ai/setup-openclaw.sh daemon"
 fi
 if jq -e '.memory.installed == true' <<< "$ai_status" >/dev/null 2>&1; then
-    jq -e '.memory.serverReachable == true or .memory.configuredMarker == true or .memory.userServiceActive == true' <<< "$ai_status" >/dev/null 2>&1 &&
-        check AI_MEMORY "ai-memory configured" PASS "$(jq -r '.memory.serverUrl' <<< "$ai_status")" ||
+    if jq -e '.memory.serverReachable == true or .memory.configuredMarker == true or .memory.userServiceActive == true' <<< "$ai_status" >/dev/null 2>&1; then
+        check AI_MEMORY "ai-memory configured" PASS "$(jq -r '.memory.serverUrl' <<< "$ai_status")"
+    else
         check AI_MEMORY "ai-memory configured" WARN "run: linux/pz ai setup memory"
+    fi
 else
     check AI_MEMORY "ai-memory installed" WARN "run: linux/pz ai setup memory"
 fi
@@ -888,9 +890,11 @@ fi
 if jq -e '.mcp.definitions | length > 0' <<< "$ai_status" >/dev/null 2>&1; then
     mcp_defs="$(jq -r '.mcp.definitions | length' <<< "$ai_status")"
     mcp_targets="$(jq -r '[.mcp.targets[]?.count // 0] | add // 0' <<< "$ai_status")"
-    [ "$mcp_targets" -gt 0 ] 2>/dev/null &&
-        check AI_MCP "MCP definitions synced" PASS "definitions=${mcp_defs} installed=${mcp_targets}" ||
+    if [ "$mcp_targets" -gt 0 ] 2>/dev/null; then
+        check AI_MCP "MCP definitions synced" PASS "definitions=${mcp_defs} installed=${mcp_targets}"
+    else
         check AI_MCP "MCP definitions synced" WARN "run: linux/pz ai mcp sync"
+    fi
 else
     check AI_MCP "MCP definitions available" WARN "assets/mcp/servers missing"
 fi

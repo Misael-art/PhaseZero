@@ -12,7 +12,9 @@ source "$PZ_ROOT/linux/lib/common.sh"
 virsh() { LC_ALL=C command virsh "$@"; }
 
 ACTION="${1:-status}"
-[ $# -gt 0 ] && shift || true
+if [ $# -gt 0 ]; then
+    shift
+fi
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero"
 CONFIG_FILE="${PZ_WINDOWS_VM_CONFIG:-$CONFIG_DIR/windows-vm.conf}"
@@ -241,7 +243,9 @@ runtime_rollback() {
 
 cmd_runtime() {
     local sub="${1:-status}"
-    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+        shift || true
+    fi
     case "$sub" in
         status)
             parse_options "$@"
@@ -888,6 +892,7 @@ write_config_profile() {
     fi
     install -d "$CONFIG_DIR"
     local tmp
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
     tmp="$(pz_tempfile)"
     if [ -f "$CONFIG_FILE" ]; then
         grep -v '^PZ_WINDOWS_VM_GRAPHICS_PROFILE=' "$CONFIG_FILE" > "$tmp" || true
@@ -905,6 +910,7 @@ remove_config_profile() {
         return 0
     fi
     local tmp
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
     tmp="$(pz_tempfile)"
     grep -v '^PZ_WINDOWS_VM_GRAPHICS_PROFILE=' "$CONFIG_FILE" > "$tmp" || true
     install -m 0644 "$tmp" "$CONFIG_FILE"
