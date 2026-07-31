@@ -424,6 +424,7 @@ ensure_hermes_config() {
     mkdir -p "$(dirname "$HERMES_CONFIG")"
     [ -f "$HERMES_CONFIG" ] || : > "$HERMES_CONFIG"
     if ! grep -Eq '^mcp_servers:[[:space:]]*$' "$HERMES_CONFIG"; then
+        # shellcheck disable=SC2094 # intentional: read and append to same file
         {
             [ -s "$HERMES_CONFIG" ] && echo
             echo "mcp_servers:"
@@ -674,7 +675,7 @@ json_target_status() {
 codex_status() {
     local target="${1:-codex}" cfg="${2:-$CODEX_CONFIG}" count=0
     if [ -f "$cfg" ]; then
-        count="$(grep -E '^\[mcp_servers\.[^].]+\]$' "$cfg" 2>/dev/null | wc -l | tr -d ' ')"
+        count="$(grep -c -E '^\[mcp_servers\.[^].]+\]$' "$cfg" 2>/dev/null || true)"
     fi
     jq -cn --arg target "$target" --arg path "$cfg" --argjson exists "$([ -f "$cfg" ] && echo true || echo false)" \
         --argjson valid true --argjson count "$count" \
@@ -695,7 +696,7 @@ openclaw_status() {
 hermes_status() {
     local count=0 entries=0
     if [ -f "$HERMES_CONFIG" ]; then
-        count="$(grep -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null | wc -l | tr -d ' ')"
+        count="$(grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null || true)"
         entries="$(awk '/^mcp_servers:[[:space:]]*$/ {inmcp=1; next} inmcp && /^  [A-Za-z0-9_.-]+:/ {c++} inmcp && /^[A-Za-z0-9_]+:/ {inmcp=0} END {print c+0}' "$HERMES_CONFIG" 2>/dev/null || echo 0)"
     fi
     jq -cn --arg target "hermes" --arg path "$HERMES_CONFIG" --argjson exists "$([ -f "$HERMES_CONFIG" ] && echo true || echo false)" \
@@ -743,18 +744,20 @@ mcp_status() {
     while IFS= read -r name; do
         definition_status_json "$name" >> "$tmp_defs"
     done < <(definition_names)
-    json_target_status opencode >> "$tmp_targets"
-    json_target_status claude >> "$tmp_targets"
-    json_target_status claude-desktop >> "$tmp_targets"
-    codex_status codex "$CODEX_CONFIG" >> "$tmp_targets"
-    codex_status codex-project "$CODEX_PROJECT_CONFIG" >> "$tmp_targets"
-    json_target_status vscode >> "$tmp_targets"
-    json_target_status vscode-user >> "$tmp_targets"
-    json_target_status cursor >> "$tmp_targets"
-    json_target_status zed >> "$tmp_targets"
-    zcode_status >> "$tmp_targets"
-    hermes_status >> "$tmp_targets"
-    openclaw_status >> "$tmp_targets"
+    {
+        json_target_status opencode
+        json_target_status claude
+        json_target_status claude-desktop
+        codex_status codex "$CODEX_CONFIG"
+        codex_status codex-project "$CODEX_PROJECT_CONFIG"
+        json_target_status vscode
+        json_target_status vscode-user
+        json_target_status cursor
+        json_target_status zed
+        zcode_status
+        hermes_status
+        openclaw_status
+    } >> "$tmp_targets"
     defs="$(jq -s '.' "$tmp_defs")"
     targets="$(jq -s 'map({(.target): del(.target)}) | add' "$tmp_targets")"
     rm -f "$tmp_defs" "$tmp_targets"

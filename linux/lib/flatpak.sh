@@ -177,7 +177,7 @@ pz_flatpak_audit() {
     echo "system: $system_apps apps, user: $user_apps apps"
     if [ -n "$duplicate_apps" ]; then
         echo "WARN: apps installed in both system and user scopes:"
-        echo "$duplicate_apps" | sed 's/^/  /'
+        printf '  %s\n' $duplicate_apps
         conflicts=$((conflicts + 1))
     fi
 

@@ -1234,7 +1234,9 @@ cmd_shares() {
             ;;
         dry-run|plan)
             echo "Windows VM shared access plan"
+            # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
             echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> home/ and sdcard/ (bind-mounted)"
+            # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
             echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard"
             echo "  SPICE WebDAV: $EXCHANGE_DIR (requires spice-webdavd in Windows guest)"
             echo "  bind-mount root: $SHARE_BIND_ROOT"
@@ -1248,6 +1250,7 @@ cmd_shares() {
             return 1
             ;;
     esac
+    # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
     echo "builtin_smb_unc: \\\\10.0.2.4\\qemu (home/, sdcard/)"
     echo "bind_root: $SHARE_BIND_ROOT"
     echo "home_bound: $(mountpoint -q "$SHARE_BIND_ROOT/home" 2>/dev/null && echo yes || echo no)"
@@ -1922,6 +1925,7 @@ print_plan() {
     echo "  home_share: $HOME"
     echo "  sdcard_share: $([ -d /mnt/sdcard ] && echo /mnt/sdcard || echo missing)"
     echo "  removable_share: $([ -d "/run/media/$USER" ] && echo "/run/media/$USER" || echo missing)"
+    # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
     echo "  smb_unc: \\\\10.0.2.4\\qemu"
     echo "  spice_usb: spice://127.0.0.1:5930"
     echo "  direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot install"

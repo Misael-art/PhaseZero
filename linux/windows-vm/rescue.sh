@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # rescue.sh - PhaseZero Windows VM boot rescue wizard
 # Sourced by windows-vm-session.sh and launch_vm on missing disk.
 # No set -euo pipefail at file level — caller controls strictness.
@@ -235,10 +236,10 @@ vm_rescue_escape_to_desktop() {
             grep -q '# PhaseZero managed' "$_conf" 2>/dev/null && sed -i '/# PhaseZero managed/,/AutomaticLogin=/d' "$_conf" && _vm_rescue_log "gdm block removed: $_conf" || true
         done
         [ -f /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf ] && grep -q 'PhaseZero managed' /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf 2>/dev/null && rm -f /etc/lightdm/lightdm.conf.d/91-phasezero-windows-vm.conf && _vm_rescue_log "lightdm drop-in removed" || true
-        for _lxdm_conf in /etc/lxdm/lxdm.conf; do
-            [ -f "$_lxdm_conf" ] || continue
+        _lxdm_conf=/etc/lxdm/lxdm.conf
+        if [ -f "$_lxdm_conf" ]; then
             grep -q '# PhaseZero managed' "$_lxdm_conf" 2>/dev/null && sed -i '/# PhaseZero managed/,/# PhaseZero managed end/d' "$_lxdm_conf" && _vm_rescue_log "lxdm block removed: $_lxdm_conf" || true
-        done
+        fi
         if [ -f /etc/greetd/config.toml ] && grep -q 'PhaseZero managed' /etc/greetd/config.toml 2>/dev/null; then
             local greetd_backup="/etc/greetd/config.toml.phasezero-backup"
             if [ -f "$greetd_backup" ]; then cp -a "$greetd_backup" /etc/greetd/config.toml && _vm_rescue_log "greetd restored from backup"; else rm -f /etc/greetd/config.toml && _vm_rescue_log "greetd config removed (no backup)"; fi

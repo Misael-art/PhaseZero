@@ -72,7 +72,9 @@ pz_shortcut_performance_platform() {
 }
 
 pz_shortcut_first_existing() {
+    # shellcheck disable=SC2178 # candidates is a semicolon-separated string, not array
     local candidates="$1" candidate match
+    # shellcheck disable=SC2128 # candidates is a string, not array
     IFS=';' read -r -a _pz_candidates <<< "$candidates"
     for candidate in "${_pz_candidates[@]}"; do
         [ -z "$candidate" ] && continue
@@ -370,11 +372,13 @@ pz_shortcut_set_desktop_key() {
 }
 
 pz_shortcut_status_line() {
+    # shellcheck disable=SC2178 # candidates is a string, not array
     local id="$1" name="$2" wrapper="$3" desktop="$4" candidates="$5" suffix="$6"
     local target dup_count=0 desktop_state wrapper_state target_state
     if [ "$id" = "emudeck" ] && pz_shortcut_emudeck_uses_steamdeck_desktop; then
         target="$(pz_shortcut_emudeck_launcher_path)"
     else
+        # shellcheck disable=SC2128 # candidates is a string, not array
         target="$(pz_shortcut_first_existing "$candidates" 2>/dev/null || true)"
     fi
     [ -n "$target" ] && target_state="found" || target_state="missing"

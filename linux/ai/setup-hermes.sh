@@ -157,7 +157,7 @@ status_json() {
         timeout 15 "$cmd" config check >/dev/null 2>&1 && config_check=true
         doctor="$(doctor_text "$cmd")"
     fi
-    [ -f "$HERMES_CONFIG" ] && mcp_count="$(grep -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null | wc -l | tr -d ' ')"
+    [ -f "$HERMES_CONFIG" ] && mcp_count="$(grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null || true)"
     mcp_sdk_available && sdk=true
     jq -cn \
         --arg commandPath "$cmd" \

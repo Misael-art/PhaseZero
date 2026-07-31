@@ -355,6 +355,7 @@ winvm_user_home="${HOME}"
 winvm_ops_dir="${XDG_STATE_HOME:-$winvm_user_home/.local/state}/phasezero/operations"
 winvm_latest_resolved=""
 if [ -d "$winvm_ops_dir" ]; then
+    # shellcheck disable=SC2012 # ls for sorting by time is intentional
     last_op_dir="$(ls -t "$winvm_ops_dir" 2>/dev/null | head -1)"
     [ -n "$last_op_dir" ] && winvm_latest_resolved="$(jq -r '.graphicsResolved.profile // ""' "$winvm_ops_dir/$last_op_dir/operation.json" 2>/dev/null || true)"
 fi

@@ -127,6 +127,7 @@ provision_plan() {
     local virtio_sha_expected="e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976331"
 
     local preflight_json preflight_status preflight_stderr
+    # shellcheck disable=SC2119
     preflight_stderr="$(pz_tempfile)" || true
     preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>"${preflight_stderr:-/dev/null}" || {
         pz_warn "preflight check failed — see diagnostics above"
@@ -625,17 +626,20 @@ run_answer_media() {
     echo "$password_xml" > "$OPERATIONS_DIR/$op/bootstrap_secret"
     chmod 0600 "$OPERATIONS_DIR/$op/bootstrap_secret"
 
+    local autounattend_args=(
+        --wim-index "$image_index"
+        --lang "$lang"
+        --keyboard "$keyboard"
+        --timezone "$tz"
+        --user "$user"
+        --password "$password_xml"
+        --disk-serial "$disk_serial"
+        --output-dir "$answer_dir"
+    )
+    [ -n "$product_key" ] && autounattend_args+=(--product-key "$product_key")
+    [ "$tpm_bypass" = "true" ] && autounattend_args+=(--tpm-bypass)
     bash "$PZ_ROOT/linux/windows-vm/autounattend.sh" generate \
-        --wim-index "$image_index" \
-        --lang "$lang" \
-        --keyboard "$keyboard" \
-        --timezone "$tz" \
-        --user "$user" \
-        --password "$password_xml" \
-        --disk-serial "$disk_serial" \
-        $( [ -n "$product_key" ] && echo "--product-key $product_key" ) \
-        $( [ "$tpm_bypass" = "true" ] && echo "--tpm-bypass" ) \
-        --output-dir "$answer_dir" >/dev/null
+        "${autounattend_args[@]}" >/dev/null
 
     local iso_file="$answer_dir/autounattend.xml"
     [ -f "$iso_file" ] || { log_operation "$op" "FAIL: autounattend.xml not generated"; return 1; }
@@ -726,6 +730,7 @@ run_setup() {
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
     [ -f "$oemdrv_iso" ] || { log_operation "$op" "OEMDRV ISO not found"; return 1; }
 
+    # shellcheck disable=SC2054
     local qemu_args=(
         -machine q35,accel=kvm
         -smp "$cpus"
@@ -749,7 +754,9 @@ run_setup() {
     )
 
     if [ -f "$vm_dir/virtio-win.iso" ]; then
+        # shellcheck disable=SC2054
         qemu_args+=(-drive file="$vm_dir/virtio-win.iso",format=raw,if=none,id=virtio)
+        # shellcheck disable=SC2054
         qemu_args+=(-device ide-cd,drive=virtio)
     fi
 
@@ -807,6 +814,7 @@ run_drivers() {
 
     rm -f "$qga_sock"
 
+    # shellcheck disable=SC2054
     local qemu_args=(
         -machine q35,accel=kvm -cpu host -smp "$cpus" -m "$ram"
         -drive file="$ovmf_code",if=pflash,format=raw,readonly=on
@@ -959,6 +967,7 @@ run_tweaks() {
 
     rm -f "$qga_sock"
 
+    # shellcheck disable=SC2054
     local qemu_args=(
         -machine q35,accel=kvm -cpu host -smp "$cpus" -m "$ram"
         -drive file="$ovmf_code",if=pflash,format=raw,readonly=on
@@ -1070,7 +1079,7 @@ run_verify() {
         return 1
     fi
 
-    log_operation "$op" "disk verified: $(numfmt --to=iec $disk_size 2>/dev/null || echo "${disk_size}B")"
+    log_operation "$op" "disk verified: $(numfmt --to=iec "$disk_size" 2>/dev/null || echo "${disk_size}B")"
     return 0
 }
 
@@ -1141,6 +1150,7 @@ run_relaunch() {
             ;;
     esac
 
+    # shellcheck disable=SC2054
     local qemu_args=(
         -machine q35,accel=kvm
         -cpu host
@@ -1162,9 +1172,11 @@ run_relaunch() {
         -device usb-kbd
     )
 
-    qemu_args+=($GRAPHICS_VGA)
-    qemu_args+=($GRAPHICS_DISPLAY)
+    qemu_args+=("$GRAPHICS_VGA")
+    qemu_args+=("$GRAPHICS_DISPLAY")
+    # shellcheck disable=SC2054
     qemu_args+=(-chardev socket,path="$vm_dir/qga.sock",server=on,id=qga0)
+    # shellcheck disable=SC2054
     qemu_args+=(-device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0)
 
     log_operation "$op" "$GRAPHICS_ACCEL_LOG"
@@ -1377,20 +1389,32 @@ provision_shutdown() {
     local vm_dir vm_dir_file="$OPERATIONS_DIR/$operation_id/vm_dir"
     [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
     if [ -z "$vm_dir" ] || [ ! -d "$vm_dir" ]; then
-        [ "$json" = "1" ] && jq -n --arg operation_id "$operation_id" '{success: false, error: "vm_dir not found", operationId: $operation_id}' || pz_error "vm_dir not found"
+        if [ "$json" = "1" ]; then
+            jq -n --arg operation_id "$operation_id" '{success: false, error: "vm_dir not found", operationId: $operation_id}'
+        else
+            pz_error "vm_dir not found"
+        fi
         return 1
     fi
 
     local qga_sock="$vm_dir/qga.sock"
     if [ ! -S "$qga_sock" ]; then
-        [ "$json" = "1" ] && jq -n --arg operation_id "$operation_id" '{success: false, error: "QGA socket not found", operationId: $operation_id}' || pz_error "QGA socket not found"
+        if [ "$json" = "1" ]; then
+            jq -n --arg operation_id "$operation_id" '{success: false, error: "QGA socket not found", operationId: $operation_id}'
+        else
+            pz_error "QGA socket not found"
+        fi
         return 1
     fi
 
     local have_socat=0
     command -v socat >/dev/null 2>&1 && have_socat=1
     if [ "$have_socat" != "1" ]; then
-        [ "$json" = "1" ] && jq -n --arg operation_id "$operation_id" '{success: false, error: "socat required for QGA shutdown", operationId: $operation_id}' || pz_error "socat required"
+        if [ "$json" = "1" ]; then
+            jq -n --arg operation_id "$operation_id" '{success: false, error: "socat required for QGA shutdown", operationId: $operation_id}'
+        else
+            pz_error "socat required"
+        fi
         return 1
     fi
 

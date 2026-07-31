@@ -23,8 +23,11 @@ apply_capture="$TMP/apply-common.args"
 (
     # shellcheck source=../linux/server/apply-common.sh
     source "$REPO_ROOT/linux/server/apply-common.sh"
+    # shellcheck disable=SC2329 # stubs invoked indirectly via sourced functions
     bash() { printf '%s\n' "$*" >> "$apply_capture"; }
+    # shellcheck disable=SC2329
     pz_info() { :; }
+    # shellcheck disable=SC2329
     pz_warn() { :; }
     PZ_SERVER_INSTALL_BOOT=0 pz_server_apply --homelab --extras --no-boot
 )

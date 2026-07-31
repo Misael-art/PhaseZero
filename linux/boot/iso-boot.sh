@@ -321,7 +321,7 @@ entry_state_json() {
                 if [ "$actual_size" = "$expected_size" ] && [ "$actual_mtime" = "$expected_mtime" ]; then available=true; reason=ready; else reason=metadata-mismatch; fi
             else
                 actual="$(sha256sum -- "$path" | awk '{print $1}')"
-                if [ "$actual" = "$sha" ]; then available=true; reason=ready; else reason=hash-mismatch; fi
+                if [ "$actual" = "$sha" ]; then available=true; reason=ready; else reason="hash-mismatch"; fi
             fi
         fi
     else
@@ -587,6 +587,7 @@ summary() {
 }
 
 if [ "${PZ_ISO_BOOT_LIBRARY_ONLY:-0}" = "1" ]; then
+    # shellcheck disable=SC2317 # reachable when sourced
     return 0 2>/dev/null || exit 0
 fi
 

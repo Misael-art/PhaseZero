@@ -136,7 +136,7 @@ opencode_sync() {
     if mkdir "$lock_dir" 2>/dev/null; then
         # Use the literal path in the trap (not the local var) so cleanup works
         # even after the function returns and the local goes out of scope.
-        trap "rmdir '$lock_dir' 2>/dev/null || true" EXIT
+        trap 'rmdir "'"$lock_dir"'" 2>/dev/null || true' EXIT
     else
         pz_info "opencode sync already in progress; skipping"
         return 0

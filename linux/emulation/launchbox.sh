@@ -598,6 +598,7 @@ launchbox_path_arg() {
         return 0
     fi
     lower="${value,,}"
+    # shellcheck disable=SC1003 # intentional: backslash in Windows path patterns
     case "$lower" in
         steam://*)
             printf '%s\n' "$value"

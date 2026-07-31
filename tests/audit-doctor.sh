@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-HERE="$(cd "$(dirname "$BASH_SOURCE")" && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 MOCK_BIN="$HERE/.bin"
 DOCTOR="$REPO/linux/audit/doctor.sh"

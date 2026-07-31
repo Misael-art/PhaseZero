@@ -352,7 +352,8 @@ pz_media_rom_entries() {
 }
 
 pz_media_write_noload() {
-    local dir="$1" marker="$dir/noload.txt"
+    local dir="$1"
+    local marker="$dir/noload.txt"
     [ -d "$dir" ] || return 0
     [ -e "$marker" ] && return 0
     printf '%s\n' "Managed by PhaseZero: skip auxiliary subtree during ES-DE scans." > "$marker"

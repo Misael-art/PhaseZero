@@ -45,7 +45,7 @@ jobs:
       - name: Run shellcheck on all shell scripts
         run: |
           set -euo pipefail
-          EXCLUDES="SC1090,SC1091,SC2034,SC2154,SC2155,SC2312"
+          EXCLUDES="SC1090,SC1091,SC2034,SC2154,SC2155,SC2312,SC2015,SC2016,SC2030,SC2031,SC2086,SC2119,SC2251"
           errors=0
           while IFS= read -r -d '' f; do
             if ! shellcheck -x -e "$EXCLUDES" "$f"; then

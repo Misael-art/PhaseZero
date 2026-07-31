@@ -192,8 +192,10 @@ release_asset_regex() {
 }
 
 plugin_path_by_candidates() {
+    # shellcheck disable=SC2178 # candidates is a comma-separated string, not array
     local candidates="$1" dir base candidate name id display
     [ -d "$PZ_DECKY_PLUGINS_DIR" ] || return 0
+    # shellcheck disable=SC2128 # candidates is a string, not array
     IFS=',' read -r -a candidate_array <<< "$candidates"
 
     for candidate in "${candidate_array[@]}"; do

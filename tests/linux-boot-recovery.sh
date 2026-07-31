@@ -101,7 +101,7 @@ fi
 grep -q 'target-root mutation must run inside target chroot' /tmp/phasezero-target-root-test.out
 
 if [ "$(findmnt -no FSTYPE / 2>/dev/null || true)" = "overlay" ] && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    if sudo -n bash "$REPO_ROOT/linux/boot/recovery.sh" install-card >/tmp/phasezero-boot-recovery-test.out 2>&1; then
+    if sudo -n bash -c '"$0" install-card > "$1" 2>&1' "$REPO_ROOT/linux/boot/recovery.sh" /tmp/phasezero-boot-recovery-test.out; then
         cat /tmp/phasezero-boot-recovery-test.out >&2
         echo "expected install-card to refuse live overlay root" >&2
         exit 1

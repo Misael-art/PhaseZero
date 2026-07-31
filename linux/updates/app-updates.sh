@@ -15,6 +15,7 @@ TIMER="phasezero-app-update-check.timer"
 safe_json() {
     local output="$1"; shift
     if timeout 90 "$@" > "$output" 2>/dev/null && jq -e . "$output" >/dev/null 2>&1; then return 0; fi
+    # shellcheck disable=SC2094 # intentional: read parent dir from path, write to file
     jq -n --arg component "$(basename "$output" .json)" '{status:"unavailable",component:$component}' > "$output"
 }
 

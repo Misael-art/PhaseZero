@@ -179,13 +179,17 @@ block_file() {
             ;;
     esac
     if [ "$header_kind" = "hash" ]; then
-        printf '# >>> %s >>>\n' "$label" >> "$out"
-        sed 's/\r$//' "$body_file" >> "$out"
-        printf '\n# <<< %s <<<\n' "$label" >> "$out"
+        {
+            printf '# >>> %s >>>\n' "$label"
+            sed 's/\r$//' "$body_file"
+            printf '\n# <<< %s <<<\n' "$label"
+        } >> "$out"
     else
-        printf '<!-- BEGIN %s -->\n' "$label" >> "$out"
-        sed 's/\r$//' "$body_file" >> "$out"
-        printf '\n<!-- END %s -->\n' "$label" >> "$out"
+        {
+            printf '<!-- BEGIN %s -->\n' "$label"
+            sed 's/\r$//' "$body_file"
+            printf '\n<!-- END %s -->\n' "$label"
+        } >> "$out"
     fi
 }
 

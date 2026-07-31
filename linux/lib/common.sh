@@ -1251,11 +1251,13 @@ pz_boot_systemd_boot_oneshot_entry() {
     esp="$(pz_boot_esp_dir)"
     loader_dir="$esp/loader/entries"
     install -d "$loader_dir"
-    printf 'title PhaseZero Windows VM\n' > "$loader_dir/$entry_id.conf"
-    printf 'sort-key phasezero-windows-vm\n' >> "$loader_dir/$entry_id.conf"
-    printf 'linux /%s\n' "${kernel#/}" >> "$loader_dir/$entry_id.conf"
-    printf 'initrd /%s\n' "${initrd#/}" >> "$loader_dir/$entry_id.conf"
-    printf 'options %s\n' "$cmdline phasezero.windowsvm=1" >> "$loader_dir/$entry_id.conf"
+    {
+        printf 'title PhaseZero Windows VM\n'
+        printf 'sort-key phasezero-windows-vm\n'
+        printf 'linux /%s\n' "${kernel#/}"
+        printf 'initrd /%s\n' "${initrd#/}"
+        printf 'options %s\n' "$cmdline phasezero.windowsvm=1"
+    } > "$loader_dir/$entry_id.conf"
     printf '%s\n' "$loader_dir/$entry_id.conf"
 }
 
@@ -1285,13 +1287,15 @@ pz_boot_refind_install_stanza() {
     install -d "$refind_entries" 2>/dev/null || refind_entries="/boot/EFI/refind/entries"
     install -d "$refind_entries"
     conf="$refind_entries/$entry_id.conf"
-    printf 'menuentry "PhaseZero Windows VM" {\n' > "$conf"
-    printf '    icon /EFI/refind/icons/os_linux.png\n' >> "$conf"
-    printf '    volume %s\n' "$(findmnt -no UUID -T "$(pz_boot_target_root)" 2>/dev/null | head -1)" >> "$conf"
-    printf '    loader /%s\n' "${kernel#/}" >> "$conf"
-    printf '    initrd /%s\n' "${initrd#/}" >> "$conf"
-    printf '    options "%s phasezero.windowsvm=1"\n' "$cmdline" >> "$conf"
-    printf '}\n' >> "$conf"
+    {
+        printf 'menuentry "PhaseZero Windows VM" {\n'
+        printf '    icon /EFI/refind/icons/os_linux.png\n'
+        printf '    volume %s\n' "$(findmnt -no UUID -T "$(pz_boot_target_root)" 2>/dev/null | head -1)"
+        printf '    loader /%s\n' "${kernel#/}"
+        printf '    initrd /%s\n' "${initrd#/}"
+        printf '    options "%s phasezero.windowsvm=1"\n' "$cmdline"
+        printf '}\n'
+    } > "$conf"
     pz_info "rEFInd stanza written: $conf"
 }
 
