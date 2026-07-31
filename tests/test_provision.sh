@@ -160,7 +160,7 @@ mkdir -p "$CANCEL_TEST_DIR/phasezero/vms/test-op"
 echo '{"id":"test-cancel","state":"running","checkpoint":"assets","progress":10}' > "$CANCEL_TEST_DIR/phasezero/operations/test-cancel/operation.json"
 echo "$CANCEL_TEST_DIR/phasezero/vms/test-op" > "$CANCEL_TEST_DIR/phasezero/operations/test-cancel/vm_dir"
 XDG_STATE_HOME="$CANCEL_TEST_DIR" bash "$PROVISION_SCRIPT" cancel --operation-id test-cancel 2>/dev/null || true
-CANCEL_STATE=$(cat "$CANCEL_TEST_DIR/phasezero/operations/test-cancel/operation.json" 2>/dev/null | jq -r '.state // ""' 2>/dev/null || echo "")
+CANCEL_STATE=$(jq -r '.state // ""' "$CANCEL_TEST_DIR/phasezero/operations/test-cancel/operation.json" 2>/dev/null || echo "")
 assert_eq "cancel changes state to cancelled" "cancelled" "$CANCEL_STATE"
 rm -rf "$CANCEL_TEST_DIR"
 
@@ -194,7 +194,7 @@ OPERATIONS_DIR="$GFX_VGL_DIR" PZ_GFX_RENDER_NODE="" PZ_GFX_KVM_PATH="/nonexisten
     PZ_GFX_QEMU_BIN="false" PZ_GFX_VIRGL_PRESENT=0 PZ_GFX_QEMU_VIRTIO_VGA_GL=0 \
     graphics_preflight "gfx-test-vgl" "virtio-gl" && true
 assert_eq "preflight virtio-gl fails without resources" "1" "$?"
-LOG_TEXT=$(cat "$GFX_VGL_DIR/gfx-test-vgl/operation.json" | jq -r '.log[]' 2>/dev/null || echo "")
+LOG_TEXT=$(jq -r '.log[]' "$GFX_VGL_DIR/gfx-test-vgl/operation.json" 2>/dev/null || echo "")
 assert_contains "preflight logs fallback message" "$LOG_TEXT" "fallback: --graphics compat"
 rm -rf "$GFX_VGL_DIR"
 
@@ -205,7 +205,7 @@ mkdir -p "$GFX_UNK_DIR/gfx-test-unk"
 echo '{"id":"gfx-test-unk","checkpoint":"validate","state":"running","log":[]}' > "$GFX_UNK_DIR/gfx-test-unk/operation.json"
 OPERATIONS_DIR="$GFX_UNK_DIR" graphics_preflight "gfx-test-unk" "vfio-looking-glass" && true
 assert_eq "preflight unknown profile fails" "1" "$?"
-LOG_UNK=$(cat "$GFX_UNK_DIR/gfx-test-unk/operation.json" | jq -r '.log[]' 2>/dev/null || echo "")
+LOG_UNK=$(jq -r '.log[]' "$GFX_UNK_DIR/gfx-test-unk/operation.json" 2>/dev/null || echo "")
 assert_contains "preflight logs unknown profile" "$LOG_UNK" "unknown graphics profile"
 rm -rf "$GFX_UNK_DIR"
 
@@ -219,9 +219,9 @@ OPERATIONS_DIR="$GFX_RES_COM_DIR" resolve_graphics_qemu_args "gfx-resolve-compat
 assert_eq "resolve compat VGA" "-vga qxl" "$GRAPHICS_VGA"
 assert_eq "resolve compat display" "-display gtk" "$GRAPHICS_DISPLAY"
 assert_contains "resolve compat accel log" "$GRAPHICS_ACCEL_LOG" "NONE (QXL)"
-RESOLVED_PROFILE=$(cat "$GFX_RES_COM_DIR/gfx-resolve-compat/operation.json" | jq -r '.graphicsResolved.profile // ""' 2>/dev/null || echo "")
+RESOLVED_PROFILE=$(jq < "$GFX_RES_COM_DIR/gfx-resolve-compat/operation.json" -r '.graphicsResolved.profile // ""' 2>/dev/null || echo "")
 assert_eq "resolve compat persists profile" "compat" "$RESOLVED_PROFILE"
-RESOLVED_VGA=$(cat "$GFX_RES_COM_DIR/gfx-resolve-compat/operation.json" | jq -r '.graphicsResolved.vgaDevice // ""' 2>/dev/null || echo "")
+RESOLVED_VGA=$(jq < "$GFX_RES_COM_DIR/gfx-resolve-compat/operation.json" -r '.graphicsResolved.vgaDevice // ""' 2>/dev/null || echo "")
 assert_eq "resolve compat persists vgaDevice" "-vga qxl" "$RESOLVED_VGA"
 rm -rf "$GFX_RES_COM_DIR"
 
@@ -235,9 +235,9 @@ OPERATIONS_DIR="$GFX_RES_VGL_DIR" resolve_graphics_qemu_args "gfx-resolve-vgl" "
 assert_eq "resolve vgl VGA" "-device virtio-vga-gl" "$GRAPHICS_VGA"
 assert_eq "resolve vgl display" "-display gtk,gl=on" "$GRAPHICS_DISPLAY"
 assert_contains "resolve vgl accel log" "$GRAPHICS_ACCEL_LOG" "virgl"
-RESOLVED_VGL_PROFILE=$(cat "$GFX_RES_VGL_DIR/gfx-resolve-vgl/operation.json" | jq -r '.graphicsResolved.profile // ""' 2>/dev/null || echo "")
+RESOLVED_VGL_PROFILE=$(jq < "$GFX_RES_VGL_DIR/gfx-resolve-vgl/operation.json" -r '.graphicsResolved.profile // ""' 2>/dev/null || echo "")
 assert_eq "resolve vgl persists profile" "virtio-gl" "$RESOLVED_VGL_PROFILE"
-RESOLVED_VGL_VGA=$(cat "$GFX_RES_VGL_DIR/gfx-resolve-vgl/operation.json" | jq -r '.graphicsResolved.vgaDevice // ""' 2>/dev/null || echo "")
+RESOLVED_VGL_VGA=$(jq < "$GFX_RES_VGL_DIR/gfx-resolve-vgl/operation.json" -r '.graphicsResolved.vgaDevice // ""' 2>/dev/null || echo "")
 assert_eq "resolve vgl persists vgaDevice" "-device virtio-vga-gl" "$RESOLVED_VGL_VGA"
 rm -rf "$GFX_RES_VGL_DIR"
 
@@ -261,7 +261,7 @@ XDG_STATE_HOME="$RL_DIR" PZ_GFX_KVM_PATH="/dev/null" \
 source "'"$PROVISION_SCRIPT"'" 2>/dev/null || true
 run_relaunch "relaunch-compat" 2>/dev/null || true
 ' 2>/dev/null || true
-RL_LOG=$(cat "$RL_DIR/phasezero/operations/relaunch-compat/operation.json" 2>/dev/null | jq -r '.log[]' 2>/dev/null || echo "")
+RL_LOG=$(jq -r '.log[]' "$RL_DIR/phasezero/operations/relaunch-compat/operation.json" 2>/dev/null || echo "")
 assert_contains "relaunch compat logs NONE" "$RL_LOG" "NONE (QXL)"
 assert_contains "relaunch compat logs relaunch" "$RL_LOG" "relaunching with display"
 rm -rf "$RL_DIR"

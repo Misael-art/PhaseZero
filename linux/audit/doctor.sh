@@ -39,7 +39,7 @@ finish() {
 header "System Info"
 echo "Host:       $(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || hostnamectl hostname)"
 echo "Kernel:     $(uname -r)"
-echo "OS:         $(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME | cut -d= -f2 | tr -d '\"')"
+echo "OS:         $(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\"' || echo 'N/A')"
 echo "Uptime:     $(uptime -p)"
 echo "Shell:      $SHELL"
 echo "CPU:        $(LANG=C lscpu 2>/dev/null | grep 'Model name' | head -1 | cut -d: -f2 | xargs || echo 'N/A')"
