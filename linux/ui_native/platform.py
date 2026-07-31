@@ -6,9 +6,6 @@ import signal
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QProcess, QUrl
-from PySide6.QtGui import QDesktopServices
-
 
 def current_platform(value: str | None = None) -> str:
     if value:
@@ -57,6 +54,7 @@ def admin_bridge() -> str:
 
 
 def configure_process_group(process: QProcess) -> None:
+    from PySide6.QtCore import QProcess
     if current_platform() != "linux" or not hasattr(process, "setUnixProcessParameters"):
         return
     parameters = QProcess.UnixProcessParameters()
@@ -65,6 +63,7 @@ def configure_process_group(process: QProcess) -> None:
 
 
 def terminate_process_group(process: QProcess, *, force: bool = False) -> None:
+    from PySide6.QtCore import QProcess
     if process.state() == QProcess.NotRunning:
         return
     pid = process.processId()
@@ -81,4 +80,6 @@ def terminate_process_group(process: QProcess, *, force: bool = False) -> None:
 
 
 def open_path(path: Path) -> bool:
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
     return QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve())))

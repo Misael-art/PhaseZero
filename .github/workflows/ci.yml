@@ -90,7 +90,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl git python3 nodejs npm unzip xz-utils
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl git python3 nodejs npm unzip xz-utils ripgrep yad ovmf
 
       - name: Run full shell test suite
         run: |
