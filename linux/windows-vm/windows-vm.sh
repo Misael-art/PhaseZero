@@ -543,6 +543,8 @@ ovmf_code_path() {
     pz_path_resolve ovmf_code \
         /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/OVMF/OVMF_CODE_4M.secboot.fd \
+        /usr/share/OVMF/OVMF_CODE_4M.fd \
         /usr/share/OVMF/OVMF_CODE.secboot.fd \
         /usr/share/OVMF/OVMF_CODE.fd || true
 }
@@ -551,6 +553,7 @@ ovmf_vars_template() {
     local path
     for path in \
         /usr/share/edk2/x64/OVMF_VARS.4m.fd \
+        /usr/share/OVMF/OVMF_VARS_4M.fd \
         /usr/share/OVMF/OVMF_VARS.fd; do
         [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
     done
@@ -604,6 +607,32 @@ effective_config() {
     fi
     SHARE_ROOT="${PZ_WINDOWS_VM_SHARE_ROOT:-$VM_DIR/shares}"
     TPM_DIR="${PZ_WINDOWS_VM_TPM_DIR:-$VM_DIR/tpm}"
+    # Share policy: minimal (default) exposes ONLY the exchange dir. home,
+    # sdcard, removable, media and /mnt are exposed only with an explicit
+    # opt-in (PZ_WINDOWS_VM_SHARE_POLICY=full); expanded shares are read-only
+    # unless PZ_WINDOWS_VM_SHARE_WRITABLE=1.
+    SHARE_POLICY="${SHARE_POLICY:-${PZ_WINDOWS_VM_SHARE_POLICY:-minimal}}"
+    case "$SHARE_POLICY" in
+        minimal|full) ;;
+        *) pz_warn "unknown share policy '$SHARE_POLICY'; falling back to minimal"; SHARE_POLICY=minimal ;;
+    esac
+    SHARE_WRITABLE="${SHARE_WRITABLE:-${PZ_WINDOWS_VM_SHARE_WRITABLE:-0}}"
+    case "$SHARE_WRITABLE" in
+        1|0) ;;
+        *) pz_warn "invalid PZ_WINDOWS_VM_SHARE_WRITABLE '$SHARE_WRITABLE'; using 0 (read-only expanded shares)"; SHARE_WRITABLE=0 ;;
+    esac
+    if [ -f "$CONFIG_FILE" ] && [ -z "${PZ_WINDOWS_VM_SHARE_POLICY:-}" ]; then
+        pz_warn "legacy Windows VM config without share policy — defaulting to minimal shares (only exchange exposed; home/sdcard/mnt need explicit PZ_WINDOWS_VM_SHARE_POLICY=full)"
+    fi
+    # SPICE binding: loopback by default. Any non-loopback address requires an
+    # explicit opt-in and emits a strong warning (unauthenticated SPICE server).
+    SPICE_ADDR="${SPICE_ADDR:-${PZ_WINDOWS_VM_SPICE_ADDR:-127.0.0.1}}"
+    case "$SPICE_ADDR" in
+        127.0.0.1|::1|localhost) ;;
+        *)
+            pz_warn "SPICE binding to non-loopback address $SPICE_ADDR (unauthenticated SPICE). Set PZ_WINDOWS_VM_SPICE_ADDR=127.0.0.1 unless remote access is intentional."
+            ;;
+    esac
     local configured_source="${PZ_WINDOWS_VM_DISK_SOURCE:-new}"
     DISK_SOURCE="$configured_source"
     if [ "$EXPLICIT_DISK" -eq 1 ]; then
@@ -781,35 +810,95 @@ vm_admin_run() {
 # fine. We populate a share root under RUNTIME_DIR (outside $HOME, so bind-mounting
 # $HOME cannot recurse) and expose that; sets the global EFFECTIVE_SMB_DIR.
 SHARE_BIND_ROOT="$RUNTIME_DIR/shares"
+share_pairs() {
+    local ro_marker="${1:-0}"
+    if [ "$SHARE_POLICY" = "full" ]; then
+        if [ "$ro_marker" = "1" ]; then
+            printf '%s\n' "exchange:$EXCHANGE_DIR:rw" "home:$HOME:ro" "sdcard:/mnt/sdcard:ro" "removable:/run/media/$USER:ro" "media:/media/$USER:ro" "mnt:/mnt:ro"
+        else
+            printf '%s\n' "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"
+        fi
+    else
+        if [ "$ro_marker" = "1" ]; then
+            printf '%s\n' "exchange:$EXCHANGE_DIR:rw"
+        else
+            printf '%s\n' "exchange:$EXCHANGE_DIR"
+        fi
+    fi
+}
+# Remove bind mounts/symlinks left from a previous WIDER policy. Migrating
+# full -> minimal must stop exposing home/sdcard/... to the guest.
+prune_share_links() {
+    local allowed="$1" name
+    for name in exchange home sdcard removable media mnt; do
+        case " $allowed " in
+            *" $name "*) continue ;;
+        esac
+        if mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
+            vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
+        fi
+        [ -L "$SHARE_ROOT/$name" ] && rm -f "$SHARE_ROOT/$name" 2>/dev/null || true
+    done
+}
+
 ensure_share_links() {
     local hard_fail="${1:-0}"
     if [ "$DRY_RUN" = "1" ]; then
-        pz_info "dry-run: would bind-mount host home + /mnt/sdcard into $SHARE_BIND_ROOT for SMB"
+        pz_info "dry-run: would expose shares for SMB (policy=$SHARE_POLICY)"
         EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
         return 0
     fi
-    local ok=1 pair name target attempt=0
+    local ok=1 pair name target mode attempt=0
     while [ "$attempt" -le 1 ]; do
         ok=1
         install -d "$SHARE_BIND_ROOT" 2>/dev/null || ok=0
         if [ "$ok" = "1" ]; then
             mkdir -p "$EXCHANGE_DIR"
-            for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
+            while IFS= read -r pair; do
+                [ -n "$pair" ] || continue
                 name="${pair%%:*}"; target="${pair#*:}"
+                mode="rw"
+                case "$target" in
+                    *:rw|*:ro) mode="${target##*:}"; target="${target%:*}" ;;
+                esac
                 [ -d "$target" ] || continue
-                install -d "$SHARE_BIND_ROOT/$name"
-                mountpoint -q "$SHARE_BIND_ROOT/$name" && continue
-                vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
-            done
+                if [ "$mode" = "ro" ] && [ "$SHARE_WRITABLE" != "1" ]; then
+                    if mountpoint -q "$SHARE_BIND_ROOT/$name"; then
+                        vm_admin_run mount -o remount,ro,bind "$SHARE_BIND_ROOT/$name" 2>/dev/null || ok=0
+                    else
+                        install -d "$SHARE_BIND_ROOT/$name"
+                        vm_admin_run mount --bind -o ro "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
+                    fi
+                elif mountpoint -q "$SHARE_BIND_ROOT/$name"; then
+                    continue
+                else
+                    install -d "$SHARE_BIND_ROOT/$name"
+                    vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
+                fi
+            done < <(share_pairs 1)
         fi
         [ "$ok" = "1" ] && break
         [ "$attempt" -ge 1 ] && break
         attempt=$((attempt + 1))
         pz_warn "bind mount attempt $attempt failed; retrying once"
     done
-    if [ "$ok" = "1" ] && mountpoint -q "$SHARE_BIND_ROOT/home"; then
+    local allowed_names=""
+    while IFS= read -r pair; do
+        [ -n "$pair" ] || continue
+        allowed_names="$allowed_names ${pair%%:*}"
+    done < <(share_pairs 1)
+    prune_share_links "$allowed_names"
+    if [ "$ok" = "1" ] && mountpoint -q "$SHARE_BIND_ROOT/exchange"; then
         EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
-        pz_info "host folders bind-mounted for SMB: \\\\10.0.2.4\\qemu -> exchange, home, sdcard, removable, media, mnt"
+        if [ "$SHARE_POLICY" = "full" ]; then
+            if [ "$SHARE_WRITABLE" = "1" ]; then
+                pz_info "host folders bind-mounted for SMB (policy=full, writable): \\\\10.0.2.4\\qemu -> exchange, home, sdcard, removable, media, mnt"
+            else
+                pz_info "host folders bind-mounted for SMB (policy=full, read-only except exchange): \\\\10.0.2.4\\qemu"
+            fi
+        else
+            pz_info "host folders bind-mounted for SMB (policy=minimal): \\\\10.0.2.4\\qemu -> exchange"
+        fi
         return 0
     fi
     if [ "$hard_fail" = "1" ]; then
@@ -819,11 +908,13 @@ ensure_share_links() {
     install -d "$SHARE_ROOT"
     mkdir -p "$EXCHANGE_DIR"
     ln -sfn "$EXCHANGE_DIR" "$SHARE_ROOT/exchange"
-    ln -sfn "$HOME" "$SHARE_ROOT/home"
-    [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
-    [ -d "/run/media/$USER" ] && ln -sfn "/run/media/$USER" "$SHARE_ROOT/removable"
-    [ -d "/media/$USER" ] && ln -sfn "/media/$USER" "$SHARE_ROOT/media"
-    [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
+    if [ "$SHARE_POLICY" = "full" ]; then
+        ln -sfn "$HOME" "$SHARE_ROOT/home"
+        [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
+        [ -d "/run/media/$USER" ] && ln -sfn "/run/media/$USER" "$SHARE_ROOT/removable"
+        [ -d "/media/$USER" ] && ln -sfn "/media/$USER" "$SHARE_ROOT/media"
+        [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
+    fi
     EFFECTIVE_SMB_DIR="$SHARE_ROOT"
     pz_warn "no root for bind mounts; SMB share uses symlinks (guest home/sdcard may be empty). Run: sudo pz windows-vm shares install, or use virtiofs."
 }
@@ -860,8 +951,12 @@ verify_share() {
 
 cmd_shares_verify() {
     local fail=0 json_output="" line result_field failures=0
-    for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
+    while IFS= read -r pair; do
+        [ -n "$pair" ] || continue
         local name="${pair%%:*}" target="${pair#*:}"
+        case "$target" in
+            *:rw|*:ro) target="${target%:*}" ;;
+        esac
         [ -d "$target" ] || continue
         if [ "${JSON_OUT:-0}" = "1" ]; then
             line="$(verify_share "$name" "$target")"
@@ -878,16 +973,17 @@ cmd_shares_verify() {
                 fail=1
             fi
         fi
-    done
+    done < <(share_pairs 0)
     if [ "${JSON_OUT:-0}" = "1" ]; then
         json_output="${json_output%,}"
         printf '{"ok":%s,"failures":%d,"shares":[%s]}\n' \
             "$([ "$fail" = "0" ] && echo true || echo false)" \
             "$failures" "$json_output"
     fi
-    local samba_reachable=""
+    local samba_reachable="" smb_share="PZExchange"
+    [ "$SHARE_POLICY" = "full" ] && smb_share="PZHome"
     if command -v smbclient >/dev/null 2>&1; then
-        if smbclient -N -L "//127.0.0.1/PZHome" -I 127.0.0.1 -p 445 2>&1 | grep 'PZHome' >/dev/null; then
+        if smbclient -N -L "//127.0.0.1/$smb_share" -I 127.0.0.1 -p 445 2>&1 | grep "$smb_share" >/dev/null; then
             samba_reachable="yes"
         else
             samba_reachable="no"
@@ -895,7 +991,7 @@ cmd_shares_verify() {
         fi
     fi
     if [ "${JSON_OUT:-0}" != "1" ]; then
-        [ -n "$samba_reachable" ] && echo "samba_home_reachable: $samba_reachable"
+        [ -n "$samba_reachable" ] && echo "samba_${smb_share}_reachable: $samba_reachable"
         printf 'shares_ok: %s\n' "$([ "$fail" = "0" ] && echo yes || echo no)"
     fi
     return $fail
@@ -920,12 +1016,35 @@ libvirt_gateway() {
     printf '%s\n' "${gateway:-192.168.122.1}"
 }
 
+# One expanded share stanza (full policy only). Read-only unless the operator
+# explicitly opted into writable expanded shares (SHARE_WRITABLE=1).
+samba_ro_stanza() {
+    local name="$1" comment="$2" path="$3" veto="${4:-}"
+    cat <<EOF
+[$name]
+    comment = $comment
+    path = $path
+    browseable = yes
+    read only = $([ "$SHARE_WRITABLE" = "1" ] && echo no || echo yes)
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+$( [ -n "$veto" ] && printf '    veto files = %s\n' "$veto" )
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
+EOF
+}
+
 samba_block_content() {
     local home removable media
     home="$(target_home)"
     removable="/run/media/$TARGET_USER"
     media="/media/$TARGET_USER"
-    cat <<EOF
+    if [ "$SHARE_POLICY" = "full" ]; then
+        cat <<EOF
 $SAMBA_BEGIN
 [PZExchange]
     comment = PhaseZero Windows exchange
@@ -943,75 +1062,37 @@ $SAMBA_BEGIN
     hosts allow = 127.0.0.1 192.168.122.0/24
     hosts deny = 0.0.0.0/0
 
-[PZHome]
-    comment = PhaseZero host home
-    path = $home
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    force create mode = 0600
-    force directory mode = 0700
-    veto files = /.ssh/.gnupg/.aws/.kube/
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
-
-[PZSDCard]
-    comment = PhaseZero SD card
-    path = /mnt/sdcard
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
-
-[PZRemovable]
-    comment = PhaseZero removable media
-    path = $removable
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
-
-[PZMedia]
-    comment = PhaseZero media mounts
-    path = $media
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
-
-[PZMounts]
-    comment = PhaseZero host mounts
-    path = /mnt
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
+$(samba_ro_stanza PZHome "PhaseZero host home" "$home" '/.ssh/.gnupg/.aws/.kube/')
+$(samba_ro_stanza PZSDCard "PhaseZero SD card" /mnt/sdcard)
+$(samba_ro_stanza PZRemovable "PhaseZero removable media" "$removable")
+$(samba_ro_stanza PZMedia "PhaseZero media mounts" "$media")
+$(samba_ro_stanza PZMounts "PhaseZero host mounts" /mnt)
 $SAMBA_END
 EOF
+    else
+        # Policy=minimal: only the exchange directory is ever published.
+        # Home, SD card, removable/media and /mnt are NOT exported over SMB.
+        cat <<EOF
+$SAMBA_BEGIN
+[PZExchange]
+    comment = PhaseZero Windows exchange
+    path = $EXCHANGE_DIR
+    browseable = yes
+    read only = no
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+    smb encrypt = desired
+    follow symlinks = no
+    wide links = no
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
+$SAMBA_END
+EOF
+    fi
 }
 
 strip_managed_samba_block() {
@@ -1032,10 +1113,23 @@ samba_shares_managed() {
 }
 
 samba_shares_reachable() {
-    command -v smbclient >/dev/null 2>&1 &&
-        smbclient -N //127.0.0.1/PZExchange -c 'ls' >/dev/null 2>&1 &&
-        smbclient -N //127.0.0.1/PZHome -c 'ls' >/dev/null 2>&1 &&
-        smbclient -N //127.0.0.1/PZSDCard -c 'ls' >/dev/null 2>&1
+    command -v smbclient >/dev/null 2>&1 || return 1
+    smbclient -N //127.0.0.1/PZExchange -c 'ls' >/dev/null 2>&1 || return 1
+    if [ "$SHARE_POLICY" = "full" ]; then
+        smbclient -N //127.0.0.1/PZHome -c 'ls' >/dev/null 2>&1 || return 1
+        smbclient -N //127.0.0.1/PZSDCard -c 'ls' >/dev/null 2>&1 || return 1
+    fi
+}
+
+# The managed block currently on disk must match the effective share policy:
+# minimal publishes only PZExchange; full must include the expanded shares.
+samba_policy_compliant() {
+    [ -r "$SAMBA_CONF" ] || return 1
+    if [ "$SHARE_POLICY" = "full" ]; then
+        grep -q '^\[PZHome\]' "$SAMBA_CONF"
+    else
+        ! grep -qE '^\[PZ(Home|SDCard|Removable|Media|Mounts)\]' "$SAMBA_CONF"
+    fi
 }
 
 windows_usb_udev_content() {
@@ -1121,7 +1215,11 @@ configure_windows_samba_shares() {
         return 1
     }
     configure_windows_usb_access
-    pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts"
+    if [ "$SHARE_POLICY" = "full" ]; then
+        pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts (policy=full, writable=$SHARE_WRITABLE)"
+    else
+        pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZExchange (policy=minimal)"
+    fi
 }
 
 remove_windows_samba_shares() {
@@ -1242,10 +1340,18 @@ cmd_shares() {
             ;;
         dry-run|plan)
             echo "Windows VM shared access plan"
-            # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
-            echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> home/ and sdcard/ (bind-mounted)"
-            # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
-            echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard"
+            if [ "$SHARE_POLICY" = "full" ]; then
+                # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+                echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> exchange/ home/ sdcard/ (bind-mounted)"
+                # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+                echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts"
+            else
+                # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+                echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> exchange/ (bind-mounted)"
+                # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+                echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZExchange"
+            fi
+            echo "  share policy: $SHARE_POLICY (expanded shares writable: $SHARE_WRITABLE)"
             echo "  SPICE WebDAV: $EXCHANGE_DIR (requires spice-webdavd in Windows guest)"
             echo "  bind-mount root: $SHARE_BIND_ROOT"
             echo "  USB auto filter: $USB_AUTO_FILTER"
@@ -1259,11 +1365,14 @@ cmd_shares() {
             ;;
     esac
     # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
-    echo "builtin_smb_unc: \\\\10.0.2.4\\qemu (home/, sdcard/)"
+    echo "builtin_smb_unc: \\\\10.0.2.4\\qemu ($([ "$SHARE_POLICY" = "full" ] && echo "exchange/ home/ sdcard/" || echo "exchange/"))"
+    echo "share_policy: $SHARE_POLICY"
+    echo "share_writable: $SHARE_WRITABLE"
     echo "bind_root: $SHARE_BIND_ROOT"
     echo "home_bound: $(mountpoint -q "$SHARE_BIND_ROOT/home" 2>/dev/null && echo yes || echo no)"
     echo "sdcard_bound: $(mountpoint -q "$SHARE_BIND_ROOT/sdcard" 2>/dev/null && echo yes || echo no)"
     echo "samba_managed: $(samba_shares_managed && echo yes || echo no)"
+    echo "samba_policy_compliant: $(samba_policy_compliant && echo yes || echo no)"
     echo "samba_reachable: $(samba_shares_reachable && echo yes || echo no)"
     echo "smb_host: $(libvirt_gateway)"
     echo "exchange_dir: $EXCHANGE_DIR"
@@ -1299,16 +1408,22 @@ cleanup_runtime() {
 }
 
 start_virtiofs_share() {
-    local tag="$1" path="$2" daemon sock pid
+    local tag="$1" path="$2" daemon sock pid extra=()
     [ -d "$path" ] || return 0
     daemon="$(virtiofsd_path)"
     [ -n "$daemon" ] || return 0
+    # expanded shares (home/sdcard/removable/media/mnt) are exposed read-only
+    # unless SHARE_WRITABLE=1; exchange is always read-write.
+    if [ "$SHARE_POLICY" = "full" ] && [ "$tag" != "exchange" ] && [ "$SHARE_WRITABLE" != "1" ]; then
+        extra+=(--readonly)
+        pz_info "virtiofs share $tag mounted read-only (policy=full, SHARE_WRITABLE=0)"
+    fi
     sock="$RUNTIME_DIR/virtiofs-$tag.sock"
     rm -f "$sock"
     if [ "$DRY_RUN" = "1" ]; then
-        pz_info "dry-run: would start virtiofsd tag=$tag path=$path socket=$sock"
+        pz_info "dry-run: would start virtiofsd tag=$tag path=$path socket=$sock ${extra[*]}"
     else
-        "$daemon" --shared-dir "$path" --socket-path "$sock" --cache auto --sandbox none --inode-file-handles=never --log-level warn &
+        "$daemon" --shared-dir "$path" --socket-path "$sock" --cache auto --sandbox none --inode-file-handles=never --log-level warn "${extra[@]}" &
         pid=$!
         CLEANUP_PIDS+=("$pid")
         local i
@@ -1411,12 +1526,14 @@ build_qemu_args() {
         install -d "$RUNTIME_DIR" "$STATE_DIR"
     fi
     ensure_share_links
-    start_virtiofs_share hosthome "$HOME"
     start_virtiofs_share exchange "$EXCHANGE_DIR"
-    [ -d /mnt/sdcard ] && start_virtiofs_share sdcard /mnt/sdcard
-    [ -d "/run/media/$USER" ] && start_virtiofs_share removable "/run/media/$USER"
-    [ -d "/media/$USER" ] && start_virtiofs_share media "/media/$USER"
-    [ -d /mnt ] && start_virtiofs_share mnt /mnt
+    if [ "$SHARE_POLICY" = "full" ]; then
+        start_virtiofs_share hosthome "$HOME"
+        [ -d /mnt/sdcard ] && start_virtiofs_share sdcard /mnt/sdcard
+        [ -d "/run/media/$USER" ] && start_virtiofs_share removable "/run/media/$USER"
+        [ -d "/media/$USER" ] && start_virtiofs_share media "/media/$USER"
+        [ -d /mnt ] && start_virtiofs_share mnt /mnt
+    fi
     start_tpm
 
     QEMU_ARGS+=("-name" "$VM_NAME")
@@ -1477,7 +1594,7 @@ build_qemu_args() {
     fi
     QEMU_ARGS+=("-netdev" "$netdev")
     QEMU_ARGS+=("-device" "e1000e,netdev=net0,mac=52:54:00:50:5a:00")
-    QEMU_ARGS+=("-spice" "port=5930,disable-ticketing=on")
+    QEMU_ARGS+=("-spice" "port=5930,addr=$SPICE_ADDR,disable-ticketing=on")
     QEMU_ARGS+=("-device" "virtio-serial-pci")
     QEMU_ARGS+=("-chardev" "spicevmc,id=vdagent,name=vdagent")
     QEMU_ARGS+=("-device" "virtserialport,chardev=vdagent,name=com.redhat.spice.0")
@@ -1745,8 +1862,8 @@ launch_vm() {
         shell_join qemu-system-x86_64 "${QEMU_ARGS[@]}"
         return 0
     fi
-    pz_info "Windows VM shares: \\\\10.0.2.4\\qemu"
-    pz_info "SPICE USB redirection: spice://127.0.0.1:5930"
+    pz_info "Windows VM shares: \\\\10.0.2.4\\qemu (policy=$SHARE_POLICY)"
+    pz_info "SPICE USB redirection: spice://$SPICE_ADDR:5930"
     if command -v ionice >/dev/null 2>&1; then
         exec ionice -c 2 -n 0 qemu-system-x86_64 "${QEMU_ARGS[@]}"
     fi
@@ -1779,6 +1896,8 @@ status_json() {
     [ -f "$SERVICE_FILE" ] && boot_service="yes"
     samba_shares_managed && samba_managed="yes"
     samba_shares_reachable && samba_reachable="yes"
+    local samba_policy="no"
+    samba_policy_compliant && samba_policy="yes"
     share_links_ready && share_links="yes"
     windows_usb_udev_managed && usb_udev_managed="yes"
     boot_artifacts_current && boot_current="yes"
@@ -1803,7 +1922,10 @@ status_json() {
         --arg usbAccessibleDevices "$(usb_accessible_device_count)" \
         --arg shareRoot "$SHARE_ROOT" \
         --arg shareLinks "$share_links" \
+        --arg sharePolicy "$SHARE_POLICY" \
+        --arg shareWritable "$SHARE_WRITABLE" \
         --arg sambaManaged "$samba_managed" \
+        --arg sambaPolicyCompliant "$samba_policy" \
         --arg sambaReachable "$samba_reachable" \
         --arg smbHost "$SMB_HOST" \
         --arg exchangeDir "$EXCHANGE_DIR" \
@@ -1844,10 +1966,13 @@ status_json() {
                 shareRoot: $shareRoot,
                 shareLinksReady: ($shareLinks == "yes"),
                 sambaManaged: ($sambaManaged == "yes"),
+                sambaPolicyCompliant: ($sambaPolicyCompliant == "yes"),
                 sambaReachable: ($sambaReachable == "yes"),
                 smbHost: $smbHost,
                 exchangeDir: $exchangeDir,
-                shares: ["PZExchange", "PZHome", "PZSDCard", "PZRemovable", "PZMedia", "PZMounts"],
+                sharePolicy: $sharePolicy,
+                shareWritable: ($shareWritable == "1"),
+                shares: ([if $sharePolicy == "full" then "PZExchange", "PZHome", "PZSDCard", "PZRemovable", "PZMedia", "PZMounts" else "PZExchange" end]),
                 spiceClient: $spicy,
                 spiceWebdavChannels: ($webdavChannels|tonumber),
                 usbMode: $usbMode,
@@ -1934,12 +2059,14 @@ print_plan() {
     echo "  kvm: $([ -e /dev/kvm ] && echo yes || echo no)"
     echo "  ovmf: ${OVMF_CODE:-missing}"
     echo "  tpm: $(command_path swtpm || echo missing)"
-    echo "  home_share: $HOME"
-    echo "  sdcard_share: $([ -d /mnt/sdcard ] && echo /mnt/sdcard || echo missing)"
-    echo "  removable_share: $([ -d "/run/media/$USER" ] && echo "/run/media/$USER" || echo missing)"
+    echo "  share_policy: $SHARE_POLICY"
+    echo "  share_writable: $SHARE_WRITABLE"
+    echo "  home_share: $([ "$SHARE_POLICY" = "full" ] && echo "$HOME" || echo 'hidden (policy=minimal)')"
+    echo "  sdcard_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d /mnt/sdcard ] && echo /mnt/sdcard || echo missing; } || echo 'hidden (policy=minimal)')"
+    echo "  removable_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d "/run/media/$USER" ] && echo "/run/media/$USER" || echo missing; } || echo 'hidden (policy=minimal)')"
     # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
     echo "  smb_unc: \\\\10.0.2.4\\qemu"
-    echo "  spice_usb: spice://127.0.0.1:5930"
+    echo "  spice_usb: spice://$SPICE_ADDR:5930"
     echo "  direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot install"
 }
 
@@ -2466,13 +2593,23 @@ status_boot() {
         case "$1" in --json) json=1; shift ;; *) shift ;; esac
     done
 
-    local loader="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
+    local loader="" grub_env="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
     loader="$(detected_loader)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && cmdline_marker="yes"
     boot_artifacts_current && artifacts_current="yes"
+    # grub-editenv list exits 1 when the env block is missing or permission is
+    # denied; under set -euo pipefail a pipeline failure must not abort status,
+    # and stdout/stderr must not leak partial output. One invocation only, the
+    # captured stream is parsed below; rc!=0 renders "unknown-permission" when
+    # the error text says so, otherwise "none".
     if command -v grub-editenv >/dev/null 2>&1; then
-        grub_next_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}')"
-        grub_saved_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "saved_entry" {print $2; exit}')"
+        if grub_env="$(grub-editenv list 2>&1)"; then
+            grub_next_entry="$(printf '%s\n' "$grub_env" | awk -F= '$1 == "next_entry" {print $2; exit}')"
+            grub_saved_entry="$(printf '%s\n' "$grub_env" | awk -F= '$1 == "saved_entry" {print $2; exit}')"
+        elif printf '%s\n' "$grub_env" | grep -qi 'permission denied'; then
+            grub_next_entry="unknown-permission"
+            grub_saved_entry="unknown-permission"
+        fi
     fi
 
     local helper_installed="no" session_launcher_installed="no"
