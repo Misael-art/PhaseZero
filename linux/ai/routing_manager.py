@@ -1382,6 +1382,7 @@ def main(argv: list[str] | None = None) -> int:
     p_plan.add_argument("--client", choices=CLIENTS, default="claude")
     p_plan.add_argument("--policy", choices=POLICY_NAMES, default="balanced")
     p_plan.add_argument("--refresh-quota", action="store_true")
+    p_plan.add_argument("--json", action="store_true", help="accepted for catalog compatibility")
     p_plan.set_defaults(func=cmd_plan)
 
     p_apply = sub.add_parser("apply", help="Materialize PhaseZero-managed combos transactionally")

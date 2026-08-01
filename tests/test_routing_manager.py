@@ -719,6 +719,14 @@ def test_cli_verify(sandbox, fake):
     assert data["verdict"] == "healthy"
 
 
+def test_cli_plan_accepts_json_flag(sandbox, fake):
+    proc = _run_cli(sandbox, fake, "plan", "--task", "code", "--json")
+    assert proc.returncode == 0, proc.stderr
+    data = json.loads(proc.stdout)
+    assert data["task"] == "code"
+    assert data["chain"][0] == "cx/gpt-5.6-sol"
+
+
 def test_cli_status_cached_before_any_state(sandbox, fake):
     proc = _run_cli(sandbox, fake, "status", "--cached")
     assert proc.returncode == 1
