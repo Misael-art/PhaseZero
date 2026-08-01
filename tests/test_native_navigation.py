@@ -61,3 +61,21 @@ def test_base_page_context_health_uses_explicit_status_args(qapp):
     with patch.object(page.status_loader, "fetch") as fetch:
         page.reload_context_status()
     fetch.assert_called_once_with(action.id, ["module", "status", "--json"])
+
+
+def test_routing_page_registered_in_sidebar_and_builds(qapp):
+    from linux.ui_native.main_window import MainWindow
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+        window.show_category("IA & Dev")
+        assert "Roteamento IA" in window.sidebar_buttons
+        page = window.registry.page_for("Roteamento IA")
+        assert page is not None
+        assert page.__class__.__name__ == "AiRoutingPage"
+        for aid in ("ai.routing-status", "ai.routing-inventory", "ai.routing-verify",
+                    "ai.routing-plan", "ai.routing-apply-all", "ai.routing-rollback"):
+            assert aid in window.registry.by_id, aid
+        window.close()

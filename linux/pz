@@ -193,6 +193,11 @@ Usage:
   pz ai 9router provider ...   Provider status, secret sync and removal
   pz ai 9router combo ...      List, create, sync or switch fallback combos
    pz ai 9router usage          Usage, latency and fallback telemetry
+  pz ai routing status         Per-task AI routing: status, inventory, quota
+  pz ai routing recommend      Recommend a model chain for a task/policy
+  pz ai routing plan|apply     Plan (diff) and materialize phasezero-* combos
+  pz ai routing run|verify     Run a client via the routed combo; verify health
+  pz ai routing rollback       Byte-level rollback from apply manifest
    pz ai omniroute <action>     OmniRoute multi-provider router (install|status|combo|opencode|test|dashboard)
    pz ai odysseus status        Audit pinned Odysseus workspace deployment
   pz ai odysseus install       Provision rootless, loopback-only Odysseus stack
@@ -509,6 +514,10 @@ cmd_ai() {
         9router|router9|smart-router)
             shift
             bash "$PZ_ROOT/linux/ai/9router-manager.sh" "${@:-status}"
+            ;;
+        routing|ai-router|task-router)
+            shift
+            python3 "$PZ_ROOT/linux/ai/routing_manager.py" "${@:-status}"
             ;;
         omniroute|or|omni-route)
             shift

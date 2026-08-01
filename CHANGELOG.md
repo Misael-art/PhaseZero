@@ -30,6 +30,26 @@ As versões seguem a data de build em `version.json`.
 ## [Não lançado]
 
 ### Adicionado
+- Configurador de roteamento IA por tarefa (`linux/ai/routing_manager.py`,
+  `pz ai routing`): inventário de conexões do 9Router com quota real
+  (known/unknown/unavailable + confiança), recomendações por tarefa
+  (code/analysis/plan) e política (quality/balanced/save-quota/privacy),
+  plano transacional `phasezero-*` com manifesto, apply idempotente,
+  rollback byte a byte (recusa drift sem `--force`), `run` com env de
+  criança e `verify` (health, planMatches, userCombosPreserved,
+  bonsaiIsolated). Redação obrigatória de segredos.
+- Página dedicada "Roteamento IA" na UI nativa: cards por tarefa com
+  recomendação/cadeia/quota, seletor de política, editor de ordem de
+  fallbacks, aplicar/reverter e isolamento Bonsai.
+- Suíte de testes `tests/test_routing_manager.py` com 9Router fake
+  (machine-id + CLI secret + API key), falhas injetadas, rollback
+  transacional e e2e via `pz ai routing`.
+- Smoke `pz ai routing` em `tests/linux-ai.sh` (degrada sem 9Router).
+
+### Corrigido
+- `verify` considera isolamento Bonsai por combos, não por conexão.
+- Redação preserva booleanos em chaves como `secretsRedacted`.
+- Atribuição de modelo a provider por prefixo (`cc/`, `cx/`, ...).
 - Página dedicada "Proxies IA" na UI nativa: gateways 9Router/Odysseus, cards
   por proxy com iniciar/parar, autenticação OAuth por navegador, integração com
   IDEs e polling passivo de status.

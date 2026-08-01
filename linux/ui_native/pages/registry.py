@@ -18,6 +18,7 @@ from .boot import BootPage
 from .flatpak import FlatpakPage
 from .ai_dev import AiDevPage
 from .ai_proxies import AiProxiesPage
+from .ai_routing import AiRoutingPage
 from .applications import ApplicationsPage
 from .tuning import TuningPage
 from .results import ResultsPage
@@ -51,6 +52,7 @@ class PageRegistry:
         "Recursos": CatalogWorkspacePage,
         "IA & Dev": AiDevPage,
         "Proxies IA": AiProxiesPage,
+        "Roteamento IA": AiRoutingPage,
         "Aplicativos": ApplicationsPage,
         "Ajustes": TuningPage,
         "Resultados": ResultsPage,

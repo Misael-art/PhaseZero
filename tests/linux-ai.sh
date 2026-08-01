@@ -145,4 +145,15 @@ timeout 10 "$REPO_ROOT/linux/ai/setup-ides.sh" dry-run >/dev/null 2>&1 || true
 timeout 10 "$REPO_ROOT/linux/ai/setup-admin-bridge.sh" dry-run >/dev/null 2>&1 || true
 timeout 10 "$REPO_ROOT/linux/ai/setup-agent-compat.sh" dry-run >/dev/null 2>&1 || true
 
+# Smoke: per-task AI routing configurator is dry-run safe via pz
+# (degrades gracefully on hosts without a reachable local 9Router)
+routing_out=$("$REPO_ROOT/linux/pz" ai routing status --json 2>/dev/null || true)
+jq -e '.health | type == "boolean"' <<< "$routing_out" >/dev/null 2>&1 || \
+    echo "  WARN: ai routing status did not answer — router may be absent"
+routing_inv=$("$REPO_ROOT/linux/pz" ai routing inventory 2>/dev/null || true)
+jq -e '.schemaVersion == 1' <<< "$routing_inv" >/dev/null 2>&1 || \
+    echo "  WARN: ai routing inventory did not answer — router may be absent"
+"$REPO_ROOT/linux/pz" ai routing apply --task code --dry-run >/dev/null 2>&1 || \
+    echo "  WARN: ai routing apply --dry-run failed — router may be absent"
+
 echo "linux-ai smoke ok"
