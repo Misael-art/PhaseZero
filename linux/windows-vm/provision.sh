@@ -127,17 +127,31 @@ provision_plan() {
     local virtio_sha_expected="e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976331"
 
     local preflight_json preflight_status preflight_stderr
-    # shellcheck disable=SC2119
-    preflight_stderr="$(pz_tempfile)" || true
-    preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>"${preflight_stderr:-/dev/null}" || {
-        pz_warn "preflight check failed — see diagnostics above"
-        echo '{"status":"fail"}'
-    })"
-    if [ -s "${preflight_stderr:-/dev/null}" ]; then
-        pz_warn "preflight diagnostics:"
-        sed 's/^/  /' "$preflight_stderr" >&2
+    if [ "${PZ_TEST_MODE:-0}" = "1" ] && [ -n "${PZ_PREFLIGHT_JSON:-}" ]; then
+        # Hermetic override — honored ONLY with the PZ_TEST_MODE=1 sentinel, so
+        # production always runs the real preflight. The fixture must match the
+        # schema the plan consumes (status in pass/warn/fail, swtpm and virtio
+        # objects); an invalid override is rejected loudly instead of falling
+        # back to host probing.
+        if preflight_json="$(printf '%s' "$PZ_PREFLIGHT_JSON" | jq -e -c '(.status == "pass" or .status == "warn" or .status == "fail") and (.swtpm | type == "object") and (.virtio | type == "object")' 2>/dev/null)"; then
+            preflight_json="$PZ_PREFLIGHT_JSON"
+        else
+            pz_error "PZ_PREFLIGHT_JSON override rejected: fixture does not match preflight schema (status/swtpm/virtio)"
+            return 1
+        fi
+    else
+        # shellcheck disable=SC2119
+        preflight_stderr="$(pz_tempfile)" || true
+        preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>"${preflight_stderr:-/dev/null}" || {
+            pz_warn "preflight check failed — see diagnostics above"
+            echo '{"status":"fail"}'
+        })"
+        if [ -s "${preflight_stderr:-/dev/null}" ]; then
+            pz_warn "preflight diagnostics:"
+            sed 's/^/  /' "$preflight_stderr" >&2
+        fi
+        rm -f "${preflight_stderr:-}"
     fi
-    rm -f "${preflight_stderr:-}"
     preflight_status="$(echo "$preflight_json" | jq -r '.status // "fail"')"
 
     local blockers="[]"
@@ -264,25 +278,14 @@ provision_start() {
     [ "$blockers" = "0" ] || { pz_error "plan has unresolved blockers"; return 1; }
 
     mkdir -p "$OPERATIONS_DIR"
-    if [ -f "$ACTIVE_LOCK" ]; then
-        local active_op
-        active_op="$(cat "$ACTIVE_LOCK")"
-        if [ -f "$OPERATIONS_DIR/$active_op/operation.json" ]; then
-            local op_state
-            op_state="$(jq -r '.state' "$OPERATIONS_DIR/$active_op/operation.json")"
-            if [ "$op_state" != "cancelled" ] && [ "$op_state" != "failed" ]; then
-                pz_error "active operation exists: $active_op (state: $op_state)"
-                return 1
-            fi
-        fi
-    fi
-
     local operation_id="op-$(date +%Y%m%d-%H%M%S)-${RANDOM}"
+    if ! provision_lock_acquire "$operation_id"; then
+        return 1
+    fi
     local op_dir="$OPERATIONS_DIR/$operation_id"
     mkdir -p "$op_dir"
     chmod 0700 "$op_dir"
 
-    echo "$operation_id" > "$ACTIVE_LOCK"
     cp "$plan_file" "$op_dir/plan.json"
 
     local timestamp
@@ -340,6 +343,24 @@ provision_run() {
     local plan_file="$op_dir/plan.json"
     [ -f "$plan_file" ] || { pz_error "plan not found for operation $operation_id"; return 1; }
 
+    # The parent (start/resume) holds the lock only until spawn; the worker
+    # re-acquires it for the whole run so a second start/resume is blocked
+    # while this operation is live. Retry briefly to bridge the handoff.
+    local acquired=0 attempt=0
+    while [ "$attempt" -lt 100 ]; do
+        if provision_lock_acquire "$operation_id"; then
+            acquired=1
+            break
+        fi
+        attempt=$((attempt + 1))
+        sleep 0.1
+    done
+    if [ "$acquired" != "1" ]; then
+        pz_error "could not acquire provision lock for $operation_id"
+        return 1
+    fi
+    trap 'provision_lock_release' RETURN
+
     for cp in "${PROVISION_CHECKPOINTS[@]}"; do
         local current_state
         current_state="$(jq -r '.state // "running"' "$op_dir/operation.json")"
@@ -389,7 +410,7 @@ provision_run() {
     local done_ts; done_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     jq --arg ts "$done_ts" '.state = "completed" | .progress = 100 | .updatedAt = $ts' \
         "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
-    rm -f "$ACTIVE_LOCK"
+    provision_lock_clear "$operation_id"
     pz_info "provision completed: $operation_id"
 }
 
@@ -406,9 +427,125 @@ update_checkpoint() {
 fail_operation() {
     local op="$1" cp="$2"
     local op_dir="$OPERATIONS_DIR/$op"
+    # A user cancel must never be downgraded to failed by the dying worker.
+    local cur
+    cur="$(jq -r '.state // "running"' "$op_dir/operation.json" 2>/dev/null || true)"
+    [ "$cur" = "cancelled" ] && return 0
     update_checkpoint "$op" "$cp" "failed"
     local ts; ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     jq --arg ts "$ts" '.state = "failed" | .updatedAt = $ts' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
+}
+
+# ── Provision lock ──
+# Single-writer lock across start/resume/cancel. Uses flock(1) when available
+# (atomic, auto-released on process death); falls back to mkdir+pidfile with
+# staleness check. The lock file content is the authoritative operation id;
+# a lock whose recorded operation is completed/failed/cancelled is recoverable,
+# a running operation blocks a new one, and inconsistent state (lock references
+# a missing/corrupt operation) produces a diagnostic instead of silent overwrite.
+LOCK_FD=-1
+LOCK_DIR_MODE="mkdir"
+
+provision_lock_init() {
+    mkdir -p "$PROVISION_DIR"
+    # PZ_LOCK_FORCE_MKDIR=1 selects the mkdir+pidfile fallback even when flock
+    # is present, so the fallback path is exercisable in tests and on hosts
+    # where flock misbehaves (sandboxes, containers with seccomp filtering).
+    if [ "${PZ_LOCK_FORCE_MKDIR:-0}" != "1" ] && command -v flock >/dev/null 2>&1; then
+        LOCK_DIR_MODE="flock"
+    else
+        LOCK_DIR_MODE="mkdir"
+    fi
+}
+
+provision_lock_acquire() {
+    local new_op="$1"
+    local prev="" prev_state=""
+    provision_lock_init
+    if [ "$LOCK_DIR_MODE" = "flock" ]; then
+        [ "$LOCK_FD" -ge 0 ] 2>/dev/null || LOCK_FD=-1
+        if [ "$LOCK_FD" -lt 0 ]; then
+            # <> opens read-write without truncating, so the recorded
+            # operation id survives across processes.
+            exec {LOCK_FD}<>"$ACTIVE_LOCK"
+        fi
+        if ! flock -n "$LOCK_FD"; then
+            prev="$(cat "$ACTIVE_LOCK" 2>/dev/null || true)"
+            pz_error "provision lock held by: ${prev:-unknown operation}"
+            return 1
+        fi
+    else
+        if ! mkdir "$ACTIVE_LOCK.d" 2>/dev/null; then
+            prev="$(cat "$ACTIVE_LOCK" 2>/dev/null || true)"
+            local holder_pid=""
+            [ -f "$ACTIVE_LOCK.d/pid" ] && holder_pid="$(cat "$ACTIVE_LOCK.d/pid" 2>/dev/null || true)"
+            if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null; then
+                pz_error "provision lock held by: ${prev:-unknown operation} (pid $holder_pid)"
+                return 1
+            fi
+            pz_warn "stale mkdir lock detected (holder pid ${holder_pid:-unknown} not alive); recovering"
+            rm -rf "$ACTIVE_LOCK.d"
+            mkdir "$ACTIVE_LOCK.d" 2>/dev/null || { pz_error "provision lock contention"; return 1; }
+        fi
+        printf '%s\n' "$$" > "$ACTIVE_LOCK.d/pid"
+    fi
+
+    prev="$(cat "$ACTIVE_LOCK" 2>/dev/null || true)"
+    if [ -n "$prev" ] && [ "$prev" != "$new_op" ]; then
+        local prev_op="$OPERATIONS_DIR/$prev"
+        if [ -f "$prev_op/operation.json" ]; then
+            prev_state="$(jq -r '.state // ""' "$prev_op/operation.json" 2>/dev/null || true)"
+            case "$prev_state" in
+                running)
+                    pz_error "active operation exists: $prev (state: running) — cancel or wait for it"
+                    provision_lock_release
+                    return 1
+                    ;;
+                completed|failed|cancelled)
+                    pz_warn "recovering provision lock from operation $prev (state: $prev_state)"
+                    ;;
+                "")
+                    pz_error "lock references operation $prev with unreadable/corrupt state — refusing to overwrite"
+                    provision_lock_release
+                    return 1
+                    ;;
+                *)
+                    pz_error "lock references operation $prev in inconsistent state ($prev_state) — refusing to overwrite"
+                    provision_lock_release
+                    return 1
+                    ;;
+            esac
+        else
+            pz_error "lock references missing operation $prev — refusing to overwrite"
+            provision_lock_release
+            return 1
+        fi
+    fi
+    printf '%s\n' "$new_op" > "$ACTIVE_LOCK"
+    return 0
+}
+
+provision_lock_release() {
+    if [ "$LOCK_DIR_MODE" = "flock" ]; then
+        if [ "$LOCK_FD" -ge 0 ] 2>/dev/null; then
+            flock -u "$LOCK_FD" 2>/dev/null || true
+            exec {LOCK_FD}>&- 2>/dev/null || true
+            LOCK_FD=-1
+        fi
+    else
+        rm -rf "$ACTIVE_LOCK.d"
+    fi
+}
+
+# Remove ACTIVE_LOCK only if it still names the given operation (the worker
+# finishing must never clear a lock that a newer operation already took over).
+# Always returns 0: a mismatch is a no-op, never a failure under set -e.
+provision_lock_clear() {
+    local op="$1"
+    local current=""
+    current="$(cat "$ACTIVE_LOCK" 2>/dev/null || true)"
+    [ "$current" = "$op" ] && rm -f "$ACTIVE_LOCK"
+    return 0
 }
 
 HAVE_SOCAT=0
@@ -1169,7 +1306,7 @@ run_relaunch() {
         -device virtio-serial-pci
         -chardev spicevmc,id=vdagent,name=vdagent
         -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
-        -spice port=5930,disable-ticketing=on
+        -spice port=5930,addr=127.0.0.1,disable-ticketing=on
         -device ich9-usb-ehci1
         -device ich9-usb-uhci1
         -device usb-tablet
@@ -1213,7 +1350,15 @@ provision_status() {
     local snap_path_file="$OPERATIONS_DIR/$operation_id/snapshot_path"
     [ -f "$snap_path_file" ] && snapshot_path="$(cat "$snap_path_file")"
     if [ -n "$vm_dir" ] && [ -f "$vm_dir/qemu-pid" ]; then
-        qemu_pid_raw="$(cat "$vm_dir/qemu-pid")"
+        # Only trust qemu-pid from a vm_dir that resolves to canonical staging;
+        # a corrupt/hostile vm_dir record must never drive a read from an
+        # arbitrary path.
+        if resolve_vm_staging_dir "$operation_id" >/dev/null 2>&1; then
+            qemu_pid_raw="$(cat "$vm_dir/qemu-pid")"
+        else
+            pz_warn "vm_dir fails staging validation; qemu-pid not read: $vm_dir"
+            vm_dir=""
+        fi
     fi
     [[ "$qemu_pid_raw" =~ ^[0-9]+$ ]] && qemu_pid_num="$qemu_pid_raw"
     local qemu_running="false"
@@ -1321,9 +1466,12 @@ provision_resume() {
         return 1
     fi
 
+    if ! provision_lock_acquire "$operation_id"; then
+        return 1
+    fi
+
     local resume_ts; resume_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     jq --arg ts "$resume_ts" '.state = "running" | .updatedAt = $ts' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
-    echo "$operation_id" > "$ACTIVE_LOCK"
 
     nohup bash "$PZ_ROOT/linux/windows-vm/provision.sh" run --operation-id "$operation_id" \
         > "$op_dir/worker.log" 2>&1 &
@@ -1332,50 +1480,242 @@ provision_resume() {
     pz_info "operation resumed: $operation_id (from checkpoint: $checkpoint)"
 }
 
+# ── Safe staging removal ──
+# Cancel --remove-staging deletes the VM staging directory. The path comes
+# from mutable operation state, so it must be validated before any recursive
+# deletion: canonical path, exact containment under the official staging
+# layout, operation-id agreement, no symlink escapes, no external roots.
+pz_staging_base() {
+    printf '%s\n' "${PZ_STATE}/windows-vm/vms"
+}
+
+resolve_vm_staging_dir() {
+    local op="$1" vm_dir="" canonical="" base="" canonical_base=""
+    local op_dir="$OPERATIONS_DIR/$op"
+    local vm_dir_file="$op_dir/vm_dir"
+
+    [ -n "$op" ] || { pz_error "resolve_vm_staging_dir: empty operation id"; return 1; }
+    case "$op" in
+        */*|*..*) pz_error "resolve_vm_staging_dir: invalid operation id: $op"; return 1 ;;
+    esac
+    [ -d "$op_dir" ] || { pz_error "operation not found: $op"; return 1; }
+    [ -f "$op_dir/operation.json" ] || { pz_error "operation metadata missing: $op"; return 1; }
+    if ! jq -e '.id and .state' "$op_dir/operation.json" >/dev/null 2>&1; then
+        pz_error "operation metadata corrupt for $op; refusing to remove staging"
+        return 1
+    fi
+    local op_id_in_meta
+    op_id_in_meta="$(jq -r '.id // ""' "$op_dir/operation.json" 2>/dev/null || true)"
+    [ "$op_id_in_meta" = "$op" ] || {
+        pz_error "operation metadata id ($op_id_in_meta) does not match $op; refusing to remove staging"
+        return 1
+    }
+
+    [ -f "$vm_dir_file" ] || { pz_error "no staging record for operation $op"; return 1; }
+    vm_dir="$(cat "$vm_dir_file" 2>/dev/null || true)"
+    [ -n "$vm_dir" ] || { pz_error "empty staging path for operation $op"; return 1; }
+
+    case "$vm_dir" in
+        *..*)
+            pz_error "refusing staging path containing '..': $vm_dir"
+            return 1
+            ;;
+    esac
+    [ "$vm_dir" = "/" ] && { pz_error "refusing to remove root"; return 1; }
+    [ "$vm_dir" = "$HOME" ] && { pz_error "refusing to remove HOME"; return 1; }
+    [ "$vm_dir" = "$PZ_STATE" ] && { pz_error "refusing to remove PZ_STATE"; return 1; }
+
+    base="$(pz_staging_base)"
+    [ -n "$base" ] || { pz_error "staging base undefined"; return 1; }
+    canonical_base="$(cd -P "$base" 2>/dev/null && pwd -P || echo "")"
+    [ -n "$canonical_base" ] || { pz_error "staging base does not exist: $base"; return 1; }
+
+    if [ -L "$vm_dir" ] || [ -L "$vm_dir_file" ]; then
+        pz_error "refusing to follow symlink in staging path: $vm_dir"
+        return 1
+    fi
+
+    # Resolve the deepest existing ancestor so containment is checked on real
+    # paths even when the leaf does not exist yet (or was partially removed).
+    local probe="$vm_dir" ancestor=""
+    while [ ! -e "$probe" ] && [ "$probe" != "/" ]; do
+        probe="$(dirname "$probe")"
+    done
+    if [ -L "$probe" ] || [ -L "$(dirname "$probe" 2>/dev/null)" ]; then
+        pz_error "refusing to follow symlink on path to staging: $vm_dir"
+        return 1
+    fi
+    canonical="$(cd -P "$probe" 2>/dev/null && pwd -P || echo "")"
+    [ -n "$canonical" ] || { pz_error "cannot resolve staging path: $vm_dir"; return 1; }
+
+    case "$canonical/" in
+        "$canonical_base/"*)
+            ;;
+        *)
+            pz_error "staging path escapes official layout: $vm_dir (resolved $canonical, base $canonical_base)"
+            return 1
+            ;;
+    esac
+
+    local expected="$canonical_base/$op"
+    [ "$canonical" = "$expected" ] || [ "$canonical/" = "$expected/" ] || {
+        pz_error "staging path does not match operation $op: $vm_dir (expected under $expected)"
+        return 1
+    }
+    printf '%s\n' "$vm_dir"
+    return 0
+}
+
+# Validate a QEMU pid before killing: numeric, alive, and its cmdline must
+# reference the operation's staging dir or disk (which embeds the operation
+# id). Guards against pid reuse.
+validate_qemu_pid() {
+    local pid="$1" vm_dir="$2" op="$3"
+    case "$pid" in
+        ''|*[!0-9]*) pz_error "invalid qemu pid: ${pid:-empty}"; return 1 ;;
+    esac
+    [ "$pid" -gt 1 ] 2>/dev/null || { pz_error "invalid qemu pid: $pid"; return 1; }
+    [ -d "/proc/$pid" ] || { pz_error "qemu pid $pid is not alive; refusing kill"; return 1; }
+    local cmdline=""
+    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    case "$cmdline" in
+        *qemu-system*)
+            ;;
+        *)
+            pz_error "pid $pid is not a qemu process; refusing kill"
+            return 1
+            ;;
+    esac
+    [ -n "$op" ] || { pz_error "validate_qemu_pid: empty operation id"; return 1; }
+    case "$cmdline" in
+        *"$op"*)
+            ;;
+        *)
+            pz_error "pid $pid cmdline does not reference operation $op; refusing kill"
+            return 1
+            ;;
+    esac
+    if [ -n "$vm_dir" ]; then
+        case "$cmdline" in
+            *"$vm_dir"*)
+                ;;
+            *)
+                pz_error "pid $pid cmdline does not reference staging $vm_dir; refusing kill"
+                return 1
+                ;;
+        esac
+    fi
+    return 0
+}
+
 provision_cancel() {
-    local operation_id="" remove_staging=0
+    local operation_id="" remove_staging=0 json=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --operation-id) operation_id="${2:-}"; shift 2 ;;
             --operation-id=*) operation_id="${1#*=}"; shift ;;
             --remove-staging) remove_staging=1; shift ;;
+            --json) json=1; shift ;;
             *) pz_error "unknown cancel option: $1"; return 1 ;;
         esac
     done
     [ -n "$operation_id" ] || { pz_error "--operation-id required"; return 1; }
 
     local op_dir="$OPERATIONS_DIR/$operation_id"
-    [ -d "$op_dir" ] || { pz_error "operation not found: $operation_id"; return 1; }
+    if [ ! -d "$op_dir" ] || [ ! -f "$op_dir/operation.json" ]; then
+        if [ "$json" = "1" ]; then
+            jq -n --arg operationId "$operation_id" \
+                '{success: false, cancelled: false, removalRequested: false, removalSucceeded: false, preservedPath: "", error: "operation not found", operationId: $operationId}'
+        fi
+        pz_error "operation not found: $operation_id"
+        return 1
+    fi
+
+    # Cancel intentionally does NOT take the provision lock: it is the one
+    # supervisory action that must be able to interrupt a running worker that
+    # holds the lock. The worker notices the state change at the next
+    # checkpoint and exits, releasing the lock on process death.
 
     local state
     state="$(jq -r '.state' "$op_dir/operation.json")"
 
-    local vm_dir vm_dir_file="$OPERATIONS_DIR/$operation_id/vm_dir"
-    [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
+    # The vm_dir record is only trusted after canonical-staging validation; a
+    # corrupt/hostile record must never drive a qemu-pid read or a removal, and
+    # a validation failure is reported (never silently treated as success).
+    local vm_dir="" raw_vm_dir="" vm_dir_file="$OPERATIONS_DIR/$operation_id/vm_dir"
+    local staging_valid=0
+    [ -f "$vm_dir_file" ] && raw_vm_dir="$(cat "$vm_dir_file")"
+    if [ -n "$raw_vm_dir" ]; then
+        if resolve_vm_staging_dir "$operation_id" >/dev/null 2>&1; then
+            staging_valid=1
+            vm_dir="$raw_vm_dir"
+        else
+            pz_warn "staging validation failed for $operation_id; refusing to touch $raw_vm_dir"
+        fi
+    fi
 
-    if [ -f "$vm_dir/qemu-pid" ]; then
+    if [ "$staging_valid" = "1" ] && [ -f "$vm_dir/qemu-pid" ]; then
         local qemu_pid
         qemu_pid="$(cat "$vm_dir/qemu-pid")"
-        kill "$qemu_pid" 2>/dev/null || true
-        rm -f "$vm_dir/qemu-pid"
+        if validate_qemu_pid "$qemu_pid" "$vm_dir" "$operation_id"; then
+            kill "$qemu_pid" 2>/dev/null || true
+            rm -f "$vm_dir/qemu-pid"
+        else
+            pz_warn "qemu pid validation failed ($qemu_pid); leaving qemu-pid record"
+        fi
     fi
 
     local cancel_ts; cancel_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     jq --arg ts "$cancel_ts" '.state = "cancelled" | .updatedAt = $ts' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
 
+    local removal_requested=0 removal_succeeded=0 preserved_path=""
     local op_state
     op_state="$(jq -r '.checkpoint' "$op_dir/operation.json")"
     if [ "$remove_staging" = "1" ] || [ "$op_state" = "validate" ] || [ "$op_state" = "assets" ]; then
-        if [ -n "$vm_dir" ] && [ -d "$vm_dir" ]; then
-            rm -rf "$vm_dir"
-            pz_info "removed staging directory: $vm_dir"
+        removal_requested=1
+        if [ "$staging_valid" = "1" ] && [ -d "$vm_dir" ]; then
+            if resolve_vm_staging_dir "$operation_id" >/dev/null 2>&1; then
+                rm -rf -- "$vm_dir"
+                [ "$json" = "1" ] && echo >&2 "INFO:  removed staging directory: $vm_dir" || pz_info "removed staging directory: $vm_dir"
+                removal_succeeded=1
+            else
+                pz_error "staging validation refused; preserving $vm_dir"
+                preserved_path="$vm_dir"
+            fi
+        elif [ "$staging_valid" = "1" ]; then
+            # Nothing left to remove (already gone or never created).
+            removal_succeeded=1
+        else
+            pz_error "staging validation failed; preserving ${raw_vm_dir:-unknown}"
+            preserved_path="$raw_vm_dir"
         fi
     else
-        pz_info "disk preserved for resume/diagnosis: $vm_dir"
+        [ "$json" = "1" ] && echo >&2 "INFO:  disk preserved for resume/diagnosis: ${vm_dir:-$raw_vm_dir}" || pz_info "disk preserved for resume/diagnosis: ${vm_dir:-$raw_vm_dir}"
+        [ -n "$raw_vm_dir" ] && preserved_path="$raw_vm_dir"
     fi
 
-    rm -f "$ACTIVE_LOCK"
-    pz_info "operation cancelled: $operation_id"
+    local success=1 error=""
+    if [ -n "$raw_vm_dir" ] && [ "$staging_valid" = "0" ]; then
+        success=0
+        error="staging validation failed; operation untouched: $raw_vm_dir"
+    elif [ "$removal_requested" = "1" ] && [ "$removal_succeeded" = "0" ]; then
+        success=0
+        error="staging removal failed; preserved: $preserved_path"
+    fi
+
+    if [ "$json" = "1" ]; then
+        jq -n \
+            --arg operationId "$operation_id" \
+            --argjson success "$([ "$success" = "1" ] && echo true || echo false)" \
+            --argjson cancelled true \
+            --argjson removalRequested "$([ "$removal_requested" = "1" ] && echo true || echo false)" \
+            --argjson removalSucceeded "$([ "$removal_succeeded" = "1" ] && echo true || echo false)" \
+            --arg preservedPath "$preserved_path" \
+            --arg error "$error" \
+            '{success: $success, cancelled: $cancelled, removalRequested: $removalRequested, removalSucceeded: $removalSucceeded, preservedPath: $preservedPath, error: $error, operationId: $operationId}'
+    fi
+    [ "$json" = "1" ] && echo >&2 "INFO:  operation cancelled: $operation_id" || pz_info "operation cancelled: $operation_id"
+    [ "$success" = "1" ]
 }
 
 provision_shutdown() {

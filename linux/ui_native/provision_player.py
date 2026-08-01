@@ -36,6 +36,10 @@ VALIDATE_TIMEOUT_MS = 20_000
 BOOT_STATUS_TIMEOUT_MS = 20_000
 CANCEL_TIMEOUT_MS = 15_000
 
+# Workers that outlived the window's bounded close wait; kept referenced so
+# their QThreads are not destroyed while still running.
+_DETACHED_WORKERS: list[ProvisionWorker] = []
+
 
 class AsyncProc(QObject):
     finished = Signal(object, int)
@@ -325,6 +329,7 @@ class ProvisionPlayerWindow(QWidget):
         self._vm_running = False
         self._snapshot_ok = False
         self._async_proc: AsyncProc | None = None
+        self._reboot_proc: QProcess | None = None
         self._closing = False
         self._discarding = False
 
@@ -766,12 +771,23 @@ class ProvisionPlayerWindow(QWidget):
             self._async_proc.run(pz, [
                 "windows-vm", "provision", "cancel",
                 "--operation-id", self._operation_id,
+                "--json",
             ], timeout_ms=CANCEL_TIMEOUT_MS)
         else:
             self._finish_cancel()
 
-    def _on_cancel_result(self, _data: object | None, _exit_code: int) -> None:
+    def _on_cancel_result(self, data: object | None, exit_code: int) -> None:
         self._async_proc = None
+        ok = exit_code == 0 and isinstance(data, dict) and data.get("success") is True
+        if not ok:
+            err = ""
+            if isinstance(data, dict):
+                err = str(data.get("error") or "")
+            self._set_state(ST_FAILED)
+            self._checkpoint_label.setText(f"Cancelamento falhou: {err or 'sem confirma\u00e7\u00e3o JSON'}")
+            self._add_log(f"FALHA no cancelamento: {err or 'sem confirma\u00e7\u00e3o JSON'}")
+            self._save_state()
+            return
         self._finish_cancel()
 
     def _finish_cancel(self) -> None:
@@ -822,13 +838,27 @@ class ProvisionPlayerWindow(QWidget):
                 "windows-vm", "provision", "cancel",
                 "--operation-id", self._operation_id,
                 "--remove-staging",
+                "--json",
             ], timeout_ms=CANCEL_TIMEOUT_MS)
         else:
             self._finish_discard()
 
-    def _on_discard_result(self, _data: object | None, _exit_code: int) -> None:
+    def _on_discard_result(self, data: object | None, exit_code: int) -> None:
         self._async_proc = None
-        self._finish_discard()
+        ok = (exit_code == 0 and isinstance(data, dict)
+              and data.get("success") is True
+              and data.get("removalSucceeded") is True)
+        if ok:
+            self._finish_discard()
+            return
+        err = ""
+        if isinstance(data, dict):
+            err = str(data.get("error") or "")
+        # Staging/window/player.json are kept: user can retry the discard.
+        self._set_state(ST_FAILED)
+        self._checkpoint_label.setText(f"Descarte falhou: {err or 'staging n\u00e3o removido'}")
+        self._add_log(f"FALHA no descarte: {err or 'sem confirma\u00e7\u00e3o JSON'}")
+        self._save_state()
 
     def _finish_discard(self) -> None:
         self._discarding = True
@@ -875,12 +905,16 @@ class ProvisionPlayerWindow(QWidget):
     def _on_shutdown_result(self, data: object | None, exit_code: int) -> None:
         self._async_proc = None
         self._progress_bar.setRange(0, 100)
-        if exit_code == 0:
+        ok = exit_code == 0 and isinstance(data, dict) and data.get("success") is True
+        if ok:
             self._add_log("VM desligada")
             self._vm_running = False
             self._run_post_validation()
         else:
-            self._add_log("Desligamento falhou ou expirou")
+            err = ""
+            if isinstance(data, dict):
+                err = str(data.get("error") or "")
+            self._add_log(f"Desligamento falhou ou expirou ({err or 'sem confirma\u00e7\u00e3o JSON'})")
             self._checkpoint_label.setText("Desligamento falhou")
 
     def _on_async_error(self, message: str) -> None:
@@ -914,10 +948,39 @@ class ProvisionPlayerWindow(QWidget):
         pz = str(self._root / "linux" / "pz")
         self._add_log("Reiniciando\u2026")
         self._progress_bar.setRange(0, 0)
+        self._reboot_btn.setEnabled(False)
         proc = QProcess(self)
         proc.setProgram(bridge)
         proc.setArguments([pz, "windows-vm", "boot", "next-reboot"])
+        proc.started.connect(self._on_reboot_started)
+        proc.errorOccurred.connect(self._on_reboot_error)
+        proc.finished.connect(self._on_reboot_finished)
+        self._reboot_proc = proc
         proc.start()
+
+    def _on_reboot_started(self) -> None:
+        self._add_log("Bridge admin aceitou o pedido de rein\u00edcio\u2026")
+
+    def _on_reboot_error(self, error: QProcess.ProcessError) -> None:
+        self._restore_reboot_ui()
+        err_msg = self._reboot_proc.errorString() if self._reboot_proc else str(error)
+        self._add_log(f"Falha ao iniciar rein\u00edcio: {err_msg}")
+        self._checkpoint_label.setText("Rein\u00edcio falhou")
+        self._reboot_proc = None
+
+    def _on_reboot_finished(self, exit_code: int, exit_status: QProcess.ExitStatus) -> None:
+        self._restore_reboot_ui()
+        if exit_code == 0 and exit_status == QProcess.ExitStatus.NormalExit:
+            self._add_log("Rein\u00edcio aceito \u2014 o sistema ser\u00e1 reiniciado no Windows VM")
+            self._checkpoint_label.setText("Rein\u00edcio agendado")
+        else:
+            self._add_log(f"Rein\u00edcio falhou (exit {exit_code})")
+            self._checkpoint_label.setText("Rein\u00edcio falhou")
+        self._reboot_proc = None
+
+    def _restore_reboot_ui(self) -> None:
+        self._progress_bar.setRange(0, 100)
+        self._reboot_btn.setEnabled(self._one_shot_ready)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._closing:
@@ -927,6 +990,13 @@ class ProvisionPlayerWindow(QWidget):
             self._async_proc.abort()
         if self._worker and self._worker.isRunning():
             self._worker.abort()
+            # Bounded wait: the worker polls in 100ms slices and exits quickly,
+            # but if it is still alive after the limit it is detached (kept
+            # referenced) so its QThread is never destroyed while running.
+            if not self._worker.wait(2500):
+                worker = self._worker
+                worker.setParent(None)
+                _DETACHED_WORKERS.append(worker)
         if self._discarding:
             PLAYER_STATE_PATH.unlink(missing_ok=True)
         else:

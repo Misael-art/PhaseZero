@@ -2588,6 +2588,116 @@
       "input_label": ""
     },
     {
+      "name": "ai.routing-status",
+      "label": "Status roteamento",
+      "command": "ai routing status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-inventory",
+      "label": "Inventário de roteamento",
+      "command": "ai routing inventory --refresh-quota --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-verify",
+      "label": "Verificar roteamento",
+      "command": "ai routing verify --live",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-plan",
+      "label": "Plano de roteamento",
+      "command": "ai routing plan --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-apply-all",
+      "label": "Aplicar plano de roteamento",
+      "command": "ai routing apply --task code --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-recommend-code",
+      "label": "Recomendar rota code",
+      "command": "ai routing recommend --task code --policy balanced --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-recommend-analysis",
+      "label": "Recomendar rota analysis",
+      "command": "ai routing recommend --task analysis --policy balanced --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-recommend-plan",
+      "label": "Recomendar rota plan",
+      "command": "ai routing recommend --task plan --policy balanced --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-rollback",
+      "label": "Reverter roteamento",
+      "command": "ai routing rollback MANIFEST",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "text",
+      "input_label": "Caminho do manifesto"
+    },
+    {
+      "name": "ai.routing-manifest",
+      "label": "Manifesto de roteamento",
+      "command": "ai routing status --cached --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "tune.browser",
       "label": "Hardening navegador",
       "command": "tune browser",

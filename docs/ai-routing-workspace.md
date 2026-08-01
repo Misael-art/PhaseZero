@@ -63,6 +63,36 @@ Odysseus recebe 9Router como endpoint OpenAI-compatible quando chave gerenciada 
 
 Odysseus inclui console administrativo, execução de ferramentas e armazenamento de arquivos. Não publicar porta 7000 diretamente. Para acesso remoto, usar proxy TLS ou rede privada, `SECURE_COOKIES=true` e origem CORS exata.
 
+## Roteamento IA por tarefa
+
+O configurador (`linux/ai/routing_manager.py`, acionado por `pz ai routing`)
+decide a cadeia de fallbacks de cada tarefa com base na saúde real do 9Router:
+
+```bash
+linux/pz ai routing status            # saúde, modelos e conexões (redigido)
+linux/pz ai routing inventory --refresh-quota   # cotas reais por conexão
+linux/pz ai routing recommend --task code --policy balanced
+linux/pz ai routing plan --json      # diff entre combos phasezero-* e o plano
+linux/pz ai routing apply --task code --yes     # materializa (transacional)
+linux/pz ai routing run codex        # executa cliente com env de criança
+linux/pz ai routing verify --live    # health, planMatches, isolamento Bonsai
+linux/pz ai routing rollback <manifest>   # restaura bytes; recusa drift sem --force
+```
+
+- Tarefas: `code`, `analysis`, `plan`. Políticas: `quality`, `balanced`,
+  `save-quota`, `privacy` (pesos somam 100; reserva de quota por política).
+- Combos gerenciados `phasezero-code/analysis/plan` (máx. 5 modelos); combos do
+  usuário (`Default`, `claude-Combo_Cleude`) nunca são alterados.
+- Apply escreve manifesto em
+  `~/.local/share/phasezero/ai-routing/operations/apply-*/` com bytes
+  anteriores; rollback restaura combos e state, falhando em drift externo.
+- Quota desconhecida nunca é tratada como 100%; confiança 1.0/0.4/0.15.
+- 401/403/429 ativos e cooldowns excluem o provider até a próxima sessão;
+  recomputar a rota antes de iniciar sessão.
+- Segredos redigidos em todo output persistido (state/manifest 0600/0700).
+- UI nativa: página "Roteamento IA" (cards por tarefa, políticas, editor de
+  fallbacks, aplicar/reverter). Bonsai permanece isolado do roteador.
+
 ## Atualizações
 
 ```bash

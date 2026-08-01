@@ -20,6 +20,7 @@ CATEGORIES = (
     ("Recursos", "preferences-plugin", "Gaming, hardware, saúde e workstation"),
     ("IA & Dev", "applications-development", "Agentes, MCPs e ferramentas"),
     ("Proxies IA", "network-server", "Gateways, proxies OpenAI-compatible e OAuth"),
+    ("Roteamento IA", "network-server", "Rota por tarefa, política e quota do 9Router"),
     ("Aplicativos", "applications-other", "Web apps, jogos e menus do desktop"),
     ("Ajustes", "preferences-system", "Gaming, navegador e desenvolvimento"),
     ("Resultados", "text-x-log", "Histórico local de operações"),
@@ -33,7 +34,7 @@ SIDEBAR_GROUPS = (
     ("Ações rápidas", ("Início", "Visão geral", "Perfis")),
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
-    ("IA & Dev", ("IA & Dev", "Proxies IA")),
+    ("IA & Dev", ("IA & Dev", "Proxies IA", "Roteamento IA")),
     ("Desktop", ("Aplicativos",)),
     ("Histórico", ("Resultados",)),
 )
@@ -587,6 +588,39 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 mutable=preview is not None,
                 preview=preview,
                 badge="Preview" if preview else "",
+            )
+        )
+
+    # Dedicated "Roteamento IA" page: per-task routing, policies, quota and
+    # transactional apply/rollback of the phasezero-* combos.
+    routing_rows = [
+        ("routing-status", "Status roteamento", "Saúde do 9Router, modelos e conexões redigidas.", ("ai", "routing", "status", "--json"), None),
+        ("routing-inventory", "Inventário de roteamento", "Refresh de cotas reais por conexão.", ("ai", "routing", "inventory", "--refresh-quota", "--json"), None),
+        ("routing-verify", "Verificar roteamento", "Health, planMatches, userCombos e isolamento Bonsai.", ("ai", "routing", "verify", "--live"), None),
+        ("routing-plan", "Plano de roteamento", "Diff entre combos phasezero-* e o plano por tarefa.", ("ai", "routing", "plan", "--json"), None),
+        ("routing-apply-all", "Aplicar plano de roteamento", "Materializa phasezero-code/analysis/plan transacionalmente.", ("ai", "routing", "apply", "--task", "code", "--yes"), None),
+        ("routing-recommend-code", "Recomendar rota code", "Cadeia recomendada para tarefas de código.", ("ai", "routing", "recommend", "--task", "code", "--policy", "balanced", "--json"), None),
+        ("routing-recommend-analysis", "Recomendar rota analysis", "Cadeia recomendada para análise de código.", ("ai", "routing", "recommend", "--task", "analysis", "--policy", "balanced", "--json"), None),
+        ("routing-recommend-plan", "Recomendar rota plan", "Cadeia recomendada para planejamento.", ("ai", "routing", "recommend", "--task", "plan", "--policy", "balanced", "--json"), None),
+        ("routing-rollback", "Reverter roteamento", "Restaura combos e state byte a byte do último apply.", ("ai", "routing", "rollback", "MANIFEST"), None),
+        ("routing-manifest", "Manifesto de roteamento", "Path do último manifesto de apply.", ("ai", "routing", "status", "--cached", "--json"), None),
+    ]
+    for key, title, description, args, _preview in routing_rows:
+        preview = None
+        if key == "routing-apply-all":
+            preview = ("ai", "routing", "apply", "--task", "code", "--dry-run")
+        elif key == "routing-rollback":
+            preview = ("ai", "routing", "plan", "--json")
+        actions.append(
+            _a(
+                f"ai.{key}",
+                "Roteamento IA",
+                title,
+                description,
+                args,
+                "network-server",
+                mutable="rollback" in key or "apply" in key,
+                preview=preview,
             )
         )
 

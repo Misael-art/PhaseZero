@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from linux.ui_native import provision_player as pp_mod
 from linux.ui_native.provision_player import (
     AsyncProc, ProvisionWorker, ProvisionPlayerWindow,
-    ST_IDLE, ST_DONE, ST_FAILED, ST_CANCELLED, ST_PROVISIONING,
+    ST_IDLE, ST_DONE, ST_FAILED, ST_CANCELLED, ST_PROVISIONING, ST_VALIDATING,
 )
 
 
@@ -78,12 +78,34 @@ def fake_pz_with_status(tmp_path: Path) -> tuple[Path, Path]:
     }))
     pz.write_text(f"""#!/usr/bin/env bash
 case "$1" in
-  provision)
+  windows-vm)
     case "$2" in
-      start) echo '{{"operationId":"op-test-001","state":"running"}}' ;;
-      status) cat {fixture} ;;
-      resume) exit 0 ;;
-      cancel) exit 0 ;;
+      provision)
+        case "$3" in
+          start) echo '{{"operationId":"op-test-001","state":"running"}}' ;;
+          status) cat {fixture} ;;
+          resume) exit 0 ;;
+          cancel)
+            if [ -n "$PZ_FAKE_CANCEL_FAIL" ]; then exit 1; fi
+            if [ -n "$PZ_FAKE_CANCEL_NO_REMOVE" ]; then
+              echo '{{"success":true,"cancelled":true,"removalRequested":true,"removalSucceeded":false,"preservedPath":"/tmp/vm","error":"staging removal failed","operationId":"op-test-001"}}'
+              exit 1
+            fi
+            case " $* " in
+              *" --remove-staging "*)
+                echo '{{"success":true,"cancelled":true,"removalRequested":true,"removalSucceeded":true,"preservedPath":"","error":"","operationId":"op-test-001"}}' ;;
+              *)
+                echo '{{"success":true,"cancelled":true,"removalRequested":false,"removalSucceeded":false,"preservedPath":"","error":"","operationId":"op-test-001"}}' ;;
+            esac ;;
+          shutdown)
+            if [ -n "$PZ_FAKE_SHUTDOWN_FAIL" ]; then
+              echo '{{"success":false,"operationId":"op-test-001","waitedSeconds":0}}'
+              exit 1
+            fi
+            echo '{{"success":true,"operationId":"op-test-001","waitedSeconds":2}}' ;;
+          *) exit 1 ;;
+        esac
+        ;;
       *) exit 1 ;;
     esac
     ;;
@@ -269,6 +291,183 @@ def test_cancel_transitions_to_cancelled(qapp, fake_pz_with_status: tuple[Path, 
             break
         time.sleep(0.05)
     assert win._state in (ST_CANCELLED,)
+    _cleanup_player()
+
+
+def test_cancel_failure_transitions_to_failed(qapp, fake_pz_with_status: tuple[Path, Path]) -> None:
+    fake_root, _ = fake_pz_with_status
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
+    win._state = ST_PROVISIONING
+    win._operation_id = "op-test"
+    with patch.dict("os.environ", {"PZ_FAKE_CANCEL_FAIL": "1"}):
+        win._on_cancel()
+    for _ in range(100):
+        QApplication.processEvents()
+        if win._state in (ST_FAILED, ST_CANCELLED):
+            break
+        time.sleep(0.05)
+    assert win._state == ST_FAILED, "cancel failure must not mark cancelled"
+    assert "Cancelamento falhou" in win._checkpoint_label.text()
+    _cleanup_player()
+
+
+def test_cancel_failure_keeps_player_state(qapp, fake_pz_with_status: tuple[Path, Path]) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    fake_root, _ = fake_pz_with_status
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
+    win._state = ST_PROVISIONING
+    win._operation_id = "op-test"
+    win._save_state()
+    with patch.dict("os.environ", {"PZ_FAKE_CANCEL_FAIL": "1"}):
+        win._on_cancel()
+    for _ in range(100):
+        QApplication.processEvents()
+        if win._state in (ST_FAILED, ST_CANCELLED):
+            break
+        time.sleep(0.05)
+    assert win._state == ST_FAILED
+    assert PLAYER_STATE_PATH.exists(), "player.json must survive a failed cancel (attach/resume)"
+    _cleanup_player()
+
+
+def test_discard_success_removes_state_and_closes(qapp, fake_pz_with_status: tuple[Path, Path]) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    fake_root, _ = fake_pz_with_status
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
+    win._state = ST_FAILED
+    win._operation_id = "op-test"
+    win._save_state()
+    assert PLAYER_STATE_PATH.exists()
+    with patch("linux.ui_native.provision_player.QMessageBox.question",
+               return_value=QMessageBox.Yes):
+        win._on_discard()
+    for _ in range(100):
+        QApplication.processEvents()
+        if win._discarding:
+            break
+        time.sleep(0.05)
+    assert win._discarding, "discard must close after removal confirmed"
+    assert not PLAYER_STATE_PATH.exists()
+    _cleanup_player()
+
+
+def test_discard_failure_keeps_window_and_state(qapp, fake_pz_with_status: tuple[Path, Path]) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    fake_root, _ = fake_pz_with_status
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
+    win._state = ST_FAILED
+    win._operation_id = "op-test"
+    win._save_state()
+    with (
+        patch.dict("os.environ", {"PZ_FAKE_CANCEL_NO_REMOVE": "1"}),
+        patch("linux.ui_native.provision_player.QMessageBox.question",
+              return_value=QMessageBox.Yes),
+    ):
+        win._on_discard()
+    for _ in range(100):
+        QApplication.processEvents()
+        if "Descarte falhou" in win._checkpoint_label.text():
+            break
+        time.sleep(0.05)
+    assert win._state == ST_FAILED, "discard failure must not close the window"
+    assert not win._discarding
+    assert PLAYER_STATE_PATH.exists(), "player.json must survive a failed discard"
+    assert "Descarte falhou" in win._checkpoint_label.text()
+    _cleanup_player()
+
+
+def test_shutdown_requires_json_success(qapp, fake_pz_with_status: tuple[Path, Path]) -> None:
+    fake_root, _ = fake_pz_with_status
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
+    win._state = ST_DONE
+    win._operation_id = "op-test"
+    win._on_shutdown_vm()
+    for _ in range(100):
+        QApplication.processEvents()
+        if win._async_proc is None:
+            break
+        time.sleep(0.05)
+    assert win._vm_running is False
+    assert win._state in (ST_DONE, ST_VALIDATING)
+    _cleanup_player()
+
+
+def test_shutdown_failure_stays_failed(qapp, fake_pz_with_status: tuple[Path, Path]) -> None:
+    fake_root, _ = fake_pz_with_status
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
+    win._state = ST_DONE
+    win._operation_id = "op-test"
+    win._vm_running = True
+    with patch.dict("os.environ", {"PZ_FAKE_SHUTDOWN_FAIL": "1"}):
+        win._on_shutdown_vm()
+    for _ in range(100):
+        QApplication.processEvents()
+        if win._async_proc is None:
+            break
+        time.sleep(0.05)
+    assert win._vm_running is True, "failed shutdown must not clear vm_running"
+    assert "Desligamento falhou" in win._checkpoint_label.text()
+    _cleanup_player()
+
+
+def test_reboot_stores_proc_and_error_restores_ui(qapp, fake_pz_with_status: tuple[Path, Path]) -> None:
+    fake_root, _ = fake_pz_with_status
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
+    win._state = ST_DONE
+    win._one_shot_ready = True
+    win._vm_running = False
+    win._reboot_btn.setEnabled(True)
+    bridge = fake_root / "bridge"
+    bridge.write_text("#!/usr/bin/env bash\nexit 3\n")
+    bridge.chmod(0o755)
+    with (
+        patch("linux.ui_native.provision_player.admin_bridge", return_value=str(bridge)),
+        patch("linux.ui_native.provision_player.QMessageBox.question",
+              return_value=QMessageBox.Yes),
+    ):
+        win._on_reboot()
+    assert win._reboot_proc is not None, "reboot QProcess must be stored"
+    for _ in range(100):
+        QApplication.processEvents()
+        if win._reboot_proc is None:
+            break
+        time.sleep(0.05)
+    assert win._reboot_proc is None, "reboot proc must be released after finished"
+    assert "Rein\u00edcio falhou" in win._checkpoint_label.text()
+    assert win._progress_bar.maximum() == 100, "UI must be restored after reboot failure"
+    assert win._reboot_btn.isEnabled(), "reboot button must be re-enabled"
+    _cleanup_player()
+
+
+def test_reboot_success_message(qapp, fake_pz_with_status: tuple[Path, Path]) -> None:
+    fake_root, _ = fake_pz_with_status
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
+    win._state = ST_DONE
+    win._one_shot_ready = True
+    win._vm_running = False
+    bridge = fake_root / "bridge-ok"
+    bridge.write_text("#!/usr/bin/env bash\nexit 0\n")
+    bridge.chmod(0o755)
+    with (
+        patch("linux.ui_native.provision_player.admin_bridge", return_value=str(bridge)),
+        patch("linux.ui_native.provision_player.QMessageBox.question",
+              return_value=QMessageBox.Yes),
+    ):
+        win._on_reboot()
+    for _ in range(100):
+        QApplication.processEvents()
+        if win._reboot_proc is None:
+            break
+        time.sleep(0.05)
+    assert "Rein\u00edcio agendado" in win._checkpoint_label.text()
     _cleanup_player()
 
 
