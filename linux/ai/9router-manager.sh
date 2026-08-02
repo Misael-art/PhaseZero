@@ -32,6 +32,9 @@ WATCH_TIMER="phasezero-9router-watch.timer"
 BRIDGE_SERVICE="phasezero-9router-unix-bridge.service"
 PACKAGE_BIN="$INSTALL_ROOT/bin/9router"
 PACKAGE_JSON="$INSTALL_ROOT/lib/node_modules/9router/package.json"
+PACKAGE_ROOT="$INSTALL_ROOT/lib/node_modules/9router"
+SERVER_RUNNER="$PZ_ROOT/linux/ai/9router-server-runner.js"
+SERVER_WRAPPER="$LOCAL_BIN/phasezero-9router-server"
 BACKUP_ROOT="$PROXY_ROOT/.9router-backups"
 CLIENT_WRAPPER="$LOCAL_BIN/phasezero-9router-run"
 DASHBOARD_ENTRY="${XDG_DATA_HOME:-$HOME/.local/share}/applications/phasezero-9router.desktop"
@@ -142,13 +145,27 @@ EOF
 }
 
 write_wrapper_and_units() {
+    local managed_pz="${PZ_9ROUTER_MANAGED_PZ:-$PZ_ROOT/linux/pz}"
+    if [ -z "${PZ_9ROUTER_MANAGED_PZ:-}" ] && [ -x /usr/lib/phasezero/linux/pz ]; then
+        managed_pz=/usr/lib/phasezero/linux/pz
+    fi
     pz_write_managed_file "$LOCAL_BIN/9router" user <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export PATH="$RUNTIME/bin:\$PATH"
-exec "$PACKAGE_BIN" --host "$HOST" --port "$PORT" --no-browser --skip-update "\$@"
+case "\${1:-} \${2:-}" in
+  "xai video") exec "$PACKAGE_BIN" "\$@" ;;
+esac
+exec "$managed_pz" ai 9router tui "\$@"
 EOF
     chmod +x "$LOCAL_BIN/9router"
+
+    pz_write_managed_file "$SERVER_WRAPPER" user <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export PATH="$RUNTIME/bin:\$PATH"
+exec "$NODE_BIN" "$SERVER_RUNNER" "$PACKAGE_ROOT"
+EOF
+    chmod 0700 "$SERVER_WRAPPER"
 
     pz_write_managed_file "$CLIENT_WRAPPER" user <<EOF
 #!/usr/bin/env bash
@@ -173,7 +190,7 @@ EOF
 Type=Application
 Name=9Router
 Comment=PhaseZero AI routing dashboard
-Exec=$HOME/.local/share/phasezero/current/linux/pz ai 9router dashboard
+Exec=$managed_pz ai 9router dashboard
 Icon=applications-science
 Terminal=false
 Categories=X-PhaseZero-WebApp;
@@ -194,10 +211,11 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_FILE
-ExecStart=$LOCAL_BIN/9router
+ExecStart=$SERVER_WRAPPER
 Restart=on-failure
 RestartSec=5
 WorkingDirectory=$INSTALL_ROOT
+KillMode=mixed
 
 [Install]
 WantedBy=default.target
@@ -210,7 +228,7 @@ After=$SERVICE
 
 [Service]
 Type=oneshot
-ExecStart=$HOME/.local/share/phasezero/current/linux/ai/9router-manager.sh watch-once
+ExecStart=$managed_pz ai 9router watch-once
 EOF
 
     pz_write_managed_file "$SYSTEMD_USER_DIR/$WATCH_TIMER" user <<EOF
@@ -245,6 +263,83 @@ RestartSec=2
 [Install]
 WantedBy=default.target
 EOF
+}
+
+ensure_attached_service() {
+    if [ "$(service_state)" != active ]; then
+        systemctl --user start "$SERVICE"
+    fi
+    wait_ready 60
+}
+
+tui_show() {
+    local title="$1" body="$2"
+    if command -v whiptail >/dev/null 2>&1 && [ -t 1 ]; then
+        whiptail --title "$title" --scrolltext --msgbox "$body" 24 90
+    else
+        printf '\n=== %s ===\n%s\n' "$title" "$body"
+    fi
+}
+
+tui_9router() {
+    ensure_attached_service || return 1
+    if [ ! -t 0 ] || [ ! -t 1 ] || ! command -v whiptail >/dev/null 2>&1; then
+        status_json
+        return 0
+    fi
+    local choice body
+    while :; do
+        choice="$(whiptail --title "9Router — PhaseZero" \
+            --menu "Attach seguro ao serviço ativo. Chaves sempre ocultas." 22 82 10 \
+            status "Saúde, listener e watchdog" \
+            providers "Providers ativos" \
+            combos "Combos e fallback" \
+            usage "Uso agregado" \
+            dashboard "Abrir dashboard local" \
+            exit "Sair sem parar o serviço" \
+            3>&1 1>&2 2>&3)" || choice="exit"
+        case "$choice" in
+            status)
+                body="$(status_json | jq 'del(.settingsPath,.healthLog)')"
+                tui_show "Status 9Router" "$body"
+                ;;
+            providers)
+                body="$(provider_status | jq 'walk(if type == "object" then del(.apiKey,.key,.secret,.token,.authorization) else . end)')"
+                tui_show "Providers" "$body"
+                ;;
+            combos)
+                body="$(combo_list | jq 'walk(if type == "object" then del(.apiKey,.key,.secret,.token,.authorization) else . end)')"
+                tui_show "Combos" "$body"
+                ;;
+            usage)
+                body="$(api_request GET /api/usage/stats | usage_summary)"
+                tui_show "Uso agregado" "$body"
+                ;;
+            dashboard) dashboard ;;
+            exit|"") return 0 ;;
+        esac
+    done
+}
+
+repair_9router() {
+    ensure_dirs
+    [ -x "$PACKAGE_BIN" ] || { pz_error "9Router package missing; run install first"; return 1; }
+    [ -f "$SERVER_RUNNER" ] || { pz_error "PhaseZero 9Router server runner missing"; return 1; }
+    if [ -n "$(listener_pid)" ] && ! service_owns_listener; then
+        pz_error "port $PORT is owned by a non-PhaseZero process; refusing to kill it"
+        return 1
+    fi
+    write_wrapper_and_units
+    systemctl --user daemon-reload
+    systemctl --user enable "$SERVICE" "$BRIDGE_SERVICE" "$WATCH_TIMER" >/dev/null
+    systemctl --user restart "$SERVICE"
+    systemctl --user restart "$BRIDGE_SERVICE"
+    systemctl --user start "$WATCH_TIMER"
+    wait_ready 90
+    # oneshot start must succeed; systemd returns non-zero for 203/EXEC and
+    # proves the migrated stable ExecStart path is executable now.
+    systemctl --user start "$WATCH_SERVICE"
+    status_json
 }
 
 registry_metadata() {
@@ -739,6 +834,7 @@ dashboard() {
     pz_info "9Router dashboard opened: $BASE_URL/dashboard"
 }
 
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 case "$ACTION" in
     install|setup) install_9router ;;
     check-update|check) check_update ;;
@@ -751,6 +847,8 @@ case "$ACTION" in
     restart) systemctl --user restart "$SERVICE" "$BRIDGE_SERVICE"; wait_ready 60 ;;
     test|health) test_9router ;;
     dashboard|open) dashboard ;;
+    tui|terminal) tui_9router ;;
+    repair|migrate) repair_9router ;;
     sync-secrets) sync_secrets "${1:-}" ;;
     provider)
         case "${1:-status}" in
@@ -783,5 +881,6 @@ case "$ACTION" in
             status) systemctl --user status "$WATCH_TIMER" --no-pager ;;
             *) pz_error "usage: pz ai 9router watchdog (status|install|remove|run)"; exit 2 ;;
         esac ;;
-    *) pz_error "usage: pz ai 9router (install|status|start|stop|restart|test|dashboard|provider|combo|usage|client|check-update|update|rollback|doctor|watchdog)"; exit 2 ;;
+    *) pz_error "usage: pz ai 9router (install|status|start|stop|restart|test|dashboard|tui|repair|provider|combo|usage|client|check-update|update|rollback|doctor|watchdog)"; exit 2 ;;
 esac
+fi
