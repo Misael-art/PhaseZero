@@ -1792,7 +1792,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    passthrough: list[str] = []
+    if raw_argv[:1] == ["run"] and "--" in raw_argv:
+        separator = raw_argv.index("--")
+        passthrough = raw_argv[separator + 1 :]
+        raw_argv = raw_argv[:separator]
+    args = parser.parse_args(raw_argv)
     try:
         if args.rollback_alias:
             print(json.dumps(restore_manifest(Path(args.rollback_alias)), indent=2))
@@ -1810,7 +1816,7 @@ def main(argv: list[str] | None = None) -> int:
         elif command == "login":
             return manager.login(args.route)
         elif command == "run":
-            route_args = args.args[1:] if args.args and args.args[0] == "--" else args.args
+            route_args = [*args.args, *passthrough]
             return manager.run_route(args.route, route_args, args.cwd, args.allow_sensitive_upload)
         elif command == "rollback":
             result = restore_manifest(Path(args.manifest), args.force)
