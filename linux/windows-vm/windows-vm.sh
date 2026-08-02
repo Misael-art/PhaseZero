@@ -1983,8 +1983,9 @@ launch_check() {
     effective_config
     local -a blockers=()
     local kvm=false disk=false ovmf=false vars=false qemu=false graphics=false
+    local kvm_path="${PZ_WINDOWS_VM_KVM_PATH:-/dev/kvm}"
 
-    [ -r /dev/kvm ] && [ -w /dev/kvm ] && kvm=true || blockers+=("KVM sem acesso read/write")
+    [ -r "$kvm_path" ] && [ -w "$kvm_path" ] && kvm=true || blockers+=("KVM sem acesso read/write: $kvm_path")
     [ -f "$DISK_PATH" ] && [ -r "$DISK_PATH" ] && disk=true || blockers+=("disco da VM ausente ou ilegível")
     [ -n "$OVMF_CODE" ] && [ -f "$OVMF_CODE" ] && [ -r "$OVMF_CODE" ] && ovmf=true || blockers+=("firmware OVMF ausente ou ilegível")
     [ -f "$OVMF_VARS" ] && [ -r "$OVMF_VARS" ] && [ -w "$OVMF_VARS" ] && vars=true || blockers+=("OVMF_VARS ausente ou sem escrita")

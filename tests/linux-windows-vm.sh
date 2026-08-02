@@ -421,7 +421,11 @@ jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled") a
        .guestLoginPolicy == "auto" and .guestLoginVerified == false' <<< "$boot_json" >/dev/null
 echo "  boot status --json schema ok"
 
-launch_check_json="$("$REPO_ROOT/linux/pz" windows-vm launch-check --graphics compat --json)"
+launch_check_kvm="$TMP_ROOT/fixture-kvm"
+: > "$launch_check_kvm"
+chmod 0666 "$launch_check_kvm"
+launch_check_json="$(PZ_WINDOWS_VM_KVM_PATH="$launch_check_kvm" \
+    "$REPO_ROOT/linux/pz" windows-vm launch-check --graphics compat --json)"
 jq -e '.success == true and .graphicsProfile == "compat" and
        ([.checks[]] | all)' <<< "$launch_check_json" >/dev/null
 echo "  launch-check validates real launch prerequisites"
