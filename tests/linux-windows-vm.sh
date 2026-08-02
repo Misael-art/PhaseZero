@@ -361,6 +361,8 @@ test "$spice_invariant" -ge 2
 mkdir -p "$HOME/VirtualMachines/PhaseZero-Windows"
 : > "$HOME/VirtualMachines/PhaseZero-Windows/phasezero-windows.qcow2"
 : > "$HOME/VirtualMachines/PhaseZero-Windows/OVMF_VARS.fd"
+: > "$TMP_ROOT/OVMF_CODE.fd"
+export PZ_WINDOWS_VM_OVMF_CODE="$TMP_ROOT/OVMF_CODE.fd"
 grep -q -- 'addr=127.0.0.1' <<< "$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu)"
 grep -q -- 'addr=0.0.0.0' <<< "$(PZ_WINDOWS_VM_SPICE_ADDR=0.0.0.0 "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu 2>/dev/null || true)"
 boot_output="$("$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
