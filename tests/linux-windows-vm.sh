@@ -174,7 +174,7 @@ adopt_disk="$adopt_dir/phasezero-windows.qcow2"
 mkdir -p "$adopt_dir"
 truncate -s 64M "$adopt_disk"
 export WV_UNIT_ADOPT_DISK="$adopt_disk"
-run_wv_unit 'disk_looks_installed() { return 0; }; target_user_can_rw() { return 0; }; install_user_files() { :; }; cmd_adopt --disk "$WV_UNIT_ADOPT_DISK" >/dev/null'
+run_wv_unit 'disk_looks_installed() { return 0; }; target_user_can_rw() { return 0; }; install_user_files() { :; }; ensure_vm_storage() { install -d "$VM_DIR" "$STATE_DIR" "$RUNTIME_DIR"; : > "$OVMF_VARS"; }; cmd_adopt --disk "$WV_UNIT_ADOPT_DISK" >/dev/null'
 unset WV_UNIT_ADOPT_DISK
 # shellcheck disable=SC1090
 source "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
