@@ -31,7 +31,7 @@ if [ "$EUID" -eq 0 ]; then
     target_uid="$(id -u "$TARGET_USER" 2>/dev/null || true)"
     [ -n "$target_uid" ] && [ -d "/run/user/$target_uid" ] && TARGET_RUNTIME_BASE="/run/user/$target_uid"
 fi
-RUNTIME_DIR="${TARGET_RUNTIME_BASE:-/tmp}/phasezero-windows-vm"
+RUNTIME_DIR="${PZ_WINDOWS_VM_RUNTIME_DIR:-${TARGET_RUNTIME_BASE:-/tmp}/phasezero-windows-vm}"
 APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
@@ -821,7 +821,12 @@ install_vm() {
 }
 
 vm_admin_run() {
-    if pz_can_sudo_noninteractive; then sudo -n "$@"
+    if [ "$EUID" -eq 0 ]; then "$@"
+    # Dedicated GRUB/SDDM sessions have no operator present. Never launch an
+    # authentication agent here: it is invisible behind the kiosk compositor
+    # and turns a recoverable share degradation into a permanent black screen.
+    elif [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ]; then return 127
+    elif pz_can_sudo_noninteractive; then sudo -n "$@"
     elif command -v phasezero-admin >/dev/null 2>&1; then phasezero-admin "$@"
     else return 127; fi
 }
@@ -2322,13 +2327,17 @@ EOF
 }
 
 root_env_content() {
+    local boot_uid
+    boot_uid="$(id -u "$TARGET_USER" 2>/dev/null || printf unknown)"
     printf '%s\n' '# PhaseZero managed Windows VM boot environment'
     printf 'PZ_WINDOWS_VM_REPO=%q\n' "$PZ_ROOT"
     printf 'PZ_WINDOWS_VM_BOOT_USER=%q\n' "$TARGET_USER"
     printf 'PZ_WINDOWS_VM_RUNTIME_LAUNCHER=%q\n' "$RUNTIME_LAUNCHER"
+    printf 'PZ_WINDOWS_VM_RUNTIME_DIR=%q\n' "/run/phasezero/windows-vm-$boot_uid"
     printf 'PZ_DISPLAY_SESSION_HELPER=%q\n' "$DISPLAY_SESSION_TARGET"
     printf 'PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=%q\n' "${PZ_WINDOWS_VM_SESSION_RETRY_SECONDS:-5}"
     printf 'PZ_WINDOWS_VM_DESKTOP_FALLBACK=%q\n' "${PZ_WINDOWS_VM_DESKTOP_FALLBACK:-0}"
+    printf 'PZ_WINDOWS_VM_REQUIRE_LOGIN=%q\n' "${PZ_WINDOWS_VM_REQUIRE_LOGIN:-0}"
 }
 
 root_env_value() {
@@ -2419,6 +2428,7 @@ Before=display-manager.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-$ROOT_ENV_FILE
 Environment=PZ_WINDOWS_VM_BOOT_USER=$TARGET_USER
 ExecStart=$BOOT_HELPER_TARGET
 

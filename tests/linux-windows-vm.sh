@@ -355,6 +355,18 @@ vm_admin="$(run_wv_unit '
 grep -q '^vm_admin_rc=0' <<< "$vm_admin"
 grep -q '^sudo -n mount --bind -o ro /tmp/fake-src /tmp/fake-dst' "$PZ_STUB_LOG"
 
+echo "=== boot session: privilege bridge is never interactive ==="
+: > "$PZ_STUB_LOG"
+boot_admin="$(run_wv_unit '
+    set +e
+    PZ_WINDOWS_VM_BOOT_SESSION=1 vm_admin_run mount --bind /tmp/fake-src /tmp/fake-dst
+    boot_admin_rc=$?
+    set -e
+    printf "boot_admin_rc=%s\n" "$boot_admin_rc"
+')"
+grep -q '^boot_admin_rc=127' <<< "$boot_admin"
+test ! -s "$PZ_STUB_LOG"
+
 spice_invariant="$({ grep -c 'addr=' "$REPO_ROOT/linux/windows-vm/windows-vm.sh" || true
                     grep -c 'addr=' "$REPO_ROOT/linux/windows-vm/provision.sh" || true; } | awk '{s+=$1} END {print s+0}')"
 test "$spice_invariant" -ge 2
@@ -640,15 +652,34 @@ cat > "$dm_bin/sddm" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
-chmod +x "$dm_bin/sddm"
+cat > "$dm_bin/powerprofilesctl" <<'EOF'
+#!/usr/bin/env bash
+# Reproduces hosts where the performance profile is unsupported. This must
+# never abort SDDM autologin preparation under set -e.
+exit 2
+EOF
+chmod +x "$dm_bin/sddm" "$dm_bin/powerprofilesctl"
 PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \
 PATH="$dm_bin:$PATH" \
 PZ_SDDM_CONF_DIR="$sddm_test_dir" \
 PZ_WINDOWS_VM_BOOT_USER=tester \
-PZ_WINDOWS_VM_SKIP_TUNING=1 \
+PZ_WINDOWS_VM_SKIP_RUNTIME_PREP=1 \
     "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 grep -q '^User=tester$' "$sddm_test_dir/91-phasezero-windows-vm.conf"
 grep -q '^Session=phasezero-windows-vm.desktop$' "$sddm_test_dir/91-phasezero-windows-vm.conf"
+grep -q '^Relogin=false$' "$sddm_test_dir/91-phasezero-windows-vm.conf"
+grep -Fq 'EnvironmentFile=-$ROOT_ENV_FILE' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'PZ_WINDOWS_VM_RUNTIME_DIR=%q' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'find "$BOOT_RUNTIME_DIR" -xdev' "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
+PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \
+PATH="$dm_bin:$PATH" \
+PZ_SDDM_CONF_DIR="$sddm_test_dir" \
+PZ_WINDOWS_VM_BOOT_USER=tester \
+PZ_WINDOWS_VM_REQUIRE_LOGIN=1 \
+PZ_WINDOWS_VM_SKIP_TUNING=1 \
+PZ_WINDOWS_VM_SKIP_RUNTIME_PREP=1 \
+    "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
+test ! -e "$sddm_test_dir/91-phasezero-windows-vm.conf"
 PZ_BOOT_CMDLINE='quiet splash' \
 PATH="$dm_bin:$PATH" \
 PZ_SDDM_CONF_DIR="$sddm_test_dir" \
