@@ -871,7 +871,9 @@ prune_share_links() {
         # Do not leave empty directory names visible through QEMU's built-in
         # SMB root after a full -> minimal policy migration.
         rmdir -- "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
-        [ -L "$SHARE_ROOT/$name" ] && rm -f "$SHARE_ROOT/$name" 2>/dev/null || true
+        if [ -L "$SHARE_ROOT/$name" ]; then
+            rm -f "$SHARE_ROOT/$name" 2>/dev/null || true
+        fi
     done
     return "$rc"
 }

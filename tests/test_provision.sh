@@ -848,7 +848,7 @@ LOCK_T="$(mktemp -d)"
     echo '{"id":"op-a","state":"running"}' > "$OPERATIONS_DIR/op-a/operation.json"
     mkdir -p "$OPERATIONS_DIR/op-b"
     echo '{"id":"op-b","state":"failed"}' > "$OPERATIONS_DIR/op-b/operation.json"
-    provision_lock_acquire "op-b" 2>/dev/null && exit 11 || true
+    if provision_lock_acquire "op-b" 2>/dev/null; then exit 11; fi
     # complete A -> B can take over (recovery)
     echo '{"id":"op-a","state":"completed"}' > "$OPERATIONS_DIR/op-a/operation.json"
     provision_lock_acquire "op-b" || exit 12
@@ -865,11 +865,11 @@ LOCK_T="$(mktemp -d)"
     [ -z "$(cat "$PROVISION_DIR/active.lock" 2>/dev/null || true)" ] || exit 16
     # corrupt reference -> refused with diagnostic
     printf 'ghost-op\n' > "$PROVISION_DIR/active.lock"
-    provision_lock_acquire "op-c" 2>/dev/null && exit 17 || true
+    if provision_lock_acquire "op-c" 2>/dev/null; then exit 17; fi
     printf 'ghost-op\n' > "$PROVISION_DIR/active.lock"
     mkdir -p "$OPERATIONS_DIR/ghost-op"
     echo 'garbage' > "$OPERATIONS_DIR/ghost-op/operation.json"
-    provision_lock_acquire "op-c" 2>/dev/null && exit 18 || true
+    if provision_lock_acquire "op-c" 2>/dev/null; then exit 18; fi
     exit 0
 )
 LOCK_RC=$?
@@ -955,7 +955,7 @@ set +e
     LIVE_PID=$!
     mkdir -p "$PROVISION_DIR/active.lock.d"
     echo "$LIVE_PID" > "$PROVISION_DIR/active.lock.d/pid"
-    provision_lock_acquire "op-e" 2>/dev/null && exit 42 || true
+    if provision_lock_acquire "op-e" 2>/dev/null; then exit 42; fi
     kill "$LIVE_PID" 2>/dev/null || true
     wait "$LIVE_PID" 2>/dev/null || true
     exit 0

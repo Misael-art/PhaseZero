@@ -1847,7 +1847,9 @@ run_relaunch() {
             sleep 1
             shutdown_wait=$((shutdown_wait + 1))
         done
-        kill -0 "$qemu_pid" 2>/dev/null && kill "$qemu_pid" 2>/dev/null || true
+        if kill -0 "$qemu_pid" 2>/dev/null; then
+            kill "$qemu_pid" 2>/dev/null || true
+        fi
         wait "$qemu_pid" 2>/dev/null || true
         rm -f "$vm_dir/qemu-pid"
         return 1

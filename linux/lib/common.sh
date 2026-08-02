@@ -36,7 +36,9 @@ pz_cleanup_temp() {
     if [ -f "$registry" ] && [ ! -L "$registry" ]; then
         while IFS= read -r -d '' entry; do
             [ -n "$entry" ] || continue
-            [ "$entry" != "/" ] && [ "$entry" != "$HOME" ] || continue
+            if [ "$entry" = "/" ] || [ "$entry" = "$HOME" ]; then
+                continue
+            fi
             if [ -d "$entry" ] && [ ! -L "$entry" ]; then
                 rm -rf -- "$entry" 2>/dev/null || true
             else
