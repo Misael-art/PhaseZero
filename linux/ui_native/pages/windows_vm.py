@@ -85,6 +85,14 @@ class WindowsVMPage(BasePage):
         self._graphics_combo.currentIndexChanged.connect(self._on_graphics_changed)
         form.addRow("Aceleração:", self._graphics_combo)
 
+        self._guest_login_combo = QComboBox()
+        self._guest_login_combo.addItem("Login automático (padrão)", "auto")
+        self._guest_login_combo.addItem("Exigir senha", "password")
+        self._guest_login_combo.setToolTip(
+            "A senha é solicitada somente durante a configuração via QGA e não é salva no host."
+        )
+        form.addRow("Login Windows:", self._guest_login_combo)
+
         self._graphics_helper = QLabel()
         self._graphics_helper.setWordWrap(True)
         self._graphics_helper.setObjectName("graphicsHelper")
@@ -282,6 +290,7 @@ class WindowsVMPage(BasePage):
             iso=self._selected_iso,
             graphics=graphics,
             image_index=str(self._selected_image_index),
+            guest_login=str(self._guest_login_combo.currentData() or "auto"),
         )
 
     def _request_plan(self) -> None:
@@ -303,6 +312,7 @@ class WindowsVMPage(BasePage):
                     "input": self._selected_iso,
                     "graphics": graphics,
                     "image_index": str(self._selected_image_index),
+                    "guest_login": str(self._guest_login_combo.currentData() or "auto"),
                 },
             )
         except (ValueError, RuntimeError) as exc:

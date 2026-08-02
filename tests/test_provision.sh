@@ -64,6 +64,7 @@ assert_contains "plan has iso" "$PLAN_OUT" '"iso"'
 assert_contains "plan has resources" "$PLAN_OUT" '"resources"'
 assert_contains "plan has profile" "$PLAN_OUT" '"performance-safe"'
 assert_contains "plan has imageIndex" "$PLAN_OUT" '"imageIndex"'
+assert_eq "default guest login policy is auto" "auto" "$(echo "$PLAN_OUT" | jq -r '.guestLogin')"
 
 PLAN_ID=$(echo "$PLAN_OUT" | jq -r '.id // ""' 2>/dev/null || echo "")
 assert_eq "plan id not empty" "1" "$([ -n "$PLAN_ID" ] && echo 1 || echo 0)"
@@ -79,6 +80,9 @@ echo "=== provision: plan with --image-index ==="
 PLAN_OUT2=$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE="$PZ_STATE_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --image-index 3 --json 2>/dev/null || echo "")
 IMAGE_INDEX2=$(echo "$PLAN_OUT2" | jq -r '.imageIndex // 0' 2>/dev/null || echo "0")
 assert_eq "custom imageIndex is 3" "3" "$IMAGE_INDEX2"
+
+PLAN_PASSWORD=$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE="$PZ_STATE_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --guest-login password --json 2>/dev/null || echo "")
+assert_eq "explicit guest password policy is serialized" "password" "$(echo "$PLAN_PASSWORD" | jq -r '.guestLogin')"
 
 PLAN_BYPASS=$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE="$PZ_STATE_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --tpm-bypass --json 2>/dev/null || echo "")
 assert_eq "tpm bypass serializes as JSON boolean" "boolean:true" "$(echo "$PLAN_BYPASS" | jq -r '(.tpmBypass | type) + ":" + (.tpmBypass | tostring)' 2>/dev/null || echo "")"
@@ -620,6 +624,8 @@ assert_eq "QGA shutdown transport survives stdin EOF" "1" "$(grep -Fq -- 'timeou
 assert_eq "QGA command rejects empty successful transport" "1" "$(grep -Fq -- 'if [ -n "$response" ]' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
 assert_eq "guest setup tries built-in and host SMB endpoints" "1" "$(grep -Fq -- "\$shareCandidates = @('\\\\10.0.2.4\\qemu', '\\\\10.0.2.2\\PZExchange')" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
 assert_eq "guest setup retains local account password" "0" "$(grep -Fc -- '.SetPassword("")' "$PROVISION_SCRIPT" 2>/dev/null || true)"
+assert_eq "guest setup delegates autologon to LSA helper" "1" "$(grep -Fq -- 'guest-login.ps1' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "guest setup does not disable autologon after success" "0" "$(grep -Fc -- 'automatic logon secret removed' "$PROVISION_SCRIPT" 2>/dev/null || true)"
 assert_eq "guest setup installs bounded QGA MSI" "1" "$(grep -Fq -- 'WaitForExit(300000)' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
 assert_eq "guest setup delays QGA and clears brittle dependencies" "1" "$(grep -Fq -- 'start= delayed-auto depend= /' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
 assert_eq "driver phase promotes proven QGA to automatic start" "1" "$(grep -Fq -- 'start= auto depend= /' "$PROVISION_SCRIPT" && echo 1 || echo 0)"

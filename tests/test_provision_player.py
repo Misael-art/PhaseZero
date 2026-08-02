@@ -173,6 +173,22 @@ def test_async_proc_stdout_stderr_preserved(qapp, tmp_path: Path) -> None:
     assert results[0][0] == {"ok": True}
 
 
+def test_async_proc_writes_secret_only_to_stdin(qapp, tmp_path: Path) -> None:
+    script = tmp_path / "stdin.sh"
+    script.write_text("#!/usr/bin/env bash\nIFS= read -r value\nprintf '{\"length\":%s}\\n' \"${#value}\"\n")
+    script.chmod(0o755)
+    results: list[tuple[object | None, int]] = []
+    proc = AsyncProc()
+    proc.finished.connect(lambda data, code: results.append((data, code)))
+    proc.run(str(script), ["safe-argument"], timeout_ms=2000,
+             stdin_data="not-persisted-secret\n")
+    start = time.monotonic()
+    while len(results) < 1 and time.monotonic() - start < 3:
+        QApplication.processEvents()
+        time.sleep(0.05)
+    assert results == [({"length": 20}, 0)]
+
+
 def test_async_proc_abort_prevents_emit(qapp, tmp_path: Path) -> None:
     script = tmp_path / "sleep.sh"
     script.write_text("#!/usr/bin/env bash\nsleep 10\necho ok")
@@ -294,12 +310,35 @@ def test_player_action_intercepted_in_request_action(qapp) -> None:
         patch("linux.ui_native.main_window.ProvisionPlayerWindow.open") as mock_open,
         patch("linux.ui_native.main_window.CommandRunner.start") as mock_start,
         patch.object(ParameterDialog, "exec", return_value=ParameterDialog.Accepted),
-        patch.object(ParameterDialog, "values", return_value={"input": "/fake.iso", "graphics": "compat", "image_index": "1"}),
+        patch.object(ParameterDialog, "values", return_value={"input": "/fake.iso", "graphics": "compat", "image_index": "1", "guest_login": "auto"}),
     ):
         win = MainWindow(ROOT)
         win.request_action(player_action[0])
         mock_open.assert_called_once()
+        assert mock_open.call_args.kwargs["guest_login"] == "auto"
         mock_start.assert_not_called()
+
+
+def test_password_policy_passes_secret_via_stdin_only(qapp, fake_pz: Path) -> None:
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_pz, MagicMock(), None, guest_login="password")
+    win._qga_socket = "/tmp/qga.sock"
+    win._provision_snapshot = "/tmp/golden.qcow2"
+    async_instance = MagicMock()
+    with (
+        patch("linux.ui_native.provision_player.QInputDialog.getText",
+              return_value=("S3cret!", True)),
+        patch("linux.ui_native.provision_player.AsyncProc",
+              return_value=async_instance),
+    ):
+        win._apply_guest_login_async([])
+    program, args = async_instance.run.call_args.args
+    kwargs = async_instance.run.call_args.kwargs
+    assert program.endswith("/linux/pz")
+    assert "S3cret!" not in args
+    assert kwargs["stdin_data"] == "S3cret!\n"
+    assert "--password-stdin" in args
+    _cleanup_player()
 
 
 # ── Cancel/retry/discard non-zero exit handling ──

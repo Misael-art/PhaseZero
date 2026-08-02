@@ -10,7 +10,8 @@ from PySide6.QtCore import QObject, QProcess, QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar,
-    QPushButton, QStyle, QVBoxLayout, QWidget, QMessageBox,
+    QPushButton, QStyle, QVBoxLayout, QWidget, QMessageBox, QInputDialog,
+    QLineEdit,
 )
 
 from .models import ActionSpec
@@ -54,7 +55,8 @@ class AsyncProc(QObject):
         self._stdout_buf = ""
         self._stderr_buf = ""
 
-    def run(self, program: str, args: list[str], timeout_ms: int = 30_000) -> None:
+    def run(self, program: str, args: list[str], timeout_ms: int = 30_000,
+            stdin_data: str = "") -> None:
         self._done = False
         self._stdout_buf = ""
         self._stderr_buf = ""
@@ -66,6 +68,9 @@ class AsyncProc(QObject):
         self._proc.finished.connect(self._on_finished)
         self._proc.errorOccurred.connect(self._on_error)
         self._proc.start()
+        if stdin_data:
+            self._proc.write(stdin_data.encode("utf-8"))
+            self._proc.closeWriteChannel()
         if timeout_ms > 0:
             self._timeout_timer = QTimer(self)
             self._timeout_timer.setSingleShot(True)
@@ -296,29 +301,33 @@ class ProvisionPlayerWindow(QWidget):
     @classmethod
     def open(cls, root: Path, runner, parent: QWidget | None = None,
              iso: str = "", graphics: str = "compat",
-             image_index: str = "1") -> ProvisionPlayerWindow:
+             image_index: str = "1", guest_login: str = "auto") -> ProvisionPlayerWindow:
         if cls._instance is not None:
             win = cls._instance
             win._resume_state()
-            win._apply_launch_params(iso, graphics, image_index)
+            win._apply_launch_params(iso, graphics, image_index, guest_login)
             win._update_summary()
             win.show()
             win.raise_()
             win.activateWindow()
             return win
-        instance = cls(root, runner, parent, iso, graphics, image_index)
+        instance = cls(root, runner, parent, iso, graphics, image_index, guest_login)
         cls._instance = instance
         return instance
 
     def __init__(self, root: Path, runner, parent: QWidget | None = None,
                  iso: str = "", graphics: str = "compat",
-                 image_index: str = "1") -> None:
+                 image_index: str = "1", guest_login: str = "auto") -> None:
         super().__init__(parent)
         self._root = root
         self._runner = runner
         self._iso = ""
         self._graphics = "compat"
         self._image_index = "1"
+        self._guest_login = "auto"
+        self._guest_login_applied = False
+        self._qga_socket = ""
+        self._provision_snapshot = ""
         self._plan_id = ""
         self._confirm_token = ""
         self._operation_id = ""
@@ -445,7 +454,7 @@ class ProvisionPlayerWindow(QWidget):
         # Resume only after every widget used by _attach_worker/_set_state exists.
         # Caller parameters win over persisted display parameters.
         self._resume_state()
-        self._apply_launch_params(iso, graphics, image_index)
+        self._apply_launch_params(iso, graphics, image_index, guest_login)
         self._update_summary()
         self.show()
 
@@ -472,6 +481,7 @@ class ProvisionPlayerWindow(QWidget):
             "iso": self._iso,
             "graphics": self._graphics,
             "imageIndex": self._image_index,
+            "guestLogin": self._guest_login,
             "operationId": self._operation_id,
         }
         data["updatedAt"] = datetime.now(timezone.utc).isoformat()
@@ -482,10 +492,11 @@ class ProvisionPlayerWindow(QWidget):
             pass
 
     def _apply_launch_params(self, iso: str = "", graphics: str = "compat",
-                              image_index: str = "1") -> None:
+                              image_index: str = "1", guest_login: str = "auto") -> None:
         self._iso = iso
         self._graphics = graphics
         self._image_index = image_index
+        self._guest_login = guest_login if guest_login in ("auto", "password") else "auto"
 
     def _resume_state(self) -> None:
         if not PLAYER_STATE_PATH.exists():
@@ -497,6 +508,7 @@ class ProvisionPlayerWindow(QWidget):
 
         prev = data.get("state", "")
         self._operation_id = data.get("operationId", "")
+        self._guest_login = data.get("guestLogin", "auto")
 
         if prev in (ST_PROVISIONING, ST_VALIDATING) and self._operation_id:
             self._attach_worker(self._operation_id)
@@ -511,6 +523,8 @@ class ProvisionPlayerWindow(QWidget):
         parts.append(f"Gr\u00e1ficos: {self._graphics}")
         if self._image_index:
             parts.append(f"\u00cdndice: {self._image_index}")
+        parts.append("Login Windows: autom\u00e1tico" if self._guest_login == "auto"
+                     else "Login Windows: exigir senha")
         self._summary.setText(" | ".join(parts))
 
     def _update_elapsed(self) -> None:
@@ -557,6 +571,7 @@ class ProvisionPlayerWindow(QWidget):
             "--iso", self._iso,
             "--image-index", self._image_index,
             "--graphics", self._graphics,
+            "--guest-login", self._guest_login,
             "--json",
         ], timeout_ms=30_000)
 
@@ -696,6 +711,9 @@ class ProvisionPlayerWindow(QWidget):
             return
 
         self._snapshot_ok = data.get("snapshotExists", False)
+        self._provision_snapshot = str(data.get("snapshotPath") or "")
+        vm_dir = str(data.get("vmDir") or "")
+        self._qga_socket = str(Path(vm_dir) / "qga.sock") if vm_dir else ""
         self._vm_running = data.get("qemuRunning", False) or data.get("libvirtRunning", False)
         # Missing key means an older provision backend; preserve compatibility.
         self._adopted_ok = bool(data.get("adoptedDiskExists", True))
@@ -766,6 +784,51 @@ class ProvisionPlayerWindow(QWidget):
             else:
                 self._add_log(f"Boot incompleto: bootReady={self._boot_ready}")
                 issues.append("boot")
+        if self._vm_running and self._qga_socket and self._provision_snapshot:
+            self._apply_guest_login_async(issues)
+        else:
+            self._finish_validation(issues)
+
+    def _apply_guest_login_async(self, issues: list[str]) -> None:
+        password = ""
+        args = [
+            "windows-vm", "guest-login", "apply",
+            "--mode", self._guest_login,
+            "--socket", self._qga_socket,
+            "--backup-proof", self._provision_snapshot,
+            "--json",
+        ]
+        if self._guest_login == "password":
+            password, ok = QInputDialog.getText(
+                self, "Senha do Windows",
+                "Defina a senha da conta Windows. Ela não será salva no host:",
+                QLineEdit.EchoMode.Password,
+            )
+            if not ok or not password:
+                issues.append("guest_login")
+                self._add_log("Política de senha não aplicada: senha não informada")
+                self._finish_validation(issues)
+                return
+            args.append("--password-stdin")
+        self._checkpoint_label.setText("Aplicando política de login do Windows…")
+        pz = str(self._root / "linux" / "pz")
+        self._async_proc = AsyncProc(self)
+        self._async_proc.finished.connect(
+            lambda parsed, code: self._on_guest_login_result(parsed, code, issues))
+        self._async_proc.errorOccurred.connect(self._on_async_error)
+        self._async_proc.run(pz, args, timeout_ms=90_000,
+                             stdin_data=(password + "\n") if password else "")
+        password = ""
+
+    def _on_guest_login_result(self, data: object | None, exit_code: int,
+                               issues: list[str]) -> None:
+        self._async_proc = None
+        if exit_code == 0 and isinstance(data, dict) and data.get("guestLoginVerified") is True:
+            self._guest_login_applied = True
+            self._add_log(f"Login Windows configurado: {self._guest_login}")
+        else:
+            issues.append("guest_login")
+            self._add_log("Falha ao aplicar/verificar política de login Windows")
         self._finish_validation(issues)
 
     def _finish_validation(self, issues: list[str]) -> None:

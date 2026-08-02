@@ -481,6 +481,7 @@ class MainWindow(QMainWindow):
                 iso=values.get("input", ""),
                 graphics=values.get("graphics", "compat"),
                 image_index=values.get("image_index", "1"),
+                guest_login=values.get("guest_login", "auto"),
             )
             return
         self.pending_action = action

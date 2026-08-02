@@ -315,7 +315,8 @@ vm_rescue_run() {
         _vm_rescue_log "test mode - returning 0"
         return 0
     fi
-    local question="Disco da VM ausente em $DISK_PATH.\n\nAbrir assistente de instalacao?"
+    local rescue_disk_path="${DISK_PATH:-desconhecido}"
+    local question="Disco da VM ausente em $rescue_disk_path.\n\nAbrir assistente de instalacao?"
     local proceed=0
     if command -v whiptail >/dev/null 2>&1; then
         pz_tui_yesno "VM Inacessivel" "$question" && proceed=1
