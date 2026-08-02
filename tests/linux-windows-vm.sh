@@ -1041,6 +1041,9 @@ if grep -Eq -- '--arg (password|secret)' "$REPO_ROOT/linux/windows-vm/guest-logi
     exit 1
 fi
 grep -Fq 'unsafe TPM restore target refused' "$REPO_ROOT/linux/windows-vm/guest-login.sh"
+grep -Fq 'exchangeMapped' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'Resolve-DnsName' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'Win32_SoundDevice' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
 echo "  guest secret never uses registry plaintext or argv"
 
 # vm_rescue_escape_to_desktop in test mode (non-destructive)

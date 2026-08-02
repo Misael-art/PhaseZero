@@ -109,12 +109,54 @@ public static class PhaseZeroLsa {
 '@
 }
 
+function Get-GuestRuntimeStatus {
+    # Status must remain available while networking or optional virtio devices
+    # are still coming up.  Each probe therefore degrades to false instead of
+    # turning a login-policy query into a QGA failure.
+    $networkReady = $false
+    $dnsReady = $false
+    $exchangeMapped = $false
+    $audioReady = $false
+    $graphicsAdapters = @()
+    try {
+        $networkReady = @(Get-NetIPConfiguration -ErrorAction Stop |
+            Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' }).Count -gt 0
+    } catch {}
+    try {
+        $dnsReady = @(Resolve-DnsName -Name microsoft.com -Type A -DnsOnly -QuickTimeout -ErrorAction Stop).Count -gt 0
+    } catch {}
+    try {
+        foreach ($hive in Get-ChildItem Registry::HKEY_USERS -ErrorAction Stop) {
+            if ($hive.PSChildName -notmatch '^S-1-5-21-') { continue }
+            $drive = "Registry::HKEY_USERS\$($hive.PSChildName)\Network\P"
+            if (Test-Path -LiteralPath $drive) { $exchangeMapped = $true; break }
+        }
+    } catch {}
+    try {
+        $audioReady = @(Get-CimInstance Win32_SoundDevice -ErrorAction Stop |
+            Where-Object { $_.Status -eq 'OK' }).Count -gt 0
+    } catch {}
+    try {
+        $graphicsAdapters = @(Get-CimInstance Win32_VideoController -ErrorAction Stop |
+            ForEach-Object { $_.Name } | Where-Object { $_ })
+    } catch {}
+    [ordered]@{
+        networkReady = [bool]$networkReady
+        dnsReady = [bool]$dnsReady
+        exchangeMapped = [bool]$exchangeMapped
+        audioReady = [bool]$audioReady
+        graphicsAdapters = $graphicsAdapters
+        graphicsReady = ($graphicsAdapters.Count -gt 0)
+    }
+}
+
 function Get-PolicyStatus {
     $auto = (Get-ItemProperty -Path $winlogon -Name AutoAdminLogon -ErrorAction SilentlyContinue).AutoAdminLogon
     $configuredUser = (Get-ItemProperty -Path $winlogon -Name DefaultUserName -ErrorAction SilentlyContinue).DefaultUserName
     $secretStored = [PhaseZeroLsa]::Has('DefaultPassword')
     $loggedOn = (Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).UserName
     $policy = if ($auto -eq '1' -and $secretStored) { 'auto' } else { 'password' }
+    $runtime = Get-GuestRuntimeStatus
     [ordered]@{
         success = $true
         policy = $policy
@@ -125,6 +167,12 @@ function Get-PolicyStatus {
         secretStored = $secretStored
         registryPasswordStored = [bool](Get-ItemProperty -Path $winlogon -Name DefaultPassword -ErrorAction SilentlyContinue)
         loggedOnUser = $loggedOn
+        networkReady = $runtime.networkReady
+        dnsReady = $runtime.dnsReady
+        exchangeMapped = $runtime.exchangeMapped
+        audioReady = $runtime.audioReady
+        graphicsAdapters = $runtime.graphicsAdapters
+        graphicsReady = $runtime.graphicsReady
     }
 }
 
