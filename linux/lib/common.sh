@@ -14,16 +14,36 @@ PZ_CLEANUP_REGISTERED=0
 PZ_STATE_READY=0
 
 pz_tempfile() {
-    local t
+    local t registry template_base
+    template_base="${TMPDIR:-/tmp}"
+    if [ "$#" -eq 1 ] && [[ "$1" != -* ]] && [[ "$1" != */* ]]; then
+        set -- "$template_base/$1"
+    fi
     t="$(mktemp "$@")"
     PZ_TEMP_FILES+=("$t")
+    registry="${XDG_RUNTIME_DIR:-$template_base}/phasezero-temp-registry.$UID.$$.list"
+    umask 077
+    printf '%s\0' "$t" >> "$registry"
     echo "$t"
 }
 
 pz_cleanup_temp() {
     local rc=$?
+    local registry="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/phasezero-temp-registry.$UID.$$.list" entry
     if [ ${#PZ_TEMP_FILES[@]} -gt 0 ]; then
         rm -f "${PZ_TEMP_FILES[@]}" 2>/dev/null || true
+    fi
+    if [ -f "$registry" ] && [ ! -L "$registry" ]; then
+        while IFS= read -r -d '' entry; do
+            [ -n "$entry" ] || continue
+            [ "$entry" != "/" ] && [ "$entry" != "$HOME" ] || continue
+            if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+                rm -rf -- "$entry" 2>/dev/null || true
+            else
+                rm -f -- "$entry" 2>/dev/null || true
+            fi
+        done < "$registry"
+        rm -f -- "$registry" 2>/dev/null || true
     fi
     return "$rc"
 }

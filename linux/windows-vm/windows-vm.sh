@@ -26,7 +26,12 @@ VM_DIR_DEFAULT="$HOME/VirtualMachines/PhaseZero-Windows"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero"
 CONFIG_FILE="${PZ_WINDOWS_VM_CONFIG:-$CONFIG_DIR/windows-vm.conf}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm"
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/phasezero-windows-vm"
+TARGET_RUNTIME_BASE="${XDG_RUNTIME_DIR:-}"
+if [ "$EUID" -eq 0 ]; then
+    target_uid="$(id -u "$TARGET_USER" 2>/dev/null || true)"
+    [ -n "$target_uid" ] && [ -d "/run/user/$target_uid" ] && TARGET_RUNTIME_BASE="/run/user/$target_uid"
+fi
+RUNTIME_DIR="${TARGET_RUNTIME_BASE:-/tmp}/phasezero-windows-vm"
 APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
@@ -80,6 +85,8 @@ RAW_DISK_BUS="nvme"
 DISPLAY_MODE="gtk"
 OPTIMIZE_HOST="${PZ_WINDOWS_VM_OPTIMIZE:-1}"
 GRAPHICS_PROFILE=""
+NET_MODEL=""
+OVMF_CODE=""
 GRAPHICS_EXPERIMENTAL=0
 EXPLICIT_GRAPHICS=0
 
@@ -119,6 +126,8 @@ Usage:
   pz windows-vm provision watch --operation-id ID
   pz windows-vm provision resume --operation-id ID
   pz windows-vm provision cancel --operation-id ID [--remove-staging]
+  pz windows-vm provision finalize --operation-id ID [--target-dir PATH] [--json]
+  pz windows-vm provision shutdown --operation-id ID [--json]
 
 Access:
   home, /mnt/sdcard, /run/media/\$USER and /mnt are exposed through SMB and virtiofs when available.
@@ -157,6 +166,10 @@ parse_options() {
             --raw-qemu) RAW_QEMU=1; shift ;;
             --graphics) GRAPHICS_PROFILE="${2:-}"; EXPLICIT_GRAPHICS=1; shift 2 ;;
             --graphics=*) GRAPHICS_PROFILE="${1#*=}"; EXPLICIT_GRAPHICS=1; shift ;;
+            --net-model) NET_MODEL="${2:-}"; shift 2 ;;
+            --net-model=*) NET_MODEL="${1#*=}"; shift ;;
+            --ovmf-code) OVMF_CODE="${2:-}"; shift 2 ;;
+            --ovmf-code=*) OVMF_CODE="${1#*=}"; shift ;;
             --experimental) GRAPHICS_EXPERIMENTAL=1; shift ;;
             --headless) DISPLAY_MODE="none"; shift ;;
             --optimize) OPTIMIZE_HOST=1; shift ;;
@@ -598,7 +611,12 @@ effective_config() {
     EXTRA_ARGS="${EXTRA_ARGS:-${PZ_WINDOWS_VM_EXTRA_ARGS:-}}"
     GRAPHICS_PROFILE="${GRAPHICS_PROFILE:-${PZ_WINDOWS_VM_GRAPHICS_PROFILE:-compat}}"
     [ "$GRAPHICS_PROFILE" = "auto" ] && GRAPHICS_PROFILE=compat
-    OVMF_CODE="${PZ_WINDOWS_VM_OVMF_CODE:-$(ovmf_code_path)}"
+    NET_MODEL="${NET_MODEL:-${PZ_WINDOWS_VM_NET_MODEL:-e1000e}}"
+    case "$NET_MODEL" in
+        e1000e|virtio-net-pci) ;;
+        *) pz_warn "unknown network model '$NET_MODEL'; falling back to e1000e"; NET_MODEL=e1000e ;;
+    esac
+    OVMF_CODE="${OVMF_CODE:-${PZ_WINDOWS_VM_OVMF_CODE:-$(ovmf_code_path)}}"
     OVMF_VARS="${PZ_WINDOWS_VM_OVMF_VARS:-$VM_DIR/OVMF_VARS.fd}"
     if [ -n "$LIBVIRT_DOMAIN" ]; then
         local domain_nvram
@@ -670,7 +688,11 @@ write_config() {
         printf 'PZ_WINDOWS_VM_EXTRA_ARGS=%q\n' "$EXTRA_ARGS"
         printf 'PZ_WINDOWS_VM_DISK_SOURCE=%q\n' "$DISK_SOURCE"
         printf 'PZ_WINDOWS_VM_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
-        printf 'PZ_WINDOWS_VM_GRAPHICS_PROFILE=%q\n' "${PZ_WINDOWS_VM_GRAPHICS_PROFILE:-compat}"
+        printf 'PZ_WINDOWS_VM_GRAPHICS_PROFILE=%q\n' "$GRAPHICS_PROFILE"
+        printf 'PZ_WINDOWS_VM_NET_MODEL=%q\n' "$NET_MODEL"
+        printf 'PZ_WINDOWS_VM_SHARE_POLICY=%q\n' "$SHARE_POLICY"
+        printf 'PZ_WINDOWS_VM_SHARE_WRITABLE=%q\n' "$SHARE_WRITABLE"
+        printf 'PZ_WINDOWS_VM_SPICE_ADDR=%q\n' "$SPICE_ADDR"
     } > "$CONFIG_FILE"
     chown_target_user "$CONFIG_DIR" "$CONFIG_FILE"
     pz_info "wrote $CONFIG_FILE"
@@ -814,9 +836,9 @@ share_pairs() {
     local ro_marker="${1:-0}"
     if [ "$SHARE_POLICY" = "full" ]; then
         if [ "$ro_marker" = "1" ]; then
-            printf '%s\n' "exchange:$EXCHANGE_DIR:rw" "home:$HOME:ro" "sdcard:/mnt/sdcard:ro" "removable:/run/media/$USER:ro" "media:/media/$USER:ro" "mnt:/mnt:ro"
+            printf '%s\n' "exchange:$EXCHANGE_DIR:rw" "home:$HOME:ro" "sdcard:/mnt/sdcard:ro" "removable:/run/media/$TARGET_USER:ro" "media:/media/$TARGET_USER:ro" "mnt:/mnt:ro"
         else
-            printf '%s\n' "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"
+            printf '%s\n' "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$TARGET_USER" "media:/media/$TARGET_USER" "mnt:/mnt"
         fi
     else
         if [ "$ro_marker" = "1" ]; then
@@ -827,18 +849,43 @@ share_pairs() {
     fi
 }
 # Remove bind mounts/symlinks left from a previous WIDER policy. Migrating
-# full -> minimal must stop exposing home/sdcard/... to the guest.
+# full -> minimal must stop exposing home/sdcard/... to the guest. Returns
+# non-zero when a stale bind survives the umount attempt (or is still mounted
+# right after it), so callers can fail closed instead of exposing a wider
+# share set than the current policy allows.
 prune_share_links() {
-    local allowed="$1" name
+    local allowed="$1" name rc=0
     for name in exchange home sdcard removable media mnt; do
         case " $allowed " in
             *" $name "*) continue ;;
         esac
         if mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
-            vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
+            if ! vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
+                pz_warn "failed to unmount stale share bind: $SHARE_BIND_ROOT/$name"
+                rc=1
+            elif mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
+                pz_warn "stale share bind still mounted after umount: $SHARE_BIND_ROOT/$name"
+                rc=1
+            fi
         fi
+        # Do not leave empty directory names visible through QEMU's built-in
+        # SMB root after a full -> minimal policy migration.
+        rmdir -- "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
         [ -L "$SHARE_ROOT/$name" ] && rm -f "$SHARE_ROOT/$name" 2>/dev/null || true
     done
+    return "$rc"
+}
+
+# True when the bind at the given mountpoint is writable (findmnt OPTIONS
+# lacks the ro flag). Callers only invoke this after mountpoint -q confirmed
+# the bind exists.
+mount_is_rw() {
+    local opts=""
+    opts="$(findmnt -no OPTIONS "$1" 2>/dev/null || true)"
+    case ",$opts," in
+        *,ro,*) return 1 ;;
+    esac
+    return 0
 }
 
 ensure_share_links() {
@@ -864,13 +911,18 @@ ensure_share_links() {
                 [ -d "$target" ] || continue
                 if [ "$mode" = "ro" ] && [ "$SHARE_WRITABLE" != "1" ]; then
                     if mountpoint -q "$SHARE_BIND_ROOT/$name"; then
-                        vm_admin_run mount -o remount,ro,bind "$SHARE_BIND_ROOT/$name" 2>/dev/null || ok=0
+                        if mount_is_rw "$SHARE_BIND_ROOT/$name"; then
+                            vm_admin_run mount -o remount,ro,bind "$SHARE_BIND_ROOT/$name" 2>/dev/null || ok=0
+                        fi
                     else
                         install -d "$SHARE_BIND_ROOT/$name"
                         vm_admin_run mount --bind -o ro "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
                     fi
                 elif mountpoint -q "$SHARE_BIND_ROOT/$name"; then
-                    continue
+                    if mount_is_rw "$SHARE_BIND_ROOT/$name"; then
+                        continue
+                    fi
+                    vm_admin_run mount -o remount,rw,bind "$SHARE_BIND_ROOT/$name" 2>/dev/null || ok=0
                 else
                     install -d "$SHARE_BIND_ROOT/$name"
                     vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
@@ -887,7 +939,10 @@ ensure_share_links() {
         [ -n "$pair" ] || continue
         allowed_names="$allowed_names ${pair%%:*}"
     done < <(share_pairs 1)
-    prune_share_links "$allowed_names"
+    if ! prune_share_links "$allowed_names"; then
+        pz_error "stale share binds remain mounted (policy=$SHARE_POLICY); refusing to expose SMB shares"
+        return 1
+    fi
     if [ "$ok" = "1" ] && mountpoint -q "$SHARE_BIND_ROOT/exchange"; then
         EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
         if [ "$SHARE_POLICY" = "full" ]; then
@@ -911,8 +966,8 @@ ensure_share_links() {
     if [ "$SHARE_POLICY" = "full" ]; then
         ln -sfn "$HOME" "$SHARE_ROOT/home"
         [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
-        [ -d "/run/media/$USER" ] && ln -sfn "/run/media/$USER" "$SHARE_ROOT/removable"
-        [ -d "/media/$USER" ] && ln -sfn "/media/$USER" "$SHARE_ROOT/media"
+        [ -d "/run/media/$TARGET_USER" ] && ln -sfn "/run/media/$TARGET_USER" "$SHARE_ROOT/removable"
+        [ -d "/media/$TARGET_USER" ] && ln -sfn "/media/$TARGET_USER" "$SHARE_ROOT/media"
         [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
     fi
     EFFECTIVE_SMB_DIR="$SHARE_ROOT"
@@ -1128,7 +1183,10 @@ samba_policy_compliant() {
     if [ "$SHARE_POLICY" = "full" ]; then
         grep -q '^\[PZHome\]' "$SAMBA_CONF"
     else
-        ! grep -qE '^\[PZ(Home|SDCard|Removable|Media|Mounts)\]' "$SAMBA_CONF"
+        if grep -qE '^\[PZ(Home|SDCard|Removable|Media|Mounts)\]' "$SAMBA_CONF"; then
+            return 1
+        fi
+        return 0
     fi
 }
 
@@ -1261,13 +1319,20 @@ usb_accessible_device_count() {
 share_links_ready() {
     local root
     for root in "$SHARE_BIND_ROOT" /tmp/phasezero-windows-vm/shares; do
-        if mountpoint -q "$root/exchange" 2>/dev/null &&
-            mountpoint -q "$root/home" 2>/dev/null &&
+        mountpoint -q "$root/exchange" 2>/dev/null || continue
+        if [ "$SHARE_POLICY" = "minimal" ]; then
+            return 0
+        fi
+        if mountpoint -q "$root/home" 2>/dev/null &&
             mountpoint -q "$root/sdcard" 2>/dev/null &&
             mountpoint -q "$root/mnt" 2>/dev/null; then
             return 0
         fi
     done
+    if [ "$SHARE_POLICY" = "minimal" ]; then
+        [ -L "$SHARE_ROOT/exchange" ]
+        return $?
+    fi
     [ -L "$SHARE_ROOT/exchange" ] && [ -L "$SHARE_ROOT/home" ] &&
         [ -L "$SHARE_ROOT/sdcard" ] && [ -L "$SHARE_ROOT/mnt" ]
 }
@@ -1320,7 +1385,7 @@ cmd_shares() {
     case "$sub" in
         install|repair)
             need_root
-            ensure_share_links
+            ensure_share_links || return 1
             configure_windows_samba_shares
             optimize_libvirt_domain
             ;;
@@ -1374,7 +1439,7 @@ cmd_shares() {
     echo "samba_managed: $(samba_shares_managed && echo yes || echo no)"
     echo "samba_policy_compliant: $(samba_policy_compliant && echo yes || echo no)"
     echo "samba_reachable: $(samba_shares_reachable && echo yes || echo no)"
-    echo "smb_host: $(libvirt_gateway)"
+    echo "smb_host: $SMB_HOST"
     echo "exchange_dir: $EXCHANGE_DIR"
     echo "webdav_channels: $(libvirt_webdav_channel_count)"
     echo "libvirt_network: $(libvirt_network_state)"
@@ -1525,13 +1590,13 @@ build_qemu_args() {
     else
         install -d "$RUNTIME_DIR" "$STATE_DIR"
     fi
-    ensure_share_links
+    ensure_share_links || return 1
     start_virtiofs_share exchange "$EXCHANGE_DIR"
     if [ "$SHARE_POLICY" = "full" ]; then
         start_virtiofs_share hosthome "$HOME"
         [ -d /mnt/sdcard ] && start_virtiofs_share sdcard /mnt/sdcard
-        [ -d "/run/media/$USER" ] && start_virtiofs_share removable "/run/media/$USER"
-        [ -d "/media/$USER" ] && start_virtiofs_share media "/media/$USER"
+        [ -d "/run/media/$TARGET_USER" ] && start_virtiofs_share removable "/run/media/$TARGET_USER"
+        [ -d "/media/$TARGET_USER" ] && start_virtiofs_share media "/media/$TARGET_USER"
         [ -d /mnt ] && start_virtiofs_share mnt /mnt
     fi
     start_tpm
@@ -1580,7 +1645,9 @@ build_qemu_args() {
     fi
     QEMU_ARGS+=("-device" "virtio-rng-pci")
     QEMU_ARGS+=("-device" "virtio-balloon-pci")
-    add_usb_redirection
+    if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then
+        add_usb_redirection
+    fi
     add_raw_usb_devices "$USB_MODE"
     audio="$(audio_driver)"
     if [ "$audio" != "none" ]; then
@@ -1593,11 +1660,20 @@ build_qemu_args() {
         netdev="$netdev,smb=${EFFECTIVE_SMB_DIR:-$SHARE_ROOT}"
     fi
     QEMU_ARGS+=("-netdev" "$netdev")
-    QEMU_ARGS+=("-device" "e1000e,netdev=net0,mac=52:54:00:50:5a:00")
-    QEMU_ARGS+=("-spice" "port=5930,addr=$SPICE_ADDR,disable-ticketing=on")
-    QEMU_ARGS+=("-device" "virtio-serial-pci")
-    QEMU_ARGS+=("-chardev" "spicevmc,id=vdagent,name=vdagent")
-    QEMU_ARGS+=("-device" "virtserialport,chardev=vdagent,name=com.redhat.spice.0")
+    QEMU_ARGS+=("-device" "$NET_MODEL,netdev=net0,mac=52:54:00:50:5a:00")
+    QEMU_ARGS+=("-device" "virtio-serial-pci,id=virtio-serial0")
+    if [ "$DRY_RUN" != "1" ]; then
+        rm -f "$RUNTIME_DIR/qga.sock"
+    fi
+    QEMU_ARGS+=("-chardev" "socket,path=$RUNTIME_DIR/qga.sock,server=on,wait=off,id=qga0")
+    QEMU_ARGS+=("-device" "virtserialport,bus=virtio-serial0.0,nr=1,chardev=qga0,name=org.qemu.guest_agent.0")
+    if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then
+        QEMU_ARGS+=("-spice" "port=5930,addr=$SPICE_ADDR,disable-ticketing=on")
+        QEMU_ARGS+=("-chardev" "spicevmc,id=vdagent,name=vdagent")
+        QEMU_ARGS+=("-device" "virtserialport,bus=virtio-serial0.0,nr=2,chardev=vdagent,name=com.redhat.spice.0")
+    else
+        pz_info "virtio-gl uses local GTK display; SPICE and USB redirection channels disabled"
+    fi
     if [ "$DISPLAY_MODE" = "none" ]; then
         QEMU_ARGS+=("-display" "none")
     elif [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
@@ -1630,7 +1706,7 @@ launch_libvirt_domain() {
         fi
         return 0
     fi
-    ensure_share_links
+    ensure_share_links || return 1
     state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
     if [ "$state" != "running" ]; then
         if ! virsh -c "$uri" start "$LIBVIRT_DOMAIN"; then
@@ -1863,7 +1939,11 @@ launch_vm() {
         return 0
     fi
     pz_info "Windows VM shares: \\\\10.0.2.4\\qemu (policy=$SHARE_POLICY)"
-    pz_info "SPICE USB redirection: spice://$SPICE_ADDR:5930"
+    if [ "$GRAPHICS" = "virtio-gl" ]; then
+        pz_info "Display: local GTK with virtio-gl acceleration (SPICE USB redirection disabled)"
+    else
+        pz_info "SPICE USB redirection: spice://$SPICE_ADDR:5930"
+    fi
     if command -v ionice >/dev/null 2>&1; then
         exec ionice -c 2 -n 0 qemu-system-x86_64 "${QEMU_ARGS[@]}"
     fi
@@ -1916,6 +1996,7 @@ status_json() {
         --arg cpus "$CPUS" \
         --arg usbMode "$USB_MODE" \
         --arg graphicsProfile "$GRAPHICS_PROFILE" \
+        --arg netModel "$NET_MODEL" \
         --arg usbAutoFilter "$USB_AUTO_FILTER" \
         --arg usbUdevManaged "$usb_udev_managed" \
         --arg usbRedirChannels "$(libvirt_usb_redir_count)" \
@@ -1959,7 +2040,7 @@ status_json() {
         --argjson discovery "$discovery" \
         '{
             config: {path: $configFile, installed: ($configInstalled == "yes")},
-            vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode, graphicsProfile: $graphicsProfile},
+            vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode, graphicsProfile: $graphicsProfile, netModel: $netModel},
             libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != ""), network:"default", networkState:$networkState, nicModel:$nicModel},
             host: {kvm: ($kvm == "yes"), qemu: $qemu, qemuImg: $qemuImg, ovmfCode: $ovmfCode, ovmfCodeExists: ($ovmfCodeExists == "yes"), ovmfVars: $ovmfVars, ovmfVarsExists: ($ovmfVarsExists == "yes"), virtiofsd: $virtiofsd, smbd: $smbd, swtpm: $swtpm},
             access: {
@@ -2034,7 +2115,16 @@ cmd_adopt() {
     DISK_PATH="$target"
     EXPLICIT_DISK=1
     effective_config
+    local target_dir
+    target="$(readlink -f -- "$target")"
+    target_dir="$(dirname -- "$target")"
     DISK_PATH="$target"
+    VM_DIR="$target_dir"
+    LIBVIRT_DOMAIN=""
+    OVMF_VARS="$VM_DIR/OVMF_VARS.fd"
+    SHARE_ROOT="$VM_DIR/shares"
+    TPM_DIR="$VM_DIR/tpm"
+    SMB_HOST="10.0.2.2"
     DISK_SOURCE="adopted-existing"
     ensure_vm_storage
     write_config
@@ -2063,7 +2153,7 @@ print_plan() {
     echo "  share_writable: $SHARE_WRITABLE"
     echo "  home_share: $([ "$SHARE_POLICY" = "full" ] && echo "$HOME" || echo 'hidden (policy=minimal)')"
     echo "  sdcard_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d /mnt/sdcard ] && echo /mnt/sdcard || echo missing; } || echo 'hidden (policy=minimal)')"
-    echo "  removable_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d "/run/media/$USER" ] && echo "/run/media/$USER" || echo missing; } || echo 'hidden (policy=minimal)')"
+    echo "  removable_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d "/run/media/$TARGET_USER" ] && echo "/run/media/$TARGET_USER" || echo missing; } || echo 'hidden (policy=minimal)')"
     # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
     echo "  smb_unc: \\\\10.0.2.4\\qemu"
     echo "  spice_usb: spice://$SPICE_ADDR:5930"
@@ -2630,10 +2720,12 @@ status_boot() {
     local configured_repo; configured_repo="$(root_env_value PZ_WINDOWS_VM_REPO)"
     local configured_user; configured_user="$(root_env_value PZ_WINDOWS_VM_BOOT_USER)"
     local boot_ready="no" one_shot_ready="no"
-    if [ "$artifacts_current" = "yes" ] && [ -n "$loader_entry" ] && [ "$loader_entry" != "missing" ] && [ "$service_enabled" = "enabled" ] && [ "$helper_installed" = "yes" ]; then
-        boot_ready="yes"
+    # bootReady only for a loader whose entry is CONFIRMED present; an
+    # unknown/unsupported loader entry must never render ready.
+    if [ "$artifacts_current" = "yes" ] && [ "$loader_entry" = "present" ] && [ "$service_enabled" = "enabled" ] && [ "$helper_installed" = "yes" ]; then
         case "$loader" in
-            grub-efi|grub-bios|systemd-boot) one_shot_ready="yes" ;;
+            grub-efi|grub-bios|systemd-boot) boot_ready="yes"; one_shot_ready="yes" ;;
+            refind) boot_ready="yes" ;;
         esac
     fi
 

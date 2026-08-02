@@ -136,8 +136,8 @@ wim_payload_images() {
     local tool="$1" iso="$2" wim_name="$3"
     (
         local hdr_tmp xml_tmp
-        hdr_tmp="$(pz_tempfile)"
-        xml_tmp="$(pz_tempfile)"
+        hdr_tmp="$(pz_tempfile "pz-wim-hdr.XXXXXX")"
+        xml_tmp="$(pz_tempfile "pz-wim-xml.XXXXXX")"
         wim_stream_prefix "$tool" "$iso" "$wim_name" 208 "$hdr_tmp" || true
         [ -s "$hdr_tmp" ] || { echo '[]'; exit 0; }
         local sig

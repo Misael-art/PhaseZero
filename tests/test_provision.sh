@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Testes para provisionamento Windows VM
+# shellcheck disable=SC2016 # Assertions intentionally match literal shell/PowerShell source.
 set -euo pipefail
 
 PZ_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -20,7 +21,9 @@ assert_eq() {
 
 assert_contains() {
     local label="$1" haystack="$2" needle="$3"
-    if echo "$haystack" | grep -F -q "$needle"; then
+    # Avoid producer SIGPIPE under pipefail when grep -q finds an early match
+    # in large JSON/log payloads.
+    if grep -F -q -- "$needle" <<< "$haystack"; then
         echo "  PASS: $label"
         PASS=$((PASS + 1))
     else
@@ -33,6 +36,13 @@ PROVISION_SCRIPT="$PZ_ROOT/linux/windows-vm/provision.sh"
 MEDIA_SCRIPT="$PZ_ROOT/linux/windows-vm/media-inspect.sh"
 AUTOUNATTEND_SCRIPT="$PZ_ROOT/linux/windows-vm/autounattend.sh"
 TWEAKS_SCRIPT="$PZ_ROOT/linux/windows-vm/tweaks.sh"
+
+echo "=== common: command-substitution temp cleanup ==="
+TEMP_HELPER_ROOT="$(mktemp -d)"
+TEMP_HELPER_PATH="$(cd "$TEMP_HELPER_ROOT" && bash -c 'source "'"$PZ_ROOT"'/linux/lib/common.sh"; pz_tempfile "pz-relative.XXXXXX"')"
+assert_eq "relative temp allocated outside current directory" "0" "$([ -e "$TEMP_HELPER_ROOT/$(basename "$TEMP_HELPER_PATH")" ] && echo 1 || echo 0)"
+assert_eq "command-substitution temp removed at parent exit" "0" "$([ -e "$TEMP_HELPER_PATH" ] && echo 1 || echo 0)"
+rm -rf "$TEMP_HELPER_ROOT"
 SNAPSHOT_SCRIPT="$PZ_ROOT/linux/windows-vm/snapshot.sh"
 
 # Hermetic preflight fixture: plan must not depend on host state (CI lacks
@@ -70,6 +80,9 @@ PLAN_OUT2=$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE=
 IMAGE_INDEX2=$(echo "$PLAN_OUT2" | jq -r '.imageIndex // 0' 2>/dev/null || echo "0")
 assert_eq "custom imageIndex is 3" "3" "$IMAGE_INDEX2"
 
+PLAN_BYPASS=$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE="$PZ_STATE_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --tpm-bypass --json 2>/dev/null || echo "")
+assert_eq "tpm bypass serializes as JSON boolean" "boolean:true" "$(echo "$PLAN_BYPASS" | jq -r '(.tpmBypass | type) + ":" + (.tpmBypass | tostring)' 2>/dev/null || echo "")"
+
 echo ""
 echo "=== provision: plan validation ==="
 BLOCKERS=$(echo "$PLAN_OUT" | jq '.blockers | length' 2>/dev/null || echo "1")
@@ -103,7 +116,7 @@ assert_eq "schema-missing fixture with sentinel rejected" "1" "$BAD_SCHEMA_RC"
 echo ""
 echo "=== autounattend: XML generation ==="
 OUT_DIR="$(mktemp -d)"
-AUTO_OUT=$(bash "$AUTOUNATTEND_SCRIPT" generate --wim-index 1 --disk-serial "PZ-TEST-1234" --output-dir "$OUT_DIR" 2>/dev/null || echo "")
+AUTO_OUT=$(bash "$AUTOUNATTEND_SCRIPT" generate --wim-index 1 --disk-serial "PZ-TEST-1234" --product-key "AAAAA-BBBBB-CCCCC-DDDDD-EEEEE" --output-dir "$OUT_DIR" 2>/dev/null || echo "")
 assert_contains "autounattend generated" "$AUTO_OUT" "autounattend.xml"
 assert_eq "autounattend.xml exists" "1" "$([ -f "$OUT_DIR/autounattend.xml" ] && echo 1 || echo 0)"
 
@@ -120,6 +133,12 @@ assert_contains "autounattend has disk config" "$(cat "$OUT_DIR/autounattend.xml
 assert_contains "autounattend has OOBE" "$(cat "$OUT_DIR/autounattend.xml")" "OOBE"
 assert_contains "autounattend has phasezero user" "$(cat "$OUT_DIR/autounattend.xml")" "phasezero"
 assert_contains "autounattend has partition" "$(cat "$OUT_DIR/autounattend.xml")" "CreatePartition"
+assert_eq "autounattend avoids invalid Recovery CreatePartition type" "0" "$(grep -Fc '<Type>Recovery</Type>' "$OUT_DIR/autounattend.xml" 2>/dev/null || true)"
+assert_contains "autounattend installs to primary partition 3" "$(cat "$OUT_DIR/autounattend.xml")" "<PartitionID>3</PartitionID>"
+assert_contains "autounattend uses case-sensitive Restart value" "$(cat "$OUT_DIR/autounattend.xml")" "<Restart>Restart</Restart>"
+assert_contains "autounattend nests product key under Key" "$(cat "$OUT_DIR/autounattend.xml")" "<Key>AAAAA-BBBBB-CCCCC-DDDDD-EEEEE</Key>"
+assert_contains "autounattend suppresses product key UI" "$(cat "$OUT_DIR/autounattend.xml")" "<WillShowUI>Never</WillShowUI>"
+assert_eq "autounattend discovers OEMDRV without hanging Get-Volume" "1" "$(grep -Fq 'foreach ($code in 68..90)' "$OUT_DIR/autounattend.xml" && ! grep -Fq 'Get-Volume' "$OUT_DIR/autounattend.xml" && echo 1 || echo 0)"
 
 rm -rf "$OUT_DIR"
 
@@ -262,6 +281,137 @@ set -e
 assert_eq "empty pid refused" "1" "$GUARD_EMPTY"
 
 echo ""
+echo "=== provision: shutdown validates staging before touching socat/qemu-pid ==="
+SHUT_EVIL_T="$(mktemp -d)"
+mkdir -p "$SHUT_EVIL_T/phasezero/operations/shut-evil" "$SHUT_EVIL_T/external-vm"
+echo '{"id":"shut-evil","state":"running"}' > "$SHUT_EVIL_T/phasezero/operations/shut-evil/operation.json"
+echo "$SHUT_EVIL_T/external-vm" > "$SHUT_EVIL_T/phasezero/operations/shut-evil/vm_dir"
+SHUT_BIN="$SHUT_EVIL_T/bin"
+mkdir -p "$SHUT_BIN"
+cat > "$SHUT_BIN/socat" <<'EOF'
+#!/usr/bin/env bash
+printf 'socat %s\n' "$*" >> "${SHUT_SOCAT_LOG:?}"
+exit 0
+EOF
+chmod +x "$SHUT_BIN/socat"
+set +e
+SHUT_EVIL_JSON=$(PATH="$SHUT_BIN:$PATH" SHUT_SOCAT_LOG="$SHUT_EVIL_T/socat.log" XDG_STATE_HOME="$SHUT_EVIL_T" bash "$PROVISION_SCRIPT" shutdown --operation-id shut-evil --json 2>/dev/null)
+SHUT_EVIL_RC=$?
+set -e
+assert_eq "shutdown external staging rc non-zero" "1" "$SHUT_EVIL_RC"
+assert_eq "shutdown external staging success false" "false" "$(echo "$SHUT_EVIL_JSON" | jq -r '.success | tostring' 2>/dev/null || echo "")"
+assert_eq "shutdown external staging never invoked socat" "0" "$([ -s "$SHUT_EVIL_T/socat.log" ] && echo 1 || echo 0)"
+
+echo ""
+echo "=== provision: shutdown corrupt metadata fails closed ==="
+SHUT_CORRUPT_T="$(mktemp -d)"
+mkdir -p "$SHUT_CORRUPT_T/phasezero/operations/shut-corrupt" "$SHUT_CORRUPT_T/phasezero/windows-vm/vms/shut-corrupt"
+echo 'garbage' > "$SHUT_CORRUPT_T/phasezero/operations/shut-corrupt/operation.json"
+echo "$SHUT_CORRUPT_T/phasezero/windows-vm/vms/shut-corrupt" > "$SHUT_CORRUPT_T/phasezero/operations/shut-corrupt/vm_dir"
+SHUT_CORRUPT_BIN="$SHUT_CORRUPT_T/bin"
+mkdir -p "$SHUT_CORRUPT_BIN"
+cat > "$SHUT_CORRUPT_BIN/socat" <<'EOF'
+#!/usr/bin/env bash
+printf 'socat %s\n' "$*" >> "${SHUT_SOCAT_LOG:?}"
+exit 0
+EOF
+chmod +x "$SHUT_CORRUPT_BIN/socat"
+set +e
+SHUT_CORRUPT_JSON=$(PATH="$SHUT_CORRUPT_BIN:$PATH" SHUT_SOCAT_LOG="$SHUT_CORRUPT_T/socat.log" XDG_STATE_HOME="$SHUT_CORRUPT_T" bash "$PROVISION_SCRIPT" shutdown --operation-id shut-corrupt --json 2>/dev/null)
+SHUT_CORRUPT_RC=$?
+set -e
+assert_eq "shutdown corrupt metadata rc non-zero" "1" "$SHUT_CORRUPT_RC"
+assert_eq "shutdown corrupt metadata success false" "false" "$(echo "$SHUT_CORRUPT_JSON" | jq -r '.success | tostring' 2>/dev/null || echo "")"
+assert_eq "shutdown corrupt metadata never invoked socat" "0" "$([ -s "$SHUT_CORRUPT_T/socat.log" ] && echo 1 || echo 0)"
+rm -rf "$SHUT_EVIL_T" "$SHUT_CORRUPT_T"
+
+echo ""
+echo "=== provision: shutdown success path hermetic (stub socat/virsh, dead pid) ==="
+SHUT_OK_T="$(mktemp -d)"
+SHUT_OK_BIN="$SHUT_OK_T/bin"
+mkdir -p "$SHUT_OK_BIN" "$SHUT_OK_T/phasezero/operations/shut-ok" "$SHUT_OK_T/phasezero/windows-vm/vms/shut-ok"
+echo '{"id":"shut-ok","state":"running"}' > "$SHUT_OK_T/phasezero/operations/shut-ok/operation.json"
+VM_OK_DIR="$SHUT_OK_T/phasezero/windows-vm/vms/shut-ok"
+echo "$VM_OK_DIR" > "$SHUT_OK_T/phasezero/operations/shut-ok/vm_dir"
+echo '999999' > "$VM_OK_DIR/qemu-pid"
+python3 -c "
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.bind('$VM_OK_DIR/qga.sock')
+s.listen(1)
+time.sleep(30)
+" &
+SHUT_SOCK_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -S "$VM_OK_DIR/qga.sock" ] && break
+    sleep 0.2
+done
+[ -S "$VM_OK_DIR/qga.sock" ] || { echo "  FAIL: could not create qga.sock fixture"; exit 1; }
+cat > "$SHUT_OK_BIN/socat" <<'EOF'
+#!/usr/bin/env bash
+printf 'socat %s\n' "$*" >> "${SHUT_SOCAT_LOG:?}"
+cat >> "${SHUT_SOCAT_LOG:?}"
+exit 0
+EOF
+cat > "$SHUT_OK_BIN/virsh" <<'EOF'
+#!/usr/bin/env bash
+printf 'virsh %s\n' "$*" >> "${SHUT_SOCAT_LOG:?}"
+printf 'shut off\n'
+exit 0
+EOF
+chmod +x "$SHUT_OK_BIN/socat" "$SHUT_OK_BIN/virsh"
+set +e
+SHUT_OK_JSON=$(PATH="$SHUT_OK_BIN:$PATH" SHUT_SOCAT_LOG="$SHUT_OK_T/socat.log" XDG_STATE_HOME="$SHUT_OK_T" bash "$PROVISION_SCRIPT" shutdown --operation-id shut-ok --json 2>/dev/null)
+SHUT_OK_RC=$?
+set -e
+kill "$SHUT_SOCK_PID" 2>/dev/null || true
+wait "$SHUT_SOCK_PID" 2>/dev/null || true
+assert_eq "shutdown success rc 0" "0" "$SHUT_OK_RC"
+assert_eq "shutdown success true" "true" "$(echo "$SHUT_OK_JSON" | jq -r '.success // ""' 2>/dev/null || echo "")"
+assert_contains "shutdown sent guest-shutdown via socat" "$(cat "$SHUT_OK_T/socat.log" 2>/dev/null || echo "")" "guest-shutdown"
+assert_contains "shutdown consulted virsh domstate" "$(cat "$SHUT_OK_T/socat.log" 2>/dev/null || echo "")" "domstate"
+rm -rf "$SHUT_OK_T"
+
+echo ""
+echo "=== provision: finalize is idempotent while adopted VM is active ==="
+FINALIZE_T="$(mktemp -d)"
+FINALIZE_HOME="$FINALIZE_T/home"
+FINALIZE_STATE="$FINALIZE_T/phasezero"
+FINALIZE_BIN="$FINALIZE_T/bin"
+FINALIZE_OP="finalize-active"
+FINALIZE_DISK="$FINALIZE_HOME/VirtualMachines/PhaseZero-Windows-Test/phasezero-windows.qcow2"
+mkdir -p "$FINALIZE_BIN" "$FINALIZE_STATE/operations/$FINALIZE_OP" "$(dirname "$FINALIZE_DISK")"
+printf 'fake-qcow2\n' > "$FINALIZE_DISK"
+jq -n --arg id "$FINALIZE_OP" --arg disk "$FINALIZE_DISK" \
+    '{id:$id,state:"completed",adoptedDisk:$disk}' > "$FINALIZE_STATE/operations/$FINALIZE_OP/operation.json"
+cat > "$FINALIZE_BIN/qemu-system-x86_64" <<'EOF'
+#!/usr/bin/env bash
+while :; do sleep 1; done
+EOF
+cat > "$FINALIZE_BIN/qemu-img" <<'EOF'
+#!/usr/bin/env bash
+printf 'called\n' > "${FINALIZE_QEMU_IMG_MARKER:?}"
+exit 70
+EOF
+chmod +x "$FINALIZE_BIN/qemu-system-x86_64" "$FINALIZE_BIN/qemu-img"
+"$FINALIZE_BIN/qemu-system-x86_64" "$FINALIZE_DISK" &
+FINALIZE_QEMU_PID=$!
+sleep 0.2
+set +e
+FINALIZE_JSON=$(HOME="$FINALIZE_HOME" XDG_STATE_HOME="$FINALIZE_T" PATH="$FINALIZE_BIN:$PATH" \
+    FINALIZE_QEMU_IMG_MARKER="$FINALIZE_T/qemu-img.called" \
+    bash "$PROVISION_SCRIPT" finalize --operation-id "$FINALIZE_OP" --json 2>/dev/null)
+FINALIZE_RC=$?
+set -e
+kill "$FINALIZE_QEMU_PID" 2>/dev/null || true
+wait "$FINALIZE_QEMU_PID" 2>/dev/null || true
+assert_eq "active adopted finalize rc 0" "0" "$FINALIZE_RC"
+assert_eq "active adopted finalize reports already finalized" "true" "$(echo "$FINALIZE_JSON" | jq -r '.alreadyFinalized // false' 2>/dev/null || echo false)"
+assert_eq "active adopted finalize bypasses locked qemu-img check" "0" "$([ -e "$FINALIZE_T/qemu-img.called" ] && echo 1 || echo 0)"
+assert_eq "active adopted finalize keeps canonical disk" "$FINALIZE_DISK" "$(echo "$FINALIZE_JSON" | jq -r '.adoptedDisk // ""' 2>/dev/null || echo "")"
+rm -rf "$FINALIZE_T"
+
+echo ""
 echo "=== graphics: plan serialization ==="
 GFX_PLAN_DIR="$(mktemp -d)"
 GFX_VIRTIO=$(PZ_STATE="$GFX_PLAN_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --graphics virtio-gl --json 2>/dev/null | jq -r '.graphics // ""' 2>/dev/null || echo "")
@@ -336,33 +486,115 @@ assert_eq "resolve vgl persists vgaDevice" "-device virtio-vga-gl" "$RESOLVED_VG
 rm -rf "$GFX_RES_VGL_DIR"
 
 echo ""
-echo "=== graphics: run_relaunch qemu_args per profile ==="
-if command -v qemu-img >/dev/null 2>&1; then
-    RL_DIR="$(mktemp -d)"
-    mkdir -p "$RL_DIR/phasezero/vms/relaunch-test"
-    SNAP_DISK_V="$RL_DIR/phasezero/vms/relaunch-test/disk.qcow2"
-    SNAP_PATH_V="$RL_DIR/phasezero/vms/relaunch-test/golden-clean.qcow2"
-    qemu-img create -f qcow2 "$SNAP_DISK_V" 64M 2>/dev/null
-    qemu-img create -f qcow2 -b "$SNAP_DISK_V" -F qcow2 "$SNAP_PATH_V" 2>/dev/null
-    mkdir -p "$RL_DIR/phasezero/operations/relaunch-compat"
-    echo '{"id":"rl-plan","graphics":"compat","resources":{"ramMb":2048,"cpus":2},"iso":{"path":"'"$DUMMY_ISO"'","arch":"x64"}}' > "$RL_DIR/phasezero/operations/relaunch-compat/plan.json"
-    echo '{"id":"relaunch-compat","state":"running","checkpoint":"relaunch","log":[]}' > "$RL_DIR/phasezero/operations/relaunch-compat/operation.json"
-    echo "$RL_DIR/phasezero/vms/relaunch-test" > "$RL_DIR/phasezero/operations/relaunch-compat/vm_dir"
-    touch "$RL_DIR/phasezero/ovmf_vars.fd"
-    XDG_STATE_HOME="$RL_DIR" PZ_GFX_KVM_PATH="/dev/null" \
-        PZ_WINDOWS_VM_OVMF_CODE="$RL_DIR/phasezero/ovmf_vars.fd" \
-        PZ_GFX_RENDER_NODE="" PZ_GFX_VIRGL_PRESENT=0 PZ_GFX_QEMU_VIRTIO_VGA_GL=0 PZ_GFX_QEMU_BIN="true" \
-        bash -c '
-    source "'"$PROVISION_SCRIPT"'" 2>/dev/null || true
-    run_relaunch "relaunch-compat" 2>/dev/null || true
-    ' 2>/dev/null || true
-    RL_LOG=$(jq -r '.log[]' "$RL_DIR/phasezero/operations/relaunch-compat/operation.json" 2>/dev/null || echo "")
-    assert_contains "relaunch compat logs NONE" "$RL_LOG" "NONE (QXL)"
-    assert_contains "relaunch compat logs relaunch" "$RL_LOG" "relaunching with display"
-    rm -rf "$RL_DIR"
-else
-    echo "  (relaunch test skipped: qemu-img not installed)"
+echo "=== graphics: run_relaunch qemu_args per profile (stubbed qemu, argv captured) ==="
+RL_DIR="$(mktemp -d)"
+RL_BIN="$RL_DIR/bin"
+mkdir -p "$RL_BIN" "$RL_DIR/phasezero/vms/relaunch-test"
+export RL_QEMU_ARGV="$RL_DIR/qemu-argv.log"
+cat > "$RL_BIN/qemu-system-x86_64" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf '%s\n' "$*" >> "${RL_QEMU_ARGV:?}"
+sock=""
+for arg in "$@"; do
+    case "$arg" in
+        socket,path=*,server=on,wait=off,id=qga0)
+            sock="${arg#socket,path=}"
+            sock="${sock%%,server=*}"
+            ;;
+    esac
+done
+if [ -n "$sock" ]; then
+    python3 - "$sock" <<'PY' &
+import socket, sys, time
+s = socket.socket(socket.AF_UNIX)
+s.bind(sys.argv[1])
+s.listen(1)
+time.sleep(10)
+PY
 fi
+sleep 10
+EOF
+chmod +x "$RL_BIN/qemu-system-x86_64"
+: > "$RL_QEMU_ARGV"
+truncate -s 64M "$RL_DIR/phasezero/vms/relaunch-test/disk.qcow2"
+truncate -s 64M "$RL_DIR/phasezero/vms/relaunch-test/golden-clean.qcow2"
+mkdir -p "$RL_DIR/phasezero/operations/relaunch-compat"
+echo '{"id":"rl-plan","graphics":"compat","resources":{"ramMb":2048,"cpus":2},"iso":{"path":"'"$DUMMY_ISO"'","arch":"x64"}}' > "$RL_DIR/phasezero/operations/relaunch-compat/plan.json"
+echo '{"id":"relaunch-compat","state":"running","checkpoint":"relaunch","log":[]}' > "$RL_DIR/phasezero/operations/relaunch-compat/operation.json"
+echo "$RL_DIR/phasezero/vms/relaunch-test" > "$RL_DIR/phasezero/operations/relaunch-compat/vm_dir"
+touch "$RL_DIR/phasezero/ovmf_vars.fd"
+XDG_STATE_HOME="$RL_DIR" PATH="$RL_BIN:$PATH" \
+    PZ_WINDOWS_VM_OVMF_CODE="$RL_DIR/phasezero/ovmf_vars.fd" \
+    bash -c '
+source "'"$PROVISION_SCRIPT"'" 2>/dev/null || true
+qga_ping() { return 0; }
+qga_exec() {
+    case "$2" in
+        *guest-get-osinfo*) QGA_RESPONSE="{\"return\":{\"name\":\"Microsoft Windows\"}}" ;;
+        *guest-network-get-interfaces*) QGA_RESPONSE="{\"return\":[{\"name\":\"Ethernet\",\"ip-addresses\":[{\"ip-address-type\":\"ipv4\",\"ip-address\":\"10.0.2.15\"}]}]}" ;;
+        *guest-file-open*) QGA_RESPONSE="{\"return\":7}" ;;
+        *guest-file-read*) QGA_RESPONSE="{\"return\":{\"buf-b64\":\"eyJjb21wbGV0ZWRBdCI6IngiLCJleGNoYW5nZVBhdGgiOiJxZW11In0=\"}}" ;;
+        *guest-file-close*) QGA_RESPONSE="{\"return\":{}}" ;;
+        *) QGA_RESPONSE="{\"return\":{}}" ;;
+    esac
+    return 0
+}
+run_relaunch "relaunch-compat" 2>/dev/null || true
+' 2>/dev/null || true
+RL_LOG=$(jq -r '.log[]' "$RL_DIR/phasezero/operations/relaunch-compat/operation.json" 2>/dev/null || echo "")
+assert_contains "relaunch compat logs NONE" "$RL_LOG" "NONE (QXL)"
+assert_contains "relaunch compat logs relaunch" "$RL_LOG" "relaunching with display"
+RL_ARGV=$(cat "$RL_QEMU_ARGV" 2>/dev/null || echo "")
+assert_contains "relaunch argv machine" "$RL_ARGV" "-machine q35,accel=kvm"
+assert_contains "relaunch argv cpu" "$RL_ARGV" "-cpu host"
+assert_contains "relaunch argv smp" "$RL_ARGV" "-smp 2"
+assert_contains "relaunch argv ram" "$RL_ARGV" "-m 2048"
+assert_contains "relaunch argv compat vga" "$RL_ARGV" "-vga qxl"
+assert_contains "relaunch argv display" "$RL_ARGV" "-display gtk"
+assert_eq "relaunch never passes combined QEMU option argv" "0" "$(grep -Fc 'qemu_args+=("$GRAPHICS_' "$PROVISION_SCRIPT" 2>/dev/null || true)"
+assert_contains "relaunch argv qga socket" "$RL_ARGV" "qga.sock"
+assert_contains "relaunch argv QMP recovery socket" "$RL_ARGV" "relaunch-qmp.sock"
+assert_eq "relaunch QEMU survives worker terminal teardown" "1" "$(grep -Fq -- 'nohup setsid qemu-system-x86_64' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "relaunch falls back once when virtio-gl is not manageable" "1" "$(grep -Fq -- 'PZ_RELAUNCH_FALLBACK_ACTIVE=1 PZ_RELAUNCH_GRAPHICS_OVERRIDE=compat' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "relaunch qemu-pid file written" "1" "$([ -f "$RL_DIR/phasezero/vms/relaunch-test/qemu-pid" ] && echo 1 || echo 0)"
+
+echo ""
+echo "=== graphics: run_relaunch virtio-gl argv ==="
+mkdir -p "$RL_DIR/phasezero/operations/relaunch-vgl"
+echo '{"id":"rl-plan","graphics":"virtio-gl","resources":{"ramMb":4096,"cpus":4},"iso":{"path":"'"$DUMMY_ISO"'","arch":"x64"}}' > "$RL_DIR/phasezero/operations/relaunch-vgl/plan.json"
+echo '{"id":"relaunch-vgl","state":"running","checkpoint":"relaunch","log":[]}' > "$RL_DIR/phasezero/operations/relaunch-vgl/operation.json"
+echo "$RL_DIR/phasezero/vms/relaunch-test" > "$RL_DIR/phasezero/operations/relaunch-vgl/vm_dir"
+: > "$RL_QEMU_ARGV"
+XDG_STATE_HOME="$RL_DIR" PATH="$RL_BIN:$PATH" \
+    PZ_WINDOWS_VM_OVMF_CODE="$RL_DIR/phasezero/ovmf_vars.fd" \
+    bash -c '
+source "'"$PROVISION_SCRIPT"'" 2>/dev/null || true
+qga_ping() { return 0; }
+qga_exec() {
+    case "$2" in
+        *guest-get-osinfo*) QGA_RESPONSE="{\"return\":{\"name\":\"Microsoft Windows\"}}" ;;
+        *guest-network-get-interfaces*) QGA_RESPONSE="{\"return\":[{\"name\":\"Ethernet\",\"ip-addresses\":[{\"ip-address-type\":\"ipv4\",\"ip-address\":\"10.0.2.15\"}]}]}" ;;
+        *guest-file-open*) QGA_RESPONSE="{\"return\":7}" ;;
+        *guest-file-read*) QGA_RESPONSE="{\"return\":{\"buf-b64\":\"eyJjb21wbGV0ZWRBdCI6IngiLCJleGNoYW5nZVBhdGgiOiJxZW11In0=\"}}" ;;
+        *guest-file-close*) QGA_RESPONSE="{\"return\":{}}" ;;
+        *) QGA_RESPONSE="{\"return\":{}}" ;;
+    esac
+    return 0
+}
+run_relaunch "relaunch-vgl" 2>/dev/null || true
+' 2>/dev/null || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -s "$RL_QEMU_ARGV" ] && break
+    sleep 0.1
+done
+RL_VGL_ARGV=$(cat "$RL_QEMU_ARGV" 2>/dev/null || echo "")
+assert_contains "relaunch virtio-gl vga" "$RL_VGL_ARGV" "-device virtio-vga-gl"
+assert_contains "relaunch virtio-gl display" "$RL_VGL_ARGV" "-display gtk,gl=on"
+assert_eq "virtio-gl relaunch omits incompatible SPICE" "0" "$(grep -c -- '-spice' <<< "$RL_VGL_ARGV" || true)"
+assert_contains "relaunch virtio-gl smp" "$RL_VGL_ARGV" "-smp 4"
+rm -rf "$RL_DIR"
+unset RL_QEMU_ARGV
 
 echo ""
 echo "=== graphics: headless invariant ==="
@@ -372,6 +604,48 @@ HEADLESS_COUNT=$(grep -c '\-display none' "$PROVISION_SCRIPT" 2>/dev/null || ech
 # relaunch also has a -vga line but it's dynamic (GRAPHICS_VGA)
 assert_eq "at least 3 instances of -vga qxl (setup+drivers+tweaks)" "1" "$([ "$SETUP_COUNT" -ge 3 ] && echo 1 || echo 0)"
 assert_eq "at least 3 instances of -display none (setup+drivers+tweaks)" "1" "$([ "$HEADLESS_COUNT" -ge 3 ] && echo 1 || echo 0)"
+assert_eq "Windows install ISO uses first CD device" "1" "$(grep -Fq -- '-device ide-cd,bus=ide.0,drive=isoboot' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "Windows install DVD is booted only once" "1" "$(grep -Fq -- '-boot once=d' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "Windows install disk has no persistent lower boot priority" "0" "$(grep -Fc -- 'drive=drive0,bootindex=' "$PROVISION_SCRIPT" 2>/dev/null || true)"
+assert_eq "Windows install acknowledges ISO boot prompt through QMP" "1" "$(grep -Fq -- '"command-line": "sendkey spc"' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+QGA_WAIT_OFF_COUNT=$(grep -Fc 'server=on,wait=off,id=qga0' "$PROVISION_SCRIPT" 2>/dev/null || echo 0)
+assert_eq "all provision QGA sockets avoid startup deadlock" "4" "$QGA_WAIT_OFF_COUNT"
+VIRTIO_SERIAL_COUNT=$(grep -Fc -- '-device virtio-serial-pci' "$PROVISION_SCRIPT" 2>/dev/null || echo 0)
+assert_eq "all QGA launch phases provide virtio serial bus" "4" "$VIRTIO_SERIAL_COUNT"
+assert_eq "QGA phase transport keeps one channel" "1" "$(grep -Fq -- 'coproc PZ_QGA_SOCAT' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "QGA requests have bounded reads" "1" "$(grep -Fq -- 'IFS= read -r -t 1 response' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "QGA ping retains parent channel" "1" "$(grep -Fq -- 'QGA_RESPONSE="$response"' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "QGA requests correlate responses by id" "1" "$(grep -Fq -- '.id == $id and (has("return") or has("error"))' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "QGA shutdown transport survives stdin EOF" "1" "$(grep -Fq -- 'timeout 5 socat -T 2 STDIO,ignoreeof' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "QGA command rejects empty successful transport" "1" "$(grep -Fq -- 'if [ -n "$response" ]' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "guest setup tries built-in and host SMB endpoints" "1" "$(grep -Fq -- "\$shareCandidates = @('\\\\10.0.2.4\\qemu', '\\\\10.0.2.2\\PZExchange')" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "guest setup retains local account password" "0" "$(grep -Fc -- '.SetPassword("")' "$PROVISION_SCRIPT" 2>/dev/null || true)"
+assert_eq "guest setup installs bounded QGA MSI" "1" "$(grep -Fq -- 'WaitForExit(300000)' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "guest setup delays QGA and clears brittle dependencies" "1" "$(grep -Fq -- 'start= delayed-auto depend= /' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "driver phase promotes proven QGA to automatic start" "1" "$(grep -Fq -- 'start= auto depend= /' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "guest setup configures QGA service recovery" "1" "$(grep -Fq -- 'actions= restart/5000/restart/10000/restart/30000' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "guest setup avoids hanging all-in-one installer" "0" "$(grep -Fc 'Start-Process $guestTools' "$PROVISION_SCRIPT" 2>/dev/null || true)"
+assert_eq "guest setup persists completion marker" "1" "$(grep -Fq -- 'provisioning-complete.json' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "tweaks enumerate Xbox packages before removal" "1" "$(grep -Fq -- "Get-AppxPackage -AllUsers -Name '*Xbox*'" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "tweaks never pass wildcard as package identity" "0" "$(grep -Fc -- 'Remove-AppxPackage -Package "*xbox*"' "$PROVISION_SCRIPT" 2>/dev/null || true)"
+assert_eq "tweaks never stop a healthy Workstation service" "0" "$(grep -Fc -- 'Restart-Service LanmanWorkstation' "$PROVISION_SCRIPT" 2>/dev/null || true)"
+assert_eq "tweaks repair missing Workstation ServiceDll" "1" "$(grep -Fq -- "ServiceDll registry repaired" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "relaunch validates guest network without blocking PowerShell" "1" "$(grep -Fq -- 'guest-network-get-interfaces' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "relaunch DHCP wait has wall-clock 60-second bound" "1" "$(grep -Fq -- 'local network_deadline=$((SECONDS + 60))' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "relaunch reads completion marker through QGA" "1" "$(grep -Fq -- 'guest-file-read' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "relaunch strips Windows QGA marker padding" "1" "$(grep -Fq -- "tr -d '\\000'" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "Windows net use calls are time bounded" "1" "$(grep -Fq -- 'WaitForExit(15000)' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "relaunch failure attempts guest shutdown before kill" "1" "$(grep -Fq -- 'qga_shutdown "$vm_dir/qga.sock"' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "guest setup retries exchange mapping at login" "1" "$(grep -Fq -- 'PhaseZeroMapExchange' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "guest setup and drivers avoid hanging Get-Volume cmdlet" "0" "$(grep -Fc -- 'Get-Volume' "$PROVISION_SCRIPT" 2>/dev/null || true)"
+assert_eq "driver phase targets Windows 11 AMD64 INF packages" "1" "$(grep -Fq -- "'NetKVM\w11\amd64\netkvm.inf'" "$PROVISION_SCRIPT" && grep -Fq -- "'viogpudo\w11\amd64\viogpudo.inf'" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "driver phase accepts pnputil already-current exit 259" "1" "$(grep -Fq -- 'if ($LASTEXITCODE -notin @(0, 259))' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "driver phase has wall-clock bounded 10-minute QGA wait" "1" "$(grep -Fq -- 'local wait_timeout=600 wait_started=$SECONDS wait_deadline=$((SECONDS + 600))' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "driver phase treats missing QGA service as failure" "1" "$(grep -Fq -- "throw 'QEMU Guest Agent service missing after driver installation'" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "tweaks verify selected SMB endpoint" "1" "$(grep -Fq -- 'Test-NetConnection $exchangeHost -Port 445' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "tweaks require active Windows network adapter" "1" "$(grep -Fq -- "throw 'No active Windows network adapter'" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "tweaks persist verified provisioning marker" "1" "$(grep -Fq -- "exchangeDrive = 'P:'" "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "tweaks serialize exchange path as plain string" "1" "$(grep -Fq -- '$exchangePath = [string](Get-Content' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
 
 echo ""
 echo "=== graphics: QGA display-adapter check logic ==="
@@ -585,14 +859,17 @@ LOCK_T="$(mktemp -d)"
     # same-op re-acquire after completion is the worker handoff -> proceeds
     provision_lock_acquire "op-a" || exit 14
     provision_lock_clear "op-a"
-    [ ! -f "$PROVISION_DIR/active.lock" ] || exit 15
+    # Clear truncates in place, never unlinks: the file persists (empty) so
+    # the flock inode stays permanent for the next acquire.
+    [ -f "$PROVISION_DIR/active.lock" ] || exit 15
+    [ -z "$(cat "$PROVISION_DIR/active.lock" 2>/dev/null || true)" ] || exit 16
     # corrupt reference -> refused with diagnostic
     printf 'ghost-op\n' > "$PROVISION_DIR/active.lock"
-    provision_lock_acquire "op-c" 2>/dev/null && exit 16 || true
+    provision_lock_acquire "op-c" 2>/dev/null && exit 17 || true
     printf 'ghost-op\n' > "$PROVISION_DIR/active.lock"
     mkdir -p "$OPERATIONS_DIR/ghost-op"
     echo 'garbage' > "$OPERATIONS_DIR/ghost-op/operation.json"
-    provision_lock_acquire "op-c" 2>/dev/null && exit 17 || true
+    provision_lock_acquire "op-c" 2>/dev/null && exit 18 || true
     exit 0
 )
 LOCK_RC=$?
@@ -625,7 +902,8 @@ B_OUT=$(
     [ -f "$PROVISION_DIR/active.lock" ] || exit 22
     [ "$(cat "$PROVISION_DIR/active.lock" 2>/dev/null || true)" = "op-b" ] || exit 23
     provision_lock_clear "op-b"
-    [ ! -f "$PROVISION_DIR/active.lock" ] || exit 24
+    [ -f "$PROVISION_DIR/active.lock" ] || exit 24
+    [ -z "$(cat "$PROVISION_DIR/active.lock" 2>/dev/null || true)" ] || exit 25
     exit 0
 )
 B_RC=$?
@@ -660,7 +938,7 @@ echo "=== provision: mkdir fallback lock (stale dead pid recovers, live holder r
 LOCK4_T="$(mktemp -d)"
 set +e
 (
-    export PZ_LOCK_FORCE_MKDIR=1
+    PZ_LOCK_FORCE_MKDIR=1
     XDG_STATE_HOME="$LOCK4_T"
     source "$PROVISION_SCRIPT" >/dev/null 2>&1 || true
     mkdir -p "$OPERATIONS_DIR/op-d" "$OPERATIONS_DIR/op-e"
@@ -686,6 +964,99 @@ MK_RC=$?
 set -e
 assert_eq "mkdir lock: stale recovers, live holder refused" "0" "$MK_RC"
 rm -rf "$LOCK4_T"
+
+echo ""
+echo "=== provision: cross-process acquire between clear and release (flock mode) ==="
+LOCK5_T="$(mktemp -d)"
+LOCK5_RC=1
+(
+    XDG_STATE_HOME="$LOCK5_T"
+    source "$PROVISION_SCRIPT" >/dev/null 2>&1 || true
+    mkdir -p "$OPERATIONS_DIR/op-f" "$OPERATIONS_DIR/op-g"
+    echo '{"id":"op-f","state":"completed"}' > "$OPERATIONS_DIR/op-f/operation.json"
+    echo '{"id":"op-g","state":"failed"}' > "$OPERATIONS_DIR/op-g/operation.json"
+    provision_lock_acquire "op-f" || exit 50
+    INODE_BEFORE=$(stat -c %i "$PROVISION_DIR/active.lock")
+    provision_lock_clear "op-f"
+    [ -f "$PROVISION_DIR/active.lock" ] || exit 51
+    # Between clear and release the racer must still be excluded: the path
+    # resolves to the SAME inode we hold the flock on. Clear must never have
+    # unlinked it, or the racer would lock a brand-new inode concurrently.
+    RACER_TRIES=0
+    for _ in 1 2 3 4 5; do
+        RACER_TRIES=$((RACER_TRIES + 1))
+        if XDG_STATE_HOME="$LOCK5_T" bash -c '
+            provision_script="$1"
+            set --
+            source "$provision_script" >/dev/null 2>&1 || true
+            mkdir -p "$OPERATIONS_DIR/op-g"
+            provision_lock_acquire "op-g" 2>/dev/null && exit 0 || exit 1
+        ' _ "$PROVISION_SCRIPT"; then
+            break
+        fi
+        sleep 0.1
+    done
+    [ "$RACER_TRIES" -eq 5 ] || exit 52
+    provision_lock_release
+    # After release the racer is admitted, still on the same inode.
+    XDG_STATE_HOME="$LOCK5_T" bash -c '
+        provision_script="$1"
+        set --
+        source "$provision_script" >/dev/null 2>&1 || true
+        mkdir -p "$OPERATIONS_DIR/op-g"
+        provision_lock_acquire "op-g" 2>/dev/null || exit 1
+        provision_lock_clear "op-g"
+        exit 0
+    ' _ "$PROVISION_SCRIPT" || exit 53
+    INODE_AFTER=$(stat -c %i "$PROVISION_DIR/active.lock")
+    [ "$INODE_BEFORE" = "$INODE_AFTER" ] || exit 54
+    exit 0
+)
+LOCK5_RC=$?
+assert_eq "flock: racer blocked between clear+release, admitted after, inode stable" "0" "$LOCK5_RC"
+rm -rf "$LOCK5_T"
+
+echo ""
+echo "=== provision: cross-process acquire between clear and release (mkdir fallback) ==="
+LOCK6_T="$(mktemp -d)"
+set +e
+(
+    PZ_LOCK_FORCE_MKDIR=1
+    XDG_STATE_HOME="$LOCK6_T"
+    source "$PROVISION_SCRIPT" >/dev/null 2>&1 || true
+    mkdir -p "$OPERATIONS_DIR/op-h" "$OPERATIONS_DIR/op-i"
+    echo '{"id":"op-h","state":"completed"}' > "$OPERATIONS_DIR/op-h/operation.json"
+    echo '{"id":"op-i","state":"failed"}' > "$OPERATIONS_DIR/op-i/operation.json"
+    provision_lock_acquire "op-h" || exit 60
+    provision_lock_clear "op-h"
+    # clear only empties the id file; the mkdir holder dir survives until
+    # release, so a racer between clear and release is still refused.
+    [ -d "$PROVISION_DIR/active.lock.d" ] || exit 61
+    if PZ_LOCK_FORCE_MKDIR=1 XDG_STATE_HOME="$LOCK6_T" bash -c '
+        provision_script="$1"
+        set --
+        source "$provision_script" >/dev/null 2>&1 || true
+        mkdir -p "$OPERATIONS_DIR/op-i"
+        provision_lock_acquire "op-i" 2>/dev/null && exit 0 || exit 1
+    ' _ "$PROVISION_SCRIPT"; then
+        exit 62
+    fi
+    provision_lock_release
+    PZ_LOCK_FORCE_MKDIR=1 XDG_STATE_HOME="$LOCK6_T" bash -c '
+        provision_script="$1"
+        set --
+        source "$provision_script" >/dev/null 2>&1 || true
+        mkdir -p "$OPERATIONS_DIR/op-i"
+        provision_lock_acquire "op-i" 2>/dev/null || exit 1
+        provision_lock_clear "op-i"
+        exit 0
+    ' _ "$PROVISION_SCRIPT" || exit 63
+    exit 0
+)
+MK6_RC=$?
+set -e
+assert_eq "mkdir: clear keeps holder dir until release, racer admitted after" "0" "$MK6_RC"
+rm -rf "$LOCK6_T"
 
 echo ""
 echo "=== provision: SPICE loopback invariant ==="
@@ -735,46 +1106,41 @@ printf '<WIM><IMAGE INDEX="1"><NAME>Windows 11 Pro</NAME><DISPLAYNAME>Windows 11
 FAKE_ISO="$MK_T/win.iso"
 printf 'fakeiso\n' > "$FAKE_ISO"
 
+FULL_MEMBERS="$MK_T/members-full.txt"
+printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /BOOTMGR;1\n' > "$FULL_MEMBERS"
+printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /SOURCES/INSTALL.WIM;1\n' >> "$FULL_MEMBERS"
+printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /SETUP.EXE;1\n' >> "$FULL_MEMBERS"
 FULL_OUT=$(
-    export PATH="$FAKE_BIN:$PATH"
-    export FAKE_WIM_STREAM
-    FAKE_MEMBERS="$MK_T/members-full.txt"
-    printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /BOOTMGR;1\n' > "$FAKE_MEMBERS"
-    printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /SOURCES/INSTALL.WIM;1\n' >> "$FAKE_MEMBERS"
-    printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /SETUP.EXE;1\n' >> "$FAKE_MEMBERS"
-    export FAKE_MEMBERS
+    FAKE_MEMBERS="$FULL_MEMBERS" FAKE_WIM_STREAM="$FAKE_WIM_STREAM" PATH="$FAKE_BIN:$PATH" \
     bash "$MEDIA_SCRIPT" inspect --iso "$FAKE_ISO" --json 2>/dev/null || echo '{"valid":false}'
 )
 assert_eq "boot+wim valid" "true" "$(echo "$FULL_OUT" | jq -r '.valid' 2>/dev/null || echo false)"
 assert_eq "uppercase/;1 normalized -> 2 wim images parsed" "2" "$(echo "$FULL_OUT" | jq -r '.imageCount' 2>/dev/null || echo 0)"
 
 echo "--- setup.exe alone is NOT a boot chain ---"
+SETUP_MEMBERS="$MK_T/members-setup.txt"
+printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /SETUP.EXE;1\n' > "$SETUP_MEMBERS"
 SETUP_OUT=$(
-    export PATH="$FAKE_BIN:$PATH" FAKE_WIM_STREAM
-    FAKE_MEMBERS="$MK_T/members-setup.txt"
-    printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /SETUP.EXE;1\n' > "$FAKE_MEMBERS"
-    export FAKE_MEMBERS
+    FAKE_MEMBERS="$SETUP_MEMBERS" FAKE_WIM_STREAM="$FAKE_WIM_STREAM" PATH="$FAKE_BIN:$PATH" \
     bash "$MEDIA_SCRIPT" inspect --iso "$FAKE_ISO" --json 2>/dev/null || echo '{"valid":false}'
 )
 assert_eq "setup.exe alone invalid" "false" "$(echo "$SETUP_OUT" | jq -r '.valid' 2>/dev/null || echo true)"
 
 echo "--- boot chain without install.wim invalid ---"
+NOBOOT_MEMBERS="$MK_T/members-noboot.txt"
+printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /BOOTMGR;1\n' > "$NOBOOT_MEMBERS"
 NOBOOT_OUT=$(
-    export PATH="$FAKE_BIN:$PATH" FAKE_WIM_STREAM
-    FAKE_MEMBERS="$MK_T/members-noboot.txt"
-    printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /BOOTMGR;1\n' > "$FAKE_MEMBERS"
-    export FAKE_MEMBERS
+    FAKE_MEMBERS="$NOBOOT_MEMBERS" FAKE_WIM_STREAM="$FAKE_WIM_STREAM" PATH="$FAKE_BIN:$PATH" \
     bash "$MEDIA_SCRIPT" inspect --iso "$FAKE_ISO" --json 2>/dev/null || echo '{"valid":false}'
 )
 assert_eq "bootmgr without wim invalid" "false" "$(echo "$NOBOOT_OUT" | jq -r '.valid' 2>/dev/null || echo true)"
 
 echo "--- payload only inside ISO: imageCount=0 + payloadNote ---"
+NOSTREAM_MEMBERS="$MK_T/members-nostream.txt"
+printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /BOOTMGR;1\n' > "$NOSTREAM_MEMBERS"
+printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /SOURCES/INSTALL.WIM;1\n' >> "$NOSTREAM_MEMBERS"
 NOSTREAM_OUT=$(
-    export PATH="$FAKE_BIN:$PATH"
-    FAKE_MEMBERS="$MK_T/members-nostream.txt"
-    printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /BOOTMGR;1\n' > "$FAKE_MEMBERS"
-    printf -- '-rw-r--r-- 1 user user 1 2020-01-01 00:00 /SOURCES/INSTALL.WIM;1\n' >> "$FAKE_MEMBERS"
-    export FAKE_MEMBERS FAKE_WIM_STREAM=/nonexistent/install.wim
+    FAKE_MEMBERS="$NOSTREAM_MEMBERS" FAKE_WIM_STREAM=/nonexistent/install.wim PATH="$FAKE_BIN:$PATH" \
     bash "$MEDIA_SCRIPT" inspect --iso "$FAKE_ISO" --json 2>/dev/null || echo '{"valid":false}'
 )
 assert_eq "structure still valid with unparseable payload" "true" "$(echo "$NOSTREAM_OUT" | jq -r '.valid' 2>/dev/null || echo false)"
@@ -820,8 +1186,7 @@ printf '<WIM><IMAGE INDEX="1"><NAME>Windows 11 Pro</NAME><DISPLAYNAME>Windows 11
 truncate -s 62914560 "$BIG_WIM"
 printf 'fakeiso\n' > "$MK2_T/win.iso"
 BIG_OUT=$(
-    export PATH="$FAKE2_BIN:$PATH"
-    export FAKE_MEMBERS="$FAKE2_MEMBERS" FAKE_WIM_STREAM="$BIG_WIM"
+    FAKE_MEMBERS="$FAKE2_MEMBERS" FAKE_WIM_STREAM="$BIG_WIM" PATH="$FAKE2_BIN:$PATH" \
     bash "$MEDIA_SCRIPT" inspect --iso "$MK2_T/win.iso" --json 2>/dev/null || echo '{"valid":false}'
 )
 assert_eq "imageCount parsed from bounded stream" "1" "$(echo "$BIG_OUT" | jq -r '.imageCount' 2>/dev/null || echo 0)"
