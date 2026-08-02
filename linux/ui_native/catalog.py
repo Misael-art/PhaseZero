@@ -279,10 +279,11 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             # Provision commands
             _a("windows.media.inspect", "Windows VM", "Inspecionar ISO", "Valida ISO, SHA-256, arquitetura e listas edições disponíveis.", ("windows-vm", "media", "inspect", "--iso", "{input}"), "media-optical", input_label="Selecione ISO do Windows", input_kind="file", badge="JSON"),
             _a("windows.provision.preflight", "Windows VM", "Pré-verificação do host", "Verifica swtpm, virtio-win, KVM, OVMF e recursos antes do plano.", ("windows-vm", "preflight", "--json"), "dialog-information", badge="JSON"),
-            _a("windows.provision.plan", "Windows VM", "Planejar instalação automática", "Gera plano completo de instalação e otimização.", ("windows-vm", "provision", "plan", "--iso", "{input}", "--image-index", "{image_index}", "--graphics", "{graphics}", "--json"), "document-properties", badge="Seguro", parameters=(
+            _a("windows.provision.plan", "Windows VM", "Planejar instalação automática", "Gera plano completo de instalação e otimização.", ("windows-vm", "provision", "plan", "--iso", "{input}", "--image-index", "{image_index}", "--graphics", "{graphics}", "--guest-login", "{guest_login}", "--json"), "document-properties", badge="Seguro", parameters=(
                 _p("input", "Selecione ISO do Windows", kind="file"),
                 _p("graphics", "Aceleração gráfica", "choice", choices=tuple(v for v, _, _ in WINDOWS_VM_GRAPHICS_OPTIONS), placeholder="compat"),
                 _p("image_index", "Índice da edição Windows", placeholder="1"),
+                _p("guest_login", "Login no Windows", "choice", choices=("auto", "password"), placeholder="auto"),
             )),
             _a("windows.provision.start", "Windows VM", "Instalar e otimizar Windows", "Executa instalação completa: setup, drivers, tweaks, snapshot.", ("windows-vm", "provision", "start", "--plan-id", "{plan_id}", "--confirm", "{confirm}", "--json"), "system-software-install", mutable=True, preview=("windows-vm", "provision", "plan", "--iso", "{input}", "--json"), preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken"), ("input", "iso.path")), badge="Alto risco", risk="high"),
             _a("windows.provision.status", "Windows VM", "Status da instalação", "Estado atual da operação de provisionamento.", ("windows-vm", "provision", "status", "--operation-id", "{operation_id}", "--json"), "dialog-information", parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),), badge="JSON"),
@@ -296,7 +297,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                "Orquestra plano, provisão, boot e reboot em janela dedicada.",
                ("--internal-player",), "system-reboot",
                mutable=True, elevated=False,
-               preview=("windows-vm", "provision", "plan", "--iso", "{input}", "--json"),
+               preview=("windows-vm", "provision", "plan", "--iso", "{input}", "--guest-login", "{guest_login}", "--json"),
                preview_bindings=(("input", "iso.path"),),
                input_label="Selecione ISO do Windows",
                input_kind="file",
@@ -305,6 +306,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                       choices=tuple(v for v, _, _ in WINDOWS_VM_GRAPHICS_OPTIONS),
                       placeholder="compat"),
                    _p("image_index", "Índice da edição Windows", placeholder="1"),
+                   _p("guest_login", "Login no Windows", "choice",
+                      choices=("auto", "password"), placeholder="auto"),
                ),
                badge="Alto risco", risk="high"),
         ]
@@ -526,6 +529,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("claude-verify", "Verificar rotas Claude", "Valida assinatura, Bonsai e 9Router sem expor credenciais.", ("ai", "claude", "verify"), None),
         ("claude-bonsai-login", "Login Bonsai", "Inicia autenticação interativa; sessões continuam com consentimento de upload.", ("ai", "claude", "login", "bonsai"), ("ai", "claude", "status")),
         ("9router-status", "Status 9Router", "Serviço, providers, combos e watchdog.", ("ai", "9router", "status"), None),
+        ("9router-tui", "Abrir TUI 9Router", "Anexa ao serviço ativo sem iniciar nem matar outra instância.", ("ai", "9router", "tui"), None),
+        ("9router-repair", "Reparar 9Router", "Migra units para caminhos estáveis e valida serviço, bridge e watchdog.", ("ai", "9router", "repair"), ("ai", "9router", "status")),
         ("9router-install", "Instalar 9Router", "Instala gateway local, segredo, serviço e watchdog.", ("ai", "9router", "install"), ("ai", "9router", "status")),
         ("9router-dashboard", "Abrir dashboard 9Router", "Gerencia providers, modelos, combos e chaves no painel local.", ("ai", "9router", "dashboard"), None),
         ("9router-test", "Testar 9Router", "Valida saúde e endpoint /v1/models autenticado.", ("ai", "9router", "test"), None),

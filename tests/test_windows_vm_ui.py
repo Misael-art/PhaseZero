@@ -462,6 +462,7 @@ def test_player_action_in_catalog(page_and_catalog):
     assert player.input_kind == "file"
     assert any(p.name == "graphics" for p in player.parameters)
     assert any(p.name == "image_index" for p in player.parameters)
+    assert any(p.name == "guest_login" for p in player.parameters)
 
 
 def test_player_singleton(qapp):
