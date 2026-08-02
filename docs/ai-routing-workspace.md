@@ -34,12 +34,23 @@ Controles PhaseZero:
 Executar cliente com perfil temporário:
 
 ```bash
-phasezero-9router-run codex
-phasezero-9router-run claude
-phasezero-9router-run opencode
+claude-9router
+linux/pz ai opencode run --route=9router -- run
 ```
 
 Wrapper injeta endpoint e chave apenas no processo filho. Configurações globais de cada agente não são sobrescritas. Uso de OAuth, assinaturas e modelos deve respeitar termos e cotas do provider. Fallback não significa evasão de limites.
+
+Claude Code oficial permanece na assinatura por padrão. `claude-subscription` remove qualquer rota herdada; `claude-9router` usa somente `ANTHROPIC_AUTH_TOKEN` e o endpoint loopback. Bonsai coexiste como `claude-bonsai`: não ocupa porta local e injeta suas variáveis somente no processo filho. O launcher preserva o consentimento de snapshot/upload e bloqueia diretórios ou arquivos sensíveis conhecidos.
+
+Use `linux/pz ai claude preflight bonsai --cwd /projeto/revisado` e depois `linux/pz ai claude run bonsai --cwd /projeto/revisado`. O diretório explícito evita iniciar snapshot no HOME por engano; preflight procura nomes conhecidos de dotenv, credenciais e chaves sem ler conteúdo. Também valida DNS A/AAAA e TLS do router Bonsai usando Node. `ENOTIMP` é classificado como falha DNS/transporte transitória; PhaseZero não altera DNS nem aumenta retries automaticamente.
+
+`bonsai start` é shim PhaseZero somente para o subcomando `start`: executa o mesmo preflight e usa `BONSAI_ROUTE=direct|9router`. Demais subcomandos seguem o CLI upstream. Rota `9router` é fallback explícito, não inicia Bonsai e não cria snapshot/upload. Token Bonsai nunca é importado no 9Router. Na rota direta, Claude.ai connectors ficam desativados porque Bonsai usa endpoint e bearer próprios. Use `claude-subscription` quando precisar dos connectors Claude.ai.
+
+O instalador mantém o binário Bonsai npm intacto e coloca `~/.local/bin` no início dos perfis shell existentes para o shim interceptar `start`. Abra novo login shell após instalação.
+
+OpenCode usa `~/.config/opencode/opencode.json` como configuração canônica. Provider 9Router aponta para `127.0.0.1:20128/v1`; `apiKey` referencia arquivo `0600`, sem chave embutida e sem variáveis Anthropic/OpenAI globais. `BONSAI_ROUTE=direct` é recusado no OpenCode por falta de suporte Bonsai documentado. `9router/Default` permanece configurado e disponível; `pz ai opencode run` e `verify --live` usam o combo ativo quando `--model` não foi informado, evitando prender execução num primeiro provider temporariamente limitado. O smoke executa prompt e chamada `read` sobre fixture temporária sintética.
+
+Diagnóstico 9Router considera saudável apenas listener loopback pertencente à árvore do serviço PhaseZero. Processo alheio ou startup legado não satisfaz healthcheck.
 
 ## Odysseus
 

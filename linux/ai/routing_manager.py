@@ -244,6 +244,80 @@ def write_private(path: Path, payload: str) -> None:
     os.chmod(path, 0o600)
 
 
+def opencode_config_path() -> Path:
+    return xdg_config_home() / "opencode" / "opencode.json"
+
+
+def _load_opencode_manager():
+    """Import opencode_9router_manager lazily (best-effort, sibling module).
+
+    The sibling module does ``import claude_code_manager`` (also a sibling), so
+    the ai/ dir must be importable; insert it on sys.path for this load only.
+    """
+    try:
+        import importlib.util
+        ai_dir = str(Path(__file__).resolve().parent)
+        if ai_dir not in sys.path:
+            sys.path.insert(0, ai_dir)
+        path = Path(ai_dir) / "opencode_9router_manager.py"
+        spec = importlib.util.spec_from_file_location("pz_opencode_9router_manager", path)
+        if spec and spec.loader:
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["pz_opencode_9router_manager"] = module
+            spec.loader.exec_module(module)
+            return module
+    except Exception:
+        pass
+    return None
+
+
+def refresh_opencode_catalog(client: R9Client, backup_dir: Path | None = None) -> dict:
+    """Refresh provider.9router.models in opencode.json so every 9Router combo
+    (incl. phasezero-*) is selectable. No-op when opencode is absent.
+
+    When ``backup_dir`` is given and the catalog actually changes, the previous
+    opencode.json bytes are written there for byte-level rollback; the path is
+    returned as ``beforeBackup`` (JSON-serializable). Failure is non-fatal.
+    """
+    path = opencode_config_path()
+    result: dict = {
+        "present": path.is_file(),
+        "path": str(path),
+        "updated": False,
+        "beforeBackup": None,
+        "models": [],
+        "skipped": False,
+        "reason": None,
+        "secretsRedacted": True,
+    }
+    if not path.is_file():
+        result["skipped"] = True
+        result["reason"] = "opencode.json absent"
+        return result
+    module = _load_opencode_manager()
+    if module is None:
+        result["skipped"] = True
+        result["reason"] = "opencode_9router_manager unavailable"
+        return result
+    try:
+        manager = module.OpenCodeManager()
+        before_bytes = path.read_bytes()
+        sync = manager.sync_catalog(dry_run=False)
+        result["updated"] = bool(sync.get("updated"))
+        result["models"] = sync.get("models", [])
+        if result["updated"] and backup_dir is not None and before_bytes != path.read_bytes():
+            ensure_private_dir(backup_dir)
+            backup = backup_dir / "opencode.json.before"
+            backup.write_bytes(before_bytes)
+            os.chmod(backup, 0o600)
+            result["beforeBackup"] = str(backup)
+    except Exception as exc:  # catalog sync must never abort an apply
+        result["skipped"] = True
+        result["reason"] = "sync failed"
+        result["error"] = str(exc) if not str(exc) else "sync error"
+    return result
+
+
 class Config:
     """Validated, versioned routing configuration."""
 
@@ -575,9 +649,16 @@ def build_inventory(client: R9Client, refresh_quota: bool = False) -> dict:
             state, reason = "unknown", [f"testStatus={c.test_status}"]
         else:
             state, reason = "ready", []
-        if c.error_code in (401, 403, 429) and now - c.last_error_at < ERROR_ACTIVE_WINDOW:
-            state = "unavailable"
-            reason.append(f"active HTTP {c.error_code}")
+        if c.error_code in (401, 403, 429):
+            error_age = now - c.last_error_at
+            if 0 <= error_age < ERROR_ACTIVE_WINDOW:
+                state = "unavailable"
+                reason.append(f"active HTTP {c.error_code}")
+            else:
+                # Preserve a safe classification after the active window
+                # expires. Raw provider errors/accounts stay redacted, while
+                # operators can still understand why testStatus is degraded.
+                reason.append(f"last HTTP {c.error_code}")
         if c.backoff_level > 0:
             reason.append(f"backoff={c.backoff_level}")
         if state == "ready" and c.backoff_level > 0:
@@ -1016,6 +1097,15 @@ def apply_plan(client: R9Client, config: Config, task: str, policy: str,
             raise
         manifest["applied"] = applied
         manifest["stateAfter"] = state_path_now.read_text(encoding="utf-8") if state_path_now.exists() else None
+
+        # Last mile: propagate new/changed combos to the opencode model catalog
+        # so they appear in the opencode picker. Byte backup lives inside the
+        # manifest dir for rollback; failure is non-fatal (never aborts apply).
+        catalog = refresh_opencode_catalog(client, backup_dir=op_dir)
+        manifest["opencodeCatalogBefore"] = catalog.get("beforeBackup")
+        result["opencodeCatalog"] = catalog
+        manifest["opencodeCatalog"] = catalog
+
         write_private(op_dir / "manifest.json", json.dumps(manifest, indent=2) + "\n")
         result["manifest"] = str(op_dir / "manifest.json")
         result["applied"] = True
@@ -1023,6 +1113,9 @@ def apply_plan(client: R9Client, config: Config, task: str, policy: str,
         result["applied"] = True
         result["manifest"] = None
         result["note"] = "combos already match plan (idempotent)"
+        # Even when combos did not change, the opencode catalog may be stale
+        # relative to the live combo set; reconcile it without a manifest.
+        result["opencodeCatalog"] = refresh_opencode_catalog(client)
 
     save_state(inventory, reco, policy, task, config.weights(policy), result.get("manifest"))
     return result
@@ -1071,11 +1164,26 @@ def rollback(client: R9Client, manifest_path: str, force: bool = False) -> dict:
     if state_before is not None:
         write_private(state_path(), state_before)
 
+    # restore opencode.json bytes (last-mile catalog sync)
+    opencode_restored = False
+    backup = manifest.get("opencodeCatalogBefore")
+    if backup:
+        backup_path = Path(backup)
+        target = opencode_config_path()
+        if backup_path.exists() and target.parent.is_dir():
+            tmp = target.with_name(target.name + ".tmp")
+            tmp.write_bytes(backup_path.read_bytes())
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, target)
+            os.chmod(target, 0o600)
+            opencode_restored = True
+
     return {
         "schemaVersion": SCHEMA_VERSION,
         "manifest": str(path),
         "restoredCombos": list(manifest.get("combos", {}).keys()),
         "stateRestored": state_before is not None,
+        "opencodeCatalogRestored": opencode_restored,
         "force": force,
         "secretsRedacted": True,
     }

@@ -117,11 +117,14 @@ PZ_KODEXBAR_REPO_URL="file:///must-not-be-cloned" \
 [ ! -d "$HOME/.local/share/plasma/plasmoids/org.kde.plasma.kodexbar" ]
 
 step "live plasmoid replacement is blocked when an instance exists"
-mkdir -p "$XDG_CONFIG_HOME"
+mkdir -p "$XDG_CONFIG_HOME" "$WORK/kde-bin"
+printf '#!/bin/sh\nexit 0\n' > "$WORK/kde-bin/kpackagetool6"
+printf '#!/bin/sh\nexit 0\n' > "$WORK/kde-bin/plasmashell"
+chmod +x "$WORK/kde-bin/kpackagetool6" "$WORK/kde-bin/plasmashell"
 printf '[Containments][1][Applets][2]\nplugin=org.kde.plasma.kodexbar\n' \
     > "$XDG_CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc"
 rc=0
-PZ_KODEXBAR_REPO_URL="file:///must-not-be-cloned" \
+PATH="$WORK/kde-bin:$PATH" PZ_KODEXBAR_REPO_URL="file:///must-not-be-cloned" \
     "$ROOT/linux/ai/setup-codexbar.sh" install-plasmoid >/dev/null 2>&1 || rc=$?
 [ "$rc" -ne 0 ]
 rm -f "$XDG_CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc"

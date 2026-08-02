@@ -20,7 +20,7 @@ CATEGORIES = (
     ("Recursos", "preferences-plugin", "Gaming, hardware, saúde e workstation"),
     ("IA & Dev", "applications-development", "Agentes, MCPs e ferramentas"),
     ("Proxies IA", "network-server", "Gateways, proxies OpenAI-compatible e OAuth"),
-    ("Roteamento IA", "network-server", "Rota por tarefa, política e quota do 9Router"),
+    ("Roteamento IA", "network-transmit-receive", "Rotas por tarefa, política e cota"),
     ("Aplicativos", "applications-other", "Web apps, jogos e menus do desktop"),
     ("Ajustes", "preferences-system", "Gaming, navegador e desenvolvimento"),
     ("Resultados", "text-x-log", "Histórico local de operações"),
@@ -504,7 +504,10 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("desktop", "Reparar apps desktop", "Claude/Codex e atualizadores.", ("ai", "desktop", "repair"), ("ai", "desktop", "status")),
         ("compat", "Agent compatibility", "RTK, Caveman, Headroom e memória.", ("ai", "compat", "setup"), ("ai", "compat", "status")),
         ("admin", "Admin bridge", "Instala phasezero-admin/bigsudo.", ("ai", "setup", "admin"), ("ai", "admin", "status")),
-        ("opencode", "Sincronizar OpenCode", "Alinha CLI e desktop.", ("ai", "opencode", "sync"), ("ai", "opencode", "status")),
+        ("opencode-status", "OpenCode + 9Router", "Audita versões, configuração canônica, segredo por arquivo e listener loopback.", ("ai", "opencode", "status"), None),
+        ("opencode-install", "Configurar OpenCode + 9Router", "Mescla configuração e aplica provider local com rollback.", ("ai", "opencode", "install", "--yes"), ("ai", "opencode", "install", "--dry-run")),
+        ("opencode-verify", "Verificar OpenCode + 9Router", "Valida isolamento de segredo e funcionamento da rota.", ("ai", "opencode", "verify"), None),
+        ("opencode", "Alinhar versão OpenCode", "Alinha CLI e desktop.", ("ai", "opencode", "sync"), ("ai", "opencode", "version-status")),
         ("opencode-free", "Modelo free OpenCode", "Corrige 'Interrompido' com modelo free (deepseek-flash).", ("ai", "opencode", "free-model"), ("ai", "opencode", "status")),
         ("omo", "Instalar OMO", "Plugin oh-my-openagent.", ("ai", "omo", "setup"), ("ai", "omo", "status")),
         ("memory", "Instalar ai-memory", "Memória persistente de agentes.", ("ai", "setup", "memory"), ("ai", "status")),
@@ -518,6 +521,10 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("codexbar-repair", "Reparar CodexBar", "Repara CLI/config sem instalar ou atualizar QML no Plasma.", ("ai", "codexbar", "repair"), ("ai", "codexbar", "health")),
         ("ides", "Configurar IDEs", "Integrações de agentes.", ("ai", "setup", "ides"), ("ai", "status")),
         ("mcp-sync", "Sincronizar MCPs", "Sincroniza defaults seguros.", ("ai", "mcp", "sync", "all"), ("ai", "mcp", "status")),
+        ("claude-status", "Claude + Bonsai", "Audita OAuth, rotas isoladas, hooks e conflitos com proxies.", ("ai", "claude", "status"), None),
+        ("claude-install", "Reparar Claude + Bonsai", "Aplica instalação transacional com backup e rollback automático.", ("ai", "claude", "install", "--yes"), ("ai", "claude", "install", "--dry-run")),
+        ("claude-verify", "Verificar rotas Claude", "Valida assinatura, Bonsai e 9Router sem expor credenciais.", ("ai", "claude", "verify"), None),
+        ("claude-bonsai-login", "Login Bonsai", "Inicia autenticação interativa; sessões continuam com consentimento de upload.", ("ai", "claude", "login", "bonsai"), ("ai", "claude", "status")),
         ("9router-status", "Status 9Router", "Serviço, providers, combos e watchdog.", ("ai", "9router", "status"), None),
         ("9router-install", "Instalar 9Router", "Instala gateway local, segredo, serviço e watchdog.", ("ai", "9router", "install"), ("ai", "9router", "status")),
         ("9router-dashboard", "Abrir dashboard 9Router", "Gerencia providers, modelos, combos e chaves no painel local.", ("ai", "9router", "dashboard"), None),
@@ -554,6 +561,52 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             )
         )
 
+    actions.append(
+        _a(
+            "ai.claude-rollback",
+            "IA & Dev",
+            "Rollback Claude + Bonsai",
+            "Restaura arquivos e serviços registrados por um manifesto cc-installer.",
+            ("ai", "claude", "rollback", "{input}"),
+            "edit-undo",
+            mutable=True,
+            preview=("ai", "claude", "status"),
+            input_label="Selecione manifest.json",
+            input_kind="file",
+            badge="Reversível",
+        )
+    )
+    actions.append(
+        _a(
+            "ai.opencode-rollback",
+            "IA & Dev",
+            "Rollback OpenCode + 9Router",
+            "Restaura configurações e referência de segredo registradas no manifesto.",
+            ("ai", "opencode", "rollback", "{input}"),
+            "edit-undo",
+            mutable=True,
+            preview=("ai", "opencode", "status"),
+            input_label="Selecione manifest.json",
+            input_kind="file",
+            badge="Reversível",
+        )
+    )
+    actions.append(
+        _a(
+            "ai.claude-bonsai-run",
+            "IA & Dev",
+            "Executar Claude via Bonsai",
+            "Seleciona projeto revisado; Bonsai pede consentimento e usa autenticação externa isolada.",
+            ("ai", "claude", "run", "bonsai", "--cwd", "{input}"),
+            "system-run",
+            mutable=True,
+            preview=("ai", "claude", "preflight", "bonsai", "--cwd", "{input}"),
+            input_label="Selecione projeto revisado para snapshot/upload",
+            input_kind="path",
+            badge="Upload com consentimento",
+        )
+    )
+
     # Dedicated "Proxies IA" page: lifecycle, OAuth and IDE wiring for the
     # OpenAI-compatible proxy suite (linux/ai/proxy-suite.sh).
     proxy_rows = [
@@ -588,39 +641,6 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 mutable=preview is not None,
                 preview=preview,
                 badge="Preview" if preview else "",
-            )
-        )
-
-    # Dedicated "Roteamento IA" page: per-task routing, policies, quota and
-    # transactional apply/rollback of the phasezero-* combos.
-    routing_rows = [
-        ("routing-status", "Status roteamento", "Saúde do 9Router, modelos e conexões redigidas.", ("ai", "routing", "status", "--json"), None),
-        ("routing-inventory", "Inventário de roteamento", "Refresh de cotas reais por conexão.", ("ai", "routing", "inventory", "--refresh-quota", "--json"), None),
-        ("routing-verify", "Verificar roteamento", "Health, planMatches, userCombos e isolamento Bonsai.", ("ai", "routing", "verify", "--live"), None),
-        ("routing-plan", "Plano de roteamento", "Diff entre combos phasezero-* e o plano por tarefa.", ("ai", "routing", "plan", "--json"), None),
-        ("routing-apply-all", "Aplicar plano de roteamento", "Materializa phasezero-code/analysis/plan transacionalmente.", ("ai", "routing", "apply", "--task", "code", "--yes"), None),
-        ("routing-recommend-code", "Recomendar rota code", "Cadeia recomendada para tarefas de código.", ("ai", "routing", "recommend", "--task", "code", "--policy", "balanced", "--json"), None),
-        ("routing-recommend-analysis", "Recomendar rota analysis", "Cadeia recomendada para análise de código.", ("ai", "routing", "recommend", "--task", "analysis", "--policy", "balanced", "--json"), None),
-        ("routing-recommend-plan", "Recomendar rota plan", "Cadeia recomendada para planejamento.", ("ai", "routing", "recommend", "--task", "plan", "--policy", "balanced", "--json"), None),
-        ("routing-rollback", "Reverter roteamento", "Restaura combos e state byte a byte do último apply.", ("ai", "routing", "rollback", "MANIFEST"), None),
-        ("routing-manifest", "Manifesto de roteamento", "Path do último manifesto de apply.", ("ai", "routing", "status", "--cached", "--json"), None),
-    ]
-    for key, title, description, args, _preview in routing_rows:
-        preview = None
-        if key == "routing-apply-all":
-            preview = ("ai", "routing", "apply", "--task", "code", "--dry-run")
-        elif key == "routing-rollback":
-            preview = ("ai", "routing", "plan", "--json")
-        actions.append(
-            _a(
-                f"ai.{key}",
-                "Roteamento IA",
-                title,
-                description,
-                args,
-                "network-server",
-                mutable="rollback" in key or "apply" in key,
-                preview=preview,
             )
         )
 
@@ -924,6 +944,49 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 result_view="table",
             )
         )
+
+    # Dedicated "Roteamento IA" page: per-task routes driven by 9Router
+    # inventory, quota and policy (linux/ai/routing_manager.py).
+    routing_rows = [
+        ("routing-status", "Status Roteamento IA", "Inventário redigido: saúde, estados e cotas.", ("ai", "routing", "status", "--json"), None),
+        ("routing-inventory", "Atualizar cotas", "Coleta inventário e quota por conexão (estado cacheado).", ("ai", "routing", "inventory", "--refresh-quota", "--json"), None),
+        ("routing-recommend-code", "Recomendar rota — Código", "Cadeia de fallback para escrever código.", ("ai", "routing", "recommend", "--task", "code", "--json"), None),
+        ("routing-recommend-analysis", "Recomendar rota — Análise", "Cadeia de fallback para análise/revisão.", ("ai", "routing", "recommend", "--task", "analysis", "--json"), None),
+        ("routing-recommend-plan", "Recomendar rota — Plano", "Cadeia de fallback para planejamento.", ("ai", "routing", "recommend", "--task", "plan", "--json"), None),
+        ("routing-plan", "Plano da rota (diff)", "Mostra combo alvo e variáveis de ambiente, sem mutar.", ("ai", "routing", "plan", "--task", "code", "--client", "claude"), None),
+        ("routing-apply-all", "Aplicar plano", "Materializa combos phasezero-* transacionalmente (todas as tarefas).", ("ai", "routing", "apply", "--task", "code", "--yes"), ("ai", "routing", "apply", "--task", "code", "--dry-run")),
+        ("routing-verify", "Verificar roteamento", "Valida combos vs plano, redação e isolamento Bonsai.", ("ai", "routing", "verify"), None),
+        ("routing-refresh", "Refresh automático de cotas", "Atualização explícita de quota (scheduler 5–10 min).", ("ai", "routing", "refresh"), None),
+    ]
+    for key, title, description, args, preview in routing_rows:
+        actions.append(
+            _a(
+                f"ai.{key}",
+                "Roteamento IA",
+                title,
+                description,
+                args,
+                "network-transmit-receive",
+                mutable=preview is not None,
+                preview=preview,
+                badge="Preview" if preview else "",
+            )
+        )
+    actions.append(
+        _a(
+            "ai.routing-rollback",
+            "Roteamento IA",
+            "Rollback Roteamento IA",
+            "Restaura combos e estado registrados por um manifesto routing-apply.",
+            ("ai", "routing", "rollback", "{input}"),
+            "edit-undo",
+            mutable=True,
+            preview=("ai", "routing", "verify"),
+            input_label="Selecione manifest.json",
+            input_kind="file",
+            badge="Reversível",
+        )
+    )
 
     validate_catalog(actions)
     selected_platform = current_platform(platform_name)

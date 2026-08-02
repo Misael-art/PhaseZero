@@ -10,7 +10,7 @@ pz_check_deps jq
 MCP_SOURCES="$PZ_ROOT/assets/mcp/servers"
 WORKSPACE_ROOT="${PZ_WORKSPACE_ROOT:-$PZ_ROOT}"
 XDG_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
-OPENCODE_CONFIG="$XDG_CONFIG/opencode/opencode.jsonc"
+OPENCODE_CONFIG="$XDG_CONFIG/opencode/opencode.json"
 CLAUDE_CONFIG="$XDG_CONFIG/claude/claude.json"
 CLAUDE_DESKTOP_CONFIG="$XDG_CONFIG/Claude/claude_desktop_config.json"
 CODEX_CONFIG="${HOME}/.codex/config.toml"

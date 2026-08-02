@@ -520,6 +520,58 @@ def test_rollback_refuses_drift_without_force(fake, config):
     assert after["phasezero-code"] == ["stale-model"]
 
 
+def test_apply_propagates_combos_to_opencode_catalog(fake, config, sandbox, monkeypatch):
+    _fake, base = fake
+    client = _client_for(fake, base)
+    # opencode.json present with stale model list
+    opencode_path = rm.opencode_config_path()
+    opencode_path.parent.mkdir(parents=True, exist_ok=True)
+    opencode_path.write_text(
+        json.dumps({"model": "9router/Default",
+                    "provider": {"9router": {"models": {"Default": {"name": "Default"}}}}}),
+        encoding="utf-8",
+    )
+    # combo set known via env fixture (avoids shelling out to 9router-manager)
+    combo_names = ["Default", "claude-Combo_Cleude", "phasezero-code",
+                   "phasezero-analysis", "phasezero-plan"]
+    monkeypatch.setenv("PZ_OPENCODE_ROUTER_COMBOS_JSON", json.dumps({"combos": combo_names}))
+
+    result = rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
+    catalog = result["opencodeCatalog"]
+    assert catalog["updated"] is True
+    assert set(catalog["models"]) == set(combo_names)
+    written = json.loads(opencode_path.read_text(encoding="utf-8"))
+    assert set(written["provider"]["9router"]["models"].keys()) == set(combo_names)
+    manifest = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
+    assert manifest["opencodeCatalogBefore"]
+
+
+def test_rollback_restores_opencode_catalog_bytes(fake, config, sandbox, monkeypatch):
+    _fake, base = fake
+    client = _client_for(fake, base)
+    opencode_path = rm.opencode_config_path()
+    opencode_path.parent.mkdir(parents=True, exist_ok=True)
+    before_bytes = b'{"model":"9router/Default","provider":{"9router":{"models":{"Default":{"name":"Default"}}}}}\n'
+    opencode_path.write_bytes(before_bytes)
+    monkeypatch.setenv("PZ_OPENCODE_ROUTER_COMBOS_JSON",
+                       json.dumps({"combos": ["Default", "phasezero-code", "phasezero-analysis", "phasezero-plan"]}))
+
+    result = rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
+    assert result["opencodeCatalog"]["updated"] is True
+    assert opencode_path.read_bytes() != before_bytes
+    rb = rm.rollback(client, result["manifest"], force=True)
+    assert rb["opencodeCatalogRestored"] is True
+    assert opencode_path.read_bytes() == before_bytes
+
+
+def test_apply_skips_opencode_sync_when_config_absent(fake, config, sandbox):
+    _fake, base = fake
+    client = _client_for(fake, base)
+    result = rm.apply_plan(client, config, "code", "balanced", assume_yes=True)
+    assert result["opencodeCatalog"]["skipped"] is True
+    assert result["opencodeCatalog"]["reason"] == "opencode.json absent"
+
+
 def test_chain_override_applies_manual_order(fake, config):
     _fake, base = fake
     client = _client_for(fake, base)

@@ -2016,8 +2016,42 @@
       "input_label": ""
     },
     {
+      "name": "ai.opencode-status",
+      "label": "OpenCode + 9Router",
+      "command": "ai opencode status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.opencode-install",
+      "label": "Configurar OpenCode + 9Router",
+      "command": "ai opencode install --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "ai opencode install --dry-run"
+    },
+    {
+      "name": "ai.opencode-verify",
+      "label": "Verificar OpenCode + 9Router",
+      "command": "ai opencode verify",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "ai.opencode",
-      "label": "Sincronizar OpenCode",
+      "label": "Alinhar versão OpenCode",
       "command": "ai opencode sync",
       "mutable": true,
       "require_plan": true,
@@ -2170,6 +2204,64 @@
       "input_label": ""
     },
     {
+      "name": "ai.claude-status",
+      "label": "Claude + Bonsai",
+      "command": "ai claude status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.claude-install",
+      "label": "Reparar Claude + Bonsai",
+      "command": "ai claude install --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "ai claude install --dry-run"
+    },
+    {
+      "name": "ai.claude-verify",
+      "label": "Verificar rotas Claude",
+      "command": "ai claude verify",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.claude-bonsai-login",
+      "label": "Login Bonsai",
+      "command": "ai claude login bonsai",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "ai claude status"
+    },
+    {
+      "name": "ai.claude-bonsai-run",
+      "label": "Executar Claude via Bonsai",
+      "command": "ai claude run bonsai --cwd {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "path",
+      "input_label": "Selecione projeto revisado para snapshot/upload",
+      "plan_command": "ai claude preflight bonsai --cwd {input}"
+    },
+    {
       "name": "ai.9router-status",
       "label": "Status 9Router",
       "command": "ai 9router status",
@@ -2289,6 +2381,30 @@
       "elevated": false,
       "input_kind": "",
       "input_label": ""
+    },
+    {
+      "name": "ai.claude-rollback",
+      "label": "Rollback Claude + Bonsai",
+      "command": "ai claude rollback {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "file",
+      "input_label": "Selecione manifest.json",
+      "plan_command": "ai claude status"
+    },
+    {
+      "name": "ai.opencode-rollback",
+      "label": "Rollback OpenCode + 9Router",
+      "command": "ai opencode rollback {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "file",
+      "input_label": "Selecione manifest.json",
+      "plan_command": "ai opencode status"
     },
     {
       "name": "ai.odysseus-status",
@@ -2687,9 +2803,9 @@
       "input_label": "Caminho do manifesto"
     },
     {
-      "name": "ai.routing-manifest",
-      "label": "Manifesto de roteamento",
-      "command": "ai routing status --cached --json",
+      "name": "ai.routing-refresh",
+      "label": "Refresh automático de cotas",
+      "command": "ai routing refresh",
       "mutable": false,
       "require_plan": false,
       "module": "Roteamento IA",
