@@ -272,6 +272,7 @@ esac
 
 # Source rescue wizard for non-loop exit on missing disk
 PZ_WINDOWS_VM_SESSION_MAX_RETRIES="${PZ_WINDOWS_VM_SESSION_MAX_RETRIES:-3}"
+PZ_WINDOWS_VM_SESSION_STABLE_SECONDS="${PZ_WINDOWS_VM_SESSION_STABLE_SECONDS:-30}"
 # shellcheck disable=SC2015 # cd/pwd fallback: empty dir acceptable when dirname fails
 _RESCUE_SESSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
 for _rescue_sh in \
@@ -296,6 +297,7 @@ fallback_desktop() {
 
 attempt=0
 rescue_attempted=0
+compat_attempted=0
 while :; do
     attempt=$((attempt + 1))
     if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 0 ]; then
@@ -327,10 +329,38 @@ while :; do
     if [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ]; then
         printf '%s launching Windows VM attempt=%s kind=%s command=%s\n' \
             "$(date -Iseconds)" "$attempt" "$LAUNCHER_KIND" "$(launcher_command)"
+        launch_started="$SECONDS"
         set +e
         "$PZ_BIN" "${LAUNCHER_ARGS[@]}"
         rc=$?
         set -e
+        launch_elapsed=$((SECONDS - launch_started))
+        if [ "$rc" -eq 0 ]; then
+            printf '%s Windows VM ended normally after %ss; closing boot session\n' \
+                "$(date -Iseconds)" "$launch_elapsed"
+            exit 0
+        fi
+        if [ "$launch_elapsed" -ge "$PZ_WINDOWS_VM_SESSION_STABLE_SECONDS" ]; then
+            printf '%s Windows VM failed after stable runtime=%ss rc=%s; refusing automatic relaunch\n' \
+                "$(date -Iseconds)" "$launch_elapsed" "$rc"
+            fallback_desktop 1 || true
+            exit "$rc"
+        fi
+        if [ "$compat_attempted" -eq 0 ]; then
+            compat_attempted=1
+            printf '%s accelerated launch failed quickly rc=%s; trying compat once\n' \
+                "$(date -Iseconds)" "$rc"
+            set +e
+            "$PZ_BIN" "${LAUNCHER_ARGS[@]}" --graphics compat
+            compat_rc=$?
+            set -e
+            if [ "$compat_rc" -eq 0 ]; then
+                printf '%s compat Windows VM ended normally; closing boot session\n' "$(date -Iseconds)"
+                exit 0
+            fi
+            printf '%s compat launch failed rc=%s; continuing bounded recovery\n' \
+                "$(date -Iseconds)" "$compat_rc"
+        fi
         printf '%s Windows VM launcher exited rc=%s attempt=%s; retrying in %ss\n' \
             "$(date -Iseconds)" "$rc" "$attempt" "$RETRY_SECONDS"
     else

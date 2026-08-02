@@ -72,7 +72,7 @@ checkpoint_label() {
 
 provision_plan() {
     local iso="" ram="" cpus="" disk_size="256G" lang="pt-BR" keyboard="pt-BR" timezone="America/Sao_Paulo"
-    local user="phasezero" product_key="" tpm_bypass=0 graphics="compat" appx_deny="default"
+    local user="phasezero" product_key="" tpm_bypass=0 graphics="compat" guest_login="auto" appx_deny="default"
     local image_index=1
     local JSON_OUT=0 DRY_RUN=0 AUTO_FIX=0
 
@@ -91,6 +91,7 @@ provision_plan() {
             --product-key) product_key="${2:-}"; shift 2 ;; --product-key=*) product_key="${1#*=}"; shift ;;
             --tpm-bypass) tpm_bypass=1; shift ;;
             --graphics) graphics="${2:-}"; shift 2 ;; --graphics=*) graphics="${1#*=}"; shift ;;
+            --guest-login) guest_login="${2:-}"; shift 2 ;; --guest-login=*) guest_login="${1#*=}"; shift ;;
             --json) JSON_OUT=1; shift ;;
             --auto-fix) AUTO_FIX=1; shift ;;
             -n|--dry-run) DRY_RUN=1; shift ;;
@@ -99,6 +100,7 @@ provision_plan() {
     done
 
     [ -n "$iso" ] || { pz_error "--iso required"; return 1; }
+    case "$guest_login" in auto|password) ;; *) pz_error "--guest-login must be auto or password"; return 1 ;; esac
 
     if [ "$AUTO_FIX" = "1" ]; then
         pz_info "running preflight with auto-fix..."
@@ -201,6 +203,7 @@ provision_plan() {
         --arg timezone "$timezone" \
         --arg user "$user" \
         --arg graphics "$graphics" \
+        --arg guestLogin "$guest_login" \
         --arg virtioSource "$virtio_source" \
         --arg virtioUrl "$virtio_url" \
         --arg virtioSha256 "$virtio_sha_expected" \
@@ -220,6 +223,7 @@ provision_plan() {
             locale: {lang: $lang, keyboard: $keyboard, timezone: $timezone},
             user: $user,
             graphics: $graphics,
+            guestLogin: $guestLogin,
             virtio: {source: $virtioSource, url: $virtioUrl, sha256: $virtioSha256},
             tpmBypass: $tpmBypass,
             profile: "performance-safe",
@@ -840,12 +844,13 @@ run_answer_media() {
     local answer_dir="$vm_dir/oemdrv"
     mkdir -p "$answer_dir"
 
-    local image_index lang keyboard tz user password_xml product_key tpm_bypass
+    local image_index lang keyboard tz user password_xml product_key tpm_bypass guest_login
     image_index="$(jq -r '.imageIndex // 1' "$plan_file")"
     lang="$(jq -r '.locale.lang // "pt-BR"' "$plan_file")"
     keyboard="$(jq -r '.locale.keyboard // "pt-BR"' "$plan_file")"
     tz="$(jq -r '.locale.timezone // "America/Sao_Paulo"' "$plan_file")"
     user="$(jq -r '.user // "phasezero"' "$plan_file")"
+    guest_login="$(jq -r '.guestLogin // "auto"' "$plan_file")"
     password_xml="$(openssl rand -base64 24 2>/dev/null || echo "PhaseZero.Install.$(date +%s)")"
     product_key="$(jq -r '.productKey // ""' "$plan_file")"
     tpm_bypass="$(jq -r '.tpmBypass // false' "$plan_file")"
@@ -869,6 +874,14 @@ run_answer_media() {
     esac
     bash "$PZ_ROOT/linux/windows-vm/autounattend.sh" generate \
         "${autounattend_args[@]}" >/dev/null
+
+    install -m 0600 "$PZ_ROOT/linux/windows-vm/guest-login.ps1" "$answer_dir/guest-login.ps1"
+    # The bootstrap secret already exists in autounattend.xml on this
+    # short-lived OEM media. Keep it off argv/logs and delete the whole staging
+    # tree after provisioning.
+    printf '%s\n%s\n' "$user" "$password_xml" | jq -R -s --arg mode "$guest_login" \
+        'split("\n") | {username:.[0],password:.[1],mode:$mode}' > "$answer_dir/guest-login.json"
+    chmod 0600 "$answer_dir/guest-login.json"
 
     local iso_file="$answer_dir/autounattend.xml"
     [ -f "$iso_file" ] || { log_operation "$op" "FAIL: autounattend.xml not generated"; return 1; }
@@ -981,10 +994,13 @@ exit 1
     Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1 -Type DWord
     Set-Service -Name wuauserv -StartupType Manual -ErrorAction SilentlyContinue
 
-    $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
-    Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '0' -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path $winlogon -Name DefaultPassword -ErrorAction SilentlyContinue
-    Write-Host "PhaseZero: automatic logon secret removed; account password retained"
+    $guestLoginPayload = Join-Path $PSScriptRoot 'guest-login.json'
+    $guestLoginScript = Join-Path $PSScriptRoot 'guest-login.ps1'
+    $guestLoginConfig = Get-Content -LiteralPath $guestLoginPayload -Raw | ConvertFrom-Json
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $guestLoginScript `
+        -Mode $guestLoginConfig.mode -UserName $guestLoginConfig.username -InputPath $guestLoginPayload
+    if ($LASTEXITCODE -ne 0) { throw "PhaseZero guest login policy failed" }
+    Write-Host "PhaseZero: guest login policy applied without registry plaintext password"
 
     $selectedExchange = Get-Content (Join-Path $phaseZeroDir 'exchange-path.txt') -ErrorAction SilentlyContinue | Select-Object -First 1
 
@@ -2563,6 +2579,7 @@ Options:
   --product-key KEY Optional Windows product key
   --tpm-bypass     Bypass TPM/Secure Boot requirements
   --graphics PROFILE Graphics profile (default: compat)
+  --guest-login MODE Windows guest login: auto (default) or password
   --json           JSON output
   -n, --dry-run    Dry run (plan only)
 EOF

@@ -105,6 +105,7 @@ bash -n "$REPO_ROOT/linux/steamdeck/display-session.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+bash -n "$REPO_ROOT/linux/windows-vm/guest-login.sh"
 jq empty "$REPO_ROOT/profiles/windows-vm-linux.json"
 weights=$(grep -oP 'CP_WEIGHTS=\(\K[^)]+' "$REPO_ROOT/linux/windows-vm/provision.sh")
 sum=0; for w in $weights; do sum=$((sum + w)); done
@@ -367,6 +368,31 @@ boot_admin="$(run_wv_unit '
 grep -q '^boot_admin_rc=127' <<< "$boot_admin"
 test ! -s "$PZ_STUB_LOG"
 
+echo "=== launch: caminho real executa QEMU e limpa recursos ==="
+export WV_UNIT_FIXTURE="$TMP_ROOT/post-launch-fixture"
+mkdir -p "$WV_UNIT_FIXTURE"
+: > "$WV_UNIT_FIXTURE/OVMF_CODE.fd"
+: > "$WV_UNIT_FIXTURE/OVMF_VARS.fd"
+: > "$WV_UNIT_FIXTURE/windows.qcow2"
+post_launch="$(run_wv_unit '
+    parse_options() { :; }
+    effective_config() {
+        GRAPHICS_PROFILE=compat; FULLSCREEN=0; LIBVIRT_DOMAIN=""; RAW_QEMU=1
+        OVMF_CODE="$WV_UNIT_FIXTURE/OVMF_CODE.fd"; OVMF_VARS="$WV_UNIT_FIXTURE/OVMF_VARS.fd"
+        DISK_PATH="$WV_UNIT_FIXTURE/windows.qcow2"; SHARE_POLICY=minimal; SPICE_ADDR=127.0.0.1
+    }
+    guard_graphics_profile() { return 0; }
+    apply_host_optimizations() { :; }
+    build_qemu_args() { QEMU_ARGS=(-machine q35); }
+    cleanup_runtime() { printf "cleanup\\n"; }
+    command() { if [ "${1:-}" = -v ] && [ "${2:-}" = ionice ]; then return 1; fi; builtin command "$@"; }
+    qemu-system-x86_64() { printf "qemu %s\\n" "$*"; return 0; }
+    launch_vm
+')"
+grep -q '^qemu -machine q35$' <<< "$post_launch"
+test "$(grep -c '^cleanup$' <<< "$post_launch")" -eq 1
+echo "  QEMU fake exits normally; runtime cleanup executes once"
+
 spice_invariant="$({ grep -c 'addr=' "$REPO_ROOT/linux/windows-vm/windows-vm.sh" || true
                     grep -c 'addr=' "$REPO_ROOT/linux/windows-vm/provision.sh" || true; } | awk '{s+=$1} END {print s+0}')"
 test "$spice_invariant" -ge 2
@@ -390,8 +416,19 @@ grep -q 'target_root: /' <<< "$target_status"
 grep -q 'artifacts_current:' <<< "$target_status"
 boot_json="$("$REPO_ROOT/linux/pz" windows-vm boot status --json 2>/dev/null || echo "")"
 jq -e '.bootLoader == "grub-efi" or .bootLoader == "systemd-boot" or .bootLoader == "grub-bios" or .bootLoader == "efi-stub" or .bootLoader == "refind" or .bootLoader == "none"' <<< "$boot_json" >/dev/null
-jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled")' <<< "$boot_json" >/dev/null
+jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled") and
+       has("artifactsVerification") and .hostLoginPolicy == "auto" and
+       .guestLoginPolicy == "auto" and .guestLoginVerified == false' <<< "$boot_json" >/dev/null
 echo "  boot status --json schema ok"
+
+launch_check_kvm="$TMP_ROOT/fixture-kvm"
+: > "$launch_check_kvm"
+chmod 0666 "$launch_check_kvm"
+launch_check_json="$(PZ_WINDOWS_VM_KVM_PATH="$launch_check_kvm" \
+    "$REPO_ROOT/linux/pz" windows-vm launch-check --graphics compat --json)"
+jq -e '.success == true and .graphicsProfile == "compat" and
+       ([.checks[]] | all)' <<< "$launch_check_json" >/dev/null
+echo "  launch-check validates real launch prerequisites"
 
 # bootReady must be false for an unknown/unsupported loader regardless of host
 # state: loaderEntry resolves to "unknown" and can never confirm readiness.
@@ -469,8 +506,29 @@ runtime_loop_rc=$?
 set -e
 test "$runtime_loop_rc" -eq 124
 test "$(head -n 1 "$runtime_args_file")" = "launch --fullscreen"
+test "$(sed -n '2p' "$runtime_args_file")" = "launch --fullscreen --graphics compat"
 test "$(wc -l < "$runtime_count_file")" -ge 2
 test ! -e "$plasma_marker"
+
+echo "=== Session: encerramento normal não religa a VM ==="
+normal_runtime="$session_bin/windows-vm-normal"
+normal_args="$TMP_ROOT/normal-runtime-args"
+cat > "$normal_runtime" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$PZ_WINDOWS_VM_TEST_ARGS_FILE"
+exit 0
+EOF
+chmod +x "$normal_runtime"
+PATH="$session_bin:/usr/bin:/bin" \
+PZ_WINDOWS_VM_COMPOSITOR=0 \
+PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-normal.env" \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$normal_runtime" \
+PZ_WINDOWS_VM_RESCUE=0 \
+PZ_WINDOWS_VM_TEST_ARGS_FILE="$normal_args" \
+    "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
+test "$(wc -l < "$normal_args")" -eq 1
+test "$(cat "$normal_args")" = "launch --fullscreen"
+echo "  normal QEMU exit closes session after one launch"
 
 set +e
 PATH="$session_bin:/usr/bin:/bin" \
@@ -664,6 +722,7 @@ PATH="$dm_bin:$PATH" \
 PZ_SDDM_CONF_DIR="$sddm_test_dir" \
 PZ_WINDOWS_VM_BOOT_USER=tester \
 PZ_WINDOWS_VM_SKIP_RUNTIME_PREP=1 \
+PZ_WINDOWS_VM_SKIP_LAUNCH_PREFLIGHT=1 \
     "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 grep -q '^User=tester$' "$sddm_test_dir/91-phasezero-windows-vm.conf"
 grep -q '^Session=phasezero-windows-vm.desktop$' "$sddm_test_dir/91-phasezero-windows-vm.conf"
@@ -671,6 +730,7 @@ grep -q '^Relogin=false$' "$sddm_test_dir/91-phasezero-windows-vm.conf"
 grep -Fq 'EnvironmentFile=-$ROOT_ENV_FILE' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -Fq 'PZ_WINDOWS_VM_RUNTIME_DIR=%q' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -Fq 'find "$BOOT_RUNTIME_DIR" -xdev' "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
+grep -Fq 'target_prefix=(runuser -u "$TARGET_USER" --)' "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \
 PATH="$dm_bin:$PATH" \
 PZ_SDDM_CONF_DIR="$sddm_test_dir" \
@@ -678,8 +738,47 @@ PZ_WINDOWS_VM_BOOT_USER=tester \
 PZ_WINDOWS_VM_REQUIRE_LOGIN=1 \
 PZ_WINDOWS_VM_SKIP_TUNING=1 \
 PZ_WINDOWS_VM_SKIP_RUNTIME_PREP=1 \
+PZ_WINDOWS_VM_SKIP_LAUNCH_PREFLIGHT=1 \
     "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 test ! -e "$sddm_test_dir/91-phasezero-windows-vm.conf"
+
+echo "=== boot helper: autologin somente após preflight aprovado ==="
+preflight_runtime="$TMP_ROOT/preflight-runtime"
+cat > "$preflight_runtime" <<'EOF'
+#!/usr/bin/env bash
+if [ "${PZ_TEST_PREFLIGHT_RESULT:-fail}" = pass ]; then
+    printf '%s\n' '{"success":true,"blockers":[]}'
+    exit 0
+fi
+printf '%s\n' '{"success":false,"blockers":["fixture"]}'
+exit 1
+EOF
+chmod +x "$preflight_runtime"
+PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \
+PATH="$dm_bin:$PATH" \
+PZ_SDDM_CONF_DIR="$sddm_test_dir" \
+PZ_WINDOWS_VM_BOOT_USER=tester \
+PZ_WINDOWS_VM_SKIP_TUNING=1 \
+PZ_WINDOWS_VM_SKIP_RUNTIME_PREP=1 \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$preflight_runtime" \
+PZ_TEST_PREFLIGHT_RESULT=pass \
+    "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
+test -f "$sddm_test_dir/91-phasezero-windows-vm.conf"
+set +e
+PZ_BOOT_CMDLINE='quiet phasezero.windowsvm=1' \
+PATH="$dm_bin:$PATH" \
+PZ_SDDM_CONF_DIR="$sddm_test_dir" \
+PZ_WINDOWS_VM_BOOT_USER=tester \
+PZ_WINDOWS_VM_SKIP_TUNING=1 \
+PZ_WINDOWS_VM_SKIP_RUNTIME_PREP=1 \
+PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$preflight_runtime" \
+PZ_TEST_PREFLIGHT_RESULT=fail \
+    "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
+preflight_fail_rc=$?
+set -e
+test "$preflight_fail_rc" -ne 0
+test ! -e "$sddm_test_dir/91-phasezero-windows-vm.conf"
+echo "  failed preflight preserves normal greeter"
 PZ_BOOT_CMDLINE='quiet splash' \
 PATH="$dm_bin:$PATH" \
 PZ_SDDM_CONF_DIR="$sddm_test_dir" \
@@ -910,6 +1009,42 @@ rescue_test_output="$(
 )"
 grep -q 'RESCUE-TEST: vm_rescue_run entered' <<< "$rescue_test_output"
 echo "  vm_rescue_run (test mode): entered"
+
+echo "=== rescue: DISK_PATH ausente não aborta por set -u ==="
+set +e
+printf 'n\n' | bash -c '
+    set -euo pipefail
+    source "$1/linux/windows-vm/rescue.sh"
+    unset DISK_PATH
+    PZ_WINDOWS_VM_BOOT_SESSION=1
+    PZ_WINDOWS_VM_RESCUE=1
+    vm_rescue_should_run() { return 0; }
+    vm_rescue_escape_to_desktop() { return 1; }
+    vm_rescue_run
+' _ "$REPO_ROOT" >/dev/null 2>&1
+rescue_unset_rc=$?
+set -e
+test "$rescue_unset_rc" -eq 1
+echo "  rescue degrades without unbound variable"
+
+echo "=== guest login: LSA secret and QGA transport invariants ==="
+grep -Fq "PhaseZeroLsa]::Store('DefaultPassword'" "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'Remove-ItemProperty -Path $winlogon -Name DefaultPassword' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq ".psbase.Invoke('SetPassword'" "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+if grep -Eq 'Set-ItemProperty.*DefaultPassword' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"; then
+    echo "guest login helper stores password in registry" >&2
+    exit 1
+fi
+grep -Fq '"input-data"' "$REPO_ROOT/linux/windows-vm/guest-login.sh"
+if grep -Eq -- '--arg (password|secret)' "$REPO_ROOT/linux/windows-vm/guest-login.sh"; then
+    echo "guest login helper exposes secret through jq argv" >&2
+    exit 1
+fi
+grep -Fq 'unsafe TPM restore target refused' "$REPO_ROOT/linux/windows-vm/guest-login.sh"
+grep -Fq 'exchangeMapped' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'Resolve-DnsName' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'Win32_SoundDevice' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+echo "  guest secret never uses registry plaintext or argv"
 
 # vm_rescue_escape_to_desktop in test mode (non-destructive)
 escape_test_output="$(

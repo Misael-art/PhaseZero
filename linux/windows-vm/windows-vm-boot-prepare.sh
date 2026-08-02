@@ -89,6 +89,43 @@ prepare_runtime_resources() {
     fi
 }
 
+runtime_launch_preflight() {
+    if [ "${PZ_WINDOWS_VM_SKIP_LAUNCH_PREFLIGHT:-0}" = "1" ]; then
+        log "runtime launch preflight skipped by explicit test override"
+        return 0
+    fi
+    if [ ! -x "$RUNTIME_LAUNCHER" ]; then
+        log "ERROR: runtime launch preflight unavailable: $RUNTIME_LAUNCHER"
+        return 1
+    fi
+    local result="" rc=0
+    local -a target_prefix=()
+    if [ "$EUID" -eq 0 ] && [ -n "$TARGET_UID" ] && [ "$TARGET_UID" != "0" ]; then
+        command -v runuser >/dev/null 2>&1 || {
+            log "ERROR: runuser unavailable; cannot verify launcher as $TARGET_USER"
+            return 1
+        }
+        target_prefix=(runuser -u "$TARGET_USER" --)
+    fi
+    result="$("${target_prefix[@]}" env \
+        HOME="$TARGET_HOME" \
+        USER="$TARGET_USER" \
+        PZ_TARGET_USER="$TARGET_USER" \
+        PZ_WINDOWS_VM_BOOT_SESSION=1 \
+        PZ_WINDOWS_VM_RUNTIME_DIR="$BOOT_RUNTIME_DIR" \
+        XDG_RUNTIME_DIR="$BOOT_RUNTIME_DIR" \
+        XDG_CONFIG_HOME="$TARGET_HOME/.config" \
+        XDG_STATE_HOME="$TARGET_HOME/.local/state" \
+        "$RUNTIME_LAUNCHER" launch-check --raw-qemu --json 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ] || ! printf '%s\n' "$result" | jq -e '.success == true' >/dev/null 2>&1; then
+        local blockers
+        blockers="$(printf '%s\n' "$result" | jq -r '.blockers[]?' 2>/dev/null | paste -sd ';' - || true)"
+        log "ERROR: runtime launch preflight failed${blockers:+: $blockers}"
+        return 1
+    fi
+    log "runtime launch preflight passed"
+}
+
 detect_display_manager() {
     local dm_service dm_bin
     dm_service="$(systemctl list-units --type=service --state=running 2>/dev/null | awk '$1 ~ /display-manager/ {print $1; exit}' || true)"
@@ -295,6 +332,19 @@ remove_greetd_autologin() {
 if printf '%s\n' "$CMDLINE" | grep -qw 'phasezero.windowsvm=1'; then
     current_dm="$(detect_display_manager)"
     log "detected display manager: $current_dm"
+    # Prepare and validate everything before enabling automatic login. If the
+    # runtime cannot launch, leave the normal greeter visible instead of
+    # entering a compositor that can only show a black screen.
+    apply_vm_tuning
+    prepare_runtime_resources
+    if ! runtime_launch_preflight; then
+        remove_sddm_autologin
+        remove_gdm_autologin
+        remove_lightdm_autologin
+        remove_lxdm_autologin
+        remove_greetd_autologin
+        exit 1
+    fi
     if [ "$REQUIRE_LOGIN" = "1" ]; then
         remove_sddm_autologin
         remove_gdm_autologin
@@ -332,10 +382,6 @@ if printf '%s\n' "$CMDLINE" | grep -qw 'phasezero.windowsvm=1'; then
                 ;;
         esac
     fi
-    # Autologin is the critical path. Optional tuning/share setup runs only
-    # after the display-manager configuration is safely present.
-    apply_vm_tuning
-    prepare_runtime_resources
     # Remove any managed SteamOS/Waydroid blocks
     conf_dir="${PZ_SDDM_CONF_DIR:-/etc/sddm.conf.d}"
     for f in "$conf_dir/90-phasezero-steamos.conf" "$conf_dir/92-phasezero-waydroid.conf"; do

@@ -200,6 +200,8 @@ Usage:
   pz ai 9router status         Managed smart router health, providers and combos
   pz ai 9router install        Install 9Router, loopback service and watchdog
   pz ai 9router dashboard      Open local 9Router dashboard
+  pz ai 9router tui            Attach to existing service without restarting it
+  pz ai 9router repair         Migrate stable units and verify watchdog
   pz ai 9router provider ...   Provider status, secret sync and removal
   pz ai 9router combo ...      List, create, sync or switch fallback combos
    pz ai 9router usage          Usage, latency and fallback telemetry

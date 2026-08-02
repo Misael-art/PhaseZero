@@ -3,7 +3,7 @@
     {
       "name": "system.doctor",
       "label": "Diagnóstico completo",
-      "command": "doctor",
+      "command": "linux/pz doctor",
       "mutable": false,
       "require_plan": false,
       "module": "Visão geral",
@@ -14,7 +14,7 @@
     {
       "name": "system.repair-plan",
       "label": "Plano de reparo",
-      "command": "repair-plan",
+      "command": "linux/pz repair-plan",
       "mutable": false,
       "require_plan": false,
       "module": "Visão geral",
@@ -25,18 +25,19 @@
     {
       "name": "system.support-bundle",
       "label": "Bundle de suporte",
-      "command": "support-bundle",
+      "command": "linux/pz support-bundle",
       "mutable": true,
       "require_plan": true,
       "module": "Visão geral",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz doctor"
     },
     {
       "name": "system.version",
       "label": "Versão PhaseZero",
-      "command": "version",
+      "command": "linux/pz version",
       "mutable": false,
       "require_plan": false,
       "module": "Visão geral",
@@ -47,7 +48,7 @@
     {
       "name": "system.installation.status",
       "label": "Canais instalados",
-      "command": "installation status",
+      "command": "linux/pz installation status",
       "mutable": false,
       "require_plan": false,
       "module": "Visão geral",
@@ -58,29 +59,31 @@
     {
       "name": "system.installation.converge",
       "label": "Convergir instalação",
-      "command": "installation apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz installation apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Visão geral",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz installation plan --channel user"
     },
     {
       "name": "system.installation.prune",
       "label": "Aplicar retenção",
-      "command": "installation prune",
+      "command": "linux/pz installation prune",
       "mutable": true,
       "require_plan": true,
       "module": "Visão geral",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz installation status"
     },
     {
       "name": "system.self-update.check",
       "label": "Verificar atualização",
-      "command": "self-update check",
+      "command": "linux/pz self-update check",
       "mutable": false,
       "require_plan": false,
       "module": "Visão geral",
@@ -91,183 +94,199 @@
     {
       "name": "system.self-update.apply",
       "label": "Atualizar PhaseZero",
-      "command": "self-update apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz self-update apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Visão geral",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz self-update plan"
     },
     {
       "name": "profile.dev-ai",
       "label": "Dev + IA",
-      "command": "install dev-ai",
+      "command": "linux/pz install dev-ai",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install dev-ai --dry-run"
     },
     {
       "name": "profile.emulation-linux",
       "label": "Emulação Linux",
-      "command": "install emulation-linux",
+      "command": "linux/pz install emulation-linux",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install emulation-linux --dry-run"
     },
     {
       "name": "profile.full-workstation",
       "label": "Workstation completa",
-      "command": "install full-workstation",
+      "command": "linux/pz install full-workstation",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install full-workstation --dry-run"
     },
     {
       "name": "profile.gaming",
       "label": "Gaming",
-      "command": "install gaming",
+      "command": "linux/pz install gaming",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install gaming --dry-run"
     },
     {
       "name": "profile.homelab",
       "label": "Homelab",
-      "command": "install homelab",
+      "command": "linux/pz install homelab",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install homelab --dry-run"
     },
     {
       "name": "profile.safe-base",
       "label": "Base segura",
-      "command": "install safe-base",
+      "command": "linux/pz install safe-base",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install safe-base --dry-run"
     },
     {
       "name": "profile.server-homelab-hermes",
       "label": "Homelab + Hermes",
-      "command": "install server-homelab-hermes",
+      "command": "linux/pz install server-homelab-hermes",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install server-homelab-hermes --dry-run"
     },
     {
       "name": "profile.server-homelab",
       "label": "Servidor Homelab",
-      "command": "install server-homelab",
+      "command": "linux/pz install server-homelab",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install server-homelab --dry-run"
     },
     {
       "name": "profile.server-llm-hermes",
       "label": "LLM + Hermes",
-      "command": "install server-llm-hermes",
+      "command": "linux/pz install server-llm-hermes",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install server-llm-hermes --dry-run"
     },
     {
       "name": "profile.server-llm-homelab-hermes",
       "label": "Servidor completo",
-      "command": "install server-llm-homelab-hermes",
+      "command": "linux/pz install server-llm-homelab-hermes",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install server-llm-homelab-hermes --dry-run"
     },
     {
       "name": "profile.server-llm-homelab",
       "label": "LLM + Homelab",
-      "command": "install server-llm-homelab",
+      "command": "linux/pz install server-llm-homelab",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install server-llm-homelab --dry-run"
     },
     {
       "name": "profile.server-llm",
       "label": "Servidor LLM",
-      "command": "install server-llm",
+      "command": "linux/pz install server-llm",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install server-llm --dry-run"
     },
     {
       "name": "profile.steamdeck-linux",
       "label": "Steam Deck Linux",
-      "command": "install steamdeck-linux",
+      "command": "linux/pz install steamdeck-linux",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install steamdeck-linux --dry-run"
     },
     {
       "name": "profile.waydroid-linux",
       "label": "Waydroid Linux",
-      "command": "install waydroid-linux",
+      "command": "linux/pz install waydroid-linux",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install waydroid-linux --dry-run"
     },
     {
       "name": "profile.windows-vm-linux",
       "label": "Windows VM",
-      "command": "install windows-vm-linux",
+      "command": "linux/pz install windows-vm-linux",
       "mutable": true,
       "require_plan": true,
       "module": "Perfis",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz install windows-vm-linux --dry-run"
     },
     {
       "name": "steamdeck.status",
       "label": "Status geral",
-      "command": "steamdeck status",
+      "command": "linux/pz steamdeck status",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -278,7 +297,7 @@
     {
       "name": "steamdeck.detect",
       "label": "Detectar modo",
-      "command": "steamdeck detect",
+      "command": "linux/pz steamdeck detect",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -289,150 +308,163 @@
     {
       "name": "steamdeck.handheld",
       "label": "Modo portátil",
-      "command": "steamdeck handheld",
+      "command": "linux/pz steamdeck handheld",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck detect"
     },
     {
       "name": "steamdeck.docked-tv",
       "label": "Dock TV",
-      "command": "steamdeck docked-tv",
+      "command": "linux/pz steamdeck docked-tv",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck detect"
     },
     {
       "name": "steamdeck.docked-monitor",
       "label": "Dock monitor",
-      "command": "steamdeck docked-monitor",
+      "command": "linux/pz steamdeck docked-monitor",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck detect"
     },
     {
       "name": "steamdeck.keyboard.toggle",
       "label": "Teclado virtual",
-      "command": "steamdeck keyboard",
+      "command": "linux/pz steamdeck keyboard",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck keyboard status"
     },
     {
       "name": "steamdeck.keyboard.repair",
       "label": "Reparar teclado",
-      "command": "steamdeck keyboard repair",
+      "command": "linux/pz steamdeck keyboard repair",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck keyboard status"
     },
     {
       "name": "steamdeck.console",
       "label": "Abrir console",
-      "command": "steamdeck console auto",
+      "command": "linux/pz steamdeck console auto",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck status"
     },
     {
       "name": "steamdeck.desktop",
       "label": "Abrir desktop",
-      "command": "steamdeck dev docked-monitor",
+      "command": "linux/pz steamdeck dev docked-monitor",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck status"
     },
     {
       "name": "steamdeck.hotkeys",
       "label": "Instalar hotkeys",
-      "command": "steamdeck hotkeys install",
+      "command": "linux/pz steamdeck hotkeys install",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck status"
     },
     {
       "name": "steamdeck.watcher",
       "label": "Instalar watcher",
-      "command": "steamdeck watcher install",
+      "command": "linux/pz steamdeck watcher install",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck status"
     },
     {
       "name": "steamdeck.privileged",
       "label": "Controles privilegiados",
-      "command": "steamdeck privileged install",
+      "command": "linux/pz steamdeck privileged install",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck privileged status"
     },
     {
       "name": "steamdeck.boot",
       "label": "Boot SteamOS",
-      "command": "steamdeck boot install",
+      "command": "linux/pz steamdeck boot install",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck boot status"
     },
     {
       "name": "steamdeck.plugins",
       "label": "Instalar Decky",
-      "command": "steamdeck plugins install",
+      "command": "linux/pz steamdeck plugins install",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck plugins status"
     },
     {
       "name": "steamdeck.plugins.repair",
       "label": "Reparar Decky",
-      "command": "steamdeck plugins repair",
+      "command": "linux/pz steamdeck plugins repair",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck plugins status"
     },
     {
       "name": "steamdeck.launch-options",
       "label": "Launch options",
-      "command": "steamdeck launch-options",
+      "command": "linux/pz steamdeck launch-options",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -443,7 +475,7 @@
     {
       "name": "steamdeck.runtime",
       "label": "Diagnóstico runtime",
-      "command": "steamdeck runtime-diagnose",
+      "command": "linux/pz steamdeck runtime-diagnose",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -454,29 +486,31 @@
     {
       "name": "steamdeck.removable",
       "label": "Montar removíveis",
-      "command": "steamdeck removable install",
+      "command": "linux/pz steamdeck removable install",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck removable status"
     },
     {
       "name": "steamdeck.display",
       "label": "Detectar display",
-      "command": "steamdeck display detect",
+      "command": "linux/pz steamdeck display detect",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck display status"
     },
     {
       "name": "windows.status",
       "label": "Status Windows VM",
-      "command": "windows-vm status",
+      "command": "linux/pz windows-vm status",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -487,7 +521,7 @@
     {
       "name": "windows.discover",
       "label": "Descobrir instalações",
-      "command": "windows-vm discover --json",
+      "command": "linux/pz windows-vm discover --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -498,7 +532,7 @@
     {
       "name": "windows.plan",
       "label": "Planejar instalação",
-      "command": "windows-vm plan --iso {input}",
+      "command": "linux/pz windows-vm plan --iso {input}",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -509,51 +543,55 @@
     {
       "name": "windows.install",
       "label": "Instalar Windows VM",
-      "command": "windows-vm install --iso {input}",
+      "command": "linux/pz windows-vm install --iso {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "file",
-      "input_label": "Selecione ISO do Windows"
+      "input_label": "Selecione ISO do Windows",
+      "plan_command": "linux/pz windows-vm plan --iso {input}"
     },
     {
       "name": "windows.adopt",
       "label": "Adotar disco Windows",
-      "command": "windows-vm adopt --disk {input}",
+      "command": "linux/pz windows-vm adopt --disk {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "file",
-      "input_label": "Selecione disco qcow2/raw"
+      "input_label": "Selecione disco qcow2/raw",
+      "plan_command": "linux/pz windows-vm discover --json"
     },
     {
       "name": "windows.optimize",
       "label": "Otimizar host",
-      "command": "windows-vm optimize",
+      "command": "linux/pz windows-vm optimize",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm status"
     },
     {
       "name": "windows.launch",
       "label": "Abrir Windows",
-      "command": "windows-vm launch --fullscreen",
+      "command": "linux/pz windows-vm launch --fullscreen",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm status"
     },
     {
       "name": "windows.graphics.doctor",
       "label": "Diagnóstico gráfico",
-      "command": "windows-vm graphics doctor --json",
+      "command": "linux/pz windows-vm graphics doctor --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -564,7 +602,7 @@
     {
       "name": "windows.graphics.status",
       "label": "GPU status",
-      "command": "windows-vm graphics status --json",
+      "command": "linux/pz windows-vm graphics status --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -575,7 +613,7 @@
     {
       "name": "windows.graphics.plan-gl",
       "label": "Plano VirtIO GL",
-      "command": "windows-vm graphics plan --profile virtio-gl --json",
+      "command": "linux/pz windows-vm graphics plan --profile virtio-gl --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -586,7 +624,7 @@
     {
       "name": "windows.graphics.test-gl",
       "label": "Validar comando GL",
-      "command": "windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental --no-optimize",
+      "command": "linux/pz windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental --no-optimize",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -597,7 +635,7 @@
     {
       "name": "windows.graphics.plan-venus",
       "label": "Plano Venus (experimental)",
-      "command": "windows-vm graphics plan --profile virtio-venus --json",
+      "command": "linux/pz windows-vm graphics plan --profile virtio-venus --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -608,7 +646,7 @@
     {
       "name": "windows.graphics.plan-vfio",
       "label": "Plano VFIO",
-      "command": "windows-vm graphics plan --profile vfio-looking-glass --pci-devices {input} --json",
+      "command": "linux/pz windows-vm graphics plan --profile vfio-looking-glass --pci-devices {input} --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -619,18 +657,19 @@
     {
       "name": "windows.graphics.compat",
       "label": "Restaurar gráfico compatível",
-      "command": "windows-vm graphics apply --profile compat",
+      "command": "linux/pz windows-vm graphics apply --profile compat",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm graphics plan --profile compat --json"
     },
     {
       "name": "windows.graphics.runtime-status",
       "label": "Status do runtime gráfico",
-      "command": "windows-vm graphics runtime status --json",
+      "command": "linux/pz windows-vm graphics runtime status --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -641,29 +680,31 @@
     {
       "name": "windows.graphics.runtime-install",
       "label": "Atualizar runtime gráfico",
-      "command": "windows-vm graphics runtime install --json",
+      "command": "linux/pz windows-vm graphics runtime install --json",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm graphics runtime install --dry-run --json"
     },
     {
       "name": "windows.graphics.runtime-rollback",
       "label": "Reverter runtime gráfico",
-      "command": "windows-vm graphics runtime rollback --backup latest --json",
+      "command": "linux/pz windows-vm graphics runtime rollback --backup latest --json",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm graphics runtime rollback --backup latest --dry-run --json"
     },
     {
       "name": "windows.graphics.guest-guide",
       "label": "Guia guest",
-      "command": "windows-vm graphics guest-guide",
+      "command": "linux/pz windows-vm graphics guest-guide",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -674,7 +715,7 @@
     {
       "name": "windows.apps.status",
       "label": "Status WinBoat/WinPodX",
-      "command": "windows-vm apps status",
+      "command": "linux/pz windows-vm apps status",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -685,29 +726,31 @@
     {
       "name": "windows.apps.setup",
       "label": "Instalar WinBoat + WinPodX",
-      "command": "windows-vm apps setup",
+      "command": "linux/pz windows-vm apps setup",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm apps status"
     },
     {
       "name": "windows.apps.configure",
       "label": "Configurar Podman Windows",
-      "command": "windows-vm apps configure",
+      "command": "linux/pz windows-vm apps configure",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm apps status"
     },
     {
       "name": "windows.boot.status-json",
       "label": "Boot status (JSON)",
-      "command": "windows-vm boot status --json",
+      "command": "linux/pz windows-vm boot status --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -718,29 +761,31 @@
     {
       "name": "windows.boot.install",
       "label": "Instalar boot direto",
-      "command": "windows-vm boot install",
+      "command": "linux/pz windows-vm boot install",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm boot status"
     },
     {
       "name": "windows.boot.next",
       "label": "Próximo boot Windows",
-      "command": "windows-vm boot next-reboot",
+      "command": "linux/pz windows-vm boot next-reboot",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm boot status"
     },
     {
       "name": "windows.media.inspect",
       "label": "Inspecionar ISO",
-      "command": "windows-vm media inspect --iso {input}",
+      "command": "linux/pz windows-vm media inspect --iso {input}",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -751,16 +796,18 @@
     {
       "name": "windows.provision.preflight",
       "label": "Pré-verificação do host",
-      "command": "windows-vm preflight --json",
+      "command": "linux/pz windows-vm preflight --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
-      "elevated": false
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
     },
     {
       "name": "windows.provision.plan",
       "label": "Planejar instalação automática",
-      "command": "windows-vm provision plan --iso {input} --image-index {image_index} --graphics {graphics} --json",
+      "command": "linux/pz windows-vm provision plan --iso {input} --image-index {image_index} --graphics {graphics} --guest-login {guest_login} --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -771,18 +818,19 @@
     {
       "name": "windows.provision.start",
       "label": "Instalar e otimizar Windows",
-      "command": "windows-vm provision start --plan-id {plan_id} --confirm {confirm} --json",
+      "command": "linux/pz windows-vm provision start --plan-id {plan_id} --confirm {confirm} --json",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm provision plan --iso {input} --json"
     },
     {
       "name": "windows.provision.status",
       "label": "Status da instalação",
-      "command": "windows-vm provision status --operation-id {operation_id} --json",
+      "command": "linux/pz windows-vm provision status --operation-id {operation_id} --json",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -793,7 +841,7 @@
     {
       "name": "windows.provision.watch",
       "label": "Acompanhar instalação",
-      "command": "windows-vm provision watch --operation-id {operation_id}",
+      "command": "linux/pz windows-vm provision watch --operation-id {operation_id}",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -804,55 +852,55 @@
     {
       "name": "windows.provision.resume",
       "label": "Retomar instalação",
-      "command": "windows-vm provision resume --operation-id {operation_id}",
+      "command": "linux/pz windows-vm provision resume --operation-id {operation_id}",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm provision status --operation-id {operation_id} --json"
     },
     {
       "name": "windows.provision.cancel",
       "label": "Cancelar instalação",
-      "command": "windows-vm provision cancel --operation-id {operation_id}",
+      "command": "linux/pz windows-vm provision cancel --operation-id {operation_id}",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm provision status --operation-id {operation_id} --json"
     },
     {
       "name": "windows.provision.discard",
       "label": "Descartar instalação",
-      "command": "windows-vm provision cancel --operation-id {operation_id} --remove-staging",
+      "command": "linux/pz windows-vm provision cancel --operation-id {operation_id} --remove-staging",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm provision status --operation-id {operation_id} --json"
     },
     {
       "name": "windows.provision.player",
       "label": "Preparar Windows e reiniciar",
-      "command": "--internal-player",
+      "command": "linux/pz --internal-player",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
-      "elevated": true,
+      "elevated": false,
       "input_kind": "file",
       "input_label": "Selecione ISO do Windows",
-      "parameters": [
-        {"name": "graphics", "label": "Aceleração gráfica", "kind": "choice", "choices": ["compat", "virtio-gl", "virtio-venus", "rutabaga", "vfio-looking-glass", "custom"], "placeholder": "compat"},
-        {"name": "image_index", "label": "Índice da edição Windows", "kind": "text", "placeholder": "1"}
-      ]
+      "plan_command": "linux/pz windows-vm provision plan --iso {input} --guest-login {guest_login} --json"
     },
     {
       "name": "waydroid.status",
       "label": "Status Waydroid",
-      "command": "waydroid status --json",
+      "command": "linux/pz waydroid status --json",
       "mutable": false,
       "require_plan": false,
       "module": "Waydroid",
@@ -863,7 +911,7 @@
     {
       "name": "waydroid.plan",
       "label": "Plano Waydroid",
-      "command": "waydroid plan",
+      "command": "linux/pz waydroid plan",
       "mutable": false,
       "require_plan": false,
       "module": "Waydroid",
@@ -874,84 +922,91 @@
     {
       "name": "waydroid.install",
       "label": "Instalar Waydroid",
-      "command": "waydroid install",
+      "command": "linux/pz waydroid install",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz waydroid plan"
     },
     {
       "name": "waydroid.repair",
       "label": "Reparar Waydroid",
-      "command": "waydroid repair",
+      "command": "linux/pz waydroid repair",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz waydroid plan"
     },
     {
       "name": "waydroid.launch",
       "label": "Abrir Waydroid",
-      "command": "waydroid launch",
+      "command": "linux/pz waydroid launch",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz waydroid status --json"
     },
     {
       "name": "waydroid.boot.install",
       "label": "Instalar boot direto",
-      "command": "waydroid boot install",
+      "command": "linux/pz waydroid boot install",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz waydroid boot status"
     },
     {
       "name": "waydroid.boot.next",
       "label": "Próximo boot Android",
-      "command": "waydroid boot next-reboot",
+      "command": "linux/pz waydroid boot next-reboot",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz waydroid boot status"
     },
     {
       "name": "waydroid.host-access",
       "label": "Acesso host → Android",
-      "command": "waydroid host-access link",
+      "command": "linux/pz waydroid host-access link",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz waydroid host-access status"
     },
     {
       "name": "windows.host-access",
       "label": "Acesso host → disco VM",
-      "command": "windows-vm host-access mount",
+      "command": "linux/pz windows-vm host-access mount",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm host-access status"
     },
     {
       "name": "server.status",
       "label": "Status servidor",
-      "command": "server status",
+      "command": "linux/pz server status",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -962,18 +1017,19 @@
     {
       "name": "server.llm",
       "label": "Instalar LLM local",
-      "command": "server llm install",
+      "command": "linux/pz server llm install",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server llm status"
     },
     {
       "name": "server.homelab.status",
       "label": "Status Homelab",
-      "command": "server homelab status --json",
+      "command": "linux/pz server homelab status --json",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -984,7 +1040,7 @@
     {
       "name": "server.homelab.plan",
       "label": "Plano Homelab",
-      "command": "server homelab plan",
+      "command": "linux/pz server homelab plan",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -995,62 +1051,67 @@
     {
       "name": "server.homelab.repair",
       "label": "Preparar Homelab",
-      "command": "server homelab repair",
+      "command": "linux/pz server homelab repair",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server homelab plan"
     },
     {
       "name": "server.homelab.up",
       "label": "Subir homelab local",
-      "command": "server homelab up --access local",
+      "command": "linux/pz server homelab up --access local",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server homelab plan --access local"
     },
     {
       "name": "server.homelab.up-tailscale",
       "label": "Subir via Tailscale",
-      "command": "server homelab up --access tailscale",
+      "command": "linux/pz server homelab up --access tailscale",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server homelab plan --access tailscale"
     },
     {
       "name": "server.homelab.up-extras",
       "label": "Subir extras Homelab",
-      "command": "server homelab up --extras --access tailscale",
+      "command": "linux/pz server homelab up --extras --access tailscale",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server homelab plan --extras --access tailscale"
     },
     {
       "name": "server.homelab.down",
       "label": "Parar homelab",
-      "command": "server homelab down",
+      "command": "linux/pz server homelab down",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server homelab status"
     },
     {
       "name": "server.homelab.open-portainer",
       "label": "Abrir Portainer",
-      "command": "server homelab open portainer",
+      "command": "linux/pz server homelab open portainer",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -1061,7 +1122,7 @@
     {
       "name": "server.homelab.open-jellyfin",
       "label": "Abrir Jellyfin",
-      "command": "server homelab open jellyfin",
+      "command": "linux/pz server homelab open jellyfin",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -1072,7 +1133,7 @@
     {
       "name": "server.homelab.open-vaultwarden",
       "label": "Abrir Vaultwarden",
-      "command": "server homelab open vaultwarden",
+      "command": "linux/pz server homelab open vaultwarden",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -1083,7 +1144,7 @@
     {
       "name": "server.homelab.open-kuma",
       "label": "Abrir Uptime Kuma",
-      "command": "server homelab open uptime-kuma",
+      "command": "linux/pz server homelab open uptime-kuma",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -1094,7 +1155,7 @@
     {
       "name": "server.homelab.logs",
       "label": "Logs Portainer",
-      "command": "server homelab logs portainer",
+      "command": "linux/pz server homelab logs portainer",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -1105,51 +1166,55 @@
     {
       "name": "server.homelab.backup",
       "label": "Backup Homelab",
-      "command": "server homelab backup",
+      "command": "linux/pz server homelab backup",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server homelab backup --dry-run"
     },
     {
       "name": "server.homelab.restore",
       "label": "Restaurar Homelab",
-      "command": "server homelab restore --source {input} --yes",
+      "command": "linux/pz server homelab restore --source {input} --yes",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "path",
-      "input_label": "Selecione pasta de backup Homelab"
+      "input_label": "Selecione pasta de backup Homelab",
+      "plan_command": "linux/pz server homelab restore --source {input} --dry-run"
     },
     {
       "name": "server.homelab.update",
       "label": "Atualizar Homelab",
-      "command": "server homelab update",
+      "command": "linux/pz server homelab update",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server homelab update --dry-run"
     },
     {
       "name": "server.homelab.tailscale",
       "label": "Autenticar Tailscale",
-      "command": "server homelab tailscale",
+      "command": "linux/pz server homelab tailscale",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server homelab plan --access tailscale"
     },
     {
       "name": "server.casaos.status",
       "label": "Status CasaOS",
-      "command": "server casaos status",
+      "command": "linux/pz server casaos status",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -1160,7 +1225,7 @@
     {
       "name": "server.casaos.plan",
       "label": "Plano CasaOS",
-      "command": "server casaos plan",
+      "command": "linux/pz server casaos plan",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -1171,73 +1236,79 @@
     {
       "name": "server.casaos.install",
       "label": "Instalar CasaOS",
-      "command": "server casaos install --yes",
+      "command": "linux/pz server casaos install --yes",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server casaos plan"
     },
     {
       "name": "server.hermes",
       "label": "Configurar Hermes",
-      "command": "server hermes setup",
+      "command": "linux/pz server hermes setup",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server hermes status"
     },
     {
       "name": "server.slim",
       "label": "Enxugar SO",
-      "command": "server slim apply",
+      "command": "linux/pz server slim apply",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server slim status"
     },
     {
       "name": "server.slim.restore",
       "label": "Reverter enxugamento",
-      "command": "server slim restore",
+      "command": "linux/pz server slim restore",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server slim status"
     },
     {
       "name": "server.boot.install",
       "label": "Instalar boot Homelab",
-      "command": "server boot install --llm --homelab",
+      "command": "linux/pz server boot install --llm --homelab",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server boot dry-run --llm --homelab"
     },
     {
       "name": "server.boot.next",
       "label": "Próximo boot Homelab",
-      "command": "server boot next-reboot",
+      "command": "linux/pz server boot next-reboot",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server boot status"
     },
     {
       "name": "emulation.status",
       "label": "Status emulação",
-      "command": "emulation status",
+      "command": "linux/pz emulation status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -1248,293 +1319,319 @@
     {
       "name": "emulation.setup",
       "label": "Setup completo",
-      "command": "emulation setup install",
+      "command": "linux/pz emulation setup install",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation setup dry-run"
     },
     {
       "name": "emulation.layout",
       "label": "Criar layout",
-      "command": "emulation layout",
+      "command": "linux/pz emulation layout",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation status"
     },
     {
       "name": "emulation.emudeck",
       "label": "Instalar EmuDeck",
-      "command": "emulation emudeck install",
+      "command": "linux/pz emulation emudeck install",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation emudeck dry-run"
     },
     {
       "name": "emulation.eden",
       "label": "Instalar Eden",
-      "command": "emulation eden install",
+      "command": "linux/pz emulation eden install",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation eden dry-run"
     },
     {
       "name": "emulation.citron",
       "label": "Instalar Citron",
-      "command": "emulation citron install",
+      "command": "linux/pz emulation citron install",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation citron dry-run"
     },
     {
       "name": "emulation.hydra",
       "label": "Instalar Hydra",
-      "command": "emulation hydra install",
+      "command": "linux/pz emulation hydra install",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation hydra dry-run"
     },
     {
       "name": "emulation.srm",
       "label": "Configurar SRM",
-      "command": "emulation srm configure",
+      "command": "linux/pz emulation srm configure",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation srm dry-run"
     },
     {
       "name": "emulation.retrodeck",
       "label": "Integrar RetroDECK",
-      "command": "emulation retrodeck integrate",
+      "command": "linux/pz emulation retrodeck integrate",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation retrodeck plan"
     },
     {
       "name": "emulation.shared",
       "label": "Aplicar conteúdo compartilhado",
-      "command": "emulation shared apply",
+      "command": "linux/pz emulation shared apply",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation shared plan"
     },
     {
       "name": "emulation.media",
       "label": "Aplicar mídia canônica",
-      "command": "emulation media apply",
+      "command": "linux/pz emulation media apply",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation media plan"
     },
     {
       "name": "emulation.media-clean",
       "label": "Limpar mídia órfã",
-      "command": "emulation media clean --apply",
+      "command": "linux/pz emulation media clean --apply",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation media clean"
     },
     {
       "name": "emulation.pc-games",
       "label": "Reparar jogos PC",
-      "command": "emulation pc-games repair",
+      "command": "linux/pz emulation pc-games repair",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation pc-games plan"
     },
     {
       "name": "emulation.shortcuts",
       "label": "Reparar atalhos",
-      "command": "emulation shortcuts repair",
+      "command": "linux/pz emulation shortcuts repair",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation shortcuts plan"
     },
     {
       "name": "emulation.launchbox-install",
       "label": "Instalar LaunchBox 13.5",
-      "command": "emulation launchbox install-clean",
+      "command": "linux/pz emulation launchbox install-clean",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation launchbox status"
     },
     {
       "name": "emulation.launchbox-sync",
       "label": "Sincronizar LaunchBox",
-      "command": "emulation launchbox import-esde",
+      "command": "linux/pz emulation launchbox import-esde",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation launchbox status"
     },
     {
       "name": "emulation.launchbox-verify",
       "label": "Verificar LaunchBox",
-      "command": "emulation launchbox verify",
+      "command": "linux/pz emulation launchbox verify",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation launchbox status"
     },
     {
       "name": "emulation.bigbox-test",
       "label": "Testar Big Box",
-      "command": "emulation launchbox verify --real",
+      "command": "linux/pz emulation launchbox verify --real",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation launchbox status"
     },
     {
       "name": "emulation.controllers",
       "label": "Controles Steam Deck",
-      "command": "emulation controllers apply",
+      "command": "linux/pz emulation controllers apply",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation controllers status"
     },
     {
       "name": "emulation.frontends",
       "label": "Reparar frontends",
-      "command": "emulation frontends repair",
+      "command": "linux/pz emulation frontends repair",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation frontends plan"
     },
     {
       "name": "emulation.performance",
       "label": "Aplicar performance",
-      "command": "emulation performance apply",
+      "command": "linux/pz emulation performance apply",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation performance plan"
     },
     {
       "name": "emulation.rom-optimize",
       "label": "Otimizar ROMs",
-      "command": "emulation rom-optimize {input}",
+      "command": "linux/pz emulation rom-optimize {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "path",
-      "input_label": "Selecione a biblioteca de ROMs"
+      "input_label": "Selecione a biblioteca de ROMs",
+      "plan_command": "linux/pz emulation rom-optimize {input} --dry-run --json"
     },
     {
       "name": "emulation.dualscreen",
       "label": "Tela dupla Deck+TV",
-      "command": "emulation dualscreen apply all",
+      "command": "linux/pz emulation dualscreen apply all",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation dualscreen detect"
     },
     {
       "name": "emulation.lsfg",
       "label": "Preparar LSFG",
-      "command": "emulation performance prepare-lsfg",
+      "command": "linux/pz emulation performance prepare-lsfg",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation performance status"
     },
     {
       "name": "emulation.lua",
       "label": "Instalar Lua",
-      "command": "emulation lua install",
+      "command": "linux/pz emulation lua install",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation lua dry-run"
     },
     {
       "name": "emulation.steam-tools",
       "label": "Instalar Steam tools",
-      "command": "emulation steam-tools install",
+      "command": "linux/pz emulation steam-tools install",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation steam-tools dry-run"
     },
     {
       "name": "emulation.heroic",
       "label": "Reparar Heroic",
-      "command": "emulation heroic repair",
+      "command": "linux/pz emulation heroic repair",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation heroic plan"
     },
     {
       "name": "emulation.doctor",
       "label": "Diagnóstico emulação",
-      "command": "emulation doctor --json",
+      "command": "linux/pz emulation doctor --json",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -1545,7 +1642,7 @@
     {
       "name": "emulation.fixes",
       "label": "Reparos amigáveis",
-      "command": "emulation fixes list",
+      "command": "linux/pz emulation fixes list",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -1556,18 +1653,19 @@
     {
       "name": "emulation.optimizers",
       "label": "Aplicar configs por jogo",
-      "command": "emulation optimizer apply-all",
+      "command": "linux/pz emulation optimizer apply-all",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation optimizer plan"
     },
     {
       "name": "emulation.library.scan",
       "label": "Analisar biblioteca",
-      "command": "emulation library scan --scope library --json",
+      "command": "linux/pz emulation library scan --scope library --json",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -1578,7 +1676,7 @@
     {
       "name": "emulation.library.plan",
       "label": "Criar plano da biblioteca",
-      "command": "emulation library plan --scan-id {scan_id} --json",
+      "command": "linux/pz emulation library plan --scan-id {scan_id} --json",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -1589,18 +1687,19 @@
     {
       "name": "emulation.library.apply",
       "label": "Aplicar plano da biblioteca",
-      "command": "emulation library apply --plan-id {plan_id} --confirm {confirm} --json",
+      "command": "linux/pz emulation library apply --plan-id {plan_id} --confirm {confirm} --json",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation library apply --plan-id {plan_id} --confirm {confirm} --dry-run --json"
     },
     {
       "name": "emulation.library.verify",
       "label": "Validar instalação",
-      "command": "emulation library verify --operation-id {operation_id} --json",
+      "command": "linux/pz emulation library verify --operation-id {operation_id} --json",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -1611,73 +1710,79 @@
     {
       "name": "emulation.library.rollback",
       "label": "Reverter instalação",
-      "command": "emulation library rollback --operation-id {operation_id} --json",
+      "command": "linux/pz emulation library rollback --operation-id {operation_id} --json",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation library verify --operation-id {operation_id} --json"
     },
     {
       "name": "emulation.bios",
       "label": "Importar BIOS",
-      "command": "emulation bios import {input}",
+      "command": "linux/pz emulation bios import {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "path",
-      "input_label": "Selecione pasta/arquivo BIOS"
+      "input_label": "Selecione pasta/arquivo BIOS",
+      "plan_command": "linux/pz emulation bios status"
     },
     {
       "name": "emulation.keys",
       "label": "Importar Switch keys",
-      "command": "emulation switch import-keys {input}",
+      "command": "linux/pz emulation switch import-keys {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "file",
-      "input_label": "Selecione prod.keys"
+      "input_label": "Selecione prod.keys",
+      "plan_command": "linux/pz emulation status"
     },
     {
       "name": "emulation.firmware",
       "label": "Importar firmware",
-      "command": "emulation switch import-firmware {input}",
+      "command": "linux/pz emulation switch import-firmware {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "path",
-      "input_label": "Selecione firmware"
+      "input_label": "Selecione firmware",
+      "plan_command": "linux/pz emulation status"
     },
     {
       "name": "emulation.nsz",
       "label": "Converter NSZ",
-      "command": "emulation nsz convert {input}",
+      "command": "linux/pz emulation nsz convert {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "path",
-      "input_label": "Selecione NSZ ou pasta"
+      "input_label": "Selecione NSZ ou pasta",
+      "plan_command": "linux/pz emulation nsz plan {input}"
     },
     {
       "name": "emulation.ps3-game",
       "label": "Importar jogo PS3",
-      "command": "emulation ps3 import-game {input}",
+      "command": "linux/pz emulation ps3 import-game {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "path",
-      "input_label": "Selecione dump PS3"
+      "input_label": "Selecione dump PS3",
+      "plan_command": "linux/pz emulation ps3 dry-run"
     },
     {
       "name": "boot.status",
       "label": "Status boot",
-      "command": "boot status",
+      "command": "linux/pz boot status",
       "mutable": false,
       "require_plan": false,
       "module": "Boot Direto",
@@ -1688,7 +1793,7 @@
     {
       "name": "boot.selector",
       "label": "Seletor visual",
-      "command": "boot selector",
+      "command": "linux/pz boot selector",
       "mutable": false,
       "require_plan": false,
       "module": "Boot Direto",
@@ -1699,7 +1804,7 @@
     {
       "name": "boot.menu",
       "label": "Abrir menu texto",
-      "command": "boot menu",
+      "command": "linux/pz boot menu",
       "mutable": false,
       "require_plan": false,
       "module": "Boot Direto",
@@ -1710,18 +1815,19 @@
     {
       "name": "boot.safe-menu",
       "label": "Instalar menu seguro",
-      "command": "boot install-safe-menu",
+      "command": "linux/pz boot install-safe-menu",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot safe-menu dry-run"
     },
     {
       "name": "boot.card",
       "label": "Cartão de recuperação",
-      "command": "boot card",
+      "command": "linux/pz boot card",
       "mutable": false,
       "require_plan": false,
       "module": "Boot Direto",
@@ -1732,84 +1838,91 @@
     {
       "name": "boot.install-card",
       "label": "Salvar cartão",
-      "command": "boot install-card",
+      "command": "linux/pz boot install-card",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot card"
     },
     {
       "name": "boot.efi",
       "label": "Instalar EFI fallback",
-      "command": "boot install-efi-fallback --fallback",
+      "command": "linux/pz boot install-efi-fallback --fallback",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot status"
     },
     {
       "name": "boot.normal",
       "label": "Próximo: Linux normal",
-      "command": "boot choose normal",
+      "command": "linux/pz boot choose normal",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot status"
     },
     {
       "name": "boot.steamos",
       "label": "Próximo: SteamOS",
-      "command": "boot choose steamos",
+      "command": "linux/pz boot choose steamos",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot status"
     },
     {
       "name": "boot.windows",
       "label": "Próximo: Windows VM",
-      "command": "boot choose windows",
+      "command": "linux/pz boot choose windows",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot status"
     },
     {
       "name": "boot.waydroid",
       "label": "Próximo: Waydroid",
-      "command": "boot choose waydroid",
+      "command": "linux/pz boot choose waydroid",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot status"
     },
     {
       "name": "boot.emergency",
       "label": "Próximo: emergência",
-      "command": "boot emergency-shell next",
+      "command": "linux/pz boot emergency-shell next",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot emergency-shell dry-run"
     },
     {
       "name": "boot.iso.status",
       "label": "ISOs registradas",
-      "command": "boot iso status --json",
+      "command": "linux/pz boot iso status --json",
       "mutable": false,
       "require_plan": false,
       "module": "Boot Direto",
@@ -1820,18 +1933,19 @@
     {
       "name": "boot.iso.add",
       "label": "Registrar ISO",
-      "command": "boot iso add {input} --profile=auto",
+      "command": "linux/pz boot iso add {input} --profile=auto",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot iso add {input} --profile=auto --dry-run"
     },
     {
       "name": "boot.usb.discover",
       "label": "Descobrir mídias EFI",
-      "command": "boot usb discover --json",
+      "command": "linux/pz boot usb discover --json",
       "mutable": false,
       "require_plan": false,
       "module": "Boot Direto",
@@ -1842,18 +1956,19 @@
     {
       "name": "boot.usb.add",
       "label": "Registrar mídia EFI",
-      "command": "boot usb add {input}",
+      "command": "linux/pz boot usb add {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot usb add {input} --dry-run"
     },
     {
       "name": "boot.grubfm.status",
       "label": "Status explorador ISO",
-      "command": "boot grubfm status --json",
+      "command": "linux/pz boot grubfm status --json",
       "mutable": false,
       "require_plan": false,
       "module": "Boot Direto",
@@ -1864,29 +1979,31 @@
     {
       "name": "boot.grubfm.install",
       "label": "Instalar explorador ISO",
-      "command": "boot grubfm install --source={source} --sha256={sha256}",
+      "command": "linux/pz boot grubfm install --source={source} --sha256={sha256}",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot grubfm install --source={source} --sha256={sha256} --dry-run"
     },
     {
       "name": "boot.grubfm.remove",
       "label": "Remover explorador ISO",
-      "command": "boot grubfm remove",
+      "command": "linux/pz boot grubfm remove",
       "mutable": true,
       "require_plan": true,
       "module": "Boot Direto",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz boot grubfm remove --dry-run"
     },
     {
       "name": "flatpak.status",
       "label": "Status Flatpak",
-      "command": "flatpak status",
+      "command": "linux/pz flatpak status",
       "mutable": false,
       "require_plan": false,
       "module": "Flatpak",
@@ -1897,7 +2014,7 @@
     {
       "name": "flatpak.audit",
       "label": "Auditar Flatpak",
-      "command": "flatpak audit",
+      "command": "linux/pz flatpak audit",
       "mutable": false,
       "require_plan": false,
       "module": "Flatpak",
@@ -1908,18 +2025,19 @@
     {
       "name": "flatpak.repair",
       "label": "Reparar Flatpak",
-      "command": "flatpak audit --repair",
+      "command": "linux/pz flatpak audit --repair",
       "mutable": true,
       "require_plan": true,
       "module": "Flatpak",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz flatpak audit"
     },
     {
       "name": "flatpak.remotes",
       "label": "Listar remotes",
-      "command": "flatpak remotes",
+      "command": "linux/pz flatpak remotes",
       "mutable": false,
       "require_plan": false,
       "module": "Flatpak",
@@ -1930,29 +2048,31 @@
     {
       "name": "flatpak.steamdeck",
       "label": "Compatibilidade Steam Deck",
-      "command": "flatpak steamdeck-compat",
+      "command": "linux/pz flatpak steamdeck-compat",
       "mutable": true,
       "require_plan": true,
       "module": "Flatpak",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz flatpak audit"
     },
     {
       "name": "flatpak.rollback",
       "label": "Rollback",
-      "command": "flatpak rollback",
+      "command": "linux/pz flatpak rollback",
       "mutable": true,
       "require_plan": true,
       "module": "Flatpak",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz flatpak audit"
     },
     {
       "name": "ai.status",
       "label": "Status IA",
-      "command": "ai status",
+      "command": "linux/pz ai status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -1963,7 +2083,7 @@
     {
       "name": "ai.doctor",
       "label": "Diagnóstico MCP",
-      "command": "ai doctor",
+      "command": "linux/pz ai doctor",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -1974,51 +2094,55 @@
     {
       "name": "ai.repair",
       "label": "Reparar MCP/IDE",
-      "command": "ai repair",
+      "command": "linux/pz ai repair",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai doctor"
     },
     {
       "name": "ai.desktop",
       "label": "Reparar apps desktop",
-      "command": "ai desktop repair",
+      "command": "linux/pz ai desktop repair",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai desktop status"
     },
     {
       "name": "ai.compat",
       "label": "Agent compatibility",
-      "command": "ai compat setup",
+      "command": "linux/pz ai compat setup",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai compat status"
     },
     {
       "name": "ai.admin",
       "label": "Admin bridge",
-      "command": "ai setup admin",
+      "command": "linux/pz ai setup admin",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai admin status"
     },
     {
       "name": "ai.opencode-status",
       "label": "OpenCode + 9Router",
-      "command": "ai opencode status",
+      "command": "linux/pz ai opencode status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2029,19 +2153,19 @@
     {
       "name": "ai.opencode-install",
       "label": "Configurar OpenCode + 9Router",
-      "command": "ai opencode install --yes",
+      "command": "linux/pz ai opencode install --yes",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "ai opencode install --dry-run"
+      "plan_command": "linux/pz ai opencode install --dry-run"
     },
     {
       "name": "ai.opencode-verify",
       "label": "Verificar OpenCode + 9Router",
-      "command": "ai opencode verify",
+      "command": "linux/pz ai opencode verify",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2052,84 +2176,91 @@
     {
       "name": "ai.opencode",
       "label": "Alinhar versão OpenCode",
-      "command": "ai opencode sync",
+      "command": "linux/pz ai opencode sync",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai opencode version-status"
     },
     {
       "name": "ai.opencode-free",
       "label": "Modelo free OpenCode",
-      "command": "ai opencode free-model",
+      "command": "linux/pz ai opencode free-model",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai opencode status"
     },
     {
       "name": "ai.omo",
       "label": "Instalar OMO",
-      "command": "ai omo setup",
+      "command": "linux/pz ai omo setup",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai omo status"
     },
     {
       "name": "ai.memory",
       "label": "Instalar ai-memory",
-      "command": "ai setup memory",
+      "command": "linux/pz ai setup memory",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai status"
     },
     {
       "name": "ai.ollama",
       "label": "Instalar Ollama",
-      "command": "ai setup ollama",
+      "command": "linux/pz ai setup ollama",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai status"
     },
     {
       "name": "ai.webui",
       "label": "Instalar Open WebUI",
-      "command": "ai setup webui",
+      "command": "linux/pz ai setup webui",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai status"
     },
     {
       "name": "ai.usagebar",
       "label": "Instalar UsageBar",
-      "command": "ai setup usagebar",
+      "command": "linux/pz ai setup usagebar",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai status"
     },
     {
       "name": "ai.codexbar-status",
       "label": "Status CodexBar",
-      "command": "ai codexbar status",
+      "command": "linux/pz ai codexbar status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2140,7 +2271,7 @@
     {
       "name": "ai.codexbar-health",
       "label": "Saúde CodexBar",
-      "command": "ai codexbar health",
+      "command": "linux/pz ai codexbar health",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2151,62 +2282,67 @@
     {
       "name": "ai.codexbar-setup",
       "label": "Configurar CodexBar",
-      "command": "ai codexbar setup",
+      "command": "linux/pz ai codexbar setup",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai codexbar status"
     },
     {
       "name": "ai.codexbar-auth",
       "label": "Autenticar CodexBar",
-      "command": "ai codexbar auth --provider all",
+      "command": "linux/pz ai codexbar auth --provider all",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai codexbar status"
     },
     {
       "name": "ai.codexbar-repair",
       "label": "Reparar CodexBar",
-      "command": "ai codexbar repair",
+      "command": "linux/pz ai codexbar repair",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai codexbar health"
     },
     {
       "name": "ai.ides",
       "label": "Configurar IDEs",
-      "command": "ai setup ides",
+      "command": "linux/pz ai setup ides",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai status"
     },
     {
       "name": "ai.mcp-sync",
       "label": "Sincronizar MCPs",
-      "command": "ai mcp sync all",
+      "command": "linux/pz ai mcp sync all",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai mcp status"
     },
     {
       "name": "ai.claude-status",
       "label": "Claude + Bonsai",
-      "command": "ai claude status",
+      "command": "linux/pz ai claude status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2217,19 +2353,19 @@
     {
       "name": "ai.claude-install",
       "label": "Reparar Claude + Bonsai",
-      "command": "ai claude install --yes",
+      "command": "linux/pz ai claude install --yes",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "ai claude install --dry-run"
+      "plan_command": "linux/pz ai claude install --dry-run"
     },
     {
       "name": "ai.claude-verify",
       "label": "Verificar rotas Claude",
-      "command": "ai claude verify",
+      "command": "linux/pz ai claude verify",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2240,31 +2376,19 @@
     {
       "name": "ai.claude-bonsai-login",
       "label": "Login Bonsai",
-      "command": "ai claude login bonsai",
+      "command": "linux/pz ai claude login bonsai",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "ai claude status"
-    },
-    {
-      "name": "ai.claude-bonsai-run",
-      "label": "Executar Claude via Bonsai",
-      "command": "ai claude run bonsai --cwd {input}",
-      "mutable": true,
-      "require_plan": true,
-      "module": "IA & Dev",
-      "elevated": false,
-      "input_kind": "path",
-      "input_label": "Selecione projeto revisado para snapshot/upload",
-      "plan_command": "ai claude preflight bonsai --cwd {input}"
+      "plan_command": "linux/pz ai claude status"
     },
     {
       "name": "ai.9router-status",
       "label": "Status 9Router",
-      "command": "ai 9router status",
+      "command": "linux/pz ai 9router status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2273,20 +2397,44 @@
       "input_label": ""
     },
     {
-      "name": "ai.9router-install",
-      "label": "Instalar 9Router",
-      "command": "ai 9router install",
-      "mutable": true,
-      "require_plan": true,
+      "name": "ai.9router-tui",
+      "label": "Abrir TUI 9Router",
+      "command": "linux/pz ai 9router tui",
+      "mutable": false,
+      "require_plan": false,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
       "input_label": ""
     },
     {
+      "name": "ai.9router-repair",
+      "label": "Reparar 9Router",
+      "command": "linux/pz ai 9router repair",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz ai 9router status"
+    },
+    {
+      "name": "ai.9router-install",
+      "label": "Instalar 9Router",
+      "command": "linux/pz ai 9router install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz ai 9router status"
+    },
+    {
       "name": "ai.9router-dashboard",
       "label": "Abrir dashboard 9Router",
-      "command": "ai 9router dashboard",
+      "command": "linux/pz ai 9router dashboard",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2297,7 +2445,7 @@
     {
       "name": "ai.9router-test",
       "label": "Testar 9Router",
-      "command": "ai 9router test",
+      "command": "linux/pz ai 9router test",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2308,29 +2456,31 @@
     {
       "name": "ai.9router-secrets",
       "label": "Sincronizar providers",
-      "command": "ai 9router provider sync-secrets",
+      "command": "linux/pz ai 9router provider sync-secrets",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai 9router provider status"
     },
     {
       "name": "ai.9router-combos",
       "label": "Gerar combos inteligentes",
-      "command": "ai 9router combo sync",
+      "command": "linux/pz ai 9router combo sync",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai 9router combo list"
     },
     {
       "name": "ai.9router-usage",
       "label": "Uso e resiliência",
-      "command": "ai 9router usage",
+      "command": "linux/pz ai 9router usage",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2341,7 +2491,7 @@
     {
       "name": "ai.9router-client",
       "label": "Integrar clientes 9Router",
-      "command": "ai 9router client status",
+      "command": "linux/pz ai 9router client status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2352,7 +2502,7 @@
     {
       "name": "ai.9router-check",
       "label": "Verificar update 9Router",
-      "command": "ai 9router check-update",
+      "command": "linux/pz ai 9router check-update",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2363,18 +2513,19 @@
     {
       "name": "ai.9router-update",
       "label": "Atualizar 9Router",
-      "command": "ai 9router update",
+      "command": "linux/pz ai 9router update",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai 9router check-update"
     },
     {
       "name": "ai.9router-doctor",
       "label": "Doctor 9Router",
-      "command": "ai 9router doctor",
+      "command": "linux/pz ai 9router doctor",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2383,33 +2534,9 @@
       "input_label": ""
     },
     {
-      "name": "ai.claude-rollback",
-      "label": "Rollback Claude + Bonsai",
-      "command": "ai claude rollback {input}",
-      "mutable": true,
-      "require_plan": true,
-      "module": "IA & Dev",
-      "elevated": false,
-      "input_kind": "file",
-      "input_label": "Selecione manifest.json",
-      "plan_command": "ai claude status"
-    },
-    {
-      "name": "ai.opencode-rollback",
-      "label": "Rollback OpenCode + 9Router",
-      "command": "ai opencode rollback {input}",
-      "mutable": true,
-      "require_plan": true,
-      "module": "IA & Dev",
-      "elevated": false,
-      "input_kind": "file",
-      "input_label": "Selecione manifest.json",
-      "plan_command": "ai opencode status"
-    },
-    {
       "name": "ai.odysseus-status",
       "label": "Status Odysseus",
-      "command": "ai odysseus status",
+      "command": "linux/pz ai odysseus status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2420,18 +2547,19 @@
     {
       "name": "ai.odysseus-install",
       "label": "Provisionar Odysseus",
-      "command": "ai odysseus install",
+      "command": "linux/pz ai odysseus install",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai odysseus status"
     },
     {
       "name": "ai.odysseus-open",
       "label": "Abrir Odysseus",
-      "command": "ai odysseus open",
+      "command": "linux/pz ai odysseus open",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2442,7 +2570,7 @@
     {
       "name": "ai.odysseus-check",
       "label": "Verificar update Odysseus",
-      "command": "ai odysseus check-update",
+      "command": "linux/pz ai odysseus check-update",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2453,29 +2581,31 @@
     {
       "name": "ai.odysseus-update",
       "label": "Atualizar Odysseus",
-      "command": "ai odysseus update",
+      "command": "linux/pz ai odysseus update",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai odysseus check-update"
     },
     {
       "name": "ai.odysseus-backup",
       "label": "Backup Odysseus",
-      "command": "ai odysseus backup",
+      "command": "linux/pz ai odysseus backup",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai odysseus status"
     },
     {
       "name": "ai.odysseus-doctor",
       "label": "Doctor Odysseus",
-      "command": "ai odysseus doctor",
+      "command": "linux/pz ai odysseus doctor",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2486,7 +2616,7 @@
     {
       "name": "ai.updates-status",
       "label": "Atualizações PhaseZero",
-      "command": "updates check",
+      "command": "linux/pz updates check",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -2497,40 +2627,79 @@
     {
       "name": "ai.updates-timer",
       "label": "Verificação diária",
-      "command": "updates install-service",
+      "command": "linux/pz updates install-service",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz updates latest"
+    },
+    {
+      "name": "ai.claude-rollback",
+      "label": "Rollback Claude + Bonsai",
+      "command": "linux/pz ai claude rollback {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "file",
+      "input_label": "Selecione manifest.json",
+      "plan_command": "linux/pz ai claude status"
+    },
+    {
+      "name": "ai.opencode-rollback",
+      "label": "Rollback OpenCode + 9Router",
+      "command": "linux/pz ai opencode rollback {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "file",
+      "input_label": "Selecione manifest.json",
+      "plan_command": "linux/pz ai opencode status"
+    },
+    {
+      "name": "ai.claude-bonsai-run",
+      "label": "Executar Claude via Bonsai",
+      "command": "linux/pz ai claude run bonsai --cwd {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "path",
+      "input_label": "Selecione projeto revisado para snapshot/upload",
+      "plan_command": "linux/pz ai claude preflight bonsai --cwd {input}"
     },
     {
       "name": "ai.proxies",
       "label": "Instalar proxies IA",
-      "command": "ai proxies install all",
+      "command": "linux/pz ai proxies install all",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-ides",
       "label": "Configurar proxies nas IDEs",
-      "command": "ai proxies configure-ides",
+      "command": "linux/pz ai proxies configure-ides",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-auth",
       "label": "Auth proxies IA",
-      "command": "ai proxies auth all",
+      "command": "linux/pz ai proxies auth all",
       "mutable": false,
       "require_plan": false,
       "module": "Proxies IA",
@@ -2541,51 +2710,55 @@
     {
       "name": "ai.proxies-login-kimi",
       "label": "Login Kimi",
-      "command": "ai proxies login kimiproxy",
+      "command": "linux/pz ai proxies login kimiproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies auth kimiproxy"
     },
     {
       "name": "ai.proxies-login-qwen",
       "label": "Login Qwen",
-      "command": "ai proxies login qwenproxy",
+      "command": "linux/pz ai proxies login qwenproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies auth qwenproxy"
     },
     {
       "name": "ai.proxies-login-deeps",
       "label": "Login DeepSeek",
-      "command": "ai proxies login deepsproxy",
+      "command": "linux/pz ai proxies login deepsproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies auth deepsproxy"
     },
     {
       "name": "ai.proxies-login-all",
       "label": "Login em todos",
-      "command": "ai proxies login all",
+      "command": "linux/pz ai proxies login all",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies auth all"
     },
     {
       "name": "ai.proxies-test",
       "label": "Testar proxies IA",
-      "command": "ai proxies test",
+      "command": "linux/pz ai proxies test",
       "mutable": false,
       "require_plan": false,
       "module": "Proxies IA",
@@ -2596,260 +2769,163 @@
     {
       "name": "ai.proxies-start-all",
       "label": "Iniciar todos os proxies",
-      "command": "ai proxies start all",
+      "command": "linux/pz ai proxies start all",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-stop-all",
       "label": "Parar todos os proxies",
-      "command": "ai proxies stop all",
+      "command": "linux/pz ai proxies stop all",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-start-kimi",
       "label": "Iniciar Kimi",
-      "command": "ai proxies start kimiproxy",
+      "command": "linux/pz ai proxies start kimiproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-stop-kimi",
       "label": "Parar Kimi",
-      "command": "ai proxies stop kimiproxy",
+      "command": "linux/pz ai proxies stop kimiproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-start-qwen",
       "label": "Iniciar Qwen",
-      "command": "ai proxies start qwenproxy",
+      "command": "linux/pz ai proxies start qwenproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-stop-qwen",
       "label": "Parar Qwen",
-      "command": "ai proxies stop qwenproxy",
+      "command": "linux/pz ai proxies stop qwenproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-start-deeps",
       "label": "Iniciar DeepSeek",
-      "command": "ai proxies start deepsproxy",
+      "command": "linux/pz ai proxies start deepsproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-stop-deeps",
       "label": "Parar DeepSeek",
-      "command": "ai proxies stop deepsproxy",
+      "command": "linux/pz ai proxies stop deepsproxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-start-mimo",
       "label": "Iniciar Mimo",
-      "command": "ai proxies start mimo-ai-proxy",
+      "command": "linux/pz ai proxies start mimo-ai-proxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies-stop-mimo",
       "label": "Parar Mimo",
-      "command": "ai proxies stop mimo-ai-proxy",
+      "command": "linux/pz ai proxies stop mimo-ai-proxy",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-status",
-      "label": "Status roteamento",
-      "command": "ai routing status --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-inventory",
-      "label": "Inventário de roteamento",
-      "command": "ai routing inventory --refresh-quota --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-verify",
-      "label": "Verificar roteamento",
-      "command": "ai routing verify --live",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-plan",
-      "label": "Plano de roteamento",
-      "command": "ai routing plan --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-apply-all",
-      "label": "Aplicar plano de roteamento",
-      "command": "ai routing apply --task code --yes",
-      "mutable": true,
-      "require_plan": true,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-recommend-code",
-      "label": "Recomendar rota code",
-      "command": "ai routing recommend --task code --policy balanced --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-recommend-analysis",
-      "label": "Recomendar rota analysis",
-      "command": "ai routing recommend --task analysis --policy balanced --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-recommend-plan",
-      "label": "Recomendar rota plan",
-      "command": "ai routing recommend --task plan --policy balanced --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "ai.routing-rollback",
-      "label": "Reverter roteamento",
-      "command": "ai routing rollback MANIFEST",
-      "mutable": true,
-      "require_plan": true,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "text",
-      "input_label": "Caminho do manifesto"
-    },
-    {
-      "name": "ai.routing-refresh",
-      "label": "Refresh automático de cotas",
-      "command": "ai routing refresh",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Roteamento IA",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "tune.browser",
       "label": "Hardening navegador",
-      "command": "tune browser",
+      "command": "linux/pz tune browser",
       "mutable": true,
       "require_plan": true,
       "module": "Ajustes",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz doctor"
     },
     {
       "name": "tune.gaming",
       "label": "Ajustes gaming",
-      "command": "tune gaming",
+      "command": "linux/pz tune gaming",
       "mutable": true,
       "require_plan": true,
       "module": "Ajustes",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz doctor"
     },
     {
       "name": "tune.dev",
       "label": "Ajustes dev",
-      "command": "tune dev",
+      "command": "linux/pz tune dev",
       "mutable": true,
       "require_plan": true,
       "module": "Ajustes",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz doctor"
     },
     {
       "name": "host.status",
       "label": "Higiene do host",
-      "command": "host status",
+      "command": "linux/pz host status",
       "mutable": false,
       "require_plan": false,
       "module": "Ajustes",
@@ -2860,7 +2936,7 @@
     {
       "name": "host.backups.list",
       "label": "Backups centralizados",
-      "command": "host backups list",
+      "command": "linux/pz host backups list",
       "mutable": false,
       "require_plan": false,
       "module": "Ajustes",
@@ -2871,40 +2947,43 @@
     {
       "name": "host.backups.migrate",
       "label": "Migrar backups legados",
-      "command": "host backups migrate --apply",
+      "command": "linux/pz host backups migrate --apply",
       "mutable": true,
       "require_plan": true,
       "module": "Ajustes",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz host backups migrate"
     },
     {
       "name": "host.prune",
       "label": "Podar backups e logs",
-      "command": "host prune",
+      "command": "linux/pz host prune",
       "mutable": true,
       "require_plan": true,
       "module": "Ajustes",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz host status"
     },
     {
       "name": "host.wipe",
       "label": "Remover pegada do PhaseZero",
-      "command": "host wipe --apply --confirm PHASEZERO-WIPE",
+      "command": "linux/pz host wipe --apply --confirm PHASEZERO-WIPE",
       "mutable": true,
       "require_plan": true,
       "module": "Ajustes",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz host wipe"
     },
     {
       "name": "steamdeck.keyboard.status",
       "label": "Status do teclado",
-      "command": "steamdeck keyboard status",
+      "command": "linux/pz steamdeck keyboard status",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -2915,7 +2994,7 @@
     {
       "name": "steamdeck.watcher.status",
       "label": "Status do watcher",
-      "command": "steamdeck watcher status",
+      "command": "linux/pz steamdeck watcher status",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -2926,7 +3005,7 @@
     {
       "name": "steamdeck.privileged.status",
       "label": "Status privilegiado",
-      "command": "steamdeck privileged status",
+      "command": "linux/pz steamdeck privileged status",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -2937,7 +3016,7 @@
     {
       "name": "steamdeck.boot.status",
       "label": "Status do boot SteamOS",
-      "command": "steamdeck boot status",
+      "command": "linux/pz steamdeck boot status",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -2948,7 +3027,7 @@
     {
       "name": "steamdeck.plugins.status",
       "label": "Status Decky",
-      "command": "steamdeck plugins status",
+      "command": "linux/pz steamdeck plugins status",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -2959,18 +3038,19 @@
     {
       "name": "steamdeck.conveniences",
       "label": "Instalar conveniências",
-      "command": "steamdeck conveniences install",
+      "command": "linux/pz steamdeck conveniences install",
       "mutable": true,
       "require_plan": true,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck status"
     },
     {
       "name": "steamdeck.removable.status",
       "label": "Status de removíveis",
-      "command": "steamdeck removable status",
+      "command": "linux/pz steamdeck removable status",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -2981,7 +3061,7 @@
     {
       "name": "steamdeck.display.status",
       "label": "Status do display",
-      "command": "steamdeck display status",
+      "command": "linux/pz steamdeck display status",
       "mutable": false,
       "require_plan": false,
       "module": "Steam Deck",
@@ -2992,7 +3072,7 @@
     {
       "name": "windows.host-access.status",
       "label": "Status acesso ao disco",
-      "command": "windows-vm host-access status",
+      "command": "linux/pz windows-vm host-access status",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -3003,18 +3083,19 @@
     {
       "name": "windows.host-access.unmount",
       "label": "Desmontar disco da VM",
-      "command": "windows-vm host-access unmount",
+      "command": "linux/pz windows-vm host-access unmount",
       "mutable": true,
       "require_plan": true,
       "module": "Windows VM",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm host-access status"
     },
     {
       "name": "windows.boot.status",
       "label": "Status boot Windows",
-      "command": "windows-vm boot status",
+      "command": "linux/pz windows-vm boot status",
       "mutable": false,
       "require_plan": false,
       "module": "Windows VM",
@@ -3025,7 +3106,7 @@
     {
       "name": "waydroid.host.status",
       "label": "Status armazenamento Android",
-      "command": "waydroid host-access status",
+      "command": "linux/pz waydroid host-access status",
       "mutable": false,
       "require_plan": false,
       "module": "Waydroid",
@@ -3036,18 +3117,19 @@
     {
       "name": "waydroid.host.unlink",
       "label": "Desvincular armazenamento",
-      "command": "waydroid host-access unlink",
+      "command": "linux/pz waydroid host-access unlink",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz waydroid host-access status"
     },
     {
       "name": "waydroid.boot.status",
       "label": "Status boot Waydroid",
-      "command": "waydroid boot status",
+      "command": "linux/pz waydroid boot status",
       "mutable": false,
       "require_plan": false,
       "module": "Waydroid",
@@ -3058,7 +3140,7 @@
     {
       "name": "server.llm.status",
       "label": "Status LLM",
-      "command": "server llm status",
+      "command": "linux/pz server llm status",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -3069,29 +3151,31 @@
     {
       "name": "server.llm.expose",
       "label": "Expor LLM na LAN",
-      "command": "server llm expose-lan",
+      "command": "linux/pz server llm expose-lan",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server llm status"
     },
     {
       "name": "server.llm.restore",
       "label": "Restaurar LLM local",
-      "command": "server llm restore",
+      "command": "linux/pz server llm restore",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server llm status"
     },
     {
       "name": "server.hermes.status",
       "label": "Status Hermes",
-      "command": "server hermes status",
+      "command": "linux/pz server hermes status",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -3102,18 +3186,19 @@
     {
       "name": "server.hermes.start",
       "label": "Iniciar Hermes",
-      "command": "server hermes start",
+      "command": "linux/pz server hermes start",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server hermes status"
     },
     {
       "name": "server.slim.status",
       "label": "Status modo enxuto",
-      "command": "server slim status",
+      "command": "linux/pz server slim status",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -3124,7 +3209,7 @@
     {
       "name": "server.boot.status",
       "label": "Status boot servidor",
-      "command": "server boot status",
+      "command": "linux/pz server boot status",
       "mutable": false,
       "require_plan": false,
       "module": "Servidor",
@@ -3135,95 +3220,103 @@
     {
       "name": "server.boot.remove",
       "label": "Remover boot servidor",
-      "command": "server boot remove",
+      "command": "linux/pz server boot remove",
       "mutable": true,
       "require_plan": true,
       "module": "Servidor",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz server boot status"
     },
     {
       "name": "emulation.eden-integrate",
       "label": "Integrar Eden",
-      "command": "emulation eden integrate",
+      "command": "linux/pz emulation eden integrate",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation eden dry-run"
     },
     {
       "name": "emulation.citron-integrate",
       "label": "Integrar Citron",
-      "command": "emulation citron integrate",
+      "command": "linux/pz emulation citron integrate",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation citron dry-run"
     },
     {
       "name": "emulation.hydra-configure",
       "label": "Configurar Hydra",
-      "command": "emulation hydra configure",
+      "command": "linux/pz emulation hydra configure",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation hydra status"
     },
     {
       "name": "emulation.ps1",
       "label": "Configurar PlayStation 1",
-      "command": "emulation ps1 configure",
+      "command": "linux/pz emulation ps1 configure",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation status"
     },
     {
       "name": "emulation.ps2",
       "label": "Configurar PlayStation 2",
-      "command": "emulation ps2 configure",
+      "command": "linux/pz emulation ps2 configure",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation status"
     },
     {
       "name": "emulation.ps3-pkg",
       "label": "Importar PKG PS3",
-      "command": "emulation ps3 import-pkg {input}",
+      "command": "linux/pz emulation ps3 import-pkg {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation ps3 dry-run"
     },
     {
       "name": "emulation.ps3-rap",
       "label": "Importar RAP PS3",
-      "command": "emulation ps3 import-rap {input}",
+      "command": "linux/pz emulation ps3 import-rap {input}",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation ps3 dry-run"
     },
     {
       "name": "emulation.performance.status",
       "label": "Status performance",
-      "command": "emulation performance status",
+      "command": "linux/pz emulation performance status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3234,7 +3327,7 @@
     {
       "name": "emulation.dualscreen.status",
       "label": "Detectar telas",
-      "command": "emulation dualscreen detect",
+      "command": "linux/pz emulation dualscreen detect",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3245,7 +3338,7 @@
     {
       "name": "emulation.lua.status",
       "label": "Status Lua",
-      "command": "emulation lua status",
+      "command": "linux/pz emulation lua status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3256,7 +3349,7 @@
     {
       "name": "emulation.steam-tools.status",
       "label": "Status Steam tools",
-      "command": "emulation steam-tools status",
+      "command": "linux/pz emulation steam-tools status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3267,7 +3360,7 @@
     {
       "name": "emulation.retrodeck.status",
       "label": "Status RetroDECK",
-      "command": "emulation retrodeck status",
+      "command": "linux/pz emulation retrodeck status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3278,7 +3371,7 @@
     {
       "name": "emulation.retrodeck.plan",
       "label": "Plano RetroDECK",
-      "command": "emulation retrodeck plan",
+      "command": "linux/pz emulation retrodeck plan",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3289,18 +3382,19 @@
     {
       "name": "emulation.retrodeck.repair",
       "label": "Reparar RetroDECK",
-      "command": "emulation retrodeck repair",
+      "command": "linux/pz emulation retrodeck repair",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation retrodeck plan"
     },
     {
       "name": "emulation.shared.status",
       "label": "Status conteúdo compartilhado",
-      "command": "emulation shared status",
+      "command": "linux/pz emulation shared status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3311,7 +3405,7 @@
     {
       "name": "emulation.shared.plan",
       "label": "Plano conteúdo compartilhado",
-      "command": "emulation shared plan",
+      "command": "linux/pz emulation shared plan",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3322,18 +3416,19 @@
     {
       "name": "emulation.shared.repair",
       "label": "Reparar conteúdo compartilhado",
-      "command": "emulation shared repair",
+      "command": "linux/pz emulation shared repair",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation shared plan"
     },
     {
       "name": "emulation.media.status",
       "label": "Status de mídia",
-      "command": "emulation media status",
+      "command": "linux/pz emulation media status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3344,18 +3439,19 @@
     {
       "name": "emulation.media.index",
       "label": "Indexar mídia",
-      "command": "emulation media index",
+      "command": "linux/pz emulation media index",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation media status"
     },
     {
       "name": "emulation.media.plan",
       "label": "Plano de mídia",
-      "command": "emulation media plan",
+      "command": "linux/pz emulation media plan",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3366,18 +3462,19 @@
     {
       "name": "emulation.media.repair",
       "label": "Reparar mídia",
-      "command": "emulation media repair",
+      "command": "linux/pz emulation media repair",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation media plan"
     },
     {
       "name": "emulation.pc-games.status",
       "label": "Status jogos PC",
-      "command": "emulation pc-games status",
+      "command": "linux/pz emulation pc-games status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3388,7 +3485,7 @@
     {
       "name": "emulation.pc-games.plan",
       "label": "Plano jogos PC",
-      "command": "emulation pc-games plan",
+      "command": "linux/pz emulation pc-games plan",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3399,7 +3496,7 @@
     {
       "name": "emulation.shortcuts.status",
       "label": "Status atalhos",
-      "command": "emulation shortcuts status",
+      "command": "linux/pz emulation shortcuts status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3410,7 +3507,7 @@
     {
       "name": "emulation.shortcuts.plan",
       "label": "Plano atalhos",
-      "command": "emulation shortcuts plan",
+      "command": "linux/pz emulation shortcuts plan",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3421,7 +3518,7 @@
     {
       "name": "emulation.launchbox.status",
       "label": "Status LaunchBox",
-      "command": "emulation launchbox status",
+      "command": "linux/pz emulation launchbox status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3432,7 +3529,7 @@
     {
       "name": "emulation.launchbox.plan",
       "label": "Plano LaunchBox",
-      "command": "emulation launchbox plan",
+      "command": "linux/pz emulation launchbox plan",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3443,18 +3540,19 @@
     {
       "name": "emulation.launchbox.repair",
       "label": "Reparar LaunchBox",
-      "command": "emulation launchbox repair",
+      "command": "linux/pz emulation launchbox repair",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation launchbox plan"
     },
     {
       "name": "emulation.controllers.status",
       "label": "Status controles",
-      "command": "emulation controllers status",
+      "command": "linux/pz emulation controllers status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3465,7 +3563,7 @@
     {
       "name": "emulation.frontends.status",
       "label": "Status frontends",
-      "command": "emulation frontends status",
+      "command": "linux/pz emulation frontends status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3476,7 +3574,7 @@
     {
       "name": "emulation.frontends.plan",
       "label": "Plano frontends",
-      "command": "emulation frontends plan",
+      "command": "linux/pz emulation frontends plan",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3487,7 +3585,7 @@
     {
       "name": "emulation.nsz.status",
       "label": "Status NSZ",
-      "command": "emulation nsz status",
+      "command": "linux/pz emulation nsz status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3498,7 +3596,7 @@
     {
       "name": "emulation.nsz.plan",
       "label": "Plano NSZ",
-      "command": "emulation nsz plan {input}",
+      "command": "linux/pz emulation nsz plan {input}",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3509,29 +3607,31 @@
     {
       "name": "emulation.nsz.install",
       "label": "Instalar NSZ",
-      "command": "emulation nsz install",
+      "command": "linux/pz emulation nsz install",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation nsz status"
     },
     {
       "name": "emulation.nsz.apply",
       "label": "Converter todos NSZ",
-      "command": "emulation nsz apply --yes",
+      "command": "linux/pz emulation nsz apply --yes",
       "mutable": true,
       "require_plan": true,
       "module": "Emulação",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz emulation nsz plan"
     },
     {
       "name": "emulation.optimizer.status",
       "label": "Status configs por jogo",
-      "command": "emulation optimizer status",
+      "command": "linux/pz emulation optimizer status",
       "mutable": false,
       "require_plan": false,
       "module": "Emulação",
@@ -3542,51 +3642,55 @@
     {
       "name": "flatpak.remote.add",
       "label": "Adicionar remote",
-      "command": "flatpak remote add {name} {url}",
+      "command": "linux/pz flatpak remote add {name} {url}",
       "mutable": true,
       "require_plan": true,
       "module": "Flatpak",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz flatpak remotes"
     },
     {
       "name": "flatpak.remote.remove",
       "label": "Remover remote",
-      "command": "flatpak remote remove {name}",
+      "command": "linux/pz flatpak remote remove {name}",
       "mutable": true,
       "require_plan": true,
       "module": "Flatpak",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz flatpak remotes"
     },
     {
       "name": "flatpak.overrides.apply",
       "label": "Aplicar overrides globais",
-      "command": "flatpak overrides apply --global",
+      "command": "linux/pz flatpak overrides apply --global",
       "mutable": true,
       "require_plan": true,
       "module": "Flatpak",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz flatpak audit"
     },
     {
       "name": "flatpak.overrides.remove",
       "label": "Remover overrides globais",
-      "command": "flatpak overrides remove --global",
+      "command": "linux/pz flatpak overrides remove --global",
       "mutable": true,
       "require_plan": true,
       "module": "Flatpak",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz flatpak audit"
     },
     {
       "name": "ai.desktop.status",
       "label": "Status apps IA",
-      "command": "ai desktop status",
+      "command": "linux/pz ai desktop status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3597,40 +3701,43 @@
     {
       "name": "ai.desktop.claude",
       "label": "Instalar Claude Desktop",
-      "command": "ai desktop install-claude",
+      "command": "linux/pz ai desktop install-claude",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai desktop status"
     },
     {
       "name": "ai.desktop.qwen",
       "label": "Instalar Qwen Code Desktop",
-      "command": "ai desktop install-qwen",
+      "command": "linux/pz ai desktop install-qwen",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai desktop status"
     },
     {
       "name": "ai.desktop.codex",
       "label": "Reparar Codex Desktop",
-      "command": "ai desktop repair-codex",
+      "command": "linux/pz ai desktop repair-codex",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai desktop status"
     },
     {
       "name": "ai.token-economy",
       "label": "Economia de tokens",
-      "command": "ai token-economy status",
+      "command": "linux/pz ai token-economy status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3641,7 +3748,7 @@
     {
       "name": "ai.admin.status",
       "label": "Status admin bridge",
-      "command": "ai admin status",
+      "command": "linux/pz ai admin status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3652,7 +3759,7 @@
     {
       "name": "ai.omo.status",
       "label": "Status OMO",
-      "command": "ai omo status",
+      "command": "linux/pz ai omo status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3663,7 +3770,7 @@
     {
       "name": "ai.omo.doctor",
       "label": "Diagnóstico OMO",
-      "command": "ai omo doctor",
+      "command": "linux/pz ai omo doctor",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3674,40 +3781,43 @@
     {
       "name": "ai.omo.enable",
       "label": "Ativar OMO",
-      "command": "ai omo enable",
+      "command": "linux/pz ai omo enable",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai omo status"
     },
     {
       "name": "ai.omo.disable",
       "label": "Desativar OMO",
-      "command": "ai omo disable",
+      "command": "linux/pz ai omo disable",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai omo status"
     },
     {
       "name": "ai.omo.uninstall",
       "label": "Remover OMO",
-      "command": "ai omo uninstall",
+      "command": "linux/pz ai omo uninstall",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai omo status"
     },
     {
       "name": "ai.opencode.status",
       "label": "Status OpenCode",
-      "command": "ai opencode status",
+      "command": "linux/pz ai opencode status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3718,40 +3828,43 @@
     {
       "name": "ai.opencode.local",
       "label": "Modelo local OpenCode",
-      "command": "ai opencode local-model",
+      "command": "linux/pz ai opencode local-model",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai opencode status"
     },
     {
       "name": "ai.opencode.hook",
       "label": "Instalar hook OpenCode",
-      "command": "ai opencode install-hook",
+      "command": "linux/pz ai opencode install-hook",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai opencode status"
     },
     {
       "name": "ai.secrets.rotate",
       "label": "Rotacionar secrets IA",
-      "command": "ai secrets rotate",
+      "command": "linux/pz ai secrets rotate",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai status"
     },
     {
       "name": "ai.mcp.status",
       "label": "Status MCP",
-      "command": "ai mcp status",
+      "command": "linux/pz ai mcp status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3762,7 +3875,7 @@
     {
       "name": "ai.mcp.list",
       "label": "Listar MCPs",
-      "command": "ai mcp list",
+      "command": "linux/pz ai mcp list",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3773,29 +3886,31 @@
     {
       "name": "ai.mcp.install",
       "label": "Instalar MCP",
-      "command": "ai mcp install {server}",
+      "command": "linux/pz ai mcp install {server}",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai mcp status"
     },
     {
       "name": "ai.mcp.repair",
       "label": "Reparar MCPs",
-      "command": "ai mcp repair all",
+      "command": "linux/pz ai mcp repair all",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai mcp status"
     },
     {
       "name": "ai.proxies.status",
       "label": "Status proxies IA",
-      "command": "ai proxies status",
+      "command": "linux/pz ai proxies status",
       "mutable": false,
       "require_plan": false,
       "module": "Proxies IA",
@@ -3806,7 +3921,7 @@
     {
       "name": "ai.proxies.detailed-status",
       "label": "Status consolidado",
-      "command": "ai proxies detailed-status",
+      "command": "linux/pz ai proxies detailed-status",
       "mutable": false,
       "require_plan": false,
       "module": "Proxies IA",
@@ -3817,18 +3932,19 @@
     {
       "name": "ai.proxies.restart-one",
       "label": "Reiniciar proxy",
-      "command": "ai proxies restart {proxy}",
+      "command": "linux/pz ai proxies restart {proxy}",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "ai.proxies.test-one",
       "label": "Testar proxy específico",
-      "command": "ai proxies test {proxy}",
+      "command": "linux/pz ai proxies test {proxy}",
       "mutable": false,
       "require_plan": false,
       "module": "Proxies IA",
@@ -3839,7 +3955,7 @@
     {
       "name": "ai.9router.provider-status",
       "label": "Providers 9Router",
-      "command": "ai 9router provider status",
+      "command": "linux/pz ai 9router provider status",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3850,7 +3966,7 @@
     {
       "name": "ai.9router.combo-list",
       "label": "Combos 9Router",
-      "command": "ai 9router combo list",
+      "command": "linux/pz ai 9router combo list",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",
@@ -3861,84 +3977,91 @@
     {
       "name": "ai.9router.watchdog-install",
       "label": "Ativar watchdog 9Router",
-      "command": "ai 9router watchdog install",
+      "command": "linux/pz ai 9router watchdog install",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai 9router status"
     },
     {
       "name": "ai.codexbar.watchdog-install",
       "label": "Ativar watchdog CodexBar",
-      "command": "ai codexbar watchdog install",
+      "command": "linux/pz ai codexbar watchdog install",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai codexbar watchdog status"
     },
     {
       "name": "ai.codexbar.watchdog-remove",
       "label": "Desativar watchdog CodexBar",
-      "command": "ai codexbar watchdog remove",
+      "command": "linux/pz ai codexbar watchdog remove",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai codexbar watchdog status"
     },
     {
       "name": "ai.codexbar.plasmoid-remove",
       "label": "Remover KodexBar do Plasma",
-      "command": "ai codexbar plasmoid-remove",
+      "command": "linux/pz ai codexbar plasmoid-remove",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai codexbar status"
     },
     {
       "name": "ai.setup.tool",
       "label": "Instalar ferramenta IA",
-      "command": "ai setup {tool}",
+      "command": "linux/pz ai setup {tool}",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai status"
     },
     {
       "name": "ai.mcp.sync-target",
       "label": "Sincronizar MCP por cliente",
-      "command": "ai mcp sync {target}",
+      "command": "linux/pz ai mcp sync {target}",
       "mutable": true,
       "require_plan": true,
       "module": "IA & Dev",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai mcp status"
     },
     {
       "name": "ai.proxies.install-one",
       "label": "Instalar proxy específico",
-      "command": "ai proxies install {proxy}",
+      "command": "linux/pz ai proxies install {proxy}",
       "mutable": true,
       "require_plan": true,
       "module": "Proxies IA",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ai proxies status"
     },
     {
       "name": "desktop.webapps.status",
       "label": "Status web apps",
-      "command": "webapp status",
+      "command": "linux/pz webapp status",
       "mutable": false,
       "require_plan": false,
       "module": "Aplicativos",
@@ -3949,7 +4072,7 @@
     {
       "name": "desktop.menu.scan",
       "label": "Analisar menu PhaseZero",
-      "command": "ui menu scan --json",
+      "command": "linux/pz ui menu scan --json",
       "mutable": false,
       "require_plan": false,
       "module": "Aplicativos",
@@ -3960,7 +4083,7 @@
     {
       "name": "desktop.menu.plan",
       "label": "Prévia da organização",
-      "command": "ui menu plan --json",
+      "command": "linux/pz ui menu plan --json",
       "mutable": false,
       "require_plan": false,
       "module": "Aplicativos",
@@ -3971,51 +4094,55 @@
     {
       "name": "desktop.menu.apply",
       "label": "Organizar menu PhaseZero",
-      "command": "ui menu apply --json",
+      "command": "linux/pz ui menu apply --json",
       "mutable": true,
       "require_plan": true,
       "module": "Aplicativos",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ui menu plan --json"
     },
     {
       "name": "desktop.menu.rollback",
       "label": "Restaurar menu anterior",
-      "command": "ui menu rollback --json",
+      "command": "linux/pz ui menu rollback --json",
       "mutable": true,
       "require_plan": true,
       "module": "Aplicativos",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz ui menu scan --json"
     },
     {
       "name": "desktop.webapps.install",
       "label": "Instalar web app",
-      "command": "webapp install {slug}",
+      "command": "linux/pz webapp install {slug}",
       "mutable": true,
       "require_plan": true,
       "module": "Aplicativos",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz webapp status"
     },
     {
       "name": "desktop.webapps.all",
       "label": "Instalar todos web apps",
-      "command": "webapp install-all",
+      "command": "linux/pz webapp install-all",
       "mutable": true,
       "require_plan": true,
       "module": "Aplicativos",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz webapp status"
     },
     {
       "name": "desktop.games.status",
       "label": "Status menu de jogos",
-      "command": "games status",
+      "command": "linux/pz games status",
       "mutable": false,
       "require_plan": false,
       "module": "Aplicativos",
@@ -4026,7 +4153,7 @@
     {
       "name": "desktop.games.scan",
       "label": "Escanear jogos",
-      "command": "games scan",
+      "command": "linux/pz games scan",
       "mutable": false,
       "require_plan": false,
       "module": "Aplicativos",
@@ -4037,18 +4164,19 @@
     {
       "name": "desktop.games.install",
       "label": "Instalar menus de jogos",
-      "command": "games install-all",
+      "command": "linux/pz games install-all",
       "mutable": true,
       "require_plan": true,
       "module": "Aplicativos",
       "elevated": false,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz games status"
     },
     {
       "name": "capability.detect",
       "label": "Compatibilidade do host",
-      "command": "capabilities detect",
+      "command": "linux/pz capabilities detect",
       "mutable": false,
       "require_plan": false,
       "module": "Recursos",
@@ -4059,7 +4187,7 @@
     {
       "name": "capability.status",
       "label": "Estado dos recursos",
-      "command": "capabilities status",
+      "command": "linux/pz capabilities status",
       "mutable": false,
       "require_plan": false,
       "module": "Recursos",
@@ -4070,7 +4198,7 @@
     {
       "name": "capability.profiles",
       "label": "Perfis disponíveis",
-      "command": "capabilities profiles",
+      "command": "linux/pz capabilities profiles",
       "mutable": false,
       "require_plan": false,
       "module": "Recursos",
@@ -4081,7 +4209,7 @@
     {
       "name": "capability.manifest.plan",
       "label": "Planejar manifesto",
-      "command": "capabilities plan --manifest {manifest}",
+      "command": "linux/pz capabilities plan --manifest {manifest}",
       "mutable": false,
       "require_plan": false,
       "module": "Recursos",
@@ -4092,18 +4220,19 @@
     {
       "name": "capability.apply",
       "label": "Aplicar plano confirmado",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm} --dry-run"
     },
     {
       "name": "capability.verify",
       "label": "Verificar operação",
-      "command": "capabilities verify --operation-id {operation_id}",
+      "command": "linux/pz capabilities verify --operation-id {operation_id}",
       "mutable": false,
       "require_plan": false,
       "module": "Recursos",
@@ -4114,1003 +4243,1206 @@
     {
       "name": "capability.rollback",
       "label": "Reverter operação",
-      "command": "capabilities rollback --operation-id {operation_id} --confirm {confirm}",
+      "command": "linux/pz capabilities rollback --operation-id {operation_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities rollback --operation-id {operation_id} --confirm {confirm} --dry-run"
     },
     {
       "name": "capability.profile.gaming-core",
       "label": "Gaming Core",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile gaming-core"
     },
     {
       "name": "capability.profile.game-streaming",
       "label": "Game Streaming",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile game-streaming"
     },
     {
       "name": "capability.profile.hardware-tools",
       "label": "Hardware Tools",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile hardware-tools"
     },
     {
       "name": "capability.profile.system-health",
       "label": "System Health",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile system-health"
     },
     {
       "name": "capability.profile.developer",
       "label": "Developer",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile developer"
     },
     {
       "name": "capability.profile.security",
       "label": "Security",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile security"
     },
     {
       "name": "capability.profile.backup",
       "label": "Backup",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile backup"
     },
     {
       "name": "capability.profile.creative",
       "label": "Creative",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile creative"
     },
     {
       "name": "capability.profile.administration",
       "label": "Administration",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile administration"
     },
     {
       "name": "capability.profile.education",
       "label": "Education",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile education"
     },
     {
       "name": "capability.profile.full-workstation",
       "label": "Full Workstation",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --profile full-workstation"
     },
     {
       "name": "capability.plan.gaming.gamescope",
       "label": "Gamescope",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.gamescope"
     },
     {
       "name": "capability.plan.gaming.gamemode",
       "label": "GameMode",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.gamemode"
     },
     {
       "name": "capability.plan.gaming.mangohud",
       "label": "MangoHud",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.mangohud"
     },
     {
       "name": "capability.plan.gaming.goverlay",
       "label": "GOverlay",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.goverlay"
     },
     {
       "name": "capability.plan.gaming.gpu-recorder",
       "label": "GPU Screen Recorder",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.gpu-recorder"
     },
     {
       "name": "capability.plan.gaming.sunshine",
       "label": "Sunshine",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.sunshine"
     },
     {
       "name": "capability.plan.gaming.moonlight",
       "label": "Moonlight",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.moonlight"
     },
     {
       "name": "capability.plan.gaming.wivrn",
       "label": "WiVRn",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.wivrn"
     },
     {
       "name": "capability.plan.gaming.protonplus",
       "label": "ProtonPlus",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.protonplus"
     },
     {
       "name": "capability.plan.gaming.protontricks",
       "label": "Protontricks",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.protontricks"
     },
     {
       "name": "capability.plan.gaming.bottles",
       "label": "Bottles",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.bottles"
     },
     {
       "name": "capability.plan.gaming.prism",
       "label": "Prism Launcher",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.prism"
     },
     {
       "name": "capability.plan.gaming.lutris",
       "label": "Lutris",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.lutris"
     },
     {
       "name": "capability.plan.gaming.heroic",
       "label": "Heroic Games Launcher",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.heroic"
     },
     {
       "name": "capability.plan.gaming.steam",
       "label": "Steam",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability gaming.steam"
     },
     {
       "name": "capability.plan.hardware.openrgb",
       "label": "OpenRGB",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.openrgb"
     },
     {
       "name": "capability.plan.hardware.piper",
       "label": "Piper",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.piper"
     },
     {
       "name": "capability.plan.hardware.solaar",
       "label": "Solaar",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.solaar"
     },
     {
       "name": "capability.plan.hardware.input-remapper",
       "label": "Input Remapper",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.input-remapper"
     },
     {
       "name": "capability.plan.hardware.oversteer",
       "label": "Oversteer",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.oversteer"
     },
     {
       "name": "capability.plan.hardware.lact",
       "label": "LACT",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.lact"
     },
     {
       "name": "capability.plan.hardware.cpu-x",
       "label": "CPU-X",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.cpu-x"
     },
     {
       "name": "capability.plan.hardware.qdiskinfo",
       "label": "QDiskInfo",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.qdiskinfo"
     },
     {
       "name": "capability.plan.hardware.f3",
       "label": "F3",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.f3"
     },
     {
       "name": "capability.plan.hardware.xpadneo",
       "label": "Xpadneo",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.xpadneo"
     },
     {
       "name": "capability.plan.hardware.rocm",
       "label": "ROCm",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.rocm"
     },
     {
       "name": "capability.plan.hardware.intel-compute",
       "label": "Intel Compute Runtime",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability hardware.intel-compute"
     },
     {
       "name": "capability.plan.health.zram",
       "label": "ZRAM Generator",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability health.zram"
     },
     {
       "name": "capability.plan.health.earlyoom",
       "label": "EarlyOOM",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability health.earlyoom"
     },
     {
       "name": "capability.plan.health.ananicy",
       "label": "Ananicy Cpp",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability health.ananicy"
     },
     {
       "name": "capability.plan.health.btrfs-assistant",
       "label": "Btrfs Assistant",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability health.btrfs-assistant"
     },
     {
       "name": "capability.plan.health.iwd",
       "label": "iNet Wireless Daemon",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability health.iwd"
     },
     {
       "name": "capability.plan.security.apparmor",
       "label": "AppArmor",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.apparmor"
     },
     {
       "name": "capability.plan.security.ufw",
       "label": "UFW",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.ufw"
     },
     {
       "name": "capability.plan.security.flatseal",
       "label": "Flatseal",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.flatseal"
     },
     {
       "name": "capability.plan.security.bitwarden",
       "label": "Bitwarden",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.bitwarden"
     },
     {
       "name": "capability.plan.security.keepassxc",
       "label": "KeePassXC",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.keepassxc"
     },
     {
       "name": "capability.plan.security.cryptomator",
       "label": "Cryptomator",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.cryptomator"
     },
     {
       "name": "capability.plan.security.wireguard",
       "label": "WireGuard",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.wireguard"
     },
     {
       "name": "capability.plan.security.librewolf",
       "label": "LibreWolf",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.librewolf"
     },
     {
       "name": "capability.plan.security.brave",
       "label": "Brave",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability security.brave"
     },
     {
       "name": "capability.plan.backup.pika",
       "label": "Pika Backup",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability backup.pika"
     },
     {
       "name": "capability.plan.backup.rclone",
       "label": "Rclone",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability backup.rclone"
     },
     {
       "name": "capability.plan.backup.sirikali",
       "label": "SiriKali",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability backup.sirikali"
     },
     {
       "name": "capability.plan.development.docker",
       "label": "Docker",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.docker"
     },
     {
       "name": "capability.plan.development.virt-manager",
       "label": "Virt-Manager",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.virt-manager"
     },
     {
       "name": "capability.plan.development.kind",
       "label": "Kind",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.kind"
     },
     {
       "name": "capability.plan.development.dotnet",
       "label": ".NET SDK",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.dotnet"
     },
     {
       "name": "capability.plan.development.jdk",
       "label": "OpenJDK",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.jdk"
     },
     {
       "name": "capability.plan.development.maven",
       "label": "Maven",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.maven"
     },
     {
       "name": "capability.plan.development.mise",
       "label": "Mise",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.mise"
     },
     {
       "name": "capability.plan.development.pyenv",
       "label": "Pyenv",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.pyenv"
     },
     {
       "name": "capability.plan.development.pnpm",
       "label": "pnpm",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.pnpm"
     },
     {
       "name": "capability.plan.development.k6",
       "label": "k6",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.k6"
     },
     {
       "name": "capability.plan.development.httpie",
       "label": "HTTPie",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.httpie"
     },
     {
       "name": "capability.plan.development.postman",
       "label": "Postman",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.postman"
     },
     {
       "name": "capability.plan.development.neovim",
       "label": "Neovim",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.neovim"
     },
     {
       "name": "capability.plan.development.vscode",
       "label": "Visual Studio Code",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.vscode"
     },
     {
       "name": "capability.plan.development.vscodium",
       "label": "VSCodium",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.vscodium"
     },
     {
       "name": "capability.plan.development.godot",
       "label": "Godot Engine",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.godot"
     },
     {
       "name": "capability.plan.creative.blender",
       "label": "Blender",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.blender"
     },
     {
       "name": "capability.plan.creative.gimp",
       "label": "GIMP",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.gimp"
     },
     {
       "name": "capability.plan.creative.krita",
       "label": "Krita",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.krita"
     },
     {
       "name": "capability.plan.creative.kdenlive",
       "label": "Kdenlive",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.kdenlive"
     },
     {
       "name": "capability.plan.creative.inkscape",
       "label": "Inkscape",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.inkscape"
     },
     {
       "name": "capability.plan.creative.freecad",
       "label": "FreeCAD",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.freecad"
     },
     {
       "name": "capability.plan.creative.kicad",
       "label": "KiCad",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.kicad"
     },
     {
       "name": "capability.plan.creative.audacity",
       "label": "Audacity",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.audacity"
     },
     {
       "name": "capability.plan.creative.darktable",
       "label": "Darktable",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.darktable"
     },
     {
       "name": "capability.plan.creative.libreoffice",
       "label": "LibreOffice",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.libreoffice"
     },
     {
       "name": "capability.plan.creative.obsidian",
       "label": "Obsidian",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability creative.obsidian"
     },
     {
       "name": "capability.plan.administration.cockpit",
       "label": "Cockpit",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability administration.cockpit"
     },
     {
       "name": "capability.plan.administration.tailscale",
       "label": "Tailscale",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability administration.tailscale"
     },
     {
       "name": "capability.plan.administration.zerotier",
       "label": "ZeroTier",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability administration.zerotier"
     },
     {
       "name": "capability.plan.administration.topgrade",
       "label": "Topgrade",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability administration.topgrade"
     },
     {
       "name": "capability.plan.education.gcompris",
       "label": "GCompris",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability education.gcompris"
     },
     {
       "name": "capability.plan.education.stellarium",
       "label": "Stellarium",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability education.stellarium"
     },
     {
       "name": "capability.plan.education.kalzium",
       "label": "Kalzium",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
-      "input_label": ""
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability education.kalzium"
     },
     {
       "name": "capability.plan.education.kolibri",
       "label": "Kolibri",
-      "command": "capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
       "mutable": true,
       "require_plan": true,
       "module": "Recursos",
       "elevated": true,
       "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability education.kolibri"
+    },
+    {
+      "name": "ai.routing-status",
+      "label": "Status Roteamento IA",
+      "command": "linux/pz ai routing status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
       "input_label": ""
+    },
+    {
+      "name": "ai.routing-inventory",
+      "label": "Atualizar cotas",
+      "command": "linux/pz ai routing inventory --refresh-quota --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-recommend-code",
+      "label": "Recomendar rota — Código",
+      "command": "linux/pz ai routing recommend --task code --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-recommend-analysis",
+      "label": "Recomendar rota — Análise",
+      "command": "linux/pz ai routing recommend --task analysis --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-recommend-plan",
+      "label": "Recomendar rota — Plano",
+      "command": "linux/pz ai routing recommend --task plan --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-plan",
+      "label": "Plano da rota (diff)",
+      "command": "linux/pz ai routing plan --task code --client claude",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-apply-all",
+      "label": "Aplicar plano",
+      "command": "linux/pz ai routing apply --task code --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz ai routing apply --task code --dry-run"
+    },
+    {
+      "name": "ai.routing-verify",
+      "label": "Verificar roteamento",
+      "command": "linux/pz ai routing verify",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-refresh",
+      "label": "Refresh automático de cotas",
+      "command": "linux/pz ai routing refresh",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.routing-rollback",
+      "label": "Rollback Roteamento IA",
+      "command": "linux/pz ai routing rollback {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Roteamento IA",
+      "elevated": false,
+      "input_kind": "file",
+      "input_label": "Selecione manifest.json",
+      "plan_command": "linux/pz ai routing verify"
     }
   ]
 }

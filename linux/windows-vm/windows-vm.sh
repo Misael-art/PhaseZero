@@ -85,6 +85,8 @@ RAW_DISK_BUS="nvme"
 DISPLAY_MODE="gtk"
 OPTIMIZE_HOST="${PZ_WINDOWS_VM_OPTIMIZE:-1}"
 GRAPHICS_PROFILE=""
+GUEST_LOGIN_POLICY=""
+GUEST_USER=""
 NET_MODEL=""
 OVMF_CODE=""
 GRAPHICS_EXPERIMENTAL=0
@@ -102,6 +104,8 @@ Usage:
   pz windows-vm install --iso <windows.iso> [--disk-size 256G] [--ram 8192|8G] [--cpus N] [--dry-run]
   pz windows-vm optimize [--dry-run]
   pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--graphics <profile>] [--experimental] [--dry-run]
+  pz windows-vm launch-check [--graphics <profile>] [--json]
+  pz windows-vm guest-login (status|backup|apply|restore|reboot|shutdown) [--mode auto|password] [--json]
   pz windows-vm graphics status [--json]
   pz windows-vm graphics doctor [--json]
   pz windows-vm graphics plan --profile <auto|compat|virtio-gl|virtio-venus|rutabaga|vfio-looking-glass> [--json]
@@ -611,6 +615,12 @@ effective_config() {
     EXTRA_ARGS="${EXTRA_ARGS:-${PZ_WINDOWS_VM_EXTRA_ARGS:-}}"
     GRAPHICS_PROFILE="${GRAPHICS_PROFILE:-${PZ_WINDOWS_VM_GRAPHICS_PROFILE:-compat}}"
     [ "$GRAPHICS_PROFILE" = "auto" ] && GRAPHICS_PROFILE=compat
+    GUEST_LOGIN_POLICY="${GUEST_LOGIN_POLICY:-${PZ_WINDOWS_VM_GUEST_LOGIN_POLICY:-auto}}"
+    case "$GUEST_LOGIN_POLICY" in
+        auto|password) ;;
+        *) pz_warn "unknown guest login policy '$GUEST_LOGIN_POLICY'; falling back to auto"; GUEST_LOGIN_POLICY=auto ;;
+    esac
+    GUEST_USER="${GUEST_USER:-${PZ_WINDOWS_VM_GUEST_USER:-phasezero}}"
     NET_MODEL="${NET_MODEL:-${PZ_WINDOWS_VM_NET_MODEL:-e1000e}}"
     case "$NET_MODEL" in
         e1000e|virtio-net-pci) ;;
@@ -689,6 +699,8 @@ write_config() {
         printf 'PZ_WINDOWS_VM_DISK_SOURCE=%q\n' "$DISK_SOURCE"
         printf 'PZ_WINDOWS_VM_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
         printf 'PZ_WINDOWS_VM_GRAPHICS_PROFILE=%q\n' "$GRAPHICS_PROFILE"
+        printf 'PZ_WINDOWS_VM_GUEST_LOGIN_POLICY=%q\n' "$GUEST_LOGIN_POLICY"
+        printf 'PZ_WINDOWS_VM_GUEST_USER=%q\n' "$GUEST_USER"
         printf 'PZ_WINDOWS_VM_NET_MODEL=%q\n' "$NET_MODEL"
         printf 'PZ_WINDOWS_VM_SHARE_POLICY=%q\n' "$SHARE_POLICY"
         printf 'PZ_WINDOWS_VM_SHARE_WRITABLE=%q\n' "$SHARE_WRITABLE"
@@ -1946,20 +1958,85 @@ launch_vm() {
         return 0
     fi
     pz_info "Windows VM shares: \\\\10.0.2.4\\qemu (policy=$SHARE_POLICY)"
-    if [ "$GRAPHICS" = "virtio-gl" ]; then
+    if [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
         pz_info "Display: local GTK with virtio-gl acceleration (SPICE USB redirection disabled)"
     else
         pz_info "SPICE USB redirection: spice://$SPICE_ADDR:5930"
     fi
+    local qemu_rc=0
+    set +e
     if command -v ionice >/dev/null 2>&1; then
-        exec ionice -c 2 -n 0 qemu-system-x86_64 "${QEMU_ARGS[@]}"
+        ionice -c 2 -n 0 qemu-system-x86_64 "${QEMU_ARGS[@]}"
+        qemu_rc=$?
+    else
+        qemu-system-x86_64 "${QEMU_ARGS[@]}"
+        qemu_rc=$?
     fi
-    exec qemu-system-x86_64 "${QEMU_ARGS[@]}"
+    set -e
+    cleanup_runtime
+    trap - EXIT INT TERM
+    return "$qemu_rc"
+}
+
+launch_check() {
+    parse_options "$@"
+    effective_config
+    local -a blockers=()
+    local kvm=false disk=false ovmf=false vars=false qemu=false graphics=false
+    local kvm_path="${PZ_WINDOWS_VM_KVM_PATH:-/dev/kvm}"
+
+    [ -r "$kvm_path" ] && [ -w "$kvm_path" ] && kvm=true || blockers+=("KVM sem acesso read/write: $kvm_path")
+    [ -f "$DISK_PATH" ] && [ -r "$DISK_PATH" ] && disk=true || blockers+=("disco da VM ausente ou ilegível")
+    [ -n "$OVMF_CODE" ] && [ -f "$OVMF_CODE" ] && [ -r "$OVMF_CODE" ] && ovmf=true || blockers+=("firmware OVMF ausente ou ilegível")
+    [ -f "$OVMF_VARS" ] && [ -r "$OVMF_VARS" ] && [ -w "$OVMF_VARS" ] && vars=true || blockers+=("OVMF_VARS ausente ou sem escrita")
+    command -v qemu-system-x86_64 >/dev/null 2>&1 && qemu=true || blockers+=("qemu-system-x86_64 ausente")
+
+    case "$GRAPHICS_PROFILE" in
+        compat) graphics=true ;;
+        virtio-gl)
+            local render_node="" qemu_bin
+            for render_node in /dev/dri/renderD*; do
+                [ -r "$render_node" ] && [ -w "$render_node" ] && break
+                render_node=""
+            done
+            [ -n "$render_node" ] || blockers+=("render node GL sem acesso")
+            qemu_bin="$(command -v qemu-system-x86_64 2>/dev/null || true)"
+            if [ -n "$qemu_bin" ] && "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl' \
+                && "$qemu_bin" -display help 2>/dev/null | grep -qw gtk; then
+                [ -n "$render_node" ] && graphics=true
+            else
+                blockers+=("QEMU sem virtio-vga-gl/GTK")
+            fi
+            ;;
+        *) blockers+=("perfil gráfico não suportado no Windows: $GRAPHICS_PROFILE") ;;
+    esac
+
+    local success=false
+    [ "${#blockers[@]}" -eq 0 ] && success=true
+    if [ "$JSON_OUT" = "1" ]; then
+        printf '%s\n' "${blockers[@]:-}" | jq -R -s \
+            --argjson success "$success" \
+            --arg profile "$GRAPHICS_PROFILE" \
+            --arg diskPath "$DISK_PATH" \
+            --argjson kvm "$kvm" --argjson disk "$disk" --argjson ovmf "$ovmf" \
+            --argjson vars "$vars" --argjson qemu "$qemu" --argjson graphics "$graphics" \
+            '{success:$success,graphicsProfile:$profile,diskPath:$diskPath,
+              checks:{kvm:$kvm,disk:$disk,ovmf:$ovmf,ovmfVars:$vars,qemu:$qemu,graphics:$graphics},
+              blockers:(split("\n")|map(select(length>0)))}'
+    else
+        if $success; then
+            pz_info "Windows VM launch preflight passed ($GRAPHICS_PROFILE)"
+        else
+            pz_error "Windows VM launch preflight failed:"
+            printf '  - %s\n' "${blockers[@]}" >&2
+        fi
+    fi
+    $success
 }
 
 status_json() {
     effective_config
-    local kvm="no" config="no" disk="no" iso="no" ovmf="no" vars="no" qemu="" qemu_img="" virtiofs="" smbd="" swtpm_bin="" boot_helper="no" boot_service="no" boot_grub="unknown" current_marker="no" installed_like="no" boot_current="no" samba_managed="no" samba_reachable="no" share_links="no" usb_udev_managed="no" discovery
+    local kvm="no" config="no" disk="no" iso="no" ovmf="no" vars="no" qemu="" qemu_img="" virtiofs="" smbd="" swtpm_bin="" boot_helper="no" boot_service="no" boot_grub="unknown" current_marker="no" installed_like="no" boot_current="no" boot_verification="stale" samba_managed="no" samba_reachable="no" share_links="no" usb_udev_managed="no" discovery
     local domain_state="missing" domain_disk=""
     [ -e /dev/kvm ] && kvm="yes"
     [ -f "$CONFIG_FILE" ] && config="yes"
@@ -1987,7 +2064,13 @@ status_json() {
     samba_policy_compliant && samba_policy="yes"
     share_links_ready && share_links="yes"
     windows_usb_udev_managed && usb_udev_managed="yes"
-    boot_artifacts_current && boot_current="yes"
+    if boot_artifacts_current; then
+        boot_current="yes"
+        boot_verification="verified"
+    elif [ "$EUID" -ne 0 ] && [ ! -x "$(dirname "$GRUB_SCRIPT")" ]; then
+        boot_current="unknown"
+        boot_verification="unknown-permission"
+    fi
     boot_grub="$(grub_cfg_entry_state)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && current_marker="yes"
     discovery="$(discovery_json)"
@@ -2040,6 +2123,9 @@ status_json() {
         --arg bootHelper "$boot_helper" \
         --arg bootService "$boot_service" \
         --arg bootArtifactsCurrent "$boot_current" \
+        --arg artifactsVerification "$boot_verification" \
+        --arg hostLoginPolicy "$(root_env_value PZ_WINDOWS_VM_REQUIRE_LOGIN)" \
+        --arg guestLoginPolicy "$GUEST_LOGIN_POLICY" \
         --arg bootConfiguredRepo "$(root_env_value PZ_WINDOWS_VM_REPO)" \
         --arg bootConfiguredUser "$(root_env_value PZ_WINDOWS_VM_BOOT_USER)" \
         --arg grubEntry "$boot_grub" \
@@ -2070,7 +2156,12 @@ status_json() {
                 usbAccessibleDevices: ($usbAccessibleDevices|tonumber)
             },
             discovery: $discovery,
-            boot: {helperInstalled: ($bootHelper == "yes"), serviceInstalled: ($bootService == "yes"), artifactsCurrent: ($bootArtifactsCurrent == "yes"), configuredRepo: $bootConfiguredRepo, configuredUser: $bootConfiguredUser, grubCfgEntry: $grubEntry, currentBootWindowsVm: ($currentMarker == "yes")}
+            boot: {helperInstalled: ($bootHelper == "yes"), serviceInstalled: ($bootService == "yes"),
+                   artifactsCurrent:(if $bootArtifactsCurrent == "unknown" then null else ($bootArtifactsCurrent == "yes") end),
+                   artifactsVerification:$artifactsVerification,
+                   hostLoginPolicy:(if $hostLoginPolicy == "1" then "password" else "auto" end),
+                   guestLoginPolicy:$guestLoginPolicy, guestLoginVerified:false,
+                   configuredRepo: $bootConfiguredRepo, configuredUser: $bootConfiguredUser, grubCfgEntry: $grubEntry, currentBootWindowsVm: ($currentMarker == "yes")}
         }'
 }
 
@@ -2695,10 +2786,17 @@ status_boot() {
         case "$1" in --json) json=1; shift ;; *) shift ;; esac
     done
 
-    local loader="" grub_env="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
+    effective_config
+    local loader="" grub_env="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no" artifacts_verification="stale"
     loader="$(detected_loader)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && cmdline_marker="yes"
-    boot_artifacts_current && artifacts_current="yes"
+    if boot_artifacts_current; then
+        artifacts_current="yes"
+        artifacts_verification="verified"
+    elif [ "$EUID" -ne 0 ] && [ ! -x "$(dirname "$GRUB_SCRIPT")" ]; then
+        artifacts_current="unknown"
+        artifacts_verification="unknown-permission"
+    fi
     # grub-editenv list exits 1 when the env block is missing or permission is
     # denied; under set -euo pipefail a pipeline failure must not abort status,
     # and stdout/stderr must not leak partial output. One invocation only, the
@@ -2732,6 +2830,7 @@ status_boot() {
     local configured_repo; configured_repo="$(root_env_value PZ_WINDOWS_VM_REPO)"
     local configured_user; configured_user="$(root_env_value PZ_WINDOWS_VM_BOOT_USER)"
     local boot_ready="no" one_shot_ready="no"
+    local artifacts_current_json=false
     # bootReady only for a loader whose entry is CONFIRMED present; an
     # unknown/unsupported loader entry must never render ready.
     if [ "$artifacts_current" = "yes" ] && [ "$loader_entry" = "present" ] && [ "$service_enabled" = "enabled" ] && [ "$helper_installed" = "yes" ]; then
@@ -2740,6 +2839,10 @@ status_boot() {
             refind) boot_ready="yes" ;;
         esac
     fi
+    case "$artifacts_current" in
+        yes) artifacts_current_json=true ;;
+        unknown) artifacts_current_json=null ;;
+    esac
 
     if [ "$json" = "1" ]; then
         jq -n \
@@ -2758,7 +2861,10 @@ status_boot() {
             --arg grubScriptExists "$grub_script" \
             --arg bootLoader "$loader" \
             --arg loaderEntry "$loader_entry" \
-            --argjson artifactsCurrent "$([ "$artifacts_current" = "yes" ] && echo true || echo false)" \
+            --argjson artifactsCurrent "$artifacts_current_json" \
+            --arg artifactsVerification "$artifacts_verification" \
+            --arg hostLoginPolicy "$(root_env_value PZ_WINDOWS_VM_REQUIRE_LOGIN)" \
+            --arg guestLoginPolicy "$GUEST_LOGIN_POLICY" \
             --arg configuredRepo "$configured_repo" \
             --arg configuredBootUser "$configured_user" \
             --arg grubCfgEntry "$grub_cfg_entry" \
@@ -2782,6 +2888,10 @@ status_boot() {
                 grubScript: $grubScript, grubScriptExists: $grubScriptExists,
                 bootLoader: $bootLoader, loaderEntry: $loaderEntry,
                 artifactsCurrent: $artifactsCurrent,
+                artifactsVerification: $artifactsVerification,
+                hostLoginPolicy: (if $hostLoginPolicy == "1" then "password" else "auto" end),
+                guestLoginPolicy: $guestLoginPolicy,
+                guestLoginVerified: false,
                 configuredRepo: $configuredRepo, configuredBootUser: $configuredBootUser,
                 grubCfgEntry: $grubCfgEntry,
                 grubNextEntry: $grubNextEntry, grubSavedEntry: $grubSavedEntry,
@@ -2804,6 +2914,7 @@ status_boot() {
         echo "loader: $loader"
         echo "loader_entry: $loader_entry"
         echo "artifacts_current: $artifacts_current"
+        echo "artifacts_verification: $artifacts_verification"
         echo "configured_repo: $configured_repo"
         echo "configured_boot_user: $configured_user"
         echo "grub_cfg_entry: $grub_cfg_entry"
@@ -2873,10 +2984,12 @@ case "$ACTION" in
     graphics|gpu) bash "$PZ_ROOT/linux/windows-vm/graphics.sh" "$@" ;;
     apps|frontends|containers) bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" "$@" ;;
     launch|start|run) launch_vm "$@" ;;
+    launch-check|launch-preflight) launch_check "$@" ;;
+    guest-login) bash "$PZ_ROOT/linux/windows-vm/guest-login.sh" "$@" ;;
     boot) cmd_boot "$@" ;;
     media|iso) bash "$PZ_ROOT/linux/windows-vm/media-inspect.sh" "$@" ;;
     preflight|check|readiness) bash "$PZ_ROOT/linux/windows-vm/preflight.sh" "$@" ;;
     provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|boot|media|preflight|provision)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|launch-check|guest-login|boot|media|preflight|provision)"; exit 1 ;;
 esac
