@@ -104,8 +104,10 @@ case "$*" in
 esac
 EOF
 chmod +x "$fake_qemu"
+ln -s "$fake_qemu" "$fake_bin/qemu-system-x86_64"
 touch "$fake_bin/looking-glass-client"
 chmod +x "$fake_bin/looking-glass-client"
+export PATH="$fake_bin:$PATH"
 
 virsh_bin="$TMP_ROOT/virsh-bin"
 mkdir -p "$virsh_bin"

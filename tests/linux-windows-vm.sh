@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Smoke tests for PhaseZero Linux Windows VM automation.
+# shellcheck disable=SC2016 # Assertions intentionally match literal shell source.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -13,6 +14,88 @@ export XDG_CACHE_HOME="$HOME/.cache"
 export XDG_STATE_HOME="$TMP_ROOT/state"
 export XDG_RUNTIME_DIR="$TMP_ROOT/run"
 mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
+
+# Hermetic privilege/mount stubs: every test below must run without real
+# mount/umount/mountpoint/findmnt calls and without real sudo/bigsudo/
+# pkexec/phasezero-admin. Stubs log argv to $PZ_STUB_LOG and keep a fake
+# mount table in $PZ_STUB_MOUNTS/$PZ_STUB_MODES so mountpoint/findmnt agree
+# with mount/umount. Failure injection via PZ_STUB_UMOUNT_FAIL=1.
+STUB_BIN="$TMP_ROOT/stubs"
+mkdir -p "$STUB_BIN"
+export PZ_STUB_MOUNTS="$TMP_ROOT/stub-mounts"
+export PZ_STUB_MODES="$TMP_ROOT/stub-modes"
+export PZ_STUB_LOG="$TMP_ROOT/stub-mount.log"
+: > "$PZ_STUB_MOUNTS"
+: > "$PZ_STUB_MODES"
+: > "$PZ_STUB_LOG"
+cat > "$STUB_BIN/mount" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'mount %s\n' "$*" >> "$PZ_STUB_LOG"
+args=("$@")
+mp="${args[@]: -1}"
+opts=""
+for ((i = 0; i < ${#args[@]}; i++)); do
+    if [ "${args[i]}" = "-o" ]; then
+        opts="${args[i + 1]:-}"
+        break
+    fi
+done
+mode="rw"
+case ",$opts," in
+    *,ro,*) mode="ro" ;;
+esac
+if [ "${PZ_STUB_MOUNT_FAIL:-0}" = "1" ]; then exit 1; fi
+grep -qxF "$mp" "$PZ_STUB_MOUNTS" || printf '%s\n' "$mp" >> "$PZ_STUB_MOUNTS"
+grep -qF "$mp " "$PZ_STUB_MODES" || printf '%s %s\n' "$mp" "$mode" >> "$PZ_STUB_MODES"
+sed -i "s#^${mp} .*#${mp} ${mode}#" "$PZ_STUB_MODES"
+exit 0
+EOF
+cat > "$STUB_BIN/umount" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf 'umount %s\n' "$*" >> "$PZ_STUB_LOG"
+if [ "${PZ_STUB_UMOUNT_FAIL:-0}" = "1" ]; then exit 1; fi
+mp="${@: -1}"
+sed -i "\#^${mp}\$#d" "$PZ_STUB_MOUNTS"
+sed -i "\#^${mp} #d" "$PZ_STUB_MODES"
+exit 0
+EOF
+cat > "$STUB_BIN/mountpoint" <<'EOF'
+#!/usr/bin/env bash
+set -u
+mp="${@: -1}"
+[ -n "$mp" ] || exit 3
+grep -qxF "$mp" "$PZ_STUB_MOUNTS"
+EOF
+cat > "$STUB_BIN/findmnt" <<'EOF'
+#!/usr/bin/env bash
+set -u
+mp="${@: -1}"
+mode="$(awk -v mp="$mp" '$1 == mp {print $2}' "$PZ_STUB_MODES" 2>/dev/null)"
+[ -n "$mode" ] || exit 1
+printf '%s,relatime\n' "$mode"
+exit 0
+EOF
+cat > "$STUB_BIN/qemu-system-x86_64" <<'EOF'
+#!/usr/bin/env bash
+printf 'qemu %s\n' "$*" >> "$PZ_STUB_LOG"
+exit 0
+EOF
+for tool in sudo bigsudo pkexec phasezero-admin; do
+    cat > "$STUB_BIN/$tool" <<'EOF'
+#!/usr/bin/env bash
+set -u
+printf '%s %s\n' "$(basename "$0")" "$*" >> "$PZ_STUB_LOG"
+# sudo -n is a flag, not a command; exec would misparse it as an option
+if [ "${1:-}" = "-n" ]; then
+    shift
+fi
+exec "$@"
+EOF
+done
+chmod +x "$STUB_BIN"/*
+export PATH="$STUB_BIN:$PATH"
 
 iso="$TMP_ROOT/Win11_test.iso"
 printf 'fake iso for dry-run tests\n' > "$iso"
@@ -60,10 +143,17 @@ grep -q 'smb_unc' <<< "$plan_output"
 grep -q 'disk_source' <<< "$plan_output"
 grep -q 'share_policy: minimal' <<< "$plan_output"
 grep -q 'share_policy: full' <<< "$(PZ_WINDOWS_VM_SHARE_POLICY=full "$REPO_ROOT/linux/pz" windows-vm plan --iso "$iso")"
+grep -Fq '"$NET_MODEL,netdev=net0' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'socket,path=$RUNTIME_DIR/qga.sock' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 shares_plan="$("$REPO_ROOT/linux/pz" windows-vm shares dry-run)"
 grep -q 'share policy: minimal' <<< "$shares_plan"
 grep -q 'exchange/' <<< "$shares_plan"
-! grep -q 'PZHome\|home/' <<< "$shares_plan"
+# shellcheck disable=SC2016 # 'SPICE WebDAV' is a literal informational line
+if grep -q 'PZHome\|home/' <<< "$(grep -v 'SPICE WebDAV' <<< "$shares_plan")"; then
+    echo "minimal share plan must not expose PZHome/home" >&2
+    exit 1
+fi
 shares_plan_full="$(PZ_WINDOWS_VM_SHARE_POLICY=full "$REPO_ROOT/linux/pz" windows-vm shares dry-run)"
 grep -q 'PZHome' <<< "$shares_plan_full"
 grep -q 'share policy: full' <<< "$shares_plan_full"
@@ -79,14 +169,48 @@ run_wv_unit() {
         '"$1"'
     ' <<< "$WV_SRC"
 }
+adopt_dir="$TMP_ROOT/adopt-self-contained"
+adopt_disk="$adopt_dir/phasezero-windows.qcow2"
+mkdir -p "$adopt_dir"
+truncate -s 64M "$adopt_disk"
+export WV_UNIT_ADOPT_DISK="$adopt_disk"
+run_wv_unit 'disk_looks_installed() { return 0; }; target_user_can_rw() { return 0; }; install_user_files() { :; }; ensure_vm_storage() { install -d "$VM_DIR" "$STATE_DIR" "$RUNTIME_DIR"; : > "$OVMF_VARS"; }; cmd_adopt --disk "$WV_UNIT_ADOPT_DISK" >/dev/null'
+unset WV_UNIT_ADOPT_DISK
+# shellcheck disable=SC1090
+source "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
+[ "$PZ_WINDOWS_VM_DIR" = "$adopt_dir" ]
+[ "$PZ_WINDOWS_VM_OVMF_VARS" = "$adopt_dir/OVMF_VARS.fd" ]
+[ "$PZ_WINDOWS_VM_SHARE_ROOT" = "$adopt_dir/shares" ]
+[ "$PZ_WINDOWS_VM_TPM_DIR" = "$adopt_dir/tpm" ]
+[ "$PZ_WINDOWS_VM_SMB_HOST" = "10.0.2.2" ]
+[ "$PZ_WINDOWS_VM_LIBVIRT_DOMAIN" = "" ]
+[ "$PZ_WINDOWS_VM_SHARE_POLICY" = "minimal" ]
+echo "  adopt keeps disk, NVRAM, shares and TPM self-contained"
+rm -f "$XDG_CONFIG_HOME/phasezero/windows-vm.conf"
+grep -Fq 'TARGET_RUNTIME_BASE="/run/user/$target_uid"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq '/run/media/$TARGET_USER' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+minimal_ready_root="$TMP_ROOT/minimal-ready"
+mkdir -p "$minimal_ready_root/exchange"
+printf '%s\n' "$minimal_ready_root/exchange" >> "$PZ_STUB_MOUNTS"
+export WV_UNIT_MINIMAL_ROOT="$minimal_ready_root"
+run_wv_unit 'SHARE_POLICY=minimal SHARE_BIND_ROOT="$WV_UNIT_MINIMAL_ROOT" share_links_ready'
+unset WV_UNIT_MINIMAL_ROOT
+sed -i "\#^${minimal_ready_root}/exchange\$#d" "$PZ_STUB_MOUNTS"
+echo "  minimal share readiness requires only exchange"
+grep -Fq 'rmdir -- "$SHARE_BIND_ROOT/$name"' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 min_samba="$(run_wv_unit 'SHARE_POLICY=minimal samba_block_content')"
 grep -q '^\[PZExchange\]' <<< "$min_samba"
-! grep -q '^\[PZ\(Home\|SDCard\|Removable\|Media\|Mounts\)\]' <<< "$min_samba"
+if grep -q '^\[PZ\(Home\|SDCard\|Removable\|Media\|Mounts\)\]' <<< "$min_samba"; then
+    echo "minimal samba block must not expose expanded shares" >&2
+    exit 1
+fi
 full_samba="$(run_wv_unit 'SHARE_POLICY=full samba_block_content')"
 grep -q '^\[PZHome\]' <<< "$full_samba"
 grep -q '^\[PZMounts\]' <<< "$full_samba"
 grep -q 'read only = yes' <<< "$full_samba"
-! grep -q '^\[PZExchange\]$' <<< "$min_samba" || grep -q 'read only = no' <<< "$min_samba"
+if grep -q '^\[PZExchange\]$' <<< "$min_samba"; then
+    grep -q 'read only = no' <<< "$min_samba"
+fi
 writable_samba="$(run_wv_unit 'SHARE_POLICY=full SHARE_WRITABLE=1 samba_block_content')"
 grep -q 'read only = no' <<< "$writable_samba"
 
@@ -111,12 +235,134 @@ prune_out="$(run_wv_unit '
 grep -q 'home_link=gone' <<< "$prune_out"
 grep -q 'mnt_link=gone' <<< "$prune_out"
 grep -q 'exchange_link=present' <<< "$prune_out"
+
+echo ""
+echo "=== shares: minimal policy binds only exchange ==="
+: > "$PZ_STUB_MOUNTS"
+: > "$PZ_STUB_MODES"
+: > "$PZ_STUB_LOG"
+min_bind="$(run_wv_unit '
+    EXCHANGE_DIR="$HOME/Shared/exchange"
+    mkdir -p "$HOME/Shared"
+    SHARE_POLICY=minimal DRY_RUN=0 ensure_share_links 0 || exit 90
+    printf "smb_dir=%s\n" "${EFFECTIVE_SMB_DIR:-}"
+')"
+grep -q "smb_dir=$TMP_ROOT/run/phasezero-windows-vm/shares" <<< "$min_bind"
+grep -q '^mount .*shares/exchange' "$PZ_STUB_LOG"
+if grep -q '^mount .*shares/home\|^mount .*shares/mnt\|^mount .*shares/sdcard' "$PZ_STUB_LOG"; then
+    echo "minimal policy mounted an expanded share" >&2
+    exit 1
+fi
+test "$(grep -c '^mount ' "$PZ_STUB_LOG")" -eq 1
+
+echo "=== shares: prune success unmounts stale bind and revalidates ==="
+: > "$PZ_STUB_MOUNTS"
+: > "$PZ_STUB_MODES"
+: > "$PZ_STUB_LOG"
+printf '%s\n' "$TMP_ROOT/run/phasezero-windows-vm/shares/home" >> "$PZ_STUB_MOUNTS"
+printf '%s rw\n' "$TMP_ROOT/run/phasezero-windows-vm/shares/home" >> "$PZ_STUB_MODES"
+prune_ok="$(run_wv_unit '
+    EXCHANGE_DIR="$HOME/Shared/exchange"
+    mkdir -p "$HOME/Shared"
+    set +e
+    SHARE_POLICY=minimal DRY_RUN=0 ensure_share_links 0
+    PRUNE_RC=$?
+    set -e
+    printf "prune_rc=%s mounted=%s\n" "$PRUNE_RC" "$(mountpoint -q "$SHARE_BIND_ROOT/home" && echo yes || echo no)"
+')"
+grep -q '^prune_rc=0' <<< "$prune_ok"
+grep -q 'mounted=no' <<< "$prune_ok"
+grep -q '^umount .*shares/home' "$PZ_STUB_LOG"
+
+echo "=== shares: umount failure fails closed (no EFFECTIVE_SMB_DIR, no QEMU) ==="
+export PZ_STUB_UMOUNT_FAIL=1
+: > "$PZ_STUB_MOUNTS"
+: > "$PZ_STUB_MODES"
+: > "$PZ_STUB_LOG"
+printf '%s\n' "$TMP_ROOT/run/phasezero-windows-vm/shares/home" >> "$PZ_STUB_MOUNTS"
+printf '%s rw\n' "$TMP_ROOT/run/phasezero-windows-vm/shares/home" >> "$PZ_STUB_MODES"
+stale_fail="$(run_wv_unit '
+    EXCHANGE_DIR="$HOME/Shared/exchange"
+    mkdir -p "$HOME/Shared"
+    set +e
+    SHARE_POLICY=minimal DRY_RUN=0 ensure_share_links 0
+    SHARE_RC=$?
+    set -e
+    printf "ensure_rc=%s smb_dir=%s\n" "$SHARE_RC" "${EFFECTIVE_SMB_DIR:-}"
+')"
+grep -q '^ensure_rc=1' <<< "$stale_fail"
+grep -q 'smb_dir=$' <<< "$stale_fail"
+grep -q '^umount .*shares/home' "$PZ_STUB_LOG"
+qemu_guard="$(run_wv_unit '
+    EXCHANGE_DIR="$HOME/Shared/exchange"
+    mkdir -p "$HOME/Shared"
+    set +e
+    SHARE_POLICY=minimal DRY_RUN=0 build_qemu_args
+    BQA_RC=$?
+    set -e
+    printf "bqa_rc=%s\n" "$BQA_RC"
+')"
+unset PZ_STUB_UMOUNT_FAIL
+grep -q '^bqa_rc=1' <<< "$qemu_guard"
+if grep -q '^qemu ' "$PZ_STUB_LOG"; then
+    echo "QEMU was launched despite stale share binds" >&2
+    exit 1
+fi
+
+echo "=== shares: full read-only -> full writable remounts existing binds rw ==="
+: > "$PZ_STUB_MOUNTS"
+: > "$PZ_STUB_MODES"
+: > "$PZ_STUB_LOG"
+printf '%s\n' "$TMP_ROOT/run/phasezero-windows-vm/shares/home" >> "$PZ_STUB_MOUNTS"
+printf '%s ro\n' "$TMP_ROOT/run/phasezero-windows-vm/shares/home" >> "$PZ_STUB_MODES"
+trans_out="$(run_wv_unit '
+    EXCHANGE_DIR="$HOME/Shared/exchange"
+    mkdir -p "$HOME/Shared"
+    set +e
+    SHARE_POLICY=full SHARE_WRITABLE=1 DRY_RUN=0 ensure_share_links 0
+    TRANS_RC=$?
+    set -e
+    printf "trans_rc=%s smb_dir=%s\n" "$TRANS_RC" "${EFFECTIVE_SMB_DIR:-}"
+')"
+grep -q '^trans_rc=0' <<< "$trans_out"
+grep -q "smb_dir=$TMP_ROOT/run/phasezero-windows-vm/shares" <<< "$trans_out"
+grep -q '^mount -o remount,rw,bind .*shares/home' "$PZ_STUB_LOG"
+
+echo "=== shares: writable bind remounted ro when policy demands read-only ==="
+: > "$PZ_STUB_MOUNTS"
+: > "$PZ_STUB_MODES"
+: > "$PZ_STUB_LOG"
+printf '%s\n' "$TMP_ROOT/run/phasezero-windows-vm/shares/home" >> "$PZ_STUB_MOUNTS"
+printf '%s rw\n' "$TMP_ROOT/run/phasezero-windows-vm/shares/home" >> "$PZ_STUB_MODES"
+ro_out="$(run_wv_unit '
+    EXCHANGE_DIR="$HOME/Shared/exchange"
+    mkdir -p "$HOME/Shared"
+    set +e
+    SHARE_POLICY=full SHARE_WRITABLE=0 DRY_RUN=0 ensure_share_links 0
+    RO_RC=$?
+    set -e
+    printf "ro_rc=%s\n" "$RO_RC"
+')"
+grep -q '^ro_rc=0' <<< "$ro_out"
+grep -q '^mount -o remount,ro,bind .*shares/home' "$PZ_STUB_LOG"
+
+echo "=== shares: vm_admin_run routes through stubbed sudo (no real root) ==="
+: > "$PZ_STUB_LOG"
+vm_admin="$(run_wv_unit '
+    vm_admin_run mount --bind -o ro /tmp/fake-src /tmp/fake-dst
+    printf "vm_admin_rc=%s\n" "$?"
+')"
+grep -q '^vm_admin_rc=0' <<< "$vm_admin"
+grep -q '^sudo -n mount --bind -o ro /tmp/fake-src /tmp/fake-dst' "$PZ_STUB_LOG"
+
 spice_invariant="$({ grep -c 'addr=' "$REPO_ROOT/linux/windows-vm/windows-vm.sh" || true
                     grep -c 'addr=' "$REPO_ROOT/linux/windows-vm/provision.sh" || true; } | awk '{s+=$1} END {print s+0}')"
 test "$spice_invariant" -ge 2
 mkdir -p "$HOME/VirtualMachines/PhaseZero-Windows"
 : > "$HOME/VirtualMachines/PhaseZero-Windows/phasezero-windows.qcow2"
 : > "$HOME/VirtualMachines/PhaseZero-Windows/OVMF_VARS.fd"
+: > "$TMP_ROOT/OVMF_CODE.fd"
+export PZ_WINDOWS_VM_OVMF_CODE="$TMP_ROOT/OVMF_CODE.fd"
 grep -q -- 'addr=127.0.0.1' <<< "$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu)"
 grep -q -- 'addr=0.0.0.0' <<< "$(PZ_WINDOWS_VM_SPICE_ADDR=0.0.0.0 "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu 2>/dev/null || true)"
 boot_output="$("$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
@@ -134,6 +380,14 @@ boot_json="$("$REPO_ROOT/linux/pz" windows-vm boot status --json 2>/dev/null || 
 jq -e '.bootLoader == "grub-efi" or .bootLoader == "systemd-boot" or .bootLoader == "grub-bios" or .bootLoader == "efi-stub" or .bootLoader == "refind" or .bootLoader == "none"' <<< "$boot_json" >/dev/null
 jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled")' <<< "$boot_json" >/dev/null
 echo "  boot status --json schema ok"
+
+# bootReady must be false for an unknown/unsupported loader regardless of host
+# state: loaderEntry resolves to "unknown" and can never confirm readiness.
+boot_unknown_json="$(PZ_BOOT_LOADER=unknown "$REPO_ROOT/linux/pz" windows-vm boot status --json 2>/dev/null || echo "")"
+jq -e '.loaderEntry == "unknown"' <<< "$boot_unknown_json" >/dev/null
+jq -e '.bootReady == false' <<< "$boot_unknown_json" >/dev/null
+jq -e '.oneShotReady == false' <<< "$boot_unknown_json" >/dev/null
+echo "  boot status: unknown loader never bootReady"
 
 stale_env="$TMP_ROOT/windows-vm-stale.env"
 cat > "$stale_env" <<EOF
@@ -509,32 +763,29 @@ EOF
 chmod +x "$GRUB_FAKE_DIR/grub-editenv"
 
 # 1) normal env block: both entries parsed
-grub_ok="$(
-    export PATH="$GRUB_FAKE_DIR:$PATH"
-    export FAKE_GRUB_ENV_OUTPUT='next_entry=phasezero-windows-vm
-saved_entry=phasezero-windows-vm'
-    FAKE_GRUB_ENV_RC=0 "$REPO_ROOT/linux/pz" windows-vm boot status --json
-)"
+FAKE_GRUB_ENV_OUTPUT='next_entry=phasezero-windows-vm
+saved_entry=phasezero-windows-vm' \
+FAKE_GRUB_ENV_RC=0 PATH="$GRUB_FAKE_DIR:$PATH" \
+    "$REPO_ROOT/linux/pz" windows-vm boot status --json > "$TMP_ROOT/grub-ok.json"
+grub_ok="$(cat "$TMP_ROOT/grub-ok.json")"
 jq -e '.grubNextEntry == "phasezero-windows-vm"' <<< "$grub_ok" >/dev/null
 jq -e '.grubSavedEntry == "phasezero-windows-vm"' <<< "$grub_ok" >/dev/null
 echo "  grub-editenv ok: entries parsed"
 
 # 2) permission denied: status must degrade to unknown-permission, never abort
-grub_denied="$(
-    export PATH="$GRUB_FAKE_DIR:$PATH"
-    export FAKE_GRUB_ENV_OUTPUT='grub-editenv: error: cannot read /boot/grub/grubenv: Permission denied'
-    FAKE_GRUB_ENV_RC=1 "$REPO_ROOT/linux/pz" windows-vm boot status --json
-)"
+FAKE_GRUB_ENV_OUTPUT='grub-editenv: error: cannot read /boot/grub/grubenv: Permission denied' \
+FAKE_GRUB_ENV_RC=1 PATH="$GRUB_FAKE_DIR:$PATH" \
+    "$REPO_ROOT/linux/pz" windows-vm boot status --json > "$TMP_ROOT/grub-denied.json"
+grub_denied="$(cat "$TMP_ROOT/grub-denied.json")"
 jq -e '.grubNextEntry == "unknown-permission"' <<< "$grub_denied" >/dev/null
 jq -e '.grubSavedEntry == "unknown-permission"' <<< "$grub_denied" >/dev/null
 echo "  grub-editenv permission denied: unknown-permission"
 
 # 3) env block missing (rc != 0, no permission text): renders none
-grub_none="$(
-    export PATH="$GRUB_FAKE_DIR:$PATH"
-    export FAKE_GRUB_ENV_OUTPUT='grub-editenv: error: no environment block'
-    FAKE_GRUB_ENV_RC=1 "$REPO_ROOT/linux/pz" windows-vm boot status --json
-)"
+FAKE_GRUB_ENV_OUTPUT='grub-editenv: error: no environment block' \
+FAKE_GRUB_ENV_RC=1 PATH="$GRUB_FAKE_DIR:$PATH" \
+    "$REPO_ROOT/linux/pz" windows-vm boot status --json > "$TMP_ROOT/grub-none.json"
+grub_none="$(cat "$TMP_ROOT/grub-none.json")"
 jq -e '.grubNextEntry == "none"' <<< "$grub_none" >/dev/null
 jq -e '.grubSavedEntry == "none"' <<< "$grub_none" >/dev/null
 echo "  grub-editenv missing env block: none"

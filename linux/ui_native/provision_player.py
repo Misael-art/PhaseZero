@@ -35,6 +35,7 @@ SHUTDOWN_TIMEOUT_MS = 70_000
 VALIDATE_TIMEOUT_MS = 20_000
 BOOT_STATUS_TIMEOUT_MS = 20_000
 CANCEL_TIMEOUT_MS = 15_000
+FINALIZE_TIMEOUT_MS = 30 * 60 * 1000
 
 # Workers that outlived the window's bounded close wait; kept referenced so
 # their QThreads are not destroyed while still running.
@@ -328,13 +329,12 @@ class ProvisionPlayerWindow(QWidget):
         self._one_shot_ready = False
         self._vm_running = False
         self._snapshot_ok = False
+        self._adopted_ok = False
         self._async_proc: AsyncProc | None = None
         self._reboot_proc: QProcess | None = None
         self._closing = False
         self._discarding = False
 
-        self._resume_state()
-        self._apply_launch_params(iso, graphics, image_index)
         self.setWindowTitle("Preparar Windows e reiniciar")
         self.setMinimumSize(600, 500)
         self.resize(680, 560)
@@ -442,6 +442,10 @@ class ProvisionPlayerWindow(QWidget):
         self._elapsed_timer.timeout.connect(self._update_elapsed)
         self._elapsed_timer.setInterval(1000)
 
+        # Resume only after every widget used by _attach_worker/_set_state exists.
+        # Caller parameters win over persisted display parameters.
+        self._resume_state()
+        self._apply_launch_params(iso, graphics, image_index)
         self._update_summary()
         self.show()
 
@@ -693,6 +697,8 @@ class ProvisionPlayerWindow(QWidget):
 
         self._snapshot_ok = data.get("snapshotExists", False)
         self._vm_running = data.get("qemuRunning", False) or data.get("libvirtRunning", False)
+        # Missing key means an older provision backend; preserve compatibility.
+        self._adopted_ok = bool(data.get("adoptedDiskExists", True))
 
         issues: list[str] = []
 
@@ -700,6 +706,34 @@ class ProvisionPlayerWindow(QWidget):
             issues.append("snapshot")
             self._add_log("Snapshot de restaura\u00e7\u00e3o ausente")
 
+        if not self._vm_running and self._snapshot_ok and not self._adopted_ok:
+            self._run_finalize_async(issues)
+        else:
+            self._fetch_boot_status_async(issues)
+
+    def _run_finalize_async(self, issues: list[str]) -> None:
+        self._checkpoint_label.setText("Finalizando imagem para uso permanente\u2026")
+        self._add_log("Achatando snapshot e adotando VM no PhaseZero\u2026")
+        pz = str(self._root / "linux" / "pz")
+        self._async_proc = AsyncProc(self)
+        self._async_proc.finished.connect(
+            lambda parsed, code: self._on_finalize_result(parsed, code, issues))
+        self._async_proc.errorOccurred.connect(self._on_async_error)
+        self._async_proc.run(pz, [
+            "windows-vm", "provision", "finalize",
+            "--operation-id", self._operation_id,
+            "--json",
+        ], timeout_ms=FINALIZE_TIMEOUT_MS)
+
+    def _on_finalize_result(self, data: object | None, exit_code: int,
+                            issues: list[str]) -> None:
+        self._async_proc = None
+        if exit_code == 0 and isinstance(data, dict) and data.get("success") is True:
+            self._adopted_ok = True
+            self._add_log(f"Imagem adotada: {data.get('adoptedDisk', '')}")
+        else:
+            issues.append("finalize")
+            self._add_log("Falha ao finalizar/adotar imagem")
         self._fetch_boot_status_async(issues)
 
     def _fetch_boot_status_async(self, issues: list[str]) -> None:
@@ -745,6 +779,8 @@ class ProvisionPlayerWindow(QWidget):
             self._repair_btn.setVisible("boot" in issues)
             if "snapshot" in issues:
                 self._checkpoint_label.setText("Conclu\u00eddo \u2014 snapshot ausente")
+            elif "finalize" in issues:
+                self._checkpoint_label.setText("Conclu\u00eddo \u2014 ado\u00e7\u00e3o da imagem falhou")
             elif self._vm_running:
                 self._checkpoint_label.setText("Conclu\u00eddo \u2014 VM ativa, desligue para reboot")
             else:

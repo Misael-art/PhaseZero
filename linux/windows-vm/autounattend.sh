@@ -77,7 +77,16 @@ generate_autounattend() {
     fi
 
     local product_key_xml=""
-    [ -n "$product_key" ] && product_key_xml="<ProductKey>${product_key}</ProductKey>"
+    if [ -n "$product_key" ]; then
+        [[ "$product_key" =~ ^[A-Za-z0-9]{5}(-[A-Za-z0-9]{5}){4}$ ]] || {
+            pz_error "invalid product key format"
+            return 1
+        }
+        product_key_xml="<ProductKey>
+                    <Key>${product_key}</Key>
+                    <WillShowUI>Never</WillShowUI>
+                </ProductKey>"
+    fi
 
     cat > "$AUTOUATTEND_DIR/autounattend.xml" << AUTOUNATTENDEOF
 <?xml version="1.0" encoding="utf-8"?>
@@ -92,7 +101,7 @@ generate_autounattend() {
             </UserData>
             <EnableFirewall>true</EnableFirewall>
             <EnableNetwork>true</EnableNetwork>
-            <Restart>restart</Restart>
+            <Restart>Restart</Restart>
             <RunSynchronous>
                 ${bypass_xml}
             </RunSynchronous>
@@ -112,11 +121,6 @@ generate_autounattend() {
                         </CreatePartition>
                         <CreatePartition wcm:action="add">
                             <Order>3</Order>
-                            <Size>100</Size>
-                            <Type>Recovery</Type>
-                        </CreatePartition>
-                        <CreatePartition wcm:action="add">
-                            <Order>4</Order>
                             <Extend>true</Extend>
                             <Type>Primary</Type>
                         </CreatePartition>
@@ -134,15 +138,9 @@ generate_autounattend() {
                         </ModifyPartition>
                         <ModifyPartition wcm:action="add">
                             <Order>3</Order>
-                            <PartitionID>4</PartitionID>
+                            <PartitionID>3</PartitionID>
                             <Label>Windows</Label>
                             <Format>NTFS</Format>
-                        </ModifyPartition>
-                        <ModifyPartition wcm:action="add">
-                            <Order>4</Order>
-                            <PartitionID>3</PartitionID>
-                            <Label>WinRE</Label>
-                            <Type>Recovery</Type>
                         </ModifyPartition>
                     </ModifyPartitions>
                     <DiskID>0</DiskID>
@@ -159,7 +157,7 @@ generate_autounattend() {
                     </InstallFrom>
                     <InstallTo>
                         <DiskID>0</DiskID>
-                        <PartitionID>4</PartitionID>
+                        <PartitionID>3</PartitionID>
                     </InstallTo>
                 </OSImage>
             </ImageInstall>
@@ -182,6 +180,15 @@ generate_autounattend() {
             <UserLocale>${lang}</UserLocale>
         </component>
         <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+            <AutoLogon>
+                <Password>
+                    <Value>${password}</Value>
+                    <PlainText>true</PlainText>
+                </Password>
+                <Enabled>true</Enabled>
+                <LogonCount>1</LogonCount>
+                <Username>${user}</Username>
+            </AutoLogon>
             <UserAccounts>
                 <LocalAccounts>
                     <LocalAccount wcm:action="add">
@@ -211,6 +218,14 @@ generate_autounattend() {
             <TimeZone>${timezone}</TimeZone>
             <ShowWindowsLive>false</ShowWindowsLive>
             <BluetoothTaskbarIconEnabled>false</BluetoothTaskbarIconEnabled>
+            <FirstLogonCommands>
+                <SynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Description>PhaseZero guest setup</Description>
+                    <RequiresUserInput>false</RequiresUserInput>
+                    <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "\$script = \$null; foreach (\$code in 68..90) { \$candidate = ([char]\$code) + ':\setup.ps1'; if (Test-Path \$candidate) { \$script = \$candidate; break } }; if (-not \$script) { exit 2 }; &amp; \$script"</CommandLine>
+                </SynchronousCommand>
+            </FirstLogonCommands>
         </component>
     </settings>
     <settings pass="specialize">

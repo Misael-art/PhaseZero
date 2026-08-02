@@ -120,9 +120,9 @@ ensure_ast_grep() {
 #     in this project; mcp-manager.sh already relies on that) --------------------
 
 active_opencode_config() {
-    # Prefer the file OMO/opencode actually load; jsonc wins when both exist.
-    if [ -f "$OPENCODE_JSONC" ]; then printf '%s\n' "$OPENCODE_JSONC"; return 0; fi
+    # PhaseZero canonical config is opencode.json. JSONC remains migration input.
     if [ -f "$OPENCODE_JSON" ]; then printf '%s\n' "$OPENCODE_JSON"; return 0; fi
+    if [ -f "$OPENCODE_JSONC" ]; then printf '%s\n' "$OPENCODE_JSONC"; return 0; fi
     return 1
 }
 

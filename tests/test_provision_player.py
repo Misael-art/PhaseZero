@@ -238,6 +238,32 @@ def test_progress_completed_is_100_from_shell() -> None:
     assert '.progress = 100' in text
 
 
+def test_completed_snapshot_is_finalized_before_boot_validation(qapp, fake_pz: Path) -> None:
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_pz, MagicMock(), None, iso="/fake.iso")
+    with patch.object(win, "_run_finalize_async") as finalize:
+        win._on_validation_result({
+            "snapshotExists": True,
+            "qemuRunning": False,
+            "libvirtRunning": False,
+            "adoptedDiskExists": False,
+        }, 0)
+    finalize.assert_called_once_with([])
+    _cleanup_player()
+
+
+def test_finalize_success_continues_to_boot_validation(qapp, fake_pz: Path) -> None:
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_pz, MagicMock(), None, iso="/fake.iso")
+    issues: list[str] = []
+    with patch.object(win, "_fetch_boot_status_async") as boot_status:
+        win._on_finalize_result({"success": True, "adoptedDisk": "/tmp/windows.qcow2"}, 0, issues)
+    assert win._adopted_ok is True
+    assert issues == []
+    boot_status.assert_called_once_with(issues)
+    _cleanup_player()
+
+
 # ── Window lifecycle tests ──
 
 def test_close_aborts_worker(qapp, fake_pz: Path) -> None:

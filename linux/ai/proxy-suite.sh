@@ -386,8 +386,9 @@ configure_opencode_ide() {
         [ -n "$id" ] || continue
         key="$(ensure_proxy_key "$id" "$port")"
         baseurl="http://127.0.0.1:$port/v1"
-        merge_opencode_provider "$OPENCODE_JSONC" "$pid" "$name" "$baseurl" "$key" "$models"
-        merge_opencode_provider "$OPENCODE_JSON"  "$pid" "$name" "$baseurl" "$key" "$models"
+        merge_opencode_provider "$OPENCODE_JSON" "$pid" "$name" "$baseurl" "$key" "$models"
+        # Legacy JSONC is migration input only; never recreate parallel global config.
+        [ -f "$OPENCODE_JSONC" ] && merge_opencode_provider "$OPENCODE_JSONC" "$pid" "$name" "$baseurl" "$key" "$models"
         count=$((count + 1))
     done < <(proxy_ide_rows)
     pz_info "opencode/opencode-desktop: wired $count PhaseZero proxy providers (default model unchanged; select a proxy model after 'npm run login')"

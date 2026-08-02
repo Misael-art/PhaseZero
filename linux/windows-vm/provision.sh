@@ -26,8 +26,6 @@ default_cpus() {
 }
 
 PROVISION_DIR="${PZ_STATE}/windows-vm/provision"
-
-PROVISION_DIR="${PZ_STATE}/windows-vm/provision"
 OPERATIONS_DIR="${PZ_STATE}/operations"
 
 PLAN_ENDPOINT="${PZ_WINDOWS_VM_PLAN:-$PROVISION_DIR/plans}"
@@ -206,7 +204,7 @@ provision_plan() {
         --arg virtioSource "$virtio_source" \
         --arg virtioUrl "$virtio_url" \
         --arg virtioSha256 "$virtio_sha_expected" \
-        --argjson tpmBypass "$tpm_bypass" \
+        --argjson tpmBypass "$([ "$tpm_bypass" = "1" ] && echo true || echo false)" \
         --argjson destructiveOps "$destructive_ops" \
         --arg createdAt "$timestamp" \
         '{
@@ -323,6 +321,10 @@ provision_start() {
         echo "$operation_id"
     fi
 
+    # Do not let the worker inherit the parent's flock FD: an inherited open
+    # file description keeps the lock alive and makes the worker deadlock on
+    # its own re-acquire loop. ACTIVE_LOCK keeps the operation-id handoff.
+    provision_lock_release
     nohup bash "$PZ_ROOT/linux/windows-vm/provision.sh" run --operation-id "$operation_id" \
         > "$op_dir/worker.log" 2>&1 &
     disown
@@ -537,36 +539,120 @@ provision_lock_release() {
     fi
 }
 
-# Remove ACTIVE_LOCK only if it still names the given operation (the worker
-# finishing must never clear a lock that a newer operation already took over).
+# Remove the recorded operation id from ACTIVE_LOCK only if it still names
+# the given operation (the worker finishing must never clear a lock that a
+# newer operation already took over). Truncates in place — never unlinks —
+# so the inode stays permanent: a racer re-opening the path between this
+# clear and the later release contends on the very flock we still hold.
 # Always returns 0: a mismatch is a no-op, never a failure under set -e.
 provision_lock_clear() {
     local op="$1"
     local current=""
     current="$(cat "$ACTIVE_LOCK" 2>/dev/null || true)"
-    [ "$current" = "$op" ] && rm -f "$ACTIVE_LOCK"
+    if [ "$current" = "$op" ]; then
+        : > "$ACTIVE_LOCK" 2>/dev/null || true
+    fi
     return 0
 }
 
 HAVE_SOCAT=0
 command -v socat >/dev/null 2>&1 && HAVE_SOCAT=1
+QGA_CHANNEL_SOCK=""
+QGA_CHANNEL_PID=""
+QGA_READ_FD=""
+QGA_WRITE_FD=""
+QGA_RESPONSE=""
+QGA_REQUEST_SEQ=0
+
+qga_channel_close() {
+    if [[ "$QGA_READ_FD" =~ ^[0-9]+$ ]]; then
+        eval "exec ${QGA_READ_FD}<&-"
+    fi
+    if [[ "$QGA_WRITE_FD" =~ ^[0-9]+$ ]]; then
+        eval "exec ${QGA_WRITE_FD}>&-"
+    fi
+    if [[ "$QGA_CHANNEL_PID" =~ ^[0-9]+$ ]]; then
+        kill "$QGA_CHANNEL_PID" 2>/dev/null || true
+        wait "$QGA_CHANNEL_PID" 2>/dev/null || true
+    fi
+    QGA_CHANNEL_SOCK=""
+    QGA_CHANNEL_PID=""
+    QGA_READ_FD=""
+    QGA_WRITE_FD=""
+}
+
+qga_channel_open() {
+    local sock="$1"
+    [ "$HAVE_SOCAT" = "1" ] || return 1
+    [ -S "$sock" ] || return 1
+    if [ "$QGA_CHANNEL_SOCK" = "$sock" ] &&
+       [[ "$QGA_CHANNEL_PID" =~ ^[0-9]+$ ]] &&
+       kill -0 "$QGA_CHANNEL_PID" 2>/dev/null; then
+        return 0
+    fi
+    qga_channel_close
+    coproc PZ_QGA_SOCAT { socat STDIO UNIX-CONNECT:"$sock" 2>/dev/null; }
+    local read_fd="${PZ_QGA_SOCAT[0]}" write_fd="${PZ_QGA_SOCAT[1]}"
+    QGA_CHANNEL_PID="$PZ_QGA_SOCAT_PID"
+    exec {QGA_READ_FD}<&"$read_fd"
+    exec {QGA_WRITE_FD}>&"$write_fd"
+    eval "exec ${read_fd}<&-"
+    eval "exec ${write_fd}>&-"
+    QGA_CHANNEL_SOCK="$sock"
+}
+
+qga_request() {
+    local sock="$1" cmd="$2" response="" request="" request_id deadline
+    QGA_RESPONSE=""
+    qga_channel_open "$sock" || return 1
+    QGA_REQUEST_SEQ=$((QGA_REQUEST_SEQ + 1))
+    request_id="$QGA_REQUEST_SEQ"
+    request="$(printf '%s\n' "$cmd" | jq -c --argjson id "$request_id" '.id = $id' 2>/dev/null)"
+    [ -n "$request" ] || return 1
+    printf '%s\n' "$request" >&"$QGA_WRITE_FD" || return 1
+    deadline=$((SECONDS + 5))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        if IFS= read -r -t 1 response <&"$QGA_READ_FD"; then
+            response="${response//$'\377'/}"
+            if printf '%s\n' "$response" |
+                jq -e --argjson id "$request_id" '.id == $id and (has("return") or has("error"))' >/dev/null 2>&1; then
+                QGA_RESPONSE="$response"
+                return 0
+            fi
+        fi
+    done
+    return 1
+}
 
 qga_ping() {
     local sock="$1"
     [ "$HAVE_SOCAT" != "1" ] && return 1
-    echo '{"execute":"guest-ping"}' | socat - UNIX-CONNECT:"$sock" 2>/dev/null | jq -e '.return' >/dev/null 2>&1
+    qga_request "$sock" '{"execute":"guest-ping"}' || return 1
+    printf '%s\n' "$QGA_RESPONSE" | jq -e '.return' >/dev/null 2>&1
 }
 
 qga_exec() {
     local sock="$1" cmd="$2"
-    [ "$HAVE_SOCAT" != "1" ] && { echo '{"return":{"pid":0}}'; return 1; }
-    echo "$cmd" | socat - UNIX-CONNECT:"$sock" 2>/dev/null || echo '{"return":{"pid":0}}'
+    if [ "$HAVE_SOCAT" != "1" ]; then
+        QGA_RESPONSE='{"return":{"pid":0}}'
+        return 1
+    fi
+    local response=""
+    qga_request "$sock" "$cmd" || true
+    response="$QGA_RESPONSE"
+    response="$(printf '%s\n' "$response" | jq -c 'select(has("return") or has("error"))' 2>/dev/null | tail -n 1)"
+    if [ -n "$response" ]; then
+        QGA_RESPONSE="$response"
+    else
+        QGA_RESPONSE='{"return":{"pid":0}}'
+    fi
 }
 
 qga_shutdown() {
     local sock="$1"
     [ "$HAVE_SOCAT" != "1" ] && return 1
-    echo '{"execute":"guest-shutdown"}' | socat - UNIX-CONNECT:"$sock" 2>/dev/null || true
+    qga_channel_open "$sock" || return 1
+    printf '%s\n' '{"execute":"guest-shutdown"}' >&"$QGA_WRITE_FD" || true
 }
 
 graphics_preflight() {
@@ -778,7 +864,9 @@ run_answer_media() {
         --output-dir "$answer_dir"
     )
     [ -n "$product_key" ] && autounattend_args+=(--product-key "$product_key")
-    [ "$tpm_bypass" = "true" ] && autounattend_args+=(--tpm-bypass)
+    case "$tpm_bypass" in
+        true|1) autounattend_args+=(--tpm-bypass) ;;
+    esac
     bash "$PZ_ROOT/linux/windows-vm/autounattend.sh" generate \
         "${autounattend_args[@]}" >/dev/null
 
@@ -793,14 +881,135 @@ $ErrorActionPreference = "Stop"
 
 Write-Host "PhaseZero: post-install setup starting"
 
-# Remove bootstrap password
-$user = [ADSI]"WinNT://./phasezero,user"
-$user.SetPassword("")
-$user.SetInfo()
-Write-Host "PhaseZero: bootstrap password cleared"
+try {
+    $virtioRoot = $null
+    foreach ($code in 68..90) {
+        $candidateRoot = ([char]$code) + ':\'
+        if (Test-Path (Join-Path $candidateRoot 'vioserial')) {
+            $virtioRoot = $candidateRoot
+            break
+        }
+    }
+    if (-not $virtioRoot) { throw "virtio-win media not found on D: through Z:" }
+
+    $qgaMsi = Join-Path $virtioRoot 'guest-agent\qemu-ga-x86_64.msi'
+
+    $vioserialInf = Get-ChildItem (Join-Path $virtioRoot 'vioserial') -Filter 'vioser.inf' -Recurse -ErrorAction SilentlyContinue |
+        Sort-Object { if ($_.FullName -match '\\w11\\amd64\\') { 0 } else { 1 } } |
+        Select-Object -First 1
+    if ($vioserialInf) {
+        Write-Host "PhaseZero: installing VirtIO serial driver"
+        & pnputil.exe /add-driver $vioserialInf.FullName /install | Out-Host
+    } else {
+        throw "VirtIO serial driver not found"
+    }
+
+    if (-not (Get-Service qemu-ga -ErrorAction SilentlyContinue)) {
+        if (-not (Test-Path $qgaMsi)) { throw "QEMU Guest Agent MSI not found" }
+        Write-Host "PhaseZero: installing QEMU Guest Agent"
+        $qgaInstall = Start-Process msiexec.exe -ArgumentList '/i', $qgaMsi, '/qn', '/norestart' -PassThru -NoNewWindow
+        if (-not $qgaInstall.WaitForExit(300000)) {
+            Stop-Process -Id $qgaInstall.Id -Force -ErrorAction SilentlyContinue
+            throw "QEMU Guest Agent installer timed out"
+        }
+        if ($qgaInstall.ExitCode -notin @(0, 3010)) {
+            throw "QEMU Guest Agent installer failed with exit code $($qgaInstall.ExitCode)"
+        }
+    }
+    & sc.exe config qemu-ga start= delayed-auto depend= / | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Unable to configure QGA delayed start: $LASTEXITCODE" }
+    & sc.exe failure qemu-ga reset= 0 actions= restart/5000/restart/10000/restart/30000 | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "Unable to configure QGA recovery actions: $LASTEXITCODE" }
+    # Setup has no persistent host QGA client yet. Restarting here can leave
+    # qemu-ga in START_PENDING; delayed auto-start binds on the next boot after
+    # the provisioner has opened its persistent channel.
+
+    # QEMU's slirp SMB bridge is isolated to this VM and exposes only the
+    # exchange directory. Windows 11 24H2 blocks guest SMB by default, so scope
+    # the compatibility exception to the workstation client and retry mapping
+    # at login after the policy becomes active.
+    $workstationPolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Windows\LanmanWorkstation'
+    $workstationParams = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
+    New-Item -Path $workstationPolicy -Force | Out-Null
+    New-Item -Path $workstationParams -Force | Out-Null
+    Set-ItemProperty -Path $workstationPolicy -Name AllowInsecureGuestAuth -Value 1 -Type DWord
+    Set-ItemProperty -Path $workstationPolicy -Name RequireSecuritySignature -Value 0 -Type DWord
+    Set-ItemProperty -Path $workstationParams -Name AllowInsecureGuestAuth -Value 1 -Type DWord
+
+    $phaseZeroDir = Join-Path $env:ProgramData 'PhaseZero'
+    $mapScriptPath = Join-Path $phaseZeroDir 'map-exchange.ps1'
+    New-Item -Path $phaseZeroDir -ItemType Directory -Force | Out-Null
+    @'
+$ErrorActionPreference = 'SilentlyContinue'
+$shareCandidates = @('\\10.0.2.4\qemu', '\\10.0.2.2\PZExchange')
+$selectedPath = Join-Path $env:ProgramData 'PhaseZero\exchange-path.txt'
+function Invoke-NetUse([string[]]$NetArgs) {
+    $process = Start-Process net.exe -ArgumentList $NetArgs -PassThru -WindowStyle Hidden
+    if (-not $process.WaitForExit(15000)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        return 1460
+    }
+    return $process.ExitCode
+}
+Remove-Item -LiteralPath $selectedPath -Force -ErrorAction SilentlyContinue
+if (Get-PSDrive -Name P -ErrorAction SilentlyContinue) {
+    [void](Invoke-NetUse @('use', 'P:', '/delete', '/y'))
+}
+foreach ($share in $shareCandidates) {
+    $mapResult = Invoke-NetUse @('use', 'P:', $share, '/persistent:yes')
+    if ($mapResult -eq 0 -and (Test-Path 'P:\')) {
+        Set-Content -LiteralPath $selectedPath -Value $share -Encoding ASCII
+        exit 0
+    }
+    [void](Invoke-NetUse @('use', 'P:', '/delete', '/y'))
+}
+exit 1
+'@ | Set-Content -Path $mapScriptPath -Encoding UTF8
+    $runKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run'
+    $mapCommand = "powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$mapScriptPath`""
+    Set-ItemProperty -Path $runKey -Name PhaseZeroMapExchange -Value $mapCommand -Type String
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $mapScriptPath
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "PhaseZero exchange mapping deferred until next login"
+    }
+
+    powercfg.exe /setactive SCHEME_MIN | Out-Host
+    powercfg.exe /change standby-timeout-ac 0 | Out-Host
+    powercfg.exe /change hibernate-timeout-ac 0 | Out-Host
+    powercfg.exe /hibernate off | Out-Host
+
+    Set-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System' -Name EnableLUA -Value 1 -Type DWord
+    Set-Service -Name wuauserv -StartupType Manual -ErrorAction SilentlyContinue
+
+    $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '0' -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $winlogon -Name DefaultPassword -ErrorAction SilentlyContinue
+    Write-Host "PhaseZero: automatic logon secret removed; account password retained"
+
+    $selectedExchange = Get-Content (Join-Path $phaseZeroDir 'exchange-path.txt') -ErrorAction SilentlyContinue | Select-Object -First 1
+
+    @{
+        success = $true
+        completedAt = (Get-Date).ToUniversalTime().ToString('o')
+        qgaService = [bool](Get-Service qemu-ga -ErrorAction SilentlyContinue)
+        exchangePath = $selectedExchange
+    } | ConvertTo-Json | Set-Content -Path (Join-Path $phaseZeroDir 'provisioning-complete.json') -Encoding UTF8
+} catch {
+    Write-Error "PhaseZero guest setup failed: $($_.Exception.Message)"
+    $failureDir = Join-Path $env:ProgramData 'PhaseZero'
+    New-Item -Path $failureDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    $_.Exception.Message | Set-Content -Path (Join-Path $failureDir 'provisioning-failed.txt') -Encoding UTF8 -ErrorAction SilentlyContinue
+    $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+    Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '0' -ErrorAction SilentlyContinue
+    Remove-ItemProperty -Path $winlogon -Name DefaultPassword -ErrorAction SilentlyContinue
+    Stop-Transcript
+    shutdown.exe /s /t 10 /c "PhaseZero unattended setup failed"
+    exit 1
+}
 
 Write-Host "PhaseZero: post-install setup complete"
 Stop-Transcript
+shutdown.exe /s /t 10 /c "PhaseZero unattended setup complete"
 PSEOF
     chmod 0600 "$inject_script"
 
@@ -849,14 +1058,18 @@ run_setup() {
     local oemdrv_iso="$vm_dir/oemdrv.iso"
     local iso
     iso="$(jq -r '.iso.path' "$plan_file")"
-    local ram cpus
+    local ram cpus exchange_dir netdev_arg
     ram="$(jq -r '.resources.ramMb // 8192' "$plan_file")"
     cpus="$(jq -r '.resources.cpus // 4' "$plan_file")"
+    exchange_dir="${PZ_WINDOWS_VM_EXCHANGE_DIR:-$HOME/Shared/WindowsVM}"
+    mkdir -p "$exchange_dir"
+    netdev_arg="user,id=net0"
+    command -v smbd >/dev/null 2>&1 && netdev_arg="$netdev_arg,smb=$exchange_dir"
 
     local ovmf_code ovmf_vars
     ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
-        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/OVMF/OVMF_CODE.secboot.fd \
         /usr/share/OVMF/OVMF_CODE.fd || true)}"
     ovmf_vars="$vm_dir/OVMF_VARS.fd"
@@ -874,38 +1087,86 @@ run_setup() {
     # shellcheck disable=SC2054
     local qemu_args=(
         -machine q35,accel=kvm
+        -cpu host
         -smp "$cpus"
         -m "$ram"
         -drive file="$ovmf_code",if=pflash,format=raw,readonly=on
         -drive file="$ovmf_vars",if=pflash,format=raw
+        -boot once=d
         -drive file="$disk_path",format=qcow2,if=none,id=drive0
-        -device nvme,serial=pzvm,drive=drive0,bootindex=1
+        -device nvme,serial=pzvm,drive=drive0
         -drive file="$iso",format=raw,if=none,id=isoboot,readonly=on
-        -device ide-hd,drive=isoboot,bootindex=2
+        -device ide-cd,bus=ide.0,drive=isoboot
         -drive file="$oemdrv_iso",format=raw,if=none,id=oemdrv,readonly=on
-        -device ide-cd,drive=oemdrv
-        -netdev user,id=net0
+        -device ide-cd,bus=ide.1,drive=oemdrv
+        -netdev "$netdev_arg"
         -device e1000e,netdev=net0
+        -device virtio-serial-pci,id=virtio-serial0
         -vga qxl
         -display none
         -nographic
         -serial file:"$vm_dir/setup-serial.log"
-        -chardev socket,path="$vm_dir/qga.sock",server=on,id=qga0
-        -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0
+        -qmp "unix:$vm_dir/setup-qmp.sock,server=on,wait=off"
+        -chardev socket,path="$vm_dir/qga.sock",server=on,wait=off,id=qga0
+        -device virtserialport,bus=virtio-serial0.0,nr=1,chardev=qga0,name=org.qemu.guest_agent.0
     )
 
     if [ -f "$vm_dir/virtio-win.iso" ]; then
         # shellcheck disable=SC2054
         qemu_args+=(-drive file="$vm_dir/virtio-win.iso",format=raw,if=none,id=virtio)
         # shellcheck disable=SC2054
-        qemu_args+=(-device ide-cd,drive=virtio)
+        qemu_args+=(-device ide-cd,bus=ide.2,drive=virtio)
     fi
 
     log_operation "$op" "launching QEMU for Windows setup"
     mkdir -p "$vm_dir"
+    rm -f "$vm_dir/qga.sock" "$vm_dir/setup-qmp.sock"
     qemu-system-x86_64 "${qemu_args[@]}" &
     local qemu_pid=$!
     echo "$qemu_pid" > "$vm_dir/qemu-pid"
+
+    # Microsoft install media prompts for a key before booting from CD. The
+    # unattended answer file cannot run until that prompt is accepted, so send
+    # three bounded key presses through a loopback UNIX monitor. No key is sent
+    # after the initial firmware window.
+    if command -v python3 >/dev/null 2>&1; then
+        local monitor_sock="$vm_dir/setup-qmp.sock" monitor_try
+        for monitor_try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            [ -S "$monitor_sock" ] && break
+            sleep 0.1
+        done
+        if [ -S "$monitor_sock" ]; then
+            if python3 - "$monitor_sock" <<'PYQMP'
+import json
+import socket
+import sys
+import time
+
+sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+sock.settimeout(5)
+sock.connect(sys.argv[1])
+sock.recv(65536)
+sock.sendall(b'{"execute":"qmp_capabilities"}\n')
+sock.recv(65536)
+for _ in range(3):
+    time.sleep(3)
+    command = {
+        "execute": "human-monitor-command",
+        "arguments": {"command-line": "sendkey spc"},
+    }
+    sock.sendall((json.dumps(command) + "\n").encode())
+    sock.recv(65536)
+sock.close()
+PYQMP
+            then
+                log_operation "$op" "Windows ISO boot prompt acknowledged"
+            else
+                log_operation "$op" "WARN: could not acknowledge Windows ISO boot prompt"
+            fi
+        else
+            log_operation "$op" "WARN: setup monitor socket unavailable; ISO boot prompt may require manual input"
+        fi
+    fi
 
     local timeout=7200 interval=30 elapsed=0
     while [ "$elapsed" -lt "$timeout" ]; do
@@ -924,6 +1185,12 @@ run_setup() {
     fi
 
     rm -f "$vm_dir/qemu-pid"
+    local installed_bytes=0
+    installed_bytes="$(qemu-img info --output=json "$disk_path" 2>/dev/null | jq -r '."actual-size" // 0' 2>/dev/null || echo 0)"
+    if [ "${installed_bytes:-0}" -lt $((1024 * 1024 * 1024)) ]; then
+        log_operation "$op" "FAIL: Windows setup exited without installed payload (${installed_bytes:-0} bytes allocated)"
+        return 1
+    fi
     log_operation "$op" "Windows setup phase complete"
     return 0
 }
@@ -936,24 +1203,29 @@ run_drivers() {
     [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
     local disk_path="$vm_dir/disk.qcow2"
     local qga_sock="$vm_dir/qga.sock"
+    local qmp_sock="$vm_dir/drivers-qmp.sock"
 
     if [ ! -f "$vm_dir/virtio-win.iso" ]; then
         log_operation "$op" "no VirtIO ISO; skipping driver injection"
         return 0
     fi
 
-    local ram cpus
+    local ram cpus exchange_dir netdev_arg
     ram="$(jq -r '.resources.ramMb // 8192' "$plan_file")"
     cpus="$(jq -r '.resources.cpus // 4' "$plan_file")"
+    exchange_dir="${PZ_WINDOWS_VM_EXCHANGE_DIR:-$HOME/Shared/WindowsVM}"
+    mkdir -p "$exchange_dir"
+    netdev_arg="user,id=net0"
+    command -v smbd >/dev/null 2>&1 && netdev_arg="$netdev_arg,smb=$exchange_dir"
     local ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
-        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/OVMF/OVMF_CODE.secboot.fd \
         /usr/share/OVMF/OVMF_CODE.fd || true)}"
     local ovmf_vars="$vm_dir/OVMF_VARS.fd"
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
 
-    rm -f "$qga_sock"
+    rm -f "$qga_sock" "$qmp_sock"
 
     # shellcheck disable=SC2054
     local qemu_args=(
@@ -964,11 +1236,13 @@ run_drivers() {
         -device nvme,serial=pzvm,drive=drive0
         -drive file="$vm_dir/virtio-win.iso",format=raw,if=none,id=virtio,readonly=on
         -device ide-cd,drive=virtio
-        -netdev user,id=net0 -device e1000e,netdev=net0
+        -netdev "$netdev_arg" -device e1000e,netdev=net0
+        -device virtio-serial-pci,id=virtio-serial0
         -vga qxl -display none -nographic
         -serial file:"$vm_dir/drivers-serial.log"
-        -chardev socket,path="$qga_sock",server=on,id=qga0
-        -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0
+        -qmp unix:"$qmp_sock",server=on,wait=off
+        -chardev socket,path="$qga_sock",server=on,wait=off,id=qga0
+        -device virtserialport,bus=virtio-serial0.0,nr=1,chardev=qga0,name=org.qemu.guest_agent.0
     )
 
     log_operation "$op" "launching QEMU for driver installation"
@@ -992,21 +1266,37 @@ run_drivers() {
     if [ "$qga_ok" = "1" ]; then
         local ps_script
         ps_script=$(cat << 'PSEOF'
-$d = (Get-Volume -FileSystemLabel VIRTIO).DriveLetter + ':' 2>$null;
-if (-not $d) { $d = 'D:' };
-if (Test-Path "$d\setup.exe") {
-    Write-Host Installing VirtIO drivers from $d;
-    Start-Process "$d\setup.exe" -ArgumentList '/S /NoRestart' -NoNewWindow -Wait
-} elseif (Test-Path "$d\virtio-win-gt-x64.msi") {
-    Write-Host Installing VirtIO MSI from $d;
-    Start-Process msiexec.exe -ArgumentList "/i ""$d\virtio-win-gt-x64.msi"" /qn /norestart" -NoNewWindow -Wait
-} else {
-    Write-Host Searching for .inf drivers in $d;
-    Get-ChildItem "$d" -Filter *.inf -Recurse | ForEach-Object {
-        & pnputil /add-driver $_.FullName /install 2>&1 | Write-Host
-    }
-};
-Write-Host VirtIO driver installation complete
+$ErrorActionPreference = 'Stop'
+$d = $null
+foreach ($code in 68..90) {
+    $candidate = ([char]$code) + ':'
+    if (Test-Path "$candidate\vioserial") { $d = $candidate; break }
+}
+if (-not $d) { throw 'VirtIO media not mounted on D: through Z:' }
+$driverPaths = @(
+    'NetKVM\w11\amd64\netkvm.inf',
+    'viogpudo\w11\amd64\viogpudo.inf',
+    'Balloon\w11\amd64\balloon.inf',
+    'viorng\w11\amd64\viorng.inf',
+    'vioscsi\w11\amd64\vioscsi.inf',
+    'vioinput\w11\amd64\vioinput.inf',
+    'vioserial\w11\amd64\vioser.inf'
+)
+Write-Host "Installing targeted Windows 11 AMD64 VirtIO INF packages from $d"
+foreach ($relativeDriver in $driverPaths) {
+    $driverPath = Join-Path $d $relativeDriver
+    if (-not (Test-Path $driverPath)) { throw "Required VirtIO driver missing: $relativeDriver" }
+    & pnputil.exe /add-driver $driverPath /install
+    if ($LASTEXITCODE -notin @(0, 259)) { throw "VirtIO driver failed ($LASTEXITCODE): $relativeDriver" }
+}
+$qga = Get-Service qemu-ga -ErrorAction SilentlyContinue
+if (-not $qga) { throw 'QEMU Guest Agent service missing after driver installation' }
+& sc.exe config qemu-ga start= auto depend= / | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "Unable to promote QGA automatic start: $LASTEXITCODE" }
+& sc.exe failure qemu-ga reset= 0 actions= restart/5000/restart/10000/restart/30000 | Out-Host
+if ($LASTEXITCODE -ne 0) { throw "Unable to configure QGA recovery actions: $LASTEXITCODE" }
+if ($qga.Status -ne 'Running') { Start-Service qemu-ga }
+Write-Host 'VirtIO INF installation complete; QGA service verified'
 PSEOF
 )
         local qga_json
@@ -1019,26 +1309,46 @@ PSEOF
             }
         }')
         local exec_result
-        exec_result="$(qga_exec "$qga_sock" "$qga_json")"
+        qga_exec "$qga_sock" "$qga_json" || true
+        exec_result="$QGA_RESPONSE"
         local pid
         pid="$(echo "$exec_result" | jq -r '.return.pid // 0')"
+        local driver_ok=0
         if [ "$pid" -gt 0 ]; then
             log_operation "$op" "driver install guest-exec PID: $pid"
-            local wait_timeout=120 wait_elapsed=0
-            while [ "$wait_elapsed" -lt "$wait_timeout" ]; do
+            local wait_timeout=600 wait_started=$SECONDS wait_deadline=$((SECONDS + 600))
+            while [ "$SECONDS" -lt "$wait_deadline" ]; do
                 local status_result
-                status_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$pid"'}}')"
+                qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$pid"'}}' || true
+                status_result="$QGA_RESPONSE"
                 local exited
                 exited="$(echo "$status_result" | jq -r '.return.exited // false')"
                 if [ "$exited" = "true" ]; then
                     local exitcode
                     exitcode="$(echo "$status_result" | jq -r '.return.exitcode // -1')"
                     log_operation "$op" "driver install exit code: $exitcode"
+                    local driver_stdout driver_stderr
+                    driver_stdout="$(echo "$status_result" | jq -r '.["return"]["out-data"] // ""' | base64 -d 2>/dev/null || true)"
+                    driver_stderr="$(echo "$status_result" | jq -r '.["return"]["err-data"] // ""' | base64 -d 2>/dev/null || true)"
+                    [ -n "$driver_stdout" ] && log_operation "$op" "driver install output: $(printf '%s' "$driver_stdout" | tr '\n\r' '  ')"
+                    [ -n "$driver_stderr" ] && log_operation "$op" "driver install error: $(printf '%s' "$driver_stderr" | tr '\n\r' '  ')"
+                    [ "$exitcode" = "0" ] && driver_ok=1
                     break
                 fi
                 sleep 5
-                wait_elapsed=$((wait_elapsed + 5))
             done
+            local wait_elapsed=$((SECONDS - wait_started))
+            [ "$driver_ok" = "1" ] || log_operation "$op" "FAIL: VirtIO INF installation failed or timed out after ${wait_timeout}s"
+        else
+            log_operation "$op" "FAIL: QGA rejected driver installation command"
+        fi
+
+        if [ "$driver_ok" != "1" ]; then
+            qga_channel_close
+            kill "$qemu_pid" 2>/dev/null || true
+            wait "$qemu_pid" 2>/dev/null || true
+            rm -f "$vm_dir/drivers-qemu-pid"
+            return 1
         fi
 
         # Post-driver display adapter check
@@ -1052,13 +1362,15 @@ PSEOF
             }
         }')
         local check_result
-        check_result="$(qga_exec "$qga_sock" "$check_qga")"
+        qga_exec "$qga_sock" "$check_qga" || true
+        check_result="$QGA_RESPONSE"
         local check_pid
         check_pid="$(echo "$check_result" | jq -r '.return.pid // 0')"
         if [ "$check_pid" -gt 0 ]; then
             sleep 5
             local check_status
-            check_status="$(qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$check_pid"'}}')"
+            qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$check_pid"'}}' || true
+            check_status="$QGA_RESPONSE"
             local check_exited
             check_exited="$(echo "$check_status" | jq -r '.return.exited // false')"
             if [ "$check_exited" = "true" ]; then
@@ -1073,13 +1385,21 @@ PSEOF
         fi
 
         qga_shutdown "$qga_sock"
-        sleep 10
+        sleep 2
+        qga_channel_close
+        sleep 8
     else
         local reason="QGA not available after ${timeout}s"
         [ "$HAVE_SOCAT" != "1" ] && reason="socat not installed (needed for QGA communication)"
-        log_operation "$op" "$reason; driver install deferred"
+        log_operation "$op" "FAIL: $reason; unattended guest setup incomplete"
+        qga_channel_close
+        kill "$qemu_pid" 2>/dev/null || true
+        wait "$qemu_pid" 2>/dev/null || true
+        rm -f "$vm_dir/drivers-qemu-pid"
+        return 1
     fi
 
+    qga_channel_close
     wait "$qemu_pid" 2>/dev/null || true
     rm -f "$vm_dir/drivers-qemu-pid"
     log_operation "$op" "driver installation phase complete"
@@ -1094,19 +1414,24 @@ run_tweaks() {
     [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
     local disk_path="$vm_dir/disk.qcow2"
     local qga_sock="$vm_dir/qga.sock"
+    local qmp_sock="$vm_dir/tweaks-qmp.sock"
 
-    local ram cpus
+    local ram cpus exchange_dir netdev_arg
     ram="$(jq -r '.resources.ramMb // 8192' "$plan_file")"
     cpus="$(jq -r '.resources.cpus // 4' "$plan_file")"
+    exchange_dir="${PZ_WINDOWS_VM_EXCHANGE_DIR:-$HOME/Shared/WindowsVM}"
+    mkdir -p "$exchange_dir"
+    netdev_arg="user,id=net0"
+    command -v smbd >/dev/null 2>&1 && netdev_arg="$netdev_arg,smb=$exchange_dir"
     local ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
-        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/OVMF/OVMF_CODE.secboot.fd \
         /usr/share/OVMF/OVMF_CODE.fd || true)}"
     local ovmf_vars="$vm_dir/OVMF_VARS.fd"
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
 
-    rm -f "$qga_sock"
+    rm -f "$qga_sock" "$qmp_sock"
 
     # shellcheck disable=SC2054
     local qemu_args=(
@@ -1115,11 +1440,13 @@ run_tweaks() {
         -drive file="$ovmf_vars",if=pflash,format=raw
         -drive file="$disk_path",format=qcow2,if=none,id=drive0
         -device nvme,serial=pzvm,drive=drive0
-        -netdev user,id=net0 -device e1000e,netdev=net0
+        -netdev "$netdev_arg" -device e1000e,netdev=net0
+        -device virtio-serial-pci,id=virtio-serial0
         -vga qxl -display none -nographic
         -serial file:"$vm_dir/tweaks-serial.log"
-        -chardev socket,path="$qga_sock",server=on,id=qga0
-        -device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0
+        -qmp unix:"$qmp_sock",server=on,wait=off
+        -chardev socket,path="$qga_sock",server=on,wait=off,id=qga0
+        -device virtserialport,bus=virtio-serial0.0,nr=1,chardev=qga0,name=org.qemu.guest_agent.0
     )
 
     log_operation "$op" "launching QEMU for tweaks"
@@ -1147,12 +1474,85 @@ run_tweaks() {
 
         local tweaks_script
         tweaks_script=$(cat << 'PSEOF'
-Remove-AppxPackage -Package "*xbox*" -AllUsers -ErrorAction SilentlyContinue
+$ErrorActionPreference = 'Stop'
+$optionalWarnings = [System.Collections.Generic.List[string]]::new()
+& sc.exe config qemu-ga start= auto depend= / | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Unable to promote QGA automatic start: $LASTEXITCODE" }
+Get-AppxPackage -AllUsers -Name '*Xbox*' -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+        Remove-AppxPackage -Package $_.PackageFullName -AllUsers -ErrorAction Stop
+    } catch {
+        $optionalWarnings.Add("Xbox package retained: $($_.Exception.Message)")
+    }
+}
 powercfg /change standby-timeout-ac 0
 powercfg /change hibernate-timeout-ac 0
 powercfg /h off
-Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 0 -Type DWord
-Set-Service -Name wuauserv -StartupType Disabled -ErrorAction SilentlyContinue
+Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name EnableLUA -Value 1 -Type DWord
+Set-Service -Name wuauserv -StartupType Manual -ErrorAction SilentlyContinue
+$lanman = 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters'
+New-Item -Path $lanman -Force | Out-Null
+New-ItemProperty -Path $lanman -Name AllowInsecureGuestAuth -PropertyType DWord -Value 1 -Force | Out-Null
+New-ItemProperty -Path $lanman -Name RequireSecuritySignature -PropertyType DWord -Value 0 -Force | Out-Null
+$workstationDll = (Get-ItemProperty -Path $lanman -Name ServiceDll -ErrorAction SilentlyContinue).ServiceDll
+if (-not $workstationDll -or -not (Test-Path ([Environment]::ExpandEnvironmentVariables($workstationDll)))) {
+    New-ItemProperty -Path $lanman -Name ServiceDll -PropertyType ExpandString -Value '%SystemRoot%\System32\wkssvc.dll' -Force | Out-Null
+    New-ItemProperty -Path $lanman -Name ServiceDllUnloadOnStop -PropertyType DWord -Value 1 -Force | Out-Null
+    $optionalWarnings.Add('LanmanWorkstation ServiceDll registry repaired')
+}
+$workstation = Get-Service LanmanWorkstation -ErrorAction Stop
+if ($workstation.Status -ne 'Running') {
+    Start-Service LanmanWorkstation -ErrorAction Stop
+}
+Start-Sleep -Seconds 2
+$phaseZeroDir = Join-Path $env:ProgramData 'PhaseZero'
+New-Item -ItemType Directory -Path $phaseZeroDir -Force | Out-Null
+$mapScript = Join-Path $phaseZeroDir 'map-exchange.ps1'
+@'
+$ErrorActionPreference = 'SilentlyContinue'
+$shareCandidates = @('\\10.0.2.4\qemu', '\\10.0.2.2\PZExchange')
+$selectedPath = Join-Path $env:ProgramData 'PhaseZero\exchange-path.txt'
+function Invoke-NetUse([string[]]$NetArgs) {
+    $process = Start-Process net.exe -ArgumentList $NetArgs -PassThru -WindowStyle Hidden
+    if (-not $process.WaitForExit(15000)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        return 1460
+    }
+    return $process.ExitCode
+}
+Remove-Item -LiteralPath $selectedPath -Force -ErrorAction SilentlyContinue
+if (Get-PSDrive -Name P -ErrorAction SilentlyContinue) {
+    [void](Invoke-NetUse @('use', 'P:', '/delete', '/y'))
+}
+foreach ($share in $shareCandidates) {
+    $mapResult = Invoke-NetUse @('use', 'P:', $share, '/persistent:yes')
+    if ($mapResult -eq 0 -and (Test-Path 'P:\')) {
+        Set-Content -LiteralPath $selectedPath -Value $share -Encoding ASCII
+        exit 0
+    }
+    [void](Invoke-NetUse @('use', 'P:', '/delete', '/y'))
+}
+exit 1
+'@ | Set-Content -Path $mapScript -Encoding UTF8
+New-ItemProperty -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name PhaseZeroMapExchange -PropertyType String -Value "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$mapScript`"" -Force | Out-Null
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $mapScript
+$exchangePath = [string](Get-Content (Join-Path $phaseZeroDir 'exchange-path.txt') -ErrorAction SilentlyContinue | Select-Object -First 1)
+if (-not $exchangePath -or -not (Test-Path 'P:\')) { throw 'PhaseZero exchange share unavailable on built-in and host SMB endpoints' }
+$exchangeHost = ($exchangePath -split '\\')[2]
+if (-not (Test-NetConnection $exchangeHost -Port 445 -InformationLevel Quiet)) { throw "SMB endpoint $exchangeHost`:445 unreachable" }
+$adapter = Get-NetAdapter | Where-Object Status -eq Up | Select-Object -First 1
+if (-not $adapter) { throw 'No active Windows network adapter' }
+$display = (Get-PnpDevice -Class Display -Status OK -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FriendlyName)
+$marker = [ordered]@{
+    completedAt = (Get-Date).ToUniversalTime().ToString('o')
+    networkAdapter = $adapter.Name
+    exchangePath = $exchangePath
+    exchangeDrive = 'P:'
+    displayAdapters = @($display)
+    qgaService = (Get-Service qemu-ga -ErrorAction Stop).Status.ToString()
+    optionalWarnings = @($optionalWarnings)
+}
+$marker | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $phaseZeroDir 'provisioning-complete.json') -Encoding UTF8
 PSEOF
 )
 
@@ -1166,35 +1566,61 @@ PSEOF
             }
         }')
         local exec_result
-        exec_result="$(qga_exec "$qga_sock" "$tweaks_qga")"
+        qga_exec "$qga_sock" "$tweaks_qga" || true
+        exec_result="$QGA_RESPONSE"
         local pid
         pid="$(echo "$exec_result" | jq -r '.return.pid // 0')"
+        local tweaks_ok=0
         if [ "$pid" -gt 0 ]; then
             log_operation "$op" "tweaks guest-exec PID: $pid"
-            local wait_timeout=120 wait_elapsed=0
-            while [ "$wait_elapsed" -lt "$wait_timeout" ]; do
+            local wait_timeout=300 wait_started=$SECONDS wait_deadline=$((SECONDS + 300))
+            while [ "$SECONDS" -lt "$wait_deadline" ]; do
                 local status_result
-                status_result="$(qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$pid"'}}')"
+                qga_exec "$qga_sock" '{"execute":"guest-exec-status","arguments":{"pid":'"$pid"'}}' || true
+                status_result="$QGA_RESPONSE"
                 local exited
                 exited="$(echo "$status_result" | jq -r '.return.exited // false')"
                 if [ "$exited" = "true" ]; then
                     local exitcode
                     exitcode="$(echo "$status_result" | jq -r '.return.exitcode // -1')"
                     log_operation "$op" "tweaks exit code: $exitcode"
+                    local tweaks_stdout tweaks_stderr
+                    tweaks_stdout="$(echo "$status_result" | jq -r '.["return"]["out-data"] // ""' | base64 -d 2>/dev/null || true)"
+                    tweaks_stderr="$(echo "$status_result" | jq -r '.["return"]["err-data"] // ""' | base64 -d 2>/dev/null || true)"
+                    [ -n "$tweaks_stdout" ] && log_operation "$op" "tweaks output: $(printf '%s' "$tweaks_stdout" | tr '\n\r' '  ')"
+                    [ -n "$tweaks_stderr" ] && log_operation "$op" "tweaks error: $(printf '%s' "$tweaks_stderr" | tr '\n\r' '  ')"
+                    [ "$exitcode" = "0" ] && tweaks_ok=1
                     break
                 fi
                 sleep 5
-                wait_elapsed=$((wait_elapsed + 5))
             done
+        else
+            log_operation "$op" "FAIL: QGA rejected tweaks command"
+        fi
+        if [ "$tweaks_ok" != "1" ]; then
+            log_operation "$op" "FAIL: Windows optimization/share verification failed or timed out"
+            qga_channel_close
+            kill "$qemu_pid" 2>/dev/null || true
+            wait "$qemu_pid" 2>/dev/null || true
+            rm -f "$vm_dir/tweaks-qemu-pid"
+            return 1
         fi
         qga_shutdown "$qga_sock"
-        sleep 10
+        sleep 2
+        qga_channel_close
+        sleep 8
     else
         local reason="QGA not available after ${timeout}s"
         [ "$HAVE_SOCAT" != "1" ] && reason="socat not installed (needed for QGA communication)"
-        log_operation "$op" "$reason; tweaks deferred"
+        log_operation "$op" "FAIL: $reason; performance-safe tweaks not verified"
+        qga_channel_close
+        kill "$qemu_pid" 2>/dev/null || true
+        wait "$qemu_pid" 2>/dev/null || true
+        rm -f "$vm_dir/tweaks-qemu-pid"
+        return 1
     fi
 
+    qga_channel_close
     wait "$qemu_pid" 2>/dev/null || true
     rm -f "$vm_dir/tweaks-qemu-pid"
     log_operation "$op" "tweaks phase complete"
@@ -1255,17 +1681,21 @@ run_relaunch() {
     local boot_disk="$disk_path"
     [ -f "$snapshot_path" ] && boot_disk="$snapshot_path"
 
-    local ram cpus
+    local ram cpus exchange_dir netdev_arg
     local plan_file="$OPERATIONS_DIR/$op/plan.json"
     ram="$(jq -r '.resources.ramMb // 8192' "$plan_file")"
     cpus="$(jq -r '.resources.cpus // 4' "$plan_file")"
+    exchange_dir="${PZ_WINDOWS_VM_EXCHANGE_DIR:-$HOME/Shared/WindowsVM}"
+    mkdir -p "$exchange_dir"
+    netdev_arg="user,id=net0"
+    command -v smbd >/dev/null 2>&1 && netdev_arg="$netdev_arg,smb=$exchange_dir"
     local graphics
-    graphics="$(jq -r '.graphics // "compat"' "$plan_file")"
+    graphics="${PZ_RELAUNCH_GRAPHICS_OVERRIDE:-$(jq -r '.graphics // "compat"' "$plan_file")}"
 
     local ovmf_code ovmf_vars
     ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
-        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/OVMF/OVMF_CODE.secboot.fd \
         /usr/share/OVMF/OVMF_CODE.fd || true)}"
     ovmf_vars="$vm_dir/OVMF_VARS.fd"
@@ -1273,16 +1703,22 @@ run_relaunch() {
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found for relaunch"; return 1; }
     [ -f "$boot_disk" ] || { log_operation "$op" "boot disk not found for relaunch"; return 1; }
 
+    local -a graphics_vga_args=() graphics_display_args=()
     GRAPHICS_VGA=""; GRAPHICS_DISPLAY=""; GRAPHICS_ACCEL_LOG=""
     case "$graphics" in
         compat)
             GRAPHICS_VGA="-vga qxl"
             GRAPHICS_DISPLAY="-display gtk"
+            graphics_vga_args=(-vga qxl)
+            graphics_display_args=(-display gtk)
             GRAPHICS_ACCEL_LOG="GPU acceleration: NONE (QXL)"
             ;;
         virtio-gl)
             GRAPHICS_VGA="-device virtio-vga-gl"
             GRAPHICS_DISPLAY="-display gtk,gl=on"
+            graphics_vga_args=(-device virtio-vga-gl)
+            # shellcheck disable=SC2054 # gtk,gl=on is one QEMU argument, not array syntax
+            graphics_display_args=(-display gtk,gl=on)
             GRAPHICS_ACCEL_LOG="GPU acceleration: virgl (OpenGL only; no Vulkan/D3D)"
             ;;
         *)
@@ -1290,6 +1726,7 @@ run_relaunch() {
             return 1
             ;;
     esac
+    resolve_graphics_qemu_args "$op" "$graphics" || return 1
 
     # shellcheck disable=SC2054
     local qemu_args=(
@@ -1301,31 +1738,141 @@ run_relaunch() {
         -drive file="$ovmf_vars",if=pflash,format=raw
         -drive file="$boot_disk",format=qcow2,if=none,id=drive0
         -device nvme,serial=pzvm,drive=drive0
-        -netdev user,id=net0
+        -netdev "$netdev_arg"
         -device virtio-net-pci,netdev=net0
-        -device virtio-serial-pci
-        -chardev spicevmc,id=vdagent,name=vdagent
-        -device virtserialport,chardev=vdagent,name=com.redhat.spice.0
-        -spice port=5930,addr=127.0.0.1,disable-ticketing=on
+        -device virtio-serial-pci,id=virtio-serial0
         -device ich9-usb-ehci1
         -device ich9-usb-uhci1
         -device usb-tablet
         -device usb-kbd
+        -serial file:"$vm_dir/relaunch-serial.log"
+        -qmp unix:"$vm_dir/relaunch-qmp.sock",server=on,wait=off
     )
 
-    qemu_args+=("$GRAPHICS_VGA")
-    qemu_args+=("$GRAPHICS_DISPLAY")
+    qemu_args+=("${graphics_vga_args[@]}")
+    qemu_args+=("${graphics_display_args[@]}")
+    if [ "$graphics" = "compat" ]; then
+        # shellcheck disable=SC2054
+        qemu_args+=(-chardev spicevmc,id=vdagent,name=vdagent)
+        # shellcheck disable=SC2054
+        qemu_args+=(-device virtserialport,bus=virtio-serial0.0,nr=2,chardev=vdagent,name=com.redhat.spice.0)
+        # shellcheck disable=SC2054
+        qemu_args+=(-spice port=5930,addr=127.0.0.1,disable-ticketing=on)
+    else
+        log_operation "$op" "SPICE disabled for virtio-gl: QEMU GL context uses GTK directly"
+    fi
     # shellcheck disable=SC2054
-    qemu_args+=(-chardev socket,path="$vm_dir/qga.sock",server=on,id=qga0)
+    qemu_args+=(-chardev socket,path="$vm_dir/qga.sock",server=on,wait=off,id=qga0)
     # shellcheck disable=SC2054
-    qemu_args+=(-device virtserialport,chardev=qga0,name=org.qemu.guest_agent.0)
+    qemu_args+=(-device virtserialport,bus=virtio-serial0.0,nr=1,chardev=qga0,name=org.qemu.guest_agent.0)
 
     log_operation "$op" "$GRAPHICS_ACCEL_LOG"
     log_operation "$op" "relaunching with display (disk=$boot_disk, graphics=$graphics)"
-    qemu-system-x86_64 "${qemu_args[@]}" &
+    rm -f "$vm_dir/qga.sock" "$vm_dir/relaunch-qmp.sock"
+    # The player/worker exits after validation. Keep the desktop VM independent
+    # from its terminal so shell teardown cannot SIGHUP a healthy guest.
+    nohup setsid qemu-system-x86_64 "${qemu_args[@]}" </dev/null >>"$vm_dir/relaunch-qemu.log" 2>&1 &
     local qemu_pid=$!
     echo "$qemu_pid" > "$vm_dir/qemu-pid"
+
+    local qga_ready=0 qga_started=$SECONDS qga_deadline=$((SECONDS + 180)) qga_elapsed=0
+    while [ "$SECONDS" -lt "$qga_deadline" ]; do
+        kill -0 "$qemu_pid" 2>/dev/null || break
+        if [ -S "$vm_dir/qga.sock" ] && qga_ping "$vm_dir/qga.sock"; then
+            qga_ready=1
+            log_operation "$op" "relaunched QGA ready after ${qga_elapsed}s"
+            break
+        fi
+        sleep 5
+        qga_elapsed=$((SECONDS - qga_started))
+    done
+    if [ "$qga_ready" != "1" ]; then
+        log_operation "$op" "FAIL: relaunched VM did not expose QGA within 180s"
+        qga_channel_close
+        kill "$qemu_pid" 2>/dev/null || true
+        wait "$qemu_pid" 2>/dev/null || true
+        rm -f "$vm_dir/qemu-pid"
+        if [ "$graphics" = "virtio-gl" ] && [ "${PZ_RELAUNCH_FALLBACK_ACTIVE:-0}" != "1" ]; then
+            log_operation "$op" "virtio-gl readiness failed; retrying once with compatible QXL display"
+            PZ_RELAUNCH_FALLBACK_ACTIVE=1 PZ_RELAUNCH_GRAPHICS_OVERRIDE=compat run_relaunch "$op"
+            return $?
+        fi
+        return 1
+    fi
+
+    local validation_os validation_network marker_open marker_handle marker_read marker_json validation_ok=0
+    qga_exec "$vm_dir/qga.sock" '{"execute":"guest-get-osinfo"}' || true
+    validation_os="$QGA_RESPONSE"
+    local network_deadline=$((SECONDS + 60))
+    while [ "$SECONDS" -lt "$network_deadline" ]; do
+        qga_exec "$vm_dir/qga.sock" '{"execute":"guest-network-get-interfaces"}' || true
+        validation_network="$QGA_RESPONSE"
+        if printf '%s\n' "$validation_network" | jq -e '[.return[]? | .["ip-addresses"][]? | select(.["ip-address-type"] == "ipv4" and (.["ip-address"] | startswith("127.") | not))] | length > 0' >/dev/null 2>&1; then
+            break
+        fi
+        sleep 2
+    done
+
+    local marker_path='C:\ProgramData\PhaseZero\provisioning-complete.json'
+    marker_open="$(jq -nc --arg path "$marker_path" '{execute:"guest-file-open",arguments:{path:$path,mode:"r"}}')"
+    qga_exec "$vm_dir/qga.sock" "$marker_open" || true
+    marker_handle="$(printf '%s\n' "$QGA_RESPONSE" | jq -r '.return // -1')"
+    if [[ "$marker_handle" =~ ^[0-9]+$ ]]; then
+        qga_exec "$vm_dir/qga.sock" '{"execute":"guest-file-read","arguments":{"handle":'"$marker_handle"',"count":65536}}' || true
+        marker_read="$QGA_RESPONSE"
+        # Windows QGA may return a fixed-size buffer padded with NUL bytes.
+        # Strip padding before handing the UTF-8 JSON marker to jq.
+        marker_json="$(printf '%s\n' "$marker_read" | jq -r '.return["buf-b64"] // ""' | base64 -d 2>/dev/null | tr -d '\000' || true)"
+        qga_exec "$vm_dir/qga.sock" '{"execute":"guest-file-close","arguments":{"handle":'"$marker_handle"'}}' || true
+    fi
+
+    if printf '%s\n' "$validation_os" | jq -e '.return | type == "object"' >/dev/null 2>&1 &&
+       printf '%s\n' "$validation_network" | jq -e '[.return[]? | .["ip-addresses"][]? | select(.["ip-address-type"] == "ipv4" and (.["ip-address"] | startswith("127.") | not))] | length > 0' >/dev/null 2>&1 &&
+       printf '%s\n' "$marker_json" | jq -e '.completedAt and .exchangePath' >/dev/null 2>&1; then
+        validation_ok=1
+        log_operation "$op" "relaunch validation: QGA OS=$(printf '%s\n' "$validation_os" | jq -r '.return["pretty-name"] // .return.name // "Windows"')"
+    fi
+    if [ "$validation_ok" != "1" ]; then
+        local validation_ipv4_count marker_bytes marker_prefix
+        validation_ipv4_count="$(printf '%s\n' "$validation_network" | jq '[.return[]? | .["ip-addresses"][]? | select(.["ip-address-type"] == "ipv4" and (.["ip-address"] | startswith("127.") | not))] | length' 2>/dev/null || echo 0)"
+        marker_bytes="$(printf '%s' "$marker_json" | wc -c)"
+        marker_prefix="$(printf '%s' "$marker_json" | head -c 256 | base64 -w0 2>/dev/null || true)"
+        log_operation "$op" "relaunch diagnostics: os=$(printf '%s\n' "$validation_os" | jq -c '.return // .error // null' 2>/dev/null || echo invalid) ipv4=$validation_ipv4_count markerHandle=$marker_handle markerBytes=$marker_bytes markerPrefixB64=$marker_prefix"
+        log_operation "$op" "FAIL: relaunched VM failed guest readiness validation"
+        qga_shutdown "$vm_dir/qga.sock" || true
+        sleep 2
+        qga_channel_close
+        local shutdown_wait=0
+        while kill -0 "$qemu_pid" 2>/dev/null && [ "$shutdown_wait" -lt 30 ]; do
+            sleep 1
+            shutdown_wait=$((shutdown_wait + 1))
+        done
+        if kill -0 "$qemu_pid" 2>/dev/null; then
+            kill "$qemu_pid" 2>/dev/null || true
+        fi
+        wait "$qemu_pid" 2>/dev/null || true
+        rm -f "$vm_dir/qemu-pid"
+        return 1
+    fi
+    log_operation "$op" "relaunch verified: QGA, network and completion marker ready (SMB verified during tweaks)"
+    qga_channel_close
     echo "$qemu_pid"
+}
+
+find_qemu_pid_for_disk() {
+    local disk="$1" proc pid cmdline canonical_disk
+    [ -n "$disk" ] && [ -f "$disk" ] || return 1
+    canonical_disk="$(readlink -f -- "$disk" 2>/dev/null || true)"
+    [ -n "$canonical_disk" ] || return 1
+    for proc in /proc/[0-9]*; do
+        [ -r "$proc/cmdline" ] || continue
+        pid="${proc##*/}"
+        cmdline="$(tr '\0' ' ' < "$proc/cmdline" 2>/dev/null || true)"
+        case "$cmdline" in
+            *qemu-system*"$canonical_disk"*|*qemu-kvm*"$canonical_disk"*) printf '%s\n' "$pid"; return 0 ;;
+        esac
+    done
+    return 1
 }
 
 provision_status() {
@@ -1344,11 +1891,12 @@ provision_status() {
     [ -d "$op_dir" ] || { pz_error "operation not found: $operation_id"; return 1; }
     [ -f "$op_dir/operation.json" ] || { pz_error "operation metadata missing"; return 1; }
 
-    local vm_dir="" snapshot_path="" qemu_pid_raw="" qemu_pid_num=0
+    local vm_dir="" snapshot_path="" qemu_pid_raw="" qemu_pid_num=0 staging_qemu_pid=0 adopted_disk="" adopted_qemu_pid=0
     local vm_dir_file="$OPERATIONS_DIR/$operation_id/vm_dir"
     [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
     local snap_path_file="$OPERATIONS_DIR/$operation_id/snapshot_path"
     [ -f "$snap_path_file" ] && snapshot_path="$(cat "$snap_path_file")"
+    adopted_disk="$(jq -r '.adoptedDisk // ""' "$op_dir/operation.json")"
     if [ -n "$vm_dir" ] && [ -f "$vm_dir/qemu-pid" ]; then
         # Only trust qemu-pid from a vm_dir that resolves to canonical staging;
         # a corrupt/hostile vm_dir record must never drive a read from an
@@ -1361,6 +1909,7 @@ provision_status() {
         fi
     fi
     [[ "$qemu_pid_raw" =~ ^[0-9]+$ ]] && qemu_pid_num="$qemu_pid_raw"
+    staging_qemu_pid="$qemu_pid_num"
     local qemu_running="false"
     if [ "$qemu_pid_num" -gt 0 ]; then
         if kill -0 "$qemu_pid_num" 2>/dev/null; then
@@ -1369,6 +1918,14 @@ provision_status() {
             case "$cmdline" in
                 *qemu-system*|*qemu-kvm*) qemu_running="true" ;;
             esac
+        fi
+    fi
+    if [ -n "$adopted_disk" ]; then
+        adopted_qemu_pid="$(find_qemu_pid_for_disk "$adopted_disk" 2>/dev/null || echo 0)"
+        [[ "$adopted_qemu_pid" =~ ^[0-9]+$ ]] || adopted_qemu_pid=0
+        if [ "$adopted_qemu_pid" -gt 0 ]; then
+            qemu_pid_num="$adopted_qemu_pid"
+            qemu_running="true"
         fi
     fi
     local snapshot_exists="false"
@@ -1389,9 +1946,13 @@ provision_status() {
             --arg snapshotPath "$snapshot_path" \
             --argjson snapshotExists "$snapshot_exists" \
             --argjson qemuPid "$qemu_pid_num" \
+            --argjson stagingQemuPid "$staging_qemu_pid" \
             --argjson qemuRunning "$qemu_running" \
+            --arg adoptedDisk "$adopted_disk" \
+            --argjson adoptedDiskExists "$([ -n "$adopted_disk" ] && [ -f "$adopted_disk" ] && echo true || echo false)" \
+            --argjson adoptedQemuPid "$adopted_qemu_pid" \
             --argjson libvirtRunning "$libvirt_running" \
-            '$op + {vmDir: $vmDir, snapshotPath: $snapshotPath, snapshotExists: $snapshotExists, qemuPid: $qemuPid, qemuRunning: $qemuRunning, libvirtRunning: $libvirtRunning}'
+            '$op + {vmDir: $vmDir, snapshotPath: $snapshotPath, snapshotExists: $snapshotExists, qemuPid: $qemuPid, stagingQemuPid: $stagingQemuPid, qemuRunning: $qemuRunning, adoptedDisk: $adoptedDisk, adoptedDiskExists: $adoptedDiskExists, adoptedQemuPid: $adoptedQemuPid, libvirtRunning: $libvirtRunning}'
     else
         local state checkpoint progress
         state="$(jq -r '.state' "$op_dir/operation.json")"
@@ -1473,6 +2034,9 @@ provision_resume() {
     local resume_ts; resume_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     jq --arg ts "$resume_ts" '.state = "running" | .updatedAt = $ts' "$op_dir/operation.json" > "${op_dir}/operation.tmp" && mv "${op_dir}/operation.tmp" "$op_dir/operation.json"
 
+    # Close the parent lock FD before spawning; otherwise nohup inherits it
+    # and the worker blocks on its own lock for the full handoff retry window.
+    provision_lock_release
     nohup bash "$PZ_ROOT/linux/windows-vm/provision.sh" run --operation-id "$operation_id" \
         > "$op_dir/worker.log" 2>&1 &
     disown
@@ -1676,7 +2240,11 @@ provision_cancel() {
         if [ "$staging_valid" = "1" ] && [ -d "$vm_dir" ]; then
             if resolve_vm_staging_dir "$operation_id" >/dev/null 2>&1; then
                 rm -rf -- "$vm_dir"
-                [ "$json" = "1" ] && echo >&2 "INFO:  removed staging directory: $vm_dir" || pz_info "removed staging directory: $vm_dir"
+                if [ "$json" = "1" ]; then
+                    echo >&2 "INFO:  removed staging directory: $vm_dir"
+                else
+                    pz_info "removed staging directory: $vm_dir"
+                fi
                 removal_succeeded=1
             else
                 pz_error "staging validation refused; preserving $vm_dir"
@@ -1690,7 +2258,11 @@ provision_cancel() {
             preserved_path="$raw_vm_dir"
         fi
     else
-        [ "$json" = "1" ] && echo >&2 "INFO:  disk preserved for resume/diagnosis: ${vm_dir:-$raw_vm_dir}" || pz_info "disk preserved for resume/diagnosis: ${vm_dir:-$raw_vm_dir}"
+        if [ "$json" = "1" ]; then
+            echo >&2 "INFO:  disk preserved for resume/diagnosis: ${vm_dir:-$raw_vm_dir}"
+        else
+            pz_info "disk preserved for resume/diagnosis: ${vm_dir:-$raw_vm_dir}"
+        fi
         [ -n "$raw_vm_dir" ] && preserved_path="$raw_vm_dir"
     fi
 
@@ -1714,8 +2286,127 @@ provision_cancel() {
             --arg error "$error" \
             '{success: $success, cancelled: $cancelled, removalRequested: $removalRequested, removalSucceeded: $removalSucceeded, preservedPath: $preservedPath, error: $error, operationId: $operationId}'
     fi
-    [ "$json" = "1" ] && echo >&2 "INFO:  operation cancelled: $operation_id" || pz_info "operation cancelled: $operation_id"
+    if [ "$json" = "1" ]; then
+        echo >&2 "INFO:  operation cancelled: $operation_id"
+    else
+        pz_info "operation cancelled: $operation_id"
+    fi
     [ "$success" = "1" ]
+}
+
+provision_finalize() {
+    local operation_id="" target_dir="" json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --operation-id) operation_id="${2:-}"; shift 2 ;;
+            --operation-id=*) operation_id="${1#*=}"; shift ;;
+            --target-dir) target_dir="${2:-}"; shift 2 ;;
+            --target-dir=*) target_dir="${1#*=}"; shift ;;
+            --json) json=1; shift ;;
+            *) pz_error "unknown finalize option: $1"; return 1 ;;
+        esac
+    done
+    [ -n "$operation_id" ] || { pz_error "--operation-id required"; return 1; }
+
+    local op_dir="$OPERATIONS_DIR/$operation_id" operation_file="$OPERATIONS_DIR/$operation_id/operation.json"
+    [ -f "$operation_file" ] || { pz_error "operation not found: $operation_id"; return 1; }
+    local state existing_adopted existing_adopted_real existing_adopted_pid=0 managed_vm_base
+    managed_vm_base="$(readlink -m -- "$HOME/VirtualMachines/PhaseZero-Windows")"
+    state="$(jq -r '.state // ""' "$operation_file")"
+    [ "$state" = "completed" ] || { pz_error "operation must be completed before finalize"; return 1; }
+    existing_adopted="$(jq -r '.adoptedDisk // ""' "$operation_file")"
+    if [ -n "$existing_adopted" ] && [ -f "$existing_adopted" ]; then
+        existing_adopted_real="$(readlink -f -- "$existing_adopted" 2>/dev/null || true)"
+        case "$existing_adopted_real" in
+            "$managed_vm_base"|"$managed_vm_base"-*)
+                existing_adopted_pid="$(find_qemu_pid_for_disk "$existing_adopted_real" 2>/dev/null || echo 0)"
+                if { [[ "$existing_adopted_pid" =~ ^[0-9]+$ ]] && [ "$existing_adopted_pid" -gt 0 ]; } || qemu-img check "$existing_adopted_real" >/dev/null 2>&1; then
+                    if [ "$json" = "1" ]; then
+                        jq -n --arg disk "$existing_adopted_real" '{success:true, adoptedDisk:$disk, alreadyFinalized:true}'
+                    else
+                        pz_info "operation already finalized: $existing_adopted_real"
+                    fi
+                    return 0
+                fi
+                ;;
+        esac
+    fi
+
+    local vm_dir snapshot_path source_pid
+    vm_dir="$(resolve_vm_staging_dir "$operation_id")" || return 1
+    snapshot_path="$(cat "$op_dir/snapshot_path" 2>/dev/null || true)"
+    [ -f "$snapshot_path" ] || { pz_error "verified snapshot missing"; return 1; }
+    source_pid="$(cat "$vm_dir/qemu-pid" 2>/dev/null || true)"
+    if [[ "$source_pid" =~ ^[0-9]+$ ]] && kill -0 "$source_pid" 2>/dev/null; then
+        pz_error "VM is running; shut it down before finalize"
+        return 1
+    fi
+
+    if [ -z "$target_dir" ]; then
+        local default_dir="$HOME/VirtualMachines/PhaseZero-Windows"
+        if [ ! -e "$default_dir/phasezero-windows.qcow2" ]; then
+            target_dir="$default_dir"
+        else
+            target_dir="$HOME/VirtualMachines/PhaseZero-Windows-${operation_id#op-}"
+        fi
+    fi
+    target_dir="$(readlink -m -- "$target_dir")"
+    case "$target_dir" in
+        "$managed_vm_base"|"$managed_vm_base"-*) ;;
+        *) pz_error "finalize target must be under $HOME/VirtualMachines/PhaseZero-Windows*"; return 1 ;;
+    esac
+
+    local target_disk="$target_dir/phasezero-windows.qcow2" partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
+    [ ! -e "$target_disk" ] || { pz_error "final target already exists: $target_disk"; return 1; }
+    install -d -m 700 "$target_dir"
+    target_dir="$(readlink -f -- "$target_dir")"
+    case "$target_dir" in
+        "$managed_vm_base"|"$managed_vm_base"-*) ;;
+        *) pz_error "finalize target resolves outside the managed VM directory"; return 1 ;;
+    esac
+    target_disk="$target_dir/phasezero-windows.qcow2"
+    partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
+    [ ! -e "$target_disk" ] || { pz_error "final target already exists: $target_disk"; return 1; }
+    trap 'rm -f -- "$partial_disk"' RETURN
+    if ! qemu-img convert -f qcow2 -O qcow2 -o compat=1.1,lazy_refcounts=on -S 4k "$snapshot_path" "$partial_disk"; then
+        rm -f -- "$partial_disk"
+        pz_error "failed to flatten provisioned snapshot"
+        return 1
+    fi
+    if ! qemu-img check "$partial_disk" >/dev/null 2>&1; then
+        rm -f -- "$partial_disk"
+        pz_error "final disk verification failed"
+        return 1
+    fi
+    mv -- "$partial_disk" "$target_disk"
+    trap - RETURN
+    chmod 600 "$target_disk"
+    if [ -f "$vm_dir/OVMF_VARS.fd" ]; then
+        cp --preserve=mode,timestamps "$vm_dir/OVMF_VARS.fd" "$target_dir/OVMF_VARS.fd"
+        chmod 600 "$target_dir/OVMF_VARS.fd"
+    fi
+
+    local graphics ovmf_code net_model="virtio-net-pci"
+    graphics="$(jq -r '.graphics // "compat"' "$op_dir/plan.json")"
+    ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd /usr/share/OVMF/OVMF_CODE.fd || true)}"
+    if ! bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" adopt --disk "$target_disk" --graphics "$graphics" --net-model "$net_model" --ovmf-code "$ovmf_code"; then
+        pz_error "disk created but PhaseZero adoption failed: $target_disk"
+        return 1
+    fi
+
+    local finalized_at
+    finalized_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    if ! jq --arg disk "$target_disk" --arg ts "$finalized_at" '.adoptedDisk=$disk | .adoptedAt=$ts' "$operation_file" > "$operation_file.tmp"; then
+        rm -f -- "$operation_file.tmp"
+        pz_error "disk adopted but operation metadata update failed: $target_disk"
+        return 1
+    fi
+    mv "$operation_file.tmp" "$operation_file"
+    if [ "$json" = "1" ]; then
+        jq -n --arg disk "$target_disk" '{success:true, adoptedDisk:$disk, alreadyFinalized:false}'
+    else
+        pz_info "provision finalized: $target_disk"
+    fi
 }
 
 provision_shutdown() {
@@ -1730,9 +2421,19 @@ provision_shutdown() {
     done
     [ -n "$operation_id" ] || { pz_error "--operation-id required"; return 1; }
 
-    local vm_dir vm_dir_file="$OPERATIONS_DIR/$operation_id/vm_dir"
-    [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
-    if [ -z "$vm_dir" ] || [ ! -d "$vm_dir" ]; then
+    local vm_dir
+    # Validate operation id, metadata and vm_dir through the canonical staging
+    # resolver BEFORE touching qga.sock / qemu-pid: an external or corrupt
+    # record must never drive a guest-agent or kill action.
+    if ! vm_dir="$(resolve_vm_staging_dir "$operation_id" 2>/dev/null)"; then
+        if [ "$json" = "1" ]; then
+            jq -n --arg operation_id "$operation_id" '{success: false, error: "staging validation failed", operationId: $operation_id}'
+        else
+            pz_error "staging validation failed for operation $operation_id"
+        fi
+        return 1
+    fi
+    if [ ! -d "$vm_dir" ]; then
         if [ "$json" = "1" ]; then
             jq -n --arg operation_id "$operation_id" '{success: false, error: "vm_dir not found", operationId: $operation_id}'
         else
@@ -1742,6 +2443,14 @@ provision_shutdown() {
     fi
 
     local qga_sock="$vm_dir/qga.sock"
+    local adopted_disk adopted_pid=""
+    adopted_disk="$(jq -r '.adoptedDisk // ""' "$OPERATIONS_DIR/$operation_id/operation.json")"
+    if [ -n "$adopted_disk" ]; then
+        adopted_pid="$(find_qemu_pid_for_disk "$adopted_disk" 2>/dev/null || true)"
+        if [[ "$adopted_pid" =~ ^[0-9]+$ ]] && kill -0 "$adopted_pid" 2>/dev/null; then
+            qga_sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/phasezero-windows-vm/qga.sock"
+        fi
+    fi
     if [ ! -S "$qga_sock" ]; then
         if [ "$json" = "1" ]; then
             jq -n --arg operation_id "$operation_id" '{success: false, error: "QGA socket not found", operationId: $operation_id}'
@@ -1765,8 +2474,12 @@ provision_shutdown() {
     local qemu_pid=""
     local qemu_pid_file="$vm_dir/qemu-pid"
     [ -f "$qemu_pid_file" ] && qemu_pid="$(cat "$qemu_pid_file")"
+    if [[ "$adopted_pid" =~ ^[0-9]+$ ]] && kill -0 "$adopted_pid" 2>/dev/null; then
+        qemu_pid="$adopted_pid"
+    fi
 
-    echo '{"execute":"guest-shutdown"}' | socat - UNIX-CONNECT:"$qga_sock" 2>/dev/null || true
+    printf '%s\n' '{"execute":"guest-shutdown"}' |
+        timeout 5 socat -T 2 STDIO,ignoreeof UNIX-CONNECT:"$qga_sock" 2>/dev/null || true
 
     local timeout=60 waited=0 shutdown_ok=0
     while [ "$waited" -lt "$timeout" ]; do
@@ -1831,6 +2544,7 @@ Usage:
   provision plan --iso <windows.iso> [options] [--json]
   provision start --plan-id <id> --confirm <token> [--json]
   provision status --operation-id <id> [--json]
+  provision finalize --operation-id <id> [--target-dir PATH] [--json]
   provision watch --operation-id <id>
   provision resume --operation-id <id>
   provision cancel --operation-id <id> [--remove-staging]
@@ -1854,20 +2568,23 @@ Options:
 EOF
 }
 
-ACTION="${1:-help}"
-if [ $# -gt 0 ]; then
-    shift
-fi
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    ACTION="${1:-help}"
+    if [ $# -gt 0 ]; then
+        shift
+    fi
 
-case "$ACTION" in
-    plan|dry-run) provision_plan "$@" ;;
-    start|begin) provision_start "$@" ;;
-    run) provision_run "$@" ;;
-    status) provision_status "$@" ;;
-    watch|follow) provision_watch "$@" ;;
-    resume|recover) provision_resume "$@" ;;
-    cancel|stop) provision_cancel "$@" ;;
-    shutdown) provision_shutdown "$@" ;;
-    help|--help|-h|"") usage ;;
-    *) pz_error "unknown provision action: $ACTION"; usage; exit 1 ;;
-esac
+    case "$ACTION" in
+        plan|dry-run) provision_plan "$@" ;;
+        start|begin) provision_start "$@" ;;
+        run) provision_run "$@" ;;
+        status) provision_status "$@" ;;
+        watch|follow) provision_watch "$@" ;;
+        resume|recover) provision_resume "$@" ;;
+        cancel|stop) provision_cancel "$@" ;;
+        finalize|adopt) provision_finalize "$@" ;;
+        shutdown) provision_shutdown "$@" ;;
+        help|--help|-h|"") usage ;;
+        *) pz_error "unknown provision action: $ACTION"; usage; exit 1 ;;
+    esac
+fi

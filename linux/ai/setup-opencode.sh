@@ -4,7 +4,7 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
-OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.jsonc"
+OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.json"
 NPM_PREFIX="${PZ_NPM_PREFIX:-$HOME/.local/share/npm}"
 LOCAL_BIN="${PZ_LOCAL_BIN:-$HOME/.local/bin}"
 APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
@@ -467,14 +467,6 @@ configure_free_default_model() {
     local tmp; tmp="$(mktemp)"
     jq --arg model "$model" --arg small "$small" '.model = $model | .small_model = $small' \
         "$OPENCODE_CONFIG" > "$tmp" && mv "$tmp" "$OPENCODE_CONFIG"
-    # opencode-desktop and CLI both read this dir; if a bare opencode.json also
-    # exists, keep its default in lockstep so neither surface hangs on Ollama.
-    local sibling="${OPENCODE_CONFIG%jsonc}json"
-    if [ "$sibling" != "$OPENCODE_CONFIG" ] && [ -f "$sibling" ] && jq empty "$sibling" >/dev/null 2>&1; then
-        tmp="$(mktemp)"
-        jq --arg model "$model" --arg small "$small" '.model = $model | .small_model = $small' \
-            "$sibling" > "$tmp" && mv "$tmp" "$sibling"
-    fi
     pz_info "opencode default model set to keyless free model: $model (fallback small_model: $small)"
 }
 
