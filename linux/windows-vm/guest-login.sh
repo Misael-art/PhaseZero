@@ -18,6 +18,7 @@ if [ "$ACTION" = "recovery" ]; then
     [ "$#" -gt 0 ] && shift
 fi
 CONFIG_FILE="${PZ_WINDOWS_VM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/windows-vm.conf}"
+# shellcheck disable=SC1090 # User-owned, documented VM configuration file.
 [ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 VM_DIR="${PZ_WINDOWS_VM_DIR:-$HOME/VirtualMachines/PhaseZero-Windows}"
 DISK_PATH="${PZ_WINDOWS_VM_DISK:-$VM_DIR/phasezero-windows.qcow2}"
@@ -25,6 +26,7 @@ OVMF_VARS="${PZ_WINDOWS_VM_OVMF_VARS:-$VM_DIR/OVMF_VARS.fd}"
 TPM_DIR="${PZ_WINDOWS_VM_TPM_DIR:-$VM_DIR/tpm}"
 RUNTIME_DIR="${PZ_WINDOWS_VM_RUNTIME_DIR:-${XDG_RUNTIME_DIR:-/tmp}/phasezero-windows-vm}"
 QGA_SOCKET="${PZ_WINDOWS_VM_QGA_SOCKET:-$RUNTIME_DIR/qga.sock}"
+QMP_SOCKET="${PZ_WINDOWS_VM_QMP_SOCKET:-$RUNTIME_DIR/qmp.sock}"
 GUEST_USER="${PZ_WINDOWS_VM_GUEST_USER:-phasezero}"
 POLICY="${PZ_WINDOWS_VM_GUEST_LOGIN_POLICY:-auto}"
 JSON_OUT=0
@@ -34,6 +36,8 @@ BACKUP_PROOF=""
 LOCAL_ONLY=1
 OFFLINE_WORK=""
 OFFLINE_LOCK_FD=""
+
+RECOVERY_STATUS_FILE="$PZ_STATE/windows-vm/guest-login-recovery.json"
 
 cleanup_offline_work() {
     if [ -n "${OFFLINE_WORK:-}" ] && [ -d "$OFFLINE_WORK" ]; then
@@ -236,6 +240,43 @@ qga_guest_exec_wait() {
     return 1
 }
 
+record_recovery_phase() {
+    local phase="$1" manifest="${2:-}" tmp
+    install -d -m 0700 "$(dirname "$RECOVERY_STATUS_FILE")" || return 1
+    tmp="$(mktemp "${RECOVERY_STATUS_FILE}.XXXXXX")" || return 1
+    jq -n --arg phase "$phase" --arg manifest "$manifest" \
+        --arg updatedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        '{schemaVersion:1,phase:$phase,rollbackManifest:$manifest,updatedAt:$updatedAt}' > "$tmp" || {
+        rm -f -- "$tmp"
+        return 1
+    }
+    chmod 0600 "$tmp" && mv -f "$tmp" "$RECOVERY_STATUS_FILE"
+}
+
+qmp_command() {
+    local command="$1" response
+    [ "${HAVE_SOCAT:-0}" = "1" ] || return 1
+    [ -S "$QMP_SOCKET" ] || return 1
+    response="$(printf '%s\n%s\n' '{"execute":"qmp_capabilities"}' "$command" | \
+        timeout 5s socat - UNIX-CONNECT:"$QMP_SOCKET" 2>/dev/null)" || return 1
+    printf '%s\n' "$response" | jq -e 'select(.return != null)' >/dev/null
+}
+
+verify_transport() {
+    local result manifest=""
+    qga_ping "$QGA_SOCKET" || { pz_error "QGA transport unavailable after guest reboot"; return 1; }
+    result="$(qga_guest_exec_wait status "")" || return 1
+    printf '%s\n' "$result" | jq -e '.qgaServiceHealthy == true' >/dev/null || {
+        pz_error "QGA service unhealthy after guest reboot"
+        return 1
+    }
+    [ -f "$RECOVERY_STATUS_FILE" ] && manifest="$(jq -r '.rollbackManifest // ""' "$RECOVERY_STATUS_FILE" 2>/dev/null || true)"
+    record_recovery_phase transport-verified "$manifest" || return 1
+    printf '%s\n' "$result" | jq --arg phase transport-verified \
+        '{success:true,phase:$phase,qgaAvailable:true,qgaServiceHealthy:(.qgaServiceHealthy == true),
+          loggedOnUser,explorerReady,networkReady,dnsReady,exchangeMapped,audioReady,graphicsAdapters,graphicsReady}'
+}
+
 guest_status() {
     if ! qga_ping "$QGA_SOCKET"; then
         jq -n --arg policy "$POLICY" \
@@ -247,7 +288,9 @@ guest_status() {
     result="$(qga_guest_exec_wait status "")" || return 1
     printf '%s\n' "$result" | jq '{guestLoginPolicy:.policy,
         guestLoginVerified:(.configured == true and .registryPasswordStored == false),
-        qgaAvailable:true,qgaServiceHealthy:true,lastVerifiedAt,error:null}'
+        qgaAvailable:true,qgaServiceHealthy:(.qgaServiceHealthy == true),
+        loggedOnUser,explorerReady,networkReady,dnsReady,exchangeMapped,audioReady,
+        graphicsAdapters,graphicsReady,lastVerifiedAt,error:null}'
 }
 
 recovery_status() {
@@ -364,13 +407,22 @@ repair_qga() {
     backup_json="$(backup_guest)" || return 1
     manifest="$(printf '%s\n' "$backup_json" | jq -er '.manifest')" || return 1
     cp "$PZ_ROOT/linux/windows-vm/qga-offline-repair.ps1" "$OFFLINE_WORK/qga-offline-repair.ps1"
-    chmod 0600 "$OFFLINE_WORK/qga-offline-repair.ps1"
+    sed -i "s/__PZ_VIRTIO_SHA256__/${virtio_sha_expected,,}/g" "$OFFLINE_WORK/qga-offline-repair.ps1"
+    # virt-customize runs --firstboot payloads through cmd.exe on Windows.
+    # Upload PowerShell separately and pass a real batch wrapper; passing the
+    # .ps1 directly silently makes cmd interpret PowerShell statements.
+    printf '%s\r\n' \
+        '@echo off' \
+        'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "C:\\ProgramData\\PhaseZeroOffline\\qga-offline-repair.ps1"' \
+        'exit /b %ERRORLEVEL%' > "$OFFLINE_WORK/qga-offline-repair.bat"
+    chmod 0600 "$OFFLINE_WORK/qga-offline-repair.ps1" "$OFFLINE_WORK/qga-offline-repair.bat"
     set +e
     TMPDIR="$guestfs_tmp" LIBGUESTFS_CACHEDIR="$guestfs_cache" \
         timeout --signal=TERM --kill-after=20s 10m virt-customize -a "$DISK_PATH" \
         --mkdir /ProgramData/PhaseZeroOffline \
         --upload "$virtio_iso:/ProgramData/PhaseZeroOffline/virtio-win.iso" \
-        --firstboot "$OFFLINE_WORK/qga-offline-repair.ps1" >/dev/null 2>"$OFFLINE_WORK/virt-customize.err"
+        --upload "$OFFLINE_WORK/qga-offline-repair.ps1:/ProgramData/PhaseZeroOffline/qga-offline-repair.ps1" \
+        --firstboot "$OFFLINE_WORK/qga-offline-repair.bat" >/dev/null 2>"$OFFLINE_WORK/virt-customize.err"
     rc=$?
     set -e
     if [ "$rc" -ne 0 ]; then
@@ -387,18 +439,29 @@ repair_qga() {
         pz_error "offline QGA repair failed; disk rollback attempted${diagnostic:+; diagnostic: $diagnostic}"
         return 1
     fi
+    record_recovery_phase reboot-scheduled "$manifest" || return 1
     cleanup_offline_work
     jq -n --arg manifest "$manifest" \
-        '{success:true,state:"pending-guest-boot",qgaAvailable:false,qgaServiceHealthy:false,rollbackManifest:$manifest,nextAction:"boot guest once, then run guest-login recovery apply --password-stdin"}'
+        '{success:true,state:"pending-guest-boot",phase:"reboot-scheduled",guestRebootRequired:true,
+          qgaAvailable:false,qgaServiceHealthy:false,rollbackManifest:$manifest,
+          nextAction:"boot guest once; firstboot repairs QGA then reboots Windows. Run guest-login transport-verify after reboot"}'
 }
 
 guest_power() {
     local mode="$1"
     acquire_guest_lock || return 1
-    qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable: guest power action refused"; return 1; }
-    qga_channel_open "$QGA_SOCKET" || return 1
-    printf '{"execute":"guest-shutdown","arguments":{"mode":"%s"}}\n' "$mode" >&"$QGA_WRITE_FD"
-    jq -n --arg action "$mode" '{success:true,accepted:true,action:$action}'
+    if qga_ping "$QGA_SOCKET"; then
+        qga_channel_open "$QGA_SOCKET" || return 1
+        printf '{"execute":"guest-shutdown","arguments":{"mode":"%s"}}\n' "$mode" >&"$QGA_WRITE_FD"
+        jq -n --arg action "$mode" '{success:true,accepted:true,action:$action,transport:"qga"}'
+        return 0
+    fi
+    case "$mode" in
+        reboot) qmp_command '{"execute":"system_reset"}' ;;
+        powerdown) qmp_command '{"execute":"system_powerdown"}' ;;
+        *) pz_error "unsupported guest power action: $mode"; return 2 ;;
+    esac || { pz_error "QGA unavailable and private QMP control failed"; return 1; }
+    jq -n --arg action "$mode" '{success:true,accepted:true,action:$action,transport:"qmp"}'
 }
 
 apply_policy() {
@@ -435,9 +498,10 @@ case "$ACTION" in
             *) pz_error "usage: guest-login recovery (status|apply|rotate|enable|disable)"; exit 2 ;;
         esac ;;
     repair-qga) repair_qga ;;
+    transport-verify) verify_transport ;;
     reboot) guest_power reboot ;;
     shutdown) guest_power powerdown ;;
-    *) pz_error "usage: pz windows-vm guest-login (status|backup|apply|recovery|repair-qga|rollback|restore|reboot|shutdown)"; exit 2 ;;
+    *) pz_error "usage: pz windows-vm guest-login (status|backup|apply|recovery|repair-qga|transport-verify|rollback|restore|reboot|shutdown)"; exit 2 ;;
 esac
 rc=$?
 set -e

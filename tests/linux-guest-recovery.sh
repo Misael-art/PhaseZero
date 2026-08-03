@@ -5,8 +5,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PS="$ROOT/linux/windows-vm/guest-login.ps1"
 SH="$ROOT/linux/windows-vm/guest-login.sh"
+RECOVER="$ROOT/linux/windows-vm/recover.sh"
 
-bash -n "$SH"
+bash -n "$SH" "$RECOVER"
 grep -Fq "\$recoveryUser = 'PZ-Recovery'" "$PS"
 grep -Fq "Get-LocalGroup -SID 'S-1-5-32-544'" "$PS"
 # Literal PowerShell contract.
@@ -24,7 +25,8 @@ grep -Fq 'repair-qga requires VM powered off' "$SH"
 grep -Fq 'virt-customize -a "$DISK_PATH"' "$SH"
 # Literal shell source contract.
 # shellcheck disable=SC2016
-grep -Fq -- '--firstboot "$OFFLINE_WORK/qga-offline-repair.ps1"' "$SH"
+grep -Fq -- '--firstboot "$OFFLINE_WORK/qga-offline-repair.bat"' "$SH"
+grep -Fq -- 'qga-offline-repair.ps1:/ProgramData/PhaseZeroOffline/qga-offline-repair.ps1' "$SH"
 grep -Fq 'automatic rollback failed' "$SH"
 grep -Fq 'LIBGUESTFS_CACHEDIR="$guestfs_cache"' "$SH"
 grep -Fq 'at least 3 GiB free space required for offline QGA repair' "$SH"
@@ -32,6 +34,32 @@ grep -Fq 'guest-login-diagnostics' "$SH"
 # Literal PowerShell contract.
 # shellcheck disable=SC2016
 grep -Fq 'Remove-Item -LiteralPath $payloadDir' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq "Join-Path \$env:SystemRoot 'System32'" "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq "Join-Path \$env:SystemRoot 'Sysnative'" "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq 'Test-Path -LiteralPath $sysnative' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq '& $pnputil /add-driver' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq "\$trustedVirtioSha256 = '__PZ_VIRTIO_SHA256__'" "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq 'virtio media payload hash mismatch' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq 'QGA MSI signature hash mismatch' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq "Write-RepairStatus \$true 'driver-installed'" "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq "Write-RepairStatus \$true 'qga-installed'" "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq "Write-RepairStatus \$true 'reboot-scheduled'" "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq 'QGA transport unavailable after guest reboot' "$SH"
+grep -Fq 'transport-verified' "$SH"
+grep -Fq 'transport:"qmp"' "$SH"
+grep -Fq 'Set-ExchangeMappingTask' "$PS"
+grep -Fq "PhaseZero-MapExchange" "$PS"
+grep -Fq '\\10.0.2.4\qemu' "$PS"
+grep -Fq 'install -d -m 0700 "$RUNTIME_DIR" "$STATE_DIR"' "$ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'wait_for_transport_cycle' "$RECOVER"
+grep -Fq 'transport-verify --json' "$RECOVER"
+grep -Fq 'guest-login.sh" apply' "$RECOVER"
+grep -Fq -- '--leave-running' "$RECOVER"
+if grep -Eq -- 'PASSWORD=.*(echo|log|arg)' "$RECOVER"; then
+    echo 'recovery orchestration may leak password' >&2
+    exit 1
+fi
+grep -Fq 's/__PZ_VIRTIO_SHA256__/${virtio_sha_expected,,}/g' "$SH"
 if grep -Eq -- '--arg (password|secret)|PZ_RECOVERY_PASSWORD|recovery.*password.*=' "$SH"; then
     echo 'recovery secret leaked through shell argv/environment contract' >&2
     exit 1
@@ -82,9 +110,11 @@ offline_fixture() {
 tmp_success="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
 success_json="$(offline_fixture "$tmp_success" success)"
 printf '%s\n' "$success_json" | jq -e \
-    '.success == true and .state == "pending-guest-boot" and
+    '.success == true and .state == "pending-guest-boot" and .phase == "reboot-scheduled" and
+     .guestRebootRequired == true and
      .qgaAvailable == false and (.rollbackManifest | type == "string")' >/dev/null
 grep -Fxq -- '--firstboot' "$tmp_success/virt.args"
+grep -Fq -- 'qga-offline-repair.bat' "$tmp_success/virt.args"
 grep -Fq -- 'qga-offline-repair.ps1' "$tmp_success/virt.args"
 manifest="$(printf '%s\n' "$success_json" | jq -r '.rollbackManifest')"
 [ -f "$manifest" ]

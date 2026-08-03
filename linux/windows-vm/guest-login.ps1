@@ -120,6 +120,7 @@ function Get-GuestRuntimeStatus {
     $exchangeMapped = $false
     $audioReady = $false
     $graphicsAdapters = @()
+    $explorerReady = $false
     try {
         $networkReady = @(Get-NetIPConfiguration -ErrorAction Stop |
             Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' }).Count -gt 0
@@ -142,6 +143,7 @@ function Get-GuestRuntimeStatus {
         $graphicsAdapters = @(Get-CimInstance Win32_VideoController -ErrorAction Stop |
             ForEach-Object { $_.Name } | Where-Object { $_ })
     } catch { Write-Verbose 'Graphics readiness probe unavailable' }
+    try { $explorerReady = @(Get-Process explorer -ErrorAction Stop).Count -gt 0 } catch { Write-Verbose 'Explorer readiness probe unavailable' }
     [ordered]@{
         networkReady = [bool]$networkReady
         dnsReady = [bool]$dnsReady
@@ -149,6 +151,7 @@ function Get-GuestRuntimeStatus {
         audioReady = [bool]$audioReady
         graphicsAdapters = $graphicsAdapters
         graphicsReady = ($graphicsAdapters.Count -gt 0)
+        explorerReady = [bool]$explorerReady
     }
 }
 
@@ -169,12 +172,15 @@ function Get-PolicyStatus {
         secretStored = $secretStored
         registryPasswordStored = [bool](Get-ItemProperty -Path $winlogon -Name DefaultPassword -ErrorAction SilentlyContinue)
         loggedOnUser = $loggedOn
+        explorerReady = $runtime.explorerReady
         networkReady = $runtime.networkReady
         dnsReady = $runtime.dnsReady
         exchangeMapped = $runtime.exchangeMapped
         audioReady = $runtime.audioReady
         graphicsAdapters = $runtime.graphicsAdapters
         graphicsReady = $runtime.graphicsReady
+        qgaServiceHealthy = [bool](Get-Service -Name qemu-ga -ErrorAction SilentlyContinue |
+            Where-Object { $_.Status -eq 'Running' })
         lastVerifiedAt = (Get-Date).ToUniversalTime().ToString('o')
     }
 }
@@ -206,6 +212,31 @@ function Get-RecoveryStatus {
             Where-Object { $_.Status -eq 'Running' })
         lastVerifiedAt = (Get-Date).ToUniversalTime().ToString('o')
     }
+}
+
+function Set-ExchangeMappingTask {
+    # QGA runs as SYSTEM, so mapping P: there would be invisible to the
+    # interactive desktop. A per-user logon task repairs the mapping after
+    # every AutoAdminLogon without storing a credential.
+    $mapScript = Join-Path $policyDir 'map-exchange.ps1'
+    @'
+$ErrorActionPreference = 'SilentlyContinue'
+cmd.exe /c 'net use P: /delete /y' | Out-Null
+foreach ($target in @('\\10.0.2.4\qemu', '\\10.0.2.2\PZExchange')) {
+    try {
+        New-PSDrive -Name P -PSProvider FileSystem -Root $target -Persist -Scope Global -ErrorAction Stop | Out-Null
+        exit 0
+    } catch { }
+}
+exit 1
+'@ | Set-Content -LiteralPath $mapScript -Encoding UTF8
+    $taskUser = "$env:COMPUTERNAME\$UserName"
+    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+        -Argument "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File `"$mapScript`""
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $taskUser
+    $principal = New-ScheduledTaskPrincipal -UserId $taskUser -LogonType Interactive -RunLevel Limited
+    Register-ScheduledTask -TaskName 'PhaseZero-MapExchange' -TaskPath '\PhaseZero\' -Action $action -Trigger $trigger `
+        -Principal $principal -Force | Out-Null
 }
 
 function Set-RecoveryRemotePolicy([bool]$LocalOnly) {
@@ -301,6 +332,8 @@ if ($Mode -eq 'auto') {
     Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '0' -Type String
     [PhaseZeroLsa]::Store('DefaultPassword', $null)
 }
+
+Set-ExchangeMappingTask
 
 @{
     schemaVersion = 1

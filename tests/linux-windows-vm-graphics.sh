@@ -325,6 +325,7 @@ iso="$TMP_ROOT/Win11_test.iso"
 printf 'fake iso for dry-run tests\n' > "$iso"
 "$REPO_ROOT/linux/pz" windows-vm install --iso "$iso" --disk-size 64M --ram 2048 --cpus 2 >/dev/null
 compat_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics compat)"
+grep -Fq -- '-qmp unix:' <<<"$compat_launch"
 grep -q 'qemu-system-x86_64' <<< "$compat_launch"
 grep -Eq -- '-device virtio-vga( |$)' <<< "$compat_launch"
 grep -Fq 'gtk\,show-cursor=on' <<< "$compat_launch"

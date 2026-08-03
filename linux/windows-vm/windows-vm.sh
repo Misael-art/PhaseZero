@@ -105,8 +105,9 @@ Usage:
   pz windows-vm optimize [--dry-run]
   pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--graphics <profile>] [--experimental] [--dry-run]
   pz windows-vm launch-check [--graphics <profile>] [--json]
-  pz windows-vm guest-login (status|backup|apply|restore|rollback|recovery|repair-qga|reboot|shutdown) [--mode auto|password] [--json]
+  pz windows-vm guest-login (status|backup|apply|restore|rollback|recovery|repair-qga|transport-verify|reboot|shutdown) [--mode auto|password] [--json]
   pz windows-vm guest-login recovery (status|apply|rotate|enable|disable) --password-stdin [--local-only|--allow-remote] [--json]
+  pz windows-vm recover --mode auto|password [--password-stdin] [--leave-running] [--json]
   pz windows-vm graphics status [--json]
   pz windows-vm graphics doctor [--json]
   pz windows-vm graphics plan --profile <auto|compat|virtio-gl|virtio-venus|rutabaga|vfio-looking-glass> [--json]
@@ -1608,7 +1609,9 @@ build_qemu_args() {
     if [ "$DRY_RUN" = "1" ]; then
         pz_info "dry-run: would prepare runtime dir: $RUNTIME_DIR"
     else
-        install -d "$RUNTIME_DIR" "$STATE_DIR"
+        # QGA and QMP allow guest execution/power control. Their Unix sockets
+        # must never be reachable by another local account.
+        install -d -m 0700 "$RUNTIME_DIR" "$STATE_DIR"
     fi
     ensure_share_links || return 1
     start_virtiofs_share exchange "$EXCHANGE_DIR"
@@ -1683,9 +1686,10 @@ build_qemu_args() {
     QEMU_ARGS+=("-device" "$NET_MODEL,netdev=net0,mac=52:54:00:50:5a:00")
     QEMU_ARGS+=("-device" "virtio-serial-pci,id=virtio-serial0")
     if [ "$DRY_RUN" != "1" ]; then
-        rm -f "$RUNTIME_DIR/qga.sock"
+        rm -f "$RUNTIME_DIR/qga.sock" "$RUNTIME_DIR/qmp.sock"
     fi
     QEMU_ARGS+=("-chardev" "socket,path=$RUNTIME_DIR/qga.sock,server=on,wait=off,id=qga0")
+    QEMU_ARGS+=("-qmp" "unix:$RUNTIME_DIR/qmp.sock,server=on,wait=off")
     QEMU_ARGS+=("-device" "virtserialport,bus=virtio-serial0.0,nr=1,chardev=qga0,name=org.qemu.guest_agent.0")
     if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then
         QEMU_ARGS+=("-spice" "port=5930,addr=$SPICE_ADDR,disable-ticketing=on")
@@ -2987,10 +2991,11 @@ case "$ACTION" in
     launch|start|run) launch_vm "$@" ;;
     launch-check|launch-preflight) launch_check "$@" ;;
     guest-login) bash "$PZ_ROOT/linux/windows-vm/guest-login.sh" "$@" ;;
+    recover) bash "$PZ_ROOT/linux/windows-vm/recover.sh" "$@" ;;
     boot) cmd_boot "$@" ;;
     media|iso) bash "$PZ_ROOT/linux/windows-vm/media-inspect.sh" "$@" ;;
     preflight|check|readiness) bash "$PZ_ROOT/linux/windows-vm/preflight.sh" "$@" ;;
     provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|launch-check|guest-login|boot|media|preflight|provision)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|launch-check|guest-login|recover|boot|media|preflight|provision)"; exit 1 ;;
 esac
