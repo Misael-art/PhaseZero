@@ -12,6 +12,11 @@ ACTION="${1:-status}"
 if [ "$#" -gt 0 ]; then
     shift
 fi
+RECOVERY_ACTION=""
+if [ "$ACTION" = "recovery" ]; then
+    RECOVERY_ACTION="${1:-status}"
+    [ "$#" -gt 0 ] && shift
+fi
 CONFIG_FILE="${PZ_WINDOWS_VM_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/windows-vm.conf}"
 [ -f "$CONFIG_FILE" ] && . "$CONFIG_FILE"
 VM_DIR="${PZ_WINDOWS_VM_DIR:-$HOME/VirtualMachines/PhaseZero-Windows}"
@@ -26,6 +31,7 @@ JSON_OUT=0
 PASSWORD_STDIN=0
 BACKUP_PATH=""
 BACKUP_PROOF=""
+LOCAL_ONLY=1
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -40,6 +46,10 @@ while [ "$#" -gt 0 ]; do
         --backup=*) BACKUP_PATH="${1#*=}"; shift ;;
         --backup-proof) BACKUP_PROOF="${2:-}"; shift 2 ;;
         --backup-proof=*) BACKUP_PROOF="${1#*=}"; shift ;;
+        --local-only) LOCAL_ONLY=1; shift ;;
+        --allow-remote) LOCAL_ONLY=0; shift ;;
+        --manifest) BACKUP_PATH="${2:-}"; shift 2 ;;
+        --manifest=*) BACKUP_PATH="${1#*=}"; shift ;;
         --json) JSON_OUT=1; shift ;;
         *) pz_error "unknown guest-login option: $1"; exit 2 ;;
     esac
@@ -158,6 +168,50 @@ guest_status() {
     printf '%s\n' "$result" | jq '. + {available:true,guestLoginVerified:(.configured == true and .registryPasswordStored == false)}'
 }
 
+recovery_status() {
+    if ! qga_ping "$QGA_SOCKET"; then
+        jq -n --arg account 'PZ-Recovery' \
+            '{success:false,recoveryAccount:$account,recoveryConfigured:false,recoveryEnabled:false,recoveryAdministrator:false,recoveryLocalOnly:true,qgaAvailable:false,qgaServiceHealthy:false,guestLoginVerified:false,error:"qga-unavailable"}'
+        return 1
+    fi
+    local result
+    result="$(qga_guest_exec_wait recovery-status "")" || return 1
+    printf '%s\n' "$result" | jq '. + {qgaAvailable:true}'
+}
+
+recovery_apply() {
+    [ "$PASSWORD_STDIN" = "1" ] || { pz_error "recovery apply requires --password-stdin"; return 2; }
+    [ -f "$(latest_backup_manifest)" ] || { pz_error "verified guest backup required before recovery mutation"; return 1; }
+    qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable; use repair-qga with VM powered off"; return 1; }
+    local password payload result
+    IFS= read -r password
+    [ -n "$password" ] || { pz_error "empty recovery password refused"; return 2; }
+    payload="$(printf '%s\n%s\n' "$password" "$LOCAL_ONLY" | jq -R -s 'split("\n") | {password:.[0],localOnly:(.[1] == "1")}')"
+    result="$(qga_guest_exec_wait recovery-apply "$payload")"
+    unset password payload
+    printf '%s\n' "$result" | jq '. + {qgaAvailable:true}'
+}
+
+recovery_toggle() {
+    local mode="$1" result
+    qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable"; return 1; }
+    result="$(qga_guest_exec_wait "recovery-$mode" "")" || return 1
+    printf '%s\n' "$result" | jq '. + {qgaAvailable:true}'
+}
+
+repair_qga() {
+    # Offline repair needs a powered-off image and a verified rollback point.
+    # Refuse rather than editing SAM/registry hives directly or retaining a
+    # password on the host.  The one-shot injector is intentionally available
+    # only when libguestfs can guarantee its temporary appliance cleanup.
+    ! vm_uses_disk || { pz_error "repair-qga requires VM powered off"; return 1; }
+    [ -f "$(latest_backup_manifest)" ] || { pz_error "verified backup required before offline repair"; return 1; }
+    qemu-img check "$DISK_PATH" >/dev/null
+    command -v guestfish >/dev/null 2>&1 || { pz_error "libguestfs/guestfish unavailable; offline repair refused"; return 1; }
+    pz_error "offline one-shot repair requires recovery password input and is not yet authorized by this command"
+    return 1
+}
+
 guest_power() {
     local mode="$1"
     qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable: guest power action refused"; return 1; }
@@ -197,9 +251,18 @@ case "$ACTION" in
     backup) backup_guest ;;
     restore|rollback) restore_guest ;;
     apply) apply_policy ;;
+    recovery)
+        case "$RECOVERY_ACTION" in
+            status) recovery_status ;;
+            apply|rotate) recovery_apply ;;
+            enable|disable) recovery_toggle "$RECOVERY_ACTION" ;;
+            *) pz_error "usage: guest-login recovery (status|apply|rotate|enable|disable)"; exit 2 ;;
+        esac ;;
+    repair-qga) repair_qga ;;
+    rollback) restore_guest ;;
     reboot) guest_power reboot ;;
     shutdown) guest_power powerdown ;;
-    *) pz_error "usage: pz windows-vm guest-login (status|backup|apply|restore|reboot|shutdown) [--mode auto|password] [--password-stdin] [--json]"; exit 2 ;;
+    *) pz_error "usage: pz windows-vm guest-login (status|backup|apply|recovery|repair-qga|rollback|restore|reboot|shutdown)"; exit 2 ;;
 esac
 rc=$?
 set -e

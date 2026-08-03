@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('auto', 'password', 'status')]
+    [ValidateSet('auto', 'password', 'status', 'recovery-status', 'recovery-apply', 'recovery-enable', 'recovery-disable')]
     [string]$Mode = 'status',
     [string]$UserName = 'phasezero',
     [string]$InputPath = ''
@@ -11,6 +11,8 @@ if ($env:PZ_GUEST_LOGIN_USER) { $UserName = $env:PZ_GUEST_LOGIN_USER }
 $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
 $policyDir = Join-Path $env:ProgramData 'PhaseZero'
 $policyFile = Join-Path $policyDir 'guest-login-policy.json'
+$recoveryUser = 'PZ-Recovery'
+$recoveryPolicyFile = Join-Path $policyDir 'recovery-login-policy.json'
 
 if (-not ('PhaseZeroLsa' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -176,8 +178,100 @@ function Get-PolicyStatus {
     }
 }
 
+function Get-RecoveryStatus {
+    $account = Get-LocalUser -Name $recoveryUser -ErrorAction SilentlyContinue
+    $isAdmin = $false
+    if ($account) {
+        try {
+            $isAdmin = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop |
+                Where-Object { $_.Name -match "\\\\$([regex]::Escape($recoveryUser))$" }).Count -gt 0
+        } catch {}
+    }
+    $localOnly = $true
+    if (Test-Path -LiteralPath $recoveryPolicyFile) {
+        try { $localOnly = ((Get-Content -LiteralPath $recoveryPolicyFile -Raw | ConvertFrom-Json).localOnly -ne $false) } catch {}
+    }
+    [ordered]@{
+        success = $true
+        recoveryAccount = $recoveryUser
+        recoveryConfigured = [bool]$account
+        recoveryEnabled = [bool]($account -and $account.Enabled)
+        recoveryAdministrator = [bool]$isAdmin
+        recoveryLocalOnly = [bool]$localOnly
+        qgaServiceHealthy = [bool](Get-Service -Name qemu-ga -ErrorAction SilentlyContinue |
+            Where-Object { $_.Status -eq 'Running' })
+        lastVerifiedAt = (Get-Date).ToUniversalTime().ToString('o')
+    }
+}
+
+function Set-RecoveryRemotePolicy([bool]$LocalOnly) {
+    # User-right assignments are system policy, not per-account registry data.
+    # Keep the temporary export inside the guest and remove it even on failure.
+    $cfg = Join-Path $env:TEMP ('pz-recovery-' + [guid]::NewGuid().ToString('N') + '.inf')
+    try {
+        & secedit.exe /export /cfg $cfg /areas USER_RIGHTS | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to export local user rights' }
+        $sid = ([System.Security.Principal.NTAccount]::new($env:COMPUTERNAME, $recoveryUser)).Translate([System.Security.Principal.SecurityIdentifier]).Value
+        $text = Get-Content -LiteralPath $cfg -Raw
+        foreach ($right in @('SeDenyNetworkLogonRight', 'SeDenyRemoteInteractiveLogonRight')) {
+            $match = [regex]::Match($text, "(?m)^$right\s*=\s*(.*)$")
+            $members = if ($match.Success -and $match.Groups[1].Value) { @($match.Groups[1].Value -split ',') } else { @() }
+            $members = @($members | Where-Object { $_.TrimStart('*') -ne $sid })
+            if ($LocalOnly) { $members += "*$sid" }
+            $line = "$right = " + ($members -join ',')
+            $text = if ($match.Success) { [regex]::Replace($text, "(?m)^$right\s*=.*$", [System.Text.RegularExpressions.MatchEvaluator]{ param($m) $line }) } else { $text + "`r`n$line`r`n" }
+        }
+        Set-Content -LiteralPath $cfg -Value $text -Encoding Unicode
+        & secedit.exe /configure /db (Join-Path $env:TEMP 'pz-recovery.sdb') /cfg $cfg /areas USER_RIGHTS | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Unable to apply local recovery policy' }
+    } finally {
+        Remove-Item -LiteralPath $cfg -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Join-Path $env:TEMP 'pz-recovery.sdb') -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Apply-Recovery {
+    $raw = if ($InputPath) { Get-Content -LiteralPath $InputPath -Raw } else { [Console]::In.ReadToEnd() }
+    $payload = $raw | ConvertFrom-Json
+    if (-not $payload.password) { throw 'recovery password missing' }
+    $localOnly = ($payload.localOnly -ne $false)
+    $account = Get-LocalUser -Name $recoveryUser -ErrorAction SilentlyContinue
+    if (-not $account) { $account = New-LocalUser -Name $recoveryUser -NoPassword -AccountNeverExpires }
+    $adsi = [ADSI]("WinNT://./{0},user" -f $recoveryUser)
+    $adsi.psbase.Invoke('SetPassword', @([string]$payload.password))
+    $adsi.SetInfo()
+    Enable-LocalUser -Name $recoveryUser
+    if (-not (@(Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -match "\\\\$([regex]::Escape($recoveryUser))$" }).Count)) {
+        Add-LocalGroupMember -Group 'Administrators' -Member $recoveryUser
+    }
+    Set-RecoveryRemotePolicy $localOnly
+    New-Item -Path $policyDir -ItemType Directory -Force | Out-Null
+    @{ schemaVersion = 1; localOnly = $localOnly; updatedAt = (Get-Date).ToUniversalTime().ToString('o') } |
+        ConvertTo-Json | Set-Content -LiteralPath $recoveryPolicyFile -Encoding UTF8
+    Get-RecoveryStatus | ConvertTo-Json -Compress
+}
+
 if ($Mode -eq 'status') {
     Get-PolicyStatus | ConvertTo-Json -Compress
+    exit 0
+}
+
+if ($Mode -eq 'recovery-status') {
+    Get-RecoveryStatus | ConvertTo-Json -Compress
+    exit 0
+}
+if ($Mode -eq 'recovery-apply') {
+    Apply-Recovery
+    exit 0
+}
+if ($Mode -eq 'recovery-enable') {
+    Enable-LocalUser -Name $recoveryUser -ErrorAction Stop
+    Get-RecoveryStatus | ConvertTo-Json -Compress
+    exit 0
+}
+if ($Mode -eq 'recovery-disable') {
+    Disable-LocalUser -Name $recoveryUser -ErrorAction Stop
+    Get-RecoveryStatus | ConvertTo-Json -Compress
     exit 0
 }
 
