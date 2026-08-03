@@ -35,7 +35,7 @@ Describe 'Windows VM guest recovery contracts' {
 
     It 'keeps PZ-Recovery separate, local-only by default, and localized admin-safe' {
         $source = Get-Content -LiteralPath $guestScript -Raw
-        if ($source -notmatch "\$recoveryUser = 'PZ-Recovery'") { throw 'recovery account missing' }
+        if ($source -notmatch '\$recoveryUser = ''PZ-Recovery''') { throw 'recovery account missing' }
         if ($source -notmatch "Get-LocalGroup -SID 'S-1-5-32-544'") { throw 'localized admin SID lookup missing' }
         if ($source -notmatch 'SeDenyNetworkLogonRight') { throw 'network deny right missing' }
         if ($source -notmatch 'SeDenyRemoteInteractiveLogonRight') { throw 'RDP deny right missing' }
