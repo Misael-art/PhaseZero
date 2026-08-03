@@ -79,6 +79,7 @@ chmod 0600 "$XDG_CONFIG_HOME/phasezero/ai-proxies/9router.env"
 
 before_pid="$listener_pid"
 repair_output="$("$ROOT/linux/pz" ai 9router repair)"
+grep -A12 '^repair_9router()' "$ROOT/linux/ai/9router-manager.sh" | grep -Fq 'ensure_node_runtime'
 kill -0 "$before_pid"
 tui_output="$("$HOME/.local/bin/9router")"
 kill -0 "$before_pid"

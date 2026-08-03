@@ -325,6 +325,10 @@ repair_9router() {
     ensure_dirs
     [ -x "$PACKAGE_BIN" ] || { pz_error "9Router package missing; run install first"; return 1; }
     [ -f "$SERVER_RUNNER" ] || { pz_error "PhaseZero 9Router server runner missing"; return 1; }
+    # The generated systemd wrapper embeds NODE_BIN.  Resolve the managed or
+    # system runtime before rewriting it; otherwise a removed isolated runtime
+    # produces a permanent 127 restart loop.
+    ensure_node_runtime
     if [ -n "$(listener_pid)" ] && ! service_owns_listener; then
         pz_error "port $PORT is owned by a non-PhaseZero process; refusing to kill it"
         return 1
