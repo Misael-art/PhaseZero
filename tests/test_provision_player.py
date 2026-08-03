@@ -9,14 +9,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from PySide6.QtCore import QObject, QTimer, QProcess
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from linux.ui_native import provision_player as pp_mod
 from linux.ui_native.provision_player import (
-    AsyncProc, ProvisionWorker, ProvisionPlayerWindow,
+    AsyncProc, ProvisionWorker, ProvisionPlayerWindow, recovery_password_strength,
     ST_IDLE, ST_DONE, ST_FAILED, ST_CANCELLED, ST_PROVISIONING, ST_VALIDATING,
 )
 
@@ -338,6 +338,87 @@ def test_password_policy_passes_secret_via_stdin_only(qapp, fake_pz: Path) -> No
     assert "S3cret!" not in args
     assert kwargs["stdin_data"] == "S3cret!\n"
     assert "--password-stdin" in args
+    _cleanup_player()
+
+
+@pytest.mark.parametrize("password,expected", [
+    ("short", False),
+    ("alllowercase123!", False),
+    ("NOLOWERCASE123!", False),
+    ("NoNumberSymbols!!", False),
+    ("Strong-Recovery-42!", True),
+])
+def test_recovery_password_strength_contract(password: str, expected: bool) -> None:
+    assert recovery_password_strength(password)[0] is expected
+
+
+def test_recovery_secret_stdin_and_snapshot_proof_only(qapp, fake_pz: Path) -> None:
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_pz, MagicMock(), None)
+    win._qga_socket = "/tmp/qga.sock"
+    win._provision_snapshot = "/tmp/golden.qcow2"
+    async_instance = MagicMock()
+    dialog = MagicMock()
+    dialog.exec.return_value = QDialog.Accepted
+    dialog.take_credentials.return_value = ("Strong-Recovery-42!", False)
+    with (
+        patch("linux.ui_native.provision_player.RecoveryPasswordDialog", return_value=dialog),
+        patch("linux.ui_native.provision_player.AsyncProc", return_value=async_instance),
+    ):
+        win._apply_recovery_async([])
+    _program, args = async_instance.run.call_args.args
+    kwargs = async_instance.run.call_args.kwargs
+    assert "Strong-Recovery-42!" not in args
+    assert kwargs["stdin_data"] == "Strong-Recovery-42!\n"
+    assert args[args.index("--backup-proof") + 1] == "/tmp/golden.qcow2"
+    assert "--local-only" in args
+    _cleanup_player()
+
+
+def test_qga_repair_has_no_secret_and_manifest_survives_resume(qapp, fake_pz: Path) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_pz, MagicMock(), None)
+    win._vm_running = False
+    async_instance = MagicMock()
+    with (
+        patch("linux.ui_native.provision_player.QMessageBox.question", return_value=QMessageBox.Yes),
+        patch("linux.ui_native.provision_player.AsyncProc", return_value=async_instance),
+    ):
+        win._on_repair_qga()
+    _program, args = async_instance.run.call_args.args
+    assert args == ["windows-vm", "guest-login", "repair-qga", "--json"]
+    with patch("linux.ui_native.provision_player.QMessageBox.information"):
+        win._on_repair_qga_result({
+            "state": "pending-guest-boot",
+            "rollbackManifest": "/private/rollback/manifest.json",
+        }, 0)
+    saved = PLAYER_STATE_PATH.read_text(encoding="utf-8")
+    assert "/private/rollback/manifest.json" in saved
+    assert "password" not in saved.lower()
+    _cleanup_player()
+
+
+def test_qga_rollback_uses_manifest_and_clears_resume_state(qapp, fake_pz: Path) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    _cleanup_player()
+    win = ProvisionPlayerWindow(fake_pz, MagicMock(), None)
+    win._vm_running = False
+    win._rollback_manifest = "/private/rollback/manifest.json"
+    async_instance = MagicMock()
+    with (
+        patch("linux.ui_native.provision_player.QMessageBox.question", return_value=QMessageBox.Yes),
+        patch("linux.ui_native.provision_player.AsyncProc", return_value=async_instance),
+    ):
+        win._on_rollback_qga()
+    _program, args = async_instance.run.call_args.args
+    assert args == [
+        "windows-vm", "guest-login", "rollback", "--manifest",
+        "/private/rollback/manifest.json", "--json",
+    ]
+    win._on_rollback_qga_result({"success": True}, 0)
+    assert win._rollback_manifest == ""
+    assert "/private/rollback/manifest.json" not in PLAYER_STATE_PATH.read_text(encoding="utf-8")
     _cleanup_player()
 
 
