@@ -26,6 +26,9 @@ grep -Fq 'virt-customize -a "$DISK_PATH"' "$SH"
 # shellcheck disable=SC2016
 grep -Fq -- '--firstboot "$OFFLINE_WORK/qga-offline-repair.ps1"' "$SH"
 grep -Fq 'automatic rollback failed' "$SH"
+grep -Fq 'LIBGUESTFS_CACHEDIR="$guestfs_cache"' "$SH"
+grep -Fq 'at least 3 GiB free space required for offline QGA repair' "$SH"
+grep -Fq 'guest-login-diagnostics' "$SH"
 # Literal PowerShell contract.
 # shellcheck disable=SC2016
 grep -Fq 'Remove-Item -LiteralPath $payloadDir' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
@@ -74,7 +77,9 @@ offline_fixture() {
         bash "$SH" repair-qga --json
 }
 
-tmp_success="$(mktemp -d)"
+# Use persistent /tmp, not Codex's per-user runtime tmpfs: repair-qga
+# deliberately requires 3 GiB for the libguestfs appliance.
+tmp_success="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
 success_json="$(offline_fixture "$tmp_success" success)"
 printf '%s\n' "$success_json" | jq -e \
     '.success == true and .state == "pending-guest-boot" and
@@ -86,7 +91,7 @@ manifest="$(printf '%s\n' "$success_json" | jq -r '.rollbackManifest')"
 jq -e '.qemuImageCheck == true and .sourceDisk and .backupDisk' "$manifest" >/dev/null
 rm -rf -- "$tmp_success"
 
-tmp_failure="$(mktemp -d)"
+tmp_failure="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
 set +e
 failure_output="$(offline_fixture "$tmp_failure" fail 2>&1)"
 failure_rc=$?
@@ -99,7 +104,7 @@ fi
 grep -Fq 'disk rollback attempted' <<<"$failure_output"
 rm -rf -- "$tmp_failure"
 
-tmp_hash="$(mktemp -d)"
+tmp_hash="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
 set +e
 hash_output="$(offline_fixture "$tmp_hash" hash-fail 2>&1)"
 hash_rc=$?

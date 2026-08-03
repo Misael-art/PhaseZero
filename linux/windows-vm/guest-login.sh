@@ -319,7 +319,8 @@ repair_qga() {
     qemu-img check "$DISK_PATH" >/dev/null
     command -v virt-customize >/dev/null 2>&1 || { pz_error "libguestfs/virt-customize unavailable; offline repair refused"; return 1; }
     local virtio_iso="${PZ_WINDOWS_VM_VIRTIO_ISO:-}" virtio_sha_expected virtio_sha_actual
-    local backup_json manifest runtime_base rc
+    local backup_json manifest runtime_base guestfs_root guestfs_tmp guestfs_cache
+    local guestfs_avail_kb diagnostic_root diagnostic rc
     for candidate in "$virtio_iso" "$VM_DIR/virtio-win.iso" \
         "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/vm/virtio-win.iso"; do
         if [ -n "$candidate" ] && [ -r "$candidate" ]; then virtio_iso="$candidate"; break; fi
@@ -343,22 +344,47 @@ repair_qga() {
     fi
     OFFLINE_WORK="$(mktemp -d "$runtime_base/phasezero-qga-repair.XXXXXX")"
     chmod 0700 "$OFFLINE_WORK"
+    # libguestfs inherits TMPDIR.  Desktop launchers often point it at the
+    # per-user runtime tmpfs, which is too small for supermin's appliance.
+    # Keep its large, non-secret work/cache on the user's persistent state
+    # volume instead; never fall back to a shared directory.
+    guestfs_root="$PZ_STATE/windows-vm/libguestfs"
+    guestfs_tmp="$guestfs_root/tmp"
+    guestfs_cache="$guestfs_root/cache"
+    install -d -m 0700 "$guestfs_tmp" "$guestfs_cache" || {
+        pz_error "private libguestfs workspace unavailable"
+        return 1
+    }
+    guestfs_avail_kb="$(df -Pk "$guestfs_root" | awk 'NR == 2 { print $4 }')"
+    [[ "$guestfs_avail_kb" =~ ^[0-9]+$ ]] && [ "$guestfs_avail_kb" -ge 3145728 ] || {
+        pz_error "at least 3 GiB free space required for offline QGA repair"
+        return 1
+    }
     acquire_guest_lock || return 1
     backup_json="$(backup_guest)" || return 1
     manifest="$(printf '%s\n' "$backup_json" | jq -er '.manifest')" || return 1
     cp "$PZ_ROOT/linux/windows-vm/qga-offline-repair.ps1" "$OFFLINE_WORK/qga-offline-repair.ps1"
     chmod 0600 "$OFFLINE_WORK/qga-offline-repair.ps1"
     set +e
-    timeout --signal=TERM --kill-after=20s 10m virt-customize -a "$DISK_PATH" \
+    TMPDIR="$guestfs_tmp" LIBGUESTFS_CACHEDIR="$guestfs_cache" \
+        timeout --signal=TERM --kill-after=20s 10m virt-customize -a "$DISK_PATH" \
         --mkdir /ProgramData/PhaseZeroOffline \
         --upload "$virtio_iso:/ProgramData/PhaseZeroOffline/virtio-win.iso" \
         --firstboot "$OFFLINE_WORK/qga-offline-repair.ps1" >/dev/null 2>"$OFFLINE_WORK/virt-customize.err"
     rc=$?
     set -e
     if [ "$rc" -ne 0 ]; then
+        diagnostic_root="$PZ_STATE/windows-vm/guest-login-diagnostics"
+        install -d -m 0700 "$diagnostic_root" || diagnostic_root=""
+        diagnostic=""
+        if [ -n "$diagnostic_root" ]; then
+            diagnostic="$(mktemp "$diagnostic_root/qga-offline-repair.XXXXXX.log")"
+            chmod 0600 "$diagnostic"
+            tail -n 80 "$OFFLINE_WORK/virt-customize.err" > "$diagnostic" || true
+        fi
         BACKUP_PATH="$manifest"
         restore_guest >/dev/null || pz_error "automatic rollback failed; use --manifest $manifest"
-        pz_error "offline QGA repair failed; disk rollback attempted"
+        pz_error "offline QGA repair failed; disk rollback attempted${diagnostic:+; diagnostic: $diagnostic}"
         return 1
     fi
     cleanup_offline_work
