@@ -301,23 +301,25 @@ class ProvisionPlayerWindow(QWidget):
     @classmethod
     def open(cls, root: Path, runner, parent: QWidget | None = None,
              iso: str = "", graphics: str = "compat",
-             image_index: str = "1", guest_login: str = "auto", recovery: bool = True) -> ProvisionPlayerWindow:
+             image_index: str = "1", guest_login: str = "auto", recovery: bool = True,
+             recovery_local_only: bool = True) -> ProvisionPlayerWindow:
         if cls._instance is not None:
             win = cls._instance
             win._resume_state()
-            win._apply_launch_params(iso, graphics, image_index, guest_login, recovery)
+            win._apply_launch_params(iso, graphics, image_index, guest_login, recovery, recovery_local_only)
             win._update_summary()
             win.show()
             win.raise_()
             win.activateWindow()
             return win
-        instance = cls(root, runner, parent, iso, graphics, image_index, guest_login, recovery)
+        instance = cls(root, runner, parent, iso, graphics, image_index, guest_login, recovery, recovery_local_only)
         cls._instance = instance
         return instance
 
     def __init__(self, root: Path, runner, parent: QWidget | None = None,
                  iso: str = "", graphics: str = "compat",
-                 image_index: str = "1", guest_login: str = "auto", recovery: bool = True) -> None:
+                 image_index: str = "1", guest_login: str = "auto", recovery: bool = True,
+                 recovery_local_only: bool = True) -> None:
         super().__init__(parent)
         self._root = root
         self._runner = runner
@@ -327,6 +329,7 @@ class ProvisionPlayerWindow(QWidget):
         self._guest_login = "auto"
         self._guest_login_applied = False
         self._recovery_requested = True
+        self._recovery_local_only = True
         self._qga_socket = ""
         self._provision_snapshot = ""
         self._plan_id = ""
@@ -455,7 +458,7 @@ class ProvisionPlayerWindow(QWidget):
         # Resume only after every widget used by _attach_worker/_set_state exists.
         # Caller parameters win over persisted display parameters.
         self._resume_state()
-        self._apply_launch_params(iso, graphics, image_index, guest_login, recovery)
+        self._apply_launch_params(iso, graphics, image_index, guest_login, recovery, recovery_local_only)
         self._update_summary()
         self.show()
 
@@ -493,12 +496,14 @@ class ProvisionPlayerWindow(QWidget):
             pass
 
     def _apply_launch_params(self, iso: str = "", graphics: str = "compat",
-                              image_index: str = "1", guest_login: str = "auto", recovery: bool = True) -> None:
+                              image_index: str = "1", guest_login: str = "auto", recovery: bool = True,
+                              recovery_local_only: bool = True) -> None:
         self._iso = iso
         self._graphics = graphics
         self._image_index = image_index
         self._guest_login = guest_login if guest_login in ("auto", "password") else "auto"
         self._recovery_requested = bool(recovery)
+        self._recovery_local_only = bool(recovery_local_only)
 
     def _resume_state(self) -> None:
         if not PLAYER_STATE_PATH.exists():
@@ -856,7 +861,8 @@ class ProvisionPlayerWindow(QWidget):
             self._finish_validation(issues)
             return
         args = ["windows-vm", "guest-login", "recovery", "apply", "--password-stdin",
-                "--local-only", "--socket", self._qga_socket, "--json"]
+                "--local-only" if self._recovery_local_only else "--allow-remote",
+                "--socket", self._qga_socket, "--json"]
         self._async_proc = AsyncProc(self)
         self._async_proc.finished.connect(
             lambda parsed, code: self._on_recovery_result(parsed, code, issues))

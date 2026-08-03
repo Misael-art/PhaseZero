@@ -99,6 +99,10 @@ class WindowsVMPage(BasePage):
             "Senha mascarada será solicitada somente em memória após QGA. Por padrão, login remoto é bloqueado."
         )
         form.addRow("Recuperação:", self._recovery_checkbox)
+        self._recovery_remote_checkbox = QCheckBox("Permitir recuperação via RDP")
+        self._recovery_remote_checkbox.setChecked(False)
+        self._recovery_remote_checkbox.setToolTip("Desmarcado: PZ-Recovery só pode entrar na janela local da VM.")
+        form.addRow("Acesso remoto:", self._recovery_remote_checkbox)
 
         self._graphics_helper = QLabel()
         self._graphics_helper.setWordWrap(True)
@@ -299,6 +303,7 @@ class WindowsVMPage(BasePage):
             image_index=str(self._selected_image_index),
             guest_login=str(self._guest_login_combo.currentData() or "auto"),
             recovery=self._recovery_checkbox.isChecked(),
+            recovery_local_only=not self._recovery_remote_checkbox.isChecked(),
         )
 
     def _request_plan(self) -> None:
