@@ -10,6 +10,7 @@ Requires:       python3
 Requires:       python3-pyside6
 Requires:       bash
 Requires:       jq
+Recommends:     libguestfs-tools-c
 
 %description
 Native Qt6 frontend for PhaseZero Linux automation. Every mutation requires

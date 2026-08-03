@@ -32,6 +32,29 @@ PASSWORD_STDIN=0
 BACKUP_PATH=""
 BACKUP_PROOF=""
 LOCAL_ONLY=1
+OFFLINE_WORK=""
+OFFLINE_LOCK_FD=""
+
+cleanup_offline_work() {
+    if [ -n "${OFFLINE_WORK:-}" ] && [ -d "$OFFLINE_WORK" ]; then
+        rm -rf -- "$OFFLINE_WORK"
+    fi
+    OFFLINE_WORK=""
+}
+trap cleanup_offline_work EXIT INT TERM
+
+acquire_guest_lock() {
+    [ -z "${OFFLINE_LOCK_FD:-}" ] || return 0
+    local lock_file="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/guest-login.lock"
+    install -d -m 0700 "$(dirname "$lock_file")" || return 1
+    touch "$lock_file" || return 1
+    chmod 0600 "$lock_file" || return 1
+    exec {OFFLINE_LOCK_FD}<>"$lock_file" || return 1
+    flock -n "$OFFLINE_LOCK_FD" || {
+        pz_error "another guest-login operation is active"
+        return 1
+    }
+}
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -59,13 +82,33 @@ case "$POLICY" in auto|password) ;; *) pz_error "guest login mode must be auto o
 [[ "$GUEST_USER" =~ ^[A-Za-z0-9_.-]{1,64}$ ]] || { pz_error "invalid guest user"; exit 2; }
 
 vm_uses_disk() {
-    local proc cmd
+    local proc cmd disk_real
+    disk_real="$(realpath -e "$DISK_PATH" 2>/dev/null || printf '%s' "$DISK_PATH")"
     for proc in /proc/[0-9]*/cmdline; do
         [ -r "$proc" ] || continue
         cmd="$(tr '\0' ' ' < "$proc" 2>/dev/null || true)"
-        [[ "$cmd" == *qemu-system*"$DISK_PATH"* ]] && return 0
+        if [[ "$cmd" == *qemu-system* || "$cmd" == *qemu-kvm* ]] && \
+            { [[ "$cmd" == *"$DISK_PATH"* ]] || [[ "$cmd" == *"$disk_real"* ]]; }; then
+            return 0
+        fi
     done
     return 1
+}
+
+validate_managed_vm_paths() {
+    local vm_real disk_real ovmf_real tpm_real
+    vm_real="$(realpath -e "$VM_DIR" 2>/dev/null)" || { pz_error "managed VM directory missing"; return 1; }
+    [ "$vm_real" != "/" ] || { pz_error "unsafe managed VM directory"; return 1; }
+    disk_real="$(realpath -e "$DISK_PATH" 2>/dev/null)" || { pz_error "managed guest disk missing"; return 1; }
+    case "$disk_real" in "$vm_real"/*) ;; *) pz_error "guest disk outside managed VM directory"; return 1 ;; esac
+    if [ -e "$OVMF_VARS" ]; then
+        ovmf_real="$(realpath -e "$OVMF_VARS" 2>/dev/null)" || return 1
+        case "$ovmf_real" in "$vm_real"/*) ;; *) pz_error "OVMF state outside managed VM directory"; return 1 ;; esac
+    fi
+    if [ -e "$TPM_DIR" ]; then
+        tpm_real="$(realpath -e "$TPM_DIR" 2>/dev/null)" || return 1
+        case "$tpm_real" in "$vm_real"/*) ;; *) pz_error "TPM state outside managed VM directory"; return 1 ;; esac
+    fi
 }
 
 latest_backup_manifest() {
@@ -75,53 +118,89 @@ latest_backup_manifest() {
 }
 
 backup_guest() {
+    acquire_guest_lock || return 1
     [ -f "$DISK_PATH" ] || { pz_error "guest disk missing: $DISK_PATH"; return 1; }
+    validate_managed_vm_paths || return 1
     ! vm_uses_disk || { pz_error "guest backup requires VM powered off"; return 1; }
-    qemu-img check "$DISK_PATH" >/dev/null
-    local root stamp dir disk_backup manifest
+    qemu-img check "$DISK_PATH" >/dev/null || { pz_error "guest disk integrity check failed"; return 1; }
+    local root stamp dir disk_backup manifest manifest_tmp source_info
     root="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/guest-login-backups"
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    dir="$root/$stamp"
-    install -d -m 0700 "$dir"
+    install -d -m 0700 "$root" || return 1
+    dir="$(mktemp -d "$root/${stamp}.XXXXXX")" || return 1
+    chmod 0700 "$dir" || { rm -rf -- "$dir"; return 1; }
     disk_backup="$dir/$(basename "$DISK_PATH")"
-    cp --reflink=auto --sparse=always --preserve=mode,timestamps "$DISK_PATH" "$disk_backup"
-    [ -f "$OVMF_VARS" ] && cp -a "$OVMF_VARS" "$dir/OVMF_VARS.fd"
-    [ -d "$TPM_DIR" ] && cp -a "$TPM_DIR" "$dir/tpm"
-    qemu-img check "$disk_backup" >/dev/null
+    cp --reflink=auto --sparse=always --preserve=mode,timestamps "$DISK_PATH" "$disk_backup" || {
+        rm -rf -- "$dir"; return 1;
+    }
+    if [ -f "$OVMF_VARS" ] && ! cp -a "$OVMF_VARS" "$dir/OVMF_VARS.fd"; then
+        rm -rf -- "$dir"; return 1
+    fi
+    if [ -d "$TPM_DIR" ] && ! cp -a "$TPM_DIR" "$dir/tpm"; then
+        rm -rf -- "$dir"; return 1
+    fi
+    qemu-img check "$disk_backup" >/dev/null || { rm -rf -- "$dir"; return 1; }
+    source_info="$(qemu-img info --output=json "$DISK_PATH")" || { rm -rf -- "$dir"; return 1; }
     manifest="$dir/manifest.json"
+    manifest_tmp="$dir/.manifest.json.tmp"
     jq -n --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         --arg sourceDisk "$DISK_PATH" --arg backupDisk "$disk_backup" \
         --arg ovmfVars "$OVMF_VARS" --arg tpmDir "$TPM_DIR" \
-        --argjson sourceInfo "$(qemu-img info --output=json "$DISK_PATH")" \
+        --argjson sourceInfo "$source_info" \
         '{schemaVersion:1,createdAt:$createdAt,sourceDisk:$sourceDisk,backupDisk:$backupDisk,
-          ovmfVars:$ovmfVars,tpmDir:$tpmDir,qemuImageCheck:true,sourceInfo:$sourceInfo}' > "$manifest"
-    chmod 0600 "$manifest"
+          ovmfVars:$ovmfVars,tpmDir:$tpmDir,qemuImageCheck:true,sourceInfo:$sourceInfo}' > "$manifest_tmp" || {
+        rm -rf -- "$dir"; return 1;
+    }
+    if ! chmod 0600 "$manifest_tmp" || ! mv "$manifest_tmp" "$manifest"; then
+        rm -rf -- "$dir"; return 1;
+    fi
     jq -n --arg backup "$dir" --arg manifest "$manifest" '{success:true,backup:$backup,manifest:$manifest}'
 }
 
 restore_guest() {
+    acquire_guest_lock || return 1
     local manifest="${BACKUP_PATH:-$(latest_backup_manifest)}"
     [ -d "$manifest" ] && manifest="$manifest/manifest.json"
     [ -f "$manifest" ] || { pz_error "guest-login backup manifest missing"; return 1; }
+    validate_managed_vm_paths || return 1
     ! vm_uses_disk || { pz_error "guest restore requires VM powered off"; return 1; }
-    local source backup dir
-    source="$(jq -r '.sourceDisk' "$manifest")"
-    backup="$(jq -r '.backupDisk' "$manifest")"
-    dir="$(dirname "$manifest")"
+    local source backup dir backup_root manifest_real backup_real restore_tmp ovmf_tmp tpm_tmp tpm_old
+    backup_root="$(realpath -m "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/guest-login-backups")"
+    manifest_real="$(realpath -e "$manifest" 2>/dev/null)" || return 1
+    case "$manifest_real" in "$backup_root"/*/manifest.json) ;; *) pz_error "unsafe backup manifest refused"; return 1 ;; esac
+    source="$(jq -er '.sourceDisk' "$manifest_real")" || return 1
+    backup="$(jq -er '.backupDisk' "$manifest_real")" || return 1
+    dir="$(dirname "$manifest_real")"
     [ "$source" = "$DISK_PATH" ] || { pz_error "backup target mismatch"; return 1; }
-    case "$TPM_DIR" in
-        "$VM_DIR"/*) ;;
-        *) pz_error "unsafe TPM restore target refused: $TPM_DIR"; return 1 ;;
-    esac
-    if [ "$TPM_DIR" = "$VM_DIR" ] || [ "$TPM_DIR" = "/" ]; then
-        pz_error "unsafe TPM restore target refused: $TPM_DIR"
-        return 1
+    backup_real="$(realpath -e "$backup" 2>/dev/null)" || return 1
+    case "$backup_real" in "$dir"/*) ;; *) pz_error "unsafe backup disk path refused"; return 1 ;; esac
+    qemu-img check "$backup_real" >/dev/null || return 1
+    restore_tmp="$(mktemp "$VM_DIR/.phasezero-disk-restore.XXXXXX")" || return 1
+    cp --reflink=auto --sparse=always --preserve=mode,timestamps "$backup_real" "$restore_tmp" || {
+        rm -f -- "$restore_tmp"; return 1;
+    }
+    qemu-img check "$restore_tmp" >/dev/null || { rm -f -- "$restore_tmp"; return 1; }
+    if [ -f "$dir/OVMF_VARS.fd" ]; then
+        ovmf_tmp="$(mktemp "$VM_DIR/.phasezero-ovmf-restore.XXXXXX")" || { rm -f -- "$restore_tmp"; return 1; }
+        cp -a "$dir/OVMF_VARS.fd" "$ovmf_tmp" || { rm -f -- "$restore_tmp" "$ovmf_tmp"; return 1; }
     fi
-    qemu-img check "$backup" >/dev/null
-    cp --reflink=auto --sparse=always --preserve=mode,timestamps "$backup" "$DISK_PATH"
-    [ -f "$dir/OVMF_VARS.fd" ] && cp -a "$dir/OVMF_VARS.fd" "$OVMF_VARS"
-    [ -d "$dir/tpm" ] && { rm -rf "$TPM_DIR"; cp -a "$dir/tpm" "$TPM_DIR"; }
-    qemu-img check "$DISK_PATH" >/dev/null
+    if [ -d "$dir/tpm" ]; then
+        tpm_tmp="$(mktemp -d "$VM_DIR/.phasezero-tpm-restore.XXXXXX")" || { rm -f -- "$restore_tmp" "${ovmf_tmp:-}"; return 1; }
+        cp -a "$dir/tpm/." "$tpm_tmp/" || { rm -f -- "$restore_tmp" "${ovmf_tmp:-}"; rm -rf -- "$tpm_tmp"; return 1; }
+    fi
+    mv -f "$restore_tmp" "$DISK_PATH" || return 1
+    [ -z "${ovmf_tmp:-}" ] || mv -f "$ovmf_tmp" "$OVMF_VARS" || return 1
+    if [ -n "${tpm_tmp:-}" ]; then
+        tpm_old="$VM_DIR/.phasezero-tpm-old.$$"
+        [ ! -e "$tpm_old" ] || { pz_error "temporary TPM restore path collision"; return 1; }
+        [ ! -e "$TPM_DIR" ] || mv "$TPM_DIR" "$tpm_old" || return 1
+        if ! mv "$tpm_tmp" "$TPM_DIR"; then
+            [ ! -e "$tpm_old" ] || mv "$tpm_old" "$TPM_DIR"
+            return 1
+        fi
+        [ ! -e "$tpm_old" ] || rm -rf -- "$tpm_old"
+    fi
+    qemu-img check "$DISK_PATH" >/dev/null || return 1
     jq -n --arg restoredFrom "$dir" '{success:true,restoredFrom:$restoredFrom}'
 }
 
@@ -159,44 +238,76 @@ qga_guest_exec_wait() {
 
 guest_status() {
     if ! qga_ping "$QGA_SOCKET"; then
-        jq -n --arg policy "$POLICY" --arg user "$GUEST_USER" --arg socket "$QGA_SOCKET" \
-            '{success:false,available:false,policy:$policy,user:$user,qgaSocket:$socket,guestLoginVerified:false}'
+        jq -n --arg policy "$POLICY" \
+            '{guestLoginPolicy:$policy,guestLoginVerified:false,qgaAvailable:false,
+              qgaServiceHealthy:false,lastVerifiedAt:null,error:"qga-unavailable"}'
         return 1
     fi
     local result
     result="$(qga_guest_exec_wait status "")" || return 1
-    printf '%s\n' "$result" | jq '. + {available:true,guestLoginVerified:(.configured == true and .registryPasswordStored == false)}'
+    printf '%s\n' "$result" | jq '{guestLoginPolicy:.policy,
+        guestLoginVerified:(.configured == true and .registryPasswordStored == false),
+        qgaAvailable:true,qgaServiceHealthy:true,lastVerifiedAt,error:null}'
 }
 
 recovery_status() {
     if ! qga_ping "$QGA_SOCKET"; then
         jq -n --arg account 'PZ-Recovery' \
-            '{success:false,recoveryAccount:$account,recoveryConfigured:false,recoveryEnabled:false,recoveryAdministrator:false,recoveryLocalOnly:true,qgaAvailable:false,qgaServiceHealthy:false,guestLoginVerified:false,error:"qga-unavailable"}'
+            '{recoveryAccount:$account,recoveryConfigured:false,recoveryEnabled:false,recoveryAdministrator:false,recoveryLocalOnly:true,qgaAvailable:false,qgaServiceHealthy:false,lastVerifiedAt:null,error:"qga-unavailable"}'
         return 1
     fi
     local result
     result="$(qga_guest_exec_wait recovery-status "")" || return 1
-    printf '%s\n' "$result" | jq '. + {qgaAvailable:true}'
+    printf '%s\n' "$result" | jq '{recoveryAccount,recoveryConfigured,recoveryEnabled,
+        recoveryAdministrator,recoveryLocalOnly,qgaServiceHealthy,lastVerifiedAt,
+        qgaAvailable:true,error:null}'
+}
+
+verified_backup_required() {
+    if [ -n "$BACKUP_PROOF" ]; then
+        if [ ! -f "$BACKUP_PROOF" ] || ! qemu-img check "$BACKUP_PROOF" >/dev/null; then
+            pz_error "verified provision snapshot required before guest mutation"
+            return 1
+        fi
+        return 0
+    fi
+    [ -f "$(latest_backup_manifest)" ] || {
+        pz_error "verified guest backup required before guest mutation"
+        return 1
+    }
 }
 
 recovery_apply() {
+    acquire_guest_lock || return 1
     [ "$PASSWORD_STDIN" = "1" ] || { pz_error "recovery apply requires --password-stdin"; return 2; }
-    [ -f "$(latest_backup_manifest)" ] || { pz_error "verified guest backup required before recovery mutation"; return 1; }
+    verified_backup_required || return 1
     qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable; use repair-qga with VM powered off"; return 1; }
     local password payload result
     IFS= read -r password
     [ -n "$password" ] || { pz_error "empty recovery password refused"; return 2; }
+    if [ "${#password}" -lt 14 ] || [[ ! "$password" =~ [A-Z] ]] \
+        || [[ ! "$password" =~ [a-z] ]] || [[ ! "$password" =~ [0-9] ]] \
+        || [[ ! "$password" =~ [[:punct:]] ]]; then
+        unset password
+        pz_error "recovery password must have 14+ chars, upper, lower, number and symbol"
+        return 2
+    fi
     payload="$(printf '%s\n%s\n' "$password" "$LOCAL_ONLY" | jq -R -s 'split("\n") | {password:.[0],localOnly:(.[1] == "1")}')"
     result="$(qga_guest_exec_wait recovery-apply "$payload")"
     unset password payload
-    printf '%s\n' "$result" | jq '. + {qgaAvailable:true}'
+    printf '%s\n' "$result" | jq '{recoveryAccount,recoveryConfigured,recoveryEnabled,
+        recoveryAdministrator,recoveryLocalOnly,qgaServiceHealthy,lastVerifiedAt,
+        qgaAvailable:true,error:null}'
 }
 
 recovery_toggle() {
     local mode="$1" result
+    acquire_guest_lock || return 1
     qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable"; return 1; }
     result="$(qga_guest_exec_wait "recovery-$mode" "")" || return 1
-    printf '%s\n' "$result" | jq '. + {qgaAvailable:true}'
+    printf '%s\n' "$result" | jq '{recoveryAccount,recoveryConfigured,recoveryEnabled,
+        recoveryAdministrator,recoveryLocalOnly,qgaServiceHealthy,lastVerifiedAt,
+        qgaAvailable:true,error:null}'
 }
 
 repair_qga() {
@@ -205,15 +316,59 @@ repair_qga() {
     # password on the host.  The one-shot injector is intentionally available
     # only when libguestfs can guarantee its temporary appliance cleanup.
     ! vm_uses_disk || { pz_error "repair-qga requires VM powered off"; return 1; }
-    [ -f "$(latest_backup_manifest)" ] || { pz_error "verified backup required before offline repair"; return 1; }
     qemu-img check "$DISK_PATH" >/dev/null
-    command -v guestfish >/dev/null 2>&1 || { pz_error "libguestfs/guestfish unavailable; offline repair refused"; return 1; }
-    pz_error "offline one-shot repair requires recovery password input and is not yet authorized by this command"
-    return 1
+    command -v virt-customize >/dev/null 2>&1 || { pz_error "libguestfs/virt-customize unavailable; offline repair refused"; return 1; }
+    local virtio_iso="${PZ_WINDOWS_VM_VIRTIO_ISO:-}" virtio_sha_expected virtio_sha_actual
+    local backup_json manifest runtime_base rc
+    for candidate in "$virtio_iso" "$VM_DIR/virtio-win.iso" \
+        "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/vm/virtio-win.iso"; do
+        if [ -n "$candidate" ] && [ -r "$candidate" ]; then virtio_iso="$candidate"; break; fi
+    done
+    if [ -z "$virtio_iso" ] || [ ! -r "$virtio_iso" ]; then
+        pz_error "verified virtio-win.iso required for offline QGA repair"
+        return 1
+    fi
+    virtio_sha_expected="${PZ_WINDOWS_VM_VIRTIO_SHA256:-e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976331}"
+    [[ "$virtio_sha_expected" =~ ^[a-fA-F0-9]{64}$ ]] || { pz_error "invalid trusted virtio-win SHA-256"; return 1; }
+    virtio_sha_actual="$(sha256sum "$virtio_iso" | cut -d' ' -f1)"
+    [ "${virtio_sha_actual,,}" = "${virtio_sha_expected,,}" ] || {
+        pz_error "virtio-win SHA-256 mismatch; offline repair refused"
+        return 1
+    }
+    runtime_base="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    case "$runtime_base" in "/run/user/$(id -u)"|"/tmp") ;; *) pz_error "unsafe offline repair tmpfs root"; return 1 ;; esac
+    if [ ! -d "$runtime_base" ] || [ ! -w "$runtime_base" ]; then
+        pz_error "writable tmpfs runtime required"
+        return 1
+    fi
+    OFFLINE_WORK="$(mktemp -d "$runtime_base/phasezero-qga-repair.XXXXXX")"
+    chmod 0700 "$OFFLINE_WORK"
+    acquire_guest_lock || return 1
+    backup_json="$(backup_guest)" || return 1
+    manifest="$(printf '%s\n' "$backup_json" | jq -er '.manifest')" || return 1
+    cp "$PZ_ROOT/linux/windows-vm/qga-offline-repair.ps1" "$OFFLINE_WORK/qga-offline-repair.ps1"
+    chmod 0600 "$OFFLINE_WORK/qga-offline-repair.ps1"
+    set +e
+    timeout --signal=TERM --kill-after=20s 10m virt-customize -a "$DISK_PATH" \
+        --mkdir /ProgramData/PhaseZeroOffline \
+        --upload "$virtio_iso:/ProgramData/PhaseZeroOffline/virtio-win.iso" \
+        --firstboot "$OFFLINE_WORK/qga-offline-repair.ps1" >/dev/null 2>"$OFFLINE_WORK/virt-customize.err"
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ]; then
+        BACKUP_PATH="$manifest"
+        restore_guest >/dev/null || pz_error "automatic rollback failed; use --manifest $manifest"
+        pz_error "offline QGA repair failed; disk rollback attempted"
+        return 1
+    fi
+    cleanup_offline_work
+    jq -n --arg manifest "$manifest" \
+        '{success:true,state:"pending-guest-boot",qgaAvailable:false,qgaServiceHealthy:false,rollbackManifest:$manifest,nextAction:"boot guest once, then run guest-login recovery apply --password-stdin"}'
 }
 
 guest_power() {
     local mode="$1"
+    acquire_guest_lock || return 1
     qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable: guest power action refused"; return 1; }
     qga_channel_open "$QGA_SOCKET" || return 1
     printf '{"execute":"guest-shutdown","arguments":{"mode":"%s"}}\n' "$mode" >&"$QGA_WRITE_FD"
@@ -221,14 +376,8 @@ guest_power() {
 }
 
 apply_policy() {
-    if [ -n "$BACKUP_PROOF" ]; then
-        if [ ! -f "$BACKUP_PROOF" ] || ! qemu-img check "$BACKUP_PROOF" >/dev/null; then
-            pz_error "verified provision snapshot required before login-policy mutation"
-            return 1
-        fi
-    else
-        [ -f "$(latest_backup_manifest)" ] || { pz_error "verified guest backup required before login-policy mutation"; return 1; }
-    fi
+    acquire_guest_lock || return 1
+    verified_backup_required || return 1
     qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable: start the VM first"; return 1; }
     local password payload result
     if [ "$POLICY" = "password" ]; then
@@ -241,8 +390,9 @@ apply_policy() {
     payload="$(printf '%s\n%s\n' "$GUEST_USER" "$password" | jq -R -s 'split("\n") | {username:.[0],password:.[1]}')"
     result="$(qga_guest_exec_wait "$POLICY" "$payload")"
     unset password payload
-    printf '%s\n' "$result" | jq --arg requestedPolicy "$POLICY" \
-        '. + {requestedPolicy:$requestedPolicy,guestLoginVerified:(.configured == true and .registryPasswordStored == false)}'
+    printf '%s\n' "$result" | jq '{guestLoginPolicy:.policy,
+        guestLoginVerified:(.configured == true and .registryPasswordStored == false),
+        qgaAvailable:true,qgaServiceHealthy:true,lastVerifiedAt,error:null}'
 }
 
 set +e
@@ -259,7 +409,6 @@ case "$ACTION" in
             *) pz_error "usage: guest-login recovery (status|apply|rotate|enable|disable)"; exit 2 ;;
         esac ;;
     repair-qga) repair_qga ;;
-    rollback) restore_guest ;;
     reboot) guest_power reboot ;;
     shutdown) guest_power powerdown ;;
     *) pz_error "usage: pz windows-vm guest-login (status|backup|apply|recovery|repair-qga|rollback|restore|reboot|shutdown)"; exit 2 ;;

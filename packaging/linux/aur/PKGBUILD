@@ -6,7 +6,8 @@ arch=('any')
 url='https://github.com/Misael-art/PhaseZero'
 license=('MIT')
 depends=('python' 'pyside6' 'bash' 'jq' 'polkit')
-optdepends=('flatpak: Flatpak management' 'bigsudo: graphical admin bridge')
+optdepends=('flatpak: Flatpak management' 'bigsudo: graphical admin bridge'
+            'libguestfs: offline Windows VM repair and host disk access')
 source=("PhaseZero-${pkgver}.tar.gz")
 sha256sums=('SKIP')
 

@@ -175,15 +175,17 @@ function Get-PolicyStatus {
         audioReady = $runtime.audioReady
         graphicsAdapters = $runtime.graphicsAdapters
         graphicsReady = $runtime.graphicsReady
+        lastVerifiedAt = (Get-Date).ToUniversalTime().ToString('o')
     }
 }
 
 function Get-RecoveryStatus {
     $account = Get-LocalUser -Name $recoveryUser -ErrorAction SilentlyContinue
     $isAdmin = $false
+    $adminGroup = (Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction SilentlyContinue).Name
     if ($account) {
         try {
-            $isAdmin = @(Get-LocalGroupMember -Group 'Administrators' -ErrorAction Stop |
+            $isAdmin = @(Get-LocalGroupMember -Group $adminGroup -ErrorAction Stop |
                 Where-Object { $_.Name -match "\\\\$([regex]::Escape($recoveryUser))$" }).Count -gt 0
         } catch {}
     }
@@ -236,13 +238,14 @@ function Apply-Recovery {
     if (-not $payload.password) { throw 'recovery password missing' }
     $localOnly = ($payload.localOnly -ne $false)
     $account = Get-LocalUser -Name $recoveryUser -ErrorAction SilentlyContinue
-    if (-not $account) { $account = New-LocalUser -Name $recoveryUser -NoPassword -AccountNeverExpires }
+    if (-not $account) { $account = New-LocalUser -Name $recoveryUser -NoPassword -AccountNeverExpires -Disabled }
     $adsi = [ADSI]("WinNT://./{0},user" -f $recoveryUser)
     $adsi.psbase.Invoke('SetPassword', @([string]$payload.password))
     $adsi.SetInfo()
     Enable-LocalUser -Name $recoveryUser
-    if (-not (@(Get-LocalGroupMember -Group 'Administrators' | Where-Object { $_.Name -match "\\\\$([regex]::Escape($recoveryUser))$" }).Count)) {
-        Add-LocalGroupMember -Group 'Administrators' -Member $recoveryUser
+    $adminGroup = (Get-LocalGroup -SID 'S-1-5-32-544' -ErrorAction Stop).Name
+    if (-not (@(Get-LocalGroupMember -Group $adminGroup | Where-Object { $_.Name -match "\\\\$([regex]::Escape($recoveryUser))$" }).Count)) {
+        Add-LocalGroupMember -Group $adminGroup -Member $recoveryUser
     }
     Set-RecoveryRemotePolicy $localOnly
     New-Item -Path $policyDir -ItemType Directory -Force | Out-Null
