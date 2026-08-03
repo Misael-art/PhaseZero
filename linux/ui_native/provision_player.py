@@ -9,9 +9,9 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QProcess, QThread, Signal, Qt, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPlainTextEdit, QProgressBar,
-    QPushButton, QStyle, QVBoxLayout, QWidget, QMessageBox, QInputDialog,
-    QLineEdit,
+    QCheckBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout,
+    QLabel, QPlainTextEdit, QProgressBar, QPushButton, QStyle, QVBoxLayout,
+    QWidget, QMessageBox, QInputDialog, QLineEdit,
 )
 
 from .models import ActionSpec
@@ -41,6 +41,82 @@ FINALIZE_TIMEOUT_MS = 30 * 60 * 1000
 # Workers that outlived the window's bounded close wait; kept referenced so
 # their QThreads are not destroyed while still running.
 _DETACHED_WORKERS: list[ProvisionWorker] = []
+
+
+def recovery_password_strength(password: str) -> tuple[bool, str]:
+    checks = (
+        len(password) >= 14,
+        any(char.isupper() for char in password),
+        any(char.islower() for char in password),
+        any(char.isdigit() for char in password),
+        any(not char.isalnum() for char in password),
+    )
+    score = sum(checks)
+    if score == 5:
+        return True, "Forte — requisitos atendidos"
+    missing = []
+    labels = ("14+ caracteres", "maiúscula", "minúscula", "número", "símbolo")
+    for ok, label in zip(checks, labels):
+        if not ok:
+            missing.append(label)
+    return False, "Faltam: " + ", ".join(missing)
+
+
+class RecoveryPasswordDialog(QDialog):
+    """Collect a recovery secret in memory. No state or logging hooks."""
+
+    def __init__(self, parent: QWidget | None = None, allow_remote: bool = False) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Administrador de recuperação")
+        layout = QVBoxLayout(self)
+        note = QLabel(
+            "Crie uma senha conhecida por você para PZ-Recovery. "
+            "PhaseZero não salva nem consegue recuperar esta senha."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        form = QFormLayout()
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_edit.setObjectName("recoveryPassword")
+        self.confirm_edit = QLineEdit()
+        self.confirm_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_edit.setObjectName("recoveryPasswordConfirm")
+        form.addRow("Senha:", self.password_edit)
+        form.addRow("Confirmar:", self.confirm_edit)
+        layout.addLayout(form)
+        self.strength_label = QLabel("Faltam: 14+ caracteres, maiúscula, minúscula, número, símbolo")
+        self.strength_label.setObjectName("recoveryPasswordStrength")
+        self.strength_label.setWordWrap(True)
+        layout.addWidget(self.strength_label)
+        self.remote_check = QCheckBox("Permitir recuperação via RDP")
+        self.remote_check.setChecked(allow_remote)
+        layout.addWidget(self.remote_check)
+        self.buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.buttons.accepted.connect(self.accept)
+        self.buttons.rejected.connect(self.reject)
+        layout.addWidget(self.buttons)
+        self.password_edit.textChanged.connect(self._validate)
+        self.confirm_edit.textChanged.connect(self._validate)
+        self._validate()
+
+    def _validate(self) -> None:
+        strong, label = recovery_password_strength(self.password_edit.text())
+        matches = bool(self.password_edit.text()) and self.password_edit.text() == self.confirm_edit.text()
+        if strong and not matches:
+            label = "Forte — confirmação não coincide"
+        self.strength_label.setText(label)
+        self.strength_label.setStyleSheet("color: #4caf50;" if strong and matches else "color: #e0a000;")
+        button = self.buttons.button(QDialogButtonBox.Ok)
+        if button:
+            button.setEnabled(strong and matches)
+
+    def take_credentials(self) -> tuple[str, bool]:
+        password = self.password_edit.text()
+        allow_remote = self.remote_check.isChecked()
+        self.password_edit.clear()
+        self.confirm_edit.clear()
+        return password, allow_remote
 
 
 class AsyncProc(QObject):
@@ -344,6 +420,7 @@ class ProvisionPlayerWindow(QWidget):
         self._snapshot_ok = False
         self._adopted_ok = False
         self._async_proc: AsyncProc | None = None
+        self._rollback_manifest = ""
         self._reboot_proc: QProcess | None = None
         self._closing = False
         self._discarding = False
@@ -431,6 +508,14 @@ class ProvisionPlayerWindow(QWidget):
         self._repair_btn.setVisible(False)
         footer.addWidget(self._repair_btn)
 
+        self._qga_repair_btn = QPushButton("Reparar agente e conta de recuperação")
+        self._qga_repair_btn.clicked.connect(self._on_repair_qga)
+        self._qga_repair_btn.setVisible(False)
+
+        self._rollback_btn = QPushButton("Reverter reparo offline")
+        self._rollback_btn.clicked.connect(self._on_rollback_qga)
+        self._rollback_btn.setVisible(False)
+
         self._shutdown_btn = QPushButton("Desligar VM e validar")
         self._shutdown_btn.clicked.connect(self._on_shutdown_vm)
         self._shutdown_btn.setVisible(False)
@@ -450,6 +535,11 @@ class ProvisionPlayerWindow(QWidget):
         footer.addWidget(self._reboot_btn)
 
         layout.addLayout(footer)
+        recovery_footer = QHBoxLayout()
+        recovery_footer.addWidget(self._qga_repair_btn)
+        recovery_footer.addWidget(self._rollback_btn)
+        recovery_footer.addStretch()
+        layout.addLayout(recovery_footer)
 
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.timeout.connect(self._update_elapsed)
@@ -477,6 +567,8 @@ class ProvisionPlayerWindow(QWidget):
         self._discard_btn.setVisible(state in (ST_FAILED, ST_CANCELLED))
         self._shutdown_btn.setVisible(False)
         self._repair_btn.setVisible(False)
+        self._qga_repair_btn.setVisible(False)
+        self._rollback_btn.setVisible(False)
         self._reboot_btn.setEnabled(False)
 
     def _save_state(self) -> None:
@@ -487,6 +579,7 @@ class ProvisionPlayerWindow(QWidget):
             "imageIndex": self._image_index,
             "guestLogin": self._guest_login,
             "operationId": self._operation_id,
+            "rollbackManifest": self._rollback_manifest,
         }
         data["updatedAt"] = datetime.now(timezone.utc).isoformat()
         try:
@@ -516,6 +609,7 @@ class ProvisionPlayerWindow(QWidget):
         prev = data.get("state", "")
         self._operation_id = data.get("operationId", "")
         self._guest_login = data.get("guestLogin", "auto")
+        self._rollback_manifest = str(data.get("rollbackManifest") or "")
 
         if prev in (ST_PROVISIONING, ST_VALIDATING) and self._operation_id:
             self._attach_worker(self._operation_id)
@@ -794,6 +888,11 @@ class ProvisionPlayerWindow(QWidget):
         if self._vm_running and self._qga_socket and self._provision_snapshot:
             self._apply_guest_login_async(issues)
         else:
+            issues.append("guest_login")
+            self._add_log("Login Windows ainda não verificado: VM/QGA indisponível")
+            if self._recovery_requested:
+                issues.append("recovery")
+                self._add_log("PZ-Recovery ainda não verificado")
             self._finish_validation(issues)
 
     def _apply_guest_login_async(self, issues: list[str]) -> None:
@@ -842,27 +941,20 @@ class ProvisionPlayerWindow(QWidget):
             self._finish_validation(issues)
 
     def _apply_recovery_async(self, issues: list[str]) -> None:
-        password, ok = QInputDialog.getText(
-            self, "Administrador de recuperação",
-            "Senha para PZ-Recovery (somente local; nunca salva no host):",
-            QLineEdit.EchoMode.Password,
-        )
-        if not ok or not password:
+        dialog = RecoveryPasswordDialog(self, allow_remote=not self._recovery_local_only)
+        if dialog.exec() != QDialog.Accepted:
             issues.append("recovery")
             self._add_log("Recovery não configurado: senha não informada")
+            dialog.deleteLater()
             self._finish_validation(issues)
             return
-        confirm, ok = QInputDialog.getText(
-            self, "Confirmar PZ-Recovery", "Confirme a senha:", QLineEdit.EchoMode.Password)
-        if not ok or password != confirm:
-            issues.append("recovery")
-            self._add_log("Recovery não configurado: confirmação inválida")
-            password = ""
-            self._finish_validation(issues)
-            return
+        password, allow_remote = dialog.take_credentials()
+        dialog.deleteLater()
+        self._recovery_local_only = not allow_remote
         args = ["windows-vm", "guest-login", "recovery", "apply", "--password-stdin",
                 "--local-only" if self._recovery_local_only else "--allow-remote",
-                "--socket", self._qga_socket, "--json"]
+                "--socket", self._qga_socket,
+                "--backup-proof", self._provision_snapshot, "--json"]
         self._async_proc = AsyncProc(self)
         self._async_proc.finished.connect(
             lambda parsed, code: self._on_recovery_result(parsed, code, issues))
@@ -870,18 +962,21 @@ class ProvisionPlayerWindow(QWidget):
         self._async_proc.run(str(self._root / "linux" / "pz"), args, timeout_ms=90_000,
                              stdin_data=password + "\n")
         password = ""
-        confirm = ""
 
     def _on_recovery_result(self, data: object | None, exit_code: int,
                             issues: list[str]) -> None:
         self._async_proc = None
         verified = isinstance(data, dict) and data.get("recoveryConfigured") is True \
-            and data.get("recoveryAdministrator") is True and data.get("recoveryLocalOnly") is True
+            and data.get("recoveryEnabled") is True \
+            and data.get("recoveryAdministrator") is True \
+            and data.get("qgaServiceHealthy") is True \
+            and data.get("recoveryLocalOnly") is self._recovery_local_only
         if exit_code != 0 or not verified:
             issues.append("recovery")
             self._add_log("Administrador de recuperação não verificado")
         else:
-            self._add_log("PZ-Recovery configurado para login local")
+            policy = "somente local" if self._recovery_local_only else "local e RDP"
+            self._add_log(f"PZ-Recovery configurado: {policy}")
         self._finish_validation(issues)
 
     def _finish_validation(self, issues: list[str]) -> None:
@@ -893,6 +988,9 @@ class ProvisionPlayerWindow(QWidget):
             self._set_state(ST_DONE)
             self._shutdown_btn.setVisible("vm_running" in issues)
             self._repair_btn.setVisible("boot" in issues)
+            recovery_degraded = "guest_login" in issues or "recovery" in issues
+            self._qga_repair_btn.setVisible(recovery_degraded and not self._vm_running)
+            self._rollback_btn.setVisible(bool(self._rollback_manifest) and not self._vm_running)
             if "snapshot" in issues:
                 self._checkpoint_label.setText("Conclu\u00eddo \u2014 snapshot ausente")
             elif "finalize" in issues:
@@ -939,6 +1037,7 @@ class ProvisionPlayerWindow(QWidget):
             self._checkpoint_label.setText(f"Cancelamento falhou: {err or 'sem confirma\u00e7\u00e3o JSON'}")
             self._add_log(f"FALHA no cancelamento: {err or 'sem confirma\u00e7\u00e3o JSON'}")
             self._save_state()
+            self._rollback_btn.setVisible(True)
             return
         self._finish_cancel()
 
@@ -1040,6 +1139,91 @@ class ProvisionPlayerWindow(QWidget):
         else:
             self._add_log("Reparo falhou")
             self._checkpoint_label.setText("Reparo falhou")
+
+    def _on_repair_qga(self) -> None:
+        if self._vm_running:
+            QMessageBox.warning(
+                self, "VM ativa",
+                "Desligue o Windows completamente antes do reparo offline."
+            )
+            return
+        reply = QMessageBox.question(
+            self, "Reparo offline seguro",
+            "PhaseZero verificará o qcow2, criará backup de disco/OVMF/TPM e "
+            "injetará reparo one-shot do QGA. Nenhuma senha será armazenada.\n\nContinuar?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._add_log("Criando rollback e preparando reparo offline do QGA…")
+        self._checkpoint_label.setText("Reparando agente com VM desligada…")
+        self._progress_bar.setRange(0, 0)
+        self._qga_repair_btn.setEnabled(False)
+        self._async_proc = AsyncProc(self)
+        self._async_proc.finished.connect(self._on_repair_qga_result)
+        self._async_proc.errorOccurred.connect(self._on_async_error)
+        self._async_proc.run(
+            str(self._root / "linux" / "pz"),
+            ["windows-vm", "guest-login", "repair-qga", "--json"],
+            timeout_ms=11 * 60 * 1000,
+        )
+
+    def _on_repair_qga_result(self, data: object | None, exit_code: int) -> None:
+        self._async_proc = None
+        self._progress_bar.setRange(0, 100)
+        self._qga_repair_btn.setEnabled(True)
+        if exit_code == 0 and isinstance(data, dict) and data.get("state") == "pending-guest-boot":
+            self._rollback_manifest = str(data.get("rollbackManifest") or "")
+            self._add_log("Reparo one-shot preparado; rollback verificado disponível")
+            self._checkpoint_label.setText(
+                "Reparo preparado — inicie o Windows e retome para validar e criar PZ-Recovery"
+            )
+            QMessageBox.information(
+                self, "Próxima etapa",
+                "Inicie a VM uma vez. O Windows reparará o QGA como SYSTEM. "
+                "Depois retome este player; a senha de PZ-Recovery será solicitada novamente."
+            )
+            self._save_state()
+            return
+        self._add_log("Reparo offline recusado ou revertido automaticamente")
+        self._checkpoint_label.setText("Reparo offline falhou — disco restaurado quando possível")
+
+    def _on_rollback_qga(self) -> None:
+        if self._vm_running or not self._rollback_manifest:
+            QMessageBox.warning(self, "Rollback indisponível", "Desligue a VM e selecione um reparo preparado.")
+            return
+        reply = QMessageBox.question(
+            self, "Reverter reparo offline",
+            "Restaurar qcow2, OVMF e TPM usando o backup verificado?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._progress_bar.setRange(0, 0)
+        self._rollback_btn.setEnabled(False)
+        self._async_proc = AsyncProc(self)
+        self._async_proc.finished.connect(self._on_rollback_qga_result)
+        self._async_proc.errorOccurred.connect(self._on_async_error)
+        self._async_proc.run(
+            str(self._root / "linux" / "pz"),
+            ["windows-vm", "guest-login", "rollback", "--manifest",
+             self._rollback_manifest, "--json"],
+            timeout_ms=11 * 60 * 1000,
+        )
+
+    def _on_rollback_qga_result(self, data: object | None, exit_code: int) -> None:
+        self._async_proc = None
+        self._progress_bar.setRange(0, 100)
+        self._rollback_btn.setEnabled(True)
+        if exit_code == 0 and isinstance(data, dict) and data.get("success") is True:
+            self._rollback_manifest = ""
+            self._rollback_btn.setVisible(False)
+            self._add_log("Rollback offline concluído e imagem verificada")
+            self._checkpoint_label.setText("Rollback concluído — inicie a VM para validar")
+            self._save_state()
+            return
+        self._add_log("Rollback offline falhou; manifesto preservado para nova tentativa")
+        self._checkpoint_label.setText("Rollback falhou — nenhuma confirmação de restauração")
 
     def _on_shutdown_vm(self) -> None:
         self._add_log("Desligando VM via QGA\u2026")
