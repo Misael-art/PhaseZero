@@ -123,25 +123,25 @@ function Get-GuestRuntimeStatus {
     try {
         $networkReady = @(Get-NetIPConfiguration -ErrorAction Stop |
             Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' }).Count -gt 0
-    } catch {}
+    } catch { Write-Verbose 'Network readiness probe unavailable' }
     try {
         $dnsReady = @(Resolve-DnsName -Name microsoft.com -Type A -DnsOnly -QuickTimeout -ErrorAction Stop).Count -gt 0
-    } catch {}
+    } catch { Write-Verbose 'DNS readiness probe unavailable' }
     try {
         foreach ($hive in Get-ChildItem Registry::HKEY_USERS -ErrorAction Stop) {
             if ($hive.PSChildName -notmatch '^S-1-5-21-') { continue }
             $drive = "Registry::HKEY_USERS\$($hive.PSChildName)\Network\P"
             if (Test-Path -LiteralPath $drive) { $exchangeMapped = $true; break }
         }
-    } catch {}
+    } catch { Write-Verbose 'Exchange mapping probe unavailable' }
     try {
         $audioReady = @(Get-CimInstance Win32_SoundDevice -ErrorAction Stop |
             Where-Object { $_.Status -eq 'OK' }).Count -gt 0
-    } catch {}
+    } catch { Write-Verbose 'Audio readiness probe unavailable' }
     try {
         $graphicsAdapters = @(Get-CimInstance Win32_VideoController -ErrorAction Stop |
             ForEach-Object { $_.Name } | Where-Object { $_ })
-    } catch {}
+    } catch { Write-Verbose 'Graphics readiness probe unavailable' }
     [ordered]@{
         networkReady = [bool]$networkReady
         dnsReady = [bool]$dnsReady
@@ -187,11 +187,13 @@ function Get-RecoveryStatus {
         try {
             $isAdmin = @(Get-LocalGroupMember -Group $adminGroup -ErrorAction Stop |
                 Where-Object { $_.Name -match "\\\\$([regex]::Escape($recoveryUser))$" }).Count -gt 0
-        } catch {}
+        } catch { Write-Verbose 'Recovery administrator membership probe unavailable' }
     }
     $localOnly = $true
     if (Test-Path -LiteralPath $recoveryPolicyFile) {
-        try { $localOnly = ((Get-Content -LiteralPath $recoveryPolicyFile -Raw | ConvertFrom-Json).localOnly -ne $false) } catch {}
+        try {
+            $localOnly = ((Get-Content -LiteralPath $recoveryPolicyFile -Raw | ConvertFrom-Json).localOnly -ne $false)
+        } catch { Write-Verbose 'Recovery policy file is unavailable or invalid' }
     }
     [ordered]@{
         success = $true
@@ -232,7 +234,7 @@ function Set-RecoveryRemotePolicy([bool]$LocalOnly) {
     }
 }
 
-function Apply-Recovery {
+function Set-RecoveryAccount {
     $raw = if ($InputPath) { Get-Content -LiteralPath $InputPath -Raw } else { [Console]::In.ReadToEnd() }
     $payload = $raw | ConvertFrom-Json
     if (-not $payload.password) { throw 'recovery password missing' }
@@ -264,7 +266,7 @@ if ($Mode -eq 'recovery-status') {
     exit 0
 }
 if ($Mode -eq 'recovery-apply') {
-    Apply-Recovery
+    Set-RecoveryAccount
     exit 0
 }
 if ($Mode -eq 'recovery-enable') {

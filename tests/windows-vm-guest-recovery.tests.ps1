@@ -1,3 +1,8 @@
+[Diagnostics.CodeAnalysis.SuppressMessageAttribute(
+    'PSUseDeclaredVarsMoreThanAssignments', '',
+    Justification = 'Pester BeforeAll variables are consumed by nested It scriptblocks.')]
+param()
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
