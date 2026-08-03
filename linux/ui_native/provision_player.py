@@ -301,23 +301,23 @@ class ProvisionPlayerWindow(QWidget):
     @classmethod
     def open(cls, root: Path, runner, parent: QWidget | None = None,
              iso: str = "", graphics: str = "compat",
-             image_index: str = "1", guest_login: str = "auto") -> ProvisionPlayerWindow:
+             image_index: str = "1", guest_login: str = "auto", recovery: bool = True) -> ProvisionPlayerWindow:
         if cls._instance is not None:
             win = cls._instance
             win._resume_state()
-            win._apply_launch_params(iso, graphics, image_index, guest_login)
+            win._apply_launch_params(iso, graphics, image_index, guest_login, recovery)
             win._update_summary()
             win.show()
             win.raise_()
             win.activateWindow()
             return win
-        instance = cls(root, runner, parent, iso, graphics, image_index, guest_login)
+        instance = cls(root, runner, parent, iso, graphics, image_index, guest_login, recovery)
         cls._instance = instance
         return instance
 
     def __init__(self, root: Path, runner, parent: QWidget | None = None,
                  iso: str = "", graphics: str = "compat",
-                 image_index: str = "1", guest_login: str = "auto") -> None:
+                 image_index: str = "1", guest_login: str = "auto", recovery: bool = True) -> None:
         super().__init__(parent)
         self._root = root
         self._runner = runner
@@ -326,6 +326,7 @@ class ProvisionPlayerWindow(QWidget):
         self._image_index = "1"
         self._guest_login = "auto"
         self._guest_login_applied = False
+        self._recovery_requested = True
         self._qga_socket = ""
         self._provision_snapshot = ""
         self._plan_id = ""
@@ -454,7 +455,7 @@ class ProvisionPlayerWindow(QWidget):
         # Resume only after every widget used by _attach_worker/_set_state exists.
         # Caller parameters win over persisted display parameters.
         self._resume_state()
-        self._apply_launch_params(iso, graphics, image_index, guest_login)
+        self._apply_launch_params(iso, graphics, image_index, guest_login, recovery)
         self._update_summary()
         self.show()
 
@@ -492,11 +493,12 @@ class ProvisionPlayerWindow(QWidget):
             pass
 
     def _apply_launch_params(self, iso: str = "", graphics: str = "compat",
-                              image_index: str = "1", guest_login: str = "auto") -> None:
+                              image_index: str = "1", guest_login: str = "auto", recovery: bool = True) -> None:
         self._iso = iso
         self._graphics = graphics
         self._image_index = image_index
         self._guest_login = guest_login if guest_login in ("auto", "password") else "auto"
+        self._recovery_requested = bool(recovery)
 
     def _resume_state(self) -> None:
         if not PLAYER_STATE_PATH.exists():
@@ -829,6 +831,51 @@ class ProvisionPlayerWindow(QWidget):
         else:
             issues.append("guest_login")
             self._add_log("Falha ao aplicar/verificar política de login Windows")
+        if self._recovery_requested and self._guest_login_applied:
+            self._apply_recovery_async(issues)
+        else:
+            self._finish_validation(issues)
+
+    def _apply_recovery_async(self, issues: list[str]) -> None:
+        password, ok = QInputDialog.getText(
+            self, "Administrador de recuperação",
+            "Senha para PZ-Recovery (somente local; nunca salva no host):",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok or not password:
+            issues.append("recovery")
+            self._add_log("Recovery não configurado: senha não informada")
+            self._finish_validation(issues)
+            return
+        confirm, ok = QInputDialog.getText(
+            self, "Confirmar PZ-Recovery", "Confirme a senha:", QLineEdit.EchoMode.Password)
+        if not ok or password != confirm:
+            issues.append("recovery")
+            self._add_log("Recovery não configurado: confirmação inválida")
+            password = ""
+            self._finish_validation(issues)
+            return
+        args = ["windows-vm", "guest-login", "recovery", "apply", "--password-stdin",
+                "--local-only", "--socket", self._qga_socket, "--json"]
+        self._async_proc = AsyncProc(self)
+        self._async_proc.finished.connect(
+            lambda parsed, code: self._on_recovery_result(parsed, code, issues))
+        self._async_proc.errorOccurred.connect(self._on_async_error)
+        self._async_proc.run(str(self._root / "linux" / "pz"), args, timeout_ms=90_000,
+                             stdin_data=password + "\n")
+        password = ""
+        confirm = ""
+
+    def _on_recovery_result(self, data: object | None, exit_code: int,
+                            issues: list[str]) -> None:
+        self._async_proc = None
+        verified = isinstance(data, dict) and data.get("recoveryConfigured") is True \
+            and data.get("recoveryAdministrator") is True and data.get("recoveryLocalOnly") is True
+        if exit_code != 0 or not verified:
+            issues.append("recovery")
+            self._add_log("Administrador de recuperação não verificado")
+        else:
+            self._add_log("PZ-Recovery configurado para login local")
         self._finish_validation(issues)
 
     def _finish_validation(self, issues: list[str]) -> None:

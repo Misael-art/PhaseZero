@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFormLayout, QFrame, QGroupBox,
+    QCheckBox, QComboBox, QFileDialog, QFormLayout, QFrame, QGroupBox,
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QStyle,
     QVBoxLayout, QWidget,
 )
@@ -92,6 +92,13 @@ class WindowsVMPage(BasePage):
             "A senha é solicitada somente durante a configuração via QGA e não é salva no host."
         )
         form.addRow("Login Windows:", self._guest_login_combo)
+
+        self._recovery_checkbox = QCheckBox("Criar administrador de recuperação PZ-Recovery")
+        self._recovery_checkbox.setChecked(True)
+        self._recovery_checkbox.setToolTip(
+            "Senha mascarada será solicitada somente em memória após QGA. Por padrão, login remoto é bloqueado."
+        )
+        form.addRow("Recuperação:", self._recovery_checkbox)
 
         self._graphics_helper = QLabel()
         self._graphics_helper.setWordWrap(True)
@@ -291,6 +298,7 @@ class WindowsVMPage(BasePage):
             graphics=graphics,
             image_index=str(self._selected_image_index),
             guest_login=str(self._guest_login_combo.currentData() or "auto"),
+            recovery=self._recovery_checkbox.isChecked(),
         )
 
     def _request_plan(self) -> None:
