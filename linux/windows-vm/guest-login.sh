@@ -538,10 +538,10 @@ repair_qga() {
         return 1
     }
     guestfs_avail_kb="$(df -Pk "$guestfs_root" | awk 'NR == 2 { print $4 }')"
-    [[ "$guestfs_avail_kb" =~ ^[0-9]+$ ]] && [ "$guestfs_avail_kb" -ge 3145728 ] || {
+    if ! [[ "$guestfs_avail_kb" =~ ^[0-9]+$ ]] || [ "$guestfs_avail_kb" -lt 3145728 ]; then
         pz_error "at least 3 GiB free space required for offline QGA repair"
         return 1
-    }
+    fi
     acquire_guest_lock || return 1
     backup_json="$(backup_guest)" || return 1
     manifest="$(printf '%s\n' "$backup_json" | jq -er '.manifest')" || return 1

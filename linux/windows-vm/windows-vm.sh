@@ -723,14 +723,14 @@ harden_vm_storage_modes() {
     [ "$DRY_RUN" = "1" ] && return 0
     local path tpm_dir="${TPM_DIR:-}"
     for path in "${VM_DIR:-}" "${STATE_DIR:-}" "$tpm_dir"; do
-        [ -n "$path" ] && [ -d "$path" ] || continue
+        if [ -z "$path" ] || [ ! -d "$path" ]; then continue; fi
         chmod 0700 "$path" 2>/dev/null || pz_warn "could not restrict directory mode: $path"
     done
     if [ -n "$tpm_dir" ] && [ -d "$tpm_dir" ]; then
         chmod -R go-rwx "$tpm_dir" 2>/dev/null || pz_warn "could not restrict TPM state: $tpm_dir"
     fi
     for path in "${DISK_PATH:-}" "${OVMF_VARS:-}"; do
-        [ -n "$path" ] && [ -f "$path" ] || continue
+        if [ -z "$path" ] || [ ! -f "$path" ]; then continue; fi
         chmod 0600 "$path" 2>/dev/null || pz_warn "could not restrict file mode: $path"
     done
     # Guest-login backups are whole copies of the same disk. Older ones were
