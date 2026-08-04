@@ -49,11 +49,15 @@ steamdeck_kde_virtual_keyboard_supported() {
 }
 
 steamdeck_kde_virtual_keyboard_prop() {
-    local prop="$1"
+    local prop="$1" value
     steamdeck_kde_virtual_keyboard_supported || return 1
-    qdbus6 org.kde.KWin /VirtualKeyboard \
+    value="$(qdbus6 org.kde.KWin /VirtualKeyboard \
         org.freedesktop.DBus.Properties.Get \
-        org.kde.kwin.VirtualKeyboard "$prop" 2>/dev/null | tail -1
+        org.kde.kwin.VirtualKeyboard "$prop" 2>/dev/null | tail -1)"
+    case "$value" in
+        true|false) printf '%s\n' "$value" ;;
+        *) printf 'false\n' ;;   # qdbus6 prints "property not found" to stdout
+    esac
 }
 
 steamdeck_maliit_desktop_file() {
@@ -276,9 +280,13 @@ steamdeck_virtual_keyboard_status() {
         provider="kde-kwin"
         kde_supported=true
         kde_available="$(steamdeck_kde_virtual_keyboard_prop available || echo false)"
+        [ -n "$kde_available" ] || kde_available=false
         kde_enabled="$(steamdeck_kde_virtual_keyboard_prop enabled || echo false)"
+        [ -n "$kde_enabled" ] || kde_enabled=false
         kde_visible="$(steamdeck_kde_virtual_keyboard_prop visible || echo false)"
+        [ -n "$kde_visible" ] || kde_visible=false
         kde_active="$(steamdeck_kde_virtual_keyboard_prop active || echo false)"
+        [ -n "$kde_active" ] || kde_active=false
         method="$(kreadconfig6 --file kwinrc --group Wayland --key InputMethod 2>/dev/null || true)"
     elif command -v wvkbd-mobintl >/dev/null 2>&1; then
         provider="wvkbd-mobintl"
