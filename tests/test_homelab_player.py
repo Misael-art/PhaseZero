@@ -102,12 +102,13 @@ def test_homelab_page_run_cmd_guard_blocks_running(app):
 
     import linux.ui_native.pages.homelab as mod
 
+    real_qprocess = mod.QProcess
     page._proc = BusyProc()
     mod.QProcess = FakeQProcess
     try:
         page.run_cmd(["plan"])
     finally:
-        mod.QProcess = None
+        mod.QProcess = real_qprocess
     assert started == []  # no new process while one is running
 
 
@@ -138,11 +139,12 @@ def test_homelab_page_run_cmd_spawns_process(app):
         def start(self, program, args):
             calls.append(("start", program, list(args)))
 
+    real_qprocess = mod.QProcess
     mod.QProcess = FakeQProcess
     try:
         page.run_cmd([  "profile", "set", "core"])
     finally:
-        mod.QProcess = None
+        mod.QProcess = real_qprocess
     assert calls[0] == ("mode", (0,))
     assert calls[-1][1].endswith("linux/pz")
     assert calls[-1][2] == ["server", "homelab", "profile", "set", "core"]
