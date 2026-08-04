@@ -308,8 +308,9 @@ PATH="$FB:$PATH" PZ_BOOT_MARKER=1 PZ_SERVER_USER=testuser PZ_SERVER_HOMELAB=1 \
 grep -Fq 'bash' "$RUNUSER_CAPTURE"
 rg -q 'homelab-stack\.sh' "$RUNUSER_CAPTURE" \
     || { echo "FAIL: stack not invoked"; exit 1; }
-rg -q '^--access$' "$RUNUSER_CAPTURE" && rg -q '^local$' "$RUNUSER_CAPTURE" \
-    || { echo "FAIL: stack not invoked with up --access local"; exit 1; }
+if ! rg -q '^--access$' "$RUNUSER_CAPTURE" || ! rg -q '^local$' "$RUNUSER_CAPTURE"; then
+    echo "FAIL: stack not invoked with up --access local"; exit 1
+fi
 test "$(cat "$RUNUSER_HOME_CAPTURE")" != "/root"
 test "$(cat "$RUNUSER_XDG_CAPTURE")" = "$TMP/boot-state-root"
 test ! -e /root/.local/state/phasezero/homelab/degraded.json
@@ -427,11 +428,19 @@ PZ_AI_STATE="$TMP/ai-state" PZ_AI_POLICY_MODE=conservative \
     "$REPO_ROOT/linux/server/ai-policy-broker.sh" check mystery-action | jq -e '.allow == false and (.reasons | length) == 1' >/dev/null
 echo "  policy unknown action denied ok"
 # hardened adapters: no latest, no auto-pull, no unchecksummed remotes, pinned tags
-! rg -q 'openclaw@latest|@openai/codex@latest' "$REPO_ROOT/linux/ai/setup-openclaw.sh" "$REPO_ROOT/linux/ai/setup-codex.sh"
-! rg -q 'ollama pull llama3.1|nohup ollama pull' "$REPO_ROOT/linux/ai/setup-ollama.sh"
+if rg -q 'openclaw@latest|@openai/codex@latest' "$REPO_ROOT/linux/ai/setup-openclaw.sh" "$REPO_ROOT/linux/ai/setup-codex.sh"; then
+    echo "FAIL: versionless install found in openclaw/codex setup"; exit 1
+fi
+if rg -q 'ollama pull llama3.1|nohup ollama pull' "$REPO_ROOT/linux/ai/setup-ollama.sh"; then
+    echo "FAIL: auto-pull found in ollama setup"; exit 1
+fi
 rg -q 'PZ_HERMES_INSTALL_SHA256' "$REPO_ROOT/linux/ai/setup-hermes.sh"
-! rg -q -- '--network host' "$REPO_ROOT/linux/ai/setup-memory.sh"
-! rg -q 'ai-memory:latest' "$REPO_ROOT/linux/ai/setup-memory.sh"
+if rg -q -- '--network host' "$REPO_ROOT/linux/ai/setup-memory.sh"; then
+    echo "FAIL: --network host found in setup-memory"; exit 1
+fi
+if rg -q 'ai-memory:latest' "$REPO_ROOT/linux/ai/setup-memory.sh"; then
+    echo "FAIL: ai-memory:latest found in setup-memory"; exit 1
+fi
 rg -q 'AI_MEMORY_DOCKER_TAG' "$REPO_ROOT/linux/ai/setup-memory.sh"
 echo "  adapters hardened ok"
 # status now carries a real policy
