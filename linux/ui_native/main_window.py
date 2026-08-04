@@ -142,6 +142,7 @@ class MainWindow(QMainWindow):
                     "Windows VM": QStyle.SP_ComputerIcon,
                     "Waydroid": QStyle.SP_DriveHDIcon,
                     "Servidor": QStyle.SP_DriveNetIcon,
+                    "Homelab": QStyle.SP_DriveNetIcon,
                     "Emulação": QStyle.SP_DriveDVDIcon,
                     "Boot Direto": QStyle.SP_BrowserReload,
                     "Flatpak": QStyle.SP_DriveHDIcon,

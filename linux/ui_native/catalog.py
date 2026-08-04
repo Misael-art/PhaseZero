@@ -14,6 +14,7 @@ CATEGORIES = (
     ("Windows VM", "computer", "QEMU/KVM e boot direto"),
     ("Waydroid", "phone", "Android, reparo e kiosk"),
     ("Servidor", "network-server", "LLM local, homelab e Hermes"),
+    ("Homelab", "folder-remote", "Player PySide6 para a stack home-server"),
     ("Emulação", "applications-games", "Emuladores, mídia e integrações"),
     ("Boot Direto", "system-reboot", "GRUB, recuperação e próxima sessão"),
     ("Flatpak", "system-software-install", "Remotes, overrides e compatibilidade"),

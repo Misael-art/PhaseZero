@@ -13,6 +13,7 @@ from .steamdeck import SteamDeckPage
 from .windows_vm import WindowsVMPage
 from .waydroid import WaydroidPage
 from .server import ServerPage
+from .homelab import HomelabPage
 from .emulation import EmulationPage
 from .boot import BootPage
 from .flatpak import FlatpakPage
@@ -46,6 +47,7 @@ class PageRegistry:
         "Windows VM": WindowsVMPage,
         "Waydroid": WaydroidPage,
         "Servidor": ServerPage,
+        "Homelab": HomelabPage,
         "Emulação": EmulationPage,
         "Boot Direto": BootPage,
         "Flatpak": FlatpakPage,
