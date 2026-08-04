@@ -182,4 +182,3 @@ def test_homelab_page_modal_free_profile_empty(app):
     finally:
         mod.QMessageBox = real
     assert warned == [1]
-    assert QTest.qWait(10) is None
