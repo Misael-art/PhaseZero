@@ -116,11 +116,12 @@ resource_budget_json() {
 }
 
 backup_state_json() {
-    local last backup_root last_file
-    backup_root="$HOMELAB_STATE/backups"
+    local last backup_root last_file verified=false
+    backup_root="${PZ_HOMELAB_BACKUP_ROOT:-$HOMELAB_STATE/backups}"
     last_file="$backup_root/last.json"
     if [ -f "$last_file" ]; then
         last="$(cat "$last_file")"
+        verified="$(printf '%s\n' "$last" | jq -r '.verified // false')"
     else
         last="null"
     fi
@@ -130,7 +131,8 @@ backup_state_json() {
     done < <(find "$backup_root" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort)
     jq -cn --argjson last "$last" \
         --argjson backups "$(arr_json "${dirs[@]}")" \
-        '{lastBackup:$last, backups:$backups, verified:false}'
+        --argjson verified "$verified" \
+        '{lastBackup:$last, backups:$backups, verified:$verified}'
 }
 
 digests_json() {

@@ -331,4 +331,48 @@ rg -q '^HOMELAB_ACCESS_MODE=tailscale$' "$PZ_HOMELAB_STATE/.env"
 "$REPO_ROOT/linux/pz" server homelab repair --access local >/dev/null 2>&1 || true
 echo "  access persistence ok"
 
+echo "=== backup: manifest + checksums + verify + restore ==="
+BKT="$TMP/backup-root"
+VM="$TMP/vol-mounts"
+mkdir -p "$VM/vaultwarden_data" "$VM/syncthing_data"
+echo "secret-password-1" > "$VM/vaultwarden_data/db.sqlite"
+echo "file-a" > "$VM/syncthing_data/a.txt"
+BENV="PZ_HOMELAB_STATE=$PZ_HOMELAB_STATE PZ_HOMELAB_BACKUP_ROOT=$BKT PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE=$VM"
+bk_out="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab backup --dest '$BKT/bk1' 2>/dev/null" | grep -v '^INFO:')"
+echo "$bk_out" | jq -e '.ok == true and (.volumes|length) == 2' >/dev/null
+test -f "$BKT/bk1/manifest.json"
+test -f "$BKT/bk1/vaultwarden_data.tgz"
+test -f "$BKT/last.json"
+jq -e '.schemaVersion == "2" and .tool == "homelab-backup" and (.volumes|length) == 2 and (.volumes[] | has("sha256") and has("sizeBytes")) and .verified == false' "$BKT/bk1/manifest.json" >/dev/null
+echo "  backup manifest ok"
+eval "$BENV '$REPO_ROOT/linux/pz' server homelab backup verify --source '$BKT/bk1' 2>/dev/null" | grep -v '^INFO:' | jq -e '.action == "verify-backup" and .verified == true and (.checks|length) == 0' >/dev/null
+echo "  verify pass ok"
+# tamper: modify an archive, verify must fail closed
+cp "$BKT/bk1/vaultwarden_data.tgz" "$BKT/bk1/vaultwarden_data.tgz.bak"
+printf 'tamper' >> "$BKT/bk1/vaultwarden_data.tgz"
+if eval "$BENV '$REPO_ROOT/linux/pz' server homelab backup verify --source '$BKT/bk1'" >/dev/null 2>&1; then
+    echo "FAIL: tampered backup verified"; exit 1
+fi
+mv "$BKT/bk1/vaultwarden_data.tgz.bak" "$BKT/bk1/vaultwarden_data.tgz"
+echo "  tamper fails closed ok"
+# restore without --yes must refuse; with --yes must apply
+if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1'" >/dev/null 2>&1; then
+    echo "FAIL: restore without --yes accepted"; exit 1
+fi
+# corrupt the restore target to prove restore writes
+rm -f "$VM/vaultwarden_data/db.sqlite"
+eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:' | jq -e '.ok == true' >/dev/null
+grep -q 'secret-password-1' "$VM/vaultwarden_data/db.sqlite"
+echo "  restore verify-then-apply ok"
+# restore from a non-manifest dir must be refused
+mkdir -p "$TMP/backup-legacy"; touch "$TMP/backup-legacy/x.tgz"
+if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$TMP/backup-legacy' --yes" >/dev/null 2>&1; then
+    echo "FAIL: legacy backup restored without manifest"; exit 1
+fi
+echo "  legacy refused ok"
+# status surfaces lastBackup + verified
+PZ_HOMELAB_BACKUP_ROOT="$BKT" "$REPO_ROOT/linux/pz" server homelab status --json >/tmp/bkst.json 2>&1 || true
+jq -e '.backupState.backups == ["bk1"] and .backupState.lastBackup.latest != null and .backupState.verified == false' /tmp/bkst.json >/dev/null
+echo "  status backup state ok"
+
 echo "=== Homelab smoke ok ==="
