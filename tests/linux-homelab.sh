@@ -355,6 +355,12 @@ jq -e '.schemaVersion == "2" and .tool == "homelab-backup" and (.volumes|length)
 echo "  backup manifest ok"
 eval "$BENV '$REPO_ROOT/linux/pz' server homelab backup verify --source '$BKT/bk1' 2>/dev/null" | grep -v '^INFO:' | jq -e '.action == "verify-backup" and .verified == true and (.checks|length) == 0' >/dev/null
 echo "  verify pass ok"
+# verify on a dir without manifest must fail closed
+mkdir -p "$TMP/backup-nomanifest"; touch "$TMP/backup-nomanifest/data.tgz"
+if eval "$BENV '$REPO_ROOT/linux/pz' server homelab backup verify --source '$TMP/backup-nomanifest'" >/dev/null 2>&1; then
+    echo "FAIL: verify accepted dir without manifest"; exit 1
+fi
+echo "  verify missing-manifest fails closed ok"
 # tamper: modify an archive, verify must fail closed
 cp "$BKT/bk1/vaultwarden_data.tgz" "$BKT/bk1/vaultwarden_data.tgz.bak"
 printf 'tamper' >> "$BKT/bk1/vaultwarden_data.tgz"
@@ -372,6 +378,14 @@ rm -f "$VM/vaultwarden_data/db.sqlite"
 eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:' | jq -e '.ok == true' >/dev/null
 grep -q 'secret-password-1' "$VM/vaultwarden_data/db.sqlite"
 echo "  restore verify-then-apply ok"
+# restore from a tampered backup must be refused before applying
+cp "$BKT/bk1/vaultwarden_data.tgz" "$BKT/bk1/vaultwarden_data.tgz.bak"
+printf 'tamper' >> "$BKT/bk1/vaultwarden_data.tgz"
+if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes" >/dev/null 2>&1; then
+    echo "FAIL: restore applied tampered backup"; exit 1
+fi
+mv "$BKT/bk1/vaultwarden_data.tgz.bak" "$BKT/bk1/vaultwarden_data.tgz"
+echo "  restore tampered refused ok"
 # restore from a non-manifest dir must be refused
 mkdir -p "$TMP/backup-legacy"; touch "$TMP/backup-legacy/x.tgz"
 if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$TMP/backup-legacy' --yes" >/dev/null 2>&1; then
@@ -402,6 +416,16 @@ echo "  broker action checks ok"
 PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/server/ai-policy-broker.sh" set permissive >/dev/null
 PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/server/ai-policy-broker.sh" status | jq -e '.mode == "permissive" and .conservative == false' >/dev/null
 echo "  policy set ok"
+# invalid mode must be rejected and leave the current mode untouched
+if PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/server/ai-policy-broker.sh" set bogus >/dev/null 2>&1; then
+    echo "FAIL: broker accepted bogus mode"; exit 1
+fi
+PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/server/ai-policy-broker.sh" status | jq -e '.mode == "permissive"' >/dev/null
+echo "  policy invalid mode rejected ok"
+# unknown action must fail closed (deny), never allow
+PZ_AI_STATE="$TMP/ai-state" PZ_AI_POLICY_MODE=conservative \
+    "$REPO_ROOT/linux/server/ai-policy-broker.sh" check mystery-action | jq -e '.allow == false and (.reasons | length) == 1' >/dev/null
+echo "  policy unknown action denied ok"
 # hardened adapters: no latest, no auto-pull, no unchecksummed remotes, pinned tags
 ! rg -q 'openclaw@latest|@openai/codex@latest' "$REPO_ROOT/linux/ai/setup-openclaw.sh" "$REPO_ROOT/linux/ai/setup-codex.sh"
 ! rg -q 'ollama pull llama3.1|nohup ollama pull' "$REPO_ROOT/linux/ai/setup-ollama.sh"
