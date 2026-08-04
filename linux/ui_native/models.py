@@ -38,6 +38,10 @@ class ActionSpec:
     parameters: tuple[ActionParameter, ...] = field(default_factory=tuple)
     preview_bindings: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     result_view: str = "auto"
+    # Name of the parameter whose value is written to the process stdin instead
+    # of argv. Secrets must never reach a command line: argv is world-readable
+    # through /proc and lands in the runner's own echoed command display.
+    stdin_parameter: str = ""
 
     def resolved_args(
         self,
@@ -54,6 +58,10 @@ class ActionSpec:
         for token in source:
             if token.startswith("{") and token.endswith("}"):
                 name = token[1:-1]
+                # A stdin-bound parameter is deliberately absent from argv; its
+                # placeholder must never survive into the command line either.
+                if name == self.stdin_parameter:
+                    continue
                 output.append(resolved_values.get(name, token))
             else:
                 output.append(token)

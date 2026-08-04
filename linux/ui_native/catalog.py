@@ -100,6 +100,7 @@ def _a(
     parameters: tuple[ActionParameter, ...] = (),
     preview_bindings: tuple[tuple[str, str], ...] = (),
     result_view: str = "auto",
+    stdin_parameter: str = "",
 ) -> ActionSpec:
     if mutable and preview is None:
         raise ValueError(f"mutable action lacks safe preview: {action_id}")
@@ -146,6 +147,7 @@ def _a(
         parameters=inferred_parameters,
         preview_bindings=preview_bindings,
         result_view=result_view,
+        stdin_parameter=stdin_parameter,
     )
 
 
@@ -310,6 +312,38 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                       choices=("auto", "password"), placeholder="auto"),
                ),
                badge="Alto risco", risk="high"),
+            # Post-install login policy. The provisioning actions above only set
+            # this while installing; changing it afterwards previously required
+            # the CLI. This is the PhaseZero-driven equivalent of clearing or
+            # ticking the password box in netplwiz.
+            _a("windows.guest-login.status", "Windows VM", "Login do Windows: estado",
+               "Mostra se o Windows entra sozinho ou exige senha, e se foi verificado.",
+               ("windows-vm", "guest-login", "status", "--json"), "dialog-password",
+               badge="JSON", group="Windows VM", result_view="auto",
+               keywords=("autologin", "senha", "netplwiz", "login")),
+            _a("windows.guest-login.auto", "Windows VM", "Entrar sem senha (autologin)",
+               "Windows entra direto na área de trabalho. A senha da conta é gerada e guardada no LSA, nunca em registro.",
+               ("windows-vm", "guest-login", "apply", "--mode", "auto", "--json"),
+               "system-log-out", mutable=True,
+               preview=("windows-vm", "guest-login", "status", "--json"),
+               badge="Requer VM ligada", risk="high", group="Windows VM",
+               keywords=("autologin", "sem senha", "netplwiz")),
+            _a("windows.guest-login.password", "Windows VM", "Exigir senha ao entrar",
+               "Desliga o autologin e define a senha da conta. A senha vai pela entrada padrão, nunca pela linha de comando.",
+               # No {password} placeholder: a stdin-bound secret has no argv
+               # position at all, and a placeholder here would be serialised
+               # verbatim into the static action catalog.
+               ("windows-vm", "guest-login", "apply", "--mode", "password",
+                "--password-stdin", "--json"),
+               "dialog-password", mutable=True,
+               preview=("windows-vm", "guest-login", "status", "--json"),
+               parameters=(
+                   _p("password", "Nova senha do Windows", "secret",
+                      placeholder="mín. 14 caracteres"),
+               ),
+               stdin_parameter="password",
+               badge="Requer VM ligada", risk="high", group="Windows VM",
+               keywords=("senha", "netplwiz", "exigir senha", "login")),
         ]
     )
 
