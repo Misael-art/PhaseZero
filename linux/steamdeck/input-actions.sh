@@ -48,6 +48,16 @@ steamdeck_kde_virtual_keyboard_supported() {
     qdbus6 org.kde.KWin /VirtualKeyboard >/dev/null 2>&1 || return 1
 }
 
+# jq --argjson aborts on anything that is not valid JSON, so a probe that
+# returns an empty string or a stray word takes the whole status command down
+# with it. Every probed value passes through here before reaching jq.
+steamdeck_bool() {
+    case "${1:-}" in
+        true|True|TRUE|1|yes) printf 'true' ;;
+        *) printf 'false' ;;
+    esac
+}
+
 steamdeck_kde_virtual_keyboard_prop() {
     local prop="$1"
     steamdeck_kde_virtual_keyboard_supported || return 1
@@ -275,10 +285,14 @@ steamdeck_virtual_keyboard_status() {
     if steamdeck_kde_virtual_keyboard_supported; then
         provider="kde-kwin"
         kde_supported=true
-        kde_available="$(steamdeck_kde_virtual_keyboard_prop available || echo false)"
-        kde_enabled="$(steamdeck_kde_virtual_keyboard_prop enabled || echo false)"
-        kde_visible="$(steamdeck_kde_virtual_keyboard_prop visible || echo false)"
-        kde_active="$(steamdeck_kde_virtual_keyboard_prop active || echo false)"
+        # `|| echo false` only covers a non-zero exit. The D-Bus query also
+        # succeeds with empty output when no KDE session owns the property,
+        # which fed an empty string to --argjson and aborted the whole status
+        # command. Anything that is not a literal boolean becomes false.
+        kde_available="$(steamdeck_bool "$(steamdeck_kde_virtual_keyboard_prop available || true)")"
+        kde_enabled="$(steamdeck_bool "$(steamdeck_kde_virtual_keyboard_prop enabled || true)")"
+        kde_visible="$(steamdeck_bool "$(steamdeck_kde_virtual_keyboard_prop visible || true)")"
+        kde_active="$(steamdeck_bool "$(steamdeck_kde_virtual_keyboard_prop active || true)")"
         method="$(kreadconfig6 --file kwinrc --group Wayland --key InputMethod 2>/dev/null || true)"
     elif command -v wvkbd-mobintl >/dev/null 2>&1; then
         provider="wvkbd-mobintl"

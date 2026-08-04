@@ -839,7 +839,10 @@ run_answer_media() {
     local plan_file="$OPERATIONS_DIR/$op/plan.json"
     local vm_dir vm_dir_file="$OPERATIONS_DIR/$op/vm_dir"
     [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
-    local disk_serial="PZ-${op:0:12}"
+    # Must match the serial windows-vm.sh puts on the QEMU disk device, or the
+    # install-target guard refuses every disk and Setup aborts. A per-operation
+    # value looked safer but matched nothing, so the guard was never enforced.
+    local disk_serial="${PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0}"
 
     local answer_dir="$vm_dir/oemdrv"
     mkdir -p "$answer_dir"

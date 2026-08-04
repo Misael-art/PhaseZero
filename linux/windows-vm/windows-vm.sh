@@ -66,6 +66,11 @@ VIRTIO_ISO=""
 VM_DIR=""
 DISK_PATH=""
 DISK_SIZE="256G"
+# Identifies the guest disk to the unattended installer, which refuses to wipe
+# a target whose serial does not match. Must stay in sync with the value
+# provision.sh feeds to autounattend.sh, and must satisfy its [A-Za-z0-9_-]{1,32}
+# validation.
+DISK_SERIAL="${PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0}"
 EXPLICIT_DISK=0
 RAM_MB=""
 CPUS=""
@@ -743,6 +748,28 @@ harden_vm_storage_modes() {
     return 0
 }
 
+# On btrfs a copy-on-write qcow2 fragments without bound and, written with
+# O_DIRECT by QEMU, can fail its own checksum on readback: btrfs then returns
+# EIO to the guest mid-write. That is not theoretical here, it corrupted an
+# in-flight Windows servicing operation and left the guest unbootable.
+#
+# nodatacow is the standard remedy and it is a real trade: btrfs stops
+# checksumming this file, so silent bit rot in it would no longer be detected.
+# The inherit flag only affects files created afterwards, so this must run
+# before qemu-img create; an already-created image cannot be converted in place.
+mark_vm_dir_nodatacow() {
+    [ "$DRY_RUN" = "1" ] && return 0
+    command -v chattr >/dev/null 2>&1 || return 0
+    local fstype
+    fstype="$(stat -f -c %T "$VM_DIR" 2>/dev/null || true)"
+    [ "$fstype" = "btrfs" ] || return 0
+    if chattr +C "$VM_DIR" 2>/dev/null; then
+        pz_info "btrfs: $VM_DIR marked nodatacow (new VM images skip CoW and checksums)"
+    else
+        pz_warn "btrfs: could not set nodatacow on $VM_DIR; VM image stays copy-on-write"
+    fi
+}
+
 ensure_vm_storage() {
     if [ "$DRY_RUN" = "1" ]; then
         pz_info "dry-run: would create VM directories under $VM_DIR"
@@ -754,6 +781,7 @@ ensure_vm_storage() {
         if [ "$DRY_RUN" = "1" ]; then
             pz_info "dry-run: would create qcow2 disk: $DISK_PATH ($DISK_SIZE)"
         else
+            mark_vm_dir_nodatacow
             qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE"
             pz_info "created qcow2 disk: $DISK_PATH"
         fi
@@ -1679,8 +1707,11 @@ build_qemu_args() {
     QEMU_ARGS+=("-drive" "if=none,id=system,file=$DISK_PATH,format=$(disk_format "$DISK_PATH"),cache=none,discard=unmap,aio=io_uring")
     case "$RAW_DISK_BUS" in
         sata|ide) QEMU_ARGS+=("-device" "ide-hd,drive=system,bus=ide.0,bootindex=1") ;;
-        virtio) QEMU_ARGS+=("-device" "virtio-blk-pci,drive=system,bootindex=1") ;;
-        *) QEMU_ARGS+=("-device" "nvme,drive=system,serial=PZWINVM0,bootindex=1") ;;
+        # The serial is the token the unattended install compares before it
+        # wipes anything, so both bus types must expose the same one. virtio-blk
+        # shipped with no serial at all, which left the guard nothing to match.
+        virtio) QEMU_ARGS+=("-device" "virtio-blk-pci,drive=system,serial=$DISK_SERIAL,bootindex=1") ;;
+        *) QEMU_ARGS+=("-device" "nvme,drive=system,serial=$DISK_SERIAL,bootindex=1") ;;
     esac
     if [ -n "$PCI_DEVICES" ]; then
         QEMU_ARGS+=("-device" "intel-iommu,intremap=on,caching-mode=on")

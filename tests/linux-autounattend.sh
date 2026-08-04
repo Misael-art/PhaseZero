@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+# Hermetic contract checks for unattended Windows install generation.
+#
+# The answer file is only exercised for real hours into a Windows install, on a
+# disk that is about to be wiped. Every property that would be expensive or
+# destructive to discover there is asserted here instead.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+AU="$ROOT/linux/windows-vm/autounattend.sh"
+GUARD="$ROOT/linux/windows-vm/assets/pz-disk-guard.cmd"
+
+bash -n "$AU"
+[ -f "$GUARD" ]
+
+WORK="$(mktemp -d /tmp/pz-autounattend.XXXXXX)"
+cleanup() { rm -rf -- "$WORK"; }
+trap cleanup EXIT
+
+gen() {
+    local out="$1"; shift
+    PZ_STATE="$WORK/state" bash "$AU" generate --output-dir "$out" "$@" >/dev/null 2>&1
+}
+
+# --- the install target guard -------------------------------------------------
+# Setup addresses the target by 0-based index and wipes it unconditionally, so
+# an index alone must never authorise the wipe.
+out="$WORK/ok"
+gen "$out" --disk-serial PZWINVM0 --password 'A.b3!xyzQ' --tpm-bypass
+xml="$out/autounattend.xml"
+[ -f "$xml" ]
+grep -Fq 'PhaseZeroDiskTargetGuard' "$xml"
+grep -Fq 'pz-disk-guard.cmd PZWINVM0 0' "$xml"
+grep -Fq '<WillWipeDisk>true</WillWipeDisk>' "$xml"
+# The guard script must be staged beside the answer file or it can never run.
+[ -f "$out/pz-disk-guard.cmd" ]
+
+# A serial that cannot be compared verbatim inside cmd must be refused rather
+# than silently producing a guard that never matches.
+for bad in '' 'PZ WINVM' 'PZ;rm' 'PZ"0' "$(printf 'x%.0s' {1..33})"; do
+    if gen "$WORK/bad" --disk-serial "$bad" --password 'A.b3!xyzQ'; then
+        echo "accepted unusable disk serial: [$bad]" >&2
+        exit 1
+    fi
+    rm -rf "$WORK/bad"
+done
+
+# --- WinPE capability contract ------------------------------------------------
+# The Setup WinPE image ships no powershell.exe and no Storage module, so a
+# guard written in PowerShell would silently never execute.
+# Match invocation, not mention: the guard's own comments explain why it avoids
+# PowerShell, so a blanket grep would flag the documentation it is meant to keep.
+if grep -viE '^[[:space:]]*rem\b' "$GUARD" | grep -qiE 'powershell|pwsh'; then
+    echo 'disk guard must not invoke PowerShell: absent from Setup WinPE' >&2
+    exit 1
+fi
+grep -Fq 'wmic diskdrive' "$GUARD"
+# A guard that cannot identify the disk must refuse, never fall through.
+grep -Fq 'exit /b 2' "$GUARD"
+grep -Fq 'exit /b 3' "$GUARD"
+
+# --- virtio storage driver ----------------------------------------------------
+# Without it Setup enumerates no disk at all and dies before DiskConfiguration.
+grep -Fq 'Microsoft-Windows-PnpCustomizationsWinPE' "$xml"
+grep -Fq '<DriverPaths>' "$xml"
+gen "$WORK/novirtio" --disk-serial PZWINVM0 --password 'A.b3!xyzQ' --no-virtio
+if grep -Fq 'PnpCustomizationsWinPE' "$WORK/novirtio/autounattend.xml"; then
+    echo '--no-virtio still emitted driver paths' >&2
+    exit 1
+fi
+
+# --- autologon persistence ----------------------------------------------------
+# Omitted LogonCount means persistent AutoAdminLogon, which is what an
+# unattended GRUB -> Windows-logged-in boot requires.
+if grep -Fq '<LogonCount>' "$xml"; then
+    echo 'default install must not cap autologon' >&2
+    exit 1
+fi
+gen "$WORK/counted" --disk-serial PZWINVM0 --password 'A.b3!xyzQ' --autologon-count 1
+grep -Fq '<LogonCount>1</LogonCount>' "$WORK/counted/autounattend.xml"
+
+# --- structural validity ------------------------------------------------------
+python3 - "$xml" <<'PYEOF'
+import sys, xml.etree.ElementTree as ET
+ns = '{urn:schemas-microsoft-com:unattend}'
+tree = ET.parse(sys.argv[1])
+passes = {s.get('pass') for s in tree.getroot()}
+for required in ('windowsPE', 'oobeSystem', 'specialize'):
+    assert required in passes, f'missing settings pass: {required}'
+# Unattend rejects duplicate Order values among siblings; CreatePartitions and
+# RunSynchronous both legitimately start at 1, so compare per parent.
+for parent in tree.iter():
+    orders = [c.findtext(f'{ns}Order') for c in parent
+              if c.findtext(f'{ns}Order') is not None]
+    dupes = {o for o in orders if orders.count(o) > 1}
+    assert not dupes, f'duplicate <Order> under {parent.tag}: {sorted(dupes)}'
+PYEOF
+
+# The generator must reject a malformed document instead of shipping it.
+# head closing the pipe early would SIGPIPE sed and, under pipefail, fail the
+# suite with 141 rather than testing anything.
+broken="$WORK/broken.xml"
+sed -n '1,20p' "$xml" > "$broken"
+if python3 -c "import sys,xml.dom.minidom as m; m.parse(sys.argv[1])" "$broken" 2>/dev/null; then
+    echo 'truncated answer file parsed as valid XML; validation is not meaningful' >&2
+    exit 1
+fi
+
+# --- host-side serial agreement ----------------------------------------------
+# The guard compares against whatever QEMU stamped on the disk device. If these
+# drift the guard rejects every disk and the install cannot proceed.
+# Literal shell source contract.
+# shellcheck disable=SC2016
+grep -Fq 'serial=$DISK_SERIAL' "$ROOT/linux/windows-vm/windows-vm.sh"
+grep -Eq 'DISK_SERIAL="\$\{PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0\}"' "$ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0' "$ROOT/linux/windows-vm/provision.sh"
+
+# --- btrfs nodatacow ----------------------------------------------------------
+# CoW + O_DIRECT on a live qcow2 produced EIO mid-write and an unbootable guest.
+grep -Fq 'mark_vm_dir_nodatacow' "$ROOT/linux/windows-vm/windows-vm.sh"
+python3 - "$ROOT/linux/windows-vm/windows-vm.sh" <<'PYEOF'
+import re, sys
+s = open(sys.argv[1]).read()
+i, j = s.index('mark_vm_dir_nodatacow\n'), s.index('qemu-img create -f qcow2')
+assert i < j, 'nodatacow must be set before the image is created; the flag only affects new files'
+PYEOF
+
+echo 'unattended install contracts ok'
