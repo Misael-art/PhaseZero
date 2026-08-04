@@ -5443,6 +5443,83 @@
       "input_kind": "file",
       "input_label": "Selecione manifest.json",
       "plan_command": "linux/pz ai routing verify"
+    },
+    {
+      "name": "homelab.profiles",
+      "label": "Perfis e pesos",
+      "command": "linux/pz server homelab profile list",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "homelab.budget",
+      "label": "Orçamento do perfil",
+      "command": "linux/pz server homelab governor budget core",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "homelab.policy",
+      "label": "Política AI",
+      "command": "linux/pz ai policy status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "homelab.verify",
+      "label": "Verificar backup",
+      "command": "linux/pz server homelab backup verify --source {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "path",
+      "input_label": "Selecione pasta de backup Homelab"
+    },
+    {
+      "name": "homelab.restore",
+      "label": "Restaurar backup",
+      "command": "linux/pz server homelab restore --source {input} --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "path",
+      "input_label": "Selecione pasta de backup Homelab"
+    },
+    {
+      "name": "homelab.status",
+      "label": "Status da stack",
+      "command": "linux/pz server homelab status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "homelab.backup",
+      "label": "Backup verificado",
+      "command": "linux/pz server homelab backup",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
     }
   ]
 }
