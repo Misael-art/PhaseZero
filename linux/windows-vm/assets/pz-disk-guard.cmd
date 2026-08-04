@@ -41,8 +41,14 @@ if not defined FOUND (
 )
 
 echo [%DATE% %TIME%] found=!FOUND!>>"%LOG%"
-if /i not "!FOUND!"=="%EXPECTED%" (
-    echo [%DATE% %TIME%] REFUSING: disk %DISKID% serial !FOUND! is not %EXPECTED%>>"%LOG%"
+rem Containment, not equality. The guest does not echo back what QEMU stamped:
+rem an NVMe device advertising PZWINVM0 is reported by Windows as
+rem "PZWINVM0                _00000001.", padded and suffixed with namespace
+rem detail. Requiring an exact match refused the correct disk and aborted Setup
+rem with 0x80070057. The expected serial only has to be present.
+echo !FOUND! | findstr /i /c:"%EXPECTED%" >nul
+if errorlevel 1 (
+    echo [%DATE% %TIME%] REFUSING: disk %DISKID% serial !FOUND! does not contain %EXPECTED%>>"%LOG%"
     exit /b 3
 )
 

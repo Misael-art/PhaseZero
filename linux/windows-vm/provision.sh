@@ -28,6 +28,12 @@ default_cpus() {
 PROVISION_DIR="${PZ_STATE}/windows-vm/provision"
 OPERATIONS_DIR="${PZ_STATE}/operations"
 
+# The install-target guard inside WinPE compares this against the serial QEMU
+# stamped on the disk and aborts Setup when they differ. The provisioning VM
+# used a hardcoded 'pzvm' while the answer file demanded PZWINVM0, so the guard
+# refused every disk. windows-vm.sh must resolve the same value.
+DISK_SERIAL="${PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0}"
+
 PLAN_ENDPOINT="${PZ_WINDOWS_VM_PLAN:-$PROVISION_DIR/plans}"
 ACTIVE_LOCK="$PROVISION_DIR/active.lock"
 
@@ -839,10 +845,10 @@ run_answer_media() {
     local plan_file="$OPERATIONS_DIR/$op/plan.json"
     local vm_dir vm_dir_file="$OPERATIONS_DIR/$op/vm_dir"
     [ -f "$vm_dir_file" ] && vm_dir="$(cat "$vm_dir_file")"
-    # Must match the serial windows-vm.sh puts on the QEMU disk device, or the
+    # Must match the serial stamped on the QEMU disk device, or the
     # install-target guard refuses every disk and Setup aborts. A per-operation
     # value looked safer but matched nothing, so the guard was never enforced.
-    local disk_serial="${PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0}"
+    local disk_serial="$DISK_SERIAL"
 
     local answer_dir="$vm_dir/oemdrv"
     mkdir -p "$answer_dir"
@@ -1113,7 +1119,7 @@ run_setup() {
         -drive file="$ovmf_vars",if=pflash,format=raw
         -boot once=d
         -drive file="$disk_path",format=qcow2,if=none,id=drive0
-        -device nvme,serial=pzvm,drive=drive0
+        -device "nvme,serial=$DISK_SERIAL,drive=drive0"
         -drive file="$iso",format=raw,if=none,id=isoboot,readonly=on
         -device ide-cd,bus=ide.0,drive=isoboot
         -drive file="$oemdrv_iso",format=raw,if=none,id=oemdrv,readonly=on
@@ -1252,7 +1258,7 @@ run_drivers() {
         -drive file="$ovmf_code",if=pflash,format=raw,readonly=on
         -drive file="$ovmf_vars",if=pflash,format=raw
         -drive file="$disk_path",format=qcow2,if=none,id=drive0
-        -device nvme,serial=pzvm,drive=drive0
+        -device "nvme,serial=$DISK_SERIAL,drive=drive0"
         -drive file="$vm_dir/virtio-win.iso",format=raw,if=none,id=virtio,readonly=on
         -device ide-cd,drive=virtio
         -netdev "$netdev_arg" -device e1000e,netdev=net0
@@ -1458,7 +1464,7 @@ run_tweaks() {
         -drive file="$ovmf_code",if=pflash,format=raw,readonly=on
         -drive file="$ovmf_vars",if=pflash,format=raw
         -drive file="$disk_path",format=qcow2,if=none,id=drive0
-        -device nvme,serial=pzvm,drive=drive0
+        -device "nvme,serial=$DISK_SERIAL,drive=drive0"
         -netdev "$netdev_arg" -device e1000e,netdev=net0
         -device virtio-serial-pci,id=virtio-serial0
         -vga qxl -display none -nographic
@@ -1756,7 +1762,7 @@ run_relaunch() {
         -drive file="$ovmf_code",if=pflash,format=raw,readonly=on
         -drive file="$ovmf_vars",if=pflash,format=raw
         -drive file="$boot_disk",format=qcow2,if=none,id=drive0
-        -device nvme,serial=pzvm,drive=drive0
+        -device "nvme,serial=$DISK_SERIAL,drive=drive0"
         -netdev "$netdev_arg"
         -device virtio-net-pci,netdev=net0
         -device virtio-serial-pci,id=virtio-serial0

@@ -58,6 +58,24 @@ grep -Fq 'wmic diskdrive' "$GUARD"
 # A guard that cannot identify the disk must refuse, never fall through.
 grep -Fq 'exit /b 2' "$GUARD"
 grep -Fq 'exit /b 3' "$GUARD"
+# Containment, not equality. Windows reports an NVMe serial padded and suffixed
+# with namespace detail ("PZWINVM0                _00000001."), so an exact
+# comparison rejected the correct disk and aborted Setup with 0x80070057.
+grep -Fq 'findstr /i /c:"%EXPECTED%"' "$GUARD"
+if grep -Eq 'if /i (not )?"!FOUND!"=="%EXPECTED%"' "$GUARD"; then
+    echo 'disk guard reverted to exact serial match; Windows pads and suffixes it' >&2
+    exit 1
+fi
+
+# The guest does not echo back the serial QEMU stamped. An NVMe device
+# advertising PZWINVM0 is reported by Windows as "PZWINVM0    _00000001.",
+# padded and suffixed. An equality test refused the correct disk and aborted
+# Setup with 0x80070057, so the comparison must be containment.
+grep -Fq 'findstr /i /c:"%EXPECTED%"' "$GUARD"
+if grep -qE 'if /i not "!FOUND!"=="%EXPECTED%"' "$GUARD"; then
+    echo 'guard compares serials for equality; the guest pads and suffixes them' >&2
+    exit 1
+fi
 
 # --- virtio storage driver ----------------------------------------------------
 # Without it Setup enumerates no disk at all and dies before DiskConfiguration.
@@ -114,6 +132,22 @@ fi
 grep -Fq 'serial=$DISK_SERIAL' "$ROOT/linux/windows-vm/windows-vm.sh"
 grep -Eq 'DISK_SERIAL="\$\{PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0\}"' "$ROOT/linux/windows-vm/windows-vm.sh"
 grep -Fq 'PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0' "$ROOT/linux/windows-vm/provision.sh"
+
+# provision.sh builds its own QEMU command line for the installer VM. It
+# hardcoded serial=pzvm while the answer file demanded PZWINVM0, so the guard
+# rejected every disk and Setup aborted. Asserting agreement between only two of
+# the three places let that through, so every -device serial= must resolve from
+# the shared variable rather than a literal.
+# Literal shell source contract: the variable name, not its value.
+# shellcheck disable=SC2016
+bad_serials="$(grep -oE '(nvme|virtio-blk-pci)[^ ]*serial=[^,"[:space:]]+' \
+    "$ROOT/linux/windows-vm/provision.sh" "$ROOT/linux/windows-vm/windows-vm.sh" \
+    | grep -v 'serial=\$DISK_SERIAL' || true)"
+if [ -n "$bad_serials" ]; then
+    echo "hardcoded QEMU disk serial would defeat the install guard:" >&2
+    printf '%s\n' "$bad_serials" >&2
+    exit 1
+fi
 
 # --- btrfs nodatacow ----------------------------------------------------------
 # CoW + O_DIRECT on a live qcow2 produced EIO mid-write and an unbootable guest.
