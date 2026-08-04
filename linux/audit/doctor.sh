@@ -336,6 +336,20 @@ elif [[ "$HOST_PROFILE" =~ ^steamdeck ]]; then
 else
     check WINVM06 "Windows VM direct GRUB boot installed" WARN "run: sudo linux/windows-vm/windows-vm.sh boot install"
 fi
+# A package upgrade replaces the PhaseZero tree but never /usr/local, so the
+# GRUB boot path keeps running the previous version with nothing to announce
+# it. This comparison needs no privilege, so it reports for every user.
+if jq -e '.boot.bootRuntimeStale == true' <<< "$winvm_status" >/dev/null 2>&1; then
+    check WINVM16 "Windows VM boot runtime matches this install" FAIL \
+        "GRUB boot path runs an outdated runtime; run: phasezero-admin linux/pz windows-vm boot install"
+elif jq -e '.boot.bootRuntimeState == "current"' <<< "$winvm_status" >/dev/null 2>&1; then
+    check WINVM16 "Windows VM boot runtime matches this install" PASS "boot runtime current"
+elif jq -e '.boot.bootRuntimeState == "not-installed"' <<< "$winvm_status" >/dev/null 2>&1; then
+    check WINVM16 "Windows VM boot runtime matches this install" INFO "boot integration not installed"
+else
+    check WINVM16 "Windows VM boot runtime matches this install" INFO \
+        "boot runtime state unverified ($(jq -r '.boot.bootRuntimeState // "unknown"' <<< "$winvm_status"))"
+fi
 if jq -e '.access.shareLinksReady == true and .access.sambaManaged == true and .access.sambaReachable == true' <<< "$winvm_status" >/dev/null 2>&1; then
     check WINVM09 "Windows host storage shares ready" PASS "$(jq -r '.access.shares | join(", ")' <<< "$winvm_status")"
 else

@@ -120,6 +120,7 @@ Usage:
   pz windows-vm shares (status|install|remove|dry-run)
   pz windows-vm apps (status|setup|configure|doctor|install-winboat|install-winpodx|launch-winboat|launch-winpodx)
   pz windows-vm boot status
+  pz windows-vm boot runtime-check [--json]
   pz windows-vm boot install
   pz windows-vm boot next
   pz windows-vm boot next-reboot
@@ -2178,9 +2179,14 @@ status_json() {
     samba_policy_compliant && samba_policy="yes"
     share_links_ready && share_links="yes"
     windows_usb_udev_managed && usb_udev_managed="yes"
+    local boot_runtime_state_value
+    boot_runtime_state_value="$(boot_runtime_state)"
     if boot_artifacts_current; then
         boot_current="yes"
         boot_verification="verified"
+    elif [ "$boot_runtime_state_value" = "stale" ]; then
+        boot_current="no"
+        boot_verification="stale"
     elif [ "$EUID" -ne 0 ] && [ ! -x "$(dirname "$GRUB_SCRIPT")" ]; then
         boot_current="unknown"
         boot_verification="unknown-permission"
@@ -2238,6 +2244,8 @@ status_json() {
         --arg bootService "$boot_service" \
         --arg bootArtifactsCurrent "$boot_current" \
         --arg artifactsVerification "$boot_verification" \
+        --arg bootRuntimeState "$boot_runtime_state_value" \
+        --argjson bootRuntimeStale "$([ "$boot_runtime_state_value" = "stale" ] && echo true || echo false)" \
         --arg hostLoginPolicy "$(root_env_value PZ_WINDOWS_VM_REQUIRE_LOGIN)" \
         --arg guestLoginPolicy "$GUEST_LOGIN_POLICY" \
         --arg bootConfiguredRepo "$(root_env_value PZ_WINDOWS_VM_REPO)" \
@@ -2273,6 +2281,7 @@ status_json() {
             boot: {helperInstalled: ($bootHelper == "yes"), serviceInstalled: ($bootService == "yes"),
                    artifactsCurrent:(if $bootArtifactsCurrent == "unknown" then null else ($bootArtifactsCurrent == "yes") end),
                    artifactsVerification:$artifactsVerification,
+                   bootRuntimeState:$bootRuntimeState, bootRuntimeStale:$bootRuntimeStale,
                    hostLoginPolicy:(if $hostLoginPolicy == "1" then "password" else "auto" end),
                    guestLoginPolicy:$guestLoginPolicy, guestLoginVerified:false,
                    configuredRepo: $bootConfiguredRepo, configuredUser: $bootConfiguredUser, grubCfgEntry: $grubEntry, currentBootWindowsVm: ($currentMarker == "yes")}
@@ -2592,6 +2601,71 @@ runtime_tree_current() {
     done < <(runtime_file_specs)
 }
 
+# Every boot artifact lives under /usr/local and is world-readable, so whether
+# the GRUB path is running current code can be answered without privilege.
+# boot_artifacts_current cannot answer it: it also inspects /etc/grub.d and the
+# root env file, so an unprivileged caller collapses a provable "stale" into
+# "unknown-permission" and never learns the boot path is running old code.
+# A package upgrade replaces $PZ_ROOT but never /usr/local, which makes this
+# the normal state after every `pacman -U`, `apt upgrade` or `dnf update`.
+boot_runtime_state() {
+    local pair src dst mode
+    if [ ! -e "$BOOT_HELPER_TARGET" ] && [ ! -e "$RUNTIME_LAUNCHER" ]; then
+        printf 'not-installed'
+        return 0
+    fi
+    for pair in "$BOOT_HELPER_SOURCE|$BOOT_HELPER_TARGET" \
+                "$SESSION_SOURCE|$SESSION_TARGET" \
+                "$DISPLAY_SESSION_SOURCE|$DISPLAY_SESSION_TARGET"; do
+        src="${pair%%|*}"
+        dst="${pair##*|}"
+        [ -r "$src" ] || { printf 'unknown-source'; return 0; }
+        [ -e "$dst" ] || { printf 'stale'; return 0; }
+        [ -r "$dst" ] || { printf 'unknown-permission'; return 0; }
+        cmp -s "$src" "$dst" || { printf 'stale'; return 0; }
+    done
+    while IFS='|' read -r src dst mode; do
+        [ -n "$src" ] || continue
+        [ -r "$src" ] || { printf 'unknown-source'; return 0; }
+        [ -e "$dst" ] || { printf 'stale'; return 0; }
+        [ -r "$dst" ] || { printf 'unknown-permission'; return 0; }
+        cmp -s "$src" "$dst" || { printf 'stale'; return 0; }
+    done < <(runtime_file_specs)
+    printf 'current'
+}
+
+# Reports whether the installed boot runtime matches this PhaseZero root, and
+# exits non-zero only when staleness is proven. Package hooks and doctor call
+# this; it must stay cheap, privilege-free and silent about states it cannot
+# establish, so an upgrade never fails on an inconclusive probe.
+runtime_check() {
+    parse_options "$@"
+    effective_config
+    local state hint
+    state="$(boot_runtime_state)"
+    hint="pz windows-vm boot install"
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg state "$state" --arg source "$PZ_ROOT" --arg runtime "$RUNTIME_ROOT" \
+            --arg remediation "$hint" \
+            --argjson stale "$([ "$state" = "stale" ] && echo true || echo false)" \
+            --argjson installed "$([ "$state" = "not-installed" ] && echo false || echo true)" \
+            '{bootRuntimeState:$state,bootRuntimeStale:$stale,bootRuntimeInstalled:$installed,
+              source:$source,runtime:$runtime,remediation:$remediation}'
+    else
+        case "$state" in
+            not-installed) pz_info "Windows VM boot integration not installed" ;;
+            current) pz_info "Windows VM boot runtime matches $PZ_ROOT" ;;
+            stale)
+                pz_warn "Windows VM boot runtime is OUTDATED: $RUNTIME_ROOT"
+                pz_warn "the GRUB boot path still runs the previous version"
+                pz_warn "run with admin rights: $hint"
+                ;;
+            *) pz_info "Windows VM boot runtime state could not be verified ($state)" ;;
+        esac
+    fi
+    [ "$state" != "stale" ]
+}
+
 boot_artifacts_current() {
     local loader
     loader="$(detected_loader)"
@@ -2904,9 +2978,18 @@ status_boot() {
     local loader="" grub_env="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no" artifacts_verification="stale"
     loader="$(detected_loader)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && cmdline_marker="yes"
+    # Answered without privilege, so an unprivileged caller still learns that a
+    # package upgrade left the GRUB boot path on the previous version.
+    local boot_runtime_state_value
+    boot_runtime_state_value="$(boot_runtime_state)"
     if boot_artifacts_current; then
         artifacts_current="yes"
         artifacts_verification="verified"
+    elif [ "$boot_runtime_state_value" = "stale" ]; then
+        # Proven stale beats "cannot tell": the runtime comparison alone is
+        # enough to know the boot path is outdated.
+        artifacts_current="no"
+        artifacts_verification="stale"
     elif [ "$EUID" -ne 0 ] && [ ! -x "$(dirname "$GRUB_SCRIPT")" ]; then
         artifacts_current="unknown"
         artifacts_verification="unknown-permission"
@@ -2984,6 +3067,8 @@ status_boot() {
             --arg loaderEntry "$loader_entry" \
             --argjson artifactsCurrent "$artifacts_current_json" \
             --arg artifactsVerification "$artifacts_verification" \
+            --arg bootRuntimeState "$boot_runtime_state_value" \
+            --argjson bootRuntimeStale "$([ "$boot_runtime_state_value" = "stale" ] && echo true || echo false)" \
             --arg hostLoginPolicy "$(root_env_value PZ_WINDOWS_VM_REQUIRE_LOGIN)" \
             --arg guestLoginPolicy "$GUEST_LOGIN_POLICY" \
             --arg configuredRepo "$configured_repo" \
@@ -3010,6 +3095,8 @@ status_boot() {
                 bootLoader: $bootLoader, loaderEntry: $loaderEntry,
                 artifactsCurrent: $artifactsCurrent,
                 artifactsVerification: $artifactsVerification,
+                bootRuntimeState: $bootRuntimeState,
+                bootRuntimeStale: $bootRuntimeStale,
                 hostLoginPolicy: (if $hostLoginPolicy == "1" then "password" else "auto" end),
                 guestLoginPolicy: $guestLoginPolicy,
                 guestLoginVerified: false,
@@ -3036,6 +3123,7 @@ status_boot() {
         echo "loader_entry: $loader_entry"
         echo "artifacts_current: $artifacts_current"
         echo "artifacts_verification: $artifacts_verification"
+        echo "boot_runtime_state: $boot_runtime_state_value"
         echo "configured_repo: $configured_repo"
         echo "configured_boot_user: $configured_user"
         echo "grub_cfg_entry: $grub_cfg_entry"
@@ -3048,6 +3136,10 @@ status_boot() {
         echo "session: phasezero-windows-vm.desktop"
         echo "grub_entry_id: $BOOT_ID"
         echo "recommended_direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+        if [ "$boot_runtime_state_value" = "stale" ]; then
+            pz_warn "boot runtime is OUTDATED; the GRUB path still runs the previous version"
+            pz_warn "run with admin rights: pz windows-vm boot install"
+        fi
     fi
 }
 
@@ -3089,7 +3181,8 @@ cmd_boot() {
         set-default) set_default_boot "$@" ;;
         clear-next) clear_next_boot "$@" ;;
         dry-run|plan) dry_run_boot "$@" ;;
-        *) pz_error "usage: windows-vm boot (install|remove|status|next|next-reboot|set-default|clear-next|dry-run) [--loader auto|grub|systemd-boot|refind|efi-stub] [--target-root /]"; exit 1 ;;
+        runtime-check|check-runtime) runtime_check "$@" ;;
+        *) pz_error "usage: windows-vm boot (install|remove|status|runtime-check|next|next-reboot|set-default|clear-next|dry-run) [--loader auto|grub|systemd-boot|refind|efi-stub] [--target-root /]"; exit 1 ;;
     esac
 }
 

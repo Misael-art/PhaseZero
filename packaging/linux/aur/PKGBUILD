@@ -23,6 +23,12 @@ package() {
     "$pkgdir/usr/share/metainfo/io.phasezero.ControlCenter.metainfo.xml"
   install -Dm644 packaging/linux/io.phasezero.ControlCenter.svg \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/io.phasezero.ControlCenter.svg"
+  # No package manager owns /usr/local/lib/phasezero, so an upgrade leaves the
+  # Windows VM GRUB boot runtime on the previous release. The hook only warns:
+  # re-running `boot install` rewrites grub.cfg and must never run inside a
+  # pacman transaction.
+  install -Dm644 packaging/linux/hooks/phasezero-boot-runtime.hook \
+    "$pkgdir/usr/share/libalpm/hooks/phasezero-boot-runtime.hook"
   # Install category/menu SVG icons
   for icon in assets/icons/hicolor/scalable/apps/*.svg; do
     install -Dm644 "$icon" "$pkgdir/usr/share/icons/hicolor/scalable/apps/$(basename "$icon")"

@@ -271,4 +271,67 @@ printf '%s\n' "$recover_output" | jq -e -s \
 [ ! -d "$tmp_recover/state/phasezero/windows-vm/guest-login-backups" ]
 rm -rf -- "$tmp_recover"
 
+# A package upgrade replaces the PhaseZero tree but never /usr/local, so the
+# GRUB boot path keeps running the previous release. Detection must work
+# without root: boot_artifacts_current also reads /etc/grub.d, so it collapses
+# a provable "stale" into "unknown-permission" for an unprivileged caller.
+VM="$ROOT/linux/windows-vm/windows-vm.sh"
+NOTICE="$ROOT/linux/windows-vm/boot-runtime-notice.sh"
+grep -Fq 'boot_runtime_state()' "$VM"
+grep -Fq 'runtime-check|check-runtime) runtime_check' "$VM"
+grep -Fq 'bootRuntimeState' "$VM"
+grep -Fq 'bootRuntimeStale' "$VM"
+grep -Fq 'bootRuntimeStale == true' "$ROOT/linux/audit/doctor.sh"
+# The hook must warn only. boot install regenerates grub.cfg and runs
+# os-prober; inside a package transaction a failure there is far worse than an
+# outdated runtime.
+if grep -Eq 'boot[ -]install' "$NOTICE"; then
+    grep -Fq 'phasezero-admin' "$NOTICE"
+fi
+if grep -Eq '^[^#]*\b(grub-mkconfig|update-grub)\b' "$NOTICE"; then
+    echo 'package hook must never regenerate the bootloader' >&2
+    exit 1
+fi
+grep -Fq 'boot-runtime-notice.sh' "$ROOT/packaging/linux/deb/build-deb.sh"
+grep -Fq 'boot-runtime-notice.sh' "$ROOT/packaging/linux/rpm/phasezero-control-center.spec"
+grep -Fq 'phasezero-boot-runtime.hook' "$ROOT/packaging/linux/aur/PKGBUILD"
+grep -Fq 'PostTransaction' "$ROOT/packaging/linux/hooks/phasezero-boot-runtime.hook"
+
+# The notice must stay silent whenever it cannot prove staleness, so no upgrade
+# is ever noisy or aborted by an inconclusive probe.
+notice_silent() {
+    local label="$1"; shift
+    local out
+    out="$(env "$@" bash "$NOTICE" 2>&1)"
+    [ -z "$out" ] || { echo "boot runtime notice was not silent: $label" >&2; exit 1; }
+}
+notice_silent 'boot integration absent' PZ_BOOT_HELPER=/nonexistent/helper
+notice_silent 'phasezero tree absent' PZ_LIB_DIR=/nonexistent
+
+tmp_notice="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+mkdir -p "$tmp_notice/lib/linux/windows-vm" "$tmp_notice/local"
+touch "$tmp_notice/local/windows-vm-boot-prepare"
+# An installed tree older than `boot runtime-check` must degrade quietly.
+printf '%s\n' '#!/usr/bin/env bash' 'echo "ERROR: unknown action" >&2' 'exit 1' \
+    > "$tmp_notice/lib/linux/windows-vm/windows-vm.sh"
+notice_silent 'installed tree predates runtime-check' \
+    "PZ_LIB_DIR=$tmp_notice/lib" "PZ_BOOT_HELPER=$tmp_notice/local/windows-vm-boot-prepare"
+# A runtime that is genuinely stale must produce an actionable warning.
+printf '%s\n' '#!/usr/bin/env bash' \
+    'printf %s "{\"bootRuntimeState\":\"stale\",\"bootRuntimeStale\":true}"' \
+    > "$tmp_notice/lib/linux/windows-vm/windows-vm.sh"
+notice_out="$(PZ_LIB_DIR="$tmp_notice/lib" PZ_BOOT_HELPER="$tmp_notice/local/windows-vm-boot-prepare" \
+    bash "$NOTICE" 2>&1)"
+grep -Fq 'OUTDATED' <<<"$notice_out"
+grep -Fq 'boot install' <<<"$notice_out"
+# The remediation path must follow the tree the package actually installed.
+grep -Fq "$tmp_notice/lib/linux/pz" <<<"$notice_out"
+# current must be silent again.
+printf '%s\n' '#!/usr/bin/env bash' \
+    'printf %s "{\"bootRuntimeState\":\"current\",\"bootRuntimeStale\":false}"' \
+    > "$tmp_notice/lib/linux/windows-vm/windows-vm.sh"
+notice_silent 'runtime current' \
+    "PZ_LIB_DIR=$tmp_notice/lib" "PZ_BOOT_HELPER=$tmp_notice/local/windows-vm-boot-prepare"
+rm -rf -- "$tmp_notice"
+
 echo 'guest recovery secret and local-only contracts ok'
