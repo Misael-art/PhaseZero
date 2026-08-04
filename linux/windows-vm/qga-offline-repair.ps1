@@ -5,6 +5,12 @@ $isoPath = Join-Path $payloadDir 'virtio-win.iso'
 $trustedVirtioSha256 = '__PZ_VIRTIO_SHA256__'
 $statusPath = Join-Path $statusDir 'qga-offline-repair.json'
 $mounted = $false
+$msiSignatureStatus = 'not-evaluated'
+# The boot that runs this repair is recorded so the host can prove the guest
+# actually rebooted afterwards instead of inferring it from a transport gap.
+$repairBootUpTime = try {
+    (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime().ToString('o')
+} catch { '' }
 # virt-customize firstboot is hosted by 32-bit RHSrvAny.  On 64-bit Windows,
 # System32 is redirected to SysWOW64 for that process; Sysnative escapes that
 # redirect and exposes the native servicing tools.
@@ -19,14 +25,15 @@ $msiexec = Join-Path $system32 'msiexec.exe'
 $sc = Join-Path $system32 'sc.exe'
 $shutdown = Join-Path $system32 'shutdown.exe'
 
-function Write-RepairStatus([bool]$Success, [string]$Phase, [string]$Error = '') {
+function Write-RepairStatus([bool]$Success, [string]$Phase, [string]$ErrorText = '') {
     [ordered]@{
-        schemaVersion = 1
+        schemaVersion = 2
         success = $Success
         phase = $Phase
         qgaServiceHealthy = $Success
         msiSignatureStatus = $msiSignatureStatus
-        error = $Error
+        repairBootUpTime = $repairBootUpTime
+        error = $ErrorText
         completedAt = (Get-Date).ToUniversalTime().ToString('o')
     } | ConvertTo-Json | Set-Content -LiteralPath $statusPath -Encoding UTF8
 }

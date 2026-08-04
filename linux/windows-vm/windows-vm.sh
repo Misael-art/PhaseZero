@@ -105,7 +105,9 @@ Usage:
   pz windows-vm optimize [--dry-run]
   pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--graphics <profile>] [--experimental] [--dry-run]
   pz windows-vm launch-check [--graphics <profile>] [--json]
-  pz windows-vm guest-login (status|backup|apply|restore|rollback|recovery|repair-qga|transport-verify|reboot|shutdown) [--mode auto|password] [--json]
+  pz windows-vm disk-check [--json]
+  pz windows-vm secure-storage [--json]
+  pz windows-vm guest-login (status|backup|prune-backups|apply|restore|rollback|recovery|repair-qga|repair-preflight|transport-verify|reboot|shutdown) [--mode auto|password] [--json]
   pz windows-vm guest-login recovery (status|apply|rotate|enable|disable) --password-stdin [--local-only|--allow-remote] [--json]
   pz windows-vm recover --mode auto|password [--password-stdin] [--leave-running] [--json]
   pz windows-vm graphics status [--json]
@@ -712,11 +714,40 @@ write_config() {
     pz_info "wrote $CONFIG_FILE"
 }
 
+# The guest disk holds the user's whole Windows installation, the TPM directory
+# holds its sealed keys and OVMF_VARS holds Secure Boot state. None of it may be
+# readable by other local accounts, and an adopted disk arrives with whatever
+# mode its creator used, so the modes are enforced on every run, not just at
+# creation time.
+harden_vm_storage_modes() {
+    [ "$DRY_RUN" = "1" ] && return 0
+    local path tpm_dir="${TPM_DIR:-}"
+    for path in "${VM_DIR:-}" "${STATE_DIR:-}" "$tpm_dir"; do
+        [ -n "$path" ] && [ -d "$path" ] || continue
+        chmod 0700 "$path" 2>/dev/null || pz_warn "could not restrict directory mode: $path"
+    done
+    if [ -n "$tpm_dir" ] && [ -d "$tpm_dir" ]; then
+        chmod -R go-rwx "$tpm_dir" 2>/dev/null || pz_warn "could not restrict TPM state: $tpm_dir"
+    fi
+    for path in "${DISK_PATH:-}" "${OVMF_VARS:-}"; do
+        [ -n "$path" ] && [ -f "$path" ] || continue
+        chmod 0600 "$path" 2>/dev/null || pz_warn "could not restrict file mode: $path"
+    done
+    # Guest-login backups are whole copies of the same disk. Older ones were
+    # written with --preserve=mode and inherited a world-readable source.
+    local backup_root="${STATE_DIR:-}/guest-login-backups"
+    if [ -n "${STATE_DIR:-}" ] && [ -d "$backup_root" ]; then
+        chmod -R go-rwx "$backup_root" 2>/dev/null || pz_warn "could not restrict backup modes: $backup_root"
+    fi
+    return 0
+}
+
 ensure_vm_storage() {
     if [ "$DRY_RUN" = "1" ]; then
         pz_info "dry-run: would create VM directories under $VM_DIR"
     else
-        install -d "$VM_DIR" "$STATE_DIR" "$RUNTIME_DIR"
+        install -d -m 0700 "$VM_DIR" "$STATE_DIR"
+        install -d -m 0700 "$RUNTIME_DIR"
     fi
     if [ ! -f "$DISK_PATH" ]; then
         if [ "$DRY_RUN" = "1" ]; then
@@ -738,6 +769,7 @@ ensure_vm_storage() {
             pz_info "created OVMF vars: $OVMF_VARS"
         fi
     fi
+    harden_vm_storage_modes
 }
 
 desktop_entry_content() {
@@ -1983,6 +2015,83 @@ launch_vm() {
     return "$qemu_rc"
 }
 
+# Repairs modes on a VM that already exists. install/adopt harden storage as
+# they create it, but a VM adopted before this existed still carries whatever
+# mode its creator used, and that is a readable Windows disk for every local
+# account on the machine.
+secure_storage() {
+    parse_options "$@"
+    effective_config
+    harden_vm_storage_modes
+    local vm_mode="" disk_mode="" ovmf_mode="" tpm_mode=""
+    [ -d "$VM_DIR" ] && vm_mode="$(stat -c %a "$VM_DIR" 2>/dev/null || true)"
+    [ -f "$DISK_PATH" ] && disk_mode="$(stat -c %a "$DISK_PATH" 2>/dev/null || true)"
+    [ -f "$OVMF_VARS" ] && ovmf_mode="$(stat -c %a "$OVMF_VARS" 2>/dev/null || true)"
+    [ -d "$TPM_DIR" ] && tpm_mode="$(stat -c %a "$TPM_DIR" 2>/dev/null || true)"
+    local secure=true
+    [ "$vm_mode" = "700" ] || [ -z "$vm_mode" ] || secure=false
+    [ "$disk_mode" = "600" ] || [ -z "$disk_mode" ] || secure=false
+    [ "$ovmf_mode" = "600" ] || [ -z "$ovmf_mode" ] || secure=false
+    [ "$tpm_mode" = "700" ] || [ -z "$tpm_mode" ] || secure=false
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg vmDir "$VM_DIR" --arg vmDirMode "$vm_mode" --arg diskMode "$disk_mode" \
+            --arg ovmfVarsMode "$ovmf_mode" --arg tpmDirMode "$tpm_mode" \
+            --argjson secure "$secure" \
+            '{success:$secure,vmDir:$vmDir,vmDirMode:$vmDirMode,diskMode:$diskMode,
+              ovmfVarsMode:$ovmfVarsMode,tpmDirMode:$tpmDirMode,storageModesSecure:$secure}'
+    elif [ "$secure" = true ]; then
+        pz_info "VM storage restricted to the owning user ($VM_DIR)"
+    else
+        pz_error "VM storage modes could not be fully restricted: $VM_DIR"
+    fi
+    [ "$secure" = true ]
+}
+
+# Image integrity after a controlled shutdown. Refuses while the VM still holds
+# the disk, because qemu-img check on a live image reports nothing meaningful.
+disk_check() {
+    parse_options "$@"
+    effective_config
+    local output rc=0
+    if [ ! -f "$DISK_PATH" ]; then
+        pz_error "guest disk missing: $DISK_PATH"
+        return 1
+    fi
+    if disk_in_use; then
+        pz_error "disk-check requires the VM powered off"
+        return 1
+    fi
+    set +e
+    output="$(qemu-img check "$DISK_PATH" 2>&1)"
+    rc=$?
+    set -e
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg disk "$DISK_PATH" --arg detail "$output" \
+            --argjson ok "$([ "$rc" -eq 0 ] && echo true || echo false)" \
+            '{success:$ok,disk:$disk,detail:$detail}'
+    elif [ "$rc" -eq 0 ]; then
+        pz_info "qemu-img check passed: $DISK_PATH"
+    else
+        pz_error "qemu-img check failed: $DISK_PATH"
+        printf '%s\n' "$output" >&2
+    fi
+    return "$rc"
+}
+
+disk_in_use() {
+    local proc cmd disk_real
+    disk_real="$(realpath -e "$DISK_PATH" 2>/dev/null || printf '%s' "$DISK_PATH")"
+    for proc in /proc/[0-9]*/cmdline; do
+        [ -r "$proc" ] || continue
+        cmd="$(tr '\0' ' ' < "$proc" 2>/dev/null || true)"
+        if [[ "$cmd" == *qemu-system* || "$cmd" == *qemu-kvm* ]] && \
+            { [[ "$cmd" == *"$DISK_PATH"* ]] || [[ "$cmd" == *"$disk_real"* ]]; }; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 launch_check() {
     parse_options "$@"
     effective_config
@@ -2825,7 +2934,14 @@ status_boot() {
     [ -x "$RUNTIME_LAUNCHER" ] && runtime_launcher_installed="yes"
     [ -x "$RUNTIME_GRAPHICS" ] && runtime_graphics_installed="yes"
     [ -f "$SERVICE_FILE" ] && service_installed="yes"
-    [ -x "$GRUB_SCRIPT" ] && grub_script="yes"
+    # /etc/grub.d is root-only on most distributions, so a plain -x test reports
+    # a missing script to any unprivileged caller. Distinguish "absent" from
+    # "cannot tell" the same way grub_cfg_entry_state does.
+    if [ -x "$GRUB_SCRIPT" ]; then
+        grub_script="yes"
+    elif [ ! -r "$(dirname "$GRUB_SCRIPT")" ] || [ ! -x "$(dirname "$GRUB_SCRIPT")" ]; then
+        grub_script="unknown-permission"
+    fi
     local service_enabled; service_enabled="$(systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || echo "disabled")"
     local loader_entry; loader_entry="$(loader_entry_state "$loader")"
     local grub_cfg_entry="n/a"
@@ -2990,6 +3106,8 @@ case "$ACTION" in
     apps|frontends|containers) bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" "$@" ;;
     launch|start|run) launch_vm "$@" ;;
     launch-check|launch-preflight) launch_check "$@" ;;
+    disk-check|check-disk) disk_check "$@" ;;
+    secure-storage|harden-storage) secure_storage "$@" ;;
     guest-login) bash "$PZ_ROOT/linux/windows-vm/guest-login.sh" "$@" ;;
     recover) bash "$PZ_ROOT/linux/windows-vm/recover.sh" "$@" ;;
     boot) cmd_boot "$@" ;;
@@ -2997,5 +3115,5 @@ case "$ACTION" in
     preflight|check|readiness) bash "$PZ_ROOT/linux/windows-vm/preflight.sh" "$@" ;;
     provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|launch-check|guest-login|recover|boot|media|preflight|provision)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|launch-check|disk-check|secure-storage|guest-login|recover|boot|media|preflight|provision)"; exit 1 ;;
 esac

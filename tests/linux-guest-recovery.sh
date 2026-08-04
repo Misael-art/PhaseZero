@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 # Hermetic contract checks for recovery-account secret handling.
+#
+# This suite asserts literal PowerShell and shell source fragments, so every
+# grep pattern is intentionally single-quoted and must not expand. Disabling
+# SC2016 once for the file keeps new assertions from silently reintroducing the
+# lint failure that has already broken CI twice.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -10,8 +16,6 @@ RECOVER="$ROOT/linux/windows-vm/recover.sh"
 bash -n "$SH" "$RECOVER"
 grep -Fq "\$recoveryUser = 'PZ-Recovery'" "$PS"
 grep -Fq "Get-LocalGroup -SID 'S-1-5-32-544'" "$PS"
-# Literal PowerShell contract.
-# shellcheck disable=SC2016
 grep -Fq 'Add-LocalGroupMember -Group $adminGroup' "$PS"
 grep -Fq 'SeDenyNetworkLogonRight' "$PS"
 grep -Fq 'SeDenyRemoteInteractiveLogonRight' "$PS"
@@ -20,19 +24,13 @@ grep -Fq 'recovery apply requires --password-stdin' "$SH"
 grep -Fq 'QGA unavailable; use repair-qga with VM powered off' "$SH"
 grep -Fq 'verified guest backup required before guest mutation' "$SH"
 grep -Fq 'repair-qga requires VM powered off' "$SH"
-# Literal shell source contract.
-# shellcheck disable=SC2016
 grep -Fq 'virt-customize -a "$DISK_PATH"' "$SH"
-# Literal shell source contract.
-# shellcheck disable=SC2016
 grep -Fq -- '--firstboot "$OFFLINE_WORK/qga-offline-repair.bat"' "$SH"
 grep -Fq -- 'qga-offline-repair.ps1:/ProgramData/PhaseZeroOffline/qga-offline-repair.ps1' "$SH"
 grep -Fq 'automatic rollback failed' "$SH"
 grep -Fq 'LIBGUESTFS_CACHEDIR="$guestfs_cache"' "$SH"
 grep -Fq 'at least 3 GiB free space required for offline QGA repair' "$SH"
 grep -Fq 'guest-login-diagnostics' "$SH"
-# Literal PowerShell contract.
-# shellcheck disable=SC2016
 grep -Fq 'Remove-Item -LiteralPath $payloadDir' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
 grep -Fq "Join-Path \$env:SystemRoot 'System32'" "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
 grep -Fq "Join-Path \$env:SystemRoot 'Sysnative'" "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
@@ -51,10 +49,64 @@ grep -Fq 'Set-ExchangeMappingTask' "$PS"
 grep -Fq "PhaseZero-MapExchange" "$PS"
 grep -Fq '\\10.0.2.4\qemu' "$PS"
 grep -Fq 'install -d -m 0700 "$RUNTIME_DIR" "$STATE_DIR"' "$ROOT/linux/windows-vm/windows-vm.sh"
-grep -Fq 'wait_for_transport_cycle' "$RECOVER"
 grep -Fq 'transport-verify --json' "$RECOVER"
-grep -Fq 'guest-login.sh" apply' "$RECOVER"
+grep -Fq '"$GUEST_LOGIN" apply' "$RECOVER"
 grep -Fq -- '--leave-running' "$RECOVER"
+
+# Reboot proof must come from guest boot identity, never from watching the QGA
+# socket disappear: a reboot faster than the poll interval is invisible to edge
+# detection and hangs recovery on a perfectly healthy guest.
+if grep -Fq 'wait_for_transport_cycle' "$RECOVER"; then
+    echo 'recovery still infers reboots from transport gaps' >&2
+    exit 1
+fi
+grep -Fq 'offlineRepairRebootProven == true' "$RECOVER"
+grep -Fq 'wait_for_boot_change' "$RECOVER"
+grep -Fq 'repairBootUpTime' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"
+grep -Fq 'offlineRepairRebootProven' "$PS"
+grep -Fq 'LastBootUpTime' "$PS"
+
+# $Error is a PowerShell automatic variable; using it as a parameter name is a
+# PSScriptAnalyzer Error and blocks the whole lint job.
+if grep -Eq '\[string\]\$Error\b' "$ROOT/linux/windows-vm/qga-offline-repair.ps1"; then
+    echo 'offline repair shadows the automatic $Error variable' >&2
+    exit 1
+fi
+
+# The VM is started by recover.sh, so recover.sh must be able to stop it.
+grep -Fq 'stop_vm' "$RECOVER"
+grep -Fq 'kill -KILL' "$RECOVER"
+grep -Fq 'disk-check' "$RECOVER"
+grep -Fq 'setsid bash' "$RECOVER"
+
+# Adapter presence is not acceleration. Readiness must not be satisfied by the
+# Microsoft Basic Display Adapter or a bare QXL controller.
+grep -Fq 'graphicsAccelerationVerified' "$PS"
+grep -Fq 'basicDisplayAdapterOnly' "$PS"
+grep -Fq 'Get-WddmVersion' "$PS"
+grep -Fq 'graphicsAccelerationVerified == true' "$RECOVER"
+# Public DNS resolution is diagnostic; an offline guest is still a valid guest.
+grep -Fq 'dnsServersConfigured == true' "$RECOVER"
+if grep -Fq '.dnsReady == true' "$RECOVER"; then
+    echo 'recovery readiness still requires public DNS resolution' >&2
+    exit 1
+fi
+
+# libguestfs firstboot needs RHSrvAny; resolving it explicitly is what makes the
+# repair reproducible on a host that did not receive a manual copy.
+grep -Fq 'VIRT_TOOLS_DATA_DIR="$virt_tools_dir"' "$SH"
+grep -Fq 'resolve_virt_tools_dir' "$SH"
+grep -Fq 'repair-preflight' "$RECOVER"
+
+# Backups must not inherit a world-readable mode from an adopted disk.
+grep -Fq 'chmod 0600 "$disk_backup"' "$SH"
+grep -Fq 'prune_guest_backups' "$SH"
+if grep -Fq -- '--preserve=mode,timestamps' "$SH"; then
+    echo 'guest backup still inherits the source disk mode' >&2
+    exit 1
+fi
+grep -Fq 'harden_vm_storage_modes' "$ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'install -d -m 0700 "$VM_DIR" "$STATE_DIR"' "$ROOT/linux/windows-vm/windows-vm.sh"
 if grep -Eq -- 'PASSWORD=.*(echo|log|arg)' "$RECOVER"; then
     echo 'recovery orchestration may leak password' >&2
     exit 1
@@ -68,13 +120,12 @@ fi
 offline_fixture() {
     local dir="$1" mode="$2"
     local trusted_sha
-    mkdir -p "$dir/bin" "$dir/vm/tpm" "$dir/state" "$dir/config"
+    mkdir -p "$dir/bin" "$dir/vm/tpm" "$dir/state" "$dir/config" "$dir/virt-tools"
+    printf 'rhsrvany\n' > "$dir/virt-tools/rhsrvany.exe"
     printf 'original-qcow2\n' > "$dir/vm/phasezero-windows.qcow2"
     printf 'ovmf\n' > "$dir/vm/OVMF_VARS.fd"
     printf 'tpm\n' > "$dir/vm/tpm/state"
     printf 'virtio\n' > "$dir/virtio-win.iso"
-    # Writing a fake executable verbatim.
-    # shellcheck disable=SC2016
     printf '%s\n' \
         '#!/usr/bin/env bash' \
         'case "$1" in' \
@@ -82,8 +133,6 @@ offline_fixture() {
         '  info) printf '\''{"format":"qcow2","virtual-size":4096}\n'\'' ;;' \
         '  *) exit 2 ;;' \
         'esac' > "$dir/bin/qemu-img"
-    # Writing a fake executable verbatim.
-    # shellcheck disable=SC2016
     printf '%s\n' \
         '#!/usr/bin/env bash' \
         'printf '\''%s\n'\'' "$@" > "$PZ_TEST_VIRT_ARGS"' \
@@ -100,9 +149,10 @@ offline_fixture() {
     PZ_WINDOWS_VM_OVMF_VARS="$dir/vm/OVMF_VARS.fd" PZ_WINDOWS_VM_TPM_DIR="$dir/vm/tpm" \
     PZ_WINDOWS_VM_VIRTIO_ISO="$dir/virtio-win.iso" \
     PZ_WINDOWS_VM_VIRTIO_SHA256="$trusted_sha" \
+    PZ_WINDOWS_VM_VIRT_TOOLS_DIR="${PZ_TEST_VIRT_TOOLS_DIR-$dir/virt-tools}" \
     XDG_STATE_HOME="$dir/state" XDG_CONFIG_HOME="$dir/config" XDG_RUNTIME_DIR=/tmp \
     HOME="$dir/home" PATH="$dir/bin:$PATH" \
-        bash "$SH" repair-qga --json
+        bash "$SH" "${PZ_TEST_ACTION:-repair-qga}" --json
 }
 
 # Use persistent /tmp, not Codex's per-user runtime tmpfs: repair-qga
@@ -144,5 +194,81 @@ grep -Fq 'SHA-256 mismatch' <<<"$hash_output"
 [ ! -e "$tmp_hash/virt.args" ]
 [ ! -d "$tmp_hash/state/phasezero/windows-vm/guest-login-backups" ]
 rm -rf -- "$tmp_hash"
+
+tmp_preflight="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+preflight_json="$(PZ_TEST_ACTION=repair-preflight offline_fixture "$tmp_preflight" success)"
+printf '%s\n' "$preflight_json" | jq -e '.success == true and .ready == true and (.missing | length) == 0' >/dev/null
+printf '%s\n' "$preflight_json" | jq -e '(.virtToolsDir | endswith("/virt-tools"))' >/dev/null
+
+# A host without the libguestfs firstboot helper must be told before anything is
+# copied, not after a backup and a rollback.
+set +e
+missing_json="$(PZ_TEST_ACTION=repair-preflight PZ_TEST_VIRT_TOOLS_DIR="$tmp_preflight/absent" \
+    PZ_STATE="$tmp_preflight/absent-state" offline_fixture "$tmp_preflight" success 2>/dev/null)"
+missing_rc=$?
+set -e
+if [ ! -r /usr/share/virt-tools/rhsrvany.exe ] && [ ! -r /usr/lib/virt-tools/rhsrvany.exe ]; then
+    [ "$missing_rc" -ne 0 ]
+    printf '%s\n' "$missing_json" | jq -e '.ready == false and (.missing | length) > 0' >/dev/null
+fi
+rm -rf -- "$tmp_preflight"
+
+# Retention: bounded by count, and never willing to drop the last recoverable
+# copy whatever the limits say.
+tmp_prune="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+prune_root="$tmp_prune/state/phasezero/windows-vm/guest-login-backups"
+mkdir -p "$prune_root"
+for day in 1 2 3 4 5 6; do
+    mkdir -p "$prune_root/2026010${day}T000000Z"
+    printf '{"schemaVersion":1}\n' > "$prune_root/2026010${day}T000000Z/manifest.json"
+    touch -d "2026-01-0${day} 00:00:00" "$prune_root/2026010${day}T000000Z/manifest.json"
+done
+# A directory whose copy was interrupted has no manifest and is unrecoverable.
+mkdir -p "$prune_root/20260107T000000Z.partial"
+prune_json="$(XDG_STATE_HOME="$tmp_prune/state" HOME="$tmp_prune/home" \
+    PZ_WINDOWS_VM_BACKUP_KEEP=2 PZ_WINDOWS_VM_BACKUP_MAX_AGE_DAYS=99999 \
+    PZ_WINDOWS_VM_BACKUP_MIN_FREE_GIB=0 \
+    bash "$SH" prune-backups --json)"
+printf '%s\n' "$prune_json" | jq -e '.success == true and .prunedBackups == 5' >/dev/null
+[ "$(find "$prune_root" -mindepth 2 -maxdepth 2 -name manifest.json | wc -l)" -eq 2 ]
+[ ! -d "$prune_root/20260107T000000Z.partial" ]
+
+# Age alone must not empty the store: the newest copy survives.
+touch -d '2000-01-01 00:00:00' "$prune_root"/*/manifest.json
+XDG_STATE_HOME="$tmp_prune/state" HOME="$tmp_prune/home" \
+    PZ_WINDOWS_VM_BACKUP_KEEP=2 PZ_WINDOWS_VM_BACKUP_MAX_AGE_DAYS=1 \
+    PZ_WINDOWS_VM_BACKUP_MIN_FREE_GIB=0 \
+    bash "$SH" prune-backups --json >/dev/null
+[ "$(find "$prune_root" -mindepth 2 -maxdepth 2 -name manifest.json | wc -l)" -eq 1 ]
+
+# Space pressure prunes further but still stops at the last recoverable copy.
+for day in 1 2 3; do
+    mkdir -p "$prune_root/2026020${day}T000000Z"
+    printf '{"schemaVersion":1}\n' > "$prune_root/2026020${day}T000000Z/manifest.json"
+done
+XDG_STATE_HOME="$tmp_prune/state" HOME="$tmp_prune/home" \
+    PZ_WINDOWS_VM_BACKUP_KEEP=99 PZ_WINDOWS_VM_BACKUP_MAX_AGE_DAYS=99999 \
+    PZ_WINDOWS_VM_BACKUP_MIN_FREE_GIB=999999 \
+    bash "$SH" prune-backups --json >/dev/null
+[ "$(find "$prune_root" -mindepth 2 -maxdepth 2 -name manifest.json | wc -l)" -eq 1 ]
+rm -rf -- "$tmp_prune"
+
+# recover.sh must abort on the preflight, before it takes a backup or starts
+# QEMU. An unsafe tmpfs root fails the gate deterministically on every host,
+# including one that happens to ship the libguestfs firstboot helper.
+tmp_recover="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+mkdir -p "$tmp_recover/state" "$tmp_recover/unsafe-runtime"
+set +e
+recover_output="$(XDG_STATE_HOME="$tmp_recover/state" XDG_CONFIG_HOME="$tmp_recover/config" \
+    HOME="$tmp_recover/home" XDG_RUNTIME_DIR="$tmp_recover/unsafe-runtime" \
+    bash "$RECOVER" --mode auto --json 2>&1)"
+recover_rc=$?
+set -e
+[ "$recover_rc" -ne 0 ]
+printf '%s\n' "$recover_output" | jq -e -s \
+    'map(select(.phase == "preflight")) | length == 1 and .[0].success == false' >/dev/null
+# Nothing may have been created before the gate fired.
+[ ! -d "$tmp_recover/state/phasezero/windows-vm/guest-login-backups" ]
+rm -rf -- "$tmp_recover"
 
 echo 'guest recovery secret and local-only contracts ok'

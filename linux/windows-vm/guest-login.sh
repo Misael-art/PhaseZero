@@ -36,6 +36,12 @@ BACKUP_PROOF=""
 LOCAL_ONLY=1
 OFFLINE_WORK=""
 OFFLINE_LOCK_FD=""
+BACKUP_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/guest-login-backups"
+# Retention is bounded by count, age and free space at once. Unlimited history
+# is a slow-motion disk exhaustion bug even with reflink-backed copies.
+BACKUP_KEEP="${PZ_WINDOWS_VM_BACKUP_KEEP:-4}"
+BACKUP_MAX_AGE_DAYS="${PZ_WINDOWS_VM_BACKUP_MAX_AGE_DAYS:-30}"
+BACKUP_MIN_FREE_GIB="${PZ_WINDOWS_VM_BACKUP_MIN_FREE_GIB:-10}"
 
 RECOVERY_STATUS_FILE="$PZ_STATE/windows-vm/guest-login-recovery.json"
 
@@ -116,9 +122,66 @@ validate_managed_vm_paths() {
 }
 
 latest_backup_manifest() {
-    find "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/guest-login-backups" \
+    find "$BACKUP_ROOT" \
         -mindepth 2 -maxdepth 2 -type f -name manifest.json -printf '%T@ %p\n' 2>/dev/null \
         | sort -nr | head -1 | cut -d' ' -f2-
+}
+
+# A backup only counts as recoverable when it still carries a manifest.  Partial
+# directories left by an interrupted copy are pruned first and never protected.
+recoverable_backups() {
+    find "$BACKUP_ROOT" -mindepth 2 -maxdepth 2 -type f -name manifest.json \
+        -printf '%T@ %h\n' 2>/dev/null | sort -nr | cut -d' ' -f2-
+}
+
+prune_guest_backups() {
+    [ -d "$BACKUP_ROOT" ] || return 0
+    [[ "$BACKUP_KEEP" =~ ^[0-9]+$ ]] && [ "$BACKUP_KEEP" -ge 1 ] || BACKUP_KEEP=4
+    [[ "$BACKUP_MAX_AGE_DAYS" =~ ^[0-9]+$ ]] || BACKUP_MAX_AGE_DAYS=30
+    [[ "$BACKUP_MIN_FREE_GIB" =~ ^[0-9]+$ ]] || BACKUP_MIN_FREE_GIB=10
+
+    local dir keep_cutoff index=0 removed=0 age_epoch free_kb
+    # Manifest-less leftovers are unrecoverable by definition; drop them first so
+    # they never occupy a retention slot.
+    while IFS= read -r dir; do
+        [ -n "$dir" ] || continue
+        [ -f "$dir/manifest.json" ] && continue
+        rm -rf -- "$dir" && removed=$((removed + 1))
+    done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+
+    age_epoch=$(( $(date +%s) - BACKUP_MAX_AGE_DAYS * 86400 ))
+    local -a keep=() drop=()
+    while IFS= read -r dir; do
+        [ -n "$dir" ] || continue
+        index=$((index + 1))
+        keep_cutoff="$(stat -c %Y "$dir/manifest.json" 2>/dev/null || echo 0)"
+        # Newest BACKUP_KEEP are always kept, including the last known good one.
+        if [ "$index" -le "$BACKUP_KEEP" ] && [ "$keep_cutoff" -ge "$age_epoch" ]; then
+            keep+=("$dir")
+        else
+            drop+=("$dir")
+        fi
+    done < <(recoverable_backups)
+
+    # Never delete the only recoverable copy, whatever the age or count limit says.
+    if [ "${#keep[@]}" -eq 0 ] && [ "${#drop[@]}" -gt 0 ]; then
+        keep+=("${drop[0]}")
+        drop=("${drop[@]:1}")
+    fi
+    for dir in ${drop[@]+"${drop[@]}"}; do
+        rm -rf -- "$dir" && removed=$((removed + 1))
+    done
+
+    # Space pressure prunes further, still refusing to drop the last copy.
+    while :; do
+        free_kb="$(df -Pk "$BACKUP_ROOT" 2>/dev/null | awk 'NR == 2 { print $4 }')"
+        [[ "$free_kb" =~ ^[0-9]+$ ]] || break
+        [ "$free_kb" -lt $((BACKUP_MIN_FREE_GIB * 1048576)) ] || break
+        mapfile -t keep < <(recoverable_backups)
+        [ "${#keep[@]}" -gt 1 ] || break
+        rm -rf -- "${keep[-1]}" && removed=$((removed + 1))
+    done
+    printf '%s' "$removed"
 }
 
 backup_guest() {
@@ -127,21 +190,26 @@ backup_guest() {
     validate_managed_vm_paths || return 1
     ! vm_uses_disk || { pz_error "guest backup requires VM powered off"; return 1; }
     qemu-img check "$DISK_PATH" >/dev/null || { pz_error "guest disk integrity check failed"; return 1; }
-    local root stamp dir disk_backup manifest manifest_tmp source_info
-    root="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/guest-login-backups"
+    local stamp dir disk_backup manifest manifest_tmp source_info pruned
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-    install -d -m 0700 "$root" || return 1
-    dir="$(mktemp -d "$root/${stamp}.XXXXXX")" || return 1
+    install -d -m 0700 "$BACKUP_ROOT" || return 1
+    pruned="$(prune_guest_backups)"
+    dir="$(mktemp -d "$BACKUP_ROOT/${stamp}.XXXXXX")" || return 1
     chmod 0700 "$dir" || { rm -rf -- "$dir"; return 1; }
     disk_backup="$dir/$(basename "$DISK_PATH")"
-    cp --reflink=auto --sparse=always --preserve=mode,timestamps "$DISK_PATH" "$disk_backup" || {
+    # Deliberately not --preserve=mode: an adopted disk may be world-readable and
+    # the backup must never inherit that.  Ownership stays with the caller.
+    cp --reflink=auto --sparse=always --preserve=timestamps "$DISK_PATH" "$disk_backup" || {
         rm -rf -- "$dir"; return 1;
     }
-    if [ -f "$OVMF_VARS" ] && ! cp -a "$OVMF_VARS" "$dir/OVMF_VARS.fd"; then
-        rm -rf -- "$dir"; return 1
+    chmod 0600 "$disk_backup" || { rm -rf -- "$dir"; return 1; }
+    if [ -f "$OVMF_VARS" ]; then
+        cp -a "$OVMF_VARS" "$dir/OVMF_VARS.fd" || { rm -rf -- "$dir"; return 1; }
+        chmod 0600 "$dir/OVMF_VARS.fd" || { rm -rf -- "$dir"; return 1; }
     fi
-    if [ -d "$TPM_DIR" ] && ! cp -a "$TPM_DIR" "$dir/tpm"; then
-        rm -rf -- "$dir"; return 1
+    if [ -d "$TPM_DIR" ]; then
+        cp -a "$TPM_DIR" "$dir/tpm" || { rm -rf -- "$dir"; return 1; }
+        chmod -R go-rwx "$dir/tpm" || { rm -rf -- "$dir"; return 1; }
     fi
     qemu-img check "$disk_backup" >/dev/null || { rm -rf -- "$dir"; return 1; }
     source_info="$(qemu-img info --output=json "$DISK_PATH")" || { rm -rf -- "$dir"; return 1; }
@@ -158,7 +226,8 @@ backup_guest() {
     if ! chmod 0600 "$manifest_tmp" || ! mv "$manifest_tmp" "$manifest"; then
         rm -rf -- "$dir"; return 1;
     fi
-    jq -n --arg backup "$dir" --arg manifest "$manifest" '{success:true,backup:$backup,manifest:$manifest}'
+    jq -n --arg backup "$dir" --arg manifest "$manifest" --argjson pruned "${pruned:-0}" \
+        '{success:true,backup:$backup,manifest:$manifest,prunedBackups:$pruned}'
 }
 
 restore_guest() {
@@ -169,7 +238,7 @@ restore_guest() {
     validate_managed_vm_paths || return 1
     ! vm_uses_disk || { pz_error "guest restore requires VM powered off"; return 1; }
     local source backup dir backup_root manifest_real backup_real restore_tmp ovmf_tmp tpm_tmp tpm_old
-    backup_root="$(realpath -m "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/guest-login-backups")"
+    backup_root="$(realpath -m "$BACKUP_ROOT")"
     manifest_real="$(realpath -e "$manifest" 2>/dev/null)" || return 1
     case "$manifest_real" in "$backup_root"/*/manifest.json) ;; *) pz_error "unsafe backup manifest refused"; return 1 ;; esac
     source="$(jq -er '.sourceDisk' "$manifest_real")" || return 1
@@ -180,9 +249,10 @@ restore_guest() {
     case "$backup_real" in "$dir"/*) ;; *) pz_error "unsafe backup disk path refused"; return 1 ;; esac
     qemu-img check "$backup_real" >/dev/null || return 1
     restore_tmp="$(mktemp "$VM_DIR/.phasezero-disk-restore.XXXXXX")" || return 1
-    cp --reflink=auto --sparse=always --preserve=mode,timestamps "$backup_real" "$restore_tmp" || {
+    cp --reflink=auto --sparse=always --preserve=timestamps "$backup_real" "$restore_tmp" || {
         rm -f -- "$restore_tmp"; return 1;
     }
+    chmod 0600 "$restore_tmp" || { rm -f -- "$restore_tmp"; return 1; }
     qemu-img check "$restore_tmp" >/dev/null || { rm -f -- "$restore_tmp"; return 1; }
     if [ -f "$dir/OVMF_VARS.fd" ]; then
         ovmf_tmp="$(mktemp "$VM_DIR/.phasezero-ovmf-restore.XXXXXX")" || { rm -f -- "$restore_tmp"; return 1; }
@@ -274,7 +344,10 @@ verify_transport() {
     record_recovery_phase transport-verified "$manifest" || return 1
     printf '%s\n' "$result" | jq --arg phase transport-verified \
         '{success:true,phase:$phase,qgaAvailable:true,qgaServiceHealthy:(.qgaServiceHealthy == true),
-          loggedOnUser,explorerReady,networkReady,dnsReady,exchangeMapped,audioReady,graphicsAdapters,graphicsReady}'
+          loggedOnUser,explorerReady,networkReady,dnsReady,dnsServersConfigured,exchangeMapped,audioReady,
+          graphicsAdapters,graphicsReady,displayAdapterPresent,graphicsDriver,graphicsDriverVersion,
+          wddmVersion,basicDisplayAdapterOnly,direct3DReady,graphicsAccelerationVerified,
+          lastBootUpTime,offlineRepairPhase,offlineRepairBootUpTime,offlineRepairRebootProven}'
 }
 
 guest_status() {
@@ -289,8 +362,11 @@ guest_status() {
     printf '%s\n' "$result" | jq '{guestLoginPolicy:.policy,
         guestLoginVerified:(.configured == true and .registryPasswordStored == false),
         qgaAvailable:true,qgaServiceHealthy:(.qgaServiceHealthy == true),
-        loggedOnUser,explorerReady,networkReady,dnsReady,exchangeMapped,audioReady,
-        graphicsAdapters,graphicsReady,lastVerifiedAt,error:null}'
+        loggedOnUser,explorerReady,networkReady,dnsReady,dnsServersConfigured,exchangeMapped,audioReady,
+        graphicsAdapters,graphicsReady,displayAdapterPresent,graphicsDriver,graphicsDriverVersion,
+        wddmVersion,basicDisplayAdapterOnly,direct3DReady,graphicsAccelerationVerified,
+        lastBootUpTime,offlineRepairPhase,offlineRepairBootUpTime,offlineRepairRebootProven,
+        lastVerifiedAt,error:null}'
 }
 
 recovery_status() {
@@ -353,6 +429,67 @@ recovery_toggle() {
         qgaAvailable:true,error:null}'
 }
 
+# libguestfs hosts Windows --firstboot payloads with RHSrvAny (or pvvxsvc), a
+# data file distributions disagree about shipping: Fedora provides it through
+# virt-v2v, Arch ships neither.  Resolving it explicitly and handing the
+# directory to virt-customize makes the repair reproducible on any host instead
+# of depending on whatever libguestfs was compiled to look for.
+resolve_virt_tools_dir() {
+    local candidate
+    for candidate in "${PZ_WINDOWS_VM_VIRT_TOOLS_DIR:-}" "${VIRT_TOOLS_DATA_DIR:-}" \
+        /usr/share/virt-tools /usr/lib/virt-tools /usr/local/share/virt-tools \
+        "$PZ_STATE/windows-vm/virt-tools"; do
+        [ -n "$candidate" ] || continue
+        if [ -r "$candidate/rhsrvany.exe" ] || [ -r "$candidate/pvvxsvc.exe" ]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+resolve_virtio_iso() {
+    local candidate
+    for candidate in "${PZ_WINDOWS_VM_VIRTIO_ISO:-}" "$VM_DIR/virtio-win.iso" \
+        "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/vm/virtio-win.iso"; do
+        if [ -n "$candidate" ] && [ -r "$candidate" ]; then
+            printf '%s' "$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Every requirement is proven before the first mutation. Failing here costs
+# nothing; failing after the backup costs a rollback and a confusing log.
+repair_preflight() {
+    local virtio_iso tools_dir runtime_base
+    local -a missing=()
+    command -v virt-customize >/dev/null 2>&1 || missing+=("virt-customize (libguestfs)")
+    command -v qemu-img >/dev/null 2>&1 || missing+=("qemu-img")
+    virtio_iso="$(resolve_virtio_iso || true)"
+    [ -n "$virtio_iso" ] || missing+=("verified virtio-win.iso (set PZ_WINDOWS_VM_VIRTIO_ISO)")
+    tools_dir="$(resolve_virt_tools_dir || true)"
+    [ -n "$tools_dir" ] || missing+=("rhsrvany.exe or pvvxsvc.exe under a virt-tools directory (set PZ_WINDOWS_VM_VIRT_TOOLS_DIR)")
+    runtime_base="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+    case "$runtime_base" in "/run/user/$(id -u)"|"/tmp") ;; *) missing+=("safe tmpfs runtime root") ;; esac
+    if [ "${#missing[@]}" -gt 0 ]; then
+        if [ "$JSON_OUT" = "1" ]; then
+            printf '%s\n' "${missing[@]}" | jq -R -s \
+                '{success:false,ready:false,missing:(split("\n") | map(select(length > 0)))}'
+        else
+            pz_error "offline QGA repair prerequisites missing: ${missing[*]}"
+        fi
+        return 1
+    fi
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg virtioIso "$virtio_iso" --arg virtToolsDir "$tools_dir" \
+            '{success:true,ready:true,missing:[],virtioIso:$virtioIso,virtToolsDir:$virtToolsDir}'
+    else
+        pz_info "offline QGA repair prerequisites satisfied (virt-tools: $tools_dir)"
+    fi
+}
+
 repair_qga() {
     # Offline repair needs a powered-off image and a verified rollback point.
     # Refuse rather than editing SAM/registry hives directly or retaining a
@@ -361,15 +498,17 @@ repair_qga() {
     ! vm_uses_disk || { pz_error "repair-qga requires VM powered off"; return 1; }
     qemu-img check "$DISK_PATH" >/dev/null
     command -v virt-customize >/dev/null 2>&1 || { pz_error "libguestfs/virt-customize unavailable; offline repair refused"; return 1; }
-    local virtio_iso="${PZ_WINDOWS_VM_VIRTIO_ISO:-}" virtio_sha_expected virtio_sha_actual
+    local virtio_iso virt_tools_dir virtio_sha_expected virtio_sha_actual
     local backup_json manifest runtime_base guestfs_root guestfs_tmp guestfs_cache
     local guestfs_avail_kb diagnostic_root diagnostic rc
-    for candidate in "$virtio_iso" "$VM_DIR/virtio-win.iso" \
-        "${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm/vm/virtio-win.iso"; do
-        if [ -n "$candidate" ] && [ -r "$candidate" ]; then virtio_iso="$candidate"; break; fi
-    done
+    virtio_iso="$(resolve_virtio_iso || true)"
     if [ -z "$virtio_iso" ] || [ ! -r "$virtio_iso" ]; then
         pz_error "verified virtio-win.iso required for offline QGA repair"
+        return 1
+    fi
+    virt_tools_dir="$(resolve_virt_tools_dir || true)"
+    if [ -z "$virt_tools_dir" ]; then
+        pz_error "libguestfs Windows firstboot helper (rhsrvany.exe/pvvxsvc.exe) not found; install virt-v2v or set PZ_WINDOWS_VM_VIRT_TOOLS_DIR"
         return 1
     fi
     virtio_sha_expected="${PZ_WINDOWS_VM_VIRTIO_SHA256:-e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976331}"
@@ -418,6 +557,7 @@ repair_qga() {
     chmod 0600 "$OFFLINE_WORK/qga-offline-repair.ps1" "$OFFLINE_WORK/qga-offline-repair.bat"
     set +e
     TMPDIR="$guestfs_tmp" LIBGUESTFS_CACHEDIR="$guestfs_cache" \
+        VIRT_TOOLS_DATA_DIR="$virt_tools_dir" \
         timeout --signal=TERM --kill-after=20s 10m virt-customize -a "$DISK_PATH" \
         --mkdir /ProgramData/PhaseZeroOffline \
         --upload "$virtio_iso:/ProgramData/PhaseZeroOffline/virtio-win.iso" \
@@ -498,10 +638,15 @@ case "$ACTION" in
             *) pz_error "usage: guest-login recovery (status|apply|rotate|enable|disable)"; exit 2 ;;
         esac ;;
     repair-qga) repair_qga ;;
+    repair-preflight) repair_preflight ;;
+    prune-backups)
+        pruned="$(prune_guest_backups)"
+        jq -n --argjson pruned "${pruned:-0}" --arg root "$BACKUP_ROOT" \
+            '{success:true,prunedBackups:$pruned,backupRoot:$root}' ;;
     transport-verify) verify_transport ;;
     reboot) guest_power reboot ;;
     shutdown) guest_power powerdown ;;
-    *) pz_error "usage: pz windows-vm guest-login (status|backup|apply|recovery|repair-qga|transport-verify|rollback|restore|reboot|shutdown)"; exit 2 ;;
+    *) pz_error "usage: pz windows-vm guest-login (status|backup|prune-backups|apply|recovery|repair-qga|repair-preflight|transport-verify|rollback|restore|reboot|shutdown)"; exit 2 ;;
 esac
 rc=$?
 set -e

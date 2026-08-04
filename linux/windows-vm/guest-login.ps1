@@ -111,21 +111,86 @@ public static class PhaseZeroLsa {
 '@
 }
 
+function Get-WddmVersion {
+    # Only a real WDDM display driver publishes a WddmVersion under its device
+    # class key.  The encoding is (major << 12) | minor, e.g. 0x2007 = WDDM 2.7.
+    $classKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
+    if (-not (Test-Path -LiteralPath $classKey)) { return '' }
+    foreach ($child in Get-ChildItem -LiteralPath $classKey -ErrorAction SilentlyContinue) {
+        if ($child.PSChildName -notmatch '^\d{4}$') { continue }
+        foreach ($name in @('WddmVersion', 'WddmVersion_Max', 'WddmVersion_Min')) {
+            $raw = (Get-ItemProperty -LiteralPath $child.PSPath -Name $name -ErrorAction SilentlyContinue).$name
+            if ($raw -is [int] -and $raw -gt 0) {
+                return ('{0}.{1}' -f ($raw -shr 12), ($raw -band 0xFFF))
+            }
+        }
+    }
+    return ''
+}
+
+function Get-GraphicsStatus {
+    # "Display adapter exists" is not "graphics acceleration works".  QXL and the
+    # Microsoft Basic Display Adapter both satisfy the former while offering no
+    # 3D pipeline, so each fact is reported separately and only the composite
+    # signal may gate readiness.
+    $status = [ordered]@{
+        graphicsAdapters = @()
+        displayAdapterPresent = $false
+        graphicsDriver = ''
+        graphicsDriverVersion = ''
+        wddmVersion = ''
+        basicDisplayAdapterOnly = $false
+        direct3DReady = $false
+        graphicsAccelerationVerified = $false
+    }
+    try {
+        $controllers = @(Get-CimInstance Win32_VideoController -ErrorAction Stop)
+        $status.graphicsAdapters = @($controllers | ForEach-Object { $_.Name } | Where-Object { $_ })
+        $status.displayAdapterPresent = $status.graphicsAdapters.Count -gt 0
+        $accelerated = @($controllers | Where-Object {
+            $_.ConfigManagerErrorCode -eq 0 -and
+            $_.Name -notmatch 'Basic Display|Basic Render|Standard VGA'
+        })
+        $status.basicDisplayAdapterOnly = ($status.displayAdapterPresent -and $accelerated.Count -eq 0)
+        $primary = if ($accelerated.Count -gt 0) { $accelerated[0] }
+                   elseif ($controllers.Count -gt 0) { $controllers[0] }
+                   else { $null }
+        if ($primary) {
+            $status.graphicsDriver = [string]$primary.AdapterCompatibility
+            $status.graphicsDriverVersion = [string]$primary.DriverVersion
+            # A driver with a working 3D pipeline registers user-mode display
+            # driver DLLs; the basic fallback adapter registers none.
+            $umd = @(@($primary.InstalledDisplayDrivers) | Where-Object { $_ })
+            $status.direct3DReady = (-not $status.basicDisplayAdapterOnly) -and $umd.Count -gt 0
+        }
+        $status.wddmVersion = Get-WddmVersion
+        $status.graphicsAccelerationVerified = ($status.direct3DReady -and [bool]$status.wddmVersion)
+    } catch { Write-Verbose 'Graphics readiness probe unavailable' }
+    $status
+}
+
 function Get-GuestRuntimeStatus {
     # Status must remain available while networking or optional virtio devices
     # are still coming up.  Each probe therefore degrades to false instead of
     # turning a login-policy query into a QGA failure.
     $networkReady = $false
     $dnsReady = $false
+    $dnsServersConfigured = $false
     $exchangeMapped = $false
     $audioReady = $false
-    $graphicsAdapters = @()
     $explorerReady = $false
+    $lastBootUpTime = ''
     try {
         $networkReady = @(Get-NetIPConfiguration -ErrorAction Stop |
             Where-Object { $_.IPv4DefaultGateway -and $_.NetAdapter.Status -eq 'Up' }).Count -gt 0
     } catch { Write-Verbose 'Network readiness probe unavailable' }
     try {
+        $dnsServersConfigured = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object { @($_.ServerAddresses).Count -gt 0 }).Count -gt 0
+    } catch { Write-Verbose 'DNS configuration probe unavailable' }
+    try {
+        # Public resolution is diagnostic only: an offline or filtered network is
+        # a legitimate guest state and must not fail provisioning.
         $dnsReady = @(Resolve-DnsName -Name microsoft.com -Type A -DnsOnly -QuickTimeout -ErrorAction Stop).Count -gt 0
     } catch { Write-Verbose 'DNS readiness probe unavailable' }
     try {
@@ -139,20 +204,56 @@ function Get-GuestRuntimeStatus {
         $audioReady = @(Get-CimInstance Win32_SoundDevice -ErrorAction Stop |
             Where-Object { $_.Status -eq 'OK' }).Count -gt 0
     } catch { Write-Verbose 'Audio readiness probe unavailable' }
-    try {
-        $graphicsAdapters = @(Get-CimInstance Win32_VideoController -ErrorAction Stop |
-            ForEach-Object { $_.Name } | Where-Object { $_ })
-    } catch { Write-Verbose 'Graphics readiness probe unavailable' }
     try { $explorerReady = @(Get-Process explorer -ErrorAction Stop).Count -gt 0 } catch { Write-Verbose 'Explorer readiness probe unavailable' }
+    try {
+        $lastBootUpTime = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime().ToString('o')
+    } catch { Write-Verbose 'Boot time probe unavailable' }
+    $graphics = Get-GraphicsStatus
+    $repair = Get-OfflineRepairStatus $lastBootUpTime
     [ordered]@{
         networkReady = [bool]$networkReady
         dnsReady = [bool]$dnsReady
+        dnsServersConfigured = [bool]$dnsServersConfigured
         exchangeMapped = [bool]$exchangeMapped
         audioReady = [bool]$audioReady
-        graphicsAdapters = $graphicsAdapters
-        graphicsReady = ($graphicsAdapters.Count -gt 0)
+        graphicsAdapters = $graphics.graphicsAdapters
+        # Retained for compatibility: presence of an adapter, nothing more.
+        graphicsReady = [bool]$graphics.displayAdapterPresent
+        displayAdapterPresent = [bool]$graphics.displayAdapterPresent
+        graphicsDriver = $graphics.graphicsDriver
+        graphicsDriverVersion = $graphics.graphicsDriverVersion
+        wddmVersion = $graphics.wddmVersion
+        basicDisplayAdapterOnly = [bool]$graphics.basicDisplayAdapterOnly
+        direct3DReady = [bool]$graphics.direct3DReady
+        graphicsAccelerationVerified = [bool]$graphics.graphicsAccelerationVerified
         explorerReady = [bool]$explorerReady
+        lastBootUpTime = $lastBootUpTime
+        offlineRepairPhase = $repair.offlineRepairPhase
+        offlineRepairBootUpTime = $repair.offlineRepairBootUpTime
+        offlineRepairRebootProven = [bool]$repair.offlineRepairRebootProven
     }
+}
+
+function Get-OfflineRepairStatus([string]$LastBootUpTime) {
+    # The offline repair records the boot it ran on. Comparing that against the
+    # current boot proves the scheduled reboot happened, which a transport-gap
+    # heuristic cannot do reliably.
+    $result = [ordered]@{
+        offlineRepairPhase = ''
+        offlineRepairBootUpTime = ''
+        offlineRepairRebootProven = $true
+    }
+    $repairFile = Join-Path $policyDir 'qga-offline-repair.json'
+    if (-not (Test-Path -LiteralPath $repairFile)) { return $result }
+    try {
+        $repair = Get-Content -LiteralPath $repairFile -Raw | ConvertFrom-Json
+        $result.offlineRepairPhase = [string]$repair.phase
+        $result.offlineRepairBootUpTime = [string]$repair.repairBootUpTime
+    } catch { Write-Verbose 'Offline repair status file is unavailable or invalid'; return $result }
+    if ($result.offlineRepairBootUpTime -and $LastBootUpTime) {
+        $result.offlineRepairRebootProven = ($LastBootUpTime -ne $result.offlineRepairBootUpTime)
+    }
+    $result
 }
 
 function Get-PolicyStatus {
@@ -175,10 +276,22 @@ function Get-PolicyStatus {
         explorerReady = $runtime.explorerReady
         networkReady = $runtime.networkReady
         dnsReady = $runtime.dnsReady
+        dnsServersConfigured = $runtime.dnsServersConfigured
         exchangeMapped = $runtime.exchangeMapped
         audioReady = $runtime.audioReady
         graphicsAdapters = $runtime.graphicsAdapters
         graphicsReady = $runtime.graphicsReady
+        displayAdapterPresent = $runtime.displayAdapterPresent
+        graphicsDriver = $runtime.graphicsDriver
+        graphicsDriverVersion = $runtime.graphicsDriverVersion
+        wddmVersion = $runtime.wddmVersion
+        basicDisplayAdapterOnly = $runtime.basicDisplayAdapterOnly
+        direct3DReady = $runtime.direct3DReady
+        graphicsAccelerationVerified = $runtime.graphicsAccelerationVerified
+        lastBootUpTime = $runtime.lastBootUpTime
+        offlineRepairPhase = $runtime.offlineRepairPhase
+        offlineRepairBootUpTime = $runtime.offlineRepairBootUpTime
+        offlineRepairRebootProven = $runtime.offlineRepairRebootProven
         qgaServiceHealthy = [bool](Get-Service -Name qemu-ga -ErrorAction SilentlyContinue |
             Where-Object { $_.Status -eq 'Running' })
         lastVerifiedAt = (Get-Date).ToUniversalTime().ToString('o')
