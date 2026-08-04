@@ -25,6 +25,7 @@ JSON_OUTPUT=0
 YES=0
 FOLLOW=0
 ACCESS_MODE="${PZ_HOMELAB_ACCESS_MODE:-local}"
+HOMELAB_PROFILE="${PZ_HOMELAB_PROFILE:-}"
 APP=""
 DEST=""
 SOURCE=""
@@ -34,7 +35,7 @@ usage() {
 Usage:
   homelab-stack.sh status [--json] [--extras] [--access local|tailscale|lan]
   homelab-stack.sh plan [--json] [--extras] [--access local|tailscale|lan]
-  homelab-stack.sh up|down|restart [--extras] [--access local|tailscale|lan]
+  homelab-stack.sh up|down|restart [--extras] [--access local|tailscale|lan] [--profile <key>]
   homelab-stack.sh open <app> [--access local|tailscale|lan]
   homelab-stack.sh logs <app> [--follow]
   homelab-stack.sh backup [--extras] [--dest PATH] [--dry-run]
@@ -60,6 +61,12 @@ while [ "$#" -gt 0 ]; do
             shift
             ;;
         --access=*) ACCESS_MODE="${1#--access=}" ;;
+        --profile)
+            [ "${2:-}" ] || { pz_error "--profile requires value"; exit 2; }
+            HOMELAB_PROFILE="$2"
+            shift
+            ;;
+        --profile=*) HOMELAB_PROFILE="${1#--profile=}" ;;
         --dest)
             [ "${2:-}" ] || { pz_error "--dest requires path"; exit 2; }
             DEST="$2"
@@ -492,6 +499,14 @@ cmd_up() {
     if [ "$ACCESS_MODE" = "tailscale" ] && ! tailscale_authenticated; then
         pz_error "tailscale access requested but Tailscale is logged out; run: pz server homelab tailscale"
         return 1
+    fi
+    if [ -n "$HOMELAB_PROFILE" ]; then
+        if ! bash "$PZ_ROOT/linux/server/homelab-governor.sh" check "$HOMELAB_PROFILE" >/dev/null 2>&1; then
+            pz_error "profile $HOMELAB_PROFILE rejected by resource governor; check budget: pz server homelab governor budget $HOMELAB_PROFILE"
+            return 1
+        fi
+        mkdir -p "$HOMELAB_STATE"
+        printf '%s\n' "$HOMELAB_PROFILE" > "$HOMELAB_STATE/profile.active"
     fi
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         pz_info "dry-run: would generate .env, validate compose, and run compose up -d (project $PROJECT, extras=$WITH_EXTRAS, access=$ACCESS_MODE)"

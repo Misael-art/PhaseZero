@@ -108,6 +108,13 @@ active_profile() {
     fi
 }
 
+resource_budget_json() {
+    local prof
+    prof="$(active_profile)"
+    [ "$prof" != null ] || { echo null; return 0; }
+    bash "$PZ_ROOT/linux/server/homelab-governor.sh" budget "$prof" 2>/dev/null || echo null
+}
+
 backup_state_json() {
     local last backup_root last_file
     backup_root="$HOMELAB_STATE/backups"
@@ -202,7 +209,7 @@ build_status() {
     jq -n \
         --arg schemaVersion "$SCHEMA_VERSION" \
         --arg tool "homelab-status" \
-        --argjson profile "$profile" \
+        --arg profile "$profile" \
         --argjson installed "$installed" \
         --argjson configured "$configured" \
         --argjson active "$active" \
@@ -218,7 +225,7 @@ build_status() {
         --arg composeVer "$(compose_ver)" \
         --argjson imageDigests "$(digests_json)" \
         --argjson resourceUsage null \
-        --argjson resourceBudget null \
+        --argjson resourceBudget "$(resource_budget_json)" \
         --argjson conflicts "[]" \
         --argjson securityState "$(security_state_json)" \
         --argjson backupState "$(backup_state_json)" \

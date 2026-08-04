@@ -61,6 +61,14 @@ pz_homelab_unlock() {
     flock -u "$PZ_HOMELAB_LOCK_FD" 2>/dev/null || true
 }
 
+# --- profile registry --------------------------------------------------------
+pz_homelab_profile_valid() {
+    local f="${PZ_HOMELAB_PROFILES_FILE:-$PZ_ROOT/assets/home-server/homelab-profiles.json}"
+    [ -f "$f" ] || { pz_error "profile registry missing: $f"; return 2; }
+    jq -e --arg k "$1" '[.profiles[].key] | index($k) != null' "$f" >/dev/null 2>&1 \
+        || { pz_error "unknown homelab profile: $1"; return 2; }
+}
+
 # --- operation registry -------------------------------------------------------
 pz_homelab_op_new_id() {
     printf '%s-%s-%s\n' "$(date -u +%Y%m%dT%H%M%SZ)" "$$" "$RANDOM"
@@ -76,6 +84,7 @@ pz_homelab_op_start() {
     for kv in "$@"; do
         k="${kv%%=*}"
         v="${kv#*=}"
+        [ "$k" != "profile" ] || pz_homelab_profile_valid "$v" || return $?
         extra="$(jq -cn --argjson e "$extra" --arg k "$k" --arg v "$v" '$e + {($k):$v}')"
     done
     jq -n --arg a "$action" --arg id "$op_id" --arg t "$now" --argjson pid "$$" --argjson extra "$extra" \

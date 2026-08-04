@@ -171,7 +171,7 @@ echo "  status persisted ok"
 
 echo "=== operations: registry flow ==="
 OPS="$PZ_HOMELAB_STATE/operations"
-op_id="$("$REPO_ROOT/linux/server/homelab-operations.sh" start backup profile=assistant-private)"
+op_id="$("$REPO_ROOT/linux/server/homelab-operations.sh" start backup profile=assistant)"
 echo "$op_id" | rg -q '^[0-9TZ]+-[0-9]+-[0-9]+$'
 jq -e '.schemaVersion == 1 and .status == "running" and .action == "backup" and .rollbackAvailable == false' "$OPS/$op_id.json" >/dev/null
 "$REPO_ROOT/linux/server/homelab-operations.sh" step "$op_id" dump-volumes
@@ -223,6 +223,47 @@ else
 fi
 rm -f "$OPS/zz-corrupt.json"
 echo "  idempotency/corrupt ok"
+
+echo "=== profiles: registry + resource governor ==="
+profile_list="$("$REPO_ROOT/linux/server/homelab-governor.sh" list)"
+printf '%s\n' "$profile_list" | jq -e --argjson keys '["core","media","cloud","assistant","monitoring","edge"]' \
+  '.schemaVersion == 1 and (.profiles|length) == 6 and ([.profiles[].key] | sort) == ($keys|sort) and .default == "core" and all(.profiles[]; (.title|length>0) and (.services|type=="array"))' >/dev/null
+echo "  registry 6 profiles ok"
+"$REPO_ROOT/linux/server/homelab-governor.sh" weights | jq -e '.weightsMB.jellyfin == 2048 and (.weightsMB|length) == 12' >/dev/null
+echo "  weights ok"
+if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=3000 "$REPO_ROOT/linux/server/homelab-governor.sh" check media >/dev/null 2>&1; then
+    echo "FAIL: overcommit check passed"; exit 1
+fi
+echo "  overcommit fails closed ok"
+if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=0 "$REPO_ROOT/linux/server/homelab-governor.sh" check core >/dev/null 2>&1; then
+    echo "FAIL: zero-RAM check passed"; exit 1
+fi
+PZ_HOMELAB_RAM_TOTAL_OVERRIDE=8192 "$REPO_ROOT/linux/server/homelab-governor.sh" budget media | jq -e '.verdict == "pass" and .budgetMB == 3072' >/dev/null
+echo "  in-budget pass ok"
+if "$REPO_ROOT/linux/server/homelab-governor.sh" check bogus >/dev/null 2>&1; then
+    echo "FAIL: unknown profile accepted"; exit 1
+fi
+echo "  unknown profile rejected ok"
+if "$REPO_ROOT/linux/server/homelab-operations.sh" start apply profile=bogus >/dev/null 2>&1; then
+    echo "FAIL: ops accepted bogus profile"; exit 1
+fi
+echo "  ops profile validation ok"
+"$REPO_ROOT/linux/pz" server homelab profile list | jq -e '.profiles|length == 6' >/dev/null
+"$REPO_ROOT/linux/pz" server homelab profile set media >/dev/null
+test "$(cat "$PZ_HOMELAB_STATE/profile.active")" = "media"
+echo "  profile set ok"
+PZ_HOMELAB_RAM_TOTAL_OVERRIDE=8192 "$REPO_ROOT/linux/pz" server homelab status --json >/tmp/ps.json 2>&1 || true
+jq -e '.profile == "media" and (.resourceBudget|type=="object") and .resourceBudget.verdict == "pass"' /tmp/ps.json >/dev/null
+echo "  status budget wiring ok"
+if "$REPO_ROOT/linux/pz" server homelab profile set bogus >/dev/null 2>&1; then
+    echo "FAIL: pz set accepted bogus profile"; exit 1
+fi
+echo "  pz set validation ok"
+if PZ_DRY_RUN=1 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=512 \
+    "$REPO_ROOT/linux/pz" server homelab up --profile media >/dev/null 2>&1; then
+    echo "FAIL: up accepted overcommit profile"; exit 1
+fi
+echo "  up profile gate ok"
 
 echo "=== boot-prepare identity: marker absent is a no-op ==="
 "$REPO_ROOT/linux/server/homelab-boot-prepare.sh" 2>&1 | rg -q 'nothing to do'

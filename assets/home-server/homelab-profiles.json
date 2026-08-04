@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "tool": "homelab-profiles",
+  "default": "core",
+  "coreBaseMB": 1024,
+  "coreBaseServices": ["vaultwarden", "syncthing", "uptime-kuma"],
+  "weightsMB": {
+    "vaultwarden": 256,
+    "syncthing": 512,
+    "uptime-kuma": 256,
+    "jellyfin": 2048,
+    "nextcloud": 1024,
+    "nextcloud-db": 512,
+    "n8n": 1024,
+    "prometheus": 512,
+    "node-exporter": 128,
+    "grafana": 512,
+    "paperless": 1024,
+    "portainer": 128
+  },
+  "profiles": [
+    {
+      "key": "core",
+      "title": "Core Homelab",
+      "description": "Base self-hosting: Vaultwarden, Syncthing, Uptime Kuma",
+      "extras": false,
+      "services": []
+    },
+    {
+      "key": "media",
+      "title": "Media Server",
+      "description": "Jellyfin streaming on top of core",
+      "extras": false,
+      "services": ["jellyfin"]
+    },
+    {
+      "key": "cloud",
+      "title": "Cloud & Documents",
+      "description": "Nextcloud files on top of core",
+      "extras": true,
+      "services": ["nextcloud", "nextcloud-db"]
+    },
+    {
+      "key": "assistant",
+      "title": "Assistant & Automation",
+      "description": "n8n workflow automation on top of core",
+      "extras": true,
+      "services": ["n8n"]
+    },
+    {
+      "key": "monitoring",
+      "title": "Monitoring",
+      "description": "Prometheus and Grafana dashboards on top of core",
+      "extras": true,
+      "services": ["prometheus", "node-exporter", "grafana"]
+    },
+    {
+      "key": "edge",
+      "title": "Edge Gateway",
+      "description": "Lightweight core for headless gateways, extras disabled",
+      "extras": false,
+      "services": []
+    }
+  ]
+}
