@@ -43,7 +43,15 @@ fi
 rg -q 'HOMELAB_ADMIN_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml"
 rg -q 'HOMELAB_PUBLIC_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml"
 rg -q 'HOMELAB_ADMIN_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.extras.yml"
-echo "  compose pins/binds ok"
+# every service block must carry no-new-privileges and a memory cap
+for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml; do
+    svcs="$(rg -c '^  [a-z0-9-]+:$' "$f")"
+    [ "$(rg -c 'no-new-privileges' "$f")" -eq "$svcs" ] || { echo "FAIL: missing no-new-privileges in $f"; exit 1; }
+    [ "$(rg -c 'mem_limit:' "$f")" -eq "$svcs" ] || { echo "FAIL: missing mem_limit in $f"; exit 1; }
+done
+jq -e '.schemaVersion == 1 and (.images | length == 12) and all(.images[]; (test(":latest") | not))' \
+    "$REPO_ROOT/assets/home-server/docker-compose.lock.json" >/dev/null
+echo "  compose pins/binds/hardening ok"
 
 echo "=== missing .env blocks sensitive services ==="
 "$REPO_ROOT/linux/pz" server homelab plan --json --extras | jq -e '
@@ -73,11 +81,11 @@ echo "=== compose config core/extras ==="
 if docker compose version >/dev/null 2>&1; then
     docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-test \
         -f "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml" config --services |
-        sort | jq -R . | jq -cs 'index("portainer") and index("vaultwarden") and index("jellyfin")' >/dev/null
+        sort | jq -R . | jq -cs 'index("vaultwarden") and index("jellyfin") and index("syncthing") and (index("portainer") | not)' >/dev/null
     docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-test \
         -f "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml" \
         -f "$REPO_ROOT/assets/home-server/docker-compose.extras.yml" config --services |
-        sort | jq -R . | jq -cs 'index("nextcloud") and index("grafana") and index("paperless") and index("n8n")' >/dev/null
+        sort | jq -R . | jq -cs 'index("nextcloud") and index("grafana") and index("paperless") and index("n8n") and index("portainer")' >/dev/null
     echo "  compose config ok"
 else
     echo "  docker compose unavailable; skipped"

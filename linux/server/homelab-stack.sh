@@ -285,11 +285,11 @@ ensure_tailscale() {
 
 app_rows() {
     cat <<'EOF'
-portainer|Portainer|portainer|phasezero-portainer|core|9000|admin|true|portainer_data
 jellyfin|Jellyfin|jellyfin|phasezero-jellyfin|core|8096|public|false|jellyfin_config jellyfin_cache
 syncthing|Syncthing|syncthing|phasezero-syncthing|core|8384|admin|true|syncthing_data
 vaultwarden|Vaultwarden|vaultwarden|phasezero-vaultwarden|core|8222|admin|true|vaultwarden_data
 uptime-kuma|Uptime Kuma|uptime-kuma|phasezero-uptime-kuma|core|3001|admin|true|uptimekuma_data
+portainer|Portainer|portainer|phasezero-portainer|extras|9000|admin|true|portainer_data
 nextcloud|Nextcloud|nextcloud|phasezero-nextcloud|extras|8080|admin|true|nextcloud_db nextcloud_data
 grafana|Grafana|grafana|phasezero-grafana|extras|3000|admin|true|grafana_data
 prometheus|Prometheus|prometheus|phasezero-prometheus|extras|9090|admin|true|prometheus_data
