@@ -170,6 +170,8 @@ Usage:
   pz ai init --undo [<dir>]    Remove managed blocks/files from a project
   pz ai token-economy status   Alias for compat status and context-frugality audit
   pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
+  pz ai policy <action>        AI policy broker (status|set <mode>|check <action>|list)
+  pz ai ollama [--pull <m>]    Ollama install/config; model pulls broker-gated
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
   pz ai opencode status        Audit CLI/Desktop, canonical config and 9Router route
   pz ai opencode install       Configure canonical loopback 9Router provider transactionally
@@ -485,8 +487,16 @@ cmd_server() {
 
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
-    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|init|omo|compat|token-economy|secrets|mcp) ..."; return 1; }
+    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|init|omo|compat|token-economy|secrets|mcp|policy|ollama) ..."; return 1; }
     case "$sub" in
+        policy)
+            shift
+            bash "$PZ_ROOT/linux/server/ai-policy-broker.sh" "${@:-status}"
+            ;;
+        ollama)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-ollama.sh" "$@"
+            ;;
         status)
             bash "$PZ_ROOT/linux/ai/status.sh"
             ;;

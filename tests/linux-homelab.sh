@@ -383,4 +383,36 @@ PZ_HOMELAB_BACKUP_ROOT="$BKT" "$REPO_ROOT/linux/pz" server homelab status --json
 jq -e '.backupState.backups == ["bk1"] and .backupState.lastBackup.latest != null and .backupState.verified == false' /tmp/bkst.json >/dev/null
 echo "  status backup state ok"
 
+echo "=== ai policy broker + hardened adapters ==="
+PZ_AI_STATE="$TMP/ai-state" PZ_AI_POLICY_MODE=conservative \
+    "$REPO_ROOT/linux/server/ai-policy-broker.sh" status | jq -e '.conservative == true and (.deniedActions | index("ollama-pull")) and (.deniedActions | index("hermes-install"))' >/dev/null
+echo "  policy conservative default ok"
+PZ_AI_STATE="$TMP/ai-state" PZ_AI_POLICY_MODE=conservative \
+    "$REPO_ROOT/linux/server/ai-policy-broker.sh" check ollama-pull | jq -e '.allow == false' >/dev/null
+PZ_AI_STATE="$TMP/ai-state" PZ_AI_POLICY_MODE=conservative \
+    "$REPO_ROOT/linux/server/ai-policy-broker.sh" check openclaw-install version=0.9.4 | jq -e '.allow == true' >/dev/null
+PZ_AI_STATE="$TMP/ai-state" PZ_AI_POLICY_MODE=conservative \
+    "$REPO_ROOT/linux/server/ai-policy-broker.sh" check hermes-install | jq -e '.allow == false' >/dev/null
+hcksum="$(printf 'a%.0s' {1..64})"
+PZ_AI_STATE="$TMP/ai-state" PZ_AI_POLICY_MODE=conservative \
+    "$REPO_ROOT/linux/server/ai-policy-broker.sh" check hermes-install checksum="$hcksum" | jq -e '.allow == true' >/dev/null
+PZ_AI_STATE="$TMP/ai-state" PZ_AI_POLICY_MODE=conservative \
+    "$REPO_ROOT/linux/server/ai-policy-broker.sh" check codex-install | jq -e '.allow == true' >/dev/null
+echo "  broker action checks ok"
+PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/server/ai-policy-broker.sh" set permissive >/dev/null
+PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/server/ai-policy-broker.sh" status | jq -e '.mode == "permissive" and .conservative == false' >/dev/null
+echo "  policy set ok"
+# hardened adapters: no latest, no auto-pull, no unchecksummed remotes, pinned tags
+! rg -q 'openclaw@latest|@openai/codex@latest' "$REPO_ROOT/linux/ai/setup-openclaw.sh" "$REPO_ROOT/linux/ai/setup-codex.sh"
+! rg -q 'ollama pull llama3.1|nohup ollama pull' "$REPO_ROOT/linux/ai/setup-ollama.sh"
+rg -q 'PZ_HERMES_INSTALL_SHA256' "$REPO_ROOT/linux/ai/setup-hermes.sh"
+! rg -q -- '--network host' "$REPO_ROOT/linux/ai/setup-memory.sh"
+! rg -q 'ai-memory:latest' "$REPO_ROOT/linux/ai/setup-memory.sh"
+rg -q 'AI_MEMORY_DOCKER_TAG' "$REPO_ROOT/linux/ai/setup-memory.sh"
+echo "  adapters hardened ok"
+# status now carries a real policy
+PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/pz" server homelab status --json >/tmp/pol.json 2>&1 || true
+jq -e '.securityState.policyActive == false and .securityState.policy.mode == "permissive"' /tmp/pol.json >/dev/null
+echo "  status policy wiring ok"
+
 echo "=== Homelab smoke ok ==="

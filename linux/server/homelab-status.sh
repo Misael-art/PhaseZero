@@ -148,12 +148,17 @@ digests_json() {
 }
 
 security_state_json() {
-    # Policy broker lands in a later commit; state stays honest until then.
+    # AI policy broker gates high-mutability agent installs and model pulls.
     local audit_file="$HOMELAB_STATE/security-audit.json"
-    local last_audit=null
+    local last_audit=null policy
     [ -f "$audit_file" ] && last_audit="$(cat "$audit_file")"
-    jq -cn --argjson lastAudit "$last_audit" \
-        '{policyActive:false, redaction:true, lastAudit:$lastAudit}'
+    policy="$(bash "$PZ_ROOT/linux/server/ai-policy-broker.sh" status 2>/dev/null || echo '{"conservative":true}')"
+    local policy_active
+    policy_active="$(printf '%s\n' "$policy" | jq -r 'if has("conservative") then .conservative else true end')"
+    jq -cn --argjson policyActive "$policy_active" \
+        --argjson policy "$policy" \
+        --argjson lastAudit "$last_audit" \
+        '{policyActive:$policyActive, policy:$policy, redaction:true, lastAudit:$lastAudit}'
 }
 
 build_status() {
