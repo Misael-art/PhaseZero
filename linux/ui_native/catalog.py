@@ -361,6 +361,18 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ]
     )
 
+    actions.extend(
+        [
+            _a("homelab.status", "Homelab", "Status da stack", "Apps, perfil ativo, orçamento e política AI.", ("server", "homelab", "status", "--json"), "folder-remote", badge="JSON", keywords=("homelab", "jellyfin", "vaultwarden")),
+            _a("homelab.profiles", "Homelab", "Perfis e pesos", "Lista os 6 perfis do registro e pesos do governor.", ("server", "homelab", "profile", "list"), "folder-documents", badge="JSON", keywords=("perfil", "weights")),
+            _a("homelab.budget", "Homelab", "Orçamento do perfil", "MiB do governor com headroom de 20%.", ("server", "homelab", "governor", "budget", "core"), "preferences-system-performance", badge="Seguro", keywords=("governor", "budget", "ram")),
+            _a("homelab.backup", "Homelab", "Backup verificado", "manifest.json + sha256 por volume nomeado.", ("server", "homelab", "backup"), "document-save", mutable=True, preview=("server", "homelab", "backup", "--dry-run"), badge="Backup"),
+            _a("homelab.verify", "Homelab", "Verificar backup", "Recomputa sha256; falha fechado se adulterado.", ("server", "homelab", "backup", "verify", "--source", "{input}"), "document-edit-verify", mutable=True, preview=("server", "homelab", "status"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação"),
+            _a("homelab.restore", "Homelab", "Restaurar backup", "Verify-then-apply; recusa sem --yes ou adulterado.", ("server", "homelab", "restore", "--source", "{input}", "--yes"), "document-revert", mutable=True, preview=("server", "homelab", "restore", "--source", "{input}", "--dry-run"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Resgate"),
+            _a("homelab.policy", "Homelab", "Política AI", "Broker conservative/permissive e ações negadas.", ("ai", "policy", "status"), "dialog-password", badge="JSON", keywords=("policy", "broker", "ollama", "hermes")),
+        ]
+    )
+
     emu_rows = [
         ("status", "Status emulação", "Auditoria geral.", ("emulation", "status"), None),
         ("setup", "Setup completo", "Stack completa de emulação.", ("emulation", "setup", "install"), ("emulation", "setup", "dry-run")),
