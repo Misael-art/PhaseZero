@@ -8,9 +8,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -134,6 +136,22 @@ class FakeR9:
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
+        # Keep the thread reachable so the fixture can join it: a daemon thread
+        # left running holds the listening socket and shows up as an orphan
+        # process at job teardown.
+        self._thread = thread
+        # serve_forever needs a moment to enter its loop. On a loaded runner the
+        # client can otherwise connect before the loop is polling and see the
+        # connection refused, which surfaces as "/v1/models unreachable".
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            try:
+                with socket.create_connection(("127.0.0.1", server.server_port), timeout=0.5):
+                    break
+            except OSError:
+                time.sleep(0.05)
+        else:
+            raise RuntimeError("fake R9 server never accepted a connection")
         return server
 
     def _make_handler(self):
@@ -239,8 +257,17 @@ def fake(tmp_path: Path):
     data_dir = tmp_path / "r9data"
     fake = FakeR9(data_dir)
     server = fake.server()
-    yield fake, f"http://127.0.0.1:{server.server_port}"
-    server.shutdown()
+    try:
+        yield fake, f"http://127.0.0.1:{server.server_port}"
+    finally:
+        # shutdown() only stops the serve_forever loop; without server_close()
+        # the listening socket survives every test in the module and the worker
+        # is still holding it when pytest exits.
+        server.shutdown()
+        server.server_close()
+        thread = getattr(fake, "_thread", None)
+        if thread is not None:
+            thread.join(timeout=5)
 
 
 @pytest.fixture()
