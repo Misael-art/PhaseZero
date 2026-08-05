@@ -220,3 +220,43 @@ PYEOF
 grep -Fq 'QGA rejected driver installation command: ' "$PROV"
 
 echo 'unattended install contracts ok'
+
+# --- memory sizing profiles ---------------------------------------------------
+# One figure cannot serve both hosts. Booted through GRUB the host runs nothing
+# but the VM, so unused RAM is wasted; over a live KDE session the same figure
+# pushed this machine into 8.6 GiB of swap because it sized from MemTotal and
+# ignored what was actually in use.
+VM_SH="$ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'windows_vm_boot_mode()' "$VM_SH"
+grep -Fq 'MemAvailable:' "$VM_SH"
+# The GRUB marker is what distinguishes the two hosts.
+grep -Fq 'phasezero.windowsvm=1' "$VM_SH"
+
+ram_for() {
+    PZ_WINDOWS_VM_PROFILE="$1" bash -c '
+        . '"$ROOT"'/linux/lib/common.sh 2>/dev/null
+        eval "$(sed -n "/^windows_vm_boot_mode()/,/^}/p;/^default_ram_mb()/,/^}/p" '"$VM_SH"')"
+        default_ram_mb' 2>/dev/null
+}
+kiosk_ram="$(ram_for kiosk)"
+desktop_ram="$(ram_for desktop)"
+for value in "$kiosk_ram" "$desktop_ram"; do
+    [[ "$value" =~ ^[0-9]+$ ]] || { echo "sizing did not produce a number: [$value]" >&2; exit 1; }
+    # Windows 11 does not run below 4 GiB; a smaller guest boots into thrashing.
+    [ "$value" -ge 4096 ] || { echo "sizing fell below the Windows 11 minimum: $value" >&2; exit 1; }
+done
+# The dedicated-boot host has no desktop to serve, so it must never be the
+# stingier of the two.
+[ "$kiosk_ram" -ge "$desktop_ram" ] || {
+    echo "kiosk sizing ($kiosk_ram) must not be below desktop sizing ($desktop_ram)" >&2
+    exit 1
+}
+# Whatever the mode, the host keeps a reserve: handing over everything OOMs the
+# host, and an OOM there kills the VM outright.
+mem_total="$(awk '/MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)"
+[ "$kiosk_ram" -lt "$mem_total" ] || {
+    echo "kiosk sizing left the host no reserve: $kiosk_ram of $mem_total" >&2
+    exit 1
+}
+
+echo 'memory sizing profile contracts ok'
