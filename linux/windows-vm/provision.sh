@@ -995,8 +995,18 @@ try {
             Stop-Process -Id $qgaInstall.Id -Force -ErrorAction SilentlyContinue
             throw "QEMU Guest Agent installer timed out"
         }
-        if ($qgaInstall.ExitCode -notin @(0, 3010)) {
-            throw "QEMU Guest Agent installer failed with exit code $($qgaInstall.ExitCode)"
+        # The timeout overload of WaitForExit returns a bool without refreshing
+        # the cached process state, so ExitCode reads back as $null on Windows
+        # PowerShell 5.1. $null -notin @(0, 3010) is true, which aborted the
+        # whole guest setup on installs that had actually succeeded.
+        $qgaInstall.WaitForExit()
+        $qgaExit = $qgaInstall.ExitCode
+        # The service existing is the outcome that matters. Only trust the exit
+        # code to condemn the install when the service is genuinely absent.
+        Start-Sleep -Seconds 2
+        $qgaPresent = [bool](Get-Service qemu-ga -ErrorAction SilentlyContinue)
+        if (-not $qgaPresent -and $qgaExit -notin @(0, 3010)) {
+            throw "QEMU Guest Agent installer failed with exit code '$qgaExit' and no qemu-ga service"
         }
     }
     & sc.exe config qemu-ga start= delayed-auto depend= / | Out-Host
@@ -1081,7 +1091,12 @@ exit 1
         exchangePath = $selectedExchange
     } | ConvertTo-Json | Set-Content -Path (Join-Path $phaseZeroDir 'provisioning-complete.json') -Encoding UTF8
 } catch {
-    Write-Error "PhaseZero guest setup failed: $($_.Exception.Message)"
+    # Write-Error is itself a terminating error while ErrorActionPreference is
+    # Stop, so it aborted the rest of this handler: the guest never powered off
+    # and the host burned the full two hour setup timeout on every failure,
+    # while the autologin teardown below silently never ran either.
+    $ErrorActionPreference = 'Continue'
+    Write-Host "PhaseZero guest setup failed: $($_.Exception.Message)"
     $failureDir = Join-Path $env:ProgramData 'PhaseZero'
     New-Item -Path $failureDir -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
     $_.Exception.Message | Set-Content -Path (Join-Path $failureDir 'provisioning-failed.txt') -Encoding UTF8 -ErrorAction SilentlyContinue
@@ -1429,7 +1444,9 @@ PSEOF
             local wait_elapsed=$((SECONDS - wait_started))
             [ "$driver_ok" = "1" ] || log_operation "$op" "FAIL: VirtIO INF installation failed or timed out after ${wait_timeout}s"
         else
-            log_operation "$op" "FAIL: QGA rejected driver installation command"
+            # The rejection reason lives in the QGA response and was being
+            # discarded, leaving only a generic failure line to debug from.
+            log_operation "$op" "FAIL: QGA rejected driver installation command: $(printf '%s' "${exec_result:-<empty response>}" | tr '\n\r' '  ' | cut -c1-400)"
         fi
 
         if [ "$driver_ok" != "1" ]; then

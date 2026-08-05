@@ -179,4 +179,44 @@ i, j = s.index('mark_vm_dir_nodatacow\n'), s.index('qemu-img create -f qcow2')
 assert i < j, 'nodatacow must be set before the image is created; the flag only affects new files'
 PYEOF
 
+# --- guest-side post-install script -------------------------------------------
+# Each of these cost a two hour timeout on a real run before being found.
+PROV="$ROOT/linux/windows-vm/provision.sh"
+
+# WaitForExit(ms) does not refresh the cached process state, so ExitCode reads
+# back as $null on Windows PowerShell 5.1 and the guest aborted setups that had
+# actually succeeded. The no-argument wait is what makes the code readable.
+grep -Fq 'qgaInstall.WaitForExit()' "$PROV"
+# The service existing is the outcome that matters; an odd exit code alone must
+# not condemn an install whose service is present.
+# Literal PowerShell contract.
+# shellcheck disable=SC2016
+grep -Fq 'qgaPresent -and $qgaExit -notin' "$PROV"
+
+# Write-Error is a terminating error while ErrorActionPreference is Stop, so it
+# aborted the rest of the failure handler: no shutdown, no autologin teardown.
+python3 - "$PROV" <<'PYEOF'
+import re, sys
+src = open(sys.argv[1], encoding='utf-8').read()
+# provision.sh embeds several PowerShell scripts. Anchor on the shutdown this
+# handler owns and walk back to its own catch, not the first one in the file.
+end = src.index('shutdown.exe /s /t 10 /c "PhaseZero unattended setup failed"')
+handler = src[src.rindex('} catch {', 0, end):end]
+# Match code, not prose: the handler's own comment names Write-Error to explain
+# why it is avoided, and a blanket search flags the documentation it protects.
+code = '\n'.join(l for l in handler.splitlines() if not l.lstrip().startswith('#'))
+assert 'Write-Error' not in code, (
+    'failure handler must not use Write-Error: with ErrorActionPreference=Stop '
+    'it re-throws and the shutdown below never runs'
+)
+assert "$ErrorActionPreference = 'Continue'" in code, (
+    'failure handler must relax ErrorActionPreference before reporting'
+)
+for required in ('AutoAdminLogon', 'Stop-Transcript'):
+    assert required in code, f'failure handler lost: {required}'
+PYEOF
+
+# A rejected guest-exec must record why, or the next failure is undebuggable.
+grep -Fq 'QGA rejected driver installation command: ' "$PROV"
+
 echo 'unattended install contracts ok'
