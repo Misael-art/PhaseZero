@@ -9,7 +9,7 @@ AUTOUATTEND_DIR=""
 generate_autounattend() {
     local wim_index=1 lang="pt-BR" keyboard="pt-BR" timezone="America/Sao_Paulo"
     local user="phasezero" password="" disk_serial="" product_key=""
-    local tpm_bypass=0 disk_id=0 autologon_count="" virtio=1
+    local tpm_bypass=0 disk_id=0 autologon_count="" virtio=1 driver_path="" disk_guard=0
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -37,6 +37,13 @@ generate_autounattend() {
             --autologon-count) autologon_count="${2:-}"; shift 2 ;;
             --autologon-count=*) autologon_count="${1#*=}"; shift ;;
             --no-virtio) virtio=0; shift ;;
+            # Explicit WinPE-visible path, e.g. E:\amd64\w11. Only supply it
+            # when the install target really is virtio-blk.
+            --driver-path) driver_path="${2:-}"; shift 2 ;;
+            --driver-path=*) driver_path="${1#*=}"; shift ;;
+            # Opt-in: aborts Setup in WinPE builds without a working WMI
+            # service. Prove it on the target media before relying on it.
+            --disk-guard) disk_guard=1; shift ;;
             --output-dir) AUTOUATTEND_DIR="${2:-}"; shift 2 ;;
             --output-dir=*) AUTOUATTEND_DIR="${1#*=}"; shift ;;
             *) pz_error "unknown autounattend option: $1"; return 1 ;;
@@ -64,17 +71,27 @@ generate_autounattend() {
         password_xml="<Password>${password}</Password>"
     fi
 
-    # Setup can only address the install target by 0-based index and wipes it
-    # unconditionally, so the index alone is never a safe contract. The guard
-    # runs first and aborts Setup unless the disk carries the expected serial.
-    local guard_xml
-    guard_xml="
+    # Setup addresses the install target by 0-based index and wipes it
+    # unconditionally, so the index alone is never a safe contract on a machine
+    # with more than one disk.
+    #
+    # The guard is opt-in because it provably cannot run in the Setup WinPE of
+    # Windows 11 25H2: WMIC.exe is present in boot.wim but the WMI service that
+    # backs it is not, so the query returns nothing, the script exits non-zero
+    # and Setup aborts with 0x800700FF on a disk it should have accepted.
+    # Verified by bisecting a real install: identical media minus this command
+    # installs normally. Enabling it on a single-disk VM only adds a failure
+    # mode; it is meant for physical media, where it must be re-proven first.
+    local guard_xml=""
+    if [ "$disk_guard" = "1" ]; then
+        guard_xml="
                 <RunSynchronousCommand wcm:action=\"add\">
                     <Path>cmd /c for %i in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %i:\\pz-disk-guard.cmd %i:\\pz-disk-guard.cmd ${disk_serial} ${disk_id}</Path>
                     <Description>PhaseZeroDiskTargetGuard</Description>
                     <Order>1</Order>
                     <WillReboot>Never</WillReboot>
                 </RunSynchronousCommand>"
+    fi
 
     local bypass_xml=""
     if [ "$tpm_bypass" = "1" ]; then
@@ -106,24 +123,22 @@ generate_autounattend() {
                 </RunSynchronousCommand>"
     fi
 
-    # Without the virtio storage driver loaded in WinPE, Setup enumerates no
-    # disk at all and the install dies before DiskConfiguration ever runs. The
-    # virtio-win media is attached as a second CD; every drive letter is probed
-    # because WinPE assigns them in no guaranteed order.
+    # DriverPaths must resolve. Speculatively listing D: through H: to find
+    # whichever letter WinPE gave the virtio media makes Setup reject the whole
+    # windowsPE pass with 0x80070057 as soon as one path is absent, which is the
+    # normal case. Only an explicit, caller-supplied path is emitted.
+    #
+    # Nothing needs this by default: the provisioning VM exposes its disk as
+    # NVMe, for which Windows ships an inbox driver. It exists for a caller that
+    # deliberately installs onto virtio-blk.
     local virtio_xml=""
-    if [ "$virtio" = "1" ]; then
+    if [ "$virtio" = "1" ] && [ -n "$driver_path" ]; then
         virtio_xml="
         <component name=\"Microsoft-Windows-PnpCustomizationsWinPE\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\">
-            <DriverPaths>"
-        local letter order=1
-        for letter in D E F G H; do
-            virtio_xml="$virtio_xml
-                <PathAndCredentials wcm:action=\"add\" wcm:keyValue=\"${order}\">
-                    <Path>${letter}:\\</Path>
-                </PathAndCredentials>"
-            order=$((order + 1))
-        done
-        virtio_xml="$virtio_xml
+            <DriverPaths>
+                <PathAndCredentials wcm:action=\"add\" wcm:keyValue=\"1\">
+                    <Path>${driver_path}</Path>
+                </PathAndCredentials>
             </DriverPaths>
         </component>"
     fi
@@ -138,7 +153,11 @@ generate_autounattend() {
                 <LogonCount>${autologon_count}</LogonCount>"
     fi
 
-    local product_key_xml=""
+    # Omitting ProductKey entirely does not mean "skip"; Setup stops on the key
+    # page and an unattended install waits there forever. An empty <Key> with
+    # WillShowUI=Never is the documented way to defer activation and keep the
+    # pass non-interactive.
+    local product_key_xml
     if [ -n "$product_key" ]; then
         [[ "$product_key" =~ ^[A-Za-z0-9]{5}(-[A-Za-z0-9]{5}){4}$ ]] || {
             pz_error "invalid product key format"
@@ -146,6 +165,11 @@ generate_autounattend() {
         }
         product_key_xml="<ProductKey>
                     <Key>${product_key}</Key>
+                    <WillShowUI>Never</WillShowUI>
+                </ProductKey>"
+    else
+        product_key_xml="<ProductKey>
+                    <Key></Key>
                     <WillShowUI>Never</WillShowUI>
                 </ProductKey>"
     fi
@@ -325,7 +349,7 @@ generate_autounattend() {
 AUTOUNATTENDEOF
 
     chmod 0600 "$AUTOUATTEND_DIR/autounattend.xml"
-    validate_autounattend "$AUTOUATTEND_DIR/autounattend.xml" "$disk_serial" || {
+    validate_autounattend "$AUTOUATTEND_DIR/autounattend.xml" "$disk_serial" "$disk_guard" || {
         rm -f "$AUTOUATTEND_DIR/autounattend.xml"
         return 1
     }
@@ -344,7 +368,7 @@ AUTOUNATTENDEOF
 # at an interactive prompt hours later, or worse, one that ignores the section
 # it could not parse. Fail at generation instead.
 validate_autounattend() {
-    local file="$1" expected_serial="$2" missing=()
+    local file="$1" expected_serial="$2" want_guard="${3:-0}" missing=()
     if command -v xmllint >/dev/null 2>&1; then
         xmllint --noout "$file" 2>/dev/null || {
             pz_error "generated autounattend.xml is not well-formed XML"
@@ -358,13 +382,20 @@ validate_autounattend() {
     fi
     local marker
     for marker in '<settings pass="windowsPE">' '<settings pass="oobeSystem">' \
-        '<settings pass="specialize">' 'PhaseZeroDiskTargetGuard' \
+        '<settings pass="specialize">' \
         '<WillWipeDisk>true</WillWipeDisk>' '<ImageInstall>'; do
         grep -Fq "$marker" "$file" || missing+=("$marker")
     done
-    # The wipe must never be reachable without the guard that authorises it.
-    grep -Fq "pz-disk-guard.cmd $expected_serial " "$file" ||
-        missing+=("disk guard invocation for serial $expected_serial")
+    # An empty key with WillShowUI=Never is what keeps Setup off the product key
+    # page; without it an unattended install stops there and waits forever.
+    grep -Fq '<WillShowUI>Never</WillShowUI>' "$file" ||
+        missing+=("ProductKey WillShowUI=Never")
+    if [ "$want_guard" = "1" ]; then
+        grep -Fq "pz-disk-guard.cmd $expected_serial " "$file" ||
+            missing+=("disk guard invocation for serial $expected_serial")
+    elif grep -Fq 'PhaseZeroDiskTargetGuard' "$file"; then
+        missing+=("guard emitted without --disk-guard")
+    fi
     if [ "${#missing[@]}" -gt 0 ]; then
         pz_error "generated autounattend.xml is missing: ${missing[*]}"
         return 1

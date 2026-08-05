@@ -29,11 +29,21 @@ out="$WORK/ok"
 gen "$out" --disk-serial PZWINVM0 --password 'A.b3!xyzQ' --tpm-bypass
 xml="$out/autounattend.xml"
 [ -f "$xml" ]
-grep -Fq 'PhaseZeroDiskTargetGuard' "$xml"
-grep -Fq 'pz-disk-guard.cmd PZWINVM0 0' "$xml"
 grep -Fq '<WillWipeDisk>true</WillWipeDisk>' "$xml"
 # The guard script must be staged beside the answer file or it can never run.
 [ -f "$out/pz-disk-guard.cmd" ]
+
+# The guard is opt-in: WMIC.exe ships in the 25H2 Setup WinPE but the WMI
+# service behind it does not, so the query returns nothing, the script exits
+# non-zero and Setup aborts with 0x800700FF on a disk it should have accepted.
+# Bisected against a real install: identical media minus this command installs.
+if grep -Fq 'PhaseZeroDiskTargetGuard' "$xml"; then
+    echo 'guard must not be enabled by default: it aborts Setup in WinPE' >&2
+    exit 1
+fi
+gen "$WORK/guarded" --disk-serial PZWINVM0 --password 'A.b3!xyzQ' --disk-guard
+grep -Fq 'PhaseZeroDiskTargetGuard' "$WORK/guarded/autounattend.xml"
+grep -Fq 'pz-disk-guard.cmd PZWINVM0 0' "$WORK/guarded/autounattend.xml"
 
 # A serial that cannot be compared verbatim inside cmd must be refused rather
 # than silently producing a guard that never matches.
@@ -77,15 +87,25 @@ if grep -qE 'if /i not "!FOUND!"=="%EXPECTED%"' "$GUARD"; then
     exit 1
 fi
 
-# --- virtio storage driver ----------------------------------------------------
-# Without it Setup enumerates no disk at all and dies before DiskConfiguration.
-grep -Fq 'Microsoft-Windows-PnpCustomizationsWinPE' "$xml"
-grep -Fq '<DriverPaths>' "$xml"
-gen "$WORK/novirtio" --disk-serial PZWINVM0 --password 'A.b3!xyzQ' --no-virtio
-if grep -Fq 'PnpCustomizationsWinPE' "$WORK/novirtio/autounattend.xml"; then
-    echo '--no-virtio still emitted driver paths' >&2
+# --- driver paths must resolve ------------------------------------------------
+# Speculatively listing D: through H: to find whichever letter WinPE assigned
+# the virtio media made Setup reject the entire windowsPE pass with
+# 0x80070057 as soon as one path was absent, which is the normal case. Verified
+# against a real 25H2 install: removing the component was what let Setup past
+# it. Nothing is emitted unless the caller names a path.
+if grep -Fq 'PnpCustomizationsWinPE' "$xml"; then
+    echo 'default answer file must not declare speculative driver paths' >&2
     exit 1
 fi
+gen "$WORK/drv" --disk-serial PZWINVM0 --password 'A.b3!xyzQ' --driver-path 'E:\amd64\w11'
+grep -Fq 'Microsoft-Windows-PnpCustomizationsWinPE' "$WORK/drv/autounattend.xml"
+grep -Fq 'E:\amd64\w11' "$WORK/drv/autounattend.xml"
+
+# --- product key page ---------------------------------------------------------
+# Omitting ProductKey does not skip the page: Setup stops there and an
+# unattended install waits on it forever. Observed on a real 25H2 run.
+grep -Fq '<Key></Key>' "$xml"
+grep -Fq '<WillShowUI>Never</WillShowUI>' "$xml"
 
 # --- autologon persistence ----------------------------------------------------
 # Omitted LogonCount means persistent AutoAdminLogon, which is what an

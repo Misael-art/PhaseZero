@@ -34,6 +34,67 @@ OPERATIONS_DIR="${PZ_STATE}/operations"
 # refused every disk. windows-vm.sh must resolve the same value.
 DISK_SERIAL="${PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0}"
 
+# Windows 11 refuses to install without TPM 2.0 and Secure Boot. Planning
+# already fails outright when swtpm is missing, calling it "required for
+# Windows 11", but no provisioning phase ever attached one: Setup died at
+# 0x80070057 with an empty disk while the preflight reported everything green.
+#
+# Each operation gets its own swtpm instance and state directory so a rerun
+# never inherits PCR values from a half-finished install. The caller appends
+# the emitted arguments to its own QEMU array.
+PROVISION_TPM_PID_FILE=""
+
+provision_tpm_args() {
+    local vm_dir="$1" op="$2" sock state_dir i
+    if ! command -v swtpm >/dev/null 2>&1; then
+        log_operation "$op" "swtpm missing; Windows 11 setup will refuse to install"
+        return 1
+    fi
+    state_dir="$vm_dir/tpm"
+    sock="$vm_dir/swtpm.sock"
+    PROVISION_TPM_PID_FILE="$vm_dir/swtpm.pid"
+    install -d -m 0700 "$state_dir"
+    rm -f "$sock" "$PROVISION_TPM_PID_FILE"
+    swtpm socket --tpm2 \
+        --tpmstate "dir=$state_dir" \
+        --ctrl "type=unixio,path=$sock,terminate" \
+        --pid "file=$PROVISION_TPM_PID_FILE" \
+        --log "file=$vm_dir/swtpm.log,level=20" \
+        --daemon || {
+        log_operation "$op" "swtpm failed to start"
+        return 1
+    }
+    for ((i = 0; i < 100; i++)); do
+        [ -S "$sock" ] && break
+        sleep 0.05
+    done
+    [ -S "$sock" ] || { log_operation "$op" "swtpm socket never appeared"; return 1; }
+    printf '%s\n' \
+        "-chardev" "socket,id=chrtpm,path=$sock" \
+        "-tpmdev" "emulator,id=tpm0,chardev=chrtpm" \
+        "-device" "tpm-tis,tpmdev=tpm0"
+}
+
+provision_tpm_stop() {
+    [ -n "$PROVISION_TPM_PID_FILE" ] && [ -f "$PROVISION_TPM_PID_FILE" ] || return 0
+    local pid
+    pid="$(cat "$PROVISION_TPM_PID_FILE" 2>/dev/null || true)"
+    if [ -n "$pid" ]; then
+        kill -TERM "$pid" 2>/dev/null || true
+    fi
+    PROVISION_TPM_PID_FILE=""
+}
+
+# Secure Boot is a Windows 11 install requirement, so the firmware that carries
+# it must be preferred over the plain build rather than listed after it.
+provision_ovmf_code() {
+    printf '%s' "${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
+        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
+        /usr/share/OVMF/OVMF_CODE.secboot.fd \
+        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/OVMF/OVMF_CODE.fd || true)}"
+}
+
 PLAN_ENDPOINT="${PZ_WINDOWS_VM_PLAN:-$PROVISION_DIR/plans}"
 ACTIVE_LOCK="$PROVISION_DIR/active.lock"
 
@@ -1092,11 +1153,7 @@ run_setup() {
     command -v smbd >/dev/null 2>&1 && netdev_arg="$netdev_arg,smb=$exchange_dir"
 
     local ovmf_code ovmf_vars
-    ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
-        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
-        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
-        /usr/share/OVMF/OVMF_CODE.secboot.fd \
-        /usr/share/OVMF/OVMF_CODE.fd || true)}"
+    ovmf_code="$(provision_ovmf_code)"
     ovmf_vars="$vm_dir/OVMF_VARS.fd"
     if [ ! -f "$ovmf_vars" ]; then
         local vars_template
@@ -1108,6 +1165,12 @@ run_setup() {
 
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
     [ -f "$oemdrv_iso" ] || { log_operation "$op" "OEMDRV ISO not found"; return 1; }
+
+    local -a tpm_args=()
+    mapfile -t tpm_args < <(provision_tpm_args "$vm_dir" "$op") || {
+        log_operation "$op" "FAIL: TPM 2.0 unavailable; Windows 11 setup cannot proceed"
+        return 1
+    }
 
     # shellcheck disable=SC2054
     local qemu_args=(
@@ -1143,7 +1206,9 @@ run_setup() {
         qemu_args+=(-device ide-cd,bus=ide.2,drive=virtio)
     fi
 
-    log_operation "$op" "launching QEMU for Windows setup"
+    qemu_args+=("${tpm_args[@]}")
+
+    log_operation "$op" "launching QEMU for Windows setup (TPM 2.0 + Secure Boot firmware)"
     mkdir -p "$vm_dir"
     rm -f "$vm_dir/qga.sock" "$vm_dir/setup-qmp.sock"
     qemu-system-x86_64 "${qemu_args[@]}" &
@@ -1210,6 +1275,9 @@ PYQMP
     fi
 
     rm -f "$vm_dir/qemu-pid"
+    # swtpm is --daemon and outlives QEMU; leaving it holding the state
+    # directory makes the next phase inherit a live TPM it did not create.
+    provision_tpm_stop
     local installed_bytes=0
     installed_bytes="$(qemu-img info --output=json "$disk_path" 2>/dev/null | jq -r '."actual-size" // 0' 2>/dev/null || echo 0)"
     if [ "${installed_bytes:-0}" -lt $((1024 * 1024 * 1024)) ]; then
@@ -1242,11 +1310,7 @@ run_drivers() {
     mkdir -p "$exchange_dir"
     netdev_arg="user,id=net0"
     command -v smbd >/dev/null 2>&1 && netdev_arg="$netdev_arg,smb=$exchange_dir"
-    local ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
-        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
-        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
-        /usr/share/OVMF/OVMF_CODE.secboot.fd \
-        /usr/share/OVMF/OVMF_CODE.fd || true)}"
+    local ovmf_code="$(provision_ovmf_code)"
     local ovmf_vars="$vm_dir/OVMF_VARS.fd"
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
 
@@ -1448,11 +1512,7 @@ run_tweaks() {
     mkdir -p "$exchange_dir"
     netdev_arg="user,id=net0"
     command -v smbd >/dev/null 2>&1 && netdev_arg="$netdev_arg,smb=$exchange_dir"
-    local ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
-        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
-        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
-        /usr/share/OVMF/OVMF_CODE.secboot.fd \
-        /usr/share/OVMF/OVMF_CODE.fd || true)}"
+    local ovmf_code="$(provision_ovmf_code)"
     local ovmf_vars="$vm_dir/OVMF_VARS.fd"
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found"; return 1; }
 
@@ -1718,11 +1778,7 @@ run_relaunch() {
     graphics="${PZ_RELAUNCH_GRAPHICS_OVERRIDE:-$(jq -r '.graphics // "compat"' "$plan_file")}"
 
     local ovmf_code ovmf_vars
-    ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code \
-        /usr/share/edk2/x64/OVMF_CODE.4m.fd \
-        /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
-        /usr/share/OVMF/OVMF_CODE.secboot.fd \
-        /usr/share/OVMF/OVMF_CODE.fd || true)}"
+    ovmf_code="$(provision_ovmf_code)"
     ovmf_vars="$vm_dir/OVMF_VARS.fd"
 
     [ -f "$ovmf_code" ] || { log_operation "$op" "OVMF code not found for relaunch"; return 1; }
@@ -2413,7 +2469,7 @@ provision_finalize() {
 
     local graphics ovmf_code net_model="virtio-net-pci"
     graphics="$(jq -r '.graphics // "compat"' "$op_dir/plan.json")"
-    ovmf_code="${PZ_WINDOWS_VM_OVMF_CODE:-$(pz_path_resolve ovmf_code /usr/share/edk2/x64/OVMF_CODE.4m.fd /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd /usr/share/OVMF/OVMF_CODE.fd || true)}"
+    ovmf_code="$(provision_ovmf_code)"
     if ! bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" adopt --disk "$target_disk" --graphics "$graphics" --net-model "$net_model" --ovmf-code "$ovmf_code"; then
         pz_error "disk created but PhaseZero adoption failed: $target_disk"
         return 1
