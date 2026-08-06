@@ -137,7 +137,15 @@ jobs:
         run: |
           set -euo pipefail
           export QT_QPA_PLATFORM=offscreen
-          /tmp/pz-venv/bin/python -m pytest tests/ -q -vv --timeout=90
+          # timeout-method=thread, not the default signal method: SIGALRM only
+          # interrupts the main thread once it returns to Python bytecode, so a
+          # test blocked in a subprocess or a socket read is never reclaimed.
+          # A hang then consumes the whole job timeout and the run is cancelled
+          # with no failing test named, which is exactly what happened on
+          # e91bcaf. The thread method dumps every thread's stack and kills the
+          # process, so the culprit appears in the log.
+          /tmp/pz-venv/bin/python -m pytest tests/ -q -vv \
+            --timeout=90 --timeout-method=thread
 
   pester:
     runs-on: windows-latest
