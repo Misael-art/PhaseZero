@@ -23,7 +23,7 @@ def _payload() -> dict:
     return {
         "schemaVersion": "1",
         "tool": "homelab-status",
-        "profile": "media",
+        "profile": "assistant-private",
         "ready": False,
         "degraded": True,
         "accessMode": {"requested": "local", "effective": "local"},

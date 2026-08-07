@@ -10,14 +10,18 @@ Core (sempre presente, porta 9000): `jellyfin`, `syncthing`, `vaultwarden`,
 `uptime-kuma`. Extras (opt-in `--extras`): `portainer`, `nextcloud`, `grafana`,
 `prometheus`, `paperless-ngx`, `n8n`.
 
-Registro `assets/home-server/homelab-profiles.json` — 6 perfis:
+Registro `assets/home-server/homelab-profiles.json` — 6 perfis públicos
+(cada um com `class` de recursos e `maturity` honesta; default `edge`,
+nenhum perfil pesado sobe por padrão):
 
-- `core`: só core (default).
-- `media`: Jellyfin + Syncthing.
-- `cloud`: Vaultwarden + Syncthing (drive seguro).
-- `assistant`: n8n + Jellyfin + Vaultwarden.
-- `monitoring`: Uptime Kuma + Grafana/Prometheus.
-- `edge`: extras de borda (Portainer/Paperless).
+| Perfil | Objetivo | Classe | Maturidade |
+|---|---|---|---|
+| `assistant-private` | Assistente local privado (Hermes, 9Router, Ollama, ai-memory) | local-inference | preview |
+| `assistant-multichannel` | Canais externos supervisionados (Hermes, OpenClaw) | automation | preview |
+| `automation` | Workflows auditáveis (n8n, PostgreSQL, LangGraph) | automation | preview |
+| `ai-studio` | Dify isolado; pesado, permanece desligado | heavy-studio | blocked |
+| `developer` | Coding assistido (Aider, OpenHands sob demanda) | coding-worker | preview |
+| `edge` | Gateway leve supervisionado (ZeroClaw, modelo remoto via 9Router) | always-on-light | experimental |
 
 Governor `linux/server/homelab-governor.sh`:
 
@@ -25,7 +29,7 @@ Governor `linux/server/homelab-governor.sh`:
 linux/pz server homelab governor list
 linux/pz server homelab governor weights        # pesos por serviço
 linux/pz server homelab governor budget core    # orçamento MiB vs headroom 20%
-linux/pz server homelab governor check --profile media
+linux/pz server homelab governor check --profile assistant-private
 ```
 
 Overcommit ou perfil desconhecido: **fail-closed** (exit != 0, sem plano).
