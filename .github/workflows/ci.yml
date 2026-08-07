@@ -83,6 +83,23 @@ jobs:
           echo "pipefail+grep-q files: $found"
           # Non-blocking — informational
 
+  homelab-fault:
+    runs-on: ubuntu-latest
+    needs: shell-lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq only
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+
+      - name: Run hermetic homelab fault suite (no docker daemon expected)
+        run: |
+          set -euo pipefail
+          if command -v docker >/dev/null 2>&1; then
+            echo "::warning::docker present in runner; suite must still pass without daemon"
+          fi
+          bash tests/linux-homelab.sh
+
   shell-test:
     runs-on: ubuntu-latest
     needs: shell-lint
