@@ -4,24 +4,16 @@
 name: phasezero-homelab
 
 services:
-  # Camada amigável de gestão (equivalente ao CasaOS/Umbrel no Windows/WSL2)
-  portainer:
-    image: ${PZ_IMAGE_PORTAINER:-portainer/portainer-ce:2.33.2}
-    container_name: phasezero-portainer
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    ports:
-      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:9000:9000"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - portainer_data:/data
-
   # Servidor de mídia
   jellyfin:
     image: ${PZ_IMAGE_JELLYFIN:-jellyfin/jellyfin:10.10.7}
     container_name: phasezero-jellyfin
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 2048m
+    cpus: 2.0
     ports:
       - "${HOMELAB_PUBLIC_BIND_ADDR:-127.0.0.1}:8096:8096"
     volumes:
@@ -35,6 +27,11 @@ services:
     container_name: phasezero-syncthing
     restart: unless-stopped
     hostname: phasezero-syncthing
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
     ports:
       - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:8384:8384"
       - "${HOMELAB_PUBLIC_BIND_ADDR:-127.0.0.1}:22000:22000/tcp"
@@ -47,6 +44,11 @@ services:
     image: ${PZ_IMAGE_VAULTWARDEN:-vaultwarden/server:1.34.3}
     container_name: phasezero-vaultwarden
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
     environment:
       - ADMIN_TOKEN=${VW_ADMIN_TOKEN}
       - SIGNUPS_ALLOWED=${VW_SIGNUPS_ALLOWED:-false}
@@ -60,13 +62,17 @@ services:
     image: ${PZ_IMAGE_UPTIME_KUMA:-louislam/uptime-kuma:1.23.16}
     container_name: phasezero-uptime-kuma
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
     ports:
       - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:3001:3001"
     volumes:
       - uptimekuma_data:/app/data
 
 volumes:
-  portainer_data:
   jellyfin_config:
   jellyfin_cache:
   syncthing_data:

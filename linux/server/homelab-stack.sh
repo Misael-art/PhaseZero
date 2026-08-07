@@ -16,6 +16,7 @@ PROJECT="${PZ_HOMELAB_PROJECT:-phasezero-homelab}"
 HOMELAB_STATE="${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}"
 ENV_FILE="${PZ_HOMELAB_ENV_FILE:-$HOMELAB_STATE/.env}"
 BACKUP_ROOT="${PZ_HOMELAB_BACKUP_ROOT:-$HOMELAB_STATE/backups}"
+PZ_HOMELAB_BACKUP_SCHEMA="2"
 
 ACTION="${1:-status}"
 shift 2>/dev/null || true
@@ -25,19 +26,22 @@ JSON_OUTPUT=0
 YES=0
 FOLLOW=0
 ACCESS_MODE="${PZ_HOMELAB_ACCESS_MODE:-local}"
+HOMELAB_PROFILE="${PZ_HOMELAB_PROFILE:-}"
 APP=""
 DEST=""
 SOURCE=""
+VERIFY_MODE=0
 
 usage() {
     cat <<EOF
 Usage:
   homelab-stack.sh status [--json] [--extras] [--access local|tailscale|lan]
   homelab-stack.sh plan [--json] [--extras] [--access local|tailscale|lan]
-  homelab-stack.sh up|down|restart [--extras] [--access local|tailscale|lan]
+  homelab-stack.sh up|down|restart [--extras] [--access local|tailscale|lan] [--profile <key>]
   homelab-stack.sh open <app> [--access local|tailscale|lan]
   homelab-stack.sh logs <app> [--follow]
   homelab-stack.sh backup [--extras] [--dest PATH] [--dry-run]
+  homelab-stack.sh backup verify --source PATH
   homelab-stack.sh restore --source PATH [--yes] [--dry-run]
   homelab-stack.sh update [--extras] [--access local|tailscale|lan] [--dry-run]
   homelab-stack.sh repair [--extras] [--access local|tailscale|lan]
@@ -60,6 +64,12 @@ while [ "$#" -gt 0 ]; do
             shift
             ;;
         --access=*) ACCESS_MODE="${1#--access=}" ;;
+        --profile)
+            [ "${2:-}" ] || { pz_error "--profile requires value"; exit 2; }
+            HOMELAB_PROFILE="$2"
+            shift
+            ;;
+        --profile=*) HOMELAB_PROFILE="${1#--profile=}" ;;
         --dest)
             [ "${2:-}" ] || { pz_error "--dest requires path"; exit 2; }
             DEST="$2"
@@ -84,6 +94,14 @@ while [ "$#" -gt 0 ]; do
                 restore)
                     if [ -z "$SOURCE" ]; then
                         SOURCE="$1"
+                    else
+                        pz_error "unexpected argument: $1"
+                        exit 2
+                    fi
+                    ;;
+                backup)
+                    if [ "$1" = "verify" ]; then
+                        VERIFY_MODE=1
                     else
                         pz_error "unexpected argument: $1"
                         exit 2
@@ -267,11 +285,11 @@ ensure_tailscale() {
 
 app_rows() {
     cat <<'EOF'
-portainer|Portainer|portainer|phasezero-portainer|core|9000|admin|true|portainer_data
 jellyfin|Jellyfin|jellyfin|phasezero-jellyfin|core|8096|public|false|jellyfin_config jellyfin_cache
 syncthing|Syncthing|syncthing|phasezero-syncthing|core|8384|admin|true|syncthing_data
 vaultwarden|Vaultwarden|vaultwarden|phasezero-vaultwarden|core|8222|admin|true|vaultwarden_data
 uptime-kuma|Uptime Kuma|uptime-kuma|phasezero-uptime-kuma|core|3001|admin|true|uptimekuma_data
+portainer|Portainer|portainer|phasezero-portainer|extras|9000|admin|true|portainer_data
 nextcloud|Nextcloud|nextcloud|phasezero-nextcloud|extras|8080|admin|true|nextcloud_db nextcloud_data
 grafana|Grafana|grafana|phasezero-grafana|extras|3000|admin|true|grafana_data
 prometheus|Prometheus|prometheus|phasezero-prometheus|extras|9090|admin|true|prometheus_data
@@ -493,6 +511,14 @@ cmd_up() {
         pz_error "tailscale access requested but Tailscale is logged out; run: pz server homelab tailscale"
         return 1
     fi
+    if [ -n "$HOMELAB_PROFILE" ]; then
+        if ! bash "$PZ_ROOT/linux/server/homelab-governor.sh" check "$HOMELAB_PROFILE" >/dev/null 2>&1; then
+            pz_error "profile $HOMELAB_PROFILE rejected by resource governor; check budget: pz server homelab governor budget $HOMELAB_PROFILE"
+            return 1
+        fi
+        mkdir -p "$HOMELAB_STATE"
+        printf '%s\n' "$HOMELAB_PROFILE" > "$HOMELAB_STATE/profile.active"
+    fi
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         pz_info "dry-run: would generate .env, validate compose, and run compose up -d (project $PROJECT, extras=$WITH_EXTRAS, access=$ACCESS_MODE)"
         PZ_DRY_RUN=1 cmd_plan
@@ -558,42 +584,154 @@ cmd_logs() {
 
 volume_actual_name() {
     local logical="$1" found
+    [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] && { printf '%s\n' "$logical"; return 0; }
     found="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E "^${PROJECT}_${logical}$|_${logical}$|^${logical}$" | head -1 || true)"
     [ -n "$found" ] && printf '%s\n' "$found" || printf '%s_%s\n' "$PROJECT" "$logical"
 }
 
+volume_mount() {
+    local vol="$1" ov="${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}"
+    if [ -n "$ov" ]; then
+        printf '%s/%s\n' "$ov" "$vol"
+        return 0
+    fi
+    docker volume inspect -f '{{ .Mountpoint }}' "$vol"
+}
+
+all_volumes_override() {
+    if [ -n "${PZ_HOMELAB_VOLUMES_OVERRIDE:-}" ]; then
+        # Intentional word-splitting: the override is a space-separated list.
+        # shellcheck disable=SC2086
+        printf '%s\n' $PZ_HOMELAB_VOLUMES_OVERRIDE
+        return 0
+    fi
+    all_volumes
+}
+
+json_arr() {
+    if [ "$#" -eq 0 ]; then
+        echo '[]'
+    else
+        printf '%s\n' "$@" | jq -R . | jq -cs .
+    fi
+}
+
 cmd_backup() {
-    local dest="${DEST:-$BACKUP_ROOT/$(date '+%Y%m%d-%H%M%S')}" vol actual mount
+    local dest="${DEST:-$BACKUP_ROOT/$(date '+%Y%m%d-%H%M%S')}" vol actual mount started finished
+    started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
-        jq -n --arg dest "$dest" --argjson volumes "$(all_volumes | jq -R . | jq -cs .)" \
+        jq -n --arg dest "$dest" --argjson volumes "$(all_volumes_override | jq -R . | jq -cs .)" \
             '{action:"backup", dryRun:true, destination:$dest, volumes:$volumes}'
         return 0
     fi
-    require_docker || return 1
+    [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] || require_docker || return 1
     mkdir -p "$dest"
+    local err=0
+    local -a vol_json=()
     while IFS= read -r vol; do
         [ -n "$vol" ] || continue
         actual="$(volume_actual_name "$vol")"
-        if ! docker volume inspect "$actual" >/dev/null 2>&1; then
-            pz_warn "volume missing, skipped: $actual"
+        mount="$(volume_mount "$actual")"
+        if [ ! -d "$mount" ]; then
+            pz_warn "volume mount missing, skipped: $actual"
             continue
         fi
-        mount="$(docker volume inspect -f '{{ .Mountpoint }}' "$actual")"
-        tar -C "$mount" -czf "$dest/$vol.tgz" .
+        if ! tar -C "$mount" -czf "$dest/$vol.tgz" . 2>/dev/null; then
+            pz_error "tar failed for $actual"
+            err=1
+            continue
+        fi
+        local sha size entries
+        sha="$(sha256sum "$dest/$vol.tgz" | cut -d' ' -f1)"
+        size="$(stat -c%s "$dest/$vol.tgz")"
+        entries="$(tar -tzf "$dest/$vol.tgz" 2>/dev/null | wc -l)"
+        vol_json+=("$(jq -cn --arg name "$vol" --arg archive "$vol.tgz" --arg sha256 "$sha" \
+            --argjson size "$size" --argjson entries "$entries" \
+            '{name:$name, archive:$archive, sha256:$sha256, sizeBytes:$size, entries:$entries}')")
         pz_info "backed up $actual -> $dest/$vol.tgz"
-    done < <(all_volumes)
-    jq -n --arg destination "$dest" '{action:"backup", destination:$destination, ok:true}'
+    done < <(all_volumes_override)
+    [ "$err" = "0" ] || { pz_error "backup incomplete; manifest not written"; return 1; }
+    finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    local volumes_json manifest
+    volumes_json="$(printf '%s\n' "${vol_json[@]}" | jq -s .)"
+    manifest="$(jq -cn --arg schemaVersion "$PZ_HOMELAB_BACKUP_SCHEMA" --arg tool "homelab-backup" \
+        --arg id "$(basename "$dest")" --arg createdAt "$started" --arg finishedAt "$finished" \
+        --arg project "$PROJECT" --argjson volumes "$volumes_json" \
+        '{schemaVersion:$schemaVersion, tool:$tool, id:$id, createdAt:$createdAt, finishedAt:$finishedAt,
+          project:$project, volumes:$volumes, verified:false}')"
+    printf '%s\n' "$manifest" > "$dest/manifest.json.tmp" && mv "$dest/manifest.json.tmp" "$dest/manifest.json"
+    local msha
+    msha="$(sha256sum "$dest/manifest.json" | cut -d' ' -f1)"
+    mkdir -p "$BACKUP_ROOT"
+    jq -n --arg latest "$dest" --arg id "$(basename "$dest")" --arg createdAt "$started" \
+        --arg manifestSha "$msha" --argjson verified false \
+        '{latest:$latest, id:$id, createdAt:$createdAt, manifestSha:$manifestSha, verified:false}' \
+        > "$BACKUP_ROOT/last.json"
+    jq -n --arg destination "$dest" --arg id "$(basename "$dest")" \
+        --argjson volumes "$volumes_json" \
+        '{action:"backup", destination:$destination, id:$id, volumes:$volumes, ok:true}'
+}
+
+cmd_verify_backup() {
+    local src="${1:-}" fail=0
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --source) src="${2:-}"; shift ;;
+            --source=*) src="${1#--source=}" ;;
+        esac
+        shift
+    done
+    [ -n "$src" ] || { pz_error "verify requires --source PATH"; return 2; }
+    [ -d "$src" ] || { pz_error "backup source missing: $src"; return 1; }
+    [ -f "$src/manifest.json" ] || { pz_error "no manifest.json (not a verifiable backup)"; return 1; }
+    local manifest
+    manifest="$(cat "$src/manifest.json")"
+    local -a reasons=()
+    if ! printf '%s\n' "$manifest" | jq -e '.schemaVersion == "2" or .schemaVersion == 2' >/dev/null 2>&1; then
+        reasons+=("unsupported manifest schemaVersion")
+        fail=1
+    fi
+    if ! printf '%s\n' "$manifest" | jq -e '.volumes | type == "array"' >/dev/null 2>&1; then
+        reasons+=("volumes list missing")
+        fail=1
+    fi
+    while IFS=$'\t' read -r archive sha; do
+        [ -n "$archive" ] || continue
+        local f="$src/$archive"
+        if [ ! -f "$f" ]; then
+            reasons+=("archive missing: $archive")
+            fail=1
+            continue
+        fi
+        local got
+        got="$(sha256sum "$f" | cut -d' ' -f1)"
+        [ "$got" = "$sha" ] || { reasons+=("checksum mismatch: $archive"); fail=1; }
+        tar -tzf "$f" >/dev/null 2>&1 || { reasons+=("tar corrupt: $archive"); fail=1; }
+    done < <(printf '%s\n' "$manifest" | jq -r '.volumes[]? | [.archive, .sha256] | @tsv')
+    local out
+    out="$(jq -cn --arg source "$src" --arg schemaVersion "$PZ_HOMELAB_BACKUP_SCHEMA" \
+        --argjson verified "$([ "$fail" -eq 0 ] && echo true || echo false)" \
+        --argjson checks "$(json_arr "${reasons[@]}")" \
+        '{action:"verify-backup", source:$source, schemaVersion:$schemaVersion, verified:$verified, checks:$checks}')"
+    printf '%s\n' "$out"
+    [ "$fail" -eq 0 ]
 }
 
 cmd_restore() {
     [ -n "$SOURCE" ] || { pz_error "restore requires --source PATH"; return 2; }
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         jq -n --arg source "$SOURCE" --argjson archives "$(find "$SOURCE" -maxdepth 1 -name '*.tgz' -printf '%f\n' 2>/dev/null | jq -R . | jq -cs .)" \
-            '{action:"restore", dryRun:true, source:$source, archives:$archives, requiresConfirmation:true}'
+            --argjson manifestOk "$([ -f "$SOURCE/manifest.json" ] && echo true || echo false)" \
+            '{action:"restore", dryRun:true, source:$source, archives:$archives, manifestOk:$manifestOk, requiresConfirmation:true}'
         return 0
     fi
+    [ -f "$SOURCE/manifest.json" ] || { pz_error "restore source is not a verifiable backup (manifest.json missing)"; return 1; }
+    if ! cmd_verify_backup --source "$SOURCE" >/dev/null 2>&1; then
+        pz_error "backup verification failed; refusing restore"
+        return 1
+    fi
     [ "$YES" = "1" ] || { pz_error "restore is destructive; pass --yes after verifying backup"; return 1; }
-    require_docker || return 1
+    [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] || require_docker || return 1
     [ -d "$SOURCE" ] || { pz_error "restore source missing: $SOURCE"; return 1; }
     cmd_down || true
     local archive vol actual mount
@@ -601,9 +739,9 @@ cmd_restore() {
         [ -e "$archive" ] || continue
         vol="$(basename "$archive" .tgz)"
         actual="$(volume_actual_name "$vol")"
-        docker volume inspect "$actual" >/dev/null 2>&1 || docker volume create "$actual" >/dev/null
-        mount="$(docker volume inspect -f '{{ .Mountpoint }}' "$actual")"
-        tar -C "$mount" -xzf "$archive"
+        mount="$(volume_mount "$actual")"
+        mkdir -p "$mount"
+        tar -C "$mount" -xzf "$archive" || { pz_error "restore failed for $vol"; return 1; }
         pz_info "restored $archive -> $actual"
     done
     jq -n --arg source "$SOURCE" '{action:"restore", source:$source, ok:true}'
@@ -648,7 +786,7 @@ case "$ACTION" in
     plan|dry-run) PZ_DRY_RUN="${PZ_DRY_RUN:-0}" cmd_plan ;;
     open) cmd_open ;;
     logs|log) cmd_logs ;;
-    backup) cmd_backup ;;
+    backup) if [ "$VERIFY_MODE" = "1" ]; then cmd_verify_backup --source "$SOURCE"; else cmd_backup; fi ;;
     restore) cmd_restore ;;
     update) cmd_update ;;
     repair) cmd_repair ;;
