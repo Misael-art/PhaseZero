@@ -89,8 +89,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install jq only
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+      - name: Install jq and ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq ripgrep
 
       - name: Syntax-check every shell script
         run: |
@@ -186,7 +186,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install smoke deps
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq ripgrep
 
       - name: Stage runtime into install root and validate
         run: |
