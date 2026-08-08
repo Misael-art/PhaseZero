@@ -6,6 +6,7 @@ from .steamdeck import SteamDeckPage
 from .windows_vm import WindowsVMPage
 from .waydroid import WaydroidPage
 from .server import ServerPage
+from .homelab import HomelabPage
 from .emulation import EmulationPage
 from .boot import BootPage
 from .flatpak import FlatpakPage
@@ -18,7 +19,7 @@ from .results import ResultsPage
 __all__ = [
     "BasePage", "PageRegistry",
     "DashboardPage", "ProfilesPage", "SteamDeckPage",
-    "WindowsVMPage", "WaydroidPage", "ServerPage",
+    "WindowsVMPage", "WaydroidPage", "ServerPage", "HomelabPage",
     "EmulationPage", "BootPage", "FlatpakPage",
     "AiDevPage", "AiProxiesPage", "TuningPage", "OverviewPage", "ResultsPage",
 ]

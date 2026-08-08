@@ -90,13 +90,14 @@ Describe 'Windows home server: homelab-stack' {
         $compose = Join-Path (Split-Path -Parent $scriptPath) 'assets/home-server/docker-compose.homelab.yml'
         Test-Path $compose | Should Be $true
         $raw = Get-Content $compose -Raw
-        foreach ($svc in @('portainer','jellyfin','syncthing','vaultwarden','uptime-kuma')) { $raw | Should Match $svc }
+        foreach ($svc in @('jellyfin','syncthing','vaultwarden','uptime-kuma')) { $raw | Should Match $svc }
+        $raw | Should Not Match '(?m)^\s*portainer:'
     }
-    It 'o compose de extras existe e referencia os servicos pesados opt-in' {
+    It 'o compose de extras referencia o portainer e os servicos pesados opt-in' {
         $extras = Join-Path (Split-Path -Parent $scriptPath) 'assets/home-server/docker-compose.extras.yml'
         Test-Path $extras | Should Be $true
         $raw = Get-Content $extras -Raw
-        foreach ($svc in @('nextcloud','grafana','prometheus','paperless','n8n')) { $raw | Should Match $svc }
+        foreach ($svc in @('portainer','nextcloud','grafana','prometheus','paperless','n8n')) { $raw | Should Match $svc }
     }
     It 'nenhum compose embute segredos em texto puro (apenas placeholders ${...})' {
         foreach ($f in @('docker-compose.homelab.yml','docker-compose.extras.yml')) {

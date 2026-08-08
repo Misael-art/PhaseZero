@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "tool": "homelab-profiles",
+  "default": "edge",
+  "coreBaseMB": 1024,
+  "coreBaseServices": ["vaultwarden", "syncthing", "uptime-kuma"],
+  "weightsMB": {
+    "vaultwarden": 256,
+    "syncthing": 512,
+    "uptime-kuma": 256,
+    "jellyfin": 2048,
+    "nextcloud": 1024,
+    "nextcloud-db": 512,
+    "n8n": 1024,
+    "prometheus": 512,
+    "node-exporter": 128,
+    "grafana": 512,
+    "paperless": 1024,
+    "portainer": 128,
+    "hermes": 384,
+    "9router": 256,
+    "ollama": 2048,
+    "ai-memory": 512,
+    "openwebui": 1024,
+    "openclaw": 1024,
+    "langgraph": 512,
+    "postgres": 1024,
+    "dify": 2048,
+    "dify-db": 1024,
+    "dify-redis": 512,
+    "dify-vector": 1024,
+    "aider": 512,
+    "openhands": 2048,
+    "zeroclaw": 384
+  },
+  "profiles": [
+    {
+      "key": "assistant-private",
+      "title": "Assistant Privado Local",
+      "description": "Assistente local privado: Hermes, 9Router, Ollama, ai-memory, OpenWebUI opcional",
+      "class": "local-inference",
+      "maturity": "preview",
+      "extras": true,
+      "services": ["hermes", "9router", "ollama", "ai-memory"]
+    },
+    {
+      "key": "assistant-multichannel",
+      "title": "Assistant Multicanal",
+      "description": "Canais externos supervisionados: Hermes, OpenClaw avancado com pairing e allowlist",
+      "class": "automation",
+      "maturity": "preview",
+      "extras": true,
+      "services": ["hermes", "9router", "openclaw"]
+    },
+    {
+      "key": "developer",
+      "title": "Developer",
+      "description": "Coding assistido: Aider padrao, OpenHands sob demanda",
+      "class": "coding-worker",
+      "maturity": "preview",
+      "extras": true,
+      "services": ["aider", "openhands", "9router"]
+    },
+    {
+      "key": "automation",
+      "title": "Automacao",
+      "description": "Workflows auditaveis: n8n, PostgreSQL, LangGraph",
+      "class": "automation",
+      "maturity": "preview",
+      "extras": true,
+      "services": ["n8n", "postgres", "langgraph"]
+    },
+    {
+      "key": "ai-studio",
+      "title": "AI Studio",
+      "description": "Dify isolado: Dify, DB, Redis, vector store, 9Router/Ollama; pesado, permanece desligado",
+      "class": "heavy-studio",
+      "maturity": "blocked",
+      "extras": true,
+      "services": ["dify", "dify-db", "dify-redis", "dify-vector", "9router", "ollama"]
+    },
+    {
+      "key": "edge",
+      "title": "Edge Gateway",
+      "description": "Gateway leve supervisionado: ZeroClaw, modelo remoto via 9Router",
+      "class": "always-on-light",
+      "maturity": "experimental",
+      "extras": false,
+      "services": ["zeroclaw", "9router"]
+    }
+  ]
+}
