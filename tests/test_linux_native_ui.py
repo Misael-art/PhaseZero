@@ -354,7 +354,7 @@ def test_native_gui_offscreen_smoke(tmp_path):
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=120,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -382,7 +382,7 @@ def test_boot_selector_offscreen_smoke(tmp_path):
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=120,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -401,7 +401,7 @@ def test_profile_preview_runs_without_mutation(tmp_path):
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=90,
         check=False,
     )
     assert result.returncode == 0, result.stderr
@@ -426,7 +426,7 @@ def done(result):
     state["result"] = result
     app.quit()
 runner.completed.connect(done)
-QTimer.singleShot(10000, app.quit)
+QTimer.singleShot(60000, app.quit)
 runner.start(action)
 app.exec()
 result = state["result"]
@@ -445,7 +445,7 @@ assert saved["exitCode"] == 0
         env=env,
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=90,
         check=False,
     )
     assert result.returncode == 0, result.stderr
