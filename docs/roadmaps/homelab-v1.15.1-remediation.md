@@ -500,8 +500,9 @@ sem evidência.
 | Item | Estado atual | Verificado por | Data |
 |---|---|---|---|
 | `main` | `31642be`, alinhada com `origin/main` | `git status`, `ls-remote` | 2026-08-07 |
-| PR #36 | aberta, conflitante, CI vermelha | `gh pr view 36` | 2026-08-07 |
-| Branch de remediação | `codex/homelab-v1151-remediation` criada; worktree `pz-homelab-v1151`; 14 commits | `git log` | 2026-08-07 |
+| PR #36 | fechada (substituída) | `gh pr close 36` | 2026-08-08 |
+| PR novo | `#37` aberta; `codex/homelab-v1151-remediation` -> `main` | `gh pr view 37` | 2026-08-08 |
+| Branch de remediação | `codex/homelab-v1151-remediation` criada; worktree `pz-homelab-v1151`; 17 commits | `git log` | 2026-08-07 |
 | Latest release | `v1.14.7` | `gh release list` | 2026-08-07 |
 | Pacote host | `1.14.7-1` | `pacman -Q` | 2026-08-07 |
 | Tag `v1.15.0` | existente; reservada | `git ls-remote` | 2026-08-07 |
@@ -521,6 +522,7 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-07 | opencode | `codex/homelab-v1151-remediation` / `pz-homelab-v1151` | Fase 0 (baseline) | `22298d3`..`92d576b` (8 commits) | suíte hermética exit 0; pytest 437; shellcheck; `git diff --check` | Port validado em commits por fase; Player reescrito (async QProcess) + 12 testes verdes |
 | 2026-08-07 | opencode | idem | Fase 4 (perfis) | `4458ff3` | suíte hermética exit 0 | 6 perfis públicos implementados: assistant-private, assistant-multichannel, automation, ai-studio (blocked), developer, edge (default) |
 | 2026-08-07 | opencode | idem | Fase 5/8 (CLI+CI) | `0e261eb`, `6bac525`, `9676b8e` | suíte exit 0; smoke install-root exit 0; compose-validate local OK | alias `profiles --json`; socket-proxy; 5 jobs homelab no CI; `homelab-integration-disposable` delegado à Fase 2 (probe E2E faltante) |
+| 2026-08-08 | opencode | idem | Fase 0/10 (PR) | branch pushed; PR #37 aberto; #36 fechada | gitleaks green; compose-validate green; homelab-python-test green; security-secret-scan green (parcial) | CI principal em andamento (lint, shell-lint, python-test, shell-test, pester); aguardar conclusão antes do merge |
 
 ## Formato obrigatório de handoff
 
