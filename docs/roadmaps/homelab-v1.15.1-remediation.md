@@ -481,13 +481,13 @@ Cada requisito precisa de uma linha. Não aceitar relatório narrativo sem matri
 
 | ID | Requisito | Implementação | Teste comportamental | Prova CI | Estado | Limitação |
 |---|---|---|---|---|---|---|
-| HL-F0-001 | Baseline reproduzível | Pendente | Pendente | Pendente | pending | — |
-| HL-RUN-001 | Estado nunca em `/root` | Pendente | Pendente | Pendente | pending | — |
-| HL-CMP-001 | Nenhum Docker socket direto | Pendente | Pendente | Pendente | pending | — |
-| HL-BKP-001 | Restore reversível | Pendente | Pendente | Pendente | pending | — |
-| HL-GOV-001 | WinVM gera suspensão graciosa | Pendente | Pendente | Pendente | pending | — |
-| HL-SEC-001 | Segredos ausentes das saídas | Pendente | Pendente | Pendente | pending | — |
-| HL-UI-001 | Player não bloqueia event loop | Pendente | Pendente | Pendente | pending | — |
+| HL-F0-001 | Baseline reproduzível | Worktree dedicado + 14 commits por fase | Suíte hermética exit 0; pytest 437; smoke | Jobs `homelab-*` no ci.yml (PR ainda não aberto) | in_progress | PR novo ainda a abrir; CI na branch ainda não executado no GitHub |
+| HL-RUN-001 | Estado nunca em `/root` | `boot-prepare`/ops com HOME/XDG explícitos | `tests/linux-homelab.sh` (identity; boot-prepare) | homelab-shell-test | verified | — |
+| HL-CMP-001 | Nenhum Docker socket direto | `socket-proxy` (read-only, allowlist) + Portainer via `DOCKER_HOST` | Suíte: compose pins/binds/hardening; compose-validate assina `socket-proxy` ro=true apenas | compose-validate | verified | — |
+| HL-BKP-001 | Restore reversível | manifest schemaVersion 2 + verify-then-apply + `--plan` | Suíte: tamper fail-closed, restore sem `--yes` recusa, verify antes de aplicar | homelab-shell-test | in_progress | Rollback automático pós-falha parcial ainda não provado em E2E |
+| HL-GOV-001 | WinVM gera suspensão graciosa | — | — | — | pending | Requer contrato WinVM + teste de contrato antes de código |
+| HL-SEC-001 | Segredos ausentes das saídas | repair gera `.env` sem leak; redação no status | Suíte: valor secreto ausente do JSON de repair | security-secret-scan (gitleaks) | in_progress | Scan completo depende de CI rodando |
+| HL-UI-001 | Player não bloqueia event loop | async QProcess; separado stdout/stderr; timeout | 13 testes do player (offscreen) incl. spawn/close/timeout | homelab-python-test | verified | — |
 
 Adicionar IDs, nunca reutilizar ID para requisito diferente. Estados permitidos:
 `pending`, `in_progress`, `blocked`, `verified`, `deferred`.
@@ -501,11 +501,15 @@ sem evidência.
 |---|---|---|---|
 | `main` | `31642be`, alinhada com `origin/main` | `git status`, `ls-remote` | 2026-08-07 |
 | PR #36 | aberta, conflitante, CI vermelha | `gh pr view 36` | 2026-08-07 |
-| Branch de remediação | ainda não criada | `git branch` | 2026-08-07 |
+| Branch de remediação | `codex/homelab-v1151-remediation` criada; worktree `pz-homelab-v1151`; 14 commits | `git log` | 2026-08-07 |
 | Latest release | `v1.14.7` | `gh release list` | 2026-08-07 |
 | Pacote host | `1.14.7-1` | `pacman -Q` | 2026-08-07 |
 | Tag `v1.15.0` | existente; reservada | `git ls-remote` | 2026-08-07 |
 | Homelab real | não deve ser implantado | revalidar antes/depois | 2026-08-07 |
+| Player UI | async QProcess; restore sem `--yes`; 13 testes verdes | `pytest tests/test_homelab_player.py` | 2026-08-07 |
+| Suíte hermética | `tests/linux-homelab.sh` exit 0 (perfis, governo, backup, broker) | bash | 2026-08-07 |
+| Socket Docker | somente `socket-proxy` read-only; Portainer via `DOCKER_HOST` | compose test, suíte | 2026-08-07 |
+| CI homelab | `homelab-shell-test`, `-python-test`, `compose-validate`, `security-secret-scan`, `package-smoke` adicionados | ci.yml | 2026-08-07 |
 
 ## Ledger de execução
 
@@ -514,6 +518,9 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | Data | Agente | Branch/worktree | Fase | Commit/PR | Gates | Resultado/próximo passo |
 |---|---|---|---|---|---|---|
 | 2026-08-07 | Codex | `main` | Roadmap | não commitado | `git diff --check` passou | Roadmap canônico criado; iniciar Fase 0 em worktree novo |
+| 2026-08-07 | opencode | `codex/homelab-v1151-remediation` / `pz-homelab-v1151` | Fase 0 (baseline) | `22298d3`..`92d576b` (8 commits) | suíte hermética exit 0; pytest 437; shellcheck; `git diff --check` | Port validado em commits por fase; Player reescrito (async QProcess) + 12 testes verdes |
+| 2026-08-07 | opencode | idem | Fase 4 (perfis) | `4458ff3` | suíte hermética exit 0 | 6 perfis públicos implementados: assistant-private, assistant-multichannel, automation, ai-studio (blocked), developer, edge (default) |
+| 2026-08-07 | opencode | idem | Fase 5/8 (CLI+CI) | `0e261eb`, `6bac525`, `9676b8e` | suíte exit 0; smoke install-root exit 0; compose-validate local OK | alias `profiles --json`; socket-proxy; 5 jobs homelab no CI; `homelab-integration-disposable` delegado à Fase 2 (probe E2E faltante) |
 
 ## Formato obrigatório de handoff
 
