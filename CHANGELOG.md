@@ -68,6 +68,33 @@ As versões seguem a data de build em `version.json`.
 - Compartilhamento `PZExchange`, canal SPICE WebDAV e diagnóstico da rede/NIC
   libvirt.
 
+### Homelab v1.15.1 (remediação, merge PR #37)
+
+### Adicionado
+- Port do Homelab v1.15.1: stack, status, boot-prepare, compose core/extras e
+  operations com lock de exclusão, crash/resume/cancel e rollback; estado nunca
+  em `/root` (HOME/XDG explícitos via runuser).
+- Resource governor com 6 perfis públicos (`homelab-profiles.json`):
+  assistant-private, assistant-multichannel, automation, ai-studio (blocked),
+  developer e edge (default), com classe, maturidade e pesos por imagem;
+  `pz server homelab profile set` com gate de RAM e fail-closed.
+- AI policy broker (modos, allowlist de ações, redação de segredos).
+- CLI `pz server homelab` (status/plan/verify/repair/backup/restore/logs,
+  `profiles --json`) e Player nativo async QProcess com UI de controle.
+- Portainer alcança o Docker somente via `socket-proxy` read-only
+  (tecnativa/docker-socket-proxy:0.2.0, allowlist CONTAINERS/TASKS); nenhum
+  container monta `/var/run/docker.sock`.
+- Suíte hermética `tests/linux-homelab.sh`, smoke `packaging/install-root-smoke.sh`
+  e jobs dedicados de CI (`homelab-shell-test`, `homelab-python-test`,
+  `compose-validate`, `package-smoke`, `security-secret-scan` com gitleaks).
+
+### Corrigido
+- Restore recusa aplicar sem `--yes` explícito; verify-then-apply e manifest
+  schemaVersion 2 com tamper fail-closed.
+- Contrato CLI/Player alinhado (`pz server homelab profiles --json`); scripts
+  novos marcados executáveis (core.filemode=false); suíte pinada ao checkout
+  via `PZ_ROOT`; ShellCheck 0.9.0 e 0.11.x verdes com os mesmos excludes do CI.
+
 ### Corrigido
 - Auditoria deduplica aliases `/usr/lib` e `/usr/lib64` do mesmo inode.
 - Shares Windows validam listagem real e criam diretório de intercâmbio como o
