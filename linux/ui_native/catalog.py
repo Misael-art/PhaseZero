@@ -408,7 +408,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
     )
 
     emu_rows = [
-        ("status", "Status emulação", "Auditoria geral.", ("emulation", "status"), None),
+        ("status", "Status emulação", "Estado atual da stack e componentes instalados.", ("emulation", "status"), None),
         ("setup", "Setup completo", "Stack completa de emulação.", ("emulation", "setup", "install"), ("emulation", "setup", "dry-run")),
         ("layout", "Criar layout", "Pastas compartilhadas de ROMs, BIOS e saves.", ("emulation", "layout"), ("emulation", "status")),
         ("emudeck", "Instalar EmuDeck", "Launcher AppImage e integração.", ("emulation", "emudeck", "install"), ("emulation", "emudeck", "dry-run")),
@@ -439,7 +439,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("lua", "Instalar Lua", "Lua, LuaJIT e LuaRocks.", ("emulation", "lua", "install"), ("emulation", "lua", "dry-run")),
         ("steam-tools", "Instalar Steam tools", "Ferramentas auxiliares e backups.", ("emulation", "steam-tools", "install"), ("emulation", "steam-tools", "dry-run")),
         ("heroic", "Reparar Heroic", "Defaults, biblioteca e menu KDE.", ("emulation", "heroic", "repair"), ("emulation", "heroic", "plan")),
-        ("doctor", "Diagnóstico emulação", "Auditoria completa do ecossistema.", ("emulation", "doctor", "--json"), None),
+        ("doctor", "Diagnóstico emulação", "Verificação profunda: configurações, integrações e integridade de ROMs/BIOS.", ("emulation", "doctor", "--json"), None),
         ("fixes", "Reparos amigáveis", "Lista correções disponíveis.", ("emulation", "fixes", "list"), None),
         ("optimizers", "Aplicar configs por jogo", "14 perfis DuckStation, PCSX2 e Dolphin.", ("emulation", "optimizer", "apply-all"), ("emulation", "optimizer", "plan")),
     ]
@@ -508,7 +508,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("emulation.keys", "Emulação", "Importar Switch keys", "Importa keys próprias.", ("emulation", "switch", "import-keys", "{input}"), "dialog-password", mutable=True, preview=("emulation", "status"), input_label="Selecione prod.keys", input_kind="file", badge="Arquivo local"),
             _a("emulation.firmware", "Emulação", "Importar firmware", "Importa firmware próprio.", ("emulation", "switch", "import-firmware", "{input}"), "folder-open", mutable=True, preview=("emulation", "status"), input_label="Selecione firmware", input_kind="path", badge="Arquivo local"),
             _a("emulation.nsz", "Emulação", "Converter NSZ", "Conversão atômica NSZ → NSP.", ("emulation", "nsz", "convert", "{input}"), "document-export", mutable=True, preview=("emulation", "nsz", "plan", "{input}"), input_label="Selecione NSZ ou pasta", input_kind="path"),
-            _a("emulation.ps3-game", "Emulação", "Importar jogo PS3", "Importa dump próprio.", ("emulation", "ps3", "import-game", "{input}"), "folder-open", mutable=True, preview=("emulation", "ps3", "dry-run"), input_label="Selecione dump PS3", input_kind="path"),
+            _a("emulation.ps3-game", "Emulação", "Importar jogo PS3", "Importa pasta de jogo (dump próprio) para a biblioteca PS3.", ("emulation", "ps3", "import-game", "{input}"), "folder-open", mutable=True, preview=("emulation", "ps3", "dry-run"), input_label="Selecione dump PS3", input_kind="path"),
         ]
     )
 
@@ -569,7 +569,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("codexbar-setup", "Configurar CodexBar", "Instala somente CLI/config; plasmoid permanece opt-in.", ("ai", "codexbar", "setup"), ("ai", "codexbar", "status")),
         ("codexbar-auth", "Autenticar CodexBar", "Detecta sessões Codex/Claude sem exibir credenciais.", ("ai", "codexbar", "auth", "--provider", "all"), ("ai", "codexbar", "status")),
         ("codexbar-repair", "Reparar CodexBar", "Repara CLI/config sem instalar ou atualizar QML no Plasma.", ("ai", "codexbar", "repair"), ("ai", "codexbar", "health")),
-        ("ides", "Configurar IDEs", "Integrações de agentes.", ("ai", "setup", "ides"), ("ai", "status")),
+        ("ides", "Configurar IDEs", "Integra agents (OpenCode, Codex, Claude) nas IDEs/editor.", ("ai", "setup", "ides"), ("ai", "status")),
         ("mcp-sync", "Sincronizar MCPs", "Sincroniza defaults seguros.", ("ai", "mcp", "sync", "all"), ("ai", "mcp", "status")),
         ("claude-status", "Claude + Bonsai", "Audita OAuth, rotas isoladas, hooks e conflitos com proxies.", ("ai", "claude", "status"), None),
         ("claude-install", "Reparar Claude + Bonsai", "Aplica instalação transacional com backup e rollback automático.", ("ai", "claude", "install", "--yes"), ("ai", "claude", "install", "--dry-run")),
@@ -663,7 +663,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
     # OpenAI-compatible proxy suite (linux/ai/proxy-suite.sh).
     proxy_rows = [
         ("proxies", "Instalar proxies IA", "Suite Linux OpenAI-compatible.", ("ai", "proxies", "install", "all"), ("ai", "proxies", "status")),
-        ("proxies-ides", "Configurar proxies nas IDEs", "Integra OpenCode, VS Code/Code-OSS e ZCode.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
+        ("proxies-ides", "Configurar proxies nas IDEs", "Injeta proxies de IA (OpenCode, VS Code/Code-OSS, ZCode) nas IDEs.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
         ("proxies-auth", "Auth proxies IA", "Status redigido de login/sessão.", ("ai", "proxies", "auth", "all"), None),
         ("proxies-login-kimi", "Login Kimi", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "kimiproxy"), ("ai", "proxies", "auth", "kimiproxy")),
         ("proxies-login-qwen", "Login Qwen", "Abre fluxo manual de browser do QwenProxy.", ("ai", "proxies", "login", "qwenproxy"), ("ai", "proxies", "auth", "qwenproxy")),
@@ -816,8 +816,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("emulation.hydra-configure", "Emulação", "Configurar Hydra", "Configura Hydra Classic e emuladores.", ("emulation", "hydra", "configure"), "applications-games", mutable=True, preview=("emulation", "hydra", "status"), visibility="advanced"),
             _a("emulation.ps1", "Emulação", "Configurar PlayStation 1", "Configura paths DuckStation.", ("emulation", "ps1", "configure"), "applications-games", mutable=True, preview=("emulation", "status"), visibility="advanced"),
             _a("emulation.ps2", "Emulação", "Configurar PlayStation 2", "Configura paths PCSX2.", ("emulation", "ps2", "configure"), "applications-games", mutable=True, preview=("emulation", "status"), visibility="advanced"),
-            _a("emulation.ps3-pkg", "Emulação", "Importar PKG PS3", "Importa PKG obtido legalmente.", ("emulation", "ps3", "import-pkg", "{input}"), "package-x-generic", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione PKG PS3", "file"),), visibility="advanced"),
-            _a("emulation.ps3-rap", "Emulação", "Importar RAP PS3", "Importa licença RAP própria.", ("emulation", "ps3", "import-rap", "{input}"), "dialog-password", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione RAP", "file"),), visibility="advanced"),
+            _a("emulation.ps3-pkg", "Emulação", "Importar PKG PS3", "Instala pacote PKG (jogo ou loja) no PS3.", ("emulation", "ps3", "import-pkg", "{input}"), "package-x-generic", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione PKG PS3", "file"),), visibility="advanced"),
+            _a("emulation.ps3-rap", "Emulação", "Importar RAP PS3", "Importa licença RAP para ativar um PKG instalado.", ("emulation", "ps3", "import-rap", "{input}"), "dialog-password", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione RAP", "file"),), visibility="advanced"),
             _a("emulation.performance.status", "Emulação", "Status performance", "Audita perfis adaptativos.", ("emulation", "performance", "status"), "utilities-system-monitor", visibility="advanced"),
             _a("emulation.dualscreen.status", "Emulação", "Detectar telas", "Detecta Deck e display externo.", ("emulation", "dualscreen", "detect"), "video-display", visibility="advanced"),
             _a("emulation.lua.status", "Emulação", "Status Lua", "Audita Lua, LuaJIT e LuaRocks.", ("emulation", "lua", "status"), "utilities-terminal", visibility="advanced"),
