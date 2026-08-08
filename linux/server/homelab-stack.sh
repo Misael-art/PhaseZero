@@ -733,18 +733,76 @@ cmd_restore() {
     [ "$YES" = "1" ] || { pz_error "restore is destructive; pass --yes after verifying backup"; return 1; }
     [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] || require_docker || return 1
     [ -d "$SOURCE" ] || { pz_error "restore source missing: $SOURCE"; return 1; }
+    local pre_dir="$SOURCE.pre-restore"
+    mkdir -p "$pre_dir"
+    local -a pre_vol=()
+    local vol actual mount
+    while IFS= read -r vol; do
+        [ -n "$vol" ] || continue
+        actual="$(volume_actual_name "$vol")"
+        mount="$(volume_mount "$actual")"
+        if [ ! -d "$mount" ]; then
+            pz_warn "no pre-restore snapshot for $actual (mount missing)"
+            continue
+        fi
+        if ! tar -C "$mount" -czf "$pre_dir/$vol.tgz" . 2>/dev/null; then
+            pz_error "pre-restore snapshot failed for $actual; aborting restore"
+            return 1
+        fi
+        local sha size entries
+        sha="$(sha256sum "$pre_dir/$vol.tgz" | cut -d' ' -f1)"
+        size="$(stat -c%s "$pre_dir/$vol.tgz")"
+        entries="$(tar -tzf "$pre_dir/$vol.tgz" 2>/dev/null | wc -l)"
+        pre_vol+=("$(jq -cn --arg name "$vol" --arg archive "$vol.tgz" --arg sha256 "$sha" \
+            --argjson size "$size" --argjson entries "$entries" \
+            '{name:$name, archive:$archive, sha256:$sha256, sizeBytes:$size, entries:$entries}')")
+    done < <(all_volumes_override)
+    if [ "${#pre_vol[@]}" -gt 0 ]; then
+        jq -cn --arg schemaVersion "$PZ_HOMELAB_BACKUP_SCHEMA" --arg tool "homelab-restore-pre" \
+            --arg id "$(basename "$SOURCE").pre-restore" --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg project "$PROJECT" --argjson volumes "$(printf '%s\n' "${pre_vol[@]}" | jq -s .)" \
+            '{schemaVersion:$schemaVersion, tool:$tool, id:$id, createdAt:$createdAt, project:$project, volumes:$volumes, verified:false}' \
+            > "$pre_dir/manifest.json"
+    fi
     cmd_down || true
-    local archive vol actual mount
+    local -a started=()
+    local failed=""
     for archive in "$SOURCE"/*.tgz; do
         [ -e "$archive" ] || continue
         vol="$(basename "$archive" .tgz)"
         actual="$(volume_actual_name "$vol")"
         mount="$(volume_mount "$actual")"
-        mkdir -p "$mount"
-        tar -C "$mount" -xzf "$archive" || { pz_error "restore failed for $vol"; return 1; }
+        if ! mkdir -p "$mount"; then
+            pz_error "mount dir unavailable for $vol"
+            failed="$vol"
+            break
+        fi
+        if ! tar -C "$mount" -xzf "$archive"; then
+            pz_error "restore failed for $vol"
+            failed="$vol"
+            break
+        fi
+        started+=("$vol")
         pz_info "restored $archive -> $actual"
     done
-    jq -n --arg source "$SOURCE" '{action:"restore", source:$source, ok:true}'
+    if [ -n "$failed" ]; then
+        local rb_ok=true rb_fail=""
+        for v in "${started[@]}"; do
+            if [ -f "$pre_dir/$v.tgz" ]; then
+                if ! tar -C "$(volume_mount "$(volume_actual_name "$v")")" -xzf "$pre_dir/$v.tgz" 2>/dev/null; then
+                    rb_ok=false
+                    rb_fail="$rb_fail $v"
+                fi
+            fi
+        done
+        jq -n --arg source "$SOURCE" --arg pre "$pre_dir" --arg volume "$failed" \
+            --argjson rollbackApplied "$([ "$rb_ok" = "true" ] && echo true || echo false)" \
+            --arg rolledBack "$(printf '%s' "${started[@]}")" --arg rollbackFailed "${rb_fail# }" \
+            '{action:"restore", source:$source, ok:false, failedVolume:$volume, preRestore:$pre, rollbackApplied:$rollbackApplied, rollbackFailed:$rollbackFailed}'
+        return 1
+    fi
+    jq -n --arg source "$SOURCE" --arg pre "$pre_dir" \
+        '{action:"restore", source:$source, ok:true, preRestore:$pre}'
 }
 
 cmd_update() {

@@ -417,8 +417,11 @@ if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1'"
 fi
 # corrupt the restore target to prove restore writes
 rm -f "$VM/vaultwarden_data/db.sqlite"
-eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:' | jq -e '.ok == true' >/dev/null
+rest_out="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:')"
+printf '%s\n' "$rest_out" | jq -e '.ok == true and .preRestore != null' >/dev/null
 grep -q 'secret-password-1' "$VM/vaultwarden_data/db.sqlite"
+test -f "$BKT/bk1.pre-restore/manifest.json"
+jq -e '.tool == "homelab-restore-pre" and (.volumes | length) == 2' "$BKT/bk1.pre-restore/manifest.json" >/dev/null
 echo "  restore verify-then-apply ok"
 # restore from a tampered backup must be refused before applying
 cp "$BKT/bk1/vaultwarden_data.tgz" "$BKT/bk1/vaultwarden_data.tgz.bak"
@@ -434,6 +437,22 @@ if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$TMP/backu
     echo "FAIL: legacy backup restored without manifest"; exit 1
 fi
 echo "  legacy refused ok"
+# partial restore failure must roll back to the pre-restore state
+echo "changed-after-backup" > "$VM/vaultwarden_data/db.sqlite"
+echo "fresh-b" > "$VM/syncthing_data/b.txt"
+# poison the second volume so extraction fails mid-restore
+rm -rf "$VM/syncthing_data" && touch "$VM/syncthing_data"
+rb_out="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:' || true)"
+printf '%s\n' "$rb_out" | jq -e '.ok == false and .rollbackApplied == true and .failedVolume == "syncthing_data"' >/dev/null
+if printf '%s\n' "$rb_out" | jq -e '.ok == true' >/dev/null 2>&1; then
+    echo "FAIL: restore with poisoned volume succeeded"; exit 1
+fi
+rm -rf "$VM/syncthing_data" && mkdir -p "$VM/syncthing_data" && echo "file-a" > "$VM/syncthing_data/a.txt"
+grep -q 'changed-after-backup' "$VM/vaultwarden_data/db.sqlite" \
+    || { echo "FAIL: rollback did not restore pre-restore state"; exit 1; }
+test "$(cat "$VM/vaultwarden_data/db.sqlite")" = "changed-after-backup" \
+    || { echo "FAIL: rollback restored backup instead of pre-restore state"; exit 1; }
+echo "  restore partial failure rolls back to pre-restore ok"
 # status surfaces lastBackup + verified
 PZ_HOMELAB_BACKUP_ROOT="$BKT" "$REPO_ROOT/linux/pz" server homelab status --json >/tmp/bkst.json 2>&1 || true
 jq -e '.backupState.backups == ["bk1"] and .backupState.lastBackup.latest != null and .backupState.verified == false' /tmp/bkst.json >/dev/null
