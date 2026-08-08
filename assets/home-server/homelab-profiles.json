@@ -3,6 +3,7 @@
   "tool": "homelab-profiles",
   "default": "edge",
   "coreBaseMB": 1024,
+  "winvmMB": 2048,
   "coreBaseServices": ["vaultwarden", "syncthing", "uptime-kuma"],
   "weightsMB": {
     "vaultwarden": 256,

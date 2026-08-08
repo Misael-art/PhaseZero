@@ -16,6 +16,11 @@ export XDG_STATE_HOME="$TMP/state"
 export PZ_HOMELAB_STATE="$TMP/homelab"
 mkdir -p "$HOME" "$XDG_STATE_HOME" "$PZ_HOMELAB_STATE"
 
+# Pin the WinVM contract boundary to a stub so the suite never touches the
+# real WinVM (or the host `pz`) and stays deterministic on every runner.
+export PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm.status"
+printf '%s\n' '{"libvirtState":"shut off","currentMarker":"no","bootRuntimeStale":false}' > "$PZ_HOMELAB_WINVM_STATUS_FILE"
+
 echo "=== syntax ==="
 bash -n "$REPO_ROOT/linux/server/homelab-stack.sh"
 bash -n "$REPO_ROOT/linux/server/casaos.sh"
@@ -277,6 +282,37 @@ if PZ_DRY_RUN=1 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=512 \
     echo "FAIL: up accepted overcommit profile"; exit 1
 fi
 echo "  up profile gate ok"
+
+echo "=== winvm contract: status boundary, graceful suspend, resume ==="
+jq -e '.winvmMB == 2048' "$REPO_ROOT/assets/home-server/homelab-profiles.json" >/dev/null
+echo "  winvm weight registered ok"
+"$REPO_ROOT/linux/server/homelab-governor.sh" winvm-status | jq -e '.status == "idle" and .active == false and .weightMB == 2048' >/dev/null
+echo "  winvm idle detection ok"
+PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" budget ai-studio | jq -e '.winvmActive == false and .verdict == "pass"' >/dev/null
+echo "  heavy profile passes when winvm idle ok"
+printf '%s\n' '{"libvirtState":"running","currentMarker":"no","bootRuntimeStale":false}' > "$PZ_HOMELAB_WINVM_STATUS_FILE"
+"$REPO_ROOT/linux/server/homelab-governor.sh" winvm-status | jq -e '.status == "active"' >/dev/null
+echo "  winvm active detection ok"
+if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" check ai-studio >/dev/null 2>&1; then
+    echo "FAIL: heavy profile passed while winvm active"; exit 1
+fi
+PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" budget ai-studio \
+    | jq -e '.winvmActive == true and .winvmWeightMB == 2048 and (.reasons | any(. | test("winvm active")))' >/dev/null
+echo "  winvm conflict impact plan ok"
+suspend_out="$("$REPO_ROOT/linux/server/homelab-governor.sh" winvm-suspend --dry-run)"
+printf '%s\n' "$suspend_out" | jq -e '.winvmSuspendRequested == true and .method == "graceful-qga" and .dryRun == true and .killUsed == "never"' >/dev/null
+echo "  graceful suspend plan ok"
+SUSPEND_CAPTURE="$TMP/suspend.capture"
+PZ_HOMELAB_WINVM_SUSPEND_CMD="printf suspend-called > '$SUSPEND_CAPTURE' && echo ok" \
+    "$REPO_ROOT/linux/server/homelab-governor.sh" winvm-suspend | jq -e '.applied == true and .killUsed == "never"' >/dev/null
+grep -Fq 'suspend-called' "$SUSPEND_CAPTURE"
+echo "  graceful suspend executes configured command ok"
+printf '%s\n' '{"libvirtState":"shut off","currentMarker":"no","bootRuntimeStale":false}' > "$PZ_HOMELAB_WINVM_STATUS_FILE"
+"$REPO_ROOT/linux/server/homelab-governor.sh" winvm-suspend --dry-run | jq -e '.winvmSuspendRequested == false and .status == "idle"' >/dev/null
+echo "  suspend no-op when idle ok"
+"$REPO_ROOT/linux/server/homelab-governor.sh" winvm-resume | jq -e '.winvmReleased == true and .status == "idle"' >/dev/null
+PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" check ai-studio >/dev/null
+echo "  resume after winvm end ok"
 
 echo "=== boot-prepare identity: marker absent is a no-op ==="
 "$REPO_ROOT/linux/server/homelab-boot-prepare.sh" 2>&1 | rg -q 'nothing to do'

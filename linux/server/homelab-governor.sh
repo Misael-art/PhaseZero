@@ -13,6 +13,16 @@
 #   homelab-governor.sh weights [--json]
 #   homelab-governor.sh budget <profile> [--headroom PCT]
 #   homelab-governor.sh check <profile> [--headroom PCT]
+#   homelab-governor.sh winvm-status
+#   homelab-governor.sh winvm-suspend [--dry-run]
+#   homelab-governor.sh winvm-resume
+#
+# WinVM contract (Fase 4): the governor never touches WinVM processes. It reads
+# the guest state through ONE boundary -- PZ_HOMELAB_WINVM_STATUS_FILE or
+# `pz windows-vm status --json` -- and suspends only through a graceful QGA
+# command (PZ_HOMELAB_WINVM_SUSPEND_CMD, default `pz windows-vm guest-login
+# shutdown --json`). A silent kill is never used; every suspend path records
+# `killUsed:"never"`. No WinVM file is modified from here.
 set -euo pipefail
 
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -46,10 +56,89 @@ pz_governor_available_mb() {
         || { pz_error "cannot read total RAM"; return 1; }
 }
 
+# pz_governor_winvm_status -> 'active' | 'idle' | 'unknown'
+pz_governor_winvm_status() {
+    local file="${PZ_HOMELAB_WINVM_STATUS_FILE:-}" json=""
+    if [ -n "$file" ] && [ -f "$file" ]; then
+        json="$(cat "$file" 2>/dev/null || true)"
+    elif command -v pz >/dev/null 2>&1; then
+        json="$(pz windows-vm status --json 2>/dev/null || true)"
+    else
+        printf 'unknown\n'
+        return 0
+    fi
+    [ -n "$json" ] || { printf 'unknown\n'; return 0; }
+    if printf '%s\n' "$json" | \
+        jq -e '(.libvirtState? == "running") or (.currentMarker? == "yes") or (.bootRuntimeStale? == true)' \
+        >/dev/null 2>&1; then
+        printf 'active\n'
+    else
+        printf 'idle\n'
+    fi
+}
+
+pz_governor_winvm_mb() {
+    local reg
+    reg="$(pz_governor_registry)" || return $?
+    jq -r '.winvmMB? // 2048' <<< "$reg"
+}
+
+pz_governor_winvm_status_json() {
+    local st mb
+    st="$(pz_governor_winvm_status)"
+    mb="$(pz_governor_winvm_mb)" || return $?
+jq -cn --argjson schemaVersion "$SCHEMA_VERSION" \
+        --arg status "$st" \
+        --argjson active "$([ "$st" = "active" ] && echo true || echo false)" \
+        --argjson weightMB "$mb" \
+        --arg probe "${PZ_HOMELAB_WINVM_STATUS_FILE:-pz windows-vm status --json}" \
+        '{schemaVersion:$schemaVersion, tool:"homelab-governor", action:"winvm-status",
+         status:$status, active:$active, weightMB:$weightMB, probe:$probe}'
+}
+
+# pz_governor_winvm_suspend <dry-run> -- graceful QGA shutdown, never a kill.
+pz_governor_winvm_suspend() {
+    local dry="${1:-0}"
+    local cmd="${PZ_HOMELAB_WINVM_SUSPEND_CMD:-pz windows-vm guest-login shutdown --json}"
+    local st
+    st="$(pz_governor_winvm_status)"
+    if [ "$st" != "active" ]; then
+        jq -cn --arg method "graceful-qga" --arg status "$st" \
+            '{action:"winvm-suspend", winvmSuspendRequested:false, method:$method, status:$status, killUsed:"never"}'
+        return 0
+    fi
+    if [ "$dry" = "1" ]; then
+        jq -cn --arg method "graceful-qga" --arg cmd "$cmd" \
+            '{action:"winvm-suspend", winvmSuspendRequested:true, method:$method, command:$cmd,
+              dryRun:true, applied:false, killUsed:"never"}'
+        return 0
+    fi
+    if ! bash -c "$cmd" >/dev/null 2>&1; then
+        jq -cn --arg method "graceful-qga" --arg cmd "$cmd" \
+            '{action:"winvm-suspend", winvmSuspendRequested:true, method:$method, command:$cmd,
+              dryRun:false, applied:false, error:"graceful suspend command failed", killUsed:"never"}'
+        return 1
+    fi
+    jq -cn --arg method "graceful-qga" --arg cmd "$cmd" \
+        '{action:"winvm-suspend", winvmSuspendRequested:true, method:$method, command:$cmd,
+          dryRun:false, applied:true, killUsed:"never"}'
+}
+
+pz_governor_winvm_resume_check() {
+    local st
+    st="$(pz_governor_winvm_status)"
+    jq -cn --argjson schemaVersion "$SCHEMA_VERSION" \
+        --arg status "$st" \
+        --argjson released "$([ "$st" != "active" ] && echo true || echo false)" \
+        '{schemaVersion:$schemaVersion, tool:"homelab-governor", action:"winvm-resume",
+          winvmReleased:$released, status:$status}'
+}
+
 # pz_governor_budget <profile> [headroom] -> budget JSON
 pz_governor_budget() {
     local profile="${1:?profile required}" headroom="${2:-20}"
     local reg base used=0 total available verdict reasons="[]"
+    local winvm_st winvm_mb=0 winvm_active=false
     reg="$(pz_governor_registry)" || return $?
     if ! jq -e --arg k "$profile" '[.profiles[].key] | index($k) != null' <<< "$reg" >/dev/null 2>&1; then
         pz_error "unknown homelab profile: $profile"
@@ -62,13 +151,26 @@ pz_governor_budget() {
     total=$((base + used))
     available="$(pz_governor_available_mb)" || return $?
     local usable=$(( available - available * headroom / 100 ))
+    winvm_st="$(pz_governor_winvm_status)"
+    if [ "$winvm_st" = "active" ]; then
+        winvm_active=true
+        winvm_mb="$(pz_governor_winvm_mb)" || return $?
+        usable=$((usable - winvm_mb))
+        [ "$usable" -lt 0 ] && usable=0
+    fi
     if [ "$total" -le "$usable" ]; then
         verdict="pass"
     else
         verdict="fail"
-        reasons="$(jq -cn --argjson total "$total" --argjson usable "$usable" --argjson headroom "$headroom" \
-            --arg profile "$profile" \
-            '["profile overcommits memory: budget \($total) MiB > usable \($usable) MiB (headroom \($headroom)%)"]')"
+    fi
+    local over_message="profile overcommits memory: budget ${total} MiB > usable ${usable} MiB (headroom ${headroom}%)"
+    local winvm_reason=""
+    if [ "$winvm_active" = "true" ]; then
+        winvm_reason="winvm active: guest reserved ${winvm_mb} MiB; no silent kill, graceful stop via governor winvm-suspend"
+    fi
+    if [ "$verdict" = "fail" ] || [ -n "$winvm_reason" ]; then
+        reasons="$(jq -cn --arg m "$over_message" --arg w "$winvm_reason" \
+            'if $w == "" then [$m] else [$m, $w] end')"
     fi
     local title
     title="$(jq -r --arg k "$profile" '[.profiles[] | select(.key == $k) | .title] | .[0]' <<< "$reg")"
@@ -81,11 +183,14 @@ pz_governor_budget() {
         --argjson budgetMB "$total" \
         --argjson availableMB "$available" \
         --argjson headroomPct "$headroom" \
+        --argjson winvmActive "$winvm_active" \
+        --argjson winvmWeightMB "$winvm_mb" \
         --arg verdict "$verdict" \
         --argjson reasons "$reasons" \
         '{schemaVersion:$schemaVersion, tool:$tool, profile:$profile, profileTitle:$profileTitle,
           coreBaseMB:$coreBaseMB, serviceMB:$serviceMB, budgetMB:$budgetMB,
-          availableMB:$availableMB, headroomPct:$headroomPct, verdict:$verdict, reasons:$reasons}'
+          availableMB:$availableMB, headroomPct:$headroomPct,
+          winvmActive:$winvmActive, winvmWeightMB:$winvmWeightMB, verdict:$verdict, reasons:$reasons}'
 }
 
 pz_governor_list_json() {
@@ -138,8 +243,19 @@ main() {
             printf '%s\n' "$out"
             [ "$(printf '%s\n' "$out" | jq -r '.verdict')" = "pass" ]
             ;;
+        winvm-status)
+            pz_governor_winvm_status_json
+            ;;
+        winvm-suspend)
+            local dry=0 a
+            for a in "$@"; do [ "$a" = "--dry-run" ] && dry=1; done
+            pz_governor_winvm_suspend "$dry"
+            ;;
+        winvm-resume)
+            pz_governor_winvm_resume_check
+            ;;
         *)
-            echo "usage: homelab-governor.sh (list|weights|budget <profile>|check <profile>) [--headroom PCT]" >&2
+            echo "usage: homelab-governor.sh (list|weights|budget <profile>|check <profile>|winvm-status|winvm-suspend [--dry-run]|winvm-resume) [--headroom PCT]" >&2
             return 2
             ;;
     esac
