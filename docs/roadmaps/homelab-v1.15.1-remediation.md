@@ -501,7 +501,8 @@ sem evidência.
 |---|---|---|---|
 | `main` | `31642be`, alinhada com `origin/main` | `git status`, `ls-remote` | 2026-08-07 |
 | `main` | `c11155b`, alinhada com `origin/main` | `git status`, `ls-remote` | 2026-08-08 |
-| PR #38 | aberta; `codex/homelab-f9` -> `main` (pendências: WinVM, rollback, E2E, docs) | `gh pr view 38` | 2026-08-08 |
+| PR #38 | mergeada via squash (`fc7ede8`); branch local/remota apagadas; worktree `pz-homelab-f9` preservado | `gh pr view 38`, `git ls-remote`, `git worktree list` | 2026-08-08 |
+| CI pós-merge | run `31266597239` (ci) + `31266597234` (gitleaks) success em `main` | `gh run view` | 2026-08-08 |
 | Pendências Fase 2/3/9 | implementadas; CI run `31265085899` 14/14 success | `gh run view 31265085899` | 2026-08-08 |
 | CI homelab | + job `homelab-integration-disposable` (E2E Docker real, sudo, seed→backup→verify→destroy→restore→igualdade) | ci.yml, run `31265085899` | 2026-08-08 |
 | Suíte hermética | exit 0 incluindo "winvm contract" e "restore partial failure rolls back" | bash | 2026-08-08 |
@@ -538,7 +539,7 @@ verdes incluindo o novo `homelab-integration-disposable` (PR #38).
 
 | Data | Agente | Branch/worktree | Fase | Primeiro item | Gates | Resultado/próximo passo |
 |---|---|---|---|---|---|---|
-| 2026-08-08 | opencode | `codex/homelab-f9` / `pz-homelab-f9` | Fase 2/3/9 (pendências) | `0259b55` (winvm contract), `676c643` (pre-restore + rollback), `6ff4298` (E2E disposable), `ce1f072` (docs/changelog) | suíte hermética exit 0; bash -n; shellcheck; diff --check; CI run `31265085899` 14/14 success | PR #38 aberta aguardando review/merge; próximo: merge em `main`, instalação do pacote pelo usuário e validação pós-instalação (0 dry-runs) |
+| 2026-08-08 | opencode | `codex/homelab-f9` / `pz-homelab-f9` | Fase 2/3/9 (pendências) | `0259b55` (winvm contract), `676c643` (pre-restore + rollback), `6ff4298` (E2E disposable), `ce1f072` (docs/changelog) | suíte hermética exit 0; bash -n; shellcheck; diff --check; CI run `31265085899` 14/14 success | PR #38 mergeada (`fc7ede8`); main CI + gitleaks verdes (`31266597239`/`31266597234`); suíte exit 0 em `main`. **Próximo**: usuário instala `1.15.1-1` via `phasezero-admin pacman -U <pkg>` e valida pós-instalação (0 dry-runs) |
 
 Prova release: workflow `31258447568` success; assets em `gh release view v1.15.1` (7); checksums 7/7 `SUCESSO`; `e2b85e6` release commit no `main`.
 
