@@ -481,12 +481,12 @@ Cada requisito precisa de uma linha. Não aceitar relatório narrativo sem matri
 
 | ID | Requisito | Implementação | Teste comportamental | Prova CI | Estado | Limitação |
 |---|---|---|---|---|---|---|
-| HL-F0-001 | Baseline reproduzível | Worktree dedicado + 14 commits por fase | Suíte hermética exit 0; pytest 437; smoke | Jobs `homelab-*` no ci.yml (PR ainda não aberto) | in_progress | PR novo ainda a abrir; CI na branch ainda não executado no GitHub |
+| HL-F0-001 | Baseline reproduzível | Worktree dedicado + 19 commits por fase | Suíte hermética exit 0; pytest 437; smoke | `homelab-*` verdes em `main` (run `31257317111`, merge `3cb05fb`) | verified | — |
 | HL-RUN-001 | Estado nunca em `/root` | `boot-prepare`/ops com HOME/XDG explícitos | `tests/linux-homelab.sh` (identity; boot-prepare) | homelab-shell-test | verified | — |
 | HL-CMP-001 | Nenhum Docker socket direto | `socket-proxy` (read-only, allowlist) + Portainer via `DOCKER_HOST` | Suíte: compose pins/binds/hardening; compose-validate assina `socket-proxy` ro=true apenas | compose-validate | verified | — |
 | HL-BKP-001 | Restore reversível | manifest schemaVersion 2 + verify-then-apply + `--plan` | Suíte: tamper fail-closed, restore sem `--yes` recusa, verify antes de aplicar | homelab-shell-test | in_progress | Rollback automático pós-falha parcial ainda não provado em E2E |
 | HL-GOV-001 | WinVM gera suspensão graciosa | — | — | — | pending | Requer contrato WinVM + teste de contrato antes de código |
-| HL-SEC-001 | Segredos ausentes das saídas | repair gera `.env` sem leak; redação no status | Suíte: valor secreto ausente do JSON de repair | security-secret-scan (gitleaks) | in_progress | Scan completo depende de CI rodando |
+| HL-SEC-001 | Segredos ausentes das saídas | repair gera `.env` sem leak; redação no status | Suíte: valor secreto ausente do JSON de repair | security-secret-scan (gitleaks) verde em `main` e no release | verified | — |
 | HL-UI-001 | Player não bloqueia event loop | async QProcess; separado stdout/stderr; timeout | 13 testes do player (offscreen) incl. spawn/close/timeout | homelab-python-test | verified | — |
 
 Adicionar IDs, nunca reutilizar ID para requisito diferente. Estados permitidos:
@@ -502,10 +502,10 @@ sem evidência.
 | `main` | `31642be`, alinhada com `origin/main` | `git status`, `ls-remote` | 2026-08-07 |
 | PR #36 | fechada (substituída) | `gh pr close 36` | 2026-08-08 |
 | PR novo | `#37` aberta; `codex/homelab-v1151-remediation` -> `main` | `gh pr view 37` | 2026-08-08 |
-| Branch de remediação | `codex/homelab-v1151-remediation` criada; worktree `pz-homelab-v1151`; 17 commits | `git log` | 2026-08-07 |
-| Latest release | `v1.14.7` | `gh release list` | 2026-08-07 |
-| Pacote host | `1.14.7-1` | `pacman -Q` | 2026-08-07 |
-| Tag `v1.15.0` | existente; reservada | `git ls-remote` | 2026-08-07 |
+| Branch de remediação | mergeada via PR #37; branch local e remota apagadas; worktree `pz-homelab-v1151` preservado | `gh pr view 37`, `git ls-remote` | 2026-08-08 |
+| Latest release | `v1.15.1` publicada (7 assets + SHA256SUMS) | `gh release view v1.15.1` | 2026-08-08 |
+| Pacote host | `1.14.7-1` (instalação de `1.15.1-1` pendente do usuário) | `pacman -Q` | 2026-08-08 |
+| Tag `v1.15.0` | existente; preservada/intacta | `git ls-remote` | 2026-08-08 |
 | Homelab real | não deve ser implantado | revalidar antes/depois | 2026-08-07 |
 | Player UI | async QProcess; restore sem `--yes`; 13 testes verdes | `pytest tests/test_homelab_player.py` | 2026-08-07 |
 | Suíte hermética | `tests/linux-homelab.sh` exit 0 (perfis, governo, backup, broker) | bash | 2026-08-07 |
@@ -526,6 +526,12 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-08 | opencode | idem | Fase 0/10 (CI verde + fixes) | `4d15f15` (SC2120/0.9.0), `f373266` (chmod +x), `0429af3` (rg nos jobs), `9c02010` (PZ_ROOT pin) | CI PR #37 run `31255687739`: 12/12 jobs success | CI verde completo: lint, shell-lint 0.9.0 e 0.11.0, python-test, pester, shell-test, windows-vm, homelab-python-test, homelab-shell-test, compose-validate, package-smoke, security-secret-scan. Próximo: merge da PR #37 |
 
 Prova CI: run `31255687739` — status `success`, 12 jobs verdes (`gh run view 31255687739`).
+
+Prova release: workflow `31258447568` success; assets em `gh release view v1.15.1` (7); checksums 7/7 `SUCESSO`; `e2b85e6` release commit no `main`.
+
+| Data | Agente | Branch/worktree | Fase | Primeiro item | Gates | Resultado/próximo passo |
+|---|---|---|---|---|---|---|
+| 2026-08-08 | opencode | `main` (worktree principal) | Fase 10 (merge/release/pacote) | `3cb05fb` (squash PR #37), `e2b85e6` (release v1.15.1), tag `v1.15.1` | run `31257317111` main verde; release `31258447568` verde; `SHA256SUMS-1.15.1` 7/7 SUCESSO; conteúdo arch/deb/rpm/src conferido | **Próximo**: usuário instala via `phasezero-admin pacman -U <pkg.tar.zst>` e valida versão/profiles/status/plan (0 dry-runs) após confirmação |
 
 ## Formato obrigatório de handoff
 
