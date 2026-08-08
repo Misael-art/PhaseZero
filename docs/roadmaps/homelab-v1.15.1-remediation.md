@@ -511,7 +511,7 @@ sem evidência.
 | PR novo | `#37` aberta; `codex/homelab-v1151-remediation` -> `main` | `gh pr view 37` | 2026-08-08 |
 | Branch de remediação | mergeada via PR #37; branch local e remota apagadas; worktree `pz-homelab-v1151` preservado | `gh pr view 37`, `git ls-remote` | 2026-08-08 |
 | Latest release | `v1.15.1` publicada (7 assets + SHA256SUMS) | `gh release view v1.15.1` | 2026-08-08 |
-| Pacote host | `1.14.7-1` (instalação de `1.15.1-1` pendente do usuário) | `pacman -Q` | 2026-08-08 |
+| Pacote host | `1.15.1-1` instalado via `bigsudo pacman -U` (assets re-baixados, `SHA256SUMS-1.15.1` 7/7 SUCESSO) | `pacman -Q`, `sha256sum -c` | 2026-08-08 |
 | Tag `v1.15.0` | existente; preservada/intacta | `git ls-remote` | 2026-08-08 |
 | Homelab real | não deve ser implantado | revalidar antes/depois | 2026-08-07 |
 | Player UI | async QProcess; restore sem `--yes`; 13 testes verdes | `pytest tests/test_homelab_player.py` | 2026-08-07 |
