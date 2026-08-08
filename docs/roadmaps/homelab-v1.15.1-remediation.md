@@ -484,8 +484,8 @@ Cada requisito precisa de uma linha. Não aceitar relatório narrativo sem matri
 | HL-F0-001 | Baseline reproduzível | Worktree dedicado + 19 commits por fase | Suíte hermética exit 0; pytest 437; smoke | `homelab-*` verdes em `main` (run `31257317111`, merge `3cb05fb`) | verified | — |
 | HL-RUN-001 | Estado nunca em `/root` | `boot-prepare`/ops com HOME/XDG explícitos | `tests/linux-homelab.sh` (identity; boot-prepare) | homelab-shell-test | verified | — |
 | HL-CMP-001 | Nenhum Docker socket direto | `socket-proxy` (read-only, allowlist) + Portainer via `DOCKER_HOST` | Suíte: compose pins/binds/hardening; compose-validate assina `socket-proxy` ro=true apenas | compose-validate | verified | — |
-| HL-BKP-001 | Restore reversível | manifest schemaVersion 2 + verify-then-apply + `--plan` | Suíte: tamper fail-closed, restore sem `--yes` recusa, verify antes de aplicar | homelab-shell-test | in_progress | Rollback automático pós-falha parcial ainda não provado em E2E |
-| HL-GOV-001 | WinVM gera suspensão graciosa | — | — | — | pending | Requer contrato WinVM + teste de contrato antes de código |
+| HL-BKP-001 | Restore reversível | manifest schemaVersion 2 + verify-then-apply + snapshot prévio `<source>.pre-restore` + rollback automático em falha parcial (`rollbackApplied`); `status` ignora `*.pre-restore` | Suíte: tamper fail-closed, restore sem `--yes` recusa, verify antes de aplicar, falha parcial com volume envenenado → estado prévio devolvido; E2E Docker: backup→destroy→restore→igualdade byte a byte | homelab-shell-test + homelab-integration-disposable (PR #38, run `31265085899` success) | verified | Rollback cobre dados de volume; `.env`/segredos fora do manifest |
+| HL-GOV-001 | WinVM gera suspensão graciosa | governor: `winvm-status`/`winvm-suspend [--dry-run]`/`winvm-resume`; boundary `PZ_HOMELAB_WINVM_STATUS_FILE` ou `pz windows-vm status --json`; `winvmMB` (default 2048) descontado do orçamento; suspensão só via QGA (`PZ_HOMELAB_WINVM_SUSPEND_CMD`, default `guest-login shutdown --json`); `killUsed:"never"`; nenhum arquivo da VM tocado | Suíte: seção "winvm contract" (idle/active via stub, fail-closed com guest ativa, plano de impacto, dry-run sem efeito, execução capturada, no-op idle, resume) | homelab-shell-test (PR #38, run `31265085899` success) | verified | Maturação real da suspensão depende de guest Windows real (não exercitada em CI) |
 | HL-SEC-001 | Segredos ausentes das saídas | repair gera `.env` sem leak; redação no status | Suíte: valor secreto ausente do JSON de repair | security-secret-scan (gitleaks) verde em `main` e no release | verified | — |
 | HL-UI-001 | Player não bloqueia event loop | async QProcess; separado stdout/stderr; timeout | 13 testes do player (offscreen) incl. spawn/close/timeout | homelab-python-test | verified | — |
 
@@ -500,6 +500,12 @@ sem evidência.
 | Item | Estado atual | Verificado por | Data |
 |---|---|---|---|
 | `main` | `31642be`, alinhada com `origin/main` | `git status`, `ls-remote` | 2026-08-07 |
+| `main` | `c11155b`, alinhada com `origin/main` | `git status`, `ls-remote` | 2026-08-08 |
+| PR #38 | aberta; `codex/homelab-f9` -> `main` (pendências: WinVM, rollback, E2E, docs) | `gh pr view 38` | 2026-08-08 |
+| Pendências Fase 2/3/9 | implementadas; CI run `31265085899` 14/14 success | `gh run view 31265085899` | 2026-08-08 |
+| CI homelab | + job `homelab-integration-disposable` (E2E Docker real, sudo, seed→backup→verify→destroy→restore→igualdade) | ci.yml, run `31265085899` | 2026-08-08 |
+| Suíte hermética | exit 0 incluindo "winvm contract" e "restore partial failure rolls back" | bash | 2026-08-08 |
+| Worktree pendências | `pz-homelab-f9` (branch `codex/homelab-f9`, HEAD `ce1f072`) preservado | git worktree list | 2026-08-08 |
 | PR #36 | fechada (substituída) | `gh pr close 36` | 2026-08-08 |
 | PR novo | `#37` aberta; `codex/homelab-v1151-remediation` -> `main` | `gh pr view 37` | 2026-08-08 |
 | Branch de remediação | mergeada via PR #37; branch local e remota apagadas; worktree `pz-homelab-v1151` preservado | `gh pr view 37`, `git ls-remote` | 2026-08-08 |
@@ -526,6 +532,13 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-08 | opencode | idem | Fase 0/10 (CI verde + fixes) | `4d15f15` (SC2120/0.9.0), `f373266` (chmod +x), `0429af3` (rg nos jobs), `9c02010` (PZ_ROOT pin) | CI PR #37 run `31255687739`: 12/12 jobs success | CI verde completo: lint, shell-lint 0.9.0 e 0.11.0, python-test, pester, shell-test, windows-vm, homelab-python-test, homelab-shell-test, compose-validate, package-smoke, security-secret-scan. Próximo: merge da PR #37 |
 
 Prova CI: run `31255687739` — status `success`, 12 jobs verdes (`gh run view 31255687739`).
+
+Prova CI pendências Fase 2/3/9: run `31265085899` — status `success`, 14 jobs
+verdes incluindo o novo `homelab-integration-disposable` (PR #38).
+
+| Data | Agente | Branch/worktree | Fase | Primeiro item | Gates | Resultado/próximo passo |
+|---|---|---|---|---|---|---|
+| 2026-08-08 | opencode | `codex/homelab-f9` / `pz-homelab-f9` | Fase 2/3/9 (pendências) | `0259b55` (winvm contract), `676c643` (pre-restore + rollback), `6ff4298` (E2E disposable), `ce1f072` (docs/changelog) | suíte hermética exit 0; bash -n; shellcheck; diff --check; CI run `31265085899` 14/14 success | PR #38 aberta aguardando review/merge; próximo: merge em `main`, instalação do pacote pelo usuário e validação pós-instalação (0 dry-runs) |
 
 Prova release: workflow `31258447568` success; assets em `gh release view v1.15.1` (7); checksums 7/7 `SUCESSO`; `e2b85e6` release commit no `main`.
 
