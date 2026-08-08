@@ -317,6 +317,25 @@ def test_homelab_page_cancel_timeout_on_finish(app):
     assert id(proc) not in page._timeouts
 
 
+def test_homelab_page_refresh_profiles_uses_roadmap_contract(app):
+    # The CLI contract is `pz server homelab profiles --json`; the page must
+    # spawn exactly that, not the legacy singular `profile list`.
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    calls = []
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    page._proc = None
+    try:
+        page.refresh_profiles()
+    finally:
+        mod.QProcess = real_qprocess
+    assert calls[-1][1].endswith("linux/pz")
+    assert calls[-1][2] == ["server", "homelab", "profiles", "--json"]
+
+
 def test_homelab_page_no_blocking_event_loop(app):
     # Operations are spawned, never run synchronously: with a fake process the
     # call returns immediately and the GUI can keep processing events.

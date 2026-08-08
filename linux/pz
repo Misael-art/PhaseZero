@@ -453,6 +453,7 @@ cmd_server() {
         homelab)
             case "${1:-status}" in
                 status|verify|repair) bash "$PZ_ROOT/linux/server/homelab-status.sh" "$@" ;;
+                profiles) bash "$PZ_ROOT/linux/server/homelab-governor.sh" list ;;
                 profile)
                     case "${2:-list}" in
                         list) bash "$PZ_ROOT/linux/server/homelab-governor.sh" list ;;
