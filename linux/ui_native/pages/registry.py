@@ -9,13 +9,10 @@ from .base import BasePage
 from .dashboard import DashboardPage
 from .overview import OverviewPage
 from .profiles import ProfilesPage
-from .steamdeck import SteamDeckPage
 from .homelab import HomelabPage
 from .emulation import EmulationPage
-from .ai_dev import AiDevPage
 from .ai_proxies import AiProxiesPage
 from .ai_routing import AiRoutingPage
-from .applications import ApplicationsPage
 from .tuning import TuningPage
 from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
@@ -40,7 +37,7 @@ class PageRegistry:
         "Início": DashboardPage,
         "Visão geral": OverviewPage,
         "Perfis": ProfilesPage,
-        "Steam Deck": SteamDeckPage,
+        "Steam Deck": CatalogWorkspacePage,
         "Windows VM": CatalogWorkspacePage,
         "Waydroid": CatalogWorkspacePage,
         "Servidor": CatalogWorkspacePage,
@@ -49,25 +46,17 @@ class PageRegistry:
         "Boot Direto": CatalogWorkspacePage,
         "Flatpak": CatalogWorkspacePage,
         "Recursos": CatalogWorkspacePage,
-        "IA & Dev": AiDevPage,
+        "IA & Dev": CatalogWorkspacePage,
         "Proxies IA": AiProxiesPage,
         "Roteamento IA": AiRoutingPage,
-        "Aplicativos": ApplicationsPage,
+        "Aplicativos": CatalogWorkspacePage,
         "Ajustes": TuningPage,
         "Resultados": ResultsPage,
     }
 
     def _build(self) -> None:
-        # Categories rendered by the generic catalog workspace page.
-        # Steam Deck / IA & Dev / Aplicativos still carry legacy bespoke pages
-        # here; they are catalog-rendered until those pages are retired.
-        workspace_categories = {
-            "Steam Deck", "IA & Dev", "Aplicativos",
-        }
         for category, page_cls in self._CATEGORY_PAGES.items():
             actions = [a for a in self.catalog if a.category == category]
-            if category in workspace_categories and category != "Emulação":
-                page_cls = CatalogWorkspacePage
             page = page_cls(self.root, self.runner, actions, by_id=self.by_id)
             page.build()
             page.finalize_action_coverage()
