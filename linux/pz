@@ -49,7 +49,7 @@ Usage:
   pz waydroid boot status     Manage direct GRUB Waydroid boot entry
   pz server status            Home server (LLM/homelab/boot) status
   pz server llm <action>      Local LLM server (install|expose-lan|restore|status)
-  pz server homelab <action>  Homelab: stack (plan|up|down|open|logs|backup|restore|update|repair) / status (status|verify) / profile (list|set <key>|get) / governor (list|weights|budget|check) [--extras] [--json] [--profile <key>]
+  pz server homelab <action>  Homelab: stack (plan|up|down|open|logs|backup|restore|update|repair) / status (status|verify) / profile (list|set <key>|get) / governor (list|weights|budget|check|winvm-status|winvm-suspend [--dry-run]|winvm-resume) [--extras] [--json] [--profile <key>]
   pz server casaos <action>   CasaOS opt-in compatibility gate (status|plan|install)
   pz server hermes <action>   Hermes remote actuation (setup|start|status)
   pz server slim <action>     Reversible OS slimming (apply [--aggressive]|restore|status)

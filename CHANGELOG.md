@@ -87,15 +87,29 @@ As versões seguem a data de build em `version.json`.
 - Suíte hermética `tests/linux-homelab.sh`, smoke `packaging/install-root-smoke.sh`
   e jobs dedicados de CI (`homelab-shell-test`, `homelab-python-test`,
   `compose-validate`, `package-smoke`, `security-secret-scan` com gitleaks).
+- Testes do contrato WinVM no governor (stub de status, fail-closed, plano de
+  impacto, execução graciosa, resume) e de rollback do restore (falha parcial
+  com volume envenenado) na suíte hermética.
+- Documentação de operação (docs/linux-homelab.md): arquitetura e perfis,
+  matriz de suporte, threat model (socket-proxy, no-new-privileges, limits),
+  segredos/rede/acesso, backup/restore/DR com snapshot prévio e rollback,
+  contrato WinVM, operação sem UI/troubleshooting e limitações honestas.
 
 ### Corrigido
 - Restore recusa aplicar sem `--yes` explícito; verify-then-apply e manifest
   schemaVersion 2 com tamper fail-closed.
+- Restore cria snapshot prévio `<source>.pre-restore` (verificável, mesmo
+  schema) e em falha parcial devolve cada volume tocado ao estado prévio
+  (`rollbackApplied`); `status` ignora diretórios `*.pre-restore`.
+- Governor desconta WinVM ativa do orçamento (`winvmMB`) e expõe contrato
+  `winvm-status`/`winvm-suspend [--dry-run]`/`winvm-resume` com suspensão
+  somente graciosa via QGA (`killUsed:"never"`, nenhum arquivo da VM tocado).
+- CI: job `homelab-integration-disposable` prova em Docker real
+  backup → destruição → restore → igualdade byte a byte em volumes
+  descartáveis.
 - Contrato CLI/Player alinhado (`pz server homelab profiles --json`); scripts
   novos marcados executáveis (core.filemode=false); suíte pinada ao checkout
   via `PZ_ROOT`; ShellCheck 0.9.0 e 0.11.x verdes com os mesmos excludes do CI.
-
-### Corrigido
 - Auditoria deduplica aliases `/usr/lib` e `/usr/lib64` do mesmo inode.
 - Shares Windows validam listagem real e criam diretório de intercâmbio como o
   usuário alvo.

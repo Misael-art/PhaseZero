@@ -127,7 +127,11 @@ backup_state_json() {
     fi
     local -a dirs=()
     while IFS= read -r d; do
-        [ -n "$d" ] && dirs+=("$(basename "$d")")
+        [ -n "$d" ] || continue
+        case "$(basename "$d")" in
+            *.pre-restore) continue ;;
+        esac
+        dirs+=("$(basename "$d")")
     done < <(find "$backup_root" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | sort)
     jq -cn --argjson last "$last" \
         --argjson backups "$(arr_json "${dirs[@]}")" \

@@ -16,6 +16,11 @@ export XDG_STATE_HOME="$TMP/state"
 export PZ_HOMELAB_STATE="$TMP/homelab"
 mkdir -p "$HOME" "$XDG_STATE_HOME" "$PZ_HOMELAB_STATE"
 
+# Pin the WinVM contract boundary to a stub so the suite never touches the
+# real WinVM (or the host `pz`) and stays deterministic on every runner.
+export PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm.status"
+printf '%s\n' '{"libvirtState":"shut off","currentMarker":"no","bootRuntimeStale":false}' > "$PZ_HOMELAB_WINVM_STATUS_FILE"
+
 echo "=== syntax ==="
 bash -n "$REPO_ROOT/linux/server/homelab-stack.sh"
 bash -n "$REPO_ROOT/linux/server/casaos.sh"
@@ -278,6 +283,37 @@ if PZ_DRY_RUN=1 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=512 \
 fi
 echo "  up profile gate ok"
 
+echo "=== winvm contract: status boundary, graceful suspend, resume ==="
+jq -e '.winvmMB == 2048' "$REPO_ROOT/assets/home-server/homelab-profiles.json" >/dev/null
+echo "  winvm weight registered ok"
+"$REPO_ROOT/linux/server/homelab-governor.sh" winvm-status | jq -e '.status == "idle" and .active == false and .weightMB == 2048' >/dev/null
+echo "  winvm idle detection ok"
+PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" budget ai-studio | jq -e '.winvmActive == false and .verdict == "pass"' >/dev/null
+echo "  heavy profile passes when winvm idle ok"
+printf '%s\n' '{"libvirtState":"running","currentMarker":"no","bootRuntimeStale":false}' > "$PZ_HOMELAB_WINVM_STATUS_FILE"
+"$REPO_ROOT/linux/server/homelab-governor.sh" winvm-status | jq -e '.status == "active"' >/dev/null
+echo "  winvm active detection ok"
+if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" check ai-studio >/dev/null 2>&1; then
+    echo "FAIL: heavy profile passed while winvm active"; exit 1
+fi
+PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" budget ai-studio \
+    | jq -e '.winvmActive == true and .winvmWeightMB == 2048 and (.reasons | any(. | test("winvm active")))' >/dev/null
+echo "  winvm conflict impact plan ok"
+suspend_out="$("$REPO_ROOT/linux/server/homelab-governor.sh" winvm-suspend --dry-run)"
+printf '%s\n' "$suspend_out" | jq -e '.winvmSuspendRequested == true and .method == "graceful-qga" and .dryRun == true and .killUsed == "never"' >/dev/null
+echo "  graceful suspend plan ok"
+SUSPEND_CAPTURE="$TMP/suspend.capture"
+PZ_HOMELAB_WINVM_SUSPEND_CMD="printf suspend-called > '$SUSPEND_CAPTURE' && echo ok" \
+    "$REPO_ROOT/linux/server/homelab-governor.sh" winvm-suspend | jq -e '.applied == true and .killUsed == "never"' >/dev/null
+grep -Fq 'suspend-called' "$SUSPEND_CAPTURE"
+echo "  graceful suspend executes configured command ok"
+printf '%s\n' '{"libvirtState":"shut off","currentMarker":"no","bootRuntimeStale":false}' > "$PZ_HOMELAB_WINVM_STATUS_FILE"
+"$REPO_ROOT/linux/server/homelab-governor.sh" winvm-suspend --dry-run | jq -e '.winvmSuspendRequested == false and .status == "idle"' >/dev/null
+echo "  suspend no-op when idle ok"
+"$REPO_ROOT/linux/server/homelab-governor.sh" winvm-resume | jq -e '.winvmReleased == true and .status == "idle"' >/dev/null
+PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" check ai-studio >/dev/null
+echo "  resume after winvm end ok"
+
 echo "=== boot-prepare identity: marker absent is a no-op ==="
 "$REPO_ROOT/linux/server/homelab-boot-prepare.sh" 2>&1 | rg -q 'nothing to do'
 echo "  marker-absent ok"
@@ -381,8 +417,11 @@ if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1'"
 fi
 # corrupt the restore target to prove restore writes
 rm -f "$VM/vaultwarden_data/db.sqlite"
-eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:' | jq -e '.ok == true' >/dev/null
+rest_out="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:')"
+printf '%s\n' "$rest_out" | jq -e '.ok == true and .preRestore != null' >/dev/null
 grep -q 'secret-password-1' "$VM/vaultwarden_data/db.sqlite"
+test -f "$BKT/bk1.pre-restore/manifest.json"
+jq -e '.tool == "homelab-restore-pre" and (.volumes | length) == 2' "$BKT/bk1.pre-restore/manifest.json" >/dev/null
 echo "  restore verify-then-apply ok"
 # restore from a tampered backup must be refused before applying
 cp "$BKT/bk1/vaultwarden_data.tgz" "$BKT/bk1/vaultwarden_data.tgz.bak"
@@ -398,6 +437,22 @@ if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$TMP/backu
     echo "FAIL: legacy backup restored without manifest"; exit 1
 fi
 echo "  legacy refused ok"
+# partial restore failure must roll back to the pre-restore state
+echo "changed-after-backup" > "$VM/vaultwarden_data/db.sqlite"
+echo "fresh-b" > "$VM/syncthing_data/b.txt"
+# poison the second volume so extraction fails mid-restore
+rm -rf "$VM/syncthing_data" && touch "$VM/syncthing_data"
+rb_out="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:' || true)"
+printf '%s\n' "$rb_out" | jq -e '.ok == false and .rollbackApplied == true and .failedVolume == "syncthing_data"' >/dev/null
+if printf '%s\n' "$rb_out" | jq -e '.ok == true' >/dev/null 2>&1; then
+    echo "FAIL: restore with poisoned volume succeeded"; exit 1
+fi
+rm -rf "$VM/syncthing_data" && mkdir -p "$VM/syncthing_data" && echo "file-a" > "$VM/syncthing_data/a.txt"
+grep -q 'changed-after-backup' "$VM/vaultwarden_data/db.sqlite" \
+    || { echo "FAIL: rollback did not restore pre-restore state"; exit 1; }
+test "$(cat "$VM/vaultwarden_data/db.sqlite")" = "changed-after-backup" \
+    || { echo "FAIL: rollback restored backup instead of pre-restore state"; exit 1; }
+echo "  restore partial failure rolls back to pre-restore ok"
 # status surfaces lastBackup + verified
 PZ_HOMELAB_BACKUP_ROOT="$BKT" "$REPO_ROOT/linux/pz" server homelab status --json >/tmp/bkst.json 2>&1 || true
 jq -e '.backupState.backups == ["bk1"] and .backupState.lastBackup.latest != null and .backupState.verified == false' /tmp/bkst.json >/dev/null

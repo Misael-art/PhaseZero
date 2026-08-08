@@ -113,6 +113,50 @@ jobs:
           # a daemon because it only exercises env-overridable paths.
           bash tests/linux-homelab.sh
 
+  homelab-integration-disposable:
+    runs-on: ubuntu-latest
+    needs: shell-lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq and ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq ripgrep
+
+      - name: E2E backup -> destroy -> restore -> data equality on disposable volumes
+        run: |
+          set -euo pipefail
+          # Volume mountpoints are root-owned; the homelab CLI writes them as root
+          # (same privilege model as the appliance host).
+          run_pz() { sudo -n PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" \
+            PZ_HOMELAB_BACKUP_ROOT="$PZ_HOMELAB_BACKUP_ROOT" \
+            PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' "$@"; }
+          export PZ_HOMELAB_STATE="$RUNNER_TEMP/pz-state"
+          export PZ_HOMELAB_BACKUP_ROOT="$RUNNER_TEMP/pz-backups"
+          mkdir -p "$PZ_HOMELAB_STATE" "$PZ_HOMELAB_BACKUP_ROOT"
+          docker volume create phasezero-homelab_vaultwarden_data >/dev/null
+          docker volume create phasezero-homelab_syncthing_data >/dev/null
+          docker pull -q busybox:latest >/dev/null
+          docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox sh -c 'echo db-secret-42 > /data/db.sqlite'
+          docker run --rm --network=host -v phasezero-homelab_syncthing_data:/data busybox sh -c 'echo sentinel-sync > /data/a.txt'
+
+          bk="$(run_pz ./linux/pz server homelab backup --dest "$PZ_HOMELAB_BACKUP_ROOT/bk1" 2>/dev/null | grep -v '^INFO:')"
+          jq -e '.ok == true and (.volumes | length) == 2' <<<"$bk" >/dev/null
+          vf="$(run_pz ./linux/pz server homelab backup verify --source "$PZ_HOMELAB_BACKUP_ROOT/bk1" 2>/dev/null | grep -v '^INFO:')"
+          jq -e '.verified == true' <<<"$vf" >/dev/null
+          echo "backup + verify ok"
+
+          docker volume rm phasezero-homelab_vaultwarden_data >/dev/null
+          docker volume rm phasezero-homelab_syncthing_data >/dev/null
+          docker volume create phasezero-homelab_vaultwarden_data >/dev/null
+          docker volume create phasezero-homelab_syncthing_data >/dev/null
+
+          rs="$(run_pz ./linux/pz server homelab restore --source "$PZ_HOMELAB_BACKUP_ROOT/bk1" --yes 2>/dev/null | grep -v '^INFO:')"
+          jq -e '.ok == true and .preRestore != null' <<<"$rs" >/dev/null
+
+          test "$(docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox cat /data/db.sqlite)" = "db-secret-42"
+          test "$(docker run --rm --network=host -v phasezero-homelab_syncthing_data:/data busybox cat /data/a.txt)" = "sentinel-sync"
+          echo "restore data equality ok (real docker volumes)"
+
   homelab-python-test:
     runs-on: ubuntu-latest
     timeout-minutes: 15
