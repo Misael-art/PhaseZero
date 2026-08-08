@@ -6,6 +6,11 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# boot-prepare resolves its runtime from an installed package first; force
+# the checkout so hermetic runs never depend on (or collide with) a host
+# installation.
+export PZ_ROOT="$REPO_ROOT"
+
 export HOME="$TMP/home"
 export XDG_STATE_HOME="$TMP/state"
 export PZ_HOMELAB_STATE="$TMP/homelab"
