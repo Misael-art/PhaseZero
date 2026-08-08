@@ -40,6 +40,8 @@ mkdir -p "$OP_DIR"
 # fd 9 is reserved for the flock. Callers that source this file must not close it.
 PZ_HOMELAB_LOCK_FD=9
 
+# Callers that source this file rely on the default wait; none pass args.
+# shellcheck disable=SC2120
 pz_homelab_lock() {
     local wait="${1:-10}"
     if ! mkdir -p "$HOMELAB_STATE" 2>/dev/null; then
