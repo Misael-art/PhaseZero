@@ -760,7 +760,7 @@
     },
     {
       "name": "windows.boot.install",
-      "label": "Instalar boot direto",
+      "label": "Instalar boot direto (Windows)",
       "command": "linux/pz windows-vm boot install",
       "mutable": true,
       "require_plan": true,
@@ -992,7 +992,7 @@
     },
     {
       "name": "waydroid.boot.install",
-      "label": "Instalar boot direto",
+      "label": "Instalar boot direto (Android)",
       "command": "linux/pz waydroid boot install",
       "mutable": true,
       "require_plan": true,
@@ -1037,6 +1037,86 @@
       "input_kind": "",
       "input_label": "",
       "plan_command": "linux/pz windows-vm host-access status"
+    },
+    {
+      "name": "homelab.status",
+      "label": "Status da stack",
+      "command": "linux/pz server homelab status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "homelab.profiles",
+      "label": "Perfis e pesos",
+      "command": "linux/pz server homelab profile list",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "homelab.budget",
+      "label": "Orçamento do perfil",
+      "command": "linux/pz server homelab governor budget core",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "homelab.backup",
+      "label": "Backup verificado",
+      "command": "linux/pz server homelab backup",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz server homelab backup --dry-run"
+    },
+    {
+      "name": "homelab.verify",
+      "label": "Verificar backup",
+      "command": "linux/pz server homelab backup verify --source {input}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "path",
+      "input_label": "Selecione pasta de backup Homelab",
+      "plan_command": "linux/pz server homelab status"
+    },
+    {
+      "name": "homelab.restore",
+      "label": "Restaurar backup",
+      "command": "linux/pz server homelab restore --source {input} --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "path",
+      "input_label": "Selecione pasta de backup Homelab",
+      "plan_command": "linux/pz server homelab restore --source {input} --dry-run"
+    },
+    {
+      "name": "homelab.policy",
+      "label": "Política AI",
+      "command": "linux/pz ai policy status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
     },
     {
       "name": "server.status",
@@ -1197,30 +1277,6 @@
       "elevated": false,
       "input_kind": "",
       "input_label": ""
-    },
-    {
-      "name": "server.homelab.backup",
-      "label": "Backup Homelab",
-      "command": "linux/pz server homelab backup",
-      "mutable": true,
-      "require_plan": true,
-      "module": "Servidor",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": "",
-      "plan_command": "linux/pz server homelab backup --dry-run"
-    },
-    {
-      "name": "server.homelab.restore",
-      "label": "Restaurar Homelab",
-      "command": "linux/pz server homelab restore --source {input} --yes",
-      "mutable": true,
-      "require_plan": true,
-      "module": "Servidor",
-      "elevated": false,
-      "input_kind": "path",
-      "input_label": "Selecione pasta de backup Homelab",
-      "plan_command": "linux/pz server homelab restore --source {input} --dry-run"
     },
     {
       "name": "server.homelab.update",
@@ -3850,17 +3906,6 @@
       "plan_command": "linux/pz ai omo status"
     },
     {
-      "name": "ai.opencode.status",
-      "label": "Status OpenCode",
-      "command": "linux/pz ai opencode status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "IA & Dev",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
       "name": "ai.opencode.local",
       "label": "Modelo local OpenCode",
       "command": "linux/pz ai opencode local-model",
@@ -5478,83 +5523,6 @@
       "input_kind": "file",
       "input_label": "Selecione manifest.json",
       "plan_command": "linux/pz ai routing verify"
-    },
-    {
-      "name": "homelab.profiles",
-      "label": "Perfis e pesos",
-      "command": "linux/pz server homelab profile list",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Homelab",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "homelab.budget",
-      "label": "Orçamento do perfil",
-      "command": "linux/pz server homelab governor budget core",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Homelab",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "homelab.policy",
-      "label": "Política AI",
-      "command": "linux/pz ai policy status",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Homelab",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "homelab.verify",
-      "label": "Verificar backup",
-      "command": "linux/pz server homelab backup verify --source {input}",
-      "mutable": true,
-      "require_plan": true,
-      "module": "Homelab",
-      "elevated": false,
-      "input_kind": "path",
-      "input_label": "Selecione pasta de backup Homelab"
-    },
-    {
-      "name": "homelab.restore",
-      "label": "Restaurar backup",
-      "command": "linux/pz server homelab restore --source {input} --yes",
-      "mutable": true,
-      "require_plan": true,
-      "module": "Homelab",
-      "elevated": false,
-      "input_kind": "path",
-      "input_label": "Selecione pasta de backup Homelab"
-    },
-    {
-      "name": "homelab.status",
-      "label": "Status da stack",
-      "command": "linux/pz server homelab status --json",
-      "mutable": false,
-      "require_plan": false,
-      "module": "Homelab",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
-    },
-    {
-      "name": "homelab.backup",
-      "label": "Backup verificado",
-      "command": "linux/pz server homelab backup",
-      "mutable": true,
-      "require_plan": true,
-      "module": "Homelab",
-      "elevated": false,
-      "input_kind": "",
-      "input_label": ""
     }
   ]
 }
