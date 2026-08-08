@@ -670,7 +670,9 @@ cmd_ai() {
 }
 
 cmd_doctor() {
-    bash "$PZ_ROOT/linux/audit/doctor.sh"
+    # Global watchdog: per-check timeouts bound every subcommand (doctor.sh),
+    # this caps the whole run. Override with PZ_DOCTOR_TIMEOUT (seconds).
+    timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
 }
 
 cmd_support_bundle() {

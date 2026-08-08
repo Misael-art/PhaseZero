@@ -21,6 +21,11 @@ check() {
 }
 
 header() { echo; echo "=== $1 ==="; }
+
+# External subcommands get a bounded budget so one hung check can never stall
+# the whole doctor run. Override with PZ_DOCTOR_CMD_TIMEOUT (seconds).
+PZ_DOCTOR_CMD_TIMEOUT="${PZ_DOCTOR_CMD_TIMEOUT:-30}"
+run() { timeout "$PZ_DOCTOR_CMD_TIMEOUT" "$@"; }
 footer() {
     echo
     echo "=== Summary ==="
@@ -186,7 +191,7 @@ if command -v gamescope &>/dev/null; then check UX02 "Gamescope available" PASS 
 if command -v mangohud &>/dev/null; then check UX03 "MangoHud available" PASS "$(command -v mangohud)"; else check UX03 "MangoHud available" WARN "install mangohud"; fi
 if command -v gamemoderun &>/dev/null; then check UX04 "GameMode launcher available" PASS "$(command -v gamemoderun)"; else check UX04 "GameMode launcher available" WARN "install gamemode"; fi
 
-vk_status="$(bash "$PZ_ROOT/linux/steamdeck/input-actions.sh" status 2>/dev/null || echo '{}')"
+vk_status="$(run bash "$PZ_ROOT/linux/steamdeck/input-actions.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.kde.supported == true and .kde.available == true and .kde.enabled == true and (.kde.inputMethod | test("maliit"))' <<< "$vk_status" >/dev/null 2>&1; then
     check UX05 "Virtual keyboard available" PASS "KDE/KWin + Maliit"
 elif jq -e '.provider != "none"' <<< "$vk_status" >/dev/null 2>&1; then
@@ -235,7 +240,7 @@ else
     check UX12 "Steam Big Picture Plus OpenGamepadUI" WARN "missing; install OpenGamepadUI or run: linux/pz steamdeck boot install"
 fi
 
-decky_status="$(bash "$PZ_ROOT/linux/steamdeck/plugins.sh" status 2>/dev/null || echo '{}')"
+decky_status="$(run bash "$PZ_ROOT/linux/steamdeck/plugins.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.decky.service.dualServiceConflict == true' <<< "$decky_status" >/dev/null 2>&1; then
     check UX13 "Decky Loader Big Picture integration" WARN "system and user plugin_loader services both active; run: linux/pz steamdeck plugins repair"
 elif jq -e '.steamDeckExperience.deckyMenuReady == true' <<< "$decky_status" >/dev/null 2>&1; then
@@ -279,7 +284,7 @@ else
 fi
 
 header "Windows VM"
-winvm_status="$(bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" status 2>/dev/null || echo '{}')"
+winvm_status="$(run bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.host.qemu != "" and .host.qemuImg != ""' <<< "$winvm_status" >/dev/null 2>&1; then
     check WINVM01 "QEMU available" PASS "$(jq -r '.host.qemu' <<< "$winvm_status")"
 else
@@ -360,7 +365,7 @@ if jq -e '.access.usbMode == "redir" and .access.usbRedirChannels > 0 and .acces
 else
     check WINVM10 "Windows USB redirection ready" WARN "run: phasezero-admin linux/pz windows-vm shares repair"
 fi
-winvm_graphics="$(bash "$PZ_ROOT/linux/windows-vm/graphics.sh" doctor --json 2>/dev/null || echo '{}')"
+winvm_graphics="$(run bash "$PZ_ROOT/linux/windows-vm/graphics.sh" doctor --json 2>/dev/null || echo '{}')"
 winvm_gfx_effective="$(jq -r '.effectiveProfile // "unknown"' <<< "$winvm_graphics")"
 winvm_gfx_eligible="$(jq -r '.graphics.profiles["virtio-gl"].eligible // false' <<< "$winvm_graphics")"
 # Resolve user state dir (stable under sudo via SUDO_USER)
@@ -402,7 +407,7 @@ elif jq -e '.runtime.status != "ok"' <<< "$winvm_graphics" >/dev/null 2>&1; then
 else
     check WINVM11 "Windows graphics integration" WARN "run: linux/pz windows-vm graphics doctor --json$winvm_deck_note"
 fi
-preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>/dev/null || echo '{}')"
+preflight_json="$(run bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>/dev/null || echo '{}')"
 SWTPM_SOCKET_PATH="${XDG_RUNTIME_DIR:-/run/user/$UID}/swtpm.sock"
 if [ -S "$SWTPM_SOCKET_PATH" ]; then
     check WINVM14 "swtpm daemon running" PASS "$SWTPM_SOCKET_PATH"
@@ -424,7 +429,7 @@ else
     check WINVM15 "virtio-win up-to-date" PASS "$virtio_version"
 fi
 
-winapps_status="$(bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" doctor 2>/dev/null || echo '{}')"
+winapps_status="$(run bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" doctor 2>/dev/null || echo '{}')"
 if jq -e '.healthy == true' <<< "$winapps_status" >/dev/null 2>&1; then
     check WINVM12 "WinBoat + WinPodX Podman host" PASS "verified AppImages; guests stopped by default"
 else
@@ -440,7 +445,7 @@ header "Waydroid"
 if ! subsystem_opted WAYDROID; then
     check WAYDROID00 "Waydroid subsystem" INFO "not opted in; run linux/pz install waydroid-linux to enable"
 else
-waydroid_status="$(bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"
+waydroid_status="$(run bash "$PZ_ROOT/linux/waydroid/waydroid.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.host.waydroid != ""' <<< "$waydroid_status" >/dev/null 2>&1; then
     check WAYDROID01 "Waydroid command available" PASS "$(jq -r '.host.waydroid' <<< "$waydroid_status")"
 else
@@ -506,7 +511,7 @@ hydra_app="$applications_dir/Hydra.AppImage"
 hydra_classic_config="${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/config.json"
 hydra_emulators_config="${XDG_CONFIG_HOME:-$HOME/.config}/hydralauncher/emulators_config.json"
 if [ -d "$emulation_root" ]; then check EMU01 "Shared emulation root" PASS "$emulation_root"; else check EMU01 "Shared emulation root" WARN "run: linux/pz emulation layout"; fi
-emudeck_status="$(bash "$PZ_ROOT/linux/emulation/emudeck.sh" status 2>/dev/null || echo '{}')"
+emudeck_status="$(run bash "$PZ_ROOT/linux/emulation/emudeck.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.launcher.installed == true and .launcher.kind == "steamdeck-desktop"' <<< "$emudeck_status" >/dev/null 2>&1; then
     emudeck_launcher="$(jq -r '.launcher.path' <<< "$emudeck_status")"
     check EMU02 "EmuDeck Steam Deck launcher installed" PASS "$emudeck_launcher"
@@ -546,7 +551,7 @@ if [ -f "$emulation_root/firmware/switch/keys/prod.keys" ]; then
 else
     check EMU05 "Switch keys imported locally" INFO "optional: linux/pz emulation switch import-keys <owned-dump-path>"
 fi
-srm_status="$(bash "$PZ_ROOT/linux/emulation/srm.sh" status 2>/dev/null || echo '{}')"
+srm_status="$(run bash "$PZ_ROOT/linux/emulation/srm.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.configured == true' <<< "$srm_status" >/dev/null 2>&1; then
     srm_count="$(jq -r '.managedParsers // 0' <<< "$srm_status")"
     check EMU10 "Steam ROM Manager paths configured" PASS "${srm_count} managed parsers"
@@ -555,7 +560,7 @@ elif jq -e '.appImageInstalled == true or .launcherInstalled == true' <<< "$srm_
 else
     check EMU10 "Steam ROM Manager available" INFO "optional: install via EmuDeck"
 fi
-ps3_status="$(bash "$PZ_ROOT/linux/emulation/ps3.sh" status 2>/dev/null || echo '{}')"
+ps3_status="$(run bash "$PZ_ROOT/linux/emulation/ps3.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.vfsConfigured == true' <<< "$ps3_status" >/dev/null 2>&1; then
     ps3_games="$(jq -r '.gameEntries // 0' <<< "$ps3_status")"
     ps3_pkg="$(jq -r '.pkgFiles // 0' <<< "$ps3_status")"
@@ -564,7 +569,7 @@ if jq -e '.vfsConfigured == true' <<< "$ps3_status" >/dev/null 2>&1; then
 else
     check EMU11 "RPCS3 PS3 paths configured" WARN "run: linux/pz emulation ps3 configure"
 fi
-shortcut_status="$(bash "$PZ_ROOT/linux/emulation/shortcuts.sh" status --json 2>/dev/null || echo '{}')"
+shortcut_status="$(run bash "$PZ_ROOT/linux/emulation/shortcuts.sh" status --json 2>/dev/null || echo '{}')"
 if jq -e '.status == "ok"' <<< "$shortcut_status" >/dev/null 2>&1; then
     shortcut_count="$(jq -r '[.checks[]? | select(.status == "ok")] | length' <<< "$shortcut_status")"
     check EMU12 "Desktop AppImage launchers clean" PASS "${shortcut_count} managed launchers"
@@ -572,7 +577,7 @@ else
     shortcut_warns="$(jq -r '[.checks[]? | select(.status == "warn")] | length' <<< "$shortcut_status" 2>/dev/null || echo 0)"
     check EMU12 "Desktop AppImage launchers clean" WARN "${shortcut_warns} issue(s); run: linux/pz emulation shortcuts repair"
 fi
-performance_status="$(bash "$PZ_ROOT/linux/emulation/performance.sh" status 2>/dev/null || echo '{}')"
+performance_status="$(run bash "$PZ_ROOT/linux/emulation/performance.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.configValid == true and .runtimeInstalled == true and .profiles.switch.lsfg == "auto" and .profiles.ps3.lsfg == "auto" and .profiles.ps4.lsfg == "auto"' <<< "$performance_status" >/dev/null 2>&1; then
     check EMU13 "Adaptive emulator profiles" PASS "Switch/PS3/PS4 auto profiles active"
 else
@@ -622,7 +627,7 @@ fi
 if command -v steamtinkerlaunch >/dev/null 2>&1; then check ST07 "SteamTinkerLaunch available" PASS "$(command -v steamtinkerlaunch)"; else check ST07 "SteamTinkerLaunch available" INFO "optional Proton/Wine per-game tool"; fi
 
 header "SteamOS Boot"
-boot_status="$(bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" status 2>/dev/null || true)"
+boot_status="$(run bash "$PZ_ROOT/linux/steamdeck/install-steamos-boot.sh" status 2>/dev/null || true)"
 boot_entry_state="$(awk -F': ' '$1 == "grub_cfg_entry" {print $2; exit}' <<< "$boot_status")"
 if [ -x /usr/local/lib/phasezero/steamos-boot-prepare ] && [ -x /etc/grub.d/42_phasezero_steamos ] && [ "$boot_entry_state" = "present" ]; then
     check BOOT01 "PhaseZero SteamOS GRUB entry installed" PASS "one-shot boot ready"
@@ -633,7 +638,7 @@ elif [ -x /usr/local/lib/phasezero/steamos-boot-prepare ] && [ -x /etc/grub.d/42
 else
     check BOOT01 "PhaseZero SteamOS GRUB entry installed" INFO "optional: sudo linux/steamdeck/install-steamos-boot.sh install"
 fi
-boot_recovery_status="$(bash "$PZ_ROOT/linux/boot/recovery.sh" status 2>/dev/null || true)"
+boot_recovery_status="$(run bash "$PZ_ROOT/linux/boot/recovery.sh" status 2>/dev/null || true)"
 boot_recovery_card="$(awk -F': ' '$1 ~ /recovery_card$/ {print $2; exit}' <<< "$boot_recovery_status")"
 boot_phasezero_efi="$(awk -F': ' '$1 ~ /phasezero_efi$/ {print $2; exit}' <<< "$boot_recovery_status")"
 boot_active_efi="$(awk -F': ' '$1 ~ /active_efi$/ {print $2; exit}' <<< "$boot_recovery_status")"
@@ -730,7 +735,7 @@ else
 fi
 
 header "AI Tools"
-ai_status="$(bash "$PZ_ROOT/linux/ai/status.sh" 2>/dev/null || echo '{}')"
+ai_status="$(run bash "$PZ_ROOT/linux/ai/status.sh" 2>/dev/null || echo '{}')"
 for tool in codex claude opencode hermes openclaw ollama; do
     if jq -e --arg tool "$tool" '.clis[$tool].available == true' <<< "$ai_status" >/dev/null 2>&1; then
         ai_path="$(jq -r --arg tool "$tool" '.clis[$tool].path' <<< "$ai_status")"
@@ -742,7 +747,7 @@ for tool in codex claude opencode hermes openclaw ollama; do
         esac
     fi
 done
-codexbar_health="$(bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" health 2>/dev/null || echo '{"verdict":"degraded","problems":["health_unavailable"]}')"
+codexbar_health="$(run bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" health 2>/dev/null || echo '{"verdict":"degraded","problems":["health_unavailable"]}')"
 if jq -e '.clis.codexbar.available == true' <<< "$ai_status" >/dev/null 2>&1; then
     if jq -e '[.problems[]? | select(. == "cli_binary_corrupted" or . == "cli_integrity_baseline_missing")] | length == 0' <<< "$codexbar_health" >/dev/null 2>&1; then
         check AI_CODEXBAR_CLI "CodexBar CLI integrity" PASS "$(jq -r '.clis.codexbar.path' <<< "$ai_status")"
@@ -786,13 +791,13 @@ if jq -e '.desktopApps.codexDesktop.guardEnabled == true and .desktopApps.update
 else
     check AI_DESKTOP_UPDATE_TIMER "AI desktop automatic updates enabled" WARN "run: linux/pz ai desktop install-services"
 fi
-router_doctor="$(bash "$PZ_ROOT/linux/ai/9router-manager.sh" doctor 2>/dev/null || echo '{}')"
+router_doctor="$(run bash "$PZ_ROOT/linux/ai/9router-manager.sh" doctor 2>/dev/null || echo '{}')"
 if jq -e '.secure == true and .healthy == true' <<< "$router_doctor" >/dev/null 2>&1; then
     check AI_9ROUTER "9Router local gateway" PASS "loopback; API key; private container bridge; passive watchdog"
 else
     check AI_9ROUTER "9Router local gateway" WARN "run: linux/pz ai 9router install"
 fi
-odysseus_doctor="$(bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" doctor 2>/dev/null || echo '{}')"
+odysseus_doctor="$(run bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" doctor 2>/dev/null || echo '{}')"
 if jq -e '.secure == true' <<< "$odysseus_doctor" >/dev/null 2>&1; then
     check AI_ODYSSEUS "Odysseus workspace" PASS "rootless; auth; pinned images"
 elif jq -e '.currentRelease == true' <<< "$odysseus_doctor" >/dev/null 2>&1; then
@@ -808,7 +813,7 @@ fi
 
 # OpenCode CLI must stay in version lockstep with opencode-desktop (they share
 # one SQLite DB); a skew crashes the older one on the migrated schema.
-oc_ver_status="$(bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status 2>/dev/null || echo '{}')"
+oc_ver_status="$(run bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status 2>/dev/null || echo '{}')"
 if jq -e '.desktop != null' <<< "$oc_ver_status" >/dev/null 2>&1; then
     if jq -e '.inSync == true' <<< "$oc_ver_status" >/dev/null 2>&1; then
         check AI_OPENCODE_SYNC "OpenCode CLI/desktop in lockstep" PASS "$(jq -r '.cli' <<< "$oc_ver_status") == desktop"
@@ -827,7 +832,7 @@ fi
 
 # oh-my-openagent (OMO) is an opt-in OpenCode plugin; report state without
 # requiring it (config-only status, no bunx spawn).
-omo_status="$(bash "$PZ_ROOT/linux/ai/setup-omo.sh" status 2>/dev/null || echo '{}')"
+omo_status="$(run bash "$PZ_ROOT/linux/ai/setup-omo.sh" status 2>/dev/null || echo '{}')"
 if jq -e '.plugin.registered == true' <<< "$omo_status" >/dev/null 2>&1; then
     if jq -e '.bun.present == true' <<< "$omo_status" >/dev/null 2>&1; then
         check AI_OMO "oh-my-openagent OpenCode plugin" PASS "registered; verify: linux/pz ai omo doctor"
