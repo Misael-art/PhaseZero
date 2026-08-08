@@ -33,9 +33,12 @@ linux/pz server homelab governor check --profile assistant-private
 ```
 
 Overcommit ou perfil desconhecido: **fail-closed** (exit != 0, sem plano).
-`docker-compose.lock.json` fixa 12 imagens com tag (sem `latest`, sem digest
+`docker-compose.lock.json` fixa 13 imagens com tag (sem `latest`, sem digest
 prometido). Todo serviço roda com `no-new-privileges` + `init` + `mem_limit`
-+ `cpus`.
++ `cpus`. O único bind do socket Docker é o `socket-proxy`
+(tecnativa/docker-socket-proxy, read-only, allowlist `CONTAINERS`/`TASKS`);
+o Portainer fala com o Docker via `DOCKER_HOST=tcp://socket-proxy:2375` e
+nunca monta o socket diretamente.
 
 ## Backup / restore (schemaVersion 2)
 

@@ -4,6 +4,7 @@
   "note": "Pinned image refs (no digest claims): digests are resolved at install/update time via pull + verify.",
   "images": {
     "portainer": "portainer/portainer-ce:2.33.2",
+    "socket-proxy": "tecnativa/docker-socket-proxy:0.2.0",
     "jellyfin": "jellyfin/jellyfin:10.10.7",
     "syncthing": "syncthing/syncthing:1.29.6",
     "vaultwarden": "vaultwarden/server:1.34.3",

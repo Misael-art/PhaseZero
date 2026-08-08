@@ -49,7 +49,7 @@ for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml; do
     [ "$(rg -c 'no-new-privileges' "$f")" -eq "$svcs" ] || { echo "FAIL: missing no-new-privileges in $f"; exit 1; }
     [ "$(rg -c 'mem_limit:' "$f")" -eq "$svcs" ] || { echo "FAIL: missing mem_limit in $f"; exit 1; }
 done
-jq -e '.schemaVersion == 1 and (.images | length == 12) and all(.images[]; (test(":latest") | not))' \
+jq -e '.schemaVersion == 1 and (.images | length == 13) and all(.images[]; (test(":latest") | not))' \
     "$REPO_ROOT/assets/home-server/docker-compose.lock.json" >/dev/null
 echo "  compose pins/binds/hardening ok"
 

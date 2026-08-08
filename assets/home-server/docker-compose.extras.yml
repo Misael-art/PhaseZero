@@ -1,11 +1,29 @@
 # PhaseZero homelab-stack — camada EXTRAS (pesada, opt-in). Rode adicionalmente:
 #   docker compose -f docker-compose.extras.yml up -d
 # Mais RAM/CPU; não recomendado nos modos que enxugam o SO. Segredos NUNCA inline (use .env/ambiente).
-# Portainer fica aqui como opt-in: monta /var/run/docker.sock e só deve rodar
-# ligado ao admin bind (127.0.0.1), nunca exposto cru na WAN.
+# Portainer fica aqui como opt-in. NUNCA monta /var/run/docker.sock direto:
+# fala com o socket via socket-proxy (allowlist de ambient nativa), e o proxy
+# só alcança o admin bind (127.0.0.1), nunca exposto cru na WAN.
 name: phasezero-homelab-extras
 
 services:
+  # Proxy de privilégio mínimo para o socket do Docker: expõe apenas os
+  # recursos que o Portainer realmente usa (containers/tasks), em rede interna.
+  socket-proxy:
+    image: ${PZ_IMAGE_SOCKET_PROXY:-tecnativa/docker-socket-proxy:0.2.0}
+    container_name: phasezero-socket-proxy
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    cpus: 0.25
+    environment:
+      CONTAINERS: "1"
+      TASKS: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   # Gestão visual da stack Docker (opt-in). Só com HOMELAB_ADMIN_BIND_ADDR=127.0.0.1.
   portainer:
     image: ${PZ_IMAGE_PORTAINER:-portainer/portainer-ce:2.33.2}
@@ -18,9 +36,12 @@ services:
     cpus: 0.5
     ports:
       - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:9000:9000"
+    environment:
+      DOCKER_HOST: "tcp://socket-proxy:2375"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - portainer_data:/data
+    depends_on:
+      - socket-proxy
 
   # "Drive" completo (alternativa pesada ao Syncthing)
   nextcloud-db:
