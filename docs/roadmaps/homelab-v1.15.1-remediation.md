@@ -523,6 +523,9 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-07 | opencode | idem | Fase 4 (perfis) | `4458ff3` | suíte hermética exit 0 | 6 perfis públicos implementados: assistant-private, assistant-multichannel, automation, ai-studio (blocked), developer, edge (default) |
 | 2026-08-07 | opencode | idem | Fase 5/8 (CLI+CI) | `0e261eb`, `6bac525`, `9676b8e` | suíte exit 0; smoke install-root exit 0; compose-validate local OK | alias `profiles --json`; socket-proxy; 5 jobs homelab no CI; `homelab-integration-disposable` delegado à Fase 2 (probe E2E faltante) |
 | 2026-08-08 | opencode | idem | Fase 0/10 (PR) | branch pushed; PR #37 aberto; #36 fechada | gitleaks green; compose-validate green; homelab-python-test green; security-secret-scan green (parcial) | CI principal em andamento (lint, shell-lint, python-test, shell-test, pester); aguardar conclusão antes do merge |
+| 2026-08-08 | opencode | idem | Fase 0/10 (CI verde + fixes) | `4d15f15` (SC2120/0.9.0), `f373266` (chmod +x), `0429af3` (rg nos jobs), `9c02010` (PZ_ROOT pin) | CI PR #37 run `31255687739`: 12/12 jobs success | CI verde completo: lint, shell-lint 0.9.0 e 0.11.0, python-test, pester, shell-test, windows-vm, homelab-python-test, homelab-shell-test, compose-validate, package-smoke, security-secret-scan. Próximo: merge da PR #37 |
+
+Prova CI: run `31255687739` — status `success`, 12 jobs verdes (`gh run view 31255687739`).
 
 ## Formato obrigatório de handoff
 
