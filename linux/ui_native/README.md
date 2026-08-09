@@ -31,13 +31,24 @@ linux/pz ai setup admin
 
 1. Ação mutável inicia preview seguro.
 2. Preview usa `--dry-run`, `plan`, `status` ou auditoria equivalente.
-3. Diálogo mostra stdout/stderr integral.
+3. Modo simplificado mostra impacto e solução; comando e stdout/stderr ficam
+   recolhidos em "Ver detalhes técnicos".
 4. Execução real nasce somente após confirmação.
 5. Operações root passam por `phasezero-admin`; fallback: `bigsudo`/`pkexec`.
    Chamadas internas a `sudo` usam shim gráfico somente dentro do subprocesso
    da UI; tarefas de usuário continuam no usuário original.
 6. Cada execução escreve envelope em
    `${XDG_STATE_HOME:-~/.local/state}/phasezero/control-center/results/`.
+
+## Modos de uso
+
+- **Simplificado (padrão):** cards, badges, botões ligar/desligar, sliders
+  seguros, painel de saúde e notificações curtas. Zero terminal no fluxo normal.
+- **Avançado:** chave no topo revela comandos, logs, JSON e abas técnicas. A
+  escolha persiste nas configurações Qt do usuário.
+
+Páginas dedicadas existem para Windows VM, Waydroid e Servidor. O histórico
+sempre mantém o resultado técnico completo, independentemente do modo visual.
 
 ## Atalhos
 
@@ -52,6 +63,9 @@ linux/pz ai setup admin
 QT_QPA_PLATFORM=offscreen python3 -m linux.ui_native \
   --smoke-test --screenshot /tmp/phasezero-ui.png
 pytest -q tests/test_linux_native_ui.py
+pytest -q tests/test_health_models.py tests/test_windows_vm_ui.py \
+  tests/test_service_control_ui.py
+bash tests/linux-waydroid.sh
 ```
 
 ## Empacotamento

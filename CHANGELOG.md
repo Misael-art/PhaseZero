@@ -30,6 +30,17 @@ As versões seguem a data de build em `version.json`.
 ## [Não lançado]
 
 ### Adicionado
+- Modo simplificado padrão na Central de Controle: comandos, JSON e logs ficam
+  recolhidos; a chave global "Modo avançado" revela detalhes técnicos sob
+  demanda.
+- Páginas visuais dedicadas para Windows VM, Waydroid e Servidor, com status,
+  ações de ligar/desligar, sliders seguros, toggles explicativos e zona de
+  perigo separada.
+- Painel "Saúde do sistema" agrupa diagnóstico por categoria e converte
+  `PASS`/`WARN`/`FAIL` em indicadores e ações compreensíveis.
+- Resultados estruturados usam cards e fatos legíveis; sucessos mutáveis usam
+  toast e falhas abrem diálogo orientado à correção.
+- Comando `pz waydroid stop` idempotente para suportar o controle visual.
 - Configurador de roteamento IA por tarefa (`linux/ai/routing_manager.py`,
   `pz ai routing`): inventário de conexões do 9Router com quota real
   (known/unknown/unavailable + confiança), recomendações por tarefa
