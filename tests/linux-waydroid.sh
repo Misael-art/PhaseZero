@@ -46,9 +46,14 @@ fake_bin="$TMP_ROOT/bin"
 mkdir -p "$fake_bin"
 cat > "$fake_bin/waydroid" <<'EOF'
 #!/usr/bin/env bash
+[ -z "${PZ_WAYDROID_TEST_ARGS:-}" ] || printf '%s\n' "$*" > "$PZ_WAYDROID_TEST_ARGS"
 exit 0
 EOF
 chmod +x "$fake_bin/waydroid"
+stop_args="$TMP_ROOT/waydroid-stop-args"
+stop_result="$(PATH="$fake_bin:$PATH" PZ_WAYDROID_TEST_ARGS="$stop_args" "$REPO_ROOT/linux/pz" waydroid stop --json)"
+jq -e '.success == true and .state == "stopped"' <<< "$stop_result" >/dev/null
+grep -Fxq 'session stop' "$stop_args"
 session_validation="$(
     PATH="$fake_bin:$PATH" \
     PZ_WAYDROID_ENV_FILE="$stale_env" \

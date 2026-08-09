@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QPlainTextEdit
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.command_runner import CommandRunner
 from linux.ui_native.provision_player import ProvisionPlayerWindow, ST_IDLE, ST_DONE
-from linux.ui_native.pages.workspace import CatalogWorkspacePage
+from linux.ui_native.pages.windows_vm import WindowsVmPage
 from linux.ui_native.result_parser import severity_for
 from linux.ui_native.widgets import ParameterDialog
 
@@ -39,6 +39,9 @@ UI_MODULES: list[str] = [
     "linux.ui_native.pages.results",
     "linux.ui_native.pages.workspace",
     "linux.ui_native.pages.ai_proxies",
+    "linux.ui_native.pages.windows_vm",
+    "linux.ui_native.pages.service_control",
+    "linux.ui_native.health_models",
 ]
 
 
@@ -57,12 +60,12 @@ def by_id(catalog):
     return {a.id: a for a in catalog}
 
 
-# ── Windows VM rendered through the generic catalog workspace page ──
+# ── Windows VM rendered through the friendly service page ──
 
 @pytest.fixture
 def ws_page(qapp, catalog):
     actions = [action for action in catalog if action.category == "Windows VM"]
-    page = CatalogWorkspacePage(ROOT, CommandRunner(ROOT), actions, by_id={a.id: a for a in catalog})
+    page = WindowsVmPage(ROOT, CommandRunner(ROOT), actions, by_id={a.id: a for a in catalog})
     page.build()
     page.finalize_action_coverage()
     return page, actions
@@ -71,6 +74,48 @@ def ws_page(qapp, catalog):
 def test_workspace_page_covers_all_windows_vm_actions(ws_page):
     page, actions = ws_page
     assert page.represented_action_ids == {action.id for action in actions}
+
+
+def test_windows_vm_page_translates_status_json_into_visual_controls(ws_page):
+    page, _actions = ws_page
+    page._on_status_ready("windows.status", "", {
+        "config": {"installed": True},
+        "vm": {
+            "diskExists": True, "ramMb": 10240, "cpus": 7,
+            "graphicsProfile": "virtio-gl",
+        },
+        "libvirt": {"state": "running"},
+        "host": {"qemu": "/usr/bin/qemu-system-x86_64"},
+        "access": {
+            "shareLinksReady": True, "sambaReachable": False,
+            "usbRedirChannels": 2, "usbUdevManaged": True,
+        },
+    })
+    assert page.state_label.text() == "● Rodando"
+    assert page.power_button.text() == "Desligar"
+    assert page.ram_value.text() == "Memória: 10 GB"
+    assert page.cpu_value.text() == "Processadores: 7"
+    assert page.share_toggle.isChecked()
+    assert page.gpu_toggle.isChecked()
+    assert page.usb_toggle.isChecked()
+
+
+def test_windows_vm_page_uses_safe_shutdown_action(ws_page):
+    from PySide6.QtTest import QSignalSpy
+
+    page, _actions = ws_page
+    page._payload = {"libvirt": {"state": "running"}}
+    spy = QSignalSpy(page.action_requested)
+    page._power_action()
+    assert spy.count() == 1
+    assert spy.at(0)[0].id == "windows.guest-login.shutdown"
+
+
+def test_windows_shutdown_action_has_read_only_preview(by_id):
+    action = by_id["windows.guest-login.shutdown"]
+    assert action.mutable
+    assert action.preview_args == ("windows-vm", "guest-login", "status", "--json")
+    assert action.args == ("windows-vm", "guest-login", "shutdown", "--json")
 
 
 def test_windows_vm_category_has_plan_and_provision_actions(by_id):

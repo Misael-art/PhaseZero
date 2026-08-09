@@ -20,6 +20,22 @@ from linux.ui_native.command_runner import build_program
 from linux.ui_native.models import ActionSpec
 from linux.ui_native.result_parser import parse_json_output, severity_for
 from linux.ui_native.pages.results import create_safe_results_archive
+from linux.ui_native.preferences import UiPreferences
+
+
+def test_doctor_results_are_grouped_and_translated_for_nontechnical_users():
+    from linux.ui_native.health_models import parse_health_checks, suggested_action_id
+
+    checks = parse_health_checks([
+        "[PASS] MEM01: Total RAM >= 4GB — 14GB",
+        "[WARN] CPU02: CPU load (1m) < cores — 9 / 8",
+        "[FAIL] NET01: Internet connectivity — offline",
+    ])
+    assert [check.group for check in checks] == ["Hardware", "Hardware", "Conexão"]
+    assert checks[0].title == "Memória total suficiente"
+    assert checks[1].state == "warning" and checks[1].needs_attention
+    assert checks[2].state == "error"
+    assert suggested_action_id(checks[1]) == "system.repair-plan"
 
 
 @pytest.fixture(scope="module")
@@ -283,6 +299,13 @@ def test_manifest_serializes_catalog(catalog):
 
 def test_native_version_comes_from_project_manifest():
     assert __version__ == json.loads((ROOT / "version.json").read_text())["version"]
+
+
+def test_simplified_mode_is_default_and_env_can_enable_advanced(monkeypatch):
+    monkeypatch.setenv("PZ_UI_ADVANCED_MODE", "0")
+    assert UiPreferences().advanced_mode is False
+    monkeypatch.setenv("PZ_UI_ADVANCED_MODE", "1")
+    assert UiPreferences().advanced_mode is True
 
 
 def test_native_launcher_reports_version_without_starting_qt():

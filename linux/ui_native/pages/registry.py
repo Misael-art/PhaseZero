@@ -16,6 +16,8 @@ from .ai_routing import AiRoutingPage
 from .tuning import TuningPage
 from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
+from .windows_vm import WindowsVmPage
+from .service_control import ServerPage, WaydroidPage
 
 
 class PageRegistry:
@@ -38,9 +40,9 @@ class PageRegistry:
         "Visão geral": OverviewPage,
         "Perfis": ProfilesPage,
         "Steam Deck": CatalogWorkspacePage,
-        "Windows VM": CatalogWorkspacePage,
-        "Waydroid": CatalogWorkspacePage,
-        "Servidor": CatalogWorkspacePage,
+        "Windows VM": WindowsVmPage,
+        "Waydroid": WaydroidPage,
+        "Servidor": ServerPage,
         "Homelab": HomelabPage,
         "Emulação": EmulationPage,
         "Boot Direto": CatalogWorkspacePage,
@@ -71,3 +73,7 @@ class PageRegistry:
     def block_all(self, running: bool) -> None:
         for page in self._pages.values():
             page.block_while_running(running)
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        for page in self._pages.values():
+            page.set_advanced_mode(enabled)

@@ -43,6 +43,8 @@ class BasePage(QWidget):
         self._loading_timer.timeout.connect(self._show_delayed_loading)
         self._represented_ids: set[str] = set()
         self._advanced_ids: set[str] = set()
+        self._advanced_mode = False
+        self._advanced_panels: list[QWidget] = []
         self._context_status_action: ActionSpec | None = None
         self._context_status: QFrame | None = None
         self.status_loader.status_ready.connect(self._context_status_ready)
@@ -56,6 +58,11 @@ class BasePage(QWidget):
 
     def block_while_running(self, running: bool) -> None:
         pass
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        self._advanced_mode = bool(enabled)
+        for panel in self._advanced_panels:
+            panel.setVisible(self._advanced_mode)
 
     def show_skeletons(self, count: int = 6, columns: int = 3) -> QGridLayout:
         """Show N skeleton cards in a grid. Returns the grid for layout positioning."""
@@ -136,6 +143,8 @@ class BasePage(QWidget):
             return
         panel = AdvancedActionsPanel(remaining)
         panel.requested.connect(self.request_action)
+        panel.setVisible(self._advanced_mode)
+        self._advanced_panels.append(panel)
         self._advanced_ids = {action.id for action in remaining}
         self._layout.addWidget(panel)
 

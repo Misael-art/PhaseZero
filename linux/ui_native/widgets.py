@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import time
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
     QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -489,6 +491,7 @@ class ActionInspector(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.action: ActionSpec | None = None
+        self._advanced_mode = False
         self.setObjectName("actionInspector")
         self.setMinimumWidth(270)
         self.setMaximumWidth(310)
@@ -555,11 +558,14 @@ class ActionInspector(QFrame):
         self.result.setObjectName("inspectorValue")
         self.result.setWordWrap(True)
         content.addWidget(self.result)
-        content.addWidget(self._section_label("Comando seguro"))
+        self.command_heading = self._section_label("Detalhes técnicos")
+        content.addWidget(self.command_heading)
         self.command = QLineEdit()
         self.command.setObjectName("inspectorCommand")
         self.command.setReadOnly(True)
         content.addWidget(self.command)
+        self.command_heading.hide()
+        self.command.hide()
         content.addStretch()
         self.execute = QPushButton("Selecionar operação")
         self.execute.setObjectName("primaryButton")
@@ -605,6 +611,11 @@ class ActionInspector(QFrame):
     def clear_action(self) -> None:
         self.action = None
         self.body.setCurrentIndex(0)
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        self._advanced_mode = bool(enabled)
+        self.command_heading.setVisible(self._advanced_mode)
+        self.command.setVisible(self._advanced_mode)
 
     def _request(self) -> None:
         if self.action is not None:
@@ -868,6 +879,166 @@ class Toast(QFrame):
 
 STATE_ICONS = {"success": "✓", "warning": "⚠", "error": "✕", "info": "ℹ", "running": "◐"}
 
+_RESULT_KEYS = {
+    "ramMb": "Memória",
+    "cpus": "Processadores",
+    "graphicsProfile": "Perfil gráfico",
+    "diskExists": "Disco",
+    "installedLike": "Windows detectado",
+    "state": "Estado",
+    "status": "Estado",
+    "installed": "Instalado",
+    "ready": "Pronto",
+    "healthy": "Saudável",
+    "configured": "Configurado",
+    "active": "Ativo",
+    "version": "Versão",
+    "profile": "Perfil",
+    "accessMode": "Acesso",
+    "warnings": "Avisos",
+    "blockers": "Bloqueios",
+    "error": "Problema",
+    "message": "Mensagem",
+}
+
+
+def _friendly_result_key(key: str) -> str:
+    if key in _RESULT_KEYS:
+        return _RESULT_KEYS[key]
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", key).replace("_", " ").strip()
+    return value[:1].upper() + value[1:]
+
+
+def _friendly_result_value(key: str, value: object) -> str:
+    if key == "ramMb" and isinstance(value, (int, float)):
+        return f"{value / 1024:g} GB"
+    if isinstance(value, bool):
+        return "Sim" if value else "Não"
+    if value is None:
+        return "—"
+    if isinstance(value, list):
+        return f"{len(value)} item(ns)"
+    return str(value)
+
+
+def _result_facts(value: object, *, limit: int = 12) -> list[tuple[str, str]]:
+    facts: list[tuple[str, str]] = []
+    if not isinstance(value, dict):
+        return facts
+    preferred_sections = ("vm", "config", "libvirt", "host", "access", "boot")
+    ordered = [key for key in preferred_sections if key in value]
+    ordered.extend(key for key in value if key not in ordered)
+    for key in ordered:
+        item = value[key]
+        if isinstance(item, dict):
+            for child_key, child in item.items():
+                if isinstance(child, (dict, list)):
+                    continue
+                facts.append((_friendly_result_key(child_key), _friendly_result_value(child_key, child)))
+                if len(facts) >= limit:
+                    return facts
+        elif not isinstance(item, (dict, list)):
+            facts.append((_friendly_result_key(key), _friendly_result_value(key, item)))
+            if len(facts) >= limit:
+                return facts
+    return facts
+
+
+class StructuredResultView(QWidget):
+    """Visual summary first; JSON and terminal text behind disclosure."""
+
+    def __init__(
+        self,
+        value: object = None,
+        raw_text: str = "",
+        parent: QWidget | None = None,
+        *,
+        advanced_mode: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+        self.summary = QWidget()
+        self.summary_layout = QVBoxLayout(self.summary)
+        self.summary_layout.setContentsMargins(0, 0, 0, 0)
+        self.summary_layout.setSpacing(10)
+        layout.addWidget(self.summary)
+        self.details_toggle = QToolButton()
+        self.details_toggle.setObjectName("technicalDisclosure")
+        self.details_toggle.setText("Ver detalhes técnicos")
+        self.details_toggle.setCheckable(True)
+        self.details_toggle.setChecked(advanced_mode)
+        self.details_toggle.setArrowType(Qt.DownArrow if advanced_mode else Qt.RightArrow)
+        self.details_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        layout.addWidget(self.details_toggle)
+        self.raw = QPlainTextEdit()
+        self.raw.setObjectName("logView")
+        self.raw.setReadOnly(True)
+        self.raw.setMaximumHeight(240)
+        self.raw.setVisible(advanced_mode)
+        layout.addWidget(self.raw, 1)
+        self.details_toggle.toggled.connect(self.raw.setVisible)
+        self.details_toggle.toggled.connect(
+            lambda checked: self.details_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        )
+        self.set_result(value, raw_text)
+
+    def set_result(self, value: object, raw_text: str) -> None:
+        while self.summary_layout.count():
+            item = self.summary_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            counts = {"PASS": 0, "WARN": 0, "FAIL": 0, "ERROR": 0, "INFO": 0}
+            for item in value:
+                for status in counts:
+                    if item.startswith(f"[{status}]"):
+                        counts[status] += 1
+                        break
+            row = QHBoxLayout()
+            row.addWidget(StatusPill("Tudo certo", "success", str(counts["PASS"])))
+            row.addWidget(StatusPill("Avisos", "warning", str(counts["WARN"] + counts["INFO"])))
+            row.addWidget(StatusPill("Erros", "error", str(counts["FAIL"] + counts["ERROR"])))
+            row.addStretch()
+            self.summary_layout.addLayout(row)
+        else:
+            facts = _result_facts(value)
+            if facts:
+                grid_host = QWidget()
+                grid_host.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+                grid = QGridLayout(grid_host)
+                grid.setContentsMargins(0, 0, 0, 0)
+                grid.setHorizontalSpacing(10)
+                grid.setVerticalSpacing(10)
+                for index, (title, fact_value) in enumerate(facts):
+                    card = QFrame()
+                    card.setObjectName("resultFact")
+                    card_layout = QVBoxLayout(card)
+                    card_layout.setContentsMargins(12, 10, 12, 10)
+                    name = QLabel(title)
+                    name.setObjectName("healthMetricLabel")
+                    result = QLabel(fact_value)
+                    result.setObjectName("resultFactValue")
+                    result.setWordWrap(True)
+                    card_layout.addWidget(name)
+                    card_layout.addWidget(result)
+                    grid.addWidget(card, index // 3, index % 3)
+                for column in range(3):
+                    grid.setColumnStretch(column, 1)
+                self.summary_layout.addWidget(grid_host)
+            else:
+                empty = QLabel("Operação concluída. Nenhum detalhe adicional necessário.")
+                empty.setObjectName("cardDescription")
+                empty.setWordWrap(True)
+                self.summary_layout.addWidget(empty)
+        if not raw_text and value is not None:
+            raw_text = json.dumps(value, ensure_ascii=False, indent=2)
+        self.raw.setPlainText(raw_text[:2_000_000])
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        self.details_toggle.setChecked(bool(enabled))
+
 
 def sanitized_command(command: list[str]) -> str:
     output: list[str] = []
@@ -899,6 +1070,7 @@ class StatefulDialog(QDialog):
         icon.setAccessibleName(f"Estado: {state}")
         heading = QLabel(title)
         heading.setObjectName("dialogTitle")
+        heading.setProperty("state", state)
         header.addWidget(icon)
         header.addWidget(heading, 1)
         outer.addLayout(header)
@@ -918,6 +1090,7 @@ class StatefulDialog(QDialog):
         button = self.footer.addButton(label, role)
         if variant:
             button.setObjectName(variant)
+            _repolish(button)
         button.setEnabled(enabled)
         return button
 
@@ -928,6 +1101,8 @@ class PreviewDialog(StatefulDialog):
         result: OperationResult,
         action: ActionSpec | None = None,
         parent: QWidget | None = None,
+        *,
+        advanced_mode: bool = False,
     ) -> None:
         blockers = result.parsed.get("blockers") if isinstance(result.parsed, dict) else None
         preview_ok = result.ok and not blockers
@@ -959,16 +1134,33 @@ class PreviewDialog(StatefulDialog):
                     row.addWidget(label, 1)
                     warn_layout.addLayout(row)
                 self.body.addWidget(warn_box)
+        self.details_toggle = QToolButton()
+        self.details_toggle.setObjectName("technicalDisclosure")
+        self.details_toggle.setText("Ver detalhes técnicos")
+        self.details_toggle.setCheckable(True)
+        self.details_toggle.setChecked(advanced_mode)
+        self.details_toggle.setArrowType(Qt.DownArrow if advanced_mode else Qt.RightArrow)
+        self.details_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.body.addWidget(self.details_toggle)
+        self.technical = QWidget()
+        technical_layout = QVBoxLayout(self.technical)
+        technical_layout.setContentsMargins(0, 0, 0, 0)
         command = QLineEdit(sanitized_command(result.command))
         command.setObjectName("commandBar")
         command.setReadOnly(True)
         command.setAccessibleName("Comando sanitizado")
-        self.body.addWidget(command)
+        technical_layout.addWidget(command)
         self.output = QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setObjectName("logView")
         self.output.setPlainText(result.stdout + ("\n[stderr]\n" + result.stderr if result.stderr else ""))
-        self.body.addWidget(self.output, 1)
+        technical_layout.addWidget(self.output, 1)
+        self.body.addWidget(self.technical, 1)
+        self.technical.setVisible(advanced_mode)
+        self.details_toggle.toggled.connect(self.technical.setVisible)
+        self.details_toggle.toggled.connect(
+            lambda checked: self.details_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        )
         copy = self.add_action("Copiar saída", QDialogButtonBox.ActionRole)
         copy.clicked.connect(lambda: QApplication.clipboard().setText(self.output.toPlainText()))
         cancel = self.add_action("Voltar", QDialogButtonBox.RejectRole)
@@ -996,14 +1188,35 @@ class PreviewDialog(StatefulDialog):
 class ProgressDialog(StatefulDialog):
     cancel_requested = Signal()
 
-    def __init__(self, title: str, command: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        command: str,
+        parent: QWidget | None = None,
+        *,
+        advanced_mode: bool = False,
+    ) -> None:
         super().__init__(title, "running", parent)
         self._started = time.monotonic()
         self._running = True
+        summary = QLabel("Aguarde. O PhaseZero está cuidando desta etapa.")
+        summary.setObjectName("cardDescription")
+        self.body.addWidget(summary)
+        self.details_toggle = QToolButton()
+        self.details_toggle.setObjectName("technicalDisclosure")
+        self.details_toggle.setText("Ver detalhes técnicos")
+        self.details_toggle.setCheckable(True)
+        self.details_toggle.setChecked(advanced_mode)
+        self.details_toggle.setArrowType(Qt.DownArrow if advanced_mode else Qt.RightArrow)
+        self.details_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.body.addWidget(self.details_toggle)
+        self.technical = QWidget()
+        technical_layout = QVBoxLayout(self.technical)
+        technical_layout.setContentsMargins(0, 0, 0, 0)
         self.command = QLineEdit(command)
         self.command.setObjectName("commandBar")
         self.command.setReadOnly(True)
-        self.body.addWidget(self.command)
+        technical_layout.addWidget(self.command)
         self.elapsed = QLabel("Tempo: 00:00")
         self.elapsed.setObjectName("pathLabel")
         self.body.addWidget(self.elapsed)
@@ -1014,7 +1227,13 @@ class ProgressDialog(StatefulDialog):
         self.log.setObjectName("logView")
         self.log.setReadOnly(True)
         self.log.document().setMaximumBlockCount(300)
-        self.body.addWidget(self.log, 1)
+        technical_layout.addWidget(self.log, 1)
+        self.body.addWidget(self.technical, 1)
+        self.technical.setVisible(advanced_mode)
+        self.details_toggle.toggled.connect(self.technical.setVisible)
+        self.details_toggle.toggled.connect(
+            lambda checked: self.details_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        )
         cancel = self.add_action("Cancelar operação", QDialogButtonBox.RejectRole, variant="dangerButton")
         cancel.clicked.connect(self.cancel_requested.emit)
         self._timer = QTimer(self)
@@ -1049,28 +1268,63 @@ class ProgressDialog(StatefulDialog):
 
 class ResultDialog(StatefulDialog):
     history_requested = Signal()
+    resolution_requested = Signal(str)
 
-    def __init__(self, result: OperationResult, formatted: str, parent: QWidget | None = None, *, severity: str | None = None) -> None:
+    def __init__(
+        self,
+        result: OperationResult,
+        formatted: str,
+        parent: QWidget | None = None,
+        *,
+        severity: str | None = None,
+        advanced_mode: bool = False,
+    ) -> None:
         sev = severity or ("success" if result.ok else "error")
         title_map = {"success": "Operação concluída", "warning": "Concluído com avisos", "error": "Operação falhou"}
         title = title_map.get(sev, "Operação falhou")
         super().__init__(title, sev, parent)
+        self.setMinimumSize(660, 380)
+        self.resize(760, 480)
         self.formatted = formatted
-        path = QLabel(f"result.json: {result.result_path}")
-        path.setObjectName("pathLabel")
-        path.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.body.addWidget(path)
-        output = QPlainTextEdit()
-        output.setReadOnly(True)
-        output.setObjectName("logView")
-        output.setPlainText(formatted)
-        self.body.addWidget(output, 1)
-        copy = self.add_action("Copiar resultado", QDialogButtonBox.ActionRole)
+        message = {
+            "success": "Tudo pronto. A operação terminou como esperado.",
+            "warning": "A operação terminou, mas alguns itens precisam de revisão.",
+            "error": "Não foi possível concluir. Revise a solução recomendada abaixo.",
+        }.get(sev, "Revise o resultado.")
+        if sev == "error":
+            detail = ""
+            if isinstance(result.parsed, dict):
+                detail = str(result.parsed.get("error") or result.parsed.get("message") or "")
+                blockers = result.parsed.get("blockers")
+                if not detail and isinstance(blockers, list) and blockers:
+                    detail = str(blockers[0])
+            if not detail and result.stderr.strip():
+                detail = result.stderr.strip().splitlines()[0]
+            if detail:
+                message = detail[:300]
+        summary = QLabel(message)
+        summary.setObjectName("resultSummary")
+        summary.setWordWrap(True)
+        self.summary_label = summary
+        self.body.addWidget(summary)
+        self.view = StructuredResultView(
+            result.parsed, formatted, self, advanced_mode=advanced_mode
+        )
+        self.body.addWidget(self.view, 1)
+        copy = self.add_action("Copiar detalhes", QDialogButtonBox.ActionRole)
         copy.clicked.connect(lambda: QApplication.clipboard().setText(formatted))
         if result.result_path is not None:
-            open_folder = self.add_action("Abrir pasta", QDialogButtonBox.ActionRole)
+            open_folder = self.add_action("Abrir pasta técnica", QDialogButtonBox.ActionRole)
             open_folder.clicked.connect(lambda: open_path(result.result_path.parent))
-        history = self.add_action("Ver histórico", QDialogButtonBox.ActionRole)
+        history = self.add_action("Histórico", QDialogButtonBox.ActionRole)
         history.clicked.connect(self.history_requested.emit)
-        close = self.add_action("Fechar", QDialogButtonBox.AcceptRole, variant="primaryButton")
+        if sev in {"warning", "error"}:
+            label = "Revisar Windows VM" if result.action_id.startswith("windows.") else "Ver solução"
+            resolution = self.add_action(label, QDialogButtonBox.AcceptRole, variant="primaryButton")
+            resolution.clicked.connect(lambda: self.resolution_requested.emit(result.action_id))
+            resolution.clicked.connect(self.accept)
+        close = self.add_action(
+            "Fechar", QDialogButtonBox.RejectRole if sev in {"warning", "error"} else QDialogButtonBox.AcceptRole,
+            variant="" if sev in {"warning", "error"} else "primaryButton",
+        )
         close.clicked.connect(self.accept)

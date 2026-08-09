@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -29,6 +30,7 @@ from .catalog import CATEGORIES, DASHBOARD, SIDEBAR_GROUPS, build_catalog
 from .command_runner import CommandRunner
 from .models import ActionSpec, OperationResult
 from .provision_player import ProvisionPlayerWindow
+from .preferences import UiPreferences
 from .pages.registry import PageRegistry
 from .result_parser import severity_for
 from .widgets import (
@@ -70,6 +72,7 @@ class MainWindow(QMainWindow):
         self.progress_dialog: ProgressDialog | None = None
         self._operation_started_at: float | None = None
         self._failure_count = 0
+        self.preferences = UiPreferences(self)
         self._elapsed_timer = QTimer(self)
         self._elapsed_timer.setInterval(1000)
         self._elapsed_timer.timeout.connect(self._update_elapsed)
@@ -197,6 +200,15 @@ class MainWindow(QMainWindow):
         self.search.setAccessibleName("Busca de ações")
         self.search.textChanged.connect(self.on_search)
         top.addWidget(self.search)
+        self.mode_switch = QCheckBox("Modo avançado")
+        self.mode_switch.setObjectName("modeSwitch")
+        self.mode_switch.setToolTip("Revela comandos, logs e operações técnicas")
+        self.mode_switch.setAccessibleDescription(
+            "Desativado por padrão. Ative para mostrar comandos, logs e ações avançadas."
+        )
+        self.mode_switch.setChecked(self.preferences.advanced_mode)
+        self.mode_switch.toggled.connect(self._set_advanced_mode)
+        top.addWidget(self.mode_switch)
         theme = QPushButton()
         theme.setObjectName("iconButton")
         theme.setToolTip("Alternar tema")
@@ -312,6 +324,7 @@ class MainWindow(QMainWindow):
         operation_layout.addWidget(self.log_view)
         main_layout.addWidget(operation)
         self._build_global_status_bar()
+        self._set_advanced_mode(self.preferences.advanced_mode, persist=False)
         QTimer.singleShot(0, self._host_summary)
 
     def _build_global_status_bar(self) -> None:
@@ -489,7 +502,7 @@ class MainWindow(QMainWindow):
         self.pending_value = values.get("input", "")
         self.pending_values = values
         self.log_view.clear()
-        self.log_view.show()
+        self.log_view.setVisible(self.preferences.advanced_mode)
         try:
             self.runner.start(action, preview=action.mutable, values=values)
         except (ValueError, RuntimeError) as exc:
@@ -505,6 +518,7 @@ class MainWindow(QMainWindow):
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)
         self.command_label.setText(command)
+        self.command_label.setVisible(self.preferences.advanced_mode)
         self.cancel_button.setEnabled(True)
         self._operation_started_at = time.monotonic()
         self._elapsed_timer.start()
@@ -518,13 +532,17 @@ class MainWindow(QMainWindow):
         self.append_output(f"$ {command}\n", False)
         if not self.runner.preview:
             title = self.pending_action.title if self.pending_action is not None else "Executando operação"
-            self.progress_dialog = ProgressDialog(title, command, self)
+            self.progress_dialog = ProgressDialog(
+                title, command, self, advanced_mode=self.preferences.advanced_mode
+            )
             self.progress_dialog.cancel_requested.connect(self.runner.cancel)
             self.progress_dialog.show()
 
     def append_output(self, text: str, error: bool) -> None:
         if error:
             self.log_view.appendPlainText("[stderr] " + text.rstrip())
+        elif action is not None and action.mutable and result.ok and severity == "success":
+            self._toast(f"{action_title} concluída com sucesso", "success")
         else:
             cursor = self.log_view.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -582,7 +600,9 @@ class MainWindow(QMainWindow):
         if start_failed:
             pass  # operation_start_failed already told the user
         elif result.preview and action is not None:
-            dialog = PreviewDialog(result, action, self)
+            dialog = PreviewDialog(
+                result, action, self, advanced_mode=self.preferences.advanced_mode
+            )
             if dialog.exec() == PreviewDialog.Accepted:
                 try:
                     self._bind_preview_result(action, result)
@@ -602,8 +622,15 @@ class MainWindow(QMainWindow):
             self._action_queue.clear()
         else:
             formatted = self._format_result(result)
-            dialog = ResultDialog(result, formatted, self, severity=severity)
+            dialog = ResultDialog(
+                result,
+                formatted,
+                self,
+                severity=severity,
+                advanced_mode=self.preferences.advanced_mode,
+            )
             dialog.history_requested.connect(lambda: self.show_category("Resultados"))
+            dialog.resolution_requested.connect(self._open_resolution)
             dialog.exec()
             verb_map = {"success": "concluída", "warning": "concluída com avisos", "error": "falhou"}
             verb = verb_map.get(severity, "falhou")
@@ -634,6 +661,17 @@ class MainWindow(QMainWindow):
     def _toast(self, message: str, state: str) -> None:
         toast = Toast(self, message, state)
         toast.popup()
+
+    def _open_resolution(self, action_id: str) -> None:
+        if action_id.startswith("windows."):
+            self.show_category("Windows VM")
+        elif action_id == "system.doctor":
+            self.show_category("Visão geral")
+        else:
+            self.show_category("Visão geral")
+            action = self.by_id.get("system.repair-plan")
+            if action is not None:
+                self.inspect_action(action)
 
     def _format_result(self, result: OperationResult) -> str:
         blocks = []
@@ -693,6 +731,20 @@ class MainWindow(QMainWindow):
 
     def toggle_logs(self) -> None:
         self.log_view.setVisible(not self.log_view.isVisible())
+
+    def _set_advanced_mode(self, enabled: bool, *, persist: bool = True) -> None:
+        enabled = bool(enabled)
+        if persist:
+            self.preferences.set_advanced_mode(enabled)
+        self.mode_switch.blockSignals(True)
+        self.mode_switch.setChecked(enabled)
+        self.mode_switch.blockSignals(False)
+        self.inspector.set_advanced_mode(enabled)
+        self.registry.set_advanced_mode(enabled)
+        self.command_label.setVisible(enabled and bool(self.command_label.text()))
+        self.toggle_logs_button.setVisible(enabled or self._failure_count > 0)
+        if not enabled:
+            self.log_view.hide()
 
     def toggle_maximize(self) -> None:
         if self.isMaximized():

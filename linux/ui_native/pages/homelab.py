@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLabel, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
     QTableWidget, QTableWidgetItem, QVBoxLayout,
 )
+from shiboken6 import isValid
 
 from .base import BasePage
 
@@ -150,6 +151,10 @@ class HomelabPage(BasePage):
 
         def on_finished(code: int) -> None:
             self._cancel_timeout(proc)
+            if not isValid(proc):
+                if self._proc is proc:
+                    self._proc = None
+                return
             on_done(
                 code,
                 bytes(proc.readAllStandardOutput()),
