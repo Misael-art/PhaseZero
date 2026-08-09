@@ -85,7 +85,7 @@ PZ_EMULATION_DMI_DIR="$DECK_DMI" \
 PZ_EMUDECK_STEAMDECK_DESKTOP_URL="file://$DECK_DESKTOP_SOURCE" \
     "$REPO_ROOT/linux/pz" emulation emudeck install >/dev/null
 test -x "$DECK_HOME/Desktop/EmuDeck.desktop"
-! grep -q $'^\t' "$DECK_HOME/Desktop/EmuDeck.desktop"
+grep -q $'^\t' "$DECK_HOME/Desktop/EmuDeck.desktop" && exit 1
 test -x "$DECK_BIN/phasezero-emudeck"
 HOME="$DECK_HOME" \
 XDG_CONFIG_HOME="$DECK_HOME/.config" \
@@ -309,8 +309,8 @@ if PZ_NSZ_BIN="$FAKE_NSZ_BIN" PZ_NSZ_RESERVE_BYTES=0 PZ_NSZ_EXPANSION_RATIO=1 \
 fi
 test ! -e "$PZ_EMULATION_ROOT/roms/switch/broken/Broken Game.nsz"
 test -f "$PZ_EMULATION_ROOT/.phasezero/quarantine/nsz/Broken Game.nsz"
-! find "$PZ_EMULATION_ROOT/roms/switch/nsp/.phasezero-staging/nsz-to-nsp" \
-    -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q .
+find "$PZ_EMULATION_ROOT/roms/switch/nsp/.phasezero-staging/nsz-to-nsp" \
+    -mindepth 1 -maxdepth 1 -type d 2>/dev/null | grep -q . && exit 1
 jq -e 'select(.status == "failed-verification" and .sourcePreserved == true and .quarantine != null)' \
     "$PZ_EMULATION_ROOT"/metadata/switch/nsz-conversions/failed-*.json >/dev/null
 

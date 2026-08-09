@@ -44,6 +44,8 @@ A [pagina de Releases](https://github.com/Misael-art/PhaseZero/releases/latest) 
 
 `SHA256SUMS-<versao>` acompanha cada release; confira com `sha256sum -c`. O pacote instala `phasezero-control-center` (binario) e um atalho de desktop (`io.phasezero.ControlCenter.desktop`); a UI so chama `linux/pz` com argumentos de um catalogo allowlisted, nunca implementa instalacao ou mutacao por conta propria. Detalhes de empacotamento e build local em [`linux/ui_native/README.md`](linux/ui_native/README.md).
 
+> **Nota de transparencia (v1.13.x):** a release v1.13.1 foi republicada apos a publicacao original e, por isso, os checksums listados nela diferem dos da primeira publicacao. A v1.13.1 atual e estavel, mas a **v1.13.2 e a versao autoritativa** para novas instalacoes; confira sempre o `SHA256SUMS` da versao mais recente.
+
 Para a trilha CLI completa (perfis, Steam Deck, VM, emulacao, servidor caseiro) sem instalar pacote, use um checkout do repositorio e chame `linux/pz` diretamente:
 
 ```bash
@@ -118,18 +120,23 @@ linux/pz install server-homelab          # Docker/Tailscale: drive, midia, cofre
 linux/pz install server-llm-homelab-hermes
 linux/pz server homelab plan                          # blockers e proximos passos, sem alterar nada
 linux/pz server homelab repair --access local          # gera .env seguro (segredos aleatorios, chmod 600)
-linux/pz server homelab up --access local              # sobe core (Portainer/Jellyfin/Syncthing/Vaultwarden/Uptime Kuma)
-linux/pz server homelab up --extras --access tailscale  # + Nextcloud/Grafana/Prometheus/Paperless/n8n via Tailscale
+linux/pz server homelab up --access local              # sobe core (Jellyfin/Syncthing/Vaultwarden/Uptime Kuma)
+linux/pz server homelab up --extras --access tailscale  # + Portainer/Nextcloud/Grafana/Prometheus/Paperless/n8n via Tailscale
 linux/pz server homelab open jellyfin                   # resolve e abre a URL do app
 linux/pz server homelab logs vaultwarden --follow
-linux/pz server homelab backup --extras                 # tar.gz por volume nomeado
-linux/pz server homelab restore --source PATH --yes
-linux/pz server homelab update                          # backup automatico + pull (tags fixadas) + up
+linux/pz server homelab governor budget media          # orcamento MiB do perfil (headroom 20%)
+linux/pz server homelab backup --extras                # manifest.json + sha256 por volume nomeado
+linux/pz server homelab backup verify --source PATH    # falha fechado em arquivo adulterado
+linux/pz server homelab restore --source PATH --yes    # verify-then-apply, recusa sem --yes
+linux/pz server homelab update                         # backup automatico + pull (tags fixadas) + up
+linux/pz ai policy status                              # broker de politica (conservative default)
 linux/pz server casaos plan                             # gate de compatibilidade (Debian/Ubuntu/RPi OS); Arch/SteamOS fica bloqueado
 sudo linux/pz server boot install --llm --homelab   # entrada GRUB Homelab headless
 ```
 
 `steamdeck-linux` e opt-in. O foco inicial e experiencia estilo SteamOS: Steam Gamepad UI, atalhos `Ctrl+Alt+F1..F6`, teclado virtual por Steam/wvkbd/onboard/maliit, watcher de modo com debounce e tuning de jogos.
+
+Homelab Linux v1.15: documentação completa em `docs/linux-homelab.md` (perfis/weights, governor com headroom 20%, backup schemaVersion 2 com verify, player PySide6 na categoria "Homelab" e broker de política AI conservative default — ação desconhecida nega, `set` com modo inválido é rejeitado).
 
 Recursos Linux ficam na área **Recursos** da UI nativa e no contrato `pz capabilities`. O catálogo cobre gaming/streaming, hardware, saúde, segurança, backup, desenvolvimento, criação, administração e educação. Cada seleção segue `detect → plan → apply → verify → rollback`: plano e operação são JSON privados (`0700/0600`), fontes executáveis limitam-se a repositórios assinados da distribuição e Flathub, comandos usam argv sem shell, fallback Flatpak ocorre quando pacote nativo não existe, e rollback remove somente itens instalados pela própria operação. Serviços reversíveis selecionados (EarlyOOM, Ananicy, Docker, Cockpit, Tailscale e ZeroTier) são ativados explicitamente no plano e desativados pelo rollback; firewall, backend de rede e parâmetros de boot nunca são alterados implicitamente. Ideias de cobertura foram estudadas no LinuxToys; implementação PhaseZero é independente, sem copiar scripts GPL ou padrões inseguros de download executável.
 

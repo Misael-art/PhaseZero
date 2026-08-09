@@ -5,6 +5,7 @@ Escopo: integrações opcionais. Nenhuma chave real entra no repositório.
 ## Fontes oficiais usadas
 
 - Claude Code: https://docs.claude.com/en/docs/claude-code/setup
+- Bonsai CLI: https://docs.trybons.ai/bonsai-cli
 - Claude Desktop Linux: https://support.claude.com/en/articles/10065433-install-claude-desktop
 - OpenCode: https://opencode.ai/docs/
 - RTK / Rust Token Killer: https://www.rtk-ai.app/docs/
@@ -28,7 +29,8 @@ Escopo: integrações opcionais. Nenhuma chave real entra no repositório.
 
 | Tool | Instalação | Validação | Configuração | Desinstalação |
 | --- | --- | --- | --- | --- |
-| `claude-code` | `npm install -g --prefix <root> @anthropic-ai/claude-code` | `claude --version` | Manual/login/chave oficial | Remove pacote/prefixo/PATH gerenciado |
+| `claude-code` | Instalador nativo oficial somente quando ausente; instalação saudável é preservada | `claude auth status --json`, wrappers e smoke opt-in | OAuth Claude.ai padrão; `claude-subscription` limpa rotas herdadas | Rollback pelo manifesto `cc-installer` |
+| `bonsai` | npm user-local com `dist.integrity`; instalação saudável é reutilizada | versão, credential store e launcher protegido | `claude-bonsai`; consentimento de snapshot continua interativo | Rollback pelo manifesto; credenciais preservadas |
 | `opencode` | `npm install -g --prefix <root> opencode-ai` | `opencode --version` | Manual/provider oficial | Remove pacote/prefixo/PATH gerenciado |
 | `oh-my-openagent` (OMO) | Linux: `bunx oh-my-openagent install --no-tui --platform=opencode` (exige Bun; provider-agnostic por padrão, telemetria off) | `bunx oh-my-openagent doctor --platform=opencode --json` (`exitCode 0`) | Plugin registrado em `~/.config/opencode/opencode.jsonc`; `oh-my-openagent.json` com agentes/categorias; providers via `PZ_OMO_*` | `linux/pz ai omo disable` (desregistra) ou `uninstall` (remove config) |
 | `openclaw` | Linux: `npm install -g --prefix <root> openclaw@latest` | `openclaw --version`, `openclaw doctor` | Linux: baseline non-interactive, MCP, ai-memory hooks; daemon guiado via `openclaw onboard --install-daemon` | Remove pacote/prefixo/PATH gerenciado |
@@ -71,7 +73,14 @@ Entrada: `linux/pz ai`.
 linux/pz ai status
 linux/pz ai setup opencode
 linux/pz ai opencode sync      # fixa o CLI na versão do opencode-desktop (anti-skew de DB)
-linux/pz ai opencode status    # JSON: versão CLI vs desktop, inSync, DB, hook
+linux/pz ai opencode version-status  # JSON: versão CLI vs desktop, inSync, DB, hook
+linux/pz ai opencode status    # JSON redigido: config canônica, segredo por arquivo e 9Router
+linux/pz ai opencode install --dry-run
+linux/pz ai opencode install --yes
+linux/pz ai opencode verify
+linux/pz ai opencode verify --live
+linux/pz ai opencode run --route=9router -- run
+linux/pz ai opencode rollback ~/.local/share/opencode-route-installer/operations/<id>/manifest.json
 linux/pz ai opencode install-hook  # hook pacman: re-sincroniza o CLI após updates
 linux/pz ai setup omo          # oh-my-openagent plugin para OpenCode (opt-in)
 linux/pz ai omo doctor         # bunx oh-my-openagent doctor --platform=opencode
@@ -79,6 +88,18 @@ linux/pz ai omo status         # status JSON (bun, opencode, plugin registrado)
 linux/pz ai omo disable        # desregistra o plugin (evita consumo em background)
 linux/pz ai setup codex
 linux/pz ai setup claude
+linux/pz ai claude status
+linux/pz ai claude install --dry-run
+linux/pz ai claude install --yes
+linux/pz ai claude verify
+linux/pz ai claude verify --auth=subscription --live
+linux/pz ai claude preflight bonsai --cwd /projeto/revisado
+linux/pz ai claude run subscription -- --help
+linux/pz ai claude run bonsai --cwd /projeto/revisado
+linux/pz ai claude run proxy --proxy=9router -- --help
+linux/pz ai claude rollback ~/.local/share/cc-installer/operations/<id>/manifest.json
+BONSAI_ROUTE=direct bonsai start --cwd /projeto/revisado
+BONSAI_ROUTE=9router bonsai start --cwd /projeto/revisado
 linux/pz ai desktop install-claude
 linux/pz ai desktop install-qwen
 linux/pz ai desktop status
@@ -118,6 +139,8 @@ Automacoes Linux:
 - `linux/ai/setup-agent-compat.sh`: instala RTK Linux por release GitHub verificada, aplica `rtk init`, instala Headroom via `uv`/`pipx`, reaplica regras Caveman/PhaseZero, mantém Ponytail limitado a workspace detectado, gera pack `ai-context-frugality` e status `agentCompat`.
 - `linux/ai/setup-admin-bridge.sh`: cria `phasezero-admin`, detecta/instala `bigsudo`, fornece fallback `pkexec`/`sudo`, escreve estado/env user e sincroniza regra para agentes/IDEs.
 - `linux/ai/headroom-agent.sh`: helper explícito para `headroom status/proxy/wrap-*`; wrappers não rodam automaticamente.
+- `linux/ai/claude_code_manager.py`: inventário redigido, quarentena de env, reparo de hooks órfãos, launchers por processo, migração 9Router e rollback byte a byte. Bonsai bloqueia diretórios sensíveis e mantém confirmação upstream de upload.
+- A rota Bonsai usa autenticação externa isolada. Claude.ai connectors ficam indisponíveis por definição nessa sessão; `status` e `verify --auth=bonsai --live` reportam essa capacidade sem tratar o aviso como erro.
 - `linux/ai/proxy-suite.sh`: instala e gerencia dez proxies Linux com runtime Node 24 isolado, build Go e units systemd de usuário desativadas por padrão. Porta o contrato Windows `webValidation`: `auth` retorna status redigido; `login` abre browser real para Kimi/Qwen/DeepSeek; Mimo fica por env-session local. Contrato completo em `docs/linux-ai-proxies.md`.
 - `linux/ai/desktop-apps.sh`: instala Claude Desktop pelo repositorio apt oficial Anthropic e Qwen Code Desktop pela release oficial `desktop-latest`, em prefixos atomicos do usuario. Valida assinatura/digestos e SHA-256. Corrige o pipeline do Codex Desktop Linux, habilita guarda de workspace e timer user.
 - `linux/ai/setup-codex.sh`: instala/atualiza `@openai/codex` no prefixo npm do usuario e publica symlink em `~/.local/bin`.

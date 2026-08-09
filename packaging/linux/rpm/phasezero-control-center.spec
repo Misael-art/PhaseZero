@@ -1,5 +1,5 @@
 Name:           phasezero-control-center
-Version:        1.12.1
+Version:        1.15.1
 Release:        1%{?dist}
 Summary:        PhaseZero native Linux control center
 License:        MIT
@@ -10,6 +10,7 @@ Requires:       python3
 Requires:       python3-pyside6
 Requires:       bash
 Requires:       jq
+Recommends:     libguestfs-tools-c
 
 %description
 Native Qt6 frontend for PhaseZero Linux automation. Every mutation requires
@@ -31,6 +32,16 @@ install -m644 packaging/linux/io.phasezero.ControlCenter.metainfo.xml %{buildroo
 install -m644 packaging/linux/io.phasezero.ControlCenter.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
 # Install category/menu SVG icons
 install -m644 assets/icons/hicolor/scalable/apps/*.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
+
+# No package manager owns /usr/local/lib/phasezero, so an upgrade leaves the
+# Windows VM GRUB boot runtime on the previous release with nothing to say so.
+# The notice only warns; re-running `boot install` rewrites grub.cfg and must
+# never happen inside an rpm transaction.
+%post
+if [ -r %{_libdir}/phasezero/linux/windows-vm/boot-runtime-notice.sh ]; then
+    PZ_LIB_DIR=%{_libdir}/phasezero \
+        bash %{_libdir}/phasezero/linux/windows-vm/boot-runtime-notice.sh || :
+fi
 
 %files
 %{_bindir}/phasezero-control-center

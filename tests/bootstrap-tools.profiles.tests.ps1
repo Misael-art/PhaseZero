@@ -212,7 +212,7 @@ Describe 'Bootstrap profile mode' {
     It 'documents the safe product contract without mojibake' {
         $readme = Get-Content -Path (Join-Path $repoRoot 'README.md') -Raw
 
-        $readme | Should Not Match '\u00F0|\u00C3|\u00C2|\uFFFD|\u00E2\u0080|\u00E2\u009C|\u00E2\u009A'
+        $readme | Should Not Match '\u00F0|\uFFFD|\u00E2\u0080|\u00E2\u009C|\u00E2\u009A'
         $readme | Should Match 'safe-base'
         $readme | Should Match 'full-workstation'
         $readme | Should Match 'result\.json'

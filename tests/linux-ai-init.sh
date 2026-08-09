@@ -67,8 +67,14 @@ step "zcode opt-in"
 step "undo"
 "$ROOT/linux/pz" ai init --undo "$PROJECT" >/dev/null
 grep -q 'custom content' "$PROJECT/AGENTS.md"
-! grep -q 'BEGIN PHASEZERO TOOLS' "$PROJECT/AGENTS.md"
-! grep -q 'BEGIN BOOTSTRAP CAVEMAN' "$PROJECT/AGENTS.md"
+if grep -q 'BEGIN PHASEZERO TOOLS' "$PROJECT/AGENTS.md"; then
+    echo "FAIL: undo left PHASEZERO TOOLS marker in AGENTS.md"
+    exit 1
+fi
+if grep -q 'BEGIN BOOTSTRAP CAVEMAN' "$PROJECT/AGENTS.md"; then
+    echo "FAIL: undo left BOOTSTRAP CAVEMAN marker in AGENTS.md"
+    exit 1
+fi
 [ ! -f "$PROJECT/CLAUDE.md" ]
 [ ! -f "$PROJECT/GEMINI.md" ]
 [ ! -e "$PROJECT/.cursor" ]

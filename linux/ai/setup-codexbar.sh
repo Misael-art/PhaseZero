@@ -99,10 +99,10 @@ install_cli_release() {
     else
         checksum_url="$(jq -r '[.assets[]? | select(.name | test("(?i)^(checksums?(\\.txt)?|sha256sums(\\.txt)?)$")) | .browser_download_url] | first // empty' <<< "$release")"
     fi
-    [ -n "$tag" ] && [ -n "$asset_name" ] && [ -n "$asset_url" ] || {
+    if [ -z "$tag" ] || [ -z "$asset_name" ] || [ -z "$asset_url" ]; then
         pz_warn "CodexBar Linux release asset not found (tag=${tag:-none}); check $CODEXBAR_REPO_API"
         return 1
-    }
+    fi
 
     archive="$work/$asset_name"
     curl -fL "$asset_url" -o "$archive"

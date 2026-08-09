@@ -59,7 +59,12 @@ install_whisper_user_fallback() {
         pz_warn "could not install whisper dependencies (ggml-git, openblas)"
     admin_run pacman -Sw --noconfirm whisper.cpp || true
 
-    pkg="$(ls -t /var/cache/pacman/pkg/whisper.cpp-*.pkg.tar.* 2>/dev/null | grep -v '\.sig$' | head -1)"
+    pkg=""
+    for _pkg_candidate in /var/cache/pacman/pkg/whisper.cpp-*.pkg.tar.*; do
+        [ -f "$_pkg_candidate" ] || continue
+        case "$_pkg_candidate" in *.sig) continue ;; esac
+        pkg="$_pkg_candidate"
+    done
     if [ -z "$pkg" ]; then
         pz_warn "whisper.cpp package not found in pacman cache"
         return 1

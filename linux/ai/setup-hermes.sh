@@ -43,8 +43,13 @@ install_hermes() {
         return 0
     fi
 
-    local tmp size rc=0 args=()
-    tmp="$(mktemp "${TMPDIR:-/tmp}/phasezero-hermes.XXXXXX")"
+    local tmp size rc=0 args=() ck
+    ck="${PZ_HERMES_INSTALL_SHA256:-}"
+    if ! bash "$PZ_ROOT/linux/server/ai-policy-broker.sh" check hermes-install checksum="$ck" >/dev/null 2>&1; then
+        pz_error "AI policy denies Hermes remote install without pinned sha256; set PZ_HERMES_INSTALL_SHA256=<64 hex>"
+        return 1
+    fi
+    tmp="$(pz_tempfile "${TMPDIR:-/tmp}/phasezero-hermes.XXXXXX")"
     if ! curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 \
         --connect-timeout 15 --max-time 120 \
         https://hermes-agent.nousresearch.com/install.sh -o "$tmp"; then
@@ -57,6 +62,16 @@ install_hermes() {
         rm -f -- "$tmp"
         pz_error "Hermes installer failed content validation (size=$size)"
         return 1
+    fi
+    if [ -n "$ck" ]; then
+        local got
+        got="$(sha256sum "$tmp" | cut -d' ' -f1)"
+        if [ "$got" != "$ck" ]; then
+            rm -f -- "$tmp"
+            pz_error "Hermes installer checksum mismatch: got $got, expected $ck"
+            return 1
+        fi
+        pz_info "Hermes installer checksum verified"
     fi
     args+=(--skip-setup --non-interactive)
     [ "${PZ_HERMES_SKIP_BROWSER:-0}" = "1" ] && args+=(--skip-browser)
@@ -157,7 +172,7 @@ status_json() {
         timeout 15 "$cmd" config check >/dev/null 2>&1 && config_check=true
         doctor="$(doctor_text "$cmd")"
     fi
-    [ -f "$HERMES_CONFIG" ] && mcp_count="$(grep -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null | wc -l | tr -d ' ')"
+    [ -f "$HERMES_CONFIG" ] && mcp_count="$(grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null || true)"
     mcp_sdk_available && sdk=true
     jq -cn \
         --arg commandPath "$cmd" \

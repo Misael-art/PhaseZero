@@ -59,7 +59,10 @@ grep -q 'vblank=0 lsfg=phasezero' "$PZ_TEST_LOG"
 "$REPO_ROOT/linux/pz" emulation performance set-game switch Game off >/dev/null
 "$PZ_LOCAL_BIN/phasezero-emulation-launch" switch -- "$TMP_ROOT/emulator" "$TMP_ROOT/Game.nsp"
 grep -q 'vblank=0 lsfg=' "$PZ_TEST_LOG"
-! grep -q 'lsfg=phasezero' "$PZ_TEST_LOG"
+if grep -q 'lsfg=phasezero' "$PZ_TEST_LOG"; then
+    echo "FAIL: per-game off still emits lsfg=phasezero"
+    exit 1
+fi
 
 "$REPO_ROOT/linux/pz" emulation performance set-profile ps3 off >/dev/null
 jq -e '.profiles.ps3.lsfg == "off" and .games.switch.Game.lsfg == "off"' \

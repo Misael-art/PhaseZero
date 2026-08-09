@@ -10,7 +10,9 @@ source "$PZ_ROOT/linux/lib/common.sh"
 virsh() { LC_ALL=C command virsh "$@"; }
 
 ACTION="${1:-status}"
-[ $# -gt 0 ] && shift || true
+if [ $# -gt 0 ]; then
+    shift || true
+fi
 
 TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
 [ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
@@ -24,7 +26,12 @@ VM_DIR_DEFAULT="$HOME/VirtualMachines/PhaseZero-Windows"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero"
 CONFIG_FILE="${PZ_WINDOWS_VM_CONFIG:-$CONFIG_DIR/windows-vm.conf}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm"
-RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}/phasezero-windows-vm"
+TARGET_RUNTIME_BASE="${XDG_RUNTIME_DIR:-}"
+if [ "$EUID" -eq 0 ]; then
+    target_uid="$(id -u "$TARGET_USER" 2>/dev/null || true)"
+    [ -n "$target_uid" ] && [ -d "/run/user/$target_uid" ] && TARGET_RUNTIME_BASE="/run/user/$target_uid"
+fi
+RUNTIME_DIR="${PZ_WINDOWS_VM_RUNTIME_DIR:-${TARGET_RUNTIME_BASE:-/tmp}/phasezero-windows-vm}"
 APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 
@@ -59,6 +66,11 @@ VIRTIO_ISO=""
 VM_DIR=""
 DISK_PATH=""
 DISK_SIZE="256G"
+# Identifies the guest disk to the unattended installer, which refuses to wipe
+# a target whose serial does not match. Must stay in sync with the value
+# provision.sh feeds to autounattend.sh, and must satisfy its [A-Za-z0-9_-]{1,32}
+# validation.
+DISK_SERIAL="${PZ_WINDOWS_VM_DISK_SERIAL:-PZWINVM0}"
 EXPLICIT_DISK=0
 RAM_MB=""
 CPUS=""
@@ -78,6 +90,10 @@ RAW_DISK_BUS="nvme"
 DISPLAY_MODE="gtk"
 OPTIMIZE_HOST="${PZ_WINDOWS_VM_OPTIMIZE:-1}"
 GRAPHICS_PROFILE=""
+GUEST_LOGIN_POLICY=""
+GUEST_USER=""
+NET_MODEL=""
+OVMF_CODE=""
 GRAPHICS_EXPERIMENTAL=0
 EXPLICIT_GRAPHICS=0
 
@@ -93,6 +109,12 @@ Usage:
   pz windows-vm install --iso <windows.iso> [--disk-size 256G] [--ram 8192|8G] [--cpus N] [--dry-run]
   pz windows-vm optimize [--dry-run]
   pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--graphics <profile>] [--experimental] [--dry-run]
+  pz windows-vm launch-check [--graphics <profile>] [--json]
+  pz windows-vm disk-check [--json]
+  pz windows-vm secure-storage [--json]
+  pz windows-vm guest-login (status|backup|prune-backups|apply|restore|rollback|recovery|repair-qga|repair-preflight|transport-verify|reboot|shutdown) [--mode auto|password] [--json]
+  pz windows-vm guest-login recovery (status|apply|rotate|enable|disable) --password-stdin [--local-only|--allow-remote] [--json]
+  pz windows-vm recover --mode auto|password [--password-stdin] [--leave-running] [--json]
   pz windows-vm graphics status [--json]
   pz windows-vm graphics doctor [--json]
   pz windows-vm graphics plan --profile <auto|compat|virtio-gl|virtio-venus|rutabaga|vfio-looking-glass> [--json]
@@ -103,6 +125,7 @@ Usage:
   pz windows-vm shares (status|install|remove|dry-run)
   pz windows-vm apps (status|setup|configure|doctor|install-winboat|install-winpodx|launch-winboat|launch-winpodx)
   pz windows-vm boot status
+  pz windows-vm boot runtime-check [--json]
   pz windows-vm boot install
   pz windows-vm boot next
   pz windows-vm boot next-reboot
@@ -117,6 +140,8 @@ Usage:
   pz windows-vm provision watch --operation-id ID
   pz windows-vm provision resume --operation-id ID
   pz windows-vm provision cancel --operation-id ID [--remove-staging]
+  pz windows-vm provision finalize --operation-id ID [--target-dir PATH] [--json]
+  pz windows-vm provision shutdown --operation-id ID [--json]
 
 Access:
   home, /mnt/sdcard, /run/media/\$USER and /mnt are exposed through SMB and virtiofs when available.
@@ -155,6 +180,10 @@ parse_options() {
             --raw-qemu) RAW_QEMU=1; shift ;;
             --graphics) GRAPHICS_PROFILE="${2:-}"; EXPLICIT_GRAPHICS=1; shift 2 ;;
             --graphics=*) GRAPHICS_PROFILE="${1#*=}"; EXPLICIT_GRAPHICS=1; shift ;;
+            --net-model) NET_MODEL="${2:-}"; shift 2 ;;
+            --net-model=*) NET_MODEL="${1#*=}"; shift ;;
+            --ovmf-code) OVMF_CODE="${2:-}"; shift 2 ;;
+            --ovmf-code=*) OVMF_CODE="${1#*=}"; shift ;;
             --experimental) GRAPHICS_EXPERIMENTAL=1; shift ;;
             --headless) DISPLAY_MODE="none"; shift ;;
             --optimize) OPTIMIZE_HOST=1; shift ;;
@@ -218,7 +247,9 @@ sysctl_set_noninteractive() {
 apply_host_optimizations() {
     [ "$OPTIMIZE_HOST" = "1" ] || return 0
     pz_info "applying Windows VM host optimizations"
-    command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl set performance >/dev/null 2>&1 || true
+    if command -v powerprofilesctl >/dev/null 2>&1; then
+        powerprofilesctl set performance >/dev/null 2>&1 || true
+    fi
     sysctl_set_noninteractive vm.swappiness 1
     sysctl_set_noninteractive vm.vfs_cache_pressure 50
     sysctl_set_noninteractive vm.dirty_background_ratio 5
@@ -281,20 +312,70 @@ chown_target_user() {
 target_user_can_rw() {
     local path="$1"
     if [ "$EUID" -eq 0 ] && command -v runuser >/dev/null 2>&1; then
+        # shellcheck disable=SC2016 # intentional: $1 is the inner sh's positional arg
         runuser -u "$TARGET_USER" -- sh -c 'test -r "$1" && test -w "$1"' sh "$path" 2>/dev/null
         return $?
     fi
     [ -r "$path" ] && [ -w "$path" ]
 }
 
+# The VM is sized for one of two very different hosts, and a single figure
+# cannot serve both.
+#
+# Booted through the GRUB entry the host runs nothing but what carries the VM,
+# so anything not given to the guest is wasted. Launched over a live KDE session
+# the host is running the user's actual work, and sizing from MemTotal ignores
+# that: it asked for 10374 MB with 5 GB free and pushed the host into 8.6 GB of
+# swap during a Windows install.
+windows_vm_boot_mode() {
+    if [ "${PZ_WINDOWS_VM_PROFILE:-}" = "kiosk" ] || [ "${PZ_WINDOWS_VM_PROFILE:-}" = "desktop" ]; then
+        printf '%s' "$PZ_WINDOWS_VM_PROFILE"
+        return 0
+    fi
+    if grep -qw 'phasezero.windowsvm=1' /proc/cmdline 2>/dev/null; then
+        printf 'kiosk'
+    else
+        printf 'desktop'
+    fi
+}
+
 default_ram_mb() {
-    local total reserve ram
+    local total avail ram reserve mode floor
     total="$(awk '/MemTotal:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || echo 8192)"
-    reserve=2048
-    ram=$(( total * 70 / 100 ))
-    [ "$ram" -gt $(( total - reserve )) ] && ram=$(( total - reserve ))
-    [ "$ram" -lt 4096 ] && ram=$(( total / 2 ))
-    [ "$ram" -lt 2048 ] && ram=2048
+    # MemAvailable is the kernel's own estimate of what can be handed out
+    # without swapping, reclaimable page cache included. MemFree alone would
+    # undercount badly on a warm desktop.
+    avail="$(awk '/MemAvailable:/ {print int($2 / 1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+    [ "$avail" -gt 0 ] 2>/dev/null || avail="$total"
+    # Windows 11 will not run below 4 GiB, so that is the floor whatever the
+    # host has left. Going under it produces a guest that boots into thrashing.
+    floor=4096
+    mode="$(windows_vm_boot_mode)"
+
+    if [ "$mode" = "kiosk" ]; then
+        # Kernel, systemd, SDDM, gamescope, virtiofsd and swtpm all live in this
+        # reserve. An OOM on the host side kills the VM outright, so it is not
+        # squeezed further.
+        reserve="${PZ_WINDOWS_VM_HOST_RESERVE_MB:-2048}"
+        ram=$(( total - reserve ))
+    else
+        # Leave the session responsive: take a share of what is actually free
+        # right now, never more than 70% of the machine.
+        reserve="${PZ_WINDOWS_VM_HOST_RESERVE_MB:-3072}"
+        ram=$(( avail - reserve ))
+        [ "$ram" -gt $(( total * 70 / 100 )) ] && ram=$(( total * 70 / 100 ))
+    fi
+
+    # Round down to a whole GiB: odd sizes gain nothing and make logs harder to
+    # compare between runs.
+    ram=$(( ram / 1024 * 1024 ))
+    if [ "$ram" -lt "$floor" ]; then
+        # Say it out loud rather than quietly handing the guest less than it
+        # needs: at this point the VM and the host cannot both be comfortable.
+        pz_warn "host has ${avail} MiB available; sizing the VM at the ${floor} MiB Windows 11 minimum anyway"
+        pz_warn "close applications or use --ram to choose deliberately"
+        ram="$floor"
+    fi
     echo "$ram"
 }
 
@@ -538,6 +619,8 @@ ovmf_code_path() {
     pz_path_resolve ovmf_code \
         /usr/share/edk2/x64/OVMF_CODE.secboot.4m.fd \
         /usr/share/edk2/x64/OVMF_CODE.4m.fd \
+        /usr/share/OVMF/OVMF_CODE_4M.secboot.fd \
+        /usr/share/OVMF/OVMF_CODE_4M.fd \
         /usr/share/OVMF/OVMF_CODE.secboot.fd \
         /usr/share/OVMF/OVMF_CODE.fd || true
 }
@@ -546,6 +629,7 @@ ovmf_vars_template() {
     local path
     for path in \
         /usr/share/edk2/x64/OVMF_VARS.4m.fd \
+        /usr/share/OVMF/OVMF_VARS_4M.fd \
         /usr/share/OVMF/OVMF_VARS.fd; do
         [ -f "$path" ] && { printf '%s\n' "$path"; return 0; }
     done
@@ -590,7 +674,18 @@ effective_config() {
     EXTRA_ARGS="${EXTRA_ARGS:-${PZ_WINDOWS_VM_EXTRA_ARGS:-}}"
     GRAPHICS_PROFILE="${GRAPHICS_PROFILE:-${PZ_WINDOWS_VM_GRAPHICS_PROFILE:-compat}}"
     [ "$GRAPHICS_PROFILE" = "auto" ] && GRAPHICS_PROFILE=compat
-    OVMF_CODE="${PZ_WINDOWS_VM_OVMF_CODE:-$(ovmf_code_path)}"
+    GUEST_LOGIN_POLICY="${GUEST_LOGIN_POLICY:-${PZ_WINDOWS_VM_GUEST_LOGIN_POLICY:-auto}}"
+    case "$GUEST_LOGIN_POLICY" in
+        auto|password) ;;
+        *) pz_warn "unknown guest login policy '$GUEST_LOGIN_POLICY'; falling back to auto"; GUEST_LOGIN_POLICY=auto ;;
+    esac
+    GUEST_USER="${GUEST_USER:-${PZ_WINDOWS_VM_GUEST_USER:-phasezero}}"
+    NET_MODEL="${NET_MODEL:-${PZ_WINDOWS_VM_NET_MODEL:-e1000e}}"
+    case "$NET_MODEL" in
+        e1000e|virtio-net-pci) ;;
+        *) pz_warn "unknown network model '$NET_MODEL'; falling back to e1000e"; NET_MODEL=e1000e ;;
+    esac
+    OVMF_CODE="${OVMF_CODE:-${PZ_WINDOWS_VM_OVMF_CODE:-$(ovmf_code_path)}}"
     OVMF_VARS="${PZ_WINDOWS_VM_OVMF_VARS:-$VM_DIR/OVMF_VARS.fd}"
     if [ -n "$LIBVIRT_DOMAIN" ]; then
         local domain_nvram
@@ -599,6 +694,32 @@ effective_config() {
     fi
     SHARE_ROOT="${PZ_WINDOWS_VM_SHARE_ROOT:-$VM_DIR/shares}"
     TPM_DIR="${PZ_WINDOWS_VM_TPM_DIR:-$VM_DIR/tpm}"
+    # Share policy: minimal (default) exposes ONLY the exchange dir. home,
+    # sdcard, removable, media and /mnt are exposed only with an explicit
+    # opt-in (PZ_WINDOWS_VM_SHARE_POLICY=full); expanded shares are read-only
+    # unless PZ_WINDOWS_VM_SHARE_WRITABLE=1.
+    SHARE_POLICY="${SHARE_POLICY:-${PZ_WINDOWS_VM_SHARE_POLICY:-minimal}}"
+    case "$SHARE_POLICY" in
+        minimal|full) ;;
+        *) pz_warn "unknown share policy '$SHARE_POLICY'; falling back to minimal"; SHARE_POLICY=minimal ;;
+    esac
+    SHARE_WRITABLE="${SHARE_WRITABLE:-${PZ_WINDOWS_VM_SHARE_WRITABLE:-0}}"
+    case "$SHARE_WRITABLE" in
+        1|0) ;;
+        *) pz_warn "invalid PZ_WINDOWS_VM_SHARE_WRITABLE '$SHARE_WRITABLE'; using 0 (read-only expanded shares)"; SHARE_WRITABLE=0 ;;
+    esac
+    if [ -f "$CONFIG_FILE" ] && [ -z "${PZ_WINDOWS_VM_SHARE_POLICY:-}" ]; then
+        pz_warn "legacy Windows VM config without share policy — defaulting to minimal shares (only exchange exposed; home/sdcard/mnt need explicit PZ_WINDOWS_VM_SHARE_POLICY=full)"
+    fi
+    # SPICE binding: loopback by default. Any non-loopback address requires an
+    # explicit opt-in and emits a strong warning (unauthenticated SPICE server).
+    SPICE_ADDR="${SPICE_ADDR:-${PZ_WINDOWS_VM_SPICE_ADDR:-127.0.0.1}}"
+    case "$SPICE_ADDR" in
+        127.0.0.1|::1|localhost) ;;
+        *)
+            pz_warn "SPICE binding to non-loopback address $SPICE_ADDR (unauthenticated SPICE). Set PZ_WINDOWS_VM_SPICE_ADDR=127.0.0.1 unless remote access is intentional."
+            ;;
+    esac
     local configured_source="${PZ_WINDOWS_VM_DISK_SOURCE:-new}"
     DISK_SOURCE="$configured_source"
     if [ "$EXPLICIT_DISK" -eq 1 ]; then
@@ -636,22 +757,80 @@ write_config() {
         printf 'PZ_WINDOWS_VM_EXTRA_ARGS=%q\n' "$EXTRA_ARGS"
         printf 'PZ_WINDOWS_VM_DISK_SOURCE=%q\n' "$DISK_SOURCE"
         printf 'PZ_WINDOWS_VM_OPTIMIZE=%q\n' "$OPTIMIZE_HOST"
-        printf 'PZ_WINDOWS_VM_GRAPHICS_PROFILE=%q\n' "${PZ_WINDOWS_VM_GRAPHICS_PROFILE:-compat}"
+        printf 'PZ_WINDOWS_VM_GRAPHICS_PROFILE=%q\n' "$GRAPHICS_PROFILE"
+        printf 'PZ_WINDOWS_VM_GUEST_LOGIN_POLICY=%q\n' "$GUEST_LOGIN_POLICY"
+        printf 'PZ_WINDOWS_VM_GUEST_USER=%q\n' "$GUEST_USER"
+        printf 'PZ_WINDOWS_VM_NET_MODEL=%q\n' "$NET_MODEL"
+        printf 'PZ_WINDOWS_VM_SHARE_POLICY=%q\n' "$SHARE_POLICY"
+        printf 'PZ_WINDOWS_VM_SHARE_WRITABLE=%q\n' "$SHARE_WRITABLE"
+        printf 'PZ_WINDOWS_VM_SPICE_ADDR=%q\n' "$SPICE_ADDR"
     } > "$CONFIG_FILE"
     chown_target_user "$CONFIG_DIR" "$CONFIG_FILE"
     pz_info "wrote $CONFIG_FILE"
+}
+
+# The guest disk holds the user's whole Windows installation, the TPM directory
+# holds its sealed keys and OVMF_VARS holds Secure Boot state. None of it may be
+# readable by other local accounts, and an adopted disk arrives with whatever
+# mode its creator used, so the modes are enforced on every run, not just at
+# creation time.
+harden_vm_storage_modes() {
+    [ "$DRY_RUN" = "1" ] && return 0
+    local path tpm_dir="${TPM_DIR:-}"
+    for path in "${VM_DIR:-}" "${STATE_DIR:-}" "$tpm_dir"; do
+        if [ -z "$path" ] || [ ! -d "$path" ]; then continue; fi
+        chmod 0700 "$path" 2>/dev/null || pz_warn "could not restrict directory mode: $path"
+    done
+    if [ -n "$tpm_dir" ] && [ -d "$tpm_dir" ]; then
+        chmod -R go-rwx "$tpm_dir" 2>/dev/null || pz_warn "could not restrict TPM state: $tpm_dir"
+    fi
+    for path in "${DISK_PATH:-}" "${OVMF_VARS:-}"; do
+        if [ -z "$path" ] || [ ! -f "$path" ]; then continue; fi
+        chmod 0600 "$path" 2>/dev/null || pz_warn "could not restrict file mode: $path"
+    done
+    # Guest-login backups are whole copies of the same disk. Older ones were
+    # written with --preserve=mode and inherited a world-readable source.
+    local backup_root="${STATE_DIR:-}/guest-login-backups"
+    if [ -n "${STATE_DIR:-}" ] && [ -d "$backup_root" ]; then
+        chmod -R go-rwx "$backup_root" 2>/dev/null || pz_warn "could not restrict backup modes: $backup_root"
+    fi
+    return 0
+}
+
+# On btrfs a copy-on-write qcow2 fragments without bound and, written with
+# O_DIRECT by QEMU, can fail its own checksum on readback: btrfs then returns
+# EIO to the guest mid-write. That is not theoretical here, it corrupted an
+# in-flight Windows servicing operation and left the guest unbootable.
+#
+# nodatacow is the standard remedy and it is a real trade: btrfs stops
+# checksumming this file, so silent bit rot in it would no longer be detected.
+# The inherit flag only affects files created afterwards, so this must run
+# before qemu-img create; an already-created image cannot be converted in place.
+mark_vm_dir_nodatacow() {
+    [ "$DRY_RUN" = "1" ] && return 0
+    command -v chattr >/dev/null 2>&1 || return 0
+    local fstype
+    fstype="$(stat -f -c %T "$VM_DIR" 2>/dev/null || true)"
+    [ "$fstype" = "btrfs" ] || return 0
+    if chattr +C "$VM_DIR" 2>/dev/null; then
+        pz_info "btrfs: $VM_DIR marked nodatacow (new VM images skip CoW and checksums)"
+    else
+        pz_warn "btrfs: could not set nodatacow on $VM_DIR; VM image stays copy-on-write"
+    fi
 }
 
 ensure_vm_storage() {
     if [ "$DRY_RUN" = "1" ]; then
         pz_info "dry-run: would create VM directories under $VM_DIR"
     else
-        install -d "$VM_DIR" "$STATE_DIR" "$RUNTIME_DIR"
+        install -d -m 0700 "$VM_DIR" "$STATE_DIR"
+        install -d -m 0700 "$RUNTIME_DIR"
     fi
     if [ ! -f "$DISK_PATH" ]; then
         if [ "$DRY_RUN" = "1" ]; then
             pz_info "dry-run: would create qcow2 disk: $DISK_PATH ($DISK_SIZE)"
         else
+            mark_vm_dir_nodatacow
             qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE"
             pz_info "created qcow2 disk: $DISK_PATH"
         fi
@@ -668,6 +847,7 @@ ensure_vm_storage() {
             pz_info "created OVMF vars: $OVMF_VARS"
         fi
     fi
+    harden_vm_storage_modes
 }
 
 desktop_entry_content() {
@@ -765,7 +945,12 @@ install_vm() {
 }
 
 vm_admin_run() {
-    if pz_can_sudo_noninteractive; then sudo -n "$@"
+    if [ "$EUID" -eq 0 ]; then "$@"
+    # Dedicated GRUB/SDDM sessions have no operator present. Never launch an
+    # authentication agent here: it is invisible behind the kiosk compositor
+    # and turns a recoverable share degradation into a permanent black screen.
+    elif [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ]; then return 127
+    elif pz_can_sudo_noninteractive; then sudo -n "$@"
     elif command -v phasezero-admin >/dev/null 2>&1; then phasezero-admin "$@"
     else return 127; fi
 }
@@ -776,35 +961,130 @@ vm_admin_run() {
 # fine. We populate a share root under RUNTIME_DIR (outside $HOME, so bind-mounting
 # $HOME cannot recurse) and expose that; sets the global EFFECTIVE_SMB_DIR.
 SHARE_BIND_ROOT="$RUNTIME_DIR/shares"
+share_pairs() {
+    local ro_marker="${1:-0}"
+    if [ "$SHARE_POLICY" = "full" ]; then
+        if [ "$ro_marker" = "1" ]; then
+            printf '%s\n' "exchange:$EXCHANGE_DIR:rw" "home:$HOME:ro" "sdcard:/mnt/sdcard:ro" "removable:/run/media/$TARGET_USER:ro" "media:/media/$TARGET_USER:ro" "mnt:/mnt:ro"
+        else
+            printf '%s\n' "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$TARGET_USER" "media:/media/$TARGET_USER" "mnt:/mnt"
+        fi
+    else
+        if [ "$ro_marker" = "1" ]; then
+            printf '%s\n' "exchange:$EXCHANGE_DIR:rw"
+        else
+            printf '%s\n' "exchange:$EXCHANGE_DIR"
+        fi
+    fi
+}
+# Remove bind mounts/symlinks left from a previous WIDER policy. Migrating
+# full -> minimal must stop exposing home/sdcard/... to the guest. Returns
+# non-zero when a stale bind survives the umount attempt (or is still mounted
+# right after it), so callers can fail closed instead of exposing a wider
+# share set than the current policy allows.
+prune_share_links() {
+    local allowed="$1" name rc=0
+    for name in exchange home sdcard removable media mnt; do
+        case " $allowed " in
+            *" $name "*) continue ;;
+        esac
+        if mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
+            if ! vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
+                pz_warn "failed to unmount stale share bind: $SHARE_BIND_ROOT/$name"
+                rc=1
+            elif mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
+                pz_warn "stale share bind still mounted after umount: $SHARE_BIND_ROOT/$name"
+                rc=1
+            fi
+        fi
+        # Do not leave empty directory names visible through QEMU's built-in
+        # SMB root after a full -> minimal policy migration.
+        rmdir -- "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
+        if [ -L "$SHARE_ROOT/$name" ]; then
+            rm -f "$SHARE_ROOT/$name" 2>/dev/null || true
+        fi
+    done
+    return "$rc"
+}
+
+# True when the bind at the given mountpoint is writable (findmnt OPTIONS
+# lacks the ro flag). Callers only invoke this after mountpoint -q confirmed
+# the bind exists.
+mount_is_rw() {
+    local opts=""
+    opts="$(findmnt -no OPTIONS "$1" 2>/dev/null || true)"
+    case ",$opts," in
+        *,ro,*) return 1 ;;
+    esac
+    return 0
+}
+
 ensure_share_links() {
     local hard_fail="${1:-0}"
     if [ "$DRY_RUN" = "1" ]; then
-        pz_info "dry-run: would bind-mount host home + /mnt/sdcard into $SHARE_BIND_ROOT for SMB"
+        pz_info "dry-run: would expose shares for SMB (policy=$SHARE_POLICY)"
         EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
         return 0
     fi
-    local ok=1 pair name target attempt=0
+    local ok=1 pair name target mode attempt=0
     while [ "$attempt" -le 1 ]; do
         ok=1
         install -d "$SHARE_BIND_ROOT" 2>/dev/null || ok=0
         if [ "$ok" = "1" ]; then
             mkdir -p "$EXCHANGE_DIR"
-            for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
+            while IFS= read -r pair; do
+                [ -n "$pair" ] || continue
                 name="${pair%%:*}"; target="${pair#*:}"
+                mode="rw"
+                case "$target" in
+                    *:rw|*:ro) mode="${target##*:}"; target="${target%:*}" ;;
+                esac
                 [ -d "$target" ] || continue
-                install -d "$SHARE_BIND_ROOT/$name"
-                mountpoint -q "$SHARE_BIND_ROOT/$name" && continue
-                vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
-            done
+                if [ "$mode" = "ro" ] && [ "$SHARE_WRITABLE" != "1" ]; then
+                    if mountpoint -q "$SHARE_BIND_ROOT/$name"; then
+                        if mount_is_rw "$SHARE_BIND_ROOT/$name"; then
+                            vm_admin_run mount -o remount,ro,bind "$SHARE_BIND_ROOT/$name" 2>/dev/null || ok=0
+                        fi
+                    else
+                        install -d "$SHARE_BIND_ROOT/$name"
+                        vm_admin_run mount --bind -o ro "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
+                    fi
+                elif mountpoint -q "$SHARE_BIND_ROOT/$name"; then
+                    if mount_is_rw "$SHARE_BIND_ROOT/$name"; then
+                        continue
+                    fi
+                    vm_admin_run mount -o remount,rw,bind "$SHARE_BIND_ROOT/$name" 2>/dev/null || ok=0
+                else
+                    install -d "$SHARE_BIND_ROOT/$name"
+                    vm_admin_run mount --bind "$target" "$SHARE_BIND_ROOT/$name" 2>/dev/null || { ok=0; break; }
+                fi
+            done < <(share_pairs 1)
         fi
         [ "$ok" = "1" ] && break
         [ "$attempt" -ge 1 ] && break
         attempt=$((attempt + 1))
         pz_warn "bind mount attempt $attempt failed; retrying once"
     done
-    if [ "$ok" = "1" ] && mountpoint -q "$SHARE_BIND_ROOT/home"; then
+    local allowed_names=""
+    while IFS= read -r pair; do
+        [ -n "$pair" ] || continue
+        allowed_names="$allowed_names ${pair%%:*}"
+    done < <(share_pairs 1)
+    if ! prune_share_links "$allowed_names"; then
+        pz_error "stale share binds remain mounted (policy=$SHARE_POLICY); refusing to expose SMB shares"
+        return 1
+    fi
+    if [ "$ok" = "1" ] && mountpoint -q "$SHARE_BIND_ROOT/exchange"; then
         EFFECTIVE_SMB_DIR="$SHARE_BIND_ROOT"
-        pz_info "host folders bind-mounted for SMB: \\\\10.0.2.4\\qemu -> exchange, home, sdcard, removable, media, mnt"
+        if [ "$SHARE_POLICY" = "full" ]; then
+            if [ "$SHARE_WRITABLE" = "1" ]; then
+                pz_info "host folders bind-mounted for SMB (policy=full, writable): \\\\10.0.2.4\\qemu -> exchange, home, sdcard, removable, media, mnt"
+            else
+                pz_info "host folders bind-mounted for SMB (policy=full, read-only except exchange): \\\\10.0.2.4\\qemu"
+            fi
+        else
+            pz_info "host folders bind-mounted for SMB (policy=minimal): \\\\10.0.2.4\\qemu -> exchange"
+        fi
         return 0
     fi
     if [ "$hard_fail" = "1" ]; then
@@ -814,11 +1094,13 @@ ensure_share_links() {
     install -d "$SHARE_ROOT"
     mkdir -p "$EXCHANGE_DIR"
     ln -sfn "$EXCHANGE_DIR" "$SHARE_ROOT/exchange"
-    ln -sfn "$HOME" "$SHARE_ROOT/home"
-    [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
-    [ -d "/run/media/$USER" ] && ln -sfn "/run/media/$USER" "$SHARE_ROOT/removable"
-    [ -d "/media/$USER" ] && ln -sfn "/media/$USER" "$SHARE_ROOT/media"
-    [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
+    if [ "$SHARE_POLICY" = "full" ]; then
+        ln -sfn "$HOME" "$SHARE_ROOT/home"
+        [ -d /mnt/sdcard ] && ln -sfn /mnt/sdcard "$SHARE_ROOT/sdcard"
+        [ -d "/run/media/$TARGET_USER" ] && ln -sfn "/run/media/$TARGET_USER" "$SHARE_ROOT/removable"
+        [ -d "/media/$TARGET_USER" ] && ln -sfn "/media/$TARGET_USER" "$SHARE_ROOT/media"
+        [ -d /mnt ] && ln -sfn /mnt "$SHARE_ROOT/mnt"
+    fi
     EFFECTIVE_SMB_DIR="$SHARE_ROOT"
     pz_warn "no root for bind mounts; SMB share uses symlinks (guest home/sdcard may be empty). Run: sudo pz windows-vm shares install, or use virtiofs."
 }
@@ -855,8 +1137,12 @@ verify_share() {
 
 cmd_shares_verify() {
     local fail=0 json_output="" line result_field failures=0
-    for pair in "exchange:$EXCHANGE_DIR" "home:$HOME" "sdcard:/mnt/sdcard" "removable:/run/media/$USER" "media:/media/$USER" "mnt:/mnt"; do
+    while IFS= read -r pair; do
+        [ -n "$pair" ] || continue
         local name="${pair%%:*}" target="${pair#*:}"
+        case "$target" in
+            *:rw|*:ro) target="${target%:*}" ;;
+        esac
         [ -d "$target" ] || continue
         if [ "${JSON_OUT:-0}" = "1" ]; then
             line="$(verify_share "$name" "$target")"
@@ -873,16 +1159,17 @@ cmd_shares_verify() {
                 fail=1
             fi
         fi
-    done
+    done < <(share_pairs 0)
     if [ "${JSON_OUT:-0}" = "1" ]; then
         json_output="${json_output%,}"
         printf '{"ok":%s,"failures":%d,"shares":[%s]}\n' \
             "$([ "$fail" = "0" ] && echo true || echo false)" \
             "$failures" "$json_output"
     fi
-    local samba_reachable=""
+    local samba_reachable="" smb_share="PZExchange"
+    [ "$SHARE_POLICY" = "full" ] && smb_share="PZHome"
     if command -v smbclient >/dev/null 2>&1; then
-        if smbclient -N -L "//127.0.0.1/PZHome" -I 127.0.0.1 -p 445 2>&1 | grep 'PZHome' >/dev/null; then
+        if smbclient -N -L "//127.0.0.1/$smb_share" -I 127.0.0.1 -p 445 2>&1 | grep "$smb_share" >/dev/null; then
             samba_reachable="yes"
         else
             samba_reachable="no"
@@ -890,7 +1177,7 @@ cmd_shares_verify() {
         fi
     fi
     if [ "${JSON_OUT:-0}" != "1" ]; then
-        [ -n "$samba_reachable" ] && echo "samba_home_reachable: $samba_reachable"
+        [ -n "$samba_reachable" ] && echo "samba_${smb_share}_reachable: $samba_reachable"
         printf 'shares_ok: %s\n' "$([ "$fail" = "0" ] && echo yes || echo no)"
     fi
     return $fail
@@ -900,8 +1187,9 @@ cmd_shares_verify() {
 clean_share_binds() {
     local name
     for name in exchange home sdcard removable media mnt; do
-        mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null &&
+        if mountpoint -q "$SHARE_BIND_ROOT/$name" 2>/dev/null; then
             vm_admin_run umount "$SHARE_BIND_ROOT/$name" 2>/dev/null || true
+        fi
     done
 }
 
@@ -914,12 +1202,35 @@ libvirt_gateway() {
     printf '%s\n' "${gateway:-192.168.122.1}"
 }
 
+# One expanded share stanza (full policy only). Read-only unless the operator
+# explicitly opted into writable expanded shares (SHARE_WRITABLE=1).
+samba_ro_stanza() {
+    local name="$1" comment="$2" path="$3" veto="${4:-}"
+    cat <<EOF
+[$name]
+    comment = $comment
+    path = $path
+    browseable = yes
+    read only = $([ "$SHARE_WRITABLE" = "1" ] && echo no || echo yes)
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+$( [ -n "$veto" ] && printf '    veto files = %s\n' "$veto" )
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
+EOF
+}
+
 samba_block_content() {
     local home removable media
     home="$(target_home)"
     removable="/run/media/$TARGET_USER"
     media="/media/$TARGET_USER"
-    cat <<EOF
+    if [ "$SHARE_POLICY" = "full" ]; then
+        cat <<EOF
 $SAMBA_BEGIN
 [PZExchange]
     comment = PhaseZero Windows exchange
@@ -937,75 +1248,37 @@ $SAMBA_BEGIN
     hosts allow = 127.0.0.1 192.168.122.0/24
     hosts deny = 0.0.0.0/0
 
-[PZHome]
-    comment = PhaseZero host home
-    path = $home
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    force create mode = 0600
-    force directory mode = 0700
-    veto files = /.ssh/.gnupg/.aws/.kube/
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
-
-[PZSDCard]
-    comment = PhaseZero SD card
-    path = /mnt/sdcard
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
-
-[PZRemovable]
-    comment = PhaseZero removable media
-    path = $removable
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
-
-[PZMedia]
-    comment = PhaseZero media mounts
-    path = $media
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
-
-[PZMounts]
-    comment = PhaseZero host mounts
-    path = /mnt
-    browseable = yes
-    read only = no
-    guest ok = yes
-    force user = $TARGET_USER
-    force group = $TARGET_USER
-    create mask = 0660
-    directory mask = 0770
-    hosts allow = 127.0.0.1 192.168.122.0/24
-    hosts deny = 0.0.0.0/0
+$(samba_ro_stanza PZHome "PhaseZero host home" "$home" '/.ssh/.gnupg/.aws/.kube/')
+$(samba_ro_stanza PZSDCard "PhaseZero SD card" /mnt/sdcard)
+$(samba_ro_stanza PZRemovable "PhaseZero removable media" "$removable")
+$(samba_ro_stanza PZMedia "PhaseZero media mounts" "$media")
+$(samba_ro_stanza PZMounts "PhaseZero host mounts" /mnt)
 $SAMBA_END
 EOF
+    else
+        # Policy=minimal: only the exchange directory is ever published.
+        # Home, SD card, removable/media and /mnt are NOT exported over SMB.
+        cat <<EOF
+$SAMBA_BEGIN
+[PZExchange]
+    comment = PhaseZero Windows exchange
+    path = $EXCHANGE_DIR
+    browseable = yes
+    read only = no
+    guest ok = yes
+    force user = $TARGET_USER
+    force group = $TARGET_USER
+    create mask = 0660
+    directory mask = 0770
+    smb encrypt = desired
+    follow symlinks = no
+    wide links = no
+    hosts allow = 127.0.0.1 192.168.122.0/24
+    hosts deny = 0.0.0.0/0
+
+$SAMBA_END
+EOF
+    fi
 }
 
 strip_managed_samba_block() {
@@ -1026,10 +1299,26 @@ samba_shares_managed() {
 }
 
 samba_shares_reachable() {
-    command -v smbclient >/dev/null 2>&1 &&
-        smbclient -N //127.0.0.1/PZExchange -c 'ls' >/dev/null 2>&1 &&
-        smbclient -N //127.0.0.1/PZHome -c 'ls' >/dev/null 2>&1 &&
-        smbclient -N //127.0.0.1/PZSDCard -c 'ls' >/dev/null 2>&1
+    command -v smbclient >/dev/null 2>&1 || return 1
+    smbclient -N //127.0.0.1/PZExchange -c 'ls' >/dev/null 2>&1 || return 1
+    if [ "$SHARE_POLICY" = "full" ]; then
+        smbclient -N //127.0.0.1/PZHome -c 'ls' >/dev/null 2>&1 || return 1
+        smbclient -N //127.0.0.1/PZSDCard -c 'ls' >/dev/null 2>&1 || return 1
+    fi
+}
+
+# The managed block currently on disk must match the effective share policy:
+# minimal publishes only PZExchange; full must include the expanded shares.
+samba_policy_compliant() {
+    [ -r "$SAMBA_CONF" ] || return 1
+    if [ "$SHARE_POLICY" = "full" ]; then
+        grep -q '^\[PZHome\]' "$SAMBA_CONF"
+    else
+        if grep -qE '^\[PZ(Home|SDCard|Removable|Media|Mounts)\]' "$SAMBA_CONF"; then
+            return 1
+        fi
+        return 0
+    fi
 }
 
 windows_usb_udev_content() {
@@ -1115,7 +1404,11 @@ configure_windows_samba_shares() {
         return 1
     }
     configure_windows_usb_access
-    pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts"
+    if [ "$SHARE_POLICY" = "full" ]; then
+        pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts (policy=full, writable=$SHARE_WRITABLE)"
+    else
+        pz_info "Windows shares ready: \\\\$(libvirt_gateway)\\PZExchange (policy=minimal)"
+    fi
 }
 
 remove_windows_samba_shares() {
@@ -1157,13 +1450,20 @@ usb_accessible_device_count() {
 share_links_ready() {
     local root
     for root in "$SHARE_BIND_ROOT" /tmp/phasezero-windows-vm/shares; do
-        if mountpoint -q "$root/exchange" 2>/dev/null &&
-            mountpoint -q "$root/home" 2>/dev/null &&
+        mountpoint -q "$root/exchange" 2>/dev/null || continue
+        if [ "$SHARE_POLICY" = "minimal" ]; then
+            return 0
+        fi
+        if mountpoint -q "$root/home" 2>/dev/null &&
             mountpoint -q "$root/sdcard" 2>/dev/null &&
             mountpoint -q "$root/mnt" 2>/dev/null; then
             return 0
         fi
     done
+    if [ "$SHARE_POLICY" = "minimal" ]; then
+        [ -L "$SHARE_ROOT/exchange" ]
+        return $?
+    fi
     [ -L "$SHARE_ROOT/exchange" ] && [ -L "$SHARE_ROOT/home" ] &&
         [ -L "$SHARE_ROOT/sdcard" ] && [ -L "$SHARE_ROOT/mnt" ]
 }
@@ -1208,13 +1508,15 @@ grant_raw_qemu_disk_access() {
 
 cmd_shares() {
     local sub="${1:-status}"
-    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+        shift || true
+    fi
     parse_options "$@"
     effective_config
     case "$sub" in
         install|repair)
             need_root
-            ensure_share_links
+            ensure_share_links || return 1
             configure_windows_samba_shares
             optimize_libvirt_domain
             ;;
@@ -1234,8 +1536,18 @@ cmd_shares() {
             ;;
         dry-run|plan)
             echo "Windows VM shared access plan"
-            echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> home/ and sdcard/ (bind-mounted)"
-            echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard"
+            if [ "$SHARE_POLICY" = "full" ]; then
+                # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+                echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> exchange/ home/ sdcard/ (bind-mounted)"
+                # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+                echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZExchange, PZHome, PZSDCard, PZRemovable, PZMedia, PZMounts"
+            else
+                # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+                echo "  built-in SMB (SLIRP): \\\\10.0.2.4\\qemu  -> exchange/ (bind-mounted)"
+                # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+                echo "  libvirt SMB host: \\\\$(libvirt_gateway)\\PZExchange"
+            fi
+            echo "  share policy: $SHARE_POLICY (expanded shares writable: $SHARE_WRITABLE)"
             echo "  SPICE WebDAV: $EXCHANGE_DIR (requires spice-webdavd in Windows guest)"
             echo "  bind-mount root: $SHARE_BIND_ROOT"
             echo "  USB auto filter: $USB_AUTO_FILTER"
@@ -1248,13 +1560,17 @@ cmd_shares() {
             return 1
             ;;
     esac
-    echo "builtin_smb_unc: \\\\10.0.2.4\\qemu (home/, sdcard/)"
+    # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
+    echo "builtin_smb_unc: \\\\10.0.2.4\\qemu ($([ "$SHARE_POLICY" = "full" ] && echo "exchange/ home/ sdcard/" || echo "exchange/"))"
+    echo "share_policy: $SHARE_POLICY"
+    echo "share_writable: $SHARE_WRITABLE"
     echo "bind_root: $SHARE_BIND_ROOT"
     echo "home_bound: $(mountpoint -q "$SHARE_BIND_ROOT/home" 2>/dev/null && echo yes || echo no)"
     echo "sdcard_bound: $(mountpoint -q "$SHARE_BIND_ROOT/sdcard" 2>/dev/null && echo yes || echo no)"
     echo "samba_managed: $(samba_shares_managed && echo yes || echo no)"
+    echo "samba_policy_compliant: $(samba_policy_compliant && echo yes || echo no)"
     echo "samba_reachable: $(samba_shares_reachable && echo yes || echo no)"
-    echo "smb_host: $(libvirt_gateway)"
+    echo "smb_host: $SMB_HOST"
     echo "exchange_dir: $EXCHANGE_DIR"
     echo "webdav_channels: $(libvirt_webdav_channel_count)"
     echo "libvirt_network: $(libvirt_network_state)"
@@ -1288,16 +1604,22 @@ cleanup_runtime() {
 }
 
 start_virtiofs_share() {
-    local tag="$1" path="$2" daemon sock pid
+    local tag="$1" path="$2" daemon sock pid extra=()
     [ -d "$path" ] || return 0
     daemon="$(virtiofsd_path)"
     [ -n "$daemon" ] || return 0
+    # expanded shares (home/sdcard/removable/media/mnt) are exposed read-only
+    # unless SHARE_WRITABLE=1; exchange is always read-write.
+    if [ "$SHARE_POLICY" = "full" ] && [ "$tag" != "exchange" ] && [ "$SHARE_WRITABLE" != "1" ]; then
+        extra+=(--readonly)
+        pz_info "virtiofs share $tag mounted read-only (policy=full, SHARE_WRITABLE=0)"
+    fi
     sock="$RUNTIME_DIR/virtiofs-$tag.sock"
     rm -f "$sock"
     if [ "$DRY_RUN" = "1" ]; then
-        pz_info "dry-run: would start virtiofsd tag=$tag path=$path socket=$sock"
+        pz_info "dry-run: would start virtiofsd tag=$tag path=$path socket=$sock ${extra[*]}"
     else
-        "$daemon" --shared-dir "$path" --socket-path "$sock" --cache auto --sandbox none --inode-file-handles=never --log-level warn &
+        "$daemon" --shared-dir "$path" --socket-path "$sock" --cache auto --sandbox none --inode-file-handles=never --log-level warn "${extra[@]}" &
         pid=$!
         CLEANUP_PIDS+=("$pid")
         local i
@@ -1360,7 +1682,9 @@ add_raw_usb_devices() {
     local mode="$1" dev vendor product bus addr class
     [ "$mode" = "all" ] || [ "$mode" = "peripherals" ] || return 0
     for dev in /sys/bus/usb/devices/*; do
-        [ -f "$dev/idVendor" ] && [ -f "$dev/idProduct" ] || continue
+        if [ ! -f "$dev/idVendor" ] || [ ! -f "$dev/idProduct" ]; then
+            continue
+        fi
         vendor="$(cat "$dev/idVendor" 2>/dev/null || true)"
         product="$(cat "$dev/idProduct" 2>/dev/null || true)"
         bus="$(cat "$dev/busnum" 2>/dev/null || true)"
@@ -1370,7 +1694,9 @@ add_raw_usb_devices() {
         if [ "$mode" = "peripherals" ] && [ "$class" = "08" ]; then
             continue
         fi
-        [ -n "$vendor" ] && [ -n "$product" ] && [ -n "$bus" ] && [ -n "$addr" ] || continue
+        if [ -z "$vendor" ] || [ -z "$product" ] || [ -z "$bus" ] || [ -z "$addr" ]; then
+            continue
+        fi
         QEMU_ARGS+=("-device" "usb-host,hostbus=$((10#$bus)),hostaddr=$((10#$addr))")
     done
 }
@@ -1393,15 +1719,19 @@ build_qemu_args() {
     if [ "$DRY_RUN" = "1" ]; then
         pz_info "dry-run: would prepare runtime dir: $RUNTIME_DIR"
     else
-        install -d "$RUNTIME_DIR" "$STATE_DIR"
+        # QGA and QMP allow guest execution/power control. Their Unix sockets
+        # must never be reachable by another local account.
+        install -d -m 0700 "$RUNTIME_DIR" "$STATE_DIR"
     fi
-    ensure_share_links
-    start_virtiofs_share hosthome "$HOME"
+    ensure_share_links || return 1
     start_virtiofs_share exchange "$EXCHANGE_DIR"
-    [ -d /mnt/sdcard ] && start_virtiofs_share sdcard /mnt/sdcard
-    [ -d "/run/media/$USER" ] && start_virtiofs_share removable "/run/media/$USER"
-    [ -d "/media/$USER" ] && start_virtiofs_share media "/media/$USER"
-    [ -d /mnt ] && start_virtiofs_share mnt /mnt
+    if [ "$SHARE_POLICY" = "full" ]; then
+        start_virtiofs_share hosthome "$HOME"
+        [ -d /mnt/sdcard ] && start_virtiofs_share sdcard /mnt/sdcard
+        [ -d "/run/media/$TARGET_USER" ] && start_virtiofs_share removable "/run/media/$TARGET_USER"
+        [ -d "/media/$TARGET_USER" ] && start_virtiofs_share media "/media/$TARGET_USER"
+        [ -d /mnt ] && start_virtiofs_share mnt /mnt
+    fi
     start_tpm
 
     QEMU_ARGS+=("-name" "$VM_NAME")
@@ -1426,8 +1756,11 @@ build_qemu_args() {
     QEMU_ARGS+=("-drive" "if=none,id=system,file=$DISK_PATH,format=$(disk_format "$DISK_PATH"),cache=none,discard=unmap,aio=io_uring")
     case "$RAW_DISK_BUS" in
         sata|ide) QEMU_ARGS+=("-device" "ide-hd,drive=system,bus=ide.0,bootindex=1") ;;
-        virtio) QEMU_ARGS+=("-device" "virtio-blk-pci,drive=system,bootindex=1") ;;
-        *) QEMU_ARGS+=("-device" "nvme,drive=system,serial=PZWINVM0,bootindex=1") ;;
+        # The serial is the token the unattended install compares before it
+        # wipes anything, so both bus types must expose the same one. virtio-blk
+        # shipped with no serial at all, which left the guard nothing to match.
+        virtio) QEMU_ARGS+=("-device" "virtio-blk-pci,drive=system,serial=$DISK_SERIAL,bootindex=1") ;;
+        *) QEMU_ARGS+=("-device" "nvme,drive=system,serial=$DISK_SERIAL,bootindex=1") ;;
     esac
     if [ -n "$PCI_DEVICES" ]; then
         QEMU_ARGS+=("-device" "intel-iommu,intremap=on,caching-mode=on")
@@ -1448,7 +1781,9 @@ build_qemu_args() {
     fi
     QEMU_ARGS+=("-device" "virtio-rng-pci")
     QEMU_ARGS+=("-device" "virtio-balloon-pci")
-    add_usb_redirection
+    if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then
+        add_usb_redirection
+    fi
     add_raw_usb_devices "$USB_MODE"
     audio="$(audio_driver)"
     if [ "$audio" != "none" ]; then
@@ -1461,11 +1796,21 @@ build_qemu_args() {
         netdev="$netdev,smb=${EFFECTIVE_SMB_DIR:-$SHARE_ROOT}"
     fi
     QEMU_ARGS+=("-netdev" "$netdev")
-    QEMU_ARGS+=("-device" "e1000e,netdev=net0,mac=52:54:00:50:5a:00")
-    QEMU_ARGS+=("-spice" "port=5930,disable-ticketing=on")
-    QEMU_ARGS+=("-device" "virtio-serial-pci")
-    QEMU_ARGS+=("-chardev" "spicevmc,id=vdagent,name=vdagent")
-    QEMU_ARGS+=("-device" "virtserialport,chardev=vdagent,name=com.redhat.spice.0")
+    QEMU_ARGS+=("-device" "$NET_MODEL,netdev=net0,mac=52:54:00:50:5a:00")
+    QEMU_ARGS+=("-device" "virtio-serial-pci,id=virtio-serial0")
+    if [ "$DRY_RUN" != "1" ]; then
+        rm -f "$RUNTIME_DIR/qga.sock" "$RUNTIME_DIR/qmp.sock"
+    fi
+    QEMU_ARGS+=("-chardev" "socket,path=$RUNTIME_DIR/qga.sock,server=on,wait=off,id=qga0")
+    QEMU_ARGS+=("-qmp" "unix:$RUNTIME_DIR/qmp.sock,server=on,wait=off")
+    QEMU_ARGS+=("-device" "virtserialport,bus=virtio-serial0.0,nr=1,chardev=qga0,name=org.qemu.guest_agent.0")
+    if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then
+        QEMU_ARGS+=("-spice" "port=5930,addr=$SPICE_ADDR,disable-ticketing=on")
+        QEMU_ARGS+=("-chardev" "spicevmc,id=vdagent,name=vdagent")
+        QEMU_ARGS+=("-device" "virtserialport,bus=virtio-serial0.0,nr=2,chardev=vdagent,name=com.redhat.spice.0")
+    else
+        pz_info "virtio-gl uses local GTK display; SPICE and USB redirection channels disabled"
+    fi
     if [ "$DISPLAY_MODE" = "none" ]; then
         QEMU_ARGS+=("-display" "none")
     elif [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
@@ -1498,7 +1843,7 @@ launch_libvirt_domain() {
         fi
         return 0
     fi
-    ensure_share_links
+    ensure_share_links || return 1
     state="$(virsh -c "$uri" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
     if [ "$state" != "running" ]; then
         if ! virsh -c "$uri" start "$LIBVIRT_DOMAIN"; then
@@ -1730,17 +2075,163 @@ launch_vm() {
         shell_join qemu-system-x86_64 "${QEMU_ARGS[@]}"
         return 0
     fi
-    pz_info "Windows VM shares: \\\\10.0.2.4\\qemu"
-    pz_info "SPICE USB redirection: spice://127.0.0.1:5930"
-    if command -v ionice >/dev/null 2>&1; then
-        exec ionice -c 2 -n 0 qemu-system-x86_64 "${QEMU_ARGS[@]}"
+    pz_info "Windows VM shares: \\\\10.0.2.4\\qemu (policy=$SHARE_POLICY)"
+    if [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
+        pz_info "Display: local GTK with virtio-gl acceleration (SPICE USB redirection disabled)"
+    else
+        pz_info "SPICE USB redirection: spice://$SPICE_ADDR:5930"
     fi
-    exec qemu-system-x86_64 "${QEMU_ARGS[@]}"
+    local qemu_rc=0
+    set +e
+    if command -v ionice >/dev/null 2>&1; then
+        ionice -c 2 -n 0 qemu-system-x86_64 "${QEMU_ARGS[@]}"
+        qemu_rc=$?
+    else
+        qemu-system-x86_64 "${QEMU_ARGS[@]}"
+        qemu_rc=$?
+    fi
+    set -e
+    cleanup_runtime
+    trap - EXIT INT TERM
+    return "$qemu_rc"
+}
+
+# Repairs modes on a VM that already exists. install/adopt harden storage as
+# they create it, but a VM adopted before this existed still carries whatever
+# mode its creator used, and that is a readable Windows disk for every local
+# account on the machine.
+secure_storage() {
+    parse_options "$@"
+    effective_config
+    harden_vm_storage_modes
+    local vm_mode="" disk_mode="" ovmf_mode="" tpm_mode=""
+    [ -d "$VM_DIR" ] && vm_mode="$(stat -c %a "$VM_DIR" 2>/dev/null || true)"
+    [ -f "$DISK_PATH" ] && disk_mode="$(stat -c %a "$DISK_PATH" 2>/dev/null || true)"
+    [ -f "$OVMF_VARS" ] && ovmf_mode="$(stat -c %a "$OVMF_VARS" 2>/dev/null || true)"
+    [ -d "$TPM_DIR" ] && tpm_mode="$(stat -c %a "$TPM_DIR" 2>/dev/null || true)"
+    local secure=true
+    [ "$vm_mode" = "700" ] || [ -z "$vm_mode" ] || secure=false
+    [ "$disk_mode" = "600" ] || [ -z "$disk_mode" ] || secure=false
+    [ "$ovmf_mode" = "600" ] || [ -z "$ovmf_mode" ] || secure=false
+    [ "$tpm_mode" = "700" ] || [ -z "$tpm_mode" ] || secure=false
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg vmDir "$VM_DIR" --arg vmDirMode "$vm_mode" --arg diskMode "$disk_mode" \
+            --arg ovmfVarsMode "$ovmf_mode" --arg tpmDirMode "$tpm_mode" \
+            --argjson secure "$secure" \
+            '{success:$secure,vmDir:$vmDir,vmDirMode:$vmDirMode,diskMode:$diskMode,
+              ovmfVarsMode:$ovmfVarsMode,tpmDirMode:$tpmDirMode,storageModesSecure:$secure}'
+    elif [ "$secure" = true ]; then
+        pz_info "VM storage restricted to the owning user ($VM_DIR)"
+    else
+        pz_error "VM storage modes could not be fully restricted: $VM_DIR"
+    fi
+    [ "$secure" = true ]
+}
+
+# Image integrity after a controlled shutdown. Refuses while the VM still holds
+# the disk, because qemu-img check on a live image reports nothing meaningful.
+disk_check() {
+    parse_options "$@"
+    effective_config
+    local output rc=0
+    if [ ! -f "$DISK_PATH" ]; then
+        pz_error "guest disk missing: $DISK_PATH"
+        return 1
+    fi
+    if disk_in_use; then
+        pz_error "disk-check requires the VM powered off"
+        return 1
+    fi
+    set +e
+    output="$(qemu-img check "$DISK_PATH" 2>&1)"
+    rc=$?
+    set -e
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg disk "$DISK_PATH" --arg detail "$output" \
+            --argjson ok "$([ "$rc" -eq 0 ] && echo true || echo false)" \
+            '{success:$ok,disk:$disk,detail:$detail}'
+    elif [ "$rc" -eq 0 ]; then
+        pz_info "qemu-img check passed: $DISK_PATH"
+    else
+        pz_error "qemu-img check failed: $DISK_PATH"
+        printf '%s\n' "$output" >&2
+    fi
+    return "$rc"
+}
+
+disk_in_use() {
+    local proc cmd disk_real
+    disk_real="$(realpath -e "$DISK_PATH" 2>/dev/null || printf '%s' "$DISK_PATH")"
+    for proc in /proc/[0-9]*/cmdline; do
+        [ -r "$proc" ] || continue
+        cmd="$(tr '\0' ' ' < "$proc" 2>/dev/null || true)"
+        if [[ "$cmd" == *qemu-system* || "$cmd" == *qemu-kvm* ]] && \
+            { [[ "$cmd" == *"$DISK_PATH"* ]] || [[ "$cmd" == *"$disk_real"* ]]; }; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+launch_check() {
+    parse_options "$@"
+    effective_config
+    local -a blockers=()
+    local kvm=false disk=false ovmf=false vars=false qemu=false graphics=false
+    local kvm_path="${PZ_WINDOWS_VM_KVM_PATH:-/dev/kvm}"
+
+    [ -r "$kvm_path" ] && [ -w "$kvm_path" ] && kvm=true || blockers+=("KVM sem acesso read/write: $kvm_path")
+    [ -f "$DISK_PATH" ] && [ -r "$DISK_PATH" ] && disk=true || blockers+=("disco da VM ausente ou ilegível")
+    [ -n "$OVMF_CODE" ] && [ -f "$OVMF_CODE" ] && [ -r "$OVMF_CODE" ] && ovmf=true || blockers+=("firmware OVMF ausente ou ilegível")
+    [ -f "$OVMF_VARS" ] && [ -r "$OVMF_VARS" ] && [ -w "$OVMF_VARS" ] && vars=true || blockers+=("OVMF_VARS ausente ou sem escrita")
+    command -v qemu-system-x86_64 >/dev/null 2>&1 && qemu=true || blockers+=("qemu-system-x86_64 ausente")
+
+    case "$GRAPHICS_PROFILE" in
+        compat) graphics=true ;;
+        virtio-gl)
+            local render_node="" qemu_bin
+            for render_node in /dev/dri/renderD*; do
+                [ -r "$render_node" ] && [ -w "$render_node" ] && break
+                render_node=""
+            done
+            [ -n "$render_node" ] || blockers+=("render node GL sem acesso")
+            qemu_bin="$(command -v qemu-system-x86_64 2>/dev/null || true)"
+            if [ -n "$qemu_bin" ] && "$qemu_bin" -device help 2>/dev/null | grep -q 'virtio-vga-gl' \
+                && "$qemu_bin" -display help 2>/dev/null | grep -qw gtk; then
+                [ -n "$render_node" ] && graphics=true
+            else
+                blockers+=("QEMU sem virtio-vga-gl/GTK")
+            fi
+            ;;
+        *) blockers+=("perfil gráfico não suportado no Windows: $GRAPHICS_PROFILE") ;;
+    esac
+
+    local success=false
+    [ "${#blockers[@]}" -eq 0 ] && success=true
+    if [ "$JSON_OUT" = "1" ]; then
+        printf '%s\n' "${blockers[@]:-}" | jq -R -s \
+            --argjson success "$success" \
+            --arg profile "$GRAPHICS_PROFILE" \
+            --arg diskPath "$DISK_PATH" \
+            --argjson kvm "$kvm" --argjson disk "$disk" --argjson ovmf "$ovmf" \
+            --argjson vars "$vars" --argjson qemu "$qemu" --argjson graphics "$graphics" \
+            '{success:$success,graphicsProfile:$profile,diskPath:$diskPath,
+              checks:{kvm:$kvm,disk:$disk,ovmf:$ovmf,ovmfVars:$vars,qemu:$qemu,graphics:$graphics},
+              blockers:(split("\n")|map(select(length>0)))}'
+    else
+        if $success; then
+            pz_info "Windows VM launch preflight passed ($GRAPHICS_PROFILE)"
+        else
+            pz_error "Windows VM launch preflight failed:"
+            printf '  - %s\n' "${blockers[@]}" >&2
+        fi
+    fi
+    $success
 }
 
 status_json() {
     effective_config
-    local kvm="no" config="no" disk="no" iso="no" ovmf="no" vars="no" qemu="" qemu_img="" virtiofs="" smbd="" swtpm_bin="" boot_helper="no" boot_service="no" boot_grub="unknown" current_marker="no" installed_like="no" boot_current="no" samba_managed="no" samba_reachable="no" share_links="no" usb_udev_managed="no" discovery
+    local kvm="no" config="no" disk="no" iso="no" ovmf="no" vars="no" qemu="" qemu_img="" virtiofs="" smbd="" swtpm_bin="" boot_helper="no" boot_service="no" boot_grub="unknown" current_marker="no" installed_like="no" boot_current="no" boot_verification="stale" samba_managed="no" samba_reachable="no" share_links="no" usb_udev_managed="no" discovery
     local domain_state="missing" domain_disk=""
     [ -e /dev/kvm ] && kvm="yes"
     [ -f "$CONFIG_FILE" ] && config="yes"
@@ -1764,9 +2255,22 @@ status_json() {
     [ -f "$SERVICE_FILE" ] && boot_service="yes"
     samba_shares_managed && samba_managed="yes"
     samba_shares_reachable && samba_reachable="yes"
+    local samba_policy="no"
+    samba_policy_compliant && samba_policy="yes"
     share_links_ready && share_links="yes"
     windows_usb_udev_managed && usb_udev_managed="yes"
-    boot_artifacts_current && boot_current="yes"
+    local boot_runtime_state_value
+    boot_runtime_state_value="$(boot_runtime_state)"
+    if boot_artifacts_current; then
+        boot_current="yes"
+        boot_verification="verified"
+    elif [ "$boot_runtime_state_value" = "stale" ]; then
+        boot_current="no"
+        boot_verification="stale"
+    elif [ "$EUID" -ne 0 ] && [ ! -x "$(dirname "$GRUB_SCRIPT")" ]; then
+        boot_current="unknown"
+        boot_verification="unknown-permission"
+    fi
     boot_grub="$(grub_cfg_entry_state)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && current_marker="yes"
     discovery="$(discovery_json)"
@@ -1782,13 +2286,17 @@ status_json() {
         --arg cpus "$CPUS" \
         --arg usbMode "$USB_MODE" \
         --arg graphicsProfile "$GRAPHICS_PROFILE" \
+        --arg netModel "$NET_MODEL" \
         --arg usbAutoFilter "$USB_AUTO_FILTER" \
         --arg usbUdevManaged "$usb_udev_managed" \
         --arg usbRedirChannels "$(libvirt_usb_redir_count)" \
         --arg usbAccessibleDevices "$(usb_accessible_device_count)" \
         --arg shareRoot "$SHARE_ROOT" \
         --arg shareLinks "$share_links" \
+        --arg sharePolicy "$SHARE_POLICY" \
+        --arg shareWritable "$SHARE_WRITABLE" \
         --arg sambaManaged "$samba_managed" \
+        --arg sambaPolicyCompliant "$samba_policy" \
         --arg sambaReachable "$samba_reachable" \
         --arg smbHost "$SMB_HOST" \
         --arg exchangeDir "$EXCHANGE_DIR" \
@@ -1815,6 +2323,11 @@ status_json() {
         --arg bootHelper "$boot_helper" \
         --arg bootService "$boot_service" \
         --arg bootArtifactsCurrent "$boot_current" \
+        --arg artifactsVerification "$boot_verification" \
+        --arg bootRuntimeState "$boot_runtime_state_value" \
+        --argjson bootRuntimeStale "$([ "$boot_runtime_state_value" = "stale" ] && echo true || echo false)" \
+        --arg hostLoginPolicy "$(root_env_value PZ_WINDOWS_VM_REQUIRE_LOGIN)" \
+        --arg guestLoginPolicy "$GUEST_LOGIN_POLICY" \
         --arg bootConfiguredRepo "$(root_env_value PZ_WINDOWS_VM_REPO)" \
         --arg bootConfiguredUser "$(root_env_value PZ_WINDOWS_VM_BOOT_USER)" \
         --arg grubEntry "$boot_grub" \
@@ -1822,17 +2335,20 @@ status_json() {
         --argjson discovery "$discovery" \
         '{
             config: {path: $configFile, installed: ($configInstalled == "yes")},
-            vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode, graphicsProfile: $graphicsProfile},
+            vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode, graphicsProfile: $graphicsProfile, netModel: $netModel},
             libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != ""), network:"default", networkState:$networkState, nicModel:$nicModel},
             host: {kvm: ($kvm == "yes"), qemu: $qemu, qemuImg: $qemuImg, ovmfCode: $ovmfCode, ovmfCodeExists: ($ovmfCodeExists == "yes"), ovmfVars: $ovmfVars, ovmfVarsExists: ($ovmfVarsExists == "yes"), virtiofsd: $virtiofsd, smbd: $smbd, swtpm: $swtpm},
             access: {
                 shareRoot: $shareRoot,
                 shareLinksReady: ($shareLinks == "yes"),
                 sambaManaged: ($sambaManaged == "yes"),
+                sambaPolicyCompliant: ($sambaPolicyCompliant == "yes"),
                 sambaReachable: ($sambaReachable == "yes"),
                 smbHost: $smbHost,
                 exchangeDir: $exchangeDir,
-                shares: ["PZExchange", "PZHome", "PZSDCard", "PZRemovable", "PZMedia", "PZMounts"],
+                sharePolicy: $sharePolicy,
+                shareWritable: ($shareWritable == "1"),
+                shares: ([if $sharePolicy == "full" then "PZExchange", "PZHome", "PZSDCard", "PZRemovable", "PZMedia", "PZMounts" else "PZExchange" end]),
                 spiceClient: $spicy,
                 spiceWebdavChannels: ($webdavChannels|tonumber),
                 usbMode: $usbMode,
@@ -1842,7 +2358,13 @@ status_json() {
                 usbAccessibleDevices: ($usbAccessibleDevices|tonumber)
             },
             discovery: $discovery,
-            boot: {helperInstalled: ($bootHelper == "yes"), serviceInstalled: ($bootService == "yes"), artifactsCurrent: ($bootArtifactsCurrent == "yes"), configuredRepo: $bootConfiguredRepo, configuredUser: $bootConfiguredUser, grubCfgEntry: $grubEntry, currentBootWindowsVm: ($currentMarker == "yes")}
+            boot: {helperInstalled: ($bootHelper == "yes"), serviceInstalled: ($bootService == "yes"),
+                   artifactsCurrent:(if $bootArtifactsCurrent == "unknown" then null else ($bootArtifactsCurrent == "yes") end),
+                   artifactsVerification:$artifactsVerification,
+                   bootRuntimeState:$bootRuntimeState, bootRuntimeStale:$bootRuntimeStale,
+                   hostLoginPolicy:(if $hostLoginPolicy == "1" then "password" else "auto" end),
+                   guestLoginPolicy:$guestLoginPolicy, guestLoginVerified:false,
+                   configuredRepo: $bootConfiguredRepo, configuredUser: $bootConfiguredUser, grubCfgEntry: $grubEntry, currentBootWindowsVm: ($currentMarker == "yes")}
         }'
 }
 
@@ -1894,7 +2416,16 @@ cmd_adopt() {
     DISK_PATH="$target"
     EXPLICIT_DISK=1
     effective_config
+    local target_dir
+    target="$(readlink -f -- "$target")"
+    target_dir="$(dirname -- "$target")"
     DISK_PATH="$target"
+    VM_DIR="$target_dir"
+    LIBVIRT_DOMAIN=""
+    OVMF_VARS="$VM_DIR/OVMF_VARS.fd"
+    SHARE_ROOT="$VM_DIR/shares"
+    TPM_DIR="$VM_DIR/tpm"
+    SMB_HOST="10.0.2.2"
     DISK_SOURCE="adopted-existing"
     ensure_vm_storage
     write_config
@@ -1919,11 +2450,14 @@ print_plan() {
     echo "  kvm: $([ -e /dev/kvm ] && echo yes || echo no)"
     echo "  ovmf: ${OVMF_CODE:-missing}"
     echo "  tpm: $(command_path swtpm || echo missing)"
-    echo "  home_share: $HOME"
-    echo "  sdcard_share: $([ -d /mnt/sdcard ] && echo /mnt/sdcard || echo missing)"
-    echo "  removable_share: $([ -d "/run/media/$USER" ] && echo "/run/media/$USER" || echo missing)"
+    echo "  share_policy: $SHARE_POLICY"
+    echo "  share_writable: $SHARE_WRITABLE"
+    echo "  home_share: $([ "$SHARE_POLICY" = "full" ] && echo "$HOME" || echo 'hidden (policy=minimal)')"
+    echo "  sdcard_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d /mnt/sdcard ] && echo /mnt/sdcard || echo missing; } || echo 'hidden (policy=minimal)')"
+    echo "  removable_share: $([ "$SHARE_POLICY" = "full" ] && { [ -d "/run/media/$TARGET_USER" ] && echo "/run/media/$TARGET_USER" || echo missing; } || echo 'hidden (policy=minimal)')"
+    # shellcheck disable=SC2028 # intentional: echo with backslash escapes for user display
     echo "  smb_unc: \\\\10.0.2.4\\qemu"
-    echo "  spice_usb: spice://127.0.0.1:5930"
+    echo "  spice_usb: spice://$SPICE_ADDR:5930"
     echo "  direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot install"
 }
 
@@ -2087,13 +2621,17 @@ EOF
 }
 
 root_env_content() {
+    local boot_uid
+    boot_uid="$(id -u "$TARGET_USER" 2>/dev/null || printf unknown)"
     printf '%s\n' '# PhaseZero managed Windows VM boot environment'
     printf 'PZ_WINDOWS_VM_REPO=%q\n' "$PZ_ROOT"
     printf 'PZ_WINDOWS_VM_BOOT_USER=%q\n' "$TARGET_USER"
     printf 'PZ_WINDOWS_VM_RUNTIME_LAUNCHER=%q\n' "$RUNTIME_LAUNCHER"
+    printf 'PZ_WINDOWS_VM_RUNTIME_DIR=%q\n' "/run/phasezero/windows-vm-$boot_uid"
     printf 'PZ_DISPLAY_SESSION_HELPER=%q\n' "$DISPLAY_SESSION_TARGET"
     printf 'PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=%q\n' "${PZ_WINDOWS_VM_SESSION_RETRY_SECONDS:-5}"
     printf 'PZ_WINDOWS_VM_DESKTOP_FALLBACK=%q\n' "${PZ_WINDOWS_VM_DESKTOP_FALLBACK:-0}"
+    printf 'PZ_WINDOWS_VM_REQUIRE_LOGIN=%q\n' "${PZ_WINDOWS_VM_REQUIRE_LOGIN:-0}"
 }
 
 root_env_value() {
@@ -2106,6 +2644,106 @@ root_env_value() {
         . "$ROOT_ENV_FILE"
         printf '%s\n' "${!name:-}"
     )
+}
+
+# Arvore runtime da sessao de boot. Precisa ser auto-contida: durante o boot
+# GRUB o repo do usuario pode nem estar montado, entao tudo que common.sh e
+# windows-vm.sh carregam com `source` tem que estar aqui. Faltando um arquivo,
+# a sessao falha em loop e o host mostra tela preta.
+runtime_file_specs() {
+    cat <<EOF
+$PZ_ROOT/linux/windows-vm/windows-vm.sh|$RUNTIME_LAUNCHER|0755
+$PZ_ROOT/linux/windows-vm/graphics.sh|$RUNTIME_GRAPHICS|0755
+$PZ_ROOT/linux/windows-vm/rescue.sh|$RUNTIME_ROOT/linux/windows-vm/rescue.sh|0644
+$PZ_ROOT/linux/lib/common.sh|$RUNTIME_COMMON|0644
+$PZ_ROOT/linux/lib/ledger.sh|$RUNTIME_ROOT/linux/lib/ledger.sh|0644
+$PZ_ROOT/linux/lib/desktop.sh|$RUNTIME_ROOT/linux/lib/desktop.sh|0644
+$PZ_ROOT/linux/lib/flatpak.sh|$RUNTIME_ROOT/linux/lib/flatpak.sh|0644
+EOF
+}
+
+install_runtime_tree() {
+    local src dst mode
+    while IFS='|' read -r src dst mode; do
+        [ -n "$src" ] || continue
+        [ -f "$src" ] || { pz_error "runtime source missing: $src"; return 1; }
+        install -d "$(dirname "$dst")"
+        install -m "$mode" "$src" "$dst"
+    done < <(runtime_file_specs)
+}
+
+runtime_tree_current() {
+    local src dst mode
+    while IFS='|' read -r src dst mode; do
+        [ -n "$src" ] || continue
+        [ -f "$dst" ] || return 1
+        cmp -s "$src" "$dst" || return 1
+    done < <(runtime_file_specs)
+}
+
+# Every boot artifact lives under /usr/local and is world-readable, so whether
+# the GRUB path is running current code can be answered without privilege.
+# boot_artifacts_current cannot answer it: it also inspects /etc/grub.d and the
+# root env file, so an unprivileged caller collapses a provable "stale" into
+# "unknown-permission" and never learns the boot path is running old code.
+# A package upgrade replaces $PZ_ROOT but never /usr/local, which makes this
+# the normal state after every `pacman -U`, `apt upgrade` or `dnf update`.
+boot_runtime_state() {
+    local pair src dst mode
+    if [ ! -e "$BOOT_HELPER_TARGET" ] && [ ! -e "$RUNTIME_LAUNCHER" ]; then
+        printf 'not-installed'
+        return 0
+    fi
+    for pair in "$BOOT_HELPER_SOURCE|$BOOT_HELPER_TARGET" \
+                "$SESSION_SOURCE|$SESSION_TARGET" \
+                "$DISPLAY_SESSION_SOURCE|$DISPLAY_SESSION_TARGET"; do
+        src="${pair%%|*}"
+        dst="${pair##*|}"
+        [ -r "$src" ] || { printf 'unknown-source'; return 0; }
+        [ -e "$dst" ] || { printf 'stale'; return 0; }
+        [ -r "$dst" ] || { printf 'unknown-permission'; return 0; }
+        cmp -s "$src" "$dst" || { printf 'stale'; return 0; }
+    done
+    while IFS='|' read -r src dst mode; do
+        [ -n "$src" ] || continue
+        [ -r "$src" ] || { printf 'unknown-source'; return 0; }
+        [ -e "$dst" ] || { printf 'stale'; return 0; }
+        [ -r "$dst" ] || { printf 'unknown-permission'; return 0; }
+        cmp -s "$src" "$dst" || { printf 'stale'; return 0; }
+    done < <(runtime_file_specs)
+    printf 'current'
+}
+
+# Reports whether the installed boot runtime matches this PhaseZero root, and
+# exits non-zero only when staleness is proven. Package hooks and doctor call
+# this; it must stay cheap, privilege-free and silent about states it cannot
+# establish, so an upgrade never fails on an inconclusive probe.
+runtime_check() {
+    parse_options "$@"
+    effective_config
+    local state hint
+    state="$(boot_runtime_state)"
+    hint="pz windows-vm boot install"
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg state "$state" --arg source "$PZ_ROOT" --arg runtime "$RUNTIME_ROOT" \
+            --arg remediation "$hint" \
+            --argjson stale "$([ "$state" = "stale" ] && echo true || echo false)" \
+            --argjson installed "$([ "$state" = "not-installed" ] && echo false || echo true)" \
+            '{bootRuntimeState:$state,bootRuntimeStale:$stale,bootRuntimeInstalled:$installed,
+              source:$source,runtime:$runtime,remediation:$remediation}'
+    else
+        case "$state" in
+            not-installed) pz_info "Windows VM boot integration not installed" ;;
+            current) pz_info "Windows VM boot runtime matches $PZ_ROOT" ;;
+            stale)
+                pz_warn "Windows VM boot runtime is OUTDATED: $RUNTIME_ROOT"
+                pz_warn "the GRUB boot path still runs the previous version"
+                pz_warn "run with admin rights: $hint"
+                ;;
+            *) pz_info "Windows VM boot runtime state could not be verified ($state)" ;;
+        esac
+    fi
+    [ "$state" != "stale" ]
 }
 
 boot_artifacts_current() {
@@ -2131,9 +2769,7 @@ boot_artifacts_current() {
     cmp -s "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET" || return 1
     cmp -s "$SESSION_SOURCE" "$SESSION_TARGET" || return 1
     cmp -s "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET" || return 1
-    cmp -s "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER" || return 1
-    cmp -s "$PZ_ROOT/linux/windows-vm/graphics.sh" "$RUNTIME_GRAPHICS" || return 1
-    cmp -s "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON" || return 1
+    runtime_tree_current || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_REPO)" = "$PZ_ROOT" ] || return 1
     [ "$(root_env_value PZ_WINDOWS_VM_BOOT_USER)" = "$TARGET_USER" ] || return 1
     grep -Fqx "Exec=$SESSION_TARGET" "$WAYLAND_SESSION_FILE" || return 1
@@ -2151,6 +2787,7 @@ Before=display-manager.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-$ROOT_ENV_FILE
 Environment=PZ_WINDOWS_VM_BOOT_USER=$TARGET_USER
 ExecStart=$BOOT_HELPER_TARGET
 
@@ -2171,8 +2808,8 @@ grub_script_content() {
     [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
     kernel_rel="$(grub-mkrelpath "$kernel")"
     initrd_rel="$(grub-mkrelpath "$initrd")"
-    amd_ucode_rel="$([ -f /boot/amd-ucode.img ] && grub-mkrelpath /boot/amd-ucode.img || true)"
-    intel_ucode_rel="$([ -f /boot/intel-ucode.img ] && grub-mkrelpath /boot/intel-ucode.img || true)"
+    amd_ucode_rel="$(if [ -f /boot/amd-ucode.img ]; then grub-mkrelpath /boot/amd-ucode.img; fi)"
+    intel_ucode_rel="$(if [ -f /boot/intel-ucode.img ]; then grub-mkrelpath /boot/intel-ucode.img; fi)"
     subvol="$(root_subvol || true)"
     [ -n "$subvol" ] && rootflags=" rootflags=subvol=$subvol"
 
@@ -2219,9 +2856,7 @@ install_boot() {
     install -m 0755 "$BOOT_HELPER_SOURCE" "$BOOT_HELPER_TARGET"
     install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
     install -m 0644 "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET"
-    install -m 0755 "$PZ_ROOT/linux/windows-vm/windows-vm.sh" "$RUNTIME_LAUNCHER"
-    install -m 0755 "$PZ_ROOT/linux/windows-vm/graphics.sh" "$RUNTIME_GRAPHICS"
-    install -m 0644 "$PZ_ROOT/linux/lib/common.sh" "$RUNTIME_COMMON"
+    install_runtime_tree
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
     session_desktop_content > "$WAYLAND_SESSION_FILE"
@@ -2401,7 +3036,9 @@ clear_next_boot() {
     loader="$(detected_loader)"
     case "$loader" in
         systemd-boot)
-            command -v bootctl >/dev/null 2>&1 && bootctl set-default "" 2>/dev/null || true
+            if command -v bootctl >/dev/null 2>&1; then
+                bootctl set-default "" 2>/dev/null || true
+            fi
             ;;
         *)
             command -v grub-editenv >/dev/null 2>&1 || { pz_error "grub-editenv missing"; return 1; }
@@ -2412,37 +3049,178 @@ clear_next_boot() {
 }
 
 status_boot() {
-    local loader="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no"
+    local json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in --json) json=1; shift ;; *) shift ;; esac
+    done
+
+    effective_config
+    local loader="" grub_env="" grub_next_entry="" grub_saved_entry="" cmdline_marker="no" artifacts_current="no" artifacts_verification="stale"
     loader="$(detected_loader)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && cmdline_marker="yes"
-    boot_artifacts_current && artifacts_current="yes"
-    if command -v grub-editenv >/dev/null 2>&1; then
-        grub_next_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "next_entry" {print $2; exit}')"
-        grub_saved_entry="$(grub-editenv list 2>/dev/null | awk -F= '$1 == "saved_entry" {print $2; exit}')"
+    # Answered without privilege, so an unprivileged caller still learns that a
+    # package upgrade left the GRUB boot path on the previous version.
+    local boot_runtime_state_value
+    boot_runtime_state_value="$(boot_runtime_state)"
+    if boot_artifacts_current; then
+        artifacts_current="yes"
+        artifacts_verification="verified"
+    elif [ "$boot_runtime_state_value" = "stale" ]; then
+        # Proven stale beats "cannot tell": the runtime comparison alone is
+        # enough to know the boot path is outdated.
+        artifacts_current="no"
+        artifacts_verification="stale"
+    elif [ "$EUID" -ne 0 ] && [ ! -x "$(dirname "$GRUB_SCRIPT")" ]; then
+        artifacts_current="unknown"
+        artifacts_verification="unknown-permission"
     fi
-    echo "helper: $BOOT_HELPER_TARGET"
-    [ -x "$BOOT_HELPER_TARGET" ] && echo "helper_installed: yes" || echo "helper_installed: no"
-    [ -x "$SESSION_TARGET" ] && echo "session_launcher_installed: yes" || echo "session_launcher_installed: no"
-    [ -x "$RUNTIME_LAUNCHER" ] && echo "runtime_launcher_installed: yes" || echo "runtime_launcher_installed: no"
-    [ -x "$RUNTIME_GRAPHICS" ] && echo "runtime_graphics_installed: yes" || echo "runtime_graphics_installed: no"
-    [ -f "$SERVICE_FILE" ] && echo "service_installed: yes" || echo "service_installed: no"
-    systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || true
-    [ -x "$GRUB_SCRIPT" ] && echo "grub_script: yes" || echo "grub_script: no"
-    echo "loader: $loader"
-    echo "loader_entry: $(loader_entry_state "$loader")"
-    echo "artifacts_current: $artifacts_current"
-    echo "configured_repo: $(root_env_value PZ_WINDOWS_VM_REPO)"
-    echo "configured_boot_user: $(root_env_value PZ_WINDOWS_VM_BOOT_USER)"
-    [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && echo "grub_cfg_entry: $(grub_cfg_entry_state)" || echo "grub_cfg_entry: n/a"
-    echo "grub_next_entry: ${grub_next_entry:-none}"
-    echo "grub_saved_entry: ${grub_saved_entry:-none}"
-    [ -f "$SDDM_CONF" ] && echo "active_sddm_windows_vm_conf: yes" || echo "active_sddm_windows_vm_conf: no"
-    echo "current_boot_windows_vm: $cmdline_marker"
-    echo "target_user: $TARGET_USER"
-    echo "target_root: $(pz_boot_target_root)"
-    echo "session: phasezero-windows-vm.desktop"
-    echo "grub_entry_id: $BOOT_ID"
-    echo "recommended_direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+    # grub-editenv list exits 1 when the env block is missing or permission is
+    # denied; under set -euo pipefail a pipeline failure must not abort status,
+    # and stdout/stderr must not leak partial output. One invocation only, the
+    # captured stream is parsed below; rc!=0 renders "unknown-permission" when
+    # the error text says so, otherwise "none".
+    if command -v grub-editenv >/dev/null 2>&1; then
+        if grub_env="$(grub-editenv list 2>&1)"; then
+            grub_next_entry="$(printf '%s\n' "$grub_env" | awk -F= '$1 == "next_entry" {print $2; exit}')"
+            grub_saved_entry="$(printf '%s\n' "$grub_env" | awk -F= '$1 == "saved_entry" {print $2; exit}')"
+        elif printf '%s\n' "$grub_env" | grep -qi 'permission denied'; then
+            grub_next_entry="unknown-permission"
+            grub_saved_entry="unknown-permission"
+        fi
+    fi
+
+    local helper_installed="no" session_launcher_installed="no"
+    local runtime_launcher_installed="no" runtime_graphics_installed="no"
+    local service_installed="no" grub_script="no"
+    [ -x "$BOOT_HELPER_TARGET" ] && helper_installed="yes"
+    [ -x "$SESSION_TARGET" ] && session_launcher_installed="yes"
+    [ -x "$RUNTIME_LAUNCHER" ] && runtime_launcher_installed="yes"
+    [ -x "$RUNTIME_GRAPHICS" ] && runtime_graphics_installed="yes"
+    [ -f "$SERVICE_FILE" ] && service_installed="yes"
+    # /etc/grub.d is root-only on most distributions, so a plain -x test reports
+    # a missing script to any unprivileged caller. Distinguish "absent" from
+    # "cannot tell" the same way grub_cfg_entry_state does.
+    if [ -x "$GRUB_SCRIPT" ]; then
+        grub_script="yes"
+    elif [ ! -r "$(dirname "$GRUB_SCRIPT")" ] || [ ! -x "$(dirname "$GRUB_SCRIPT")" ]; then
+        grub_script="unknown-permission"
+    fi
+    local service_enabled; service_enabled="$(systemctl is-enabled phasezero-windows-vm-boot-prepare.service 2>/dev/null || echo "disabled")"
+    local loader_entry; loader_entry="$(loader_entry_state "$loader")"
+    local grub_cfg_entry="n/a"
+    [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && grub_cfg_entry="$(grub_cfg_entry_state)"
+    local active_sddm="no"; [ -f "$SDDM_CONF" ] && active_sddm="yes"
+    local target_root; target_root="$(pz_boot_target_root)"
+    local configured_repo; configured_repo="$(root_env_value PZ_WINDOWS_VM_REPO)"
+    local configured_user; configured_user="$(root_env_value PZ_WINDOWS_VM_BOOT_USER)"
+    local boot_ready="no" one_shot_ready="no"
+    local artifacts_current_json=false
+    # bootReady only for a loader whose entry is CONFIRMED present; an
+    # unknown/unsupported loader entry must never render ready.
+    if [ "$artifacts_current" = "yes" ] && [ "$loader_entry" = "present" ] && [ "$service_enabled" = "enabled" ] && [ "$helper_installed" = "yes" ]; then
+        case "$loader" in
+            grub-efi|grub-bios|systemd-boot) boot_ready="yes"; one_shot_ready="yes" ;;
+            refind) boot_ready="yes" ;;
+        esac
+    fi
+    case "$artifacts_current" in
+        yes) artifacts_current_json=true ;;
+        unknown) artifacts_current_json=null ;;
+    esac
+
+    if [ "$json" = "1" ]; then
+        jq -n \
+            --arg helper "$BOOT_HELPER_TARGET" \
+            --arg helperInstalled "$helper_installed" \
+            --arg sessionLauncher "$SESSION_TARGET" \
+            --arg sessionLauncherInstalled "$session_launcher_installed" \
+            --arg runtimeLauncher "$RUNTIME_LAUNCHER" \
+            --arg runtimeLauncherInstalled "$runtime_launcher_installed" \
+            --arg runtimeGraphics "$RUNTIME_GRAPHICS" \
+            --arg runtimeGraphicsInstalled "$runtime_graphics_installed" \
+            --arg serviceFile "$SERVICE_FILE" \
+            --arg serviceInstalled "$service_installed" \
+            --arg serviceEnabled "$service_enabled" \
+            --arg grubScript "$GRUB_SCRIPT" \
+            --arg grubScriptExists "$grub_script" \
+            --arg bootLoader "$loader" \
+            --arg loaderEntry "$loader_entry" \
+            --argjson artifactsCurrent "$artifacts_current_json" \
+            --arg artifactsVerification "$artifacts_verification" \
+            --arg bootRuntimeState "$boot_runtime_state_value" \
+            --argjson bootRuntimeStale "$([ "$boot_runtime_state_value" = "stale" ] && echo true || echo false)" \
+            --arg hostLoginPolicy "$(root_env_value PZ_WINDOWS_VM_REQUIRE_LOGIN)" \
+            --arg guestLoginPolicy "$GUEST_LOGIN_POLICY" \
+            --arg configuredRepo "$configured_repo" \
+            --arg configuredBootUser "$configured_user" \
+            --arg grubCfgEntry "$grub_cfg_entry" \
+            --arg grubNextEntry "${grub_next_entry:-none}" \
+            --arg grubSavedEntry "${grub_saved_entry:-none}" \
+            --arg sddmConf "$SDDM_CONF" \
+            --arg activeSddm "$active_sddm" \
+            --argjson currentBootWindowsVm "$([ "$cmdline_marker" = "yes" ] && echo true || echo false)" \
+            --arg targetUser "$TARGET_USER" \
+            --arg targetRoot "$target_root" \
+            --arg session "phasezero-windows-vm.desktop" \
+            --arg grubEntryId "$BOOT_ID" \
+            --argjson bootReady "$([ "$boot_ready" = "yes" ] && echo true || echo false)" \
+            --argjson oneShotReady "$([ "$one_shot_ready" = "yes" ] && echo true || echo false)" \
+            '{
+                helper: $helper, helperInstalled: $helperInstalled,
+                sessionLauncher: $sessionLauncher, sessionLauncherInstalled: $sessionLauncherInstalled,
+                runtimeLauncher: $runtimeLauncher, runtimeLauncherInstalled: $runtimeLauncherInstalled,
+                runtimeGraphics: $runtimeGraphics, runtimeGraphicsInstalled: $runtimeGraphicsInstalled,
+                serviceFile: $serviceFile, serviceInstalled: $serviceInstalled, serviceEnabled: $serviceEnabled,
+                grubScript: $grubScript, grubScriptExists: $grubScriptExists,
+                bootLoader: $bootLoader, loaderEntry: $loaderEntry,
+                artifactsCurrent: $artifactsCurrent,
+                artifactsVerification: $artifactsVerification,
+                bootRuntimeState: $bootRuntimeState,
+                bootRuntimeStale: $bootRuntimeStale,
+                hostLoginPolicy: (if $hostLoginPolicy == "1" then "password" else "auto" end),
+                guestLoginPolicy: $guestLoginPolicy,
+                guestLoginVerified: false,
+                configuredRepo: $configuredRepo, configuredBootUser: $configuredBootUser,
+                grubCfgEntry: $grubCfgEntry,
+                grubNextEntry: $grubNextEntry, grubSavedEntry: $grubSavedEntry,
+                sddmConf: $sddmConf, activeSddm: $activeSddm,
+                currentBootWindowsVm: $currentBootWindowsVm,
+                targetUser: $targetUser, targetRoot: $targetRoot,
+                session: $session, grubEntryId: $grubEntryId,
+                bootReady: $bootReady,
+                oneShotReady: $oneShotReady
+            }'
+    else
+        echo "helper: $BOOT_HELPER_TARGET"
+        echo "helper_installed: $helper_installed"
+        echo "session_launcher_installed: $session_launcher_installed"
+        echo "runtime_launcher_installed: $runtime_launcher_installed"
+        echo "runtime_graphics_installed: $runtime_graphics_installed"
+        echo "service_installed: $service_installed"
+        echo "service_enabled: $service_enabled"
+        echo "grub_script: $grub_script"
+        echo "loader: $loader"
+        echo "loader_entry: $loader_entry"
+        echo "artifacts_current: $artifacts_current"
+        echo "artifacts_verification: $artifacts_verification"
+        echo "boot_runtime_state: $boot_runtime_state_value"
+        echo "configured_repo: $configured_repo"
+        echo "configured_boot_user: $configured_user"
+        echo "grub_cfg_entry: $grub_cfg_entry"
+        echo "grub_next_entry: ${grub_next_entry:-none}"
+        echo "grub_saved_entry: ${grub_saved_entry:-none}"
+        echo "active_sddm_windows_vm_conf: $active_sddm"
+        echo "current_boot_windows_vm: $cmdline_marker"
+        echo "target_user: $TARGET_USER"
+        echo "target_root: $target_root"
+        echo "session: phasezero-windows-vm.desktop"
+        echo "grub_entry_id: $BOOT_ID"
+        echo "recommended_direct_boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"
+        if [ "$boot_runtime_state_value" = "stale" ]; then
+            pz_warn "boot runtime is OUTDATED; the GRUB path still runs the previous version"
+            pz_warn "run with admin rights: pz windows-vm boot install"
+        fi
+    fi
 }
 
 dry_run_boot() {
@@ -2471,7 +3249,9 @@ cmd_boot() {
     parse_boot_common_args "$@"
     set -- "${PZ_BOOT_PARSED_ARGS[@]}"
     local sub="${1:-status}"
-    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+        shift || true
+    fi
     case "$sub" in
         install) install_boot "$@" ;;
         remove) remove_boot "$@" ;;
@@ -2481,7 +3261,8 @@ cmd_boot() {
         set-default) set_default_boot "$@" ;;
         clear-next) clear_next_boot "$@" ;;
         dry-run|plan) dry_run_boot "$@" ;;
-        *) pz_error "usage: windows-vm boot (install|remove|status|next|next-reboot|set-default|clear-next|dry-run) [--loader auto|grub|systemd-boot|refind|efi-stub] [--target-root /]"; exit 1 ;;
+        runtime-check|check-runtime) runtime_check "$@" ;;
+        *) pz_error "usage: windows-vm boot (install|remove|status|runtime-check|next|next-reboot|set-default|clear-next|dry-run) [--loader auto|grub|systemd-boot|refind|efi-stub] [--target-root /]"; exit 1 ;;
     esac
 }
 
@@ -2497,10 +3278,15 @@ case "$ACTION" in
     graphics|gpu) bash "$PZ_ROOT/linux/windows-vm/graphics.sh" "$@" ;;
     apps|frontends|containers) bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" "$@" ;;
     launch|start|run) launch_vm "$@" ;;
+    launch-check|launch-preflight) launch_check "$@" ;;
+    disk-check|check-disk) disk_check "$@" ;;
+    secure-storage|harden-storage) secure_storage "$@" ;;
+    guest-login) bash "$PZ_ROOT/linux/windows-vm/guest-login.sh" "$@" ;;
+    recover) bash "$PZ_ROOT/linux/windows-vm/recover.sh" "$@" ;;
     boot) cmd_boot "$@" ;;
     media|iso) bash "$PZ_ROOT/linux/windows-vm/media-inspect.sh" "$@" ;;
     preflight|check|readiness) bash "$PZ_ROOT/linux/windows-vm/preflight.sh" "$@" ;;
     provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|boot|media|preflight|provision)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|launch-check|disk-check|secure-storage|guest-login|recover|boot|media|preflight|provision)"; exit 1 ;;
 esac

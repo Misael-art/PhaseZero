@@ -192,8 +192,10 @@ release_asset_regex() {
 }
 
 plugin_path_by_candidates() {
+    # shellcheck disable=SC2178 # candidates is a comma-separated string, not array
     local candidates="$1" dir base candidate name id display
     [ -d "$PZ_DECKY_PLUGINS_DIR" ] || return 0
+    # shellcheck disable=SC2128 # candidates is a string, not array
     IFS=',' read -r -a candidate_array <<< "$candidates"
 
     for candidate in "${candidate_array[@]}"; do
@@ -232,7 +234,9 @@ plugin_path_by_candidates() {
 plugin_version() {
     local path="$1"
     if [ -f "$path/plugin.json" ]; then
-        jq -r '.version // empty' "$path/plugin.json" 2>/dev/null | grep -v '^$' && return 0 || true
+        if jq -r '.version // empty' "$path/plugin.json" 2>/dev/null | grep -v '^$' >/dev/null; then
+            return 0
+        fi
     fi
     [ -f "$path/package.json" ] || return 0
     jq -r '.version // empty' "$path/package.json" 2>/dev/null || true
@@ -670,7 +674,9 @@ download_remote_binaries_for_plugin() {
     bin_dir="$plugin_dir/bin"
     install -d "$bin_dir"
     while IFS=$'\t' read -r name url hash; do
-        [ -n "$name" ] && [ -n "$url" ] && [ -n "$hash" ] || continue
+        if [ -z "$name" ] || [ -z "$url" ] || [ -z "$hash" ]; then
+            continue
+        fi
         [[ "$name" =~ ^[A-Za-z0-9._-]+$ ]] || {
             pz_error "unsafe remote binary name: $name"
             return 1
@@ -933,10 +939,10 @@ install_store_plugin() {
     version="$(jq -r '.versions[0].name // empty' <<< "$entry")"
     hash="$(jq -r '.versions[0].hash // empty' <<< "$entry")"
     artifact="$(jq -r '.versions[0].artifact // empty' <<< "$entry")"
-    [ -n "$version" ] && [[ "$hash" =~ ^[A-Fa-f0-9]{64}$ ]] || {
+    if [ -z "$version" ] || ! [[ "$hash" =~ ^[A-Fa-f0-9]{64}$ ]]; then
         pz_warn "$id: Deckbrew version/hash invalid"
         return 1
-    }
+    fi
     if [ -z "$artifact" ] || [ "$artifact" = "null" ] || ! safe_download_url "$artifact"; then
         artifact="$PZ_DECKBREW_CDN_URL/$hash.zip"
     fi
@@ -1246,7 +1252,10 @@ install_github_dir_theme() {
     local display="$1" source="$2" repo subdir zip tmp root
     repo="${source%%:*}"
     subdir="${source#*:}"
-    [ -n "$repo" ] && [ -n "$subdir" ] || { pz_error "invalid theme source: $source"; return 1; }
+    if [ -z "$repo" ] || [ -z "$subdir" ]; then
+        pz_error "invalid theme source: $source"
+        return 1
+    fi
     require_cmds curl unzip
     ensure_plugin_dirs
     install -d "$PZ_DECKY_CACHE/themes"

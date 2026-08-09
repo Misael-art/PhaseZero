@@ -132,9 +132,9 @@ Describe 'CLI and UI coherence' {
         $list = Invoke-PhaseZeroCliCoherenceTest -Arguments '--list-items'
 
         $list.ExitCode | Should Be 0
-        $list.Stdout | Should Match '(?m)^\s*1\.\s+\[(app|config|tool)\]\s+'
+        $list.Stdout | Should Match '(?m)^\s*1\.\s+\[(app|config|tool)\]\s+\[[^\]]+\]\s+'
         $list.Stdout | Should Not Match '(?m)acoes:\s*\|\s*risco:\s*$'
-        $first = [regex]::Match($list.Stdout, '(?m)^\s*1\.\s+\[(?<kind>app|config|tool)\]\s+(?<id>[^\s|]+)')
+        $first = [regex]::Match($list.Stdout, '(?m)^\s*1\.\s+\[(?<kind>app|config|tool)\]\s+\[[^\]]+\]\s+(?<id>[^\s|]+)')
         $first.Success | Should Be $true
 
         $resultPath = Join-Path $env:TEMP ("phasezero-coherence-item-{0}.json" -f ([Guid]::NewGuid().ToString('N')))

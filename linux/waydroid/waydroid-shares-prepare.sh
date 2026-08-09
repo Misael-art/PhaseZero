@@ -21,6 +21,10 @@ SKIP_ACL="${PZ_WAYDROID_SHARE_SKIP_ACL:-0}"
 TEST_MODE="${PZ_WAYDROID_SHARE_TEST_MODE:-0}"
 INCLUDE_LINE="lxc.include = $SHARES_CONFIG"
 
+_PZ_TMP=()
+_pz_cleanup() { rm -f "${_PZ_TMP[@]}" 2>/dev/null || true; }
+trap _pz_cleanup EXIT
+
 log() {
     printf 'waydroid-shares: %s\n' "$*"
 }
@@ -85,7 +89,7 @@ ensure_include() {
 remove_include() {
     local file="$1" tmp
     [ -f "$file" ] || return 0
-    tmp="$(mktemp)"
+    tmp="$(mktemp)" && _PZ_TMP+=("$tmp")
     grep -Fvx "$INCLUDE_LINE" "$file" > "$tmp" || true
     install -m 0644 "$tmp" "$file"
     rm -f "$tmp"
@@ -97,7 +101,7 @@ write_config() {
         printf 'waydroid-shares: target home unresolved for %s\n' "$TARGET_USER" >&2
         return 1
     }
-    tmp="$(mktemp)"
+    tmp="$(mktemp)" && _PZ_TMP+=("$tmp")
     printf '%s\n' '# PhaseZero managed Waydroid host storage and USB access.' > "$tmp"
     printf '%s\n' '# Hidden credential directories are intentionally excluded.' >> "$tmp"
 

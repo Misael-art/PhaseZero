@@ -14,14 +14,15 @@ APPIMAGETOOL_SHA256="a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9
 # there (observed on an NTFS-3g SD-card checkout: ~80 stdlib files including
 # encodings/ vanished with no error, producing an AppImage that failed at
 # startup with "Fatal Python error: Failed to import encodings module"). Default
-# to a fresh dir under /tmp (tmpfs on most distros); pass PZ_APPIMAGE_WORK to
-# override, but keep it off FUSE/network mounts.
+# to a fresh dir under /tmp (tmpfs on most distros); do not inherit TMPDIR:
+# desktop launchers commonly put it in a small per-user runtime tmpfs. Pass
+# PZ_APPIMAGE_WORK to override, but keep it off FUSE/network mounts.
 WORK="${PZ_APPIMAGE_WORK:-}"
 CLEANUP_WORK=0
 SMOKE_DIR=""
 TOOL_TEMP=""
 if [ -z "$WORK" ]; then
-    WORK="$(mktemp -d "${TMPDIR:-/tmp}/pz-appimage-build.XXXXXX")"
+    WORK="$(mktemp -d "/tmp/pz-appimage-build.XXXXXX")"
     CLEANUP_WORK=1
 fi
 case "$WORK" in
@@ -62,10 +63,10 @@ if [ -z "$APPIMAGETOOL" ]; then
     fi
     printf '%s  %s\n' "$APPIMAGETOOL_SHA256" "$APPIMAGETOOL" | sha256sum -c -
 fi
-[ -n "$PYTHON_BIN" ] && [ -x "$PYTHON_BIN" ] || {
+if [ -z "$PYTHON_BIN" ] || [ ! -x "$PYTHON_BIN" ]; then
     echo "python executable missing: $PYTHON" >&2
     exit 69
-}
+fi
 command -v jq >/dev/null 2>&1 || { echo "jq missing" >&2; exit 69; }
 "$PYTHON_BIN" -m pip --version >/dev/null 2>&1 || { echo "python pip missing" >&2; exit 69; }
 
@@ -118,7 +119,7 @@ chmod +x "$APPDIR/AppRun" "$APPDIR/usr/lib/phasezero/linux/pz" \
     "$APPDIR/usr/lib/phasezero/linux/ui/native.sh"
 
 # Bundle sanity: the AppDir must run standalone from any cwd before packaging.
-SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pz-appimage-smoke.XXXXXX")"
+SMOKE_DIR="$(mktemp -d "/tmp/pz-appimage-smoke.XXXXXX")"
 (cd "$SMOKE_DIR" && QT_QPA_PLATFORM=offscreen "$APPDIR/AppRun" --smoke-test)
 rm -rf -- "$SMOKE_DIR"
 SMOKE_DIR=""

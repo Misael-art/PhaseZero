@@ -41,7 +41,7 @@ Describe 'Windows resources catalog' {
         (@($catalog['3d-viewer'].AppxPackageNames) -contains 'Microsoft.Microsoft3DViewer') | Should Be $true
 
         $catalog['winhance'].Kind | Should Be 'winhance'
-        $catalog['winhance'].InstallCommand | Should Be 'irm "https://get.winhance.net" | iex'
+        $catalog['winhance'].InstallCommand | Should Be 'download-validate-execute https://get.winhance.net/'
         $catalog['winhance'].SourceUrl | Should Be 'https://get.winhance.net/'
     }
 

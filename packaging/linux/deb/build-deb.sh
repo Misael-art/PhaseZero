@@ -21,6 +21,19 @@ cp "$SOURCE/packaging/linux/deb/control" "$PKG/DEBIAN/control"
 # always stamp the copy with version.json so a shipped .deb never reports a stale
 # version if the tracked file falls out of sync.
 sed -i "s/^Version:.*/Version: $VERSION/" "$PKG/DEBIAN/control"
+# No package manager owns /usr/local/lib/phasezero, so an upgrade leaves the
+# Windows VM GRUB boot runtime on the previous release with nothing to say so.
+# The notice only warns; re-running `boot install` rewrites grub.cfg and must
+# never happen inside a package transaction.
+cat > "$PKG/DEBIAN/postinst" <<'POSTINST'
+#!/bin/sh
+set -e
+if [ "$1" = configure ] && [ -r /usr/lib/phasezero/linux/windows-vm/boot-runtime-notice.sh ]; then
+    bash /usr/lib/phasezero/linux/windows-vm/boot-runtime-notice.sh || true
+fi
+exit 0
+POSTINST
+chmod 0755 "$PKG/DEBIAN/postinst"
 cp -a "$SOURCE/linux" "$SOURCE/profiles" "$SOURCE/assets" "$SOURCE/version.json" "$PKG/usr/lib/phasezero/"
 find "$PKG/usr/lib/phasezero" -type d -name __pycache__ -exec rm -rf {} +
 install -m755 "$SOURCE/packaging/linux/phasezero-control-center" "$PKG/usr/bin/"
@@ -37,6 +50,8 @@ else
     rm -rf -- "$MANUAL"
     mkdir -p "$MANUAL/control" "$MANUAL/data"
     cp "$PKG/DEBIAN/control" "$MANUAL/control/control"
+    cp "$PKG/DEBIAN/postinst" "$MANUAL/control/postinst"
+    chmod 0755 "$MANUAL/control/postinst"
     cp -a "$PKG/usr" "$MANUAL/data/"
     printf '2.0\n' > "$MANUAL/debian-binary"
     tar --owner=0 --group=0 -C "$MANUAL/control" -czf "$MANUAL/control.tar.gz" .

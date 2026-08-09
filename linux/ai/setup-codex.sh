@@ -10,10 +10,12 @@ pz_check_deps npm
 NPM_PREFIX="${PZ_NPM_PREFIX:-$HOME/.local/share/npm}"
 LOCAL_BIN="${PZ_LOCAL_BIN:-$HOME/.local/bin}"
 
+CODEX_VERSION="${PZ_CODEX_VERSION:-0.66.0}"
+
 install_codex() {
     mkdir -p "$NPM_PREFIX"
-    pz_info "installing/updating Codex CLI into user npm prefix: $NPM_PREFIX"
-    npm install -g --prefix "$NPM_PREFIX" @openai/codex@latest
+    pz_info "installing/updating Codex CLI $CODEX_VERSION into user npm prefix: $NPM_PREFIX"
+    npm install -g --prefix "$NPM_PREFIX" "@openai/codex@$CODEX_VERSION"
 }
 
 link_managed_bin() {

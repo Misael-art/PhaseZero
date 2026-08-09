@@ -34,6 +34,13 @@ Conflict rules:
 
 <!-- END PHASEZERO TOOLS -->
 
+## Active roadmaps
+
+- Homelab v1.15.1 remediation: read
+  `docs/roadmaps/homelab-v1.15.1-remediation.md` before any Homelab, server,
+  AI-appliance, release, or host-package work. Treat its anti-pollution rules,
+  phase gates, evidence matrix, and handoff format as mandatory.
+
 <!-- BEGIN PONYTAIL ARCHITECTURE -->
 Ponytail architecture runtime.
 

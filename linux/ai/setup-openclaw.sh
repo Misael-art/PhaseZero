@@ -53,18 +53,24 @@ link_managed_bin() {
     pz_info "linked $command_name into $LOCAL_BIN"
 }
 
+OPENCLAW_VERSION="${PZ_OPENCLAW_VERSION:-0.9.4}"
+
 install_openclaw() {
     pz_check_deps npm node jq
     if ! node_version_ok; then
         pz_error "OpenClaw requires Node >=22.19; current: $(node --version 2>/dev/null || echo missing)"
         return 1
     fi
+    if ! bash "$PZ_ROOT/linux/server/ai-policy-broker.sh" check openclaw-install version="$OPENCLAW_VERSION" >/dev/null 2>&1; then
+        pz_error "AI policy denies OpenClaw install (pinned version required); policy: ai-policy-broker status"
+        return 1
+    fi
     if openclaw_cmd >/dev/null 2>&1; then
         pz_info "OpenClaw already installed: $(openclaw_cmd)"
     else
         mkdir -p "$NPM_PREFIX"
-        pz_info "installing OpenClaw into user npm prefix: $NPM_PREFIX"
-        npm install -g --prefix "$NPM_PREFIX" openclaw@latest
+        pz_info "installing OpenClaw $OPENCLAW_VERSION into user npm prefix: $NPM_PREFIX"
+        npm install -g --prefix "$NPM_PREFIX" "openclaw@$OPENCLAW_VERSION"
         export PATH="$NPM_PREFIX/bin:$LOCAL_BIN:$PATH"
     fi
     link_managed_bin openclaw "$NPM_PREFIX/bin/openclaw"
@@ -214,7 +220,7 @@ dry_run() {
         --arg localBin "$LOCAL_BIN" \
         --arg configPath "$CONFIG_FILE" \
         --arg envFile "$ENV_FILE" \
-        '{tool:"openclaw",planned:["install npm package openclaw@latest into user prefix","link openclaw into local bin","run openclaw setup --non-interactive --accept-risk","sync PhaseZero MCP servers into ~/.openclaw/config.json","wire ai-memory MCP/hooks plugin when available","write env template without secrets"],npmPrefix:$npmPrefix,localBin:$localBin,configPath:$configPath,envFile:$envFile}'
+        '{tool:"openclaw",planned:["install npm package openclaw@<pinned> into user prefix","link openclaw into local bin","run openclaw setup --non-interactive --accept-risk","sync PhaseZero MCP servers into ~/.openclaw/config.json","wire ai-memory MCP/hooks plugin when available","write env template without secrets"],npmPrefix:$npmPrefix,localBin:$localBin,configPath:$configPath,envFile:$envFile}'
 }
 
 case "${1:-setup}" in

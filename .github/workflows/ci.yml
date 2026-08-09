@@ -10,14 +10,14 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install PSScriptAnalyzer
         shell: pwsh
         run: |
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
-          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -Repository PSGallery
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force -Scope CurrentUser -Repository PSGallery
 
       - name: Run PSScriptAnalyzer
         shell: pwsh
@@ -35,12 +35,24 @@ jobs:
 
   shell-lint:
     runs-on: ubuntu-latest
-    continue-on-error: true
+    strategy:
+      matrix:
+        shellcheck_version: ['0.9.0', '0.11.0']
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install shellcheck
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: Install shellcheck ${{ matrix.shellcheck_version }}
+        run: |
+          set -euo pipefail
+          V="${{ matrix.shellcheck_version }}"
+          if [ "$V" = "0.9.0" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          else
+            curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v${V}/shellcheck-v${V}.linux.x86_64.tar.xz" -o /tmp/shellcheck.tar.xz
+            tar -xJf /tmp/shellcheck.tar.xz -C /tmp
+            sudo mv "/tmp/shellcheck-v${V}/shellcheck" /usr/local/bin/shellcheck
+          fi
+          shellcheck --version
 
       - name: Run shellcheck on all shell scripts
         run: |
@@ -71,52 +83,229 @@ jobs:
           echo "pipefail+grep-q files: $found"
           # Non-blocking — informational
 
+  homelab-shell-test:
+    runs-on: ubuntu-latest
+    needs: shell-lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq and ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq ripgrep
+
+      - name: Syntax-check every shell script
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' f; do
+            bash -n "$f"
+          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          echo "bash -n: all .sh files passed"
+
+      - name: Validate homelab registry and compose lock JSON
+        run: |
+          set -euo pipefail
+          jq -e '.schemaVersion == 1 and (.profiles|length) == 6' assets/home-server/homelab-profiles.json >/dev/null
+          jq -e '.schemaVersion == 1 and (.images|type == "object") and (.images|length) == 13 and all(.images[]; (test(":latest") | not))' assets/home-server/docker-compose.lock.json >/dev/null
+
+      - name: Run hermetic homelab fault suite (no docker daemon expected)
+        run: |
+          set -euo pipefail
+          # docker is present in the runner; the suite must still pass without
+          # a daemon because it only exercises env-overridable paths.
+          bash tests/linux-homelab.sh
+
+  homelab-integration-disposable:
+    runs-on: ubuntu-latest
+    needs: shell-lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install jq and ripgrep
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq ripgrep
+
+      - name: E2E backup -> destroy -> restore -> data equality on disposable volumes
+        run: |
+          set -euo pipefail
+          # Volume mountpoints are root-owned; the homelab CLI writes them as root
+          # (same privilege model as the appliance host).
+          run_pz() { sudo -n PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" \
+            PZ_HOMELAB_BACKUP_ROOT="$PZ_HOMELAB_BACKUP_ROOT" \
+            PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' "$@"; }
+          export PZ_HOMELAB_STATE="$RUNNER_TEMP/pz-state"
+          export PZ_HOMELAB_BACKUP_ROOT="$RUNNER_TEMP/pz-backups"
+          mkdir -p "$PZ_HOMELAB_STATE" "$PZ_HOMELAB_BACKUP_ROOT"
+          docker volume create phasezero-homelab_vaultwarden_data >/dev/null
+          docker volume create phasezero-homelab_syncthing_data >/dev/null
+          docker pull -q busybox:latest >/dev/null
+          docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox sh -c 'echo db-secret-42 > /data/db.sqlite'
+          docker run --rm --network=host -v phasezero-homelab_syncthing_data:/data busybox sh -c 'echo sentinel-sync > /data/a.txt'
+
+          bk="$(run_pz ./linux/pz server homelab backup --dest "$PZ_HOMELAB_BACKUP_ROOT/bk1" 2>/dev/null | grep -v '^INFO:')"
+          jq -e '.ok == true and (.volumes | length) == 2' <<<"$bk" >/dev/null
+          vf="$(run_pz ./linux/pz server homelab backup verify --source "$PZ_HOMELAB_BACKUP_ROOT/bk1" 2>/dev/null | grep -v '^INFO:')"
+          jq -e '.verified == true' <<<"$vf" >/dev/null
+          echo "backup + verify ok"
+
+          docker volume rm phasezero-homelab_vaultwarden_data >/dev/null
+          docker volume rm phasezero-homelab_syncthing_data >/dev/null
+          docker volume create phasezero-homelab_vaultwarden_data >/dev/null
+          docker volume create phasezero-homelab_syncthing_data >/dev/null
+
+          rs="$(run_pz ./linux/pz server homelab restore --source "$PZ_HOMELAB_BACKUP_ROOT/bk1" --yes 2>/dev/null | grep -v '^INFO:')"
+          jq -e '.ok == true and .preRestore != null' <<<"$rs" >/dev/null
+
+          test "$(docker run --rm --network=host -v phasezero-homelab_vaultwarden_data:/data busybox cat /data/db.sqlite)" = "db-secret-42"
+          test "$(docker run --rm --network=host -v phasezero-homelab_syncthing_data:/data busybox cat /data/a.txt)" = "sentinel-sync"
+          echo "restore data equality ok (real docker volumes)"
+
+  homelab-python-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python test deps
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-venv libgl1 libegl1 libxkbcommon0 libdbus-1-3
+          python3 -m venv /tmp/pz-venv
+          /tmp/pz-venv/bin/pip install -q pytest pytest-timeout PySide6
+
+      - name: Run homelab player tests (offscreen)
+        run: |
+          set -euo pipefail
+          export QT_QPA_PLATFORM=offscreen
+          /tmp/pz-venv/bin/python -m pytest tests/test_homelab_player.py -q \
+            --timeout=90 --timeout-method=thread
+
+  compose-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate compose for core and core+extras
+        run: |
+          set -euo pipefail
+          docker compose version >/dev/null
+          # docker compose config is client-side and needs no daemon.
+          for k in VW_ADMIN_TOKEN NEXTCLOUD_DB_ROOT_PASSWORD NEXTCLOUD_DB_PASSWORD \
+                   GRAFANA_ADMIN_PASSWORD N8N_ENCRYPTION_KEY PAPERLESS_SECRET_KEY; do
+            export "$k=smoke"
+          done
+          docker compose -f assets/home-server/docker-compose.homelab.yml config --quiet
+          docker compose -f assets/home-server/docker-compose.homelab.yml \
+            -f assets/home-server/docker-compose.extras.yml config --quiet
+          cfg="$(docker compose -f assets/home-server/docker-compose.homelab.yml \
+            -f assets/home-server/docker-compose.extras.yml config --format json)"
+          # The docker socket may only be bound by the dedicated socket-proxy,
+          # read-only; every other service must reach docker via nothing at all.
+          sock_binds="$(jq -c '[.services | to_entries[] | . as $s | ($s.value.volumes // [])[] | select(.source == "/var/run/docker.sock") | {svc: $s.key, ro: (.read_only // false)}]' <<<"$cfg")"
+          jq -e '
+            length == 1
+            and .[0].svc == "socket-proxy"
+            and .[0].ro == true
+          ' <<<"$sock_binds" >/dev/null
+          # At least one service carries a memory limit.
+          jq -e '([.services[] | .deploy.resources.limits.memory? // .mem_limit?] | map(select(. != null)) | length) > 0' <<<"$cfg" >/dev/null
+
+  security-secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan the tree for leaked secrets
+        run: |
+          set -euo pipefail
+          GITLEAKS_VERSION=8.18.4
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tgz
+          tar -xzf /tmp/gitleaks.tgz -C /tmp gitleaks
+          /tmp/gitleaks detect --source . --no-banner -v
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    needs: shell-lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install smoke deps
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq ripgrep
+
+      - name: Stage runtime into install root and validate
+        run: |
+          set -euo pipefail
+          bash packaging/install-root-smoke.sh
+
   shell-test:
     runs-on: ubuntu-latest
     needs: shell-lint
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
       - name: Install test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq bash
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl git python3 python3-pil nodejs npm unzip xz-utils ripgrep yad ovmf sddm qemu-utils
 
-      - name: Unit-test common.sh functions
+      - name: Run full shell test suite
         run: |
           set -euo pipefail
-          # shellcheck source=linux/lib/common.sh
-          source linux/lib/common.sh
-          # Smoke test pz_path_resolve
-          result="$(pz_path_resolve "/nonexistent" "/bin" 2>/dev/null || true)"
-          if [ -z "$result" ]; then
-            echo "FAIL: pz_path_resolve returned empty"
-            exit 1
-          fi
-          echo "PASS: pz_path_resolve returns $result"
+          bash tests/runner.sh
 
-      - name: Assert no unresolvable grep -q in critical files
+  windows-vm-shell-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Windows VM test dependencies
         run: |
           set -euo pipefail
-          bad=0
-          for f in \
-            linux/windows-vm/preflight.sh \
-            linux/windows-vm/provision.sh \
-            linux/windows-vm/windows-vm.sh \
-            linux/audit/doctor.sh
-          do
-            if grep -q 'grep -q' "$f" 2>/dev/null; then
-              echo "FAIL: $f still has grep -q (should be grep >/dev/null)"
-              ((bad++)) || true
-            fi
-          done
-          if [ "$bad" -gt 0 ]; then exit 1; fi
-          echo "PASS: critical files free of grep -q"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq file p7zip-full genisoimage qemu-utils
+
+      - name: Run Windows VM shell suites (hermetic)
+        run: |
+          set -euo pipefail
+          bash -n linux/windows-vm/provision.sh
+          bash -n linux/windows-vm/windows-vm.sh
+          bash -n linux/windows-vm/media-inspect.sh
+          bash tests/linux-windows-vm.sh
+          bash tests/test_provision.sh
+
+  python-test:
+    runs-on: ubuntu-latest
+    # Qt subprocess regressions must report a failing test, never consume a
+    # runner indefinitely with no live log output.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python test deps
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq python3-venv libgl1 libegl1 libxkbcommon0 libdbus-1-3
+          python3 -m venv /tmp/pz-venv
+          /tmp/pz-venv/bin/pip install -q pytest pytest-timeout PySide6 pillow
+
+      - name: Run pytest (offscreen)
+        run: |
+          set -euo pipefail
+          export QT_QPA_PLATFORM=offscreen
+          # timeout-method=thread, not the default signal method: SIGALRM only
+          # interrupts the main thread once it returns to Python bytecode, so a
+          # test blocked in a subprocess or a socket read is never reclaimed.
+          # A hang then consumes the whole job timeout and the run is cancelled
+          # with no failing test named, which is exactly what happened on
+          # e91bcaf. The thread method dumps every thread's stack and kills the
+          # process, so the culprit appears in the log.
+          /tmp/pz-venv/bin/python -m pytest tests/ -q -vv \
+            --timeout=90 --timeout-method=thread
 
   pester:
     runs-on: windows-latest
     needs: lint
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Pester 3.4.0 and PSScriptAnalyzer
         shell: powershell
@@ -124,7 +313,7 @@ jobs:
           Set-StrictMode -Version Latest
           $ErrorActionPreference = 'Stop'
           Install-Module Pester -RequiredVersion 3.4.0 -Force -Scope CurrentUser -SkipPublisherCheck
-          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -RequiredVersion 1.25.0 -Force -Scope CurrentUser -SkipPublisherCheck
 
       - name: Parse PowerShell
         shell: pwsh

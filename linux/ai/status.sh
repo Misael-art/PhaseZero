@@ -137,58 +137,67 @@ tmp_ides="$(mktemp)"
 tmp_services="$(mktemp)"
 trap 'rm -f "$tmp_runtime" "$tmp_clis" "$tmp_ides" "$tmp_services"' EXIT
 
-command_record node node --version >> "$tmp_runtime"
-command_record npm npm --version >> "$tmp_runtime"
-command_record bun bun --version >> "$tmp_runtime"
-command_record pnpm pnpm --version >> "$tmp_runtime"
-command_record python3 python3 --version >> "$tmp_runtime"
-command_record uv uv --version >> "$tmp_runtime"
-command_record pipx pipx --version >> "$tmp_runtime"
-command_record cargo cargo --version >> "$tmp_runtime"
-command_record rustc rustc --version >> "$tmp_runtime"
-command_record go go version >> "$tmp_runtime"
-command_record jq jq --version >> "$tmp_runtime"
-command_record yq yq --version >> "$tmp_runtime"
-command_record git git --version >> "$tmp_runtime"
-command_record gitLfs git-lfs --version >> "$tmp_runtime"
-command_record rg rg --version >> "$tmp_runtime"
+{
+    command_record node node --version
+    command_record npm npm --version
+    command_record bun bun --version
+    command_record pnpm pnpm --version
+    command_record python3 python3 --version
+    command_record uv uv --version
+    command_record pipx pipx --version
+    command_record cargo cargo --version
+    command_record rustc rustc --version
+    command_record go go version
+    command_record jq jq --version
+    command_record yq yq --version
+    command_record git git --version
+    command_record gitLfs git-lfs --version
+    command_record rg rg --version
+} >> "$tmp_runtime"
 
-command_record codex codex --version >> "$tmp_clis"
-command_record claude claude --version >> "$tmp_clis"
-command_record opencode opencode --version >> "$tmp_clis"
-command_record hermes hermes --version >> "$tmp_clis"
-command_record openclaw openclaw --version >> "$tmp_clis"
-command_record gemini gemini --version >> "$tmp_clis"
-command_record aider aider --version >> "$tmp_clis"
-command_record goose goose --version >> "$tmp_clis"
-command_record gh gh --version >> "$tmp_clis"
-command_record ollama ollama --version >> "$tmp_clis"
-command_record ai-memory ai-memory --version >> "$tmp_clis"
-command_record ai-usagebar ai-usagebar --help >> "$tmp_clis"
-command_record ai-usagebar-tui ai-usagebar-tui --help >> "$tmp_clis"
-command_record headroom headroom --version >> "$tmp_clis"
-command_record rtk rtk --version >> "$tmp_clis"
-command_record codexbar codexbar --version >> "$tmp_clis"
+{
+    command_record codex codex --version
+    command_record claude claude --version
+    command_record opencode opencode --version
+    command_record hermes hermes --version
+    command_record openclaw openclaw --version
+    command_record gemini gemini --version
+    command_record aider aider --version
+    command_record goose goose --version
+    command_record gh gh --version
+    command_record ollama ollama --version
+    command_record ai-memory ai-memory --version
+    command_record ai-usagebar ai-usagebar --help
+    command_record ai-usagebar-tui ai-usagebar-tui --help
+    command_record headroom headroom --version
+    command_record rtk rtk --version
+    command_record codexbar codexbar --version
+} >> "$tmp_clis"
 
-ide_record vscode code "${XDG_CONFIG_HOME:-$HOME/.config}/Code/User/settings.json" >> "$tmp_ides"
-ide_record code-oss codium "${XDG_CONFIG_HOME:-$HOME/.config}/VSCodium/User/settings.json" >> "$tmp_ides"
-ide_record cursor cursor "${XDG_CONFIG_HOME:-$HOME/.config}/Cursor/User/settings.json" >> "$tmp_ides"
-ide_record windsurf windsurf "${XDG_CONFIG_HOME:-$HOME/.config}/Windsurf/User/settings.json" >> "$tmp_ides"
-ide_record zed zed "${XDG_CONFIG_HOME:-$HOME/.config}/zed/settings.json" >> "$tmp_ides"
-ide_record zcode zcode "${XDG_CONFIG_HOME:-$HOME/.config}/ai.z.zcode/store.json" >> "$tmp_ides"
-ide_record neovim nvim "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua" >> "$tmp_ides"
+{
+    ide_record vscode code "${XDG_CONFIG_HOME:-$HOME/.config}/Code/User/settings.json"
+    ide_record code-oss codium "${XDG_CONFIG_HOME:-$HOME/.config}/VSCodium/User/settings.json"
+    ide_record cursor cursor "${XDG_CONFIG_HOME:-$HOME/.config}/Cursor/User/settings.json"
+    ide_record windsurf windsurf "${XDG_CONFIG_HOME:-$HOME/.config}/Windsurf/User/settings.json"
+    ide_record zed zed "${XDG_CONFIG_HOME:-$HOME/.config}/zed/settings.json"
+    ide_record zcode zcode "${XDG_CONFIG_HOME:-$HOME/.config}/ai.z.zcode/store.json"
+    ide_record neovim nvim "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua"
+} >> "$tmp_ides"
 
-service_record docker docker system >> "$tmp_services"
-service_record ollama ollama system >> "$tmp_services"
-service_record ai-memory ai-memory user >> "$tmp_services"
-service_record openclaw openclaw user >> "$tmp_services"
-service_record openclaw-gateway openclaw-gateway user >> "$tmp_services"
-service_record codex-update-guard phasezero-codex-desktop-guard.service user >> "$tmp_services"
-service_record ai-desktop-update phasezero-ai-desktop-update.timer user >> "$tmp_services"
+{
+    service_record docker docker system
+    service_record ollama ollama system
+    service_record ai-memory ai-memory user
+    service_record openclaw openclaw user
+    service_record openclaw-gateway openclaw-gateway user
+    service_record codex-update-guard phasezero-codex-desktop-guard.service user
+    service_record ai-desktop-update phasezero-ai-desktop-update.timer user
+} >> "$tmp_services"
 
 runtime="$(records_to_object < "$tmp_runtime")"
 clis="$(records_to_object < "$tmp_clis")"
 ides="$(records_to_object < "$tmp_ides")"
+# shellcheck disable=SC2178 # intentional: services is a JSON string, not array
 services="$(records_to_object < "$tmp_services")"
 mcp="$(bash "$PZ_ROOT/linux/ai/mcp-manager.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,definitions:[],targets:{}}')"
 open_webui="$(docker_container_record open-webui)"
@@ -222,6 +231,7 @@ jq -e '.claude.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai se
 jq -e '.hermes.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai setup hermes" >> "$recommendations"
 jq -e '.openclaw.available == true' <<< "$clis" >/dev/null || echo "linux/pz ai setup openclaw" >> "$recommendations"
 bash "$PZ_ROOT/linux/ai/mcp-manager.sh" doctor 2>/dev/null | jq -e '(.problems | length) == 0' >/dev/null || echo "linux/pz ai repair" >> "$recommendations"
+# shellcheck disable=SC2128 # services is a JSON string, not array
 if ! jq -e '.ollama.available == true' <<< "$clis" >/dev/null; then
     echo "linux/pz ai setup ollama" >> "$recommendations"
 elif ! jq -e '.ollama.active == true' <<< "$services" >/dev/null; then
@@ -242,6 +252,7 @@ jq -e '.updater.timerEnabled == true and .codexDesktop.guardEnabled == true' <<<
 jq -e '.healthy == true' <<< "$router_status" >/dev/null || echo "linux/pz ai 9router install" >> "$recommendations"
 jq -e '.healthy == true' <<< "$odysseus_status" >/dev/null || echo "linux/pz ai odysseus install" >> "$recommendations"
 
+# shellcheck disable=SC2128 # services is a JSON string, not array
 jq -cn \
     --arg mode "$mode" \
     --arg memoryUrl "$AI_MEMORY_URL" \
@@ -264,7 +275,7 @@ jq -cn \
     --arg openclawConfig "$HOME/.openclaw/config.json" \
     --argjson hermesConfigExists "$([ -f "$HOME/.hermes/config.yaml" ] && echo true || echo false)" \
     --argjson openclawConfigExists "$([ -f "$HOME/.openclaw/config.json" ] && echo true || echo false)" \
-    --argjson hermesMcpCount "$([ -f "$HOME/.hermes/config.yaml" ] && grep -E '^  # BEGIN PHASEZERO MCP ' "$HOME/.hermes/config.yaml" 2>/dev/null | wc -l | tr -d ' ' || echo 0)" \
+    --argjson hermesMcpCount "$([ -f "$HOME/.hermes/config.yaml" ] && grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HOME/.hermes/config.yaml" 2>/dev/null || echo 0)" \
     --argjson openclawMcpCount "$([ -f "$HOME/.openclaw/config.json" ] && jq '.mcp.servers // {} | length' "$HOME/.openclaw/config.json" 2>/dev/null || echo 0)" \
     --argjson recommendations "$(jq -R . "$recommendations" | jq -s .)" \
     '{

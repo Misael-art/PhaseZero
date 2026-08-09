@@ -11,8 +11,8 @@ shift 2>/dev/null || true
 PROXY_ROOT="${PZ_AI_PROXY_ROOT:-$HOME/.local/share/phasezero/ai-proxies}"
 INSTALL_ROOT="${PZ_9ROUTER_INSTALL_ROOT:-$PROXY_ROOT/9router}"
 RUNTIME="$PROXY_ROOT/.runtime/node24"
-NODE_BIN="$RUNTIME/node_modules/node/bin/node"
-NPM_CLI="$RUNTIME/node_modules/npm/bin/npm-cli.js"
+NODE_BIN="${PZ_9ROUTER_NODE_BIN:-$RUNTIME/node_modules/node/bin/node}"
+NPM_CLI="${PZ_9ROUTER_NPM_CLI:-$RUNTIME/node_modules/npm/bin/npm-cli.js}"
 LOCAL_BIN="${PZ_LOCAL_BIN:-$HOME/.local/bin}"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/9router"
@@ -32,6 +32,9 @@ WATCH_TIMER="phasezero-9router-watch.timer"
 BRIDGE_SERVICE="phasezero-9router-unix-bridge.service"
 PACKAGE_BIN="$INSTALL_ROOT/bin/9router"
 PACKAGE_JSON="$INSTALL_ROOT/lib/node_modules/9router/package.json"
+PACKAGE_ROOT="$INSTALL_ROOT/lib/node_modules/9router"
+SERVER_RUNNER="$PZ_ROOT/linux/ai/9router-server-runner.js"
+SERVER_WRAPPER="$LOCAL_BIN/phasezero-9router-server"
 BACKUP_ROOT="$PROXY_ROOT/.9router-backups"
 CLIENT_WRAPPER="$LOCAL_BIN/phasezero-9router-run"
 DASHBOARD_ENTRY="${XDG_DATA_HOME:-$HOME/.local/share}/applications/phasezero-9router.desktop"
@@ -70,9 +73,32 @@ env_upsert() {
 }
 
 ensure_node_runtime() {
-    local npm
+    local npm system_node system_npm_cli node_version node_major
+    if [ -n "${PZ_9ROUTER_NODE_BIN:-}" ] && [ -x "$NODE_BIN" ] \
+        && [ -n "${PZ_9ROUTER_NPM_CLI:-}" ] && [ -f "$NPM_CLI" ]; then
+        install -d "$RUNTIME/bin"
+        ln -sfn "$NODE_BIN" "$RUNTIME/bin/node"
+        pz_debug "Using verified external Node.js runtime for 9Router"
+        return 0
+    fi
     npm="$(command -v npm || true)"
     [ -n "$npm" ] || { pz_error "npm required"; return 1; }
+    system_node="$(command -v node || true)"
+    if [ -n "$system_node" ]; then
+        node_version="$("$system_node" --version 2>/dev/null || true)"
+        node_major="${node_version#v}"
+        node_major="${node_major%%.*}"
+        system_npm_cli="$(readlink -f "$npm" 2>/dev/null || true)"
+        if [[ "$node_major" =~ ^[0-9]+$ ]] && [ "$node_major" -ge 24 ] \
+            && [ -f "$system_npm_cli" ]; then
+            NODE_BIN="$system_node"
+            NPM_CLI="$system_npm_cli"
+            install -d "$RUNTIME/bin"
+            ln -sfn "$NODE_BIN" "$RUNTIME/bin/node"
+            pz_debug "Using existing Node.js $node_version for 9Router"
+            return 0
+        fi
+    fi
     if [ ! -x "$NODE_BIN" ] || [ ! -f "$NPM_CLI" ]; then
         pz_info "Installing isolated Node.js 24 runtime for 9Router"
         install -d "$RUNTIME"
@@ -110,7 +136,7 @@ EOF
     chmod 0600 "$ENV_FILE"
 
     local active_model
-    active_model="$(jq -r '.model // "phasezero-smart"' "$SETTINGS_FILE" 2>/dev/null || echo phasezero-smart)"
+    active_model="$(jq -r '.activeCombo // .model // "Default"' "$SETTINGS_FILE" 2>/dev/null || echo Default)"
     jq -n --arg endpoint "$BASE_URL/v1" --arg dashboard "$BASE_URL/dashboard" \
         --arg model "$active_model" --arg env "$ENV_FILE" \
         '{schemaVersion:1,baseUrl:$endpoint,dashboardUrl:$dashboard,apiKeyEnv:"PHASEZERO_9ROUTER_API_KEY",model:$model,activeCombo:$model,managedEnv:$env}' \
@@ -119,13 +145,27 @@ EOF
 }
 
 write_wrapper_and_units() {
+    local managed_pz="${PZ_9ROUTER_MANAGED_PZ:-$PZ_ROOT/linux/pz}"
+    if [ -z "${PZ_9ROUTER_MANAGED_PZ:-}" ] && [ -x /usr/lib/phasezero/linux/pz ]; then
+        managed_pz=/usr/lib/phasezero/linux/pz
+    fi
     pz_write_managed_file "$LOCAL_BIN/9router" user <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export PATH="$RUNTIME/bin:\$PATH"
-exec "$PACKAGE_BIN" --host "$HOST" --port "$PORT" --no-browser --skip-update "\$@"
+case "\${1:-} \${2:-}" in
+  "xai video") exec "$PACKAGE_BIN" "\$@" ;;
+esac
+exec "$managed_pz" ai 9router tui "\$@"
 EOF
     chmod +x "$LOCAL_BIN/9router"
+
+    pz_write_managed_file "$SERVER_WRAPPER" user <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export PATH="$RUNTIME/bin:\$PATH"
+exec "$NODE_BIN" "$SERVER_RUNNER" "$PACKAGE_ROOT"
+EOF
+    chmod 0700 "$SERVER_WRAPPER"
 
     pz_write_managed_file "$CLIENT_WRAPPER" user <<EOF
 #!/usr/bin/env bash
@@ -150,7 +190,7 @@ EOF
 Type=Application
 Name=9Router
 Comment=PhaseZero AI routing dashboard
-Exec=$HOME/.local/share/phasezero/current/linux/pz ai 9router dashboard
+Exec=$managed_pz ai 9router dashboard
 Icon=applications-science
 Terminal=false
 Categories=X-PhaseZero-WebApp;
@@ -159,7 +199,9 @@ X-PhaseZero-MenuGroup=web.ai
 X-PhaseZero-Managed=true
 EOF
     chmod 0644 "$DASHBOARD_ENTRY"
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    fi
 
     pz_write_managed_file "$SYSTEMD_USER_DIR/$SERVICE" user <<EOF
 [Unit]
@@ -169,10 +211,11 @@ After=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$ENV_FILE
-ExecStart=$LOCAL_BIN/9router
+ExecStart=$SERVER_WRAPPER
 Restart=on-failure
 RestartSec=5
 WorkingDirectory=$INSTALL_ROOT
+KillMode=mixed
 
 [Install]
 WantedBy=default.target
@@ -185,7 +228,7 @@ After=$SERVICE
 
 [Service]
 Type=oneshot
-ExecStart=$HOME/.local/share/phasezero/current/linux/ai/9router-manager.sh watch-once
+ExecStart=$managed_pz ai 9router watch-once
 EOF
 
     pz_write_managed_file "$SYSTEMD_USER_DIR/$WATCH_TIMER" user <<EOF
@@ -222,6 +265,87 @@ WantedBy=default.target
 EOF
 }
 
+ensure_attached_service() {
+    if [ "$(service_state)" != active ]; then
+        systemctl --user start "$SERVICE"
+    fi
+    wait_ready 60
+}
+
+tui_show() {
+    local title="$1" body="$2"
+    if command -v whiptail >/dev/null 2>&1 && [ -t 1 ]; then
+        whiptail --title "$title" --scrolltext --msgbox "$body" 24 90
+    else
+        printf '\n=== %s ===\n%s\n' "$title" "$body"
+    fi
+}
+
+tui_9router() {
+    ensure_attached_service || return 1
+    if [ ! -t 0 ] || [ ! -t 1 ] || ! command -v whiptail >/dev/null 2>&1; then
+        status_json
+        return 0
+    fi
+    local choice body
+    while :; do
+        choice="$(whiptail --title "9Router — PhaseZero" \
+            --menu "Attach seguro ao serviço ativo. Chaves sempre ocultas." 22 82 10 \
+            status "Saúde, listener e watchdog" \
+            providers "Providers ativos" \
+            combos "Combos e fallback" \
+            usage "Uso agregado" \
+            dashboard "Abrir dashboard local" \
+            exit "Sair sem parar o serviço" \
+            3>&1 1>&2 2>&3)" || choice="exit"
+        case "$choice" in
+            status)
+                body="$(status_json | jq 'del(.settingsPath,.healthLog)')"
+                tui_show "Status 9Router" "$body"
+                ;;
+            providers)
+                body="$(provider_status | jq 'walk(if type == "object" then del(.apiKey,.key,.secret,.token,.authorization) else . end)')"
+                tui_show "Providers" "$body"
+                ;;
+            combos)
+                body="$(combo_list | jq 'walk(if type == "object" then del(.apiKey,.key,.secret,.token,.authorization) else . end)')"
+                tui_show "Combos" "$body"
+                ;;
+            usage)
+                body="$(api_request GET /api/usage/stats | usage_summary)"
+                tui_show "Uso agregado" "$body"
+                ;;
+            dashboard) dashboard ;;
+            exit|"") return 0 ;;
+        esac
+    done
+}
+
+repair_9router() {
+    ensure_dirs
+    [ -x "$PACKAGE_BIN" ] || { pz_error "9Router package missing; run install first"; return 1; }
+    [ -f "$SERVER_RUNNER" ] || { pz_error "PhaseZero 9Router server runner missing"; return 1; }
+    # The generated systemd wrapper embeds NODE_BIN.  Resolve the managed or
+    # system runtime before rewriting it; otherwise a removed isolated runtime
+    # produces a permanent 127 restart loop.
+    ensure_node_runtime
+    if [ -n "$(listener_pid)" ] && ! service_owns_listener; then
+        pz_error "port $PORT is owned by a non-PhaseZero process; refusing to kill it"
+        return 1
+    fi
+    write_wrapper_and_units
+    systemctl --user daemon-reload
+    systemctl --user enable "$SERVICE" "$BRIDGE_SERVICE" "$WATCH_TIMER" >/dev/null
+    systemctl --user restart "$SERVICE"
+    systemctl --user restart "$BRIDGE_SERVICE"
+    systemctl --user start "$WATCH_TIMER"
+    wait_ready 90
+    # oneshot start must succeed; systemd returns non-zero for 203/EXEC and
+    # proves the migrated stable ExecStart path is executable now.
+    systemctl --user start "$WATCH_SERVICE"
+    status_json
+}
+
 registry_metadata() {
     ensure_node_runtime
     PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" view 9router version dist.integrity dist.shasum --json
@@ -256,7 +380,9 @@ install_verified_package() (
         return 1
     }
     [ "$(service_state)" = active ] && was_active=true
-    $was_active && systemctl --user stop "$SERVICE" >/dev/null 2>&1 || true
+    if $was_active; then
+        systemctl --user stop "$SERVICE" >/dev/null 2>&1 || true
+    fi
     backup="$BACKUP_ROOT/$(installed_version)-$(date +%Y%m%d-%H%M%S)"
     if [ -e "$INSTALL_ROOT" ]; then mv "$INSTALL_ROOT" "$backup"; fi
     if ! mv "$stage" "$INSTALL_ROOT"; then
@@ -272,7 +398,9 @@ install_verified_package() (
             rm -rf "$INSTALL_ROOT"
             [ -e "$backup" ] && mv "$backup" "$INSTALL_ROOT"
             systemctl --user daemon-reload
-            $was_active && systemctl --user start "$SERVICE" >/dev/null 2>&1 || true
+            if $was_active; then
+                systemctl --user start "$SERVICE" >/dev/null 2>&1 || true
+            fi
             pz_error "9Router update failed health check; rollback applied"
             return 1
         fi
@@ -305,18 +433,65 @@ install_9router() {
     fi
     wait_ready 90
     ensure_api_key
+    ensure_active_combo
     pz_info "9Router installed: $BASE_URL/dashboard"
 }
 
 wait_ready() {
     local timeout="${1:-30}" i
     for ((i = 0; i < timeout; i++)); do
-        curl -fsS --max-time 2 "$BASE_URL/api/health" >/dev/null 2>&1 && return 0
+        if curl -fsS --max-time 2 "$BASE_URL/api/health" >/dev/null 2>&1 \
+            && service_owns_listener && listener_is_loopback; then
+            return 0
+        fi
         sleep 1
     done
     pz_error "9Router did not become healthy within ${timeout}s"
     systemctl --user status "$SERVICE" --no-pager >&2 2>/dev/null || true
     return 1
+}
+
+listener_row() {
+    command -v ss >/dev/null 2>&1 || return 1
+    ss -H -ltnp "sport = :$PORT" 2>/dev/null | head -1
+}
+
+listener_pid() {
+    listener_row | sed -nE 's/.*pid=([0-9]+).*/\1/p'
+}
+
+listener_address() {
+    listener_row | awk 'NR == 1 {print $4}'
+}
+
+listener_is_loopback() {
+    local address
+    address="$(listener_address)"
+    case "$address" in
+        127.0.0.1:*|'[::1]':*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+pid_descends_from() {
+    local pid="$1" ancestor="$2" parent steps=0
+    [ -n "$pid" ] && [ -n "$ancestor" ] && [ "$ancestor" -gt 0 ] 2>/dev/null || return 1
+    while [ "$pid" -gt 1 ] 2>/dev/null && [ "$steps" -lt 32 ]; do
+        [ "$pid" = "$ancestor" ] && return 0
+        parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+        [ -n "$parent" ] || return 1
+        pid="$parent"
+        steps=$((steps + 1))
+    done
+    return 1
+}
+
+service_owns_listener() {
+    local pid main
+    [ "$(service_state)" = active ] || return 1
+    pid="$(listener_pid)"
+    main="$(systemctl --user show "$SERVICE" -p MainPID --value 2>/dev/null || true)"
+    pid_descends_from "$pid" "$main"
 }
 
 cli_token() {
@@ -362,11 +537,15 @@ service_state() {
 }
 
 status_json() {
-    local installed=false service version="" health=false providers='{"connections":[]}' combos='{"combos":[]}' usage='{}'
+    local installed=false service version="" health=false owner=false loopback=false providers='{"connections":[]}' combos='{"combos":[]}' usage='{}' address pid
     [ -x "$PACKAGE_BIN" ] && installed=true
     service="$(service_state)"; service="${service:-inactive}"
     if $installed; then version="$(installed_version)"; fi
-    if curl -fsS --max-time 2 "$BASE_URL/api/health" >/dev/null 2>&1; then
+    service_owns_listener && owner=true
+    listener_is_loopback && loopback=true
+    address="$(listener_address)"
+    pid="$(listener_pid)"
+    if $installed && $owner && $loopback && curl -fsS --max-time 2 "$BASE_URL/api/health" >/dev/null 2>&1; then
         health=true
         providers="$(api_request GET /api/providers 2>/dev/null || echo '{"connections":[]}')"
         combos="$(api_request GET /api/combos 2>/dev/null || echo '{"combos":[]}')"
@@ -374,11 +553,13 @@ status_json() {
     fi
     jq -cn --arg version "$version" --arg service "$service" --arg endpoint "$BASE_URL/v1" \
         --arg dashboard "$BASE_URL/dashboard" --arg settings "$SETTINGS_FILE" \
-        --arg healthLog "$HEALTH_LOG" \
+        --arg healthLog "$HEALTH_LOG" --arg listenerAddress "$address" --arg listenerPid "$pid" \
         --argjson installed "$installed" --argjson health "$health" \
+        --argjson owner "$owner" --argjson loopback "$loopback" \
         --argjson providers "$providers" --argjson combos "$combos" --argjson usage "$usage" \
         '{schemaVersion:1,id:"9router",installed:$installed,version:$version,service:$service,healthy:$health,
           endpoint:$endpoint,dashboard:$dashboard,settingsPath:$settings,
+          listener:{address:$listenerAddress,pid:($listenerPid|tonumber? // null),ownedByService:$owner,loopbackOnly:$loopback},
           providers:{total:(($providers.connections // $providers.providers // [])|length),active:(($providers.connections // $providers.providers // [])|map(select((.isActive // true)==true))|length)},
           combos:{total:(($combos.combos // $combos.data // [])|length),names:(($combos.combos // $combos.data // [])|map(.name))},
           usage:$usage,
@@ -528,7 +709,10 @@ combo_list() {
 
 combo_create() {
     local name="${1:-}" csv="${2:-}" models payload
-    [ -n "$name" ] && [ -n "$csv" ] || { pz_error "usage: pz ai 9router combo create <name> <model1,model2>"; return 2; }
+    if [ -z "$name" ] || [ -z "$csv" ]; then
+        pz_error "usage: pz ai 9router combo create <name> <model1,model2>"
+        return 2
+    fi
     models="$(printf '%s' "$csv" | jq -R 'split(",") | map(select(length>0))')"
     payload="$(mktemp)"; jq -n --arg name "$name" --argjson models "$models" '{name:$name,models:$models}' > "$payload"
     api_request POST /api/combos "$payload" | jq 'del(.apiKey,.secret,.token)'
@@ -543,6 +727,24 @@ combo_switch() {
     jq --arg name "$name" '.model=$name | .activeCombo=$name' "$SETTINGS_FILE" > "$tmp"
     install -m 0600 "$tmp" "$SETTINGS_FILE"; rm -f "$tmp"
     jq -cn --arg combo "$name" --arg settings "$SETTINGS_FILE" '{activeCombo:$combo,settings:$settings}'
+}
+
+ensure_active_combo() {
+    local combo_json current selected
+    combo_json="$(combo_list)"
+    current="$(jq -r '.activeCombo // .model // empty' "$SETTINGS_FILE" 2>/dev/null || true)"
+    if [ -n "$current" ] && printf '%s' "$combo_json" | jq -e --arg name "$current" '.combos[] | select(.name==$name)' >/dev/null; then
+        return 0
+    fi
+    selected="$(printf '%s' "$combo_json" | jq -r '
+        [.combos[]?.name] as $names
+        | (($names | map(select(test("claude"; "i"))) | .[0])
+           // (if ($names | index("Default")) then "Default" else $names[0] end)
+           // empty)
+    ')"
+    [ -n "$selected" ] || { pz_error "9Router has no combo available for Claude"; return 1; }
+    combo_switch "$selected" >/dev/null
+    pz_info "9Router Claude combo selected: $selected"
 }
 
 usage_json() {
@@ -609,17 +811,25 @@ client_status() {
 }
 
 doctor_9router() {
-    local package=false env_mode="missing" data_mode="missing" service health=false timer bridge=false
+    local package=false env_mode="missing" data_mode="missing" service health=false owner=false loopback=false timer bridge=false
     [ -x "$PACKAGE_BIN" ] && package=true
     [ -e "$ENV_FILE" ] && env_mode="$(stat -c %a "$ENV_FILE")"
     [ -e "$DATA_DIR" ] && data_mode="$(stat -c %a "$DATA_DIR")"
     service="$(service_state)"; service="${service:-inactive}"
-    curl -fsS --max-time 2 "$BASE_URL/api/health" >/dev/null 2>&1 && health=true
+    service_owns_listener && owner=true
+    listener_is_loopback && loopback=true
+    if $package && $owner && $loopback && curl -fsS --max-time 2 "$BASE_URL/api/health" >/dev/null 2>&1; then health=true; fi
     timer="$(systemctl --user is-enabled "$WATCH_TIMER" 2>/dev/null || true)"
     [ -S "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/phasezero/9router.sock" ] && bridge=true
     jq -cn --argjson package "$package" --arg service "$service" --argjson health "$health" \
         --arg envMode "$env_mode" --arg dataMode "$data_mode" --arg timer "$timer" --argjson bridge "$bridge" \
-        '{id:"9router",package:$package,service:$service,healthy:$health,permissions:{env:$envMode,data:$dataMode},passiveWatchdog:$timer,privateContainerBridge:$bridge,secure:($envMode=="600" and $dataMode=="700" and $bridge),secretsRedacted:true}'
+        --argjson owner "$owner" --argjson loopback "$loopback" \
+        '{id:"9router",package:$package,service:$service,healthy:$health,
+          listener:{ownedByService:$owner,loopbackOnly:$loopback},
+          permissions:{env:$envMode,data:$dataMode},passiveWatchdog:$timer,
+          privateContainerBridge:$bridge,
+          secure:($envMode=="600" and $dataMode=="700" and $bridge and $owner and $loopback),
+          secretsRedacted:true}'
 }
 
 dashboard() {
@@ -628,10 +838,11 @@ dashboard() {
     pz_info "9Router dashboard opened: $BASE_URL/dashboard"
 }
 
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 case "$ACTION" in
     install|setup) install_9router ;;
     check-update|check) check_update ;;
-    update|upgrade) ensure_dirs; install_verified_package; ensure_api_key ;;
+    update|upgrade) ensure_dirs; install_verified_package; ensure_api_key; ensure_active_combo ;;
     rollback) rollback_package ;;
     doctor) doctor_9router ;;
     status) status_json ;;
@@ -640,6 +851,8 @@ case "$ACTION" in
     restart) systemctl --user restart "$SERVICE" "$BRIDGE_SERVICE"; wait_ready 60 ;;
     test|health) test_9router ;;
     dashboard|open) dashboard ;;
+    tui|terminal) tui_9router ;;
+    repair|migrate) repair_9router ;;
     sync-secrets) sync_secrets "${1:-}" ;;
     provider)
         case "${1:-status}" in
@@ -672,5 +885,6 @@ case "$ACTION" in
             status) systemctl --user status "$WATCH_TIMER" --no-pager ;;
             *) pz_error "usage: pz ai 9router watchdog (status|install|remove|run)"; exit 2 ;;
         esac ;;
-    *) pz_error "usage: pz ai 9router (install|status|start|stop|restart|test|dashboard|provider|combo|usage|client|check-update|update|rollback|doctor|watchdog)"; exit 2 ;;
+    *) pz_error "usage: pz ai 9router (install|status|start|stop|restart|test|dashboard|tui|repair|provider|combo|usage|client|check-update|update|rollback|doctor|watchdog)"; exit 2 ;;
 esac
+fi

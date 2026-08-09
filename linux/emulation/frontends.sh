@@ -226,7 +226,9 @@ Icon=$PZ_EMULATION_ROOT/media/icons/phasezero/frontends.svg
 Categories=Game;Emulator;
 X-PhaseZero-Managed=true
 EOF
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    fi
 }
 
 ensure_base_frontends() {

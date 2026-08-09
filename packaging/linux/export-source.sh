@@ -31,7 +31,7 @@ if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
             tar -C "$ROOT" -cf - -- "${changed[@]}" | tar -x -C "$DESTINATION"
         fi
         while IFS= read -r -d '' path; do
-            rm -rf -- "$DESTINATION/$path"
+            rm -rf -- "${DESTINATION:?}/$path"
         done < <(git -C "$ROOT" diff --name-only --diff-filter=D -z)
     fi
 else

@@ -25,8 +25,8 @@ WATCH_TIMER="phasezero-omniroute-watch.timer"
 SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 DASHBOARD_ENTRY="${XDG_DATA_HOME:-$HOME/.local/share}/applications/phasezero-omniroute.desktop"
 CLIENT_WRAPPER="$LOCAL_BIN/phasezero-omniroute-run"
-OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.jsonc"
-OPENCODE_CONFIG_JSON="${HOME}/.config/opencode/opencode.json"
+OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.json"
+OPENCODE_CONFIG_JSON="${HOME}/.config/opencode/opencode.jsonc"
 OMNIROUTE_BIN="${INSTALL_PREFIX}/bin/omniroute"
 BACKUP_ROOT="$PROXY_ROOT/.omniroute-backups"
 
@@ -70,7 +70,8 @@ env_upsert() {
     local key="$1" value="$2" tmp
     ensure_dirs
     [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     grep -vE "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
     printf '%s=%s\n' "$key" "$value" >> "$tmp"
     install -m 0600 "$tmp" "$ENV_FILE"
@@ -173,7 +174,9 @@ X-PhaseZero-MenuGroup=web.ai
 X-PhaseZero-Managed=true
 EOF
     chmod 0644 "$DASHBOARD_ENTRY"
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    fi
 
     pz_write_managed_file "$SYSTEMD_USER_DIR/$SERVICE" user <<EOF
 [Unit]
@@ -299,7 +302,8 @@ ensure_api_key() {
     local password
     password="$(env_get INITIAL_PASSWORD)"
 
-    payload="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    payload="$(pz_tempfile)"
     jq -n --arg name "phasezero-managed" '{name:$name}' > "$payload"
 
     response="$(curl -fsS --max-time 10 -X POST "http://127.0.0.1:$port/api/keys" \
@@ -404,7 +408,8 @@ test_omniroute() {
         [ -n "$model" ] || model="$(jq -r '.data[0].id // empty' <<< "$body" 2>/dev/null || true)"
 
         if [ -n "$model" ]; then
-            payload="$(mktemp)"
+            # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+            payload="$(pz_tempfile)"
             jq -n --arg model "$model" '{model:$model,messages:[{role:"user",content:"Reply only: OK"}],stream:false,max_tokens:8}' > "$payload"
             chat_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 -X POST "http://127.0.0.1:$port/v1/chat/completions" \
                 -H "Authorization: Bearer $key" -H 'Content-Type: application/json' --data-binary "@$payload" 2>/dev/null || true)"
@@ -444,7 +449,8 @@ provider_sync() {
     while IFS=$'\t' read -r provider name secret; do
         case "$provider" in openai|anthropic|gemini|openrouter|deepseek|glm|kimi|minimask|qwen|mistral|groq|nvidia) ;; *) skipped=$((skipped + 1)); continue ;; esac
         [ -n "$secret" ] || { skipped=$((skipped + 1)); continue; }
-        payload="$(mktemp)"
+        # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+        payload="$(pz_tempfile)"
         jq -n --arg provider "$provider" --arg name "${name:-PhaseZero $provider}" --arg apiKey "$secret" \
             '{provider:$provider,name:$name,apiKey:$apiKey}' > "$payload"
         if response="$(api_request POST /api/providers "$payload" 2>/dev/null)" && jq -e '(.error // empty) == ""' <<< "$response" >/dev/null 2>&1; then
@@ -501,7 +507,8 @@ create_combo() {
     combos="$(api_request GET /api/combos 2>/dev/null || echo '{"combos":[]}')"
     id="$(jq -r --arg name "$name" '(.combos // .data // [])[] | select(.name==$name) | .id // empty' <<< "$combos" | head -1)"
 
-    payload="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    payload="$(pz_tempfile)"
     jq -n --arg name "$name" --argjson models "$models_json" '{name:$name,models:$models}' > "$payload"
     if [ -n "$id" ]; then
         api_request PUT "/api/combos/$id" "$payload" >/dev/null 2>&1 || true
@@ -576,11 +583,13 @@ opencode_custom_provider() {
     [ -n "$config_file" ] || config_file="$OPENCODE_CONFIG"
 
     mkdir -p "$(dirname "$config_file")"
+    # shellcheck disable=SC2016 # literal "$schema" JSON key in generated config
     [ -f "$config_file" ] || printf '{\n  "$schema": "https://opencode.ai/config.json",\n  "mcp": {}\n}\n' > "$config_file"
     pz_backup_file "$config_file" user >/dev/null
 
     local tmp
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     jq --arg key "$key" --arg port "$port" '
         .provider.omniroute = {
             name: "OmniRoute Smart Router",

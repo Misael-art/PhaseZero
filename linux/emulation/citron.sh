@@ -55,7 +55,9 @@ Terminal=false
 Categories=Game;Emulator;
 MimeType=application/x-nx-nsp;application/x-nx-xci;
 EOF
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    fi
 }
 
 configure_citron_dirs() {
@@ -222,6 +224,7 @@ integrate_with_emudeck() {
     local es_rules="$emudeck_backend/configs/emulationstation/custom_systems/es_find_rules.xml"
     if [ -f "$es_rules" ] && ! grep -q '<emulator name="CITRON">' "$es_rules" 2>/dev/null; then
         if command -v xmlstarlet >/dev/null 2>&1; then
+            # shellcheck disable=SC2016 # xmlstarlet --var literal/reference, not shell expansion
             xmlstarlet ed -S --inplace \
                 -s '/ruleList' -t elem -n 'emulator' \
                 --var newEmu '$prev' \
@@ -260,8 +263,11 @@ ALTEOF
 
     if [ -f "$emudeck_home/settings.json" ] && command -v jq >/dev/null 2>&1; then
         local tmp
-        tmp="$(mktemp)"
-        jq '.android.overwriteConfigEmus.citron.status = true' "$emudeck_home/settings.json" > "$tmp" 2>/dev/null && mv "$tmp" "$emudeck_home/settings.json" || rm -f "$tmp"
+        # shellcheck disable=SC2119 # mktemp default template
+        tmp="$(pz_tempfile)"
+        if ! jq '.android.overwriteConfigEmus.citron.status = true' "$emudeck_home/settings.json" > "$tmp" 2>/dev/null || ! mv "$tmp" "$emudeck_home/settings.json"; then
+            rm -f "$tmp"
+        fi
     fi
 
     pz_info "Citron integrated with EmuDeck"

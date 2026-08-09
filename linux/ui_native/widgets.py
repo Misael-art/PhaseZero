@@ -648,6 +648,12 @@ class ParameterDialog(QDialog):
                     )
             elif parameter.kind == "boolean":
                 field = QCheckBox(parameter.label)
+            elif parameter.kind == "secret":
+                # Masked on screen and routed to stdin by the runner, so the
+                # value never reaches argv or the echoed command line.
+                field = QLineEdit()
+                field.setEchoMode(QLineEdit.Password)
+                field.setPlaceholderText(parameter.placeholder)
             else:
                 field = QLineEdit()
                 field.setPlaceholderText(parameter.placeholder)

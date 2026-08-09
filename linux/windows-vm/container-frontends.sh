@@ -31,7 +31,12 @@ vendor_msis() {
         name="$(jq -r ".components.$entry.file // empty" "$manifest")"
         url="$(jq -r ".components.$entry.url // empty" "$manifest")"
         sha="$(jq -r ".components.$entry.sha256 // empty" "$manifest")"
-        [ -n "$name" ] && [ -n "$sha" ] || { pz_warn "vendor/$entry missing file or sha256 in manifest"; continue; }
+        if [ -n "$name" ] && [ -n "$sha" ]; then
+            :
+        else
+            pz_warn "vendor/$entry missing file or sha256 in manifest"
+            continue
+        fi
         file="$GUEST_BUNDLE_VENDOR/$name"
         if [ -f "$file" ]; then
             local computed
@@ -86,8 +91,11 @@ install_guest_bundle() {
     (cd "$bundle_dir" && find . -type f -not -name 'vendor.json' -exec sha256sum {} \; > "$bundle_dir/SHA256SUMS.txt")
     pz_info "bundle SHA256: $bundle_dir/SHA256SUMS.txt"
     if command -v pwsh >/dev/null 2>&1; then
-        pwsh -NoProfile -Command "Get-Command $bundle_dir/Install-VirtioFS.ps1 2>&1" >/dev/null 2>&1 && \
-            pz_info "PowerShell parse check: ok" || pz_warn "PowerShell parse check: skipped (no pwsh or parse-only mode)"
+        if pwsh -NoProfile -Command "Get-Command $bundle_dir/Install-VirtioFS.ps1 2>&1" >/dev/null 2>&1; then
+            pz_info "PowerShell parse check: ok"
+        else
+            pz_warn "PowerShell parse check: skipped (no pwsh or parse-only mode)"
+        fi
     fi
 }
 
@@ -236,8 +244,9 @@ install_app() {
     cp "$final/manifest.json" "$APP_ROOT/$app/state.json"
     chmod 0600 "$APP_ROOT/$app/state.json"
     write_launcher "$app" "$title"
-    command -v update-desktop-database >/dev/null 2>&1 &&
+    if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
+    fi
     pz_info "$title installed: $version"
 }
 

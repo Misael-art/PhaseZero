@@ -6,7 +6,9 @@ source "$PZ_ROOT/linux/lib/common.sh"
 
 pz_harden_firefox() {
     local profile_dir
+    # shellcheck disable=SC2012
     profile_dir=$(ls -d ~/.mozilla/firefox/*.default-release 2>/dev/null | head -1)
+    # shellcheck disable=SC2012
     [ -z "$profile_dir" ] && profile_dir=$(ls -d ~/.mozilla/firefox/*.default 2>/dev/null | head -1)
     [ -z "$profile_dir" ] && { pz_warn "no firefox profile found"; return; }
 
