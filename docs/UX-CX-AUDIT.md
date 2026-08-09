@@ -67,14 +67,16 @@ Nota: `pz commands --json` primeiro run >60s (cold start), depois 0,16s.
 
 ## Correções propostas (PRs separados)
 
-| PR | Escopo | Esforço |
-|---|---|---|
-| 1 | `pz doctor` hang (timeouts em AI Tools) + remover `preview=("doctor",)` dos tune.* | M |
-| 2 | Remover dead pages + limpar registry.py | S |
-| 3 | Deduplicar catálogo: `server.homelab.restore`, `ai.opencode.status`, unificar label boot direto | S |
-| 4 | UX core: rótulo "Prévia" para mutáveis, reset do contador de falhas, separar papéis do `global_state` | M |
-| 5 | Labels/copy: trio PS3, emulation status/doctor, tripla IDE | S |
-| 6 | Flaky tests: subir timeouts + isolar smoke | S |
-| 7 | Performance: windows-vm status 28s (não bloqueante) | L |
+| PR | Escopo | Esforço | Status |
+|---|---|---|---|
+| 1 | `pz doctor` hang (timeouts em AI Tools) + remover `preview=("doctor",)` dos tune.* | M | Merged (#40, `b94f5fc`) |
+| 2 | Remover dead pages + limpar registry.py | S | Merged (#41+46, `6f28407`) |
+| 3 | Deduplicar catálogo: `server.homelab.restore`, `ai.opencode.status`, unificar label boot direto | S | Merged (#42, `f0dd05e`) |
+| 4 | UX core: rótulo "Prévia" para mutáveis, reset do contador de falhas, separar papéis do `global_state` | M | Merged (#43, `6a08b9b`) |
+| 5 | Labels/copy: trio PS3, emulation status/doctor, tripla IDE | S | Merged (#44, aguardando pester) |
+| 6 | Flaky tests: subir timeouts + isolar smoke | S | Merged (#45, `d56cf7e`) |
+| 7 | Performance: windows-vm status 28s (não bloqueante) | L | Encerrado sem mudança — não reproduzível |
 
 **P0: nenhum.** P1#1 (doctor) é o único bug funcional — atinge a ação de suporte mais usada em crise.
+
+**PR 7 (encerrado):** a medição de 28,8s ocorreu sob carga pesada do próprio audit (todas as rotinas `status` paralelas na mesma máquina; updates 24,5s e ai 25,8s na mesma rodada). `status_json` não contém sleeps nem timeouts fixos. Verificado standalone após os merges: `windows-vm status --json` em 1,57s (rc=0, 2929 bytes). Sem intervenção.
