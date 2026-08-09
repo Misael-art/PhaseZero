@@ -488,6 +488,7 @@ Cada requisito precisa de uma linha. Não aceitar relatório narrativo sem matri
 | HL-GOV-001 | WinVM gera suspensão graciosa | governor: `winvm-status`/`winvm-suspend [--dry-run]`/`winvm-resume`; boundary `PZ_HOMELAB_WINVM_STATUS_FILE` ou `pz windows-vm status --json`; `winvmMB` (default 2048) descontado do orçamento; suspensão só via QGA (`PZ_HOMELAB_WINVM_SUSPEND_CMD`, default `guest-login shutdown --json`); `killUsed:"never"`; nenhum arquivo da VM tocado | Suíte: seção "winvm contract" (idle/active via stub, fail-closed com guest ativa, plano de impacto, dry-run sem efeito, execução capturada, no-op idle, resume) | homelab-shell-test (PR #38, run `31265085899` success) | verified | Maturação real da suspensão depende de guest Windows real (não exercitada em CI) |
 | HL-SEC-001 | Segredos ausentes das saídas | repair gera `.env` sem leak; redação no status | Suíte: valor secreto ausente do JSON de repair | security-secret-scan (gitleaks) verde em `main` e no release | verified | — |
 | HL-UI-001 | Player não bloqueia event loop | async QProcess; separado stdout/stderr; timeout | 13 testes do player (offscreen) incl. spawn/close/timeout | homelab-python-test | verified | — |
+| HL-UI-002 | Interface leiga com revelação progressiva | modo simplificado padrão; comandos/logs/JSON recolhidos; páginas visuais Windows VM, Waydroid, Servidor e Saúde; modo avançado global | pytest 428 + 9 subtestes; UI smoke 27; provision 226/0; QA offscreen de 6 superfícies | PR #48: CI `31327861952` e gitleaks verdes; `main` `31329472867` verde | verified | Sliders de recursos são somente leitura enquanto backend não expõe mutação tipada segura |
 
 Adicionar IDs, nunca reutilizar ID para requisito diferente. Estados permitidos:
 `pending`, `in_progress`, `blocked`, `verified`, `deferred`.
@@ -518,6 +519,10 @@ sem evidência.
 | Suíte hermética | `tests/linux-homelab.sh` exit 0 (perfis, governo, backup, broker) | bash | 2026-08-07 |
 | Socket Docker | somente `socket-proxy` read-only; Portainer via `DOCKER_HOST` | compose test, suíte | 2026-08-07 |
 | CI homelab | `homelab-shell-test`, `-python-test`, `compose-validate`, `security-secret-scan`, `package-smoke` adicionados | ci.yml | 2026-08-07 |
+| `main` | `1339a35`, alinhada com `origin/main`; PR #48 mergeada em `32664a1` | `git status`, `gh pr view 48` | 2026-08-09 |
+| Latest release | `v1.15.3` publicada com 7 assets; workflow `31329478165` success | `gh release view`, GitHub asset digests | 2026-08-09 |
+| Pacote host | `phasezero-control-center 1.15.3-1`; UI instalada importa páginas novas | `pacman -Q`, `pz --version`, import offscreen | 2026-08-09 |
+| Homelab real | não configurado/ativo; 0 workloads; nenhum apply executado | `pz server homelab status --json`, `docker ps` | 2026-08-09 |
 
 ## Ledger de execução
 
@@ -547,6 +552,7 @@ Prova release: workflow `31258447568` success; assets em `gh release view v1.15.
 |---|---|---|---|---|---|---|
 | 2026-08-08 | opencode | `main` (worktree principal) | Fase 10 (merge/release/pacote) | `3cb05fb` (squash PR #37), `e2b85e6` (release v1.15.1), tag `v1.15.1` | run `31257317111` main verde; release `31258447568` verde; `SHA256SUMS-1.15.1` 7/7 SUCESSO; conteúdo arch/deb/rpm/src conferido | **Próximo**: usuário instala via `phasezero-admin pacman -U <pkg.tar.zst>` e valida versão/profiles/status/plan (0 dry-runs) após confirmação |
 | 2026-08-09 | opencode | `main` (worktree principal) | Pós-v1.15.1: release v1.15.2 (auditoria CX/UX + dependabot) | 10+ PRs audit (dead pages, doctor timeouts, dedup catálogo, UX core, labels, flaky) + 5 dependabot; `release.sh 1.15.2 --push` (`d4bc8a2`, tag `v1.15.2`) | run release `31314293821` success; `SHA256SUMS-1.15.2` 7/7 SUCESSO; bigsudo pacman -U exit 0 | Instalado `phasezero-control-center 1.15.2-1`; `pz --version` → v1.15.2; homelab status fail-closed (`configured:false active:false`, 0 workloads); doctor 130 PASS / 0 técnico (1 FAIL `CPU01` sensor 88°C — estado real do HW, não regressão); CLI `profiles/status/plan` top-level não existem — usar `pz server homelab status --json` e `pz server homelab profile list` |
+| 2026-08-09 | Codex | `codex/ui-progressive-disclosure` (`/tmp/pz-ui-progressive`) + `main` | HL-UI-002: UX leiga, release v1.15.3 e instalação | 6 commits de implementação/docs + PR #48 (`32664a1`); release `1339a35`, tag `v1.15.3` | pytest 428 + 9; runner CI 39/39; ShellCheck 0.9/0.11; Pester; gitleaks; CI PR `31327861952`; CI main `31329472867`; release `31329478165` | Instalado `1.15.3-1`; Arch SHA `924feeda…` OK; 5/6 binários baixados validaram localmente e 7/7 digests da API GitHub coincidem com manifesto (AppImage local corrompida por retomada NAT64, rejeitada); Homelab `configured:false active:false`, 0 workloads; mounts/cmdline/Docker iguais; listener adicional pertence a pytest concorrente de `Port_Steam`, não ao pacote |
 
 ## Formato obrigatório de handoff
 
