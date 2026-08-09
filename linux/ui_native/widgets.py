@@ -489,6 +489,7 @@ class ActionInspector(QFrame):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.action: ActionSpec | None = None
+        self._advanced_mode = False
         self.setObjectName("actionInspector")
         self.setMinimumWidth(270)
         self.setMaximumWidth(310)
@@ -555,11 +556,14 @@ class ActionInspector(QFrame):
         self.result.setObjectName("inspectorValue")
         self.result.setWordWrap(True)
         content.addWidget(self.result)
-        content.addWidget(self._section_label("Comando seguro"))
+        self.command_heading = self._section_label("Detalhes técnicos")
+        content.addWidget(self.command_heading)
         self.command = QLineEdit()
         self.command.setObjectName("inspectorCommand")
         self.command.setReadOnly(True)
         content.addWidget(self.command)
+        self.command_heading.hide()
+        self.command.hide()
         content.addStretch()
         self.execute = QPushButton("Selecionar operação")
         self.execute.setObjectName("primaryButton")
@@ -605,6 +609,11 @@ class ActionInspector(QFrame):
     def clear_action(self) -> None:
         self.action = None
         self.body.setCurrentIndex(0)
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        self._advanced_mode = bool(enabled)
+        self.command_heading.setVisible(self._advanced_mode)
+        self.command.setVisible(self._advanced_mode)
 
     def _request(self) -> None:
         if self.action is not None:
@@ -996,14 +1005,35 @@ class PreviewDialog(StatefulDialog):
 class ProgressDialog(StatefulDialog):
     cancel_requested = Signal()
 
-    def __init__(self, title: str, command: str, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        command: str,
+        parent: QWidget | None = None,
+        *,
+        advanced_mode: bool = False,
+    ) -> None:
         super().__init__(title, "running", parent)
         self._started = time.monotonic()
         self._running = True
+        summary = QLabel("Aguarde. O PhaseZero está cuidando desta etapa.")
+        summary.setObjectName("cardDescription")
+        self.body.addWidget(summary)
+        self.details_toggle = QToolButton()
+        self.details_toggle.setObjectName("technicalDisclosure")
+        self.details_toggle.setText("Ver detalhes técnicos")
+        self.details_toggle.setCheckable(True)
+        self.details_toggle.setChecked(advanced_mode)
+        self.details_toggle.setArrowType(Qt.DownArrow if advanced_mode else Qt.RightArrow)
+        self.details_toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.body.addWidget(self.details_toggle)
+        self.technical = QWidget()
+        technical_layout = QVBoxLayout(self.technical)
+        technical_layout.setContentsMargins(0, 0, 0, 0)
         self.command = QLineEdit(command)
         self.command.setObjectName("commandBar")
         self.command.setReadOnly(True)
-        self.body.addWidget(self.command)
+        technical_layout.addWidget(self.command)
         self.elapsed = QLabel("Tempo: 00:00")
         self.elapsed.setObjectName("pathLabel")
         self.body.addWidget(self.elapsed)
@@ -1014,7 +1044,13 @@ class ProgressDialog(StatefulDialog):
         self.log.setObjectName("logView")
         self.log.setReadOnly(True)
         self.log.document().setMaximumBlockCount(300)
-        self.body.addWidget(self.log, 1)
+        technical_layout.addWidget(self.log, 1)
+        self.body.addWidget(self.technical, 1)
+        self.technical.setVisible(advanced_mode)
+        self.details_toggle.toggled.connect(self.technical.setVisible)
+        self.details_toggle.toggled.connect(
+            lambda checked: self.details_toggle.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+        )
         cancel = self.add_action("Cancelar operação", QDialogButtonBox.RejectRole, variant="dangerButton")
         cancel.clicked.connect(self.cancel_requested.emit)
         self._timer = QTimer(self)

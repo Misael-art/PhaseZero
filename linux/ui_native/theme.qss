@@ -136,6 +136,24 @@ QMainWindow {
     border: 1px solid {{accent}};
     background: {{surface_alt}};
 }
+#modeSwitch {
+    color: {{text_dim}};
+    spacing: {{space_sm}}px;
+    padding: 0 {{space_sm}}px;
+    font-size: {{text_sm}}px;
+    font-weight: 650;
+}
+#modeSwitch::indicator {
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: {{surface_disabled}};
+    border: 1px solid {{border_strong}};
+}
+#modeSwitch::indicator:checked {
+    background: {{accent}};
+    border-color: {{accent_hover}};
+}
 QScrollArea, QScrollArea > QWidget > QWidget {
     background: transparent;
     border: 0;
@@ -756,6 +774,14 @@ QComboBox QAbstractItemView {
     border-radius: {{radius_sm}}px;
     padding: {{space_sm}}px;
     font-family: {{font_mono}};
+}
+#technicalDisclosure {
+    color: {{text_dim}};
+    background: transparent;
+    border: 0;
+    padding: {{space_sm}}px 0;
+    text-align: left;
+    font-weight: 650;
 }
 
 /* QCheckBox (toolCheck, tuneCheck): list-item checkboxes. */

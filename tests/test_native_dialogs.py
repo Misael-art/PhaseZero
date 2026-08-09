@@ -74,6 +74,31 @@ def test_progress_dialog_emits_cancel_and_updates(qapp):
     dialog.finish()
 
 
+def test_progress_dialog_hides_technical_details_by_default(qapp):
+    from linux.ui_native.widgets import ProgressDialog
+
+    dialog = ProgressDialog("Teste", "linux/pz doctor")
+    assert not dialog.technical.isVisible()
+    dialog.details_toggle.setChecked(True)
+    assert not dialog.technical.isHidden()
+    dialog.finish()
+
+
+def test_action_inspector_reveals_command_only_in_advanced_mode(qapp):
+    from linux.ui_native.widgets import ActionInspector
+
+    inspector = ActionInspector()
+    inspector.set_action(ActionSpec(
+        id="status", category="Teste", title="Status", description="Estado",
+        args=("version",), icon="dialog-information",
+    ))
+    assert inspector.command.isHidden()
+    assert inspector.command_heading.isHidden()
+    inspector.set_advanced_mode(True)
+    assert not inspector.command.isHidden()
+    assert "linux/pz version" == inspector.command.text()
+
+
 def test_result_dialog_offers_history(qapp):
     from PySide6.QtTest import QSignalSpy
     from linux.ui_native.widgets import ResultDialog

@@ -71,3 +71,7 @@ class PageRegistry:
     def block_all(self, running: bool) -> None:
         for page in self._pages.values():
             page.block_while_running(running)
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        for page in self._pages.values():
+            page.set_advanced_mode(enabled)

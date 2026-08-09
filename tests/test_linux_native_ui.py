@@ -20,6 +20,7 @@ from linux.ui_native.command_runner import build_program
 from linux.ui_native.models import ActionSpec
 from linux.ui_native.result_parser import parse_json_output, severity_for
 from linux.ui_native.pages.results import create_safe_results_archive
+from linux.ui_native.preferences import UiPreferences
 
 
 @pytest.fixture(scope="module")
@@ -283,6 +284,13 @@ def test_manifest_serializes_catalog(catalog):
 
 def test_native_version_comes_from_project_manifest():
     assert __version__ == json.loads((ROOT / "version.json").read_text())["version"]
+
+
+def test_simplified_mode_is_default_and_env_can_enable_advanced(monkeypatch):
+    monkeypatch.setenv("PZ_UI_ADVANCED_MODE", "0")
+    assert UiPreferences().advanced_mode is False
+    monkeypatch.setenv("PZ_UI_ADVANCED_MODE", "1")
+    assert UiPreferences().advanced_mode is True
 
 
 def test_native_launcher_reports_version_without_starting_qt():
