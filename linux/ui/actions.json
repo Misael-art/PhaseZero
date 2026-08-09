@@ -589,6 +589,18 @@
       "plan_command": "linux/pz windows-vm status"
     },
     {
+      "name": "windows.guest-login.shutdown",
+      "label": "Desligar Windows",
+      "command": "linux/pz windows-vm guest-login shutdown --json",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm guest-login status --json"
+    },
+    {
       "name": "windows.graphics.doctor",
       "label": "Diagnóstico gráfico",
       "command": "linux/pz windows-vm graphics doctor --json",
@@ -982,6 +994,18 @@
       "name": "waydroid.launch",
       "label": "Abrir Waydroid",
       "command": "linux/pz waydroid launch",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz waydroid status --json"
+    },
+    {
+      "name": "waydroid.stop",
+      "label": "Parar Waydroid",
+      "command": "linux/pz waydroid stop --json",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
