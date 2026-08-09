@@ -180,6 +180,65 @@ QScrollArea, QScrollArea > QWidget > QWidget {
     background: {{surface_hero_alt}};
     border: 1px solid {{accent}};
 }
+#serviceHero, #healthHero {
+    background: {{surface_hero}};
+    border: 1px solid {{accent_border}};
+    border-radius: {{radius_lg}}px;
+}
+#serviceIcon, #healthShield {
+    color: {{on_accent}};
+    background: {{accent}};
+    border-radius: {{radius_lg}}px;
+    font-size: {{text_xl}}px;
+    font-weight: 800;
+}
+#serviceTitle {
+    color: {{text_strong}};
+    font-size: {{text_xl}}px;
+    font-weight: 800;
+}
+#serviceState { color: {{text_dim}}; font-weight: 750; }
+#serviceState[state="success"] { color: {{success}}; }
+#serviceState[state="warning"] { color: {{warning}}; }
+#serviceState[state="error"] { color: {{error}}; }
+#settingsCard, #healthGroup, #healthMetric {
+    background: {{surface}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_lg}}px;
+}
+#settingValue { color: {{text}}; font-weight: 650; }
+#healthMetricValue { color: {{text}}; font-size: {{text_2xl}}px; font-weight: 800; }
+#healthMetricValue[state="success"] { color: {{success}}; }
+#healthMetricValue[state="warning"] { color: {{warning}}; }
+#healthMetricValue[state="error"] { color: {{error}}; }
+#healthMetricLabel { color: {{text_dim}}; font-size: {{text_sm}}px; }
+#healthGroupHeader { background: {{surface_header}}; border-bottom: 1px solid {{border_divider}}; }
+#healthCheckRow { border-bottom: 1px solid {{border_divider}}; }
+#healthCheckIcon {
+    border-radius: 14px;
+    background: {{surface_inset}};
+    font-weight: 800;
+}
+#healthCheckIcon[state="success"] { color: {{success}}; background: {{success_bg}}; }
+#healthCheckIcon[state="warning"] { color: {{warning}}; background: {{warning_bg}}; }
+#healthCheckIcon[state="error"] { color: {{error}}; background: {{error_bg}}; }
+#healthCheckIcon[state="info"] { color: {{info}}; background: {{info_bg}}; }
+#technicalLabel { color: {{text_muted}}; font-family: {{font_mono}}; font-size: {{text_xs}}px; }
+#dangerZone {
+    background: {{error_bg}};
+    border: 1px solid {{error_border}};
+    border-radius: {{radius_lg}}px;
+}
+#dangerOutlineButton {
+    color: {{error}};
+    background: transparent;
+    border: 1px solid {{error_border}};
+}
+#largeSwitch::indicator {
+    width: 38px;
+    height: 22px;
+    border-radius: 11px;
+}
 #cardIcon {
     background: {{border_subtle}};
     border-radius: {{radius_md}}px;
@@ -277,6 +336,11 @@ QPushButton:disabled {
 }
 #primaryButton:pressed {
     background: {{accent_pressed}};
+}
+#primaryButton:disabled {
+    color: {{text_muted}};
+    background: {{surface_disabled}};
+    border-color: {{border_subtle}};
 }
 #secondaryButton {
     color: {{text}};

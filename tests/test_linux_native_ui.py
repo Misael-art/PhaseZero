@@ -23,6 +23,21 @@ from linux.ui_native.pages.results import create_safe_results_archive
 from linux.ui_native.preferences import UiPreferences
 
 
+def test_doctor_results_are_grouped_and_translated_for_nontechnical_users():
+    from linux.ui_native.health_models import parse_health_checks, suggested_action_id
+
+    checks = parse_health_checks([
+        "[PASS] MEM01: Total RAM >= 4GB — 14GB",
+        "[WARN] CPU02: CPU load (1m) < cores — 9 / 8",
+        "[FAIL] NET01: Internet connectivity — offline",
+    ])
+    assert [check.group for check in checks] == ["Hardware", "Hardware", "Conexão"]
+    assert checks[0].title == "Memória total suficiente"
+    assert checks[1].state == "warning" and checks[1].needs_attention
+    assert checks[2].state == "error"
+    assert suggested_action_id(checks[1]) == "system.repair-plan"
+
+
 @pytest.fixture(scope="module")
 def catalog():
     return build_catalog(ROOT)

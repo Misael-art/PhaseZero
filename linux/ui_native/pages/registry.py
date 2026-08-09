@@ -16,6 +16,7 @@ from .ai_routing import AiRoutingPage
 from .tuning import TuningPage
 from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
+from .windows_vm import WindowsVmPage
 
 
 class PageRegistry:
@@ -38,7 +39,7 @@ class PageRegistry:
         "Visão geral": OverviewPage,
         "Perfis": ProfilesPage,
         "Steam Deck": CatalogWorkspacePage,
-        "Windows VM": CatalogWorkspacePage,
+        "Windows VM": WindowsVmPage,
         "Waydroid": CatalogWorkspacePage,
         "Servidor": CatalogWorkspacePage,
         "Homelab": HomelabPage,

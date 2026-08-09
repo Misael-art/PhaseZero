@@ -1,0 +1,342 @@
+from __future__ import annotations
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QStyle,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..models import ActionSpec
+from ..widgets import SectionHeader, themed_icon
+from .base import BasePage
+
+
+RUNNING_STATES = {"running", "paused", "in shutdown", "pmsuspended"}
+
+
+class WindowsVmPage(BasePage):
+    """Friendly Windows VM control surface backed by the status JSON contract."""
+
+    _PRIMARY_IDS = {
+        "windows.status",
+        "windows.launch",
+        "windows.guest-login.shutdown",
+        "windows.provision.player",
+        "windows.optimize",
+        "windows.graphics.status",
+        "windows.host-access",
+        "windows.guest-login.status",
+        "windows.provision.cancel",
+        "windows.provision.discard",
+    }
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._payload: dict = {}
+        self._technical_widgets: list[QWidget] = []
+
+    def build(self) -> None:
+        for action_id in self._PRIMARY_IDS:
+            action = self.by_id.get(action_id)
+            if action is not None:
+                self.mark_represented(action)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(2, 2, 8, 12)
+        layout.setSpacing(14)
+
+        layout.addWidget(self._build_hero())
+        cards = QGridLayout()
+        cards.setContentsMargins(0, 0, 0, 0)
+        cards.setHorizontalSpacing(14)
+        cards.setVerticalSpacing(14)
+        cards.addWidget(self._build_performance(), 0, 0)
+        cards.addWidget(self._build_integrations(), 0, 1)
+        cards.setColumnStretch(0, 1)
+        cards.setColumnStretch(1, 1)
+        layout.addLayout(cards)
+        layout.addWidget(self._build_setup_card())
+        layout.addWidget(self._build_danger_zone())
+        layout.addStretch()
+        scroll.setWidget(host)
+        self._layout.addWidget(scroll, 1)
+
+        self.status_loader.status_ready.connect(self._on_status_ready)
+        self.status_loader.status_failed.connect(self._on_status_failed)
+
+    def _build_hero(self) -> QFrame:
+        hero = QFrame()
+        hero.setObjectName("serviceHero")
+        row = QHBoxLayout(hero)
+        row.setContentsMargins(20, 18, 20, 18)
+        row.setSpacing(16)
+        icon = QLabel()
+        icon.setObjectName("serviceIcon")
+        icon.setPixmap(themed_icon(hero, "computer", QStyle.SP_ComputerIcon).pixmap(38, 38))
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setFixedSize(58, 58)
+        row.addWidget(icon)
+        copy = QVBoxLayout()
+        copy.setSpacing(3)
+        title = QLabel("Windows 11 VM")
+        title.setObjectName("serviceTitle")
+        self.state_label = QLabel("● Verificando…")
+        self.state_label.setObjectName("serviceState")
+        self.state_label.setProperty("state", "info")
+        self.state_detail = QLabel("Lendo configuração e estado da máquina virtual")
+        self.state_detail.setObjectName("cardDescription")
+        copy.addWidget(title)
+        copy.addWidget(self.state_label)
+        copy.addWidget(self.state_detail)
+        row.addLayout(copy, 1)
+        self.refresh_button = QPushButton("Atualizar")
+        self.refresh_button.setObjectName("secondaryButton")
+        self.refresh_button.clicked.connect(self.reload)
+        row.addWidget(self.refresh_button)
+        self.power_button = QPushButton("Iniciar VM")
+        self.power_button.setObjectName("primaryButton")
+        self.power_button.setMinimumSize(150, 50)
+        self.power_button.setEnabled(False)
+        self.power_button.clicked.connect(self._power_action)
+        row.addWidget(self.power_button)
+        return hero
+
+    def _build_performance(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        layout.addWidget(SectionHeader("Desempenho", "Recursos reservados para o Windows"))
+        self.ram_value = QLabel("Memória: —")
+        self.ram_value.setObjectName("settingValue")
+        self.ram_slider = QSlider(Qt.Horizontal)
+        self.ram_slider.setRange(4, 32)
+        self.ram_slider.setEnabled(False)
+        self.ram_slider.setAccessibleName("Memória configurada em gigabytes")
+        self.cpu_value = QLabel("Processadores: —")
+        self.cpu_value.setObjectName("settingValue")
+        self.cpu_slider = QSlider(Qt.Horizontal)
+        self.cpu_slider.setRange(2, 16)
+        self.cpu_slider.setEnabled(False)
+        self.cpu_slider.setAccessibleName("Processadores configurados")
+        layout.addWidget(self.ram_value)
+        layout.addWidget(self.ram_slider)
+        layout.addWidget(self.cpu_value)
+        layout.addWidget(self.cpu_slider)
+        hint = QLabel("Ajustes ficam protegidos no assistente de instalação.")
+        hint.setObjectName("cardDescription")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        edit = QPushButton("Ajustar com segurança")
+        edit.setObjectName("secondaryButton")
+        edit.clicked.connect(lambda: self.run_action("windows.provision.player"))
+        layout.addWidget(edit)
+        return card
+
+    def _integration_switch(self, title: str, description: str) -> tuple[QWidget, QCheckBox, QLabel]:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 4, 0, 4)
+        copy = QVBoxLayout()
+        name = QLabel(title)
+        name.setObjectName("settingValue")
+        note = QLabel(description)
+        note.setObjectName("cardDescription")
+        note.setWordWrap(True)
+        copy.addWidget(name)
+        copy.addWidget(note)
+        toggle = QCheckBox()
+        toggle.setObjectName("largeSwitch")
+        toggle.setEnabled(False)
+        toggle.setAccessibleName(title)
+        layout.addLayout(copy, 1)
+        layout.addWidget(toggle)
+        return row, toggle, note
+
+    def _build_integrations(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(SectionHeader("Dispositivos e integração", "Recursos conectados ao Windows"))
+        share, self.share_toggle, self.share_note = self._integration_switch(
+            "Compartilhar arquivos", "Pasta de troca entre Linux e Windows"
+        )
+        gpu, self.gpu_toggle, self.gpu_note = self._integration_switch(
+            "Aceleração de vídeo", "Usa o perfil gráfico compatível disponível"
+        )
+        usb, self.usb_toggle, self.usb_note = self._integration_switch(
+            "Dispositivos USB", "Libera periféricos permitidos para a VM"
+        )
+        layout.addWidget(share)
+        layout.addWidget(gpu)
+        layout.addWidget(usb)
+        configure = QPushButton("Configurar integrações")
+        configure.setObjectName("secondaryButton")
+        configure.clicked.connect(lambda: self.run_action("windows.host-access"))
+        layout.addWidget(configure)
+        return card
+
+    def _build_setup_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        row = QHBoxLayout(card)
+        row.setContentsMargins(16, 14, 16, 14)
+        copy = QVBoxLayout()
+        title = QLabel("Instalação e manutenção")
+        title.setObjectName("sectionHeading")
+        desc = QLabel("Prepare uma nova VM, revise compatibilidade ou otimize o host.")
+        desc.setObjectName("cardDescription")
+        desc.setWordWrap(True)
+        copy.addWidget(title)
+        copy.addWidget(desc)
+        row.addLayout(copy, 1)
+        install = QPushButton("Preparar Windows")
+        install.setObjectName("primaryButton")
+        install.clicked.connect(lambda: self.run_action("windows.provision.player"))
+        optimize = QPushButton("Otimizar")
+        optimize.setObjectName("secondaryButton")
+        optimize.clicked.connect(lambda: self.run_action("windows.optimize"))
+        row.addWidget(optimize)
+        row.addWidget(install)
+        return card
+
+    def _build_danger_zone(self) -> QFrame:
+        zone = QFrame()
+        zone.setObjectName("dangerZone")
+        layout = QVBoxLayout(zone)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(SectionHeader(
+            "Zona de perigo",
+            "Ações destrutivas exigem prévia e confirmação digitada.",
+        ))
+        buttons = QHBoxLayout()
+        cancel = QPushButton("Cancelar instalação")
+        cancel.setObjectName("dangerOutlineButton")
+        cancel.clicked.connect(lambda: self.run_action("windows.provision.cancel"))
+        discard = QPushButton("Descartar instalação")
+        discard.setObjectName("dangerButton")
+        discard.clicked.connect(lambda: self.run_action("windows.provision.discard"))
+        buttons.addWidget(cancel)
+        buttons.addWidget(discard)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+        return zone
+
+    def _install_context_status(self) -> None:
+        return  # Hero owns the status surface.
+
+    def reload(self) -> None:
+        action = self.by_id.get("windows.status")
+        if action is None or self.status_loader.running(action.id):
+            return
+        self.refresh_button.setEnabled(False)
+        self.state_label.setText("● Verificando…")
+        self._set_state("info")
+        self.status_loader.fetch_action(action)
+
+    def _set_state(self, state: str) -> None:
+        self.state_label.setProperty("state", state)
+        self.state_label.style().unpolish(self.state_label)
+        self.state_label.style().polish(self.state_label)
+
+    def _on_status_ready(self, action_id: str, _stdout: str, parsed: object) -> None:
+        if action_id != "windows.status" or not isinstance(parsed, dict):
+            return
+        self.refresh_button.setEnabled(True)
+        self._payload = parsed
+        vm = parsed.get("vm") if isinstance(parsed.get("vm"), dict) else {}
+        libvirt = parsed.get("libvirt") if isinstance(parsed.get("libvirt"), dict) else {}
+        access = parsed.get("access") if isinstance(parsed.get("access"), dict) else {}
+        host = parsed.get("host") if isinstance(parsed.get("host"), dict) else {}
+        state = str(libvirt.get("state", "missing")).strip().casefold()
+        running = state in RUNNING_STATES
+        configured = bool((parsed.get("config") or {}).get("installed"))
+        disk_ready = bool(vm.get("diskExists"))
+        if running:
+            self.state_label.setText("● Rodando")
+            self.state_detail.setText("Windows está ligado e pronto para uso")
+            self._set_state("success")
+            self.power_button.setText("Desligar")
+            self.power_button.setObjectName("dangerButton")
+        elif configured and disk_ready:
+            self.state_label.setText("● Parado")
+            self.state_detail.setText("Máquina pronta para iniciar")
+            self._set_state("info")
+            self.power_button.setText("▶ Iniciar VM")
+            self.power_button.setObjectName("primaryButton")
+        else:
+            self.state_label.setText("● Precisa configurar")
+            self.state_detail.setText("Prepare o Windows antes do primeiro uso")
+            self._set_state("warning")
+            self.power_button.setText("Preparar VM")
+            self.power_button.setObjectName("primaryButton")
+        self.power_button.style().unpolish(self.power_button)
+        self.power_button.style().polish(self.power_button)
+        self.power_button.setEnabled(True)
+        ram_mb = int(vm.get("ramMb") or 0)
+        cpus = int(vm.get("cpus") or 0)
+        self.ram_value.setText(f"Memória: {ram_mb / 1024:g} GB" if ram_mb else "Memória: —")
+        self.ram_slider.setMaximum(max(4, 32, (ram_mb + 1023) // 1024))
+        self.ram_slider.setValue(max(4, (ram_mb + 1023) // 1024) if ram_mb else 4)
+        self.cpu_value.setText(f"Processadores: {cpus}" if cpus else "Processadores: —")
+        self.cpu_slider.setMaximum(max(2, 16, cpus))
+        self.cpu_slider.setValue(max(2, cpus) if cpus else 2)
+        self.share_toggle.setChecked(bool(access.get("shareLinksReady") or access.get("sambaReachable")))
+        profile = str(vm.get("graphicsProfile") or "compat")
+        gpu_available = bool(host.get("qemu"))
+        self.gpu_toggle.setChecked(gpu_available and profile != "compat")
+        if not gpu_available:
+            self.gpu_note.setText("Indisponível: QEMU não foi encontrado no host")
+        else:
+            self.gpu_note.setText(f"Perfil ativo: {profile}")
+        usb_ready = int(access.get("usbRedirChannels") or 0) > 0 or bool(access.get("usbUdevManaged"))
+        self.usb_toggle.setChecked(usb_ready)
+        if not usb_ready:
+            self.usb_note.setText("Desativado até configurar permissões seguras")
+
+    def _on_status_failed(self, action_id: str, _message: str) -> None:
+        if action_id != "windows.status":
+            return
+        self.refresh_button.setEnabled(True)
+        self.power_button.setEnabled(False)
+        self.state_label.setText("● Estado indisponível")
+        self.state_detail.setText("Tente atualizar. Detalhes técnicos ficam no histórico.")
+        self._set_state("error")
+
+    def _power_action(self) -> None:
+        libvirt = self._payload.get("libvirt") if isinstance(self._payload.get("libvirt"), dict) else {}
+        state = str(libvirt.get("state", "missing")).strip().casefold()
+        config = self._payload.get("config") if isinstance(self._payload.get("config"), dict) else {}
+        vm = self._payload.get("vm") if isinstance(self._payload.get("vm"), dict) else {}
+        if state in RUNNING_STATES:
+            self.run_action("windows.guest-login.shutdown")
+        elif config.get("installed") and vm.get("diskExists"):
+            self.run_action("windows.launch")
+        else:
+            self.run_action("windows.provision.player")
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        super().set_advanced_mode(enabled)
+        for widget in self._technical_widgets:
+            widget.setVisible(enabled)
+
+    def block_while_running(self, running: bool) -> None:
+        self.power_button.setEnabled(not running)
+        self.refresh_button.setEnabled(not running)
