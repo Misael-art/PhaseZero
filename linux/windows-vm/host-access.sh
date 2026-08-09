@@ -47,7 +47,10 @@ vm_is_running() {
 cmd_mount() {
     command -v guestmount >/dev/null 2>&1 || { pz_error "libguestfs required: sudo pacman -S libguestfs"; return 1; }
     local disk; disk="$(resolve_disk)"
-    [ -n "$disk" ] && [ -f "$disk" ] || { pz_error "Windows VM disk not found (pass --disk=PATH)"; return 1; }
+    if [ -z "$disk" ] || [ ! -f "$disk" ]; then
+        pz_error "Windows VM disk not found (pass --disk=PATH)"
+        return 1
+    fi
     if vm_is_running; then
         pz_error "Windows VM is running; shut it down before mounting its disk on the host (risk of corruption)"
         return 1

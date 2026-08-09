@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Smoke tests for PhaseZero Linux emulation shared-content and media.
+# shellcheck disable=SC2030,SC2031 # pz commands run in intentionally isolated subshell envs
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -50,7 +51,11 @@ test -L "$PZ_RETRODECK_ROOT/saves" || { echo "FAIL: saves root symlink missing a
 test "$(readlink "$PZ_RETRODECK_ROOT/saves")" = "$PZ_EMULATION_ROOT/saves" || { echo "FAIL: saves root wrong target"; exit 1; }
 test -f "$PZ_EMULATION_ROOT/saves/psx/duckstation/save.mcd" || { echo "FAIL: migrated save file missing in canonical"; exit 1; }
 # backup should exist
-ls "$PZ_EMULATION_ROOT/.phasezero/backups/" 2>/dev/null | grep -q retrodeck-saves || { echo "FAIL: saves backup not created"; exit 1; }
+_backup_found=0
+for _bf in "$PZ_EMULATION_ROOT/.phasezero/backups/"retrodeck-saves*; do
+    [ -e "$_bf" ] && _backup_found=1 && break
+done
+[ "$_backup_found" -eq 1 ] || { echo "FAIL: saves backup not created"; exit 1; }
 
 # shared status reports correct state
 "$REPO_ROOT/linux/pz" emulation shared status >/dev/null
@@ -144,7 +149,10 @@ grep -q 'value="'"$PZ_EMULATION_ROOT/tools/downloaded_media"'"' "$ESDE_SETTINGS"
 grep -q 'value="'"$PZ_EMULATION_ROOT/roms"'"' "$ESDE_SETTINGS" || { echo "FAIL: ES-DE ROMDirectory not updated"; exit 1; }
 
 # Hydra LevelDB not touched - verify it doesn't get created by our scripts
-test -d "$XDG_CONFIG_HOME/hydralauncher/leveldb" && { echo "FAIL: Hydra LevelDB should not be touched"; exit 1; } || true
+if test -d "$XDG_CONFIG_HOME/hydralauncher/leveldb"; then
+    echo "FAIL: Hydra LevelDB should not be touched"
+    exit 1
+fi
 
 # === LaunchBox compatibility tree and emulator bridge ===
 LB_ROOT="$PZ_EMULATION_ROOT/tools/launchers/LaunchBox"
@@ -571,7 +579,11 @@ echo "repair-only" > "$PZ_RETRODECK_ROOT/ES-DE/downloaded_media/psx/screenshots/
 # file should be in canonical
 test -f "$PZ_EMULATION_ROOT/tools/downloaded_media/psx/screenshots/game.png" || { echo "FAIL: repair did not migrate media file"; find "$PZ_EMULATION_ROOT/tools/downloaded_media/"; exit 1; }
 # backup should exist
-ls "$PZ_EMULATION_ROOT/.phasezero/backups/" 2>/dev/null | grep -q retrodeck-downloaded_media || { echo "FAIL: repair backup not created"; exit 1; }
+_repair_backup_found=0
+for _rf in "$PZ_EMULATION_ROOT/.phasezero/backups/"retrodeck-downloaded_media*; do
+    [ -e "$_rf" ] && _repair_backup_found=1 && break
+done
+[ "$_repair_backup_found" -eq 1 ] || { echo "FAIL: repair backup not created"; exit 1; }
 # symlink should point to canonical
 test -L "$PZ_RETRODECK_ROOT/ES-DE/downloaded_media" || { echo "FAIL: repair did not recreate symlink"; exit 1; }
 echo "  media repair com mídia no RetroDECK ok"

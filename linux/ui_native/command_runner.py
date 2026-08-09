@@ -88,6 +88,12 @@ class CommandRunner(QObject):
         if self.running:
             raise RuntimeError("operation already running")
         program, args = build_program(self.root, action, preview=preview, value=value, values=values)
+        # Read before anything echoes the command: this value goes to stdin and
+        # must stay out of argv, out of self.command and out of the started
+        # signal that renders the command to the user.
+        stdin_data = ""
+        if action.stdin_parameter and not preview:
+            stdin_data = (values or {}).get(action.stdin_parameter, "")
         self.action = action
         self.preview = preview
         self.command = [program, *args]
@@ -116,6 +122,12 @@ class CommandRunner(QObject):
         display = shlex.join(self.command)
         self.started.emit(display)
         process.start()
+        if stdin_data:
+            # The receiving script reads one line and refuses an empty secret,
+            # so terminate it and close the channel: without the EOF the child
+            # blocks on read and the action hangs until the timeout.
+            process.write((stdin_data + "\n").encode("utf-8"))
+            process.closeWriteChannel()
         self.timeout_timer.start(self.timeout_ms)
 
     def cancel(self) -> None:

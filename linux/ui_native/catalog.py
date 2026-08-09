@@ -14,12 +14,14 @@ CATEGORIES = (
     ("Windows VM", "computer", "QEMU/KVM e boot direto"),
     ("Waydroid", "phone", "Android, reparo e kiosk"),
     ("Servidor", "network-server", "LLM local, homelab e Hermes"),
+    ("Homelab", "folder-remote", "Player PySide6 para a stack home-server"),
     ("Emulação", "applications-games", "Emuladores, mídia e integrações"),
     ("Boot Direto", "system-reboot", "GRUB, recuperação e próxima sessão"),
     ("Flatpak", "system-software-install", "Remotes, overrides e compatibilidade"),
     ("Recursos", "preferences-plugin", "Gaming, hardware, saúde e workstation"),
     ("IA & Dev", "applications-development", "Agentes, MCPs e ferramentas"),
     ("Proxies IA", "network-server", "Gateways, proxies OpenAI-compatible e OAuth"),
+    ("Roteamento IA", "network-transmit-receive", "Rotas por tarefa, política e cota"),
     ("Aplicativos", "applications-other", "Web apps, jogos e menus do desktop"),
     ("Ajustes", "preferences-system", "Gaming, navegador e desenvolvimento"),
     ("Resultados", "text-x-log", "Histórico local de operações"),
@@ -33,7 +35,7 @@ SIDEBAR_GROUPS = (
     ("Ações rápidas", ("Início", "Visão geral", "Perfis")),
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
-    ("IA & Dev", ("IA & Dev", "Proxies IA")),
+    ("IA & Dev", ("IA & Dev", "Proxies IA", "Roteamento IA")),
     ("Desktop", ("Aplicativos",)),
     ("Histórico", ("Resultados",)),
 )
@@ -99,6 +101,7 @@ def _a(
     parameters: tuple[ActionParameter, ...] = (),
     preview_bindings: tuple[tuple[str, str], ...] = (),
     result_view: str = "auto",
+    stdin_parameter: str = "",
 ) -> ActionSpec:
     if mutable and preview is None:
         raise ValueError(f"mutable action lacks safe preview: {action_id}")
@@ -145,6 +148,7 @@ def _a(
         parameters=inferred_parameters,
         preview_bindings=preview_bindings,
         result_view=result_view,
+        stdin_parameter=stdin_parameter,
     )
 
 
@@ -271,16 +275,18 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.apps.status", "Windows VM", "Status WinBoat/WinPodX", "Audita AppImages, Podman, KVM, RDP e concorrência.", ("windows-vm", "apps", "status"), "computer", badge="JSON"),
             _a("windows.apps.setup", "Windows VM", "Instalar WinBoat + WinPodX", "Instala releases oficiais verificadas e perfil Steam Deck.", ("windows-vm", "apps", "setup"), "system-software-install", mutable=True, preview=("windows-vm", "apps", "status"), badge="Podman"),
             _a("windows.apps.configure", "Windows VM", "Configurar Podman Windows", "Aplica recursos, RDP, compartilhamento e política de um guest.", ("windows-vm", "apps", "configure"), "preferences-system", mutable=True, preview=("windows-vm", "apps", "status"), badge="Reversível"),
-            _a("windows.boot.install", "Windows VM", "Instalar boot direto", "Entrada GRUB para Windows VM.", ("windows-vm", "boot", "install"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
+            _a("windows.boot.status-json", "Windows VM", "Boot status (JSON)", "Estado do boot em JSON para consumo programático.", ("windows-vm", "boot", "status", "--json"), "dialog-information", badge="JSON", visibility="advanced"),
+            _a("windows.boot.install", "Windows VM", "Instalar boot direto (Windows)", "Entrada GRUB para Windows VM.", ("windows-vm", "boot", "install"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
             _a("windows.boot.next", "Windows VM", "Próximo boot Windows", "Agenda uma sessão Windows VM.", ("windows-vm", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
 
             # Provision commands
             _a("windows.media.inspect", "Windows VM", "Inspecionar ISO", "Valida ISO, SHA-256, arquitetura e listas edições disponíveis.", ("windows-vm", "media", "inspect", "--iso", "{input}"), "media-optical", input_label="Selecione ISO do Windows", input_kind="file", badge="JSON"),
             _a("windows.provision.preflight", "Windows VM", "Pré-verificação do host", "Verifica swtpm, virtio-win, KVM, OVMF e recursos antes do plano.", ("windows-vm", "preflight", "--json"), "dialog-information", badge="JSON"),
-            _a("windows.provision.plan", "Windows VM", "Planejar instalação automática", "Gera plano completo de instalação e otimização.", ("windows-vm", "provision", "plan", "--iso", "{input}", "--image-index", "{image_index}", "--graphics", "{graphics}", "--json"), "document-properties", badge="Seguro", parameters=(
+            _a("windows.provision.plan", "Windows VM", "Planejar instalação automática", "Gera plano completo de instalação e otimização.", ("windows-vm", "provision", "plan", "--iso", "{input}", "--image-index", "{image_index}", "--graphics", "{graphics}", "--guest-login", "{guest_login}", "--json"), "document-properties", badge="Seguro", parameters=(
                 _p("input", "Selecione ISO do Windows", kind="file"),
                 _p("graphics", "Aceleração gráfica", "choice", choices=tuple(v for v, _, _ in WINDOWS_VM_GRAPHICS_OPTIONS), placeholder="compat"),
                 _p("image_index", "Índice da edição Windows", placeholder="1"),
+                _p("guest_login", "Login no Windows", "choice", choices=("auto", "password"), placeholder="auto"),
             )),
             _a("windows.provision.start", "Windows VM", "Instalar e otimizar Windows", "Executa instalação completa: setup, drivers, tweaks, snapshot.", ("windows-vm", "provision", "start", "--plan-id", "{plan_id}", "--confirm", "{confirm}", "--json"), "system-software-install", mutable=True, preview=("windows-vm", "provision", "plan", "--iso", "{input}", "--json"), preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken"), ("input", "iso.path")), badge="Alto risco", risk="high"),
             _a("windows.provision.status", "Windows VM", "Status da instalação", "Estado atual da operação de provisionamento.", ("windows-vm", "provision", "status", "--operation-id", "{operation_id}", "--json"), "dialog-information", parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),), badge="JSON"),
@@ -288,6 +294,57 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.provision.resume", "Windows VM", "Retomar instalação", "Retoma instalação interrompida do último checkpoint.", ("windows-vm", "provision", "resume", "--operation-id", "{operation_id}"), "media-skip-forward", mutable=True, preview=("windows-vm", "provision", "status", "--operation-id", "{operation_id}", "--json"), parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),), badge="Reparo"),
             _a("windows.provision.cancel", "Windows VM", "Cancelar instalação", "Cancela operação ativa; preserva disco para retomada.", ("windows-vm", "provision", "cancel", "--operation-id", "{operation_id}"), "media-playback-stop", mutable=True, preview=("windows-vm", "provision", "status", "--operation-id", "{operation_id}", "--json"), parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),), badge="Alto risco", risk="high"),
             _a("windows.provision.discard", "Windows VM", "Descartar instalação", "Remove staging e libera recursos da instalação cancelada.", ("windows-vm", "provision", "cancel", "--operation-id", "{operation_id}", "--remove-staging"), "edit-delete", mutable=True, preview=("windows-vm", "provision", "status", "--operation-id", "{operation_id}", "--json"), parameters=(_p("operation_id", "ID da operação", placeholder="op-…"),), badge="Alto risco", risk="high", visibility="advanced"),
+
+            # Player flow (janela dedicada)
+            _a("windows.provision.player", "Windows VM", "Preparar Windows e reiniciar",
+               "Orquestra plano, provisão, boot e reboot em janela dedicada.",
+               ("--internal-player",), "system-reboot",
+               mutable=True, elevated=False,
+               preview=("windows-vm", "provision", "plan", "--iso", "{input}", "--guest-login", "{guest_login}", "--json"),
+               preview_bindings=(("input", "iso.path"),),
+               input_label="Selecione ISO do Windows",
+               input_kind="file",
+               parameters=(
+                   _p("graphics", "Aceleração gráfica", "choice",
+                      choices=tuple(v for v, _, _ in WINDOWS_VM_GRAPHICS_OPTIONS),
+                      placeholder="compat"),
+                   _p("image_index", "Índice da edição Windows", placeholder="1"),
+                   _p("guest_login", "Login no Windows", "choice",
+                      choices=("auto", "password"), placeholder="auto"),
+               ),
+               badge="Alto risco", risk="high"),
+            # Post-install login policy. The provisioning actions above only set
+            # this while installing; changing it afterwards previously required
+            # the CLI. This is the PhaseZero-driven equivalent of clearing or
+            # ticking the password box in netplwiz.
+            _a("windows.guest-login.status", "Windows VM", "Login do Windows: estado",
+               "Mostra se o Windows entra sozinho ou exige senha, e se foi verificado.",
+               ("windows-vm", "guest-login", "status", "--json"), "dialog-password",
+               badge="JSON", group="Windows VM", result_view="auto",
+               keywords=("autologin", "senha", "netplwiz", "login")),
+            _a("windows.guest-login.auto", "Windows VM", "Entrar sem senha (autologin)",
+               "Windows entra direto na área de trabalho. A senha da conta é gerada e guardada no LSA, nunca em registro.",
+               ("windows-vm", "guest-login", "apply", "--mode", "auto", "--json"),
+               "system-log-out", mutable=True,
+               preview=("windows-vm", "guest-login", "status", "--json"),
+               badge="Requer VM ligada", risk="high", group="Windows VM",
+               keywords=("autologin", "sem senha", "netplwiz")),
+            _a("windows.guest-login.password", "Windows VM", "Exigir senha ao entrar",
+               "Desliga o autologin e define a senha da conta. A senha vai pela entrada padrão, nunca pela linha de comando.",
+               # No {password} placeholder: a stdin-bound secret has no argv
+               # position at all, and a placeholder here would be serialised
+               # verbatim into the static action catalog.
+               ("windows-vm", "guest-login", "apply", "--mode", "password",
+                "--password-stdin", "--json"),
+               "dialog-password", mutable=True,
+               preview=("windows-vm", "guest-login", "status", "--json"),
+               parameters=(
+                   _p("password", "Nova senha do Windows", "secret",
+                      placeholder="mín. 14 caracteres"),
+               ),
+               stdin_parameter="password",
+               badge="Requer VM ligada", risk="high", group="Windows VM",
+               keywords=("senha", "netplwiz", "exigir senha", "login")),
         ]
     )
 
@@ -298,13 +355,25 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("waydroid.install", "Waydroid", "Instalar Waydroid", "Configura container e launchers.", ("waydroid", "install"), "system-software-install", mutable=True, preview=("waydroid", "plan"), elevated=True),
             _a("waydroid.repair", "Waydroid", "Reparar Waydroid", "Repara host, serviços e sessão.", ("waydroid", "repair"), "tools-check-spelling", mutable=True, preview=("waydroid", "plan"), elevated=True),
             _a("waydroid.launch", "Waydroid", "Abrir Waydroid", "Inicia sessão otimizada.", ("waydroid", "launch"), "media-playback-start", mutable=True, preview=("waydroid", "status", "--json")),
-            _a("waydroid.boot.install", "Waydroid", "Instalar boot direto", "Entrada GRUB para sessão Android.", ("waydroid", "boot", "install"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True),
+            _a("waydroid.boot.install", "Waydroid", "Instalar boot direto (Android)", "Entrada GRUB para sessão Android.", ("waydroid", "boot", "install"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True),
             _a("waydroid.boot.next", "Waydroid", "Próximo boot Android", "Agenda sessão Waydroid.", ("waydroid", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True),
             _a("waydroid.host-access", "Waydroid", "Acesso host → Android", "Link para o armazenamento interno do Waydroid.", ("waydroid", "host-access", "link"), "folder-remote", mutable=True, preview=("waydroid", "host-access", "status")),
         ]
     )
     actions.append(
         _a("windows.host-access", "Windows VM", "Acesso host → disco VM", "Monta o disco da VM no host (libguestfs).", ("windows-vm", "host-access", "mount"), "drive-harddisk", mutable=True, preview=("windows-vm", "host-access", "status")),
+    )
+
+    actions.extend(
+        [
+            _a("homelab.status", "Homelab", "Status da stack", "Apps, perfil ativo, orçamento e política AI.", ("server", "homelab", "status", "--json"), "folder-remote", badge="JSON", keywords=("homelab", "jellyfin", "vaultwarden")),
+            _a("homelab.profiles", "Homelab", "Perfis e pesos", "Lista os 6 perfis do registro e pesos do governor.", ("server", "homelab", "profile", "list"), "folder-documents", badge="JSON", keywords=("perfil", "weights")),
+            _a("homelab.budget", "Homelab", "Orçamento do perfil", "MiB do governor com headroom de 20%.", ("server", "homelab", "governor", "budget", "core"), "preferences-system-performance", badge="Seguro", keywords=("governor", "budget", "ram")),
+            _a("homelab.backup", "Homelab", "Backup verificado", "manifest.json + sha256 por volume nomeado.", ("server", "homelab", "backup"), "document-save", mutable=True, preview=("server", "homelab", "backup", "--dry-run"), badge="Backup"),
+            _a("homelab.verify", "Homelab", "Verificar backup", "Recomputa sha256; falha fechado se adulterado.", ("server", "homelab", "backup", "verify", "--source", "{input}"), "document-edit-verify", mutable=True, preview=("server", "homelab", "status"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação"),
+            _a("homelab.restore", "Homelab", "Restaurar backup", "Verify-then-apply; recusa sem --yes ou adulterado.", ("server", "homelab", "restore", "--source", "{input}", "--yes"), "document-revert", mutable=True, preview=("server", "homelab", "restore", "--source", "{input}", "--dry-run"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Resgate"),
+            _a("homelab.policy", "Homelab", "Política AI", "Broker conservative/permissive e ações negadas.", ("ai", "policy", "status"), "dialog-password", badge="JSON", keywords=("policy", "broker", "ollama", "hermes")),
+        ]
     )
 
     actions.extend(
@@ -323,8 +392,6 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("server.homelab.open-vaultwarden", "Servidor", "Abrir Vaultwarden", "Cofre Bitwarden compatível.", ("server", "homelab", "open", "vaultwarden"), "dialog-password", keywords=("vaultwarden", "bitwarden")),
             _a("server.homelab.open-kuma", "Servidor", "Abrir Uptime Kuma", "Monitoramento de serviços.", ("server", "homelab", "open", "uptime-kuma"), "utilities-system-monitor", keywords=("uptime", "kuma")),
             _a("server.homelab.logs", "Servidor", "Logs Portainer", "Mostra logs recentes do dashboard Docker.", ("server", "homelab", "logs", "portainer"), "text-x-log", keywords=("logs",)),
-            _a("server.homelab.backup", "Servidor", "Backup Homelab", "Salva volumes nomeados em arquivo tar.gz.", ("server", "homelab", "backup"), "document-save", mutable=True, preview=("server", "homelab", "backup", "--dry-run"), badge="Backup"),
-            _a("server.homelab.restore", "Servidor", "Restaurar Homelab", "Restaura volumes a partir de backup local.", ("server", "homelab", "restore", "--source", "{input}", "--yes"), "document-revert", mutable=True, preview=("server", "homelab", "restore", "--source", "{input}", "--dry-run"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Resgate"),
             _a("server.homelab.update", "Servidor", "Atualizar Homelab", "Backup antes de pull/up com tags fixas.", ("server", "homelab", "update"), "system-software-update", mutable=True, preview=("server", "homelab", "update", "--dry-run"), badge="Backup"),
             _a("server.homelab.tailscale", "Servidor", "Autenticar Tailscale", "Prepara acesso remoto privado para o Homelab.", ("server", "homelab", "tailscale"), "network-vpn", mutable=True, preview=("server", "homelab", "plan", "--access", "tailscale"), elevated=True),
             _a("server.casaos.status", "Servidor", "Status CasaOS", "Detecta instalação e compatibilidade.", ("server", "casaos", "status"), "network-server", badge="JSON", keywords=("casaos", "zimaos")),
@@ -339,7 +406,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
     )
 
     emu_rows = [
-        ("status", "Status emulação", "Auditoria geral.", ("emulation", "status"), None),
+        ("status", "Status emulação", "Estado atual da stack e componentes instalados.", ("emulation", "status"), None),
         ("setup", "Setup completo", "Stack completa de emulação.", ("emulation", "setup", "install"), ("emulation", "setup", "dry-run")),
         ("layout", "Criar layout", "Pastas compartilhadas de ROMs, BIOS e saves.", ("emulation", "layout"), ("emulation", "status")),
         ("emudeck", "Instalar EmuDeck", "Launcher AppImage e integração.", ("emulation", "emudeck", "install"), ("emulation", "emudeck", "dry-run")),
@@ -370,7 +437,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("lua", "Instalar Lua", "Lua, LuaJIT e LuaRocks.", ("emulation", "lua", "install"), ("emulation", "lua", "dry-run")),
         ("steam-tools", "Instalar Steam tools", "Ferramentas auxiliares e backups.", ("emulation", "steam-tools", "install"), ("emulation", "steam-tools", "dry-run")),
         ("heroic", "Reparar Heroic", "Defaults, biblioteca e menu KDE.", ("emulation", "heroic", "repair"), ("emulation", "heroic", "plan")),
-        ("doctor", "Diagnóstico emulação", "Auditoria completa do ecossistema.", ("emulation", "doctor", "--json"), None),
+        ("doctor", "Diagnóstico emulação", "Verificação profunda: configurações, integrações e integridade de ROMs/BIOS.", ("emulation", "doctor", "--json"), None),
         ("fixes", "Reparos amigáveis", "Lista correções disponíveis.", ("emulation", "fixes", "list"), None),
         ("optimizers", "Aplicar configs por jogo", "14 perfis DuckStation, PCSX2 e Dolphin.", ("emulation", "optimizer", "apply-all"), ("emulation", "optimizer", "plan")),
     ]
@@ -439,7 +506,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("emulation.keys", "Emulação", "Importar Switch keys", "Importa keys próprias.", ("emulation", "switch", "import-keys", "{input}"), "dialog-password", mutable=True, preview=("emulation", "status"), input_label="Selecione prod.keys", input_kind="file", badge="Arquivo local"),
             _a("emulation.firmware", "Emulação", "Importar firmware", "Importa firmware próprio.", ("emulation", "switch", "import-firmware", "{input}"), "folder-open", mutable=True, preview=("emulation", "status"), input_label="Selecione firmware", input_kind="path", badge="Arquivo local"),
             _a("emulation.nsz", "Emulação", "Converter NSZ", "Conversão atômica NSZ → NSP.", ("emulation", "nsz", "convert", "{input}"), "document-export", mutable=True, preview=("emulation", "nsz", "plan", "{input}"), input_label="Selecione NSZ ou pasta", input_kind="path"),
-            _a("emulation.ps3-game", "Emulação", "Importar jogo PS3", "Importa dump próprio.", ("emulation", "ps3", "import-game", "{input}"), "folder-open", mutable=True, preview=("emulation", "ps3", "dry-run"), input_label="Selecione dump PS3", input_kind="path"),
+            _a("emulation.ps3-game", "Emulação", "Importar jogo PS3", "Importa pasta de jogo (dump próprio) para a biblioteca PS3.", ("emulation", "ps3", "import-game", "{input}"), "folder-open", mutable=True, preview=("emulation", "ps3", "dry-run"), input_label="Selecione dump PS3", input_kind="path"),
         ]
     )
 
@@ -485,7 +552,10 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("desktop", "Reparar apps desktop", "Claude/Codex e atualizadores.", ("ai", "desktop", "repair"), ("ai", "desktop", "status")),
         ("compat", "Agent compatibility", "RTK, Caveman, Headroom e memória.", ("ai", "compat", "setup"), ("ai", "compat", "status")),
         ("admin", "Admin bridge", "Instala phasezero-admin/bigsudo.", ("ai", "setup", "admin"), ("ai", "admin", "status")),
-        ("opencode", "Sincronizar OpenCode", "Alinha CLI e desktop.", ("ai", "opencode", "sync"), ("ai", "opencode", "status")),
+        ("opencode-status", "OpenCode + 9Router", "Audita versões, configuração canônica, segredo por arquivo e listener loopback.", ("ai", "opencode", "status"), None),
+        ("opencode-install", "Configurar OpenCode + 9Router", "Mescla configuração e aplica provider local com rollback.", ("ai", "opencode", "install", "--yes"), ("ai", "opencode", "install", "--dry-run")),
+        ("opencode-verify", "Verificar OpenCode + 9Router", "Valida isolamento de segredo e funcionamento da rota.", ("ai", "opencode", "verify"), None),
+        ("opencode", "Alinhar versão OpenCode", "Alinha CLI e desktop.", ("ai", "opencode", "sync"), ("ai", "opencode", "version-status")),
         ("opencode-free", "Modelo free OpenCode", "Corrige 'Interrompido' com modelo free (deepseek-flash).", ("ai", "opencode", "free-model"), ("ai", "opencode", "status")),
         ("omo", "Instalar OMO", "Plugin oh-my-openagent.", ("ai", "omo", "setup"), ("ai", "omo", "status")),
         ("memory", "Instalar ai-memory", "Memória persistente de agentes.", ("ai", "setup", "memory"), ("ai", "status")),
@@ -497,9 +567,15 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("codexbar-setup", "Configurar CodexBar", "Instala somente CLI/config; plasmoid permanece opt-in.", ("ai", "codexbar", "setup"), ("ai", "codexbar", "status")),
         ("codexbar-auth", "Autenticar CodexBar", "Detecta sessões Codex/Claude sem exibir credenciais.", ("ai", "codexbar", "auth", "--provider", "all"), ("ai", "codexbar", "status")),
         ("codexbar-repair", "Reparar CodexBar", "Repara CLI/config sem instalar ou atualizar QML no Plasma.", ("ai", "codexbar", "repair"), ("ai", "codexbar", "health")),
-        ("ides", "Configurar IDEs", "Integrações de agentes.", ("ai", "setup", "ides"), ("ai", "status")),
+        ("ides", "Configurar IDEs", "Integra agents (OpenCode, Codex, Claude) nas IDEs/editor.", ("ai", "setup", "ides"), ("ai", "status")),
         ("mcp-sync", "Sincronizar MCPs", "Sincroniza defaults seguros.", ("ai", "mcp", "sync", "all"), ("ai", "mcp", "status")),
+        ("claude-status", "Claude + Bonsai", "Audita OAuth, rotas isoladas, hooks e conflitos com proxies.", ("ai", "claude", "status"), None),
+        ("claude-install", "Reparar Claude + Bonsai", "Aplica instalação transacional com backup e rollback automático.", ("ai", "claude", "install", "--yes"), ("ai", "claude", "install", "--dry-run")),
+        ("claude-verify", "Verificar rotas Claude", "Valida assinatura, Bonsai e 9Router sem expor credenciais.", ("ai", "claude", "verify"), None),
+        ("claude-bonsai-login", "Login Bonsai", "Inicia autenticação interativa; sessões continuam com consentimento de upload.", ("ai", "claude", "login", "bonsai"), ("ai", "claude", "status")),
         ("9router-status", "Status 9Router", "Serviço, providers, combos e watchdog.", ("ai", "9router", "status"), None),
+        ("9router-tui", "Abrir TUI 9Router", "Anexa ao serviço ativo sem iniciar nem matar outra instância.", ("ai", "9router", "tui"), None),
+        ("9router-repair", "Reparar 9Router", "Migra units para caminhos estáveis e valida serviço, bridge e watchdog.", ("ai", "9router", "repair"), ("ai", "9router", "status")),
         ("9router-install", "Instalar 9Router", "Instala gateway local, segredo, serviço e watchdog.", ("ai", "9router", "install"), ("ai", "9router", "status")),
         ("9router-dashboard", "Abrir dashboard 9Router", "Gerencia providers, modelos, combos e chaves no painel local.", ("ai", "9router", "dashboard"), None),
         ("9router-test", "Testar 9Router", "Valida saúde e endpoint /v1/models autenticado.", ("ai", "9router", "test"), None),
@@ -535,11 +611,57 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             )
         )
 
+    actions.append(
+        _a(
+            "ai.claude-rollback",
+            "IA & Dev",
+            "Rollback Claude + Bonsai",
+            "Restaura arquivos e serviços registrados por um manifesto cc-installer.",
+            ("ai", "claude", "rollback", "{input}"),
+            "edit-undo",
+            mutable=True,
+            preview=("ai", "claude", "status"),
+            input_label="Selecione manifest.json",
+            input_kind="file",
+            badge="Reversível",
+        )
+    )
+    actions.append(
+        _a(
+            "ai.opencode-rollback",
+            "IA & Dev",
+            "Rollback OpenCode + 9Router",
+            "Restaura configurações e referência de segredo registradas no manifesto.",
+            ("ai", "opencode", "rollback", "{input}"),
+            "edit-undo",
+            mutable=True,
+            preview=("ai", "opencode", "status"),
+            input_label="Selecione manifest.json",
+            input_kind="file",
+            badge="Reversível",
+        )
+    )
+    actions.append(
+        _a(
+            "ai.claude-bonsai-run",
+            "IA & Dev",
+            "Executar Claude via Bonsai",
+            "Seleciona projeto revisado; Bonsai pede consentimento e usa autenticação externa isolada.",
+            ("ai", "claude", "run", "bonsai", "--cwd", "{input}"),
+            "system-run",
+            mutable=True,
+            preview=("ai", "claude", "preflight", "bonsai", "--cwd", "{input}"),
+            input_label="Selecione projeto revisado para snapshot/upload",
+            input_kind="path",
+            badge="Upload com consentimento",
+        )
+    )
+
     # Dedicated "Proxies IA" page: lifecycle, OAuth and IDE wiring for the
     # OpenAI-compatible proxy suite (linux/ai/proxy-suite.sh).
     proxy_rows = [
         ("proxies", "Instalar proxies IA", "Suite Linux OpenAI-compatible.", ("ai", "proxies", "install", "all"), ("ai", "proxies", "status")),
-        ("proxies-ides", "Configurar proxies nas IDEs", "Integra OpenCode, VS Code/Code-OSS e ZCode.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
+        ("proxies-ides", "Configurar proxies nas IDEs", "Injeta proxies de IA (OpenCode, VS Code/Code-OSS, ZCode) nas IDEs.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
         ("proxies-auth", "Auth proxies IA", "Status redigido de login/sessão.", ("ai", "proxies", "auth", "all"), None),
         ("proxies-login-kimi", "Login Kimi", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "kimiproxy"), ("ai", "proxies", "auth", "kimiproxy")),
         ("proxies-login-qwen", "Login Qwen", "Abre fluxo manual de browser do QwenProxy.", ("ai", "proxies", "login", "qwenproxy"), ("ai", "proxies", "auth", "qwenproxy")),
@@ -692,8 +814,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("emulation.hydra-configure", "Emulação", "Configurar Hydra", "Configura Hydra Classic e emuladores.", ("emulation", "hydra", "configure"), "applications-games", mutable=True, preview=("emulation", "hydra", "status"), visibility="advanced"),
             _a("emulation.ps1", "Emulação", "Configurar PlayStation 1", "Configura paths DuckStation.", ("emulation", "ps1", "configure"), "applications-games", mutable=True, preview=("emulation", "status"), visibility="advanced"),
             _a("emulation.ps2", "Emulação", "Configurar PlayStation 2", "Configura paths PCSX2.", ("emulation", "ps2", "configure"), "applications-games", mutable=True, preview=("emulation", "status"), visibility="advanced"),
-            _a("emulation.ps3-pkg", "Emulação", "Importar PKG PS3", "Importa PKG obtido legalmente.", ("emulation", "ps3", "import-pkg", "{input}"), "package-x-generic", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione PKG PS3", "file"),), visibility="advanced"),
-            _a("emulation.ps3-rap", "Emulação", "Importar RAP PS3", "Importa licença RAP própria.", ("emulation", "ps3", "import-rap", "{input}"), "dialog-password", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione RAP", "file"),), visibility="advanced"),
+            _a("emulation.ps3-pkg", "Emulação", "Importar PKG PS3", "Instala pacote PKG (jogo ou loja) no PS3.", ("emulation", "ps3", "import-pkg", "{input}"), "package-x-generic", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione PKG PS3", "file"),), visibility="advanced"),
+            _a("emulation.ps3-rap", "Emulação", "Importar RAP PS3", "Importa licença RAP para ativar um PKG instalado.", ("emulation", "ps3", "import-rap", "{input}"), "dialog-password", mutable=True, preview=("emulation", "ps3", "dry-run"), parameters=(_p("input", "Selecione RAP", "file"),), visibility="advanced"),
             _a("emulation.performance.status", "Emulação", "Status performance", "Audita perfis adaptativos.", ("emulation", "performance", "status"), "utilities-system-monitor", visibility="advanced"),
             _a("emulation.dualscreen.status", "Emulação", "Detectar telas", "Detecta Deck e display externo.", ("emulation", "dualscreen", "detect"), "video-display", visibility="advanced"),
             _a("emulation.lua.status", "Emulação", "Status Lua", "Audita Lua, LuaJIT e LuaRocks.", ("emulation", "lua", "status"), "utilities-terminal", visibility="advanced"),
@@ -740,7 +862,6 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("ai.omo.enable", "IA & Dev", "Ativar OMO", "Ativa plugin OpenCode.", ("ai", "omo", "enable"), "media-playback-start", mutable=True, preview=("ai", "omo", "status"), visibility="advanced"),
             _a("ai.omo.disable", "IA & Dev", "Desativar OMO", "Desativa plugin sem remover.", ("ai", "omo", "disable"), "media-playback-pause", mutable=True, preview=("ai", "omo", "status"), visibility="advanced"),
             _a("ai.omo.uninstall", "IA & Dev", "Remover OMO", "Remove plugin OpenCode.", ("ai", "omo", "uninstall"), "edit-delete", mutable=True, preview=("ai", "omo", "status"), risk="high", visibility="advanced"),
-            _a("ai.opencode.status", "IA & Dev", "Status OpenCode", "Audita CLI, desktop e modelos.", ("ai", "opencode", "status"), "applications-development", visibility="advanced"),
             _a("ai.opencode.local", "IA & Dev", "Modelo local OpenCode", "Configura modelo Ollama local.", ("ai", "opencode", "local-model"), "applications-development", mutable=True, preview=("ai", "opencode", "status"), visibility="advanced"),
             _a("ai.opencode.hook", "IA & Dev", "Instalar hook OpenCode", "Instala sincronização automática.", ("ai", "opencode", "install-hook"), "system-run", mutable=True, preview=("ai", "opencode", "status"), visibility="advanced"),
             _a("ai.secrets.rotate", "IA & Dev", "Rotacionar secrets IA", "Rotaciona chaves gerenciadas sem exibi-las.", ("ai", "secrets", "rotate"), "dialog-password", mutable=True, preview=("ai", "status"), risk="high", visibility="advanced"),
@@ -872,6 +993,49 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 result_view="table",
             )
         )
+
+    # Dedicated "Roteamento IA" page: per-task routes driven by 9Router
+    # inventory, quota and policy (linux/ai/routing_manager.py).
+    routing_rows = [
+        ("routing-status", "Status Roteamento IA", "Inventário redigido: saúde, estados e cotas.", ("ai", "routing", "status", "--json"), None),
+        ("routing-inventory", "Atualizar cotas", "Coleta inventário e quota por conexão (estado cacheado).", ("ai", "routing", "inventory", "--refresh-quota", "--json"), None),
+        ("routing-recommend-code", "Recomendar rota — Código", "Cadeia de fallback para escrever código.", ("ai", "routing", "recommend", "--task", "code", "--json"), None),
+        ("routing-recommend-analysis", "Recomendar rota — Análise", "Cadeia de fallback para análise/revisão.", ("ai", "routing", "recommend", "--task", "analysis", "--json"), None),
+        ("routing-recommend-plan", "Recomendar rota — Plano", "Cadeia de fallback para planejamento.", ("ai", "routing", "recommend", "--task", "plan", "--json"), None),
+        ("routing-plan", "Plano da rota (diff)", "Mostra combo alvo e variáveis de ambiente, sem mutar.", ("ai", "routing", "plan", "--task", "code", "--client", "claude"), None),
+        ("routing-apply-all", "Aplicar plano", "Materializa combos phasezero-* transacionalmente (todas as tarefas).", ("ai", "routing", "apply", "--task", "code", "--yes"), ("ai", "routing", "apply", "--task", "code", "--dry-run")),
+        ("routing-verify", "Verificar roteamento", "Valida combos vs plano, redação e isolamento Bonsai.", ("ai", "routing", "verify"), None),
+        ("routing-refresh", "Refresh automático de cotas", "Atualização explícita de quota (scheduler 5–10 min).", ("ai", "routing", "refresh"), None),
+    ]
+    for key, title, description, args, preview in routing_rows:
+        actions.append(
+            _a(
+                f"ai.{key}",
+                "Roteamento IA",
+                title,
+                description,
+                args,
+                "network-transmit-receive",
+                mutable=preview is not None,
+                preview=preview,
+                badge="Preview" if preview else "",
+            )
+        )
+    actions.append(
+        _a(
+            "ai.routing-rollback",
+            "Roteamento IA",
+            "Rollback Roteamento IA",
+            "Restaura combos e estado registrados por um manifesto routing-apply.",
+            ("ai", "routing", "rollback", "{input}"),
+            "edit-undo",
+            mutable=True,
+            preview=("ai", "routing", "verify"),
+            input_label="Selecione manifest.json",
+            input_kind="file",
+            badge="Reversível",
+        )
+    )
 
     validate_catalog(actions)
     selected_platform = current_platform(platform_name)

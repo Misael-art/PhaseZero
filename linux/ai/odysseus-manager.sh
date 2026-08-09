@@ -109,7 +109,7 @@ X-PhaseZero-MenuGroup=web.ai
 X-PhaseZero-Managed=true
 EOF
     chmod 0644 "$DASHBOARD_ENTRY"
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true; fi
     pz_write_managed_file "$SYSTEMD_USER_DIR/$SERVICE" user <<EOF
 [Unit]
 Description=PhaseZero Odysseus AI workspace (rootless Podman)
@@ -182,7 +182,8 @@ record_runtime_image() {
     local image tmp
     image="$(podman inspect phasezero-odysseus-odysseus-1 --format '{{.Image}}' 2>/dev/null || true)"
     [ -n "$image" ] || return 0
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile template arg optional; default mktemp template intended
+    tmp="$(pz_tempfile)"
     jq --arg image "$image" '.runtimeImage=$image' "$MANIFEST" > "$tmp"
     install -m 0600 "$tmp" "$MANIFEST"
     rm -f "$tmp"
@@ -233,7 +234,8 @@ services:
 EOF
     chmod 0600 "$LOCK_FILE"
     local tmp
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile template arg optional; default mktemp template intended
+    tmp="$(pz_tempfile)"
     jq --arg chroma "$chroma" --arg searx "$searx" --arg ntfy "$ntfy" \
         '.dependencyImages={chromadb:$chroma,searxng:$searx,ntfy:$ntfy}' "$MANIFEST" > "$tmp"
     install -m 0600 "$tmp" "$MANIFEST"
@@ -271,6 +273,7 @@ harden_build_context() {
     local script="$CURRENT/docker/build-realesrgan-wheels.sh" dockerfile="$CURRENT/Dockerfile" patch_hash tmp
     [ -f "$script" ] || { pz_error "Odysseus Real-ESRGAN build helper missing"; return 1; }
     if ! grep -Fq 'PHASEZERO: pure-Python wheel build' "$script"; then
+        # shellcheck disable=SC2016 # literal ${OUT} must stay unexpanded in sed pattern
         sed -i '/echo ">> building wheels into ${OUT}"/i\
 # PHASEZERO: pure-Python wheel build; setup_requires pulls Torch/CUDA needlessly.\
 sed -E -i "s/setup_requires=\\[[^]]*\\]/setup_requires=[]/" ./*/setup.py' "$script"
@@ -281,7 +284,8 @@ sed -E -i "s/setup_requires=\\[[^]]*\\]/setup_requires=[]/" ./*/setup.py' "$scri
     fi
     patch_hash="$(git -C "$CURRENT" diff -- Dockerfile docker/build-realesrgan-wheels.sh | sha256sum | awk '{print $1}')"
     [ -n "$patch_hash" ] || { pz_error "Odysseus build patch hash missing"; return 1; }
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile template arg optional; default mktemp template intended
+    tmp="$(pz_tempfile)"
     jq --arg hash "$patch_hash" \
         '.localPatches=[{id:"phasezero-container-build-hardening",sha256:$hash,reason:"avoid Torch/CUDA setup_requires; force bounded IPv4 APT retries"}]' \
         "$MANIFEST" > "$tmp"
@@ -383,13 +387,13 @@ backup_data() {
 
 doctor_odysseus() {
     local compose=false rootless=false env_mode="missing" current=false auth=false bypass=true socket=false images_locked=false router_bridge=false
-    podman compose version >/dev/null 2>&1 && compose=true || true
+    if podman compose version >/dev/null 2>&1; then compose=true; fi
     [ "$(podman info --format '{{.Host.Security.Rootless}}' 2>/dev/null || echo false)" = true ] && rootless=true
     [ -f "$ENV_FILE" ] && env_mode="$(stat -c %a "$ENV_FILE")"
     [ -f "$CURRENT/docker-compose.yml" ] && current=true
     grep -qx 'AUTH_ENABLED=true' "$ENV_FILE" 2>/dev/null && auth=true
     grep -qx 'LOCALHOST_BYPASS=false' "$ENV_FILE" 2>/dev/null && bypass=false
-    grep -Rqs '/var/run/docker.sock' "$CONFIG" 2>/dev/null && socket=true || true
+    if grep -Rqs '/var/run/docker.sock' "$CONFIG" 2>/dev/null; then socket=true; fi
     [ "$(grep -c '@sha256:' "$LOCK_FILE" 2>/dev/null || true)" -eq 3 ] && images_locked=true
     [ -S "$ROUTER_SOCKET_DIR/9router.sock" ] && router_bridge=true
     jq -cn --argjson compose "$compose" --argjson rootless "$rootless" --arg envMode "$env_mode" \

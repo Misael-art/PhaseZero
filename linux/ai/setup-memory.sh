@@ -53,27 +53,29 @@ install_via_aur() {
     return 1
 }
 
+# Pinned runtime image; never :latest so upgrades are explicit.
+AI_MEMORY_DOCKER_TAG="${AI_MEMORY_DOCKER_TAG:-0.7.2}"
+
 install_via_docker_wrapper() {
     command -v docker >/dev/null 2>&1 || return 1
     mkdir -p "$LOCAL_BIN"
-    pz_write_managed_file "$LOCAL_BIN/ai-memory" <<'EOF'
+    pz_write_managed_file "$LOCAL_BIN/ai-memory" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-image="${AI_MEMORY_DOCKER_IMAGE:-akitaonrails/ai-memory:latest}"
-data_dir="${AI_MEMORY_DATA_DIR:-$HOME/.local/share/ai-memory}"
-workdir="${PWD:-$HOME}"
-[ -d "$workdir" ] || workdir="$HOME"
-mkdir -p "$data_dir"
-exec docker run --rm \
-  --network host \
-  --user "$(id -u):$(id -g)" \
-  -e HOME="$HOME" \
-  -e USER="${USER:-$(id -un)}" \
-  -e AI_MEMORY_DATA_DIR="/data" \
-  -v "$HOME:$HOME" \
-  -v "$data_dir:/data" \
-  -w "$workdir" \
-  "$image" "$@"
+image="\${AI_MEMORY_DOCKER_IMAGE:-akitaonrails/ai-memory:${AI_MEMORY_DOCKER_TAG}}"
+data_dir="\${AI_MEMORY_DATA_DIR:-\$HOME/.local/share/ai-memory}"
+workdir="\${PWD:-\$HOME}"
+[ -d "\$workdir" ] || workdir="\$HOME"
+mkdir -p "\$data_dir"
+exec docker run --rm \\
+  --user "\$(id -u):\$(id -g)" \\
+  -e HOME="\$HOME" \\
+  -e USER="\${USER:-\$(id -un)}" \\
+  -e AI_MEMORY_DATA_DIR="/data" \\
+  -v "\$HOME:\$HOME" \\
+  -v "\$data_dir:/data" \\
+  -w "\$workdir" \\
+  "\$image" "\$@"
 EOF
     chmod +x "$LOCAL_BIN/ai-memory"
     export PATH="$LOCAL_BIN:$PATH"

@@ -57,8 +57,9 @@ EOF
     if [ -f "$old_selector" ] && grep -Fq 'X-PhaseZero-Managed=true' "$old_selector"; then
         rm -f "$old_selector"
     fi
-    command -v update-desktop-database >/dev/null 2>&1 &&
+    if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$APP_DIR" >/dev/null 2>&1 || true
+    fi
     pz_info "SteamOS convenience launchers installed"
 }
 

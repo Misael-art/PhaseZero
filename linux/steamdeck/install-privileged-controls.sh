@@ -122,7 +122,8 @@ install_files() {
     install -m 0755 "$SOURCE_HELPER" "$TARGET_HELPER"
 
     local tmp
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile template arg optional; default mktemp template intended
+    tmp="$(pz_tempfile)"
     sudoers_content > "$tmp"
     visudo -cf "$tmp" >/dev/null
     install -m 0440 "$tmp" "$SUDOERS_FILE"

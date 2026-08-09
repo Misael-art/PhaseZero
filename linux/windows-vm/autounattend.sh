@@ -9,7 +9,7 @@ AUTOUATTEND_DIR=""
 generate_autounattend() {
     local wim_index=1 lang="pt-BR" keyboard="pt-BR" timezone="America/Sao_Paulo"
     local user="phasezero" password="" disk_serial="" product_key=""
-    local tpm_bypass=0
+    local tpm_bypass=0 disk_id=0 autologon_count="" virtio=1 driver_path="" disk_guard=0
 
     while [ $# -gt 0 ]; do
         case "$1" in
@@ -30,6 +30,20 @@ generate_autounattend() {
             --product-key) product_key="${2:-}"; shift 2 ;;
             --product-key=*) product_key="${1#*=}"; shift ;;
             --tpm-bypass) tpm_bypass=1; shift ;;
+            --disk-id) disk_id="${2:-0}"; shift 2 ;;
+            --disk-id=*) disk_id="${1#*=}"; shift ;;
+            # Persistent by default so GRUB -> Windows-logged-in needs no human.
+            # A finite count exists for password-policy installs.
+            --autologon-count) autologon_count="${2:-}"; shift 2 ;;
+            --autologon-count=*) autologon_count="${1#*=}"; shift ;;
+            --no-virtio) virtio=0; shift ;;
+            # Explicit WinPE-visible path, e.g. E:\amd64\w11. Only supply it
+            # when the install target really is virtio-blk.
+            --driver-path) driver_path="${2:-}"; shift 2 ;;
+            --driver-path=*) driver_path="${1#*=}"; shift ;;
+            # Opt-in: aborts Setup in WinPE builds without a working WMI
+            # service. Prove it on the target media before relying on it.
+            --disk-guard) disk_guard=1; shift ;;
             --output-dir) AUTOUATTEND_DIR="${2:-}"; shift 2 ;;
             --output-dir=*) AUTOUATTEND_DIR="${1#*=}"; shift ;;
             *) pz_error "unknown autounattend option: $1"; return 1 ;;
@@ -37,6 +51,17 @@ generate_autounattend() {
     done
 
     [ -n "$disk_serial" ] || { pz_error "--disk-serial required"; return 1; }
+    # The serial is a guard token compared verbatim inside WinPE; anything that
+    # needs escaping there would silently never match.
+    [[ "$disk_serial" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || {
+        pz_error "--disk-serial must be 1-32 chars of [A-Za-z0-9_-]"
+        return 1
+    }
+    [[ "$disk_id" =~ ^[0-9]+$ ]] || { pz_error "--disk-id must be numeric"; return 1; }
+    [ -z "$autologon_count" ] || [[ "$autologon_count" =~ ^[0-9]+$ ]] || {
+        pz_error "--autologon-count must be numeric"
+        return 1
+    }
     [ -n "$AUTOUATTEND_DIR" ] || AUTOUATTEND_DIR="${PZ_STATE}/autounattend-$$"
     mkdir -p "$AUTOUATTEND_DIR"
     chmod 0700 "$AUTOUATTEND_DIR"
@@ -46,38 +71,108 @@ generate_autounattend() {
         password_xml="<Password>${password}</Password>"
     fi
 
+    # Setup addresses the install target by 0-based index and wipes it
+    # unconditionally, so the index alone is never a safe contract on a machine
+    # with more than one disk.
+    #
+    # The guard is opt-in because it provably cannot run in the Setup WinPE of
+    # Windows 11 25H2: WMIC.exe is present in boot.wim but the WMI service that
+    # backs it is not, so the query returns nothing, the script exits non-zero
+    # and Setup aborts with 0x800700FF on a disk it should have accepted.
+    # Verified by bisecting a real install: identical media minus this command
+    # installs normally. Enabling it on a single-disk VM only adds a failure
+    # mode; it is meant for physical media, where it must be re-proven first.
+    local guard_xml=""
+    if [ "$disk_guard" = "1" ]; then
+        guard_xml="
+                <RunSynchronousCommand wcm:action=\"add\">
+                    <Path>cmd /c for %i in (D E F G H I J K L M N O P Q R S T U V W X Y Z) do @if exist %i:\\pz-disk-guard.cmd %i:\\pz-disk-guard.cmd ${disk_serial} ${disk_id}</Path>
+                    <Description>PhaseZeroDiskTargetGuard</Description>
+                    <Order>1</Order>
+                    <WillReboot>Never</WillReboot>
+                </RunSynchronousCommand>"
+    fi
+
     local bypass_xml=""
     if [ "$tpm_bypass" = "1" ]; then
         bypass_xml="
                 <RunSynchronousCommand wcm:action=\"add\">
                     <Path>reg add HKLM\\System\\Setup\\LabConfig /v BypassTPMCheck /t reg_dword /d 00000001 /f</Path>
                     <Description>BypassTPMCheck</Description>
-                    <Order>1</Order>
+                    <Order>2</Order>
                 </RunSynchronousCommand>
                 <RunSynchronousCommand wcm:action=\"add\">
                     <Path>reg add HKLM\\System\\Setup\\LabConfig /v BypassSecureBootCheck /t reg_dword /d 00000001 /f</Path>
                     <Description>BypassSecureBootCheck</Description>
-                    <Order>2</Order>
+                    <Order>3</Order>
                 </RunSynchronousCommand>
                 <RunSynchronousCommand wcm:action=\"add\">
                     <Path>reg add HKLM\\System\\Setup\\LabConfig /v BypassRAMCheck /t reg_dword /d 00000001 /f</Path>
                     <Description>BypassRAMCheck</Description>
-                    <Order>3</Order>
+                    <Order>4</Order>
                 </RunSynchronousCommand>
                 <RunSynchronousCommand wcm:action=\"add\">
                     <Path>reg add HKLM\\System\\Setup\\LabConfig /v BypassStorageCheck /t reg_dword /d 00000001 /f</Path>
                     <Description>BypassStorageCheck</Description>
-                    <Order>4</Order>
+                    <Order>5</Order>
                 </RunSynchronousCommand>
                 <RunSynchronousCommand wcm:action=\"add\">
                     <Path>reg add HKLM\\System\\Setup\\LabConfig /v BypassCPUCheck /t reg_dword /d 00000001 /f</Path>
                     <Description>BypassCPUCheck</Description>
-                    <Order>5</Order>
+                    <Order>6</Order>
                 </RunSynchronousCommand>"
     fi
 
-    local product_key_xml=""
-    [ -n "$product_key" ] && product_key_xml="<ProductKey>${product_key}</ProductKey>"
+    # DriverPaths must resolve. Speculatively listing D: through H: to find
+    # whichever letter WinPE gave the virtio media makes Setup reject the whole
+    # windowsPE pass with 0x80070057 as soon as one path is absent, which is the
+    # normal case. Only an explicit, caller-supplied path is emitted.
+    #
+    # Nothing needs this by default: the provisioning VM exposes its disk as
+    # NVMe, for which Windows ships an inbox driver. It exists for a caller that
+    # deliberately installs onto virtio-blk.
+    local virtio_xml=""
+    if [ "$virtio" = "1" ] && [ -n "$driver_path" ]; then
+        virtio_xml="
+        <component name=\"Microsoft-Windows-PnpCustomizationsWinPE\" processorArchitecture=\"amd64\" publicKeyToken=\"31bf3856ad364e35\" language=\"neutral\" versionScope=\"nonSxS\">
+            <DriverPaths>
+                <PathAndCredentials wcm:action=\"add\" wcm:keyValue=\"1\">
+                    <Path>${driver_path}</Path>
+                </PathAndCredentials>
+            </DriverPaths>
+        </component>"
+    fi
+
+    # Omitting LogonCount makes AutoAdminLogon persistent, which is what a
+    # turnkey GRUB -> Windows-logged-in boot needs. A finite count is only
+    # emitted when the caller asks for one, e.g. a password-policy install that
+    # just needs the first boot to reach the setup script.
+    local autologon_count_xml=""
+    if [ -n "$autologon_count" ]; then
+        autologon_count_xml="
+                <LogonCount>${autologon_count}</LogonCount>"
+    fi
+
+    # Omitting ProductKey entirely does not mean "skip"; Setup stops on the key
+    # page and an unattended install waits there forever. An empty <Key> with
+    # WillShowUI=Never is the documented way to defer activation and keep the
+    # pass non-interactive.
+    local product_key_xml
+    if [ -n "$product_key" ]; then
+        [[ "$product_key" =~ ^[A-Za-z0-9]{5}(-[A-Za-z0-9]{5}){4}$ ]] || {
+            pz_error "invalid product key format"
+            return 1
+        }
+        product_key_xml="<ProductKey>
+                    <Key>${product_key}</Key>
+                    <WillShowUI>Never</WillShowUI>
+                </ProductKey>"
+    else
+        product_key_xml="<ProductKey>
+                    <Key></Key>
+                    <WillShowUI>Never</WillShowUI>
+                </ProductKey>"
+    fi
 
     cat > "$AUTOUATTEND_DIR/autounattend.xml" << AUTOUNATTENDEOF
 <?xml version="1.0" encoding="utf-8"?>
@@ -92,9 +187,9 @@ generate_autounattend() {
             </UserData>
             <EnableFirewall>true</EnableFirewall>
             <EnableNetwork>true</EnableNetwork>
-            <Restart>restart</Restart>
+            <Restart>Restart</Restart>
             <RunSynchronous>
-                ${bypass_xml}
+                ${guard_xml}${bypass_xml}
             </RunSynchronous>
             <DiskConfiguration>
                 <WillShowUI>Never</WillShowUI>
@@ -112,11 +207,6 @@ generate_autounattend() {
                         </CreatePartition>
                         <CreatePartition wcm:action="add">
                             <Order>3</Order>
-                            <Size>100</Size>
-                            <Type>Recovery</Type>
-                        </CreatePartition>
-                        <CreatePartition wcm:action="add">
-                            <Order>4</Order>
                             <Extend>true</Extend>
                             <Type>Primary</Type>
                         </CreatePartition>
@@ -134,18 +224,12 @@ generate_autounattend() {
                         </ModifyPartition>
                         <ModifyPartition wcm:action="add">
                             <Order>3</Order>
-                            <PartitionID>4</PartitionID>
+                            <PartitionID>3</PartitionID>
                             <Label>Windows</Label>
                             <Format>NTFS</Format>
                         </ModifyPartition>
-                        <ModifyPartition wcm:action="add">
-                            <Order>4</Order>
-                            <PartitionID>3</PartitionID>
-                            <Label>WinRE</Label>
-                            <Type>Recovery</Type>
-                        </ModifyPartition>
                     </ModifyPartitions>
-                    <DiskID>0</DiskID>
+                    <DiskID>${disk_id}</DiskID>
                     <WillWipeDisk>true</WillWipeDisk>
                 </Disk>
             </DiskConfiguration>
@@ -158,8 +242,8 @@ generate_autounattend() {
                         </MetaData>
                     </InstallFrom>
                     <InstallTo>
-                        <DiskID>0</DiskID>
-                        <PartitionID>4</PartitionID>
+                        <DiskID>${disk_id}</DiskID>
+                        <PartitionID>3</PartitionID>
                     </InstallTo>
                 </OSImage>
             </ImageInstall>
@@ -172,7 +256,7 @@ generate_autounattend() {
             <SystemLocale>${lang}</SystemLocale>
             <UILanguage>${lang}</UILanguage>
             <UserLocale>${lang}</UserLocale>
-        </component>
+        </component>${virtio_xml}
     </settings>
     <settings pass="oobeSystem">
         <component name="Microsoft-Windows-International-Core" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
@@ -182,6 +266,14 @@ generate_autounattend() {
             <UserLocale>${lang}</UserLocale>
         </component>
         <component name="Microsoft-Windows-Shell-Setup" processorArchitecture="amd64" publicKeyToken="31bf3856ad364e35" language="neutral" versionScope="nonSxS">
+            <AutoLogon>
+                <Password>
+                    <Value>${password}</Value>
+                    <PlainText>true</PlainText>
+                </Password>
+                <Enabled>true</Enabled>${autologon_count_xml}
+                <Username>${user}</Username>
+            </AutoLogon>
             <UserAccounts>
                 <LocalAccounts>
                     <LocalAccount wcm:action="add">
@@ -211,6 +303,14 @@ generate_autounattend() {
             <TimeZone>${timezone}</TimeZone>
             <ShowWindowsLive>false</ShowWindowsLive>
             <BluetoothTaskbarIconEnabled>false</BluetoothTaskbarIconEnabled>
+            <FirstLogonCommands>
+                <SynchronousCommand wcm:action="add">
+                    <Order>1</Order>
+                    <Description>PhaseZero guest setup</Description>
+                    <RequiresUserInput>false</RequiresUserInput>
+                    <CommandLine>powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "\$script = \$null; foreach (\$code in 68..90) { \$candidate = ([char]\$code) + ':\setup.ps1'; if (Test-Path \$candidate) { \$script = \$candidate; break } }; if (-not \$script) { exit 2 }; &amp; \$script"</CommandLine>
+                </SynchronousCommand>
+            </FirstLogonCommands>
         </component>
     </settings>
     <settings pass="specialize">
@@ -249,8 +349,77 @@ generate_autounattend() {
 AUTOUNATTENDEOF
 
     chmod 0600 "$AUTOUATTEND_DIR/autounattend.xml"
-    pz_info "generated: $AUTOUATTEND_DIR/autounattend.xml"
+    validate_autounattend "$AUTOUATTEND_DIR/autounattend.xml" "$disk_serial" "$disk_guard" || {
+        rm -f "$AUTOUATTEND_DIR/autounattend.xml"
+        return 1
+    }
+    # The guard is useless if it is not on the answer media next to the XML.
+    install -m 0644 "$PZ_ROOT/linux/windows-vm/assets/pz-disk-guard.cmd" \
+        "$AUTOUATTEND_DIR/pz-disk-guard.cmd" || {
+        pz_error "could not stage pz-disk-guard.cmd next to the answer file"
+        rm -f "$AUTOUATTEND_DIR/autounattend.xml"
+        return 1
+    }
+    pz_info "generated: $AUTOUATTEND_DIR/autounattend.xml (target guard: $disk_serial)"
     echo "$AUTOUATTEND_DIR/autounattend.xml"
+}
+
+# A malformed or silently-truncated answer file turns into a Setup that stops
+# at an interactive prompt hours later, or worse, one that ignores the section
+# it could not parse. Fail at generation instead.
+validate_autounattend() {
+    local file="$1" expected_serial="$2" want_guard="${3:-0}" missing=()
+    if command -v xmllint >/dev/null 2>&1; then
+        xmllint --noout "$file" 2>/dev/null || {
+            pz_error "generated autounattend.xml is not well-formed XML"
+            return 1
+        }
+    else
+        python3 -c "import sys,xml.dom.minidom as m; m.parse(sys.argv[1])" "$file" 2>/dev/null || {
+            pz_error "generated autounattend.xml is not well-formed XML"
+            return 1
+        }
+    fi
+    local marker
+    for marker in '<settings pass="windowsPE">' '<settings pass="oobeSystem">' \
+        '<settings pass="specialize">' \
+        '<WillWipeDisk>true</WillWipeDisk>' '<ImageInstall>'; do
+        grep -Fq "$marker" "$file" || missing+=("$marker")
+    done
+    # An empty key with WillShowUI=Never is what keeps Setup off the product key
+    # page; without it an unattended install stops there and waits forever.
+    grep -Fq '<WillShowUI>Never</WillShowUI>' "$file" ||
+        missing+=("ProductKey WillShowUI=Never")
+    if [ "$want_guard" = "1" ]; then
+        grep -Fq "pz-disk-guard.cmd $expected_serial " "$file" ||
+            missing+=("disk guard invocation for serial $expected_serial")
+    elif grep -Fq 'PhaseZeroDiskTargetGuard' "$file"; then
+        missing+=("guard emitted without --disk-guard")
+    fi
+    if [ "${#missing[@]}" -gt 0 ]; then
+        pz_error "generated autounattend.xml is missing: ${missing[*]}"
+        return 1
+    fi
+    # Unattend rejects duplicate Order values among siblings. Comparing them
+    # per parent matters: CreatePartitions and RunSynchronous both legitimately
+    # start at 1, so a flat scan of the document reports collisions that do not
+    # exist and hides the ones that do.
+    python3 - "$file" <<'PYEOF' || return 1
+import sys, xml.etree.ElementTree as ET
+ns = '{urn:schemas-microsoft-com:unattend}'
+tree = ET.parse(sys.argv[1])
+bad = []
+for parent in tree.iter():
+    orders = [c.findtext(f'{ns}Order') for c in parent
+              if c.findtext(f'{ns}Order') is not None]
+    dupes = {o for o in orders if orders.count(o) > 1}
+    if dupes:
+        bad.append(f"{parent.tag.replace(ns,'')}: {sorted(dupes)}")
+if bad:
+    print('duplicate sibling <Order> values: ' + '; '.join(bad), file=sys.stderr)
+    sys.exit(1)
+PYEOF
+    return 0
 }
 
 case "${1:-generate}" in

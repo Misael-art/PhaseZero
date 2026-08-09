@@ -118,7 +118,7 @@ PY
     fi
 
     # SimpleIcons endpoint is fixed; validate bounded passive SVG before use.
-    svg_tmp="$(mktemp "${svg_dest}.tmp.XXXXXX")"
+    svg_tmp="$(pz_tempfile "${svg_dest}.tmp.XXXXXX")"
     if curl -fsSL --retry 2 --connect-timeout 10 --max-time 30 --max-filesize 1048576 \
         "https://cdn.simpleicons.org/$si_name" -o "$svg_tmp" 2>/dev/null &&
         grep -q '<svg' "$svg_tmp" &&

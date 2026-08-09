@@ -11,15 +11,71 @@ on:
       ref:
         description: 'Tag or ref to build (e.g. v1.7.3)'
         required: false
+      allow_red_ci:
+        description: 'Publish even if the ci workflow is not green (emergency only)'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write   # needed to create the GitHub Release
+  actions: read     # needed to read the ci workflow conclusion for this commit
 
 jobs:
+  # A tag must never ship code the ci workflow rejected. Packages only build
+  # after ci is proven green for the exact commit being released; the
+  # workflow_dispatch override exists for emergencies and is logged.
+  ci-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+
+      - name: Require a green ci run for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALLOW_RED_CI: ${{ github.event.inputs.allow_red_ci }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          echo "release commit: $sha"
+          if [ "${ALLOW_RED_CI:-false}" = "true" ]; then
+            echo "::warning::ci gate bypassed by explicit allow_red_ci for $sha"
+            exit 0
+          fi
+          # ci is triggered by the branch push, so it may still be running when
+          # the tag lands. Wait for a conclusion rather than racing it.
+          deadline=$(( SECONDS + 2700 ))
+          conclusion=""
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            runs="$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$sha&per_page=100")"
+            total="$(jq -r '.total_count' <<<"$runs")"
+            if [ "$total" = "0" ]; then
+              echo "no ci run for $sha yet; waiting"
+              sleep 30
+              continue
+            fi
+            # Newest run wins: a re-run after a fix is the authoritative result.
+            conclusion="$(jq -r '[.workflow_runs[]] | sort_by(.run_started_at) | last | .conclusion // "pending"' <<<"$runs")"
+            [ "$conclusion" = "pending" ] || [ "$conclusion" = "null" ] || break
+            echo "ci still running for $sha; waiting"
+            conclusion=""
+            sleep 30
+          done
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::ci conclusion for $sha is '${conclusion:-timed-out}'; refusing to publish a release" >&2
+            exit 1
+          fi
+          echo "ci is green for $sha"
+
   # Native packages (deb, rpm, Arch, AppImage, source) built on Arch, which is
   # the only distro shipping makepkg. makepkg refuses to run as root, so the
   # build runs as an unprivileged user.
   linux-packages:
+    needs: ci-gate
     runs-on: ubuntu-latest
     container:
       image: archlinux:latest
@@ -72,6 +128,7 @@ jobs:
   # sandbox. It runs in the flathub CI image and is best-effort: a failure here
   # never blocks shipping the native packages.
   flatpak:
+    needs: ci-gate
     runs-on: ubuntu-latest
     continue-on-error: true
     container:
@@ -101,8 +158,8 @@ jobs:
   # the GitHub Release. Runs even if the flatpak job failed.
   release:
     runs-on: ubuntu-latest
-    needs: [linux-packages, flatpak]
-    if: always() && needs.linux-packages.result == 'success'
+    needs: [ci-gate, linux-packages, flatpak]
+    if: always() && needs.ci-gate.result == 'success' && needs.linux-packages.result == 'success'
     steps:
       - uses: actions/checkout@v4
         with:

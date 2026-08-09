@@ -44,9 +44,22 @@ load_display_session_helper() {
     }
 }
 
+# A arvore runtime so serve se estiver completa. Um common.sh sem ledger.sh /
+# desktop.sh aborta o launcher em todo retry e o boot GRUB fica em tela preta;
+# nesse caso e melhor cair para o repo completo (deb ou checkout).
+runtime_tree_usable() {
+    local root dep
+    [ -x "$RUNTIME_LAUNCHER" ] || return 1
+    root="${RUNTIME_LAUNCHER%/linux/windows-vm/windows-vm.sh}"
+    [ "$root" != "$RUNTIME_LAUNCHER" ] || return 0
+    for dep in linux/lib/common.sh linux/lib/ledger.sh linux/lib/desktop.sh; do
+        [ -r "$root/$dep" ] || return 1
+    done
+}
+
 resolve_launcher() {
     local candidate
-    if [ -x "$RUNTIME_LAUNCHER" ]; then
+    if runtime_tree_usable; then
         PZ_WINDOWS_VM_REPO=""
         PZ_BIN="$RUNTIME_LAUNCHER"
         LAUNCHER_KIND="runtime"
@@ -189,11 +202,11 @@ compositor_command() {
 
 if [ "${1:-}" = "--validate" ]; then
     kind="$(compositor_kind)"
-    [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ] || {
+    if [ -z "$PZ_BIN" ] || [ ! -x "$PZ_BIN" ] || [ -z "$LAUNCHER_KIND" ]; then
         printf 'windows_vm_session_ready=no configured_repo=%s display_profile=%s external_connectors=%s compositor=%s reason=%s\n' \
             "${CONFIGURED_REPO:-missing}" "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_reason "$kind")"
         exit 1
-    }
+    fi
     printf 'windows_vm_session_ready=yes repo=%s launcher=%s launcher_kind=%s command=%s display_profile=%s external_connectors=%s compositor=%s compositor_command=%s reason=%s\n' \
         "${PZ_WINDOWS_VM_REPO:-runtime}" "$PZ_BIN" "$LAUNCHER_KIND" "$(launcher_command)" \
         "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_command "$kind")" "$(compositor_reason "$kind")"
@@ -207,6 +220,11 @@ export PZ_WINDOWS_VM_OPTIMIZE="${PZ_WINDOWS_VM_OPTIMIZE:-0}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/windows-vm"
 LOG_FILE="$STATE_DIR/session.log"
 install -d "$STATE_DIR"
+# Uma sessao presa em retry escreve algumas linhas por segundo; sem rotacao o
+# log cresce sem limite ate o proximo boot bem-sucedido.
+if [ -f "$LOG_FILE" ] && [ "$(stat -c %s "$LOG_FILE" 2>/dev/null || echo 0)" -gt 5242880 ]; then
+    mv -f "$LOG_FILE" "$LOG_FILE.1"
+fi
 exec >>"$LOG_FILE" 2>&1
 printf '%s starting Windows VM boot session\n' "$(date -Iseconds)"
 
@@ -254,6 +272,8 @@ esac
 
 # Source rescue wizard for non-loop exit on missing disk
 PZ_WINDOWS_VM_SESSION_MAX_RETRIES="${PZ_WINDOWS_VM_SESSION_MAX_RETRIES:-3}"
+PZ_WINDOWS_VM_SESSION_STABLE_SECONDS="${PZ_WINDOWS_VM_SESSION_STABLE_SECONDS:-30}"
+# shellcheck disable=SC2015 # cd/pwd fallback: empty dir acceptable when dirname fails
 _RESCUE_SESSION_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null || true)"
 for _rescue_sh in \
     "${_RESCUE_SESSION_DIR}/rescue.sh" \
@@ -263,8 +283,9 @@ done
 unset _RESCUE_SESSION_DIR
 
 fallback_desktop() {
-    [ "$DESKTOP_FALLBACK" = "1" ] || return 1
-    printf '%s explicit desktop fallback enabled\n' "$(date -Iseconds)"
+    local force="${1:-0}"
+    [ "$force" = "1" ] || [ "$DESKTOP_FALLBACK" = "1" ] || return 1
+    printf '%s desktop fallback (force=%s)\n' "$(date -Iseconds)" "$force"
     if command -v startplasma-wayland >/dev/null 2>&1; then
         exec startplasma-wayland
     fi
@@ -276,27 +297,70 @@ fallback_desktop() {
 
 attempt=0
 rescue_attempted=0
+compat_attempted=0
 while :; do
     attempt=$((attempt + 1))
-    if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 0 ] && type vm_rescue_run >/dev/null 2>&1; then
-        printf '%s max retries reached; launching rescue wizard\n' "$(date -Iseconds)"
+    if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 0 ]; then
         rescue_attempted=1
-        if vm_rescue_run; then
-            printf '%s rescue wizard succeeded; resetting retry counter\n' "$(date -Iseconds)"
-            attempt=0
+        if ! type vm_rescue_run >/dev/null 2>&1; then
+            printf '%s max retries reached and rescue wizard unavailable\n' "$(date -Iseconds)"
         else
-            printf '%s rescue wizard declined or failed; shutting down\n' "$(date -Iseconds)"
+            printf '%s max retries reached; launching rescue wizard\n' "$(date -Iseconds)"
+            if vm_rescue_run; then
+                printf '%s rescue wizard succeeded; resetting retry counter\n' "$(date -Iseconds)"
+                attempt=0
+            else
+                printf '%s rescue wizard declined or failed\n' "$(date -Iseconds)"
+            fi
         fi
         sleep "$RETRY_SECONDS"
         continue
     fi
+    # Resgate ja tentado e ainda falhando: parar de girar. Um loop infinito
+    # dentro de um compositor vazio e exatamente a tela preta que o usuario ve.
+    if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 1 ]; then
+        printf '%s giving up after %s attempts; leaving Windows VM boot session\n' \
+            "$(date -Iseconds)" "$attempt"
+        fallback_desktop 1 || true
+        printf '%s no desktop session available; exiting so the display manager can recover\n' \
+            "$(date -Iseconds)"
+        exit 1
+    fi
     if [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ]; then
         printf '%s launching Windows VM attempt=%s kind=%s command=%s\n' \
             "$(date -Iseconds)" "$attempt" "$LAUNCHER_KIND" "$(launcher_command)"
+        launch_started="$SECONDS"
         set +e
         "$PZ_BIN" "${LAUNCHER_ARGS[@]}"
         rc=$?
         set -e
+        launch_elapsed=$((SECONDS - launch_started))
+        if [ "$rc" -eq 0 ]; then
+            printf '%s Windows VM ended normally after %ss; closing boot session\n' \
+                "$(date -Iseconds)" "$launch_elapsed"
+            exit 0
+        fi
+        if [ "$launch_elapsed" -ge "$PZ_WINDOWS_VM_SESSION_STABLE_SECONDS" ]; then
+            printf '%s Windows VM failed after stable runtime=%ss rc=%s; refusing automatic relaunch\n' \
+                "$(date -Iseconds)" "$launch_elapsed" "$rc"
+            fallback_desktop 1 || true
+            exit "$rc"
+        fi
+        if [ "$compat_attempted" -eq 0 ]; then
+            compat_attempted=1
+            printf '%s accelerated launch failed quickly rc=%s; trying compat once\n' \
+                "$(date -Iseconds)" "$rc"
+            set +e
+            "$PZ_BIN" "${LAUNCHER_ARGS[@]}" --graphics compat
+            compat_rc=$?
+            set -e
+            if [ "$compat_rc" -eq 0 ]; then
+                printf '%s compat Windows VM ended normally; closing boot session\n' "$(date -Iseconds)"
+                exit 0
+            fi
+            printf '%s compat launch failed rc=%s; continuing bounded recovery\n' \
+                "$(date -Iseconds)" "$compat_rc"
+        fi
         printf '%s Windows VM launcher exited rc=%s attempt=%s; retrying in %ss\n' \
             "$(date -Iseconds)" "$rc" "$attempt" "$RETRY_SECONDS"
     else

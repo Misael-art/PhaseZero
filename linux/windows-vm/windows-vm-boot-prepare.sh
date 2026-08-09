@@ -5,6 +5,12 @@ set -euo pipefail
 TARGET_USER="${PZ_WINDOWS_VM_BOOT_USER:-misael}"
 CMDLINE="${PZ_BOOT_CMDLINE:-$(cat /proc/cmdline 2>/dev/null || true)}"
 SESSION="phasezero-windows-vm.desktop"
+RUNTIME_LAUNCHER="${PZ_WINDOWS_VM_RUNTIME_LAUNCHER:-/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/windows-vm.sh}"
+TARGET_UID="$(id -u "$TARGET_USER" 2>/dev/null || true)"
+TARGET_GID="$(id -g "$TARGET_USER" 2>/dev/null || true)"
+TARGET_HOME="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6 || true)"
+BOOT_RUNTIME_DIR="${PZ_WINDOWS_VM_RUNTIME_DIR:-/run/phasezero/windows-vm-${TARGET_UID:-unknown}}"
+REQUIRE_LOGIN="${PZ_WINDOWS_VM_REQUIRE_LOGIN:-0}"
 
 log() {
     local msg="phasezero-windows-vm-boot: $*"
@@ -18,7 +24,7 @@ log() {
 write_value() {
     local path="$1" value="$2"
     [ -e "$path" ] || return 0
-    printf '%s\n' "$value" > "$path" 2>/dev/null || true
+    (printf '%s\n' "$value" > "$path") 2>/dev/null || true
 }
 
 apply_vm_tuning() {
@@ -26,7 +32,10 @@ apply_vm_tuning() {
         log "host VM tuning skipped by environment"
         return 0
     fi
-    command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl set performance >/dev/null 2>&1 || true
+    if command -v powerprofilesctl >/dev/null 2>&1; then
+        powerprofilesctl set performance >/dev/null 2>&1 ||
+            log "WARN: performance power profile unavailable; continuing boot"
+    fi
     sysctl -w vm.swappiness=1 >/dev/null 2>&1 || true
     sysctl -w vm.vfs_cache_pressure=50 >/dev/null 2>&1 || true
     sysctl -w vm.dirty_background_ratio=5 >/dev/null 2>&1 || true
@@ -43,6 +52,78 @@ apply_vm_tuning() {
         write_value "$governor" performance
     done
     log "host VM tuning applied"
+}
+
+prepare_runtime_resources() {
+    if [ "${PZ_WINDOWS_VM_SKIP_RUNTIME_PREP:-0}" = "1" ]; then
+        log "runtime resource preparation skipped by environment"
+        return 0
+    fi
+    if [ -z "$TARGET_UID" ] || [ -z "$TARGET_GID" ] || [ -z "$TARGET_HOME" ]; then
+        log "WARN: cannot resolve boot user $TARGET_USER; skipping runtime resources"
+        return 0
+    fi
+    if [ ! -x "$RUNTIME_LAUNCHER" ]; then
+        log "WARN: runtime launcher missing: $RUNTIME_LAUNCHER"
+        return 0
+    fi
+
+    if ! install -d -m 0700 -o "$TARGET_UID" -g "$TARGET_GID" "$BOOT_RUNTIME_DIR"; then
+        log "WARN: cannot create boot runtime directory; continuing without pre-mounted shares"
+        return 0
+    fi
+    if env \
+        HOME="$TARGET_HOME" \
+        USER="$TARGET_USER" \
+        PZ_TARGET_USER="$TARGET_USER" \
+        PZ_WINDOWS_VM_BOOT_SESSION=1 \
+        PZ_WINDOWS_VM_RUNTIME_DIR="$BOOT_RUNTIME_DIR" \
+        XDG_CONFIG_HOME="$TARGET_HOME/.config" \
+        XDG_STATE_HOME="$TARGET_HOME/.local/state" \
+        "$RUNTIME_LAUNCHER" shares install >/dev/null 2>&1; then
+        # Do not cross the exchange bind mount while fixing runtime ownership.
+        find "$BOOT_RUNTIME_DIR" -xdev -type d -exec chown "$TARGET_UID:$TARGET_GID" {} + 2>/dev/null || true
+        log "runtime resources prepared without interactive authentication"
+    else
+        log "WARN: runtime resource preparation failed; session will use safe degraded shares"
+    fi
+}
+
+runtime_launch_preflight() {
+    if [ "${PZ_WINDOWS_VM_SKIP_LAUNCH_PREFLIGHT:-0}" = "1" ]; then
+        log "runtime launch preflight skipped by explicit test override"
+        return 0
+    fi
+    if [ ! -x "$RUNTIME_LAUNCHER" ]; then
+        log "ERROR: runtime launch preflight unavailable: $RUNTIME_LAUNCHER"
+        return 1
+    fi
+    local result="" rc=0
+    local -a target_prefix=()
+    if [ "$EUID" -eq 0 ] && [ -n "$TARGET_UID" ] && [ "$TARGET_UID" != "0" ]; then
+        command -v runuser >/dev/null 2>&1 || {
+            log "ERROR: runuser unavailable; cannot verify launcher as $TARGET_USER"
+            return 1
+        }
+        target_prefix=(runuser -u "$TARGET_USER" --)
+    fi
+    result="$("${target_prefix[@]}" env \
+        HOME="$TARGET_HOME" \
+        USER="$TARGET_USER" \
+        PZ_TARGET_USER="$TARGET_USER" \
+        PZ_WINDOWS_VM_BOOT_SESSION=1 \
+        PZ_WINDOWS_VM_RUNTIME_DIR="$BOOT_RUNTIME_DIR" \
+        XDG_RUNTIME_DIR="$BOOT_RUNTIME_DIR" \
+        XDG_CONFIG_HOME="$TARGET_HOME/.config" \
+        XDG_STATE_HOME="$TARGET_HOME/.local/state" \
+        "$RUNTIME_LAUNCHER" launch-check --raw-qemu --json 2>/dev/null)" || rc=$?
+    if [ "$rc" -ne 0 ] || ! printf '%s\n' "$result" | jq -e '.success == true' >/dev/null 2>&1; then
+        local blockers
+        blockers="$(printf '%s\n' "$result" | jq -r '.blockers[]?' 2>/dev/null | paste -sd ';' - || true)"
+        log "ERROR: runtime launch preflight failed${blockers:+: $blockers}"
+        return 1
+    fi
+    log "runtime launch preflight passed"
 }
 
 detect_display_manager() {
@@ -100,7 +181,7 @@ write_sddm_autologin() {
 [Autologin]
 User=$TARGET_USER
 Session=$SESSION
-Relogin=true
+Relogin=false
 EOF
     chmod 0644 "$conf_file"
     log "SDDM autologin written: user=$TARGET_USER session=$SESSION"
@@ -249,37 +330,58 @@ remove_greetd_autologin() {
 }
 
 if printf '%s\n' "$CMDLINE" | grep -qw 'phasezero.windowsvm=1'; then
-    apply_vm_tuning
     current_dm="$(detect_display_manager)"
     log "detected display manager: $current_dm"
-    case "$current_dm" in
-        sddm)
-            remove_sddm_autologin
-            write_sddm_autologin
-            ;;
-        gdm|gdm3)
-            ensure_autologin_group "$current_dm"
-            remove_gdm_autologin
-            write_gdm_autologin
-            ;;
-        lightdm)
-            ensure_autologin_group "$current_dm"
-            remove_lightdm_autologin
-            write_lightdm_autologin
-            ;;
-        lxdm)
-            ensure_autologin_group "$current_dm"
-            remove_lxdm_autologin
-            write_lxdm_autologin
-            ;;
-        greetd)
-            remove_greetd_autologin
-            write_greetd_autologin
-            ;;
-        none)
-            log "WARN: no display manager detected; boot may not autologin"
-            ;;
-    esac
+    # Prepare and validate everything before enabling automatic login. If the
+    # runtime cannot launch, leave the normal greeter visible instead of
+    # entering a compositor that can only show a black screen.
+    apply_vm_tuning
+    prepare_runtime_resources
+    if ! runtime_launch_preflight; then
+        remove_sddm_autologin
+        remove_gdm_autologin
+        remove_lightdm_autologin
+        remove_lxdm_autologin
+        remove_greetd_autologin
+        exit 1
+    fi
+    if [ "$REQUIRE_LOGIN" = "1" ]; then
+        remove_sddm_autologin
+        remove_gdm_autologin
+        remove_lightdm_autologin
+        remove_lxdm_autologin
+        remove_greetd_autologin
+        log "manual login requested; autologin disabled by operator"
+    else
+        case "$current_dm" in
+            sddm)
+                remove_sddm_autologin
+                write_sddm_autologin
+                ;;
+            gdm|gdm3)
+                ensure_autologin_group "$current_dm"
+                remove_gdm_autologin
+                write_gdm_autologin
+                ;;
+            lightdm)
+                ensure_autologin_group "$current_dm"
+                remove_lightdm_autologin
+                write_lightdm_autologin
+                ;;
+            lxdm)
+                ensure_autologin_group "$current_dm"
+                remove_lxdm_autologin
+                write_lxdm_autologin
+                ;;
+            greetd)
+                remove_greetd_autologin
+                write_greetd_autologin
+                ;;
+            none)
+                log "WARN: no display manager detected; boot may not autologin"
+                ;;
+        esac
+    fi
     # Remove any managed SteamOS/Waydroid blocks
     conf_dir="${PZ_SDDM_CONF_DIR:-/etc/sddm.conf.d}"
     for f in "$conf_dir/90-phasezero-steamos.conf" "$conf_dir/92-phasezero-waydroid.conf"; do

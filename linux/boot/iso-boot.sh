@@ -26,9 +26,9 @@ done
 set -- "${ARGS[@]}"
 
 DOMAIN="${1:-summary}"
-[ "$#" -gt 0 ] && shift || true
+if [ "$#" -gt 0 ]; then shift; fi
 SUBCOMMAND="${1:-status}"
-[ "$#" -gt 0 ] && shift || true
+if [ "$#" -gt 0 ]; then shift; fi
 REST=("$@")
 
 CONFIG="${PZ_ISO_BOOT_CONFIG:-$(pz_boot_path /etc/phasezero/boot-isos.json)}"
@@ -133,7 +133,10 @@ inspect_iso_json() {
             ;;
         *) pz_error "unsupported ISO profile: $profile"; return 2 ;;
     esac
-    [ -n "$kernel" ] && [ -n "$initrd" ] || { pz_error "profile $profile kernel/initrd missing"; return 1; }
+    if [ -z "$kernel" ] || [ -z "$initrd" ]; then
+        pz_error "profile $profile kernel/initrd missing"
+        return 1
+    fi
     label="$(blkid -p -s LABEL -o value "$real" 2>/dev/null || true)"
     jq -n --arg profile "$profile" --arg kernelPath "/$kernel" --arg initrdPath "/$initrd" --arg isoLabel "$label" \
         '{profile:$profile,kernelPath:$kernelPath,initrdPath:$initrdPath,isoLabel:$isoLabel}'
@@ -171,7 +174,9 @@ EOF
         printf "menuentry %s --id='phasezero-iso-%s' --class recovery --class iso {\n" "$qtitle" "$id"
         printf '    insmod part_gpt\n    insmod part_msdos\n    insmod %s\n    insmod loopback\n' "$module"
         printf '    search --no-floppy --fs-uuid --set=iso_dev %s\n' "$uuid"
+        # shellcheck disable=SC2016 # grub variable literal in generated script
         printf '    if [ -f ($iso_dev)%s ]; then\n' "$qpath"
+        # shellcheck disable=SC2016 # grub variable literal in generated script
         printf '        loopback loop ($iso_dev)%s\n' "$qpath"
         case "$profile" in
             archiso)
@@ -214,6 +219,7 @@ EOF
         printf "menuentry %s --id='phasezero-removable-%s' --class usb --class efi {\n" "$qtitle" "$id"
         printf '    insmod part_gpt\n    insmod part_msdos\n    insmod %s\n    insmod chain\n' "$module"
         printf '    search --no-floppy --fs-uuid --set=removable %s\n' "$uuid"
+        # shellcheck disable=SC2016 # grub variable literal in generated script
         printf '    if [ -f ($removable)%s ]; then\n        chainloader ($removable)%s\n    else\n' "$qefi" "$qefi"
         printf "        echo 'PhaseZero removable EFI unavailable.'\n        sleep 5\n    fi\n}\n"
     done < <(jq -c '.entries[] | select(.kind == "removable-efi" and .enabled == true)' "$manifest")
@@ -260,7 +266,7 @@ apply_manifest_file() {
     pz_boot_validate_active_efi_safe
     jq -e '.schemaVersion == 1 and (.entries | type == "array")' "$proposed" >/dev/null
     pz_boot_backup_bundle "dynamic-iso-boot"
-    tmpdir="$(mktemp -d)"; rollback="$tmpdir/rollback"; install -d "$rollback"
+    tmpdir="$(pz_tempfile -d)"; rollback="$tmpdir/rollback"; install -d "$rollback"
     config_old="$rollback/config"; iso_old="$rollback/iso"; usb_old="$rollback/usb"; fm_old="$rollback/grubfm"
     [ -f "$CONFIG" ] && cp -a "$CONFIG" "$config_old"
     [ -f "$ISO_SCRIPT" ] && cp -a "$ISO_SCRIPT" "$iso_old"
@@ -321,7 +327,7 @@ entry_state_json() {
                 if [ "$actual_size" = "$expected_size" ] && [ "$actual_mtime" = "$expected_mtime" ]; then available=true; reason=ready; else reason=metadata-mismatch; fi
             else
                 actual="$(sha256sum -- "$path" | awk '{print $1}')"
-                if [ "$actual" = "$sha" ]; then available=true; reason=ready; else reason=hash-mismatch; fi
+                if [ "$actual" = "$sha" ]; then available=true; reason=ready; else reason="hash-mismatch"; fi
             fi
         fi
     else
@@ -357,7 +363,11 @@ cmd_iso() {
     case "$sub" in
         status)
             [ "${REST[0]:-}" = --json ] && json=1
-            [ "$json" -eq 1 ] && status_json iso || print_status iso
+            if [ "$json" -eq 1 ]; then
+                status_json iso
+            else
+                print_status iso
+            fi
             ;;
         inspect)
             path="${REST[0]:-}"; [ -n "$path" ] || { pz_error "usage: boot iso inspect PATH [--profile PROFILE]"; return 2; }
@@ -379,13 +389,13 @@ cmd_iso() {
             [ -n "$id" ] || id="$(slugify "$(basename "${path%.iso}")")"
             [ -n "$title" ] || title="ISO: $(basename "$path")"
             entry="$(iso_entry_json "$path" "$profile" "$id" "$title")"
-            proposed="$(mktemp)"; manifest_with_entry "$entry" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_with_entry "$entry" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
         remove)
             id="${REST[0]:-}"; [ -n "$id" ] || { pz_error "usage: boot iso remove ID [--dry-run]"; return 2; }
             [ "${REST[1]:-}" = --dry-run ] && dry=1
-            proposed="$(mktemp)"; manifest_without_entry "$id" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_without_entry "$id" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
         verify)
@@ -405,12 +415,12 @@ cmd_iso() {
             path="$(jq -r '.hostPath' <<< "$entry")"; profile="$(jq -r '.profile' <<< "$entry")"; title="$(jq -r '.title' <<< "$entry")"
             [ "${REST[1]:-}" = --dry-run ] && dry=1
             entry="$(iso_entry_json "$path" "$profile" "$id" "$title")"
-            proposed="$(mktemp)"; manifest_with_entry "$entry" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_with_entry "$entry" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
         install)
             [ "${REST[0]:-}" = --dry-run ] && { manifest_json; return 0; }
-            proposed="$(mktemp)"; manifest_json > "$proposed"; apply_manifest_file "$proposed"; rm -f "$proposed"
+            proposed="$(pz_tempfile)"; manifest_json > "$proposed"; apply_manifest_file "$proposed"; rm -f "$proposed"
             ;;
         next)
             id="${REST[0]:-}"; schedule_next iso "$id" "${REST[@]:1}"
@@ -433,16 +443,18 @@ usb_entry_json() {
         uuid="$(findmnt -no UUID -T "$root" | head -1)"; fstype="$(findmnt -no FSTYPE -T "$root" | head -1)"
     elif [ -b "$input" ]; then
         source="$(realpath -e "$input")"; uuid="$(blkid -s UUID -o value "$source")"; fstype="$(blkid -s TYPE -o value "$source")"
-        tmp="$(mktemp -d)"; mount_device_ro "$source" "$tmp"; root="$tmp"
+        tmp="$(pz_tempfile -d)"; mount_device_ro "$source" "$tmp"; root="$tmp"
     else
         pz_error "USB source must be mounted directory or block partition: $input"; return 2
     fi
     host_esp_uuid="$(findmnt -no UUID -T "$ESP_DIR" 2>/dev/null | head -1 || true)"
     if [ "$uuid" = "$host_esp_uuid" ]; then [ -z "$tmp" ] || { umount "$tmp"; rmdir "$tmp"; }; pz_error "refusing host ESP as removable target"; return 1; fi
     module="$(pz_boot_fs_module_for_fstype "$fstype" 2>/dev/null || true)"
-    [ -n "$module" ] && pz_boot_grub_module_available "$module" || {
-        [ -z "$tmp" ] || { umount "$tmp"; rmdir "$tmp"; }; pz_error "unsupported removable filesystem: $fstype"; return 1;
-    }
+    if [ -z "$module" ] || ! pz_boot_grub_module_available "$module"; then
+        [ -z "$tmp" ] || { umount "$tmp"; rmdir "$tmp"; }
+        pz_error "unsupported removable filesystem: $fstype"
+        return 1
+    fi
     efi="$root/EFI/BOOT/BOOTX64.EFI"
     [ -f "$efi" ] || { [ -z "$tmp" ] || { umount "$tmp"; rmdir "$tmp"; }; pz_error "missing /EFI/BOOT/BOOTX64.EFI on $input"; return 1; }
     hash="$(sha256sum "$efi" | awk '{print $1}')"
@@ -454,7 +466,7 @@ usb_entry_json() {
 cmd_usb() {
     local sub="$SUBCOMMAND" input id="" title="" dry=0 arg entry proposed
     case "$sub" in
-        status) [ "${REST[0]:-}" = --json ] && status_json removable-efi || print_status removable-efi ;;
+        status) if [ "${REST[0]:-}" = --json ]; then status_json removable-efi; else print_status removable-efi; fi ;;
         discover)
             lsblk -J -o PATH,TYPE,FSTYPE,UUID,LABEL,MOUNTPOINTS,RM,HOTPLUG,TRAN | jq '{schemaVersion:1,devices:[.. | objects | select(.type? == "part" and (.uuid? != null) and ((.rm? == true) or (.hotplug? == true) or (.tran? == "mmc")))]}'
             ;;
@@ -465,16 +477,16 @@ cmd_usb() {
             [ -n "$title" ] || title="Removable EFI: $(basename "$input")"
             [ "$dry" -eq 1 ] || need_root
             entry="$(usb_entry_json "$input" "$id" "$title")"
-            proposed="$(mktemp)"; manifest_with_entry "$entry" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_with_entry "$entry" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
         remove)
             id="${REST[0]:-}"; [ -n "$id" ] || { pz_error "usage: boot usb remove ID [--dry-run]"; return 2; }
             [ "${REST[1]:-}" = --dry-run ] && dry=1
-            proposed="$(mktemp)"; manifest_without_entry "$id" > "$proposed"
+            proposed="$(pz_tempfile)"; manifest_without_entry "$id" > "$proposed"
             if [ "$dry" -eq 1 ]; then jq . "$proposed"; rm -f "$proposed"; else apply_manifest_file "$proposed"; rm -f "$proposed"; fi
             ;;
-        install) proposed="$(mktemp)"; manifest_json > "$proposed"; [ "${REST[0]:-}" = --dry-run ] && cat "$proposed" || apply_manifest_file "$proposed"; rm -f "$proposed" ;;
+        install) proposed="$(pz_tempfile)"; manifest_json > "$proposed"; if [ "${REST[0]:-}" = --dry-run ]; then cat "$proposed"; else apply_manifest_file "$proposed"; fi; rm -f "$proposed" ;;
         next) id="${REST[0]:-}"; schedule_next removable-efi "$id" "${REST[@]:1}" ;;
         *) pz_error "usage: boot usb (status|discover|add|remove|install|next)"; return 2 ;;
     esac
@@ -504,7 +516,7 @@ inspect_grubfm() {
 cmd_grubfm() {
     local sub="$SUBCOMMAND" source="" expected="" dry=0 arg inspection tmp manifest secure
     case "$sub" in
-        status) [ "${REST[0]:-}" = --json ] && grubfm_status_json || grubfm_status_json | jq -r '"PhaseZero grubfm: \(.state) secureBoot=\(.secureBoot) experimental=true upstreamArchived=true"' ;;
+        status) if [ "${REST[0]:-}" = --json ]; then grubfm_status_json; else grubfm_status_json | jq -r '"PhaseZero grubfm: \(.state) secureBoot=\(.secureBoot) experimental=true upstreamArchived=true"'; fi ;;
         inspect)
             source="${REST[0]:-}"; [ -n "$source" ] || { pz_error "usage: boot grubfm inspect PATH [--sha256 HEX]"; return 2; }
             for arg in "${REST[@]:1}"; do case "$arg" in --sha256=*) expected="${arg#*=}" ;; esac; done
@@ -512,22 +524,25 @@ cmd_grubfm() {
             ;;
         install)
             for arg in "${REST[@]}"; do case "$arg" in --source=*) source="${arg#*=}" ;; --sha256=*) expected="${arg#*=}" ;; --dry-run|-n) dry=1 ;; *) pz_error "unknown option: $arg"; return 2 ;; esac; done
-            [ -n "$source" ] && [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || { pz_error "usage: boot grubfm install --source=PATH --sha256=HEX [--dry-run]"; return 2; }
+            if [ -z "$source" ] || ! [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]]; then
+                pz_error "usage: boot grubfm install --source=PATH --sha256=HEX [--dry-run]"
+                return 2
+            fi
             inspection="$(inspect_grubfm "$source" "${expected,,}")"
             secure="$(pz_boot_secure_boot_state)"
             [ "$secure" = disabled ] || { pz_error "Secure Boot must be confirmed disabled before grubfm install (state=$secure)"; return 1; }
             [ "$dry" -eq 0 ] || { jq --arg secureBoot "$secure" '. + {secureBoot:$secureBoot,wouldInstall:true}' <<< "$inspection"; return 0; }
             need_root; pz_boot_require_current_root_target; pz_boot_preflight_grub; pz_boot_backup_bundle "grubfm-install"
-            tmp="$(mktemp)"; install -m 0644 "$source" "$tmp"; pz_boot_atomic_install "$tmp" "$GRUBFM_EFI" 0644; rm -f "$tmp"
+            tmp="$(pz_tempfile)"; install -m 0644 "$source" "$tmp"; pz_boot_atomic_install "$tmp" "$GRUBFM_EFI" 0644; rm -f "$tmp"
             install -d "$(dirname "$ARTIFACTS")"
             jq --arg installedAt "$(date -Iseconds)" '. + {installedAt:$installedAt}' <<< "$inspection" > "$ARTIFACTS"
             chmod 0644 "$ARTIFACTS"
-            manifest="$(mktemp)"; manifest_json > "$manifest"; apply_manifest_file "$manifest"; rm -f "$manifest"
+            manifest="$(pz_tempfile)"; manifest_json > "$manifest"; apply_manifest_file "$manifest"; rm -f "$manifest"
             ;;
         remove)
             [ "${REST[0]:-}" = --dry-run ] && { grubfm_status_json | jq '. + {wouldRemove:true}'; return 0; }
             need_root; pz_boot_backup_bundle "grubfm-remove"; rm -f "$GRUBFM_EFI" "$ARTIFACTS"
-            manifest="$(mktemp)"; manifest_json > "$manifest"; apply_manifest_file "$manifest"; rm -f "$manifest"
+            manifest="$(pz_tempfile)"; manifest_json > "$manifest"; apply_manifest_file "$manifest"; rm -f "$manifest"
             ;;
         next) schedule_next grubfm "" "${REST[@]}" ;;
         *) pz_error "usage: boot grubfm (status|inspect|install|remove|next)"; return 2 ;;
@@ -587,6 +602,7 @@ summary() {
 }
 
 if [ "${PZ_ISO_BOOT_LIBRARY_ONLY:-0}" = "1" ]; then
+    # shellcheck disable=SC2317 # reachable when sourced
     return 0 2>/dev/null || exit 0
 fi
 

@@ -88,8 +88,8 @@ initrd_relpath() {
 
 microcode_initrd_args() {
     local amd="" intel=""
-    amd="$([ -f "$(pz_boot_path /boot/amd-ucode.img)" ] && pz_boot_file_relpath /boot/amd-ucode.img || true)"
-    intel="$([ -f "$(pz_boot_path /boot/intel-ucode.img)" ] && pz_boot_file_relpath /boot/intel-ucode.img || true)"
+    amd="$(if [ -f "$(pz_boot_path /boot/amd-ucode.img)" ]; then pz_boot_file_relpath /boot/amd-ucode.img || true; fi)"
+    intel="$(if [ -f "$(pz_boot_path /boot/intel-ucode.img)" ]; then pz_boot_file_relpath /boot/intel-ucode.img || true; fi)"
     printf '%s %s' "$amd" "$intel"
 }
 
@@ -224,7 +224,8 @@ cmd_install_safe_menu() {
     pz_boot_backup_bundle "boot-safe-menu"
     install -d "$(dirname "$SAFE_MENU_DROPIN")"
     local tmp
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile template arg optional; default mktemp template intended
+    tmp="$(pz_tempfile)"
     safe_menu_dropin_content > "$tmp"
     install -m 0644 "$tmp" "$SAFE_MENU_DROPIN"
     rm -f "$tmp"
@@ -349,7 +350,8 @@ cmd_install_efi_fallback() {
     done
 
     pz_boot_backup_bundle "boot-efi-fallback"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile template arg optional; default mktemp template intended
+    tmp="$(pz_tempfile)"
     bootstrap_config_content > "$tmp"
     install -d "$PHASEZERO_EFI_DIR"
     grub-mkstandalone \

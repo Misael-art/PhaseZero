@@ -49,7 +49,7 @@ Usage:
   pz waydroid boot status     Manage direct GRUB Waydroid boot entry
   pz server status            Home server (LLM/homelab/boot) status
   pz server llm <action>      Local LLM server (install|expose-lan|restore|status)
-  pz server homelab <action>  Homelab Docker stack (plan|up|down|open|logs|backup|restore|update|repair) [--extras]
+  pz server homelab <action>  Homelab: stack (plan|up|down|open|logs|backup|restore|update|repair) / status (status|verify) / profile (list|set <key>|get) / governor (list|weights|budget|check|winvm-status|winvm-suspend [--dry-run]|winvm-resume) [--extras] [--json] [--profile <key>]
   pz server casaos <action>   CasaOS opt-in compatibility gate (status|plan|install)
   pz server hermes <action>   Hermes remote actuation (setup|start|status)
   pz server slim <action>     Reversible OS slimming (apply [--aggressive]|restore|status)
@@ -170,10 +170,22 @@ Usage:
   pz ai init --undo [<dir>]    Remove managed blocks/files from a project
   pz ai token-economy status   Alias for compat status and context-frugality audit
   pz ai admin status           Check phasezero-admin/bigsudo escalation bridge
+  pz ai policy <action>        AI policy broker (status|set <mode>|check <action>|list)
+  pz ai ollama [--pull <m>]    Ollama install/config; model pulls broker-gated
   pz ai omo <action>           oh-my-openagent OpenCode plugin (setup|doctor|status|enable|disable|uninstall)
-  pz ai opencode <action>      OpenCode CLI<->desktop lockstep + models (sync|status|local-model|free-model|install-hook)
+  pz ai opencode status        Audit CLI/Desktop, canonical config and 9Router route
+  pz ai opencode install       Configure canonical loopback 9Router provider transactionally
+  pz ai opencode verify        Verify config, secret isolation and optional live prompt
+  pz ai opencode run --route=9router -- <args>  Run OpenCode with isolated 9Router route
+  pz ai opencode rollback <manifest> Restore an OpenCode route transaction
   pz ai setup <tool>           Setup AI tool (codex|ollama|webui|claude|desktop|opencode|omo|hermes|openclaw|memory|admin|rtk|caveman|headroom|compat|ides|ide-apps|usagebar|codexbar|all)
   pz ai codexbar <action>      CodexBar CLI + optional KodexBar plasmoid (status|setup|health|auth|watchdog|plasmoid|plasmoid-remove|repair)
+  pz ai claude status          Audit Claude, Bonsai, routes, hooks and 9Router conflicts
+  pz ai claude install         Transactional install/repair with backup and rollback
+  pz ai claude verify          Verify isolated subscription/Bonsai/9Router launchers
+  pz ai claude preflight bonsai --cwd <dir>  Audit upload target without reading file contents
+  pz ai claude run bonsai --cwd <dir>  Run Bonsai only from an explicitly reviewed project
+  pz ai claude rollback <file> Restore a cc-installer transaction manifest
   pz ai secrets rotate         Rotate AI API keys
   pz ai mcp install <server>   Install MCP server
   pz ai mcp sync [target]      Sync safe MCP servers to all/target clients
@@ -190,9 +202,20 @@ Usage:
   pz ai 9router status         Managed smart router health, providers and combos
   pz ai 9router install        Install 9Router, loopback service and watchdog
   pz ai 9router dashboard      Open local 9Router dashboard
+  pz ai 9router tui            Attach to existing service without restarting it
+  pz ai 9router repair         Migrate stable units and verify watchdog
   pz ai 9router provider ...   Provider status, secret sync and removal
   pz ai 9router combo ...      List, create, sync or switch fallback combos
    pz ai 9router usage          Usage, latency and fallback telemetry
+   pz ai routing status         Redacted routing status [--cached] [--json]
+   pz ai routing inventory      Collect redacted inventory [--refresh-quota] [--json]
+   pz ai routing recommend --task code|analysis|plan --policy quality|balanced|save-quota|privacy
+   pz ai routing plan --task <t> --client claude|opencode
+   pz ai routing apply [--dry-run] [--yes] --task <t> [--policy <p>]
+   pz ai routing run <task> --client claude|opencode -- <args>
+   pz ai routing rollback <manifest> [--force]
+   pz ai routing verify [--live]
+   pz ai routing refresh        Refresh quota (scheduler-safe, 5-10 min)
    pz ai omniroute <action>     OmniRoute multi-provider router (install|status|combo|opencode|test|dashboard)
    pz ai odysseus status        Audit pinned Odysseus workspace deployment
   pz ai odysseus install       Provision rootless, loopback-only Odysseus stack
@@ -427,7 +450,32 @@ cmd_server() {
             bash "$PZ_ROOT/linux/server/install-homelab-boot.sh" status
             ;;
         llm)      bash "$PZ_ROOT/linux/server/llm-server.sh" "${1:-status}" "${@:2}" ;;
-        homelab)  bash "$PZ_ROOT/linux/server/homelab-stack.sh" "${1:-status}" "${@:2}" ;;
+        homelab)
+            case "${1:-status}" in
+                status|verify|repair) bash "$PZ_ROOT/linux/server/homelab-status.sh" "$@" ;;
+                profiles) bash "$PZ_ROOT/linux/server/homelab-governor.sh" list ;;
+                profile)
+                    case "${2:-list}" in
+                        list) bash "$PZ_ROOT/linux/server/homelab-governor.sh" list ;;
+                        set)
+                            [ "${3:-}" ] || { echo "usage: pz server homelab profile set <key>" >&2; exit 2; }
+                            if ! bash "$PZ_ROOT/linux/server/homelab-governor.sh" list 2>/dev/null | jq -e '[.profiles[].key] | index("'"$3"'") != null' >/dev/null; then
+                                echo "unknown homelab profile: $3" >&2
+                                exit 2
+                            fi
+                            HL_STATE="${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}"
+                            mkdir -p "$HL_STATE"
+                            printf '%s\n' "$3" > "$HL_STATE/profile.active"
+                            echo "homelab profile set: $3"
+                            ;;
+                        get) cat "${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}/profile.active" 2>/dev/null || echo "unset" ;;
+                        *) echo "usage: pz server homelab profile (list|set <key>|get)" >&2; exit 2 ;;
+                    esac
+                    ;;
+                governor) bash "$PZ_ROOT/linux/server/homelab-governor.sh" "${2:-list}" "${@:3}" ;;
+                *) bash "$PZ_ROOT/linux/server/homelab-stack.sh" "$@" ;;
+            esac
+            ;;
         casaos)   bash "$PZ_ROOT/linux/server/casaos.sh" "${1:-status}" "${@:2}" ;;
         up)       bash "$PZ_ROOT/linux/server/homelab-stack.sh" up "$@" ;;
         down)     bash "$PZ_ROOT/linux/server/homelab-stack.sh" down ;;
@@ -440,8 +488,16 @@ cmd_server() {
 
 cmd_ai() {
     local sub="${1:-}" target="${2:-}"
-    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|init|omo|compat|token-economy|secrets|mcp) ..."; return 1; }
+    [ -z "$sub" ] && { pz_error "usage: pz ai (status|setup|init|omo|compat|token-economy|secrets|mcp|policy|ollama) ..."; return 1; }
     case "$sub" in
+        policy)
+            shift
+            bash "$PZ_ROOT/linux/server/ai-policy-broker.sh" "${@:-status}"
+            ;;
+        ollama)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-ollama.sh" "$@"
+            ;;
         status)
             bash "$PZ_ROOT/linux/ai/status.sh"
             ;;
@@ -451,15 +507,18 @@ cmd_ai() {
             ;;
         opencode)
             shift
-            case "${1:-version-status}" in
+            case "${1:-status}" in
                 sync|align) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" sync ;;
-                status|version-status) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status ;;
+                version-status|version) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" version-status ;;
+                status|install|configure|repair|verify|run|rollback)
+                    python3 "$PZ_ROOT/linux/ai/opencode_9router_manager.py" "$@"
+                    ;;
                 local-model|ollama) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" local-model ;;
                 free-model|free|zen) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" free-model ;;
                 install-hook) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" install-hook ;;
                 remove-hook) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" remove-hook ;;
                 setup) bash "$PZ_ROOT/linux/ai/setup-opencode.sh" setup ;;
-                *) pz_error "usage: pz ai opencode (sync|status|local-model|free-model|install-hook|remove-hook|setup)"; return 1 ;;
+                *) pz_error "usage: pz ai opencode (status|install|verify|run|rollback|sync|version-status|local-model|free-model|install-hook|remove-hook|setup)"; return 1 ;;
             esac
             ;;
         doctor)
@@ -510,6 +569,14 @@ cmd_ai() {
             shift
             bash "$PZ_ROOT/linux/ai/9router-manager.sh" "${@:-status}"
             ;;
+        routing|ai-router|task-router)
+            shift
+            python3 "$PZ_ROOT/linux/ai/routing_manager.py" "$@"
+            ;;
+        claude|claude-code|bonsai)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" "${@:-status}"
+            ;;
         omniroute|or|omni-route)
             shift
             bash "$PZ_ROOT/linux/ai/omniroute-manager.sh" "${@:-status}"
@@ -539,7 +606,7 @@ cmd_ai() {
                 codex)    bash "$PZ_ROOT/linux/ai/setup-codex.sh" ;;
                 ollama)   bash "$PZ_ROOT/linux/ai/setup-ollama.sh" ;;
                 webui)    bash "$PZ_ROOT/linux/ai/setup-open-webui.sh" ;;
-                claude)   bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" ;;
+                claude)   bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" install --yes ;;
                 desktop|desktop-apps)
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-claude
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-services
@@ -563,7 +630,7 @@ cmd_ai() {
                     bash "$PZ_ROOT/linux/ai/setup-codex.sh"
                     bash "$PZ_ROOT/linux/ai/setup-ollama.sh"
                     bash "$PZ_ROOT/linux/ai/setup-open-webui.sh"
-                    bash "$PZ_ROOT/linux/ai/setup-claude-code.sh"
+                    bash "$PZ_ROOT/linux/ai/setup-claude-code.sh" install --yes
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-claude
                     bash "$PZ_ROOT/linux/ai/desktop-apps.sh" install-services
                     bash "$PZ_ROOT/linux/ai/setup-opencode.sh"
@@ -603,7 +670,9 @@ cmd_ai() {
 }
 
 cmd_doctor() {
-    bash "$PZ_ROOT/linux/audit/doctor.sh"
+    # Global watchdog: per-check timeouts bound every subcommand (doctor.sh),
+    # this caps the whole run. Override with PZ_DOCTOR_TIMEOUT (seconds).
+    timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
 }
 
 cmd_support_bundle() {

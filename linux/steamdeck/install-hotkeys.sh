@@ -310,7 +310,9 @@ install_kde_shortcuts() {
 
     # sycoca must know the fresh desktop entries before the service component
     # can resolve their Exec lines
-    command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 >/dev/null 2>&1 || true
+    if command -v kbuildsycoca6 >/dev/null 2>&1; then
+        kbuildsycoca6 >/dev/null 2>&1
+    fi
 
     kde_write_all_shortcuts
 

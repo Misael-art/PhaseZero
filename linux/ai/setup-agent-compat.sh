@@ -65,10 +65,10 @@ install_rtk_release() {
     tag="$(jq -r '.tag_name // empty' <<< "$release")"
     asset_url="$(jq -r --arg asset "$asset" '.assets[]? | select(.name == $asset) | .browser_download_url' <<< "$release" | head -1)"
     checksum_url="$(jq -r '.assets[]? | select(.name == "checksums.txt") | .browser_download_url' <<< "$release" | head -1)"
-    [ -n "$tag" ] && [ -n "$asset_url" ] && [ -n "$checksum_url" ] || {
+    if [ -z "$tag" ] || [ -z "$asset_url" ] || [ -z "$checksum_url" ]; then
         pz_warn "RTK release asset not found for $asset"
         return 1
-    }
+    fi
 
     archive="$work/$asset"
     checksums="$work/checksums.txt"
@@ -179,13 +179,17 @@ block_file() {
             ;;
     esac
     if [ "$header_kind" = "hash" ]; then
-        printf '# >>> %s >>>\n' "$label" >> "$out"
-        sed 's/\r$//' "$body_file" >> "$out"
-        printf '\n# <<< %s <<<\n' "$label" >> "$out"
+        {
+            printf '# >>> %s >>>\n' "$label"
+            sed 's/\r$//' "$body_file"
+            printf '\n# <<< %s <<<\n' "$label"
+        } >> "$out"
     else
-        printf '<!-- BEGIN %s -->\n' "$label" >> "$out"
-        sed 's/\r$//' "$body_file" >> "$out"
-        printf '\n<!-- END %s -->\n' "$label" >> "$out"
+        {
+            printf '<!-- BEGIN %s -->\n' "$label"
+            sed 's/\r$//' "$body_file"
+            printf '\n<!-- END %s -->\n' "$label"
+        } >> "$out"
     fi
 }
 
@@ -683,7 +687,9 @@ init_undo() {
         "$target/.cursor/rules" "$target/.cursor" \
         "$target/.windsurf/rules" "$target/.windsurf" \
         "$target/.clinerules" "$target/.zcode/rules" "$target/.zcode"; do
-        [ -d "$dir" ] && rmdir --ignore-fail-on-non-empty "$dir" 2>/dev/null || true
+        if [ -d "$dir" ]; then
+            rmdir --ignore-fail-on-non-empty "$dir" 2>/dev/null
+        fi
     done
     unregister_project "$target"
     jq -cn --arg path "$target" \

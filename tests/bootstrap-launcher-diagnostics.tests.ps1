@@ -88,7 +88,7 @@ Describe 'PhaseZero launcher diagnostics and CLI short menu' {
         $json = $result.Stdout | ConvertFrom-Json -ErrorAction Stop
         $json.runTimeline | Should Not BeNullOrEmpty
         [bool]$json.runTimeline.present | Should Be $true
-        $expectedStages = @('Preparando','Dry-run','Executando','result.json','Bundle/Logs')
+        $expectedStages = @('Preparando','Dry-run','Executando','result.json','Pacote/Logs')
         $actual = @($json.runTimeline.stages)
         $actual.Count | Should Be $expectedStages.Count
         for ($i = 0; $i -lt $expectedStages.Count; $i++) {

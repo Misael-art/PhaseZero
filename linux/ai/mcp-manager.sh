@@ -10,7 +10,7 @@ pz_check_deps jq
 MCP_SOURCES="$PZ_ROOT/assets/mcp/servers"
 WORKSPACE_ROOT="${PZ_WORKSPACE_ROOT:-$PZ_ROOT}"
 XDG_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}"
-OPENCODE_CONFIG="$XDG_CONFIG/opencode/opencode.jsonc"
+OPENCODE_CONFIG="$XDG_CONFIG/opencode/opencode.json"
 CLAUDE_CONFIG="$XDG_CONFIG/claude/claude.json"
 CLAUDE_DESKTOP_CONFIG="$XDG_CONFIG/Claude/claude_desktop_config.json"
 CODEX_CONFIG="${HOME}/.codex/config.toml"
@@ -233,7 +233,8 @@ ensure_json_config() {
         return 1
     fi
     backup_config "$cfg"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     if [ "$target" = "opencode" ]; then
         jq '.mcp = (if (.mcp | type) == "object" then .mcp else {} end) | del(.mcpServers)' "$cfg" > "$tmp"
     else
@@ -249,7 +250,8 @@ install_json_target() {
     ensure_json_config "$target" || return 0
     server="$(server_json_for_target "$target" "$json")"
     backup_config "$cfg"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     jq --arg field "$field" --arg name "$name" --argjson server "$server" '.[$field][$name] = $server' "$cfg" > "$tmp"
     mv "$tmp" "$cfg"
     pz_info "MCP $name installed in $target config: $cfg"
@@ -265,7 +267,8 @@ remove_json_target() {
         return 0
     fi
     backup_config "$cfg"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     if [ "$target" = "opencode" ]; then
         jq --arg name "$name" 'del(.mcp[$name]) | del(.mcpServers)' "$cfg" > "$tmp"
     else
@@ -286,7 +289,8 @@ toml_array() {
 strip_codex_block() {
     local name="$1" cfg="$2" tmp
     [ -f "$cfg" ] || return 0
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     awk -v name="$name" -v begin="# BEGIN PHASEZERO MCP ${name}" -v end="# END PHASEZERO MCP ${name}" '
         $0 == begin {managed=1; next}
         $0 == end {managed=0; next}
@@ -315,7 +319,8 @@ install_codex_target() {
     [ -f "$cfg" ] || : > "$cfg"
     backup_config "$cfg"
     strip_codex_block "$name" "$cfg"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     {
         cat "$cfg"
         echo
@@ -396,7 +401,8 @@ hermes_server_yaml() {
 strip_hermes_block() {
     local name="$1" cfg="$2" tmp
     [ -f "$cfg" ] || return 0
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     awk -v begin="  # BEGIN PHASEZERO MCP ${name}" -v end="  # END PHASEZERO MCP ${name}" '
         $0 == begin {skip=1; next}
         $0 == end {skip=0; next}
@@ -408,7 +414,8 @@ strip_hermes_block() {
 strip_hermes_entry() {
     local name="$1" cfg="$2" tmp
     [ -f "$cfg" ] || return 0
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     awk -v key="  ${name}:" '
         /^mcp_servers:[[:space:]]*$/ {inmcp=1; print; next}
         inmcp == 1 && skip == 1 && $0 !~ /^ / && $0 !~ /^$/ {skip=0; inmcp=0}
@@ -424,6 +431,7 @@ ensure_hermes_config() {
     mkdir -p "$(dirname "$HERMES_CONFIG")"
     [ -f "$HERMES_CONFIG" ] || : > "$HERMES_CONFIG"
     if ! grep -Eq '^mcp_servers:[[:space:]]*$' "$HERMES_CONFIG"; then
+        # shellcheck disable=SC2094 # intentional: read and append to same file
         {
             [ -s "$HERMES_CONFIG" ] && echo
             echo "mcp_servers:"
@@ -438,7 +446,8 @@ install_hermes_target() {
     strip_hermes_block "$name" "$HERMES_CONFIG"
     strip_hermes_entry "$name" "$HERMES_CONFIG"
     block="$(hermes_server_yaml "$name" "$json")"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     inserted=0
     awk -v block="$block" '
         {
@@ -480,7 +489,8 @@ ensure_openclaw_config() {
     fi
     backup_config "$OPENCLAW_CONFIG"
     local tmp
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     jq '.mcp = (.mcp // {}) | .mcp.servers = (if (.mcp.servers | type) == "object" then .mcp.servers else {} end) | del(.mcpServers)' "$OPENCLAW_CONFIG" > "$tmp"
     mv "$tmp" "$OPENCLAW_CONFIG"
 }
@@ -490,7 +500,8 @@ install_openclaw_target() {
     ensure_openclaw_config || return 0
     server="$(server_json_for_target openclaw "$json")"
     backup_config "$OPENCLAW_CONFIG"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     jq --arg name "$name" --argjson server "$server" '.mcp.servers[$name] = $server' "$OPENCLAW_CONFIG" > "$tmp"
     mv "$tmp" "$OPENCLAW_CONFIG"
     pz_info "MCP $name installed in openclaw config: $OPENCLAW_CONFIG"
@@ -504,7 +515,8 @@ remove_openclaw_target() {
         return 0
     fi
     backup_config "$OPENCLAW_CONFIG"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     jq --arg name "$name" 'del(.mcp.servers[$name]) | del(.mcpServers)' "$OPENCLAW_CONFIG" > "$tmp"
     mv "$tmp" "$OPENCLAW_CONFIG"
     pz_info "MCP $name removed from openclaw config: $OPENCLAW_CONFIG"
@@ -543,7 +555,8 @@ install_zcode_target() {
         }])
     ' <<< "$storage")"
     backup_config "$ZCODE_STORE"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     jq --arg storage "$new_storage" '."mcp-storage" = $storage' "$ZCODE_STORE" > "$tmp"
     mv "$tmp" "$ZCODE_STORE"
     pz_info "MCP $name installed in zcode store: $ZCODE_STORE"
@@ -562,7 +575,8 @@ remove_zcode_target() {
       | .state.servers = ((.state.servers // []) | map(select(.name != $name)))
     ' <<< "$storage")"
     backup_config "$ZCODE_STORE"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     jq --arg storage "$new_storage" '."mcp-storage" = $storage' "$ZCODE_STORE" > "$tmp"
     mv "$tmp" "$ZCODE_STORE"
     pz_info "MCP $name removed from zcode store: $ZCODE_STORE"
@@ -674,7 +688,7 @@ json_target_status() {
 codex_status() {
     local target="${1:-codex}" cfg="${2:-$CODEX_CONFIG}" count=0
     if [ -f "$cfg" ]; then
-        count="$(grep -E '^\[mcp_servers\.[^].]+\]$' "$cfg" 2>/dev/null | wc -l | tr -d ' ')"
+        count="$(grep -c -E '^\[mcp_servers\.[^].]+\]$' "$cfg" 2>/dev/null || true)"
     fi
     jq -cn --arg target "$target" --arg path "$cfg" --argjson exists "$([ -f "$cfg" ] && echo true || echo false)" \
         --argjson valid true --argjson count "$count" \
@@ -695,7 +709,7 @@ openclaw_status() {
 hermes_status() {
     local count=0 entries=0
     if [ -f "$HERMES_CONFIG" ]; then
-        count="$(grep -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null | wc -l | tr -d ' ')"
+        count="$(grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null || true)"
         entries="$(awk '/^mcp_servers:[[:space:]]*$/ {inmcp=1; next} inmcp && /^  [A-Za-z0-9_.-]+:/ {c++} inmcp && /^[A-Za-z0-9_]+:/ {inmcp=0} END {print c+0}' "$HERMES_CONFIG" 2>/dev/null || echo 0)"
     fi
     jq -cn --arg target "hermes" --arg path "$HERMES_CONFIG" --argjson exists "$([ -f "$HERMES_CONFIG" ] && echo true || echo false)" \
@@ -738,23 +752,27 @@ definition_status_json() {
 
 mcp_status() {
     local tmp_defs tmp_targets defs targets
-    tmp_defs="$(mktemp)"
-    tmp_targets="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp_defs="$(pz_tempfile)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp_targets="$(pz_tempfile)"
     while IFS= read -r name; do
         definition_status_json "$name" >> "$tmp_defs"
     done < <(definition_names)
-    json_target_status opencode >> "$tmp_targets"
-    json_target_status claude >> "$tmp_targets"
-    json_target_status claude-desktop >> "$tmp_targets"
-    codex_status codex "$CODEX_CONFIG" >> "$tmp_targets"
-    codex_status codex-project "$CODEX_PROJECT_CONFIG" >> "$tmp_targets"
-    json_target_status vscode >> "$tmp_targets"
-    json_target_status vscode-user >> "$tmp_targets"
-    json_target_status cursor >> "$tmp_targets"
-    json_target_status zed >> "$tmp_targets"
-    zcode_status >> "$tmp_targets"
-    hermes_status >> "$tmp_targets"
-    openclaw_status >> "$tmp_targets"
+    {
+        json_target_status opencode
+        json_target_status claude
+        json_target_status claude-desktop
+        codex_status codex "$CODEX_CONFIG"
+        codex_status codex-project "$CODEX_PROJECT_CONFIG"
+        json_target_status vscode
+        json_target_status vscode-user
+        json_target_status cursor
+        json_target_status zed
+        zcode_status
+        hermes_status
+        openclaw_status
+    } >> "$tmp_targets"
     defs="$(jq -s '.' "$tmp_defs")"
     targets="$(jq -s 'map({(.target): del(.target)}) | add' "$tmp_targets")"
     rm -f "$tmp_defs" "$tmp_targets"

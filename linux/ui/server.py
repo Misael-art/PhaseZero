@@ -100,29 +100,33 @@ def _actions_from_catalog():
         _sys.path.insert(0, str(PZ_ROOT))
     try:
         from linux.ui_native.catalog import build_catalog
+
+        def _build(loader):
+            actions = {}
+            for spec in loader(PZ_ROOT):
+                argv = [str(PZ_ROOT / "linux" / "pz"), *spec.args]
+                preview_argv = (
+                    [str(PZ_ROOT / "linux" / "pz"), *spec.preview_args]
+                    if spec.preview_args is not None else None
+                )
+                actions[spec.id] = {
+                    "name": spec.id,
+                    "label": spec.title,
+                    "command": shlex.join(["linux/pz", *spec.args]),
+                    "argv": argv,
+                    "preview_argv": preview_argv,
+                    "mutable": bool(spec.mutable),
+                    "require_plan": bool(spec.mutable),
+                    "module": spec.category,
+                    "elevated": bool(spec.elevated),
+                    "input_kind": spec.input_kind,
+                    "input_label": spec.input_label,
+                }
+            return actions
+
+        return _build(build_catalog)
     except Exception:
         return None
-    actions = {}
-    for spec in build_catalog(PZ_ROOT):
-        argv = [str(PZ_ROOT / "linux" / "pz"), *spec.args]
-        preview_argv = (
-            [str(PZ_ROOT / "linux" / "pz"), *spec.preview_args]
-            if spec.preview_args is not None else None
-        )
-        actions[spec.id] = {
-            "name": spec.id,
-            "label": spec.title,
-            "command": shlex.join(["linux/pz", *spec.args]),
-            "argv": argv,
-            "preview_argv": preview_argv,
-            "mutable": bool(spec.mutable),
-            "require_plan": bool(spec.mutable),
-            "module": spec.category,
-            "elevated": bool(spec.elevated),
-            "input_kind": spec.input_kind,
-            "input_label": spec.input_label,
-        }
-    return actions
 
 
 def load_actions():

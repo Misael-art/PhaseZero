@@ -151,8 +151,9 @@ class OverviewPage(BasePage):
         text_box.addWidget(title)
         text_box.addWidget(desc)
         row.addLayout(text_box, 1)
-        btn = QPushButton("Executar")
+        btn = QPushButton("Pré-visualizar" if action.mutable else "Executar")
         btn.setObjectName("primaryButton" if action.mutable else "secondaryButton")
+        btn.setAccessibleDescription(("Auditar e confirmar antes de aplicar: " if action.mutable else "Executar: ") + action.title)
         btn.clicked.connect(lambda: self.request_action(action))
         row.addWidget(btn)
         return card

@@ -205,7 +205,12 @@ def rezip_archive(
                     if item.compress_type in (zipfile.ZIP_STORED, 1, 2, 3, 4, 5, 6, 7) or force:
                         target_info = copy.copy(item)
                         target_info.compress_type = zipfile.ZIP_DEFLATED
-                        target_info.compress_level = profile.zip_level
+                        if hasattr(target_info, "compress_level"):
+                            target_info.compress_level = profile.zip_level
+                        else:
+                            # Python <3.13 exposes this only through the
+                            # private field consumed by ZipFile.open().
+                            target_info._compresslevel = profile.zip_level
                     else:
                         target_info = copy.copy(item)
                     if item.is_dir():

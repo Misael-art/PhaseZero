@@ -100,15 +100,35 @@ print('  blockers:', d.get('blockers', []))
 
 echo "=== API: no auth returns 401 ==="
 status=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/api/status/steamdeck")
-[ "$status" = "401" ] && echo "  no auth 401 ok" || { echo "FAIL: expected 401 got $status"; exit 1; }
+if [ "$status" = "401" ]; then
+    echo "  no auth 401 ok"
+else
+    echo "FAIL: expected 401 got $status"
+    exit 1
+fi
 
 echo "=== Static files served ==="
 style_data=$(curl -s "http://127.0.0.1:$PORT/static/style.css")
-echo "$style_data" | head -1 | grep -q "PhaseZero" && echo "  style.css ok" || { echo "  FAIL: style.css"; exit 1; }
+if echo "$style_data" | head -1 | grep -q "PhaseZero"; then
+    echo "  style.css ok"
+else
+    echo "  FAIL: style.css"
+    exit 1
+fi
 app_data=$(curl -s "http://127.0.0.1:$PORT/static/app.js")
-echo "$app_data" | head -1 | grep -q "PhaseZero" && echo "  app.js ok" || { echo "  FAIL: app.js"; exit 1; }
+if echo "$app_data" | head -1 | grep -q "PhaseZero"; then
+    echo "  app.js ok"
+else
+    echo "  FAIL: app.js"
+    exit 1
+fi
 html_data=$(curl -s "http://127.0.0.1:$PORT/")
-echo "$html_data" | grep -q "PhaseZero" && echo "  index.html ok" || { echo "  FAIL: index.html"; exit 1; }
+if echo "$html_data" | grep -q "PhaseZero"; then
+    echo "  index.html ok"
+else
+    echo "  FAIL: index.html"
+    exit 1
+fi
 
 echo "=== Cleanup ==="
 kill "$SERVER_PID" 2>/dev/null || true

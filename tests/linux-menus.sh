@@ -57,7 +57,7 @@ PY
 
 test ! -e "$XDG_CONFIG_HOME/menus/applications-merged/phz-games.menu"
 test ! -e "$XDG_CONFIG_HOME/menus/applications-merged/phz-webapps.menu"
-menu_status="$($REPO_ROOT/linux/pz ui menu scan --json)"
+menu_status="$("$REPO_ROOT/linux/pz" ui menu scan --json)"
 jq -e '.schema == "pz.desktop-menu/v1" and .readOnly == true and .summary.managedVisible == 3' <<< "$menu_status" >/dev/null
 
 "$REPO_ROOT/linux/pz" ui menu rollback --json | jq -e '.status == "ok"' >/dev/null

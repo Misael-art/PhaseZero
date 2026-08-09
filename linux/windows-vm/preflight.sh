@@ -90,10 +90,14 @@ virtio_check() {
         VIRTIO_LATEST_URL="$url"
         local version
         version="$(echo "$url" | sed -n 's|.*virtio-win-\([0-9.]*\)-1/virtio-win.*|\1|p')" || true
-        [ -z "$version" ] && version="$(echo "$url" | sed -n 's|.*virtio-win-\([0-9.]*\)/virtio-win.*|\1|p')" || true
+        if [ -z "$version" ]; then
+            version="$(echo "$url" | sed -n 's|.*virtio-win-\([0-9.]*\)/virtio-win.*|\1|p')"
+        fi
         if [ -n "$version" ]; then
             VIRTIO_LATEST="$version"
-            [ "$VIRTIO_LATEST" != "$VIRTIO_PINNED" ] && VIRTIO_OUTDATED=true || true
+            if [ "$VIRTIO_LATEST" != "$VIRTIO_PINNED" ]; then
+                VIRTIO_OUTDATED=true
+            fi
         fi
     fi
 }
@@ -108,9 +112,13 @@ virtio_auto_fix() {
     pz_info "downloading virtio-win $VIRTIO_LATEST → $vm_dir/virtio-win.iso"
     local ok=0
     if command -v curl >/dev/null 2>&1; then
-        curl -L -o "$vm_dir/virtio-win.iso" "$VIRTIO_LATEST_URL" && ok=1 || true
+        if curl -L -o "$vm_dir/virtio-win.iso" "$VIRTIO_LATEST_URL"; then
+            ok=1
+        fi
     elif command -v wget >/dev/null 2>&1; then
-        wget -O "$vm_dir/virtio-win.iso" "$VIRTIO_LATEST_URL" && ok=1 || true
+        if wget -O "$vm_dir/virtio-win.iso" "$VIRTIO_LATEST_URL"; then
+            ok=1
+        fi
     fi
 
     if [ "$ok" = "1" ]; then
