@@ -546,6 +546,7 @@ Prova release: workflow `31258447568` success; assets em `gh release view v1.15.
 | Data | Agente | Branch/worktree | Fase | Primeiro item | Gates | Resultado/próximo passo |
 |---|---|---|---|---|---|---|
 | 2026-08-08 | opencode | `main` (worktree principal) | Fase 10 (merge/release/pacote) | `3cb05fb` (squash PR #37), `e2b85e6` (release v1.15.1), tag `v1.15.1` | run `31257317111` main verde; release `31258447568` verde; `SHA256SUMS-1.15.1` 7/7 SUCESSO; conteúdo arch/deb/rpm/src conferido | **Próximo**: usuário instala via `phasezero-admin pacman -U <pkg.tar.zst>` e valida versão/profiles/status/plan (0 dry-runs) após confirmação |
+| 2026-08-09 | opencode | `main` (worktree principal) | Pós-v1.15.1: release v1.15.2 (auditoria CX/UX + dependabot) | 10+ PRs audit (dead pages, doctor timeouts, dedup catálogo, UX core, labels, flaky) + 5 dependabot; `release.sh 1.15.2 --push` (`d4bc8a2`, tag `v1.15.2`) | run release `31314293821` success; `SHA256SUMS-1.15.2` 7/7 SUCESSO; bigsudo pacman -U exit 0 | Instalado `phasezero-control-center 1.15.2-1`; `pz --version` → v1.15.2; homelab status fail-closed (`configured:false active:false`, 0 workloads); doctor 130 PASS / 0 técnico (1 FAIL `CPU01` sensor 88°C — estado real do HW, não regressão); CLI `profiles/status/plan` top-level não existem — usar `pz server homelab status --json` e `pz server homelab profile list` |
 
 ## Formato obrigatório de handoff
 
