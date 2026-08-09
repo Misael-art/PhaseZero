@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QHBoxLayout, QHeaderView, QPlainTextEdit,
+    QFileDialog, QFrame, QHBoxLayout, QHeaderView,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
 from ..platform import open_path, state_dir
+from ..widgets import StructuredResultView
 from .base import BasePage
 
 
@@ -79,7 +80,7 @@ class ResultsPage(BasePage):
     ) -> None:
         super().__init__(root, runner, actions, by_id, parent)
         self.table: QTableWidget | None = None
-        self.detail: QPlainTextEdit | None = None
+        self.detail: StructuredResultView | None = None
 
     def build(self) -> None:
         toolbar = QHBoxLayout()
@@ -112,9 +113,7 @@ class ResultsPage(BasePage):
         self.table.setObjectName("historyTable")
         splitter.addWidget(self.table)
 
-        self.detail = QPlainTextEdit()
-        self.detail.setReadOnly(True)
-        self.detail.setObjectName("logView")
+        self.detail = StructuredResultView()
         splitter.addWidget(self.detail)
         splitter.setSizes([360, 620])
         self._layout.addWidget(splitter, 1)
@@ -162,15 +161,16 @@ class ResultsPage(BasePage):
         path = Path(path_str)
         try:
             if path.stat().st_size > 8 * 1024 * 1024:
-                self.detail.setPlainText("Arquivo excede limite de visualização de 8 MiB.")
+                self.detail.set_result(None, "Arquivo excede limite de visualização de 8 MiB.")
                 return
             if path.suffix == ".json":
                 data = json.loads(path.read_text(encoding="utf-8"))
-                self.detail.setPlainText(json.dumps(data, ensure_ascii=False, indent=2))
+                raw = json.dumps(data, ensure_ascii=False, indent=2)
+                self.detail.set_result(data.get("result", data), raw)
             else:
-                self.detail.setPlainText(path.read_text(errors="replace"))
+                self.detail.set_result(None, path.read_text(errors="replace"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            self.detail.setPlainText(str(exc))
+            self.detail.set_result(None, str(exc))
 
     def _open_folder(self) -> None:
         folder = state_dir().parent
@@ -210,3 +210,8 @@ class ResultsPage(BasePage):
 
     def block_while_running(self, running: bool) -> None:
         pass  # Results page is read-only, no need to block
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        super().set_advanced_mode(enabled)
+        if self.detail is not None:
+            self.detail.set_advanced_mode(enabled)

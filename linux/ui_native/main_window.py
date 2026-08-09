@@ -600,7 +600,9 @@ class MainWindow(QMainWindow):
         if start_failed:
             pass  # operation_start_failed already told the user
         elif result.preview and action is not None:
-            dialog = PreviewDialog(result, action, self)
+            dialog = PreviewDialog(
+                result, action, self, advanced_mode=self.preferences.advanced_mode
+            )
             if dialog.exec() == PreviewDialog.Accepted:
                 try:
                     self._bind_preview_result(action, result)
@@ -620,8 +622,15 @@ class MainWindow(QMainWindow):
             self._action_queue.clear()
         else:
             formatted = self._format_result(result)
-            dialog = ResultDialog(result, formatted, self, severity=severity)
+            dialog = ResultDialog(
+                result,
+                formatted,
+                self,
+                severity=severity,
+                advanced_mode=self.preferences.advanced_mode,
+            )
             dialog.history_requested.connect(lambda: self.show_category("Resultados"))
+            dialog.resolution_requested.connect(self._open_resolution)
             dialog.exec()
             verb_map = {"success": "concluída", "warning": "concluída com avisos", "error": "falhou"}
             verb = verb_map.get(severity, "falhou")
@@ -652,6 +661,17 @@ class MainWindow(QMainWindow):
     def _toast(self, message: str, state: str) -> None:
         toast = Toast(self, message, state)
         toast.popup()
+
+    def _open_resolution(self, action_id: str) -> None:
+        if action_id.startswith("windows."):
+            self.show_category("Windows VM")
+        elif action_id == "system.doctor":
+            self.show_category("Visão geral")
+        else:
+            self.show_category("Visão geral")
+            action = self.by_id.get("system.repair-plan")
+            if action is not None:
+                self.inspect_action(action)
 
     def _format_result(self, result: OperationResult) -> str:
         blocks = []

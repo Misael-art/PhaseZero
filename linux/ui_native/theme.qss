@@ -637,7 +637,12 @@ QProgressBar::chunk {
     font-size: 21px;
     font-weight: 700;
 }
-#dialogTitle, #successTitle { color: {{success}}; }
+#dialogTitle { color: {{text_strong}}; }
+#dialogTitle[state="success"] { color: {{success}}; }
+#dialogTitle[state="warning"] { color: {{warning}}; }
+#dialogTitle[state="error"] { color: {{error}}; }
+#dialogTitle[state="running"] { color: {{accent}}; }
+#successTitle { color: {{success}}; }
 #errorTitle { color: {{error}}; }
 QDialog {
     color: {{text}};
@@ -846,6 +851,25 @@ QComboBox QAbstractItemView {
     padding: {{space_sm}}px 0;
     text-align: left;
     font-weight: 650;
+}
+#resultSummary {
+    color: {{text}};
+    background: {{surface_header}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    padding: {{space_md}}px;
+    font-size: {{text_base}}px;
+    font-weight: 650;
+}
+#resultFact {
+    background: {{surface}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+}
+#resultFactValue {
+    color: {{text_strong}};
+    font-size: {{text_lg}}px;
+    font-weight: 750;
 }
 
 /* QCheckBox (toolCheck, tuneCheck): list-item checkboxes. */
