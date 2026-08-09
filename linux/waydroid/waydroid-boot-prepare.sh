@@ -34,7 +34,9 @@ apply_waydroid_tuning() {
         log "host Waydroid tuning skipped by environment"
         return 0
     fi
-    command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl set performance >/dev/null 2>&1 || true
+    if command -v powerprofilesctl >/dev/null 2>&1; then
+        powerprofilesctl set performance >/dev/null 2>&1 || true
+    fi
     sysctl -w vm.swappiness=1 >/dev/null 2>&1 || true
     sysctl -w vm.vfs_cache_pressure=50 >/dev/null 2>&1 || true
     sysctl -w vm.dirty_background_ratio=5 >/dev/null 2>&1 || true

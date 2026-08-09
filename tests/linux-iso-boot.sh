@@ -66,12 +66,22 @@ grep -q 'img_loop=/@/boot/iso/arch rescue.iso' "$PZ_ISO_GRUB_SCRIPT"
 grep -q "phasezero-removable-ventoy-test" "$PZ_USB_GRUB_SCRIPT"
 grep -q 'search --no-floppy --fs-uuid --set=removable 3333-4444' "$PZ_USB_GRUB_SCRIPT"
 grep -q '/EFI/BOOT/BOOTX64.EFI' "$PZ_USB_GRUB_SCRIPT"
-! grep -Eq '\(hd[0-9]+,gpt[0-9]+' "$PZ_ISO_GRUB_SCRIPT" "$PZ_USB_GRUB_SCRIPT"
+if grep -Eq '\(hd[0-9]+,gpt[0-9]+' "$PZ_ISO_GRUB_SCRIPT" "$PZ_USB_GRUB_SCRIPT"; then
+    echo "FAIL: grub scripts contain device-specific hd/gpt references"
+    exit 1
+fi
 
+# shellcheck disable=SC2016 # literal dquote fixtures
 [ "$(pz_boot_grub_dquote 'a $b `c` "d"')" = '"a \$b \`c\` \"d\""' ]
 pz_boot_valid_id arch-rescue
-! pz_boot_valid_id 'Arch Rescue'
-! safe_title "bad'title"
+if pz_boot_valid_id 'Arch Rescue'; then
+    echo "FAIL: 'Arch Rescue' should be an invalid id"
+    exit 1
+fi
+if safe_title "bad'title"; then
+    echo "FAIL: bad title should be rejected"
+    exit 1
+fi
 
 status="$(bash "$REPO_ROOT/linux/boot/iso-boot.sh" iso status --json)"
 jq -e '.schemaVersion == 1 and .entries[0].available == true and .entries[0].reason == "ready"' <<< "$status" >/dev/null

@@ -44,7 +44,9 @@ ensure_ps3_layout() {
 set_vfs_line() {
     local key="$1" value="$2" tmp
     if [ -f "$RPCS3_VFS" ] && grep -Fq "$key" "$RPCS3_VFS"; then
-        tmp="$(mktemp)"
+        # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
         awk -v key="$key" -v value="$value" '
             index($0, key) == 1 { print key " " value; next }
             { print }
@@ -132,7 +134,8 @@ EOF
 
 write_esde_system_file() {
     local path="$1" flatpak="${2:-false}" tmp
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     if [ -f "$path" ]; then
         python3 - "$path" "$tmp" "$flatpak" "$RPCS3_WRAPPER" <<'PY'
 import sys

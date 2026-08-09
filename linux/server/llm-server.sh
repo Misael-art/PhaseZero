@@ -38,7 +38,9 @@ cmd_expose_lan() {
         pz_info "dry-run: would write $DROPIN (OLLAMA_HOST=0.0.0.0) and restart ollama"
         return 0
     fi
-    local tmp; tmp="$(mktemp)"
+    local tmp
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     cat > "$tmp" <<'EOF'
 # PhaseZero managed: expose Ollama on the LAN/Tailscale interface for the home
 # server. Remove this drop-in (llm-server.sh restore) to revert to localhost.

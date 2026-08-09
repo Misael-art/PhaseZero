@@ -1,14 +1,58 @@
 # PhaseZero homelab-stack — camada EXTRAS (pesada, opt-in). Rode adicionalmente:
 #   docker compose -f docker-compose.extras.yml up -d
 # Mais RAM/CPU; não recomendado nos modos que enxugam o SO. Segredos NUNCA inline (use .env/ambiente).
+# Portainer fica aqui como opt-in. NUNCA monta /var/run/docker.sock direto:
+# fala com o socket via socket-proxy (allowlist de ambient nativa), e o proxy
+# só alcança o admin bind (127.0.0.1), nunca exposto cru na WAN.
 name: phasezero-homelab-extras
 
 services:
+  # Proxy de privilégio mínimo para o socket do Docker: expõe apenas os
+  # recursos que o Portainer realmente usa (containers/tasks), em rede interna.
+  socket-proxy:
+    image: ${PZ_IMAGE_SOCKET_PROXY:-tecnativa/docker-socket-proxy:0.2.0}
+    container_name: phasezero-socket-proxy
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    cpus: 0.25
+    environment:
+      CONTAINERS: "1"
+      TASKS: "1"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # Gestão visual da stack Docker (opt-in). Só com HOMELAB_ADMIN_BIND_ADDR=127.0.0.1.
+  portainer:
+    image: ${PZ_IMAGE_PORTAINER:-portainer/portainer-ce:2.33.2}
+    container_name: phasezero-portainer
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    ports:
+      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:9000:9000"
+    environment:
+      DOCKER_HOST: "tcp://socket-proxy:2375"
+    volumes:
+      - portainer_data:/data
+    depends_on:
+      - socket-proxy
+
   # "Drive" completo (alternativa pesada ao Syncthing)
   nextcloud-db:
     image: ${PZ_IMAGE_MARIADB:-mariadb:11.8.3}
     container_name: phasezero-nextcloud-db
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
     environment:
       - MARIADB_ROOT_PASSWORD=${NEXTCLOUD_DB_ROOT_PASSWORD}
       - MARIADB_PASSWORD=${NEXTCLOUD_DB_PASSWORD}
@@ -21,6 +65,11 @@ services:
     image: ${PZ_IMAGE_NEXTCLOUD:-nextcloud:31.0.6}
     container_name: phasezero-nextcloud
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1024m
+    cpus: 1.0
     depends_on:
       - nextcloud-db
     environment:
@@ -38,6 +87,11 @@ services:
     image: ${PZ_IMAGE_PROMETHEUS:-prom/prometheus:v3.5.0}
     container_name: phasezero-prometheus
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
     ports:
       - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:9090:9090"
     volumes:
@@ -47,6 +101,11 @@ services:
     image: ${PZ_IMAGE_NODE_EXPORTER:-prom/node-exporter:v1.9.1}
     container_name: phasezero-node-exporter
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
     ports:
       - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:9100:9100"
 
@@ -54,6 +113,11 @@ services:
     image: ${PZ_IMAGE_GRAFANA:-grafana/grafana:12.0.2}
     container_name: phasezero-grafana
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
     ports:
@@ -66,6 +130,11 @@ services:
     image: ${PZ_IMAGE_PAPERLESS:-ghcr.io/paperless-ngx/paperless-ngx:2.16.3}
     container_name: phasezero-paperless
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1024m
+    cpus: 1.5
     environment:
       - PAPERLESS_SECRET_KEY=${PAPERLESS_SECRET_KEY}
     ports:
@@ -79,6 +148,11 @@ services:
     image: ${PZ_IMAGE_N8N:-docker.n8n.io/n8nio/n8n:1.100.1}
     container_name: phasezero-n8n
     restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1024m
+    cpus: 1.0
     environment:
       - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
     ports:
@@ -87,6 +161,7 @@ services:
       - n8n_data:/home/node/.n8n
 
 volumes:
+  portainer_data:
   nextcloud_db:
   nextcloud_data:
   prometheus_data:

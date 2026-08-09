@@ -76,6 +76,7 @@ fi
 # Orphaned packages
 orphans=$( { pacman -Qdt 2>/dev/null || true; } | wc -l)
 if [ "$orphans" -gt 0 ]; then
+    # shellcheck disable=SC2016 # literal suggested command; $(pacman -Qdtq) evaluated by user at run time
     add_item "PKG02" "low" "${orphans} orphaned packages" 'sudo pacman -Rns $(pacman -Qdtq 2>/dev/null)'
 fi
 

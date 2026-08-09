@@ -4,7 +4,7 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
-OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.jsonc"
+OPENCODE_CONFIG="${HOME}/.config/opencode/opencode.json"
 NPM_PREFIX="${PZ_NPM_PREFIX:-$HOME/.local/share/npm}"
 LOCAL_BIN="${PZ_LOCAL_BIN:-$HOME/.local/bin}"
 APPLICATIONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
@@ -136,7 +136,7 @@ opencode_sync() {
     if mkdir "$lock_dir" 2>/dev/null; then
         # Use the literal path in the trap (not the local var) so cleanup works
         # even after the function returns and the local goes out of scope.
-        trap "rmdir '$lock_dir' 2>/dev/null || true" EXIT
+        trap 'rmdir "'"$lock_dir"'" 2>/dev/null || true' EXIT
     else
         pz_info "opencode sync already in progress; skipping"
         return 0
@@ -461,19 +461,12 @@ configure_free_default_model() {
     fi
 
     mkdir -p "$(dirname "$OPENCODE_CONFIG")"
+    # shellcheck disable=SC2016 # intentional literal JSON key "$schema" in printf template
     [ -f "$OPENCODE_CONFIG" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$OPENCODE_CONFIG"
     pz_backup_file "$OPENCODE_CONFIG" user >/dev/null
     local tmp; tmp="$(mktemp)"
     jq --arg model "$model" --arg small "$small" '.model = $model | .small_model = $small' \
         "$OPENCODE_CONFIG" > "$tmp" && mv "$tmp" "$OPENCODE_CONFIG"
-    # opencode-desktop and CLI both read this dir; if a bare opencode.json also
-    # exists, keep its default in lockstep so neither surface hangs on Ollama.
-    local sibling="${OPENCODE_CONFIG%jsonc}json"
-    if [ "$sibling" != "$OPENCODE_CONFIG" ] && [ -f "$sibling" ] && jq empty "$sibling" >/dev/null 2>&1; then
-        tmp="$(mktemp)"
-        jq --arg model "$model" --arg small "$small" '.model = $model | .small_model = $small' \
-            "$sibling" > "$tmp" && mv "$tmp" "$sibling"
-    fi
     pz_info "opencode default model set to keyless free model: $model (fallback small_model: $small)"
 }
 
@@ -506,6 +499,7 @@ configure_local_model() {
     local models_json tmp
     models_json="$(jq -Rn '[inputs] | map({(.): {name: (. + " (local)"), tools: true, options: {num_ctx: 8192}}}) | add' <<< "$models")"
     mkdir -p "$(dirname "$OPENCODE_CONFIG")"
+    # shellcheck disable=SC2016 # intentional literal JSON key "$schema" in printf template
     [ -f "$OPENCODE_CONFIG" ] || printf '{\n  "$schema": "https://opencode.ai/config.json"\n}\n' > "$OPENCODE_CONFIG"
     pz_backup_file "$OPENCODE_CONFIG" user >/dev/null
     tmp="$(mktemp)"

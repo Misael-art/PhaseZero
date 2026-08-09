@@ -177,7 +177,8 @@ pz_flatpak_audit() {
     echo "system: $system_apps apps, user: $user_apps apps"
     if [ -n "$duplicate_apps" ]; then
         echo "WARN: apps installed in both system and user scopes:"
-        echo "$duplicate_apps" | sed 's/^/  /'
+        # shellcheck disable=SC2086 # intentional word splitting: one app id per line
+        printf '  %s\n' $duplicate_apps
         conflicts=$((conflicts + 1))
     fi
 
@@ -225,15 +226,21 @@ pz_flatpak_steamdeck_compat() {
 
     pz_info "configuring steamdeck flatpak compat"
 
-    [ "$dry_run" = "1" ] && pz_info "dry-run: would add flathub" || \
+    if [ "$dry_run" = "1" ]; then
+        pz_info "dry-run: would add flathub"
+    else
         pz_flatpak_ensure_remote \
             "flathub" \
             "https://dl.flathub.org/repo/flathub.flatpakrepo"
+    fi
 
-    [ "$dry_run" = "1" ] && pz_info "dry-run: would add flathub-beta" || \
+    if [ "$dry_run" = "1" ]; then
+        pz_info "dry-run: would add flathub-beta"
+    else
         pz_flatpak_ensure_remote \
             "flathub-beta" \
             "https://flathub.org/beta-repo/flathub-beta.flatpakrepo"
+    fi
 
     if [ "$dry_run" = "1" ]; then
         pz_info "dry-run: would apply gaming overrides"
@@ -278,7 +285,7 @@ pz_flatpak_setup_from_profile() {
         overrides=$(jq -r '.packages.linux.flatpak.overrides // {}' "$profile_file" 2>/dev/null || true)
 
         if [ -n "$remotes" ]; then
-            [ "$dry_run" = "1" ] && pz_info "planning flatpak remotes..." || pz_info "configuring flatpak remotes..."
+            if [ "$dry_run" = "1" ]; then pz_info "planning flatpak remotes..."; else pz_info "configuring flatpak remotes..."; fi
             echo "$remotes" | while IFS=$'\t' read -r name url required; do
                 [ -z "$name" ] || [ -z "$url" ] && continue
                 if [ "$dry_run" = "1" ]; then
@@ -303,13 +310,15 @@ pz_flatpak_setup_from_profile() {
             local override_type
             override_type=$(echo "$overrides" | jq -r 'keys[]' 2>/dev/null || true)
             for ot in $override_type; do
-                [ "$dry_run" = "1" ] && pz_info "  would apply $ot overrides" || {
+                if [ "$dry_run" = "1" ]; then
+                    pz_info "  would apply $ot overrides"
+                else
                     case "$ot" in
                         gaming) pz_flatpak_override_gaming "" "user" ;;
                         steamdeck) pz_flatpak_override_steamdeck "" "user" ;;
                         *) pz_info "unknown override type: $ot" ;;
                     esac
-                }
+                fi
             done
         fi
     fi

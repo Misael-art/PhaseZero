@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from .catalog import CATEGORIES, DASHBOARD, SIDEBAR_GROUPS, build_catalog
 from .command_runner import CommandRunner
 from .models import ActionSpec, OperationResult
+from .provision_player import ProvisionPlayerWindow
 from .pages.registry import PageRegistry
 from .result_parser import severity_for
 from .widgets import (
@@ -141,6 +142,7 @@ class MainWindow(QMainWindow):
                     "Windows VM": QStyle.SP_ComputerIcon,
                     "Waydroid": QStyle.SP_DriveHDIcon,
                     "Servidor": QStyle.SP_DriveNetIcon,
+                    "Homelab": QStyle.SP_DriveNetIcon,
                     "Emulação": QStyle.SP_DriveDVDIcon,
                     "Boot Direto": QStyle.SP_BrowserReload,
                     "Flatpak": QStyle.SP_DriveHDIcon,
@@ -473,6 +475,16 @@ class MainWindow(QMainWindow):
             if dialog.exec() != ParameterDialog.Accepted:
                 return
             values = dialog.values()
+
+        if action.id == "windows.provision.player":
+            ProvisionPlayerWindow.open(
+                self.root, self.runner, self,
+                iso=values.get("input", ""),
+                graphics=values.get("graphics", "compat"),
+                image_index=values.get("image_index", "1"),
+                guest_login=values.get("guest_login", "auto"),
+            )
+            return
         self.pending_action = action
         self.pending_value = values.get("input", "")
         self.pending_values = values
@@ -497,7 +509,6 @@ class MainWindow(QMainWindow):
         self._operation_started_at = time.monotonic()
         self._elapsed_timer.start()
         self._update_elapsed()
-        self.global_state.setText(self.status_text.text())
         self.progress.setRange(0, 0)
         self.progress.show()
         self.registry.block_all(True)
@@ -523,10 +534,6 @@ class MainWindow(QMainWindow):
         scrollbar.setValue(scrollbar.maximum())
         if self.progress_dialog is not None:
             self.progress_dialog.append_output(text, error)
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if lines:
-            tail = lines[-1]
-            self.global_state.setText(("Erro: " if error else "Executando: ") + tail[:120])
 
     def update_progress(self, value: int) -> None:
         self.progress.setRange(0, 100)
@@ -551,7 +558,6 @@ class MainWindow(QMainWindow):
         status_map = {"success": "Concluído", "warning": "Concluído com avisos", "error": "Falhou"}
         status_label = status_map.get(severity, "Falhou")
         self.status_text.setText(status_label)
-        self.global_state.setText(self.status_text.text())
         self.status_dot.setObjectName("statusSuccess" if severity == "success" else "statusWarning" if severity == "warning" else "statusError")
         self.status_dot.style().unpolish(self.status_dot)
         self.status_dot.style().polish(self.status_dot)
@@ -559,6 +565,10 @@ class MainWindow(QMainWindow):
         self.inspector.setEnabled(True)
         if not result.ok:
             self._failure_count += 1
+        elif not result.preview:
+            # A confirmed operation that succeeded clears the pending-failure
+            # badge; preview runs must not clear it (no change was applied).
+            self._failure_count = 0
         self._update_failure_summary()
         for card in self._search_cards:
             card.setEnabled(True)
@@ -645,7 +655,6 @@ class MainWindow(QMainWindow):
         self._elapsed_timer.stop()
         self._operation_started_at = None
         self.elapsed_label.clear()
-        self.global_state.setText("Falha ao iniciar")
         self._failure_count += 1
         self._update_failure_summary()
         QMessageBox.critical(self, "Falha ao iniciar", message)

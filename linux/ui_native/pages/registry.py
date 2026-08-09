@@ -9,16 +9,10 @@ from .base import BasePage
 from .dashboard import DashboardPage
 from .overview import OverviewPage
 from .profiles import ProfilesPage
-from .steamdeck import SteamDeckPage
-from .windows_vm import WindowsVMPage
-from .waydroid import WaydroidPage
-from .server import ServerPage
+from .homelab import HomelabPage
 from .emulation import EmulationPage
-from .boot import BootPage
-from .flatpak import FlatpakPage
-from .ai_dev import AiDevPage
 from .ai_proxies import AiProxiesPage
-from .applications import ApplicationsPage
+from .ai_routing import AiRoutingPage
 from .tuning import TuningPage
 from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
@@ -36,35 +30,33 @@ class PageRegistry:
         self._pages: dict[str, BasePage] = {}
         self._build()
 
-    # Category -> page class mapping.
+    # Category -> page class mapping. Categories rendered by the generic
+    # catalog workspace page are mapped directly; bespoke pages only survive
+    # where they add real UI (Homelab, Emulação, Proxies/Roteamento IA, ...).
     _CATEGORY_PAGES: dict[str, type[BasePage]] = {
         "Início": DashboardPage,
         "Visão geral": OverviewPage,
         "Perfis": ProfilesPage,
-        "Steam Deck": SteamDeckPage,
-        "Windows VM": WindowsVMPage,
-        "Waydroid": WaydroidPage,
-        "Servidor": ServerPage,
+        "Steam Deck": CatalogWorkspacePage,
+        "Windows VM": CatalogWorkspacePage,
+        "Waydroid": CatalogWorkspacePage,
+        "Servidor": CatalogWorkspacePage,
+        "Homelab": HomelabPage,
         "Emulação": EmulationPage,
-        "Boot Direto": BootPage,
-        "Flatpak": FlatpakPage,
+        "Boot Direto": CatalogWorkspacePage,
+        "Flatpak": CatalogWorkspacePage,
         "Recursos": CatalogWorkspacePage,
-        "IA & Dev": AiDevPage,
+        "IA & Dev": CatalogWorkspacePage,
         "Proxies IA": AiProxiesPage,
-        "Aplicativos": ApplicationsPage,
+        "Roteamento IA": AiRoutingPage,
+        "Aplicativos": CatalogWorkspacePage,
         "Ajustes": TuningPage,
         "Resultados": ResultsPage,
     }
 
     def _build(self) -> None:
-        workspace_categories = {
-            "Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação",
-            "Boot Direto", "Flatpak", "Recursos", "IA & Dev", "Aplicativos",
-        }
         for category, page_cls in self._CATEGORY_PAGES.items():
             actions = [a for a in self.catalog if a.category == category]
-            if category in workspace_categories and category != "Emulação":
-                page_cls = CatalogWorkspacePage
             page = page_cls(self.root, self.runner, actions, by_id=self.by_id)
             page.build()
             page.finalize_action_coverage()

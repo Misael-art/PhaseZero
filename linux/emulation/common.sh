@@ -15,7 +15,8 @@ pz_ini_set() {
     local file="$1" section="$2" key="$3" value="$4" tmp
     install -d "$(dirname "$file")"
     [ -f "$file" ] || printf '[%s]\n' "$section" > "$file"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     awk -v section="$section" -v key="$key" -v value="$value" '
         BEGIN { active=0; section_seen=0; wrote=0 }
         $0 == "[" section "]" { active=1; section_seen=1; print; next }
@@ -33,7 +34,9 @@ pz_ini_set() {
             if (!wrote) print key " = " value
         }
     ' "$file" > "$tmp"
-    [ -f "$file" ] && cp "$file" "$file.phasezero.bak" 2>/dev/null || true
+    if [ -f "$file" ]; then
+        cp "$file" "$file.phasezero.bak" 2>/dev/null || true
+    fi
     mv "$tmp" "$file"
 }
 
@@ -278,7 +281,9 @@ pz_emulation_consolidate_aliases() {
     for entry in "${entries[@]}"; do
         canonical="${entry%%|*}"
         alias="${entry##*|}"
-        [ -n "$canonical" ] && [ -n "$alias" ] || continue
+        if [ -z "$canonical" ] || [ -z "$alias" ]; then
+            continue
+        fi
         [ "$canonical" = "$alias" ] && continue
         # Skip if the alias is already a symlink pointing at the canonical target.
         if [ -L "$alias" ] && [ "$(readlink -f "$alias")" = "$(readlink -f "$canonical")" ]; then
@@ -289,7 +294,11 @@ pz_emulation_consolidate_aliases() {
         if [ -e "$alias" ] && [ ! -L "$alias" ]; then
             local count
             count="$(find "$alias" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
-            [ "$count" -eq 0 ] && rmdir "$alias" 2>/dev/null || continue
+            if [ "$count" -eq 0 ]; then
+                rmdir "$alias" 2>/dev/null || true
+            else
+                continue
+            fi
         fi
         ln -sfn "$canonical" "$alias" 2>/dev/null || true
     done
@@ -299,7 +308,8 @@ pz_emulation_write_file() {
     local path="$1" mode="${2:-0644}" dir tmp
     dir="$(dirname "$path")"
     install -d "$dir"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     cat > "$tmp"
     pz_backup_file "$path" user >/dev/null
     install -m "$mode" "$tmp" "$path"

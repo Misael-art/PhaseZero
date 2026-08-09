@@ -48,6 +48,6 @@ grep -q '^\[keep-id\]$' <<< "$config"
 if grep -q 'PhaseZero dualscreen:' <<< "$config"; then exit 1; fi
 grep -q '^count=1$' <<< "$config"
 grep -q '^rules=keep-id$' <<< "$config"
-find "$XDG_CONFIG_HOME" -maxdepth 1 -type f -name 'kwinrulesrc.phasezero.bak.*' -print -quit | grep -q .
+find "$PZ_BACKUP_ROOT" -type f -name 'kwinrulesrc.bak.*' -print -quit | grep -q .
 
 echo "linux dualscreen tests passed"

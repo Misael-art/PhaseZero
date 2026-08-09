@@ -102,7 +102,8 @@ EOF
 dualscreen_kwin_write_rules() {
     local tag="$1"
     local blocks
-    blocks="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    blocks="$(pz_tempfile)"
     cat > "$blocks"
     if ! dualscreen_kwin_rewrite "$tag" "$blocks" false; then
         rm -f "$blocks"
@@ -124,7 +125,8 @@ dualscreen_kwin_remove_all() {
     # Remove every PhaseZero dualscreen rule, leaving the rest intact.
     [ -f "$KWINRULES" ] || { pz_info "no kwinrulesrc present; nothing to remove"; return 0; }
     local empty
-    empty="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    empty="$(pz_tempfile)"
     if ! dualscreen_kwin_rewrite "" "$empty" true; then
         rm -f "$empty"
         return 1

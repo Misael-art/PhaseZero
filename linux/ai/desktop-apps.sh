@@ -210,8 +210,9 @@ install_qwen() {
     chmod 0600 "$QWEN_STATE"
     write_qwen_launcher
     write_qwen_desktop_entry
-    command -v update-desktop-database >/dev/null 2>&1 &&
+    if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
+    fi
     pz_info "Qwen Code Desktop installed: $version"
 }
 
@@ -269,10 +270,10 @@ read_claude_metadata() {
             in_sha && $3 == target {print $2; exit}
         ' "$release"
     )"
-    [ -n "$package_hash" ] && [ -n "$package_size" ] || {
+    if [ -z "$package_hash" ] || [ -z "$package_size" ]; then
         pz_error "signed Packages digest missing for $packages_rel"
         return 1
-    }
+    fi
 
     download_atomic "$CLAUDE_REPO_BASE/dists/stable/$packages_rel" "$packages_file"
     verify_size_hash "$packages_file" "$package_size" "$package_hash"
@@ -452,10 +453,12 @@ install_claude() {
     write_claude_launcher
     write_claude_desktop_entry
     install_claude_icons "$extracted"
-    command -v update-desktop-database >/dev/null 2>&1 &&
+    if command -v update-desktop-database >/dev/null 2>&1; then
         update-desktop-database "$APPLICATIONS_DIR" >/dev/null 2>&1 || true
-    command -v xdg-mime >/dev/null 2>&1 &&
+    fi
+    if command -v xdg-mime >/dev/null 2>&1; then
         xdg-mime default claude-desktop.desktop x-scheme-handler/claude >/dev/null 2>&1 || true
+    fi
     bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync claude-desktop >/dev/null ||
         pz_warn "Claude Desktop MCP sync failed"
     prune_claude_versions
@@ -585,10 +588,10 @@ repair_codex() {
     local workspace version builder dist updater_copy package rc=0
     workspace="$(codex_failed_workspace || true)"
     version="$(codex_candidate_version || true)"
-    [ -n "$workspace" ] && [ -d "$workspace/builder" ] && [ -d "$workspace/codex-app" ] || {
+    if [ -z "$workspace" ] || [ ! -d "$workspace/builder" ] || [ ! -d "$workspace/codex-app" ]; then
         pz_error "no failed Codex Desktop workspace available"
         return 1
-    }
+    fi
     [ -n "$version" ] || {
         pz_error "Codex candidate version missing"
         return 1

@@ -31,6 +31,7 @@ grep -q 'pz_boot_validate_active_efi_safe' "$REPO_ROOT/linux/waydroid/waydroid.s
 grep -q 'pz_boot_require_current_root_target' "$REPO_ROOT/linux/waydroid/waydroid.sh"
 grep -q 'BOOT_ID="phasezero-waydroid"' "$REPO_ROOT/linux/waydroid/waydroid.sh"
 grep -q -- "--hotkey=a" "$REPO_ROOT/linux/waydroid/waydroid.sh"
+# shellcheck disable=SC2016 # literal: script must call grub-reboot "$BOOT_ID" verbatim
 grep -q 'grub-reboot "$BOOT_ID"' "$REPO_ROOT/linux/waydroid/waydroid.sh"
 target_status="$("$REPO_ROOT/linux/pz" waydroid boot --target-root / status)"
 grep -q 'target_root: /' <<< "$target_status"
@@ -58,7 +59,9 @@ session_validation="$(
 grep -q 'waydroid_session_ready=yes' <<< "$session_validation"
 grep -q 'display_profile=' <<< "$session_validation"
 grep -q 'compositor=' <<< "$session_validation"
-! grep -q 'startkde-biglinux' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
+if grep -q 'startkde-biglinux' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"; then
+    exit 1
+fi
 grep -q 'session_is_running' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 grep -q 'android_platform_ready' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 grep -q 'full UI accepted; monitoring Android session' "$REPO_ROOT/linux/waydroid/waydroid-session.sh"

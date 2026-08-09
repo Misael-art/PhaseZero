@@ -386,8 +386,9 @@ configure_opencode_ide() {
         [ -n "$id" ] || continue
         key="$(ensure_proxy_key "$id" "$port")"
         baseurl="http://127.0.0.1:$port/v1"
-        merge_opencode_provider "$OPENCODE_JSONC" "$pid" "$name" "$baseurl" "$key" "$models"
-        merge_opencode_provider "$OPENCODE_JSON"  "$pid" "$name" "$baseurl" "$key" "$models"
+        merge_opencode_provider "$OPENCODE_JSON" "$pid" "$name" "$baseurl" "$key" "$models"
+        # Legacy JSONC is migration input only; never recreate parallel global config.
+        [ -f "$OPENCODE_JSONC" ] && merge_opencode_provider "$OPENCODE_JSONC" "$pid" "$name" "$baseurl" "$key" "$models"
         count=$((count + 1))
     done < <(proxy_ide_rows)
     pz_info "opencode/opencode-desktop: wired $count PhaseZero proxy providers (default model unchanged; select a proxy model after 'npm run login')"
@@ -758,10 +759,10 @@ login_proxy() {
     fi
     [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || { pz_error "browser login requires a graphical session (DISPLAY or WAYLAND_DISPLAY)"; return 3; }
     [ -d "$dir/.git" ] || { pz_error "$id not installed; run: pz ai proxies install $id"; return 1; }
-    [ -f "$dir/package.json" ] && jq -er '.scripts.login // empty' "$dir/package.json" >/dev/null 2>&1 || {
+    if [ ! -f "$dir/package.json" ] || ! jq -er '.scripts.login // empty' "$dir/package.json" >/dev/null 2>&1; then
         pz_error "$id has no npm login script"
         return 2
-    }
+    fi
     if login_process_running "$id"; then
         pz_info "login already running for $id; use the existing browser window"
         return 0

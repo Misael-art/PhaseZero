@@ -84,7 +84,7 @@ rm_path() {
         rm -rf -- "$real"
         printf '  removido   %s\n' "$real"
     else
-        printf '  [dry] rm   %s  (%s)\n' "$real" "$(numfmt --to=iec ${sz:-0} 2>/dev/null || echo "${sz}B")"
+        printf '  [dry] rm   %s  (%s)\n' "$real" "$(numfmt --to=iec "${sz:-0}" 2>/dev/null || echo "${sz}B")"
     fi
     REMOVED=$((REMOVED + 1))
 }

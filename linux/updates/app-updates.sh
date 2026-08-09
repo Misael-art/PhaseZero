@@ -15,12 +15,13 @@ TIMER="phasezero-app-update-check.timer"
 safe_json() {
     local output="$1"; shift
     if timeout 90 "$@" > "$output" 2>/dev/null && jq -e . "$output" >/dev/null 2>&1; then return 0; fi
+    # shellcheck disable=SC2094 # intentional: read parent dir from path, write to file
     jq -n --arg component "$(basename "$output" .json)" '{status:"unavailable",component:$component}' > "$output"
 }
 
 host_updates() {
     local output="$1" list count=0
-    list="$(mktemp)"
+    list="$(pz_tempfile)"
     if command -v checkupdates >/dev/null 2>&1; then
         checkupdates > "$list" 2>/dev/null || [ "$?" -eq 2 ] || true
         count="$(awk 'NF {count++} END {print count+0}' "$list")"
@@ -33,7 +34,7 @@ host_updates() {
 
 check_all() (
     local work payload update_count codex_failed
-    work="$(mktemp -d)"; trap 'rm -rf "$work"' EXIT
+    work="$(pz_tempfile -d)"; trap 'rm -rf "$work"' EXIT
     safe_json "$work/core.json" env PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m linux.installation.update_cli check &
     safe_json "$work/install.json" env PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" python3 -m linux.installation status &
     safe_json "$work/9router.json" bash "$PZ_ROOT/linux/ai/9router-manager.sh" check-update &
@@ -56,7 +57,7 @@ check_all() (
 write_state() {
     install -d -m 0700 "$STATE_DIR"
     local tmp
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     check_all > "$tmp"
     install -m 0600 "$tmp" "$STATE_FILE"
     rm -f "$tmp"
@@ -113,7 +114,7 @@ apply_one() {
 case "$ACTION" in
     check|status) check_all ;;
     check-state) write_state >/dev/null ;;
-    latest) [ -f "$STATE_FILE" ] && cat "$STATE_FILE" || check_all ;;
+    latest) if [ -f "$STATE_FILE" ]; then cat "$STATE_FILE"; else check_all; fi ;;
     apply|update) apply_one "${1:-}" ;;
     install-service|install-timer) install_timer ;;
     timer-status) systemctl --user status "$TIMER" --no-pager ;;

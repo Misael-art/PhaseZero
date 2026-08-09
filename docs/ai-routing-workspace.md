@@ -34,12 +34,23 @@ Controles PhaseZero:
 Executar cliente com perfil temporário:
 
 ```bash
-phasezero-9router-run codex
-phasezero-9router-run claude
-phasezero-9router-run opencode
+claude-9router
+linux/pz ai opencode run --route=9router -- run
 ```
 
 Wrapper injeta endpoint e chave apenas no processo filho. Configurações globais de cada agente não são sobrescritas. Uso de OAuth, assinaturas e modelos deve respeitar termos e cotas do provider. Fallback não significa evasão de limites.
+
+Claude Code oficial permanece na assinatura por padrão. `claude-subscription` remove qualquer rota herdada; `claude-9router` usa somente `ANTHROPIC_AUTH_TOKEN` e o endpoint loopback. Bonsai coexiste como `claude-bonsai`: não ocupa porta local e injeta suas variáveis somente no processo filho. O launcher preserva o consentimento de snapshot/upload e bloqueia diretórios ou arquivos sensíveis conhecidos.
+
+Use `linux/pz ai claude preflight bonsai --cwd /projeto/revisado` e depois `linux/pz ai claude run bonsai --cwd /projeto/revisado`. O diretório explícito evita iniciar snapshot no HOME por engano; preflight procura nomes conhecidos de dotenv, credenciais e chaves sem ler conteúdo. Também valida DNS A/AAAA e TLS do router Bonsai usando Node. `ENOTIMP` é classificado como falha DNS/transporte transitória; PhaseZero não altera DNS nem aumenta retries automaticamente.
+
+`bonsai start` é shim PhaseZero somente para o subcomando `start`: executa o mesmo preflight e usa `BONSAI_ROUTE=direct|9router`. Demais subcomandos seguem o CLI upstream. Rota `9router` é fallback explícito, não inicia Bonsai e não cria snapshot/upload. Token Bonsai nunca é importado no 9Router. Na rota direta, Claude.ai connectors ficam desativados porque Bonsai usa endpoint e bearer próprios. Use `claude-subscription` quando precisar dos connectors Claude.ai.
+
+O instalador mantém o binário Bonsai npm intacto e coloca `~/.local/bin` no início dos perfis shell existentes para o shim interceptar `start`. Abra novo login shell após instalação.
+
+OpenCode usa `~/.config/opencode/opencode.json` como configuração canônica. Provider 9Router aponta para `127.0.0.1:20128/v1`; `apiKey` referencia arquivo `0600`, sem chave embutida e sem variáveis Anthropic/OpenAI globais. `BONSAI_ROUTE=direct` é recusado no OpenCode por falta de suporte Bonsai documentado. `9router/Default` permanece configurado e disponível; `pz ai opencode run` e `verify --live` usam o combo ativo quando `--model` não foi informado, evitando prender execução num primeiro provider temporariamente limitado. O smoke executa prompt e chamada `read` sobre fixture temporária sintética.
+
+Diagnóstico 9Router considera saudável apenas listener loopback pertencente à árvore do serviço PhaseZero. Processo alheio ou startup legado não satisfaz healthcheck.
 
 ## Odysseus
 
@@ -62,6 +73,36 @@ Patch local registrado remove `setup_requires` de Torch/CUDA usado somente ao co
 Odysseus recebe 9Router como endpoint OpenAI-compatible quando chave gerenciada existe. Um proxy interno no container atravessa socket Unix `0600`; 9Router continua preso ao loopback do host. Doctor valida socket e rota. Dashboard permite cadastrar outro endpoint sem acoplar workspace a provider.
 
 Odysseus inclui console administrativo, execução de ferramentas e armazenamento de arquivos. Não publicar porta 7000 diretamente. Para acesso remoto, usar proxy TLS ou rede privada, `SECURE_COOKIES=true` e origem CORS exata.
+
+## Roteamento IA por tarefa
+
+O configurador (`linux/ai/routing_manager.py`, acionado por `pz ai routing`)
+decide a cadeia de fallbacks de cada tarefa com base na saúde real do 9Router:
+
+```bash
+linux/pz ai routing status            # saúde, modelos e conexões (redigido)
+linux/pz ai routing inventory --refresh-quota   # cotas reais por conexão
+linux/pz ai routing recommend --task code --policy balanced
+linux/pz ai routing plan --json      # diff entre combos phasezero-* e o plano
+linux/pz ai routing apply --task code --yes     # materializa (transacional)
+linux/pz ai routing run codex        # executa cliente com env de criança
+linux/pz ai routing verify --live    # health, planMatches, isolamento Bonsai
+linux/pz ai routing rollback <manifest>   # restaura bytes; recusa drift sem --force
+```
+
+- Tarefas: `code`, `analysis`, `plan`. Políticas: `quality`, `balanced`,
+  `save-quota`, `privacy` (pesos somam 100; reserva de quota por política).
+- Combos gerenciados `phasezero-code/analysis/plan` (máx. 5 modelos); combos do
+  usuário (`Default`, `claude-Combo_Cleude`) nunca são alterados.
+- Apply escreve manifesto em
+  `~/.local/share/phasezero/ai-routing/operations/apply-*/` com bytes
+  anteriores; rollback restaura combos e state, falhando em drift externo.
+- Quota desconhecida nunca é tratada como 100%; confiança 1.0/0.4/0.15.
+- 401/403/429 ativos e cooldowns excluem o provider até a próxima sessão;
+  recomputar a rota antes de iniciar sessão.
+- Segredos redigidos em todo output persistido (state/manifest 0600/0700).
+- UI nativa: página "Roteamento IA" (cards por tarefa, políticas, editor de
+  fallbacks, aplicar/reverter). Bonsai permanece isolado do roteador.
 
 ## Atualizações
 

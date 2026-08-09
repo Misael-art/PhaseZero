@@ -198,7 +198,7 @@ cmd_install() {
     command -v curl >/dev/null 2>&1 || { pz_error "curl missing"; return 1; }
     pz_info "installing CasaOS from official installer ($INSTALL_URL)"
     local installer size rc=0
-    installer="$(mktemp "${TMPDIR:-/tmp}/phasezero-casaos.XXXXXX")"
+    installer="$(pz_tempfile "${TMPDIR:-/tmp}/phasezero-casaos.XXXXXX")"
     if ! curl --proto '=https' --tlsv1.2 --fail --show-error --location \
         --retry 3 --retry-all-errors --connect-timeout 15 --max-time 120 \
         --output "$installer" "$INSTALL_URL"; then

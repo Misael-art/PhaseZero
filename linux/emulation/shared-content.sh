@@ -64,7 +64,8 @@ pz_shared_record_migration() {
     local name="$1" source="$2" backup="$3" files="$4" timestamp tmp
     timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     install -d "$PZ_BACKUP_DIR"
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     if [ -f "$PZ_SHARED_MIGRATIONS" ] && jq -e '.migrations | type == "array"' "$PZ_SHARED_MIGRATIONS" >/dev/null 2>&1; then
         jq --arg name "$name" --arg source "$source" --arg backup "$backup" \
             --arg timestamp "$timestamp" --argjson files "$files" \

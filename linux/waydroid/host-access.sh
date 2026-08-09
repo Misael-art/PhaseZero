@@ -34,7 +34,7 @@ cmd_link() {
 }
 
 cmd_unlink() {
-    [ -L "$LINK" ] && rm -f "$LINK" && pz_info "removed $LINK" || pz_info "no managed link at $LINK"
+    if [ -L "$LINK" ] && rm -f "$LINK"; then pz_info "removed $LINK"; else pz_info "no managed link at $LINK"; fi
 }
 
 cmd_status() {

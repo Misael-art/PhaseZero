@@ -9,7 +9,51 @@ PZ_OPERATION_ID="${PZ_OPERATION_ID:-legacy-$(date +%Y%m%d-%H%M%S)-${BASHPID:-$$}
 PZ_MANIFEST="${PZ_MANIFEST:-$PZ_STATE/operations/$PZ_OPERATION_ID.json}"
 PZ_LOG="$PZ_STATE/pz.log"
 PZ_BACKUP_ROOT="${PZ_BACKUP_ROOT:-$PZ_STATE/backups}"
+PZ_TEMP_FILES=()
+PZ_CLEANUP_REGISTERED=0
 PZ_STATE_READY=0
+
+pz_tempfile() {
+    local t registry template_base
+    template_base="${TMPDIR:-/tmp}"
+    if [ "$#" -eq 1 ] && [[ "$1" != -* ]] && [[ "$1" != */* ]]; then
+        set -- "$template_base/$1"
+    fi
+    t="$(mktemp "$@")"
+    PZ_TEMP_FILES+=("$t")
+    registry="${XDG_RUNTIME_DIR:-$template_base}/phasezero-temp-registry.$UID.$$.list"
+    umask 077
+    printf '%s\0' "$t" >> "$registry"
+    echo "$t"
+}
+
+pz_cleanup_temp() {
+    local rc=$?
+    local registry="${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/phasezero-temp-registry.$UID.$$.list" entry
+    if [ ${#PZ_TEMP_FILES[@]} -gt 0 ]; then
+        rm -f "${PZ_TEMP_FILES[@]}" 2>/dev/null || true
+    fi
+    if [ -f "$registry" ] && [ ! -L "$registry" ]; then
+        while IFS= read -r -d '' entry; do
+            [ -n "$entry" ] || continue
+            if [ "$entry" = "/" ] || [ "$entry" = "$HOME" ]; then
+                continue
+            fi
+            if [ -d "$entry" ] && [ ! -L "$entry" ]; then
+                rm -rf -- "$entry" 2>/dev/null || true
+            else
+                rm -f -- "$entry" 2>/dev/null || true
+            fi
+        done < "$registry"
+        rm -f -- "$registry" 2>/dev/null || true
+    fi
+    return "$rc"
+}
+
+if [ "${PZ_CLEANUP_REGISTERED:-0}" = "0" ]; then
+    trap pz_cleanup_temp EXIT
+    PZ_CLEANUP_REGISTERED=1
+fi
 
 # O estado é criado SOB DEMANDA, nunca no `source`. Comandos puramente
 # informativos (`pz help`, `pz version`) não podem tocar o host.
@@ -605,12 +649,24 @@ pz_boot_backup_bundle() {
     base="$(pz_boot_path /var/lib/phasezero/boot-backups)"
     install -d "$base"
     dir="$(mktemp -d "$base/${ts}.XXXXXX")"
-    [ -f "$(pz_boot_path /etc/default/grub)" ] && cp -a "$(pz_boot_path /etc/default/grub)" "$dir/grub.default" 2>/dev/null || true
-    [ -d "$(pz_boot_path /etc/default/grub.d)" ] && cp -a "$(pz_boot_path /etc/default/grub.d)" "$dir/grub.d.default" 2>/dev/null || true
-    [ -d "$(pz_boot_path /etc/grub.d)" ] && cp -a "$(pz_boot_path /etc/grub.d)" "$dir/grub.d.scripts" 2>/dev/null || true
-    [ -f "$(pz_boot_path /boot/grub/grub.cfg)" ] && cp -a "$(pz_boot_path /boot/grub/grub.cfg)" "$dir/grub.cfg" 2>/dev/null || true
-    [ -f "$(pz_boot_path /boot/grub/grubenv)" ] && cp -a "$(pz_boot_path /boot/grub/grubenv)" "$dir/grubenv" 2>/dev/null || true
-    [ -d "$(pz_boot_esp_dir)/EFI" ] && cp -a "$(pz_boot_esp_dir)/EFI" "$dir/EFI" 2>/dev/null || true
+    if [ -f "$(pz_boot_path /etc/default/grub)" ]; then
+        cp -a "$(pz_boot_path /etc/default/grub)" "$dir/grub.default" 2>/dev/null || true
+    fi
+    if [ -d "$(pz_boot_path /etc/default/grub.d)" ]; then
+        cp -a "$(pz_boot_path /etc/default/grub.d)" "$dir/grub.d.default" 2>/dev/null || true
+    fi
+    if [ -d "$(pz_boot_path /etc/grub.d)" ]; then
+        cp -a "$(pz_boot_path /etc/grub.d)" "$dir/grub.d.scripts" 2>/dev/null || true
+    fi
+    if [ -f "$(pz_boot_path /boot/grub/grub.cfg)" ]; then
+        cp -a "$(pz_boot_path /boot/grub/grub.cfg)" "$dir/grub.cfg" 2>/dev/null || true
+    fi
+    if [ -f "$(pz_boot_path /boot/grub/grubenv)" ]; then
+        cp -a "$(pz_boot_path /boot/grub/grubenv)" "$dir/grubenv" 2>/dev/null || true
+    fi
+    if [ -d "$(pz_boot_esp_dir)/EFI" ]; then
+        cp -a "$(pz_boot_esp_dir)/EFI" "$dir/EFI" 2>/dev/null || true
+    fi
     lsblk -f > "$dir/lsblk-f.txt" 2>&1 || true
     blkid > "$dir/blkid.txt" 2>&1 || true
     findmnt > "$dir/findmnt.txt" 2>&1 || true
@@ -725,10 +781,10 @@ pz_boot_resolve_file_identity() {
     source="$(findmnt -no SOURCE -T "$real" 2>/dev/null | head -1 || true)"
     uuid="$(findmnt -no UUID -T "$real" 2>/dev/null | head -1 || true)"
     fstype="$(findmnt -no FSTYPE -T "$real" 2>/dev/null | head -1 || true)"
-    [ -n "$source" ] && [ -n "$uuid" ] && [ -n "$fstype" ] || {
+    if [ -z "$source" ] || [ -z "$uuid" ] || [ -z "$fstype" ]; then
         pz_error "could not resolve filesystem identity for: $real"
         return 1
-    }
+    fi
     case "$fstype" in
         overlay|squashfs|fuse.*|nfs|nfs4|cifs|sshfs)
             pz_error "filesystem unavailable to GRUB: $fstype ($real)"
@@ -921,7 +977,9 @@ pz_rollback() {
             flatpak-package) flatpak --user uninstall -y "$target" 2>/dev/null || true ;;
             service) systemctl disable --now "$target" 2>/dev/null || true ;;
             flatpak-remote)
-                command -v flatpak >/dev/null 2>&1 && flatpak remote-delete "$target" 2>/dev/null || true
+                if command -v flatpak >/dev/null 2>&1; then
+                    flatpak remote-delete "$target" 2>/dev/null || true
+                fi
                 ;;
         esac
     done
@@ -1062,7 +1120,11 @@ pz_run_profile() {
     fi
 
     if [ -n "$packages" ]; then
-        [ "$dry_run" = "1" ] && pz_info "planning pacman packages..." || pz_info "installing pacman packages..."
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning pacman packages..."
+        else
+            pz_info "installing pacman packages..."
+        fi
         while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
             if [ "$dry_run" = "1" ]; then
@@ -1077,7 +1139,11 @@ pz_run_profile() {
     fi
 
     if [ -n "$yay_pkgs" ]; then
-        [ "$dry_run" = "1" ] && pz_info "planning AUR packages..." || pz_info "installing AUR packages..."
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning AUR packages..."
+        else
+            pz_info "installing AUR packages..."
+        fi
         while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
             if [ "$dry_run" = "1" ]; then
@@ -1097,7 +1163,11 @@ pz_run_profile() {
     fi
 
     if [ -n "$flatpak_pkgs" ]; then
-        [ "$dry_run" = "1" ] && pz_info "planning flatpak packages..." || pz_info "installing flatpak packages..."
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning flatpak packages..."
+        else
+            pz_info "installing flatpak packages..."
+        fi
         while IFS= read -r pkg; do
             [ -z "$pkg" ] && continue
             if [ "$dry_run" = "1" ]; then
@@ -1116,7 +1186,11 @@ pz_run_profile() {
     fi
 
     if [ -n "$scripts" ]; then
-        [ "$dry_run" = "1" ] && pz_info "planning setup scripts..." || pz_info "running setup scripts..."
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning setup scripts..."
+        else
+            pz_info "running setup scripts..."
+        fi
         while IFS= read -r script; do
             [ -z "$script" ] && continue
             if [[ "$script" = /* || "/$script/" = *"/../"* ]]; then
@@ -1150,7 +1224,11 @@ pz_run_profile() {
     fi
 
     if [ -n "$system_services" ]; then
-        [ "$dry_run" = "1" ] && pz_info "planning system services..." || pz_info "enabling system services..."
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning system services..."
+        else
+            pz_info "enabling system services..."
+        fi
         while IFS= read -r service; do
             [ -z "$service" ] && continue
             if [ "$dry_run" = "1" ]; then
@@ -1162,7 +1240,11 @@ pz_run_profile() {
     fi
 
     if [ -n "$user_services" ]; then
-        [ "$dry_run" = "1" ] && pz_info "planning user services..." || pz_info "enabling user services..."
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning user services..."
+        else
+            pz_info "enabling user services..."
+        fi
         while IFS= read -r service; do
             [ -z "$service" ] && continue
             if [ "$dry_run" = "1" ]; then
@@ -1174,7 +1256,11 @@ pz_run_profile() {
     fi
 
     if [ -n "$sysctl_entries" ]; then
-        [ "$dry_run" = "1" ] && pz_info "planning sysctl tuning..." || pz_info "applying sysctl tuning..."
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning sysctl tuning..."
+        else
+            pz_info "applying sysctl tuning..."
+        fi
         while IFS= read -r entry; do
             [ -z "$entry" ] && continue
             if [ "$dry_run" = "1" ]; then
@@ -1229,11 +1315,13 @@ pz_boot_systemd_boot_oneshot_entry() {
     esp="$(pz_boot_esp_dir)"
     loader_dir="$esp/loader/entries"
     install -d "$loader_dir"
-    printf 'title PhaseZero Windows VM\n' > "$loader_dir/$entry_id.conf"
-    printf 'sort-key phasezero-windows-vm\n' >> "$loader_dir/$entry_id.conf"
-    printf 'linux /%s\n' "${kernel#/}" >> "$loader_dir/$entry_id.conf"
-    printf 'initrd /%s\n' "${initrd#/}" >> "$loader_dir/$entry_id.conf"
-    printf 'options %s\n' "$cmdline phasezero.windowsvm=1" >> "$loader_dir/$entry_id.conf"
+    {
+        printf 'title PhaseZero Windows VM\n'
+        printf 'sort-key phasezero-windows-vm\n'
+        printf 'linux /%s\n' "${kernel#/}"
+        printf 'initrd /%s\n' "${initrd#/}"
+        printf 'options %s\n' "$cmdline phasezero.windowsvm=1"
+    } > "$loader_dir/$entry_id.conf"
     printf '%s\n' "$loader_dir/$entry_id.conf"
 }
 
@@ -1263,13 +1351,15 @@ pz_boot_refind_install_stanza() {
     install -d "$refind_entries" 2>/dev/null || refind_entries="/boot/EFI/refind/entries"
     install -d "$refind_entries"
     conf="$refind_entries/$entry_id.conf"
-    printf 'menuentry "PhaseZero Windows VM" {\n' > "$conf"
-    printf '    icon /EFI/refind/icons/os_linux.png\n' >> "$conf"
-    printf '    volume %s\n' "$(findmnt -no UUID -T "$(pz_boot_target_root)" 2>/dev/null | head -1)" >> "$conf"
-    printf '    loader /%s\n' "${kernel#/}" >> "$conf"
-    printf '    initrd /%s\n' "${initrd#/}" >> "$conf"
-    printf '    options "%s phasezero.windowsvm=1"\n' "$cmdline" >> "$conf"
-    printf '}\n' >> "$conf"
+    {
+        printf 'menuentry "PhaseZero Windows VM" {\n'
+        printf '    icon /EFI/refind/icons/os_linux.png\n'
+        printf '    volume %s\n' "$(findmnt -no UUID -T "$(pz_boot_target_root)" 2>/dev/null | head -1)"
+        printf '    loader /%s\n' "${kernel#/}"
+        printf '    initrd /%s\n' "${initrd#/}"
+        printf '    options "%s phasezero.windowsvm=1"\n' "$cmdline"
+        printf '}\n'
+    } > "$conf"
     pz_info "rEFInd stanza written: $conf"
 }
 

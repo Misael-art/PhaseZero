@@ -1,5 +1,14 @@
 #!/usr/bin/env bash
 # Smoke tests for PhaseZero Linux boot recovery tooling.
+
+assert_grep_absent() {
+    local label="$1"
+    shift
+    if grep -q "$@"; then
+        echo "FAIL: $label" >&2
+        exit 1
+    fi
+}
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -55,26 +64,28 @@ grep -q 'boot selector' "$REPO_ROOT/linux/pz"
 grep -q 'cmd_selector' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'validate_next_entry' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'search --no-floppy --fs-uuid --set=root' "$REPO_ROOT/linux/boot/recovery.sh"
+# shellcheck disable=SC2016 # literal grep pattern
 grep -q 'configfile (\\$root)' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'systemd.unit=rescue.target' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'pz_boot_preflight_grub' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'pz_boot_backup_bundle "boot-efi-fallback"' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q 'iso-boot.sh' "$REPO_ROOT/linux/boot/recovery.sh"
+# shellcheck disable=SC2016 # literal grep pattern
 grep -q '\[ -f "$ISO_BOOT" \]' "$REPO_ROOT/linux/boot/recovery.sh"
 grep -q '46_phasezero_iso_loopback' "$REPO_ROOT/linux/boot/iso-boot.sh"
 grep -q '47_phasezero_removable_efi' "$REPO_ROOT/linux/boot/iso-boot.sh"
 grep -q '48_phasezero_grubfm' "$REPO_ROOT/linux/boot/iso-boot.sh"
 
-! grep -q 'init=/bin/bash' "$REPO_ROOT/linux/boot/recovery.sh"
-! grep -q 'GRUB_TERMINAL_INPUT=' "$REPO_ROOT/linux/boot/recovery.sh"
-! grep -q 'usb_keyboard' "$REPO_ROOT/linux/boot/recovery.sh"
-! grep -q 'at_keyboard' "$REPO_ROOT/linux/boot/recovery.sh"
-! grep -q 'GRUB_GFXPAYLOAD_LINUX=keep' "$REPO_ROOT/linux/boot/recovery.sh"
-! grep -q 'fbcon=rotate' "$REPO_ROOT/linux/boot/recovery.sh"
-! grep -Eq 'video=.*rotate' "$REPO_ROOT/linux/boot/recovery.sh"
-! grep -q 'GRUB_GFXPAYLOAD_LINUX=keep' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
-! grep -q 'fbcon=rotate' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
-! grep -Eq 'video=.*rotate' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
+assert_grep_absent "recovery.sh contains init=/bin/bash" 'init=/bin/bash' "$REPO_ROOT/linux/boot/recovery.sh"
+assert_grep_absent "recovery.sh contains GRUB_TERMINAL_INPUT=" 'GRUB_TERMINAL_INPUT=' "$REPO_ROOT/linux/boot/recovery.sh"
+assert_grep_absent "recovery.sh contains usb_keyboard" 'usb_keyboard' "$REPO_ROOT/linux/boot/recovery.sh"
+assert_grep_absent "recovery.sh contains at_keyboard" 'at_keyboard' "$REPO_ROOT/linux/boot/recovery.sh"
+assert_grep_absent "recovery.sh contains GRUB_GFXPAYLOAD_LINUX=keep" 'GRUB_GFXPAYLOAD_LINUX=keep' "$REPO_ROOT/linux/boot/recovery.sh"
+assert_grep_absent "recovery.sh contains fbcon=rotate" 'fbcon=rotate' "$REPO_ROOT/linux/boot/recovery.sh"
+assert_grep_absent "recovery.sh contains video=.*rotate" -E 'video=.*rotate' "$REPO_ROOT/linux/boot/recovery.sh"
+assert_grep_absent "install-steamos-boot.sh contains GRUB_GFXPAYLOAD_LINUX=keep" 'GRUB_GFXPAYLOAD_LINUX=keep' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
+assert_grep_absent "install-steamos-boot.sh contains fbcon=rotate" 'fbcon=rotate' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
+assert_grep_absent "install-steamos-boot.sh contains video=.*rotate" -E 'video=.*rotate' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
 
 tmp_root="$(mktemp -d)"
 trap 'rm -rf "$tmp_root"' EXIT
@@ -101,7 +112,7 @@ fi
 grep -q 'target-root mutation must run inside target chroot' /tmp/phasezero-target-root-test.out
 
 if [ "$(findmnt -no FSTYPE / 2>/dev/null || true)" = "overlay" ] && command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
-    if sudo -n bash "$REPO_ROOT/linux/boot/recovery.sh" install-card >/tmp/phasezero-boot-recovery-test.out 2>&1; then
+    if sudo -n bash -c '"$0" install-card > "$1" 2>&1' "$REPO_ROOT/linux/boot/recovery.sh" /tmp/phasezero-boot-recovery-test.out; then
         cat /tmp/phasezero-boot-recovery-test.out >&2
         echo "expected install-card to refuse live overlay root" >&2
         exit 1

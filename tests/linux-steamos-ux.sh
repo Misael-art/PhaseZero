@@ -60,14 +60,15 @@ boot_plan="$("$REPO_ROOT/linux/pz" steamdeck boot plan)"
 grep -q 'one-shot boot' <<< "$boot_plan"
 grep -q 'phasezero-steamos.desktop' <<< "$boot_plan"
 grep -q 'no global handheld input/video drop-in' <<< "$boot_plan"
-! grep -q 'GRUB_TERMINAL_INPUT="console usb_keyboard at_keyboard"' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
-! grep -q 'usb_keyboard ehci ohci uhci at_keyboard' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
+grep -q 'GRUB_TERMINAL_INPUT="console usb_keyboard at_keyboard"' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh" && exit 1
+grep -q 'usb_keyboard ehci ohci uhci at_keyboard' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh" && exit 1
 grep -q 'pz_boot_preflight_grub' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
 grep -q 'pz_boot_backup_bundle "steamdeck-boot-install"' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
 grep -q 'pz_boot_validate_active_efi_safe' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
 grep -q 'pz_boot_require_current_root_target' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
 grep -q 'BOOT_ID="phasezero-steamos"' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
 grep -q -- "--hotkey=s" "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
+# shellcheck disable=SC2016 # literal "$BOOT_ID" text searched in script source
 grep -q 'grub-reboot "$BOOT_ID"' "$REPO_ROOT/linux/steamdeck/install-steamos-boot.sh"
 grep -q 'startkde-biglinux wayland' "$REPO_ROOT/linux/steamdeck/steamos-session.sh"
 grep -q 'session-target' "$REPO_ROOT/linux/steamdeck/os-session-select.sh"

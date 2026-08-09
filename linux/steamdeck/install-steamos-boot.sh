@@ -51,10 +51,10 @@ fi
 if ! getent passwd "$TARGET_USER" >/dev/null 2>&1; then
     TARGET_USER="$(getent passwd 1000 2>/dev/null | cut -d: -f1 || true)"
 fi
-[ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ] || {
+if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
     pz_error "could not resolve a non-root target user; pass --target-user USER"
     exit 1
-}
+fi
 
 HELPER_SOURCE="$PZ_ROOT/linux/steamdeck/steamos-boot-prepare.sh"
 SESSION_SOURCE="$PZ_ROOT/linux/steamdeck/steamos-session.sh"
@@ -209,8 +209,8 @@ grub_script_content() {
     [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
     kernel_rel="$(grub-mkrelpath "$kernel")"
     initrd_rel="$(grub-mkrelpath "$initrd")"
-    amd_ucode_rel="$([ -f /boot/amd-ucode.img ] && grub-mkrelpath /boot/amd-ucode.img || true)"
-    intel_ucode_rel="$([ -f /boot/intel-ucode.img ] && grub-mkrelpath /boot/intel-ucode.img || true)"
+    amd_ucode_rel="$(if [ -f /boot/amd-ucode.img ]; then grub-mkrelpath /boot/amd-ucode.img; fi)"
+    intel_ucode_rel="$(if [ -f /boot/intel-ucode.img ]; then grub-mkrelpath /boot/intel-ucode.img; fi)"
     subvol="$(root_subvol || true)"
     [ -n "$subvol" ] && rootflags=" rootflags=subvol=$subvol"
 

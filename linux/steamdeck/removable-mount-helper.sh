@@ -38,10 +38,10 @@ case "$DEVNAME" in
 esac
 [[ "$DEVNAME" =~ ^[A-Za-z0-9._+-]+$ ]] || { log "unsafe device name rejected"; exit 1; }
 [ -b "$devnode" ] || { log "$devnode is not a block device"; exit 0; }
-[ -n "$TARGET_UID" ] && [ "$TARGET_UID" -ne 0 ] && [ -n "$TARGET_HOME" ] || {
+if [ -z "$TARGET_UID" ] || [ "$TARGET_UID" -eq 0 ] || [ -z "$TARGET_HOME" ]; then
     log "invalid non-root target user: $TARGET_USER"
     exit 1
-}
+fi
 
 # Already mounted? Nothing to do.
 if [ -n "$(lsblk -npo MOUNTPOINT "$devnode" 2>/dev/null)" ]; then

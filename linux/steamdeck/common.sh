@@ -129,8 +129,11 @@ steamdeck_set_tdp() {
             pz_warn "bc not installed, cannot convert fractional TDP"
             return 0
         fi
-        steamdeck_run_privileged ryzenadj --stapm-limit="$mw" --fast-limit="$mw" --slow-limit="$mw" --tctl-temp=85 2>/dev/null && \
-            pz_info "TDP set to ${watts}W" || pz_warn "ryzenadj failed"
+        if steamdeck_run_privileged ryzenadj --stapm-limit="$mw" --fast-limit="$mw" --slow-limit="$mw" --tctl-temp=85 2>/dev/null; then
+            pz_info "TDP set to ${watts}W"
+        else
+            pz_warn "ryzenadj failed"
+        fi
     else
         pz_warn "ryzenadj not installed, cannot set TDP"
     fi

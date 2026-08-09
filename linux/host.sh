@@ -161,7 +161,7 @@ host_wipe() {
         pz_result_envelope ok \
             "wipe planejado: ${#targets[@]} path(s), ${#services[@]} serviço(s)" \
             "Para aplicar: pz host wipe --apply --confirm $CONFIRM_TOKEN" \
-            "~/Emulation e dados do usuário não entram na lista"
+            "$HOME/Emulation e dados do usuário não entram na lista"
         pz_result_emitted
         return 0
     fi
@@ -200,7 +200,7 @@ host_wipe() {
     else
         pz_result_envelope ok \
             "wipe aplicado: $removed removido(s), $skipped protegido(s)" \
-            "~/Emulation permanece intacto"
+            "$HOME/Emulation permanece intacto"
     fi
     pz_result_emitted
 }

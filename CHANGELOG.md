@@ -3,9 +3,53 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.13.0] - 2026-07-30
+
+### Adicionado
+- Janela dedicada Provision Player (`windows.provision.player` na UI nativa):
+  plano, confirmação, provisão com checkpoint e progresso, validação pós-boot,
+  cancelamento, retomada, descarte, reparo, shutdown e reboot.
+- `provision status --json` expõe vmDir, snapshotPath, snapshotExists, qemuPid,
+  qemuRunning, libvirtRunning.
+- `provision shutdown` via QGA guest-shutdown + PID waiting + libvirt fallback.
+- `windows-vm.sh --json` emite bootReady e oneShotReady como booleanos estritos.
+- `common.sh::checkpoint_progress_start`/`end`: sequência de progresso por
+  checkpoint com pesos somando 100.
+- ProvisionWorker com sleep interruptível (100ms) para fechamento rápido.
+- AsyncProc: timeout dispara uma vez, FailedToStart aborta imediatamente,
+  finished sinal com tupla (data, exit_code).
+- Testes comportamentais (295 Python, 12 específicos do player).
+
+### Corrigido
+- Player não bloqueia o event loop Qt (sem waitForFinished/QThread.wait).
+- `_finish_once` centraliza conclusão de AsyncProc (sem emissão dupla).
+- Janela não destrói worker thread durante close (aborta primeiro).
+- `_resume_state` não sobrescreve ISO/parâmetros explícitos em `open()`.
+- Discard limpa disco sem salvar estado via `_discarding` flag.
+
 ## [Não lançado]
 
 ### Adicionado
+- Configurador de roteamento IA por tarefa (`linux/ai/routing_manager.py`,
+  `pz ai routing`): inventário de conexões do 9Router com quota real
+  (known/unknown/unavailable + confiança), recomendações por tarefa
+  (code/analysis/plan) e política (quality/balanced/save-quota/privacy),
+  plano transacional `phasezero-*` com manifesto, apply idempotente,
+  rollback byte a byte (recusa drift sem `--force`), `run` com env de
+  criança e `verify` (health, planMatches, userCombosPreserved,
+  bonsaiIsolated). Redação obrigatória de segredos.
+- Página dedicada "Roteamento IA" na UI nativa: cards por tarefa com
+  recomendação/cadeia/quota, seletor de política, editor de ordem de
+  fallbacks, aplicar/reverter e isolamento Bonsai.
+- Suíte de testes `tests/test_routing_manager.py` com 9Router fake
+  (machine-id + CLI secret + API key), falhas injetadas, rollback
+  transacional e e2e via `pz ai routing`.
+- Smoke `pz ai routing` em `tests/linux-ai.sh` (degrada sem 9Router).
+
+### Corrigido
+- `verify` considera isolamento Bonsai por combos, não por conexão.
+- Redação preserva booleanos em chaves como `secretsRedacted`.
+- Atribuição de modelo a provider por prefixo (`cc/`, `cx/`, ...).
 - Página dedicada "Proxies IA" na UI nativa: gateways 9Router/Odysseus, cards
   por proxy com iniciar/parar, autenticação OAuth por navegador, integração com
   IDEs e polling passivo de status.
@@ -24,7 +68,48 @@ As versões seguem a data de build em `version.json`.
 - Compartilhamento `PZExchange`, canal SPICE WebDAV e diagnóstico da rede/NIC
   libvirt.
 
+### Homelab v1.15.1 (remediação, merge PR #37)
+
+### Adicionado
+- Port do Homelab v1.15.1: stack, status, boot-prepare, compose core/extras e
+  operations com lock de exclusão, crash/resume/cancel e rollback; estado nunca
+  em `/root` (HOME/XDG explícitos via runuser).
+- Resource governor com 6 perfis públicos (`homelab-profiles.json`):
+  assistant-private, assistant-multichannel, automation, ai-studio (blocked),
+  developer e edge (default), com classe, maturidade e pesos por imagem;
+  `pz server homelab profile set` com gate de RAM e fail-closed.
+- AI policy broker (modos, allowlist de ações, redação de segredos).
+- CLI `pz server homelab` (status/plan/verify/repair/backup/restore/logs,
+  `profiles --json`) e Player nativo async QProcess com UI de controle.
+- Portainer alcança o Docker somente via `socket-proxy` read-only
+  (tecnativa/docker-socket-proxy:0.2.0, allowlist CONTAINERS/TASKS); nenhum
+  container monta `/var/run/docker.sock`.
+- Suíte hermética `tests/linux-homelab.sh`, smoke `packaging/install-root-smoke.sh`
+  e jobs dedicados de CI (`homelab-shell-test`, `homelab-python-test`,
+  `compose-validate`, `package-smoke`, `security-secret-scan` com gitleaks).
+- Testes do contrato WinVM no governor (stub de status, fail-closed, plano de
+  impacto, execução graciosa, resume) e de rollback do restore (falha parcial
+  com volume envenenado) na suíte hermética.
+- Documentação de operação (docs/linux-homelab.md): arquitetura e perfis,
+  matriz de suporte, threat model (socket-proxy, no-new-privileges, limits),
+  segredos/rede/acesso, backup/restore/DR com snapshot prévio e rollback,
+  contrato WinVM, operação sem UI/troubleshooting e limitações honestas.
+
 ### Corrigido
+- Restore recusa aplicar sem `--yes` explícito; verify-then-apply e manifest
+  schemaVersion 2 com tamper fail-closed.
+- Restore cria snapshot prévio `<source>.pre-restore` (verificável, mesmo
+  schema) e em falha parcial devolve cada volume tocado ao estado prévio
+  (`rollbackApplied`); `status` ignora diretórios `*.pre-restore`.
+- Governor desconta WinVM ativa do orçamento (`winvmMB`) e expõe contrato
+  `winvm-status`/`winvm-suspend [--dry-run]`/`winvm-resume` com suspensão
+  somente graciosa via QGA (`killUsed:"never"`, nenhum arquivo da VM tocado).
+- CI: job `homelab-integration-disposable` prova em Docker real
+  backup → destruição → restore → igualdade byte a byte em volumes
+  descartáveis.
+- Contrato CLI/Player alinhado (`pz server homelab profiles --json`); scripts
+  novos marcados executáveis (core.filemode=false); suíte pinada ao checkout
+  via `PZ_ROOT`; ShellCheck 0.9.0 e 0.11.x verdes com os mesmos excludes do CI.
 - Auditoria deduplica aliases `/usr/lib` e `/usr/lib64` do mesmo inode.
 - Shares Windows validam listagem real e criam diretório de intercâmbio como o
   usuário alvo.

@@ -78,7 +78,8 @@ normalize_steamdeck_desktop() {
     if ! grep -Eq '^[[:space:]]+(\[Desktop Entry\]|[A-Za-z0-9_.-]+(\[[^]]+\])?=)' "$desktop"; then
         return 0
     fi
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # intentional no-arg call: mktemp default template
+    tmp="$(pz_tempfile)"
     sed -E \
         -e 's/^[[:space:]]+(\[Desktop Entry\])/\1/' \
         -e 's/^[[:space:]]+([A-Za-z0-9_.-]+(\[[^]]+\])?=)/\1/' \
@@ -167,7 +168,9 @@ Categories=Game;Emulator;
 StartupNotify=false
 X-PhaseZero-Managed=true
 EOF
-    command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$PZ_DESKTOP_DIR" >/dev/null 2>&1
+    fi
 }
 
 install_emudeck_appimage() {

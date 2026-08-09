@@ -6,7 +6,7 @@ PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
 ACTION="${1:-status}"
-[ $# -gt 0 ] && shift || true
+if [ $# -gt 0 ]; then shift; fi
 
 TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
 [ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
@@ -207,7 +207,9 @@ sysctl_set_noninteractive() {
 apply_host_optimizations() {
     [ "$OPTIMIZE_HOST" = "1" ] || return 0
     pz_info "applying Waydroid host optimizations"
-    command -v powerprofilesctl >/dev/null 2>&1 && powerprofilesctl set performance >/dev/null 2>&1 || true
+    if command -v powerprofilesctl >/dev/null 2>&1; then
+        powerprofilesctl set performance >/dev/null 2>&1
+    fi
     sysctl_set_noninteractive vm.swappiness 1
     sysctl_set_noninteractive vm.vfs_cache_pressure 50
     sysctl_set_noninteractive vm.dirty_background_ratio 5
@@ -433,10 +435,10 @@ prefetch_waydroid_archive() {
     size="$(jq -r '.response[0].size // 0' <<< "$metadata")"
     checksum="$(jq -r '.response[0].id // empty' <<< "$metadata")"
     filename="$(jq -r '.response[0].filename // empty' <<< "$metadata")"
-    [ -n "$url" ] && [ -n "$filename" ] && [ "$size" -gt 0 ] || {
+    if ! { [ -n "$url" ] && [ -n "$filename" ] && [ "$size" -gt 0 ]; }; then
         pz_warn "Waydroid $kind OTA metadata invalid"
         return 1
-    }
+    fi
     cache_dir="/var/lib/waydroid/cache_http"
     cache_path="$cache_dir/${filename//\//_}_$(printf '%s' "$url" | sha256sum | awk '{print $1}')"
     part_path="${cache_path}.part"
@@ -506,10 +508,10 @@ prefetch_waydroid_images() {
     rm -f "$PREINSTALLED_DIR/system.img" "$PREINSTALLED_DIR/vendor.img"
     unzip -oq "$PREFETCH_SYSTEM_PATH" -d "$PREINSTALLED_DIR"
     unzip -oq "$PREFETCH_VENDOR_PATH" -d "$PREINSTALLED_DIR"
-    [ -s "$PREINSTALLED_DIR/system.img" ] && [ -s "$PREINSTALLED_DIR/vendor.img" ] || {
+    if ! { [ -s "$PREINSTALLED_DIR/system.img" ] && [ -s "$PREINSTALLED_DIR/vendor.img" ]; }; then
         pz_warn "Waydroid preinstalled image extraction incomplete"
         return 1
-    }
+    fi
     pz_info "Waydroid preinstalled images staged: $PREINSTALLED_DIR"
 }
 
@@ -867,8 +869,16 @@ grub_script_content() {
     [ -f "$initrd" ] || { pz_error "missing initrd: $initrd"; return 1; }
     kernel_rel="$(grub-mkrelpath "$kernel")"
     initrd_rel="$(grub-mkrelpath "$initrd")"
-    amd_ucode_rel="$([ -f /boot/amd-ucode.img ] && grub-mkrelpath /boot/amd-ucode.img || true)"
-    intel_ucode_rel="$([ -f /boot/intel-ucode.img ] && grub-mkrelpath /boot/intel-ucode.img || true)"
+    if [ -f /boot/amd-ucode.img ]; then
+        amd_ucode_rel="$(grub-mkrelpath /boot/amd-ucode.img)"
+    else
+        amd_ucode_rel=""
+    fi
+    if [ -f /boot/intel-ucode.img ]; then
+        intel_ucode_rel="$(grub-mkrelpath /boot/intel-ucode.img)"
+    else
+        intel_ucode_rel=""
+    fi
     subvol="$(root_subvol || true)"
     [ -n "$subvol" ] && rootflags=" rootflags=subvol=$subvol"
 
@@ -1061,7 +1071,7 @@ cmd_boot() {
     parse_boot_common_args "$@"
     set -- "${PZ_BOOT_PARSED_ARGS[@]}"
     local sub="${1:-status}"
-    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then shift; fi
     case "$sub" in
         install) install_boot "$@" ;;
         remove) remove_boot "$@" ;;

@@ -166,11 +166,11 @@ compositor_command() {
 
 if [ "${1:-}" = "--validate" ]; then
     kind="$(compositor_kind)"
-    [ -x "$SESSION_TARGET" ] && command -v waydroid >/dev/null 2>&1 || {
+    if [ ! -x "$SESSION_TARGET" ] || ! command -v waydroid >/dev/null 2>&1; then
         printf 'waydroid_session_ready=no configured_repo=%s target=%s display_profile=%s external_connectors=%s compositor=%s reason=%s\n' \
             "${CONFIGURED_REPO:-missing}" "$SESSION_TARGET" "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_reason "$kind")"
         exit 1
-    }
+    fi
     printf 'waydroid_session_ready=yes configured_repo=%s target=%s display_profile=%s external_connectors=%s compositor=%s compositor_command=%s reason=%s\n' \
         "${CONFIGURED_REPO:-missing}" "$SESSION_TARGET" "$(display_profile)" "$(external_connectors)" \
         "$kind" "$(compositor_command "$kind")" "$(compositor_reason "$kind")"

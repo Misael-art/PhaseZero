@@ -46,7 +46,10 @@ jq -e '
   .webValidation.status == "missing-credentials" and
   (.webValidation.missing | length == 3)
 ' <<< "$auth" >/dev/null
-! grep -Eq 'SERVICE_TOKEN|USER_ID|XIAOMI_CHATBOT_PH|API_KEY|phasezero-qwen' <<< "$auth"
+if grep -Eq 'SERVICE_TOKEN|USER_ID|XIAOMI_CHATBOT_PH|API_KEY|phasezero-qwen' <<< "$auth"; then
+    echo "FAIL: credentials leaked into proxies auth output"
+    exit 1
+fi
 "$ROOT/linux/pz" ai proxies configure-ides >/dev/null
 jq -e '.provider."phasezero-deepseek".models."deepseek-v4-flash"' "$HOME/.config/opencode/opencode.json" >/dev/null
 jq -e '[.models[] | select((.title // "") | startswith("[PhaseZero Proxy] "))] | length == 11' "$HOME/.continue/config.json" >/dev/null
@@ -70,6 +73,9 @@ jq -e '.schemaVersion == 1 and (.proxies | length == 11)' <<< "$detailed" >/dev/
 jq -e '.proxies[] | select(.id == "deepsproxy") | .webValidation.kind == "browser-session"' <<< "$detailed" >/dev/null
 jq -e '.ide | has("envDefaults") and has("opencodeProviders") and has("continueModels") and has("zcodeProviders")' <<< "$detailed" >/dev/null
 jq -e '.ide.envDefaults == true and .ide.opencodeProviders >= 1 and .ide.continueModels == 11' <<< "$detailed" >/dev/null
-! grep -Eq 'API_KEY=|Bearer ' <<< "$detailed"
+if grep -Eq 'API_KEY=|Bearer ' <<< "$detailed"; then
+    echo "FAIL: credentials leaked into detailed auth output"
+    exit 1
+fi
 grep -q 'restart) service_action restart ;;' "$ROOT/linux/ai/proxy-suite.sh"
 echo "linux-ai-proxies smoke ok"

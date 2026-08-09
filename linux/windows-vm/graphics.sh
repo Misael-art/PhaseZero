@@ -12,7 +12,9 @@ source "$PZ_ROOT/linux/lib/common.sh"
 virsh() { LC_ALL=C command virsh "$@"; }
 
 ACTION="${1:-status}"
-[ $# -gt 0 ] && shift || true
+if [ $# -gt 0 ]; then
+    shift
+fi
 
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero"
 CONFIG_FILE="${PZ_WINDOWS_VM_CONFIG:-$CONFIG_DIR/windows-vm.conf}"
@@ -106,7 +108,11 @@ session|$PZ_ROOT/linux/windows-vm/windows-vm-session.sh|/usr/local/lib/phasezero
 display|$PZ_ROOT/linux/steamdeck/display-session.sh|/usr/local/lib/phasezero/display-session|0644
 launcher|$PZ_ROOT/linux/windows-vm/windows-vm.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/windows-vm.sh|0755
 graphics|$PZ_ROOT/linux/windows-vm/graphics.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/graphics.sh|0755
+rescue|$PZ_ROOT/linux/windows-vm/rescue.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/rescue.sh|0644
 common|$PZ_ROOT/linux/lib/common.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/lib/common.sh|0644
+ledger|$PZ_ROOT/linux/lib/ledger.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/lib/ledger.sh|0644
+desktop|$PZ_ROOT/linux/lib/desktop.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/lib/desktop.sh|0644
+flatpak|$PZ_ROOT/linux/lib/flatpak.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/lib/flatpak.sh|0644
 EOF
 }
 
@@ -237,7 +243,9 @@ runtime_rollback() {
 
 cmd_runtime() {
     local sub="${1:-status}"
-    [ $# -gt 0 ] && shift || true
+    if [ $# -gt 0 ]; then
+        shift || true
+    fi
     case "$sub" in
         status)
             parse_options "$@"
@@ -884,7 +892,8 @@ write_config_profile() {
     fi
     install -d "$CONFIG_DIR"
     local tmp
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     if [ -f "$CONFIG_FILE" ]; then
         grep -v '^PZ_WINDOWS_VM_GRAPHICS_PROFILE=' "$CONFIG_FILE" > "$tmp" || true
     fi
@@ -901,7 +910,8 @@ remove_config_profile() {
         return 0
     fi
     local tmp
-    tmp="$(mktemp)"
+    # shellcheck disable=SC2119 # pz_tempfile forwards args to mktemp; no args is intentional
+    tmp="$(pz_tempfile)"
     grep -v '^PZ_WINDOWS_VM_GRAPHICS_PROFILE=' "$CONFIG_FILE" > "$tmp" || true
     install -m 0644 "$tmp" "$CONFIG_FILE"
     rm -f "$tmp"

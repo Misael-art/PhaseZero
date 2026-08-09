@@ -88,7 +88,7 @@ ensure_bun() {
     if command -v curl >/dev/null 2>&1; then
         pz_info "installing bun via official installer into ~/.bun"
         export BUN_INSTALL="${BUN_INSTALL:-$HOME/.bun}"
-        installer="$(mktemp "${TMPDIR:-/tmp}/phasezero-bun.XXXXXX")"
+        installer="$(pz_tempfile "${TMPDIR:-/tmp}/phasezero-bun.XXXXXX")"
         if curl --proto '=https' --tlsv1.2 -fL --retry 3 --retry-delay 2 \
             --connect-timeout 15 --max-time 120 https://bun.sh/install -o "$installer"; then
             size="$(wc -c < "$installer")"
@@ -120,9 +120,9 @@ ensure_ast_grep() {
 #     in this project; mcp-manager.sh already relies on that) --------------------
 
 active_opencode_config() {
-    # Prefer the file OMO/opencode actually load; jsonc wins when both exist.
-    if [ -f "$OPENCODE_JSONC" ]; then printf '%s\n' "$OPENCODE_JSONC"; return 0; fi
+    # PhaseZero canonical config is opencode.json. JSONC remains migration input.
     if [ -f "$OPENCODE_JSON" ]; then printf '%s\n' "$OPENCODE_JSON"; return 0; fi
+    if [ -f "$OPENCODE_JSONC" ]; then printf '%s\n' "$OPENCODE_JSONC"; return 0; fi
     return 1
 }
 
@@ -138,7 +138,7 @@ unregister_plugin_file() {
     local cfg="$1" tmp
     [ -f "$cfg" ] || return 0
     jq . "$cfg" >/dev/null 2>&1 || { pz_warn "skip $cfg (not strict JSON)"; return 0; }
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg p "$OMO_PLUGIN_PREFIX" '
         if has("plugin") then
             .plugin |= (map(select((tostring | startswith($p)) | not)))
@@ -152,7 +152,7 @@ register_plugin_file() {
     local cfg="$1" tmp
     [ -f "$cfg" ] || return 0
     jq . "$cfg" >/dev/null 2>&1 || { pz_warn "skip $cfg (not strict JSON)"; return 0; }
-    tmp="$(mktemp)"
+    tmp="$(pz_tempfile)"
     jq --arg spec "$OMO_SPEC" --arg p "$OMO_PLUGIN_PREFIX" '
         .plugin = ((.plugin // []) | map(select((tostring | startswith($p)) | not)) + [$spec])
     ' "$cfg" > "$tmp" 2>/dev/null || { rm -f "$tmp"; return 0; }
@@ -254,7 +254,9 @@ do_uninstall() {
         return 0
     fi
     do_disable
-    command -v bun >/dev/null 2>&1 && omo_env bunx "$OMO_SPEC" cleanup >/dev/null 2>&1 || true
+    if command -v bun >/dev/null 2>&1; then
+        omo_env bunx "$OMO_SPEC" cleanup >/dev/null 2>&1 || true
+    fi
     local f
     for f in "$OMO_CONFIG" "$OMO_CONFIG_LEGACY" "$OPENCODE_DIR/tui.json"; do
         [ -f "$f" ] && { pz_backup_file "$f" user >/dev/null; rm -f "$f"; pz_info "removed $f"; }
