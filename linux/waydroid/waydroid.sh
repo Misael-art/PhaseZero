@@ -66,6 +66,7 @@ Usage:
   pz waydroid repair [--init] [--image-type VANILLA|GAPPS]
   pz waydroid optimize [--dry-run]
   pz waydroid launch
+  pz waydroid stop [--json]
   pz waydroid shares (status|install|remove|dry-run)
   pz waydroid boot status
   pz waydroid boot install
@@ -703,6 +704,26 @@ print_status() {
     status_json
 }
 
+cmd_stop() {
+    parse_options "$@"
+    local waydroid_bin output rc=0
+    waydroid_bin="$(command_path waydroid)"
+    [ -n "$waydroid_bin" ] || { pz_error "waydroid command missing"; return 1; }
+    set +e
+    output="$(timeout 30 "$waydroid_bin" session stop 2>&1)"
+    rc=$?
+    set -e
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg detail "$output" --argjson success "$([ "$rc" -eq 0 ] && echo true || echo false)" \
+            '{success:$success,state:(if $success then "stopped" else "error" end),detail:$detail}'
+    elif [ "$rc" -eq 0 ]; then
+        pz_info "Waydroid session stopped; apps and data preserved"
+    else
+        pz_error "could not stop Waydroid session: ${output:-unknown error}"
+    fi
+    return "$rc"
+}
+
 print_plan() {
     parse_options "$@"
     effective_config
@@ -1092,9 +1113,10 @@ case "$ACTION" in
     repair) cmd_repair "$@" ;;
     optimize|tune) cmd_optimize "$@" ;;
     launch|start|run) cmd_launch "$@" ;;
+    stop|down) cmd_stop "$@" ;;
     shares|access) cmd_shares "$@" ;;
     host-access|browse-guest|internal) bash "$PZ_ROOT/linux/waydroid/host-access.sh" "${@:-status}" ;;
     boot) cmd_boot "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: waydroid (status|plan|install|repair|optimize|launch|shares|host-access|boot)"; exit 1 ;;
+    *) pz_error "usage: waydroid (status|plan|install|repair|optimize|launch|stop|shares|host-access|boot)"; exit 1 ;;
 esac

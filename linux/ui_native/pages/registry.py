@@ -17,6 +17,7 @@ from .tuning import TuningPage
 from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
 from .windows_vm import WindowsVmPage
+from .service_control import ServerPage, WaydroidPage
 
 
 class PageRegistry:
@@ -40,8 +41,8 @@ class PageRegistry:
         "Perfis": ProfilesPage,
         "Steam Deck": CatalogWorkspacePage,
         "Windows VM": WindowsVmPage,
-        "Waydroid": CatalogWorkspacePage,
-        "Servidor": CatalogWorkspacePage,
+        "Waydroid": WaydroidPage,
+        "Servidor": ServerPage,
         "Homelab": HomelabPage,
         "Emulação": EmulationPage,
         "Boot Direto": CatalogWorkspacePage,

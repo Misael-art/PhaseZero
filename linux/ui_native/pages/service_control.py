@@ -1,0 +1,352 @@
+from __future__ import annotations
+
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QScrollArea, QStyle, QVBoxLayout, QWidget,
+)
+
+from ..widgets import SectionHeader, themed_icon
+from .base import BasePage
+
+
+class FriendlyServicePage(BasePage):
+    service_name = "Serviço"
+    service_subtitle = ""
+    service_icon = "network-server"
+    status_action_id = ""
+    start_action_id = ""
+    stop_action_id = ""
+    setup_action_id = ""
+    represented_ids: tuple[str, ...] = ()
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._payload: dict = {}
+        self._running = False
+        self._configured = False
+
+    def build(self) -> None:
+        for action_id in self.represented_ids:
+            action = self.by_id.get(action_id)
+            if action is not None:
+                self.mark_represented(action)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        host = QWidget()
+        layout = QVBoxLayout(host)
+        layout.setContentsMargins(2, 2, 8, 12)
+        layout.setSpacing(14)
+        layout.addWidget(self._build_hero())
+        body = QGridLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setHorizontalSpacing(14)
+        body.addWidget(self._build_status_card(), 0, 0)
+        body.addWidget(self._build_features_card(), 0, 1)
+        body.setColumnStretch(0, 1)
+        body.setColumnStretch(1, 1)
+        layout.addLayout(body)
+        layout.addWidget(self._build_shortcuts())
+        layout.addStretch()
+        scroll.setWidget(host)
+        self._layout.addWidget(scroll, 1)
+        self.status_loader.status_ready.connect(self._on_status_ready)
+        self.status_loader.status_failed.connect(self._on_status_failed)
+
+    def _build_hero(self) -> QFrame:
+        hero = QFrame()
+        hero.setObjectName("serviceHero")
+        row = QHBoxLayout(hero)
+        row.setContentsMargins(20, 18, 20, 18)
+        row.setSpacing(16)
+        icon = QLabel()
+        icon.setObjectName("serviceIcon")
+        icon.setPixmap(themed_icon(hero, self.service_icon, QStyle.SP_ComputerIcon).pixmap(38, 38))
+        icon.setAlignment(Qt.AlignCenter)
+        icon.setFixedSize(58, 58)
+        row.addWidget(icon)
+        copy = QVBoxLayout()
+        title = QLabel(self.service_name)
+        title.setObjectName("serviceTitle")
+        self.state_label = QLabel("● Verificando…")
+        self.state_label.setObjectName("serviceState")
+        self.state_label.setProperty("state", "info")
+        self.state_detail = QLabel(self.service_subtitle)
+        self.state_detail.setObjectName("cardDescription")
+        copy.addWidget(title)
+        copy.addWidget(self.state_label)
+        copy.addWidget(self.state_detail)
+        row.addLayout(copy, 1)
+        self.refresh_button = QPushButton("Atualizar")
+        self.refresh_button.setObjectName("secondaryButton")
+        self.refresh_button.clicked.connect(self.reload)
+        row.addWidget(self.refresh_button)
+        self.power_button = QPushButton("Iniciar")
+        self.power_button.setObjectName("primaryButton")
+        self.power_button.setMinimumSize(140, 50)
+        self.power_button.setEnabled(False)
+        self.power_button.clicked.connect(self._power_action)
+        row.addWidget(self.power_button)
+        return hero
+
+    def _build_status_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(10)
+        layout.addWidget(SectionHeader("Resumo", "Informações essenciais"))
+        self.fact_labels: list[QLabel] = []
+        for _ in range(3):
+            label = QLabel("—")
+            label.setObjectName("settingValue")
+            label.setWordWrap(True)
+            self.fact_labels.append(label)
+            layout.addWidget(label)
+        layout.addStretch()
+        return card
+
+    def _feature_switch(self, title: str) -> tuple[QWidget, QCheckBox, QLabel]:
+        row = QWidget()
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 3, 0, 3)
+        copy = QVBoxLayout()
+        name = QLabel(title)
+        name.setObjectName("settingValue")
+        detail = QLabel("Verificando…")
+        detail.setObjectName("cardDescription")
+        detail.setWordWrap(True)
+        toggle = QCheckBox()
+        toggle.setObjectName("largeSwitch")
+        toggle.setEnabled(False)
+        toggle.setAccessibleName(title)
+        copy.addWidget(name)
+        copy.addWidget(detail)
+        layout.addLayout(copy, 1)
+        layout.addWidget(toggle)
+        return row, toggle, detail
+
+    def _build_features_card(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(SectionHeader("Integrações", "Recursos conectados"))
+        self.feature_controls: list[tuple[QCheckBox, QLabel]] = []
+        for title in self.feature_titles():
+            row, toggle, detail = self._feature_switch(title)
+            layout.addWidget(row)
+            self.feature_controls.append((toggle, detail))
+        layout.addStretch()
+        return card
+
+    def _build_shortcuts(self) -> QFrame:
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.addWidget(SectionHeader("Ações rápidas", "Tarefas comuns sem terminal"))
+        buttons = QHBoxLayout()
+        self.shortcut_buttons: dict[str, QPushButton] = {}
+        for action_id, label, primary in self.shortcut_actions():
+            action = self.by_id.get(action_id)
+            if action is None:
+                continue
+            button = QPushButton(label)
+            button.setObjectName("primaryButton" if primary else "secondaryButton")
+            button.clicked.connect(lambda _checked=False, item=action: self.request_action(item))
+            self.shortcut_buttons[action_id] = button
+            buttons.addWidget(button)
+        buttons.addStretch()
+        layout.addLayout(buttons)
+        return card
+
+    def feature_titles(self) -> tuple[str, ...]:
+        return ()
+
+    def shortcut_actions(self) -> tuple[tuple[str, str, bool], ...]:
+        return ()
+
+    def apply_payload(self, payload: dict) -> None:
+        raise NotImplementedError
+
+    def _install_context_status(self) -> None:
+        return
+
+    def reload(self) -> None:
+        action = self.by_id.get(self.status_action_id)
+        if action is None or self.status_loader.running(action.id):
+            return
+        self.refresh_button.setEnabled(False)
+        self.power_button.setEnabled(False)
+        self.state_label.setText("● Verificando…")
+        self._set_state("info")
+        self.status_loader.fetch_action(action)
+
+    def _set_state(self, state: str) -> None:
+        self.state_label.setProperty("state", state)
+        self.state_label.style().unpolish(self.state_label)
+        self.state_label.style().polish(self.state_label)
+
+    def _set_service_state(self, running: bool, configured: bool, detail: str = "") -> None:
+        self._running = running
+        self._configured = configured
+        if running:
+            self.state_label.setText("● Rodando")
+            self._set_state("success")
+            self.power_button.setText("Parar")
+            self.power_button.setObjectName("dangerButton")
+        elif configured:
+            self.state_label.setText("● Parado")
+            self._set_state("info")
+            self.power_button.setText("▶ Iniciar")
+            self.power_button.setObjectName("primaryButton")
+        else:
+            self.state_label.setText("● Precisa configurar")
+            self._set_state("warning")
+            self.power_button.setText("Configurar")
+            self.power_button.setObjectName("primaryButton")
+        self.state_detail.setText(detail or self.service_subtitle)
+        self.power_button.style().unpolish(self.power_button)
+        self.power_button.style().polish(self.power_button)
+        self.power_button.setEnabled(True)
+        for action_id, button in self.shortcut_buttons.items():
+            if not configured:
+                enabled = action_id == self.setup_action_id or "repair" in action_id
+            elif ".open-" in action_id:
+                enabled = running
+            elif action_id == self.start_action_id:
+                enabled = not running
+            else:
+                enabled = True
+            button.setEnabled(enabled)
+
+    def _on_status_ready(self, action_id: str, _stdout: str, parsed: object) -> None:
+        if action_id != self.status_action_id or not isinstance(parsed, dict):
+            return
+        self.refresh_button.setEnabled(True)
+        self._payload = parsed
+        self.apply_payload(parsed)
+
+    def _on_status_failed(self, action_id: str, _message: str) -> None:
+        if action_id != self.status_action_id:
+            return
+        self.refresh_button.setEnabled(True)
+        self._payload = {}
+        self._set_service_state(False, False, "Configure o serviço para começar")
+
+    def _power_action(self) -> None:
+        target = self.stop_action_id if self._running else self.start_action_id if self._configured else self.setup_action_id
+        action = self.by_id.get(target)
+        if action is not None:
+            self.request_action(action)
+
+    def block_while_running(self, running: bool) -> None:
+        self.power_button.setEnabled(not running)
+        self.refresh_button.setEnabled(not running)
+
+
+class WaydroidPage(FriendlyServicePage):
+    service_name = "Android com Waydroid"
+    service_subtitle = "Aplicativos Android integrados ao desktop"
+    service_icon = "phone"
+    status_action_id = "waydroid.status"
+    start_action_id = "waydroid.launch"
+    stop_action_id = "waydroid.stop"
+    setup_action_id = "waydroid.install"
+    represented_ids = (
+        "waydroid.status", "waydroid.launch", "waydroid.stop", "waydroid.install",
+        "waydroid.repair", "waydroid.host-access", "waydroid.plan",
+    )
+
+    def feature_titles(self) -> tuple[str, ...]:
+        return ("Arquivos compartilhados", "Dispositivos USB", "Boot direto")
+
+    def shortcut_actions(self) -> tuple[tuple[str, str, bool], ...]:
+        return (
+            ("waydroid.host-access", "Compartilhar arquivos", False),
+            ("waydroid.repair", "Reparar", False),
+            ("waydroid.launch", "Abrir Android", True),
+        )
+
+    def apply_payload(self, payload: dict) -> None:
+        config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
+        android = payload.get("android") if isinstance(payload.get("android"), dict) else {}
+        access = payload.get("access") if isinstance(payload.get("access"), dict) else {}
+        boot = payload.get("boot") if isinstance(payload.get("boot"), dict) else {}
+        host = payload.get("host") if isinstance(payload.get("host"), dict) else {}
+        active = str(android.get("serviceActive", "")).casefold() == "active"
+        configured = bool(config.get("installed") or android.get("initialized"))
+        self._set_service_state(
+            active, configured,
+            "Android está pronto para uso" if active else "Sessão Android desligada" if configured else "Instale as imagens Android para começar",
+        )
+        self.fact_labels[0].setText(f"Imagem: {android.get('imageType') or '—'}")
+        self.fact_labels[1].setText("Android inicializado" if android.get("initialized") else "Android ainda não inicializado")
+        binder = bool(host.get("binderDevices") or host.get("binderMounted"))
+        self.fact_labels[2].setText("Hardware compatível" if binder else "Compatibilidade precisa de revisão")
+        values = (
+            (bool(access.get("sharesReady")), f"{int(access.get('mountCount') or 0)} pasta(s) conectada(s)"),
+            (bool(access.get("usbBusShared")), "USB disponível ao Android"),
+            (bool(boot.get("helperInstalled") and boot.get("artifactsCurrent")), "Entrada de inicialização verificada"),
+        )
+        for (toggle, detail), (checked, text) in zip(self.feature_controls, values):
+            toggle.setChecked(checked)
+            detail.setText(text)
+
+
+class ServerPage(FriendlyServicePage):
+    service_name = "Servidor doméstico"
+    service_subtitle = "Mídia, arquivos e serviços privados"
+    service_icon = "network-server"
+    status_action_id = "server.homelab.status"
+    start_action_id = "server.homelab.up"
+    stop_action_id = "server.homelab.down"
+    setup_action_id = "server.homelab.repair"
+    represented_ids = (
+        "server.homelab.status", "server.homelab.up", "server.homelab.down",
+        "server.homelab.repair", "server.homelab.plan", "server.homelab.open-portainer",
+        "server.homelab.open-jellyfin", "server.homelab.open-vaultwarden",
+        "server.homelab.open-kuma", "server.homelab.update",
+    )
+
+    def feature_titles(self) -> tuple[str, ...]:
+        return ("Serviços principais", "Acesso privado", "Backup e recuperação")
+
+    def shortcut_actions(self) -> tuple[tuple[str, str, bool], ...]:
+        return (
+            ("server.homelab.open-jellyfin", "Abrir mídia", False),
+            ("server.homelab.open-vaultwarden", "Abrir cofre", False),
+            ("server.homelab.open-kuma", "Ver saúde", False),
+            ("server.homelab.up", "Iniciar servidor", True),
+        )
+
+    def apply_payload(self, payload: dict) -> None:
+        stack = payload.get("stack") if isinstance(payload.get("stack"), dict) else {}
+        apps = stack.get("apps") if isinstance(stack.get("apps"), list) else []
+        running_count = sum(bool(app.get("running")) for app in apps if isinstance(app, dict))
+        configured = bool(payload.get("configured") or payload.get("profile") or apps)
+        running = bool(payload.get("active") or payload.get("ready") or running_count)
+        degraded = bool(payload.get("degraded"))
+        self._set_service_state(
+            running, configured,
+            f"{running_count} serviço(s) rodando" if running else "Serviços desligados; dados preservados" if configured else "Escolha um perfil e prepare o servidor",
+        )
+        if degraded:
+            self.state_label.setText("● Atenção necessária")
+            self._set_state("warning")
+        access = payload.get("accessMode") if isinstance(payload.get("accessMode"), dict) else {}
+        backup = payload.get("backupState") if isinstance(payload.get("backupState"), dict) else {}
+        self.fact_labels[0].setText(f"Perfil: {payload.get('profile') or 'nenhum'}")
+        self.fact_labels[1].setText(f"Aplicativos: {running_count}/{len(apps)} rodando")
+        self.fact_labels[2].setText(f"Acesso: {access.get('effective') or 'local'}")
+        values = (
+            (running_count > 0, f"{running_count} serviço(s) disponível(is)"),
+            (str(access.get("effective", "local")) != "public", f"Modo {access.get('effective') or 'local'}"),
+            (bool(backup.get("lastBackup")), "Backup localizado" if backup.get("lastBackup") else "Nenhum backup recente"),
+        )
+        for (toggle, detail), (checked, text) in zip(self.feature_controls, values):
+            toggle.setChecked(checked)
+            detail.setText(text)
