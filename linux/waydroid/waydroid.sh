@@ -598,6 +598,7 @@ status_json() {
     local config="no" waydroid_bin cage_bin weston_bin kwin_bin dbus_bin binder_fs="no" binder_dev="no" binder_mounted="no" initialized="no" lxc_hook_safe="no"
     local waydroid_active waydroid_enabled boot_helper="no" session_launcher="no" shares_helper="no" boot_service="no" boot_current="no" boot_grub current_marker="no"
     local shares_ready="no" shares_mount_count="0" shares_android_root="" shares_usb="no"
+    local host_link="$HOME/Waydroid" host_linked="no"
     [ -f "$CONFIG_FILE" ] && config="yes"
     waydroid_bin="$(command_path waydroid)"
     cage_bin="$(command_path cage)"
@@ -622,6 +623,7 @@ status_json() {
     shares_mount_count="$(waydroid_shares_value mount_count)"
     shares_android_root="$(waydroid_shares_value android_host_root)"
     shares_usb="$(waydroid_shares_value usb_bus_shared)"
+    [ -L "$host_link" ] && host_linked="yes"
     [[ "$shares_mount_count" =~ ^[0-9]+$ ]] || shares_mount_count=0
     jq -n \
         --arg configFile "$CONFIG_FILE" \
@@ -656,6 +658,8 @@ status_json() {
         --arg sharesMountCount "$shares_mount_count" \
         --arg sharesAndroidRoot "$shares_android_root" \
         --arg sharesUsb "$shares_usb" \
+        --arg hostLink "$host_link" \
+        --arg hostLinked "$host_linked" \
         '{
             config: {path: $configFile, installed: ($configInstalled == "yes")},
             host: {
@@ -684,7 +688,9 @@ status_json() {
                 sharesReady: ($sharesReady == "yes"),
                 mountCount: ($sharesMountCount|tonumber),
                 androidHostRoot: $sharesAndroidRoot,
-                usbBusShared: ($sharesUsb == "yes")
+                usbBusShared: ($sharesUsb == "yes"),
+                hostLink: $hostLink,
+                hostLinked: ($hostLinked == "yes")
             },
             boot: {
                 helperInstalled: ($bootHelper == "yes"),

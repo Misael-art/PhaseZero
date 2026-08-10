@@ -66,7 +66,7 @@ class RecoveryPasswordDialog(QDialog):
     """Collect a recovery secret in memory. No state or logging hooks."""
 
     def __init__(self, parent: QWidget | None = None, allow_remote: bool = False) -> None:
-        super().__init__(parent)
+        super().__init__(parent, Qt.Window)
         self.setWindowTitle("Administrador de recuperação")
         layout = QVBoxLayout(self)
         note = QLabel(
@@ -426,8 +426,9 @@ class ProvisionPlayerWindow(QWidget):
         self._discarding = False
 
         self.setWindowTitle("Preparar Windows e reiniciar")
-        self.setMinimumSize(600, 500)
-        self.resize(680, 560)
+        self.setWindowModality(Qt.WindowModal)
+        self.setMinimumSize(720, 460)
+        self.resize(820, 540)
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -464,9 +465,14 @@ class ProvisionPlayerWindow(QWidget):
         self._elapsed_label.setStyleSheet("font-size: 11px; color: #888;")
         layout.addWidget(self._elapsed_label)
 
-        log_frame = QFrame()
-        log_frame.setFrameShape(QFrame.StyledPanel)
-        log_inner = QVBoxLayout(log_frame)
+        self._details_btn = QPushButton("Ver detalhes técnicos")
+        self._details_btn.setObjectName("secondaryButton")
+        self._details_btn.setCheckable(True)
+        layout.addWidget(self._details_btn, 0, Qt.AlignLeft)
+
+        self._log_frame = QFrame()
+        self._log_frame.setFrameShape(QFrame.StyledPanel)
+        log_inner = QVBoxLayout(self._log_frame)
         log_inner.setContentsMargins(0, 0, 0, 0)
         log_lbl = QLabel("Log da opera\u00e7\u00e3o")
         log_lbl.setStyleSheet("font-size: 11px; color: #888; padding: 2px 0;")
@@ -478,12 +484,14 @@ class ProvisionPlayerWindow(QWidget):
             "font-family: monospace; font-size: 11px; background: #1a1a1a; color: #aaa;"
         )
         log_inner.addWidget(self._log)
-        layout.addWidget(log_frame, 1)
+        layout.addWidget(self._log_frame, 1)
+        self._log_frame.setVisible(False)
+        self._details_btn.toggled.connect(self._toggle_details)
 
         footer = QHBoxLayout()
         footer.setSpacing(8)
 
-        self._start_btn = QPushButton("Preparar")
+        self._start_btn = QPushButton("Iniciar instalação")
         self._start_btn.setObjectName("primaryButton")
         self._start_btn.clicked.connect(self._on_start_clicked)
         footer.addWidget(self._start_btn)
@@ -551,6 +559,12 @@ class ProvisionPlayerWindow(QWidget):
         self._apply_launch_params(iso, graphics, image_index, guest_login, recovery, recovery_local_only)
         self._update_summary()
         self.show()
+
+    def _toggle_details(self, visible: bool) -> None:
+        self._log_frame.setVisible(visible)
+        self._details_btn.setText("Ocultar detalhes técnicos" if visible else "Ver detalhes técnicos")
+        if visible:
+            self.resize(max(self.width(), 820), max(self.height(), 640))
 
     def _set_state(self, state: str) -> None:
         self._state = state

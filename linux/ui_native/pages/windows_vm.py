@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -38,12 +38,19 @@ class WindowsVmPage(BasePage):
         "windows.guest-login.status",
         "windows.provision.cancel",
         "windows.provision.discard",
+        "windows.shares.enable",
+        "windows.shares.disable",
+        "windows.graphics.enable",
+        "windows.graphics.disable",
+        "windows.usb.enable",
+        "windows.usb.disable",
     }
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         self._payload: dict = {}
         self._technical_widgets: list[QWidget] = []
+        self._integration_actions: dict[QCheckBox, tuple[str, str]] = {}
 
     def build(self) -> None:
         for action_id in self._PRIMARY_IDS:
@@ -106,6 +113,11 @@ class WindowsVmPage(BasePage):
         self.refresh_button.setObjectName("secondaryButton")
         self.refresh_button.clicked.connect(self.reload)
         row.addWidget(self.refresh_button)
+        self.install_button = QPushButton("Instalar automaticamente")
+        self.install_button.setObjectName("secondaryButton")
+        self.install_button.setMinimumHeight(50)
+        self.install_button.clicked.connect(lambda: self.run_action("windows.provision.player"))
+        row.addWidget(self.install_button)
         self.power_button = QPushButton("Iniciar VM")
         self.power_button.setObjectName("primaryButton")
         self.power_button.setMinimumSize(150, 50)
@@ -186,11 +198,35 @@ class WindowsVmPage(BasePage):
         layout.addWidget(share)
         layout.addWidget(gpu)
         layout.addWidget(usb)
-        configure = QPushButton("Configurar integrações")
+        self._bind_integration_toggle(self.share_toggle, "windows.shares.enable", "windows.shares.disable")
+        self._bind_integration_toggle(self.gpu_toggle, "windows.graphics.enable", "windows.graphics.disable")
+        self._bind_integration_toggle(self.usb_toggle, "windows.usb.enable", "windows.usb.disable")
+        configure = QPushButton("Atualizar integrações")
         configure.setObjectName("secondaryButton")
-        configure.clicked.connect(lambda: self.run_action("windows.host-access"))
+        configure.clicked.connect(self.reload)
         layout.addWidget(configure)
         return card
+
+    def _bind_integration_toggle(self, toggle: QCheckBox, enable_id: str, disable_id: str) -> None:
+        self._integration_actions[toggle] = (enable_id, disable_id)
+        toggle.toggled.connect(lambda checked, control=toggle: self._integration_toggle_requested(control, checked))
+
+    def _integration_toggle_requested(self, toggle: QCheckBox, checked: bool) -> None:
+        applied = bool(toggle.property("applied"))
+        if checked == applied:
+            return
+        with QSignalBlocker(toggle):
+            toggle.setChecked(applied)
+        enable_id, disable_id = self._integration_actions[toggle]
+        self.run_action(enable_id if checked else disable_id)
+
+    @staticmethod
+    def _apply_toggle(toggle: QCheckBox, checked: bool, enabled: bool = True) -> None:
+        with QSignalBlocker(toggle):
+            toggle.setChecked(checked)
+            toggle.setProperty("applied", checked)
+            toggle.setProperty("supported", enabled)
+            toggle.setEnabled(enabled)
 
     def _build_setup_card(self) -> QFrame:
         card = QFrame()
@@ -285,11 +321,11 @@ class WindowsVmPage(BasePage):
             self.state_label.setText("● Precisa configurar")
             self.state_detail.setText("Prepare o Windows antes do primeiro uso")
             self._set_state("warning")
-            self.power_button.setText("Preparar VM")
+            self.power_button.setText("Iniciar VM")
             self.power_button.setObjectName("primaryButton")
         self.power_button.style().unpolish(self.power_button)
         self.power_button.style().polish(self.power_button)
-        self.power_button.setEnabled(True)
+        self.power_button.setEnabled(configured and disk_ready)
         ram_mb = int(vm.get("ramMb") or 0)
         cpus = int(vm.get("cpus") or 0)
         self.ram_value.setText(f"Memória: {ram_mb / 1024:g} GB" if ram_mb else "Memória: —")
@@ -298,16 +334,16 @@ class WindowsVmPage(BasePage):
         self.cpu_value.setText(f"Processadores: {cpus}" if cpus else "Processadores: —")
         self.cpu_slider.setMaximum(max(2, 16, cpus))
         self.cpu_slider.setValue(max(2, cpus) if cpus else 2)
-        self.share_toggle.setChecked(bool(access.get("shareLinksReady") or access.get("sambaReachable")))
+        self._apply_toggle(self.share_toggle, bool(access.get("shareLinksReady") or access.get("sambaReachable")))
         profile = str(vm.get("graphicsProfile") or "compat")
         gpu_available = bool(host.get("qemu"))
-        self.gpu_toggle.setChecked(gpu_available and profile != "compat")
+        self._apply_toggle(self.gpu_toggle, gpu_available and profile != "compat", gpu_available)
         if not gpu_available:
             self.gpu_note.setText("Indisponível: QEMU não foi encontrado no host")
         else:
             self.gpu_note.setText(f"Perfil ativo: {profile}")
         usb_ready = int(access.get("usbRedirChannels") or 0) > 0 or bool(access.get("usbUdevManaged"))
-        self.usb_toggle.setChecked(usb_ready)
+        self._apply_toggle(self.usb_toggle, usb_ready)
         if not usb_ready:
             self.usb_note.setText("Desativado até configurar permissões seguras")
 
@@ -330,7 +366,7 @@ class WindowsVmPage(BasePage):
         elif config.get("installed") and vm.get("diskExists"):
             self.run_action("windows.launch")
         else:
-            self.run_action("windows.provision.player")
+            return
 
     def set_advanced_mode(self, enabled: bool) -> None:
         super().set_advanced_mode(enabled)
@@ -340,3 +376,6 @@ class WindowsVmPage(BasePage):
     def block_while_running(self, running: bool) -> None:
         self.power_button.setEnabled(not running)
         self.refresh_button.setEnabled(not running)
+        self.install_button.setEnabled(not running)
+        for toggle in self._integration_actions:
+            toggle.setEnabled(not running and bool(toggle.property("supported")))

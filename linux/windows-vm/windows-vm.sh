@@ -123,6 +123,7 @@ Usage:
   pz windows-vm graphics runtime (status|install|rollback)
   pz windows-vm graphics guest-guide [--save]
   pz windows-vm shares (status|install|remove|dry-run)
+  pz windows-vm usb-access (status|install|remove|dry-run)
   pz windows-vm apps (status|setup|configure|doctor|install-winboat|install-winpodx|launch-winboat|launch-winpodx)
   pz windows-vm boot status
   pz windows-vm boot runtime-check [--json]
@@ -1346,6 +1347,46 @@ configure_windows_usb_access() {
     udevadm control --reload-rules
     udevadm trigger --subsystem-match=usb --action=change
     udevadm settle --timeout=10 || true
+}
+
+remove_windows_usb_access() {
+    [ "$EUID" -eq 0 ] || {
+        pz_error "root required to remove Windows VM USB access"
+        return 1
+    }
+    rm -f "$USB_UDEV_RULE"
+    if command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules
+        udevadm trigger --subsystem-match=usb --action=change
+    fi
+    pz_info "Windows VM USB access disabled"
+}
+
+cmd_usb_access() {
+    local sub="${1:-status}"
+    case "$sub" in
+        install|enable)
+            need_root
+            configure_windows_usb_access
+            ;;
+        remove|disable)
+            need_root
+            remove_windows_usb_access
+            ;;
+        dry-run|plan)
+            echo "Windows VM USB access plan"
+            echo "  managed rule: $USB_UDEV_RULE"
+            echo "  policy: active-seat external devices and mass storage"
+            return 0
+            ;;
+        status) ;;
+        *) pz_error "usage: windows-vm usb-access (status|install|remove|dry-run)"; return 1 ;;
+    esac
+    jq -n \
+        --arg rule "$USB_UDEV_RULE" \
+        --argjson managed "$(windows_usb_udev_managed && echo true || echo false)" \
+        --argjson channels "$(libvirt_usb_redir_count)" \
+        '{tool:"windows-vm-usb-access",rule:$rule,managed:$managed,redirChannels:$channels}'
 }
 
 configure_windows_samba_shares() {
@@ -3274,6 +3315,7 @@ case "$ACTION" in
     install|setup) install_vm "$@" ;;
     optimize|tune) cmd_optimize "$@" ;;
     shares|access) cmd_shares "$@" ;;
+    usb-access|usb) cmd_usb_access "$@" ;;
     host-access|guest-disk|browse-guest) bash "$PZ_ROOT/linux/windows-vm/host-access.sh" "$@" ;;
     graphics|gpu) bash "$PZ_ROOT/linux/windows-vm/graphics.sh" "$@" ;;
     apps|frontends|containers) bash "$PZ_ROOT/linux/windows-vm/container-frontends.sh" "$@" ;;
@@ -3288,5 +3330,5 @@ case "$ACTION" in
     preflight|check|readiness) bash "$PZ_ROOT/linux/windows-vm/preflight.sh" "$@" ;;
     provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|host-access|graphics|apps|launch|launch-check|disk-check|secure-storage|guest-login|recover|boot|media|preflight|provision)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|usb-access|host-access|graphics|apps|launch|launch-check|disk-check|secure-storage|guest-login|recover|boot|media|preflight|provision)"; exit 1 ;;
 esac

@@ -30,6 +30,7 @@ from .catalog import CATEGORIES, DASHBOARD, SIDEBAR_GROUPS, build_catalog
 from .command_runner import CommandRunner
 from .models import ActionSpec, OperationResult
 from .provision_player import ProvisionPlayerWindow
+from .windows_install_dialog import WindowsInstallDialog
 from .preferences import UiPreferences
 from .pages.registry import PageRegistry
 from .result_parser import severity_for
@@ -483,21 +484,25 @@ class MainWindow(QMainWindow):
         if self.runner.running:
             return
         values: dict[str, str] = {}
+        if action.id == "windows.provision.player":
+            dialog = WindowsInstallDialog(self)
+            if dialog.exec() != WindowsInstallDialog.Accepted:
+                return
+            values = dialog.values()
+            ProvisionPlayerWindow.open(
+                self.root, self.runner, self,
+                iso=values["input"],
+                graphics=values["graphics"],
+                image_index=values["image_index"],
+                guest_login=values["guest_login"],
+            )
+            return
         if action.parameters:
             dialog = ParameterDialog(action, self)
             if dialog.exec() != ParameterDialog.Accepted:
                 return
             values = dialog.values()
 
-        if action.id == "windows.provision.player":
-            ProvisionPlayerWindow.open(
-                self.root, self.runner, self,
-                iso=values.get("input", ""),
-                graphics=values.get("graphics", "compat"),
-                image_index=values.get("image_index", "1"),
-                guest_login=values.get("guest_login", "auto"),
-            )
-            return
         self.pending_action = action
         self.pending_value = values.get("input", "")
         self.pending_values = values
@@ -643,6 +648,10 @@ class MainWindow(QMainWindow):
             QTimer.singleShot(0, lambda: self.request_action(next_action))
         elif not result.ok:
             self._action_queue.clear()
+        if not result.preview:
+            page = self.registry.page_for(self.current_category)
+            if page is not None:
+                QTimer.singleShot(0, page.reload)
 
     def _bind_preview_result(self, action: ActionSpec, result: OperationResult) -> None:
         if not action.preview_bindings:
