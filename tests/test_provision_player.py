@@ -29,29 +29,53 @@ def qapp():
 @pytest.fixture(autouse=True)
 def _isolated_state_path(tmp_path: Path) -> None:
     tmp_state = tmp_path / "windows-vm" / "player.json"
+    tmp_operations = tmp_path / "operations"
     tmp_state.parent.mkdir(parents=True)
+    tmp_operations.mkdir()
     orig = pp_mod.PLAYER_STATE_PATH
+    orig_operations = pp_mod.OPERATIONS_STATE_DIR
     pp_mod.PLAYER_STATE_PATH = tmp_state
+    pp_mod.OPERATIONS_STATE_DIR = tmp_operations
     yield
+    _cleanup_player()
     pp_mod.PLAYER_STATE_PATH = orig
+    pp_mod.OPERATIONS_STATE_DIR = orig_operations
 
 
 def _cleanup_player():
     from linux.ui_native.provision_player import PLAYER_STATE_PATH
-    if ProvisionPlayerWindow._instance is not None:
-        win = ProvisionPlayerWindow._instance
+    windows = [
+        widget for widget in QApplication.topLevelWidgets()
+        if isinstance(widget, ProvisionPlayerWindow)
+    ]
+    if ProvisionPlayerWindow._instance is not None and ProvisionPlayerWindow._instance not in windows:
+        windows.append(ProvisionPlayerWindow._instance)
+    for win in windows:
         if win._worker and win._worker.isRunning():
             win._worker.abort()
             win._worker.wait(2000)
         if win._async_proc:
             win._async_proc.abort()
         win._closing = True
-        ProvisionPlayerWindow._instance = None
+        win.close()
+    ProvisionPlayerWindow._instance = None
     for _ in range(10):
         QApplication.processEvents()
         time.sleep(0.05)
     if PLAYER_STATE_PATH.exists():
         PLAYER_STATE_PATH.unlink()
+
+
+def _write_operation(operation_id: str = "op-20260810-120000-1234",
+                     state: str = "running") -> str:
+    operation_dir = pp_mod.OPERATIONS_STATE_DIR / operation_id
+    operation_dir.mkdir(parents=True, exist_ok=True)
+    (operation_dir / "operation.json").write_text(json.dumps({
+        "state": state,
+        "checkpoint": "setup",
+        "progress": 50,
+    }))
+    return operation_id
 
 
 @pytest.fixture
@@ -502,7 +526,7 @@ def test_discard_success_removes_state_and_closes(qapp, fake_pz_with_status: tup
     _cleanup_player()
     win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
     win._state = ST_FAILED
-    win._operation_id = "op-test"
+    win._operation_id = _write_operation()
     win._save_state()
     assert PLAYER_STATE_PATH.exists()
     with patch("linux.ui_native.provision_player.QMessageBox.question",
@@ -524,7 +548,7 @@ def test_discard_failure_keeps_window_and_state(qapp, fake_pz_with_status: tuple
     _cleanup_player()
     win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
     win._state = ST_FAILED
-    win._operation_id = "op-test"
+    win._operation_id = _write_operation()
     win._save_state()
     with (
         patch.dict("os.environ", {"PZ_FAKE_CANCEL_NO_REMOVE": "1"}),
@@ -549,7 +573,7 @@ def test_shutdown_requires_json_success(qapp, fake_pz_with_status: tuple[Path, P
     _cleanup_player()
     win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
     win._state = ST_DONE
-    win._operation_id = "op-test"
+    win._operation_id = _write_operation()
     win._on_shutdown_vm()
     for _ in range(100):
         QApplication.processEvents()
@@ -566,7 +590,7 @@ def test_shutdown_failure_stays_failed(qapp, fake_pz_with_status: tuple[Path, Pa
     _cleanup_player()
     win = ProvisionPlayerWindow(fake_root, MagicMock(), None)
     win._state = ST_DONE
-    win._operation_id = "op-test"
+    win._operation_id = _write_operation()
     win._vm_running = True
     with patch.dict("os.environ", {"PZ_FAKE_SHUTDOWN_FAIL": "1"}):
         win._on_shutdown_vm()
@@ -635,13 +659,15 @@ def test_reboot_success_message(qapp, fake_pz_with_status: tuple[Path, Path]) ->
     _cleanup_player()
 
 
-def test_retry_without_operation_fails(qapp, fake_pz: Path) -> None:
+def test_retry_without_operation_recovers_to_new_install(qapp, fake_pz: Path) -> None:
     _cleanup_player()
     win = ProvisionPlayerWindow(fake_pz, MagicMock(), None)
     win._operation_id = ""
     win._on_retry()
     QApplication.processEvents()
-    assert win._state == ST_FAILED
+    assert win._state == ST_IDLE
+    assert win._start_btn.isVisible()
+    assert "Inicie uma nova instalação" in win._checkpoint_label.text()
     _cleanup_player()
 
 
@@ -691,3 +717,95 @@ def test_open_params_beat_persisted_state(qapp) -> None:
         assert win._image_index == "2", f"expected 2, got {win._image_index}"
     finally:
         _cleanup_player()
+
+
+def test_orphaned_done_state_is_quarantined_and_starts_clean(qapp) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    _cleanup_player()
+    PLAYER_STATE_PATH.write_text(json.dumps({
+        "state": "done",
+        "iso": "/synthetic.iso",
+        "graphics": "virtio-gl",
+        "imageIndex": "9",
+        "operationId": "op-test",
+    }))
+
+    with patch.object(ProvisionPlayerWindow, "_run_post_validation") as validation:
+        win = ProvisionPlayerWindow(
+            ROOT, MagicMock(), None,
+            iso="/current.iso", graphics="compat", image_index="2",
+        )
+
+    validation.assert_not_called()
+    assert win._state == ST_IDLE
+    assert win._operation_id == ""
+    assert win._iso == "/current.iso"
+    assert win._graphics == "compat"
+    assert win._image_index == "2"
+    assert not win._start_btn.isHidden()
+    assert "Inicie uma nova instalação" in win._checkpoint_label.text()
+    assert not PLAYER_STATE_PATH.exists()
+    assert len(list(PLAYER_STATE_PATH.parent.glob("player.orphaned-*.json"))) == 1
+    _cleanup_player()
+
+
+def test_valid_failed_state_resumes_original_operation(qapp) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    _cleanup_player()
+    operation_id = _write_operation(state="failed")
+    PLAYER_STATE_PATH.write_text(json.dumps({
+        "state": "failed",
+        "iso": "/original.iso",
+        "graphics": "virtio-venus",
+        "imageIndex": "4",
+        "guestLogin": "auto",
+        "operationId": operation_id,
+    }))
+
+    win = ProvisionPlayerWindow(
+        ROOT, MagicMock(), None,
+        iso="/new.iso", graphics="compat", image_index="2",
+    )
+
+    assert win._state == ST_FAILED
+    assert win._operation_id == operation_id
+    assert win._iso == "/original.iso"
+    assert win._graphics == "virtio-venus"
+    assert win._image_index == "4"
+    assert not win._retry_btn.isHidden()
+    assert "Retome ou descarte" in win._checkpoint_label.text()
+    _cleanup_player()
+
+
+def test_validation_failure_exposes_backend_reason(qapp) -> None:
+    _cleanup_player()
+    win = ProvisionPlayerWindow(ROOT, MagicMock(), None, iso="/fake.iso")
+    async_proc = MagicMock()
+    async_proc.stderr = "ERROR: metadata checksum mismatch"
+    win._async_proc = async_proc
+
+    win._on_validation_result(None, 1)
+
+    assert win._state == ST_FAILED
+    assert "metadata checksum mismatch" in win._checkpoint_label.text()
+    assert "metadata checksum mismatch" in win._log.toPlainText()
+    _cleanup_player()
+
+
+def test_discard_orphaned_operation_returns_to_start(qapp) -> None:
+    from linux.ui_native.provision_player import PLAYER_STATE_PATH
+    _cleanup_player()
+    win = ProvisionPlayerWindow(ROOT, MagicMock(), None, iso="/fake.iso")
+    win._operation_id = "op-test"
+    win._set_state(ST_FAILED)
+    win._save_state()
+
+    with patch("linux.ui_native.provision_player.QMessageBox.question") as question:
+        win._on_discard()
+
+    question.assert_not_called()
+    assert win._state == ST_IDLE
+    assert win._operation_id == ""
+    assert "Inicie uma nova instalação" in win._checkpoint_label.text()
+    assert not PLAYER_STATE_PATH.exists()
+    _cleanup_player()
