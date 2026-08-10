@@ -807,6 +807,12 @@ grep -q 'libvirt_domain_nvram' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -q 'ide-hd,drive=system,bus=ide.0,bootindex=1' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 grep -q 'session.log' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
 "$REPO_ROOT/linux/pz" windows-vm status | jq -e '.config.installed == true and .vm.isoExists == true and (.vm.diskSource == "new" or .vm.diskSource == "config" or .vm.diskSource == "discovered-installed" or .vm.diskSource == "adopted-existing") and (.vm | has("installedLike"))' >/dev/null
+"$REPO_ROOT/linux/pz" windows-vm status | jq -e '
+    (.status == "ok" or .status == "warning" or .status == "blocked" or .status == "needsinstall") and
+    (.health.readyToLaunch | type == "boolean") and
+    (.health.bootDirectReady | type == "boolean") and
+    (.health.findings | type == "array")
+' >/dev/null
 "$REPO_ROOT/linux/pz" install windows-vm-linux --dry-run >/dev/null
 
 echo "=== Guest bundle generation ==="

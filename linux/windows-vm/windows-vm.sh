@@ -2375,6 +2375,36 @@ status_json() {
         --arg currentMarker "$current_marker" \
         --argjson discovery "$discovery" \
         '{
+            status: (
+                if $kvm != "yes" or $qemu == "" or $ovmfCodeExists != "yes" or $ovmfVarsExists != "yes" then "blocked"
+                elif $configInstalled != "yes" or $diskExists != "yes" or $diskInstalledLike != "yes" then "needsinstall"
+                elif $bootRuntimeStale then "warning"
+                else "ok"
+                end
+            ),
+            health: {
+                readyToLaunch: (
+                    $configInstalled == "yes" and $diskExists == "yes" and $diskInstalledLike == "yes"
+                    and $kvm == "yes" and $qemu != "" and $ovmfCodeExists == "yes" and $ovmfVarsExists == "yes"
+                ),
+                bootDirectReady: (
+                    $bootHelper == "yes" and $bootService == "yes"
+                    and $bootArtifactsCurrent == "yes" and ($bootRuntimeStale | not)
+                ),
+                findings: [
+                    if $configInstalled != "yes" then
+                        {id:"vm-not-configured", severity:"warning", message:"A máquina virtual ainda não foi configurada.", action:"windows.provision.player"}
+                    elif $diskExists != "yes" then
+                        {id:"disk-missing", severity:"error", message:"O disco configurado não foi encontrado.", action:"windows.provision.player"}
+                    elif $diskInstalledLike != "yes" then
+                        {id:"guest-not-installed", severity:"warning", message:"O disco existe, mas ainda não contém um Windows inicializável.", action:"windows.provision.player"}
+                    else empty end,
+                    if $kvm != "yes" then {id:"kvm-unavailable", severity:"error", message:"A aceleração KVM não está disponível.", action:"windows.graphics.doctor"} else empty end,
+                    if $qemu == "" then {id:"qemu-missing", severity:"error", message:"QEMU não foi encontrado no host.", action:"windows.graphics.doctor"} else empty end,
+                    if $ovmfCodeExists != "yes" or $ovmfVarsExists != "yes" then {id:"uefi-incomplete", severity:"error", message:"Os arquivos UEFI da VM estão incompletos.", action:"windows.provision.player"} else empty end,
+                    if $bootRuntimeStale then {id:"boot-runtime-stale", severity:"warning", message:"O boot direto usa uma versão antiga do PhaseZero.", action:"windows.boot.install"} else empty end
+                ]
+            },
             config: {path: $configFile, installed: ($configInstalled == "yes")},
             vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode, graphicsProfile: $graphicsProfile, netModel: $netModel},
             libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != ""), network:"default", networkState:$networkState, nicModel:$nicModel},

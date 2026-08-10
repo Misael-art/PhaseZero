@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -17,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..models import ActionSpec
-from ..widgets import SectionHeader, themed_icon
+from ..widgets import SectionHeader, SwitchControl, themed_icon
 from .base import BasePage
 
 
@@ -38,6 +37,7 @@ class WindowsVmPage(BasePage):
         "windows.guest-login.status",
         "windows.provision.cancel",
         "windows.provision.discard",
+        "windows.boot.install",
         "windows.shares.enable",
         "windows.shares.disable",
         "windows.graphics.enable",
@@ -50,7 +50,8 @@ class WindowsVmPage(BasePage):
         super().__init__(*args, **kwargs)
         self._payload: dict = {}
         self._technical_widgets: list[QWidget] = []
-        self._integration_actions: dict[QCheckBox, tuple[str, str]] = {}
+        self._integration_actions: dict[SwitchControl, tuple[str, str]] = {}
+        self._pending_integrations: dict[str, tuple[SwitchControl, bool, QLabel, str]] = {}
 
     def build(self) -> None:
         for action_id in self._PRIMARY_IDS:
@@ -159,7 +160,7 @@ class WindowsVmPage(BasePage):
         layout.addWidget(edit)
         return card
 
-    def _integration_switch(self, title: str, description: str) -> tuple[QWidget, QCheckBox, QLabel]:
+    def _integration_switch(self, title: str, description: str) -> tuple[QWidget, SwitchControl, QLabel]:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 4, 0, 4)
@@ -171,8 +172,7 @@ class WindowsVmPage(BasePage):
         note.setWordWrap(True)
         copy.addWidget(name)
         copy.addWidget(note)
-        toggle = QCheckBox()
-        toggle.setObjectName("largeSwitch")
+        toggle = SwitchControl()
         toggle.setEnabled(False)
         toggle.setAccessibleName(title)
         layout.addLayout(copy, 1)
@@ -207,26 +207,43 @@ class WindowsVmPage(BasePage):
         layout.addWidget(configure)
         return card
 
-    def _bind_integration_toggle(self, toggle: QCheckBox, enable_id: str, disable_id: str) -> None:
+    def _bind_integration_toggle(self, toggle: SwitchControl, enable_id: str, disable_id: str) -> None:
         self._integration_actions[toggle] = (enable_id, disable_id)
         toggle.toggled.connect(lambda checked, control=toggle: self._integration_toggle_requested(control, checked))
 
-    def _integration_toggle_requested(self, toggle: QCheckBox, checked: bool) -> None:
+    def _integration_toggle_requested(self, toggle: SwitchControl, checked: bool) -> None:
         applied = bool(toggle.property("applied"))
         if checked == applied:
             return
-        with QSignalBlocker(toggle):
-            toggle.setChecked(applied)
         enable_id, disable_id = self._integration_actions[toggle]
-        self.run_action(enable_id if checked else disable_id)
+        action_id = enable_id if checked else disable_id
+        note = self.share_note if toggle is self.share_toggle else self.gpu_note if toggle is self.gpu_toggle else self.usb_note
+        previous_note = note.text()
+        toggle.set_pending(True)
+        toggle.setEnabled(False)
+        note.setText("Aguardando confirmação…")
+        self._pending_integrations[action_id] = (toggle, applied, note, previous_note)
+        self.run_action(action_id)
 
     @staticmethod
-    def _apply_toggle(toggle: QCheckBox, checked: bool, enabled: bool = True) -> None:
+    def _apply_toggle(toggle: SwitchControl, checked: bool, enabled: bool = True) -> None:
         with QSignalBlocker(toggle):
             toggle.setChecked(checked)
             toggle.setProperty("applied", checked)
             toggle.setProperty("supported", enabled)
+            toggle.set_pending(False)
             toggle.setEnabled(enabled)
+
+    def cancel_pending_action(self, action_id: str) -> None:
+        pending = self._pending_integrations.pop(action_id, None)
+        if pending is None:
+            return
+        toggle, applied, note, previous_note = pending
+        with QSignalBlocker(toggle):
+            toggle.setChecked(applied)
+        toggle.set_pending(False)
+        toggle.setEnabled(bool(toggle.property("supported")))
+        note.setText(previous_note)
 
     def _build_setup_card(self) -> QFrame:
         card = QFrame()
@@ -241,13 +258,22 @@ class WindowsVmPage(BasePage):
         desc.setWordWrap(True)
         copy.addWidget(title)
         copy.addWidget(desc)
+        self.maintenance_health = QLabel("Verificando saúde da instalação…")
+        self.maintenance_health.setObjectName("cardDescription")
+        self.maintenance_health.setWordWrap(True)
+        copy.addWidget(self.maintenance_health)
         row.addLayout(copy, 1)
+        self.repair_boot_button = QPushButton("Atualizar boot direto")
+        self.repair_boot_button.setObjectName("secondaryButton")
+        self.repair_boot_button.clicked.connect(lambda: self.run_action("windows.boot.install"))
+        self.repair_boot_button.setVisible(False)
         install = QPushButton("Preparar Windows")
         install.setObjectName("primaryButton")
         install.clicked.connect(lambda: self.run_action("windows.provision.player"))
         optimize = QPushButton("Otimizar")
         optimize.setObjectName("secondaryButton")
         optimize.clicked.connect(lambda: self.run_action("windows.optimize"))
+        row.addWidget(self.repair_boot_button)
         row.addWidget(optimize)
         row.addWidget(install)
         return card
@@ -301,10 +327,15 @@ class WindowsVmPage(BasePage):
         libvirt = parsed.get("libvirt") if isinstance(parsed.get("libvirt"), dict) else {}
         access = parsed.get("access") if isinstance(parsed.get("access"), dict) else {}
         host = parsed.get("host") if isinstance(parsed.get("host"), dict) else {}
+        health = parsed.get("health") if isinstance(parsed.get("health"), dict) else {}
+        findings = health.get("findings") if isinstance(health.get("findings"), list) else []
         state = str(libvirt.get("state", "missing")).strip().casefold()
         running = state in RUNNING_STATES
         configured = bool((parsed.get("config") or {}).get("installed"))
-        disk_ready = bool(vm.get("diskExists"))
+        disk_exists = bool(vm.get("diskExists"))
+        disk_ready = bool(health.get("readyToLaunch")) if "readyToLaunch" in health else bool(vm.get("installedLike")) or bool(
+            ((parsed.get("discovery") or {}).get("discoveredUsableDisk") or {}).get("usable")
+        )
         if running:
             self.state_label.setText("● Rodando")
             self.state_detail.setText("Windows está ligado e pronto para uso")
@@ -317,6 +348,12 @@ class WindowsVmPage(BasePage):
             self._set_state("info")
             self.power_button.setText("▶ Iniciar VM")
             self.power_button.setObjectName("primaryButton")
+        elif configured and disk_exists:
+            self.state_label.setText("● Instalação incompleta")
+            self.state_detail.setText("O disco existe, mas ainda não contém um Windows inicializável")
+            self._set_state("warning")
+            self.power_button.setText("Iniciar VM")
+            self.power_button.setObjectName("primaryButton")
         else:
             self.state_label.setText("● Precisa configurar")
             self.state_detail.setText("Prepare o Windows antes do primeiro uso")
@@ -325,7 +362,17 @@ class WindowsVmPage(BasePage):
             self.power_button.setObjectName("primaryButton")
         self.power_button.style().unpolish(self.power_button)
         self.power_button.style().polish(self.power_button)
-        self.power_button.setEnabled(configured and disk_ready)
+        self.power_button.setEnabled(running or (configured and disk_ready))
+        boot_stale = any(
+            isinstance(item, dict) and item.get("id") == "boot-runtime-stale" for item in findings
+        ) or bool((parsed.get("boot") or {}).get("bootRuntimeStale"))
+        if not disk_ready:
+            self.maintenance_health.setText("Ação necessária: conclua a instalação antes de iniciar a VM.")
+        elif boot_stale:
+            self.maintenance_health.setText("Atenção: boot direto desatualizado; a inicialização normal continua disponível.")
+        else:
+            self.maintenance_health.setText("VM pronta; componentes essenciais verificados.")
+        self.repair_boot_button.setVisible(boot_stale)
         ram_mb = int(vm.get("ramMb") or 0)
         cpus = int(vm.get("cpus") or 0)
         self.ram_value.setText(f"Memória: {ram_mb / 1024:g} GB" if ram_mb else "Memória: —")
@@ -334,7 +381,22 @@ class WindowsVmPage(BasePage):
         self.cpu_value.setText(f"Processadores: {cpus}" if cpus else "Processadores: —")
         self.cpu_slider.setMaximum(max(2, 16, cpus))
         self.cpu_slider.setValue(max(2, cpus) if cpus else 2)
-        self._apply_toggle(self.share_toggle, bool(access.get("shareLinksReady") or access.get("sambaReachable")))
+        share_ready = bool(
+            access.get("shareLinksReady")
+            and access.get("sambaManaged")
+            and access.get("sambaPolicyCompliant")
+            and access.get("sambaReachable")
+        )
+        self._apply_toggle(self.share_toggle, share_ready)
+        if share_ready:
+            policy = str(access.get("sharePolicy") or "minimal")
+            self.share_note.setText(
+                "Pasta de troca disponível; pastas extras somente leitura"
+                if policy == "full" and not access.get("shareWritable")
+                else "Pasta de troca disponível no Linux e no Windows"
+            )
+        else:
+            self.share_note.setText("Integração incompleta; ative para reparar configuração e acesso")
         profile = str(vm.get("graphicsProfile") or "compat")
         gpu_available = bool(host.get("qemu"))
         self._apply_toggle(self.gpu_toggle, gpu_available and profile != "compat", gpu_available)
@@ -344,8 +406,11 @@ class WindowsVmPage(BasePage):
             self.gpu_note.setText(f"Perfil ativo: {profile}")
         usb_ready = int(access.get("usbRedirChannels") or 0) > 0 or bool(access.get("usbUdevManaged"))
         self._apply_toggle(self.usb_toggle, usb_ready)
-        if not usb_ready:
+        if usb_ready:
+            self.usb_note.setText("Permissões prontas; canais USB abrem quando a VM inicia")
+        else:
             self.usb_note.setText("Desativado até configurar permissões seguras")
+        self._pending_integrations.clear()
 
     def _on_status_failed(self, action_id: str, _message: str) -> None:
         if action_id != "windows.status":
@@ -363,7 +428,12 @@ class WindowsVmPage(BasePage):
         vm = self._payload.get("vm") if isinstance(self._payload.get("vm"), dict) else {}
         if state in RUNNING_STATES:
             self.run_action("windows.guest-login.shutdown")
-        elif config.get("installed") and vm.get("diskExists"):
+        elif config.get("installed") and bool(
+            ((self._payload.get("health") or {}).get("readyToLaunch"))
+            if isinstance(self._payload.get("health"), dict) and "readyToLaunch" in self._payload.get("health", {})
+            else vm.get("installedLike")
+            or (((self._payload.get("discovery") or {}).get("discoveredUsableDisk") or {}).get("usable"))
+        ):
             self.run_action("windows.launch")
         else:
             return
@@ -377,5 +447,8 @@ class WindowsVmPage(BasePage):
         self.power_button.setEnabled(not running)
         self.refresh_button.setEnabled(not running)
         self.install_button.setEnabled(not running)
+        self.repair_boot_button.setEnabled(not running)
         for toggle in self._integration_actions:
-            toggle.setEnabled(not running and bool(toggle.property("supported")))
+            toggle.setEnabled(
+                not running and bool(toggle.property("supported")) and not bool(toggle.property("pending"))
+            )
