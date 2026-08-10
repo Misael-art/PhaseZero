@@ -525,6 +525,10 @@ sem evidência.
 | Homelab real | não configurado/ativo; 0 workloads; nenhum apply executado | `pz server homelab status --json`, `docker ps` | 2026-08-09 |
 | Jornada Windows/integrações | PR #49 mergeada; ISO antecipada, índices 1–10, player modal e controles reversíveis Windows/Waydroid/Servidor publicados em `v1.15.4` | pytest 436 + 9; provision 228/0; CI PR `31348479922` success; CI main `31349833848` success; release `31349835128` success | 2026-08-09 |
 | Feedback visual e prontidão Windows | branch `codex/ui-state-feedback`; switches explícitos e otimistas, janelas de instalação opacas, launch bloqueado sem guest inicializável e saúde acionável | pytest 437 + 9; shell Windows exit 0; ShellCheck; QA offscreen | 2026-08-10 |
+| `main` | `9b0e6e3`, alinhada com `origin/main`; PR #50 mergeada em `f0d88fe` | `git status`, `gh pr view 50` | 2026-08-10 |
+| Latest release | `v1.15.5` publicada com 7 assets; workflow `31377411747` success | `gh release view`, `SHA256SUMS-1.15.5` | 2026-08-10 |
+| Pacote host | `phasezero-control-center 1.15.5-1` instalado via `phasezero-admin pacman -U`; pacote Arch SHA-256 validado | `pacman -Q`, `sha256sum -c`, import UI | 2026-08-10 |
+| Boot direto Windows | runtime em `/usr/local/lib/phasezero/windows-vm-runtime` permanece `stale`; nenhuma mutação de boot executada nesta release | `pz windows-vm boot runtime-check` | 2026-08-10 |
 
 ## Ledger de execução
 
@@ -558,6 +562,7 @@ Prova release: workflow `31258447568` success; assets em `gh release view v1.15.
 | 2026-08-09 | Codex | `codex/ui-windows-install-journey` (`/tmp/pz-ui-windows-install`) | HL-UI-002: correção da jornada Windows e controles reais | `6338d21` (implementação), `153a973` (contratos/testes), base `fc1af96` | pytest 436 + 9; provision 228 PASS/0 FAIL; Windows VM shell exit 0; Waydroid smoke exit 0; bash -n; compileall; diff-check | ISO exigida antes do player; edições limitadas e já concluídas bloqueadas; janela não incorpora no painel; logs recolhidos; toggles executam pares enable/disable e recarregam estado. Sem push, PR, release ou instalação; próximo: revisão, push/PR e release somente sob autorização explícita |
 | 2026-08-09 | Codex | `codex/ui-windows-install-journey` + `main` | HL-UI-002: merge, release e instalação | PR #49 mergeada (`7923035`); release `93adbca`, tag `v1.15.4` | CI PR `31348479922` success; CI main `31349833848` success; release `31349835128` success; Arch SHA256 OK | 7/7 assets publicados; pacote Arch `1.15.4-1` validado. Host continua `1.15.3-1`: Bigsudo recusou autorização, sem fallback sudo. Próximo: autorizar Bigsudo e repetir `phasezero-admin pacman -U <pkg>`. |
 | 2026-08-10 | Codex | `codex/ui-state-feedback` (`/tmp/pz-ui-state-feedback`) | HL-UI-002: feedback de estado, opacidade e saúde Windows | `4fb2e5c`, `80a30d9`, `d9f09c5` | pytest 437 + 9; 63 testes focados; `tests/linux-windows-vm.sh` exit 0; bash -n; ShellCheck; QA offscreen | Toggles mostram Ligado/Desligado/Aplicando e restauram cancelamento; player virou QDialog opaco; status real reporta `needsinstall`, `guest-not-installed` e `boot-runtime-stale`; sem push/release/install nesta sessão. |
+| 2026-08-10 | Codex | `main` + `codex/ui-state-feedback` | HL-UI-002: merge, release e pacote | PR #50 (`f0d88fe`); release `9b0e6e3`, tag `v1.15.5` | CI PR `31374802265` + `31374785566` success; release `31377411747` success; `SHA256SUMS-1.15.5` Arch OK; import UI OK | Host atualizado para `1.15.5-1`. WinVM reporta `needsinstall` por disco ainda não inicializável e runtime de boot direto `stale`; nenhuma mudança em VM, GRUB ou runtime de boot. |
 
 ## Formato obrigatório de handoff
 
