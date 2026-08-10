@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -19,6 +20,8 @@ from .platform import admin_bridge, state_dir, secure_file
 
 
 PLAYER_STATE_PATH = state_dir() / "windows-vm" / "player.json"
+OPERATIONS_STATE_DIR = state_dir().parent / "operations"
+PRODUCTION_OPERATION_ID = re.compile(r"^op-\d{8}-\d{6}-\d+$")
 
 ST_IDLE = "idle"
 ST_PLANNING = "planning"
@@ -381,8 +384,9 @@ class ProvisionPlayerWindow(QDialog):
              recovery_local_only: bool = True) -> ProvisionPlayerWindow:
         if cls._instance is not None:
             win = cls._instance
-            win._resume_state()
-            win._apply_launch_params(iso, graphics, image_index, guest_login, recovery, recovery_local_only)
+            resumed = win._resume_state()
+            if not resumed:
+                win._apply_launch_params(iso, graphics, image_index, guest_login, recovery, recovery_local_only)
             win._update_summary()
             win.show()
             win.raise_()
@@ -558,8 +562,9 @@ class ProvisionPlayerWindow(QDialog):
 
         # Resume only after every widget used by _attach_worker/_set_state exists.
         # Caller parameters win over persisted display parameters.
-        self._resume_state()
-        self._apply_launch_params(iso, graphics, image_index, guest_login, recovery, recovery_local_only)
+        resumed = self._resume_state()
+        if not resumed:
+            self._apply_launch_params(iso, graphics, image_index, guest_login, recovery, recovery_local_only)
         self._update_summary()
         self.show()
 
@@ -615,17 +620,70 @@ class ProvisionPlayerWindow(QDialog):
         self._recovery_requested = bool(recovery)
         self._recovery_local_only = bool(recovery_local_only)
 
-    def _resume_state(self) -> None:
+    def _operation_resume_issue(self, operation_id: str) -> str:
+        if not operation_id:
+            return "identificador ausente"
+        if not PRODUCTION_OPERATION_ID.fullmatch(operation_id):
+            return "identificador inválido"
+        metadata = OPERATIONS_STATE_DIR / operation_id / "operation.json"
+        if not metadata.is_file():
+            return "operação não encontrada"
+        try:
+            payload = json.loads(metadata.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return "metadados ilegíveis"
+        if not isinstance(payload, dict):
+            return "metadados inválidos"
+        return ""
+
+    def _quarantine_orphaned_state(self, reason: str) -> None:
+        quarantine = ""
+        if PLAYER_STATE_PATH.exists():
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+            candidate = PLAYER_STATE_PATH.with_name(f"player.orphaned-{stamp}.json")
+            try:
+                PLAYER_STATE_PATH.replace(candidate)
+                quarantine = str(candidate)
+            except OSError:
+                pass
+        self._operation_id = ""
+        self._plan_id = ""
+        self._confirm_token = ""
+        self._rollback_manifest = ""
+        self._set_state(ST_IDLE)
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(0)
+        self._checkpoint_label.setText("Sessão anterior inválida. Inicie uma nova instalação.")
+        self._add_log(f"Sessão anterior ignorada: {reason}.")
+        if quarantine:
+            self._add_log(f"Registro preservado para diagnóstico: {quarantine}")
+
+    def _resume_state(self) -> bool:
         if not PLAYER_STATE_PATH.exists():
-            return
+            return False
         try:
             data = json.loads(PLAYER_STATE_PATH.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            return
+            self._quarantine_orphaned_state("registro local ilegível")
+            return False
+
+        if not isinstance(data, dict):
+            self._quarantine_orphaned_state("registro local inválido")
+            return False
 
         prev = data.get("state", "")
-        self._operation_id = data.get("operationId", "")
-        self._guest_login = data.get("guestLogin", "auto")
+        self._operation_id = str(data.get("operationId") or "")
+        resumable = prev in (ST_PROVISIONING, ST_VALIDATING, ST_DONE, ST_FAILED, ST_CANCELLED)
+        if resumable:
+            issue = self._operation_resume_issue(self._operation_id)
+            if issue:
+                self._quarantine_orphaned_state(issue)
+                return False
+
+        self._iso = str(data.get("iso") or self._iso)
+        self._graphics = str(data.get("graphics") or self._graphics)
+        self._image_index = str(data.get("imageIndex") or self._image_index)
+        self._guest_login = str(data.get("guestLogin") or "auto")
         self._rollback_manifest = str(data.get("rollbackManifest") or "")
 
         if prev in (ST_PROVISIONING, ST_VALIDATING) and self._operation_id:
@@ -633,6 +691,14 @@ class ProvisionPlayerWindow(QDialog):
         elif prev == ST_DONE:
             self._set_state(ST_DONE)
             self._run_post_validation()
+        elif prev in (ST_FAILED, ST_CANCELLED):
+            self._set_state(prev)
+            self._checkpoint_label.setText(
+                "Instalação anterior interrompida. Retome ou descarte o progresso."
+            )
+        else:
+            return False
+        return True
 
     def _update_summary(self) -> None:
         parts = []
@@ -808,6 +874,10 @@ class ProvisionPlayerWindow(QDialog):
     # ── Validation ──
 
     def _run_post_validation(self) -> None:
+        issue = self._operation_resume_issue(self._operation_id)
+        if issue:
+            self._quarantine_orphaned_state(issue)
+            return
         pz = str(self._root / "linux" / "pz")
         self._async_proc = AsyncProc(self)
         self._async_proc.finished.connect(self._on_validation_result)
@@ -819,11 +889,16 @@ class ProvisionPlayerWindow(QDialog):
         ], timeout_ms=VALIDATE_TIMEOUT_MS)
 
     def _on_validation_result(self, data: object | None, exit_code: int) -> None:
+        stderr = self._async_proc.stderr.strip() if self._async_proc else ""
         self._async_proc = None
         if exit_code != 0 or not isinstance(data, dict):
+            if "operation not found" in stderr.casefold():
+                self._quarantine_orphaned_state("operação não encontrada durante a validação")
+                return
             self._set_state(ST_FAILED)
-            self._checkpoint_label.setText("Valida\u00e7\u00e3o falhou")
-            self._add_log("Falha ao obter status do provisionamento")
+            detail = stderr.splitlines()[-1].strip() if stderr else "resposta inválida do backend"
+            self._checkpoint_label.setText(f"Validação falhou: {detail[:160]}")
+            self._add_log(f"Falha ao obter status do provisionamento: {detail}")
             self._progress_bar.setRange(0, 100)
             self._save_state()
             return
@@ -1066,9 +1141,9 @@ class ProvisionPlayerWindow(QDialog):
         self._save_state()
 
     def _on_retry(self) -> None:
-        if not self._operation_id:
-            self._set_state(ST_FAILED)
-            self._checkpoint_label.setText("Sem opera\u00e7\u00e3o para retomar")
+        issue = self._operation_resume_issue(self._operation_id)
+        if issue:
+            self._quarantine_orphaned_state(issue)
             return
         pz = str(self._root / "linux" / "pz")
         self._async_proc = AsyncProc(self)
@@ -1089,6 +1164,9 @@ class ProvisionPlayerWindow(QDialog):
             self._add_log("Retomada falhou \u2014 descarte e recomece")
 
     def _on_discard(self) -> None:
+        if self._operation_id and self._operation_resume_issue(self._operation_id):
+            self._quarantine_orphaned_state("operação ausente durante o descarte")
+            return
         reply = QMessageBox.question(
             self, "Descartar",
             "Remove staging e libera recursos.\n"
