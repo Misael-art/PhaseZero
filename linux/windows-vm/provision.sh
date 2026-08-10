@@ -167,10 +167,10 @@ provision_plan() {
     done
 
     [ -n "$iso" ] || { pz_error "--iso required"; return 1; }
-    [[ "$image_index" =~ ^[0-9]+$ ]] && [ "$image_index" -ge 1 ] && [ "$image_index" -le 10 ] || {
+    if ! [[ "$image_index" =~ ^[0-9]+$ ]] || [ "$image_index" -lt 1 ] || [ "$image_index" -gt 10 ]; then
         pz_error "--image-index must be an integer from 1 to 10"
         return 1
-    }
+    fi
     case "$guest_login" in auto|password) ;; *) pz_error "--guest-login must be auto or password"; return 1 ;; esac
 
     if [ "$AUTO_FIX" = "1" ]; then
