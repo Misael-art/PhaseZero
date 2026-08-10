@@ -159,6 +159,10 @@ shares_plan_full="$(PZ_WINDOWS_VM_SHARE_POLICY=full "$REPO_ROOT/linux/pz" window
 grep -q 'PZHome' <<< "$shares_plan_full"
 grep -q 'share policy: full' <<< "$shares_plan_full"
 grep -q 'USB auto filter: 0x08,-1,-1,-1,1' <<< "$shares_plan"
+usb_plan="$("$REPO_ROOT/linux/pz" windows-vm usb-access dry-run)"
+grep -q 'active-seat external devices and mass storage' <<< "$usb_plan"
+PZ_WINDOWS_VM_USB_UDEV_RULE="$TMP_ROOT/missing-usb.rules" \
+    "$REPO_ROOT/linux/pz" windows-vm usb-access status | jq -e '.managed == false' >/dev/null
 
 echo "=== samba block content follows share policy ==="
 WV_SRC="$(sed "/^case \"\$ACTION\" in/,\$d" "$REPO_ROOT/linux/windows-vm/windows-vm.sh" | sed "s#^PZ_ROOT=.*#PZ_ROOT=\"$REPO_ROOT\"#")"

@@ -81,6 +81,15 @@ PLAN_OUT2=$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE=
 IMAGE_INDEX2=$(echo "$PLAN_OUT2" | jq -r '.imageIndex // 0' 2>/dev/null || echo "0")
 assert_eq "custom imageIndex is 3" "3" "$IMAGE_INDEX2"
 
+index_zero_rejected=0
+PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE="$PZ_STATE_DIR" \
+    bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --image-index 0 --json >/dev/null 2>&1 || index_zero_rejected=1
+assert_eq "imageIndex 0 is rejected" "1" "$index_zero_rejected"
+index_eleven_rejected=0
+PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE="$PZ_STATE_DIR" \
+    bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --image-index 11 --json >/dev/null 2>&1 || index_eleven_rejected=1
+assert_eq "imageIndex 11 is rejected" "1" "$index_eleven_rejected"
+
 PLAN_PASSWORD=$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" PZ_STATE="$PZ_STATE_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --guest-login password --json 2>/dev/null || echo "")
 assert_eq "explicit guest password policy is serialized" "password" "$(echo "$PLAN_PASSWORD" | jq -r '.guestLogin')"
 
