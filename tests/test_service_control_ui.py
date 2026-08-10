@@ -97,9 +97,15 @@ def test_waydroid_toggles_dispatch_reversible_actions(qapp, catalog):
     })
     spy = QSignalSpy(page.action_requested)
     page.feature_controls[0][0].click()
-    assert page.feature_controls[0][0].isChecked()
+    assert not page.feature_controls[0][0].isChecked()
+    assert page.feature_controls[0][0].property("pending") is True
+    assert not page.feature_controls[0][0].isEnabled()
     assert spy.at(0)[0].id == "waydroid.host-access.remove"
+    page.cancel_pending_action("waydroid.host-access.remove")
+    assert page.feature_controls[0][0].isChecked()
+    assert page.feature_controls[0][0].isEnabled()
     page.feature_controls[1][0].click()
+    assert page.feature_controls[1][0].isChecked()
     assert spy.at(1)[0].id == "waydroid.shares.enable"
 
 

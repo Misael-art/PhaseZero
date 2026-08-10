@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QStyle, QVBoxLayout, QWidget,
 )
 
-from ..widgets import SectionHeader, themed_icon
+from ..widgets import SectionHeader, SwitchControl, themed_icon
 from .base import BasePage
 
 
@@ -26,6 +26,7 @@ class FriendlyServicePage(BasePage):
         self._running = False
         self._configured = False
         self._feature_actions: list[tuple[str, str]] = []
+        self._pending_features: dict[str, tuple[SwitchControl, bool, QLabel, str]] = {}
 
     def build(self) -> None:
         for action_id in self.represented_ids:
@@ -108,7 +109,7 @@ class FriendlyServicePage(BasePage):
         layout.addStretch()
         return card
 
-    def _feature_switch(self, title: str) -> tuple[QWidget, QCheckBox, QLabel]:
+    def _feature_switch(self, title: str) -> tuple[QWidget, SwitchControl, QLabel]:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 3, 0, 3)
@@ -118,8 +119,7 @@ class FriendlyServicePage(BasePage):
         detail = QLabel("Verificando…")
         detail.setObjectName("cardDescription")
         detail.setWordWrap(True)
-        toggle = QCheckBox()
-        toggle.setObjectName("largeSwitch")
+        toggle = SwitchControl()
         toggle.setEnabled(False)
         toggle.setAccessibleName(title)
         copy.addWidget(name)
@@ -135,7 +135,7 @@ class FriendlyServicePage(BasePage):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
         layout.addWidget(SectionHeader("Integrações", "Recursos conectados"))
-        self.feature_controls: list[tuple[QCheckBox, QLabel]] = []
+        self.feature_controls: list[tuple[SwitchControl, QLabel]] = []
         self._feature_actions = list(self.feature_actions())
         for index, title in enumerate(self.feature_titles()):
             row, toggle, detail = self._feature_switch(title)
@@ -180,18 +180,35 @@ class FriendlyServicePage(BasePage):
         applied = bool(toggle.property("applied"))
         if checked == applied:
             return
-        with QSignalBlocker(toggle):
-            toggle.setChecked(applied)
         enable_id, disable_id = self._feature_actions[index]
-        self.run_action(enable_id if checked else disable_id)
+        action_id = enable_id if checked else disable_id
+        detail = self.feature_controls[index][1]
+        previous_detail = detail.text()
+        toggle.set_pending(True)
+        toggle.setEnabled(False)
+        detail.setText("Aguardando confirmação…")
+        self._pending_features[action_id] = (toggle, applied, detail, previous_detail)
+        self.run_action(action_id)
 
     @staticmethod
-    def _apply_feature(toggle: QCheckBox, checked: bool, enabled: bool = True) -> None:
+    def _apply_feature(toggle: SwitchControl, checked: bool, enabled: bool = True) -> None:
         with QSignalBlocker(toggle):
             toggle.setChecked(checked)
             toggle.setProperty("applied", checked)
             toggle.setProperty("supported", enabled)
+            toggle.set_pending(False)
             toggle.setEnabled(enabled)
+
+    def cancel_pending_action(self, action_id: str) -> None:
+        pending = self._pending_features.pop(action_id, None)
+        if pending is None:
+            return
+        toggle, applied, detail, previous_detail = pending
+        with QSignalBlocker(toggle):
+            toggle.setChecked(applied)
+        toggle.set_pending(False)
+        toggle.setEnabled(bool(toggle.property("supported")))
+        detail.setText(previous_detail)
 
     def shortcut_actions(self) -> tuple[tuple[str, str, bool], ...]:
         return ()
@@ -256,6 +273,7 @@ class FriendlyServicePage(BasePage):
         self.refresh_button.setEnabled(True)
         self._payload = parsed
         self.apply_payload(parsed)
+        self._pending_features.clear()
 
     def _on_status_failed(self, action_id: str, _message: str) -> None:
         if action_id != self.status_action_id:
@@ -274,7 +292,9 @@ class FriendlyServicePage(BasePage):
         self.power_button.setEnabled(not running)
         self.refresh_button.setEnabled(not running)
         for toggle, _detail in self.feature_controls:
-            toggle.setEnabled(not running and bool(toggle.property("supported")))
+            toggle.setEnabled(
+                not running and bool(toggle.property("supported")) and not bool(toggle.property("pending"))
+            )
 
 
 class WaydroidPage(FriendlyServicePage):

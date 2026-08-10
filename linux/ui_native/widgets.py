@@ -11,11 +11,13 @@ from PySide6.QtCore import (
     QEvent,
     QPoint,
     QPropertyAnimation,
+    QRectF,
+    QSize,
     Qt,
     QTimer,
     Signal,
 )
-from PySide6.QtGui import QColor, QIcon, QMouseEvent
+from PySide6.QtGui import QColor, QIcon, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -620,6 +622,59 @@ class ActionInspector(QFrame):
     def _request(self) -> None:
         if self.action is not None:
             self.requested.emit(self.action)
+
+
+class SwitchControl(QCheckBox):
+    """Semantic on/off control with an explicit state label and pending state."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("largeSwitch")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setMinimumSize(126, 30)
+        self.setAccessibleDescription("Desligado")
+        self.toggled.connect(self._state_changed)
+
+    def sizeHint(self) -> QSize:
+        return QSize(126, 30)
+
+    def _state_changed(self, checked: bool) -> None:
+        self.setAccessibleDescription("Ligado" if checked else "Desligado")
+        self.update()
+
+    def set_pending(self, pending: bool) -> None:
+        self.setProperty("pending", pending)
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        pending = bool(self.property("pending"))
+        checked = self.isChecked()
+        enabled = self.isEnabled()
+        palette = self.palette()
+
+        text = "Aplicando…" if pending else "Ligado" if checked else "Desligado"
+        text_color = QColor("#b77900") if pending else palette.windowText().color() if enabled else palette.mid().color()
+        label_rect = QRectF(0, 0, 76, self.height())
+        painter.setPen(text_color)
+        painter.drawText(label_rect, Qt.AlignRight | Qt.AlignVCenter, text)
+
+        track = QRectF(self.width() - 44, (self.height() - 24) / 2, 44, 24)
+        if pending:
+            track_color = QColor("#b77900")
+        elif checked:
+            track_color = palette.highlight().color() if enabled else palette.mid().color()
+        else:
+            track_color = palette.mid().color() if enabled else palette.button().color()
+        painter.setBrush(track_color)
+        painter.setPen(QPen(QColor("#f4b942") if pending else palette.dark().color(), 1))
+        painter.drawRoundedRect(track, 12, 12)
+
+        knob_x = track.right() - 20 if checked else track.left() + 4
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(palette.highlightedText().color() if enabled or pending else palette.mid().color())
+        painter.drawEllipse(QRectF(knob_x, track.top() + 4, 16, 16))
 
 
 class ParameterDialog(QDialog):
