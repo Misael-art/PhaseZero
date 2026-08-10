@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QStyle, QVBoxLayout, QWidget,
@@ -25,6 +25,7 @@ class FriendlyServicePage(BasePage):
         self._payload: dict = {}
         self._running = False
         self._configured = False
+        self._feature_actions: list[tuple[str, str]] = []
 
     def build(self) -> None:
         for action_id in self.represented_ids:
@@ -135,10 +136,15 @@ class FriendlyServicePage(BasePage):
         layout.setSpacing(8)
         layout.addWidget(SectionHeader("Integrações", "Recursos conectados"))
         self.feature_controls: list[tuple[QCheckBox, QLabel]] = []
-        for title in self.feature_titles():
+        self._feature_actions = list(self.feature_actions())
+        for index, title in enumerate(self.feature_titles()):
             row, toggle, detail = self._feature_switch(title)
             layout.addWidget(row)
             self.feature_controls.append((toggle, detail))
+            if index < len(self._feature_actions):
+                toggle.toggled.connect(
+                    lambda checked, feature_index=index: self._feature_toggle_requested(feature_index, checked)
+                )
         layout.addStretch()
         return card
 
@@ -165,6 +171,27 @@ class FriendlyServicePage(BasePage):
 
     def feature_titles(self) -> tuple[str, ...]:
         return ()
+
+    def feature_actions(self) -> tuple[tuple[str, str], ...]:
+        return ()
+
+    def _feature_toggle_requested(self, index: int, checked: bool) -> None:
+        toggle, _detail = self.feature_controls[index]
+        applied = bool(toggle.property("applied"))
+        if checked == applied:
+            return
+        with QSignalBlocker(toggle):
+            toggle.setChecked(applied)
+        enable_id, disable_id = self._feature_actions[index]
+        self.run_action(enable_id if checked else disable_id)
+
+    @staticmethod
+    def _apply_feature(toggle: QCheckBox, checked: bool, enabled: bool = True) -> None:
+        with QSignalBlocker(toggle):
+            toggle.setChecked(checked)
+            toggle.setProperty("applied", checked)
+            toggle.setProperty("supported", enabled)
+            toggle.setEnabled(enabled)
 
     def shortcut_actions(self) -> tuple[tuple[str, str, bool], ...]:
         return ()
@@ -246,6 +273,8 @@ class FriendlyServicePage(BasePage):
     def block_while_running(self, running: bool) -> None:
         self.power_button.setEnabled(not running)
         self.refresh_button.setEnabled(not running)
+        for toggle, _detail in self.feature_controls:
+            toggle.setEnabled(not running and bool(toggle.property("supported")))
 
 
 class WaydroidPage(FriendlyServicePage):
@@ -258,11 +287,20 @@ class WaydroidPage(FriendlyServicePage):
     setup_action_id = "waydroid.install"
     represented_ids = (
         "waydroid.status", "waydroid.launch", "waydroid.stop", "waydroid.install",
-        "waydroid.repair", "waydroid.host-access", "waydroid.plan",
+        "waydroid.repair", "waydroid.host-access", "waydroid.host-access.remove",
+        "waydroid.shares.enable", "waydroid.shares.disable",
+        "waydroid.boot.install", "waydroid.boot.remove", "waydroid.plan",
     )
 
     def feature_titles(self) -> tuple[str, ...]:
         return ("Arquivos compartilhados", "Dispositivos USB", "Boot direto")
+
+    def feature_actions(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("waydroid.host-access", "waydroid.host-access.remove"),
+            ("waydroid.shares.enable", "waydroid.shares.disable"),
+            ("waydroid.boot.install", "waydroid.boot.remove"),
+        )
 
     def shortcut_actions(self) -> tuple[tuple[str, str, bool], ...]:
         return (
@@ -288,12 +326,12 @@ class WaydroidPage(FriendlyServicePage):
         binder = bool(host.get("binderDevices") or host.get("binderMounted"))
         self.fact_labels[2].setText("Hardware compatível" if binder else "Compatibilidade precisa de revisão")
         values = (
-            (bool(access.get("sharesReady")), f"{int(access.get('mountCount') or 0)} pasta(s) conectada(s)"),
+            (bool(access.get("hostLinked")), "Pasta Android disponível no gerenciador de arquivos"),
             (bool(access.get("usbBusShared")), "USB disponível ao Android"),
             (bool(boot.get("helperInstalled") and boot.get("artifactsCurrent")), "Entrada de inicialização verificada"),
         )
         for (toggle, detail), (checked, text) in zip(self.feature_controls, values):
-            toggle.setChecked(checked)
+            self._apply_feature(toggle, checked, configured)
             detail.setText(text)
 
 
@@ -307,19 +345,27 @@ class ServerPage(FriendlyServicePage):
     setup_action_id = "server.homelab.repair"
     represented_ids = (
         "server.homelab.status", "server.homelab.up", "server.homelab.down",
+        "server.homelab.up-tailscale",
         "server.homelab.repair", "server.homelab.plan", "server.homelab.open-portainer",
         "server.homelab.open-jellyfin", "server.homelab.open-vaultwarden",
         "server.homelab.open-kuma", "server.homelab.update",
     )
 
     def feature_titles(self) -> tuple[str, ...]:
-        return ("Serviços principais", "Acesso privado", "Backup e recuperação")
+        return ("Serviços principais", "Acesso remoto privado")
+
+    def feature_actions(self) -> tuple[tuple[str, str], ...]:
+        return (
+            ("server.homelab.up", "server.homelab.down"),
+            ("server.homelab.up-tailscale", "server.homelab.up"),
+        )
 
     def shortcut_actions(self) -> tuple[tuple[str, str, bool], ...]:
         return (
             ("server.homelab.open-jellyfin", "Abrir mídia", False),
             ("server.homelab.open-vaultwarden", "Abrir cofre", False),
             ("server.homelab.open-kuma", "Ver saúde", False),
+            ("homelab.backup", "Criar backup", False),
             ("server.homelab.up", "Iniciar servidor", True),
         )
 
@@ -344,9 +390,13 @@ class ServerPage(FriendlyServicePage):
         self.fact_labels[2].setText(f"Acesso: {access.get('effective') or 'local'}")
         values = (
             (running_count > 0, f"{running_count} serviço(s) disponível(is)"),
-            (str(access.get("effective", "local")) != "public", f"Modo {access.get('effective') or 'local'}"),
-            (bool(backup.get("lastBackup")), "Backup localizado" if backup.get("lastBackup") else "Nenhum backup recente"),
+            (str(access.get("effective", "local")) == "tailscale", f"Modo {access.get('effective') or 'local'}"),
         )
         for (toggle, detail), (checked, text) in zip(self.feature_controls, values):
-            toggle.setChecked(checked)
+            self._apply_feature(toggle, checked, configured)
             detail.setText(text)
+        backup_button = self.shortcut_buttons.get("homelab.backup")
+        if backup_button is not None:
+            backup_button.setToolTip(
+                "Backup verificado disponível" if backup.get("lastBackup") else "Nenhum backup recente"
+            )

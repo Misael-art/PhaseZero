@@ -296,8 +296,20 @@ def test_close_aborts_worker(qapp, fake_pz: Path) -> None:
     _cleanup_player()
 
 
+def test_player_hides_technical_log_until_requested(qapp) -> None:
+    _cleanup_player()
+    win = ProvisionPlayerWindow(ROOT, MagicMock(), None, iso="/fake.iso")
+    assert win._log_frame.isHidden()
+    assert win._details_btn.text() == "Ver detalhes técnicos"
+    win._details_btn.click()
+    assert not win._log_frame.isHidden()
+    assert win._details_btn.text() == "Ocultar detalhes técnicos"
+    win.close()
+    _cleanup_player()
+
+
 def test_player_action_intercepted_in_request_action(qapp) -> None:
-    from linux.ui_native.main_window import MainWindow, ParameterDialog
+    from linux.ui_native.main_window import MainWindow, WindowsInstallDialog
     from linux.ui_native.catalog import build_catalog
 
     catalog = build_catalog(ROOT)
@@ -309,14 +321,17 @@ def test_player_action_intercepted_in_request_action(qapp) -> None:
     with (
         patch("linux.ui_native.main_window.ProvisionPlayerWindow.open") as mock_open,
         patch("linux.ui_native.main_window.CommandRunner.start") as mock_start,
-        patch.object(ParameterDialog, "exec", return_value=ParameterDialog.Accepted),
-        patch.object(ParameterDialog, "values", return_value={"input": "/fake.iso", "graphics": "compat", "image_index": "1", "guest_login": "auto"}),
+        patch.object(WindowsInstallDialog, "exec", return_value=WindowsInstallDialog.Accepted),
+        patch.object(WindowsInstallDialog, "values", return_value={"input": "/fake.iso", "graphics": "compat", "image_index": "1", "guest_login": "auto"}),
     ):
         win = MainWindow(ROOT)
         win.request_action(player_action[0])
         mock_open.assert_called_once()
         assert mock_open.call_args.kwargs["guest_login"] == "auto"
         mock_start.assert_not_called()
+        win.close()
+        win.deleteLater()
+        QApplication.processEvents()
 
 
 def test_password_policy_passes_secret_via_stdin_only(qapp, fake_pz: Path) -> None:

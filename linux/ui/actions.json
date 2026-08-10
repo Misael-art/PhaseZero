@@ -577,6 +577,78 @@
       "plan_command": "linux/pz windows-vm status"
     },
     {
+      "name": "windows.shares.enable",
+      "label": "Ativar arquivos compartilhados",
+      "command": "linux/pz windows-vm shares install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm shares dry-run"
+    },
+    {
+      "name": "windows.shares.disable",
+      "label": "Desativar arquivos compartilhados",
+      "command": "linux/pz windows-vm shares remove",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm status"
+    },
+    {
+      "name": "windows.graphics.enable",
+      "label": "Ativar aceleração de vídeo",
+      "command": "linux/pz windows-vm graphics apply --profile virtio-gl --experimental --yes",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm graphics plan --profile virtio-gl --json"
+    },
+    {
+      "name": "windows.graphics.disable",
+      "label": "Usar vídeo compatível",
+      "command": "linux/pz windows-vm graphics apply --profile compat",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm graphics plan --profile compat --json"
+    },
+    {
+      "name": "windows.usb.enable",
+      "label": "Ativar dispositivos USB",
+      "command": "linux/pz windows-vm usb-access install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm usb-access dry-run"
+    },
+    {
+      "name": "windows.usb.disable",
+      "label": "Desativar dispositivos USB",
+      "command": "linux/pz windows-vm usb-access remove",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm usb-access status"
+    },
+    {
       "name": "windows.launch",
       "label": "Abrir Windows",
       "command": "linux/pz windows-vm launch --fullscreen",
@@ -1049,6 +1121,54 @@
       "input_kind": "",
       "input_label": "",
       "plan_command": "linux/pz waydroid host-access status"
+    },
+    {
+      "name": "waydroid.host-access.remove",
+      "label": "Remover acesso aos arquivos",
+      "command": "linux/pz waydroid host-access unlink",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz waydroid host-access status"
+    },
+    {
+      "name": "waydroid.shares.enable",
+      "label": "Ativar dispositivos USB",
+      "command": "linux/pz waydroid shares install",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz waydroid shares dry-run"
+    },
+    {
+      "name": "waydroid.shares.disable",
+      "label": "Desativar dispositivos USB",
+      "command": "linux/pz waydroid shares remove",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz waydroid status --json"
+    },
+    {
+      "name": "waydroid.boot.remove",
+      "label": "Remover boot direto Android",
+      "command": "linux/pz waydroid boot remove",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz waydroid boot status"
     },
     {
       "name": "windows.host-access",

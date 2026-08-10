@@ -6,7 +6,8 @@ from types import ModuleType
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit
+from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QPlainTextEdit, QPushButton, QTextEdit
+from PySide6.QtTest import QSignalSpy
 
 from linux.ui_native.catalog import build_catalog
 from linux.ui_native.command_runner import CommandRunner
@@ -98,6 +99,35 @@ def test_windows_vm_page_translates_status_json_into_visual_controls(ws_page):
     assert page.share_toggle.isChecked()
     assert page.gpu_toggle.isChecked()
     assert page.usb_toggle.isChecked()
+
+
+def test_windows_vm_primary_actions_are_ordered_and_launch_requires_disk(ws_page):
+    page, _actions = ws_page
+    hero = page.refresh_button.parentWidget()
+    labels = [
+        hero.layout().itemAt(index).widget().text()
+        for index in range(hero.layout().count())
+        if isinstance(hero.layout().itemAt(index).widget(), QPushButton)
+    ]
+    assert labels == ["Atualizar", "Instalar automaticamente", "Iniciar VM"]
+    page._on_status_ready("windows.status", "", {
+        "config": {"installed": False}, "vm": {"diskExists": False},
+        "libvirt": {"state": "missing"}, "host": {"qemu": "/usr/bin/qemu"},
+    })
+    assert not page.power_button.isEnabled()
+
+
+def test_windows_integration_toggle_dispatches_real_reverse_action(ws_page):
+    page, _actions = ws_page
+    page._on_status_ready("windows.status", "", {
+        "config": {"installed": True}, "vm": {"diskExists": True, "graphicsProfile": "compat"},
+        "libvirt": {"state": "shut off"}, "host": {"qemu": "/usr/bin/qemu"},
+        "access": {"shareLinksReady": True, "usbUdevManaged": False},
+    })
+    spy = QSignalSpy(page.action_requested)
+    page.share_toggle.click()
+    assert page.share_toggle.isChecked()  # authoritative state changes only after refresh
+    assert spy.at(0)[0].id == "windows.shares.disable"
 
 
 def test_windows_vm_page_uses_safe_shutdown_action(ws_page):

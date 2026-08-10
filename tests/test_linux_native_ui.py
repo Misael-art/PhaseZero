@@ -126,6 +126,8 @@ def test_windows_graphics_actions_are_safe_plans(catalog):
         "windows.graphics.plan-vfio",
         "windows.graphics.plan-venus",
         "windows.graphics.compat",
+        "windows.graphics.enable",
+        "windows.graphics.disable",
         "windows.graphics.runtime-status",
         "windows.graphics.runtime-install",
         "windows.graphics.runtime-rollback",
@@ -134,6 +136,8 @@ def test_windows_graphics_actions_are_safe_plans(catalog):
     mutable = {action.id for action in actions.values() if action.mutable}
     assert mutable == {
         "windows.graphics.compat",
+        "windows.graphics.enable",
+        "windows.graphics.disable",
         "windows.graphics.runtime-install",
         "windows.graphics.runtime-rollback",
     }

@@ -39,7 +39,7 @@ def test_waydroid_page_covers_catalog_and_maps_visual_status(qapp, catalog):
         "config": {"installed": True},
         "android": {"initialized": True, "imageType": "GAPPS", "serviceActive": "active"},
         "host": {"binderDevices": True},
-        "access": {"sharesReady": True, "mountCount": 4, "usbBusShared": True},
+        "access": {"sharesReady": True, "hostLinked": True, "mountCount": 4, "usbBusShared": True},
         "boot": {"helperInstalled": True, "artifactsCurrent": True},
     })
     assert page.state_label.text() == "● Rodando"
@@ -85,3 +85,38 @@ def test_waydroid_stop_action_is_preview_protected(catalog):
     assert action.mutable
     assert action.args == ("waydroid", "stop", "--json")
     assert action.preview_args == ("waydroid", "status", "--json")
+
+
+def test_waydroid_toggles_dispatch_reversible_actions(qapp, catalog):
+    page, _actions = _page(WaydroidPage, "Waydroid", catalog)
+    page.apply_payload({
+        "config": {"installed": True},
+        "android": {"initialized": True},
+        "access": {"hostLinked": True, "usbBusShared": False},
+        "boot": {"helperInstalled": False},
+    })
+    spy = QSignalSpy(page.action_requested)
+    page.feature_controls[0][0].click()
+    assert page.feature_controls[0][0].isChecked()
+    assert spy.at(0)[0].id == "waydroid.host-access.remove"
+    page.feature_controls[1][0].click()
+    assert spy.at(1)[0].id == "waydroid.shares.enable"
+
+
+def test_server_toggles_dispatch_service_access_and_backup_actions(qapp, catalog):
+    page, _actions = _page(ServerPage, "Servidor", catalog)
+    page.apply_payload({
+        "configured": True,
+        "ready": False,
+        "accessMode": {"effective": "local"},
+        "stack": {"apps": []},
+        "backupState": {},
+    })
+    spy = QSignalSpy(page.action_requested)
+    page.feature_controls[0][0].click()
+    assert spy.at(0)[0].id == "server.homelab.up"
+    page.feature_controls[1][0].click()
+    assert spy.at(1)[0].id == "server.homelab.up-tailscale"
+    assert len(page.feature_controls) == 2
+    page.shortcut_buttons["homelab.backup"].click()
+    assert spy.at(2)[0].id == "homelab.backup"
