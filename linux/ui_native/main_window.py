@@ -7,7 +7,6 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, QTimer, Qt, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QTextCursor
 from PySide6.QtWidgets import (
-    QCheckBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -43,6 +42,7 @@ from .widgets import (
     PreviewDialog,
     ProgressDialog,
     ResultDialog,
+    SwitchControl,
     Toast,
     themed_icon,
 )
@@ -201,8 +201,12 @@ class MainWindow(QMainWindow):
         self.search.setAccessibleName("Busca de ações")
         self.search.textChanged.connect(self.on_search)
         top.addWidget(self.search)
-        self.mode_switch = QCheckBox("Modo avançado")
+        mode_label = QLabel("Modo avançado")
+        mode_label.setObjectName("modeSwitchLabel")
+        top.addWidget(mode_label)
+        self.mode_switch = SwitchControl()
         self.mode_switch.setObjectName("modeSwitch")
+        self.mode_switch.setAccessibleName("Modo avançado")
         self.mode_switch.setToolTip("Revela comandos, logs e operações técnicas")
         self.mode_switch.setAccessibleDescription(
             "Desativado por padrão. Ative para mostrar comandos, logs e ações avançadas."
@@ -614,6 +618,7 @@ class MainWindow(QMainWindow):
                 except ValueError as exc:
                     self._action_queue.clear()
                     QMessageBox.warning(self, "Preview não aplicável", str(exc))
+                    self._cancel_page_pending_action(action.id)
                     self.pending_action = None
                     self.pending_values = {}
                     return
@@ -624,6 +629,7 @@ class MainWindow(QMainWindow):
                 except (ValueError, RuntimeError) as exc:
                     self._action_queue.clear()
                     QMessageBox.warning(self, "Não foi possível iniciar", str(exc))
+            self._cancel_page_pending_action(action.id)
             self._action_queue.clear()
         else:
             formatted = self._format_result(result)
@@ -704,7 +710,14 @@ class MainWindow(QMainWindow):
         self.elapsed_label.clear()
         self._failure_count += 1
         self._update_failure_summary()
+        if self.pending_action is not None:
+            self._cancel_page_pending_action(self.pending_action.id)
         QMessageBox.critical(self, "Falha ao iniciar", message)
+
+    def _cancel_page_pending_action(self, action_id: str) -> None:
+        page = self.registry.page_for(self.current_category)
+        if page is not None:
+            page.cancel_pending_action(action_id)
 
     def _update_elapsed(self, *, final: bool = False) -> None:
         if self._operation_started_at is None:

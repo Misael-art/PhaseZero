@@ -136,23 +136,10 @@ QMainWindow {
     border: 1px solid {{accent}};
     background: {{surface_alt}};
 }
-#modeSwitch {
+#modeSwitchLabel {
     color: {{text_dim}};
-    spacing: {{space_sm}}px;
-    padding: 0 {{space_sm}}px;
     font-size: {{text_sm}}px;
     font-weight: 650;
-}
-#modeSwitch::indicator {
-    width: 36px;
-    height: 20px;
-    border-radius: 10px;
-    background: {{surface_disabled}};
-    border: 1px solid {{border_strong}};
-}
-#modeSwitch::indicator:checked {
-    background: {{accent}};
-    border-color: {{accent_hover}};
 }
 QScrollArea, QScrollArea > QWidget > QWidget {
     background: transparent;
@@ -647,6 +634,11 @@ QProgressBar::chunk {
 QDialog {
     color: {{text}};
     background: {{bg}};
+}
+#windowsInstallDialog, #provisionPlayerWindow {
+    color: {{text}};
+    background-color: {{bg}};
+    border: 1px solid {{border_strong}};
 }
 QTreeWidget {
     color: {{text_log}};

@@ -59,6 +59,10 @@ class BasePage(QWidget):
     def block_while_running(self, running: bool) -> None:
         pass
 
+    def cancel_pending_action(self, _action_id: str) -> None:
+        """Restore optimistic controls when a preview is rejected or cannot start."""
+        pass
+
     def set_advanced_mode(self, enabled: bool) -> None:
         self._advanced_mode = bool(enabled)
         for panel in self._advanced_panels:

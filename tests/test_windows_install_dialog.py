@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItemModel
 from PySide6.QtWidgets import QApplication
 
@@ -29,6 +30,9 @@ def test_completed_indices_only_include_finished_operations(tmp_path: Path) -> N
 
 def test_dialog_limits_editions_and_disables_used_index(qapp) -> None:
     dialog = WindowsInstallDialog(used_indices={2, 7})
+    assert dialog.isWindow()
+    assert dialog.testAttribute(Qt.WA_StyledBackground)
+    assert dialog.autoFillBackground()
     assert dialog.edition_combo.count() == 10
     model = dialog.edition_combo.model()
     assert isinstance(model, QStandardItemModel)

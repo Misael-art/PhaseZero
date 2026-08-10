@@ -82,13 +82,14 @@ def test_windows_vm_page_translates_status_json_into_visual_controls(ws_page):
     page._on_status_ready("windows.status", "", {
         "config": {"installed": True},
         "vm": {
-            "diskExists": True, "ramMb": 10240, "cpus": 7,
+            "diskExists": True, "installedLike": True, "ramMb": 10240, "cpus": 7,
             "graphicsProfile": "virtio-gl",
         },
         "libvirt": {"state": "running"},
         "host": {"qemu": "/usr/bin/qemu-system-x86_64"},
         "access": {
-            "shareLinksReady": True, "sambaReachable": False,
+            "shareLinksReady": True, "sambaManaged": True,
+            "sambaPolicyCompliant": True, "sambaReachable": True,
             "usbRedirChannels": 2, "usbUdevManaged": True,
         },
     })
@@ -120,14 +121,49 @@ def test_windows_vm_primary_actions_are_ordered_and_launch_requires_disk(ws_page
 def test_windows_integration_toggle_dispatches_real_reverse_action(ws_page):
     page, _actions = ws_page
     page._on_status_ready("windows.status", "", {
-        "config": {"installed": True}, "vm": {"diskExists": True, "graphicsProfile": "compat"},
+        "config": {"installed": True}, "vm": {"diskExists": True, "installedLike": True, "graphicsProfile": "compat"},
         "libvirt": {"state": "shut off"}, "host": {"qemu": "/usr/bin/qemu"},
-        "access": {"shareLinksReady": True, "usbUdevManaged": False},
+        "access": {
+            "shareLinksReady": True, "sambaManaged": True,
+            "sambaPolicyCompliant": True, "sambaReachable": True,
+            "usbUdevManaged": False,
+        },
     })
     spy = QSignalSpy(page.action_requested)
     page.share_toggle.click()
-    assert page.share_toggle.isChecked()  # authoritative state changes only after refresh
+    assert not page.share_toggle.isChecked()
+    assert page.share_toggle.property("pending") is True
+    assert not page.share_toggle.isEnabled()
+    assert page.share_toggle.accessibleDescription() == "Desligado"
     assert spy.at(0)[0].id == "windows.shares.disable"
+    page.cancel_pending_action("windows.shares.disable")
+    assert page.share_toggle.isChecked()
+    assert page.share_toggle.property("pending") is False
+    assert page.share_toggle.isEnabled()
+
+
+def test_windows_vm_blocks_blank_disk_and_surfaces_stale_boot(ws_page):
+    page, _actions = ws_page
+    page._on_status_ready("windows.status", "", {
+        "status": "needsinstall",
+        "health": {
+            "readyToLaunch": False,
+            "findings": [
+                {"id": "guest-not-installed"},
+                {"id": "boot-runtime-stale"},
+            ],
+        },
+        "config": {"installed": True},
+        "vm": {"diskExists": True, "installedLike": False},
+        "libvirt": {"state": "missing"},
+        "host": {"qemu": "/usr/bin/qemu"},
+        "access": {},
+        "boot": {"bootRuntimeStale": True},
+    })
+    assert page.state_label.text() == "● Instalação incompleta"
+    assert not page.power_button.isEnabled()
+    assert "conclua a instalação" in page.maintenance_health.text()
+    assert not page.repair_boot_button.isHidden()
 
 
 def test_windows_vm_page_uses_safe_shutdown_action(ws_page):
