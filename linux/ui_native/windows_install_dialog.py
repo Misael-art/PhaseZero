@@ -48,7 +48,10 @@ class WindowsInstallDialog(QDialog):
     """Collect the complete install contract before the provision player opens."""
 
     def __init__(self, parent: QWidget | None = None, *, used_indices: set[int] | None = None) -> None:
-        super().__init__(parent)
+        super().__init__(parent, Qt.Dialog)
+        self.setObjectName("windowsInstallDialog")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAutoFillBackground(True)
         self.setWindowTitle("Instalar Windows automaticamente")
         self.setWindowModality(Qt.WindowModal)
         self.setMinimumWidth(620)
@@ -131,10 +134,13 @@ class WindowsInstallDialog(QDialog):
 
         self.buttons = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
         install = self.buttons.button(QDialogButtonBox.Ok)
+        cancel = self.buttons.button(QDialogButtonBox.Cancel)
         if install:
             install.setText("Instalar automaticamente")
             install.setObjectName("primaryButton")
             install.setEnabled(first_available >= 0)
+        if cancel:
+            cancel.setText("Cancelar")
         self.buttons.accepted.connect(self._accept_if_valid)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)

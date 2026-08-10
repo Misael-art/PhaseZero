@@ -8,7 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PySide6.QtCore import QObject, QTimer, QProcess
+from PySide6.QtCore import QObject, QTimer, QProcess, Qt
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -299,6 +299,9 @@ def test_close_aborts_worker(qapp, fake_pz: Path) -> None:
 def test_player_hides_technical_log_until_requested(qapp) -> None:
     _cleanup_player()
     win = ProvisionPlayerWindow(ROOT, MagicMock(), None, iso="/fake.iso")
+    assert win.isWindow()
+    assert win.testAttribute(Qt.WA_StyledBackground)
+    assert win.autoFillBackground()
     assert win._log_frame.isHidden()
     assert win._details_btn.text() == "Ver detalhes técnicos"
     win._details_btn.click()

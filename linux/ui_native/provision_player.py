@@ -371,7 +371,7 @@ class StepIndicator(QWidget):
                 lbl.setStyleSheet("color: #666; font-size: 10px;")
 
 
-class ProvisionPlayerWindow(QWidget):
+class ProvisionPlayerWindow(QDialog):
     _instance: ProvisionPlayerWindow | None = None
 
     @classmethod
@@ -396,7 +396,10 @@ class ProvisionPlayerWindow(QWidget):
                  iso: str = "", graphics: str = "compat",
                  image_index: str = "1", guest_login: str = "auto", recovery: bool = True,
                  recovery_local_only: bool = True) -> None:
-        super().__init__(parent)
+        super().__init__(parent, Qt.Window)
+        self.setObjectName("provisionPlayerWindow")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self.setAutoFillBackground(True)
         self._root = root
         self._runner = runner
         self._iso = ""
