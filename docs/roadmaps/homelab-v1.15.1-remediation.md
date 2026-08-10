@@ -530,6 +530,8 @@ sem evidência.
 | Pacote host | `phasezero-control-center 1.15.5-1` instalado via `phasezero-admin pacman -U`; pacote Arch SHA-256 validado | `pacman -Q`, `sha256sum -c`, import UI | 2026-08-10 |
 | Boot direto Windows | runtime em `/usr/local/lib/phasezero/windows-vm-runtime` permanece `stale`; nenhuma mutação de boot executada nesta release | `pz windows-vm boot runtime-check` | 2026-08-10 |
 | Recuperação do Player Windows | branch `codex/windows-provision-state-recovery`; estado órfão é validado, preservado para diagnóstico e substituído por nova jornada acionável | pytest 441 + 9; Player 38/38; descarte/recuperação 6 rodadas; shell Windows exit 0 | 2026-08-10 |
+| Latest release | `v1.15.6` publicada com 7 assets; workflow `31419021099` success | `gh release view`, `SHA256SUMS-1.15.6` | 2026-08-10 |
+| Pacote host | `phasezero-control-center 1.15.6-1` instalado; estado sintético `op-test` movido para quarentena e Player retorna a `idle` | `pacman -Q`, import/instanciação UI instalada, arquivo de quarentena | 2026-08-10 |
 
 ## Ledger de execução
 
@@ -565,6 +567,7 @@ Prova release: workflow `31258447568` success; assets em `gh release view v1.15.
 | 2026-08-10 | Codex | `codex/ui-state-feedback` (`/tmp/pz-ui-state-feedback`) | HL-UI-002: feedback de estado, opacidade e saúde Windows | `4fb2e5c`, `80a30d9`, `d9f09c5` | pytest 437 + 9; 63 testes focados; `tests/linux-windows-vm.sh` exit 0; bash -n; ShellCheck; QA offscreen | Toggles mostram Ligado/Desligado/Aplicando e restauram cancelamento; player virou QDialog opaco; status real reporta `needsinstall`, `guest-not-installed` e `boot-runtime-stale`; sem push/release/install nesta sessão. |
 | 2026-08-10 | Codex | `main` + `codex/ui-state-feedback` | HL-UI-002: merge, release e pacote | PR #50 (`f0d88fe`); release `9b0e6e3`, tag `v1.15.5` | CI PR `31374802265` + `31374785566` success; release `31377411747` success; `SHA256SUMS-1.15.5` Arch OK; import UI OK | Host atualizado para `1.15.5-1`. WinVM reporta `needsinstall` por disco ainda não inicializável e runtime de boot direto `stale`; nenhuma mudança em VM, GRUB ou runtime de boot. |
 | 2026-08-10 | Codex | `codex/windows-provision-state-recovery` (`/tmp/pz-windows-state-recovery`) | HL-UI-002: recuperação de sessão órfã | `9a88e75` | pytest 441 + 9; Player 38/38; descarte/recuperação 6/6; `tests/linux-windows-vm.sh` exit 0; diff-check | `op-test` sintético não bloqueia nova instalação; registro órfão é preservado; erro backend fica acionável; lifecycle de testes fecha todas as janelas. Próximo: PR/release/instalação após CI. |
+| 2026-08-10 | Codex | `main` + `codex/windows-provision-state-recovery` | HL-UI-002: merge, release e recuperação no host | PR #51 (`4197d6e`); release `33c6311`, tag `v1.15.6` | CI PR `31416105858` success; release `31419021099` success; Arch SHA-256 OK; UI instalada retorna `idle`/start visível | Host em `1.15.6-1`; `player.json` órfão preservado como `player.orphaned-20260810T191226218069Z.json`; status `needsinstall`, sem iniciar VM. Boot runtime continua `stale` e exige autorização administrativa separada. |
 
 ## Formato obrigatório de handoff
 
