@@ -24,6 +24,7 @@ CATEGORIES = (
     ("Roteamento IA", "network-transmit-receive", "Rotas por tarefa, política e cota"),
     ("Aplicativos", "applications-other", "Web apps, jogos e menus do desktop"),
     ("Ajustes", "preferences-system", "Gaming, navegador e desenvolvimento"),
+    ("Temas", "preferences-desktop-theme", "Tema, acessibilidade e conforto visual"),
     ("Resultados", "text-x-log", "Histórico local de operações"),
 )
 
@@ -36,7 +37,7 @@ SIDEBAR_GROUPS = (
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
     ("IA & Dev", ("IA & Dev", "Proxies IA", "Roteamento IA")),
-    ("Desktop", ("Aplicativos",)),
+    ("Desktop", ("Aplicativos", "Temas")),
     ("Histórico", ("Resultados",)),
 )
 
@@ -102,6 +103,7 @@ def _a(
     preview_bindings: tuple[tuple[str, str], ...] = (),
     result_view: str = "auto",
     stdin_parameter: str = "",
+    status_args: tuple[str, ...] | None = None,
 ) -> ActionSpec:
     if mutable and preview is None:
         raise ValueError(f"mutable action lacks safe preview: {action_id}")
@@ -144,7 +146,7 @@ def _a(
         visibility=inferred_visibility,
         platforms=platforms,
         risk=inferred_risk,
-        status_args=preview if mutable else args,
+        status_args=status_args or (preview if mutable else args),
         parameters=inferred_parameters,
         preview_bindings=preview_bindings,
         result_view=result_view,
@@ -1033,6 +1035,99 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 badge="Preview" if preview else "",
             )
         )
+    # "Temas" page: appearance + accessibility with plan/preview/apply
+    # bindings (the CLI emits {id, confirmToken}; apply consumes both).
+    _themes_features = (
+        ("theme.phasezero", "Tema PhaseZero", "Tema padrão com persistência no PhaseZero."),
+        ("theme.kde", "Tema global KDE", "Look and feel do Plasma."),
+        ("theme.colorscheme", "Esquema de cores", "Colorscheme ativo do KDE."),
+        ("theme.icons", "Ícones", "Tema de ícones do KDE."),
+        ("theme.cursor", "Cursor", "Tema e tamanho do cursor."),
+        ("theme.accent", "Cor de destaque", "Accent color extraído do wallpaper ou explícito."),
+        ("theme.auto-dark", "Alternância claro/escuro", "Esquema escuro automático do KDE."),
+        ("theme.night-color", "Night Color", "Luz noturna por horário."),
+        ("access.text-size", "Texto maior", "Escala de texto em percentual (50–300)."),
+        ("access.reduce-motion", "Movimento reduzido", "Reduz animações do KWin e do KDE."),
+        ("access.locate-cursor", "Localizar cursor", "Busca visual do cursor ao digitar."),
+        ("access.zoom", "Zoom", "Efeito de zoom do KWin."),
+        ("access.colorblind", "Filtro de daltonismo", "Correção protanopia/deuteranopia/tritanopia/achromatopsia."),
+        ("access.visual-alert", "Alerta visual", "Sino visível em vez de beep."),
+        ("access.screen-reader", "Leitor de tela", "Orca iniciado na sessão."),
+        ("access.sticky-keys", "Teclas aderentes", "Modificadores permanecem pressionados."),
+        ("access.slow-keys", "Teclas lentas", "Aceita teclas mantidas por um instante."),
+        ("access.bounce-keys", "Teclas de repercussão", "Ignora toques repetidos."),
+        ("power.adaptive", "Animações adaptativas", "Pausa animações em bateria."),
+        ("power.pause-on-game", "Pausar em jogos", "Pausa animações durante Game Mode."),
+    )
+    for feature_id, title, description in _themes_features:
+        for state, state_label in (("on", "Ativar"), ("off", "Desativar")):
+            actions.append(
+                _a(
+                    f"themes.feature.{feature_id}.{state}",
+                    "Temas",
+                    f"{title} — {state_label}",
+                    description,
+                    ("themes", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}"),
+                    "preferences-desktop-theme",
+                    mutable=True,
+                    preview=("themes", "plan", "--feature", feature_id, "--state", state),
+                    preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
+                    badge="Preview" if state == "on" else "Reversível",
+                    keywords=(feature_id, state),
+                )
+            )
+    _themes_profiles = (
+        ("essencial", "Perfil Essencial", "Segue o sistema, texto 110%, foco reforçado e movimento reduzido."),
+        ("steam-deck", "Perfil Steam Deck", "Game Mode, botões acessíveis e pausa de animações em jogos."),
+        ("gamer", "Perfil Gamer", "Conforto visual e redução de distração durante partidas."),
+        ("desenvolvedor", "Perfil Desenvolvedor", "Alto contraste, texto maior e leitor de tela opcional."),
+    )
+    for profile_id, title, description in _themes_profiles:
+        actions.append(
+            _a(
+                f"themes.profile.{profile_id}",
+                "Temas",
+                title,
+                description,
+                ("themes", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}"),
+                "package-x-generic",
+                mutable=True,
+                preview=("themes", "plan", "--profile", profile_id),
+                preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
+                badge="Preview",
+                keywords=(profile_id,),
+            )
+        )
+    _themes_wallpapers = (
+        ("pz.geo-dark", "PhaseZero Geo (escuro)", "Wallpaper vetorial CC0 do PhaseZero."),
+        ("pz.aurora", "PhaseZero Aurora", "Wallpaper vetorial CC0 do PhaseZero."),
+        ("pz.solid-charcoal", "PhaseZero Carvão (sólido)", "Cor sólida com visual discreto."),
+    )
+    for wallpaper_id, title, description in _themes_wallpapers:
+        actions.append(
+            _a(
+                f"themes.wallpaper.{wallpaper_id}",
+                "Temas",
+                title,
+                description,
+                ("themes", "apply", "--plan-id", "{plan_id}", "--confirm", "{confirm}"),
+                "image-x-generic",
+                mutable=True,
+                preview=("themes", "plan", "--wallpaper", wallpaper_id, "--screen", "0", "--target", "desktop"),
+                preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
+                badge="Preview",
+                keywords=(wallpaper_id, "wallpaper"),
+            )
+        )
+    actions.extend(
+        [
+            _a("themes.status", "Temas", "Status de temas", "Estado efetivo da sessão: features, Plasma, bateria e wallpapers.", ("themes", "status"), "preferences-desktop-theme", badge="JSON", group="Temas", visibility="primary", status_args=("themes", "status")),
+            _a("themes.catalog", "Temas", "Catálogo avaliado", "Features, perfis, wallpapers, extensões KDE e plugins Steam.", ("themes", "catalog"), "view-list-tree", badge="JSON", group="Temas"),
+            _a("themes.history", "Temas", "Histórico de operações", "Últimas operações e rollbacks aplicados.", ("themes", "history"), "document-edit-history", badge="JSON", group="Temas"),
+            _a("themes.undo", "Temas", "Desfazer última alteração", "Restaura o snapshot mais recente byte a byte.", ("themes", "rollback"), "edit-undo", mutable=True, preview=("themes", "history"), badge="Reversível", group="Temas"),
+            _a("themes.rescue-wallpaper", "Temas", "Restaurar wallpaper (crash)", "Restaura wallpaper estático após crash do Plasma.", ("themes", "rescue-wallpaper"), "view-refresh", badge="Recuperação", group="Temas"),
+        ]
+    )
     actions.append(
         _a(
             "ai.routing-rollback",

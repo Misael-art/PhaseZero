@@ -898,3 +898,33 @@ def _load_plan(plan_id: str) -> dict:
     if state.expired(plan, PLAN_TTL_SECONDS):
         raise ThemesError("plano expirado; gere um novo")
     return plan
+
+
+def history_payload(limit: int = 15) -> dict:
+    """Últimas operações e rollbacks, da mais recente para a mais antiga."""
+    directory = state.root() / "operations"
+    if not directory.is_dir():
+        return {"schema": SCHEMA, "operations": []}
+    records = []
+    for path in sorted(directory.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            record = state.load("operations", path.stem)
+        except ValueError:
+            continue
+        feature_ids = [
+            result.get("featureId", result.get("wallpaperId", ""))
+            for result in record.get("results", ())
+            if result.get("featureId") or result.get("wallpaperId")
+        ]
+        records.append({
+            "operationId": record.get("id"),
+            "planId": record.get("planId", ""),
+            "snapshotId": record.get("snapshotId", ""),
+            "createdAt": record.get("createdAt", 0),
+            "status": record.get("status", ""),
+            "restored": bool(record.get("restored")),
+            "features": feature_ids,
+        })
+        if len(records) >= limit:
+            break
+    return {"schema": SCHEMA, "operations": records}

@@ -203,5 +203,43 @@ def test_overview_status_contains_every_module(ui_server):
     )
     assert status_code == 200
     data = json.loads(payload)
-    assert tuple(data) == ("system", "steamdeck", "emulation", "server", "ai")
+    assert tuple(data) == ("system", "steamdeck", "emulation", "server", "ai", "themes")
     assert all(value["module"] == key for key, value in data.items())
+
+
+def test_themes_module_status_returns_envelope(ui_server):
+    status_code, _, payload = request(
+        ui_server, "GET", "/api/status/themes", headers=auth_headers(ui_server),
+    )
+    assert status_code == 200
+    data = json.loads(payload)
+    assert data["module"] == "themes"
+    assert data["status"] in ("ok", "warn")
+    names = [check["name"] for check in data["checks"]]
+    assert "themes.plasma" in names
+    assert "themes.theme.phasezero" in names
+    assert "themes.access.text-size" in names
+
+
+def test_themes_actions_present_in_allowlist(ui_server):
+    status_code, _, payload = request(
+        ui_server, "GET", "/api/actions", headers=auth_headers(ui_server),
+    )
+    assert status_code == 200
+    names = {entry["name"] for entry in json.loads(payload)["actions"]}
+    for required in (
+        "themes.status", "themes.undo", "themes.history",
+        "themes.feature.access.text-size.on", "themes.profile.essencial",
+        "themes.wallpaper.pz.geo-dark",
+    ):
+        assert required in names, required
+
+
+def test_dashboard_html_contains_themes_section(ui_server):
+    status_code, _, payload = request(
+        ui_server, "GET", "/", headers=auth_headers(ui_server),
+    )
+    assert status_code == 200
+    html = payload.decode("utf-8", errors="replace")
+    assert 'id="themes"' in html
+    assert 'href="#themes"' in html

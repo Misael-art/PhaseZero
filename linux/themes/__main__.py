@@ -18,6 +18,7 @@ from .engine import (
     apply_plan,
     catalog_payload,
     create_plan,
+    history_payload,
     preview_plan,
     rescue_wallpaper,
     rollback_snapshot,
@@ -63,6 +64,9 @@ def _parser() -> argparse.ArgumentParser:
 
     commands.add_parser("rescue-wallpaper", help="Restaura wallpaper estático após crash.")
 
+    history = commands.add_parser("history", help="Histórico de operações.")
+    history.add_argument("--limit", type=int, default=15)
+
     return parser
 
 
@@ -104,6 +108,8 @@ def main(argv: list[str] | None = None) -> int:
             return _emit(rollback_snapshot(args.snapshot))
         if args.command == "rescue-wallpaper":
             return _emit(rescue_wallpaper())
+        if args.command == "history":
+            return _emit(history_payload(limit=args.limit))
         return _fail(SCHEMA, "comando desconhecido", 2)  # pragma: no cover
     except ThemesError as exc:
         return _fail(SCHEMA, str(exc), 2)
