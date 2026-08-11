@@ -532,6 +532,10 @@ sem evidência.
 | Recuperação do Player Windows | branch `codex/windows-provision-state-recovery`; estado órfão é validado, preservado para diagnóstico e substituído por nova jornada acionável | pytest 441 + 9; Player 38/38; descarte/recuperação 6 rodadas; shell Windows exit 0 | 2026-08-10 |
 | Latest release | `v1.15.6` publicada com 7 assets; workflow `31419021099` success | `gh release view`, `SHA256SUMS-1.15.6` | 2026-08-10 |
 | Pacote host | `phasezero-control-center 1.15.6-1` instalado; estado sintético `op-test` movido para quarentena e Player retorna a `idle` | `pacman -Q`, import/instanciação UI instalada, arquivo de quarentena | 2026-08-10 |
+| Status Windows VM | PR #52 mergeada em `98d8419`; status configurado evita descoberta exaustiva, sonda Samba é limitada, timeout UI específico é 45 s e cabeçalho exibe a versão | pytest 444 + 9; shell Windows; CI PR `31452172396` e `31452241293` success; 5 sondas host | 2026-08-11 |
+| Latest release | `v1.15.7` publicada com 7 assets; workflow `31454088820` success | `gh release view`, `SHA256SUMS-1.15.7` 7/7 | 2026-08-11 |
+| Pacote host | `phasezero-control-center 1.15.7-1` instalado; Qt retorna `needsinstall` e barra mostra `PhaseZero v1.15.7` | `pacman -Q`, `pz --version`, StatusLoader/UI offscreen instalada | 2026-08-11 |
+| Boot direto Windows | runtime em `/usr/local/lib/phasezero/windows-vm-runtime` permanece `stale`; pacote não alterou GRUB nem runtime de boot | `pz windows-vm boot runtime-check` | 2026-08-11 |
 
 ## Ledger de execução
 
@@ -568,6 +572,7 @@ Prova release: workflow `31258447568` success; assets em `gh release view v1.15.
 | 2026-08-10 | Codex | `main` + `codex/ui-state-feedback` | HL-UI-002: merge, release e pacote | PR #50 (`f0d88fe`); release `9b0e6e3`, tag `v1.15.5` | CI PR `31374802265` + `31374785566` success; release `31377411747` success; `SHA256SUMS-1.15.5` Arch OK; import UI OK | Host atualizado para `1.15.5-1`. WinVM reporta `needsinstall` por disco ainda não inicializável e runtime de boot direto `stale`; nenhuma mudança em VM, GRUB ou runtime de boot. |
 | 2026-08-10 | Codex | `codex/windows-provision-state-recovery` (`/tmp/pz-windows-state-recovery`) | HL-UI-002: recuperação de sessão órfã | `9a88e75` | pytest 441 + 9; Player 38/38; descarte/recuperação 6/6; `tests/linux-windows-vm.sh` exit 0; diff-check | `op-test` sintético não bloqueia nova instalação; registro órfão é preservado; erro backend fica acionável; lifecycle de testes fecha todas as janelas. Próximo: PR/release/instalação após CI. |
 | 2026-08-10 | Codex | `main` + `codex/windows-provision-state-recovery` | HL-UI-002: merge, release e recuperação no host | PR #51 (`4197d6e`); release `33c6311`, tag `v1.15.6` | CI PR `31416105858` success; release `31419021099` success; Arch SHA-256 OK; UI instalada retorna `idle`/start visível | Host em `1.15.6-1`; `player.json` órfão preservado como `player.orphaned-20260810T191226218069Z.json`; status `needsinstall`, sem iniciar VM. Boot runtime continua `stale` e exige autorização administrativa separada. |
+| 2026-08-11 | Codex | `codex/windows-status-version` (`/tmp/pz-windows-status-version`) + `main` | HL-UI-002: status Windows resiliente, versão visível e release | `5cef80b`; PR #52 (`98d8419`); release `2e6e482`, tag `v1.15.7` | pytest 444 + 9; Windows shell; CI PR duplicada verde; CI main `31454086764`; release `31454088820`; checksums 7/7; Qt instalada `ready/needsinstall` | Host atualizado para `1.15.7-1`; falso `Estado indisponível` removido, RAM/CPU carregadas e cabeçalho mostra `PhaseZero v1.15.7`. Disco segue legitimamente `needsinstall`; boot runtime continua `stale`, sem mutação de GRUB/VM. |
 
 ## Formato obrigatório de handoff
 
