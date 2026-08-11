@@ -33,7 +33,7 @@ MAX_BODY_BYTES = 64 * 1024
 MAX_LOG_CHARS = 2 * 1024 * 1024
 STATUS_TIMEOUT = 30
 ACTION_TIMEOUT = 30 * 60
-MODULES = ("system", "steamdeck", "emulation", "server", "ai")
+MODULES = ("system", "steamdeck", "emulation", "server", "ai", "themes")
 ACTION_LOCK = threading.Lock()
 
 
@@ -263,6 +263,39 @@ def run_module_status(module):
             checks.append({"name": "casaos.status", "status": "warn", "message": err[:160] or "failed"})
         status = "ok" if all(c.get("status") in ("ok", "running") for c in checks) else "warn"
         return build_envelope("server", status, checks=checks)
+    elif module == "themes":
+        ok, out, err = run_bash([sys.executable, "-m", "linux.themes", "status", "--json"], timeout=STATUS_TIMEOUT)
+        checks = []
+        if ok and out.strip():
+            try:
+                payload = json.loads(out)
+                plasma = payload.get("plasma", {})
+                checks.append({
+                    "name": "themes.plasma",
+                    "status": "ok" if plasma.get("compatible") else "blocked",
+                    "message": f"Plasma {plasma.get('major', '—')} · {plasma.get('session', '—')} · KWin {'sim' if plasma.get('kwin') else 'não'}",
+                })
+                hero = payload.get("hero", {})
+                checks.append({
+                    "name": "themes.wallpaper",
+                    "status": "ok",
+                    "message": str(hero.get("wallpaper", {}).get("file", "") or "—") if isinstance(hero.get("wallpaper"), dict) else "—",
+                })
+                for feature_id, entry in payload.get("features", {}).items():
+                    state = entry.get("state", "indisponivel")
+                    status = {"ligado": "ok", "pausado-bateria": "ok", "pausado-jogo": "ok", "desligado": "warn"}.get(state, "warn")
+                    reason = entry.get("reason", "")
+                    checks.append({
+                        "name": f"themes.{feature_id}",
+                        "status": "blocked" if state == "indisponivel" else status,
+                        "message": reason or state,
+                    })
+            except json.JSONDecodeError:
+                checks.append({"name": "themes.status", "status": "warn", "message": "json parse error"})
+        else:
+            checks.append({"name": "themes.status", "status": "warn", "message": (err or "failed")[:160]})
+        status = "ok" if checks and all(c.get("status") in ("ok",) for c in checks) else "warn"
+        return build_envelope("themes", status, checks=checks)
     else:
         return build_envelope(module, "warn", checks=[{"name": "unknown", "status": "warn", "message": f"unknown module: {module}"}])
 

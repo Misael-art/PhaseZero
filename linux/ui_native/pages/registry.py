@@ -18,6 +18,7 @@ from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
 from .windows_vm import WindowsVmPage
 from .service_control import ServerPage, WaydroidPage
+from .themes import ThemesPage
 
 
 class PageRegistry:
@@ -53,6 +54,7 @@ class PageRegistry:
         "Roteamento IA": AiRoutingPage,
         "Aplicativos": CatalogWorkspacePage,
         "Ajustes": TuningPage,
+        "Temas": ThemesPage,
         "Resultados": ResultsPage,
     }
 

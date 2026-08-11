@@ -83,6 +83,7 @@ def test_catalog_ids_and_commands_are_allowlisted(catalog):
             "webapp",
             "games",
             "ui",
+            "themes",
         "--internal-player",
         }
     for item in catalog:

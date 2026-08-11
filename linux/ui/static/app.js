@@ -120,7 +120,7 @@ function showPage(id) {
   });
   const loaders = {
     overview: loadOverview, steamdeck: loadSteamDeck, emulation: loadEmulation,
-    media: loadMedia, server: loadServer, ai: loadAI,
+    media: loadMedia, server: loadServer, ai: loadAI, themes: loadThemes,
     profiles: loadProfiles, doctor: loadDoctor,
   };
   loaders[page.id]?.();
@@ -159,6 +159,7 @@ function loadSteamDeck() { return loadModulePage('steamdeck-content', 'steamdeck
 function loadEmulation() { return loadModulePage('emulation-content', 'emulation', 'Emulação'); }
 function loadServer() { return loadModulePage('server-content', 'server', 'Servidor'); }
 function loadAI() { return loadModulePage('ai-content', 'ai', 'IA & Dev'); }
+function loadThemes() { return loadModulePage('themes-content', 'themes', 'Temas'); }
 
 async function loadMedia() {
   const container = document.getElementById('media-content');
