@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "windows-vm-graphics/v1",
+  "profiles": [
+    {
+      "id": "compat",
+      "label": "compat — máxima compatibilidade",
+      "helperText": "Funciona em qualquer host compatível com a VM. Usa QXL por software e não oferece aceleração 3D.",
+      "provisionSupported": true,
+      "applySupported": true,
+      "planSupported": true,
+      "mode": "stable"
+    },
+    {
+      "id": "virtio-gl",
+      "label": "virtio-gl — aceleração OpenGL",
+      "helperText": "Usa virtio-gl/virgl. Requer render node acessível, virtio-vga-gl no QEMU e virglrenderer no host.",
+      "provisionSupported": true,
+      "applySupported": true,
+      "planSupported": true,
+      "mode": "stable"
+    },
+    {
+      "id": "virtio-venus",
+      "label": "virtio-venus — experimental (somente plano)",
+      "helperText": "Somente plano experimental. A instalação automática permanece bloqueada até o pipeline Venus ser suportado e testado.",
+      "provisionSupported": false,
+      "applySupported": false,
+      "planSupported": true,
+      "mode": "experimental"
+    }
+  ]
+}

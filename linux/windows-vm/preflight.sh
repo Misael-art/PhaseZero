@@ -14,10 +14,11 @@ VIRTIO_PINNED_SHA="e14cf2b94492c3e925f0070ba7fdfedeb2048c91eea9c5a5afb30232a3976
 VIRTIO_LATEST=""
 VIRTIO_LATEST_URL=""
 VIRTIO_OUTDATED=false
-GRAPHICS_PROFILE=""
+GRAPHICS_PROFILE="compat"
 GRAPHICS_SUPPORTED=false
 GRAPHICS_FALLBACK="compat"
 GRAPHICS_FAILURES=()
+GRAPHICS_CONTRACT="${PZ_WINDOWS_VM_GRAPHICS_CONTRACT:-$PZ_ROOT/linux/windows-vm/graphics-profiles.json}"
 KVM_ACCESS=false
 OVMF_PRESENT=false
 RAM_MB=0
@@ -137,16 +138,11 @@ virtio_auto_fix() {
 graphics_check() {
     GRAPHICS_FAILURES=()
     local qemu_bin="${PZ_GFX_QEMU_BIN:-qemu-system-x86_64}"
+    local kvm_path="${PZ_GFX_KVM_PATH:-/dev/kvm}"
 
-    [ -e /dev/kvm ] || GRAPHICS_FAILURES+=("KVM not accessible")
+    [ -e "$kvm_path" ] || GRAPHICS_FAILURES+=("KVM not accessible")
 
-    local render_node=""
-    for node in /dev/dri/renderD*; do
-        [ -r "$node" ] && [ -w "$node" ] && { render_node="$node"; break; }
-    done
-    [ -n "$render_node" ] || GRAPHICS_FAILURES+=("no accessible render node")
-
-    [ -e /dev/kvm ] && KVM_ACCESS=true
+    [ -e "$kvm_path" ] && KVM_ACCESS=true
 
     if pz_path_resolve ovmf_code \
         /usr/share/edk2/x64/OVMF_CODE.4m.fd \
@@ -155,19 +151,57 @@ graphics_check() {
         OVMF_PRESENT=true
     fi
 
-    local has_virtio_vga_gl=false
-    if command -v "$qemu_bin" >/dev/null 2>&1; then
-        "$qemu_bin" -device help 2>/dev/null | grep 'virtio-vga-gl' >/dev/null && has_virtio_vga_gl=true
+    if ! jq -e '
+        .schemaVersion == "windows-vm-graphics/v1"
+        and (.profiles | type == "array")
+        and all(.profiles[]; (.id | type == "string") and (.provisionSupported | type == "boolean"))
+    ' "$GRAPHICS_CONTRACT" >/dev/null 2>&1; then
+        GRAPHICS_FAILURES+=("graphics contract missing or invalid")
+        GRAPHICS_SUPPORTED=false
+        return 0
     fi
-    $has_virtio_vga_gl || GRAPHICS_FAILURES+=("QEMU lacks virtio-vga-gl device")
-
-    local virgl_ok=false
-    ldconfig -p 2>/dev/null | grep 'virglrenderer' >/dev/null && virgl_ok=true
-    $virgl_ok || GRAPHICS_FAILURES+=("virglrenderer library not found")
-
-    if [ -e /dev/kvm ] && [ -n "$render_node" ] && $has_virtio_vga_gl && $virgl_ok; then
-        GRAPHICS_SUPPORTED=true
+    if ! jq -e --arg profile "$GRAPHICS_PROFILE" \
+        '.profiles[] | select(.id == $profile and .provisionSupported == true)' \
+        "$GRAPHICS_CONTRACT" >/dev/null 2>&1; then
+        GRAPHICS_FAILURES+=("profile $GRAPHICS_PROFILE is not supported by automated provisioning")
+        GRAPHICS_SUPPORTED=false
+        return 0
     fi
+
+    case "$GRAPHICS_PROFILE" in
+        compat)
+            GRAPHICS_SUPPORTED=true
+            ;;
+        virtio-gl)
+            local render_node="${PZ_GFX_RENDER_NODE:-}"
+            if [ -z "$render_node" ]; then
+                for node in /dev/dri/renderD*; do
+                    [ -r "$node" ] && [ -w "$node" ] && { render_node="$node"; break; }
+                done
+            fi
+            [ -n "$render_node" ] || GRAPHICS_FAILURES+=("no accessible render node")
+
+            local has_virtio_vga_gl=false
+            if [ -n "${PZ_GFX_QEMU_VIRTIO_VGA_GL:-}" ]; then
+                [ "$PZ_GFX_QEMU_VIRTIO_VGA_GL" = "1" ] && has_virtio_vga_gl=true
+            elif command -v "$qemu_bin" >/dev/null 2>&1; then
+                "$qemu_bin" -device help 2>/dev/null | grep 'virtio-vga-gl' >/dev/null && has_virtio_vga_gl=true
+            fi
+            $has_virtio_vga_gl || GRAPHICS_FAILURES+=("QEMU lacks virtio-vga-gl device")
+
+            local virgl_ok=false
+            if [ -n "${PZ_GFX_VIRGL_PRESENT:-}" ]; then
+                [ "$PZ_GFX_VIRGL_PRESENT" = "1" ] && virgl_ok=true
+            else
+                ldconfig -p 2>/dev/null | grep 'virglrenderer' >/dev/null && virgl_ok=true
+            fi
+            $virgl_ok || GRAPHICS_FAILURES+=("virglrenderer library not found")
+
+            if [ -e "$kvm_path" ] && [ -n "$render_node" ] && $has_virtio_vga_gl && $virgl_ok; then
+                GRAPHICS_SUPPORTED=true
+            fi
+            ;;
+    esac
 }
 
 resource_check() {
@@ -187,6 +221,9 @@ emit_json() {
     if $VIRTIO_OUTDATED; then
         [ "$status" = "pass" ] && status="warn"
     fi
+    if ! $GRAPHICS_SUPPORTED; then
+        status="fail"
+    fi
 
     jq -n \
         --arg status "$status" \
@@ -199,7 +236,7 @@ emit_json() {
         --arg virtioLatest "${VIRTIO_LATEST:-$VIRTIO_PINNED}" \
         --argjson virtioOutdated "$VIRTIO_OUTDATED" \
         --arg virtioLatestUrl "${VIRTIO_LATEST_URL:-}" \
-        --arg graphicsProfile "${GRAPHICS_PROFILE:-virtio-venus}" \
+        --arg graphicsProfile "$GRAPHICS_PROFILE" \
         --argjson graphicsSupported "$GRAPHICS_SUPPORTED" \
         --arg graphicsFallback "$GRAPHICS_FALLBACK" \
         --argjson kvmAccess "$KVM_ACCESS" \
@@ -312,6 +349,8 @@ main() {
             --auto-fix) AUTO_FIX=true; shift ;;
             --json) JSON_OUT=true; shift ;;
             --watch) WATCH=true; shift ;;
+            --graphics) GRAPHICS_PROFILE="${2:-}"; shift 2 ;;
+            --graphics=*) GRAPHICS_PROFILE="${1#*=}"; shift ;;
             --interval) PZ_PREFLIGHT_WATCH_INTERVAL="${2:-60}"; shift 2 ;;
             *) pz_error "unknown preflight option: $1"; return 1 ;;
         esac
