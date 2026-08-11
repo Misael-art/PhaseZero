@@ -434,6 +434,92 @@ assert_eq "plan without --graphics defaults to compat" "compat" "$GFX_DEFAULT"
 rm -rf "$GFX_PLAN_DIR"
 
 echo ""
+echo "=== graphics: plan rejects non-provisionable profiles before persistence ==="
+GFX_REJECT_BASE="$(mktemp -d)"
+GFX_REJECT_DIR="$GFX_REJECT_BASE/phasezero"
+mkdir -p "$GFX_REJECT_DIR/windows-vm/provision/plans"
+mkdir -p "$GFX_REJECT_DIR/operations"
+GFX_REJECT_BEFORE="$(find "$GFX_REJECT_DIR/windows-vm/provision/plans" -type f | wc -l)"
+set +e
+GFX_VENUS_ERROR="$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" XDG_STATE_HOME="$GFX_REJECT_BASE" \
+    bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --graphics virtio-venus --json 2>&1)"
+GFX_VENUS_RC=$?
+GFX_CUSTOM_ERROR="$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" XDG_STATE_HOME="$GFX_REJECT_BASE" \
+    bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --graphics custom --json 2>&1)"
+GFX_CUSTOM_RC=$?
+set -e
+GFX_REJECT_AFTER="$(find "$GFX_REJECT_DIR/windows-vm/provision/plans" -type f | wc -l)"
+assert_eq "venus provision plan rejected" "1" "$GFX_VENUS_RC"
+assert_contains "venus rejection explains plan-only" "$GFX_VENUS_ERROR" "plan-only"
+assert_eq "custom provision plan rejected" "1" "$GFX_CUSTOM_RC"
+assert_contains "custom rejection lists supported profiles" "$GFX_CUSTOM_ERROR" "valid: compat, virtio-gl"
+assert_eq "invalid profiles create no plan/token" "$GFX_REJECT_BEFORE" "$GFX_REJECT_AFTER"
+
+echo ""
+echo "=== graphics: malformed contract fails closed ==="
+GFX_BAD_CONTRACT="$GFX_REJECT_DIR/bad-contract.json"
+printf '%s\n' '{"schemaVersion":"wrong","profiles":[]}' > "$GFX_BAD_CONTRACT"
+set +e
+GFX_BAD_ERROR="$(PZ_WINDOWS_VM_GRAPHICS_CONTRACT="$GFX_BAD_CONTRACT" PZ_TEST_MODE=1 \
+    PZ_PREFLIGHT_JSON="$PREFLIGHT_PASS_FIXTURE" XDG_STATE_HOME="$GFX_REJECT_BASE" \
+    bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --graphics compat --json 2>&1)"
+GFX_BAD_RC=$?
+set -e
+assert_eq "malformed graphics contract rejected" "1" "$GFX_BAD_RC"
+assert_contains "malformed graphics contract error" "$GFX_BAD_ERROR" "contract is missing or invalid"
+
+echo ""
+echo "=== graphics: start rejects stale Venus plan before operation creation ==="
+GFX_STALE_PLAN_DIR="$GFX_REJECT_DIR/windows-vm/provision/plans"
+cat > "$GFX_STALE_PLAN_DIR/stale-venus.json" <<'EOF'
+{"id":"stale-venus","confirmToken":"stale-token","graphics":"virtio-venus","blockers":[]}
+EOF
+set +e
+GFX_STALE_ERROR="$(XDG_STATE_HOME="$GFX_REJECT_BASE" bash "$PROVISION_SCRIPT" start \
+    --plan-id stale-venus --confirm stale-token --json 2>&1)"
+GFX_STALE_RC=$?
+set -e
+assert_eq "stale Venus plan rejected by start" "1" "$GFX_STALE_RC"
+assert_contains "stale Venus rejection is explicit" "$GFX_STALE_ERROR" "refusing stale plan"
+assert_eq "stale plan creates no operation" "0" "$(find "$GFX_REJECT_DIR/operations" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | wc -l)"
+rm -rf "$GFX_REJECT_BASE"
+
+echo ""
+echo "=== preflight: selected graphics profile is honest ==="
+PREFLIGHT_SCRIPT="$PZ_ROOT/linux/windows-vm/preflight.sh"
+GFX_PREFLIGHT_T="$(mktemp -d)"
+touch "$GFX_PREFLIGHT_T/kvm"
+GFX_PREFLIGHT_COMPAT="$(PZ_GFX_KVM_PATH="$GFX_PREFLIGHT_T/kvm" PZ_GFX_RENDER_NODE="" \
+    PZ_GFX_QEMU_VIRTIO_VGA_GL=0 PZ_GFX_VIRGL_PRESENT=0 \
+    bash "$PREFLIGHT_SCRIPT" --graphics compat --json 2>/dev/null)"
+assert_eq "compat preflight reports requested profile" "compat" "$(jq -r '.graphics.profile' <<< "$GFX_PREFLIGHT_COMPAT")"
+assert_eq "compat preflight ignores GL dependencies" "true" "$(jq -r '.graphics.supported' <<< "$GFX_PREFLIGHT_COMPAT")"
+GFX_PREFLIGHT_GL="$(PZ_GFX_KVM_PATH="$GFX_PREFLIGHT_T/kvm" PZ_GFX_RENDER_NODE="$GFX_PREFLIGHT_T/render" \
+    PZ_GFX_QEMU_VIRTIO_VGA_GL=1 PZ_GFX_VIRGL_PRESENT=1 \
+    bash "$PREFLIGHT_SCRIPT" --graphics virtio-gl --json 2>/dev/null)"
+assert_eq "virtio-gl preflight reports requested profile" "virtio-gl" "$(jq -r '.graphics.profile' <<< "$GFX_PREFLIGHT_GL")"
+assert_eq "virtio-gl preflight passes hermetic requirements" "true" "$(jq -r '.graphics.supported' <<< "$GFX_PREFLIGHT_GL")"
+GFX_PREFLIGHT_VENUS="$(PZ_GFX_KVM_PATH="$GFX_PREFLIGHT_T/kvm" \
+    bash "$PREFLIGHT_SCRIPT" --graphics virtio-venus --json 2>/dev/null)"
+assert_eq "Venus preflight preserves requested profile" "virtio-venus" "$(jq -r '.graphics.profile' <<< "$GFX_PREFLIGHT_VENUS")"
+assert_eq "Venus preflight refuses provisioning support" "false" "$(jq -r '.graphics.supported' <<< "$GFX_PREFLIGHT_VENUS")"
+assert_contains "Venus preflight explains provisioning boundary" \
+    "$(jq -r '.graphics.failures[]' <<< "$GFX_PREFLIGHT_VENUS")" "not supported by automated provisioning"
+rm -rf "$GFX_PREFLIGHT_T"
+
+echo ""
+echo "=== graphics: unsupported virtio-gl becomes a plan blocker ==="
+GFX_BLOCK_BASE="$(mktemp -d)"
+GFX_BLOCK_FIXTURE='{"status":"fail","swtpm":{"binary":true,"running":true},"virtio":{"outdated":false},"graphics":{"profile":"wrong","supported":false,"fallback":"compat","failures":["no render node"]}}'
+GFX_BLOCK_PLAN="$(PZ_TEST_MODE=1 PZ_PREFLIGHT_JSON="$GFX_BLOCK_FIXTURE" XDG_STATE_HOME="$GFX_BLOCK_BASE" \
+    bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --graphics virtio-gl --json 2>/dev/null)"
+assert_eq "plan preflight profile matches selection" "virtio-gl" "$(jq -r '.preflight.graphics.profile' <<< "$GFX_BLOCK_PLAN")"
+assert_eq "unsupported virtio-gl adds blocker" "1" "$(jq -r '.blockers | length' <<< "$GFX_BLOCK_PLAN")"
+assert_contains "virtio-gl blocker gives compat action" "$(jq -r '.blockers[]' <<< "$GFX_BLOCK_PLAN")" \
+    "Selecione Compatibilidade para continuar"
+rm -rf "$GFX_BLOCK_BASE"
+
+echo ""
 echo "=== graphics: preflight compat ==="
 GFX_COM_DIR="$(mktemp -d)"
 mkdir -p "$GFX_COM_DIR/gfx-test-compat"
@@ -679,7 +765,8 @@ assert_eq "QGA VirtIO GPU does not trigger WARN" "OK" "$VIRTIO_CHECK"
 
 echo ""
 echo "=== graphics: venus plan (experimental) ==="
-VENUS_PLAN=$(bash "$PZ_ROOT/linux/windows-vm/graphics.sh" plan --profile virtio-venus --json 2>/dev/null || echo '{}')
+VENUS_STATE="$(mktemp -d)"
+VENUS_PLAN=$(PZ_STATE="$VENUS_STATE" bash "$PZ_ROOT/linux/windows-vm/graphics.sh" plan --profile virtio-venus --json 2>/dev/null || echo '{}')
 VENUS_ELIGIBLE=$(jq -r '.eligible' <<< "$VENUS_PLAN")
 VENUS_MODE=$(jq -r '.mode' <<< "$VENUS_PLAN")
 VENUS_ALLOW=$(jq -r '.applyAllowed' <<< "$VENUS_PLAN")
@@ -690,6 +777,7 @@ assert_eq "venus apply blocked" "false" "$VENUS_ALLOW"
 assert_contains "venus notes mention Vulkan" "$VENUS_NOTES" "Vulkan"
 assert_contains "venus notes mention experimental" "$VENUS_NOTES" "EXPERIMENTAL"
 assert_contains "venus notes mention Deck" "$VENUS_NOTES" "Steam Deck"
+rm -rf "$VENUS_STATE"
 
 echo ""
 echo "=== preflight: JSON output structure ==="
