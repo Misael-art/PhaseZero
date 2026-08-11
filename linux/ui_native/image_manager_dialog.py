@@ -501,10 +501,12 @@ class ImageManagerDialog(QDialog):
     def _set_busy(self, busy: bool, message: str) -> None:
         self.progress.setVisible(busy)
         self.status_label.setText(message)
-        for button in (self.add_button, self.scan_button, self.play_button):
+        for button in (self.add_button, self.scan_button):
             button.setEnabled(not busy)
-        if not busy and self._current is not None:
-            self._set_actions_enabled(True)
+        # Never hand the primary button back unconditionally: leaving the
+        # dialog idle with nothing selected (a scan that found nothing) would
+        # show an enabled "Reproduzir" that does nothing when clicked.
+        self._set_actions_enabled(not busy and self._current is not None)
 
     # ----- add / scan -----
 

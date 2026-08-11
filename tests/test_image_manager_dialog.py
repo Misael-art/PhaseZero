@@ -275,6 +275,21 @@ def test_remove_trash_calls_moveToTrash(qapp, tmp_path: Path) -> None:
     assert trash_calls == ["/iso/win11.iso"]
 
 
+def test_fruitless_scan_leaves_play_disabled(qapp, tmp_path: Path) -> None:
+    """An empty registry must never end up with an enabled, inert play button."""
+    _write_fake_pz(tmp_path, scan_candidates=[])
+    dlg = _make_dialog(tmp_path)
+    dlg._scan_isos()
+    assert _wait_for(lambda: not dlg._reader.any_running() and bool(dlg.status_label.text()))
+    assert dlg.list_widget.count() == 0
+    assert "Nenhuma imagem" in dlg.status_label.text()
+    assert not dlg.play_button.isEnabled()
+    assert not dlg.boot_button.isEnabled()
+    # The toolbar must come back so the user can still act.
+    assert dlg.add_button.isEnabled()
+    assert dlg.scan_button.isEnabled()
+
+
 def test_valid_iso_without_parseable_images_still_offers_indices(qapp, tmp_path: Path) -> None:
     """Retail media inspects as valid with ``imageCount: 0``.
 
