@@ -199,7 +199,7 @@ print('  game mode plan ok')
 "
 
 echo "=== nenhuma alteração fora do estado/config fake ==="
-EXTRA=$(git -C "$REPO_ROOT" status --porcelain -- 'linux/themes' 'linux/ui' 2>/dev/null | grep -v '^??' | wc -l)
+EXTRA=$(git -C "$REPO_ROOT" status --porcelain -- 'linux/themes' 'linux/ui' 2>/dev/null | grep -v '^??' | wc -l || true)
 echo "  diff em linux/themes e linux/ui (esperado 0): $EXTRA"
 
 echo "=== themes suite ok ==="
