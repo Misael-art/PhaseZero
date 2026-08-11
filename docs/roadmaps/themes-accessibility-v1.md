@@ -339,7 +339,7 @@ Estados permitidos: `pending`, `in_progress`, `blocked`, `verified`, `deferred`.
 | Baseline pytest | 444 passed + 9 subtests | `pytest tests/ -q` | 2026-08-11 |
 | Baseline UI | 27 passed; UI smoke ok | `tests/linux-ui.sh` | 2026-08-11 |
 | Baseline SteamOS UX | smoke ok | `tests/linux-steamos-ux.sh` | 2026-08-11 |
-| Worktree | `/tmp/pz-themes` em `codex/themes-accessibility-v1` (prunable após encerramento) | `git worktree list` | 2026-08-11 |
+| Worktree | `/tmp/pz-themes` removido junto com a branch; nenhum worktree de temas registrado | `git worktree list` | 2026-08-11 |
 | PR #53 | mergeada em `c1d9931` (squash) | `gh pr view 53`, `git log main` | 2026-08-11 |
 | Release `v1.16.0` | publicada com 7 assets e checksums; temas incluídos | `gh release view v1.16.0` | 2026-08-11 |
 | Pacote host | `phasezero-control-center 1.16.1-1` instalado (temas inclusos via v1.16.0/v1.16.1) | `pacman -Q`, import UI | 2026-08-11 |

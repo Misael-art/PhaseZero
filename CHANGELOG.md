@@ -72,7 +72,7 @@ As versões seguem a data de build em `version.json`.
 ### Corrigido
 - Gerenciador de imagens: ISO válida cujas edições não são legíveis a partir
   do arquivo (caso comum em mídia de varejo, em que `media inspect` devolve
-  `imageCount: 0`) passa a oferecer as edições 1..10, como a instalação já
+  `imageCount: 0`) passa a oferecer as edições 1 a 10, como a instalação já
   fazia, em vez de deixar a lista vazia e o botão de reproduzir desabilitado.
 - Gerenciador de imagens: falha ao mover a ISO para a lixeira é reportada como
   falha (a sobrecarga estática do Qt devolve uma tupla, sempre verdadeira).

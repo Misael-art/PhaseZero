@@ -119,6 +119,64 @@ def test_unknown_future_schema_fail_closed(tmp_path: Path) -> None:
     assert reg.load(path)["images"] == []
 
 
+def test_sha_case_variants_are_one_image(tmp_path: Path) -> None:
+    """A digest is case-insensitive hex; two spellings must not duplicate."""
+    path = tmp_path / "images.json"
+    reg.add_image(_entry(sha="A" * 64, label="upper"), state_path=path)
+    reg.add_image(_entry(sha="a" * 64, label="lower"), state_path=path)
+    images = reg.list_images(path)
+    assert len(images) == 1
+    assert images[0]["sha256"] == "a" * 64
+    assert images[0]["label"] == "lower"
+
+
+def test_remove_matches_sha_case_insensitively(tmp_path: Path) -> None:
+    path = tmp_path / "images.json"
+    reg.add_image(_entry(sha="a" * 64), state_path=path)
+    reg.remove_image(sha256="A" * 64, state_path=path)
+    assert reg.list_images(path) == []
+
+
+def test_local_fallback_identity_is_preserved(tmp_path: Path) -> None:
+    """Non-hex identities from the dialog's fallback pass through unchanged."""
+    path = tmp_path / "images.json"
+    ident = "local:Win11.iso:8172161024:1786400000"
+    reg.add_image(_entry(sha=ident), state_path=path)
+    assert reg.list_images(path)[0]["sha256"] == ident
+
+
+def test_add_requires_nonempty_path(tmp_path: Path) -> None:
+    with pytest.raises(ValueError):
+        reg.add_image({"sha256": "a" * 64, "path": "  "}, state_path=tmp_path / "images.json")
+
+
+def test_older_schema_fails_closed(tmp_path: Path) -> None:
+    """No migration exists for version 0, so it must not be read as v1."""
+    path = tmp_path / "images.json"
+    path.write_text(
+        json.dumps({"schemaVersion": 0, "images": [{"path": "/x", "sha256": "a" * 64}]}),
+        encoding="utf-8",
+    )
+    assert reg.load(path)["images"] == []
+
+
+def test_persisted_entries_without_identity_are_dropped(tmp_path: Path) -> None:
+    path = tmp_path / "images.json"
+    path.write_text(
+        json.dumps({
+            "schemaVersion": 1,
+            "images": [
+                {"path": "/good.iso", "sha256": "b" * 64},
+                {"path": "/orphan.iso"},
+                {"path": "/blank.iso", "sha256": ""},
+            ],
+        }),
+        encoding="utf-8",
+    )
+    images = reg.list_images(path)
+    assert [img["path"] for img in images] == ["/good.iso"]
+
+
 def test_write_is_atomic_json_mode0600(tmp_path: Path) -> None:
     path = tmp_path / "windows-vm" / "images.json"
     reg.add_image(_entry(), state_path=path)

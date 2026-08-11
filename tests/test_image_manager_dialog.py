@@ -146,7 +146,9 @@ def test_seeded_image_shows_indices_and_installed_badge(qapp, tmp_path: Path) ->
 
 # ── Play delegates to ProvisionPlayerWindow.open ──
 
-def test_play_invokes_player_with_selected_index(qapp, tmp_path: Path) -> None:
+def test_play_invokes_player_with_selected_index(
+    qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     dlg = _make_dialog(tmp_path, seeded=[_entry("/iso/win11.iso", sha="b" * 64)])
     captured: dict = {}
 
@@ -158,8 +160,9 @@ def test_play_invokes_player_with_selected_index(qapp, tmp_path: Path) -> None:
             captured.update(iso=iso, image_index=image_index, graphics=graphics,
                             guest_login=guest_login)
 
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(imd_mod, "ProvisionPlayerWindow", _FakePlayer)
+    # The built-in fixture reverts the patch; a bare MonkeyPatch() would leave
+    # the fake installed for every later test in the session.
+    monkeypatch.setattr(imd_mod, "ProvisionPlayerWindow", _FakePlayer)
     dlg._play()
     assert captured["iso"] == "/iso/win11.iso"
     assert captured["image_index"] == "1"
@@ -192,12 +195,13 @@ def test_grub_button_emits_pending_action(qapp, tmp_path: Path) -> None:
     assert dlg.pending_action().id == "boot.safe-menu"
 
 
-def test_request_action_unknown_is_safe(qapp, tmp_path: Path) -> None:
+def test_request_action_unknown_is_safe(
+    qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     dlg = _make_dialog(tmp_path, by_id={}, seeded=[_entry("/iso/win11.iso", sha="e" * 64)])
-    # Stub the modal so the test does not block.
-    pytest.MonkeyPatch().setattr(
-        imd_mod.QMessageBox, "information", lambda *a, **k: None
-    )
+    # Stub the modal so the test does not block. The fixture reverts it; a
+    # throwaway MonkeyPatch() would stub QMessageBox for the whole session.
+    monkeypatch.setattr(imd_mod.QMessageBox, "information", lambda *a, **k: None)
     dlg._request_action("does.not.exist")
     assert dlg.pending_action() is None
 

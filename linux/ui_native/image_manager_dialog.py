@@ -134,10 +134,19 @@ class _PzReader(QObject):
         proc = self._procs.get(request_id)
         if proc is None:
             return
+        # Drop the request before killing: waitForFinished can deliver
+        # `finished` synchronously, and _on_finished would then emit its own
+        # terminal signal for the same id, advancing the batch twice. Keep a
+        # local reference so the process outlives the bookkeeping.
+        self._procs.pop(request_id, None)
+        timer = self._timers.pop(request_id, None)
+        if timer is not None:
+            timer.stop()
+            timer.deleteLater()
         if proc.state() != QProcess.NotRunning:
             proc.kill()
             proc.waitForFinished(1000)
-        self._teardown(request_id)
+        proc.deleteLater()
         self.failed.emit(request_id, "tempo esgotado")
 
 
@@ -149,16 +158,14 @@ class ImageManagerDialog(QDialog):
         root: Path,
         runner: object,
         by_id: dict[str, ActionSpec] | None = None,
-        QWidget_parent: QWidget | None = None,
-        *,
         parent: QWidget | None = None,
+        *,
         state_path: Path | str | None = None,
         operations_dir: Path | str | None = None,
         advanced: bool = False,
         graphics_profile: str = "compat",
     ) -> None:
-        actual_parent = parent or QWidget_parent
-        super().__init__(actual_parent, Qt.Dialog)
+        super().__init__(parent, Qt.Dialog)
         self.setObjectName("imageManagerDialog")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAutoFillBackground(True)
@@ -185,6 +192,7 @@ class ImageManagerDialog(QDialog):
         self._batch_source = "manual"
         self._batch_total = 0
         self._batch_done = 0
+        self._failed_registrations: list[str] = []
 
         self._build_ui()
         self._refresh_list()
@@ -534,6 +542,18 @@ class ImageManagerDialog(QDialog):
         )
 
     def _on_read_ok(self, request_id: str, stdout: str) -> None:
+        if request_id.startswith("inspect:"):
+            path = request_id.split(":", 1)[1]
+            try:
+                payload = json.loads(stdout)
+            except json.JSONDecodeError:
+                # Unreadable output is just another failed inspection: record
+                # it and keep the queue moving instead of stalling the batch.
+                self._fail_inspect(path, "resposta ilegível do comando")
+                return
+            self._register_inspect(path, payload, source=self._batch_source)
+            self._advance_batch()
+            return
         try:
             payload = json.loads(stdout)
         except json.JSONDecodeError:
@@ -541,29 +561,33 @@ class ImageManagerDialog(QDialog):
             return
         if request_id == "scan":
             self._handle_scan_result(payload)
-            return
-        if request_id.startswith("inspect:"):
-            path = request_id.split(":", 1)[1]
-            self._handle_inspect_result(path, payload)
-            return
 
     def _on_read_failed(self, request_id: str, message: str) -> None:
         if request_id.startswith("inspect:"):
-            path = request_id.split(":", 1)[1]
-            # Keep an invalid entry so the user sees the file and can retry/inspect.
-            self._register_inspect(
-                path,
-                {"valid": False, "payloadNote": message},
-                source=getattr(self, "_batch_source", "manual"),
-            )
-            # One bad ISO must not abort the rest of the batch: drop it and
-            # keep going, exactly like a successful inspect.
-            if getattr(self, "_batch", None):
-                self._batch.pop(0)
-                self._batch_done = getattr(self, "_batch_done", 0) + 1
-            self._inspect_next()
+            self._fail_inspect(request_id.split(":", 1)[1], message)
             return
         self._set_busy(False, f"Falha: {message}")
+
+    def _fail_inspect(self, path: str, message: str) -> None:
+        """Record an unusable ISO and move on to the next one in the batch."""
+        # Keep an invalid entry so the user still sees the file and can retry.
+        self._register_inspect(
+            path, {"valid": False, "payloadNote": message}, source=self._batch_source
+        )
+        self._advance_batch()
+
+    def _advance_batch(self) -> None:
+        """Single exit for every terminal inspect path.
+
+        Each of the three ways an inspect can end (parsed, unparseable, failed
+        or timed out) has to drop the head of the queue and start the next
+        one; doing it in only some of them silently strands the remaining
+        images.
+        """
+        if self._batch:
+            self._batch.pop(0)
+            self._batch_done += 1
+        self._inspect_next()
 
     def _handle_scan_result(self, payload: dict) -> None:
         candidates = payload.get("candidates") if isinstance(payload, dict) else None
@@ -627,7 +651,7 @@ class ImageManagerDialog(QDialog):
         self._inspect_next()
 
     def _inspect_next(self) -> None:
-        if not getattr(self, "_batch", None):
+        if not self._batch:
             self._after_batch_done()
             return
         path = self._batch[0]
@@ -640,13 +664,6 @@ class ImageManagerDialog(QDialog):
             ["windows-vm", "media", "inspect", "--iso", path, "--json"],
             timeout_ms=INSPECT_TIMEOUT_MS,
         )
-
-    def _handle_inspect_result(self, path: str, payload: dict) -> None:
-        self._register_inspect(path, payload, source=getattr(self, "_batch_source", "manual"))
-        if getattr(self, "_batch", None):
-            self._batch.pop(0)
-            self._batch_done = getattr(self, "_batch_done", 0) + 1
-        self._inspect_next()
 
     def _register_inspect(self, path: str, payload: dict, *, source: str) -> None:
         size_mb = 0
@@ -668,9 +685,11 @@ class ImageManagerDialog(QDialog):
         }
         try:
             reg.add_image(entry, state_path=self._state_arg())
-        except (TypeError, ValueError):
-            # No sha256 available: keep a transient marker so the UI can show it.
-            pass
+        except (TypeError, ValueError) as exc:
+            # `_fallback_sha` always yields an identity, so this only fires if
+            # the registry rejects the entry outright. Say so instead of
+            # dropping the image silently.
+            self._failed_registrations.append(f"{Path(path).name}: {exc}")
 
     def _fallback_sha(self, path: str) -> str:
         # Distinguish files even when inspect did not return a digest (e.g. it
@@ -683,9 +702,19 @@ class ImageManagerDialog(QDialog):
 
     def _after_batch_done(self) -> None:
         self._batch = []
-        n = getattr(self, "_batch_total", 0)
+        n = self._batch_total
+        rejected = list(self._failed_registrations)
+        self._failed_registrations = []
         self._refresh_list()
-        self._set_busy(False, f"Pronto. {n} imagem(ns) processada(s)." if n else "")
+        if rejected:
+            message = (
+                f"Pronto. {n} imagem(ns) processada(s); "
+                f"{len(rejected)} não pôde(puderam) ser registrada(s): "
+                + "; ".join(rejected[:3])
+            )
+        else:
+            message = f"Pronto. {n} imagem(ns) processada(s)." if n else ""
+        self._set_busy(False, message)
 
     # ----- actions -----
 

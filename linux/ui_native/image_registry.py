@@ -43,23 +43,49 @@ def _resolve(state_path: Path | None) -> Path:
     return state_path if state_path is not None else default_path()
 
 
+def _canonical_sha(value: Any) -> str:
+    """Normalize an image identity, or return "" when there is none.
+
+    A real digest is case-insensitive hex, so ``ABC…`` and ``abc…`` are the
+    same image and must not become two entries. The dialog also synthesizes
+    ``local:<name>:<size>:<mtime>`` identities when ``media inspect`` produced
+    no digest; those are passed through verbatim.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) == 64:
+        try:
+            int(text, 16)
+        except ValueError:
+            return text
+        return text.lower()
+    return text
+
+
 def _migrate(doc: Any) -> dict[str, Any]:
     """Normalize a parsed document; fail closed on unknown/corrupt input."""
     if not isinstance(doc, dict):
         return _empty_doc()
     version = doc.get("schemaVersion")
-    if not isinstance(version, int):
+    if not isinstance(version, int) or isinstance(version, bool):
         # Missing schema: be conservative and do not adopt free-form JSON.
         return _empty_doc()
-    if version > SCHEMA_VERSION:
-        # A newer Control Center wrote this; do not guess the layout.
+    if version != SCHEMA_VERSION:
+        # Newer means a layout we cannot guess; older means a migration that
+        # does not exist yet. Both fail closed rather than misread the data.
         return _empty_doc()
     images = doc.get("images")
     if not isinstance(images, list):
         images = []
     cleaned = _empty_doc()
     cleaned["updatedAt"] = str(doc.get("updatedAt") or "")
-    cleaned["images"] = [img for img in images if isinstance(img, dict)]
+    # A persisted entry without an identity can never be matched or removed,
+    # so it is dropped rather than kept as unreachable state.
+    cleaned["images"] = [
+        img for img in images
+        if isinstance(img, dict) and _canonical_sha(img.get("sha256"))
+    ]
     return cleaned
 
 
@@ -92,7 +118,7 @@ def list_images(state_path: Path | None = None) -> list[dict[str, Any]]:
 
 def _matches(entry: dict[str, Any], *, sha256: str | None, path: str | None) -> bool:
     if sha256:
-        return str(entry.get("sha256") or "") == sha256
+        return _canonical_sha(entry.get("sha256")) == _canonical_sha(sha256)
     if path:
         return str(entry.get("path") or "") == path
     return False
@@ -101,20 +127,27 @@ def _matches(entry: dict[str, Any], *, sha256: str | None, path: str | None) -> 
 def add_image(entry: dict[str, Any], state_path: Path | None = None) -> dict[str, Any]:
     """Register one image, idempotent by ``sha256``.
 
-    ``entry`` must carry at least ``path`` and ``sha256``. Re-adding an
+    ``entry`` must carry a nonempty ``path`` and ``sha256``. Re-adding an
     already-registered sha256 updates the stored entry (refresh of
-    characteristics) without duplicating it. Returns the updated document.
+    characteristics) without duplicating it; digests are compared
+    case-insensitively. Returns the updated document.
+
+    Not safe against a second concurrent writer: the load/mutate/write cycle
+    is unsynchronized, so simultaneous callers can lose one update. The
+    registry has a single writer (the image manager dialog), so this is
+    accepted rather than locked.
     """
     if not isinstance(entry, dict):
         raise TypeError("entry must be a dict")
-    sha = str(entry.get("sha256") or "")
+    sha = _canonical_sha(entry.get("sha256"))
     if not sha:
         raise ValueError("entry.sha256 is required")
+    if not str(entry.get("path") or "").strip():
+        raise ValueError("entry.path is required")
     doc = load(state_path)
     images: list[dict[str, Any]] = list(doc.get("images", []))
     normalized = dict(entry)
-    normalized.setdefault("path", "")
-    normalized.setdefault("sha256", sha)
+    normalized["sha256"] = sha
     normalized.setdefault("label", "")
     normalized.setdefault("sizeMb", 0)
     normalized.setdefault("arch", "")
@@ -126,7 +159,7 @@ def add_image(entry: dict[str, Any], state_path: Path | None = None) -> dict[str
         "addedAt", datetime.now(timezone.utc).isoformat()
     )
     for i, existing in enumerate(images):
-        if str(existing.get("sha256") or "") == sha:
+        if _canonical_sha(existing.get("sha256")) == sha:
             # Preserve original addedAt on refresh.
             normalized["addedAt"] = str(existing.get("addedAt") or normalized["addedAt"])
             images[i] = normalized
