@@ -100,13 +100,6 @@ class WindowsInstallDialog(QDialog):
         self.graphics_help.setWordWrap(True)
         form.addRow("", self.graphics_help)
 
-        self.custom_label = QLabel("Perfil/args customizados:")
-        self.custom_graphics = QLineEdit()
-        self.custom_graphics.setObjectName("windowsCustomGraphics")
-        self.custom_graphics.setPlaceholderText("Perfil aceito pelo backend")
-        self.custom_graphics.setEnabled(False)
-        form.addRow(self.custom_label, self.custom_graphics)
-
         self.edition_combo = QComboBox()
         self.edition_combo.setObjectName("windowsEditionIndex")
         for index in range(1, 11):
@@ -160,10 +153,6 @@ class WindowsInstallDialog(QDialog):
         data = self.graphics_combo.itemData(index)
         value, helper = data if isinstance(data, tuple) and len(data) == 2 else ("compat", "")
         self.graphics_help.setText(str(helper))
-        custom = value == "custom"
-        self.custom_graphics.setEnabled(custom)
-        self.custom_graphics.setVisible(custom)
-        self.custom_label.setVisible(custom)
 
     def _accept_if_valid(self) -> None:
         iso = Path(self.iso_edit.text()).expanduser()
@@ -177,16 +166,11 @@ class WindowsInstallDialog(QDialog):
         if self.edition_combo.currentIndex() < 0:
             QMessageBox.warning(self, "Edições indisponíveis", "Os dez índices já foram usados.")
             return
-        if self.graphics_value() == "custom" and not self.custom_graphics.text().strip():
-            QMessageBox.warning(self, "Perfil necessário", "Informe o perfil ou argumento personalizado.")
-            return
         self.accept()
 
     def graphics_value(self) -> str:
         data = self.graphics_combo.currentData()
         value = data[0] if isinstance(data, tuple) and data else "compat"
-        if value == "custom":
-            return self.custom_graphics.text().strip()
         return str(value)
 
     def values(self) -> dict[str, str]:
