@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 
+from .graphics_profiles import provision_graphics_options
 from .models import ActionParameter, ActionSpec
 from .platform import current_platform
 
@@ -51,32 +52,10 @@ DASHBOARD_TOOLS = (
     "server.status",
 )
 
-# Single source of truth for Windows VM provision graphics options.
-# Each entry: (value, combo_label, helper_text_pt).
-WINDOWS_VM_GRAPHICS_OPTIONS: list[tuple[str, str, str]] = [
-    ("compat", "compat (QXL, software)",
-     "Padrão. Funciona em qualquer host. Sem aceleração: Windows roda com "
-     "'Microsoft Basic Display Adapter'. Indicado se você não precisa de "
-     "jogos/vídeo ou se sua GPU não suporta virtio-gl. Resultado: interface "
-     "funcional mas lenta em 3D."),
-    ("virtio-gl", "virtio-gl (OpenGL parcial, virgl)",
-     "Aceleração OpenGL via virgl. Requer: GPU host com mesa/virglrenderer, "
-     "/dev/dri/renderD* acessível, QEMU com virtio-vga-gl. Resultado: "
-     "aplicativos OpenGL rodam; Vulkan/Direct3D não. Em Steam Deck (APU "
-     "VanGogh) é o máximo estável. Se o host não atender, o instalador "
-     "avisa e você volta para compat."),
-    ("virtio-venus", "virtio-venus (experimental — Vulkan)",
-     "EXPERIMENTAL. Vulkan paravirtual via Venus. Pré-requisitos não "
-     "fixados (kernel 6.7+, mesa 23+, crosvm). No Steam Deck, é o único "
-     "caminho de aceleração Vulkan, mas ainda instável. O plano "
-     "experimental pode ser consultado em 'Plano Venus'. Aplicar fica "
-     "bloqueado na v1."),
-    ("custom", "custom (avançado)",
-     "Permite digitar um perfil gráfico personalizado ou argumentos extras "
-     "do QEMU. Use apenas se você conhece os perfis aceitos pelo backend. "
-     "Se o perfil for inválido, o instalador rejeitará com uma mensagem "
-     "clara."),
-]
+# Automated provisioning exposes only profiles explicitly enabled by the
+# versioned backend contract. Experimental profiles retain separate plan-only
+# actions and can never drift into the installer selector.
+WINDOWS_VM_GRAPHICS_OPTIONS: tuple[tuple[str, str, str], ...] = provision_graphics_options()
 
 
 def _a(
@@ -272,7 +251,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.graphics.status", "Windows VM", "GPU status", "GPU, render nodes, IOMMU e perfis gráficos elegíveis.", ("windows-vm", "graphics", "status", "--json"), "video-display", badge="JSON"),
             _a("windows.graphics.plan-gl", "Windows VM", "Plano VirtIO GL", "Valida caminho GL experimental sem alterar a VM.", ("windows-vm", "graphics", "plan", "--profile", "virtio-gl", "--json"), "video-display", badge="Seguro"),
             _a("windows.graphics.test-gl", "Windows VM", "Validar comando GL", "Gera lançamento QEMU VirtIO GL completo em dry-run.", ("windows-vm", "launch", "--dry-run", "--raw-qemu", "--graphics", "virtio-gl", "--experimental", "--no-optimize"), "system-run", badge="Seguro"),
-            _a("windows.graphics.plan-venus", "Windows VM", "Plano Venus (experimental)", "Plano experimental Vulkan paravirtual; mostra pré-requisitos e limites no Steam Deck.", ("windows-vm", "graphics", "plan", "--profile", "virtio-venus", "--json"), "video-display", badge="Seguro"),
+            _a("windows.graphics.plan-venus", "Windows VM", "Ver plano Venus", "Somente plano; instalação bloqueada. Mostra pré-requisitos e limites do Vulkan experimental no Steam Deck.", ("windows-vm", "graphics", "plan", "--profile", "virtio-venus", "--json"), "video-display", badge="Experimental", visibility="advanced"),
             _a("windows.graphics.plan-vfio", "Windows VM", "Plano VFIO", "Valida GPU, áudio e grupos IOMMU; não vincula drivers.", ("windows-vm", "graphics", "plan", "--profile", "vfio-looking-glass", "--pci-devices", "{input}", "--json"), "video-display", badge="Seguro", input_label="Dispositivos PCI (GPU, áudio)", input_kind="text"),
             _a("windows.graphics.compat", "Windows VM", "Restaurar gráfico compatível", "Define QXL/SPICE ou VirtIO VGA como perfil estável.", ("windows-vm", "graphics", "apply", "--profile", "compat"), "edit-undo", mutable=True, preview=("windows-vm", "graphics", "plan", "--profile", "compat", "--json"), badge="Reversível"),
             _a("windows.graphics.runtime-status", "Windows VM", "Status do runtime gráfico", "Compara byte a byte a sessão instalada com as fontes atuais.", ("windows-vm", "graphics", "runtime", "status", "--json"), "system-search", badge="JSON"),

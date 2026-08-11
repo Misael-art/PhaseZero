@@ -27,6 +27,48 @@ default_cpus() {
 
 PROVISION_DIR="${PZ_STATE}/windows-vm/provision"
 OPERATIONS_DIR="${PZ_STATE}/operations"
+GRAPHICS_CONTRACT="${PZ_WINDOWS_VM_GRAPHICS_CONTRACT:-$PZ_ROOT/linux/windows-vm/graphics-profiles.json}"
+
+graphics_contract_validate() {
+    jq -e '
+        .schemaVersion == "windows-vm-graphics/v1"
+        and (.profiles | type == "array")
+        and ([.profiles[].id] | length == (unique | length))
+        and all(.profiles[];
+            (.id | type == "string" and length > 0)
+            and (.provisionSupported | type == "boolean")
+            and (.applySupported | type == "boolean")
+            and (.planSupported | type == "boolean")
+            and (.mode | type == "string" and length > 0)
+        )
+    ' "$GRAPHICS_CONTRACT" >/dev/null 2>&1
+}
+
+provision_graphics_supported() {
+    local profile="$1"
+    graphics_contract_validate || {
+        pz_error "Windows VM graphics contract is missing or invalid: $GRAPHICS_CONTRACT"
+        return 1
+    }
+    jq -e --arg profile "$profile" \
+        '.profiles[] | select(.id == $profile and .provisionSupported == true)' \
+        "$GRAPHICS_CONTRACT" >/dev/null 2>&1
+}
+
+provision_graphics_rejection() {
+    local profile="$1"
+    if ! graphics_contract_validate; then
+        printf 'Windows VM graphics contract is missing or invalid: %s' "$GRAPHICS_CONTRACT"
+        return 0
+    fi
+    if jq -e --arg profile "$profile" \
+        '.profiles[] | select(.id == $profile and .planSupported == true and .provisionSupported == false)' \
+        "$GRAPHICS_CONTRACT" >/dev/null 2>&1; then
+        printf 'graphics profile %s is plan-only and cannot be used by automated provisioning' "$profile"
+    else
+        printf 'unknown or unsupported provisioning graphics profile: %s (valid: compat, virtio-gl)' "$profile"
+    fi
+}
 
 # The install-target guard inside WinPE compares this against the serial QEMU
 # stamped on the disk and aborts Setup when they differ. The provisioning VM
@@ -172,6 +214,10 @@ provision_plan() {
         return 1
     fi
     case "$guest_login" in auto|password) ;; *) pz_error "--guest-login must be auto or password"; return 1 ;; esac
+    if ! provision_graphics_supported "$graphics"; then
+        pz_error "$(provision_graphics_rejection "$graphics")"
+        return 1
+    fi
 
     if [ "$AUTO_FIX" = "1" ]; then
         pz_info "running preflight with auto-fix..."
@@ -205,7 +251,9 @@ provision_plan() {
         # objects); an invalid override is rejected loudly instead of falling
         # back to host probing.
         if preflight_json="$(printf '%s' "$PZ_PREFLIGHT_JSON" | jq -e -c '(.status == "pass" or .status == "warn" or .status == "fail") and (.swtpm | type == "object") and (.virtio | type == "object")' 2>/dev/null)"; then
-            preflight_json="$PZ_PREFLIGHT_JSON"
+            preflight_json="$(printf '%s' "$PZ_PREFLIGHT_JSON" | jq -c --arg profile "$graphics" '
+                .graphics = ((.graphics // {supported: true, fallback: "compat", failures: []}) + {profile: $profile})
+            ')"
         else
             pz_error "PZ_PREFLIGHT_JSON override rejected: fixture does not match preflight schema (status/swtpm/virtio)"
             return 1
@@ -213,7 +261,7 @@ provision_plan() {
     else
         # shellcheck disable=SC2119
         preflight_stderr="$(pz_tempfile)" || true
-        preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --json 2>"${preflight_stderr:-/dev/null}" || {
+        preflight_json="$(bash "$PZ_ROOT/linux/windows-vm/preflight.sh" --graphics "$graphics" --json 2>"${preflight_stderr:-/dev/null}" || {
             pz_warn "preflight check failed — see diagnostics above"
             echo '{"status":"fail"}'
         })"
@@ -236,6 +284,10 @@ provision_plan() {
             local fail_msg="swtpm binary not found — TPM 2.0 required for Windows 11"
             blockers="$(echo "$blockers" | jq --arg m "$fail_msg" '. + [$m]')"
         fi
+    fi
+    if [ "$(echo "$preflight_json" | jq -r '.graphics.supported // false' 2>/dev/null)" != "true" ]; then
+        local graphics_msg="Este host não atende aos requisitos do virtio-gl. Selecione Compatibilidade para continuar."
+        blockers="$(echo "$blockers" | jq --arg m "$graphics_msg" '. + [$m]')"
     fi
 
     local warnings="[]"
@@ -341,6 +393,13 @@ provision_start() {
 
     local plan_file="$PLAN_ENDPOINT/$plan_id.json"
     [ -f "$plan_file" ] || { pz_error "plan not found: $plan_id"; return 1; }
+
+    local plan_graphics
+    plan_graphics="$(jq -r '.graphics // ""' "$plan_file" 2>/dev/null || true)"
+    if ! provision_graphics_supported "$plan_graphics"; then
+        pz_error "refusing stale plan: $(provision_graphics_rejection "$plan_graphics")"
+        return 1
+    fi
 
     local expected_token
     expected_token="$(jq -r '.confirmToken' "$plan_file")"

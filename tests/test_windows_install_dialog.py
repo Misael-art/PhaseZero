@@ -44,25 +44,21 @@ def test_dialog_limits_editions_and_disables_used_index(qapp) -> None:
     QApplication.processEvents()
 
 
-def test_dialog_exposes_custom_profile_and_returns_iso_before_player(qapp, tmp_path: Path) -> None:
+def test_dialog_exposes_only_installable_profiles_and_returns_iso_before_player(qapp, tmp_path: Path) -> None:
     iso = tmp_path / "Windows.iso"
     iso.touch()
     dialog = WindowsInstallDialog(used_indices=set())
     dialog.iso_edit.setText(str(iso))
-    assert dialog.custom_graphics.isHidden()
-    assert dialog.custom_label.isHidden()
-    custom_row = dialog.graphics_combo.findData(next(
-        data for index in range(dialog.graphics_combo.count())
-        if (data := dialog.graphics_combo.itemData(index))[0] == "custom"
-    ))
-    dialog.graphics_combo.setCurrentIndex(custom_row)
-    assert dialog.custom_graphics.isEnabled()
-    assert dialog.custom_graphics.isVisibleTo(dialog)
-    assert dialog.custom_label.isVisibleTo(dialog)
-    dialog.custom_graphics.setText("my-safe-profile")
+    ids = [dialog.graphics_combo.itemData(index)[0] for index in range(dialog.graphics_combo.count())]
+    labels = [dialog.graphics_combo.itemText(index) for index in range(dialog.graphics_combo.count())]
+    assert ids == ["compat", "virtio-gl"]
+    assert labels == ["compat — máxima compatibilidade", "virtio-gl — aceleração OpenGL"]
+    assert not hasattr(dialog, "custom_graphics")
+    assert not hasattr(dialog, "custom_label")
+    dialog.graphics_combo.setCurrentIndex(1)
     values = dialog.values()
     assert values["input"] == str(iso)
-    assert values["graphics"] == "my-safe-profile"
+    assert values["graphics"] == "virtio-gl"
     assert values["image_index"] == "1"
     dialog.close()
     dialog.deleteLater()

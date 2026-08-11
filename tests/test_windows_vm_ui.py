@@ -6,7 +6,7 @@ from types import ModuleType
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QTextEdit
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QPlainTextEdit, QPushButton, QTextEdit
 from PySide6.QtTest import QSignalSpy
 
 from linux.ui_native.catalog import build_catalog
@@ -258,17 +258,16 @@ def test_venus_catalog_entry_correct(by_id):
     assert venus.args[:4] == ("windows-vm", "graphics", "plan", "--profile")
     assert "virtio-venus" in venus.args
     assert "--json" in venus.args
+    assert venus.title == "Ver plano Venus"
+    assert venus.badge == "Experimental"
+    assert "instalação bloqueada" in venus.description
 
 
 def test_catalog_graphics_param_kind_is_choice(by_id):
     plan = by_id["windows.provision.plan"]
     graphics_param = next(p for p in plan.parameters if p.name == "graphics")
     assert graphics_param.kind == "choice"
-    assert "compat" in graphics_param.choices
-    assert "virtio-gl" in graphics_param.choices
-    assert "virtio-venus" in graphics_param.choices
-    assert "custom" in graphics_param.choices
-    assert len(graphics_param.choices) == 4
+    assert graphics_param.choices == ("compat", "virtio-gl")
 
 
 # ── ParameterDialog (live path used by the workspace page) ──────────
@@ -279,35 +278,9 @@ def test_parameter_dialog_renders_combo_for_graphics(qapp, catalog):
     field = dialog._fields.get("graphics")
     assert field is not None
     assert isinstance(field, QComboBox)
-    assert field.count() == 4
-
-
-def test_parameter_dialog_custom_support(qapp, catalog):
-    plan = next(a for a in catalog if a.id == "windows.provision.plan")
-    dialog = ParameterDialog(plan)
-    custom_field = dialog._fields.get("graphics.custom")
-    assert custom_field is not None
-    assert isinstance(custom_field, QLineEdit)
-    # custom field is disabled by default (compat selected)
-    assert not custom_field.isEnabled()
-    combo = dialog._fields["graphics"]
-    combo.setCurrentText("custom")
-    assert custom_field.isEnabled()
-    custom_field.setText("my-profile")
-    # selecting compat disables custom
-    combo.setCurrentText("compat")
-    assert not custom_field.isEnabled()
-
-
-def test_parameter_dialog_custom_value_reaches_plan_argv(by_id):
-    plan = by_id["windows.provision.plan"]
-    args = plan.resolved_args(
-        value="/fake.iso",
-        values={"input": "/fake.iso", "graphics": "my-custom-profile", "image_index": "1"},
-    )
-    assert "--graphics" in args
-    idx = args.index("--graphics") + 1
-    assert args[idx] == "my-custom-profile"
+    assert field.count() == 2
+    assert [field.itemText(index) for index in range(field.count())] == ["compat", "virtio-gl"]
+    assert dialog._fields.get("graphics.custom") is None
 
 
 # ── PySide6 6.11 cursor-enum regression tests ──────────────────────
