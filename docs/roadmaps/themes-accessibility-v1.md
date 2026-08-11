@@ -339,7 +339,11 @@ Estados permitidos: `pending`, `in_progress`, `blocked`, `verified`, `deferred`.
 | Baseline pytest | 444 passed + 9 subtests | `pytest tests/ -q` | 2026-08-11 |
 | Baseline UI | 27 passed; UI smoke ok | `tests/linux-ui.sh` | 2026-08-11 |
 | Baseline SteamOS UX | smoke ok | `tests/linux-steamos-ux.sh` | 2026-08-11 |
-| Worktree | `/tmp/pz-themes` em `codex/themes-accessibility-v1` | `git worktree list` | 2026-08-11 |
+| Worktree | `/tmp/pz-themes` em `codex/themes-accessibility-v1` (prunable após encerramento) | `git worktree list` | 2026-08-11 |
+| PR #53 | mergeada em `c1d9931` (squash) | `gh pr view 53`, `git log main` | 2026-08-11 |
+| Release `v1.16.0` | publicada com 7 assets e checksums; temas incluídos | `gh release view v1.16.0` | 2026-08-11 |
+| Pacote host | `phasezero-control-center 1.16.1-1` instalado (temas inclusos via v1.16.0/v1.16.1) | `pacman -Q`, import UI | 2026-08-11 |
+| Branch `codex/themes-accessibility-v1` | encerrada; commit stale de docs `c0f01ea` (linha de ledger) absorvido neste roadmap; branch local/remota removida | `git branch -a` | 2026-08-11 |
 
 ## Ledger de execução
 
@@ -347,6 +351,7 @@ Estados permitidos: `pending`, `in_progress`, `blocked`, `verified`, `deferred`.
 |---|---|---|---|---|---|---|
 | 2026-08-11 | opencode | `codex/themes-accessibility-v1` / `/tmp/pz-themes` | Fase 0 | roadmap canônico | pytest 444+9; UI 27; SteamOS UX ok | Iniciar Fase 1: contratos e catálogo |
 | 2026-08-11 | opencode | `codex/themes-accessibility-v1` / `/tmp/pz-themes` | Fases 1–7 | `30db2a9`, `2a0e7bd`, `f27d1a3` + M7 pendente | pytest 54 temas; UI 27; native 19; linux-themes.sh verde; SteamOS UX ok | PR + release + instalação (Fase 8) |
+| 2026-08-11 | opencode | `main` | Fase 8 (encerramento) | PR #53 mergeada (`c1d9931`); release `v1.16.0` (7 assets, checksums verificados); host atualizado via `v1.16.1-1` | pytest 501+9; UI 27; native 19; `linux-themes.sh`; SteamOS UX; CI completa verde no PR e na release | Temas em produção. Branch `codex/themes-accessibility-v1` encerrada (commit stale de docs absorvido aqui); worktree `/tmp/pz-themes` prunable. Sem trabalho pendente. |
 
 ## Formato obrigatório de handoff
 
