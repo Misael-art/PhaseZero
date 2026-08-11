@@ -6,7 +6,7 @@ from types import ModuleType
 import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QPlainTextEdit, QPushButton, QTextEdit
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QTextEdit
 from PySide6.QtTest import QSignalSpy
 
 from linux.ui_native.catalog import build_catalog
@@ -14,7 +14,9 @@ from linux.ui_native.command_runner import CommandRunner
 from linux.ui_native.provision_player import ProvisionPlayerWindow, ST_IDLE, ST_DONE
 from linux.ui_native.pages.windows_vm import WindowsVmPage
 from linux.ui_native.result_parser import severity_for
-from linux.ui_native.widgets import ParameterDialog
+from linux.ui_native.status_loader import StatusLoader
+from linux.ui_native.widgets import HeaderBar, ParameterDialog
+from linux.ui_native import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -164,6 +166,26 @@ def test_windows_vm_blocks_blank_disk_and_surfaces_stale_boot(ws_page):
     assert not page.power_button.isEnabled()
     assert "conclua a instalação" in page.maintenance_health.text()
     assert not page.repair_boot_button.isHidden()
+
+
+def test_windows_status_has_budget_for_aggregate_host_probes():
+    assert StatusLoader.timeout_ms("windows.status") == 45_000
+    assert StatusLoader.timeout_ms("steamdeck.status") == 15_000
+
+
+def test_windows_status_timeout_explains_safe_retry(ws_page):
+    page, _actions = ws_page
+    page._on_status_failed("windows.status", "timed out")
+    assert page.state_label.text() == "● Estado indisponível"
+    assert "demorou demais" in page.state_detail.text()
+    assert "nenhuma configuração" in page.maintenance_health.text()
+
+
+def test_header_shows_installed_version_next_to_product_name(qapp):
+    header = HeaderBar()
+    title = header.findChild(QLabel, "windowTitle")
+    assert title is not None
+    assert title.text() == f"PhaseZero v{__version__}"
 
 
 def test_windows_vm_page_uses_safe_shutdown_action(ws_page):

@@ -547,12 +547,25 @@ disk_format() {
 }
 
 discovery_json() {
-    local installed usable any configured installed_like="no" usable_like="no" any_like="no" configured_like="no" installed_readable="no" usable_readable="no" any_readable="no" configured_readable="no"
-    installed="$(find_existing_windows_disk | sed -n '1p')"
-    usable="$(find_usable_existing_windows_disk | sed -n '1p')"
-    any="$(find_existing_windows_disk_any | sed -n '1p')"
+    local mode="${1:-full}"
+    local installed="" usable="" any="" configured="" installed_like="no" usable_like="no" any_like="no" configured_like="no" installed_readable="no" usable_readable="no" any_readable="no" configured_readable="no"
     configured="${PZ_WINDOWS_VM_DISK:-}"
     [ -z "$configured" ] && [ -f "$CONFIG_FILE" ] && configured="$(bash -c '. "$0"; printf "%s\n" "${PZ_WINDOWS_VM_DISK:-}"' "$CONFIG_FILE" 2>/dev/null || true)"
+    # Status is requested on every page visit. A configured disk is already
+    # authoritative; rescanning all of $HOME and /mnt/sdcard here caused
+    # intermittent 15s UI timeouts. `windows-vm discover` keeps the exhaustive
+    # path by calling this function without the configured-only mode.
+    if [ "$mode" = "configured" ] && [ -n "$configured" ] && [ -f "$configured" ]; then
+        any="$configured"
+        if disk_looks_installed "$configured"; then
+            installed="$configured"
+            [ -r "$configured" ] && usable="$configured"
+        fi
+    else
+        installed="$(find_existing_windows_disk | sed -n '1p')"
+        [ -n "$installed" ] && [ -r "$installed" ] && usable="$installed"
+        any="$(find_existing_windows_disk_any | sed -n '1p')"
+    fi
     if [ -n "$installed" ]; then
         installed_like="yes"
         [ -r "$installed" ] && installed_readable="yes"
@@ -646,10 +659,12 @@ load_config() {
 
 effective_config() {
     load_config
-    local discovered_disk="${PZ_WINDOWS_VM_DISCOVERED_DISK:-$(discovered_windows_disk)}"
+    local configured_disk="${PZ_WINDOWS_VM_DISK:-}" discovered_disk="${PZ_WINDOWS_VM_DISCOVERED_DISK:-}"
+    if [ -z "$discovered_disk" ] && { [ -z "$configured_disk" ] || [ ! -f "$configured_disk" ]; }; then
+        discovered_disk="$(discovered_windows_disk)"
+    fi
     VM_NAME="${PZ_WINDOWS_VM_NAME:-$VM_NAME_DEFAULT}"
     VM_DIR="${VM_DIR:-${PZ_WINDOWS_VM_DIR:-$VM_DIR_DEFAULT}}"
-    local configured_disk="${PZ_WINDOWS_VM_DISK:-}"
     if [ "$EXPLICIT_DISK" -eq 0 ] && [ -n "$configured_disk" ] && [ -n "$discovered_disk" ] && ! disk_looks_installed "$configured_disk"; then
         configured_disk=""
     fi
@@ -1301,10 +1316,15 @@ samba_shares_managed() {
 
 samba_shares_reachable() {
     command -v smbclient >/dev/null 2>&1 || return 1
-    smbclient -N //127.0.0.1/PZExchange -c 'ls' >/dev/null 2>&1 || return 1
+    local probe_timeout="${PZ_WINDOWS_VM_STATUS_PROBE_TIMEOUT_SECONDS:-4}"
+    local -a timeout_prefix=()
+    if command -v timeout >/dev/null 2>&1; then
+        timeout_prefix=(timeout --signal=TERM --kill-after=1 "$probe_timeout")
+    fi
+    "${timeout_prefix[@]}" smbclient -N //127.0.0.1/PZExchange -c 'ls' >/dev/null 2>&1 || return 1
     if [ "$SHARE_POLICY" = "full" ]; then
-        smbclient -N //127.0.0.1/PZHome -c 'ls' >/dev/null 2>&1 || return 1
-        smbclient -N //127.0.0.1/PZSDCard -c 'ls' >/dev/null 2>&1 || return 1
+        "${timeout_prefix[@]}" smbclient -N //127.0.0.1/PZHome -c 'ls' >/dev/null 2>&1 || return 1
+        "${timeout_prefix[@]}" smbclient -N //127.0.0.1/PZSDCard -c 'ls' >/dev/null 2>&1 || return 1
     fi
 }
 
@@ -2314,7 +2334,7 @@ status_json() {
     fi
     boot_grub="$(grub_cfg_entry_state)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && current_marker="yes"
-    discovery="$(discovery_json)"
+    discovery="$(discovery_json configured)"
     jq -n \
         --arg configFile "$CONFIG_FILE" \
         --arg configInstalled "$config" \

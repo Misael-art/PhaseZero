@@ -13,6 +13,14 @@ _SECRET_PATTERNS = (
     (r"(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{16,}", "[REDACTED]"),
 )
 
+_DEFAULT_TIMEOUT_MS = 15_000
+_ACTION_TIMEOUT_MS = {
+    # Windows status includes bounded libvirt, Samba, disk and boot probes.
+    # Slower storage/daemon recovery can legitimately exceed the generic UI
+    # budget without meaning that the VM state is unavailable.
+    "windows.status": 45_000,
+}
+
 
 class StatusLoader(QObject):
     """Fetches status for read-only actions asynchronously via QProcess.
@@ -50,11 +58,12 @@ class StatusLoader(QObject):
         )
         self._processes[action_id] = process
         process.start()
-        # Safety timeout: 15s per status command
+        # Safety timeout remains bounded, but complex aggregate probes receive
+        # an explicit budget instead of being reported as unavailable at 15s.
         timer = QTimer(self)
         timer.setSingleShot(True)
         timer.timeout.connect(lambda: self._on_timeout(action_id, process))
-        timer.start(15000)
+        timer.start(self.timeout_ms(action_id))
         process.setProperty("timeout_timer", timer)
 
     def fetch_action(self, action: ActionSpec) -> None:
@@ -78,6 +87,10 @@ class StatusLoader(QObject):
 
     def running(self, action_id: str) -> bool:
         return action_id in self._processes
+
+    @staticmethod
+    def timeout_ms(action_id: str) -> int:
+        return _ACTION_TIMEOUT_MS.get(action_id, _DEFAULT_TIMEOUT_MS)
 
     def _on_finished(self, action_id: str, exit_code: int, process: QProcess) -> None:
         if action_id not in self._processes or not isValid(process):

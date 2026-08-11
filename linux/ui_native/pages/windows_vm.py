@@ -412,13 +412,17 @@ class WindowsVmPage(BasePage):
             self.usb_note.setText("Desativado até configurar permissões seguras")
         self._pending_integrations.clear()
 
-    def _on_status_failed(self, action_id: str, _message: str) -> None:
+    def _on_status_failed(self, action_id: str, message: str) -> None:
         if action_id != "windows.status":
             return
         self.refresh_button.setEnabled(True)
         self.power_button.setEnabled(False)
         self.state_label.setText("● Estado indisponível")
-        self.state_detail.setText("Tente atualizar. Detalhes técnicos ficam no histórico.")
+        if message == "timed out":
+            self.state_detail.setText("A verificação demorou demais. Tente atualizar novamente.")
+        else:
+            self.state_detail.setText("Não foi possível consultar o host. Tente atualizar novamente.")
+        self.maintenance_health.setText("Falha temporária de leitura; nenhuma configuração da VM foi alterada.")
         self._set_state("error")
 
     def _power_action(self) -> None:

@@ -45,6 +45,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
+
 from .models import ActionSpec, OperationResult
 from .platform import open_path
 
@@ -126,7 +128,7 @@ class HeaderBar(QFrame):
         layout.setContentsMargins(18, 8, 10, 8)
         mark = QLabel("PZ")
         mark.setObjectName("brandMark")
-        title = QLabel("PhaseZero")
+        title = QLabel(f"PhaseZero v{__version__}")
         title.setObjectName("windowTitle")
         subtitle = QLabel("Central de Controle")
         subtitle.setObjectName("windowSubtitle")
