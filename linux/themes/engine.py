@@ -595,7 +595,7 @@ def apply_plan(
                     break
                 result = adapter.apply(facts, session, action)
                 results.append({"featureId": action.get("featureId"), **result})
-                if result.get("status") not in ("ligado", "desligado", "ok"):
+                if result.get("status") not in ("ligado", "desligado", "ok", "pausado-bateria", "pausado-jogo"):
                     failed = True
                     failed_index = index
                     break

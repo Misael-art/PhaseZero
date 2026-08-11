@@ -32,7 +32,12 @@ FAKE_PLASMA6 = {
     "vulkan": True,
     "steamInstall": "",
     "steamLibraries": [],
-    "binaries": {},
+    "binaries": {
+        "qdbus": "",
+        "plasma-apply-lookandfeel": "",
+        "plasma-apply-colorscheme": "",
+        "plasma-apply-cursortheme": "",
+    },
 }
 
 FAKE_NO_KDE = {

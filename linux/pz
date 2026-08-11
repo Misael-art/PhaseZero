@@ -237,6 +237,7 @@ Usage:
   pz themes apply             Aplica plano confirmado (--plan-id --confirm)
   pz themes verify            Verifica operação (--operation-id)
   pz themes rollback          Restaura snapshot (--snapshot <id|latest>)
+  pz themes history           Últimas operações e rollbacks (--limit)
   pz themes rescue-wallpaper  Restaura wallpaper estático após crash do Plasma
   pz installation status     Audit duplicate PhaseZero install channels
   pz installation plan       Plan convergence to canonical user install

@@ -318,16 +318,16 @@ revisão de segredos, paths do host e mudanças não relacionadas.
 
 | ID | Requisito | Implementação | Teste comportamental | Prova CI | Estado | Limitação |
 |---|---|---|---|---|---|---|
-| TH-CON-001 | Schema `themes/v1` e stdout JSON puro | `linux/themes/*` + `pz themes` | pytest: schema presente em toda saída; stderr separado | python-test | pending | — |
-| TH-STA-001 | Estados reais com motivos | `engine.status` | pytest: 8 estados + indisponível/degradado com razão | python-test | pending | — |
-| TH-PLA-001 | Plano expira e exige token | engine plan/apply | pytest: TTL e token inválido falham fechado | python-test | pending | — |
-| TH-RBK-001 | Rollback preserva painéis/widgets | snapshot por monitor | pytest: diff de containments retorna byte a byte | python-test | pending | — |
-| TH-PRV-001 | Preview 15 s com Manter/Reverter/expiração | preview engine | pytest: aceita, reverter e expiração | python-test | pending | — |
-| TH-WAL-001 | Wallpaper por tela via D-Bus, sem reescrita de containments | wallpaper adapter | pytest: multi-monitor, alvo desktop/lock | python-test | pending | — |
-| TH-CAT-001 | Catálogo com licença+SHA-256 e recusas rastreáveis | catalog.py | pytest: itens recusados/adiados presentes com motivo | python-test | pending | — |
-| TH-VID-001 | Vídeo opcional com watchdog e rescue | video adapter | pytest: crash→rescue; bateria; sem aceleração | python-test | pending | — |
-| TH-STE-001 | Game Mode com ownership e uninstall-managed | steam adapter | pytest: steam nativo/flatpak, decky ausente | python-test | pending | — |
-| TH-UI-001 | ThemesPage com 7 abas e hero real | `pages/themes.py` | QA offscreen: teclado/D-pad, 44 px, cancelamento | python-test | pending | — |
+| TH-CON-001 | Schema `themes/v1` e stdout JSON puro | `linux/themes/*` + `pz themes` | pytest: schema presente em toda saída; stderr separado | python-test | verified | — |
+| TH-STA-001 | Estados reais com motivos | `engine.status` | pytest: 8 estados + indisponível/degradado com razão | python-test | verified | — |
+| TH-PLA-001 | Plano expira e exige token | engine plan/apply | pytest: TTL e token inválido falham fechado | python-test | verified | — |
+| TH-RBK-001 | Rollback preserva painéis/widgets | snapshot por monitor | pytest: diff de containments retorna byte a byte | python-test | verified | — |
+| TH-PRV-001 | Preview 15 s com Manter/Reverter/expiração | preview engine | pytest: aceita, reverter e expiração | python-test | verified | — |
+| TH-WAL-001 | Wallpaper por tela via D-Bus, sem reescrita de containments | wallpaper adapter | pytest: multi-monitor, alvo desktop/lock | python-test | verified | — |
+| TH-CAT-001 | Catálogo com licença+SHA-256 e recusas rastreáveis | catalog.py | pytest: itens recusados/adiados presentes com motivo | python-test | verified | — |
+| TH-VID-001 | Vídeo opcional com watchdog e rescue | video adapter | pytest: crash→rescue; bateria; sem aceleração | python-test | deferred | Extensão de vídeo (Wallpaper Engine/Waywallen) permanece experimental; watchdog+rescue já presentes; reprovar vídeo sem perfil explícito |
+| TH-STE-001 | Game Mode com ownership e uninstall-managed | steam adapter | pytest: steam nativo/flatpak, decky ausente | python-test | verified | — |
+| TH-UI-001 | ThemesPage com 7 abas e hero real | `pages/themes.py` | QA offscreen: teclado/D-pad, 44 px, cancelamento | python-test | verified | — |
 
 Estados permitidos: `pending`, `in_progress`, `blocked`, `verified`, `deferred`.
 
@@ -346,6 +346,7 @@ Estados permitidos: `pending`, `in_progress`, `blocked`, `verified`, `deferred`.
 | Data | Agente | Branch/worktree | Fase | Commit/PR | Gates | Resultado/próximo passo |
 |---|---|---|---|---|---|---|
 | 2026-08-11 | opencode | `codex/themes-accessibility-v1` / `/tmp/pz-themes` | Fase 0 | roadmap canônico | pytest 444+9; UI 27; SteamOS UX ok | Iniciar Fase 1: contratos e catálogo |
+| 2026-08-11 | opencode | `codex/themes-accessibility-v1` / `/tmp/pz-themes` | Fases 1–7 | `30db2a9`, `2a0e7bd`, `f27d1a3` + M7 pendente | pytest 54 temas; UI 27; native 19; linux-themes.sh verde; SteamOS UX ok | PR + release + instalação (Fase 8) |
 
 ## Formato obrigatório de handoff
 
