@@ -174,6 +174,42 @@ run_wv_unit() {
         '"$1"'
     ' <<< "$WV_SRC"
 }
+
+echo "=== windows-vm.sh: bounded Samba status probe ==="
+slow_smb_bin="$TMP_ROOT/slow-smb-bin"
+mkdir -p "$slow_smb_bin"
+cat > "$slow_smb_bin/smbclient" <<'EOF'
+#!/usr/bin/env bash
+sleep 10
+EOF
+chmod +x "$slow_smb_bin/smbclient"
+start_seconds="$SECONDS"
+PATH="$slow_smb_bin:$PATH" PZ_WINDOWS_VM_STATUS_PROBE_TIMEOUT_SECONDS=1 HOME="$HOME" \
+    bash -c 'source /dev/stdin; SHARE_POLICY=minimal; samba_shares_reachable && exit 1; exit 0' \
+    <<< "$WV_SRC"
+test "$((SECONDS - start_seconds))" -lt 4
+echo "  Samba probe timeout ok"
+
+echo "=== windows-vm.sh: configured status skips exhaustive disk scan ==="
+configured_fast_disk="$TMP_ROOT/configured-fast.qcow2"
+scan_log="$TMP_ROOT/configured-scan.log"
+: > "$configured_fast_disk"
+: > "$scan_log"
+WV_CONFIGURED_FAST_DISK="$configured_fast_disk" WV_SCAN_LOG="$scan_log" HOME="$HOME" \
+    bash -c '
+        source /dev/stdin
+        CONFIG_FILE=/nonexistent
+        PZ_WINDOWS_VM_DISK="$WV_CONFIGURED_FAST_DISK"
+        disk_looks_installed() { return 1; }
+        find_existing_windows_disk() { printf "installed\n" >> "$WV_SCAN_LOG"; }
+        find_existing_windows_disk_any() { printf "any\n" >> "$WV_SCAN_LOG"; }
+        discovery_json configured >/dev/null
+        test ! -s "$WV_SCAN_LOG"
+        discovery_json full >/dev/null
+        test -s "$WV_SCAN_LOG"
+    ' <<< "$WV_SRC"
+echo "  configured status scan bypass ok"
+
 adopt_dir="$TMP_ROOT/adopt-self-contained"
 adopt_disk="$adopt_dir/phasezero-windows.qcow2"
 mkdir -p "$adopt_dir"
