@@ -50,6 +50,14 @@ from .windows_install_dialog import completed_image_indices
 INSPECT_TIMEOUT_MS = 180_000  # sha256 of a large ISO on slow storage is the floor.
 SCAN_TIMEOUT_MS = 60_000
 
+# ``media inspect`` can only name the WIM images when the install payload is
+# readable from the ISO; retail media routinely reports ``imageCount: 0`` with
+# ``payloadNote`` explaining why. The install journey
+# (``windows_install_dialog``) already offers editions 1..10 unconditionally in
+# that case, so mirror the same range here instead of dead-ending the user with
+# an empty edition list and a permanently disabled play button.
+FALLBACK_INDEX_RANGE = range(1, 11)
+
 
 class _PzReader(QObject):
     """Run a read-only ``pz`` command asynchronously with a bounded timeout.
@@ -395,11 +403,18 @@ class ImageManagerDialog(QDialog):
         valid = "Válida" if entry.get("valid") else "Inválida / não confirmada"
         size = int(entry.get("sizeMb") or 0)
         size_text = f"{size / 1024:g} GB" if size >= 1024 else f"{size} MB"
-        count = len(entry.get("images") or [])
+        named_count = len(entry.get("images") or [])
+        note = ""
+        if not named_count and entry.get("valid"):
+            note = (
+                "\nOs nomes das edições não puderam ser lidos desta ISO; "
+                "escolha a edição pelo número, como na instalação."
+            )
         self.meta_label.setText(
             f"Arquivo: {path_text}\n"
             f"Tamanho: {size_text}  •  Arquitetura: {arch}  •  UEFI: {uefi}\n"
-            f"Estado: {valid}  •  Edições: {count}"
+            f"Estado: {valid}  •  Edições: {named_count}"
+            f"{note}"
         )
         sha = str(entry.get("sha256") or "")
         self.sha_short_label.setText(f"SHA-256: {sha[:12]}…" if sha else "SHA-256: —")
@@ -407,14 +422,9 @@ class ImageManagerDialog(QDialog):
 
         self.index_list.blockSignals(True)
         self.index_list.clear()
-        images = entry.get("images") or []
+        entries = self._index_entries(entry)
         first_usable = -1
-        for img in images:
-            if not isinstance(img, dict):
-                continue
-            idx = int(img.get("index") or 0)
-            name = str(img.get("name") or f"Edição {idx}")
-            edition = str(img.get("edition") or "")
+        for idx, name, edition in entries:
             suffix = ""
             if idx in self._install_indices:
                 suffix = "  (já instalada)"
@@ -439,6 +449,29 @@ class ImageManagerDialog(QDialog):
 
         self._set_actions_enabled(True)
         self._update_play_enabled()
+
+    def _index_entries(self, entry: dict) -> list[tuple[int, str, str]]:
+        """Editions to offer for this image: named ones, else the 1..10 range.
+
+        Returns ``(index, name, edition)`` triples. Retail ISOs frequently
+        inspect as valid with an empty ``images`` list (see
+        :data:`FALLBACK_INDEX_RANGE`); an invalid image offers nothing.
+        """
+        named: list[tuple[int, str, str]] = []
+        for img in entry.get("images") or []:
+            if not isinstance(img, dict):
+                continue
+            idx = int(img.get("index") or 0)
+            named.append((
+                idx,
+                str(img.get("name") or f"Edição {idx}"),
+                str(img.get("edition") or ""),
+            ))
+        if named:
+            return named
+        if not entry.get("valid"):
+            return []
+        return [(idx, f"Edição {idx}", "") for idx in FALLBACK_INDEX_RANGE]
 
     def _on_index_changed(self, _row: int) -> None:
         self._update_play_enabled()

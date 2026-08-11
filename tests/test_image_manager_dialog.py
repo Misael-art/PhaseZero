@@ -275,6 +275,37 @@ def test_remove_trash_calls_moveToTrash(qapp, tmp_path: Path) -> None:
     assert trash_calls == ["/iso/win11.iso"]
 
 
+def test_valid_iso_without_parseable_images_still_offers_indices(qapp, tmp_path: Path) -> None:
+    """Retail media inspects as valid with ``imageCount: 0``.
+
+    Observed on a real Win11 25H2 ISO: ``media inspect`` returns
+    ``valid: true`` but ``images: []`` with a payloadNote. Without the 1..10
+    fallback (the same range the install dialog offers) the edition list is
+    empty and the play button can never be enabled.
+    """
+    entry = _entry("/iso/retail.iso", sha="r" * 64, images=[],
+                   payloadNote="install payload present but WIM images not parseable")
+    dlg = _make_dialog(tmp_path, seeded=[entry])
+    assert dlg.index_list.count() == 10
+    assert dlg._selected_index() == 1
+    assert dlg.play_button.isEnabled()
+    assert "não puderam ser lidos" in dlg.meta_label.text()
+
+
+def test_invalid_iso_offers_no_indices(qapp, tmp_path: Path) -> None:
+    """The fallback must not resurrect an ISO that failed inspection."""
+    entry = _entry("/iso/broken.iso", sha="s" * 64, images=[], valid=False)
+    dlg = _make_dialog(tmp_path, seeded=[entry])
+    assert dlg.index_list.count() == 0
+    assert not dlg.play_button.isEnabled()
+
+
+def test_named_images_win_over_fallback(qapp, tmp_path: Path) -> None:
+    dlg = _make_dialog(tmp_path, seeded=[_entry("/iso/named.iso", sha="n" * 64)])
+    assert dlg.index_list.count() == 2
+    assert "Windows 11 Home" in dlg.index_list.item(0).text()
+
+
 def test_remove_trash_reports_failure_from_tuple_result(qapp, tmp_path: Path) -> None:
     """PySide6's static ``moveToTrash(path)`` returns ``(ok, pathInTrash)``.
 
