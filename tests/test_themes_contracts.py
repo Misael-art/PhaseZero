@@ -134,10 +134,15 @@ def test_status_non_kde_reports_reason(fake_state, fake_config, tmp_path):
 
 
 def test_status_no_success_apparent_on_unintegrated_adapters(fake_plasma, fake_state, fake_config):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "linux"))
+    from themes.catalog import FEATURES
+    from themes.features import REGISTRY
+
     result = run_cli("status", "--json")
     payload = json.loads(result.stdout)
     for feature_id, value in payload["features"].items():
-        if feature_id in ("power.adaptive", "power.pause-on-game"):
+        spec = FEATURES.get(feature_id)
+        if spec is None or REGISTRY.get(feature_id) is not None:
             continue
         assert value["state"] in (
             "indisponivel", "desligado", "degradado", "reinicio-pendente",
@@ -223,18 +228,23 @@ def test_ini_surgical_write_preserves_rest(fake_config):
     assert read_ini_key(path, "General", "ColorScheme") == "BreezeDark"
 
 
-def test_feature_plan_blocked_until_adapter(fake_plasma, fake_state, fake_config):
+def test_feature_plan_applies_with_integrated_adapters(fake_plasma, fake_state, fake_config):
     result = run_cli("plan", "--profile", "essencial")
     assert result.returncode == 0
     plan = json.loads(result.stdout)
     assert plan["schema"] == SCHEMA
-    assert plan["ok"] is False
-    assert any("adapter ainda não integrado" in blocker for blocker in plan["blockers"])
+    assert plan["ok"] is True
     assert plan["confirmToken"]
+    assert all(action["kind"] == "feature" for action in plan["actions"])
 
     apply = run_cli("apply", "--plan-id", plan["id"], "--confirm", plan["confirmToken"])
-    assert apply.returncode == 2
-    assert "bloqueios" in json.loads(apply.stderr)["error"]
+    assert apply.returncode == 0
+    operation = json.loads(apply.stdout)
+    assert operation["status"] == "complete"
+    assert operation["restored"] is False
+    assert all(
+        result["status"] in ("ligado", "noop") for result in operation["results"]
+    ), operation["results"]
 
 
 def test_plan_expires_and_requires_token(fake_plasma, fake_state, fake_config):
