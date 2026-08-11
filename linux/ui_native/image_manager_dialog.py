@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 from . import image_registry as reg
 from .models import ActionSpec
 from .provision_player import ProvisionPlayerWindow
-from .widgets import SectionHeader, themed_icon
+from .widgets import SectionHeader
 from .windows_install_dialog import completed_image_indices
 
 
@@ -173,6 +173,10 @@ class ImageManagerDialog(QDialog):
         self._pending_action: ActionSpec | None = None
         self._install_indices: set[int] = set()
         self._current: dict | None = None
+        self._batch: list[str] = []
+        self._batch_source = "manual"
+        self._batch_total = 0
+        self._batch_done = 0
 
         self._build_ui()
         self._refresh_list()
@@ -512,9 +516,17 @@ class ImageManagerDialog(QDialog):
         if request_id.startswith("inspect:"):
             path = request_id.split(":", 1)[1]
             # Keep an invalid entry so the user sees the file and can retry/inspect.
-            self._register_inspect(path, {"valid": False, "payloadNote": message},
-                                   source="manual")
-            self._after_batch_done()
+            self._register_inspect(
+                path,
+                {"valid": False, "payloadNote": message},
+                source=getattr(self, "_batch_source", "manual"),
+            )
+            # One bad ISO must not abort the rest of the batch: drop it and
+            # keep going, exactly like a successful inspect.
+            if getattr(self, "_batch", None):
+                self._batch.pop(0)
+                self._batch_done = getattr(self, "_batch_done", 0) + 1
+            self._inspect_next()
             return
         self._set_busy(False, f"Falha: {message}")
 
@@ -705,11 +717,15 @@ class ImageManagerDialog(QDialog):
             reg.remove_image(sha256=sha or None, path=path or None, state_path=self._state_arg())
             trashed = False
             if path:
-                trashed = QFile.moveToTrash(path)
+                # The static overload is ``moveToTrash(fileName) -> (ok, pathInTrash)``
+                # in PySide6; the tuple itself is always truthy, so read [0].
+                result = QFile.moveToTrash(path)
+                trashed = bool(result[0]) if isinstance(result, tuple) else bool(result)
             self._refresh_list()
             if trashed:
                 self.status_label.setText(f"Imagem “{label}” removida e enviada para a lixeira.")
             else:
                 self.status_label.setText(
-                    f"Imagem removida do registro; arquivo não pôde ser movido para a lixeira."
+                    "Imagem removida do registro; o arquivo não pôde ser movido "
+                    "para a lixeira e continua no disco."
                 )

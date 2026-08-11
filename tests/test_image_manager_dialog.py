@@ -275,6 +275,38 @@ def test_remove_trash_calls_moveToTrash(qapp, tmp_path: Path) -> None:
     assert trash_calls == ["/iso/win11.iso"]
 
 
+def test_remove_trash_reports_failure_from_tuple_result(qapp, tmp_path: Path) -> None:
+    """PySide6's static ``moveToTrash(path)`` returns ``(ok, pathInTrash)``.
+
+    The tuple is always truthy, so a failed trash must be read from ``[0]``;
+    otherwise the dialog claims success while the file is still on disk.
+    """
+    dlg = _make_dialog(tmp_path, seeded=[_entry("/iso/win11.iso", sha="t" * 64)])
+    _FakeMsgBox.chosen_role = "trash"
+    mp = pytest.MonkeyPatch()
+    mp.setattr(imd_mod, "QMessageBox", _FakeMsgBox)
+    mp.setattr(imd_mod.QFile, "moveToTrash", staticmethod(lambda p: (False, "")))
+    try:
+        dlg._remove()
+    finally:
+        _FakeMsgBox.chosen_role = "cancel"
+        mp.undo()
+    assert "não pôde ser movido" in dlg.status_label.text()
+
+    dlg2 = _make_dialog(tmp_path, seeded=[_entry("/iso/win12.iso", sha="u" * 64)])
+    _FakeMsgBox.chosen_role = "trash"
+    mp2 = pytest.MonkeyPatch()
+    mp2.setattr(imd_mod, "QMessageBox", _FakeMsgBox)
+    mp2.setattr(imd_mod.QFile, "moveToTrash", staticmethod(lambda p: (True, "/trash/win12.iso")))
+    try:
+        dlg2._remove()
+    finally:
+        _FakeMsgBox.chosen_role = "cancel"
+        mp2.undo()
+    assert "lixeira" in dlg2.status_label.text()
+    assert "não pôde" not in dlg2.status_label.text()
+
+
 # ── Add via inspect (async) ──
 
 def test_inspect_and_add_registers_parsed_fields(qapp, tmp_path: Path) -> None:
@@ -302,6 +334,21 @@ def test_inspect_failure_registers_invalid_entry(qapp, tmp_path: Path) -> None:
     images = reg.list_images(state)
     assert len(images) == 1
     assert images[0]["valid"] is False
+
+
+def test_inspect_failure_does_not_abort_remaining_batch(qapp, tmp_path: Path) -> None:
+    """A single unreadable ISO must not drop the rest of the queue."""
+    state = tmp_path / "state" / "images.json"
+    _write_fake_pz(tmp_path, inspect_fail=True)
+    dlg = _make_dialog(tmp_path)
+    dlg._inspect_and_add(["/bad/one.iso", "/bad/two.iso", "/bad/three.iso"], source="scan")
+    assert _wait_for(lambda: not dlg._reader.any_running() and not dlg._batch, timeout=20.0)
+    images = reg.list_images(state)
+    assert {img["path"] for img in images} == {
+        "/bad/one.iso", "/bad/two.iso", "/bad/three.iso"
+    }
+    assert all(img["valid"] is False for img in images)
+    assert all(img["source"] == "scan" for img in images)
 
 
 # ── Scan (async) registers picked candidates ──
