@@ -269,6 +269,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
 
             # Provision commands
             _a("windows.media.inspect", "Windows VM", "Inspecionar ISO", "Valida ISO, SHA-256, arquitetura e listas edições disponíveis.", ("windows-vm", "media", "inspect", "--iso", "{input}"), "media-optical", input_label="Selecione ISO do Windows", input_kind="file", badge="JSON"),
+            _a("windows.images.manage", "Windows VM", "Gerenciar imagens", "Lista ISOs registradas, mostra edições por índice e abre player/boot/GRUB.", ("windows-vm", "images", "manage"), "media-optical", badge="Gestão"),
             _a("windows.provision.preflight", "Windows VM", "Pré-verificação do host", "Verifica swtpm, virtio-win, KVM, OVMF e recursos antes do plano.", ("windows-vm", "preflight", "--json"), "dialog-information", badge="JSON"),
             _a("windows.provision.plan", "Windows VM", "Planejar instalação automática", "Gera plano completo de instalação e otimização.", ("windows-vm", "provision", "plan", "--iso", "{input}", "--image-index", "{image_index}", "--graphics", "{graphics}", "--guest-login", "{guest_login}", "--json"), "document-properties", badge="Seguro", parameters=(
                 _p("input", "Selecione ISO do Windows", kind="file"),

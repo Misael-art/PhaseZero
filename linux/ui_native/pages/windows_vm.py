@@ -37,6 +37,7 @@ class WindowsVmPage(BasePage):
         "windows.guest-login.status",
         "windows.provision.cancel",
         "windows.provision.discard",
+        "windows.images.manage",
         "windows.boot.install",
         "windows.shares.enable",
         "windows.shares.disable",
@@ -267,6 +268,9 @@ class WindowsVmPage(BasePage):
         self.repair_boot_button.setObjectName("secondaryButton")
         self.repair_boot_button.clicked.connect(lambda: self.run_action("windows.boot.install"))
         self.repair_boot_button.setVisible(False)
+        images = QPushButton("Gerenciar imagens")
+        images.setObjectName("secondaryButton")
+        images.clicked.connect(lambda: self.run_action("windows.images.manage"))
         install = QPushButton("Preparar Windows")
         install.setObjectName("primaryButton")
         install.clicked.connect(lambda: self.run_action("windows.provision.player"))
@@ -274,6 +278,7 @@ class WindowsVmPage(BasePage):
         optimize.setObjectName("secondaryButton")
         optimize.clicked.connect(lambda: self.run_action("windows.optimize"))
         row.addWidget(self.repair_boot_button)
+        row.addWidget(images)
         row.addWidget(optimize)
         row.addWidget(install)
         return card
