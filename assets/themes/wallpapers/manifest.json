@@ -1,0 +1,36 @@
+{
+  "schema": "themes/v1",
+  "wallpapers": [
+    {
+      "id": "pz.geo-dark",
+      "title": "PhaseZero Geo (escuro)",
+      "kind": "image",
+      "file": "phasezero-geo-dark.svg",
+      "sha256": "f117c99b3270d1228db8dc815504da0a2b2277cbb8e58c7f2fdc19a1c6fc473f",
+      "license": "CC0-1.0",
+      "source": "bundled",
+      "network": false
+    },
+    {
+      "id": "pz.aurora",
+      "title": "PhaseZero Aurora",
+      "kind": "image",
+      "file": "phasezero-aurora.svg",
+      "sha256": "eafc3cc55f029aa92d58951176f51ff96aaa1f6dc2d290d52eef8de48ee928f7",
+      "license": "CC0-1.0",
+      "source": "bundled",
+      "network": false
+    },
+    {
+      "id": "pz.solid-charcoal",
+      "title": "PhaseZero Carvão (sólido)",
+      "kind": "solid",
+      "file": "",
+      "sha256": "",
+      "license": "CC0-1.0",
+      "color": "#171c26",
+      "source": "bundled",
+      "network": false
+    }
+  ]
+}
