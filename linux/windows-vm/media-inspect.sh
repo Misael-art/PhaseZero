@@ -294,7 +294,60 @@ media_inspect() {
     fi
 }
 
+# Canonical search bases mirror detect_windows_iso() in windows-vm.sh so the
+# scan and the runtime detection agree on where Windows ISOs live. The list is
+# bounded and local; no network or recursive walk beyond maxdepth.
+media_scan() {
+    local json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=1; shift ;;
+            *) pz_error "unknown media-scan option: $1"; return 1 ;;
+        esac
+    done
+
+    local tmp
+    tmp="$(pz_tempfile "pz-media-scan.XXXXXX")" || { pz_error "tempfile failed"; return 1; }
+    : >"$tmp"
+
+    local base path size_mb
+    for base in "${PZ_WINDOWS_ISO_DIR:-}" "/mnt/sdcard/Steam" "$HOME/Downloads" "$HOME" "/mnt/sdcard"; do
+        [ -n "$base" ] || continue
+        [ -d "$base" ] || continue
+        while IFS= read -r path; do
+            [ -n "$path" ] || continue
+            size_mb="$(stat -c%s "$path" 2>/dev/null || echo 0)"
+            size_mb=$((size_mb / 1048576))
+            printf '%s\t%s\n' "$path" "$size_mb" >>"$tmp"
+        done < <(find "$base" -maxdepth 4 -type f \( -iname '*win*.iso' -o -iname '*windows*.iso' \) 2>/dev/null | sort -u)
+    done
+
+    # Dedup by path (bases overlap, e.g. $HOME and $HOME/Downloads) and keep a
+    # stable order. Empty tmp degrades to an empty array, never an error.
+    local candidates_json
+    candidates_json="$(jq -Rn '
+        [ inputs
+          | split("\t")
+          | select(length == 2)
+          | { path: .[0], sizeMb: (.[1] | tonumber) } ]
+        | unique_by(.path)
+        | sort_by(.path)' "$tmp" 2>/dev/null || echo '[]')"
+    rm -f "$tmp"
+
+    if [ "$json" = "1" ]; then
+        jq -n --argjson candidates "$candidates_json" '{ candidates: $candidates }'
+    else
+        echo "Candidates:"
+        if [ "$(printf '%s' "$candidates_json" | jq 'length' 2>/dev/null || echo 0)" = "0" ]; then
+            echo "  (none)"
+        else
+            printf '%s\n' "$candidates_json" | jq -r '.[] | "  \(.sizeMb) MB  \(.path)"' 2>/dev/null || true
+        fi
+    fi
+}
+
 case "${1:-inspect}" in
     inspect) shift; media_inspect "$@" ;;
-    *) echo "usage: media-inspect inspect --iso <windows.iso> [--json]"; exit 1 ;;
+    scan) shift; media_scan "$@" ;;
+    *) echo "usage: media-inspect (inspect --iso <windows.iso> [--json] | scan [--json])"; exit 1 ;;
 esac
