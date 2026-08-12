@@ -231,6 +231,27 @@ FEATURES: dict[str, FeatureSpec] = {
         invasive=True,
     ),
     # --- Vídeo -----------------------------------------------------------
+    "video.wallpaper-engine": FeatureSpec(
+        id="video.wallpaper-engine",
+        title="Wallpaper Engine",
+        description=(
+            "Plugin nativo do Plasma (com.github.catsout.wallpaperEngineKde) para papéis de "
+            "parede animados da Steam Workshop. Requer o pacote "
+            "plasma6-wallpapers-wallpaper-engine-git e uma pasta de conteúdo já baixada; "
+            "o PhaseZero não baixa nem contorna a assinatura da Steam."
+        ),
+        section="vídeo",
+        kind="plasma-dbus",
+        plasma_major=6,
+        invasive=True,
+        risk="elevated",
+        params=("steamLibrary", "wallpaperId"),
+        # A running animated wallpaper is a continuous GPU cost, so it is never
+        # turned on implicitly; the containment is snapshotted byte-level like
+        # any other wallpaper change.
+        config_keys=("plasma-org.kde.plasma.desktop-appletsrc:[Containments]/wallpaperPlugin",),
+        restart_required=False,
+    ),
     "video.smart-wallpaper": FeatureSpec(
         id="video.smart-wallpaper",
         title="Vídeo de fundo",

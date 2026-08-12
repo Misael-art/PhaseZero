@@ -310,3 +310,44 @@ def test_power_adaptive_running_on_ac(fake_plasma, fake_state, fake_config):
     result, _ = _apply_feature("power.adaptive", fake_config, params={})
     assert result["status"] == "ligado", result
     assert _read_config(fake_config, "kdeglobals", "KDE", "AnimationDurationFactor") == "1"
+
+
+# --------------------------------------------------------------------------
+# Wallpaper Engine — plugin empacotado à parte
+# --------------------------------------------------------------------------
+
+def test_wallpaper_engine_absent_plugin_is_unavailable_not_failure(monkeypatch):
+    """Um plugin não instalado é um estado normal, não um defeito."""
+    from linux.themes import features as feat
+
+    monkeypatch.setattr(feat, "WALLPAPER_ENGINE_DIRS", ("/nao/existe",))
+    adapter = feat.REGISTRY.get("video.wallpaper-engine")
+    state = adapter.effective(None, None)
+    assert state["state"] == "indisponivel"
+    # A mensagem tem de nomear o pacote, senão o usuário não sabe o que fazer.
+    assert "plasma6-wallpapers-wallpaper-engine-git" in state["reason"]
+
+
+def test_wallpaper_engine_refuses_incomplete_params(monkeypatch, tmp_path):
+    from linux.themes import features as feat
+
+    monkeypatch.setattr(feat, "WALLPAPER_ENGINE_DIRS", (str(tmp_path),))
+    adapter = feat.REGISTRY.get("video.wallpaper-engine")
+    action = {"target": {"state": "ligado"}, "params": {"steamLibrary": "", "wallpaperId": ""}}
+    result = adapter.apply(None, None, action)
+    assert result["status"] == "failed"
+    assert "obrigatórios" in result["error"]
+
+
+def test_wallpaper_engine_refuses_missing_steam_library(monkeypatch, tmp_path):
+    from linux.themes import features as feat
+
+    monkeypatch.setattr(feat, "WALLPAPER_ENGINE_DIRS", (str(tmp_path),))
+    adapter = feat.REGISTRY.get("video.wallpaper-engine")
+    action = {
+        "target": {"state": "ligado"},
+        "params": {"steamLibrary": str(tmp_path / "ausente"), "wallpaperId": "123"},
+    }
+    result = adapter.apply(None, None, action)
+    assert result["status"] == "failed"
+    assert "inexistente" in result["error"]

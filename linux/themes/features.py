@@ -17,6 +17,7 @@ garantida por snapshot/restauração byte a byte.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
 from .kde import process_running
 from .catalog import FEATURES
@@ -607,6 +608,85 @@ class _Registry:
         return self._adapters.get(feature_id)
 
 
+WALLPAPER_ENGINE_PLUGIN = "com.github.catsout.wallpaperEngineKde"
+WALLPAPER_ENGINE_DIRS = (
+    "/usr/share/plasma/wallpapers/" + WALLPAPER_ENGINE_PLUGIN,
+    str(Path.home() / ".local/share/plasma/wallpapers" / WALLPAPER_ENGINE_PLUGIN),
+)
+
+
+class _WallpaperEngineAdapter(FeatureAdapter):
+    """Plasma wallpaper plugin for Steam Workshop animated wallpapers.
+
+    The plugin is packaged separately, so its absence is a normal state and is
+    reported as unavailable with the package name rather than attempted and
+    failed. Nothing here downloads content or works around Steam.
+    """
+
+    def _installed(self) -> bool:
+        return any(Path(path).is_dir() for path in WALLPAPER_ENGINE_DIRS)
+
+    def effective(self, facts, session) -> dict:  # noqa: ARG002
+        if not self._installed():
+            return {
+                "state": "indisponivel",
+                "reason": "instale plasma6-wallpapers-wallpaper-engine-git",
+                "params": {},
+            }
+        try:
+            screens = session.read_wallpapers()
+        except Exception:  # noqa: BLE001 - a locked or absent session is not a failure here
+            return {"state": "indisponivel", "reason": "sessão Plasma ilegível", "params": {}}
+        active = [s for s in screens if s.get("wallpaperPlugin") == WALLPAPER_ENGINE_PLUGIN]
+        if not active:
+            return {"state": "desligado", "reason": "", "params": {}}
+        if len(active) < len(screens):
+            return {
+                "state": "degradado",
+                "reason": f"ativo em {len(active)} de {len(screens)} telas",
+                "params": {},
+            }
+        return {"state": "ligado", "reason": "", "params": dict(active[0].get("config", {}))}
+
+    def apply(self, facts, session, action) -> dict:  # noqa: ARG002
+        if not self._installed():
+            return {
+                "status": "failed",
+                "error": "plugin ausente: instale plasma6-wallpapers-wallpaper-engine-git",
+            }
+        wanted = _wanted_state(action)
+        if wanted != "ligado":
+            return {
+                "status": "failed",
+                "error": "desligue escolhendo outro wallpaper; este adapter não decide o substituto",
+            }
+        params = action.get("params", {}) or {}
+        library = str(params.get("steamLibrary", "")).strip()
+        wallpaper = str(params.get("wallpaperId", "")).strip()
+        if not library or not wallpaper:
+            return {"status": "failed", "error": "steamLibrary e wallpaperId são obrigatórios"}
+        if not Path(library).is_dir():
+            return {"status": "failed", "error": f"pasta da Steam inexistente: {library}"}
+        try:
+            screens = session.read_wallpapers()
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "failed", "error": f"sessão Plasma ilegível: {exc}"}
+        for screen in screens:
+            session.write_wallpaper(
+                int(screen.get("screen", 0)),
+                WALLPAPER_ENGINE_PLUGIN,
+                {"SteamLibraryPath": library, "WallpaperWorkShopId": wallpaper},
+            )
+        session.notify()
+        state = self.effective(facts, session)
+        if state["state"] != "ligado":
+            return {"status": "failed", "error": state.get("reason") or "wallpaper não refletido"}
+        return {"status": "ligado", "params": {"steamLibrary": library, "wallpaperId": wallpaper}}
+
+    def verify(self, facts, session) -> bool:  # noqa: ARG002
+        return self.effective(facts, session)["state"] == "ligado"
+
+
 REGISTRY = _Registry()
 
 REGISTRY.register("theme.phasezero", _PhaseZeroThemeAdapter(FEATURES["theme.phasezero"]))
@@ -627,6 +707,7 @@ REGISTRY.register("access.screen-reader", _ScreenReaderAdapter(FEATURES["access.
 REGISTRY.register("access.sticky-keys", _KeysAccessAdapter(FEATURES["access.sticky-keys"], key_name="StickyKeys"))
 REGISTRY.register("access.slow-keys", _KeysAccessAdapter(FEATURES["access.slow-keys"], key_name="SlowKeys"))
 REGISTRY.register("access.bounce-keys", _KeysAccessAdapter(FEATURES["access.bounce-keys"], key_name="BounceKeys"))
+REGISTRY.register("video.wallpaper-engine", _WallpaperEngineAdapter(FEATURES["video.wallpaper-engine"]))
 REGISTRY.register("power.adaptive", _PowerAdaptiveAdapter(FEATURES["power.adaptive"]))
 REGISTRY.register("power.pause-on-game", _PowerAdaptiveAdapter(FEATURES["power.pause-on-game"], pause_in_game=True))
 
