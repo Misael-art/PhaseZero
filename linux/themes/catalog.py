@@ -42,7 +42,22 @@ FEATURES: dict[str, FeatureSpec] = {
         section="aparência",
         kind="kde-config",
         params=("package",),
-        config_keys=("plasmarc:[Theme]/name",),
+        # The snapshot scope is derived from these entries, so they have to name
+        # every file the apply can disturb, not just the one that identifies the
+        # setting. plasma-apply-lookandfeel rewrites all of these in one go;
+        # declaring only plasmarc meant a failed apply restored that single file
+        # and left the rest - including the look-and-feel id itself and the
+        # colour scheme - as the half-applied theme had left them.
+        config_keys=(
+            "kdeglobals:[KDE]/LookAndFeelPackage",
+            "plasmarc:[Theme]/name",
+            "kcminputrc:[Mouse]/cursorTheme",
+            "kwinrc:[Effect-blur]/BlurStrength",
+            "ksplashrc:[KSplash]/Theme",
+            "gtkrc:[Settings]/gtk-theme-name",
+            "gtkrc-2.0:[Settings]/gtk-theme-name",
+            "Trolltech.conf:[Qt]/style",
+        ),
         default_params={"package": "org.kde.breeze.desktop"},
     ),
     "theme.colorscheme": FeatureSpec(
@@ -98,7 +113,9 @@ FEATURES: dict[str, FeatureSpec] = {
         section="aparência",
         kind="kde-config",
         params=("darkScheme",),
-        config_keys=("kdeglobals:[KDE]/ColorScheme",),
+        # Plasma reads the active scheme from [General]; the [KDE] group was
+        # written and verified by this feature but consulted by nothing.
+        config_keys=("kdeglobals:[General]/ColorScheme",),
         key_verified=False,
         default_params={"darkScheme": "BreezeDark"},
     ),

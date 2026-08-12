@@ -197,7 +197,10 @@ def test_single_key_toggles(fake_plasma, fake_state, fake_config):
 def test_auto_dark_roundtrip(fake_plasma, fake_state, fake_config):
     operation = _plan_and_apply("--feature", "theme.auto-dark", "--state", "on")
     assert operation["status"] == "complete"
-    assert _read_config(fake_config, "kdeglobals", "KDE", "ColorScheme") == "BreezeDark"
+    # Plasma reads the active scheme from [General]. This asserted [KDE], the
+    # same group the feature wrongly wrote, so the pair agreed with each other
+    # while the desktop never changed.
+    assert _read_config(fake_config, "kdeglobals", "General", "ColorScheme") == "BreezeDark"
     status = json.loads(run_cli("status", "--json").stdout)
     assert status["features"]["theme.auto-dark"]["state"] == "ligado"
 

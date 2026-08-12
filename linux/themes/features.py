@@ -71,6 +71,26 @@ def _match(session, config: str, group: str, key: str, expected: str) -> bool:
     return _read(session, config, group, key) == expected
 
 
+# Plasma's stock look-and-feel. Applying it clears the key rather than writing
+# the value, because KDE drops entries that match the built-in default.
+DEFAULT_LOOKANDFEEL = "org.kde.breeze.desktop"
+
+
+def _lookandfeel_matches(session, package: str) -> bool:
+    """An absent key means the default package is active, not that none is.
+
+    plasma-apply-lookandfeel writes the id for a third-party theme but removes
+    the entry entirely when the applied package is the built-in default, so an
+    equality test could never confirm a successful switch to Breeze: every
+    apply reported "tema global não refletido" and rolled back a change that
+    had in fact taken effect.
+    """
+    current = _read(session, "kdeglobals", "KDE", "LookAndFeelPackage")
+    if current:
+        return current == package
+    return package == DEFAULT_LOOKANDFEEL
+
+
 class _OnOffConfigAdapter(FeatureAdapter):
     """Adapter genérico: chaves ligado/desligado com valores explícitos."""
 
@@ -154,10 +174,17 @@ class _PhaseZeroThemeAdapter(FeatureAdapter):
 
 
 class _KdeThemeAdapter(FeatureAdapter):
+    # A look-and-feel package id and a Plasma desktop theme name live in
+    # different namespaces: applying org.kde.breeze.desktop leaves
+    # kdeglobals:[KDE]/LookAndFeelPackage holding that id, while
+    # plasmarc:[Theme]/name holds a bare theme name such as "breeze" or "Layan".
+    # Reading the latter to confirm the former can never match, so every apply
+    # reported "tema global não refletido" and rolled back a change that had in
+    # fact succeeded, and effective() always answered "desligado".
     def effective(self, facts, session) -> dict:  # noqa: ARG002
         params = self.spec.default_params
         package = str(params.get("package", "org.kde.breeze.desktop"))
-        if _match(session, "plasmarc", "Theme", "name", package):
+        if _lookandfeel_matches(session, package):
             return {"state": "ligado", "reason": "", "params": {"package": package}}
         return {"state": "desligado", "reason": "", "params": {"package": package}}
 
@@ -166,7 +193,7 @@ class _KdeThemeAdapter(FeatureAdapter):
         package = str(params.get("package", "org.kde.breeze.desktop"))
         session.apply_lookandfeel(package)
         session.notify()
-        if not _match(session, "plasmarc", "Theme", "name", package):
+        if not _lookandfeel_matches(session, package):
             return {"status": "failed", "error": "tema global não refletido"}
         return {"status": "ligado"}
 
@@ -241,17 +268,24 @@ class _CursorAdapter(_NameParamAdapter):
     key = "cursorTheme"
     extra_keys = (("kcminputrc", "Mouse", "cursorSize", ""),)
 
+    # Plasma only writes cursorSize once a size is chosen explicitly, so an
+    # empty value is the default size and not a broken configuration. Demanding
+    # both keys left the feature permanently "degradado" on any desktop that
+    # had never touched the size, which is the common case.
+    DEFAULT_CURSOR_SIZE = 24
+
     def effective(self, facts, session) -> dict:  # noqa: ARG002
         name = _read(session, self.config, self.group, self.key).strip()
         size_raw = _read(session, "kcminputrc", "Mouse", "cursorSize").strip()
-        if name == "" and size_raw == "":
+        if name == "":
             return {"state": "desligado", "reason": "", "params": {}}
-        if name == "" or size_raw == "":
-            return {"state": "degradado", "reason": "tema ou tamanho do cursor ausente", "params": {}}
-        try:
-            size = int(size_raw)
-        except ValueError:
-            return {"state": "degradado", "reason": "cursorSize ilegível", "params": {}}
+        if size_raw == "":
+            size = self.DEFAULT_CURSOR_SIZE
+        else:
+            try:
+                size = int(size_raw)
+            except ValueError:
+                return {"state": "degradado", "reason": "cursorSize ilegível", "params": {}}
         return {"state": "ligado", "reason": "", "params": {"name": name, "size": size}}
 
     def _apply(self, session, name: str, params: dict) -> None:
@@ -464,8 +498,12 @@ class _NightColorAdapter(FeatureAdapter):
 
 
 class _AutoDarkAdapter(FeatureAdapter):
+    # Plasma stores the active colour scheme in kdeglobals:[General]/ColorScheme.
+    # This wrote and then re-read [KDE]/ColorScheme, a key nothing else consults,
+    # so the change never reached the desktop while the check trivially passed
+    # against the value it had just written and reported success.
     def effective(self, facts, session) -> dict:  # noqa: ARG002
-        stored = _read(session, "kdeglobals", "KDE", "ColorScheme").strip()
+        stored = _read(session, "kdeglobals", "General", "ColorScheme").strip()
         if not stored:
             return {"state": "desligado", "reason": "", "params": {}}
         params = dict(self.spec.default_params)
@@ -475,9 +513,11 @@ class _AutoDarkAdapter(FeatureAdapter):
     def apply(self, facts, session, action) -> dict:  # noqa: ARG002
         params = action.get("params", {}) or self.spec.default_params
         scheme = str(params.get("darkScheme", "BreezeDark"))
-        session.write_key("kdeglobals", "KDE", "ColorScheme", scheme)
+        # apply_colorscheme drives plasma-apply-colorscheme, which is what makes
+        # a running session repaint; writing the key alone only changes a file.
+        session.apply_colorscheme(scheme)
         session.notify()
-        if not _match(session, "kdeglobals", "KDE", "ColorScheme", scheme):
+        if not _match(session, "kdeglobals", "General", "ColorScheme", scheme):
             return {"status": "failed", "error": "alternância automática não refletida"}
         return {"status": "ligado", "params": dict(params)}
 

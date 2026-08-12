@@ -72,6 +72,21 @@ def _parser() -> argparse.ArgumentParser:
 
 def _emit(payload: dict) -> int:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+    # A failed apply used to exit 0 because only the JSON carried the verdict.
+    # Every caller that checks the exit status - the UI runner, shell scripts,
+    # CI - was told the theme had been applied while the engine had already
+    # rolled it back.
+    #
+    # Only an operation that failed counts. A plan answering ok=false did its
+    # job: it is reporting that the feature cannot be applied here, which is the
+    # result, not a failure of the command.
+    if payload.get("status") == "failed":
+        return 1
+    results = payload.get("results")
+    if isinstance(results, list) and any(
+        isinstance(r, dict) and r.get("status") == "failed" for r in results
+    ):
+        return 1
     return 0
 
 

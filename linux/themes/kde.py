@@ -202,7 +202,13 @@ class ConfigWrite:
             backup_dir = state.root() / "config-backups"
             backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             backup = backup_dir / f"{hashlib.sha256(str(path).encode()).hexdigest()[:16]}-{digest[:12]}.cfg"
-            if not backup.exists():
+            # Backups are content addressed and shared between snapshots, so a
+            # name that already exists was assumed to hold the right bytes and
+            # was reused untouched - for weeks, across unrelated snapshots. If
+            # such a file is ever truncated, edited or collides on the 48 bits
+            # of digest in its name, every later rollback silently writes those
+            # wrong bytes over the live configuration. Re-verify before reuse.
+            if not backup.exists() or file_sha256(backup) != digest:
                 shutil.copy2(path, backup)
                 backup.chmod(0o600)
             self._backups.append(backup)
@@ -215,6 +221,15 @@ class ConfigWrite:
             target = Path(str(record["path"]))
             if not backup.exists():
                 continue
+            # The snapshot recorded what these bytes must hash to. Writing a
+            # backup that no longer matches would replace a working config with
+            # unknown content and call it a restore; skipping leaves the file as
+            # the apply left it, which is recoverable and honest.
+            expected = str(record.get("sha256", ""))
+            if expected and file_sha256(backup) != expected:
+                raise KdeStateError(
+                    f"backup de {target.name} não confere com o snapshot; restauração recusada"
+                )
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(backup, target)
 
@@ -248,9 +263,17 @@ class KdeSession:
     def apply_lookandfeel(self, package: str) -> None:
         binary = self.facts.binaries.get("plasma-apply-lookandfeel")
         if binary:
-            _run([binary, package], timeout=20)
+            # Unlike its colorscheme, cursortheme and desktoptheme siblings,
+            # this tool takes the package through -a/--apply and treats a bare
+            # positional as a usage error - for which it prints help and still
+            # exits 0. Nothing was applied and nothing reported a failure, so
+            # every global theme change silently did nothing.
+            _run([binary, "--apply", package], timeout=20)
             return
-        self.write_key("plasmarc", "Theme", "name", package)
+        # The fallback wrote the look-and-feel id into plasmarc:[Theme]/name,
+        # which holds a desktop theme name, corrupting one setting while
+        # leaving the intended one untouched.
+        self.write_key("kdeglobals", "KDE", "LookAndFeelPackage", package)
 
     def apply_colorscheme(self, name: str) -> None:
         binary = self.facts.binaries.get("plasma-apply-colorscheme")

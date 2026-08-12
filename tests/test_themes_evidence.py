@@ -156,26 +156,41 @@ def test_preview_rejects_non_wallpaper_plans(fake_plasma, fake_state, fake_confi
 # --------------------------------------------------------------------------
 
 def test_rollback_restores_config_bytes_exactly(fake_plasma, fake_state, fake_config):
+    # A global theme apply rewrites every one of these, so the snapshot has to
+    # carry them all: covering only plasmarc restored one file and left the rest
+    # holding a half-applied theme.
+    kdeglobals = fake_config / "kdeglobals"
     plasmarc = fake_config / "plasmarc"
-    original = "[Theme]\nname=Breeze\nkeepEmpty=true\n\n[Wallpaper]\ncolor=#111111\n"
-    plasmarc.write_text(original, encoding="utf-8")
+    originals = {
+        kdeglobals: "[KDE]\nLookAndFeelPackage=com.example.custom\n\n[General]\nColorScheme=Custom\n",
+        plasmarc: "[Theme]\nname=Breeze\nkeepEmpty=true\n\n[Wallpaper]\ncolor=#111111\n",
+    }
+    for path, text in originals.items():
+        path.write_text(text, encoding="utf-8")
 
     facts = detect()
     sess = KdeSession(facts)
     plan = create_plan(feature="theme.kde", feature_state_target="on", facts=facts, session=sess)
     assert plan["ok"] is True
     snapshot = themes_state.load("snapshots", plan["snapshotId"])
-    assert snapshot["files"], "snapshot deve conter cópia de plasmarc"
-    assert Path(snapshot["files"][0]["backup"]).read_bytes() == original.encode("utf-8")
+    captured = {Path(entry["path"]).name for entry in snapshot["files"]}
+    assert {"kdeglobals", "plasmarc"} <= captured, f"snapshot incompleto: {sorted(captured)}"
+    for entry in snapshot["files"]:
+        path = Path(entry["path"])
+        if path in originals:
+            assert Path(entry["backup"]).read_bytes() == originals[path].encode("utf-8")
 
     operation = apply_plan(plan["id"], confirmation=plan["confirmToken"], facts=facts, session=sess)
     assert operation["status"] == "complete"
-    assert plasmarc.read_text(encoding="utf-8") != original
+    # The look-and-feel id is what this feature owns; plasmarc holds a desktop
+    # theme name and is only snapshotted because the apply disturbs it.
+    assert kdeglobals.read_text(encoding="utf-8") != originals[kdeglobals]
 
     rollback = rollback_snapshot(plan["snapshotId"], facts=facts, session=sess)
     assert rollback["status"] == "complete"
     assert rollback["restored"] is True
-    assert plasmarc.read_bytes() == original.encode("utf-8")
+    for path, text in originals.items():
+        assert path.read_bytes() == text.encode("utf-8"), f"{path.name} não restaurado byte a byte"
 
 
 def test_rollback_snapshot_covers_containments_byte_level(fake_plasma, fake_state, fake_config):
