@@ -58,17 +58,26 @@ jobs:
         run: |
           set -euo pipefail
           EXCLUDES="SC1090,SC1091,SC2034,SC2154,SC2155,SC2312"
+          # Selecting by extension skipped every entry point that has none, so
+          # linux/pz - the CLI the whole product is driven through - was never
+          # linted, and a defect there survived in a file edited constantly.
+          # Shell scripts are identified by their shebang instead.
+          # Tracked files only. A bare find also sweeps build artefacts and
+          # vendored node_modules, which are absent from a clean checkout but
+          # would make this pass depend on what happens to be lying around.
           errors=0
+          checked=0
           while IFS= read -r -d '' f; do
+            checked=$((checked + 1))
             if ! shellcheck -x -e "$EXCLUDES" "$f"; then
               ((errors++)) || true
             fi
-          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          done < <(bash tools/list-shell-scripts.sh)
           if [ "$errors" -gt 0 ]; then
-            echo "::warning::shellcheck: $errors file(s) failed (excludes: $EXCLUDES)"
+            echo "::warning::shellcheck: $errors of $checked file(s) failed (excludes: $EXCLUDES)"
             exit 1
           fi
-          echo "shellcheck: all .sh files passed"
+          echo "shellcheck: $checked shell scripts passed"
 
       - name: Check for pipefail + grep -q pattern
         run: |
@@ -79,7 +88,7 @@ jobs:
               echo "::warning file=$f::$f uses pipefail AND grep -q (SIGPIPE risk)"
               ((found++)) || true
             fi
-          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
+          done < <(bash tools/list-shell-scripts.sh)
           echo "pipefail+grep-q files: $found"
           # Non-blocking — informational
 
@@ -97,8 +106,8 @@ jobs:
           set -euo pipefail
           while IFS= read -r -d '' f; do
             bash -n "$f"
-          done < <(find . -name '*.sh' -not -path './.git/*' -print0)
-          echo "bash -n: all .sh files passed"
+          done < <(bash tools/list-shell-scripts.sh)
+          echo "bash -n: all shell scripts passed"
 
       - name: Validate homelab registry and compose lock JSON
         run: |

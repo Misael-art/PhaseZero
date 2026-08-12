@@ -95,3 +95,38 @@ def test_static_action_snapshot_matches_native_catalog():
         for action in json.loads((ROOT / "linux/ui/actions.json").read_text(encoding="utf-8"))["actions"]
     }
     assert static == expected
+
+
+def test_ci_shellcheck_covers_extensionless_entry_points():
+    """Selecionar por extensão deixava linux/pz fora do lint.
+
+    O CLI por onde todo o produto é operado não tem sufixo .sh, então nunca era
+    verificado, e um defeito ali sobreviveu num arquivo editado o tempo todo.
+    """
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    lister = ROOT / "tools/list-shell-scripts.sh"
+    assert lister.is_file(), "a descoberta compartilhada sumiu"
+    source = lister.read_text(encoding="utf-8")
+    assert "git ls-files" in source, "a descoberta precisa usar arquivos versionados"
+    assert "(ba)?sh" in source, "scripts sem extensão são achados pelo shebang"
+    # Os três passos que varrem scripts têm de usar a mesma lista; um deles
+    # (bash -n) é bloqueante e também deixava linux/pz de fora.
+    assert workflow.count("tools/list-shell-scripts.sh") >= 3, (
+        "algum passo voltou a descobrir scripts por conta própria"
+    )
+    assert "find . -name '*.sh' -not -path" not in workflow, (
+        "a seleção voltou a ser only-by-extension"
+    )
+
+
+def test_extensionless_entry_points_are_shell_and_tracked():
+    """Se um destes deixar de existir, o teste acima perde o sentido."""
+    import subprocess
+
+    tracked = subprocess.run(
+        ["git", "ls-files"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.split()
+    for path in ("linux/pz", "packaging/linux/phasezero-control-center"):
+        assert path in tracked, f"{path} deixou de ser versionado"
+        first = (ROOT / path).read_text(encoding="utf-8", errors="replace").splitlines()[0]
+        assert first.startswith("#!") and "sh" in first, f"{path} não tem shebang de shell"

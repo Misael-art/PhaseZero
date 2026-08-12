@@ -724,7 +724,12 @@ cmd_ui() {
             ;;
         status)
             local pid_file="$PZ_STATE/ui-server.pid" server_pid=""
-            [ -f "$pid_file" ] && IFS= read -r server_pid < "$pid_file" || true
+            # Best-effort read: a missing or unreadable pid file just leaves
+            # server_pid empty, which the validation below already treats as
+            # "not running".
+            if [ -f "$pid_file" ]; then
+                IFS= read -r server_pid < "$pid_file" || server_pid=""
+            fi
             if [[ "$server_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$server_pid" 2>/dev/null; then
                 echo "UI server running (pid $server_pid)"
             else
