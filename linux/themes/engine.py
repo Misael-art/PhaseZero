@@ -392,8 +392,16 @@ def create_plan(
                 entry["invasive"] = True
             current = feature_state(spec, facts, session) if spec else {"state": "indisponivel"}
             wanted = "ligado" if action["target"].get("state") == "ligado" else "desligado"
-            if current.get("state") in ("indisponivel", "degradado") and wanted == "ligado":
+            # Unavailable means a prerequisite is missing and applying cannot
+            # work, so it blocks. Degraded means the feature is half-applied or
+            # inconsistent, and re-applying is exactly the repair - blocking it
+            # left the product unable to fix the state a user is most likely to
+            # be stuck in, with the honest report of the problem being what
+            # prevented the fix.
+            if current.get("state") == "indisponivel" and wanted == "ligado":
                 blockers.append(f"{spec.title}: {current.get('reason', 'estado ilegível')}")
+            elif current.get("state") == "degradado" and wanted == "ligado":
+                entry["repairs"] = current.get("reason", "")
             entry["current"] = current
             entry["noop"] = current.get("state") == wanted
             entry["risk"] = spec.risk if spec else "normal"

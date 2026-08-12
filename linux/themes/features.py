@@ -16,6 +16,7 @@ garantida por snapshot/restauração byte a byte.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -622,10 +623,38 @@ class _Registry:
 
 
 WALLPAPER_ENGINE_PLUGIN = "com.github.catsout.wallpaperEngineKde"
+WALLPAPER_ENGINE_APPID = "431960"
 WALLPAPER_ENGINE_DIRS = (
     "/usr/share/plasma/wallpapers/" + WALLPAPER_ENGINE_PLUGIN,
     str(Path.home() / ".local/share/plasma/wallpapers" / WALLPAPER_ENGINE_PLUGIN),
 )
+
+
+def _wallpaper_engine_source(library: str, wallpaper_id: str) -> tuple[str, str]:
+    """Builds the plugin's WallpaperSource, or explains why it cannot.
+
+    The plugin composes it as `<item path>/<file>+<type>` (Common.qml
+    packWallpaperSource) and refuses to load anything when the field is empty.
+    Both halves come from the item's own project.json: `file` names the entry
+    point and `type` selects the backend, so neither can be guessed from the id.
+
+    `file` frequently names something that is not on disk - a scene item
+    declares scene.json while shipping scene.pkg - so the declared name is used
+    verbatim and never checked for existence.
+    """
+    item = Path(library) / "steamapps/workshop/content" / WALLPAPER_ENGINE_APPID / wallpaper_id
+    project = item / "project.json"
+    if not project.is_file():
+        return "", f"item {wallpaper_id} sem project.json em {item}"
+    try:
+        data = json.loads(project.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return "", f"project.json ilegível para {wallpaper_id}: {exc}"
+    entry = str(data.get("file", "")).strip()
+    kind = str(data.get("type", "")).strip().lower()
+    if not entry or not kind:
+        return "", f"project.json de {wallpaper_id} sem 'file' ou 'type'"
+    return f"file://{item}/{entry}+{kind}", ""
 
 
 def _real_screens(screens: list[dict]) -> list[dict]:
@@ -670,6 +699,19 @@ class _WallpaperEngineAdapter(FeatureAdapter):
                 "reason": f"ativo em {len(active)} de {len(screens)} telas",
                 "params": {},
             }
+        # The plugin being selected says nothing about it having anything to
+        # show. Without WallpaperSource it loads and reports "Source is empty.
+        # The config may be broken." on screen, which this used to record as a
+        # successful apply.
+        sourceless = [
+            s for s in active if not str((s.get("config") or {}).get("WallpaperSource", "")).strip()
+        ]
+        if sourceless:
+            return {
+                "state": "degradado",
+                "reason": f"sem WallpaperSource em {len(sourceless)} de {len(active)} telas",
+                "params": {},
+            }
         return {"state": "ligado", "reason": "", "params": dict(active[0].get("config", {}))}
 
     def apply(self, facts, session, action) -> dict:  # noqa: ARG002
@@ -695,6 +737,9 @@ class _WallpaperEngineAdapter(FeatureAdapter):
             screens = session.read_wallpapers()
         except Exception as exc:  # noqa: BLE001
             return {"status": "failed", "error": f"sessão Plasma ilegível: {exc}"}
+        source, reason = _wallpaper_engine_source(library, wallpaper)
+        if not source:
+            return {"status": "failed", "error": reason}
         targets = _real_screens(screens)
         if not targets:
             return {"status": "failed", "error": "nenhuma tela ativa para aplicar"}
@@ -702,7 +747,11 @@ class _WallpaperEngineAdapter(FeatureAdapter):
             session.write_wallpaper(
                 int(screen["screen"]),
                 WALLPAPER_ENGINE_PLUGIN,
-                {"SteamLibraryPath": library, "WallpaperWorkShopId": wallpaper},
+                {
+                    "SteamLibraryPath": library,
+                    "WallpaperWorkShopId": wallpaper,
+                    "WallpaperSource": source,
+                },
             )
         session.notify()
         state = self.effective(facts, session)

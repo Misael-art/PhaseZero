@@ -234,6 +234,15 @@ class ConfigWrite:
             shutil.copy2(backup, target)
 
 
+# Keys read back from a wallpaper plugin's config group. Containment exposes no
+# configKeys() in Plasma 6, so the set has to be named explicitly.
+WALLPAPER_CONFIG_KEYS = [
+    "Image", "FillMode", "Color", "SlidePaths", "SlideInterval",
+    "Provider", "Category",
+    "SteamLibraryPath", "WallpaperWorkShopId", "WallpaperSource",
+]
+
+
 class KdeSession:
     """Operações reais sobre a sessão Plasma."""
 
@@ -307,13 +316,26 @@ class KdeSession:
             argv = [qdbus, "org.kde.plasmashell", "/PlasmaShell", "org.kde.PlasmaShell.evaluateScript", script]
         return _run(argv, timeout=20)
 
+    # Read by name, since the keys cannot be enumerated. Covers the stock
+    # plugins and Wallpaper Engine; a key absent from a given plugin simply
+    # comes back empty and is omitted.
     def _wallpaper_read_script(self) -> str:
         return (
             "var out = desktops().map(function(d) {"
             "  var cfg = {};"
-            "  try { var names = d.configKeys();"
-            "    for (var i = 0; i < names.length; i++) { cfg[names[i]] = d.readConfig(names[i]); }"
-            "  } catch (e) {}"
+            # Two faults made wallpaper configuration unreadable. The group has
+            # to be selected first, or these keys belong to the containment
+            # rather than the wallpaper plugin. And Containment has no
+            # configKeys() in Plasma 6, so enumerating threw a TypeError that
+            # the surrounding catch swallowed into an empty object - every read
+            # returned {} and any check based on it was meaningless.
+            "  try { d.currentConfigGroup = ['Wallpaper', d.wallpaperPlugin, 'General'];"
+            f"    var names = {json.dumps(WALLPAPER_CONFIG_KEYS)};"
+            "    for (var i = 0; i < names.length; i++) {"
+            "      var v = d.readConfig(names[i]);"
+            "      if (v !== undefined && v !== null && String(v) !== '') { cfg[names[i]] = String(v); }"
+            "    }"
+            "  } catch (e) { cfg['_error'] = String(e); }"
             "  return {id: String(d.id), screen: d.screen, wallpaperPlugin: d.wallpaperPlugin,"
             "          wallpaperMode: d.wallpaperMode, config: cfg};"
             "});"

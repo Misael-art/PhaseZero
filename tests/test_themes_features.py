@@ -377,11 +377,69 @@ def test_wallpaper_engine_ignores_detached_containments(monkeypatch, tmp_path):
 
     class _Session:
         def read_wallpapers(self):
+            source = {"WallpaperSource": "file:///w/scene.json+scene"}
             return [
-                {"screen": 0, "wallpaperPlugin": feat.WALLPAPER_ENGINE_PLUGIN, "config": {}},
-                {"screen": 1, "wallpaperPlugin": feat.WALLPAPER_ENGINE_PLUGIN, "config": {}},
+                {"screen": 0, "wallpaperPlugin": feat.WALLPAPER_ENGINE_PLUGIN, "config": source},
+                {"screen": 1, "wallpaperPlugin": feat.WALLPAPER_ENGINE_PLUGIN, "config": source},
                 {"screen": -1, "wallpaperPlugin": "org.kde.image", "config": {}},
             ]
 
     state = adapter.effective(None, _Session())
     assert state["state"] == "ligado", state
+
+
+def test_wallpaper_source_matches_plugin_pack_format(tmp_path):
+    """O plugin monta `<path>/<file>+<type>` (Common.qml packWallpaperSource)."""
+    from linux.themes.features import _wallpaper_engine_source, WALLPAPER_ENGINE_APPID
+    import json as _json
+
+    item = tmp_path / "steamapps/workshop/content" / WALLPAPER_ENGINE_APPID / "1139304621"
+    item.mkdir(parents=True)
+    # `file` nomeia scene.json enquanto o item traz scene.pkg: o nome declarado
+    # é usado literalmente e nunca conferido em disco.
+    (item / "project.json").write_text(_json.dumps({"file": "scene.json", "type": "scene"}))
+    (item / "scene.pkg").write_text("binário")
+
+    source, reason = _wallpaper_engine_source(str(tmp_path), "1139304621")
+    assert reason == ""
+    assert source == f"file://{item}/scene.json+scene"
+
+
+def test_wallpaper_source_refuses_without_project_json(tmp_path):
+    from linux.themes.features import _wallpaper_engine_source
+
+    source, reason = _wallpaper_engine_source(str(tmp_path), "999")
+    assert source == ""
+    assert "project.json" in reason
+
+
+def test_wallpaper_engine_degrades_without_source(monkeypatch, tmp_path):
+    """Plugin ativo sem WallpaperSource mostra erro na tela; não é 'ligado'."""
+    from linux.themes import features as feat
+
+    monkeypatch.setattr(feat, "WALLPAPER_ENGINE_DIRS", (str(tmp_path),))
+    adapter = feat.REGISTRY.get("video.wallpaper-engine")
+
+    class _Session:
+        def read_wallpapers(self):
+            return [{"screen": 0, "wallpaperPlugin": feat.WALLPAPER_ENGINE_PLUGIN,
+                     "config": {"WallpaperWorkShopId": "1139304621"}}]
+
+    state = adapter.effective(None, _Session())
+    assert state["state"] == "degradado"
+    assert "WallpaperSource" in state["reason"]
+
+
+def test_wallpaper_read_script_names_keys_and_selects_group():
+    """Containment não tem configKeys() no Plasma 6 e o grupo precisa ser trocado."""
+    import inspect
+    from themes.kde import KdeSession, WALLPAPER_CONFIG_KEYS
+
+    src = inspect.getsource(KdeSession._wallpaper_read_script)
+    # O próprio comentário da função cita configKeys() para explicar a armadilha;
+    # comparar o arquivo inteiro acusaria a documentação que o protege.
+    code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
+    assert "currentConfigGroup" in code, "sem trocar o grupo, lê-se o containment"
+    assert "configKeys()" not in code, "configKeys() lança TypeError e vira {} silencioso"
+    for key in ("WallpaperSource", "WallpaperWorkShopId", "SteamLibraryPath"):
+        assert key in WALLPAPER_CONFIG_KEYS
