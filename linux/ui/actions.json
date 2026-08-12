@@ -12,6 +12,29 @@
       "input_label": ""
     },
     {
+      "name": "system.deps.status",
+      "label": "Dependências opcionais",
+      "command": "linux/pz deps status --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Visão geral",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "system.deps.install",
+      "label": "Instalar dependências ausentes",
+      "command": "linux/pz deps install {ids} --confirm",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Visão geral",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz deps status --json"
+    },
+    {
       "name": "system.repair-plan",
       "label": "Plano de reparo",
       "command": "linux/pz repair-plan",
@@ -718,7 +741,7 @@
     },
     {
       "name": "windows.graphics.plan-venus",
-      "label": "Plano Venus (experimental)",
+      "label": "Ver plano Venus",
       "command": "linux/pz windows-vm graphics plan --profile virtio-venus --json",
       "mutable": false,
       "require_plan": false,

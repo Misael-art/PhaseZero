@@ -148,6 +148,23 @@ def _p(
 def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSpec]:
     actions: list[ActionSpec] = [
         _a("system.doctor", "Visão geral", "Diagnóstico completo", "Audita host, boot, jogos, IA e integrações.", ("doctor",), "dialog-information", badge="Seguro"),
+        # Optional dependencies: what is missing, what that costs, and a way to
+        # fix it without leaving the app. Install is privileged and separate
+        # from the report so nothing is installed by merely looking.
+        _a("system.deps.status", "Visão geral", "Dependências opcionais",
+           "Mostra o que falta e qual serviço fica degradado sem isso.",
+           ("deps", "status", "--json"), "package-x-generic",
+           badge="JSON", group="Saúde e suporte", result_view="auto",
+           keywords=("dependência", "pacote", "faltando", "pillow")),
+        _a("system.deps.install", "Visão geral", "Instalar dependências ausentes",
+           "Instala os pacotes que faltam usando o gerenciador da sua distribuição.",
+           ("deps", "install", "{ids}", "--confirm"), "system-software-install",
+           mutable=True, preview=("deps", "status", "--json"), elevated=True,
+           parameters=(
+               _p("ids", "Dependências (separadas por espaço)", placeholder="pillow"),
+           ),
+           badge="Requer admin", risk="high", group="Saúde e suporte",
+           keywords=("dependência", "instalar", "pacote")),
         _a("system.repair-plan", "Visão geral", "Plano de reparo", "Gera recomendações sem alterar sistema.", ("repair-plan",), "document-properties", badge="Seguro"),
         _a("system.support-bundle", "Visão geral", "Bundle de suporte", "Coleta logs sanitizados para diagnóstico.", ("support-bundle",), "folder-download", mutable=True, preview=("doctor",), badge="Coleta"),
         _a("system.version", "Visão geral", "Versão PhaseZero", "Mostra versão e canal instalados.", ("version",), "help-about"),

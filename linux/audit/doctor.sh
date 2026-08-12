@@ -924,4 +924,24 @@ else
     check AI_IDE "AI-capable IDE/editor available" WARN "install VS Code/Cursor/Windsurf/Zed/Neovim"
 fi
 
+# Optional dependencies degrade a service without breaking the product, so
+# absence is reported rather than treated as a fault. The distinction that
+# matters to the user is whether PhaseZero can install it here: on a
+# distribution we have no package name for, offering a fix would be a lie.
+deps_status="$(run bash "$PZ_ROOT/linux/pz" deps status --json 2>/dev/null || echo '{}')"
+deps_missing="$(jq -r '.missingCount // 0' <<< "$deps_status" 2>/dev/null || echo 0)"
+if [ "${deps_missing:-0}" = "0" ]; then
+    check DEPS01 "Optional dependencies present" PASS "nada ausente"
+else
+    deps_names="$(jq -r '[.dependencies[] | select(.present == false) | .title] | join(", ")' <<< "$deps_status" 2>/dev/null)"
+    deps_fixable="$(jq -r '.installable | join(" ")' <<< "$deps_status" 2>/dev/null)"
+    if [ -n "$deps_fixable" ]; then
+        check DEPS01 "Optional dependencies present" WARN \
+            "ausente: ${deps_names} — instale com: linux/pz deps install ${deps_fixable} --confirm"
+    else
+        check DEPS01 "Optional dependencies present" INFO \
+            "ausente: ${deps_names} — sem pacote conhecido nesta distribuição; instale manualmente"
+    fi
+fi
+
 finish

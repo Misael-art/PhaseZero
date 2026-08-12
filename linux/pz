@@ -857,6 +857,11 @@ cmd_themes() {
         python3 -m linux.themes "$@"
 }
 
+cmd_deps() {
+    PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+        python3 -m linux.deps "$@"
+}
+
 cmd_installation() {
     PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
         python3 -m linux.installation "$@"
@@ -894,6 +899,7 @@ main() {
         tune)          cmd_tune "$@" ;;
         capabilities|capability|features|recursos) cmd_capabilities "$@" ;;
         themes|temas) cmd_themes "$@" ;;
+        deps|dependencias|dependências) cmd_deps "$@" ;;
         installation|installations) cmd_installation "$@" ;;
         self-update|selfupdate|update-phasezero) cmd_self_update "$@" ;;
         updates|app-updates|atualizacoes) cmd_updates "$@" ;;
