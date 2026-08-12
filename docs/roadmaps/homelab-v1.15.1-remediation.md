@@ -545,6 +545,12 @@ sem evidência.
 | Correção de release concorrente | tag temporária `v1.15.8` removida antes de publicação apó concorrência com `v1.16.0`; release patch correta é `v1.16.1` | `git ls-remote --tags`, `gh release view v1.16.1` | 2026-08-11 |
 | Gestão de imagens WinVM | PR #55 mergeada em `9e5f3be`; branch `codex/winvm-image-manager` removida (local e remota); worktree `/tmp/pz-winvm-image-manager` perdido por limpeza de `/tmp` e podado — nenhum commit perdido, `origin` já tinha `c6d2ced` | pytest 545 + 9; `tests/runner.sh` 40/40; `tests/test_provision.sh` 248/0; `tests/linux-ui.sh` 27; ShellCheck 0.11 no repositório inteiro (0 falhas); `bash -n` global; `git diff --check`; CI PR `31526162284` | 2026-08-11 |
 | Temas (encerramento) | `themes-accessibility-v1` encerrada; PR #53 mergeada em `c1d9931`; branch local e remota removidas; commit stale `c0f01ea` (docs) absorvido no roadmap de temas | `git branch -a`, `docs/roadmaps/themes-accessibility-v1.md` | 2026-08-11 |
+| `main` | `5ac5427`, alinhada com `origin/main`; CI pós-merge `31551200375` e gitleaks `31551200362` success em `9e5f3be` | `git status`, `gh run list` | 2026-08-12 |
+| Latest release | `v1.16.2` publicada com 7 assets; workflow `31553130028` success; checksums 6/6 SUCESSO após download real | `gh release view v1.16.2`, `sha256sum -c SHA256SUMS-1.16.2` | 2026-08-12 |
+| Pacote `1.16.2` validado sem instalar | pacote Arch contém `image_manager_dialog.py`, `image_registry.py` e `media-inspect.sh`; `version.json` do pacote é `1.16.2`; `media scan --json` do pacote executa e devolve candidatos reais; catálogo do pacote expõe `windows.images.manage` e a UI importa offscreen | extração em diretório temporário, execução do script empacotado, import Qt offscreen | 2026-08-12 |
+| Pacote host | continua `phasezero-control-center 1.16.1-1`; instalação de `1.16.2` **não** executada, aguarda autorização explícita | `pacman -Q` | 2026-08-12 |
+| Host inalterado pela release | `grubenv` mantém mtime 2026-08-04 10:19:03; 45 mounts; 0 processos QEMU; nenhuma mutação de GRUB/VM/discos | `stat`, `mount`, `pgrep` | 2026-08-12 |
+| Tags | `v1.16.2` criada como tag anotada; `v1.16.0`, `v1.16.1` e todas as anteriores preservadas (87 refs de tag) | `git ls-remote --tags` | 2026-08-12 |
 
 ## Ledger de execução
 
@@ -584,6 +590,7 @@ Prova release: workflow `31258447568` success; assets em `gh release view v1.15.
 | 2026-08-11 | Codex | `codex/windows-status-version` (`/tmp/pz-windows-status-version`) + `main` | HL-UI-002: status Windows resiliente, versão visível e release | `5cef80b`; PR #52 (`98d8419`); release `2e6e482`, tag `v1.15.7` | pytest 444 + 9; Windows shell; CI PR duplicada verde; CI main `31454086764`; release `31454088820`; checksums 7/7; Qt instalada `ready/needsinstall` | Host atualizado para `1.15.7-1`; falso `Estado indisponível` removido, RAM/CPU carregadas e cabeçalho mostra `PhaseZero v1.15.7`. Disco segue legitimamente `needsinstall`; boot runtime continua `stale`, sem mutação de GRUB/VM. |
 | 2026-08-11 | Codex | `codex/winvm-provision-graphics-contract` (`/tmp/pz-winvm-graphics`) + `main` | HL-WIN-GFX-001: contrato gráfico, release e recuperação real | `12da34b`, `98203ea`, `b91eacd`; PR #54 (`db12d68`); release `bd9a0b7`, tag `v1.16.1` | pytest 449 + 9; runner 39/39; provision 248/0; CI `31501159700`; release `31501162559`; SHA 6/6; host `setup` 50% | Host em `1.16.1-1`; Venus antigo cancelado sem staging; edição 2 reutilizada legitimamente; instalação `virtio-gl` avançou por validate/assets/mídia/disco e iniciou Setup. Tag temporária `v1.15.8` foi removida antes de publicação; nenhuma tag histórica movida. |
 | 2026-08-11 | Codex + Claude | `codex/winvm-image-manager` (`/tmp/pz-winvm-image-manager`) | HL-IMG-001 Fases A–E: encerramento de temas, registro de imagens, `media scan`, `ImageManagerDialog`, wiring e testes | `abfc5c5` (docs temas), `d63b66a` (registro), `3a4da5f` (scan), `1b2fad5` (dialog), `117d430` (wiring), `03ae621`, `12ccf4b`, `fda34e8`, `c6d2ced` (correções de revisão); PR #55 → `9e5f3be` | pytest 545 + 9; `tests/runner.sh` 40/40; `tests/test_provision.sh` 248/0; `tests/linux-ui.sh` 27; ShellCheck 0.11 repo inteiro; `bash -n`; `git diff --check`; CI PR `31526162284` 29/29 success | Dirigir a tela contra a ISO real do host expôs que a jornada principal terminava em beco sem saída: `media inspect` devolve `valid:true` com `imageCount:0` em mídia de varejo, então nenhuma edição era selecionável e reproduzir nunca habilitava. Corrigido reusando a faixa 1–10 da instalação. Mais três defeitos corrigidos: `moveToTrash` estático devolve tupla sempre verdadeira (falha reportada como sucesso), falha de `inspect` abortava o resto do lote, e o botão primário ficava habilitado e inerte sem seleção. Revisão automatizada acrescentou emissão dupla no timeout, avanço de lote só no caminho feliz, schema 0 lido como v1, sha maiúsculo/minúsculo duplicando imagem e dois monkeypatches de teste sem reversão. Todos com teste que falha contra a implementação anterior. Nenhuma mutação de GRUB/`grubenv`/VM/discos/mounts. **Próximo**: release `v1.16.2` |
+| 2026-08-12 | Claude | `main` (worktree principal) | HL-IMG-001 Fase F: merge, release e validação do pacote | PR #55 squash → `9e5f3be`; `9cc0a2f` (evidências no roadmap); `5ac5427` (release v1.16.2), tag anotada `v1.16.2` | CI main `31551200375` + gitleaks `31551200362` success; release workflow `31553130028` success; 7 assets; `sha256sum -c SHA256SUMS-1.16.2` 6/6 SUCESSO após download real | Pacote `1.16.2` validado sem instalar: contém `image_manager_dialog.py`/`image_registry.py`, `version.json` correto, `media scan --json` empacotado devolve candidatos reais e a UI empacotada importa offscreen expondo `windows.images.manage`. Host segue em `1.16.1-1`; `grubenv`, mounts e VM inalterados. HL-IMG-001 permanece `in_progress`: falta somente a validação pós-instalação, que exige autorização explícita do usuário. **Próximo**: `phasezero-admin pacman -U <phasezero-control-center-1.16.2-1-any.pkg.tar.zst>` somente após autorização, depois marcar HL-IMG-001 como `verified` |
 
 ## Formato obrigatório de handoff
 
@@ -607,6 +614,60 @@ Próximo passo exato:
 ```
 
 Handoff sem comandos/resultados verificáveis não altera requisito para `verified`.
+
+### Handoff — HL-IMG-001 (2026-08-12)
+
+```text
+Objetivo da sessão: concluir o plano de gestão de imagens Windows para leigo
+  (achar ISO, ver edições por índice, reproduzir, habilitar no boot, restaurar
+  GRUB, remover) e harmonizar as pendências de temas, retomando o trabalho
+  parado de outro agente.
+Fase/IDs assumidos: HL-IMG-001, Fases A–F.
+Branch e worktree: `codex/winvm-image-manager` em `/tmp/pz-winvm-image-manager`
+  (perdido por limpeza de `/tmp` e podado); conclusão feita em `main`
+  (`/mnt/sdcard/Projects/PhaseZero`).
+HEAD inicial: `0abc5ad` (main) / `117d430` (branch, deixada pelo agente anterior).
+HEAD final: `5ac5427` (main, release v1.16.2).
+Arquivos alterados: `linux/ui_native/image_registry.py` (novo),
+  `linux/ui_native/image_manager_dialog.py` (novo), `linux/ui_native/catalog.py`,
+  `linux/ui_native/main_window.py`, `linux/ui_native/pages/windows_vm.py`,
+  `linux/ui/actions.json`, `linux/windows-vm/media-inspect.sh`,
+  `linux/windows-vm/windows-vm.sh`, `tests/test_image_registry.py` (novo),
+  `tests/test_image_manager_dialog.py` (novo), `tests/test_windows_vm_ui.py`,
+  `tests/linux-windows-vm.sh`, `CHANGELOG.md`, os dois roadmaps.
+Commits criados: `03ae621`, `12ccf4b`, `fda34e8`, `c6d2ced` (correções desta
+  sessão sobre o trabalho herdado), `36891ec`/`3337983` (docs), merge `9e5f3be`,
+  `9cc0a2f` (evidências), `5ac5427` (release).
+Testes executados e resultados: pytest 545 passed + 9 subtests; `tests/runner.sh`
+  40/40; `tests/test_provision.sh` 248 PASS/0 FAIL; `tests/linux-ui.sh` 27;
+  `tests/linux-windows-vm.sh` exit 0; ShellCheck 0.11 no repositório inteiro com
+  0 falhas; `bash -n` global; `git diff --check`.
+CI/PR: PR #55 run `31526162284` success (29 checks, 0 falhas) + gitleaks
+  `31526162389`; CI de `main` `31551200375` e gitleaks `31551200362` success;
+  release workflow `31553130028` success.
+Estado do host antes/depois: pacote `phasezero-control-center 1.16.1-1` antes e
+  depois — a instalação de `1.16.2` NÃO foi executada. `grubenv` mantém mtime
+  2026-08-04 10:19:03, 45 mounts, 0 processos QEMU. Nenhuma mutação de GRUB, VM,
+  discos ou mounts. As únicas execuções contra o host foram leituras
+  (`media scan`, `media inspect`) com estado gravado em diretório temporário.
+Segredos verificados como ausentes: gitleaks verde no PR, em `main` e na release;
+  `security-secret-scan` verde; nenhum valor de segredo lido, logado ou gravado
+  pelo registro de imagens.
+Limitações e riscos restantes: (1) `media inspect` não consegue ler os nomes das
+  edições em mídia de varejo — a tela oferece a faixa numérica 1–10, o mesmo
+  contorno já usado pela instalação; (2) o registro não é seguro contra escritor
+  concorrente (um único escritor por desenho, limitação documentada no
+  docstring); (3) o SHA-256 de uma ISO grande leva dezenas de segundos, embora
+  assíncrono; (4) worktrees em `/tmp` são frágeis — esta sessão perdeu a sua para
+  uma limpeza de `/tmp` no meio do trabalho, sem perda de commits porque tudo já
+  estava em `origin`.
+Bloqueios reais: nenhum técnico. HL-IMG-001 permanece `in_progress` apenas porque
+  a validação pós-instalação exige autorização explícita do usuário.
+Próximo passo exato: com autorização, `phasezero-admin pacman -U
+  <phasezero-control-center-1.16.2-1-any.pkg.tar.zst>`; validar versão, imports
+  da UI instalada, `windows-vm status`, abrir "Gerenciar imagens" e confirmar 0
+  mutação de GRUB/VM/discos/mounts; só então marcar HL-IMG-001 como `verified`.
+```
 
 ## Definição de concluído
 
