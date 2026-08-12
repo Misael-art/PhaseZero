@@ -351,3 +351,37 @@ def test_wallpaper_engine_refuses_missing_steam_library(monkeypatch, tmp_path):
     result = adapter.apply(None, None, action)
     assert result["status"] == "failed"
     assert "inexistente" in result["error"]
+
+
+def test_wallpaper_write_sets_plugin_before_config_group():
+    """Trocar o plugin reinicia o grupo; selecioná-lo antes perde os writeConfig."""
+    import inspect
+    from themes.kde import KdeSession
+
+    src = inspect.getsource(KdeSession.write_wallpaper)
+    plugin_at = src.index("d.wallpaperPlugin =")
+    group_at = src.index("d.currentConfigGroup =")
+    assert plugin_at < group_at, (
+        "wallpaperPlugin deve ser atribuído antes de currentConfigGroup, "
+        "senão as chaves do plugin são gravadas fora do grupo e o wallpaper "
+        "fica sem conteúdo"
+    )
+
+
+def test_wallpaper_engine_ignores_detached_containments(monkeypatch, tmp_path):
+    """Containments de monitores removidos vêm com screen=-1 e não são telas."""
+    from linux.themes import features as feat
+
+    monkeypatch.setattr(feat, "WALLPAPER_ENGINE_DIRS", (str(tmp_path),))
+    adapter = feat.REGISTRY.get("video.wallpaper-engine")
+
+    class _Session:
+        def read_wallpapers(self):
+            return [
+                {"screen": 0, "wallpaperPlugin": feat.WALLPAPER_ENGINE_PLUGIN, "config": {}},
+                {"screen": 1, "wallpaperPlugin": feat.WALLPAPER_ENGINE_PLUGIN, "config": {}},
+                {"screen": -1, "wallpaperPlugin": "org.kde.image", "config": {}},
+            ]
+
+    state = adapter.effective(None, _Session())
+    assert state["state"] == "ligado", state

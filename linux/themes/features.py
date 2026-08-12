@@ -307,9 +307,13 @@ class _AccentAdapter(FeatureAdapter):
         mode = str(params.get("mode", "auto"))
         color = str(params.get("color", "")).strip()
         if mode == "auto" and not color:
-            color = self._from_wallpaper(facts, session)
+            # _from_wallpaper comes back empty for four unrelated reasons, and
+            # every one of them used to be reported as a missing Pillow. On a
+            # desktop showing a solid colour, with Pillow installed, the user
+            # was told to install a library they already had.
+            color, reason = self._from_wallpaper(facts, session)
             if not color:
-                return {"status": "failed", "error": "Pillow indisponível para extrair cor do wallpaper local"}
+                return {"status": "failed", "error": reason}
         if mode == "color" and not color:
             return {"status": "failed", "error": "modo color exige --param color"}
         if not color.startswith("#") or len(color) != 7:
@@ -321,11 +325,12 @@ class _AccentAdapter(FeatureAdapter):
             return {"status": "failed", "error": "cor de destaque não refletida"}
         return {"status": "ligado", "params": {"mode": mode, "color": color}}
 
-    def _from_wallpaper(self, facts, session) -> str:  # noqa: ARG002
+    def _from_wallpaper(self, facts, session) -> tuple[str, str]:  # noqa: ARG002
+        """Returns (colour, reason). The reason names the actual obstacle."""
         try:
             screens = session.read_wallpapers()
-        except Exception:
-            return ""
+        except Exception as exc:  # noqa: BLE001
+            return "", f"sessão Plasma ilegível: {exc}"
         image = ""
         for item in screens:
             config = item.get("config", {}) or {}
@@ -334,24 +339,32 @@ class _AccentAdapter(FeatureAdapter):
                 break
         image = image.replace("file://", "")
         if not image:
-            return ""
-        from pathlib import Path
+            return "", (
+                "nenhuma tela usa wallpaper de imagem; escolha uma imagem ou "
+                "informe a cor com --param color"
+            )
 
         path = Path(image)
         if path.name.startswith("pz.") or "phasezero" in str(path):
-            return ACCENT_PALETTE.get(path.stem, "")
+            palette = ACCENT_PALETTE.get(path.stem, "")
+            if palette:
+                return palette, ""
+            return "", f"wallpaper PhaseZero sem cor na paleta: {path.stem}"
         try:
             from PIL import Image
         except ImportError:
-            return ""
+            return "", (
+                "Pillow ausente: instale python-pillow (Arch), python3-pil (Debian/Ubuntu) "
+                "ou python3-pillow (Fedora)"
+            )
         try:
             with Image.open(path) as handle:
                 small = handle.convert("RGB").resize((64, 64))
                 pixels = list(small.getdata())
                 avg = tuple(round(sum(channel[index] for channel in pixels) / len(pixels)) for index in range(3))
-                return "#{:02x}{:02x}{:02x}".format(*avg)
-        except Exception:
-            return ""
+                return "#{:02x}{:02x}{:02x}".format(*avg), ""
+        except Exception as exc:  # noqa: BLE001
+            return "", f"wallpaper ilegível ({path.name}): {exc}"
 
     def verify(self, facts, session) -> bool:  # noqa: ARG002
         return self.effective(facts, session)["state"] == "ligado"
@@ -615,6 +628,14 @@ WALLPAPER_ENGINE_DIRS = (
 )
 
 
+def _real_screens(screens: list[dict]) -> list[dict]:
+    """Plasma keeps desktop containments for monitors that are no longer
+    attached and reports them with screen=-1. They cannot be written to, so
+    counting them makes a wallpaper that applied to every real display look
+    like a partial failure."""
+    return [s for s in screens if int(s.get("screen", -1)) >= 0]
+
+
 class _WallpaperEngineAdapter(FeatureAdapter):
     """Plasma wallpaper plugin for Steam Workshop animated wallpapers.
 
@@ -637,6 +658,9 @@ class _WallpaperEngineAdapter(FeatureAdapter):
             screens = session.read_wallpapers()
         except Exception:  # noqa: BLE001 - a locked or absent session is not a failure here
             return {"state": "indisponivel", "reason": "sessão Plasma ilegível", "params": {}}
+        screens = _real_screens(screens)
+        if not screens:
+            return {"state": "indisponivel", "reason": "nenhuma tela ativa", "params": {}}
         active = [s for s in screens if s.get("wallpaperPlugin") == WALLPAPER_ENGINE_PLUGIN]
         if not active:
             return {"state": "desligado", "reason": "", "params": {}}
@@ -671,9 +695,12 @@ class _WallpaperEngineAdapter(FeatureAdapter):
             screens = session.read_wallpapers()
         except Exception as exc:  # noqa: BLE001
             return {"status": "failed", "error": f"sessão Plasma ilegível: {exc}"}
-        for screen in screens:
+        targets = _real_screens(screens)
+        if not targets:
+            return {"status": "failed", "error": "nenhuma tela ativa para aplicar"}
+        for screen in targets:
             session.write_wallpaper(
-                int(screen.get("screen", 0)),
+                int(screen["screen"]),
                 WALLPAPER_ENGINE_PLUGIN,
                 {"SteamLibraryPath": library, "WallpaperWorkShopId": wallpaper},
             )

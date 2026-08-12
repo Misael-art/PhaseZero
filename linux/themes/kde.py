@@ -349,9 +349,14 @@ class KdeSession:
             f'var d = null; var ds = desktops();',
             f'for (var i = 0; i < ds.length; i++) {{ if (ds[i].screen === {screen}) {{ d = ds[i]; break; }} }}',
             f'if (!d) {{ print("NO_SCREEN_" + {screen}); }} else {{',
-            f'  d.currentConfigGroup = ["Wallpaper", "{plugin}", "General"];',
+            # Assigning wallpaperPlugin resets the current config group, so
+            # selecting the group first sent every writeConfig below into
+            # whatever group the switch left selected. The plugin was applied
+            # and its settings silently went nowhere, leaving the new wallpaper
+            # with no content to show.
             f'  d.wallpaperPlugin = "{plugin}";',
             f'  d.wallpaperMode = "{mode}";',
+            f'  d.currentConfigGroup = ["Wallpaper", "{plugin}", "General"];',
         ]
         for key, value in params.items():
             parts.append(f'  d.writeConfig("{key}", {json.dumps(str(value))});')

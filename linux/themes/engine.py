@@ -279,6 +279,7 @@ def _resolve_targets(
     wallpaper: str = "",
     screen: str = "",
     wallpaper_target: str = "desktop",
+    feature_params: dict | None = None,
 ) -> tuple[list[dict], list[str]]:
     actions: list[dict] = []
     blockers: list[str] = []
@@ -309,11 +310,18 @@ def _resolve_targets(
             )
         if feature_state_target not in ("on", "off"):
             raise ThemesError("--state deve ser on ou off")
+        supplied = dict(feature_params or {})
+        unknown = sorted(set(supplied) - set(spec.params or ()))
+        if unknown:
+            raise ThemesError(
+                f"parâmetro desconhecido para {feature}: {', '.join(unknown)}; "
+                f"aceitos: {', '.join(spec.params or ()) or 'nenhum'}"
+            )
         actions.append({
             "kind": "feature",
             "featureId": feature,
             "target": {"state": "ligado" if feature_state_target == "on" else "desligado"},
-            "params": {},
+            "params": supplied,
         })
 
     if wallpaper:
@@ -345,6 +353,10 @@ def create_plan(
     wallpaper: str = "",
     screen: str = "",
     wallpaper_target: str = "desktop",
+    # Several features are useless without input - an accent colour, a cursor
+    # name, the Steam library a wallpaper lives in - and had no way to receive
+    # it, so their adapters could only ever run on defaults or refuse.
+    feature_params: dict | None = None,
     facts: HostFacts | None = None,
     session: KdeSession | None = None,
 ) -> dict:
@@ -358,6 +370,7 @@ def create_plan(
         wallpaper=wallpaper,
         screen=screen,
         wallpaper_target=wallpaper_target,
+        feature_params=feature_params,
     )
     if not compatible:
         blockers.append(platform_reason)

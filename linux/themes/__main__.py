@@ -47,6 +47,13 @@ def _parser() -> argparse.ArgumentParser:
     plan.add_argument("--wallpaper", default="")
     plan.add_argument("--screen", default="")
     plan.add_argument("--target", default="desktop")
+    plan.add_argument(
+        "--param",
+        action="append",
+        default=[],
+        metavar="CHAVE=VALOR",
+        help="Parâmetro da feature; repita para vários (ex.: --param color=#4f7cc9).",
+    )
 
     preview = commands.add_parser("preview", help="Pré-visualiza wallpaper (15 s).")
     preview.add_argument("--plan-id", required=True)
@@ -68,6 +75,19 @@ def _parser() -> argparse.ArgumentParser:
     history.add_argument("--limit", type=int, default=15)
 
     return parser
+
+
+def _parse_params(items: list[str]) -> dict:
+    """CHAVE=VALOR pairs. A malformed one is rejected rather than ignored, so a
+    typo cannot silently fall back to a default the user did not ask for."""
+    params: dict[str, str] = {}
+    for item in items or ():
+        key, sep, value = str(item).partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise ThemesError(f"--param espera CHAVE=VALOR, recebido: {item!r}")
+        params[key] = value.strip()
+    return params
 
 
 def _emit(payload: dict) -> int:
@@ -111,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
                     wallpaper=args.wallpaper,
                     screen=args.screen,
                     wallpaper_target=args.target,
+                    feature_params=_parse_params(args.param),
                 )
             )
         if args.command == "preview":
