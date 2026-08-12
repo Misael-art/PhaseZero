@@ -501,6 +501,17 @@ class MainWindow(QMainWindow):
                 guest_login=values["guest_login"],
             )
             return
+        if action.id == "windows.images.manage":
+            from .image_manager_dialog import ImageManagerDialog
+            dialog = ImageManagerDialog(
+                self.root, self.runner, self.by_id, self,
+                advanced=self.preferences.advanced_mode,
+            )
+            dialog.exec()
+            pending = dialog.pending_action()
+            if pending is not None:
+                self.request_action(pending)
+            return
         if action.parameters:
             dialog = ParameterDialog(action, self)
             if dialog.exec() != ParameterDialog.Accepted:

@@ -199,6 +199,18 @@ def test_windows_vm_page_uses_safe_shutdown_action(ws_page):
     assert spy.at(0)[0].id == "windows.guest-login.shutdown"
 
 
+def test_windows_vm_page_offers_image_manager(ws_page):
+    from PySide6.QtTest import QSignalSpy
+
+    page, _actions = ws_page
+    buttons = [b for b in page.findChildren(QPushButton) if b.text() == "Gerenciar imagens"]
+    assert buttons, "página Windows VM deve expor o botão 'Gerenciar imagens'"
+    spy = QSignalSpy(page.action_requested)
+    buttons[0].click()
+    assert spy.count() == 1
+    assert spy.at(0)[0].id == "windows.images.manage"
+
+
 def test_windows_shutdown_action_has_read_only_preview(by_id):
     action = by_id["windows.guest-login.shutdown"]
     assert action.mutable

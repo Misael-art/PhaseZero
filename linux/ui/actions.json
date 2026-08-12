@@ -878,6 +878,17 @@
       "input_label": "Selecione ISO do Windows"
     },
     {
+      "name": "windows.images.manage",
+      "label": "Gerenciar imagens",
+      "command": "linux/pz windows-vm images manage",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Windows VM",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "windows.provision.preflight",
       "label": "Pré-verificação do host",
       "command": "linux/pz windows-vm preflight --json",

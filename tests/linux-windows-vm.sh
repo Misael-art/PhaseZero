@@ -1101,3 +1101,35 @@ grep -q 'RESCUE-TEST: would call remove_sddm_autologin' <<< "$escape_test_output
 echo "  vm_rescue_escape_to_desktop (test mode): non-destructive prints actions"
 
 echo "  rescue.sh tests ok"
+
+# media-inspect contracts: scan (net-new) and inspect schema (regression guard).
+MEDIA_TEST_DIR="$TMP_ROOT/media-test"
+mkdir -p "$MEDIA_TEST_DIR/home/Downloads"
+touch "$MEDIA_TEST_DIR/home/Downloads/Win11_25H2_BrazilianPortuguese_x64.iso"
+touch "$MEDIA_TEST_DIR/home/Downloads/Windows10_x64.iso"
+touch "$MEDIA_TEST_DIR/home/Downloads/notaniso.txt"
+
+# scan --json: dedups overlapping bases, lists only *.iso, stable schema.
+scan_json="$(HOME="$MEDIA_TEST_DIR/home" bash "$REPO_ROOT/linux/windows-vm/media-inspect.sh" scan --json)"
+# Filter to candidates created by this test so host ISOs cannot perturb counts.
+mine="$(printf '%s' "$scan_json" | jq --arg base "$MEDIA_TEST_DIR" '[.candidates[] | select(.path | startswith($base))]')"
+printf '%s' "$mine" | jq -e 'length == 2' >/dev/null
+printf '%s' "$mine" | jq -e 'any(.path | endswith("Win11_25H2_BrazilianPortuguese_x64.iso"))' >/dev/null
+printf '%s' "$mine" | jq -e 'any(.path | endswith("Windows10_x64.iso"))' >/dev/null
+printf '%s' "$mine" | jq -e 'all(.path | test("notaniso") | not)' >/dev/null
+printf '%s' "$scan_json" | jq -e '.candidates | all(has("path") and has("sizeMb"))' >/dev/null
+echo "  media scan --json: deduped candidate list; non-ISO excluded"
+
+# scan text mode stays non-empty and exits 0.
+HOME="$MEDIA_TEST_DIR/home" bash "$REPO_ROOT/linux/windows-vm/media-inspect.sh" scan >/dev/null
+echo "  media scan (text): exit 0"
+
+# inspect --json schema preserved on a non-Windows blob (regression guard).
+inspect_iso="$MEDIA_TEST_DIR/home/Downloads/notwindows.iso"
+printf 'definitely not a windows payload\n' > "$inspect_iso"
+inspect_json="$(bash "$REPO_ROOT/linux/windows-vm/media-inspect.sh" inspect --iso "$inspect_iso" --json)"
+printf '%s' "$inspect_json" | jq -e '.valid == false and .imageCount == 0 and (.images | type == "array")' >/dev/null
+printf '%s' "$inspect_json" | jq -e 'has("sha256") and has("arch") and has("uefiBoot") and has("sizeMb") and has("label") and has("payloadNote")' >/dev/null
+echo "  media inspect --json: schema stable (valid=false on non-Windows blob, all keys present)"
+
+echo "  media-inspect tests ok"

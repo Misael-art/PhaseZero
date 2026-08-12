@@ -3377,8 +3377,14 @@ case "$ACTION" in
     recover) bash "$PZ_ROOT/linux/windows-vm/recover.sh" "$@" ;;
     boot) cmd_boot "$@" ;;
     media|iso) bash "$PZ_ROOT/linux/windows-vm/media-inspect.sh" "$@" ;;
+    # UI-only surface: the native Control Center opens ImageManagerDialog when
+    # the user requests the "windows.images.manage" action. This branch keeps a
+    # direct CLI call harmless instead of falling through to the usage error.
+    images|image)
+        echo "Gerenciador de imagens: abra o PhaseZero Control Center em 'Windows VM' -> 'Gerenciar imagens'."
+        ;;
     preflight|check|readiness) bash "$PZ_ROOT/linux/windows-vm/preflight.sh" "$@" ;;
     provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|usb-access|host-access|graphics|apps|launch|launch-check|disk-check|secure-storage|guest-login|recover|boot|media|preflight|provision)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|usb-access|host-access|graphics|apps|launch|launch-check|disk-check|secure-storage|guest-login|recover|boot|media|images|preflight|provision)"; exit 1 ;;
 esac

@@ -30,6 +30,18 @@ As versões seguem a data de build em `version.json`.
 ## [Não lançado]
 
 ### Adicionado
+- Gerenciador de imagens Windows na Central de Controle (`Windows VM` →
+  "Gerenciar imagens"): lista as ISOs registradas, mostra características
+  básicas (tamanho, arquitetura, UEFI, SHA-256, validade), lista as edições
+  por índice WIM marcando as já instaladas e reúne numa única tela reproduzir
+  no player, habilitar no boot, restaurar o GRUB e remover.
+- Registro versionado de imagens (`linux/ui_native/image_registry.py`,
+  `images.json` sob o diretório de estado): `schemaVersion 1`, escrita atômica
+  com modo 0600, idempotência por `sha256`, arquivo ausente ou corrompido
+  degrada para lista vazia e versão futura falha fechada.
+- `pz windows-vm media scan [--json]`: descoberta de ISOs do Windows nas bases
+  canônicas (`~/Downloads`, `/mnt/sdcard/Steam`, `$HOME`, `/mnt/sdcard`), com
+  deduplicação por caminho. O contrato de `media inspect` permanece inalterado.
 - Modo simplificado padrão na Central de Controle: comandos, JSON e logs ficam
   recolhidos; a chave global "Modo avançado" revela detalhes técnicos sob
   demanda.
@@ -58,6 +70,14 @@ As versões seguem a data de build em `version.json`.
 - Smoke `pz ai routing` em `tests/linux-ai.sh` (degrada sem 9Router).
 
 ### Corrigido
+- Gerenciador de imagens: ISO válida cujas edições não são legíveis a partir
+  do arquivo (caso comum em mídia de varejo, em que `media inspect` devolve
+  `imageCount: 0`) passa a oferecer as edições 1 a 10, como a instalação já
+  fazia, em vez de deixar a lista vazia e o botão de reproduzir desabilitado.
+- Gerenciador de imagens: falha ao mover a ISO para a lixeira é reportada como
+  falha (a sobrecarga estática do Qt devolve uma tupla, sempre verdadeira).
+- Gerenciador de imagens: uma ISO ilegível não interrompe mais a análise das
+  demais imagens selecionadas na busca.
 - `verify` considera isolamento Bonsai por combos, não por conexão.
 - Redação preserva booleanos em chaves como `secretsRedacted`.
 - Atribuição de modelo a provider por prefixo (`cc/`, `cx/`, ...).
