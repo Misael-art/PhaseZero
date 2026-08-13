@@ -88,6 +88,42 @@ pz_display_native_resolution() {
     printf '%s\n' "$first" | sed -nE 's/^([0-9]+)x([0-9]+).*/\1 \2/p'
 }
 
+pz_display_kde_output_config() {
+    printf '%s\n' "${PZ_DISPLAY_KDE_OUTPUT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/kwinoutputconfig.json}"
+}
+
+# Resolve the physical mode KDE saved for the monitor currently connected to a
+# DRM connector. KWin keeps historical entries with the same connector name, so
+# connector name alone is unsafe: match the connected panel's EDID hash.
+pz_display_kde_resolution() {
+    local connector="$1" connector_name root edid_path edid_hash config resolution
+    case "$connector" in
+        ""|*[!A-Za-z0-9_.:-]*) return 0 ;;
+    esac
+    command -v jq >/dev/null 2>&1 || return 0
+    command -v md5sum >/dev/null 2>&1 || return 0
+
+    root="$(pz_display_sysfs_root)"
+    edid_path="$root/class/drm/$connector/edid"
+    # sysfs reports EDID files with st_size=0 even when reads return data.
+    [ -r "$edid_path" ] || return 0
+    edid_hash="$(md5sum "$edid_path" 2>/dev/null | awk '{print $1}')"
+    [ -n "$edid_hash" ] || return 0
+
+    config="$(pz_display_kde_output_config)"
+    [ -r "$config" ] || return 0
+    connector_name="${connector#card*-}"
+    resolution="$(jq -er \
+        --arg connector "$connector_name" \
+        --arg edid "$edid_hash" \
+        '[.[] | select(.name == "outputs") | .data[] |
+          select(.connectorName == $connector and .edidHash == $edid) |
+          .mode | select((.width | type) == "number" and (.height | type) == "number") |
+          "\(.width) \(.height)"] | .[0] // empty' \
+        "$config" 2>/dev/null || true)"
+    [ -n "$resolution" ] && printf '%s\n' "$resolution"
+}
+
 pz_display_valid_dimension() {
     local value="$1"
     [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 320 ] && [ "$value" -le 16384 ]
@@ -117,9 +153,13 @@ pz_display_resolved_session_vars() {
         printf '%s\n%s\n%s\n' "$width" "$height" "$connector"
         return 0
     fi
-    local native w h
+    local configured native w h
+    configured="$(pz_display_kde_resolution "$first_ext" || true)"
     native="$(pz_display_native_resolution "$first_ext" || true)"
-    if [ -n "$native" ]; then
+    if [ -n "$configured" ]; then
+        w="${configured%% *}"
+        h="${configured##* }"
+    elif [ -n "$native" ]; then
         w="${native%% *}"
         h="${native##* }"
     else
