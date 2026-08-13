@@ -84,8 +84,9 @@ class MainWindow(QMainWindow):
         self._search_relayout_timer.timeout.connect(self.rebuild_search)
 
         self.setWindowTitle("PhaseZero — Central de Controle")
-        # Narrow and portrait displays are supported by collapsing the sidebar.
-        self.setMinimumSize(800, 560)
+        # The compact layout keeps navigation and controls available down to the
+        # smallest documented high-DPI viewport. Page content scrolls vertically.
+        self.setMinimumSize(400, 280)
         self.resize(1280, 800)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self._build_ui()
@@ -186,8 +187,10 @@ class MainWindow(QMainWindow):
         self.breadcrumb = Breadcrumb()
         main_layout.addWidget(self.breadcrumb)
 
-        top = QHBoxLayout()
-        self.top_layout = top
+        top = QVBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
+        title_row = QHBoxLayout()
         title_box = QVBoxLayout()
         self.page_title = QLabel()
         self.page_title.setObjectName("pageTitle")
@@ -195,8 +198,8 @@ class MainWindow(QMainWindow):
         self.page_subtitle.setObjectName("pageSubtitle")
         title_box.addWidget(self.page_title)
         title_box.addWidget(self.page_subtitle)
-        top.addLayout(title_box)
-        top.addStretch()
+        title_row.addLayout(title_box)
+        title_row.addStretch()
         self.compact_menu = QPushButton("Menu")
         self.compact_menu.setObjectName("secondaryButton")
         self.compact_menu.setAccessibleName("Abrir navegação")
@@ -210,18 +213,23 @@ class MainWindow(QMainWindow):
                 item.triggered.connect(lambda _checked=False, name=category: self.show_category(name))
         self.compact_menu.setMenu(navigation_menu)
         self.compact_menu.hide()
-        top.addWidget(self.compact_menu)
+        title_row.addWidget(self.compact_menu)
+        top.addLayout(title_row)
+        self.controls_layout = QGridLayout()
+        self.controls_layout.setHorizontalSpacing(8)
+        self.controls_layout.setVerticalSpacing(6)
         self.search = QLineEdit()
         self.search.setObjectName("searchBox")
         self.search.setPlaceholderText("Buscar ação, perfil ou módulo…")
         self.search.setClearButtonEnabled(True)
-        self.search.setMinimumWidth(320)
+        self.search.setMinimumWidth(160)
+        self.search.setMinimumHeight(25)
         self.search.setAccessibleName("Busca de ações")
         self.search.textChanged.connect(self.on_search)
-        top.addWidget(self.search)
-        mode_label = QLabel("Modo avançado")
-        mode_label.setObjectName("modeSwitchLabel")
-        top.addWidget(mode_label)
+        self.controls_layout.addWidget(self.search, 0, 0)
+        self.mode_label = QLabel("Modo avançado")
+        self.mode_label.setObjectName("modeSwitchLabel")
+        self.controls_layout.addWidget(self.mode_label, 0, 1)
         self.mode_switch = SwitchControl()
         self.mode_switch.setObjectName("modeSwitch")
         self.mode_switch.setAccessibleName("Modo avançado")
@@ -231,18 +239,21 @@ class MainWindow(QMainWindow):
         )
         self.mode_switch.setChecked(self.preferences.advanced_mode)
         self.mode_switch.toggled.connect(self._set_advanced_mode)
-        top.addWidget(self.mode_switch)
-        theme = QPushButton()
-        theme.setObjectName("iconButton")
-        theme.setToolTip("Alternar tema")
+        self.controls_layout.addWidget(self.mode_switch, 0, 2)
+        self.theme_button = QPushButton()
+        self.theme_button.setObjectName("iconButton")
+        self.theme_button.setToolTip("Alternar tema")
+        self.theme_button.setMinimumHeight(25)
         theme_icon = QIcon.fromTheme("weather-clear-night")
         if theme_icon.isNull():
-            theme.setText("◐")
+            self.theme_button.setText("◐")
         else:
-            theme.setIcon(theme_icon)
-        theme.clicked.connect(self.toggle_theme)
-        theme.setAccessibleName("Alternar tema claro ou escuro")
-        top.addWidget(theme)
+            self.theme_button.setIcon(theme_icon)
+        self.theme_button.clicked.connect(self.toggle_theme)
+        self.theme_button.setAccessibleName("Alternar tema claro ou escuro")
+        self.controls_layout.addWidget(self.theme_button, 0, 3)
+        self.controls_layout.setColumnStretch(0, 1)
+        top.addLayout(self.controls_layout)
         main_layout.addLayout(top)
 
         reboot_marker = Path("/run/reboot-required")
@@ -489,11 +500,39 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
         compact = event.size().width() < 1100
+        compact_controls = event.size().width() < 450
+        hide_mode_label = event.size().width() < 560
+        short_viewport = event.size().height() < 360
         self.sidebar.setVisible(not compact)
         self.compact_menu.setVisible(compact)
-        self.search.setMinimumWidth(200 if compact else 320)
+        self.mode_label.setVisible(not hide_mode_label)
+        self.breadcrumb.setVisible(not short_viewport)
+        self.page_title.setVisible(not short_viewport)
+        self.page_subtitle.setVisible(not short_viewport)
+        self._set_controls_compact(compact_controls)
         if self.stack.currentIndex() == self._search_page_idx:
             self._search_relayout_timer.start()
+
+    def _set_controls_compact(self, compact: bool) -> None:
+        """Stack header controls before they can overlap at high DPI."""
+        for widget in (self.search, self.mode_label, self.mode_switch, self.theme_button):
+            self.controls_layout.removeWidget(widget)
+        if compact:
+            self.controls_layout.addWidget(self.search, 0, 0, 1, 3)
+            self.controls_layout.addWidget(self.mode_switch, 1, 0)
+            self.controls_layout.addWidget(self.theme_button, 1, 1)
+            self.controls_layout.setColumnStretch(0, 1)
+            self.controls_layout.setColumnStretch(1, 0)
+            self.controls_layout.setColumnStretch(2, 0)
+        else:
+            self.controls_layout.addWidget(self.search, 0, 0)
+            self.controls_layout.addWidget(self.mode_label, 0, 1)
+            self.controls_layout.addWidget(self.mode_switch, 0, 2)
+            self.controls_layout.addWidget(self.theme_button, 0, 3)
+            self.controls_layout.setColumnStretch(0, 1)
+            self.controls_layout.setColumnStretch(1, 0)
+            self.controls_layout.setColumnStretch(2, 0)
+            self.controls_layout.setColumnStretch(3, 0)
 
     def request_actions(self, actions: object) -> None:
         """Run a user-selected batch sequentially, retaining confirmation gates."""

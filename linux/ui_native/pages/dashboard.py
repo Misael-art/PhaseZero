@@ -24,6 +24,7 @@ class DashboardPage(BasePage):
     ) -> None:
         super().__init__(root, runner, actions, by_id, parent)
         self.dashboard_cards: list[ActionCard] = []
+        self._grids: list[tuple[QGridLayout, list[ActionCard], int]] = []
 
     def build(self) -> None:
         scroll = QScrollArea()
@@ -36,9 +37,11 @@ class DashboardPage(BasePage):
 
         welcome = QLabel("Bem-vindo de volta ao PhaseZero 👋")
         welcome.setObjectName("welcomeTitle")
+        welcome.setWordWrap(True)
         host_layout.addWidget(welcome)
         subtitle = QLabel("Escaneie, escolha um card e execute — sem decorar caminhos de menu.")
         subtitle.setObjectName("welcomeSubtitle")
+        subtitle.setWordWrap(True)
         host_layout.addWidget(subtitle)
 
         host_layout.addWidget(SectionHeader("Ações rápidas", "As tarefas mais comuns, em destaque."))
@@ -67,7 +70,47 @@ class DashboardPage(BasePage):
             grid.addWidget(card, index // columns, index % columns)
         for column in range(columns):
             grid.setColumnStretch(column, 1)
+        cards = [grid.itemAt(index).widget() for index in range(grid.count())]
+        self._grids.append((grid, cards, columns))
+        self._reflow_grid(grid, self._grids[-1][1], columns, holder.width())
         return holder
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._reflow_for_width(event.size().width())
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        self._reflow_for_width(self.width())
+
+    def _reflow_for_width(self, width: int) -> None:
+        for grid, cards, max_columns in self._grids:
+            self._reflow_grid(grid, cards, max_columns, width)
+
+    @staticmethod
+    def _reflow_grid(
+        grid: QGridLayout,
+        cards: list[ActionCard],
+        max_columns: int,
+        width: int,
+    ) -> None:
+        """Use only as many columns as fit without a horizontal scrollbar."""
+        card_width = max(card.minimumWidth() for card in cards) if cards else 1
+        columns = max(
+            1,
+            min(
+                max_columns,
+                (max(0, width) + grid.horizontalSpacing())
+                // (card_width + grid.horizontalSpacing()),
+            ),
+        )
+        while grid.count():
+            grid.takeAt(0)
+        for index, card in enumerate(cards):
+            grid.addWidget(card, index // columns, index % columns)
+        for column in range(max_columns):
+            grid.setColumnStretch(column, 1 if column < columns else 0)
+            grid.setColumnMinimumWidth(column, 0)
 
     def block_while_running(self, running: bool) -> None:
         for card in self.dashboard_cards:
