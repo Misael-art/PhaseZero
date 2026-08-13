@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QProcess, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QTextCursor
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QResizeEvent, QTextCursor
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -83,7 +84,8 @@ class MainWindow(QMainWindow):
         self._search_relayout_timer.timeout.connect(self.rebuild_search)
 
         self.setWindowTitle("PhaseZero — Central de Controle")
-        self.setMinimumSize(1100, 680)
+        # Narrow and portrait displays are supported by collapsing the sidebar.
+        self.setMinimumSize(800, 560)
         self.resize(1280, 800)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Window)
         self._build_ui()
@@ -114,6 +116,7 @@ class MainWindow(QMainWindow):
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
         sidebar.setFixedWidth(230)
+        self.sidebar = sidebar
         sidebar_scroll = QScrollArea()
         sidebar_scroll.setWidgetResizable(True)
         sidebar_scroll.setFrameShape(QFrame.NoFrame)
@@ -184,6 +187,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.breadcrumb)
 
         top = QHBoxLayout()
+        self.top_layout = top
         title_box = QVBoxLayout()
         self.page_title = QLabel()
         self.page_title.setObjectName("pageTitle")
@@ -193,6 +197,20 @@ class MainWindow(QMainWindow):
         title_box.addWidget(self.page_subtitle)
         top.addLayout(title_box)
         top.addStretch()
+        self.compact_menu = QPushButton("Menu")
+        self.compact_menu.setObjectName("secondaryButton")
+        self.compact_menu.setAccessibleName("Abrir navegação")
+        self.compact_menu.setToolTip("Abrir páginas da Central de Controle")
+        navigation_menu = QMenu(self.compact_menu)
+        for _group_title, categories in SIDEBAR_GROUPS:
+            for category in categories:
+                if category not in self.cat_meta:
+                    continue
+                item = navigation_menu.addAction(category)
+                item.triggered.connect(lambda _checked=False, name=category: self.show_category(name))
+        self.compact_menu.setMenu(navigation_menu)
+        self.compact_menu.hide()
+        top.addWidget(self.compact_menu)
         self.search = QLineEdit()
         self.search.setObjectName("searchBox")
         self.search.setPlaceholderText("Buscar ação, perfil ou módulo…")
@@ -468,8 +486,12 @@ class MainWindow(QMainWindow):
                 row.set_selected(row is selected)
         self.inspect_action(action)
 
-    def resizeEvent(self, event) -> None:
+    def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
+        compact = event.size().width() < 1100
+        self.sidebar.setVisible(not compact)
+        self.compact_menu.setVisible(compact)
+        self.search.setMinimumWidth(200 if compact else 320)
         if self.stack.currentIndex() == self._search_page_idx:
             self._search_relayout_timer.start()
 

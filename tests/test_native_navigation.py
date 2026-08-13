@@ -45,6 +45,25 @@ def test_main_window_has_persistent_status_and_grouped_breadcrumb(qapp):
         window.close()
 
 
+def test_main_window_supports_documented_narrow_viewport(qapp):
+    from linux.ui_native.main_window import MainWindow
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+        window.show()
+        window.resize(949, 593)
+        qapp.processEvents()
+        assert window.size().width() == 949
+        assert window.size().height() == 593
+        assert not window.sidebar.isVisible()
+        assert not window.compact_menu.isHidden()
+        assert window.compact_menu.menu() is not None
+        assert len(window.compact_menu.menu().actions()) == len(window.sidebar_buttons)
+        window.close()
+
+
 def test_base_page_context_health_uses_explicit_status_args(qapp):
     action = ActionSpec(
         id="module.status",
