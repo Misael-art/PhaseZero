@@ -88,6 +88,8 @@ EXPLICIT_DOMAIN=0
 RAW_QEMU=0
 RAW_DISK_BUS="nvme"
 DISPLAY_MODE="gtk"
+DISPLAY_WIDTH=""
+DISPLAY_HEIGHT=""
 OPTIMIZE_HOST="${PZ_WINDOWS_VM_OPTIMIZE:-1}"
 GRAPHICS_PROFILE=""
 GUEST_LOGIN_POLICY=""
@@ -204,6 +206,25 @@ parse_options() {
             *) pz_error "unknown windows-vm option: $1"; return 1 ;;
         esac
     done
+}
+
+resolve_display_geometry() {
+    local width="${PZ_WINDOWS_VM_DISPLAY_WIDTH:-}" height="${PZ_WINDOWS_VM_DISPLAY_HEIGHT:-}"
+    if [ -z "$width" ] && [ -z "$height" ]; then
+        DISPLAY_WIDTH=""
+        DISPLAY_HEIGHT=""
+        return 0
+    fi
+    if [[ "$width" =~ ^[0-9]+$ ]] && [[ "$height" =~ ^[0-9]+$ ]] \
+        && [ "$width" -ge 320 ] && [ "$width" -le 16384 ] \
+        && [ "$height" -ge 320 ] && [ "$height" -le 16384 ]; then
+        DISPLAY_WIDTH="$width"
+        DISPLAY_HEIGHT="$height"
+        return 0
+    fi
+    pz_warn "invalid boot display geometry ignored: ${width:-unset}x${height:-unset}"
+    DISPLAY_WIDTH=""
+    DISPLAY_HEIGHT=""
 }
 
 run_privileged_noninteractive() {
@@ -1836,7 +1857,7 @@ add_pci_devices() {
 }
 
 build_qemu_args() {
-    local audio netdev accel_cpu accel_machine
+    local audio netdev accel_cpu accel_machine display_geometry=""
     QEMU_ARGS=()
     VIRTIOFS_COUNT=0
     if [ "$DRY_RUN" = "1" ]; then
@@ -1897,10 +1918,13 @@ build_qemu_args() {
     if [ -n "$VIRTIO_ISO" ] && [ -f "$VIRTIO_ISO" ]; then
         QEMU_ARGS+=("-drive" "file=$VIRTIO_ISO,media=cdrom,readonly=on,index=3")
     fi
+    if [ -n "$DISPLAY_WIDTH" ] && [ -n "$DISPLAY_HEIGHT" ]; then
+        display_geometry=",xres=$DISPLAY_WIDTH,yres=$DISPLAY_HEIGHT"
+    fi
     if [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
-        QEMU_ARGS+=("-device" "virtio-vga-gl")
+        QEMU_ARGS+=("-device" "virtio-vga-gl$display_geometry")
     else
-        QEMU_ARGS+=("-device" "virtio-vga")
+        QEMU_ARGS+=("-device" "virtio-vga$display_geometry")
     fi
     QEMU_ARGS+=("-device" "virtio-rng-pci")
     QEMU_ARGS+=("-device" "virtio-balloon-pci")
@@ -1940,10 +1964,10 @@ build_qemu_args() {
     if [ "$DISPLAY_MODE" = "none" ]; then
         QEMU_ARGS+=("-display" "none")
     elif [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
-        QEMU_ARGS+=("-display" "gtk,gl=on,show-cursor=on")
+        QEMU_ARGS+=("-display" "gtk,gl=on,show-cursor=on,zoom-to-fit=on")
         [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
     else
-        QEMU_ARGS+=("-display" "gtk,show-cursor=on")
+        QEMU_ARGS+=("-display" "gtk,show-cursor=on,zoom-to-fit=on")
         [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
     fi
     add_pci_devices
@@ -2152,6 +2176,7 @@ launch_vm() {
     parse_options "$@"
     [ "${PZ_WINDOWS_VM_FULLSCREEN:-0}" = "1" ] && FULLSCREEN=1
     effective_config
+    resolve_display_geometry
     local RESCUE_SOURCED=0
     RESCUE_SOURCED=0
     guard_graphics_profile || return 1
