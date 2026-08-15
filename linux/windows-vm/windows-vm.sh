@@ -2237,6 +2237,40 @@ disk_in_use() {
     return 1
 }
 
+provision_removal_blocker() {
+    local active_lock="$PZ_STATE/windows-vm/provision/active.lock"
+    local operation_id="" operation_file="" operation_state=""
+    [ -e "$active_lock" ] || return 1
+    if [ ! -f "$active_lock" ] || [ -L "$active_lock" ]; then
+        printf 'estado do provisionamento é inconsistente; repare ou descarte a operação antes de remover a VM'
+        return 0
+    fi
+    IFS= read -r operation_id < "$active_lock" || true
+    case "$operation_id" in
+        ""|.|..|*[!A-Za-z0-9._-]*)
+            printf 'estado do provisionamento é inconsistente; repare ou descarte a operação antes de remover a VM'
+            return 0
+            ;;
+    esac
+    operation_file="$PZ_STATE/operations/$operation_id/operation.json"
+    if [ ! -f "$operation_file" ] || [ -L "$operation_file" ]; then
+        printf 'estado do provisionamento é inconsistente; repare ou descarte a operação antes de remover a VM'
+        return 0
+    fi
+    operation_state="$(jq -r 'if type == "object" then .state // empty else empty end' "$operation_file" 2>/dev/null || true)"
+    case "$operation_state" in
+        running)
+            printf 'instalação Windows em andamento (%s); cancele ou aguarde antes de remover a VM' "$operation_id"
+            return 0
+            ;;
+        completed|failed|cancelled) return 1 ;;
+        *)
+            printf 'estado do provisionamento é inconsistente; repare ou descarte a operação antes de remover a VM'
+            return 0
+            ;;
+    esac
+}
+
 launch_check() {
     parse_options "$@"
     effective_config
@@ -2531,7 +2565,7 @@ cmd_remove() {
     parse_options "$@"
     effective_config
     local -a blockers=()
-    local vm_real disk_real domain_state="" blockers_json='[]'
+    local vm_real disk_real domain_state="" provision_blocker="" blockers_json='[]'
     vm_real="$(realpath -m -- "$VM_DIR" 2>/dev/null || printf '%s' "$VM_DIR")"
     disk_real="$(realpath -m -- "$DISK_PATH" 2>/dev/null || printf '%s' "$DISK_PATH")"
 
@@ -2546,6 +2580,9 @@ cmd_remove() {
         *) blockers+=("diretório não pertence ao local gerenciado ~/VirtualMachines/PhaseZero*") ;;
     esac
     case "$disk_real" in "$vm_real"/*) ;; *) blockers+=("disco configurado está fora do diretório gerenciado") ;; esac
+    if provision_blocker="$(provision_removal_blocker)"; then
+        blockers+=("$provision_blocker")
+    fi
     disk_in_use && blockers+=("desligue a VM antes de removê-la")
     if [ -n "$LIBVIRT_DOMAIN" ]; then
         domain_state="$(virsh -c "$(libvirt_uri)" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"

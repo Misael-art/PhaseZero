@@ -53,6 +53,20 @@ if "$REPO_ROOT/linux/pz" windows-vm remove --json >/dev/null 2>&1; then
 fi
 [ -d "$VM_DIR" ]
 
+mkdir -p "$XDG_STATE_HOME/phasezero/windows-vm/provision" \
+    "$XDG_STATE_HOME/phasezero/operations/op-running"
+printf '%s\n' 'op-running' > "$XDG_STATE_HOME/phasezero/windows-vm/provision/active.lock"
+printf '%s\n' '{"id":"op-running","state":"running"}' \
+    > "$XDG_STATE_HOME/phasezero/operations/op-running/operation.json"
+blocked_plan="$("$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json || true)"
+jq -e '.ready == false and any(.blockers[]; contains("instalação Windows em andamento"))' \
+    <<< "$blocked_plan" >/dev/null
+[ -d "$VM_DIR" ]
+printf '%s\n' '{"id":"op-running","state":"failed"}' \
+    > "$XDG_STATE_HOME/phasezero/operations/op-running/operation.json"
+terminal_plan="$("$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json)"
+jq -e '.ready == true' <<< "$terminal_plan" >/dev/null
+
 mkdir -p "$TEST_ROOT/not-managed"
 touch "$TEST_ROOT/not-managed/phasezero-windows.qcow2"
 VM_DIR="$TEST_ROOT/not-managed"
