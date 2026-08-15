@@ -169,7 +169,7 @@ class ImageManagerDialog(QDialog):
         self.setObjectName("imageManagerDialog")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAutoFillBackground(True)
-        self.setWindowTitle("Gerenciar imagens Windows")
+        self.setWindowTitle("Gerenciar imagens e VMs Windows")
         self.setWindowModality(Qt.WindowModal)
         self.setMinimumSize(780, 540)
 
@@ -218,8 +218,8 @@ class ImageManagerDialog(QDialog):
         outer.setSpacing(14)
 
         outer.addWidget(SectionHeader(
-            "Imagens Windows",
-            "Encontre uma imagem instalada, veja as edições por índice e gerencie com segurança.",
+            "Imagens e VMs Windows",
+            "Gerencie ISOs por edição e remova com segurança VMs criadas pelo PhaseZero.",
         ))
 
         # Toolbar
@@ -345,6 +345,11 @@ class ImageManagerDialog(QDialog):
         self.remove_button.setObjectName("dangerOutlineButton")
         self.remove_button.setMinimumHeight(44)
         self.remove_button.clicked.connect(self._remove)
+        self.remove_vm_button = QPushButton("🗑 Remover VM criada")
+        self.remove_vm_button.setObjectName("dangerOutlineButton")
+        self.remove_vm_button.setMinimumHeight(44)
+        self.remove_vm_button.setToolTip("Move a VM criada para a lixeira. Não altera boot direto.")
+        self.remove_vm_button.clicked.connect(lambda: self._request_action("windows.vm.remove"))
         close = QPushButton("Fechar")
         close.setMinimumHeight(44)
         close.clicked.connect(self.reject)
@@ -352,7 +357,9 @@ class ImageManagerDialog(QDialog):
             row.addWidget(button)
         row.addStretch()
         row.addWidget(self.remove_button)
+        row.addWidget(self.remove_vm_button)
         row.addWidget(close)
+        self.remove_vm_button.setEnabled("windows.vm.remove" in self._by_id)
         return row
 
     # ----- data flow -----

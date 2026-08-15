@@ -96,6 +96,7 @@ NET_MODEL=""
 OVMF_CODE=""
 GRAPHICS_EXPERIMENTAL=0
 EXPLICIT_GRAPHICS=0
+REMOVE_CONFIRMED=0
 
 usage() {
     cat <<EOF
@@ -107,6 +108,7 @@ Usage:
   pz windows-vm adopt [--disk PATH]
   pz windows-vm plan --iso <windows.iso> [--json]
   pz windows-vm install --iso <windows.iso> [--disk-size 256G] [--ram 8192|8G] [--cpus N] [--dry-run]
+  pz windows-vm remove [--dry-run] --yes [--json]
   pz windows-vm optimize [--dry-run]
   pz windows-vm launch [--domain NAME|--raw-qemu] [--iso <windows.iso>] [--fullscreen|--headless] [--graphics <profile>] [--experimental] [--dry-run]
   pz windows-vm launch-check [--graphics <profile>] [--json]
@@ -193,6 +195,7 @@ parse_options() {
             --with-boot) WITH_BOOT=1; shift ;;
             --json) JSON_OUT=1; shift ;;
             --dry-run|-n) DRY_RUN=1; shift ;;
+            --yes) REMOVE_CONFIRMED=1; shift ;;
             --rescue) PZ_WINDOWS_VM_RESCUE=1; shift ;;
             --no-rescue) PZ_WINDOWS_VM_RESCUE=0; shift ;;
             --help|-h) usage; exit 0 ;;
@@ -2524,6 +2527,67 @@ cmd_adopt() {
     pz_info "adopted existing Windows VM disk: $target"
 }
 
+cmd_remove() {
+    parse_options "$@"
+    effective_config
+    local -a blockers=()
+    local vm_real disk_real domain_state="" blockers_json='[]'
+    vm_real="$(realpath -m -- "$VM_DIR" 2>/dev/null || printf '%s' "$VM_DIR")"
+    disk_real="$(realpath -m -- "$DISK_PATH" 2>/dev/null || printf '%s' "$DISK_PATH")"
+
+    case "$DISK_SOURCE" in
+        new|managed|config) ;;
+        *) blockers+=("somente VMs criadas pelo PhaseZero podem ser removidas aqui") ;;
+    esac
+    [ -d "$vm_real" ] || blockers+=("diretório gerenciado da VM não foi encontrado")
+    [ "$vm_real" != "/" ] && [ "$vm_real" != "$HOME" ] || blockers+=("diretório da VM inseguro")
+    case "$vm_real" in
+        "$HOME"/VirtualMachines/PhaseZero*) ;;
+        *) blockers+=("diretório não pertence ao local gerenciado ~/VirtualMachines/PhaseZero*") ;;
+    esac
+    case "$disk_real" in "$vm_real"/*) ;; *) blockers+=("disco configurado está fora do diretório gerenciado") ;; esac
+    disk_in_use && blockers+=("desligue a VM antes de removê-la")
+    if [ -n "$LIBVIRT_DOMAIN" ]; then
+        domain_state="$(virsh -c "$(libvirt_uri)" domstate "$LIBVIRT_DOMAIN" 2>/dev/null || true)"
+        case "$domain_state" in running|paused|pmsuspended) blockers+=("domínio libvirt está $domain_state") ;; esac
+    fi
+    command -v gio >/dev/null 2>&1 || blockers+=("gio não está disponível para mover a VM à lixeira")
+    if [ "${#blockers[@]}" -gt 0 ]; then
+        blockers_json="$(printf '%s\n' "${blockers[@]}" | jq -R . | jq -s .)"
+    fi
+
+    if [ "$JSON_OUT" = "1" ] && { [ "$DRY_RUN" = 1 ] || [ "$REMOVE_CONFIRMED" != 1 ] || [ "${#blockers[@]}" -gt 0 ]; }; then
+        jq -n \
+            --arg vmDir "$vm_real" \
+            --arg disk "$disk_real" \
+            --arg source "$DISK_SOURCE" \
+            --arg config "$CONFIG_FILE" \
+            --arg domain "$LIBVIRT_DOMAIN" \
+            --argjson blockers "$blockers_json" \
+            --argjson confirmed "$([ "$REMOVE_CONFIRMED" = 1 ] && echo true || echo false)" \
+            '{schemaVersion:1, operation:"windows-vm-remove", vm:{dir:$vmDir,disk:$disk,diskSource:$source,libvirtDomain:$domain}, config:$config, blockers:$blockers, ready:($blockers|length == 0), confirmed:$confirmed, recovery:"A VM será movida para a lixeira; restaure-a e use Adotar disco para recuperar.", nextAction:"Remova o boot direto Windows separadamente, se ele estiver instalado."}'
+    elif [ "$JSON_OUT" != "1" ]; then
+        printf 'VM: %s\nDisco: %s\n' "$vm_real" "$disk_real"
+        [ "${#blockers[@]}" -eq 0 ] && echo "Pronta para mover à lixeira." || printf 'Bloqueios:\n%s\n' "$(printf -- '- %s\n' "${blockers[@]}")"
+    fi
+    [ "${#blockers[@]}" -eq 0 ] || return 1
+    [ "$DRY_RUN" = 1 ] && return 0
+    [ "$REMOVE_CONFIRMED" = 1 ] || { pz_error "remoção requer --yes após a prévia"; return 1; }
+
+    gio trash -- "$vm_real" || { pz_error "não foi possível mover a VM para a lixeira"; return 1; }
+    [ ! -e "$vm_real" ] || { pz_error "a VM ainda existe após a operação de lixeira"; return 1; }
+    rm -f -- "$CONFIG_FILE" "$APPLICATIONS_DIR/phasezero-windows-vm.desktop" \
+        "$APPLICATIONS_DIR/phasezero-reboot-windows-vm.desktop" "$SYSTEMD_USER_DIR/phasezero-windows-vm.service" \
+        || { pz_error "a VM foi movida para a lixeira, mas a configuração não pôde ser removida"; return 1; }
+    [ ! -e "$CONFIG_FILE" ] || { pz_error "a VM foi movida para a lixeira, mas a configuração ainda existe"; return 1; }
+    if [ "$JSON_OUT" = "1" ]; then
+        jq -n --arg vmDir "$vm_real" --arg config "$CONFIG_FILE" \
+            '{schemaVersion:1, operation:"windows-vm-remove", success:true, vmDir:$vmDir, configRemoved:(($config|length) > 0), recovery:"Restaure a pasta da lixeira e use Adotar disco para recuperar.", nextAction:"Remova o boot direto Windows separadamente, se ele estiver instalado."}'
+    else
+        pz_info "VM movida para a lixeira; configuração PhaseZero removida"
+    fi
+}
+
 print_plan() {
     parse_options "$@"
     effective_config
@@ -3361,6 +3425,7 @@ case "$ACTION" in
     status) parse_options "$@"; print_status ;;
     discover|detect) print_discover "$@" ;;
     adopt|use-existing) cmd_adopt "$@" ;;
+    remove|delete) cmd_remove "$@" ;;
     plan|dry-run) print_plan "$@" ;;
     install|setup) install_vm "$@" ;;
     optimize|tune) cmd_optimize "$@" ;;
@@ -3386,5 +3451,5 @@ case "$ACTION" in
     preflight|check|readiness) bash "$PZ_ROOT/linux/windows-vm/preflight.sh" "$@" ;;
     provision|provisioning|install-auto) bash "$PZ_ROOT/linux/windows-vm/provision.sh" "$@" ;;
     help|--help|-h|"") usage ;;
-    *) pz_error "usage: windows-vm (status|discover|adopt|plan|install|optimize|shares|usb-access|host-access|graphics|apps|launch|launch-check|disk-check|secure-storage|guest-login|recover|boot|media|images|preflight|provision)"; exit 1 ;;
+    *) pz_error "usage: windows-vm (status|discover|adopt|remove|plan|install|optimize|shares|usb-access|host-access|graphics|apps|launch|launch-check|disk-check|secure-storage|guest-login|recover|boot|media|images|preflight|provision)"; exit 1 ;;
 esac
