@@ -169,7 +169,7 @@ class ImageManagerDialog(QDialog):
         self.setObjectName("imageManagerDialog")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setAutoFillBackground(True)
-        self.setWindowTitle("Gerenciar imagens Windows")
+        self.setWindowTitle("Gerenciar imagens e VMs Windows")
         self.setWindowModality(Qt.WindowModal)
         self.setMinimumSize(780, 540)
 
@@ -218,8 +218,8 @@ class ImageManagerDialog(QDialog):
         outer.setSpacing(14)
 
         outer.addWidget(SectionHeader(
-            "Imagens Windows",
-            "Encontre uma imagem instalada, veja as edições por índice e gerencie com segurança.",
+            "Imagens e VMs Windows",
+            "Gerencie ISOs por edição e remova com segurança VMs criadas pelo PhaseZero.",
         ))
 
         # Toolbar
@@ -326,9 +326,13 @@ class ImageManagerDialog(QDialog):
         layout.addWidget(self._raw_view)
         return panel
 
-    def _build_action_bar(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(10)
+    def _build_action_bar(self) -> QVBoxLayout:
+        actions = QVBoxLayout()
+        actions.setSpacing(8)
+        primary_row = QHBoxLayout()
+        primary_row.setSpacing(10)
+        secondary_row = QHBoxLayout()
+        secondary_row.setSpacing(10)
         self.play_button = QPushButton("▶ Reproduzir no player")
         self.play_button.setObjectName("primaryButton")
         self.play_button.setMinimumHeight(44)
@@ -345,15 +349,25 @@ class ImageManagerDialog(QDialog):
         self.remove_button.setObjectName("dangerOutlineButton")
         self.remove_button.setMinimumHeight(44)
         self.remove_button.clicked.connect(self._remove)
-        close = QPushButton("Fechar")
-        close.setMinimumHeight(44)
-        close.clicked.connect(self.reject)
+        self.remove_vm_button = QPushButton("🗑 Remover VM criada")
+        self.remove_vm_button.setObjectName("dangerOutlineButton")
+        self.remove_vm_button.setMinimumHeight(44)
+        self.remove_vm_button.setToolTip("Move a VM criada para a lixeira. Não altera boot direto.")
+        self.remove_vm_button.clicked.connect(lambda: self._request_action("windows.vm.remove"))
+        self.close_button = QPushButton("Fechar")
+        self.close_button.setMinimumHeight(44)
+        self.close_button.clicked.connect(self.reject)
         for button in (self.play_button, self.boot_button, self.grub_button):
-            row.addWidget(button)
-        row.addStretch()
-        row.addWidget(self.remove_button)
-        row.addWidget(close)
-        return row
+            primary_row.addWidget(button)
+        primary_row.addStretch()
+        secondary_row.addWidget(self.remove_button)
+        secondary_row.addWidget(self.remove_vm_button)
+        secondary_row.addStretch()
+        secondary_row.addWidget(self.close_button)
+        actions.addLayout(primary_row)
+        actions.addLayout(secondary_row)
+        self.remove_vm_button.setEnabled("windows.vm.remove" in self._by_id)
+        return actions
 
     # ----- data flow -----
 

@@ -119,21 +119,20 @@ def test_skeleton_shimmer_lifecycle(app):
     assert all(tile.property("shimmer") != "true" for tile in tiles)
 
 
-def test_overview_page_shows_skeletons_on_reload(app, qtbot=None):
+def test_overview_page_shows_skeletons_on_reload(app, monkeypatch):
     """OverviewPage.reload() should show skeletons then load status."""
     from pathlib import Path
     from linux.ui_native.pages.overview import OverviewPage
     from linux.ui_native.command_runner import CommandRunner
     from linux.ui_native.catalog import build_catalog
-    from linux.ui_native.widgets import SkeletonPill, StatusPill
+    from linux.ui_native.widgets import SkeletonPill
 
     catalog = build_catalog(Path(ROOT))
     by_id = {a.id: a for a in catalog}
     page = OverviewPage(Path(ROOT), CommandRunner(Path(ROOT)), catalog, by_id)
     page.build()
+    monkeypatch.setattr(page.status_loader, "fetch_action", lambda _action: None)
     page.reload()
     QTest.qWait(250)
-    # Slow status shows skeletons; a fast result may already show status pills.
-    skeletons = page.findChildren(SkeletonPill)
-    assert len(skeletons) > 0 or len(page.findChildren(StatusPill)) > 0
+    assert page.findChildren(SkeletonPill)
     page.cancel_status()

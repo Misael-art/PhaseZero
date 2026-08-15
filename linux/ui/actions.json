@@ -588,6 +588,18 @@
       "plan_command": "linux/pz windows-vm discover --json"
     },
     {
+      "name": "windows.vm.remove",
+      "label": "Remover VM criada",
+      "command": "linux/pz windows-vm remove --yes --json",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm remove --dry-run --json"
+    },
+    {
       "name": "windows.optimize",
       "label": "Otimizar host",
       "command": "linux/pz windows-vm optimize",
