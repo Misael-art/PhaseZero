@@ -47,7 +47,7 @@ legacy_plan="$("$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json)"
 jq -e '.ready == true and .vm.diskSource == "managed"' <<< "$legacy_plan" >/dev/null
 write_config new
 
-if "$REPO_ROOT/linux/pz" windows-vm remove --json >/dev/null 2>&1; then
+if "$REPO_ROOT"/linux/pz windows-vm remove --json >/dev/null 2>&1; then
     echo "remove without --yes unexpectedly succeeded" >&2
     exit 1
 fi
@@ -72,7 +72,7 @@ touch "$TEST_ROOT/not-managed/phasezero-windows.qcow2"
 VM_DIR="$TEST_ROOT/not-managed"
 DISK="$VM_DIR/phasezero-windows.qcow2"
 write_config new
-if "$REPO_ROOT/linux/pz" windows-vm remove --dry-run --json >/dev/null 2>&1; then
+if "$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json >/dev/null 2>&1; then
     echo "remove outside managed directory unexpectedly planned as safe" >&2
     exit 1
 fi
@@ -92,7 +92,7 @@ jq -e '.success == true' <<< "$result" >/dev/null
 mkdir -p "$VM_DIR"
 touch "$DISK"
 write_config adopted-existing
-if "$REPO_ROOT/linux/pz" windows-vm remove --dry-run --json >/dev/null 2>&1; then
+if "$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json >/dev/null 2>&1; then
     echo "remove adopted VM unexpectedly planned as safe" >&2
     exit 1
 fi

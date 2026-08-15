@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self._maximized = False
         self._start_failed = False
         self._search_cards: list[QWidget] = []
+        self._controls_compact: bool | None = None
         self._host_process: QProcess | None = None
         self._closing = False
         self.progress_dialog: ProgressDialog | None = None
@@ -515,6 +516,9 @@ class MainWindow(QMainWindow):
 
     def _set_controls_compact(self, compact: bool) -> None:
         """Stack header controls before they can overlap at high DPI."""
+        if self._controls_compact is compact:
+            return
+        self._controls_compact = compact
         for widget in (self.search, self.mode_label, self.mode_switch, self.theme_button):
             self.controls_layout.removeWidget(widget)
         if compact:
