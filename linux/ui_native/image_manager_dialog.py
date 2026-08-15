@@ -326,9 +326,13 @@ class ImageManagerDialog(QDialog):
         layout.addWidget(self._raw_view)
         return panel
 
-    def _build_action_bar(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(10)
+    def _build_action_bar(self) -> QVBoxLayout:
+        actions = QVBoxLayout()
+        actions.setSpacing(8)
+        primary_row = QHBoxLayout()
+        primary_row.setSpacing(10)
+        secondary_row = QHBoxLayout()
+        secondary_row.setSpacing(10)
         self.play_button = QPushButton("▶ Reproduzir no player")
         self.play_button.setObjectName("primaryButton")
         self.play_button.setMinimumHeight(44)
@@ -350,17 +354,20 @@ class ImageManagerDialog(QDialog):
         self.remove_vm_button.setMinimumHeight(44)
         self.remove_vm_button.setToolTip("Move a VM criada para a lixeira. Não altera boot direto.")
         self.remove_vm_button.clicked.connect(lambda: self._request_action("windows.vm.remove"))
-        close = QPushButton("Fechar")
-        close.setMinimumHeight(44)
-        close.clicked.connect(self.reject)
+        self.close_button = QPushButton("Fechar")
+        self.close_button.setMinimumHeight(44)
+        self.close_button.clicked.connect(self.reject)
         for button in (self.play_button, self.boot_button, self.grub_button):
-            row.addWidget(button)
-        row.addStretch()
-        row.addWidget(self.remove_button)
-        row.addWidget(self.remove_vm_button)
-        row.addWidget(close)
+            primary_row.addWidget(button)
+        primary_row.addStretch()
+        secondary_row.addWidget(self.remove_button)
+        secondary_row.addWidget(self.remove_vm_button)
+        secondary_row.addStretch()
+        secondary_row.addWidget(self.close_button)
+        actions.addLayout(primary_row)
+        actions.addLayout(secondary_row)
         self.remove_vm_button.setEnabled("windows.vm.remove" in self._by_id)
-        return row
+        return actions
 
     # ----- data flow -----
 

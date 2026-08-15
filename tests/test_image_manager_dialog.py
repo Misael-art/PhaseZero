@@ -206,6 +206,29 @@ def test_remove_vm_button_emits_preview_first_action(qapp, tmp_path: Path) -> No
     assert action.preview_args == ("windows-vm", "remove", "--dry-run", "--json")
 
 
+def test_action_buttons_fit_minimum_dialog_viewport(qapp, tmp_path: Path) -> None:
+    dlg = _make_dialog(tmp_path, by_id=_real_by_id())
+    dlg.resize(780, 540)
+    dlg.show()
+    qapp.processEvents()
+
+    bounds = dlg.contentsRect()
+    for button in (
+        dlg.play_button,
+        dlg.boot_button,
+        dlg.grub_button,
+        dlg.remove_button,
+        dlg.remove_vm_button,
+        dlg.close_button,
+    ):
+        top_left = button.mapTo(dlg, button.rect().topLeft())
+        bottom_right = button.mapTo(dlg, button.rect().bottomRight())
+        assert top_left.x() >= bounds.left()
+        assert top_left.y() >= bounds.top()
+        assert bottom_right.x() <= bounds.right()
+        assert bottom_right.y() <= bounds.bottom()
+
+
 def test_request_action_unknown_is_safe(
     qapp, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
