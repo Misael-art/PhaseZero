@@ -145,6 +145,8 @@ Usage:
   pz windows-vm provision cancel --operation-id ID [--remove-staging]
   pz windows-vm provision finalize --operation-id ID [--target-dir PATH] [--json]
   pz windows-vm provision shutdown --operation-id ID [--json]
+  pz windows-vm provision inventory [--json]
+  pz windows-vm provision remove --operation-id ID [--trash|--purge --confirm-operation ID] --yes [--json]
 
 Access:
   home, /mnt/sdcard, /run/media/\$USER and /mnt are exposed through SMB and virtiofs when available.

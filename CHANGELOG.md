@@ -30,6 +30,9 @@ As versões seguem a data de build em `version.json`.
 ## [Não lançado]
 
 ### Adicionado
+- Inventário de VMs concluídas criadas pelo provisionador, com espaço real por
+  operação e remoção explícita por instalação. A interface separa a VM atual
+  das instalações legadas e oferece lixeira recuperável ou liberação imediata.
 - Gerenciador de imagens Windows na Central de Controle (`Windows VM` →
   "Gerenciar imagens"): lista as ISOs registradas, mostra características
   básicas (tamanho, arquitetura, UEFI, SHA-256, validade), lista as edições
@@ -70,6 +73,10 @@ As versões seguem a data de build em `version.json`.
 - Smoke `pz ai routing` em `tests/linux-ai.sh` (degrada sem 9Router).
 
 ### Corrigido
+- Remover uma imagem do Windows não é mais confundido com apagar a VM criada.
+  Remoção legada valida o identificador, recusa VM em execução, revalida o alvo
+  sob trava compartilhada com a finalização e libera o índice somente após
+  remoção confirmada.
 - Gerenciador de imagens: ISO válida cujas edições não são legíveis a partir
   do arquivo (caso comum em mídia de varejo, em que `media inspect` devolve
   `imageCount: 0`) passa a oferecer as edições 1 a 10, como a instalação já

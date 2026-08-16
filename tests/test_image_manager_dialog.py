@@ -58,7 +58,8 @@ def _entry(path: str = "/tmp/win.iso", sha: str | None = None, **overrides) -> d
 
 
 def _write_fake_pz(tmp_path: Path, *, inspect_fail: bool = False,
-                   scan_candidates: list[str] | None = None) -> Path:
+                   scan_candidates: list[str] | None = None,
+                   inventory: list[dict] | None = None) -> Path:
     pz = tmp_path / "linux" / "pz"
     pz.parent.mkdir(parents=True, exist_ok=True)
     scan_payload = json.dumps({
@@ -66,6 +67,14 @@ def _write_fake_pz(tmp_path: Path, *, inspect_fail: bool = False,
             {"path": p, "sizeMb": 2048 + i}
             for i, p in enumerate(scan_candidates or [])
         ]
+    })
+    inventory_payload = json.dumps({
+        "schemaVersion": 1,
+        "instances": inventory or [],
+        "count": len(inventory or []),
+        "totalAllocatedBytes": sum(
+            int(entry.get("allocatedBytes") or 0) for entry in (inventory or [])
+        ),
     })
     inspect_body = (
         '    exit 1 ;;\n'
@@ -82,6 +91,9 @@ def _write_fake_pz(tmp_path: Path, *, inspect_fail: bool = False,
         "    exit 0 ;;\n"
         '  "windows-vm media inspect")\n'
         f"{inspect_body}"
+        '  "windows-vm provision inventory")\n'
+        f"    printf '%s' {json.dumps(inventory_payload)}\n"
+        "    exit 0 ;;\n"
         "  *) exit 1 ;;\n"
         "esac\n"
     )
@@ -195,15 +207,60 @@ def test_grub_button_emits_pending_action(qapp, tmp_path: Path) -> None:
     assert dlg.pending_action().id == "boot.safe-menu"
 
 
-def test_remove_vm_button_emits_preview_first_action(qapp, tmp_path: Path) -> None:
+def test_current_vm_remove_button_keeps_standard_action(qapp, tmp_path: Path) -> None:
     dlg = _make_dialog(tmp_path, by_id=_real_by_id())
-    assert dlg.remove_vm_button.isEnabled()
     dlg.remove_vm_button.click()
+    assert dlg.pending_action() is not None
+    assert dlg.pending_action().id == "windows.vm.remove"
+    assert dlg.result() == QDialog.Accepted
+
+
+def test_prepare_vm_purge_builds_preview_first_action(qapp, tmp_path: Path) -> None:
+    dlg = _make_dialog(tmp_path, by_id=_real_by_id())
+    dlg._prepare_vm_removal({
+        "id": "op-legacy-1", "imageIndex": 2, "allocatedBytes": 21_000_000_000,
+    }, purge=True)
     action = dlg.pending_action()
     assert action is not None
     assert action.id == "windows.vm.remove"
     assert action.mutable
-    assert action.preview_args == ("windows-vm", "remove", "--dry-run", "--json")
+    assert action.preview_args == (
+        "windows-vm", "provision", "remove", "--operation-id", "op-legacy-1",
+        "--purge", "--dry-run", "--json",
+    )
+    assert action.args == (
+        "windows-vm", "provision", "remove", "--operation-id", "op-legacy-1",
+        "--purge", "--confirm-operation", "op-legacy-1", "--yes", "--json",
+    )
+    assert "19.6 GB" in action.description
+
+
+def test_prepare_vm_trash_keeps_recovery_mode(qapp, tmp_path: Path) -> None:
+    dlg = _make_dialog(tmp_path, by_id=_real_by_id())
+    dlg._prepare_vm_removal({
+        "id": "op-legacy-2", "imageIndex": 1, "allocatedBytes": 1024,
+    }, purge=False)
+    action = dlg.pending_action()
+    assert action is not None
+    assert "--trash" in action.args
+    assert "--confirm-operation" not in action.args
+
+
+def test_inventory_button_reports_count_and_real_space(qapp, tmp_path: Path) -> None:
+    _write_fake_pz(tmp_path, inventory=[{
+        "id": "op-legacy-1",
+        "imageIndex": 2,
+        "allocatedBytes": 21_000_000_000,
+        "running": False,
+        "vmDir": "/state/windows-vm/vms/op-legacy-1",
+    }])
+    dlg = _make_dialog(tmp_path, by_id=_real_by_id())
+    assert _wait_for(lambda: not dlg._reader.is_running("vm-inventory"))
+    assert dlg.vms_button.text() == "VMs instaladas · 1"
+    assert dlg.vms_button.isEnabled()
+    assert "19.6 GB" in dlg.vms_button.toolTip()
+    assert dlg.remove_vm_button is not dlg.vms_button
+    assert dlg.remove_vm_button.isEnabled()
 
 
 def test_action_buttons_fit_minimum_dialog_viewport(qapp, tmp_path: Path) -> None:

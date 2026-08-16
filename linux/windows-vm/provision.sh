@@ -2455,6 +2455,246 @@ provision_cancel() {
     [ "$success" = "1" ]
 }
 
+# ── Completed VM inventory and removal ──
+# Completed provision operations own their staging directory. Older releases
+# left those directories behind indefinitely, so one successful install could
+# consume tens of gigabytes even after another VM became the configured one.
+# Inventory and removal are keyed by operation id: callers never supply a path.
+
+operation_allocated_bytes() {
+    local path="$1" blocks=""
+    blocks="$(du -sk -- "$path" 2>/dev/null | awk '{print $1}' || true)"
+    [[ "$blocks" =~ ^[0-9]+$ ]] || blocks=0
+    printf '%s\n' "$((blocks * 1024))"
+}
+
+operation_vm_running() {
+    local vm_dir="$1" disk
+    while IFS= read -r disk; do
+        [ -f "$disk" ] || continue
+        if find_qemu_pid_for_disk "$disk" >/dev/null 2>&1; then
+            return 0
+        fi
+    done < <(find "$vm_dir" -maxdepth 1 -type f -name '*.qcow2' -print 2>/dev/null)
+    return 1
+}
+
+provision_inventory() {
+    local json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --json) json=1; shift ;;
+            *) pz_error "unknown inventory option: $1"; return 1 ;;
+        esac
+    done
+
+    local instances='[]' total=0 operation_file op op_dir state removed_at
+    local vm_dir allocated image_index created_at updated_at adopted_disk kind running
+    shopt -s nullglob
+    for operation_file in "$OPERATIONS_DIR"/op-*/operation.json; do
+        if [ ! -f "$operation_file" ] || [ -L "$operation_file" ]; then
+            continue
+        fi
+        op_dir="$(dirname -- "$operation_file")"
+        op="$(basename -- "$op_dir")"
+        case "$op" in */*|*..*|*[!A-Za-z0-9._-]*) continue ;; esac
+        state="$(jq -r '.state // ""' "$operation_file" 2>/dev/null || true)"
+        [ "$state" = "completed" ] || continue
+        removed_at="$(jq -r '.vmRemovedAt // ""' "$operation_file" 2>/dev/null || true)"
+        [ -z "$removed_at" ] || continue
+        vm_dir="$(resolve_vm_staging_dir "$op" 2>/dev/null || true)"
+        if [ -z "$vm_dir" ] || [ ! -d "$vm_dir" ]; then
+            continue
+        fi
+
+        allocated="$(operation_allocated_bytes "$vm_dir")"
+        total=$((total + allocated))
+        image_index="$(jq -r '.imageIndex // 0' "$op_dir/plan.json" 2>/dev/null || echo 0)"
+        [[ "$image_index" =~ ^[0-9]+$ ]] || image_index=0
+        created_at="$(jq -r '.createdAt // ""' "$operation_file" 2>/dev/null || true)"
+        updated_at="$(jq -r '.updatedAt // ""' "$operation_file" 2>/dev/null || true)"
+        adopted_disk="$(jq -r '.adoptedDisk // ""' "$operation_file" 2>/dev/null || true)"
+        kind="installed"
+        [ -n "$adopted_disk" ] && kind="installation-files"
+        running=false
+        if operation_vm_running "$vm_dir"; then
+            running=true
+        fi
+
+        instances="$(jq -c \
+            --arg id "$op" \
+            --arg vmDir "$vm_dir" \
+            --arg createdAt "$created_at" \
+            --arg updatedAt "$updated_at" \
+            --arg adoptedDisk "$adopted_disk" \
+            --arg kind "$kind" \
+            --argjson imageIndex "$image_index" \
+            --argjson allocatedBytes "$allocated" \
+            --argjson running "$running" \
+            '. + [{id:$id, state:"completed", kind:$kind, vmDir:$vmDir,
+                    imageIndex:$imageIndex, allocatedBytes:$allocatedBytes,
+                    createdAt:$createdAt, updatedAt:$updatedAt,
+                    adoptedDisk:$adoptedDisk, running:$running,
+                    removable:($running|not)}]' <<< "$instances")"
+    done
+    shopt -u nullglob
+
+    if [ "$json" = "1" ]; then
+        jq -n --argjson instances "$instances" --argjson total "$total" \
+            '{schemaVersion:1, operation:"windows-vm-inventory",
+              instances:$instances, count:($instances|length),
+              totalAllocatedBytes:$total}'
+    else
+        if [ "$(jq 'length' <<< "$instances")" = "0" ]; then
+            echo "Nenhuma VM concluída encontrada."
+            return 0
+        fi
+        jq -r '.[] | "\(.id)  edição \(.imageIndex)  \(.allocatedBytes) bytes  \(.vmDir)"' \
+            <<< "$instances"
+    fi
+}
+
+mark_operation_vm_removed() {
+    local operation_file="$1" mode="$2" path="$3" bytes="$4" timestamp tmp
+    timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    tmp="$(mktemp "$(dirname -- "$operation_file")/.operation.remove.XXXXXX")" || return 1
+    if ! jq --arg ts "$timestamp" --arg mode "$mode" --arg path "$path" \
+        --argjson bytes "$bytes" \
+        '.vmRemovedAt=$ts | .vmRemovalMode=$mode | .vmRemovedPath=$path |
+         .vmRemovedBytes=$bytes | .updatedAt=$ts' \
+        "$operation_file" > "$tmp"; then
+        rm -f -- "$tmp"
+        return 1
+    fi
+    chmod 0600 "$tmp"
+    mv -- "$tmp" "$operation_file"
+}
+
+purge_operation_vm_dir() {
+    local operation_id="$1" vm_dir="$2" base quarantine
+    base="$(pz_staging_base)"
+    quarantine="$base/.phasezero-removing-${operation_id}-$$"
+    [ ! -e "$quarantine" ] || { pz_error "temporary removal path already exists"; return 1; }
+    mv -- "$vm_dir" "$quarantine" || { pz_error "could not isolate VM before removal"; return 1; }
+    if ! find "$quarantine" -xdev -depth -delete; then
+        if [ -e "$quarantine" ] && [ ! -e "$vm_dir" ]; then
+            mv -- "$quarantine" "$vm_dir" 2>/dev/null || true
+        fi
+        pz_error "permanent removal failed; remaining files were preserved"
+        return 1
+    fi
+    [ ! -e "$quarantine" ] || { pz_error "permanent removal left files behind"; return 1; }
+}
+
+provision_remove() {
+    local operation_id="" dry_run=0 confirmed=0 purge=0 confirm_operation="" json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --operation-id) operation_id="${2:-}"; shift 2 ;;
+            --operation-id=*) operation_id="${1#*=}"; shift ;;
+            --dry-run|-n) dry_run=1; shift ;;
+            --yes) confirmed=1; shift ;;
+            --purge) purge=1; shift ;;
+            --trash) purge=0; shift ;;
+            --confirm-operation) confirm_operation="${2:-}"; shift 2 ;;
+            --confirm-operation=*) confirm_operation="${1#*=}"; shift ;;
+            --json) json=1; shift ;;
+            *) pz_error "unknown remove option: $1"; return 1 ;;
+        esac
+    done
+
+    local -a blockers=()
+    local op_dir="$OPERATIONS_DIR/$operation_id" operation_file=""
+    operation_file="$op_dir/operation.json"
+    local vm_dir="" state="" allocated=0 mode="trash" blockers_json='[]' running=false
+    case "$operation_id" in
+        op-* ) ;;
+        *) blockers+=("identificador da instalação inválido") ;;
+    esac
+    case "$operation_id" in */*|*..*|*[!A-Za-z0-9._-]*) blockers+=("identificador da instalação inseguro") ;; esac
+    if [ "${#blockers[@]}" -eq 0 ]; then
+        [ -d "$op_dir" ] && [ ! -L "$op_dir" ] || blockers+=("instalação não encontrada")
+        [ -f "$operation_file" ] && [ ! -L "$operation_file" ] || blockers+=("registro da instalação ausente ou inseguro")
+    fi
+    if [ "${#blockers[@]}" -eq 0 ]; then
+        state="$(jq -r '.state // ""' "$operation_file" 2>/dev/null || true)"
+        [ "$state" = "completed" ] || blockers+=("somente instalações concluídas podem ser removidas")
+        [ "$(jq -r '.vmRemovedAt // ""' "$operation_file" 2>/dev/null || true)" = "" ] || blockers+=("esta VM já foi removida")
+        vm_dir="$(resolve_vm_staging_dir "$operation_id" 2>/dev/null || true)"
+        [ -n "$vm_dir" ] && [ -d "$vm_dir" ] || blockers+=("diretório gerenciado da VM não foi encontrado ou é inseguro")
+    fi
+    if [ -n "$vm_dir" ] && [ -d "$vm_dir" ]; then
+        allocated="$(operation_allocated_bytes "$vm_dir")"
+        if operation_vm_running "$vm_dir"; then
+            running=true
+        fi
+        [ "$running" = false ] || blockers+=("desligue esta VM antes de removê-la")
+    fi
+    if [ "$purge" = "1" ]; then
+        mode="purge"
+        if [ "$dry_run" != "1" ] && [ "$confirm_operation" != "$operation_id" ]; then
+            blockers+=("confirmação permanente não corresponde à instalação selecionada")
+        fi
+        command -v find >/dev/null 2>&1 || blockers+=("find não está disponível para remoção permanente segura")
+    else
+        command -v gio >/dev/null 2>&1 || blockers+=("gio não está disponível para mover a VM à lixeira")
+    fi
+    if [ "${#blockers[@]}" -gt 0 ]; then
+        blockers_json="$(printf '%s\n' "${blockers[@]}" | jq -R . | jq -s .)"
+    fi
+
+    if [ "$json" = "1" ]; then
+        jq -n \
+            --arg operationId "$operation_id" --arg vmDir "$vm_dir" --arg mode "$mode" \
+            --argjson allocatedBytes "$allocated" --argjson blockers "$blockers_json" \
+            --argjson confirmed "$([ "$confirmed" = 1 ] && echo true || echo false)" \
+            --argjson freesImmediately "$([ "$purge" = 1 ] && echo true || echo false)" \
+            '{schemaVersion:1, operation:"windows-vm-provision-remove",
+              target:{operationId:$operationId,vmDir:$vmDir,allocatedBytes:$allocatedBytes},
+              removalMode:$mode, freesSpaceImmediately:$freesImmediately,
+              blockers:$blockers, ready:($blockers|length == 0), confirmed:$confirmed,
+              recovery:(if $mode == "trash" then "Restaure a pasta pela lixeira enquanto ela não for esvaziada." else "Remoção permanente; não há recuperação pelo PhaseZero." end)}'
+    elif [ "${#blockers[@]}" -eq 0 ]; then
+        printf 'Instalação: %s\nEspaço ocupado: %s bytes\nModo: %s\n' "$operation_id" "$allocated" "$mode"
+    else
+        printf 'Bloqueios:\n%s\n' "$(printf -- '- %s\n' "${blockers[@]}")"
+    fi
+    [ "${#blockers[@]}" -eq 0 ] || return 1
+    [ "$dry_run" = "1" ] && return 0
+    [ "$confirmed" = "1" ] || { pz_error "remoção requer --yes após a prévia"; return 1; }
+
+    if ! provision_lock_acquire "$operation_id"; then
+        return 1
+    fi
+    trap 'provision_lock_clear "$operation_id"; provision_lock_release' RETURN
+    # Revalidate after taking the lock. Prevents target substitution between
+    # preview and execution and blocks a new provisioning run from racing us.
+    local locked_vm_dir
+    locked_vm_dir="$(resolve_vm_staging_dir "$operation_id")" || return 1
+    [ "$locked_vm_dir" = "$vm_dir" ] || { pz_error "VM target changed after preview"; return 1; }
+    [ -d "$locked_vm_dir" ] || { pz_error "VM target disappeared after preview"; return 1; }
+
+    if [ "$purge" = "1" ]; then
+        purge_operation_vm_dir "$operation_id" "$locked_vm_dir" || return 1
+    else
+        gio trash -- "$locked_vm_dir" || { pz_error "não foi possível mover a VM para a lixeira"; return 1; }
+        [ ! -e "$locked_vm_dir" ] || { pz_error "a VM ainda existe após a operação de lixeira"; return 1; }
+    fi
+    mark_operation_vm_removed "$operation_file" "$mode" "$locked_vm_dir" "$allocated" || {
+        pz_error "VM removida, mas registro da operação não pôde ser atualizado"
+        return 1
+    }
+    if [ "$json" = "1" ]; then
+        jq -n --arg operationId "$operation_id" --arg mode "$mode" \
+            --argjson bytes "$allocated" \
+            '{schemaVersion:1, operation:"windows-vm-provision-remove", success:true,
+              operationId:$operationId, removalMode:$mode, releasedBytes:$bytes,
+              indexReleased:true}'
+    else
+        pz_info "VM $operation_id removida; edição liberada para nova instalação"
+    fi
+}
+
 provision_finalize() {
     local operation_id="" target_dir="" json=0
     while [ $# -gt 0 ]; do
@@ -2493,7 +2733,11 @@ provision_finalize() {
         esac
     fi
 
-    local vm_dir snapshot_path source_pid
+    local vm_dir snapshot_path source_pid partial_disk=""
+    if ! provision_lock_acquire "$operation_id"; then
+        return 1
+    fi
+    trap '[ -z "$partial_disk" ] || rm -f -- "$partial_disk" || true; provision_lock_clear "$operation_id"; provision_lock_release' RETURN
     vm_dir="$(resolve_vm_staging_dir "$operation_id")" || return 1
     snapshot_path="$(cat "$op_dir/snapshot_path" 2>/dev/null || true)"
     [ -f "$snapshot_path" ] || { pz_error "verified snapshot missing"; return 1; }
@@ -2517,7 +2761,8 @@ provision_finalize() {
         *) pz_error "finalize target must be under $HOME/VirtualMachines/PhaseZero-Windows*"; return 1 ;;
     esac
 
-    local target_disk="$target_dir/phasezero-windows.qcow2" partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
+    local target_disk="$target_dir/phasezero-windows.qcow2"
+    partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
     [ ! -e "$target_disk" ] || { pz_error "final target already exists: $target_disk"; return 1; }
     install -d -m 700 "$target_dir"
     target_dir="$(readlink -f -- "$target_dir")"
@@ -2528,7 +2773,6 @@ provision_finalize() {
     target_disk="$target_dir/phasezero-windows.qcow2"
     partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
     [ ! -e "$target_disk" ] || { pz_error "final target already exists: $target_disk"; return 1; }
-    trap 'rm -f -- "$partial_disk"' RETURN
     if ! qemu-img convert -f qcow2 -O qcow2 -o compat=1.1,lazy_refcounts=on -S 4k "$snapshot_path" "$partial_disk"; then
         rm -f -- "$partial_disk"
         pz_error "failed to flatten provisioned snapshot"
@@ -2540,7 +2784,7 @@ provision_finalize() {
         return 1
     fi
     mv -- "$partial_disk" "$target_disk"
-    trap - RETURN
+    partial_disk=""
     chmod 600 "$target_disk"
     if [ -f "$vm_dir/OVMF_VARS.fd" ]; then
         cp --preserve=mode,timestamps "$vm_dir/OVMF_VARS.fd" "$target_dir/OVMF_VARS.fd"
@@ -2710,6 +2954,8 @@ Usage:
   provision resume --operation-id <id>
   provision cancel --operation-id <id> [--remove-staging]
   provision shutdown --operation-id <id> [--json]
+  provision inventory [--json]
+  provision remove --operation-id <id> [--trash|--purge --confirm-operation <id>] --yes [--json]
 
 Options:
   --iso PATH       Windows installation ISO
@@ -2746,6 +2992,8 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
         cancel|stop) provision_cancel "$@" ;;
         finalize|adopt) provision_finalize "$@" ;;
         shutdown) provision_shutdown "$@" ;;
+        inventory|list) provision_inventory "$@" ;;
+        remove|delete) provision_remove "$@" ;;
         help|--help|-h|"") usage ;;
         *) pz_error "unknown provision action: $ACTION"; usage; exit 1 ;;
     esac
