@@ -2468,6 +2468,17 @@ operation_allocated_bytes() {
     printf '%s\n' "$((blocks * 1024))"
 }
 
+operation_vm_running() {
+    local vm_dir="$1" disk
+    while IFS= read -r disk; do
+        [ -f "$disk" ] || continue
+        if find_qemu_pid_for_disk "$disk" >/dev/null 2>&1; then
+            return 0
+        fi
+    done < <(find "$vm_dir" -maxdepth 1 -type f -name '*.qcow2' -print 2>/dev/null)
+    return 1
+}
+
 provision_inventory() {
     local json=0
     while [ $# -gt 0 ]; do
@@ -2481,7 +2492,9 @@ provision_inventory() {
     local vm_dir allocated image_index created_at updated_at adopted_disk kind running
     shopt -s nullglob
     for operation_file in "$OPERATIONS_DIR"/op-*/operation.json; do
-        [ -f "$operation_file" ] && [ ! -L "$operation_file" ] || continue
+        if [ ! -f "$operation_file" ] || [ -L "$operation_file" ]; then
+            continue
+        fi
         op_dir="$(dirname -- "$operation_file")"
         op="$(basename -- "$op_dir")"
         case "$op" in */*|*..*|*[!A-Za-z0-9._-]*) continue ;; esac
@@ -2490,7 +2503,9 @@ provision_inventory() {
         removed_at="$(jq -r '.vmRemovedAt // ""' "$operation_file" 2>/dev/null || true)"
         [ -z "$removed_at" ] || continue
         vm_dir="$(resolve_vm_staging_dir "$op" 2>/dev/null || true)"
-        [ -n "$vm_dir" ] && [ -d "$vm_dir" ] || continue
+        if [ -z "$vm_dir" ] || [ ! -d "$vm_dir" ]; then
+            continue
+        fi
 
         allocated="$(operation_allocated_bytes "$vm_dir")"
         total=$((total + allocated))
@@ -2502,13 +2517,9 @@ provision_inventory() {
         kind="installed"
         [ -n "$adopted_disk" ] && kind="installation-files"
         running=false
-        while IFS= read -r disk; do
-            [ -f "$disk" ] || continue
-            if find_qemu_pid_for_disk "$disk" >/dev/null 2>&1; then
-                running=true
-                break
-            fi
-        done < <(find "$vm_dir" -maxdepth 1 -type f -name '*.qcow2' -print 2>/dev/null)
+        if operation_vm_running "$vm_dir"; then
+            running=true
+        fi
 
         instances="$(jq -c \
             --arg id "$op" \
@@ -2614,13 +2625,9 @@ provision_remove() {
     fi
     if [ -n "$vm_dir" ] && [ -d "$vm_dir" ]; then
         allocated="$(operation_allocated_bytes "$vm_dir")"
-        while IFS= read -r disk; do
-            [ -f "$disk" ] || continue
-            if find_qemu_pid_for_disk "$disk" >/dev/null 2>&1; then
-                running=true
-                break
-            fi
-        done < <(find "$vm_dir" -maxdepth 1 -type f -name '*.qcow2' -print 2>/dev/null)
+        if operation_vm_running "$vm_dir"; then
+            running=true
+        fi
         [ "$running" = false ] || blockers+=("desligue esta VM antes de removê-la")
     fi
     if [ "$purge" = "1" ]; then
@@ -2677,10 +2684,6 @@ provision_remove() {
         pz_error "VM removida, mas registro da operação não pôde ser atualizado"
         return 1
     }
-    provision_lock_clear "$operation_id"
-    provision_lock_release
-    trap - RETURN
-
     if [ "$json" = "1" ]; then
         jq -n --arg operationId "$operation_id" --arg mode "$mode" \
             --argjson bytes "$allocated" \
@@ -2730,7 +2733,11 @@ provision_finalize() {
         esac
     fi
 
-    local vm_dir snapshot_path source_pid
+    local vm_dir snapshot_path source_pid partial_disk=""
+    if ! provision_lock_acquire "$operation_id"; then
+        return 1
+    fi
+    trap '[ -z "$partial_disk" ] || rm -f -- "$partial_disk" || true; provision_lock_clear "$operation_id"; provision_lock_release' RETURN
     vm_dir="$(resolve_vm_staging_dir "$operation_id")" || return 1
     snapshot_path="$(cat "$op_dir/snapshot_path" 2>/dev/null || true)"
     [ -f "$snapshot_path" ] || { pz_error "verified snapshot missing"; return 1; }
@@ -2754,7 +2761,8 @@ provision_finalize() {
         *) pz_error "finalize target must be under $HOME/VirtualMachines/PhaseZero-Windows*"; return 1 ;;
     esac
 
-    local target_disk="$target_dir/phasezero-windows.qcow2" partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
+    local target_disk="$target_dir/phasezero-windows.qcow2"
+    partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
     [ ! -e "$target_disk" ] || { pz_error "final target already exists: $target_disk"; return 1; }
     install -d -m 700 "$target_dir"
     target_dir="$(readlink -f -- "$target_dir")"
@@ -2765,7 +2773,6 @@ provision_finalize() {
     target_disk="$target_dir/phasezero-windows.qcow2"
     partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
     [ ! -e "$target_disk" ] || { pz_error "final target already exists: $target_disk"; return 1; }
-    trap 'rm -f -- "$partial_disk"' RETURN
     if ! qemu-img convert -f qcow2 -O qcow2 -o compat=1.1,lazy_refcounts=on -S 4k "$snapshot_path" "$partial_disk"; then
         rm -f -- "$partial_disk"
         pz_error "failed to flatten provisioned snapshot"
@@ -2777,7 +2784,7 @@ provision_finalize() {
         return 1
     fi
     mv -- "$partial_disk" "$target_disk"
-    trap - RETURN
+    partial_disk=""
     chmod 600 "$target_disk"
     if [ -f "$vm_dir/OVMF_VARS.fd" ]; then
         cp --preserve=mode,timestamps "$vm_dir/OVMF_VARS.fd" "$target_dir/OVMF_VARS.fd"

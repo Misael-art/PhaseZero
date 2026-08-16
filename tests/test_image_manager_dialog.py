@@ -207,7 +207,15 @@ def test_grub_button_emits_pending_action(qapp, tmp_path: Path) -> None:
     assert dlg.pending_action().id == "boot.safe-menu"
 
 
-def test_remove_vm_button_emits_preview_first_action(qapp, tmp_path: Path) -> None:
+def test_current_vm_remove_button_keeps_standard_action(qapp, tmp_path: Path) -> None:
+    dlg = _make_dialog(tmp_path, by_id=_real_by_id())
+    dlg.remove_vm_button.click()
+    assert dlg.pending_action() is not None
+    assert dlg.pending_action().id == "windows.vm.remove"
+    assert dlg.result() == QDialog.Accepted
+
+
+def test_prepare_vm_purge_builds_preview_first_action(qapp, tmp_path: Path) -> None:
     dlg = _make_dialog(tmp_path, by_id=_real_by_id())
     dlg._prepare_vm_removal({
         "id": "op-legacy-1", "imageIndex": 2, "allocatedBytes": 21_000_000_000,
@@ -251,6 +259,8 @@ def test_inventory_button_reports_count_and_real_space(qapp, tmp_path: Path) -> 
     assert dlg.vms_button.text() == "VMs instaladas · 1"
     assert dlg.vms_button.isEnabled()
     assert "19.6 GB" in dlg.vms_button.toolTip()
+    assert dlg.remove_vm_button is not dlg.vms_button
+    assert dlg.remove_vm_button.isEnabled()
 
 
 def test_action_buttons_fit_minimum_dialog_viewport(qapp, tmp_path: Path) -> None:

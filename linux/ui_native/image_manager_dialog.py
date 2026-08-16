@@ -376,9 +376,13 @@ class ImageManagerDialog(QDialog):
         self.remove_button.setObjectName("dangerOutlineButton")
         self.remove_button.setMinimumHeight(44)
         self.remove_button.clicked.connect(self._remove)
-        # Kept as a compatibility alias for callers/tests. Removal now starts
-        # from the inventory button and always targets one explicit operation.
-        self.remove_vm_button = self.vms_button
+        self.remove_vm_button = QPushButton("🗑 Remover VM atual")
+        self.remove_vm_button.setObjectName("dangerOutlineButton")
+        self.remove_vm_button.setMinimumHeight(44)
+        self.remove_vm_button.setEnabled("windows.vm.remove" in self._by_id)
+        self.remove_vm_button.clicked.connect(
+            lambda: self._request_action("windows.vm.remove")
+        )
         self.close_button = QPushButton("Fechar")
         self.close_button.setMinimumHeight(44)
         self.close_button.clicked.connect(self.reject)
@@ -386,6 +390,7 @@ class ImageManagerDialog(QDialog):
             primary_row.addWidget(button)
         primary_row.addStretch()
         secondary_row.addWidget(self.remove_button)
+        secondary_row.addWidget(self.remove_vm_button)
         secondary_row.addStretch()
         secondary_row.addWidget(self.close_button)
         actions.addLayout(primary_row)
@@ -563,6 +568,9 @@ class ImageManagerDialog(QDialog):
         self.status_label.setText(message)
         for button in (self.add_button, self.scan_button):
             button.setEnabled(not busy)
+        self.remove_vm_button.setEnabled(
+            not busy and "windows.vm.remove" in self._by_id
+        )
         # Never hand the primary button back unconditionally: leaving the
         # dialog idle with nothing selected (a scan that found nothing) would
         # show an enabled "Reproduzir" that does nothing when clicked.

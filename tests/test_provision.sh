@@ -425,6 +425,49 @@ assert_eq "active adopted finalize keeps canonical disk" "$FINALIZE_DISK" "$(ech
 rm -rf "$FINALIZE_T"
 
 echo ""
+echo "=== provision: finalize contends on the shared operation lock ==="
+FINALIZE_LOCK_T="$(mktemp -d)"
+FINALIZE_LOCK_STATE="$FINALIZE_LOCK_T/phasezero"
+FINALIZE_LOCK_OP="op-finalize-lock"
+FINALIZE_LOCK_VM="$FINALIZE_LOCK_STATE/windows-vm/vms/$FINALIZE_LOCK_OP"
+FINALIZE_LOCK_FILE="$FINALIZE_LOCK_STATE/windows-vm/provision/active.lock"
+mkdir -p "$FINALIZE_LOCK_STATE/operations/$FINALIZE_LOCK_OP" \
+    "$FINALIZE_LOCK_VM" "$(dirname "$FINALIZE_LOCK_FILE")"
+printf '%s\n' '{"id":"op-finalize-lock","state":"completed"}' \
+    > "$FINALIZE_LOCK_STATE/operations/$FINALIZE_LOCK_OP/operation.json"
+printf '%s\n' "$FINALIZE_LOCK_VM" \
+    > "$FINALIZE_LOCK_STATE/operations/$FINALIZE_LOCK_OP/vm_dir"
+printf '%s\n' "$FINALIZE_LOCK_VM/snapshot.qcow2" \
+    > "$FINALIZE_LOCK_STATE/operations/$FINALIZE_LOCK_OP/snapshot_path"
+touch "$FINALIZE_LOCK_VM/snapshot.qcow2"
+(
+    exec 9<>"$FINALIZE_LOCK_FILE"
+    flock 9
+    printf '%s\n' "$FINALIZE_LOCK_OP" > "$FINALIZE_LOCK_FILE"
+    touch "$FINALIZE_LOCK_T/ready"
+    sleep 30
+) &
+FINALIZE_LOCK_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$FINALIZE_LOCK_T/ready" ] && break
+    sleep 0.1
+done
+[ -e "$FINALIZE_LOCK_T/ready" ] || { echo "  FAIL: lock holder did not start"; exit 1; }
+set +e
+HOME="$FINALIZE_LOCK_T/home" XDG_STATE_HOME="$FINALIZE_LOCK_T" \
+    bash "$PROVISION_SCRIPT" finalize --operation-id "$FINALIZE_LOCK_OP" --json \
+    >/dev/null 2>&1
+FINALIZE_LOCK_RC=$?
+set -e
+kill "$FINALIZE_LOCK_PID" 2>/dev/null || true
+wait "$FINALIZE_LOCK_PID" 2>/dev/null || true
+assert_eq "finalize refuses concurrent removal lock" "1" \
+    "$([ "$FINALIZE_LOCK_RC" -ne 0 ] && echo 1 || echo 0)"
+assert_eq "finalize contention preserves staging" "1" \
+    "$([ -f "$FINALIZE_LOCK_VM/snapshot.qcow2" ] && echo 1 || echo 0)"
+rm -rf "$FINALIZE_LOCK_T"
+
+echo ""
 echo "=== graphics: plan serialization ==="
 GFX_PLAN_DIR="$(mktemp -d)"
 GFX_VIRTIO=$(PZ_STATE="$GFX_PLAN_DIR" bash "$PROVISION_SCRIPT" plan --iso "$DUMMY_ISO" --graphics virtio-gl --json 2>/dev/null | jq -r '.graphics // ""' 2>/dev/null || echo "")
