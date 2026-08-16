@@ -692,7 +692,7 @@ PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
 gamescope_rc=$?
 set -e
 test "$gamescope_rc" -eq 77
-grep -q -- '--backend drm --expose-wayland -O eDP-1 --force-orientation right -W 1280 -H 800 -w 1280 -h 800 --force-windows-fullscreen --' "$gamescope_args_file"
+grep -q -- '--backend drm --expose-wayland -O eDP-1 --force-orientation right -W 1280 -H 800 -w 1280 -h 800 -r 60.000 --force-windows-fullscreen --' "$gamescope_args_file"
 
 mkdir -p "$display_sys/class/drm/card1-DP-1"
 printf 'connected\n' > "$display_sys/class/drm/card1-DP-1/status"
@@ -703,8 +703,8 @@ kde_output_config="$TMP_ROOT/kwinoutputconfig.json"
 cat > "$kde_output_config" <<EOF
 [
   {"name":"outputs","data":[
-    {"connectorName":"DP-1","edidHash":"stale","mode":{"width":640,"height":480}},
-    {"connectorName":"DP-1","edidHash":"$display_edid_hash","mode":{"width":2560,"height":1080}}
+    {"connectorName":"DP-1","edidHash":"stale","mode":{"width":640,"height":480,"refreshRate":59940}},
+    {"connectorName":"DP-1","edidHash":"$display_edid_hash","mode":{"width":2560,"height":1080,"refreshRate":74991}}
   ]}
 ]
 EOF
@@ -720,13 +720,14 @@ docked_validation="$(
 )"
 grep -q 'display_profile=steamdeck-docked' <<< "$docked_validation"
 grep -q 'display_width=2560 display_height=1080 display_connector=DP-1' <<< "$docked_validation"
+grep -q 'display_refresh_millihz=74991 display_refresh_hz=74.991' <<< "$docked_validation"
 grep -q 'compositor=gamescope' <<< "$docked_validation"
 grep -q 'reason=steamdeck-docked-explicit-output' <<< "$docked_validation"
-grep -q -- '-O DP-1 -W 2560 -H 1080 -w 2560 -h 1080 --force-windows-fullscreen' <<< "$docked_validation"
+grep -q -- '-O DP-1 -W 2560 -H 1080 -w 2560 -h 1080 -r 74.991 --force-windows-fullscreen' <<< "$docked_validation"
 if grep -q -- '--force-orientation' <<< "$docked_validation"; then
     exit 1
 fi
-echo "  docked session targets connected KDE monitor mode explicitly"
+echo "  docked session targets connected KDE monitor mode and refresh explicitly"
 rm -f "$session_bin/gamescope" "$gamescope_args_file"
 
 cat > "$session_bin/cage" <<EOF

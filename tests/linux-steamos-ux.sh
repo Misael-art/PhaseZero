@@ -24,12 +24,31 @@ mkdir -p "$display_root/dmi" "$display_root/sys/class/drm/card1-eDP-1" "$display
 printf 'Jupiter\n' > "$display_root/dmi/product_name"
 printf 'connected\n' > "$display_root/sys/class/drm/card1-eDP-1/status"
 printf 'disconnected\n' > "$display_root/sys/class/drm/card1-DP-1/status"
+printf 'panel-edid\n' > "$display_root/sys/class/drm/card1-eDP-1/edid"
+panel_edid_hash="$(md5sum "$display_root/sys/class/drm/card1-eDP-1/edid" | awk '{print $1}')"
+display_kde_config="$display_root/kwinoutputconfig.json"
+cat > "$display_kde_config" <<EOF
+[
+  {"name":"outputs","data":[
+    {"connectorName":"eDP-1","edidHash":"$panel_edid_hash","mode":{"width":800,"height":1280,"refreshRate":59999}}
+  ]}
+]
+EOF
 display_profile="$(
     PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
     PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
     bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_profile"
 )"
 test "$display_profile" = "steamdeck-lcd-handheld"
+display_status="$(
+    PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
+    PZ_DISPLAY_KDE_OUTPUT_CONFIG="$display_kde_config" \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_status"
+)"
+jq -e '.screenWidth == "1280" and .screenHeight == "800" and
+       .outputConnector == "*,eDP-1" and .refreshMilliHz == 59999 and
+       .refreshHz == "59.999"' <<< "$display_status" >/dev/null
 printf 'connected\n' > "$display_root/sys/class/drm/card1-DP-1/status"
 display_profile="$(
     PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \

@@ -55,6 +55,9 @@ _session_vars="$(pz_display_resolved_session_vars 2>/dev/null || true)"
 screen_w="$(printf '%s\n' "$_session_vars" | sed -n '1p')"; [ -n "$screen_w" ] || screen_w=1280
 screen_h="$(printf '%s\n' "$_session_vars" | sed -n '2p')"; [ -n "$screen_h" ] || screen_h=800
 screen_conn="$(printf '%s\n' "$_session_vars" | sed -n '3p')"; [ -n "$screen_conn" ] || screen_conn='*,eDP-1'
+screen_refresh_millihz="$(printf '%s\n' "$_session_vars" | sed -n '4p')"
+pz_display_valid_refresh_millihz "$screen_refresh_millihz" || screen_refresh_millihz=60000
+screen_refresh_hz="$(pz_display_refresh_hz "$screen_refresh_millihz")"
 
 jq -n \
     --arg mode "$mode" \
@@ -79,6 +82,8 @@ jq -n \
     --arg screenW "$screen_w" \
     --arg screenH "$screen_h" \
     --arg screenConn "$screen_conn" \
+    --argjson screenRefreshMilliHz "$screen_refresh_millihz" \
+    --arg screenRefreshHz "$screen_refresh_hz" \
     '{
         mode: $mode,
         tools: {
@@ -107,7 +112,9 @@ jq -n \
             externalConnectors: $displayExternal,
             screenWidth: $screenW,
             screenHeight: $screenH,
-            outputConnector: $screenConn
+            outputConnector: $screenConn,
+            refreshMilliHz: $screenRefreshMilliHz,
+            refreshHz: $screenRefreshHz
         },
         plugins: $deckyPlugins
     }'
