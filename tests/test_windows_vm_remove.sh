@@ -98,4 +98,80 @@ if "$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json >/dev/null 2>&1; the
 fi
 [ -d "$VM_DIR" ]
 
+# Completed provisioning VMs are separate managed instances. Inventory must
+# expose their real allocated size and removal must target one operation id,
+# never an arbitrary path supplied by the caller.
+OPS="$XDG_STATE_HOME/phasezero/operations"
+STAGING="$XDG_STATE_HOME/phasezero/windows-vm/vms"
+mkdir -p "$OPS/op-legacy-1" "$OPS/op-legacy-2" \
+    "$STAGING/op-legacy-1" "$STAGING/op-legacy-2"
+printf '%s\n' '{"id":"op-legacy-1","state":"completed","createdAt":"2026-08-01T10:00:00Z"}' \
+    > "$OPS/op-legacy-1/operation.json"
+printf '%s\n' '{"imageIndex":1}' > "$OPS/op-legacy-1/plan.json"
+printf '%s\n' "$STAGING/op-legacy-1" > "$OPS/op-legacy-1/vm_dir"
+dd if=/dev/zero of="$STAGING/op-legacy-1/disk.qcow2" bs=1024 count=64 status=none
+printf '%s\n' '{"id":"op-legacy-2","state":"completed","createdAt":"2026-08-02T10:00:00Z"}' \
+    > "$OPS/op-legacy-2/operation.json"
+printf '%s\n' '{"imageIndex":2}' > "$OPS/op-legacy-2/plan.json"
+printf '%s\n' "$STAGING/op-legacy-2" > "$OPS/op-legacy-2/vm_dir"
+dd if=/dev/zero of="$STAGING/op-legacy-2/disk.qcow2" bs=1024 count=96 status=none
+
+inventory="$("$REPO_ROOT"/linux/pz windows-vm provision inventory --json)"
+jq -e '.count == 2 and .totalAllocatedBytes > 0 and
+    ([.instances[].id] | sort) == ["op-legacy-1","op-legacy-2"]' <<< "$inventory" >/dev/null
+purge_plan="$("$REPO_ROOT"/linux/pz windows-vm provision remove \
+    --operation-id op-legacy-1 --purge --dry-run --json)"
+jq -e '.ready == true and .freesSpaceImmediately == true and
+    .target.operationId == "op-legacy-1" and .target.allocatedBytes > 0' \
+    <<< "$purge_plan" >/dev/null
+
+if "$REPO_ROOT"/linux/pz windows-vm provision remove --operation-id op-legacy-1 \
+    --purge --yes --json >/dev/null 2>&1; then
+    echo "permanent removal without matching operation confirmation unexpectedly succeeded" >&2
+    exit 1
+fi
+[ -d "$STAGING/op-legacy-1" ]
+
+printf '%s\n' 'op-running' > "$XDG_STATE_HOME/phasezero/windows-vm/provision/active.lock"
+printf '%s\n' '{"id":"op-running","state":"running"}' \
+    > "$XDG_STATE_HOME/phasezero/operations/op-running/operation.json"
+if "$REPO_ROOT"/linux/pz windows-vm provision remove --operation-id op-legacy-1 \
+    --purge --confirm-operation op-legacy-1 --yes --json >/dev/null 2>&1; then
+    echo "legacy removal raced an active provision operation" >&2
+    exit 1
+fi
+[ -d "$STAGING/op-legacy-1" ]
+printf '%s\n' '{"id":"op-running","state":"failed"}' \
+    > "$XDG_STATE_HOME/phasezero/operations/op-running/operation.json"
+
+purged="$("$REPO_ROOT"/linux/pz windows-vm provision remove --operation-id op-legacy-1 \
+    --purge --confirm-operation op-legacy-1 --yes --json)"
+jq -e '.success == true and .removalMode == "purge" and
+    .releasedBytes > 0 and .indexReleased == true' <<< "$purged" >/dev/null
+[ ! -e "$STAGING/op-legacy-1" ]
+jq -e '.vmRemovedAt and .vmRemovalMode == "purge" and .vmRemovedBytes > 0' \
+    "$OPS/op-legacy-1/operation.json" >/dev/null
+
+trashed="$("$REPO_ROOT"/linux/pz windows-vm provision remove --operation-id op-legacy-2 \
+    --trash --yes --json)"
+jq -e '.success == true and .removalMode == "trash" and .indexReleased == true' \
+    <<< "$trashed" >/dev/null
+[ ! -e "$STAGING/op-legacy-2" ]
+[ -e "$TEST_VM_TRASH/op-legacy-2/disk.qcow2" ]
+
+after_inventory="$("$REPO_ROOT"/linux/pz windows-vm provision inventory --json)"
+jq -e '.count == 0 and .totalAllocatedBytes == 0' <<< "$after_inventory" >/dev/null
+
+mkdir -p "$OPS/op-unsafe" "$TEST_ROOT/outside-vm"
+printf '%s\n' '{"id":"op-unsafe","state":"completed"}' > "$OPS/op-unsafe/operation.json"
+printf '%s\n' '{"imageIndex":3}' > "$OPS/op-unsafe/plan.json"
+printf '%s\n' "$TEST_ROOT/outside-vm" > "$OPS/op-unsafe/vm_dir"
+touch "$TEST_ROOT/outside-vm/disk.qcow2"
+if "$REPO_ROOT"/linux/pz windows-vm provision remove --operation-id op-unsafe \
+    --purge --dry-run --json >/dev/null 2>&1; then
+    echo "legacy removal accepted a path outside managed staging" >&2
+    exit 1
+fi
+[ -d "$TEST_ROOT/outside-vm" ]
+
 echo "windows-vm remove smoke ok"
