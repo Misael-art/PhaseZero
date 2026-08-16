@@ -121,6 +121,31 @@ pz_admin_mode() {
 
 pz_admin_available() { [ "$(pz_admin_mode)" = "ready" ]; }
 
+# qcow2 files opened with cache=none use O_DIRECT. On Btrfs, creating them in
+# a regular CoW directory can produce checksum races and EIO under guest load.
+# The directory attribute must exist before qemu-img creates the file.
+pz_prepare_vm_nodatacow_dir() {
+    local dir="$1" fstype attrs
+    [ -n "$dir" ] || { pz_error "VM directory is empty"; return 1; }
+    install -d -m 0700 -- "$dir" || return 1
+    fstype="$(stat -f -c %T -- "$dir" 2>/dev/null || true)"
+    [ "$fstype" = "btrfs" ] || return 0
+    command -v chattr >/dev/null 2>&1 || {
+        pz_error "Btrfs VM storage requires chattr so nodatacow can be enabled: $dir"
+        return 1
+    }
+    chattr +C -- "$dir" 2>/dev/null || {
+        pz_error "could not enable nodatacow on Btrfs VM directory: $dir"
+        return 1
+    }
+    attrs="$(lsattr -d -- "$dir" 2>/dev/null | awk '{print $1}')"
+    case "$attrs" in
+        *C*) return 0 ;;
+    esac
+    pz_error "Btrfs VM directory did not retain nodatacow: $dir"
+    return 1
+}
+
 # Mensagem acionável única, para não divergir entre CLI e UI.
 pz_admin_howtofix() {
     printf '%s\n' \

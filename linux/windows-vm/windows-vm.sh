@@ -850,14 +850,9 @@ harden_vm_storage_modes() {
 # before qemu-img create; an already-created image cannot be converted in place.
 mark_vm_dir_nodatacow() {
     [ "$DRY_RUN" = "1" ] && return 0
-    command -v chattr >/dev/null 2>&1 || return 0
-    local fstype
-    fstype="$(stat -f -c %T "$VM_DIR" 2>/dev/null || true)"
-    [ "$fstype" = "btrfs" ] || return 0
-    if chattr +C "$VM_DIR" 2>/dev/null; then
+    pz_prepare_vm_nodatacow_dir "$VM_DIR" || return 1
+    if [ "$(stat -f -c %T -- "$VM_DIR" 2>/dev/null || true)" = "btrfs" ]; then
         pz_info "btrfs: $VM_DIR marked nodatacow (new VM images skip CoW and checksums)"
-    else
-        pz_warn "btrfs: could not set nodatacow on $VM_DIR; VM image stays copy-on-write"
     fi
 }
 
@@ -872,7 +867,7 @@ ensure_vm_storage() {
         if [ "$DRY_RUN" = "1" ]; then
             pz_info "dry-run: would create qcow2 disk: $DISK_PATH ($DISK_SIZE)"
         else
-            mark_vm_dir_nodatacow
+            mark_vm_dir_nodatacow || return 1
             qemu-img create -f qcow2 "$DISK_PATH" "$DISK_SIZE"
             pz_info "created qcow2 disk: $DISK_PATH"
         fi

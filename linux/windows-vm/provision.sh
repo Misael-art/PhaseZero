@@ -912,7 +912,10 @@ run_assets() {
     local disk_size
     disk_size="$(jq -r '.resources.diskSize // "256G"' "$plan_file")"
 
-    mkdir -p "$vm_dir"
+    pz_prepare_vm_nodatacow_dir "$vm_dir" || {
+        log_operation "$op" "FAIL: could not prepare safe VM storage"
+        return 1
+    }
     echo "$vm_dir" > "$OPERATIONS_DIR/$op/vm_dir"
 
     log_operation "$op" "VM directory: $vm_dir"
@@ -2764,7 +2767,10 @@ provision_finalize() {
     local target_disk="$target_dir/phasezero-windows.qcow2"
     partial_disk="$target_dir/.phasezero-windows.qcow2.partial.$$"
     [ ! -e "$target_disk" ] || { pz_error "final target already exists: $target_disk"; return 1; }
-    install -d -m 700 "$target_dir"
+    pz_prepare_vm_nodatacow_dir "$target_dir" || {
+        pz_error "could not prepare safe finalize target"
+        return 1
+    }
     target_dir="$(readlink -f -- "$target_dir")"
     case "$target_dir" in
         "$managed_vm_base"|"$managed_vm_base"-*) ;;
