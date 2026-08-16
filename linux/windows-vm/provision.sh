@@ -2736,7 +2736,7 @@ provision_finalize() {
         esac
     fi
 
-    local vm_dir snapshot_path source_pid partial_disk=""
+    local vm_dir snapshot_path source_pid partial_disk="" base_disk=""
     if ! provision_lock_acquire "$operation_id"; then
         return 1
     fi
@@ -2744,6 +2744,18 @@ provision_finalize() {
     vm_dir="$(resolve_vm_staging_dir "$operation_id")" || return 1
     snapshot_path="$(cat "$op_dir/snapshot_path" 2>/dev/null || true)"
     [ -f "$snapshot_path" ] || { pz_error "verified snapshot missing"; return 1; }
+    # golden-clean is the writable overlay used by the post-install relaunch.
+    # Flattening it adopts transient boot/runtime state and can make the next
+    # boot enter Windows Automatic Repair.  The base disk was fully tweaked and
+    # verified before that overlay was created, so it is the canonical source.
+    base_disk="$vm_dir/disk.qcow2"
+    if [ -f "$base_disk" ]; then
+        qemu-img check "$base_disk" >/dev/null 2>&1 || {
+            pz_error "verified base disk failed integrity check"
+            return 1
+        }
+        snapshot_path="$base_disk"
+    fi
     source_pid="$(cat "$vm_dir/qemu-pid" 2>/dev/null || true)"
     if [[ "$source_pid" =~ ^[0-9]+$ ]] && kill -0 "$source_pid" 2>/dev/null; then
         pz_error "VM is running; shut it down before finalize"

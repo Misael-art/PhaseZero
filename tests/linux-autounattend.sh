@@ -189,6 +189,8 @@ target = s.index('pz_prepare_vm_nodatacow_dir "$target_dir"')
 convert = s.index('qemu-img convert -f qcow2')
 assert assets < create, 'provision storage must be nodatacow before disk creation'
 assert target < convert, 'finalize target must be nodatacow before flattening'
+assert 'base_disk="$vm_dir/disk.qcow2"' in s, 'finalize must adopt verified base, not writable relaunch overlay'
+assert 'snapshot_path="$base_disk"' in s, 'finalize must select canonical base disk'
 PYEOF
 
 # --- guest-side post-install script -------------------------------------------
