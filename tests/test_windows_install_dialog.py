@@ -28,6 +28,31 @@ def test_completed_indices_only_include_finished_operations(tmp_path: Path) -> N
     assert completed_image_indices(tmp_path) == {4}
 
 
+def test_removed_or_missing_vm_releases_completed_index(tmp_path: Path) -> None:
+    removed = tmp_path / "op-removed"
+    removed.mkdir()
+    (removed / "operation.json").write_text(json.dumps({
+        "state": "completed", "vmRemovedAt": "2026-08-16T12:00:00Z",
+    }))
+    (removed / "plan.json").write_text(json.dumps({"imageIndex": 2}))
+
+    missing = tmp_path / "op-missing"
+    missing.mkdir()
+    (missing / "operation.json").write_text(json.dumps({"state": "completed"}))
+    (missing / "plan.json").write_text(json.dumps({"imageIndex": 3}))
+    (missing / "vm_dir").write_text(str(tmp_path / "no-longer-present"))
+
+    active = tmp_path / "op-active"
+    active.mkdir()
+    vm_dir = tmp_path / "existing-vm"
+    vm_dir.mkdir()
+    (active / "operation.json").write_text(json.dumps({"state": "completed"}))
+    (active / "plan.json").write_text(json.dumps({"imageIndex": 4}))
+    (active / "vm_dir").write_text(str(vm_dir))
+
+    assert completed_image_indices(tmp_path) == {4}
+
+
 def test_dialog_limits_editions_and_disables_used_index(qapp) -> None:
     dialog = WindowsInstallDialog(used_indices={2, 7})
     assert dialog.isWindow()

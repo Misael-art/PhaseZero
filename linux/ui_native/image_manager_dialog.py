@@ -21,6 +21,7 @@ The ISO file on disk is never ``unlink``-ed; the only destructive option is
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QFile, QObject, QProcess, QTimer, Qt, Signal
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QListWidget,
     QListWidgetItem,
@@ -59,6 +61,19 @@ SCAN_TIMEOUT_MS = 60_000
 FALLBACK_INDEX_RANGE = range(1, 11)
 
 
+def _human_bytes(value: object) -> str:
+    try:
+        size = max(0, int(value))
+    except (TypeError, ValueError):
+        size = 0
+    amount = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if amount < 1024 or unit == "TB":
+            return f"{amount:.1f} {unit}" if unit != "B" else f"{int(amount)} B"
+        amount /= 1024
+    return f"{size} B"
+
+
 class _PzReader(QObject):
     """Run a read-only ``pz`` command asynchronously with a bounded timeout.
 
@@ -81,6 +96,9 @@ class _PzReader(QObject):
 
     def any_running(self) -> bool:
         return bool(self._procs)
+
+    def has_running_prefix(self, prefix: str) -> bool:
+        return any(request_id.startswith(prefix) for request_id in self._procs)
 
     def run(self, request_id: str, args: list[str], *, timeout_ms: int) -> None:
         if request_id in self._procs:
@@ -187,6 +205,7 @@ class ImageManagerDialog(QDialog):
 
         self._pending_action: ActionSpec | None = None
         self._install_indices: set[int] = set()
+        self._vm_entries: list[dict] = []
         self._current: dict | None = None
         self._batch: list[str] = []
         self._batch_source = "manual"
@@ -196,6 +215,8 @@ class ImageManagerDialog(QDialog):
 
         self._build_ui()
         self._refresh_list()
+        if (self._root / "linux" / "pz").is_file():
+            self._refresh_vms()
         self.set_advanced_mode(self._advanced)
 
     # ----- public after exec() -----
@@ -231,11 +252,17 @@ class ImageManagerDialog(QDialog):
         self.scan_button = QPushButton("↻ Buscar ISOs")
         self.scan_button.setObjectName("secondaryButton")
         self.scan_button.clicked.connect(self._scan_isos)
+        self.vms_button = QPushButton("VMs instaladas")
+        self.vms_button.setObjectName("secondaryButton")
+        self.vms_button.setEnabled(False)
+        self.vms_button.setToolTip("Carregando instalações concluídas…")
+        self.vms_button.clicked.connect(self._show_vm_manager)
         self.refresh_button = QPushButton("Atualizar")
         self.refresh_button.setObjectName("secondaryButton")
-        self.refresh_button.clicked.connect(self._refresh_list)
+        self.refresh_button.clicked.connect(self._refresh_all)
         toolbar.addWidget(self.add_button)
         toolbar.addWidget(self.scan_button)
+        toolbar.addWidget(self.vms_button)
         toolbar.addStretch()
         toolbar.addWidget(self.refresh_button)
         outer.addLayout(toolbar)
@@ -349,11 +376,9 @@ class ImageManagerDialog(QDialog):
         self.remove_button.setObjectName("dangerOutlineButton")
         self.remove_button.setMinimumHeight(44)
         self.remove_button.clicked.connect(self._remove)
-        self.remove_vm_button = QPushButton("🗑 Remover VM criada")
-        self.remove_vm_button.setObjectName("dangerOutlineButton")
-        self.remove_vm_button.setMinimumHeight(44)
-        self.remove_vm_button.setToolTip("Move a VM criada para a lixeira. Não altera boot direto.")
-        self.remove_vm_button.clicked.connect(lambda: self._request_action("windows.vm.remove"))
+        # Kept as a compatibility alias for callers/tests. Removal now starts
+        # from the inventory button and always targets one explicit operation.
+        self.remove_vm_button = self.vms_button
         self.close_button = QPushButton("Fechar")
         self.close_button.setMinimumHeight(44)
         self.close_button.clicked.connect(self.reject)
@@ -361,12 +386,10 @@ class ImageManagerDialog(QDialog):
             primary_row.addWidget(button)
         primary_row.addStretch()
         secondary_row.addWidget(self.remove_button)
-        secondary_row.addWidget(self.remove_vm_button)
         secondary_row.addStretch()
         secondary_row.addWidget(self.close_button)
         actions.addLayout(primary_row)
         actions.addLayout(secondary_row)
-        self.remove_vm_button.setEnabled("windows.vm.remove" in self._by_id)
         return actions
 
     # ----- data flow -----
@@ -374,9 +397,23 @@ class ImageManagerDialog(QDialog):
     def _state_arg(self) -> Path | None:
         return self._state_path
 
-    def _refresh_list(self) -> None:
-        if self._reader.any_running():
+    def _refresh_all(self) -> None:
+        self._refresh_list()
+        self._refresh_vms()
+
+    def _refresh_vms(self) -> None:
+        if self._reader.is_running("vm-inventory"):
             return
+        self.vms_button.setEnabled(False)
+        self.vms_button.setText("VMs instaladas · …")
+        self.vms_button.setToolTip("Carregando instalações concluídas…")
+        self._reader.run(
+            "vm-inventory",
+            ["windows-vm", "provision", "inventory", "--json"],
+            timeout_ms=30_000,
+        )
+
+    def _refresh_list(self) -> None:
         self._install_indices = completed_image_indices(self._operations_dir)
         images = reg.list_images(self._state_arg())
         self.list_widget.blockSignals(True)
@@ -518,7 +555,8 @@ class ImageManagerDialog(QDialog):
         entry = self._current
         valid = bool(entry and entry.get("valid"))
         has_index = self._selected_index() is not None
-        self.play_button.setEnabled(valid and has_index and not self._reader.any_running())
+        media_busy = self._reader.is_running("scan") or self._reader.has_running_prefix("inspect:")
+        self.play_button.setEnabled(valid and has_index and not media_busy)
 
     def _set_busy(self, busy: bool, message: str) -> None:
         self.progress.setVisible(busy)
@@ -533,7 +571,7 @@ class ImageManagerDialog(QDialog):
     # ----- add / scan -----
 
     def _add_iso(self) -> None:
-        if self._reader.any_running():
+        if self._reader.is_running("scan") or self._reader.has_running_prefix("inspect:"):
             return
         path, _filt = QFileDialog.getOpenFileName(
             self,
@@ -546,7 +584,7 @@ class ImageManagerDialog(QDialog):
         self._inspect_and_add([path], source="manual")
 
     def _scan_isos(self) -> None:
-        if self._reader.any_running():
+        if self._reader.is_running("scan") or self._reader.has_running_prefix("inspect:"):
             return
         self._set_busy(True, "Buscando imagens do Windows no computador…")
         self._reader.run(
@@ -575,10 +613,31 @@ class ImageManagerDialog(QDialog):
             return
         if request_id == "scan":
             self._handle_scan_result(payload)
+        elif request_id == "vm-inventory":
+            entries = payload.get("instances") if isinstance(payload, dict) else None
+            self._vm_entries = [entry for entry in (entries or []) if isinstance(entry, dict)]
+            count = len(self._vm_entries)
+            total = sum(int(entry.get("allocatedBytes") or 0) for entry in self._vm_entries)
+            self.vms_button.setText(f"VMs instaladas · {count}")
+            self.vms_button.setEnabled(count > 0 and "windows.vm.remove" in self._by_id)
+            if count:
+                self.vms_button.setToolTip(
+                    f"{count} instalação(ões), ocupando {_human_bytes(total)}"
+                )
+            else:
+                self.vms_button.setToolTip("Nenhuma instalação concluída ocupa espaço")
+            self._update_play_enabled()
 
     def _on_read_failed(self, request_id: str, message: str) -> None:
         if request_id.startswith("inspect:"):
             self._fail_inspect(request_id.split(":", 1)[1], message)
+            return
+        if request_id == "vm-inventory":
+            self._vm_entries = []
+            self.vms_button.setText("VMs instaladas · indisponível")
+            self.vms_button.setEnabled(False)
+            self.vms_button.setToolTip(message)
+            self._update_play_enabled()
             return
         self._set_busy(False, f"Falha: {message}")
 
@@ -731,6 +790,131 @@ class ImageManagerDialog(QDialog):
         self._set_busy(False, message)
 
     # ----- actions -----
+
+    def _show_vm_manager(self) -> None:
+        if not self._vm_entries:
+            QMessageBox.information(self, "VMs instaladas", "Nenhuma VM concluída ocupa espaço.")
+            return
+        dialog = QDialog(self)
+        dialog.setObjectName("windowsVmInventoryDialog")
+        dialog.setWindowTitle("VMs instaladas")
+        dialog.setMinimumSize(680, 430)
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+        layout.addWidget(SectionHeader(
+            "VMs instaladas",
+            "Escolha uma instalação. O PhaseZero confirma caminho, uso e tamanho antes de remover.",
+        ))
+        vm_list = QListWidget()
+        vm_list.setObjectName("windowsVmInventoryList")
+        for entry in self._vm_entries:
+            index = int(entry.get("imageIndex") or 0)
+            edition = f"Edição {index}" if index else "Edição não identificada"
+            status = "Em execução" if entry.get("running") else "Desligada"
+            item = QListWidgetItem(
+                f"Windows 11 · {edition}  —  {_human_bytes(entry.get('allocatedBytes'))}  ·  {status}"
+            )
+            item.setData(Qt.UserRole, entry)
+            vm_list.addItem(item)
+        vm_list.setCurrentRow(0)
+        layout.addWidget(vm_list, 1)
+        details = QLabel()
+        details.setObjectName("cardDescription")
+        details.setWordWrap(True)
+        layout.addWidget(details)
+
+        buttons = QHBoxLayout()
+        trash = QPushButton("Mover para a lixeira")
+        trash.setObjectName("secondaryButton")
+        trash.setMinimumHeight(44)
+        purge = QPushButton("Liberar espaço agora")
+        purge.setObjectName("dangerButton")
+        purge.setMinimumHeight(44)
+        close = QPushButton("Cancelar")
+        close.setMinimumHeight(44)
+        buttons.addWidget(trash)
+        buttons.addWidget(purge)
+        buttons.addStretch()
+        buttons.addWidget(close)
+        layout.addLayout(buttons)
+
+        def selected() -> dict | None:
+            item = vm_list.currentItem()
+            entry = item.data(Qt.UserRole) if item is not None else None
+            return entry if isinstance(entry, dict) else None
+
+        def update_details() -> None:
+            entry = selected()
+            if not entry:
+                details.clear()
+                trash.setEnabled(False)
+                purge.setEnabled(False)
+                return
+            running = bool(entry.get("running"))
+            path_text = str(entry.get("vmDir") or "")
+            details.setText(
+                f"Espaço ocupado: {_human_bytes(entry.get('allocatedBytes'))}\n"
+                f"Criada em: {entry.get('createdAt') or '—'}\n"
+                f"Local: {path_text}\n\n"
+                "Lixeira permite recuperação, mas libera espaço somente após ser esvaziada. "
+                "Liberação imediata é permanente."
+            )
+            trash.setEnabled(not running)
+            purge.setEnabled(not running)
+
+        def choose(mode: str) -> None:
+            entry = selected()
+            if not entry:
+                return
+            if mode == "purge":
+                text, accepted = QInputDialog.getText(
+                    dialog,
+                    "Confirmar liberação permanente",
+                    f"Esta ação apagará {_human_bytes(entry.get('allocatedBytes'))} sem recuperação.\n"
+                    "Digite REMOVER para continuar:",
+                )
+                if not accepted or text.strip().upper() != "REMOVER":
+                    return
+            self._prepare_vm_removal(entry, purge=(mode == "purge"))
+            dialog.accept()
+            self.accept()
+
+        vm_list.currentRowChanged.connect(lambda _row: update_details())
+        trash.clicked.connect(lambda: choose("trash"))
+        purge.clicked.connect(lambda: choose("purge"))
+        close.clicked.connect(dialog.reject)
+        update_details()
+        dialog.exec()
+
+    def _prepare_vm_removal(self, entry: dict, *, purge: bool) -> None:
+        base = self._by_id.get("windows.vm.remove")
+        operation_id = str(entry.get("id") or "")
+        if base is None or not operation_id:
+            return
+        preview = [
+            "windows-vm", "provision", "remove",
+            "--operation-id", operation_id,
+            "--purge" if purge else "--trash",
+            "--dry-run", "--json",
+        ]
+        execute = [
+            "windows-vm", "provision", "remove",
+            "--operation-id", operation_id,
+            "--purge" if purge else "--trash",
+        ]
+        if purge:
+            execute.extend(("--confirm-operation", operation_id))
+        execute.extend(("--yes", "--json"))
+        self._pending_action = replace(
+            base,
+            title=("Liberar espaço da VM" if purge else "Mover VM para a lixeira"),
+            description=(
+                f"Remove a instalação selecionada e libera {_human_bytes(entry.get('allocatedBytes'))}."
+            ),
+            args=tuple(execute),
+            preview_args=tuple(preview),
+        )
 
     def _play(self) -> None:
         entry = self._current

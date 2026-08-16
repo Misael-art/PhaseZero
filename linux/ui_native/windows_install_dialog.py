@@ -35,6 +35,13 @@ def completed_image_indices(operations_dir: Path | None = None) -> set[int]:
             operation = json.loads(operation_file.read_text(encoding="utf-8"))
             if operation.get("state") != "completed":
                 continue
+            if operation.get("vmRemovedAt"):
+                continue
+            vm_dir_file = operation_file.parent / "vm_dir"
+            if vm_dir_file.exists():
+                vm_dir = Path(vm_dir_file.read_text(encoding="utf-8").strip())
+                if not vm_dir.is_dir():
+                    continue
             plan = json.loads((operation_file.parent / "plan.json").read_text(encoding="utf-8"))
             index = int(plan.get("imageIndex", 0))
         except (OSError, ValueError, TypeError, json.JSONDecodeError):
