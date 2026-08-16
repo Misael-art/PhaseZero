@@ -172,11 +172,25 @@ fi
 # --- btrfs nodatacow ----------------------------------------------------------
 # CoW + O_DIRECT on a live qcow2 produced EIO mid-write and an unbootable guest.
 grep -Fq 'mark_vm_dir_nodatacow' "$ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq 'pz_prepare_vm_nodatacow_dir "$vm_dir"' "$ROOT/linux/windows-vm/provision.sh"
+grep -Fq 'pz_prepare_vm_nodatacow_dir "$target_dir"' "$ROOT/linux/windows-vm/provision.sh"
 python3 - "$ROOT/linux/windows-vm/windows-vm.sh" <<'PYEOF'
 import re, sys
 s = open(sys.argv[1]).read()
-i, j = s.index('mark_vm_dir_nodatacow\n'), s.index('qemu-img create -f qcow2')
+i, j = s.index('mark_vm_dir_nodatacow || return 1'), s.index('qemu-img create -f qcow2')
 assert i < j, 'nodatacow must be set before the image is created; the flag only affects new files'
+PYEOF
+python3 - "$ROOT/linux/windows-vm/provision.sh" <<'PYEOF'
+import sys
+s = open(sys.argv[1], encoding='utf-8').read()
+assets = s.index('pz_prepare_vm_nodatacow_dir "$vm_dir"')
+create = s.index('qemu-img create -f qcow2 "$disk_path"')
+target = s.index('pz_prepare_vm_nodatacow_dir "$target_dir"')
+convert = s.index('qemu-img convert -f qcow2')
+assert assets < create, 'provision storage must be nodatacow before disk creation'
+assert target < convert, 'finalize target must be nodatacow before flattening'
+assert 'base_disk="$vm_dir/disk.qcow2"' in s, 'finalize must adopt verified base, not writable relaunch overlay'
+assert 'snapshot_path="$base_disk"' in s, 'finalize must select canonical base disk'
 PYEOF
 
 # --- guest-side post-install script -------------------------------------------

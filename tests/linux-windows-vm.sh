@@ -443,6 +443,24 @@ mkdir -p "$HOME/VirtualMachines/PhaseZero-Windows"
 export PZ_WINDOWS_VM_OVMF_CODE="$TMP_ROOT/OVMF_CODE.fd"
 grep -q -- 'addr=127.0.0.1' <<< "$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu)"
 grep -q -- 'addr=0.0.0.0' <<< "$(PZ_WINDOWS_VM_SPICE_ADDR=0.0.0.0 "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu 2>/dev/null || true)"
+display_launch="$(
+    PZ_WINDOWS_VM_DISPLAY_WIDTH=2560 \
+    PZ_WINDOWS_VM_DISPLAY_HEIGHT=1080 \
+        "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics compat --fullscreen
+)"
+grep -Fq 'virtio-vga\,xres=2560\,yres=1080' <<< "$display_launch"
+grep -Fq 'gtk\,show-cursor=on\,zoom-to-fit=on' <<< "$display_launch"
+grep -q -- '-full-screen' <<< "$display_launch"
+invalid_display_launch="$(
+    PZ_WINDOWS_VM_DISPLAY_WIDTH='2560,evil=on' \
+    PZ_WINDOWS_VM_DISPLAY_HEIGHT=1080 \
+        "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics compat 2>/dev/null
+)"
+grep -Eq -- '-device virtio-vga( |$)' <<< "$invalid_display_launch"
+if grep -q 'evil=on' <<< "$invalid_display_launch"; then
+    exit 1
+fi
+echo "  boot display geometry reaches guest EDID and GTK scales to fullscreen"
 boot_output="$("$REPO_ROOT/linux/pz" windows-vm boot dry-run)"
 grep -q 'one-shot boot' <<< "$boot_output"
 grep -q 'pz_boot_validate_active_efi_safe' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
@@ -674,7 +692,42 @@ PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
 gamescope_rc=$?
 set -e
 test "$gamescope_rc" -eq 77
-grep -q -- '--backend drm --expose-wayland --force-orientation right -W 1280 -H 800 -w 1280 -h 800 --force-windows-fullscreen --' "$gamescope_args_file"
+grep -q -- '--backend drm --expose-wayland -O eDP-1 --force-orientation right -W 1280 -H 800 -w 1280 -h 800 -r 60.000 --force-windows-fullscreen --' "$gamescope_args_file"
+
+mkdir -p "$display_sys/class/drm/card1-DP-1"
+printf 'connected\n' > "$display_sys/class/drm/card1-DP-1/status"
+printf 'monitor-edid\n' > "$display_sys/class/drm/card1-DP-1/edid"
+printf '1920x1080\n' > "$display_sys/class/drm/card1-DP-1/modes"
+display_edid_hash="$(md5sum "$display_sys/class/drm/card1-DP-1/edid" | awk '{print $1}')"
+kde_output_config="$TMP_ROOT/kwinoutputconfig.json"
+cat > "$kde_output_config" <<EOF
+[
+  {"name":"outputs","data":[
+    {"connectorName":"DP-1","edidHash":"stale","mode":{"width":640,"height":480,"refreshRate":59940}},
+    {"connectorName":"DP-1","edidHash":"$display_edid_hash","mode":{"width":2560,"height":1080,"refreshRate":74991}}
+  ]}
+]
+EOF
+docked_validation="$(
+    env -u DISPLAY -u WAYLAND_DISPLAY \
+    PATH="$session_bin:/usr/bin:/bin" \
+    PZ_DISPLAY_DMI_ROOT="$display_dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
+    PZ_DISPLAY_KDE_OUTPUT_CONFIG="$kde_output_config" \
+    PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
+    PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+        "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
+)"
+grep -q 'display_profile=steamdeck-docked' <<< "$docked_validation"
+grep -q 'display_width=2560 display_height=1080 display_connector=DP-1' <<< "$docked_validation"
+grep -q 'display_refresh_millihz=74991 display_refresh_hz=74.991' <<< "$docked_validation"
+grep -q 'compositor=gamescope' <<< "$docked_validation"
+grep -q 'reason=steamdeck-docked-explicit-output' <<< "$docked_validation"
+grep -q -- '-O DP-1 -W 2560 -H 1080 -w 2560 -h 1080 -r 74.991 --force-windows-fullscreen' <<< "$docked_validation"
+if grep -q -- '--force-orientation' <<< "$docked_validation"; then
+    exit 1
+fi
+echo "  docked session targets connected KDE monitor mode and refresh explicitly"
 rm -f "$session_bin/gamescope" "$gamescope_args_file"
 
 cat > "$session_bin/cage" <<EOF
