@@ -1783,7 +1783,7 @@ first_readable_input_path() {
             return 0
         }
     done
-    return 0
+    return 1
 }
 
 host_input_passthrough_enabled() {
@@ -1811,10 +1811,10 @@ add_steamdeck_host_inputs() {
     local by_id_dir="${PZ_WINDOWS_VM_INPUT_BY_ID_DIR:-/dev/input/by-id}"
     local by_path_dir="${PZ_WINDOWS_VM_INPUT_BY_PATH_DIR:-/dev/input/by-path}"
     local keyboard mouse gamepad touchscreen
-    keyboard="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-kbd)"
-    mouse="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-mouse)"
-    gamepad="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-joystick)"
-    touchscreen="$(first_readable_input_path "${PZ_WINDOWS_VM_TOUCHSCREEN_EVENT:-}" "$by_path_dir/platform-AMDI0010:01-event")"
+    keyboard="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-kbd || true)"
+    mouse="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-mouse || true)"
+    gamepad="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-joystick || true)"
+    touchscreen="$(first_readable_input_path "${PZ_WINDOWS_VM_TOUCHSCREEN_EVENT:-}" "$by_path_dir/platform-AMDI0010:01-event" || true)"
 
     add_host_input_device "pz-steamdeck-keyboard" "$keyboard"
     add_host_input_device "pz-steamdeck-mouse" "$mouse"

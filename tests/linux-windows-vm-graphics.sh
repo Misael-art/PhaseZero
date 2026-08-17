@@ -366,6 +366,11 @@ desktop_input_launch="$(PZ_WINDOWS_VM_BOOT_SESSION=0 \
     PZ_WINDOWS_VM_INPUT_BY_PATH_DIR="$input_by_path" \
     "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
 assert_grep_absent "desktop launch captures Steam Deck input" 'pz-steamdeck-' <<< "$desktop_input_launch"
+empty_input_launch="$(PZ_WINDOWS_VM_BOOT_SESSION=1 \
+    PZ_WINDOWS_VM_INPUT_BY_ID_DIR="$TMP_ROOT/empty-input/by-id" \
+    PZ_WINDOWS_VM_INPUT_BY_PATH_DIR="$TMP_ROOT/empty-input/by-path" \
+    "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
+assert_grep_absent "missing input devices abort GRUB launch" 'pz-steamdeck-' <<< "$empty_input_launch"
 echo "  GRUB input mapping gated to boot session"
 
 echo "=== launch: perfis bloqueados e gates ==="
