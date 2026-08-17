@@ -15,12 +15,20 @@ LAUNCHER_KIND=""
 LAUNCHER_ARGS=()
 
 load_display_session_helper() {
-    local candidate
+    local candidate source_tree_helper
+    source_tree_helper="$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/steamdeck/display-session.sh"
+    if [ -n "${PZ_DISPLAY_SYSFS_ROOT:-}" ] && [ -r "$source_tree_helper" ]; then
+        # Fixture/dev runs must exercise the helper from the same source tree.
+        # Production has no sysfs override and keeps preferring installed runtime.
+        # shellcheck disable=SC1090
+        . "$source_tree_helper"
+        return 0
+    fi
     for candidate in \
         "$DISPLAY_SESSION_HELPER" \
         "$CONFIGURED_REPO/linux/steamdeck/display-session.sh" \
         "$PZ_WINDOWS_VM_REPO_FALLBACK/linux/steamdeck/display-session.sh" \
-        "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)/steamdeck/display-session.sh"; do
+        "$source_tree_helper"; do
         [ -n "$candidate" ] || continue
         if [ -r "$candidate" ]; then
             # shellcheck disable=SC1090
@@ -34,6 +42,14 @@ load_display_session_helper() {
     pz_display_gamescope_orientation() { printf '%s\n' "${PZ_STEAMDECK_LCD_ORIENTATION:-right}"; }
     pz_display_gamescope_width() { printf '%s\n' "${PZ_STEAMDECK_LCD_LOGICAL_WIDTH:-1280}"; }
     pz_display_gamescope_height() { printf '%s\n' "${PZ_STEAMDECK_LCD_LOGICAL_HEIGHT:-800}"; }
+    pz_display_is_internal_connector() {
+        case "$1" in *eDP*|*edp*|*DSI*|*dsi*|*LVDS*|*lvds*) return 0 ;; *) return 1 ;; esac
+    }
+    pz_display_resolved_session_vars() {
+        printf '%s\n%s\n%s\n' \
+            "${PZ_STEAMDECK_LCD_LOGICAL_WIDTH:-1280}" \
+            "${PZ_STEAMDECK_LCD_LOGICAL_HEIGHT:-800}" '*,eDP-1'
+    }
     pz_display_shell_join() {
         local out="" arg
         for arg in "$@"; do
@@ -96,6 +112,54 @@ PZ_BIN=""
 resolve_launcher || true
 load_display_session_helper
 
+DISPLAY_WIDTH=1280
+DISPLAY_HEIGHT=800
+DISPLAY_SELECTOR='*,eDP-1'
+DISPLAY_CONNECTOR=eDP-1
+DISPLAY_REFRESH_RATE=60
+GAMESCOPE_ARGS=()
+
+resolve_display_target() {
+    local -a session_vars=()
+    export PZ_DISPLAY_PRIMARY_TARGET="${PZ_WINDOWS_VM_PRIMARY_DISPLAY:-internal}"
+    mapfile -t session_vars < <(pz_display_resolved_session_vars 2>/dev/null || true)
+    DISPLAY_WIDTH="${session_vars[0]:-1280}"
+    DISPLAY_HEIGHT="${session_vars[1]:-800}"
+    DISPLAY_SELECTOR="${session_vars[2]:-*,eDP-1}"
+    DISPLAY_REFRESH_RATE="${session_vars[3]:-60}"
+    case "$DISPLAY_WIDTH" in ""|*[!0-9]*) DISPLAY_WIDTH=1280 ;; esac
+    case "$DISPLAY_HEIGHT" in ""|*[!0-9]*) DISPLAY_HEIGHT=800 ;; esac
+    [ "$DISPLAY_WIDTH" -ge 320 ] && [ "$DISPLAY_WIDTH" -le 16384 ] || DISPLAY_WIDTH=1280
+    [ "$DISPLAY_HEIGHT" -ge 320 ] && [ "$DISPLAY_HEIGHT" -le 16384 ] || DISPLAY_HEIGHT=800
+    DISPLAY_CONNECTOR="${DISPLAY_SELECTOR#*,}"
+    case "$DISPLAY_CONNECTOR" in
+        ""|*[!A-Za-z0-9_.:-]*) DISPLAY_CONNECTOR=eDP-1 ;;
+    esac
+    if ! [[ "$DISPLAY_REFRESH_RATE" =~ ^[0-9]+([.][0-9]{1,3})?$ ]] ||
+        ! awk -v rate="$DISPLAY_REFRESH_RATE" 'BEGIN { exit !(rate >= 20 && rate <= 360) }'; then
+        DISPLAY_REFRESH_RATE=60
+    fi
+}
+
+build_gamescope_args() {
+    GAMESCOPE_ARGS=(
+        --backend drm
+        --expose-wayland
+        -O "$DISPLAY_CONNECTOR"
+        -r "$DISPLAY_REFRESH_RATE"
+    )
+    if pz_display_is_internal_connector "$DISPLAY_CONNECTOR"; then
+        GAMESCOPE_ARGS+=(--force-orientation "$(pz_display_gamescope_orientation)")
+    fi
+    GAMESCOPE_ARGS+=(
+        -W "$DISPLAY_WIDTH"
+        -H "$DISPLAY_HEIGHT"
+        -w "$DISPLAY_WIDTH"
+        -h "$DISPLAY_HEIGHT"
+        --force-windows-fullscreen
+    )
+}
+
 launcher_command() {
     pz_display_shell_join "$PZ_BIN" "${LAUNCHER_ARGS[@]}"
 }
@@ -107,6 +171,13 @@ display_profile() {
 external_connectors() {
     pz_display_external_connectors_csv
 }
+
+resolve_display_target
+build_gamescope_args
+export PZ_WINDOWS_VM_DISPLAY_WIDTH="$DISPLAY_WIDTH"
+export PZ_WINDOWS_VM_DISPLAY_HEIGHT="$DISPLAY_HEIGHT"
+export PZ_WINDOWS_VM_DISPLAY_CONNECTOR="$DISPLAY_CONNECTOR"
+export PZ_WINDOWS_VM_DISPLAY_REFRESH_RATE="$DISPLAY_REFRESH_RATE"
 
 session_has_display() {
     [ -n "${WAYLAND_DISPLAY:-}" ] || [ -n "${DISPLAY:-}" ] || [ "${PZ_WINDOWS_VM_INSIDE_COMPOSITOR:-0}" = "1" ]
@@ -133,12 +204,13 @@ compositor_kind() {
             ;;
     esac
 
-    if [ "$profile" = "steamdeck-lcd-handheld" ]; then
+    if [ "$profile" = "steamdeck-lcd-handheld" ] || [ "$profile" = "steamdeck-docked" ]; then
         if command -v gamescope >/dev/null 2>&1; then
             printf '%s\n' "gamescope"
         elif command -v kwin_wayland >/dev/null 2>&1; then
             printf '%s\n' "kwin"
-        elif [ "${PZ_STEAMDECK_HANDHELD_ALLOW_CAGE:-0}" = "1" ] && command -v cage >/dev/null 2>&1; then
+        elif { [ "$profile" = "steamdeck-docked" ] || [ "${PZ_STEAMDECK_HANDHELD_ALLOW_CAGE:-0}" = "1" ]; } \
+            && command -v cage >/dev/null 2>&1; then
             printf '%s\n' "cage"
         else
             printf '%s\n' "none"
@@ -158,7 +230,15 @@ compositor_kind() {
 compositor_reason() {
     case "$1" in
         existing-session) printf '%s\n' "display-already-present" ;;
-        gamescope) printf '%s\n' "steamdeck-lcd-handheld-landscape" ;;
+        gamescope)
+            if pz_display_is_internal_connector "$DISPLAY_CONNECTOR"; then
+                printf '%s\n' "steamdeck-primary-internal"
+            elif [ "$(display_profile)" = "steamdeck-docked" ]; then
+                printf '%s\n' "steamdeck-docked-explicit-output"
+            else
+                printf '%s\n' "steamdeck-lcd-handheld-landscape"
+            fi
+            ;;
         kwin) printf '%s\n' "fallback-kwin-wayland" ;;
         cage)
             if [ "$(display_profile)" = "steamdeck-lcd-handheld" ]; then
@@ -179,14 +259,7 @@ compositor_command() {
         gamescope)
             pz_display_shell_join \
                 dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 gamescope \
-                --backend drm \
-                --expose-wayland \
-                --force-orientation "$(pz_display_gamescope_orientation)" \
-                -W "$(pz_display_gamescope_width)" \
-                -H "$(pz_display_gamescope_height)" \
-                -w "$(pz_display_gamescope_width)" \
-                -h "$(pz_display_gamescope_height)" \
-                --force-windows-fullscreen \
+                "${GAMESCOPE_ARGS[@]}" \
                 -- "$0"
             ;;
         cage)
@@ -207,9 +280,11 @@ if [ "${1:-}" = "--validate" ]; then
             "${CONFIGURED_REPO:-missing}" "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_reason "$kind")"
         exit 1
     fi
-    printf 'windows_vm_session_ready=yes repo=%s launcher=%s launcher_kind=%s command=%s display_profile=%s external_connectors=%s compositor=%s compositor_command=%s reason=%s\n' \
+    printf 'windows_vm_session_ready=yes repo=%s launcher=%s launcher_kind=%s command=%s display_profile=%s external_connectors=%s display_width=%s display_height=%s display_connector=%s display_refresh_rate=%s compositor=%s compositor_command=%s reason=%s\n' \
         "${PZ_WINDOWS_VM_REPO:-runtime}" "$PZ_BIN" "$LAUNCHER_KIND" "$(launcher_command)" \
-        "$(display_profile)" "$(external_connectors)" "$kind" "$(compositor_command "$kind")" "$(compositor_reason "$kind")"
+        "$(display_profile)" "$(external_connectors)" "$DISPLAY_WIDTH" "$DISPLAY_HEIGHT" "$DISPLAY_CONNECTOR" \
+        "$DISPLAY_REFRESH_RATE" \
+        "$kind" "$(compositor_command "$kind")" "$(compositor_reason "$kind")"
     exit 0
 fi
 
@@ -230,7 +305,8 @@ printf '%s starting Windows VM boot session\n' "$(date -Iseconds)"
 
 # SDDM Wayland sessions start without a compositor; spicy/virt-viewer/QEMU-gtk
 # need one or they die with "gtk initialization failed" (black screen).
-# Steam Deck LCD handheld needs Gamescope rotation because the panel is portrait.
+# Gamescope receives the resolved output and physical mode. Steam Deck LCD also
+# needs rotation because its panel is portrait.
 kind="$(compositor_kind)"
 printf '%s display_profile=%s external_connectors=%s compositor=%s reason=%s command=%s\n' \
     "$(date -Iseconds)" "$(display_profile)" "$(external_connectors)" "$kind" \
@@ -238,14 +314,7 @@ printf '%s display_profile=%s external_connectors=%s compositor=%s reason=%s com
 case "$kind" in
     gamescope)
         exec dbus-run-session -- env PZ_WINDOWS_VM_INSIDE_COMPOSITOR=1 gamescope \
-            --backend drm \
-            --expose-wayland \
-            --force-orientation "$(pz_display_gamescope_orientation)" \
-            -W "$(pz_display_gamescope_width)" \
-            -H "$(pz_display_gamescope_height)" \
-            -w "$(pz_display_gamescope_width)" \
-            -h "$(pz_display_gamescope_height)" \
-            --force-windows-fullscreen \
+            "${GAMESCOPE_ARGS[@]}" \
             -- "$0"
         ;;
     cage)

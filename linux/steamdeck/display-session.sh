@@ -88,6 +88,73 @@ pz_display_native_resolution() {
     printf '%s\n' "$first" | sed -nE 's/^([0-9]+)x([0-9]+).*/\1 \2/p'
 }
 
+pz_display_kde_output_config() {
+    printf '%s\n' "${PZ_DISPLAY_KDE_OUTPUT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/kwinoutputconfig.json}"
+}
+
+# Resolve the physical mode KDE saved for the monitor currently connected to a
+# DRM connector. KWin keeps historical entries with the same connector name, so
+# connector name alone is unsafe: match the connected panel's EDID hash.
+pz_display_kde_resolution() {
+    local connector="$1" connector_name root edid_path edid_hash config resolution
+    case "$connector" in
+        ""|*[!A-Za-z0-9_.:-]*) return 0 ;;
+    esac
+    command -v jq >/dev/null 2>&1 || return 0
+    command -v md5sum >/dev/null 2>&1 || return 0
+
+    root="$(pz_display_sysfs_root)"
+    edid_path="$root/class/drm/$connector/edid"
+    # sysfs reports EDID files with st_size=0 even when reads return data.
+    [ -r "$edid_path" ] || return 0
+    edid_hash="$(md5sum "$edid_path" 2>/dev/null | awk '{print $1}')"
+    [ -n "$edid_hash" ] || return 0
+
+    config="$(pz_display_kde_output_config)"
+    [ -r "$config" ] || return 0
+    connector_name="${connector#card*-}"
+    resolution="$(jq -er \
+        --arg connector "$connector_name" \
+        --arg edid "$edid_hash" \
+        '[.[] | select(.name == "outputs") | .data[] |
+          select(.connectorName == $connector and .edidHash == $edid) |
+          .mode | select((.width | type) == "number" and (.height | type) == "number") |
+          "\(.width) \(.height)"] | .[0] // empty' \
+        "$config" 2>/dev/null || true)"
+    [ -n "$resolution" ] && printf '%s\n' "$resolution"
+}
+
+# KWin stores refreshRate in millihertz. Gamescope expects frames per second,
+# accepting decimals, so 74991 becomes 74.991 without rounding away the active
+# monitor mode.
+pz_display_kde_refresh_rate() {
+    local connector="$1" connector_name root edid_path edid_hash config refresh
+    case "$connector" in
+        ""|*[!A-Za-z0-9_.:-]*) return 0 ;;
+    esac
+    command -v jq >/dev/null 2>&1 || return 0
+    command -v md5sum >/dev/null 2>&1 || return 0
+
+    root="$(pz_display_sysfs_root)"
+    edid_path="$root/class/drm/$connector/edid"
+    [ -r "$edid_path" ] || return 0
+    edid_hash="$(md5sum "$edid_path" 2>/dev/null | awk '{print $1}')"
+    [ -n "$edid_hash" ] || return 0
+    config="$(pz_display_kde_output_config)"
+    [ -r "$config" ] || return 0
+    connector_name="${connector#card*-}"
+    refresh="$(jq -er \
+        --arg connector "$connector_name" \
+        --arg edid "$edid_hash" \
+        '[.[] | select(.name == "outputs") | .data[] |
+          select(.connectorName == $connector and .edidHash == $edid) |
+          .mode.refreshRate |
+          select((type == "number") and (. >= 20000) and (. <= 360000)) |
+          (. / 1000)] | .[0] // empty' \
+        "$config" 2>/dev/null || true)"
+    [ -n "$refresh" ] && printf '%s\n' "$refresh"
+}
+
 pz_display_valid_dimension() {
     local value="$1"
     [[ "$value" =~ ^[0-9]+$ ]] && [ "$value" -ge 320 ] && [ "$value" -le 16384 ]
@@ -101,25 +168,34 @@ pz_display_valid_connector() {
 # Resolve the gamescope-session-plus output vars for the current connector state.
 # Handheld (no external connector) -> the Deck LCD logical size and eDP-1.
 # Docked -> the first external connector's native mode, preferring that output.
-# Prints three lines: SCREEN_WIDTH, SCREEN_HEIGHT, OUTPUT_CONNECTOR.
+# PZ_DISPLAY_PRIMARY_TARGET=internal keeps the Deck panel primary even while a
+# dock is connected. External output remains available as fallback/override.
+# Prints four lines: SCREEN_WIDTH, SCREEN_HEIGHT, OUTPUT_CONNECTOR, REFRESH_RATE.
 pz_display_resolved_session_vars() {
-    local first_ext width height connector internal
+    local first_ext width height connector internal refresh primary
     first_ext="$(pz_display_connected_external_connectors | head -n1 || true)"
-    if [ -z "$first_ext" ]; then
+    internal="$(pz_display_connected_internal_connector || true)"
+    primary="${PZ_DISPLAY_PRIMARY_TARGET:-auto}"
+    if [ -z "$first_ext" ] || { [ "$primary" = "internal" ] && [ -n "$internal" ]; }; then
         width="${PZ_STEAMDECK_LCD_LOGICAL_WIDTH:-1280}"
         height="${PZ_STEAMDECK_LCD_LOGICAL_HEIGHT:-800}"
         pz_display_valid_dimension "$width" || width=1280
         pz_display_valid_dimension "$height" || height=800
-        internal="$(pz_display_connected_internal_connector || true)"
+        refresh="$(pz_display_kde_refresh_rate "$internal" || true)"
+        [ -n "$refresh" ] || refresh="${PZ_STEAMDECK_LCD_REFRESH_RATE:-60}"
         internal="${internal#card*-}"
         connector="*,${internal:-eDP-1}"
         pz_display_valid_connector "$connector" || connector='*,eDP-1'
-        printf '%s\n%s\n%s\n' "$width" "$height" "$connector"
+        printf '%s\n%s\n%s\n%s\n' "$width" "$height" "$connector" "$refresh"
         return 0
     fi
-    local native w h
+    local configured native w h
+    configured="$(pz_display_kde_resolution "$first_ext" || true)"
     native="$(pz_display_native_resolution "$first_ext" || true)"
-    if [ -n "$native" ]; then
+    if [ -n "$configured" ]; then
+        w="${configured%% *}"
+        h="${configured##* }"
+    elif [ -n "$native" ]; then
         w="${native%% *}"
         h="${native##* }"
     else
@@ -129,14 +205,16 @@ pz_display_resolved_session_vars() {
     # Strip the cardN- prefix so OUTPUT_CONNECTOR matches the connector name
     # gamescope expects (DP-1, HDMI-A-1, ...).
     local conn="${first_ext#card*-}"
+    refresh="$(pz_display_kde_refresh_rate "$first_ext" || true)"
+    [ -n "$refresh" ] || refresh="${PZ_STEAMDECK_DOCKED_REFRESH_RATE:-60}"
     pz_display_valid_dimension "$w" || w=1920
     pz_display_valid_dimension "$h" || h=1080
     pz_display_valid_connector "*,$conn" || conn="DP-1"
-    printf '%s\n%s\n%s\n' "$w" "$h" "*,$conn"
+    printf '%s\n%s\n%s\n%s\n' "$w" "$h" "*,$conn" "$refresh"
 }
 
 pz_display_status() {
-    local profile ext w h conn
+    local profile ext w h conn refresh
     local -a session_vars=()
     profile="$(pz_display_profile)"
     ext="$(pz_display_external_connectors_csv)"
@@ -144,14 +222,17 @@ pz_display_status() {
     w="${session_vars[0]:-1280}"
     h="${session_vars[1]:-800}"
     conn="${session_vars[2]:-*,eDP-1}"
+    refresh="${session_vars[3]:-60}"
     jq -n \
         --arg profile "$profile" \
         --arg externalConnectors "$ext" \
         --arg width "$w" \
         --arg height "$h" \
         --arg connector "$conn" \
+        --arg refreshRate "$refresh" \
         '{displayProfile: $profile, externalConnectors: $externalConnectors,
-          screenWidth: $width, screenHeight: $height, outputConnector: $connector}'
+          screenWidth: $width, screenHeight: $height, outputConnector: $connector,
+          refreshRate: $refreshRate}'
 }
 
 pz_display_gamescope_orientation() {
@@ -201,7 +282,7 @@ pz_display_main() {
             pz_display_status
             ;;
         detect)
-            local profile ext w h c
+            local profile ext w h c refresh
             local -a session_vars=()
             profile="$(pz_display_profile)"
             ext="$(pz_display_external_connectors_csv)"
@@ -211,7 +292,8 @@ pz_display_main() {
             w="${session_vars[0]:-1280}"
             h="${session_vars[1]:-800}"
             c="${session_vars[2]:-*,eDP-1}"
-            printf 'screen_width: %s\nscreen_height: %s\noutput_connector: %s\n' "$w" "$h" "$c"
+            refresh="${session_vars[3]:-60}"
+            printf 'screen_width: %s\nscreen_height: %s\noutput_connector: %s\nrefresh_rate: %s\n' "$w" "$h" "$c" "$refresh"
             printf 'note: resolution applies at Game Mode boot (steam-plus session drop-in)\n'
             ;;
         *)

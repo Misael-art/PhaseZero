@@ -88,6 +88,8 @@ EXPLICIT_DOMAIN=0
 RAW_QEMU=0
 RAW_DISK_BUS="nvme"
 DISPLAY_MODE="gtk"
+DISPLAY_WIDTH=""
+DISPLAY_HEIGHT=""
 OPTIMIZE_HOST="${PZ_WINDOWS_VM_OPTIMIZE:-1}"
 GRAPHICS_PROFILE=""
 GUEST_LOGIN_POLICY=""
@@ -204,6 +206,25 @@ parse_options() {
             *) pz_error "unknown windows-vm option: $1"; return 1 ;;
         esac
     done
+}
+
+resolve_display_geometry() {
+    local width="${PZ_WINDOWS_VM_DISPLAY_WIDTH:-}" height="${PZ_WINDOWS_VM_DISPLAY_HEIGHT:-}"
+    if [ -z "$width" ] && [ -z "$height" ]; then
+        DISPLAY_WIDTH=""
+        DISPLAY_HEIGHT=""
+        return 0
+    fi
+    if [[ "$width" =~ ^[0-9]+$ ]] && [[ "$height" =~ ^[0-9]+$ ]] \
+        && [ "$width" -ge 320 ] && [ "$width" -le 16384 ] \
+        && [ "$height" -ge 320 ] && [ "$height" -le 16384 ]; then
+        DISPLAY_WIDTH="$width"
+        DISPLAY_HEIGHT="$height"
+        return 0
+    fi
+    pz_warn "invalid boot display geometry ignored: ${width:-unset}x${height:-unset}"
+    DISPLAY_WIDTH=""
+    DISPLAY_HEIGHT=""
 }
 
 run_privileged_noninteractive() {
@@ -1729,11 +1750,19 @@ start_tpm() {
     QEMU_ARGS+=("-device" "tpm-tis,tpmdev=tpm0")
 }
 
-add_usb_redirection() {
-    local idx
+add_guest_hid_devices() {
+    # GTK sends keyboard, pointer and touch events to QEMU. Keep standard USB
+    # HID plus virtio multitouch present for every graphics profile; virtio-gl
+    # has no SPICE USB channel. Touch must pass through GTK/Gamescope so the
+    # Deck panel's native 800x1280 axes receive the active output rotation.
     QEMU_ARGS+=("-device" "qemu-xhci,id=xhci,p2=8,p3=8")
     QEMU_ARGS+=("-device" "usb-kbd,bus=xhci.0")
     QEMU_ARGS+=("-device" "usb-tablet,bus=xhci.0")
+    QEMU_ARGS+=("-device" "virtio-multitouch-pci,id=pz-touchscreen")
+}
+
+add_spice_usb_redirection() {
+    local idx
     case "$USB_MODE" in
         redir|peripherals|all)
             for idx in 0 1 2 3; do
@@ -1742,6 +1771,55 @@ add_usb_redirection() {
             done
             ;;
     esac
+}
+
+# Direct GRUB boot runs a local QEMU GTK display, outside the normal Steam
+# Input/Gamescope session. Map the Deck composite devices through virtio-input
+# so Windows receives the physical controls without passing USB storage or
+# unrelated host devices to the guest. The directories are overridable only to
+# keep the shell tests hermetic; production defaults stay under /dev/input.
+first_readable_input_path() {
+    local candidate
+    for candidate in "$@"; do
+        [ -n "$candidate" ] && [ -r "$candidate" ] && {
+            printf '%s\n' "$candidate"
+            return 0
+        }
+    done
+    return 1
+}
+
+host_input_passthrough_enabled() {
+    case "${PZ_WINDOWS_VM_HOST_INPUT:-auto}" in
+        auto|"") [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ] ;;
+        1|on|yes|true) return 0 ;;
+        0|off|no|false) return 1 ;;
+        *)
+            pz_warn "invalid PZ_WINDOWS_VM_HOST_INPUT '${PZ_WINDOWS_VM_HOST_INPUT}'; using auto"
+            [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ]
+            ;;
+    esac
+}
+
+add_host_input_device() {
+    local id="$1" path="$2"
+    [ -n "$path" ] || return 0
+    QEMU_ARGS+=("-device" "virtio-input-host-pci,id=$id,evdev=$path")
+}
+
+add_steamdeck_host_inputs() {
+    [ "$GRAPHICS_PROFILE" = "virtio-gl" ] || return 0
+    host_input_passthrough_enabled || return 0
+
+    local by_id_dir="${PZ_WINDOWS_VM_INPUT_BY_ID_DIR:-/dev/input/by-id}"
+    local keyboard mouse gamepad
+    keyboard="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-kbd || true)"
+    mouse="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-mouse || true)"
+    gamepad="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-joystick || true)"
+
+    add_host_input_device "pz-steamdeck-keyboard" "$keyboard"
+    add_host_input_device "pz-steamdeck-mouse" "$mouse"
+    add_host_input_device "pz-steamdeck-gamepad" "$gamepad"
 }
 
 add_raw_usb_devices() {
@@ -1779,7 +1857,7 @@ add_pci_devices() {
 }
 
 build_qemu_args() {
-    local audio netdev accel_cpu accel_machine
+    local audio netdev accel_cpu accel_machine display_geometry=""
     QEMU_ARGS=()
     VIRTIOFS_COUNT=0
     if [ "$DRY_RUN" = "1" ]; then
@@ -1840,15 +1918,21 @@ build_qemu_args() {
     if [ -n "$VIRTIO_ISO" ] && [ -f "$VIRTIO_ISO" ]; then
         QEMU_ARGS+=("-drive" "file=$VIRTIO_ISO,media=cdrom,readonly=on,index=3")
     fi
+    if [ -n "$DISPLAY_WIDTH" ] && [ -n "$DISPLAY_HEIGHT" ]; then
+        display_geometry=",xres=$DISPLAY_WIDTH,yres=$DISPLAY_HEIGHT"
+    fi
     if [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
-        QEMU_ARGS+=("-device" "virtio-vga-gl")
+        QEMU_ARGS+=("-device" "virtio-vga-gl$display_geometry")
     else
-        QEMU_ARGS+=("-device" "virtio-vga")
+        QEMU_ARGS+=("-device" "virtio-vga$display_geometry")
     fi
     QEMU_ARGS+=("-device" "virtio-rng-pci")
     QEMU_ARGS+=("-device" "virtio-balloon-pci")
+    add_guest_hid_devices
     if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then
-        add_usb_redirection
+        add_spice_usb_redirection
+    else
+        add_steamdeck_host_inputs
     fi
     add_raw_usb_devices "$USB_MODE"
     audio="$(audio_driver)"
@@ -1875,15 +1959,15 @@ build_qemu_args() {
         QEMU_ARGS+=("-chardev" "spicevmc,id=vdagent,name=vdagent")
         QEMU_ARGS+=("-device" "virtserialport,bus=virtio-serial0.0,nr=2,chardev=vdagent,name=com.redhat.spice.0")
     else
-        pz_info "virtio-gl uses local GTK display; SPICE and USB redirection channels disabled"
+        pz_info "virtio-gl uses local GTK display; SPICE redirection disabled; standard USB HID enabled"
     fi
     if [ "$DISPLAY_MODE" = "none" ]; then
         QEMU_ARGS+=("-display" "none")
     elif [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
-        QEMU_ARGS+=("-display" "gtk,gl=on,show-cursor=on")
+        QEMU_ARGS+=("-display" "gtk,gl=on,show-cursor=on,zoom-to-fit=on")
         [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
     else
-        QEMU_ARGS+=("-display" "gtk,show-cursor=on")
+        QEMU_ARGS+=("-display" "gtk,show-cursor=on,zoom-to-fit=on")
         [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
     fi
     add_pci_devices
@@ -1893,6 +1977,44 @@ build_qemu_args() {
         local extra=( $EXTRA_ARGS )
         QEMU_ARGS+=("${extra[@]}")
     fi
+}
+
+# Existing guests do not rerun provision setup after an upgrade. Apply the
+# touch-keyboard policy through QGA once Windows is ready, without delaying the
+# compositor or exposing helper output over the fullscreen guest display.
+start_guest_touch_input_setup() {
+    [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ] || return 0
+    [ "$DRY_RUN" != "1" ] || return 0
+    local helper timeout log pid
+    helper="${PZ_WINDOWS_VM_GUEST_LOGIN_HELPER:-$PZ_ROOT/linux/windows-vm/guest-login.sh}"
+    [ -x "$helper" ] || {
+        pz_warn "touch-input helper unavailable: $helper"
+        return 0
+    }
+    timeout="${PZ_WINDOWS_VM_TOUCH_INPUT_TIMEOUT_SECONDS:-180}"
+    [[ "$timeout" =~ ^[0-9]+$ ]] && [ "$timeout" -ge 10 ] && [ "$timeout" -le 600 ] || timeout=180
+    log="$STATE_DIR/touch-input.log"
+    (
+        local deadline attempt_log
+        deadline=$((SECONDS + timeout))
+        attempt_log="${log}.tmp.$$"
+        trap 'rm -f "$attempt_log"' EXIT
+        while [ "$SECONDS" -lt "$deadline" ]; do
+            if [ -S "$RUNTIME_DIR/qga.sock" ] && \
+                "$helper" touch-input --socket "$RUNTIME_DIR/qga.sock" --user "$GUEST_USER" --json \
+                    >"$attempt_log" 2>&1; then
+                mv -f "$attempt_log" "$log"
+                trap - EXIT
+                exit 0
+            fi
+            sleep 2
+        done
+        printf '{"success":false,"state":"timeout","action":"touch-input"}\n' >"$attempt_log"
+        mv -f "$attempt_log" "$log"
+        trap - EXIT
+    ) &
+    pid=$!
+    CLEANUP_PIDS+=("$pid")
 }
 
 launch_libvirt_domain() {
@@ -2092,6 +2214,7 @@ launch_vm() {
     parse_options "$@"
     [ "${PZ_WINDOWS_VM_FULLSCREEN:-0}" = "1" ] && FULLSCREEN=1
     effective_config
+    resolve_display_geometry
     local RESCUE_SOURCED=0
     RESCUE_SOURCED=0
     guard_graphics_profile || return 1
@@ -2141,6 +2264,7 @@ launch_vm() {
         shell_join qemu-system-x86_64 "${QEMU_ARGS[@]}"
         return 0
     fi
+    start_guest_touch_input_setup
     pz_info "Windows VM shares: \\\\10.0.2.4\\qemu (policy=$SHARE_POLICY)"
     if [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
         pz_info "Display: local GTK with virtio-gl acceleration (SPICE USB redirection disabled)"
@@ -2849,6 +2973,10 @@ runtime_file_specs() {
 $PZ_ROOT/linux/windows-vm/windows-vm.sh|$RUNTIME_LAUNCHER|0755
 $PZ_ROOT/linux/windows-vm/graphics.sh|$RUNTIME_GRAPHICS|0755
 $PZ_ROOT/linux/windows-vm/rescue.sh|$RUNTIME_ROOT/linux/windows-vm/rescue.sh|0644
+$PZ_ROOT/linux/windows-vm/guest-login.sh|$RUNTIME_ROOT/linux/windows-vm/guest-login.sh|0755
+$PZ_ROOT/linux/windows-vm/guest-login.ps1|$RUNTIME_ROOT/linux/windows-vm/guest-login.ps1|0644
+$PZ_ROOT/linux/windows-vm/provision.sh|$RUNTIME_ROOT/linux/windows-vm/provision.sh|0644
+$PZ_ROOT/linux/windows-vm/graphics-profiles.json|$RUNTIME_ROOT/linux/windows-vm/graphics-profiles.json|0644
 $PZ_ROOT/linux/lib/common.sh|$RUNTIME_COMMON|0644
 $PZ_ROOT/linux/lib/ledger.sh|$RUNTIME_ROOT/linux/lib/ledger.sh|0644
 $PZ_ROOT/linux/lib/desktop.sh|$RUNTIME_ROOT/linux/lib/desktop.sh|0644

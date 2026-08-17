@@ -333,10 +333,43 @@ assert_grep_absent "compat launch contains virtio-vga-gl" 'virtio-vga-gl' <<< "$
 assert_grep_absent "compat launch contains gl=on" 'gl=on' <<< "$compat_launch"
 default_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu)"
 assert_grep_absent "default launch contains gl=on" 'gl=on' <<< "$default_launch"
-gl_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
-grep -q -- '-device virtio-vga-gl' <<< "$gl_launch"
-grep -Fq 'gtk\,gl=on\,show-cursor=on' <<< "$gl_launch"
+gl_launch="$(
+    PZ_WINDOWS_VM_DISPLAY_WIDTH=2560 \
+    PZ_WINDOWS_VM_DISPLAY_HEIGHT=1080 \
+        "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null
+)"
+grep -Fq 'virtio-vga-gl\,xres=2560\,yres=1080' <<< "$gl_launch"
+grep -Fq 'gtk\,gl=on\,show-cursor=on\,zoom-to-fit=on' <<< "$gl_launch"
+grep -Fq -- '-device qemu-xhci' <<< "$gl_launch"
+grep -Fq -- '-device usb-kbd' <<< "$gl_launch"
+grep -Fq -- '-device usb-tablet' <<< "$gl_launch"
+grep -Fq -- '-device virtio-multitouch-pci' <<< "$gl_launch"
 echo "  launch dry-run profiles ok"
+
+echo "=== launch GRUB: controles diretos; touch rotacionado via GTK ==="
+input_by_id="$TMP_ROOT/input/by-id"
+mkdir -p "$input_by_id"
+touch "$input_by_id/usb-Valve_Software_Steam_Deck_Controller_test-event-kbd"
+touch "$input_by_id/usb-Valve_Software_Steam_Deck_Controller_test-event-mouse"
+touch "$input_by_id/usb-Valve_Software_Steam_Deck_Controller_test-event-joystick"
+deck_input_launch="$(PZ_WINDOWS_VM_BOOT_SESSION=1 \
+    PZ_WINDOWS_VM_INPUT_BY_ID_DIR="$input_by_id" \
+    "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
+grep -Fq 'pz-steamdeck-keyboard' <<< "$deck_input_launch"
+grep -Fq 'pz-steamdeck-mouse' <<< "$deck_input_launch"
+grep -Fq 'pz-steamdeck-gamepad' <<< "$deck_input_launch"
+grep -Fq 'virtio-multitouch-pci' <<< "$deck_input_launch"
+assert_grep_absent "raw portrait touchscreen bypasses output rotation" 'pz-steamdeck-touchscreen' <<< "$deck_input_launch"
+desktop_input_launch="$(PZ_WINDOWS_VM_BOOT_SESSION=0 \
+    PZ_WINDOWS_VM_INPUT_BY_ID_DIR="$input_by_id" \
+    "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
+assert_grep_absent "desktop launch captures Steam Deck input" 'pz-steamdeck-' <<< "$desktop_input_launch"
+empty_input_launch="$(PZ_WINDOWS_VM_BOOT_SESSION=1 \
+    PZ_WINDOWS_VM_INPUT_BY_ID_DIR="$TMP_ROOT/empty-input/by-id" \
+    PZ_WINDOWS_VM_INPUT_BY_PATH_DIR="$TMP_ROOT/empty-input/by-path" \
+    "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
+assert_grep_absent "missing input devices abort GRUB launch" 'pz-steamdeck-' <<< "$empty_input_launch"
+echo "  GRUB input mapping gated to boot session"
 
 echo "=== launch: perfis bloqueados e gates ==="
 set +e
