@@ -1729,11 +1729,16 @@ start_tpm() {
     QEMU_ARGS+=("-device" "tpm-tis,tpmdev=tpm0")
 }
 
-add_usb_redirection() {
-    local idx
+add_guest_hid_devices() {
+    # GTK sends its keyboard/pointer events to QEMU. Keep standard USB HID
+    # present for every graphics profile; virtio-gl has no SPICE USB channel.
     QEMU_ARGS+=("-device" "qemu-xhci,id=xhci,p2=8,p3=8")
     QEMU_ARGS+=("-device" "usb-kbd,bus=xhci.0")
     QEMU_ARGS+=("-device" "usb-tablet,bus=xhci.0")
+}
+
+add_spice_usb_redirection() {
+    local idx
     case "$USB_MODE" in
         redir|peripherals|all)
             for idx in 0 1 2 3; do
@@ -1742,6 +1747,58 @@ add_usb_redirection() {
             done
             ;;
     esac
+}
+
+# Direct GRUB boot runs a local QEMU GTK display, outside the normal Steam
+# Input/Gamescope session. Map the Deck composite devices through virtio-input
+# so Windows receives the physical controls without passing USB storage or
+# unrelated host devices to the guest. The directories are overridable only to
+# keep the shell tests hermetic; production defaults stay under /dev/input.
+first_readable_input_path() {
+    local candidate
+    for candidate in "$@"; do
+        [ -n "$candidate" ] && [ -r "$candidate" ] && {
+            printf '%s\n' "$candidate"
+            return 0
+        }
+    done
+    return 0
+}
+
+host_input_passthrough_enabled() {
+    case "${PZ_WINDOWS_VM_HOST_INPUT:-auto}" in
+        auto|"") [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ] ;;
+        1|on|yes|true) return 0 ;;
+        0|off|no|false) return 1 ;;
+        *)
+            pz_warn "invalid PZ_WINDOWS_VM_HOST_INPUT '${PZ_WINDOWS_VM_HOST_INPUT}'; using auto"
+            [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ]
+            ;;
+    esac
+}
+
+add_host_input_device() {
+    local id="$1" path="$2"
+    [ -n "$path" ] || return 0
+    QEMU_ARGS+=("-device" "virtio-input-host-pci,id=$id,evdev=$path")
+}
+
+add_steamdeck_host_inputs() {
+    [ "$GRAPHICS_PROFILE" = "virtio-gl" ] || return 0
+    host_input_passthrough_enabled || return 0
+
+    local by_id_dir="${PZ_WINDOWS_VM_INPUT_BY_ID_DIR:-/dev/input/by-id}"
+    local by_path_dir="${PZ_WINDOWS_VM_INPUT_BY_PATH_DIR:-/dev/input/by-path}"
+    local keyboard mouse gamepad touchscreen
+    keyboard="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-kbd)"
+    mouse="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-mouse)"
+    gamepad="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-joystick)"
+    touchscreen="$(first_readable_input_path "${PZ_WINDOWS_VM_TOUCHSCREEN_EVENT:-}" "$by_path_dir/platform-AMDI0010:01-event")"
+
+    add_host_input_device "pz-steamdeck-keyboard" "$keyboard"
+    add_host_input_device "pz-steamdeck-mouse" "$mouse"
+    add_host_input_device "pz-steamdeck-gamepad" "$gamepad"
+    add_host_input_device "pz-steamdeck-touchscreen" "$touchscreen"
 }
 
 add_raw_usb_devices() {
@@ -1847,8 +1904,11 @@ build_qemu_args() {
     fi
     QEMU_ARGS+=("-device" "virtio-rng-pci")
     QEMU_ARGS+=("-device" "virtio-balloon-pci")
+    add_guest_hid_devices
     if [ "$GRAPHICS_PROFILE" != "virtio-gl" ]; then
-        add_usb_redirection
+        add_spice_usb_redirection
+    else
+        add_steamdeck_host_inputs
     fi
     add_raw_usb_devices "$USB_MODE"
     audio="$(audio_driver)"
@@ -1875,7 +1935,7 @@ build_qemu_args() {
         QEMU_ARGS+=("-chardev" "spicevmc,id=vdagent,name=vdagent")
         QEMU_ARGS+=("-device" "virtserialport,bus=virtio-serial0.0,nr=2,chardev=vdagent,name=com.redhat.spice.0")
     else
-        pz_info "virtio-gl uses local GTK display; SPICE and USB redirection channels disabled"
+        pz_info "virtio-gl uses local GTK display; SPICE redirection disabled; standard USB HID enabled"
     fi
     if [ "$DISPLAY_MODE" = "none" ]; then
         QEMU_ARGS+=("-display" "none")
