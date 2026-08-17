@@ -1751,11 +1751,14 @@ start_tpm() {
 }
 
 add_guest_hid_devices() {
-    # GTK sends its keyboard/pointer events to QEMU. Keep standard USB HID
-    # present for every graphics profile; virtio-gl has no SPICE USB channel.
+    # GTK sends keyboard, pointer and touch events to QEMU. Keep standard USB
+    # HID plus virtio multitouch present for every graphics profile; virtio-gl
+    # has no SPICE USB channel. Touch must pass through GTK/Gamescope so the
+    # Deck panel's native 800x1280 axes receive the active output rotation.
     QEMU_ARGS+=("-device" "qemu-xhci,id=xhci,p2=8,p3=8")
     QEMU_ARGS+=("-device" "usb-kbd,bus=xhci.0")
     QEMU_ARGS+=("-device" "usb-tablet,bus=xhci.0")
+    QEMU_ARGS+=("-device" "virtio-multitouch-pci,id=pz-touchscreen")
 }
 
 add_spice_usb_redirection() {
@@ -1809,17 +1812,14 @@ add_steamdeck_host_inputs() {
     host_input_passthrough_enabled || return 0
 
     local by_id_dir="${PZ_WINDOWS_VM_INPUT_BY_ID_DIR:-/dev/input/by-id}"
-    local by_path_dir="${PZ_WINDOWS_VM_INPUT_BY_PATH_DIR:-/dev/input/by-path}"
-    local keyboard mouse gamepad touchscreen
+    local keyboard mouse gamepad
     keyboard="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-kbd || true)"
     mouse="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-mouse || true)"
     gamepad="$(first_readable_input_path "$by_id_dir"/usb-Valve_Software_Steam_Deck_Controller_*-event-joystick || true)"
-    touchscreen="$(first_readable_input_path "${PZ_WINDOWS_VM_TOUCHSCREEN_EVENT:-}" "$by_path_dir/platform-AMDI0010:01-event" || true)"
 
     add_host_input_device "pz-steamdeck-keyboard" "$keyboard"
     add_host_input_device "pz-steamdeck-mouse" "$mouse"
     add_host_input_device "pz-steamdeck-gamepad" "$gamepad"
-    add_host_input_device "pz-steamdeck-touchscreen" "$touchscreen"
 }
 
 add_raw_usb_devices() {
@@ -1977,6 +1977,44 @@ build_qemu_args() {
         local extra=( $EXTRA_ARGS )
         QEMU_ARGS+=("${extra[@]}")
     fi
+}
+
+# Existing guests do not rerun provision setup after an upgrade. Apply the
+# touch-keyboard policy through QGA once Windows is ready, without delaying the
+# compositor or exposing helper output over the fullscreen guest display.
+start_guest_touch_input_setup() {
+    [ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ] || return 0
+    [ "$DRY_RUN" != "1" ] || return 0
+    local helper timeout log pid
+    helper="${PZ_WINDOWS_VM_GUEST_LOGIN_HELPER:-$PZ_ROOT/linux/windows-vm/guest-login.sh}"
+    [ -x "$helper" ] || {
+        pz_warn "touch-input helper unavailable: $helper"
+        return 0
+    }
+    timeout="${PZ_WINDOWS_VM_TOUCH_INPUT_TIMEOUT_SECONDS:-180}"
+    [[ "$timeout" =~ ^[0-9]+$ ]] && [ "$timeout" -ge 10 ] && [ "$timeout" -le 600 ] || timeout=180
+    log="$STATE_DIR/touch-input.log"
+    (
+        local deadline attempt_log
+        deadline=$((SECONDS + timeout))
+        attempt_log="${log}.tmp.$$"
+        trap 'rm -f "$attempt_log"' EXIT
+        while [ "$SECONDS" -lt "$deadline" ]; do
+            if [ -S "$RUNTIME_DIR/qga.sock" ] && \
+                "$helper" touch-input --socket "$RUNTIME_DIR/qga.sock" --user "$GUEST_USER" --json \
+                    >"$attempt_log" 2>&1; then
+                mv -f "$attempt_log" "$log"
+                trap - EXIT
+                exit 0
+            fi
+            sleep 2
+        done
+        printf '{"success":false,"state":"timeout","action":"touch-input"}\n' >"$attempt_log"
+        mv -f "$attempt_log" "$log"
+        trap - EXIT
+    ) &
+    pid=$!
+    CLEANUP_PIDS+=("$pid")
 }
 
 launch_libvirt_domain() {
@@ -2226,6 +2264,7 @@ launch_vm() {
         shell_join qemu-system-x86_64 "${QEMU_ARGS[@]}"
         return 0
     fi
+    start_guest_touch_input_setup
     pz_info "Windows VM shares: \\\\10.0.2.4\\qemu (policy=$SHARE_POLICY)"
     if [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
         pz_info "Display: local GTK with virtio-gl acceleration (SPICE USB redirection disabled)"
@@ -2934,6 +2973,10 @@ runtime_file_specs() {
 $PZ_ROOT/linux/windows-vm/windows-vm.sh|$RUNTIME_LAUNCHER|0755
 $PZ_ROOT/linux/windows-vm/graphics.sh|$RUNTIME_GRAPHICS|0755
 $PZ_ROOT/linux/windows-vm/rescue.sh|$RUNTIME_ROOT/linux/windows-vm/rescue.sh|0644
+$PZ_ROOT/linux/windows-vm/guest-login.sh|$RUNTIME_ROOT/linux/windows-vm/guest-login.sh|0755
+$PZ_ROOT/linux/windows-vm/guest-login.ps1|$RUNTIME_ROOT/linux/windows-vm/guest-login.ps1|0644
+$PZ_ROOT/linux/windows-vm/provision.sh|$RUNTIME_ROOT/linux/windows-vm/provision.sh|0644
+$PZ_ROOT/linux/windows-vm/graphics-profiles.json|$RUNTIME_ROOT/linux/windows-vm/graphics-profiles.json|0644
 $PZ_ROOT/linux/lib/common.sh|$RUNTIME_COMMON|0644
 $PZ_ROOT/linux/lib/ledger.sh|$RUNTIME_ROOT/linux/lib/ledger.sh|0644
 $PZ_ROOT/linux/lib/desktop.sh|$RUNTIME_ROOT/linux/lib/desktop.sh|0644

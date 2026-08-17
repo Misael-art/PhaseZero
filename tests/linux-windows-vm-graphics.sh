@@ -343,27 +343,25 @@ grep -Fq 'gtk\,gl=on\,show-cursor=on\,zoom-to-fit=on' <<< "$gl_launch"
 grep -Fq -- '-device qemu-xhci' <<< "$gl_launch"
 grep -Fq -- '-device usb-kbd' <<< "$gl_launch"
 grep -Fq -- '-device usb-tablet' <<< "$gl_launch"
+grep -Fq -- '-device virtio-multitouch-pci' <<< "$gl_launch"
 echo "  launch dry-run profiles ok"
 
-echo "=== launch GRUB: HID USB e entradas Steam Deck passam ao guest ==="
+echo "=== launch GRUB: controles diretos; touch rotacionado via GTK ==="
 input_by_id="$TMP_ROOT/input/by-id"
-input_by_path="$TMP_ROOT/input/by-path"
-mkdir -p "$input_by_id" "$input_by_path"
+mkdir -p "$input_by_id"
 touch "$input_by_id/usb-Valve_Software_Steam_Deck_Controller_test-event-kbd"
 touch "$input_by_id/usb-Valve_Software_Steam_Deck_Controller_test-event-mouse"
 touch "$input_by_id/usb-Valve_Software_Steam_Deck_Controller_test-event-joystick"
-touch "$input_by_path/platform-AMDI0010:01-event"
 deck_input_launch="$(PZ_WINDOWS_VM_BOOT_SESSION=1 \
     PZ_WINDOWS_VM_INPUT_BY_ID_DIR="$input_by_id" \
-    PZ_WINDOWS_VM_INPUT_BY_PATH_DIR="$input_by_path" \
     "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
 grep -Fq 'pz-steamdeck-keyboard' <<< "$deck_input_launch"
 grep -Fq 'pz-steamdeck-mouse' <<< "$deck_input_launch"
 grep -Fq 'pz-steamdeck-gamepad' <<< "$deck_input_launch"
-grep -Fq 'pz-steamdeck-touchscreen' <<< "$deck_input_launch"
+grep -Fq 'virtio-multitouch-pci' <<< "$deck_input_launch"
+assert_grep_absent "raw portrait touchscreen bypasses output rotation" 'pz-steamdeck-touchscreen' <<< "$deck_input_launch"
 desktop_input_launch="$(PZ_WINDOWS_VM_BOOT_SESSION=0 \
     PZ_WINDOWS_VM_INPUT_BY_ID_DIR="$input_by_id" \
-    PZ_WINDOWS_VM_INPUT_BY_PATH_DIR="$input_by_path" \
     "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null)"
 assert_grep_absent "desktop launch captures Steam Deck input" 'pz-steamdeck-' <<< "$desktop_input_launch"
 empty_input_launch="$(PZ_WINDOWS_VM_BOOT_SESSION=1 \

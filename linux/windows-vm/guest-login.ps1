@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('auto', 'password', 'status', 'recovery-status', 'recovery-apply', 'recovery-enable', 'recovery-disable')]
+    [ValidateSet('auto', 'password', 'status', 'touch-input', 'recovery-status', 'recovery-apply', 'recovery-enable', 'recovery-disable')]
     [string]$Mode = 'status',
     [string]$UserName = 'phasezero',
     [string]$InputPath = ''
@@ -352,6 +352,64 @@ exit 1
         -Principal $principal -Force | Out-Null
 }
 
+function Set-TouchInputPolicy {
+    # Windows' device policy value 2 means "Always": tapping an editable field
+    # opens the touch keyboard even though QEMU exposes a virtual USB keyboard.
+    # QGA executes as LocalSystem, which is the partition required by the MDM
+    # bridge for device policies. Older Windows builds may not expose the newer
+    # property, so keep the per-user setting as a compatibility path.
+    $cspApplied = $false
+    try {
+        $namespace = 'root\cimv2\mdm\dmmap'
+        $class = 'MDM_Policy_Config01_TextInput02'
+        $filter = "ParentID='./Vendor/MSFT/Policy/Config' and InstanceID='TextInput'"
+        $policy = Get-CimInstance -Namespace $namespace -ClassName $class -Filter $filter -ErrorAction Stop
+        if ($policy -and $policy.CimInstanceProperties['EnableTouchKeyboardAutoInvokeInDesktopMode']) {
+            $policy.EnableTouchKeyboardAutoInvokeInDesktopMode = 2
+            Set-CimInstance -CimInstance $policy -ErrorAction Stop | Out-Null
+            $cspApplied = $true
+        }
+    } catch {
+        Write-Verbose "TextInput CSP bridge unavailable: $($_.Exception.Message)"
+    }
+
+    $account = Get-CimInstance Win32_UserAccount -Filter "LocalAccount=True AND Name='$UserName'" -ErrorAction Stop |
+        Select-Object -First 1
+    if (-not $account) { throw "Managed guest user not found: $UserName" }
+    $sid = [string]$account.SID
+    $profile = Get-CimInstance Win32_UserProfile -Filter "SID='$sid'" -ErrorAction Stop
+    if (-not $profile -or -not $profile.LocalPath) { throw "Guest profile not found: $UserName" }
+
+    $hiveName = "PZTouchInput-$PID"
+    $hiveRoot = "Registry::HKEY_USERS\$sid"
+    $loadedHere = $false
+    if (-not (Test-Path -LiteralPath $hiveRoot)) {
+        & reg.exe load "HKU\$hiveName" (Join-Path $profile.LocalPath 'NTUSER.DAT') | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "Unable to load guest user registry hive: $LASTEXITCODE" }
+        $hiveRoot = "Registry::HKEY_USERS\$hiveName"
+        $loadedHere = $true
+    }
+    try {
+        $tabletTip = Join-Path $hiveRoot 'Software\Microsoft\TabletTip\1.7'
+        New-Item -Path $tabletTip -Force | Out-Null
+        New-ItemProperty -Path $tabletTip -Name EnableDesktopModeAutoInvoke -PropertyType DWord -Value 1 -Force | Out-Null
+        New-ItemProperty -Path $tabletTip -Name TouchKeyboardTapInvoke -PropertyType DWord -Value 2 -Force | Out-Null
+    } finally {
+        if ($loadedHere) { & reg.exe unload "HKU\$hiveName" | Out-Null }
+    }
+    Start-Service -Name TabletInputService -ErrorAction SilentlyContinue
+    $service = Get-Service -Name TabletInputService -ErrorAction SilentlyContinue
+    [ordered]@{
+        schemaVersion = 1
+        user = $UserName
+        touchKeyboardAutoInvoke = 'always'
+        cspApplied = $cspApplied
+        userSettingApplied = $true
+        tabletInputServiceRunning = [bool]($service -and $service.Status -eq 'Running')
+        appliedAt = (Get-Date).ToUniversalTime().ToString('o')
+    } | ConvertTo-Json -Compress
+}
+
 function Set-RecoveryRemotePolicy([bool]$LocalOnly) {
     # User-right assignments are system policy, not per-account registry data.
     # Keep the temporary export inside the guest and remove it even on failure.
@@ -402,6 +460,11 @@ function Set-RecoveryAccount {
 
 if ($Mode -eq 'status') {
     Get-PolicyStatus | ConvertTo-Json -Compress
+    exit 0
+}
+
+if ($Mode -eq 'touch-input') {
+    Set-TouchInputPolicy
     exit 0
 }
 

@@ -1143,6 +1143,9 @@ exit 1
     & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $guestLoginScript `
         -Mode $guestLoginConfig.mode -UserName $guestLoginConfig.username -InputPath $guestLoginPayload
     if ($LASTEXITCODE -ne 0) { throw "PhaseZero guest login policy failed" }
+    & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $guestLoginScript `
+        -Mode touch-input -UserName $guestLoginConfig.username
+    if ($LASTEXITCODE -ne 0) { throw "PhaseZero touch-input policy failed" }
     Write-Host "PhaseZero: guest login policy applied without registry plaintext password"
 
     $selectedExchange = Get-Content (Join-Path $phaseZeroDir 'exchange-path.txt') -ErrorAction SilentlyContinue | Select-Object -First 1

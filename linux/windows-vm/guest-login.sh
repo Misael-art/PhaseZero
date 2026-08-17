@@ -624,12 +624,24 @@ apply_policy() {
         qgaAvailable:true,qgaServiceHealthy:true,lastVerifiedAt,error:null}'
 }
 
+apply_touch_input_policy() {
+    acquire_guest_lock || return 1
+    qga_ping "$QGA_SOCKET" || { pz_error "QGA unavailable: start the VM first"; return 1; }
+    local result
+    result="$(qga_guest_exec_wait touch-input '{}')" || {
+        pz_error "Windows touch-input policy failed"
+        return 1
+    }
+    printf '%s\n' "$result" | jq -e '{success:true} + .'
+}
+
 set +e
 case "$ACTION" in
     status) guest_status ;;
     backup) backup_guest ;;
     restore|rollback) restore_guest ;;
     apply) apply_policy ;;
+    touch-input) apply_touch_input_policy ;;
     recovery)
         case "$RECOVERY_ACTION" in
             status) recovery_status ;;
@@ -646,7 +658,7 @@ case "$ACTION" in
     transport-verify) verify_transport ;;
     reboot) guest_power reboot ;;
     shutdown) guest_power powerdown ;;
-    *) pz_error "usage: pz windows-vm guest-login (status|backup|prune-backups|apply|recovery|repair-qga|repair-preflight|transport-verify|rollback|restore|reboot|shutdown)"; exit 2 ;;
+    *) pz_error "usage: pz windows-vm guest-login (status|backup|prune-backups|apply|touch-input|recovery|repair-qga|repair-preflight|transport-verify|rollback|restore|reboot|shutdown)"; exit 2 ;;
 esac
 rc=$?
 set -e

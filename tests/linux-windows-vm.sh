@@ -128,7 +128,7 @@ while read -r lib_dep; do
     grep -Fq "linux/lib/$lib_dep" <<< "$gfx_specs" || {
         echo "runtime_artifact_specs sem dependencia dura de common.sh: lib/$lib_dep" >&2; exit 1; }
 done < <(sed -n 's#^source "$PZ_ROOT/linux/lib/\([a-z_-]*\.sh\)"#\1#p' "$REPO_ROOT/linux/lib/common.sh")
-for runtime_dep in windows-vm.sh graphics.sh rescue.sh; do
+for runtime_dep in windows-vm.sh graphics.sh rescue.sh guest-login.sh guest-login.ps1 provision.sh graphics-profiles.json; do
     grep -Fq "linux/windows-vm/$runtime_dep" <<< "$runtime_specs" || {
         echo "runtime_file_specs sem $runtime_dep" >&2; exit 1; }
     grep -Fq "linux/windows-vm/$runtime_dep" <<< "$gfx_specs" || {
@@ -433,6 +433,53 @@ grep -q '^qemu -machine q35$' <<< "$post_launch"
 test "$(grep -c '^cleanup$' <<< "$post_launch")" -eq 1
 echo "  QEMU fake exits normally; runtime cleanup executes once"
 
+echo "=== boot session: aplica teclado virtual no guest existente ==="
+touch_runtime="$TMP_ROOT/touch-input-runtime"
+touch_state="$TMP_ROOT/touch-input-state"
+touch_helper="$TMP_ROOT/touch-input-helper"
+touch_capture="$TMP_ROOT/touch-input-argv"
+mkdir -p "$touch_runtime" "$touch_state"
+cat > "$touch_helper" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" > "$WV_TOUCH_CAPTURE"
+printf '{"touchKeyboardAutoInvoke":"always"}\n'
+EOF
+chmod +x "$touch_helper"
+python3 - "$touch_runtime/qga.sock" <<'PY' &
+import socket
+import sys
+import time
+
+server = socket.socket(socket.AF_UNIX)
+server.bind(sys.argv[1])
+server.listen(1)
+time.sleep(10)
+PY
+touch_socket_pid=$!
+for _ in $(seq 1 50); do
+    [ -S "$touch_runtime/qga.sock" ] && break
+    sleep 0.02
+done
+[ -S "$touch_runtime/qga.sock" ]
+export WV_TOUCH_RUNTIME="$touch_runtime" WV_TOUCH_STATE="$touch_state"
+export WV_TOUCH_HELPER="$touch_helper" WV_TOUCH_CAPTURE="$touch_capture"
+run_wv_unit '
+    RUNTIME_DIR="$WV_TOUCH_RUNTIME"
+    STATE_DIR="$WV_TOUCH_STATE"
+    GUEST_USER=phasezero
+    DRY_RUN=0
+    export PZ_WINDOWS_VM_BOOT_SESSION=1
+    export PZ_WINDOWS_VM_GUEST_LOGIN_HELPER="$WV_TOUCH_HELPER"
+    start_guest_touch_input_setup
+    wait "${CLEANUP_PIDS[-1]}"
+'
+kill "$touch_socket_pid" 2>/dev/null || true
+wait "$touch_socket_pid" 2>/dev/null || true
+grep -Fq "touch-input --socket $touch_runtime/qga.sock --user phasezero --json" "$touch_capture"
+grep -Fq '"touchKeyboardAutoInvoke":"always"' "$touch_state/touch-input.log"
+unset WV_TOUCH_RUNTIME WV_TOUCH_STATE WV_TOUCH_HELPER WV_TOUCH_CAPTURE
+echo "  touch keyboard policy scheduled through QGA"
+
 spice_invariant="$({ grep -c 'addr=' "$REPO_ROOT/linux/windows-vm/windows-vm.sh" || true
                     grep -c 'addr=' "$REPO_ROOT/linux/windows-vm/provision.sh" || true; } | awk '{s+=$1} END {print s+0}')"
 test "$spice_invariant" -ge 2
@@ -692,7 +739,7 @@ PZ_WINDOWS_VM_TEST_PLASMA_FILE="$plasma_marker" \
 gamescope_rc=$?
 set -e
 test "$gamescope_rc" -eq 77
-grep -q -- '--backend drm --expose-wayland -O eDP-1 --force-orientation right -W 1280 -H 800 -w 1280 -h 800 --force-windows-fullscreen --' "$gamescope_args_file"
+grep -q -- '--backend drm --expose-wayland -O eDP-1 -r 60 --force-orientation right -W 1280 -H 800 -w 1280 -h 800 --force-windows-fullscreen --' "$gamescope_args_file"
 
 mkdir -p "$display_sys/class/drm/card1-DP-1"
 printf 'connected\n' > "$display_sys/class/drm/card1-DP-1/status"
@@ -704,11 +751,11 @@ cat > "$kde_output_config" <<EOF
 [
   {"name":"outputs","data":[
     {"connectorName":"DP-1","edidHash":"stale","mode":{"width":640,"height":480}},
-    {"connectorName":"DP-1","edidHash":"$display_edid_hash","mode":{"width":2560,"height":1080}}
+    {"connectorName":"DP-1","edidHash":"$display_edid_hash","mode":{"width":2560,"height":1080,"refreshRate":74991}}
   ]}
 ]
 EOF
-docked_validation="$(
+primary_validation="$(
     env -u DISPLAY -u WAYLAND_DISPLAY \
     PATH="$session_bin:/usr/bin:/bin" \
     PZ_DISPLAY_DMI_ROOT="$display_dmi" \
@@ -718,15 +765,30 @@ docked_validation="$(
     PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
         "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
 )"
+grep -q 'display_profile=steamdeck-docked' <<< "$primary_validation"
+grep -q 'display_width=1280 display_height=800 display_connector=eDP-1 display_refresh_rate=60' <<< "$primary_validation"
+grep -q -- '-O eDP-1 -r 60 --force-orientation right -W 1280 -H 800' <<< "$primary_validation"
+grep -q 'reason=steamdeck-primary-internal' <<< "$primary_validation"
+docked_validation="$(
+    env -u DISPLAY -u WAYLAND_DISPLAY \
+    PATH="$session_bin:/usr/bin:/bin" \
+    PZ_DISPLAY_DMI_ROOT="$display_dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
+    PZ_DISPLAY_KDE_OUTPUT_CONFIG="$kde_output_config" \
+    PZ_WINDOWS_VM_PRIMARY_DISPLAY=external \
+    PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
+    PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
+        "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
+)"
 grep -q 'display_profile=steamdeck-docked' <<< "$docked_validation"
-grep -q 'display_width=2560 display_height=1080 display_connector=DP-1' <<< "$docked_validation"
+grep -q 'display_width=2560 display_height=1080 display_connector=DP-1 display_refresh_rate=74.991' <<< "$docked_validation"
 grep -q 'compositor=gamescope' <<< "$docked_validation"
 grep -q 'reason=steamdeck-docked-explicit-output' <<< "$docked_validation"
-grep -q -- '-O DP-1 -W 2560 -H 1080 -w 2560 -h 1080 --force-windows-fullscreen' <<< "$docked_validation"
+grep -q -- '-O DP-1 -r 74.991 -W 2560 -H 1080 -w 2560 -h 1080 --force-windows-fullscreen' <<< "$docked_validation"
 if grep -q -- '--force-orientation' <<< "$docked_validation"; then
     exit 1
 fi
-echo "  docked session targets connected KDE monitor mode explicitly"
+echo "  Deck panel stays primary; external override follows KDE mode and refresh"
 rm -f "$session_bin/gamescope" "$gamescope_args_file"
 
 cat > "$session_bin/cage" <<EOF
@@ -1142,6 +1204,12 @@ grep -Fq 'TPM state outside managed VM directory' "$REPO_ROOT/linux/windows-vm/g
 grep -Fq 'exchangeMapped' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
 grep -Fq 'Resolve-DnsName' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
 grep -Fq 'Win32_SoundDevice' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq "EnableTouchKeyboardAutoInvokeInDesktopMode = 2" "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'EnableDesktopModeAutoInvoke -PropertyType DWord -Value 1' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'TouchKeyboardTapInvoke -PropertyType DWord -Value 2' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'Start-Service -Name TabletInputService' "$REPO_ROOT/linux/windows-vm/guest-login.ps1"
+grep -Fq 'start_guest_touch_input_setup' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq '[ "${PZ_WINDOWS_VM_BOOT_SESSION:-0}" = "1" ] || return 0' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 echo "  guest secret never uses registry plaintext or argv"
 
 # vm_rescue_escape_to_desktop in test mode (non-destructive)

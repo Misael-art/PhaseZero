@@ -109,6 +109,10 @@ display|$PZ_ROOT/linux/steamdeck/display-session.sh|/usr/local/lib/phasezero/dis
 launcher|$PZ_ROOT/linux/windows-vm/windows-vm.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/windows-vm.sh|0755
 graphics|$PZ_ROOT/linux/windows-vm/graphics.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/graphics.sh|0755
 rescue|$PZ_ROOT/linux/windows-vm/rescue.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/rescue.sh|0644
+guest-login|$PZ_ROOT/linux/windows-vm/guest-login.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/guest-login.sh|0755
+guest-login-powershell|$PZ_ROOT/linux/windows-vm/guest-login.ps1|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/guest-login.ps1|0644
+provision|$PZ_ROOT/linux/windows-vm/provision.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/provision.sh|0644
+graphics-contract|$PZ_ROOT/linux/windows-vm/graphics-profiles.json|/usr/local/lib/phasezero/windows-vm-runtime/linux/windows-vm/graphics-profiles.json|0644
 common|$PZ_ROOT/linux/lib/common.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/lib/common.sh|0644
 ledger|$PZ_ROOT/linux/lib/ledger.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/lib/ledger.sh|0644
 desktop|$PZ_ROOT/linux/lib/desktop.sh|/usr/local/lib/phasezero/windows-vm-runtime/linux/lib/desktop.sh|0644
