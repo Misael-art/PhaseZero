@@ -3244,14 +3244,18 @@ install_boot() {
     rm -f -- "$BOOT_RUNTIME_PENDING_FILE" 2>/dev/null || true
     if command -v jq >/dev/null 2>&1; then
         local provenance_version="unknown"
-        [ -r "$PZ_ROOT/../version.json" ] && \
-            provenance_version="$(jq -r '.version // "unknown"' "$PZ_ROOT/../version.json" 2>/dev/null || echo unknown)"
+        # PZ_ROOT is the package root (/usr/lib/phasezero in production, the
+        # repo root in a checkout) and version.json sits directly inside it.
+        [ -r "$PZ_ROOT/version.json" ] && \
+            provenance_version="$(jq -r '.version // "unknown"' "$PZ_ROOT/version.json" 2>/dev/null || echo unknown)"
         jq -n \
             --arg source "$PZ_ROOT" \
             --arg version "$provenance_version" \
             --arg installedAt "$(date -Iseconds)" \
             '{schemaVersion:1, source:$source, version:$version, installedAt:$installedAt}' \
             > "$RUNTIME_ROOT/provenance.json" 2>/dev/null || true
+        # Auditability was the point: root's umask must not hide the record.
+        chmod 0644 "$RUNTIME_ROOT/provenance.json" 2>/dev/null || true
     fi
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
