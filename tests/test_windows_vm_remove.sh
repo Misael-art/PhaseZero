@@ -67,6 +67,12 @@ printf '%s\n' '{"id":"op-running","state":"failed"}' \
 terminal_plan="$("$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json)"
 jq -e '.ready == true' <<< "$terminal_plan" >/dev/null
 
+# provision_lock_clear truncates in place and never unlinks, so an empty lock
+# is the canonical idle state and must not block removal.
+: > "$XDG_STATE_HOME/phasezero/windows-vm/provision/active.lock"
+idle_plan="$("$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json)"
+jq -e '.ready == true' <<< "$idle_plan" >/dev/null
+
 mkdir -p "$TEST_ROOT/not-managed"
 touch "$TEST_ROOT/not-managed/phasezero-windows.qcow2"
 VM_DIR="$TEST_ROOT/not-managed"

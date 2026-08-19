@@ -2378,8 +2378,11 @@ provision_removal_blocker() {
         return 0
     fi
     IFS= read -r operation_id < "$active_lock" || true
+    # provision_lock_clear truncates in place and never unlinks: an empty lock
+    # is the idle state, not corruption.
+    [ -n "$operation_id" ] || return 1
     case "$operation_id" in
-        ""|.|..|*[!A-Za-z0-9._-]*)
+        .|..|*[!A-Za-z0-9._-]*)
             printf 'estado do provisionamento é inconsistente; repare ou descarte a operação antes de remover a VM'
             return 0
             ;;

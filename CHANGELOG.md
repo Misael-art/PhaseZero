@@ -87,6 +87,13 @@ As versões seguem a data de build em `version.json`.
   localização: discos dentro de `~/VirtualMachines/PhaseZero*` são removíveis,
   com aviso explícito quando a VM foi adotada em vez de criada. Procedência
   desconhecida vira bloqueio.
+- A prévia de remoção da VM deixava de ficar pronta em qualquer host cujo
+  `active.lock` já tivesse sido liberado: `provision_lock_clear` trunca o lock
+  no lugar e nunca o apaga, então lock vazio é o estado normal de "nenhuma
+  operação ativa", mas o leitor tratava o vazio como inconsistente e devolvia
+  "estado do provisionamento é inconsistente; repare ou descarte a operação".
+  Lock vazio volta a significar ociosidade; conteúdo inválido continua
+  bloqueando.
 - Remover uma imagem do Windows não é mais confundido com apagar a VM criada.
   Remoção legada valida o identificador, recusa VM em execução, revalida o alvo
   sob trava compartilhada com a finalização e libera o índice somente após
