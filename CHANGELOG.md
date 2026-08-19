@@ -93,9 +93,10 @@ As versões seguem a data de build em `version.json`.
 - `fallback_desktop` ganha kill-switch `PZ_WINDOWS_VM_SESSION_DESKTOP_FALLBACK=0`
   para suítes de contrato rodarem dentro de uma sessão logada sem risco de
   subir um desktop aninhado.
-- A janela do QEMU passa a pedir confirmação antes de fechar
-  (`confirm-quit=on` nos perfis GTK): fechar sem querer com o Windows ligado
-  derrubava o convidado na hora e sujava o disco.
+- Fechar a janela do QEMU não encerra mais a máquina (`window-close=off` nos
+  perfis GTK, validado contra o QEMU instalado): fechar com o Windows ligado
+  derrubava o convidado na hora e sujava o disco. O desligamento passa a ser
+  pelo menu Iniciar do Windows ou pelo botão Desligar do PhaseZero.
 - Descartar uma instalação interrompida antes de qualquer disco existir
   (checkpoints `validate`/`assets`) deixa de reportar
   `staging removal failed; preserved:` com caminho vazio. A operação nunca
