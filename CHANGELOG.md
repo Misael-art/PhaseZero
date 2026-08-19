@@ -73,6 +73,19 @@ As versões seguem a data de build em `version.json`.
 - Smoke `pz ai routing` em `tests/linux-ai.sh` (degrada sem 9Router).
 
 ### Corrigido
+- A sessão de boot direto não mata mais o Windows em execução ao ser
+  encerrada. Todo fim de sessão (logout do SDDM, sinal, arquivo
+  `shutdown.requested`) pede primeiro o desligamento do convidado via QGA
+  (`guest-login shutdown`), espera até 120 s e só então escala TERM→KILL;
+  fim forçado é registrado como desligamento sujo.
+- Cada sessão grava `session-state.json` versionado (graceful, motivo,
+  duração, display usado) e o `status --json` passa a expor `session` com os
+  findings `guest-unclean-shutdown` (desligamento sujo — orientação de
+  reparo) e `session-shutdown-hint` (saída não verificada — dica de
+  encerramento correto), alimentando a UI com próximo passo claro.
+- `fallback_desktop` ganha kill-switch `PZ_WINDOWS_VM_SESSION_DESKTOP_FALLBACK=0`
+  para suítes de contrato rodarem dentro de uma sessão logada sem risco de
+  subir um desktop aninhado.
 - Descartar uma instalação interrompida antes de qualquer disco existir
   (checkpoints `validate`/`assets`) deixa de reportar
   `staging removal failed; preserved:` com caminho vazio. A operação nunca

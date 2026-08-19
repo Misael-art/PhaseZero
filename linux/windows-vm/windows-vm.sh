@@ -2507,6 +2507,20 @@ status_json() {
     boot_grub="$(grub_cfg_entry_state)"
     grep -w 'phasezero.windowsvm=1' /proc/cmdline >/dev/null 2>&1 && current_marker="yes"
     discovery="$(discovery_json configured)"
+    local session_state_file="$PZ_STATE/windows-vm/session-state.json"
+    local session_graceful=true session_reason="" session_ended_at=""
+    if [ -r "$session_state_file" ]; then
+        session_graceful="$(jq -r 'if has("graceful") and (.graceful|type) == "boolean" then .graceful else true end' "$session_state_file" 2>/dev/null || echo true)"
+        session_reason="$(jq -r '.reason // ""' "$session_state_file" 2>/dev/null || true)"
+        session_ended_at="$(jq -r '.endedAt // ""' "$session_state_file" 2>/dev/null || true)"
+    fi
+    [ "$session_graceful" = "false" ] || [ "$session_graceful" = "true" ] || session_graceful=true
+    local session_unclean=false session_hint=false
+    if [ "$session_graceful" = "false" ]; then
+        session_unclean=true
+    elif [ "$session_reason" = "guest-exit-unverified" ]; then
+        session_hint=true
+    fi
     jq -n \
         --arg configFile "$CONFIG_FILE" \
         --arg configInstalled "$config" \
@@ -2559,6 +2573,11 @@ status_json() {
         --arg artifactsVerification "$boot_verification" \
         --arg bootRuntimeState "$boot_runtime_state_value" \
         --argjson bootRuntimeStale "$([ "$boot_runtime_state_value" = "stale" ] && echo true || echo false)" \
+        --argjson lastSessionGraceful "$session_graceful" \
+        --arg lastSessionReason "$session_reason" \
+        --arg lastSessionEndedAt "$session_ended_at" \
+        --argjson sessionUnclean "$session_unclean" \
+        --argjson sessionEndHint "$session_hint" \
         --arg hostLoginPolicy "$(root_env_value PZ_WINDOWS_VM_REQUIRE_LOGIN)" \
         --arg guestLoginPolicy "$GUEST_LOGIN_POLICY" \
         --arg bootConfiguredRepo "$(root_env_value PZ_WINDOWS_VM_REPO)" \
@@ -2594,9 +2613,12 @@ status_json() {
                     if $kvm != "yes" then {id:"kvm-unavailable", severity:"error", message:"A aceleração KVM não está disponível.", action:"windows.graphics.doctor"} else empty end,
                     if $qemu == "" then {id:"qemu-missing", severity:"error", message:"QEMU não foi encontrado no host.", action:"windows.graphics.doctor"} else empty end,
                     if $ovmfCodeExists != "yes" or $ovmfVarsExists != "yes" then {id:"uefi-incomplete", severity:"error", message:"Os arquivos UEFI da VM estão incompletos.", action:"windows.provision.player"} else empty end,
-                    if $bootRuntimeStale then {id:"boot-runtime-stale", severity:"warning", message:"O boot direto usa uma versão antiga do PhaseZero.", action:"windows.boot.install"} else empty end
+                    if $bootRuntimeStale then {id:"boot-runtime-stale", severity:"warning", message:"O boot direto usa uma versão antiga do PhaseZero.", action:"windows.boot.install"} else empty end,
+                    if $sessionUnclean and $diskInstalledLike == "yes" then {id:"guest-unclean-shutdown", severity:"warning", message:"Windows foi desligado de forma inesperada. Ao iniciar, deixe o reparo automático concluir — pode levar alguns minutos.", action:"windows.status"} else empty end,
+                    if $sessionEndHint and $diskInstalledLike == "yes" then {id:"session-shutdown-hint", severity:"info", message:"Encerre o Windows pelo menu Iniciar ou pelo botão Desligar do PhaseZero para um desligamento limpo.", action:"windows.status"} else empty end
                 ]
             },
+            session: {lastEndedAt:$lastSessionEndedAt, lastGraceful:$lastSessionGraceful, lastReason:$lastSessionReason},
             config: {path: $configFile, installed: ($configInstalled == "yes")},
             vm: {dir: $vmDir, disk: $disk, diskExists: ($diskExists == "yes"), diskSource: $diskSource, installedLike: ($diskInstalledLike == "yes"), iso: $iso, isoExists: ($isoExists == "yes"), ramMb: ($ramMb|tonumber), cpus: ($cpus|tonumber), usbMode: $usbMode, graphicsProfile: $graphicsProfile, netModel: $netModel},
             libvirt: {domain: $libvirtDomain, uri: $libvirtUri, state: $libvirtState, disk: $libvirtDisk, preferred: ($libvirtDomain != ""), network:"default", networkState:$networkState, nicModel:$nicModel},

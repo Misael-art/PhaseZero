@@ -351,8 +351,156 @@ for _rescue_sh in \
 done
 unset _RESCUE_SESSION_DIR
 
+# --- Graceful shutdown and session state (WBR-001/002/008) -----------------
+# Closing the QEMU window or ending the session kills a running guest
+# instantly, leaving NTFS dirty; Windows then trips over itself on the next
+# boot. The session therefore owns the launcher lifetime: every exit path
+# first asks the guest to shut down through QGA, escalates to signals only as
+# a last resort, and records whether the guest was actually left clean.
+SHUTDOWN_TIMEOUT="${PZ_WINDOWS_VM_SESSION_SHUTDOWN_TIMEOUT:-120}"
+SHUTDOWN_ESCALATE_GRACE="${PZ_WINDOWS_VM_SESSION_SHUTDOWN_GRACE:-15}"
+STOP_FILE="$STATE_DIR/shutdown.requested"
+SESSION_STATE_FILE="$STATE_DIR/session-state.json"
+GRACE_REQUESTED=0
+GRACE_FORCED=0
+GRACE_REASON=""
+SESSION_SIGNALED=""
+SESSION_LAST_REASON=""
+
+case "$SHUTDOWN_TIMEOUT" in ""|*[!0-9]*) SHUTDOWN_TIMEOUT=120 ;; esac
+case "$SHUTDOWN_ESCALATE_GRACE" in ""|*[!0-9]*) SHUTDOWN_ESCALATE_GRACE=15 ;; esac
+
+launcher_guest_call() {
+    case "$LAUNCHER_KIND" in
+        dispatcher) "$PZ_BIN" windows-vm guest-login shutdown --json ;;
+        *) "$PZ_BIN" guest-login shutdown --json ;;
+    esac
+}
+
+write_session_state() {
+    # graceful=true means the guest was not interrupted mid-run. A rc=0 exit
+    # nobody requested is recorded as graceful but "unverified": a guest that
+    # powered off and a window closed on a live guest are indistinguishable
+    # from the exit code alone, and status treats them differently.
+    local graceful="$1" reason="$2" exit_code="$3" elapsed="$4"
+    command -v jq >/dev/null 2>&1 || return 0
+    local tmp="$SESSION_STATE_FILE.tmp"
+    jq -n \
+        --arg endedAt "$(date -Iseconds)" \
+        --argjson exitCode "$exit_code" \
+        --argjson elapsedSeconds "$elapsed" \
+        --argjson graceful "$graceful" \
+        --arg reason "$reason" \
+        --arg displayWidth "$DISPLAY_WIDTH" \
+        --arg displayHeight "$DISPLAY_HEIGHT" \
+        --arg displayConnector "$DISPLAY_CONNECTOR" \
+        --arg displayRefresh "$DISPLAY_REFRESH_RATE" \
+        '{schemaVersion:1, endedAt:$endedAt, exitCode:$exitCode,
+          elapsedSeconds:$elapsedSeconds, graceful:$graceful, reason:$reason,
+          display:{width:($displayWidth|tonumber), height:($displayHeight|tonumber),
+                    connector:$displayConnector, refreshRate:($displayRefresh|tonumber)}}' \
+        > "$tmp" && mv -f "$tmp" "$SESSION_STATE_FILE"
+}
+
+# Ask the running guest to shut down and wait for the launcher to follow.
+# Escalates to TERM/KILL only after SHUTDOWN_TIMEOUT; a forced end is recorded
+# as unclean so the next interaction can offer repair.
+request_graceful_stop() {
+    local reason="$1" deadline waited=0 guest_pid
+    [ "$GRACE_REQUESTED" = "0" ] || return 0
+    GRACE_REQUESTED=1
+    GRACE_REASON="$reason"
+    printf '%s graceful stop requested (%s); asking the guest to shut down\n' \
+        "$(date -Iseconds)" "$reason"
+    # Fire-and-forget: `timeout` cannot wrap a shell function, and a hung
+    # guest call must never hold the session hostage — the deadline below
+    # bounds the whole stop by watching the launcher, not the call.
+    ( launcher_guest_call >/dev/null 2>&1 ) &
+    guest_pid=$!
+    deadline=$((SECONDS + SHUTDOWN_TIMEOUT))
+    while kill -0 "$LAUNCHER_PID" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 1
+    done
+    if kill -0 "$LAUNCHER_PID" 2>/dev/null; then
+        GRACE_FORCED=1
+        printf '%s guest still running after %ss; escalating TERM then KILL\n' \
+            "$(date -Iseconds)" "$SHUTDOWN_TIMEOUT"
+        kill -TERM "$LAUNCHER_PID" 2>/dev/null || true
+        while kill -0 "$LAUNCHER_PID" 2>/dev/null && [ "$waited" -lt "$SHUTDOWN_ESCALATE_GRACE" ]; do
+            sleep 1
+            waited=$((waited + 1))
+        done
+        kill -KILL "$LAUNCHER_PID" 2>/dev/null || true
+    fi
+    kill "$guest_pid" 2>/dev/null || true
+}
+
+session_on_signal() {
+    SESSION_SIGNALED="${1:-signal}"
+}
+
+trap 'session_on_signal TERM' TERM
+trap 'session_on_signal INT' INT
+trap 'session_on_signal HUP' HUP
+
+LAUNCHER_PID=""
+LAUNCHER_RC=0
+LAUNCHER_ELAPSED=0
+
+run_launcher() {
+    local -a args=("$@")
+    local rc=0 started="$SECONDS"
+    GRACE_REQUESTED=0
+    GRACE_FORCED=0
+    GRACE_REASON=""
+    printf '%s launching Windows VM attempt=%s kind=%s command=%s\n' \
+        "$(date -Iseconds)" "$attempt" "$LAUNCHER_KIND" "$(launcher_command)"
+    "$PZ_BIN" "${args[@]}" &
+    LAUNCHER_PID=$!
+    while kill -0 "$LAUNCHER_PID" 2>/dev/null; do
+        if [ -e "$STOP_FILE" ]; then
+            rm -f -- "$STOP_FILE"
+            request_graceful_stop "stop-file"
+        elif [ -n "$SESSION_SIGNALED" ]; then
+            SESSION_SIGNALED=""
+            request_graceful_stop "signal"
+        fi
+        sleep 1
+    done
+    wait "$LAUNCHER_PID" || rc=$?
+    LAUNCHER_RC="$rc"
+    LAUNCHER_ELAPSED=$((SECONDS - started))
+}
+
+record_outcome() {
+    local graceful=true reason=""
+    if [ "$GRACE_REQUESTED" = "1" ]; then
+        if [ "$GRACE_FORCED" = "1" ]; then
+            graceful=false
+            reason="forced-shutdown:$GRACE_REASON"
+        else
+            reason="graceful:$GRACE_REASON"
+        fi
+    elif [ "$LAUNCHER_RC" -eq 0 ]; then
+        reason="guest-exit-unverified"
+    elif [ "$LAUNCHER_ELAPSED" -ge "$PZ_WINDOWS_VM_SESSION_STABLE_SECONDS" ]; then
+        graceful=false
+        reason="launcher-crash"
+    else
+        reason="start-failure"
+    fi
+    SESSION_LAST_REASON="$reason"
+    write_session_state "$graceful" "$reason" "$LAUNCHER_RC" "$LAUNCHER_ELAPSED"
+}
+
 fallback_desktop() {
     local force="${1:-0}"
+    # PZ_WINDOWS_VM_SESSION_DESKTOP_FALLBACK=0 is the test kill-switch; the
+    # default stays 1 so bare GRUB sessions keep the recovery path. Never add a
+    # session_has_display guard here: the contract suite proves the fallback
+    # via a PATH-injected fake desktop, and production boot sessions are
+    # display-less by definition.
+    [ "${PZ_WINDOWS_VM_SESSION_DESKTOP_FALLBACK:-1}" = "1" ] || return 1
     [ "$force" = "1" ] || [ "$DESKTOP_FALLBACK" = "1" ] || return 1
     printf '%s desktop fallback (force=%s)\n' "$(date -Iseconds)" "$force"
     if command -v startplasma-wayland >/dev/null 2>&1; then
@@ -390,50 +538,46 @@ while :; do
     if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 1 ]; then
         printf '%s giving up after %s attempts; leaving Windows VM boot session\n' \
             "$(date -Iseconds)" "$attempt"
+        write_session_state true "start-failure" "$LAUNCHER_RC" "$LAUNCHER_ELAPSED"
         fallback_desktop 1 || true
         printf '%s no desktop session available; exiting so the display manager can recover\n' \
             "$(date -Iseconds)"
         exit 1
     fi
     if [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ]; then
-        printf '%s launching Windows VM attempt=%s kind=%s command=%s\n' \
-            "$(date -Iseconds)" "$attempt" "$LAUNCHER_KIND" "$(launcher_command)"
-        launch_started="$SECONDS"
-        set +e
-        "$PZ_BIN" "${LAUNCHER_ARGS[@]}"
-        rc=$?
-        set -e
-        launch_elapsed=$((SECONDS - launch_started))
-        if [ "$rc" -eq 0 ]; then
-            printf '%s Windows VM ended normally after %ss; closing boot session\n' \
-                "$(date -Iseconds)" "$launch_elapsed"
+        run_launcher "${LAUNCHER_ARGS[@]}"
+        record_outcome
+        if [ "$LAUNCHER_RC" -eq 0 ] || [ "$GRACE_REQUESTED" = "1" ]; then
+            printf '%s Windows VM ended after %ss rc=%s (reason=%s); closing boot session\n' \
+                "$(date -Iseconds)" "$LAUNCHER_ELAPSED" "$LAUNCHER_RC" "$SESSION_LAST_REASON"
             exit 0
         fi
-        if [ "$launch_elapsed" -ge "$PZ_WINDOWS_VM_SESSION_STABLE_SECONDS" ]; then
+        if [ "$LAUNCHER_ELAPSED" -ge "$PZ_WINDOWS_VM_SESSION_STABLE_SECONDS" ]; then
             printf '%s Windows VM failed after stable runtime=%ss rc=%s; refusing automatic relaunch\n' \
-                "$(date -Iseconds)" "$launch_elapsed" "$rc"
+                "$(date -Iseconds)" "$LAUNCHER_ELAPSED" "$LAUNCHER_RC"
             fallback_desktop 1 || true
-            exit "$rc"
+            exit "$LAUNCHER_RC"
         fi
         if [ "$compat_attempted" -eq 0 ]; then
             compat_attempted=1
             printf '%s accelerated launch failed quickly rc=%s; trying compat once\n' \
-                "$(date -Iseconds)" "$rc"
-            set +e
-            "$PZ_BIN" "${LAUNCHER_ARGS[@]}" --graphics compat
-            compat_rc=$?
-            set -e
-            if [ "$compat_rc" -eq 0 ]; then
-                printf '%s compat Windows VM ended normally; closing boot session\n' "$(date -Iseconds)"
+                "$(date -Iseconds)" "$LAUNCHER_RC"
+            run_launcher "${LAUNCHER_ARGS[@]}" --graphics compat
+            record_outcome
+            if [ "$LAUNCHER_RC" -eq 0 ] || [ "$GRACE_REQUESTED" = "1" ]; then
+                printf '%s compat Windows VM ended rc=%s (reason=%s); closing boot session\n' \
+                    "$(date -Iseconds)" "$LAUNCHER_RC" "$SESSION_LAST_REASON"
                 exit 0
             fi
             printf '%s compat launch failed rc=%s; continuing bounded recovery\n' \
-                "$(date -Iseconds)" "$compat_rc"
+                "$(date -Iseconds)" "$LAUNCHER_RC"
         fi
         printf '%s Windows VM launcher exited rc=%s attempt=%s; retrying in %ss\n' \
-            "$(date -Iseconds)" "$rc" "$attempt" "$RETRY_SECONDS"
+            "$(date -Iseconds)" "$LAUNCHER_RC" "$attempt" "$RETRY_SECONDS"
     else
-        rc=127
+        LAUNCHER_RC=127
+        LAUNCHER_ELAPSED=0
+        write_session_state true "start-failure" 127 0
         printf '%s Windows VM launcher missing attempt=%s configured_repo=%s; retrying in %ss\n' \
             "$(date -Iseconds)" "$attempt" "${CONFIGURED_REPO:-missing}" "$RETRY_SECONDS"
     fi
