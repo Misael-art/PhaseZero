@@ -276,9 +276,14 @@ jobs:
           set -euo pipefail
           bash -n linux/windows-vm/provision.sh
           bash -n linux/windows-vm/windows-vm.sh
+          bash -n linux/windows-vm/windows-vm-session.sh
+          bash -n linux/windows-vm/boot-runtime-notice.sh
           bash -n linux/windows-vm/media-inspect.sh
           bash tests/linux-windows-vm.sh
           bash tests/test_provision.sh
+          bash tests/test_windows_vm_remove.sh
+          bash tests/test_windows_vm_session.sh
+          bash tests/test_boot_runtime_notice.sh
 
   python-test:
     runs-on: ubuntu-latest

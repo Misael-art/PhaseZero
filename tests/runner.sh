@@ -5,7 +5,9 @@ PASS=0
 FAIL=0
 FAILED_NAMES=()
 
-for test_file in tests/linux-*.sh tests/test_provision.sh; do
+# tests/test_provision.sh is covered by the test_*.sh glob below; listing it
+# twice would spend another full provision run per invocation.
+for test_file in tests/linux-*.sh tests/test_*.sh; do
     [ -f "$test_file" ] || continue
     name="$(basename "$test_file" .sh)"
     printf '\n--- %s ---\n' "$name"
