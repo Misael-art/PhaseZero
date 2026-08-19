@@ -558,6 +558,8 @@ sem evidência.
 | Boot direto WinVM v1.16.6 | PR #60 mergeada em `2f5f262`; Deck é display primário em 1280×800/59.999 Hz, externo opcional herda 2560×1080/74.991 Hz, touch passa pelo multitouch GTK rotacionado, controles usam evdev e teclado virtual Windows é autoativado | CI PR duplicada verde; CI main `31988802642`; release-commit `31990545037`; testes no hardware conectado e QEMU dry-run | 2026-08-17 |
 | Latest release | `v1.16.6` publicada com 7 assets; workflow `31990545769` success; manifesto baixado e 6/6 checksums OK | `gh release view v1.16.6`, `sha256sum -c SHA256SUMS-1.16.6` | 2026-08-17 |
 | Pacote host | permanece `phasezero-control-center 1.16.5-1`; instalação 1.16.6 não iniciou porque Polkit não foi autorizado; tentativa cancelada limpa, `grubenv` mtime `1785849543`, 0 QEMU | `pacman -Q`, `pgrep`, `stat`; nenhum lock `pacman` criado | 2026-08-17 |
+| Pacote host | `phasezero-control-center 1.16.6-1` instalado via `phasezero-admin pacman -U` (rebuild do `main` `fe76f0f`, não o asset da release); prévia de remoção da VM atual retorna `ready:true` com 0 blockers e aviso de VM adotada; `grubenv` mtime `1785849543` e 0 QEMU preservados; runtime GRUB segue `OUTDATED` (sincronização deliberadamente adiada) | `pacman -Q`, `pz --version`, `pz windows-vm remove --json`, `stat`, `pgrep` | 2026-08-19 |
+| VMs legadas | as 2 VMs concluídas de 2026-08-16 foram removidas em 2026-08-19 05:42 local com `vmRemovedAt` registrado (`op-20260805-152412-5248`, `op-20260811-120613-9550`); `provision inventory --json` devolve `count:0`; resta `PhaseZero-Windows-Primary-final-20260816` como VM atual | `provision inventory --json`, `operation.json` de cada operação | 2026-08-19 |
 
 ## Ledger de execução
 
@@ -601,6 +603,7 @@ Prova release: workflow `31258447568` success; assets em `gh release view v1.15.
 | 2026-08-15 | Codex | `codex/phasezero-ui-functional-audit` (`/mnt/sdcard/Projects/pz-ui-functional-audit`) + `main` | P1 UI narrow viewport + HL-IMG-001: reavaliação, remoção de VM, release e validação do host | `0e21c54`, `5f49dbd`, `ce79038`, `b56c826`, `ac9e210`, `90f9234`, `4649e1c`; PR #57 → `b95c62e`; release `15ccd72`, tag `v1.16.4` | pytest 570 + 9; runner 40/40; provision 248/0; UI 27; CI PR verde; CI main `31892440978` e `31894001140` success; gitleaks `31894001162` success; release `31894002944` success; checksums 6/6 | Host atualizado para `1.16.4-1`. Preview instalado de remoção retorna `ready:true`, 0 blockers e recuperação via lixeira; nenhuma VM foi removida no teste. VM, disco, firmware, ISO, `grubenv`, Homelab e container `ai-memory` preservados. Runtime de boot direto segue `stale`, fora do escopo da atualização do pacote. |
 | 2026-08-16 | Codex | `codex/winvm-legacy-removal` (`/mnt/sdcard/Projects/pz-winvm-legacy-removal`) + `main` | HL-IMG-001: inventário e remoção segura de VMs concluídas legadas | `2be2b2a`, `b205668`, `913c702`, `2f2e937`; PR #58 → `d202139`; release `2d721b7`, tag `v1.16.5` | pytest 573 + 9; UI 27; remoção e provisionamento herméticos; CI PR 30/30; CI main `31947914357` e release-commit `31949400280` success; release `31949402337` success; 7 assets e checksums 6/6 | Host atualizado para `1.16.5-1`. Inventário instalado encontra 2 VMs desligadas/removíveis, 43.133.304.832 bytes; ambas prévias permanentes retornam `ready:true`, 0 blockers. Nenhuma VM removida. `grubenv` mtime `1785849543`, 46 mounts e 0 QEMU preservados. UI instalada mostra `VMs instaladas · 2`, `40.2 GB` e ação separada para VM atual. Runtime GRUB segue `stale`; atualização deliberadamente adiada para validação física da próxima release. |
 | 2026-08-17 | Codex | `codex/winvm-direct-input` (`/mnt/sdcard/Projects/pz-winvm-direct-input`) + `main` | Boot GRUB WinVM: display, frequência, touchscreen, controles e teclado virtual | `25344d0`, `9e06323`, `39c7e35`, `6af07f6`; PR #60 → `2f5f262`; release `da86960`, tag `v1.16.6` | PR CI duplicada success; main `31988802642`; release-commit `31990545037`; gitleaks `31990545071`; release `31990545769`; checksums 6/6; provision 252/0; Windows VM/graphics/UI verdes | Release oficial pronta. Auditoria detectou e removeu passthrough cru do touchscreen 800×1280, substituído por `virtio-multitouch` via GTK/Gamescope para respeitar rotação. Host ainda `1.16.5-1`: diálogo Polkit não autorizado, processo cancelado antes de `pacman`; `grubenv` e VM intactos. **Próximo**: autorizar `phasezero-admin pacman -U` do pacote validado, executar `pz windows-vm boot install`, validar runtime `current`, depois boot físico e evidência dentro do Windows. |
+| 2026-08-19 | ZCode | `main` (worktree principal) | Pós-v1.16.6: instalar 1.16.6 no host; terceiro defeito de remoção (lock vazio) achado e corrigido | fix `d6b6285` (sessão anterior) + `fe76f0f` (lock vazio); docs roadmap | TDD: teste do lock vazio falhou antes e passou depois; `tests/test_windows_vm_remove.sh` ok; `tests/test_provision.sh` 257/0; `tests/linux-windows-vm.sh` ok; `bash -n`; shellcheck com excludes do CI; `git diff --check`; rebuild + reinstalação `1.16.6-1` exit 0 | Host em `1.16.6-1`. Prévia de remoção da VM atual: `ready:true`, 0 blockers, aviso de adotada. Causa raiz: `provision_lock_clear` trunca `active.lock` e nunca apaga (design), mas `provision_removal_blocker` chamava lock vazio de inconsistente — todo host liberado ficava `ready:false` para sempre. Não-mutação: `grubenv` mtime `1785849543`, 0 QEMU, VM intacta, inventário `count:0` coerente com as 2 remoções legadas de 05:42. **Próximo**: CI verde no push de `fe76f0f`; runtime GRUB `OUTDATED` segue adiado até o boot físico planejado. |
 
 ### Escopo obrigatório da próxima release WinVM
 
@@ -693,6 +696,48 @@ Próximo passo exato: com autorização, `phasezero-admin pacman -U
   <phasezero-control-center-1.16.2-1-any.pkg.tar.zst>`; validar versão, imports
   da UI instalada, `windows-vm status`, abrir "Gerenciar imagens" e confirmar 0
   mutação de GRUB/VM/discos/mounts; só então marcar HL-IMG-001 como `verified`.
+```
+
+### Handoff — instalação v1.16.6 + fix lock vazio (2026-08-19)
+
+```text
+Objetivo da sessão: instalar `1.16.6-1` autorizado pelo usuário e provar a
+  correção da remoção na UI instalada; um terceiro defeito de remoção apareceu
+  na validação e foi corrigido.
+Fase/IDs assumidos: pós-Fase 10 (validação do pacote no host); sem ID novo de
+  requisito (defeito de regressão do HL-IMG-001/remoção).
+Branch e worktree: `main`, worktree principal
+  (`/mnt/sdcard/Projects/PhaseZero`).
+HEAD inicial: `d6b6285`.
+HEAD final: `fe76f0f` (+ commit de docs deste registro).
+Arquivos alterados: `linux/windows-vm/windows-vm.sh`,
+  `tests/test_windows_vm_remove.sh`, `CHANGELOG.md`, este roadmap.
+Commits criados: `fe76f0f` fix(winvm): treat empty provision lock as idle in
+  removal preview; docs do roadmap.
+Testes executados e resultados: teste novo (lock vazio → plan ready) falhou
+  antes do fix e passou depois; `tests/test_windows_vm_remove.sh` ok;
+  `tests/test_provision.sh` 257 PASS/0 FAIL; `tests/linux-windows-vm.sh` ok;
+  `bash -n`; shellcheck com os excludes do CI (0 erros); `git diff --check`.
+CI/PR: push de `fe76f0f` dispara CI de `main`; verificar run verde.
+Estado do host antes/depois: antes `1.16.5-1`, lock vazio pré-existente
+  (truncado em 2026-08-19 05:42 pelas remoções legadas), 2 VMs já removidas
+  com `vmRemovedAt`; depois `1.16.6-1` (rebuild do `fe76f0f` via
+  `build-arch.sh`, fix verificado dentro do artefato antes de instalar),
+  `pz --version` v1.16.6, import da UI instalada ok, prévia de remoção da VM
+  atual `ready:true` com 0 blockers e aviso de VM adotada. `grubenv` mtime
+  `1785849543`, 0 QEMU, VM/disco/OVMF/ISO intactos. Runtime GRUB permanece
+  `OUTDATED`/`stale` — sincronização adiada por decisão anterior.
+Segredos verificados como ausentes: diff revisado; nenhum segredo adicionado;
+  leitura de config excluiu linhas sensíveis.
+Limitações e riscos restantes: pacote instalado é rebuild do `main` pós-tag
+  `v1.16.6` (`d6b6285`+`fe76f0f`), não o asset publicado da release; se a
+  release oficial for reinstalada depois, o fix do lock volta a faltar até uma
+  nova release. Procedência da VM atual segue `adopted-existing` (legítima,
+  gravada antes do fix): remoção liberada com aviso, não silenciosa.
+Bloqueios reais: nenhum. Polkit autorizado nesta sessão.
+Próximo passo exato: confirmar CI verde no push; quando planejar o boot físico,
+  sincronizar o runtime GRUB (`phasezero-admin /usr/lib/phasezero/linux/pz
+  windows-vm boot install`) e validar `runtime-check` `current`.
 ```
 
 ## Definição de concluído
