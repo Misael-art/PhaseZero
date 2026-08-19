@@ -63,14 +63,14 @@ Evidência coletada em diagnóstico read-only do host:
 
 | ID | Requisito | Implementação esperada | Teste comportamental | Prova CI/hardware | Estado |
 |---|---|---|---|---|---|
-| WBR-001 | Encerramento de sessão gracioso | Ao terminar sessão GRUB/launch (fechar janela, logout SDDM, SIGTERM, fim de compositor): QGA `guest-login shutdown` → ACPI `system_powerdown` → espera (≤120 s) → kill apenas como último recurso; reutilizar padrão de `recover.sh::stop_vm`; QEMU GTK com `confirm-quit` para evitar fecho acidental; combo/botão "Desligar Windows" sempre alcançável (controles evdev já previstos) | Suíte com QEMU fake via `PZ_WINDOWS_VM_RUNTIME_LAUNCHER` stub: fecho de janela/sinais produzem sequência QGA→ACPI→kill e registram `clean`/`unclean` | hermética + validação física (1 shutdown real via GRUB) | pending |
-| WBR-002 | Sem relançamento sobre estado sujo | Retry loop da sessão (`windows-vm-session.sh`) não relança automaticamente após término `unclean` ou falha rápida do launcher; em vez disso encerra com motivo e deixa estado acionável | Fixture: launcher falha 2× rápido → sessão NÃO reexecuta; grava `lastSessionUnclean` | hermética | pending |
-| WBR-003 | Reparo leigo de um clique | Status detecta `unclean` persistente (flag de sessão + falha de boot repetida) e a UI oferece card "Windows precisa de reparo — Reparar agora": inicia VM em modo reparo (sem auto-kill, banner "não desligue", timeout ≥15 min), deixa chkdsk/Reparo Automático concluir; sucesso = próximo boot com sessão `clean` | Suíte: modo reparo não mata por timeout curto; sucesso/falha atualizam estado e card some | hermética + 1 ciclo real de reparo no host | pending |
-| WBR-004 | Runtime nunca stale após interação | Hook pós-transação do pacote grava marker de versão; app na bandeja/página Windows mostra "Preparar boot Windows (1 clique)" com fluxo elevado preview-first já existente (`windows.boot.install`); `boot install` copia SEMPRE da fonte do pacote `/usr/lib/phasezero`, nunca de worktree; `configured_repo` de worktree é sobreposto e reportado | Teste: runtime divergente + marker → card aparece; boot install com repo configurado de worktree usa pacote; runtime-check volta `current` | hermética + package-smoke | pending |
-| WBR-005 | Resolução correta em cada tela | Handheld (só eDP): 1280×800@refresh do painel; docked: modo físico do monitor (preferência KWin por EDID hash → EDID nativo → 1080p), Deck pode permanecer primário (`PZ_DISPLAY_PRIMARY_TARGET=internal`); já implementado em `display-session.sh` — requisito é prova e regressão | Fixture `PZ_DISPLAY_SYSFS_ROOT` com EDID/modes falsos: handheld e docked resolvem como especificado; monitor trocado re-resolve | hermética + validação física Deck LCD e monitor 2560×1080 | pending |
-| WBR-006 | Tela cheia, controles e teclado virtual no boot GRUB | Já entregue em main (PR #60: evdev, virtio-multitouch GTK/Gamescope, teclado virtual); requisito é validar no runtime sincronizado (depende de WBR-004) | — | boot físico com evidência (foto/log de sessão com resolução e controles) | pending |
-| WBR-007 | Escalada de recuperação guiada | Após 2 reparos sem sucesso, wizard leigo encadeia: `pz windows-vm recover` (offline QGA) → último recurso guiado WinRE (prompt para `chkdsk C: /f` com instruções passo a passo na UI); nunca automático sem consentimento | Suíte: estado `repairFailed>=2` oferece wizard; recover invocado com argumentos corretos | hermética; físico opcional | pending |
-| WBR-008 | Telemetria de sessão alimenta status | Fim de cada sessão grava registro versionado (`session-state.json`: clean/unclean, duração, motivo, resolução usada); `status --json` e página Windows VM expõem; estado `unclean` sem reparo deixa card visível | Suíte: sessões fake clean/unclean refletem no status e na UI offscreen | hermética | pending |
+| WBR-001 | Encerramento de sessão gracioso | `windows-vm-session.sh`: launcher em background com monitor; fim de sessão (SIGHUP/TERM/INT, `shutdown.requested`) pede QGA `guest-login shutdown` → espera ≤120 s → TERM → 15 s → KILL; GTK com `confirm-quit=on` nos dois perfis (`5238f7d`) | `tests/test_windows_vm_session.sh`: stop-file e SIGTERM produzem sequência graciosa (`graceful:stop-file`, `graceful:signal`); `tests/linux-windows-vm-graphics.sh` cobre `confirm-quit=on` | hermética verde + runner 43/43; shutdown físico via GRUB pendente | in_progress |
+| WBR-002 | Sem relançamento sobre estado sujo | Crash pós-estável recusa relançamento (pré-existente) e agora classifica `launcher-crash` como `graceful:false`; give-up registra `start-failure` sem tocar o convidado; `fallback_desktop` ganha kill-switch de teste | Suíte de sessão: crash ≥stable → rc propagado + `graceful:false`; start-failure limitado termina em give-up | hermética verde; CI `windows-vm-shell-test` agora roda a suíte (`c73f211`) | in_progress |
+| WBR-003 | Reparo leigo de um clique | `status --json` emite finding `guest-unclean-shutdown` (warning) com orientação; página Windows VM mostra card "Windows foi desligado de forma inesperada. Inicie e deixe o reparo automático concluir" e mantém Iniciar habilitado; hint info para saída não verificada | `tests/test_windows_vm_ui.py`: pending-sync + unclean acionam botão/mensagem e estado limpo os oculta | pytest 575 + 9; ciclo real de reparo no host pendente | in_progress |
+| WBR-004 | Runtime nunca stale após interação | Hook pós-transação grava `/var/lib/phasezero/windows-vm-runtime-sync.pending` (legível sem privilégio); `status --json` expõe `boot.bootRuntimePendingSync`; `boot install` consome o marker e grava `provenance.json` (fonte/versão/data) | `tests/test_boot_runtime_notice.sh`: stale→aviso+marker, current/ausente→silêncio, nunca falha transação; `linux-windows-vm.sh` asserts pendingSync true/false | hermética verde + E2E real no host: reinstalação 14:08 criou o marker e `status` instalado devolveu `pending:true` | in_progress |
+| WBR-005 | Resolução correta em cada tela | Já implementado em `display-session.sh` (handheld 1280×800; docked usa modo do monitor por EDID hash do KWin, fallback 1080p; Deck primário opcional) — requisito é prova e regressão | Fixture `PZ_DISPLAY_SYSFS_ROOT` existente; falta caso dedicado de troca de monitor | validação física Deck LCD + monitor pendente | pending |
+| WBR-006 | Tela cheia, controles e teclado virtual no boot GRUB | Entregue no main (PR #60); valida somente com runtime sincronizado (depende de WBR-004 física) | — | boot físico com evidência pendente | pending |
+| WBR-007 | Escalada de recuperação guiada | Após 2 reparos sem sucesso, wizard encadeia `pz windows-vm recover` → WinRE guiado | Estado `repairFailed>=2` ainda não existe | hermética; físico opcional | pending |
+| WBR-008 | Telemetria de sessão alimenta status | `session-state.json` versionado (graceful, reason, duração, display) gravado em todo fim de launch; `status --json` expõe `session` + findings por severidade | Suíte de sessão cobre os cinco motivos e o schema; status real no host devolve o bloco | hermética verde + host | in_progress |
 
 Adicionar IDs, nunca reutilizar. Estados: `pending`, `in_progress`, `verified`,
 `deferred`.
@@ -124,12 +124,64 @@ Adicionar IDs, nunca reutilizar. Estados: `pending`, `in_progress`, `verified`,
 | Incidente originador | diagnosticado; sem mutação; correções ainda não aplicadas | diagnóstico read-only 2026-08-19 | 2026-08-19 |
 | Runtime GRUB do host | `stale` (2026-07-25, worktree `pz-winvm-display`); sincronização pendente de autorização | `pz windows-vm boot runtime-check --json` | 2026-08-19 |
 | VM atual | NTFS sujo; Reparo Automático não concluiu; disco estruturalmente são | `qemu-img check`, `ntfsinfo`, boot sector | 2026-08-19 |
+| Implementação Fases 1–3 | WBR-001..004/008 implementados com testes herméticos (`da373f8`, `5238f7d`, `8a92aab`, `c73f211`, `095d674`); runner 43/43; pytest 575+9; ShellCheck paridade CI | `bash tests/runner.sh`, `pytest tests/` | 2026-08-19 |
+| Pacote host | `1.16.6-1` reinstalado às 14:08 do HEAD `095d674`; hook criou `/var/lib/phasezero/windows-vm-runtime-sync.pending`; `status` instalado devolve `pending:true`, `stale:true` e bloco `session` | `pacman -Q`, `cat` marker, `pz windows-vm status --json` | 2026-08-19 |
+| CI | runs `32279172680`/`32279456440` (ci) em andamento no push; gitleaks verde; confirmar verde antes de marcar `verified` | `gh run list` | 2026-08-19 |
 
 ## Ledger de execução
 
 | Data | Agente | Branch/worktree | Fase | Commits | Gates | Resultado |
 |---|---|---|---|---|---|---|
 | 2026-08-19 | ZCode | `main` (diagnóstico) | — | `1ccaf61` (docs anteriores) | diagnóstico read-only | Incidente documentado; roadmap criado |
+| 2026-08-19 | ZCode | `main` (worktree principal) | Fases 1–3 + testes CI | `da373f8` (sessão graciosa + estado), `5238f7d` (confirm-quit), `8a92aab` (marker/provenance/cards UI), `c73f211` (suítes no CI), `095d674` (AGENTS.md LF) | runner 43/43 (inclui suítes novas de sessão/notice/remoção); pytest 575+9; `linux-windows-vm.sh` verde; ShellCheck com excludes do CI; `git diff --check`; gitleaks verde | WBR-001..004 e 008 em `in_progress` (falta física). Acidente de sessão durante o desenvolvimento: `fallback_desktop` sob teste dentro do desktop logado aninhou um Plasma e derrubou a sessão KDE; corrigido com kill-switch de teste e análise de parentagem antes de matar processos. Pacote reinstalado 14:08; marker pending criado E2E. **Próximo**: CI verde; boot install autorizado (consome marker, grava provenance); boot físico p/ WBR-005/006; ciclo real de reparo p/ WBR-003 |
+
+### Handoff — Fases 1–3 (2026-08-19)
+
+```text
+Objetivo da sessão: implementar a robustez de boot direto planejada
+  (WBR-001..004, 008) após o incidente de NTFS suja/Reparo Automático.
+Fase/IDs assumidos: Fases 1–3; WBR-001/002/003/004/008.
+Branch e worktree: `main`, worktree principal.
+HEAD inicial: `d54d9fc`.
+HEAD final: `095d674` (+ docs deste registro).
+Arquivos alterados: `linux/windows-vm/windows-vm-session.sh`,
+  `linux/windows-vm/windows-vm.sh`, `linux/windows-vm/boot-runtime-notice.sh`,
+  `linux/ui_native/pages/windows_vm.py`, `tests/test_windows_vm_session.sh`
+  (novo), `tests/test_boot_runtime_notice.sh` (novo),
+  `tests/test_windows_vm_remove.sh`, `tests/test_windows_vm_ui.py`,
+  `tests/linux-windows-vm.sh`, `tests/linux-windows-vm-graphics.sh`,
+  `tests/runner.sh`, `.github/workflows/ci.yml`, `CHANGELOG.md`, `AGENTS.md`
+  (normalizado LF), este roadmap.
+Commits criados: `da373f8`, `5238f7d`, `8a92aab`, `c73f211`, `095d674`,
+  docs do roadmap.
+Testes executados e resultados: runner 43/43 (suítes novas de sessão,
+  notice e remoção incluídas); pytest 575 + 9 subtests; suítes individuais
+  re-executadas após cada commit; `bash -n`; ShellCheck com os excludes do
+  CI; `git diff --check`.
+CI/PR: pushes `c73f211` e `095d674`; gitleaks verde; jobs `ci` em andamento
+  (runs `32279172680`, `32279456440`) — confirmar verde antes de `verified`.
+Estado do host antes/depois: pacote `1.16.6-1` reinstalado às 14:08 do
+  HEAD `095d674` via `phasezero-admin pacman -U`; hook criou o marker
+  pending; `status` instalado devolve `pending:true`/`stale:true`/bloco
+  `session`; runtime GRUB segue de 2026-07-25 (boot install pendente de
+  autorização); VM/disco/GRUB não mutados nesta sessão.
+Segredos verificados como ausentes: diffs revisados; gitleaks verde.
+Limitações e riscos restantes: (1) shutdown gracioso e reparo dependem de
+  QGA ativo no convidado — sem agente, escala para TERM após 120 s e marca
+  unclean; (2) saída rc=0 sem pedido continua indistinguível entre
+  desligamento pelo menu Iniciar e fechamento confirmado — tratada como
+  dica, não como dano; (3) validação física (WBR-005/006, ciclo de reparo
+  real, shutdown via GRUB) pendente; (4) durante o desenvolvimento, um
+  teste rodando a sessão real dentro do desktop logado derrubou a sessão
+  KDE do usuário via `fallback_desktop` — kill-switch adicionado e
+  guardado por revisão de parentagem antes de qualquer kill.
+Bloqueios reais: nenhum técnico; boot install aguarda autorização.
+Próximo passo exato: confirmar CI verde; com autorização, `phasezero-admin
+  /usr/lib/phasezero/linux/pz windows-vm boot install` (consome o marker,
+  grava provenance, sincroniza runtime 1.16.6); bootar VM pela UI, deixar
+  o Reparo Automático concluir (WBR-003 física) e registrar
+  `session-state.json` real; boot físico GRUB para WBR-005/006.
+```
 
 ## Definição de concluído
 
