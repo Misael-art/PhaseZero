@@ -73,6 +73,20 @@ As versões seguem a data de build em `version.json`.
 - Smoke `pz ai routing` em `tests/linux-ai.sh` (degrada sem 9Router).
 
 ### Corrigido
+- Descartar uma instalação interrompida antes de qualquer disco existir
+  (checkpoints `validate`/`assets`) deixa de reportar
+  `staging removal failed; preserved:` com caminho vazio. A operação nunca
+  registrou diretório de staging, então não há nada a preservar e o descarte é
+  concluído. O player ficava preso em "Descarte falhou" e impedia iniciar uma
+  nova instalação.
+- Remover a VM configurada deixa de ser impossível para toda VM criada pelo
+  PhaseZero. `provision finalize` adota o próprio disco que acabou de construir,
+  o que marcava a VM como `adopted-existing` e caía no bloqueio "somente VMs
+  criadas pelo PhaseZero podem ser removidas aqui". `adopt` passa a registrar a
+  procedência (`--source provisioned|adopted-existing`) e `remove` decide pela
+  localização: discos dentro de `~/VirtualMachines/PhaseZero*` são removíveis,
+  com aviso explícito quando a VM foi adotada em vez de criada. Procedência
+  desconhecida vira bloqueio.
 - Remover uma imagem do Windows não é mais confundido com apagar a VM criada.
   Remoção legada valida o identificador, recusa VM em execução, revalida o alvo
   sob trava compartilhada com a finalização e libera o índice somente após

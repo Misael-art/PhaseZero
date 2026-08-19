@@ -256,6 +256,28 @@ assert_eq "cancel --json removalSucceeded false" "false" "$(echo "$CANCEL_EVIL_J
 assert_eq "cancel --json preservedPath set" "$CANCEL_EVIL_T/external-staging" "$(echo "$CANCEL_EVIL_JSON" | jq -r '.preservedPath' 2>/dev/null || echo "")"
 rm -rf "$CANCEL_EVIL_T"
 
+echo ""
+echo "=== provision: discard succeeds when nothing was ever staged ==="
+# An operation that stopped at the validate checkpoint never created a staging
+# directory, so there is no vm_dir record. Discarding it used to report
+# "staging removal failed; preserved: " with an empty path, which left the
+# player stuck in FAILED and blocked starting a new installation.
+CANCEL_NOSTAGE_T="$(mktemp -d)"
+mkdir -p "$CANCEL_NOSTAGE_T/phasezero/operations/cancel-nostage"
+echo '{"id":"cancel-nostage","state":"cancelled","checkpoint":"validate","progress":0}' \
+    > "$CANCEL_NOSTAGE_T/phasezero/operations/cancel-nostage/operation.json"
+set +e
+CANCEL_NOSTAGE_JSON=$(XDG_STATE_HOME="$CANCEL_NOSTAGE_T" bash "$PROVISION_SCRIPT" \
+    cancel --operation-id cancel-nostage --remove-staging --json 2>/dev/null)
+CANCEL_NOSTAGE_RC=$?
+set -e
+assert_eq "cancel without staging rc 0" "0" "$CANCEL_NOSTAGE_RC"
+assert_eq "cancel without staging success" "true" "$(echo "$CANCEL_NOSTAGE_JSON" | jq -r '.success' 2>/dev/null || echo "")"
+assert_eq "cancel without staging removalSucceeded" "true" "$(echo "$CANCEL_NOSTAGE_JSON" | jq -r '.removalSucceeded' 2>/dev/null || echo "")"
+assert_eq "cancel without staging no error" "" "$(echo "$CANCEL_NOSTAGE_JSON" | jq -r '.error' 2>/dev/null || echo "")"
+assert_eq "cancel without staging no preserved path" "" "$(echo "$CANCEL_NOSTAGE_JSON" | jq -r '.preservedPath' 2>/dev/null || echo "")"
+rm -rf "$CANCEL_NOSTAGE_T"
+
 # shellcheck source=linux/windows-vm/provision.sh
 source "$PROVISION_SCRIPT" 2>/dev/null || true
 

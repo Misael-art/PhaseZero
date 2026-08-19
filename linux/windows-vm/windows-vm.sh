@@ -99,6 +99,10 @@ OVMF_CODE=""
 GRAPHICS_EXPERIMENTAL=0
 EXPLICIT_GRAPHICS=0
 REMOVE_CONFIRMED=0
+# Provenance recorded by `adopt`. "provisioned" marks a disk PhaseZero itself
+# built through `provision finalize`; the default marks a disk that already
+# existed on the host. `remove` reads it back to decide how loudly to warn.
+ADOPT_SOURCE="adopted-existing"
 
 usage() {
     cat <<EOF
@@ -107,7 +111,7 @@ PhaseZero Windows VM - QEMU/KVM Windows automation
 Usage:
   pz windows-vm status
   pz windows-vm discover [--json]
-  pz windows-vm adopt [--disk PATH]
+  pz windows-vm adopt [--disk PATH] [--source provisioned|adopted-existing]
   pz windows-vm plan --iso <windows.iso> [--json]
   pz windows-vm install --iso <windows.iso> [--disk-size 256G] [--ram 8192|8G] [--cpus N] [--dry-run]
   pz windows-vm remove [--dry-run] --yes [--json]
@@ -199,6 +203,8 @@ parse_options() {
             --with-boot) WITH_BOOT=1; shift ;;
             --json) JSON_OUT=1; shift ;;
             --dry-run|-n) DRY_RUN=1; shift ;;
+            --source) ADOPT_SOURCE="${2:-}"; shift 2 ;;
+            --source=*) ADOPT_SOURCE="${1#*=}"; shift ;;
             --yes) REMOVE_CONFIRMED=1; shift ;;
             --rescue) PZ_WINDOWS_VM_RESCUE=1; shift ;;
             --no-rescue) PZ_WINDOWS_VM_RESCUE=0; shift ;;
@@ -2680,7 +2686,10 @@ cmd_adopt() {
     SHARE_ROOT="$VM_DIR/shares"
     TPM_DIR="$VM_DIR/tpm"
     SMB_HOST="10.0.2.2"
-    DISK_SOURCE="adopted-existing"
+    case "$ADOPT_SOURCE" in
+        provisioned|adopted-existing) DISK_SOURCE="$ADOPT_SOURCE" ;;
+        *) pz_error "unknown adopt source: $ADOPT_SOURCE (provisioned|adopted-existing)"; return 1 ;;
+    esac
     ensure_vm_storage
     write_config
     install_user_files
@@ -2690,14 +2699,25 @@ cmd_adopt() {
 cmd_remove() {
     parse_options "$@"
     effective_config
-    local -a blockers=()
+    local -a blockers=() warnings=()
     local vm_real disk_real domain_state="" provision_blocker="" blockers_json='[]'
+    local warnings_json='[]' adopted=false
     vm_real="$(realpath -m -- "$VM_DIR" 2>/dev/null || printf '%s' "$VM_DIR")"
     disk_real="$(realpath -m -- "$DISK_PATH" 2>/dev/null || printf '%s' "$DISK_PATH")"
 
+    # Ownership is decided by location, not by the provenance label: the disk
+    # must sit inside ~/VirtualMachines/PhaseZero* (checked below). Disks that
+    # PhaseZero adopted rather than built are still removable from there —
+    # refusing them left every provisioned VM unremovable, since `provision
+    # finalize` adopts its own output — but they are flagged so the caller can
+    # warn before trashing an installation PhaseZero did not create.
     case "$DISK_SOURCE" in
-        new|managed|config) ;;
-        *) blockers+=("somente VMs criadas pelo PhaseZero podem ser removidas aqui") ;;
+        new|managed|config|provisioned) ;;
+        adopted-existing|discovered-installed|explicit)
+            adopted=true
+            warnings+=("esta VM foi adotada, não criada pelo PhaseZero; confirme antes de removê-la")
+            ;;
+        *) blockers+=("origem do disco desconhecida: $DISK_SOURCE") ;;
     esac
     [ -d "$vm_real" ] || blockers+=("diretório gerenciado da VM não foi encontrado")
     [ "$vm_real" != "/" ] && [ "$vm_real" != "$HOME" ] || blockers+=("diretório da VM inseguro")
@@ -2718,6 +2738,9 @@ cmd_remove() {
     if [ "${#blockers[@]}" -gt 0 ]; then
         blockers_json="$(printf '%s\n' "${blockers[@]}" | jq -R . | jq -s .)"
     fi
+    if [ "${#warnings[@]}" -gt 0 ]; then
+        warnings_json="$(printf '%s\n' "${warnings[@]}" | jq -R . | jq -s .)"
+    fi
 
     if [ "$JSON_OUT" = "1" ] && { [ "$DRY_RUN" = 1 ] || [ "$REMOVE_CONFIRMED" != 1 ] || [ "${#blockers[@]}" -gt 0 ]; }; then
         jq -n \
@@ -2727,10 +2750,13 @@ cmd_remove() {
             --arg config "$CONFIG_FILE" \
             --arg domain "$LIBVIRT_DOMAIN" \
             --argjson blockers "$blockers_json" \
+            --argjson warnings "$warnings_json" \
+            --argjson adopted "$adopted" \
             --argjson confirmed "$([ "$REMOVE_CONFIRMED" = 1 ] && echo true || echo false)" \
-            '{schemaVersion:1, operation:"windows-vm-remove", vm:{dir:$vmDir,disk:$disk,diskSource:$source,libvirtDomain:$domain}, config:$config, blockers:$blockers, ready:($blockers|length == 0), confirmed:$confirmed, recovery:"A VM será movida para a lixeira; restaure-a e use Adotar disco para recuperar.", nextAction:"Remova o boot direto Windows separadamente, se ele estiver instalado."}'
+            '{schemaVersion:1, operation:"windows-vm-remove", vm:{dir:$vmDir,disk:$disk,diskSource:$source,adopted:$adopted,libvirtDomain:$domain}, config:$config, blockers:$blockers, warnings:$warnings, ready:($blockers|length == 0), confirmed:$confirmed, recovery:"A VM será movida para a lixeira; restaure-a e use Adotar disco para recuperar.", nextAction:"Remova o boot direto Windows separadamente, se ele estiver instalado."}'
     elif [ "$JSON_OUT" != "1" ]; then
         printf 'VM: %s\nDisco: %s\n' "$vm_real" "$disk_real"
+        [ "${#warnings[@]}" -eq 0 ] || printf 'Avisos:\n%s\n' "$(printf -- '- %s\n' "${warnings[@]}")"
         [ "${#blockers[@]}" -eq 0 ] && echo "Pronta para mover à lixeira." || printf 'Bloqueios:\n%s\n' "$(printf -- '- %s\n' "${blockers[@]}")"
     fi
     [ "${#blockers[@]}" -eq 0 ] || return 1

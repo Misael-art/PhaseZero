@@ -91,12 +91,30 @@ jq -e '.success == true' <<< "$result" >/dev/null
 
 mkdir -p "$VM_DIR"
 touch "$DISK"
+# A disk PhaseZero built itself is labelled "provisioned" by `provision
+# finalize`, and removes without any adoption warning.
+write_config provisioned
+provisioned_plan="$("$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json)"
+jq -e '.ready == true and .vm.adopted == false and (.warnings | length == 0)' \
+    <<< "$provisioned_plan" >/dev/null
+
+# An adopted disk inside the managed directory stays removable — refusing it
+# left the user with no way to delete the VM at all — but the plan has to flag
+# the adoption so the caller can warn first.
 write_config adopted-existing
+adopted_plan="$("$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json)"
+jq -e '.ready == true and .vm.adopted == true and
+    any(.warnings[]; contains("adotada"))' <<< "$adopted_plan" >/dev/null
+[ -d "$VM_DIR" ]
+
+# An unrecognised provenance is a corrupt config, not a removal target.
+write_config bogus-source
 if "$REPO_ROOT"/linux/pz windows-vm remove --dry-run --json >/dev/null 2>&1; then
-    echo "remove adopted VM unexpectedly planned as safe" >&2
+    echo "remove accepted an unknown disk source" >&2
     exit 1
 fi
 [ -d "$VM_DIR" ]
+write_config new
 
 # Completed provisioning VMs are separate managed instances. Inventory must
 # expose their real allocated size and removal must target one operation id,

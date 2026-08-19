@@ -2417,8 +2417,14 @@ provision_cancel() {
         elif [ "$staging_valid" = "1" ]; then
             # Nothing left to remove (already gone or never created).
             removal_succeeded=1
+        elif [ -z "$raw_vm_dir" ]; then
+            # The operation never recorded a staging directory: it stopped at
+            # an early checkpoint (validate/assets), before any disk existed.
+            # There is nothing on disk to preserve, so the discard is complete
+            # instead of reporting a removal failure with an empty path.
+            removal_succeeded=1
         else
-            pz_error "staging validation failed; preserving ${raw_vm_dir:-unknown}"
+            pz_error "staging validation failed; preserving $raw_vm_dir"
             preserved_path="$raw_vm_dir"
         fi
     else
@@ -2797,7 +2803,10 @@ provision_finalize() {
     local graphics ovmf_code net_model="virtio-net-pci"
     graphics="$(jq -r '.graphics // "compat"' "$op_dir/plan.json")"
     ovmf_code="$(provision_ovmf_code)"
-    if ! bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" adopt --disk "$target_disk" --graphics "$graphics" --net-model "$net_model" --ovmf-code "$ovmf_code"; then
+    # --source provisioned: this disk was built by PhaseZero, not found on the
+    # host. `windows-vm remove` uses that distinction to decide whether the VM
+    # is PhaseZero's to delete without extra warnings.
+    if ! bash "$PZ_ROOT/linux/windows-vm/windows-vm.sh" adopt --disk "$target_disk" --graphics "$graphics" --net-model "$net_model" --ovmf-code "$ovmf_code" --source provisioned; then
         pz_error "disk created but PhaseZero adoption failed: $target_disk"
         return 1
     fi
