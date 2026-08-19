@@ -40,6 +40,10 @@ Conflict rules:
   `docs/roadmaps/homelab-v1.15.1-remediation.md` before any Homelab, server,
   AI-appliance, release, or host-package work. Treat its anti-pollution rules,
   phase gates, evidence matrix, and handoff format as mandatory.
+- WinVM boot resilience v1: read
+  `docs/roadmaps/winvm-boot-resilience-v1.md` before any Windows VM, direct
+  boot, GRUB, boot-runtime, VM session, or Windows VM UI work. Treat its
+  requirements matrix, phase gates, and evidence rules as mandatory.
 
 <!-- BEGIN PONYTAIL ARCHITECTURE -->
 Ponytail architecture runtime.
