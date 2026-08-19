@@ -28,6 +28,16 @@ command -v jq >/dev/null 2>&1 || exit 0
 state="$(bash "$VM_SH" boot runtime-check --json 2>/dev/null | jq -r '.bootRuntimeState // "unknown"' 2>/dev/null)"
 [ "$state" = "stale" ] || exit 0
 
+# Leave a marker the app can read without privileges: status --json surfaces
+# bootRuntimePendingSync so the UI offers the one-click resync even when the
+# user missed this stderr notice. `boot install` removes the marker on
+# success. Best effort only — never fails the transaction.
+PENDING_FILE="${PZ_BOOT_RUNTIME_PENDING:-/var/lib/phasezero/windows-vm-runtime-sync.pending}"
+if install -d "$(dirname "$PENDING_FILE")" 2>/dev/null; then
+    printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$state" \
+        > "$PENDING_FILE" 2>/dev/null || true
+fi
+
 # $PZ_LIB, not a hardcoded path: rpm installs under %{_libdir}, which is
 # /usr/lib64 on 64-bit Fedora and friends.
 cat >&2 <<EOF

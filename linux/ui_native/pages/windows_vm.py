@@ -368,11 +368,20 @@ class WindowsVmPage(BasePage):
         self.power_button.style().unpolish(self.power_button)
         self.power_button.style().polish(self.power_button)
         self.power_button.setEnabled(running or (configured and disk_ready))
+        boot_block = parsed.get("boot") or {}
         boot_stale = any(
             isinstance(item, dict) and item.get("id") == "boot-runtime-stale" for item in findings
-        ) or bool((parsed.get("boot") or {}).get("bootRuntimeStale"))
+        ) or bool(boot_block.get("bootRuntimeStale")) or bool(boot_block.get("bootRuntimePendingSync"))
+        guest_unclean = any(
+            isinstance(item, dict) and item.get("id") == "guest-unclean-shutdown" for item in findings
+        )
         if not disk_ready:
             self.maintenance_health.setText("Ação necessária: conclua a instalação antes de iniciar a VM.")
+        elif guest_unclean:
+            self.maintenance_health.setText(
+                "Windows foi desligado de forma inesperada. Inicie e deixe o reparo automático "
+                "concluir — pode levar alguns minutos."
+            )
         elif boot_stale:
             self.maintenance_health.setText("Atenção: boot direto desatualizado; a inicialização normal continua disponível.")
         else:

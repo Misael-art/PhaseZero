@@ -168,6 +168,41 @@ def test_windows_vm_blocks_blank_disk_and_surfaces_stale_boot(ws_page):
     assert not page.repair_boot_button.isHidden()
 
 
+def test_windows_vm_pending_sync_and_unclean_shutdown_drive_repair_cards(ws_page):
+    page, _actions = ws_page
+    page._on_status_ready("windows.status", "", {
+        "status": "warning",
+        "health": {
+            "readyToLaunch": True,
+            "findings": [
+                {"id": "guest-unclean-shutdown"},
+            ],
+        },
+        "config": {"installed": True},
+        "vm": {"diskExists": True, "installedLike": True},
+        "libvirt": {"state": "missing"},
+        "host": {"qemu": "/usr/bin/qemu"},
+        "access": {},
+        "boot": {"bootRuntimeStale": False, "bootRuntimePendingSync": True},
+    })
+    assert page.power_button.isEnabled()
+    assert "forma inesperada" in page.maintenance_health.text()
+    assert not page.repair_boot_button.isHidden()
+
+    page._on_status_ready("windows.status", "", {
+        "status": "ok",
+        "health": {"readyToLaunch": True, "findings": []},
+        "config": {"installed": True},
+        "vm": {"diskExists": True, "installedLike": True},
+        "libvirt": {"state": "missing"},
+        "host": {"qemu": "/usr/bin/qemu"},
+        "access": {},
+        "boot": {"bootRuntimeStale": False, "bootRuntimePendingSync": False},
+    })
+    assert page.repair_boot_button.isHidden()
+    assert "inesperada" not in page.maintenance_health.text()
+
+
 def test_windows_status_has_budget_for_aggregate_host_probes():
     assert StatusLoader.timeout_ms("windows.status") == 45_000
     assert StatusLoader.timeout_ms("steamdeck.status") == 15_000

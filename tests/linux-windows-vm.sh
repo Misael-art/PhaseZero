@@ -963,6 +963,11 @@ grep -q 'session.log' "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
     (.health.bootDirectReady | type == "boolean") and
     (.health.findings | type == "array")
 ' >/dev/null
+touch "$TMP_ROOT/pending-sync"
+PZ_BOOT_RUNTIME_PENDING="$TMP_ROOT/pending-sync" "$REPO_ROOT/linux/pz" windows-vm status \
+    | jq -e '.boot.bootRuntimePendingSync == true' >/dev/null
+PZ_BOOT_RUNTIME_PENDING="$TMP_ROOT/absent-sync" "$REPO_ROOT/linux/pz" windows-vm status \
+    | jq -e '.boot.bootRuntimePendingSync == false' >/dev/null
 "$REPO_ROOT/linux/pz" install windows-vm-linux --dry-run >/dev/null
 
 echo "=== Guest bundle generation ==="

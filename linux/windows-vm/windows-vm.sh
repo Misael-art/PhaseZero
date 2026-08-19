@@ -42,6 +42,10 @@ BOOT_HELPER_TARGET="/usr/local/lib/phasezero/windows-vm-boot-prepare"
 SESSION_TARGET="/usr/local/lib/phasezero/windows-vm-session"
 DISPLAY_SESSION_TARGET="/usr/local/lib/phasezero/display-session"
 RUNTIME_ROOT="/usr/local/lib/phasezero/windows-vm-runtime"
+# Written by the package post-transaction hook when an upgrade leaves the
+# installed runtime behind; cleared by `boot install` and read by status so
+# the UI can offer the one-click resync even before runtime-check runs.
+BOOT_RUNTIME_PENDING_FILE="${PZ_BOOT_RUNTIME_PENDING:-/var/lib/phasezero/windows-vm-runtime-sync.pending}"
 RUNTIME_LAUNCHER="$RUNTIME_ROOT/linux/windows-vm/windows-vm.sh"
 RUNTIME_GRAPHICS="$RUNTIME_ROOT/linux/windows-vm/graphics.sh"
 RUNTIME_COMMON="$RUNTIME_ROOT/linux/lib/common.sh"
@@ -2521,6 +2525,8 @@ status_json() {
     elif [ "$session_reason" = "guest-exit-unverified" ]; then
         session_hint=true
     fi
+    local boot_pending=false
+    [ -e "$BOOT_RUNTIME_PENDING_FILE" ] && boot_pending=true
     jq -n \
         --arg configFile "$CONFIG_FILE" \
         --arg configInstalled "$config" \
@@ -2578,6 +2584,7 @@ status_json() {
         --arg lastSessionEndedAt "$session_ended_at" \
         --argjson sessionUnclean "$session_unclean" \
         --argjson sessionEndHint "$session_hint" \
+        --argjson bootRuntimePendingSync "$boot_pending" \
         --arg hostLoginPolicy "$(root_env_value PZ_WINDOWS_VM_REQUIRE_LOGIN)" \
         --arg guestLoginPolicy "$GUEST_LOGIN_POLICY" \
         --arg bootConfiguredRepo "$(root_env_value PZ_WINDOWS_VM_REPO)" \
@@ -2647,6 +2654,7 @@ status_json() {
                    artifactsCurrent:(if $bootArtifactsCurrent == "unknown" then null else ($bootArtifactsCurrent == "yes") end),
                    artifactsVerification:$artifactsVerification,
                    bootRuntimeState:$bootRuntimeState, bootRuntimeStale:$bootRuntimeStale,
+                   bootRuntimePendingSync:$bootRuntimePendingSync,
                    hostLoginPolicy:(if $hostLoginPolicy == "1" then "password" else "auto" end),
                    guestLoginPolicy:$guestLoginPolicy, guestLoginVerified:false,
                    configuredRepo: $bootConfiguredRepo, configuredUser: $bootConfiguredUser, grubCfgEntry: $grubEntry, currentBootWindowsVm: ($currentMarker == "yes")}
@@ -3230,6 +3238,21 @@ install_boot() {
     install -m 0755 "$SESSION_SOURCE" "$SESSION_TARGET"
     install -m 0644 "$DISPLAY_SESSION_SOURCE" "$DISPLAY_SESSION_TARGET"
     install_runtime_tree
+    # A successful install resolves the pending-sync marker the package hook
+    # may have left and records where this runtime came from, so a stale
+    # worktree-sourced runtime can never hide as "current" without a trace.
+    rm -f -- "$BOOT_RUNTIME_PENDING_FILE" 2>/dev/null || true
+    if command -v jq >/dev/null 2>&1; then
+        local provenance_version="unknown"
+        [ -r "$PZ_ROOT/../version.json" ] && \
+            provenance_version="$(jq -r '.version // "unknown"' "$PZ_ROOT/../version.json" 2>/dev/null || echo unknown)"
+        jq -n \
+            --arg source "$PZ_ROOT" \
+            --arg version "$provenance_version" \
+            --arg installedAt "$(date -Iseconds)" \
+            '{schemaVersion:1, source:$source, version:$version, installedAt:$installedAt}' \
+            > "$RUNTIME_ROOT/provenance.json" 2>/dev/null || true
+    fi
     root_env_content > "$ROOT_ENV_FILE"
     chmod 0644 "$ROOT_ENV_FILE"
     session_desktop_content > "$WAYLAND_SESSION_FILE"

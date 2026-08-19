@@ -30,6 +30,13 @@ As versões seguem a data de build em `version.json`.
 ## [Não lançado]
 
 ### Adicionado
+- Atualização do pacote com boot direto instalado deixa um marcador
+  legível sem privilégios (`windows-vm-runtime-sync.pending`): o
+  `status --json` expõe `boot.bootRuntimePendingSync` e a página Windows VM
+  aciona o botão "reparar boot" também por ele, mesmo se o aviso do terminal
+  passar despercebido. `boot install` consome o marcador e grava
+  `provenance.json` (fonte, versão, data) no runtime instalado, impedindo que
+  um runtime vindo de worktree se disfarce de atual sem rastro.
 - Inventário de VMs concluídas criadas pelo provisionador, com espaço real por
   operação e remoção explícita por instalação. A interface separa a VM atual
   das instalações legadas e oferece lixeira recuperável ou liberação imediata.
