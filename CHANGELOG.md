@@ -86,6 +86,9 @@ As versões seguem a data de build em `version.json`.
 - `fallback_desktop` ganha kill-switch `PZ_WINDOWS_VM_SESSION_DESKTOP_FALLBACK=0`
   para suítes de contrato rodarem dentro de uma sessão logada sem risco de
   subir um desktop aninhado.
+- A janela do QEMU passa a pedir confirmação antes de fechar
+  (`confirm-quit=on` nos perfis GTK): fechar sem querer com o Windows ligado
+  derrubava o convidado na hora e sujava o disco.
 - Descartar uma instalação interrompida antes de qualquer disco existir
   (checkpoints `validate`/`assets`) deixa de reportar
   `staging removal failed; preserved:` com caminho vazio. A operação nunca

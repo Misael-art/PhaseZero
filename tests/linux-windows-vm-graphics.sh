@@ -328,7 +328,7 @@ compat_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --
 grep -Fq -- '-qmp unix:' <<<"$compat_launch"
 grep -q 'qemu-system-x86_64' <<< "$compat_launch"
 grep -Eq -- '-device virtio-vga( |$)' <<< "$compat_launch"
-grep -Fq 'gtk\,show-cursor=on' <<< "$compat_launch"
+grep -Fq 'gtk\,show-cursor=on\,zoom-to-fit=on\,confirm-quit=on' <<< "$compat_launch"
 assert_grep_absent "compat launch contains virtio-vga-gl" 'virtio-vga-gl' <<< "$compat_launch"
 assert_grep_absent "compat launch contains gl=on" 'gl=on' <<< "$compat_launch"
 default_launch="$("$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu)"
@@ -339,7 +339,7 @@ gl_launch="$(
         "$REPO_ROOT/linux/pz" windows-vm launch --dry-run --raw-qemu --graphics virtio-gl --experimental 2>/dev/null
 )"
 grep -Fq 'virtio-vga-gl\,xres=2560\,yres=1080' <<< "$gl_launch"
-grep -Fq 'gtk\,gl=on\,show-cursor=on\,zoom-to-fit=on' <<< "$gl_launch"
+grep -Fq 'gtk\,gl=on\,show-cursor=on\,zoom-to-fit=on\,confirm-quit=on' <<< "$gl_launch"
 grep -Fq -- '-device qemu-xhci' <<< "$gl_launch"
 grep -Fq -- '-device usb-kbd' <<< "$gl_launch"
 grep -Fq -- '-device usb-tablet' <<< "$gl_launch"

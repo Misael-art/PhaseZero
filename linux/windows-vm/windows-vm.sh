@@ -1970,10 +1970,10 @@ build_qemu_args() {
     if [ "$DISPLAY_MODE" = "none" ]; then
         QEMU_ARGS+=("-display" "none")
     elif [ "$GRAPHICS_PROFILE" = "virtio-gl" ]; then
-        QEMU_ARGS+=("-display" "gtk,gl=on,show-cursor=on,zoom-to-fit=on")
+        QEMU_ARGS+=("-display" "gtk,gl=on,show-cursor=on,zoom-to-fit=on,confirm-quit=on")
         [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
     else
-        QEMU_ARGS+=("-display" "gtk,show-cursor=on,zoom-to-fit=on")
+        QEMU_ARGS+=("-display" "gtk,show-cursor=on,zoom-to-fit=on,confirm-quit=on")
         [ "$FULLSCREEN" = "1" ] && QEMU_ARGS+=("-full-screen")
     fi
     add_pci_devices
