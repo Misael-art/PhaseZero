@@ -601,6 +601,7 @@ PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_SESSION_GRAPHICS_PROBE=0 \
 PZ_WINDOWS_VM_RESCUE=0 \
 PZ_WINDOWS_VM_SESSION_MAX_RETRIES=999 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
@@ -628,6 +629,7 @@ PATH="$session_bin:/usr/bin:/bin" \
 PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-normal.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$normal_runtime" \
+PZ_WINDOWS_VM_SESSION_GRAPHICS_PROBE=0 \
 PZ_WINDOWS_VM_RESCUE=0 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$normal_args" \
     "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
@@ -642,6 +644,7 @@ PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-dispatcher.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$TMP_ROOT/missing-runtime" \
 PZ_WINDOWS_VM_REPO_FALLBACK="$fake_repo" \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_SESSION_GRAPHICS_PROBE=0 \
 PZ_WINDOWS_VM_RESCUE=0 \
 PZ_WINDOWS_VM_SESSION_MAX_RETRIES=999 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$dispatcher_args_file" \
@@ -659,6 +662,7 @@ PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-fallback.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_DESKTOP_FALLBACK=1 \
+PZ_WINDOWS_VM_SESSION_GRAPHICS_PROBE=0 \
 PZ_WINDOWS_VM_RESCUE=0 \
 PZ_WINDOWS_VM_SESSION_MAX_RETRIES=999 \
 PZ_WINDOWS_VM_TEST_ARGS_FILE="$runtime_args_file" \
@@ -678,6 +682,7 @@ PZ_WINDOWS_VM_COMPOSITOR=0 \
 PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-giveup.env" \
 PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
 PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=1 \
+PZ_WINDOWS_VM_SESSION_GRAPHICS_PROBE=0 \
 PZ_WINDOWS_VM_RESCUE=0 \
 PZ_WINDOWS_VM_SESSION_MAX_RETRIES=2 \
 PZ_WINDOWS_VM_DESKTOP_FALLBACK=0 \
@@ -761,6 +766,7 @@ primary_validation="$(
     PZ_DISPLAY_DMI_ROOT="$display_dmi" \
     PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
     PZ_DISPLAY_KDE_OUTPUT_CONFIG="$kde_output_config" \
+    PZ_WINDOWS_VM_PRIMARY_DISPLAY=internal \
     PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
     PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
         "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
@@ -769,13 +775,13 @@ grep -q 'display_profile=steamdeck-docked' <<< "$primary_validation"
 grep -q 'display_width=1280 display_height=800 display_connector=eDP-1 display_refresh_rate=60' <<< "$primary_validation"
 grep -q -- '-O eDP-1 -r 60 --force-orientation right -W 1280 -H 800' <<< "$primary_validation"
 grep -q 'reason=steamdeck-primary-internal' <<< "$primary_validation"
+# Default is auto: a docked boot owns the monitor without any override.
 docked_validation="$(
     env -u DISPLAY -u WAYLAND_DISPLAY \
     PATH="$session_bin:/usr/bin:/bin" \
     PZ_DISPLAY_DMI_ROOT="$display_dmi" \
     PZ_DISPLAY_SYSFS_ROOT="$display_sys" \
     PZ_DISPLAY_KDE_OUTPUT_CONFIG="$kde_output_config" \
-    PZ_WINDOWS_VM_PRIMARY_DISPLAY=external \
     PZ_WINDOWS_VM_ENV_FILE="$TMP_ROOT/missing-runtime.env" \
     PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$fake_runtime" \
         "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh" --validate
@@ -788,7 +794,7 @@ grep -q -- '-O DP-1 -r 74.991 -W 2560 -H 1080 -w 2560 -h 1080 --force-windows-fu
 if grep -q -- '--force-orientation' <<< "$docked_validation"; then
     exit 1
 fi
-echo "  Deck panel stays primary; external override follows KDE mode and refresh"
+echo "  Docked monitor is primary by default; internal override keeps the Deck panel"
 rm -f "$session_bin/gamescope" "$gamescope_args_file"
 
 cat > "$session_bin/cage" <<EOF

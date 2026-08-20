@@ -121,7 +121,10 @@ GAMESCOPE_ARGS=()
 
 resolve_display_target() {
     local -a session_vars=()
-    export PZ_DISPLAY_PRIMARY_TARGET="${PZ_WINDOWS_VM_PRIMARY_DISPLAY:-internal}"
+    # auto: a docked boot owns the monitor (its native/configured mode), the
+    # handheld boot owns the LCD. Operators can still pin the Deck panel with
+    # PZ_WINDOWS_VM_PRIMARY_DISPLAY=internal.
+    export PZ_DISPLAY_PRIMARY_TARGET="${PZ_WINDOWS_VM_PRIMARY_DISPLAY:-auto}"
     mapfile -t session_vars < <(pz_display_resolved_session_vars 2>/dev/null || true)
     DISPLAY_WIDTH="${session_vars[0]:-1280}"
     DISPLAY_HEIGHT="${session_vars[1]:-800}"
@@ -377,6 +380,35 @@ launcher_guest_call() {
     esac
 }
 
+# Only virtio-gl honors the resolved output resolution (xres/yres; the
+# viogpudo driver is installed by the provisioner). QXL ignores it and the
+# guest ends at 1024x768 in a letterboxed window, so direct boot prefers the
+# accelerated profile whenever the host proves it eligible and keeps the
+# quick-fail compat retry as the fallback.
+launcher_graphics_probe() {
+    case "$LAUNCHER_KIND" in
+        dispatcher) "$PZ_BIN" windows-vm graphics plan --profile "$1" --json ;;
+        *) "$PZ_BIN" graphics plan --profile "$1" --json ;;
+    esac
+}
+
+direct_boot_graphics_flag() {
+    case "${PZ_WINDOWS_VM_SESSION_GRAPHICS:-}" in
+        compat|virtio-gl)
+            printf '%s\n' "--graphics ${PZ_WINDOWS_VM_SESSION_GRAPHICS}"
+            return 0
+            ;;
+    esac
+    # Contract suites for other session properties disable the probe; in
+    # production it stays on (default 1).
+    [ "${PZ_WINDOWS_VM_SESSION_GRAPHICS_PROBE:-1}" = "1" ] || return 0
+    command -v jq >/dev/null 2>&1 || return 0
+    local plan
+    plan="$(launcher_graphics_probe virtio-gl 2>/dev/null || true)"
+    [ "$(jq -r '.eligible // false' <<<"$plan" 2>/dev/null)" = "true" ] || return 0
+    printf '%s\n' "--graphics virtio-gl"
+}
+
 write_session_state() {
     # graceful=true means the guest was not interrupted mid-run. A rc=0 exit
     # nobody requested is recorded as graceful but "unverified": a guest that
@@ -454,7 +486,7 @@ run_launcher() {
     GRACE_FORCED=0
     GRACE_REASON=""
     printf '%s launching Windows VM attempt=%s kind=%s command=%s\n' \
-        "$(date -Iseconds)" "$attempt" "$LAUNCHER_KIND" "$(launcher_command)"
+        "$(date -Iseconds)" "$attempt" "$LAUNCHER_KIND" "$(pz_display_shell_join "$PZ_BIN" "$@")"
     "$PZ_BIN" "${args[@]}" &
     LAUNCHER_PID=$!
     while kill -0 "$LAUNCHER_PID" 2>/dev/null; do
@@ -515,6 +547,13 @@ fallback_desktop() {
 attempt=0
 rescue_attempted=0
 compat_attempted=0
+SESSION_GRAPHICS_ARGS=()
+read -r -a SESSION_GRAPHICS_ARGS <<< "$(direct_boot_graphics_flag)"
+if [ "${#SESSION_GRAPHICS_ARGS[@]}" -gt 0 ]; then
+    printf '%s direct boot graphics: %s\n' "$(date -Iseconds)" "${SESSION_GRAPHICS_ARGS[*]}"
+else
+    printf '%s direct boot graphics: configured profile\n' "$(date -Iseconds)"
+fi
 while :; do
     attempt=$((attempt + 1))
     if [ "$attempt" -gt "$PZ_WINDOWS_VM_SESSION_MAX_RETRIES" ] && [ "$rescue_attempted" -eq 0 ]; then
@@ -545,7 +584,7 @@ while :; do
         exit 1
     fi
     if [ -n "$PZ_BIN" ] && [ -x "$PZ_BIN" ] && [ -n "$LAUNCHER_KIND" ]; then
-        run_launcher "${LAUNCHER_ARGS[@]}"
+        run_launcher "${LAUNCHER_ARGS[@]}" "${SESSION_GRAPHICS_ARGS[@]}"
         record_outcome
         if [ "$LAUNCHER_RC" -eq 0 ] || [ "$GRACE_REQUESTED" = "1" ]; then
             printf '%s Windows VM ended after %ss rc=%s (reason=%s); closing boot session\n' \

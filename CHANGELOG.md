@@ -30,6 +30,17 @@ As versões seguem a data de build em `version.json`.
 ## [Não lançado]
 
 ### Adicionado
+- Boot direto reconhece o monitor: o default da sessão GRUB deixa de forçar o
+  painel do Deck (`internal` → `auto`) — com monitor conectado, o boot usa o
+  modo físico do monitor (preferência do KWin por EDID, senão nativo, senão
+  1080p) e o refresh real; no handheld mantém 1280×800 com rotação. Quem
+  quiser o Deck na dock: `PZ_WINDOWS_VM_PRIMARY_DISPLAY=internal`.
+- Boot direto em tela cheia de verdade: a sessão sonda `graphics plan` e
+  quando o host suporta passa `--graphics virtio-gl` (único perfil que honra
+  a resolução da saída via `xres/yres`, com driver `viogpudo` já instalado
+  pelo provisionador), mantendo o fallback `compat` em falha rápida. Sem
+  isso, VMs `compat`/QXL sem driver rodavam 1024×768 em janela minúscula.
+  Override manual: `PZ_WINDOWS_VM_SESSION_GRAPHICS=compat|virtio-gl`.
 - Atualização do pacote com boot direto instalado deixa um marcador
   legível sem privilégios (`windows-vm-runtime-sync.pending`): o
   `status --json` expõe `boot.bootRuntimePendingSync` e a página Windows VM

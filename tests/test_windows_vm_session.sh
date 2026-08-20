@@ -48,6 +48,15 @@ case "${1:-}" in
         touch "$MARKER"
         exit 0
         ;;
+    graphics)
+        # plan probe: eligibility toggled by a marker file
+        if [ -e "$STUB_STATE/virtio-gl-eligible" ]; then
+            printf '%s\n' '{"eligible":true}'
+        else
+            printf '%s\n' '{"eligible":false}'
+        fi
+        exit 0
+        ;;
     launch)
         mode="$(cat "$MODE_FILE" 2>/dev/null || printf 'exit0')"
         case "$mode" in
@@ -150,5 +159,23 @@ wait $! || RC=$?
 [ "$(state_get .reason)" = "start-failure" ] || { echo "FAIL: expected start-failure, got $(state_get .reason)" >&2; exit 18; }
 [ "$(state_get .graceful)" = "true" ] || { echo "FAIL: start failure never touches the guest" >&2; exit 19; }
 grep -q 'giving up after' "$STATE_DIR/session.log" || { echo "FAIL: give-up not logged" >&2; exit 20; }
+
+# --- 6: eligible host -> direct boot passes the accelerated profile.
+set_stub_mode exit0
+rm -f "$SESSION_STATE"
+touch "$STATE_DIR/virtio-gl-eligible"
+run_session >/dev/null 2>&1 &
+wait $! || exit 21
+grep -q 'direct boot graphics: --graphics virtio-gl' "$STATE_DIR/session.log" || { echo "FAIL: eligible probe must pick virtio-gl" >&2; exit 22; }
+grep -q -- '--graphics virtio-gl' < <(grep 'launching Windows VM' "$STATE_DIR/session.log" | tail -n1) || { echo "FAIL: launcher args missing virtio-gl" >&2; exit 23; }
+
+# --- 7: ineligible host -> keep the configured profile, no extra flag.
+set_stub_mode exit0
+rm -f "$SESSION_STATE" "$STATE_DIR/virtio-gl-eligible"
+: > "$STATE_DIR/session.log"
+run_session >/dev/null 2>&1 &
+wait $! || exit 24
+grep -q 'direct boot graphics: configured profile' "$STATE_DIR/session.log" || { echo "FAIL: ineligible probe must keep configured profile" >&2; exit 25; }
+grep -q -- '--graphics virtio-gl' "$STATE_DIR/session.log" && { echo "FAIL: virtio-gl leaked into ineligible boot" >&2; exit 26; } || true
 
 echo "windows-vm session lifecycle contract ok"
