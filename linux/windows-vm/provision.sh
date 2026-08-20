@@ -1297,9 +1297,10 @@ run_setup() {
     echo "$qemu_pid" > "$vm_dir/qemu-pid"
 
     # Microsoft install media prompts for a key before booting from CD. The
-    # unattended answer file cannot run until that prompt is accepted, so send
-    # three bounded key presses through a loopback UNIX monitor. No key is sent
-    # after the initial firmware window.
+    # unattended answer file cannot run until that prompt is accepted. The
+    # helper presses the key across the whole prompt window: a fixed burst of
+    # three presses missed it on real hardware (BdsDxe started the DVD entry,
+    # timed out untouched, and the install stalled in a boot-manager loop).
     if command -v python3 >/dev/null 2>&1; then
         local monitor_sock="$vm_dir/setup-qmp.sock" monitor_try
         for monitor_try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
@@ -1307,29 +1308,7 @@ run_setup() {
             sleep 0.1
         done
         if [ -S "$monitor_sock" ]; then
-            if python3 - "$monitor_sock" <<'PYQMP'
-import json
-import socket
-import sys
-import time
-
-sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-sock.settimeout(5)
-sock.connect(sys.argv[1])
-sock.recv(65536)
-sock.sendall(b'{"execute":"qmp_capabilities"}\n')
-sock.recv(65536)
-for _ in range(3):
-    time.sleep(3)
-    command = {
-        "execute": "human-monitor-command",
-        "arguments": {"command-line": "sendkey spc"},
-    }
-    sock.sendall((json.dumps(command) + "\n").encode())
-    sock.recv(65536)
-sock.close()
-PYQMP
-            then
+            if python3 "$PZ_ROOT/linux/windows-vm/setup-boot-prompt.py" "$monitor_sock"; then
                 log_operation "$op" "Windows ISO boot prompt acknowledged"
             else
                 log_operation "$op" "WARN: could not acknowledge Windows ISO boot prompt"

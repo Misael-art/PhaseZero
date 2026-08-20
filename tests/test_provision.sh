@@ -771,7 +771,51 @@ assert_eq "at least 3 instances of -display none (setup+drivers+tweaks)" "1" "$(
 assert_eq "Windows install ISO uses first CD device" "1" "$(grep -Fq -- '-device ide-cd,bus=ide.0,drive=isoboot' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
 assert_eq "Windows install DVD is booted only once" "1" "$(grep -Fq -- '-boot once=d' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
 assert_eq "Windows install disk has no persistent lower boot priority" "0" "$(grep -Fc -- 'drive=drive0,bootindex=' "$PROVISION_SCRIPT" 2>/dev/null || true)"
-assert_eq "Windows install acknowledges ISO boot prompt through QMP" "1" "$(grep -Fq -- '"command-line": "sendkey spc"' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+assert_eq "Windows install acknowledges ISO boot prompt through QMP" "1" "$(grep -Fq -- 'setup-boot-prompt.py' "$PROVISION_SCRIPT" && echo 1 || echo 0)"
+
+# Behavioral: a fake QMP server counts the presses, so a regression that
+# narrows the prompt window (like the fixed three-press burst that missed it
+# on real hardware) fails here instead of stalling an actual install.
+PROMPT_TMP="$(mktemp -d)"
+PROMPT_SOCK="$PROMPT_TMP/fake-qmp.sock"
+PROMPT_COUNT_FILE="$PROMPT_TMP/prompt-count"
+python3 - "$PROMPT_SOCK" "$PROMPT_COUNT_FILE" <<'PYFAKE' &
+import json, os, sys
+sock_path, count_path = sys.argv[1], sys.argv[2]
+try:
+    os.unlink(sock_path)
+except FileNotFoundError:
+    pass
+import socket
+server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+server.bind(sock_path)
+server.listen(1)
+conn, _ = server.accept()
+conn.sendall(json.dumps({"QMP": {"version": {}}}).encode() + b"\n")
+presses = 0
+buf = b""
+while True:
+    chunk = conn.recv(4096)
+    if not chunk:
+        break
+    buf += chunk
+    while b"\n" in buf:
+        line, buf = buf.split(b"\n", 1)
+        try:
+            msg = json.loads(line)
+        except ValueError:
+            continue
+        if msg.get("execute") == "human-monitor-command":
+            presses += 1
+        conn.sendall(b'{"return": {}}\n')
+open(count_path, "w").write(str(presses))
+conn.close()
+PYFAKE
+FAKE_PID=$!
+for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S "$PROMPT_SOCK" ] && break; sleep 0.1; done
+python3 "$PZ_ROOT/linux/windows-vm/setup-boot-prompt.py" "$PROMPT_SOCK" --presses 6 --delay 0.02
+wait "$FAKE_PID"
+assert_eq "boot prompt helper presses across the whole window" "6" "$(cat "$PROMPT_COUNT_FILE")"
 QGA_WAIT_OFF_COUNT=$(grep -Fc 'server=on,wait=off,id=qga0' "$PROVISION_SCRIPT" 2>/dev/null || echo 0)
 assert_eq "all provision QGA sockets avoid startup deadlock" "4" "$QGA_WAIT_OFF_COUNT"
 VIRTIO_SERIAL_COUNT=$(grep -Fc -- '-device virtio-serial-pci' "$PROVISION_SCRIPT" 2>/dev/null || echo 0)
