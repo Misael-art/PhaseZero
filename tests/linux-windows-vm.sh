@@ -525,7 +525,7 @@ jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled") a
        has("artifactsVerification") and .hostLoginPolicy == "auto" and
        .guestLoginPolicy == "auto" and .guestLoginVerified == false and
        (.dockEntryInstalled | type == "boolean") and
-       (.dockEntryState == "disabled" or .dockEntryState == "present" or .dockEntryState == "missing")' <<< "$boot_json" >/dev/null
+       (.dockEntryState == "disabled" or .dockEntryState == "present" or .dockEntryState == "missing" or .dockEntryState == "unknown-permission")' <<< "$boot_json" >/dev/null
 echo "  boot status --json schema ok"
 
 echo "=== Boot: entrada GRUB dedicada para a dock ==="

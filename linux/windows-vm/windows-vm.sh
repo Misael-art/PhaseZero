@@ -3552,10 +3552,16 @@ status_boot() {
     [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && grub_cfg_entry="$(grub_cfg_entry_state)"
     local dock_entry="disabled"
     if [ "$(boot_dock_entry_enabled)" = "1" ]; then
-        if grep -Fq "menuentry '$BOOT_DOCK_ENTRY'" "$GRUB_SCRIPT" 2>/dev/null; then
-            dock_entry="present"
+        # /etc/grub.d is root-only on most distributions (0700): an
+        # unreadable script must not be reported as "missing".
+        if [ -r "$GRUB_SCRIPT" ]; then
+            if grep -Fq "menuentry '$BOOT_DOCK_ENTRY'" "$GRUB_SCRIPT" 2>/dev/null; then
+                dock_entry="present"
+            else
+                dock_entry="missing"
+            fi
         else
-            dock_entry="missing"
+            dock_entry="unknown-permission"
         fi
     fi
     local active_sddm="no"; [ -f "$SDDM_CONF" ] && active_sddm="yes"
