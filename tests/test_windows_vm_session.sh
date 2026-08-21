@@ -178,4 +178,32 @@ wait $! || exit 24
 grep -q 'direct boot graphics: configured profile' "$STATE_DIR/session.log" || { echo "FAIL: ineligible probe must keep configured profile" >&2; exit 25; }
 grep -q -- '--graphics virtio-gl' "$STATE_DIR/session.log" && { echo "FAIL: virtio-gl leaked into ineligible boot" >&2; exit 26; } || true
 
+# --- 8: the dedicated "(Dock)" GRUB entry pins the output via kernel cmdline.
+DOCK_SYS="$TEST_ROOT/dock-sys"
+mkdir -p "$DOCK_SYS/class/drm/card1-eDP-1" "$DOCK_SYS/class/drm/card1-DP-1"
+printf 'connected\n' > "$DOCK_SYS/class/drm/card1-eDP-1/status"
+printf '800x1280\n' > "$DOCK_SYS/class/drm/card1-eDP-1/modes"
+printf 'connected\n' > "$DOCK_SYS/class/drm/card1-DP-1/status"
+printf '2560x1080\n' > "$DOCK_SYS/class/drm/card1-DP-1/modes"
+printf '%s\n' 'BOOT_IMAGE=/vmlinuz root=UUID=x phasezero.windowsvm=1 phasezero.windowsvm-display=external' > "$TEST_ROOT/cmdline-dock"
+printf '%s\n' 'BOOT_IMAGE=/vmlinuz root=UUID=x phasezero.windowsvm=1 phasezero.windowsvm-display=internal' > "$TEST_ROOT/cmdline-internal"
+dock_validate="$(
+    PZ_WINDOWS_VM_CMDLINE_FILE="$TEST_ROOT/cmdline-dock" \
+    PZ_DISPLAY_SYSFS_ROOT="$DOCK_SYS" \
+    PZ_WINDOWS_VM_PRIMARY_DISPLAY=internal \
+    PZ_WINDOWS_VM_ENV_FILE="$TEST_ROOT/phasezero-no.env" \
+    PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$RUNTIME_DIR/linux/windows-vm/windows-vm.sh" \
+        bash "$PKG_DIR/linux/windows-vm/windows-vm-session.sh" --validate
+)"
+grep -q 'display_width=2560 display_height=1080 display_connector=DP-1' <<< "$dock_validate" || { echo "FAIL: dock cmdline must pin the external output" >&2; exit 27; }
+internal_validate="$(
+    PZ_WINDOWS_VM_CMDLINE_FILE="$TEST_ROOT/cmdline-internal" \
+    PZ_DISPLAY_SYSFS_ROOT="$DOCK_SYS" \
+    PZ_WINDOWS_VM_PRIMARY_DISPLAY=external \
+    PZ_WINDOWS_VM_ENV_FILE="$TEST_ROOT/phasezero-no.env" \
+    PZ_WINDOWS_VM_RUNTIME_LAUNCHER="$RUNTIME_DIR/linux/windows-vm/windows-vm.sh" \
+        bash "$PKG_DIR/linux/windows-vm/windows-vm-session.sh" --validate
+)"
+grep -q 'display_width=1280 display_height=800 display_connector=eDP-1' <<< "$internal_validate" || { echo "FAIL: internal cmdline must pin the panel" >&2; exit 28; }
+
 echo "windows-vm session lifecycle contract ok"

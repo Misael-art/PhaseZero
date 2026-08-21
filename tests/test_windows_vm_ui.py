@@ -203,6 +203,26 @@ def test_windows_vm_pending_sync_and_unclean_shutdown_drive_repair_cards(ws_page
     assert "inesperada" not in page.maintenance_health.text()
 
 
+def test_windows_vm_dock_grub_button_tracks_installed_state(ws_page):
+    page, _actions = ws_page
+    payload = {
+        "status": "ok",
+        "health": {"readyToLaunch": True, "findings": []},
+        "config": {"installed": True},
+        "vm": {"diskExists": True, "installedLike": True},
+        "libvirt": {"state": "missing"},
+        "host": {"qemu": "/usr/bin/qemu"},
+        "access": {},
+        "boot": {"bootRuntimeStale": False, "dockEntryInstalled": True},
+    }
+    page._on_status_ready("windows.status", "", dict(payload))
+    assert page.dock_entry_button.isChecked()
+
+    payload["boot"] = {"bootRuntimeStale": False, "dockEntryInstalled": False}
+    page._on_status_ready("windows.status", "", payload)
+    assert not page.dock_entry_button.isChecked()
+
+
 def test_windows_status_has_budget_for_aggregate_host_probes():
     assert StatusLoader.timeout_ms("windows.status") == 45_000
     assert StatusLoader.timeout_ms("steamdeck.status") == 15_000

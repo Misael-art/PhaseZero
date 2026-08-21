@@ -890,6 +890,30 @@
       "plan_command": "linux/pz windows-vm boot status"
     },
     {
+      "name": "windows.boot.dock.enable",
+      "label": "Adicionar entrada GRUB Windows (Dock)",
+      "command": "linux/pz windows-vm boot install --dock-entry",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm boot status"
+    },
+    {
+      "name": "windows.boot.dock.disable",
+      "label": "Remover entrada GRUB Windows (Dock)",
+      "command": "linux/pz windows-vm boot install --no-dock-entry",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Windows VM",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz windows-vm boot status"
+    },
+    {
       "name": "windows.boot.next",
       "label": "Próximo boot Windows",
       "command": "linux/pz windows-vm boot next-reboot",

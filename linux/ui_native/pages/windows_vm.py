@@ -268,6 +268,18 @@ class WindowsVmPage(BasePage):
         self.repair_boot_button.setObjectName("secondaryButton")
         self.repair_boot_button.clicked.connect(lambda: self.run_action("windows.boot.install"))
         self.repair_boot_button.setVisible(False)
+        self.dock_entry_button = QPushButton("GRUB: Windows (Dock)")
+        self.dock_entry_button.setObjectName("secondaryButton")
+        self.dock_entry_button.setCheckable(True)
+        self.dock_entry_button.setToolTip(
+            "Adiciona/remove a entrada GRUB dedicada que inicia a VM sempre no monitor da dock"
+        )
+        self.dock_entry_button.clicked.connect(
+            lambda: self.run_action(
+                "windows.boot.dock.disable" if self.dock_entry_button.isChecked()
+                else "windows.boot.dock.enable"
+            )
+        )
         images = QPushButton("Gerenciar imagens")
         images.setObjectName("secondaryButton")
         images.clicked.connect(lambda: self.run_action("windows.images.manage"))
@@ -278,6 +290,7 @@ class WindowsVmPage(BasePage):
         optimize.setObjectName("secondaryButton")
         optimize.clicked.connect(lambda: self.run_action("windows.optimize"))
         row.addWidget(self.repair_boot_button)
+        row.addWidget(self.dock_entry_button)
         row.addWidget(images)
         row.addWidget(optimize)
         row.addWidget(install)
@@ -369,6 +382,8 @@ class WindowsVmPage(BasePage):
         self.power_button.style().polish(self.power_button)
         self.power_button.setEnabled(running or (configured and disk_ready))
         boot_block = parsed.get("boot") or {}
+        if hasattr(self, "dock_entry_button"):
+            self.dock_entry_button.setChecked(bool(boot_block.get("dockEntryInstalled")))
         boot_stale = any(
             isinstance(item, dict) and item.get("id") == "boot-runtime-stale" for item in findings
         ) or bool(boot_block.get("bootRuntimeStale")) or bool(boot_block.get("bootRuntimePendingSync"))

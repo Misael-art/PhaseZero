@@ -58,6 +58,8 @@ GRUB_CFG="/boot/grub/grub.cfg"
 SDDM_CONF="/etc/sddm.conf.d/91-phasezero-windows-vm.conf"
 BOOT_ENTRY="PhaseZero Windows VM"
 BOOT_ID="phasezero-windows-vm"
+BOOT_DOCK_ENTRY="PhaseZero Windows VM (Dock)"
+BOOT_DOCK_ID="phasezero-windows-vm-dock"
 SAMBA_CONF="${PZ_WINDOWS_VM_SAMBA_CONF:-/etc/samba/smb.conf}"
 SAMBA_BEGIN="# BEGIN PHASEZERO WINDOWS VM SHARES"
 SAMBA_END="# END PHASEZERO WINDOWS VM SHARES"
@@ -3012,6 +3014,7 @@ root_env_content() {
     printf 'PZ_WINDOWS_VM_SESSION_RETRY_SECONDS=%q\n' "${PZ_WINDOWS_VM_SESSION_RETRY_SECONDS:-5}"
     printf 'PZ_WINDOWS_VM_DESKTOP_FALLBACK=%q\n' "${PZ_WINDOWS_VM_DESKTOP_FALLBACK:-0}"
     printf 'PZ_WINDOWS_VM_REQUIRE_LOGIN=%q\n' "${PZ_WINDOWS_VM_REQUIRE_LOGIN:-0}"
+    printf 'PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=%q\n' "$(boot_dock_entry_enabled)"
 }
 
 root_env_value() {
@@ -3024,6 +3027,17 @@ root_env_value() {
         . "$ROOT_ENV_FILE"
         printf '%s\n' "${!name:-}"
     )
+}
+
+# Dock GRUB entry state: the process environment wins (so `boot install
+# --dock-entry` takes effect in the same run and tests can pin it), then the
+# persisted root env, then disabled.
+boot_dock_entry_enabled() {
+    if [ -n "${PZ_WINDOWS_VM_BOOT_DOCK_ENTRY+x}" ]; then
+        case "$PZ_WINDOWS_VM_BOOT_DOCK_ENTRY" in 1) printf '1' ;; *) printf '0' ;; esac
+        return 0
+    fi
+    case "$(root_env_value PZ_WINDOWS_VM_BOOT_DOCK_ENTRY)" in 1) printf '1' ;; *) printf '0' ;; esac
 }
 
 # Arvore runtime da sessao de boot. Precisa ser auto-contida: durante o boot
@@ -3210,6 +3224,18 @@ menuentry '$BOOT_ENTRY' --id='$BOOT_ID' --hotkey=w --class windows --class gnu-l
     initrd $amd_ucode_rel $intel_ucode_rel $initrd_rel
 }
 EOF
+    if [ "$(boot_dock_entry_enabled)" = "1" ]; then
+        cat <<EOF
+menuentry '$BOOT_DOCK_ENTRY' --id='$BOOT_DOCK_ID' --hotkey=d --class windows --class gnu-linux --class gnu --class os {
+    insmod part_gpt
+    insmod btrfs
+    search --no-floppy --fs-uuid --set=root $uuid
+    echo 'Booting PhaseZero Windows VM on the docked monitor...'
+    linux $kernel_rel root=UUID=$uuid rw$rootflags quiet splash phasezero.windowsvm=1 phasezero.windowsvm-display=external
+    initrd $amd_ucode_rel $intel_ucode_rel $initrd_rel
+}
+EOF
+    fi
 }
 
 refresh_grub_config() {
@@ -3227,9 +3253,21 @@ grub_cfg_entry_state() {
 }
 
 install_boot() {
-    local loader
+    local loader dock_pref=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dock-entry) dock_pref=1; shift ;;
+            --no-dock-entry) dock_pref=0; shift ;;
+            *) shift ;;
+        esac
+    done
     need_root
     pz_boot_require_current_root_target
+    # The dock toggle is persisted in the root env so kernel-refresh installs
+    # and package hooks keep regenerating the entry until it is disabled.
+    if [ -n "$dock_pref" ]; then
+        export PZ_WINDOWS_VM_BOOT_DOCK_ENTRY="$dock_pref"
+    fi
     loader="$(detected_loader)"
     pz_boot_backup_bundle "windows-vm-boot-install-${loader}"
     effective_config
@@ -3512,6 +3550,14 @@ status_boot() {
     local loader_entry; loader_entry="$(loader_entry_state "$loader")"
     local grub_cfg_entry="n/a"
     [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && grub_cfg_entry="$(grub_cfg_entry_state)"
+    local dock_entry="disabled"
+    if [ "$(boot_dock_entry_enabled)" = "1" ]; then
+        if grep -Fq "menuentry '$BOOT_DOCK_ENTRY'" "$GRUB_SCRIPT" 2>/dev/null; then
+            dock_entry="present"
+        else
+            dock_entry="missing"
+        fi
+    fi
     local active_sddm="no"; [ -f "$SDDM_CONF" ] && active_sddm="yes"
     local target_root; target_root="$(pz_boot_target_root)"
     local configured_repo; configured_repo="$(root_env_value PZ_WINDOWS_VM_REPO)"
@@ -3557,6 +3603,7 @@ status_boot() {
             --arg configuredRepo "$configured_repo" \
             --arg configuredBootUser "$configured_user" \
             --arg grubCfgEntry "$grub_cfg_entry" \
+            --arg dockEntry "$dock_entry" \
             --arg grubNextEntry "${grub_next_entry:-none}" \
             --arg grubSavedEntry "${grub_saved_entry:-none}" \
             --arg sddmConf "$SDDM_CONF" \
@@ -3585,6 +3632,7 @@ status_boot() {
                 guestLoginVerified: false,
                 configuredRepo: $configuredRepo, configuredBootUser: $configuredBootUser,
                 grubCfgEntry: $grubCfgEntry,
+                dockEntryState: $dockEntry, dockEntryInstalled: ($dockEntry == "present"),
                 grubNextEntry: $grubNextEntry, grubSavedEntry: $grubSavedEntry,
                 sddmConf: $sddmConf, activeSddm: $activeSddm,
                 currentBootWindowsVm: $currentBootWindowsVm,
@@ -3610,6 +3658,7 @@ status_boot() {
         echo "configured_repo: $configured_repo"
         echo "configured_boot_user: $configured_user"
         echo "grub_cfg_entry: $grub_cfg_entry"
+        echo "dock_entry: $dock_entry"
         echo "grub_next_entry: ${grub_next_entry:-none}"
         echo "grub_saved_entry: ${grub_saved_entry:-none}"
         echo "active_sddm_windows_vm_conf: $active_sddm"
@@ -3642,6 +3691,11 @@ dry_run_boot() {
     echo "  kernel: $(latest_kernel_version || true)"
     echo "  session: phasezero-windows-vm.desktop"
     echo "  grub entry id: $BOOT_ID"
+    if [ "$(boot_dock_entry_enabled)" = "1" ]; then
+        echo "  dock entry: enabled (id: $BOOT_DOCK_ID, hotkey: d, always external output)"
+    else
+        echo "  dock entry: disabled"
+    fi
     [ "$loader" = "grub-efi" ] || [ "$loader" = "grub-bios" ] && echo "  grub hotkey: w"
     echo "  one-shot boot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next"
     echo "  one-shot reboot: sudo $PZ_ROOT/linux/windows-vm/windows-vm.sh boot next-reboot"

@@ -523,8 +523,19 @@ boot_json="$("$REPO_ROOT/linux/pz" windows-vm boot status --json 2>/dev/null || 
 jq -e '.bootLoader == "grub-efi" or .bootLoader == "systemd-boot" or .bootLoader == "grub-bios" or .bootLoader == "efi-stub" or .bootLoader == "refind" or .bootLoader == "none"' <<< "$boot_json" >/dev/null
 jq -e 'has("bootReady") and has("artifactsCurrent") and has("helperInstalled") and
        has("artifactsVerification") and .hostLoginPolicy == "auto" and
-       .guestLoginPolicy == "auto" and .guestLoginVerified == false' <<< "$boot_json" >/dev/null
+       .guestLoginPolicy == "auto" and .guestLoginVerified == false and
+       (.dockEntryInstalled | type == "boolean") and
+       (.dockEntryState == "disabled" or .dockEntryState == "present" or .dockEntryState == "missing")' <<< "$boot_json" >/dev/null
 echo "  boot status --json schema ok"
+
+echo "=== Boot: entrada GRUB dedicada para a dock ==="
+PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=1 "$REPO_ROOT/linux/pz" windows-vm boot dry-run | \
+    grep -q 'dock entry: enabled (id: phasezero-windows-vm-dock, hotkey: d, always external output)'
+PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=0 "$REPO_ROOT/linux/pz" windows-vm boot dry-run | \
+    grep -q 'dock entry: disabled'
+grep -Fq -- 'phasezero.windowsvm-display=external' "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+grep -Fq -- "menuentry '\$BOOT_DOCK_ENTRY' --id='\$BOOT_DOCK_ID'" "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
+echo "  dock entry dry-run ok"
 
 launch_check_kvm="$TMP_ROOT/fixture-kvm"
 : > "$launch_check_kvm"

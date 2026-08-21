@@ -121,10 +121,16 @@ GAMESCOPE_ARGS=()
 
 resolve_display_target() {
     local -a session_vars=()
-    # auto: a docked boot owns the monitor (its native/configured mode), the
-    # handheld boot owns the LCD. Operators can still pin the Deck panel with
-    # PZ_WINDOWS_VM_PRIMARY_DISPLAY=internal.
-    export PZ_DISPLAY_PRIMARY_TARGET="${PZ_WINDOWS_VM_PRIMARY_DISPLAY:-auto}"
+    # The dedicated "(Dock)" GRUB entry pins the external output through the
+    # kernel cmdline and wins over the env and the auto default; PZ_WINDOWS_
+    # VM_CMDLINE_FILE exists so contract suites can stub /proc/cmdline.
+    local boot_cmdline=""
+    boot_cmdline="$(cat "${PZ_WINDOWS_VM_CMDLINE_FILE:-/proc/cmdline}" 2>/dev/null || true)"
+    case "$boot_cmdline" in
+        *phasezero.windowsvm-display=external*) export PZ_DISPLAY_PRIMARY_TARGET="external" ;;
+        *phasezero.windowsvm-display=internal*) export PZ_DISPLAY_PRIMARY_TARGET="internal" ;;
+        *) export PZ_DISPLAY_PRIMARY_TARGET="${PZ_WINDOWS_VM_PRIMARY_DISPLAY:-auto}" ;;
+    esac
     mapfile -t session_vars < <(pz_display_resolved_session_vars 2>/dev/null || true)
     DISPLAY_WIDTH="${session_vars[0]:-1280}"
     DISPLAY_HEIGHT="${session_vars[1]:-800}"

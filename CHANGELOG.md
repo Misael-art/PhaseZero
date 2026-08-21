@@ -30,6 +30,14 @@ As versões seguem a data de build em `version.json`.
 ## [Não lançado]
 
 ### Adicionado
+- Entrada GRUB dedicada "PhaseZero Windows VM (Dock)": `boot install
+  --dock-entry` cria uma segunda entrada (hotkey `d`, mesma classe de ícone
+  do Windows) que inicia a sessão sempre no monitor da dock via
+  `phasezero.windowsvm-display=external` no cmdline — o cmdline vence o
+  default `auto` e o override de ambiente. A preferência persiste no env
+  root (`PZ_WINDOWS_VM_BOOT_DOCK_ENTRY=1`), sobrevive a reinstalações, e a
+  Central de Controle ganhou o botão "GRUB: Windows (Dock)" para
+  adicionar/remover com fluxo elevado de prévia.
 - Boot direto reconhece o monitor: o default da sessão GRUB deixa de forçar o
   painel do Deck (`internal` → `auto`) — com monitor conectado, o boot usa o
   modo físico do monitor (preferência do KWin por EDID, senão nativo, senão
