@@ -176,7 +176,10 @@ rm -f "$SESSION_STATE" "$STATE_DIR/virtio-gl-eligible"
 run_session >/dev/null 2>&1 &
 wait $! || exit 24
 grep -q 'direct boot graphics: configured profile' "$STATE_DIR/session.log" || { echo "FAIL: ineligible probe must keep configured profile" >&2; exit 25; }
-grep -q -- '--graphics virtio-gl' "$STATE_DIR/session.log" && { echo "FAIL: virtio-gl leaked into ineligible boot" >&2; exit 26; } || true
+if grep -q -- '--graphics virtio-gl' "$STATE_DIR/session.log"; then
+    echo "FAIL: virtio-gl leaked into ineligible boot" >&2
+    exit 26
+fi
 
 # --- 8: the dedicated "(Dock)" GRUB entry pins the output via kernel cmdline.
 DOCK_SYS="$TEST_ROOT/dock-sys"

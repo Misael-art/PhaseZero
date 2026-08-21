@@ -283,6 +283,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.apps.configure", "Windows VM", "Configurar Podman Windows", "Aplica recursos, RDP, compartilhamento e política de um guest.", ("windows-vm", "apps", "configure"), "preferences-system", mutable=True, preview=("windows-vm", "apps", "status"), badge="Reversível"),
             _a("windows.boot.status-json", "Windows VM", "Boot status (JSON)", "Estado do boot em JSON para consumo programático.", ("windows-vm", "boot", "status", "--json"), "dialog-information", badge="JSON", visibility="advanced"),
             _a("windows.boot.install", "Windows VM", "Instalar boot direto (Windows)", "Entrada GRUB para Windows VM.", ("windows-vm", "boot", "install"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
+            _a("windows.boot.dock.enable", "Windows VM", "Adicionar entrada GRUB Windows (Dock)", "Cria a entrada dedicada que inicia a VM sempre no monitor da dock.", ("windows-vm", "boot", "install", "--dock-entry"), "video-display", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
+            _a("windows.boot.dock.disable", "Windows VM", "Remover entrada GRUB Windows (Dock)", "Remove a entrada dedicada do monitor da dock.", ("windows-vm", "boot", "install", "--no-dock-entry"), "video-display", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
             _a("windows.boot.next", "Windows VM", "Próximo boot Windows", "Agenda uma sessão Windows VM.", ("windows-vm", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("windows-vm", "boot", "status"), elevated=True),
 
             # Provision commands
