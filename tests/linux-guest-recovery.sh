@@ -12,6 +12,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PS="$ROOT/linux/windows-vm/guest-login.ps1"
 SH="$ROOT/linux/windows-vm/guest-login.sh"
 RECOVER="$ROOT/linux/windows-vm/recover.sh"
+TEST_TMP_ROOT="${PZ_TEST_TMP_ROOT:-/tmp}"
+mkdir -p "$TEST_TMP_ROOT"
 
 bash -n "$SH" "$RECOVER"
 grep -Fq "\$recoveryUser = 'PZ-Recovery'" "$PS"
@@ -155,9 +157,10 @@ offline_fixture() {
         bash "$SH" "${PZ_TEST_ACTION:-repair-qga}" --json
 }
 
-# Use persistent /tmp, not Codex's per-user runtime tmpfs: repair-qga
-# deliberately requires 3 GiB for the libguestfs appliance.
-tmp_success="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+# Use persistent storage, not Codex's per-user runtime tmpfs: repair-qga
+# deliberately requires 3 GiB for the libguestfs appliance. CI may override
+# PZ_TEST_TMP_ROOT when the host /tmp is another constrained tmpfs.
+tmp_success="$(mktemp -d "$TEST_TMP_ROOT/pz-guest-recovery.XXXXXX")"
 success_json="$(offline_fixture "$tmp_success" success)"
 printf '%s\n' "$success_json" | jq -e \
     '.success == true and .state == "pending-guest-boot" and .phase == "reboot-scheduled" and
@@ -171,7 +174,7 @@ manifest="$(printf '%s\n' "$success_json" | jq -r '.rollbackManifest')"
 jq -e '.qemuImageCheck == true and .sourceDisk and .backupDisk' "$manifest" >/dev/null
 rm -rf -- "$tmp_success"
 
-tmp_failure="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+tmp_failure="$(mktemp -d "$TEST_TMP_ROOT/pz-guest-recovery.XXXXXX")"
 set +e
 failure_output="$(offline_fixture "$tmp_failure" fail 2>&1)"
 failure_rc=$?
@@ -184,7 +187,7 @@ fi
 grep -Fq 'disk rollback attempted' <<<"$failure_output"
 rm -rf -- "$tmp_failure"
 
-tmp_hash="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+tmp_hash="$(mktemp -d "$TEST_TMP_ROOT/pz-guest-recovery.XXXXXX")"
 set +e
 hash_output="$(offline_fixture "$tmp_hash" hash-fail 2>&1)"
 hash_rc=$?
@@ -195,7 +198,7 @@ grep -Fq 'SHA-256 mismatch' <<<"$hash_output"
 [ ! -d "$tmp_hash/state/phasezero/windows-vm/guest-login-backups" ]
 rm -rf -- "$tmp_hash"
 
-tmp_preflight="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+tmp_preflight="$(mktemp -d "$TEST_TMP_ROOT/pz-guest-recovery.XXXXXX")"
 preflight_json="$(PZ_TEST_ACTION=repair-preflight offline_fixture "$tmp_preflight" success)"
 printf '%s\n' "$preflight_json" | jq -e '.success == true and .ready == true and (.missing | length) == 0' >/dev/null
 printf '%s\n' "$preflight_json" | jq -e '(.virtToolsDir | endswith("/virt-tools"))' >/dev/null
@@ -215,7 +218,7 @@ rm -rf -- "$tmp_preflight"
 
 # Retention: bounded by count, and never willing to drop the last recoverable
 # copy whatever the limits say.
-tmp_prune="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+tmp_prune="$(mktemp -d "$TEST_TMP_ROOT/pz-guest-recovery.XXXXXX")"
 prune_root="$tmp_prune/state/phasezero/windows-vm/guest-login-backups"
 mkdir -p "$prune_root"
 for day in 1 2 3 4 5 6; do
@@ -256,7 +259,7 @@ rm -rf -- "$tmp_prune"
 # recover.sh must abort on the preflight, before it takes a backup or starts
 # QEMU. An unsafe tmpfs root fails the gate deterministically on every host,
 # including one that happens to ship the libguestfs firstboot helper.
-tmp_recover="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+tmp_recover="$(mktemp -d "$TEST_TMP_ROOT/pz-guest-recovery.XXXXXX")"
 mkdir -p "$tmp_recover/state" "$tmp_recover/unsafe-runtime"
 set +e
 recover_output="$(XDG_STATE_HOME="$tmp_recover/state" XDG_CONFIG_HOME="$tmp_recover/config" \
@@ -308,7 +311,7 @@ notice_silent() {
 notice_silent 'boot integration absent' PZ_BOOT_HELPER=/nonexistent/helper
 notice_silent 'phasezero tree absent' PZ_LIB_DIR=/nonexistent
 
-tmp_notice="$(mktemp -d /tmp/pz-guest-recovery.XXXXXX)"
+tmp_notice="$(mktemp -d "$TEST_TMP_ROOT/pz-guest-recovery.XXXXXX")"
 mkdir -p "$tmp_notice/lib/linux/windows-vm" "$tmp_notice/local"
 touch "$tmp_notice/local/windows-vm-boot-prepare"
 # An installed tree older than `boot runtime-check` must degrade quietly.

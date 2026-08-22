@@ -27,6 +27,10 @@ nenhum perfil pesado sobe por padrão):
 - `up` sem perfil sobe somente o core (`edge`). Perfil pesado exige gate de
   RAM do governor e `--yes`-like: overcommit ou perfil desconhecido é
   **fail-closed** (exit != 0, sem plano).
+- `plan --profile` compara serviços declarados com Compose real. Perfil
+  `assistant-private` permanece preview e não pode executar `up`: Hermes,
+  9Router, Ollama e ai-memory ainda não são orquestrados por esse Compose.
+  Use `pz ai workspaces doctor` para diagnóstico completo e redigido.
 - `docker-compose.lock.json` fixa 13 imagens com tag (sem `latest`).
 - Todo serviço roda `no-new-privileges` + `init` + memória/CPU limitadas
   (pelo menos um serviço carrega `mem_limit`; validado por CI).

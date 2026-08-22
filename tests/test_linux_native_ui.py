@@ -262,6 +262,11 @@ def test_proxy_models_parse_detailed_status_and_gateways():
     assert router.label == "ativo" and "3 providers" in router.detail
     odysseus = parse_gateway_status("odysseus", {"installed": True, "healthy": False, "endpoint": "http://127.0.0.1:4000"})
     assert odysseus.label == "parado" and odysseus.state == "warning"
+    hermes = parse_gateway_status("hermes", {"installed": True, "ready": True, "version": "Hermes 1.2.3"})
+    assert hermes.label == "ativo" and hermes.state == "success" and "1.2.3" in hermes.detail
+    actions = {action.id: action for action in build_catalog(ROOT)}
+    assert actions["ai.odysseus-install"].preview_args == ("ai", "odysseus", "plan")
+    assert actions["ai.odysseus-update"].preview_args == ("ai", "odysseus", "plan")
     assert parse_gateway_status("9router", None).label == "não instalado"
 
 

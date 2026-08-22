@@ -15,6 +15,12 @@ ENV_FILE="$PHASEZERO_CONFIG_DIR/hermes.env"
 STATE_FILE="${XDG_STATE_HOME:-$HOME/.local/state}/phasezero/ai/hermes.json"
 INSTALL_TIMEOUT="${PZ_HERMES_INSTALL_TIMEOUT:-1800}"
 
+require_workload_release_gate() {
+    [ "${PZ_HOMELAB_ALLOW_HOST_WORKLOADS:-0}" = 1 ] && return 0
+    pz_error "Hermes changes blocked by Homelab release gate; run: pz ai workspaces plan"
+    return 69
+}
+
 hermes_cmd() {
     command -v hermes 2>/dev/null || {
         [ -x "$LOCAL_BIN/hermes" ] && echo "$LOCAL_BIN/hermes" && return 0
@@ -148,7 +154,10 @@ write_state() {
         --arg hermesHome "$HERMES_HOME" \
         --arg configPath "$HERMES_CONFIG" \
         --arg envFile "$ENV_FILE" \
-        '{tool:"hermes",installedAt:$installedAt,commandPath:$commandPath,version:$version,home:$hermesHome,configPath:$configPath,envFile:$envFile}' > "$STATE_FILE"
+        '{schemaVersion:1,tool:"hermes",installedAt:$installedAt,commandPath:$commandPath,version:$version,
+          home:$hermesHome,configPath:$configPath,envFile:$envFile}' |
+        pz_write_managed_file "$STATE_FILE" user
+    chmod 0600 "$STATE_FILE"
 }
 
 mcp_sdk_available() {
@@ -158,64 +167,150 @@ import mcp
 PY
 }
 
-doctor_text() {
-    local cmd="$1"
-    [ -n "$cmd" ] || return 0
-    timeout 15 "$cmd" doctor 2>&1 | head -40 | tr -d '\r' || true
+env_has_auth_reference() {
+    [ -f "$ENV_FILE" ] || return 1
+    awk -F= '
+        /^(OPENAI|ANTHROPIC|OPENROUTER)_API_KEY=/ {
+            value=$0; sub(/^[^=]*=/, "", value)
+            if (value != "" && value !~ /^<.*>$/ && value !~ /manual-secret-store-value/) found=1
+        }
+        END { exit(found ? 0 : 1) }
+    ' "$ENV_FILE"
+}
+
+path_is_local_regular() {
+    local path="$1" root="$2" resolved
+    [ ! -e "$path" ] && [ ! -L "$path" ] && return 0
+    [ -f "$path" ] || return 1
+    resolved="$(realpath -e -- "$path" 2>/dev/null || true)"
+    [ -n "$resolved" ] && [[ "$resolved" == "$root"/* ]]
 }
 
 status_json() {
-    local cmd="" version="" mcp_count=0 sdk=false doctor="" config_check=false
+    local cmd="" version="" mcp_count=0 sdk=false config_check=false doctor_ok=false
+    local installed=false configured=false ready=false auth=false config_safe=false mcp_ready=false
+    local config_mode="missing" env_mode="missing" state_mode="missing"
     cmd="$(hermes_cmd || true)"
     if [ -n "$cmd" ]; then
+        installed=true
         version="$(timeout 10 "$cmd" --version 2>/dev/null | head -1 | tr -d '\r' || true)"
         timeout 15 "$cmd" config check >/dev/null 2>&1 && config_check=true
-        doctor="$(doctor_text "$cmd")"
+        timeout 30 "$cmd" doctor >/dev/null 2>&1 && doctor_ok=true
     fi
     [ -f "$HERMES_CONFIG" ] && mcp_count="$(grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HERMES_CONFIG" 2>/dev/null || true)"
     mcp_sdk_available && sdk=true
+    path_is_local_regular "$HERMES_CONFIG" "$HERMES_HOME" && config_safe=true
+    [ -f "$HERMES_CONFIG" ] && config_mode="$(stat -c %a "$HERMES_CONFIG" 2>/dev/null || echo unknown)"
+    [ -f "$ENV_FILE" ] && env_mode="$(stat -c %a "$ENV_FILE" 2>/dev/null || echo unknown)"
+    [ -f "$STATE_FILE" ] && state_mode="$(stat -c %a "$STATE_FILE" 2>/dev/null || echo unknown)"
+    env_has_auth_reference && auth=true
+    [ "$mcp_count" -gt 0 ] && [ "$sdk" = true ] && mcp_ready=true
+    if [ -f "$HERMES_CONFIG" ] && [ -f "$ENV_FILE" ] && [ "$config_safe" = true ] &&
+        [ "$config_mode" = 600 ] && [ "$env_mode" = 600 ]; then
+        configured=true
+    fi
+    if [ "$installed" = true ] && [ "$configured" = true ] && [ "$config_check" = true ] &&
+        [ "$doctor_ok" = true ] && [ "$auth" = true ] && [ "$mcp_ready" = true ]; then
+        ready=true
+    fi
     jq -cn \
+        --argjson schemaVersion 1 \
         --arg commandPath "$cmd" \
         --arg version "$version" \
         --arg hermesHome "$HERMES_HOME" \
         --arg configPath "$HERMES_CONFIG" \
         --arg envFile "$ENV_FILE" \
         --arg stateFile "$STATE_FILE" \
-        --arg doctor "$doctor" \
-        --argjson available "$([ -n "$cmd" ] && echo true || echo false)" \
+        --arg configMode "$config_mode" \
+        --arg envMode "$env_mode" \
+        --arg stateMode "$state_mode" \
+        --argjson available "$installed" \
+        --argjson installed "$installed" \
+        --argjson configured "$configured" \
+        --argjson ready "$ready" \
+        --argjson authConfigured "$auth" \
+        --argjson configPathSafe "$config_safe" \
         --argjson configExists "$([ -f "$HERMES_CONFIG" ] && echo true || echo false)" \
         --argjson envExists "$([ -f "$ENV_FILE" ] && echo true || echo false)" \
         --argjson stateExists "$([ -f "$STATE_FILE" ] && echo true || echo false)" \
         --argjson mcpServerCount "$mcp_count" \
         --argjson mcpSdk "$sdk" \
+        --argjson mcpReady "$mcp_ready" \
         --argjson configCheckOk "$config_check" \
-        '{tool:"hermes",available:$available,commandPath:$commandPath,version:$version,home:$hermesHome,configPath:$configPath,configExists:$configExists,envFile:$envFile,envExists:$envExists,stateFile:$stateFile,stateExists:$stateExists,mcp:{serverCount:$mcpServerCount,pythonSdk:$mcpSdk},configCheckOk:$configCheckOk,doctor:$doctor}'
+        --argjson doctorOk "$doctor_ok" \
+        '{schemaVersion:$schemaVersion,tool:"hermes",id:"hermes",available:$available,installed:$installed,
+          configured:$configured,ready:$ready,commandPath:$commandPath,version:$version,home:$hermesHome,
+          configPath:$configPath,configExists:$configExists,configMode:$configMode,configPathSafe:$configPathSafe,
+          envFile:$envFile,envExists:$envExists,envMode:$envMode,stateFile:$stateFile,stateExists:$stateExists,
+          stateMode:$stateMode,auth:{configured:$authConfigured,secretsRedacted:true},
+          mcp:{serverCount:$mcpServerCount,pythonSdk:$mcpSdk,ready:$mcpReady},configCheckOk:$configCheckOk,
+          doctor:{ok:$doctorOk,outputRedacted:true},secretsRedacted:true}'
 }
 
-dry_run() {
+doctor_json() {
+    local status policy checksum="${PZ_HERMES_INSTALL_SHA256:-}" tailscale=false tailscale_auth=false
+    status="$(status_json)"
+    policy="$(bash "$PZ_ROOT/linux/server/ai-policy-broker.sh" check hermes-install checksum="$checksum" 2>/dev/null || echo '{"allow":false,"reasons":["policy probe failed"]}')"
+    command -v tailscale >/dev/null 2>&1 && tailscale=true
+    [ "$tailscale" = true ] && tailscale status >/dev/null 2>&1 && tailscale_auth=true
+    jq -cn --argjson status "$status" --argjson policy "$policy" \
+        --argjson tailscaleInstalled "$tailscale" --argjson tailscaleAuthenticated "$tailscale_auth" \
+        --argjson checksumPinned "$([[ "$checksum" =~ ^[0-9a-fA-F]{64}$ ]] && echo true || echo false)" \
+        '{schemaVersion:1,id:"hermes",diagnosticComplete:true,ready:$status.ready,status:$status,
+          distribution:{installer:"https://hermes-agent.nousresearch.com/install.sh",sha256Pinned:$checksumPinned,
+            policyAllowed:$policy.allow},remoteAccess:{provider:"tailscale",installed:$tailscaleInstalled,
+            authenticated:$tailscaleAuthenticated},issues:([
+              if ($status.installed|not) then {severity:"error",component:"hermes",code:"hermes-not-installed"} else empty end,
+              if ($checksumPinned|not) then {severity:"error",component:"hermes",code:"hermes-installer-untrusted"} else empty end,
+              if ($status.auth.configured|not) then {severity:"warning",component:"hermes",code:"hermes-auth-unconfigured"} else empty end,
+              if ($status.configExists and $status.configMode != "600") then {severity:"error",component:"hermes",code:"hermes-config-permissions-unsafe"} else empty end,
+              if ($status.envExists and $status.envMode != "600") then {severity:"error",component:"hermes",code:"hermes-env-permissions-unsafe"} else empty end,
+              if ($status.mcp.ready|not) then {severity:"warning",component:"hermes",code:"hermes-mcp-not-ready"} else empty end,
+              if ($status.configPathSafe|not) then {severity:"error",component:"hermes",code:"hermes-config-path-unsafe"} else empty end,
+              if ($tailscaleAuthenticated|not) then {severity:"warning",component:"tailscale",code:"tailscale-unavailable"} else empty end
+            ]),secretsRedacted:true}'
+}
+
+plan_json() {
+    local doctor gate=false allowed=false
+    doctor="$(doctor_json)"
+    [ "${PZ_HOMELAB_ALLOW_HOST_WORKLOADS:-0}" = 1 ] && gate=true
+    if [ "$gate" = true ] && jq -e '.distribution.sha256Pinned == true and .distribution.policyAllowed == true' \
+        >/dev/null 2>&1 <<< "$doctor"; then
+        allowed=true
+    fi
     jq -cn \
-        --arg home "$HERMES_HOME" \
-        --arg configPath "$HERMES_CONFIG" \
-        --arg envFile "$ENV_FILE" \
-        --arg skipBrowser "${PZ_HERMES_SKIP_BROWSER:-0}" \
-        '{tool:"hermes",planned:["download official install.sh","run install.sh --skip-setup --non-interactive","sync PhaseZero MCP servers into ~/.hermes/config.yaml","install Python mcp SDK in Hermes venv when available","write env template without secrets"],home:$home,configPath:$configPath,envFile:$envFile,skipBrowserEnv:$skipBrowser}'
+        --arg home "$HERMES_HOME" --arg configPath "$HERMES_CONFIG" --arg envFile "$ENV_FILE" \
+        --argjson doctor "$doctor" --argjson releaseGate "$gate" --argjson deploymentAllowed "$allowed" \
+        '{schemaVersion:1,tool:"hermes",id:"hermes",mode:"read-only-plan",releaseGate:$releaseGate,
+          deploymentAllowed:$deploymentAllowed,ready:$doctor.ready,home:$home,configPath:$configPath,envFile:$envFile,
+          phases:["verify immutable installer checksum","verify policy and release gate","stage isolated install",
+            "sync MCP configuration without raw secrets","run config check and doctor","complete official authentication",
+            "record version, paths and rollback manifest"],
+          blockers:(([if ($releaseGate|not) then "roadmap-host-deployment-blocked" else empty end,
+            if ($doctor.distribution.sha256Pinned|not) then "hermes-installer-untrusted" else empty end,
+            if ($doctor.distribution.policyAllowed|not) then "policy-denied" else empty end] +
+            [$doctor.issues[]?.code]) | unique),secretsRedacted:true}'
 }
 
 case "${1:-setup}" in
     setup)
+        require_workload_release_gate
         install_hermes
         configure_hermes
         status_json
         ;;
-    install) install_hermes ;;
-    configure) configure_hermes ;;
-    mcp) bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync hermes ;;
+    install) require_workload_release_gate; install_hermes ;;
+    configure) require_workload_release_gate; configure_hermes ;;
+    mcp) require_workload_release_gate; bash "$PZ_ROOT/linux/ai/mcp-manager.sh" sync hermes ;;
     status) status_json ;;
-    dry-run|plan) dry_run ;;
+    dry-run|plan) plan_json ;;
+    doctor|diagnose) doctor_json ;;
     portal)
+        require_workload_release_gate
         cmd="$(hermes_cmd || true)"
         [ -n "$cmd" ] || { pz_error "Hermes not installed"; exit 1; }
         "$cmd" setup --portal
         ;;
-    *) echo "usage: setup-hermes.sh (setup|install|configure|mcp|status|dry-run|portal)"; exit 1 ;;
+    *) echo "usage: setup-hermes.sh (setup|install|configure|mcp|status|doctor|dry-run|portal)"; exit 1 ;;
 esac
