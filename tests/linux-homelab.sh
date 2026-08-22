@@ -258,6 +258,17 @@ if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=0 "$REPO_ROOT/linux/server/homelab-governor.sh"
 fi
 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=8192 "$REPO_ROOT/linux/server/homelab-governor.sh" budget assistant-private | jq -e '.verdict == "pass" and .budgetMB == 4224' >/dev/null
 echo "  in-budget pass ok"
+profile_plan="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=8192 "$REPO_ROOT/linux/pz" server homelab plan --json --profile assistant-private)"
+jq -e '
+  .profileId == "assistant-private"
+  and .profile.key == "assistant-private"
+  and .profileCoverage.complete == false
+  and (.profileCoverage.unmanaged | sort) == (["9router","ai-memory","hermes","ollama"] | sort)
+  and .resourceBudget.verdict == "pass"
+  and (.blockers | any(test("not orchestrated")))
+  and (.nextSteps | any(test("workspaces doctor")))
+' <<< "$profile_plan" >/dev/null
+echo "  profile plan exposes orchestration gap"
 if "$REPO_ROOT/linux/server/homelab-governor.sh" check bogus >/dev/null 2>&1; then
     echo "FAIL: unknown profile accepted"; exit 1
 fi

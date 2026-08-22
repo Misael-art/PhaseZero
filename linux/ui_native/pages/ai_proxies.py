@@ -69,15 +69,26 @@ class AiProxiesPage(BasePage):
         layout.setContentsMargins(2, 2, 8, 8)
         layout.setSpacing(14)
 
-        layout.addWidget(SectionHeader("Gateway de roteamento", "9Router e workspace Odysseus"))
+        layout.addWidget(SectionHeader("Agentes e gateways", "Hermes, 9Router e workspace Odysseus"))
+        layout.addWidget(self._gateway_row(
+            "hermes", "Hermes",
+            (("ai.hermes-doctor", "Diagnosticar"), ("ai.hermes-status", "Status")),
+        ))
         layout.addWidget(self._gateway_row(
             "9router", "9Router",
             (("ai.9router-dashboard", "Dashboard"), ("ai.9router-test", "Testar"), ("ai.9router-install", "Instalar")),
         ))
         layout.addWidget(self._gateway_row(
             "odysseus", "Odysseus",
-            (("ai.odysseus-open", "Abrir"), ("ai.odysseus-doctor", "Doctor"), ("ai.odysseus-install", "Instalar")),
+            (("ai.odysseus-open", "Abrir"), ("ai.odysseus-doctor", "Doctor"), ("ai.workspaces-plan", "Plano seguro")),
         ))
+        diagnostic_row = QHBoxLayout()
+        diagnostic_row.addStretch()
+        for aid, label in (("ai.workspaces-doctor", "Diagnóstico completo"), ("ai.workspaces-plan", "Ver plano seguro")):
+            button = self._action_button(aid, label)
+            if button is not None:
+                diagnostic_row.addWidget(button)
+        layout.addLayout(diagnostic_row)
 
         layout.addWidget(SectionHeader("Proxies individuais", "Serviços locais OpenAI-compatible"))
         grid_host = QWidget()
@@ -288,7 +299,7 @@ class AiProxiesPage(BasePage):
         super().reload()
         if not self.status_loader.running(_DETAILED_KEY):
             self.status_loader.fetch(_DETAILED_KEY, ["ai", "proxies", "detailed-status"])
-        for aid in ("ai.9router-status", "ai.odysseus-status"):
+        for aid in ("ai.hermes-status", "ai.9router-status", "ai.odysseus-status"):
             action = self.by_id.get(aid)
             if action is not None and not self.status_loader.running(aid):
                 self.status_loader.fetch_action(action)
@@ -315,6 +326,8 @@ class AiProxiesPage(BasePage):
             proxies, ide = parse_detailed_status(parsed)
             self._apply_proxies(proxies)
             self._apply_ide(ide)
+        elif action_id == "ai.hermes-status":
+            self._apply_gateway(parse_gateway_status("hermes", parsed))
         elif action_id == "ai.9router-status":
             self._apply_gateway(parse_gateway_status("9router", parsed))
         elif action_id == "ai.odysseus-status":
@@ -326,8 +339,8 @@ class AiProxiesPage(BasePage):
                 service = refs.get("service")
                 if isinstance(service, QLabel):
                     service.setText(f"Status indisponível — {message}")
-        elif action_id in ("ai.9router-status", "ai.odysseus-status"):
-            gateway_id = "9router" if action_id == "ai.9router-status" else "odysseus"
+        elif action_id in ("ai.hermes-status", "ai.9router-status", "ai.odysseus-status"):
+            gateway_id = {"ai.hermes-status": "hermes", "ai.9router-status": "9router", "ai.odysseus-status": "odysseus"}[action_id]
             refs = self._gateway_rows.get(gateway_id)
             if refs is not None:
                 refs[1].setText("Status indisponível")

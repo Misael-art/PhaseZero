@@ -356,6 +356,36 @@ services_json() {
     fi
 }
 
+profile_definition_json() {
+    local registry="$COMPOSE_DIR/homelab-profiles.json"
+    [ -n "$HOMELAB_PROFILE" ] || { echo 'null'; return 0; }
+    [ -f "$registry" ] || { echo 'null'; return 0; }
+    jq -c --arg profile "$HOMELAB_PROFILE" '[.profiles[] | select(.key == $profile)] | .[0] // null' \
+        "$registry" 2>/dev/null || echo 'null'
+}
+
+profile_coverage_json() {
+    local profile services
+    profile="$(profile_definition_json)"
+    services="$(services_json)"
+    if [ "$profile" = null ]; then
+        jq -cn --arg requested "$HOMELAB_PROFILE" \
+            '{requested:$requested,known:($requested==""),complete:($requested==""),composeManaged:[],unmanaged:[]}'
+        return 0
+    fi
+    jq -cn --argjson profile "$profile" --argjson compose "$services" \
+        '{requested:$profile.key,known:true,
+          complete:([$profile.services[] as $service | select(($compose|index($service)) == null) | $service]|length)==0,
+          composeManaged:[$profile.services[] as $service | select(($compose|index($service)) != null) | $service],
+          unmanaged:[$profile.services[] as $service | select(($compose|index($service)) == null) | $service],
+          reason:"profile registry is declarative; homelab-stack may start only services present in rendered Compose"}'
+}
+
+profile_budget_json() {
+    [ -n "$HOMELAB_PROFILE" ] || { echo 'null'; return 0; }
+    bash "$PZ_ROOT/linux/server/homelab-governor.sh" budget "$HOMELAB_PROFILE" 2>/dev/null || echo 'null'
+}
+
 secrets_json() {
     local rows=()
     while IFS='|' read -r key service layer; do
@@ -371,7 +401,7 @@ secrets_json() {
 }
 
 apps_json() {
-    local effective admin_bind public_bind reason host admin_host public_host running names_json rows=()
+    local effective admin_bind public_bind reason host names_json rows=()
     IFS='|' read -r effective admin_bind public_bind reason < <(access_bind_plan "$ACCESS_MODE")
     IFS='|' read -r host _ _ < <(access_host_for_urls "$effective" "$admin_bind" "$public_bind")
     names_json="$(running_containers_json)"
@@ -392,7 +422,7 @@ apps_json() {
 }
 
 blockers_json() {
-    local blockers=()
+    local blockers=() coverage unmanaged
     [ -f "$CORE_FILE" ] || blockers+=("compose core missing: $CORE_FILE")
     [ "$WITH_EXTRAS" = "0" ] || [ -f "$EXTRAS_FILE" ] || blockers+=("compose extras missing: $EXTRAS_FILE")
     docker_installed || blockers+=("docker not installed")
@@ -407,24 +437,39 @@ blockers_json() {
     if [ "$ACCESS_MODE" = "tailscale" ] && ! tailscale_authenticated; then
         blockers+=("tailscale logged out; sensitive services stay local-only")
     fi
+    if [ -n "$HOMELAB_PROFILE" ]; then
+        coverage="$(profile_coverage_json)"
+        if [ "$(jq -r '.known' <<< "$coverage")" != true ]; then
+            blockers+=("unknown homelab profile: $HOMELAB_PROFILE")
+        elif [ "$(jq -r '.complete' <<< "$coverage")" != true ]; then
+            unmanaged="$(jq -r '.unmanaged | join(",")' <<< "$coverage")"
+            blockers+=("profile $HOMELAB_PROFILE is not orchestrated by this Compose stack: $unmanaged")
+        fi
+    fi
     [ "${#blockers[@]}" -gt 0 ] || { echo '[]'; return 0; }
     printf '%s\n' "${blockers[@]}" | jq -R . | jq -cs .
 }
 
 next_steps_json() {
-    local steps=()
+    local steps=() coverage
     docker_reachable || steps+=("ativar Docker e permitir acesso do usuário")
     [ -f "$ENV_FILE" ] || steps+=("gerar secrets com: pz server homelab repair")
     if [ "$ACCESS_MODE" = "tailscale" ] && ! tailscale_authenticated; then
         steps+=("autenticar Tailscale com: phasezero-admin tailscale up")
     fi
-    steps+=("subir core com: pz server homelab up --access local")
-    steps+=("subir extras só se precisar: pz server homelab up --extras --access tailscale")
+    coverage="$(profile_coverage_json)"
+    if [ -n "$HOMELAB_PROFILE" ] && [ "$(jq -r '.complete' <<< "$coverage")" != true ]; then
+        steps+=("executar diagnóstico: pz ai workspaces doctor")
+        steps+=("não aplicar perfil até adapters, proveniência e release gate estarem completos")
+    else
+        steps+=("subir core com: pz server homelab up --access local")
+        steps+=("subir extras só se precisar: pz server homelab up --extras --access tailscale")
+    fi
     printf '%s\n' "${steps[@]}" | jq -R . | jq -cs .
 }
 
 emit_status_json() {
-    local effective admin_bind public_bind reason host blockers secrets apps running services
+    local effective admin_bind public_bind reason host blockers secrets apps running services profile coverage budget
     IFS='|' read -r effective admin_bind public_bind reason < <(access_bind_plan "$ACCESS_MODE")
     host="$(access_host_for_urls "$effective" "$admin_bind" "$public_bind" | cut -d'|' -f1)"
     blockers="$(blockers_json)"
@@ -432,6 +477,9 @@ emit_status_json() {
     apps="$(apps_json)"
     running="$(running_containers_json)"
     services="$(services_json)"
+    profile="$(profile_definition_json)"
+    coverage="$(profile_coverage_json)"
+    budget="$(profile_budget_json)"
     jq -n \
         --arg project "$PROJECT" \
         --arg stateDir "$HOMELAB_STATE" \
@@ -458,6 +506,10 @@ emit_status_json() {
         --argjson apps "$apps" \
         --argjson running "$running" \
         --argjson services "$services" \
+        --arg profileId "$HOMELAB_PROFILE" \
+        --argjson profile "$profile" \
+        --argjson profileCoverage "$coverage" \
+        --argjson resourceBudget "$budget" \
         --argjson nextSteps "$(next_steps_json)" \
         '{
           tool:"homelab-stack",
@@ -469,6 +521,7 @@ emit_status_json() {
           tailscale:{installed:$tailscaleInstalled, authenticated:$tailscaleAuthenticated},
           access:{requested:$access, effective:$effective, reason:$reason, host:$host, adminBind:$adminBind, publicBind:$publicBind},
           compose:{coreExists:$coreExists, extrasExists:$extrasExists, services:$services},
+          profileId:$profileId,profile:$profile,profileCoverage:$profileCoverage,resourceBudget:$resourceBudget,
           env:{exists:$envExists, secrets:$secrets},
           apps:$apps,
           running:$running,
@@ -512,6 +565,12 @@ cmd_up() {
         return 1
     fi
     if [ -n "$HOMELAB_PROFILE" ]; then
+        local coverage
+        coverage="$(profile_coverage_json)"
+        if [ "$(jq -r '.known and .complete' <<< "$coverage")" != true ]; then
+            pz_error "profile $HOMELAB_PROFILE cannot be applied: services are not fully orchestrated ($(jq -r '.unmanaged|join(",")' <<< "$coverage"))"
+            return 69
+        fi
         if ! bash "$PZ_ROOT/linux/server/homelab-governor.sh" check "$HOMELAB_PROFILE" >/dev/null 2>&1; then
             pz_error "profile $HOMELAB_PROFILE rejected by resource governor; check budget: pz server homelab governor budget $HOMELAB_PROFILE"
             return 1

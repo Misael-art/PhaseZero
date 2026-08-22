@@ -2851,7 +2851,7 @@
     },
     {
       "name": "ai.odysseus-install",
-      "label": "Provisionar Odysseus",
+      "label": "Implantar Odysseus (protegido)",
       "command": "linux/pz ai odysseus install",
       "mutable": true,
       "require_plan": true,
@@ -2859,7 +2859,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz ai odysseus status"
+      "plan_command": "linux/pz ai odysseus plan"
     },
     {
       "name": "ai.odysseus-open",
@@ -2885,7 +2885,7 @@
     },
     {
       "name": "ai.odysseus-update",
-      "label": "Atualizar Odysseus",
+      "label": "Atualizar Odysseus (protegido)",
       "command": "linux/pz ai odysseus update",
       "mutable": true,
       "require_plan": true,
@@ -2893,7 +2893,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz ai odysseus check-update"
+      "plan_command": "linux/pz ai odysseus plan"
     },
     {
       "name": "ai.odysseus-backup",
@@ -2911,6 +2911,50 @@
       "name": "ai.odysseus-doctor",
       "label": "Doctor Odysseus",
       "command": "linux/pz ai odysseus doctor",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.hermes-status",
+      "label": "Status Hermes",
+      "command": "linux/pz ai hermes status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.hermes-doctor",
+      "label": "Doctor Hermes",
+      "command": "linux/pz ai hermes doctor",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.workspaces-doctor",
+      "label": "Diagnóstico Hermes + Odysseus",
+      "command": "linux/pz ai workspaces doctor",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.workspaces-plan",
+      "label": "Plano Hermes + Odysseus",
+      "command": "linux/pz ai workspaces plan",
       "mutable": false,
       "require_plan": false,
       "module": "IA & Dev",

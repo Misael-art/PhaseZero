@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TMP_ROOT="$(mktemp -d)"
+trap 'rm -rf "$TMP_ROOT"' EXIT
+export HOME="$TMP_ROOT/home"
+export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_STATE_HOME="$HOME/.local/state"
+mkdir -p "$HOME" "$TMP_ROOT/bin"
+
+write_stub() {
+    local name="$1"
+    shift
+    cat > "$TMP_ROOT/bin/$name"
+    chmod +x "$TMP_ROOT/bin/$name"
+}
+
+write_stub hermes-manager <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = plan ]; then
+  printf '%s\n' '{"schemaVersion":1,"id":"hermes","mode":"read-only-plan","deploymentAllowed":false,"blockers":["hermes-installer-untrusted"],"secretsRedacted":true}'
+  exit 0
+fi
+cat <<'JSON'
+{"schemaVersion":1,"id":"hermes","diagnosticComplete":true,"ready":false,
+ "status":{"configured":false},"distribution":{"sha256Pinned":false},
+ "issues":[{"severity":"error","component":"hermes","code":"hermes-installer-untrusted"}],
+ "secretsRedacted":true}
+JSON
+SH
+
+write_stub odysseus-manager <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = plan ]; then
+  printf '%s\n' '{"schemaVersion":1,"id":"odysseus","mode":"read-only-plan","deploymentAllowed":false,"blockers":["upstream-commit-untrusted"],"secretsRedacted":true}'
+  exit 0
+fi
+cat <<'JSON'
+{"schemaVersion":1,"id":"odysseus","diagnosticComplete":true,"configured":false,"ready":false,"secure":false,"healthy":false,"commitTrusted":false,
+ "issues":[{"severity":"error","component":"odysseus","code":"odysseus-commit-untrusted"}],
+ "secretsRedacted":true}
+JSON
+SH
+
+write_stub router-manager <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":1,"installed":true,"healthy":true,"secretsRedacted":true}'
+SH
+
+write_stub governor <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":1,"profile":"assistant-private","verdict":"pass","budgetMB":4224,"reasons":[]}'
+SH
+
+write_stub policy <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' '{"schemaVersion":1,"mode":"conservative","conservative":true,"deniedActions":["hermes-install"]}'
+SH
+
+write_stub docker <<'SH'
+#!/usr/bin/env bash
+case "${1:-}" in
+  info) exit 0 ;;
+  ps) printf '%s\n' 'akitaonrails/ai-memory:1.0|Up 2 hours (healthy)' ;;
+esac
+SH
+
+write_stub podman <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = info ]; then printf '%s\n' 'true'; exit 0; fi
+exit 1
+SH
+
+write_stub tailscale <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+
+write_stub ollama <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' 'ollama version 1.0-test'
+SH
+
+write_stub curl <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+
+write_stub ss <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+
+export PATH="$TMP_ROOT/bin:/usr/bin:/bin"
+export PZ_HERMES_MANAGER="$TMP_ROOT/bin/hermes-manager"
+export PZ_ODYSSEUS_MANAGER="$TMP_ROOT/bin/odysseus-manager"
+export PZ_9ROUTER_MANAGER="$TMP_ROOT/bin/router-manager"
+export PZ_HOMELAB_GOVERNOR="$TMP_ROOT/bin/governor"
+export PZ_AI_POLICY_BROKER="$TMP_ROOT/bin/policy"
+
+output="$(bash "$ROOT/linux/ai/agent-workspaces-diagnostic.sh" doctor)"
+jq -e '
+  .schemaVersion == 1 and .tool == "agent-workspaces-diagnostic"
+  and .mode == "read-only" and .diagnosticComplete == true
+  and .deploymentAllowed == false and .ready == false
+  and .configurationReady == false
+  and .components.router.healthy == true
+  and .components.aiMemory.healthy == true
+  and .runtime.podman.rootless == true
+  and (.issues | any(.code == "roadmap-host-deployment-blocked"))
+  and (.issues | any(.code == "hermes-installer-untrusted"))
+  and (.issues | any(.code == "odysseus-commit-untrusted"))
+  and (.issues | all(.component != null and .component != ""))
+  and (.plan.phases | any(.id == "deploy" and .state == "blocked"))
+  and .secretsRedacted == true
+' <<< "$output" >/dev/null
+if grep -q 'SENTINEL_SECRET' <<< "$output"; then
+    echo "FAIL: diagnostic leaked secret sentinel" >&2
+    exit 1
+fi
+
+plan_output="$(bash "$ROOT/linux/ai/agent-workspaces-diagnostic.sh" plan)"
+jq -e '
+  .action == "plan"
+  and .componentPlans.hermes.mode == "read-only-plan"
+  and .componentPlans.odysseus.mode == "read-only-plan"
+  and .componentPlans.hermes.deploymentAllowed == false
+  and .componentPlans.odysseus.deploymentAllowed == false
+' <<< "$plan_output" >/dev/null
+
+hermes_status="$(HERMES_HOME="$HOME/.hermes" PZ_LOCAL_BIN="$HOME/.local/bin" bash "$ROOT/linux/ai/setup-hermes.sh" status)"
+jq -e '.schemaVersion == 1 and .installed == false and .ready == false and .doctor.outputRedacted == true and .secretsRedacted == true' \
+    <<< "$hermes_status" >/dev/null
+
+mkdir -p "$XDG_CONFIG_HOME/phasezero/ai"
+printf '%s\n' 'OPENAI_API_KEY=SENTINEL_SECRET' > "$XDG_CONFIG_HOME/phasezero/ai/hermes.env"
+chmod 0600 "$XDG_CONFIG_HOME/phasezero/ai/hermes.env"
+hermes_status="$(HERMES_HOME="$HOME/.hermes" PZ_LOCAL_BIN="$HOME/.local/bin" bash "$ROOT/linux/ai/setup-hermes.sh" status)"
+jq -e '.auth.configured == true and .secretsRedacted == true' <<< "$hermes_status" >/dev/null
+if grep -q 'SENTINEL_SECRET' <<< "$hermes_status"; then
+    echo "FAIL: Hermes status leaked credential value" >&2
+    exit 1
+fi
+mkdir -p "$HOME/.hermes"
+printf '%s\n' 'model: test' > "$HOME/.hermes/config.yaml"
+chmod 0644 "$HOME/.hermes/config.yaml"
+hermes_doctor="$(HERMES_HOME="$HOME/.hermes" PZ_LOCAL_BIN="$HOME/.local/bin" bash "$ROOT/linux/ai/setup-hermes.sh" doctor)"
+jq -e '.status.configured == false and (.issues | any(.code == "hermes-config-permissions-unsafe"))' \
+    <<< "$hermes_doctor" >/dev/null
+
+set +e
+HERMES_HOME="$HOME/gated-hermes" bash "$ROOT/linux/ai/setup-hermes.sh" configure >/dev/null 2>&1
+hermes_gate_rc=$?
+set -e
+test "$hermes_gate_rc" -eq 69
+test ! -e "$HOME/gated-hermes"
+
+odysseus_status="$(PZ_ODYSSEUS_ROOT="$HOME/odysseus" bash "$ROOT/linux/ai/odysseus-manager.sh" status)"
+jq -e '.schemaVersion == 1 and .installed == false and .configured == false and .ready == false and .secretsRedacted == true' \
+    <<< "$odysseus_status" >/dev/null
+
+set +e
+PZ_ODYSSEUS_ROOT="$HOME/gated-odysseus" bash "$ROOT/linux/ai/odysseus-manager.sh" install >/dev/null 2>&1
+odysseus_gate_rc=$?
+set -e
+test "$odysseus_gate_rc" -eq 69
+test ! -e "$HOME/gated-odysseus"
+
+external="$TMP_ROOT/external-odysseus"
+odysseus_root="$HOME/unsafe-odysseus"
+odysseus_config="$XDG_CONFIG_HOME/phasezero/odysseus"
+trusted="$TMP_ROOT/trusted-commits.json"
+commit="0123456789abcdef0123456789abcdef01234567"
+mkdir -p "$external" "$odysseus_root" "$odysseus_config"
+touch "$external/docker-compose.yml"
+ln -s "$external" "$odysseus_root/current"
+printf '%s\n' "{\"schemaVersion\":1,\"commits\":[{\"commit\":\"$commit\",\"tree\":\"89abcdef0123456789abcdef0123456789abcdef\"}]}" > "$trusted"
+printf '%s\n' "{\"schemaVersion\":1,\"commit\":\"$commit\",\"tree\":\"89abcdef0123456789abcdef0123456789abcdef\"}" > "$odysseus_config/manifest.json"
+printf '%s\n' 'AUTH_ENABLED=true' 'LOCALHOST_BYPASS=false' > "$odysseus_config/odysseus.env"
+chmod 0600 "$odysseus_config/odysseus.env"
+printf '%s\n' 'a@sha256:1' 'b@sha256:2' 'c@sha256:3' > "$odysseus_config/compose.images.lock.yml"
+unsafe_status="$(PZ_ODYSSEUS_ROOT="$odysseus_root" PZ_ODYSSEUS_TRUSTED_COMMITS_FILE="$trusted" bash "$ROOT/linux/ai/odysseus-manager.sh" status)"
+jq -e '.installed == true and .pathsSafe == false and .configured == false and .ready == false' <<< "$unsafe_status" >/dev/null
+
+if grep -Fq "printf 'OPENAI_API_KEY=%s" "$ROOT/linux/ai/odysseus-manager.sh"; then
+    echo "FAIL: Odysseus duplicates the canonical 9Router credential" >&2
+    exit 1
+fi
+# shellcheck disable=SC2016 # assertions intentionally match literal shell variables
+grep -Fq -- '--env-file "$ROUTER_ENV" --env-file "$ENV_FILE"' "$ROOT/linux/ai/odysseus-manager.sh"
+# shellcheck disable=SC2016 # assertion intentionally matches literal Compose interpolation
+grep -Fq 'OPENAI_API_KEY: \${PHASEZERO_9ROUTER_API_KEY:' "$ROOT/linux/ai/odysseus-manager.sh"
+
+echo "linux-agent-workspaces smoke ok"

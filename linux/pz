@@ -217,9 +217,11 @@ Usage:
    pz ai routing verify [--live]
    pz ai routing refresh        Refresh quota (scheduler-safe, 5-10 min)
    pz ai omniroute <action>     OmniRoute multi-provider router (install|status|combo|opencode|test|dashboard)
-   pz ai odysseus status        Audit pinned Odysseus workspace deployment
+  pz ai odysseus status        Audit pinned Odysseus workspace deployment
   pz ai odysseus install       Provision rootless, loopback-only Odysseus stack
   pz ai odysseus update        Update to verified official branch commit with rollback
+  pz ai workspaces doctor      Deep read-only Hermes/Odysseus readiness diagnostic
+  pz ai workspaces plan        Secret-redacted configuration and deployment plan
   pz doctor                    Run full system diagnostics
   pz support-bundle            Generate support tarball
   pz repair-plan               Generate repair plan
@@ -593,6 +595,14 @@ cmd_ai() {
         odysseus|odysseus-os|workspace)
             shift
             bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" "${@:-status}"
+            ;;
+        hermes|hermes-agent)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-hermes.sh" "${@:-status}"
+            ;;
+        workspaces|agent-workspaces|agents-diagnostic)
+            shift
+            bash "$PZ_ROOT/linux/ai/agent-workspaces-diagnostic.sh" "${@:-doctor}"
             ;;
         codexbar|kodexbar)
             shift

@@ -1,11 +1,39 @@
-# 9Router e Odysseus
+# Hermes, 9Router e Odysseus
 
-PhaseZero integra dois componentes distintos:
+PhaseZero integra três componentes distintos:
 
+- **Hermes**: agente local/CLI. Autenticação e configuração permanecem no
+  fluxo oficial; PhaseZero só considera pronto após config check, doctor e
+  referência de autenticação válida.
 - **9Router**: gateway OpenAI-compatible local. Consolida providers autorizados, combos e fallback.
 - **Odysseus**: workspace web agnóstico de IA. Consome endpoints locais/remotos; não é distribuição Linux.
 
-Na UI nativa, a página **Proxies IA** reúne ambos os gateways, os cards de ciclo de vida dos proxies OpenAI-compatible (`kimi`, `qwen`, `deeps`, `mimo`), a autenticação por navegador e a sincronização com IDEs, com polling passivo de `pz ai proxies detailed-status`.
+Na UI nativa, a página **Proxies IA** reúne Hermes, ambos os gateways, os
+cards de ciclo de vida dos proxies OpenAI-compatible (`kimi`, `qwen`, `deeps`,
+`mimo`), autenticação por navegador e sincronização com IDEs.
+
+## Diagnóstico consolidado
+
+```bash
+linux/pz ai workspaces doctor
+linux/pz ai workspaces plan
+linux/pz ai hermes status
+linux/pz ai hermes doctor
+linux/pz ai odysseus status
+linux/pz ai odysseus doctor
+```
+
+O diagnóstico é somente leitura e nunca imprime tokens, chaves ou conteúdo de
+configuração. Ele verifica proveniência, configuração, saúde, política,
+orçamento, ai-memory, rootless Podman, Tailscale e conflitos de portas. Campos
+`configured`, `ready`, `issues` e `plan.phases` evitam confundir arquivo criado
+com serviço utilizável.
+
+Em 22/08/2026, Hermes publicava release sem asset/checksum do instalador e sua
+tag não era marcada imutável. Odysseus não publicava releases/tags e usava a
+branch mutável `dev`. Portanto, instalação/configuração automática fica
+fail-closed (exit 69) até existir allowlist confiável e o release gate Homelab
+autorizar workloads. Diagnóstico e plano continuam disponíveis.
 
 ## 9Router
 
@@ -62,11 +90,16 @@ linux/pz ai odysseus check-update
 linux/pz ai odysseus update
 linux/pz ai odysseus backup
 linux/pz ai odysseus doctor
+linux/pz ai odysseus plan
 ```
 
-Upstream não publica releases ou tags. PhaseZero resolve `dev`, clona repositório oficial, exige SHA estável durante clone e fixa commit. Manifesto registra origem, commit e tree. Commit não assinado permanece identificado; atualização nunca ocorre automaticamente.
+Upstream não publica releases ou tags. PhaseZero consulta `dev`, mas recusa
+clone, build ou serviço antes de o commit aparecer na allowlist versionada.
+Manifesto registra origem, commit e tree. Atualização nunca ocorre
+automaticamente. `plan` mostra blockers sem criar diretórios, imagens,
+containers ou units.
 
-Deploy usa Podman rootless e Compose. UI, ChromaDB, SearXNG e ntfy ficam em loopback. Imagens dependentes são resolvidas e travadas por digest. Limites padrão preservam recursos do Steam Deck: 6 GiB/5 CPUs para app, 2 GiB para ChromaDB, 1 GiB para SearXNG e 256 MiB para ntfy. Autenticação é obrigatória; bypass localhost fica desligado; `no-new-privileges` fica ativo; socket Docker não é montado. Segredos residem em `~/.config/phasezero/odysseus/odysseus.env`, modo `0600`. Comando `credentials-path` revela somente caminho.
+Deploy usa Podman rootless e Compose. UI, ChromaDB, SearXNG e ntfy ficam em loopback. Imagens dependentes são resolvidas e travadas por digest. Limites padrão preservam recursos do Steam Deck: 6 GiB/5 CPUs para app, 2 GiB para ChromaDB, 1 GiB para SearXNG e 256 MiB para ntfy. Autenticação é obrigatória; bypass localhost fica desligado; `no-new-privileges` fica ativo; socket Docker não é montado. Segredos próprios residem em `~/.config/phasezero/odysseus/odysseus.env`, modo `0600`. A chave 9Router não é copiada: Compose referencia o env canônico `0600` do gateway somente no subprocesso. Comando `credentials-path` revela somente caminho.
 
 Patch local registrado remove `setup_requires` de Torch/CUDA usado somente ao construir wheels Python do Real-ESRGAN. Isso evita baixar toolchain NVIDIA num host AMD. Manifesto registra SHA-256 do diff junto ao tree upstream.
 

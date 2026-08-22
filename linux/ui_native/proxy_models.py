@@ -162,10 +162,12 @@ def parse_gateway_status(gateway_id: str, parsed: object) -> GatewayState:
         detail = f"{active} providers · {total} combos"
     elif gateway_id == "odysseus":
         detail = str(parsed.get("endpoint", ""))
+    elif gateway_id == "hermes":
+        detail = str(parsed.get("version", ""))
     return GatewayState(
         id=gateway_id,
-        installed=bool(parsed.get("installed")),
-        healthy=bool(parsed.get("healthy")),
+        installed=bool(parsed.get("installed", parsed.get("available"))),
+        healthy=bool(parsed.get("healthy", parsed.get("ready"))),
         service=str(parsed.get("service", "unknown")),
         detail=detail,
     )

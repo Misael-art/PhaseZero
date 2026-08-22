@@ -30,6 +30,13 @@ As versões seguem a data de build em `version.json`.
 ## [Não lançado]
 
 ### Adicionado
+- Diagnóstico consolidado `pz ai workspaces doctor|plan` para Hermes,
+  Odysseus, 9Router, Ollama, ai-memory, Podman, Tailscale, portas, política e
+  orçamento. Saída redigida, readiness honesta e implantação bloqueada até
+  proveniência e release gate válidos.
+- Página Proxies IA mostra Hermes e oferece diagnóstico/plano seguro. Odysseus
+  deixa de sugerir instalação direta quando upstream confiável não está
+  disponível.
 - Entrada GRUB dedicada "PhaseZero Windows VM (Dock)": `boot install
   --dock-entry` cria uma segunda entrada (hotkey `d`, mesma classe de ícone
   do Windows) que inicia a sessão sempre no monitor da dock via

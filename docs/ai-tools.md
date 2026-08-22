@@ -145,7 +145,13 @@ Automacoes Linux:
 - `linux/ai/desktop-apps.sh`: instala Claude Desktop pelo repositorio apt oficial Anthropic e Qwen Code Desktop pela release oficial `desktop-latest`, em prefixos atomicos do usuario. Valida assinatura/digestos e SHA-256. Corrige o pipeline do Codex Desktop Linux, habilita guarda de workspace e timer user.
 - `linux/ai/setup-codex.sh`: instala/atualiza `@openai/codex` no prefixo npm do usuario e publica symlink em `~/.local/bin`.
 - `linux/ai/setup-memory.sh`: instala `ai-memory` por AUR (`ai-memory-bin`) quando disponivel; fallback Docker wrapper; fallback build Cargo. Configura serviço user loopback `127.0.0.1:49374` e roda `install-mcp`/`install-hooks` para agentes detectados.
-- `linux/ai/setup-hermes.sh`: instala Hermes pelo instalador oficial em modo não interativo, escreve env template sem segredos, sincroniza MCPs em `~/.hermes/config.yaml` e instala o pacote Python `mcp` no venv quando disponível.
+- `linux/ai/setup-hermes.sh`: status/doctor redigidos validam instalação,
+  configuração, auth, MCP, permissões e Tailscale. Instalação/configuração
+  automática exige release gate e SHA-256 explícito do instalador oficial;
+  sem ambos, falha antes de escrever estado.
+- `linux/ai/agent-workspaces-diagnostic.sh`: auditoria read-only conjunta de
+  Hermes/Odysseus/9Router/Ollama/ai-memory, runtime, portas, política e budget;
+  acessível por `pz ai workspaces doctor|plan` e pela página Proxies IA.
 - `linux/ai/setup-openclaw.sh`: instala `openclaw@latest` no prefixo npm do usuário, executa baseline não interativo (`openclaw setup --non-interactive --accept-risk` com fallback legado), sincroniza MCPs em `~/.openclaw/config.json`, aplica `ai-memory` MCP/hooks e instala o Gateway user service via `openclaw gateway install/start`.
 - `linux/ai/setup-ides.sh`: gera recomendações `.vscode/extensions.json`, sincroniza MCP seguro em VS Code workspace/user, Cursor, Zed e ZCode, adiciona helper Neovim opcional e grava estado em `~/.local/state/phasezero/ai/ides.json`.
 - `linux/ai/mcp-manager.sh`: sincroniza MCP seguro por padrao (`ai-memory` loopback), repara configs quebradas, e permite install explicito de remotos em OpenCode (`mcp`), Claude/Claude Desktop, Codex TOML, VS Code, Cursor, Zed, ZCode, Hermes YAML e OpenClaw JSON.
