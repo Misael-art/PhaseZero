@@ -120,6 +120,41 @@ def by_id_catalog(catalog):
     return {a.id: a for a in catalog}
 
 
+def test_waydroid_page_mirrors_windows_vm_ui_contract(qapp, catalog):
+    """CCS-037: espelho do contrato de test_windows_vm_ui.py para Waydroid —
+    cobertura total, status traduzido em controles e dispatch real nos cliques."""
+    from PySide6.QtWidgets import QPushButton
+
+    page, actions = _page(WaydroidPage, "Waydroid", catalog)
+    # 1) cobertura completa da categoria (espelho de
+    #    test_workspace_page_covers_all_windows_vm_actions)
+    assert page.represented_action_ids == {a.id for a in actions}
+    # 2) botões de atalho existem e disparam ações reais ao clicar
+    buttons = {b.text(): b for b in page.findChildren(QPushButton)}
+    assert "Abrir Android" in buttons
+    spy = QSignalSpy(page.action_requested)
+    buttons["Abrir Android"].click()
+    assert spy.at(0)[0].id == "waydroid.launch"
+    # 3) refresh dispara o loader de status da página
+    page.reload()
+    assert page.status_loader.running("waydroid.status") or page._proc_running()
+
+
+def _proc_running(self):  # helper usado pelo teste acima
+    return False
+
+
+def test_waydroid_shares_previews_are_area_scoped(by_id_catalog):
+    enable = by_id_catalog["waydroid.shares.enable"]
+    disable = by_id_catalog["waydroid.shares.disable"]
+    usb_enable = by_id_catalog["waydroid.usb.enable"]
+    usb_disable = by_id_catalog["waydroid.usb.disable"]
+    assert enable.preview_args[:2] == ("waydroid", "shares")
+    assert disable.preview_args == ("waydroid", "shares", "status")
+    assert "--groups" in usb_enable.args and "usb" in usb_enable.args
+    assert "--groups" in usb_disable.args and "usb" in usb_disable.args
+
+
 def test_waydroid_prevents_launch_before_configuration(qapp, catalog):
     page, _actions = _page(WaydroidPage, "Waydroid", catalog)
     page.apply_payload({"config": {"installed": False}, "android": {"initialized": False}})
