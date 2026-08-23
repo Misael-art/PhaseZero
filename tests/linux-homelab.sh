@@ -258,6 +258,24 @@ if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=0 "$REPO_ROOT/linux/server/homelab-governor.sh"
 fi
 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=8192 "$REPO_ROOT/linux/server/homelab-governor.sh" budget assistant-private | jq -e '.verdict == "pass" and .budgetMB == 4224' >/dev/null
 echo "  in-budget pass ok"
+# CCS-014: budget-active usa o perfil ativo real; sem perfil, falha fechado
+# com a lista de perfis públicos.
+gov_state="$PZ_HOMELAB_STATE"
+if PZ_HOMELAB_STATE="$gov_state/no-active" PZ_HOMELAB_RAM_TOTAL_OVERRIDE=8192 \
+    "$REPO_ROOT/linux/server/homelab-governor.sh" budget-active > "$gov_state/budget-empty.json" 2>/dev/null; then
+    echo "FAIL: budget-active sem perfil ativo deveria falhar"; exit 1
+fi
+jq -e '.error == "no-active-profile" and (.profiles | index("edge"))' "$gov_state/budget-empty.json" >/dev/null
+mkdir -p "$gov_state/with-profile"
+printf 'assistant-private\n' > "$gov_state/with-profile/profile.active"
+PZ_HOMELAB_STATE="$gov_state/with-profile" PZ_HOMELAB_RAM_TOTAL_OVERRIDE=8192 \
+    "$REPO_ROOT/linux/server/homelab-governor.sh" budget-active | \
+    jq -e '.profile == "assistant-private" and .verdict == "pass"' >/dev/null
+echo "  budget-active real profile ok"
+# "core" nunca é chave pública de perfil appliance
+if "$REPO_ROOT/linux/server/homelab-governor.sh" check core >/dev/null 2>&1; then
+    echo "FAIL: 'core' aceito como perfil appliance"; exit 1
+fi
 if "$REPO_ROOT/linux/server/homelab-governor.sh" check bogus >/dev/null 2>&1; then
     echo "FAIL: unknown profile accepted"; exit 1
 fi

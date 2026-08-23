@@ -204,7 +204,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         "emulation-linux": ("Emulação Linux", "EmuDeck, frontends e layout compartilhado.", "Emulação"),
         "homelab": ("Homelab", "Docker, mídia, nuvem e monitoramento.", "Servidor"),
         "server-llm": ("Servidor LLM", "Ollama local + boot enxuto reversível.", "Servidor"),
-        "server-homelab": ("Servidor Homelab", "Docker + Tailscale: drive, mídia, cofre, monitor.", "Servidor"),
+        "server-homelab": ("Servidor Homelab", "Instalação de SO servidor: Docker + Tailscale (eixo install, distinto dos perfis appliance).", "Servidor"),
         "server-homelab-hermes": ("Homelab + Hermes", "Servidor caseiro com atuação remota Hermes.", "Servidor"),
         "server-llm-hermes": ("LLM + Hermes", "LLM local + Hermes remoto, SO enxuto.", "Servidor"),
         "server-llm-homelab": ("LLM + Homelab", "LLM local + servidor caseiro, SO enxuto.", "Servidor"),
@@ -388,8 +388,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
     actions.extend(
         [
             _a("homelab.status", "Homelab", "Status da stack", "Apps, perfil ativo, orçamento e política AI.", ("server", "homelab", "status", "--json"), "folder-remote", badge="JSON", keywords=("homelab", "jellyfin", "vaultwarden")),
-            _a("homelab.profiles", "Homelab", "Perfis e pesos", "Lista os 6 perfis do registro e pesos do governor.", ("server", "homelab", "profile", "list"), "folder-documents", badge="JSON", keywords=("perfil", "weights")),
-            _a("homelab.budget", "Homelab", "Orçamento do perfil", "MiB do governor com headroom de 20%.", ("server", "homelab", "governor", "budget", "core"), "preferences-system-performance", badge="Seguro", keywords=("governor", "budget", "ram")),
+            _a("homelab.profiles", "Homelab", "Perfis e pesos", "Perfis appliance (edge, assistant-*): só orçamento de RAM e pesos; o compose continua core/extras.", ("server", "homelab", "profile", "list"), "folder-documents", badge="JSON", keywords=("perfil", "weights")),
+            _a("homelab.budget", "Homelab", "Orçamento do perfil ativo", "MiB do governor para o perfil ativo da stack (headroom de 20%); perfis appliance são orçamento de RAM, não mudam o compose.", ("server", "homelab", "governor", "budget-active"), "preferences-system-performance", badge="Seguro", keywords=("governor", "budget", "ram")),
             _a("homelab.backup", "Homelab", "Backup verificado", "manifest.json + sha256 por volume nomeado.", ("server", "homelab", "backup"), "document-save", mutable=True, preview=("server", "homelab", "backup", "--dry-run"), badge="Backup"),
             _a("homelab.verify", "Homelab", "Verificar backup", "Recomputa sha256; falha fechado se adulterado.", ("server", "homelab", "backup", "verify", "--source", "{input}"), "document-edit-verify", mutable=True, preview=("server", "homelab", "status"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação"),
             _a("homelab.restore", "Homelab", "Restaurar backup (plano)", "Verifica o backup e mostra o impacto; aplicar exige confirmação explícita na CLI (--yes).", ("server", "homelab", "restore", "--source", "{input}", "--plan"), "document-revert", input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação", keywords=("restaurar", "backup", "resgate")),

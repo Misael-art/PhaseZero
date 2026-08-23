@@ -231,6 +231,24 @@ main() {
                 pz_governor_budget "$profile"
             fi
             ;;
+        budget-active)
+            # CCS-014: o orçamento mostrado na Central é sempre de um perfil
+            # real do registro (o ativo), nunca uma chave interna como "core".
+            local active headroom="${1:-}"
+            local state_dir="${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}"
+            active="$(cat "$state_dir/profile.active" 2>/dev/null || true)"
+            if [ -z "$active" ]; then
+                jq -cn --arg msg "nenhum perfil appliance ativo; defina com: pz server homelab profile set <key>" \
+                    --argjson keys "$(pz_governor_registry | jq -c '[.profiles[].key]')" \
+                    '{error:"no-active-profile", message:$msg, profiles:$keys}'
+                return 3
+            fi
+            if [ -n "$headroom" ]; then
+                pz_governor_budget "$active" "$headroom"
+            else
+                pz_governor_budget "$active"
+            fi
+            ;;
         check)
             local profile="${1:-}" headroom="${2:-}"
             [ -n "$profile" ] || { pz_error "check requires a profile"; return 2; }

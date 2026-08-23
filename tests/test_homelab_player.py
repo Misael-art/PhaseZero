@@ -272,6 +272,27 @@ def test_homelab_restore_catalog_action_is_plan_only(by_id_catalog):
     assert not action.mutable, "restore --plan é leitura; mutável só na CLI com --yes"
 
 
+def test_homelab_budget_targets_real_profile_not_core(by_id_catalog):
+    """CCS-014: o orçamento usa perfil real do registro, não a chave 'core'."""
+    action = by_id_catalog["homelab.budget"]
+    assert "core" not in action.args
+    assert "budget-active" in action.args
+    assert "compose" in action.description.casefold() or "ram" in action.description.casefold()
+
+
+def test_install_profiles_and_appliance_profiles_use_distinct_words(by_id_catalog):
+    """CCS-014: server-* instala SO; perfis appliance são orçamento de RAM."""
+    install_meta = by_id_catalog["server.homelab.status"]
+    profiles_action = by_id_catalog["homelab.profiles"]
+    assert "orçamento de ram" in profiles_action.description.casefold()
+    # o eixo de instalação continua descrevendo instalação de sistema
+    install_descriptions = " ".join(
+        a.description for aid, a in by_id_catalog.items()
+        if aid.startswith(("profile.server-homelab", "system.installation"))
+    ).casefold()
+    assert "instala" in install_descriptions or "instalação" in install_descriptions
+
+
 @pytest.fixture(scope="module")
 def by_id_catalog(app):
     from pathlib import Path as _Path
