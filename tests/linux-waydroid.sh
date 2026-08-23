@@ -23,6 +23,10 @@ bash -n "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh"
 jq empty "$REPO_ROOT/profiles/waydroid-linux.json"
 # CCS-021: a sessão handheld prefere gamescope; o perfil precisa instalá-lo.
 jq -e '.packages.linux.pacman | index("gamescope")' "$REPO_ROOT/profiles/waydroid-linux.json" >/dev/null
+# CCS-036: o help documenta stop e shares (contratos reais do CLI)
+pz_help="$("$REPO_ROOT/linux/pz" help)"
+grep -q 'pz waydroid stop' <<< "$pz_help" || { echo "FAIL: help sem pz waydroid stop"; exit 1; }
+grep -q 'pz waydroid shares' <<< "$pz_help" || { echo "FAIL: help sem pz waydroid shares"; exit 1; }
 
 "$REPO_ROOT/linux/pz" waydroid status | jq -e '(.host | has("binderFilesystem") and has("kwinWayland")) and (.access | has("sharesReady") and has("usbBusShared") and has("hostLink") and has("hostLinked")) and (.android | has("sessionRunning"))' >/dev/null
 plan_output="$("$REPO_ROOT/linux/pz" waydroid plan)"
