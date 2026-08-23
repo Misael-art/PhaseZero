@@ -208,4 +208,63 @@ grep -q 'Internal storage/Host' <<< "$shares_plan"
 grep -q 'PZ_WAYDROID_SOURCEFORGE_MIRRORS' "$REPO_ROOT/linux/waydroid/waydroid.sh"
 "$REPO_ROOT/linux/pz" install waydroid-linux --dry-run >/dev/null
 
+# CCS-007: imagem ausente na sessão kiosk desarma o autologin (escape).
+esc_conf_dir="$TMP_ROOT/escape-sddm"
+mkdir -p "$esc_conf_dir"
+printf '# PhaseZero managed: Waydroid one-shot GRUB boot profile\n[Autologin]\nUser=tester\nSession=phasezero-waydroid.desktop\nRelogin=true\n' > "$esc_conf_dir/92-phasezero-waydroid.conf"
+esc_marker="$TMP_ROOT/escape-state/phasezero/waydroid/autologin-escape.request"
+esc_log_dir="$TMP_ROOT/escape-logs"
+mkdir -p "$esc_log_dir"
+timeout 8 env \
+    HOME="$TMP_ROOT/home" \
+    XDG_STATE_HOME="$TMP_ROOT/escape-state" \
+    PATH="$fake_bin:$PATH" \
+    WAYLAND_DISPLAY="wl-escape-test" \
+    PZ_WAYDROID_REPO_FALLBACK="$REPO_ROOT" \
+    PZ_WAYDROID_SESSION_TARGET="/bin/true" \
+    PZ_WAYDROID_BASE_PROP="$TMP_ROOT/absent/waydroid_base.prop" \
+    PZ_WAYDROID_ESCAPE_HELPER="$REPO_ROOT/linux/waydroid/waydroid-escape.sh" \
+    PZ_SDDM_CONF_DIR="$esc_conf_dir" \
+    PZ_WAYDROID_ESCAPE_MARKER="$esc_marker" \
+    PZ_WAYDROID_SESSION_RESTARTS=1 \
+    bash "$REPO_ROOT/linux/waydroid/waydroid-session.sh" >/dev/null 2>&1 || true
+if [ -f "$esc_conf_dir/92-phasezero-waydroid.conf" ]; then
+    echo "FAIL: sessao com imagem ausente nao removeu o autologin Waydroid"
+    exit 1
+fi
+test -f "$esc_marker" || { echo "FAIL: escape nao armou o marker de greeter"; exit 1; }
+if timeout 5 env PZ_SDDM_CONF_DIR="$esc_conf_dir" PZ_WAYDROID_ESCAPE_MARKER="$esc_marker" \
+    bash "$REPO_ROOT/linux/waydroid/waydroid-escape.sh" status | grep -q '^managed_autologin: /'; then
+    echo "FAIL: status do escape ainda ve conf gerenciada"
+    exit 1
+fi
+
+# CCS-007: proximo boot waydroid consome o marker e mantem o greeter...
+boot_conf_dir="$TMP_ROOT/boot-sddm"
+mkdir -p "$boot_conf_dir"
+PZ_BOOT_CMDLINE='BOOT_IMAGE=/vmlinuz root=/dev/nvme0n1p2 phasezero.waydroid=1' \
+PZ_SDDM_CONF_DIR="$boot_conf_dir" \
+PZ_WAYDROID_SKIP_RUNTIME=1 \
+PZ_WAYDROID_SHARES_HELPER="/bin/true" \
+PZ_WAYDROID_BOOT_USER="tester" \
+PZ_WAYDROID_ESCAPE_MARKER="$esc_marker" \
+bash "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh" > /dev/null
+if [ -f "$boot_conf_dir/92-phasezero-waydroid.conf" ]; then
+    echo "FAIL: boot com marker de escape reescreveu o autologin"
+    exit 1
+fi
+test ! -f "$esc_marker" || { echo "FAIL: boot nao consumiu o marker de escape"; exit 1; }
+
+# ...e sem marker o autologin volta a ser escrito (controle positivo).
+PZ_BOOT_CMDLINE='BOOT_IMAGE=/vmlinuz root=/dev/nvme0n1p2 phasezero.waydroid=1' \
+PZ_SDDM_CONF_DIR="$boot_conf_dir" \
+PZ_WAYDROID_SKIP_RUNTIME=1 \
+PZ_WAYDROID_SHARES_HELPER="/bin/true" \
+PZ_WAYDROID_BOOT_USER="tester" \
+bash "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh" > /dev/null
+grep -q 'Relogin=true' "$boot_conf_dir/92-phasezero-waydroid.conf" || {
+    echo "FAIL: controle positivo — autologin deveria voltar sem marker"
+    exit 1
+}
+
 echo "linux-waydroid smoke ok"

@@ -11,6 +11,7 @@ CONFIGURED_REPO="${PZ_WAYDROID_REPO:-}"
 PZ_WAYDROID_REPO_FALLBACK="${PZ_WAYDROID_REPO_FALLBACK:-/mnt/sdcard/Projects/PhaseZero}"
 SESSION_TARGET="${PZ_WAYDROID_SESSION_TARGET:-/usr/local/lib/phasezero/waydroid-session}"
 DISPLAY_SESSION_HELPER="${PZ_DISPLAY_SESSION_HELPER:-/usr/local/lib/phasezero/display-session}"
+ESCAPE_HELPER="${PZ_WAYDROID_ESCAPE_HELPER:-/usr/local/lib/phasezero/waydroid-escape}"
 DESKTOP_FALLBACK="${PZ_WAYDROID_DESKTOP_FALLBACK:-0}"
 
 load_display_session_helper() {
@@ -59,6 +60,39 @@ resolve_session_target() {
         fi
     done
     return 1
+}
+
+resolve_escape_helper() {
+    local candidate script_dir
+    for candidate in \
+        "$ESCAPE_HELPER" \
+        "$CONFIGURED_REPO/linux/waydroid/waydroid-escape.sh" \
+        "$PZ_WAYDROID_REPO_FALLBACK/linux/waydroid/waydroid-escape.sh" \
+        "$(cd "$(dirname "$0")" 2>/dev/null && pwd)/waydroid-escape.sh"; do
+        [ -n "$candidate" ] || continue
+        if [ -r "$candidate" ]; then
+            ESCAPE_HELPER="$candidate"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# CCS-007: após falhas repetidas (ou imagem ausente), desarmar o autologin do
+# boot direto para que o próximo boot caia no greeter — padrão de escape do
+# WinVM, sem QGA. Uma tentativa por sessão; falha não derruba o launcher.
+request_escape_to_greeter() {
+    [ "${PZ_WAYDROID_ESCAPE_DISABLED:-0}" = "1" ] && return 0
+    if [ "${_PZ_ESCAPE_DONE:-0}" = "1" ]; then
+        return 0
+    fi
+    resolve_escape_helper || { log "escape: helper ausente"; return 1; }
+    if bash "$ESCAPE_HELPER" strip >> "$LOG_FILE" 2>&1; then
+        log "escape: autologin Waydroid desativado; proximo boot vai para o greeter"
+        _PZ_ESCAPE_DONE=1
+    else
+        log "escape: nao foi possivel desativar o autologin"
+    fi
 }
 
 resolve_session_target || true
@@ -227,14 +261,20 @@ wait_for_waydroid() {
     return 1
 }
 
+WAYDROID_BASE_PROP="${PZ_WAYDROID_BASE_PROP:-/var/lib/waydroid/waydroid_base.prop}"
+
 start_waydroid_session() {
     if ! command -v waydroid >/dev/null 2>&1; then
         log "waydroid command missing"
+        request_escape_to_greeter
         fallback_desktop
         return 1
     fi
-    if [ ! -e /var/lib/waydroid/waydroid_base.prop ]; then
+    if [ ! -e "$WAYDROID_BASE_PROP" ]; then
         log "Waydroid image not initialized"
+        # CCS-007: sem imagem, reentrar no kiosk é armadilha; desarma o
+        # autologin para o próximo boot mostrar o greeter.
+        request_escape_to_greeter
         fallback_desktop
         return 1
     fi
@@ -281,6 +321,8 @@ run_waydroid_ui_loop() {
             waydroid session stop >> "$LOG_FILE" 2>&1 || true
             sleep 3
         done
+        # CCS-007: N falhas seguidas de UI — garante saída no próximo boot.
+        request_escape_to_greeter
         fallback_desktop || true
     done
 }
