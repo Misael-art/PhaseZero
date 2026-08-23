@@ -97,6 +97,7 @@ class SteamDeckPage(BasePage):
             ("Instalar atalhos Game Mode", "steamdeck.hotkeys"),
             ("Alternar teclado", "steamdeck.keyboard.toggle"),
             ("Instalar Decky", "steamdeck.plugins"),
+            ("Ligar watcher", "steamdeck.watcher.enable"),
         ):
             button = QPushButton(label)
             button.setObjectName("secondaryButton")
@@ -104,6 +105,25 @@ class SteamDeckPage(BasePage):
             actions_row.addWidget(button)
         actions_row.addStretch(1)
         self._layout.addLayout(actions_row)
+
+        # CCS-012: ações elevadas ficam visíveis no primário com o custo claro.
+        admin_row = QHBoxLayout()
+        for label, action_id, risk in (
+            ("Controles TDP (requer admin)", "steamdeck.privileged",
+             "Instala sudoers limitados para TDP/GPU; revisível em steamdeck.privileged.status."),
+            ("Boot Game Mode (requer admin)", "steamdeck.boot",
+             "Escreve entrada GRUB dedicada; requer senha e toca configuração de boot."),
+            ("USB automático (requer admin)", "steamdeck.removable",
+             "Auto-mount de USB; desligado durante a Windows VM; requer senha."),
+        ):
+            button = QPushButton(label)
+            button.setObjectName("dangerOutlineButton")
+            button.setToolTip(risk)
+            button.setAccessibleDescription(risk)
+            button.clicked.connect(lambda _checked=False, aid=action_id: self.run_action(aid))
+            admin_row.addWidget(button)
+        admin_row.addStretch(1)
+        self._layout.addLayout(admin_row)
         self._layout.addStretch(1)
 
     def _fact(self, grid: QGridLayout, row: int, col: int, title: str) -> QLabel:
