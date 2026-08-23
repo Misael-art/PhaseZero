@@ -393,23 +393,34 @@ configure_waydroid_shared_access() {
 
 cmd_shares() {
     local sub="${1:-status}"
+    shift 2>/dev/null || true
+    local share_groups="all"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --groups) share_groups="${2:-all}"; shift ;;
+            --groups=*) share_groups="${1#--groups=}" ;;
+        esac
+        shift
+    done
     effective_config
     case "$sub" in
         install|repair)
             need_root
-            configure_waydroid_shared_access
+            PZ_WAYDROID_SHARE_GROUPS="$share_groups" configure_waydroid_shared_access
             ;;
         remove)
             need_root
-            [ -x "$SHARES_TARGET" ] && PZ_WAYDROID_BOOT_USER="$TARGET_USER" "$SHARES_TARGET" remove
+            [ -x "$SHARES_TARGET" ] && PZ_WAYDROID_BOOT_USER="$TARGET_USER" \
+                PZ_WAYDROID_SHARE_GROUPS="$share_groups" "$SHARES_TARGET" remove
             ;;
         dry-run|plan)
-            PZ_WAYDROID_BOOT_USER="$TARGET_USER" bash "$SHARES_SOURCE" dry-run
+            PZ_WAYDROID_BOOT_USER="$TARGET_USER" \
+                PZ_WAYDROID_SHARE_GROUPS="$share_groups" bash "$SHARES_SOURCE" dry-run
             return 0
             ;;
         status) ;;
         *)
-            pz_error "usage: waydroid shares (status|install|repair|remove|dry-run)"
+            pz_error "usage: waydroid shares (status|install|repair|remove|dry-run) [--groups folders,usb]"
             return 1
             ;;
     esac

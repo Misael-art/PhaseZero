@@ -71,6 +71,55 @@ def test_waydroid_power_follows_session_not_container(qapp, catalog):
     assert spy.at(0)[0].id == "waydroid.launch"
 
 
+def test_waydroid_three_toggles_are_independent_contracts(qapp, catalog):
+    """CCS-015: host-link ≠ pastas LXC ≠ USB — cada toggle dispara o par certo."""
+    page, _actions = _page(WaydroidPage, "Waydroid", catalog)
+    page.apply_payload({
+        "config": {"installed": True},
+        "android": {"initialized": True},
+        "host": {},
+        "access": {"hostLinked": False, "sharesReady": False, "mountCount": 0,
+                   "usbBusShared": False},
+        "boot": {},
+    })
+    spy = QSignalSpy(page.action_requested)
+    page.feature_controls[0][0].click()
+    assert spy.at(0)[0].id == "waydroid.host-access"
+    page.cancel_pending_action("waydroid.host-access")
+    page.feature_controls[1][0].click()
+    assert spy.at(1)[0].id == "waydroid.shares.enable"
+    page.cancel_pending_action("waydroid.shares.enable")
+    page.feature_controls[2][0].click()
+    assert spy.at(2)[0].id == "waydroid.usb.enable"
+    # estados independentes: só USB ligada não liga as pastas
+    page.apply_payload({
+        "config": {"installed": True},
+        "android": {"initialized": True},
+        "host": {},
+        "access": {"hostLinked": False, "sharesReady": False, "mountCount": 0,
+                   "usbBusShared": True},
+        "boot": {},
+    })
+    assert not page.feature_controls[1][0].isChecked()
+    assert page.feature_controls[2][0].isChecked()
+
+
+def test_waydroid_boot_actions_split_schedule_from_reboot(by_id_catalog):
+    """CCS-015: boot.next agenda; next-reboot é explícito e fica no advanced."""
+    schedule = by_id_catalog["waydroid.boot.next"]
+    reboot = by_id_catalog["waydroid.boot.next-reboot"]
+    assert schedule.args == ("waydroid", "boot", "next")
+    assert "NÃO reinicia" in schedule.description
+    assert reboot.args == ("waydroid", "boot", "next-reboot")
+    assert reboot.visibility == "advanced"
+    assert reboot.badge == "Alto risco"
+
+
+@pytest.fixture(scope="module")
+def by_id_catalog(catalog):
+    return {a.id: a for a in catalog}
+
+
 def test_waydroid_prevents_launch_before_configuration(qapp, catalog):
     page, _actions = _page(WaydroidPage, "Waydroid", catalog)
     page.apply_payload({"config": {"installed": False}, "android": {"initialized": False}})

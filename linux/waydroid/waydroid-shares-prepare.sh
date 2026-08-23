@@ -19,6 +19,10 @@ MEDIA_RW_UID="${PZ_WAYDROID_MEDIA_RW_UID:-1023}"
 SHARE_EXTRA="${PZ_WAYDROID_SHARE_EXTRA:-}"
 SKIP_ACL="${PZ_WAYDROID_SHARE_SKIP_ACL:-0}"
 TEST_MODE="${PZ_WAYDROID_SHARE_TEST_MODE:-0}"
+# CCS-015: grupos independentes de compartilhamento. "all" mantém o legado;
+# listas ("folders", "usb") tornam host-folders e barramento USB toggles
+# separados, sem um derrubar o estado do outro.
+SHARE_GROUPS="${PZ_WAYDROID_SHARE_GROUPS:-all}"
 INCLUDE_LINE="lxc.include = $SHARES_CONFIG"
 
 _PZ_TMP=()
@@ -95,24 +99,78 @@ remove_include() {
     rm -f "$tmp"
 }
 
+# Grupos presentes no config gerenciado atual (folders = tudo sob Host/,
+# usb = barramento /dev/bus/usb).
+config_targets() {
+    sed -n 's/^lxc\.mount\.entry = \([^ ]*\) \([^ ]*\) .*/\2/p' "$SHARES_CONFIG" 2>/dev/null || true
+}
+
+current_groups() {
+    local out=""
+    if config_targets | grep -q '^data/media/0/Host/'; then
+        out="folders"
+    fi
+    if config_targets | grep -q '^dev/bus/usb'; then
+        out="${out:+$out,}usb"
+    fi
+    printf '%s\n' "${out:-none}"
+}
+
+list_has() {
+    case ",$1," in *",$2,"*) return 0 ;; *) return 1 ;; esac
+}
+
+# Conjunto efetivo de grupos para a escrita do config.
+effective_groups() {
+    local current
+    current="$(current_groups)"
+    if [ "$SHARE_GROUPS" = "all" ]; then
+        printf '%s\n' "folders,usb"
+        return 0
+    fi
+    if [ "$ACTION" = "remove" ]; then
+        # remove: subtrai os grupos pedidos do estado atual.
+        local out="" group
+        IFS=',' read -r -a group <<< "$current"
+        local g
+        for g in "${group[@]:-}"; do
+            [ -n "$g" ] || continue
+            list_has "$SHARE_GROUPS" "$g" || out="${out:+$out,}$g"
+        done
+        printf '%s\n' "${out:-none}"
+        return 0
+    fi
+    # install com lista: união do estado atual com o pedido.
+    local out="$current" group g
+    IFS=',' read -r -a group <<< "$SHARE_GROUPS"
+    for g in "${group[@]:-}"; do
+        [ -n "$g" ] || continue
+        list_has "$out" "$g" || out="${out:+$out,}$g"
+    done
+    printf '%s\n' "$out"
+}
+
 write_config() {
-    local tmp key label path extra
+    local tmp key label path extra groups
+    groups="$(effective_groups)"
     [ -n "$TARGET_HOME" ] || {
         printf 'waydroid-shares: target home unresolved for %s\n' "$TARGET_USER" >&2
         return 1
     }
     tmp="$(mktemp)" && _PZ_TMP+=("$tmp")
     printf '%s\n' '# PhaseZero managed Waydroid host storage and USB access.' > "$tmp"
+    printf '%s\n' "# groups: $groups" >> "$tmp"
     printf '%s\n' '# Hidden credential directories are intentionally excluded.' >> "$tmp"
 
-    while read -r key label; do
-        [ -n "$key" ] || continue
-        path="$(xdg_user_dir "$key")"
-        [ -d "$path" ] || continue
-        ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/Home/$label"
-        grant_media_access "$path"
-        add_mount "$tmp" "$path" "data/media/0/Host/Home/$label"
-    done <<'EOF'
+    if list_has "$groups" folders; then
+        while read -r key label; do
+            [ -n "$key" ] || continue
+            path="$(xdg_user_dir "$key")"
+            [ -d "$path" ] || continue
+            ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/Home/$label"
+            grant_media_access "$path"
+            add_mount "$tmp" "$path" "data/media/0/Host/Home/$label"
+        done <<'EOF'
 DESKTOP Desktop
 DOWNLOAD Downloads
 DOCUMENTS Documents
@@ -123,32 +181,38 @@ PUBLICSHARE Public
 TEMPLATES Templates
 EOF
 
-    # Opt-in: expose the whole home (incl. dotfiles) instead of just XDG folders.
-    # Default stays XDG-only so Android apps never see ~/.ssh, keys, tokens, etc.
-    if [ "${PZ_WAYDROID_SHARE_FULL_HOME:-0}" = "1" ] && [ -d "$TARGET_HOME" ]; then
-        ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/Home/All"
-        grant_media_access "$TARGET_HOME"
-        add_mount "$tmp" "$TARGET_HOME" "data/media/0/Host/Home/All"
+        # Opt-in: expose the whole home (incl. dotfiles) instead of just XDG folders.
+        # Default stays XDG-only so Android apps never see ~/.ssh, keys, tokens, etc.
+        if [ "${PZ_WAYDROID_SHARE_FULL_HOME:-0}" = "1" ] && [ -d "$TARGET_HOME" ]; then
+            ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/Home/All"
+            grant_media_access "$TARGET_HOME"
+            add_mount "$tmp" "$TARGET_HOME" "data/media/0/Host/Home/All"
+        fi
+
+        install -d -o "$TARGET_USER" -g "$TARGET_USER" "$REMOVABLE_PATH" "$MEDIA_PATH"
+        ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/SDCard" "$ANDROID_MEDIA_ROOT/Host/Removable" \
+            "$ANDROID_MEDIA_ROOT/Host/Media" "$ANDROID_MEDIA_ROOT/Host/Mounts" "$ANDROID_MEDIA_ROOT/Host/Extra"
+
+        add_mount "$tmp" "$SDCARD_PATH" data/media/0/Host/SDCard
+        add_mount "$tmp" "$REMOVABLE_PATH" data/media/0/Host/Removable
+        add_mount "$tmp" "$MEDIA_PATH" data/media/0/Host/Media
+        add_mount "$tmp" "$MOUNTS_PATH" data/media/0/Host/Mounts
     fi
 
-    install -d -o "$TARGET_USER" -g "$TARGET_USER" "$REMOVABLE_PATH" "$MEDIA_PATH"
-    ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/SDCard" "$ANDROID_MEDIA_ROOT/Host/Removable" \
-        "$ANDROID_MEDIA_ROOT/Host/Media" "$ANDROID_MEDIA_ROOT/Host/Mounts" "$ANDROID_MEDIA_ROOT/Host/Extra"
+    if list_has "$groups" usb; then
+        add_mount "$tmp" "$USB_BUS_PATH" dev/bus/usb
+    fi
 
-    add_mount "$tmp" "$SDCARD_PATH" data/media/0/Host/SDCard
-    add_mount "$tmp" "$REMOVABLE_PATH" data/media/0/Host/Removable
-    add_mount "$tmp" "$MEDIA_PATH" data/media/0/Host/Media
-    add_mount "$tmp" "$MOUNTS_PATH" data/media/0/Host/Mounts
-    add_mount "$tmp" "$USB_BUS_PATH" dev/bus/usb
-
-    IFS=: read -r -a extras <<< "$SHARE_EXTRA"
-    for extra in "${extras[@]:-}"; do
-        [ -d "$extra" ] || continue
-        label="$(basename "$extra" | tr -c '[:alnum:]_.-' '_')"
-        ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/Extra/$label"
-        grant_media_access "$extra"
-        add_mount "$tmp" "$extra" "data/media/0/Host/Extra/$label"
-    done
+    if list_has "$groups" folders; then
+        IFS=: read -r -a extras <<< "$SHARE_EXTRA"
+        for extra in "${extras[@]:-}"; do
+            [ -d "$extra" ] || continue
+            label="$(basename "$extra" | tr -c '[:alnum:]_.-' '_')"
+            ensure_android_dir "$ANDROID_MEDIA_ROOT/Host/Extra/$label"
+            grant_media_access "$extra"
+            add_mount "$tmp" "$extra" "data/media/0/Host/Extra/$label"
+        done
+    fi
 
     install -d "$(dirname "$SHARES_CONFIG")"
     install -m 0644 "$tmp" "$SHARES_CONFIG"
@@ -180,16 +244,23 @@ case "$ACTION" in
         ;;
     remove)
         need_root
-        remove_include "$LXC_CONFIG_BASE"
-        remove_include "$LXC_CONFIG"
-        rm -f "$SHARES_CONFIG"
-        log "managed Waydroid shares removed"
+        if [ "$SHARE_GROUPS" != "all" ] && [ "$(effective_groups)" != "none" ]; then
+            # Remoção por grupo: reescreve o config sem o grupo pedido.
+            write_config
+            log "managed Waydroid share groups removed: $SHARE_GROUPS"
+        else
+            remove_include "$LXC_CONFIG_BASE"
+            remove_include "$LXC_CONFIG"
+            rm -f "$SHARES_CONFIG"
+            log "managed Waydroid shares removed"
+        fi
+        status
         ;;
     status|--status)
         status
         ;;
     dry-run|plan)
-        echo "Waydroid shared access plan"
+        echo "Waydroid shared access plan (groups: $(effective_groups))"
         echo "  personal folders: $TARGET_HOME (XDG directories only)"
         echo "  SD card: $SDCARD_PATH"
         echo "  removable: $REMOVABLE_PATH and $MEDIA_PATH"

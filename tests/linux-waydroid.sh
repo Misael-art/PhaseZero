@@ -178,6 +178,52 @@ grep -Fq ' data/media/0/Host/SDCard ' "$shares_root/shares.conf"
 grep -Fq ' dev/bus/usb ' "$shares_root/shares.conf"
 test -d "$shares_root/android/Host/SDCard"
 
+# CCS-015: grupos independentes — pastas (folders) e USB são toggles separados.
+shares_env=(
+    PZ_WAYDROID_SHARE_TEST_MODE=1
+    PZ_WAYDROID_SHARE_SKIP_ACL=1
+    PZ_WAYDROID_BOOT_USER="$(id -un)"
+    PZ_WAYDROID_TARGET_HOME="$HOME"
+    PZ_WAYDROID_LXC_SHARES_CONFIG="$shares_root/shares.conf"
+    PZ_WAYDROID_LXC_CONFIG_BASE="$shares_root/config_base"
+    PZ_WAYDROID_LXC_CONFIG="$shares_root/config"
+    PZ_WAYDROID_ANDROID_MEDIA_ROOT="$shares_root/android"
+    PZ_WAYDROID_SDCARD_PATH="$shares_root/sdcard"
+    PZ_WAYDROID_REMOVABLE_PATH="$shares_root/removable"
+    PZ_WAYDROID_MEDIA_PATH="$shares_root/media"
+    PZ_WAYDROID_MOUNTS_PATH="$shares_root/mnt"
+    PZ_WAYDROID_USB_BUS_PATH="$shares_root/usb"
+)
+# remove só o grupo usb: pastas permanecem
+env "${shares_env[@]}" PZ_WAYDROID_SHARE_GROUPS=usb \
+    bash "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh" remove > /dev/null
+if grep -q ' dev/bus/usb ' "$shares_root/shares.conf"; then
+    echo "FAIL: remove --groups usb deixou o barramento USB no config"
+    exit 1
+fi
+grep -q ' data/media/0/Host/SDCard ' "$shares_root/shares.conf" || {
+    echo "FAIL: remove --groups usb apagou as pastas compartilhadas"
+    exit 1
+}
+# add só usb de novo: união preserva pastas
+env "${shares_env[@]}" PZ_WAYDROID_SHARE_GROUPS=usb \
+    bash "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh" install | grep -q '^usb_bus_shared: yes$'
+grep -q ' data/media/0/Host/SDCard ' "$shares_root/shares.conf" || {
+    echo "FAIL: install --groups usb apagou as pastas compartilhadas"
+    exit 1
+}
+# dry-run declara os grupos efetivos
+plan_groups="$(env "${shares_env[@]}" PZ_WAYDROID_SHARE_GROUPS=folders \
+    bash "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh" dry-run)"
+grep -q 'groups: folders' <<< "$plan_groups"
+# teardown completo continua igual
+env "${shares_env[@]}" bash "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh" remove > /dev/null
+test ! -e "$shares_root/shares.conf"
+if grep -Fqx "lxc.include = $shares_root/shares.conf" "$shares_root/config"; then
+    echo "FAIL: teardown não removeu o include LXC"
+    exit 1
+fi
+
 sddm_test_dir="$TMP_ROOT/sddm"
 PZ_BOOT_CMDLINE='quiet phasezero.waydroid=1' \
 PZ_SDDM_CONF_DIR="$sddm_test_dir" \
