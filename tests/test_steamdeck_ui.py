@@ -126,3 +126,28 @@ def test_mode_actions_match_catalog_ids(catalog):
     for mode, action_id in MODE_ACTIONS.items():
         assert f"steamdeck.{mode}" == action_id
         assert action_id in by_id, f"{action_id} ausente no catálogo"
+
+
+def test_hotkeys_copy_matches_real_combinations(by_id_catalog):
+    """CCS-011: as hotkeys reais são Meta+Shift+F1–F8 (Ctrl+Alt é VT)."""
+    description = by_id_catalog["steamdeck.hotkeys"].description
+    assert "Meta+Shift" in description
+    assert "Ctrl+Alt" not in description
+
+
+def test_deck_previews_are_area_scoped_not_status(by_id_catalog):
+    plugins = by_id_catalog["steamdeck.plugins"]
+    conveniences = by_id_catalog["steamdeck.conveniences"]
+    assert plugins.preview_args == ("steamdeck", "plugins", "dry-run")
+    assert conveniences.preview_args == ("steamdeck", "conveniences", "plan")
+
+
+def test_display_detect_is_read_only(by_id_catalog):
+    display = by_id_catalog["steamdeck.display"]
+    assert not display.mutable, "detect é somente leitura"
+    assert display.args == ("steamdeck", "display", "detect")
+
+
+@pytest.fixture(scope="module")
+def by_id_catalog(qapp, catalog):
+    return {a.id: a for a in catalog}

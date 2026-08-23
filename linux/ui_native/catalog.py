@@ -237,16 +237,16 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("steamdeck.keyboard.repair", "Steam Deck", "Reparar teclado", "Configura Maliit/KDE e integração Steam.", ("steamdeck", "keyboard", "repair"), "input-keyboard", mutable=True, preview=("steamdeck", "keyboard", "status"), badge="Reparo"),
             _a("steamdeck.console", "Steam Deck", "Abrir console", "Inicia Steam Gamepad UI.", ("steamdeck", "console", "auto"), "applications-games", mutable=True, preview=("steamdeck", "status")),
             _a("steamdeck.desktop", "Steam Deck", "Abrir desktop", "Inicia sessão dev/desktop.", ("steamdeck", "dev", "docked-monitor"), "user-desktop", mutable=True, preview=("steamdeck", "status")),
-            _a("steamdeck.hotkeys", "Steam Deck", "Instalar hotkeys", "Instala Ctrl+Alt+F1…F6 e ações SteamOS.", ("steamdeck", "hotkeys", "install"), "preferences-desktop-keyboard-shortcuts", mutable=True, preview=("steamdeck", "status")),
+            _a("steamdeck.hotkeys", "Steam Deck", "Instalar hotkeys", "Instala Meta+Shift+F1…F8 e ações SteamOS.", ("steamdeck", "hotkeys", "install"), "preferences-desktop-keyboard-shortcuts", mutable=True, preview=("steamdeck", "status")),
             _a("steamdeck.watcher", "Steam Deck", "Instalar watcher", "Serviço que reage a dock e tela.", ("steamdeck", "watcher", "install"), "system-run", mutable=True, preview=("steamdeck", "status")),
             _a("steamdeck.privileged", "Steam Deck", "Controles privilegiados", "Bridge seguro para TDP/GPU.", ("steamdeck", "privileged", "install"), "security-high", mutable=True, preview=("steamdeck", "privileged", "status"), elevated=True),
             _a("steamdeck.boot", "Steam Deck", "Boot SteamOS", "Instala entrada de boot Gamepad UI.", ("steamdeck", "boot", "install"), "system-reboot", mutable=True, preview=("steamdeck", "boot", "status"), elevated=True),
-            _a("steamdeck.plugins", "Steam Deck", "Instalar Decky", "Decky Loader e plugins curados.", ("steamdeck", "plugins", "install"), "application-x-addon", mutable=True, preview=("steamdeck", "plugins", "status"), badge="Plugins"),
-            _a("steamdeck.plugins.repair", "Steam Deck", "Reparar Decky", "Restaura loader e plugins.", ("steamdeck", "plugins", "repair"), "tools-check-spelling", mutable=True, preview=("steamdeck", "plugins", "status"), badge="Reparo"),
+            _a("steamdeck.plugins", "Steam Deck", "Instalar Decky", "Decky Loader e plugins curados.", ("steamdeck", "plugins", "install"), "application-x-addon", mutable=True, preview=("steamdeck", "plugins", "dry-run"), badge="Plugins"),
+            _a("steamdeck.plugins.repair", "Steam Deck", "Reparar Decky", "Restaura loader e plugins.", ("steamdeck", "plugins", "repair"), "tools-check-spelling", mutable=True, preview=("steamdeck", "plugins", "dry-run"), badge="Reparo"),
             _a("steamdeck.launch-options", "Steam Deck", "Launch options", "Lista presets para jogos Steam.", ("steamdeck", "launch-options"), "document-properties"),
             _a("steamdeck.runtime", "Steam Deck", "Diagnóstico runtime", "Analisa runtime Steam e bibliotecas.", ("steamdeck", "runtime-diagnose"), "utilities-terminal"),
             _a("steamdeck.removable", "Steam Deck", "Montar removíveis", "Auto-mount USB (ignora durante Windows VM).", ("steamdeck", "removable", "install"), "drive-removable-media", mutable=True, preview=("steamdeck", "removable", "status"), elevated=True),
-            _a("steamdeck.display", "Steam Deck", "Detectar display", "Resolução TV/monitor para Game Mode.", ("steamdeck", "display", "detect"), "video-display", mutable=True, preview=("steamdeck", "display", "status")),
+            _a("steamdeck.display", "Steam Deck", "Detectar display", "Detecta perfil de tela e resolução do Game Mode sem alterar nada.", ("steamdeck", "display", "detect"), "video-display", badge="Seguro", keywords=("gamescope", "resolução", "oled")),
         ]
     )
 
@@ -802,7 +802,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("steamdeck.privileged.status", "Steam Deck", "Status privilegiado", "Estado da bridge TDP/GPU.", ("steamdeck", "privileged", "status"), "security-high", visibility="advanced"),
             _a("steamdeck.boot.status", "Steam Deck", "Status do boot SteamOS", "Audita entrada e sessão SteamOS.", ("steamdeck", "boot", "status"), "system-reboot", visibility="advanced"),
             _a("steamdeck.plugins.status", "Steam Deck", "Status Decky", "Saúde de loader, CEF e plugins.", ("steamdeck", "plugins", "status"), "application-x-addon", visibility="advanced"),
-            _a("steamdeck.conveniences", "Steam Deck", "Instalar conveniências", "Atalhos Return, Windows VM e Waydroid.", ("steamdeck", "conveniences", "install"), "applications-system", mutable=True, preview=("steamdeck", "status"), visibility="advanced"),
+            _a("steamdeck.conveniences", "Steam Deck", "Instalar conveniências", "Atalhos Return, Windows VM e Waydroid.", ("steamdeck", "conveniences", "install"), "applications-system", mutable=True, preview=("steamdeck", "conveniences", "plan"), visibility="advanced"),
             _a("steamdeck.removable.status", "Steam Deck", "Status de removíveis", "Audita auto-mount USB.", ("steamdeck", "removable", "status"), "drive-removable-media", visibility="advanced"),
             _a("steamdeck.display.status", "Steam Deck", "Status do display", "Audita TV/monitor para Game Mode.", ("steamdeck", "display", "status"), "video-display", visibility="advanced"),
 
