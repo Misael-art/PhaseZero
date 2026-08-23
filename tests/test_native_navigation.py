@@ -115,3 +115,26 @@ def test_routing_page_registered_in_sidebar_and_builds(qapp):
                     "ai.routing-plan", "ai.routing-apply-all", "ai.routing-rollback"):
             assert aid in window.registry.by_id, aid
         window.close()
+
+
+def test_homelab_reachable_from_sidebar_and_registry(qapp):
+    """CCS-013: Homelab é uma superfície alcançável — sidebar + registry."""
+    from linux.ui_native.catalog import CATEGORIES, SIDEBAR_GROUPS
+    from linux.ui_native.main_window import MainWindow
+
+    sidebar_categories = {cat for _title, cats in SIDEBAR_GROUPS for cat in cats}
+    assert "Homelab" in sidebar_categories, "Homelab ausente da navegação (SIDEBAR_GROUPS)"
+    # Toda categoria registrada deve ser navegável; nada pode ficar órfão.
+    orphans = [name for name, *_ in CATEGORIES if name not in sidebar_categories]
+    assert orphans == [], f"categorias fora do menu: {orphans}"
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+        window.show_category("Homelab")
+        assert "Homelab" in window.sidebar_buttons
+        page = window.registry.page_for("Homelab")
+        assert page is not None
+        assert page.__class__.__name__ == "HomelabPage"
+        window.close()

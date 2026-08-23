@@ -251,12 +251,17 @@ def test_homelab_page_never_spawns_resume_flag(app):
     # flag the CLI rejects. Plain `up` is already idempotent/convergent.
     import inspect
 
+    from PySide6.QtWidgets import QPushButton
+
     import linux.ui_native.pages.homelab as mod
 
     src = inspect.getsource(mod)
     assert "--resume" not in src, "Player ainda envia up --resume (flag inexistente)"
-    resume_buttons = [b for b in app.allWidgets() if getattr(b, "text", lambda: "")() == "Resume"]
+    page = _page()
+    resume_buttons = [b for b in page.findChildren(QPushButton) if b.text() == "Resume"]
     assert resume_buttons == []
+    up_buttons = [b for b in page.findChildren(QPushButton) if b.text() == "Up"]
+    assert up_buttons, "ação Up convergente deve existir no Player"
 
 
 def test_homelab_restore_catalog_action_is_plan_only(by_id_catalog):

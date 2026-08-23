@@ -35,7 +35,7 @@ DASHBOARD = ("Início", "go-home", "Bem-vindo de volta ao PhaseZero")
 # Sidebar sections group categories by context (EmuDeck-style grouping).
 SIDEBAR_GROUPS = (
     ("Ações rápidas", ("Início", "Visão geral", "Perfis")),
-    ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação")),
+    ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Homelab", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
     ("IA & Dev", ("IA & Dev", "Proxies IA", "Roteamento IA")),
     ("Desktop", ("Aplicativos", "Temas")),
