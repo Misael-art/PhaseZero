@@ -63,7 +63,7 @@ Evidência coletada em diagnóstico read-only do host:
 
 | ID | Requisito | Implementação esperada | Teste comportamental | Prova CI/hardware | Estado |
 |---|---|---|---|---|---|
-| WBR-001 | Encerramento de sessão gracioso | `windows-vm-session.sh`: launcher em background com monitor; fim de sessão (SIGHUP/TERM/INT, `shutdown.requested`) pede QGA `guest-login shutdown` → espera ≤120 s → TERM → 15 s → KILL; GTK com `confirm-quit=on` nos dois perfis (`5238f7d`) | `tests/test_windows_vm_session.sh`: stop-file e SIGTERM produzem sequência graciosa (`graceful:stop-file`, `graceful:signal`); `tests/linux-windows-vm-graphics.sh` cobre `confirm-quit=on` | hermética verde + runner 43/43; shutdown físico via GRUB pendente | in_progress |
+| WBR-001 | Encerramento de sessão gracioso | `windows-vm-session.sh`: launcher em background com monitor; fim de sessão (SIGHUP/TERM/INT, `shutdown.requested`) pede QGA `guest-login shutdown` → espera ≤120 s → TERM → 15 s → KILL; GTK com `window-close=off` nos dois perfis (`e982eee` substituiu o `confirm-quit=on` de `5238f7d`, que o QEMU rejeitava) | `tests/test_windows_vm_session.sh`: stop-file e SIGTERM produzem sequência graciosa (`graceful:stop-file`, `graceful:signal`); `tests/linux-windows-vm-graphics.sh` cobre `confirm-quit=on` | hermética verde + runner 43/43; shutdown físico via GRUB pendente | in_progress |
 | WBR-002 | Sem relançamento sobre estado sujo | Crash pós-estável recusa relançamento (pré-existente) e agora classifica `launcher-crash` como `graceful:false`; give-up registra `start-failure` sem tocar o convidado; `fallback_desktop` ganha kill-switch de teste | Suíte de sessão: crash ≥stable → rc propagado + `graceful:false`; start-failure limitado termina em give-up | hermética verde; CI `windows-vm-shell-test` agora roda a suíte (`c73f211`) | in_progress |
 | WBR-003 | Reparo leigo de um clique | `status --json` emite finding `guest-unclean-shutdown` (warning) com orientação; página Windows VM mostra card "Windows foi desligado de forma inesperada. Inicie e deixe o reparo automático concluir" e mantém Iniciar habilitado; hint info para saída não verificada | `tests/test_windows_vm_ui.py`: pending-sync + unclean acionam botão/mensagem e estado limpo os oculta | pytest 575 + 9; ciclo real de reparo no host pendente | in_progress |
 | WBR-004 | Runtime nunca stale após interação | Hook pós-transação grava `/var/lib/phasezero/windows-vm-runtime-sync.pending` (legível sem privilégio); `status --json` expõe `boot.bootRuntimePendingSync`; `boot install` consome o marker e grava `provenance.json` (fonte/versão/data) | `tests/test_boot_runtime_notice.sh`: stale→aviso+marker, current/ausente→silêncio, nunca falha transação; `linux-windows-vm.sh` asserts pendingSync true/false | hermética verde + E2E real no host: reinstalação 14:08 criou o marker e `status` instalado devolveu `pending:true` | in_progress |
@@ -88,7 +88,7 @@ Adicionar IDs, nunca reutilizar. Estados: `pending`, `in_progress`, `verified`,
 
 - Extrair padrão `stop_vm` para função compartilhada; aplicar na sessão GRUB e
   no launch comum.
-- `confirm-quit` no GTK; ação de desligar nos controles.
+- `window-close=off` no GTK (substituiu `confirm-quit`, rejeitado pelo QEMU); ação de desligar nos controles.
 - Registro de sessão versionado; status/UI consomem.
 - Gate: hermética verde; 1 shutdown físico real via GRUB com registro `clean`.
 
