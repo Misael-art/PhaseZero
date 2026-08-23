@@ -11,8 +11,8 @@ PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
 ACTION="${1:-status}"
-TARGET_USER="${PZ_WAYDROID_BOOT_USER:-${SUDO_USER:-${USER:-misael}}}"
-[ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
+# CCS-038: usuário alvo resolvido, nunca fixo no código.
+TARGET_USER="${PZ_WAYDROID_BOOT_USER:-$(pz_resolve_target_user)}"
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 DATA_ROOT="${PZ_WAYDROID_DATA_ROOT:-$TARGET_HOME/.local/share/waydroid/data}"
 MEDIA_ROOT="$DATA_ROOT/media/0"

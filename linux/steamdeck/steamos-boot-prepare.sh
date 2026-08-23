@@ -2,7 +2,14 @@
 # steamos-boot-prepare.sh - switch SDDM session for PhaseZero GRUB console boot
 set -euo pipefail
 
-TARGET_USER="${PZ_STEAMOS_BOOT_USER:-misael}"
+# CCS-038: resolução sem nome fixo.
+TARGET_USER="${PZ_STEAMOS_BOOT_USER:-}"
+if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
+    TARGET_USER="$(logname 2>/dev/null || true)"
+fi
+if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
+    TARGET_USER="$(getent passwd 1000 2>/dev/null | cut -d: -f1)"
+fi
 CMDLINE="${PZ_BOOT_CMDLINE:-$(cat /proc/cmdline 2>/dev/null || true)}"
 CONF_DIR="${PZ_SDDM_CONF_DIR:-/etc/sddm.conf.d}"
 CONF_FILE="$CONF_DIR/90-phasezero-steamos.conf"

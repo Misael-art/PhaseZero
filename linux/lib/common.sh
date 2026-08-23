@@ -1410,3 +1410,26 @@ pz_path_resolve() {
     done
     return 1
 }
+
+# Resolve o usuário humano alvo sem nome fixo no código (CCS-038).
+# Ordem: variável explícita -> SUDO_USER -> logname -> UID 1000 -> $USER.
+pz_resolve_target_user() {
+    local candidate="${1:-}"
+    if [ -z "$candidate" ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        candidate="$SUDO_USER"
+    fi
+    if [ -z "$candidate" ] || [ "$candidate" = "root" ]; then
+        local login_user
+        login_user="$(logname 2>/dev/null || true)"
+        if [ -n "$login_user" ] && [ "$login_user" != "root" ]; then
+            candidate="$login_user"
+        fi
+    fi
+    if [ -z "$candidate" ] || [ "$candidate" = "root" ]; then
+        candidate="$(getent passwd 1000 2>/dev/null | cut -d: -f1)"
+    fi
+    if [ -z "$candidate" ]; then
+        candidate="${USER:-}"
+    fi
+    [ "$candidate" != "root" ] && printf '%s\n' "$candidate" || printf '%s\n' ""
+}

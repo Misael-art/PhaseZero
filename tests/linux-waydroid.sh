@@ -20,6 +20,11 @@ bash -n "$REPO_ROOT/linux/waydroid/waydroid.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh"
+# CCS-038: nenhum fallback de usuário fixo nos scripts waydroid
+if grep -rn "misael" "$REPO_ROOT/linux/waydroid" --include="*.sh"; then
+    echo "FAIL: fallback de usuário hardcoded em linux/waydroid"
+    exit 1
+fi
 jq empty "$REPO_ROOT/profiles/waydroid-linux.json"
 # CCS-021: a sessão handheld prefere gamescope; o perfil precisa instalá-lo.
 jq -e '.packages.linux.pacman | index("gamescope")' "$REPO_ROOT/profiles/waydroid-linux.json" >/dev/null

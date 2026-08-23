@@ -17,6 +17,12 @@ mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 bash -n "$REPO_ROOT/linux/pz"
 find "$REPO_ROOT/linux" -type f -name '*.sh' -exec bash -n {} \;
 
+# CCS-038: nenhum fallback de usuário fixo nos scripts steamdeck
+if grep -rn "misael" "$REPO_ROOT/linux/steamdeck" --include="*.sh"; then
+    echo "FAIL: fallback de usuário hardcoded em linux/steamdeck"
+    exit 1
+fi
+
 jq empty "$REPO_ROOT"/profiles/*.json
 
 display_root="$TMP_ROOT/display"
