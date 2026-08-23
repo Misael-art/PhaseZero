@@ -4,6 +4,13 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
+PZ_TUNE_MODE="${1:-apply}"
+case "$PZ_TUNE_MODE" in
+    apply) ;;
+    --dry-run) ;;
+    *) pz_error "usage: ${0##*/} [--dry-run]"; exit 1 ;;
+esac
+
 pz_harden_firefox() {
     local profile_dir
     # shellcheck disable=SC2012
@@ -13,6 +20,10 @@ pz_harden_firefox() {
     [ -z "$profile_dir" ] && { pz_warn "no firefox profile found"; return; }
 
     local userjs="$profile_dir/user.js"
+    if [ "$PZ_TUNE_MODE" = "--dry-run" ]; then
+        pz_info "dry-run: faria backup e escreveria user.js de hardening Firefox em: $userjs"
+        return 0
+    fi
     pz_backup_file "$userjs" user >/dev/null
 
     cat > "$userjs" <<'EOF'
@@ -68,6 +79,10 @@ pz_harden_chromium() {
     [ ! -d "$config_dir" ] && { pz_warn "no chrome/chromium profile found"; return; }
 
     local policies_dir="$config_dir/Default/policies/managed"
+    if [ "$PZ_TUNE_MODE" = "--dry-run" ]; then
+        pz_info "dry-run: escreveria políticas gerenciadas Chromium/Chrome em: $policies_dir/phasezero-hardening.json"
+        return 0
+    fi
     mkdir -p "$policies_dir"
 
     cat > "$policies_dir/phasezero-hardening.json" <<'EOF'

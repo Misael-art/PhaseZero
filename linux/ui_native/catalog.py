@@ -166,7 +166,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
            badge="Requer admin", risk="high", group="Saúde e suporte",
            keywords=("dependência", "instalar", "pacote")),
         _a("system.repair-plan", "Visão geral", "Plano de reparo", "Gera recomendações sem alterar sistema.", ("repair-plan",), "document-properties", badge="Seguro"),
-        _a("system.support-bundle", "Visão geral", "Bundle de suporte", "Coleta logs sanitizados para diagnóstico.", ("support-bundle",), "folder-download", mutable=True, preview=("doctor",), badge="Coleta"),
+        _a("system.support-bundle", "Visão geral", "Bundle de suporte", "Coleta logs sanitizados para diagnóstico.", ("support-bundle",), "folder-download", mutable=True, preview=("support-bundle", "--plan"), badge="Coleta"),
         _a("system.version", "Visão geral", "Versão PhaseZero", "Mostra versão e canal instalados.", ("version",), "help-about"),
         _a("system.installation.status", "Visão geral", "Canais instalados", "Audita versões user, pacote nativo, Flatpak e raízes órfãs.", ("installation", "status"), "system-search", badge="JSON", group="Instalação PhaseZero", visibility="primary", result_view="table"),
         _a(
@@ -722,7 +722,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 ("tune", area),
                 "preferences-system",
                 mutable=True,
-                preview=("doctor",),
+                preview=("tune", area, "--dry-run"),
                 badge="Sistema",
             )
         )

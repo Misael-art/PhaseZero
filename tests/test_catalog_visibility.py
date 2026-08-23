@@ -115,6 +115,30 @@ def test_read_only_actions_are_never_high_risk(catalog):
     assert wrong == [], "ação somente-leitura marcada como alto risco: " + ", ".join(wrong)
 
 
+# --- CCS-003: preview de Ajustes/bundle nunca dispara o doctor -------------
+
+
+def test_tune_and_support_bundle_previews_do_not_run_doctor(catalog):
+    """Abrir preview de tune/support-bundle é plano da área, não doctor completo."""
+    by_id = {action.id: action for action in catalog}
+    for action_id in (
+        "tune.browser",
+        "tune.gaming",
+        "tune.dev",
+        "system.support-bundle",
+    ):
+        assert action_id in by_id, f"ação ausente no catálogo: {action_id}"
+        preview = by_id[action_id].preview_args or ()
+        assert "doctor" not in preview, (
+            f"{action_id}: preview ainda executa pz doctor ({preview})"
+        )
+
+    for area in ("browser", "gaming", "dev"):
+        preview = by_id[f"tune.{area}"].preview_args
+        assert preview == ("tune", area, "--dry-run")
+    assert by_id["system.support-bundle"].preview_args == ("support-bundle", "--plan")
+
+
 # --- ações de manutenção do host (PR2) dentro do mesmo modelo -------------
 
 

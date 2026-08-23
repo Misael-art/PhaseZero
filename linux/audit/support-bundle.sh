@@ -4,6 +4,26 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
+bundle_mode="${1:-collect}"
+case "$bundle_mode" in
+    collect) ;;
+    --plan)
+        # Preview honesto: lista o que seria coletado sem escrever nada.
+        pz_info "plano do bundle de suporte (nenhum arquivo será escrito):"
+        pz_info "  - sistema: uname, os-release, lscpu, lsusb, lspci, lsblk, df, free, uptime"
+        pz_info "  - logs: dmesg (200 linhas) e journalctl (500 linhas), com segredos redigidos"
+        pz_info "  - pacotes: pacman -Qe/-Q quando disponíveis"
+        pz_info "  - configs: version.json, profiles/*.json, bashrc e opencode.jsonc do usuário (redigidos)"
+        pz_info "  - módulos: doctor, steamdeck, docker, steamos-ux, windows-vm, waydroid, emulação, IA"
+        pz_info "  - saída: tarball .tar.gz com permissão 0600 em \$TMPDIR; staging removido ao fim"
+        exit 0
+        ;;
+    *)
+        pz_error "usage: ${0##*/} [--plan]"
+        exit 1
+        ;;
+esac
+
 pz_check_deps jq tar
 
 umask 077

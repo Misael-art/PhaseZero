@@ -33,4 +33,17 @@ fi
 rg -q '<redacted>' "$extract"
 
 rm -f "$bundle"
+
+# CCS-003: --plan é preview honesto — zero tarball, zero staging, zero escrita.
+before="$(find "$TMPDIR" -mindepth 1 | sort)"
+plan_out="$("$REPO_ROOT/linux/pz" support-bundle --plan)"
+after="$(find "$TMPDIR" -mindepth 1 | sort)"
+test "$before" = "$after" || { echo "FAIL: support-bundle --plan escreveu arquivos"; exit 1; }
+grep -q "plano do bundle de suporte" <<< "$plan_out" || { echo "FAIL: --plan sem plano"; exit 1; }
+
+if bash "$REPO_ROOT/linux/audit/support-bundle.sh" --modo-ruim >/dev/null 2>&1; then
+    echo "FAIL: support-bundle.sh aceitou modo inválido"
+    exit 1
+fi
+
 echo "linux-support-bundle smoke ok"

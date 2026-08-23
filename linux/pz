@@ -221,9 +221,9 @@ Usage:
   pz ai odysseus install       Provision rootless, loopback-only Odysseus stack
   pz ai odysseus update        Update to verified official branch commit with rollback
   pz doctor                    Run full system diagnostics
-  pz support-bundle            Generate support tarball
+  pz support-bundle [--plan]   Generate support tarball (--plan: preview sem escrita)
   pz repair-plan               Generate repair plan
-  pz tune <area>               Apply tuning (browser|gaming|dev)
+  pz tune <area> [--dry-run]   Apply tuning (browser|gaming|dev); --dry-run mostra o plano
   pz capabilities detect      Detect host/package compatibility as JSON
   pz capabilities catalog     List trusted capabilities [--group ID]
   pz capabilities plan        Preview --profile/--capability/--manifest selection
@@ -685,7 +685,11 @@ cmd_doctor() {
 }
 
 cmd_support_bundle() {
-    bash "$PZ_ROOT/linux/audit/support-bundle.sh"
+    case "${1:-collect}" in
+        collect|"") bash "$PZ_ROOT/linux/audit/support-bundle.sh" ;;
+        --plan)     bash "$PZ_ROOT/linux/audit/support-bundle.sh" --plan ;;
+        *)          pz_error "usage: pz support-bundle [--plan]"; return 1 ;;
+    esac
 }
 
 cmd_repair_plan() {
@@ -694,11 +698,17 @@ cmd_repair_plan() {
 
 cmd_tune() {
     local area="${1:-}"
-    [ -z "$area" ] && { pz_error "usage: pz tune (browser|gaming|dev)"; return 1; }
+    local mode="${2:-apply}"
+    [ -z "$area" ] && { pz_error "usage: pz tune (browser|gaming|dev) [--dry-run]"; return 1; }
+    case "$mode" in
+        apply|"") mode="apply" ;;
+        --dry-run) ;;
+        *) pz_error "usage: pz tune (browser|gaming|dev) [--dry-run]"; return 1 ;;
+    esac
     case "$area" in
-        browser) bash "$PZ_ROOT/linux/tuning/browser-hardening.sh" ;;
-        gaming)  bash "$PZ_ROOT/linux/tuning/gaming-tweaks.sh" ;;
-        dev)     bash "$PZ_ROOT/linux/tuning/dev-tweaks.sh" ;;
+        browser) bash "$PZ_ROOT/linux/tuning/browser-hardening.sh" "$mode" ;;
+        gaming)  bash "$PZ_ROOT/linux/tuning/gaming-tweaks.sh" "$mode" ;;
+        dev)     bash "$PZ_ROOT/linux/tuning/dev-tweaks.sh" "$mode" ;;
         *)       pz_error "unknown tune area: $area"; return 1 ;;
     esac
 }
