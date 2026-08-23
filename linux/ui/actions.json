@@ -2455,7 +2455,7 @@
     },
     {
       "name": "ai.repair",
-      "label": "Reparar MCP/IDE",
+      "label": "Reparar MCPs e IDEs",
       "command": "linux/pz ai repair",
       "mutable": true,
       "require_plan": true,
@@ -2679,7 +2679,7 @@
     },
     {
       "name": "ai.ides",
-      "label": "Configurar IDEs",
+      "label": "Configurar IDEs (agentes)",
       "command": "linux/pz ai setup ides",
       "mutable": true,
       "require_plan": true,

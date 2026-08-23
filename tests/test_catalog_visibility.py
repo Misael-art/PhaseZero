@@ -195,3 +195,12 @@ def test_scope_reduction_is_documented():
     text = doc.read_text(encoding="utf-8")
     assert "visibility" in text
     assert "catalog.py" in text
+
+
+def test_ide_copy_uses_one_vocabulary(catalog):
+    """CCS-035: OpenCode, proxies e reparo compartilham o stem 'Configurar/Reparar IDEs'."""
+    by_id = {a.id: a for a in catalog}
+    assert by_id["ai.ides"].title == "Configurar IDEs (agentes)"
+    assert by_id["ai.repair"].title == "Reparar MCPs e IDEs"
+    page_src = (ROOT / "linux/ui_native/pages/ai_proxies.py").read_text(encoding="utf-8")
+    assert '"Configurar IDEs (proxies)"' in page_src, "botão da página Proxies saiu do vocabulário"

@@ -569,7 +569,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
     ai_rows = [
         ("status", "Status IA", "Stack local e agentes.", ("ai", "status"), None),
         ("doctor", "Diagnóstico MCP", "Audita integrações MCP.", ("ai", "doctor"), None),
-        ("repair", "Reparar MCP/IDE", "Repara integrações seguras.", ("ai", "repair"), ("ai", "doctor")),
+        ("repair", "Reparar MCPs e IDEs", "Repara integrações seguras.", ("ai", "repair"), ("ai", "doctor")),
         ("desktop", "Reparar apps desktop", "Claude/Codex e atualizadores.", ("ai", "desktop", "repair"), ("ai", "desktop", "status")),
         ("compat", "Agent compatibility", "RTK, Caveman, Headroom e memória.", ("ai", "compat", "setup"), ("ai", "compat", "status")),
         ("admin", "Admin bridge", "Instala phasezero-admin/bigsudo.", ("ai", "setup", "admin"), ("ai", "admin", "status")),
@@ -588,7 +588,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("codexbar-setup", "Configurar CodexBar", "Instala somente CLI/config; plasmoid permanece opt-in.", ("ai", "codexbar", "setup"), ("ai", "codexbar", "status")),
         ("codexbar-auth", "Autenticar CodexBar", "Detecta sessões Codex/Claude sem exibir credenciais.", ("ai", "codexbar", "auth", "--provider", "all"), ("ai", "codexbar", "status")),
         ("codexbar-repair", "Reparar CodexBar", "Repara CLI/config sem instalar ou atualizar QML no Plasma.", ("ai", "codexbar", "repair"), ("ai", "codexbar", "health")),
-        ("ides", "Configurar IDEs", "Integra agents (OpenCode, Codex, Claude) nas IDEs/editor.", ("ai", "setup", "ides"), ("ai", "status")),
+        ("ides", "Configurar IDEs (agentes)", "Integra agents (OpenCode, Codex, Claude) nas IDEs/editor.", ("ai", "setup", "ides"), ("ai", "status")),
         ("mcp-sync", "Sincronizar MCPs", "Sincroniza defaults seguros.", ("ai", "mcp", "sync", "all"), ("ai", "mcp", "status")),
         ("claude-status", "Claude + Bonsai", "Audita OAuth, rotas isoladas, hooks e conflitos com proxies.", ("ai", "claude", "status"), None),
         ("claude-install", "Reparar Claude + Bonsai", "Aplica instalação transacional com backup e rollback automático.", ("ai", "claude", "install", "--yes"), ("ai", "claude", "install", "--dry-run")),
