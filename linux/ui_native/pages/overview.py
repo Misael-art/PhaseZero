@@ -139,7 +139,9 @@ class OverviewPage(BasePage):
         self.health_summary.setText("Isso pode levar alguns segundos.")
         self.health_icon.setText("…")
         self.begin_loading(self._show_status_skeletons)
-        action = self.by_id.get("system.doctor")
+        # CCS-016: o hero de saúde usa o escopo system — rápido e sem
+        # auditar subsystemas opcionais que o usuário nunca habilitou.
+        action = self.by_id.get("system.doctor.system") or self.by_id.get("system.doctor")
         if action is not None:
             self.status_loader.fetch_action(action)
         else:
@@ -163,7 +165,7 @@ class OverviewPage(BasePage):
         self._technical_labels.clear()
 
     def _on_status_ready(self, action_id: str, _stdout: str, parsed: object) -> None:
-        if action_id != "system.doctor":
+        if action_id not in {"system.doctor", "system.doctor.system"}:
             return
         self.finish_loading()
         self._clear_health()
@@ -261,7 +263,7 @@ class OverviewPage(BasePage):
         return row
 
     def _on_status_failed(self, action_id: str, _error: str) -> None:
-        if action_id != "system.doctor":
+        if action_id not in {"system.doctor", "system.doctor.system"}:
             return
         self.finish_loading()
         self._clear_health()

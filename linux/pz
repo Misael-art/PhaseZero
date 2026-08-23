@@ -681,7 +681,14 @@ cmd_ai() {
 cmd_doctor() {
     # Global watchdog: per-check timeouts bound every subcommand (doctor.sh),
     # this caps the whole run. Override with PZ_DOCTOR_TIMEOUT (seconds).
-    timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
+    local scope="full"
+    if [ "${1:-}" = "--scope" ]; then
+        case "${2:-}" in
+            system|full) scope="$2"; shift 2 ;;
+            *) pz_error "usage: pz doctor [--scope system|full]"; return 1 ;;
+        esac
+    fi
+    PZ_DOCTOR_SCOPE="$scope" timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
 }
 
 cmd_support_bundle() {

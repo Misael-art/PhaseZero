@@ -148,6 +148,9 @@ def _p(
 def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSpec]:
     actions: list[ActionSpec] = [
         _a("system.doctor", "Visão geral", "Diagnóstico completo", "Audita host, boot, jogos, IA e integrações.", ("doctor",), "dialog-information", badge="Seguro"),
+        # CCS-016: a Visão geral usa o escopo system (rápido); o completo
+        # continua disponível na busca.
+        _a("system.doctor.system", "Visão geral", "Saúde do sistema", "Checagem rápida de host e serviços sem auditar subsystemas opcionais.", ("doctor", "--scope", "system"), "dialog-information", badge="JSON", group="Saúde e suporte", visibility="advanced", keywords=("saúde", "rápido")),
         # Optional dependencies: what is missing, what that costs, and a way to
         # fix it without leaving the app. Install is privileged and separate
         # from the report so nothing is installed by merely looking.
