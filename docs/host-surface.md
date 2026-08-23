@@ -130,6 +130,13 @@ Legenda: **✅ coberto** = toda mutação passa por um chokepoint · **⚠️ pa
 
 ## Dívida técnica explícita
 
+> CCS-031 (2026-08-23): **D2–D5 ficam `deferred`** neste plano. Instrumentar
+> essas mutações root (polkit, GRUB de quatro módulos, `pz_boot_atomic_install`,
+> sysctl via `sudo` cru) exige executar os caminhos privilegiados no host real
+> para provar comportamento — e mutar GRUB/sysctl ao vivo é proibido no
+> mandato da sessão CCS. A lista abaixo permanece a fonte da dívida; um commit
+> por chokepoint quando houver janela de boot autorizada.
+
 Mutações **conhecidas e ainda não instrumentadas**. Cada linha é um item de
 trabalho, não uma omissão. Nenhuma delas grava backup ao lado do original — o
 critério da correção 1 continua satisfeito.

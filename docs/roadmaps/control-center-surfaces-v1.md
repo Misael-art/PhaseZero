@@ -16,7 +16,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Planejado; implementação ainda não aceita como concluída |
+| Status | **Fases 0–2 implementadas** (ver matriz); físico opcional pendente do operador |
 | Criado | 2026-08-23, America/Sao_Paulo |
 | Origem | Diagnóstico de superfícies (sessão Grok); wiki `notes/surface-maturity-audit-2026-08-23.md` |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
@@ -83,18 +83,18 @@ nenhum `windows.install` no modo simples.
 
 | ID | Requisito | Implementação | Teste | Prova | Estado |
 |---|---|---|---|---|---|
-| CCS-010 | Página Steam Deck viva | StatusLoader: modo, watcher, teclado, Decky, boot. Radios leem `status.mode`. Não é só CatalogWorkspace + rádio | pytest página: payload liga radios e facts | pytest | pending |
-| CCS-011 | Copy e preview honestos no Deck | Hotkeys **Meta+Shift+F1–F8**. Plugins preview = `plugins dry-run`. Conveniências = `conveniences plan`. Display detect não `mutable` | assert catálogo | pytest | pending |
-| CCS-012 | Elevated primário visível | `action_section`: boot/privileged/USB no grupo Sessão/Controles com badge de risco. Advanced = `*.status` e remove. Expor `watcher enable` | pytest grouping | pytest | pending |
-| CCS-013 | Homelab no menu ou fundido | `SIDEBAR_GROUPS` inclui Homelab **ou** Player move para Servidor e categoria some. Uma superfície | pytest sidebar + registry | pytest | pending |
-| CCS-014 | Um vocabulário de perfil | Copy: install `server-*` ≠ appliance `edge\|assistant-*` (só orçamento RAM; compose continua core/extras). `homelab.budget` perfil real, não `core` | teste hermético budget; copy review | hermético | pending |
-| CCS-015 | Waydroid: três toggles e dois boots | Host-link ≠ LXC shares ≠ USB. `waydroid.boot.next` agenda; ação explícita “Reiniciar no Android” para `next-reboot` | pytest UI + linux-waydroid | hermético | pending |
-| CCS-016 | Doctor não inunda host fresco | `subsystem_opted` default `never` se conf ausente. Overview nativo `PZ_DOCTOR_SCOPE=system`. Alinhar `linux/audit/subsystems.conf` com o código | `tests/linux-doctor.sh` host sem conf → INFO, não 50 WARN | hermético | pending |
-| CCS-017 | Contrato `~/Emulation` | `docs/host-surface.md`: wipe/uninstall nunca toca; módulo emulação escreve em `$PZ_EMULATION_ROOT` | review doc; uninstall test continua a não apagar | doc + teste wipe | pending |
-| CCS-018 | Optimizers estritos | `set -euo pipefail` em `dolphin.sh`, `duckstation.sh`, `pcsx2.sh` | `linux-emulation-optimizers.sh` | hermético | pending |
-| CCS-019 | OmniRoute: UI ou sumir | Card experimental no catálogo **ou** CLI deprecado. 9Router permanece o router público | catálogo 0 ou 1 OmniRoute, nunca silencioso | pytest catálogo | pending |
-| CCS-020 | WinVM modo simples honesto | Esconder `windows.install` (disco vazio) do modo simples. QGA-down = modal/bloqueio de launch (120s+KILL recria NTFS suja). Sliders RAM/CPU rotulados só-leitura | pytest UI | pytest. WBR-007 continua no roadmap WinVM | pending |
-| CCS-021 | `gamescope` no perfil Waydroid | `profiles/waydroid-linux.json` inclui gamescope (sessão handheld já prefere) | profile JSON assert | hermético | pending |
+| CCS-010 | Página Steam Deck viva | StatusLoader: modo, watcher, teclado, Decky, boot. Radios leem `status.mode`. Não é só CatalogWorkspace + rádio | pytest página: payload liga radios e facts | pytest | verified `1bcb225` |
+| CCS-011 | Copy e preview honestos no Deck | Hotkeys **Meta+Shift+F1–F8**. Plugins preview = `plugins dry-run`. Conveniências = `conveniences plan`. Display detect não `mutable` | assert catálogo | pytest | verified `b948719` |
+| CCS-012 | Elevated primário visível | `action_section`: boot/privileged/USB no grupo Sessão/Controles com badge de risco. Advanced = `*.status` e remove. Expor `watcher enable` | pytest grouping | pytest | verified `dbe43e7` |
+| CCS-013 | Homelab no menu ou fundido | `SIDEBAR_GROUPS` inclui Homelab **ou** Player move para Servidor e categoria some. Uma superfície | pytest sidebar + registry | pytest | verified `ea8feb1` (sidebar Plataformas) |
+| CCS-014 | Um vocabulário de perfil | Copy: install `server-*` ≠ appliance `edge\|assistant-*` (só orçamento RAM; compose continua core/extras). `homelab.budget` perfil real, não `core` | teste hermético budget; copy review | hermético | verified `e4df975` (budget-active) |
+| CCS-015 | Waydroid: três toggles e dois boots | Host-link ≠ LXC shares ≠ USB. `waydroid.boot.next` agenda; ação explícita “Reiniciar no Android” para `next-reboot` | pytest UI + linux-waydroid | hermético | verified `cbdaa4f` |
+| CCS-016 | Doctor não inunda host fresco | `subsystem_opted` default `never` se conf ausente. Overview nativo `PZ_DOCTOR_SCOPE=system`. Alinhar `linux/audit/subsystems.conf` com o código | `tests/linux-doctor.sh` host sem conf → INFO, não 50 WARN | hermético | verified `9538c0d` |
+| CCS-017 | Contrato `~/Emulation` | `docs/host-surface.md`: wipe/uninstall nunca toca; módulo emulação escreve em `$PZ_EMULATION_ROOT` | review doc; uninstall test continua a não apagar | doc + teste wipe | verified `5061d93` |
+| CCS-018 | Optimizers estritos | `set -euo pipefail` em `dolphin.sh`, `duckstation.sh`, `pcsx2.sh` | `linux-emulation-optimizers.sh` | hermético | verified `5061d93` |
+| CCS-019 | OmniRoute: UI ou sumir | Card experimental no catálogo **ou** CLI deprecado. 9Router permanece o router público | catálogo 0 ou 1 OmniRoute, nunca silencioso | pytest catálogo | verified `3cb05cb` (card experimental) |
+| CCS-020 | WinVM modo simples honesto | Esconder `windows.install` (disco vazio) do modo simples. QGA-down = modal/bloqueio de launch (120s+KILL recria NTFS suja). Sliders RAM/CPU rotulados só-leitura | pytest UI | pytest. WBR-007 continua no roadmap WinVM | verified `f7f500e` |
+| CCS-021 | `gamescope` no perfil Waydroid | `profiles/waydroid-linux.json` inclui gamescope (sessão handheld já prefere) | profile JSON assert | hermético | verified `85393d6` |
 
 ### Fase 2 — Higiene (P2)
 
@@ -103,15 +103,15 @@ CHANGELOG 1.16.x; decisão explícita sobre `linux/ui/server.py`.
 
 | ID | Requisito | Implementação | Teste | Prova | Estado |
 |---|---|---|---|---|---|
-| CCS-030 | Apagar pyc de páginas mortas | `pages/{boot,flatpak,applications,ai_dev,steamdeck,waydroid,server}.cpython-314.pyc` | tree limpa | git | pending |
-| CCS-031 | Ledger root D2–D5 | GRUB/polkit/sysctl/iso-boot via chokepoint ou `print_root_items` completo (removable udev incluso). Escopo grande: um commit por chokepoint | `test_host_ledger.py` / wipe notes | hermético | pending |
-| CCS-032 | Headers de roadmap honestos | Temas: shipped. Homelab header 1.14.7 → snapshot atual, **sem** marcar appliance concluído. WinVM: `confirm-quit` → `window-close=off` | review | doc | pending |
-| CCS-033 | CHANGELOG | Unreleased WinVM/IA/Homelab sob versão real 1.16.x/1.17; 1.13.0 não parece latest | review | doc | pending |
-| CCS-034 | Destino `linux/ui/server.py` | Decidir: manter com teste de drift contra `catalog.py`, ou marcar legado e parar de expandir | ADR curto neste arquivo | decisão | pending |
-| CCS-035 | Copy tríplice IDE | Unificar labels OpenCode / proxies / “Sincronizar IDEs” | catálogo | pytest copy | pending |
-| CCS-036 | `pz` help Waydroid | Documentar `stop` e `shares` | help grep | hermético | pending |
-| CCS-037 | Testes UI Waydroid | Espelhar `test_windows_vm_ui.py` para power/toggles | pytest | pytest | pending |
-| CCS-038 | Fallback user `misael` | Tirar hardcoded dos scripts waydroid/steamdeck | grep | hermético | pending |
+| CCS-030 | Apagar pyc de páginas mortas | `pages/{boot,flatpak,applications,ai_dev,steamdeck,waydroid,server}.cpython-314.pyc` | tree limpa | git | verified `6e50482` (pycs apagados no checkout de trabalho + guarda) |
+| CCS-031 | Ledger root D2–D5 | GRUB/polkit/sysctl/iso-boot via chokepoint ou `print_root_items` completo (removable udev incluso). Escopo grande: um commit por chokepoint | `test_host_ledger.py` / wipe notes | hermético | deferred 2026-08-23 — provar instrumentação exigiria executar mutações root/GRUB ao vivo, proibidas; lista mantida em docs/host-surface.md D2–D5 |
+| CCS-032 | Headers de roadmap honestos | Temas: shipped. Homelab header 1.14.7 → snapshot atual, **sem** marcar appliance concluído. WinVM: `confirm-quit` → `window-close=off` | review | doc | verified `034539f` |
+| CCS-033 | CHANGELOG | Unreleased WinVM/IA/Homelab sob versão real 1.16.x/1.17; 1.13.0 não parece latest | review | doc | verified `034539f` |
+| CCS-034 | Destino `linux/ui/server.py` | Decidir: manter com teste de drift contra `catalog.py`, ou marcar legado e parar de expandir | ADR curto neste arquivo | decisão | verified `ed80af5` — ADR abaixo |
+| CCS-035 | Copy tríplice IDE | Unificar labels OpenCode / proxies / “Sincronizar IDEs” | catálogo | pytest copy | verified `5958407` |
+| CCS-036 | `pz` help Waydroid | Documentar `stop` e `shares` | help grep | hermético | verified `b3a152c` |
+| CCS-037 | Testes UI Waydroid | Espelhar `test_windows_vm_ui.py` para power/toggles | pytest | verified `a2a11ad` — espelho vive em test_service_control_ui.py |
+| CCS-038 | Fallback user `misael` | Tirar hardcoded dos scripts waydroid/steamdeck | grep | hermético | verified `f053adb` (windows-vm/homelab anotados p/ seus roadmaps) |
 
 Fora deste plano (apontar, não executar aqui):
 
@@ -144,17 +144,37 @@ Não fazer neste plano:
 | Data | Agente | Branch/worktree | IDs | Resultado |
 |---|---|---|---|---|
 | 2026-08-23 | Grok | diagnóstico em `main` `ea9b927` | — | Auditoria. Plano criado. Zero implementação |
+| 2026-08-23 | ox-alpha (opencode) | `codex/ccs-surfaces-v1`, worktree `/mnt/sdcard/Projects/pz-ccs-surfaces` | CCS-002..007, 010..021, 030..038 | **Fases 0–2 fechadas.** `verified`: todos exceto CCS-000 e CCS-031. `deferred`: CCS-000 (ops de storage; ledger WinVM) e CCS-031 (mutação root/GRUB proibida; lista em host-surface.md). Host não mutado em runtime: nenhum reboot, nenhum GRUB/sysctl/SDDM ao vivo, nenhum `homelab up`; único toque físico foi apagar pycs órfãos untracked (CCS-030). Gates por fase verdes (pytest UI + linux-waydroid/steamos-ux/homelab/doctor/emulation-optimizers) |
+
+### ADR — destino de `linux/ui/server.py` (CCS-034)
+
+**Decisão: manter como fallback gerado, com drift test.** O server web
+(`pz ui web|server`) é superfície de contingência, nunca fonte: seu allowlist
+(`linux/ui/actions.json`) é derivado do catálogo nativo via
+`linux/ui/generate_actions.py`. Um teste compara o arquivo commitado com a
+regeneração fresca e falha apontando o comando de regeneração — o web não
+pode anunciar ação que o catálogo não define nem deixar de anunciar as novas.
+Não expandir features específicas da web; esforço de UI vai para a nativa.
 
 ## Handoff (modelo)
 
 ```text
-Objetivo da sessão: <IDs CCS-xxx>
-Branch e worktree: <dedicado, não WinVM/Homelab>
-HEAD inicial / final:
-Arquivos:
-Testes e resultados:
-Host mutado? (deve ser não, salvo CCS-000 ops)
-Próximo ID exatamente:
+Objetivo da sessão: fechar o roadmap CCS v1 (Fases 0–2)
+Branch e worktree: codex/ccs-surfaces-v1 em /mnt/sdcard/Projects/pz-ccs-surfaces (dedicado)
+HEAD inicial / final: ea9b927 → ver último commit da branch (sessão 2026-08-23)
+Arquivos: windows_vm.py, catalog.py, main_window.py, pages/{steamdeck,service_control,
+  homelab,overview}.py, waydroid{,-boot-prepare,-session,-shares-prepare,-escape}.sh,
+  steamdeck/{common,display-session}.sh, homelab-stack.sh, homelab-governor.sh,
+  doctor.sh, pz, tuning/*, optimizers, host-surface.md, CHANGELOG.md, actions.json,
+  roadmaps (CCS/WinVM/Temas/Homelab), tests/*
+Testes e resultados: pytest UI 120+ verde (offscreen); linux-waydroid,
+  linux-steamos-ux, linux-homelab, linux-doctor, linux-emulation-optimizers,
+  linux-tuning, linux-support-bundle todos verdes por ID e nos gates de fase
+Host mutado? (deve ser não, salvo CCS-000 ops): NÃO — nenhum reboot/GRUB/sysctl/
+  SDDM ao vivo; nenhum `homelab up`; único toque físico: rm de pycs órfãos
+  untracked em linux/ui_native/pages/__pycache__ (CCS-030)
+Próximo ID exatamente: nenhum pendente no plano; operador decide CCS-031 (D2–D5),
+  WBR físicos e validação física opcional do escape Waydroid
 ```
 
 ## Definição de concluído
