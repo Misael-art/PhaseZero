@@ -12,6 +12,17 @@
       "input_label": ""
     },
     {
+      "name": "system.doctor.system",
+      "label": "Saúde do sistema",
+      "command": "linux/pz doctor --scope system",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Visão geral",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "system.deps.status",
       "label": "Dependências opcionais",
       "command": "linux/pz deps status --json",
@@ -55,7 +66,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz doctor"
+      "plan_command": "linux/pz support-bundle --plan"
     },
     {
       "name": "system.version",
@@ -434,11 +445,23 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz steamdeck status"
+      "plan_command": "linux/pz steamdeck watcher status"
+    },
+    {
+      "name": "steamdeck.watcher.enable",
+      "label": "Ligar watcher",
+      "command": "linux/pz steamdeck watcher enable",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Steam Deck",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz steamdeck watcher status"
     },
     {
       "name": "steamdeck.privileged",
-      "label": "Controles privilegiados",
+      "label": "Controles TDP (admin)",
       "command": "linux/pz steamdeck privileged install",
       "mutable": true,
       "require_plan": true,
@@ -450,7 +473,7 @@
     },
     {
       "name": "steamdeck.boot",
-      "label": "Boot SteamOS",
+      "label": "Boot Game Mode (admin)",
       "command": "linux/pz steamdeck boot install",
       "mutable": true,
       "require_plan": true,
@@ -470,7 +493,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz steamdeck plugins status"
+      "plan_command": "linux/pz steamdeck plugins dry-run"
     },
     {
       "name": "steamdeck.plugins.repair",
@@ -482,7 +505,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz steamdeck plugins status"
+      "plan_command": "linux/pz steamdeck plugins dry-run"
     },
     {
       "name": "steamdeck.launch-options",
@@ -508,7 +531,7 @@
     },
     {
       "name": "steamdeck.removable",
-      "label": "Montar removíveis",
+      "label": "USB automático (admin)",
       "command": "linux/pz steamdeck removable install",
       "mutable": true,
       "require_plan": true,
@@ -522,13 +545,12 @@
       "name": "steamdeck.display",
       "label": "Detectar display",
       "command": "linux/pz steamdeck display detect",
-      "mutable": true,
-      "require_plan": true,
+      "mutable": false,
+      "require_plan": false,
       "module": "Steam Deck",
       "elevated": false,
       "input_kind": "",
-      "input_label": "",
-      "plan_command": "linux/pz steamdeck display status"
+      "input_label": ""
     },
     {
       "name": "windows.status",
@@ -1171,6 +1193,18 @@
     {
       "name": "waydroid.boot.next",
       "label": "Próximo boot Android",
+      "command": "linux/pz waydroid boot next",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz waydroid boot status"
+    },
+    {
+      "name": "waydroid.boot.next-reboot",
+      "label": "Reiniciar no Android agora",
       "command": "linux/pz waydroid boot next-reboot",
       "mutable": true,
       "require_plan": true,
@@ -1206,27 +1240,51 @@
     },
     {
       "name": "waydroid.shares.enable",
-      "label": "Ativar dispositivos USB",
-      "command": "linux/pz waydroid shares install",
+      "label": "Pastas do host no Android",
+      "command": "linux/pz waydroid shares install --groups folders",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": true,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz waydroid shares dry-run"
+      "plan_command": "linux/pz waydroid shares dry-run --groups folders"
     },
     {
       "name": "waydroid.shares.disable",
-      "label": "Desativar dispositivos USB",
-      "command": "linux/pz waydroid shares remove",
+      "label": "Remover pastas do Android",
+      "command": "linux/pz waydroid shares remove --groups folders",
       "mutable": true,
       "require_plan": true,
       "module": "Waydroid",
       "elevated": true,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz waydroid status --json"
+      "plan_command": "linux/pz waydroid shares status"
+    },
+    {
+      "name": "waydroid.usb.enable",
+      "label": "USB no Android",
+      "command": "linux/pz waydroid shares install --groups usb",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz waydroid shares dry-run --groups usb"
+    },
+    {
+      "name": "waydroid.usb.disable",
+      "label": "Sem USB no Android",
+      "command": "linux/pz waydroid shares remove --groups usb",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Waydroid",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz waydroid shares status"
     },
     {
       "name": "waydroid.boot.remove",
@@ -1276,8 +1334,8 @@
     },
     {
       "name": "homelab.budget",
-      "label": "Orçamento do perfil",
-      "command": "linux/pz server homelab governor budget core",
+      "label": "Orçamento do perfil ativo",
+      "command": "linux/pz server homelab governor budget-active",
       "mutable": false,
       "require_plan": false,
       "module": "Homelab",
@@ -1311,15 +1369,14 @@
     },
     {
       "name": "homelab.restore",
-      "label": "Restaurar backup",
-      "command": "linux/pz server homelab restore --source {input} --yes",
-      "mutable": true,
-      "require_plan": true,
+      "label": "Restaurar backup (plano)",
+      "command": "linux/pz server homelab restore --source {input} --plan",
+      "mutable": false,
+      "require_plan": false,
       "module": "Homelab",
       "elevated": false,
       "input_kind": "path",
-      "input_label": "Selecione pasta de backup Homelab",
-      "plan_command": "linux/pz server homelab restore --source {input} --dry-run"
+      "input_label": "Selecione pasta de backup Homelab"
     },
     {
       "name": "homelab.policy",
@@ -2942,6 +2999,17 @@
       "plan_command": "linux/pz updates latest"
     },
     {
+      "name": "ai.omniroute-status",
+      "label": "Status OmniRoute (experimental)",
+      "command": "linux/pz ai omniroute status",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "ai.claude-rollback",
       "label": "Rollback Claude + Bonsai",
       "command": "linux/pz ai claude rollback {input}",
@@ -3201,7 +3269,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz doctor"
+      "plan_command": "linux/pz tune browser --dry-run"
     },
     {
       "name": "tune.gaming",
@@ -3213,7 +3281,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz doctor"
+      "plan_command": "linux/pz tune gaming --dry-run"
     },
     {
       "name": "tune.dev",
@@ -3225,7 +3293,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz doctor"
+      "plan_command": "linux/pz tune dev --dry-run"
     },
     {
       "name": "host.status",
@@ -3350,7 +3418,7 @@
       "elevated": false,
       "input_kind": "",
       "input_label": "",
-      "plan_command": "linux/pz steamdeck status"
+      "plan_command": "linux/pz steamdeck conveniences plan"
     },
     {
       "name": "steamdeck.removable.status",
