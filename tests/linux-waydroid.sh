@@ -21,6 +21,8 @@ bash -n "$REPO_ROOT/linux/waydroid/waydroid-boot-prepare.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh"
 jq empty "$REPO_ROOT/profiles/waydroid-linux.json"
+# CCS-021: a sessão handheld prefere gamescope; o perfil precisa instalá-lo.
+jq -e '.packages.linux.pacman | index("gamescope")' "$REPO_ROOT/profiles/waydroid-linux.json" >/dev/null
 
 "$REPO_ROOT/linux/pz" waydroid status | jq -e '(.host | has("binderFilesystem") and has("kwinWayland")) and (.access | has("sharesReady") and has("usbBusShared") and has("hostLink") and has("hostLinked")) and (.android | has("sessionRunning"))' >/dev/null
 plan_output="$("$REPO_ROOT/linux/pz" waydroid plan)"
