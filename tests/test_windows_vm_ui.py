@@ -247,6 +247,74 @@ def test_windows_vm_dock_grub_click_dispatches_checked_enable(ws_page):
     assert spy.at(1)[0].id == "windows.boot.dock.disable"
 
 
+# ── CCS-020: modo simples honesto e launch protegido sem QGA ─────────
+
+def test_windows_install_action_is_advanced_only(by_id):
+    action = by_id["windows.install"]
+    assert action.visibility == "advanced", (
+        "instalador bruto (disco vazio) não pode aparecer no modo simples"
+    )
+
+
+def test_sliders_are_labelled_read_only(ws_page):
+    page, _actions = ws_page
+    assert "somente leitura" in page.ram_slider.toolTip().casefold()
+    assert "somente leitura" in page.cpu_slider.toolTip().casefold()
+    assert not page.ram_slider.isEnabled()
+    assert not page.cpu_slider.isEnabled()
+
+
+def test_launch_with_guest_agent_risk_requires_modal_confirmation(ws_page, qapp):
+    from PySide6.QtTest import QSignalSpy
+
+    page, _actions = ws_page
+    payload = {
+        "status": "warning",
+        "health": {
+            "readyToLaunch": True,
+            "findings": [{"id": "guest-unclean-shutdown"}],
+        },
+        "config": {"installed": True},
+        "vm": {"diskExists": True, "installedLike": True},
+        "libvirt": {"state": "missing"},
+        "host": {"qemu": "/usr/bin/qemu"},
+        "access": {},
+    }
+    page._on_status_ready("windows.status", "", dict(payload))
+
+    spy = QSignalSpy(page.action_requested)
+    # operador cancela o modal → nada é disparado
+    page._confirm_risky_launch = lambda: False
+    page._power_action()
+    assert spy.count() == 0
+
+    # operador confirma → windows.launch dispara
+    page._confirm_risky_launch = lambda: True
+    page._power_action()
+    assert spy.count() == 1
+    assert spy.at(0)[0].id == "windows.launch"
+
+
+def test_launch_without_guest_agent_risk_needs_no_modal(ws_page):
+    page, _actions = ws_page
+    page._on_status_ready("windows.status", "", {
+        "status": "ok",
+        "health": {"readyToLaunch": True, "findings": []},
+        "config": {"installed": True},
+        "vm": {"diskExists": True, "installedLike": True},
+        "libvirt": {"state": "missing"},
+        "host": {"qemu": "/usr/bin/qemu"},
+        "access": {},
+    })
+    called = []
+    page._confirm_risky_launch = lambda: called.append(1) or True
+    from PySide6.QtTest import QSignalSpy
+    spy = QSignalSpy(page.action_requested)
+    page._power_action()
+    assert spy.count() == 1
+    assert called == [], "modal não deveria aparecer com guest agent saudável"
+
+
 def test_windows_status_has_budget_for_aggregate_host_probes():
     assert StatusLoader.timeout_ms("windows.status") == 45_000
     assert StatusLoader.timeout_ms("steamdeck.status") == 15_000
