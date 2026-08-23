@@ -223,6 +223,30 @@ def test_windows_vm_dock_grub_button_tracks_installed_state(ws_page):
     assert not page.dock_entry_button.isChecked()
 
 
+def test_windows_vm_dock_grub_click_dispatches_checked_enable(ws_page):
+    page, _actions = ws_page
+    page._on_status_ready("windows.status", "", {
+        "status": "ok",
+        "health": {"readyToLaunch": True, "findings": []},
+        "config": {"installed": True},
+        "vm": {"diskExists": True, "installedLike": True},
+        "libvirt": {"state": "missing"},
+        "host": {"qemu": "/usr/bin/qemu"},
+        "access": {},
+        "boot": {"bootRuntimeStale": False, "dockEntryInstalled": False},
+    })
+    spy = QSignalSpy(page.action_requested)
+    assert not page.dock_entry_button.isChecked()
+
+    page.dock_entry_button.click()
+    assert spy.count() == 1
+    assert spy.at(0)[0].id == "windows.boot.dock.enable"
+
+    page.dock_entry_button.click()
+    assert spy.count() == 2
+    assert spy.at(1)[0].id == "windows.boot.dock.disable"
+
+
 def test_windows_status_has_budget_for_aggregate_host_probes():
     assert StatusLoader.timeout_ms("windows.status") == 45_000
     assert StatusLoader.timeout_ms("steamdeck.status") == 15_000

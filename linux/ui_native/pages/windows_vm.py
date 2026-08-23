@@ -276,8 +276,8 @@ class WindowsVmPage(BasePage):
         )
         self.dock_entry_button.clicked.connect(
             lambda: self.run_action(
-                "windows.boot.dock.disable" if self.dock_entry_button.isChecked()
-                else "windows.boot.dock.enable"
+                "windows.boot.dock.enable" if self.dock_entry_button.isChecked()
+                else "windows.boot.dock.disable"
             )
         )
         images = QPushButton("Gerenciar imagens")
