@@ -403,6 +403,26 @@ if eval "$BENV '$REPO_ROOT/linux/pz' server homelab backup verify --source '$TMP
     echo "FAIL: verify accepted dir without manifest"; exit 1
 fi
 echo "  verify missing-manifest fails closed ok"
+# restore --plan: verify + impacto, zero escrita (CCS-004)
+plan_before="$(find "$BKT" -mindepth 1 | sort)"
+plan_out="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --plan 2>/dev/null" | grep -v '^INFO:')"
+printf '%s\n' "$plan_out" | jq -e '.action == "restore" and .plan == true and .verified == true and .requiresConfirmation == true and (.volumesAffected | index("vaultwarden_data"))' >/dev/null
+plan_after="$(find "$BKT" -mindepth 1 | sort)"
+test "$plan_before" = "$plan_after" || { echo "FAIL: restore --plan escreveu arquivos"; exit 1; }
+# plan de backup adulterado mostra verified:false e falha fechado
+cp "$BKT/bk1/vaultwarden_data.tgz" "$BKT/bk1/vaultwarden_data.tgz.bak"
+printf 'tamper' >> "$BKT/bk1/vaultwarden_data.tgz"
+if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --plan" >/dev/null 2>&1; then
+    echo "FAIL: restore --plan aceitou backup adulterado"; exit 1
+fi
+tampered_raw="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --plan 2>/dev/null")" || true
+jq -e '.plan == true and .verified == false' < <(grep -v '^INFO:' <<< "$tampered_raw") >/dev/null
+mv "$BKT/bk1/vaultwarden_data.tgz.bak" "$BKT/bk1/vaultwarden_data.tgz"
+# --plan não combina com --yes/--dry-run
+if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --plan --yes" >/dev/null 2>&1; then
+    echo "FAIL: restore aceitou --plan junto de --yes"; exit 1
+fi
+echo "  restore --plan zero-write ok"
 # tamper: modify an archive, verify must fail closed
 cp "$BKT/bk1/vaultwarden_data.tgz" "$BKT/bk1/vaultwarden_data.tgz.bak"
 printf 'tamper' >> "$BKT/bk1/vaultwarden_data.tgz"

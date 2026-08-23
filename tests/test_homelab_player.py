@@ -246,6 +246,36 @@ def test_homelab_page_pick_restore_never_passes_yes(app):
     assert "--plan" in calls[-1][2]
 
 
+def test_homelab_page_never_spawns_resume_flag(app):
+    # CCS-004: the stack never parsed `up --resume`; the Player must not send a
+    # flag the CLI rejects. Plain `up` is already idempotent/convergent.
+    import inspect
+
+    import linux.ui_native.pages.homelab as mod
+
+    src = inspect.getsource(mod)
+    assert "--resume" not in src, "Player ainda envia up --resume (flag inexistente)"
+    resume_buttons = [b for b in app.allWidgets() if getattr(b, "text", lambda: "")() == "Resume"]
+    assert resume_buttons == []
+
+
+def test_homelab_restore_catalog_action_is_plan_only(by_id_catalog):
+    action = by_id_catalog["homelab.restore"]
+    joined = " ".join(action.args)
+    assert "--yes" not in joined, "catálogo não pode disparar restore com --yes"
+    assert "--plan" in action.args
+    assert not action.mutable, "restore --plan é leitura; mutável só na CLI com --yes"
+
+
+@pytest.fixture(scope="module")
+def by_id_catalog(app):
+    from pathlib import Path as _Path
+
+    from linux.ui_native.catalog import build_catalog
+
+    return {a.id: a for a in build_catalog(_Path(ROOT))}
+
+
 def test_homelab_page_restore_without_backup_warns(app):
     import linux.ui_native.pages.homelab as mod
 
