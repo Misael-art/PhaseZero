@@ -632,6 +632,21 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             )
         )
 
+    # CCS-019: OmniRoute visível e rotulado como experimental; o 9Router
+    # segue sendo o router público da Central. Exatamente um card.
+    actions.append(
+        _a(
+            "ai.omniroute-status",
+            "IA & Dev",
+            "Status OmniRoute (experimental)",
+            "Router alternativo via CLI; o 9Router segue sendo o router público da Central.",
+            ("ai", "omniroute", "status"),
+            "network-workgroup",
+            badge="Experimental",
+            keywords=("omniroute", "router", "experimental"),
+        )
+    )
+
     actions.append(
         _a(
             "ai.claude-rollback",

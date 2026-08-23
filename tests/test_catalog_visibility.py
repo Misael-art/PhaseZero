@@ -170,6 +170,25 @@ def test_maintenance_actions_are_searchable(catalog):
     assert "limpeza" in by_id["host.status"].keywords
 
 
+# --- CCS-019: OmniRoute visível e rotulado; 9Router segue público -----------
+
+
+def test_omniroute_appears_exactly_once_with_experimental_badge(catalog):
+    omniroute = [action for action in catalog if "omniroute" in " ".join(action.args).casefold()]
+    assert len(omniroute) == 1, f"esperado 1 card OmniRoute, há {len(omniroute)}"
+    card = omniroute[0]
+    assert card.badge == "Experimental"
+    assert not card.mutable, "card experimental é somente leitura (status)"
+    assert "9router" in card.description.casefold(), (
+        "copy precisa apontar o 9Router como router público"
+    )
+
+
+def test_9router_remains_the_public_router(catalog):
+    nine = [action for action in catalog if ".9router" in action.id or "9router" in action.args]
+    assert len(nine) > 5, "9Router deixou de ser a superfície principal do router"
+
+
 def test_scope_reduction_is_documented():
     doc = ROOT / "docs/pr3-scope-reduction.md"
     assert doc.is_file(), "docs/pr3-scope-reduction.md ausente (correção 6)"
