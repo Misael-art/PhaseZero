@@ -37,7 +37,10 @@ def test_waydroid_page_covers_catalog_and_maps_visual_status(qapp, catalog):
     assert page.represented_action_ids == {action.id for action in actions}
     page.apply_payload({
         "config": {"installed": True},
-        "android": {"initialized": True, "imageType": "GAPPS", "serviceActive": "active"},
+        "android": {
+            "initialized": True, "imageType": "GAPPS", "serviceActive": "active",
+            "sessionRunning": True,
+        },
         "host": {"binderDevices": True},
         "access": {"sharesReady": True, "hostLinked": True, "mountCount": 4, "usbBusShared": True},
         "boot": {"helperInstalled": True, "artifactsCurrent": True},
@@ -48,6 +51,24 @@ def test_waydroid_page_covers_catalog_and_maps_visual_status(qapp, catalog):
     spy = QSignalSpy(page.action_requested)
     page._power_action()
     assert spy.at(0)[0].id == "waydroid.stop"
+
+
+def test_waydroid_power_follows_session_not_container(qapp, catalog):
+    """CCS-005: container ativo + sessão parada = Parado (▶ Iniciar)."""
+    page, _actions = _page(WaydroidPage, "Waydroid", catalog)
+    page.apply_payload({
+        "config": {"installed": True},
+        "android": {"initialized": True, "serviceActive": "active", "sessionRunning": False},
+        "host": {"binderDevices": True},
+        "access": {},
+        "boot": {},
+    })
+    assert page.state_label.text() == "● Parado"
+    assert page.power_button.text() == "▶ Iniciar"
+    assert "Container ativo" in page.state_detail.text()
+    spy = QSignalSpy(page.action_requested)
+    page._power_action()
+    assert spy.at(0)[0].id == "waydroid.launch"
 
 
 def test_waydroid_prevents_launch_before_configuration(qapp, catalog):

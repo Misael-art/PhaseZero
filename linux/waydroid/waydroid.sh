@@ -612,6 +612,12 @@ status_json() {
     waydroid_initialized && initialized="yes"
     waydroid_active="$(service_state waydroid-container active)"
     waydroid_enabled="$(service_state waydroid-container enabled)"
+    # CCS-005: energia pela sessão Android, não pelo container. O container
+    # pode estar ativo sem nenhuma sessão Android utilizável.
+    local session_running="no"
+    if [ -n "$waydroid_bin" ] && timeout 10 "$waydroid_bin" status 2>/dev/null | grep -Eq '^Session:[[:space:]]*RUNNING$'; then
+        session_running="yes"
+    fi
     [ -x "$BOOT_HELPER_TARGET" ] && boot_helper="yes"
     [ -x "$SESSION_TARGET" ] && session_launcher="yes"
     [ -x "$SHARES_TARGET" ] && shares_helper="yes"
@@ -640,6 +646,7 @@ status_json() {
         --arg initialized "$initialized" \
         --arg serviceActive "$waydroid_active" \
         --arg serviceEnabled "$waydroid_enabled" \
+        --arg sessionRunning "$session_running" \
         --arg imageType "$IMAGE_TYPE" \
         --arg restartAttempts "$SESSION_RESTARTS" \
         --arg initAttempts "$INIT_ATTEMPTS" \
@@ -677,6 +684,7 @@ status_json() {
                 imageType: $imageType,
                 serviceActive: $serviceActive,
                 serviceEnabled: $serviceEnabled,
+                sessionRunning: ($sessionRunning == "yes"),
                 restartAttempts: ($restartAttempts|tonumber),
                 initAttempts: ($initAttempts|tonumber),
                 resumablePrefetch: ($prefetchImages == "1"),
@@ -712,16 +720,24 @@ print_status() {
 
 cmd_stop() {
     parse_options "$@"
-    local waydroid_bin output rc=0
+    local waydroid_bin output rc=0 state="stopped"
     waydroid_bin="$(command_path waydroid)"
     [ -n "$waydroid_bin" ] || { pz_error "waydroid command missing"; return 1; }
     set +e
-    output="$(timeout 30 "$waydroid_bin" session stop 2>&1)"
-    rc=$?
+    if timeout 15 "$waydroid_bin" status 2>/dev/null | grep -Eq '^Session:[[:space:]]*RUNNING$'; then
+        output="$(timeout 30 "$waydroid_bin" session stop 2>&1)"
+        rc=$?
+        [ "$rc" -eq 0 ] || state="error"
+    else
+        # CCS-005: stop idempotente — sessão já parada é sucesso, não erro.
+        output="session already stopped"
+        rc=0
+        state="already-stopped"
+    fi
     set -e
     if [ "$JSON_OUT" = "1" ]; then
-        jq -n --arg detail "$output" --argjson success "$([ "$rc" -eq 0 ] && echo true || echo false)" \
-            '{success:$success,state:(if $success then "stopped" else "error" end),detail:$detail}'
+        jq -n --arg detail "$output" --argjson success "$([ "$rc" -eq 0 ] && echo true || echo false)" --arg state "$state" \
+            '{success:$success,state:$state,detail:$detail}'
     elif [ "$rc" -eq 0 ]; then
         pz_info "Waydroid session stopped; apps and data preserved"
     else

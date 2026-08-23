@@ -22,7 +22,7 @@ bash -n "$REPO_ROOT/linux/waydroid/waydroid-session.sh"
 bash -n "$REPO_ROOT/linux/waydroid/waydroid-shares-prepare.sh"
 jq empty "$REPO_ROOT/profiles/waydroid-linux.json"
 
-"$REPO_ROOT/linux/pz" waydroid status | jq -e '(.host | has("binderFilesystem") and has("kwinWayland")) and (.access | has("sharesReady") and has("usbBusShared") and has("hostLink") and has("hostLinked"))' >/dev/null
+"$REPO_ROOT/linux/pz" waydroid status | jq -e '(.host | has("binderFilesystem") and has("kwinWayland")) and (.access | has("sharesReady") and has("usbBusShared") and has("hostLink") and has("hostLinked")) and (.android | has("sessionRunning"))' >/dev/null
 plan_output="$("$REPO_ROOT/linux/pz" waydroid plan)"
 grep -q 'PhaseZero Waydroid plan' <<< "$plan_output"
 boot_output="$("$REPO_ROOT/linux/pz" waydroid boot dry-run)"
@@ -46,14 +46,47 @@ fake_bin="$TMP_ROOT/bin"
 mkdir -p "$fake_bin"
 cat > "$fake_bin/waydroid" <<'EOF'
 #!/usr/bin/env bash
-[ -z "${PZ_WAYDROID_TEST_ARGS:-}" ] || printf '%s\n' "$*" > "$PZ_WAYDROID_TEST_ARGS"
+[ -z "${PZ_WAYDROID_TEST_ARGS:-}" ] || printf '%s\n' "$*" >> "${PZ_WAYDROID_TEST_ARGS}.log"
+if [ "${1:-}" = "status" ]; then
+    printf '%s\n' "${PZ_WAYDROID_FAKE_STATUS:-Session: STOPPED
+Container: STOPPED}"
+fi
 exit 0
 EOF
 chmod +x "$fake_bin/waydroid"
+
+# CCS-005: container ativo + sessão parada — status expõe os dois fatos.
+fake_systemctl="$fake_bin/systemctl"
+cat > "$fake_systemctl" <<'EOF'
+#!/usr/bin/env bash
+case "${1:-}" in
+    is-active) echo active ;;
+    is-enabled) echo enabled ;;
+esac
+exit 0
+EOF
+chmod +x "$fake_systemctl"
+mixed_status="$(PATH="$fake_bin:$PATH" "$REPO_ROOT/linux/pz" waydroid status --json | jq -c .android)"
+jq -e '.serviceActive == "active" and .sessionRunning == false' <<< "$mixed_status" >/dev/null
+
+# stop com sessão rodando chama session stop e reporta stopped.
 stop_args="$TMP_ROOT/waydroid-stop-args"
-stop_result="$(PATH="$fake_bin:$PATH" PZ_WAYDROID_TEST_ARGS="$stop_args" "$REPO_ROOT/linux/pz" waydroid stop --json)"
+stop_result="$(
+    PATH="$fake_bin:$PATH" PZ_WAYDROID_FAKE_STATUS='Session: RUNNING' \
+    PZ_WAYDROID_TEST_ARGS="$stop_args" "$REPO_ROOT/linux/pz" waydroid stop --json
+)"
 jq -e '.success == true and .state == "stopped"' <<< "$stop_result" >/dev/null
-grep -Fxq 'session stop' "$stop_args"
+grep -Fxq 'session stop' "$stop_args.log"
+
+# CCS-005: stop idempotente — sessão já parada é sucesso e não chama stop de novo.
+idle_args="$TMP_ROOT/waydroid-idle-args"
+rm -f "$idle_args.log"
+idle_result="$(PATH="$fake_bin:$PATH" PZ_WAYDROID_TEST_ARGS="$idle_args" "$REPO_ROOT/linux/pz" waydroid stop --json)"
+jq -e '.success == true and .state == "already-stopped"' <<< "$idle_result" >/dev/null
+if [ -f "$idle_args.log" ] && grep -Fxq 'session stop' "$idle_args.log"; then
+    echo "FAIL: stop idempotente chamou session stop sem sessão"
+    exit 1
+fi
 session_validation="$(
     PATH="$fake_bin:$PATH" \
     PZ_WAYDROID_ENV_FILE="$stale_env" \

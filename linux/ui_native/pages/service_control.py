@@ -335,12 +335,19 @@ class WaydroidPage(FriendlyServicePage):
         access = payload.get("access") if isinstance(payload.get("access"), dict) else {}
         boot = payload.get("boot") if isinstance(payload.get("boot"), dict) else {}
         host = payload.get("host") if isinstance(payload.get("host"), dict) else {}
-        active = str(android.get("serviceActive", "")).casefold() == "active"
+        # CCS-005: Rodando = sessão Android ativa, não o container systemd.
+        session_running = bool(android.get("sessionRunning"))
+        container_active = str(android.get("serviceActive", "")).casefold() == "active"
         configured = bool(config.get("installed") or android.get("initialized"))
-        self._set_service_state(
-            active, configured,
-            "Android está pronto para uso" if active else "Sessão Android desligada" if configured else "Instale as imagens Android para começar",
-        )
+        if session_running:
+            detail = "Android está pronto para uso"
+        elif container_active:
+            detail = "Container ativo, mas a sessão Android está parada"
+        elif configured:
+            detail = "Sessão Android desligada"
+        else:
+            detail = "Instale as imagens Android para começar"
+        self._set_service_state(session_running, configured, detail)
         self.fact_labels[0].setText(f"Imagem: {android.get('imageType') or '—'}")
         self.fact_labels[1].setText("Android inicializado" if android.get("initialized") else "Android ainda não inicializado")
         binder = bool(host.get("binderDevices") or host.get("binderMounted"))
