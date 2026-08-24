@@ -12,7 +12,7 @@ source "$PZ_ROOT/linux/lib/common.sh"
 
 ACTION="${1:-status}"
 # CCS-038: usuário alvo resolvido, nunca fixo no código.
-TARGET_USER="${PZ_WAYDROID_BOOT_USER:-$(pz_resolve_target_user)}"
+TARGET_USER="$(pz_resolve_target_user "${PZ_WAYDROID_BOOT_USER:-${PZ_TARGET_USER:-}}")"
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 DATA_ROOT="${PZ_WAYDROID_DATA_ROOT:-$TARGET_HOME/.local/share/waydroid/data}"
 MEDIA_ROOT="$DATA_ROOT/media/0"

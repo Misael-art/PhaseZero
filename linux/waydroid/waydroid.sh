@@ -9,7 +9,7 @@ ACTION="${1:-status}"
 if [ $# -gt 0 ]; then shift; fi
 
 # CCS-038: usuário alvo resolvido, nunca fixo no código.
-TARGET_USER="${PZ_TARGET_USER:-$(pz_resolve_target_user)}"
+TARGET_USER="$(pz_resolve_target_user "${PZ_TARGET_USER:-}")"
 [ -n "$TARGET_USER" ] || { pz_error "unable to resolve target user; set PZ_TARGET_USER"; exit 1; }
 if [ "$EUID" -eq 0 ]; then
     target_home_root="$(getent passwd "$TARGET_USER" | cut -d: -f6 || true)"

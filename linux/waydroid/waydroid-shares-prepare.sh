@@ -8,10 +8,10 @@ TARGET_USER="${PZ_WAYDROID_BOOT_USER:-${PZ_TARGET_USER:-}}"
 case "$TARGET_USER" in ""|"root") TARGET_USER="$(logname 2>/dev/null || true)" ;; esac
 case "$TARGET_USER" in ""|"root") TARGET_USER="$(getent passwd 1000 2>/dev/null | cut -d: -f1)" ;; esac
 case "$TARGET_USER" in ""|"root") TARGET_USER="${SUDO_USER:-${USER:-}}" ;; esac
-[ -n "$TARGET_USER" ] && [ "$TARGET_USER" != "root" ] || {
+if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
     printf 'waydroid-shares: unable to resolve target user; set PZ_WAYDROID_BOOT_USER\n' >&2
     exit 1
-}
+fi
 TARGET_HOME="${PZ_WAYDROID_TARGET_HOME:-$(getent passwd "$TARGET_USER" | cut -d: -f6)}"
 SHARES_CONFIG="${PZ_WAYDROID_LXC_SHARES_CONFIG:-/etc/phasezero/waydroid-lxc-shares.conf}"
 LXC_CONFIG_BASE="${PZ_WAYDROID_LXC_CONFIG_BASE:-/usr/lib/waydroid/data/configs/config_base}"
