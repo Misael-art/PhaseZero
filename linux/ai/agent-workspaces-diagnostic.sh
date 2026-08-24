@@ -118,9 +118,9 @@ emit_diagnostic() {
           policy:$policy,resourceBudget:$budget,
           configurationReady:($hermes.status.configured == true and $odysseus.configured == true and
             $router.healthy == true and $ollama.healthy == true and $memory.running == true),
-          ready:($roadmapBlocked|not) and ($hermes.ready == true) and ($odysseus.ready == true) and
+          ready:(($roadmapBlocked|not) and ($hermes.ready == true) and ($odysseus.ready == true) and
             ($router.healthy == true) and ($ollama.healthy == true) and ($memory.healthy == true) and
-            ($budget.verdict == "pass"),
+            ($budget.verdict == "pass")),
           issues:(([
             if $roadmapBlocked then {severity:"error",component:"policy",code:"roadmap-host-deployment-blocked",
               message:"Host workload deployment is prohibited until a verified PhaseZero release"} else empty end,
@@ -149,4 +149,3 @@ case "$ACTION" in
     status|doctor|diagnose|plan) emit_diagnostic ;;
     *) echo "usage: agent-workspaces-diagnostic.sh (status|doctor|diagnose|plan)" >&2; exit 2 ;;
 esac
-

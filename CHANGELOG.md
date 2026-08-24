@@ -3,7 +3,7 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
-## [1.17.0] - Não lançado
+## [1.17.0] - 2026-08-24
 
 > Atual estável publicada: **1.16.x** (`version.json`).
 > Entradas abaixo cobrem WinVM, IA, Homelab e Central desde 1.13.0.
