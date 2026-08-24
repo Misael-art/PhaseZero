@@ -833,6 +833,64 @@ Próximo passo exato: não atualizar automaticamente para `main`; auditar novo
   release, atualizar manifesto/commit e repetir provas antes de qualquer upgrade.
 ```
 
+### Handoff — release v1.17.0 e validação IA/Hermes no host (2026-08-24)
+
+```text
+Objetivo da sessão: concluir implementação IA/UX, publicar release estável,
+  atualizar pacote oficial no host e provar Hermes/9Router/proxies ponta a ponta.
+Fase/IDs assumidos: AI-UX-001 a AI-UX-006; pós-Fase 10 para instalação oficial.
+Branches e worktrees: `feat/ai-proxies-runtime` no worktree principal sujo;
+  `codex/release-v1.17.0` e `codex/handoff-v1.17.0` no worktree limpo
+  `/tmp/phasezero-release-v1.17.0`. WIP `.mimosa/` e
+  `uber-defesa-privada/` permaneceu excluído e intocado.
+HEAD inicial: `c09dd4d0cdbaf86bf047c957d1fc36e9cdcada25`.
+HEADs finais: feature `9d9a722`, merge PR #64 `f0554d8`, release
+  `f18079a`, merge PR #65 `2a15da7` e tag `v1.17.0`.
+Arquivos alterados: UI nativa IA, ações/tarefas, CLI e backends de proxy,
+  autenticação, ledger, Hermes/Odysseus/9Router, manifests de procedência,
+  testes, documentação, changelog e metadados de pacote/release.
+Commits criados: `d035c7b` (feature), `59b1572` e `9d9a722` (CI),
+  `f18079a` (release), além deste handoff.
+Testes executados e resultados: pytest 640 passed + 9 subtests;
+  `tests/runner.sh` 44/44; UI smoke 28; package smoke e install-root verdes;
+  ShellCheck 0.9/0.11, `bash -n`, diff-check e gitleaks verdes. CI do SHA exato
+  de release run `32750364264` success, gitleaks `32750364129` success e
+  release workflow `32753660173` success. Pester: 797 passed, 0 failed,
+  2 skipped. Artefatos publicados: source, AppImage, Flatpak, Arch, RPM, DEB
+  e SHA256SUMS; 6/6 artefatos conferiram com o manifesto e o digest GitHub.
+CI/PR/release: PR #64 e PR #65 mergeados; release pública
+  `https://github.com/Misael-art/PhaseZero/releases/tag/v1.17.0`.
+Estado do host antes/depois: pacote `1.16.6-1` -> `1.17.0-1` pelo asset Arch
+  oficial. UI instalada abriu em offscreen. Hermes Agent v0.20.5 segue
+  habilitado/ativo, zero restarts/erros recentes, linger habilitado e chat real
+  pós-upgrade retornou `HERMES_HOST_OK`. 9Router está saudável com 108 modelos,
+  16 provedores e chat HTTP 200; DeepSeek proxy passou modelos+chat. Kimi e Qwen
+  exigem renovar login; Mimo exige credenciais próprias. Registro de autenticação:
+  20 entradas, 8 prontas, 0 essencial ausente; 9Router, OpenCode e Hermes prontos.
+  Nenhum processo QEMU. `grubenv` manteve mtime 2026-08-04 10:19:03; runtime
+  WinVM continua stale e não foi sincronizado por estar fora do escopo IA.
+Conflitos/recuperação: arquivo manual antigo, sem dono e modo 777 em
+  `/usr/lib/phasezero/linux/ui_native/pages/ai_dev.py` bloqueou pacman. Cópia
+  modo 0600 salva em
+  `~/.local/state/phasezero/backups/v1.17.0-preinstall-20260824T1706Z/ai_dev.py`;
+  somente esse caminho foi sobrescrito pelo pacote. `pacman -Qkk` reporta apenas
+  o launcher desktop modificado pelo hook global BigLinux com ação
+  `SoftwareRender`, comportamento esperado e registrado no ai-memory.
+Segredos verificados como ausentes: gitleaks e security-secret-scan verdes;
+  AuthRegistry, status e logs redigem valores. Hermes referencia somente a chave
+  cliente canônica 9Router; nenhum valor foi exposto ou commitado.
+Limitações e riscos restantes: Hermes upstream mantém release sem assinatura,
+  auditoria semântica e pinagem transitiva incompletas; risco aceito pelo operador
+  e exibido como aviso. Kimi/Qwen/Mimo dependem de login humano. Odysseus permanece
+  bloqueado corretamente: commit/dependências/imagens/auditoria e política de
+  workload ainda não aprovados. Não instalar até fechar esses gates.
+Bloqueios reais: nenhum para PhaseZero 1.17.0, Hermes, 9Router, UI, MCP,
+  autenticação essencial ou inferência. Logins opcionais e Odysseus são deferred.
+Próximo passo exato: renovar sessões Kimi/Qwen e fornecer credenciais Mimo apenas
+  se o usuário quiser esses backends; manter Hermes no commit auditado. Não
+  sincronizar GRUB nem implantar Odysseus sem autorização e gates próprios.
+```
+
 ## Definição de concluído
 
 Homelab v1.15.1 somente termina quando:
