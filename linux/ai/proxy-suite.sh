@@ -39,23 +39,50 @@ selected_rows() {
 }
 
 ensure_node_runtime() {
-    local system_npm
+    local system_npm system_node
     system_npm="$(command -v npm || true)"
+    system_node="$(command -v node || true)"
     [ -n "$system_npm" ] || { pz_error "npm required"; return 1; }
     if [ ! -x "$NODE_BIN" ] || [ ! -f "$NPM_CLI" ]; then
         pz_info "Installing isolated Node.js 24 runtime for proxy compatibility"
         install -d "$RUNTIME"
-        "$system_npm" install --prefix "$RUNTIME" --no-save "node@24" "npm@10"
+        # npm 11+/12 blocks the node package preinstall (downloads the real binary)
+        # unless allowScripts lists it. A local package.json is required for
+        # `npm install-scripts approve`.
+        if [ ! -f "$RUNTIME/package.json" ]; then
+            printf '%s\n' '{"private":true,"name":"phasezero-proxy-node24"}' > "$RUNTIME/package.json"
+        fi
+        (
+            cd "$RUNTIME"
+            "$system_npm" install --no-save --foreground-scripts "node@24" "npm@10" || true
+            if [ ! -x "$NODE_BIN" ] && "$system_npm" install-scripts approve node >/dev/null 2>&1; then
+                "$system_npm" install --no-save --foreground-scripts "node@24" "npm@10"
+            fi
+        )
+    fi
+    if [ ! -x "$NODE_BIN" ]; then
+        if [ -n "$system_node" ]; then
+            pz_warn "isolated Node 24 binary missing; falling back to system node $($system_node --version)"
+            NODE_BIN="$system_node"
+            NPM_CLI="$system_npm"
+        else
+            pz_error "isolated Node 24 failed to install (npm allowScripts blocked node@24 preinstall)"
+            return 1
+        fi
     fi
     install -d "$RUNTIME/bin"
     ln -sfn "$NODE_BIN" "$RUNTIME/bin/node"
-    pz_info "Proxy runtime: Node $("$NODE_BIN" --version), npm $("$NODE_BIN" "$NPM_CLI" --version)"
+    pz_info "Proxy runtime: Node $("$NODE_BIN" --version), npm $("$NODE_BIN" "$NPM_CLI" --version 2>/dev/null || "$system_npm" --version)"
 }
 
 run_npm() {
     local dir="$1"
     shift
-    (cd "$dir" && PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" "$@")
+    if [ -n "${NPM_CLI:-}" ] && [ -f "$NPM_CLI" ]; then
+        (cd "$dir" && PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" "$@")
+    else
+        (cd "$dir" && PATH="$RUNTIME/bin:$PATH" npm "$@")
+    fi
 }
 
 # Parse dotenv as data. Never source it: a credential file must not execute shell.
@@ -195,6 +222,16 @@ install_one() {
                     run_npm "$dir" exec -- playwright install chromium
                     ;;
             esac
+            if [ "$id" = qwenproxy ] && [ -f "$dir/web/package.json" ]; then
+                # prestart runs `npm --prefix web run build` (vite). Root npm ci
+                # does not install web/ node_modules, so the unit crash-loops.
+                if [ -f "$dir/web/package-lock.json" ]; then
+                    run_npm "$dir/web" ci --ignore-scripts=false
+                else
+                    run_npm "$dir/web" install --ignore-scripts=false
+                fi
+                run_npm "$dir" run build:admin
+            fi
             ;;
         go)
             apply_loopback_patch "$id" "$dir"
@@ -404,13 +441,13 @@ ensure_continue_extensions() {
         if ! grep -qx 'continue.continue' <<< "$installed"; then
             pz_info "installing Continue for $cli"
             "$cli" --install-extension "$CONTINUE_EXTENSION" --force >/dev/null || {
-                pz_error "$cli could not install $CONTINUE_EXTENSION"
-                return 1
+                pz_warn "$cli could not install $CONTINUE_EXTENSION (stub or broken editor CLI)"
+                continue
             }
         fi
         "$cli" --list-extensions 2>/dev/null | tr '[:upper:]' '[:lower:]' | grep -qx 'continue.continue' || {
-            pz_error "$CONTINUE_EXTENSION unavailable in $cli after installation"
-            return 1
+            pz_warn "$CONTINUE_EXTENSION unavailable in $cli after installation"
+            continue
         }
     done
     $found || pz_warn "VS Code-compatible editor not found; Continue configuration was still generated"
