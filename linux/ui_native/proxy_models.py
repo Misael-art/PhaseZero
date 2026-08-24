@@ -150,7 +150,7 @@ def parse_detailed_status(parsed: object) -> tuple[dict[str, ProxyState], IdeInt
 
 
 def parse_gateway_status(gateway_id: str, parsed: object) -> GatewayState:
-    """Parse `pz ai 9router status` / `pz ai odysseus status` JSON envelopes."""
+    """Parse Hermes, 9Router and Odysseus status JSON envelopes."""
     if not isinstance(parsed, dict):
         return GatewayState(id=gateway_id)
     detail = ""
@@ -161,11 +161,21 @@ def parse_gateway_status(gateway_id: str, parsed: object) -> GatewayState:
         total = combos.get("total", 0) if isinstance(combos, dict) else 0
         detail = f"{active} providers · {total} combos"
     elif gateway_id == "odysseus":
-        detail = str(parsed.get("endpoint", ""))
+        if not bool(parsed.get("installed")) and parsed.get("podmanRootless") is False:
+            detail = "Precisa de Podman rootless neste host"
+        else:
+            detail = str(parsed.get("endpoint", ""))
+    elif gateway_id == "hermes":
+        version = str(parsed.get("version", "")).strip()
+        auth = parsed.get("auth") if isinstance(parsed.get("auth"), dict) else {}
+        if not bool(auth.get("configured")):
+            detail = "Autenticação pendente"
+        else:
+            detail = version or "Configuração validada"
     return GatewayState(
         id=gateway_id,
-        installed=bool(parsed.get("installed")),
-        healthy=bool(parsed.get("healthy")),
+        installed=bool(parsed.get("installed", parsed.get("available"))),
+        healthy=bool(parsed.get("healthy", parsed.get("ready"))),
         service=str(parsed.get("service", "unknown")),
         detail=detail,
     )

@@ -956,6 +956,9 @@ _RESULT_KEYS = {
     "blockers": "Bloqueios",
     "error": "Problema",
     "message": "Mensagem",
+    "summary": "Resumo",
+    "next": "Próximo passo",
+    "needsUser": "Ação sua",
 }
 
 
@@ -1165,10 +1168,20 @@ class PreviewDialog(StatefulDialog):
         preview_ok = result.ok and not blockers
         super().__init__("Confirmar operação", "success" if preview_ok else "error", parent)
         self.action = action
-        summary = QLabel("Preview concluído. Nenhuma mutação foi executada.")
+        headline = "Preview concluído. Nenhuma mutação foi executada."
+        next_step = ""
+        if isinstance(result.parsed, dict):
+            headline = str(result.parsed.get("summary") or headline)
+            next_step = str(result.parsed.get("next") or "")
+        summary = QLabel(headline)
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")
         self.body.addWidget(summary)
+        if next_step:
+            follow = QLabel(next_step)
+            follow.setWordWrap(True)
+            follow.setObjectName("cardDescription")
+            self.body.addWidget(follow)
         chips = QHBoxLayout()
         chips.addWidget(StatusPill("Preview", "success" if preview_ok else "error"))
         chips.addWidget(StatusPill("Admin", "warning" if action and action.elevated else "info", "necessário" if action and action.elevated else "não"))
@@ -1348,7 +1361,14 @@ class ResultDialog(StatefulDialog):
             "warning": "A operação terminou, mas alguns itens precisam de revisão.",
             "error": "Não foi possível concluir. Revise a solução recomendada abaixo.",
         }.get(sev, "Revise o resultado.")
-        if sev == "error":
+        if isinstance(result.parsed, dict):
+            human = str(result.parsed.get("summary") or result.parsed.get("message") or "").strip()
+            nxt = str(result.parsed.get("next") or "").strip()
+            if human:
+                message = f"{human}\n\n{nxt}" if nxt else human
+        if sev == "error" and message in {
+            "Não foi possível concluir. Revise a solução recomendada abaixo.",
+        }:
             detail = ""
             if isinstance(result.parsed, dict):
                 detail = str(result.parsed.get("error") or result.parsed.get("message") or "")
@@ -1376,7 +1396,14 @@ class ResultDialog(StatefulDialog):
         history = self.add_action("Histórico", QDialogButtonBox.ActionRole)
         history.clicked.connect(self.history_requested.emit)
         if sev in {"warning", "error"}:
-            label = "Revisar Windows VM" if result.action_id.startswith("windows.") else "Ver solução"
+            if result.action_id.startswith("windows."):
+                label = "Revisar Windows VM"
+            elif result.action_id.startswith("ai.proxies") or result.action_id.startswith("ai.9router"):
+                label = "Revisar Proxies IA"
+            elif result.action_id.startswith("ai."):
+                label = "Revisar IA & Dev"
+            else:
+                label = "Ver solução"
             resolution = self.add_action(label, QDialogButtonBox.AcceptRole, variant="primaryButton")
             resolution.clicked.connect(lambda: self.resolution_requested.emit(result.action_id))
             resolution.clicked.connect(self.accept)

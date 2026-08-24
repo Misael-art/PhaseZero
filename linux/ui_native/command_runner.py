@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, QTimer, Signal
 
 from .models import ActionSpec, OperationResult
+from .operation_ledger import OperationLedger
 from .platform import (
     admin_bridge,
     configure_process_group,
@@ -68,6 +69,13 @@ class CommandRunner(QObject):
         self._stdout_size = 0
         self._stderr_size = 0
         self.started_at = ""
+        self.operation_id = ""
+        self._cancel_requested = False
+        self.ledger = OperationLedger()
+        try:
+            self.ledger.recover_interrupted()
+        except OSError:
+            pass
         self.timeout_ms = timeout_ms
         self.timeout_timer = QTimer(self)
         self.timeout_timer.setSingleShot(True)
@@ -102,6 +110,11 @@ class CommandRunner(QObject):
         self._stdout_size = 0
         self._stderr_size = 0
         self.started_at = utc_now()
+        self._cancel_requested = False
+        try:
+            self.operation_id = self.ledger.begin(action, preview=preview)
+        except OSError:
+            self.operation_id = ""
         process = QProcess(self)
         process.setWorkingDirectory(str(self.root))
         env = QProcessEnvironment.systemEnvironment()
@@ -129,11 +142,20 @@ class CommandRunner(QObject):
             process.write((stdin_data + "\n").encode("utf-8"))
             process.closeWriteChannel()
         self.timeout_timer.start(self.timeout_ms)
+        try:
+            self.ledger.update(status="previewing" if preview else "running")
+        except OSError:
+            pass
 
     def cancel(self) -> None:
         if not self.running or self.process is None:
             return
         process = self.process
+        self._cancel_requested = True
+        try:
+            self.ledger.update(status="cancelling")
+        except OSError:
+            pass
         terminate_process_group(process)
         QTimer.singleShot(
             2000,
@@ -178,7 +200,12 @@ class CommandRunner(QObject):
         self.output.emit(text, False)
         matches = re.findall(r"(?<!\d)(100|[1-9]?\d)%", text)
         if matches:
-            self.progress.emit(int(matches[-1]))
+            value = int(matches[-1])
+            self.progress.emit(value)
+            try:
+                self.ledger.update(progress=value)
+            except OSError:
+                pass
 
     def _stderr(self) -> None:
         if self.process is None:
@@ -224,6 +251,7 @@ class CommandRunner(QObject):
             stdout=stdout,
             stderr=stderr,
             parsed=parsed,
+            operation_id=self.operation_id,
         )
         try:
             private_state = secure_directory(state_dir())
@@ -239,5 +267,15 @@ class CommandRunner(QObject):
                 obsolete.unlink(missing_ok=True)
         except OSError as exc:
             result.stderr += f"\nfailed to persist result: {exc}\n"
+        try:
+            self.ledger.finish(
+                exit_code=code,
+                result_path=result.result_path,
+                cancelled=self._cancel_requested,
+            )
+        except OSError as exc:
+            result.stderr += f"\nfailed to persist operation ledger: {exc}\n"
+        self.operation_id = ""
+        self._cancel_requested = False
         self.process = None
         self.completed.emit(result)

@@ -42,6 +42,14 @@ def create_safe_results_archive(source: Path, archive_path: Path) -> Path:
         for path in sorted((source / "ui" / "results").glob("*.json"))
     ]
     candidates.extend(
+        (path, f"results/{path.name}")
+        for path in sorted((source / "control-center" / "results").glob("*.json"))
+    )
+    candidates.extend(
+        (path, f"operations/{path.parent.name}/operation.json")
+        for path in sorted((source / "control-center" / "operations").glob("*/operation.json"))
+    )
+    candidates.extend(
         (path, f"logs/{path.name}") for path in sorted(source.glob("*.log"))
     )
     candidates = candidates[-500:]
@@ -81,16 +89,24 @@ class ResultsPage(BasePage):
         super().__init__(root, runner, actions, by_id, parent)
         self.table: QTableWidget | None = None
         self.detail: StructuredResultView | None = None
+        self.retry_button: QPushButton | None = None
+        self._retry_action_id = ""
 
     def build(self) -> None:
         toolbar = QHBoxLayout()
         refresh = QPushButton("Atualizar")
         refresh.clicked.connect(self.reload)
+        self.retry_button = QPushButton("Tentar novamente")
+        self.retry_button.setObjectName("primaryButton")
+        self.retry_button.setEnabled(False)
+        self.retry_button.setToolTip("Executa nova prévia e pede confirmação antes de repetir.")
+        self.retry_button.clicked.connect(self._retry_selected)
         folder = QPushButton("Abrir pasta")
         folder.clicked.connect(self._open_folder)
         export = QPushButton("Exportar ZIP")
         export.clicked.connect(self._export)
         toolbar.addWidget(refresh)
+        toolbar.addWidget(self.retry_button)
         toolbar.addWidget(folder)
         toolbar.addWidget(export)
         toolbar.addStretch()
@@ -125,8 +141,38 @@ class ResultsPage(BasePage):
         self.table.setRowCount(0)
         result_dir = state_dir() / "results"
         rows = []
+        linked_results: set[str] = set()
+        status_labels = {
+            "starting": "Iniciando",
+            "previewing": "Prévia",
+            "running": "Em andamento",
+            "cancelling": "Cancelando",
+            "succeeded": "OK",
+            "failed": "Falha",
+            "cancelled": "Cancelada",
+            "interrupted": "Interrompida",
+        }
+        operation_dir = state_dir() / "operations"
+        if operation_dir.exists():
+            for path in sorted(operation_dir.glob("*/operation.json"), reverse=True)[:250]:
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    continue
+                result_path = str(data.get("resultPath") or "")
+                if result_path:
+                    linked_results.add(result_path)
+                state = str(data.get("status") or "unknown")
+                rows.append((
+                    str(data.get("title") or data.get("actionId") or path.parent.name),
+                    status_labels.get(state, state),
+                    str(data.get("updatedAt") or data.get("startedAt") or ""),
+                    str(path),
+                ))
         if result_dir.exists():
             for path in sorted(result_dir.glob("*.json"), reverse=True)[:250]:
+                if str(path) in linked_results:
+                    continue
                 try:
                     data = json.loads(path.read_text(encoding="utf-8"))
                 except (OSError, UnicodeError, json.JSONDecodeError):
@@ -159,18 +205,33 @@ class ResultsPage(BasePage):
         if not path_str:
             return
         path = Path(path_str)
+        self._retry_action_id = ""
+        if self.retry_button is not None:
+            self.retry_button.setEnabled(False)
         try:
             if path.stat().st_size > 8 * 1024 * 1024:
                 self.detail.set_result(None, "Arquivo excede limite de visualização de 8 MiB.")
                 return
             if path.suffix == ".json":
                 data = json.loads(path.read_text(encoding="utf-8"))
+                if data.get("resumable") is True and isinstance(data.get("nextAction"), str):
+                    action_id = str(data["nextAction"])
+                    if action_id in self.by_id:
+                        self._retry_action_id = action_id
+                        if self.retry_button is not None:
+                            self.retry_button.setEnabled(True)
                 raw = json.dumps(data, ensure_ascii=False, indent=2)
                 self.detail.set_result(data.get("result", data), raw)
             else:
                 self.detail.set_result(None, path.read_text(errors="replace"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             self.detail.set_result(None, str(exc))
+
+    def _retry_selected(self) -> None:
+        action = self.by_id.get(self._retry_action_id)
+        if action is None:
+            return
+        self.request_action(action)
 
     def _open_folder(self) -> None:
         folder = state_dir().parent
@@ -209,7 +270,8 @@ class ResultsPage(BasePage):
         QMessageBox.information(self, "Exportação concluída", str(archive))
 
     def block_while_running(self, running: bool) -> None:
-        pass  # Results page is read-only, no need to block
+        if self.retry_button is not None:
+            self.retry_button.setEnabled(not running and bool(self._retry_action_id))
 
     def set_advanced_mode(self, enabled: bool) -> None:
         super().set_advanced_mode(enabled)

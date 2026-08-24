@@ -127,7 +127,13 @@ PZ_DRY_RUN=1 PZ_OLLAMA_URL="http://127.0.0.1:1" "$REPO_ROOT/linux/ai/setup-openc
 "$REPO_ROOT/linux/ai/setup-usagebar.sh" dry-run | jq -e '.tool == "ai-usagebar"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-hermes.sh" dry-run | jq -e '.tool == "hermes"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-openclaw.sh" dry-run | jq -e '.tool == "openclaw"' >/dev/null
-"$REPO_ROOT/linux/pz" ai status | jq -e '(.clis.hermes.available | type == "boolean") and (.clis.openclaw.available | type == "boolean")' >/dev/null
+"$REPO_ROOT/linux/pz" ai status | jq -e '
+  (.clis.hermes.available | type == "boolean")
+  and (.clis.openclaw.available | type == "boolean")
+  and (.setupCatalog.essentials | map(.id) | index("9router") != null)
+  and (.setupCatalog.optional | map(.id) | index("hermes") != null)
+  and (.setupCatalog.optional | map(.id) | index("odysseus") != null)
+' >/dev/null
 "$REPO_ROOT/linux/pz" install dev-ai --dry-run >/dev/null
 
 # Smoke: AI managers gracefully report "not installed"
@@ -155,5 +161,19 @@ jq -e '.schemaVersion == 1' <<< "$routing_inv" >/dev/null 2>&1 || \
     echo "  WARN: ai routing inventory did not answer — router may be absent"
 "$REPO_ROOT/linux/pz" ai routing apply --task code --dry-run >/dev/null 2>&1 || \
     echo "  WARN: ai routing apply --dry-run failed — router may be absent"
+
+# Central auth registry: identities and secrets never leave source managers.
+auth_out="$(timeout 30 "$REPO_ROOT/linux/pz" ai auth status)"
+jq -e '
+  .schemaVersion == 1 and .secretsRedacted == true
+  and (.entries | type == "array")
+  and ([.entries[] | has("name") or has("email") or has("apiKey") or has("token")] | any | not)
+' <<< "$auth_out" >/dev/null
+if grep -Eq '[[:alnum:]._%+-]+@[[:alnum:].-]+\.[[:alpha:]]{2,}' <<< "$auth_out"; then
+    echo "auth registry leaked an account identity" >&2
+    exit 1
+fi
+"$REPO_ROOT/linux/pz" ai auth doctor | jq -e '.secretsRedacted == true and (.issues | type == "array")' >/dev/null
+"$REPO_ROOT/linux/pz" ai operations status | jq -e '.schemaVersion == 1 and .secretsRedacted == true' >/dev/null
 
 echo "linux-ai smoke ok"

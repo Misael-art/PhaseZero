@@ -560,6 +560,7 @@ sem evidência.
 | Pacote host | permanece `phasezero-control-center 1.16.5-1`; instalação 1.16.6 não iniciou porque Polkit não foi autorizado; tentativa cancelada limpa, `grubenv` mtime `1785849543`, 0 QEMU | `pacman -Q`, `pgrep`, `stat`; nenhum lock `pacman` criado | 2026-08-17 |
 | Pacote host | `phasezero-control-center 1.16.6-1` instalado via `phasezero-admin pacman -U` (rebuild do `main` `fe76f0f`, não o asset da release); prévia de remoção da VM atual retorna `ready:true` com 0 blockers e aviso de VM adotada; `grubenv` mtime `1785849543` e 0 QEMU preservados; runtime GRUB segue `OUTDATED` (sincronização deliberadamente adiada) | `pacman -Q`, `pz --version`, `pz windows-vm remove --json`, `stat`, `pgrep` | 2026-08-19 |
 | VMs legadas | as 2 VMs concluídas de 2026-08-16 foram removidas em 2026-08-19 05:42 local com `vmRemovedAt` registrado (`op-20260805-152412-5248`, `op-20260811-120613-9550`); `provision inventory --json` devolve `count:0`; resta `PhaseZero-Windows-Primary-final-20260816` como VM atual | `provision inventory --json`, `operation.json` de cada operação | 2026-08-19 |
+| IA, proxies e workspaces | jornada auditada; autenticação/ledger centrais; quatro proxies com snapshots fixos; três imagens Odysseus fixadas por digest; deploy Odysseus continua bloqueado sem commit aprovado | pytest 640 + 9; testes shell IA/Homelab/UI; testes adversariais de commit/digest; ShellCheck; QA offscreen; diff-check | 2026-08-24 |
 
 ## Ledger de execução
 
@@ -604,6 +605,12 @@ Prova release: workflow `31258447568` success; assets em `gh release view v1.15.
 | 2026-08-16 | Codex | `codex/winvm-legacy-removal` (`/mnt/sdcard/Projects/pz-winvm-legacy-removal`) + `main` | HL-IMG-001: inventário e remoção segura de VMs concluídas legadas | `2be2b2a`, `b205668`, `913c702`, `2f2e937`; PR #58 → `d202139`; release `2d721b7`, tag `v1.16.5` | pytest 573 + 9; UI 27; remoção e provisionamento herméticos; CI PR 30/30; CI main `31947914357` e release-commit `31949400280` success; release `31949402337` success; 7 assets e checksums 6/6 | Host atualizado para `1.16.5-1`. Inventário instalado encontra 2 VMs desligadas/removíveis, 43.133.304.832 bytes; ambas prévias permanentes retornam `ready:true`, 0 blockers. Nenhuma VM removida. `grubenv` mtime `1785849543`, 46 mounts e 0 QEMU preservados. UI instalada mostra `VMs instaladas · 2`, `40.2 GB` e ação separada para VM atual. Runtime GRUB segue `stale`; atualização deliberadamente adiada para validação física da próxima release. |
 | 2026-08-17 | Codex | `codex/winvm-direct-input` (`/mnt/sdcard/Projects/pz-winvm-direct-input`) + `main` | Boot GRUB WinVM: display, frequência, touchscreen, controles e teclado virtual | `25344d0`, `9e06323`, `39c7e35`, `6af07f6`; PR #60 → `2f5f262`; release `da86960`, tag `v1.16.6` | PR CI duplicada success; main `31988802642`; release-commit `31990545037`; gitleaks `31990545071`; release `31990545769`; checksums 6/6; provision 252/0; Windows VM/graphics/UI verdes | Release oficial pronta. Auditoria detectou e removeu passthrough cru do touchscreen 800×1280, substituído por `virtio-multitouch` via GTK/Gamescope para respeitar rotação. Host ainda `1.16.5-1`: diálogo Polkit não autorizado, processo cancelado antes de `pacman`; `grubenv` e VM intactos. **Próximo**: autorizar `phasezero-admin pacman -U` do pacote validado, executar `pz windows-vm boot install`, validar runtime `current`, depois boot físico e evidência dentro do Windows. |
 | 2026-08-19 | ZCode | `main` (worktree principal) | Pós-v1.16.6: instalar 1.16.6 no host; terceiro defeito de remoção (lock vazio) achado e corrigido | fix `d6b6285` (sessão anterior) + `fe76f0f` (lock vazio); docs roadmap | TDD: teste do lock vazio falhou antes e passou depois; `tests/test_windows_vm_remove.sh` ok; `tests/test_provision.sh` 257/0; `tests/linux-windows-vm.sh` ok; `bash -n`; shellcheck com excludes do CI; `git diff --check`; rebuild + reinstalação `1.16.6-1` exit 0 | Host em `1.16.6-1`. Prévia de remoção da VM atual: `ready:true`, 0 blockers, aviso de adotada. Causa raiz: `provision_lock_clear` trunca `active.lock` e nunca apaga (design), mas `provision_removal_blocker` chamava lock vazio de inconsistente — todo host liberado ficava `ready:false` para sempre. Não-mutação: `grubenv` mtime `1785849543`, 0 QEMU, VM intacta, inventário `count:0` coerente com as 2 remoções legadas de 05:42. **Próximo**: CI verde no push de `fe76f0f`; runtime GRUB `OUTDATED` segue adiado até o boot físico planejado. |
+| 2026-08-24 | Codex | `feat/ai-proxies-runtime` / worktree principal | AI-UX-001: diagnóstico, UX, proxies, roteamento e gates de workspaces | não commitado | pytest 634 + 9; `linux-ai`, `linux-ai-proxies`, `linux-agent-workspaces`, `linux-homelab`, `linux-ui`; ShellCheck; `bash -n`; QA offscreen; diff-check | Corrigidos falso sucesso, continuação Mimo, falhas assíncronas e divergência de política. Catálogo essencial/opcional e seção Hermes/9Router/Odysseus adicionados. Odysseus e perfis incompletos falham antes de mutação. Nenhum workload aplicado. Próximo: aprovar allowlists/digests, decidir “Nova Router” e criar AuthRegistry/OperationLedger. |
+| 2026-08-24 | Codex | `feat/ai-proxies-runtime` / worktree principal | AI-UX-002: AuthRegistry, OperationLedger e latência do status | não commitado | pytest 640 + 9; linux-ai/proxies/workspaces/UI; ShellCheck; `bash -n`; QA 1280×1080; diff-check | `pz ai auth` agrega 20 integrações/16 contas sem identidade ou segredo. Ledger registra ciclo, recupera interrupção e oferece retry com nova confirmação. `pz ai status` caiu de ~6,7 s para ~4,6 s por paralelismo. Próximo: expiração/revogação por adapter, checkpoints internos e allowlists/digests. |
+| 2026-08-24 | Codex | `feat/ai-proxies-runtime` / worktree principal | AI-UX-003: procedência dos proxies | não commitado | pytest focado 64; `linux-ai-proxies`; ShellCheck; `bash -n`; diff-check; quatro checkouts reais validados | Kimi, Qwen, DeepSeek e Mimo fixados por repo/commit/tree/licença/lockfiles. Clone usa staging; start/restart/login/Mimo/IDE falham antes de executar snapshot divergente. Legados sem revisão bloqueados. `semanticAudit:false`; próximo: SBOM/diff/rollback e digests Odysseus. |
+| 2026-08-24 | Codex | `feat/ai-proxies-runtime` / worktree principal | AI-UX-004: imagens Odysseus por digest | não commitado | `linux-agent-workspaces`; ShellCheck; `bash -n`; diff-check; Registry v2 header/body SHA iguais | Chroma 1.5.9, SearXNG 2026.5.31 e ntfy v2.26.3 fixados por manifest-list digest. `latest`/pull removidos do deploy. Instalação bloqueia antes de escrita; start/restart antes de systemd se lock divergir. Commit Odysseus segue sem allowlist; nenhum workload iniciado. |
+| 2026-08-24 | Codex | `feat/ai-proxies-runtime` / worktree principal | AI-UX-005: auditoria de distribuição Hermes e release Odysseus | não commitado | `linux-agent-workspaces`, `linux-ai`; ShellCheck; `bash -n`; hashes raw; npm audit; Registry v2 header/body SHA iguais | Checksum arbitrário não promove mais instalador Hermes. Release `v2026.8.19` ficou pinada, porém bloqueada por cadeia transitiva e auditoria incompletas. Odysseus `b4d1293` assinado ficou catalogado, não aprovado; base Python fixada por digest, grafo Python e superfície shell mantêm deploy bloqueado. Plano sem allowlist voltou a retornar JSON estruturado. Nenhum workload iniciado. |
+| 2026-08-24 | Codex | `feat/ai-proxies-runtime` / worktree principal | AI-UX-006: instalação Hermes ponta a ponta autorizada | não commitado | commit/árvore exatos; config/doctor; chat real `HERMES_OK`; Browser live; MCP ai-memory; OSV 107/0; gateway ativo e isolado | Hermes `v0.20.5` instalado do release `v2026.8.19` por aceite de risco preso ao commit `fcbd1076`; integrado ao 9Router canônico em loopback, gateway user habilitado com linger, desktop/CLI/ACP, 77 skills e Playwright. Fallback destravado do instalador e assinatura ausente permanecem avisos explícitos. |
 
 ### Escopo obrigatório da próxima release WinVM
 
@@ -738,6 +745,92 @@ Bloqueios reais: nenhum. Polkit autorizado nesta sessão.
 Próximo passo exato: confirmar CI verde no push; quando planejar o boot físico,
   sincronizar o runtime GRUB (`phasezero-admin /usr/lib/phasezero/linux/pz
   windows-vm boot install`) e validar `runtime-check` `current`.
+```
+
+### Handoff — auditoria IA/UX, autenticação, ledger e procedência (2026-08-24)
+
+```text
+Objetivo da sessão: diagnosticar e corrigir jornadas IA/proxies/autenticação,
+  integrar Hermes/9Router/Odysseus, remover falso sucesso e adicionar continuidade,
+  recuperação e procedência fail-closed.
+Fase/IDs assumidos: AI-UX-001, AI-UX-002, AI-UX-003, AI-UX-004 e AI-UX-005.
+Branch e worktree: `feat/ai-proxies-runtime`, worktree principal
+  `/mnt/sdcard/Projects/PhaseZero` já sujo; WIP pré-existente preservado.
+HEAD inicial: `c09dd4d0cdbaf86bf047c957d1fc36e9cdcada25`.
+HEAD final: `c09dd4d0cdbaf86bf047c957d1fc36e9cdcada25` (sem commit).
+Arquivos alterados: backend IA/proxy/Hermes/Odysseus/Homelab, CLI `linux/pz`,
+  catálogo/UI nativa/resultados/roteamento, testes IA/UI/workspaces, ações geradas,
+  `assets/ai/*.json`, documentação e relatório de auditoria. `.mimosa/` e
+  `uber-defesa-privada/` eram WIP alheio e não foram tocados.
+Commits criados: nenhum. Sem stage, push, PR ou release.
+Testes executados e resultados: pytest completo 640 passed + 9 subtests;
+  `tests/linux-ai.sh`, `tests/linux-ai-proxies.sh`,
+  `tests/linux-agent-workspaces.sh`, `tests/linux-ui.sh` verdes; ShellCheck com
+  exclusões documentadas SC1091/SC2016, `bash -n`, `py_compile`, JSON e
+  `git diff --check` verdes. QA offscreen 1280x800 e 1280x1080 aprovada.
+CI/PR: não executados; trabalho não commitado.
+Estado do host antes/depois: Homelab configurado, inativo e não saudável porque
+  nenhum container está rodando; zero containers com label PhaseZero Homelab.
+  Nenhum pacote, proxy, serviço, container ou workload iniciado/alterado.
+Segredos verificados como ausentes: saídas AuthRegistry/proxies e ledger têm
+  testes de redação; sentinelas não vazaram; novos manifests contêm somente
+  URLs, versões, commits, árvores e hashes públicos, sem credencial.
+Limitações e riscos restantes: snapshots/digests declaram `semanticAudit:false`;
+  faltam SBOM, assinatura e rollback de atualização. Odysseus candidato tem commit
+  assinado e base por digest, mas dependências Python e superfícies shell não foram
+  aprovadas. Hermes tem instalador/commit fixos, mas cadeia transitiva mutável e
+  release sem assinatura. Ambos continuam bloqueados. Login Mimo ainda depende de DevTools.
+  “Nova Router” continua ambíguo e não foi inventado. Worktree contém WIP amplo.
+Bloqueios reais: deploy Odysseus bloqueado por allowlist, lock Python, auditoria
+  semântica e gate de workload; Hermes bloqueado por dependências transitivas,
+  auditoria semântica, assinatura ausente e gate de workload.
+Próximo passo exato: gerar SBOMs, tornar grafos transitivos reproduzíveis e revisar
+  superfícies de execução; somente depois mudar `approvedForInstall/Deploy` e criar
+  allowlist. Não aplicar workloads no host nesta etapa.
+```
+
+### Handoff — Hermes ponta a ponta no host (2026-08-24)
+
+```text
+Objetivo da sessão: instalar a versão estável mais recente do Hermes Agent e
+  comprovar integração funcional com o host e o 9Router.
+Fase/IDs assumidos: AI-UX-006; implantação posterior ao fechamento publicado do
+  roadmap, autorizada explicitamente pelo usuário.
+Branch e worktree: `feat/ai-proxies-runtime`, worktree principal
+  `/mnt/sdcard/Projects/PhaseZero`, já sujo; WIP pré-existente preservado.
+HEAD inicial: `c09dd4d0cdbaf86bf047c957d1fc36e9cdcada25`.
+HEAD final: `c09dd4d0cdbaf86bf047c957d1fc36e9cdcada25` (sem commit).
+Arquivos alterados nesta continuação: `linux/ai/setup-hermes.sh`, relatório de
+  auditoria IA/UX e este roadmap. Demais arquivos sujos pertencem ao WIP anterior.
+Commits criados: nenhum. Sem stage, push, PR ou release.
+Testes executados e resultados: commit `fcbd1076a93841fa88855acce810e342a5b78101`
+  e árvore `cc9f987a403a1d02b8b17cc527a57b54402e864b` conferem; `hermes config check`
+  e status/doctor PhaseZero prontos; chat real via 9Router retornou `HERMES_OK`;
+  Chromium headless abriu uma página; doctor live validou Browser e MCP ai-memory;
+  auditoria OSV examinou 107 componentes e encontrou zero achados; testes do
+  repositório: pytest 640 passed + 9 subtests; `linux-agent-workspaces`,
+  `linux-ai` e `linux-ai-proxies` verdes; ShellCheck, `bash -n` e diff-check verdes.
+CI/PR: não executados; trabalho não commitado.
+Estado do host antes/depois: antes Hermes ausente e 9Router ativo; depois Hermes
+  Agent `v0.20.5` do release `v2026.8.19` instalado em `~/.hermes`, launchers e
+  desktop entry locais criados, gateway systemd de usuário habilitado/ativo com
+  drop-in PhaseZero persistente e linger habilitado. Nenhum pacote de sistema,
+  container, serviço root, GRUB,
+  WinVM ou perfil Homelab alterado.
+Segredos verificados como ausentes: configuração contém somente referência
+  `${PHASEZERO_9ROUTER_API_KEY}`; launcher lê apenas a chave cliente do ambiente
+  canônico modo 0600. Processo gateway não herda JWT, service secret ou variáveis
+  administrativas; evidências registram nomes/estado, nunca valores.
+Limitações e riscos restantes: release/commit/tag sem assinatura verificada;
+  auditoria semântica e pinagem transitiva incompletas. `uv sync --locked` do
+  upstream falhou e o instalador oficial caiu para resolução destravada. Doctor
+  reporta 4 avisos high no workspace web e 3 no ui-tui, todos em tooling de build;
+  snapshot upstream permaneceu limpo e não recebeu `npm audit fix`.
+Bloqueios reais: nenhum para chat, gateway, Browser, MCP, Skills Hub, CLI ou ACP.
+  Canais Telegram/Discord e acesso remoto Tailscale permanecem opcionais e não
+  configurados porque exigem credenciais/escolha próprias.
+Próximo passo exato: não atualizar automaticamente para `main`; auditar novo
+  release, atualizar manifesto/commit e repetir provas antes de qualquer upgrade.
 ```
 
 ## Definição de concluído

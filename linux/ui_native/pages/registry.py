@@ -13,6 +13,7 @@ from .homelab import HomelabPage
 from .emulation import EmulationPage
 from .ai_proxies import AiProxiesPage
 from .ai_routing import AiRoutingPage
+from .ai_dev import AiDevPage
 from .steamdeck import SteamDeckPage
 from .tuning import TuningPage
 from .results import ResultsPage
@@ -50,7 +51,7 @@ class PageRegistry:
         "Boot Direto": CatalogWorkspacePage,
         "Flatpak": CatalogWorkspacePage,
         "Recursos": CatalogWorkspacePage,
-        "IA & Dev": CatalogWorkspacePage,
+        "IA & Dev": AiDevPage,
         "Proxies IA": AiProxiesPage,
         "Roteamento IA": AiRoutingPage,
         "Aplicativos": CatalogWorkspacePage,

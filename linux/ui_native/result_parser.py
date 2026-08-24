@@ -53,7 +53,11 @@ def severity_for(value: Any, exit_code: int, *, mutable: bool = True, has_output
     status = str(value.get("status", "")).casefold()
     if status in {"failed", "error", "blocked", "requiresrestart", "manualaction"}:
         return "error"
-    if status in {"warn", "warning", "degraded", "needsinstall", "needsrepair"}:
+    if status in {
+        "warn", "warning", "degraded", "needsinstall", "needsrepair",
+        "needs-login", "needslogin", "needs-credentials", "needscredentials",
+        "gui-required", "guirequired",
+    }:
         return "warning"
     return "success"
 

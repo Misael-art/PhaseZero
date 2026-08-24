@@ -199,7 +199,9 @@ Usage:
   pz ai proxies install [id]   Install/update all or one Linux AI proxy (also wires IDEs)
   pz ai proxies configure-ides Wire proxies into OpenCode, VS Code/Code-OSS and ZCode
   pz ai proxies auth [id]      Redacted auth/login readiness for proxy suite
+  pz ai proxies provenance     Verify pinned source snapshots before runtime
   pz ai proxies login <id>     Open headed browser login for kimi/qwen/deeps
+  pz ai proxies ensure [id]    One-click install + start + login (JSON summary)
   pz ai proxies test [id]      Honest target/all probe: /v1/models + chat (JSON)
   pz ai 9router status         Managed smart router health, providers and combos
   pz ai 9router install        Install 9Router, loopback service and watchdog
@@ -220,8 +222,15 @@ Usage:
    pz ai routing refresh        Refresh quota (scheduler-safe, 5-10 min)
    pz ai omniroute <action>     OmniRoute multi-provider router (install|status|combo|opencode|test|dashboard)
    pz ai odysseus status        Audit pinned Odysseus workspace deployment
-  pz ai odysseus install       Provision rootless, loopback-only Odysseus stack
-  pz ai odysseus update        Update to verified official branch commit with rollback
+  pz ai odysseus install       Protected deploy; requires provenance and release gate
+  pz ai odysseus update        Protected update with allowlist and rollback
+  pz ai hermes status          Redacted Hermes readiness and authentication state
+  pz ai hermes doctor          Read-only Hermes integrity and policy diagnostic
+  pz ai workspaces doctor      Unified Hermes/Odysseus/9Router readiness audit
+  pz ai workspaces plan        Safe read-only deployment plan and blockers
+  pz ai auth status            Redacted registry for AI accounts and sessions
+  pz ai operations status      Persistent Control Center operation summary
+  pz ai operations resume-info Safe retry metadata for interrupted operations
   pz doctor                    Run full system diagnostics
   pz support-bundle [--plan]   Generate support tarball (--plan: preview sem escrita)
   pz repair-plan               Generate repair plan
@@ -595,6 +604,23 @@ cmd_ai() {
         odysseus|odysseus-os|workspace)
             shift
             bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" "${@:-status}"
+            ;;
+        hermes|hermes-agent)
+            shift
+            bash "$PZ_ROOT/linux/ai/setup-hermes.sh" "${@:-status}"
+            ;;
+        workspaces|agent-workspaces|agents-diagnostic)
+            shift
+            bash "$PZ_ROOT/linux/ai/agent-workspaces-diagnostic.sh" "${@:-doctor}"
+            ;;
+        auth|auth-registry|accounts)
+            shift
+            bash "$PZ_ROOT/linux/ai/auth-registry.sh" "${@:-status}"
+            ;;
+        operations|operation-ledger|op-ledger)
+            shift
+            PYTHONPATH="$PZ_ROOT${PYTHONPATH:+:$PYTHONPATH}" \
+                python3 -m linux.ui_native.operation_ledger "${@:-status}"
             ;;
         codexbar|kodexbar)
             shift

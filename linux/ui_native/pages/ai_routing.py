@@ -22,10 +22,23 @@ TASKS = (
 )
 POLICIES = ("balanced", "quality", "save-quota", "privacy")
 POLICY_LABELS = {
-    "balanced": "Balanced",
-    "quality": "Quality",
-    "save-quota": "Save quota",
-    "privacy": "Privacy",
+    "balanced": "Equilibrado",
+    "quality": "Mais qualidade",
+    "save-quota": "Poupar cota",
+    "privacy": "Privacidade",
+}
+
+QUOTA_LABELS = {
+    "known": "conhecida",
+    "unknown": "desconhecida",
+    "unavailable": "indisponível",
+}
+
+POLICY_REASONS = {
+    "balanced": "Equilibra qualidade, cota disponível e confiabilidade.",
+    "quality": "Prioriza modelos com maior qualidade para a tarefa.",
+    "save-quota": "Poupa contas limitadas e mantém fallbacks disponíveis.",
+    "privacy": "Prefere rotas locais e reduz exposição a provedores externos.",
 }
 
 _CLEAR = "—"
@@ -52,13 +65,27 @@ class AiRoutingPage(BasePage):
         self._status_value: QLabel | None = None
         self._quota_label: QLabel | None = None
         self._task_cards: dict[str, dict] = {}
+        self._recommendations: dict[str, list[dict]] = {}
+        self._policy_combo: QComboBox | None = None
+        self._apply_all_button: QPushButton | None = None
         self._chain_editor: QListWidget | None = None
         self._chain_task = "code"
+        self._technical_widgets: list[QWidget] = []
         self.status_loader.status_ready.connect(self._routing_status_ready)
         self.status_loader.status_failed.connect(self._routing_status_failed)
 
     # ---------------------------------------------------------------- build
     def build(self) -> None:
+        for aid in (
+            "ai.routing-inventory", "ai.routing-verify", "ai.routing-plan",
+            "ai.routing-apply-all", "ai.routing-status", "ai.routing-rollback",
+            "ai.claude-bonsai-run", "ai.claude-bonsai-preflight",
+            "ai.routing-recommend-code", "ai.routing-recommend-analysis",
+            "ai.routing-recommend-plan", "ai.routing-refresh",
+        ):
+            action = self.by_id.get(aid) if self.by_id else None
+            if action is not None:
+                self.mark_represented(action)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
@@ -68,7 +95,7 @@ class AiRoutingPage(BasePage):
         layout.setSpacing(14)
 
         layout.addWidget(SectionHeader(
-            "Roteamento IA", "Rota por tarefa, política e quota real do 9Router"))
+            "Roteamento IA", "Escolha a tarefa. O PhaseZero sugere o modelo e aplica a rota."))
 
         summary = QFrame()
         summary.setObjectName("moduleFacts")
@@ -81,15 +108,30 @@ class AiRoutingPage(BasePage):
 
         actions_row = QHBoxLayout()
         actions_row.setSpacing(8)
-        for aid, label in (
-            ("ai.routing-inventory", "Atualizar cotas"),
-            ("ai.routing-verify", "Verificar"),
-            ("ai.routing-plan", "Plano (diff)"),
-            ("ai.routing-apply-all", "Aplicar plano"),
-        ):
+        actions_row.addWidget(QLabel("Política das 3 rotas:"))
+        self._policy_combo = QComboBox()
+        for policy_id in POLICIES:
+            self._policy_combo.addItem(POLICY_LABELS[policy_id], policy_id)
+        self._policy_combo.currentIndexChanged.connect(self._global_policy_changed)
+        actions_row.addWidget(self._policy_combo)
+        refresh = self._action_button("ai.routing-inventory", "Atualizar cotas")
+        if refresh is not None:
+            actions_row.addWidget(refresh)
+        self._apply_all_button = QPushButton("Aplicar as 3 rotas")
+        self._apply_all_button.setObjectName("primaryButton")
+        self._apply_all_button.setEnabled(False)
+        self._apply_all_button.clicked.connect(self._apply_all)
+        actions_row.addWidget(self._apply_all_button)
+        preview_all = QPushButton("Prévia do plano")
+        preview_all.setObjectName("secondaryButton")
+        preview_all.clicked.connect(lambda: self._task_preview("code"))
+        actions_row.addWidget(preview_all)
+        self._technical_widgets.append(preview_all)
+        for aid, label in (("ai.routing-verify", "Verificar"),):
             button = self._action_button(aid, label)
             if button is not None:
                 actions_row.addWidget(button)
+                self._technical_widgets.append(button)
         actions_row.addStretch()
         layout.addLayout(actions_row)
 
@@ -103,6 +145,7 @@ class AiRoutingPage(BasePage):
         layout.addWidget(grid_host)
 
         editor_box = QGroupBox("Ordem avançada de fallbacks")
+        self._technical_widgets.append(editor_box)
         editor_layout = QVBoxLayout(editor_box)
         editor_row = QHBoxLayout()
         self._chain_task_combo = QComboBox()
@@ -133,6 +176,7 @@ class AiRoutingPage(BasePage):
         layout.addWidget(editor_box)
 
         bonsai_box = QGroupBox("Bonsai — rota experimental separada")
+        self._technical_widgets.append(bonsai_box)
         bonsai_layout = QVBoxLayout(bonsai_box)
         warn = QLabel(
             "Rota explícita e isolada do 9Router: sem token Bonsai no roteador, "
@@ -159,6 +203,7 @@ class AiRoutingPage(BasePage):
         layout.addWidget(bonsai_box)
 
         rollback_box = QGroupBox("Rollback transacional")
+        self._technical_widgets.append(rollback_box)
         rollback_layout = QHBoxLayout(rollback_box)
         self._manifest_input = QLineEdit()
         self._manifest_input.setPlaceholderText("Caminho do manifest.json (operations/<id>)")
@@ -196,11 +241,7 @@ class AiRoutingPage(BasePage):
         title = QLabel(label)
         title.setObjectName("cardTitle")
         header.addWidget(title)
-        policy = QComboBox()
-        for pid in POLICIES:
-            policy.addItem(POLICY_LABELS[pid], pid)
-        policy.currentIndexChanged.connect(lambda _i, t=task: self._policy_changed(t))
-        header.addWidget(policy, 1)
+        header.addStretch()
         column.addLayout(header)
 
         recommended = QLabel("Verificando…")
@@ -218,21 +259,10 @@ class AiRoutingPage(BasePage):
         quota = QLabel("")
         quota.setObjectName("cardDescription")
         column.addWidget(quota)
-
-        apply_row = QHBoxLayout()
-        preview = QPushButton("Prévia")
-        preview.setObjectName("secondaryButton")
-        preview.clicked.connect(lambda: self._task_preview(task))
-        apply = QPushButton("Aplicar")
-        apply.setObjectName("primaryButton")
-        apply.clicked.connect(lambda: self._task_apply(task))
-        apply_row.addWidget(preview)
-        apply_row.addWidget(apply)
-        apply_row.addStretch()
-        column.addLayout(apply_row)
+        self._technical_widgets.append(quota)
 
         self._task_cards[task] = {
-            "policy": policy, "recommended": recommended, "chain": chain,
+            "recommended": recommended, "chain": chain,
             "reason": reason, "quota": quota,
         }
         return card
@@ -247,36 +277,61 @@ class AiRoutingPage(BasePage):
         self._fetch_recommendations()
 
     def _fetch_recommendations(self) -> None:
-        for task, _label, aid in TASKS:
-            action = self.by_id.get(aid) if self.by_id else None
-            if not action:
-                continue
+        for task, _label, _aid in TASKS:
+            self._fetch_recommendation(task)
+
+    def _fetch_recommendation(self, task: str) -> None:
+        card = self._task_cards.get(task)
+        if card is None:
+            return
+        policy = self._policy_combo.currentData() if self._policy_combo is not None else "balanced"
+        dynamic = ActionSpec(
+            id=f"routing.dynamic.{task}.{policy}",
+            category="Roteamento IA",
+            title=f"Recomendação {task} {policy}",
+            description="",
+            args=("ai", "routing", "recommend", "--task", task,
+                  "--policy", policy, "--json"),
+            icon="system-search",
+        )
+        if not self.status_loader.running(dynamic.id):
+            self.status_loader.fetch_action(dynamic)
+
+    def _global_policy_changed(self) -> None:
+        self._recommendations.clear()
+        if self._apply_all_button is not None:
+            self._apply_all_button.setEnabled(False)
+        for task, _label, _aid in TASKS:
             card = self._task_cards.get(task)
             if card is None:
                 continue
-            policy = card["policy"].currentData()
-            dynamic = ActionSpec(
-                id=f"routing.dynamic.{task}.{policy}",
-                category="Roteamento IA",
-                title=f"Recomendação {task} {policy}",
-                description="",
-                args=("ai", "routing", "recommend", "--task", task,
-                      "--policy", policy, "--json"),
-                icon="system-search",
-            )
-            if not self.status_loader.running(dynamic.id):
-                self.status_loader.fetch_action(dynamic)
-
-    def _policy_changed(self, task: str) -> None:
-        card = self._task_cards.get(task)
-        if card:
             card["recommended"].setText("Verificando…")
             card["chain"].setText(_CLEAR)
+            card["reason"].clear()
+            card["quota"].clear()
         self._fetch_recommendations()
 
     def _chain_task_changed(self) -> None:
         self._chain_task = self._chain_task_combo.currentData()
+        self._populate_chain_editor(self._chain_task)
+
+    def _populate_chain_editor(self, task: str) -> None:
         self._chain_editor.clear()
+        for entry in self._recommendations.get(task, []):
+            self._chain_editor.addItem(str(entry.get("model_id")))
+
+    def _render_reason(self, task: str) -> None:
+        card = self._task_cards.get(task)
+        reco = self._recommendations.get(task) or []
+        if card is None or not reco:
+            return
+        top = reco[0]
+        if self._advanced_mode:
+            text = " · ".join(str(item) for item in (top.get("justifications") or [])[:2])
+        else:
+            policy = self._policy_combo.currentData() if self._policy_combo is not None else "balanced"
+            text = POLICY_REASONS.get(str(policy), POLICY_REASONS["balanced"])
+        card["reason"].setText(text)
 
     def _chain_apply(self) -> None:
         models = [self._chain_editor.item(i).text() for i in range(self._chain_editor.count())]
@@ -312,30 +367,43 @@ class AiRoutingPage(BasePage):
         self._chain_editor.setCurrentRow(target)
 
     def _task_preview(self, task: str) -> None:
-        action = self.by_id.get("ai.routing-apply-all") if self.by_id else None
-        if action:
+        card = self._task_cards.get(task)
+        if card is None:
             return
+        policy = str(self._policy_combo.currentData()) if self._policy_combo is not None else "balanced"
         dynamic = ActionSpec(
-            id=f"routing.preview.{task}",
+            id=f"routing.preview.{task}.{policy}",
             category="Roteamento IA",
             title=f"Prévia {task}",
             description="",
-            args=("ai", "routing", "apply", "--task", task, "--dry-run"),
+            args=("ai", "routing", "apply", "--task", task,
+                  "--policy", policy, "--dry-run"),
             icon="document-preview",
         )
         self.request_action(dynamic)
 
     def _task_apply(self, task: str) -> None:
+        card = self._task_cards.get(task)
+        if card is None:
+            return
+        policy = str(self._policy_combo.currentData()) if self._policy_combo is not None else "balanced"
         action = ActionSpec(
-            id=f"routing.apply.{task}",
+            id=f"routing.apply.{task}.{policy}",
             category="Roteamento IA",
             title=f"Aplicar rota {task}",
             description="",
-            args=("ai", "routing", "apply", "--task", task, "--yes"),
+            args=("ai", "routing", "apply", "--task", task,
+                  "--policy", policy, "--yes"),
+            preview_args=("ai", "routing", "apply", "--task", task,
+                          "--policy", policy, "--dry-run"),
             icon="system-run",
             mutable=True,
         )
         self.request_action(action)
+
+    def _apply_all(self) -> None:
+        # Backend reconciles all three managed combos in one transaction.
+        self._task_apply("code")
 
     def _rollback_clicked(self) -> None:
         manifest = self._manifest_input.text().strip()
@@ -383,32 +451,55 @@ class AiRoutingPage(BasePage):
             if not reco:
                 card["recommended"].setText("Nenhum modelo elegível")
                 card["chain"].setText("Verifique cotas e saúde do 9Router")
+                card["reason"].setText("Nenhuma rota pode ser aplicada com esta política.")
+                self._recommendations.pop(task, None)
+                if self._apply_all_button is not None:
+                    self._apply_all_button.setEnabled(False)
                 return
+            self._recommendations[task] = list(reco)
             top = reco[0]
             card["recommended"].setText(
                 f"{top.get('model_id', _CLEAR)}  ·  {top.get('score', 0):.3f}")
             chain_text = " → ".join(str(c.get("model_id")) for c in reco)
             card["chain"].setText(chain_text)
-            just = " · ".join(str(j) for j in (top.get("justifications") or [])[:2])
-            card["reason"].setText(just)
+            self._render_reason(task)
             quota = top.get("quota_state", "?")
             pct = top.get("quota", 0)
             conf = top.get("quota_confidence", 0)
             card["quota"].setText(
-                f"quota: {quota} ({pct:.0%}) · confiança: {conf:.0%}")
-            if action_id == aid:
-                self._chain_editor.clear()
-                for entry in reco:
-                    self._chain_editor.addItem(str(entry.get("model_id")))
+                f"cota: {QUOTA_LABELS.get(str(quota), quota)} ({pct:.0%}) · confiança: {conf:.0%}")
+            if self._apply_all_button is not None:
+                self._apply_all_button.setEnabled(
+                    all(task_id in self._recommendations for task_id, _label, _aid in TASKS)
+                )
+            if task == self._chain_task:
+                self._populate_chain_editor(task)
 
     def _routing_status_failed(self, action_id: str, _message: str) -> None:
         if action_id == "ai.routing-status" and self._status_value:
             self._status_value.setText("Indisponível")
         for task, _label, aid in TASKS:
-            if action_id == aid:
+            if action_id == aid or action_id.startswith(f"routing.dynamic.{task}."):
                 card = self._task_cards.get(task)
                 if card:
-                    card["recommended"].setText("Erro redigido")
+                    card["recommended"].setText("Recomendação indisponível")
+                    card["chain"].setText("Atualize cotas e confirme a saúde do 9Router.")
+                    card["reason"].setText("A operação não ficará presa: tente novamente após corrigir o gateway.")
+                    self._recommendations.pop(task, None)
+                    if self._apply_all_button is not None:
+                        self._apply_all_button.setEnabled(False)
+
+    def _install_context_status(self) -> None:
+        return
+
+    def set_advanced_mode(self, enabled: bool) -> None:
+        super().set_advanced_mode(enabled)
+        for widget in self._technical_widgets:
+            widget.setVisible(enabled)
+        for task, _label, _aid in TASKS:
+            self._render_reason(task)
 
     def block_while_running(self, running: bool) -> None:
         self.setEnabled(not running)
+        if not running and self.isVisible():
+            self.reload()

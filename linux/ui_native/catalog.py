@@ -20,8 +20,8 @@ CATEGORIES = (
     ("Boot Direto", "system-reboot", "GRUB, recuperação e próxima sessão"),
     ("Flatpak", "system-software-install", "Remotes, overrides e compatibilidade"),
     ("Recursos", "preferences-plugin", "Gaming, hardware, saúde e workstation"),
-    ("IA & Dev", "applications-development", "Agentes, MCPs e ferramentas"),
-    ("Proxies IA", "network-server", "Gateways, proxies OpenAI-compatible e OAuth"),
+    ("IA & Dev", "applications-development", "OpenCode, Claude, MCPs e agentes"),
+    ("Proxies IA", "network-server", "Um clique instala, liga e autentica os proxies"),
     ("Roteamento IA", "network-transmit-receive", "Rotas por tarefa, política e cota"),
     ("Aplicativos", "applications-other", "Web apps, jogos e menus do desktop"),
     ("Ajustes", "preferences-system", "Gaming, navegador e desenvolvimento"),
@@ -608,12 +608,18 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("9router-update", "Atualizar 9Router", "Valida integrity npm, troca atomicamente e reverte se a saúde falhar.", ("ai", "9router", "update"), ("ai", "9router", "check-update")),
         ("9router-doctor", "Doctor 9Router", "Audita bind, permissões, serviço e watchdog passivo.", ("ai", "9router", "doctor"), None),
         ("odysseus-status", "Status Odysseus", "Workspace IA agnóstico fixado em commit oficial.", ("ai", "odysseus", "status"), None),
-        ("odysseus-install", "Provisionar Odysseus", "Deploy rootless Podman, autenticação obrigatória e portas loopback.", ("ai", "odysseus", "install"), ("ai", "odysseus", "status")),
+        ("odysseus-install", "Implantar Odysseus (protegido)", "Exige allowlist de commit e release gate; sem ambos, não altera o host.", ("ai", "odysseus", "install"), ("ai", "odysseus", "plan")),
         ("odysseus-open", "Abrir Odysseus", "Abre workspace local autenticado.", ("ai", "odysseus", "open"), None),
         ("odysseus-check", "Verificar update Odysseus", "Compara commit fixado com branch oficial protegida.", ("ai", "odysseus", "check-update"), None),
         ("odysseus-update", "Atualizar Odysseus", "Fixa novo commit oficial e restaura o anterior em falha.", ("ai", "odysseus", "update"), ("ai", "odysseus", "check-update")),
         ("odysseus-backup", "Backup Odysseus", "Arquiva dados persistentes com SHA-256.", ("ai", "odysseus", "backup"), ("ai", "odysseus", "status")),
         ("odysseus-doctor", "Doctor Odysseus", "Audita containers, endpoint e credenciais sem alterar nada.", ("ai", "odysseus", "doctor"), None),
+        ("hermes-status", "Status Hermes", "Prontidão, autenticação, configuração e MCPs sem revelar segredos.", ("ai", "hermes", "status"), None),
+        ("hermes-doctor", "Doctor Hermes", "Audita integridade, política e acesso remoto sem alterar nada.", ("ai", "hermes", "doctor"), None),
+        ("workspaces-doctor", "Diagnóstico Hermes + Odysseus", "Auditoria read-only e redigida da jornada completa.", ("ai", "workspaces", "doctor"), None),
+        ("workspaces-plan", "Plano Hermes + Odysseus", "Mostra fases, bloqueios e próxima ação segura sem implantar workloads.", ("ai", "workspaces", "plan"), None),
+        ("operations-status", "Operações persistentes", "Estado redigido de operações concluídas, falhas e interrupções recuperáveis.", ("ai", "operations", "status"), None),
+        ("operations-resume", "Retomada segura", "Mostra a última operação que pode ser repetida com nova confirmação.", ("ai", "operations", "resume-info"), None),
         ("updates-status", "Atualizações PhaseZero", "Inventário único de apps, host e falhas de atualização.", ("updates", "check"), None),
         ("updates-timer", "Verificação diária", "Ativa timer check-only; aplicação permanece explícita.", ("updates", "install-service"), ("updates", "latest")),
     ]
@@ -693,29 +699,42 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         )
     )
 
-    # Dedicated "Proxies IA" page: lifecycle, OAuth and IDE wiring for the
-    # OpenAI-compatible proxy suite (linux/ai/proxy-suite.sh).
+    # Dedicated "Proxies IA" page: one-click ensure (install+start+login) is
+    # the primary CX. Lifecycle/OAuth leftovers stay advanced.
     proxy_rows = [
-        ("proxies", "Instalar proxies IA", "Suite Linux OpenAI-compatible.", ("ai", "proxies", "install", "all"), ("ai", "proxies", "status")),
-        ("proxies-ides", "Configurar proxies nas IDEs", "Injeta proxies de IA (OpenCode, VS Code/Code-OSS, ZCode) nas IDEs.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status")),
-        ("proxies-auth", "Auth proxies IA", "Status redigido de login/sessão.", ("ai", "proxies", "auth", "all"), None),
-        ("proxies-login-kimi", "Login Kimi", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "kimiproxy"), ("ai", "proxies", "auth", "kimiproxy")),
-        ("proxies-login-qwen", "Login Qwen", "Abre fluxo manual de browser do QwenProxy.", ("ai", "proxies", "login", "qwenproxy"), ("ai", "proxies", "auth", "qwenproxy")),
-        ("proxies-login-deeps", "Login DeepSeek", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "deepsproxy"), ("ai", "proxies", "auth", "deepsproxy")),
-        ("proxies-login-all", "Login em todos", "Abre login de navegador para Kimi, Qwen e DeepSeek pendentes.", ("ai", "proxies", "login", "all"), ("ai", "proxies", "auth", "all")),
-        ("proxies-test", "Testar proxies IA", "Probe honesto /v1/models + chat.", ("ai", "proxies", "test"), None),
-        ("proxies-start-all", "Iniciar todos os proxies", "Habilita e inicia os serviços de usuário.", ("ai", "proxies", "start", "all"), ("ai", "proxies", "status")),
-        ("proxies-stop-all", "Parar todos os proxies", "Desabilita e para os serviços de usuário.", ("ai", "proxies", "stop", "all"), ("ai", "proxies", "status")),
-        ("proxies-start-kimi", "Iniciar Kimi", "Inicia phasezero-kimiproxy (porta 3010).", ("ai", "proxies", "start", "kimiproxy"), ("ai", "proxies", "status")),
-        ("proxies-stop-kimi", "Parar Kimi", "Para phasezero-kimiproxy.", ("ai", "proxies", "stop", "kimiproxy"), ("ai", "proxies", "status")),
-        ("proxies-start-qwen", "Iniciar Qwen", "Inicia phasezero-qwenproxy (porta 3011).", ("ai", "proxies", "start", "qwenproxy"), ("ai", "proxies", "status")),
-        ("proxies-stop-qwen", "Parar Qwen", "Para phasezero-qwenproxy.", ("ai", "proxies", "stop", "qwenproxy"), ("ai", "proxies", "status")),
-        ("proxies-start-deeps", "Iniciar DeepSeek", "Inicia phasezero-deepsproxy (porta 3012).", ("ai", "proxies", "start", "deepsproxy"), ("ai", "proxies", "status")),
-        ("proxies-stop-deeps", "Parar DeepSeek", "Para phasezero-deepsproxy.", ("ai", "proxies", "stop", "deepsproxy"), ("ai", "proxies", "status")),
-        ("proxies-start-mimo", "Iniciar Mimo", "Inicia phasezero-mimo-ai-proxy (porta 3013).", ("ai", "proxies", "start", "mimo-ai-proxy"), ("ai", "proxies", "status")),
-        ("proxies-stop-mimo", "Parar Mimo", "Para phasezero-mimo-ai-proxy.", ("ai", "proxies", "stop", "mimo-ai-proxy"), ("ai", "proxies", "status")),
+        ("proxies-ensure-kimi", "Usar Kimi", "Instala, inicia e abre o login do Kimi se ainda faltar.", ("ai", "proxies", "ensure", "kimiproxy"), ("ai", "proxies", "ensure", "kimiproxy", "--dry-run"), ""),
+        ("proxies-ensure-qwen", "Usar Qwen", "Instala, inicia e abre o login do Qwen se ainda faltar.", ("ai", "proxies", "ensure", "qwenproxy"), ("ai", "proxies", "ensure", "qwenproxy", "--dry-run"), ""),
+        ("proxies-ensure-deeps", "Usar DeepSeek", "Instala, inicia e abre o login do DeepSeek se ainda faltar.", ("ai", "proxies", "ensure", "deepsproxy"), ("ai", "proxies", "ensure", "deepsproxy", "--dry-run"), ""),
+        ("proxies-ensure-mimo", "Usar Mimo", "Instala, abre o Xiaomi AI Studio e pede o token se ainda faltar.", ("ai", "proxies", "ensure", "mimo-ai-proxy"), ("ai", "proxies", "ensure", "mimo-ai-proxy", "--dry-run"), ""),
+        ("proxies-ensure-all", "Preparar todos os proxies", "Instala, inicia e autentica Kimi, Qwen, DeepSeek e Mimo.", ("ai", "proxies", "ensure", "all"), ("ai", "proxies", "ensure", "all", "--dry-run"), ""),
+        ("proxies-open-kimi", "Abrir Kimi no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Kimi.", ("ai", "proxies", "open", "kimiproxy"), None, ""),
+        ("proxies-open-qwen", "Abrir Qwen no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Qwen.", ("ai", "proxies", "open", "qwenproxy"), None, ""),
+        ("proxies-open-deeps", "Abrir DeepSeek no OpenCode", "Abre o OpenCode CLI já no modelo do proxy DeepSeek.", ("ai", "proxies", "open", "deepsproxy"), None, ""),
+        ("proxies-open-mimo", "Abrir Mimo no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Mimo.", ("ai", "proxies", "open", "mimo-ai-proxy"), None, ""),
+        ("proxies-open-studio-mimo", "Abrir Xiaomi AI Studio", "Abre a página para gerar token, user id e PH do Mimo.", ("ai", "proxies", "open-studio"), None, ""),
+        ("proxies-ides", "Configurar IDEs (proxies)", "Injeta proxies de IA (OpenCode, VS Code/Code-OSS, ZCode) nas IDEs.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status"), ""),
+        ("proxies-stop-kimi", "Parar Kimi", "Para phasezero-kimiproxy.", ("ai", "proxies", "stop", "kimiproxy"), ("ai", "proxies", "status"), ""),
+        ("proxies-stop-qwen", "Parar Qwen", "Para phasezero-qwenproxy.", ("ai", "proxies", "stop", "qwenproxy"), ("ai", "proxies", "status"), ""),
+        ("proxies-stop-deeps", "Parar DeepSeek", "Para phasezero-deepsproxy.", ("ai", "proxies", "stop", "deepsproxy"), ("ai", "proxies", "status"), ""),
+        ("proxies-stop-mimo", "Parar Mimo", "Para phasezero-mimo-ai-proxy.", ("ai", "proxies", "stop", "mimo-ai-proxy"), ("ai", "proxies", "status"), ""),
+        ("proxies-stop-all", "Parar todos os proxies", "Desabilita e para os serviços de usuário.", ("ai", "proxies", "stop", "all"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies", "Plano do catálogo legado", "Mostra snapshots aprovados e integrações bloqueadas sem baixar código.", ("ai", "proxies", "plan", "all"), None, "advanced"),
+        ("proxies-auth", "Auth proxies IA", "Status redigido de login/sessão.", ("ai", "proxies", "auth", "all"), None, "advanced"),
+        ("proxies-provenance", "Procedência dos proxies", "Verifica repositório, commit, árvore, licença, lockfiles e alterações locais; não substitui auditoria semântica.", ("ai", "proxies", "provenance", "all"), None, ""),
+        ("auth-registry", "Autenticação central", "Contas, sessões, providers e workspaces sem nomes, e-mails ou segredos.", ("ai", "auth", "status"), None, ""),
+        ("auth-doctor", "Diagnosticar autenticação", "Prioriza integrações essenciais e próximas ações sem revelar credenciais.", ("ai", "auth", "doctor"), None, "advanced"),
+        ("proxies-login-kimi", "Login Kimi", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "kimiproxy"), ("ai", "proxies", "auth", "kimiproxy"), "advanced"),
+        ("proxies-login-qwen", "Login Qwen", "Abre fluxo manual de browser do QwenProxy.", ("ai", "proxies", "login", "qwenproxy"), ("ai", "proxies", "auth", "qwenproxy"), "advanced"),
+        ("proxies-login-deeps", "Login DeepSeek", "Abre Chromium visível para salvar sessão.", ("ai", "proxies", "login", "deepsproxy"), ("ai", "proxies", "auth", "deepsproxy"), "advanced"),
+        ("proxies-login-all", "Login em todos", "Abre login de navegador para Kimi, Qwen e DeepSeek pendentes.", ("ai", "proxies", "login", "all"), ("ai", "proxies", "auth", "all"), "advanced"),
+        ("proxies-test", "Testar proxies IA", "Probe honesto /v1/models + chat.", ("ai", "proxies", "test"), None, "advanced"),
+        ("proxies-start-all", "Iniciar todos os proxies", "Habilita e inicia os serviços de usuário.", ("ai", "proxies", "start", "all"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-start-kimi", "Iniciar Kimi", "Inicia phasezero-kimiproxy (porta 3010).", ("ai", "proxies", "start", "kimiproxy"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-start-qwen", "Iniciar Qwen", "Inicia phasezero-qwenproxy (porta 3011).", ("ai", "proxies", "start", "qwenproxy"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-start-deeps", "Iniciar DeepSeek", "Inicia phasezero-deepsproxy (porta 3012).", ("ai", "proxies", "start", "deepsproxy"), ("ai", "proxies", "status"), "advanced"),
+        ("proxies-start-mimo", "Iniciar Mimo", "Inicia phasezero-mimo-ai-proxy (porta 3013).", ("ai", "proxies", "start", "mimo-ai-proxy"), ("ai", "proxies", "status"), "advanced"),
     ]
-    for key, title, description, args, preview in proxy_rows:
+    for key, title, description, args, preview, visibility in proxy_rows:
         actions.append(
             _a(
                 f"ai.{key}",
@@ -727,8 +746,22 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 mutable=preview is not None,
                 preview=preview,
                 badge="Preview" if preview else "",
+                visibility=visibility,
             )
         )
+    actions.append(
+        _a(
+            "ai.proxies-credentials-mimo",
+            "Proxies IA",
+            "Colar credenciais Mimo",
+            "Salva token, user id e PH do Xiaomi AI Studio sem exibi-los.",
+            ("ai", "proxies", "set-credentials", "mimo-ai-proxy"),
+            "dialog-password",
+            mutable=True,
+            preview=("ai", "proxies", "auth", "mimo-ai-proxy"),
+            stdin_parameter="credentials",
+        )
+    )
 
     for area, title, description in [
         ("browser", "Hardening navegador", "Privacidade e segurança."),
@@ -1038,8 +1071,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("routing-recommend-code", "Recomendar rota — Código", "Cadeia de fallback para escrever código.", ("ai", "routing", "recommend", "--task", "code", "--json"), None),
         ("routing-recommend-analysis", "Recomendar rota — Análise", "Cadeia de fallback para análise/revisão.", ("ai", "routing", "recommend", "--task", "analysis", "--json"), None),
         ("routing-recommend-plan", "Recomendar rota — Plano", "Cadeia de fallback para planejamento.", ("ai", "routing", "recommend", "--task", "plan", "--json"), None),
-        ("routing-plan", "Plano da rota (diff)", "Mostra combo alvo e variáveis de ambiente, sem mutar.", ("ai", "routing", "plan", "--task", "code", "--client", "claude"), None),
-        ("routing-apply-all", "Aplicar plano", "Materializa combos phasezero-* transacionalmente (todas as tarefas).", ("ai", "routing", "apply", "--task", "code", "--yes"), ("ai", "routing", "apply", "--task", "code", "--dry-run")),
+        ("routing-plan", "Plano Código · Equilibrado (diff)", "Mostra combo alvo e variáveis de ambiente, sem mutar.", ("ai", "routing", "plan", "--task", "code", "--client", "claude"), None),
+        ("routing-apply-all", "Aplicar 3 rotas · Equilibrado", "Materializa os três combos phasezero-* com uma política global e transação única.", ("ai", "routing", "apply", "--task", "code", "--policy", "balanced", "--yes"), ("ai", "routing", "apply", "--task", "code", "--policy", "balanced", "--dry-run")),
         ("routing-verify", "Verificar roteamento", "Valida combos vs plano, redação e isolamento Bonsai.", ("ai", "routing", "verify"), None),
         ("routing-refresh", "Refresh automático de cotas", "Atualização explícita de quota (scheduler 5–10 min).", ("ai", "routing", "refresh"), None),
     ]
