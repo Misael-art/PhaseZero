@@ -131,11 +131,12 @@ github_auth_record() {
         '{installed:$installed,authenticated:$authenticated,authStatus:$authStatus}'
 }
 
-tmp_runtime="$(mktemp)"
-tmp_clis="$(mktemp)"
-tmp_ides="$(mktemp)"
-tmp_services="$(mktemp)"
-trap 'rm -f "$tmp_runtime" "$tmp_clis" "$tmp_ides" "$tmp_services"' EXIT
+tmp_dir="$(mktemp -d)"
+tmp_runtime="$tmp_dir/runtime.jsonl"
+tmp_clis="$tmp_dir/clis.jsonl"
+tmp_ides="$tmp_dir/ides.jsonl"
+tmp_services="$tmp_dir/services.jsonl"
+trap 'rm -rf -- "$tmp_dir"' EXIT
 
 {
     command_record node node --version
@@ -153,7 +154,8 @@ trap 'rm -f "$tmp_runtime" "$tmp_clis" "$tmp_ides" "$tmp_services"' EXIT
     command_record git git --version
     command_record gitLfs git-lfs --version
     command_record rg rg --version
-} >> "$tmp_runtime"
+} > "$tmp_runtime" &
+pid_runtime=$!
 
 {
     command_record codex codex --version
@@ -172,7 +174,8 @@ trap 'rm -f "$tmp_runtime" "$tmp_clis" "$tmp_ides" "$tmp_services"' EXIT
     command_record headroom headroom --version
     command_record rtk rtk --version
     command_record codexbar codexbar --version
-} >> "$tmp_clis"
+} > "$tmp_clis" &
+pid_clis=$!
 
 {
     ide_record vscode code "${XDG_CONFIG_HOME:-$HOME/.config}/Code/User/settings.json"
@@ -182,7 +185,8 @@ trap 'rm -f "$tmp_runtime" "$tmp_clis" "$tmp_ides" "$tmp_services"' EXIT
     ide_record zed zed "${XDG_CONFIG_HOME:-$HOME/.config}/zed/settings.json"
     ide_record zcode zcode "${XDG_CONFIG_HOME:-$HOME/.config}/ai.z.zcode/store.json"
     ide_record neovim nvim "${XDG_CONFIG_HOME:-$HOME/.config}/nvim/init.lua"
-} >> "$tmp_ides"
+} > "$tmp_ides" &
+pid_ides=$!
 
 {
     service_record docker docker system
@@ -192,22 +196,63 @@ trap 'rm -f "$tmp_runtime" "$tmp_clis" "$tmp_ides" "$tmp_services"' EXIT
     service_record openclaw-gateway openclaw-gateway user
     service_record codex-update-guard phasezero-codex-desktop-guard.service user
     service_record ai-desktop-update phasezero-ai-desktop-update.timer user
-} >> "$tmp_services"
+} > "$tmp_services" &
+pid_services=$!
+
+for pid in "$pid_runtime" "$pid_clis" "$pid_ides" "$pid_services"; do
+    wait "$pid"
+done
 
 runtime="$(records_to_object < "$tmp_runtime")"
 clis="$(records_to_object < "$tmp_clis")"
 ides="$(records_to_object < "$tmp_ides")"
 # shellcheck disable=SC2178 # intentional: services is a JSON string, not array
 services="$(records_to_object < "$tmp_services")"
-mcp="$(bash "$PZ_ROOT/linux/ai/mcp-manager.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,definitions:[],targets:{}}')"
-open_webui="$(docker_container_record open-webui)"
-desktop_apps="$(bash "$PZ_ROOT/linux/ai/desktop-apps.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,claudeDesktop:{installed:false},codexDesktop:{},updater:{}}')"
-router_status="$(bash "$PZ_ROOT/linux/ai/9router-manager.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,installed:false,healthy:false}')"
-odysseus_status="$(bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,installed:false,healthy:false}')"
-github="$(github_auth_record)"
-admin_bridge="$(bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,ready:false,backend:"missing"}')"
-agent_compat="$(bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,mode:"degraded",rules:{ok:false,files:[]},tools:{}}')"
-codexbar_status="$(bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" status 2>/dev/null || jq -cn '{schemaVersion:1,cli:{available:false,path:""},plasmoid:{installed:false},config:{exists:false}}')"
+(
+    bash "$PZ_ROOT/linux/ai/mcp-manager.sh" status > "$tmp_dir/mcp.json" 2>/dev/null ||
+        jq -cn '{schemaVersion:1,definitions:[],targets:{}}' > "$tmp_dir/mcp.json"
+) & pid_mcp=$!
+(docker_container_record open-webui > "$tmp_dir/open-webui.json") & pid_webui=$!
+(
+    bash "$PZ_ROOT/linux/ai/desktop-apps.sh" status > "$tmp_dir/desktop-apps.json" 2>/dev/null ||
+        jq -cn '{schemaVersion:1,claudeDesktop:{installed:false},codexDesktop:{},updater:{}}' > "$tmp_dir/desktop-apps.json"
+) & pid_desktop=$!
+(
+    bash "$PZ_ROOT/linux/ai/9router-manager.sh" status > "$tmp_dir/router.json" 2>/dev/null ||
+        jq -cn '{schemaVersion:1,installed:false,healthy:false}' > "$tmp_dir/router.json"
+) & pid_router=$!
+(
+    bash "$PZ_ROOT/linux/ai/odysseus-manager.sh" status > "$tmp_dir/odysseus.json" 2>/dev/null ||
+        jq -cn '{schemaVersion:1,installed:false,healthy:false}' > "$tmp_dir/odysseus.json"
+) & pid_odysseus=$!
+(github_auth_record > "$tmp_dir/github.json") & pid_github=$!
+(
+    bash "$PZ_ROOT/linux/ai/setup-admin-bridge.sh" status > "$tmp_dir/admin.json" 2>/dev/null ||
+        jq -cn '{schemaVersion:1,ready:false,backend:"missing"}' > "$tmp_dir/admin.json"
+) & pid_admin=$!
+(
+    bash "$PZ_ROOT/linux/ai/setup-agent-compat.sh" status > "$tmp_dir/compat.json" 2>/dev/null ||
+        jq -cn '{schemaVersion:1,mode:"degraded",rules:{ok:false,files:[]},tools:{}}' > "$tmp_dir/compat.json"
+) & pid_compat=$!
+(
+    bash "$PZ_ROOT/linux/ai/setup-codexbar.sh" status > "$tmp_dir/codexbar.json" 2>/dev/null ||
+        jq -cn '{schemaVersion:1,cli:{available:false,path:""},plasmoid:{installed:false},config:{exists:false}}' > "$tmp_dir/codexbar.json"
+) & pid_codexbar=$!
+
+for pid in "$pid_mcp" "$pid_webui" "$pid_desktop" "$pid_router" "$pid_odysseus" \
+    "$pid_github" "$pid_admin" "$pid_compat" "$pid_codexbar"; do
+    wait "$pid"
+done
+
+mcp="$(<"$tmp_dir/mcp.json")"
+open_webui="$(<"$tmp_dir/open-webui.json")"
+desktop_apps="$(<"$tmp_dir/desktop-apps.json")"
+router_status="$(<"$tmp_dir/router.json")"
+odysseus_status="$(<"$tmp_dir/odysseus.json")"
+github="$(<"$tmp_dir/github.json")"
+admin_bridge="$(<"$tmp_dir/admin.json")"
+agent_compat="$(<"$tmp_dir/compat.json")"
+codexbar_status="$(<"$tmp_dir/codexbar.json")"
 
 rtk_available="$(jq -r '.rtk.available' <<< "$clis")"
 memory_available="$(jq -r '."ai-memory".available' <<< "$clis")"
@@ -289,6 +334,30 @@ jq -cn \
       desktopApps: $desktopApps,
       routing: {"9router": $router},
       workspaces: {odysseus: $odysseus},
+      setupCatalog: {
+        essentials: [
+          {id:"opencode",label:"OpenCode",state:(if $clis.opencode.available then "ready" else "missing" end),
+            action:"linux/pz ai setup opencode",maturity:"stable"},
+          {id:"9router",label:"9Router",state:(if $router.healthy then "ready" elif $router.installed then "degraded" else "missing" end),
+            action:"linux/pz ai 9router install",maturity:"stable"},
+          {id:"ai-memory",label:"Memória",state:(if $memoryReachable then "ready" elif $clis["ai-memory"].available then "degraded" else "missing" end),
+            action:"linux/pz ai setup memory",maturity:"stable"},
+          {id:"mcp",label:"MCPs",state:(if (($mcp.problems // [])|length)==0 then "ready" else "degraded" end),
+            action:"linux/pz ai repair",maturity:"stable"}
+        ],
+        optional: [
+          {id:"claude",label:"Claude + Bonsai",state:(if $clis.claude.available then "installed" else "optional" end),
+            action:"linux/pz ai setup claude",maturity:"preview"},
+          {id:"hermes",label:"Hermes",state:(if $clis.hermes.available and $hermesConfigExists then "configured" elif $clis.hermes.available then "installed" else "optional" end),
+            action:"linux/pz ai workspaces plan",maturity:"preview"},
+          {id:"openclaw",label:"OpenClaw",state:(if $clis.openclaw.available then "installed" else "optional" end),
+            action:"linux/pz ai setup openclaw",maturity:"experimental"},
+          {id:"ollama",label:"Ollama",state:(if $clis.ollama.available then "installed" else "optional" end),
+            action:"linux/pz ai setup ollama",maturity:"preview"},
+          {id:"odysseus",label:"Odysseus",state:(if $odysseus.ready then "ready" elif $odysseus.installed then "degraded" else "optional" end),
+            action:"linux/pz ai workspaces plan",maturity:"experimental"}
+        ]
+      },
       github: $github,
       adminBridge: $adminBridge,
       agentCompat: $agentCompat,

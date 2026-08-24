@@ -42,6 +42,8 @@ UI_MODULES: list[str] = [
     "linux.ui_native.pages.results",
     "linux.ui_native.pages.workspace",
     "linux.ui_native.pages.ai_proxies",
+    "linux.ui_native.pages.ai_dev",
+    "linux.ui_native.pages.ai_routing",
     "linux.ui_native.pages.windows_vm",
     "linux.ui_native.pages.service_control",
     "linux.ui_native.health_models",

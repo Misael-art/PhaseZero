@@ -592,7 +592,18 @@ class MainWindow(QMainWindow):
         self.log_view.clear()
         self.log_view.setVisible(self.preferences.advanced_mode)
         try:
-            self.runner.start(action, preview=action.mutable, values=values)
+            # One-click proxy journeys: install/start/login already confirmed by Usar.
+            skip_preview = (
+                action.id.startswith("ai.proxies-ensure")
+                or action.id.startswith("ai.proxies-login")
+                or action.id.startswith("ai.proxies-open")
+                or action.id == "ai.proxies-credentials-mimo"
+            )
+            page = self.registry.page_for(self.current_category)
+            extra = getattr(page, "consume_action_values", None)
+            if callable(extra):
+                values.update(extra(action) or {})
+            self.runner.start(action, preview=action.mutable and not skip_preview, values=values)
         except (ValueError, RuntimeError) as exc:
             self.pending_action = None
             self.pending_value = ""
@@ -629,8 +640,6 @@ class MainWindow(QMainWindow):
     def append_output(self, text: str, error: bool) -> None:
         if error:
             self.log_view.appendPlainText("[stderr] " + text.rstrip())
-        elif action is not None and action.mutable and result.ok and severity == "success":
-            self._toast(f"{action_title} concluída com sucesso", "success")
         else:
             cursor = self.log_view.textCursor()
             cursor.movePosition(QTextCursor.MoveOperation.End)
@@ -759,6 +768,12 @@ class MainWindow(QMainWindow):
     def _open_resolution(self, action_id: str) -> None:
         if action_id.startswith("windows."):
             self.show_category("Windows VM")
+        elif action_id.startswith("ai.proxies") or action_id.startswith("ai.9router") or action_id.startswith("ai.odysseus"):
+            self.show_category("Proxies IA")
+        elif action_id.startswith("ai.routing"):
+            self.show_category("Roteamento IA")
+        elif action_id.startswith("ai."):
+            self.show_category("IA & Dev")
         elif action_id == "system.doctor":
             self.show_category("Visão geral")
         else:

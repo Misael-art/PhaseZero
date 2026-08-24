@@ -121,6 +121,7 @@ class OperationResult:
     stderr: str
     parsed: Any = None
     result_path: Path | None = None
+    operation_id: str = ""
 
     @property
     def ok(self) -> bool:
@@ -133,6 +134,7 @@ class OperationResult:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schemaVersion": 1,
+            "operationId": self.operation_id,
             "action": self.action_id,
             "command": self.command,
             "preview": self.preview,

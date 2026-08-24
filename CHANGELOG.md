@@ -3,12 +3,33 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
-## [1.17.0] - Não lançado
+## [1.17.0] - 2026-08-24
 
 > Atual estável publicada: **1.16.x** (`version.json`).
 > Entradas abaixo cobrem WinVM, IA, Homelab e Central desde 1.13.0.
 
 ### Adicionado
+- Central IA reorganizada por jornada: catálogo separa base essencial de
+  opcionais, páginas dedicadas para IA & Dev, Proxies e Roteamento, próxima ação
+  pedagógica, progresso persistente e repetição segura após interrupção.
+- Registro central de autenticação redigido (`pz ai auth`) para clientes,
+  providers 9Router, proxies e workspaces; nenhuma identidade ou credencial
+  aparece no contrato público.
+- Ledger privado de operações da Central com estados running/completed/failed/
+  interrupted, recuperação após encerramento da UI e retry sempre submetido a
+  nova prévia e confirmação.
+- Hermes Agent `v0.20.5` integrado ponta a ponta ao 9Router: distribuição e
+  instalador fixados, aceite de risco preso ao commit, launchers protegidos,
+  MCP ai-memory, Playwright, desktop entry e gateway user persistente por
+  drop-in systemd.
+- Procedência fail-closed para Kimi, Qwen, DeepSeek e Mimo: repo, commit, árvore,
+  licença e lockfiles versionados; instalação atômica em staging; divergência
+  bloqueia execução sem impedir parada segura.
+- Diagnóstico e plano agregados para Hermes, Odysseus, 9Router, Ollama,
+  ai-memory, Podman, Tailscale, portas, política e orçamento do host.
+- Odysseus ganhou manifests de release, imagens por digest OCI e base Python
+  por digest, mantendo instalação bloqueada enquanto auditoria semântica e
+  dependências Python não forem aprovadas.
 - Entrada GRUB dedicada "PhaseZero Windows VM (Dock)": `boot install
   --dock-entry` cria uma segunda entrada (hotkey `d`, mesma classe de ícone
   do Windows) que inicia a sessão sempre no monitor da dock via
@@ -78,6 +99,16 @@ As versões seguem a data de build em `version.json`.
 - Smoke `pz ai routing` em `tests/linux-ai.sh` (degrada sem 9Router).
 
 ### Corrigido
+- Proxies deixam de declarar sucesso após falha de serviço: início, readiness,
+  porta e chat real agora determinam resultado terminal e próxima ação.
+- Fluxo Mimo não inicia sem credencial; salvar valores válidos continua
+  automaticamente por iniciar, verificar e abrir. Falhas de IDE são degradadas,
+  nunca descartadas.
+- Roteamento IA usa uma política global coerente para code/analysis/plan;
+  recomendações, preview e aplicação transacional compartilham o mesmo estado.
+- Status IA executa sondas independentes em paralelo e reduz espera da Central.
+- Hermes gateway preserva integração 9Router após reboot mesmo quando upstream
+  autorregenera sua unit systemd.
 - A sessão de boot direto não mata mais o Windows em execução ao ser
   encerrada. Todo fim de sessão (logout do SDDM, sinal, arquivo
   `shutdown.requested`) pede primeiro o desligamento do convidado via QGA

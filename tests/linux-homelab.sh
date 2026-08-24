@@ -532,7 +532,11 @@ fi
 if rg -q 'ollama pull llama3.1|nohup ollama pull' "$REPO_ROOT/linux/ai/setup-ollama.sh"; then
     echo "FAIL: auto-pull found in ollama setup"; exit 1
 fi
-rg -q 'PZ_HERMES_INSTALL_SHA256' "$REPO_ROOT/linux/ai/setup-hermes.sh"
+if rg -q 'PZ_HERMES_INSTALL_SHA256' "$REPO_ROOT/linux/ai/setup-hermes.sh"; then
+    echo "FAIL: arbitrary Hermes installer checksum bypass found"; exit 1
+fi
+rg -q 'PZ_HERMES_ACCEPT_UNAUDITED_COMMIT' "$REPO_ROOT/linux/ai/setup-hermes.sh"
+rg -q 'hermes-distribution-audit.json' "$REPO_ROOT/linux/ai/setup-hermes.sh"
 if rg -q -- '--network host' "$REPO_ROOT/linux/ai/setup-memory.sh"; then
     echo "FAIL: --network host found in setup-memory"; exit 1
 fi

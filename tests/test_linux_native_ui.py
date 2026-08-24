@@ -441,6 +441,7 @@ def test_profile_preview_runs_without_mutation(tmp_path):
 def test_qprocess_runner_writes_result_envelope(tmp_path):
     script = r"""
 import json
+import os
 from pathlib import Path
 from PySide6.QtCore import QCoreApplication, QTimer
 from linux.ui_native.catalog import build_catalog
@@ -465,6 +466,12 @@ assert result.result_path.exists()
 saved = json.loads(result.result_path.read_text())
 assert saved["action"] == "system.version"
 assert saved["exitCode"] == 0
+assert saved["operationId"]
+ledger_path = Path(os.environ["XDG_STATE_HOME"]) / "phasezero" / "control-center" / "operations" / saved["operationId"] / "operation.json"
+ledger = json.loads(ledger_path.read_text())
+assert ledger["status"] == "succeeded"
+assert ledger["resultPath"] == str(result.result_path)
+assert ledger["secretsRedacted"] is True
 """
     env = os.environ.copy()
     env["XDG_STATE_HOME"] = str(tmp_path / "state")

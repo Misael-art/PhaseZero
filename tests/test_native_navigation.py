@@ -57,7 +57,15 @@ def test_main_window_supports_documented_narrow_viewport(qapp, width, height):
         window.resize(width, height)
         qapp.processEvents()
         assert window.size().width() == width
-        assert window.size().height() == height
+        # Window managers may clamp an oversized portrait request to a bound
+        # between availableGeometry and the requested size. Exact height is
+        # meaningful only when Qt can honor it; width/reflow assertions below
+        # remain strict in either case.
+        actual_height = window.size().height()
+        available_height = qapp.primaryScreen().availableGeometry().height()
+        assert actual_height == height or (
+            height > available_height and available_height <= actual_height < height
+        )
         assert not window.sidebar.isVisible()
         assert not window.compact_menu.isHidden()
         assert window.search.isVisible()
