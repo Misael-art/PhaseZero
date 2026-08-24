@@ -45,8 +45,10 @@ Usage:
   pz waydroid install         Create Waydroid config/launchers
   pz waydroid repair          Apply Waydroid host/service repair
   pz waydroid launch          Launch optimized Waydroid session
+  pz waydroid stop [--json]   Stop the Android session (idempotent; already-stopped is success)
+  pz waydroid shares <a>      LXC shares (status|install|repair|remove|dry-run) [--groups folders,usb]
   pz waydroid host-access <a> Host->guest: browse Android storage (link|unlink|status)
-  pz waydroid boot status     Manage direct GRUB Waydroid boot entry
+  pz waydroid boot status     Manage direct GRUB Waydroid boot entry (install|remove|status|next|next-reboot|set-default|clear-next)
   pz server status            Home server (LLM/homelab/boot) status
   pz server llm <action>      Local LLM server (install|expose-lan|restore|status)
   pz server homelab <action>  Homelab: stack (plan|up|down|open|logs|backup|restore|update|repair) / status (status|verify) / profile (list|set <key>|get) / governor (list|weights|budget|check|winvm-status|winvm-suspend [--dry-run]|winvm-resume) [--extras] [--json] [--profile <key>]
@@ -221,9 +223,9 @@ Usage:
   pz ai odysseus install       Provision rootless, loopback-only Odysseus stack
   pz ai odysseus update        Update to verified official branch commit with rollback
   pz doctor                    Run full system diagnostics
-  pz support-bundle            Generate support tarball
+  pz support-bundle [--plan]   Generate support tarball (--plan: preview sem escrita)
   pz repair-plan               Generate repair plan
-  pz tune <area>               Apply tuning (browser|gaming|dev)
+  pz tune <area> [--dry-run]   Apply tuning (browser|gaming|dev); --dry-run mostra o plano
   pz capabilities detect      Detect host/package compatibility as JSON
   pz capabilities catalog     List trusted capabilities [--group ID]
   pz capabilities plan        Preview --profile/--capability/--manifest selection
@@ -681,11 +683,22 @@ cmd_ai() {
 cmd_doctor() {
     # Global watchdog: per-check timeouts bound every subcommand (doctor.sh),
     # this caps the whole run. Override with PZ_DOCTOR_TIMEOUT (seconds).
-    timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
+    local scope="full"
+    if [ "${1:-}" = "--scope" ]; then
+        case "${2:-}" in
+            system|full) scope="$2"; shift 2 ;;
+            *) pz_error "usage: pz doctor [--scope system|full]"; return 1 ;;
+        esac
+    fi
+    PZ_DOCTOR_SCOPE="$scope" timeout "${PZ_DOCTOR_TIMEOUT:-300}" bash "$PZ_ROOT/linux/audit/doctor.sh"
 }
 
 cmd_support_bundle() {
-    bash "$PZ_ROOT/linux/audit/support-bundle.sh"
+    case "${1:-collect}" in
+        collect|"") bash "$PZ_ROOT/linux/audit/support-bundle.sh" ;;
+        --plan)     bash "$PZ_ROOT/linux/audit/support-bundle.sh" --plan ;;
+        *)          pz_error "usage: pz support-bundle [--plan]"; return 1 ;;
+    esac
 }
 
 cmd_repair_plan() {
@@ -694,11 +707,17 @@ cmd_repair_plan() {
 
 cmd_tune() {
     local area="${1:-}"
-    [ -z "$area" ] && { pz_error "usage: pz tune (browser|gaming|dev)"; return 1; }
+    local mode="${2:-apply}"
+    [ -z "$area" ] && { pz_error "usage: pz tune (browser|gaming|dev) [--dry-run]"; return 1; }
+    case "$mode" in
+        apply|"") mode="apply" ;;
+        --dry-run) ;;
+        *) pz_error "usage: pz tune (browser|gaming|dev) [--dry-run]"; return 1 ;;
+    esac
     case "$area" in
-        browser) bash "$PZ_ROOT/linux/tuning/browser-hardening.sh" ;;
-        gaming)  bash "$PZ_ROOT/linux/tuning/gaming-tweaks.sh" ;;
-        dev)     bash "$PZ_ROOT/linux/tuning/dev-tweaks.sh" ;;
+        browser) bash "$PZ_ROOT/linux/tuning/browser-hardening.sh" "$mode" ;;
+        gaming)  bash "$PZ_ROOT/linux/tuning/gaming-tweaks.sh" "$mode" ;;
+        dev)     bash "$PZ_ROOT/linux/tuning/dev-tweaks.sh" "$mode" ;;
         *)       pz_error "unknown tune area: $area"; return 1 ;;
     esac
 }

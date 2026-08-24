@@ -9,8 +9,8 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Planejado; implementação ainda não aceita como concluída |
-| Última verificação | 2026-08-11, America/Sao_Paulo |
+| Status | **Shipped** — entregue no produto (Plasma 6); roadmap mantido como registro. Reabrir só para bug novo (CCS-032) |
+| Última verificação | 2026-08-23, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
 | Base observada | `origin/main` em `141619c` (v1.15.7) |
 | Release pública observada | `v1.15.7` (7 assets, checksums 7/7) |

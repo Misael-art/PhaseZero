@@ -96,7 +96,7 @@ class HomelabPage(BasePage):
             ("Verify", lambda: self.run_cmd(["backup", "verify", "--source", self._last_backup()])),
             ("Restore", self.pick_restore),
             ("Repair", lambda: self.run_cmd(["repair"])),
-            ("Resume", lambda: self.run_cmd(["up", "--resume"])),
+            ("Up", lambda: self.run_cmd(["up"])),
         ):
             btn = QPushButton(label)
             btn.clicked.connect(fn)

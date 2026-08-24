@@ -9,10 +9,32 @@ STEAMDECK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 AMDGPU_VENDOR="0x1002"
 GPU_PCI="0000:04:00.0"
 
-steamdeck_is_jupiter() {
+steamdeck_dmi_root() {
+    printf '%s\n' "${PZ_STEAMDECK_DMI_ROOT:-/sys/devices/virtual/dmi/id}"
+}
+
+steamdeck_dmi_product_name() {
+    cat "$(steamdeck_dmi_root)/product_name" 2>/dev/null || echo ""
+}
+
+# Jupiter = Steam Deck LCD; Galileo = Steam Deck OLED (same chassis, same
+# handheld contracts). Both must take the Deck path, never the generic PC one.
+steamdeck_model() {
     local product
-    product=$(cat /sys/devices/virtual/dmi/id/product_name 2>/dev/null || echo "")
-    [ "$product" = "Jupiter" ]
+    product="$(steamdeck_dmi_product_name)"
+    case "$product" in
+        Jupiter*) printf '%s\n' "jupiter" ;;
+        Galileo*) printf '%s\n' "galileo" ;;
+        *) printf '%s\n' "generic" ;;
+    esac
+}
+
+steamdeck_is_jupiter() {
+    [ "$(steamdeck_model)" != "generic" ]
+}
+
+steamdeck_is_oled() {
+    [ "$(steamdeck_model)" = "galileo" ]
 }
 
 steamdeck_display_connected() {

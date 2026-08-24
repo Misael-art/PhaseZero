@@ -473,9 +473,12 @@ class MainWindow(QMainWindow):
                 item.widget().deleteLater()
         self._search_cards.clear()
         query = self.search.text().strip().casefold()
+        # CCS-020: o modo simples não expõe ações avançadas nem na busca —
+        # progressive disclosure vale para a busca também.
         visible = [
             action for action in self.catalog
             if query and query in action.searchable_text
+            and (self.preferences.advanced_mode or action.visibility != "advanced")
         ]
         columns = 1
         for index, action in enumerate(visible):

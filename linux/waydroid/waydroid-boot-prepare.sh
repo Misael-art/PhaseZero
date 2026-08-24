@@ -2,7 +2,15 @@
 # waydroid-boot-prepare.sh - switch SDDM session for PhaseZero Waydroid boot
 set -euo pipefail
 
-TARGET_USER="${PZ_WAYDROID_BOOT_USER:-misael}"
+# CCS-038: resolução sem nome fixo — explícito -> SUDO_USER -> logname -> UID 1000.
+TARGET_USER="${PZ_WAYDROID_BOOT_USER:-}"
+if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
+    TARGET_USER="$(logname 2>/dev/null || true)"
+fi
+if [ -z "$TARGET_USER" ] || [ "$TARGET_USER" = "root" ]; then
+    TARGET_USER="$(getent passwd 1000 2>/dev/null | cut -d: -f1)"
+fi
+[ -n "$TARGET_USER" ] || { log "unable to resolve target user; set PZ_WAYDROID_BOOT_USER"; exit 1; }
 CMDLINE="${PZ_BOOT_CMDLINE:-$(cat /proc/cmdline 2>/dev/null || true)}"
 CONF_DIR="${PZ_SDDM_CONF_DIR:-/etc/sddm.conf.d}"
 CONF_FILE="$CONF_DIR/92-phasezero-waydroid.conf"
@@ -94,6 +102,10 @@ ensure_shared_access() {
 }
 
 start_waydroid_container() {
+    if [ "${PZ_WAYDROID_SKIP_RUNTIME:-0}" = "1" ]; then
+        log "waydroid-container start skipped by environment"
+        return 0
+    fi
     systemctl list-unit-files waydroid-container.service >/dev/null 2>&1 || {
         log "waydroid-container.service missing"
         return 0
@@ -114,12 +126,31 @@ ensure_binder_runtime
 repair_lxc_post_stop_hook
 ensure_shared_access
 
+waydroid_escape_marker() {
+    # CCS-007: pedido escrito pelo waydroid-escape.sh na sessão que falhou.
+    if [ -n "${PZ_WAYDROID_ESCAPE_MARKER:-}" ]; then
+        printf '%s\n' "$PZ_WAYDROID_ESCAPE_MARKER"
+        return 0
+    fi
+    local home
+    home="$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)"
+    [ -n "$home" ] || home="/home/$TARGET_USER"
+    printf '%s\n' "$home/.local/state/phasezero/waydroid/autologin-escape.request"
+}
+
 if printf '%s\n' "$CMDLINE" | grep -qw 'phasezero.waydroid=1'; then
     apply_waydroid_tuning
     start_waydroid_container
     install -d "$CONF_DIR"
     remove_managed_conf "$STEAMOS_CONF"
     remove_managed_conf "$WINDOWS_VM_CONF"
+    escape_marker="$(waydroid_escape_marker)"
+    if [ -f "$escape_marker" ]; then
+        rm -f "$escape_marker"
+        rm -f "$CONF_FILE"
+        log "escape request present; Waydroid autologin stays off (greeter boot) for user=$TARGET_USER"
+        exit 0
+    fi
     cat > "$CONF_FILE" <<EOF
 # PhaseZero managed: Waydroid one-shot GRUB boot profile
 [Autologin]

@@ -37,4 +37,19 @@ if grep -Fq 'cat | sudo tee' "$REPO_ROOT/linux/tuning/dev-tweaks.sh"; then
     exit 1
 fi
 
+# CCS-003: --dry-run é preview da área — zero escrita, plano listado.
+for area in browser gaming dev; do
+    before="$(find "$TMP_ROOT" -mindepth 1 | sort)"
+    dry_out="$("$REPO_ROOT/linux/pz" tune "$area" --dry-run)"
+    after="$(find "$TMP_ROOT" -mindepth 1 | sort)"
+    test "$before" = "$after" || { echo "FAIL: tune $area --dry-run escreveu arquivos"; exit 1; }
+    grep -q "dry-run" <<< "$dry_out" || { echo "FAIL: tune $area --dry-run sem plano"; exit 1; }
+done
+
+# argumento inválido falha em vez de aplicar silenciosamente
+if "$REPO_ROOT/linux/tuning/gaming-tweaks.sh" --modo-ruim >/dev/null 2>&1; then
+    echo "FAIL: gaming-tweaks.sh aceitou modo inválido"
+    exit 1
+fi
+
 echo "linux-tuning smoke ok"

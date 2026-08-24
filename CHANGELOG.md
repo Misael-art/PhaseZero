@@ -3,31 +3,10 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
-## [1.13.0] - 2026-07-30
+## [1.17.0] - Não lançado
 
-### Adicionado
-- Janela dedicada Provision Player (`windows.provision.player` na UI nativa):
-  plano, confirmação, provisão com checkpoint e progresso, validação pós-boot,
-  cancelamento, retomada, descarte, reparo, shutdown e reboot.
-- `provision status --json` expõe vmDir, snapshotPath, snapshotExists, qemuPid,
-  qemuRunning, libvirtRunning.
-- `provision shutdown` via QGA guest-shutdown + PID waiting + libvirt fallback.
-- `windows-vm.sh --json` emite bootReady e oneShotReady como booleanos estritos.
-- `common.sh::checkpoint_progress_start`/`end`: sequência de progresso por
-  checkpoint com pesos somando 100.
-- ProvisionWorker com sleep interruptível (100ms) para fechamento rápido.
-- AsyncProc: timeout dispara uma vez, FailedToStart aborta imediatamente,
-  finished sinal com tupla (data, exit_code).
-- Testes comportamentais (295 Python, 12 específicos do player).
-
-### Corrigido
-- Player não bloqueia o event loop Qt (sem waitForFinished/QThread.wait).
-- `_finish_once` centraliza conclusão de AsyncProc (sem emissão dupla).
-- Janela não destrói worker thread durante close (aborta primeiro).
-- `_resume_state` não sobrescreve ISO/parâmetros explícitos em `open()`.
-- Discard limpa disco sem salvar estado via `_discarding` flag.
-
-## [Não lançado]
+> Atual estável publicada: **1.16.x** (`version.json`).
+> Entradas abaixo cobrem WinVM, IA, Homelab e Central desde 1.13.0.
 
 ### Adicionado
 - Entrada GRUB dedicada "PhaseZero Windows VM (Dock)": `boot install
@@ -217,6 +196,34 @@ As versões seguem a data de build em `version.json`.
   usuário alvo.
 - Runtime gráfico Steam Deck LCD documenta e aplica Gamescope 1280×800 com
   orientação `right`, evitando guest vertical no modo handheld.
+
+## [1.13.0] - 2026-07-30
+
+> Nota (CCS-033): as releases 1.14.x–1.16.x foram publicadas sem entrada
+> individual neste arquivo; a fonte de verdade de versão é `version.json`
+> e as tags/releases do GitHub.
+
+### Adicionado
+- Janela dedicada Provision Player (`windows.provision.player` na UI nativa):
+  plano, confirmação, provisão com checkpoint e progresso, validação pós-boot,
+  cancelamento, retomada, descarte, reparo, shutdown e reboot.
+- `provision status --json` expõe vmDir, snapshotPath, snapshotExists, qemuPid,
+  qemuRunning, libvirtRunning.
+- `provision shutdown` via QGA guest-shutdown + PID waiting + libvirt fallback.
+- `windows-vm.sh --json` emite bootReady e oneShotReady como booleanos estritos.
+- `common.sh::checkpoint_progress_start`/`end`: sequência de progresso por
+  checkpoint com pesos somando 100.
+- ProvisionWorker com sleep interruptível (100ms) para fechamento rápido.
+- AsyncProc: timeout dispara uma vez, FailedToStart aborta imediatamente,
+  finished sinal com tupla (data, exit_code).
+- Testes comportamentais (295 Python, 12 específicos do player).
+
+### Corrigido
+- Player não bloqueia o event loop Qt (sem waitForFinished/QThread.wait).
+- `_finish_once` centraliza conclusão de AsyncProc (sem emissão dupla).
+- Janela não destrói worker thread durante close (aborta primeiro).
+- `_resume_state` não sobrescreve ISO/parâmetros explícitos em `open()`.
+- Discard limpa disco sem salvar estado via `_discarding` flag.
 
 ## [1.8.4] - 2026-07-13
 

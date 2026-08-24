@@ -17,6 +17,12 @@ mkdir -p "$HOME" "$XDG_RUNTIME_DIR"
 bash -n "$REPO_ROOT/linux/pz"
 find "$REPO_ROOT/linux" -type f -name '*.sh' -exec bash -n {} \;
 
+# CCS-038: nenhum fallback de usuário fixo nos scripts steamdeck
+if grep -rn "misael" "$REPO_ROOT/linux/steamdeck" --include="*.sh"; then
+    echo "FAIL: fallback de usuário hardcoded em linux/steamdeck"
+    exit 1
+fi
+
 jq empty "$REPO_ROOT"/profiles/*.json
 
 display_root="$TMP_ROOT/display"
@@ -44,6 +50,49 @@ display_profile="$(
     bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_profile"
 )"
 test "$display_profile" = "generic"
+
+# CCS-006: Steam Deck OLED (DMI Galileo) é um Deck — perfil oled-handheld e
+# 90 Hz no handheld; nunca cai no caminho de PC genérico.
+printf 'connected\n' > "$display_root/sys/class/drm/card1-eDP-1/status"
+printf 'disconnected\n' > "$display_root/sys/class/drm/card1-DP-1/status"
+printf 'Galileo\n' > "$display_root/dmi/product_name"
+galileo_profile="$(
+    PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_profile"
+)"
+test "$galileo_profile" = "steamdeck-oled-handheld"
+galileo_vars="$(
+    PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_resolved_session_vars"
+)"
+test "$(sed -n 4p <<< "$galileo_vars")" = "90"
+galileo_status="$(
+    PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_status"
+)"
+jq -e '.displayProfile == "steamdeck-oled-handheld" and .refreshRate == "90"' <<< "$galileo_status" >/dev/null
+# override manual do operador vence o default do painel
+galileo_override="$(
+    PZ_DISPLAY_DMI_ROOT="$display_root/dmi" \
+    PZ_DISPLAY_SYSFS_ROOT="$display_root/sys" \
+    PZ_STEAMDECK_LCD_REFRESH_RATE=60 \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/display-session.sh'; pz_display_resolved_session_vars"
+)"
+test "$(sed -n 4p <<< "$galileo_override")" = "60"
+# steamdeck_is_jupiter (common.sh) também reconhece o Galileo
+galileo_common="$(
+    PZ_STEAMDECK_DMI_ROOT="$display_root/dmi" \
+    bash -c ". '$REPO_ROOT/linux/steamdeck/common.sh'; steamdeck_model; if steamdeck_is_jupiter; then echo deck; else echo generic; fi; if steamdeck_is_oled; then echo oled; else echo lcd; fi"
+)"
+test "$(sed -n 1p <<< "$galileo_common")" = "galileo"
+test "$(sed -n 2p <<< "$galileo_common")" = "deck"
+test "$(sed -n 3p <<< "$galileo_common")" = "oled"
+
+# volta ao LCD de Jupiter para o resto da suíte
+printf 'Jupiter\n' > "$display_root/dmi/product_name"
 
 "$REPO_ROOT/linux/pz" help >/dev/null
 "$REPO_ROOT/linux/pz" steamdeck detect >/dev/null

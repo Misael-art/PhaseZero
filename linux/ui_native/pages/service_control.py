@@ -313,13 +313,18 @@ class WaydroidPage(FriendlyServicePage):
     )
 
     def feature_titles(self) -> tuple[str, ...]:
-        return ("Arquivos compartilhados", "Dispositivos USB", "Boot direto")
+        # CCS-015: três contratos distintos — link no host, pastas LXC e USB.
+        return (
+            "Pasta Android no gerenciador de arquivos",
+            "Pastas do host dentro do Android",
+            "Barramento USB no Android",
+        )
 
     def feature_actions(self) -> tuple[tuple[str, str], ...]:
         return (
             ("waydroid.host-access", "waydroid.host-access.remove"),
             ("waydroid.shares.enable", "waydroid.shares.disable"),
-            ("waydroid.boot.install", "waydroid.boot.remove"),
+            ("waydroid.usb.enable", "waydroid.usb.disable"),
         )
 
     def shortcut_actions(self) -> tuple[tuple[str, str, bool], ...]:
@@ -333,22 +338,29 @@ class WaydroidPage(FriendlyServicePage):
         config = payload.get("config") if isinstance(payload.get("config"), dict) else {}
         android = payload.get("android") if isinstance(payload.get("android"), dict) else {}
         access = payload.get("access") if isinstance(payload.get("access"), dict) else {}
-        boot = payload.get("boot") if isinstance(payload.get("boot"), dict) else {}
         host = payload.get("host") if isinstance(payload.get("host"), dict) else {}
-        active = str(android.get("serviceActive", "")).casefold() == "active"
+        # CCS-005: Rodando = sessão Android ativa, não o container systemd.
+        session_running = bool(android.get("sessionRunning"))
+        container_active = str(android.get("serviceActive", "")).casefold() == "active"
         configured = bool(config.get("installed") or android.get("initialized"))
-        self._set_service_state(
-            active, configured,
-            "Android está pronto para uso" if active else "Sessão Android desligada" if configured else "Instale as imagens Android para começar",
-        )
+        if session_running:
+            detail = "Android está pronto para uso"
+        elif container_active:
+            detail = "Container ativo, mas a sessão Android está parada"
+        elif configured:
+            detail = "Sessão Android desligada"
+        else:
+            detail = "Instale as imagens Android para começar"
+        self._set_service_state(session_running, configured, detail)
         self.fact_labels[0].setText(f"Imagem: {android.get('imageType') or '—'}")
         self.fact_labels[1].setText("Android inicializado" if android.get("initialized") else "Android ainda não inicializado")
         binder = bool(host.get("binderDevices") or host.get("binderMounted"))
         self.fact_labels[2].setText("Hardware compatível" if binder else "Compatibilidade precisa de revisão")
+        mount_count = int(access.get("mountCount") or 0)
         values = (
-            (bool(access.get("hostLinked")), "Pasta Android disponível no gerenciador de arquivos"),
-            (bool(access.get("usbBusShared")), "USB disponível ao Android"),
-            (bool(boot.get("helperInstalled") and boot.get("artifactsCurrent")), "Entrada de inicialização verificada"),
+            (bool(access.get("hostLinked")), "Link gerenciado para o armazenamento Android"),
+            (mount_count > 0, f"{mount_count} pasta(s) do host montada(s) via LXC"),
+            (bool(access.get("usbBusShared")), "Dispositivos USB visíveis ao Android"),
         )
         for (toggle, detail), (checked, text) in zip(self.feature_controls, values):
             self._apply_feature(toggle, checked, configured)

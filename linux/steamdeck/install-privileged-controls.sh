@@ -27,7 +27,14 @@ resolve_target_user() {
         return 0
     fi
 
-    echo "${USER:-misael}"
+    # CCS-038: último recurso é o UID 1000 do host, não um nome fixo.
+    local uid_user
+    uid_user="$(getent passwd 1000 2>/dev/null | cut -d: -f1)"
+    if [ -n "$uid_user" ]; then
+        echo "$uid_user"
+        return 0
+    fi
+    echo "${USER:-}"
 }
 
 resolve_user_home() {

@@ -146,7 +146,7 @@ class AiProxiesPage(BasePage):
             self._ide_values[key] = value
         sync_row = QHBoxLayout()
         sync_row.addStretch()
-        sync_button = self._action_button("ai.proxies-ides", "Configurar proxies nas IDEs")
+        sync_button = self._action_button("ai.proxies-ides", "Configurar IDEs (proxies)")
         if sync_button is not None:
             sync_row.addWidget(sync_button)
         ide_layout.addLayout(sync_row)

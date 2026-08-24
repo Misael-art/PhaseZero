@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 pcsx2_root() {
     for path in \

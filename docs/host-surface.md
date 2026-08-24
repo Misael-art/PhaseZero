@@ -11,8 +11,22 @@ instrumentado aparece na seção [Dívida técnica](#dívida-técnica-explícita
 - Ledger: `$PZ_STATE/ledger/ledger.jsonl` (JSONL, uma linha por operação).
 - Store de backups: `$PZ_STATE/backups/<sha256 do path original>/`.
 - `$PZ_STATE` = `${XDG_STATE_HOME:-~/.local/state}/phasezero`.
-- **`~/Emulation` nunca entra neste mapa.** É dado do usuário; nenhuma rotina
-  do PhaseZero grava, move ou remove nada lá.
+
+### Contrato `~/Emulation` (CCS-017)
+
+São **dois contratos diferentes** — não um:
+
+1. **Wipe / higiene / uninstall nunca tocam `~/Emulation`.** É dado do
+   usuário (ROMs, saves, BIOS, mídias). `linux/uninstall.sh`, `host.sh`
+   (`host wipe`/`prune`) e qualquer rotina de limpeza não gravam, movem nem
+   removem nada lá — e continuam assim.
+2. **O módulo de emulação escreve dentro da raiz de emulação por design.**
+   Layout, library, romopt, media e journeys usam
+   `${PZ_EMULATION_ROOT:-$HOME/Emulation}` (`linux/emulation/common.sh`) como
+   raiz de trabalho do usuário. Isso é operação normal do módulo, com backup
+   via chokepoints, e não viola o item 1.
+
+Resumo: *wipe nunca*; *módulo de emulação sim, restrito a `$PZ_EMULATION_ROOT`*.
 
 ## Chokepoints instrumentados
 
@@ -68,7 +82,7 @@ Legenda: **✅ coberto** = toda mutação passa por um chokepoint · **⚠️ pa
 | configs de emulador (Hydra, RPCS3, EmuDeck, SRM, Sony, dualscreen, controllers, performance) | `emulation/*.sh` | ✅ `pz_backup_file` |
 | configs via Python (`write_json`) | `frontends.py`, `heroic.py`, `pc-games.py`, `launchbox.sh` | ✅ `pz_hostbackup.backup_file` |
 | launchers `.desktop` de frontend | `emulation/frontends.sh`, `shortcuts.sh` | ✅ `pz_write_managed_file` |
-| **`~/Emulation`** | — | **fora de escopo por contrato: nunca tocado** |
+| **`~/Emulation`** | wipe/uninstall/higiene: **nunca tocado** (contrato acima). Módulo de emulação: grava **somente** dentro de `$PZ_EMULATION_ROOT` por design | ✅ contratos separados |
 
 ### `server`
 
@@ -115,6 +129,13 @@ Legenda: **✅ coberto** = toda mutação passa por um chokepoint · **⚠️ pa
 | tweaks de gaming | `gaming-tweaks.sh` | ⚠️ ver dívida |
 
 ## Dívida técnica explícita
+
+> CCS-031 (2026-08-23): **D2–D5 ficam `deferred`** neste plano. Instrumentar
+> essas mutações root (polkit, GRUB de quatro módulos, `pz_boot_atomic_install`,
+> sysctl via `sudo` cru) exige executar os caminhos privilegiados no host real
+> para provar comportamento — e mutar GRUB/sysctl ao vivo é proibido no
+> mandato da sessão CCS. A lista abaixo permanece a fonte da dívida; um commit
+> por chokepoint quando houver janela de boot autorizada.
 
 Mutações **conhecidas e ainda não instrumentadas**. Cada linha é um item de
 trabalho, não uma omissão. Nenhuma delas grava backup ao lado do original — o

@@ -37,7 +37,10 @@ def test_waydroid_page_covers_catalog_and_maps_visual_status(qapp, catalog):
     assert page.represented_action_ids == {action.id for action in actions}
     page.apply_payload({
         "config": {"installed": True},
-        "android": {"initialized": True, "imageType": "GAPPS", "serviceActive": "active"},
+        "android": {
+            "initialized": True, "imageType": "GAPPS", "serviceActive": "active",
+            "sessionRunning": True,
+        },
         "host": {"binderDevices": True},
         "access": {"sharesReady": True, "hostLinked": True, "mountCount": 4, "usbBusShared": True},
         "boot": {"helperInstalled": True, "artifactsCurrent": True},
@@ -48,6 +51,108 @@ def test_waydroid_page_covers_catalog_and_maps_visual_status(qapp, catalog):
     spy = QSignalSpy(page.action_requested)
     page._power_action()
     assert spy.at(0)[0].id == "waydroid.stop"
+
+
+def test_waydroid_power_follows_session_not_container(qapp, catalog):
+    """CCS-005: container ativo + sessão parada = Parado (▶ Iniciar)."""
+    page, _actions = _page(WaydroidPage, "Waydroid", catalog)
+    page.apply_payload({
+        "config": {"installed": True},
+        "android": {"initialized": True, "serviceActive": "active", "sessionRunning": False},
+        "host": {"binderDevices": True},
+        "access": {},
+        "boot": {},
+    })
+    assert page.state_label.text() == "● Parado"
+    assert page.power_button.text() == "▶ Iniciar"
+    assert "Container ativo" in page.state_detail.text()
+    spy = QSignalSpy(page.action_requested)
+    page._power_action()
+    assert spy.at(0)[0].id == "waydroid.launch"
+
+
+def test_waydroid_three_toggles_are_independent_contracts(qapp, catalog):
+    """CCS-015: host-link ≠ pastas LXC ≠ USB — cada toggle dispara o par certo."""
+    page, _actions = _page(WaydroidPage, "Waydroid", catalog)
+    page.apply_payload({
+        "config": {"installed": True},
+        "android": {"initialized": True},
+        "host": {},
+        "access": {"hostLinked": False, "sharesReady": False, "mountCount": 0,
+                   "usbBusShared": False},
+        "boot": {},
+    })
+    spy = QSignalSpy(page.action_requested)
+    page.feature_controls[0][0].click()
+    assert spy.at(0)[0].id == "waydroid.host-access"
+    page.cancel_pending_action("waydroid.host-access")
+    page.feature_controls[1][0].click()
+    assert spy.at(1)[0].id == "waydroid.shares.enable"
+    page.cancel_pending_action("waydroid.shares.enable")
+    page.feature_controls[2][0].click()
+    assert spy.at(2)[0].id == "waydroid.usb.enable"
+    # estados independentes: só USB ligada não liga as pastas
+    page.apply_payload({
+        "config": {"installed": True},
+        "android": {"initialized": True},
+        "host": {},
+        "access": {"hostLinked": False, "sharesReady": False, "mountCount": 0,
+                   "usbBusShared": True},
+        "boot": {},
+    })
+    assert not page.feature_controls[1][0].isChecked()
+    assert page.feature_controls[2][0].isChecked()
+
+
+def test_waydroid_boot_actions_split_schedule_from_reboot(by_id_catalog):
+    """CCS-015: boot.next agenda; next-reboot é explícito e fica no advanced."""
+    schedule = by_id_catalog["waydroid.boot.next"]
+    reboot = by_id_catalog["waydroid.boot.next-reboot"]
+    assert schedule.args == ("waydroid", "boot", "next")
+    assert "NÃO reinicia" in schedule.description
+    assert reboot.args == ("waydroid", "boot", "next-reboot")
+    assert reboot.visibility == "advanced"
+    assert reboot.badge == "Alto risco"
+
+
+@pytest.fixture(scope="module")
+def by_id_catalog(catalog):
+    return {a.id: a for a in catalog}
+
+
+def test_waydroid_page_mirrors_windows_vm_ui_contract(qapp, catalog):
+    """CCS-037: espelho do contrato de test_windows_vm_ui.py para Waydroid —
+    cobertura total, status traduzido em controles e dispatch real nos cliques."""
+    from PySide6.QtWidgets import QPushButton
+
+    page, actions = _page(WaydroidPage, "Waydroid", catalog)
+    # 1) cobertura completa da categoria (espelho de
+    #    test_workspace_page_covers_all_windows_vm_actions)
+    assert page.represented_action_ids == {a.id for a in actions}
+    # 2) botões de atalho existem e disparam ações reais ao clicar
+    buttons = {b.text(): b for b in page.findChildren(QPushButton)}
+    assert "Abrir Android" in buttons
+    spy = QSignalSpy(page.action_requested)
+    buttons["Abrir Android"].click()
+    assert spy.at(0)[0].id == "waydroid.launch"
+    # 3) refresh dispara o loader de status da página
+    page.reload()
+    assert page.status_loader.running("waydroid.status") or page._proc_running()
+
+
+def _proc_running(self):  # helper usado pelo teste acima
+    return False
+
+
+def test_waydroid_shares_previews_are_area_scoped(by_id_catalog):
+    enable = by_id_catalog["waydroid.shares.enable"]
+    disable = by_id_catalog["waydroid.shares.disable"]
+    usb_enable = by_id_catalog["waydroid.usb.enable"]
+    usb_disable = by_id_catalog["waydroid.usb.disable"]
+    assert enable.preview_args[:2] == ("waydroid", "shares")
+    assert disable.preview_args == ("waydroid", "shares", "status")
+    assert "--groups" in usb_enable.args and "usb" in usb_enable.args
+    assert "--groups" in usb_disable.args and "usb" in usb_disable.args
 
 
 def test_waydroid_prevents_launch_before_configuration(qapp, catalog):

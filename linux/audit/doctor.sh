@@ -63,9 +63,11 @@ if [ -f "$SUBSYSTEMS_CONF" ]; then
 fi
 subsystem_opted() {
     local var="SUBSYSTEM_$1"
-    case "${!var:-opted}" in
+    # CCS-016: ausência de conf = nunca optou. Um host fresco não pode virar
+    # uma parede de WARN por subsystemas que o usuário nunca pediu.
+    case "${!var:-never}" in
         opted|partial) return 0 ;;
-        never) return 1 ;;
+        *) return 1 ;;
     esac
 }
 

@@ -243,3 +243,29 @@ def test_dashboard_html_contains_themes_section(ui_server):
     html = payload.decode("utf-8", errors="replace")
     assert 'id="themes"' in html
     assert 'href="#themes"' in html
+
+
+def test_web_allowlist_matches_native_catalog():
+    """CCS-034: o server.py web é fallback — o allowlist commitado não pode
+    divergir do catálogo nativo que o gera."""
+    import json
+    import subprocess
+    import sys
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "ui-actions.json"
+        result = subprocess.run(
+            [sys.executable, "-m", "linux.ui.generate_actions", "--root", str(ROOT), str(out)],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stderr
+        generated = json.loads(out.read_text())
+    committed = json.loads((ROOT / "linux" / "ui" / "actions.json").read_text())
+    assert generated == committed, (
+        "linux/ui/actions.json está defasado vs catalog.py — "
+        "regenere com: python3 -m linux.ui.generate_actions --root . linux/ui/actions.json"
+    )

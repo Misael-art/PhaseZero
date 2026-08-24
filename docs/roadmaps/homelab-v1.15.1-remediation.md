@@ -9,12 +9,12 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Planejado; implementação ainda não aceita como concluída |
-| Última verificação | 2026-08-07, America/Sao_Paulo |
+| Status | Planejado; implementação ainda não aceita como concluída (appliance NÃO está done) |
+| Última verificação | 2026-08-23, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
-| Base observada | `origin/main` em `31642be1965513932ad338051c51c4c236092490` |
-| Release instalada observada | `phasezero-control-center 1.14.7-1` |
-| Release pública observada | `v1.14.7` |
+| Base observada | `main` em `ea9b927` (repo version.json 1.16.6); revalidar |
+| Release instalada observada | snapshot desatualizado removido; conferir `pacman -Q phasezero-control-center` antes de mutar |
+| Release pública observada | v1.16.x na main; conferir GitHub antes da release |
 | Branch rejeitada | `codex/homelab-appliance` em `d24b233` |
 | PR rejeitada | `#36`, aberta, conflitante, CI vermelha |
 | Tag reservada | `v1.15.0`; não mover, apagar ou recriar |

@@ -35,7 +35,7 @@ DASHBOARD = ("Início", "go-home", "Bem-vindo de volta ao PhaseZero")
 # Sidebar sections group categories by context (EmuDeck-style grouping).
 SIDEBAR_GROUPS = (
     ("Ações rápidas", ("Início", "Visão geral", "Perfis")),
-    ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Emulação")),
+    ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Homelab", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
     ("IA & Dev", ("IA & Dev", "Proxies IA", "Roteamento IA")),
     ("Desktop", ("Aplicativos", "Temas")),
@@ -148,6 +148,9 @@ def _p(
 def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSpec]:
     actions: list[ActionSpec] = [
         _a("system.doctor", "Visão geral", "Diagnóstico completo", "Audita host, boot, jogos, IA e integrações.", ("doctor",), "dialog-information", badge="Seguro"),
+        # CCS-016: a Visão geral usa o escopo system (rápido); o completo
+        # continua disponível na busca.
+        _a("system.doctor.system", "Visão geral", "Saúde do sistema", "Checagem rápida de host e serviços sem auditar subsystemas opcionais.", ("doctor", "--scope", "system"), "dialog-information", badge="JSON", group="Saúde e suporte", visibility="advanced", keywords=("saúde", "rápido")),
         # Optional dependencies: what is missing, what that costs, and a way to
         # fix it without leaving the app. Install is privileged and separate
         # from the report so nothing is installed by merely looking.
@@ -166,7 +169,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
            badge="Requer admin", risk="high", group="Saúde e suporte",
            keywords=("dependência", "instalar", "pacote")),
         _a("system.repair-plan", "Visão geral", "Plano de reparo", "Gera recomendações sem alterar sistema.", ("repair-plan",), "document-properties", badge="Seguro"),
-        _a("system.support-bundle", "Visão geral", "Bundle de suporte", "Coleta logs sanitizados para diagnóstico.", ("support-bundle",), "folder-download", mutable=True, preview=("doctor",), badge="Coleta"),
+        _a("system.support-bundle", "Visão geral", "Bundle de suporte", "Coleta logs sanitizados para diagnóstico.", ("support-bundle",), "folder-download", mutable=True, preview=("support-bundle", "--plan"), badge="Coleta"),
         _a("system.version", "Visão geral", "Versão PhaseZero", "Mostra versão e canal instalados.", ("version",), "help-about"),
         _a("system.installation.status", "Visão geral", "Canais instalados", "Audita versões user, pacote nativo, Flatpak e raízes órfãs.", ("installation", "status"), "system-search", badge="JSON", group="Instalação PhaseZero", visibility="primary", result_view="table"),
         _a(
@@ -201,7 +204,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         "emulation-linux": ("Emulação Linux", "EmuDeck, frontends e layout compartilhado.", "Emulação"),
         "homelab": ("Homelab", "Docker, mídia, nuvem e monitoramento.", "Servidor"),
         "server-llm": ("Servidor LLM", "Ollama local + boot enxuto reversível.", "Servidor"),
-        "server-homelab": ("Servidor Homelab", "Docker + Tailscale: drive, mídia, cofre, monitor.", "Servidor"),
+        "server-homelab": ("Servidor Homelab", "Instalação de SO servidor: Docker + Tailscale (eixo install, distinto dos perfis appliance).", "Servidor"),
         "server-homelab-hermes": ("Homelab + Hermes", "Servidor caseiro com atuação remota Hermes.", "Servidor"),
         "server-llm-hermes": ("LLM + Hermes", "LLM local + Hermes remoto, SO enxuto.", "Servidor"),
         "server-llm-homelab": ("LLM + Homelab", "LLM local + servidor caseiro, SO enxuto.", "Servidor"),
@@ -237,16 +240,17 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("steamdeck.keyboard.repair", "Steam Deck", "Reparar teclado", "Configura Maliit/KDE e integração Steam.", ("steamdeck", "keyboard", "repair"), "input-keyboard", mutable=True, preview=("steamdeck", "keyboard", "status"), badge="Reparo"),
             _a("steamdeck.console", "Steam Deck", "Abrir console", "Inicia Steam Gamepad UI.", ("steamdeck", "console", "auto"), "applications-games", mutable=True, preview=("steamdeck", "status")),
             _a("steamdeck.desktop", "Steam Deck", "Abrir desktop", "Inicia sessão dev/desktop.", ("steamdeck", "dev", "docked-monitor"), "user-desktop", mutable=True, preview=("steamdeck", "status")),
-            _a("steamdeck.hotkeys", "Steam Deck", "Instalar hotkeys", "Instala Ctrl+Alt+F1…F6 e ações SteamOS.", ("steamdeck", "hotkeys", "install"), "preferences-desktop-keyboard-shortcuts", mutable=True, preview=("steamdeck", "status")),
-            _a("steamdeck.watcher", "Steam Deck", "Instalar watcher", "Serviço que reage a dock e tela.", ("steamdeck", "watcher", "install"), "system-run", mutable=True, preview=("steamdeck", "status")),
-            _a("steamdeck.privileged", "Steam Deck", "Controles privilegiados", "Bridge seguro para TDP/GPU.", ("steamdeck", "privileged", "install"), "security-high", mutable=True, preview=("steamdeck", "privileged", "status"), elevated=True),
-            _a("steamdeck.boot", "Steam Deck", "Boot SteamOS", "Instala entrada de boot Gamepad UI.", ("steamdeck", "boot", "install"), "system-reboot", mutable=True, preview=("steamdeck", "boot", "status"), elevated=True),
-            _a("steamdeck.plugins", "Steam Deck", "Instalar Decky", "Decky Loader e plugins curados.", ("steamdeck", "plugins", "install"), "application-x-addon", mutable=True, preview=("steamdeck", "plugins", "status"), badge="Plugins"),
-            _a("steamdeck.plugins.repair", "Steam Deck", "Reparar Decky", "Restaura loader e plugins.", ("steamdeck", "plugins", "repair"), "tools-check-spelling", mutable=True, preview=("steamdeck", "plugins", "status"), badge="Reparo"),
+            _a("steamdeck.hotkeys", "Steam Deck", "Instalar hotkeys", "Instala Meta+Shift+F1…F8 e ações SteamOS.", ("steamdeck", "hotkeys", "install"), "preferences-desktop-keyboard-shortcuts", mutable=True, preview=("steamdeck", "status")),
+            _a("steamdeck.watcher", "Steam Deck", "Instalar watcher", "Serviço que reage a dock e tela.", ("steamdeck", "watcher", "install"), "system-run", mutable=True, preview=("steamdeck", "watcher", "status")),
+            _a("steamdeck.watcher.enable", "Steam Deck", "Ligar watcher", "Habilita e inicia o modo automático já instalado.", ("steamdeck", "watcher", "enable"), "system-run", mutable=True, preview=("steamdeck", "watcher", "status")),
+            _a("steamdeck.privileged", "Steam Deck", "Controles TDP (admin)", "Instala bridge privilegiado para TDP/GPU; pede senha de admin.", ("steamdeck", "privileged", "install"), "security-high", mutable=True, preview=("steamdeck", "privileged", "status"), elevated=True, badge="Requer admin", visibility="primary"),
+            _a("steamdeck.boot", "Steam Deck", "Boot Game Mode (admin)", "Instala entrada GRUB do Gamepad UI; pede senha de admin.", ("steamdeck", "boot", "install"), "system-reboot", mutable=True, preview=("steamdeck", "boot", "status"), elevated=True, badge="Requer admin", visibility="primary"),
+            _a("steamdeck.plugins", "Steam Deck", "Instalar Decky", "Decky Loader e plugins curados.", ("steamdeck", "plugins", "install"), "application-x-addon", mutable=True, preview=("steamdeck", "plugins", "dry-run"), badge="Plugins"),
+            _a("steamdeck.plugins.repair", "Steam Deck", "Reparar Decky", "Restaura loader e plugins.", ("steamdeck", "plugins", "repair"), "tools-check-spelling", mutable=True, preview=("steamdeck", "plugins", "dry-run"), badge="Reparo"),
             _a("steamdeck.launch-options", "Steam Deck", "Launch options", "Lista presets para jogos Steam.", ("steamdeck", "launch-options"), "document-properties"),
             _a("steamdeck.runtime", "Steam Deck", "Diagnóstico runtime", "Analisa runtime Steam e bibliotecas.", ("steamdeck", "runtime-diagnose"), "utilities-terminal"),
-            _a("steamdeck.removable", "Steam Deck", "Montar removíveis", "Auto-mount USB (ignora durante Windows VM).", ("steamdeck", "removable", "install"), "drive-removable-media", mutable=True, preview=("steamdeck", "removable", "status"), elevated=True),
-            _a("steamdeck.display", "Steam Deck", "Detectar display", "Resolução TV/monitor para Game Mode.", ("steamdeck", "display", "detect"), "video-display", mutable=True, preview=("steamdeck", "display", "status")),
+            _a("steamdeck.removable", "Steam Deck", "USB automático (admin)", "Auto-mount USB; ignora enquanto a Windows VM roda; pede senha de admin.", ("steamdeck", "removable", "install"), "drive-removable-media", mutable=True, preview=("steamdeck", "removable", "status"), elevated=True, badge="Requer admin", visibility="primary"),
+            _a("steamdeck.display", "Steam Deck", "Detectar display", "Detecta perfil de tela e resolução do Game Mode sem alterar nada.", ("steamdeck", "display", "detect"), "video-display", badge="Seguro", keywords=("gamescope", "resolução", "oled")),
         ]
     )
 
@@ -255,7 +259,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("windows.status", "Windows VM", "Status Windows VM", "Estado KVM, disco, domínio e boot.", ("windows-vm", "status"), "computer", badge="JSON"),
             _a("windows.discover", "Windows VM", "Descobrir instalações", "Procura discos Windows existentes.", ("windows-vm", "discover", "--json"), "drive-harddisk"),
             _a("windows.plan", "Windows VM", "Planejar instalação", "Prévia com ISO selecionada.", ("windows-vm", "plan", "--iso", "{input}"), "document-properties", input_label="Selecione ISO do Windows", input_kind="file"),
-            _a("windows.install", "Windows VM", "Instalar Windows VM", "Cria disco, domínio e launchers.", ("windows-vm", "install", "--iso", "{input}"), "system-software-install", mutable=True, preview=("windows-vm", "plan", "--iso", "{input}"), input_label="Selecione ISO do Windows", input_kind="file", badge="Requer ISO"),
+            _a("windows.install", "Windows VM", "Instalar Windows VM", "Cria disco, domínio e launchers.", ("windows-vm", "install", "--iso", "{input}"), "system-software-install", mutable=True, preview=("windows-vm", "plan", "--iso", "{input}"), input_label="Selecione ISO do Windows", input_kind="file", badge="Requer ISO", visibility="advanced"),
             _a("windows.adopt", "Windows VM", "Adotar disco Windows", "Integra instalação existente.", ("windows-vm", "adopt", "--disk", "{input}"), "drive-harddisk", mutable=True, preview=("windows-vm", "discover", "--json"), input_label="Selecione disco qcow2/raw", input_kind="file"),
             _a("windows.vm.remove", "Windows VM", "Remover VM criada", "Move a VM criada pelo PhaseZero para a lixeira; boot direto permanece separado.", ("windows-vm", "remove", "--yes", "--json"), "edit-delete", mutable=True, preview=("windows-vm", "remove", "--dry-run", "--json"), badge="Alto risco", risk="high", visibility="advanced"),
             _a("windows.optimize", "Windows VM", "Otimizar host", "Ajustes temporários para QEMU.", ("windows-vm", "optimize"), "preferences-system-performance", mutable=True, preview=("windows-vm", "status")),
@@ -366,11 +370,14 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("waydroid.launch", "Waydroid", "Abrir Waydroid", "Inicia sessão otimizada.", ("waydroid", "launch"), "media-playback-start", mutable=True, preview=("waydroid", "status", "--json")),
             _a("waydroid.stop", "Waydroid", "Parar Waydroid", "Encerra a sessão Android e preserva aplicativos e dados.", ("waydroid", "stop", "--json"), "media-playback-stop", mutable=True, preview=("waydroid", "status", "--json"), badge="Reversível"),
             _a("waydroid.boot.install", "Waydroid", "Instalar boot direto (Android)", "Entrada GRUB para sessão Android.", ("waydroid", "boot", "install"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True),
-            _a("waydroid.boot.next", "Waydroid", "Próximo boot Android", "Agenda sessão Waydroid.", ("waydroid", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True),
+            _a("waydroid.boot.next", "Waydroid", "Próximo boot Android", "Agenda a sessão Waydroid para o próximo boot; NÃO reinicia agora.", ("waydroid", "boot", "next"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True),
+            _a("waydroid.boot.next-reboot", "Waydroid", "Reiniciar no Android agora", "Agenda o Waydroid e REINICIA o host imediatamente.", ("waydroid", "boot", "next-reboot"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True, badge="Alto risco", risk="high", visibility="advanced"),
             _a("waydroid.host-access", "Waydroid", "Acesso host → Android", "Link para o armazenamento interno do Waydroid.", ("waydroid", "host-access", "link"), "folder-remote", mutable=True, preview=("waydroid", "host-access", "status")),
             _a("waydroid.host-access.remove", "Waydroid", "Remover acesso aos arquivos", "Remove somente o link gerenciado para o armazenamento Android.", ("waydroid", "host-access", "unlink"), "folder-remote", mutable=True, preview=("waydroid", "host-access", "status"), badge="Reversível"),
-            _a("waydroid.shares.enable", "Waydroid", "Ativar dispositivos USB", "Instala compartilhamentos LXC gerenciados, incluindo o barramento USB.", ("waydroid", "shares", "install"), "drive-removable-media-usb", mutable=True, preview=("waydroid", "shares", "dry-run"), elevated=True, badge="Reversível"),
-            _a("waydroid.shares.disable", "Waydroid", "Desativar dispositivos USB", "Remove os compartilhamentos LXC gerenciados; dados Android permanecem.", ("waydroid", "shares", "remove"), "drive-removable-media-usb", mutable=True, preview=("waydroid", "status", "--json"), elevated=True, badge="Reversível"),
+            _a("waydroid.shares.enable", "Waydroid", "Pastas do host no Android", "Compartilha pastas pessoais e mídias via LXC, sem o barramento USB.", ("waydroid", "shares", "install", "--groups", "folders"), "folder-remote", mutable=True, preview=("waydroid", "shares", "dry-run", "--groups", "folders"), elevated=True, badge="Reversível"),
+            _a("waydroid.shares.disable", "Waydroid", "Remover pastas do Android", "Para de compartilhar as pastas do host; dados Android permanecem.", ("waydroid", "shares", "remove", "--groups", "folders"), "folder-remote", mutable=True, preview=("waydroid", "shares", "status"), elevated=True, badge="Reversível"),
+            _a("waydroid.usb.enable", "Waydroid", "USB no Android", "Expõe somente o barramento USB ao container Android.", ("waydroid", "shares", "install", "--groups", "usb"), "drive-removable-media-usb", mutable=True, preview=("waydroid", "shares", "dry-run", "--groups", "usb"), elevated=True, badge="Reversível"),
+            _a("waydroid.usb.disable", "Waydroid", "Sem USB no Android", "Remove só o barramento USB; pastas compartilhadas permanecem.", ("waydroid", "shares", "remove", "--groups", "usb"), "drive-removable-media-usb", mutable=True, preview=("waydroid", "shares", "status"), elevated=True, badge="Reversível"),
             _a("waydroid.boot.remove", "Waydroid", "Remover boot direto Android", "Remove somente a entrada de boot gerenciada.", ("waydroid", "boot", "remove"), "system-reboot", mutable=True, preview=("waydroid", "boot", "status"), elevated=True, badge="Reversível"),
         ]
     )
@@ -381,11 +388,11 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
     actions.extend(
         [
             _a("homelab.status", "Homelab", "Status da stack", "Apps, perfil ativo, orçamento e política AI.", ("server", "homelab", "status", "--json"), "folder-remote", badge="JSON", keywords=("homelab", "jellyfin", "vaultwarden")),
-            _a("homelab.profiles", "Homelab", "Perfis e pesos", "Lista os 6 perfis do registro e pesos do governor.", ("server", "homelab", "profile", "list"), "folder-documents", badge="JSON", keywords=("perfil", "weights")),
-            _a("homelab.budget", "Homelab", "Orçamento do perfil", "MiB do governor com headroom de 20%.", ("server", "homelab", "governor", "budget", "core"), "preferences-system-performance", badge="Seguro", keywords=("governor", "budget", "ram")),
+            _a("homelab.profiles", "Homelab", "Perfis e pesos", "Perfis appliance (edge, assistant-*): só orçamento de RAM e pesos; o compose continua core/extras.", ("server", "homelab", "profile", "list"), "folder-documents", badge="JSON", keywords=("perfil", "weights")),
+            _a("homelab.budget", "Homelab", "Orçamento do perfil ativo", "MiB do governor para o perfil ativo da stack (headroom de 20%); perfis appliance são orçamento de RAM, não mudam o compose.", ("server", "homelab", "governor", "budget-active"), "preferences-system-performance", badge="Seguro", keywords=("governor", "budget", "ram")),
             _a("homelab.backup", "Homelab", "Backup verificado", "manifest.json + sha256 por volume nomeado.", ("server", "homelab", "backup"), "document-save", mutable=True, preview=("server", "homelab", "backup", "--dry-run"), badge="Backup"),
             _a("homelab.verify", "Homelab", "Verificar backup", "Recomputa sha256; falha fechado se adulterado.", ("server", "homelab", "backup", "verify", "--source", "{input}"), "document-edit-verify", mutable=True, preview=("server", "homelab", "status"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação"),
-            _a("homelab.restore", "Homelab", "Restaurar backup", "Verify-then-apply; recusa sem --yes ou adulterado.", ("server", "homelab", "restore", "--source", "{input}", "--yes"), "document-revert", mutable=True, preview=("server", "homelab", "restore", "--source", "{input}", "--dry-run"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Resgate"),
+            _a("homelab.restore", "Homelab", "Restaurar backup (plano)", "Verifica o backup e mostra o impacto; aplicar exige confirmação explícita na CLI (--yes).", ("server", "homelab", "restore", "--source", "{input}", "--plan"), "document-revert", input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação", keywords=("restaurar", "backup", "resgate")),
             _a("homelab.policy", "Homelab", "Política AI", "Broker conservative/permissive e ações negadas.", ("ai", "policy", "status"), "dialog-password", badge="JSON", keywords=("policy", "broker", "ollama", "hermes")),
         ]
     )
@@ -562,7 +569,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
     ai_rows = [
         ("status", "Status IA", "Stack local e agentes.", ("ai", "status"), None),
         ("doctor", "Diagnóstico MCP", "Audita integrações MCP.", ("ai", "doctor"), None),
-        ("repair", "Reparar MCP/IDE", "Repara integrações seguras.", ("ai", "repair"), ("ai", "doctor")),
+        ("repair", "Reparar MCPs e IDEs", "Repara integrações seguras.", ("ai", "repair"), ("ai", "doctor")),
         ("desktop", "Reparar apps desktop", "Claude/Codex e atualizadores.", ("ai", "desktop", "repair"), ("ai", "desktop", "status")),
         ("compat", "Agent compatibility", "RTK, Caveman, Headroom e memória.", ("ai", "compat", "setup"), ("ai", "compat", "status")),
         ("admin", "Admin bridge", "Instala phasezero-admin/bigsudo.", ("ai", "setup", "admin"), ("ai", "admin", "status")),
@@ -581,7 +588,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("codexbar-setup", "Configurar CodexBar", "Instala somente CLI/config; plasmoid permanece opt-in.", ("ai", "codexbar", "setup"), ("ai", "codexbar", "status")),
         ("codexbar-auth", "Autenticar CodexBar", "Detecta sessões Codex/Claude sem exibir credenciais.", ("ai", "codexbar", "auth", "--provider", "all"), ("ai", "codexbar", "status")),
         ("codexbar-repair", "Reparar CodexBar", "Repara CLI/config sem instalar ou atualizar QML no Plasma.", ("ai", "codexbar", "repair"), ("ai", "codexbar", "health")),
-        ("ides", "Configurar IDEs", "Integra agents (OpenCode, Codex, Claude) nas IDEs/editor.", ("ai", "setup", "ides"), ("ai", "status")),
+        ("ides", "Configurar IDEs (agentes)", "Integra agents (OpenCode, Codex, Claude) nas IDEs/editor.", ("ai", "setup", "ides"), ("ai", "status")),
         ("mcp-sync", "Sincronizar MCPs", "Sincroniza defaults seguros.", ("ai", "mcp", "sync", "all"), ("ai", "mcp", "status")),
         ("claude-status", "Claude + Bonsai", "Audita OAuth, rotas isoladas, hooks e conflitos com proxies.", ("ai", "claude", "status"), None),
         ("claude-install", "Reparar Claude + Bonsai", "Aplica instalação transacional com backup e rollback automático.", ("ai", "claude", "install", "--yes"), ("ai", "claude", "install", "--dry-run")),
@@ -624,6 +631,21 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 badge="Preview" if preview else "",
             )
         )
+
+    # CCS-019: OmniRoute visível e rotulado como experimental; o 9Router
+    # segue sendo o router público da Central. Exatamente um card.
+    actions.append(
+        _a(
+            "ai.omniroute-status",
+            "IA & Dev",
+            "Status OmniRoute (experimental)",
+            "Router alternativo via CLI; o 9Router segue sendo o router público da Central.",
+            ("ai", "omniroute", "status"),
+            "network-workgroup",
+            badge="Experimental",
+            keywords=("omniroute", "router", "experimental"),
+        )
+    )
 
     actions.append(
         _a(
@@ -722,7 +744,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 ("tune", area),
                 "preferences-system",
                 mutable=True,
-                preview=("doctor",),
+                preview=("tune", area, "--dry-run"),
                 badge="Sistema",
             )
         )
@@ -802,7 +824,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("steamdeck.privileged.status", "Steam Deck", "Status privilegiado", "Estado da bridge TDP/GPU.", ("steamdeck", "privileged", "status"), "security-high", visibility="advanced"),
             _a("steamdeck.boot.status", "Steam Deck", "Status do boot SteamOS", "Audita entrada e sessão SteamOS.", ("steamdeck", "boot", "status"), "system-reboot", visibility="advanced"),
             _a("steamdeck.plugins.status", "Steam Deck", "Status Decky", "Saúde de loader, CEF e plugins.", ("steamdeck", "plugins", "status"), "application-x-addon", visibility="advanced"),
-            _a("steamdeck.conveniences", "Steam Deck", "Instalar conveniências", "Atalhos Return, Windows VM e Waydroid.", ("steamdeck", "conveniences", "install"), "applications-system", mutable=True, preview=("steamdeck", "status"), visibility="advanced"),
+            _a("steamdeck.conveniences", "Steam Deck", "Instalar conveniências", "Atalhos Return, Windows VM e Waydroid.", ("steamdeck", "conveniences", "install"), "applications-system", mutable=True, preview=("steamdeck", "conveniences", "plan"), visibility="advanced"),
             _a("steamdeck.removable.status", "Steam Deck", "Status de removíveis", "Audita auto-mount USB.", ("steamdeck", "removable", "status"), "drive-removable-media", visibility="advanced"),
             _a("steamdeck.display.status", "Steam Deck", "Status do display", "Audita TV/monitor para Game Mode.", ("steamdeck", "display", "status"), "video-display", visibility="advanced"),
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+set -euo pipefail
 
 duckstation_root() {
     for path in \

@@ -16,7 +16,18 @@ pz_display_product_name() {
 }
 
 pz_display_is_jupiter() {
-    [ "$(pz_display_product_name)" = "Jupiter" ]
+    # Jupiter = Deck LCD; Galileo = Deck OLED. Ambos seguem o caminho Deck.
+    case "$(pz_display_product_name)" in
+        Jupiter*|Galileo*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+pz_display_is_steamdeck_oled() {
+    case "$(pz_display_product_name)" in
+        Galileo*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 pz_display_is_internal_connector() {
@@ -63,7 +74,12 @@ pz_display_external_connectors_csv() {
 pz_display_profile() {
     if pz_display_is_jupiter; then
         if [ -z "$(pz_display_external_connectors_csv)" ]; then
-            printf '%s\n' "steamdeck-lcd-handheld"
+            # CCS-006: OLED (Galileo) não pode ser tratado como LCD genérico.
+            if pz_display_is_steamdeck_oled; then
+                printf '%s\n' "steamdeck-oled-handheld"
+            else
+                printf '%s\n' "steamdeck-lcd-handheld"
+            fi
         else
             printf '%s\n' "steamdeck-docked"
         fi
@@ -182,7 +198,14 @@ pz_display_resolved_session_vars() {
         pz_display_valid_dimension "$width" || width=1280
         pz_display_valid_dimension "$height" || height=800
         refresh="$(pz_display_kde_refresh_rate "$internal" || true)"
-        [ -n "$refresh" ] || refresh="${PZ_STEAMDECK_LCD_REFRESH_RATE:-60}"
+        if [ -z "$refresh" ]; then
+            # CCS-006: painel OLED do Galileo é 90 Hz; LCD de Jupiter fica em 60.
+            if pz_display_is_steamdeck_oled && [ -z "${PZ_STEAMDECK_LCD_REFRESH_RATE:-}" ]; then
+                refresh=90
+            else
+                refresh="${PZ_STEAMDECK_LCD_REFRESH_RATE:-60}"
+            fi
+        fi
         internal="${internal#card*-}"
         connector="*,${internal:-eDP-1}"
         pz_display_valid_connector "$connector" || connector='*,eDP-1'

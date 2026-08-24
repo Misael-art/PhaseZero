@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -151,7 +152,11 @@ class WindowsVmPage(BasePage):
         layout.addWidget(self.ram_slider)
         layout.addWidget(self.cpu_value)
         layout.addWidget(self.cpu_slider)
-        hint = QLabel("Ajustes ficam protegidos no assistente de instalação.")
+        # CCS-020: leitura honesta — os sliders exibem o estado, não editam.
+        for slider in (self.ram_slider, self.cpu_slider):
+            slider.setToolTip("Somente leitura; ajuste pelo assistente de instalação")
+            slider.setAccessibleDescription("Somente leitura; ajuste pelo assistente de instalação")
+        hint = QLabel("Exibição somente leitura; ajustes ficam no assistente de instalação.")
         hint.setObjectName("cardDescription")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -276,8 +281,8 @@ class WindowsVmPage(BasePage):
         )
         self.dock_entry_button.clicked.connect(
             lambda: self.run_action(
-                "windows.boot.dock.disable" if self.dock_entry_button.isChecked()
-                else "windows.boot.dock.enable"
+                "windows.boot.dock.enable" if self.dock_entry_button.isChecked()
+                else "windows.boot.dock.disable"
             )
         )
         images = QPushButton("Gerenciar imagens")
@@ -454,6 +459,32 @@ class WindowsVmPage(BasePage):
         self.maintenance_health.setText("Falha temporária de leitura; nenhuma configuração da VM foi alterada.")
         self._set_state("error")
 
+    def _guest_agent_at_risk(self) -> bool:
+        """CCS-020: sessão desligada sem QGA — iniciar e matar em 120s suja o NTFS."""
+        health = self._payload.get("health") if isinstance(self._payload.get("health"), dict) else {}
+        findings = health.get("findings") if isinstance(health.get("findings"), list) else []
+        return any(
+            isinstance(item, dict) and item.get("id") == "guest-unclean-shutdown"
+            for item in findings
+        )
+
+    def _confirm_risky_launch(self) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Windows não foi desligado corretamente")
+        box.setText(
+            "O agente convidado (QGA) não respondeu no último desligamento. "
+            "Se a VM for fechada à força depois de iniciar, o disco pode ficar marcado como sujo."
+        )
+        box.setInformativeText(
+            "Recomendado: inicie e deixe o Reparo Automático do Windows terminar, "
+            "depois use \"Desligar\" dentro da própria VM."
+        )
+        confirm = box.addButton("Iniciar mesmo assim", QMessageBox.AcceptRole)
+        box.addButton("Cancelar", QMessageBox.RejectRole)
+        box.exec()
+        return box.clickedButton() is confirm
+
     def _power_action(self) -> None:
         libvirt = self._payload.get("libvirt") if isinstance(self._payload.get("libvirt"), dict) else {}
         state = str(libvirt.get("state", "missing")).strip().casefold()
@@ -461,15 +492,19 @@ class WindowsVmPage(BasePage):
         vm = self._payload.get("vm") if isinstance(self._payload.get("vm"), dict) else {}
         if state in RUNNING_STATES:
             self.run_action("windows.guest-login.shutdown")
-        elif config.get("installed") and bool(
+            return
+        disk_ready = bool(
             ((self._payload.get("health") or {}).get("readyToLaunch"))
             if isinstance(self._payload.get("health"), dict) and "readyToLaunch" in self._payload.get("health", {})
             else vm.get("installedLike")
             or (((self._payload.get("discovery") or {}).get("discoveredUsableDisk") or {}).get("usable"))
-        ):
-            self.run_action("windows.launch")
-        else:
+        )
+        if not (config.get("installed") and disk_ready):
             return
+        # CCS-020: QGA indisponível no último ciclo exige confirmação explícita.
+        if self._guest_agent_at_risk() and not self._confirm_risky_launch():
+            return
+        self.run_action("windows.launch")
 
     def set_advanced_mode(self, enabled: bool) -> None:
         super().set_advanced_mode(enabled)

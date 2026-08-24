@@ -13,6 +13,7 @@ from .homelab import HomelabPage
 from .emulation import EmulationPage
 from .ai_proxies import AiProxiesPage
 from .ai_routing import AiRoutingPage
+from .steamdeck import SteamDeckPage
 from .tuning import TuningPage
 from .results import ResultsPage
 from .workspace import CatalogWorkspacePage
@@ -40,7 +41,7 @@ class PageRegistry:
         "Início": DashboardPage,
         "Visão geral": OverviewPage,
         "Perfis": ProfilesPage,
-        "Steam Deck": CatalogWorkspacePage,
+        "Steam Deck": SteamDeckPage,
         "Windows VM": WindowsVmPage,
         "Waydroid": WaydroidPage,
         "Servidor": ServerPage,

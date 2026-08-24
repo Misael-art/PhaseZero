@@ -31,6 +31,7 @@ APP=""
 DEST=""
 SOURCE=""
 VERIFY_MODE=0
+PLAN=0
 
 usage() {
     cat <<EOF
@@ -42,7 +43,7 @@ Usage:
   homelab-stack.sh logs <app> [--follow]
   homelab-stack.sh backup [--extras] [--dest PATH] [--dry-run]
   homelab-stack.sh backup verify --source PATH
-  homelab-stack.sh restore --source PATH [--yes] [--dry-run]
+  homelab-stack.sh restore --source PATH [--plan] [--yes] [--dry-run]
   homelab-stack.sh update [--extras] [--access local|tailscale|lan] [--dry-run]
   homelab-stack.sh repair [--extras] [--access local|tailscale|lan]
   homelab-stack.sh tailscale
@@ -56,6 +57,7 @@ while [ "$#" -gt 0 ]; do
         --extras) WITH_EXTRAS=1 ;;
         --json) JSON_OUTPUT=1 ;;
         --yes|-y) YES=1 ;;
+        --plan) PLAN=1 ;;
         --follow|-f) FOLLOW=1 ;;
         --dry-run|-n) PZ_DRY_RUN=1 ;;
         --access)
@@ -719,6 +721,34 @@ cmd_verify_backup() {
 
 cmd_restore() {
     [ -n "$SOURCE" ] || { pz_error "restore requires --source PATH"; return 2; }
+    if [ "$PLAN" = "1" ]; then
+        # CCS-004: --plan = verify + impacto, zero escrita. É o caminho que a
+        # Central (catálogo e Player) usa; aplicar segue exigindo --yes na CLI.
+        if [ "$YES" = "1" ] || [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+            pz_error "restore: use --plan sozinho; --dry-run e --yes não se combinam com ele"
+            return 2
+        fi
+        [ -f "$SOURCE/manifest.json" ] || { pz_error "restore source is not a verifiable backup (manifest.json missing)"; return 1; }
+        local verify_json verify_rc=0 archives checks verified
+        verify_json="$(cmd_verify_backup --source "$SOURCE")" || verify_rc=$?
+        verified="$(jq -r '.verified' <<< "$verify_json")"
+        checks="$(jq -c '.checks' <<< "$verify_json")"
+        archives="$(find "$SOURCE" -maxdepth 1 -name '*.tgz' -printf '%f\n' 2>/dev/null | jq -R . | jq -cs .)"
+        volumes="$(jq -c '[.volumes[]?.name]' "$SOURCE/manifest.json")"
+        jq -cn \
+            --arg source "$SOURCE" \
+            --arg schemaVersion "$PZ_HOMELAB_BACKUP_SCHEMA" \
+            --argjson manifestOk true \
+            --argjson verified "$verified" \
+            --argjson checks "$checks" \
+            --argjson archives "$archives" \
+            --argjson volumesAffected "$volumes" \
+            '{action:"restore", plan:true, source:$source, schemaVersion:$schemaVersion,
+              manifestOk:$manifestOk, verified:$verified, checks:$checks,
+              archives:$archives, volumesAffected:$volumesAffected,
+              requiresConfirmation:true}'
+        return "$verify_rc"
+    fi
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         jq -n --arg source "$SOURCE" --argjson archives "$(find "$SOURCE" -maxdepth 1 -name '*.tgz' -printf '%f\n' 2>/dev/null | jq -R . | jq -cs .)" \
             --argjson manifestOk "$([ -f "$SOURCE/manifest.json" ] && echo true || echo false)" \

@@ -8,6 +8,7 @@
       "pacman": [
         "waydroid",
         "cage",
+        "gamescope",
         "dnsmasq",
         "python-gbinder",
         "lxc",

@@ -478,3 +478,14 @@ assert saved["exitCode"] == 0
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_no_orphaned_bytecode_for_dead_pages():
+    """CCS-030: nenhum .pyc sobrevive sem o .py correspondente em linux/."""
+    orphans = [
+        str(pyc.relative_to(ROOT))
+        for pyc in ROOT.glob("linux/**/__pycache__/*.pyc")
+        if not pyc.with_name(pyc.name.split(".")[0] + ".py").exists()
+        and not (pyc.parent.parent / (pyc.name.split(".")[0] + ".py")).exists()
+    ]
+    assert orphans == [], f"pyc órfãos de páginas mortas: {orphans}"

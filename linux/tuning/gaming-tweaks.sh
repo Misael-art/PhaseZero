@@ -4,6 +4,24 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
+PZ_TUNE_MODE="${1:-apply}"
+case "$PZ_TUNE_MODE" in
+    apply) ;;
+    --dry-run) ;;
+    *) pz_error "usage: ${0##*/} [--dry-run]"; exit 1 ;;
+esac
+if [ "$PZ_TUNE_MODE" = "--dry-run" ]; then
+    # Preview da área: lista o que seria escrito sem tocar nenhum arquivo.
+    pz_write_managed_file() { pz_info "dry-run: escreveria arquivo gerenciado ($2): $1"; }
+    pz_enable_service() {
+        if [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; then
+            sudo -n systemctl enable --now "$1" 2>/dev/null || true
+        else
+            pz_info "dry-run: habilitaria o serviço '$1' (requer root)"
+        fi
+    }
+fi
+
 pz_configure_gamemode() {
     local cfg="/etc/gamemode.ini"
     pz_write_managed_file "$cfg" root <<'EOF'
@@ -85,7 +103,9 @@ pz_configure_ananicy() {
   "class": "latency"
 }
 EOF
-        if [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; then
+        if [ "$PZ_TUNE_MODE" = "--dry-run" ]; then
+            pz_enable_service ananicy
+        elif [ "${PZ_USE_SUDO:-0}" = "1" ] && pz_can_sudo_noninteractive; then
             sudo -n systemctl enable --now ananicy 2>/dev/null || true
         else
             pz_warn "ananicy service enable requires root; skipped"

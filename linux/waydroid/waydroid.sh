@@ -8,8 +8,9 @@ source "$PZ_ROOT/linux/lib/common.sh"
 ACTION="${1:-status}"
 if [ $# -gt 0 ]; then shift; fi
 
-TARGET_USER="${PZ_TARGET_USER:-${SUDO_USER:-${USER:-misael}}}"
-[ "$TARGET_USER" = "root" ] && TARGET_USER="misael"
+# CCS-038: usuário alvo resolvido, nunca fixo no código.
+TARGET_USER="$(pz_resolve_target_user "${PZ_TARGET_USER:-}")"
+[ -n "$TARGET_USER" ] || { pz_error "unable to resolve target user; set PZ_TARGET_USER"; exit 1; }
 if [ "$EUID" -eq 0 ]; then
     target_home_root="$(getent passwd "$TARGET_USER" | cut -d: -f6 || true)"
     [ -n "$target_home_root" ] && export HOME="$target_home_root"
@@ -393,23 +394,34 @@ configure_waydroid_shared_access() {
 
 cmd_shares() {
     local sub="${1:-status}"
+    shift 2>/dev/null || true
+    local share_groups="all"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --groups) share_groups="${2:-all}"; shift ;;
+            --groups=*) share_groups="${1#--groups=}" ;;
+        esac
+        shift
+    done
     effective_config
     case "$sub" in
         install|repair)
             need_root
-            configure_waydroid_shared_access
+            PZ_WAYDROID_SHARE_GROUPS="$share_groups" configure_waydroid_shared_access
             ;;
         remove)
             need_root
-            [ -x "$SHARES_TARGET" ] && PZ_WAYDROID_BOOT_USER="$TARGET_USER" "$SHARES_TARGET" remove
+            [ -x "$SHARES_TARGET" ] && PZ_WAYDROID_BOOT_USER="$TARGET_USER" \
+                PZ_WAYDROID_SHARE_GROUPS="$share_groups" "$SHARES_TARGET" remove
             ;;
         dry-run|plan)
-            PZ_WAYDROID_BOOT_USER="$TARGET_USER" bash "$SHARES_SOURCE" dry-run
+            PZ_WAYDROID_BOOT_USER="$TARGET_USER" \
+                PZ_WAYDROID_SHARE_GROUPS="$share_groups" bash "$SHARES_SOURCE" dry-run
             return 0
             ;;
         status) ;;
         *)
-            pz_error "usage: waydroid shares (status|install|repair|remove|dry-run)"
+            pz_error "usage: waydroid shares (status|install|repair|remove|dry-run) [--groups folders,usb]"
             return 1
             ;;
     esac
@@ -612,6 +624,12 @@ status_json() {
     waydroid_initialized && initialized="yes"
     waydroid_active="$(service_state waydroid-container active)"
     waydroid_enabled="$(service_state waydroid-container enabled)"
+    # CCS-005: energia pela sessão Android, não pelo container. O container
+    # pode estar ativo sem nenhuma sessão Android utilizável.
+    local session_running="no"
+    if [ -n "$waydroid_bin" ] && timeout 10 "$waydroid_bin" status 2>/dev/null | grep -Eq '^Session:[[:space:]]*RUNNING$'; then
+        session_running="yes"
+    fi
     [ -x "$BOOT_HELPER_TARGET" ] && boot_helper="yes"
     [ -x "$SESSION_TARGET" ] && session_launcher="yes"
     [ -x "$SHARES_TARGET" ] && shares_helper="yes"
@@ -640,6 +658,7 @@ status_json() {
         --arg initialized "$initialized" \
         --arg serviceActive "$waydroid_active" \
         --arg serviceEnabled "$waydroid_enabled" \
+        --arg sessionRunning "$session_running" \
         --arg imageType "$IMAGE_TYPE" \
         --arg restartAttempts "$SESSION_RESTARTS" \
         --arg initAttempts "$INIT_ATTEMPTS" \
@@ -677,6 +696,7 @@ status_json() {
                 imageType: $imageType,
                 serviceActive: $serviceActive,
                 serviceEnabled: $serviceEnabled,
+                sessionRunning: ($sessionRunning == "yes"),
                 restartAttempts: ($restartAttempts|tonumber),
                 initAttempts: ($initAttempts|tonumber),
                 resumablePrefetch: ($prefetchImages == "1"),
@@ -712,16 +732,24 @@ print_status() {
 
 cmd_stop() {
     parse_options "$@"
-    local waydroid_bin output rc=0
+    local waydroid_bin output rc=0 state="stopped"
     waydroid_bin="$(command_path waydroid)"
     [ -n "$waydroid_bin" ] || { pz_error "waydroid command missing"; return 1; }
     set +e
-    output="$(timeout 30 "$waydroid_bin" session stop 2>&1)"
-    rc=$?
+    if timeout 15 "$waydroid_bin" status 2>/dev/null | grep -Eq '^Session:[[:space:]]*RUNNING$'; then
+        output="$(timeout 30 "$waydroid_bin" session stop 2>&1)"
+        rc=$?
+        [ "$rc" -eq 0 ] || state="error"
+    else
+        # CCS-005: stop idempotente — sessão já parada é sucesso, não erro.
+        output="session already stopped"
+        rc=0
+        state="already-stopped"
+    fi
     set -e
     if [ "$JSON_OUT" = "1" ]; then
-        jq -n --arg detail "$output" --argjson success "$([ "$rc" -eq 0 ] && echo true || echo false)" \
-            '{success:$success,state:(if $success then "stopped" else "error" end),detail:$detail}'
+        jq -n --arg detail "$output" --argjson success "$([ "$rc" -eq 0 ] && echo true || echo false)" --arg state "$state" \
+            '{success:$success,state:$state,detail:$detail}'
     elif [ "$rc" -eq 0 ]; then
         pz_info "Waydroid session stopped; apps and data preserved"
     else

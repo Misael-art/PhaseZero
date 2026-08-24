@@ -115,6 +115,30 @@ def test_read_only_actions_are_never_high_risk(catalog):
     assert wrong == [], "ação somente-leitura marcada como alto risco: " + ", ".join(wrong)
 
 
+# --- CCS-003: preview de Ajustes/bundle nunca dispara o doctor -------------
+
+
+def test_tune_and_support_bundle_previews_do_not_run_doctor(catalog):
+    """Abrir preview de tune/support-bundle é plano da área, não doctor completo."""
+    by_id = {action.id: action for action in catalog}
+    for action_id in (
+        "tune.browser",
+        "tune.gaming",
+        "tune.dev",
+        "system.support-bundle",
+    ):
+        assert action_id in by_id, f"ação ausente no catálogo: {action_id}"
+        preview = by_id[action_id].preview_args or ()
+        assert "doctor" not in preview, (
+            f"{action_id}: preview ainda executa pz doctor ({preview})"
+        )
+
+    for area in ("browser", "gaming", "dev"):
+        preview = by_id[f"tune.{area}"].preview_args
+        assert preview == ("tune", area, "--dry-run")
+    assert by_id["system.support-bundle"].preview_args == ("support-bundle", "--plan")
+
+
 # --- ações de manutenção do host (PR2) dentro do mesmo modelo -------------
 
 
@@ -146,9 +170,37 @@ def test_maintenance_actions_are_searchable(catalog):
     assert "limpeza" in by_id["host.status"].keywords
 
 
+# --- CCS-019: OmniRoute visível e rotulado; 9Router segue público -----------
+
+
+def test_omniroute_appears_exactly_once_with_experimental_badge(catalog):
+    omniroute = [action for action in catalog if "omniroute" in " ".join(action.args).casefold()]
+    assert len(omniroute) == 1, f"esperado 1 card OmniRoute, há {len(omniroute)}"
+    card = omniroute[0]
+    assert card.badge == "Experimental"
+    assert not card.mutable, "card experimental é somente leitura (status)"
+    assert "9router" in card.description.casefold(), (
+        "copy precisa apontar o 9Router como router público"
+    )
+
+
+def test_9router_remains_the_public_router(catalog):
+    nine = [action for action in catalog if ".9router" in action.id or "9router" in action.args]
+    assert len(nine) > 5, "9Router deixou de ser a superfície principal do router"
+
+
 def test_scope_reduction_is_documented():
     doc = ROOT / "docs/pr3-scope-reduction.md"
     assert doc.is_file(), "docs/pr3-scope-reduction.md ausente (correção 6)"
     text = doc.read_text(encoding="utf-8")
     assert "visibility" in text
     assert "catalog.py" in text
+
+
+def test_ide_copy_uses_one_vocabulary(catalog):
+    """CCS-035: OpenCode, proxies e reparo compartilham o stem 'Configurar/Reparar IDEs'."""
+    by_id = {a.id: a for a in catalog}
+    assert by_id["ai.ides"].title == "Configurar IDEs (agentes)"
+    assert by_id["ai.repair"].title == "Reparar MCPs e IDEs"
+    page_src = (ROOT / "linux/ui_native/pages/ai_proxies.py").read_text(encoding="utf-8")
+    assert '"Configurar IDEs (proxies)"' in page_src, "botão da página Proxies saiu do vocabulário"

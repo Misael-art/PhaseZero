@@ -4,8 +4,25 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$PZ_ROOT/linux/lib/common.sh"
 
+PZ_TUNE_MODE="${1:-apply}"
+case "$PZ_TUNE_MODE" in
+    apply) ;;
+    --dry-run) ;;
+    *) pz_error "usage: ${0##*/} [--dry-run]"; exit 1 ;;
+esac
+if [ "$PZ_TUNE_MODE" = "--dry-run" ]; then
+    # Executa só o plano: imprime a mutação sem rodar git/npm/sudo.
+    pz_tune_exec() { pz_info "dry-run: $*"; }
+else
+    pz_tune_exec() { "$@"; }
+fi
+
 pz_apply_sysctl() {
     local sysctl_conf="/etc/sysctl.d/99-phasezero-dev.conf"
+    if [ "$PZ_TUNE_MODE" = "--dry-run" ]; then
+        pz_info "dry-run: faria backup e escreveria sysctl de dev em: $sysctl_conf"
+        return 0
+    fi
     pz_backup_file "$sysctl_conf" root >/dev/null
 
     sudo tee "$sysctl_conf" >/dev/null <<'EOF'
@@ -37,22 +54,22 @@ EOF
 }
 
 pz_configure_git() {
-    git config --global core.fsmonitor true
-    git config --global core.untrackedcache true
-    git config --global core.autocrlf input
-    git config --global pull.rebase true
-    git config --global fetch.prune true
-    git config --global diff.algorithm histogram
-    git config --global status.showUntrackedFiles normal
-    git config --global init.defaultBranch main
+    pz_tune_exec git config --global core.fsmonitor true
+    pz_tune_exec git config --global core.untrackedcache true
+    pz_tune_exec git config --global core.autocrlf input
+    pz_tune_exec git config --global pull.rebase true
+    pz_tune_exec git config --global fetch.prune true
+    pz_tune_exec git config --global diff.algorithm histogram
+    pz_tune_exec git config --global status.showUntrackedFiles normal
+    pz_tune_exec git config --global init.defaultBranch main
     pz_info "git config optimized"
 }
 
 pz_configure_npm() {
-    npm config set fund false
-    npm config set audit false
-    npm config set update-notifier false
-    npm config set cache "${HOME}/.cache/npm"
+    pz_tune_exec npm config set fund false
+    pz_tune_exec npm config set audit false
+    pz_tune_exec npm config set update-notifier false
+    pz_tune_exec npm config set cache "${HOME}/.cache/npm"
     pz_info "npm config optimized"
 }
 
