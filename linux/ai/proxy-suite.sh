@@ -1704,7 +1704,9 @@ ensure_one() {
             _ensure_steps_add "$steps_file" start deferred "aguarda credenciais"
             _ensure_steps_add "$steps_file" credentials missing
             if [ "$dry" != 1 ]; then
-                command -v xdg-open >/dev/null 2>&1 && xdg-open "$MIMO_STUDIO_URL" >/dev/null 2>&1 || true
+                if command -v xdg-open >/dev/null 2>&1; then
+                    xdg-open "$MIMO_STUDIO_URL" >/dev/null 2>&1 || true
+                fi
             fi
             summary="Xiaomi AI Studio abre para gerar o token do Mimo."
             next="Entre na conta, envie uma mensagem no chat, copie token + user id + PH (F12 → Rede → bot/chat) e cole na Central."

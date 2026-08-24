@@ -132,8 +132,8 @@ jq -e '
 hermes_status="$(HERMES_HOME="$HOME/.hermes" PZ_LOCAL_BIN="$HOME/.local/bin" bash "$ROOT/linux/ai/setup-hermes.sh" status)"
 jq -e '.schemaVersion == 1 and .installed == false and .ready == false and .doctor.outputRedacted == true and .secretsRedacted == true' \
     <<< "$hermes_status" >/dev/null
-grep -Fq 'HERMES_GATEWAY_DROPIN="${HERMES_GATEWAY_SERVICE}.d/phasezero.conf"' "$ROOT/linux/ai/setup-hermes.sh"
-grep -Fq 'ExecStart=$LOCAL_BIN/hermes gateway run' "$ROOT/linux/ai/setup-hermes.sh"
+grep -Fq "HERMES_GATEWAY_DROPIN=\"\${HERMES_GATEWAY_SERVICE}.d/phasezero.conf\"" "$ROOT/linux/ai/setup-hermes.sh"
+grep -Fq "ExecStart=\$LOCAL_BIN/hermes gateway run" "$ROOT/linux/ai/setup-hermes.sh"
 grep -Fq 'UnsetEnvironment=PHASEZERO_ADMIN PHASEZERO_ADMIN_BACKEND PHASEZERO_ADMIN_COMMAND' "$ROOT/linux/ai/setup-hermes.sh"
 test "$(grep -Fc 'unset PYTHONPATH PYTHONHOME PHASEZERO_ADMIN PHASEZERO_ADMIN_BACKEND PHASEZERO_ADMIN_COMMAND' \
     "$ROOT/linux/ai/setup-hermes.sh")" -eq 3

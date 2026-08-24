@@ -83,7 +83,7 @@ config_has_router_reference() {
     [ -f "$HERMES_CONFIG" ] || return 1
     grep -Fq 'provider: custom' "$HERMES_CONFIG" &&
       grep -Fq "base_url: $ROUTER_ENDPOINT" "$HERMES_CONFIG" &&
-      grep -Fq '${PHASEZERO_9ROUTER_API_KEY}' "$HERMES_CONFIG"
+      grep -Fq "\${PHASEZERO_9ROUTER_API_KEY}" "$HERMES_CONFIG"
 }
 
 distribution_json() {
@@ -145,10 +145,10 @@ prepare_managed_uv() {
 }
 
 write_router_launchers() {
-    [ -x "$HERMES_VENV_PY" ] && [ -f "$HERMES_ENTRYPOINT" ] || {
+    if [ ! -x "$HERMES_VENV_PY" ] || [ ! -f "$HERMES_ENTRYPOINT" ]; then
         pz_error "Hermes launcher prerequisites missing"
         return 1
-    }
+    fi
     router_credentials_ready || {
         pz_error "canonical 9Router client credential unavailable or unsafe: $ROUTER_ENV"
         return 69
@@ -200,8 +200,9 @@ X-PHZ-Group=ia
 X-PhaseZero-Managed=true
 EOF
     chmod 0644 "$DASHBOARD_ENTRY"
-    command -v update-desktop-database >/dev/null 2>&1 && \
-      update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    if command -v update-desktop-database >/dev/null 2>&1; then
+        update-desktop-database "$(dirname "$DASHBOARD_ENTRY")" >/dev/null 2>&1 || true
+    fi
 }
 
 install_hermes() {

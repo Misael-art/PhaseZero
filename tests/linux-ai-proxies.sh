@@ -89,10 +89,10 @@ grep -q 'set_proxy_credentials' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'open_opencode_proxy' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'qwenproxy.db' "$ROOT/linux/ai/proxy-suite.sh"
 # set-credentials must persist via upsert and never echo the payload keys' values in jq.
-grep -q 'upsert_env_var "\$file" SERVICE_TOKEN' "$ROOT/linux/ai/proxy-suite.sh"
+grep -q "upsert_env_var \"\\\$file\" SERVICE_TOKEN" "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'jq -r .serviceToken' "$ROOT/linux/ai/proxy-suite.sh" || grep -q 'serviceToken' "$ROOT/linux/ai/proxy-suite.sh"
 # Regression: `[ id = qwenproxy ] && pz_info` as last command made kimi/deeps login exit 1.
-if grep -n '\[ "$id" = qwenproxy \] && pz_info' "$ROOT/linux/ai/proxy-suite.sh"; then
+if grep -n "\\[ \"\\\$id\" = qwenproxy \\] && pz_info" "$ROOT/linux/ai/proxy-suite.sh"; then
     echo "FAIL: login_proxy still ends with a failing && for non-qwen ids"
     exit 1
 fi
