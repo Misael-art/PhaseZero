@@ -111,6 +111,20 @@ def test_workspace_auth_and_provenance_actions_are_catalogued(by_id):
     assert by_id["ai.operations-status"].args == ("ai", "operations", "status")
 
 
+def test_ai_portability_actions_keep_passphrase_off_argv(by_id):
+    export = by_id["ai.backup.export"]
+    verify = by_id["ai.backup.verify"]
+    restore = by_id["ai.backup.restore"]
+    assert export.stdin_parameter == "passphrase"
+    assert "{passphrase}" not in export.args
+    assert verify.stdin_parameter == "passphrase"
+    assert "{passphrase}" not in verify.args
+    assert restore.stdin_parameter == "passphrase"
+    assert restore.stdin_on_preview is True
+    assert "{passphrase}" not in restore.args
+    assert "{passphrase}" not in restore.preview_args
+
+
 def test_proxies_page_covers_all_catalog_actions(proxies_page):
     page, actions = proxies_page
     assert {action.id for action in actions} <= page.represented_action_ids
@@ -189,7 +203,7 @@ def test_proxies_page_translates_status_into_human_copy(proxies_page):
     assert page._cards["qwenproxy"]["headline"].text() == "Precisa preparar"
     assert page._cards["kimiproxy"]["headline"].text() == "Pronto"
     assert page._cards["deepsproxy"]["headline"].text() == "Falta login"
-    assert page._cards["mimo-ai-proxy"]["headline"].text() == "Falta token da conta"
+    assert page._cards["mimo-ai-proxy"]["headline"].text() == "Falta chave da API"
     assert "Falta login" in page.state_label.text() or "Precisa preparar" in page.state_label.text()
 
 
@@ -241,7 +255,8 @@ def test_mimo_credentials_continue_to_opencode_automatically(
     page, _actions = proxies_page
     monkeypatch.setattr(MimoTokenDialog, "exec", lambda _self: MimoTokenDialog.Accepted)
     monkeypatch.setattr(MimoTokenDialog, "payload", lambda _self: {
-        "serviceToken": "secret", "userId": "user", "chatbotPh": "ph",
+        "apiKey": "sk-secret-value", "baseUrl": "https://api.xiaomimimo.com/v1",
+        "model": "mimo-v2.5-pro",
     })
     monkeypatch.setattr(
         "linux.ui_native.pages.ai_proxies.QDesktopServices.openUrl", lambda _url: True,
@@ -390,6 +405,21 @@ def test_ensure_status_severity_is_honest():
     assert severity_for({"status": "needs-credentials"}, 0) == "warning"
     assert severity_for({"status": "gui-required"}, 0) == "warning"
     assert severity_for({"status": "error"}, 0) == "error"
+
+
+def test_incomplete_structured_result_is_not_success():
+    result = OperationResult(
+        action_id="ai.proxies-ensure-qwen",
+        command=["pz", "ai", "proxies", "ensure", "qwenproxy"],
+        preview=False,
+        exit_code=0,
+        started_at="t0",
+        finished_at="t1",
+        stdout="",
+        stderr="",
+        parsed={"ok": False, "status": "needs-login", "resumable": True},
+    )
+    assert result.ok is False
 
 
 def test_result_dialog_prefers_json_summary(qapp):

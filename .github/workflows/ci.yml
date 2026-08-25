@@ -253,7 +253,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install test dependencies
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl git python3 python3-pil nodejs npm unzip xz-utils ripgrep yad ovmf sddm qemu-utils
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl git gnupg python3 python3-pil nodejs npm unzip xz-utils ripgrep yad ovmf sddm qemu-utils
 
       - name: Run full shell test suite
         run: |

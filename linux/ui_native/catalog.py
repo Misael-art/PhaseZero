@@ -82,6 +82,7 @@ def _a(
     preview_bindings: tuple[tuple[str, str], ...] = (),
     result_view: str = "auto",
     stdin_parameter: str = "",
+    stdin_on_preview: bool = False,
     status_args: tuple[str, ...] | None = None,
 ) -> ActionSpec:
     if mutable and preview is None:
@@ -130,6 +131,7 @@ def _a(
         preview_bindings=preview_bindings,
         result_view=result_view,
         stdin_parameter=stdin_parameter,
+        stdin_on_preview=stdin_on_preview,
     )
 
 
@@ -705,13 +707,13 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("proxies-ensure-kimi", "Usar Kimi", "Instala, inicia e abre o login do Kimi se ainda faltar.", ("ai", "proxies", "ensure", "kimiproxy"), ("ai", "proxies", "ensure", "kimiproxy", "--dry-run"), ""),
         ("proxies-ensure-qwen", "Usar Qwen", "Instala, inicia e abre o login do Qwen se ainda faltar.", ("ai", "proxies", "ensure", "qwenproxy"), ("ai", "proxies", "ensure", "qwenproxy", "--dry-run"), ""),
         ("proxies-ensure-deeps", "Usar DeepSeek", "Instala, inicia e abre o login do DeepSeek se ainda faltar.", ("ai", "proxies", "ensure", "deepsproxy"), ("ai", "proxies", "ensure", "deepsproxy", "--dry-run"), ""),
-        ("proxies-ensure-mimo", "Usar Mimo", "Instala, abre o Xiaomi AI Studio e pede o token se ainda faltar.", ("ai", "proxies", "ensure", "mimo-ai-proxy"), ("ai", "proxies", "ensure", "mimo-ai-proxy", "--dry-run"), ""),
+        ("proxies-ensure-mimo", "Usar Mimo", "Configura a API oficial Xiaomi; não extrai cookies nem tokens do navegador.", ("ai", "proxies", "ensure", "mimo-ai-proxy"), ("ai", "proxies", "ensure", "mimo-ai-proxy", "--dry-run"), ""),
         ("proxies-ensure-all", "Preparar todos os proxies", "Instala, inicia e autentica Kimi, Qwen, DeepSeek e Mimo.", ("ai", "proxies", "ensure", "all"), ("ai", "proxies", "ensure", "all", "--dry-run"), ""),
         ("proxies-open-kimi", "Abrir Kimi no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Kimi.", ("ai", "proxies", "open", "kimiproxy"), None, ""),
         ("proxies-open-qwen", "Abrir Qwen no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Qwen.", ("ai", "proxies", "open", "qwenproxy"), None, ""),
         ("proxies-open-deeps", "Abrir DeepSeek no OpenCode", "Abre o OpenCode CLI já no modelo do proxy DeepSeek.", ("ai", "proxies", "open", "deepsproxy"), None, ""),
         ("proxies-open-mimo", "Abrir Mimo no OpenCode", "Abre o OpenCode CLI já no modelo do proxy Mimo.", ("ai", "proxies", "open", "mimo-ai-proxy"), None, ""),
-        ("proxies-open-studio-mimo", "Abrir Xiaomi AI Studio", "Abre a página para gerar token, user id e PH do Mimo.", ("ai", "proxies", "open-studio"), None, ""),
+        ("proxies-open-studio-mimo", "Abrir API Service Xiaomi", "Abre o portal oficial para criar uma chave da API MiMo.", ("ai", "proxies", "open-studio"), None, ""),
         ("proxies-ides", "Configurar IDEs (proxies)", "Injeta proxies de IA (OpenCode, VS Code/Code-OSS, ZCode) nas IDEs.", ("ai", "proxies", "configure-ides"), ("ai", "proxies", "status"), ""),
         ("proxies-stop-kimi", "Parar Kimi", "Para phasezero-kimiproxy.", ("ai", "proxies", "stop", "kimiproxy"), ("ai", "proxies", "status"), ""),
         ("proxies-stop-qwen", "Parar Qwen", "Para phasezero-qwenproxy.", ("ai", "proxies", "stop", "qwenproxy"), ("ai", "proxies", "status"), ""),
@@ -753,8 +755,8 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         _a(
             "ai.proxies-credentials-mimo",
             "Proxies IA",
-            "Colar credenciais Mimo",
-            "Salva token, user id e PH do Xiaomi AI Studio sem exibi-los.",
+            "Salvar chave oficial MiMo",
+            "Valida e salva a chave da API oficial em arquivo protegido; configura OpenCode e registra ZCode sem incorporar o segredo.",
             ("ai", "proxies", "set-credentials", "mimo-ai-proxy"),
             "dialog-password",
             mutable=True,
@@ -934,6 +936,39 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("ai.opencode.local", "IA & Dev", "Modelo local OpenCode", "Configura modelo Ollama local.", ("ai", "opencode", "local-model"), "applications-development", mutable=True, preview=("ai", "opencode", "status"), visibility="advanced"),
             _a("ai.opencode.hook", "IA & Dev", "Instalar hook OpenCode", "Instala sincronização automática.", ("ai", "opencode", "install-hook"), "system-run", mutable=True, preview=("ai", "opencode", "status"), visibility="advanced"),
             _a("ai.secrets.rotate", "IA & Dev", "Rotacionar secrets IA", "Rotaciona chaves gerenciadas sem exibi-las.", ("ai", "secrets", "rotate"), "dialog-password", mutable=True, preview=("ai", "status"), risk="high", visibility="advanced"),
+            _a(
+                "ai.backup.export", "IA & Dev", "Exportar memória e acessos",
+                "Cria pacote AES-256 com ai-memory e allowlist de chaves. Exclui cookies e perfis de navegador.",
+                ("ai", "backup", "create", "--include-credentials", "--passphrase-stdin"),
+                "document-save", mutable=True,
+                preview=("ai", "backup", "plan", "--include-credentials"),
+                parameters=(_p("passphrase", "Senha do pacote", "secret", placeholder="mínimo 12 caracteres"),),
+                stdin_parameter="passphrase", badge="Protegido", visibility="primary",
+            ),
+            _a(
+                "ai.backup.verify", "IA & Dev", "Verificar backup de IA",
+                "Descriptografa em área temporária e valida manifesto e SHA-256 sem restaurar.",
+                ("ai", "backup", "verify", "--bundle", "{bundle}", "--passphrase-stdin"),
+                "document-preview",
+                parameters=(
+                    _p("bundle", "Pacote criptografado", "file"),
+                    _p("passphrase", "Senha do pacote", "secret"),
+                ),
+                stdin_parameter="passphrase", badge="Seguro", visibility="primary",
+            ),
+            _a(
+                "ai.backup.restore", "IA & Dev", "Restaurar memória e acessos",
+                "Verifica o pacote, mostra destinos, faz pré-backup e aplica com rollback.",
+                ("ai", "backup", "restore", "--bundle", "{bundle}", "--passphrase-stdin", "--confirm", "RESTORE"),
+                "document-revert", mutable=True,
+                preview=("ai", "backup", "restore", "--plan", "--bundle", "{bundle}", "--passphrase-stdin"),
+                parameters=(
+                    _p("bundle", "Pacote criptografado", "file"),
+                    _p("passphrase", "Senha do pacote", "secret"),
+                ),
+                stdin_parameter="passphrase", stdin_on_preview=True,
+                badge="Reversível", risk="high", visibility="primary",
+            ),
             _a("ai.mcp.status", "IA & Dev", "Status MCP", "Audita servidores MCP.", ("ai", "mcp", "status"), "network-server", visibility="advanced"),
             _a("ai.mcp.list", "IA & Dev", "Listar MCPs", "Lista servidores instalados.", ("ai", "mcp", "list"), "view-list-details", visibility="advanced"),
             _a("ai.mcp.install", "IA & Dev", "Instalar MCP", "Instala servidor MCP pelo identificador.", ("ai", "mcp", "install", "{server}"), "system-software-install", mutable=True, preview=("ai", "mcp", "status"), parameters=(_p("server", "Servidor MCP"),), visibility="advanced"),
@@ -1254,6 +1289,7 @@ def catalog_manifest(root: Path, platform_name: str | None = None) -> dict[str, 
                 "platforms": list(item.platforms),
                 "risk": item.risk,
                 "resultView": item.result_view,
+                "stdinOnPreview": item.stdin_on_preview,
                 "parameters": [
                     {
                         "name": parameter.name,

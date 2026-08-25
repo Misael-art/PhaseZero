@@ -100,7 +100,7 @@ class CommandRunner(QObject):
         # must stay out of argv, out of self.command and out of the started
         # signal that renders the command to the user.
         stdin_data = ""
-        if action.stdin_parameter and not preview:
+        if action.stdin_parameter and (not preview or action.stdin_on_preview):
             stdin_data = (values or {}).get(action.stdin_parameter, "")
         self.action = action
         self.preview = preview

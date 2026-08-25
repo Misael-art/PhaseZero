@@ -573,7 +573,10 @@ OPENCODE_JSON="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json"
 ZCODE_STORE="${XDG_CONFIG_HOME:-$HOME/.config}/ai.z.zcode/store.json"
 PROXY_ENV_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/ai-proxies"
 IDE_ENV_DEFAULTS="$PROXY_ENV_DIR/ide-defaults.env"
-MIMO_STUDIO_URL="https://aistudio.xiaomimimo.com"
+MIMO_PLATFORM_URL="https://platform.xiaomimimo.com"
+MIMO_PROVIDER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/ai-providers/mimo"
+MIMO_PROVIDER_CONFIG="$MIMO_PROVIDER_DIR/config.json"
+MIMO_PROVIDER_KEY="$MIMO_PROVIDER_DIR/api-key"
 CONTINUE_CONFIG="${PZ_CONTINUE_CONFIG:-$HOME/.continue/config.json}"
 CONTINUE_GLOBAL_CONTEXT="${PZ_CONTINUE_GLOBAL_CONTEXT:-$HOME/.continue/index/globalContext.json}"
 CONTINUE_EXTENSION="Continue.continue"
@@ -643,6 +646,60 @@ merge_opencode_provider() {
             "models": $models
           }
     ' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+mimo_official_configured() {
+    local base_url host
+    [ -s "$MIMO_PROVIDER_KEY" ] && [ -f "$MIMO_PROVIDER_CONFIG" ] || return 1
+    [ "$(stat -c '%a' "$MIMO_PROVIDER_KEY" 2>/dev/null || true)" = 600 ] || return 1
+    [ "$(stat -c '%a' "$MIMO_PROVIDER_CONFIG" 2>/dev/null || true)" = 600 ] || return 1
+    jq -e '
+      .schemaVersion == 1 and
+      (.baseUrl | type == "string" and startswith("https://")) and
+      (.model | type == "string" and length > 0) and
+      .validation.httpCode == "200"
+    ' "$MIMO_PROVIDER_CONFIG" >/dev/null 2>&1 || return 1
+    base_url="$(jq -r '.baseUrl' "$MIMO_PROVIDER_CONFIG")"
+    host="$(sed -E 's#^https://([^/]+).*$#\1#' <<< "$base_url")"
+    case "$host" in
+        api.xiaomimimo.com|token-plan-cn.xiaomimimo.com|token-plan-sgp.xiaomimimo.com|token-plan-ams.xiaomimimo.com) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+mimo_official_provider_values() {
+    mimo_official_configured || return 1
+    jq -r '[.baseUrl,.model] | @tsv' "$MIMO_PROVIDER_CONFIG"
+}
+
+configure_mimo_official_clients() {
+    mimo_official_configured || return 0
+    local values baseurl model key_ref models store_tmp
+    values="$(mimo_official_provider_values)"
+    baseurl="${values%%$'\t'*}"
+    model="${values#*$'\t'}"
+    key_ref="{file:$MIMO_PROVIDER_KEY}"
+    models="$model,mimo-v2.5"
+    merge_opencode_provider "$OPENCODE_JSON" phasezero-mimo-official \
+        "Xiaomi MiMo (API oficial)" "$baseurl" "$key_ref" "$models"
+    [ -f "$OPENCODE_JSONC" ] && merge_opencode_provider "$OPENCODE_JSONC" \
+        phasezero-mimo-official "Xiaomi MiMo (API oficial)" "$baseurl" "$key_ref" "$models"
+
+    install -d -m 700 "$(dirname "$ZCODE_STORE")"
+    [ -f "$ZCODE_STORE" ] || jq -n '{}' > "$ZCODE_STORE"
+    if jq empty "$ZCODE_STORE" >/dev/null 2>&1; then
+        pz_backup_file "$ZCODE_STORE" user >/dev/null
+        store_tmp="$(mktemp)"
+        jq --arg baseUrl "$baseurl" --arg model "$model" --arg keyFile "$MIMO_PROVIDER_KEY" '
+          ."phasezero-ai-providers" = (."phasezero-ai-providers" // {}) |
+          ."phasezero-ai-providers".mimo = {
+            source:"xiaomi-official", protocol:"openai-compatible",
+            baseUrl:$baseUrl, defaultModel:$model, keyFile:$keyFile,
+            secretEmbedded:false
+          }
+        ' "$ZCODE_STORE" > "$store_tmp" && mv "$store_tmp" "$ZCODE_STORE"
+        chmod 600 "$ZCODE_STORE"
+    fi
 }
 
 configure_opencode_ide() {
@@ -813,6 +870,7 @@ configure_ides() {
     [ "${PZ_NO_IDES:-0}" = 1 ] && { pz_info "PZ_NO_IDES=1: skipping IDE configuration"; return 0; }
     command -v jq >/dev/null 2>&1 || { pz_error "jq required for IDE configuration"; return 1; }
     configure_opencode_ide
+    configure_mimo_official_clients
     write_ide_env_defaults
     configure_zcode_ide
     ensure_continue_extensions
@@ -1080,10 +1138,17 @@ wait_proxy_chat() {
 
 emit_login_json() {
     local id="$1" ok="$2" status="$3" summary="$4" next="$5" log="${6:-}"
+    local ready=false completed=false resumable=false
+    [ "$status" = ready ] && { ready=true; completed=true; }
+    case "$status" in needs-login|gui-required) resumable=true ;; esac
     jq -nc --arg id "$id" --arg name "$(proxy_display_name "$id")" \
         --arg status "$status" --arg summary "$summary" --arg next "$next" \
-        --arg log "$log" --argjson ok "$ok" \
-        '{schemaVersion:1,id:$id,name:$name,ok:$ok,status:$status,summary:$summary,next:$next,needsUser:(if $status=="ready" then "none" else "browser-login" end),log:$log}'
+        --arg log "$log" --argjson ok "$ok" --argjson ready "$ready" \
+        --argjson completed "$completed" --argjson resumable "$resumable" \
+        '{schemaVersion:1,id:$id,name:$name,ok:$ok,ready:$ready,completed:$completed,resumable:$resumable,
+          status:$status,summary:$summary,next:$next,
+          nextAction:(if $resumable then ("linux/pz ai proxies ensure " + $id) else null end),
+          needsUser:(if $status=="ready" then "none" else "browser-login" end),log:$log}'
 }
 
 patch_proxy_unit_success_exit() {
@@ -1100,8 +1165,10 @@ patch_proxy_unit_success_exit() {
 watch_login_then_restart() {
     local id="$1" pid="$2" log="$PZ_STATE/ai-proxies/$1-login.log"
     (
+        login_marker=false
         while kill -0 "$pid" 2>/dev/null; do
             if grep -Eqi 'Account added|Login detected|session saved' "$log" 2>/dev/null; then
+                login_marker=true
                 sleep 2
                 kill "$pid" >/dev/null 2>&1 || true
                 sleep 1
@@ -1110,13 +1177,19 @@ watch_login_then_restart() {
             fi
             sleep 2
         done
-        if grep -Eqi 'Account added|Login detected|session saved' "$log" 2>/dev/null; then
+        # Kimi and DeepSeek do not print a success marker. Their supported
+        # flow is: user signs in, closes Chromium, then the persistent profile
+        # is validated by a real chat probe before readiness is recorded.
+        if [ "$login_marker" = true ] || session_artifact_present "$id"; then
             if start_proxy_service "$id" >>"$log" 2>&1 && wait_proxy_chat "$id" 15; then
                 record_login_authenticated "$id"
             else
-                record_login_status "$id" start-required
-                printf '%s\n' "PhaseZero: login salvo, mas serviço/chat não ficou pronto" >>"$log"
+                record_login_status "$id" needs-login
+                printf '%s\n' "PhaseZero: sessão encontrada, mas a validação do chat falhou; novo login necessário" >>"$log"
             fi
+        else
+            record_login_status "$id" needs-login
+            printf '%s\n' "PhaseZero: navegador fechou sem uma sessão detectável" >>"$log"
         fi
     ) >/dev/null 2>&1 &
 }
@@ -1147,11 +1220,13 @@ auth_status_json() {
         if [ "$id" = 9router ]; then [ -x "$dir/bin/9router" ] && installed=true
         else [ -d "$dir/.git" ] && installed=true
         fi
+        [ "$id" = "mimo-ai-proxy" ] && mimo_official_configured && installed=true
         service="not-applicable"
         { [ "$kind" = node ] || [ "$kind" = go ] || [ "$kind" = npm ]; } &&
             service="$(systemctl --user is-active "phasezero-$id.service" 2>/dev/null || true)"
         api_configured=false
         dotenv_has_any_key "$env_file" API_KEY && api_configured=true
+        [ "$id" = "mimo-ai-proxy" ] && mimo_official_configured && api_configured=true
         required=false; web_kind=""; web_status="not-applicable"; command=""; log_path=""; missing_json="[]"
         if is_login_capable_proxy "$id"; then
             required=true
@@ -1173,12 +1248,12 @@ auth_status_json() {
             fi
         elif [ "$id" = "mimo-ai-proxy" ]; then
             required=true
-            web_kind="env-session"
+            web_kind="official-api-key"
             command="linux/pz ai proxies open-studio"
-            missing_json="$(mimo_missing_groups_json "$env_file")"
-            if [ "$(jq 'length' <<< "$missing_json")" -eq 0 ]; then
+            if mimo_official_configured; then
                 web_status="configured"
             else
+                missing_json='["api-key"]'
                 web_status="missing-credentials"
             fi
         elif [ "$id" = "9router" ]; then
@@ -1280,7 +1355,7 @@ login_proxy() {
     fi
     if login_process_running "$id"; then
         log="$PZ_STATE/ai-proxies/$id-login.log"
-        emit_login_json "$id" true "needs-login" \
+        emit_login_json "$id" false "needs-login" \
             "O login do $name já está aberto no navegador." \
             "Conclua o login na janela do Chromium. O proxy inicia sozinho depois." "$log"
         return 0
@@ -1333,9 +1408,13 @@ login_proxy() {
             while kill -0 "$login_pid" 2>/dev/null; do sleep 2; done
         ) >"$fifo" &
     else
+        tsx="$(login_tsx "$dir")" || {
+            emit_login_json "$id" false error "$name não tem o runtime de login (tsx)." "Reinstale o proxy." "$log"
+            return 2
+        }
         (
             cd "$dir"
-            exec setsid env PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" run login
+            exec setsid env PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$tsx" src/login.ts
         ) </dev/null >"$log" 2>&1 &
         login_pid=$!
     fi
@@ -1346,13 +1425,13 @@ login_proxy() {
     watch_login_then_restart "$id" "$login_pid"
 
     if wait_for_login_window "$log" "$login_pid" 40; then
-        emit_login_json "$id" true "needs-login" \
+        emit_login_json "$id" false "needs-login" \
             "Uma janela do navegador abriu para o login do $name." \
             "Conclua o login no Chromium e feche a janela. O serviço inicia sozinho." "$log"
         return 0
     fi
     if kill -0 "$login_pid" 2>/dev/null; then
-        emit_login_json "$id" true "needs-login" \
+        emit_login_json "$id" false "needs-login" \
             "Login do $name iniciado. O Chromium deve abrir em instantes." \
             "Se a janela não aparecer, use o modo avançado." "$log"
         return 0
@@ -1509,6 +1588,41 @@ ensure_one() {
     install -d -m 700 "$PZ_STATE/ai-proxies"
     steps_file="$(mktemp)"
     printf '[]\n' > "$steps_file"
+
+    # MiMo uses Xiaomi's supported OpenAI-compatible API. Do not clone or run
+    # the legacy browser-session scraper on the normal user journey.
+    if [ "$id" = "mimo-ai-proxy" ]; then
+        if mimo_official_configured; then
+            _ensure_steps_add "$steps_file" credentials ok "chave oficial em arquivo protegido"
+            _ensure_steps_add "$steps_file" start skipped "API remota; serviço local desnecessário"
+            if [ "$dry" = 1 ]; then
+                summary="MiMo oficial já está configurado. Vai sincronizar o provedor nas IDEs."
+            else
+                configure_mimo_official_clients >>"$log" 2>&1 || true
+                summary="MiMo oficial está configurado e pronto no OpenCode."
+            fi
+            jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
+                --argjson dryRun "$([ "$dry" = 1 ] && echo true || echo false)" \
+                --argjson steps "$(cat "$steps_file")" \
+                '{schemaVersion:1,id:$id,name:$name,ok:true,ready:true,completed:true,resumable:false,
+                  status:"ready",summary:$summary,next:"Abra o MiMo pelo botão Usar.",needsUser:"none",
+                  dryRun:$dryRun,installed:true,steps:$steps}'
+        else
+            _ensure_steps_add "$steps_file" credentials missing "chave da API oficial"
+            _ensure_steps_add "$steps_file" start deferred "aguarda chave oficial"
+            [ "$dry" = 1 ] || open_mimo_studio >/dev/null 2>&1 || true
+            jq -nc --arg id "$id" --arg name "$name" \
+                --argjson dryRun "$([ "$dry" = 1 ] && echo true || echo false)" \
+                --argjson steps "$(cat "$steps_file")" \
+                '{schemaVersion:1,id:$id,name:$name,ok:false,ready:false,completed:false,resumable:true,
+                  status:"needs-credentials",summary:"Falta a chave oficial da API Xiaomi MiMo.",
+                  next:"Abra API Service, crie uma chave e cole-a na Central. Nenhum cookie do navegador é necessário.",
+                  nextAction:"linux/pz ai proxies ensure mimo-ai-proxy",needsUser:"api-key",
+                  dryRun:$dryRun,installed:false,steps:$steps}'
+        fi
+        rm -f "$steps_file"
+        return 0
+    fi
 
     if proxy_is_installed "$id"; then
         if [ "$id" != 9router ] && ! provenance_ready "$id"; then
@@ -1676,41 +1790,6 @@ ensure_one() {
                 fi
             fi
         fi
-    elif [ "$id" = "mimo-ai-proxy" ]; then
-        local missing_json
-        missing_json="$(mimo_missing_groups_json "$PROXY_ENV_DIR/$id.env")"
-        if [ "$(jq 'length' <<< "$missing_json")" -eq 0 ]; then
-            if [ "$service" = active ]; then
-                _ensure_steps_add "$steps_file" start skipped "já rodando"
-            elif [ "$dry" = 1 ]; then
-                _ensure_steps_add "$steps_file" start would-run
-            elif start_proxy_service "$id" >>"$log" 2>&1; then
-                _ensure_steps_add "$steps_file" start ok
-            else
-                _ensure_steps_add "$steps_file" start failed "veja $log"
-                ok=false
-                status=error
-            fi
-            _ensure_steps_add "$steps_file" credentials skipped "configuradas"
-            if [ "$ok" = true ]; then
-                summary="$name já está pronto para usar."
-            else
-                summary="As credenciais do $name existem, mas o serviço não iniciou."
-                next="Tente de novo. Detalhes técnicos ficam no modo avançado."
-            fi
-        else
-            needs_user="env-credentials"
-            status="needs-credentials"
-            _ensure_steps_add "$steps_file" start deferred "aguarda credenciais"
-            _ensure_steps_add "$steps_file" credentials missing
-            if [ "$dry" != 1 ]; then
-                if command -v xdg-open >/dev/null 2>&1; then
-                    xdg-open "$MIMO_STUDIO_URL" >/dev/null 2>&1 || true
-                fi
-            fi
-            summary="Xiaomi AI Studio abre para gerar o token do Mimo."
-            next="Entre na conta, envie uma mensagem no chat, copie token + user id + PH (F12 → Rede → bot/chat) e cole na Central."
-        fi
     else
         if [ "$kind" != node ] && [ "$kind" != go ] && [ "$kind" != npm ]; then
             _ensure_steps_add "$steps_file" start skipped "sem serviço local"
@@ -1740,13 +1819,26 @@ ensure_one() {
         [ -n "$summary" ] || summary="Vai preparar $name."
     fi
 
-    local dry_json=false
+    local dry_json=false result_ok="$ok" ready=false completed=false resumable=false
     [ "$dry" = 1 ] && dry_json=true
+    case "$status" in
+        ready) ready=true; completed=true ;;
+        planned) result_ok=true ;;
+        needs-login|needs-credentials|gui-required)
+            result_ok=false
+            resumable=true
+            ;;
+        error|blocked) result_ok=false ;;
+    esac
     jq -nc --arg id "$id" --arg name "$name" --arg status "$status" \
         --arg summary "$summary" --arg next "$next" --arg needsUser "$needs_user" \
-        --arg log "$log" --argjson ok "$ok" --argjson dryRun "$dry_json" \
+        --arg log "$log" --argjson ok "$result_ok" --argjson ready "$ready" \
+        --argjson completed "$completed" --argjson resumable "$resumable" --argjson dryRun "$dry_json" \
         --argjson installed "$installed" --argjson steps "$(cat "$steps_file")" \
-        '{schemaVersion:1,id:$id,name:$name,ok:$ok,status:$status,summary:$summary,next:$next,needsUser:$needsUser,dryRun:$dryRun,installed:$installed,log:$log,steps:$steps}'
+        '{schemaVersion:1,id:$id,name:$name,ok:$ok,ready:$ready,completed:$completed,resumable:$resumable,
+          status:$status,summary:$summary,next:$next,needsUser:$needsUser,
+          nextAction:(if $resumable then ("linux/pz ai proxies ensure " + $id) else null end),
+          dryRun:$dryRun,installed:$installed,log:$log,steps:$steps}'
     rm -f "$steps_file"
     [ "$ok" = true ]
 }
@@ -1768,7 +1860,7 @@ ensure_selected() {
         printf '%s\n' "$item" | jq -e . >/dev/null 2>&1 || item="$(jq -nc --arg id "$id" '{schemaVersion:1,id:$id,ok:false,status:"error",summary:"Falha inesperada ao preparar o proxy.",needsUser:"none",dryRun:false,steps:[]}')"
         jq --argjson item "$item" '. + [$item]' "$results_file" > "$results_file.tmp"
         mv "$results_file.tmp" "$results_file"
-        jq -e '.ok == true' <<< "$item" >/dev/null || ok=false
+        jq -e '.status != "error" and .status != "blocked"' <<< "$item" >/dev/null || ok=false
     done
     if [ "$dry" != 1 ] && [ "$ok" = true ]; then
         if configure_ides >>"$ide_log" 2>&1; then
@@ -1808,10 +1900,16 @@ ensure_selected() {
         else
             summary="Os quatro proxies estão prontos para usar."
         fi
-        jq -nc --argjson ok "$ok" --argjson dryRun "$dry_json" --arg status "$envelope_status" \
+        local result_ok="$ok" ready=false completed=false resumable=false
+        if [ "$envelope_status" = ready ]; then ready=true; completed=true; fi
+        case "$envelope_status" in needs-login|needs-credentials|gui-required) result_ok=false; resumable=true ;; esac
+        jq -nc --argjson ok "$result_ok" --argjson ready "$ready" --argjson completed "$completed" \
+            --argjson resumable "$resumable" --argjson dryRun "$dry_json" --arg status "$envelope_status" \
             --arg summary "$summary" --arg next "$next" --argjson proxies "$(cat "$results_file")" \
             --arg ideStatus "$ide_status" --arg ideLog "$ide_log" --argjson ideOk "$ide_ok" \
-            '{schemaVersion:1,ok:$ok,status:$status,summary:$summary,next:$next,dryRun:$dryRun,proxies:$proxies,
+            '{schemaVersion:1,ok:$ok,ready:$ready,completed:$completed,resumable:$resumable,
+              status:$status,summary:$summary,next:$next,
+              nextAction:(if $resumable then "linux/pz ai proxies ensure all" else null end),dryRun:$dryRun,proxies:$proxies,
               ide:{ok:$ideOk,status:$ideStatus,log:$ideLog}}'
     else
         jq --arg ideStatus "$ide_status" --arg ideLog "$ide_log" --argjson ideOk "$ide_ok" '
@@ -1829,44 +1927,64 @@ ensure_selected() {
 
 open_mimo_studio() {
     command -v xdg-open >/dev/null 2>&1 || { pz_error "xdg-open missing"; return 1; }
-    xdg-open "$MIMO_STUDIO_URL" >/dev/null 2>&1 &
-    jq -nc --arg url "$MIMO_STUDIO_URL" \
-        '{schemaVersion:1,ok:true,status:"needs-credentials",summary:"Xiaomi AI Studio aberto no navegador.",next:"Entre na conta, envie uma mensagem no Mimo e copie token, user id e PH (F12 → Rede → bot/chat).",studioUrl:$url,needsUser:"env-credentials"}'
+    xdg-open "$MIMO_PLATFORM_URL" >/dev/null 2>&1 &
+    jq -nc --arg url "$MIMO_PLATFORM_URL" \
+        '{schemaVersion:1,ok:false,ready:false,completed:false,resumable:true,status:"needs-credentials",summary:"Portal oficial Xiaomi MiMo aberto.",next:"Abra API Service, crie uma chave e cole-a na Central. Não use DevTools, cookies ou tokens de sessão.",studioUrl:$url,needsUser:"api-key"}'
 }
 
 set_proxy_credentials() {
-    local id="${TARGET:-mimo-ai-proxy}" payload file token user ph
+    local id="${TARGET:-mimo-ai-proxy}" payload api_key base_url model host http_code tmp
     [ "$id" = "mimo-ai-proxy" ] || [ "$id" = mimo ] || { pz_error "set-credentials only supports mimo-ai-proxy"; return 2; }
     id=mimo-ai-proxy
-    if ! provenance_ready "$id"; then
-        jq -nc '{schemaVersion:1,ok:false,status:"blocked",summary:"Mimo foi bloqueado: a instalação não corresponde ao snapshot aprovado.",next:"Abra Procedência dos proxies antes de salvar ou usar credenciais.",needsUser:"review-provenance"}'
-        return 69
-    fi
     payload="$(cat)"
     printf '%s' "$payload" | jq -e 'type=="object"' >/dev/null 2>&1 || {
-        jq -nc '{schemaVersion:1,ok:false,status:"error",summary:"Credenciais inválidas.",needsUser:"env-credentials"}'
+        jq -nc '{schemaVersion:1,ok:false,status:"error",summary:"Configuração inválida.",needsUser:"api-key"}'
         return 2
     }
-    token="$(jq -r '.serviceToken // .SERVICE_TOKEN // empty' <<< "$payload")"
-    user="$(jq -r '.userId // .USER_ID // empty' <<< "$payload")"
-    ph="$(jq -r '.chatbotPh // .XIAOMI_CHATBOT_PH // empty' <<< "$payload")"
-    if [ -z "$token" ] || [ -z "$user" ] || [ -z "$ph" ]; then
-        jq -nc '{schemaVersion:1,ok:false,status:"needs-credentials",summary:"Faltam os três valores: token, user id e PH.",next:"Cole os três campos e salve de novo.",needsUser:"env-credentials"}'
+    api_key="$(jq -r '.apiKey // empty' <<< "$payload")"
+    base_url="$(jq -r '.baseUrl // "https://api.xiaomimimo.com/v1"' <<< "$payload")"
+    model="$(jq -r '.model // "mimo-v2.5-pro"' <<< "$payload")"
+    if [ "${#api_key}" -lt 12 ] || [[ "$api_key" =~ [[:space:]] ]]; then
+        jq -nc '{schemaVersion:1,ok:false,status:"needs-credentials",summary:"Chave da API ausente ou inválida.",next:"Cole a chave completa criada em API Service.",needsUser:"api-key"}'
         return 2
     fi
-    file="$PROXY_ENV_DIR/$id.env"
-    install -d -m 700 "$PROXY_ENV_DIR"
-    upsert_env_var "$file" SERVICE_TOKEN "$token"
-    upsert_env_var "$file" USER_ID "$user"
-    upsert_env_var "$file" XIAOMI_CHATBOT_PH "$ph"
-    chmod 600 "$file"
-    if ! start_proxy_service "$id" >/dev/null 2>&1 || ! wait_proxy_chat "$id" 8; then
-        jq -nc --arg summary "Conta Mimo salva, mas o serviço não iniciou." \
-            '{schemaVersion:1,ok:false,status:"error",summary:$summary,next:"Tente novamente; no modo avançado, revise o serviço phasezero-mimo-ai-proxy.",needsUser:"none"}'
+    host="$(sed -E 's#^https://([^/]+).*$#\1#' <<< "$base_url")"
+    case "$host" in
+        api.xiaomimimo.com|token-plan-cn.xiaomimimo.com|token-plan-sgp.xiaomimimo.com|token-plan-ams.xiaomimimo.com) ;;
+        *) jq -nc '{schemaVersion:1,ok:false,status:"blocked",summary:"Endpoint MiMo não aprovado.",next:"Use o endpoint oficial mostrado pela Xiaomi.",needsUser:"api-key"}'; return 2 ;;
+    esac
+    [[ "$model" =~ ^[A-Za-z0-9._-]+$ ]] || {
+        jq -nc '{schemaVersion:1,ok:false,status:"error",summary:"Nome de modelo inválido.",needsUser:"api-key"}'
+        return 2
+    }
+    http_code="$(curl -sS -m 15 -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer $api_key" "$base_url/models" 2>/dev/null || true)"
+    if [ "$http_code" = 401 ] || [ "$http_code" = 403 ]; then
+        jq -nc '{schemaVersion:1,ok:false,status:"needs-credentials",summary:"A Xiaomi recusou esta chave.",next:"Revogue a chave inválida, crie outra em API Service e tente novamente.",needsUser:"api-key"}'
+        return 2
+    fi
+    if [ "$http_code" != 200 ]; then
+        jq -nc --arg code "${http_code:-000}" \
+            '{schemaVersion:1,ok:false,status:"error",summary:"Não foi possível validar a API oficial do MiMo.",
+              next:"Verifique internet, endpoint e plano da conta; tente novamente.",validation:{httpCode:$code},needsUser:"api-key"}'
         return 1
     fi
-    jq -nc --arg summary "Conta Mimo salva e serviço validado." \
-        '{schemaVersion:1,ok:true,status:"configured",summary:$summary,next:"O OpenCode abrirá automaticamente com o Mimo.",needsUser:"none"}'
+    install -d -m 700 "$MIMO_PROVIDER_DIR"
+    printf '%s\n' "$api_key" > "$MIMO_PROVIDER_KEY"
+    chmod 600 "$MIMO_PROVIDER_KEY"
+    tmp="$(mktemp)"
+    jq -n --arg baseUrl "$base_url" --arg model "$model" --arg checkedAt "$(date -Iseconds)" \
+        --arg httpCode "${http_code:-000}" \
+        '{schemaVersion:1,source:"xiaomi-official",protocol:"openai-compatible",baseUrl:$baseUrl,
+          model:$model,keyFile:"api-key",validation:{checkedAt:$checkedAt,httpCode:$httpCode}}' > "$tmp"
+    mv "$tmp" "$MIMO_PROVIDER_CONFIG"
+    chmod 600 "$MIMO_PROVIDER_CONFIG"
+    configure_mimo_official_clients
+    jq -nc --arg code "${http_code:-000}" \
+        '{schemaVersion:1,ok:true,ready:true,completed:true,resumable:false,status:"configured",
+          summary:"MiMo oficial configurado sem copiar cookies do navegador.",
+          next:"Abra o OpenCode com MiMo. A chave permanece em arquivo protegido e não aparece na configuração.",
+          validation:{httpCode:$code},needsUser:"none"}'
 }
 
 open_opencode_proxy() {
@@ -1879,15 +1997,31 @@ open_opencode_proxy() {
     model="$(cut -d'|' -f5 <<< "$row")"
     name="$(proxy_display_name "$id")"
     spec="$provider/$model"
-    if ! start_proxy_service "$id" >/dev/null 2>&1; then
+    if [ "$id" = "mimo-ai-proxy" ] && mimo_official_configured; then
+        local mimo_values
+        mimo_values="$(mimo_official_provider_values)"
+        model="${mimo_values#*$'\t'}"
+        provider="phasezero-mimo-official"
+        spec="$provider/$model"
+        configure_mimo_official_clients
+    elif [ "$id" = "mimo-ai-proxy" ]; then
+        open_mimo_studio
+        return 0
+    fi
+    if [ "$id" != "mimo-ai-proxy" ] && ! start_proxy_service "$id" >/dev/null 2>&1; then
         jq -nc --arg name "$name" \
             '{schemaVersion:1,ok:false,status:"error",summary:("O serviço do " + $name + " não iniciou."),next:"Tente Usar novamente; detalhes técnicos ficam no modo avançado."}'
         return 1
     fi
-    if ! wait_proxy_chat "$id" 5; then
+    if [ "$id" != "mimo-ai-proxy" ] && ! wait_proxy_chat "$id" 5; then
+        if is_login_capable_proxy "$id"; then
+            record_login_needs_login "$id"
+            login_proxy "$id"
+            return $?
+        fi
         jq -nc --arg name "$name" \
-            '{schemaVersion:1,ok:false,status:"needs-login",summary:("O serviço do " + $name + " iniciou, mas a conta não respondeu."),next:"Clique em Usar para renovar o login antes de abrir o OpenCode."}'
-        return 1
+            '{schemaVersion:1,ok:false,ready:false,completed:false,resumable:true,status:"needs-login",summary:("O serviço do " + $name + " iniciou, mas a conta não respondeu."),next:"Renove a autenticação e tente novamente.",needsUser:"browser-login"}'
+        return 0
     fi
     if ! command -v opencode >/dev/null 2>&1; then
         jq -nc --arg summary "OpenCode CLI não está no PATH." --arg spec "$spec" \

@@ -42,6 +42,9 @@ class ActionSpec:
     # of argv. Secrets must never reach a command line: argv is world-readable
     # through /proc and lands in the runner's own echoed command display.
     stdin_parameter: str = ""
+    # Restore previews need the passphrase to verify/decrypt the bundle before
+    # any mutation. The value still travels only through stdin.
+    stdin_on_preview: bool = False
 
     def resolved_args(
         self,
@@ -125,7 +128,11 @@ class OperationResult:
 
     @property
     def ok(self) -> bool:
-        return self.exit_code == 0
+        if self.exit_code != 0:
+            return False
+        if isinstance(self.parsed, dict) and self.parsed.get("ok") is False:
+            return False
+        return True
 
     @property
     def severity(self) -> str:

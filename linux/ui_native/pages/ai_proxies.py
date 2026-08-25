@@ -20,7 +20,7 @@ from .base import BasePage
 
 _DETAILED_KEY = "proxies.detailed-status"
 _POLL_MS = 5_000
-_MIMO_STUDIO = "https://aistudio.xiaomimimo.com"
+_MIMO_PLATFORM = "https://platform.xiaomimimo.com"
 
 ENSURE_ACTIONS: dict[str, str] = {
     "kimiproxy": "ai.proxies-ensure-kimi",
@@ -98,11 +98,15 @@ def _friendly_proxy_copy(state: ProxyState) -> tuple[str, str, str]:
             return "Pronto", "Sessão válida. Pode usar nas IDEs.", "success"
         return "Parado", "Sessão válida. Clique em Usar para ligar de novo.", "info"
     if state.auth_status == "configured":
+        if state.id == "mimo-ai-proxy" and state.auth_kind == "official-api-key":
+            return "Pronto", "API oficial configurada. Nenhum serviço local é necessário.", "success"
         if state.running:
             return "Pronto", "Credenciais configuradas.", "success"
         return "Parado", "Clique em Usar para ligar.", "info"
     if state.auth_status == "missing-credentials":
-        return "Falta token da conta", "Abre o Xiaomi AI Studio. Depois cole token, user id e PH aqui.", "warning"
+        if state.id == "mimo-ai-proxy":
+            return "Falta chave da API", "Abra API Service na Xiaomi e cole uma chave oficial.", "warning"
+        return "Falta credencial", "Abra o provedor e conclua a configuração.", "warning"
     if state.auth_status == "gui-required":
         return "Precisa do desktop", "Abra a Central no Linux gráfico para o login.", "error"
     if state.auth_status in _LOGIN_PENDING or state.auth_status == "session-present":
@@ -115,7 +119,7 @@ def _friendly_proxy_copy(state: ProxyState) -> tuple[str, str, str]:
 
 
 class MimoTokenDialog(QDialog):
-    """Paste Xiaomi AI Studio session values without echoing them later."""
+    """Configure Xiaomi's supported API without browser-session extraction."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -124,34 +128,28 @@ class MimoTokenDialog(QDialog):
         layout = QVBoxLayout(self)
         guide = QTextEdit()
         guide.setReadOnly(True)
-        guide.setMaximumHeight(180)
+        guide.setMaximumHeight(150)
         guide.setPlainText(
-            "1. Clique em Abrir Xiaomi AI Studio e entre na conta Xiaomi.\n"
-            "2. Abra o chat Mimo e envie qualquer mensagem (por exemplo: oi).\n"
-            "3. Pressione F12 → aba Rede.\n"
-            "4. Clique no pedido que contém bot/chat.\n"
-            "5. Copie e cole abaixo:\n"
-            "   • Token de serviço — cabeçalho Authorization, sem a palavra Bearer\n"
-            "   • ID de usuário — campo user id do pedido\n"
-            "   • PH do chatbot — cookie ou parâmetro xiaomichatbot_ph"
+            "1. Clique em Abrir API Service e entre na conta Xiaomi.\n"
+            "2. Crie uma chave de API no portal oficial.\n"
+            "3. Cole a chave abaixo e salve.\n\n"
+            "A chave fica em arquivo protegido. Não copie cookies, cabeçalhos do "
+            "DevTools, user id ou tokens de sessão."
         )
         layout.addWidget(guide)
-        open_btn = QPushButton("Abrir Xiaomi AI Studio")
+        open_btn = QPushButton("Abrir API Service")
         open_btn.setObjectName("primaryButton")
-        open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(_MIMO_STUDIO)))
+        open_btn.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(_MIMO_PLATFORM)))
         layout.addWidget(open_btn)
-        self.token = QLineEdit()
-        self.token.setEchoMode(QLineEdit.Password)
-        self.token.setPlaceholderText("Token de serviço")
-        self.user = QLineEdit()
-        self.user.setPlaceholderText("ID de usuário")
-        self.ph = QLineEdit()
-        self.ph.setEchoMode(QLineEdit.Password)
-        self.ph.setPlaceholderText("PH do chatbot")
+        self.api_key = QLineEdit()
+        self.api_key.setEchoMode(QLineEdit.Password)
+        self.api_key.setPlaceholderText("sk-… ou tp-…")
+        self.base_url = QLineEdit("https://api.xiaomimimo.com/v1")
+        self.model = QLineEdit("mimo-v2.5-pro")
         for field, label in (
-            (self.token, "Token de serviço"),
-            (self.user, "ID de usuário"),
-            (self.ph, "PH do chatbot"),
+            (self.api_key, "Chave da API"),
+            (self.base_url, "Endpoint oficial"),
+            (self.model, "Modelo"),
         ):
             layout.addWidget(QLabel(label))
             field.setAccessibleName(label)
@@ -163,9 +161,9 @@ class MimoTokenDialog(QDialog):
 
     def payload(self) -> dict[str, str]:
         return {
-            "serviceToken": self.token.text().strip(),
-            "userId": self.user.text().strip(),
-            "chatbotPh": self.ph.text().strip(),
+            "apiKey": self.api_key.text().strip(),
+            "baseUrl": self.base_url.text().strip(),
+            "model": self.model.text().strip(),
         }
 
 
@@ -542,7 +540,6 @@ class AiProxiesPage(BasePage):
         self.run_action(ENSURE_ACTIONS.get(proxy_id, ""))
 
     def _connect_mimo(self) -> None:
-        QDesktopServices.openUrl(QUrl(_MIMO_STUDIO))
         dialog = MimoTokenDialog(self)
         if dialog.exec() != QDialog.Accepted:
             return

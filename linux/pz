@@ -203,6 +203,10 @@ Usage:
   pz ai proxies login <id>     Open headed browser login for kimi/qwen/deeps
   pz ai proxies ensure [id]    One-click install + start + login (JSON summary)
   pz ai proxies test [id]      Honest target/all probe: /v1/models + chat (JSON)
+  pz ai backup plan            Inventário sem segredos do pacote portátil
+  pz ai backup create          Exporta ai-memory e acessos em pacote AES-256
+  pz ai backup verify          Valida senha, paths e SHA-256 sem restaurar
+  pz ai backup restore --plan  Prévia obrigatória da restauração e rollback
   pz ai 9router status         Managed smart router health, providers and combos
   pz ai 9router install        Install 9Router, loopback service and watchdog
   pz ai 9router dashboard      Open local 9Router dashboard
@@ -584,6 +588,10 @@ cmd_ai() {
         proxies|proxy|ai-proxy-suite)
             shift
             bash "$PZ_ROOT/linux/ai/proxy-suite.sh" "${@:-status}"
+            ;;
+        backup|portability|export)
+            shift
+            bash "$PZ_ROOT/linux/ai/backup-manager.sh" "${@:-plan}"
             ;;
         9router|router9|smart-router)
             shift
