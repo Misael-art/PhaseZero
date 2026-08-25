@@ -307,7 +307,12 @@ class HomelabPage(BasePage):
         try:
             payload: dict = json.loads(raw.decode("utf-8", "replace"))
         except Exception:
-            QMessageBox.warning(self, "Política", "policy broker indisponível")
+            QMessageBox.warning(
+                self, "Política",
+                "Policy broker indisponível agora.\n\n"
+                "Tente novamente; se persistir, execute:\n"
+                "linux/pz server ai-policy status",
+            )
             return
         denied = ", ".join(payload.get("deniedActions", []) or []) or "nenhuma"
         QMessageBox.information(

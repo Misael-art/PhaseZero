@@ -1291,6 +1291,22 @@ def _print_json(obj) -> None:
 
 
 def cmd_status(args) -> int:
+    try:
+        return _cmd_status_impl(args)
+    except RedactionError as exc:
+        # 9Router ausente/sem chave é estado acionável, não falha de leitura.
+        _print_json({
+            "schemaVersion": SCHEMA_VERSION,
+            "state": "needs-config",
+            "summary": "9Router ainda não foi configurado.",
+            "detail": str(exc),
+            "nextAction": "linux/pz ai routing inventory",
+            "secretsRedacted": True,
+        })
+        return 0
+
+
+def _cmd_status_impl(args) -> int:
     cached = args.cached
     client = R9Client()
     if cached:

@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..widgets import SectionHeader, SwitchControl, themed_icon
+from ..result_parser import guidance
 from .base import BasePage
 
 
@@ -100,7 +101,7 @@ class FriendlyServicePage(BasePage):
         layout.setSpacing(10)
         layout.addWidget(SectionHeader("Resumo", "Informações essenciais"))
         self.fact_labels: list[QLabel] = []
-        for _ in range(3):
+        for _ in range(4):
             label = QLabel("—")
             label.setObjectName("settingValue")
             label.setWordWrap(True)
@@ -408,12 +409,23 @@ class ServerPage(FriendlyServicePage):
         configured = bool(payload.get("configured") or payload.get("profile") or apps)
         running = bool(payload.get("active") or payload.get("ready") or running_count)
         degraded = bool(payload.get("degraded"))
+        guide = guidance(payload)
+        if not configured and guide["next_action"]:
+            # Envelope v1.17.2: diagnóstico honesto com próximo passo embutido.
+            self.state_detail.setText(guide["summary"] or "Servidor ainda não preparado.")
+            self.fact_labels[3].setText(f"Próximo passo: {guide['next_action']}")
         self._set_service_state(
             running, configured,
             f"{running_count} serviço(s) rodando" if running else "Serviços desligados; dados preservados" if configured else "Escolha um perfil e prepare o servidor",
         )
         if degraded:
+            reasons = guide["reasons"]
+            detail = "; ".join(reasons[:2]) if reasons else (guide["summary"] or "")
             self.state_label.setText("● Atenção necessária")
+            if detail:
+                self.state_detail.setText(detail)
+            if guide["next_action"]:
+                self.fact_labels[3].setText(f"Próximo passo: {guide['next_action']}")
             self._set_state("warning")
         access = payload.get("accessMode") if isinstance(payload.get("accessMode"), dict) else {}
         backup = payload.get("backupState") if isinstance(payload.get("backupState"), dict) else {}

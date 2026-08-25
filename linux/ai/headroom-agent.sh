@@ -25,7 +25,12 @@ run_headroom() {
 }
 
 status() {
-    run_headroom --version || return 1
+    if ! run_headroom --version >/dev/null 2>&1; then
+        # Not installed is a state the operator can act on, not a tool failure.
+        printf '%s\n' '{"tool":"headroom-agent","state":"not-installed","summary":"Headroom nao esta instalado.","nextAction":"linux/pz ai setup headroom"}'
+        return 0
+    fi
+    run_headroom --version
     for name in claude codex aider cursor copilot gemini openclaw opencode n8n; do
         local path=""
         path="$(resolve_cmd "$name" || true)"

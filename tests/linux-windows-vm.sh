@@ -106,6 +106,13 @@ bash -n "$REPO_ROOT/linux/windows-vm/windows-vm.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm-boot-prepare.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/windows-vm-session.sh"
 bash -n "$REPO_ROOT/linux/windows-vm/guest-login.sh"
+# QGA ausente (sem VM) é relatório válido rc0 com envelope acionável — WBR
+# "nenhum beco sem saída". Nunca pode virar erro seco na Central.
+gl_status="$("$REPO_ROOT/linux/pz" windows-vm guest-login status --json 2>/dev/null)"; gl_rc=$?
+[ "$gl_rc" -eq 0 ] || { echo "FAIL: guest-login status deve sair 0 com relatório (rc=$gl_rc)" >&2; exit 1; }
+jq -e '.qgaAvailable == false and .state == "needs-vm-running" and (.nextAction | type == "string")' \
+    <<< "$gl_status" >/dev/null || { echo "FAIL: envelope qga-unavailable acionável ausente" >&2; echo "$gl_status"; exit 1; }
+echo "  guest-login qga-unavailable envelope ok"
 jq empty "$REPO_ROOT/profiles/windows-vm-linux.json"
 weights=$(grep -oP 'CP_WEIGHTS=\(\K[^)]+' "$REPO_ROOT/linux/windows-vm/provision.sh")
 sum=0; for w in $weights; do sum=$((sum + w)); done
