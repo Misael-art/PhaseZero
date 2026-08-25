@@ -967,7 +967,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                     _p("passphrase", "Senha do pacote", "secret"),
                 ),
                 stdin_parameter="passphrase", stdin_on_preview=True,
-                badge="Reversível", risk="high", visibility="primary",
+                badge="Reversível", risk="high", visibility="advanced",
             ),
             _a("ai.mcp.status", "IA & Dev", "Status MCP", "Audita servidores MCP.", ("ai", "mcp", "status"), "network-server", visibility="advanced"),
             _a("ai.mcp.list", "IA & Dev", "Listar MCPs", "Lista servidores instalados.", ("ai", "mcp", "list"), "view-list-details", visibility="advanced"),
