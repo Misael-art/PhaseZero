@@ -6,6 +6,13 @@ on:
       - '**'
   pull_request:
 
+# Push e pull_request do mesmo SHA disparam duas rodadas completas em
+# paralelo; sem grupo, as rodadas brigam por concorrência e jobs saem como
+# "canceled" no meio da varredura (shell-lint levava ~6 min e morria aos 4).
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
