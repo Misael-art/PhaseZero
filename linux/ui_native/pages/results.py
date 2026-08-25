@@ -7,8 +7,8 @@ import zipfile
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QApplication
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog, QFrame, QHBoxLayout, QHeaderView,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
