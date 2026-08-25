@@ -123,7 +123,8 @@ PZ_DRY_RUN=1 "$REPO_ROOT/linux/ai/setup-opencode.sh" install-hook >/dev/null
 PZ_DRY_RUN=1 PZ_OLLAMA_URL="http://127.0.0.1:1" "$REPO_ROOT/linux/ai/setup-opencode.sh" local-model >/dev/null
 "$REPO_ROOT/linux/pz" ai opencode version-status | jq -e '.tool == "opencode-version"' >/dev/null
 
-"$REPO_ROOT/linux/ai/setup-memory.sh" dry-run | jq -e '.tool == "ai-memory"' >/dev/null
+"$REPO_ROOT/linux/ai/setup-memory.sh" dry-run \
+    | jq -e '.tool == "ai-memory" and .version == "1.31.1" and (.sha256 | length) == 64 and (.planned | index("install verified native release") != null)' >/dev/null
 "$REPO_ROOT/linux/ai/setup-usagebar.sh" dry-run | jq -e '.tool == "ai-usagebar"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-hermes.sh" dry-run | jq -e '.tool == "hermes"' >/dev/null
 "$REPO_ROOT/linux/ai/setup-openclaw.sh" dry-run | jq -e '.tool == "openclaw"' >/dev/null

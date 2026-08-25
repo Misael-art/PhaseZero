@@ -3217,7 +3217,7 @@
     },
     {
       "name": "ai.proxies-open-studio-mimo",
-      "label": "Abrir Xiaomi AI Studio",
+      "label": "Abrir API Service Xiaomi",
       "command": "linux/pz ai proxies open-studio",
       "mutable": false,
       "require_plan": false,
@@ -3474,7 +3474,7 @@
     },
     {
       "name": "ai.proxies-credentials-mimo",
-      "label": "Colar credenciais Mimo",
+      "label": "Salvar chave oficial MiMo",
       "command": "linux/pz ai proxies set-credentials mimo-ai-proxy",
       "mutable": true,
       "require_plan": true,
@@ -4447,6 +4447,41 @@
       "input_kind": "",
       "input_label": "",
       "plan_command": "linux/pz ai status"
+    },
+    {
+      "name": "ai.backup.export",
+      "label": "Exportar memória e acessos",
+      "command": "linux/pz ai backup create --include-credentials --passphrase-stdin",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz ai backup plan --include-credentials"
+    },
+    {
+      "name": "ai.backup.verify",
+      "label": "Verificar backup de IA",
+      "command": "linux/pz ai backup verify --bundle {bundle} --passphrase-stdin",
+      "mutable": false,
+      "require_plan": false,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
+      "name": "ai.backup.restore",
+      "label": "Restaurar memória e acessos",
+      "command": "linux/pz ai backup restore --bundle {bundle} --passphrase-stdin --confirm RESTORE",
+      "mutable": true,
+      "require_plan": true,
+      "module": "IA & Dev",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz ai backup restore --plan --bundle {bundle} --passphrase-stdin"
     },
     {
       "name": "ai.mcp.status",

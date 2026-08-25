@@ -44,9 +44,9 @@ jq -e '
 jq -e '
   .[] | select(.id == "mimo-ai-proxy") |
   .webValidation.required == true and
-  .webValidation.kind == "env-session" and
+  .webValidation.kind == "official-api-key" and
   .webValidation.status == "missing-credentials" and
-  (.webValidation.missing | length == 3)
+  .webValidation.missing == ["api-key"]
 ' <<< "$auth" >/dev/null
 if grep -Eq 'SERVICE_TOKEN|USER_ID|XIAOMI_CHATBOT_PH|API_KEY|phasezero-qwen' <<< "$auth"; then
     echo "FAIL: credentials leaked into proxies auth output"
@@ -88,18 +88,30 @@ grep -q 'login_window_kind' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'set_proxy_credentials' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'open_opencode_proxy' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'qwenproxy.db' "$ROOT/linux/ai/proxy-suite.sh"
-# set-credentials must persist via upsert and never echo the payload keys' values in jq.
-grep -q "upsert_env_var \"\\\$file\" SERVICE_TOKEN" "$ROOT/linux/ai/proxy-suite.sh"
-grep -q 'jq -r .serviceToken' "$ROOT/linux/ai/proxy-suite.sh" || grep -q 'serviceToken' "$ROOT/linux/ai/proxy-suite.sh"
+# MiMo normal flow must use the official API and reject session scraping instructions.
+grep -q 'phasezero-mimo-official' "$ROOT/linux/ai/proxy-suite.sh"
+grep -q 'MIMO_PROVIDER_KEY' "$ROOT/linux/ai/proxy-suite.sh"
+if grep -q 'F12.*Rede.*bot/chat' "$ROOT/linux/ai/proxy-suite.sh"; then
+    echo "FAIL: MiMo journey still instructs DevTools session extraction"
+    exit 1
+fi
 # Regression: `[ id = qwenproxy ] && pz_info` as last command made kimi/deeps login exit 1.
 if grep -n "\\[ \"\\\$id\" = qwenproxy \\] && pz_info" "$ROOT/linux/ai/proxy-suite.sh"; then
     echo "FAIL: login_proxy still ends with a failing && for non-qwen ids"
     exit 1
 fi
+# Kimi/DeepSeek must execute the pinned local tsx runtime directly. `npm run
+# login` re-entered npx and stalled before the script's first log line.
+# Patterns match literal $ in the proxy source; no expansion is intended.
+# shellcheck disable=SC2016
+grep -q '"\$NODE_BIN" "\$tsx" src/login.ts' "$ROOT/linux/ai/proxy-suite.sh"
+# shellcheck disable=SC2016
+grep -q 'session_artifact_present "\$id"' "$ROOT/linux/ai/proxy-suite.sh"
 # Remove deliberately incomplete auth-only fixture before provenance-gated ensure.
 rm -rf "$HOME/.local/share/phasezero/ai-proxies/deepsproxy"
 ensure="$("$ROOT/linux/pz" ai proxies ensure qwenproxy --dry-run)"
 jq -e '.schemaVersion == 1 and .dryRun == true and .id == "qwenproxy" and (.summary|length>0)' <<< "$ensure" >/dev/null
+jq -e '.ok == false and .ready == false and .completed == false and .resumable == true' <<< "$ensure" >/dev/null
 jq -e '.steps | map(.name) | index("install") != null and index("login") != null' <<< "$ensure" >/dev/null
 if grep -Eq 'API_KEY=|Bearer |SERVICE_TOKEN' <<< "$ensure"; then
     echo "FAIL: credentials leaked into proxies ensure output"
@@ -143,30 +155,27 @@ PZ_AI_PROXY_TRUSTED_SOURCES_FILE="$WORK/mimo-manifest.json" \
     "$ROOT/linux/pz" ai proxies provenance mimo-ai-proxy \
     | jq -e '.sources[0].ready == true and .sources[0].commitMatch == true' >/dev/null
 
-# A configured, valid proxy whose user service fails must never be reported ready.
-cat > "$WORK/bin/systemctl" <<'SH'
+# Official MiMo setup validates the API, protects the key, wires OpenCode by
+# file reference, and requires no local scraper service.
+cat > "$WORK/bin/curl" <<'SH'
 #!/usr/bin/env bash
-case "${1:-}" in
-  --user)
-    shift
-    [ "${1:-}" = is-active ] && { printf '%s\n' inactive; exit 3; }
-    [ "${1:-}" = reset-failed ] && exit 0
-    [ "${1:-}" = enable ] && exit 1
-    ;;
-esac
-exit 1
+printf '200'
 SH
-chmod +x "$WORK/bin/systemctl"
-printf '%s\n' 'SERVICE_TOKEN=test' 'USER_ID=test' 'XIAOMI_CHATBOT_PH=test' \
-    > "$HOME/.config/phasezero/ai-proxies/mimo-ai-proxy.env"
-set +e
-mimo_failed="$(PZ_AI_PROXY_TRUSTED_SOURCES_FILE="$WORK/mimo-manifest.json" PATH="$WORK/bin:$PATH" \
-    "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy 2>/dev/null)"
-mimo_rc=$?
-set -e
-[ "$mimo_rc" -ne 0 ]
-jq -e '.ok == false and .status == "error" and (.summary | test("não iniciou"))' \
-    <<< "$mimo_failed" >/dev/null
+chmod +x "$WORK/bin/curl"
+printf '%s\n' '{"apiKey":"sk-phasezero-test-key","baseUrl":"https://api.xiaomimimo.com/v1","model":"mimo-v2.5-pro"}' \
+  | PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies set-credentials mimo-ai-proxy \
+  | jq -e '.ok == true and .status == "configured"' >/dev/null
+[ "$(stat -c '%a' "$HOME/.config/phasezero/ai-providers/mimo/api-key")" = 600 ]
+[ "$(cat "$HOME/.config/phasezero/ai-providers/mimo/api-key")" = sk-phasezero-test-key ]
+jq -e '.provider."phasezero-mimo-official".options.apiKey | startswith("{file:")' \
+  "$HOME/.config/opencode/opencode.json" >/dev/null
+if grep -q 'sk-phasezero-test-key' "$HOME/.config/opencode/opencode.json"; then
+    echo "FAIL: OpenCode config embeds the MiMo secret instead of referencing the key file"
+    exit 1
+fi
+mimo_ready="$(PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy)"
+jq -e '.ok == true and .ready == true and (.steps[1].detail | contains("desnecessário"))' \
+    <<< "$mimo_ready" >/dev/null
 
 # A commit mismatch blocks runtime before systemctl can start anything.
 git -C "$HOME/.local/share/phasezero/ai-proxies/mimo-ai-proxy" config user.name PhaseZero

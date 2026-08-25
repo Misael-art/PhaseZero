@@ -543,7 +543,9 @@ fi
 if rg -q 'ai-memory:latest' "$REPO_ROOT/linux/ai/setup-memory.sh"; then
     echo "FAIL: ai-memory:latest found in setup-memory"; exit 1
 fi
-rg -q 'AI_MEMORY_DOCKER_TAG' "$REPO_ROOT/linux/ai/setup-memory.sh"
+rg -q 'AI_MEMORY_VERSION=.*1\.31\.1' "$REPO_ROOT/linux/ai/setup-memory.sh"
+rg -q 'AI_MEMORY_SHA256_X86_64=' "$REPO_ROOT/linux/ai/setup-memory.sh"
+rg -q 'install_native_release' "$REPO_ROOT/linux/ai/setup-memory.sh"
 echo "  adapters hardened ok"
 # status now carries a real policy
 PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/pz" server homelab status --json >/tmp/pol.json 2>&1 || true
