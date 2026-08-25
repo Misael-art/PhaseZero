@@ -336,6 +336,7 @@ class AiRoutingPage(BasePage):
     def _chain_apply(self) -> None:
         models = [self._chain_editor.item(i).text() for i in range(self._chain_editor.count())]
         if not models:
+            self._status_value.setText("Sem modelos na cadeia — adicione ao menos um antes de aplicar")
             return
         action = ActionSpec(
             id=f"routing.chain-apply.{self._chain_task}",
@@ -408,6 +409,9 @@ class AiRoutingPage(BasePage):
     def _rollback_clicked(self) -> None:
         manifest = self._manifest_input.text().strip()
         if not manifest:
+            self._status_value.setText(
+                "Informe o manifesto em operations/<id> para reverter"
+            )
             return
         action = self.by_id.get("ai.routing-rollback") if self.by_id else None
         if action is None:
@@ -477,7 +481,7 @@ class AiRoutingPage(BasePage):
 
     def _routing_status_failed(self, action_id: str, _message: str) -> None:
         if action_id == "ai.routing-status" and self._status_value:
-            self._status_value.setText("Indisponível")
+            self._status_value.setText("Indisponível — tente atualizar")
         for task, _label, aid in TASKS:
             if action_id == aid or action_id.startswith(f"routing.dynamic.{task}."):
                 card = self._task_cards.get(task)

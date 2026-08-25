@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QApplication
 from PySide6.QtWidgets import (
     QFileDialog, QFrame, QHBoxLayout, QHeaderView,
     QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem,
@@ -193,6 +194,11 @@ class ResultsPage(BasePage):
             self.table.setItem(i, 2, QTableWidgetItem(finished))
             self.table.item(i, 0).setData(Qt.UserRole, path_str)
         self.table.setSortingEnabled(True)
+        if not rows:
+            self.table.setRowCount(1)
+            placeholder = QTableWidgetItem("Nenhuma operação ainda — execute uma ação na página Início.")
+            placeholder.setFlags(Qt.ItemIsEnabled)
+            self.table.setItem(0, 0, placeholder)
 
     def _show_selected(self) -> None:
         if self.table is None or self.detail is None:
@@ -237,7 +243,11 @@ class ResultsPage(BasePage):
         folder = state_dir().parent
         folder.mkdir(parents=True, exist_ok=True)
         if not open_path(folder):
-            QMessageBox.warning(self, "Abrir pasta", f"Não foi possível abrir {folder}")
+            QApplication.clipboard().setText(str(folder))
+            QMessageBox.warning(
+                self, "Abrir pasta",
+                f"Não foi possível abrir {folder}\nO caminho foi copiado para a área de transferência.",
+            )
 
     def _export(self) -> None:
         source = state_dir().parent

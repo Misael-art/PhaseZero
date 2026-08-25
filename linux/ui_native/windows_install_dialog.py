@@ -171,7 +171,12 @@ class WindowsInstallDialog(QDialog):
             )
             return
         if self.edition_combo.currentIndex() < 0:
-            QMessageBox.warning(self, "Edições indisponíveis", "Os dez índices já foram usados.")
+            QMessageBox.warning(
+                self, "Edições indisponíveis",
+                "Os dez índices desta ISO já foram usados em instalações anteriores.\n\n"
+                "Opções: remova a VM anterior (Windows VM → Remover) para liberar o registro, "
+                "ou escolha outra ISO.",
+            )
             return
         self.accept()
 

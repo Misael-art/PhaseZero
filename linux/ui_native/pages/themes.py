@@ -83,6 +83,7 @@ class ThemesPage(BasePage):
         self._catalog_loaded = False
         self._history_loaded = False
         self.status_loader.status_ready.connect(self._on_status_ready)
+        self.status_loader.status_failed.connect(self._on_status_failed)
 
     # ------------------------------------------------------------------ build
 
@@ -340,6 +341,23 @@ class ThemesPage(BasePage):
             self._apply_catalog(parsed)
         elif action_id == "themes.history":
             self._apply_history(parsed)
+
+    def _on_status_failed(self, action_id: str, message: str) -> None:
+        # Sem handler, a página ficava presa em "Verificando…"/"Carregando…"
+        # para sempre na primeira falha de leitura.
+        if action_id == "themes.status":
+            self._set_hero("profile", "Indisponível agora")
+            for _fid, toggle, detail in self._controls:
+                detail.setText("Não foi possível verificar. Clique em Atualizar.")
+                with QtSignalBlockerGuard(toggle):
+                    toggle.set_pending(False)
+                    toggle.setEnabled(False)
+            if self.gamemode_label is not None:
+                self.gamemode_label.setText("Leitura falhou; nenhuma configuração foi alterada. Tente Atualizar.")
+        elif action_id == "themes.catalog":
+            self.catalog_hint.setText("Catálogo indisponível agora — clique em Atualizar para tentar de novo.")
+        elif action_id == "themes.history":
+            self.history_hint.setText("Histórico indisponível agora — clique em Atualizar para tentar de novo.")
 
     def _apply_status(self, parsed: object) -> None:
         if not isinstance(parsed, dict):

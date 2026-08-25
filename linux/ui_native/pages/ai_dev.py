@@ -337,7 +337,12 @@ class AiDevPage(BasePage):
         self.state_detail.setText("Não foi possível ler o host. Tente atualizar.")
         self._set_state("error")
         for label in getattr(self, "_status_labels", {}).values():
-            label.setText(f"Indisponível — {message}" if self._advanced_mode else "Indisponível")
+            # Falha de leitura não deve despejar rc cru no card; causa curta só
+            # no modo avançado.
+            if self._advanced_mode and message and not message.startswith("exit code"):
+                label.setText(f"Leitura falhou ({message[:80]})")
+            else:
+                label.setText("Indisponível — tente atualizar")
 
     def set_advanced_mode(self, enabled: bool) -> None:
         super().set_advanced_mode(enabled)

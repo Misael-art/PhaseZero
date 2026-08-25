@@ -435,7 +435,9 @@ class WindowsVmPage(BasePage):
         gpu_available = bool(host.get("qemu"))
         self._apply_toggle(self.gpu_toggle, gpu_available and profile != "compat", gpu_available)
         if not gpu_available:
-            self.gpu_note.setText("Indisponível: QEMU não foi encontrado no host")
+            self.gpu_note.setText(
+                "QEMU ausente no host — instale o runtime em Windows VM → Preparar (perfil windows-vm-linux)"
+            )
         else:
             self.gpu_note.setText(f"Perfil ativo: {profile}")
         usb_ready = int(access.get("usbRedirChannels") or 0) > 0 or bool(access.get("usbUdevManaged"))

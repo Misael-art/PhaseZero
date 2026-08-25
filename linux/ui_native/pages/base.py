@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QPushBut
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
 from ..status_loader import StatusLoader
-from ..result_parser import severity_for
+from ..result_parser import guidance, severity_for
 from ..widgets import AdvancedActionsPanel, SkeletonCard, SkeletonTile, stop_shimmer
 
 
@@ -208,10 +208,12 @@ class BasePage(QWidget):
         if action is None or action.id != action_id or self._context_status is None:
             return
         state = severity_for(parsed, 0)
+        guide = guidance(parsed)
         detail = "OK" if state == "success" else "Atenção" if state == "warning" else "Verificar"
         label = self._context_status.findChild(QLabel, "contextStatusText")
         if label is not None:
-            label.setText(f"Saúde: {detail} — {action.title}")
+            suffix = f" — {guide['next_action']}" if guide["next_action"] and state != "success" else f" — {action.title}"
+            label.setText(f"Saúde: {detail}{suffix}")
             label.setProperty("state", state)
             label.style().unpolish(label)
             label.style().polish(label)
@@ -222,8 +224,10 @@ class BasePage(QWidget):
             return
         label = self._context_status.findChild(QLabel, "contextStatusText")
         if label is not None:
-            label.setText(f"Saúde indisponível — {message}")
-            label.setProperty("state", "error")
+            # Falha de LEITURA ≠ estado ruim: orienta repetir em vez de assustar.
+            cause = "" if message.startswith("exit code") or message == "timed out" else f" ({message})"
+            label.setText(f"Saúde: não foi possível verificar{cause} — clique para tentar de novo")
+            label.setProperty("state", "warning")
             label.style().unpolish(label)
             label.style().polish(label)
 

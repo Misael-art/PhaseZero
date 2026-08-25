@@ -170,8 +170,16 @@ class BootSelectorWindow(QDialog):
             QMessageBox.information(self, "Boot agendado", result.stdout.strip() or display)
             self.accept()
             return
-        QMessageBox.critical(
-            self,
-            "Falha ao agendar boot",
-            "\n\n".join(part for part in (display, result.stdout.strip(), result.stderr.strip()) if part),
+        lines = [ln.strip() for ln in (result.stderr.splitlines() + result.stdout.splitlines()) if ln.strip()]
+        cause = lines[-1][:200] if lines else f"exit {result.returncode}"
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Critical)
+        box.setWindowTitle("Falha ao agendar boot")
+        box.setText("Não foi possível agendar o boot direto agora.")
+        box.setInformativeText(
+            f"Causa: {cause}\n\n"
+            "Confira se a entrada do Windows existe no GRUB e tente de novo; "
+            "o reparo fica em Windows VM → Reparo."
         )
+        box.setDetailedText("\n".join(part for part in (display, result.stdout.strip(), result.stderr.strip()) if part))
+        box.exec()
