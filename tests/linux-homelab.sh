@@ -312,6 +312,10 @@ jq -e '.winvmMB == 2048' "$REPO_ROOT/assets/home-server/homelab-profiles.json" >
 echo "  winvm weight registered ok"
 "$REPO_ROOT/linux/server/homelab-governor.sh" winvm-status | jq -e '.status == "idle" and .active == false and .weightMB == 2048' >/dev/null
 echo "  winvm idle detection ok"
+# Unconfigured budget is a reportable state (rc 0 + envelope), not a failure.
+PZ_HOMELAB_PROFILES_FILE="$TMP/registry-ausente.json" "$REPO_ROOT/linux/server/homelab-governor.sh" winvm-status \
+    | jq -e '.state == "needs-config" and .weightMB == null and (.nextAction | type == "string")' >/dev/null
+echo "  winvm unconfigured envelope ok"
 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=12288 "$REPO_ROOT/linux/server/homelab-governor.sh" budget ai-studio | jq -e '.winvmActive == false and .verdict == "pass"' >/dev/null
 echo "  heavy profile passes when winvm idle ok"
 printf '%s\n' '{"libvirtState":"running","currentMarker":"no","bootRuntimeStale":false}' > "$PZ_HOMELAB_WINVM_STATUS_FILE"

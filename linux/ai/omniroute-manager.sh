@@ -375,13 +375,27 @@ usage_summary() {
 # ─── API request helper ───────────────────────────────────────────────────────
 
 api_request() {
-    local method="$1" path="$2" data_file="${3:-}" max_time="${4:-8}" port key args
+    local method="$1" path="$2" data_file="${3:-}" max_time="${4:-8}" port key args out
     port="$(detect_port)"
     key="$(env_get OMNIROUTE_API_KEY)"
-    [ -n "$key" ] || { pz_error "OmniRoute API key unavailable; run install first"; return 1; }
+    if [ -z "$key" ]; then
+        if [ "$method" = "GET" ]; then
+            printf '{"ok":false,"state":"needs-config","summary":"OmniRoute nao tem chave de API; o servico pode nao estar instalado.","nextAction":"linux/pz ai omniroute install"}\n'
+            return 0
+        fi
+        pz_error "OmniRoute API key unavailable; run install first"
+        return 1
+    fi
     args=(-fsS --max-time "$max_time" -X "$method" -H "Authorization: Bearer $key" -H 'Content-Type: application/json')
     [ -z "$data_file" ] || args+=(--data-binary "@$data_file")
-    curl "${args[@]}" "http://127.0.0.1:$port$path"
+    if ! out="$(curl "${args[@]}" "http://127.0.0.1:$port$path")"; then
+        if [ "$method" = "GET" ]; then
+            printf '{"ok":false,"state":"unavailable","summary":"O servico OmniRoute nao respondeu na porta %s.","nextAction":"linux/pz ai omniroute install"}\n' "$port"
+            return 0
+        fi
+        return 1
+    fi
+    printf '%s\n' "$out"
 }
 
 # ─── test ─────────────────────────────────────────────────────────────────────

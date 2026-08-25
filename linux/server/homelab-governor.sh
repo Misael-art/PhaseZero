@@ -86,7 +86,15 @@ pz_governor_winvm_mb() {
 pz_governor_winvm_status_json() {
     local st mb
     st="$(pz_governor_winvm_status)"
-    mb="$(pz_governor_winvm_mb)" || return $?
+    if ! mb="$(pz_governor_winvm_mb)"; then
+        # Unconfigured budget is a reportable state, not a tool failure.
+        jq -cn --argjson schemaVersion "$SCHEMA_VERSION" --arg status "$st" \
+            '{schemaVersion:$schemaVersion, tool:"homelab-governor", action:"winvm-status",
+              status:$status, active:false, weightMB:null, state:"needs-config",
+              summary:"Nenhum orcamento WinVM configurado no governador.",
+              nextAction:"linux/pz server homelab profile set <perfil>"}'
+        return 0
+    fi
 jq -cn --argjson schemaVersion "$SCHEMA_VERSION" \
         --arg status "$st" \
         --argjson active "$([ "$st" = "active" ] && echo true || echo false)" \

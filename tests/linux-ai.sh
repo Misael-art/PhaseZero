@@ -147,6 +147,22 @@ done
 # Smoke: headroom-agent dry-run
 timeout 10 "$REPO_ROOT/linux/ai/headroom-agent.sh" status 2>/dev/null || true
 
+# headroom ausente é envelope rc0 acionável (PATH restrito garante ausência).
+hr_env="$(PATH="/usr/bin:/bin" "$REPO_ROOT/linux/ai/headroom-agent.sh" status 2>/dev/null)"; hr_rc=$?
+[ "$hr_rc" -eq 0 ] || { echo "FAIL: headroom status sem binário deve sair 0 (rc=$hr_rc)" >&2; exit 1; }
+jq -e '.state == "not-installed" and (.nextAction | type == "string")' <<< "$hr_env" >/dev/null \
+    || { echo "FAIL: envelope not-installed do headroom ausente" >&2; echo "$hr_env"; exit 1; }
+echo "  headroom not-installed envelope ok"
+
+# omniroute GET sem chave/serviço é envelope needs-config rc0.
+OMNI_HOME="$(mktemp -d)"
+omni_out="$(HOME="$OMNI_HOME" "$REPO_ROOT/linux/ai/omniroute-manager.sh" combo list 2>/dev/null)"; omni_rc=$?
+rm -rf "$OMNI_HOME"
+[ "$omni_rc" -eq 0 ] || { echo "FAIL: omniroute combo list sem config deve sair 0 (rc=$omni_rc)" >&2; exit 1; }
+jq -e '(.state == "needs-config") or (.combos.state == "needs-config")' <<< "$omni_out" >/dev/null \
+    || { echo "FAIL: envelope needs-config do omniroute ausente" >&2; echo "$omni_out"; exit 1; }
+echo "  omniroute unconfigured envelope ok"
+
 # Smoke: setup scripts with dry-run
 timeout 10 "$REPO_ROOT/linux/ai/setup-ides.sh" dry-run >/dev/null 2>&1 || true
 timeout 10 "$REPO_ROOT/linux/ai/setup-admin-bridge.sh" dry-run >/dev/null 2>&1 || true
