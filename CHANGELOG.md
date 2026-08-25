@@ -3,6 +3,21 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.17.1] - 2026-08-25
+
+> Recuperação de UX da integração IA: fim do `ok:true` enganoso, MiMo por API oficial, backup portátil criptografado e `ai-memory` nativo 1.31.1.
+
+### Corrigido
+- **Contrato honesto de jornada**: `needs-login`/`needs-credentials` saem com `ok:false`, campos `ready/completed/resumable` e `nextAction`; o runner da UI trata JSON `ok:false` como falha mesmo com exit 0 — a fila nunca mais registra pendência como conclusão.
+- **Compat audit no workspace certo**: diagnóstico passa a apontar o projeto registrado (`workspaceSource=registered|explicit|needs-project`) em vez de `/usr/lib/phasezero`.
+- **Asserções de teste**: verificações de ausência com `!` sob `set -e` não falhavam silenciosamente (SC2251); guardas SC2015 reescritos.
+
+### Adicionado
+- **MiMo via API oficial Xiaomi**: portal oficial + chave única validada contra `/models`, host na allowlist; chave em arquivo `0600`; OpenCode por referência `{file:…}`; registro ZCode sem embutir segredo; fim das instruções de DevTools/cookies.
+- **Backup portátil (ADR 0002)**: `pz ai backup plan|create|verify|restore` com GPG AES-256, allowlist de credenciais, manifesto sem segredos, pré-backup e rollback na restauração.
+- **ai-memory nativo 1.31.1**: binário verificado por SHA-256 pinado (conferido com o release upstream), wrapper Docker removido, status honesto (`ready/status/integrations`) e adapter correto `open-code`.
+- **Integrações declaradas**: Grok Build e Kimi Code detectados como clientes (regras via AGENTS.md), providers separados de clientes; ZCode consome MCP canônico sem prometer hooks inexistentes.
+
 ## [1.17.0] - 2026-08-24
 
 > Atual estável publicada: **1.16.x** (`version.json`).
