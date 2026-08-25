@@ -284,8 +284,8 @@ def test_homelab_page_never_spawns_resume_flag(app):
     page = _page()
     resume_buttons = [b for b in page.findChildren(QPushButton) if b.text() == "Resume"]
     assert resume_buttons == []
-    up_buttons = [b for b in page.findChildren(QPushButton) if b.text() == "Up"]
-    assert up_buttons, "ação Up convergente deve existir no Player"
+    up_buttons = [b for b in page.findChildren(QPushButton) if b.text() == "Subir"]
+    assert up_buttons, "ação Up convergente deve existir no Player (rótulo PT)"
 
 
 def test_homelab_restore_catalog_action_is_plan_only(by_id_catalog):
@@ -434,3 +434,48 @@ def test_homelab_page_no_blocking_event_loop(app):
         assert calls[-1][0] == "start"
     finally:
         mod.QProcess = real_qprocess
+
+
+def test_restore_confirmation_phrase_binds_source():
+    from linux.ui_native.pages.homelab import HomelabPage
+    assert HomelabPage._confirmation_phrase("/backups/bk1") == "RESTAURAR bk1"
+
+
+def test_write_confirm_file_roundtrip(app, tmp_path, monkeypatch):
+    from linux.ui_native.pages.homelab import HomelabPage
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    page = _page()
+    path = HomelabPage._write_confirm_file(page, "/backups/bk1", "RESTAURAR bk1")
+    assert path is not None and path.exists()
+    assert path.read_text(encoding="utf-8").strip() == "RESTAURAR bk1"
+    assert path.stat().st_mode & 0o777 == 0o600
+    path.unlink()
+
+
+def test_zero_state_row_guides_to_up(app):
+    payload = {
+        "schemaVersion": "1", "ready": False, "degraded": False,
+        "state": "needs-config",
+        "summary": "Homelab ainda não foi configurado.",
+        "nextAction": "linux/pz server homelab repair",
+        "accessMode": {"requested": "local", "effective": "local"},
+        "stack": {"apps": []},
+    }
+    page = _page()
+    page._apply_status(json.dumps(payload).encode())
+    cell = page._table.item(0, 0)
+    assert cell is not None and "Subir" in cell.text()
+
+
+def test_restore_summary_mentions_volumes_and_rollback():
+    from linux.ui_native.pages.homelab import HomelabPage
+    plan = {
+        "action": "restore", "plan": True, "verified": True,
+        "checks": [{"ok": True}, {"ok": True}],
+        "archives": ["a.tgz", "b.tgz"],
+        "volumesAffected": ["vaultwarden_data", "jellyfin_config"],
+    }
+    page = _page()
+    text = page._restore_summary_text(plan, "/backups/bk1")
+    assert "aprovada" in text and "(2/2 provas)" in text
+    assert "vaultwarden_data" in text and "pré-backup" in text

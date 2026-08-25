@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtWidgets import (
@@ -35,13 +37,22 @@ class HomelabPage(BasePage):
         parent=None,
     ) -> None:
         super().__init__(root, runner, actions, by_id, parent)
-        self._green = QLabel()
-        self._green.setStyleSheet("color:#7CFC98;font-weight:600")
-        self._green.setText("●")
+        self._green = QLabel("●")
+        self._green.setObjectName("serviceState")
         self._proc: QProcess | None = None
         self._profile_map: dict[str, str] = {}
         self._last_status: dict = {}
         self._timeouts: dict[int, QTimer] = {}
+        self._action_buttons: list[QPushButton] = []
+        self._pending_confirm_file: Path | None = None
+
+    # ------------------------------------------------------------- theming
+    def _set_state(self, state: str) -> None:
+        """Cor via tema (objectName+property), nunca stylesheet cru."""
+        for label in (self._state_label, self._green):
+            label.setProperty("state", state)
+            label.style().unpolish(label)
+            label.style().polish(label)
 
     def build(self) -> None:
         self._layout.setSpacing(12)
@@ -52,34 +63,43 @@ class HomelabPage(BasePage):
         header.addWidget(title)
         header.addStretch(1)
         self._state_label = QLabel("—")
-        self._state_label.setStyleSheet("color:#a0b0c0")
+        self._state_label.setObjectName("serviceState")
         header.addWidget(self._state_label)
         header.addWidget(self._green)
         refresh = QPushButton("Atualizar")
+        refresh.setAccessibleName("Atualizar status do Homelab")
         refresh.clicked.connect(self.refresh_status)
         header.addWidget(refresh)
         self._layout.addLayout(header)
 
         # Status table ------------------------------------------------------
         self._table = QTableWidget(0, 5)
-        self._table.setHorizontalHeaderLabels(["Serviço", "Layer", "Bind", "URL", "Rodando"])
+        self._table.setHorizontalHeaderLabels(["Serviço", "Camada", "Endereço", "URL", "Rodando"])
+        self._table.setAccessibleName("Serviços do Homelab")
         header_view = self._table.horizontalHeader()
         header_view.setSectionResizeMode(QHeaderView.ResizeToContents)
         self._table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._table.setSelectionMode(QTableWidget.NoSelection)
+        self._table.setSelectionMode(QTableWidget.SingleSelection)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setAlternatingRowColors(True)
+        self._table.verticalHeader().setVisible(False)
         self._layout.addWidget(self._table, 1)
 
         # Profile + governor ------------------------------------------------
         profile_box = QGroupBox("Perfil e orçamento")
         pslot = QHBoxLayout()
         self._profile_combo = QComboBox()
-        pslot.addWidget(QLabel("Perfil:"))
+        profile_caption = QLabel("Perfil:")
+        profile_caption.setBuddy(self._profile_combo)
+        pslot.addWidget(profile_caption)
         pslot.addWidget(self._profile_combo, 1)
-        self._profile_set = QPushButton("Aplicar")
+        self._profile_set = QPushButton("Aplicar perfil")
         self._profile_set.clicked.connect(self.apply_profile)
         pslot.addWidget(self._profile_set)
-        pslot.addWidget(QLabel("Orçamento:"))
+        budget_caption = QLabel("Orçamento:")
         self._budget_label = QLabel("—")
+        budget_caption.setBuddy(self._budget_label)
+        pslot.addWidget(budget_caption)
         pslot.addWidget(self._budget_label)
         policy = QPushButton("Política")
         policy.clicked.connect(self.show_policy)
@@ -91,15 +111,26 @@ class HomelabPage(BasePage):
         actions_box = QGroupBox("Ações")
         arow = QHBoxLayout()
         for label, fn in (
-            ("Plan", lambda: self.run_cmd(["plan"])),
-            ("Backup", lambda: self.run_cmd(["backup"])),
-            ("Verify", lambda: self.run_cmd(["backup", "verify", "--source", self._last_backup()])),
-            ("Restore", self.pick_restore),
-            ("Repair", lambda: self.run_cmd(["repair"])),
-            ("Up", lambda: self.run_cmd(["up"])),
+            ("Planejar", lambda: self.run_cmd(["plan"])),
+            ("Copiar segurança", lambda: self.run_cmd(["backup"])),
+            ("Conferir backup", lambda: self.run_cmd(["backup", "verify", "--source", self._last_backup()])),
+            ("Restaurar", self.pick_restore),
+            ("Reparar", lambda: self.run_cmd(["repair"])),
+            ("Subir", lambda: self.run_cmd(["up"])),
         ):
             btn = QPushButton(label)
+            btn.setToolTip(
+                {
+                    "Planejar": "Mostra o plano de implantação sem alterar nada.",
+                    "Copiar segurança": "Gera backup verificado dos volumes.",
+                    "Conferir backup": "Valida o último backup (checksums e manifesto).",
+                    "Restaurar": "Fluxo assistido: prévia, confirmação digitada e rollback.",
+                    "Reparar": "Prepara/repara a configuração do Homelab.",
+                    "Subir": "Liga os serviços; dados preservados.",
+                }.get(label, "")
+            )
             btn.clicked.connect(fn)
+            self._action_buttons.append(btn)
             arow.addWidget(btn)
         actions_box.setLayout(arow)
         self._layout.addWidget(actions_box)
@@ -211,9 +242,9 @@ class HomelabPage(BasePage):
             if degraded:
                 headline += " · degradado"
         self._state_label.setText(f"{headline} · acesso={mode}")
-        self._green.setStyleSheet(
-            "color:#7CFC98" if ready else "color:#e0a040"
-            if degraded or state_key in {"degraded", "unhealthy"} else "color:#e05555"
+        self._set_state(
+            "success" if ready else "warning"
+            if degraded or state_key in {"degraded", "unhealthy"} else "error"
         )
 
         reasons = payload.get("reasons") or []
@@ -225,6 +256,16 @@ class HomelabPage(BasePage):
             self._append(f"[status] Próximo passo: {next_action}\n")
 
         apps = (payload.get("stack") or {}).get("apps", [])
+        if not apps:
+            self._table.setRowCount(1)
+            placeholder = QTableWidgetItem(
+                "Nada rodando ainda — clique Subir para preparar o servidor."
+            )
+            placeholder.setFlags(Qt.ItemIsEnabled)
+            self._table.setItem(0, 0, placeholder)
+            for col in range(1, 5):
+                self._table.setItem(0, col, QTableWidgetItem(""))
+            return
         self._table.setRowCount(len(apps))
         for row, app in enumerate(apps):
             for col, key in enumerate(("key", "layer", "bind", "url", "running")):
@@ -323,6 +364,10 @@ class HomelabPage(BasePage):
     # -- actions ------------------------------------------------------------
     def run_cmd(self, args: list[str]) -> None:
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            self._state_label.setText("Já existe operação em andamento — aguarde")
+            return
+        if getattr(getattr(self, "runner", None), "running", False):
+            self._state_label.setText("Já existe operação global em andamento — aguarde")
             return
         self._output.clear()
         self._bar.show()
@@ -339,6 +384,11 @@ class HomelabPage(BasePage):
         proc.start(str(self.root / "linux" / "pz"), ["server", "homelab", *args])
         self._proc = proc
 
+    def block_while_running(self, running: bool) -> None:
+        for btn in self._action_buttons:
+            btn.setEnabled(not running)
+        self._profile_set.setEnabled(not running)
+
     def _on_cmd_done(self, code: int) -> None:
         proc = self._proc
         if proc is not None:
@@ -348,7 +398,20 @@ class HomelabPage(BasePage):
                 if err.strip():
                     self._append_log(err)
         self._bar.hide()
-        self._state_label.setText(f"comando concluído (exit {code})")
+        confirm = self._pending_confirm_file
+        if confirm is not None:
+            # A frase digitada vive só o necessário; nada de segredo-restos.
+            try:
+                confirm.unlink(missing_ok=True)
+            except OSError:
+                pass
+            self._pending_confirm_file = None
+        if code == 0:
+            self._state_label.setText("Concluído")
+            self._set_state("success")
+        else:
+            self._state_label.setText("Falhou — veja a saída abaixo")
+            self._set_state("error")
         QTimer.singleShot(300, self.refresh_status)
 
     def _on_cmd_error(self, error: QProcess.ProcessError, proc: QProcess) -> None:
@@ -370,17 +433,134 @@ class HomelabPage(BasePage):
     def pick_restore(self) -> None:
         last = self._last_backup()
         if not last:
-            QMessageBox.warning(self, "Restaurar", "Nenhum backup anterior localizado.")
+            QMessageBox.warning(
+                self, "Restaurar",
+                "Nenhum backup anterior localizado.\n"
+                "Clique em Copiar segurança para criar o primeiro.",
+            )
             return
-        path = last
-        answer = QMessageBox.question(
-            self, "Restaurar",
-            f"Restaurar o backup verificado em:\n{path}\n\n"
-            "Os volumes serão substituídos após validação de schema e checksums.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        self._start_restore_flow(last)
+
+    # ------------------------------------------------- restore assistido
+    @staticmethod
+    def _confirmation_phrase(source: str) -> str:
+        return f"RESTAURAR {Path(source).name}"
+
+    def _start_restore_flow(self, source: str) -> None:
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            self._state_label.setText("Já existe operação em andamento — aguarde")
+            return
+        self._state_label.setText("Restaurar · verificando backup…")
+        self._bar.show()
+        proc = QProcess(self)
+        self._setup_proc(proc)
+        proc.finished.connect(
+            lambda code, p=proc, src=source: self._on_restore_plan_done(
+                code, bytes(p.readAllStandardOutput()), src
+            )
         )
-        if answer != QMessageBox.Yes:
+        proc.errorOccurred.connect(lambda _e, p=proc: self._restore_failed(p, "não iniciou"))
+        proc.start(str(self.root / "linux" / "pz"),
+                   ["server", "homelab", "restore", "--source", source, "--plan"])
+        self._proc = proc
+
+    def _restore_failed(self, proc: QProcess, why: str) -> None:
+        self._cancel_timeout(proc)
+        if self._proc is proc:
+            self._proc = None
+        self._bar.hide()
+        self._set_state("error")
+        self._state_label.setText("Restaurar · falhou antes da prévia")
+        self._append(f"[restore] {why}\n")
+
+    def _parse_plan(self, raw: bytes) -> dict:
+        for line in raw.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    payload = json.loads(line)
+                    if isinstance(payload, dict) and payload.get("action") == "restore":
+                        return payload
+                except Exception:
+                    continue
+        return {}
+
+    def _restore_summary_text(self, plan: dict, source: str) -> str:
+        checks = plan.get("checks") or []
+        passed = sum(1 for c in checks if isinstance(c, dict) and c.get("ok"))
+        volumes = [str(v) for v in (plan.get("volumesAffected") or [])]
+        lines = [
+            f"Origem: {source}",
+            f"Verificação: {'aprovada' if plan.get('verified') else 'FALHOU'}"
+            f" ({passed}/{len(checks)} provas)",
+            f"Arquivos de volume: {len(plan.get('archives') or [])}",
+            "Volumes substituídos: " + (", ".join(volumes[:6]) or "—")
+            + ("…" if len(volumes) > 6 else ""),
+            "",
+            "Antes de aplicar, o PhaseZero faz um pré-backup automático",
+            "dos volumes atuais (rollback possível em caso de falha).",
+        ]
+        return "\n".join(lines)
+
+    def _on_restore_plan_done(self, code: int, raw: bytes, source: str) -> None:
+        self._cancel_timeout(self._proc) if self._proc is not None else None
+        if self._proc is not None and self._proc.state() == QProcess.NotRunning:
+            self._proc = None
+        self._bar.hide()
+        plan = self._parse_plan(raw)
+        if code != 0 or not plan:
+            self._set_state("error")
+            self._state_label.setText("Restaurar · prévia indisponível")
+            self._append("[restore] Não foi possível gerar a prévia do restore.\n")
             return
-        # restore runs in plan mode first; the CLI refuses to apply without an
-        # explicit operator-written confirmation file. We never pass --yes.
-        self.run_cmd(["restore", "--source", path, "--plan"])
+        if not plan.get("verified"):
+            QMessageBox.critical(
+                self, "Restaurar",
+                "Este backup NÃO passou na verificação (checksums/manifesto).\n"
+                "Nada foi alterado. Gere um novo backup com Copiar segurança.",
+            )
+            return
+
+        phrase = self._confirmation_phrase(source)
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Warning)
+        dialog.setWindowTitle("Restaurar Homelab")
+        dialog.setText("Restauração assistida — os volumes serão SUBSTITUÍDOS.")
+        dialog.setInformativeText(self._restore_summary_text(plan, source))
+        confirmation = QPlainTextEdit()
+        confirmation.setPlaceholderText(f"Digite exatamente: {phrase}")
+        confirmation.setAccessibleName("Confirmação da restauração")
+        confirmation.setMaximumHeight(64)
+        dialog.layout().addWidget(confirmation)
+        cancel = dialog.addButton("Voltar", QMessageBox.RejectRole)
+        apply_btn = dialog.addButton("Aplicar restauração", QMessageBox.AcceptRole)
+        apply_btn.setObjectName("dangerButton")
+        apply_btn.setEnabled(False)
+        confirmation.textChanged.connect(
+            lambda: apply_btn.setEnabled(confirmation.toPlainText().strip() == phrase)
+        )
+        dialog.setDefaultButton(cancel)
+        dialog.exec()
+        if dialog.clickedButton() is not apply_btn:
+            self._state_label.setText("Restaurar · cancelado")
+            return
+        confirm_file = self._write_confirm_file(source, phrase)
+        if confirm_file is None:
+            QMessageBox.critical(self, "Restaurar", "Não foi possível gravar o arquivo de confirmação.")
+            return
+        self._pending_confirm_file = confirm_file
+        self.run_cmd(["restore", "--source", source, "--confirm-file", str(confirm_file)])
+
+    def _write_confirm_file(self, source: str, phrase: str) -> Path | None:
+        state_dir = (
+            Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
+            / "phasezero" / "homelab"
+        )
+        try:
+            state_dir.mkdir(parents=True, exist_ok=True)
+            target = state_dir / f"confirm-{Path(source).name}.txt"
+            target.write_text(f"{phrase}\n", encoding="utf-8")
+            target.chmod(0o600)
+            return target
+        except OSError:
+            return None
