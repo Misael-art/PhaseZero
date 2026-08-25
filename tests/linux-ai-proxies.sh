@@ -91,7 +91,10 @@ grep -q 'qwenproxy.db' "$ROOT/linux/ai/proxy-suite.sh"
 # MiMo normal flow must use the official API and reject session scraping instructions.
 grep -q 'phasezero-mimo-official' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'MIMO_PROVIDER_KEY' "$ROOT/linux/ai/proxy-suite.sh"
-! grep -q 'F12.*Rede.*bot/chat' "$ROOT/linux/ai/proxy-suite.sh"
+if grep -q 'F12.*Rede.*bot/chat' "$ROOT/linux/ai/proxy-suite.sh"; then
+    echo "FAIL: MiMo journey still instructs DevTools session extraction"
+    exit 1
+fi
 # Regression: `[ id = qwenproxy ] && pz_info` as last command made kimi/deeps login exit 1.
 if grep -n "\\[ \"\\\$id\" = qwenproxy \\] && pz_info" "$ROOT/linux/ai/proxy-suite.sh"; then
     echo "FAIL: login_proxy still ends with a failing && for non-qwen ids"
@@ -99,7 +102,10 @@ if grep -n "\\[ \"\\\$id\" = qwenproxy \\] && pz_info" "$ROOT/linux/ai/proxy-sui
 fi
 # Kimi/DeepSeek must execute the pinned local tsx runtime directly. `npm run
 # login` re-entered npx and stalled before the script's first log line.
+# Patterns match literal $ in the proxy source; no expansion is intended.
+# shellcheck disable=SC2016
 grep -q '"\$NODE_BIN" "\$tsx" src/login.ts' "$ROOT/linux/ai/proxy-suite.sh"
+# shellcheck disable=SC2016
 grep -q 'session_artifact_present "\$id"' "$ROOT/linux/ai/proxy-suite.sh"
 # Remove deliberately incomplete auth-only fixture before provenance-gated ensure.
 rm -rf "$HOME/.local/share/phasezero/ai-proxies/deepsproxy"
@@ -163,7 +169,10 @@ printf '%s\n' '{"apiKey":"sk-phasezero-test-key","baseUrl":"https://api.xiaomimi
 [ "$(cat "$HOME/.config/phasezero/ai-providers/mimo/api-key")" = sk-phasezero-test-key ]
 jq -e '.provider."phasezero-mimo-official".options.apiKey | startswith("{file:")' \
   "$HOME/.config/opencode/opencode.json" >/dev/null
-! grep -q 'sk-phasezero-test-key' "$HOME/.config/opencode/opencode.json"
+if grep -q 'sk-phasezero-test-key' "$HOME/.config/opencode/opencode.json"; then
+    echo "FAIL: OpenCode config embeds the MiMo secret instead of referencing the key file"
+    exit 1
+fi
 mimo_ready="$(PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy)"
 jq -e '.ok == true and .ready == true and (.steps[1].detail | contains("desnecessário"))' \
     <<< "$mimo_ready" >/dev/null

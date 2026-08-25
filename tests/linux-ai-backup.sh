@@ -44,7 +44,7 @@ export FAKE_MEMORY_LOG="$WORK/memory-restore.log"
 PASS='correct horse battery staple'
 BUNDLE="$WORK/phasezero-ai.tar.gz.gpg"
 
-plan="$($ROOT/linux/pz ai backup plan --include-credentials --output "$BUNDLE")"
+plan="$("$ROOT"/linux/pz ai backup plan --include-credentials --output "$BUNDLE")"
 jq -e '.ok and .encrypted and .credentials.count == 2 and (.exclusions|index("cookies"))' <<< "$plan" >/dev/null
 if grep -q 'test-secret' <<< "$plan"; then
     echo 'FAIL: backup plan leaked a secret' >&2
