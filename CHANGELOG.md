@@ -3,6 +3,12 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.17.2] - 2026-08-25
+
+### Corrigido
+- **Diagnóstico Homelab deixa de ser erro**: `server homelab status` com stack não pronto (inclusive nunca configurado) sai `exit 0` com relatório honesto `state` (`needs-config|stopped|degraded|unhealthy|ready`), `summary` em pt-BR e `nextAction` acionável; falha real da ferramenta emite envelope `unavailable` em vez de texto cru.
+- **Homelab Player**: estados traduzidos ("Ainda não configurado", "Desligado · dados preservados"…), motivos listados e próximo passo exibido; fim do "status indisponível (exit N)" sem orientação.
+
 ## [1.17.1] - 2026-08-25
 
 > Recuperação de UX da integração IA: fim do `ok:true` enganoso, MiMo por API oficial, backup portátil criptografado e `ai-memory` nativo 1.31.1.
