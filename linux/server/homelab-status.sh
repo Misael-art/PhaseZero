@@ -269,18 +269,28 @@ build_status() {
           stack:$stack}'
 }
 
+status_envelope() {
+    # A valid diagnostic report is a success, even when the stack is not
+    # ready: readiness lives in the fields, never in the exit code. The
+    # decorated keys give the UI (and scripts) an actionable next step.
+    jq -c '. + (
+        if .ready then {state:"ready", summary:"Homelab saudável.", nextAction:null}
+        elif (.configured == true|not) then {state:"needs-config", summary:"Homelab ainda não foi configurado.", nextAction:"linux/pz server homelab repair"}
+        elif (.degraded == true) then {state:"degraded", summary:"Atenção necessária: revise os motivos.", nextAction:"linux/pz server homelab repair"}
+        elif ((.stack.apps // []) | map(.running == true) | any) then {state:"unhealthy", summary:"Serviços no ar, mas as provas de saúde não fecham.", nextAction:"linux/pz server homelab repair"}
+        else {state:"stopped", summary:"Configurado e desligado; dados preservados.", nextAction:"linux/pz server homelab up"} end
+    )'
+}
+
 cmd_status() {
     local data
-    data="$(build_status)"
+    data="$(build_status)" || return 1
+    data="$(status_envelope <<< "$data")"
     mkdir -p "$HOMELAB_STATE"
     printf '%s\n' "$data" > "$STATUS_FILE"
     chmod 0644 "$STATUS_FILE"
     printf '%s\n' "$data"
-    if [ "$(echo "$data" | jq -r '.ready')" = "true" ]; then
-        return 0
-    else
-        return 1
-    fi
+    return 0
 }
 
 cmd_verify() {
@@ -333,7 +343,19 @@ cmd_repair() {
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     case "$cmd" in
-        status) cmd_status ;;
+        status)
+            if ! cmd_status; then
+                # Tool-level failure: still answer with an honest envelope so
+                # callers never have to parse a bare failure.
+                jq -nc '{tool:"homelab-status",schemaVersion:"1",ready:false,
+                         state:"unavailable",
+                         summary:"O diagnóstico não conseguiu coletar provas agora.",
+                         reasons:["falha ao consultar Docker/Compose"],
+                         nextAction:"Confirme que o Docker está ativo e repita; se persistir, use Preparar Homelab."}' \
+                    && exit 0
+                exit 1
+            fi
+            ;;
         verify) cmd_verify ;;
         repair) cmd_repair ;;
         *) echo "usage: homelab-status.sh (status|verify|repair) [--json]" >&2; exit 2 ;;

@@ -152,12 +152,18 @@ PZ_CASAOS_OS_RELEASE="$TMP/arch-os-release" "$REPO_ROOT/linux/pz" server casaos 
 echo "  casaos gate ok"
 
 echo "=== aggregate status schemaVersion + ready proofs ==="
-status_json="$("$REPO_ROOT/linux/pz" server homelab status --json 2>/dev/null)" || true
+status_json="$("$REPO_ROOT/linux/pz" server homelab status --json 2>/dev/null)"; status_rc=$?
+# A valid diagnostic is a success even when the stack is not configured:
+# readiness lives in the fields (ready/state/reasons), never in the exit code.
+[ "$status_rc" -eq 0 ] || { echo "FAIL: homelab status must exit 0 with a valid report"; exit 1; }
 echo "$status_json" | jq -e '
   .schemaVersion == "1"
   and .tool == "homelab-status"
   and .ready == false
   and (.reasons | length > 0)
+  and (.state | type == "string" and length > 0)
+  and (.summary | type == "string" and length > 0)
+  and (.nextAction == null or (.nextAction | type == "string"))
   and .degraded == false
   and .securityState.redaction == true
   and (.lastOperation | type == "object")

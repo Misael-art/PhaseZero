@@ -132,6 +132,30 @@ def test_homelab_page_applies_status(app):
     assert page._table.item(0, 4).text() == "não"
 
 
+def test_homelab_page_translates_state_envelope(app):
+    payload = dict(_payload(), state="needs-config", degraded=False,
+                   summary="Homelab ainda não foi configurado.",
+                   nextAction="linux/pz server homelab repair",
+                   reasons=["homelab not configured (compose or .env missing)"])
+    page = _page()
+    page._apply_status(json.dumps(payload).encode())
+    assert page._state_label.text() == "Ainda não configurado · acesso=local"
+    out = page._output.toPlainText()
+    assert "homelab not configured" in out
+    assert "linux/pz server homelab repair" in out
+
+
+def test_status_failure_is_actionable_not_scary(app):
+    page = _page()
+    page._proc = None
+    page._on_status_done(1, b"", b"Cannot connect to the Docker daemon\n")
+    assert page._state_label.text() == "não foi possível diagnosticar agora"
+    assert "indisponível" not in page._state_label.text()
+    out = page._output.toPlainText()
+    assert "Docker daemon" in out
+    assert "Atualizar" in out
+
+
 def test_homelab_page_run_cmd_guard_blocks_running(app):
     page = _page()
     started = []
