@@ -101,7 +101,10 @@ memory_restore_from() {
 create_bundle() {
     local destination temp stage rows path rel inner
     command -v gpg >/dev/null 2>&1 || { pz_error "gpg missing"; return 1; }
-    [ -n "$AI_MEMORY_BIN" ] && [ -x "$AI_MEMORY_BIN" ] || { pz_error "ai-memory missing"; return 1; }
+    if [ -z "$AI_MEMORY_BIN" ] || [ ! -x "$AI_MEMORY_BIN" ]; then
+        pz_error "ai-memory missing"
+        return 1
+    fi
     read_passphrase
     destination="${OUTPUT:-$DEFAULT_OUTPUT}"
     safe_output "$destination" || { pz_error "unsafe or existing output path"; return 2; }
@@ -147,7 +150,10 @@ create_bundle() {
 decrypt_and_verify() {
     local bundle="$1" temp="$2" entry expected actual
     local inner="$temp/phasezero-ai.tar.gz"
-    [ -f "$bundle" ] && [ ! -L "$bundle" ] || { pz_error "bundle not found or symlink refused"; return 2; }
+    if [ ! -f "$bundle" ] || [ -L "$bundle" ]; then
+        pz_error "bundle not found or symlink refused"
+        return 2
+    fi
     printf '%s' "$PASSPHRASE" | gpg --batch --quiet --pinentry-mode loopback --passphrase-fd 0 \
         --decrypt --output "$inner" "$bundle" || { pz_error "wrong passphrase or damaged bundle"; return 3; }
     tar -tzf "$inner" | awk '/^\// || /(^|\/)\.\.($|\/)/ {bad=1} END {exit bad}' || {
@@ -181,7 +187,10 @@ verify_bundle() {
 restore_bundle() {
     local temp manifest path category rel target mode rollback memory_previous="" failed=false
     [ -n "$BUNDLE" ] || { pz_error "--bundle required"; return 2; }
-    [ -n "$AI_MEMORY_BIN" ] && [ -x "$AI_MEMORY_BIN" ] || { pz_error "ai-memory missing"; return 1; }
+    if [ -z "$AI_MEMORY_BIN" ] || [ ! -x "$AI_MEMORY_BIN" ]; then
+        pz_error "ai-memory missing"
+        return 1
+    fi
     read_passphrase
     temp="$(mktemp -d)"; chmod 700 "$temp"
     trap 'rm -rf -- "$temp"; unset PASSPHRASE' RETURN
