@@ -3,6 +3,16 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.17.3] - 2026-08-25
+
+### Corrigido
+- **Jornadas sem beco sem saída**: relatório de diagnóstico válido nunca sai como erro — status de leitura com estado pendente (não configurado, VM desligada, QGA ausente, LaunchBox/9Router/headroom ausentes, drift de emulação) responde rc0 com envelope `state/summary/nextAction`; falha real da ferramenta continua honesta.
+- Preview mutável com pendência vira aviso explicativo (botão Confirmar permanece disponível); ResultDialog/PreviewDialog renderizam "Próximo passo" unificado (`nextAction`/`next`/`reasons`).
+- Temas não fica mais presa em "Verificando…" quando a leitura falha; Servidor exibe motivos e próximo passo do Homelab; saúde contextual, boot direto, IA & Dev, Roteamento, Resultados, Ajustes e Assistente Windows com orientação acionável.
+
+### Adicionado
+- Guarda transversal `tests/test_status_contract.py`: 60 ações de status do catálogo vigiadas (rc0 + envelope quando `--json`) — a classe "diagnóstico indisponível" não renasce.
+
 ## [1.17.2] - 2026-08-25
 
 ### Corrigido
