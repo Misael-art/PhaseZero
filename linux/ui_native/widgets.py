@@ -49,6 +49,7 @@ from . import __version__
 
 from .models import ActionSpec, OperationResult
 from .platform import open_path
+from .result_parser import guidance, is_pending_report
 
 
 _ICON_CACHE: dict[str, QIcon] = {}
@@ -1165,25 +1166,33 @@ class PreviewDialog(StatefulDialog):
         advanced_mode: bool = False,
     ) -> None:
         blockers = result.parsed.get("blockers") if isinstance(result.parsed, dict) else None
-        preview_ok = result.ok and not blockers
-        super().__init__("Confirmar operação", "success" if preview_ok else "error", parent)
+        pending = is_pending_report(result.parsed)
+        preview_ok = (result.ok or pending) and not blockers
+        dialog_state = "success" if preview_ok and not pending else "warning" if preview_ok else "error"
+        super().__init__("Confirmar operação", dialog_state, parent)
         self.action = action
-        headline = "Preview concluído. Nenhuma mutação foi executada."
-        next_step = ""
-        if isinstance(result.parsed, dict):
-            headline = str(result.parsed.get("summary") or headline)
-            next_step = str(result.parsed.get("next") or "")
+        guide = guidance(result.parsed)
+        headline = guide["summary"] or "Preview concluído. Nenhuma mutação foi executada."
+        next_step = guide["next_action"]
         summary = QLabel(headline)
         summary.setWordWrap(True)
         summary.setObjectName("cardDescription")
         self.body.addWidget(summary)
+        for reason in guide["reasons"]:
+            reason_label = QLabel(f"• {reason}")
+            reason_label.setWordWrap(True)
+            reason_label.setObjectName("cardDescription")
+            self.body.addWidget(reason_label)
         if next_step:
-            follow = QLabel(next_step)
+            follow = QLabel(f"Próximo passo: {next_step}")
             follow.setWordWrap(True)
             follow.setObjectName("cardDescription")
             self.body.addWidget(follow)
         chips = QHBoxLayout()
-        chips.addWidget(StatusPill("Preview", "success" if preview_ok else "error"))
+        chips.addWidget(StatusPill(
+            "Pendente" if pending else "Preview",
+            "success" if preview_ok and not pending else "warning" if pending else "error",
+        ))
         chips.addWidget(StatusPill("Admin", "warning" if action and action.elevated else "info", "necessário" if action and action.elevated else "não"))
         chips.addStretch()
         self.body.addLayout(chips)
@@ -1362,10 +1371,12 @@ class ResultDialog(StatefulDialog):
             "error": "Não foi possível concluir. Revise a solução recomendada abaixo.",
         }.get(sev, "Revise o resultado.")
         if isinstance(result.parsed, dict):
-            human = str(result.parsed.get("summary") or result.parsed.get("message") or "").strip()
-            nxt = str(result.parsed.get("next") or "").strip()
-            if human:
-                message = f"{human}\n\n{nxt}" if nxt else human
+            guide = guidance(result.parsed)
+            human = guide["summary"]
+            nxt = guide["next_action"]
+            parts = [part for part in (human, f"Próximo passo: {nxt}" if nxt else "") if part]
+            if parts:
+                message = "\n".join(parts)
         if sev == "error" and message in {
             "Não foi possível concluir. Revise a solução recomendada abaixo.",
         }:

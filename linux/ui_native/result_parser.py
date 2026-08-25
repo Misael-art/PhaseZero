@@ -41,8 +41,61 @@ def _has_output(value: Any) -> bool:
     return value is not None
 
 
+# Statuses that mean "valid report, action pending on the user/environment"
+# rather than "the tool failed".
+_RESUMABLE_STATUSES = {
+    "warn", "warning", "degraded", "needsinstall", "needsrepair",
+    "needs-login", "needslogin", "needs-credentials", "needscredentials",
+    "gui-required", "guirequired",
+}
+
+
+def is_pending_report(value: Any) -> bool:
+    """True when the payload is a valid diagnostic saying work is pending.
+
+    Readiness/state lives in these payloads (homelab ``state``, AI proxies
+    ``resumable``, legacy ``status`` warnings); a run that produced one did its
+    job even with a non-zero exit code.
+    """
+    if not isinstance(value, dict) or not value:
+        return False
+    if value.get("resumable") is True:
+        return True
+    state = value.get("state")
+    if isinstance(state, str) and state.strip() and state.strip().casefold() != "error":
+        return True
+    if str(value.get("status", "")).casefold() in _RESUMABLE_STATUSES:
+        return True
+    next_action = value.get("nextAction")
+    return isinstance(next_action, str) and bool(next_action.strip())
+
+
+def guidance(value: Any) -> dict[str, Any]:
+    """Unified orientation fields across backend envelope dialects.
+
+    Backends emit either ``next`` (legacy AI proxies) or ``nextAction``
+    (homelab/ledger), plus optional ``summary`` and ``reasons``. Consumers
+    render whatever this returns without caring which dialect produced it.
+    """
+    out: dict[str, Any] = {"summary": None, "next_action": None, "reasons": []}
+    if not isinstance(value, dict):
+        return out
+    summary = value.get("summary") or value.get("message")
+    if isinstance(summary, str) and summary.strip():
+        out["summary"] = summary.strip()
+    nxt = value.get("nextAction") or value.get("next")
+    if isinstance(nxt, str) and nxt.strip():
+        out["next_action"] = nxt.strip()
+    reasons = value.get("reasons")
+    if isinstance(reasons, list):
+        out["reasons"] = [str(item) for item in reasons[:6]]
+    return out
+
+
 def severity_for(value: Any, exit_code: int, *, mutable: bool = True, has_output: bool | None = None) -> str:
     if exit_code != 0:
+        if is_pending_report(value):
+            return "warning"
         if mutable:
             return "error"
         if has_output is None:

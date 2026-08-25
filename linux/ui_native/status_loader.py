@@ -13,6 +13,30 @@ _SECRET_PATTERNS = (
     (r"(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{16,}", "[REDACTED]"),
 )
 
+
+def redact(text: str) -> str:
+    import re
+
+    for pattern, replacement in _SECRET_PATTERNS:
+        text = re.sub(pattern, replacement, text)
+    return text
+
+
+def report_outcome(stdout: str, stderr: str, exit_code: int) -> tuple[str, object, str]:
+    """Decide whether a finished status run produced a usable report.
+
+    Returns ("ready", parsed, "") when the command reported state as JSON —
+    even with a non-zero exit code, because readiness lives in the payload —
+    and ("failed", None, message) when there is no report to show.
+    """
+    parsed = parse_json_output(stdout)
+    if isinstance(parsed, dict) and parsed:
+        return "ready", parsed, ""
+    if exit_code != 0:
+        detail = redact(stderr.strip())[:500]
+        return "failed", None, f"exit code {exit_code}" + (f": {detail}" if detail else "")
+    return "ready", parsed, ""
+
 _DEFAULT_TIMEOUT_MS = 15_000
 _ACTION_TIMEOUT_MS = {
     # Windows status includes bounded libvirt, Samba, disk and boot probes.
@@ -98,13 +122,11 @@ class StatusLoader(QObject):
         stdout = bytes(process.readAllStandardOutput().data()).decode("utf-8", errors="replace")
         stderr = bytes(process.readAllStandardError().data()).decode("utf-8", errors="replace")
         self._cleanup_process(action_id, process)
-        if exit_code != 0:
-            detail = self._redact(stderr.strip())[:500]
-            message = f"exit code {exit_code}" + (f": {detail}" if detail else "")
+        outcome, parsed, message = report_outcome(stdout, stderr, exit_code)
+        if outcome == "ready":
+            self.status_ready.emit(action_id, stdout, parsed)
+        else:
             self.status_failed.emit(action_id, message)
-            return
-        parsed = parse_json_output(stdout)
-        self.status_ready.emit(action_id, stdout, parsed)
 
     def _on_error(self, action_id: str, error: QProcess.ProcessError, process: QProcess) -> None:
         if action_id not in self._processes or not isValid(process):
@@ -130,11 +152,3 @@ class StatusLoader(QObject):
         self._processes.pop(action_id, None)
         if process is not None and isValid(process):
             process.deleteLater()
-
-    @staticmethod
-    def _redact(text: str) -> str:
-        import re
-
-        for pattern, replacement in _SECRET_PATTERNS:
-            text = re.sub(pattern, replacement, text)
-        return text
