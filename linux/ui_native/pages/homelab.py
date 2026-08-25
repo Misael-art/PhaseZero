@@ -198,13 +198,31 @@ class HomelabPage(BasePage):
         ready = bool(payload.get("ready"))
         degraded = bool(payload.get("degraded"))
         mode = (payload.get("accessMode") or {}).get("effective", "?")
-        state = f"{'ready' if ready else 'não pronto'} · acesso={mode}"
-        if degraded:
-            state += " · degradado"
-        self._state_label.setText(state)
+        state_key = str(payload.get("state") or "")
+        headline = {
+            "ready": "Saudável",
+            "needs-config": "Ainda não configurado",
+            "stopped": "Desligado · dados preservados",
+            "degraded": "Atenção necessária",
+            "unhealthy": "Saúde insuficiente",
+        }.get(state_key)
+        if not headline:
+            headline = "pronto" if ready else "não pronto"
+            if degraded:
+                headline += " · degradado"
+        self._state_label.setText(f"{headline} · acesso={mode}")
         self._green.setStyleSheet(
-            "color:#7CFC98" if ready else "color:#e0a040" if degraded else "color:#e05555"
+            "color:#7CFC98" if ready else "color:#e0a040"
+            if degraded or state_key in {"degraded", "unhealthy"} else "color:#e05555"
         )
+
+        reasons = payload.get("reasons") or []
+        if reasons and not ready:
+            bullets = "\n".join(f"- {r}" for r in reasons[:4])
+            self._append(f"[status] Motivos:\n{bullets}\n")
+        next_action = payload.get("nextAction")
+        if isinstance(next_action, str) and next_action.strip():
+            self._append(f"[status] Próximo passo: {next_action}\n")
 
         apps = (payload.get("stack") or {}).get("apps", [])
         self._table.setRowCount(len(apps))
@@ -231,10 +249,16 @@ class HomelabPage(BasePage):
 
     def _on_status_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
-        if code == 0 or b"{" in raw:
+        if b"{" in raw:
             self._apply_status(raw)
-        else:
-            self._state_label.setText(f"status indisponível (exit {code})")
+            return
+        self._state_label.setText("não foi possível diagnosticar agora")
+        detail = err.decode("utf-8", "replace").strip().splitlines()
+        reason = detail[-1] if detail else f"exit {code}"
+        self._append(
+            f"[status] Diagnóstico falhou ({reason}).\n"
+            "Verifique se o Docker está ativo e clique Atualizar.\n"
+        )
 
     def _on_profiles_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
