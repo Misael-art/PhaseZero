@@ -14,7 +14,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Fase 3: ADR 0003 + agente hermético (TLS/token/allowlist); systemd user e mDNS advertise ainda parciais |
+| Status | Fase 4: dashboard web mínimo (CSRF/sessão/restore/bind) + correção JSON do compose; disposable CI ainda pendente |
 | Última verificação | 2026-08-26, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
 | Base observada | `origin/main` `a85c7a4` (release v1.17.4) |
@@ -435,12 +435,12 @@ reutilizar ID para requisito diferente.
 | HL-AGT-003 | Allowlist fechada, audit, rate limit, kill switch | API allowlist; audit.log append-only; `shell=False`; kill file | shell arbitrário 403+audit; 429; kill 503 | homelab-python-test | in_progress | prova local; aguarda CI |
 | HL-AGT-004 | Threat model ADR antes do código do agente | `docs/adr/0003-homelab-agent-mdns.md` | ADR versionado no repo | docs | in_progress | TDD vermelho isolado não foi commitado à parte |
 | HL-AGT-005 | Fuzz básico de auth + agente sem socket/shell | corpus vazio/lixo/traversal; source sem docker.sock/`shell=True` | fuzz recusado; source prova `shell=False` | homelab-python-test | in_progress | prova local; aguarda CI |
-| HL-WEB-001 | Dashboard web HTTPS com login local no host homelab | bind opt-in, argon2id, sessão/CSRF | login→ação→logout E2E; CSRF ausente negado; cookie flags | web e2e disposable | pending | ADR 0004 aceite; código ainda não |
-| HL-WEB-002 | Paridade de ações com restore em duas etapas | mesmas ações do Player; nunca `--yes` automático | restore web sem confirmação não aplica | web e2e | pending | — |
-| HL-WEB-003 | “Abrir dashboard” do host selecionado no Player | URL HTTPS do appliance no browser do host admin | ação abre URL correcta local/remota | python test | pending | — |
-| HL-WEB-004 | Senha fraca recusada | política de senha no `web user add/password` e no login de bootstrap | teste prova rejeição com razão; hash nunca em logs | web test | pending | 2FA deferred |
-| HL-WEB-005 | Bind LAN, sem UPnP/port-forward; externo só Tailscale | default loopback/LAN; opt-in persistido; zero UPnP | bind `0.0.0.0` sem opt-in falha; scan de unidade não abre WAN | web test + compose-validate | pending | — |
-| HL-WEB-006 | Primeira conta nunca nasce pela web aberta | bootstrap só CLI/Player; web recusa signup sem user existente | E2E: web sem users → recusa; CLI cria; login passa | web e2e | pending | — |
+| HL-WEB-001 | Dashboard web HTTPS com login local no host homelab | `homelab_web.py`; bind opt-in; argon2id (scrypt fallback); sessão/CSRF | login→ação→logout; CSRF ausente 403; cookie Secure/HttpOnly/SameSite=Strict | homelab-python-test | in_progress | HTML mínimo; 2FA deferred; serve não arranca systemd |
+| HL-WEB-002 | Paridade de ações com restore em duas etapas | API status/apps/backup/logs/restore; never `--yes` | restore sem confirmação não chama pz; `--confirm-file` na apply | homelab-python-test | in_progress | paridade visual Player ainda rasa |
+| HL-WEB-003 | “Abrir dashboard” do host selecionado no Player | botão; URL HTTPS local `127.0.0.1:17443` ou host do registro | URL local/remota; `QDesktopServices.openUrl` | homelab-python-test | in_progress | prova unitária; browser real não aberto nos testes |
+| HL-WEB-004 | Senha fraca recusada | política em `web user add/password`; `--password-file` | rejeição com razão; hash nunca em HTML/audit | homelab-python-test + homelab-shell-test | in_progress | 2FA deferred |
+| HL-WEB-005 | Bind LAN, sem UPnP/port-forward; externo só Tailscale | default loopback; `lanBind` persistido; zero UPnP | bind `0.0.0.0` sem opt-in → `127.0.0.1`; source sem upnp | homelab-python-test | in_progress | unit file só como ficheiro |
+| HL-WEB-006 | Primeira conta nunca nasce pela web aberta | bootstrap CLI; `POST /signup` 403; login sem users 403 | E2E: web sem users recusa; CLI cria | homelab-python-test | in_progress | Player ainda não tem UI de `web user add` |
 | HL-SRV-001 | Página Servidor honesta | SMART/rede/disco read-only; desconhecido explícito | sensores ausentes → “indisponível”, nunca fabricado | python test | pending | — |
 | HL-ONB-001 | Onboarding guiado ponta a ponta no host admin | descobrir→parear→perfil→revisão→aplicar | E2E com stubs completa sem host real | integration | pending | — |
 | HL-BKP-001 | Backup/restore reversível | herdado do v1.15.1; expor na web na Fase 4 | já verified na CI disposable | homelab-shell-test + homelab-integration-disposable | verified | Rollback cobre dados de volume; `.env`/segredos fora do manifest. Rewind/horário deferred |
@@ -472,7 +472,8 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1 | `02b1360` | suíte hermética + 26 player | catálogo um clique |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1–2 | `192d2eb` | hosts stub + disposable script | CI 02b1360 vermelho (SC2016/SC2005); 192d2eb ainda a correr |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3 | `179bd93` | python-test + homelab-python + shellcheck 0.11 verdes; **0.9.0 SC2015** | disposable skipped |
-| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3–4 | este commit | pytest 45 passed; SC2015 corrigido; HTTPS 401; unit user sem systemctl | ADR 0004. Próximo: CI 0.9 verde + disposable |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3–4 | `98ddde9` | pytest 45 passed; SC2015 corrigido; HTTPS 401; unit user sem systemctl | ADR 0004. Disposable CI vermelho (compose stdout) |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1+4 | este commit | docker_cli stderr; contratos web CSRF/cookie/restore/bind; Player Abrir dashboard | CI disposable + homelab-python-test |
 
 ## Formato obrigatório de handoff
 

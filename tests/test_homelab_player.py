@@ -126,6 +126,9 @@ def test_homelab_page_builds_widgets(app):
     assert page._host_badge.text() == "Local"
     assert page._pair_btn is not None
     assert page._pair_btn.isEnabled() is False
+    assert page._dash_btn is not None
+    assert page._dash_btn.text() == "Abrir dashboard"
+    assert page.dashboard_url() == "https://127.0.0.1:17443/"
 
 
 def test_homelab_page_applies_status(app):
@@ -479,6 +482,26 @@ def test_homelab_remote_host_prefixes_qprocess(app):
     argv = calls[-1][2]
     assert argv[:4] == ["server", "homelab", "--host", "garage"]
     assert "plan" in argv
+
+
+def test_homelab_open_dashboard_url_local_and_remote(app):
+    import inspect
+
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    assert page.dashboard_url() == "https://127.0.0.1:17443/"
+    page._hosts["garage"] = {"alias": "garage", "user": "misael", "host": "192.168.1.8"}
+    page._host_combo.blockSignals(True)
+    page._host_combo.addItem("garage (misael@192.168.1.8)", "garage")
+    page._host_combo.setCurrentIndex(page._host_combo.findData("garage"))
+    page._host_combo.blockSignals(False)
+    assert page.dashboard_url() == "https://192.168.1.8:17443/"
+    src = inspect.getsource(mod.HomelabPage.open_dashboard)
+    assert "QDesktopServices" in src
+    assert "openUrl" in src
+    assert "subprocess" not in src
+    assert "--yes" not in src
 
 
 def test_homelab_pair_uses_ssh_copy_id_without_password(app):

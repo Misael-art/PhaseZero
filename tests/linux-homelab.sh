@@ -28,6 +28,7 @@ echo "=== syntax ==="
 bash -n "$REPO_ROOT/linux/server/homelab-stack.sh"
 bash -n "$REPO_ROOT/linux/server/homelab-apps.sh"
 bash -n "$REPO_ROOT/linux/server/homelab-hosts.sh"
+python3 -m py_compile "$REPO_ROOT/linux/server/homelab_web.py"
 bash -n "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh"
 bash -n "$REPO_ROOT/linux/server/casaos.sh"
 bash -n "$REPO_ROOT/linux/server/apply-common.sh"
@@ -135,6 +136,70 @@ echo "$after_disable" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled]
 upd="$("$REPO_ROOT/linux/pz" server homelab apps update --all --dry-run --json)"
 echo "$upd" | jq -e '.ok == true and .dryRun == true and ([.apps[].usesLatest] | all(. == false))' >/dev/null
 echo "  apps catalog ok"
+
+echo "=== apps JSON stays pure when compose writes to stdout ==="
+# Reproduce the disposable CI failure: docker compose v2 prints progress on
+# stdout. docker_cli must send that to stderr so --json remains parseable.
+FAKEDOCKER="$TMP/fakedocker"
+mkdir -p "$FAKEDOCKER"
+cat > "$FAKEDOCKER/docker" <<'EOS'
+#!/usr/bin/env bash
+echo " Container phasezero-n8n Stopping"
+echo " Container phasezero-n8n Removed"
+case "${1:-}" in
+  info) exit 0 ;;
+  compose)
+    if [ "${2:-}" = "version" ]; then
+      echo "Docker Compose version v2.27.0"
+      exit 0
+    fi
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$FAKEDOCKER/docker"
+mixed="$(
+    PATH="$FAKEDOCKER:$PATH"
+    export PATH
+    export PZ_HOMELAB_APPS_NO_DOCKER=0
+    export PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768
+    "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json
+)"
+echo "$mixed" | jq -e '.ok == true and .schemaVersion == "1" and .enabled == true' >/dev/null
+case "$mixed" in
+    '{'* ) ;;
+    *) echo "FAIL: enable stdout not JSON: $mixed" >&2; exit 1 ;;
+esac
+mixed_dis="$(
+    PATH="$FAKEDOCKER:$PATH"
+    export PATH
+    export PZ_HOMELAB_APPS_NO_DOCKER=0
+    "$REPO_ROOT/linux/pz" server homelab apps disable n8n --json
+)"
+echo "$mixed_dis" | jq -e '.ok == true and .enabled == false' >/dev/null
+case "$mixed_dis" in
+    '{'* ) ;;
+    *) echo "FAIL: disable stdout not JSON: $mixed_dis" >&2; exit 1 ;;
+esac
+echo "  compose stdout isolation ok"
+
+echo "=== web CLI bootstrap (no serve) ==="
+export PZ_HOMELAB_WEB_STATE="$TMP/web"
+"$REPO_ROOT/linux/pz" server homelab web status --json | jq -e \
+    '.schemaVersion == "1" and .tool == "homelab-web" and .bind == "127.0.0.1" and .users == 0' >/dev/null
+printf '%s\n' 'correct-horse-9x' > "$TMP/web-pw"
+chmod 600 "$TMP/web-pw"
+"$REPO_ROOT/linux/pz" server homelab web user add alice --password-file "$TMP/web-pw" --json |
+    jq -e '.ok == true and .user == "alice"' >/dev/null
+printf '%s\n' '123' > "$TMP/web-pw-weak"
+if "$REPO_ROOT/linux/pz" server homelab web user add bob --password-file "$TMP/web-pw-weak" --json >/dev/null 2>&1; then
+    echo "FAIL: weak password accepted" >&2
+    exit 1
+fi
+"$REPO_ROOT/linux/pz" server homelab web status --json | jq -e '.users == 1' >/dev/null
+unset PZ_HOMELAB_WEB_STATE
+echo "  web CLI ok"
 
 echo "=== hosts registry + ssh envelope ==="
 if "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh" >/dev/null 2>&1; then

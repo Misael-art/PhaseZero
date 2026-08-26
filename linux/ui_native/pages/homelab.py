@@ -52,6 +52,7 @@ class HomelabPage(BasePage):
         self._host_combo: QComboBox | None = None
         self._host_badge: QLabel | None = None
         self._pair_btn: QPushButton | None = None
+        self._dash_btn: QPushButton | None = None
 
     # ------------------------------------------------------------- theming
     def _set_state(self, state: str) -> None:
@@ -84,6 +85,11 @@ class HomelabPage(BasePage):
         self._pair_btn.setEnabled(False)
         self._pair_btn.clicked.connect(self.start_pair)
         header.addWidget(self._pair_btn)
+        self._dash_btn = QPushButton("Abrir dashboard")
+        self._dash_btn.setToolTip("Abre o dashboard HTTPS do host Homelab selecionado.")
+        self._dash_btn.setAccessibleName("Abrir dashboard")
+        self._dash_btn.clicked.connect(self.open_dashboard)
+        header.addWidget(self._dash_btn)
         self._host_combo.currentIndexChanged.connect(self._on_host_changed)
         header.addStretch(1)
         self._state_label = QLabel("—")
@@ -240,6 +246,22 @@ class HomelabPage(BasePage):
             return ""
         data = self._host_combo.currentData()
         return str(data) if data else ""
+
+    def dashboard_url(self) -> str:
+        """HTTPS URL of the appliance dashboard for the selected host."""
+        alias = self._selected_host()
+        if alias:
+            rec = self._hosts.get(alias) or {}
+            host = str(rec.get("host") or "127.0.0.1")
+            port = int(rec.get("webPort") or 17443)
+            return f"https://{host}:{port}/"
+        return "https://127.0.0.1:17443/"
+
+    def open_dashboard(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl(self.dashboard_url()))
 
     def _hl(self, *parts: str) -> list[str]:
         args = ["server", "homelab"]

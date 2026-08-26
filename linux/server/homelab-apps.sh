@@ -143,10 +143,13 @@ env_has_value() {
 }
 
 docker_cli() {
+    # JSON contract: compose chatter (up/rm/pull progress) belongs on stderr.
+    # docker compose v2 prints "Container … Stopping" on stdout; that mixed
+    # with --json and broke jq in the disposable CI job.
     if docker compose version >/dev/null 2>&1; then
-        docker compose "$@"
+        docker compose "$@" >&2
     elif command -v docker-compose >/dev/null 2>&1; then
-        docker-compose "$@"
+        docker-compose "$@" >&2
     else
         return 127
     fi

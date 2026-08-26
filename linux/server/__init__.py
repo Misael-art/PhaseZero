@@ -1,1 +1,1 @@
-# Namespace for Homelab Python helpers (agent, future web).
+# Namespace for Homelab Python helpers (agent, web dashboard).

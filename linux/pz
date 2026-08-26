@@ -51,7 +51,7 @@ Usage:
   pz waydroid boot status     Manage direct GRUB Waydroid boot entry (install|remove|status|next|next-reboot|set-default|clear-next)
   pz server status            Home server (LLM/homelab/boot) status
   pz server llm <action>      Local LLM server (install|expose-lan|restore|status)
-  pz server homelab <action>  Homelab: stack (plan|up|down|open|logs|backup|restore|update|repair) / apps (list|enable|disable|update) / hosts (add|list|remove|ping) / --host <alias> / status (status|verify) / profile (list|set <key>|get) / governor ... [--extras] [--json] [--profile <key>]
+  pz server homelab <action>  Homelab: stack (plan|up|down|open|logs|backup|restore|update|repair) / apps (list|enable|disable|update) / hosts (add|list|remove|ping) / --host <alias> / agent / web (status|enable|user) / status (status|verify) / profile (list|set <key>|get) / governor ... [--extras] [--json] [--profile <key>]
   pz server casaos <action>   CasaOS opt-in compatibility gate (status|plan|install)
   pz server hermes <action>   Hermes remote actuation (setup|start|status)
   pz server slim <action>     Reversible OS slimming (apply [--aggressive]|restore|status)
@@ -531,6 +531,7 @@ cmd_server() {
                 hosts) bash "$PZ_ROOT/linux/server/homelab-hosts.sh" "${@:2}" ;;
                 agent) python3 "$PZ_ROOT/linux/server/homelab_agent.py" "${@:2}" ;;
                 discover) python3 "$PZ_ROOT/linux/server/homelab_agent.py" discover --json ;;
+                web) python3 "$PZ_ROOT/linux/server/homelab_web.py" "${@:2}" ;;
                 *) bash "$PZ_ROOT/linux/server/homelab-stack.sh" "$@" ;;
             esac
             ;;
