@@ -6,6 +6,9 @@
 # bring-up is skipped with an actionable reason when the daemon is down.
 # Host apply of real workloads is a CI-disposable concern, not this script's
 # default: callers in the hermetic suite pin PZ_HOMELAB_STATE to tmp.
+#
+# jq --arg bindings look like shell expansions inside single-quoted programs.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

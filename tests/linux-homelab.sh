@@ -115,11 +115,11 @@ if "$REPO_ROOT/linux/pz" server homelab apps enable no-such-app --json >/dev/nul
 fi
 gov_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=256 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json || true)"
 echo "$gov_out" | jq -e '.ok == false and .governor.verdict == "fail"' >/dev/null
-echo "$("$REPO_ROOT/linux/pz" server homelab apps list --json)" | jq -e \
+"$REPO_ROOT/linux/pz" server homelab apps list --json | jq -e \
     '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
 plan_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --dry-run --json)"
 echo "$plan_out" | jq -e '.ok == true and .dryRun == true and .applied == false' >/dev/null
-echo "$("$REPO_ROOT/linux/pz" server homelab apps list --json)" | jq -e \
+"$REPO_ROOT/linux/pz" server homelab apps list --json | jq -e \
     '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
 enable_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json)"
 echo "$enable_out" | jq -e '.ok == true and .enabled == true and .started == false' >/dev/null

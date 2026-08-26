@@ -58,7 +58,10 @@ echo "$en" | jq -e '.ok == true and .started == true and .enabled == true' >/dev
 
 echo "=== isolation: neighbours not started ==="
 names="$(docker ps --filter "name=phasezero-" --format '{{.Names}}')"
-echo "$names" | grep -qx phasezero-vaultwarden
+if ! echo "$names" | grep -qx phasezero-vaultwarden; then
+    echo "FAIL: vaultwarden not running: $names" >&2
+    exit 1
+fi
 if echo "$names" | grep -Eqx 'phasezero-(jellyfin|syncthing|uptime-kuma|n8n|portainer)'; then
     echo "FAIL: neighbour started: $names" >&2
     exit 1
@@ -92,8 +95,8 @@ if docker ps --filter "name=phasezero-" --format '{{.Names}}' | grep -q .; then
     echo "FAIL: leftover phasezero containers after disable" >&2
     exit 1
 fi
-echo "$("$REPO_ROOT/linux/pz" server homelab apps list --json)" | jq -e \
+"$REPO_ROOT/linux/pz" server homelab apps list --json | jq -e \
     '[.apps[] | select(.key == "vaultwarden") | .enabled] | first == false' >/dev/null
-echo "$("$REPO_ROOT/linux/pz" server homelab apps list --json)" | jq -e \
+"$REPO_ROOT/linux/pz" server homelab apps list --json | jq -e \
     '[.apps[] | select(.key == "jellyfin") | .running] | first == false' >/dev/null
 echo "=== disposable apps isolate ok ==="
