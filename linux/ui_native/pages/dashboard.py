@@ -101,6 +101,12 @@ class DashboardPage(BasePage):
             return None
         card = QFrame()
         card.setObjectName("healthHero")
+        # Faixa precisa encolher em viewports estreitos: sem largura mínima
+        # herdada de texto longo (labels têm wrap; política Ignored horizontal).
+        policy = card.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        card.setSizePolicy(policy)
+        card.setMinimumWidth(0)
         column = QVBoxLayout(card)
         column.setContentsMargins(20, 16, 20, 16)
         column.setSpacing(8)
@@ -117,9 +123,11 @@ class DashboardPage(BasePage):
             label = QLabel(title)
             label.setObjectName("serviceTitle")
             label.setWordWrap(True)
+            label.setMinimumWidth(0)
             hint = QLabel(_hint_for(number))
             hint.setObjectName("cardDescription")
             hint.setWordWrap(True)
+            hint.setMinimumWidth(0)
             text.addWidget(label)
             text.addWidget(hint)
             run = QPushButton("Executar")
