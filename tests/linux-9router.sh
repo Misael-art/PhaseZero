@@ -106,7 +106,39 @@ if grep -Fq 'killProcessOnPort' "$ROOT/linux/ai/9router-server-runner.js"; then
 fi
 grep -Eq '^ExecStart=(/usr/lib/phasezero/linux/pz|'"$ROOT"'/linux/pz) ai 9router watch-once$' "$watch_unit"
 
-"$HOME/.local/bin/phasezero-9router-server" >/dev/null 2>&1 &
+env_file="$XDG_CONFIG_HOME/phasezero/ai-proxies/9router.env"
+
+# repair must rebuild the server variables a damaged env lost, and must carry the
+# client credential across the rewrite instead of dropping it.
+grep -Eq '^PORT=20128$' "$env_file"
+grep -Eq '^HOSTNAME=127\.0\.0\.1$' "$env_file"
+grep -Fq "PHASEZERO_9ROUTER_API_KEY=$secret_marker" "$env_file"
+
+# The server wrapper is the last line of defence: without the managed loopback
+# variables the upstream server binds 0.0.0.0:3000, so it must refuse to start.
+set +e
+HOSTNAME= PORT= "$HOME/.local/bin/phasezero-9router-server" >/dev/null 2>&1
+guard_rc=$?
+set -e
+test "$guard_rc" = 78
+
+# A single-letter key is the signature of a scratch write that escaped its
+# sandbox onto the live file; env_upsert must reject it and leave the file alone.
+manager_lib="$ROOT/linux/ai/9router-manager.sh"
+upsert_err="$( ( source "$manager_lib" status; env_upsert K v ) 2>&1 1>/dev/null || true )"
+grep -Fq 'refusing to write malformed 9Router env key: K' <<< "$upsert_err"
+grep -Fq "PHASEZERO_9ROUTER_API_KEY=$secret_marker" "$env_file"
+( source "$manager_lib" status; env_upsert JWT_SECRET rotated ) >/dev/null 2>&1
+grep -Eq '^JWT_SECRET=rotated$' "$env_file"
+
+# Truncation must be recoverable from the rotating backup, not fatal.
+cp "$env_file" "$TMP_ROOT/env-good"
+printf 'K=v\n' > "$env_file"
+"$ROOT/linux/pz" ai 9router repair >/dev/null
+grep -Fq "PHASEZERO_9ROUTER_API_KEY=$secret_marker" "$env_file"
+grep -Eq '^PORT=20128$' "$env_file"
+
+HOSTNAME=127.0.0.1 PORT=20128 "$HOME/.local/bin/phasezero-9router-server" >/dev/null 2>&1 &
 runner_pid=$!
 sleep 0.3
 kill -0 "$runner_pid"
