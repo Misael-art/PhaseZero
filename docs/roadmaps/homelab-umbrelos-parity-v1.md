@@ -14,7 +14,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Fase 5: host-facts honestos + onboarding; CI a8f7da1 vermelho no shell-lint SC2030 |
+| Status | Fase 6: disposable CI verde; runner skip do compose real; fault injection porta/cert |
 | Última verificação | 2026-08-26, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
 | Base observada | `origin/main` `a85c7a4` (release v1.17.4) |
@@ -421,7 +421,7 @@ reutilizar ID para requisito diferente.
 
 | ID | Requisito | Implementação | Teste comportamental | Prova CI | Estado | Limitação |
 |---|---|---|---|---|---|---|
-| HL-APP-001 | Apps individuais com manifest versionado e compose por subconjunto | `assets/home-server/apps/catalog.json` + `apps/compose/*.yml` + `linux/server/homelab-apps.sh` | compose config por subconjunto; enable/disable isolado no estado; job `homelab-apps-disposable` (vaultwarden health) | homelab-shell-test + compose-validate + homelab-apps-disposable | in_progress | catálogo curado; disposable só com `PZ_HOMELAB_APPS_DISPOSABLE=1`; verified após CI verde |
+| HL-APP-001 | Apps individuais com manifest versionado e compose por subconjunto | `assets/home-server/apps/catalog.json` + `apps/compose/*.yml` + `linux/server/homelab-apps.sh` | compose config por subconjunto; enable/disable isolado no estado; job `homelab-apps-disposable` (vaultwarden health) | homelab-shell-test + compose-validate + homelab-apps-disposable | verified | catálogo curado; `tests/runner.sh` ignora scripts `# Disposable CI`; prova run `33009994646` |
 | HL-APP-002 | Preflight de orçamento por card | governor soma enabled+app+deps vs RAM (headroom 20%); card desliga Ligar quando fail | `PZ_HOMELAB_RAM_TOTAL_OVERRIDE=256` recusa n8n com razão; não persiste | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
 | HL-APP-003 | UI cards um clique no Player (host admin) | grid no Player, Prévia/Ligar/Atualizar via QProcess | offscreen: 26 testes; preview spawna `apps enable --dry-run`; sem subprocess.run | homelab-python-test | in_progress | prova unitária local; aguarda CI |
 | HL-APP-004 | Update por digest sem `latest` | lock+catálogo pinam tags; `apps update --dry-run` recusa `:latest`; digest só após pull permitido | render/catálogo sem `latest`; digest ainda não pinado no lock | compose-validate + shell test | in_progress | lock continua por tag; digest em `$HOMELAB_STATE/image-digests.json` após pull |
@@ -474,7 +474,8 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3 | `179bd93` | python-test + homelab-python + shellcheck 0.11 verdes; **0.9.0 SC2015** | disposable skipped |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3–4 | `98ddde9` | pytest 45 passed; SC2015 corrigido; HTTPS 401; unit user sem systemctl | ADR 0004. Disposable CI vermelho (compose stdout) |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1+4 | `a8f7da1` | docker_cli stderr; contratos web CSRF/cookie/restore/bind; Player Abrir dashboard | CI 33006026031: python/homelab-python verdes; **shell-lint 0.11 SC2030**; disposable skipped |
-| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 5 | este commit | SC2030 via `env`; host-facts honestos; onboarding Player | CI shell-lint + homelab-apps-disposable |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 5 | `075abf4` | SC2030 via `env`; host-facts honestos; onboarding Player | CI 33009994646: lint/python/disposable verdes; **shell-test** falhou (runner globou disposable) |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 6 | este commit | runner skip `# Disposable CI`; porta ocupada + cert corrupto | CI shell-test + homelab-python-test |
 
 ## Formato obrigatório de handoff
 

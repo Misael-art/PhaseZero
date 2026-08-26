@@ -95,6 +95,24 @@ def test_bind_wan_without_lan_opt_in_stays_loopback(tmp_path, monkeypatch):
     assert boxed.resolve_bind("0.0.0.0") == "0.0.0.0"
 
 
+def test_web_bind_port_in_use_fails_closed(web, tmp_path):
+    httpd = serve(web, tls=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = httpd.server_address[1]
+        other = HomelabWeb(
+            state_dir=tmp_path / "web-other",
+            invoker=lambda argv: (0, "{}", ""),
+            bind="127.0.0.1",
+            port=port,
+        )
+        with pytest.raises(OSError):
+            serve(other, tls=False)
+    finally:
+        httpd.shutdown()
+
+
 def test_weak_password_rejected(web):
     result = web.add_user("alice", "123")
     assert result["ok"] is False

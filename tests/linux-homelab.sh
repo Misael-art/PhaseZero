@@ -235,6 +235,8 @@ if "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh" >/dev/null 2>&1; then
     echo "FAIL: disposable script ran without PZ_HOMELAB_APPS_DISPOSABLE"
     exit 1
 fi
+grep -q '^# Disposable CI' "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh"
+grep -q 'Disposable CI' "$REPO_ROOT/tests/runner.sh"
 add_out="$("$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json)"
 echo "$add_out" | jq -e '.ok == true and .host.alias == "garage" and .host.user == "misael" and .host.port == 22' >/dev/null
 hosts_file="$XDG_CONFIG_HOME/phasezero/homelab-hosts.json"

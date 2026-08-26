@@ -206,6 +206,33 @@ def test_user_unit_never_starts_root_or_systemctl(agent, tmp_path, monkeypatch):
     assert "systemctl" not in src
 
 
+def test_bind_port_in_use_fails_closed(agent, tmp_path):
+    httpd = serve(agent, tls=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = httpd.server_address[1]
+        other = HomelabAgent(
+            state_dir=tmp_path / "agent-other",
+            invoker=lambda argv: (0, "{}", ""),
+            bind="127.0.0.1",
+            port=port,
+        )
+        with pytest.raises(OSError):
+            serve(other, tls=False)
+    finally:
+        httpd.shutdown()
+
+
+def test_corrupt_tls_cert_refuses_serve(agent):
+    cert = agent.state_dir / "cert.pem"
+    key = agent.state_dir / "key.pem"
+    cert.write_text("not-a-cert\n", encoding="utf-8")
+    key.write_text("not-a-key\n", encoding="utf-8")
+    with pytest.raises((ssl.SSLError, OSError, ValueError)):
+        serve(agent, tls=True)
+
+
 def test_bind_wan_without_lan_opt_in_stays_loopback(tmp_path, monkeypatch):
     monkeypatch.setenv("PZ_HOMELAB_AGENT_BIND", "0.0.0.0")
     boxed = HomelabAgent(
