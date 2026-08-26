@@ -14,8 +14,18 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+import pytest
+
+from PySide6.QtWidgets import QApplication
+
+from linux.ui_native.models import ActionSpec  # noqa: E402
 from linux.ui_native.result_parser import guidance, is_pending_report, severity_for  # noqa: E402
 from linux.ui_native.status_loader import redact, report_outcome  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def app():
+    return QApplication.instance() or QApplication([])
 
 
 # --- report_outcome ---------------------------------------------------------
@@ -95,3 +105,39 @@ def test_guidance_caps_reasons_and_tolerates_garbage():
     assert len(out["reasons"]) == 6
     assert out["summary"] is None and out["next_action"] is None
     assert guidance("not-a-dict") == {"summary": None, "next_action": None, "reasons": []}
+
+
+# --- Fase B: Início que orienta (primeiro uso) -------------------------------
+
+def _dashboard_page(monkeypatch, *, records):
+    from PySide6.QtWidgets import QFrame, QLabel
+    import linux.ui_native.pages.dashboard as mod
+    monkeypatch.setattr(mod.OperationLedger, "records", lambda self, limit=100: records)
+    by_id = {
+        "system.doctor.system": ActionSpec(id="system.doctor.system", title="Saúde", description="d", icon="i", category="t", args=("doctor",)),
+        "ai.compat": ActionSpec(id="ai.compat", title="Agentes", description="d", icon="i", category="t", args=("ai",)),
+        "ai.backup.export": ActionSpec(id="ai.backup.export", title="Backup IA", description="d", icon="i", category="t", args=("backup",)),
+    }
+    page = mod.DashboardPage(ROOT, None, [], by_id=by_id)
+    page.build()
+    welcome = next(
+        label.text() for label in page.findChildren(QLabel)
+        if label.objectName() == "welcomeTitle"
+    )
+    heroes = [w for w in page.findChildren(QFrame) if w.objectName() == "healthHero"]
+    return welcome, heroes
+
+
+def test_dashboard_first_run_shows_onboarding(app, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QLabel
+    welcome, heroes = _dashboard_page(monkeypatch, records=[])
+    assert "Vamos configurar" in welcome
+    assert heroes, "faixa Comece por aqui ausente no primeiro uso"
+    texts = " ".join(l.text() for l in heroes[0].findChildren(QLabel))
+    for step in ("Diagnosticar o sistema", "Preparar agentes de IA", "Criar primeiro backup"):
+        assert step in texts
+
+
+def test_dashboard_returning_run_keeps_old_copy(app, monkeypatch):
+    welcome, _heroes = _dashboard_page(monkeypatch, records=[{"id": "op1"}])
+    assert "Bem-vindo de volta" in welcome
