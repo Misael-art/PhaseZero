@@ -532,6 +532,7 @@ cmd_server() {
                 agent) python3 "$PZ_ROOT/linux/server/homelab_agent.py" "${@:2}" ;;
                 discover) python3 "$PZ_ROOT/linux/server/homelab_agent.py" discover --json ;;
                 web) python3 "$PZ_ROOT/linux/server/homelab_web.py" "${@:2}" ;;
+                host-facts) bash "$PZ_ROOT/linux/server/homelab-host-facts.sh" "${@:2}" ;;
                 *) bash "$PZ_ROOT/linux/server/homelab-stack.sh" "$@" ;;
             esac
             ;;

@@ -53,6 +53,11 @@ class HomelabPage(BasePage):
         self._host_badge: QLabel | None = None
         self._pair_btn: QPushButton | None = None
         self._dash_btn: QPushButton | None = None
+        self._onboard_step = 0
+        self._onboard_confirmed = False
+        self._onboard_state: dict = {}
+        self._onboard_label: QLabel | None = None
+        self._onboard_next: QPushButton | None = None
 
     # ------------------------------------------------------------- theming
     def _set_state(self, state: str) -> None:
@@ -101,6 +106,23 @@ class HomelabPage(BasePage):
         refresh.clicked.connect(self.refresh_status)
         header.addWidget(refresh)
         self._layout.addLayout(header)
+
+        onboard = QGroupBox("Primeiros passos")
+        onboard.setAccessibleName("Onboarding do Homelab")
+        o_lay = QHBoxLayout()
+        self._onboard_label = QLabel(self._onboard_prompt())
+        self._onboard_label.setWordWrap(True)
+        start = QPushButton("Começar")
+        start.setAccessibleName("Começar onboarding")
+        start.clicked.connect(self.start_onboarding)
+        self._onboard_next = QPushButton("Avançar")
+        self._onboard_next.setAccessibleName("Avançar onboarding")
+        self._onboard_next.clicked.connect(self.onboard_advance)
+        o_lay.addWidget(self._onboard_label, 1)
+        o_lay.addWidget(start)
+        o_lay.addWidget(self._onboard_next)
+        onboard.setLayout(o_lay)
+        self._layout.addWidget(onboard)
 
         # App cards (one-click catalog) ------------------------------------
         cards_box = QGroupBox("Aplicativos")
@@ -262,6 +284,79 @@ class HomelabPage(BasePage):
         from PySide6.QtGui import QDesktopServices
 
         QDesktopServices.openUrl(QUrl(self.dashboard_url()))
+
+    ONBOARD_STEPS = ("discover", "pair", "profile", "review", "apply")
+
+    def onboard_step_name(self) -> str:
+        steps = self.ONBOARD_STEPS
+        idx = min(max(self._onboard_step, 0), len(steps) - 1)
+        return steps[idx]
+
+    def _onboard_prompt(self) -> str:
+        name = self.onboard_step_name()
+        copy = {
+            "discover": "Descobrir o host Homelab na rede (mDNS ou IP:porta).",
+            "pair": "Parear a chave SSH. Senha nunca vai no argv.",
+            "profile": "Escolher perfil e apps. Orçamento recusa host curto.",
+            "review": "Revisão: bind local, sem UPnP, fora de casa só Tailscale.",
+            "apply": "Aplicar só depois da revisão. Preview via repair; nunca --yes.",
+        }
+        return copy[name]
+
+    def start_onboarding(self) -> None:
+        self._onboard_step = 0
+        self._onboard_confirmed = False
+        self._onboard_state = {}
+        self._refresh_onboard_label()
+
+    def _refresh_onboard_label(self) -> None:
+        if self._onboard_label is not None:
+            self._onboard_label.setText(self._onboard_prompt())
+
+    def onboard_ingest_discover(self, payload: dict) -> None:
+        self._onboard_state["discover"] = payload if isinstance(payload, dict) else {}
+
+    def onboard_ingest_pair(self, ok: bool) -> None:
+        self._onboard_state["pair"] = bool(ok)
+
+    def onboard_confirm_review(self) -> None:
+        self._onboard_confirmed = True
+        self._onboard_state["review"] = {
+            "lanBind": False,
+            "upnp": False,
+            "external": "tailscale",
+        }
+
+    def onboard_review_text(self) -> str:
+        return (
+            "Bind padrão 127.0.0.1. Sem UPnP. Acesso externo só via Tailscale. "
+            "SMART/rede/disco ausentes aparecem como indisponível."
+        )
+
+    def onboard_advance(self) -> None:
+        current = self.onboard_step_name()
+        if current == "discover" and "discover" not in self._onboard_state:
+            self.onboard_ingest_discover(
+                {"service": "phasezero-homelab._tcp", "manualFallback": "IP:17432"}
+            )
+        elif current == "pair" and "pair" not in self._onboard_state:
+            alias = self._selected_host()
+            self.onboard_ingest_pair(bool(alias))
+        elif current == "profile":
+            self._onboard_state["profile"] = True
+        elif current == "review" and not self._onboard_confirmed:
+            return
+        elif current == "apply":
+            self.onboard_apply()
+            return
+        if self._onboard_step < len(self.ONBOARD_STEPS) - 1:
+            self._onboard_step += 1
+        self._refresh_onboard_label()
+
+    def onboard_apply(self) -> None:
+        if not self._onboard_confirmed:
+            return
+        self.run_cmd(["repair", "--json"])
 
     def _hl(self, *parts: str) -> list[str]:
         args = ["server", "homelab"]

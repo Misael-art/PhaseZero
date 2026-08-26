@@ -129,6 +129,8 @@ def test_homelab_page_builds_widgets(app):
     assert page._dash_btn is not None
     assert page._dash_btn.text() == "Abrir dashboard"
     assert page.dashboard_url() == "https://127.0.0.1:17443/"
+    assert page.onboard_step_name() == "discover"
+    assert page._onboard_next is not None
 
 
 def test_homelab_page_applies_status(app):
@@ -502,6 +504,43 @@ def test_homelab_open_dashboard_url_local_and_remote(app):
     assert "openUrl" in src
     assert "subprocess" not in src
     assert "--yes" not in src
+
+
+def test_homelab_onboarding_reaches_apply_without_yes(app):
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page.start_onboarding()
+    assert page.onboard_step_name() == "discover"
+    page.onboard_ingest_discover(
+        {"service": "phasezero-homelab._tcp", "manualFallback": "IP:17432"}
+    )
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    page.onboard_ingest_pair(True)
+    page.onboard_advance()
+    assert page.onboard_step_name() == "profile"
+    page.onboard_advance()
+    assert page.onboard_step_name() == "review"
+    assert "UPnP" in page.onboard_review_text()
+    page.onboard_advance()
+    assert page.onboard_step_name() == "review"
+    page.onboard_confirm_review()
+    page.onboard_advance()
+    assert page.onboard_step_name() == "apply"
+    calls = []
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    page._proc = None
+    try:
+        page.onboard_apply()
+    finally:
+        mod.QProcess = real_qprocess
+    argv = calls[-1][2]
+    assert argv[:3] == ["server", "homelab", "repair"]
+    assert "--json" in argv
+    assert "--yes" not in argv
 
 
 def test_homelab_pair_uses_ssh_copy_id_without_password(app):

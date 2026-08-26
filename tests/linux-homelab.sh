@@ -28,6 +28,7 @@ echo "=== syntax ==="
 bash -n "$REPO_ROOT/linux/server/homelab-stack.sh"
 bash -n "$REPO_ROOT/linux/server/homelab-apps.sh"
 bash -n "$REPO_ROOT/linux/server/homelab-hosts.sh"
+bash -n "$REPO_ROOT/linux/server/homelab-host-facts.sh"
 python3 -m py_compile "$REPO_ROOT/linux/server/homelab_web.py"
 bash -n "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh"
 bash -n "$REPO_ROOT/linux/server/casaos.sh"
@@ -160,11 +161,10 @@ esac
 EOS
 chmod +x "$FAKEDOCKER/docker"
 mixed="$(
-    PATH="$FAKEDOCKER:$PATH"
-    export PATH
-    export PZ_HOMELAB_APPS_NO_DOCKER=0
-    export PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768
-    "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json
+    env PATH="$FAKEDOCKER:$PATH" \
+        PZ_HOMELAB_APPS_NO_DOCKER=0 \
+        PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 \
+        "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json
 )"
 echo "$mixed" | jq -e '.ok == true and .schemaVersion == "1" and .enabled == true' >/dev/null
 case "$mixed" in
@@ -172,10 +172,9 @@ case "$mixed" in
     *) echo "FAIL: enable stdout not JSON: $mixed" >&2; exit 1 ;;
 esac
 mixed_dis="$(
-    PATH="$FAKEDOCKER:$PATH"
-    export PATH
-    export PZ_HOMELAB_APPS_NO_DOCKER=0
-    "$REPO_ROOT/linux/pz" server homelab apps disable n8n --json
+    env PATH="$FAKEDOCKER:$PATH" \
+        PZ_HOMELAB_APPS_NO_DOCKER=0 \
+        "$REPO_ROOT/linux/pz" server homelab apps disable n8n --json
 )"
 echo "$mixed_dis" | jq -e '.ok == true and .enabled == false' >/dev/null
 case "$mixed_dis" in
@@ -200,6 +199,36 @@ fi
 "$REPO_ROOT/linux/pz" server homelab web status --json | jq -e '.users == 1' >/dev/null
 unset PZ_HOMELAB_WEB_STATE
 echo "  web CLI ok"
+
+echo "=== host-facts never invent sensors ==="
+facts="$(
+    PZ_HOMELAB_SMARTCTL=/no/such/smartctl \
+    PZ_HOMELAB_SENSORS=/no/such/sensors \
+    PZ_HOMELAB_THERMAL_DIR="$TMP/no-thermal" \
+    "$REPO_ROOT/linux/pz" server homelab host-facts --json
+)"
+echo "$facts" | jq -e '
+  .schemaVersion == "1" and .tool == "homelab-host-facts"
+  and .smart.available == false
+  and .temperature.available == false
+  and .temperature.celsius == null
+  and (.smart.reason | test("ausente"))
+' >/dev/null
+if echo "$facts" | jq -e '.temperature.celsius != null and .temperature.available == false' >/dev/null; then
+    echo "FAIL: fabricated temperature" >&2
+    exit 1
+fi
+mkdir -p "$TMP/thermal/thermal_zone0"
+printf '42000\n' > "$TMP/thermal/thermal_zone0/temp"
+printf 'x86_pkg_temp\n' > "$TMP/thermal/thermal_zone0/type"
+hot="$(
+    PZ_HOMELAB_SMARTCTL=/no/such/smartctl \
+    PZ_HOMELAB_SENSORS=/no/such/sensors \
+    PZ_HOMELAB_THERMAL_DIR="$TMP/thermal" \
+    "$REPO_ROOT/linux/pz" server homelab host-facts --json
+)"
+echo "$hot" | jq -e '.temperature.available == true and .temperature.celsius == 42' >/dev/null
+echo "  host-facts ok"
 
 echo "=== hosts registry + ssh envelope ==="
 if "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh" >/dev/null 2>&1; then

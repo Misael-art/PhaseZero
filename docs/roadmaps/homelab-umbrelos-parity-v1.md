@@ -14,7 +14,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Fase 4: dashboard web mínimo (CSRF/sessão/restore/bind) + correção JSON do compose; disposable CI ainda pendente |
+| Status | Fase 5: host-facts honestos + onboarding; CI a8f7da1 vermelho no shell-lint SC2030 |
 | Última verificação | 2026-08-26, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
 | Base observada | `origin/main` `a85c7a4` (release v1.17.4) |
@@ -441,8 +441,8 @@ reutilizar ID para requisito diferente.
 | HL-WEB-004 | Senha fraca recusada | política em `web user add/password`; `--password-file` | rejeição com razão; hash nunca em HTML/audit | homelab-python-test + homelab-shell-test | in_progress | 2FA deferred |
 | HL-WEB-005 | Bind LAN, sem UPnP/port-forward; externo só Tailscale | default loopback; `lanBind` persistido; zero UPnP | bind `0.0.0.0` sem opt-in → `127.0.0.1`; source sem upnp | homelab-python-test | in_progress | unit file só como ficheiro |
 | HL-WEB-006 | Primeira conta nunca nasce pela web aberta | bootstrap CLI; `POST /signup` 403; login sem users 403 | E2E: web sem users recusa; CLI cria | homelab-python-test | in_progress | Player ainda não tem UI de `web user add` |
-| HL-SRV-001 | Página Servidor honesta | SMART/rede/disco read-only; desconhecido explícito | sensores ausentes → “indisponível”, nunca fabricado | python test | pending | — |
-| HL-ONB-001 | Onboarding guiado ponta a ponta no host admin | descobrir→parear→perfil→revisão→aplicar | E2E com stubs completa sem host real | integration | pending | — |
+| HL-SRV-001 | Página Servidor honesta | `homelab-host-facts.sh` + cartão Hardware; SMART/rede/disco/temp | sensores ausentes → “indisponível”; sysfs 42 °C só com ficheiro | homelab-shell-test + python-test | in_progress | smartctl `-H` read-only; sem parse inventivo de `sensors -u` |
+| HL-ONB-001 | Onboarding guiado ponta a ponta no host admin | wizard Player: discover→pair→profile→review→apply (`repair --json`) | E2E stubs; apply sem revisão não dispara; nunca `--yes` | homelab-python-test | in_progress | apply é repair/preview, não `up` no host |
 | HL-BKP-001 | Backup/restore reversível | herdado do v1.15.1; expor na web na Fase 4 | já verified na CI disposable | homelab-shell-test + homelab-integration-disposable | verified | Rollback cobre dados de volume; `.env`/segredos fora do manifest. Rewind/horário deferred |
 
 ## Estado vivo
@@ -473,7 +473,8 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1–2 | `192d2eb` | hosts stub + disposable script | CI 02b1360 vermelho (SC2016/SC2005); 192d2eb ainda a correr |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3 | `179bd93` | python-test + homelab-python + shellcheck 0.11 verdes; **0.9.0 SC2015** | disposable skipped |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3–4 | `98ddde9` | pytest 45 passed; SC2015 corrigido; HTTPS 401; unit user sem systemctl | ADR 0004. Disposable CI vermelho (compose stdout) |
-| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1+4 | este commit | docker_cli stderr; contratos web CSRF/cookie/restore/bind; Player Abrir dashboard | CI disposable + homelab-python-test |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1+4 | `a8f7da1` | docker_cli stderr; contratos web CSRF/cookie/restore/bind; Player Abrir dashboard | CI 33006026031: python/homelab-python verdes; **shell-lint 0.11 SC2030**; disposable skipped |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 5 | este commit | SC2030 via `env`; host-facts honestos; onboarding Player | CI shell-lint + homelab-apps-disposable |
 
 ## Formato obrigatório de handoff
 
