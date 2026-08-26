@@ -48,6 +48,10 @@ class HomelabPage(BasePage):
         self._pending_confirm_file: Path | None = None
         self._cards_layout: QGridLayout | None = None
         self._cards_host: QWidget | None = None
+        self._hosts: dict[str, dict] = {}
+        self._host_combo: QComboBox | None = None
+        self._host_badge: QLabel | None = None
+        self._pair_btn: QPushButton | None = None
 
     # ------------------------------------------------------------- theming
     def _set_state(self, state: str) -> None:
@@ -64,6 +68,23 @@ class HomelabPage(BasePage):
         title = QLabel("Homelab Player")
         title.setStyleSheet("font-size:17px;font-weight:700")
         header.addWidget(title)
+        host_caption = QLabel("Host:")
+        self._host_combo = QComboBox()
+        self._host_combo.setAccessibleName("Host Homelab")
+        self._host_combo.addItem("Este computador (local)", "")
+        host_caption.setBuddy(self._host_combo)
+        header.addWidget(host_caption)
+        header.addWidget(self._host_combo)
+        self._host_badge = QLabel("Local")
+        self._host_badge.setObjectName("serviceState")
+        self._host_badge.setProperty("state", "success")
+        header.addWidget(self._host_badge)
+        self._pair_btn = QPushButton("Parear")
+        self._pair_btn.setToolTip("Copia a chave SSH sem colocar senha na linha de comando.")
+        self._pair_btn.setEnabled(False)
+        self._pair_btn.clicked.connect(self.start_pair)
+        header.addWidget(self._pair_btn)
+        self._host_combo.currentIndexChanged.connect(self._on_host_changed)
         header.addStretch(1)
         self._state_label = QLabel("—")
         self._state_label.setObjectName("serviceState")
@@ -167,7 +188,7 @@ class HomelabPage(BasePage):
         out_layout.addWidget(self._bar)
         self._layout.addWidget(out_group, 1)
 
-        QTimer.singleShot(0, self.refresh_status)
+        QTimer.singleShot(0, self.refresh_hosts)
 
     # -- data ---------------------------------------------------------------
     def _setup_proc(self, proc: QProcess) -> None:
@@ -214,21 +235,148 @@ class HomelabPage(BasePage):
         proc.start(str(self.root / "linux" / "pz"), args)
         self._proc = proc
 
+    def _selected_host(self) -> str:
+        if self._host_combo is None:
+            return ""
+        data = self._host_combo.currentData()
+        return str(data) if data else ""
+
+    def _hl(self, *parts: str) -> list[str]:
+        args = ["server", "homelab"]
+        alias = self._selected_host()
+        if alias:
+            args += ["--host", alias]
+        args.extend(parts)
+        return args
+
+    def _on_host_changed(self) -> None:
+        alias = self._selected_host()
+        if self._host_badge is not None:
+            if alias:
+                self._host_badge.setText("Remoto")
+                self._host_badge.setProperty("state", "warning")
+            else:
+                self._host_badge.setText("Local")
+                self._host_badge.setProperty("state", "success")
+            self._host_badge.style().unpolish(self._host_badge)
+            self._host_badge.style().polish(self._host_badge)
+        if self._pair_btn is not None:
+            self._pair_btn.setEnabled(bool(alias))
+        if self._proc is None or self._proc.state() == QProcess.NotRunning:
+            self.refresh_status()
+
+    def refresh_hosts(self) -> None:
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            return
+        self._spawn(["server", "homelab", "hosts", "list", "--json"], self._on_hosts_done)
+
+    def _on_hosts_done(self, code: int, raw: bytes, err: bytes) -> None:
+        self._proc = None
+        payload: dict = {}
+        for line in raw.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    payload = json.loads(line)
+                    break
+                except Exception:
+                    continue
+        hosts = payload.get("hosts") if isinstance(payload.get("hosts"), list) else []
+        current = self._selected_host()
+        if self._host_combo is not None:
+            self._host_combo.blockSignals(True)
+            self._host_combo.clear()
+            self._host_combo.addItem("Este computador (local)", "")
+            self._hosts = {}
+            for host in hosts:
+                if not isinstance(host, dict):
+                    continue
+                alias = str(host.get("alias") or "")
+                if not alias:
+                    continue
+                self._hosts[alias] = host
+                label = f"{alias} ({host.get('user')}@{host.get('host')})"
+                self._host_combo.addItem(label, alias)
+            idx = self._host_combo.findData(current)
+            self._host_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self._host_combo.blockSignals(False)
+        self.refresh_status()
+
+    def start_pair(self) -> None:
+        alias = self._selected_host()
+        if not alias:
+            QMessageBox.information(self, "Parear", "Selecione um host remoto.")
+            return
+        rec = self._hosts.get(alias) or {}
+        user = str(rec.get("user") or "")
+        host = str(rec.get("host") or "")
+        if not user or not host:
+            QMessageBox.warning(self, "Parear", "Registro do host sem user@host.")
+            return
+        pub = Path.home() / ".ssh" / "id_ed25519.pub"
+        if not pub.is_file():
+            pub = Path.home() / ".ssh" / "id_rsa.pub"
+        if not pub.is_file():
+            QMessageBox.information(
+                self, "Parear",
+                "Nenhuma chave pública encontrada.\n"
+                "Crie uma no terminal (sem senha no argv do Player):\n"
+                "ssh-keygen -t ed25519",
+            )
+            return
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            self._state_label.setText("Já existe operação em andamento — aguarde")
+            return
+        self._state_label.setText("Pareando chave SSH…")
+        proc = QProcess(self)
+        self._setup_proc(proc)
+        proc.finished.connect(
+            lambda code, p=proc: self._on_pair_done(code, bytes(p.readAllStandardError()))
+        )
+        proc.start(
+            "ssh-copy-id",
+            [
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=8",
+                "-i", str(pub),
+                f"{user}@{host}",
+            ],
+        )
+        self._proc = proc
+
+    def _on_pair_done(self, code: int, err: bytes) -> None:
+        if self._proc is not None:
+            self._cancel_timeout(self._proc)
+        self._proc = None
+        if code == 0:
+            self._state_label.setText("Chave copiada — testando…")
+            self.run_cmd(["hosts", "ping", self._selected_host(), "--json"])
+            return
+        detail = err.decode("utf-8", "replace").strip().splitlines()
+        reason = detail[-1] if detail else f"exit {code}"
+        QMessageBox.warning(
+            self, "Parear",
+            "Não foi possível copiar a chave sem senha.\n"
+            f"{reason}\n\n"
+            "No terminal: ssh-copy-id -i ~/.ssh/id_ed25519.pub user@host",
+        )
+        self._state_label.setText("Pareamento precisa de chave já autorizada")
+
     def refresh_status(self) -> None:
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:
             return
         self._state_label.setText("carregando…")
-        self._spawn(["server", "homelab", "status", "--json"], self._on_status_done)
+        self._spawn(self._hl("status", "--json"), self._on_status_done)
 
     def refresh_profiles(self) -> None:
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:
             return
-        self._spawn(["server", "homelab", "profiles", "--json"], self._on_profiles_done)
+        self._spawn(self._hl("profiles", "--json"), self._on_profiles_done)
 
     def refresh_apps(self) -> None:
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:
             return
-        self._spawn(["server", "homelab", "apps", "list", "--json"], self._on_apps_done)
+        self._spawn(self._hl("apps", "list", "--json"), self._on_apps_done)
 
     def _on_apps_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
@@ -496,7 +644,11 @@ class HomelabPage(BasePage):
         )
         proc.finished.connect(self._on_cmd_done)
         proc.errorOccurred.connect(lambda err: self._on_cmd_error(err, proc))
-        proc.start(str(self.root / "linux" / "pz"), ["server", "homelab", *args])
+        if args and args[0] == "hosts":
+            argv = ["server", "homelab", *args]
+        else:
+            argv = self._hl(*args)
+        proc.start(str(self.root / "linux" / "pz"), argv)
         self._proc = proc
 
     def block_while_running(self, running: bool) -> None:
@@ -578,7 +730,7 @@ class HomelabPage(BasePage):
         )
         proc.errorOccurred.connect(lambda _e, p=proc: self._restore_failed(p, "não iniciou"))
         proc.start(str(self.root / "linux" / "pz"),
-                   ["server", "homelab", "restore", "--source", source, "--plan"])
+                   self._hl("restore", "--source", source, "--plan"))
         self._proc = proc
 
     def _restore_failed(self, proc: QProcess, why: str) -> None:

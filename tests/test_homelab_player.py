@@ -122,6 +122,10 @@ def test_homelab_page_builds_widgets(app):
     assert page._output is not None
     assert page._cards_host is not None
     assert page._cards_layout is not None
+    assert page._host_combo is not None
+    assert page._host_badge.text() == "Local"
+    assert page._pair_btn is not None
+    assert page._pair_btn.isEnabled() is False
 
 
 def test_homelab_page_applies_status(app):
@@ -450,6 +454,43 @@ def test_homelab_cards_do_not_block_event_loop_source(app):
     assert "subprocess.run" not in src
     assert "apps" in src
     assert "QProcess" in src
+
+
+def test_homelab_remote_host_prefixes_qprocess(app):
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page._proc = BusyProc()
+    page._host_combo.blockSignals(True)
+    page._host_combo.addItem("garage (misael@192.168.1.8)", "garage")
+    page._host_combo.setCurrentIndex(page._host_combo.findData("garage"))
+    page._host_combo.blockSignals(False)
+    page._on_host_changed()
+    assert page._host_badge.text() == "Remoto"
+    page._proc = None
+    calls = []
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    try:
+        page.run_cmd(["plan"])
+    finally:
+        mod.QProcess = real_qprocess
+    argv = calls[-1][2]
+    assert argv[:4] == ["server", "homelab", "--host", "garage"]
+    assert "plan" in argv
+
+
+def test_homelab_pair_uses_ssh_copy_id_without_password(app):
+    import inspect
+
+    import linux.ui_native.pages.homelab as mod
+
+    src = inspect.getsource(mod.HomelabPage.start_pair)
+    assert "ssh-copy-id" in src
+    assert "BatchMode=yes" in src
+    assert "--password" not in src
+    assert "sshpass" not in src
 
 
 def test_homelab_page_cancel_timeout_on_finish(app):

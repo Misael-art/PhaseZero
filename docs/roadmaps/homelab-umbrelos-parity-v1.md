@@ -14,7 +14,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Fase 1 em curso (catálogo CLI+cards); HL-APP-* ainda sem prova disposable de health |
+| Status | Fase 1 disposable em CI; Fase 2 SSH bridge implementada, prova local com stub |
 | Última verificação | 2026-08-26, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
 | Base observada | `origin/main` `a85c7a4` (release v1.17.4) |
@@ -421,14 +421,14 @@ reutilizar ID para requisito diferente.
 
 | ID | Requisito | Implementação | Teste comportamental | Prova CI | Estado | Limitação |
 |---|---|---|---|---|---|---|
-| HL-APP-001 | Apps individuais com manifest versionado e compose por subconjunto | `assets/home-server/apps/catalog.json` + `apps/compose/*.yml` + `linux/server/homelab-apps.sh` | compose config por subconjunto; enable/disable isolado no estado; health em CI descartável ainda falta | homelab-shell-test + compose-validate | in_progress | catálogo curado; suíte hermética usa `PZ_HOMELAB_APPS_NO_DOCKER=1` |
+| HL-APP-001 | Apps individuais com manifest versionado e compose por subconjunto | `assets/home-server/apps/catalog.json` + `apps/compose/*.yml` + `linux/server/homelab-apps.sh` | compose config por subconjunto; enable/disable isolado no estado; job `homelab-apps-disposable` (vaultwarden health) | homelab-shell-test + compose-validate + homelab-apps-disposable | in_progress | catálogo curado; disposable só com `PZ_HOMELAB_APPS_DISPOSABLE=1`; verified após CI verde |
 | HL-APP-002 | Preflight de orçamento por card | governor soma enabled+app+deps vs RAM (headroom 20%); card desliga Ligar quando fail | `PZ_HOMELAB_RAM_TOTAL_OVERRIDE=256` recusa n8n com razão; não persiste | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
 | HL-APP-003 | UI cards um clique no Player (host admin) | grid no Player, Prévia/Ligar/Atualizar via QProcess | offscreen: 26 testes; preview spawna `apps enable --dry-run`; sem subprocess.run | homelab-python-test | in_progress | prova unitária local; aguarda CI |
 | HL-APP-004 | Update por digest sem `latest` | lock+catálogo pinam tags; `apps update --dry-run` recusa `:latest`; digest só após pull permitido | render/catálogo sem `latest`; digest ainda não pinado no lock | compose-validate + shell test | in_progress | lock continua por tag; digest em `$HOMELAB_STATE/image-digests.json` após pull |
-| HL-HOST-001 | Registro de hosts seguro no host admin | XDG, schemaVersion, atómico 0600, lock | segunda execução idempotente; corrupção falha fechado | shell test | pending | — |
-| HL-HOST-002 | Comandos remotos via `--host` fail-closed | envelope `{hostAlias, rc, payload, error}`, timeout | stub ssh: offline→razão accionável; JSON puro | shell test | pending | — |
-| HL-HOST-003 | Pareamento guiado de chave SSH na UI | QProcess, sem senha em argv, teste de conexão | pareamento E2E com stub; sem bloqueio de event loop | homelab-python-test | pending | — |
-| HL-HOST-004 | Versão remota incompatível recusada antes de mutação | handshake `pz --version` remoto | remoto antigo → recusa com plano de impacto | shell test | pending | — |
+| HL-HOST-001 | Registro de hosts seguro no host admin | XDG, schemaVersion, atómico 0600, lock | segunda execução idempotente; corrupção falha fechado; zero material privado | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
+| HL-HOST-002 | Comandos remotos via `--host` fail-closed | envelope `{hostAlias, rc, payload, error}`, timeout ssh | stub ssh: offline→razão accionável; JSON puro | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
+| HL-HOST-003 | Pareamento guiado de chave SSH na UI | QProcess ssh-copy-id BatchMode, sem senha em argv | Player: seletor + badge Local/Remoto; source sem sshpass/--password | homelab-python-test | in_progress | E2E ssh-copy-id com stub ainda raso |
+| HL-HOST-004 | Versão remota incompatível recusada antes de mutação | handshake `pz --version` remoto | stub `old` → rc 69, payload null | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
 | HL-DSC-001 | Descoberta mDNS com fallback manual | advertise `phasezero-homelab._tcp`; avahi detectado; manual `IP:porta` | avahi ausente → orientação, sem reativação silenciosa; manual funciona | agente test | pending | conflito conhecido com `os-slim.sh` |
 | HL-AGT-001 | Agente user-level TLS+token no host homelab | systemd --user, cert local, token exibido uma vez | sem/expirado → negado | agente python test | pending | — |
 | HL-AGT-002 | Pareamento e revogação | pair consome token; revoke corta sessão | revogação encerra acesso activo (provado) | agente test | pending | — |
@@ -469,7 +469,8 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 |---|---|---|---|---|---|---|
 | 2026-08-26 | opencode (checkout principal) | `feat/homelab-player-v2` (somente docs, sem commit) | rascunho | não commitado | — | rascunho untracked no checkout principal; não reutilizar |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 0 | `0ebc7cc` | CI base `32965735176` success; suíte hermética + player 23 passed | Roadmap + dois papéis. |
-| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1 | este commit (catálogo + Player cards) | `tests/linux-homelab.sh` exit 0 (~56s); `pytest tests/test_homelab_player.py` 26 passed / 1.55s; `docker compose -f apps/compose/*.yml config` ok; `git diff --check` limpo; nenhum compose up no host | CLI `apps list/enable/disable/update --json`; grid de cards. Próximo: job CI disposable enable→health→disable (HL-APP-001) e pin de digest no update (HL-APP-004) |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1 | `02b1360` | suíte hermética + 26 player | catálogo um clique |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1–2 | este commit | `tests/linux-homelab.sh` exit 0 (~56s, hosts bridge ok); `pytest tests/test_homelab_player.py` 28 passed; disposable script recusa sem flag; nenhum compose up no host | Job `homelab-apps-disposable` + `--host` SSH stub. Próximo: CI verde nestes jobs; Fase 3 ADR do agente |
 
 ## Formato obrigatório de handoff
 

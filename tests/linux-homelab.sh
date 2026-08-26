@@ -12,11 +12,12 @@ trap 'rm -rf "$TMP"' EXIT
 export PZ_ROOT="$REPO_ROOT"
 
 export HOME="$TMP/home"
+export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_STATE_HOME="$TMP/state"
 export PZ_HOMELAB_STATE="$TMP/homelab"
 # Never compose-up/rm on the developer host or the hermetic CI job.
 export PZ_HOMELAB_APPS_NO_DOCKER=1
-mkdir -p "$HOME" "$XDG_STATE_HOME" "$PZ_HOMELAB_STATE"
+mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$PZ_HOMELAB_STATE"
 
 # Pin the WinVM contract boundary to a stub so the suite never touches the
 # real WinVM (or the host `pz`) and stays deterministic on every runner.
@@ -26,6 +27,8 @@ printf '%s\n' '{"libvirtState":"shut off","currentMarker":"no","bootRuntimeStale
 echo "=== syntax ==="
 bash -n "$REPO_ROOT/linux/server/homelab-stack.sh"
 bash -n "$REPO_ROOT/linux/server/homelab-apps.sh"
+bash -n "$REPO_ROOT/linux/server/homelab-hosts.sh"
+bash -n "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh"
 bash -n "$REPO_ROOT/linux/server/casaos.sh"
 bash -n "$REPO_ROOT/linux/server/apply-common.sh"
 bash -n "$REPO_ROOT/linux/pz"
@@ -132,6 +135,84 @@ echo "$after_disable" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled]
 upd="$("$REPO_ROOT/linux/pz" server homelab apps update --all --dry-run --json)"
 echo "$upd" | jq -e '.ok == true and .dryRun == true and ([.apps[].usesLatest] | all(. == false))' >/dev/null
 echo "  apps catalog ok"
+
+echo "=== hosts registry + ssh envelope ==="
+if "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh" >/dev/null 2>&1; then
+    echo "FAIL: disposable script ran without PZ_HOMELAB_APPS_DISPOSABLE"
+    exit 1
+fi
+add_out="$("$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json)"
+echo "$add_out" | jq -e '.ok == true and .host.alias == "garage" and .host.user == "misael" and .host.port == 22' >/dev/null
+hosts_file="$XDG_CONFIG_HOME/phasezero/homelab-hosts.json"
+test "$(stat -c '%a' "$hosts_file")" = "600"
+if jq -e '.hosts[] | select(.password or .privateKey or .token or .identityFile)' "$hosts_file" >/dev/null; then
+    echo "FAIL: registry contains private material"
+    exit 1
+fi
+"$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json | jq -e '.already == true' >/dev/null
+if "$REPO_ROOT/linux/pz" server homelab hosts add garage 'other@192.168.1.8' --json >/dev/null 2>&1; then
+    echo "FAIL: alias retarget should fail closed"
+    exit 1
+fi
+if "$REPO_ROOT/linux/pz" server homelab hosts add bad 'root@/etc/shadow' --json >/dev/null 2>&1; then
+    echo "FAIL: path target should be rejected"
+    exit 1
+fi
+printf '{not json' > "$hosts_file"
+if "$REPO_ROOT/linux/pz" server homelab hosts list --json >/dev/null 2>&1; then
+    echo "FAIL: corrupt registry should fail closed"
+    exit 1
+fi
+# restore a valid registry for the ssh stub
+"$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json >/dev/null 2>&1 || true
+# rewrite after corruption
+rm -f "$hosts_file"
+"$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json | jq -e '.ok == true' >/dev/null
+stub="$TMP/fake-ssh"
+cat > "$stub" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+log="${PZ_HOMELAB_SSH_STUB_LOG:-}"
+[ -n "$log" ] && printf '%s\n' "$@" >> "$log"
+mode="${PZ_HOMELAB_SSH_STUB_MODE:-ok}"
+joined="$*"
+if [ "$mode" = "offline" ]; then
+    echo "ssh: connect to host 192.168.1.8 port 22: Connection timed out" >&2
+    exit 255
+fi
+if [[ "$joined" == *"--version"* ]]; then
+    if [ "$mode" = "old" ]; then
+        echo "PhaseZero Linux v1.10.0 (stable)"
+        exit 0
+    fi
+    echo "PhaseZero Linux v1.17.4 (stable)"
+    exit 0
+fi
+echo '{"schemaVersion":"1","tool":"homelab-apps","action":"list","apps":[{"key":"jellyfin","enabled":true}]}'
+exit 0
+EOS
+chmod +x "$stub"
+export PZ_HOMELAB_SSH_BIN="$stub"
+export PZ_HOMELAB_SSH_STUB_LOG="$TMP/ssh.log"
+: > "$PZ_HOMELAB_SSH_STUB_LOG"
+"$REPO_ROOT/linux/pz" server homelab hosts ping garage --json | jq -e \
+    '.ok == true and .reachable == true and .remoteVersion == "1.17.4"' >/dev/null
+env_out="$("$REPO_ROOT/linux/pz" server homelab --host garage apps list --json)"
+echo "$env_out" | jq -e '.hostAlias == "garage" and .rc == 0 and .payload.action == "list" and (.payload.apps|length) == 1' >/dev/null
+grep -q 'BatchMode=yes' "$PZ_HOMELAB_SSH_STUB_LOG"
+if echo "$env_out" | rg -q 'BEGIN OPENSSH PRIVATE|password='; then
+    echo "FAIL: secret material in remote envelope"
+    exit 1
+fi
+export PZ_HOMELAB_SSH_STUB_MODE=offline
+off="$("$REPO_ROOT/linux/pz" server homelab --host garage status --json || true)"
+echo "$off" | jq -e '.rc != 0 and .payload == null and (.error | test("unreachable|timed out"))' >/dev/null
+export PZ_HOMELAB_SSH_STUB_MODE=old
+old="$("$REPO_ROOT/linux/pz" server homelab --host garage apps enable n8n --json || true)"
+echo "$old" | jq -e '.rc == 69 and .payload == null and (.error | test("older than required"))' >/dev/null
+unset PZ_HOMELAB_SSH_STUB_MODE
+"$REPO_ROOT/linux/pz" server homelab hosts remove garage --json | jq -e '.ok == true' >/dev/null
+echo "  hosts bridge ok"
 
 echo "=== compose config core/extras ==="
 if docker compose version >/dev/null 2>&1; then
