@@ -46,6 +46,13 @@ def _state_dir() -> Path:
     return Path(xdg) / "phasezero" / "homelab-agent"
 
 
+def _unit_dir() -> Path | None:
+    override = os.environ.get("PZ_HOMELAB_AGENT_UNIT_DIR")
+    if override:
+        return Path(override)
+    return None
+
+
 def _hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -79,7 +86,8 @@ class HomelabAgent:
             str(Path(__file__).resolve().parents[2] / "linux" / "pz"),
         )
         self.invoker = invoker or self._default_invoker
-        self.bind = os.environ.get("PZ_HOMELAB_AGENT_BIND", bind)
+        requested = os.environ.get("PZ_HOMELAB_AGENT_BIND", bind)
+        self.bind = self.resolve_bind(requested)
         self.port = int(os.environ.get("PZ_HOMELAB_AGENT_PORT", str(port)))
         self._hits: dict[str, list[float]] = {}
         self._auth_fails: dict[str, list[float]] = {}
@@ -126,6 +134,97 @@ class HomelabAgent:
 
     def _save_json(self, name: str, data: dict) -> None:
         _atomic_write(self._path(name), json.dumps(data, indent=2) + "\n")
+
+    def resolve_bind(self, requested: str) -> str:
+        cfg = self._load_json("config.json", {})
+        lan = bool(cfg.get("lanBind"))
+        want = (requested or "127.0.0.1").strip()
+        if want in {"0.0.0.0", "::", "[::]"} and not lan:
+            return "127.0.0.1"
+        return want or "127.0.0.1"
+
+    def set_lan_bind(self, enabled: bool) -> None:
+        cfg = self._load_json("config.json", {"schemaVersion": SCHEMA})
+        cfg["lanBind"] = bool(enabled)
+        cfg["schemaVersion"] = SCHEMA
+        self._save_json("config.json", cfg)
+        self.bind = self.resolve_bind(os.environ.get("PZ_HOMELAB_AGENT_BIND", self.bind))
+
+    def ensure_tls_cert(self) -> tuple[Path, Path]:
+        cert = self._path("cert.pem")
+        key = self._path("key.pem")
+        if cert.is_file() and key.is_file():
+            return cert, key
+        openssl = shutil.which("openssl")
+        if not openssl:
+            raise RuntimeError("openssl missing; cannot mint TLS cert")
+        subprocess.run(
+            [
+                openssl, "req", "-x509", "-newkey", "rsa:2048", "-sha256",
+                "-days", "365", "-nodes",
+                "-keyout", str(key), "-out", str(cert),
+                "-subj", "/CN=phasezero-homelab",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+        os.chmod(cert, 0o600)
+        os.chmod(key, 0o600)
+        return cert, key
+
+    def write_user_unit(self) -> Path:
+        python = sys.executable or "/usr/bin/python3"
+        script = str(Path(__file__).resolve())
+        body = (
+            "[Unit]\n"
+            "Description=PhaseZero Homelab agent (user)\n"
+            "Documentation=file:docs/adr/0003-homelab-agent-mdns.md\n"
+            "After=network-online.target\n"
+            "\n"
+            "[Service]\n"
+            "Type=simple\n"
+            f"ExecStart={python} {script} serve\n"
+            f"Environment=PZ_HOMELAB_AGENT_STATE={self.state_dir}\n"
+            "Restart=on-failure\n"
+            "RestartSec=3\n"
+            "NoNewPrivileges=true\n"
+            "PrivateTmp=true\n"
+            "# Never root. Never the container engine socket.\n"
+            "\n"
+            "[Install]\n"
+            "WantedBy=default.target\n"
+        )
+        template = self._path("phasezero-agent.service")
+        _atomic_write(template, body, 0o644)
+        dest_dir = _unit_dir()
+        if dest_dir is not None:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest = dest_dir / "phasezero-agent.service"
+            _atomic_write(dest, body, 0o644)
+            return dest
+        return template
+
+    def install(self) -> dict[str, Any]:
+        cert, key = self.ensure_tls_cert()
+        unit = self.write_user_unit()
+        token = self.issue_pairing_token()
+        if not self._path("config.json").is_file():
+            self._save_json(
+                "config.json",
+                {"schemaVersion": SCHEMA, "lanBind": False, "bind": "127.0.0.1"},
+            )
+        return {
+            **self.status(),
+            "action": "install",
+            "pairingToken": token,
+            "shownOnce": True,
+            "tlsCert": str(cert),
+            "tlsKey": str(key),
+            "unitPath": str(unit),
+            "systemdStarted": False,
+        }
 
     def issue_pairing_token(self) -> str:
         token = secrets.token_urlsafe(24)
@@ -390,6 +489,7 @@ def _handler_for(agent: HomelabAgent):
 def serve(agent: HomelabAgent, tls: bool = True) -> ThreadingHTTPServer:
     httpd = AgentHTTPServer((agent.bind, agent.port), _handler_for(agent))
     httpd.agent = agent
+    agent.port = int(httpd.server_address[1])
     if tls:
         cert = agent._path("cert.pem")
         key = agent._path("key.pem")
@@ -407,11 +507,21 @@ def _cli(argv: list[str]) -> int:
     action = args[0] if args else "status"
     agent = HomelabAgent()
     if action == "install":
-        token = agent.issue_pairing_token()
-        payload = {**agent.status(), "action": "install", "pairingToken": token, "shownOnce": True}
+        payload = agent.install()
         print(json.dumps(payload, separators=(",", ":")))
         if not json_out:
-            print("pairing token (shown once):", token, file=sys.stderr)
+            print("pairing token (shown once):", payload.get("pairingToken"), file=sys.stderr)
+        return 0
+    if action == "uninstall":
+        unit = agent._path("phasezero-agent.service")
+        if unit.exists():
+            unit.unlink()
+        dest_dir = _unit_dir()
+        if dest_dir is not None:
+            dest = dest_dir / "phasezero-agent.service"
+            if dest.exists():
+                dest.unlink()
+        print(json.dumps({"schemaVersion": SCHEMA, "action": "uninstall", "ok": True}))
         return 0
     if action == "pair":
         token = ""
@@ -447,7 +557,15 @@ def _cli(argv: list[str]) -> int:
     if action == "status":
         print(json.dumps(agent.status(), separators=(",", ":")))
         return 0
-    print("usage: homelab_agent.py (install|status|pair|revoke|discover|kill) [--json]", file=sys.stderr)
+    if action == "serve":
+        agent.ensure_tls_cert()
+        httpd = serve(agent, tls=True)
+        httpd.serve_forever()
+        return 0
+    print(
+        "usage: homelab_agent.py (install|uninstall|status|pair|revoke|discover|kill|serve) [--json]",
+        file=sys.stderr,
+    )
     return 2
 
 

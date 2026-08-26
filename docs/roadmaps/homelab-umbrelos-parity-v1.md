@@ -430,12 +430,12 @@ reutilizar ID para requisito diferente.
 | HL-HOST-003 | Pareamento guiado de chave SSH na UI | QProcess ssh-copy-id BatchMode, sem senha em argv | Player: seletor + badge Local/Remoto; source sem sshpass/--password | homelab-python-test | in_progress | E2E ssh-copy-id com stub ainda raso |
 | HL-HOST-004 | Versão remota incompatível recusada antes de mutação | handshake `pz --version` remoto | stub `old` → rc 69, payload null | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
 | HL-DSC-001 | Descoberta mDNS com fallback manual | `discover --json` anuncia `phasezero-homelab._tcp`; nunca reativa avahi | avahi ausente → orientação + `wouldReenableAvahi:false` | test_homelab_agent_contract | in_progress | advertise real (avahi-publish) ainda não |
-| HL-AGT-001 | Agente user-level TLS+token no host homelab | `homelab_agent.py`; token one-shot hashed; HTTP 401 sem Bearer | sem/expirado → 401; install devolve token uma vez | homelab-python-test | in_progress | unit TLS=off; systemd --user unit ainda não gravada |
+| HL-AGT-001 | Agente user-level TLS+token no host homelab | `homelab_agent.py`; token one-shot hashed; HTTPS 401 sem Bearer; unit `systemd --user` como ficheiro | sem/expirado → 401; HTTPS 401; unit WantedBy=default.target, sem systemctl no install | homelab-python-test | in_progress | install não arranca systemd no host; aguarda CI |
 | HL-AGT-002 | Pareamento e revogação | pair consome token; revoke corta sessão HTTP | HTTP pair→status→revoke→401 | homelab-python-test | in_progress | prova local; aguarda CI |
 | HL-AGT-003 | Allowlist fechada, audit, rate limit, kill switch | API allowlist; audit.log append-only; `shell=False`; kill file | shell arbitrário 403+audit; 429; kill 503 | homelab-python-test | in_progress | prova local; aguarda CI |
 | HL-AGT-004 | Threat model ADR antes do código do agente | `docs/adr/0003-homelab-agent-mdns.md` | ADR versionado no repo | docs | in_progress | TDD vermelho isolado não foi commitado à parte |
 | HL-AGT-005 | Fuzz básico de auth + agente sem socket/shell | corpus vazio/lixo/traversal; source sem docker.sock/`shell=True` | fuzz recusado; source prova `shell=False` | homelab-python-test | in_progress | prova local; aguarda CI |
-| HL-WEB-001 | Dashboard web HTTPS com login local no host homelab | bind opt-in, argon2id, sessão/CSRF | login→ação→logout E2E; CSRF ausente negado; cookie flags | web e2e disposable | pending | maior superfície nova desta frente |
+| HL-WEB-001 | Dashboard web HTTPS com login local no host homelab | bind opt-in, argon2id, sessão/CSRF | login→ação→logout E2E; CSRF ausente negado; cookie flags | web e2e disposable | pending | ADR 0004 aceite; código ainda não |
 | HL-WEB-002 | Paridade de ações com restore em duas etapas | mesmas ações do Player; nunca `--yes` automático | restore web sem confirmação não aplica | web e2e | pending | — |
 | HL-WEB-003 | “Abrir dashboard” do host selecionado no Player | URL HTTPS do appliance no browser do host admin | ação abre URL correcta local/remota | python test | pending | — |
 | HL-WEB-004 | Senha fraca recusada | política de senha no `web user add/password` e no login de bootstrap | teste prova rejeição com razão; hash nunca em logs | web test | pending | 2FA deferred |
@@ -471,7 +471,8 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 0 | `0ebc7cc` | CI base `32965735176` success; suíte hermética + player 23 passed | Roadmap + dois papéis. |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1 | `02b1360` | suíte hermética + 26 player | catálogo um clique |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1–2 | `192d2eb` | hosts stub + disposable script | CI 02b1360 vermelho (SC2016/SC2005); 192d2eb ainda a correr |
-| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3 | este commit | shellcheck 0.11 limpo nos scripts novos; `pytest` player+agent 42 passed; nenhum compose up | ADR 0003 + agente hermético. Próximo: CI verde; unit systemd; advertise mDNS real |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3 | `179bd93` | python-test + homelab-python + shellcheck 0.11 verdes; **0.9.0 SC2015** | disposable skipped |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3–4 | este commit | pytest 45 passed; SC2015 corrigido; HTTPS 401; unit user sem systemctl | ADR 0004. Próximo: CI 0.9 verde + disposable |
 
 ## Formato obrigatório de handoff
 

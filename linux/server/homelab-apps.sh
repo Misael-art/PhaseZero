@@ -201,7 +201,9 @@ compose_files_for_keys() {
     local seen=""
     for k in "${keys[@]}"; do
         file="$(catalog_json | jq -r --arg k "$k" '.apps[] | select(.key == $k) | .composeFile')"
-        [ -n "$file" ] && [ "$file" != "null" ] || continue
+        if [ -z "$file" ] || [ "$file" = "null" ]; then
+            continue
+        fi
         case " $seen " in
             *" $file "*) continue ;;
         esac

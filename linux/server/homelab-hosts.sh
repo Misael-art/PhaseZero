@@ -223,7 +223,10 @@ cmd_list() {
 
 cmd_add() {
     local alias="${POSITIONAL[0]:-}" spec="${POSITIONAL[1]:-}"
-    [ -n "$alias" ] && [ -n "$spec" ] || { pz_error "usage: hosts add <alias> <user@host[:port]>"; return 2; }
+    if [ -z "$alias" ] || [ -z "$spec" ]; then
+        pz_error "usage: hosts add <alias> <user@host[:port]>"
+        return 2
+    fi
     valid_alias "$alias" || { pz_error "invalid alias"; return 2; }
     local user host port
     read -r user host port < <(parse_target "$spec") || return $?
