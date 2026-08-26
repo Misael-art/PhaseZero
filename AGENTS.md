@@ -40,6 +40,11 @@ Conflict rules:
   `docs/roadmaps/homelab-v1.15.1-remediation.md` before any Homelab, server,
   AI-appliance, release, or host-package work. Treat its anti-pollution rules,
   phase gates, evidence matrix, and handoff format as mandatory.
+- Homelab umbrelOS-parity v1: read
+  `docs/roadmaps/homelab-umbrelos-parity-v1.md` before any Homelab catalog,
+  multi-host, agent, dashboard web, or onboarding work. Anti-pollution rules,
+  host limits, and handoff format still come from the v1.15.1 remediation
+  roadmap.
 - WinVM boot resilience v1: read
   `docs/roadmaps/winvm-boot-resilience-v1.md` before any Windows VM, direct
   boot, GRUB, boot-runtime, VM session, or Windows VM UI work. Treat its

@@ -1,0 +1,493 @@
+# Roadmap — Homelab umbrelOS-parity v1
+
+> Fonte operacional única para agentes humanos e de IA nesta frente.
+>
+> Este documento coordena implementação. Não prova conclusão. Commits, testes,
+> CI, artefatos e validações são as provas.
+>
+> Regras permanentes anti-poluição, limites de host, ordem das fontes de
+> verdade e formato de handoff herdam de
+> `docs/roadmaps/homelab-v1.15.1-remediation.md` e aplicam-se integralmente
+> aqui.
+
+## Metadados
+
+| Campo | Valor |
+|---|---|
+| Status | Fase 0 concluída na branch; nenhum requisito de produto verificado |
+| Última verificação | 2026-08-26, America/Sao_Paulo |
+| Repositório | `/mnt/sdcard/Projects/PhaseZero` |
+| Base observada | `origin/main` `a85c7a4` (release v1.17.4) |
+| Pré-requisito Player v2 | cumprido: `f7746de` ancestral de `origin/main` via PR #70 (`1f86913`) |
+| CI da base | run `32965735176` success em `a85c7a4` |
+| Branch | `feat/homelab-umbrelos-v1` |
+| Worktree | `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` (dedicado; não reutilizar WinVM nem `pz-homelab-v1151` / `pz-homelab-f9`) |
+| Referência externa | https://umbrel.com/umbrelos — funções-alvo, não código |
+| Decisão do operador | 2026-08-26: dois papéis de instalação (appliance vs admin/consumidor); acesso remoto fasado (SSH bridge → agente+mDNS); dashboard web completo; catálogo curado um clique por app |
+| Release alvo | indefinida; tag não reservada |
+
+Dados acima são snapshot, não pressupostos eternos. Todo agente deve revalidá-los.
+
+## Missão
+
+PhaseZero cobre as funções-chave do umbrelOS sem virar umbrelOS e sem perder
+os invariantes já provados. Dois papéis, um produto: uma máquina instala o
+projeto para **funcionar como homelab**; outra instala o mesmo projeto para
+**administrar e consumir** esse homelab, com foco na experiência do usuário.
+
+Funções-alvo: catálogo um clique por app, gestão multi-host a partir do
+Player, dashboard web com login no host homelab, descoberta/pareamento, e
+onboarding leigo. Nada disso reduz “funcional” a presença de arquivo, import
+smoke, mock ou Compose válido — prova comportamental proporcional é
+obrigatória.
+
+## Papéis de instalação (dois hosts, um produto)
+
+Esta é a decisão arquitetural 0 desta frente. umbrelOS é um appliance
+acessado por navegador. PhaseZero entrega o appliance **e** um cliente de
+administração de primeira classe.
+
+```text
+Dispositivos da casa (TV, celular, notebook)
+        |  consomem Jellyfin / Vaultwarden / Nextcloud / ...
+        v
+┌───────────────────────────┐         LAN / Tailscale        ┌───────────────────────────┐
+│  Host Homelab (appliance) │◄──────────────────────────────►│ Host Admin/Consumidor     │
+│  PhaseZero instalado para │                                 │ PhaseZero instalado para  │
+│  FUNCIONAR como homelab   │                                 │ ADMINISTRAR e CONSUMIR    │
+│                           │                                 │ foco: experiência do user │
+│  - compose + backups      │                                 │  - Player desktop         │
+│  - Tailscale              │                                 │  - seletor de host        │
+│  - agente + mDNS          │                                 │  - pareamento SSH/token   │
+│  - dashboard web HTTPS    │                                 │  - cards / onboarding     │
+│  - CLI pz do usuário      │                                 │  - Abrir dashboard        │
+└───────────────────────────┘                                 └───────────────────────────┘
+```
+
+Regras dos papéis:
+
+1. **Homelab (appliance).** Máquina que corre a stack. Headless ok. Equivalente
+   operacional de umbrel.local. Roda compose, backups, Tailscale, agente
+   user-level, dashboard web e anúncio mDNS. Nunca recebe apply desta frente
+   no host de desenvolvimento.
+2. **Admin/consumidor (Player).** Máquina em que o usuário senta. Instala
+   PhaseZero pelo painel, não precisa ter Docker nem a stack local. Descobre,
+   pareia, opera o homelab remoto e abre os apps. Experiência é o objetivo —
+   o terminal fica como escape, não como caminho principal.
+3. **Co-localização é opt-in, não o modelo.** Um único computador pode
+   desempenhar os dois papéis (modo local, badge Local). O desenho trata os
+   papéis como distintos para que o caso de duas máquinas funcione sem
+   gambiarra.
+4. **Host de desenvolvimento desta frente não é nenhum dos dois papéis em
+   produção.** Worktree + CI descartável. Validação em segundo host real exige
+   autorização explícita do operador.
+
+## Escopo decidido
+
+| Pilar umbrelOS | Entrega PhaseZero | Fase |
+|---|---|---|
+| App store one-click | Catálogo curado expandido, card por app (habilitar/atualizar/remover) | 1 |
+| Acesso multi-dispositivo | Player no host admin opera homelab remoto (SSH bridge) | 2 |
+| umbrel.local / descoberta | Agente leve + mDNS `phasezero-homelab._tcp` + pareamento por token | 3 |
+| Dashboard web qualquer dispositivo | Web completo com login de usuário, mesmas ações do Player, no host homelab | 4 |
+| Gestão de sistema | Página Servidor honesta (SMART/rede/disco) + onboarding guiado | 5 |
+| Backups | Já verificado no roadmap v1.15.1 (HL-BKP-001); reaproveitar, expor na web | — |
+| Tailscale | Já existe (`up --access tailscale`); permanece único caminho externo | — |
+| Network sharing (SMB) | Deferred — decisão futura separada | — |
+
+## Matriz extraída do umbrelOS (funções-alvo)
+
+Fonte: https://umbrel.com/umbrelos e suporte umbrel (apps, backups, remote
+access, files) em 2026-08-26. Não copiar chrome (dock, LiveTile, widgets).
+Copiar a função que o leigo sente.
+
+| Função umbrelOS | Em v1? | Mapeamento PhaseZero | Evidência |
+|---|---|---|---|
+| `umbrel.local` no browser, qualquer dispositivo da LAN | sim | dashboard web HTTPS no host homelab + mDNS | HL-WEB-*, HL-DSC-001 |
+| App Store um clique (install/update/uninstall) | sim, catálogo **curado** (não a loja comunitária) | `apps enable/disable/update` + cards no Player/web | HL-APP-001..004 |
+| Atualização de app por digest, sem `latest` | sim | lock/manifest por plataforma | HL-APP-004 |
+| Gestão a partir de outro dispositivo | sim | Player no host admin; web no appliance | HL-HOST-*, HL-WEB-* |
+| Login que protege a superfície de gestão | sim | usuários locais, sessão/CSRF; 2FA **deferred** | HL-WEB-001, HL-WEB-004, HL-WEB-006 |
+| Backups + restore | reaproveitar | HL-BKP-001 já verified; expor no Player (já) e na web | HL-WEB-002 |
+| Backups horários / Rewind de arquivo | não | deferred | — |
+| Tailscale como único caminho fora de casa | manter | `--access tailscale`; sem UPnP/port-forward | HL-WEB-005 |
+| Partilha SMB / Files app / NAS browser | não | deferred | — |
+| Settings: RAM, disco, temperatura | sim, read-only honesto | página Servidor | HL-SRV-001 |
+| Community app stores | não | catálogo no repo; contrib via PR | — |
+| Bitcoin/Lightning/mempool | fora | não entra nesta frente | — |
+| App permissions / dependências visíveis | parcial | orçamento governor + deps no manifest | HL-APP-002 |
+| Credenciais default num diálogo | não nesta v1 | segredos só por referência | invariante v1.15.1 |
+| OTA one-click do SO | fora | release canônica `packaging/release.sh` | Fase 8 |
+
+Catálogo curado inicial = o que o compose já declara, promovido a cards
+individuais. Não é a loja umbrel com centenas de apps.
+
+| Camada atual | Serviços user-facing | Infra (não são cards) |
+|---|---|---|
+| core (`docker-compose.homelab.yml`) | jellyfin, syncthing, vaultwarden, uptime-kuma | — |
+| extras (`docker-compose.extras.yml`) | portainer, nextcloud, grafana, prometheus, paperless, n8n | socket-proxy, nextcloud-db, node-exporter |
+
+Hoje `up`/`down` sobe a camada inteira. Fase 1 parte isso em subconjunto.
+
+`docker-compose.lock.json` pinna **tags**, não digests (`"no digest claims"`).
+HL-APP-004 fecha esse buraco.
+
+## Gap revalidado contra `origin/main` `a85c7a4`
+
+CLI pública atual (`linux/pz` → `homelab-stack.sh` / `homelab-status.sh` /
+`homelab-governor.sh`):
+
+```text
+pz server homelab status|verify|repair|plan|up|down|restart|open|logs
+pz server homelab backup|restore|update|tailscale
+pz server homelab profile list|set|get
+pz server homelab governor ...
+pz server homelab profiles
+```
+
+Ausente (esta frente cria):
+
+```text
+pz server homelab apps list|enable|disable|update --json
+pz server homelab hosts add|list|remove|ping --json
+pz server homelab --host <alias> <comando-homelab> [--json]
+pz server homelab discover --json
+pz server homelab agent install|uninstall|status|pair|revoke --json
+pz server homelab web status|enable|disable --json
+pz server homelab web user add|remove|password --json
+```
+
+Player (`linux/ui_native/pages/homelab.py`): tabela de serviços, perfil,
+plan/up/down/backup/verify/restore com QProcess e restore via `--confirm-file`
+(nunca `--yes` automático). Sem grid de cards por app, sem seletor de host,
+sem pareamento SSH, sem “Abrir dashboard”.
+
+Invariantes que permanecem: socket-proxy (nenhum serviço recebe
+`/var/run/docker.sock` direto), redação de segredos, JSON no stdout / logs
+no stderr, `schemaVersion`, lock atómico, sem apply no host de
+desenvolvimento, Docker só em CI descartável.
+
+## Decisões arquiteturais fechadas
+
+0. **Dois papéis.** Ver seção “Papéis de instalação”. Código, CLI, UI e
+   testes distinguem *onde a stack corre* de *onde o usuário administra*.
+   Comando sem `--host` fala com o runtime local (papel appliance no mesmo
+   sítio). `--host <alias>` fala com o appliance remoto (papel admin).
+1. **Multi-host fasado.** Fase SSH primeiro (nenhum daemon novo); agente
+   HTTP/TLS com descoberta depois. O Player nunca grava senha de host; usa
+   chave SSH existente ou pareamento guiado de chave.
+2. **Registro de hosts.** Arquivo local sob XDG no **host admin**,
+   `schemaVersion`, escrita atómica `0600`, lock cross-process, IDs
+   persistentes. Contém alias, `user@host` e metadados — nunca chaves
+   privadas, senhas ou tokens de app.
+3. **Agente.** `phasezero-agent` corre `systemd --user` no **host homelab**,
+   como o usuário dono do runtime. TLS self-signed gerado localmente;
+   token de pareamento aleatório exibido uma vez; allowlist FECHADA de
+   comandos (subconjunto JSON do CLI homelab); rate limit; audit trail
+   append-only; kill switch local. Nunca recebe `/var/run/docker.sock`,
+   nunca corre como root, nunca executa shell arbitrário — só invoca `pz`
+   do usuário.
+4. **Dashboard web.** Serviço no **host homelab**, HTTPS obrigatório
+   (certificado próprio), bind LAN explícito opt-in, usuários LOCAIS
+   geridos por CLI/Player no host admin, hash de senha forte, sessão com
+   expiração, CSRF, rate limit. Restore na web exige confirmação em duas
+   etapas — nunca `--yes` automático. Sem UPnP, sem port-forward, sem
+   exposição externa; fora de casa o caminho continua sendo Tailscale.
+   Bootstrap da primeira conta é local (CLI/Player), nunca pela web aberta.
+5. **Catálogo.** Manifest versionado por app dentro do repo (imagem pinada
+   por manifest-list digest ou lock por plataforma, portas, volumes,
+   healthcheck, camada, orçamento estimado, dependências de infra). Compose
+   renderizado por subconjunto; segredos só por referência; nenhum socket
+   direto; `latest` proibido.
+6. **Descoberta.** mDNS via avahi quando habilitado; `os-slim.sh` pode
+   desabilitar avahi em host headless — instalação do agente deve detectar,
+   orientar e nunca reativar silenciosamente (mudança de serviço exige
+   consentimento). Fallback sempre disponível: entrada manual `IP:porta`.
+7. **Host de desenvolvimento intocado.** Nada disto corre no host dev antes
+   da release; Docker só em CI descartável; validação em segundo host real
+   exige autorização explícita do operador.
+
+## Interfaces públicas mínimas
+
+CLI mantém stdout JSON puro e logs em stderr. Novidades sobre o conjunto
+existente de `pz server homelab`:
+
+```text
+pz server homelab apps list --json
+pz server homelab apps enable <app> --json
+pz server homelab apps disable <app> --json
+pz server homelab apps update [<app>|--all] --json
+pz server homelab hosts add <alias> <user@host> --json
+pz server homelab hosts list --json
+pz server homelab hosts remove <alias> --json
+pz server homelab hosts ping <alias> --json
+pz server homelab discover --json
+pz server homelab --host <alias> <comando-homelab> [--json]
+pz server homelab agent install|uninstall|status|pair|revoke --json
+pz server homelab web status|enable|disable --json
+pz server homelab web user add|remove|password --json
+```
+
+Contratos obrigatórios (acumulam com os do roadmap v1.15.1):
+
+- `schemaVersion` em todo documento persistido ou público.
+- Exit codes documentados; envelope JSON uniforme para resultado remoto
+  (`{hostAlias, rc, payload, error}`) com timeout explícito.
+- Apply/disable/update/removal idempotentes; operation ID persistente.
+- Redação centralizada de segredos em toda saída, inclusive envelopes remotos.
+- Host inalcançável ou versão remote incompatível falha fechado com razão
+  accionável, nunca sucesso aparente.
+- `--host` sem alias no registro falha fechado; alias local implícito não
+  inventa entrada.
+
+## Fases e gates
+
+### Fase 0 — Fundação
+
+Objetivo: base limpa e pré-requisitos cumpridos.
+
+- Confirmar merge de `feat/homelab-player-v2` em `main`. **Cumprido:** PR #70
+  em `1f86913`; ancestral `f7746de`; release v1.17.4 `a85c7a4`.
+- Criar worktree dedicado de `origin/main`; branch `feat/homelab-umbrelos-v1`.
+- Revalidar matriz abaixo contra o código atual; ajustar sem reutilizar IDs.
+- Registrar WIP alheio existente e não tocá-lo (ver Estado vivo).
+- Extrair funções umbrelOS → IDs PhaseZero (seção acima).
+- Documentar os dois papéis de instalação.
+
+Gate de saída:
+
+- CI existente verde na base do branch (`a85c7a4` run `32965735176` success).
+- Baseline hermética local da suíte homelab na worktree.
+- Nenhum claim novo sem teste correspondente previsto na matriz.
+
+### Fase 1 — Catálogo um clique por app
+
+Objetivo: apps individuais instaláveis/atualizáveis/removíveis com orçamento
+honesto. Corre no papel **appliance**; o Player no papel **admin** dispara as
+ações (local ou via `--host` na Fase 2).
+
+- Refactor de `linux/server/homelab-stack.sh` em módulos por app com manifest
+  versionado (decisão 5).
+- `apps list/enable/disable/update`; compose render por subconjunto; preflight
+  do Resource Governor por app; card bloqueia com razão quando recusado.
+- Player: grid de cards com estado real por app, ações com plan/preview,
+  progresso e cancel; nenhum modal que bloqueie o event loop (padrões
+  HL-UI-001/002 do v1.15.1 / Player v2).
+
+Gate de saída:
+
+- `docker compose config` válido para cada subconjunto testado em CI
+  descartável.
+- Teste prova enable→health→disable de um app sem afectar os demais.
+- Update resolve digest por plataforma; nenhum `latest` renderizado.
+- Segredos só por referência; socket-proxy inalterado.
+
+### Fase 2 — Multi-host via bridge SSH
+
+Objetivo: o Player no host **admin** opera o homelab no host **appliance**
+via SSH, com pareamento guiado. Nenhum daemon novo.
+
+- Registro de hosts conforme decisão 2 (vive no host admin).
+- Envelope remoto: `--host <alias>` executa `ssh <user@host> -- pz …`;
+  timeout; stderr separado; fail-closed offline; checagem de versão mínima
+  remota antes de mutação.
+- Pareamento guiado de chave SSH na UI (checa chave local, oferece
+  `ssh-copy-id` via QProcess, testa conexão) — nunca bloqueia event loop,
+  nunca pede senha em argv.
+- HomelabPage: seletor de host no topo, badge Local/Remoto, diagnósticos sem
+  segredos.
+
+Gate de saída:
+
+- Suíte hermética com stub de ssh prova envelope, timeout e fail-closed.
+- Contrato: saída remota é JSON puro; erro de rede vira razão accionável.
+- Gitleaks verde; registro contém zero material privado.
+
+### Fase 3 — Agente remoto + descoberta mDNS
+
+Objetivo: experiência umbrel-like de descobrir e parear sem terminal. O
+agente vive no host **homelab**; o Player no host **admin** descobre e pareia.
+
+- **ADR antes do código** (HL-AGT-004): threat model, schemas de API,
+  armazenamento do token, expiração/revogação, auditoria, integração. Testes
+  de contrato que falhem antes da implementação.
+- `phasezero-agent` conforme decisão 3; API = allowlist fechada espelhando o
+  CLI homelab (leitura + ações com confirmação).
+- mDNS advertise `phasezero-homelab._tcp`; detecção de avahi desabilitado
+  (conflito conhecido com `os-slim.sh`) com orientação explícita; fallback
+  manual `IP:porta` sempre funcional.
+- Painel: `discover`, pareamento colando o token, revogação, status do agente.
+
+Gate de saída:
+
+- Requisição sem token/expirada → negada (provado em teste).
+- Revogação corta sessão activa (provado).
+- Comando fora da allowlist → negado e auditado (teste tenta shell arbitrário).
+- Rate limit dispara; kill switch local para o agente (provado).
+- Fuzz básico de auth (HL-AGT-005).
+- Nenhum segredo em stdout/stderr/logs/audit (gitleaks + scan).
+
+### Fase 4 — Dashboard web completo
+
+Objetivo: mesmas funções do Player no navegador, de qualquer dispositivo da
+rede, servido pelo host **homelab**. Superfície nova maior — ADR de ameaça
+antes do código.
+
+- **ADR antes do código**: threat model de sessões/cookies/CSRF/senha,
+  recuperação, bootstrap de conta.
+- Serviço web conforme decisão 4; paridade de ações: status, cards de apps,
+  up/down, backup, restore assistido em duas etapas, logs.
+- Gestão de usuários locais via CLI/Player no host admin; primeira conta
+  nunca nasce pela web.
+- Player no host admin ganha “Abrir dashboard” do host selecionado (URL
+  HTTPS do appliance).
+
+Gate de saída:
+
+- E2E descartável: login→ação→logout; senha fraca recusada; requisição sem
+  CSRF/token → negada; cookie sem Secure/HttpOnly → falha de contrato.
+- Restore na web nunca aplica sem confirmação explícita (teste prova).
+- Bind padrão não é `0.0.0.0` sem opt-in explícito persistido.
+- Secret scan verde.
+
+### Fase 5 — Amigabilidade restante
+
+Objetivo: página Servidor honesta e onboarding leigo no host **admin**.
+
+- Página Servidor: SMART read-only (quando `smartctl` existir), rede, disco,
+  temperatura; dado indisponível aparece como indisponível — nunca inventado.
+- Onboarding guiado: descobrir host → parear → perfil/apps → revisão de
+  segurança → aplicar.
+- SMB sharing: permanece `deferred`.
+
+Gate de saída:
+
+- Página não apresenta dado fabricado (teste com sensores ausentes).
+- Onboarding E2E com stubs completa sem toque no host real.
+
+### Fase 6 — Testes e CI
+
+Objetivo: provar resiliência sem tocar host real.
+
+- Novos jobs seguindo o padrão atual do `ci.yml` (nomes finais na PR):
+  validação de manifests/catálogo, shell dos hosts/envelope, Python do agente
+  e da web, E2E descartável do web/agente.
+- Fault injection mínimo adicional: host offline, ssh lento/morto, versão
+  remota incompatível, certificado expirado, token inválido/expirado, porta
+  ocupada, avahi ausente, agente morto no meio da operação, disco cheio.
+
+Gate de saída:
+
+- Suíte completa verde; `bash -n` global; ShellCheck 0.9.0 e 0.11.x com os
+  excludes do CI; pytest completo; `git diff --check`; gitleaks.
+- Nenhum `continue-on-error` em gate obrigatório.
+
+### Fase 7 — Documentação
+
+Objetivo: operação compreensível sem contexto de chat.
+
+- Arquitectura dos dois papéis, bridge e agente, threat model agente+web,
+  guia de pareamento e revogação, catálogo (como adicionar app), limitações
+  honestas, release notes.
+
+Gate de saída:
+
+- Docs correspondem ao comportamento testado; nenhum “pronto/seguro/privado”
+  sem prova citada.
+
+### Fase 8 — Merge, release e pacote
+
+Objetivo: publicar de forma reproduzível.
+
+1. CI obrigatória verde na PR; PR documenta arquitectura, riscos, migrações,
+   testes, limitações e rollback.
+2. Merge squash em `main`; fluxo canônico `packaging/release.sh <versão>`;
+   tag anotada nova (nunca mover tags históricas); 7 assets +
+   `SHA256SUMS` conferidos por download real.
+3. Instalação no host só com comando administrativo entregue ao usuário
+   (`phasezero-admin pacman -U`), após SHA256 confirmado; nunca Polkit em
+   background.
+4. Validação pós-instalação: versão, imports UI, `profiles/status --json`,
+   dry-runs; containers, serviços, listeners, mounts, `grubenv` e WinVM devem
+   permanecer iguais.
+5. Validação em segundo host real: somente com autorização explícita do
+   operador e registrada no ledger.
+
+## Matriz de evidência obrigatória
+
+Cada requisito precisa de uma linha. Estados permitidos: `pending`,
+`in_progress`, `blocked`, `verified`, `deferred`. Adicionar IDs novos; nunca
+reutilizar ID para requisito diferente.
+
+| ID | Requisito | Implementação | Teste comportamental | Prova CI | Estado | Limitação |
+|---|---|---|---|---|---|---|
+| HL-APP-001 | Apps individuais com manifest versionado e compose por subconjunto | módulos por app em `linux/server/`, manifests com digest/portas/volumes/healthcheck/orçamento | compose config por subconjunto; enable→health→disable isolado | job catálogo/disposable | pending | catálogo curado, não loja comunitária |
+| HL-APP-002 | Preflight de orçamento por card | governor consultado antes de mutação; card bloqueia com razão | host limitado recusa app pesado com razão verificável | shell test | pending | — |
+| HL-APP-003 | UI cards um clique no Player (host admin) | grid no Player, plan/preview/cancel, QProcess assíncrono | testes player offscreen; event loop responsivo | homelab-python-test | pending | — |
+| HL-APP-004 | Update por digest sem `latest` | resolução manifest-list por plataforma; lock deixa de ser só tag | render não contém `latest`; digest fixado | compose-validate | pending | lock atual pinna tags (`a85c7a4`) |
+| HL-HOST-001 | Registro de hosts seguro no host admin | XDG, schemaVersion, atómico 0600, lock | segunda execução idempotente; corrupção falha fechado | shell test | pending | — |
+| HL-HOST-002 | Comandos remotos via `--host` fail-closed | envelope `{hostAlias, rc, payload, error}`, timeout | stub ssh: offline→razão accionável; JSON puro | shell test | pending | — |
+| HL-HOST-003 | Pareamento guiado de chave SSH na UI | QProcess, sem senha em argv, teste de conexão | pareamento E2E com stub; sem bloqueio de event loop | homelab-python-test | pending | — |
+| HL-HOST-004 | Versão remota incompatível recusada antes de mutação | handshake `pz --version` remoto | remoto antigo → recusa com plano de impacto | shell test | pending | — |
+| HL-DSC-001 | Descoberta mDNS com fallback manual | advertise `phasezero-homelab._tcp`; avahi detectado; manual `IP:porta` | avahi ausente → orientação, sem reativação silenciosa; manual funciona | agente test | pending | conflito conhecido com `os-slim.sh` |
+| HL-AGT-001 | Agente user-level TLS+token no host homelab | systemd --user, cert local, token exibido uma vez | sem/expirado → negado | agente python test | pending | — |
+| HL-AGT-002 | Pareamento e revogação | pair consome token; revoke corta sessão | revogação encerra acesso activo (provado) | agente test | pending | — |
+| HL-AGT-003 | Allowlist fechada, audit, rate limit, kill switch | API espelha subconjunto CLI; audit append-only; só invoca `pz` do user | shell arbitrário negado+auditado; rate limit dispara; kill switch para | agente test | pending | nunca docker.sock, nunca root |
+| HL-AGT-004 | Threat model ADR antes do código do agente | ADR versionado: ameaça, token, expiração, auditoria, schemas | testes de contrato falham antes da implementação | docs + contract tests | pending | bloqueia início da Fase 3 |
+| HL-AGT-005 | Fuzz básico de auth + agente sem socket/shell | harness de auth; assertiva de que o agente não monta docker.sock nem executa shell | corpus mínimo recusado; unit prova invocação só via `pz` | agente test | pending | — |
+| HL-WEB-001 | Dashboard web HTTPS com login local no host homelab | bind opt-in, argon2id, sessão/CSRF | login→ação→logout E2E; CSRF ausente negado; cookie flags | web e2e disposable | pending | maior superfície nova desta frente |
+| HL-WEB-002 | Paridade de ações com restore em duas etapas | mesmas ações do Player; nunca `--yes` automático | restore web sem confirmação não aplica | web e2e | pending | — |
+| HL-WEB-003 | “Abrir dashboard” do host selecionado no Player | URL HTTPS do appliance no browser do host admin | ação abre URL correcta local/remota | python test | pending | — |
+| HL-WEB-004 | Senha fraca recusada | política de senha no `web user add/password` e no login de bootstrap | teste prova rejeição com razão; hash nunca em logs | web test | pending | 2FA deferred |
+| HL-WEB-005 | Bind LAN, sem UPnP/port-forward; externo só Tailscale | default loopback/LAN; opt-in persistido; zero UPnP | bind `0.0.0.0` sem opt-in falha; scan de unidade não abre WAN | web test + compose-validate | pending | — |
+| HL-WEB-006 | Primeira conta nunca nasce pela web aberta | bootstrap só CLI/Player; web recusa signup sem user existente | E2E: web sem users → recusa; CLI cria; login passa | web e2e | pending | — |
+| HL-SRV-001 | Página Servidor honesta | SMART/rede/disco read-only; desconhecido explícito | sensores ausentes → “indisponível”, nunca fabricado | python test | pending | — |
+| HL-ONB-001 | Onboarding guiado ponta a ponta no host admin | descobrir→parear→perfil→revisão→aplicar | E2E com stubs completa sem host real | integration | pending | — |
+| HL-BKP-001 | Backup/restore reversível | herdado do v1.15.1; expor na web na Fase 4 | já verified na CI disposable | homelab-shell-test + homelab-integration-disposable | verified | Rollback cobre dados de volume; `.env`/segredos fora do manifest. Rewind/horário deferred |
+
+## Estado vivo
+
+Actualizar esta seção no início e fim de cada sessão.
+
+| Item | Estado atual | Verificado por | Data |
+|---|---|---|---|
+| Base | `origin/main` `a85c7a4` (v1.17.4) | `git fetch` + `git log origin/main` | 2026-08-26 |
+| Player v2 | mergeado: PR #70 `1f86913`; `f7746de` ancestral | `git merge-base --is-ancestor f7746de origin/main` | 2026-08-26 |
+| CI da base | success run `32965735176` | GitHub Actions `ci.yml` push `main` | 2026-08-26 |
+| Branch/worktree | `feat/homelab-umbrelos-v1` em `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | `git worktree list` | 2026-08-26 |
+| Baseline local | `tests/linux-homelab.sh` exit 0; `test_homelab_player.py` 23 passed | worktree, 2026-08-26 | 2026-08-26 |
+| WIP alheio (checkout principal) | untracked `.mimosa/`, `uber-defesa-privada/`; NÃO tocar `dashboard.py` nem `test_status_journey_contract.py`; NÃO stashar/commitar no checkout `feat/homelab-player-v2` | `git status` em `/mnt/sdcard/Projects/PhaseZero` | 2026-08-26 |
+| Homelab real | segue sem workload desta frente; nenhum apply | herdado do v1.15.1; revalidar | 2026-08-26 |
+| Catálogo atual | core+extras all-or-nothing; lock por tag, não digest | `assets/home-server/*.yml` + `docker-compose.lock.json` | 2026-08-26 |
+
+## Ledger de execução
+
+Adicionar uma linha por sessão material. Não apagar histórico.
+
+| Data | Agente | Branch/worktree | Fase | Commit/PR | Gates | Resultado/próximo passo |
+|---|---|---|---|---|---|---|
+| 2026-08-26 | opencode (checkout principal) | `feat/homelab-player-v2` (somente docs, sem commit) | rascunho | não commitado | — | rascunho untracked no checkout principal; não reutilizar |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 0 | este commit (docs + AGENTS.md) | CI base `32965735176` success; `tests/linux-homelab.sh` exit 0 na worktree (~59s; ERROR de registry-ausente é o caso fail-closed esperado); `pytest tests/test_homelab_player.py` 23 passed / 1.51s offscreen; `git diff --check` limpo | Roadmap revalidado: Player v2 já em main; dois papéis appliance vs admin/consumidor; matriz umbrelOS extraída; IDs HL-AGT-004/005 e HL-WEB-004..006. Próximo: Fase 1 catálogo (apps list/enable/disable, compose por subconjunto) |
+
+## Formato obrigatório de handoff
+
+Herdado integralmente de `docs/roadmaps/homelab-v1.15.1-remediation.md`
+(§ Formato obrigatório de handoff). Handoff sem comandos/resultados
+verificáveis não altera requisito para `verified`.
+
+```text
+Objetivo da sessão:
+Fase/IDs assumidos:
+Branch e worktree:
+HEAD inicial:
+HEAD final:
+Arquivos alterados:
+Commits criados:
+Testes executados e resultados:
+CI/PR:
+Estado do host antes/depois:
+Segredos verificados como ausentes:
+Limitações e riscos restantes:
+Bloqueios reais:
+Próximo passo exacto:
+```
