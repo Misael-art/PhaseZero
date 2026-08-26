@@ -529,6 +529,8 @@ cmd_server() {
                 governor) bash "$PZ_ROOT/linux/server/homelab-governor.sh" "${2:-list}" "${@:3}" ;;
                 apps) bash "$PZ_ROOT/linux/server/homelab-apps.sh" "${@:2}" ;;
                 hosts) bash "$PZ_ROOT/linux/server/homelab-hosts.sh" "${@:2}" ;;
+                agent) python3 "$PZ_ROOT/linux/server/homelab_agent.py" "${@:2}" ;;
+                discover) python3 "$PZ_ROOT/linux/server/homelab_agent.py" discover --json ;;
                 *) bash "$PZ_ROOT/linux/server/homelab-stack.sh" "$@" ;;
             esac
             ;;

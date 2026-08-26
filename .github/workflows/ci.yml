@@ -212,7 +212,8 @@ jobs:
         run: |
           set -euo pipefail
           export QT_QPA_PLATFORM=offscreen
-          /tmp/pz-venv/bin/python -m pytest tests/test_homelab_player.py -q \
+          /tmp/pz-venv/bin/python -m pytest tests/test_homelab_player.py \
+            tests/test_homelab_agent_contract.py -q \
             --timeout=90 --timeout-method=thread
 
   compose-validate:

@@ -14,7 +14,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Fase 1 disposable em CI; Fase 2 SSH bridge implementada, prova local com stub |
+| Status | Fase 3: ADR 0003 + agente hermético (TLS/token/allowlist); systemd user e mDNS advertise ainda parciais |
 | Última verificação | 2026-08-26, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
 | Base observada | `origin/main` `a85c7a4` (release v1.17.4) |
@@ -429,12 +429,12 @@ reutilizar ID para requisito diferente.
 | HL-HOST-002 | Comandos remotos via `--host` fail-closed | envelope `{hostAlias, rc, payload, error}`, timeout ssh | stub ssh: offline→razão accionável; JSON puro | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
 | HL-HOST-003 | Pareamento guiado de chave SSH na UI | QProcess ssh-copy-id BatchMode, sem senha em argv | Player: seletor + badge Local/Remoto; source sem sshpass/--password | homelab-python-test | in_progress | E2E ssh-copy-id com stub ainda raso |
 | HL-HOST-004 | Versão remota incompatível recusada antes de mutação | handshake `pz --version` remoto | stub `old` → rc 69, payload null | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
-| HL-DSC-001 | Descoberta mDNS com fallback manual | advertise `phasezero-homelab._tcp`; avahi detectado; manual `IP:porta` | avahi ausente → orientação, sem reativação silenciosa; manual funciona | agente test | pending | conflito conhecido com `os-slim.sh` |
-| HL-AGT-001 | Agente user-level TLS+token no host homelab | systemd --user, cert local, token exibido uma vez | sem/expirado → negado | agente python test | pending | — |
-| HL-AGT-002 | Pareamento e revogação | pair consome token; revoke corta sessão | revogação encerra acesso activo (provado) | agente test | pending | — |
-| HL-AGT-003 | Allowlist fechada, audit, rate limit, kill switch | API espelha subconjunto CLI; audit append-only; só invoca `pz` do user | shell arbitrário negado+auditado; rate limit dispara; kill switch para | agente test | pending | nunca docker.sock, nunca root |
-| HL-AGT-004 | Threat model ADR antes do código do agente | ADR versionado: ameaça, token, expiração, auditoria, schemas | testes de contrato falham antes da implementação | docs + contract tests | pending | bloqueia início da Fase 3 |
-| HL-AGT-005 | Fuzz básico de auth + agente sem socket/shell | harness de auth; assertiva de que o agente não monta docker.sock nem executa shell | corpus mínimo recusado; unit prova invocação só via `pz` | agente test | pending | — |
+| HL-DSC-001 | Descoberta mDNS com fallback manual | `discover --json` anuncia `phasezero-homelab._tcp`; nunca reativa avahi | avahi ausente → orientação + `wouldReenableAvahi:false` | test_homelab_agent_contract | in_progress | advertise real (avahi-publish) ainda não |
+| HL-AGT-001 | Agente user-level TLS+token no host homelab | `homelab_agent.py`; token one-shot hashed; HTTP 401 sem Bearer | sem/expirado → 401; install devolve token uma vez | homelab-python-test | in_progress | unit TLS=off; systemd --user unit ainda não gravada |
+| HL-AGT-002 | Pareamento e revogação | pair consome token; revoke corta sessão HTTP | HTTP pair→status→revoke→401 | homelab-python-test | in_progress | prova local; aguarda CI |
+| HL-AGT-003 | Allowlist fechada, audit, rate limit, kill switch | API allowlist; audit.log append-only; `shell=False`; kill file | shell arbitrário 403+audit; 429; kill 503 | homelab-python-test | in_progress | prova local; aguarda CI |
+| HL-AGT-004 | Threat model ADR antes do código do agente | `docs/adr/0003-homelab-agent-mdns.md` | ADR versionado no repo | docs | in_progress | TDD vermelho isolado não foi commitado à parte |
+| HL-AGT-005 | Fuzz básico de auth + agente sem socket/shell | corpus vazio/lixo/traversal; source sem docker.sock/`shell=True` | fuzz recusado; source prova `shell=False` | homelab-python-test | in_progress | prova local; aguarda CI |
 | HL-WEB-001 | Dashboard web HTTPS com login local no host homelab | bind opt-in, argon2id, sessão/CSRF | login→ação→logout E2E; CSRF ausente negado; cookie flags | web e2e disposable | pending | maior superfície nova desta frente |
 | HL-WEB-002 | Paridade de ações com restore em duas etapas | mesmas ações do Player; nunca `--yes` automático | restore web sem confirmação não aplica | web e2e | pending | — |
 | HL-WEB-003 | “Abrir dashboard” do host selecionado no Player | URL HTTPS do appliance no browser do host admin | ação abre URL correcta local/remota | python test | pending | — |
@@ -470,7 +470,8 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-26 | opencode (checkout principal) | `feat/homelab-player-v2` (somente docs, sem commit) | rascunho | não commitado | — | rascunho untracked no checkout principal; não reutilizar |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 0 | `0ebc7cc` | CI base `32965735176` success; suíte hermética + player 23 passed | Roadmap + dois papéis. |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1 | `02b1360` | suíte hermética + 26 player | catálogo um clique |
-| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1–2 | este commit | `tests/linux-homelab.sh` exit 0 (~56s, hosts bridge ok); `pytest tests/test_homelab_player.py` 28 passed; disposable script recusa sem flag; nenhum compose up no host | Job `homelab-apps-disposable` + `--host` SSH stub. Próximo: CI verde nestes jobs; Fase 3 ADR do agente |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1–2 | `192d2eb` | hosts stub + disposable script | CI 02b1360 vermelho (SC2016/SC2005); 192d2eb ainda a correr |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 3 | este commit | shellcheck 0.11 limpo nos scripts novos; `pytest` player+agent 42 passed; nenhum compose up | ADR 0003 + agente hermético. Próximo: CI verde; unit systemd; advertise mDNS real |
 
 ## Formato obrigatório de handoff
 

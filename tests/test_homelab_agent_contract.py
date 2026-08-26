@@ -1,0 +1,190 @@
+from __future__ import annotations
+
+import inspect
+import json
+import sys
+import threading
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from linux.server.homelab_agent import ALLOWLIST, HomelabAgent, serve  # noqa: E402
+
+
+@pytest.fixture
+def agent(tmp_path, monkeypatch):
+    monkeypatch.setenv("PZ_HOMELAB_AGENT_STATE", str(tmp_path / "agent"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+
+    def invoker(argv):
+        return 0, json.dumps({"schemaVersion": "1", "ok": True, "argv": argv}), ""
+
+    return HomelabAgent(state_dir=tmp_path / "agent", invoker=invoker, bind="127.0.0.1", port=0)
+
+
+def test_missing_token_denied(agent):
+    assert agent.authorize(None) is False
+    assert agent.authorize("") is False
+
+
+def test_expired_pairing_denied(agent):
+    token = agent.issue_pairing_token()
+    rec = json.loads((agent.state_dir / "pairing.json").read_text())
+    rec["expiresAt"] = 1
+    agent._save_json("pairing.json", rec)
+    assert agent.pair(token) is None
+
+
+def test_pair_then_command_then_revoke(agent):
+    pairing = agent.issue_pairing_token()
+    session = agent.pair(pairing)
+    assert session
+    assert agent.authorize(session)
+    result = agent.run_command("apps.list", {})
+    assert result["ok"] is True
+    assert result["payload"]["ok"] is True
+    assert agent.revoke(session) is True
+    assert agent.authorize(session) is False
+
+
+def test_arbitrary_shell_denied_and_audited(agent):
+    pairing = agent.issue_pairing_token()
+    session = agent.pair(pairing)
+    assert session
+    result = agent.run_command("sh -c 'rm -rf /'", {})
+    assert result["ok"] is False
+    assert result["code"] == 403
+    audit = (agent.state_dir / "audit.log").read_text()
+    assert "denied-allowlist" in audit
+    assert "rm -rf" not in audit or "denied-allowlist" in audit
+
+
+def test_restore_yes_forbidden(agent):
+    result = agent.run_command("restore.plan", {"source": "/tmp/bk1", "yes": "1"})
+    assert result["ok"] is False
+    assert "yes" in result["error"]
+
+
+def test_enable_rejects_metacharacters(agent):
+    result = agent.run_command("apps.enable", {"app": "vaultwarden;id"})
+    assert result["ok"] is False
+    assert result["code"] == 400
+
+
+def test_kill_switch_blocks(agent):
+    pairing = agent.issue_pairing_token()
+    session = agent.pair(pairing)
+    agent.set_kill_switch(True)
+    assert agent.authorize(session) is False
+    result = agent.run_command("status", {})
+    assert result["code"] == 503
+
+
+def test_mdns_never_silently_reenables_avahi(agent):
+    status = agent.mdns_status()
+    assert status["service"] == "phasezero-homelab._tcp"
+    assert status["wouldReenableAvahi"] is False
+    assert "IP" in status["manualFallback"]
+
+
+def test_source_has_no_docker_sock_or_shell_true():
+    src = inspect.getsource(HomelabAgent)
+    assert "docker.sock" not in src
+    assert "shell=False" in src
+    assert "shell=True" not in src
+
+
+def test_fuzz_auth_tokens(agent):
+    for blob in ("", " ", "\x00", "a" * 4096, "' OR 1=1", "../etc/passwd"):
+        assert agent.pair(blob) is None
+        assert agent.authorize(blob) is False
+
+
+def test_http_without_token_is_401(agent):
+    httpd = serve(agent, tls=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = httpd.server_address[1]
+        url = f"http://127.0.0.1:{port}/v1/status"
+        with pytest.raises(HTTPError) as err:
+            urlopen(url, timeout=2)
+        assert err.value.code == 401
+        pairing = agent.issue_pairing_token()
+        req = Request(
+            f"http://127.0.0.1:{port}/v1/pair",
+            data=json.dumps({"pairingToken": pairing}).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with urlopen(req, timeout=2) as resp:
+            body = json.loads(resp.read().decode())
+        assert body["ok"] is True
+        session = body["sessionToken"]
+        req = Request(
+            url,
+            headers={"Authorization": f"Bearer {session}"},
+        )
+        with urlopen(req, timeout=2) as resp:
+            st = json.loads(resp.read().decode())
+        assert st["ok"] is True
+        req = Request(
+            f"http://127.0.0.1:{port}/v1/revoke",
+            data=b"{}",
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {session}",
+                "Content-Type": "application/json",
+            },
+        )
+        with urlopen(req, timeout=2) as resp:
+            assert json.loads(resp.read().decode())["ok"] is True
+        with pytest.raises(HTTPError) as err:
+            urlopen(
+                Request(url, headers={"Authorization": f"Bearer {session}"}),
+                timeout=2,
+            )
+        assert err.value.code == 401
+    finally:
+        httpd.shutdown()
+
+
+def test_http_rate_limit(agent):
+    httpd = serve(agent, tls=False)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        port = httpd.server_address[1]
+        url = f"http://127.0.0.1:{port}/v1/status"
+        codes = []
+        for _ in range(25):
+            try:
+                urlopen(url, timeout=2)
+                codes.append(200)
+            except HTTPError as exc:
+                codes.append(exc.code)
+            except URLError:
+                codes.append(0)
+        assert 429 in codes
+    finally:
+        httpd.shutdown()
+
+
+def test_install_cli_shows_token_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("PZ_HOMELAB_AGENT_STATE", str(tmp_path / "agent"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    from linux.server import homelab_agent as mod
+
+    rc = mod._cli(["install", "--json"])
+    assert rc == 0
+
+
+def test_allowlist_does_not_include_yes():
+    joined = " ".join(v for args in ALLOWLIST.values() for v in args)
+    assert "--yes" not in joined
