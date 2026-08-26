@@ -728,6 +728,15 @@ class ParameterDialog(QDialog):
                 field = QLineEdit()
                 field.setEchoMode(QLineEdit.Password)
                 field.setPlaceholderText(parameter.placeholder)
+                if not getattr(self, "_secret_note_added", False):
+                    note = QLabel(
+                        "Vai direto para o comando por entrada segura: não aparece em logs, "
+                        "na linha de comando nem fica guardada na Central."
+                    )
+                    note.setObjectName("cardDescription")
+                    note.setWordWrap(True)
+                    form.addRow("", note)
+                    self._secret_note_added = True
             else:
                 field = QLineEdit()
                 field.setPlaceholderText(parameter.placeholder)
@@ -1356,6 +1365,7 @@ class ProgressDialog(StatefulDialog):
 class ResultDialog(StatefulDialog):
     history_requested = Signal()
     resolution_requested = Signal(str)
+    retry_requested = Signal(object)
 
     def __init__(
         self,
@@ -1385,6 +1395,11 @@ class ResultDialog(StatefulDialog):
             parts = [part for part in (human, f"Próximo passo: {nxt}" if nxt else "") if part]
             if parts:
                 message = "\n".join(parts)
+        if getattr(result, "timed_out", False):
+            message = (
+                "A operação passou do tempo limite e foi interrompida.\n"
+                "Nada além do que apareceu na saída foi feito. Você pode tentar de novo."
+            )
         if sev == "error" and message in {
             "Não foi possível concluir. Revise a solução recomendada abaixo.",
         }:
@@ -1415,6 +1430,10 @@ class ResultDialog(StatefulDialog):
         history = self.add_action("Histórico", QDialogButtonBox.ActionRole)
         history.clicked.connect(self.history_requested.emit)
         if sev in {"warning", "error"}:
+            if getattr(result, "timed_out", False):
+                retry = self.add_action("Tentar novamente", QDialogButtonBox.AcceptRole, variant="primaryButton")
+                retry.clicked.connect(lambda: self.retry_requested.emit(result.action))
+                retry.clicked.connect(self.accept)
             if result.action_id.startswith("windows."):
                 label = "Revisar Windows VM"
             elif result.action_id.startswith("ai.proxies") or result.action_id.startswith("ai.9router"):

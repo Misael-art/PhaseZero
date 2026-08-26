@@ -554,6 +554,7 @@ class MainWindow(QMainWindow):
 
     def request_action(self, action: ActionSpec) -> None:
         if self.runner.running:
+            self._toast("Já existe operação em andamento — aguarde ou cancele", "warning")
             return
         values: dict[str, str] = {}
         if action.id == "windows.provision.player":
@@ -730,6 +731,11 @@ class MainWindow(QMainWindow):
             )
             dialog.history_requested.connect(lambda: self.show_category("Resultados"))
             dialog.resolution_requested.connect(self._open_resolution)
+            if severity == "error":
+                # Falha confirmada: reverte o toggle otimista na hora, sem
+                # esperar o refetch assíncrono (que pode falhar também).
+                self._cancel_page_pending_action(action.id)
+            dialog.retry_requested.connect(lambda _a: self.request_action(action))
             dialog.exec()
             verb_map = {"success": "concluída", "warning": "concluída com avisos", "error": "falhou"}
             verb = verb_map.get(severity, "falhou")

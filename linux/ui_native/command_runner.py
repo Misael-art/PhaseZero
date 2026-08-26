@@ -109,6 +109,7 @@ class CommandRunner(QObject):
         self.stderr_parts = []
         self._stdout_size = 0
         self._stderr_size = 0
+        self.timed_out = False
         self.started_at = utc_now()
         self._cancel_requested = False
         try:
@@ -224,6 +225,7 @@ class CommandRunner(QObject):
     def _timeout(self) -> None:
         if not self.running:
             return
+        self.timed_out = True
         message = f"operation timed out after {self.timeout_ms // 1000}s\n"
         self._capture(message, stderr=True)
         self.output.emit(message, True)
@@ -252,6 +254,7 @@ class CommandRunner(QObject):
             stderr=stderr,
             parsed=parsed,
             operation_id=self.operation_id,
+            timed_out=self.timed_out,
         )
         try:
             private_state = secure_directory(state_dir())
