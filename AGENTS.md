@@ -45,6 +45,40 @@ Conflict rules:
   boot, GRUB, boot-runtime, VM session, or Windows VM UI work. Treat its
   requirements matrix, phase gates, and evidence rules as mandatory.
 
+## Sandboxed HOME: one export per variable
+
+Never build a throwaway HOME with a single `export`:
+
+```bash
+# WRONG - XDG_CONFIG_HOME lands in the real ~/.config
+export HOME="$W/home" XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+```
+
+`export` is a builtin, so bash expands every argument before the builtin
+assigns anything. `$HOME` on the right-hand side is still the *real* home. The
+result is the worst possible state: a sandboxed HOME with production XDG paths,
+so destructive commands run believing they are isolated.
+
+```bash
+# RIGHT - each assignment sees the previous one
+export HOME="$W/home"
+export XDG_CONFIG_HOME="$HOME/.config"
+export XDG_DATA_HOME="$HOME/.local/share"
+export XDG_STATE_HOME="$HOME/.local/state"
+```
+
+This is not hypothetical. On 2026-08-24 that one-line form truncated the live
+`~/.config/phasezero/ai-proxies/9router.env` to `K=v`. It is the systemd
+`EnvironmentFile` for the router, so the next restart fell back to upstream
+defaults and bound `0.0.0.0:3000` instead of loopback, exposing the gateway on
+the LAN, while every client reading `PHASEZERO_9ROUTER_API_KEY` (Hermes, Claude
+Code, OpenCode, Odysseus) stopped working.
+
+Same rule for any derived sandbox path (`AI_MEMORY_DATA_DIR`, `PZ_*`): assign
+it in its own statement, or build it from the sandbox root instead of `$HOME`.
+Before running a destructive command in a sandbox, echo the paths it will
+actually touch.
+
 <!-- BEGIN PONYTAIL ARCHITECTURE -->
 Ponytail architecture runtime.
 
