@@ -3881,12 +3881,12 @@ function Get-BootstrapNotepadPlusPlusInstallInfo {
     $programW6432 = [Environment]::GetEnvironmentVariable('ProgramW6432')
     $publicProfile = [Environment]::GetEnvironmentVariable('PUBLIC')
     $candidates = @(
-        (Join-Path $env:ProgramFiles 'Notepad++')
+        (Join-BootstrapKnownFolderPath -Base $env:ProgramFiles -ChildPath 'Notepad++')
         $(if ($programW6432 -and ($env:ProgramFiles -ne $programW6432)) { Join-Path $programW6432 'Notepad++' } else { $null })
         $(if ($programFilesX86 -and ($env:ProgramFiles -ne $programFilesX86)) { Join-Path $programFilesX86 'Notepad++' } else { $null })
-        (Join-Path $env:LOCALAPPDATA 'Programs\Notepad++')
+        (Join-BootstrapKnownFolderPath -Base $env:LOCALAPPDATA -ChildPath 'Programs\Notepad++')
         $(if ($publicProfile) { Join-Path $publicProfile 'Notepad++' } else { $null })
-    ) | Where-Object { $_ } | Select-Object -Unique
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Select-Object -Unique
 
     $installRoot = $null
     foreach ($path in @($candidates)) {
@@ -7692,6 +7692,18 @@ function Repair-BootstrapCodexDesktopProcesses {
 
 function Repair-BootstrapCodexDesktop {
     $before = Get-BootstrapCodexDesktopDiagnostics
+    $beforePkg = ConvertTo-BootstrapHashtable -InputObject $before['package']
+    if (-not [bool]$beforePkg['installed'] -and -not [bool]$beforePkg['dataRootExists']) {
+        # Sem Codex Desktop instalado nao ha reparo possivel. 'audited' aqui daria a impressao de
+        # que o item mutante rodou; 'skipped' com motivo e o que de fato aconteceu.
+        return [ordered]@{
+            status = 'skipped'
+            reason = 'codex-desktop-absent'
+            note = 'Codex Desktop nao instalado; nada a reparar.'
+            before = $before
+            after = $before
+        }
+    }
     $runtimeResult = [ordered]@{ status = 'skipped'; reason = 'vcpp-runtime-present-or-not-needed' }
     if (@($before['issues']) -contains 'vcpp-redist-missing-for-codex-desktop') {
         $runtimeResult = Ensure-BootstrapCodexDesktopVcppRuntime
@@ -10883,23 +10895,28 @@ function ConvertTo-BootstrapHashtable {
 
     if ($null -eq $InputObject) { return $null }
 
-    if ($InputObject -is [System.Collections.IDictionary]) {
+    $value = $InputObject
+
+    if ($value -is [System.Collections.IDictionary]) {
         $result = @{}
-        foreach ($key in $InputObject.Keys) {
-            $result[[string]$key] = ConvertTo-BootstrapHashtable -InputObject $InputObject[$key]
+        foreach ($key in $value.Keys) {
+            $result[[string]$key] = ConvertTo-BootstrapHashtable -InputObject $value[$key]
         }
         return $result
     }
 
-    if (($InputObject -is [System.Collections.IEnumerable]) -and -not ($InputObject -is [string])) {
+    if (($value -is [System.Collections.IEnumerable]) -and -not ($value -is [string])) {
         $items = New-Object System.Collections.Generic.List[object]
-        foreach ($item in $InputObject) {
+        foreach ($item in $value) {
             $items.Add((ConvertTo-BootstrapHashtable -InputObject $item))
         }
         return ,@($items.ToArray())
     }
 
-    if ($InputObject -is [pscustomobject]) {
+    # Precisa ser PSCustomObject de verdade. O acelerador [pscustomobject] casa com qualquer valor
+    # embrulhado em PSObject - o que cmdlets como Test-Path e Join-Path devolvem - e fazia bool e
+    # string cairem neste ramo, virando hashtable VAZIA e apagando o dado em silencio.
+    if ($value -is [System.Management.Automation.PSCustomObject]) {
         $result = @{}
         foreach ($property in $InputObject.PSObject.Properties) {
             $result[$property.Name] = ConvertTo-BootstrapHashtable -InputObject $property.Value
@@ -10907,7 +10924,7 @@ function ConvertTo-BootstrapHashtable {
         return $result
     }
 
-    return $InputObject
+    return $value
 }
 
 function Test-BootstrapMapContainsKey {
@@ -11482,7 +11499,7 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'soundswitch-audio-profile'; category = 'steamdeck-control'; displayName = 'SoundSwitch audio'; description = 'Prepara troca de audio Deck/HDMI/DP por modo.'; targetApps = @('soundswitch'); probePaths = @('$env:APPDATA\SoundSwitch'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('config-file','session'); rollback = @('backup-file') }
         [ordered]@{ id = 'displayfusion-layouts'; category = 'steamdeck-control'; displayName = 'DisplayFusion layouts'; description = 'Perfis de monitor/dock; pode exigir elevacao para hooks globais.'; targetApps = @('displayfusion'); probePaths = @('$env:ProgramFiles\DisplayFusion\DisplayFusion.exe','$env:ProgramFiles(x86)\DisplayFusion\DisplayFusion.exe'); requiresAdmin = $true; defaultMode = 'recommended'; profiles = @('desktop','dev'); actions = @('config-file','task'); rollback = @('backup-file','registry-snapshot') }
 
-        [ordered]@{ id = 'vscode-family-settings'; category = 'dev-ai'; displayName = 'VS Code family settings'; description = 'Aplica settings/extensoes/MCPs para VS Code, Insiders, Cursor, Windsurf, Trae e Zed.'; targetApps = @('visual studio code','cursor','windsurf','trae','zed'); probePaths = @('$env:APPDATA\Code\User\settings.json','$env:APPDATA\Code - Insiders\User\settings.json','$env:APPDATA\Cursor\User','$env:APPDATA\Windsurf\User','$env:APPDATA\Zed\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
+        [ordered]@{ id = 'vscode-family-settings'; category = 'dev-ai'; displayName = 'VS Code family settings'; description = 'Aplica settings/extensoes/MCPs para VS Code, Insiders, Cursor, Windsurf, Trae e Zed.'; targetApps = @('visual studio code','cursor','windsurf','trae','zed'); probePaths = @('$env:APPDATA\Code\User\settings.json','$env:APPDATA\Code - Insiders\User\settings.json','$env:APPDATA\Cursor\User','$env:APPDATA\Windsurf\User','$env:APPDATA\Zed\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('install','audit'); rollback = @('winget-uninstall-manual') }
         [ordered]@{ id = 'notepadpp-defaults'; category = 'dev-ai'; displayName = 'Notepad++ defaults'; description = 'Instala plugins oficiais curados, UDLs oficiais/custom, NppOpenAI.ini seguro e deixa LSP alpha fora do default.'; targetApps = @('notepad++'); probePaths = @('$env:ProgramFiles\Notepad++\notepad++.exe','$env:ProgramFiles(x86)\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Programs\Notepad++\notepad++.exe','$env:LOCALAPPDATA\Microsoft\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe','$env:ProgramFiles\WinGet\Packages\Notepad++.Notepad++_*\notepad++.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file','audit'); rollback = @('backup-file','manual') }
         [ordered]@{ id = 'claude-code-defaults'; category = 'dev-ai'; displayName = 'Claude Code defaults'; description = 'Mantem settings, plugins e rules de Claude Code.'; targetApps = @('claude code'); probePaths = @('$env:USERPROFILE\.claude\settings.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'opencode-auth-config'; category = 'dev-ai'; displayName = 'OpenCode auth/config'; description = 'Usa manifesto de chaves para auth/config do OpenCode.'; targetApps = @('opencode'); probePaths = @('$env:USERPROFILE\.config\opencode\opencode.json','$env:USERPROFILE\.local\share\opencode\auth.json'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('dev','desktop'); actions = @('config-file'); rollback = @('backup-file') }
@@ -29152,8 +29169,8 @@ function Apply-BrowserStartupTuning {
 }
 
 function Ensure-BootstrapPlayniteFullscreenConfig {
-    $configPath = Join-Path $env:APPDATA 'Playnite\config.json'
-    if (-not (Test-Path $configPath)) {
+    $configPath = Join-BootstrapKnownFolderPath -Base $env:APPDATA -ChildPath 'Playnite\config.json'
+    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path $configPath)) {
         return [ordered]@{ status = 'skipped'; note = "Playnite config ausente: $configPath" }
     }
 
@@ -31060,7 +31077,28 @@ function Apply-CaptureTuning {
 }
 
 function Apply-SteamDeckControlTuning {
-    param([Parameter(Mandatory = $true)]$Item)
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [AllowNull()][hashtable]$State = $null
+    )
+
+    if ([string]$Item.id -ne 'steam-input-desktop-layout-audit') {
+        $declared = @()
+        if (($Item -is [System.Collections.IDictionary]) -and $Item.Contains('actions')) { $declared = @($Item['actions']) }
+        elseif ($Item.PSObject.Properties['actions']) { $declared = @($Item.actions) }
+        $mutating = @($declared | Where-Object { @('audit', 'install') -notcontains [string]$_ })
+        if ($mutating.Count -gt 0) {
+            if ($null -eq $State) {
+                return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'skipped'; reason = 'state-required'; note = 'Tuning steamdeck-control exige State para registrar rollback.' }
+            }
+            $result = Apply-SteamDeckControlItemTuning -State $State -Item $Item
+            $map = ConvertTo-BootstrapHashtable -InputObject $result
+            if (-not ($map -is [hashtable])) { $map = @{ status = 'skipped'; reason = 'invalid-result' } }
+            $map['id'] = [string]$Item.id
+            $map['category'] = [string]$Item.category
+            return $map
+        }
+    }
 
     if ([string]$Item.id -eq 'steam-input-desktop-layout-audit') {
         $settings = (Get-BootstrapSteamDeckSettingsData).Data
@@ -31201,57 +31239,11 @@ function Get-BootstrapPowerToysNoisyModules {
 }
 
 function Ensure-BootstrapPowerToysQol {
-    # settings.json do PowerToys traz o mapa "enabled". Validamos o schema antes de tocar; se o
-    # mapa nao existir, devolvemos skipped em vez de inventar estrutura.
     param([Parameter(Mandatory = $true)][hashtable]$State)
 
-    $configPath = Join-BootstrapKnownFolderPath -Base $env:LOCALAPPDATA -ChildPath 'Microsoft\PowerToys\settings.json'
-    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path -LiteralPath $configPath)) {
-        return [ordered]@{ status = 'skipped'; reason = 'powertoys-settings-absent'; note = "settings.json do PowerToys ausente: $configPath." }
-    }
-
-    try {
-        $raw = Get-Content -LiteralPath $configPath -Raw -Encoding utf8
-        $config = ConvertTo-BootstrapHashtable -InputObject ($raw | ConvertFrom-Json -ErrorAction Stop)
-    } catch {
-        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = "Falha ao ler $configPath."; path = $configPath }
-    }
-
-    if (-not ($config -is [hashtable]) -or -not (Test-BootstrapMapContainsKey -Map $config -Key 'enabled')) {
-        return [ordered]@{ status = 'skipped'; reason = 'powertoys-schema-unexpected'; note = "Mapa 'enabled' nao encontrado em $configPath; nada foi alterado." }
-    }
-
-    $enabled = ConvertTo-BootstrapHashtable -InputObject $config['enabled']
-    if (-not ($enabled -is [hashtable])) {
-        return [ordered]@{ status = 'skipped'; reason = 'powertoys-schema-unexpected'; note = "Mapa 'enabled' com formato inesperado em $configPath." }
-    }
-
-    $disabled = @()
-    foreach ($moduleName in @(Get-BootstrapPowerToysNoisyModules)) {
-        if ((Test-BootstrapMapContainsKey -Map $enabled -Key $moduleName) -and [bool]$enabled[$moduleName]) {
-            $enabled[$moduleName] = $false
-            $disabled += @($moduleName)
-        }
-    }
-
-    if ($disabled.Count -eq 0) {
-        return [ordered]@{ status = 'unchanged'; note = 'Modulos ruidosos do PowerToys ja estavam desligados.'; path = $configPath }
-    }
-
-    $config['enabled'] = $enabled
-    Register-BootstrapFileChange -State $State -Target $configPath -Operation 'powertoys-qol' -Component 'powertoys'
-    try {
-        Write-BootstrapJsonFile -Path $configPath -Value $config
-    } catch {
-        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = 'Falha ao escrever settings.json do PowerToys.'; path = $configPath }
-    }
-    return [ordered]@{
-        status = 'applied'
-        note = ('PowerToys: modulos desligados para reduzir overlay em jogo: {0}.' -f ($disabled -join ', '))
-        path = $configPath
-        disabledModules = @($disabled)
-        rollback = 'backup-file'
-    }
+    $modules = @{}
+    foreach ($moduleName in @(Get-BootstrapPowerToysNoisyModules)) { $modules[$moduleName] = $false }
+    return (Set-BootstrapPowerToysModulesEnabled -State $State -Modules $modules -Operation 'powertoys-qol')
 }
 
 function Set-BootstrapIniValue {
@@ -31547,6 +31539,109 @@ function Ensure-BootstrapClaudeRtkTemplate {
         changed = ([string]$row['status'] -eq 'applied')
         paths = @([string]$row['path'])
         nextSteps = @('Nenhuma chave foi gravada; use bootstrap-secrets.')
+    }
+}
+
+function Set-BootstrapPowerToysModulesEnabled {
+    # Liga/desliga modulos no mapa "enabled" do settings.json do PowerToys, validando o schema
+    # antes de escrever. Compartilhado por powertoys-qol e powertoys-deck-layout.
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)][hashtable]$Modules,
+        [Parameter(Mandatory = $true)][string]$Operation
+    )
+
+    $configPath = Join-BootstrapKnownFolderPath -Base $env:LOCALAPPDATA -ChildPath 'Microsoft\PowerToys\settings.json'
+    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path -LiteralPath $configPath)) {
+        return [ordered]@{ status = 'skipped'; reason = 'powertoys-settings-absent'; note = "settings.json do PowerToys ausente: $configPath." }
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $configPath -Raw -Encoding utf8
+        $config = ConvertTo-BootstrapHashtable -InputObject ($raw | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = "Falha ao ler $configPath."; path = $configPath }
+    }
+
+    if (-not ($config -is [hashtable]) -or -not (Test-BootstrapMapContainsKey -Map $config -Key 'enabled')) {
+        return [ordered]@{ status = 'skipped'; reason = 'powertoys-schema-unexpected'; note = "Mapa 'enabled' nao encontrado em $configPath; nada alterado." }
+    }
+    $enabled = ConvertTo-BootstrapHashtable -InputObject $config['enabled']
+    if (-not ($enabled -is [hashtable])) {
+        return [ordered]@{ status = 'skipped'; reason = 'powertoys-schema-unexpected'; note = "Mapa 'enabled' com formato inesperado em $configPath." }
+    }
+
+    $touched = @()
+    foreach ($moduleName in @($Modules.Keys)) {
+        $desired = [bool]$Modules[$moduleName]
+        if (-not (Test-BootstrapMapContainsKey -Map $enabled -Key $moduleName)) { continue }
+        if ([bool]$enabled[$moduleName] -eq $desired) { continue }
+        $enabled[$moduleName] = $desired
+        $touched += @(('{0}={1}' -f $moduleName, $desired))
+    }
+    if ($touched.Count -eq 0) {
+        return [ordered]@{ status = 'unchanged'; note = 'Modulos do PowerToys ja estavam no estado desejado.'; path = $configPath }
+    }
+
+    $config['enabled'] = $enabled
+    Register-BootstrapFileChange -State $State -Target $configPath -Operation $Operation -Component 'powertoys'
+    try {
+        Write-BootstrapJsonFile -Path $configPath -Value $config
+    } catch {
+        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = 'Falha ao escrever settings.json do PowerToys.'; path = $configPath }
+    }
+    return [ordered]@{ status = 'applied'; note = ('PowerToys atualizado: {0}.' -f ($touched -join ', ')); path = $configPath; modules = @($touched); rollback = 'backup-file' }
+}
+
+function Get-BootstrapSteamDeckControlManualGuidance {
+    # Configs destes apps nao tem schema estavel e documentado o suficiente para escrita cega.
+    # Em vez de reportar sucesso sem mutar, devolvemos a acao concreta para o operador.
+    return @{
+        'autohotkey-recovery-hotkeys' = 'Crie/valide o script AutoHotkey de retorno ao Desktop e registre-o no atalho desejado; PhaseZero nao gera script de hotkey automaticamente.'
+        'soundswitch-audio-profile'   = 'Abra SoundSwitch > Settings e defina os dispositivos Deck/HDMI/DP por perfil; a troca por modo depende dessa escolha manual.'
+        'displayfusion-layouts'       = 'Configure os perfis de monitor no DisplayFusion; hooks globais podem exigir elevacao e nao sao aplicados sem consentimento.'
+    }
+}
+
+function Apply-SteamDeckControlItemTuning {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Item
+    )
+
+    $itemId = [string]$Item.id
+    switch ($itemId) {
+        'steamdeck-tools-allowlist' {
+            $installRoot = Join-BootstrapKnownFolderPath -Base $env:LOCALAPPDATA -ChildPath 'Programs\SteamDeckTools'
+            if ([string]::IsNullOrWhiteSpace($installRoot) -or -not (Test-Path -LiteralPath $installRoot)) {
+                return [ordered]@{ status = 'skipped'; reason = 'steamdeck-tools-absent'; note = "Steam Deck Tools nao encontrado em $installRoot." }
+            }
+            $running = @(Get-Process -Name 'SteamDeckTools' -ErrorAction SilentlyContinue)
+            if ($running.Count -gt 0) {
+                return [ordered]@{ status = 'unchanged'; note = 'Steam Deck Tools em execucao; nada a preservar.' }
+            }
+            return [ordered]@{
+                status = 'manual-review'
+                note = 'Steam Deck Tools instalado mas parado.'
+                recommendedAction = 'Inicie Steam Deck Tools se quiser os overlays de bateria/TDP neste modo.'
+                rollback = 'manual'
+            }
+        }
+        'powertoys-deck-layout' {
+            return (Set-BootstrapPowerToysModulesEnabled -State $State -Modules @{ Awake = $true; FancyZones = $true } -Operation 'powertoys-deck-layout')
+        }
+        default {
+            $guidance = Get-BootstrapSteamDeckControlManualGuidance
+            if ($guidance.ContainsKey($itemId)) {
+                return [ordered]@{
+                    status = 'manual-review'
+                    note = 'Config de terceiro sem schema estavel; PhaseZero nao escreve as cegas.'
+                    recommendedAction = [string]$guidance[$itemId]
+                    rollback = 'manual'
+                }
+            }
+            return [ordered]@{ status = 'skipped'; reason = 'no-handler'; note = "Item steamdeck-control sem handler dedicado: $itemId." }
+        }
     }
 }
 
@@ -31923,7 +32018,7 @@ function Invoke-BootstrapAppTuningItem {
             if ([string]$Item.id -eq 'playnite-fullscreen') { return (Apply-PlayniteTuning -Item $Item) }
             return (Apply-SteamConsoleTuning -Item $Item)
         }
-        'steamdeck-control' { return (Apply-SteamDeckControlTuning -Item $Item) }
+        'steamdeck-control' { return (Apply-SteamDeckControlTuning -Item $Item -State $State) }
         'dev-ai' { return (Apply-DevAiTuning -State $State -Item $Item) }
         'agent-config' { return (Apply-AgentConfigTuning -State $State -Item $Item) }
         'local-ai-containers' { return (Apply-LocalAiContainerTuning -Item $Item) }
