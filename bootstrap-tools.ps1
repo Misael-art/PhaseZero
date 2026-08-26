@@ -11469,8 +11469,8 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'agent-config-claude-rtk-template'; category = 'agent-config'; displayName = 'Claude/RTK agent config template'; description = 'Template local para documentar uso de RTK, Claude e providers BYOK sem gravar chaves.'; targetApps = @('claude code','rtk','codex','opencode'); probePaths = @('$env:USERPROFILE\.claude\settings.json','$env:USERPROFILE\.codex\config.toml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('config-template','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'file-template'; safetyNotes = @('Nao grava segredos', 'Template manual', 'Revisar antes de aplicar'); installComponents = @('bootstrap-secrets','agent-skills') }
         [ordered]@{ id = 'headroom-agent-context-compression'; category = 'agent-config'; displayName = 'Headroom agent context compression'; description = 'Gera helper local para Headroom em Claude Code, Codex, Aider, Cursor, Copilot, Gemini, OpenClaw, n8n e MCP sem gravar chaves.'; targetApps = @('headroom','claude code','codex','aider','cursor','copilot','gemini','openclaw','n8n','mcp','opencode'); probePaths = @('$env:USERPROFILE\.local\bin\headroom.exe','$env:APPDATA\Python\Scripts\headroom.exe','.codex\context-packs\headroom-agent-integration.md'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('config-template','wrapper-template','audit'); rollback = @('backup-file','manual'); riskTier = 'manual'; rollbackScope = 'file-template'; safetyNotes = @('Nao grava segredos', 'Nao executa wrap automaticamente', 'OpenCode fica proxy/manual ate wrapper upstream maduro'); requiresInteractiveLogin = $false; installComponents = @('headroom-ai') }
         [ordered]@{ id = 'ai-context-frugality-pack'; category = 'agent-config'; displayName = 'AI context frugality pack'; description = 'Gera regras seguras de higiene de contexto, .aiderignore conservador e skeleton map local para CLIs/IDEs de IA.'; targetApps = @('codex','claude code','aider','headroom','cursor','windsurf','zed','opencode'); probePaths = @('AGENTS.md','.aiderignore','.codex\context-packs\ai-context-frugality.md','.codex\ai-context\repo-skeleton.json'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('config-template','skeleton-map','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'backup-file'; safetyNotes = @('Nao grava segredos', 'Nao executa reset de sessao', 'Nao ignora lockfiles', 'Skeleton sem corpos de funcao'); requiresInteractiveLogin = $false; installComponents = @() }
-        [ordered]@{ id = 'knowledge-vault-obsidian-template'; category = 'knowledge-vault'; displayName = 'Obsidian transcript vault template'; description = 'Template manual de vault Obsidian para transcricoes tecnicas e memoria de projeto.'; targetApps = @('obsidian'); probePaths = @('$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe','$env:USERPROFILE\Documents\Obsidian'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'manual'; safetyNotes = @('Nao cria sync remoto', 'Nao instala plugins automaticamente', 'Vault fica sob controle do usuario'); installComponents = @('obsidian') }
-        [ordered]@{ id = 'n8n-youtube-workflow-template'; category = 'workflow-automation'; displayName = 'n8n YouTube transcript workflow template'; description = 'Template manual para fluxo n8n de coleta/transcricao, sem credenciais ou execucao automatica.'; targetApps = @('n8n','youtube'); probePaths = @('$env:APPDATA\npm\n8n.cmd','$env:APPDATA\npm\n8n.ps1'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('workflow-template','manual-action','audit'); rollback = @('manual'); riskTier = 'manual'; rollbackScope = 'manual'; safetyNotes = @('Requer login/API keys do usuario', 'Nao agenda jobs automaticamente', 'Validar fontes e direitos antes de baixar audio'); requiresInteractiveLogin = $true; installComponents = @('n8n') }
+        [ordered]@{ id = 'knowledge-vault-obsidian-template'; category = 'knowledge-vault'; displayName = 'Obsidian transcript vault template'; description = 'Template manual de vault Obsidian para transcricoes tecnicas e memoria de projeto.'; targetApps = @('obsidian'); probePaths = @('$env:LOCALAPPDATA\Programs\Obsidian\Obsidian.exe','$env:USERPROFILE\Documents\Obsidian'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('file-template'); riskTier = 'manual'; rollbackScope = 'manual'; safetyNotes = @('Nao cria sync remoto', 'Nao instala plugins automaticamente', 'Vault fica sob controle do usuario'); installComponents = @('obsidian') }
+        [ordered]@{ id = 'n8n-youtube-workflow-template'; category = 'workflow-automation'; displayName = 'n8n YouTube transcript workflow template'; description = 'Template manual para fluxo n8n de coleta/transcricao, sem credenciais ou execucao automatica.'; targetApps = @('n8n','youtube'); probePaths = @('$env:APPDATA\npm\n8n.cmd','$env:APPDATA\npm\n8n.ps1'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev'); actions = @('workflow-template','manual-action','audit'); rollback = @('file-template','manual'); riskTier = 'manual'; rollbackScope = 'manual'; safetyNotes = @('Requer login/API keys do usuario', 'Nao agenda jobs automaticamente', 'Validar fontes e direitos antes de baixar audio'); requiresInteractiveLogin = $true; installComponents = @('n8n') }
         [ordered]@{ id = 'reverse-proxy-traefik-pack'; category = 'container-hosting'; displayName = 'Traefik reverse proxy pack'; description = 'Gera stack Traefik local com rede proxy-net, dashboard local, volumes persistentes e TLS-ready.'; targetApps = @('docker','traefik','reverse proxy'); probePaths = @('$env:APPDATA\Docker','.phasezero\container-hosting\traefik\docker-compose.yml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','docker-network','doctor','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('Docker local apenas', 'Cria somente rede Docker proxy-net quando engine estiver disponivel', 'Nao abre portas de apps gerados'); aliases = @('traefik','reverse-proxy','proxy-net'); badges = @('Docker','Seguro'); installComponents = @('docker') }
         [ordered]@{ id = 'compose-app-template'; category = 'container-hosting'; displayName = 'Compose app template'; description = 'Gera template Compose de app atras do Traefik com rede interna, healthcheck, restart policy e log rotation.'; targetApps = @('docker','compose','traefik'); probePaths = @('.phasezero\container-hosting\templates\compose-app.yml'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('config-template','audit'); rollback = @('backup-file','manual'); riskTier = 'conservative'; rollbackScope = 'file-template'; safetyNotes = @('Template sem credenciais', 'Nao expoe ports no app', 'Usuario define dominio antes do deploy'); aliases = @('compose-template','compose-app','docker-compose-template'); badges = @('Docker','Seguro'); installComponents = @('docker') }
         [ordered]@{ id = 'docker-hosting-doctor'; category = 'container-hosting'; displayName = 'Docker hosting doctor'; description = 'Audita Docker Desktop, compose plugin, portas 80/443, rede proxy-net, containers e volumes sem alterar host.'; targetApps = @('docker','traefik','compose'); probePaths = @('$env:APPDATA\Docker'); alwaysAvailable = $true; requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('dev','desktop'); actions = @('doctor','audit'); rollback = @('manual'); riskTier = 'conservative'; rollbackScope = 'audit-only'; safetyNotes = @('Somente leitura', 'Nao para containers', 'Nao altera firewall'); aliases = @('docker-doctor','hosting-doctor','container-doctor'); badges = @('Docker','Seguro'); installComponents = @('docker') }
@@ -11491,10 +11491,10 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'edge-background-off'; category = 'browser-startup'; displayName = 'Edge background off'; description = 'Desliga startup boost/background do Edge via HKCU.'; targetApps = @('microsoft edge','edge'); probePaths = @('$env:LOCALAPPDATA\Microsoft\Edge\User Data'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-handheld','game-docked'); actions = @('registry','startup'); rollback = @('registry-snapshot') }
         [ordered]@{ id = 'chrome-background-off'; category = 'browser-startup'; displayName = 'Chrome background off'; description = 'Desliga apps em background do Chrome via policy HKCU.'; targetApps = @('google chrome','chrome'); probePaths = @('$env:LOCALAPPDATA\Google\Chrome\User Data'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-handheld','game-docked'); actions = @('registry','startup'); rollback = @('registry-snapshot') }
 
-        [ordered]@{ id = 'sunshine-allowlist'; category = 'connectivity'; displayName = 'Sunshine allowlist'; description = 'Mantem Sunshine ativo para streaming remoto.'; targetApps = @('sunshine'); probePaths = @('$env:ProgramFiles\Sunshine\sunshine.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-docked','desktop'); actions = @('session','audit'); rollback = @('manual') }
-        [ordered]@{ id = 'tailscale-allowlist'; category = 'connectivity'; displayName = 'Tailscale allowlist'; description = 'Mantem VPN mesh preservada em modos jogo e dev.'; targetApps = @('tailscale'); probePaths = @('$env:ProgramFiles\Tailscale\tailscale.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('session','audit'); rollback = @('manual') }
-        [ordered]@{ id = 'syncthing-allowlist'; category = 'connectivity'; displayName = 'Syncthing allowlist'; description = 'Preserva sync de saves/configs quando instalado.'; targetApps = @('syncthing'); probePaths = @('$env:LOCALAPPDATA\Syncthing'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('manual') }
-        [ordered]@{ id = 'rustdesk-allowlist'; category = 'connectivity'; displayName = 'RustDesk allowlist'; description = 'Preserva remote desktop quando instalado.'; targetApps = @('rustdesk'); probePaths = @('$env:ProgramFiles\RustDesk\rustdesk.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('manual') }
+        [ordered]@{ id = 'sunshine-allowlist'; category = 'connectivity'; displayName = 'Sunshine allowlist'; description = 'Mantem Sunshine ativo para streaming remoto.'; targetApps = @('sunshine'); probePaths = @('$env:ProgramFiles\Sunshine\sunshine.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-docked','desktop'); actions = @('session','audit'); rollback = @('service-state','manual') }
+        [ordered]@{ id = 'tailscale-allowlist'; category = 'connectivity'; displayName = 'Tailscale allowlist'; description = 'Mantem VPN mesh preservada em modos jogo e dev.'; targetApps = @('tailscale'); probePaths = @('$env:ProgramFiles\Tailscale\tailscale.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-handheld','game-docked','desktop'); actions = @('session','audit'); rollback = @('service-state','manual') }
+        [ordered]@{ id = 'syncthing-allowlist'; category = 'connectivity'; displayName = 'Syncthing allowlist'; description = 'Preserva sync de saves/configs quando instalado.'; targetApps = @('syncthing'); probePaths = @('$env:LOCALAPPDATA\Syncthing'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('service-state','manual') }
+        [ordered]@{ id = 'rustdesk-allowlist'; category = 'connectivity'; displayName = 'RustDesk allowlist'; description = 'Preserva remote desktop quando instalado.'; targetApps = @('rustdesk'); probePaths = @('$env:ProgramFiles\RustDesk\rustdesk.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('service-state','manual') }
 
         [ordered]@{ id = 'obs-replay-buffer'; category = 'capture-creator'; displayName = 'OBS replay buffer'; description = 'Audita/guarda ponto para replay buffer e source record.'; targetApps = @('obs studio','obs'); probePaths = @('$env:APPDATA\obs-studio'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('game-docked','desktop'); actions = @('config-file','audit'); rollback = @('backup-file') }
         [ordered]@{ id = 'sharex-hotkeys'; category = 'capture-creator'; displayName = 'ShareX hotkeys'; description = 'Prepara captura rapida sem interferir no jogo.'; targetApps = @('sharex'); probePaths = @('$env:APPDATA\ShareX'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','game-docked'); actions = @('config-file'); rollback = @('backup-file') }
@@ -11504,8 +11504,8 @@ function Get-BootstrapAppTuningCatalog {
         [ordered]@{ id = 'storage-tools-audit'; category = 'storage-backup'; displayName = 'Storage tools audit'; description = 'Audita CompactGUI, TreeSize e WinDirStat sem compactar nada automaticamente.'; targetApps = @('compactgui','treesize','windirstat'); probePaths = @('$env:ProgramFiles\WinDirStat\windirstat.exe'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('audit'); rollback = @('manual') }
         [ordered]@{ id = 'driver-backup-manual'; category = 'storage-backup'; displayName = 'Driver backup manual'; description = 'Marca backup de drivers/imagem golden como manual.'; targetApps = @('driver store explorer','macrium'); probePaths = @(); requiresAdmin = $true; defaultMode = 'opt-in'; profiles = @('desktop'); actions = @('audit'); rollback = @('manual') }
 
-        [ordered]@{ id = 'quicklook-defaults'; category = 'windows-qol'; displayName = 'QuickLook defaults'; description = 'Prepara preview rapido quando QuickLook existir.'; targetApps = @('quicklook'); probePaths = @('$env:LOCALAPPDATA\Programs\QuickLook'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('manual') }
-        [ordered]@{ id = 'explorerpatcher-optin'; category = 'windows-qol'; displayName = 'ExplorerPatcher opt-in'; description = 'Shell tweak profundo; opt-in para reduzir risco.'; targetApps = @('explorerpatcher'); probePaths = @('$env:ProgramFiles\ExplorerPatcher'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('desktop'); actions = @('config-file','registry'); rollback = @('backup-file','registry-snapshot') }
+        [ordered]@{ id = 'quicklook-defaults'; category = 'windows-qol'; displayName = 'QuickLook defaults'; description = 'Prepara preview rapido quando QuickLook existir.'; targetApps = @('quicklook'); probePaths = @('$env:LOCALAPPDATA\Programs\QuickLook'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop'); actions = @('session','audit'); rollback = @('session-only') }
+        [ordered]@{ id = 'explorerpatcher-optin'; category = 'windows-qol'; displayName = 'ExplorerPatcher opt-in'; description = 'Shell tweak profundo; opt-in para reduzir risco.'; targetApps = @('explorerpatcher'); probePaths = @('$env:ProgramFiles\ExplorerPatcher'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('desktop'); actions = @('registry'); rollback = @('registry-snapshot') }
         [ordered]@{ id = 'mica-optin'; category = 'windows-qol'; displayName = 'Mica opt-in'; description = 'Visual tweak opcional para Mica For Everyone.'; targetApps = @('mica for everyone'); probePaths = @('$env:APPDATA\Mica For Everyone'); requiresAdmin = $false; defaultMode = 'opt-in'; profiles = @('desktop'); actions = @('config-file'); rollback = @('backup-file') }
         [ordered]@{ id = 'powertoys-qol'; category = 'windows-qol'; displayName = 'PowerToys QoL'; description = 'Mantem PowerToys nos modulos uteis e evita ruído no jogo.'; targetApps = @('powertoys'); probePaths = @('$env:LOCALAPPDATA\Microsoft\PowerToys'); requiresAdmin = $false; defaultMode = 'recommended'; profiles = @('desktop','dev'); actions = @('config-file','session'); rollback = @('backup-file') }
     )
@@ -31005,6 +31005,533 @@ function Apply-SteamDeckControlTuning {
     return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'Steam Deck control policy audited; no unsafe mutation applied.' }
 }
 
+function Join-BootstrapKnownFolderPath {
+    # Join-Path lanca quando a base e nula. Em host nao-Windows (ou perfil sem a variavel) as
+    # known folders vem vazias, entao devolvemos '' e deixamos o chamador tratar como ausente.
+    param(
+        [AllowNull()][AllowEmptyString()][string]$Base,
+        [Parameter(Mandatory = $true)][string]$ChildPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Base)) { return '' }
+    return (Join-Path -Path $Base -ChildPath $ChildPath)
+}
+
+function Get-BootstrapQuickLookExecutable {
+    $candidates = @(
+        (Join-BootstrapKnownFolderPath -Base $env:LOCALAPPDATA -ChildPath 'Programs\QuickLook\QuickLook.exe'),
+        (Join-BootstrapKnownFolderPath -Base $env:ProgramFiles -ChildPath 'QuickLook\QuickLook.exe')
+    )
+    foreach ($candidate in $candidates) {
+        if (-not [string]::IsNullOrWhiteSpace($candidate) -and (Test-Path -LiteralPath $candidate)) { return $candidate }
+    }
+    return ''
+}
+
+function Ensure-BootstrapQuickLookSession {
+    # Acao de sessao: garante QuickLook em execucao. Nao grava config nem autostart, entao
+    # nao ha o que registrar no manifesto de rollback - encerrar o processo desfaz.
+    $exePath = Get-BootstrapQuickLookExecutable
+    if ([string]::IsNullOrWhiteSpace($exePath)) {
+        return [ordered]@{ status = 'skipped'; reason = 'quicklook-absent'; note = 'QuickLook.exe nao encontrado em LOCALAPPDATA nem em Program Files.' }
+    }
+
+    $running = @(Get-Process -Name 'QuickLook' -ErrorAction SilentlyContinue)
+    if ($running.Count -gt 0) {
+        return [ordered]@{ status = 'unchanged'; note = 'QuickLook ja estava em execucao.'; path = $exePath; rollback = 'session-only' }
+    }
+
+    try {
+        Start-Process -FilePath $exePath -ErrorAction Stop | Out-Null
+    } catch {
+        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = 'Falha ao iniciar QuickLook.'; path = $exePath }
+    }
+    return [ordered]@{ status = 'applied'; note = 'QuickLook iniciado nesta sessao.'; path = $exePath; rollback = 'session-only' }
+}
+
+function Ensure-BootstrapExplorerPatcherOptIn {
+    # ExplorerPatcher e dirigido por registro (HKCU:\Software\ExplorerPatcher), nao por arquivo de
+    # config. Aplicamos apenas OldTaskbar=1, que e o motivo declarado do opt-in, via helper que
+    # registra o valor anterior no manifesto para o -Rollback reverter.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $installRoot = Join-BootstrapKnownFolderPath -Base $env:ProgramFiles -ChildPath 'ExplorerPatcher'
+    if ([string]::IsNullOrWhiteSpace($installRoot) -or -not (Test-Path -LiteralPath $installRoot)) {
+        return [ordered]@{ status = 'skipped'; reason = 'explorerpatcher-absent'; note = "ExplorerPatcher nao encontrado em $installRoot." }
+    }
+
+    $change = Apply-BootstrapRegistryDword -State $State -Path 'HKCU:\Software\ExplorerPatcher' -Name 'OldTaskbar' -Value 1
+    if ([string]$change.status -eq 'failed') {
+        return [ordered]@{ status = 'failed'; error = [string]$change.error; note = 'Falha ao aplicar OldTaskbar do ExplorerPatcher.'; changes = @($change) }
+    }
+    return [ordered]@{
+        status = 'applied'
+        note = 'ExplorerPatcher: OldTaskbar=1 aplicado com snapshot de registro.'
+        changes = @($change)
+        rollback = 'registry-snapshot'
+    }
+}
+
+function Ensure-BootstrapMicaOptIn {
+    # Mica For Everyone guarda um .conf estilo INI. So editamos quando a secao [Global] existir;
+    # schema desconhecido vira skipped em vez de escrita as cegas.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $configPath = Join-BootstrapKnownFolderPath -Base $env:APPDATA -ChildPath 'Mica For Everyone\MicaForEveryone.conf'
+    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path -LiteralPath $configPath)) {
+        return [ordered]@{ status = 'skipped'; reason = 'mica-config-absent'; note = "Config do Mica For Everyone ausente: $configPath." }
+    }
+
+    $lines = @(Get-Content -LiteralPath $configPath -Encoding utf8)
+    if (-not (@($lines | Where-Object { $_ -match '^\s*\[Global\]\s*$' }).Count -gt 0)) {
+        return [ordered]@{ status = 'skipped'; reason = 'mica-schema-unexpected'; note = "Secao [Global] nao encontrada em $configPath; nada foi alterado." }
+    }
+
+    $alreadySet = @($lines | Where-Object { $_ -match '^\s*BackdropPreference\s*=\s*Mica\s*$' }).Count -gt 0
+    if ($alreadySet) {
+        return [ordered]@{ status = 'unchanged'; note = 'Mica ja configurado como BackdropPreference.'; path = $configPath }
+    }
+
+    $updated = New-Object System.Collections.Generic.List[string]
+    $replaced = $false
+    foreach ($line in $lines) {
+        if ($line -match '^\s*BackdropPreference\s*=') {
+            $updated.Add('BackdropPreference=Mica') | Out-Null
+            $replaced = $true
+        } else {
+            $updated.Add([string]$line) | Out-Null
+            if (-not $replaced -and $line -match '^\s*\[Global\]\s*$') {
+                $updated.Add('BackdropPreference=Mica') | Out-Null
+                $replaced = $true
+            }
+        }
+    }
+
+    Register-BootstrapFileChange -State $State -Target $configPath -Operation 'mica-optin' -Component 'mica-for-everyone'
+    try {
+        [System.IO.File]::WriteAllLines($configPath, $updated.ToArray(), (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = 'Falha ao escrever config do Mica.'; path = $configPath }
+    }
+    return [ordered]@{ status = 'applied'; note = 'Mica: BackdropPreference=Mica aplicado com backup registrado.'; path = $configPath; rollback = 'backup-file' }
+}
+
+function Get-BootstrapPowerToysNoisyModules {
+    # Modulos que desenham overlay por cima de jogo em tela cheia.
+    return @('ShortcutGuide', 'AlwaysOnTop', 'ColorPicker')
+}
+
+function Ensure-BootstrapPowerToysQol {
+    # settings.json do PowerToys traz o mapa "enabled". Validamos o schema antes de tocar; se o
+    # mapa nao existir, devolvemos skipped em vez de inventar estrutura.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $configPath = Join-BootstrapKnownFolderPath -Base $env:LOCALAPPDATA -ChildPath 'Microsoft\PowerToys\settings.json'
+    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path -LiteralPath $configPath)) {
+        return [ordered]@{ status = 'skipped'; reason = 'powertoys-settings-absent'; note = "settings.json do PowerToys ausente: $configPath." }
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $configPath -Raw -Encoding utf8
+        $config = ConvertTo-BootstrapHashtable -InputObject ($raw | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = "Falha ao ler $configPath."; path = $configPath }
+    }
+
+    if (-not ($config -is [hashtable]) -or -not (Test-BootstrapMapContainsKey -Map $config -Key 'enabled')) {
+        return [ordered]@{ status = 'skipped'; reason = 'powertoys-schema-unexpected'; note = "Mapa 'enabled' nao encontrado em $configPath; nada foi alterado." }
+    }
+
+    $enabled = ConvertTo-BootstrapHashtable -InputObject $config['enabled']
+    if (-not ($enabled -is [hashtable])) {
+        return [ordered]@{ status = 'skipped'; reason = 'powertoys-schema-unexpected'; note = "Mapa 'enabled' com formato inesperado em $configPath." }
+    }
+
+    $disabled = @()
+    foreach ($moduleName in @(Get-BootstrapPowerToysNoisyModules)) {
+        if ((Test-BootstrapMapContainsKey -Map $enabled -Key $moduleName) -and [bool]$enabled[$moduleName]) {
+            $enabled[$moduleName] = $false
+            $disabled += @($moduleName)
+        }
+    }
+
+    if ($disabled.Count -eq 0) {
+        return [ordered]@{ status = 'unchanged'; note = 'Modulos ruidosos do PowerToys ja estavam desligados.'; path = $configPath }
+    }
+
+    $config['enabled'] = $enabled
+    Register-BootstrapFileChange -State $State -Target $configPath -Operation 'powertoys-qol' -Component 'powertoys'
+    try {
+        Write-BootstrapJsonFile -Path $configPath -Value $config
+    } catch {
+        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = 'Falha ao escrever settings.json do PowerToys.'; path = $configPath }
+    }
+    return [ordered]@{
+        status = 'applied'
+        note = ('PowerToys: modulos desligados para reduzir overlay em jogo: {0}.' -f ($disabled -join ', '))
+        path = $configPath
+        disabledModules = @($disabled)
+        rollback = 'backup-file'
+    }
+}
+
+function Get-BootstrapConnectivityTargets {
+    # ExePath vazio significa "checar apenas o diretorio". ServiceName vazio significa que o app
+    # roda em modo usuario, sem servico.
+    return @{
+        'sunshine-allowlist'  = [ordered]@{ label = 'Sunshine'; probe = (Join-BootstrapKnownFolderPath -Base $env:ProgramFiles -ChildPath 'Sunshine\sunshine.exe'); service = 'SunshineService'; process = 'sunshine' }
+        'tailscale-allowlist' = [ordered]@{ label = 'Tailscale'; probe = (Join-BootstrapKnownFolderPath -Base $env:ProgramFiles -ChildPath 'Tailscale\tailscale.exe'); service = 'Tailscale'; process = 'tailscale-ipn' }
+        'syncthing-allowlist' = [ordered]@{ label = 'Syncthing'; probe = (Join-BootstrapKnownFolderPath -Base $env:LOCALAPPDATA -ChildPath 'Syncthing'); service = ''; process = 'syncthing' }
+        'rustdesk-allowlist'  = [ordered]@{ label = 'RustDesk'; probe = (Join-BootstrapKnownFolderPath -Base $env:ProgramFiles -ChildPath 'RustDesk\rustdesk.exe'); service = 'RustDesk'; process = 'rustdesk' }
+    }
+}
+
+function Ensure-BootstrapConnectivityPresence {
+    # Politica: preservar a intencao ja expressa pelo usuario, nunca ampliar exposicao de rede.
+    # - servico Automatic parado  -> desvio da intencao; religamos (requer admin) e registramos.
+    # - servico Manual/Disabled   -> escolha deliberada do usuario; apenas reportamos.
+    # - sem servico e sem processo-> reportamos acao manual; nao subimos daemon de acesso remoto
+    #                               por conta propria.
+    # Nenhuma regra de firewall e criada ou alterada: os itens declaram requiresAdmin = $false.
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Target
+    )
+
+    $label = [string]$Target.label
+    $probe = [string]$Target.probe
+    if ([string]::IsNullOrWhiteSpace($probe) -or -not (Test-Path -LiteralPath $probe)) {
+        return [ordered]@{ status = 'skipped'; reason = 'app-absent'; note = "$label nao encontrado em $probe." }
+    }
+
+    $serviceName = [string]$Target.service
+    if (-not [string]::IsNullOrWhiteSpace($serviceName)) {
+        $snapshot = Get-BootstrapServiceSnapshot -Name $serviceName
+        if ([bool]$snapshot.Exists) {
+            if ([string]$snapshot.Status -eq 'Running') {
+                return [ordered]@{ status = 'unchanged'; note = "$label ativo (servico $serviceName em execucao)."; service = $serviceName }
+            }
+            if ([string]$snapshot.StartType -ne 'Automatic') {
+                return [ordered]@{
+                    status = 'manual-review'
+                    note = "$label com servico $serviceName em StartType=$($snapshot.StartType); escolha do usuario preservada."
+                    service = $serviceName
+                    recommendedAction = "Se quiser $label sempre ativo, defina o servico $serviceName como Automatic."
+                    rollback = 'manual'
+                }
+            }
+            if (-not (Test-IsAdmin)) {
+                return [ordered]@{
+                    status = 'manual-review'
+                    note = "${label}: servico $serviceName e Automatic mas esta parado; religar exige admin."
+                    service = $serviceName
+                    recommendedAction = "Execute como administrador ou rode: Start-Service $serviceName"
+                    rollback = 'manual'
+                }
+            }
+            try {
+                Register-BootstrapChange -State $State -Type 'Service' -Target $serviceName -Name 'Status' -OldValue $snapshot -NewValue 'Running' -Operation 'connectivity-preserve' -Component 'connectivity'
+                Start-Service -Name $serviceName -ErrorAction Stop
+            } catch {
+                return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = "Falha ao religar servico $serviceName."; service = $serviceName }
+            }
+            return [ordered]@{ status = 'applied'; note = "$label religado: servico $serviceName voltou ao estado Automatic pretendido."; service = $serviceName; rollback = 'service-state' }
+        }
+    }
+
+    $processName = [string]$Target.process
+    $running = @()
+    if (-not [string]::IsNullOrWhiteSpace($processName)) {
+        $running = @(Get-Process -Name $processName -ErrorAction SilentlyContinue)
+    }
+    if ($running.Count -gt 0) {
+        return [ordered]@{ status = 'unchanged'; note = "$label ativo (processo $processName em execucao)."; process = $processName }
+    }
+    return [ordered]@{
+        status = 'manual-review'
+        note = "$label instalado mas parado; nao iniciamos daemon de rede automaticamente."
+        recommendedAction = "Inicie $label manualmente se quiser preservar a conectividade neste modo."
+        rollback = 'manual'
+    }
+}
+
+function Apply-ConnectivityTuning {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Item
+    )
+
+    $itemId = [string]$Item.id
+    $targets = Get-BootstrapConnectivityTargets
+    if (-not $targets.ContainsKey($itemId)) {
+        $result = [ordered]@{ status = 'skipped'; reason = 'no-handler'; note = "Item connectivity sem alvo mapeado: $itemId." }
+    } else {
+        $result = Ensure-BootstrapConnectivityPresence -State $State -Target $targets[$itemId]
+    }
+
+    $map = ConvertTo-BootstrapHashtable -InputObject $result
+    if (-not ($map -is [hashtable])) { $map = @{ status = 'skipped'; reason = 'invalid-result' } }
+    $map['id'] = $itemId
+    $map['category'] = [string]$Item.category
+    return $map
+}
+
+function Get-BootstrapObsidianVaultReadmeText {
+    return @'
+# Vault de transcricoes tecnicas
+
+Template local do PhaseZero. Nada aqui sincroniza sozinho: nenhuma conta, nenhum plugin
+de sync e nenhuma credencial e configurada por este template.
+
+## Estrutura
+
+- `00-inbox/`      captura crua, ainda nao revisada
+- `10-transcricoes/` transcricoes limpas, uma nota por fonte
+- `20-projetos/`   memoria por projeto
+- `90-templates/`  modelos de nota
+
+## Uso
+
+Abra esta pasta no Obsidian como vault ("Open folder as vault"). Revise antes de
+ativar qualquer plugin de sincronizacao.
+'@
+}
+
+function Get-BootstrapObsidianTranscriptNoteText {
+    return @'
+---
+fonte:
+url:
+data:
+duracao:
+tags: [transcricao]
+---
+
+# {{titulo}}
+
+## Resumo
+
+## Pontos-chave
+
+## Transcricao
+
+## Acoes
+'@
+}
+
+function Get-BootstrapObsidianProjectNoteText {
+    return @'
+---
+projeto:
+status: ativo
+atualizado:
+tags: [projeto, memoria]
+---
+
+# {{projeto}}
+
+## Objetivo
+
+## Decisoes
+
+| data | decisao | motivo |
+| ---- | ------- | ------ |
+
+## Pendencias
+
+## Referencias
+'@
+}
+
+function Ensure-BootstrapKnowledgeVaultTemplate {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $base = Join-Path $root '.phasezero\knowledge-vault'
+    $files = @(
+        [ordered]@{ path = (Join-Path $base 'README.md'); content = (Get-BootstrapObsidianVaultReadmeText) },
+        [ordered]@{ path = (Join-Path $base '90-templates\transcricao.md'); content = (Get-BootstrapObsidianTranscriptNoteText) },
+        [ordered]@{ path = (Join-Path $base '90-templates\projeto.md'); content = (Get-BootstrapObsidianProjectNoteText) }
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $changed = $false
+    foreach ($file in @($files)) {
+        $row = Write-BootstrapManagedTemplateFile -Path ([string]$file.path) -Content ([string]$file.content)
+        if ([string]$row['status'] -eq 'applied') { $changed = $true }
+        $results.Add($row) | Out-Null
+    }
+    foreach ($folder in @('00-inbox', '10-transcricoes', '20-projetos')) {
+        $null = New-Item -Path (Join-Path $base $folder) -ItemType Directory -Force
+    }
+
+    return [ordered]@{
+        status = if ($changed) { 'applied' } else { 'configured' }
+        changed = $changed
+        root = $base
+        paths = @($results.ToArray() | ForEach-Object { [string]$_['path'] })
+        nextSteps = @('Abra a pasta no Obsidian como vault.', 'Nenhuma sincronizacao foi configurada; ative manualmente se desejar.')
+    }
+}
+
+function Get-BootstrapN8nYoutubeWorkflowTemplateText {
+    $workflow = [ordered]@{
+        name = 'PhaseZero - YouTube transcript (template)'
+        active = $false
+        nodes = @(
+            [ordered]@{
+                parameters = [ordered]@{}
+                id = 'manual-trigger'
+                name = 'Executar manualmente'
+                type = 'n8n-nodes-base.manualTrigger'
+                typeVersion = 1
+                position = @(-260, 0)
+            },
+            [ordered]@{
+                parameters = [ordered]@{
+                    values = [ordered]@{
+                        string = @(
+                            [ordered]@{ name = 'videoUrl'; value = '' }
+                        )
+                    }
+                }
+                id = 'set-input'
+                name = 'Entrada'
+                type = 'n8n-nodes-base.set'
+                typeVersion = 2
+                position = @(-40, 0)
+            },
+            [ordered]@{
+                parameters = [ordered]@{
+                    content = 'Preencha videoUrl e conecte aqui o node de transcricao que voce usa. Este template nao embute credenciais nem executa nada sozinho (active=false).'
+                }
+                id = 'nota'
+                name = 'Nota'
+                type = 'n8n-nodes-base.stickyNote'
+                typeVersion = 1
+                position = @(-40, 180)
+            }
+        )
+        connections = [ordered]@{
+            'Executar manualmente' = [ordered]@{
+                main = @(, @([ordered]@{ node = 'Entrada'; type = 'main'; index = 0 }))
+            }
+        }
+        settings = [ordered]@{}
+    }
+    return ($workflow | ConvertTo-Json -Depth 12)
+}
+
+function Get-BootstrapN8nWorkflowReadmeText {
+    return @'
+# n8n - template de transcricao YouTube
+
+Template local do PhaseZero. Importe manualmente em n8n:
+Workflows > Import from File > `youtube-transcript.workflow.json`.
+
+O workflow vem com `active: false` e sem credenciais. Nada roda ate voce
+conectar seu proprio node de transcricao e ativar o fluxo.
+
+Nao adicione chaves de API neste arquivo: use o gerenciador de credenciais do n8n.
+'@
+}
+
+function Ensure-BootstrapWorkflowAutomationTemplate {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $base = Join-Path $root '.phasezero\workflow-automation'
+    $files = @(
+        [ordered]@{ path = (Join-Path $base 'README.md'); content = (Get-BootstrapN8nWorkflowReadmeText) },
+        [ordered]@{ path = (Join-Path $base 'youtube-transcript.workflow.json'); content = (Get-BootstrapN8nYoutubeWorkflowTemplateText) }
+    )
+
+    $results = New-Object System.Collections.Generic.List[object]
+    $changed = $false
+    foreach ($file in @($files)) {
+        $row = Write-BootstrapManagedTemplateFile -Path ([string]$file.path) -Content ([string]$file.content)
+        if ([string]$row['status'] -eq 'applied') { $changed = $true }
+        $results.Add($row) | Out-Null
+    }
+
+    return [ordered]@{
+        status = if ($changed) { 'applied' } else { 'configured' }
+        changed = $changed
+        root = $base
+        paths = @($results.ToArray() | ForEach-Object { [string]$_['path'] })
+        nextSteps = @('Importe o JSON em n8n manualmente.', 'Workflow vem inativo e sem credenciais.')
+    }
+}
+
+function Get-BootstrapAppTuningWorkspaceRoot {
+    param([AllowNull()][hashtable]$State = $null)
+
+    if ($State -and (Test-BootstrapMapContainsKey -Map $State -Key 'CloneBaseDir') -and -not [string]::IsNullOrWhiteSpace([string]$State['CloneBaseDir'])) {
+        return [string]$State['CloneBaseDir']
+    }
+    return (Get-Location).Path
+}
+
+function Apply-KnowledgeVaultTuning {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Item
+    )
+
+    $template = Ensure-BootstrapKnowledgeVaultTemplate -WorkspaceRoot (Get-BootstrapAppTuningWorkspaceRoot -State $State)
+    return [ordered]@{
+        id = [string]$Item.id
+        category = [string]$Item.category
+        status = [string]$template.status
+        changed = [bool]$template.changed
+        root = [string]$template.root
+        paths = @($template.paths)
+        nextSteps = @($template.nextSteps)
+        rollback = 'file-template'
+    }
+}
+
+function Apply-WorkflowAutomationTuning {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Item
+    )
+
+    $template = Ensure-BootstrapWorkflowAutomationTemplate -WorkspaceRoot (Get-BootstrapAppTuningWorkspaceRoot -State $State)
+    return [ordered]@{
+        id = [string]$Item.id
+        category = [string]$Item.category
+        status = [string]$template.status
+        changed = [bool]$template.changed
+        root = [string]$template.root
+        paths = @($template.paths)
+        nextSteps = @($template.nextSteps)
+        rollback = 'file-template'
+    }
+}
+
+function Apply-WindowsQolTuning {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$State,
+        [Parameter(Mandatory = $true)]$Item
+    )
+
+    $itemId = [string]$Item.id
+    $result = switch ($itemId) {
+        'quicklook-defaults'    { Ensure-BootstrapQuickLookSession }
+        'explorerpatcher-optin' { Ensure-BootstrapExplorerPatcherOptIn -State $State }
+        'mica-optin'            { Ensure-BootstrapMicaOptIn -State $State }
+        'powertoys-qol'         { Ensure-BootstrapPowerToysQol -State $State }
+        default                 { [ordered]@{ status = 'skipped'; reason = 'no-handler'; note = "Item windows-qol sem handler dedicado: $itemId." } }
+    }
+
+    $map = ConvertTo-BootstrapHashtable -InputObject $result
+    if (-not ($map -is [hashtable])) { $map = @{ status = 'skipped'; reason = 'invalid-result' } }
+    $map['id'] = $itemId
+    $map['category'] = [string]$Item.category
+    return $map
+}
+
 function Invoke-BootstrapAppTuningItem {
     param(
         [Parameter(Mandatory = $true)][hashtable]$State,
@@ -31029,7 +31556,36 @@ function Invoke-BootstrapAppTuningItem {
         'ai-edge-safe' { return (Apply-AiEdgeSafeTuning -State $State -Item $Item) }
         'ai-agent-performance' { return (Apply-AiAgentPerformanceTuning -State $State -Item $Item) }
         'capture-creator' { return (Apply-CaptureTuning -Item $Item) }
-        default { return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'No mutable v1 action for this item.' } }
+        'windows-qol' { return (Apply-WindowsQolTuning -State $State -Item $Item) }
+        'connectivity' { return (Apply-ConnectivityTuning -State $State -Item $Item) }
+        'knowledge-vault' { return (Apply-KnowledgeVaultTuning -State $State -Item $Item) }
+        'workflow-automation' { return (Apply-WorkflowAutomationTuning -State $State -Item $Item) }
+        default {
+            # Sem handler para a categoria. Itens que so declaram auditoria sao honestos como
+            # 'audited'; itens que declaram acao mutante nao podem reportar sucesso sem ter mutado
+            # nada - viram 'skipped' com motivo explicito para nao mentir no status nem no -Audit.
+            $declaredActions = @()
+            if (($Item -is [System.Collections.IDictionary]) -and $Item.Contains('actions')) {
+                $declaredActions = @($Item['actions'])
+            } elseif ($Item.PSObject.Properties['actions']) {
+                $declaredActions = @($Item.actions)
+            }
+            $mutatingActions = @($declaredActions | Where-Object {
+                @('audit', 'install') -notcontains [string]$_
+            })
+            if ($mutatingActions.Count -gt 0) {
+                return [ordered]@{
+                    id = [string]$Item.id
+                    category = [string]$Item.category
+                    status = 'skipped'
+                    reason = 'no-handler'
+                    blocking = $false
+                    note = ('Categoria {0} nao possui handler de tuning; acoes declaradas nao foram aplicadas: {1}.' -f [string]$Item.category, (@($mutatingActions) -join ', '))
+                    declaredActions = @($mutatingActions)
+                }
+            }
+            return [ordered]@{ id = [string]$Item.id; category = [string]$Item.category; status = 'audited'; note = 'Item somente de auditoria; nenhuma mutacao declarada.' }
+        }
     }
 }
 
