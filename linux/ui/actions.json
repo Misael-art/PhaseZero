@@ -437,7 +437,7 @@
     },
     {
       "name": "steamdeck.watcher",
-      "label": "Instalar watcher",
+      "label": "Assistente de dock",
       "command": "linux/pz steamdeck watcher install",
       "mutable": true,
       "require_plan": true,
@@ -2375,7 +2375,7 @@
     },
     {
       "name": "flatpak.audit",
-      "label": "Auditar Flatpak",
+      "label": "Auditar permissões e fontes",
       "command": "linux/pz flatpak audit",
       "mutable": false,
       "require_plan": false,
@@ -2398,7 +2398,7 @@
     },
     {
       "name": "flatpak.remotes",
-      "label": "Listar remotes",
+      "label": "Fontes de aplicativos (remotes)",
       "command": "linux/pz flatpak remotes",
       "mutable": false,
       "require_plan": false,
@@ -2444,7 +2444,7 @@
     },
     {
       "name": "ai.doctor",
-      "label": "Diagnóstico MCP",
+      "label": "Diagnóstico dos conectores",
       "command": "linux/pz ai doctor",
       "mutable": false,
       "require_plan": false,
@@ -2479,7 +2479,7 @@
     },
     {
       "name": "ai.compat",
-      "label": "Agent compatibility",
+      "label": "Preparar agentes de IA",
       "command": "linux/pz ai compat setup",
       "mutable": true,
       "require_plan": true,
@@ -2760,7 +2760,7 @@
     },
     {
       "name": "ai.9router-tui",
-      "label": "Abrir TUI 9Router",
+      "label": "Abrir painel técnico do 9Router",
       "command": "linux/pz ai 9router tui",
       "mutable": false,
       "require_plan": false,
@@ -2817,7 +2817,7 @@
     },
     {
       "name": "ai.9router-secrets",
-      "label": "Sincronizar providers",
+      "label": "Sincronizar contas de IA",
       "command": "linux/pz ai 9router provider sync-secrets",
       "mutable": true,
       "require_plan": true,
@@ -2829,7 +2829,7 @@
     },
     {
       "name": "ai.9router-combos",
-      "label": "Gerar combos inteligentes",
+      "label": "Criar rotas prontas",
       "command": "linux/pz ai 9router combo sync",
       "mutable": true,
       "require_plan": true,

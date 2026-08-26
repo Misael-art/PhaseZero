@@ -274,7 +274,9 @@ class ActionCard(QFrame):
             lock.setObjectName("cardLock")
             title_box.addWidget(lock)
         heading.addLayout(title_box, 1)
-        if action.badge:
+        # Badge "JSON" é ruído para leigo nos cards simples; o modo avançado
+        # tem painel próprio e continua mostrando tudo.
+        if action.badge and action.badge.upper() != "JSON":
             badge = QLabel(action.badge)
             badge.setObjectName("badge")
             badge.setProperty("state", action.state)
@@ -366,10 +368,11 @@ class AdvancedActionsPanel(QFrame):
         rows.setContentsMargins(4, 4, 4, 4)
         rows.setSpacing(6)
         for action in actions:
-            button = QPushButton(f"{action.title}  —  {action.description}")
+            button = QPushButton(action.title)
             button.setObjectName("advancedAction")
             button.setProperty("actionId", action.id)
-            button.setToolTip(" ".join(action.args))
+            # Ajuda em linguagem humana; a sintaxe CLI fica no Inspector.
+            button.setToolTip(action.description)
             button.setAccessibleName(action.title)
             button.clicked.connect(lambda _checked=False, item=action: self.requested.emit(item))
             rows.addWidget(button)
@@ -706,6 +709,7 @@ class ParameterDialog(QDialog):
                     custom_edit = QLineEdit()
                     custom_edit.setPlaceholderText("Perfil/args customizados")
                     custom_edit.setEnabled(False)
+                    custom_edit.setAccessibleName(f"{parameter.label} — valor customizado")
                     custom_label = QLabel("Custom:")
                     custom_label.setVisible(False)
                     custom_layout.addWidget(custom_label)
@@ -717,12 +721,22 @@ class ParameterDialog(QDialog):
                     )
             elif parameter.kind == "boolean":
                 field = QCheckBox(parameter.label)
+                field.setAccessibleName(parameter.label)
             elif parameter.kind == "secret":
                 # Masked on screen and routed to stdin by the runner, so the
                 # value never reaches argv or the echoed command line.
                 field = QLineEdit()
                 field.setEchoMode(QLineEdit.Password)
                 field.setPlaceholderText(parameter.placeholder)
+                if not getattr(self, "_secret_note_added", False):
+                    note = QLabel(
+                        "Vai direto para o comando por entrada segura: não aparece em logs, "
+                        "na linha de comando nem fica guardada na Central."
+                    )
+                    note.setObjectName("cardDescription")
+                    note.setWordWrap(True)
+                    form.addRow("", note)
+                    self._secret_note_added = True
             else:
                 field = QLineEdit()
                 field.setPlaceholderText(parameter.placeholder)
@@ -1152,6 +1166,8 @@ class StatefulDialog(QDialog):
         if variant:
             button.setObjectName(variant)
             _repolish(button)
+        if role == QDialogButtonBox.AcceptRole:
+            button.setDefault(True)
         button.setEnabled(enabled)
         return button
 
@@ -1260,6 +1276,7 @@ class PreviewDialog(StatefulDialog):
             )
             self.body.insertWidget(1, warning)
             self.body.insertWidget(2, self.confirmation)
+            self.confirmation.setFocus()
         cancel.clicked.connect(self.reject)
         self.confirm.clicked.connect(self.accept)
 
@@ -1348,6 +1365,7 @@ class ProgressDialog(StatefulDialog):
 class ResultDialog(StatefulDialog):
     history_requested = Signal()
     resolution_requested = Signal(str)
+    retry_requested = Signal(object)
 
     def __init__(
         self,
@@ -1377,6 +1395,11 @@ class ResultDialog(StatefulDialog):
             parts = [part for part in (human, f"Próximo passo: {nxt}" if nxt else "") if part]
             if parts:
                 message = "\n".join(parts)
+        if getattr(result, "timed_out", False):
+            message = (
+                "A operação passou do tempo limite e foi interrompida.\n"
+                "Nada além do que apareceu na saída foi feito. Você pode tentar de novo."
+            )
         if sev == "error" and message in {
             "Não foi possível concluir. Revise a solução recomendada abaixo.",
         }:
@@ -1407,6 +1430,10 @@ class ResultDialog(StatefulDialog):
         history = self.add_action("Histórico", QDialogButtonBox.ActionRole)
         history.clicked.connect(self.history_requested.emit)
         if sev in {"warning", "error"}:
+            if getattr(result, "timed_out", False):
+                retry = self.add_action("Tentar novamente", QDialogButtonBox.AcceptRole, variant="primaryButton")
+                retry.clicked.connect(lambda: self.retry_requested.emit(result.action))
+                retry.clicked.connect(self.accept)
             if result.action_id.startswith("windows."):
                 label = "Revisar Windows VM"
             elif result.action_id.startswith("ai.proxies") or result.action_id.startswith("ai.9router"):

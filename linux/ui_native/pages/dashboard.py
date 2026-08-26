@@ -11,8 +11,26 @@ from PySide6.QtWidgets import (
 from ..catalog import DASHBOARD_QUICK, DASHBOARD_TOOLS
 from ..command_runner import CommandRunner
 from ..models import ActionSpec
+from ..operation_ledger import OperationLedger
 from ..widgets import ActionCard, SectionHeader, themed_icon
 from .base import BasePage
+
+# Jornada de primeiro uso: três passos concretos, cada um uma ação real do
+# catálogo (nada de navegação inventada). IDs ausentes simplesmente somem.
+ONBOARDING_STEPS: tuple[tuple[str, str, str], ...] = (
+    ("1", "Diagnosticar o sistema",
+     "Uma checagem rápida diz o que já está bom e o que precisa de atenção."),
+    ("2", "Preparar agentes de IA",
+     "Instala as regras e conectores para os assistentes funcionarem aqui."),
+    ("3", "Criar primeiro backup",
+     "Memória, acessos e dados protegidos antes de qualquer mudança grande."),
+)
+
+_STEP_HINTS = {number: hint for number, _t, hint in ONBOARDING_STEPS}
+
+
+def _hint_for(number: str) -> str:
+    return _STEP_HINTS.get(number, "")
 
 
 class DashboardPage(BasePage):
@@ -25,6 +43,11 @@ class DashboardPage(BasePage):
         super().__init__(root, runner, actions, by_id, parent)
         self.dashboard_cards: list[ActionCard] = []
         self._grids: list[tuple[QGridLayout, list[ActionCard], int]] = []
+        try:
+            first_use = not OperationLedger(root).records(limit=1)
+        except Exception:
+            first_use = True
+        self.first_use = first_use
 
     def build(self) -> None:
         scroll = QScrollArea()
@@ -35,7 +58,10 @@ class DashboardPage(BasePage):
         host_layout.setContentsMargins(2, 2, 8, 8)
         host_layout.setSpacing(14)
 
-        welcome = QLabel("Bem-vindo de volta ao PhaseZero 👋")
+        if self.first_use:
+            welcome = QLabel("Vamos configurar seu computador 👋")
+        else:
+            welcome = QLabel("Bem-vindo de volta ao PhaseZero 👋")
         welcome.setObjectName("welcomeTitle")
         welcome.setWordWrap(True)
         host_layout.addWidget(welcome)
@@ -43,6 +69,11 @@ class DashboardPage(BasePage):
         subtitle.setObjectName("welcomeSubtitle")
         subtitle.setWordWrap(True)
         host_layout.addWidget(subtitle)
+
+        if self.first_use:
+            onboarding = self._build_onboarding()
+            if onboarding is not None:
+                host_layout.addWidget(onboarding)
 
         host_layout.addWidget(SectionHeader("Ações rápidas", "As tarefas mais comuns, em destaque."))
         host_layout.addWidget(self._make_grid(DASHBOARD_QUICK, hero=True, columns=2))
@@ -53,6 +84,61 @@ class DashboardPage(BasePage):
 
         scroll.setWidget(host)
         self._layout.addWidget(scroll)
+
+    def _build_onboarding(self) -> QWidget | None:
+        """Faixa 'Comece por aqui' — 3 passos, só com ações que existem."""
+        steps: list[tuple[str, str, ActionSpec]] = []
+        for number, title, _hint in ONBOARDING_STEPS:
+            action_id = {
+                "1": "system.doctor.system",
+                "2": "ai.compat",
+                "3": "ai.backup.export",
+            }.get(number, "")
+            action = self.by_id.get(action_id)
+            if action is not None:
+                steps.append((number, title, action))
+        if len(steps) < 2:
+            return None
+        card = QFrame()
+        card.setObjectName("healthHero")
+        # Faixa precisa encolher em viewports estreitos: sem largura mínima
+        # herdada de texto longo (labels têm wrap; política Ignored horizontal).
+        policy = card.sizePolicy()
+        policy.setHorizontalPolicy(QSizePolicy.Policy.Ignored)
+        card.setSizePolicy(policy)
+        card.setMinimumWidth(0)
+        column = QVBoxLayout(card)
+        column.setContentsMargins(20, 16, 20, 16)
+        column.setSpacing(8)
+        heading = QLabel("Comece por aqui")
+        heading.setObjectName("serviceTitle")
+        column.addWidget(heading)
+        for number, title, action in steps:
+            row = QHBoxLayout()
+            badge = QLabel(number)
+            badge.setObjectName("healthShield")
+            badge.setAlignment(Qt.AlignCenter)
+            badge.setFixedSize(30, 30)
+            text = QVBoxLayout()
+            label = QLabel(title)
+            label.setObjectName("serviceTitle")
+            label.setWordWrap(True)
+            label.setMinimumWidth(0)
+            hint = QLabel(_hint_for(number))
+            hint.setObjectName("cardDescription")
+            hint.setWordWrap(True)
+            hint.setMinimumWidth(0)
+            text.addWidget(label)
+            text.addWidget(hint)
+            run = QPushButton("Executar")
+            run.setObjectName("primaryButton")
+            run.setAccessibleName(f"{title} — executar agora")
+            run.clicked.connect(lambda _=False, a=action: self.request_action(a))
+            row.addWidget(badge)
+            row.addLayout(text, 1)
+            row.addWidget(run)
+            column.addLayout(row)
+        return card
 
     def _make_grid(self, ids: tuple[str, ...], *, hero: bool, columns: int) -> QWidget:
         holder = QWidget()

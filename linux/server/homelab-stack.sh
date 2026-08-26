@@ -24,6 +24,7 @@ shift 2>/dev/null || true
 WITH_EXTRAS=0
 JSON_OUTPUT=0
 YES=0
+CONFIRM_FILE=""
 FOLLOW=0
 ACCESS_MODE="${PZ_HOMELAB_ACCESS_MODE:-local}"
 HOMELAB_PROFILE="${PZ_HOMELAB_PROFILE:-}"
@@ -43,7 +44,7 @@ Usage:
   homelab-stack.sh logs <app> [--follow]
   homelab-stack.sh backup [--extras] [--dest PATH] [--dry-run]
   homelab-stack.sh backup verify --source PATH
-  homelab-stack.sh restore --source PATH [--plan] [--yes] [--dry-run]
+  homelab-stack.sh restore --source PATH [--plan] [--yes] [--confirm-file PATH] [--dry-run]
   homelab-stack.sh update [--extras] [--access local|tailscale|lan] [--dry-run]
   homelab-stack.sh repair [--extras] [--access local|tailscale|lan]
   homelab-stack.sh tailscale
@@ -57,6 +58,12 @@ while [ "$#" -gt 0 ]; do
         --extras) WITH_EXTRAS=1 ;;
         --json) JSON_OUTPUT=1 ;;
         --yes|-y) YES=1 ;;
+        --confirm-file)
+            [ "${2:-}" ] || { pz_error "--confirm-file requires value"; exit 2; }
+            CONFIRM_FILE="$2"
+            shift
+            ;;
+        --confirm-file=*) CONFIRM_FILE="${1#*=}" ;;
         --plan) PLAN=1 ;;
         --follow|-f) FOLLOW=1 ;;
         --dry-run|-n) PZ_DRY_RUN=1 ;;
@@ -819,7 +826,14 @@ cmd_restore() {
         pz_error "backup verification failed; refusing restore"
         return 1
     fi
-    [ "$YES" = "1" ] || { pz_error "restore is destructive; pass --yes after verifying backup"; return 1; }
+    if [ "$YES" != "1" ]; then
+        # CCS-004: a Central nunca usa --yes; o operador confirma gerando um
+        # arquivo com a frase exata vinculada à origem do restore.
+        [ -n "$CONFIRM_FILE" ] || { pz_error "restore is destructive; pass --yes or --confirm-file after verifying backup"; return 1; }
+        [ -f "$CONFIRM_FILE" ] || { pz_error "confirmation file missing: $CONFIRM_FILE"; return 1; }
+        grep -qx "RESTAURAR $(basename "$SOURCE")" "$CONFIRM_FILE" \
+            || { pz_error "confirmation phrase mismatch in $CONFIRM_FILE (esperado: RESTAURAR $(basename "$SOURCE"))"; return 1; }
+    fi
     [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] || require_docker || return 1
     [ -d "$SOURCE" ] || { pz_error "restore source missing: $SOURCE"; return 1; }
     local pre_dir="$SOURCE.pre-restore"

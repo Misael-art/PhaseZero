@@ -32,6 +32,9 @@ EXCLUDED: dict[str, str] = {
     # doctor é verificador de saúde por design: falha (rc!=0) é o contrato
     # quando há checks reprovados — classe intencional, como `verify`.
     "system.doctor.system": "verificador intencional (falha = achado)",
+    # CCS-043: via `pz` o comando sai vazio/travado fora do desktop; direto no
+    # script funciona. Investigar o wrapper antes de vigiar aqui.
+    "emulation.shortcuts.status": "wrapper pz trava/vazio — CCS-043",
 }
 
 

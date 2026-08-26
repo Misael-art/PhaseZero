@@ -125,6 +125,7 @@ class OperationResult:
     parsed: Any = None
     result_path: Path | None = None
     operation_id: str = ""
+    timed_out: bool = False
 
     @property
     def ok(self) -> bool:

@@ -170,7 +170,7 @@ class SteamDeckPage(BasePage):
         else:
             automation = _dict(self._payload.get("automation"))
             if automation.get("watcherActive"):
-                self.mode_note.setText("Watchador ativo mantém este modo conforme a dock.")
+                self.mode_note.setText("O assistente de dock mantém este modo conforme você encaixa ou desencaixa.")
             else:
                 self.mode_note.setText("Watcher inativo; o modo vale até nova aplicação manual.")
 

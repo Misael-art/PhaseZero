@@ -259,7 +259,7 @@ def test_proxy_models_parse_detailed_status_and_gateways():
     assert {row[0] for row in PROXY_CARDS} <= {"kimiproxy", "qwenproxy", "deepsproxy", "mimo-ai-proxy"}
 
     router = parse_gateway_status("9router", {"installed": True, "healthy": True, "providers": {"active": 3}, "combos": {"total": 5}})
-    assert router.label == "ativo" and "3 providers" in router.detail
+    assert router.label == "ativo" and "3 contas conectadas" in router.detail
     odysseus = parse_gateway_status("odysseus", {"installed": True, "healthy": False, "endpoint": "http://127.0.0.1:4000"})
     assert odysseus.label == "parado" and odysseus.state == "warning"
     assert parse_gateway_status("9router", None).label == "não instalado"

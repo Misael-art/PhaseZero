@@ -471,6 +471,19 @@ grep -q 'secret-password-1' "$VM/vaultwarden_data/db.sqlite"
 test -f "$BKT/bk1.pre-restore/manifest.json"
 jq -e '.tool == "homelab-restore-pre" and (.volumes | length) == 2' "$BKT/bk1.pre-restore/manifest.json" >/dev/null
 echo "  restore verify-then-apply ok"
+
+# CCS-004 evolutivo: arquivo de confirmação (jornada da Central) equivale a
+# --yes, desde que a frase exata — vinculada à origem — esteja presente.
+rm -f "$VM/vaultwarden_data/db.sqlite"
+printf 'FRASE ERRADA\n' > "$TMP/confirm.txt"
+if eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --confirm-file '$TMP/confirm.txt'" >/dev/null 2>&1; then
+    echo "FAIL: confirm-file com frase errada foi aceito"; exit 1
+fi
+printf 'RESTAURAR bk1\n' > "$TMP/confirm.txt"
+conf_out="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --confirm-file '$TMP/confirm.txt' 2>/dev/null" | grep -v '^INFO:')"
+printf '%s\n' "$conf_out" | jq -e '.ok == true and .preRestore != null' >/dev/null
+grep -q 'secret-password-1' "$VM/vaultwarden_data/db.sqlite"
+echo "  restore --confirm-file ok"
 # restore from a tampered backup must be refused before applying
 cp "$BKT/bk1/vaultwarden_data.tgz" "$BKT/bk1/vaultwarden_data.tgz.bak"
 printf 'tamper' >> "$BKT/bk1/vaultwarden_data.tgz"

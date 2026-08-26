@@ -281,7 +281,20 @@ class FriendlyServicePage(BasePage):
             return
         self.refresh_button.setEnabled(True)
         self._payload = {}
-        self._set_service_state(False, False, "Configure o serviço para começar")
+        # Falha de LEITURA não vira "precisa configurar" (estado real desconhecido);
+        # e toggles pendentes são liberados para não prender a página.
+        for _aid, (toggle, applied, detail, previous_detail) in list(self._pending_features.items()):
+            with QSignalBlocker(toggle):
+                toggle.set_pending(False)
+                toggle.setChecked(applied)
+            detail.setText(previous_detail or "—")
+        self._pending_features.clear()
+        self.refresh_button.setText("Tentar de novo")
+        self.state_label.setText("● Indisponível agora")
+        self._set_state("warning")
+        self.state_detail.setText(
+            "Não foi possível ler o estado agora — nada foi alterado. Clique em Tentar de novo."
+        )
 
     def _power_action(self) -> None:
         target = self.stop_action_id if self._running else self.start_action_id if self._configured else self.setup_action_id

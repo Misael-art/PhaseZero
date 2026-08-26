@@ -243,7 +243,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("steamdeck.console", "Steam Deck", "Abrir console", "Inicia Steam Gamepad UI.", ("steamdeck", "console", "auto"), "applications-games", mutable=True, preview=("steamdeck", "status")),
             _a("steamdeck.desktop", "Steam Deck", "Abrir desktop", "Inicia sessão dev/desktop.", ("steamdeck", "dev", "docked-monitor"), "user-desktop", mutable=True, preview=("steamdeck", "status")),
             _a("steamdeck.hotkeys", "Steam Deck", "Instalar hotkeys", "Instala Meta+Shift+F1…F8 e ações SteamOS.", ("steamdeck", "hotkeys", "install"), "preferences-desktop-keyboard-shortcuts", mutable=True, preview=("steamdeck", "status")),
-            _a("steamdeck.watcher", "Steam Deck", "Instalar watcher", "Serviço que reage a dock e tela.", ("steamdeck", "watcher", "install"), "system-run", mutable=True, preview=("steamdeck", "watcher", "status")),
+            _a("steamdeck.watcher", "Steam Deck", "Assistente de dock", "Detecta quando o Steam Deck é encaixado na base e aplica o modo certo sozinho.", ("steamdeck", "watcher", "install"), "system-run", mutable=True, preview=("steamdeck", "watcher", "status")),
             _a("steamdeck.watcher.enable", "Steam Deck", "Ligar watcher", "Habilita e inicia o modo automático já instalado.", ("steamdeck", "watcher", "enable"), "system-run", mutable=True, preview=("steamdeck", "watcher", "status")),
             _a("steamdeck.privileged", "Steam Deck", "Controles TDP (admin)", "Instala bridge privilegiado para TDP/GPU; pede senha de admin.", ("steamdeck", "privileged", "install"), "security-high", mutable=True, preview=("steamdeck", "privileged", "status"), elevated=True, badge="Requer admin", visibility="primary"),
             _a("steamdeck.boot", "Steam Deck", "Boot Game Mode (admin)", "Instala entrada GRUB do Gamepad UI; pede senha de admin.", ("steamdeck", "boot", "install"), "system-reboot", mutable=True, preview=("steamdeck", "boot", "status"), elevated=True, badge="Requer admin", visibility="primary"),
@@ -475,7 +475,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 "applications-games",
                 mutable=preview is not None,
                 preview=preview,
-                badge="Preview" if preview else "",
+                badge="Prévia" if preview else "",
                 input_label="Selecione a biblioteca de ROMs" if key == "rom-optimize" else "",
                 input_kind="path" if key == "rom-optimize" else "",
             )
@@ -560,9 +560,9 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
     actions.extend(
         [
             _a("flatpak.status", "Flatpak", "Status Flatpak", "Estado da instalação e remotes.", ("flatpak", "status"), "system-software-install"),
-            _a("flatpak.audit", "Flatpak", "Auditar Flatpak", "Conflitos de remote, override e runtime.", ("flatpak", "audit"), "system-search"),
+            _a("flatpak.audit", "Flatpak", "Auditar permissões e fontes", "Conflitos de fontes (remotes), permissões globais (overrides) e runtime.", ("flatpak", "audit"), "system-search"),
             _a("flatpak.repair", "Flatpak", "Reparar Flatpak", "Corrige conflitos detectados.", ("flatpak", "audit", "--repair"), "tools-check-spelling", mutable=True, preview=("flatpak", "audit")),
-            _a("flatpak.remotes", "Flatpak", "Listar remotes", "Repositórios configurados.", ("flatpak", "remotes"), "network-server"),
+            _a("flatpak.remotes", "Flatpak", "Fontes de aplicativos (remotes)", "Repositórios de onde os aplicativos Flatpak vêm.", ("flatpak", "remotes"), "network-server"),
             _a("flatpak.steamdeck", "Flatpak", "Compatibilidade Steam Deck", "Overrides e runtimes gaming.", ("flatpak", "steamdeck-compat"), "input-gaming", mutable=True, preview=("flatpak", "audit")),
             _a("flatpak.rollback", "Flatpak", "Rollback", "Reverte alterações PhaseZero.", ("flatpak", "rollback"), "edit-undo", mutable=True, preview=("flatpak", "audit"), badge="Reversível"),
         ]
@@ -570,10 +570,10 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
 
     ai_rows = [
         ("status", "Status IA", "Stack local e agentes.", ("ai", "status"), None),
-        ("doctor", "Diagnóstico MCP", "Audita integrações MCP.", ("ai", "doctor"), None),
+        ("doctor", "Diagnóstico dos conectores", "Audita as integrações MCP — o que liga os agentes a ferramentas e memória.", ("ai", "doctor"), None),
         ("repair", "Reparar MCPs e IDEs", "Repara integrações seguras.", ("ai", "repair"), ("ai", "doctor")),
         ("desktop", "Reparar apps desktop", "Claude/Codex e atualizadores.", ("ai", "desktop", "repair"), ("ai", "desktop", "status")),
-        ("compat", "Agent compatibility", "RTK, Caveman, Headroom e memória.", ("ai", "compat", "setup"), ("ai", "compat", "status")),
+        ("compat", "Preparar agentes de IA", "Instala regras de comportamento, acelerador de comandos e memória nos agentes suportados.", ("ai", "compat", "setup"), ("ai", "compat", "status")),
         ("admin", "Admin bridge", "Instala phasezero-admin/bigsudo.", ("ai", "setup", "admin"), ("ai", "admin", "status")),
         ("opencode-status", "OpenCode + 9Router", "Audita versões, configuração canônica, segredo por arquivo e listener loopback.", ("ai", "opencode", "status"), None),
         ("opencode-install", "Configurar OpenCode + 9Router", "Mescla configuração e aplica provider local com rollback.", ("ai", "opencode", "install", "--yes"), ("ai", "opencode", "install", "--dry-run")),
@@ -597,13 +597,13 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
         ("claude-verify", "Verificar rotas Claude", "Valida assinatura, Bonsai e 9Router sem expor credenciais.", ("ai", "claude", "verify"), None),
         ("claude-bonsai-login", "Login Bonsai", "Inicia autenticação interativa; sessões continuam com consentimento de upload.", ("ai", "claude", "login", "bonsai"), ("ai", "claude", "status")),
         ("9router-status", "Status 9Router", "Serviço, providers, combos e watchdog.", ("ai", "9router", "status"), None),
-        ("9router-tui", "Abrir TUI 9Router", "Anexa ao serviço ativo sem iniciar nem matar outra instância.", ("ai", "9router", "tui"), None),
+        ("9router-tui", "Abrir painel técnico do 9Router", "Abre a tela técnica avançada; para o dia a dia use os cards acima.", ("ai", "9router", "tui"), None),
         ("9router-repair", "Reparar 9Router", "Migra units para caminhos estáveis e valida serviço, bridge e watchdog.", ("ai", "9router", "repair"), ("ai", "9router", "status")),
         ("9router-install", "Instalar 9Router", "Instala gateway local, segredo, serviço e watchdog.", ("ai", "9router", "install"), ("ai", "9router", "status")),
         ("9router-dashboard", "Abrir dashboard 9Router", "Gerencia providers, modelos, combos e chaves no painel local.", ("ai", "9router", "dashboard"), None),
         ("9router-test", "Testar 9Router", "Valida saúde e endpoint /v1/models autenticado.", ("ai", "9router", "test"), None),
-        ("9router-secrets", "Sincronizar providers", "Importa somente credenciais ativas e validadas; saída redigida.", ("ai", "9router", "provider", "sync-secrets"), ("ai", "9router", "provider", "status")),
-        ("9router-combos", "Gerar combos inteligentes", "Cria tiers free, smart e max com fallback ordenado.", ("ai", "9router", "combo", "sync"), ("ai", "9router", "combo", "list")),
+        ("9router-secrets", "Sincronizar contas de IA", "Importa somente credenciais ativas e validadas; saída redigida.", ("ai", "9router", "provider", "sync-secrets"), ("ai", "9router", "provider", "status")),
+        ("9router-combos", "Criar rotas prontas", "Monta as rotas de modelo (free, smart, max) com reserva automática.", ("ai", "9router", "combo", "sync"), ("ai", "9router", "combo", "list")),
         ("9router-usage", "Uso e resiliência", "Tokens, latência, custo e falhas coletados pelo 9Router.", ("ai", "9router", "usage"), None),
         ("9router-client", "Integrar clientes 9Router", "Perfil redigido para Codex, Claude, OpenCode e clientes OpenAI-compatible.", ("ai", "9router", "client", "status"), None),
         ("9router-check", "Verificar update 9Router", "Compara versão e exige integrity publicada.", ("ai", "9router", "check-update"), None),
@@ -636,7 +636,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 "applications-development",
                 mutable=preview is not None,
                 preview=preview,
-                badge="Preview" if preview else "",
+                badge="Prévia" if preview else "",
             )
         )
 
@@ -747,7 +747,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 "network-server",
                 mutable=preview is not None,
                 preview=preview,
-                badge="Preview" if preview else "",
+                badge="Prévia" if preview else "",
                 visibility=visibility,
             )
         )
@@ -1122,7 +1122,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 "network-transmit-receive",
                 mutable=preview is not None,
                 preview=preview,
-                badge="Preview" if preview else "",
+                badge="Prévia" if preview else "",
             )
         )
     # "Temas" page: appearance + accessibility with plan/preview/apply
@@ -1162,7 +1162,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                     mutable=True,
                     preview=("themes", "plan", "--feature", feature_id, "--state", state),
                     preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
-                    badge="Preview" if state == "on" else "Reversível",
+                    badge="Prévia" if state == "on" else "Reversível",
                     keywords=(feature_id, state),
                 )
             )
@@ -1184,7 +1184,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 mutable=True,
                 preview=("themes", "plan", "--profile", profile_id),
                 preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
-                badge="Preview",
+                badge="Prévia",
                 keywords=(profile_id,),
             )
         )
@@ -1205,7 +1205,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 mutable=True,
                 preview=("themes", "plan", "--wallpaper", wallpaper_id, "--screen", "0", "--target", "desktop"),
                 preview_bindings=(("plan_id", "id"), ("confirm", "confirmToken")),
-                badge="Preview",
+                badge="Prévia",
                 keywords=(wallpaper_id, "wallpaper"),
             )
         )
