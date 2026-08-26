@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 from PySide6.QtTest import QTest
 
 
@@ -120,6 +120,8 @@ def test_homelab_page_builds_widgets(app):
     assert page._table.columnCount() == 5
     assert page._profile_combo is not None
     assert page._output is not None
+    assert page._cards_host is not None
+    assert page._cards_layout is not None
 
 
 def test_homelab_page_applies_status(app):
@@ -377,6 +379,77 @@ def test_homelab_page_timeout_kills(app):
     page._kill_timed_out(proc)
     assert any(c[0] == "kill" for c in calls)
     assert page._proc is None
+
+
+def _catalog_apps() -> list[dict]:
+    return [
+        {
+            "key": "jellyfin", "title": "Jellyfin", "layer": "core",
+            "enabled": True, "running": False, "budgetMB": 2048,
+            "url": "http://127.0.0.1:8096",
+            "governor": {"verdict": "pass", "reasons": []},
+        },
+        {
+            "key": "n8n", "title": "n8n", "layer": "extras",
+            "enabled": False, "running": False, "budgetMB": 1024,
+            "url": "http://127.0.0.1:5678",
+            "governor": {
+                "verdict": "fail",
+                "reasons": ["app overcommits memory: budget 1024 MiB > usable 200 MiB"],
+            },
+        },
+    ]
+
+
+def test_homelab_cards_render_catalog(app):
+    page = _page()
+    page._rebuild_cards(_catalog_apps())
+    assert page._cards_layout.count() == 2
+    texts = [w.text() for w in page.findChildren(QLabel)]
+    joined = " ".join(texts)
+    assert "Jellyfin" in joined
+    assert "n8n" in joined
+    assert "orçamento insuficiente" in joined or "overcommits" in joined
+    toggles = [b for b in page._card_buttons if b.text() in {"Ligar", "Desligar"}]
+    assert len(toggles) == 2
+    ligar = [b for b in toggles if b.text() == "Ligar"][0]
+    assert ligar.isEnabled() is False
+    desligar = [b for b in toggles if b.text() == "Desligar"][0]
+    assert desligar.isEnabled() is True
+
+
+def test_homelab_card_preview_uses_qprocess(app):
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page._proc = None
+    page._rebuild_cards(_catalog_apps())
+    calls = []
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    try:
+        previews = [b for b in page._card_buttons if b.text() == "Prévia"]
+        previews[1].click()
+    finally:
+        mod.QProcess = real_qprocess
+    assert calls
+    argv = calls[-1][2]
+    assert argv[:4] == ["server", "homelab", "apps", "enable"]
+    assert "--dry-run" in argv
+    assert "--yes" not in argv
+
+
+def test_homelab_cards_do_not_block_event_loop_source(app):
+    import inspect
+
+    import linux.ui_native.pages.homelab as mod
+
+    src = inspect.getsource(mod)
+    assert "import subprocess" not in src
+    assert "subprocess.run" not in src
+    assert "apps" in src
+    assert "QProcess" in src
 
 
 def test_homelab_page_cancel_timeout_on_finish(app):

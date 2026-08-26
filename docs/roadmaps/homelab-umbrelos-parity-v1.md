@@ -14,7 +14,7 @@
 
 | Campo | Valor |
 |---|---|
-| Status | Fase 0 concluída na branch; nenhum requisito de produto verificado |
+| Status | Fase 1 em curso (catálogo CLI+cards); HL-APP-* ainda sem prova disposable de health |
 | Última verificação | 2026-08-26, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
 | Base observada | `origin/main` `a85c7a4` (release v1.17.4) |
@@ -421,10 +421,10 @@ reutilizar ID para requisito diferente.
 
 | ID | Requisito | Implementação | Teste comportamental | Prova CI | Estado | Limitação |
 |---|---|---|---|---|---|---|
-| HL-APP-001 | Apps individuais com manifest versionado e compose por subconjunto | módulos por app em `linux/server/`, manifests com digest/portas/volumes/healthcheck/orçamento | compose config por subconjunto; enable→health→disable isolado | job catálogo/disposable | pending | catálogo curado, não loja comunitária |
-| HL-APP-002 | Preflight de orçamento por card | governor consultado antes de mutação; card bloqueia com razão | host limitado recusa app pesado com razão verificável | shell test | pending | — |
-| HL-APP-003 | UI cards um clique no Player (host admin) | grid no Player, plan/preview/cancel, QProcess assíncrono | testes player offscreen; event loop responsivo | homelab-python-test | pending | — |
-| HL-APP-004 | Update por digest sem `latest` | resolução manifest-list por plataforma; lock deixa de ser só tag | render não contém `latest`; digest fixado | compose-validate | pending | lock atual pinna tags (`a85c7a4`) |
+| HL-APP-001 | Apps individuais com manifest versionado e compose por subconjunto | `assets/home-server/apps/catalog.json` + `apps/compose/*.yml` + `linux/server/homelab-apps.sh` | compose config por subconjunto; enable/disable isolado no estado; health em CI descartável ainda falta | homelab-shell-test + compose-validate | in_progress | catálogo curado; suíte hermética usa `PZ_HOMELAB_APPS_NO_DOCKER=1` |
+| HL-APP-002 | Preflight de orçamento por card | governor soma enabled+app+deps vs RAM (headroom 20%); card desliga Ligar quando fail | `PZ_HOMELAB_RAM_TOTAL_OVERRIDE=256` recusa n8n com razão; não persiste | homelab-shell-test | in_progress | prova hermética local; aguarda CI |
+| HL-APP-003 | UI cards um clique no Player (host admin) | grid no Player, Prévia/Ligar/Atualizar via QProcess | offscreen: 26 testes; preview spawna `apps enable --dry-run`; sem subprocess.run | homelab-python-test | in_progress | prova unitária local; aguarda CI |
+| HL-APP-004 | Update por digest sem `latest` | lock+catálogo pinam tags; `apps update --dry-run` recusa `:latest`; digest só após pull permitido | render/catálogo sem `latest`; digest ainda não pinado no lock | compose-validate + shell test | in_progress | lock continua por tag; digest em `$HOMELAB_STATE/image-digests.json` após pull |
 | HL-HOST-001 | Registro de hosts seguro no host admin | XDG, schemaVersion, atómico 0600, lock | segunda execução idempotente; corrupção falha fechado | shell test | pending | — |
 | HL-HOST-002 | Comandos remotos via `--host` fail-closed | envelope `{hostAlias, rc, payload, error}`, timeout | stub ssh: offline→razão accionável; JSON puro | shell test | pending | — |
 | HL-HOST-003 | Pareamento guiado de chave SSH na UI | QProcess, sem senha em argv, teste de conexão | pareamento E2E com stub; sem bloqueio de event loop | homelab-python-test | pending | — |
@@ -455,10 +455,11 @@ Actualizar esta seção no início e fim de cada sessão.
 | Player v2 | mergeado: PR #70 `1f86913`; `f7746de` ancestral | `git merge-base --is-ancestor f7746de origin/main` | 2026-08-26 |
 | CI da base | success run `32965735176` | GitHub Actions `ci.yml` push `main` | 2026-08-26 |
 | Branch/worktree | `feat/homelab-umbrelos-v1` em `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | `git worktree list` | 2026-08-26 |
-| Baseline local | `tests/linux-homelab.sh` exit 0; `test_homelab_player.py` 23 passed | worktree, 2026-08-26 | 2026-08-26 |
+| Baseline local | `tests/linux-homelab.sh` exit 0; `test_homelab_player.py` 26 passed | worktree, 2026-08-26 | 2026-08-26 |
+| Catálogo v1 | 10 apps user-facing; compose por módulo válido; enable/disable isolado; governor recusa host curto | `tests/linux-homelab.sh` + `docker compose -f apps/compose/*.yml config` | 2026-08-26 |
 | WIP alheio (checkout principal) | untracked `.mimosa/`, `uber-defesa-privada/`; NÃO tocar `dashboard.py` nem `test_status_journey_contract.py`; NÃO stashar/commitar no checkout `feat/homelab-player-v2` | `git status` em `/mnt/sdcard/Projects/PhaseZero` | 2026-08-26 |
 | Homelab real | segue sem workload desta frente; nenhum apply | herdado do v1.15.1; revalidar | 2026-08-26 |
-| Catálogo atual | core+extras all-or-nothing; lock por tag, não digest | `assets/home-server/*.yml` + `docker-compose.lock.json` | 2026-08-26 |
+| Catálogo atual | 10 apps user-facing em `apps/catalog.json`; `up --extras` ainda all-or-nothing; lock por tag | `assets/home-server/apps/` + compose legado | 2026-08-26 |
 
 ## Ledger de execução
 
@@ -467,7 +468,8 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | Data | Agente | Branch/worktree | Fase | Commit/PR | Gates | Resultado/próximo passo |
 |---|---|---|---|---|---|---|
 | 2026-08-26 | opencode (checkout principal) | `feat/homelab-player-v2` (somente docs, sem commit) | rascunho | não commitado | — | rascunho untracked no checkout principal; não reutilizar |
-| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 0 | este commit (docs + AGENTS.md) | CI base `32965735176` success; `tests/linux-homelab.sh` exit 0 na worktree (~59s; ERROR de registry-ausente é o caso fail-closed esperado); `pytest tests/test_homelab_player.py` 23 passed / 1.51s offscreen; `git diff --check` limpo | Roadmap revalidado: Player v2 já em main; dois papéis appliance vs admin/consumidor; matriz umbrelOS extraída; IDs HL-AGT-004/005 e HL-WEB-004..006. Próximo: Fase 1 catálogo (apps list/enable/disable, compose por subconjunto) |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 0 | `0ebc7cc` | CI base `32965735176` success; suíte hermética + player 23 passed | Roadmap + dois papéis. |
+| 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1 | este commit (catálogo + Player cards) | `tests/linux-homelab.sh` exit 0 (~56s); `pytest tests/test_homelab_player.py` 26 passed / 1.55s; `docker compose -f apps/compose/*.yml config` ok; `git diff --check` limpo; nenhum compose up no host | CLI `apps list/enable/disable/update --json`; grid de cards. Próximo: job CI disposable enable→health→disable (HL-APP-001) e pin de digest no update (HL-APP-004) |
 
 ## Formato obrigatório de handoff
 

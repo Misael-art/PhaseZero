@@ -121,6 +121,7 @@ jobs:
           set -euo pipefail
           jq -e '.schemaVersion == 1 and (.profiles|length) == 6' assets/home-server/homelab-profiles.json >/dev/null
           jq -e '.schemaVersion == 1 and (.images|type == "object") and (.images|length) == 13 and all(.images[]; (test(":latest") | not))' assets/home-server/docker-compose.lock.json >/dev/null
+          jq -e '.schemaVersion == 1 and (.apps|length) >= 10 and all(.apps[].imageRef; (test(":latest") | not))' assets/home-server/apps/catalog.json >/dev/null
 
       - name: Run hermetic homelab fault suite (no docker daemon expected)
         run: |
@@ -211,6 +212,11 @@ jobs:
           docker compose -f assets/home-server/docker-compose.homelab.yml config --quiet
           docker compose -f assets/home-server/docker-compose.homelab.yml \
             -f assets/home-server/docker-compose.extras.yml config --quiet
+          jq -e '.schemaVersion == 1 and (.apps|length) >= 10' assets/home-server/apps/catalog.json >/dev/null
+          jq -e 'all(.apps[].imageRef; (test(":latest") | not))' assets/home-server/apps/catalog.json >/dev/null
+          for f in assets/home-server/apps/compose/*.yml; do
+            docker compose -f "$f" config --quiet
+          done
           cfg="$(docker compose -f assets/home-server/docker-compose.homelab.yml \
             -f assets/home-server/docker-compose.extras.yml config --format json)"
           # The docker socket may only be bound by the dedicated socket-proxy,

@@ -6,9 +6,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtWidgets import (
-    QComboBox, QGroupBox, QHBoxLayout, QHeaderView,
+    QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
     QLabel, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 from shiboken6 import isValid
 
@@ -44,7 +44,10 @@ class HomelabPage(BasePage):
         self._last_status: dict = {}
         self._timeouts: dict[int, QTimer] = {}
         self._action_buttons: list[QPushButton] = []
+        self._card_buttons: list[QPushButton] = []
         self._pending_confirm_file: Path | None = None
+        self._cards_layout: QGridLayout | None = None
+        self._cards_host: QWidget | None = None
 
     # ------------------------------------------------------------- theming
     def _set_state(self, state: str) -> None:
@@ -71,6 +74,21 @@ class HomelabPage(BasePage):
         refresh.clicked.connect(self.refresh_status)
         header.addWidget(refresh)
         self._layout.addLayout(header)
+
+        # App cards (one-click catalog) ------------------------------------
+        cards_box = QGroupBox("Aplicativos")
+        cards_box.setAccessibleName("Catálogo de aplicativos do Homelab")
+        cards_outer = QVBoxLayout()
+        self._cards_scroll = QScrollArea()
+        self._cards_scroll.setWidgetResizable(True)
+        self._cards_host = QWidget()
+        self._cards_layout = QGridLayout(self._cards_host)
+        self._cards_layout.setContentsMargins(4, 4, 4, 4)
+        self._cards_scroll.setWidget(self._cards_host)
+        self._cards_scroll.setMinimumHeight(200)
+        cards_outer.addWidget(self._cards_scroll)
+        cards_box.setLayout(cards_outer)
+        self._layout.addWidget(cards_box)
 
         # Status table ------------------------------------------------------
         self._table = QTableWidget(0, 5)
@@ -207,6 +225,103 @@ class HomelabPage(BasePage):
             return
         self._spawn(["server", "homelab", "profiles", "--json"], self._on_profiles_done)
 
+    def refresh_apps(self) -> None:
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            return
+        self._spawn(["server", "homelab", "apps", "list", "--json"], self._on_apps_done)
+
+    def _on_apps_done(self, code: int, raw: bytes, err: bytes) -> None:
+        self._proc = None
+        payload: dict = {}
+        text = raw.decode("utf-8", "replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    payload = json.loads(line)
+                    break
+                except Exception:
+                    continue
+        apps = payload.get("apps") if isinstance(payload.get("apps"), list) else []
+        self._rebuild_cards(apps)
+        self.refresh_profiles()
+
+    def _clear_layout(self, layout: QGridLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _rebuild_cards(self, apps: list) -> None:
+        if self._cards_layout is None:
+            return
+        self._clear_layout(self._cards_layout)
+        self._card_buttons = []
+        for index, app in enumerate(apps):
+            if not isinstance(app, dict):
+                continue
+            self._cards_layout.addWidget(self._make_app_card(app), index // 2, index % 2)
+
+    def _make_app_card(self, app: dict) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("homelabAppCard")
+        frame.setFrameShape(QFrame.StyledPanel)
+        frame.setAccessibleName(f"Aplicativo {app.get('title') or app.get('key')}")
+        lay = QVBoxLayout(frame)
+        title = QLabel(f"{app.get('title') or app.get('key')} · {app.get('layer', '')}")
+        title.setStyleSheet("font-weight:700")
+        lay.addWidget(title)
+        running = bool(app.get("running"))
+        enabled = bool(app.get("enabled"))
+        if running:
+            state = "ligado"
+        elif enabled:
+            state = "ativado · parado"
+        else:
+            state = "desligado"
+        lay.addWidget(QLabel(f"{state} · {app.get('budgetMB', '—')} MiB"))
+        url = str(app.get("url") or "")
+        if url:
+            lay.addWidget(QLabel(url))
+        gov = app.get("governor") if isinstance(app.get("governor"), dict) else {}
+        verdict = str(gov.get("verdict") or "")
+        if verdict == "fail":
+            reasons = gov.get("reasons") if isinstance(gov.get("reasons"), list) else []
+            reason = str(reasons[0]) if reasons else "orçamento insuficiente"
+            warn = QLabel(reason)
+            warn.setWordWrap(True)
+            warn.setObjectName("serviceState")
+            warn.setProperty("state", "warning")
+            lay.addWidget(warn)
+        key = str(app.get("key") or "")
+        row = QHBoxLayout()
+        preview = QPushButton("Prévia")
+        preview.setToolTip("Mostra o plano sem alterar o host.")
+        action = "disable" if enabled else "enable"
+        preview.clicked.connect(
+            lambda _=False, k=key, a=action: self.run_cmd(
+                ["apps", a, k, "--dry-run", "--json"]
+            )
+        )
+        toggle = QPushButton("Desligar" if enabled else "Ligar")
+        toggle.setToolTip("Ativa ou desativa só este aplicativo.")
+        if verdict == "fail" and not enabled:
+            toggle.setEnabled(False)
+        toggle.clicked.connect(
+            lambda _=False, k=key, a=action: self.run_cmd(["apps", a, k, "--json"])
+        )
+        update = QPushButton("Atualizar")
+        update.setToolTip("Atualiza a imagem pinada deste aplicativo.")
+        update.clicked.connect(
+            lambda _=False, k=key: self.run_cmd(["apps", "update", k, "--json"])
+        )
+        for btn in (preview, toggle, update):
+            row.addWidget(btn)
+            self._card_buttons.append(btn)
+        lay.addLayout(row)
+        return frame
+
     def _last_backup(self) -> str:
         last = self._last_status.get("backupState", {}).get("lastBackup")
         return (last or {}).get("latest", "") if isinstance(last, dict) else ""
@@ -286,7 +401,7 @@ class HomelabPage(BasePage):
             )
         else:
             self._budget_label.setText("sem perfil ativo")
-        self.refresh_profiles()
+        self.refresh_apps()
 
     def _on_status_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
@@ -386,6 +501,8 @@ class HomelabPage(BasePage):
 
     def block_while_running(self, running: bool) -> None:
         for btn in self._action_buttons:
+            btn.setEnabled(not running)
+        for btn in self._card_buttons:
             btn.setEnabled(not running)
         self._profile_set.setEnabled(not running)
 

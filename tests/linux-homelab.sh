@@ -14,6 +14,8 @@ export PZ_ROOT="$REPO_ROOT"
 export HOME="$TMP/home"
 export XDG_STATE_HOME="$TMP/state"
 export PZ_HOMELAB_STATE="$TMP/homelab"
+# Never compose-up/rm on the developer host or the hermetic CI job.
+export PZ_HOMELAB_APPS_NO_DOCKER=1
 mkdir -p "$HOME" "$XDG_STATE_HOME" "$PZ_HOMELAB_STATE"
 
 # Pin the WinVM contract boundary to a stub so the suite never touches the
@@ -23,6 +25,7 @@ printf '%s\n' '{"libvirtState":"shut off","currentMarker":"no","bootRuntimeStale
 
 echo "=== syntax ==="
 bash -n "$REPO_ROOT/linux/server/homelab-stack.sh"
+bash -n "$REPO_ROOT/linux/server/homelab-apps.sh"
 bash -n "$REPO_ROOT/linux/server/casaos.sh"
 bash -n "$REPO_ROOT/linux/server/apply-common.sh"
 bash -n "$REPO_ROOT/linux/pz"
@@ -54,13 +57,19 @@ rg -q 'HOMELAB_ADMIN_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.ho
 rg -q 'HOMELAB_PUBLIC_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml"
 rg -q 'HOMELAB_ADMIN_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.extras.yml"
 # every service block must carry no-new-privileges and a memory cap
-for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml; do
+for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml \
+         "$REPO_ROOT/assets/home-server/apps/compose/"*.yml; do
     svcs="$(rg -c '^  [a-z0-9-]+:$' "$f")"
     [ "$(rg -c 'no-new-privileges' "$f")" -eq "$svcs" ] || { echo "FAIL: missing no-new-privileges in $f"; exit 1; }
     [ "$(rg -c 'mem_limit:' "$f")" -eq "$svcs" ] || { echo "FAIL: missing mem_limit in $f"; exit 1; }
 done
 jq -e '.schemaVersion == 1 and (.images | length == 13) and all(.images[]; (test(":latest") | not))' \
     "$REPO_ROOT/assets/home-server/docker-compose.lock.json" >/dev/null
+jq -e '.schemaVersion == 1 and (.apps | length) >= 10' \
+    "$REPO_ROOT/assets/home-server/apps/catalog.json" >/dev/null
+jq -e --slurpfile lock "$REPO_ROOT/assets/home-server/docker-compose.lock.json" \
+    'all(.apps[]; .imageLockKey as $k | ($lock[0].images[$k] == .imageRef) and ((.imageRef | test(":latest")) | not))' \
+    "$REPO_ROOT/assets/home-server/apps/catalog.json" >/dev/null
 echo "  compose pins/binds/hardening ok"
 
 echo "=== missing .env blocks sensitive services ==="
@@ -87,6 +96,43 @@ if echo "$repair_out" | rg -q '[a-f0-9]{64}'; then
 fi
 echo "  secure env ok"
 
+echo "=== apps catalog list/enable/disable/update ==="
+apps_list="$("$REPO_ROOT/linux/pz" server homelab apps list --json)"
+echo "$apps_list" | jq -e '.schemaVersion == "1" and .action == "list" and (.apps | length) >= 10' >/dev/null
+echo "$apps_list" | jq -e '[.apps[].imageRef] | all(test(":latest") | not)' >/dev/null
+echo "$apps_list" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled] | first == true' >/dev/null
+echo "$apps_list" | jq -e '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
+if echo "$apps_list" | rg -q '[a-f0-9]{64}'; then
+    echo "FAIL: secret value leaked in apps list"
+    exit 1
+fi
+if "$REPO_ROOT/linux/pz" server homelab apps enable no-such-app --json >/dev/null 2>&1; then
+    echo "FAIL: unknown app should fail closed"
+    exit 1
+fi
+gov_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=256 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json || true)"
+echo "$gov_out" | jq -e '.ok == false and .governor.verdict == "fail"' >/dev/null
+echo "$("$REPO_ROOT/linux/pz" server homelab apps list --json)" | jq -e \
+    '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
+plan_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --dry-run --json)"
+echo "$plan_out" | jq -e '.ok == true and .dryRun == true and .applied == false' >/dev/null
+echo "$("$REPO_ROOT/linux/pz" server homelab apps list --json)" | jq -e \
+    '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
+enable_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json)"
+echo "$enable_out" | jq -e '.ok == true and .enabled == true and .started == false' >/dev/null
+test "$(stat -c '%a' "$PZ_HOMELAB_STATE/apps.enabled.json")" = "600"
+after_enable="$("$REPO_ROOT/linux/pz" server homelab apps list --json)"
+echo "$after_enable" | jq -e '[.apps[] | select(.key == "n8n") | .enabled] | first == true' >/dev/null
+echo "$after_enable" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled] | first == true' >/dev/null
+disable_out="$("$REPO_ROOT/linux/pz" server homelab apps disable n8n --json)"
+echo "$disable_out" | jq -e '.ok == true and .enabled == false' >/dev/null
+after_disable="$("$REPO_ROOT/linux/pz" server homelab apps list --json)"
+echo "$after_disable" | jq -e '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
+echo "$after_disable" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled] | first == true' >/dev/null
+upd="$("$REPO_ROOT/linux/pz" server homelab apps update --all --dry-run --json)"
+echo "$upd" | jq -e '.ok == true and .dryRun == true and ([.apps[].usesLatest] | all(. == false))' >/dev/null
+echo "  apps catalog ok"
+
 echo "=== compose config core/extras ==="
 if docker compose version >/dev/null 2>&1; then
     docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-test \
@@ -96,6 +142,23 @@ if docker compose version >/dev/null 2>&1; then
         -f "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml" \
         -f "$REPO_ROOT/assets/home-server/docker-compose.extras.yml" config --services |
         sort | jq -R . | jq -cs 'index("nextcloud") and index("grafana") and index("paperless") and index("n8n") and index("portainer")' >/dev/null
+    jelly_svcs="$(docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-subset \
+        -f "$REPO_ROOT/assets/home-server/apps/compose/jellyfin.yml" config --services)"
+    echo "$jelly_svcs" | grep -qx jellyfin
+    if echo "$jelly_svcs" | grep -qx n8n; then
+        echo "FAIL: jellyfin subset leaked n8n"
+        exit 1
+    fi
+    n8n_svcs="$(docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-subset \
+        -f "$REPO_ROOT/assets/home-server/apps/compose/n8n.yml" config --services)"
+    echo "$n8n_svcs" | grep -qx n8n
+    if echo "$n8n_svcs" | grep -qx jellyfin; then
+        echo "FAIL: n8n subset leaked jellyfin"
+        exit 1
+    fi
+    docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-subset \
+        -f "$REPO_ROOT/assets/home-server/apps/compose/vaultwarden.yml" \
+        -f "$REPO_ROOT/assets/home-server/apps/compose/n8n.yml" config --quiet
     echo "  compose config ok"
 else
     echo "  docker compose unavailable; skipped"
