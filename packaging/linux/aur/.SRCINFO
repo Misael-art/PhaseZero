@@ -1,6 +1,6 @@
 pkgbase = phasezero-control-center
 	pkgdesc = PhaseZero native Linux control center
-	pkgver = 1.17.3
+	pkgver = 1.17.4
 	pkgrel = 1
 	url = https://github.com/Misael-art/PhaseZero
 	arch = any

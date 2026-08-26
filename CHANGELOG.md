@@ -3,6 +3,17 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.17.4] - 2026-08-25
+
+### Adicionado (CCS-040/041/042)
+- **Homelab Player v2**: padrões visuais da Central, rótulos em português, bloqueio honesto durante operações e **restauração assistida** — prévia legível, confirmação digitada (`RESTAURAR <backup>`) e aplicação sem `--yes` na UI (CLI ganha `--confirm-file`).
+- **Primeiro uso orientado**: Início detecta host novo e oferece "Comece por aqui" com três passos reais (Diagnosticar → Agentes de IA → Backup).
+- **Confiança global**: timeout com botão Tentar novamente, aviso central quando já há operação em andamento, toggles liberados quando a leitura falha, nota clara sobre onde segredos ficam.
+
+### Corrigido
+- Glossário único para o leigo: Prévia/Aplicar; dry-run → "simulação"; conectores MCP, fontes Flatpak e assistente de dock descritos por benefício.
+- Acessibilidade fina: botão default e foco nos diálogos, rótulos acessíveis em todos os campos, tooltips com linguagem humana.
+
 ## [1.17.3] - 2026-08-25
 
 ### Corrigido
