@@ -7258,19 +7258,38 @@ function Ensure-CodexInstaller {
     }
 }
 
+function Get-BootstrapUserProfileRoot {
+    # $env:USERPROFILE pode vir vazio (perfil incompleto, host nao-Windows). Join-Path lanca com
+    # base nula, entao resolvemos por fallback em vez de propagar o erro.
+    if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { return [string]$env:USERPROFILE }
+    $profileFolder = ''
+    try { $profileFolder = [Environment]::GetFolderPath('UserProfile') } catch { $profileFolder = '' }
+    if (-not [string]::IsNullOrWhiteSpace($profileFolder)) { return $profileFolder }
+    if (-not [string]::IsNullOrWhiteSpace($env:HOME)) { return [string]$env:HOME }
+    return (Get-Location).Path
+}
+
+function Get-BootstrapLocalAppDataRoot {
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { return [string]$env:LOCALAPPDATA }
+    $folder = ''
+    try { $folder = [Environment]::GetFolderPath('LocalApplicationData') } catch { $folder = '' }
+    if (-not [string]::IsNullOrWhiteSpace($folder)) { return $folder }
+    return (Join-Path (Get-BootstrapUserProfileRoot) '.local')
+}
+
 function Get-BootstrapCodexHome {
     $codexHome = [Environment]::GetEnvironmentVariable('CODEX_HOME', 'Process')
     if ([string]::IsNullOrWhiteSpace($codexHome)) {
         $codexHome = [Environment]::GetEnvironmentVariable('CODEX_HOME', 'User')
     }
     if ([string]::IsNullOrWhiteSpace($codexHome)) {
-        $codexHome = Join-Path $env:USERPROFILE '.codex'
+        $codexHome = Join-Path (Get-BootstrapUserProfileRoot) '.codex'
     }
     return $codexHome
 }
 
 function Get-BootstrapCodexDesktopPackageDataRoot {
-    return (Join-Path $env:LOCALAPPDATA 'Packages\OpenAI.Codex_2p2nqsd0c76g0')
+    return (Join-Path (Get-BootstrapLocalAppDataRoot) 'Packages\OpenAI.Codex_2p2nqsd0c76g0')
 }
 
 function Get-BootstrapCodexDesktopStatePaths {
@@ -7411,8 +7430,22 @@ function Get-BootstrapCodexDesktopLatestLog {
 }
 
 function Get-BootstrapVcppRuntimeStatus {
-    $system32 = Join-Path $env:WINDIR 'System32'
     $required = @('vcruntime140.dll', 'vcruntime140_1.dll', 'msvcp140.dll')
+    $system32 = Join-BootstrapKnownFolderPath -Base $env:WINDIR -ChildPath 'System32'
+    if ([string]::IsNullOrWhiteSpace($system32) -or -not (Test-Path -LiteralPath $system32)) {
+        # Sem System32 nao ha o que sondar. Reportar 'present' evita que um probe impossivel vire
+        # "runtime ausente" e dispare reinstalacao do VCRedist sem motivo.
+        return [ordered]@{
+            present = $true
+            missing = @()
+            found = @()
+            probeRoot = $system32
+            probeSkipped = $true
+            reason = 'system32-unavailable'
+            wingetId = 'Microsoft.VCRedist.2015+.x64'
+        }
+    }
+
     $missing = @()
     $present = @()
     foreach ($dll in @($required)) {
@@ -7429,6 +7462,7 @@ function Get-BootstrapVcppRuntimeStatus {
         missing = @($missing)
         found = @($present)
         probeRoot = $system32
+        probeSkipped = $false
         wingetId = 'Microsoft.VCRedist.2015+.x64'
     }
 }
@@ -30838,6 +30872,18 @@ function Apply-DevAiTuning {
                 envShim = $envShim
             }
         }
+        'llamacpp-mtp-template' {
+            $template = Ensure-BootstrapLlamacppMtpTemplate -WorkspaceRoot (Get-BootstrapAppTuningWorkspaceRoot -State $State)
+            return [ordered]@{
+                id = [string]$Item.id
+                status = [string]$template.status
+                changed = [bool]$template.changed
+                note = 'Template de diagnostico MTP gerado; nenhum modelo foi baixado.'
+                paths = @($template.paths)
+                nextSteps = @($template.nextSteps)
+                rollback = 'file-template'
+            }
+        }
         default {
             return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Dev/AI integration audited; secrets remain managed by bootstrap-secrets.' }
         }
@@ -30869,6 +30915,19 @@ function Apply-AgentConfigTuning {
                 status = [string]$result.status
                 note = 'AI context frugality pack generated with conservative ignores and skeleton map.'
                 manifest = $result
+            }
+        }
+        'agent-config-claude-rtk-template' {
+            $template = Ensure-BootstrapClaudeRtkTemplate -WorkspaceRoot (Get-BootstrapAppTuningWorkspaceRoot -State $State)
+            return [ordered]@{
+                id = [string]$Item.id
+                category = [string]$Item.category
+                status = [string]$template.status
+                changed = [bool]$template.changed
+                note = 'Template Claude/RTK gerado; nenhuma chave foi gravada.'
+                paths = @($template.paths)
+                nextSteps = @($template.nextSteps)
+                rollback = 'file-template'
             }
         }
         default {
@@ -30976,8 +31035,28 @@ function Apply-LocalAiContainerTuning {
 }
 
 function Apply-CaptureTuning {
-    param([Parameter(Mandatory = $true)]$Item)
-    return [ordered]@{ id = [string]$Item.id; status = 'audited'; note = 'Capture settings kept audit-only unless explicit app config is safe.' }
+    param(
+        [Parameter(Mandatory = $true)]$Item,
+        [AllowNull()][hashtable]$State = $null
+    )
+
+    $itemId = [string]$Item.id
+    if ($null -eq $State) {
+        return [ordered]@{ id = $itemId; category = [string]$Item.category; status = 'skipped'; reason = 'state-required'; note = 'Tuning de captura exige State para registrar rollback.' }
+    }
+
+    $result = switch ($itemId) {
+        'obs-replay-buffer'    { Ensure-BootstrapObsReplayBuffer -State $State }
+        'sharex-hotkeys'       { Ensure-BootstrapShareXHotkeys -State $State }
+        'blender-no-autostart' { Ensure-BootstrapBlenderNoAutostart -State $State }
+        default                { [ordered]@{ status = 'skipped'; reason = 'no-handler'; note = "Item capture-creator sem handler dedicado: $itemId." } }
+    }
+
+    $map = ConvertTo-BootstrapHashtable -InputObject $result
+    if (-not ($map -is [hashtable])) { $map = @{ status = 'skipped'; reason = 'invalid-result' } }
+    $map['id'] = $itemId
+    $map['category'] = [string]$Item.category
+    return $map
 }
 
 function Apply-SteamDeckControlTuning {
@@ -31172,6 +31251,302 @@ function Ensure-BootstrapPowerToysQol {
         path = $configPath
         disabledModules = @($disabled)
         rollback = 'backup-file'
+    }
+}
+
+function Set-BootstrapIniValue {
+    # Define Key=Value dentro de Section. Só altera se a secao existir: nao criamos secao nova em
+    # arquivo de terceiro. Devolve as linhas resultantes e se houve mudanca.
+    param(
+        [Parameter(Mandatory = $true)][AllowEmptyCollection()][string[]]$Lines,
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][string]$Key,
+        [Parameter(Mandatory = $true)][string]$Value
+    )
+
+    $out = New-Object System.Collections.Generic.List[string]
+    $inSection = $false
+    $sectionFound = $false
+    $keyWritten = $false
+    $changed = $false
+
+    foreach ($line in @($Lines)) {
+        $text = [string]$line
+        if ($text -match '^\s*\[(.+)\]\s*$') {
+            # Ao sair da secao alvo sem ter achado a chave, insere antes do proximo cabecalho.
+            if ($inSection -and -not $keyWritten) {
+                $out.Add(('{0}={1}' -f $Key, $Value)) | Out-Null
+                $keyWritten = $true
+                $changed = $true
+            }
+            $inSection = ([string]$Matches[1] -eq $Section)
+            if ($inSection) { $sectionFound = $true }
+            $out.Add($text) | Out-Null
+            continue
+        }
+        if ($inSection -and $text -match ('^\s*' + [regex]::Escape($Key) + '\s*=')) {
+            if ($text -match ('^\s*' + [regex]::Escape($Key) + '\s*=\s*' + [regex]::Escape($Value) + '\s*$')) {
+                $out.Add($text) | Out-Null
+            } else {
+                $out.Add(('{0}={1}' -f $Key, $Value)) | Out-Null
+                $changed = $true
+            }
+            $keyWritten = $true
+            continue
+        }
+        $out.Add($text) | Out-Null
+    }
+
+    if ($inSection -and -not $keyWritten) {
+        $out.Add(('{0}={1}' -f $Key, $Value)) | Out-Null
+        $changed = $true
+    }
+
+    return [ordered]@{ lines = @($out.ToArray()); changed = $changed; sectionFound = $sectionFound }
+}
+
+function Ensure-BootstrapObsReplayBuffer {
+    # OBS guarda um basic.ini por profile. Ligamos RecRB apenas nas secoes de saida que ja
+    # existirem no arquivo; ausencia das duas significa schema inesperado e nao escrevemos nada.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $profilesRoot = Join-BootstrapKnownFolderPath -Base $env:APPDATA -ChildPath 'obs-studio\basic\profiles'
+    if ([string]::IsNullOrWhiteSpace($profilesRoot) -or -not (Test-Path -LiteralPath $profilesRoot)) {
+        return [ordered]@{ status = 'skipped'; reason = 'obs-profiles-absent'; note = "Profiles do OBS nao encontrados: $profilesRoot." }
+    }
+
+    $iniFiles = @(Get-ChildItem -LiteralPath $profilesRoot -Filter 'basic.ini' -Recurse -File -ErrorAction SilentlyContinue)
+    if ($iniFiles.Count -eq 0) {
+        return [ordered]@{ status = 'skipped'; reason = 'obs-profiles-absent'; note = "Nenhum basic.ini sob $profilesRoot." }
+    }
+
+    $touched = @()
+    $skipped = @()
+    foreach ($ini in $iniFiles) {
+        $lines = @(Get-Content -LiteralPath $ini.FullName -Encoding utf8)
+        $changed = $false
+        $anySection = $false
+        foreach ($section in @('SimpleOutput', 'AdvOut')) {
+            $res = Set-BootstrapIniValue -Lines $lines -Section $section -Key 'RecRB' -Value 'true'
+            if ([bool]$res.sectionFound) {
+                $anySection = $true
+                $lines = @($res.lines)
+                if ([bool]$res.changed) { $changed = $true }
+            }
+        }
+        if (-not $anySection) {
+            $skipped += @([string]$ini.FullName)
+            continue
+        }
+        if (-not $changed) { continue }
+
+        Register-BootstrapFileChange -State $State -Target $ini.FullName -Operation 'obs-replay-buffer' -Component 'obs-studio'
+        try {
+            [System.IO.File]::WriteAllLines($ini.FullName, $lines, (New-Object System.Text.UTF8Encoding($false)))
+        } catch {
+            return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = "Falha ao escrever $($ini.FullName)."; path = [string]$ini.FullName }
+        }
+        $touched += @([string]$ini.FullName)
+    }
+
+    if ($touched.Count -eq 0) {
+        if ($skipped.Count -eq $iniFiles.Count) {
+            return [ordered]@{ status = 'skipped'; reason = 'obs-schema-unexpected'; note = 'Nenhum basic.ini com secao [SimpleOutput] ou [AdvOut]; nada alterado.' }
+        }
+        return [ordered]@{ status = 'unchanged'; note = 'Replay buffer do OBS ja estava ligado nos profiles.' }
+    }
+    return [ordered]@{
+        status = 'applied'
+        note = ('Replay buffer ligado em {0} profile(s) do OBS.' -f $touched.Count)
+        paths = @($touched)
+        rollback = 'backup-file'
+    }
+}
+
+function Ensure-BootstrapShareXHotkeys {
+    # ApplicationConfig.json do ShareX expoe DisableHotkeys na raiz. Só mexemos nesse campo, e
+    # apenas se ele ja existir no arquivo.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $configPath = Join-BootstrapKnownFolderPath -Base $env:APPDATA -ChildPath 'ShareX\ApplicationConfig.json'
+    if ([string]::IsNullOrWhiteSpace($configPath) -or -not (Test-Path -LiteralPath $configPath)) {
+        return [ordered]@{ status = 'skipped'; reason = 'sharex-config-absent'; note = "ApplicationConfig.json do ShareX ausente: $configPath." }
+    }
+
+    try {
+        $raw = Get-Content -LiteralPath $configPath -Raw -Encoding utf8
+        $config = ConvertTo-BootstrapHashtable -InputObject ($raw | ConvertFrom-Json -ErrorAction Stop)
+    } catch {
+        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = "Falha ao ler $configPath."; path = $configPath }
+    }
+
+    if (-not ($config -is [hashtable]) -or -not (Test-BootstrapMapContainsKey -Map $config -Key 'DisableHotkeys')) {
+        return [ordered]@{ status = 'skipped'; reason = 'sharex-schema-unexpected'; note = "Campo DisableHotkeys nao encontrado em $configPath; nada alterado." }
+    }
+    if (-not [bool]$config['DisableHotkeys']) {
+        return [ordered]@{ status = 'unchanged'; note = 'Hotkeys do ShareX ja estavam habilitadas.'; path = $configPath }
+    }
+
+    $config['DisableHotkeys'] = $false
+    Register-BootstrapFileChange -State $State -Target $configPath -Operation 'sharex-hotkeys' -Component 'sharex'
+    try {
+        Write-BootstrapJsonFile -Path $configPath -Value $config
+    } catch {
+        return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = 'Falha ao escrever ApplicationConfig.json do ShareX.'; path = $configPath }
+    }
+    return [ordered]@{ status = 'applied'; note = 'Hotkeys do ShareX reabilitadas.'; path = $configPath; rollback = 'backup-file' }
+}
+
+function Ensure-BootstrapBlenderNoAutostart {
+    # Remove entradas de autostart do Blender em HKCU:\...\Run e na pasta Startup. Cada remocao e
+    # registrada antes de acontecer para o -Rollback recriar o valor/atalho original.
+    param([Parameter(Mandatory = $true)][hashtable]$State)
+
+    $removed = @()
+    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    if (Test-Path -LiteralPath $runKey) {
+        $props = $null
+        try { $props = Get-ItemProperty -Path $runKey -ErrorAction Stop } catch { $props = $null }
+        if ($null -ne $props) {
+            foreach ($prop in @($props.PSObject.Properties)) {
+                $name = [string]$prop.Name
+                if ($name.StartsWith('PS')) { continue }
+                $data = [string]$prop.Value
+                if ($name -notmatch 'blender' -and $data -notmatch 'blender') { continue }
+                try {
+                    Register-BootstrapChange -State $State -Type 'Registry' -Target $runKey -Name $name -OldValue $data -NewValue '' -Operation 'blender-no-autostart' -Component 'blender'
+                    Remove-ItemProperty -Path $runKey -Name $name -ErrorAction Stop
+                    $removed += @("registry:$name")
+                } catch {
+                    return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = "Falha ao remover autostart de registro '$name'." }
+                }
+            }
+        }
+    }
+
+    $startupDir = ''
+    try { $startupDir = [Environment]::GetFolderPath('Startup') } catch { $startupDir = '' }
+    if (-not [string]::IsNullOrWhiteSpace($startupDir) -and (Test-Path -LiteralPath $startupDir)) {
+        foreach ($link in @(Get-ChildItem -LiteralPath $startupDir -Filter '*.lnk' -File -ErrorAction SilentlyContinue)) {
+            if ([string]$link.Name -notmatch 'blender') { continue }
+            try {
+                Register-BootstrapFileChange -State $State -Target $link.FullName -Operation 'blender-no-autostart' -Component 'blender'
+                Remove-Item -LiteralPath $link.FullName -Force -ErrorAction Stop
+                $removed += @("startup:$($link.Name)")
+            } catch {
+                return [ordered]@{ status = 'failed'; error = $_.Exception.Message; note = "Falha ao remover atalho de startup '$($link.Name)'." }
+            }
+        }
+    }
+
+    if ($removed.Count -eq 0) {
+        return [ordered]@{ status = 'unchanged'; note = 'Blender ja estava fora do autostart.' }
+    }
+    return [ordered]@{
+        status = 'applied'
+        note = ('Autostart do Blender removido: {0}.' -f ($removed -join ', '))
+        removed = @($removed)
+        rollback = 'registry-snapshot'
+    }
+}
+
+function Get-BootstrapLlamacppMtpTemplateText {
+    return @'
+# llama.cpp - diagnostico MTP / speculative decoding
+
+Template local do PhaseZero. Nenhum modelo e baixado por este arquivo: os caminhos
+abaixo sao placeholders que voce preenche com modelos que ja possui.
+
+## Contexto
+
+Speculative decoding usa um modelo "draft" pequeno para propor tokens que o modelo
+principal valida em lote. Ganho real depende de o draft concordar com o principal;
+taxa de aceitacao baixa deixa o conjunto mais lento que o modelo sozinho.
+
+## Baseline (sempre meça antes)
+
+    llama-server -m <modelo-principal.gguf> --host 127.0.0.1 --port 8080
+
+## Com draft
+
+    llama-server -m <modelo-principal.gguf> \
+      -md <modelo-draft.gguf> \
+      --draft-max 16 --draft-min 4 \
+      --host 127.0.0.1 --port 8080
+
+## O que observar
+
+| metrica | onde | leitura |
+| ------- | ---- | ------- |
+| tokens/s | log do servidor | comparar com baseline |
+| taxa de aceitacao do draft | log do servidor | abaixo de ~60% costuma nao compensar |
+| VRAM total | nvidia-smi / Task Manager | draft + principal precisam caber juntos |
+
+## Criterio de decisao
+
+Mantenha o draft apenas se tokens/s subir com a mesma qualidade de saida. Se a VRAM
+estourar e forcar offload para CPU, o resultado piora — volte ao baseline.
+'@
+}
+
+function Ensure-BootstrapLlamacppMtpTemplate {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $path = Join-Path $root '.phasezero\llamacpp\mtp-diagnostic.md'
+    $row = Write-BootstrapManagedTemplateFile -Path $path -Content (Get-BootstrapLlamacppMtpTemplateText)
+    return [ordered]@{
+        status = [string]$row['status']
+        changed = ([string]$row['status'] -eq 'applied')
+        paths = @([string]$row['path'])
+        nextSteps = @('Meça o baseline antes de ativar o draft.', 'Nenhum modelo foi baixado.')
+    }
+}
+
+function Get-BootstrapClaudeRtkTemplateText {
+    return @'
+# Agentes, RTK e providers BYOK
+
+Template local do PhaseZero. Este arquivo e documentacao: nao coloque chaves aqui.
+As credenciais vivem no manifesto gerenciado (`bootstrap-secrets`), que aplica um
+provider somente quando a validacao dele passa.
+
+## Providers
+
+| provider | onde a chave vive | usado por |
+| -------- | ----------------- | --------- |
+| anthropic | bootstrap-secrets | Claude Code, Claude Desktop |
+| openai | bootstrap-secrets | Codex CLI, OpenCode |
+| openrouter | bootstrap-secrets | fallback OpenAI-compatible |
+
+Rotacao e ativacao passam por `bootstrap-secrets`; nao edite configs de agente a mao
+para injetar chave.
+
+## RTK
+
+RTK e proxy de CLI que reduz tokens em operacoes de desenvolvimento. Use apenas
+quando `rtk` resolver no PATH; se faltar, rode o comando direto e registre
+`rtk missing` — a ausencia dele nao deve falhar uma tarefa.
+
+## Higiene de contexto
+
+- prefira diff e trecho a arquivo inteiro;
+- feche o loop com teste ou execucao real, nao so leitura;
+- nao cole segredo em prompt: referencie o provider gerenciado.
+'@
+}
+
+function Ensure-BootstrapClaudeRtkTemplate {
+    param([AllowNull()][string]$WorkspaceRoot = '')
+
+    $root = if ([string]::IsNullOrWhiteSpace($WorkspaceRoot)) { (Get-Location).Path } else { [System.IO.Path]::GetFullPath($WorkspaceRoot) }
+    $path = Join-Path $root '.phasezero\agent-config\claude-rtk.md'
+    $row = Write-BootstrapManagedTemplateFile -Path $path -Content (Get-BootstrapClaudeRtkTemplateText)
+    return [ordered]@{
+        status = [string]$row['status']
+        changed = ([string]$row['status'] -eq 'applied')
+        paths = @([string]$row['path'])
+        nextSteps = @('Nenhuma chave foi gravada; use bootstrap-secrets.')
     }
 }
 
@@ -31555,7 +31930,7 @@ function Invoke-BootstrapAppTuningItem {
         'container-hosting' { return (Apply-ContainerHostingTuning -State $State -Item $Item) }
         'ai-edge-safe' { return (Apply-AiEdgeSafeTuning -State $State -Item $Item) }
         'ai-agent-performance' { return (Apply-AiAgentPerformanceTuning -State $State -Item $Item) }
-        'capture-creator' { return (Apply-CaptureTuning -Item $Item) }
+        'capture-creator' { return (Apply-CaptureTuning -Item $Item -State $State) }
         'windows-qol' { return (Apply-WindowsQolTuning -State $State -Item $Item) }
         'connectivity' { return (Apply-ConnectivityTuning -State $State -Item $Item) }
         'knowledge-vault' { return (Apply-KnowledgeVaultTuning -State $State -Item $Item) }
