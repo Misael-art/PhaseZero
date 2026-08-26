@@ -159,7 +159,7 @@ def parse_gateway_status(gateway_id: str, parsed: object) -> GatewayState:
         combos = parsed.get("combos")
         active = providers.get("active", 0) if isinstance(providers, dict) else 0
         total = combos.get("total", 0) if isinstance(combos, dict) else 0
-        detail = f"{active} providers · {total} combos"
+        detail = f"{active} contas conectadas · {total} rotas prontas"
     elif gateway_id == "odysseus":
         if not bool(parsed.get("installed")) and parsed.get("podmanRootless") is False:
             detail = "Precisa de Podman rootless neste host"

@@ -274,7 +274,9 @@ class ActionCard(QFrame):
             lock.setObjectName("cardLock")
             title_box.addWidget(lock)
         heading.addLayout(title_box, 1)
-        if action.badge:
+        # Badge "JSON" é ruído para leigo nos cards simples; o modo avançado
+        # tem painel próprio e continua mostrando tudo.
+        if action.badge and action.badge.upper() != "JSON":
             badge = QLabel(action.badge)
             badge.setObjectName("badge")
             badge.setProperty("state", action.state)
@@ -366,10 +368,11 @@ class AdvancedActionsPanel(QFrame):
         rows.setContentsMargins(4, 4, 4, 4)
         rows.setSpacing(6)
         for action in actions:
-            button = QPushButton(f"{action.title}  —  {action.description}")
+            button = QPushButton(action.title)
             button.setObjectName("advancedAction")
             button.setProperty("actionId", action.id)
-            button.setToolTip(" ".join(action.args))
+            # Ajuda em linguagem humana; a sintaxe CLI fica no Inspector.
+            button.setToolTip(action.description)
             button.setAccessibleName(action.title)
             button.clicked.connect(lambda _checked=False, item=action: self.requested.emit(item))
             rows.addWidget(button)
@@ -706,6 +709,7 @@ class ParameterDialog(QDialog):
                     custom_edit = QLineEdit()
                     custom_edit.setPlaceholderText("Perfil/args customizados")
                     custom_edit.setEnabled(False)
+                    custom_edit.setAccessibleName(f"{parameter.label} — valor customizado")
                     custom_label = QLabel("Custom:")
                     custom_label.setVisible(False)
                     custom_layout.addWidget(custom_label)
@@ -717,6 +721,7 @@ class ParameterDialog(QDialog):
                     )
             elif parameter.kind == "boolean":
                 field = QCheckBox(parameter.label)
+                field.setAccessibleName(parameter.label)
             elif parameter.kind == "secret":
                 # Masked on screen and routed to stdin by the runner, so the
                 # value never reaches argv or the echoed command line.
@@ -1152,6 +1157,8 @@ class StatefulDialog(QDialog):
         if variant:
             button.setObjectName(variant)
             _repolish(button)
+        if role == QDialogButtonBox.AcceptRole:
+            button.setDefault(True)
         button.setEnabled(enabled)
         return button
 
@@ -1260,6 +1267,7 @@ class PreviewDialog(StatefulDialog):
             )
             self.body.insertWidget(1, warning)
             self.body.insertWidget(2, self.confirmation)
+            self.confirmation.setFocus()
         cancel.clicked.connect(self.reject)
         self.confirm.clicked.connect(self.accept)
 
