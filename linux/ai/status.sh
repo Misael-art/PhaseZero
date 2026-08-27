@@ -297,6 +297,21 @@ jq -e '.updater.timerEnabled == true and .codexDesktop.guardEnabled == true' <<<
 jq -e '.healthy == true' <<< "$router_status" >/dev/null || echo "linux/pz ai 9router install" >> "$recommendations"
 jq -e '.healthy == true' <<< "$odysseus_status" >/dev/null || echo "linux/pz ai odysseus install" >> "$recommendations"
 
+# Contagem de blocos MCP gerenciados no config do Hermes.
+#
+# `grep -c` imprime a contagem E sai com 1 quando ela é zero. Escrito como
+# `[ -f ... ] && grep -c ... || echo 0`, o arquivo existente sem nenhum bloco
+# fazia o grep imprimir "0", falhar, e o ramo `||` imprimir outro "0" — o
+# `--argjson` recebia "0\n0" e derrubava o comando inteiro com "invalid JSON
+# text". Um `if` explícito não depende do código de saída do grep.
+hermes_mcp_count=0
+if [ -f "$HOME/.hermes/config.yaml" ]; then
+    hermes_mcp_count="$(grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HOME/.hermes/config.yaml" 2>/dev/null || true)"
+    case "$hermes_mcp_count" in
+        ''|*[!0-9]*) hermes_mcp_count=0 ;;
+    esac
+fi
+
 # shellcheck disable=SC2128 # services is a JSON string, not array
 jq -cn \
     --arg mode "$mode" \
@@ -320,7 +335,7 @@ jq -cn \
     --arg openclawConfig "$HOME/.openclaw/config.json" \
     --argjson hermesConfigExists "$([ -f "$HOME/.hermes/config.yaml" ] && echo true || echo false)" \
     --argjson openclawConfigExists "$([ -f "$HOME/.openclaw/config.json" ] && echo true || echo false)" \
-    --argjson hermesMcpCount "$([ -f "$HOME/.hermes/config.yaml" ] && grep -c -E '^  # BEGIN PHASEZERO MCP ' "$HOME/.hermes/config.yaml" 2>/dev/null || echo 0)" \
+    --argjson hermesMcpCount "$hermes_mcp_count" \
     --argjson openclawMcpCount "$([ -f "$HOME/.openclaw/config.json" ] && jq '.mcp.servers // {} | length' "$HOME/.openclaw/config.json" 2>/dev/null || echo 0)" \
     --argjson recommendations "$(jq -R . "$recommendations" | jq -s .)" \
     '{
