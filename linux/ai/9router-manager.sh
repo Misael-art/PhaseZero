@@ -18,6 +18,7 @@ SYSTEMD_USER_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/9router"
 PROXY_ENV_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/phasezero/ai-proxies"
 ENV_FILE="$PROXY_ENV_DIR/9router.env"
+ENV_BACKUP_DIR="$PROXY_ENV_DIR/.9router-env-backups"
 SETTINGS_FILE="$CONFIG_DIR/settings.json"
 DATA_DIR="${PZ_9ROUTER_DATA_DIR:-$HOME/.9router}"
 STATE_DIR="$PZ_STATE/9router"
@@ -63,9 +64,17 @@ env_get() {
 
 env_upsert() {
     local key="$1" value="$2" tmp
+    # Only real env names. A single-letter placeholder key is the signature of a
+    # test or scratch call that escaped its sandbox onto the live file.
+    [[ "$key" =~ ^[A-Z][A-Z0-9_]{2,}$ ]] || {
+        pz_error "refusing to write malformed 9Router env key: $key"
+        return 1
+    }
     ensure_dirs
     [ -f "$ENV_FILE" ] || : > "$ENV_FILE"
+    backup_env_file
     tmp="$(mktemp)"
+    chmod 0600 "$tmp"
     grep -vE "^${key}=" "$ENV_FILE" > "$tmp" 2>/dev/null || true
     printf '%s=%s\n' "$key" "$value" >> "$tmp"
     install -m 0600 "$tmp" "$ENV_FILE"
@@ -108,17 +117,49 @@ ensure_node_runtime() {
     ln -sfn "$NODE_BIN" "$RUNTIME/bin/node"
 }
 
+# Keep a rotating 0600 copy of the env before every rewrite. This file holds the
+# only copy of the server secrets and the client credential: a truncating write
+# from any source (a stray env_upsert, a test pointed at the real $HOME) leaves
+# no way back, takes the systemd EnvironmentFile with it, and drops the service
+# to its defaults -- which binds 0.0.0.0:3000 instead of loopback.
+backup_env_file() {
+    local stamp
+    [ -s "$ENV_FILE" ] || return 0
+    install -d -m 0700 "$ENV_BACKUP_DIR"
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    install -m 0600 "$ENV_FILE" "$ENV_BACKUP_DIR/9router.env.$stamp"
+    find "$ENV_BACKUP_DIR" -maxdepth 1 -name '9router.env.*' -type f -printf '%T@ %p\n' 2>/dev/null |
+        sort -nr | tail -n +11 | cut -d' ' -f2- | xargs -r rm -f
+}
+
+env_file_is_complete() {
+    local file="${1:-$ENV_FILE}" key
+    [ -f "$file" ] || return 1
+    for key in DATA_DIR PORT HOSTNAME BASE_URL JWT_SECRET API_KEY_SECRET; do
+        grep -qE "^${key}=." "$file" || return 1
+    done
+}
+
 write_runtime_config() {
-    local initial_password jwt_secret api_secret machine_salt
+    local initial_password jwt_secret api_secret machine_salt client_key tmp
     initial_password="$(env_get INITIAL_PASSWORD)"
     jwt_secret="$(env_get JWT_SECRET)"
     api_secret="$(env_get API_KEY_SECRET)"
     machine_salt="$(env_get MACHINE_ID_SALT)"
+    # Carried, not regenerated: this is the credential every downstream client
+    # reads (Hermes launchers, Claude Code, OpenCode, Odysseus). Dropping it here
+    # used to break all of them on every install and update.
+    client_key="$(env_get PHASEZERO_9ROUTER_API_KEY)"
     [ -n "$initial_password" ] || initial_password="pz-$(random_hex 18)"
     [ -n "$jwt_secret" ] || jwt_secret="$(random_hex 32)"
     [ -n "$api_secret" ] || api_secret="$(random_hex 32)"
     [ -n "$machine_salt" ] || machine_salt="$(random_hex 24)"
-    cat > "$ENV_FILE" <<EOF
+    backup_env_file
+    # Staged write: a partial or failed write must not truncate the live file the
+    # service reads at boot.
+    tmp="$(mktemp)"
+    chmod 0600 "$tmp"
+    cat > "$tmp" <<EOF
 DATA_DIR=$DATA_DIR
 PORT=$PORT
 HOSTNAME=$HOST
@@ -133,7 +174,14 @@ REQUIRE_API_KEY=true
 ENABLE_REQUEST_LOGS=false
 AUTH_COOKIE_SECURE=false
 EOF
-    chmod 0600 "$ENV_FILE"
+    [ -z "$client_key" ] || printf 'PHASEZERO_9ROUTER_API_KEY=%s\n' "$client_key" >> "$tmp"
+    if ! env_file_is_complete "$tmp"; then
+        rm -f "$tmp"
+        pz_error "refusing to install incomplete 9Router environment"
+        return 1
+    fi
+    install -m 0600 "$tmp" "$ENV_FILE"
+    rm -f "$tmp"
 
     local active_model
     active_model="$(jq -r '.activeCombo // .model // "Default"' "$SETTINGS_FILE" 2>/dev/null || echo Default)"
@@ -159,9 +207,18 @@ exec "$managed_pz" ai 9router tui "\$@"
 EOF
     chmod +x "$LOCAL_BIN/9router"
 
+    # Fail closed on a damaged EnvironmentFile. systemd tolerates missing keys,
+    # and the upstream server then falls back to its own defaults -- which listen
+    # on 0.0.0.0:3000. Refusing to boot is the safe outcome: a dead loopback
+    # gateway is visible and repairable, a wildcard-bound one is neither.
     pz_write_managed_file "$SERVER_WRAPPER" user <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+if [ "\${HOSTNAME:-}" != "$HOST" ] || [ "\${PORT:-}" != "$PORT" ]; then
+  echo "9Router refusing to start: managed environment missing or altered (expected $HOST:$PORT, got \${HOSTNAME:-unset}:\${PORT:-unset})" >&2
+  echo "repair with: pz ai 9router repair" >&2
+  exit 78
+fi
 export PATH="$RUNTIME/bin:\$PATH"
 exec "$NODE_BIN" "$SERVER_RUNNER" "$PACKAGE_ROOT"
 EOF
@@ -257,6 +314,9 @@ Type=simple
 RuntimeDirectory=phasezero
 RuntimeDirectoryMode=0700
 ExecStart=/usr/sbin/socat UNIX-LISTEN:%t/phasezero/9router.sock,fork,mode=0600 TCP:127.0.0.1:$PORT
+# socat exits 143 on SIGTERM. Without this, every ordinary stop -- including the
+# one an update performs -- leaves the unit in "failed" and it never comes back.
+SuccessExitStatus=143
 Restart=on-failure
 RestartSec=2
 
@@ -321,6 +381,31 @@ tui_9router() {
     done
 }
 
+# Recover a truncated or partially written env without a package reinstall.
+# Prefer the newest complete backup: it keeps the original server secrets, so
+# existing API keys and dashboard credentials survive. Regenerating is the last
+# resort and is announced, because it invalidates issued keys.
+ensure_env_file() {
+    local candidate
+    # Snapshot while it is still good: a backup taken only on write would not
+    # exist yet the first time something truncates the file.
+    if env_file_is_complete; then
+        backup_env_file
+        return 0
+    fi
+    pz_warn "9Router environment is incomplete: $ENV_FILE"
+    while read -r candidate; do
+        [ -n "$candidate" ] || continue
+        env_file_is_complete "$candidate" || continue
+        install -m 0600 "$candidate" "$ENV_FILE"
+        pz_info "restored 9Router environment from $(basename "$candidate")"
+        return 0
+    done < <(find "$ENV_BACKUP_DIR" -maxdepth 1 -name '9router.env.*' -type f -printf '%T@ %p\n' 2>/dev/null |
+        sort -nr | cut -d' ' -f2-)
+    pz_warn "no usable 9Router environment backup; regenerating server secrets (issued API keys will stop working)"
+    write_runtime_config
+}
+
 repair_9router() {
     ensure_dirs
     [ -x "$PACKAGE_BIN" ] || { pz_error "9Router package missing; run install first"; return 1; }
@@ -333,6 +418,7 @@ repair_9router() {
         pz_error "port $PORT is owned by a non-PhaseZero process; refusing to kill it"
         return 1
     fi
+    ensure_env_file
     write_wrapper_and_units
     systemctl --user daemon-reload
     systemctl --user enable "$SERVICE" "$BRIDGE_SERVICE" "$WATCH_TIMER" >/dev/null
@@ -343,12 +429,16 @@ repair_9router() {
     # oneshot start must succeed; systemd returns non-zero for 203/EXEC and
     # proves the migrated stable ExecStart path is executable now.
     systemctl --user start "$WATCH_SERVICE"
+    ensure_api_key
     status_json
 }
 
 registry_metadata() {
     ensure_node_runtime
-    PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" view 9router version dist.integrity dist.shasum --json
+    # npm >= 10 wraps multi-field `view` output in an array; older npm emits a
+    # bare object.  Normalize to an object so callers can index fields directly.
+    PATH="$RUNTIME/bin:$PATH" "$NODE_BIN" "$NPM_CLI" view 9router version dist.integrity dist.shasum --json \
+        | jq -c 'if type == "array" then (.[0] // {}) else . end'
 }
 
 installed_version() {
@@ -404,6 +494,10 @@ install_verified_package() (
             pz_error "9Router update failed health check; rollback applied"
             return 1
         fi
+        # PartOf propagates the stop above to the bridge but never the start
+        # back, so an update would otherwise leave containers with no socket.
+        systemctl --user reset-failed "$BRIDGE_SERVICE" >/dev/null 2>&1 || true
+        systemctl --user start "$BRIDGE_SERVICE" >/dev/null 2>&1 || true
     fi
     find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
         | sort -nr | awk 'NR>2 {$1=""; sub(/^ /,""); print}' | xargs -r rm -rf --
