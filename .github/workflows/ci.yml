@@ -129,6 +129,14 @@ jobs:
           # a daemon because it only exercises env-overridable paths.
           bash tests/linux-homelab.sh
 
+      - name: Run tuning suites (apply/revert/status contract)
+        run: |
+          set -euo pipefail
+          # Ambas rodam em HOME sandboxado e sem admin bridge: as mutações root
+          # degradam para no-op anunciado, o contrato user-scope é exercido.
+          bash tests/linux-tuning.sh
+          bash tests/linux-tuning-lifecycle.sh
+
   homelab-integration-disposable:
     runs-on: ubuntu-latest
     needs: shell-lint

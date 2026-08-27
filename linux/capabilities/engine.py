@@ -8,7 +8,18 @@ from pathlib import Path
 from typing import Iterable
 
 from . import SCHEMA
-from .catalog import BY_ID, CAPABILITIES, GROUPS, PROFILES, compatibility, source_for, sources_for
+from .catalog import (
+    BY_ID,
+    CAPABILITIES,
+    GROUPS,
+    PROFILES,
+    ROLLBACK_LABELS,
+    compatibility,
+    mode_for,
+    rollback_kinds,
+    source_for,
+    sources_for,
+)
 from .models import CapabilitySpec, SourceSpec
 from .platform import HostFacts, detect
 from .providers import CommandPlan, Provider
@@ -125,11 +136,19 @@ def catalog_payload(
             "risk": capability.risk,
             "reboot": capability.reboot,
             "keywords": list(capability.keywords),
+            "mode": mode_for(capability),
+            "rollback": list(rollback_kinds(
+                capability, source, has_recipe=recipe_for(capability.id) is not None,
+            )),
         })
     return {
         "schema": SCHEMA,
         "host": host.to_dict(),
         "groups": GROUPS,
+        # `catalog` não sonda o host: sem esta marca o consumidor não distingue
+        # "não instalado" de "não perguntamos", e desenharia switch desligado.
+        "hasStatus": include_status,
+        "rollbackLabels": ROLLBACK_LABELS,
         "capabilities": items,
     }
 
@@ -303,6 +322,8 @@ def create_plan(
             } if recipe else None,
             "risk": capability.risk,
             "reboot": capability.reboot,
+            "mode": mode_for(capability),
+            "rollback": list(rollback_kinds(capability, source, has_recipe=recipe is not None)),
         })
     max_risk = str(manifest_policy.get("maxRisk", "high"))
     if risk_order[risk] > risk_order[max_risk]:
@@ -561,3 +582,205 @@ def rollback_operation(
     }
     state.save("rollbacks", rollback_id, record)
     return record
+
+
+# --- remoção por capability ------------------------------------------------
+#
+# `rollback` exige o operation-id da instalação; a UI só tem o id da capability
+# e o usuário só tem um botão. Estas funções fazem a ponte mantendo a garantia
+# que importa: só é removido o que o PhaseZero instalou, comprovado pelo
+# histórico de operações. Software que o usuário instalou por conta própria
+# nunca é desinstalado por um toggle.
+
+
+def _install_history(capability_id: str) -> tuple[dict | None, bool]:
+    """(fonte instalada por nós, se ativamos o serviço) para esta capability."""
+    source_payload: dict | None = None
+    recipe_activated = False
+    for operation in state.list_records("operations"):
+        if operation.get("dryRun") or operation.get("kind") != "operation":
+            continue
+        for item in operation.get("installedByOperation", ()):
+            if item.get("capabilityId") == capability_id and source_payload is None:
+                source_payload = item.get("source")
+        for item in operation.get("recipesByOperation", ()):
+            if item.get("capabilityId") == capability_id:
+                recipe_activated = True
+        if source_payload is not None:
+            break
+    return source_payload, recipe_activated
+
+
+def _installed_dependents(capability_id: str, provider: Provider, host: HostFacts) -> list[str]:
+    dependents = []
+    for capability in CAPABILITIES:
+        if capability_id not in capability.requires:
+            continue
+        source, installed = _select_source(capability, host, provider, require_available=False)
+        if source is not None and installed:
+            dependents.append(capability.title)
+    return dependents
+
+
+def create_removal_plan(
+    capability_ids: Iterable[str],
+    *,
+    facts: HostFacts | None = None,
+    provider: Provider | None = None,
+) -> dict:
+    host = facts or detect()
+    package_provider = provider or Provider(host)
+    actions: list[dict] = []
+    blockers: list[str] = []
+    for capability_id in dict.fromkeys(capability_ids):
+        capability = BY_ID.get(capability_id)
+        if capability is None:
+            blockers.append(f"capability desconhecida: {capability_id}")
+            continue
+        source_payload, recipe_activated = _install_history(capability_id)
+        recipe = recipe_for(capability_id) if recipe_activated else None
+        if source_payload is None and recipe is None:
+            blockers.append(
+                f"{capability.title}: não foi instalado pelo PhaseZero; "
+                "remova pelo gerenciador de pacotes do sistema"
+            )
+            continue
+        source = _source_from_dict(source_payload) if source_payload else None
+        if source is not None and not package_provider.installed(source):
+            blockers.append(f"{capability.title}: já não está instalado")
+            continue
+        dependents = _installed_dependents(capability_id, package_provider, host)
+        if dependents:
+            blockers.append(
+                f"{capability.title}: ainda é requisito de {', '.join(dependents)}"
+            )
+            continue
+        actions.append({
+            "capabilityId": capability_id,
+            "title": capability.title,
+            "source": _source_dict(source),
+            "command": _command_dict(package_provider.remove_plan(source)) if source else None,
+            "recipe": {
+                "kind": "systemd-service",
+                "unit": recipe.unit,
+                "command": _command_dict(recipe.rollback_plan()),
+            } if recipe else None,
+            "rollback": list(rollback_kinds(capability, source, has_recipe=recipe is not None)),
+        })
+    plan_id = state.new_id("removal")
+    record = {
+        "schema": SCHEMA,
+        "kind": "removal-plan",
+        "id": plan_id,
+        "createdAt": int(time.time()),
+        "host": host.to_dict(),
+        "actions": actions,
+        "blockers": blockers,
+        "ok": bool(actions) and not blockers,
+        "status": "blocked" if blockers or not actions else "ready",
+        "confirmToken": state.token(),
+    }
+    state.save("removal-plans", plan_id, record)
+    return record
+
+
+def apply_removal(
+    plan_id: str,
+    *,
+    confirmation: str = "",
+    dry_run: bool = False,
+    facts: HostFacts | None = None,
+    provider: Provider | None = None,
+) -> dict:
+    plan = state.load("removal-plans", plan_id)
+    if plan.get("schema") != SCHEMA or plan.get("kind") != "removal-plan":
+        raise CapabilityError("registro de remoção incompatível")
+    if int(time.time()) - int(plan.get("createdAt", 0)) > PLAN_TTL_SECONDS:
+        raise CapabilityError("plano expirado; gere um novo preview")
+    if plan.get("blockers"):
+        raise CapabilityError("plano contém bloqueios; revise a seleção")
+    if not plan.get("actions"):
+        raise CapabilityError("plano de remoção vazio")
+    if not dry_run and confirmation != plan.get("confirmToken"):
+        raise CapabilityError("token de confirmação inválido")
+    host = facts or detect()
+    package_provider = provider or Provider(host)
+    results: list[dict] = []
+    failed = False
+    for action in plan.get("actions", ()):
+        capability_id = str(action.get("capabilityId", ""))
+        # O serviço sai antes do pacote: desativar depois de remover o binário
+        # deixaria a unidade órfã e o systemd reclamando.
+        commands: list[tuple[str, CommandPlan]] = []
+        recipe = recipe_for(capability_id)
+        if action.get("recipe") and recipe is not None:
+            if recipe.unit != (action["recipe"] or {}).get("unit"):
+                raise CapabilityError("receita mudou desde o preview")
+            commands.append(("service-disabled", recipe.rollback_plan()))
+        if action.get("source"):
+            source = _source_from_dict(action["source"])
+            if not package_provider.supports(source):
+                raise CapabilityError(f"fonte não suportada neste host: {capability_id}")
+            commands.append(("removed", package_provider.remove_plan(source)))
+        if dry_run:
+            results.append({
+                "capabilityId": capability_id,
+                "status": "dry-run",
+                "commands": [_command_dict(command) for _label, command in commands],
+            })
+            continue
+        for label, command in commands:
+            code, stdout, stderr = package_provider.execute(command)
+            results.append({
+                "capabilityId": capability_id,
+                "status": label if code == 0 else "failed",
+                "exitCode": code,
+                "stdout": _clean_output(stdout),
+                "stderr": _clean_output(stderr),
+            })
+            if code != 0:
+                failed = True
+                break
+        if failed:
+            break
+    removal_id = state.new_id("removal-run")
+    record = {
+        "schema": SCHEMA,
+        "kind": "removal",
+        "id": removal_id,
+        "planId": plan_id,
+        "createdAt": int(time.time()),
+        "dryRun": dry_run,
+        "status": "failed" if failed else ("preview" if dry_run else "complete"),
+        "results": results,
+    }
+    state.save("removals", removal_id, record)
+    return record
+
+
+def verify_removal(
+    capability_ids: Iterable[str],
+    *,
+    facts: HostFacts | None = None,
+    provider: Provider | None = None,
+) -> dict:
+    host = facts or detect()
+    package_provider = provider or Provider(host)
+    checks = []
+    for capability_id in dict.fromkeys(capability_ids):
+        capability = BY_ID.get(capability_id)
+        if capability is None:
+            checks.append({"capabilityId": capability_id, "removed": False, "reason": "desconhecida"})
+            continue
+        source, installed = _select_source(
+            capability, host, package_provider, require_available=False,
+        )
+        checks.append({
+            "capabilityId": capability_id,
+            "removed": not (source is not None and installed),
+        })
+    return {
+        "schema": SCHEMA,
+        "ok": all(check["removed"] for check in checks),
+        "checks": checks,
+    }

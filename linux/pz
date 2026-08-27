@@ -238,13 +238,18 @@ Usage:
   pz doctor                    Run full system diagnostics
   pz support-bundle [--plan]   Generate support tarball (--plan: preview sem escrita)
   pz repair-plan               Generate repair plan
-  pz tune <area> [--dry-run]   Apply tuning (browser|gaming|dev); --dry-run mostra o plano
+  pz tune <area> [apply|revert|status] [--dry-run]
+                               Tuning por área (browser|gaming|dev): aplica, reverte
+                               pelos backups gravados ou reporta estado em JSON
   pz capabilities detect      Detect host/package compatibility as JSON
   pz capabilities catalog     List trusted capabilities [--group ID]
   pz capabilities plan        Preview --profile/--capability/--manifest selection
   pz capabilities apply       Apply a confirmed plan
   pz capabilities verify      Verify an operation
   pz capabilities rollback    Revert only items installed by an operation
+  pz capabilities remove-plan Preview removal of what PhaseZero installed
+  pz capabilities remove      Execute a confirmed removal plan
+  pz capabilities verify-removal Confirm capabilities left the host
   pz themes status            Temas e acessibilidade: estado efetivo Plasma (JSON)
   pz themes catalog           Catálogo avaliado: features, wallpapers, extensões
   pz themes plan              Plano com snapshot (--profile|--feature|--wallpaper)
@@ -740,20 +745,27 @@ cmd_repair_plan() {
 }
 
 cmd_tune() {
-    local area="${1:-}"
-    local mode="${2:-apply}"
-    [ -z "$area" ] && { pz_error "usage: pz tune (browser|gaming|dev) [--dry-run]"; return 1; }
-    case "$mode" in
-        apply|"") mode="apply" ;;
-        --dry-run) ;;
-        *) pz_error "usage: pz tune (browser|gaming|dev) [--dry-run]"; return 1 ;;
-    esac
+    local area="${1:-}" usage="usage: pz tune (browser|gaming|dev) [apply|revert|status] [--dry-run]"
+    [ -z "$area" ] && { pz_error "$usage"; return 1; }
+    shift
+    local -a args=()
+    local token
+    for token in "$@"; do
+        case "$token" in
+            apply|revert|status|--dry-run) args+=("$token") ;;
+            "") ;;
+            *) pz_error "$usage"; return 1 ;;
+        esac
+    done
+    [ "${#args[@]}" -gt 0 ] || args=(apply)
+    local script
     case "$area" in
-        browser) bash "$PZ_ROOT/linux/tuning/browser-hardening.sh" "$mode" ;;
-        gaming)  bash "$PZ_ROOT/linux/tuning/gaming-tweaks.sh" "$mode" ;;
-        dev)     bash "$PZ_ROOT/linux/tuning/dev-tweaks.sh" "$mode" ;;
+        browser) script="browser-hardening.sh" ;;
+        gaming)  script="gaming-tweaks.sh" ;;
+        dev)     script="dev-tweaks.sh" ;;
         *)       pz_error "unknown tune area: $area"; return 1 ;;
     esac
+    bash "$PZ_ROOT/linux/tuning/$script" "${args[@]}"
 }
 
 cmd_ui() {
