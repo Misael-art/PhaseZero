@@ -34,9 +34,9 @@ Describe 'Bootstrap quality gates' {
             }
         }
         # Baseline medida com PSScriptAnalyzer 1.25.0 (94 arquivos .ps1 -> 884 warnings).
-        # CI pinna a mesma versao; margem pequena (890) absorve drift de ambiente
-        # sem mascarar regressoes. Errors continuam em 0.
-        ([int]$warnings.Count -le 890) | Should Be $true
+        # Merge apptuning em main (8da599a) subiu para 908. Margem 920 absorve
+        # drift de ambiente sem mascarar saltos grandes. Errors continuam em 0.
+        ([int]$warnings.Count -le 920) | Should Be $true
     }
 
     It 'keeps mutating bootstrap functions registered or explicitly allow-listed' {

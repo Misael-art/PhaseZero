@@ -117,7 +117,7 @@ grep -Fq "PHASEZERO_9ROUTER_API_KEY=$secret_marker" "$env_file"
 # The server wrapper is the last line of defence: without the managed loopback
 # variables the upstream server binds 0.0.0.0:3000, so it must refuse to start.
 set +e
-HOSTNAME= PORT= "$HOME/.local/bin/phasezero-9router-server" >/dev/null 2>&1
+HOSTNAME='' PORT='' "$HOME/.local/bin/phasezero-9router-server" >/dev/null 2>&1
 guard_rc=$?
 set -e
 test "$guard_rc" = 78
