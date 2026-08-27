@@ -80,7 +80,7 @@ No Arch, prefira `phasezero-admin` (ou `bigsudo`) em vez de `sudo` sem contexto.
 
 O pacote instala o binário `phasezero-control-center` (atalho *PhaseZero*) e o CLI `linux/pz`. A UI só chama `pz` com argumentos de um catálogo fechado.
 
-Windows: `bootstrap-ui.bat` / `install-cli.bat` no checkout; PowerShell 5.1. Detalhe em [Requisitos Windows](#windows-pós-instalação).
+Windows: `bootstrap-ui.bat` / `install-cli.bat` no checkout; PowerShell 5.1. Perfis `safe-base` (default) e `full-workstation` (opt-in). Sem `result.json` a corrida é erro do produto. Detalhe abaixo.
 
 ---
 
@@ -151,6 +151,15 @@ Launchers e layout `~/Emulation`. BIOS, keys, ROMs: **só importação local** d
 Roteamento e proxies no Control Center. Segredos no cofre gerido; stdout JSON sem valores crus. 9Router **recusa** subir se `HOSTNAME`/`PORT` estiverem vazios (não volta a bind `0.0.0.0:3000`).
 
 ---
+
+## Limites
+
+O que o produto **não** finge:
+
+- Componente Windows sem prova de auditoria vira `UnsupportedAudit`, nunca “ok”.
+- Sem `result.json` a execução é falha do produto, não silêncio.
+- Homelab neste PC de desenvolvimento **não** recebe `up` da stack. Appliance é o outro computador.
+- BIOS, ROM, ISO e chaves de consola não são descarregados.
 
 ## Segurança (o que o leigo precisa saber)
 
