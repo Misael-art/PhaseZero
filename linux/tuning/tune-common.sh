@@ -127,7 +127,13 @@ pz_tune_file() {
 # em vez de apagar a preferência dele.
 pz_tune_setting() {
     local tool="${1:-}" key="${2:-}" value="${3:-}" previous="" had=false
-    [ -n "$tool" ] && [ -n "$key" ] || { pz_error "pz_tune_setting exige tool e key"; return 1; }
+    # `A && B || C` não é if-then-else: com tool preenchido e key vazia, o C
+    # roda de qualquer forma — aqui até calharia de estar certo, mas a forma
+    # explícita não depende disso.
+    if [ -z "$tool" ] || [ -z "$key" ]; then
+        pz_error "pz_tune_setting exige tool e key"
+        return 1
+    fi
     command -v "$tool" >/dev/null 2>&1 || { pz_warn "$tool ausente; ajuste '$key' ignorado"; return 0; }
 
     # `npm config get` inicializa cache e .npmrc no HOME: consultar durante um
@@ -370,7 +376,10 @@ pz_tune_main() {
     exec 3>&1
     case "$PZ_TUNE_ACTION" in
         status)
-            pz_tune_status_json >&3
+            # Área explícita: a função aceita argumento, e chamá-la sem ele faz
+            # o shellcheck (com razão) perguntar se o $1 do script deveria
+            # entrar aqui.
+            pz_tune_status_json "$PZ_TUNE_AREA" >&3
             ;;
         revert)
             pz_tune_revert_run 1>&2
