@@ -11,6 +11,7 @@ from .platform import current_platform
 CATEGORIES = (
     ("Visão geral", "view-dashboard", "Saúde, auditoria e suporte"),
     ("Perfis", "package-x-generic", "Instalações completas"),
+    ("Linux", "distributor-logo", "Apps, serviços e otimizações do sistema"),
     ("Steam Deck", "input-gaming", "Modos, controles e SteamOS UX"),
     ("Windows VM", "computer", "QEMU/KVM e boot direto"),
     ("Waydroid", "phone", "Android, reparo e kiosk"),
@@ -34,7 +35,7 @@ DASHBOARD = ("Início", "go-home", "Bem-vindo de volta ao PhaseZero")
 
 # Sidebar sections group categories by context (EmuDeck-style grouping).
 SIDEBAR_GROUPS = (
-    ("Ações rápidas", ("Início", "Visão geral", "Perfis")),
+    ("Ações rápidas", ("Início", "Visão geral", "Linux", "Perfis")),
     ("Plataformas", ("Steam Deck", "Windows VM", "Waydroid", "Servidor", "Homelab", "Emulação")),
     ("Sistema", ("Boot Direto", "Flatpak", "Recursos", "Ajustes")),
     ("IA & Dev", ("IA & Dev", "Proxies IA", "Roteamento IA")),
@@ -780,6 +781,9 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
                 "preferences-system",
                 mutable=True,
                 preview=("tune", area, "--dry-run"),
+                # Estado real da área: sem isto o status seria um dry-run do
+                # apply, que descreve intenção e não o que está no host.
+                status_args=("tune", area, "status"),
                 badge="Sistema",
             )
         )

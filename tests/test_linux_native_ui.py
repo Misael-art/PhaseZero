@@ -45,7 +45,11 @@ def catalog():
 
 def test_catalog_covers_every_control_center_category(catalog):
     categories = {item.category for item in catalog}
-    expected = {row[0] for row in CATEGORIES if row[0] != "Resultados"}
+    # "Resultados" (histórico) e "Linux" (hub) não consomem o catálogo de
+    # ações: a primeira lê o ledger, a segunda deriva os itens de
+    # `capabilities`/`tune` e reusa ações de outras categorias. Exigir ação
+    # própria delas só produziria entrada duplicada para satisfazer o teste.
+    expected = {row[0] for row in CATEGORIES if row[0] not in {"Resultados", "Linux"}}
     assert categories == expected
     assert len(catalog) >= 100
 

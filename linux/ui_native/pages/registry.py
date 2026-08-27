@@ -10,6 +10,7 @@ from .dashboard import DashboardPage
 from .overview import OverviewPage
 from .profiles import ProfilesPage
 from .homelab import HomelabPage
+from .linux_hub import LinuxHubPage
 from .emulation import EmulationPage
 from .ai_proxies import AiProxiesPage
 from .ai_routing import AiRoutingPage
@@ -42,6 +43,7 @@ class PageRegistry:
         "Início": DashboardPage,
         "Visão geral": OverviewPage,
         "Perfis": ProfilesPage,
+        "Linux": LinuxHubPage,
         "Steam Deck": SteamDeckPage,
         "Windows VM": WindowsVmPage,
         "Waydroid": WaydroidPage,
