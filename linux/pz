@@ -51,7 +51,7 @@ Usage:
   pz waydroid boot status     Manage direct GRUB Waydroid boot entry (install|remove|status|next|next-reboot|set-default|clear-next)
   pz server status            Home server (LLM/homelab/boot) status
   pz server llm <action>      Local LLM server (install|expose-lan|restore|status)
-  pz server homelab <action>  Homelab: stack (plan|up|down|open|logs|backup|restore|update|repair) / status (status|verify) / profile (list|set <key>|get) / governor (list|weights|budget|check|winvm-status|winvm-suspend [--dry-run]|winvm-resume) [--extras] [--json] [--profile <key>]
+  pz server homelab <action>  Homelab: stack (plan|up|down|open|logs|backup|restore|update|repair) / apps (list|enable|disable|update) / hosts (add|list|remove|ping) / --host <alias> / agent / web (status|enable|user) / status (status|verify) / profile (list|set <key>|get) / governor ... [--extras] [--json] [--profile <key>]
   pz server casaos <action>   CasaOS opt-in compatibility gate (status|plan|install)
   pz server hermes <action>   Hermes remote actuation (setup|start|status)
   pz server slim <action>     Reversible OS slimming (apply [--aggressive]|restore|status)
@@ -475,6 +475,36 @@ cmd_server() {
             ;;
         llm)      bash "$PZ_ROOT/linux/server/llm-server.sh" "${1:-status}" "${@:2}" ;;
         homelab)
+            local host_alias=""
+            local -a hl_args=()
+            while [ "$#" -gt 0 ]; do
+                case "$1" in
+                    --host)
+                        [ "${2:-}" ] || { pz_error "--host requires alias"; return 2; }
+                        host_alias="$2"
+                        shift 2
+                        ;;
+                    --host=*)
+                        host_alias="${1#--host=}"
+                        shift
+                        ;;
+                    *)
+                        hl_args+=("$1")
+                        shift
+                        ;;
+                esac
+            done
+            if [ -n "$host_alias" ]; then
+                case "${hl_args[0]:-}" in
+                    hosts)
+                        pz_error "hosts registry is local; do not combine --host with hosts"
+                        return 2
+                        ;;
+                esac
+                bash "$PZ_ROOT/linux/server/homelab-hosts.sh" exec "$host_alias" -- "${hl_args[@]}"
+                return
+            fi
+            set -- "${hl_args[@]}"
             case "${1:-status}" in
                 status|verify|repair) bash "$PZ_ROOT/linux/server/homelab-status.sh" "$@" ;;
                 profiles) bash "$PZ_ROOT/linux/server/homelab-governor.sh" list ;;
@@ -497,6 +527,12 @@ cmd_server() {
                     esac
                     ;;
                 governor) bash "$PZ_ROOT/linux/server/homelab-governor.sh" "${2:-list}" "${@:3}" ;;
+                apps) bash "$PZ_ROOT/linux/server/homelab-apps.sh" "${@:2}" ;;
+                hosts) bash "$PZ_ROOT/linux/server/homelab-hosts.sh" "${@:2}" ;;
+                agent) python3 "$PZ_ROOT/linux/server/homelab_agent.py" "${@:2}" ;;
+                discover) python3 "$PZ_ROOT/linux/server/homelab_agent.py" discover --json ;;
+                web) python3 "$PZ_ROOT/linux/server/homelab_web.py" "${@:2}" ;;
+                host-facts) bash "$PZ_ROOT/linux/server/homelab-host-facts.sh" "${@:2}" ;;
                 *) bash "$PZ_ROOT/linux/server/homelab-stack.sh" "$@" ;;
             esac
             ;;

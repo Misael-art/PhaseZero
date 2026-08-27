@@ -292,31 +292,25 @@ ensure_tailscale() {
     fi
 }
 
+HOMELAB_APPS_CATALOG="${PZ_HOMELAB_APPS_CATALOG:-$COMPOSE_DIR/apps/catalog.json}"
+
 app_rows() {
-    cat <<'EOF'
-jellyfin|Jellyfin|jellyfin|phasezero-jellyfin|core|8096|public|false|jellyfin_config jellyfin_cache
-syncthing|Syncthing|syncthing|phasezero-syncthing|core|8384|admin|true|syncthing_data
-vaultwarden|Vaultwarden|vaultwarden|phasezero-vaultwarden|core|8222|admin|true|vaultwarden_data
-uptime-kuma|Uptime Kuma|uptime-kuma|phasezero-uptime-kuma|core|3001|admin|true|uptimekuma_data
-portainer|Portainer|portainer|phasezero-portainer|extras|9000|admin|true|portainer_data
-nextcloud|Nextcloud|nextcloud|phasezero-nextcloud|extras|8080|admin|true|nextcloud_db nextcloud_data
-grafana|Grafana|grafana|phasezero-grafana|extras|3000|admin|true|grafana_data
-prometheus|Prometheus|prometheus|phasezero-prometheus|extras|9090|admin|true|prometheus_data
-node-exporter|Node Exporter|node-exporter|phasezero-node-exporter|extras|9100|admin|true|
-paperless|Paperless|paperless|phasezero-paperless|extras|8010|admin|true|paperless_data paperless_media
-n8n|n8n|n8n|phasezero-n8n|extras|5678|admin|true|n8n_data
-EOF
+    jq -r '
+        .apps[] | select(.listInStatus == true)
+        | [
+            .key, .title, .service, .container, .layer,
+            (.port | tostring), .bindKind,
+            (if .sensitive then "true" else "false" end),
+            ((.volumes // []) | join(" "))
+          ] | join("|")
+    ' "$HOMELAB_APPS_CATALOG"
 }
 
 secret_rows() {
-    cat <<'EOF'
-VW_ADMIN_TOKEN|vaultwarden|core
-NEXTCLOUD_DB_ROOT_PASSWORD|nextcloud-db|extras
-NEXTCLOUD_DB_PASSWORD|nextcloud|extras
-GRAFANA_ADMIN_PASSWORD|grafana|extras
-PAPERLESS_SECRET_KEY|paperless|extras
-N8N_ENCRYPTION_KEY|n8n|extras
-EOF
+    jq -r '
+        .apps[] | select((.secrets // []) | length > 0) as $a
+        | $a.secrets[] | "\(.)|\($a.service)|\($a.layer)"
+    ' "$HOMELAB_APPS_CATALOG"
 }
 
 all_volumes() {

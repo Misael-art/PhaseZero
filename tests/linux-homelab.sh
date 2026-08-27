@@ -12,9 +12,12 @@ trap 'rm -rf "$TMP"' EXIT
 export PZ_ROOT="$REPO_ROOT"
 
 export HOME="$TMP/home"
+export XDG_CONFIG_HOME="$HOME/.config"
 export XDG_STATE_HOME="$TMP/state"
 export PZ_HOMELAB_STATE="$TMP/homelab"
-mkdir -p "$HOME" "$XDG_STATE_HOME" "$PZ_HOMELAB_STATE"
+# Never compose-up/rm on the developer host or the hermetic CI job.
+export PZ_HOMELAB_APPS_NO_DOCKER=1
+mkdir -p "$HOME" "$XDG_CONFIG_HOME" "$XDG_STATE_HOME" "$PZ_HOMELAB_STATE"
 
 # Pin the WinVM contract boundary to a stub so the suite never touches the
 # real WinVM (or the host `pz`) and stays deterministic on every runner.
@@ -23,6 +26,11 @@ printf '%s\n' '{"libvirtState":"shut off","currentMarker":"no","bootRuntimeStale
 
 echo "=== syntax ==="
 bash -n "$REPO_ROOT/linux/server/homelab-stack.sh"
+bash -n "$REPO_ROOT/linux/server/homelab-apps.sh"
+bash -n "$REPO_ROOT/linux/server/homelab-hosts.sh"
+bash -n "$REPO_ROOT/linux/server/homelab-host-facts.sh"
+python3 -m py_compile "$REPO_ROOT/linux/server/homelab_web.py"
+bash -n "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh"
 bash -n "$REPO_ROOT/linux/server/casaos.sh"
 bash -n "$REPO_ROOT/linux/server/apply-common.sh"
 bash -n "$REPO_ROOT/linux/pz"
@@ -54,13 +62,19 @@ rg -q 'HOMELAB_ADMIN_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.ho
 rg -q 'HOMELAB_PUBLIC_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml"
 rg -q 'HOMELAB_ADMIN_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.extras.yml"
 # every service block must carry no-new-privileges and a memory cap
-for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml; do
+for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml \
+         "$REPO_ROOT/assets/home-server/apps/compose/"*.yml; do
     svcs="$(rg -c '^  [a-z0-9-]+:$' "$f")"
     [ "$(rg -c 'no-new-privileges' "$f")" -eq "$svcs" ] || { echo "FAIL: missing no-new-privileges in $f"; exit 1; }
     [ "$(rg -c 'mem_limit:' "$f")" -eq "$svcs" ] || { echo "FAIL: missing mem_limit in $f"; exit 1; }
 done
 jq -e '.schemaVersion == 1 and (.images | length == 13) and all(.images[]; (test(":latest") | not))' \
     "$REPO_ROOT/assets/home-server/docker-compose.lock.json" >/dev/null
+jq -e '.schemaVersion == 1 and (.apps | length) >= 10' \
+    "$REPO_ROOT/assets/home-server/apps/catalog.json" >/dev/null
+jq -e --slurpfile lock "$REPO_ROOT/assets/home-server/docker-compose.lock.json" \
+    'all(.apps[]; .imageLockKey as $k | ($lock[0].images[$k] == .imageRef) and ((.imageRef | test(":latest")) | not))' \
+    "$REPO_ROOT/assets/home-server/apps/catalog.json" >/dev/null
 echo "  compose pins/binds/hardening ok"
 
 echo "=== missing .env blocks sensitive services ==="
@@ -87,6 +101,215 @@ if echo "$repair_out" | rg -q '[a-f0-9]{64}'; then
 fi
 echo "  secure env ok"
 
+echo "=== apps catalog list/enable/disable/update ==="
+apps_list="$("$REPO_ROOT/linux/pz" server homelab apps list --json)"
+echo "$apps_list" | jq -e '.schemaVersion == "1" and .action == "list" and (.apps | length) >= 10' >/dev/null
+echo "$apps_list" | jq -e '[.apps[].imageRef] | all(test(":latest") | not)' >/dev/null
+echo "$apps_list" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled] | first == true' >/dev/null
+echo "$apps_list" | jq -e '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
+if echo "$apps_list" | rg -q '[a-f0-9]{64}'; then
+    echo "FAIL: secret value leaked in apps list"
+    exit 1
+fi
+if "$REPO_ROOT/linux/pz" server homelab apps enable no-such-app --json >/dev/null 2>&1; then
+    echo "FAIL: unknown app should fail closed"
+    exit 1
+fi
+gov_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=256 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json || true)"
+echo "$gov_out" | jq -e '.ok == false and .governor.verdict == "fail"' >/dev/null
+"$REPO_ROOT/linux/pz" server homelab apps list --json | jq -e \
+    '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
+plan_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --dry-run --json)"
+echo "$plan_out" | jq -e '.ok == true and .dryRun == true and .applied == false' >/dev/null
+"$REPO_ROOT/linux/pz" server homelab apps list --json | jq -e \
+    '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
+enable_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json)"
+echo "$enable_out" | jq -e '.ok == true and .enabled == true and .started == false' >/dev/null
+test "$(stat -c '%a' "$PZ_HOMELAB_STATE/apps.enabled.json")" = "600"
+after_enable="$("$REPO_ROOT/linux/pz" server homelab apps list --json)"
+echo "$after_enable" | jq -e '[.apps[] | select(.key == "n8n") | .enabled] | first == true' >/dev/null
+echo "$after_enable" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled] | first == true' >/dev/null
+disable_out="$("$REPO_ROOT/linux/pz" server homelab apps disable n8n --json)"
+echo "$disable_out" | jq -e '.ok == true and .enabled == false' >/dev/null
+after_disable="$("$REPO_ROOT/linux/pz" server homelab apps list --json)"
+echo "$after_disable" | jq -e '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
+echo "$after_disable" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled] | first == true' >/dev/null
+upd="$("$REPO_ROOT/linux/pz" server homelab apps update --all --dry-run --json)"
+echo "$upd" | jq -e '.ok == true and .dryRun == true and ([.apps[].usesLatest] | all(. == false))' >/dev/null
+echo "  apps catalog ok"
+
+echo "=== apps JSON stays pure when compose writes to stdout ==="
+# Reproduce the disposable CI failure: docker compose v2 prints progress on
+# stdout. docker_cli must send that to stderr so --json remains parseable.
+FAKEDOCKER="$TMP/fakedocker"
+mkdir -p "$FAKEDOCKER"
+cat > "$FAKEDOCKER/docker" <<'EOS'
+#!/usr/bin/env bash
+echo " Container phasezero-n8n Stopping"
+echo " Container phasezero-n8n Removed"
+case "${1:-}" in
+  info) exit 0 ;;
+  compose)
+    if [ "${2:-}" = "version" ]; then
+      echo "Docker Compose version v2.27.0"
+      exit 0
+    fi
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$FAKEDOCKER/docker"
+mixed="$(
+    env PATH="$FAKEDOCKER:$PATH" \
+        PZ_HOMELAB_APPS_NO_DOCKER=0 \
+        PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 \
+        "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json
+)"
+echo "$mixed" | jq -e '.ok == true and .schemaVersion == "1" and .enabled == true' >/dev/null
+case "$mixed" in
+    '{'* ) ;;
+    *) echo "FAIL: enable stdout not JSON: $mixed" >&2; exit 1 ;;
+esac
+mixed_dis="$(
+    env PATH="$FAKEDOCKER:$PATH" \
+        PZ_HOMELAB_APPS_NO_DOCKER=0 \
+        "$REPO_ROOT/linux/pz" server homelab apps disable n8n --json
+)"
+echo "$mixed_dis" | jq -e '.ok == true and .enabled == false' >/dev/null
+case "$mixed_dis" in
+    '{'* ) ;;
+    *) echo "FAIL: disable stdout not JSON: $mixed_dis" >&2; exit 1 ;;
+esac
+echo "  compose stdout isolation ok"
+
+echo "=== web CLI bootstrap (no serve) ==="
+export PZ_HOMELAB_WEB_STATE="$TMP/web"
+"$REPO_ROOT/linux/pz" server homelab web status --json | jq -e \
+    '.schemaVersion == "1" and .tool == "homelab-web" and .bind == "127.0.0.1" and .users == 0' >/dev/null
+printf '%s\n' 'correct-horse-9x' > "$TMP/web-pw"
+chmod 600 "$TMP/web-pw"
+"$REPO_ROOT/linux/pz" server homelab web user add alice --password-file "$TMP/web-pw" --json |
+    jq -e '.ok == true and .user == "alice"' >/dev/null
+printf '%s\n' '123' > "$TMP/web-pw-weak"
+if "$REPO_ROOT/linux/pz" server homelab web user add bob --password-file "$TMP/web-pw-weak" --json >/dev/null 2>&1; then
+    echo "FAIL: weak password accepted" >&2
+    exit 1
+fi
+"$REPO_ROOT/linux/pz" server homelab web status --json | jq -e '.users == 1' >/dev/null
+unset PZ_HOMELAB_WEB_STATE
+echo "  web CLI ok"
+
+echo "=== host-facts never invent sensors ==="
+facts="$(
+    PZ_HOMELAB_SMARTCTL=/no/such/smartctl \
+    PZ_HOMELAB_SENSORS=/no/such/sensors \
+    PZ_HOMELAB_THERMAL_DIR="$TMP/no-thermal" \
+    "$REPO_ROOT/linux/pz" server homelab host-facts --json
+)"
+echo "$facts" | jq -e '
+  .schemaVersion == "1" and .tool == "homelab-host-facts"
+  and .smart.available == false
+  and .temperature.available == false
+  and .temperature.celsius == null
+  and (.smart.reason | test("ausente"))
+' >/dev/null
+if echo "$facts" | jq -e '.temperature.celsius != null and .temperature.available == false' >/dev/null; then
+    echo "FAIL: fabricated temperature" >&2
+    exit 1
+fi
+mkdir -p "$TMP/thermal/thermal_zone0"
+printf '42000\n' > "$TMP/thermal/thermal_zone0/temp"
+printf 'x86_pkg_temp\n' > "$TMP/thermal/thermal_zone0/type"
+hot="$(
+    PZ_HOMELAB_SMARTCTL=/no/such/smartctl \
+    PZ_HOMELAB_SENSORS=/no/such/sensors \
+    PZ_HOMELAB_THERMAL_DIR="$TMP/thermal" \
+    "$REPO_ROOT/linux/pz" server homelab host-facts --json
+)"
+echo "$hot" | jq -e '.temperature.available == true and .temperature.celsius == 42' >/dev/null
+echo "  host-facts ok"
+
+echo "=== hosts registry + ssh envelope ==="
+if "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh" >/dev/null 2>&1; then
+    echo "FAIL: disposable script ran without PZ_HOMELAB_APPS_DISPOSABLE"
+    exit 1
+fi
+grep -q '^# Disposable CI' "$REPO_ROOT/tests/linux-homelab-apps-disposable.sh"
+grep -q 'Disposable CI' "$REPO_ROOT/tests/runner.sh"
+add_out="$("$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json)"
+echo "$add_out" | jq -e '.ok == true and .host.alias == "garage" and .host.user == "misael" and .host.port == 22' >/dev/null
+hosts_file="$XDG_CONFIG_HOME/phasezero/homelab-hosts.json"
+test "$(stat -c '%a' "$hosts_file")" = "600"
+if jq -e '.hosts[] | select(.password or .privateKey or .token or .identityFile)' "$hosts_file" >/dev/null; then
+    echo "FAIL: registry contains private material"
+    exit 1
+fi
+"$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json | jq -e '.already == true' >/dev/null
+if "$REPO_ROOT/linux/pz" server homelab hosts add garage 'other@192.168.1.8' --json >/dev/null 2>&1; then
+    echo "FAIL: alias retarget should fail closed"
+    exit 1
+fi
+if "$REPO_ROOT/linux/pz" server homelab hosts add bad 'root@/etc/shadow' --json >/dev/null 2>&1; then
+    echo "FAIL: path target should be rejected"
+    exit 1
+fi
+printf '{not json' > "$hosts_file"
+if "$REPO_ROOT/linux/pz" server homelab hosts list --json >/dev/null 2>&1; then
+    echo "FAIL: corrupt registry should fail closed"
+    exit 1
+fi
+# restore a valid registry for the ssh stub
+"$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json >/dev/null 2>&1 || true
+# rewrite after corruption
+rm -f "$hosts_file"
+"$REPO_ROOT/linux/pz" server homelab hosts add garage 'misael@192.168.1.8' --json | jq -e '.ok == true' >/dev/null
+stub="$TMP/fake-ssh"
+cat > "$stub" <<'EOS'
+#!/usr/bin/env bash
+set -euo pipefail
+log="${PZ_HOMELAB_SSH_STUB_LOG:-}"
+[ -n "$log" ] && printf '%s\n' "$@" >> "$log"
+mode="${PZ_HOMELAB_SSH_STUB_MODE:-ok}"
+joined="$*"
+if [ "$mode" = "offline" ]; then
+    echo "ssh: connect to host 192.168.1.8 port 22: Connection timed out" >&2
+    exit 255
+fi
+if [[ "$joined" == *"--version"* ]]; then
+    if [ "$mode" = "old" ]; then
+        echo "PhaseZero Linux v1.10.0 (stable)"
+        exit 0
+    fi
+    echo "PhaseZero Linux v1.17.4 (stable)"
+    exit 0
+fi
+echo '{"schemaVersion":"1","tool":"homelab-apps","action":"list","apps":[{"key":"jellyfin","enabled":true}]}'
+exit 0
+EOS
+chmod +x "$stub"
+export PZ_HOMELAB_SSH_BIN="$stub"
+export PZ_HOMELAB_SSH_STUB_LOG="$TMP/ssh.log"
+: > "$PZ_HOMELAB_SSH_STUB_LOG"
+"$REPO_ROOT/linux/pz" server homelab hosts ping garage --json | jq -e \
+    '.ok == true and .reachable == true and .remoteVersion == "1.17.4"' >/dev/null
+env_out="$("$REPO_ROOT/linux/pz" server homelab --host garage apps list --json)"
+echo "$env_out" | jq -e '.hostAlias == "garage" and .rc == 0 and .payload.action == "list" and (.payload.apps|length) == 1' >/dev/null
+grep -q 'BatchMode=yes' "$PZ_HOMELAB_SSH_STUB_LOG"
+if echo "$env_out" | rg -q 'BEGIN OPENSSH PRIVATE|password='; then
+    echo "FAIL: secret material in remote envelope"
+    exit 1
+fi
+export PZ_HOMELAB_SSH_STUB_MODE=offline
+off="$("$REPO_ROOT/linux/pz" server homelab --host garage status --json || true)"
+echo "$off" | jq -e '.rc != 0 and .payload == null and (.error | test("unreachable|timed out"))' >/dev/null
+export PZ_HOMELAB_SSH_STUB_MODE=old
+old="$("$REPO_ROOT/linux/pz" server homelab --host garage apps enable n8n --json || true)"
+echo "$old" | jq -e '.rc == 69 and .payload == null and (.error | test("older than required"))' >/dev/null
+unset PZ_HOMELAB_SSH_STUB_MODE
+"$REPO_ROOT/linux/pz" server homelab hosts remove garage --json | jq -e '.ok == true' >/dev/null
+echo "  hosts bridge ok"
+
 echo "=== compose config core/extras ==="
 if docker compose version >/dev/null 2>&1; then
     docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-test \
@@ -96,6 +319,23 @@ if docker compose version >/dev/null 2>&1; then
         -f "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml" \
         -f "$REPO_ROOT/assets/home-server/docker-compose.extras.yml" config --services |
         sort | jq -R . | jq -cs 'index("nextcloud") and index("grafana") and index("paperless") and index("n8n") and index("portainer")' >/dev/null
+    jelly_svcs="$(docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-subset \
+        -f "$REPO_ROOT/assets/home-server/apps/compose/jellyfin.yml" config --services)"
+    echo "$jelly_svcs" | grep -qx jellyfin
+    if echo "$jelly_svcs" | grep -qx n8n; then
+        echo "FAIL: jellyfin subset leaked n8n"
+        exit 1
+    fi
+    n8n_svcs="$(docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-subset \
+        -f "$REPO_ROOT/assets/home-server/apps/compose/n8n.yml" config --services)"
+    echo "$n8n_svcs" | grep -qx n8n
+    if echo "$n8n_svcs" | grep -qx jellyfin; then
+        echo "FAIL: n8n subset leaked jellyfin"
+        exit 1
+    fi
+    docker compose --env-file "$PZ_HOMELAB_STATE/.env" -p phasezero-homelab-subset \
+        -f "$REPO_ROOT/assets/home-server/apps/compose/vaultwarden.yml" \
+        -f "$REPO_ROOT/assets/home-server/apps/compose/n8n.yml" config --quiet
     echo "  compose config ok"
 else
     echo "  docker compose unavailable; skipped"

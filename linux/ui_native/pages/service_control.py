@@ -51,6 +51,9 @@ class FriendlyServicePage(BasePage):
         body.setColumnStretch(1, 1)
         layout.addLayout(body)
         layout.addWidget(self._build_shortcuts())
+        extra = self.build_extra()
+        if extra is not None:
+            layout.addWidget(extra)
         layout.addStretch()
         scroll.setWidget(host)
         self._layout.addWidget(scroll, 1)
@@ -175,6 +178,9 @@ class FriendlyServicePage(BasePage):
 
     def feature_actions(self) -> tuple[tuple[str, str], ...]:
         return ()
+
+    def build_extra(self) -> QWidget | None:
+        return None
 
     def _feature_toggle_requested(self, index: int, checked: bool) -> None:
         toggle, _detail = self.feature_controls[index]
@@ -457,3 +463,75 @@ class ServerPage(FriendlyServicePage):
             backup_button.setToolTip(
                 "Backup verificado disponível" if backup.get("lastBackup") else "Nenhum backup recente"
             )
+        host_facts = payload.get("hostFacts") if isinstance(payload.get("hostFacts"), dict) else None
+        if host_facts:
+            self.apply_host_facts(host_facts)
+
+    def build_extra(self) -> QWidget | None:
+        card = QFrame()
+        card.setObjectName("settingsCard")
+        card.setAccessibleName("Hardware do servidor")
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+        layout.addWidget(SectionHeader("Hardware", "Leitura local; dado ausente fica indisponível"))
+        self.hw_labels: dict[str, QLabel] = {}
+        for key, caption in (
+            ("smart", "SMART"),
+            ("network", "Rede"),
+            ("disk", "Disco"),
+            ("temperature", "Temperatura"),
+        ):
+            label = QLabel(f"{caption}: indisponível")
+            label.setObjectName("settingValue")
+            label.setWordWrap(True)
+            label.setAccessibleName(caption)
+            self.hw_labels[key] = label
+            layout.addWidget(label)
+        layout.addStretch()
+        return card
+
+    @staticmethod
+    def _fact_line(title: str, block: dict | None, present_text: str | None) -> str:
+        if not isinstance(block, dict) or not block.get("available"):
+            reason = ""
+            if isinstance(block, dict):
+                reason = str(block.get("reason") or "")
+            suffix = f" ({reason})" if reason else ""
+            return f"{title}: indisponível{suffix}"
+        if not present_text:
+            return f"{title}: indisponível"
+        return f"{title}: {present_text}"
+
+    def apply_host_facts(self, payload: dict) -> None:
+        if not getattr(self, "hw_labels", None):
+            return
+        smart = payload.get("smart") if isinstance(payload.get("smart"), dict) else {}
+        devices = smart.get("devices") if isinstance(smart.get("devices"), list) else []
+        smart_text = None
+        if smart.get("available") and devices:
+            bits = []
+            for item in devices:
+                if not isinstance(item, dict):
+                    continue
+                health = item.get("health")
+                if health:
+                    bits.append(f"{item.get('device')}: {health}")
+            smart_text = ", ".join(bits) if bits else None
+        net = payload.get("network") if isinstance(payload.get("network"), dict) else {}
+        net_text = net.get("hostname") if net.get("available") else None
+        disk = payload.get("disk") if isinstance(payload.get("disk"), dict) else {}
+        disk_text = None
+        volumes = disk.get("volumes") if isinstance(disk.get("volumes"), list) else []
+        if disk.get("available") and volumes:
+            first = volumes[0] if isinstance(volumes[0], dict) else {}
+            if "usedBytes" in first and "totalBytes" in first:
+                disk_text = f"{first.get('mount')} {first.get('usedBytes')}/{first.get('totalBytes')} B"
+        temp = payload.get("temperature") if isinstance(payload.get("temperature"), dict) else {}
+        temp_text = None
+        if temp.get("available") and temp.get("celsius") is not None:
+            temp_text = f"{temp.get('celsius')} °C"
+        self.hw_labels["smart"].setText(self._fact_line("SMART", smart, smart_text))
+        self.hw_labels["network"].setText(self._fact_line("Rede", net, str(net_text) if net_text else None))
+        self.hw_labels["disk"].setText(self._fact_line("Disco", disk, disk_text))
+        self.hw_labels["temperature"].setText(self._fact_line("Temperatura", temp, temp_text))

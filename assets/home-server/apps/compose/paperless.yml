@@ -1,0 +1,22 @@
+# Per-app compose module. Segredos nunca inline.
+services:
+  paperless:
+    image: ${PZ_IMAGE_PAPERLESS:-ghcr.io/paperless-ngx/paperless-ngx:2.16.3}
+    container_name: phasezero-paperless
+    restart: unless-stopped
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1024m
+    cpus: 1.5
+    environment:
+      - PAPERLESS_SECRET_KEY=${PAPERLESS_SECRET_KEY}
+    ports:
+      - "${HOMELAB_ADMIN_BIND_ADDR:-127.0.0.1}:8010:8000"
+    volumes:
+      - paperless_data:/usr/src/paperless/data
+      - paperless_media:/usr/src/paperless/media
+
+volumes:
+  paperless_data:
+  paperless_media:

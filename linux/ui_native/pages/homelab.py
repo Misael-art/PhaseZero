@@ -6,9 +6,9 @@ from pathlib import Path
 
 from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtWidgets import (
-    QComboBox, QGroupBox, QHBoxLayout, QHeaderView,
+    QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
     QLabel, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 from shiboken6 import isValid
 
@@ -44,7 +44,20 @@ class HomelabPage(BasePage):
         self._last_status: dict = {}
         self._timeouts: dict[int, QTimer] = {}
         self._action_buttons: list[QPushButton] = []
+        self._card_buttons: list[QPushButton] = []
         self._pending_confirm_file: Path | None = None
+        self._cards_layout: QGridLayout | None = None
+        self._cards_host: QWidget | None = None
+        self._hosts: dict[str, dict] = {}
+        self._host_combo: QComboBox | None = None
+        self._host_badge: QLabel | None = None
+        self._pair_btn: QPushButton | None = None
+        self._dash_btn: QPushButton | None = None
+        self._onboard_step = 0
+        self._onboard_confirmed = False
+        self._onboard_state: dict = {}
+        self._onboard_label: QLabel | None = None
+        self._onboard_next: QPushButton | None = None
 
     # ------------------------------------------------------------- theming
     def _set_state(self, state: str) -> None:
@@ -61,6 +74,28 @@ class HomelabPage(BasePage):
         title = QLabel("Homelab Player")
         title.setStyleSheet("font-size:17px;font-weight:700")
         header.addWidget(title)
+        host_caption = QLabel("Host:")
+        self._host_combo = QComboBox()
+        self._host_combo.setAccessibleName("Host Homelab")
+        self._host_combo.addItem("Este computador (local)", "")
+        host_caption.setBuddy(self._host_combo)
+        header.addWidget(host_caption)
+        header.addWidget(self._host_combo)
+        self._host_badge = QLabel("Local")
+        self._host_badge.setObjectName("serviceState")
+        self._host_badge.setProperty("state", "success")
+        header.addWidget(self._host_badge)
+        self._pair_btn = QPushButton("Parear")
+        self._pair_btn.setToolTip("Copia a chave SSH sem colocar senha na linha de comando.")
+        self._pair_btn.setEnabled(False)
+        self._pair_btn.clicked.connect(self.start_pair)
+        header.addWidget(self._pair_btn)
+        self._dash_btn = QPushButton("Abrir dashboard")
+        self._dash_btn.setToolTip("Abre o dashboard HTTPS do host Homelab selecionado.")
+        self._dash_btn.setAccessibleName("Abrir dashboard")
+        self._dash_btn.clicked.connect(self.open_dashboard)
+        header.addWidget(self._dash_btn)
+        self._host_combo.currentIndexChanged.connect(self._on_host_changed)
         header.addStretch(1)
         self._state_label = QLabel("—")
         self._state_label.setObjectName("serviceState")
@@ -71,6 +106,38 @@ class HomelabPage(BasePage):
         refresh.clicked.connect(self.refresh_status)
         header.addWidget(refresh)
         self._layout.addLayout(header)
+
+        onboard = QGroupBox("Primeiros passos")
+        onboard.setAccessibleName("Onboarding do Homelab")
+        o_lay = QHBoxLayout()
+        self._onboard_label = QLabel(self._onboard_prompt())
+        self._onboard_label.setWordWrap(True)
+        start = QPushButton("Começar")
+        start.setAccessibleName("Começar onboarding")
+        start.clicked.connect(self.start_onboarding)
+        self._onboard_next = QPushButton("Avançar")
+        self._onboard_next.setAccessibleName("Avançar onboarding")
+        self._onboard_next.clicked.connect(self.onboard_advance)
+        o_lay.addWidget(self._onboard_label, 1)
+        o_lay.addWidget(start)
+        o_lay.addWidget(self._onboard_next)
+        onboard.setLayout(o_lay)
+        self._layout.addWidget(onboard)
+
+        # App cards (one-click catalog) ------------------------------------
+        cards_box = QGroupBox("Aplicativos")
+        cards_box.setAccessibleName("Catálogo de aplicativos do Homelab")
+        cards_outer = QVBoxLayout()
+        self._cards_scroll = QScrollArea()
+        self._cards_scroll.setWidgetResizable(True)
+        self._cards_host = QWidget()
+        self._cards_layout = QGridLayout(self._cards_host)
+        self._cards_layout.setContentsMargins(4, 4, 4, 4)
+        self._cards_scroll.setWidget(self._cards_host)
+        self._cards_scroll.setMinimumHeight(200)
+        cards_outer.addWidget(self._cards_scroll)
+        cards_box.setLayout(cards_outer)
+        self._layout.addWidget(cards_box)
 
         # Status table ------------------------------------------------------
         self._table = QTableWidget(0, 5)
@@ -149,7 +216,7 @@ class HomelabPage(BasePage):
         out_layout.addWidget(self._bar)
         self._layout.addWidget(out_group, 1)
 
-        QTimer.singleShot(0, self.refresh_status)
+        QTimer.singleShot(0, self.refresh_hosts)
 
     # -- data ---------------------------------------------------------------
     def _setup_proc(self, proc: QProcess) -> None:
@@ -196,16 +263,329 @@ class HomelabPage(BasePage):
         proc.start(str(self.root / "linux" / "pz"), args)
         self._proc = proc
 
+    def _selected_host(self) -> str:
+        if self._host_combo is None:
+            return ""
+        data = self._host_combo.currentData()
+        return str(data) if data else ""
+
+    def dashboard_url(self) -> str:
+        """HTTPS URL of the appliance dashboard for the selected host."""
+        alias = self._selected_host()
+        if alias:
+            rec = self._hosts.get(alias) or {}
+            host = str(rec.get("host") or "127.0.0.1")
+            port = int(rec.get("webPort") or 17443)
+            return f"https://{host}:{port}/"
+        return "https://127.0.0.1:17443/"
+
+    def open_dashboard(self) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl(self.dashboard_url()))
+
+    ONBOARD_STEPS = ("discover", "pair", "profile", "review", "apply")
+
+    def onboard_step_name(self) -> str:
+        steps = self.ONBOARD_STEPS
+        idx = min(max(self._onboard_step, 0), len(steps) - 1)
+        return steps[idx]
+
+    def _onboard_prompt(self) -> str:
+        name = self.onboard_step_name()
+        copy = {
+            "discover": "Descobrir o host Homelab na rede (mDNS ou IP:porta).",
+            "pair": "Parear a chave SSH. Senha nunca vai no argv.",
+            "profile": "Escolher perfil e apps. Orçamento recusa host curto.",
+            "review": "Revisão: bind local, sem UPnP, fora de casa só Tailscale.",
+            "apply": "Aplicar só depois da revisão. Preview via repair; nunca --yes.",
+        }
+        return copy[name]
+
+    def start_onboarding(self) -> None:
+        self._onboard_step = 0
+        self._onboard_confirmed = False
+        self._onboard_state = {}
+        self._refresh_onboard_label()
+
+    def _refresh_onboard_label(self) -> None:
+        if self._onboard_label is not None:
+            self._onboard_label.setText(self._onboard_prompt())
+
+    def onboard_ingest_discover(self, payload: dict) -> None:
+        self._onboard_state["discover"] = payload if isinstance(payload, dict) else {}
+
+    def onboard_ingest_pair(self, ok: bool) -> None:
+        self._onboard_state["pair"] = bool(ok)
+
+    def onboard_confirm_review(self) -> None:
+        self._onboard_confirmed = True
+        self._onboard_state["review"] = {
+            "lanBind": False,
+            "upnp": False,
+            "external": "tailscale",
+        }
+
+    def onboard_review_text(self) -> str:
+        return (
+            "Bind padrão 127.0.0.1. Sem UPnP. Acesso externo só via Tailscale. "
+            "SMART/rede/disco ausentes aparecem como indisponível."
+        )
+
+    def onboard_advance(self) -> None:
+        current = self.onboard_step_name()
+        if current == "discover" and "discover" not in self._onboard_state:
+            self.onboard_ingest_discover(
+                {"service": "phasezero-homelab._tcp", "manualFallback": "IP:17432"}
+            )
+        elif current == "pair" and "pair" not in self._onboard_state:
+            alias = self._selected_host()
+            self.onboard_ingest_pair(bool(alias))
+        elif current == "profile":
+            self._onboard_state["profile"] = True
+        elif current == "review" and not self._onboard_confirmed:
+            return
+        elif current == "apply":
+            self.onboard_apply()
+            return
+        if self._onboard_step < len(self.ONBOARD_STEPS) - 1:
+            self._onboard_step += 1
+        self._refresh_onboard_label()
+
+    def onboard_apply(self) -> None:
+        if not self._onboard_confirmed:
+            return
+        self.run_cmd(["repair", "--json"])
+
+    def _hl(self, *parts: str) -> list[str]:
+        args = ["server", "homelab"]
+        alias = self._selected_host()
+        if alias:
+            args += ["--host", alias]
+        args.extend(parts)
+        return args
+
+    def _on_host_changed(self) -> None:
+        alias = self._selected_host()
+        if self._host_badge is not None:
+            if alias:
+                self._host_badge.setText("Remoto")
+                self._host_badge.setProperty("state", "warning")
+            else:
+                self._host_badge.setText("Local")
+                self._host_badge.setProperty("state", "success")
+            self._host_badge.style().unpolish(self._host_badge)
+            self._host_badge.style().polish(self._host_badge)
+        if self._pair_btn is not None:
+            self._pair_btn.setEnabled(bool(alias))
+        if self._proc is None or self._proc.state() == QProcess.NotRunning:
+            self.refresh_status()
+
+    def refresh_hosts(self) -> None:
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            return
+        self._spawn(["server", "homelab", "hosts", "list", "--json"], self._on_hosts_done)
+
+    def _on_hosts_done(self, code: int, raw: bytes, err: bytes) -> None:
+        self._proc = None
+        payload: dict = {}
+        for line in raw.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    payload = json.loads(line)
+                    break
+                except Exception:
+                    continue
+        hosts = payload.get("hosts") if isinstance(payload.get("hosts"), list) else []
+        current = self._selected_host()
+        if self._host_combo is not None:
+            self._host_combo.blockSignals(True)
+            self._host_combo.clear()
+            self._host_combo.addItem("Este computador (local)", "")
+            self._hosts = {}
+            for host in hosts:
+                if not isinstance(host, dict):
+                    continue
+                alias = str(host.get("alias") or "")
+                if not alias:
+                    continue
+                self._hosts[alias] = host
+                label = f"{alias} ({host.get('user')}@{host.get('host')})"
+                self._host_combo.addItem(label, alias)
+            idx = self._host_combo.findData(current)
+            self._host_combo.setCurrentIndex(idx if idx >= 0 else 0)
+            self._host_combo.blockSignals(False)
+        self.refresh_status()
+
+    def start_pair(self) -> None:
+        alias = self._selected_host()
+        if not alias:
+            QMessageBox.information(self, "Parear", "Selecione um host remoto.")
+            return
+        rec = self._hosts.get(alias) or {}
+        user = str(rec.get("user") or "")
+        host = str(rec.get("host") or "")
+        if not user or not host:
+            QMessageBox.warning(self, "Parear", "Registro do host sem user@host.")
+            return
+        pub = Path.home() / ".ssh" / "id_ed25519.pub"
+        if not pub.is_file():
+            pub = Path.home() / ".ssh" / "id_rsa.pub"
+        if not pub.is_file():
+            QMessageBox.information(
+                self, "Parear",
+                "Nenhuma chave pública encontrada.\n"
+                "Crie uma no terminal (sem senha no argv do Player):\n"
+                "ssh-keygen -t ed25519",
+            )
+            return
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            self._state_label.setText("Já existe operação em andamento — aguarde")
+            return
+        self._state_label.setText("Pareando chave SSH…")
+        proc = QProcess(self)
+        self._setup_proc(proc)
+        proc.finished.connect(
+            lambda code, p=proc: self._on_pair_done(code, bytes(p.readAllStandardError()))
+        )
+        proc.start(
+            "ssh-copy-id",
+            [
+                "-o", "BatchMode=yes",
+                "-o", "ConnectTimeout=8",
+                "-i", str(pub),
+                f"{user}@{host}",
+            ],
+        )
+        self._proc = proc
+
+    def _on_pair_done(self, code: int, err: bytes) -> None:
+        if self._proc is not None:
+            self._cancel_timeout(self._proc)
+        self._proc = None
+        if code == 0:
+            self._state_label.setText("Chave copiada — testando…")
+            self.run_cmd(["hosts", "ping", self._selected_host(), "--json"])
+            return
+        detail = err.decode("utf-8", "replace").strip().splitlines()
+        reason = detail[-1] if detail else f"exit {code}"
+        QMessageBox.warning(
+            self, "Parear",
+            "Não foi possível copiar a chave sem senha.\n"
+            f"{reason}\n\n"
+            "No terminal: ssh-copy-id -i ~/.ssh/id_ed25519.pub user@host",
+        )
+        self._state_label.setText("Pareamento precisa de chave já autorizada")
+
     def refresh_status(self) -> None:
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:
             return
         self._state_label.setText("carregando…")
-        self._spawn(["server", "homelab", "status", "--json"], self._on_status_done)
+        self._spawn(self._hl("status", "--json"), self._on_status_done)
 
     def refresh_profiles(self) -> None:
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:
             return
-        self._spawn(["server", "homelab", "profiles", "--json"], self._on_profiles_done)
+        self._spawn(self._hl("profiles", "--json"), self._on_profiles_done)
+
+    def refresh_apps(self) -> None:
+        if self._proc is not None and self._proc.state() != QProcess.NotRunning:
+            return
+        self._spawn(self._hl("apps", "list", "--json"), self._on_apps_done)
+
+    def _on_apps_done(self, code: int, raw: bytes, err: bytes) -> None:
+        self._proc = None
+        payload: dict = {}
+        text = raw.decode("utf-8", "replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    payload = json.loads(line)
+                    break
+                except Exception:
+                    continue
+        apps = payload.get("apps") if isinstance(payload.get("apps"), list) else []
+        self._rebuild_cards(apps)
+        self.refresh_profiles()
+
+    def _clear_layout(self, layout: QGridLayout) -> None:
+        while layout.count():
+            item = layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _rebuild_cards(self, apps: list) -> None:
+        if self._cards_layout is None:
+            return
+        self._clear_layout(self._cards_layout)
+        self._card_buttons = []
+        for index, app in enumerate(apps):
+            if not isinstance(app, dict):
+                continue
+            self._cards_layout.addWidget(self._make_app_card(app), index // 2, index % 2)
+
+    def _make_app_card(self, app: dict) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("homelabAppCard")
+        frame.setFrameShape(QFrame.StyledPanel)
+        frame.setAccessibleName(f"Aplicativo {app.get('title') or app.get('key')}")
+        lay = QVBoxLayout(frame)
+        title = QLabel(f"{app.get('title') or app.get('key')} · {app.get('layer', '')}")
+        title.setStyleSheet("font-weight:700")
+        lay.addWidget(title)
+        running = bool(app.get("running"))
+        enabled = bool(app.get("enabled"))
+        if running:
+            state = "ligado"
+        elif enabled:
+            state = "ativado · parado"
+        else:
+            state = "desligado"
+        lay.addWidget(QLabel(f"{state} · {app.get('budgetMB', '—')} MiB"))
+        url = str(app.get("url") or "")
+        if url:
+            lay.addWidget(QLabel(url))
+        gov = app.get("governor") if isinstance(app.get("governor"), dict) else {}
+        verdict = str(gov.get("verdict") or "")
+        if verdict == "fail":
+            reasons = gov.get("reasons") if isinstance(gov.get("reasons"), list) else []
+            reason = str(reasons[0]) if reasons else "orçamento insuficiente"
+            warn = QLabel(reason)
+            warn.setWordWrap(True)
+            warn.setObjectName("serviceState")
+            warn.setProperty("state", "warning")
+            lay.addWidget(warn)
+        key = str(app.get("key") or "")
+        row = QHBoxLayout()
+        preview = QPushButton("Prévia")
+        preview.setToolTip("Mostra o plano sem alterar o host.")
+        action = "disable" if enabled else "enable"
+        preview.clicked.connect(
+            lambda _=False, k=key, a=action: self.run_cmd(
+                ["apps", a, k, "--dry-run", "--json"]
+            )
+        )
+        toggle = QPushButton("Desligar" if enabled else "Ligar")
+        toggle.setToolTip("Ativa ou desativa só este aplicativo.")
+        if verdict == "fail" and not enabled:
+            toggle.setEnabled(False)
+        toggle.clicked.connect(
+            lambda _=False, k=key, a=action: self.run_cmd(["apps", a, k, "--json"])
+        )
+        update = QPushButton("Atualizar")
+        update.setToolTip("Atualiza a imagem pinada deste aplicativo.")
+        update.clicked.connect(
+            lambda _=False, k=key: self.run_cmd(["apps", "update", k, "--json"])
+        )
+        for btn in (preview, toggle, update):
+            row.addWidget(btn)
+            self._card_buttons.append(btn)
+        lay.addLayout(row)
+        return frame
 
     def _last_backup(self) -> str:
         last = self._last_status.get("backupState", {}).get("lastBackup")
@@ -286,7 +666,7 @@ class HomelabPage(BasePage):
             )
         else:
             self._budget_label.setText("sem perfil ativo")
-        self.refresh_profiles()
+        self.refresh_apps()
 
     def _on_status_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
@@ -381,11 +761,17 @@ class HomelabPage(BasePage):
         )
         proc.finished.connect(self._on_cmd_done)
         proc.errorOccurred.connect(lambda err: self._on_cmd_error(err, proc))
-        proc.start(str(self.root / "linux" / "pz"), ["server", "homelab", *args])
+        if args and args[0] == "hosts":
+            argv = ["server", "homelab", *args]
+        else:
+            argv = self._hl(*args)
+        proc.start(str(self.root / "linux" / "pz"), argv)
         self._proc = proc
 
     def block_while_running(self, running: bool) -> None:
         for btn in self._action_buttons:
+            btn.setEnabled(not running)
+        for btn in self._card_buttons:
             btn.setEnabled(not running)
         self._profile_set.setEnabled(not running)
 
@@ -461,7 +847,7 @@ class HomelabPage(BasePage):
         )
         proc.errorOccurred.connect(lambda _e, p=proc: self._restore_failed(p, "não iniciou"))
         proc.start(str(self.root / "linux" / "pz"),
-                   ["server", "homelab", "restore", "--source", source, "--plan"])
+                   self._hl("restore", "--source", source, "--plan"))
         self._proc = proc
 
     def _restore_failed(self, proc: QProcess, why: str) -> None:
