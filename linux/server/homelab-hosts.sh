@@ -16,7 +16,9 @@ REG_FILE="${PZ_HOMELAB_HOSTS_FILE:-$REG_DIR/homelab-hosts.json}"
 LOCK_FILE="${PZ_HOMELAB_HOSTS_LOCK:-$REG_DIR/homelab-hosts.lock}"
 SSH_BIN="${PZ_HOMELAB_SSH_BIN:-ssh}"
 SSH_TIMEOUT="${PZ_HOMELAB_SSH_TIMEOUT:-8}"
-MIN_VERSION="${PZ_HOMELAB_REMOTE_MIN_VERSION:-}"
+# Floor, not "equal to this checkout". A 1.18 admin must still talk to a
+# 1.17.4 appliance. Override with PZ_HOMELAB_REMOTE_MIN_VERSION for tests.
+MIN_VERSION="${PZ_HOMELAB_REMOTE_MIN_VERSION:-1.17.4}"
 
 SUB="${1:-list}"
 shift 2>/dev/null || true
@@ -116,15 +118,7 @@ write_registry() {
 }
 
 local_version() {
-    if [ -n "$MIN_VERSION" ]; then
-        printf '%s\n' "$MIN_VERSION"
-        return 0
-    fi
-    if [ -f "$PZ_ROOT/version.json" ]; then
-        jq -r '.version' "$PZ_ROOT/version.json"
-    else
-        printf '0.0.0\n'
-    fi
+    printf '%s\n' "$MIN_VERSION"
 }
 
 version_ge() {
