@@ -6,6 +6,10 @@ Não é umbrelOS. Não é um “app store” da comunidade. É o mesmo produto e
 
 [![CI](https://github.com/Misael-art/PhaseZero/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Misael-art/PhaseZero/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/Misael-art/PhaseZero)](https://github.com/Misael-art/PhaseZero/releases/latest)
+[![Plataformas](https://img.shields.io/badge/plataformas-Windows%20%7C%20Linux%20%7C%20Steam%20Deck-6c5ce7)](#o-que-o-projeto-faz)
+[![Idioma](https://img.shields.io/badge/interface-portugu%C3%AAs%20do%20Brasil-009c3b)](#)
+
+**[Instalar](#instalar)** · **[Página Linux](#página-linux-apps-serviços-e-otimizações)** · **[Homelab](#homelab-dois-pcs-um-produto)** · **[CLI](#cli-rápido-quando-o-painel-não-chega)** · **[Segurança](#segurança-o-que-o-leigo-precisa-saber)** · **[Changelog](CHANGELOG.md)**
 
 ---
 
@@ -29,6 +33,18 @@ Três regras que não mudam:
 
 Este é o modelo que o projeto assume. Co-localizar os dois papéis no mesmo computador é opt-in, não o desenho.
 
+```mermaid
+flowchart LR
+    C["Celular · TV · notebook<br/>consomem os serviços"]
+    A["PC Homelab (appliance)<br/>PhaseZero para FUNCIONAR<br/><br/>compose + backups<br/>Tailscale · agente + mDNS<br/>dashboard web HTTPS"]
+    B["PC Admin (Player)<br/>PhaseZero para ADMINISTRAR<br/><br/>painel desktop<br/>seletor de host<br/>pareamento SSH / token"]
+    C -->|Jellyfin · Vaultwarden · Nextcloud| A
+    B <-->|LAN / Tailscale| A
+```
+
+<details>
+<summary>Mesma topologia em texto puro</summary>
+
 ```text
 Celular, TV, notebook da casa
         │  consomem Jellyfin / Vaultwarden / Nextcloud
@@ -44,12 +60,63 @@ Celular, TV, notebook da casa
 └───────────────────────────┘                         └───────────────────────────┘
 ```
 
+</details>
+
 | Papel | Onde instala | O que **não** faz |
 |---|---|---|
 | **Appliance** | O outro PC, o que fica ligado | Não precisa de teclado o dia todo |
 | **Admin / Player** | O PC em que você senta | **Não** sobe Docker da stack Homelab |
 
 Fora de casa o caminho é **Tailscale**. Não há UPnP nem port-forward.
+
+---
+
+## Página Linux: apps, serviços e otimizações
+
+Uma vitrine categorizada com tudo o que o projeto entrega no Linux. Sem caçar comando no
+terminal e sem adivinhar o que já está ligado.
+
+![Control Center — página Linux](docs/images/control-center-linux.png)
+
+Cada cartão mostra:
+
+| Elemento | Para que serve |
+|---|---|
+| **Ícone e nome** | Ícone real do app instalado, lido do `.desktop`. Nada é baixado da internet. |
+| **Descrição** | O que aquilo faz, em uma linha. |
+| **Interruptor** | Ligado = instalado / aplicado. Desligado = ausente. |
+| **Selo de reversão** | Como se desfaz: pacote, Flatpak, arquivo de backup, valor anterior — ou `manual`/`sem reversão`, sem pintar de verde o que ninguém desfaz sozinho. |
+| **Selo de modo** | `Recomendado`, `Opcional` ou `Avançado`. |
+
+Três garantias que valem para todo interruptor:
+
+1. **Prévia antes de mutar.** Ligar dispara um plano; nada acontece sem sua confirmação.
+2. **Estado nunca otimista.** O interruptor fica em *aplicando…* e só assume o novo valor
+   quando o host reconfirma. Prévia recusada devolve o botão ao lugar.
+3. **Não sondado ≠ desligado.** Se a leitura falhar, o controle fica inerte e diz o motivo,
+   em vez de exibir um "desligado" em que você poderia agir por engano.
+
+O equivalente em linha de comando:
+
+```bash
+# Recursos: sondar, planejar, aplicar, remover. Toda saída já é JSON.
+linux/pz capabilities status
+linux/pz capabilities plan --capability gaming.mangohud
+linux/pz capabilities apply --plan-id <id-do-plano> --confirm <token>
+linux/pz capabilities remove-plan --capability gaming.mangohud
+linux/pz capabilities remove --plan-id <id-do-plano> --confirm <token>
+
+# Otimizações por área (gaming | browser | dev).
+linux/pz tune gaming status                  # estado real, com aviso de drift
+linux/pz tune gaming apply --dry-run         # plano, sem tocar em nada
+linux/pz tune gaming revert                  # volta ao que era seu
+```
+
+O `id` e o `token` saem do próprio `plan`/`remove-plan`: aplicar exige o plano que você
+acabou de ver, não um comando solto. O painel faz esse encadeamento por você.
+
+`revert` guarda o arquivo original e o valor anterior de cada preferência de ferramenta;
+o que era seu volta a ser seu, em vez de simplesmente sumir.
 
 ---
 
@@ -61,7 +128,7 @@ Sempre pela [página de Releases](https://github.com/Misael-art/PhaseZero/releas
 
 ```bash
 # exemplo: última estável (substitua a versão pelo nome do ficheiro na Release)
-sha256sum -c SHA256SUMS-1.18.0
+sha256sum -c SHA256SUMS-1.19.0
 ```
 
 Se a linha do pacote não for `OK`, **pare**. Não instale.
@@ -198,7 +265,7 @@ CI (`.github/workflows/ci.yml`): parse PowerShell, Pester 3.4.0, ShellCheck 0.9 
 Release canónica:
 
 ```bash
-packaging/release.sh 1.18.0 --push    # bump, tag anotada, dispara o workflow
+packaging/release.sh 1.19.0 --push    # bump, tag anotada, dispara o workflow
 ```
 
 Tags históricas **não** se movem. Confira sempre o `SHA256SUMS` da versão que vai instalar.
