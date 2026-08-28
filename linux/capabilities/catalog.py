@@ -47,6 +47,7 @@ def _c(
     immutable: str = "supported",
     license: str = "upstream",
     keywords: tuple[str, ...] = (),
+    mode: str = "",
 ) -> CapabilitySpec:
     return CapabilitySpec(
         id=capability_id,
@@ -63,6 +64,7 @@ def _c(
         risk=risk,
         license=license,
         keywords=keywords,
+        mode=mode,
     )
 
 
@@ -185,6 +187,63 @@ PROFILES["full-workstation"] = tuple(
         for capability_id in PROFILES[profile]
     )
 )
+
+
+# Perfis com curadoria manual. Os perfis que apenas espelham um grupo inteiro
+# ("creative", "administration", "education", "full-workstation") ficam de fora:
+# pertencer a eles não é recomendação, é só existir no catálogo.
+CURATED_PROFILES = (
+    "gaming-core", "game-streaming", "hardware-tools",
+    "system-health", "developer", "security", "backup",
+)
+
+RECOMMENDED_IDS = frozenset(
+    capability_id
+    for profile in CURATED_PROFILES
+    for capability_id in PROFILES[profile]
+)
+
+
+def mode_for(capability: CapabilitySpec) -> str:
+    """recommended | opt-in | advanced — como a UI deve apresentar o item.
+
+    Derivado de dados que já existem (risco, reboot, perfis curados) em vez de
+    uma lista paralela que envelheceria em silêncio. `spec.mode` sobrepõe.
+    """
+    if capability.mode:
+        return capability.mode
+    if capability.risk in {"elevated", "high"} or capability.reboot == "required":
+        return "advanced"
+    if capability.id in RECOMMENDED_IDS:
+        return "recommended"
+    return "opt-in"
+
+
+# Como cada mecanismo é desfeito, para a UI exibir o selo certo.
+ROLLBACK_LABELS = {
+    "package-remove": "Remoção pelo gerenciador de pacotes",
+    "flatpak-uninstall": "Desinstalação do Flatpak",
+    "service-disable": "Desativação do serviço systemd",
+}
+
+
+def rollback_kinds(
+    capability: CapabilitySpec,
+    source: SourceSpec | None,
+    *,
+    has_recipe: bool = False,
+) -> tuple[str, ...]:
+    """Mecanismos que o motor sabe reverter para esta capability.
+
+    Reflete o que `rollback_operation` de fato executa. Se a lista vier vazia,
+    não há reversão automática — e a UI precisa dizer isso, não presumir.
+    """
+    kinds: list[str] = []
+    if has_recipe:
+        kinds.append("service-disable")
+    if source is not None:
+        kinds.append("flatpak-uninstall" if source.kind == "flatpak" else "package-remove")
+    return tuple(kinds)
 
 
 def validate_catalog() -> None:

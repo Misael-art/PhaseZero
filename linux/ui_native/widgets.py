@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
@@ -87,6 +88,32 @@ def themed_icon(widget: QWidget, name: str, fallback: QStyle.StandardPixmap) -> 
     if icon.isNull():
         icon = widget.style().standardIcon(fallback)
     _ICON_CACHE[name] = icon
+    return icon
+
+
+def hub_item_icon(widget: QWidget, item, fallback: QStyle.StandardPixmap = QStyle.SP_FileIcon) -> QIcon:
+    """Ícone de um `HubItem`, preferindo o logo real do app instalado.
+
+    A cascata vive em `icons.resolve_icon` (sem Qt, testável); aqui só entra o
+    que depende do tema carregado: se o tema tem mesmo o ícone chutado a partir
+    do nome do pacote. Sem essa checagem a UI mostraria quadrado vazio em vez
+    de cair para o ícone da seção.
+    """
+    from .icons import resolve_icon
+
+    reference = resolve_icon(
+        item,
+        overlay_icon=item.icon if getattr(item, "icon_explicit", False) else "",
+        has_theme_icon=QIcon.hasThemeIcon,
+    )
+    cache_key = f"hub:{reference.kind}:{reference.value}"
+    cached = _ICON_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    icon = QIcon(reference.value) if reference.kind == "file" else QIcon.fromTheme(reference.value)
+    if icon.isNull():
+        icon = themed_icon(widget, getattr(item, "icon", "") or "package-x-generic", fallback)
+    _ICON_CACHE[cache_key] = icon
     return icon
 
 
@@ -316,6 +343,219 @@ class ActionCard(QFrame):
         if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
             self.requested.emit(self.action)
         super().mouseReleaseEvent(event)
+
+
+MODE_LABELS = {
+    "recommended": ("Recomendado", "success"),
+    "opt-in": ("Opcional", "info"),
+    "advanced": ("Avançado", "warning"),
+}
+
+
+class HubChip(QLabel):
+    """Selo compacto de metadado (reversão, risco, reboot)."""
+
+    def __init__(self, text: str, state: str = "info", tooltip: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setObjectName("hubChip")
+        self.setProperty("state", state)
+        if tooltip:
+            self.setToolTip(tooltip)
+            self.setAccessibleDescription(tooltip)
+
+
+class HubAppCard(QFrame):
+    """Cartão de app/serviço/otimização da página Linux.
+
+    Um switch aparece só quando existe contrato para desligar. Estado nunca é
+    otimista: `set_state` é chamado com o que o host respondeu, e enquanto a
+    operação corre o switch fica em `pending` — a confirmação vem do refetch.
+    """
+
+    toggle_requested = Signal(object, str, bool)  # item, "install"|"tune", ligado
+    action_requested = Signal(object)             # ActionSpec
+
+    def __init__(self, item, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.item = item
+        self.setObjectName("hubCard")
+        self.setProperty("mode", item.mode)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(item.title)
+
+        # Linha densa, como as listas do resto do app: ícone à esquerda, texto
+        # no meio, controles à direita. Empilhar tudo verticalmente rendia três
+        # cartões por tela e obrigava a rolar para comparar itens.
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 10, 14, 10)
+        layout.setSpacing(12)
+
+        icon_label = QLabel()
+        icon_label.setObjectName("hubCardIcon")
+        icon_label.setPixmap(hub_item_icon(self, item).pixmap(QSize(32, 32)))
+        icon_label.setFixedSize(40, 40)
+        icon_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(icon_label, 0, Qt.AlignTop)
+
+        center = QVBoxLayout()
+        center.setSpacing(3)
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        title = QLabel(item.title)
+        title.setObjectName("hubCardTitle")
+        head.addWidget(title, 0)
+        mode_text, mode_state = MODE_LABELS.get(item.mode, ("Opcional", "info"))
+        head.addWidget(HubChip(
+            mode_text,
+            mode_state,
+            {
+                "recommended": "Faz parte do conjunto recomendado do PhaseZero.",
+                "opt-in": "Instale só se quiser; nada depende disso.",
+                "advanced": "Mexe em áreas sensíveis do sistema. Revise antes.",
+            }.get(item.mode, ""),
+        ))
+        head.addStretch(1)
+        center.addLayout(head)
+
+        description = QLabel(item.description)
+        description.setObjectName("hubCardDescription")
+        description.setWordWrap(True)
+        center.addWidget(description)
+
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        for label in item.rollback_labels:
+            state = "success" if item.reversible else "warning"
+            chips.addWidget(HubChip(label, state, f"Como isto é desfeito: {label.lower()}."))
+        if item.reboot == "required":
+            chips.addWidget(HubChip("Requer reiniciar", "warning", "Só passa a valer após reiniciar."))
+        elif item.reboot == "recommended":
+            chips.addWidget(HubChip("Reinício recomendado", "info", "Funciona melhor após reiniciar."))
+        if item.risk in {"elevated", "high"}:
+            chips.addWidget(HubChip("Pede privilégio", "warning", "Precisa de elevação administrativa."))
+        chips.addStretch(1)
+        center.addLayout(chips)
+
+        self.reason_label = QLabel(item.reason)
+        self.reason_label.setObjectName("hubCardReason")
+        self.reason_label.setWordWrap(True)
+        self.reason_label.setVisible(bool(item.reason) and not item.available)
+        center.addWidget(self.reason_label)
+        layout.addLayout(center, 1)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(14)
+        self.install_switch: SwitchControl | None = None
+        self.tune_switch: SwitchControl | None = None
+        if item.install is not None:
+            controls.addWidget(self._switch_block("Instalado", "install"), 0, Qt.AlignVCenter)
+        if item.tune is not None:
+            controls.addWidget(self._switch_block("Otimizado", "tune"), 0, Qt.AlignVCenter)
+        if item.actions:
+            more = QToolButton()
+            more.setObjectName("hubCardMore")
+            more.setText("Ações")
+            more.setPopupMode(QToolButton.InstantPopup)
+            more.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            more.setIcon(themed_icon(self, "open-menu", QStyle.SP_FileDialogDetailedView))
+            more.setAccessibleName(f"Ações de {item.title}")
+            menu = QMenu(more)
+            for action in item.actions:
+                entry = menu.addAction(action.title)
+                entry.setToolTip(action.description)
+                entry.triggered.connect(lambda _checked=False, target=action: self.action_requested.emit(target))
+            more.setMenu(menu)
+            controls.addWidget(more, 0, Qt.AlignVCenter)
+        layout.addLayout(controls, 0)
+
+        if not item.available:
+            self.set_available(False, item.reason)
+
+    def _switch_block(self, caption: str, kind: str) -> QWidget:
+        # Legenda ao lado do switch, não acima: o switch já escreve
+        # "Ligado/Desligado", e a legenda diz o QUE liga. Separados em linhas
+        # diferentes, os dois textos pareciam estados concorrentes.
+        block = QWidget()
+        row = QHBoxLayout(block)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        label = QLabel(caption)
+        label.setObjectName("hubSwitchCaption")
+        switch = SwitchControl()
+        switch.setAccessibleName(f"{caption}: {self.item.title}")
+        switch.setTristate(False)
+        switch.toggled.connect(lambda checked, which=kind: self._on_toggled(which, checked))
+        row.addWidget(label, 0, Qt.AlignVCenter)
+        row.addWidget(switch, 0, Qt.AlignVCenter)
+        if kind == "install":
+            self.install_switch = switch
+        else:
+            self.tune_switch = switch
+        return block
+
+    def _on_toggled(self, kind: str, checked: bool) -> None:
+        switch = self.install_switch if kind == "install" else self.tune_switch
+        if switch is None or switch.property("syncing"):
+            return
+        switch.set_pending(True)
+        self.toggle_requested.emit(self.item, kind, checked)
+
+    # ------------------------------------------------------------- estado
+    def _apply(self, switch: SwitchControl | None, value: bool | None) -> None:
+        """Escreve o estado vindo do host sem disparar o handler do usuário."""
+        if switch is None:
+            return
+        switch.setProperty("syncing", True)
+        switch.blockSignals(True)
+        switch.setChecked(bool(value))
+        switch.blockSignals(False)
+        switch.setProperty("syncing", False)
+        switch.set_pending(False)
+        # Estado desconhecido não pode parecer "desligado": o texto diz o que
+        # sabemos, e o switch fica inerte até o host responder.
+        unknown = value is None
+        switch.setEnabled(not unknown and self.property("available") is not False)
+        switch.setToolTip("Estado ainda não verificado" if unknown else "")
+
+    def set_state(self, *, installed: bool | None = None, applied: bool | None = None) -> None:
+        if self.install_switch is not None:
+            self._apply(self.install_switch, installed)
+        if self.tune_switch is not None:
+            self._apply(self.tune_switch, applied)
+
+    def set_pending(self, kind: str, pending: bool) -> None:
+        switch = self.install_switch if kind == "install" else self.tune_switch
+        if switch is not None:
+            switch.set_pending(pending)
+
+    def revert_pending(self) -> None:
+        """Desfaz o movimento otimista quando a operação não aconteceu."""
+        for switch in (self.install_switch, self.tune_switch):
+            if switch is None or not switch.property("pending"):
+                continue
+            switch.setProperty("syncing", True)
+            switch.blockSignals(True)
+            switch.setChecked(not switch.isChecked())
+            switch.blockSignals(False)
+            switch.setProperty("syncing", False)
+            switch.set_pending(False)
+
+    def set_available(self, available: bool, reason: str = "") -> None:
+        self.setProperty("available", available)
+        _repolish(self)
+        for switch in (self.install_switch, self.tune_switch):
+            if switch is not None:
+                switch.setEnabled(available)
+                switch.setToolTip(reason if not available else "")
+        if reason:
+            self.reason_label.setText(reason)
+        self.reason_label.setVisible(bool(reason) and not available)
+
+    def set_busy(self, busy: bool) -> None:
+        for switch in (self.install_switch, self.tune_switch):
+            if switch is not None:
+                switch.setEnabled(not busy and self.property("available") is not False)
 
 
 class StatusPill(QFrame):

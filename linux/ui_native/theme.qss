@@ -889,3 +889,70 @@ QCheckBox::indicator:checked {
     font-size: {{text_base}}px;
     padding: {{space_sm}}px 0;
 }
+
+/* ---- Página Linux (hub de apps, serviços e otimizações) -------------- */
+#hubToolbar {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: {{radius_lg}}px;
+}
+#hubSearch {
+    background: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_md}}px;
+    padding: {{space_sm}}px {{space_md}}px;
+    color: {{text}};
+    min-height: 28px;
+}
+#hubSearch:focus { border: 1px solid {{accent}}; }
+#hubFilterChip {
+    background: transparent;
+    border: 1px solid {{border}};
+    border-radius: {{radius_md}}px;
+    padding: {{space_sm}}px {{space_md}}px;
+    color: {{text_dim}};
+}
+#hubFilterChip:checked {
+    background: {{surface_hero}};
+    border: 1px solid {{accent_border}};
+    color: {{text}};
+    font-weight: 600;
+}
+#hubSummary { color: {{text_dim}}; font-size: {{text_sm}}px; }
+
+#hubCard {
+    background: {{surface}};
+    border: 1px solid {{border}};
+    border-radius: {{radius_lg}}px;
+}
+#hubCard:hover { border: 1px solid {{accent_border}}; }
+#hubCard[mode="recommended"] { border-left: 3px solid {{success}}; }
+#hubCard[mode="advanced"] { border-left: 3px solid {{warning}}; }
+/* Indisponível continua legível: some o realce, não o conteúdo. */
+#hubCard[available="false"] { background: {{surface_disabled}}; }
+#hubCardTitle { color: {{text_strong}}; font-size: {{text_base}}px; font-weight: 700; }
+#hubCardDescription { color: {{text_dim}}; font-size: {{text_sm}}px; }
+#hubCardReason { color: {{warning}}; font-size: {{text_sm}}px; }
+#hubSwitchCaption { color: {{text_dim}}; font-size: {{text_xs}}px; }
+#hubCardMore {
+    background: transparent;
+    border: 1px solid {{border}};
+    border-radius: {{radius_md}}px;
+    padding: {{space_sm}}px {{space_md}}px;
+    color: {{text}};
+}
+#hubCardMore:hover { border: 1px solid {{accent_border}}; }
+#hubChip {
+    background: {{surface_disabled}};
+    border: 1px solid {{border_subtle}};
+    border-radius: {{radius_sm}}px;
+    padding: 2px {{space_sm}}px;
+    color: {{text_dim}};
+    font-size: {{text_xs}}px;
+}
+/* Sem borda lateral: com cantos arredondados ela virava um "(" antes do
+   texto. O estado vive na cor do texto e da borda inteira. */
+#hubChip[state="success"] { color: {{success}}; border: 1px solid {{success}}; }
+#hubChip[state="warning"] { color: {{warning}}; border: 1px solid {{warning}}; }
+#hubChip[state="info"] { color: {{accent}}; border: 1px solid {{accent_border}}; }
+#hubEmpty { color: {{text_dim}}; font-size: {{text_sm}}px; padding: {{space_md}}px; }

@@ -314,3 +314,94 @@ def test_ui_preview_bindings_feed_plan_tokens_without_prompting():
     assert action.resolved_args(values={"plan_id": "plan-1", "confirm": "token-1"}) == [
         "capabilities", "apply", "--plan-id", "plan-1", "--confirm", "token-1",
     ]
+
+
+def test_mode_and_rollback_metadata_are_derived_from_real_machinery():
+    from linux.capabilities.catalog import mode_for, rollback_kinds
+
+    # Perfil curado -> recomendado; risco elevado -> avançado; resto -> opt-in.
+    assert mode_for(BY_ID["gaming.gamemode"]) == "recommended"
+    assert mode_for(BY_ID["administration.tailscale"]) == "advanced"
+    assert mode_for(BY_ID["education.stellarium"]) == "opt-in"
+    assert mode_for(BY_ID["health.iwd"]) == "advanced"
+
+    facts = host()
+    package = source_for(BY_ID["gaming.gamemode"], facts)
+    assert rollback_kinds(BY_ID["gaming.gamemode"], package) == ("package-remove",)
+    # Capability com receita de serviço reverte a unidade antes do pacote.
+    assert rollback_kinds(BY_ID["health.earlyoom"], package, has_recipe=True) == (
+        "service-disable", "package-remove",
+    )
+    # Sem fonte aplicável não existe reversão automática, e o payload precisa
+    # dizer isso em vez de sugerir um rollback que não existe.
+    assert rollback_kinds(BY_ID["gaming.gamemode"], None) == ()
+
+
+def test_status_payload_exposes_mode_and_rollback_for_every_item(monkeypatch):
+    from linux.capabilities import engine
+
+    facts = host()
+    monkeypatch.setattr(engine, "detect", lambda: facts)
+    payload = engine.catalog_payload(facts=facts, group="gaming")
+    assert payload["rollbackLabels"]["package-remove"]
+    for item in payload["capabilities"]:
+        assert item["mode"] in {"recommended", "opt-in", "advanced"}
+        assert isinstance(item["rollback"], list)
+        if item["applicable"]:
+            assert item["rollback"], f"{item['id']} aplicável sem rollback declarado"
+
+
+def test_removal_requires_phasezero_install_history(private_state):
+    from linux.capabilities.engine import create_removal_plan
+
+    facts = host()
+    # Instalado pelo usuário, fora do PhaseZero: o toggle não pode desinstalar.
+    provider = FakeProvider(facts, {"gamemode"})
+    plan = create_removal_plan(["gaming.gamemode"], facts=facts, provider=provider)
+    assert plan["status"] == "blocked"
+    assert plan["actions"] == []
+    assert "não foi instalado pelo PhaseZero" in plan["blockers"][0]
+
+
+def test_removal_plan_apply_and_verify_round_trip(private_state):
+    from linux.capabilities.engine import (
+        apply_removal, create_removal_plan, verify_removal,
+    )
+
+    facts = host()
+    provider = FakeProvider(facts)
+    plan = create_plan(capability_ids=["gaming.gamemode"], facts=facts, provider=provider)
+    apply_plan(plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider)
+    assert provider.installed_names == {"gamemode"}
+
+    removal_plan = create_removal_plan(["gaming.gamemode"], facts=facts, provider=provider)
+    assert removal_plan["status"] == "ready"
+    assert removal_plan["actions"][0]["rollback"] == ["package-remove"]
+
+    preview = apply_removal(removal_plan["id"], dry_run=True, facts=facts, provider=provider)
+    assert preview["status"] == "preview"
+    assert provider.installed_names == {"gamemode"}, "preview não pode remover nada"
+
+    with pytest.raises(CapabilityError, match="token"):
+        apply_removal(removal_plan["id"], confirmation="wrong", facts=facts, provider=provider)
+
+    removal = apply_removal(
+        removal_plan["id"], confirmation=removal_plan["confirmToken"],
+        facts=facts, provider=provider,
+    )
+    assert removal["status"] == "complete"
+    assert provider.installed_names == set()
+    assert verify_removal(["gaming.gamemode"], facts=facts, provider=provider)["ok"] is True
+
+
+def test_removal_refuses_while_another_installed_capability_requires_it(private_state):
+    from linux.capabilities.engine import create_removal_plan
+
+    facts = host()
+    provider = FakeProvider(facts)
+    plan = create_plan(capability_ids=["gaming.goverlay"], facts=facts, provider=provider)
+    apply_plan(plan["id"], confirmation=plan["confirmToken"], facts=facts, provider=provider)
+    # goverlay depende de mangohud; remover mangohud sozinho quebraria o outro.
+    blocked = create_removal_plan(["gaming.mangohud"], facts=facts, provider=provider)
+    assert blocked["status"] == "blocked"
+    assert "requisito de" in blocked["blockers"][0]
