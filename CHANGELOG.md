@@ -3,6 +3,40 @@
 Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 As versões seguem a data de build em `version.json`.
 
+## [1.19.0] - 2026-08-27
+
+### Adicionado
+- **Página Linux no Control Center**: uma vitrine categorizada com os apps, serviços e otimizações do projeto. Cada cartão traz ícone real do app, o que ele faz, como é desfeito, se é recomendado ou opcional, e um interruptor que reflete o estado do host — instalar/remover para recursos, aplicar/reverter para otimizações.
+- **Tuning reversível**: `pz tune <área> apply|revert|status` nas três áreas (gaming, navegador, desenvolvimento). Cada mutação é registrada com backup, hash do conteúdo e valor anterior das preferências de ferramenta, então `revert` devolve o que era do usuário em vez de apagar.
+- **Remoção de recursos por id**: `pz capabilities remove-plan|remove|verify-removal`, espelhando o ciclo de instalação. A remoção é recusada quando o histórico não mostra que o PhaseZero instalou o item, ou quando outro recurso instalado ainda depende dele.
+- Metadados honestos no catálogo de recursos: `mode` (recomendado/opcional/avançado), `rollback` (mecanismos que o motor realmente executa) e `hasStatus`, que distingue "não instalado" de "não sondamos o host".
+
+### Corrigido
+- `pz ai status` deixava de responder quando o Hermes estava instalado sem nenhum bloco MCP gerenciado: `grep -c` imprime a contagem **e** sai com 1 quando ela é zero, o ramo `|| echo 0` imprimia um segundo zero, e o `--argjson` recebia JSON inválido. A página de IA ficava sem nada para renderizar.
+- `pz tune dev` não escreve mais com `sudo tee` direto; passa pelo arquivo gerenciado e pela ponte administrativa como o resto do projeto.
+- Selo de reversibilidade deixa de pintar de verde o que ninguém desfaz sozinho: `manual` e `sem reversão` não contam como reversível.
+
+### Interface
+- Estado nunca otimista: o interruptor vai para "aplicando…" e só assume o novo valor quando o host reconfirma; prévia recusada devolve o interruptor ao lugar; leitura que falha desabilita o controle com o motivo, em vez de exibir um "desligado" em que o usuário poderia agir.
+- Ícone original do app resolvido a partir do `.desktop` instalado, sem baixar nada da rede.
+
+## [1.18.0] - 2026-08-27
+
+Versão marcada em `810d9b9` cujo workflow de release foi cancelado; nunca chegou a publicar
+artefatos. O conteúdo abaixo está incluído na 1.19.0 e fica registrado aqui para o histórico
+não pular de 1.17.4 para 1.19.0.
+
+### Adicionado (Homelab paridade umbrelOS v1)
+- **Catálogo um clique por app**: `pz server homelab apps list/enable/disable/update --json`, com isolamento por app validado em CI descartável.
+- **Ponte multi-host**: `--host` por SSH para administrar um Homelab remoto a partir do painel.
+- **Contratos do dashboard web**: HTTPS, unidade de usuário via template, allowlist de token e TLS do agente, com ADR de modelo de ameaças.
+- Fatos honestos do host e primeiro uso orientado no Player.
+
+### Corrigido (AppTuning)
+- Itens fantasma passam a existir de fato; `status` deixa de relatar sucesso falso.
+- `ConvertTo-BootstrapHashtable` não perde mais dado na conversão.
+- Tuning de captura, templates e sondas de known folder implementados.
+
 ## [1.17.4] - 2026-08-25
 
 ### Adicionado (CCS-040/041/042)
