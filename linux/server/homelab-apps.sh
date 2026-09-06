@@ -301,7 +301,8 @@ missing_secrets_for_keys() {
 
 running_names_json() {
     if docker_reachable; then
-        docker ps --filter "name=phasezero-" --format '{{.Names}}' 2>/dev/null | jq -R . | jq -cs .
+        # PZ-AUD-011: same project scoping as homelab-stack.sh.
+        docker ps --filter "label=com.docker.compose.project=$PROJECT" --filter "name=phasezero-" --format '{{.Names}}' 2>/dev/null | jq -R . | jq -cs .
     else
         echo '[]'
     fi
@@ -543,19 +544,32 @@ cmd_enable() {
                 --arg action "enable" --arg app "$APP" --argjson ok false --argjson enabled true \
                 --arg reason "$reason" \
                 '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok,
-                  enabled:$enabled, started:false, reason:$reason}'
+                  enabled:$enabled, started:false, state:"failed", deferred:false, reason:$reason}'
             return 1
         fi
     else
+        # PZ-AUD-005: desired recorded, nothing applied. Never report ok
+        # while the workload is not running; the reconciler retries later.
         reason="docker daemon not reachable; app marked enabled, start deferred"
     fi
+    if [ "$started" = true ]; then
+        emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
+            --arg action "enable" --arg app "$APP" --argjson ok true --argjson dryRun false \
+            --argjson enabled true --argjson started true --argjson composeValidated "$validated" \
+            --argjson governor "$gov" --argjson keys "$keys_json" \
+            '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok, dryRun:$dryRun,
+              enabled:$enabled, started:$started, state:"applied", deferred:false,
+              composeValidated:$composeValidated, enabledKeys:$keys, governor:$governor, reason:null}'
+        return 0
+    fi
     emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
-        --arg action "enable" --arg app "$APP" --argjson ok true --argjson dryRun false \
-        --argjson enabled true --argjson started "$started" --argjson composeValidated "$validated" \
+        --arg action "enable" --arg app "$APP" --argjson ok false --argjson dryRun false \
+        --argjson enabled true --argjson started false --argjson composeValidated "$validated" \
         --argjson governor "$gov" --argjson keys "$keys_json" --arg reason "$reason" \
         '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok, dryRun:$dryRun,
-          enabled:$enabled, started:$started, composeValidated:$composeValidated, enabledKeys:$keys,
-          governor:$governor, reason:(if $reason == "" then null else $reason end)}'
+          enabled:$enabled, started:$started, state:"deferred", deferred:true,
+          composeValidated:$composeValidated, enabledKeys:$keys, governor:$governor, reason:$reason}'
+    return 1
 }
 
 cmd_disable() {
@@ -590,7 +604,7 @@ cmd_disable() {
         return 0
     fi
     apps_lock || return 1
-    local new_enabled stopped=false reason=""
+    local new_enabled stopped=false reason="" state="applied" ok=true
     new_enabled="$(subtract_enabled "$keys_json")" || { apps_unlock; return 1; }
     write_enabled_json "$new_enabled" || { apps_unlock; return 1; }
     apps_unlock
@@ -598,18 +612,28 @@ cmd_disable() {
         if compose_rm_subset "${files[@]}" -- "${services[@]}"; then
             stopped=true
         else
+            # PZ-AUD-005: desired (disabled) recorded, removal failed.
+            # Report failure so the reconciler retries; never ok:true.
             reason="compose rm failed; app unmarked enabled"
+            state="failed"
+            ok=false
         fi
-    elif ! docker_reachable; then
+    elif ! apps_may_apply; then
+        # PZ-AUD-005: covers daemon down AND hermetic/no-docker mode:
+        # containers are unchanged, removal is deferred to the reconciler.
         reason="docker daemon not reachable; app unmarked enabled, containers unchanged"
+        state="deferred"
+        ok=false
     fi
     emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
-        --arg action "disable" --arg app "$APP" --argjson ok true --argjson dryRun false \
+        --arg action "disable" --arg app "$APP" --argjson ok "$ok" --argjson dryRun false \
         --argjson enabled false --argjson stopped "$stopped" --argjson keys "$keys_json" \
-        --argjson remaining "$new_enabled" --arg reason "$reason" \
+        --argjson remaining "$new_enabled" --arg reason "$reason" --arg state "$state" \
         '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok, dryRun:$dryRun,
-          enabled:$enabled, stopped:$stopped, disabledKeys:$keys, remaining:$remaining,
+          enabled:$enabled, stopped:$stopped, state:$state, deferred:($state != "applied"),
+          disabledKeys:$keys, remaining:$remaining,
           reason:(if $reason == "" then null else $reason end)}'
+    [ "$ok" = true ]
 }
 
 uses_latest() {
@@ -646,7 +670,7 @@ cmd_update() {
         fi
         rows="$(jq -c --arg key "$key" --arg imageRef "$ref" --arg lockKey "$lock_key" \
             --arg digest "$(digest_for_lock_key "$lock_key")" \
-            '. + [{key:$key, imageRef:$imageRef, lockKey:$lockKey, digest:(if $digest=="" then null else $digest end), usesLatest:($imageRef | test(":latest$"))}]' <<< "$rows")"
+            '. + [{key:$key, imageRef:$imageRef, lockKey:$lockKey, digest:(if $digest=="" then null else $digest end), usesLatest:(($imageRef | test(":latest$")) or ($imageRef == "latest"))}]' <<< "$rows")"
     done
     if [ "$latest_hit" = true ]; then
         emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
@@ -703,14 +727,26 @@ cmd_update() {
     else
         reason="docker daemon not reachable; update not applied"
     fi
-    local ok=true
-    [ -z "$reason" ] || [ "$pulled" = true ] || ok=false
-    [ "$pulled" = true ] && ok=true
+    # PZ-AUD-005: pull ok + up failed is NOT success; daemon down is NOT
+    # success. ok requires pulled images actually running.
+    local ok=false state="failed"
+    if [ "${#targets[@]}" -eq 0 ]; then
+        ok=true
+        state="noop"
+        reason=""
+    elif [ -z "$reason" ] && [ "$pulled" = true ]; then
+        ok=true
+        state="applied"
+    elif [ "$reason" = "docker daemon not reachable; update not applied" ]; then
+        state="deferred"
+    fi
     emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
         --arg action "update" --argjson ok "$ok" --argjson dryRun false --argjson pulled "$pulled" \
-        --argjson apps "$rows" --arg reason "$reason" \
+        --argjson apps "$rows" --arg reason "$reason" --arg state "$state" \
         '{schemaVersion:$schemaVersion, tool:$tool, action:$action, ok:$ok, dryRun:$dryRun,
-          pulled:$pulled, apps:$apps, reason:(if $reason == "" then null else $reason end)}'
+          pulled:$pulled, state:$state, deferred:($state != "applied"),
+          apps:$apps, reason:(if $reason == "" then null else $reason end)}'
+    [ "$ok" = true ]
 }
 
 case "$SUB" in

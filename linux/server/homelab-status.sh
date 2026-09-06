@@ -65,7 +65,9 @@ compose_ver() {
 }
 
 running_containers() {
-    docker ps --filter "name=phasezero-" --format '{{.Names}}' 2>/dev/null | sort
+    # PZ-AUD-011: project-scoped; see homelab-stack.sh running_containers_json.
+    local project="${PZ_HOMELAB_PROJECT:-phasezero-homelab}"
+    docker ps --filter "label=com.docker.compose.project=$project" --filter "name=phasezero-" --format '{{.Names}}' 2>/dev/null | sort
 }
 
 container_health() {

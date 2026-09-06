@@ -116,8 +116,8 @@
       "acceptance": "Fixtures Docker ausente, rm exit 42 e pull ok/up failed jamais resultam em ready/completed=true; reconciliador retoma estado desejado.",
       "evidence": "evidence/reproductions.json",
       "dependsOn": [],
-      "status": "pending",
-      "owner": null,
+      "status": "in_progress",
+      "owner": "codex/aud-fase0",
       "implementation": null,
       "behavioralProof": null,
       "ciProof": null
@@ -140,8 +140,8 @@
       "dependsOn": [
         "PZ-AUD-005"
       ],
-      "status": "pending",
-      "owner": null,
+      "status": "in_progress",
+      "owner": "codex/aud-fase0",
       "implementation": null,
       "behavioralProof": null,
       "ciProof": null
@@ -216,8 +216,8 @@
         "PZ-AUD-011",
         "PZ-AUD-012"
       ],
-      "status": "pending",
-      "owner": null,
+      "status": "in_progress",
+      "owner": "codex/aud-fase0",
       "implementation": null,
       "behavioralProof": null,
       "ciProof": null
@@ -241,8 +241,8 @@
         "PZ-AUD-009",
         "PZ-AUD-011"
       ],
-      "status": "pending",
-      "owner": null,
+      "status": "in_progress",
+      "owner": "codex/aud-fase0",
       "implementation": null,
       "behavioralProof": null,
       "ciProof": null
@@ -263,8 +263,8 @@
       "acceptance": "Dois projetos com mesmo app e volume lógico nunca compartilham status nem dados; operação em A deixa B byte a byte intacto.",
       "evidence": "evidence/compose.json",
       "dependsOn": [],
-      "status": "pending",
-      "owner": null,
+      "status": "in_progress",
+      "owner": "codex/aud-fase0",
       "implementation": null,
       "behavioralProof": null,
       "ciProof": null
@@ -288,8 +288,8 @@
         "PZ-AUD-005",
         "PZ-AUD-011"
       ],
-      "status": "pending",
-      "owner": null,
+      "status": "in_progress",
+      "owner": "codex/aud-fase0",
       "implementation": null,
       "behavioralProof": null,
       "ciProof": null

@@ -116,10 +116,10 @@ if [ "${PZ_SERVER_HOMELAB:-0}" = "1" ]; then
         mark_degraded "docker service failed to start"
         exit 1
     fi
-    extra_flag=""
-    [ "${PZ_SERVER_EXTRAS:-0}" = "1" ] && extra_flag="--extras"
-    if as_user bash "$RUNTIME_ROOT/linux/server/homelab-stack.sh" up $extra_flag --access "$PZ_HOMELAB_ACCESS_MODE"; then
-        log "homelab docker stack up (extras=${PZ_SERVER_EXTRAS:-0}, access=$PZ_HOMELAB_ACCESS_MODE)"
+    # PZ-AUD-012: boot converges the curated registry (disabled apps stay
+    # down); reconcile falls back to legacy layer up when no registry exists.
+    if as_user bash "$RUNTIME_ROOT/linux/server/homelab-stack.sh" reconcile --access "$PZ_HOMELAB_ACCESS_MODE"; then
+        log "homelab docker stack reconciled (access=$PZ_HOMELAB_ACCESS_MODE)"
         clear_degraded
     else
         log "DEGRADED: homelab stack bring-up failed"

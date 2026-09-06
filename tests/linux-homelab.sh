@@ -123,14 +123,16 @@ plan_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server hom
 echo "$plan_out" | jq -e '.ok == true and .dryRun == true and .applied == false' >/dev/null
 "$REPO_ROOT/linux/pz" server homelab apps list --json | jq -e \
     '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
-enable_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json)"
-echo "$enable_out" | jq -e '.ok == true and .enabled == true and .started == false' >/dev/null
+enable_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --json || true)"
+# PZ-AUD-005: desired recorded, nothing applied without a daemon: never ok.
+echo "$enable_out" | jq -e '.ok == false and .enabled == true and .started == false and .state == "deferred" and .deferred == true' >/dev/null
 test "$(stat -c '%a' "$PZ_HOMELAB_STATE/apps.enabled.json")" = "600"
 after_enable="$("$REPO_ROOT/linux/pz" server homelab apps list --json)"
 echo "$after_enable" | jq -e '[.apps[] | select(.key == "n8n") | .enabled] | first == true' >/dev/null
 echo "$after_enable" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled] | first == true' >/dev/null
-disable_out="$("$REPO_ROOT/linux/pz" server homelab apps disable n8n --json)"
-echo "$disable_out" | jq -e '.ok == true and .enabled == false' >/dev/null
+disable_out="$("$REPO_ROOT/linux/pz" server homelab apps disable n8n --json || true)"
+# PZ-AUD-005: desired recorded, removal deferred without a daemon: never ok.
+echo "$disable_out" | jq -e '.ok == false and .enabled == false and .state == "deferred"' >/dev/null
 after_disable="$("$REPO_ROOT/linux/pz" server homelab apps list --json)"
 echo "$after_disable" | jq -e '[.apps[] | select(.key == "n8n") | .enabled] | first == false' >/dev/null
 echo "$after_disable" | jq -e '[.apps[] | select(.key == "jellyfin") | .enabled] | first == true' >/dev/null
@@ -182,6 +184,121 @@ case "$mixed_dis" in
     *) echo "FAIL: disable stdout not JSON: $mixed_dis" >&2; exit 1 ;;
 esac
 echo "  compose stdout isolation ok"
+
+echo "=== apps never report success on partial failure (PZ-AUD-005) ==="
+FAILDOCKER="$TMP/faildocker"
+mkdir -p "$FAILDOCKER"
+cat > "$FAILDOCKER/docker" <<'EOS'
+#!/usr/bin/env bash
+case "${1:-}" in
+  info) exit 0 ;;
+  version) exit 0 ;;
+  image) exit 0 ;;
+  compose)
+    shift
+    for a in "$@"; do
+      case "$a" in
+        pull) exit 0 ;;
+        up) echo "stub compose up failed" >&2; exit 42 ;;
+        version) echo "Docker Compose version v2.27.0"; exit 0 ;;
+      esac
+    done
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$FAILDOCKER/docker"
+# pull ok + up failed must be ok:false (update path).
+upd_fail="$(
+    env PATH="$FAILDOCKER:$PATH" \
+        PZ_HOMELAB_APPS_NO_DOCKER=0 \
+        PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 \
+        "$REPO_ROOT/linux/pz" server homelab apps update n8n --json || true
+)"
+echo "$upd_fail" | jq -e '.ok == false and .pulled == true and .state == "failed"' >/dev/null
+# update without daemon must be deferred, never applied.
+upd_defer="$("$REPO_ROOT/linux/pz" server homelab apps update n8n --json || true)"
+echo "$upd_defer" | jq -e '.ok == false and .pulled == false and .state == "deferred"' >/dev/null
+RMDOCKER="$TMP/rmdocker"
+mkdir -p "$RMDOCKER"
+cat > "$RMDOCKER/docker" <<'EOS'
+#!/usr/bin/env bash
+case "${1:-}" in
+  info) exit 0 ;;
+  version) exit 0 ;;
+  compose)
+    shift
+    for a in "$@"; do
+      case "$a" in
+        rm) echo "stub compose rm failed" >&2; exit 42 ;;
+        version) echo "Docker Compose version v2.27.0"; exit 0 ;;
+      esac
+    done
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$RMDOCKER/docker"
+dis_fail="$(
+    env PATH="$RMDOCKER:$PATH" \
+        PZ_HOMELAB_APPS_NO_DOCKER=0 \
+        "$REPO_ROOT/linux/pz" server homelab apps disable n8n --json || true
+)"
+echo "$dis_fail" | jq -e '.ok == false and .enabled == false and .stopped == false and .state == "failed"' >/dev/null
+echo "  partial-failure honesty ok"
+
+echo "=== reconcile converges the curated registry (PZ-AUD-012) ==="
+RECSTATE="$TMP/reconcile-state"
+mkdir -p "$RECSTATE"
+printf '%s\n' '{"schemaVersion":1,"tool":"homelab-apps","enabled":["vaultwarden"]}' > "$RECSTATE/apps.enabled.json"
+RECDOCKER="$TMP/recdocker"
+mkdir -p "$RECDOCKER"
+cat > "$RECDOCKER/docker" <<'EOS'
+#!/usr/bin/env bash
+case "${1:-}" in
+  info) exit 0 ;;
+  version) exit 0 ;;
+  compose)
+    shift
+    for a in "$@"; do
+      case "$a" in
+        version) echo "Docker Compose version v2.27.0"; exit 0 ;;
+      esac
+    done
+    printf '%s\n' "$*" >> "$RECONCILE_CAPTURE"
+    exit 0
+    ;;
+  volume) exit 0 ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$RECDOCKER/docker"
+export RECONCILE_CAPTURE="$TMP/reconcile.capture"
+rm -f "$RECONCILE_CAPTURE"
+rec_out="$(
+    env PATH="$RECDOCKER:$PATH" \
+        PZ_HOMELAB_STATE="$RECSTATE" \
+        PZ_HOMELAB_APPS_NO_DOCKER=0 \
+        "$REPO_ROOT/linux/pz" server homelab reconcile --json
+)"
+echo "$rec_out" | jq -e '.ok == true and (.desired | index("vaultwarden") != null)' >/dev/null
+rg -q 'vaultwarden' "$RECONCILE_CAPTURE" \
+    || { echo "FAIL: reconcile did not start enabled app"; exit 1; }
+if rg -q '(^| )jellyfin($| )|(^| )syncthing($| )' "$RECONCILE_CAPTURE"; then
+    echo "FAIL: reconcile started apps outside the registry"
+    exit 1
+fi
+# backup covers exactly the volumes in use.
+bk_vols="$(
+    env PZ_HOMELAB_STATE="$RECSTATE" \
+        PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$TMP/recmounts" \
+        PZ_HOMELAB_VOLUMES_OVERRIDE="" \
+        bash "$REPO_ROOT/linux/server/homelab-stack.sh" backup --dry-run --json
+)"
+echo "$bk_vols" | jq -e '(.volumes | index("vaultwarden_data") != null) and ([.volumes[] | select(test("jellyfin|syncthing"))] | length == 0)' >/dev/null
+echo "  reconcile convergence ok"
 
 echo "=== web CLI bootstrap (no serve) ==="
 export PZ_HOMELAB_WEB_STATE="$TMP/web"

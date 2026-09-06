@@ -12,9 +12,11 @@ source "$PZ_ROOT/linux/lib/common.sh"
 COMPOSE_DIR="${PZ_HOMELAB_COMPOSE_DIR:-$PZ_ROOT/assets/home-server}"
 CORE_FILE="$COMPOSE_DIR/docker-compose.homelab.yml"
 EXTRAS_FILE="$COMPOSE_DIR/docker-compose.extras.yml"
+APPS_CATALOG="${PZ_HOMELAB_APPS_CATALOG:-$COMPOSE_DIR/apps/catalog.json}"
 PROJECT="${PZ_HOMELAB_PROJECT:-phasezero-homelab}"
 HOMELAB_STATE="${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}"
 ENV_FILE="${PZ_HOMELAB_ENV_FILE:-$HOMELAB_STATE/.env}"
+ENABLED_FILE="${PZ_HOMELAB_APPS_ENABLED:-$HOMELAB_STATE/apps.enabled.json}"
 BACKUP_ROOT="${PZ_HOMELAB_BACKUP_ROOT:-$HOMELAB_STATE/backups}"
 PZ_HOMELAB_BACKUP_SCHEMA="2"
 
@@ -40,6 +42,7 @@ Usage:
   homelab-stack.sh status [--json] [--extras] [--access local|tailscale|lan]
   homelab-stack.sh plan [--json] [--extras] [--access local|tailscale|lan]
   homelab-stack.sh up|down|restart [--extras] [--access local|tailscale|lan] [--profile <key>]
+  homelab-stack.sh reconcile [--access local|tailscale|lan]
   homelab-stack.sh open <app> [--access local|tailscale|lan]
   homelab-stack.sh logs <app> [--follow]
   homelab-stack.sh backup [--extras] [--dest PATH] [--dry-run]
@@ -314,12 +317,111 @@ secret_rows() {
 }
 
 all_volumes() {
+    # PZ-AUD-012: when the curated registry exists, back up exactly the
+    # volumes in use (enabled set); an explicit --extras keeps covering
+    # the extras layer as the operator requested.
+    if [ -f "$ENABLED_FILE" ] && [ -f "$APPS_CATALOG" ]; then
+        local keys
+        keys="$(enabled_keys)" || return 1
+        {
+            jq -r --argjson en "$keys" '
+                .apps[] | select(.key as $k | ($en | index($k) != null))
+                | (.volumes // [])[]
+            ' "$APPS_CATALOG" 2>/dev/null
+            if [ "$WITH_EXTRAS" = "1" ]; then
+                jq -r '.apps[] | select(.layer == "extras") | (.volumes // [])[]' \
+                    "$APPS_CATALOG" 2>/dev/null
+            fi
+        } | sort -u
+        return 0
+    fi
     app_rows | awk -F'|' -v extras="$WITH_EXTRAS" '
         $5 == "core" || extras == "1" {
             n = split($9, vols, " ")
             for (i = 1; i <= n; i++) if (vols[i] != "") print vols[i]
         }
     ' | sort -u
+}
+
+enabled_keys() {
+    # Desired set from the curated registry; errors when corrupt so the
+    # caller never converges a guessed set.
+    local raw
+    raw="$(cat "$ENABLED_FILE" 2>/dev/null || true)"
+    if ! jq -e '.schemaVersion == 1 and (.enabled | type == "array")' <<< "$raw" >/dev/null 2>&1; then
+        pz_error "enabled-apps registry corrupt: $ENABLED_FILE"
+        return 1
+    fi
+    jq -c '.enabled' <<< "$raw"
+}
+
+enabled_keys_with_deps() {
+    local keys
+    keys="$(enabled_keys)" || return 1
+    jq -n -c --argjson en "$keys" --slurpfile cat "$APPS_CATALOG" '
+        ($cat[0].apps) as $apps
+        | ([$apps[] | select(.key as $k | ($en | index($k) != null))
+            | ((.dependsOn // [])[]?), (.key)] | unique)
+        | map(select(. as $k | ($apps | map(.key) | index($k) != null)))
+    '
+}
+
+reconcile_files_for_keys() {
+    local keys="$1"
+    jq -r --argjson en "$keys" '
+        .apps[] | select(.key as $k | ($en | index($k) != null)) | .composeFile
+    ' "$APPS_CATALOG" 2>/dev/null | sort -u | while IFS= read -r f; do
+        [ -n "$f" ] && [ "$f" != "null" ] && printf '%s/%s\n' "$COMPOSE_DIR" "$f"
+    done
+}
+
+reconcile_services_for_keys() {
+    local keys="$1"
+    jq -r --argjson en "$keys" '
+        .apps[] | select(.key as $k | ($en | index($k) != null)) | (.services // [])[]
+    ' "$APPS_CATALOG" 2>/dev/null | sort -u
+}
+
+cmd_reconcile() {
+    # PZ-AUD-012: one reconciler for boot/restart/update/backup. Desired =
+    # curated registry; without a registry fall back to legacy layer up.
+    require_docker || return 1
+    if [ ! -f "$ENABLED_FILE" ]; then
+        pz_info "no curated registry; reconciling via legacy layer up"
+        cmd_up
+        return $?
+    fi
+    local keys files services
+    keys="$(enabled_keys_with_deps)" || return 1
+    if [ "$(jq -r 'length' <<< "$keys")" = "0" ]; then
+        jq -n --arg project "$PROJECT" \
+            '{action:"reconcile", ok:true, project:$project, desired:[], started:[], note:"registry empty; nothing to start (use down to stop running services)"}'
+        return 0
+    fi
+    if [ "$ACCESS_MODE" = "tailscale" ] && ! tailscale_authenticated; then
+        pz_error "tailscale access requested but Tailscale is logged out; run: pz server homelab tailscale"
+        return 1
+    fi
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        jq -n --argjson desired "$keys" \
+            '{action:"reconcile", dryRun:true, desired:$desired}'
+        return 0
+    fi
+    mapfile -t files < <(reconcile_files_for_keys "$keys")
+    mapfile -t services < <(reconcile_services_for_keys "$keys")
+    [ "${#files[@]}" -gt 0 ] || { pz_error "no compose modules for enabled set"; return 1; }
+    ensure_env_file "$ACCESS_MODE"
+    local -a args=()
+    [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+    args+=(-p "$PROJECT")
+    local f
+    for f in "${files[@]}"; do args+=(-f "$f"); done
+    docker_cli "${args[@]}" config --services >/dev/null || { pz_error "compose config failed for enabled set"; return 1; }
+    docker_cli "${args[@]}" up -d "${services[@]}" || { pz_error "reconcile up failed for enabled set"; return 1; }
+    local started_json
+    started_json="$(printf '%s\n' "${services[@]}" | jq -R . | jq -cs .)"
+    jq -n --arg project "$PROJECT" --argjson desired "$keys" --argjson started "$started_json" \
+        '{action:"reconcile", ok:true, project:$project, desired:$desired, started:$started}'
 }
 
 app_info() {
@@ -345,7 +447,9 @@ app_bind_kind() {
 
 running_containers_json() {
     if docker_reachable; then
-        docker ps --filter "name=phasezero-" --format '{{.Names}}' 2>/dev/null | jq -R . | jq -cs .
+        # PZ-AUD-011: scope discovery to this compose project; a second
+        # project on the same daemon must never leak into our status.
+        docker ps --filter "label=com.docker.compose.project=$PROJECT" --filter "name=phasezero-" --format '{{.Names}}' 2>/dev/null | jq -R . | jq -cs .
     else
         echo '[]'
     fi
@@ -645,10 +749,33 @@ cmd_logs() {
 }
 
 volume_actual_name() {
-    local logical="$1" found
+    # PZ-AUD-011: deterministic identity. Compose always creates
+    # <project>_<logical>; never fuzzy-match another project's suffix.
+    local logical="$1"
     [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] && { printf '%s\n' "$logical"; return 0; }
-    found="$(docker volume ls --format '{{.Name}}' 2>/dev/null | grep -E "^${PROJECT}_${logical}$|_${logical}$|^${logical}$" | head -1 || true)"
-    [ -n "$found" ] && printf '%s\n' "$found" || printf '%s_%s\n' "$PROJECT" "$logical"
+    printf '%s_%s\n' "$PROJECT" "$logical"
+}
+
+volume_project_label() {
+    # Owning compose project recorded on the volume, empty when unknown.
+    docker volume inspect -f '{{ index .Labels "com.docker.compose.project" }}' "$1" 2>/dev/null || true
+}
+
+volume_owned_by_project() {
+    # PZ-AUD-011: refuse volumes owned by another project. Unlabeled
+    # (legacy) volumes are allowed with a warning, never silently shared:
+    # a foreign label is a hard error before backup/restore/rm.
+    local vol="$1" owner
+    [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] && return 0
+    owner="$(volume_project_label "$vol")"
+    if [ -n "$owner" ] && [ "$owner" != "$PROJECT" ]; then
+        pz_error "volume $vol belongs to project $owner, not $PROJECT; refusing"
+        return 1
+    fi
+    if [ -z "$owner" ] && docker volume inspect "$vol" >/dev/null 2>&1; then
+        pz_warn "volume $vol has no project label (legacy); assuming $PROJECT"
+    fi
+    return 0
 }
 
 volume_mount() {
@@ -693,6 +820,10 @@ cmd_backup() {
     while IFS= read -r vol; do
         [ -n "$vol" ] || continue
         actual="$(volume_actual_name "$vol")"
+        if ! volume_owned_by_project "$actual"; then
+            err=1
+            continue
+        fi
         mount="$(volume_mount "$actual")"
         if [ ! -d "$mount" ]; then
             pz_warn "volume mount missing, skipped: $actual"
@@ -837,6 +968,10 @@ cmd_restore() {
     while IFS= read -r vol; do
         [ -n "$vol" ] || continue
         actual="$(volume_actual_name "$vol")"
+        if ! volume_owned_by_project "$actual"; then
+            pz_error "pre-restore snapshot refused for foreign volume $actual; aborting restore"
+            return 1
+        fi
         mount="$(volume_mount "$actual")"
         if [ ! -d "$mount" ]; then
             pz_warn "no pre-restore snapshot for $actual (mount missing)"
@@ -936,6 +1071,7 @@ case "$ACTION" in
     up|install|start) cmd_up ;;
     down|stop) cmd_down ;;
     restart) cmd_down; cmd_up ;;
+    reconcile) cmd_reconcile ;;
     tailscale) ensure_tailscale ;;
     status) cmd_status ;;
     plan|dry-run) PZ_DRY_RUN="${PZ_DRY_RUN:-0}" cmd_plan ;;
