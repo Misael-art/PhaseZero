@@ -460,6 +460,7 @@ Actualizar esta seção no início e fim de cada sessão.
 | WIP alheio (checkout principal) | untracked `.mimosa/`, `uber-defesa-privada/`; NÃO tocar `dashboard.py` nem `test_status_journey_contract.py`; NÃO stashar/commitar no checkout `feat/homelab-player-v2` | `git status` em `/mnt/sdcard/Projects/PhaseZero` | 2026-08-26 |
 | Homelab real | segue sem workload desta frente; nenhum apply | herdado do v1.15.1; revalidar | 2026-08-26 |
 | Catálogo atual | 10 apps user-facing em `apps/catalog.json`; `up --extras` ainda all-or-nothing; lock por tag | `assets/home-server/apps/` + compose legado | 2026-08-26 |
+| Auditoria host limpo 2026-09-06 | main `2180c94`, v1.19.0; 31 itens abertos (1 P0 restore). Bootstrap incompleto, sucesso falso e divergências IA/proxies documentados; nenhum workload implantado | [relatório e provas](../../reports/portfolio-clean-host-2026-09-06/README.md); 364 pytest direcionados, 4 suítes shell, 13 Compose cliente, asset Arch verificado | 2026-09-06 |
 
 ## Ledger de execução
 
@@ -467,6 +468,7 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 
 | Data | Agente | Branch/worktree | Fase | Commit/PR | Gates | Resultado/próximo passo |
 |---|---|---|---|---|---|---|
+| 2026-09-06 | Codex | `codex/portfolio-clean-host-audit` / `pz-portfolio-clean-host-audit` | diagnóstico transversal | documentação; base `2180c94` | 364 pytest; 4 shell; 12 registros reproduzidos; 2 contratos PS; 13 Compose válidos sem healthchecks declarados | PZ-AUD-001..031 pending; [plano/handoff](../../reports/portfolio-clean-host-2026-09-06/PLANO.md); priorizar integridade do restore e estados honestos. Nenhum runtime alterado |
 | 2026-08-26 | opencode (checkout principal) | `feat/homelab-player-v2` (somente docs, sem commit) | rascunho | não commitado | — | rascunho untracked no checkout principal; não reutilizar |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 0 | `0ebc7cc` | CI base `32965735176` success; suíte hermética + player 23 passed | Roadmap + dois papéis. |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1 | `02b1360` | suíte hermética + 26 player | catálogo um clique |

@@ -561,6 +561,7 @@ sem evidência.
 | Pacote host | `phasezero-control-center 1.16.6-1` instalado via `phasezero-admin pacman -U` (rebuild do `main` `fe76f0f`, não o asset da release); prévia de remoção da VM atual retorna `ready:true` com 0 blockers e aviso de VM adotada; `grubenv` mtime `1785849543` e 0 QEMU preservados; runtime GRUB segue `OUTDATED` (sincronização deliberadamente adiada) | `pacman -Q`, `pz --version`, `pz windows-vm remove --json`, `stat`, `pgrep` | 2026-08-19 |
 | VMs legadas | as 2 VMs concluídas de 2026-08-16 foram removidas em 2026-08-19 05:42 local com `vmRemovedAt` registrado (`op-20260805-152412-5248`, `op-20260811-120613-9550`); `provision inventory --json` devolve `count:0`; resta `PhaseZero-Windows-Primary-final-20260816` como VM atual | `provision inventory --json`, `operation.json` de cada operação | 2026-08-19 |
 | IA, proxies e workspaces | jornada auditada; autenticação/ledger centrais; quatro proxies com snapshots fixos; três imagens Odysseus fixadas por digest; deploy Odysseus continua bloqueado sem commit aprovado | pytest 640 + 9; testes shell IA/Homelab/UI; testes adversariais de commit/digest; ShellCheck; QA offscreen; diff-check | 2026-08-24 |
+| Auditoria host limpo 2026-09-06 | main `2180c94`, v1.19.0; 31 itens abertos (1 P0 restore). Bootstrap incompleto, sucesso falso e divergências IA/proxies documentados; nenhum workload implantado | [relatório e provas](../../reports/portfolio-clean-host-2026-09-06/README.md); 364 pytest direcionados, 4 suítes shell, 13 Compose cliente, asset Arch verificado | 2026-09-06 |
 
 ## Ledger de execução
 
@@ -568,6 +569,7 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 
 | Data | Agente | Branch/worktree | Fase | Commit/PR | Gates | Resultado/próximo passo |
 |---|---|---|---|---|---|---|
+| 2026-09-06 | Codex | `codex/portfolio-clean-host-audit` / `pz-portfolio-clean-host-audit` | diagnóstico transversal | docs sobre `2180c94` | 364 pytest; 4 shell; 12 registros reproduzidos; 2 contratos PS; 13 Compose; asset Arch verificado | PZ-AUD-001..031 pending; [plano/handoff](../../reports/portfolio-clean-host-2026-09-06/PLANO.md); P0 restore aberto. Sem mutação de runtime |
 | 2026-08-07 | Codex | `main` | Roadmap | não commitado | `git diff --check` passou | Roadmap canônico criado; iniciar Fase 0 em worktree novo |
 | 2026-08-07 | opencode | `codex/homelab-v1151-remediation` / `pz-homelab-v1151` | Fase 0 (baseline) | `22298d3`..`92d576b` (8 commits) | suíte hermética exit 0; pytest 437; shellcheck; `git diff --check` | Port validado em commits por fase; Player reescrito (async QProcess) + 12 testes verdes |
 | 2026-08-07 | opencode | idem | Fase 4 (perfis) | `4458ff3` | suíte hermética exit 0 | 6 perfis públicos implementados: assistant-private, assistant-multichannel, automation, ai-studio (blocked), developer, edge (default) |
