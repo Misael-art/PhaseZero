@@ -244,4 +244,18 @@ if bash -c '
     echo "FAIL: artifact verification accepted missing dist"; exit 1
 fi
 echo "  transactional build ok"
+
+echo "=== proxy manifest is the cross-OS contract (PZ-AUD-019) ==="
+manifest_out="$("$ROOT/linux/pz" ai proxies manifest 2>/dev/null)"
+echo "$manifest_out" | jq -e '.ok == true and (.checks | length == 0)' >/dev/null
+# Manifest pins/ports/repos agree with approved snapshots and catalog rows.
+for pid in kimiproxy qwenproxy deepsproxy mimo-ai-proxy; do
+    mrepo="$(jq -r --arg i "$pid" '.proxies[] | select(.id == $i) | .repository' "$ROOT/assets/ai/proxy-manifest.json")"
+    mcommit="$(jq -r --arg i "$pid" '.proxies[] | select(.id == $i) | .pin.commit // empty' "$ROOT/assets/ai/proxy-manifest.json")"
+    srepo="$(jq -r --arg i "$pid" '.sources[] | select(.id == $i) | .repository' "$ROOT/assets/ai/proxy-suite-trusted-sources.json")"
+    scommit="$(jq -r --arg i "$pid" '.sources[] | select(.id == $i) | .commit' "$ROOT/assets/ai/proxy-suite-trusted-sources.json")"
+    [ "$mrepo" = "$srepo" ] || { echo "FAIL: manifest repo drift for $pid"; exit 1; }
+    [ "$mcommit" = "$scommit" ] || { echo "FAIL: manifest pin drift for $pid"; exit 1; }
+done
+echo "  manifest contract ok"
 echo "linux-ai-proxies smoke ok"

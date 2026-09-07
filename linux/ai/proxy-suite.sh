@@ -67,6 +67,45 @@ supported_rows() {
     done
 }
 
+MANIFEST_FILE="${PZ_AI_PROXY_MANIFEST_FILE:-$PZ_ROOT/assets/ai/proxy-manifest.json}"
+
+manifest_check_json() {
+    # PZ-AUD-019: the manifest is the cross-OS contract; Linux rows, IDE
+    # rows and approved snapshots must agree with it (repo, pin, port,
+    # runtime, default model). Prints {ok, checks[]}.
+    local manifest="$MANIFEST_FILE" fail=0
+    local -a reasons=()
+    [ -f "$manifest" ] || { pz_error "proxy manifest missing: $manifest"; return 2; }
+    local id repo port kind pin mrepo mport mruntime mmodel mcommit
+    while IFS='|' read -r id repo port kind; do
+        [ -n "$id" ] || continue
+        [ "$(proxy_tier "$id")" = supported ] || continue
+        mrepo="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .repository // empty' "$manifest")"
+        mport="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .port // empty' "$manifest")"
+        mcommit="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .pin.commit // empty' "$manifest")"
+        mruntime="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .runtime // empty' "$manifest")"
+        mmodel="$(jq -r --arg i "$id" '.proxies[] | select(.id == $i) | .defaultModel // empty' "$manifest")"
+        [ -z "$mrepo" ] && { reasons+=("$id: missing from manifest"); fail=1; continue; }
+        [ "$mrepo" = "$repo" ] || { reasons+=("$id: repo drift (manifest=$mrepo catalog=$repo)"); fail=1; }
+        [ "$mport" = "$port" ] || { reasons+=("$id: port drift (manifest=$mport catalog=$port)"); fail=1; }
+        if [ "$id" != "mimo-ai-proxy" ]; then
+            [ "$mruntime" = "$kind" ] || { reasons+=("$id: runtime drift (manifest=$mruntime catalog=$kind)"); fail=1; }
+        fi
+        pin="$(trusted_source_record "$id" 2>/dev/null | jq -r '.commit // empty' || true)"
+        if [ -n "$mcommit" ] && [ -n "$pin" ] && [ "$mcommit" != "$pin" ]; then
+            reasons+=("$id: pin drift (manifest=$mcommit snapshot=$pin)")
+            fail=1
+        fi
+        [ -n "$mmodel" ] || { reasons+=("$id: manifest missing defaultModel"); fail=1; }
+    done < <(supported_rows)
+    local out
+    out="$(jq -cn --argjson ok "$([ "$fail" -eq 0 ] && echo true || echo false)" \
+        --argjson checks "$(printf '%s\n' "${reasons[@]}" | jq -R . | jq -cs 'map(select(length > 0))')" \
+        '{schemaVersion:1, action:"manifest-check", ok:$ok, checks:$checks}')"
+    printf '%s\n' "$out"
+    [ "$fail" -eq 0 ]
+}
+
 selected_rows() {
     if [ "$TARGET" = all ]; then supported_rows; else proxy_rows | awk -F'|' -v id="$TARGET" '$1 == id'; fi
 }
@@ -2140,6 +2179,7 @@ case "$ACTION" in
         ;;
     auth|auth-status|login-status) auth_status_json ;;
     provenance|sources|source-status) provenance_status_json ;;
+    manifest|manifest-check) manifest_check_json ;;
     detailed-status|detailed|overview) detailed_status_json ;;
     configure-ides|ides|configure) configure_ides ;;
     test|verify)

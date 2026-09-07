@@ -27,6 +27,19 @@ Describe 'AI proxy suite support' {
         Remove-Variable -Scope Script -Name AiProxySuiteRoot -ErrorAction SilentlyContinue
     }
 
+    It 'matches the cross-OS proxy manifest on repo and port (PZ-AUD-019)' {
+        $issues = @(Test-PhaseZeroProxyManifestParity)
+        $issues.Count | Should Be 0
+        $manifest = Get-PhaseZeroProxyManifest
+        $manifest | Should Not Be $null
+        # Known divergences stay recorded as migrations, never silent.
+        $mimo = @($manifest.proxies | Where-Object { $_.id -eq 'mimo-ai-proxy' })[0]
+        [string]$mimo.auth.windows | Should Be 'env-session'
+        [string]$mimo.migration.windowsAuth | Should Match 'PZ-AUD-019'
+        $deeps = @($manifest.proxies | Where-Object { $_.id -eq 'deepsproxy' })[0]
+        [string]$deeps.migration.windowsDefaultModel | Should Match 'PZ-AUD-019'
+    }
+
     It 'declares pedrofariasx proxies and Docker Native Manager as default AI managed tools' {
         $catalog = Get-BootstrapAiToolCatalog
         $components = Get-BootstrapComponentCatalog
