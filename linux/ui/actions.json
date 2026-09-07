@@ -5547,6 +5547,18 @@
       "plan_command": "linux/pz capabilities plan --capability development.docker"
     },
     {
+      "name": "capability.plan.development.docker-compose",
+      "label": "Docker Compose",
+      "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
+      "mutable": true,
+      "require_plan": true,
+      "module": "Recursos",
+      "elevated": true,
+      "input_kind": "",
+      "input_label": "",
+      "plan_command": "linux/pz capabilities plan --capability development.docker-compose"
+    },
+    {
       "name": "capability.plan.development.virt-manager",
       "label": "Virt-Manager",
       "command": "linux/pz capabilities apply --plan-id {plan_id} --confirm {confirm}",
