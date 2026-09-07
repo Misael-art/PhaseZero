@@ -2,6 +2,11 @@
 services:
   prometheus:
     image: ${PZ_IMAGE_PROMETHEUS:-prom/prometheus:v3.5.0}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     container_name: phasezero-prometheus
     restart: unless-stopped
     init: true

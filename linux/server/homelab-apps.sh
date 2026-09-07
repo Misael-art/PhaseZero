@@ -22,6 +22,7 @@ HOMELAB_STATE="${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}"
 ENV_FILE="${PZ_HOMELAB_ENV_FILE:-$HOMELAB_STATE/.env}"
 ENABLED_FILE="${PZ_HOMELAB_APPS_ENABLED:-$HOMELAB_STATE/apps.enabled.json}"
 DIGESTS_FILE="${PZ_HOMELAB_IMAGE_DIGESTS:-$HOMELAB_STATE/image-digests.json}"
+PINS_ENV="${PZ_HOMELAB_IMAGE_PINS:-$HOMELAB_STATE/image-pins.env}"
 PROJECT="${PZ_HOMELAB_PROJECT:-phasezero-homelab}"
 SCHEMA_VERSION="1"
 HEADROOM_PCT="${PZ_HOMELAB_APP_HEADROOM:-20}"
@@ -94,7 +95,13 @@ app_record() {
 }
 
 lock_ref_for() {
-    local key="$1"
+    # PZ-AUD-030: an executed pin (recorded digest) wins over the lock tag.
+    local key="$1" var pin
+    var="$(pins_env_var_for_key "$key")"
+    if [ -f "$PINS_ENV" ]; then
+        pin="$(awk -F= -v k="$var" '$1 == k {sub(/^[^=]*=/, ""); print; exit}' "$PINS_ENV")"
+        [ -n "$pin" ] && { printf '%s\n' "$pin"; return 0; }
+    fi
     [ -f "$LOCK_FILE" ] || { printf '%s\n' ""; return 0; }
     jq -r --arg k "$key" '.images[$k] // empty' "$LOCK_FILE"
 }
@@ -314,6 +321,37 @@ digest_for_lock_key() {
     jq -r --arg k "$key" '.digests[$k] // empty' "$DIGESTS_FILE" 2>/dev/null || true
 }
 
+pins_env_var_for_key() {
+    # lockKey -> PZ_IMAGE_* override consumed by every compose module.
+    printf 'PZ_IMAGE_%s\n' "$(printf '%s' "$1" | tr 'a-z-' 'A-Z_')"
+}
+
+write_image_pins_env() {
+    # PZ-AUD-030: the digest recorded at update time becomes the digest
+    # actually executed: compose resolves ${PZ_IMAGE_X:-tag} with the pin
+    # winning over the tag default on every up/reconcile.
+    [ -f "$DIGESTS_FILE" ] || { rm -f "$PINS_ENV"; return 0; }
+    local tmp key digest var
+    tmp="$(pz_tempfile)"
+    while IFS=$'\t' read -r key digest; do
+        [ -n "$key" ] && [ -n "$digest" ] || continue
+        var="$(pins_env_var_for_key "$key")"
+        printf '%s=%s\n' "$var" "$digest"
+    done < <(jq -r '.digests // {} | to_entries[] | [.key, .value] | @tsv' "$DIGESTS_FILE" 2>/dev/null) > "$tmp"
+    if [ -s "$tmp" ]; then
+        install -m 0600 "$tmp" "$PINS_ENV"
+    else
+        rm -f "$PINS_ENV"
+    fi
+    rm -f "$tmp"
+}
+
+compose_env_args() {
+    # Shared --env-file selection: user config first, executed pins second.
+    [ -f "$ENV_FILE" ] && printf '%s\0' --env-file "$ENV_FILE"
+    [ -f "$PINS_ENV" ] && printf '%s\0' --env-file "$PINS_ENV"
+}
+
 emit_app_row() {
     local rec="$1" enabled_json="$2" running_json="$3"
     local key title layer port bind_kind image_ref lock_key container user_facing
@@ -419,7 +457,7 @@ compose_config_subset() {
     local -a files=() args=()
     mapfile -t files
     [ "${#files[@]}" -gt 0 ] || return 1
-    [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+    while IFS= read -r -d '' a; do args+=( "$a" ); done < <(compose_env_args)
     args+=(-p "$PROJECT")
     local f
     for f in "${files[@]}"; do
@@ -439,7 +477,7 @@ compose_up_subset() {
         esac
     done
     services=("$@")
-    [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+    while IFS= read -r -d '' a; do args+=( "$a" ); done < <(compose_env_args)
     args+=(-p "$PROJECT")
     for f in "${files[@]}"; do
         args+=(-f "$f")
@@ -457,7 +495,7 @@ compose_rm_subset() {
         esac
     done
     services=("$@")
-    [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+    while IFS= read -r -d '' a; do args+=( "$a" ); done < <(compose_env_args)
     args+=(-p "$PROJECT")
     for f in "${files[@]}"; do
         args+=(-f "$f")
@@ -691,7 +729,7 @@ cmd_update() {
         mapfile -t files < <(compose_files_for_keys "${targets[@]}")
         mapfile -t services < <(services_for_keys "${targets[@]}")
         local args=() f
-        [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+        while IFS= read -r -d '' a; do args+=( "$a" ); done < <(compose_env_args)
         args+=(-p "$PROJECT")
         for f in "${files[@]}"; do
             args+=(-f "$f")
@@ -716,6 +754,12 @@ cmd_update() {
             printf '%s\n' "$digest_map" > "$tmp"
             install -m 0600 "$tmp" "$DIGESTS_FILE"
             rm -f "$tmp"
+            write_image_pins_env
+            # The pin written above must drive this same up, not the next one.
+            case " ${args[*]} " in
+                *" $PINS_ENV "*) ;;
+                *) [ -f "$PINS_ENV" ] && args+=(--env-file "$PINS_ENV") ;;
+            esac
             docker_cli "${args[@]}" up -d "${services[@]}" || reason="pull ok; compose up failed"
         else
             reason="compose pull failed"

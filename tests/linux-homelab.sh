@@ -123,9 +123,10 @@ rg -q 'HOMELAB_ADMIN_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.ho
 rg -q 'HOMELAB_PUBLIC_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml"
 rg -q 'HOMELAB_ADMIN_BIND_ADDR' "$REPO_ROOT/assets/home-server/docker-compose.extras.yml"
 # every service block must carry no-new-privileges and a memory cap
+# (the shared `pz-internal` network header is not a service).
 for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml \
          "$REPO_ROOT/assets/home-server/apps/compose/"*.yml; do
-    svcs="$(rg -c '^  [a-z0-9-]+:$' "$f")"
+    svcs="$(rg '^  [a-z0-9-]+:$' "$f" | rg -vc '^  pz-internal:$')"
     [ "$(rg -c 'no-new-privileges' "$f")" -eq "$svcs" ] || { echo "FAIL: missing no-new-privileges in $f"; exit 1; }
     [ "$(rg -c 'mem_limit:' "$f")" -eq "$svcs" ] || { echo "FAIL: missing mem_limit in $f"; exit 1; }
 done
@@ -375,6 +376,81 @@ jq -e '.images["paperless-broker"] == "valkey/valkey:8.0"' \
 paper_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable paperless --dry-run --json)"
 echo "$paper_out" | jq -e '.ok == true and (.wouldEnable | index("paperless-broker") != null)' >/dev/null
 echo "  paperless broker ok"
+
+echo "=== executed pins, isolation, no secret expansion (PZ-AUD-030) ==="
+# Log rotation on every service block.
+for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml \
+         "$REPO_ROOT/assets/home-server/apps/compose/"*.yml; do
+    svcs="$(rg '^  [a-z0-9-]+:$' "$f" | rg -vc '^  pz-internal:$')"
+    [ "$(rg -c '^    logging:$' "$f")" -eq "$svcs" ] || { echo "FAIL: logging missing in $f"; exit 1; }
+    rg -q 'max-size: "10m"' "$f" || { echo "FAIL: log rotation missing in $f"; exit 1; }
+done
+# Media libraries are read-only for the server.
+rg -q '\$\{HOMELAB_MEDIA_DIR:-./media\}:/media:ro' "$REPO_ROOT/assets/home-server/docker-compose.homelab.yml" \
+    || { echo "FAIL: jellyfin media not ro in core"; exit 1; }
+rg -q '\$\{HOMELAB_MEDIA_DIR:-./media\}:/media:ro' "$REPO_ROOT/assets/home-server/apps/compose/jellyfin.yml" \
+    || { echo "FAIL: jellyfin media not ro in module"; exit 1; }
+# Least-privilege networks: proxy and db traffic stays internal.
+rg -q 'pz-internal:' "$REPO_ROOT/assets/home-server/apps/compose/portainer.yml" \
+    || { echo "FAIL: portainer module missing internal net"; exit 1; }
+rg -q 'internal: true' "$REPO_ROOT/assets/home-server/apps/compose/nextcloud.yml" \
+    || { echo "FAIL: nextcloud module missing internal net"; exit 1; }
+# Digests recorded at update time drive the executed compose.
+PINDOCKER="$TMP/pindocker"
+mkdir -p "$PINDOCKER"
+cat > "$PINDOCKER/docker" <<'EOS'
+#!/usr/bin/env bash
+case "${1:-}" in
+  info) exit 0 ;;
+  version) exit 0 ;;
+  image) echo "vaultwarden/server@sha256:aaabbbccc0001"; exit 0 ;;
+  compose)
+    shift
+    for a in "$@"; do
+      case "$a" in
+        version) echo "Docker Compose version v2.27.0"; exit 0 ;;
+      esac
+    done
+    printf '%s\n' "$*" >> "$PINS_CAPTURE"
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$PINDOCKER/docker"
+export PINS_CAPTURE="$TMP/pins.capture"
+rm -f "$PINS_CAPTURE"
+PINSTATE="$TMP/pin-state"
+mkdir -p "$PINSTATE"
+env PATH="$PINDOCKER:$PATH" PZ_HOMELAB_STATE="$PINSTATE" \
+    PZ_HOMELAB_APPS_NO_DOCKER=0 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 \
+    PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm-pin.json" \
+    "$REPO_ROOT/linux/pz" server homelab repair --json >/dev/null 2>&1
+env PATH="$PINDOCKER:$PATH" PZ_HOMELAB_STATE="$PINSTATE" \
+    PZ_HOMELAB_APPS_NO_DOCKER=0 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 \
+    PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm-pin.json" \
+    "$REPO_ROOT/linux/pz" server homelab apps enable vaultwarden --json >/dev/null 2>&1
+pin_upd="$(env PATH="$PINDOCKER:$PATH" PZ_HOMELAB_STATE="$PINSTATE" \
+    PZ_HOMELAB_APPS_NO_DOCKER=0 PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 \
+    PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm-pin.json" \
+    "$REPO_ROOT/linux/pz" server homelab apps update vaultwarden --json 2>/dev/null)"
+echo "$pin_upd" | jq -e '.ok == true and .state == "applied"' >/dev/null
+test "$(stat -c '%a' "$PINSTATE/image-pins.env")" = "600"
+rg -q '^PZ_IMAGE_VAULTWARDEN=vaultwarden/server@sha256:aaabbbccc0001$' "$PINSTATE/image-pins.env" \
+    || { echo "FAIL: executed pin not recorded"; exit 1; }
+rg -q 'image-pins.env up -d' "$PINS_CAPTURE" \
+    || { echo "FAIL: executed up did not consume pins"; exit 1; }
+PZ_HOMELAB_STATE="$PINSTATE" "$REPO_ROOT/linux/pz" server homelab apps list --json 2>/dev/null \
+    | jq -e '[.apps[] | select(.key == "vaultwarden") | .imageRef] | first | test("sha256:aaabbbccc0001")' >/dev/null
+# No rendered output may carry secret values (compose config is never dumped).
+secret_val="$(grep -E '^VW_ADMIN_TOKEN=' "$PINSTATE/.env" | cut -d= -f2-)"
+for cmdline in "server homelab status --json" "server homelab plan --json" "server homelab apps list --json" "server homelab apps enable n8n --dry-run --json"; do
+    # shellcheck disable=SC2086
+    if PZ_HOMELAB_STATE="$PINSTATE" $REPO_ROOT/linux/pz $cmdline 2>/dev/null | rg -qF "$secret_val"; then
+        echo "FAIL: secret value expanded in: $cmdline"; exit 1
+    fi
+done
+echo "  pins + isolation + redaction ok"
 
 echo "=== web CLI bootstrap (no serve) ==="
 export PZ_HOMELAB_WEB_STATE="$TMP/web"

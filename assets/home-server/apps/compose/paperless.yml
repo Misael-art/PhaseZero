@@ -2,6 +2,11 @@
 services:
   paperless-broker:
     image: ${PZ_IMAGE_PAPERLESS_BROKER:-valkey/valkey:8.0}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     container_name: phasezero-paperless-broker
     restart: unless-stopped
     init: true
@@ -22,6 +27,11 @@ services:
       start_period: 10s
   paperless:
     image: ${PZ_IMAGE_PAPERLESS:-ghcr.io/paperless-ngx/paperless-ngx:2.16.3}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     container_name: phasezero-paperless
     restart: unless-stopped
     init: true

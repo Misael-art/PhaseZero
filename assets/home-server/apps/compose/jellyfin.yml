@@ -2,6 +2,11 @@
 services:
   jellyfin:
     image: ${PZ_IMAGE_JELLYFIN:-jellyfin/jellyfin:10.10.7}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     container_name: phasezero-jellyfin
     restart: unless-stopped
     init: true
@@ -14,7 +19,7 @@ services:
     volumes:
       - jellyfin_config:/config
       - jellyfin_cache:/cache
-      - ${HOMELAB_MEDIA_DIR:-./media}:/media
+      - ${HOMELAB_MEDIA_DIR:-./media}:/media:ro
 
 volumes:
   jellyfin_config:

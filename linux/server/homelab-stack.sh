@@ -15,6 +15,7 @@ EXTRAS_FILE="$COMPOSE_DIR/docker-compose.extras.yml"
 APPS_CATALOG="${PZ_HOMELAB_APPS_CATALOG:-$COMPOSE_DIR/apps/catalog.json}"
 PROJECT="${PZ_HOMELAB_PROJECT:-phasezero-homelab}"
 HOMELAB_STATE="${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}"
+PINS_ENV="${PZ_HOMELAB_IMAGE_PINS:-$HOMELAB_STATE/image-pins.env}"
 ENV_FILE="${PZ_HOMELAB_ENV_FILE:-$HOMELAB_STATE/.env}"
 ENABLED_FILE="${PZ_HOMELAB_APPS_ENABLED:-$HOMELAB_STATE/apps.enabled.json}"
 BACKUP_ROOT="${PZ_HOMELAB_BACKUP_ROOT:-$HOMELAB_STATE/backups}"
@@ -154,6 +155,7 @@ docker_cli() {
 
 compose_args() {
     [ -f "$ENV_FILE" ] && printf '%s\0' --env-file "$ENV_FILE"
+    [ -f "$PINS_ENV" ] && printf '%s\0' --env-file "$PINS_ENV"
     printf '%s\0' -p "$PROJECT" -f "$CORE_FILE"
     [ "$WITH_EXTRAS" = "1" ] && [ -f "$EXTRAS_FILE" ] && printf '%s\0' -f "$EXTRAS_FILE"
 }
@@ -424,6 +426,7 @@ cmd_reconcile() {
     ensure_env_file "$ACCESS_MODE"
     local -a args=()
     [ -f "$ENV_FILE" ] && args+=(--env-file "$ENV_FILE")
+    [ -f "$PINS_ENV" ] && args+=(--env-file "$PINS_ENV")
     args+=(-p "$PROJECT")
     local f
     for f in "${files[@]}"; do args+=(-f "$f"); done

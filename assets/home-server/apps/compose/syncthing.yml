@@ -2,6 +2,11 @@
 services:
   syncthing:
     image: ${PZ_IMAGE_SYNCTHING:-syncthing/syncthing:1.29.6}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     container_name: phasezero-syncthing
     restart: unless-stopped
     hostname: phasezero-syncthing
