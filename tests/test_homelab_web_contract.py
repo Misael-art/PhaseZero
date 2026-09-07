@@ -393,3 +393,40 @@ def test_cli_user_add_password_file(tmp_path, monkeypatch):
 def test_confirmation_phrase_binds_source():
     assert confirmation_phrase("/backups/bk1") == "RESTAURAR bk1"
     assert re.fullmatch(r"RESTAURAR [\w.-]+", confirmation_phrase("/x/y"))
+
+
+def test_enable_starts_unit_and_guides_first_account(tmp_path, monkeypatch):
+    """PZ-AUD-015: enable provisions AND starts; first account is guided."""
+    monkeypatch.setenv("PZ_HOMELAB_WEB_STATE", str(tmp_path / "web"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("PZ_HOMELAB_WEB_UNIT_DIR", str(tmp_path / "units"))
+    from linux.server import homelab_web as mod
+
+    calls = []
+    monkeypatch.setattr(mod, "_systemctl", lambda *a: (calls.append(a) or (0, "")))
+    monkeypatch.setattr(mod, "_loginctl", lambda *a: (0, "Linger=yes"))
+    monkeypatch.setattr(mod, "_probe_https", lambda host, port: True)
+    dashboard = mod.HomelabWeb(state_dir=tmp_path / "web2", bind="127.0.0.1", port=17443)
+    payload = dashboard.enable()
+    assert ("daemon-reload",) in calls
+    assert ("enable", "--now", "phasezero-homelab-web.service") in calls
+    assert payload["systemdStarted"] is True
+    assert payload["httpsReachable"] is True
+    assert payload["ok"] is True
+    assert "user add" in (payload["nextAction"] or "")
+    assert (tmp_path / "units" / "phasezero-homelab-web.service").is_file()
+
+
+def test_enable_reports_failed_start_honestly(tmp_path, monkeypatch):
+    monkeypatch.setenv("PZ_HOMELAB_WEB_STATE", str(tmp_path / "web"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("PZ_HOMELAB_WEB_UNIT_DIR", str(tmp_path / "units"))
+    from linux.server import homelab_web as mod
+
+    monkeypatch.setattr(mod, "_systemctl", lambda *a: (1, "no bus"))
+    monkeypatch.setattr(mod, "_loginctl", lambda *a: (1, "no loginctl"))
+    dashboard = mod.HomelabWeb(state_dir=tmp_path / "web3", bind="127.0.0.1", port=17443)
+    payload = dashboard.enable()
+    assert payload["systemdStarted"] is False
+    assert payload["ok"] is False
+    assert payload["linger"]["active"] is False

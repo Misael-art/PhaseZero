@@ -47,6 +47,45 @@ WEAK_PASSWORDS = frozenset(
 Invoker = Callable[[list[str]], tuple[int, str, str]]
 
 
+def _systemctl(*args: str) -> tuple[int, str]:
+    # PZ-AUD-015 seam: user-scope systemd only, monkeypatched in tests.
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", *args],
+            capture_output=True, text=True, timeout=30, shell=False, check=False,
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, str(exc)
+
+
+def _loginctl(*args: str) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(
+            ["loginctl", *args],
+            capture_output=True, text=True, timeout=30, shell=False, check=False,
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, str(exc)
+
+
+def _probe_https(host: str, port: int, timeout: float = 2.0) -> bool:
+    import http.client
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
+        conn.request("GET", "/login")
+        resp = conn.getresponse()
+        conn.close()
+        return resp.status < 500
+    except (OSError, ssl.SSLError, http.client.HTTPException):
+        return False
+
+
 def _state_dir() -> Path:
     override = os.environ.get("PZ_HOMELAB_WEB_STATE")
     if override:
@@ -403,13 +442,24 @@ class HomelabWeb:
         )
         template = self._path("phasezero-homelab-web.service")
         _atomic_write(template, body, 0o644)
-        return template
+        # PZ-AUD-015: enable --now needs the unit on the user bus path.
+        unit_dir = os.environ.get("PZ_HOMELAB_WEB_UNIT_DIR")
+        if unit_dir:
+            dest_dir = Path(unit_dir)
+        else:
+            xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+            dest_dir = Path(xdg) / "systemd" / "user"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / "phasezero-homelab-web.service"
+        _atomic_write(dest, body, 0o644)
+        return dest
 
     def dashboard_url(self) -> str:
         host = "127.0.0.1" if self.bind in {"0.0.0.0", "::", "[::]"} else self.bind
         return f"https://{host}:{self.port}/"
 
     def status(self) -> dict[str, Any]:
+        rc, _ = _systemctl("is-active", "--quiet", "phasezero-homelab-web.service")
         return {
             "schemaVersion": SCHEMA,
             "tool": "homelab-web",
@@ -417,7 +467,65 @@ class HomelabWeb:
             "port": self.port,
             "url": self.dashboard_url(),
             "users": len(self.users()),
+            "unitActive": rc == 0,
             "lanBind": bool(self._load_json("config.json", {}).get("lanBind")),
+        }
+
+    def start(self, unit_name: str = "phasezero-homelab-web.service") -> dict[str, Any]:
+        # PZ-AUD-015: daemon-reload + enable --now + active proof.
+        _systemctl("daemon-reload")
+        rc, out = _systemctl("enable", "--now", unit_name)
+        if rc != 0:
+            return {"started": False, "detail": (out.strip() or "systemctl enable failed")[:300]}
+        for _ in range(10):
+            rc, _ = _systemctl("is-active", "--quiet", unit_name)
+            if rc == 0:
+                return {"started": True, "detail": "unit active"}
+            time.sleep(1)
+        return {"started": False, "detail": "unit not active after enable"}
+
+    def ensure_linger(self) -> dict[str, Any]:
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        rc, out = _loginctl("show-user", user, "-p", "Linger") if user else (127, "no user")
+        if rc == 0 and "Linger=yes" in out:
+            return {"active": True, "detail": "linger already on"}
+        rc2, out2 = _loginctl("enable-linger", user) if user else (127, "no user")
+        if rc2 == 0:
+            return {"active": True, "detail": "linger enabled"}
+        return {
+            "active": False,
+            "detail": ((out2.strip() or out.strip() or "linger not granted")[:300]),
+            "nextAction": "run once with privilege: loginctl enable-linger $USER (else the dashboard stops at logout)",
+        }
+
+    def enable(self) -> dict[str, Any]:
+        # PZ-AUD-015: enable provisions AND starts; the first account is
+        # still created by the operator over a protected channel, guided
+        # by nextAction — never auto-created with a default password.
+        self.ensure_tls_cert()
+        unit = self.write_user_unit()
+        started = self.start()
+        linger = self.ensure_linger()
+        https = _probe_https("127.0.0.1", self.port) if started["started"] else False
+        users = len(self.users())
+        ok = bool(started["started"] and https)
+        if users == 0:
+            next_action = (
+                None if not ok else
+                "create the first account now: pz server homelab web user add <name> --password-file PATH"
+            )
+        else:
+            next_action = None if ok else "check startDetail, then open the dashboard URL"
+        return {
+            **self.status(),
+            "action": "enable",
+            "ok": ok,
+            "unitPath": str(unit),
+            "systemdStarted": bool(started["started"]),
+            "startDetail": started["detail"],
+            "linger": linger,
+            "httpsReachable": https,
+            "nextAction": next_action,
         }
 
     def _default_invoker(self, argv: list[str]) -> tuple[int, str, str]:
@@ -762,9 +870,7 @@ def _cli(argv: list[str]) -> int:
         print(json.dumps(web.status(), separators=(",", ":")))
         return 0
     if action == "enable":
-        web.ensure_tls_cert()
-        unit = web.write_user_unit()
-        payload = {**web.status(), "action": "enable", "unitPath": str(unit), "systemdStarted": False}
+        payload = web.enable()
         print(json.dumps(payload, separators=(",", ":")))
         return 0
     if action == "disable":

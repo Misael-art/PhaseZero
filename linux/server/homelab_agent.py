@@ -50,7 +50,52 @@ def _unit_dir() -> Path | None:
     override = os.environ.get("PZ_HOMELAB_AGENT_UNIT_DIR")
     if override:
         return Path(override)
-    return None
+    # PZ-AUD-015: user units belong on the user bus; without this path,
+    # enable --now can never find them after a reboot without graphical login.
+    xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(xdg) / "systemd" / "user"
+
+
+def _systemctl(*args: str) -> tuple[int, str]:
+    # PZ-AUD-015 seam: user-scope systemd only, monkeypatched in tests so the
+    # suite never touches the host session bus.
+    try:
+        proc = subprocess.run(
+            ["systemctl", "--user", *args],
+            capture_output=True, text=True, timeout=30, shell=False, check=False,
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, str(exc)
+
+
+def _loginctl(*args: str) -> tuple[int, str]:
+    try:
+        proc = subprocess.run(
+            ["loginctl", *args],
+            capture_output=True, text=True, timeout=30, shell=False, check=False,
+        )
+        return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+    except (OSError, subprocess.SubprocessError) as exc:
+        return 127, str(exc)
+
+
+def _probe_https(host: str, port: int, timeout: float = 2.0) -> bool:
+    # PZ-AUD-015: proof the dashboard/agent answers TLS, not just that a
+    # unit file exists. Any HTTP status (even 404/401) proves serving.
+    import http.client
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    try:
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        conn.close()
+        return resp.status < 500
+    except (OSError, ssl.SSLError, http.client.HTTPException):
+        return False
 
 
 def _hash(value: str) -> str:
@@ -206,6 +251,36 @@ class HomelabAgent:
             return dest
         return template
 
+    def start(self, unit_name: str = "phasezero-agent.service") -> dict[str, Any]:
+        # PZ-AUD-015: daemon-reload + enable --now + active proof. Kept out
+        # of install()/write_user_unit() on purpose (user-unit purity gate).
+        _systemctl("daemon-reload")
+        rc, out = _systemctl("enable", "--now", unit_name)
+        if rc != 0:
+            return {"started": False, "detail": (out.strip() or "systemctl enable failed")[:300]}
+        for _ in range(10):
+            rc, _ = _systemctl("is-active", "--quiet", unit_name)
+            if rc == 0:
+                return {"started": True, "detail": "unit active"}
+            time.sleep(1)
+        return {"started": False, "detail": "unit not active after enable"}
+
+    def ensure_linger(self) -> dict[str, Any]:
+        # User units stop at logout without linger; enabling it needs
+        # privilege, so this is best-effort with an honest report.
+        user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+        rc, out = _loginctl("show-user", user, "-p", "Linger") if user else (127, "no user")
+        if rc == 0 and "Linger=yes" in out:
+            return {"active": True, "detail": "linger already on"}
+        rc2, out2 = _loginctl("enable-linger", user) if user else (127, "no user")
+        if rc2 == 0:
+            return {"active": True, "detail": "linger enabled"}
+        return {
+            "active": False,
+            "detail": ((out2.strip() or out.strip() or "linger not granted")[:300]),
+            "nextAction": "run once with privilege: loginctl enable-linger $USER (else the agent stops at logout)",
+        }
+
     def install(self) -> dict[str, Any]:
         cert, key = self.ensure_tls_cert()
         unit = self.write_user_unit()
@@ -215,15 +290,24 @@ class HomelabAgent:
                 "config.json",
                 {"schemaVersion": SCHEMA, "lanBind": False, "bind": "127.0.0.1"},
             )
+        started = self.start()
+        linger = self.ensure_linger()
+        https = _probe_https("127.0.0.1", self.port) if started["started"] else False
+        ok = bool(started["started"] and https)
         return {
             **self.status(),
             "action": "install",
+            "ok": ok,
             "pairingToken": token,
             "shownOnce": True,
             "tlsCert": str(cert),
             "tlsKey": str(key),
             "unitPath": str(unit),
-            "systemdStarted": False,
+            "systemdStarted": bool(started["started"]),
+            "startDetail": started["detail"],
+            "linger": linger,
+            "httpsReachable": https,
+            "nextAction": None if ok else "check startDetail; pair with the shown-once token, then open the agent URL",
         }
 
     def issue_pairing_token(self) -> str:
@@ -367,6 +451,7 @@ class HomelabAgent:
     def status(self) -> dict[str, Any]:
         pairing = self._load_json("pairing.json", {})
         sessions = self._load_json("sessions.json", {"sessions": []})
+        rc, _ = _systemctl("is-active", "--quiet", "phasezero-agent.service")
         return {
             "schemaVersion": SCHEMA,
             "tool": "homelab-agent",
@@ -375,6 +460,7 @@ class HomelabAgent:
             "killSwitch": self.kill_switch_on(),
             "pairingConsumed": bool(pairing.get("consumed")),
             "sessions": len(sessions.get("sessions") or []),
+            "unitActive": rc == 0,
             "mdns": self.mdns_status(),
             "allowlist": sorted(ALLOWLIST),
         }
