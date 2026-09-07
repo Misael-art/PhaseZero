@@ -1284,25 +1284,64 @@ snap_line="$(rg -n 'tar -C "\$mount" -czf "\$pre_dir' "$REPO_ROOT/linux/server/h
 [ -n "$down_line" ] && [ -n "$snap_line" ] && [ "$down_line" -lt "$snap_line" ] \
     || { echo "FAIL: pre-restore snapshot must follow stack stop (REV-003)"; exit 1; }
 echo "  restore stops stack before snapshot ok (REV-003)"
-# REV-001: a swap that fails mid-copy (ENOSPC-like) still rolls the target
-# back to the pre-restore snapshot — the volume is registered before the
-# first destructive write, so it can never fall out of the rollback set.
-echo "pre-restore-bytes" > "$VM/vaultwarden_data/db.sqlite"
+# R01-001: a compose down failure must stop restore before ANY write.
+# `if ! cmd_down` suppresses errexit, so cmd_down propagates explicitly.
+# The REAL cmd_down runs; only the docker CLI is stubbed (info/version/
+# ps/volume succeed, `compose down` exits 42). No volume-mount override —
+# that path short-circuits cmd_down.
+DOCK="$TMP/docker-down42"; mkdir -p "$DOCK"
+printf '#!/usr/bin/env bash\ncase "$1" in info|compose) case "${2:-}" in version|"") exit 0 ;; esac ;; esac\ncase "$*" in *"down"*) exit 42 ;; *) exit 0 ;; esac\n' > "$DOCK/docker"
+chmod +x "$DOCK/docker"
+cp -a "$BKT/bk1" "$BKT/bkr01"
+rm -rf "$BKT/bkr01.pre-restore"
+sentinel="$(cat "$VM/vaultwarden_data/db.sqlite")"
+r01_rc=0
+r01_out="$(env PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$BKT" \
+    PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' \
+    PATH="$DOCK:$PATH" \
+    "$REPO_ROOT/linux/pz" server homelab restore --source "$BKT/bkr01" --yes 2>&1)" || r01_rc=$?
+test "$r01_rc" = "1" || { echo "FAIL: compose down failure must fail the restore (R01-001), rc=$r01_rc"; exit 1; }
+grep -q "could not stop stack" <<< "$r01_out" || { echo "FAIL: restore did not report the failed stop (R01-001): $r01_out"; exit 1; }
+grep -q "stack stopped" <<< "$r01_out" && { echo "FAIL: cmd_down reported the stack as stopped after a failed compose down (R01-001)"; exit 1; }
+test ! -e "$BKT/bkr01.pre-restore" || { echo "FAIL: pre-restore snapshot taken over live writers (R01-001)"; exit 1; }
+test "$(cat "$VM/vaultwarden_data/db.sqlite")" = "$sentinel" || { echo "FAIL: restore mutated volumes after a failed stop (R01-001)"; exit 1; }
+rm -rf "$BKT/bkr01"
+echo "  restore refuses to run over failed compose down ok (R01-001)"
+# REV-001 matrix (R01): a mutation failure on ANY position — first or last
+# volume, failed copy or failed wipe — rolls every mutated volume back to
+# the pre-restore snapshot. The volume is registered before the first
+# destructive write, so it can never fall out of the rollback set.
 SHIM="$TMP/cp-shim"; mkdir -p "$SHIM"
 real_cp="$(command -v cp)"
-printf '#!/usr/bin/env bash\nif [ -n "$PZ_REV1_ARM" ] && [ -f "$PZ_REV1_ARM" ] && [ "${*: -1}" = "$PZ_REV1_TARGET" ]; then rm -f "$PZ_REV1_ARM"; exit 42; fi\nexec %q "$@"\n' "$real_cp" > "$SHIM/cp"
-chmod +x "$SHIM/cp"
-touch "$TMP/rev1-arm"
-rev1_out="$(env PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$BKT" \
-    PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' \
-    PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$VM" \
-    PATH="$SHIM:$PATH" PZ_REV1_ARM="$TMP/rev1-arm" PZ_REV1_TARGET="$VM/vaultwarden_data/" \
-    "$REPO_ROOT/linux/pz" server homelab restore --source "$BKT/bk1" --yes 2>/dev/null | grep -v '^INFO:' || true)"
-printf '%s\n' "$rev1_out" | jq -e '.ok == false and .failedVolume == "vaultwarden_data" and .rollbackApplied == true and .recoveryRequired == false' >/dev/null \
-    || { echo "FAIL: failed swap output wrong (REV-001): $rev1_out"; exit 1; }
-test "$(cat "$VM/vaultwarden_data/db.sqlite")" = "pre-restore-bytes" \
-    || { echo "FAIL: failed swap lost the pre-restore bytes (REV-001)"; exit 1; }
-echo "  restore failed-swap rolls target back ok (REV-001)"
+real_find="$(command -v find)"
+# cp shim: fails once (consumes the arm file) when the destination matches.
+printf '#!/usr/bin/env bash\nif [ "${1:-}" = "-a" ] && [ -n "$PZ_REV1_ARM" ] && [ -f "$PZ_REV1_ARM" ] && [ "${*: -1}" = "$PZ_REV1_TARGET" ]; then rm -f "$PZ_REV1_ARM"; exit 42; fi\nexec %q "$@"\n' "$real_cp" > "$SHIM/cp"
+# find shim: fails only the FIRST wipe of the configured directory (arm
+# consumed) so the rollback's own wipe still succeeds.
+printf '#!/usr/bin/env bash\nif [ -n "${PZ_REV1_WIPE:-}" ] && [ -n "$PZ_REV1_ARM" ] && [ -f "$PZ_REV1_ARM" ] && [ "${1:-}" = "$PZ_REV1_WIPE" ] && [ "${*: -1}" = "-delete" ]; then rm -f "$PZ_REV1_ARM"; exit 42; fi\nexec %q "$@"\n' "$real_find" > "$SHIM/find"
+chmod +x "$SHIM/cp" "$SHIM/find"
+for scenario in vw-cp st-cp vw-wipe; do
+    case "$scenario" in
+        vw-cp)   rb_vol="vaultwarden_data"; arm="$TMP/arm-cp-vw"; tgt="$VM/vaultwarden_data/";  wipe="";;
+        st-cp)   rb_vol="syncthing_data";   arm="$TMP/arm-cp-st"; tgt="$VM/syncthing_data/";    wipe="";;
+        vw-wipe) rb_vol="vaultwarden_data"; arm="$TMP/arm-none";    tgt="";                       wipe="$VM/vaultwarden_data";;
+    esac
+    : > "$arm"
+    echo "round-$scenario-vw" > "$VM/vaultwarden_data/db.sqlite"
+    echo "round-$scenario-st" > "$VM/syncthing_data/a.txt"
+    m_out="$(env PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$BKT" \
+        PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' \
+        PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$VM" \
+        PATH="$SHIM:$PATH" PZ_REV1_ARM="$arm" PZ_REV1_TARGET="$tgt" PZ_REV1_WIPE="$wipe" \
+        "$REPO_ROOT/linux/pz" server homelab restore --source "$BKT/bk1" --yes 2>/dev/null | grep -v '^INFO:' || true)"
+    printf '%s\n' "$m_out" | jq -e --arg v "$rb_vol" '.ok == false and .failedVolume == $v and .rollbackApplied == true and .recoveryRequired == false and .rolledBack != null' >/dev/null \
+        || { echo "FAIL: matrix scenario $scenario wrong output (REV-001/R01): $m_out"; exit 1; }
+    test "$(cat "$VM/vaultwarden_data/db.sqlite")" = "round-$scenario-vw" \
+        || { echo "FAIL: scenario $scenario lost vaultwarden pre-restore bytes (REV-001/R01)"; exit 1; }
+    test "$(cat "$VM/syncthing_data/a.txt")" = "round-$scenario-st" \
+        || { echo "FAIL: scenario $scenario lost syncthing pre-restore bytes (REV-001/R01)"; exit 1; }
+done
+echo "  restore failed mutation rolls back at every position ok (REV-001 matrix)"
 # REV-001: when even the rollback cannot complete, the result says
 # recovery-required instead of claiming rollbackApplied:true.
 printf '#!/usr/bin/env bash\nif [ "${*: -1}" = "$PZ_REV1_TARGET" ]; then exit 42; fi\nexec %q "$@"\n' "$real_cp" > "$SHIM/cp"
@@ -1337,7 +1376,7 @@ if command -v sqlite3 >/dev/null 2>&1; then
         "$REPO_ROOT/linux/pz" server homelab backup --dest "$TMP/rev2-bk/bk" 2>/dev/null | grep -v '^INFO:' || true)"
     touch "$TMP/rev2-stop"
     wait "$rev2_writer" 2>/dev/null || true
-    echo "$rev2_out" | jq -e '.ok == true and .consistent == true and .volumes[0].consistent == true and .volumes[0].method == "staged-tar+sqlite-live-hotbackup"' >/dev/null \
+    echo "$rev2_out" | jq -e '.ok == true and .consistent == true and .volumes[0].consistent == true and .volumes[0].method == "staged-tar+sqlite-live-hotbackup" and .volumes[0].reason == null' >/dev/null \
         || { echo "FAIL: sqlite backup not consistent live hot-backup (REV-002): $rev2_out"; exit 1; }
     REV2R="$TMP/rev2-restore"; rm -rf "$REV2R"; mkdir -p "$REV2R"
     PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_VOLUMES_OVERRIDE='rev2_vol' \
@@ -1353,6 +1392,29 @@ if command -v sqlite3 >/dev/null 2>&1; then
 else
     echo "  SKIP REV-002 (sqlite3 unavailable)"
 fi
+# R01-004: the consistency reason reaches manifest + result — nothing rides
+# on a side variable that the $(...) command substitution would discard.
+R04="$TMP/rev4-pg"; rm -rf "$R04"; mkdir -p "$R04/rev4_vol"
+echo 16 > "$R04/rev4_vol/PG_VERSION"
+r04_out="$(PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$TMP/rev4-bk" \
+    PZ_HOMELAB_VOLUMES_OVERRIDE='rev4_vol' PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$R04" \
+    "$REPO_ROOT/linux/pz" server homelab backup --dest "$TMP/rev4-bk/bk" 2>/dev/null | grep -v '^INFO:' || true)"
+echo "$r04_out" | jq -e '.ok == true and .consistent == false and .volumes[0].consistent == false and (.volumes[0].reason | length > 0) and (.volumes[0].reason | test("server database"))' >/dev/null \
+    || { echo "FAIL: server-engine reason missing from backup result (R01-004): $r04_out"; exit 1; }
+jq -e '.volumes[0].consistent == false and (.volumes[0].reason | length > 0)' "$TMP/rev4-bk/bk/manifest.json" >/dev/null \
+    || { echo "FAIL: server-engine reason missing from manifest (R01-004)"; exit 1; }
+echo "  backup reason survives subshell ok (R01-004)"
+# R01-005: the real Prometheus TSDB layout (wal/ + chunks_head/ + block
+# dirs with index/chunks) is never classified consistent by a live copy.
+R05="$TMP/rev5-tsdb"; rm -rf "$R05"; mkdir -p "$R05/rev5_vol/wal" "$R05/rev5_vol/chunks_head" "$R05/rev5_vol/01ABC/chunks"
+: > "$R05/rev5_vol/01ABC/index"
+: > "$R05/rev5_vol/01ABC/meta.json"
+r05_out="$(PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$TMP/rev5-bk" \
+    PZ_HOMELAB_VOLUMES_OVERRIDE='rev5_vol' PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$R05" \
+    "$REPO_ROOT/linux/pz" server homelab backup --dest "$TMP/rev5-bk/bk" 2>/dev/null | grep -v '^INFO:' || true)"
+echo "$r05_out" | jq -e '.ok == true and .consistent == false and .volumes[0].consistent == false and (.volumes[0].reason | test("TSDB"))' >/dev/null \
+    || { echo "FAIL: real TSDB layout classified consistent (R01-005): $r05_out"; exit 1; }
+echo "  real TSDB layout fails conservative ok (R01-005)"
 # PZ-AUD-009: empty set fails closed; explicit --allow-empty records emptiness.
 # (A single space keeps the override active while selecting zero volumes.)
 if eval "$BENV PZ_HOMELAB_VOLUMES_OVERRIDE=' ' '$REPO_ROOT/linux/pz' server homelab backup --dest '$TMP/empty-refused'" >/dev/null 2>&1; then

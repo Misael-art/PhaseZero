@@ -739,7 +739,14 @@ cmd_down() {
         pz_info "dry-run: would run compose down (volumes preserved)"
         return 0
     fi
-    run_compose down
+    # R01-001: callers use `if ! cmd_down`, which suppresses errexit inside
+    # this function — a failed compose down must be propagated explicitly,
+    # otherwise restore snapshots/applies over live writers while reporting
+    # the stack as stopped.
+    if ! run_compose down; then
+        pz_error "compose down failed; the stack may still be running"
+        return 1
+    fi
     pz_info "homelab stack stopped (named volumes preserved)"
 }
 
@@ -846,29 +853,41 @@ json_arr() {
 }
 
 stage_volume_consistent() {
-    # PZ-AUD-009 + REV-002: copy mount -> staging, then hot-backup SQLite
-    # files FROM THE LIVE MOUNT via the sqlite3 backup API, so a write in
-    # flight cannot ship a torn database and stale WAL/SHM copies are never
-    # shipped beside the hot backup. Server engines (MariaDB/Postgres data
-    # dirs) and Prometheus TSDB layouts cannot be made consistent from
-    # files alone: they are archived as-is and flagged consistent:false
-    # with the reason (native dumps or a stopped-stack snapshot are the
-    # per-app recipe concern). Prints: "<method> <consistent(true|false)>";
-    # STAGE_REASON carries the human-readable motive when not consistent.
-    local mount="$1" stage="$2" db f tmp rel
-    STAGE_REASON=""
+    # PZ-AUD-009 + REV-002 + R01-004: copy mount -> staging, then hot-backup
+    # SQLite files FROM THE LIVE MOUNT via the sqlite3 backup API, so a
+    # write in flight cannot ship a torn database and stale WAL/SHM copies
+    # are never shipped beside the hot backup. Server engines
+    # (MariaDB/Postgres data dirs) and Prometheus TSDB layouts cannot be
+    # made consistent from files alone: they are archived as-is and flagged
+    # consistent:false with the reason. Prints ONE tab-separated record
+    # "<method>\t<consistent>\t<reason>" — a reason carried in a side
+    # variable would be lost inside the $(...) command substitution.
+    # R01-005: the real TSDB layout is wal/ + chunks_head/ + block
+    # directories (01XXXX/index + chunks); any of those shapes must never
+    # be classified consistent from a plain file copy.
+    local mount="$1" stage="$2" db rel tmp blk tsdb=false
     if ! cp -a "$mount/." "$stage/"; then
         return 1
     fi
     if find "$stage" -maxdepth 4 \( -name 'PG_VERSION' -o -name 'ibdata1' -o -name 'mysql' \) -print -quit 2>/dev/null | grep -q .; then
-        STAGE_REASON="server database directory copied as-is; needs native dump or stopped-stack snapshot"
-        printf 'staged-tar %s\n' false
+        printf 'staged-tar\t%s\t%s\n' false "server database directory copied as-is; needs native dump or stopped-stack snapshot"
         return 0
     fi
-    # Prometheus TSDB layout: no SQL marker, but file-copy is not consistent.
-    if [ -d "$stage/wal" ] && { [ -d "$stage/chunks" ] || [ -f "$stage/index" ]; }; then
-        STAGE_REASON="TSDB directory copied as-is; needs the service snapshot API or stopped-stack snapshot"
-        printf 'staged-tar %s\n' false
+    if [ -d "$stage/wal" ]; then
+        if [ -d "$stage/chunks_head" ] || [ -d "$stage/chunks" ] || [ -f "$stage/index" ]; then
+            tsdb=true
+        else
+            for blk in "$stage"/*/; do
+                [ -d "$blk" ] || continue
+                if [ -f "${blk}index" ] || [ -d "${blk}chunks" ]; then
+                    tsdb=true
+                    break
+                fi
+            done
+        fi
+    fi
+    if [ "$tsdb" = true ]; then
+        printf 'staged-tar\t%s\t%s\n' false "TSDB directory copied as-is; needs the service snapshot API or stopped-stack snapshot"
         return 0
     fi
     local -a dbs=()
@@ -879,13 +898,12 @@ stage_volume_consistent() {
         esac
     done < <(find "$stage" -maxdepth 4 -type f \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) 2>/dev/null)
     if [ "${#dbs[@]}" -eq 0 ]; then
-        printf 'staged-tar %s\n' true
+        printf 'staged-tar\t%s\t\n' true
         return 0
     fi
     if ! command -v sqlite3 >/dev/null 2>&1; then
         pz_warn "sqlite3 unavailable; shipping ${#dbs[@]} sqlite file(s) without hot-backup"
-        STAGE_REASON="sqlite3 unavailable; plain file copy is not a consistent snapshot"
-        printf 'staged-tar %s\n' false
+        printf 'staged-tar\t%s\t%s\n' false "sqlite3 unavailable; plain file copy is not a consistent snapshot"
         return 0
     fi
     for db in "${dbs[@]}"; do
@@ -899,12 +917,11 @@ stage_volume_consistent() {
         else
             pz_warn "sqlite hot-backup failed for $db; shipping file as-is"
             rm -f "$tmp"
-            STAGE_REASON="sqlite hot-backup failed for $rel; file shipped as-is"
-            printf 'staged-tar %s\n' false
+            printf 'staged-tar\t%s\t%s\n' false "sqlite hot-backup failed for $rel; file shipped as-is"
             return 0
         fi
     done
-    printf 'staged-tar+sqlite-live-hotbackup %s\n' true
+    printf 'staged-tar+sqlite-live-hotbackup\t%s\t\n' true
     return 0
 }
 
@@ -963,10 +980,10 @@ cmd_backup() {
         local stage="$stage_root/$vol"
         mkdir -p "$stage"
         local method consistent reason
-        if stage_out="$(stage_volume_consistent "$mount" "$stage")"; then
-            method="${stage_out% *}"
-            consistent="${stage_out#* }"
-            reason="${STAGE_REASON:-}"
+        if stage_line="$(stage_volume_consistent "$mount" "$stage")"; then
+            # R01-004: single tab-separated record; nothing rides on a side
+            # variable that a command substitution would discard.
+            IFS=$'\t' read -r method consistent reason <<< "$stage_line"
         else
             pz_error "staging failed for $actual"
             err=1
