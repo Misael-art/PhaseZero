@@ -22,7 +22,16 @@
       "dependsOn": [],
       "imageLockKey": "jellyfin",
       "imageRef": "jellyfin/jellyfin:10.10.7",
-      "budgetMB": 2048
+      "budgetMB": 2048,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/health", "expectMax": 499},
+        "steps": [
+        "Open the app and complete the first-run wizard (local media stays yours).",
+        "Point a library at your media folder (mounted read-only at /media).",
+        "Play one title to confirm indexing and playback."
+        ]
+      }
     },
     {
       "key": "syncthing",
@@ -43,7 +52,16 @@
       "dependsOn": [],
       "imageLockKey": "syncthing",
       "imageRef": "syncthing/syncthing:1.29.6",
-      "budgetMB": 512
+      "budgetMB": 512,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/", "expectMax": 499},
+        "steps": [
+        "Open the GUI and set a GUI username/password under Settings.",
+        "On the second device, add this host via its Device ID (Actions > Show ID).",
+        "Share one folder and confirm one file syncs both ways."
+        ]
+      }
     },
     {
       "key": "vaultwarden",
@@ -64,7 +82,16 @@
       "dependsOn": [],
       "imageLockKey": "vaultwarden",
       "imageRef": "vaultwarden/server:1.34.3",
-      "budgetMB": 256
+      "budgetMB": 256,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/alive", "expectMax": 499},
+        "steps": [
+        "Open the app and create the FIRST account (signups stay open until then).",
+        "Log in and save one vault item.",
+        "Admin panel at /admin uses VW_ADMIN_TOKEN from the homelab .env."
+        ]
+      }
     },
     {
       "key": "uptime-kuma",
@@ -85,7 +112,16 @@
       "dependsOn": [],
       "imageLockKey": "uptime-kuma",
       "imageRef": "louislam/uptime-kuma:1.23.16",
-      "budgetMB": 256
+      "budgetMB": 256,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/", "expectMax": 499},
+        "steps": [
+        "Open the app and create the admin account on first launch.",
+        "Add one HTTP monitor for each PhaseZero endpoint you care about.",
+        "Stop one service and confirm the monitor flips to DOWN, then recovers."
+        ]
+      }
     },
     {
       "key": "socket-proxy",
@@ -128,7 +164,16 @@
       "dependsOn": ["socket-proxy"],
       "imageLockKey": "portainer",
       "imageRef": "portainer/portainer-ce:2.33.2",
-      "budgetMB": 128
+      "budgetMB": 128,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/", "expectMax": 499},
+        "steps": [
+        "Open the app and create the admin account (12+ chars) on first launch.",
+        "Connect the local socket-proxy environment when prompted.",
+        "List the homelab stack to confirm visibility through the proxy."
+        ]
+      }
     },
     {
       "key": "nextcloud-db",
@@ -171,7 +216,16 @@
       "dependsOn": ["nextcloud-db"],
       "imageLockKey": "nextcloud",
       "imageRef": "nextcloud:31.0.6",
-      "budgetMB": 1024
+      "budgetMB": 1024,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/status.php", "expectMax": 499},
+        "steps": [
+        "Wait for the database to accept connections, then open the app.",
+        "Create the admin account on the setup screen.",
+        "Upload and download one file; check background jobs under Settings."
+        ]
+      }
     },
     {
       "key": "prometheus",
@@ -192,7 +246,16 @@
       "dependsOn": [],
       "imageLockKey": "prometheus",
       "imageRef": "prom/prometheus:v3.5.0",
-      "budgetMB": 512
+      "budgetMB": 512,
+      "firstUse": {
+        "openPath": "/-/healthy",
+        "probe": {"kind": "http", "path": "/-/healthy", "expectMax": 499},
+        "steps": [
+        "Open /-/healthy to confirm the server is up.",
+        "Point a scrape job at the appliance targets (see homelab docs).",
+        "Query one metric, then stop a target and watch it go down."
+        ]
+      }
     },
     {
       "key": "node-exporter",
@@ -214,7 +277,15 @@
       "dependsOn": [],
       "imageLockKey": "node-exporter",
       "imageRef": "prom/node-exporter:v1.9.1",
-      "budgetMB": 128
+      "budgetMB": 128,
+      "firstUse": {
+        "openPath": "/metrics",
+        "probe": {"kind": "http", "path": "/-/healthy", "expectMax": 499},
+        "steps": [
+        "Confirm /metrics exposes this host (check the nodename label).",
+        "Wire it as a Prometheus scrape target on the appliance."
+        ]
+      }
     },
     {
       "key": "grafana",
@@ -235,7 +306,16 @@
       "dependsOn": [],
       "imageLockKey": "grafana",
       "imageRef": "grafana/grafana:12.0.2",
-      "budgetMB": 512
+      "budgetMB": 512,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/api/health", "expectMax": 499},
+        "steps": [
+        "Log in with admin and the GRAFANA_ADMIN_PASSWORD from the homelab .env.",
+        "Add Prometheus as a data source.",
+        "Import one host dashboard and confirm real data renders."
+        ]
+      }
     },
     {
       "key": "paperless",
@@ -256,7 +336,16 @@
       "dependsOn": ["paperless-broker"],
       "imageLockKey": "paperless",
       "imageRef": "ghcr.io/paperless-ngx/paperless-ngx:2.16.3",
-      "budgetMB": 1024
+      "budgetMB": 1024,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/", "expectMax": 499},
+        "steps": [
+        "Create the superuser on first launch (createsuperuser via the app console).",
+        "Drop one PDF into the consume folder and wait for OCR.",
+        "Search the document text, then export it back out."
+        ]
+      }
     },
     {
       "key": "paperless-broker",
@@ -299,7 +388,16 @@
       "dependsOn": [],
       "imageLockKey": "n8n",
       "imageRef": "docker.n8n.io/n8nio/n8n:1.100.1",
-      "budgetMB": 1024
+      "budgetMB": 1024,
+      "firstUse": {
+        "openPath": "/",
+        "probe": {"kind": "http", "path": "/healthz", "expectMax": 499},
+        "steps": [
+        "Create the owner account on first launch.",
+        "Build one two-step workflow and run it manually.",
+        "Deactivate/reactivate it and confirm executions persist after restore."
+        ]
+      }
     }
   ]
 }

@@ -467,6 +467,31 @@ prof_winvm="$(PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm-active.json" PZ_HOMELAB_R
 echo "$prof_winvm" | jq -e '.winvmActive == true and .winvmWeightMB == 2048' >/dev/null
 echo "  unified governor ok"
 
+echo "=== app recipes guide first use, probes prove serving (PZ-AUD-008) ==="
+# Every user-facing app documents its usable journey in the catalog.
+jq -e '[.apps[] | select(.userFacing == true)
+        | select((.firstUse.steps | length) >= 2
+                 and (.firstUse.openPath | type == "string")
+                 and (.firstUse.probe.path | type == "string"))] | length >= 10' \
+    "$REPO_ROOT/assets/home-server/apps/catalog.json" >/dev/null
+# Recipes surface on list rows with a deep open URL.
+"$REPO_ROOT/linux/pz" server homelab apps list --json 2>/dev/null \
+    | jq -e '[.apps[] | select(.key == "vaultwarden")]
+             | first | .firstUse.steps[0] != null and (.openUrl | test("/$"))' >/dev/null
+# A running container whose app probe fails is not ready (honest, not TCP-only).
+R8="$TMP/recipe-strict"
+mkdir -p "$R8"
+printf '%s\n' '{"schemaVersion":1,"tool":"homelab-apps","enabled":["vaultwarden"]}' > "$R8/apps.enabled.json"
+cp "$PZ_HOMELAB_STATE/.env" "$R8/.env"
+probe_out="$(PZ_HOMELAB_STATE="$R8" bash -c '
+    source "$0/linux/server/homelab-status.sh"
+    running_containers() { echo phasezero-vaultwarden; }
+    container_health() { echo healthy; }
+    build_status
+' "$REPO_ROOT")"
+echo "$probe_out" | jq -e '.ready == false and (.functionalProbes.failed | index("vaultwarden") != null)' >/dev/null
+echo "  app recipes ok"
+
 echo "=== web CLI bootstrap (no serve) ==="
 export PZ_HOMELAB_WEB_STATE="$TMP/web"
 "$REPO_ROOT/linux/pz" server homelab web status --json | jq -e \

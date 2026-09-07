@@ -393,22 +393,29 @@ emit_app_row() {
         url="http://$host:$port"
     fi
     digest="$(digest_for_lock_key "$lock_key")"
+    local first_use open_url
+    first_use="$(jq -c '.firstUse // null' <<< "$rec")"
+    open_url=""
+    if [ -n "$url" ]; then
+        open_url="$url$(jq -r '.firstUse.openPath // "/"' <<< "$rec")"
+    fi
     jq -cn \
         --arg key "$key" --arg title "$title" --arg layer "$layer" \
         --arg imageRef "$image_ref" --arg digest "$digest" \
-        --arg bind "$bind" --arg url "$url" --arg container "$container" \
+        --arg bind "$bind" --arg url "$url" --arg openUrl "$open_url" --arg container "$container" \
         --argjson port "${port:-0}" \
         --argjson userFacing "$user_facing" \
         --argjson enabled "$enabled" --argjson running "$running" \
         --argjson budgetMB "$(jq -r '.budgetMB' <<< "$rec")" \
         --argjson secrets "$(jq -c '.secrets' <<< "$rec")" \
         --argjson dependsOn "$(jq -c '.dependsOn' <<< "$rec")" \
+        --argjson firstUse "$first_use" \
         '{
             key:$key, title:$title, layer:$layer, userFacing:$userFacing,
             enabled:$enabled, running:$running, budgetMB:$budgetMB,
             imageRef:$imageRef, digest:(if $digest == "" then null else $digest end),
-            port:$port, bind:$bind, url:$url, container:$container,
-            secrets:$secrets, dependsOn:$dependsOn,
+            port:$port, bind:$bind, url:$url, openUrl:$openUrl, container:$container,
+            secrets:$secrets, dependsOn:$dependsOn, firstUse:$firstUse,
             usesLatest:( ($imageRef | test(":latest$")) or ($imageRef == "latest") )
         }'
 }
@@ -607,13 +614,23 @@ cmd_enable() {
         reason="docker daemon not reachable; app marked enabled, start deferred"
     fi
     if [ "$started" = true ]; then
+        # PZ-AUD-008: point at the usable journey, not just the container.
+        local first_use next_action open_path
+        first_use="$(jq -c '.firstUse // null' <<< "$rec")"
+        open_path="$(jq -r '.firstUse.openPath // "/"' <<< "$rec")"
+        next_action="open the app and follow its first-use steps"
+        if [ "$first_use" != "null" ]; then
+            next_action="$(jq -r --arg app "$APP" '.firstUse.steps[0] // "open the app"' <<< "$rec")"
+        fi
         emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \
             --arg action "enable" --arg app "$APP" --argjson ok true --argjson dryRun false \
             --argjson enabled true --argjson started true --argjson composeValidated "$validated" \
             --argjson governor "$gov" --argjson keys "$keys_json" \
+            --argjson firstUse "$first_use" --arg openPath "$open_path" --arg nextAction "$next_action" \
             '{schemaVersion:$schemaVersion, tool:$tool, action:$action, app:$app, ok:$ok, dryRun:$dryRun,
               enabled:$enabled, started:$started, state:"applied", deferred:false,
-              composeValidated:$composeValidated, enabledKeys:$keys, governor:$governor, reason:null}'
+              composeValidated:$composeValidated, enabledKeys:$keys, governor:$governor, reason:null,
+              firstUse:$firstUse, openPath:$openPath, nextAction:$nextAction}'
         return 0
     fi
     emit_result --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-apps" \

@@ -194,31 +194,45 @@ expected_set_json() {
            containers:[$apps[] | select(.key as $k | ($keys | index($k) != null)) | .container],
            probes:[$apps[] | select(.key as $k | ($keys | index($k) != null))
                     | select(.port != null and .port != 0)
-                    | {key:.key, container:.container, port:.port}]}'
+                    | {key:.key, container:.container, port:.port,
+                       path:(.firstUse.probe.path // "/"),
+                       expectMax:(.firstUse.probe.expectMax // 499)}]}'
 }
 
-probe_tcp() {
-    local port="$1"
-    timeout 2 bash -c "</dev/tcp/127.0.0.1/$port" 2>/dev/null
+probe_http() {
+    # PZ-AUD-008: recipe-aware probe. Any status <= expectMax proves the
+    # app answers (auth walls return 401/403, which still count as alive).
+    local port="$1" path="$2" expect_max="$3"
+    timeout 8 python3 -c '
+import sys, urllib.request
+port, path, expect = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    r = urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5)
+    sys.exit(0 if r.status <= expect else 1)
+except urllib.error.HTTPError as e:
+    sys.exit(0 if e.code <= expect else 1)
+except Exception:
+    sys.exit(1)
+' "$port" "$path" "$expect_max" 2>/dev/null
 }
 
 functional_probes_json() {
-    # PZ-AUD-006: TCP-level proof per expected RUNNING app. Skipped
-    # entirely when nothing runs, so hermetic runs stay silent.
+    # PZ-AUD-006/008: per-recipe HTTP proof for each expected RUNNING app.
+    # Skipped entirely when nothing runs, so hermetic runs stay silent.
     local expected="$1" running="$2"
     local -a failed=() passed=()
-    local key container port
-    while IFS=$'\t' read -r key container port; do
+    local key container port path expect_max
+    while IFS=$'\t' read -r key container port path expect_max; do
         [ -n "$key" ] || continue
         if ! jq -e --arg c "$container" 'index($c) != null' <<< "$running" >/dev/null 2>&1; then
             continue
         fi
-        if probe_tcp "$port"; then
+        if probe_http "$port" "$path" "$expect_max"; then
             passed+=("$key")
         else
             failed+=("$key")
         fi
-    done < <(jq -r '.probes[]? | [.key, .container, (.port|tostring)] | @tsv' <<< "$expected" 2>/dev/null)
+    done < <(jq -r '.probes[]? | [.key, .container, (.port|tostring), .path, (.expectMax|tostring)] | @tsv' <<< "$expected" 2>/dev/null)
     jq -cn --argjson passed "$(arr_json "${passed[@]}")" \
         --argjson failed "$(arr_json "${failed[@]}")" \
         '{passed:$passed, failed:$failed}'
