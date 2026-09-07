@@ -788,6 +788,22 @@ mimo_official_provider_values() {
     jq -r '[.baseUrl,.model] | @tsv' "$MIMO_PROVIDER_CONFIG"
 }
 
+mimo_chat_probe() {
+    # PZ-AUD-020: configured != authenticated. A tiny real completion
+    # proves key, model, quota and reachability; a stored 200 from setup
+    # time proves none of those. The key travels in a header (same as the
+    # setup validation), never in argv dumps, logs or stored config.
+    local base_url="$1" model="$2" key http_code body
+    key="$(cat "$MIMO_PROVIDER_KEY" 2>/dev/null || true)"
+    [ -n "$key" ] || return 1
+    body="$(jq -nc --arg m "$model" \
+        '{model:$m,messages:[{role:"user",content:"reply with: ok"}],max_tokens:4,temperature:0}')"
+    http_code="$(curl -sS -m 30 -o /dev/null -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $key" -H 'Content-Type: application/json' \
+        -d "$body" "$base_url/chat/completions" 2>/dev/null || true)"
+    [ "$http_code" = 200 ]
+}
+
 configure_mimo_official_clients() {
     mimo_official_configured || return 0
     local values baseurl model key_ref models store_tmp
@@ -1717,16 +1733,44 @@ ensure_one() {
             _ensure_steps_add "$steps_file" start skipped "API remota; serviço local desnecessário"
             if [ "$dry" = 1 ]; then
                 summary="MiMo oficial já está configurado. Vai sincronizar o provedor nas IDEs."
+                jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
+                    --argjson dryRun true \
+                    --argjson steps "$(cat "$steps_file")" \
+                    '{schemaVersion:1,id:$id,name:$name,ok:true,ready:true,completed:true,resumable:false,
+                      status:"ready",summary:$summary,next:"Abra o MiMo pelo botão Usar.",needsUser:"none",
+                      dryRun:$dryRun,installed:true,steps:$steps,inference:{probed:false}}'
             else
-                configure_mimo_official_clients >>"$log" 2>&1 || true
-                summary="MiMo oficial está configurado e pronto no OpenCode."
+                local mimo_values mimo_base mimo_model
+                mimo_values="$(mimo_official_provider_values)"
+                mimo_base="${mimo_values%%$'\t'*}"
+                mimo_model="${mimo_values#*$'\t'}"
+                # PZ-AUD-020: only a real answer closes readiness.
+                if mimo_chat_probe "$mimo_base" "$mimo_model"; then
+                    _ensure_steps_add "$steps_file" inference ok "resposta real da API oficial"
+                    configure_mimo_official_clients >>"$log" 2>&1 || true
+                    summary="MiMo oficial está configurado e respondeu na API oficial."
+                    jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
+                        --argjson dryRun false \
+                        --argjson steps "$(cat "$steps_file")" \
+                        '{schemaVersion:1,id:$id,name:$name,ok:true,ready:true,completed:true,resumable:false,
+                          status:"ready",summary:$summary,next:"Abra o MiMo pelo botão Usar.",needsUser:"none",
+                          dryRun:$dryRun,installed:true,steps:$steps,inference:{probed:true,httpCode:"200"}}'
+                else
+                    _ensure_steps_add "$steps_file" inference failed "sem resposta de chat (chave revogada, quota, modelo ou rede)"
+                    summary="MiMo tem chave armazenada, mas a API oficial não respondeu a uma pergunta real."
+                    jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
+                        --argjson dryRun false \
+                        --argjson steps "$(cat "$steps_file")" \
+                        '{schemaVersion:1,id:$id,name:$name,ok:false,ready:false,completed:false,resumable:true,
+                          status:"needs-credentials",
+                          summary:$summary,
+                          next:"Confira quota/modelo da conta, gere nova chave se preciso e rode set-credentials de novo.",
+                          nextAction:"linux/pz ai proxies set-credentials mimo-ai-proxy",needsUser:"api-key",
+                          dryRun:$dryRun,installed:true,steps:$steps,inference:{probed:true,httpCode:"non-200"}}'
+                    rm -f "$steps_file"
+                    return 1
+                fi
             fi
-            jq -nc --arg id "$id" --arg name "$name" --arg summary "$summary" \
-                --argjson dryRun "$([ "$dry" = 1 ] && echo true || echo false)" \
-                --argjson steps "$(cat "$steps_file")" \
-                '{schemaVersion:1,id:$id,name:$name,ok:true,ready:true,completed:true,resumable:false,
-                  status:"ready",summary:$summary,next:"Abra o MiMo pelo botão Usar.",needsUser:"none",
-                  dryRun:$dryRun,installed:true,steps:$steps}'
         else
             _ensure_steps_add "$steps_file" credentials missing "chave da API oficial"
             _ensure_steps_add "$steps_file" start deferred "aguarda chave oficial"

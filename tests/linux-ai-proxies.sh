@@ -179,6 +179,27 @@ fi
 mimo_ready="$(PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy)"
 jq -e '.ok == true and .ready == true and (.steps[1].detail | contains("desnecessário"))' \
     <<< "$mimo_ready" >/dev/null
+jq -e '.inference.probed == true and .inference.httpCode == "200"' \
+    <<< "$mimo_ready" >/dev/null
+
+# PZ-AUD-020: a stored key without a real answer is never ready.
+cat > "$WORK/bin/curl" <<'SH'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        */chat/completions) printf '401'; exit 0 ;;
+        */models) printf '200'; exit 0 ;;
+    esac
+done
+printf '200'
+SH
+chmod +x "$WORK/bin/curl"
+mimo_dead="$(PATH="$WORK/bin:$PATH" "$ROOT/linux/pz" ai proxies ensure mimo-ai-proxy 2>/dev/null || true)"
+jq -e '.ok == false and .ready == false and .resumable == true and .needsUser == "api-key"' \
+    <<< "$mimo_dead" >/dev/null
+if grep -q 'sk-phasezero-test-key' <<< "$mimo_dead"; then
+    echo "FAIL: MiMo probe failure leaked the key"; exit 1
+fi
 
 # A commit mismatch blocks runtime before systemctl can start anything.
 git -C "$HOME/.local/share/phasezero/ai-proxies/mimo-ai-proxy" config user.name PhaseZero
