@@ -150,6 +150,30 @@ pz_admin_run() {
 # Verdadeiro quando alguma chamada nesta execução foi degradada.
 pz_degraded() { [ "${PZ_DEGRADED:-0}" = "1" ]; }
 
+# --- host capacity (PZ-AUD-031): one definition of available memory/disk ---
+#
+# availableMB is memory actually free for new workloads (MemAvailable), not
+# MemTotal. Total is reported separately for transparency. Both governors
+# (per-app and per-profile) read through these helpers so app and profile
+# verdicts can never diverge on the same host.
+
+pz_mem_available_mb() {
+    if [ -n "${PZ_HOMELAB_RAM_TOTAL_OVERRIDE:-}" ]; then
+        printf '%s\n' "$PZ_HOMELAB_RAM_TOTAL_OVERRIDE"
+        return 0
+    fi
+    awk '/^MemAvailable:/ {printf "%d", $2/1024; exit}' /proc/meminfo 2>/dev/null         || { pz_error "cannot read available RAM"; return 1; }
+}
+
+pz_mem_total_mb() {
+    awk '/^MemTotal:/ {printf "%d", $2/1024; exit}' /proc/meminfo 2>/dev/null         || { pz_error "cannot read total RAM"; return 1; }
+}
+
+pz_disk_available_mb() {
+    local path="${1:-$PZ_STATE}"
+    df -Pm "$path" 2>/dev/null | awk 'NR==2 {printf "%d", $4; exit}'         || { pz_error "cannot read free disk for $path"; return 1; }
+}
+
 # --- backups centralizados ------------------------------------------------
 #
 # Backup NUNCA fica ao lado do arquivo original (isso é lixo no host do

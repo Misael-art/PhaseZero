@@ -14,6 +14,9 @@ set -euo pipefail
 PZ_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=linux/lib/common.sh
 source "$PZ_ROOT/linux/lib/common.sh"
+# shellcheck source=linux/server/homelab-governor.sh
+# Guarded (no dispatch on source): single WinVM-reserve definition (PZ-AUD-031).
+source "$PZ_ROOT/linux/server/homelab-governor.sh"
 
 COMPOSE_DIR="${PZ_HOMELAB_COMPOSE_DIR:-$PZ_ROOT/assets/home-server}"
 CATALOG_FILE="${PZ_HOMELAB_APPS_CATALOG:-$COMPOSE_DIR/apps/catalog.json}"
@@ -263,22 +266,28 @@ dependents_of() {
 }
 
 governor_for_keys() {
+    # PZ-AUD-031: same capacity source as the profile governor
+    # (MemAvailable, shared helper) plus the WinVM guest reserve, so app
+    # and profile verdicts agree on one host.
     local -a keys=("$@")
-    local available usable need verdict reasons
-    available="$(awk '/^MemTotal:/ {printf "%d", $2/1024; exit}' /proc/meminfo 2>/dev/null || true)"
-    if [ -n "${PZ_HOMELAB_RAM_TOTAL_OVERRIDE:-}" ]; then
-        available="$PZ_HOMELAB_RAM_TOTAL_OVERRIDE"
-    fi
-    if [ -z "$available" ]; then
-        jq -cn --arg verdict "fail" --arg reason "cannot read total RAM" \
-            '{verdict:$verdict, availableMB:null, budgetMB:null, reasons:[$reason]}'
+    local available total usable need verdict reasons winvm_mb=0 winvm_active=false disk_mb
+    if ! available="$(pz_mem_available_mb)"; then
+        jq -cn --arg verdict "fail" --arg reason "cannot read available RAM" \
+            '{verdict:$verdict, availableMB:null, totalMB:null, budgetMB:null, reasons:[$reason]}'
         return 0
     fi
+    total="$(pz_mem_total_mb 2>/dev/null || printf 'null')"
+    disk_mb="$(pz_disk_available_mb "$HOMELAB_STATE" 2>/dev/null || printf 'null')"
     need="$(catalog_json | jq -r --args '
         .apps as $apps
         | [$ARGS.positional[] as $k | ($apps[] | select(.key == $k) | .budgetMB // 0)] | add // 0
     ' -- "${keys[@]}")"
     usable=$((available - available * HEADROOM_PCT / 100))
+    if [ "$(pz_governor_winvm_status)" = "active" ]; then
+        winvm_active=true
+        winvm_mb="$(pz_governor_winvm_mb 2>/dev/null || echo 2048)"
+        usable=$((usable - winvm_mb))
+    fi
     [ "$usable" -lt 0 ] && usable=0
     if [ "$need" -le "$usable" ]; then
         verdict="pass"
@@ -287,9 +296,16 @@ governor_for_keys() {
         verdict="fail"
         reasons="$(jq -cn --arg m "app overcommits memory: budget ${need} MiB > usable ${usable} MiB (headroom ${HEADROOM_PCT}%)" '[$m]')"
     fi
-    jq -cn --argjson availableMB "$available" --argjson budgetMB "$need" \
+    if [ "$winvm_active" = "true" ]; then
+        reasons="$(jq -cn --argjson r "$reasons" --arg w "winvm active: guest reserved ${winvm_mb} MiB" '$r + [$w]')"
+    fi
+    jq -cn --argjson availableMB "$available" --argjson totalMB "${total:-null}" \
+        --argjson diskAvailableMB "${disk_mb:-null}" --argjson budgetMB "$need" \
         --argjson headroomPct "$HEADROOM_PCT" --arg verdict "$verdict" --argjson reasons "$reasons" \
-        '{verdict:$verdict, availableMB:$availableMB, budgetMB:$budgetMB, headroomPct:$headroomPct, reasons:$reasons}'
+        --argjson winvmActive "$winvm_active" --argjson winvmWeightMB "$winvm_mb" \
+        '{verdict:$verdict, availableMB:$availableMB, totalMB:$totalMB, diskAvailableMB:$diskAvailableMB,
+          budgetMB:$budgetMB, headroomPct:$headroomPct, winvmActive:$winvmActive,
+          winvmWeightMB:$winvmWeightMB, reasons:$reasons}'
 }
 
 missing_secrets_for_keys() {

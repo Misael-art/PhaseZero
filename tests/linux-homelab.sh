@@ -452,6 +452,21 @@ for cmdline in "server homelab status --json" "server homelab plan --json" "serv
 done
 echo "  pins + isolation + redaction ok"
 
+echo "=== governor uses available memory, app and profile agree (PZ-AUD-031) ==="
+# Low MemAvailable refuses even when total RAM would be plenty.
+gov_low="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=1500 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --dry-run --json 2>/dev/null || true)"
+echo "$gov_low" | jq -e '.ok == false and .governor.verdict == "fail" and .governor.availableMB == 1500 and .governor.totalMB != null' >/dev/null
+# Same host, same source: profile budget reports the same available base.
+prof_low="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=1500 "$REPO_ROOT/linux/server/homelab-governor.sh" budget edge 2>/dev/null)"
+echo "$prof_low" | jq -e '.availableMB == 1500 and .totalMB != null and .diskAvailableMB != null' >/dev/null
+# Active WinVM reserves its weight on both paths.
+echo '{"libvirtState":"running","currentMarker":"no"}' > "$TMP/winvm-active.json"
+gov_winvm="$(PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm-active.json" PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable n8n --dry-run --json 2>/dev/null)"
+echo "$gov_winvm" | jq -e '.governor.winvmActive == true and .governor.winvmWeightMB == 2048' >/dev/null
+prof_winvm="$(PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm-active.json" PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/server/homelab-governor.sh" budget edge 2>/dev/null)"
+echo "$prof_winvm" | jq -e '.winvmActive == true and .winvmWeightMB == 2048' >/dev/null
+echo "  unified governor ok"
+
 echo "=== web CLI bootstrap (no serve) ==="
 export PZ_HOMELAB_WEB_STATE="$TMP/web"
 "$REPO_ROOT/linux/pz" server homelab web status --json | jq -e \
