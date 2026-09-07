@@ -388,14 +388,53 @@ clone_approved_snapshot() {
     mv -- "$stage" "$dir"
 }
 
+verify_proxy_artifacts() {
+    # PZ-AUD-016/017: no launcher may point at a missing binary, and no
+    # "installed" record may exist without runnable artifacts.
+    local id="$1" kind="$2" dir="$3"
+    case "$kind" in
+        node|worker|library)
+            [ -f "$dir/package.json" ] || { pz_error "$id: package.json missing after build"; return 1; }
+            if [ "$kind" = node ] && jq -er '.scripts.start // ""' "$dir/package.json" 2>/dev/null | grep -q 'dist/'; then
+                [ -d "$dir/dist" ] || { pz_error "$id: dist/ missing (build did not emit it)"; return 1; }
+            fi
+            ;;
+        go)
+            [ -x "$dir/.phasezero-bin/$id" ] || { pz_error "$id: go binary missing after build"; return 1; }
+            ;;
+    esac
+    return 0
+}
+
+verify_playwright_chromium() {
+    # PZ-AUD-016: the browser binary must actually launch; a bare download
+    # without OS libs is a deferred failure, not a success.
+    local id="$1" dir="$2"
+    local chromium
+    chromium="$(find "$HOME/.cache/ms-playwright" -maxdepth 3 -name 'headless_shell' -o -maxdepth 3 -name 'chrome' 2>/dev/null | head -1)"
+    [ -n "$chromium" ] || { pz_error "$id: no Playwright chromium binary after install"; return 1; }
+    if ! "$chromium" --headless --no-sandbox --dump-dom about:blank >/dev/null 2>&1; then
+        pz_error "$id: chromium binary present but cannot launch (missing OS libraries?). Install system deps, e.g.: pz dependencies install, then retry"
+        return 1
+    fi
+    return 0
+}
+
 install_one() {
-    local id="$1" repo="$2" port="$3" kind="$4" dir
+    local id="$1" repo="$2" port="$3" kind="$4" dir fresh_clone=false
     if [ "$id" = 9router ] && [ "$kind" = npm ]; then
         bash "$PZ_ROOT/linux/ai/9router-manager.sh" install
         return
     fi
     dir="$ROOT/$id"
     install -d "$ROOT" "$BIN" "$UNITS"
+    # PZ-AUD-016: toolchains resolve BEFORE any clone/build, from every entry
+    # point (install and ensure share this path).
+    command -v git >/dev/null || { pz_error "git required"; return 1; }
+    case "$kind" in
+        node|worker|library) ensure_node_runtime || return 1 ;;
+        go) command -v go >/dev/null || { pz_error "go toolchain required for $id"; return 1; } ;;
+    esac
     if [ -d "$dir/.git" ]; then
         if ! provenance_ready "$id"; then
             pz_error "blocked: installed $id differs from approved snapshot; inspect 'pz ai proxies provenance $id'"
@@ -403,41 +442,54 @@ install_one() {
         fi
     else
         [ ! -e "$dir" ] || { pz_error "blocked: $dir exists but is not a Git checkout"; return 69; }
-        clone_approved_snapshot "$id" "$repo" "$dir"
+        clone_approved_snapshot "$id" "$repo" "$dir" || return $?
+        fresh_clone=true
     fi
+    # PZ-AUD-017: every stage is explicit-checked (errexit is suppressed in
+    # `if` contexts); on failure a fresh clone is removed for a clean retry.
+    _proxy_fail_build() {
+        pz_error "$id: build step failed: $1"
+        if [ "$fresh_clone" = true ]; then
+            rm -rf -- "$dir"
+            pz_info "$id: removed partial clone for a clean retry"
+        fi
+        return 1
+    }
     case "$kind" in
         node|worker|library)
-            if [ -f "$dir/package-lock.json" ]; then run_npm "$dir" ci --ignore-scripts=false
-            elif [ -f "$dir/package.json" ]; then run_npm "$dir" install --ignore-scripts=false
+            if [ -f "$dir/package-lock.json" ]; then run_npm "$dir" ci --ignore-scripts=false || return "$(_proxy_fail_build "npm ci")"
+            elif [ -f "$dir/package.json" ]; then run_npm "$dir" install --ignore-scripts=false || return "$(_proxy_fail_build "npm install")"
             fi
-            apply_loopback_patch "$id" "$dir"
+            apply_loopback_patch "$id" "$dir" || return "$(_proxy_fail_build "loopback patch")"
             if [ "$kind" = node ] && jq -er '.scripts.start // ""' "$dir/package.json" 2>/dev/null | grep -q 'dist/'; then
-                run_npm "$dir" run build
+                run_npm "$dir" run build || return "$(_proxy_fail_build "npm run build")"
             fi
             case "$id" in
                 kimiproxy|qwenproxy|deepsproxy)
-                    run_npm "$dir" exec -- playwright install chromium
+                    run_npm "$dir" exec -- playwright install chromium || return "$(_proxy_fail_build "playwright install chromium")"
+                    verify_playwright_chromium "$id" "$dir" || return "$(_proxy_fail_build "chromium launch smoke")"
                     ;;
             esac
             if [ "$id" = qwenproxy ] && [ -f "$dir/web/package.json" ]; then
                 # prestart runs `npm --prefix web run build` (vite). Root npm ci
                 # does not install web/ node_modules, so the unit crash-loops.
                 if [ -f "$dir/web/package-lock.json" ]; then
-                    run_npm "$dir/web" ci --ignore-scripts=false
+                    run_npm "$dir/web" ci --ignore-scripts=false || return "$(_proxy_fail_build "web npm ci")"
                 else
-                    run_npm "$dir/web" install --ignore-scripts=false
+                    run_npm "$dir/web" install --ignore-scripts=false || return "$(_proxy_fail_build "web npm install")"
                 fi
-                run_npm "$dir" run build:admin
+                run_npm "$dir" run build:admin || return "$(_proxy_fail_build "npm run build:admin")"
             fi
             ;;
         go)
-            apply_loopback_patch "$id" "$dir"
+            apply_loopback_patch "$id" "$dir" || return "$(_proxy_fail_build "loopback patch")"
             if [ -f "$dir/go.mod" ]; then
                 install -d "$dir/.phasezero-bin"
-                (cd "$dir" && go build -o "$dir/.phasezero-bin/$id" .)
+                (cd "$dir" && go build -o "$dir/.phasezero-bin/$id" .) || return "$(_proxy_fail_build "go build")"
             fi
             ;;
     esac
+    verify_proxy_artifacts "$id" "$kind" "$dir" || return "$(_proxy_fail_build "artifact verification")"
     if [ "$kind" = node ] || [ "$kind" = go ]; then
         local run_command
         if [ "$kind" = node ]; then

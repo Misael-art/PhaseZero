@@ -199,4 +199,46 @@ PZ_AI_PROXY_TRUSTED_SOURCES_FILE="$WORK/mimo-manifest.json" \
     | jq -e '.sources[0].ready == false and .sources[0].commitMatch == false' >/dev/null
 grep -q 'start_proxy_service' "$ROOT/linux/ai/proxy-suite.sh"
 grep -q 'wait_proxy_chat' "$ROOT/linux/ai/proxy-suite.sh"
+
+echo "=== proxy build is transactional with validated runtimes (PZ-AUD-016/017) ==="
+export PZ_AI_PROXY_ROOT="$WORK/tx-proxies" PZ_LOCAL_BIN="$WORK/tx-bin"
+mkdir -p "$PZ_AI_PROXY_ROOT" "$PZ_LOCAL_BIN"
+# A failing npm step rejects the install and removes the fresh clone.
+if bash -c '
+    set -- status kimiproxy
+    source "$0/linux/ai/proxy-suite.sh" >/dev/null 2>&1
+    ensure_node_runtime() { return 0; }
+    clone_approved_snapshot() {
+        mkdir -p "$3/.git"
+        printf "%s\n" "{\"scripts\":{\"start\":\"node dist/index.js\"}}" > "$3/package.json"
+        printf "%s\n" "{}" > "$3/package-lock.json"
+    }
+    run_npm() { echo fixture-npm-failed >&2; return 42; }
+    apply_loopback_patch() { return 0; }
+    install_one kimiproxy https://example.invalid/fixture.git 3010 node
+' "$ROOT" >/dev/null 2>&1; then
+    echo "FAIL: failed npm build was accepted"; exit 1
+fi
+[ ! -e "$PZ_AI_PROXY_ROOT/kimiproxy" ] || { echo "FAIL: partial clone left behind"; exit 1; }
+# A missing Go toolchain fails closed with an actionable reason.
+go_out="$(bash -c '
+    set -- status mimo-ai-proxy
+    source "$0/linux/ai/proxy-suite.sh" >/dev/null 2>&1
+    command() { [ "$1" = "-v" ] && [ "$2" = "git" ] && return 0; return 1; }
+    install_one mimo-ai-proxy https://example.invalid/fixture.git 3013 go
+' "$ROOT" 2>&1 || true)"
+if grep -qi "go toolchain" <<< "$go_out"; then
+    :
+else
+    echo "FAIL: missing go toolchain not reported"; exit 1
+fi
+# A node proxy installed without dist/ fails artifact verification.
+if bash -c '
+    set -- status kimiproxy
+    source "$0/linux/ai/proxy-suite.sh" >/dev/null 2>&1
+    verify_proxy_artifacts kimiproxy node "$0/nonexistent-dir"
+' "$ROOT" >/dev/null 2>&1; then
+    echo "FAIL: artifact verification accepted missing dist"; exit 1
+fi
+echo "  transactional build ok"
 echo "linux-ai-proxies smoke ok"
