@@ -1029,6 +1029,58 @@ fi
 jq -e '.reasons | any(.reason == "docker service failed to start")' "$BOOTSTATE/degraded.json" >/dev/null
 echo "  degraded/fail ok"
 
+echo "=== boot hermes timeout wraps the inner command (PZ-AUD-025) ==="
+HB="$TMP/hermesbin"
+mkdir -p "$HB"
+cat > "$HB/systemctl" <<'EOS'
+#!/usr/bin/env bash
+exit 0
+EOS
+cat > "$HB/runuser" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$RUNUSER_CAPTURE"
+# Chain into the inner command like runuser would (past -u user -- env VARS).
+inner=()
+seen_env=0
+for a in "$@"; do
+    if [ "$seen_env" = "1" ]; then
+        case "$a" in
+            *=*) export "$a" ;;
+            *) inner+=("$a"); seen_env=2 ;;
+        esac
+    elif [ "$a" = "env" ]; then
+        seen_env=1
+    elif [ "$seen_env" = "2" ]; then
+        inner+=("$a")
+    fi
+done
+exec "${inner[@]}"
+EOS
+cat > "$HB/timeout" <<'EOS'
+#!/usr/bin/env bash
+# Fake timeout: exec the inner command like the real one.
+dur="$1"; shift
+printf 'TIMEOUT dur=%s\n' "$dur" >> "$RUNUSER_CAPTURE"
+exec "$@"
+EOS
+chmod +x "$HB/systemctl" "$HB/runuser" "$HB/timeout"
+export RUNUSER_CAPTURE="$TMP/runuser-hermes.capture"
+rm -f "$RUNUSER_CAPTURE"
+PATH="$HB:$PATH" PZ_BOOT_MARKER=1 PZ_SERVER_USER=testuser PZ_SERVER_HOMESERVER=0 \
+    PZ_SERVER_HOMELAB=0 PZ_SERVER_LLM=0 PZ_SERVER_HERMES=1 \
+    PZ_STATE_ROOT="$TMP/hermes-state-root" \
+    PZ_HOMELAB_STATE="$TMP/hermes-test-state" \
+    "$REPO_ROOT/linux/server/homelab-boot-prepare.sh" >/dev/null 2>&1 || true
+rg -q '^timeout$' "$RUNUSER_CAPTURE" \
+    || { echo "FAIL: timeout not passed through as_user to runuser"; exit 1; }
+rg -q '^120$' "$RUNUSER_CAPTURE" \
+    || { echo "FAIL: timeout duration missing in hermes boot path"; exit 1; }
+rg -q 'hermes-remote\.sh$' "$RUNUSER_CAPTURE" \
+    || { echo "FAIL: hermes-remote not invoked in boot path"; exit 1; }
+rg -q 'TIMEOUT dur=120' "$RUNUSER_CAPTURE" \
+    || { echo "FAIL: timeout did not wrap the inner command"; exit 1; }
+echo "  hermes boot timeout ok"
+
 echo "=== access mode persists in homelab env ==="
 "$REPO_ROOT/linux/pz" server homelab repair --access tailscale >/dev/null 2>&1 || true
 rg -q '^HOMELAB_ACCESS_MODE=tailscale$' "$PZ_HOMELAB_STATE/.env"

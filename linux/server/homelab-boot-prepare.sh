@@ -129,7 +129,10 @@ if [ "${PZ_SERVER_HOMELAB:-0}" = "1" ]; then
 fi
 
 if [ "${PZ_SERVER_HERMES:-0}" = "1" ]; then
-    if timeout 120 as_user bash "$RUNTIME_ROOT/linux/server/hermes-remote.sh" start; then
+    # PZ-AUD-025: timeout wraps the inner executable, not the as_user shell
+    # function (timeout cannot exec a function; the old form failed before
+    # hermes-remote ever ran).
+    if as_user timeout 120 bash "$RUNTIME_ROOT/linux/server/hermes-remote.sh" start; then
         log "hermes remote agent started for $TARGET_USER"
     else
         log "DEGRADED: hermes start skipped or failed for $TARGET_USER"
