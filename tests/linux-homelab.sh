@@ -53,6 +53,46 @@ grep -Fq "$REPO_ROOT/linux/server/homelab-stack.sh up --extras" "$apply_capture"
 test "$(wc -l < "$apply_capture")" -eq 1
 echo "  profile args ok"
 
+echo "=== profile ordering + failure propagation (PZ-AUD-003) ==="
+# Services are enabled before setup scripts run (scripts may need daemons).
+order_out="$(PZ_DRY_RUN=1 bash -c '
+    source "$0/linux/lib/common.sh"
+    pz_run_profile "$0/profiles/server-homelab.json"
+' "$REPO_ROOT" 2>&1)"
+svc_line="$(printf '%s\n' "$order_out" | grep -n "system services" | head -1 | cut -d: -f1)"
+script_line="$(printf '%s\n' "$order_out" | grep -n "setup scripts" | head -1 | cut -d: -f1)"
+[ -n "$svc_line" ] && [ -n "$script_line" ] && [ "$svc_line" -lt "$script_line" ] \
+    || { echo "FAIL: services not ordered before scripts"; exit 1; }
+# A failing workload step fails the applier (no WARN-and-continue).
+if (
+    # shellcheck source=../linux/server/apply-common.sh
+    source "$REPO_ROOT/linux/server/apply-common.sh"
+    # shellcheck disable=SC2329,SC2317
+    bash() { echo fixture-child-failed >&2; return 42; }
+    # shellcheck disable=SC2329,SC2317
+    pz_info() { :; }
+    # shellcheck disable=SC2329,SC2317
+    pz_warn() { :; }
+    PZ_SERVER_INSTALL_BOOT=0 pz_server_apply --homelab --no-boot
+) >/dev/null 2>&1; then
+    echo "FAIL: applier swallowed child failure"; exit 1
+fi
+# Privileged steps without any admin bridge fail closed (rc 77), pre-mutation.
+printf '%s\n' '{"name":"pz-test-svc","systemd":{"linux":{"enable":["phasezero-test-nonexistent"]}}}' > "$TMP/svc-profile.json"
+NOADMIN="$TMP/noadminbin"
+mkdir -p "$NOADMIN"
+for t in bash sh jq realpath dirname grep cut date mkdir uname touch chmod mktemp rm cat tr; do
+    src="$(command -v "$t" 2>/dev/null || true)"
+    [ -n "$src" ] && ln -sf "$src" "$NOADMIN/$t"
+done
+admin_rc=0
+PATH="$NOADMIN" PZ_DRY_RUN=0 bash -c '
+    source "$0/linux/lib/common.sh"
+    pz_run_profile "$1"
+' "$REPO_ROOT" "$TMP/svc-profile.json" >/dev/null 2>&1 || admin_rc=$?
+[ "$admin_rc" -eq 77 ] || { echo "FAIL: expected rc 77 without admin bridge, got $admin_rc"; exit 1; }
+echo "  profile ordering + propagation ok"
+
 echo "=== compose has pinned tags and safe binds ==="
 if rg -n ':latest' "$REPO_ROOT/assets/home-server/docker-compose."*.yml; then
     echo "FAIL: compose uses latest tag"

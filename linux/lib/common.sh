@@ -1094,6 +1094,13 @@ pz_run_profile() {
     local sysctl_entries
     sysctl_entries=$(jq -r '.tuning.linux.sysctl // {} | to_entries[] | "\(.key)=\(.value)"' "$profile_file" 2>/dev/null || true)
 
+    if [ "$dry_run" != "1" ] && { [ -n "$packages" ] || [ -n "$yay_pkgs" ] || [ -n "$system_services" ] || [ -n "$sysctl_entries" ]; }; then
+        if [ "$EUID" -ne 0 ] && ! pz_admin_available; then
+            pz_error "profile '$profile_name' needs privileged steps but no admin bridge is ready"
+            pz_admin_howtofix
+            return "$PZ_RC_NO_ADMIN"
+        fi
+    fi
     if [ "$dry_run" != "1" ]; then
         command -v pacman >/dev/null 2>&1 || {
             pz_error "legacy profile '$profile_name' requires an Arch/pacman host; use 'pz capabilities' on other distributions"
@@ -1185,6 +1192,75 @@ pz_run_profile() {
         done <<< "$flatpak_pkgs"
     fi
 
+    if [ -n "$system_services" ]; then
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning system services..."
+        else
+            pz_info "enabling system services..."
+        fi
+        while IFS= read -r service; do
+            [ -z "$service" ] && continue
+            if [ "$dry_run" = "1" ]; then
+                pz_info "would enable system service: $service"
+                continue
+            fi
+            pz_admin_run systemctl enable --now "$service" || {
+                pz_error "failed to enable system service: $service"
+                PZ_PROFILE_CALL_DEPTH="$call_depth"
+                PZ_PROFILE_ACTIVE="$active_before"
+                return 1
+            }
+            systemctl is-active --quiet "$service" || {
+                pz_error "system service not active after enable: $service"
+                PZ_PROFILE_CALL_DEPTH="$call_depth"
+                PZ_PROFILE_ACTIVE="$active_before"
+                return 1
+            }
+        done <<< "$system_services"
+    fi
+
+    if [ -n "$user_services" ]; then
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning user services..."
+        else
+            pz_info "enabling user services..."
+        fi
+        while IFS= read -r service; do
+            [ -z "$service" ] && continue
+            if [ "$dry_run" = "1" ]; then
+                pz_info "would enable user service: $service"
+                continue
+            fi
+            systemctl --user enable --now "$service" || {
+                pz_error "failed to enable user service: $service"
+                PZ_PROFILE_CALL_DEPTH="$call_depth"
+                PZ_PROFILE_ACTIVE="$active_before"
+                return 1
+            }
+        done <<< "$user_services"
+    fi
+
+    if [ -n "$sysctl_entries" ]; then
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning sysctl tuning..."
+        else
+            pz_info "applying sysctl tuning..."
+        fi
+        while IFS= read -r entry; do
+            [ -z "$entry" ] && continue
+            if [ "$dry_run" = "1" ]; then
+                pz_info "would set sysctl: $entry"
+                continue
+            fi
+            pz_admin_run sysctl -w "$entry" || {
+                pz_error "failed to apply sysctl: $entry"
+                PZ_PROFILE_CALL_DEPTH="$call_depth"
+                PZ_PROFILE_ACTIVE="$active_before"
+                return 1
+            }
+        done <<< "$sysctl_entries"
+    fi
+
     if [ -n "$scripts" ]; then
         if [ "$dry_run" = "1" ]; then
             pz_info "planning setup scripts..."
@@ -1216,59 +1292,19 @@ pz_run_profile() {
                     continue
                 fi
                 pz_info "executing $script_path"
-                bash "$script_path"
+                bash "$script_path" || {
+                    pz_error "profile script failed: $script"
+                    PZ_PROFILE_CALL_DEPTH="$call_depth"
+                    PZ_PROFILE_ACTIVE="$active_before"
+                    return 1
+                }
             else
-                pz_warn "script not found: $script_path"
+                pz_error "profile script missing: $script_path"
+                PZ_PROFILE_CALL_DEPTH="$call_depth"
+                PZ_PROFILE_ACTIVE="$active_before"
+                return 1
             fi
         done <<< "$scripts"
-    fi
-
-    if [ -n "$system_services" ]; then
-        if [ "$dry_run" = "1" ]; then
-            pz_info "planning system services..."
-        else
-            pz_info "enabling system services..."
-        fi
-        while IFS= read -r service; do
-            [ -z "$service" ] && continue
-            if [ "$dry_run" = "1" ]; then
-                pz_info "would enable system service: $service"
-                continue
-            fi
-            pz_admin_run systemctl enable --now "$service"
-        done <<< "$system_services"
-    fi
-
-    if [ -n "$user_services" ]; then
-        if [ "$dry_run" = "1" ]; then
-            pz_info "planning user services..."
-        else
-            pz_info "enabling user services..."
-        fi
-        while IFS= read -r service; do
-            [ -z "$service" ] && continue
-            if [ "$dry_run" = "1" ]; then
-                pz_info "would enable user service: $service"
-                continue
-            fi
-            systemctl --user enable --now "$service"
-        done <<< "$user_services"
-    fi
-
-    if [ -n "$sysctl_entries" ]; then
-        if [ "$dry_run" = "1" ]; then
-            pz_info "planning sysctl tuning..."
-        else
-            pz_info "applying sysctl tuning..."
-        fi
-        while IFS= read -r entry; do
-            [ -z "$entry" ] && continue
-            if [ "$dry_run" = "1" ]; then
-                pz_info "would set sysctl: $entry"
-                continue
-            fi
-            pz_admin_run sysctl -w "$entry"
-        done <<< "$sysctl_entries"
     fi
 
     pz_info "profile $profile_file complete"
