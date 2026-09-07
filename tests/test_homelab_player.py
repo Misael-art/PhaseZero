@@ -932,3 +932,62 @@ def test_onboard_plan_binds_captured_host_and_carries_profile(app):
         )]
     finally:
         page.run_cmd = real_run_cmd
+
+
+# ---------------------------------------------------------------------------
+# R01-002: late pairing results never touch the wrong host.
+# ---------------------------------------------------------------------------
+
+def _to_pair_step_with_host(page, alias: str) -> None:
+    page._host_combo.addItem(f"host {alias}", alias)
+    page._host_combo.setCurrentIndex(page._host_combo.count() - 1)
+    page.start_onboarding()
+    page.onboard_ingest_discover({"manualFallback": "IP:17432"})
+    page.onboard_advance()  # local-free: runs start_pair; blocked by BusyProc
+    assert page.onboard_step_name() == "pair"
+
+
+def test_late_pair_result_for_old_host_is_dropped(app):
+    # Pair A in flight, operator selects B, A reports success: B stays
+    # unpaired, the step does not advance, nothing runs against B.
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    _to_pair_step_with_host(page, "fixture-a")
+    page._pair_advance = True
+    # operator switches to B while the pairing runs
+    page._host_combo.addItem("host fixture-b", "fixture-b")
+    page._host_combo.setCurrentIndex(page._host_combo.count() - 1)
+    assert page._pair_advance is False  # invalidated by the host switch
+    paired = {"paired": True, "hostAlias": "fixture-a"}
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append(args)  # noqa: E731
+    try:
+        page._on_pair_done(0, json.dumps(paired).encode(), b"", "fixture-a")
+        assert page._onboard_state.get("pair") is not True
+        assert page.onboard_step_name() == "pair"
+        assert "outro host" in page._state_label.text()
+        assert ran == []  # no ping / follow-up on B from A's result
+    finally:
+        page.run_cmd = real_run_cmd
+
+
+def test_late_pair_result_for_selected_host_advances(app):
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    _to_pair_step_with_host(page, "fixture-b")
+    page._pair_advance = True
+    paired = {"paired": True, "hostAlias": "fixture-b"}
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append(args)  # noqa: E731
+    try:
+        page._on_pair_done(0, json.dumps(paired).encode(), b"", "fixture-b")
+        assert page._onboard_state.get("pair") is True
+        assert (page._onboard_state.get("pair_detail") or {}).get("alias") == "fixture-b"
+        assert page.onboard_step_name() == "profile"
+        assert ran and ran[-1][:2] == ["hosts", "ping"]
+    finally:
+        page.run_cmd = real_run_cmd

@@ -57,6 +57,7 @@ class HomelabPage(BasePage):
         self._onboard_confirmed = False
         self._onboard_state: dict = {}
         self._pair_advance = False
+        self._pair_host = ""
         self._onboard_label: QLabel | None = None
         self._onboard_next: QPushButton | None = None
 
@@ -506,6 +507,11 @@ class HomelabPage(BasePage):
         self._onboard_state.pop("pair", None)
         self._onboard_state.pop("pair_detail", None)
         self._onboard_confirmed = False
+        # R01-002: an in-flight pairing belongs to the old host — its late
+        # callback will be dropped by the captured-alias check; kill the
+        # auto-advance and the captured alias right away.
+        self._pair_advance = False
+        self._pair_host = ""
         if self._onboard_step >= 1:
             self._onboard_step = 1
             self._refresh_onboard_label()
@@ -567,24 +573,37 @@ class HomelabPage(BasePage):
         args = ["server", "homelab", "hosts", "pair", alias, "--json"]
         if generate:
             args.append("--generate")
+        self._pair_host = alias
         proc = QProcess(self)
         self._setup_proc(proc)
+        # R01-002: capture the alias the pairing was started for — the
+        # combo selection may change while the process runs.
         proc.finished.connect(
-            lambda code, p=proc: self._on_pair_done(
-                code, bytes(p.readAllStandardOutput()), bytes(p.readAllStandardError())
+            lambda code, p=proc, a=alias: self._on_pair_done(
+                code, bytes(p.readAllStandardOutput()), bytes(p.readAllStandardError()), a
             )
         )
         proc.start(str(self.root / "linux" / "pz"), args)
         self._proc = proc
 
-    def _on_pair_done(self, code: int, out: bytes, err: bytes) -> None:
+    def _on_pair_done(self, code: int, out: bytes, err: bytes, alias: str | None = None) -> None:
         if self._proc is not None:
             self._cancel_timeout(self._proc)
         self._proc = None
         payload = self._parse_json_payload(out)
+        # R01-002: a late pairing result belongs to the host it was started
+        # for (captured at spawn; the envelope hostAlias confirms it). If
+        # the selection changed meanwhile, the result is dropped: nothing
+        # is ingested, nothing advances, no follow-up runs on the new host.
+        result_host = str(payload.get("hostAlias") or alias or "")
+        selected = self._selected_host()
+        if alias is not None and result_host != selected:
+            self._pair_advance = False
+            self._state_label.setText("Pareamento era para outro host — pareie o host selecionado")
+            return
         state = str(payload.get("state", ""))
         if code == 0 and payload.get("paired"):
-            self.onboard_ingest_pair(True, {"alias": self._selected_host()})
+            self.onboard_ingest_pair(True, {"alias": result_host})
             if self._pair_advance:
                 self._pair_advance = False
                 if self._onboard_step < len(self.ONBOARD_STEPS) - 1:
