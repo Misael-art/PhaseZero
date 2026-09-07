@@ -13,13 +13,13 @@
 
 | Campo | Valor |
 |---|---|
-| Status | R0+R1 implementados e provados localmente; R2..R5 pendentes |
+| Status | R0+R1 + contrarrevisão R01 + UX-001..004 implementados e provados localmente; UX-005..011 e R2..R5 pendentes |
 | Criado | 2026-09-07, America/Sao_Paulo |
 | Repositório | `/mnt/sdcard/Projects/PhaseZero` |
 | Base | `codex/aud-fase5` em `9d6be9d` (fases de auditoria 0–4 preservadas; branches do agente não reescritas) |
 | Branch | `codex/rev-remediation` |
 | Worktree | `/mnt/sdcard/Projects/pz-rev-remediation` (dedicado) |
-| Revisão fonte | ACHADOS.md REV-001..018; cinco reproduções em `reproduce.py` (asserts provam o DEFEITO, não o aceite) |
+| Revisão fonte | ACHADOS.md REV-001..018; cinco reproduções em `reproduce.py` (asserts provam o DEFEITO, não o aceite); contrarrevisões `codex/review-r0-r1` (R01-001..005) e `codex/review-r01-ux` (UX-001..011, commit 44cc200) |
 | Estado do host | nenhum workload, boot, pacote, VM ou serviço alterado nesta frente |
 
 ## Ordem de trabalho (fases R)
@@ -75,6 +75,34 @@ Cobertura REV-001 ampliada: matriz de mutação falha por posição (primeiro e
 A afirmação "qualquer posição" vale para a matriz implementada; staging falho
 permanece coberto pelo fail-closed de backup, não pelo rollback.
 
+## UX backlog — revisão r01-ux (2026-09-07)
+
+Fonte: `codex/review-r01-ux`, worktree `pz-review-r01-ux`, commit `44cc200`
+(relatório + capturas 1280×800/800×600 + probes `check.py`). Prioridade
+sugerida pela revisão: UX-001/002 → UX-003/004 → UX-005/007/009 → UX-008 →
+UX-006/010; UX-011 acompanha todas as entregas. Experiência-alvo do modo
+simples: **objetivo → destino → recursos → resumo → progresso → configurar
+acesso → abrir solução**; detalhe técnico apenas no avançado opt-in.
+
+| ID | Requisito (resumo) | Trabalho | Aceite | Tier atual | Estado |
+|---|---|---|---|---|---|
+| UX-001 | Revisão confirmável pelo fluxo visível | botão "Confirmar revisão" ligado a `onboard_confirm_review`; some após confirmar | E2E Qt somente por cliques/teclado chega ao apply; proibido setar flag privada no teste | local-regression | in_progress |
+| UX-002 | Plano estável apesar de telemetria | hash cobre a INTENÇÃO (host/apps/perfil/acesso) e exclui `budget`; verdict fail bloqueia execução com motivo | drift de 1 MiB não invalida aceite; cruzar limite bloqueia; mudança material exige nova revisão | local-regression | in_progress |
+| UX-003 | Homelab com controles inteiros | scroll vertical global; alturas mínimas; zero scroll horizontal | geometria de cada botão provada em 800×600 (ensureWidgetVisible + visibleRegion) | local-regression | in_progress |
+| UX-004 | Windows VM adapta colunas e ações | reflow <1000px: 1 coluna + hero empilhado; CTA mantém mínimo | geometria provada em 800×600 e 1280×800; sem scroll horizontal | local-regression | in_progress |
+| UX-005 | Instalar distinto de simular orçamento | no simples, só apps instaláveis; perfis sem receita ficam em "Simular recursos" (avançado) | escolha indisponível não instala outros apps como se atendesse o objetivo; aviso fora dos logs | planned | pending |
+| UX-006 | Início por objetivo real | cards abrem jornada/destino específicos; retomar tarefa recente | escolher Windows chega à instalação Windows; servidor remoto chega ao pareamento; IA não exigida | planned | pending |
+| UX-007 | Modo simples com linguagem de produto | texto orientado à tarefa, progresso por etapa, recuperação; argv/bind/dry-run no avançado | falha de download/auth/daemon/espaço explica causa e oferece retomar sem ler log | planned | pending |
+| UX-008 | Primeiro acesso remoto na jornada | = REV-008 (R2): pareamento guiado, credencial protegida, timeout/cancel | máquina sem chave + host novo: completo sem terminal externo, senha fora de argv/log | planned | pending |
+| UX-009 | Instalação termina abrindo a solução | estados não instalado→preparando→configurar acesso→pronto→abrir; readiness funcional | Vaultwarden primeira conta/TLS a partir do admin; Paperless PDF pesquisável; "rodando" não é "pronto" | planned | pending |
+| UX-010 | Windows explica gráficos sem prometer 3D | = REV-010 (R3): simples mostra display recomendado e motivo; experimental só no avançado | guest sem 3D nunca aparece acelerado; flags sessão/launcher coerentes; física separada | planned | pending |
+| UX-011 | Gate de acessibilidade/usabilidade | smoke por input público; nomes acessíveis/foco/contraste; sessão com leigos | completar local/remoto/VM com teclado e touch; escalas 150/200%; erros/retomada registrados | planned | pending |
+
+Nota de prova: `test_status_contract.py::test_status_command_always_reports
+[emulation.dualscreen.status]` falha de forma idêntica em `a82e2cc` (base da
+contrarrevisão) e no HEAD atual — falha pré-existente de ambiente, não
+regressão desta frente; não usada como aceite.
+
 ## Matriz de evidência obrigatória
 
 | ID | Requisito (resumo) | Implementação | Teste comportamental | Tier atual | Estado |
@@ -92,7 +120,7 @@ permanece coberto pelo fail-closed de backup, não pelo rollback.
 | REV-011 | Runtime de boot = pacote | sync transacional com preview/elevação + hash pré-sessão: implementável em fixture (VM descartável) | LCD+monitor no runtime entregue + rollback testado: exige host/operador | planned | pending (fixture) / blocked (física) |
 | REV-012 | Resiliência física sem aceite | escalada repairFailed>=2 e trava pós-guest-start no fallback: implementáveis em fixture | boot frio; QGA indisponível; crash tardio; 2 falhas escaladas: exige host/operador | planned | pending (fixture) / blocked (física) |
 | REV-013 | Dev Windows certificado | perfil Dev separado (manifesto, disco/RAM, retomada) e gate nested-guest declarado: implementáveis em fixture | toolchain→clone→build→test→debug→reboot→retomar em guest limpo: exige hardware | planned | pending (fixture) / blocked (hardware) |
-| REV-014 | Homelab sem clipping | página rolável/responsiva; simples vs avançado | screenshots+geometria 1280×800, 800×600, 150/200%; teclado/touch | planned | pending |
+| REV-014 | Homelab sem clipping | scroll vertical global + geometria provada (UX-003); modo simples vs avançado e escalas pendentes | screenshots+geometria 1280×800, 800×600 feitas; 150/200% e teclado/touch pendentes | local-regression | in_progress |
 | REV-015 | Objetivos honestos no Início | cards abrem assistente específico; nada promete solução ausente | usuário sem terminal conclui cada objetivo | planned | pending |
 | REV-016 | Paridade IA sem migração pendente | matriz supported/experimental/blocked consumida pela UI e fixtures por plataforma: implementável em fixture | chat/stream/renovação reais por plataforma: exige credenciais/operador | planned | pending (fixture) / blocked (credenciais) |
 | REV-017 | Certificação por evidência | PR/CI por SHA; Arch limpo prepare+app+reboot | asset instalado em Arch/Windows limpos; estados refletem tier | planned | pending |
