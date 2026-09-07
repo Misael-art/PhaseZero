@@ -171,7 +171,10 @@ security_state_json() {
     jq -cn --argjson policyActive "$policy_active" \
         --argjson policy "$policy" \
         --argjson lastAudit "$last_audit" \
-        '{policyActive:$policyActive, policy:$policy, redaction:true, lastAudit:$lastAudit}'
+        '{policyActive:$policyActive, policy:$policy, redaction:true, lastAudit:$lastAudit,
+          scope:"install-policy",
+          executionEnforced:false,
+          note:"install/pull policy only; runtime tool execution is bounded by the caller allowlist"}'
 }
 
 expected_set_json() {

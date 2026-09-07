@@ -1315,5 +1315,13 @@ echo "  adapters hardened ok"
 PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/pz" server homelab status --json >/tmp/pol.json 2>&1 || true
 jq -e '.securityState.policyActive == false and .securityState.policy.mode == "permissive"' /tmp/pol.json >/dev/null
 echo "  status policy wiring ok"
+# PZ-AUD-023: install policy must not pose as execution sandbox.
+PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/server/ai-policy-broker.sh" status \
+    | jq -e '.scope == "install-policy" and .executionEnforced == false' >/dev/null
+PZ_AI_STATE="$TMP/ai-state" "$REPO_ROOT/linux/server/ai-policy-broker.sh" check ollama-pull \
+    | jq -e '.scope == "install-policy" and .executionEnforced == false' >/dev/null
+"$REPO_ROOT/linux/pz" server homelab status --json 2>/dev/null \
+    | jq -e '.securityState.scope == "install-policy" and .securityState.executionEnforced == false' >/dev/null
+echo "  install-policy scope ok"
 
 echo "=== Homelab smoke ok ==="
