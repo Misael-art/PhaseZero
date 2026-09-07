@@ -1277,6 +1277,82 @@ grep -q 'changed-after-backup' "$VM/vaultwarden_data/db.sqlite" \
 test "$(cat "$VM/vaultwarden_data/db.sqlite")" = "changed-after-backup" \
     || { echo "FAIL: rollback restored backup instead of pre-restore state"; exit 1; }
 echo "  restore partial failure rolls back to pre-restore ok"
+# REV-003: the stack stop happens BEFORE the pre-restore snapshot — a
+# rollback copy taken while writers are live can ship a torn database.
+down_line="$(rg -n 'if ! cmd_down; then' "$REPO_ROOT/linux/server/homelab-stack.sh" | head -1 | cut -d: -f1)"
+snap_line="$(rg -n 'tar -C "\$mount" -czf "\$pre_dir' "$REPO_ROOT/linux/server/homelab-stack.sh" | head -1 | cut -d: -f1)"
+[ -n "$down_line" ] && [ -n "$snap_line" ] && [ "$down_line" -lt "$snap_line" ] \
+    || { echo "FAIL: pre-restore snapshot must follow stack stop (REV-003)"; exit 1; }
+echo "  restore stops stack before snapshot ok (REV-003)"
+# REV-001: a swap that fails mid-copy (ENOSPC-like) still rolls the target
+# back to the pre-restore snapshot — the volume is registered before the
+# first destructive write, so it can never fall out of the rollback set.
+echo "pre-restore-bytes" > "$VM/vaultwarden_data/db.sqlite"
+SHIM="$TMP/cp-shim"; mkdir -p "$SHIM"
+real_cp="$(command -v cp)"
+printf '#!/usr/bin/env bash\nif [ -n "$PZ_REV1_ARM" ] && [ -f "$PZ_REV1_ARM" ] && [ "${*: -1}" = "$PZ_REV1_TARGET" ]; then rm -f "$PZ_REV1_ARM"; exit 42; fi\nexec %q "$@"\n' "$real_cp" > "$SHIM/cp"
+chmod +x "$SHIM/cp"
+touch "$TMP/rev1-arm"
+rev1_out="$(env PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$BKT" \
+    PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' \
+    PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$VM" \
+    PATH="$SHIM:$PATH" PZ_REV1_ARM="$TMP/rev1-arm" PZ_REV1_TARGET="$VM/vaultwarden_data/" \
+    "$REPO_ROOT/linux/pz" server homelab restore --source "$BKT/bk1" --yes 2>/dev/null | grep -v '^INFO:' || true)"
+printf '%s\n' "$rev1_out" | jq -e '.ok == false and .failedVolume == "vaultwarden_data" and .rollbackApplied == true and .recoveryRequired == false' >/dev/null \
+    || { echo "FAIL: failed swap output wrong (REV-001): $rev1_out"; exit 1; }
+test "$(cat "$VM/vaultwarden_data/db.sqlite")" = "pre-restore-bytes" \
+    || { echo "FAIL: failed swap lost the pre-restore bytes (REV-001)"; exit 1; }
+echo "  restore failed-swap rolls target back ok (REV-001)"
+# REV-001: when even the rollback cannot complete, the result says
+# recovery-required instead of claiming rollbackApplied:true.
+printf '#!/usr/bin/env bash\nif [ "${*: -1}" = "$PZ_REV1_TARGET" ]; then exit 42; fi\nexec %q "$@"\n' "$real_cp" > "$SHIM/cp"
+rev2_out="$(env PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$BKT" \
+    PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data syncthing_data' \
+    PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$VM" \
+    PATH="$SHIM:$PATH" PZ_REV1_TARGET="$VM/vaultwarden_data/" \
+    "$REPO_ROOT/linux/pz" server homelab restore --source "$BKT/bk1" --yes 2>/dev/null | grep -v '^INFO:' || true)"
+printf '%s\n' "$rev2_out" | jq -e '.ok == false and .rollbackApplied == false and .recoveryRequired == true and (.rollbackFailed | index("vaultwarden_data") != null) and .nextAction != null' >/dev/null \
+    || { echo "FAIL: failed rollback not reported as recovery-required (REV-001): $rev2_out"; exit 1; }
+rm -rf "$VM/vaultwarden_data" && mkdir -p "$VM/vaultwarden_data"
+echo "  restore failed rollback reports recovery-required ok (REV-001)"
+# REV-002: sqlite volumes are hot-backed up from the LIVE mount through the
+# sqlite3 backup API; a concurrent writer cannot tear the backup, stale
+# WAL/SHM sidecars never ship, and a restored database passes integrity.
+if command -v sqlite3 >/dev/null 2>&1; then
+    REV2="$TMP/rev2-mount"; rm -rf "$REV2"; mkdir -p "$REV2/rev2_vol"
+    sqlite3 "$REV2/rev2_vol/data.db" "PRAGMA journal_mode=WAL; CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT);" >/dev/null
+    for i in 1 2 3; do sqlite3 "$REV2/rev2_vol/data.db" "INSERT INTO t(v) VALUES ('seed-$i');"; done
+    rm -f "$TMP/rev2-stop"
+    (
+        i=0
+        while [ ! -e "$TMP/rev2-stop" ]; do
+            sqlite3 "$REV2/rev2_vol/data.db" "INSERT INTO t(v) VALUES ('w-$i');" 2>/dev/null || true
+            i=$((i + 1))
+            sleep 0.02
+        done
+    ) &
+    rev2_writer=$!
+    rev2_out="$(PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_BACKUP_ROOT="$TMP/rev2-bk" \
+        PZ_HOMELAB_VOLUMES_OVERRIDE='rev2_vol' PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$REV2" \
+        "$REPO_ROOT/linux/pz" server homelab backup --dest "$TMP/rev2-bk/bk" 2>/dev/null | grep -v '^INFO:' || true)"
+    touch "$TMP/rev2-stop"
+    wait "$rev2_writer" 2>/dev/null || true
+    echo "$rev2_out" | jq -e '.ok == true and .consistent == true and .volumes[0].consistent == true and .volumes[0].method == "staged-tar+sqlite-live-hotbackup"' >/dev/null \
+        || { echo "FAIL: sqlite backup not consistent live hot-backup (REV-002): $rev2_out"; exit 1; }
+    REV2R="$TMP/rev2-restore"; rm -rf "$REV2R"; mkdir -p "$REV2R"
+    PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" PZ_HOMELAB_VOLUMES_OVERRIDE='rev2_vol' \
+        PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE="$REV2R" \
+        "$REPO_ROOT/linux/pz" server homelab restore --source "$TMP/rev2-bk/bk" --yes >/dev/null 2>&1
+    test ! -e "$REV2R/rev2_vol/data.db-wal" || { echo "FAIL: stale WAL shipped with hot backup (REV-002)"; exit 1; }
+    test ! -e "$REV2R/rev2_vol/data.db-shm" || { echo "FAIL: stale SHM shipped with hot backup (REV-002)"; exit 1; }
+    test "$(sqlite3 "$REV2R/rev2_vol/data.db" 'PRAGMA integrity_check;' 2>/dev/null)" = "ok" \
+        || { echo "FAIL: restored sqlite failed integrity_check (REV-002)"; exit 1; }
+    test "$(sqlite3 "$REV2R/rev2_vol/data.db" 'SELECT count(*) FROM t;' 2>/dev/null)" -ge 3 \
+        || { echo "FAIL: restored sqlite lost seed rows (REV-002)"; exit 1; }
+    echo "  sqlite live hot-backup under concurrent writer ok (REV-002)"
+else
+    echo "  SKIP REV-002 (sqlite3 unavailable)"
+fi
 # PZ-AUD-009: empty set fails closed; explicit --allow-empty records emptiness.
 # (A single space keeps the override active while selecting zero volumes.)
 if eval "$BENV PZ_HOMELAB_VOLUMES_OVERRIDE=' ' '$REPO_ROOT/linux/pz' server homelab backup --dest '$TMP/empty-refused'" >/dev/null 2>&1; then

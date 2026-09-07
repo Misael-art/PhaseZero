@@ -846,17 +846,28 @@ json_arr() {
 }
 
 stage_volume_consistent() {
-    # PZ-AUD-009: copy mount -> staging, then hot-backup SQLite files so a
-    # write in flight does not ship a torn database. Server engines
-    # (MariaDB/Postgres data dirs, Prometheus TSDB) cannot be made
-    # consistent from files alone: they are archived as-is and flagged
-    # consistent:false (native dumps are a per-app recipe concern).
-    # Prints: "<method> <consistent(true|false)>".
-    local mount="$1" stage="$2" db f tmp
+    # PZ-AUD-009 + REV-002: copy mount -> staging, then hot-backup SQLite
+    # files FROM THE LIVE MOUNT via the sqlite3 backup API, so a write in
+    # flight cannot ship a torn database and stale WAL/SHM copies are never
+    # shipped beside the hot backup. Server engines (MariaDB/Postgres data
+    # dirs) and Prometheus TSDB layouts cannot be made consistent from
+    # files alone: they are archived as-is and flagged consistent:false
+    # with the reason (native dumps or a stopped-stack snapshot are the
+    # per-app recipe concern). Prints: "<method> <consistent(true|false)>";
+    # STAGE_REASON carries the human-readable motive when not consistent.
+    local mount="$1" stage="$2" db f tmp rel
+    STAGE_REASON=""
     if ! cp -a "$mount/." "$stage/"; then
         return 1
     fi
     if find "$stage" -maxdepth 4 \( -name 'PG_VERSION' -o -name 'ibdata1' -o -name 'mysql' \) -print -quit 2>/dev/null | grep -q .; then
+        STAGE_REASON="server database directory copied as-is; needs native dump or stopped-stack snapshot"
+        printf 'staged-tar %s\n' false
+        return 0
+    fi
+    # Prometheus TSDB layout: no SQL marker, but file-copy is not consistent.
+    if [ -d "$stage/wal" ] && { [ -d "$stage/chunks" ] || [ -f "$stage/index" ]; }; then
+        STAGE_REASON="TSDB directory copied as-is; needs the service snapshot API or stopped-stack snapshot"
         printf 'staged-tar %s\n' false
         return 0
     fi
@@ -873,21 +884,27 @@ stage_volume_consistent() {
     fi
     if ! command -v sqlite3 >/dev/null 2>&1; then
         pz_warn "sqlite3 unavailable; shipping ${#dbs[@]} sqlite file(s) without hot-backup"
+        STAGE_REASON="sqlite3 unavailable; plain file copy is not a consistent snapshot"
         printf 'staged-tar %s\n' false
         return 0
     fi
     for db in "${dbs[@]}"; do
+        rel="${db#"$stage"/}"
         tmp="$db.pzhot"
-        if sqlite3 "$db" ".backup '$tmp'" 2>/dev/null && [ -f "$tmp" ]; then
+        # Stale sidecar copies from the cp would corrupt the hot backup on
+        # open; drop them before replacing the staged database.
+        rm -f "$db-wal" "$db-shm"
+        if sqlite3 "$mount/$rel" ".timeout 2000" ".backup '$tmp'" 2>/dev/null && [ -f "$tmp" ]; then
             mv -f "$tmp" "$db"
         else
             pz_warn "sqlite hot-backup failed for $db; shipping file as-is"
             rm -f "$tmp"
+            STAGE_REASON="sqlite hot-backup failed for $rel; file shipped as-is"
             printf 'staged-tar %s\n' false
             return 0
         fi
     done
-    printf 'staged-tar+sqlite-hotbackup %s\n' true
+    printf 'staged-tar+sqlite-live-hotbackup %s\n' true
     return 0
 }
 
@@ -945,10 +962,11 @@ cmd_backup() {
         fi
         local stage="$stage_root/$vol"
         mkdir -p "$stage"
-        local method consistent
+        local method consistent reason
         if stage_out="$(stage_volume_consistent "$mount" "$stage")"; then
             method="${stage_out% *}"
             consistent="${stage_out#* }"
+            reason="${STAGE_REASON:-}"
         else
             pz_error "staging failed for $actual"
             err=1
@@ -965,9 +983,11 @@ cmd_backup() {
         size="$(stat -c%s "$dest/$vol.tgz")"
         entries="$(tar -tzf "$dest/$vol.tgz" 2>/dev/null | wc -l)"
         vol_json+=("$(jq -cn --arg name "$vol" --arg archive "$vol.tgz" --arg sha256 "$sha" \
-            --arg method "$method" --argjson consistent "$consistent" \
+            --arg method "$method" --argjson consistent "$consistent" --arg reason "$reason" \
             --argjson size "$size" --argjson entries "$entries" \
-            '{name:$name, archive:$archive, sha256:$sha256, sizeBytes:$size, entries:$entries, method:$method, consistent:$consistent}')")
+            '{name:$name, archive:$archive, sha256:$sha256, sizeBytes:$size, entries:$entries,
+              method:$method, consistent:$consistent,
+              reason:(if $consistent then null else $reason end)}')")
         pz_info "backed up $actual -> $dest/$vol.tgz ($method)"
     done < <(printf '%s\n' "${expected[@]}")
     rm -rf "$stage_root"
@@ -1131,6 +1151,21 @@ cmd_restore() {
     local -a manifest_vols=()
     mapfile -t manifest_vols < <(jq -r '.volumes[]? | "\(.name)\t\(.archive)\t\(.sha256)"' "$SOURCE/manifest.json")
     [ "${#manifest_vols[@]}" -gt 0 ] || { pz_error "manifest lists no volumes; refusing empty restore"; return 1; }
+    # REV-003: stop the stack BEFORE capturing the pre-restore snapshot —
+    # a rollback copy taken while writers are live can ship a torn database.
+    # The previous execution state is remembered so a successful restore can
+    # bring the stack back up.
+    local stack_was_running=false
+    if [ -z "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] && docker_reachable; then
+        if [ -n "$(docker ps --filter "label=com.docker.compose.project=$PROJECT" -q 2>/dev/null)" ]; then
+            stack_was_running=true
+        fi
+    fi
+    # PZ-AUD-010: a failed stop must block mutation, never be ignored.
+    if ! cmd_down; then
+        pz_error "could not stop stack; refusing to mutate volumes"
+        return 1
+    fi
     local pre_dir="$SOURCE.pre-restore"
     mkdir -p "$pre_dir"
     local -a pre_vol=()
@@ -1166,15 +1201,10 @@ cmd_restore() {
             '{schemaVersion:$schemaVersion, tool:$tool, id:$id, createdAt:$createdAt, project:$project, volumes:$volumes, verified:false}' \
             > "$pre_dir/manifest.json"
     fi
-    # PZ-AUD-010: a failed stop must block mutation, never be ignored.
-    if ! cmd_down; then
-        pz_error "could not stop stack; refusing to mutate volumes"
-        return 1
-    fi
     local work
     work="$(mktemp -d "${TMPDIR:-/tmp}/pz-restore.XXXXXX")" || { pz_error "no temp dir for restore staging"; return 1; }
     local -a applied=()
-    local failed=""
+    local failed="" mutating=""
     while IFS=$'\t' read -r vol archive sha; do
         [ -n "$vol" ] || continue
         actual="$(volume_actual_name "$vol")"
@@ -1208,21 +1238,32 @@ cmd_restore() {
             failed="$vol"
             break
         fi
+        # REV-001: the volume is mutated from here on. Register it BEFORE
+        # the first destructive write so a failed swap is part of the
+        # rollback set instead of being silently dropped with its
+        # destination wiped.
+        mutating="$vol"
         # Exact state: wipe current contents, then populate from staging.
         if ! wipe_dir_contents "$mount" || ! cp -a "$work/stage/." "$mount/"; then
             pz_error "swap failed for $vol"
             failed="$vol"
             break
         fi
+        mutating=""
         applied+=("$vol")
         pz_info "restored $archive -> $actual"
     done < <(printf '%s\n' "${manifest_vols[@]}")
     rm -rf "$work"
     if [ -n "$failed" ]; then
-        # Roll back every applied volume to its pre-restore snapshot.
+        # REV-001: roll back every mutated volume — including the one whose
+        # swap failed mid-copy — to its pre-restore snapshot. A rollback
+        # that cannot complete is reported as recovery-required, never as
+        # an applied rollback.
+        local -a rb_targets=("${applied[@]}")
+        [ -n "$mutating" ] && rb_targets+=("$mutating")
         local rb_ok=true rb_fail="" rb_work
         rb_work="$(mktemp -d "${TMPDIR:-/tmp}/pz-restore-rb.XXXXXX")" || { pz_error "no temp dir for rollback"; return 1; }
-        for v in "${applied[@]}"; do
+        for v in "${rb_targets[@]}"; do
             if [ -f "$pre_dir/$v.tgz" ]; then
                 local rbm
                 rbm="$(volume_mount "$(volume_actual_name "$v")")"
@@ -1244,12 +1285,31 @@ cmd_restore() {
         rm -rf "$rb_work"
         jq -n --arg source "$SOURCE" --arg pre "$pre_dir" --arg volume "$failed" \
             --argjson rollbackApplied "$([ "$rb_ok" = "true" ] && echo true || echo false)" \
-            --arg rolledBack "$(printf '%s' "${applied[@]}")" --arg rollbackFailed "${rb_fail# }" \
-            '{action:"restore", source:$source, ok:false, failedVolume:$volume, preRestore:$pre, rollbackApplied:$rollbackApplied, rollbackFailed:$rollbackFailed}'
+            --argjson recoveryRequired "$([ "$rb_ok" = "true" ] && echo false || echo true)" \
+            --arg rolledBack "$(printf '%s' "${rb_targets[@]}")" --arg rollbackFailed "${rb_fail# }" \
+            --argjson stackWasRunning "$stack_was_running" \
+            --arg nextAction "inspect $pre_dir and restore it manually before any retry" \
+            '{action:"restore", source:$source, ok:false, failedVolume:$volume, preRestore:$pre,
+              rollbackApplied:$rollbackApplied, recoveryRequired:$recoveryRequired,
+              rolledBack:$rolledBack, rollbackFailed:$rollbackFailed,
+              stackWasRunning:$stackWasRunning,
+              nextAction:(if $recoveryRequired then $nextAction else null end)}'
         return 1
     fi
+    # REV-003: a successful restore returns the stack to its previous
+    # execution state (best effort, honestly reported).
+    local stack_restarted=false
+    if [ "$stack_was_running" = "true" ]; then
+        if run_compose up -d >/dev/null 2>&1; then
+            stack_restarted=true
+        else
+            pz_warn "stack was running before restore; bring it back with: pz server homelab up"
+        fi
+    fi
     jq -n --arg source "$SOURCE" --arg pre "$pre_dir" \
-        '{action:"restore", source:$source, ok:true, preRestore:$pre}'
+        --argjson stackWasRunning "$stack_was_running" --argjson stackRestarted "$stack_restarted" \
+        '{action:"restore", source:$source, ok:true, preRestore:$pre,
+          stackWasRunning:$stackWasRunning, stackRestarted:$stackRestarted}'
 }
 
 cmd_update() {
