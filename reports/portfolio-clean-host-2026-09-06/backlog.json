@@ -402,11 +402,12 @@
         "PZ-AUD-001",
         "PZ-AUD-002"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "toolchains (git/node/go) antes de clone/build em todas entradas; chromium precisa abrir (libs OS faltando falham com acao); verificacao de artefatos bloqueia launchers pendurados; 9router via manager com prereqs proprios."
     },
     {
       "id": "PZ-AUD-017",
@@ -426,11 +427,12 @@
       "dependsOn": [
         "PZ-AUD-016"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "cada etapa de build checada explicitamente; falha em clone fresco remove diretorio p/ retry limpo; ensure/install propagam."
     },
     {
       "id": "PZ-AUD-018",
@@ -451,11 +453,12 @@
         "PZ-AUD-016",
         "PZ-AUD-017"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "SUPPORTED_PROXY_IDS unico p/ install/ensure/start/plan batch; status/auth/plan reportam universo com tier; experimental em batch vira preview explicito."
     },
     {
       "id": "PZ-AUD-019",
@@ -476,11 +479,12 @@
         "PZ-AUD-016",
         "PZ-AUD-018"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "proxy-manifest.json canonico; manifest-check linux impoe repo/pin/porta/runtime; Windows com leitor + paridade Pester (repo/porta) e migrations registradas (mimo auth, deeps default). Pester 3/5 nao roda neste host; CI Windows cobrira."
     },
     {
       "id": "PZ-AUD-020",
@@ -500,11 +504,12 @@
       "dependsOn": [
         "PZ-AUD-019"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "ensure mimo exige completion real (/chat/completions); chave armazenada sem resposta = needs-credentials resumable, nunca ready; sem vazamento de chave."
     },
     {
       "id": "PZ-AUD-021",
@@ -525,11 +530,12 @@
         "PZ-AUD-016",
         "PZ-AUD-019"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "setup-hermes-optional: gate 69 vira skip explicado, erro real propaga; dev-ai usa wrapper; UI marca experimental. Auditoria da distribuicao segue gate humano."
     },
     {
       "id": "PZ-AUD-022",
@@ -551,11 +557,12 @@
         "PZ-AUD-006",
         "PZ-AUD-021"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "installable/installNote no registry; list expoe; up --profile recusa nao-instalavel nomeando maturidade; UI mostra [maturity] e explica apply=orcamento."
     },
     {
       "id": "PZ-AUD-023",
@@ -575,11 +582,12 @@
       "dependsOn": [
         "PZ-AUD-022"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "scope install-policy + executionEnforced:false em broker e securityState; ADR-0005 delimita; allowlist do agente segue fronteira de runtime."
     },
     {
       "id": "PZ-AUD-024",
@@ -600,11 +608,12 @@
         "PZ-AUD-002",
         "PZ-AUD-006"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase3",
+      "implementation": "codex/aud-fase3",
+      "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
+      "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
+      "closureNote": "pull foreground via path broker-gated com progresso; probe /api/generate fecha ready e persiste; nohup removido; modelo mudo falha fechado."
     },
     {
       "id": "PZ-AUD-025",
