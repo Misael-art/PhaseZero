@@ -26,7 +26,9 @@
       "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
       "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
-      "closureNote": "/usr/bin/pz nos pacotes Arch/Deb/RPM + ~/.local/bin/pz no user-install; bridge SSH com retry via payload + PZ_REMOTE_PZ_BIN; README bootstrap admin apos install unico com sudo. Teste test_pz_entrypoint_shipped_on_path."
+      "closureNote": "/usr/bin/pz nos pacotes Arch/Deb/RPM + ~/.local/bin/pz no user-install; bridge SSH com retry via payload + PZ_REMOTE_PZ_BIN; README bootstrap admin apos install unico com sudo. Teste test_pz_entrypoint_shipped_on_path.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-002",
@@ -51,7 +53,9 @@
       "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
       "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
-      "closureNote": "prepare --app: deps via capabilities (plan token) -> daemon -> acesso (grupo com re-login explicito) -> configure -> enable+reconcile -> verify. States ready/needs-reauth/failed; onboarding usa prepare; needs-config aponta prepare."
+      "closureNote": "prepare --app: deps via capabilities (plan token) -> daemon -> acesso (grupo com re-login explicito) -> configure -> enable+reconcile -> verify. States ready/needs-reauth/failed; onboarding usa prepare; needs-config aponta prepare.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-003",
@@ -76,7 +80,9 @@
       "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
       "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
-      "closureNote": "servicos antes de scripts; falhas de script/servico/sysctl abortam; sem bridge => rc 77 pre-mutacao; apply-common propaga workloads."
+      "closureNote": "servicos antes de scripts; falhas de script/servico/sysctl abortam; sem bridge => rc 77 pre-mutacao; apply-common propaga workloads.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-004",
@@ -102,7 +108,9 @@
       "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
       "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
-      "closureNote": "docker_compose validado e convergido (reconcile com registro, senao up; extras so com with_extras); core ausente falha fechado."
+      "closureNote": "docker_compose validado e convergido (reconcile com registro, senao up; extras so com with_extras); core ausente falha fechado.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-005",
@@ -125,7 +133,9 @@
       "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
       "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
       "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
-      "closureNote": "desired/observed separados (state applied/deferred/failed/noop); enable/disable/update com daemon down ou falha parcial retornam ok:false + exit 1; reconciliador retoma. Suite linux-homelab + fakedockers rm-fail/pull-ok-up-fail."
+      "closureNote": "desired/observed separados (state applied/deferred/failed/noop); enable/disable/update com daemon down ou falha parcial retornam ok:false + exit 1; reconciliador retoma. Suite linux-homelab + fakedockers rm-fail/pull-ok-up-fail.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-006",
@@ -150,7 +160,9 @@
       "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
       "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
       "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
-      "closureNote": "health none/unknown vira unchecked e bloqueia healthy/ready; ready exige conjunto esperado (missing/unexpected), segredos completos e sondas TCP; campos novos no status JSON. Healthchecks por app = Fase 2 (030)."
+      "closureNote": "health none/unknown vira unchecked e bloqueia healthy/ready; ready exige conjunto esperado (missing/unexpected), segredos completos e sondas TCP; campos novos no status JSON. Healthchecks por app = Fase 2 (030).",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-007",
@@ -176,7 +188,9 @@
       "implementation": "codex/aud-fase2 (commits de fase2)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
       "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
-      "closureNote": "broker Valkey dedicado (healthcheck, appendonly, sem portas) + PAPERLESS_REDIS + depends_on healthy + consume/export em modulo, extras, catalogo, lock, pesos; enable puxa broker via dependsOn."
+      "closureNote": "broker Valkey dedicado (healthcheck, appendonly, sem portas) + PAPERLESS_REDIS + depends_on healthy + consume/export em modulo, extras, catalogo, lock, pesos; enable puxa broker via dependsOn.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-008",
@@ -203,7 +217,9 @@
       "implementation": "codex/aud-fase2 (commits de fase2)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
       "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
-      "closureNote": "firstUse (openPath, sonda http, passos) nos 10 apps; list expoe firstUse+openUrl; enable retorna nextAction da receita; sondas de status usam endpoints http por app."
+      "closureNote": "firstUse (openPath, sonda http, passos) nos 10 apps; list expoe firstUse+openUrl; enable retorna nextAction da receita; sondas de status usam endpoints http por app.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-009",
@@ -224,12 +240,15 @@
         "PZ-AUD-011",
         "PZ-AUD-012"
       ],
-      "status": "verified",
-      "owner": "codex/aud-fase0",
+      "status": "in_progress",
+      "owner": "codex/rev-remediation",
       "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
       "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
       "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
-      "closureNote": "volumes ausentes falham fechado (listados, sem manifesto); vazio exige backup --allow-empty; staging + sqlite hot-backup; flags consistent/method no manifesto e verify. Dumps nativos MariaDB/PG = limitacao (receitas Fase 2)."
+      "closureNote": "volumes ausentes falham fechado (listados, sem manifesto); vazio exige backup --allow-empty; staging + sqlite hot-backup; flags consistent/method no manifesto e verify. Dumps nativos MariaDB/PG = limitacao (receitas Fase 2). REV-002 (codex/rev-remediation 765e791): sqlite .backup na origem viva com busy timeout, WAL/SHM obsoletos descartados, TSDB/servidores consistent:false com reason; escritor concorrente + restore + integrity_check provados na suite.",
+      "evidenceTier": "implemented",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released",
+      "reopenedBy": "REV-002"
     },
     {
       "id": "PZ-AUD-010",
@@ -250,12 +269,15 @@
         "PZ-AUD-009",
         "PZ-AUD-011"
       ],
-      "status": "verified",
-      "owner": "codex/aud-fase0",
+      "status": "in_progress",
+      "owner": "codex/rev-remediation",
       "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
       "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
       "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
-      "closureNote": "restore so aplica entradas do manifesto (extra tgz ignorado, provado); checa identidade de projeto; stop falho bloqueia; re-checksum TOCTOU; scan de paths; swap exato via staging (remove posteriores); rollback integral com wipe+copy."
+      "closureNote": "restore so aplica entradas do manifesto (extra tgz ignorado, provado); checa identidade de projeto; stop falho bloqueia; re-checksum TOCTOU; scan de paths; swap exato via staging (remove posteriores); rollback integral com wipe+copy. REV-001/003 (codex/rev-remediation 765e791): volume registrado antes da primeira mutacao (swap falho entra no rollback), rollback incompleto = recoveryRequired:true, cmd_down antes do snapshot pre-restore, estado de execucao preservado (stackWasRunning/stackRestarted).",
+      "evidenceTier": "implemented",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released",
+      "reopenedBy": "REV-001/003"
     },
     {
       "id": "PZ-AUD-011",
@@ -278,7 +300,9 @@
       "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
       "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
       "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
-      "closureNote": "volume_actual_name deterministico <projeto>_<logico>; descoberta por label com.docker.compose.project; refuse em label estrangeiro no backup/restore. container_name fixo mantido (colisao entre projetos falha rapido no up)."
+      "closureNote": "volume_actual_name deterministico <projeto>_<logico>; descoberta por label com.docker.compose.project; refuse em label estrangeiro no backup/restore. container_name fixo mantido (colisao entre projetos falha rapido no up).",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-012",
@@ -304,7 +328,9 @@
       "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
       "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
       "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
-      "closureNote": "reconcile converge registro curado (boot usa; fallback legacy sem registro); backup cobre volumes em uso (+extras com --explicit); desligado permanece desligado apos reboot."
+      "closureNote": "reconcile converge registro curado (boot usa; fallback legacy sem registro); backup cobre volumes em uso (+extras com --explicit); desligado permanece desligado apos reboot.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-013",
@@ -327,12 +353,15 @@
         "PZ-AUD-014",
         "PZ-AUD-015"
       ],
-      "status": "verified",
-      "owner": "codex/aud-fase4",
+      "status": "in_progress",
+      "owner": "codex/rev-remediation",
       "implementation": "codex/aud-fase4",
       "behavioralProof": "tests/linux-homelab.sh verde (pair); pytest player/navigation; viewport estreito preservado",
       "ciProof": "hermetico local verde; usabilidade com usuarios reais + Windows nativo pendentes (Fase 5)",
-      "closureNote": "wizard executa: discover via agent, pair com resultado real (local explicito), profile registrado, apply em dois tempos (dry-run hash + execucao so com plano igual). Cartoes mantem one-click com estados honestos (005) e nextAction (008)."
+      "closureNote": "wizard executa: discover via agent, pair com resultado real (local explicito), profile registrado, apply em dois tempos (dry-run hash + execucao so com plano igual). Cartoes mantem one-click com estados honestos (005) e nextAction (008). REV-004..007 (codex/rev-remediation 87c31a1): parser unico de documento (pretty/compact/envelope), pair=false bloqueia avanco, plano amarrado a host capturado (troca de host invalida pair/confirmed/plan), perfil revisado transmitido ao backend (prepare --profile).",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released",
+      "reopenedBy": "REV-004/005/006/007"
     },
     {
       "id": "PZ-AUD-014",
@@ -357,7 +386,9 @@
       "implementation": "codex/aud-fase4",
       "behavioralProof": "tests/linux-homelab.sh verde (pair); pytest player/navigation; viewport estreito preservado",
       "ciProof": "hermetico local verde; usabilidade com usuarios reais + Windows nativo pendentes (Fase 5)",
-      "closureNote": "hosts pair: porta do registro sempre, --key/reuso/--generate explicito, BatchMode sem senha, first-contact com comando exato com porta; Player pareia via CLI."
+      "closureNote": "hosts pair: porta do registro sempre, --key/reuso/--generate explicito, BatchMode sem senha, first-contact com comando exato com porta; Player pareia via CLI.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-015",
@@ -383,7 +414,9 @@
       "implementation": "codex/aud-fase2 (commits de fase2)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
       "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
-      "closureNote": "units no user bus; install/enable encadeiam daemon-reload + enable --now + espera active; linger best-effort honesto; sonda TLS fecha ok; primeira conta web via nextAction (nunca auto-criada); status com unitActive."
+      "closureNote": "units no user bus; install/enable encadeiam daemon-reload + enable --now + espera active; linger best-effort honesto; sonda TLS fecha ok; primeira conta web via nextAction (nunca auto-criada); status com unitActive.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-016",
@@ -409,7 +442,9 @@
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "toolchains (git/node/go) antes de clone/build em todas entradas; chromium precisa abrir (libs OS faltando falham com acao); verificacao de artefatos bloqueia launchers pendurados; 9router via manager com prereqs proprios."
+      "closureNote": "toolchains (git/node/go) antes de clone/build em todas entradas; chromium precisa abrir (libs OS faltando falham com acao); verificacao de artefatos bloqueia launchers pendurados; 9router via manager com prereqs proprios.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-017",
@@ -434,7 +469,9 @@
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "cada etapa de build checada explicitamente; falha em clone fresco remove diretorio p/ retry limpo; ensure/install propagam."
+      "closureNote": "cada etapa de build checada explicitamente; falha em clone fresco remove diretorio p/ retry limpo; ensure/install propagam.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-018",
@@ -460,7 +497,9 @@
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "SUPPORTED_PROXY_IDS unico p/ install/ensure/start/plan batch; status/auth/plan reportam universo com tier; experimental em batch vira preview explicito."
+      "closureNote": "SUPPORTED_PROXY_IDS unico p/ install/ensure/start/plan batch; status/auth/plan reportam universo com tier; experimental em batch vira preview explicito.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-019",
@@ -481,12 +520,15 @@
         "PZ-AUD-016",
         "PZ-AUD-018"
       ],
-      "status": "verified",
-      "owner": "codex/aud-fase3",
+      "status": "in_progress",
+      "owner": "codex/rev-remediation",
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "proxy-manifest.json canonico; manifest-check linux impoe repo/pin/porta/runtime; Windows com leitor + paridade Pester (repo/porta) e migrations registradas (mimo auth, deeps default). Pester 3/5 nao roda neste host; CI Windows cobrira."
+      "closureNote": "proxy-manifest.json canonico; manifest-check linux impoe repo/pin/porta/runtime; Windows com leitor + paridade Pester (repo/porta) e migrations registradas (mimo auth, deeps default). Pester 3/5 nao roda neste host; CI Windows cobrira.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released",
+      "reopenedBy": "REV-016"
     },
     {
       "id": "PZ-AUD-020",
@@ -511,7 +553,9 @@
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "ensure mimo exige completion real (/chat/completions); chave armazenada sem resposta = needs-credentials resumable, nunca ready; sem vazamento de chave."
+      "closureNote": "ensure mimo exige completion real (/chat/completions); chave armazenada sem resposta = needs-credentials resumable, nunca ready; sem vazamento de chave.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-021",
@@ -537,7 +581,9 @@
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "setup-hermes-optional: gate 69 vira skip explicado, erro real propaga; dev-ai usa wrapper; UI marca experimental. Auditoria da distribuicao segue gate humano."
+      "closureNote": "setup-hermes-optional: gate 69 vira skip explicado, erro real propaga; dev-ai usa wrapper; UI marca experimental. Auditoria da distribuicao segue gate humano.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-022",
@@ -564,7 +610,9 @@
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "installable/installNote no registry; list expoe; up --profile recusa nao-instalavel nomeando maturidade; UI mostra [maturity] e explica apply=orcamento."
+      "closureNote": "installable/installNote no registry; list expoe; up --profile recusa nao-instalavel nomeando maturidade; UI mostra [maturity] e explica apply=orcamento.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-023",
@@ -589,7 +637,9 @@
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "scope install-policy + executionEnforced:false em broker e securityState; ADR-0005 delimita; allowlist do agente segue fronteira de runtime."
+      "closureNote": "scope install-policy + executionEnforced:false em broker e securityState; ADR-0005 delimita; allowlist do agente segue fronteira de runtime.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-024",
@@ -615,7 +665,9 @@
       "implementation": "codex/aud-fase3",
       "behavioralProof": "tests/linux-ai-proxies.sh + linux-agent-workspaces.sh + linux-homelab.sh verdes; pytest 158; pwsh direto p/ paridade Windows (Pester 6 incompativel local, teste p/ CI Windows)",
       "ciProof": "hermetico local verde; inferencia autenticada real, Pester Windows e E2E daemon pendentes (Fase 5)",
-      "closureNote": "pull foreground via path broker-gated com progresso; probe /api/generate fecha ready e persiste; nohup removido; modelo mudo falha fechado."
+      "closureNote": "pull foreground via path broker-gated com progresso; probe /api/generate fecha ready e persiste; nohup removido; modelo mudo falha fechado.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-025",
@@ -642,7 +694,9 @@
       "implementation": "codex/aud-fase2 (commits de fase2)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
       "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
-      "closureNote": "timeout envolve o executavel interno (as_user timeout 120 bash ...); fixture runuser com chaining prova o wrap."
+      "closureNote": "timeout envolve o executavel interno (as_user timeout 120 bash ...); fixture runuser com chaining prova o wrap.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-026",
@@ -667,7 +721,9 @@
       "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
       "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
-      "closureNote": "provider por familia (official/aur); AUR sem helper nao instalavel; install AUR sem elevacao; required_by (swtpm/windows-11-vm)."
+      "closureNote": "provider por familia (official/aur); AUR sem helper nao instalavel; install AUR sem elevacao; required_by (swtpm/windows-11-vm).",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-027",
@@ -692,7 +748,9 @@
       "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
       "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
-      "closureNote": "fantasmas removidos (codecs, p7zip->7zip, cargo dup, redis->valkey); optionalPacman/Yay (warn/skip); monitoramento homelab opcional; flatpak auto-bootstrap + remote required falha fechado. Repo check em test_profile_packages."
+      "closureNote": "fantasmas removidos (codecs, p7zip->7zip, cargo dup, redis->valkey); optionalPacman/Yay (warn/skip); monitoramento homelab opcional; flatpak auto-bootstrap + remote required falha fechado. Repo check em test_profile_packages.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-028",
@@ -716,12 +774,15 @@
         "PZ-AUD-010",
         "PZ-AUD-019"
       ],
-      "status": "verified",
-      "owner": "codex/aud-fase5",
+      "status": "in_progress",
+      "owner": "codex/rev-remediation",
       "implementation": "codex/aud-fase5",
       "behavioralProof": "arch-clean-host CI job proven locally in disposable archlinux containers (live repo resolution 15/15, asset build+install, pz entrypoints); hermetic suites green",
       "ciProof": "ci.yml: arch-clean-host (Arch container), manifest gate, restore-exactness on real volumes, lock 14; Pester Windows unchanged; full matrix in docs/acceptance-evidence.md",
-      "closureNote": "CI agora prova host limpo Arch (repos+asset+entrypoints), paridade de manifesto e exatidao de restore com daemon; matriz de evidencia liga cada solucao a prova/limite; verified historico reconciliado como historico."
+      "closureNote": "CI agora prova host limpo Arch (repos+asset+entrypoints), paridade de manifesto e exatidao de restore com daemon; matriz de evidencia liga cada solucao a prova/limite; verified historico reconciliado como historico.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released",
+      "reopenedBy": "REV-017"
     },
     {
       "id": "PZ-AUD-029",
@@ -743,12 +804,15 @@
         "PZ-AUD-013",
         "PZ-AUD-028"
       ],
-      "status": "verified",
-      "owner": "codex/aud-fase4",
+      "status": "in_progress",
+      "owner": "codex/rev-remediation",
       "implementation": "codex/aud-fase4",
       "behavioralProof": "tests/linux-homelab.sh verde (pair); pytest player/navigation; viewport estreito preservado",
       "ciProof": "hermetico local verde; usabilidade com usuarios reais + Windows nativo pendentes (Fase 5)",
-      "closureNote": "Início com 5 jornadas por objetivo (requisito, custo, maturidade, UMA acao de entrada); homelab.hosts adicionada; detalhes seguem nas paginas (revelacao progressiva, sem scrollbar horizontal)."
+      "closureNote": "Início com 5 jornadas por objetivo (requisito, custo, maturidade, UMA acao de entrada); homelab.hosts adicionada; detalhes seguem nas paginas (revelacao progressiva, sem scrollbar horizontal).",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released",
+      "reopenedBy": "REV-014/015"
     },
     {
       "id": "PZ-AUD-030",
@@ -774,7 +838,9 @@
       "implementation": "codex/aud-fase2 (commits de fase2)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
       "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
-      "closureNote": "image-pins.env (0600) leva RepoDigest do update para todo up/reconcile (pin vence tag, mesmo up aplica); rede pz-internal p/ proxy/db; midia jellyfin :ro; rotacao json-file em todos servicos; sweep sem segredo nos outputs."
+      "closureNote": "image-pins.env (0600) leva RepoDigest do update para todo up/reconcile (pin vence tag, mesmo up aplica); rede pz-internal p/ proxy/db; midia jellyfin :ro; rotacao json-file em todos servicos; sweep sem segredo nos outputs.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     },
     {
       "id": "PZ-AUD-031",
@@ -800,7 +866,9 @@
       "implementation": "codex/aud-fase2 (commits de fase2)",
       "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
       "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
-      "closureNote": "MemAvailable via helpers compartilhados (total/disco expostos); governor por app subtrai reserva WinVM; vereditos convergem no mesmo host."
+      "closureNote": "MemAvailable via helpers compartilhados (total/disco expostos); governor por app subtrai reserva WinVM; vereditos convergem no mesmo host.",
+      "evidenceTier": "local-regression",
+      "tierLegend": "implemented/local-regression/ci/e2e-platform/physical/released"
     }
   ]
 }
