@@ -199,7 +199,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
 
     profile_meta = {
         "safe-base": ("Base segura", "Essenciais para uso diário.", "Seguro"),
-        "dev-ai": ("Dev + IA", "Toolchain Python, Node, Rust, agentes e modelos.", "Dev"),
+        "dev-ai": ("Dev + IA", "Toolchain Python, Node, Rust, agentes e modelos. Hermes é experimental e opcional (skip explicado quando bloqueado).", "Dev"),
         "gaming": ("Gaming", "Steam, Heroic, Lutris e telemetria local.", "Jogos"),
         "steamdeck-linux": ("Steam Deck Linux", "UX SteamOS, hotkeys e Gamepad UI.", "Recomendado"),
         "windows-vm-linux": ("Windows VM", "QEMU/KVM, OVMF, TPM e compartilhamentos.", "VM"),

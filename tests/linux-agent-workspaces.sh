@@ -315,4 +315,20 @@ grep -Fq -- '--env-file "$ROUTER_ENV" --env-file "$ENV_FILE"' "$ROOT/linux/ai/od
 # shellcheck disable=SC2016 # assertion intentionally matches literal Compose interpolation
 grep -Fq 'OPENAI_API_KEY: \${PHASEZERO_9ROUTER_API_KEY:' "$ROOT/linux/ai/odysseus-manager.sh"
 
+echo "=== hermes stays optional in broad profiles (PZ-AUD-021) ==="
+# The gate block (rc 69) becomes an explained skip, never a profile abort.
+skip_out="$(env -u PZ_HOMELAB_ALLOW_HOST_WORKLOADS "$ROOT/linux/ai/setup-hermes-optional.sh" setup 2>&1 || true)"
+echo "$skip_out" | rg -qi "SKIP|experimental|blocked" \
+    || { echo "FAIL: hermes gate block not explained"; exit 1; }
+# ...but a real failure still propagates.
+if "$ROOT/linux/ai/setup-hermes-optional.sh" bogus-action >/dev/null 2>&1; then
+    echo "FAIL: hermes misuse accepted"; exit 1
+fi
+rg -q 'setup-hermes-optional\.sh' "$ROOT/profiles/dev-ai.json" \
+    || { echo "FAIL: dev-ai still calls raw setup-hermes"; exit 1; }
+if rg -q '"linux/ai/setup-hermes\.sh"' "$ROOT/profiles/dev-ai.json"; then
+    echo "FAIL: dev-ai references blocking hermes setup"; exit 1
+fi
+echo "  hermes optional ok"
+
 echo "linux-agent-workspaces smoke ok"
