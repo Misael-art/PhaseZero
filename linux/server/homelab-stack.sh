@@ -30,6 +30,7 @@ CONFIRM_FILE=""
 FOLLOW=0
 ACCESS_MODE="${PZ_HOMELAB_ACCESS_MODE:-local}"
 HOMELAB_PROFILE="${PZ_HOMELAB_PROFILE:-}"
+ALLOW_EMPTY=0
 APP=""
 DEST=""
 SOURCE=""
@@ -114,6 +115,8 @@ while [ "$#" -gt 0 ]; do
                 backup)
                     if [ "$1" = "verify" ]; then
                         VERIFY_MODE=1
+                    elif [ "$1" = "--allow-empty" ] || [ "$1" = "allow-empty" ]; then
+                        ALLOW_EMPTY=1
                     else
                         pz_error "unexpected argument: $1"
                         exit 2
@@ -701,6 +704,11 @@ cmd_up() {
 }
 
 cmd_down() {
+    # Fixture/override mode has no daemon to stop; treat as stopped.
+    if [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ]; then
+        pz_info "homelab stack stopped (volume-mount override; no daemon)"
+        return 0
+    fi
     require_docker || return 1
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         pz_info "dry-run: would run compose down (volumes preserved)"
@@ -787,6 +795,13 @@ volume_mount() {
     docker volume inspect -f '{{ .Mountpoint }}' "$vol"
 }
 
+wipe_dir_contents() {
+    # Empty a directory without removing it (rm refuses trailing /.).
+    local dir="$1"
+    [ -n "$dir" ] && [ -d "$dir" ] || return 1
+    find "$dir" -mindepth 1 -delete 2>/dev/null
+}
+
 all_volumes_override() {
     if [ -n "${PZ_HOMELAB_VOLUMES_OVERRIDE:-}" ]; then
         # Intentional word-splitting: the override is a space-separated list.
@@ -805,6 +820,52 @@ json_arr() {
     fi
 }
 
+stage_volume_consistent() {
+    # PZ-AUD-009: copy mount -> staging, then hot-backup SQLite files so a
+    # write in flight does not ship a torn database. Server engines
+    # (MariaDB/Postgres data dirs, Prometheus TSDB) cannot be made
+    # consistent from files alone: they are archived as-is and flagged
+    # consistent:false (native dumps are a per-app recipe concern).
+    # Prints: "<method> <consistent(true|false)>".
+    local mount="$1" stage="$2" db f tmp
+    if ! cp -a "$mount/." "$stage/"; then
+        return 1
+    fi
+    if find "$stage" -maxdepth 4 \( -name 'PG_VERSION' -o -name 'ibdata1' -o -name 'mysql' \) -print -quit 2>/dev/null | grep -q .; then
+        printf 'staged-tar %s\n' false
+        return 0
+    fi
+    local -a dbs=()
+    while IFS= read -r db; do
+        [ -n "$db" ] || continue
+        case "$db" in
+            *.db|*.sqlite|*.sqlite3) dbs+=("$db") ;;
+        esac
+    done < <(find "$stage" -maxdepth 4 -type f \( -name '*.db' -o -name '*.sqlite' -o -name '*.sqlite3' \) 2>/dev/null)
+    if [ "${#dbs[@]}" -eq 0 ]; then
+        printf 'staged-tar %s\n' true
+        return 0
+    fi
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        pz_warn "sqlite3 unavailable; shipping ${#dbs[@]} sqlite file(s) without hot-backup"
+        printf 'staged-tar %s\n' false
+        return 0
+    fi
+    for db in "${dbs[@]}"; do
+        tmp="$db.pzhot"
+        if sqlite3 "$db" ".backup '$tmp'" 2>/dev/null && [ -f "$tmp" ]; then
+            mv -f "$tmp" "$db"
+        else
+            pz_warn "sqlite hot-backup failed for $db; shipping file as-is"
+            rm -f "$tmp"
+            printf 'staged-tar %s\n' false
+            return 0
+        fi
+    done
+    printf 'staged-tar+sqlite-hotbackup %s\n' true
+    return 0
+}
+
 cmd_backup() {
     local dest="${DEST:-$BACKUP_ROOT/$(date '+%Y%m%d-%H%M%S')}" vol actual mount started finished
     started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -814,9 +875,34 @@ cmd_backup() {
         return 0
     fi
     [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] || require_docker || return 1
+    local -a expected=() _raw=()
+    mapfile -t _raw < <(all_volumes_override)
+    local _v
+    for _v in "${_raw[@]}"; do [ -n "$_v" ] && expected+=("$_v"); done
+    if [ "${#expected[@]}" -eq 0 ]; then
+        # PZ-AUD-009: an empty set is only a success when explicitly asked.
+        if [ "$ALLOW_EMPTY" = "1" ]; then
+            mkdir -p "$dest"
+            finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            jq -cn --arg schemaVersion "$PZ_HOMELAB_BACKUP_SCHEMA" --arg tool "homelab-backup" \
+                --arg id "$(basename "$dest")" --arg createdAt "$started" --arg finishedAt "$finished" \
+                --arg project "$PROJECT" \
+                '{schemaVersion:$schemaVersion, tool:$tool, id:$id, createdAt:$createdAt, finishedAt:$finishedAt,
+                  project:$project, volumes:[], verified:false, consistent:true, empty:true}' \
+                > "$dest/manifest.json"
+            jq -n --arg destination "$dest" --arg id "$(basename "$dest")" \
+                '{action:"backup", destination:$destination, id:$id, volumes:[], ok:true, consistent:true, empty:true}'
+            return 0
+        fi
+        pz_error "no volumes expected; refusing empty backup (pass backup --allow-empty to record one explicitly)"
+        return 1
+    fi
     mkdir -p "$dest"
-    local err=0
-    local -a vol_json=()
+    local stage_root="$dest/.staging"
+    rm -rf "$stage_root"
+    mkdir -p "$stage_root"
+    local -a vol_json=() missing=()
+    local err=0 consistent_all=true
     while IFS= read -r vol; do
         [ -n "$vol" ] || continue
         actual="$(volume_actual_name "$vol")"
@@ -826,43 +912,69 @@ cmd_backup() {
         fi
         mount="$(volume_mount "$actual")"
         if [ ! -d "$mount" ]; then
-            pz_warn "volume mount missing, skipped: $actual"
+            # PZ-AUD-009: required data is never silently omitted.
+            pz_error "volume mount missing, cannot back up: $actual"
+            missing+=("$vol")
+            err=1
             continue
         fi
-        if ! tar -C "$mount" -czf "$dest/$vol.tgz" . 2>/dev/null; then
+        local stage="$stage_root/$vol"
+        mkdir -p "$stage"
+        local method consistent
+        if stage_out="$(stage_volume_consistent "$mount" "$stage")"; then
+            method="${stage_out% *}"
+            consistent="${stage_out#* }"
+        else
+            pz_error "staging failed for $actual"
+            err=1
+            continue
+        fi
+        if ! tar -C "$stage" -czf "$dest/$vol.tgz" . 2>/dev/null; then
             pz_error "tar failed for $actual"
             err=1
             continue
         fi
+        [ "$consistent" = true ] || consistent_all=false
         local sha size entries
         sha="$(sha256sum "$dest/$vol.tgz" | cut -d' ' -f1)"
         size="$(stat -c%s "$dest/$vol.tgz")"
         entries="$(tar -tzf "$dest/$vol.tgz" 2>/dev/null | wc -l)"
         vol_json+=("$(jq -cn --arg name "$vol" --arg archive "$vol.tgz" --arg sha256 "$sha" \
+            --arg method "$method" --argjson consistent "$consistent" \
             --argjson size "$size" --argjson entries "$entries" \
-            '{name:$name, archive:$archive, sha256:$sha256, sizeBytes:$size, entries:$entries}')")
-        pz_info "backed up $actual -> $dest/$vol.tgz"
-    done < <(all_volumes_override)
-    [ "$err" = "0" ] || { pz_error "backup incomplete; manifest not written"; return 1; }
+            '{name:$name, archive:$archive, sha256:$sha256, sizeBytes:$size, entries:$entries, method:$method, consistent:$consistent}')")
+        pz_info "backed up $actual -> $dest/$vol.tgz ($method)"
+    done < <(printf '%s\n' "${expected[@]}")
+    rm -rf "$stage_root"
+    if [ "$err" != "0" ]; then
+        local missing_json
+        missing_json="$(json_arr "${missing[@]}")"
+        jq -n --arg destination "$dest" --argjson missing "$missing_json" \
+            '{action:"backup", destination:$destination, ok:false, missingVolumes:$missing,
+              reason:"backup incomplete; manifest not written"}' || true
+        pz_error "backup incomplete; manifest not written"
+        return 1
+    fi
     finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     local volumes_json manifest
     volumes_json="$(printf '%s\n' "${vol_json[@]}" | jq -s .)"
     manifest="$(jq -cn --arg schemaVersion "$PZ_HOMELAB_BACKUP_SCHEMA" --arg tool "homelab-backup" \
         --arg id "$(basename "$dest")" --arg createdAt "$started" --arg finishedAt "$finished" \
-        --arg project "$PROJECT" --argjson volumes "$volumes_json" \
+        --arg project "$PROJECT" --argjson volumes "$volumes_json" --argjson consistent "$consistent_all" \
         '{schemaVersion:$schemaVersion, tool:$tool, id:$id, createdAt:$createdAt, finishedAt:$finishedAt,
-          project:$project, volumes:$volumes, verified:false}')"
+          project:$project, volumes:$volumes, verified:false, consistent:$consistent,
+          empty:false}')"
     printf '%s\n' "$manifest" > "$dest/manifest.json.tmp" && mv "$dest/manifest.json.tmp" "$dest/manifest.json"
     local msha
     msha="$(sha256sum "$dest/manifest.json" | cut -d' ' -f1)"
     mkdir -p "$BACKUP_ROOT"
     jq -n --arg latest "$dest" --arg id "$(basename "$dest")" --arg createdAt "$started" \
-        --arg manifestSha "$msha" --argjson verified false \
-        '{latest:$latest, id:$id, createdAt:$createdAt, manifestSha:$manifestSha, verified:false}' \
+        --arg manifestSha "$msha" --argjson verified false --argjson consistent "$consistent_all" \
+        '{latest:$latest, id:$id, createdAt:$createdAt, manifestSha:$manifestSha, verified:false, consistent:$consistent}' \
         > "$BACKUP_ROOT/last.json"
     jq -n --arg destination "$dest" --arg id "$(basename "$dest")" \
-        --argjson volumes "$volumes_json" \
-        '{action:"backup", destination:$destination, id:$id, volumes:$volumes, ok:true}'
+        --argjson volumes "$volumes_json" --argjson consistent "$consistent_all" \
+        '{action:"backup", destination:$destination, id:$id, volumes:$volumes, ok:true, consistent:$consistent}'
 }
 
 cmd_verify_backup() {
@@ -901,11 +1013,31 @@ cmd_verify_backup() {
         [ "$got" = "$sha" ] || { reasons+=("checksum mismatch: $archive"); fail=1; }
         tar -tzf "$f" >/dev/null 2>&1 || { reasons+=("tar corrupt: $archive"); fail=1; }
     done < <(printf '%s\n' "$manifest" | jq -r '.volumes[]? | [.archive, .sha256] | @tsv')
+    # PZ-AUD-009/010: size/entries recorded at backup time must still hold;
+    # extra archives outside the manifest are reported (restore ignores them).
+    while IFS=$'\t' read -r archive size entries; do
+        [ -n "$archive" ] || continue
+        local f="$src/$archive"
+        [ -f "$f" ] || continue
+        if [ -n "$size" ] && [ "$size" != "null" ]; then
+            [ "$(stat -c%s "$f")" = "$size" ] || { reasons+=("size changed: $archive"); fail=1; }
+        fi
+        if [ -n "$entries" ] && [ "$entries" != "null" ]; then
+            [ "$(tar -tzf "$f" 2>/dev/null | wc -l)" = "$entries" ] || { reasons+=("entries changed: $archive"); fail=1; }
+        fi
+    done < <(printf '%s\n' "$manifest" | jq -r '.volumes[]? | [.archive, (.sizeBytes|tostring), (.entries|tostring)] | @tsv')
+    local extra
+    extra="$(comm -23 <(find "$src" -maxdepth 1 -name '*.tgz' -printf '%f\n' 2>/dev/null | sort) \
+        <(printf '%s\n' "$manifest" | jq -r '.volumes[]?.archive' | sort) | tr '\n' ' ')"
+    [ -z "${extra// }" ] || reasons+=("extra archives outside manifest (ignored by restore):${extra}")
+    local consistent
+    consistent="$(printf '%s\n' "$manifest" | jq -r '.consistent // "unknown"')"
     local out
     out="$(jq -cn --arg source "$src" --arg schemaVersion "$PZ_HOMELAB_BACKUP_SCHEMA" \
         --argjson verified "$([ "$fail" -eq 0 ] && echo true || echo false)" \
         --argjson checks "$(json_arr "${reasons[@]}")" \
-        '{action:"verify-backup", source:$source, schemaVersion:$schemaVersion, verified:$verified, checks:$checks}')"
+        --arg consistent "$consistent" \
+        '{action:"verify-backup", source:$source, schemaVersion:$schemaVersion, verified:$verified, checks:$checks, consistent:$consistent}')"
     printf '%s\n' "$out"
     [ "$fail" -eq 0 ]
 }
@@ -951,6 +1083,14 @@ cmd_restore() {
         pz_error "backup verification failed; refusing restore"
         return 1
     fi
+    # PZ-AUD-010: a backup belongs to exactly one project; never apply a
+    # foreign project's data onto this one.
+    local manifest_project
+    manifest_project="$(jq -r '.project // empty' "$SOURCE/manifest.json")"
+    if [ -n "$manifest_project" ] && [ "$manifest_project" != "$PROJECT" ]; then
+        pz_error "backup project $manifest_project != $PROJECT; refusing restore"
+        return 1
+    fi
     if [ "$YES" != "1" ]; then
         # CCS-004: a Central nunca usa --yes; o operador confirma gerando um
         # arquivo com a frase exata vinculada à origem do restore.
@@ -961,11 +1101,16 @@ cmd_restore() {
     fi
     [ -n "${PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE:-}" ] || require_docker || return 1
     [ -d "$SOURCE" ] || { pz_error "restore source missing: $SOURCE"; return 1; }
+    # Manifest-driven volume list: extra *.tgz files in the directory are
+    # NEVER applied (PZ-AUD-010).
+    local -a manifest_vols=()
+    mapfile -t manifest_vols < <(jq -r '.volumes[]? | "\(.name)\t\(.archive)\t\(.sha256)"' "$SOURCE/manifest.json")
+    [ "${#manifest_vols[@]}" -gt 0 ] || { pz_error "manifest lists no volumes; refusing empty restore"; return 1; }
     local pre_dir="$SOURCE.pre-restore"
     mkdir -p "$pre_dir"
     local -a pre_vol=()
-    local vol actual mount
-    while IFS= read -r vol; do
+    local vol actual mount archive sha
+    while IFS=$'\t' read -r vol archive sha; do
         [ -n "$vol" ] || continue
         actual="$(volume_actual_name "$vol")"
         if ! volume_owned_by_project "$actual"; then
@@ -981,14 +1126,14 @@ cmd_restore() {
             pz_error "pre-restore snapshot failed for $actual; aborting restore"
             return 1
         fi
-        local sha size entries
-        sha="$(sha256sum "$pre_dir/$vol.tgz" | cut -d' ' -f1)"
+        local sha2 size entries
+        sha2="$(sha256sum "$pre_dir/$vol.tgz" | cut -d' ' -f1)"
         size="$(stat -c%s "$pre_dir/$vol.tgz")"
         entries="$(tar -tzf "$pre_dir/$vol.tgz" 2>/dev/null | wc -l)"
-        pre_vol+=("$(jq -cn --arg name "$vol" --arg archive "$vol.tgz" --arg sha256 "$sha" \
+        pre_vol+=("$(jq -cn --arg name "$vol" --arg archive "$vol.tgz" --arg sha256 "$sha2" \
             --argjson size "$size" --argjson entries "$entries" \
             '{name:$name, archive:$archive, sha256:$sha256, sizeBytes:$size, entries:$entries}')")
-    done < <(all_volumes_override)
+    done < <(printf '%s\n' "${manifest_vols[@]}")
     if [ "${#pre_vol[@]}" -gt 0 ]; then
         jq -cn --arg schemaVersion "$PZ_HOMELAB_BACKUP_SCHEMA" --arg tool "homelab-restore-pre" \
             --arg id "$(basename "$SOURCE").pre-restore" --arg createdAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -996,40 +1141,85 @@ cmd_restore() {
             '{schemaVersion:$schemaVersion, tool:$tool, id:$id, createdAt:$createdAt, project:$project, volumes:$volumes, verified:false}' \
             > "$pre_dir/manifest.json"
     fi
-    cmd_down || true
-    local -a started=()
+    # PZ-AUD-010: a failed stop must block mutation, never be ignored.
+    if ! cmd_down; then
+        pz_error "could not stop stack; refusing to mutate volumes"
+        return 1
+    fi
+    local work
+    work="$(mktemp -d "${TMPDIR:-/tmp}/pz-restore.XXXXXX")" || { pz_error "no temp dir for restore staging"; return 1; }
+    local -a applied=()
     local failed=""
-    for archive in "$SOURCE"/*.tgz; do
-        [ -e "$archive" ] || continue
-        vol="$(basename "$archive" .tgz)"
+    while IFS=$'\t' read -r vol archive sha; do
+        [ -n "$vol" ] || continue
         actual="$(volume_actual_name "$vol")"
-        mount="$(volume_mount "$actual")"
-        if ! mkdir -p "$mount"; then
-            pz_error "mount dir unavailable for $vol"
+        if ! volume_owned_by_project "$actual"; then
+            pz_error "refusing foreign volume $actual"
             failed="$vol"
             break
         fi
-        if ! tar -C "$mount" -xzf "$archive"; then
+        if [ ! -f "$SOURCE/$archive" ]; then
+            pz_error "manifest archive missing: $archive"
+            failed="$vol"
+            break
+        fi
+        # TOCTOU: re-checksum right before applying.
+        if [ "$(sha256sum "$SOURCE/$archive" | cut -d' ' -f1)" != "$sha" ]; then
+            pz_error "checksum changed since verify: $archive; aborting"
+            failed="$vol"
+            break
+        fi
+        # Path safety: no absolute paths, no parent escapes.
+        if tar -tzf "$SOURCE/$archive" 2>/dev/null | grep -Eq '(^/|(^|/)\.\.(/|$))'; then
+            pz_error "unsafe paths in $archive; aborting"
+            failed="$vol"
+            break
+        fi
+        mount="$(volume_mount "$actual")"
+        rm -rf "$work/stage"
+        mkdir -p "$work/stage" "$mount" || { pz_error "mount dir unavailable for $vol"; failed="$vol"; break; }
+        if ! tar -C "$work/stage" -xzf "$SOURCE/$archive"; then
             pz_error "restore failed for $vol"
             failed="$vol"
             break
         fi
-        started+=("$vol")
+        # Exact state: wipe current contents, then populate from staging.
+        if ! wipe_dir_contents "$mount" || ! cp -a "$work/stage/." "$mount/"; then
+            pz_error "swap failed for $vol"
+            failed="$vol"
+            break
+        fi
+        applied+=("$vol")
         pz_info "restored $archive -> $actual"
-    done
+    done < <(printf '%s\n' "${manifest_vols[@]}")
+    rm -rf "$work"
     if [ -n "$failed" ]; then
-        local rb_ok=true rb_fail=""
-        for v in "${started[@]}"; do
+        # Roll back every applied volume to its pre-restore snapshot.
+        local rb_ok=true rb_fail="" rb_work
+        rb_work="$(mktemp -d "${TMPDIR:-/tmp}/pz-restore-rb.XXXXXX")" || { pz_error "no temp dir for rollback"; return 1; }
+        for v in "${applied[@]}"; do
             if [ -f "$pre_dir/$v.tgz" ]; then
-                if ! tar -C "$(volume_mount "$(volume_actual_name "$v")")" -xzf "$pre_dir/$v.tgz" 2>/dev/null; then
+                local rbm
+                rbm="$(volume_mount "$(volume_actual_name "$v")")"
+                rm -rf "$rb_work/swap"
+                mkdir -p "$rb_work/swap"
+                if [ -n "$rbm" ] && [ -d "$rbm" ] \
+                    && tar -C "$rb_work/swap" -xzf "$pre_dir/$v.tgz" 2>/dev/null \
+                    && wipe_dir_contents "$rbm" && cp -a "$rb_work/swap/." "$rbm/"; then
+                    :
+                else
                     rb_ok=false
                     rb_fail="$rb_fail $v"
                 fi
+            else
+                rb_ok=false
+                rb_fail="$rb_fail $v"
             fi
         done
+        rm -rf "$rb_work"
         jq -n --arg source "$SOURCE" --arg pre "$pre_dir" --arg volume "$failed" \
             --argjson rollbackApplied "$([ "$rb_ok" = "true" ] && echo true || echo false)" \
-            --arg rolledBack "$(printf '%s' "${started[@]}")" --arg rollbackFailed "${rb_fail# }" \
+            --arg rolledBack "$(printf '%s' "${applied[@]}")" --arg rollbackFailed "${rb_fail# }" \
             '{action:"restore", source:$source, ok:false, failedVolume:$volume, preRestore:$pre, rollbackApplied:$rollbackApplied, rollbackFailed:$rollbackFailed}'
         return 1
     fi

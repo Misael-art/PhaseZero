@@ -871,6 +871,32 @@ grep -q 'changed-after-backup' "$VM/vaultwarden_data/db.sqlite" \
 test "$(cat "$VM/vaultwarden_data/db.sqlite")" = "changed-after-backup" \
     || { echo "FAIL: rollback restored backup instead of pre-restore state"; exit 1; }
 echo "  restore partial failure rolls back to pre-restore ok"
+# PZ-AUD-009: empty set fails closed; explicit --allow-empty records emptiness.
+# (A single space keeps the override active while selecting zero volumes.)
+if eval "$BENV PZ_HOMELAB_VOLUMES_OVERRIDE=' ' '$REPO_ROOT/linux/pz' server homelab backup --dest '$TMP/empty-refused'" >/dev/null 2>&1; then
+    echo "FAIL: empty backup accepted without --allow-empty"; exit 1
+fi
+empty_out="$(eval "$BENV PZ_HOMELAB_VOLUMES_OVERRIDE=' ' '$REPO_ROOT/linux/pz' server homelab backup --dest '$TMP/empty-ok' --allow-empty 2>/dev/null" | grep -v '^INFO:')"
+echo "$empty_out" | jq -e '.ok == true and .empty == true and (.volumes|length) == 0' >/dev/null
+# PZ-AUD-009: a missing required volume fails closed with the name listed.
+if eval "PZ_HOMELAB_STATE=$PZ_HOMELAB_STATE PZ_HOMELAB_BACKUP_ROOT=$BKT PZ_HOMELAB_VOLUMES_OVERRIDE='vaultwarden_data vol_missing_nope' PZ_HOMELAB_VOLUME_MOUNT_OVERRIDE=$VM '$REPO_ROOT/linux/pz' server homelab backup --dest '$TMP/missing-refused'" >/dev/null 2>&1; then
+    echo "FAIL: backup with missing volume succeeded"; exit 1
+fi
+test ! -f "$TMP/missing-refused/manifest.json" || { echo "FAIL: manifest written for incomplete backup"; exit 1; }
+echo "  backup empty/missing fail closed ok"
+# PZ-AUD-010: extra archives outside the manifest are never applied, and
+# files created after the backup are removed (exact state).
+echo "posterior-data" > "$VM/vaultwarden_data/posterior.txt"
+echo "EVIL" > "$TMP/evil.txt"
+tar -C "$TMP" -czf "$BKT/bk1/evil_extra.tgz" evil.txt 2>/dev/null
+rm -f "$VM/vaultwarden_data/db.sqlite"
+exact_out="$(eval "$BENV '$REPO_ROOT/linux/pz' server homelab restore --source '$BKT/bk1' --yes 2>/dev/null" | grep -v '^INFO:')"
+echo "$exact_out" | jq -e '.ok == true' >/dev/null
+test ! -e "$VM/evil_extra" || { echo "FAIL: extra archive applied"; exit 1; }
+test ! -e "$VM/vaultwarden_data/posterior.txt" || { echo "FAIL: post-backup file survived restore"; exit 1; }
+grep -q 'secret-password-1' "$VM/vaultwarden_data/db.sqlite"
+rm -f "$BKT/bk1/evil_extra.tgz"
+echo "  restore ignores extras and converges exact state ok"
 # status surfaces lastBackup + verified
 PZ_HOMELAB_BACKUP_ROOT="$BKT" "$REPO_ROOT/linux/pz" server homelab status --json >/tmp/bkst.json 2>&1 || true
 jq -e '.backupState.backups == ["bk1"] and .backupState.lastBackup.latest != null and .backupState.verified == false' /tmp/bkst.json >/dev/null
