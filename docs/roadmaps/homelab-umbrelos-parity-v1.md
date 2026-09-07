@@ -478,6 +478,7 @@ Adicionar uma linha por sessão material. Não apagar histórico.
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 1+4 | `a8f7da1` | docker_cli stderr; contratos web CSRF/cookie/restore/bind; Player Abrir dashboard | CI 33006026031: python/homelab-python verdes; **shell-lint 0.11 SC2030**; disposable skipped |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 5 | `075abf4` | SC2030 via `env`; host-facts honestos; onboarding Player | CI 33009994646: lint/python/disposable verdes; **shell-test** falhou (runner globou disposable) |
 | 2026-08-26 | grok | `feat/homelab-umbrelos-v1` `/mnt/sdcard/Projects/pz-homelab-umbrelos-v1` | 6 | este commit | runner skip `# Disposable CI`; porta ocupada + cert corrupto | CI shell-test + homelab-python-test |
+| 2026-09-07 | ZCode | `codex/rev-remediation` (`pz-rev-remediation`) | R0 (revisão REV: onboarding Fase 5) | `87c31a1` (+ `8686279` backend) | pytest player 40 passed (6 regressões REV novas); contratos agent/web 38 passed | Correções de auditoria no onboarding do Player (HL-ONB-001): parser de documento único (pretty/compact/envelope `--host`), pair=false bloqueia avanço, plano amarrado a host capturado (troca de host invalida pair/revisão), perfil revisado transmitido via `prepare --profile`. Base `9d6be9d`; ver matriz em `docs/roadmaps/rev-remediation-v1.md`. |
 
 ## Formato obrigatório de handoff
 
