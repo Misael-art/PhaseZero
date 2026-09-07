@@ -1026,6 +1026,7 @@ pz_run_profile() {
     if ! jq -e '
         ((.extends // []) | type == "array") and
         ((.packages.linux.pacman // []) | type == "array") and
+        ((.packages.linux.archRepos // []) | type == "array") and
         ((.packages.linux.yay // []) | type == "array") and
         ((.packages.linux.optionalPacman // []) | type == "array") and
         ((.packages.linux.optionalYay // []) | type == "array") and
@@ -1098,6 +1099,50 @@ pz_run_profile() {
     done < <(jq -er '(.extends // []) | if type == "array" then .[] else error("extends must be an array") end' "$profile_file")
 
     local dry_run="${PZ_DRY_RUN:-0}"
+    local arch_repos
+    arch_repos=$(jq -r '.packages.linux.archRepos // [] | .[]' "$profile_file" 2>/dev/null || true)
+    if [ -n "$arch_repos" ]; then
+        # PZ-AUD-027: clean Arch ships [multilib] commented out; lib32/steam
+        # packages cannot resolve without it. Enabling a repo is explicit,
+        # admin-gated and dry-run visible — never silent.
+        local repo
+        while IFS= read -r repo; do
+            [ -z "$repo" ] && continue
+            case "$repo" in
+                multilib) ;;
+                *) pz_error "unsupported arch repo: $repo"; return 2 ;;
+            esac
+            if grep -Eq '^\[multilib\]' /etc/pacman.conf 2>/dev/null; then
+                [ "$dry_run" = "1" ] && pz_info "repo [$repo] already enabled"
+                continue
+            fi
+            if [ "$dry_run" = "1" ]; then
+                pz_info "would enable [$repo] in /etc/pacman.conf and refresh databases"
+                continue
+            fi
+            pz_info "enabling [$repo] repository..."
+            if grep -Eq '^#\[multilib\]' /etc/pacman.conf 2>/dev/null; then
+                pz_admin_run sed -i '/^#\[multilib\]/,/^#Include/s/^#//' /etc/pacman.conf || {
+                    pz_error "could not enable [$repo] (admin bridge needed)"
+                    return "$PZ_RC_NO_ADMIN"
+                }
+            else
+                # Minimal images ship no [multilib] block at all: append it.
+                pz_admin_run bash -c 'printf "\n[multilib]\nInclude = /etc/pacman.d/mirrorlist\n" >> /etc/pacman.conf' || {
+                    pz_error "could not enable [$repo] (admin bridge needed)"
+                    return "$PZ_RC_NO_ADMIN"
+                }
+            fi
+            grep -Eq '^\[multilib\]' /etc/pacman.conf || {
+                pz_error "[$repo] section still disabled after edit"
+                return 1
+            }
+            pz_admin_run pacman -Sy || {
+                pz_error "database refresh failed after enabling [$repo]"
+                return 1
+            }
+        done <<< "$arch_repos"
+    fi
     local packages
     packages=$(jq -r '.packages.linux.pacman // [] | .[]' "$profile_file" 2>/dev/null || true)
     local yay_pkgs
