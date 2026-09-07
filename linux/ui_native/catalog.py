@@ -397,6 +397,7 @@ def build_catalog(root: Path, platform_name: str | None = None) -> list[ActionSp
             _a("homelab.verify", "Homelab", "Verificar backup", "Recomputa sha256; falha fechado se adulterado.", ("server", "homelab", "backup", "verify", "--source", "{input}"), "document-edit-verify", mutable=True, preview=("server", "homelab", "status"), input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação"),
             _a("homelab.restore", "Homelab", "Restaurar backup (plano)", "Verifica o backup e mostra o impacto; aplicar exige confirmação explícita na CLI (--yes).", ("server", "homelab", "restore", "--source", "{input}", "--plan"), "document-revert", input_label="Selecione pasta de backup Homelab", input_kind="path", badge="Verificação", keywords=("restaurar", "backup", "resgate")),
             _a("homelab.policy", "Homelab", "Política AI", "Broker conservative/permissive e ações negadas.", ("ai", "policy", "status"), "dialog-password", badge="JSON", keywords=("policy", "broker", "ollama", "hermes")),
+            _a("homelab.hosts", "Homelab", "Hosts pareados", "Computadores remotos registrados, pareamento e ponte SSH.", ("server", "homelab", "hosts", "list", "--json"), "folder-remote", badge="JSON", keywords=("host", "remoto", "parear", "ssh")),
         ]
     )
 

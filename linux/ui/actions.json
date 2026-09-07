@@ -1390,6 +1390,17 @@
       "input_label": ""
     },
     {
+      "name": "homelab.hosts",
+      "label": "Hosts pareados",
+      "command": "linux/pz server homelab hosts list --json",
+      "mutable": false,
+      "require_plan": false,
+      "module": "Homelab",
+      "elevated": false,
+      "input_kind": "",
+      "input_label": ""
+    },
+    {
       "name": "server.status",
       "label": "Status servidor",
       "command": "linux/pz server status",

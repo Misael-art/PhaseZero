@@ -56,6 +56,7 @@ class HomelabPage(BasePage):
         self._onboard_step = 0
         self._onboard_confirmed = False
         self._onboard_state: dict = {}
+        self._pair_advance = False
         self._onboard_label: QLabel | None = None
         self._onboard_next: QPushButton | None = None
 
@@ -299,7 +300,7 @@ class HomelabPage(BasePage):
             "pair": "Parear a chave SSH. Senha nunca vai no argv.",
             "profile": "Escolher perfil e apps. Orçamento recusa host curto.",
             "review": "Revisão: bind local, sem UPnP, fora de casa só Tailscale.",
-            "apply": "Aplicar só depois da revisão. Preview via repair; nunca --yes.",
+            "apply": "Aplicar gera o plano (dry-run), revisar e aplicar de novo executa. Nunca --yes.",
         }
         return copy[name]
 
@@ -316,8 +317,10 @@ class HomelabPage(BasePage):
     def onboard_ingest_discover(self, payload: dict) -> None:
         self._onboard_state["discover"] = payload if isinstance(payload, dict) else {}
 
-    def onboard_ingest_pair(self, ok: bool) -> None:
+    def onboard_ingest_pair(self, ok: bool, detail: dict | None = None) -> None:
         self._onboard_state["pair"] = bool(ok)
+        if detail is not None:
+            self._onboard_state["pair_detail"] = detail
 
     def onboard_confirm_review(self) -> None:
         self._onboard_confirmed = True
@@ -334,16 +337,27 @@ class HomelabPage(BasePage):
         )
 
     def onboard_advance(self) -> None:
+        # PZ-AUD-013: every step executes something real. Nothing advances
+        # on placeholders: discover runs agent discovery, pair needs a real
+        # pairing result (or an explicit local host), profile records the
+        # actual selection, review needs confirmation, apply needs a plan.
         current = self.onboard_step_name()
         if current == "discover" and "discover" not in self._onboard_state:
-            self.onboard_ingest_discover(
-                {"service": "phasezero-homelab._tcp", "manualFallback": "IP:17432"}
-            )
+            self._run_discover()
+            return
         elif current == "pair" and "pair" not in self._onboard_state:
             alias = self._selected_host()
-            self.onboard_ingest_pair(bool(alias))
+            if not alias:
+                self.onboard_ingest_pair(True, {"local": True})
+            else:
+                self._pair_advance = True
+                self.start_pair()
+                return
         elif current == "profile":
-            self._onboard_state["profile"] = True
+            combo = self._profile_combo
+            self._onboard_state["profile"] = {
+                "profile": combo.currentData() if combo is not None else "",
+            }
         elif current == "review" and not self._onboard_confirmed:
             return
         elif current == "apply":
@@ -353,10 +367,67 @@ class HomelabPage(BasePage):
             self._onboard_step += 1
         self._refresh_onboard_label()
 
+    def _run_discover(self) -> None:
+        self._state_label.setText("Descobrindo Homelab…")
+        self._spawn(["server", "homelab", "agent", "discover", "--json"], self._on_discover_done)
+
+    def _first_json_line(self, raw: bytes) -> dict:
+        for line in raw.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, dict):
+                        return data
+                except Exception:
+                    continue
+        return {}
+
+    def _on_discover_done(self, code: int, raw: bytes, err: bytes) -> None:
+        self._proc = None
+        payload = self._first_json_line(raw)
+        if code == 0 and payload:
+            self.onboard_ingest_discover(payload)
+            self.refresh_hosts()
+            if self._onboard_step < len(self.ONBOARD_STEPS) - 1:
+                self._onboard_step += 1
+            self._refresh_onboard_label()
+        else:
+            detail = err.decode("utf-8", "replace").strip().splitlines()
+            reason = detail[-1] if detail else f"exit {code}"
+            self._state_label.setText(f"Descoberta falhou: {reason}")
+        self._refresh_onboard_label()
+
     def onboard_apply(self) -> None:
         if not self._onboard_confirmed:
             return
-        # PZ-AUD-002: onboarding installs (prepare), it does not just repair.
+        # PZ-AUD-002/013: apply is plan-then-execute. First press renders
+        # the prepare dry-run; second press re-renders and only executes
+        # when the plan is unchanged (a changed plan needs a new review).
+        self._state_label.setText("Gerando plano…")
+        self._spawn(self._hl("prepare", "--dry-run", "--json"), self._on_apply_plan_done)
+
+    def _on_apply_plan_done(self, code: int, raw: bytes, err: bytes) -> None:
+        self._proc = None
+        payload = self._first_json_line(raw)
+        if code != 0 or not payload:
+            detail = err.decode("utf-8", "replace").strip().splitlines()
+            reason = detail[-1] if detail else f"exit {code}"
+            self._state_label.setText(f"Plano falhou: {reason}")
+            return
+        plan_hash = json.dumps(payload, sort_keys=True)
+        previous = self._onboard_state.get("review_plan")
+        if previous is None:
+            self._onboard_state["review_plan"] = plan_hash
+            self._append(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            self._state_label.setText("Plano pronto — revise acima e pressione Aplicar de novo para executar")
+            return
+        if previous != plan_hash:
+            self._onboard_state["review_plan"] = plan_hash
+            self._append(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            self._state_label.setText("Plano mudou — revise de novo e pressione Aplicar para executar")
+            return
+        self._onboard_state.pop("review_plan", None)
         self.run_cmd(["prepare", "--json"])
 
     def _hl(self, *parts: str) -> list[str]:
@@ -460,10 +531,16 @@ class HomelabPage(BasePage):
                     continue
         state = str(payload.get("state", ""))
         if code == 0 and payload.get("paired"):
-            self.onboard_ingest_pair(True)
+            self.onboard_ingest_pair(True, {"alias": self._selected_host()})
+            if self._pair_advance:
+                self._pair_advance = False
+                if self._onboard_step < len(self.ONBOARD_STEPS) - 1:
+                    self._onboard_step += 1
+                self._refresh_onboard_label()
             self._state_label.setText("Chave copiada — testando…")
             self.run_cmd(["hosts", "ping", self._selected_host(), "--json"])
             return
+        self._pair_advance = False
         self.onboard_ingest_pair(False)
         if state == "missing-key":
             want = QMessageBox.question(

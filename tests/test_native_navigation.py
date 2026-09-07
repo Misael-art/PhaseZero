@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from PySide6.QtWidgets import QApplication, QLabel, QScrollArea
+from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea
 
 from linux.ui_native.command_runner import CommandRunner
 from linux.ui_native.models import ActionSpec
@@ -145,4 +145,37 @@ def test_homelab_reachable_from_sidebar_and_registry(qapp):
         page = window.registry.page_for("Homelab")
         assert page is not None
         assert page.__class__.__name__ == "HomelabPage"
+        window.close()
+
+
+def test_home_journeys_cover_objectives_with_single_entry(qapp):
+    """PZ-AUD-029: Início mostra objetivos (não taxonomias), cada um com
+    UMA ação de entrada real mais requisito, custo e maturidade."""
+    from linux.ui_native.main_window import MainWindow
+    from unittest.mock import patch
+
+    with patch.object(MainWindow, "_host_summary"), patch(
+        "linux.ui_native.status_loader.StatusLoader.fetch_action"
+    ):
+        window = MainWindow(ROOT)
+        page = window.registry.page_for("Início")
+        assert page is not None
+        cards = getattr(page, "journey_cards", [])
+        assert len(cards) == 5, f"expected 5 journey cards, got {len(cards)}"
+        seen_actions = set()
+        for card in cards:
+            labels = [w.text() for w in card.findChildren(QLabel)]
+            joined = "\n".join(labels)
+            assert "Precisa:" in joined
+            assert "Custo:" in joined
+            assert "Maturidade:" in joined
+            buttons = [b for b in card.findChildren(QPushButton)
+                       if b.text() == "Preparar e usar"]
+            assert len(buttons) == 1
+        from linux.ui_native.pages.dashboard import JOURNEYS
+
+        for _key, _title, action_id, _req, _cost, _mat in JOURNEYS:
+            assert action_id in window.registry.by_id, action_id
+            seen_actions.add(action_id)
+        assert len(seen_actions) == 5
         window.close()

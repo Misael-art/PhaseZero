@@ -506,6 +506,51 @@ def test_homelab_open_dashboard_url_local_and_remote(app):
     assert "--yes" not in src
 
 
+def test_homelab_onboarding_discover_runs_real_discovery(app):
+    # PZ-AUD-013: advancing on discover spawns agent discovery, it does
+    # not record a placeholder.
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page.start_onboarding()
+    assert page.onboard_step_name() == "discover"
+    calls = []
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    page._proc = None
+    try:
+        page.onboard_advance()
+    finally:
+        mod.QProcess = real_qprocess
+    assert "discover" not in page._onboard_state
+    argv = calls[-1][2]
+    assert argv == ["server", "homelab", "agent", "discover", "--json"]
+    # A real result advances; a failure stays with a message.
+    import json as _json
+
+    page._proc = None
+    page._on_discover_done(0, _json.dumps({"manualFallback": "IP:17432"}).encode(), b"")
+    assert page._onboard_state["discover"] == {"manualFallback": "IP:17432"}
+    assert page.onboard_step_name() == "pair"
+
+
+def test_homelab_onboarding_pair_needs_real_result(app):
+    # PZ-AUD-013: an alias alone is not pairing; local host is explicit.
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page.start_onboarding()
+    page.onboard_ingest_discover({"manualFallback": "IP:17432"})
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    # Local machine: recorded explicitly, no fake remote pairing.
+    page._host_combo.setCurrentIndex(0)
+    page.onboard_advance()
+    assert page._onboard_state.get("pair") is True
+    assert page.onboard_step_name() == "profile"
+
+
 def test_homelab_onboarding_reaches_apply_without_yes(app):
     import linux.ui_native.pages.homelab as mod
 
@@ -534,14 +579,35 @@ def test_homelab_onboarding_reaches_apply_without_yes(app):
     FakeQProcess._calls = calls
     page._proc = None
     try:
+        # PZ-AUD-013: first press renders the plan, never executes.
         page.onboard_apply()
     finally:
         mod.QProcess = real_qprocess
     argv = calls[-1][2]
-    # PZ-AUD-002: onboarding installs (prepare), it does not just repair.
     assert argv[:3] == ["server", "homelab", "prepare"]
+    assert "--dry-run" in argv
     assert "--json" in argv
     assert "--yes" not in argv
+    # Plan unchanged on second press: executes the reviewed plan.
+    import json as _json
+
+    plan = {"action": "prepare", "dryRun": True, "apps": ["vaultwarden"]}
+    page._proc = None
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args: ran.append(args)  # noqa: E731
+    try:
+        page._on_apply_plan_done(0, (_json.dumps(plan) + "\n").encode(), b"")
+        assert page._onboard_state.get("review_plan") is not None
+        page._proc = None
+        page._on_apply_plan_done(0, (_json.dumps(plan) + "\n").encode(), b"")
+        assert ran and ran[-1][:1] == ["prepare"] and "--dry-run" not in ran[-1]
+        assert "--yes" not in ran[-1]
+    finally:
+        mod.QProcess = real_qprocess
+        page.run_cmd = real_run_cmd
 
 
 def test_homelab_pair_goes_through_hosts_pair(app):

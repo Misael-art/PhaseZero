@@ -26,6 +26,38 @@ ONBOARDING_STEPS: tuple[tuple[str, str, str], ...] = (
      "Memória, acessos e dados protegidos antes de qualquer mudança grande."),
 )
 
+# PZ-AUD-029: objetivos em vez de taxonomias. Cinco jornadas, cada uma com
+# UMA ação de entrada real do catálogo mais requisito, custo e maturidade.
+# Detalhes técnicos continuam nas páginas de cada área (revelação progressiva).
+JOURNEYS: tuple[tuple[str, str, str, str, str, str], ...] = (
+    # key, title, entry action id, requirement, cost, maturity
+    ("use", "Preparar este computador",
+     "profile.safe-base",
+     "Arch/derivada + bridge admin (configurada após instalar)",
+     "pacotes do sistema",
+     "perfil base"),
+    ("host", "Hospedar serviços em casa",
+     "profile.homelab",
+     "Docker instalado pelo preparo; orçamento verificado antes",
+     "~1 GiB de RAM base + apps",
+     "receitas por app"),
+    ("manage", "Cuidar de outro computador",
+     "homelab.hosts",
+     "SSH + pareamento com a chave do admin",
+     "sem custo nesta máquina",
+     "ponte remota"),
+    ("ai", "IA e desenvolvimento",
+     "profile.dev-ai",
+     "toolchain via perfil; logins dos provedores quando pedir",
+     "modelos sob demanda",
+     "núcleo + proxies"),
+    ("play", "Jogos, Android e VM",
+     "profile.gaming",
+     "drivers/Steam conforme a página de cada área",
+     "downloads por área",
+     "catálogo por área"),
+)
+
 _STEP_HINTS = {number: hint for number, _t, hint in ONBOARDING_STEPS}
 
 
@@ -74,6 +106,11 @@ class DashboardPage(BasePage):
             onboarding = self._build_onboarding()
             if onboarding is not None:
                 host_layout.addWidget(onboarding)
+
+        journeys = self._build_journeys()
+        if journeys is not None:
+            host_layout.addWidget(SectionHeader("Comece por um objetivo", "Uma operação prepara e usa."))
+            host_layout.addWidget(journeys)
 
         host_layout.addWidget(SectionHeader("Ações rápidas", "As tarefas mais comuns, em destaque."))
         host_layout.addWidget(self._make_grid(DASHBOARD_QUICK, hero=True, columns=2))
@@ -139,6 +176,53 @@ class DashboardPage(BasePage):
             row.addWidget(run)
             column.addLayout(row)
         return card
+
+    def _build_journeys(self) -> QWidget | None:
+        """Faixa de objetivos — PZ-AUD-029. Só ações que existem."""
+        rows: list[tuple[ActionSpec, str, str, str, str]] = []
+        for _key, title, action_id, requirement, cost, maturity in JOURNEYS:
+            action = self.by_id.get(action_id)
+            if action is None:
+                continue
+            rows.append((action, title, requirement, cost, maturity))
+        if not rows:
+            return None
+        self.journey_cards: list[QWidget] = []
+        holder = QWidget()
+        grid = QGridLayout(holder)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(14)
+        for index, (action, title, requirement, cost, maturity) in enumerate(rows):
+            card = QFrame()
+            card.setObjectName("journeyCard")
+            # Same reflow contract as ActionCard: narrow viewports collapse
+            # to one column instead of growing a horizontal scrollbar.
+            card.setMinimumWidth(272)
+            column = QVBoxLayout(card)
+            head = QLabel(title)
+            head.setObjectName("serviceTitle")
+            head.setWordWrap(True)
+            column.addWidget(head)
+            meta = QLabel(f"Precisa: {requirement}\nCusto: {cost}\nMaturidade: {maturity}")
+            meta.setObjectName("cardDescription")
+            meta.setWordWrap(True)
+            meta.setMinimumWidth(0)
+            column.addWidget(meta)
+            run = QPushButton("Preparar e usar")
+            run.setObjectName("primaryButton")
+            run.setAccessibleName(f"{title} — preparar e usar")
+            run.clicked.connect(lambda _=False, a=action: self.request_action(a))
+            column.addWidget(run)
+            self.journey_cards.append(card)
+            self.mark_represented(action)
+            grid.addWidget(card, index // 2, index % 2)
+        for column in range(2):
+            grid.setColumnStretch(column, 1)
+        cards: list = list(self.journey_cards)
+        self._grids.append((grid, cards, 2))
+        self._reflow_grid(grid, cards, 2, holder.width())
+        return holder
 
     def _make_grid(self, ids: tuple[str, ...], *, hero: bool, columns: int) -> QWidget:
         holder = QWidget()
