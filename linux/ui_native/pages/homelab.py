@@ -420,65 +420,72 @@ class HomelabPage(BasePage):
             self._host_combo.blockSignals(False)
         self.refresh_status()
 
-    def start_pair(self) -> None:
+    def start_pair(self, generate: bool = False) -> None:
+        # PZ-AUD-014: pairing runs through `hosts pair`, which honors the
+        # registry port, reuses or generates keys explicitly, and reports
+        # first-contact with the exact port-bearing command.
         alias = self._selected_host()
         if not alias:
             QMessageBox.information(self, "Parear", "Selecione um host remoto.")
-            return
-        rec = self._hosts.get(alias) or {}
-        user = str(rec.get("user") or "")
-        host = str(rec.get("host") or "")
-        if not user or not host:
-            QMessageBox.warning(self, "Parear", "Registro do host sem user@host.")
-            return
-        pub = Path.home() / ".ssh" / "id_ed25519.pub"
-        if not pub.is_file():
-            pub = Path.home() / ".ssh" / "id_rsa.pub"
-        if not pub.is_file():
-            QMessageBox.information(
-                self, "Parear",
-                "Nenhuma chave pública encontrada.\n"
-                "Crie uma no terminal (sem senha no argv do Player):\n"
-                "ssh-keygen -t ed25519",
-            )
             return
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:
             self._state_label.setText("Já existe operação em andamento — aguarde")
             return
         self._state_label.setText("Pareando chave SSH…")
+        args = ["server", "homelab", "hosts", "pair", alias, "--json"]
+        if generate:
+            args.append("--generate")
         proc = QProcess(self)
         self._setup_proc(proc)
         proc.finished.connect(
-            lambda code, p=proc: self._on_pair_done(code, bytes(p.readAllStandardError()))
+            lambda code, p=proc: self._on_pair_done(
+                code, bytes(p.readAllStandardOutput()), bytes(p.readAllStandardError())
+            )
         )
-        proc.start(
-            "ssh-copy-id",
-            [
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=8",
-                "-i", str(pub),
-                f"{user}@{host}",
-            ],
-        )
+        proc.start(str(self.root / "linux" / "pz"), args)
         self._proc = proc
 
-    def _on_pair_done(self, code: int, err: bytes) -> None:
+    def _on_pair_done(self, code: int, out: bytes, err: bytes) -> None:
         if self._proc is not None:
             self._cancel_timeout(self._proc)
         self._proc = None
-        if code == 0:
+        payload: dict = {}
+        for line in out.decode("utf-8", "replace").splitlines():
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    payload = json.loads(line)
+                    break
+                except Exception:
+                    continue
+        state = str(payload.get("state", ""))
+        if code == 0 and payload.get("paired"):
+            self.onboard_ingest_pair(True)
             self._state_label.setText("Chave copiada — testando…")
             self.run_cmd(["hosts", "ping", self._selected_host(), "--json"])
             return
-        detail = err.decode("utf-8", "replace").strip().splitlines()
-        reason = detail[-1] if detail else f"exit {code}"
+        self.onboard_ingest_pair(False)
+        if state == "missing-key":
+            want = QMessageBox.question(
+                self, "Parear",
+                "Nenhuma chave SSH encontrada.\n"
+                "Gerar uma chave ed25519 nova (sem senha, só para automação)?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if want == QMessageBox.Yes:
+                self.start_pair(generate=True)
+            else:
+                self._state_label.setText("Pareamento cancelado — sem chave")
+            return
+        guidance = str(payload.get("guidance") or "")
+        reason = str(payload.get("reason") or "")
+        detail = "\n".join(part for part in (guidance, reason) if part)
         QMessageBox.warning(
             self, "Parear",
-            "Não foi possível copiar a chave sem senha.\n"
-            f"{reason}\n\n"
-            "No terminal: ssh-copy-id -i ~/.ssh/id_ed25519.pub user@host",
+            "Não foi possível concluir o pareamento.\n"
+            f"{detail}\n\nPrimeiro acesso sempre pede a senha no terminal.",
         )
-        self._state_label.setText("Pareamento precisa de chave já autorizada")
+        self._state_label.setText("Pareamento precisa de primeiro acesso")
 
     def refresh_status(self) -> None:
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:

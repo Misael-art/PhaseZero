@@ -544,16 +544,67 @@ def test_homelab_onboarding_reaches_apply_without_yes(app):
     assert "--yes" not in argv
 
 
-def test_homelab_pair_uses_ssh_copy_id_without_password(app):
+def test_homelab_pair_goes_through_hosts_pair(app):
+    # PZ-AUD-014: pairing honors registry port/keys via `hosts pair`;
+    # no raw ssh-copy-id argv, no password anywhere near the UI.
     import inspect
 
     import linux.ui_native.pages.homelab as mod
 
     src = inspect.getsource(mod.HomelabPage.start_pair)
-    assert "ssh-copy-id" in src
-    assert "BatchMode=yes" in src
+    assert "hosts" in src and "pair" in src
+    assert "ssh-copy-id" not in src
+    assert "BatchMode=yes" not in src
     assert "--password" not in src
     assert "sshpass" not in src
+
+
+def test_homelab_pair_done_ingests_states(app):
+    import json
+
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()
+    page._proc = None
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = []
+    real_run_cmd = page.run_cmd
+    seen = []
+    page.run_cmd = lambda args: seen.append(args)  # noqa: E731
+    warned = []
+
+    class FakeBox:  # noqa: N801
+        @staticmethod
+        def warning(*a, **k):
+            warned.append(a)
+
+        @staticmethod
+        def question(*a, **k):
+            return 0
+
+        @staticmethod
+        def information(*a, **k):
+            warned.append(a)
+
+    real_box = mod.QMessageBox
+    mod.QMessageBox = FakeBox
+    try:
+        paired = json.dumps({"paired": True, "state": "paired"}).encode()
+        page._on_pair_done(0, paired, b"")
+        assert page._onboard_state.get("pair") is True
+        assert seen and seen[-1][:2] == ["hosts", "ping"]
+        first = json.dumps({
+            "paired": False, "state": "needs-first-contact",
+            "guidance": "ssh-copy-id -i k -p 2222 u@h",
+        }).encode()
+        page._on_pair_done(1, first, b"")
+        assert page._onboard_state.get("pair") is False
+        assert warned and "2222" in str(warned[-1])
+    finally:
+        mod.QMessageBox = real_box
+        mod.QProcess = real_qprocess
+        page.run_cmd = real_run_cmd
 
 
 def test_homelab_page_cancel_timeout_on_finish(app):

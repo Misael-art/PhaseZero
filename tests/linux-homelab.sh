@@ -616,6 +616,38 @@ export PZ_HOMELAB_SSH_STUB_MODE=old
 old="$("$REPO_ROOT/linux/pz" server homelab --host garage apps enable n8n --json || true)"
 echo "$old" | jq -e '.rc == 69 and .payload == null and (.error | test("older than required"))' >/dev/null
 unset PZ_HOMELAB_SSH_STUB_MODE
+echo "=== hosts pair honors port, key and first contact (PZ-AUD-014) ==="
+"$REPO_ROOT/linux/pz" server homelab hosts add custom-port 'misael@192.168.1.9:2222' --json | jq -e '.host.port == 2222' >/dev/null
+# No key anywhere: missing-key state, never a blind attempt.
+pair_missing="$("$REPO_ROOT/linux/pz" server homelab hosts pair custom-port --json 2>/dev/null || true)"
+echo "$pair_missing" | jq -e '.ok == false and .state == "missing-key" and (.guidance | test("generate|ssh-keygen"))' >/dev/null
+# --generate creates the keypair in this HOME, then the stub copy succeeds.
+scid="$TMP/fake-copy-id"
+cat > "$scid" <<'EOS'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$SSH_COPY_LOG"
+exit "${SSH_COPY_RC:-0}"
+EOS
+chmod +x "$scid"
+export SSH_COPY_LOG="$TMP/copy.log" SSH_COPY_RC=0
+: > "$SSH_COPY_LOG"
+PATH="$TMP/copybin:$PATH"
+mkdir -p "$TMP/copybin"
+ln -sf "$scid" "$TMP/copybin/ssh-copy-id"
+pair_gen="$("$REPO_ROOT/linux/pz" server homelab hosts pair custom-port --generate --json 2>/dev/null)"
+echo "$pair_gen" | jq -e '.ok == true and .paired == true and .generated == true' >/dev/null
+test -f "$HOME/.ssh/id_ed25519" -a -f "$HOME/.ssh/id_ed25519.pub"
+test "$(stat -c '%a' "$HOME/.ssh/id_ed25519")" = "600"
+grep -q -- '-p 2222' "$SSH_COPY_LOG" || grep -q -e '-p' -e '2222' "$SSH_COPY_LOG" \
+    || { echo "FAIL: registry port not passed to ssh-copy-id"; exit 1; }
+rg -q 'misael@192.168.1.9' "$SSH_COPY_LOG"
+# Failing copy: first contact with the exact port-bearing command.
+export SSH_COPY_RC=42
+pair_first="$("$REPO_ROOT/linux/pz" server homelab hosts pair custom-port --json 2>/dev/null || true)"
+echo "$pair_first" | jq -e '.ok == false and .state == "needs-first-contact"' >/dev/null
+echo "$pair_first" | jq -e '.guidance | test("2222")' >/dev/null
+"$REPO_ROOT/linux/pz" server homelab hosts remove custom-port --json | jq -e '.ok == true' >/dev/null
+echo "  hosts pair ok"
 "$REPO_ROOT/linux/pz" server homelab hosts remove garage --json | jq -e '.ok == true' >/dev/null
 echo "  hosts bridge ok"
 

@@ -26,6 +26,8 @@ shift 2>/dev/null || true
 JSON_OUTPUT=0
 ALIAS=""
 TARGET=""
+PAIR_GENERATE=0
+PAIR_KEY=""
 POSITIONAL=()
 
 usage() {
@@ -35,6 +37,7 @@ Usage:
   homelab-hosts.sh list [--json]
   homelab-hosts.sh remove <alias> [--json]
   homelab-hosts.sh ping <alias> [--json]
+  homelab-hosts.sh pair <alias> [--generate] [--key PATH] [--json]
   homelab-hosts.sh exec <alias> -- <homelab-args...>
 EOF
 }
@@ -42,6 +45,13 @@ EOF
 while [ "$#" -gt 0 ]; do
     case "$1" in
         --json) JSON_OUTPUT=1 ;;
+        --generate) PAIR_GENERATE=1 ;;
+        --key)
+            [ "${2:-}" ] || { pz_error "--key requires a path"; exit 2; }
+            PAIR_KEY="$2"
+            shift
+            ;;
+        --key=*) PAIR_KEY="${1#--key=}" ;;
         --help|-h) usage; exit 0 ;;
         --)
             shift
@@ -426,11 +436,109 @@ cmd_exec() {
     [ "$rc2" -eq 0 ]
 }
 
+pair_key_path() {
+    # PZ-AUD-014: explicit --key wins; otherwise existing ed25519, then rsa.
+    # Prints the .pub path or nothing.
+    if [ -n "$PAIR_KEY" ]; then
+        case "$PAIR_KEY" in
+            *.pub) [ -f "$PAIR_KEY" ] && printf '%s\n' "$PAIR_KEY" ;;
+            *) [ -f "$PAIR_KEY.pub" ] && printf '%s\n' "$PAIR_KEY.pub" ;;
+        esac
+        return 0
+    fi
+    local ssh_dir="${HOME}/.ssh"
+    if [ -f "$ssh_dir/id_ed25519.pub" ]; then
+        printf '%s\n' "$ssh_dir/id_ed25519.pub"
+    elif [ -f "$ssh_dir/id_rsa.pub" ]; then
+        printf '%s\n' "$ssh_dir/id_rsa.pub"
+    fi
+    return 0
+}
+
+pair_generate_key() {
+    # PZ-AUD-014: create an automation keypair only on explicit --generate.
+    # No passphrase (automation), 0600, refuses to overwrite. The operator
+    # invoked pairing deliberately; the key type and path are reported.
+    local priv="${HOME}/.ssh/id_ed25519"
+    [ -e "$priv" ] || [ -e "$priv.pub" ] || {
+        mkdir -p "${HOME}/.ssh"
+        chmod 0700 "${HOME}/.ssh"
+        ssh-keygen -t ed25519 -N "" -C "phasezero-homelab" -f "$priv" >/dev/null 2>&1 || return 1
+        chmod 0600 "$priv" "$priv.pub"
+        printf '%s\n' "$priv.pub"
+        return 0
+    }
+    return 1
+}
+
+cmd_pair() {
+    local alias="${POSITIONAL[0]:-}" rec
+    [ -n "$alias" ] || { pz_error "usage: hosts pair <alias> [--generate] [--key PATH]"; return 2; }
+    rec="$(host_record "$alias")" || return $?
+    if [ -z "$rec" ]; then
+        pz_error "unknown host alias: $alias"
+        return 2
+    fi
+    local user host port pub generated=false guidance=""
+    user="$(jq -r '.user' <<< "$rec")"
+    host="$(jq -r '.host' <<< "$rec")"
+    port="$(jq -r '.port' <<< "$rec")"
+    pub="$(pair_key_path)"
+    if [ -z "$pub" ] && [ "$PAIR_GENERATE" = "1" ]; then
+        if pub="$(pair_generate_key)"; then
+            generated=true
+        fi
+    fi
+    if [ -z "$pub" ]; then
+        guidance="no SSH key found; re-run with --generate or create one: ssh-keygen -t ed25519"
+        jq -cn --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-hosts" \
+            --arg action "pair" --arg hostAlias "$alias" --arg guidance "$guidance" \
+            '{schemaVersion:$schemaVersion, tool:$tool, action:$action, hostAlias:$hostAlias,
+              ok:false, paired:false, state:"missing-key", keyPath:null, generated:false, guidance:$guidance}'
+        return 1
+    fi
+    local errf rc=0
+    errf="$(pz_tempfile)"
+    set +e
+    # PZ-AUD-014: the registry port is always honored (-p). BatchMode keeps
+    # this non-interactive: first contact needs a terminal login, reported
+    # below with the exact command (port included), never attempted blind.
+    if command -v ssh-copy-id >/dev/null 2>&1; then
+        ssh-copy-id -o BatchMode=yes -o ConnectTimeout="$SSH_TIMEOUT" \
+            -o StrictHostKeyChecking=accept-new -i "$pub" -p "$port" "$user@$host" 2>"$errf"
+        rc=$?
+    else
+        echo "ssh-copy-id not found" >"$errf"
+        rc=127
+    fi
+    set -e
+    local err
+    err="$(tr -d '\0' < "$errf" 2>/dev/null | tail -1 || true)"
+    rm -f "$errf"
+    if [ "$rc" -eq 0 ]; then
+        jq -cn --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-hosts" \
+            --arg action "pair" --arg hostAlias "$alias" --arg keyPath "$pub" \
+            --argjson generated "$generated" \
+            '{schemaVersion:$schemaVersion, tool:$tool, action:$action, hostAlias:$hostAlias,
+              ok:true, paired:true, state:"paired", keyPath:$keyPath, generated:$generated, guidance:null}'
+        return 0
+    fi
+    guidance="first contact needs one terminal login (port $port honored): ssh-copy-id -i $pub -p $port $user@$host — then re-run pair"
+    jq -cn --arg schemaVersion "$SCHEMA_VERSION" --arg tool "homelab-hosts" \
+        --arg action "pair" --arg hostAlias "$alias" --arg keyPath "$pub" \
+        --argjson generated "$generated" --arg reason "${err:-exit $rc}" --arg guidance "$guidance" \
+        '{schemaVersion:$schemaVersion, tool:$tool, action:$action, hostAlias:$hostAlias,
+          ok:false, paired:false, state:"needs-first-contact", keyPath:$keyPath,
+          generated:$generated, reason:$reason, guidance:$guidance}'
+    return 1
+}
+
 case "$SUB" in
     list) cmd_list ;;
     add) cmd_add ;;
     remove) cmd_remove ;;
     ping) cmd_ping ;;
+    pair) cmd_pair ;;
     exec) cmd_exec ;;
     *)
         usage >&2
