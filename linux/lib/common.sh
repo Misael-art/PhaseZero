@@ -1005,6 +1005,10 @@ pz_run_profile() {
         ((.packages.linux.yay // []) | type == "array") and
         (((.packages.linux.flatpak // []) | type) as $t | $t == "array" or $t == "object") and
         ((.scripts.linux // []) | type == "array") and
+        ((.docker_compose // {}) | type == "object") and
+        (((.docker_compose.core // "") | type) as $t | $t == "string") and
+        (((.docker_compose.extras // "") | type) as $t | $t == "string") and
+        (((.docker_compose.with_extras // false) | type) as $t | $t == "boolean") and
         ((.systemd.linux.enable // []) | type == "array") and
         ((.systemd.linux.user // []) | type == "array") and
         ((.tuning.linux.sysctl // {}) | type == "object") and
@@ -1087,6 +1091,10 @@ pz_run_profile() {
     fi
     local scripts
     scripts=$(jq -r '.scripts.linux // [] | .[]' "$profile_file" 2>/dev/null || true)
+    local compose_core compose_extras compose_with_extras
+    compose_core=$(jq -r '.docker_compose.core // empty' "$profile_file" 2>/dev/null || true)
+    compose_extras=$(jq -r '.docker_compose.extras // empty' "$profile_file" 2>/dev/null || true)
+    compose_with_extras=$(jq -r '.docker_compose.with_extras // false' "$profile_file" 2>/dev/null || true)
     local system_services
     system_services=$(jq -r '.systemd.linux.enable // [] | .[]' "$profile_file" 2>/dev/null || true)
     local user_services
@@ -1259,6 +1267,37 @@ pz_run_profile() {
                 return 1
             }
         done <<< "$sysctl_entries"
+    fi
+
+    if [ -n "$compose_core" ] || [ -n "$compose_extras" ]; then
+        # PZ-AUD-004: docker_compose is executable selection, not decoration.
+        # Registry present -> reconcile the curated set; otherwise legacy
+        # layer up from the declared files (extras only on explicit opt-in).
+        if [ -n "$compose_core" ] && [ ! -f "$PZ_ROOT/$compose_core" ]; then
+            pz_error "profile declares missing compose core: $compose_core"
+            PZ_PROFILE_CALL_DEPTH="$call_depth"
+            PZ_PROFILE_ACTIVE="$active_before"
+            return 1
+        fi
+        local -a compose_args=()
+        if [ -f "${PZ_HOMELAB_STATE:-$PZ_STATE/homelab}/apps.enabled.json" ]; then
+            compose_args=(reconcile)
+        elif [ "$compose_with_extras" = "true" ]; then
+            compose_args=(up --extras)
+        else
+            compose_args=(up)
+        fi
+        if [ "$dry_run" = "1" ]; then
+            pz_info "would converge declared compose: ${compose_args[*]} (core=$compose_core extras=$compose_extras)"
+        else
+            pz_info "converging declared compose: ${compose_args[*]}"
+            bash "$PZ_ROOT/linux/server/homelab-stack.sh" "${compose_args[@]}" || {
+                pz_error "declared compose failed to converge for profile: $profile_name"
+                PZ_PROFILE_CALL_DEPTH="$call_depth"
+                PZ_PROFILE_ACTIVE="$active_before"
+                return 1
+            }
+        fi
     fi
 
     if [ -n "$scripts" ]; then

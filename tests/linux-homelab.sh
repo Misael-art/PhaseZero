@@ -93,6 +93,27 @@ PATH="$NOADMIN" PZ_DRY_RUN=0 bash -c '
 [ "$admin_rc" -eq 77 ] || { echo "FAIL: expected rc 77 without admin bridge, got $admin_rc"; exit 1; }
 echo "  profile ordering + propagation ok"
 
+echo "=== declared compose converges (PZ-AUD-004) ==="
+compose_out="$(PZ_DRY_RUN=1 bash -c '
+    source "$0/linux/lib/common.sh"
+    pz_run_profile "$0/profiles/homelab.json"
+' "$REPO_ROOT" 2>&1)"
+echo "$compose_out" | rg -q "would converge declared compose: up" \
+    || { echo "FAIL: docker_compose not consumed in dry-run"; exit 1; }
+compose_line="$(printf '%s\n' "$compose_out" | grep -n "would converge declared compose" | head -1 | cut -d: -f1)"
+script_line2="$(printf '%s\n' "$compose_out" | grep -n "setup scripts" | head -1 | cut -d: -f1)"
+[ -n "$compose_line" ] && [ -n "$script_line2" ] && [ "$compose_line" -lt "$script_line2" ] \
+    || { echo "FAIL: compose not converged before scripts"; exit 1; }
+printf '%s\n' '{"name":"pz-test-bad","docker_compose":{"core":123}}' > "$TMP/bad-compose.json"
+if PZ_DRY_RUN=1 bash -c 'source "$0/linux/lib/common.sh"; pz_run_profile "$1"' "$REPO_ROOT" "$TMP/bad-compose.json" >/dev/null 2>&1; then
+    echo "FAIL: invalid docker_compose accepted"; exit 1
+fi
+printf '%s\n' '{"name":"pz-test-missing","docker_compose":{"core":"assets/nope/missing.yml"}}' > "$TMP/missing-compose.json"
+if PZ_DRY_RUN=1 bash -c 'source "$0/linux/lib/common.sh"; pz_run_profile "$1"' "$REPO_ROOT" "$TMP/missing-compose.json" >/dev/null 2>&1; then
+    echo "FAIL: missing compose core accepted"; exit 1
+fi
+echo "  declared compose ok"
+
 echo "=== compose has pinned tags and safe binds ==="
 if rg -n ':latest' "$REPO_ROOT/assets/home-server/docker-compose."*.yml; then
     echo "FAIL: compose uses latest tag"
