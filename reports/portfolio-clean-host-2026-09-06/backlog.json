@@ -716,11 +716,12 @@
         "PZ-AUD-010",
         "PZ-AUD-019"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase5",
+      "implementation": "codex/aud-fase5",
+      "behavioralProof": "arch-clean-host CI job proven locally in disposable archlinux containers (live repo resolution 15/15, asset build+install, pz entrypoints); hermetic suites green",
+      "ciProof": "ci.yml: arch-clean-host (Arch container), manifest gate, restore-exactness on real volumes, lock 14; Pester Windows unchanged; full matrix in docs/acceptance-evidence.md",
+      "closureNote": "CI agora prova host limpo Arch (repos+asset+entrypoints), paridade de manifesto e exatidao de restore com daemon; matriz de evidencia liga cada solucao a prova/limite; verified historico reconciliado como historico."
     },
     {
       "id": "PZ-AUD-029",

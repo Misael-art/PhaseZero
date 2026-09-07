@@ -117,7 +117,7 @@ echo "  declared compose ok"
 PZ_DRY_RUN=1 bash -c '
     source "$0/linux/lib/common.sh"
     pz_run_profile "$0/profiles/gaming.json"
-' "$REPO_ROOT" 2>&1 | rg -q "would enable \[multilib\]" \
+' "$REPO_ROOT" 2>&1 | rg -q "repo \[multilib\]" \
     || { echo "FAIL: archRepos not planned in dry-run"; exit 1; }
 printf '%s\n' '{"name":"pz-test-badrepo","packages":{"linux":{"archRepos":["nope"]}}}' > "$TMP/bad-repo.json"
 if PZ_DRY_RUN=1 bash -c 'source "$0/linux/lib/common.sh"; pz_run_profile "$1"' "$REPO_ROOT" "$TMP/bad-repo.json" >/dev/null 2>&1; then
