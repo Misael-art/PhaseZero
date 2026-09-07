@@ -582,6 +582,76 @@ echo "$exp_out" | jq -e '.ready == false
     and (.unexpectedContainers | index("phasezero-jellyfin") != null)' >/dev/null
 echo "  strict readiness ok"
 
+echo "=== prepare installs deps then converges honestly (PZ-AUD-002) ==="
+# Stub capabilities engine: records plan/apply, performs no install.
+CAPSTUB="$TMP/capstub"
+mkdir -p "$CAPSTUB"
+cat > "$CAPSTUB/pz-capabilities-stub" <<'EOS'
+#!/usr/bin/env bash
+echo "$*" >> "$CAPSTUB_CALLOUT"
+if [ "${1:-}" = "plan" ]; then
+    echo '{"schema":"pz.capabilities/v1","id":"plan-test-1","confirmToken":"tok-test-1"}'
+elif [ "${1:-}" = "apply" ]; then
+    echo '{"schema":"pz.capabilities/v1","ok":true}'
+else
+    echo '{"ok":false}' >&2; exit 2
+fi
+EOS
+chmod +x "$CAPSTUB/pz-capabilities-stub"
+# PATH without docker/compose: allowlisted minimal tools only.
+NODOCKER="$TMP/nodockerbin"
+mkdir -p "$NODOCKER"
+for t in bash sh jq python3 date dirname mkdir chmod mktemp rm cat grep head tail sort cut wc stat install mv cp ln find flock sha256sum tar gzip realpath timeout openssl tr basename touch sleep id uname; do
+    src="$(command -v "$t" 2>/dev/null || true)"
+    [ -n "$src" ] && ln -sf "$src" "$NODOCKER/$t"
+done
+PREPSTATE="$TMP/prepare-state"
+mkdir -p "$PREPSTATE"
+export CAPSTUB_CALLOUT="$TMP/capstub.calls"
+rm -f "$CAPSTUB_CALLOUT"
+prep_nodeps="$(env PATH="$NODOCKER" PZ_HOMELAB_STATE="$PREPSTATE" \
+    PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm-prep.json" \
+    PZ_HOMELAB_CAPABILITIES_CLI="$CAPSTUB/pz-capabilities-stub" \
+    "$REPO_ROOT/linux/pz" server homelab prepare --app vaultwarden --json 2>/dev/null || true)"
+echo "$prep_nodeps" | jq -e '.ok == false and .state == "failed"' >/dev/null
+rg -q 'plan --capability development.docker' "$CAPSTUB_CALLOUT" \
+    || { echo "FAIL: prepare did not delegate deps to capabilities"; exit 1; }
+rg -q 'apply --plan-id plan-test-1 --confirm tok-test-1' "$CAPSTUB_CALLOUT" \
+    || { echo "FAIL: prepare did not apply with plan token"; exit 1; }
+# Stub docker that works but runs nothing: prepare must pass every step
+# until verify, then fail honestly (never ready without proofs).
+FULLDOCKER="$TMP/fulldocker"
+mkdir -p "$FULLDOCKER"
+cat > "$FULLDOCKER/docker" <<'EOS'
+#!/usr/bin/env bash
+case "${1:-}" in
+  info) exit 0 ;;
+  ps) exit 0 ;;
+  inspect) echo "healthy"; exit 0 ;;
+  compose)
+    shift
+    for a in "$@"; do
+      case "$a" in
+        version) echo "Docker Compose version v2.27.0"; exit 0 ;;
+      esac
+    done
+    exit 0
+    ;;
+  version) exit 0 ;;
+  *) exit 0 ;;
+esac
+EOS
+chmod +x "$FULLDOCKER/docker"
+prep_full_out="$(env PATH="$FULLDOCKER:$PATH" PZ_HOMELAB_STATE="$PREPSTATE" \
+    PZ_HOMELAB_APPS_NO_DOCKER=0 \
+    PZ_HOMELAB_WINVM_STATUS_FILE="$TMP/winvm-prep.json" \
+    PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 \
+    "$REPO_ROOT/linux/pz" server homelab prepare --app vaultwarden --json 2>/dev/null || true)"
+echo "$prep_full_out" | jq -e '.ok == false and .state == "failed"' >/dev/null
+echo "$prep_full_out" | jq -e '[.steps[] | select(.name == "dependencies" or .name == "daemon" or .name == "access" or .name == "configure" or .name == "apps") | .status] | all(. == "ready")' >/dev/null
+echo "$prep_full_out" | jq -e '[.steps[] | select(.name == "verify") | .status] == ["failed"]' >/dev/null
+echo "  prepare delegation + honest verify ok"
+
 echo "=== operations: registry flow ==="
 OPS="$PZ_HOMELAB_STATE/operations"
 op_id="$("$REPO_ROOT/linux/server/homelab-operations.sh" start backup profile=assistant-private)"

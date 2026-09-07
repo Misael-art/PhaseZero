@@ -36,6 +36,7 @@ DEST=""
 SOURCE=""
 VERIFY_MODE=0
 PLAN=0
+PREPARE_APPS=()
 
 usage() {
     cat <<EOF
@@ -51,6 +52,7 @@ Usage:
   homelab-stack.sh restore --source PATH [--plan] [--yes] [--confirm-file PATH] [--dry-run]
   homelab-stack.sh update [--extras] [--access local|tailscale|lan] [--dry-run]
   homelab-stack.sh repair [--extras] [--access local|tailscale|lan]
+  homelab-stack.sh prepare [--app KEY]... [--access local|tailscale|lan] [--dry-run]
   homelab-stack.sh tailscale
 
 Apps: portainer jellyfin syncthing vaultwarden uptime-kuma nextcloud grafana prometheus paperless n8n
@@ -84,10 +86,16 @@ while [ "$#" -gt 0 ]; do
             ;;
         --profile=*) HOMELAB_PROFILE="${1#--profile=}" ;;
         --dest)
-            [ "${2:-}" ] || { pz_error "--dest requires path"; exit 2; }
+            [ "${2:-}" ] || { pz_error "--dest requires value"; exit 2; }
             DEST="$2"
             shift
             ;;
+        --app)
+            [ "${2:-}" ] || { pz_error "--app requires value"; exit 2; }
+            PREPARE_APPS+=("$2")
+            shift
+            ;;
+        --app=*) PREPARE_APPS+=("${1#--app=}") ;;
         --source)
             [ "${2:-}" ] || { pz_error "--source requires path"; exit 2; }
             SOURCE="$2"
@@ -1241,6 +1249,202 @@ cmd_update() {
     pz_info "homelab updated using pinned compose tags"
 }
 
+capabilities_cli() {
+    # Test seam: PZ_HOMELAB_CAPABILITIES_CLI overrides the real engine.
+    if [ -n "${PZ_HOMELAB_CAPABILITIES_CLI:-}" ]; then
+        # Intentional word-splitting: the override is a command line.
+        # shellcheck disable=SC2086
+        printf '%s\n' $PZ_HOMELAB_CAPABILITIES_CLI
+        return 0
+    fi
+    printf '%s\n' "$PZ_ROOT/linux/pz" capabilities
+}
+
+prepare_missing_deps() {
+    local -a missing=()
+    command -v docker >/dev/null 2>&1 || missing+=("docker")
+    docker compose version >/dev/null 2>&1 || missing+=("compose")
+    [ "${#missing[@]}" -gt 0 ] && printf '%s\n' "${missing[@]}"
+    return 0
+}
+
+prepare_install_deps() {
+    # PZ-AUD-002: one approval (this invocation) covers the whole plan:
+    # create the capabilities plan, then apply it with its own token.
+    local plan_json plan_id token apply_out
+    mapfile -t cap_args < <(capabilities_cli)
+    plan_json="$("${cap_args[@]}" plan --capability development.docker --capability development.docker-compose 2>/dev/null)" || {
+        pz_error "capabilities plan for docker/compose failed"
+        return 1
+    }
+    plan_id="$(jq -r '.planId // .plan_id // .id // empty' <<< "$plan_json")"
+    token="$(jq -r '.confirmToken // .confirm_token // .token // empty' <<< "$plan_json")"
+    [ -n "$plan_id" ] && [ -n "$token" ] || {
+        pz_error "capabilities plan returned no plan-id/token"
+        return 1
+    }
+    apply_out="$("${cap_args[@]}" apply --plan-id "$plan_id" --confirm "$token" 2>/dev/null)" || {
+        pz_error "capabilities apply for docker/compose failed"
+        return 1
+    }
+    [ "$(jq -r '.ok // false' <<< "$apply_out")" = "true" ] || {
+        pz_error "capabilities apply did not report ok"
+        return 1
+    }
+    return 0
+}
+
+prepare_ensure_daemon() {
+    docker info >/dev/null 2>&1 && return 0
+    # Installed but inactive: enable + start once via the admin bridge.
+    pz_admin_run systemctl enable --now docker >/dev/null 2>&1 || return 1
+    local i
+    for i in $(seq 1 15); do
+        docker info >/dev/null 2>&1 && return 0
+        sleep 1
+    done
+    return 1
+}
+
+prepare_ensure_access() {
+    # Returns 0 when this session can drive the daemon, 2 when group
+    # membership was configured but the session needs a re-login, 1 on
+    # failure. Installing the package, starting the daemon and granting
+    # access are distinct steps; group access grants elevated privileges
+    # and always needs a fresh session (Docker post-install).
+    docker info >/dev/null 2>&1 && return 0
+    local user="${USER:-$(id -un 2>/dev/null)}"
+    if id -nG "$user" 2>/dev/null | tr ' ' '\n' | grep -qx docker; then
+        pz_error "user $user is in docker group but this session cannot reach the daemon; log out and back in, then re-run prepare"
+        return 2
+    fi
+    pz_admin_run usermod -aG docker "$user" >/dev/null 2>&1 || return 1
+    pz_error "user $user added to docker group; log out and back in, then re-run prepare (group access needs a fresh session)"
+    return 2
+}
+
+default_prepare_apps() {
+    if [ -f "$APPS_CATALOG" ]; then
+        jq -r '[.apps[] | select(.userFacing == true and .defaultEnabled == true) | .key] | .[]' "$APPS_CATALOG" 2>/dev/null
+    fi
+}
+
+cmd_prepare() {
+    # PZ-AUD-002: the install path. Dependencies -> daemon -> access ->
+    # configure -> apps -> verify, idempotent, one approval, honest states.
+    local -a steps=() apps=()
+    local step_status="failed" next_action="" detail=""
+    step() { steps+=("$(jq -cn --arg name "$1" --arg status "$2" --arg detail "${3:-}" '{name:$name, status:$status, detail:$detail}')"); }
+    finish() {
+        local ok="$1" state="$2"
+        jq -n --argjson ok "$ok" --arg state "$state" \
+            --argjson steps "$(printf '%s\n' "${steps[@]}" | jq -cs '.')" \
+            --arg nextAction "$next_action" \
+            '{action:"prepare", tool:"homelab-stack", ok:$ok, state:$state, steps:$steps,
+              nextAction:(if $nextAction == "" then null else $nextAction end)}'
+        [ "$ok" = true ]
+    }
+    if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
+        apps=("${PREPARE_APPS[@]}")
+        [ "${#apps[@]}" -gt 0 ] || mapfile -t apps < <(default_prepare_apps)
+        jq -n --argjson apps "$(printf '%s\n' "${apps[@]}" | jq -R . | jq -cs .)" \
+            --arg access "$ACCESS_MODE" \
+            '{action:"prepare", dryRun:true, access:$access, apps:$apps,
+              steps:["dependencies","daemon","access","configure","apps","verify"]}'
+        return 0
+    fi
+    apps=("${PREPARE_APPS[@]}")
+    [ "${#apps[@]}" -gt 0 ] || mapfile -t apps < <(default_prepare_apps)
+    # 1. dependencies
+    local -a missing=()
+    mapfile -t missing < <(prepare_missing_deps)
+    if [ "${#missing[@]}" -gt 0 ]; then
+        if prepare_install_deps; then
+            mapfile -t missing < <(prepare_missing_deps)
+            if [ "${#missing[@]}" -gt 0 ]; then
+                step dependencies failed "still missing after install: ${missing[*]}"
+                next_action="inspect capabilities apply output; then re-run: pz server homelab prepare"
+                finish false failed
+                return 1
+            fi
+            step dependencies installed "installed via capabilities: development.docker + development.docker-compose"
+        else
+            step dependencies failed "could not install: ${missing[*]}"
+            next_action="install docker + compose for your distro, then re-run: pz server homelab prepare"
+            finish false failed
+            return 1
+        fi
+    else
+        step dependencies ready "docker + compose present"
+    fi
+    # 2. daemon
+    if prepare_ensure_daemon; then
+        step daemon ready "engine reachable"
+    else
+        step daemon failed "engine not reachable and could not be started (admin bridge needed)"
+        next_action="start the docker daemon (systemctl enable --now docker), then re-run: pz server homelab prepare"
+        finish false failed
+        return 1
+    fi
+    # 3. access
+    local access_rc=0
+    prepare_ensure_access || access_rc=$?
+    if [ "$access_rc" = "0" ]; then
+        step access ready "session drives the daemon"
+    elif [ "$access_rc" = "2" ]; then
+        step access needs-reauth "group configured; fresh session required"
+        next_action="log out and back in, then re-run: pz server homelab prepare"
+        finish false needs-reauth
+        return 1
+    else
+        step access failed "no daemon access and could not configure group (admin bridge needed)"
+        next_action="grant daemon access, then re-run: pz server homelab prepare"
+        finish false failed
+        return 1
+    fi
+    # 4. configure
+    ensure_env_file "$ACCESS_MODE" || {
+        step configure failed "could not write homelab .env"
+        finish false failed
+        return 1
+    }
+    step configure ready ".env ensured (access=$ACCESS_MODE)"
+    # 5. apps
+    local app enable_out
+    for app in "${apps[@]}"; do
+        enable_out="$(bash "$PZ_ROOT/linux/server/homelab-apps.sh" enable "$app" --json 2>/dev/null)" || {
+            step apps failed "enable $app failed: $(jq -r '.reason // "unknown"' <<< "$enable_out" 2>/dev/null || echo unknown)"
+            next_action="fix the reported cause, then re-run: pz server homelab prepare"
+            finish false failed
+            return 1
+        }
+    done
+    if ! bash "$PZ_ROOT/linux/server/homelab-stack.sh" reconcile --access "$ACCESS_MODE" >/dev/null 2>&1; then
+        step apps failed "reconcile failed after enable"
+        next_action="check compose output, then re-run: pz server homelab prepare"
+        finish false failed
+        return 1
+    fi
+    step apps ready "enabled + reconciled: ${apps[*]}"
+    # 6. verify
+    local status_json ready
+    status_json="$(bash "$PZ_ROOT/linux/server/homelab-status.sh" status --json 2>/dev/null)" || {
+        step verify failed "status collection failed"
+        finish false failed
+        return 1
+    }
+    ready="$(jq -r '.ready' <<< "$status_json")"
+    if [ "$ready" = "true" ]; then
+        step verify ready "homelab ready"
+        finish true ready
+        return 0
+    fi
+    step verify failed "not ready: $(jq -r '.reasons[:3] | join("; ")' <<< "$status_json")"
+    next_action="review status reasons, then re-run: pz server homelab prepare"
+    finish false failed
+    return 1
+}
+
 cmd_repair() {
     if [ "${PZ_DRY_RUN:-0}" = "1" ]; then
         pz_info "dry-run: would generate missing secrets and validate compose"
@@ -1262,6 +1466,7 @@ case "$ACTION" in
     down|stop) cmd_down ;;
     restart) cmd_down; cmd_up ;;
     reconcile) cmd_reconcile ;;
+    prepare) cmd_prepare ;;
     tailscale) ensure_tailscale ;;
     status) cmd_status ;;
     plan|dry-run) PZ_DRY_RUN="${PZ_DRY_RUN:-0}" cmd_plan ;;
