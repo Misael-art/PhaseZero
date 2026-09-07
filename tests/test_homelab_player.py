@@ -597,14 +597,14 @@ def test_homelab_onboarding_reaches_apply_without_yes(app):
     FakeQProcess._calls = calls
     ran = []
     real_run_cmd = page.run_cmd
-    page.run_cmd = lambda args: ran.append(args)  # noqa: E731
+    page.run_cmd = lambda args, host=None: ran.append((args, host))  # noqa: E731
     try:
         page._on_apply_plan_done(0, (_json.dumps(plan) + "\n").encode(), b"")
         assert page._onboard_state.get("review_plan") is not None
         page._proc = None
         page._on_apply_plan_done(0, (_json.dumps(plan) + "\n").encode(), b"")
-        assert ran and ran[-1][:1] == ["prepare"] and "--dry-run" not in ran[-1]
-        assert "--yes" not in ran[-1]
+        assert ran and ran[-1][0][:1] == ["prepare"] and "--dry-run" not in ran[-1][0]
+        assert "--yes" not in ran[-1][0]
     finally:
         mod.QProcess = real_qprocess
         page.run_cmd = real_run_cmd
@@ -793,3 +793,142 @@ def test_restore_summary_mentions_volumes_and_rollback():
     text = page._restore_summary_text(plan, "/backups/bk1")
     assert "aprovada" in text and "(2/2 provas)" in text
     assert "vaultwarden_data" in text and "pré-backup" in text
+
+
+# ---------------------------------------------------------------------------
+# REV-004..007: document parser, pair gate, host-bound plan, typed plan.
+# ---------------------------------------------------------------------------
+
+def test_parse_json_payload_reads_multiline_document(app):
+    # REV-004: `jq -n` output is pretty (multiline) JSON; the old line-based
+    # parser returned {} and dropped a valid plan.
+    page = _page()
+    doc = {"action": "prepare", "dryRun": True, "apps": ["vaultwarden"]}
+    pretty = json.dumps(doc, indent=2).encode()
+    assert page._parse_json_payload(pretty) == doc
+    # compact single line still works
+    assert page._parse_json_payload(json.dumps(doc).encode()) == doc
+    # leading non-JSON lines do not break parsing
+    noisy = b"INFO: collecting\n" + json.dumps(doc, indent=2).encode()
+    assert page._parse_json_payload(noisy) == doc
+    # garbage stays {} (never raises)
+    assert page._parse_json_payload(b"not json at all\n{broken") == {}
+
+
+def test_parse_json_payload_unwraps_remote_host_envelope(app):
+    # REV-006: `--host alias` wraps the payload in {hostAlias, rc, payload};
+    # callers must see the payload plus the bound hostAlias.
+    page = _page()
+    inner = {"action": "prepare", "dryRun": True, "apps": ["vaultwarden"]}
+    envelope = {
+        "schemaVersion": "1", "tool": "homelab-hosts", "action": "exec",
+        "hostAlias": "appliance", "rc": 0, "payload": inner, "error": None,
+    }
+    payload = page._parse_json_payload(json.dumps(envelope, indent=2).encode())
+    assert payload["action"] == "prepare"
+    assert payload["hostAlias"] == "appliance"
+    assert "payload" not in payload
+
+
+def test_onboarding_pair_false_blocks_advance(app):
+    # REV-005: pair=false must keep the flow on the pair step; only a real
+    # success for the selected host advances.
+    page = _page()
+    page._host_combo.addItem("fixture B", "fixture-b")
+    page._host_combo.setCurrentIndex(1)
+    page.start_onboarding()
+    page.onboard_ingest_discover({"manualFallback": "IP:17432"})
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    page.onboard_ingest_pair(False)
+    page._pair_advance = False
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    # a success recorded for ANOTHER host does not unlock this one
+    page.onboard_ingest_pair(True, {"alias": "fixture-other"})
+    page.onboard_advance()
+    assert page.onboard_step_name() == "pair"
+    page.onboard_ingest_pair(True, {"alias": "fixture-b"})
+    page.onboard_advance()
+    assert page.onboard_step_name() == "profile"
+
+
+def test_onboarding_host_change_invalidates_pair_and_confirmation(app):
+    # REV-005/006: authorization is bound to one host; switching targets
+    # rewinds the flow to pair and drops the reviewed plan.
+    page = _page()
+    page.start_onboarding()
+    page.onboard_ingest_pair(True, {"local": True})
+    page._onboard_step = 4  # apply
+    page.onboard_confirm_review()
+    page._onboard_state["review_plan"] = json.dumps({"action": "prepare"})
+    page._host_combo.addItem("fixture B", "fixture-b")
+    page._host_combo.setCurrentIndex(1)  # fires _on_host_changed
+    assert page._onboard_confirmed is False
+    assert "review_plan" not in page._onboard_state
+    assert "pair" not in page._onboard_state
+    assert page.onboard_step_name() == "pair"
+
+
+def test_plan_callback_from_other_host_is_dropped(app):
+    # REV-006 acceptance: review A, select B, receive A's late callback —
+    # nothing may execute and the stale plan must not be kept.
+    page = _page()
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": "edge"}
+    page._onboard_state["plan_host"] = "fixture-a"
+    page._onboard_state["review_plan"] = json.dumps({"action": "prepare"})
+    plan = {"action": "prepare", "dryRun": True, "host": "fixture-a"}
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append((args, host))  # noqa: E731
+    try:
+        page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
+        assert ran == []
+        assert "review_plan" not in page._onboard_state
+        # captured A vs current B: the host-switch guard fires
+        assert "novo plano" in page._state_label.text()
+    finally:
+        page.run_cmd = real_run_cmd
+
+
+def test_onboard_plan_binds_captured_host_and_carries_profile(app):
+    # REV-007: the reviewed profile reaches the backend in both phases, and
+    # execution targets the captured host.
+    page = _page()
+    page._host_combo.addItem("fixture A", "fixture-a")
+    page._host_combo.setCurrentIndex(1)  # fires _on_host_changed (no-op here)
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": "edge"}
+    import linux.ui_native.pages.homelab as mod
+
+    calls = []
+    real_qprocess = mod.QProcess
+    mod.QProcess = FakeQProcess
+    FakeQProcess._calls = calls
+    page._proc = None
+    try:
+        page.onboard_apply()
+    finally:
+        mod.QProcess = real_qprocess
+    argv = calls[-1][2]
+    assert argv[:2] == ["server", "homelab"]
+    assert argv[2:5] == ["--host", "fixture-a", "prepare"]
+    assert "--dry-run" in argv and "--json" in argv
+    assert argv[-2:] == ["--profile", "edge"]
+    # matching plan -> second callback executes the same profile on the
+    # captured host, never a re-derivation from widget state.
+    plan = {"action": "prepare", "dryRun": True, "host": "fixture-a", "profile": "edge"}
+    page._onboard_state["review_plan"] = json.dumps(plan, sort_keys=True)
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append((args, host))  # noqa: E731
+    try:
+        page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
+        assert ran == [(
+            ["prepare", "--json", "--profile", "edge"], "fixture-a",
+        )]
+    finally:
+        page.run_cmd = real_run_cmd

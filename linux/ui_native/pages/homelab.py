@@ -345,14 +345,24 @@ class HomelabPage(BasePage):
         if current == "discover" and "discover" not in self._onboard_state:
             self._run_discover()
             return
-        elif current == "pair" and "pair" not in self._onboard_state:
-            alias = self._selected_host()
-            if not alias:
-                self.onboard_ingest_pair(True, {"local": True})
+        elif current == "pair":
+            # REV-005: only a real pairing success for THIS host advances.
+            # pair=false / cancel / offline keep the operator on the step
+            # with an actionable error; nothing auto-advances.
+            pair_detail = self._onboard_state.get("pair_detail") or {}
+            if pair_detail.get("local") is True:
+                paired_for = ""
             else:
-                self._pair_advance = True
-                self.start_pair()
-                return
+                paired_for = str(pair_detail.get("alias") or "")
+            if self._onboard_state.get("pair") is not True \
+                    or paired_for != self._selected_host():
+                alias = self._selected_host()
+                if not alias:
+                    self.onboard_ingest_pair(True, {"local": True})
+                else:
+                    self._pair_advance = True
+                    self.start_pair()
+                    return
         elif current == "profile":
             combo = self._profile_combo
             self._onboard_state["profile"] = {
@@ -371,21 +381,39 @@ class HomelabPage(BasePage):
         self._state_label.setText("Descobrindo Homelab…")
         self._spawn(["server", "homelab", "agent", "discover", "--json"], self._on_discover_done)
 
-    def _first_json_line(self, raw: bytes) -> dict:
-        for line in raw.decode("utf-8", "replace").splitlines():
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    data = json.loads(line)
-                    if isinstance(data, dict):
-                        return data
-                except Exception:
-                    continue
+    def _first_json_document(self, text: str) -> dict:
+        decoder = json.JSONDecoder()
+        for idx, ch in enumerate(text):
+            if ch != "{":
+                continue
+            try:
+                doc, _end = decoder.raw_decode(text, idx)
+            except ValueError:
+                continue
+            if isinstance(doc, dict):
+                return doc
         return {}
+
+    def _parse_json_payload(self, raw: bytes) -> dict:
+        """REV-004: one document parser for every Player command output.
+
+        Accepts pretty or compact JSON anywhere in stdout (``jq -n`` emits
+        multiline documents) instead of parsing line by line, and unwraps
+        the remote-host envelope ``{hostAlias, rc, payload, ...}`` produced
+        by ``--host`` so callers see the inner payload plus the bound
+        ``hostAlias``.
+        """
+        doc = self._first_json_document(raw.decode("utf-8", "replace"))
+        payload = doc.get("payload")
+        if isinstance(payload, dict) and isinstance(doc.get("hostAlias"), str):
+            merged = dict(payload)
+            merged["hostAlias"] = doc["hostAlias"]
+            return merged
+        return doc
 
     def _on_discover_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
-        payload = self._first_json_line(raw)
+        payload = self._parse_json_payload(raw)
         if code == 0 and payload:
             self.onboard_ingest_discover(payload)
             self.refresh_hosts()
@@ -401,19 +429,39 @@ class HomelabPage(BasePage):
     def onboard_apply(self) -> None:
         if not self._onboard_confirmed:
             return
-        # PZ-AUD-002/013: apply is plan-then-execute. First press renders
-        # the prepare dry-run; second press re-renders and only executes
-        # when the plan is unchanged (a changed plan needs a new review).
+        # PZ-AUD-002/013 + REV-006/007: apply is plan-then-execute, and the
+        # plan is a typed document bound to the host and profile the
+        # operator reviewed. The captured host — never the mutable combo —
+        # is what execution may target.
         self._state_label.setText("Gerando plano…")
-        self._spawn(self._hl("prepare", "--dry-run", "--json"), self._on_apply_plan_done)
+        profile = (self._onboard_state.get("profile") or {}).get("profile") or ""
+        plan_args = ["prepare", "--dry-run", "--json"]
+        if profile:
+            plan_args += ["--profile", profile]
+        self._onboard_state["plan_host"] = self._selected_host()
+        self._onboard_state["plan_args"] = plan_args
+        self._spawn(self._hl(*plan_args), self._on_apply_plan_done)
 
     def _on_apply_plan_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
-        payload = self._first_json_line(raw)
+        payload = self._parse_json_payload(raw)
         if code != 0 or not payload:
             detail = err.decode("utf-8", "replace").strip().splitlines()
             reason = detail[-1] if detail else f"exit {code}"
             self._state_label.setText(f"Plano falhou: {reason}")
+            return
+        # REV-006: the plan must belong to the captured host. A late
+        # callback generated for another target is dropped, and a host
+        # switch while the plan ran invalidates the reviewed plan.
+        captured_host = str(self._onboard_state.get("plan_host") or "")
+        plan_host = str(payload.get("hostAlias") or payload.get("host") or "local")
+        if plan_host != (captured_host or "local"):
+            self._onboard_state.pop("review_plan", None)
+            self._state_label.setText("Plano é de outro host — gere um novo plano para o host selecionado")
+            return
+        if self._selected_host() != captured_host:
+            self._onboard_state.pop("review_plan", None)
+            self._state_label.setText("Host mudou durante o plano — revise e gere um novo plano")
             return
         plan_hash = json.dumps(payload, sort_keys=True)
         previous = self._onboard_state.get("review_plan")
@@ -428,18 +476,39 @@ class HomelabPage(BasePage):
             self._state_label.setText("Plano mudou — revise de novo e pressione Aplicar para executar")
             return
         self._onboard_state.pop("review_plan", None)
-        self.run_cmd(["prepare", "--json"])
+        # REV-007: execute exactly the reviewed plan (same profile), not a
+        # re-derivation from current widget state.
+        exec_args = ["prepare", "--json"]
+        profile = (self._onboard_state.get("profile") or {}).get("profile") or ""
+        if profile:
+            exec_args += ["--profile", profile]
+        self.run_cmd(exec_args, host=captured_host)
 
-    def _hl(self, *parts: str) -> list[str]:
+    def _hl_for(self, alias: str, *parts: str) -> list[str]:
         args = ["server", "homelab"]
-        alias = self._selected_host()
         if alias:
             args += ["--host", alias]
         args.extend(parts)
         return args
 
+    def _hl(self, *parts: str) -> list[str]:
+        return self._hl_for(self._selected_host(), *parts)
+
     def _on_host_changed(self) -> None:
         alias = self._selected_host()
+        # REV-005/006: pairing and plan confirmation are bound to one host.
+        # Switching the target invalidates them — an authorization made for
+        # host A must never apply to host B. The flow rewinds to the pair
+        # step so the new host is verified on its own.
+        self._onboard_state.pop("review_plan", None)
+        self._onboard_state.pop("plan_host", None)
+        self._onboard_state.pop("plan_args", None)
+        self._onboard_state.pop("pair", None)
+        self._onboard_state.pop("pair_detail", None)
+        self._onboard_confirmed = False
+        if self._onboard_step >= 1:
+            self._onboard_step = 1
+            self._refresh_onboard_label()
         if self._host_badge is not None:
             if alias:
                 self._host_badge.setText("Remoto")
@@ -461,15 +530,7 @@ class HomelabPage(BasePage):
 
     def _on_hosts_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
-        payload: dict = {}
-        for line in raw.decode("utf-8", "replace").splitlines():
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    payload = json.loads(line)
-                    break
-                except Exception:
-                    continue
+        payload = self._parse_json_payload(raw)
         hosts = payload.get("hosts") if isinstance(payload.get("hosts"), list) else []
         current = self._selected_host()
         if self._host_combo is not None:
@@ -520,15 +581,7 @@ class HomelabPage(BasePage):
         if self._proc is not None:
             self._cancel_timeout(self._proc)
         self._proc = None
-        payload: dict = {}
-        for line in out.decode("utf-8", "replace").splitlines():
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    payload = json.loads(line)
-                    break
-                except Exception:
-                    continue
+        payload = self._parse_json_payload(out)
         state = str(payload.get("state", ""))
         if code == 0 and payload.get("paired"):
             self.onboard_ingest_pair(True, {"alias": self._selected_host()})
@@ -582,16 +635,7 @@ class HomelabPage(BasePage):
 
     def _on_apps_done(self, code: int, raw: bytes, err: bytes) -> None:
         self._proc = None
-        payload: dict = {}
-        text = raw.decode("utf-8", "replace")
-        for line in text.splitlines():
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    payload = json.loads(line)
-                    break
-                except Exception:
-                    continue
+        payload = self._parse_json_payload(raw)
         apps = payload.get("apps") if isinstance(payload.get("apps"), list) else []
         self._rebuild_cards(apps)
         self.refresh_profiles()
@@ -677,16 +721,7 @@ class HomelabPage(BasePage):
         return (last or {}).get("latest", "") if isinstance(last, dict) else ""
 
     def _apply_status(self, raw: bytes) -> None:
-        text = raw.decode("utf-8", "replace")
-        payload: dict = {}
-        for line in text.splitlines():
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    payload = json.loads(line)
-                    break
-                except Exception:
-                    continue
+        payload = self._parse_json_payload(raw)
         if not payload:
             self._state_label.setText("falha ao ler status")
             return
@@ -844,7 +879,7 @@ class HomelabPage(BasePage):
         )
 
     # -- actions ------------------------------------------------------------
-    def run_cmd(self, args: list[str]) -> None:
+    def run_cmd(self, args: list[str], host: str | None = None) -> None:
         if self._proc is not None and self._proc.state() != QProcess.NotRunning:
             self._state_label.setText("Já existe operação em andamento — aguarde")
             return
@@ -866,7 +901,7 @@ class HomelabPage(BasePage):
         if args and args[0] == "hosts":
             argv = ["server", "homelab", *args]
         else:
-            argv = self._hl(*args)
+            argv = self._hl_for(self._selected_host() if host is None else host, *args)
         proc.start(str(self.root / "linux" / "pz"), argv)
         self._proc = proc
 
@@ -962,15 +997,9 @@ class HomelabPage(BasePage):
         self._append(f"[restore] {why}\n")
 
     def _parse_plan(self, raw: bytes) -> dict:
-        for line in raw.decode("utf-8", "replace").splitlines():
-            line = line.strip()
-            if line.startswith("{"):
-                try:
-                    payload = json.loads(line)
-                    if isinstance(payload, dict) and payload.get("action") == "restore":
-                        return payload
-                except Exception:
-                    continue
+        payload = self._parse_json_payload(raw)
+        if isinstance(payload, dict) and payload.get("action") == "restore":
+            return payload
         return {}
 
     def _restore_summary_text(self, plan: dict, source: str) -> str:
