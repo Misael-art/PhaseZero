@@ -116,11 +116,12 @@
       "acceptance": "Fixtures Docker ausente, rm exit 42 e pull ok/up failed jamais resultam em ready/completed=true; reconciliador retoma estado desejado.",
       "evidence": "evidence/reproductions.json",
       "dependsOn": [],
-      "status": "in_progress",
+      "status": "verified",
       "owner": "codex/aud-fase0",
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
+      "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
+      "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
+      "closureNote": "desired/observed separados (state applied/deferred/failed/noop); enable/disable/update com daemon down ou falha parcial retornam ok:false + exit 1; reconciliador retoma. Suite linux-homelab + fakedockers rm-fail/pull-ok-up-fail."
     },
     {
       "id": "PZ-AUD-006",
@@ -140,11 +141,12 @@
       "dependsOn": [
         "PZ-AUD-005"
       ],
-      "status": "in_progress",
+      "status": "verified",
       "owner": "codex/aud-fase0",
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
+      "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
+      "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
+      "closureNote": "health none/unknown vira unchecked e bloqueia healthy/ready; ready exige conjunto esperado (missing/unexpected), segredos completos e sondas TCP; campos novos no status JSON. Healthchecks por app = Fase 2 (030)."
     },
     {
       "id": "PZ-AUD-007",
@@ -216,11 +218,12 @@
         "PZ-AUD-011",
         "PZ-AUD-012"
       ],
-      "status": "in_progress",
+      "status": "verified",
       "owner": "codex/aud-fase0",
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
+      "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
+      "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
+      "closureNote": "volumes ausentes falham fechado (listados, sem manifesto); vazio exige backup --allow-empty; staging + sqlite hot-backup; flags consistent/method no manifesto e verify. Dumps nativos MariaDB/PG = limitacao (receitas Fase 2)."
     },
     {
       "id": "PZ-AUD-010",
@@ -241,11 +244,12 @@
         "PZ-AUD-009",
         "PZ-AUD-011"
       ],
-      "status": "in_progress",
+      "status": "verified",
       "owner": "codex/aud-fase0",
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
+      "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
+      "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
+      "closureNote": "restore so aplica entradas do manifesto (extra tgz ignorado, provado); checa identidade de projeto; stop falho bloqueia; re-checksum TOCTOU; scan de paths; swap exato via staging (remove posteriores); rollback integral com wipe+copy."
     },
     {
       "id": "PZ-AUD-011",
@@ -263,11 +267,12 @@
       "acceptance": "Dois projetos com mesmo app e volume lógico nunca compartilham status nem dados; operação em A deixa B byte a byte intacto.",
       "evidence": "evidence/compose.json",
       "dependsOn": [],
-      "status": "in_progress",
+      "status": "verified",
       "owner": "codex/aud-fase0",
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
+      "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
+      "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
+      "closureNote": "volume_actual_name deterministico <projeto>_<logico>; descoberta por label com.docker.compose.project; refuse em label estrangeiro no backup/restore. container_name fixo mantido (colisao entre projetos falha rapido no up)."
     },
     {
       "id": "PZ-AUD-012",
@@ -288,11 +293,12 @@
         "PZ-AUD-005",
         "PZ-AUD-011"
       ],
-      "status": "in_progress",
+      "status": "verified",
       "owner": "codex/aud-fase0",
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "implementation": "codex/aud-fase0: 076b4ba (005/011/012), 1a47c15 (009/010), 98b75a1 (006)",
+      "behavioralProof": "tests/linux-homelab.sh verde (inclui regressoes novas); fixtures /tmp/pz-fase0-repro, /tmp/pz-r10, /tmp/pz-rec",
+      "ciProof": "suites hermeticas locais verdes (homelab, ai-proxies, 9router, agent-workspaces); CI descartavel/VM real pendente (Fase 5)",
+      "closureNote": "reconcile converge registro curado (boot usa; fallback legacy sem registro); backup cobre volumes em uso (+extras com --explicit); desligado permanece desligado apos reboot."
     },
     {
       "id": "PZ-AUD-013",
