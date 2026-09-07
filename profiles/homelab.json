@@ -11,14 +11,16 @@
         "git",
         "git-lfs",
         "github-cli",
+        "tailscale",
+        "rsync",
+        "restic",
+        "borg"
+      ],
+      "optionalPacman": [
         "cockpit",
         "cockpit-docker",
         "cockpit-podman",
         "netdata",
-        "tailscale",
-        "rsync",
-        "restic",
-        "borg",
         "nginx",
         "certbot",
         "acme.sh"

@@ -1003,6 +1003,8 @@ pz_run_profile() {
         ((.extends // []) | type == "array") and
         ((.packages.linux.pacman // []) | type == "array") and
         ((.packages.linux.yay // []) | type == "array") and
+        ((.packages.linux.optionalPacman // []) | type == "array") and
+        ((.packages.linux.optionalYay // []) | type == "array") and
         (((.packages.linux.flatpak // []) | type) as $t | $t == "array" or $t == "object") and
         ((.scripts.linux // []) | type == "array") and
         ((.docker_compose // {}) | type == "object") and
@@ -1076,6 +1078,9 @@ pz_run_profile() {
     packages=$(jq -r '.packages.linux.pacman // [] | .[]' "$profile_file" 2>/dev/null || true)
     local yay_pkgs
     yay_pkgs=$(jq -r '.packages.linux.yay // [] | .[]' "$profile_file" 2>/dev/null || true)
+    local opt_pacman opt_yay
+    opt_pacman=$(jq -r '.packages.linux.optionalPacman // [] | .[]' "$profile_file" 2>/dev/null || true)
+    opt_yay=$(jq -r '.packages.linux.optionalYay // [] | .[]' "$profile_file" 2>/dev/null || true)
     local flatpak_pkgs
     flatpak_pkgs=$(jq -r '
       if .packages.linux.flatpak | type == "object"
@@ -1132,6 +1137,13 @@ pz_run_profile() {
             pz_error "profile preflight failed before mutation: ${missing_packages[*]}"
             return 69
         fi
+        if [ -n "$opt_pacman" ]; then
+            local opt_pkg
+            while IFS= read -r opt_pkg; do
+                [ -z "$opt_pkg" ] && continue
+                pacman -Q "$opt_pkg" >/dev/null 2>&1 || pacman -Si "$opt_pkg" >/dev/null 2>&1 ||                     pz_warn "optional package unavailable, will skip: $opt_pkg"
+            done <<< "$opt_pacman"
+        fi
     fi
 
     if [ -n "$packages" ]; then
@@ -1170,6 +1182,42 @@ pz_run_profile() {
             yay -S --needed --noconfirm "$pkg"
             [ "$package_preexisting" = "1" ] || pz_rollback_register package "$pkg" ""
         done <<< "$yay_pkgs"
+    fi
+
+    if [ -n "$opt_pacman" ] || [ -n "$opt_yay" ]; then
+        if [ "$dry_run" = "1" ]; then
+            pz_info "planning optional packages (best effort)..."
+        else
+            pz_info "installing optional packages (best effort)..."
+        fi
+        while IFS= read -r pkg; do
+            [ -z "$pkg" ] && continue
+            if [ "$dry_run" = "1" ]; then
+                pz_info "would try optional pacman package: $pkg"
+                continue
+            fi
+            if ! pacman -Q "$pkg" >/dev/null 2>&1 && ! pacman -Si "$pkg" >/dev/null 2>&1; then
+                pz_warn "optional package unavailable, skipped: $pkg"
+                continue
+            fi
+            pz_admin_run pacman -S --needed --noconfirm "$pkg" ||                 pz_warn "optional package failed, skipped: $pkg"
+        done <<< "$opt_pacman"
+        while IFS= read -r pkg; do
+            [ -z "$pkg" ] && continue
+            if [ "$dry_run" = "1" ]; then
+                pz_info "would try optional AUR package: $pkg"
+                continue
+            fi
+            if ! command -v yay >/dev/null 2>&1; then
+                pz_warn "yay unavailable, optional AUR package skipped: $pkg"
+                continue
+            fi
+            if ! pacman -Q "$pkg" >/dev/null 2>&1 && ! yay -Si "$pkg" >/dev/null 2>&1; then
+                pz_warn "optional AUR package unavailable, skipped: $pkg"
+                continue
+            fi
+            yay -S --needed --noconfirm "$pkg" ||                 pz_warn "optional AUR package failed, skipped: $pkg"
+        done <<< "$opt_yay"
     fi
 
     if [ "$flatpak_is_object" = true ]; then
