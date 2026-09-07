@@ -70,7 +70,22 @@ class HomelabPage(BasePage):
             label.style().polish(label)
 
     def build(self) -> None:
-        self._layout.setSpacing(12)
+        # UX-003: the whole page lives in a vertical scroll area — at
+        # 1280x800 and 800x600 every control stays reachable by scrolling;
+        # no group is compressed and no horizontal scroll is needed.
+        self._page_scroll = QScrollArea()
+        self._page_scroll.setWidgetResizable(True)
+        self._page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._page_scroll.setFrameShape(QFrame.NoFrame)
+        self._page_scroll.setAccessibleName("Conteúdo do Homelab")
+        page_host = QWidget()
+        page_host.setObjectName("homelabPageHost")
+        lay = QVBoxLayout(page_host)
+        lay.setSpacing(12)
+        self._layout.addSpacing(8)
+        self._layout.addWidget(self._page_scroll, 1)
+        self._layout = lay
+        self._page_scroll.setWidget(page_host)
 
         header = QHBoxLayout()
         title = QLabel("Homelab Player")
@@ -107,7 +122,7 @@ class HomelabPage(BasePage):
         refresh.setAccessibleName("Atualizar status do Homelab")
         refresh.clicked.connect(self.refresh_status)
         header.addWidget(refresh)
-        self._layout.addLayout(header)
+        lay.addLayout(header)
 
         onboard = QGroupBox("Primeiros passos")
         onboard.setAccessibleName("Onboarding do Homelab")
@@ -133,7 +148,7 @@ class HomelabPage(BasePage):
         o_lay.addWidget(self._onboard_confirm)
         o_lay.addWidget(self._onboard_next)
         onboard.setLayout(o_lay)
-        self._layout.addWidget(onboard)
+        lay.addWidget(onboard)
 
         # App cards (one-click catalog) ------------------------------------
         cards_box = QGroupBox("Aplicativos")
@@ -148,7 +163,7 @@ class HomelabPage(BasePage):
         self._cards_scroll.setMinimumHeight(200)
         cards_outer.addWidget(self._cards_scroll)
         cards_box.setLayout(cards_outer)
-        self._layout.addWidget(cards_box)
+        lay.addWidget(cards_box)
 
         # Status table ------------------------------------------------------
         self._table = QTableWidget(0, 5)
@@ -161,7 +176,8 @@ class HomelabPage(BasePage):
         self._table.setSelectionBehavior(QTableWidget.SelectRows)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
-        self._layout.addWidget(self._table, 1)
+        self._table.setMinimumHeight(140)
+        lay.addWidget(self._table, 1)
 
         # Profile + governor ------------------------------------------------
         profile_box = QGroupBox("Perfil e orçamento")
@@ -183,7 +199,7 @@ class HomelabPage(BasePage):
         policy.clicked.connect(self.show_policy)
         pslot.addWidget(policy)
         profile_box.setLayout(pslot)
-        self._layout.addWidget(profile_box)
+        lay.addWidget(profile_box)
 
         # Actions -----------------------------------------------------------
         actions_box = QGroupBox("Ações")
@@ -211,7 +227,7 @@ class HomelabPage(BasePage):
             self._action_buttons.append(btn)
             arow.addWidget(btn)
         actions_box.setLayout(arow)
-        self._layout.addWidget(actions_box)
+        lay.addWidget(actions_box)
 
         # Output ------------------------------------------------------------
         out_group = QGroupBox("Saída")
@@ -225,7 +241,9 @@ class HomelabPage(BasePage):
         self._bar.setRange(0, 0)
         self._bar.hide()
         out_layout.addWidget(self._bar)
-        self._layout.addWidget(out_group, 1)
+        self._output.setMinimumHeight(160)
+        lay.addWidget(out_group, 1)
+        lay.addStretch(0)
 
         QTimer.singleShot(0, self.refresh_hosts)
 

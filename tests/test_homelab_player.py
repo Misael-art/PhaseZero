@@ -1115,3 +1115,30 @@ def test_plan_survives_telemetry_drift_blocks_on_verdict_fail(app):
         assert "insuficientes" in page._state_label.text()
     finally:
         page.run_cmd = real_run_cmd
+
+
+# ---------------------------------------------------------------------------
+# UX-003: every control stays reachable by vertical scroll at small sizes.
+# ---------------------------------------------------------------------------
+
+def test_homelab_actions_reachable_by_vertical_scroll_at_800x600(app):
+    from PySide6.QtTest import QTest
+
+    page = _page()
+    page.resize(800, 600)
+    page.show()
+    QTest.qWaitForWindowExposed(page)
+    try:
+        scroll = page._page_scroll
+        assert scroll.widgetResizable()
+        # the page never demands horizontal scrolling
+        assert scroll.horizontalScrollBar().maximum() == 0
+        for btn in page._action_buttons:
+            scroll.ensureWidgetVisible(btn, 8, 8)
+            app.processEvents()
+            assert not btn.visibleRegion().isEmpty(), \
+                f"botão '{btn.text()}' inalcançável em 800x600"
+            assert btn.width() >= 60, f"botão '{btn.text()}' colapsado"
+            assert btn.height() >= max(20, btn.sizeHint().height() - 4)
+    finally:
+        page.hide()

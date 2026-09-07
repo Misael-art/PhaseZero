@@ -54,6 +54,12 @@ class WindowsVmPage(BasePage):
         self._technical_widgets: list[QWidget] = []
         self._integration_actions: dict[SwitchControl, tuple[str, str]] = {}
         self._pending_integrations: dict[str, tuple[SwitchControl, bool, QLabel, str]] = {}
+        # UX-004: reflow state; built widgets arrive in build().
+        self._narrow_layout: bool | None = None
+        self._cards: QGridLayout | None = None
+        self._hero_grid: QGridLayout | None = None
+        self._perf_card: QFrame | None = None
+        self._integration_card: QFrame | None = None
 
     def build(self) -> None:
         for action_id in self._PRIMARY_IDS:
@@ -73,19 +79,49 @@ class WindowsVmPage(BasePage):
         cards.setContentsMargins(0, 0, 0, 0)
         cards.setHorizontalSpacing(14)
         cards.setVerticalSpacing(14)
-        cards.addWidget(self._build_performance(), 0, 0)
-        cards.addWidget(self._build_integrations(), 0, 1)
+        self._perf_card = self._build_performance()
+        self._integration_card = self._build_integrations()
+        cards.addWidget(self._perf_card, 0, 0)
+        cards.addWidget(self._integration_card, 0, 1)
         cards.setColumnStretch(0, 1)
         cards.setColumnStretch(1, 1)
+        self._cards = cards
         layout.addLayout(cards)
         layout.addWidget(self._build_setup_card())
         layout.addWidget(self._build_danger_zone())
         layout.addStretch()
         scroll.setWidget(host)
         self._layout.addWidget(scroll, 1)
+        self._page_scroll = scroll
 
         self.status_loader.status_ready.connect(self._on_status_ready)
         self.status_loader.status_failed.connect(self._on_status_failed)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        if self._cards is None or self._hero_grid is None:
+            return
+        self._apply_reflow(self.width() < 1000)
+
+    def _apply_reflow(self, narrow: bool) -> None:
+        if narrow == self._narrow_layout or self._cards is None:
+            return
+        self._narrow_layout = narrow
+        # Hero: three buttons in one row (wide) or stacked under the copy
+        # (narrow) — same widgets, re-placed in the hero grid.
+        buttons = (self.refresh_button, self.install_button, self.power_button)
+        for index, btn in enumerate(buttons):
+            if narrow:
+                self._hero_grid.addWidget(btn, index, 0)
+            else:
+                self._hero_grid.addWidget(btn, 0, index)
+        # Cards: side by side (wide) or one per row spanning both columns.
+        if narrow:
+            self._cards.addWidget(self._perf_card, 0, 0, 1, 2)
+            self._cards.addWidget(self._integration_card, 1, 0, 1, 2)
+        else:
+            self._cards.addWidget(self._perf_card, 0, 0)
+            self._cards.addWidget(self._integration_card, 0, 1)
 
     def _build_hero(self) -> QFrame:
         hero = QFrame()
@@ -115,18 +151,24 @@ class WindowsVmPage(BasePage):
         self.refresh_button = QPushButton("Atualizar")
         self.refresh_button.setObjectName("secondaryButton")
         self.refresh_button.clicked.connect(self.reload)
-        row.addWidget(self.refresh_button)
         self.install_button = QPushButton("Instalar automaticamente")
         self.install_button.setObjectName("secondaryButton")
         self.install_button.setMinimumHeight(50)
         self.install_button.clicked.connect(lambda: self.run_action("windows.provision.player"))
-        row.addWidget(self.install_button)
         self.power_button = QPushButton("Iniciar VM")
         self.power_button.setObjectName("primaryButton")
         self.power_button.setMinimumSize(150, 50)
         self.power_button.setEnabled(False)
         self.power_button.clicked.connect(self._power_action)
-        row.addWidget(self.power_button)
+        # UX-004: the action buttons live in their own grid so the reflow
+        # can stack them vertically on narrow windows.
+        self._hero_grid = QGridLayout()
+        self._hero_grid.setContentsMargins(0, 0, 0, 0)
+        self._hero_grid.setSpacing(8)
+        self._hero_grid.addWidget(self.refresh_button, 0, 0)
+        self._hero_grid.addWidget(self.install_button, 0, 1)
+        self._hero_grid.addWidget(self.power_button, 0, 2)
+        row.addLayout(self._hero_grid, 0)
         return hero
 
     def _build_performance(self) -> QFrame:
