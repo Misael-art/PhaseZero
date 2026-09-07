@@ -1351,13 +1351,27 @@ cmd_prepare() {
     # configure -> apps -> verify, idempotent, one approval, honest states.
     local -a steps=() apps=()
     local step_status="failed" next_action="" detail=""
+    # REV-006/007: the plan is typed. It carries the host it targets and the
+    # profile the operator reviewed; the Player binds its confirmation to
+    # exactly this identity, and an unknown profile fails closed first.
+    local host_alias="${PZ_HOMELAB_HOST_ALIAS:-local}"
+    if [ -n "$HOMELAB_PROFILE" ]; then
+        local prep_cov
+        prep_cov="$(profile_coverage_json)"
+        if [ "$(jq -r '.known' <<< "$prep_cov")" != true ]; then
+            pz_error "prepare: unknown profile $HOMELAB_PROFILE"
+            return 2
+        fi
+    fi
     step() { steps+=("$(jq -cn --arg name "$1" --arg status "$2" --arg detail "${3:-}" '{name:$name, status:$status, detail:$detail}')"); }
     finish() {
         local ok="$1" state="$2"
         jq -n --argjson ok "$ok" --arg state "$state" \
             --argjson steps "$(printf '%s\n' "${steps[@]}" | jq -cs '.')" \
             --arg nextAction "$next_action" \
+            --arg host "$host_alias" --arg profile "$HOMELAB_PROFILE" \
             '{action:"prepare", tool:"homelab-stack", ok:$ok, state:$state, steps:$steps,
+              host:$host, profile:(if $profile == "" then null else $profile end),
               nextAction:(if $nextAction == "" then null else $nextAction end)}'
         [ "$ok" = true ]
     }
@@ -1366,7 +1380,10 @@ cmd_prepare() {
         [ "${#apps[@]}" -gt 0 ] || mapfile -t apps < <(default_prepare_apps)
         jq -n --argjson apps "$(printf '%s\n' "${apps[@]}" | jq -R . | jq -cs .)" \
             --arg access "$ACCESS_MODE" \
-            '{action:"prepare", dryRun:true, access:$access, apps:$apps,
+            --arg host "$host_alias" --arg profile "$HOMELAB_PROFILE" \
+            '{action:"prepare", dryRun:true, host:$host,
+              profile:(if $profile == "" then null else $profile end),
+              access:$access, apps:$apps,
               steps:["dependencies","daemon","access","configure","apps","verify"]}'
         return 0
     fi
@@ -1425,6 +1442,12 @@ cmd_prepare() {
         finish false failed
         return 1
     }
+    if [ -n "$HOMELAB_PROFILE" ]; then
+        # REV-007: the reviewed profile selection actually drives the stack,
+        # it is not dropped on the floor.
+        mkdir -p "$HOMELAB_STATE"
+        printf '%s\n' "$HOMELAB_PROFILE" > "$HOMELAB_STATE/profile.active"
+    fi
     step configure ready ".env ensured (access=$ACCESS_MODE)"
     # 5. apps
     local app enable_out
