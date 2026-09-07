@@ -1029,3 +1029,89 @@ def test_plan_without_warning_for_installable_profile(app):
     }
     page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
     assert "ORÇAMENTO" not in page._output.toPlainText()
+
+
+# ---------------------------------------------------------------------------
+# UX-001/UX-002: confirmation reachable by public input; stable plan intent.
+# ---------------------------------------------------------------------------
+
+def test_review_confirmation_reachable_by_clicks(app):
+    # UX-001 acceptance: clicking/typing through the PUBLIC controls must
+    # reach apply. No private flags are set and onboard_confirm_review is
+    # never called directly — the Confirm button drives the state machine.
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    import linux.ui_native.pages.homelab as mod
+
+    page = _page()  # BusyProc keeps real spawns blocked
+
+    def click(btn):
+        QTest.mouseClick(btn, Qt.MouseButton.LeftButton)
+
+    spawned = []
+    real_spawn = page._spawn
+    page._spawn = lambda args, cb: spawned.append(list(args))  # noqa: E731
+    try:
+        page.start_onboarding()
+        # discover -> pair (local host auto-verifies) -> profile -> review
+        page.onboard_ingest_discover({"manualFallback": "IP:17432"})
+        click(page._onboard_next)
+        assert page.onboard_step_name() == "pair"
+        click(page._onboard_next)
+        assert page.onboard_step_name() == "profile"
+        click(page._onboard_next)
+        assert page.onboard_step_name() == "review"
+        # the confirm control is visible and click-driven confirmation works
+        assert page._onboard_confirm.isVisible() or page._onboard_confirm.isEnabled()
+        click(page._onboard_confirm)
+        assert page._onboard_confirmed is True
+        assert not page._onboard_confirm.isVisible()
+        click(page._onboard_next)
+        assert page.onboard_step_name() == "apply"
+        # apply by clicks only: first press renders the plan
+        click(page._onboard_next)
+        assert spawned and spawned[-1][2:5] == ["prepare", "--dry-run", "--json"]
+    finally:
+        page._spawn = real_spawn
+
+
+def test_plan_survives_telemetry_drift_blocks_on_verdict_fail(app):
+    # UX-002: availableMB drift (16000 -> 15999) must NOT revoke the
+    # review; a crossed limit (verdict fail) blocks execution with a
+    # reason; an app change still forces a new review.
+    page = _page()
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["plan_host"] = ""
+    base = {
+        "action": "prepare", "dryRun": True, "host": "local",
+        "apps": ["vaultwarden"], "access": "local",
+        "budget": {"availableMB": 16000, "verdict": "pass"},
+    }
+    page._on_apply_plan_done(0, json.dumps(base).encode(), b"")
+    assert page._onboard_state.get("review_plan") is not None
+
+    ran = []
+    real_run_cmd = page.run_cmd
+    page.run_cmd = lambda args, host=None: ran.append((args, host))  # noqa: E731
+    try:
+        drifted = dict(base, budget={"availableMB": 15999, "verdict": "pass"})
+        page._on_apply_plan_done(0, json.dumps(drifted).encode(), b"")
+        assert ran, "1 MiB RAM drift wrongly invalidated the review"
+        assert ran[-1][0][:2] == ["prepare", "--json"]
+
+        # re-arm review with a different app set: material change forces a
+        # new review (run_cmd is armed but must not fire yet)
+        changed = dict(base, apps=["vaultwarden", "jellyfin"])
+        page._on_apply_plan_done(0, json.dumps(changed).encode(), b"")
+        assert len(ran) == 1
+        assert page._onboard_state.get("review_plan") is not None
+
+        # same intent as `changed`, but the budget crossed a limit
+        crossed = dict(changed, budget={"availableMB": 512, "verdict": "fail"})
+        page._on_apply_plan_done(0, json.dumps(crossed).encode(), b"")
+        assert len(ran) == 1  # blocked
+        assert "insuficientes" in page._state_label.text()
+    finally:
+        page.run_cmd = real_run_cmd

@@ -117,11 +117,20 @@ class HomelabPage(BasePage):
         start = QPushButton("Começar")
         start.setAccessibleName("Começar onboarding")
         start.clicked.connect(self.start_onboarding)
+        # UX-001: the review step has an explicit, reachable confirmation —
+        # the state machine's onboard_confirm_review() is wired to a real
+        # control instead of existing only for tests.
+        self._onboard_confirm = QPushButton("Confirmar revisão")
+        self._onboard_confirm.setAccessibleName("Confirmar revisão do Homelab")
+        self._onboard_confirm.setToolTip("Aceita a política mostrada e libera a instalação.")
+        self._onboard_confirm.clicked.connect(self._confirm_review_clicked)
+        self._onboard_confirm.setVisible(False)
         self._onboard_next = QPushButton("Avançar")
         self._onboard_next.setAccessibleName("Avançar onboarding")
         self._onboard_next.clicked.connect(self.onboard_advance)
         o_lay.addWidget(self._onboard_label, 1)
         o_lay.addWidget(start)
+        o_lay.addWidget(self._onboard_confirm)
         o_lay.addWidget(self._onboard_next)
         onboard.setLayout(o_lay)
         self._layout.addWidget(onboard)
@@ -305,6 +314,24 @@ class HomelabPage(BasePage):
         }
         return copy[name]
 
+    def _confirm_review_clicked(self) -> None:
+        # UX-001: production path for the review confirmation.
+        self.onboard_confirm_review()
+        self._refresh_onboard_label()
+
+    def _refresh_onboard_label(self) -> None:
+        if self._onboard_label is not None:
+            text = self._onboard_prompt()
+            if self.onboard_step_name() == "review" and self._onboard_confirmed:
+                text = "Revisão confirmada — Avançar gera o plano para instalação."
+            self._onboard_label.setText(text)
+        # UX-001: the confirm control exists only while the review step is
+        # unconfirmed; after confirmation Avançar is the single next action.
+        if self._onboard_confirm is not None:
+            visible = self.onboard_step_name() == "review" and not self._onboard_confirmed
+            self._onboard_confirm.setVisible(visible)
+            self._onboard_confirm.setEnabled(visible)
+
     def start_onboarding(self) -> None:
         self._onboard_step = 0
         self._onboard_confirmed = False
@@ -464,7 +491,7 @@ class HomelabPage(BasePage):
             self._onboard_state.pop("review_plan", None)
             self._state_label.setText("Host mudou durante o plano — revise e gere um novo plano")
             return
-        plan_hash = json.dumps(payload, sort_keys=True)
+        plan_hash = json.dumps(self._plan_intent(payload), sort_keys=True)
         previous = self._onboard_state.get("review_plan")
         if previous is None:
             self._onboard_state["review_plan"] = plan_hash
@@ -476,6 +503,14 @@ class HomelabPage(BasePage):
             self._render_onboard_plan(payload)
             self._state_label.setText("Plano mudou — revise de novo e pressione Aplicar para executar")
             return
+        # UX-002: intent is stable, but the observed budget may have crossed
+        # a limit since the review — execution would fail downstream.
+        budget = payload.get("budget") if isinstance(payload.get("budget"), dict) else {}
+        if str(budget.get("verdict") or "") == "fail":
+            self._state_label.setText(
+                "Recursos insuficientes agora — libere memória/disco ou revise o plano"
+            )
+            return
         self._onboard_state.pop("review_plan", None)
         # REV-007: execute exactly the reviewed plan (same profile), not a
         # re-derivation from current widget state.
@@ -484,6 +519,17 @@ class HomelabPage(BasePage):
         if profile:
             exec_args += ["--profile", profile]
         self.run_cmd(exec_args, host=captured_host)
+
+    @staticmethod
+    def _plan_intent(payload: dict) -> dict:
+        """UX-002: what a confirmation binds to is the reviewed INTENT —
+        host, profile, apps, access, policy — not volatile telemetry.
+        availableMB/diskAvailableMB drift by megabytes between renders; a
+        1 MiB RAM change must never revoke the operator's review. Material
+        changes (apps/host/profile/access) stay in the intent and still
+        force a new review; a crossed resource limit is caught separately
+        by the budget verdict at execution time."""
+        return {k: v for k, v in payload.items() if k != "budget"}
 
     def _render_onboard_plan(self, payload: dict) -> None:
         # R01-003: budget-only profiles are stated, never implied — the
