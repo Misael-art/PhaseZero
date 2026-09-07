@@ -48,7 +48,32 @@ mimo-ai-proxy|https://github.com/pedrofariasx/mimo-ai-proxy.git|3013|go
 EOF
 }
 
+# PZ-AUD-018: one supported set for every aggregate action. install all,
+# ensure all and start all operate on exactly these; anything else is
+# experimental (explicit id only) or externally managed (9router).
+SUPPORTED_PROXY_IDS="kimiproxy qwenproxy deepsproxy mimo-ai-proxy"
+
+proxy_tier() {
+    case " $SUPPORTED_PROXY_IDS " in
+        *" $1 "*) printf 'supported\n' ;;
+        *) [ "$1" = 9router ] && printf 'external-manager\n' || printf 'experimental\n' ;;
+    esac
+}
+
+supported_rows() {
+    local id
+    for id in $SUPPORTED_PROXY_IDS; do
+        lookup_proxy_row "$id"
+    done
+}
+
 selected_rows() {
+    if [ "$TARGET" = all ]; then supported_rows; else proxy_rows | awk -F'|' -v id="$TARGET" '$1 == id'; fi
+}
+
+inventory_rows() {
+    # Reporting scope: the whole universe for `all`, the single row for an
+    # explicit id. Action scope (selected_rows) is narrower by design.
     if [ "$TARGET" = all ]; then proxy_rows; else proxy_rows | awk -F'|' -v id="$TARGET" '$1 == id'; fi
 }
 
@@ -337,7 +362,8 @@ provenance_ready() {
 provenance_status_json() {
     local id first=true item ready_count=0 approved_count=0 installed_count=0 invalid_installed=0 total=0 all_ready=true ids=()
     if [ "$TARGET" = all ]; then
-        ids=(kimiproxy qwenproxy deepsproxy mimo-ai-proxy)
+        # shellcheck disable=SC2206
+        ids=($SUPPORTED_PROXY_IDS)
     else
         ids=("$TARGET")
     fi
@@ -571,8 +597,9 @@ status_json() {
         first=false
         jq -cn --arg id "$id" --arg repo "$repo" --arg kind "$kind" --arg path "$dir" \
             --arg service "${service:-inactive}" --argjson port "$port" --argjson installed "$installed" \
-            '{id:$id,repo:$repo,kind:$kind,path:$path,port:$port,installed:$installed,service:$service}'
-    done < <(selected_rows)
+            --arg tier "$(proxy_tier "$id")" \
+            '{id:$id,repo:$repo,kind:$kind,path:$path,port:$port,installed:$installed,service:$service,tier:$tier}'
+    done < <(inventory_rows)
     printf ']\n'
 }
 
@@ -582,9 +609,7 @@ service_rows() {
         selected_rows
         return
     fi
-    for id in kimiproxy qwenproxy deepsproxy mimo-ai-proxy; do
-        lookup_proxy_row "$id"
-    done
+    supported_rows
 }
 
 service_action() {
@@ -950,9 +975,11 @@ port_open() {
 # nohup/disown), reliably launches headed and survives this script exiting
 # (background jobs of a non-interactive script are not SIGHUP'd on exit).
 LOGIN_CAPABLE_PROXIES=(kimiproxy qwenproxy deepsproxy)
-# Cards the Control Center "Usar" flow prepares. Legacy sources remain
+# Cards the Control Center "Usar" flow prepares: identical to the
+# supported set by construction (PZ-AUD-018). Legacy sources remain
 # catalog-only until they receive their own reviewed snapshots.
-USER_FACING_PROXIES=(kimiproxy qwenproxy deepsproxy mimo-ai-proxy)
+# shellcheck disable=SC2206
+USER_FACING_PROXIES=($SUPPORTED_PROXY_IDS)
 
 is_login_capable_proxy() {
     local id="$1" p
@@ -1333,16 +1360,18 @@ auth_status_json() {
             --arg webStatus "$web_status" --arg command "$command" --arg loginLog "$log_path" \
             --argjson port "$port" --argjson installed "$installed" --argjson required "$required" \
             --argjson apiKeyConfigured "$api_configured" --argjson missing "$missing_json" \
+            --arg tier "$(proxy_tier "$id")" \
             '{
               id:$id, repo:$repo, kind:$kind, path:$path, port:$port,
               installed:$installed, service:$service, envPath:$envPath,
               apiKeyConfigured:$apiKeyConfigured,
+              tier:$tier,
               webValidation:{
                 required:$required, kind:$webKind, status:$webStatus,
                 command:$command, loginLog:$loginLog, missing:$missing
               }
             }'
-    done < <(selected_rows)
+    done < <(inventory_rows)
     printf ']\n'
 }
 
@@ -2098,10 +2127,12 @@ case "$ACTION" in
             elif record="$(trusted_source_record "$id" 2>/dev/null || true)" && [ -n "$record" ]; then
                 printf 'would install %s from %s at commit %s (%s)\n' \
                     "$id" "$repo" "$(jq -r '.commit' <<< "$record")" "$kind"
+            elif [ "$(proxy_tier "$id")" = experimental ]; then
+                printf 'preview %s: experimental, install explicitly after review (no approved snapshot)\n' "$id"
             else
                 printf 'blocked %s: no approved snapshot\n' "$id"
             fi
-        done < <(selected_rows)
+        done < <(inventory_rows)
         ;;
     install|setup|update|repair)
         install_selected

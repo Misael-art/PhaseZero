@@ -31,7 +31,10 @@ jq -e '
 ' <<< "$status" >/dev/null
 plan="$("$ROOT/linux/pz" ai proxies plan all)"
 [ "$(grep -c '^would install ' <<< "$plan")" -eq 4 ]
-[ "$(grep -c '^blocked ' <<< "$plan")" -eq 6 ]
+# PZ-AUD-018: one supported set for batch actions; the rest is explicit
+# preview, never an indistinct blocked batch.
+[ "$(grep -c '^preview ' <<< "$plan")" -eq 6 ]
+[ "$(grep -c '^blocked ' <<< "$plan")" -eq 0 ]
 grep -Eq '^would install kimiproxy .* at commit [0-9a-f]{40} ' <<< "$plan"
 auth="$("$ROOT/linux/pz" ai proxies auth all)"
 [ "$(jq 'length' <<< "$auth")" -eq 11 ]
