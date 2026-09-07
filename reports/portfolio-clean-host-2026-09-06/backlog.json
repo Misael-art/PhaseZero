@@ -21,11 +21,12 @@
       "acceptance": "Instalar asset em Arch mínimo; shell SSH não interativo resolve pz --version; usuário abre preparação sem configurar PATH manualmente.",
       "evidence": "evidence/arch-package.json",
       "dependsOn": [],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase1",
+      "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
+      "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
+      "closureNote": "/usr/bin/pz nos pacotes Arch/Deb/RPM + ~/.local/bin/pz no user-install; bridge SSH com retry via payload + PZ_REMOTE_PZ_BIN; README bootstrap admin apos install unico com sudo. Teste test_pz_entrypoint_shipped_on_path."
     },
     {
       "id": "PZ-AUD-002",
@@ -45,11 +46,12 @@
       "dependsOn": [
         "PZ-AUD-001"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase1",
+      "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
+      "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
+      "closureNote": "prepare --app: deps via capabilities (plan token) -> daemon -> acesso (grupo com re-login explicito) -> configure -> enable+reconcile -> verify. States ready/needs-reauth/failed; onboarding usa prepare; needs-config aponta prepare."
     },
     {
       "id": "PZ-AUD-003",
@@ -69,11 +71,12 @@
       "dependsOn": [
         "PZ-AUD-002"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase1",
+      "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
+      "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
+      "closureNote": "servicos antes de scripts; falhas de script/servico/sysctl abortam; sem bridge => rc 77 pre-mutacao; apply-common propaga workloads."
     },
     {
       "id": "PZ-AUD-004",
@@ -94,11 +97,12 @@
         "PZ-AUD-002",
         "PZ-AUD-003"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase1",
+      "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
+      "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
+      "closureNote": "docker_compose validado e convergido (reconcile com registro, senao up; extras so com with_extras); core ausente falha fechado."
     },
     {
       "id": "PZ-AUD-005",
@@ -643,11 +647,12 @@
       "dependsOn": [
         "PZ-AUD-027"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase1",
+      "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
+      "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
+      "closureNote": "provider por familia (official/aur); AUR sem helper nao instalavel; install AUR sem elevacao; required_by (swtpm/windows-11-vm)."
     },
     {
       "id": "PZ-AUD-027",
@@ -667,11 +672,12 @@
       "dependsOn": [
         "PZ-AUD-002"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase1",
+      "implementation": "codex/aud-fase1: b9523da (001), prepare+cap-compose (002), profile-order (003), compose-consumed (004), deps-provider (026), manifests (027)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 153 (capabilities, deps, cohesion, profile-packages, homelab player/web/agent, status-journey, native)",
+      "ciProof": "suites hermeticas locais verdes; Arch oficial limpo + CI descartavel pendentes (Fase 5)",
+      "closureNote": "fantasmas removidos (codecs, p7zip->7zip, cargo dup, redis->valkey); optionalPacman/Yay (warn/skip); monitoramento homelab opcional; flatpak auto-bootstrap + remote required falha fechado. Repo check em test_profile_packages."
     },
     {
       "id": "PZ-AUD-028",
