@@ -224,6 +224,9 @@ class SectionHeader(QWidget):
         if caption:
             cap = QLabel(caption)
             cap.setObjectName("sectionCaption")
+            # UX-003/004: an unwrapped caption dictates the container's
+            # minimum width and forces horizontal overflow on narrow windows.
+            cap.setWordWrap(True)
             layout.addWidget(cap)
 
 

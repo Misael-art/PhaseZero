@@ -60,8 +60,88 @@ class HomelabPage(BasePage):
         self._pair_host = ""
         self._onboard_label: QLabel | None = None
         self._onboard_next: QPushButton | None = None
+        # UX-003: reflow state; built widgets arrive in build().
+        self._narrow_layout: bool | None = None
+        self._header_grid: QGridLayout | None = None
+        self._profile_grid: QGridLayout | None = None
+        self._actions_grid: QGridLayout | None = None
 
     # ------------------------------------------------------------- theming
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        super().resizeEvent(event)
+        if self._header_grid is None:
+            return
+        self._apply_reflow(self.width() < 1000)
+
+    def _apply_reflow(self, narrow: bool) -> None:
+        if narrow == self._narrow_layout:
+            return
+        self._narrow_layout = narrow
+        self._reflow_header(narrow)
+        self._reflow_profile(narrow)
+        self._reflow_actions(narrow)
+
+    def _reflow_header(self, narrow: bool) -> None:
+        g = self._header_grid
+        if g is None:
+            return
+        if narrow:
+            # two rows: status + refresh on top, host controls below
+            g.addWidget(self._state_label, 0, 1)
+            g.addWidget(self._green, 0, 2)
+            g.addWidget(self.refresh_header_btn, 0, 3)
+            g.addWidget(self._host_caption, 1, 0)
+            g.addWidget(self._host_combo, 1, 1)
+            g.addWidget(self._host_badge, 1, 2)
+            g.addWidget(self._pair_btn, 1, 3)
+            g.addWidget(self._dash_btn, 1, 4)
+            g.setColumnStretch(0, 1)
+            g.setColumnStretch(5, 1)
+        else:
+            g.addWidget(self._state_label, 0, 7)
+            g.addWidget(self._green, 0, 8)
+            g.addWidget(self.refresh_header_btn, 0, 9)
+            g.addWidget(self._host_caption, 0, 1)
+            g.addWidget(self._host_combo, 0, 2)
+            g.addWidget(self._host_badge, 0, 3)
+            g.addWidget(self._pair_btn, 0, 4)
+            g.addWidget(self._dash_btn, 0, 5)
+            g.setColumnStretch(6, 1)
+            g.setColumnStretch(0, 0)
+
+    def _reflow_profile(self, narrow: bool) -> None:
+        g = self._profile_grid
+        if g is None:
+            return
+        if narrow:
+            g.addWidget(self._profile_caption, 0, 0)
+            g.addWidget(self._profile_combo, 0, 1, 1, 3)
+            g.addWidget(self._profile_set, 1, 0)
+            g.addWidget(self._budget_caption, 1, 1)
+            g.addWidget(self._budget_label, 1, 2)
+            g.addWidget(self._policy_btn, 1, 3)
+            g.setColumnStretch(1, 1)
+            g.setColumnStretch(3, 1)
+        else:
+            g.addWidget(self._profile_caption, 0, 0)
+            g.addWidget(self._profile_combo, 0, 1)
+            g.addWidget(self._profile_set, 0, 2)
+            g.addWidget(self._budget_caption, 0, 3)
+            g.addWidget(self._budget_label, 0, 4)
+            g.addWidget(self._policy_btn, 0, 5)
+            g.setColumnStretch(1, 1)
+            g.setColumnStretch(4, 0)
+
+    def _reflow_actions(self, narrow: bool) -> None:
+        g = self._actions_grid
+        if g is None:
+            return
+        for index, btn in enumerate(self._action_buttons):
+            if narrow:
+                g.addWidget(btn, index // 3, index % 3)
+            else:
+                g.addWidget(btn, 0, index)
+
     def _set_state(self, state: str) -> None:
         """Cor via tema (objectName+property), nunca stylesheet cru."""
         for label in (self._state_label, self._green):
@@ -87,42 +167,43 @@ class HomelabPage(BasePage):
         self._layout = lay
         self._page_scroll.setWidget(page_host)
 
-        header = QHBoxLayout()
+        # UX-003: header, profile and actions live in reflowable grids —
+        # on narrow windows the rows wrap instead of dictating a minimum
+        # width that would clip controls at 800x600 with the real theme.
+        self._header_grid = QGridLayout()
+        self._header_grid.setContentsMargins(0, 0, 0, 0)
+        self._header_grid.setHorizontalSpacing(8)
         title = QLabel("Homelab Player")
         title.setStyleSheet("font-size:17px;font-weight:700")
-        header.addWidget(title)
+        self._header_grid.addWidget(title, 0, 0)
         host_caption = QLabel("Host:")
+        self._host_caption = host_caption
         self._host_combo = QComboBox()
         self._host_combo.setAccessibleName("Host Homelab")
         self._host_combo.addItem("Este computador (local)", "")
         host_caption.setBuddy(self._host_combo)
-        header.addWidget(host_caption)
-        header.addWidget(self._host_combo)
         self._host_badge = QLabel("Local")
         self._host_badge.setObjectName("serviceState")
         self._host_badge.setProperty("state", "success")
-        header.addWidget(self._host_badge)
         self._pair_btn = QPushButton("Parear")
         self._pair_btn.setToolTip("Copia a chave SSH sem colocar senha na linha de comando.")
         self._pair_btn.setEnabled(False)
         self._pair_btn.clicked.connect(self.start_pair)
-        header.addWidget(self._pair_btn)
         self._dash_btn = QPushButton("Abrir dashboard")
         self._dash_btn.setToolTip("Abre o dashboard HTTPS do host Homelab selecionado.")
         self._dash_btn.setAccessibleName("Abrir dashboard")
         self._dash_btn.clicked.connect(self.open_dashboard)
-        header.addWidget(self._dash_btn)
-        self._host_combo.currentIndexChanged.connect(self._on_host_changed)
-        header.addStretch(1)
         self._state_label = QLabel("—")
         self._state_label.setObjectName("serviceState")
-        header.addWidget(self._state_label)
-        header.addWidget(self._green)
+        self._green = QLabel("●")
+        self._green.setObjectName("serviceState")
         refresh = QPushButton("Atualizar")
         refresh.setAccessibleName("Atualizar status do Homelab")
         refresh.clicked.connect(self.refresh_status)
-        header.addWidget(refresh)
-        lay.addLayout(header)
+        self.refresh_header_btn = refresh
+        self._reflow_header(bool(self._narrow_layout))
+        self._host_combo.currentIndexChanged.connect(self._on_host_changed)
+        lay.addLayout(self._header_grid)
 
         onboard = QGroupBox("Primeiros passos")
         onboard.setAccessibleName("Onboarding do Homelab")
@@ -181,29 +262,36 @@ class HomelabPage(BasePage):
 
         # Profile + governor ------------------------------------------------
         profile_box = QGroupBox("Perfil e orçamento")
-        pslot = QHBoxLayout()
+        self._profile_grid = QGridLayout()
+        self._profile_grid.setContentsMargins(0, 0, 0, 0)
+        self._profile_grid.setHorizontalSpacing(8)
         self._profile_combo = QComboBox()
+        self._budget_label = QLabel("—")
         profile_caption = QLabel("Perfil:")
+        self._profile_caption = profile_caption
         profile_caption.setBuddy(self._profile_combo)
-        pslot.addWidget(profile_caption)
-        pslot.addWidget(self._profile_combo, 1)
+        self._profile_grid.addWidget(profile_caption, 0, 0)
+        self._profile_grid.addWidget(self._profile_combo, 0, 1)
         self._profile_set = QPushButton("Aplicar perfil")
         self._profile_set.clicked.connect(self.apply_profile)
-        pslot.addWidget(self._profile_set)
+        self._profile_grid.addWidget(self._profile_set, 0, 2)
         budget_caption = QLabel("Orçamento:")
-        self._budget_label = QLabel("—")
+        self._budget_caption = budget_caption
         budget_caption.setBuddy(self._budget_label)
-        pslot.addWidget(budget_caption)
-        pslot.addWidget(self._budget_label)
+        self._profile_grid.addWidget(budget_caption, 0, 3)
+        self._profile_grid.addWidget(self._budget_label, 0, 4)
         policy = QPushButton("Política")
+        self._policy_btn = policy
         policy.clicked.connect(self.show_policy)
-        pslot.addWidget(policy)
-        profile_box.setLayout(pslot)
+        self._profile_grid.addWidget(policy, 0, 5)
+        profile_box.setLayout(self._profile_grid)
         lay.addWidget(profile_box)
+        self._reflow_profile(bool(self._narrow_layout))
 
         # Actions -----------------------------------------------------------
         actions_box = QGroupBox("Ações")
-        arow = QHBoxLayout()
+        self._actions_grid = QGridLayout()
+        self._actions_grid.setContentsMargins(0, 0, 0, 0)
         for label, fn in (
             ("Planejar", lambda: self.run_cmd(["plan"])),
             ("Copiar segurança", lambda: self.run_cmd(["backup"])),
@@ -225,9 +313,10 @@ class HomelabPage(BasePage):
             )
             btn.clicked.connect(fn)
             self._action_buttons.append(btn)
-            arow.addWidget(btn)
-        actions_box.setLayout(arow)
+            self._actions_grid.addWidget(btn, 0, len(self._action_buttons) - 1)
+        actions_box.setLayout(self._actions_grid)
         lay.addWidget(actions_box)
+        self._reflow_actions(bool(self._narrow_layout))
 
         # Output ------------------------------------------------------------
         out_group = QGroupBox("Saída")
@@ -355,10 +444,6 @@ class HomelabPage(BasePage):
         self._onboard_confirmed = False
         self._onboard_state = {}
         self._refresh_onboard_label()
-
-    def _refresh_onboard_label(self) -> None:
-        if self._onboard_label is not None:
-            self._onboard_label.setText(self._onboard_prompt())
 
     def onboard_ingest_discover(self, payload: dict) -> None:
         self._onboard_state["discover"] = payload if isinstance(payload, dict) else {}

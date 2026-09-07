@@ -495,10 +495,11 @@ def test_windows_vm_page_reflows_without_cut_cta(qapp, ws_page):
         assert scroll.widgetResizable()
         assert scroll.horizontalScrollBar().maximum() == 0
         # wide: cards side by side, hero buttons share one row (same center
-        # line; heights differ so tops can differ)
+        # line within rounding; heights differ so tops can differ)
         assert page._narrow_layout is False
         assert page._perf_card.geometry().top() == page._integration_card.geometry().top()
-        assert page.refresh_button.geometry().center().y() == page.power_button.geometry().center().y()
+        assert abs(page.refresh_button.geometry().center().y()
+                   - page.power_button.geometry().center().y()) <= 2
         scroll.ensureWidgetVisible(page.power_button, 8, 8)
         settle()
         assert not page.power_button.visibleRegion().isEmpty()

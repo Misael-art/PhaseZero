@@ -103,38 +103,55 @@ class WindowsVmPage(BasePage):
             return
         self._apply_reflow(self.width() < 1000)
 
+    def _reflow_hero(self, narrow: bool) -> None:
+        g = self._hero_grid
+        g.addWidget(self._hero_icon, 0, 0)
+        g.addWidget(self._hero_copy, 0, 1)
+        if narrow:
+            g.addWidget(self.refresh_button, 1, 1)
+            g.addWidget(self.install_button, 2, 1)
+            g.addWidget(self.power_button, 3, 1)
+        else:
+            g.addWidget(self.refresh_button, 0, 2)
+            g.addWidget(self.install_button, 0, 3)
+            g.addWidget(self.power_button, 0, 4)
+        g.setColumnStretch(0, 0)
+        g.setColumnStretch(1, 1)
+        for col in (2, 3, 4):
+            g.setColumnStretch(col, 0)
+
     def _apply_reflow(self, narrow: bool) -> None:
-        if narrow == self._narrow_layout or self._cards is None:
+        if narrow == self._narrow_layout:
             return
         self._narrow_layout = narrow
-        # Hero: three buttons in one row (wide) or stacked under the copy
-        # (narrow) — same widgets, re-placed in the hero grid.
-        buttons = (self.refresh_button, self.install_button, self.power_button)
-        for index, btn in enumerate(buttons):
+        self._reflow_hero(narrow)
+        if self._cards is not None:
+            # Cards: side by side (wide) or one per row spanning both columns.
             if narrow:
-                self._hero_grid.addWidget(btn, index, 0)
+                self._cards.addWidget(self._perf_card, 0, 0, 1, 2)
+                self._cards.addWidget(self._integration_card, 1, 0, 1, 2)
             else:
-                self._hero_grid.addWidget(btn, 0, index)
-        # Cards: side by side (wide) or one per row spanning both columns.
-        if narrow:
-            self._cards.addWidget(self._perf_card, 0, 0, 1, 2)
-            self._cards.addWidget(self._integration_card, 1, 0, 1, 2)
-        else:
-            self._cards.addWidget(self._perf_card, 0, 0)
-            self._cards.addWidget(self._integration_card, 0, 1)
+                self._cards.addWidget(self._perf_card, 0, 0)
+                self._cards.addWidget(self._integration_card, 0, 1)
+        if getattr(self, "_setup_grid", None) is not None:
+            self._reflow_setup(narrow)
 
     def _build_hero(self) -> QFrame:
         hero = QFrame()
         hero.setObjectName("serviceHero")
-        row = QHBoxLayout(hero)
-        row.setContentsMargins(20, 18, 20, 18)
-        row.setSpacing(16)
+        # UX-004: the whole hero is one grid so the reflow can move icon,
+        # copy and actions between the wide (single row) and narrow
+        # (stacked) arrangements without leaving anything side by side.
+        self._hero_grid = QGridLayout(hero)
+        self._hero_grid.setContentsMargins(20, 18, 20, 18)
+        self._hero_grid.setHorizontalSpacing(16)
+        self._hero_grid.setVerticalSpacing(10)
         icon = QLabel()
         icon.setObjectName("serviceIcon")
         icon.setPixmap(themed_icon(hero, "computer", QStyle.SP_ComputerIcon).pixmap(38, 38))
         icon.setAlignment(Qt.AlignCenter)
         icon.setFixedSize(58, 58)
-        row.addWidget(icon)
+        self._hero_icon = icon
         copy = QVBoxLayout()
         copy.setSpacing(3)
         title = QLabel("Windows 11 VM")
@@ -144,10 +161,12 @@ class WindowsVmPage(BasePage):
         self.state_label.setProperty("state", "info")
         self.state_detail = QLabel("Lendo configuração e estado da máquina virtual")
         self.state_detail.setObjectName("cardDescription")
+        self.state_detail.setWordWrap(True)
         copy.addWidget(title)
         copy.addWidget(self.state_label)
         copy.addWidget(self.state_detail)
-        row.addLayout(copy, 1)
+        self._hero_copy = QWidget()
+        self._hero_copy.setLayout(copy)
         self.refresh_button = QPushButton("Atualizar")
         self.refresh_button.setObjectName("secondaryButton")
         self.refresh_button.clicked.connect(self.reload)
@@ -160,15 +179,7 @@ class WindowsVmPage(BasePage):
         self.power_button.setMinimumSize(150, 50)
         self.power_button.setEnabled(False)
         self.power_button.clicked.connect(self._power_action)
-        # UX-004: the action buttons live in their own grid so the reflow
-        # can stack them vertically on narrow windows.
-        self._hero_grid = QGridLayout()
-        self._hero_grid.setContentsMargins(0, 0, 0, 0)
-        self._hero_grid.setSpacing(8)
-        self._hero_grid.addWidget(self.refresh_button, 0, 0)
-        self._hero_grid.addWidget(self.install_button, 0, 1)
-        self._hero_grid.addWidget(self.power_button, 0, 2)
-        row.addLayout(self._hero_grid, 0)
+        self._apply_reflow(bool(self._narrow_layout))
         return hero
 
     def _build_performance(self) -> QFrame:
@@ -296,8 +307,13 @@ class WindowsVmPage(BasePage):
     def _build_setup_card(self) -> QFrame:
         card = QFrame()
         card.setObjectName("settingsCard")
-        row = QHBoxLayout(card)
-        row.setContentsMargins(16, 14, 16, 14)
+        # UX-004: one grid — copy stays at (0,0) and the reflow moves the
+        # maintenance buttons between the wide side-by-side row and the
+        # narrow stacked column, so the card no longer dictates 785px.
+        self._setup_grid = QGridLayout(card)
+        self._setup_grid.setContentsMargins(16, 14, 16, 14)
+        self._setup_grid.setHorizontalSpacing(10)
+        self._setup_grid.setVerticalSpacing(10)
         copy = QVBoxLayout()
         title = QLabel("Instalação e manutenção")
         title.setObjectName("sectionHeading")
@@ -310,11 +326,15 @@ class WindowsVmPage(BasePage):
         self.maintenance_health.setObjectName("cardDescription")
         self.maintenance_health.setWordWrap(True)
         copy.addWidget(self.maintenance_health)
-        row.addLayout(copy, 1)
+        self._setup_copy = QWidget()
+        self._setup_copy.setLayout(copy)
+        self._setup_grid.addWidget(self._setup_copy, 0, 0)
+        self._setup_buttons = []
         self.repair_boot_button = QPushButton("Atualizar boot direto")
         self.repair_boot_button.setObjectName("secondaryButton")
         self.repair_boot_button.clicked.connect(lambda: self.run_action("windows.boot.install"))
         self.repair_boot_button.setVisible(False)
+        self._setup_buttons.append(self.repair_boot_button)
         self.dock_entry_button = QPushButton("GRUB: Windows (Dock)")
         self.dock_entry_button.setObjectName("secondaryButton")
         self.dock_entry_button.setCheckable(True)
@@ -327,6 +347,7 @@ class WindowsVmPage(BasePage):
                 else "windows.boot.dock.disable"
             )
         )
+        self._setup_buttons.append(self.dock_entry_button)
         images = QPushButton("Gerenciar imagens")
         images.setObjectName("secondaryButton")
         images.clicked.connect(lambda: self.run_action("windows.images.manage"))
@@ -336,12 +357,19 @@ class WindowsVmPage(BasePage):
         optimize = QPushButton("Otimizar")
         optimize.setObjectName("secondaryButton")
         optimize.clicked.connect(lambda: self.run_action("windows.optimize"))
-        row.addWidget(self.repair_boot_button)
-        row.addWidget(self.dock_entry_button)
-        row.addWidget(images)
-        row.addWidget(optimize)
-        row.addWidget(install)
+        self._setup_buttons += [images, optimize, install]
+        self._reflow_setup(bool(self._narrow_layout))
         return card
+
+    def _reflow_setup(self, narrow: bool) -> None:
+        for index, btn in enumerate(self._setup_buttons):
+            if narrow:
+                self._setup_grid.addWidget(btn, index + 1, 0)
+            else:
+                self._setup_grid.addWidget(btn, 0, index + 1)
+        self._setup_grid.setColumnStretch(0, 1)
+        for col in range(1, len(self._setup_buttons) + 1):
+            self._setup_grid.setColumnStretch(col, 0)
 
     def _build_danger_zone(self) -> QFrame:
         zone = QFrame()

@@ -1036,44 +1036,141 @@ def test_plan_without_warning_for_installable_profile(app):
 # ---------------------------------------------------------------------------
 
 def test_review_confirmation_reachable_by_clicks(app):
-    # UX-001 acceptance: clicking/typing through the PUBLIC controls must
-    # reach apply. No private flags are set and onboard_confirm_review is
-    # never called directly — the Confirm button drives the state machine.
-    from PySide6.QtCore import Qt
+    # UX-001 acceptance: clicking through the PUBLIC controls must reach
+    # apply. The button must be PRESENTED (visible AND enabled, whole
+    # rectangle inside the scroll viewport) and the click is delivered to
+    # the viewport AT the button's position — a hidden-but-enabled control
+    # fails here. No private flags; onboard_confirm_review is never called
+    # directly by the test.
+    from PySide6.QtCore import Qt, QPoint, QRect
     from PySide6.QtTest import QTest
 
     import linux.ui_native.pages.homelab as mod
 
     page = _page()  # BusyProc keeps real spawns blocked
+    page.resize(800, 600)
+    page.show()
+    app.processEvents()
+    scroll = page._page_scroll
 
-    def click(btn):
-        QTest.mouseClick(btn, Qt.MouseButton.LeftButton)
+    def click_in_viewport(btn) -> None:
+        scroll.ensureWidgetVisible(btn, 12, 12)
+        app.processEvents()
+        assert btn.isVisible() and btn.isEnabled(), \
+            f"controle '{btn.text()}' não foi apresentado"
+        assert not btn.visibleRegion().isEmpty()
+        vp = scroll.viewport()
+        rect = QRect(btn.mapTo(vp, QPoint(0, 0)), btn.size())
+        assert vp.rect().contains(rect), \
+            f"controle '{btn.text()}' parcialmente fora do viewport"
+        # real hit-test: whatever the user's click would land on at the
+        # button's position must be the button itself (a covered or clipped
+        # control fails here)
+        center_global = btn.mapToGlobal(btn.rect().center())
+        hit = QApplication.widgetAt(center_global)
+        assert hit is not None and (hit is btn or btn.isAncestorOf(hit)), \
+            f"clique na posição de '{btn.text()}' atingiria {type(hit).__name__}"
+        QTest.mouseClick(hit, Qt.MouseButton.LeftButton,
+                         pos=hit.mapFromGlobal(center_global))
 
     spawned = []
     real_spawn = page._spawn
     page._spawn = lambda args, cb: spawned.append(list(args))  # noqa: E731
     try:
         page.start_onboarding()
-        # discover -> pair (local host auto-verifies) -> profile -> review
         page.onboard_ingest_discover({"manualFallback": "IP:17432"})
-        click(page._onboard_next)
+        click_in_viewport(page._onboard_next)
         assert page.onboard_step_name() == "pair"
-        click(page._onboard_next)
+        click_in_viewport(page._onboard_next)
         assert page.onboard_step_name() == "profile"
-        click(page._onboard_next)
+        click_in_viewport(page._onboard_next)
         assert page.onboard_step_name() == "review"
-        # the confirm control is visible and click-driven confirmation works
-        assert page._onboard_confirm.isVisible() or page._onboard_confirm.isEnabled()
-        click(page._onboard_confirm)
+        # the confirm control is presented whole and the click lands on it
+        click_in_viewport(page._onboard_confirm)
         assert page._onboard_confirmed is True
         assert not page._onboard_confirm.isVisible()
-        click(page._onboard_next)
+        click_in_viewport(page._onboard_next)
         assert page.onboard_step_name() == "apply"
         # apply by clicks only: first press renders the plan
-        click(page._onboard_next)
+        click_in_viewport(page._onboard_next)
         assert spawned and spawned[-1][2:5] == ["prepare", "--dry-run", "--json"]
     finally:
         page._spawn = real_spawn
+        page.hide()
+
+
+def test_ui_pages_have_no_duplicate_method_definitions():
+    # Prevention for UX-001: a later duplicate definition silently
+    # overrides the earlier one (the confirm-button logic was lost that
+    # way). Scans the page modules touched by this front.
+    import re
+
+    for name in ("homelab.py", "windows_vm.py", "base.py"):
+        source = (ROOT / "linux" / "ui_native" / "pages" / name).read_text()
+        names = re.findall(r"^    def (\w+)\(", source, re.M)
+        dups = sorted({n for n in names if names.count(n) > 1})
+        assert not dups, f"{name}: métodos duplicados {dups}"
+
+
+# ---------------------------------------------------------------------------
+# UX-003/UX-004 acceptance: real app window + real stylesheet, no horizontal
+# overflow and every public control fully inside the viewport after
+# scrolling — across the 800 -> 1280 -> 800 alternation.
+# ---------------------------------------------------------------------------
+
+def test_pages_reflow_in_real_window_with_theme(app):
+    from unittest.mock import patch
+
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtWidgets import QComboBox, QPushButton
+
+    from linux.ui_native.app import apply_theme
+    from linux.ui_native.main_window import MainWindow
+
+    previous_qss = app.styleSheet()
+    previous_style = app.style().objectName() if app.style() is not None else ""
+    apply_theme(app, "dark")
+    with patch.object(MainWindow, "_host_summary"), \
+         patch("linux.ui_native.status_loader.StatusLoader.fetch_action"):
+        win = MainWindow(ROOT)
+        win.show()
+        try:
+            for width, height in ((800, 600), (1280, 800), (800, 600)):
+                win.resize(width, height)
+                for _ in range(8):
+                    app.processEvents()
+                for category in ("Homelab", "Windows VM"):
+                    win.show_category(category)
+                    for _ in range(8):
+                        app.processEvents()
+                    page = win.registry.page_for(category)
+                    scroll = page._page_scroll
+                    assert scroll.horizontalScrollBar().maximum() == 0, \
+                        f"{category}: overflow horizontal em {width}x{height}"
+                    host = scroll.widget()
+                    vp = scroll.viewport()
+                    def _label(w) -> str:
+                        return w.text() if hasattr(w, "text") else w.currentText() or w.accessibleName()
+
+                    controls = [
+                        w for w in host.findChildren(QPushButton) + host.findChildren(QComboBox)
+                        if w.isVisibleTo(host) and _label(w)
+                    ]
+                    assert controls, f"{category}: nenhum controle público"
+                    for control in controls:
+                        scroll.ensureWidgetVisible(control, 12, 12)
+                        for _ in range(2):
+                            app.processEvents()
+                        rect = QRect(control.mapTo(vp, QPoint(0, 0)), control.size())
+                        label = _label(control)
+                        assert vp.rect().contains(rect), \
+                            f"{category} {width}x{height}: '{label}' cortado no viewport"
+        finally:
+            win.hide()
+            win.close()
+    app.setStyleSheet(previous_qss)
+    if previous_style:
+        app.setStyle(previous_style)
 
 
 def test_plan_survives_telemetry_drift_blocks_on_verdict_fail(app):
