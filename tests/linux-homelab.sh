@@ -958,9 +958,13 @@ echo "  weights ok"
 if "$REPO_ROOT/linux/server/homelab-stack.sh" up --profile edge 2>/dev/null; then
     echo "FAIL: preview profile applied as installable"; exit 1
 fi
-refuse_out="$("$REPO_ROOT/linux/server/homelab-stack.sh" up --profile edge 2>&1 || true)"
+refuse_rc=0
+refuse_out="$("$REPO_ROOT/linux/server/homelab-stack.sh" up --profile edge 2>&1)" || refuse_rc=$?
 echo "$refuse_out" | rg -qi "preview|not installable" \
     || { echo "FAIL: refusal hides maturity"; exit 1; }
+# REV-018: maturity is decided BEFORE the Docker requirement, so the honest
+# refusal (rc 69) must surface even where the daemon is absent/stopped.
+test "$refuse_rc" = "69" || { echo "FAIL: maturity refusal is not rc 69 (got $refuse_rc)"; exit 1; }
 echo "  appliance preview honesty ok"
 if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=3000 "$REPO_ROOT/linux/server/homelab-governor.sh" check ai-studio >/dev/null 2>&1; then
     echo "FAIL: overcommit check passed"; exit 1

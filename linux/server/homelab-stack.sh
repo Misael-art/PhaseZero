@@ -681,13 +681,9 @@ cmd_plan() {
 }
 
 cmd_up() {
-    require_docker || return 1
-    [ -f "$CORE_FILE" ] || { pz_error "compose file missing: $CORE_FILE"; return 1; }
-    [ "$WITH_EXTRAS" = "0" ] || [ -f "$EXTRAS_FILE" ] || { pz_error "extras compose file missing: $EXTRAS_FILE"; return 1; }
-    if [ "$ACCESS_MODE" = "tailscale" ] && ! tailscale_authenticated; then
-        pz_error "tailscale access requested but Tailscale is logged out; run: pz server homelab tailscale"
-        return 1
-    fi
+    # REV-018: profile maturity is a pure decision — it must refuse before
+    # any Docker requirement, so a clean host sees the honest refusal (rc 69)
+    # instead of a misleading daemon error.
     if [ -n "$HOMELAB_PROFILE" ]; then
         local coverage
         coverage="$(profile_coverage_json)"
@@ -703,6 +699,17 @@ cmd_up() {
             pz_error "profile $HOMELAB_PROFILE rejected by resource governor; check budget: pz server homelab governor budget $HOMELAB_PROFILE"
             return 1
         fi
+    fi
+    require_docker || return 1
+    [ -f "$CORE_FILE" ] || { pz_error "compose file missing: $CORE_FILE"; return 1; }
+    [ "$WITH_EXTRAS" = "0" ] || [ -f "$EXTRAS_FILE" ] || { pz_error "extras compose file missing: $EXTRAS_FILE"; return 1; }
+    if [ "$ACCESS_MODE" = "tailscale" ] && ! tailscale_authenticated; then
+        pz_error "tailscale access requested but Tailscale is logged out; run: pz server homelab tailscale"
+        return 1
+    fi
+    if [ -n "$HOMELAB_PROFILE" ]; then
+        # Persist the profile only after every gate passed (never record
+        # intent for a refused up).
         mkdir -p "$HOMELAB_STATE"
         printf '%s\n' "$HOMELAB_PROFILE" > "$HOMELAB_STATE/profile.active"
     fi
