@@ -331,4 +331,43 @@ if rg -q '"linux/ai/setup-hermes\.sh"' "$ROOT/profiles/dev-ai.json"; then
 fi
 echo "  hermes optional ok"
 
+echo "=== llm model proven by inference, never backgrounded (PZ-AUD-024) ==="
+LLMBIN="$TMP_ROOT/llmbin"
+mkdir -p "$LLMBIN"
+cat > "$LLMBIN/ollama" <<'EOS'
+#!/usr/bin/env bash
+if [ "${1:-}" = "list" ]; then
+    printf 'NAME\nqwen2.5-coder:1.5b\n'
+    exit 0
+fi
+exit 0
+EOS
+cat > "$LLMBIN/curl" <<'EOS'
+#!/usr/bin/env bash
+for a in "$@"; do
+    case "$a" in
+        */api/generate) printf '{"model":"qwen2.5-coder:1.5b","response":"ok","done":true}'; exit 0 ;;
+    esac
+done
+exit 1
+EOS
+chmod +x "$LLMBIN/ollama" "$LLMBIN/curl"
+export PZ_LLM_SERVER_STATE="$TMP_ROOT/llm-server.json"
+if ! PATH="$LLMBIN:$PATH" PZ_DRY_RUN=0 "$ROOT/linux/server/llm-server.sh" install >/dev/null 2>&1; then
+    echo "FAIL: llm install with answering model failed"; exit 1
+fi
+jq -e '.defaultModel == "qwen2.5-coder:1.5b" and .inference.probed == true and .inference.httpCode == "200"' \
+    "$PZ_LLM_SERVER_STATE" >/dev/null
+rg -q 'nohup ollama pull' "$ROOT/linux/server/llm-server.sh" && { echo "FAIL: background pull still present"; exit 1; }
+# A present model that cannot answer is not ready.
+cat > "$LLMBIN/curl" <<'EOS'
+#!/usr/bin/env bash
+exit 1
+EOS
+chmod +x "$LLMBIN/curl"
+if PATH="$LLMBIN:$PATH" PZ_DRY_RUN=0 "$ROOT/linux/server/llm-server.sh" install >/dev/null 2>&1; then
+    echo "FAIL: silent model reported ready"; exit 1
+fi
+echo "  llm inference proof ok"
+
 echo "linux-agent-workspaces smoke ok"
