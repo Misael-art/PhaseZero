@@ -327,11 +327,12 @@
         "PZ-AUD-014",
         "PZ-AUD-015"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase4",
+      "implementation": "codex/aud-fase4",
+      "behavioralProof": "tests/linux-homelab.sh verde (pair); pytest player/navigation; viewport estreito preservado",
+      "ciProof": "hermetico local verde; usabilidade com usuarios reais + Windows nativo pendentes (Fase 5)",
+      "closureNote": "wizard executa: discover via agent, pair com resultado real (local explicito), profile registrado, apply em dois tempos (dry-run hash + execucao so com plano igual). Cartoes mantem one-click com estados honestos (005) e nextAction (008)."
     },
     {
       "id": "PZ-AUD-014",
@@ -351,11 +352,12 @@
       "dependsOn": [
         "PZ-AUD-001"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase4",
+      "implementation": "codex/aud-fase4",
+      "behavioralProof": "tests/linux-homelab.sh verde (pair); pytest player/navigation; viewport estreito preservado",
+      "ciProof": "hermetico local verde; usabilidade com usuarios reais + Windows nativo pendentes (Fase 5)",
+      "closureNote": "hosts pair: porta do registro sempre, --key/reuso/--generate explicito, BatchMode sem senha, first-contact com comando exato com porta; Player pareia via CLI."
     },
     {
       "id": "PZ-AUD-015",
@@ -740,11 +742,12 @@
         "PZ-AUD-013",
         "PZ-AUD-028"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase4",
+      "implementation": "codex/aud-fase4",
+      "behavioralProof": "tests/linux-homelab.sh verde (pair); pytest player/navigation; viewport estreito preservado",
+      "ciProof": "hermetico local verde; usabilidade com usuarios reais + Windows nativo pendentes (Fase 5)",
+      "closureNote": "Início com 5 jornadas por objetivo (requisito, custo, maturidade, UMA acao de entrada); homelab.hosts adicionada; detalhes seguem nas paginas (revelacao progressiva, sem scrollbar horizontal)."
     },
     {
       "id": "PZ-AUD-030",
