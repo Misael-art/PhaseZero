@@ -129,7 +129,7 @@ for f in "$REPO_ROOT/assets/home-server/docker-compose."*.yml \
     [ "$(rg -c 'no-new-privileges' "$f")" -eq "$svcs" ] || { echo "FAIL: missing no-new-privileges in $f"; exit 1; }
     [ "$(rg -c 'mem_limit:' "$f")" -eq "$svcs" ] || { echo "FAIL: missing mem_limit in $f"; exit 1; }
 done
-jq -e '.schemaVersion == 1 and (.images | length == 13) and all(.images[]; (test(":latest") | not))' \
+jq -e '.schemaVersion == 1 and (.images | length == 14) and all(.images[]; (test(":latest") | not))' \
     "$REPO_ROOT/assets/home-server/docker-compose.lock.json" >/dev/null
 jq -e '.schemaVersion == 1 and (.apps | length) >= 10' \
     "$REPO_ROOT/assets/home-server/apps/catalog.json" >/dev/null
@@ -360,6 +360,21 @@ bk_vols="$(
 )"
 echo "$bk_vols" | jq -e '(.volumes | index("vaultwarden_data") != null) and ([.volumes[] | select(test("jellyfin|syncthing"))] | length == 0)' >/dev/null
 echo "  reconcile convergence ok"
+
+echo "=== paperless ships its broker (PZ-AUD-007) ==="
+rg -q 'PAPERLESS_REDIS=redis://paperless-broker:6379' "$REPO_ROOT/assets/home-server/apps/compose/paperless.yml" \
+    || { echo "FAIL: paperless module missing broker URL"; exit 1; }
+rg -q 'condition: service_healthy' "$REPO_ROOT/assets/home-server/apps/compose/paperless.yml" \
+    || { echo "FAIL: paperless does not wait for healthy broker"; exit 1; }
+rg -q 'paperless_consume:/usr/src/paperless/consume' "$REPO_ROOT/assets/home-server/apps/compose/paperless.yml" \
+    || { echo "FAIL: paperless consume flow missing"; exit 1; }
+rg -q 'paperless_export:/usr/src/paperless/export' "$REPO_ROOT/assets/home-server/apps/compose/paperless.yml" \
+    || { echo "FAIL: paperless export flow missing"; exit 1; }
+jq -e '.images["paperless-broker"] == "valkey/valkey:8.0"' \
+    "$REPO_ROOT/assets/home-server/docker-compose.lock.json" >/dev/null
+paper_out="$(PZ_HOMELAB_RAM_TOTAL_OVERRIDE=32768 "$REPO_ROOT/linux/pz" server homelab apps enable paperless --dry-run --json)"
+echo "$paper_out" | jq -e '.ok == true and (.wouldEnable | index("paperless-broker") != null)' >/dev/null
+echo "  paperless broker ok"
 
 echo "=== web CLI bootstrap (no serve) ==="
 export PZ_HOMELAB_WEB_STATE="$TMP/web"
@@ -773,7 +788,7 @@ profile_list="$("$REPO_ROOT/linux/server/homelab-governor.sh" list)"
 printf '%s\n' "$profile_list" | jq -e --argjson keys '["ai-studio","assistant-multichannel","assistant-private","automation","developer","edge"]' \
   '.schemaVersion == 1 and (.profiles|length) == 6 and ([.profiles[].key] | sort) == ($keys|sort) and .default == "edge" and all(.profiles[]; (.title|length>0) and (.services|type=="array") and (.class|length>0) and (.maturity|length>0))' >/dev/null
 echo "  registry 6 profiles ok"
-"$REPO_ROOT/linux/server/homelab-governor.sh" weights | jq -e '.weightsMB.jellyfin == 2048 and .weightsMB.ollama == 2048 and (.weightsMB|length) == 27' >/dev/null
+"$REPO_ROOT/linux/server/homelab-governor.sh" weights | jq -e '.weightsMB.jellyfin == 2048 and .weightsMB.ollama == 2048 and .weightsMB["paperless-broker"] == 128 and (.weightsMB|length) == 28' >/dev/null
 echo "  weights ok"
 if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=3000 "$REPO_ROOT/linux/server/homelab-governor.sh" check ai-studio >/dev/null 2>&1; then
     echo "FAIL: overcommit check passed"; exit 1

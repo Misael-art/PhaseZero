@@ -17,6 +17,7 @@
     "node-exporter": 128,
     "grafana": 512,
     "paperless": 1024,
+    "paperless-broker": 128,
     "portainer": 128,
     "hermes": 384,
     "9router": 256,
