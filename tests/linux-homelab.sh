@@ -550,6 +550,38 @@ echo "  verify ok"
 test -s "$PZ_HOMELAB_STATE/status.json"
 echo "  status persisted ok"
 
+echo "=== readiness proofs are strict (PZ-AUD-006) ==="
+# A container without a healthcheck is never a health proof.
+hp_none="$(bash -c '
+    source "$0/linux/server/homelab-status.sh"
+    running_containers() { echo phasezero-fixture; }
+    container_health() { echo none; }
+    health_proofs
+' "$REPO_ROOT")"
+echo "$hp_none" | jq -e '.healthy == false and (.unchecked | index("phasezero-fixture") != null)' >/dev/null
+hp_ok="$(bash -c '
+    source "$0/linux/server/homelab-status.sh"
+    running_containers() { echo phasezero-fixture; }
+    container_health() { echo healthy; }
+    health_proofs
+' "$REPO_ROOT")"
+echo "$hp_ok" | jq -e '.healthy == true and (.unchecked | length == 0)' >/dev/null
+# Expected set: a running container outside the registry blocks ready.
+S6="$TMP/status-strict"
+mkdir -p "$S6"
+printf '%s\n' '{"schemaVersion":1,"tool":"homelab-apps","enabled":["vaultwarden"]}' > "$S6/apps.enabled.json"
+cp "$PZ_HOMELAB_STATE/.env" "$S6/.env"
+exp_out="$(PZ_HOMELAB_STATE="$S6" bash -c '
+    source "$0/linux/server/homelab-status.sh"
+    running_containers() { echo phasezero-jellyfin; }
+    container_health() { echo healthy; }
+    build_status
+' "$REPO_ROOT")"
+echo "$exp_out" | jq -e '.ready == false
+    and (.missingContainers | index("phasezero-vaultwarden") != null)
+    and (.unexpectedContainers | index("phasezero-jellyfin") != null)' >/dev/null
+echo "  strict readiness ok"
+
 echo "=== operations: registry flow ==="
 OPS="$PZ_HOMELAB_STATE/operations"
 op_id="$("$REPO_ROOT/linux/server/homelab-operations.sh" start backup profile=assistant-private)"
