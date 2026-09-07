@@ -1432,13 +1432,26 @@ cmd_prepare() {
     # profile the operator reviewed; the Player binds its confirmation to
     # exactly this identity, and an unknown profile fails closed first.
     local host_alias="${PZ_HOMELAB_HOST_ALIAS:-local}"
+    # R01-003: the plan states the profile truth. Today every appliance
+    # profile is budget-only (installable:false with no service recipe), so
+    # the plan carries installable/note/services/budget explicitly instead
+    # of silently implying that profile.active delivers the profile's
+    # services. Apps enabled by prepare come from the catalog defaults.
+    local prep_installable="null" prep_note="" prep_services="null" prep_budget="null"
     if [ -n "$HOMELAB_PROFILE" ]; then
-        local prep_cov
+        local prep_cov prep_def
         prep_cov="$(profile_coverage_json)"
         if [ "$(jq -r '.known' <<< "$prep_cov")" != true ]; then
             pz_error "prepare: unknown profile $HOMELAB_PROFILE"
             return 2
         fi
+        prep_installable="$(jq -r '.installable' <<< "$prep_cov")"
+        if [ "$prep_installable" != "true" ]; then
+            prep_note="$(jq -r '.installNote // "no install recipe yet"' <<< "$prep_cov")"
+        fi
+        prep_def="$(profile_definition_json)"
+        prep_services="$(jq -c '.services // []' <<< "$prep_def" 2>/dev/null || echo '[]')"
+        prep_budget="$(profile_budget_json)"
     fi
     step() { steps+=("$(jq -cn --arg name "$1" --arg status "$2" --arg detail "${3:-}" '{name:$name, status:$status, detail:$detail}')"); }
     finish() {
@@ -1447,8 +1460,14 @@ cmd_prepare() {
             --argjson steps "$(printf '%s\n' "${steps[@]}" | jq -cs '.')" \
             --arg nextAction "$next_action" \
             --arg host "$host_alias" --arg profile "$HOMELAB_PROFILE" \
+            --argjson installable "$prep_installable" --arg note "$prep_note" \
+            --argjson services "$prep_services" --argjson budget "$prep_budget" \
             '{action:"prepare", tool:"homelab-stack", ok:$ok, state:$state, steps:$steps,
               host:$host, profile:(if $profile == "" then null else $profile end),
+              profileInstallable:$installable,
+              profileNote:(if $installable == false then $note else null end),
+              profileServices:$services, budget:$budget,
+              appsSource:"catalog-defaults",
               nextAction:(if $nextAction == "" then null else $nextAction end)}'
         [ "$ok" = true ]
     }
@@ -1458,8 +1477,14 @@ cmd_prepare() {
         jq -n --argjson apps "$(printf '%s\n' "${apps[@]}" | jq -R . | jq -cs .)" \
             --arg access "$ACCESS_MODE" \
             --arg host "$host_alias" --arg profile "$HOMELAB_PROFILE" \
+            --argjson installable "$prep_installable" --arg note "$prep_note" \
+            --argjson services "$prep_services" --argjson budget "$prep_budget" \
             '{action:"prepare", dryRun:true, host:$host,
               profile:(if $profile == "" then null else $profile end),
+              profileInstallable:$installable,
+              profileNote:(if $installable == false then $note else null end),
+              profileServices:$services, budget:$budget,
+              appsSource:"catalog-defaults",
               access:$access, apps:$apps,
               steps:["dependencies","daemon","access","configure","apps","verify"]}'
         return 0
@@ -1520,8 +1545,10 @@ cmd_prepare() {
         return 1
     }
     if [ -n "$HOMELAB_PROFILE" ]; then
-        # REV-007: the reviewed profile selection actually drives the stack,
-        # it is not dropped on the floor.
+        # REV-007/R01-003: the reviewed profile selection drives the
+        # RESOURCE BUDGET (governor reads profile.active). It does not
+        # claim the profile's services are installed — the plan states
+        # installable/note and apps stay catalog-driven.
         mkdir -p "$HOMELAB_STATE"
         printf '%s\n' "$HOMELAB_PROFILE" > "$HOMELAB_STATE/profile.active"
     fi

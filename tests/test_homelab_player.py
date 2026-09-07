@@ -991,3 +991,41 @@ def test_late_pair_result_for_selected_host_advances(app):
         assert ran and ran[-1][:2] == ["hosts", "ping"]
     finally:
         page.run_cmd = real_run_cmd
+
+
+# ---------------------------------------------------------------------------
+# R01-003: the plan states budget-only profile truth in the UI.
+# ---------------------------------------------------------------------------
+
+def test_plan_renders_budget_only_profile_warning(app):
+    page = _page()
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": "edge"}
+    page._onboard_state["plan_host"] = ""
+    plan = {
+        "action": "prepare", "dryRun": True, "host": "local",
+        "profile": "edge", "profileInstallable": False,
+        "profileNote": "zeroclaw worker not implemented",
+        "appsSource": "catalog-defaults",
+    }
+    page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
+    assert page._onboard_state.get("review_plan") is not None
+    out = page._output.toPlainText()
+    assert "ORÇAMENTO" in out and "NÃO instala" in out
+    assert "zeroclaw worker not implemented" in out
+
+
+def test_plan_without_warning_for_installable_profile(app):
+    page = _page()
+    page.start_onboarding()
+    page._onboard_confirmed = True
+    page._onboard_state["profile"] = {"profile": "edge"}
+    page._onboard_state["plan_host"] = ""
+    plan = {
+        "action": "prepare", "dryRun": True, "host": "local",
+        "profile": "edge", "profileInstallable": True,
+        "appsSource": "catalog-defaults",
+    }
+    page._on_apply_plan_done(0, json.dumps(plan).encode(), b"")
+    assert "ORÇAMENTO" not in page._output.toPlainText()

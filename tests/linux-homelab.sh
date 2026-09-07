@@ -818,6 +818,23 @@ echo "$exp_out" | jq -e '.ready == false
     and (.unexpectedContainers | index("phasezero-jellyfin") != null)' >/dev/null
 echo "  strict readiness ok"
 
+echo "=== prepare plan states profile truth (R01-003) ==="
+r03_a="$(PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" "$REPO_ROOT/linux/pz" server homelab prepare --dry-run --json --profile edge 2>/dev/null)"
+echo "$r03_a" | jq -e '.dryRun == true and .host == "local" and .profile == "edge"
+    and .profileInstallable == false and (.profileNote | length > 0)
+    and (.profileServices | index("zeroclaw") != null)
+    and .appsSource == "catalog-defaults" and (.budget | type == "object")' >/dev/null \
+    || { echo "FAIL: plan does not state budget-only profile truth (R01-003): $r03_a"; exit 1; }
+r03_b="$(PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" "$REPO_ROOT/linux/pz" server homelab prepare --dry-run --json --profile assistant-private 2>/dev/null)"
+echo "$r03_b" | jq -e '.profile == "assistant-private" and (.profileServices | index("zeroclaw") == null)' >/dev/null \
+    || { echo "FAIL: distinct profiles must produce distinct plan truth (R01-003): $r03_b"; exit 1; }
+test "$r03_a" != "$r03_b" || { echo "FAIL: distinct profiles produced identical plans (R01-003)"; exit 1; }
+# no profile at all: installable/note stay null, catalog defaults declared
+PZ_HOMELAB_STATE="$PZ_HOMELAB_STATE" "$REPO_ROOT/linux/pz" server homelab prepare --dry-run --json 2>/dev/null \
+    | jq -e '.profile == null and .profileInstallable == null and .profileNote == null and .appsSource == "catalog-defaults"' >/dev/null \
+    || { echo "FAIL: profile-less plan truth wrong (R01-003)"; exit 1; }
+echo "  prepare plan profile truth ok (R01-003)"
+
 echo "=== prepare installs deps then converges honestly (PZ-AUD-002) ==="
 # Stub capabilities engine: records plan/apply, performs no install.
 CAPSTUB="$TMP/capstub"

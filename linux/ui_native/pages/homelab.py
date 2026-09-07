@@ -468,12 +468,12 @@ class HomelabPage(BasePage):
         previous = self._onboard_state.get("review_plan")
         if previous is None:
             self._onboard_state["review_plan"] = plan_hash
-            self._append(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            self._render_onboard_plan(payload)
             self._state_label.setText("Plano pronto — revise acima e pressione Aplicar de novo para executar")
             return
         if previous != plan_hash:
             self._onboard_state["review_plan"] = plan_hash
-            self._append(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+            self._render_onboard_plan(payload)
             self._state_label.setText("Plano mudou — revise de novo e pressione Aplicar para executar")
             return
         self._onboard_state.pop("review_plan", None)
@@ -484,6 +484,19 @@ class HomelabPage(BasePage):
         if profile:
             exec_args += ["--profile", profile]
         self.run_cmd(exec_args, host=captured_host)
+
+    def _render_onboard_plan(self, payload: dict) -> None:
+        # R01-003: budget-only profiles are stated, never implied — the
+        # operator sees that the profile's services are NOT installed by
+        # this plan before pressing apply again.
+        if payload.get("profileInstallable") is False:
+            note = str(payload.get("profileNote") or "sem receita de instalação")
+            self._append(
+                f"[plano] Perfil '{payload.get('profile')}' é apenas ORÇAMENTO: "
+                f"este plano NÃO instala os serviços do perfil ({note}). "
+                "Aplicativos vêm do catálogo.\n"
+            )
+        self._append(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
 
     def _hl_for(self, alias: str, *parts: str) -> list[str]:
         args = ["server", "homelab"]
