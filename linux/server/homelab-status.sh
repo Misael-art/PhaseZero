@@ -400,7 +400,7 @@ status_envelope() {
     # decorated keys give the UI (and scripts) an actionable next step.
     jq -c '. + (
         if .ready then {state:"ready", summary:"Homelab saudável.", nextAction:null}
-        elif (.configured == true|not) then {state:"needs-config", summary:"Homelab ainda não foi configurado.", nextAction:"linux/pz server homelab repair"}
+        elif (.configured == true|not) then {state:"needs-config", summary:"Homelab ainda não foi configurado.", nextAction:"linux/pz server homelab prepare"}
         elif (.degraded == true) then {state:"degraded", summary:"Atenção necessária: revise os motivos.", nextAction:"linux/pz server homelab repair"}
         elif ((.stack.apps // []) | map(.running == true) | any) then {state:"unhealthy", summary:"Serviços no ar, mas as provas de saúde não fecham.", nextAction:"linux/pz server homelab repair"}
         else {state:"stopped", summary:"Configurado e desligado; dados preservados.", nextAction:"linux/pz server homelab up"} end

@@ -538,7 +538,8 @@ def test_homelab_onboarding_reaches_apply_without_yes(app):
     finally:
         mod.QProcess = real_qprocess
     argv = calls[-1][2]
-    assert argv[:3] == ["server", "homelab", "repair"]
+    # PZ-AUD-002: onboarding installs (prepare), it does not just repair.
+    assert argv[:3] == ["server", "homelab", "prepare"]
     assert "--json" in argv
     assert "--yes" not in argv
 

@@ -356,7 +356,8 @@ class HomelabPage(BasePage):
     def onboard_apply(self) -> None:
         if not self._onboard_confirmed:
             return
-        self.run_cmd(["repair", "--json"])
+        # PZ-AUD-002: onboarding installs (prepare), it does not just repair.
+        self.run_cmd(["prepare", "--json"])
 
     def _hl(self, *parts: str) -> list[str]:
         args = ["server", "homelab"]
