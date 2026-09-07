@@ -171,11 +171,12 @@
         "PZ-AUD-002",
         "PZ-AUD-006"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase2",
+      "implementation": "codex/aud-fase2 (commits de fase2)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
+      "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
+      "closureNote": "broker Valkey dedicado (healthcheck, appendonly, sem portas) + PAPERLESS_REDIS + depends_on healthy + consume/export em modulo, extras, catalogo, lock, pesos; enable puxa broker via dependsOn."
     },
     {
       "id": "PZ-AUD-008",
@@ -197,11 +198,12 @@
         "PZ-AUD-006",
         "PZ-AUD-030"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase2",
+      "implementation": "codex/aud-fase2 (commits de fase2)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
+      "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
+      "closureNote": "firstUse (openPath, sonda http, passos) nos 10 apps; list expoe firstUse+openUrl; enable retorna nextAction da receita; sondas de status usam endpoints http por app."
     },
     {
       "id": "PZ-AUD-009",
@@ -374,11 +376,12 @@
         "PZ-AUD-002",
         "PZ-AUD-014"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase2",
+      "implementation": "codex/aud-fase2 (commits de fase2)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
+      "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
+      "closureNote": "units no user bus; install/enable encadeiam daemon-reload + enable --now + espera active; linger best-effort honesto; sonda TLS fecha ok; primeira conta web via nextAction (nunca auto-criada); status com unitActive."
     },
     {
       "id": "PZ-AUD-016",
@@ -623,11 +626,12 @@
         "PZ-AUD-015",
         "PZ-AUD-021"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase2",
+      "implementation": "codex/aud-fase2 (commits de fase2)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
+      "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
+      "closureNote": "timeout envolve o executavel interno (as_user timeout 120 bash ...); fixture runuser com chaining prova o wrap."
     },
     {
       "id": "PZ-AUD-026",
@@ -752,11 +756,12 @@
         "PZ-AUD-006",
         "PZ-AUD-011"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase2",
+      "implementation": "codex/aud-fase2 (commits de fase2)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
+      "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
+      "closureNote": "image-pins.env (0600) leva RepoDigest do update para todo up/reconcile (pin vence tag, mesmo up aplica); rede pz-internal p/ proxy/db; midia jellyfin :ro; rotacao json-file em todos servicos; sweep sem segredo nos outputs."
     },
     {
       "id": "PZ-AUD-031",
@@ -777,11 +782,12 @@
         "PZ-AUD-012",
         "PZ-AUD-022"
       ],
-      "status": "pending",
-      "owner": null,
-      "implementation": null,
-      "behavioralProof": null,
-      "ciProof": null
+      "status": "verified",
+      "owner": "codex/aud-fase2",
+      "implementation": "codex/aud-fase2 (commits de fase2)",
+      "behavioralProof": "tests/linux-homelab.sh verde + pytest 157; fixtures /tmp com stubs (daemon real intocado)",
+      "ciProof": "suites hermeticas locais verdes; E2E com daemon/VM real pendente (Fase 5)",
+      "closureNote": "MemAvailable via helpers compartilhados (total/disco expostos); governor por app subtrai reserva WinVM; vereditos convergem no mesmo host."
     }
   ]
 }
