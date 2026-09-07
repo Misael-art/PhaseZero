@@ -199,6 +199,46 @@ run_ssh() {
     "$SSH_BIN" "${opts[@]}" "$user@$host" "$@"
 }
 
+remote_pz_bin() {
+    # PZ-AUD-001: `pz` is on PATH for packaged installs; fall back to the
+    # payload path for manual checkouts. PZ_REMOTE_PZ_BIN wins when set.
+    if [ -n "${PZ_REMOTE_PZ_BIN:-}" ]; then
+        printf '%s\n' "$PZ_REMOTE_PZ_BIN"
+        return 0
+    fi
+    printf '%s\n' "pz"
+    return 0
+}
+
+remote_pz_fallback_bin() {
+    if [ -n "${PZ_REMOTE_PZ_BIN:-}" ]; then
+        return 1
+    fi
+    printf '%s\n' "/usr/lib/phasezero/linux/pz"
+    return 0
+}
+
+run_remote_pz() {
+    # Run `pz ...` on the remote host, retrying once via the payload path
+    # when `pz` is not on the remote PATH.
+    local user="$1" host="$2" port="$3"
+    shift 3
+    local bin fallback out rc=0
+    bin="$(remote_pz_bin)"
+    set +e
+    out="$(run_ssh "$user" "$host" "$port" "$bin" "$@" 2>&1)"
+    rc=$?
+    set -e
+    if [ "$rc" -ne 0 ] && fallback="$(remote_pz_fallback_bin)" && [ "$bin" != "$fallback" ]; then
+        set +e
+        out="$(run_ssh "$user" "$host" "$port" "$fallback" "$@" 2>&1)"
+        rc=$?
+        set -e
+    fi
+    printf '%s' "$out"
+    return "$rc"
+}
+
 cmd_list() {
     local reg
     reg="$(read_registry)" || return $?
@@ -294,7 +334,7 @@ cmd_ping() {
     local errf
     errf="$(pz_tempfile)"
     set +e
-    out="$(run_ssh "$user" "$host" "$port" pz --version 2>"$errf")"
+    out="$(run_remote_pz "$user" "$host" "$port" --version 2>"$errf")"
     rc=$?
     set -e
     err="$(tr -d '\0' < "$errf" 2>/dev/null | tail -1 || true)"
@@ -338,7 +378,7 @@ cmd_exec() {
     local errf
     errf="$(pz_tempfile)"
     set +e
-    out="$(run_ssh "$user" "$host" "$port" pz --version 2>"$errf")"
+    out="$(run_remote_pz "$user" "$host" "$port" --version 2>"$errf")"
     rc=$?
     set -e
     err="$(tr -d '\0' < "$errf" 2>/dev/null | tail -1 || true)"
@@ -367,7 +407,7 @@ cmd_exec() {
     local stdout rc2=0 errf2
     errf2="$(pz_tempfile)"
     set +e
-    stdout="$(run_ssh "$user" "$host" "$port" pz server homelab "${inner[@]}" 2>"$errf2")"
+    stdout="$(run_remote_pz "$user" "$host" "$port" server homelab "${inner[@]}" 2>"$errf2")"
     rc2=$?
     set -e
     err="$(tr '\n' ' ' < "$errf2" 2>/dev/null | sed 's/[[:space:]]*$//' || true)"
