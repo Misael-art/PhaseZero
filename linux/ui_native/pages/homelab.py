@@ -695,8 +695,17 @@ class HomelabPage(BasePage):
             self._profile_map.clear()
             for p in profiles:
                 key = str(p.get("key", ""))
+                maturity = str(p.get("maturity", ""))
+                installable = bool(p.get("installable", False))
                 self._profile_map[key] = str(p.get("title", key))
-                self._profile_combo.addItem(f"{p['title']} ({key})", key)
+                label = f"{p['title']} ({key})"
+                if maturity and maturity not in ("stable",):
+                    label += f" [{maturity}]"
+                self._profile_combo.addItem(label, key)
+                if not installable:
+                    self._profile_map[key + ":note"] = str(
+                        p.get("installNote", "preview: budget only, no install recipe yet")
+                    )
         idx = self._profile_combo.findData(current)
         if idx >= 0:
             self._profile_combo.setCurrentIndex(idx)
@@ -707,6 +716,14 @@ class HomelabPage(BasePage):
         if not key:
             QMessageBox.warning(self, "Perfil", "Selecione um perfil.")
             return
+        # PZ-AUD-022: applying sets the RAM budget; installable=false
+        # profiles have no install recipe, and the user must know that.
+        note = self._profile_map.get(key + ":note", "")
+        if note:
+            QMessageBox.information(
+                self, "Perfil",
+                f"Perfil '{key}' aplicado como orçamento. {note}",
+            )
         self.run_cmd(["profile", "set", key])
 
     def show_policy(self) -> None:

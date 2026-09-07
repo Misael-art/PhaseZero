@@ -496,6 +496,9 @@ profile_coverage_json() {
     fi
     jq -cn --argjson profile "$profile" --argjson compose "$services" \
         '{requested:$profile.key,known:true,
+          maturity:($profile.maturity // "preview"),
+          installable:($profile.installable // false),
+          installNote:($profile.installNote // "no install recipe yet"),
           complete:([$profile.services[] as $service | select(($compose|index($service)) == null) | $service]|length)==0,
           composeManaged:[$profile.services[] as $service | select(($compose|index($service)) != null) | $service],
           unmanaged:[$profile.services[] as $service | select(($compose|index($service)) == null) | $service],
@@ -688,6 +691,10 @@ cmd_up() {
     if [ -n "$HOMELAB_PROFILE" ]; then
         local coverage
         coverage="$(profile_coverage_json)"
+        if [ "$(jq -r '.installable' <<< "$coverage")" != true ]; then
+            pz_error "profile $HOMELAB_PROFILE is $(jq -r '.maturity' <<< "$coverage") and not installable: $(jq -r '.installNote' <<< "$coverage")"
+            return 69
+        fi
         if [ "$(jq -r '.known and .complete' <<< "$coverage")" != true ]; then
             pz_error "profile $HOMELAB_PROFILE cannot be applied: services are not fully orchestrated ($(jq -r '.unmanaged|join(",")' <<< "$coverage"))"
             return 69

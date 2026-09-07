@@ -593,6 +593,26 @@ def test_homelab_page_refresh_profiles_uses_roadmap_contract(app):
     assert calls[-1][2] == ["server", "homelab", "profiles", "--json"]
 
 
+def test_homelab_page_marks_preview_profiles(app):
+    # PZ-AUD-022: non-installable profiles show maturity, never an install
+    # promise; the note is kept for the apply dialog.
+    page = _page()
+    payload = json.dumps({
+        "profiles": [
+            {"key": "edge", "title": "Edge", "maturity": "experimental",
+             "installable": False, "installNote": "zeroclaw worker not implemented"},
+            {"key": "core", "title": "Core", "maturity": "stable",
+             "installable": True, "installNote": ""},
+        ],
+    }).encode()
+    page._last_status = {}
+    page._on_profiles_done(0, payload, b"")
+    labels = [page._profile_combo.itemText(i) for i in range(page._profile_combo.count())]
+    assert any("[experimental]" in label for label in labels)
+    assert not any("[stable]" in label for label in labels)
+    assert page._profile_map["edge:note"] == "zeroclaw worker not implemented"
+
+
 def test_homelab_page_no_blocking_event_loop(app):
     # Operations are spawned, never run synchronously: with a fake process the
     # call returns immediately and the GUI can keep processing events.

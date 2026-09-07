@@ -209,7 +209,7 @@ pz_governor_list_json() {
     def="$(jq -r '.default' <<< "$reg")"
     jq -cn --argjson schemaVersion "$SCHEMA_VERSION" \
         --arg default "$def" \
-        --argjson profiles "$(jq -c '[.profiles[] | {key, title, description, class, maturity, extras, services}]' <<< "$reg")" \
+        --argjson profiles "$(jq -c '[.profiles[] | {key, title, description, class, maturity, installable, installNote, extras, services}]' <<< "$reg")" \
         '{schemaVersion:$schemaVersion, tool:"homelab-governor", default:$default, profiles:$profiles}'
 }
 

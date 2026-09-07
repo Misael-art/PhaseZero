@@ -906,6 +906,18 @@ printf '%s\n' "$profile_list" | jq -e --argjson keys '["ai-studio","assistant-mu
 echo "  registry 6 profiles ok"
 "$REPO_ROOT/linux/server/homelab-governor.sh" weights | jq -e '.weightsMB.jellyfin == 2048 and .weightsMB.ollama == 2048 and .weightsMB["paperless-broker"] == 128 and (.weightsMB|length) == 28' >/dev/null
 echo "  weights ok"
+# PZ-AUD-022: appliance profiles are budget-only until installable.
+"$REPO_ROOT/linux/server/homelab-governor.sh" list | jq -e \
+    '[.profiles[] | select(.installable == true)] | length == 0' >/dev/null
+"$REPO_ROOT/linux/server/homelab-governor.sh" list | jq -e \
+    'all(.profiles[]; (.installNote | type == "string" and length > 0))' >/dev/null
+if "$REPO_ROOT/linux/server/homelab-stack.sh" up --profile edge 2>/dev/null; then
+    echo "FAIL: preview profile applied as installable"; exit 1
+fi
+refuse_out="$("$REPO_ROOT/linux/server/homelab-stack.sh" up --profile edge 2>&1 || true)"
+echo "$refuse_out" | rg -qi "preview|not installable" \
+    || { echo "FAIL: refusal hides maturity"; exit 1; }
+echo "  appliance preview honesty ok"
 if PZ_HOMELAB_RAM_TOTAL_OVERRIDE=3000 "$REPO_ROOT/linux/server/homelab-governor.sh" check ai-studio >/dev/null 2>&1; then
     echo "FAIL: overcommit check passed"; exit 1
 fi
