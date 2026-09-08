@@ -724,10 +724,17 @@ def test_homelab_page_marks_preview_profiles(app):
     }).encode()
     page._last_status = {}
     page._on_profiles_done(0, payload, b"")
+    # UX-005: in simple mode a budget-only profile is not offered at all —
+    # it cannot be mistaken for an install.
+    labels = [page._profile_combo.itemText(i) for i in range(page._profile_combo.count())]
+    assert not any("edge" in label for label in labels)
+    # Asking for a simulation reveals it, still marked by maturity and with
+    # the note that no service is installed.
+    page._simulate_check.setChecked(True)
     labels = [page._profile_combo.itemText(i) for i in range(page._profile_combo.count())]
     assert any("[experimental]" in label for label in labels)
     assert not any("[stable]" in label for label in labels)
-    assert page._profile_map["edge:note"] == "zeroclaw worker not implemented"
+    assert "zeroclaw worker not implemented" in page._profile_map["edge:note"]
 
 
 def test_homelab_page_no_blocking_event_loop(app):

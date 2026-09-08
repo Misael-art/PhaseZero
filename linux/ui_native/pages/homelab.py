@@ -6,13 +6,20 @@ from pathlib import Path
 
 from PySide6.QtCore import QProcess, Qt, QTimer
 from PySide6.QtWidgets import (
-    QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout, QHeaderView,
-    QLabel, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
+    QHeaderView, QLabel, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QScrollArea, QTableWidget, QTableWidgetItem, QVBoxLayout,
+    QWidget,
 )
 from shiboken6 import isValid
 
 from .base import BasePage
+from ..journey import (
+    CONFIGURE_ACCESS, NOT_INSTALLED, PREPARING, READY,
+    app_journey, failure_banner_text, first_use_steps, journey_action_label,
+    journey_headline, open_url, profile_simulation_note, split_profiles,
+)
+from ..platform import state_dir
 
 CMD_TIMEOUT_MS = 30 * 60 * 1000
 
@@ -60,6 +67,18 @@ class HomelabPage(BasePage):
         self._pair_host = ""
         self._onboard_label: QLabel | None = None
         self._onboard_next: QPushButton | None = None
+        # UX-005: simple mode installs; simulating a budget is opt-in.
+        self._profiles_all: list = []
+        self._simulate_check: QCheckBox | None = None
+        self._profile_note: QLabel | None = None
+        # UX-007: failures are recovered from the interface, not from the log.
+        self._error_banner: QLabel | None = None
+        self._error_retry: QPushButton | None = None
+        self._last_cmd: tuple[list[str], str | None] | None = None
+        # UX-009: apps carry a journey; first access is remembered per app.
+        self._apps: list = []
+        self._card_advanced: list = []
+        self._first_access: set[str] = self._load_first_access()
         # UX-003: reflow state; built widgets arrive in build().
         self._narrow_layout: bool | None = None
         self._header_grid: QGridLayout | None = None
@@ -205,6 +224,26 @@ class HomelabPage(BasePage):
         self._host_combo.currentIndexChanged.connect(self._on_host_changed)
         lay.addLayout(self._header_grid)
 
+        # UX-007: one visible place for the cause of a failure and the way
+        # out of it. The log stays available, but it is never the only copy
+        # of what went wrong.
+        self._error_frame = QFrame()
+        self._error_frame.setObjectName("homelabFailureBanner")
+        err_lay = QHBoxLayout(self._error_frame)
+        err_lay.setContentsMargins(8, 6, 8, 6)
+        self._error_banner = QLabel("")
+        self._error_banner.setObjectName("serviceState")
+        self._error_banner.setProperty("state", "error")
+        self._error_banner.setWordWrap(True)
+        self._error_banner.setAccessibleName("Motivo da falha")
+        self._error_retry = QPushButton("Tentar de novo")
+        self._error_retry.setAccessibleName("Tentar de novo")
+        self._error_retry.clicked.connect(self._retry_last_cmd)
+        err_lay.addWidget(self._error_banner, 1)
+        err_lay.addWidget(self._error_retry)
+        self._error_frame.setVisible(False)
+        lay.addWidget(self._error_frame)
+
         onboard = QGroupBox("Primeiros passos")
         onboard.setAccessibleName("Onboarding do Homelab")
         o_lay = QHBoxLayout()
@@ -262,6 +301,7 @@ class HomelabPage(BasePage):
 
         # Profile + governor ------------------------------------------------
         profile_box = QGroupBox("Perfil e orçamento")
+        profile_outer = QVBoxLayout()
         self._profile_grid = QGridLayout()
         self._profile_grid.setContentsMargins(0, 0, 0, 0)
         self._profile_grid.setHorizontalSpacing(8)
@@ -284,7 +324,26 @@ class HomelabPage(BasePage):
         self._policy_btn = policy
         policy.clicked.connect(self.show_policy)
         self._profile_grid.addWidget(policy, 0, 5)
-        profile_box.setLayout(self._profile_grid)
+        profile_outer.addLayout(self._profile_grid)
+        # UX-005: installing and simulating a budget are different jobs.
+        # Simple mode offers only profiles that install something; the
+        # budget-only ones appear when the operator asks for a simulation.
+        self._simulate_check = QCheckBox("Simular recursos (avançado)")
+        self._simulate_check.setAccessibleName("Simular recursos")
+        self._simulate_check.setToolTip(
+            "Mostra perfis que apenas reservam orçamento, sem instalar soluções."
+        )
+        self._simulate_check.toggled.connect(self._on_simulate_toggled)
+        profile_outer.addWidget(self._simulate_check)
+        self._profile_note = QLabel("")
+        self._profile_note.setObjectName("serviceState")
+        self._profile_note.setProperty("state", "warning")
+        self._profile_note.setWordWrap(True)
+        self._profile_note.setAccessibleName("Aviso do perfil")
+        self._profile_note.setVisible(False)
+        profile_outer.addWidget(self._profile_note)
+        self._profile_combo.currentIndexChanged.connect(self._refresh_profile_note)
+        profile_box.setLayout(profile_outer)
         lay.addWidget(profile_box)
         self._reflow_profile(bool(self._narrow_layout))
 
@@ -412,12 +471,15 @@ class HomelabPage(BasePage):
 
     def _onboard_prompt(self) -> str:
         name = self.onboard_step_name()
+        # UX-007: each step says what the operator gets, in product language.
+        # Technical vocabulary (argv, bind, dry-run) lives in tooltips and in
+        # the advanced surfaces, never as the only description of the step.
         copy = {
-            "discover": "Descobrir o host Homelab na rede (mDNS ou IP:porta).",
-            "pair": "Parear a chave SSH. Senha nunca vai no argv.",
-            "profile": "Escolher perfil e apps. Orçamento recusa host curto.",
-            "review": "Revisão: bind local, sem UPnP, fora de casa só Tailscale.",
-            "apply": "Aplicar gera o plano (dry-run), revisar e aplicar de novo executa. Nunca --yes.",
+            "discover": "Passo 1 de 5 — Encontrar o servidor onde suas soluções vão rodar.",
+            "pair": "Passo 2 de 5 — Autorizar este computador a administrar o servidor.",
+            "profile": "Passo 3 de 5 — Escolher o perfil que cabe na memória disponível.",
+            "review": "Passo 4 de 5 — Conferir o que será feito e como o acesso fica protegido.",
+            "apply": "Passo 5 de 5 — Preparar o servidor. Depois, instale suas soluções abaixo.",
         }
         return copy[name]
 
@@ -831,12 +893,61 @@ class HomelabPage(BasePage):
     def _rebuild_cards(self, apps: list) -> None:
         if self._cards_layout is None:
             return
+        self._apps = [a for a in apps if isinstance(a, dict)]
         self._clear_layout(self._cards_layout)
         self._card_buttons = []
-        for index, app in enumerate(apps):
-            if not isinstance(app, dict):
-                continue
+        # The previous panels died with the cards; never keep dangling refs.
+        self._card_advanced = []
+        for index, app in enumerate(self._apps):
             self._cards_layout.addWidget(self._make_app_card(app), index // 2, index % 2)
+
+    # ---------------------------------------------------------- UX-009
+    def _first_access_path(self) -> Path:
+        return state_dir() / "homelab" / "first-access.json"
+
+    def _load_first_access(self) -> set[str]:
+        try:
+            data = json.loads(self._first_access_path().read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, ValueError):
+            return set()
+        apps = data.get("apps") if isinstance(data, dict) else None
+        return {str(k) for k in apps} if isinstance(apps, list) else set()
+
+    def _mark_first_access(self, key: str) -> None:
+        if not key:
+            return
+        self._first_access.add(key)
+        target = self._first_access_path()
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                json.dumps({"apps": sorted(self._first_access)}, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    def app_journey_state(self, app: dict) -> tuple[str, str]:
+        """UX-009: journey state of one app against the live status."""
+        key = str(app.get("key") or "")
+        return app_journey(app, self._last_status, key in self._first_access)
+
+    def _open_solution(self, app: dict, configuring: bool) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        url = open_url(app)
+        if not url:
+            QMessageBox.information(
+                self, "Abrir",
+                "Esta solução não publica endereço próprio; use o dashboard.",
+            )
+            return
+        QDesktopServices.openUrl(QUrl(url))
+        if configuring:
+            # First access is only claimed after the operator was taken to it.
+            self._mark_first_access(str(app.get("key") or ""))
+            self._rebuild_cards(self._apps)
 
     def _make_app_card(self, app: dict) -> QFrame:
         frame = QFrame()
@@ -847,18 +958,27 @@ class HomelabPage(BasePage):
         title = QLabel(f"{app.get('title') or app.get('key')} · {app.get('layer', '')}")
         title.setStyleSheet("font-weight:700")
         lay.addWidget(title)
-        running = bool(app.get("running"))
+
+        state, explanation = self.app_journey_state(app)
+        headline = QLabel(f"{journey_headline(state)} · {app.get('budgetMB', '—')} MiB")
+        headline.setObjectName("serviceState")
+        headline.setProperty(
+            "state",
+            {READY: "success", CONFIGURE_ACCESS: "warning",
+             PREPARING: "warning", NOT_INSTALLED: "idle"}.get(state, "idle"),
+        )
+        lay.addWidget(headline)
+        detail = QLabel(explanation)
+        detail.setWordWrap(True)
+        lay.addWidget(detail)
+        if state == CONFIGURE_ACCESS:
+            steps = first_use_steps(app)[1:]
+            for step in steps:
+                hint = QLabel(f"• {step}")
+                hint.setWordWrap(True)
+                lay.addWidget(hint)
+
         enabled = bool(app.get("enabled"))
-        if running:
-            state = "ligado"
-        elif enabled:
-            state = "ativado · parado"
-        else:
-            state = "desligado"
-        lay.addWidget(QLabel(f"{state} · {app.get('budgetMB', '—')} MiB"))
-        url = str(app.get("url") or "")
-        if url:
-            lay.addWidget(QLabel(url))
         gov = app.get("governor") if isinstance(app.get("governor"), dict) else {}
         verdict = str(gov.get("verdict") or "")
         if verdict == "fail":
@@ -869,11 +989,43 @@ class HomelabPage(BasePage):
             warn.setObjectName("serviceState")
             warn.setProperty("state", "warning")
             lay.addWidget(warn)
+
         key = str(app.get("key") or "")
         row = QHBoxLayout()
+        # UX-009: one primary action per state — the journey ends on
+        # "Abrir solução", not on a container that happens to be running.
+        primary = QPushButton(journey_action_label(state))
+        primary.setObjectName("primaryButton")
+        primary.setAccessibleName(f"{journey_action_label(state)} — {app.get('title') or key}")
+        if state == NOT_INSTALLED:
+            primary.setToolTip("Instala e liga esta solução neste servidor.")
+            primary.setEnabled(verdict != "fail")
+            primary.clicked.connect(
+                lambda _=False, k=key: self.run_cmd(["apps", "enable", k, "--json"])
+            )
+        elif state == PREPARING:
+            primary.setToolTip("A solução ainda está subindo; atualize para acompanhar.")
+            primary.setEnabled(False)
+        else:
+            configuring = state == CONFIGURE_ACCESS
+            primary.setToolTip(
+                "Abre a solução para concluir o primeiro acesso." if configuring
+                else "Abre a solução pronta para uso."
+            )
+            primary.clicked.connect(
+                lambda _=False, a=app, c=configuring: self._open_solution(a, c)
+            )
+        row.addWidget(primary)
+        self._card_buttons.append(primary)
+
+        # Advanced controls: preview, image update and turning the app off
+        # are not part of the simple journey.
+        advanced = QWidget()
+        adv_row = QHBoxLayout(advanced)
+        adv_row.setContentsMargins(0, 0, 0, 0)
+        action = "disable" if enabled else "enable"
         preview = QPushButton("Prévia")
         preview.setToolTip("Mostra o plano sem alterar o host.")
-        action = "disable" if enabled else "enable"
         preview.clicked.connect(
             lambda _=False, k=key, a=action: self.run_cmd(
                 ["apps", a, k, "--dry-run", "--json"]
@@ -892,8 +1044,11 @@ class HomelabPage(BasePage):
             lambda _=False, k=key: self.run_cmd(["apps", "update", k, "--json"])
         )
         for btn in (preview, toggle, update):
-            row.addWidget(btn)
+            adv_row.addWidget(btn)
             self._card_buttons.append(btn)
+        advanced.setVisible(self._advanced_mode)
+        self._card_advanced.append(advanced)
+        row.addWidget(advanced)
         lay.addLayout(row)
         return frame
 
@@ -977,6 +1132,7 @@ class HomelabPage(BasePage):
         self._state_label.setText("não foi possível diagnosticar agora")
         detail = err.decode("utf-8", "replace").strip().splitlines()
         reason = detail[-1] if detail else f"exit {code}"
+        self._show_failure(reason)
         self._append(
             f"[status] Diagnóstico falhou ({reason}).\n"
             "Verifique se o Docker está ativo e clique Atualizar.\n"
@@ -989,26 +1145,49 @@ class HomelabPage(BasePage):
         except Exception:
             return
         profiles = payload.get("profiles", []) or []
-        current = self._last_status.get("profile") or ""
-        if profiles and self._profile_combo.count() != len(profiles):
-            self._profile_combo.clear()
-            self._profile_map.clear()
-            for p in profiles:
-                key = str(p.get("key", ""))
-                maturity = str(p.get("maturity", ""))
-                installable = bool(p.get("installable", False))
-                self._profile_map[key] = str(p.get("title", key))
-                label = f"{p['title']} ({key})"
-                if maturity and maturity not in ("stable",):
-                    label += f" [{maturity}]"
-                self._profile_combo.addItem(label, key)
-                if not installable:
-                    self._profile_map[key + ":note"] = str(
-                        p.get("installNote", "preview: budget only, no install recipe yet")
-                    )
+        if profiles:
+            self._profiles_all = [p for p in profiles if isinstance(p, dict)]
+            self._rebuild_profile_combo()
+
+    def _simulating(self) -> bool:
+        return bool(self._simulate_check is not None and self._simulate_check.isChecked())
+
+    def _rebuild_profile_combo(self) -> None:
+        """UX-005: simple mode lists only profiles with an install recipe."""
+        installable, budget_only = split_profiles(self._profiles_all)
+        visible = installable + (budget_only if self._simulating() else [])
+        current = str(self._profile_combo.currentData() or "") \
+            or str(self._last_status.get("profile") or "")
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.clear()
+        self._profile_map.clear()
+        for p in visible:
+            key = str(p.get("key", ""))
+            maturity = str(p.get("maturity", ""))
+            self._profile_map[key] = str(p.get("title", key))
+            label = f"{p.get('title', key)} ({key})"
+            if maturity and maturity not in ("stable",):
+                label += f" [{maturity}]"
+            if not p.get("installable"):
+                label += " — simulação"
+                self._profile_map[key + ":note"] = profile_simulation_note(p)
+            self._profile_combo.addItem(label, key)
         idx = self._profile_combo.findData(current)
-        if idx >= 0:
-            self._profile_combo.setCurrentIndex(idx)
+        self._profile_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._profile_combo.blockSignals(False)
+        self._refresh_profile_note()
+
+    def _on_simulate_toggled(self, _checked: bool) -> None:
+        self._rebuild_profile_combo()
+
+    def _refresh_profile_note(self) -> None:
+        """UX-005: the simulation warning is shown, never only logged."""
+        if self._profile_note is None:
+            return
+        key = str(self._profile_combo.currentData() or "")
+        note = self._profile_map.get(key + ":note", "")
+        self._profile_note.setText(note)
+        self._profile_note.setVisible(bool(note))
 
     # -- profile ------------------------------------------------------------
     def apply_profile(self) -> None:
@@ -1020,10 +1199,7 @@ class HomelabPage(BasePage):
         # profiles have no install recipe, and the user must know that.
         note = self._profile_map.get(key + ":note", "")
         if note:
-            QMessageBox.information(
-                self, "Perfil",
-                f"Perfil '{key}' aplicado como orçamento. {note}",
-            )
+            QMessageBox.information(self, "Perfil", note)
         self.run_cmd(["profile", "set", key])
 
     def show_policy(self) -> None:
@@ -1068,6 +1244,8 @@ class HomelabPage(BasePage):
             self._state_label.setText("Já existe operação global em andamento — aguarde")
             return
         self._output.clear()
+        self._clear_failure()
+        self._last_cmd = (list(args), host)
         self._bar.show()
         proc = QProcess(self)
         self._setup_proc(proc)
@@ -1086,6 +1264,37 @@ class HomelabPage(BasePage):
         proc.start(str(self.root / "linux" / "pz"), argv)
         self._proc = proc
 
+    def set_advanced_mode(self, enabled: bool) -> None:
+        super().set_advanced_mode(enabled)
+        for panel in self._card_advanced:
+            if isValid(panel):
+                panel.setVisible(self._advanced_mode)
+
+    # ---------------------------------------------------------- UX-007
+    def _show_failure(self, raw_text: str) -> None:
+        """State the cause and the way out, in the interface."""
+        if self._error_banner is None:
+            return
+        self._error_banner.setText(failure_banner_text(raw_text))
+        self._error_frame.setVisible(True)
+        if self._error_retry is not None:
+            self._error_retry.setVisible(self._last_cmd is not None)
+
+    def _clear_failure(self) -> None:
+        if self._error_banner is not None:
+            self._error_banner.setText("")
+        if getattr(self, "_error_frame", None) is not None:
+            self._error_frame.setVisible(False)
+
+    def _retry_last_cmd(self) -> None:
+        last = self._last_cmd
+        self._clear_failure()
+        if last is None:
+            self.refresh_status()
+            return
+        args, host = last
+        self.run_cmd(list(args), host=host)
+
     def block_while_running(self, running: bool) -> None:
         for btn in self._action_buttons:
             btn.setEnabled(not running)
@@ -1095,11 +1304,13 @@ class HomelabPage(BasePage):
 
     def _on_cmd_done(self, code: int) -> None:
         proc = self._proc
+        tail = ""
         if proc is not None:
             self._cancel_timeout(proc)
             if proc.state() == QProcess.NotRunning:
                 err = bytes(proc.readAllStandardError())
                 if err.strip():
+                    tail = str(err, "utf-8", "replace")
                     self._append_log(err)
         self._bar.hide()
         confirm = self._pending_confirm_file
@@ -1113,9 +1324,13 @@ class HomelabPage(BasePage):
         if code == 0:
             self._state_label.setText("Concluído")
             self._set_state("success")
+            self._clear_failure()
         else:
-            self._state_label.setText("Falhou — veja a saída abaixo")
+            # UX-007: the cause and the next action are stated here; the
+            # output pane stays as evidence, not as the only explanation.
+            self._state_label.setText("Não foi possível concluir")
             self._set_state("error")
+            self._show_failure(tail or self._output.toPlainText()[-4000:])
         QTimer.singleShot(300, self.refresh_status)
 
     def _on_cmd_error(self, error: QProcess.ProcessError, proc: QProcess) -> None:
