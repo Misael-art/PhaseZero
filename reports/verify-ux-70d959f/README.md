@@ -48,6 +48,31 @@ reexecutada após os dois commits. A suíte shell é hermética: `HOME`/`XDG_*`/
 aceite local: nenhum app foi instalado de verdade, nenhuma conta criada em servidor
 real, nenhuma medição com participantes.
 
+## Rodada UX-005/007 — escolha indisponível deixa de fingir instalação (7099ef4)
+
+Diagnóstico antes de mexer, contra o CLI real: **todo perfil do catálogo tem
+`installable=false`** (`assistant-private`, `developer`, `automation`, `ai-studio`,
+`edge`, `assistant-multichannel`). `prepare --dry-run --profile edge` reserva
+1664 MiB e devolve `apps: [jellyfin, syncthing, vaultwarden, uptime-kuma]`, enquanto
+`profileServices: [zeroclaw, 9router]` — o que o perfil promete — não é instalado.
+O aviso de orçamento já existia; a execução seguia mesmo assim. Era exatamente o
+que o aceite de UX-005 proíbe, e não um caso de borda: é o comportamento de todo
+perfil hoje.
+
+| Mudança | Prova |
+|---|---|
+| Plano revisado com perfil sem receita não executa sozinho; a página nomeia os serviços que ele não instala e exige decisão explícita | cancelar não roda comando nenhum; "só reservar recursos" roda apenas `profile set`; "instalar base do servidor" roda `prepare` sem perfil; perfil instalável executa o plano revisado sem perguntar |
+| `journey.plan_simulation_refusal` nomeia serviços e nota | recusa cita `zeroclaw`, `9router` e `zeroclaw worker not implemented` |
+| UX-007: plano resumido em `journey.plan_summary` num widget — servidor, apps, acesso, memória, etapas | resumo confere as cinco linhas e não contém argv nem flags (`--json`, `--dry-run`, `--profile`, `dryRun`, `appsSource`); JSON permanece na Saída para a visão avançada |
+
+Dois testes R01-003 fixavam a redação antiga do aviso no log; foram reescritos contra
+a invariante (verdade do perfil orçamento afirmada na interface), agora conferida no
+widget e no log. Resultado desta rodada: **pytest 872 passaram, 0 falhas** e
+**`tests/linux-homelab.sh` exit 0**.
+
+Sem captura visual nesta rodada — o aceite é por controle e por comando executado,
+não por layout. Limites anteriores continuam valendo.
+
 ## Próxima etapa aprovada como direção
 
 Avançar UX-005/007/009: modo simples por jornada, separando instalação de simulação de orçamento, com estado funcional, ação principal, configuração de acesso e Abrir solução. Preferir um fluxo completo de referência antes de replicá-lo pelo catálogo.
@@ -61,13 +86,13 @@ Depois R2/UX-008 (primeiro pareamento) e R3/UX-010 (contrato gráfico). Permanec
 ```text
 Objetivo: verificar retorno de70d959f e fechar contrarrevisão UX-001..004.
 Branch/worktree: codex/verify-ux-70d959f; /mnt/sdcard/Projects/pz-verify-ux-70d959f-tree.
-HEAD inicial:70d959f; documental 4e318a9; jornada 510eeed; canal de instalação 60104a5.
+HEAD inicial:70d959f; documental 4e318a9; jornada 510eeed; canal de instalação 60104a5; UX-005/007 7099ef4.
 Arquivos: reports/verify-ux-70d959f; notas Estado vivo/Ledger Homelab e roadmap REV.
 Testes: validation.json/pytest-final.txt; QA dark e medidas de viewport.
-Depois: pytest completo866 verde e tests/linux-homelab.sh exit0 nas duas rodadas seguintes.
+Depois: pytest completo872 verde e tests/linux-homelab.sh exit0 nas rodadas seguintes.
 CI/PR: nenhum; host sem alteração de workloads/serviços/VM/boot/pacotes.
 Segredos: ambiente allowlist, fixtures sintéticas, diff revisto; gitleaks não executado.
 Limitações: aceite local; demais UX e certificação física continuam pendentes.
-Próximo passo: UX-009 replicado pelo catálogo; falta UX-005/007 (instalar vs simular
-orçamento, recuperação por etapa). Depois R2/UX-008 e R3/UX-010.
+Próximo passo: UX-005/007/009 com aceite local; falta UX-006 (início por objetivo),
+R2/UX-008 (pareamento) e R3/UX-010 (contrato gráfico); UX-011 segue aberto.
 ```
