@@ -932,6 +932,27 @@ class HomelabPage(BasePage):
         key = str(app.get("key") or "")
         return app_journey(app, self._last_status, key in self._first_access)
 
+    def _ask_first_access_done(self, app: dict) -> bool:
+        """Ask whether the app's own first-use steps were completed.
+
+        Opening the page is not the same as having created the first
+        account, so PhaseZero asks instead of assuming. Answering "ainda
+        não" keeps the card in "Configurar acesso" with the steps visible.
+        """
+        steps = first_use_steps(app)
+        body = "\n".join(f"• {step}" for step in steps) or \
+            "Conclua o primeiro acesso na própria solução."
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Question)
+        box.setWindowTitle(f"Primeiro acesso — {app.get('title') or app.get('key')}")
+        box.setText("Conclua estes passos na solução que acabou de abrir:")
+        box.setInformativeText(body)
+        later = box.addButton("Ainda não", QMessageBox.RejectRole)
+        done = box.addButton("Concluí o primeiro acesso", QMessageBox.AcceptRole)
+        box.setDefaultButton(later)
+        box.exec()
+        return box.clickedButton() is done
+
     def _open_solution(self, app: dict, configuring: bool) -> None:
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
@@ -944,8 +965,7 @@ class HomelabPage(BasePage):
             )
             return
         QDesktopServices.openUrl(QUrl(url))
-        if configuring:
-            # First access is only claimed after the operator was taken to it.
+        if configuring and self._ask_first_access_done(app):
             self._mark_first_access(str(app.get("key") or ""))
             self._rebuild_cards(self._apps)
 

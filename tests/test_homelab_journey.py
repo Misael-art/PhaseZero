@@ -130,6 +130,7 @@ def test_card_offers_install_then_configure_then_open(app, monkeypatch):
         "PySide6.QtGui.QDesktopServices.openUrl",
         lambda url: opened.append(url.toString()) or True,
     )
+    monkeypatch.setattr(type(page), "_ask_first_access_done", lambda self, a: True)
     button = _card_buttons(page)["Configurar acesso"]
     QTest.mouseClick(button, Qt.LeftButton)
     assert opened == ["http://127.0.0.1:8096/"]
@@ -138,6 +139,100 @@ def test_card_offers_install_then_configure_then_open(app, monkeypatch):
     assert "jellyfin" in page._first_access
     assert "Abrir solução" in _card_buttons(page)
     assert "Pronto para usar" in " | ".join(_card_texts(page))
+
+
+CATALOG = json.loads(
+    (ROOT / "assets" / "home-server" / "apps" / "catalog.json").read_text(encoding="utf-8")
+)
+USER_FACING = [a for a in CATALOG["apps"] if a.get("userFacing")]
+
+
+def _catalog_row(entry: dict, **over) -> dict:
+    """Row shaped like `pz server homelab apps list --json` emits."""
+    port = entry.get("port") or 0
+    url = f"http://127.0.0.1:{port}" if port else ""
+    first_use = entry.get("firstUse") or {}
+    row = {
+        "key": entry["key"],
+        "title": entry.get("title") or entry["key"],
+        "layer": entry.get("layer", ""),
+        "enabled": False,
+        "running": False,
+        "budgetMB": entry.get("budgetMB"),
+        "url": url,
+        "openUrl": f"{url}{first_use.get('openPath', '/')}" if url else "",
+        "governor": {"verdict": "pass", "reasons": []},
+        "firstUse": first_use,
+    }
+    row.update(over)
+    return row
+
+
+@pytest.mark.parametrize("entry", USER_FACING, ids=[a["key"] for a in USER_FACING])
+def test_every_user_facing_app_walks_the_journey(app, entry, monkeypatch):
+    """UX-009 replicated across the real catalog, one app at a time."""
+    key = entry["key"]
+    page = _page()
+
+    page._last_status = {"functionalProbes": {"passed": [], "failed": []}}
+    page._rebuild_cards([_catalog_row(entry)])
+    assert "Instalar" in _card_buttons(page)
+    assert "Não instalado" in " | ".join(_card_texts(page))
+
+    # Running without a passing probe is still "preparando" for every app.
+    page._rebuild_cards([_catalog_row(entry, enabled=True, running=True)])
+    assert "Preparando" in " | ".join(_card_texts(page))
+    assert not _card_buttons(page)["Preparando…"].isEnabled()
+
+    page._last_status = {"functionalProbes": {"passed": [key], "failed": []}}
+    row = _catalog_row(entry, enabled=True, running=True)
+    page._rebuild_cards([row])
+    texts = _card_texts(page)
+    assert "Configurar acesso" in " | ".join(texts)
+    # Every first-use step of this app is presented on the card.
+    steps = entry["firstUse"]["stepsPtBr"]
+    joined = " | ".join(texts)
+    for step in steps:
+        assert step in joined, f"{key}: passo ausente no card"
+
+    opened: list[str] = []
+    monkeypatch.setattr(
+        "PySide6.QtGui.QDesktopServices.openUrl",
+        lambda url: opened.append(url.toString()) or True,
+    )
+    monkeypatch.setattr(type(page), "_ask_first_access_done", lambda self, a: True)
+    QTest.mouseClick(_card_buttons(page)["Configurar acesso"], Qt.LeftButton)
+
+    expected = f"http://127.0.0.1:{entry['port']}{entry['firstUse'].get('openPath', '/')}"
+    assert opened == [expected]
+    assert "Abrir solução" in _card_buttons(page)
+    assert "Pronto para usar" in " | ".join(_card_texts(page))
+
+
+def test_catalog_ships_interface_copy_for_every_user_facing_app():
+    """The Player is pt-BR: no app may fall back to the CLI copy."""
+    for entry in USER_FACING:
+        first_use = entry.get("firstUse") or {}
+        pt = first_use.get("stepsPtBr")
+        assert isinstance(pt, list) and pt, f"{entry['key']}: sem stepsPtBr"
+        assert len(pt) == len(first_use["steps"]), f"{entry['key']}: passos divergentes"
+        assert pt != first_use["steps"], f"{entry['key']}: cópia não traduzida"
+        assert journey.first_use_steps({"firstUse": first_use}) == pt
+
+
+def test_first_access_is_not_claimed_until_the_operator_confirms(app, monkeypatch):
+    entry = next(a for a in USER_FACING if a["key"] == "vaultwarden")
+    page = _page()
+    page._last_status = {"functionalProbes": {"passed": ["vaultwarden"], "failed": []}}
+    page._rebuild_cards([_catalog_row(entry, enabled=True, running=True)])
+    monkeypatch.setattr(
+        "PySide6.QtGui.QDesktopServices.openUrl", lambda url: True
+    )
+    # Opening the page is not the same as creating the first account.
+    monkeypatch.setattr(type(page), "_ask_first_access_done", lambda self, a: False)
+    QTest.mouseClick(_card_buttons(page)["Configurar acesso"], Qt.LeftButton)
+    assert "vaultwarden" not in page._first_access
+    assert "Configurar acesso" in _card_buttons(page)
 
 
 def test_first_access_is_persisted_between_pages(app):

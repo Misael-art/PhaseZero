@@ -30,6 +30,11 @@
         "Open the app and complete the first-run wizard (local media stays yours).",
         "Point a library at your media folder (mounted read-only at /media).",
         "Play one title to confirm indexing and playback."
+        ],
+        "stepsPtBr": [
+        "Abra e conclua o assistente inicial — sua mídia continua só sua.",
+        "Aponte uma biblioteca para sua pasta de mídia (montada como somente leitura em /media).",
+        "Reproduza um título para confirmar indexação e reprodução."
         ]
       }
     },
@@ -60,6 +65,11 @@
         "Open the GUI and set a GUI username/password under Settings.",
         "On the second device, add this host via its Device ID (Actions > Show ID).",
         "Share one folder and confirm one file syncs both ways."
+        ],
+        "stepsPtBr": [
+        "Abra a interface e defina usuário e senha em Configurações.",
+        "No segundo dispositivo, adicione este servidor pelo Device ID (Ações > Mostrar ID).",
+        "Compartilhe uma pasta e confirme que um arquivo sincroniza nos dois sentidos."
         ]
       }
     },
@@ -90,6 +100,11 @@
         "Open the app and create the FIRST account (signups stay open until then).",
         "Log in and save one vault item.",
         "Admin panel at /admin uses VW_ADMIN_TOKEN from the homelab .env."
+        ],
+        "stepsPtBr": [
+        "Abra e crie a PRIMEIRA conta — o cadastro fecha depois dela.",
+        "Entre e salve um item no cofre.",
+        "O painel em /admin usa o VW_ADMIN_TOKEN do .env do homelab."
         ]
       }
     },
@@ -120,6 +135,11 @@
         "Open the app and create the admin account on first launch.",
         "Add one HTTP monitor for each PhaseZero endpoint you care about.",
         "Stop one service and confirm the monitor flips to DOWN, then recovers."
+        ],
+        "stepsPtBr": [
+        "Abra e crie a conta de administrador no primeiro acesso.",
+        "Adicione um monitor HTTP para cada endereço que você quer acompanhar.",
+        "Pare um serviço e confirme que o monitor marca fora do ar e depois se recupera."
         ]
       }
     },
@@ -172,6 +192,11 @@
         "Open the app and create the admin account (12+ chars) on first launch.",
         "Connect the local socket-proxy environment when prompted.",
         "List the homelab stack to confirm visibility through the proxy."
+        ],
+        "stepsPtBr": [
+        "Abra e crie a conta de administrador (12+ caracteres) no primeiro acesso.",
+        "Conecte o ambiente local do socket-proxy quando for solicitado.",
+        "Liste a stack do homelab para confirmar a visibilidade pelo proxy."
         ]
       }
     },
@@ -224,6 +249,11 @@
         "Wait for the database to accept connections, then open the app.",
         "Create the admin account on the setup screen.",
         "Upload and download one file; check background jobs under Settings."
+        ],
+        "stepsPtBr": [
+        "Espere o banco de dados aceitar conexões e abra o aplicativo.",
+        "Crie a conta de administrador na tela de instalação.",
+        "Envie e baixe um arquivo; confira as tarefas em segundo plano em Configurações."
         ]
       }
     },
@@ -254,6 +284,11 @@
         "Open /-/healthy to confirm the server is up.",
         "Point a scrape job at the appliance targets (see homelab docs).",
         "Query one metric, then stop a target and watch it go down."
+        ],
+        "stepsPtBr": [
+        "Abra /-/healthy para confirmar que o servidor está no ar.",
+        "Aponte uma coleta para os alvos do servidor (veja a documentação do homelab).",
+        "Consulte uma métrica, pare um alvo e acompanhe a queda."
         ]
       }
     },
@@ -284,6 +319,10 @@
         "steps": [
         "Confirm /metrics exposes this host (check the nodename label).",
         "Wire it as a Prometheus scrape target on the appliance."
+        ],
+        "stepsPtBr": [
+        "Confirme que /metrics responde neste servidor.",
+        "Use o Prometheus para coletar estas métricas."
         ]
       }
     },
@@ -314,6 +353,11 @@
         "Log in with admin and the GRAFANA_ADMIN_PASSWORD from the homelab .env.",
         "Add Prometheus as a data source.",
         "Import one host dashboard and confirm real data renders."
+        ],
+        "stepsPtBr": [
+        "Entre com admin e a GRAFANA_ADMIN_PASSWORD do .env do homelab.",
+        "Adicione o Prometheus como fonte de dados.",
+        "Importe um painel do host e confirme que dados reais aparecem."
         ]
       }
     },
@@ -344,6 +388,11 @@
         "Create the superuser on first launch (createsuperuser via the app console).",
         "Drop one PDF into the consume folder and wait for OCR.",
         "Search the document text, then export it back out."
+        ],
+        "stepsPtBr": [
+        "Crie o superusuário no primeiro acesso (createsuperuser pelo console do aplicativo).",
+        "Coloque um PDF na pasta de entrada e aguarde o OCR.",
+        "Pesquise o texto do documento e exporte-o de volta."
         ]
       }
     },
@@ -396,6 +445,11 @@
         "Create the owner account on first launch.",
         "Build one two-step workflow and run it manually.",
         "Deactivate/reactivate it and confirm executions persist after restore."
+        ],
+        "stepsPtBr": [
+        "Crie a conta de dono no primeiro acesso.",
+        "Monte um fluxo de dois passos e execute manualmente.",
+        "Desative e reative o fluxo e confirme que as execuções sobrevivem à restauração."
         ]
       }
     }

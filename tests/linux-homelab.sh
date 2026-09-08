@@ -486,6 +486,13 @@ jq -e '[.apps[] | select(.userFacing == true)
                  and (.firstUse.openPath | type == "string")
                  and (.firstUse.probe.path | type == "string"))] | length >= 10' \
     "$REPO_ROOT/assets/home-server/apps/catalog.json" >/dev/null
+# UX-009: the Player is pt-BR — every user-facing app ships interface copy
+# with the same number of steps as the CLI copy, and never equal to it.
+jq -e '([.apps[] | select(.userFacing == true)
+         | select((.firstUse.stepsPtBr | length) == (.firstUse.steps | length)
+                  and (.firstUse.stepsPtBr != .firstUse.steps))] | length)
+       == ([.apps[] | select(.userFacing == true)] | length)' \
+    "$REPO_ROOT/assets/home-server/apps/catalog.json" >/dev/null
 # Recipes surface on list rows with a deep open URL.
 "$REPO_ROOT/linux/pz" server homelab apps list --json 2>/dev/null \
     | jq -e '[.apps[] | select(.key == "vaultwarden")]

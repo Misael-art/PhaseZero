@@ -78,11 +78,21 @@ def app_journey(app: dict, status: dict | None = None,
 
 
 def first_use_steps(app: dict) -> list[str]:
+    """First-use steps for the interface.
+
+    The catalog carries the CLI copy in ``steps`` (English, same language as
+    the rest of ``pz``) and the interface copy in ``stepsPtBr``. The Player
+    is Brazilian Portuguese, so it prefers ``stepsPtBr`` and only falls back
+    to ``steps`` for an app that has not been translated yet.
+    """
     first_use = app.get("firstUse")
     if not isinstance(first_use, dict):
         return []
-    steps = first_use.get("steps")
-    return [str(s) for s in steps] if isinstance(steps, list) else []
+    for field in ("stepsPtBr", "steps"):
+        steps = first_use.get(field)
+        if isinstance(steps, list) and steps:
+            return [str(s) for s in steps]
+    return []
 
 
 def first_use_summary(app: dict) -> str:
